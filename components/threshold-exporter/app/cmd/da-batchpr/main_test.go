@@ -13,6 +13,7 @@ import (
 // --- Dispatcher --------------------------------------------------
 
 func TestRun_NoArgs_PrintsUsageAndCallerErr(t *testing.T) {
+	t.Parallel()
 	stdout := &bytes.Buffer{}
 	stderr := &bytes.Buffer{}
 	code := run(nil, stdout, stderr)
@@ -25,6 +26,7 @@ func TestRun_NoArgs_PrintsUsageAndCallerErr(t *testing.T) {
 }
 
 func TestRun_UnknownSubcommand_CallerErr(t *testing.T) {
+	t.Parallel()
 	stdout := &bytes.Buffer{}
 	stderr := &bytes.Buffer{}
 	code := run([]string{"frobnicate"}, stdout, stderr)
@@ -37,6 +39,7 @@ func TestRun_UnknownSubcommand_CallerErr(t *testing.T) {
 }
 
 func TestRun_VersionPrintsAndExitOK(t *testing.T) {
+	t.Parallel()
 	stdout := &bytes.Buffer{}
 	stderr := &bytes.Buffer{}
 	for _, flag := range []string{"--version", "-v"} {
@@ -53,6 +56,7 @@ func TestRun_VersionPrintsAndExitOK(t *testing.T) {
 }
 
 func TestRun_HelpPrintsUsageAndExitOK(t *testing.T) {
+	t.Parallel()
 	stdout := &bytes.Buffer{}
 	stderr := &bytes.Buffer{}
 	for _, flag := range []string{"--help", "-h", "help"} {
@@ -70,6 +74,7 @@ func TestRun_HelpPrintsUsageAndExitOK(t *testing.T) {
 // --- Helper: parseRepoFlag --------------------------------------
 
 func TestParseRepoFlag_AcceptsValid(t *testing.T) {
+	t.Parallel()
 	repo, err := parseRepoFlag("vencil/da-tools")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -80,6 +85,7 @@ func TestParseRepoFlag_AcceptsValid(t *testing.T) {
 }
 
 func TestParseRepoFlag_RejectsMalformed(t *testing.T) {
+	t.Parallel()
 	for _, bad := range []string{"", "noslash", "/missing-owner", "missing-name/", "a/b/c"} {
 		_, err := parseRepoFlag(bad)
 		if err == nil {
@@ -99,6 +105,7 @@ func TestParseRepoFlag_RejectsMalformed(t *testing.T) {
 // --- Helper: walkFilesDir --------------------------------------
 
 func TestWalkFilesDir_HappyPath(t *testing.T) {
+	t.Parallel()
 	tmp := t.TempDir()
 	mustWriteFile(t, filepath.Join(tmp, "a/b.yaml"), []byte("body-1"))
 	mustWriteFile(t, filepath.Join(tmp, "a/c.yaml"), []byte("body-2"))
@@ -129,6 +136,7 @@ func TestWalkFilesDir_HappyPath(t *testing.T) {
 }
 
 func TestWalkFilesDir_PrefixApplied(t *testing.T) {
+	t.Parallel()
 	tmp := t.TempDir()
 	mustWriteFile(t, filepath.Join(tmp, "x.yaml"), []byte("body"))
 
@@ -142,6 +150,7 @@ func TestWalkFilesDir_PrefixApplied(t *testing.T) {
 }
 
 func TestWalkFilesDir_NotADir(t *testing.T) {
+	t.Parallel()
 	tmp := t.TempDir()
 	f := filepath.Join(tmp, "f.txt")
 	mustWriteFile(t, f, []byte("not a dir"))
@@ -152,6 +161,7 @@ func TestWalkFilesDir_NotADir(t *testing.T) {
 }
 
 func TestWalkFilesDir_Missing(t *testing.T) {
+	t.Parallel()
 	_, err := walkFilesDir(filepath.Join(t.TempDir(), "nope"), "")
 	if err == nil {
 		t.Error("expected error for missing dir, got nil")
@@ -161,6 +171,7 @@ func TestWalkFilesDir_Missing(t *testing.T) {
 // --- Helper: writeJSON / writeReport / readInputJSON ---------------
 
 func TestReadInputJSON_FromFile(t *testing.T) {
+	t.Parallel()
 	tmp := t.TempDir()
 	p := filepath.Join(tmp, "in.json")
 	mustWriteFile(t, p, []byte(`{"name": "alice", "age": 30}`))
@@ -178,6 +189,7 @@ func TestReadInputJSON_FromFile(t *testing.T) {
 }
 
 func TestReadInputJSON_RejectsUnknownFields(t *testing.T) {
+	t.Parallel()
 	tmp := t.TempDir()
 	p := filepath.Join(tmp, "in.json")
 	mustWriteFile(t, p, []byte(`{"name": "alice", "age": 30, "ROGUE": true}`))
@@ -193,6 +205,7 @@ func TestReadInputJSON_RejectsUnknownFields(t *testing.T) {
 }
 
 func TestReadInputJSON_FromStdin(t *testing.T) {
+	t.Parallel()
 	stdin := bytes.NewBufferString(`{"name": "bob"}`)
 	var got struct {
 		Name string `json:"name"`
@@ -206,6 +219,7 @@ func TestReadInputJSON_FromStdin(t *testing.T) {
 }
 
 func TestWriteJSON_ToFile(t *testing.T) {
+	t.Parallel()
 	tmp := t.TempDir()
 	p := filepath.Join(tmp, "out.json")
 	if err := writeJSON(p, &bytes.Buffer{}, map[string]int{"a": 1}); err != nil {
@@ -224,6 +238,7 @@ func TestWriteJSON_ToFile(t *testing.T) {
 }
 
 func TestWriteJSON_ToStdout(t *testing.T) {
+	t.Parallel()
 	out := &bytes.Buffer{}
 	if err := writeJSON("-", out, []string{"x"}); err != nil {
 		t.Fatalf("writeJSON: %v", err)
@@ -234,6 +249,7 @@ func TestWriteJSON_ToStdout(t *testing.T) {
 }
 
 func TestWriteReport_ToFileAndStdout(t *testing.T) {
+	t.Parallel()
 	out := &bytes.Buffer{}
 	if err := writeReport("-", out, "hello"); err != nil {
 		t.Fatalf("writeReport: %v", err)

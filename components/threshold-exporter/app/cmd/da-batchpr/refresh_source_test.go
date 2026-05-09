@@ -24,6 +24,7 @@ func fixtureRefreshSourceInputJSON() []byte {
 }
 
 func TestRefreshSource_MissingPatchesDir(t *testing.T) {
+	t.Parallel()
 	stderr := &bytes.Buffer{}
 	code := cmdRefreshSource([]string{}, &bytes.Buffer{}, stderr)
 	if code != exitCallerErr {
@@ -35,6 +36,7 @@ func TestRefreshSource_MissingPatchesDir(t *testing.T) {
 }
 
 func TestRefreshSource_HelpExitsOK(t *testing.T) {
+	t.Parallel()
 	code := cmdRefreshSource([]string{"--help"}, &bytes.Buffer{}, &bytes.Buffer{})
 	if code != exitOK {
 		t.Errorf("exit code = %d, want %d", code, exitOK)
@@ -44,6 +46,7 @@ func TestRefreshSource_HelpExitsOK(t *testing.T) {
 // --- loadTargetPatches happy path + edge cases -----------------
 
 func TestLoadTargetPatches_HappyPath(t *testing.T) {
+	t.Parallel()
 	tmp := t.TempDir()
 	mustWriteFile(t, filepath.Join(tmp, "101/conf.d/foo/_defaults.yaml"), []byte("body-a"))
 	mustWriteFile(t, filepath.Join(tmp, "101/conf.d/foo/tenant.yaml"), []byte("body-b"))
@@ -70,6 +73,7 @@ func TestLoadTargetPatches_HappyPath(t *testing.T) {
 }
 
 func TestLoadTargetPatches_MissingPRSubdirIsNoChange(t *testing.T) {
+	t.Parallel()
 	tmp := t.TempDir()
 	// No subdir for PR 101 (no patches for that tenant) → Files
 	// stays nil → orchestration records PatchSkippedNoChange.
@@ -93,6 +97,7 @@ func TestLoadTargetPatches_MissingPRSubdirIsNoChange(t *testing.T) {
 }
 
 func TestLoadTargetPatches_PatchesDirMissing(t *testing.T) {
+	t.Parallel()
 	in := &batchpr.RefreshSourceInput{
 		Targets: []batchpr.RefreshSourceTarget{{PRNumber: 1, BranchName: "x"}},
 	}
@@ -103,6 +108,7 @@ func TestLoadTargetPatches_PatchesDirMissing(t *testing.T) {
 }
 
 func TestLoadTargetPatches_PatchesDirIsAFile(t *testing.T) {
+	t.Parallel()
 	tmp := t.TempDir()
 	f := filepath.Join(tmp, "f.txt")
 	mustWriteFile(t, f, []byte("not a dir"))
@@ -119,6 +125,7 @@ func TestLoadTargetPatches_PatchesDirIsAFile(t *testing.T) {
 // --- runRefreshSource happy path --------------------------------
 
 func TestRunRefreshSource_HappyPath_StubClients(t *testing.T) {
+	t.Parallel()
 	tmp := t.TempDir()
 	report := filepath.Join(tmp, "report.md")
 	resultJSON := filepath.Join(tmp, "result.json")
@@ -168,6 +175,7 @@ func TestRunRefreshSource_HappyPath_StubClients(t *testing.T) {
 // --- exitCodeForRefreshSource mapping ---------------------------
 
 func TestExitCodeForRefreshSource(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		s    batchpr.RefreshSourceSummary
@@ -190,6 +198,7 @@ func TestExitCodeForRefreshSource(t *testing.T) {
 // --- end-to-end: cmdRefreshSource via input JSON + patches dir ---
 
 func TestCmdRefreshSource_EndToEnd_WithStubsViaWorkdir(t *testing.T) {
+	t.Parallel()
 	// We can't inject clients into cmdRefreshSource without
 	// constructing a real workdir. This test just exercises the
 	// flag-parsing + patches-loading flow up to makeClients (which

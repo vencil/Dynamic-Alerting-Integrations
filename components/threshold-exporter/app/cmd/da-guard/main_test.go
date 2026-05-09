@@ -50,6 +50,7 @@ func writeTree(t *testing.T, tmp string, files map[string]string) {
 // --- happy path / clean tree --------------------------------------
 
 func TestRun_CleanTree_ExitsZero(t *testing.T) {
+	t.Parallel()
 	tmp := t.TempDir()
 	writeTree(t, tmp, map[string]string{
 		"conf.d/_defaults.yaml": "defaults:\n  cpu: 70\n",
@@ -79,6 +80,7 @@ func TestRun_CleanTree_ExitsZero(t *testing.T) {
 // --- schema error: missing required field ------------------------
 
 func TestRun_MissingRequired_ExitsOne(t *testing.T) {
+	t.Parallel()
 	tmp := t.TempDir()
 	writeTree(t, tmp, map[string]string{
 		"conf.d/_defaults.yaml": "defaults:\n  cpu: 70\n",
@@ -106,6 +108,7 @@ func TestRun_MissingRequired_ExitsOne(t *testing.T) {
 // --- routing: unknown receiver type --------------------------------
 
 func TestRun_UnknownReceiverType_ExitsOne(t *testing.T) {
+	t.Parallel()
 	tmp := t.TempDir()
 	writeTree(t, tmp, map[string]string{
 		"conf.d/_defaults.yaml": "defaults: {}\n",
@@ -132,6 +135,7 @@ func TestRun_UnknownReceiverType_ExitsOne(t *testing.T) {
 // --- cardinality limit: warn ratio exit semantics -----------------
 
 func TestRun_CardinalityExceeded_ExitsOne(t *testing.T) {
+	t.Parallel()
 	// Build a tenant with 6 metrics; limit at 3 → tenant exceeds.
 	tmp := t.TempDir()
 	writeTree(t, tmp, map[string]string{
@@ -161,6 +165,7 @@ func TestRun_CardinalityExceeded_ExitsOne(t *testing.T) {
 }
 
 func TestRun_CardinalityWarn_DoesNotExitOne_ByDefault(t *testing.T) {
+	t.Parallel()
 	// 5 metrics, limit 6, warn-ratio default 0.8 → 4.8 → tenant at
 	// 5 trips warning but no error. Default exit is 0.
 	tmp := t.TempDir()
@@ -191,6 +196,7 @@ func TestRun_CardinalityWarn_DoesNotExitOne_ByDefault(t *testing.T) {
 }
 
 func TestRun_CardinalityWarn_WithWarnAsError_ExitsOne(t *testing.T) {
+	t.Parallel()
 	tmp := t.TempDir()
 	writeTree(t, tmp, map[string]string{
 		"conf.d/_defaults.yaml": `defaults:
@@ -218,6 +224,7 @@ func TestRun_CardinalityWarn_WithWarnAsError_ExitsOne(t *testing.T) {
 // --- empty scope is vacuously safe --------------------------------
 
 func TestRun_EmptyScope_ExitsZero(t *testing.T) {
+	t.Parallel()
 	tmp := t.TempDir()
 	writeTree(t, tmp, map[string]string{
 		"conf.d/_defaults.yaml": "defaults: {}\n",
@@ -241,6 +248,7 @@ func TestRun_EmptyScope_ExitsZero(t *testing.T) {
 // → guard.checkRedundantOverrides emits a SeverityWarn. Default exit
 // code stays 0 (warnings don't block); --warn-as-error flips to 1.
 func TestRun_RedundantOverride_SurfacesAsWarning(t *testing.T) {
+	t.Parallel()
 	tmp := t.TempDir()
 	writeTree(t, tmp, map[string]string{
 		"conf.d/_defaults.yaml": "defaults:\n  cpu: 80\n",
@@ -280,6 +288,7 @@ func TestRun_RedundantOverride_SurfacesAsWarning(t *testing.T) {
 }
 
 func TestRun_RedundantOverride_WithWarnAsError_ExitsOne(t *testing.T) {
+	t.Parallel()
 	tmp := t.TempDir()
 	writeTree(t, tmp, map[string]string{
 		"conf.d/_defaults.yaml": "defaults:\n  cpu: 80\n",
@@ -298,6 +307,7 @@ func TestRun_RedundantOverride_WithWarnAsError_ExitsOne(t *testing.T) {
 // different merged defaults. This verifies da-guard threads
 // per-tenant defaults (NewDefaultsByTenant) through to the guard.
 func TestRun_RedundantOverride_HonorsCascadingDefaults(t *testing.T) {
+	t.Parallel()
 	tmp := t.TempDir()
 	writeTree(t, tmp, map[string]string{
 		"conf.d/_defaults.yaml":    "defaults:\n  cpu: 70\n",
@@ -340,6 +350,7 @@ func TestRun_RedundantOverride_HonorsCascadingDefaults(t *testing.T) {
 // IO errors. A bad --output path on an empty scope must surface as
 // exitCallerErr, not exitOK.
 func TestRun_EmptyScope_BadOutputPath_ExitsTwo(t *testing.T) {
+	t.Parallel()
 	tmp := t.TempDir()
 	writeTree(t, tmp, map[string]string{
 		"conf.d/_defaults.yaml": "defaults: {}\n",
@@ -364,6 +375,7 @@ func TestRun_EmptyScope_BadOutputPath_ExitsTwo(t *testing.T) {
 // --- caller-error paths -------------------------------------------
 
 func TestRun_MissingConfigDir_ExitsTwo(t *testing.T) {
+	t.Parallel()
 	code, _, stderr := runOnce(t)
 	if code != exitCallerErr {
 		t.Errorf("exit = %d, want %d", code, exitCallerErr)
@@ -374,6 +386,7 @@ func TestRun_MissingConfigDir_ExitsTwo(t *testing.T) {
 }
 
 func TestRun_BadFormat_ExitsTwo(t *testing.T) {
+	t.Parallel()
 	tmp := t.TempDir()
 	writeTree(t, tmp, map[string]string{
 		"conf.d/_defaults.yaml": "defaults: {}\n",
@@ -391,6 +404,7 @@ func TestRun_BadFormat_ExitsTwo(t *testing.T) {
 }
 
 func TestRun_BadWarnRatio_ExitsTwo(t *testing.T) {
+	t.Parallel()
 	tmp := t.TempDir()
 	writeTree(t, tmp, map[string]string{
 		"conf.d/_defaults.yaml": "defaults: {}\n",
@@ -412,6 +426,7 @@ func TestRun_BadWarnRatio_ExitsTwo(t *testing.T) {
 }
 
 func TestRun_ScopeOutsideRoot_ExitsTwo(t *testing.T) {
+	t.Parallel()
 	tmp := t.TempDir()
 	writeTree(t, tmp, map[string]string{
 		"conf.d/_defaults.yaml": "defaults: {}\n",
@@ -430,6 +445,7 @@ func TestRun_ScopeOutsideRoot_ExitsTwo(t *testing.T) {
 }
 
 func TestRun_ConfigDirMissing_ExitsTwo(t *testing.T) {
+	t.Parallel()
 	code, _, stderr := runOnce(t,
 		"--config-dir", filepath.Join(t.TempDir(), "nope"),
 	)
@@ -444,6 +460,7 @@ func TestRun_ConfigDirMissing_ExitsTwo(t *testing.T) {
 // --- output formats and routing ----------------------------------
 
 func TestRun_JSONOutput_IsValidJSON(t *testing.T) {
+	t.Parallel()
 	tmp := t.TempDir()
 	writeTree(t, tmp, map[string]string{
 		"conf.d/_defaults.yaml": "defaults:\n  cpu: 70\n",
@@ -481,6 +498,7 @@ func TestRun_JSONOutput_IsValidJSON(t *testing.T) {
 }
 
 func TestRun_OutputToFile_WritesAndAnnouncesOnStderr(t *testing.T) {
+	t.Parallel()
 	tmp := t.TempDir()
 	writeTree(t, tmp, map[string]string{
 		"conf.d/_defaults.yaml": "defaults: {}\n",
@@ -512,6 +530,7 @@ func TestRun_OutputToFile_WritesAndAnnouncesOnStderr(t *testing.T) {
 // --- determinism: two runs over the same input → byte-identical output
 
 func TestRun_Determinism_TwoRunsByteIdentical(t *testing.T) {
+	t.Parallel()
 	tmp := t.TempDir()
 	writeTree(t, tmp, map[string]string{
 		"conf.d/_defaults.yaml":  "defaults:\n  cpu: 70\n",
@@ -533,6 +552,7 @@ func TestRun_Determinism_TwoRunsByteIdentical(t *testing.T) {
 // --- version flag --------------------------------------------------
 
 func TestRun_VersionFlag(t *testing.T) {
+	t.Parallel()
 	prev := Version
 	Version = "0.0.0-test"
 	defer func() { Version = prev }()
@@ -548,6 +568,7 @@ func TestRun_VersionFlag(t *testing.T) {
 // --- duplicate tenant ID --------------------------------------
 
 func TestRun_DuplicateTenantID_ExitsTwo(t *testing.T) {
+	t.Parallel()
 	tmp := t.TempDir()
 	writeTree(t, tmp, map[string]string{
 		"conf.d/_defaults.yaml":       "defaults: {}\n",
@@ -568,6 +589,7 @@ func TestRun_DuplicateTenantID_ExitsTwo(t *testing.T) {
 // --- splitNonEmpty unit test --------------------------------------
 
 func TestSplitNonEmpty(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		in   string
 		want []string
@@ -596,6 +618,7 @@ func TestSplitNonEmpty(t *testing.T) {
 // --- cross-platform sanity ----------------------------------------
 
 func TestRun_PathSeparators_OnAnyOS(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS != "windows" {
 		t.Skip("only relevant on Windows where filepath.Separator differs")
 	}
