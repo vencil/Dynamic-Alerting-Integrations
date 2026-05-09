@@ -59,6 +59,7 @@ import generate_rule_pack_split as grps  # noqa: E402
 import generate_doc_map as gdm  # noqa: E402
 import generate_changelog as gc  # noqa: E402
 import _lib_validation as lv  # noqa: E402
+import axe_lite_static as axe  # noqa: E402
 
 
 # Hypothesis settings: keep the example budget tight so this file runs
@@ -516,3 +517,187 @@ class TestValidateAndClampProperties:
         assert lv.parse_duration_seconds(clamped) == max_sec
         assert len(warnings) == 1
         assert "above maximum" in warnings[0]
+
+
+# ---------------------------------------------------------------------------
+# axe_lite_static — WCAG static a11y scanner
+# ---------------------------------------------------------------------------
+# Pilot extension batch 3: the 4 scanner functions + strip_frontmatter
+# helper. These run on every commit via the axe-lite-static pre-commit
+# hook (#318) and the TestPortalFloor regression test, so any silent
+# behavior change here becomes a real WCAG floor regression.
+#
+# Properties pinned: empty-input contracts, line-number positivity,
+# idempotency, monotonicity (output never longer than input where
+# applicable), and category-specific aria-hidden / role / placeholder
+# escape hatches.
+
+class TestStripFrontmatterProperties:
+
+    @given(st.text())
+    @PILOT_SETTINGS
+    def test_idempotent(self, src):
+        # Property: stripping twice gives the same result as stripping once.
+        once = axe.strip_frontmatter(src)
+        twice = axe.strip_frontmatter(once)
+        assert once == twice, (
+            f"strip_frontmatter not idempotent for input {src!r}: "
+            f"once={once!r} twice={twice!r}"
+        )
+
+    @given(st.text())
+    @PILOT_SETTINGS
+    def test_never_longer_than_input(self, src):
+        # Property: stripping never grows the string.
+        out = axe.strip_frontmatter(src)
+        assert len(out) <= len(src)
+
+    @given(st.text().filter(lambda s: not s.startswith("---")))
+    @PILOT_SETTINGS
+    def test_no_frontmatter_returns_input_unchanged(self, src):
+        # Property: input not starting with `---` returns identically.
+        assert axe.strip_frontmatter(src) == src
+
+    def test_strips_well_formed_frontmatter(self):
+        src = "---\ntitle: x\n---\nbody\n"
+        # `find("\n---", 3) + 4` lands on the newline right after the
+        # second `---`, so the leading `\n` is preserved in the body.
+        # This is the function's actual contract — preserved here as a
+        # behavior lock, not a re-derivation.
+        assert axe.strip_frontmatter(src) == "\nbody\n"
+
+    def test_unterminated_frontmatter_returns_input(self):
+        # Property: frontmatter that doesn't close returns input unchanged
+        # (avoids accidentally swallowing legitimate document body).
+        src = "---\nstart\nno close marker\n"
+        assert axe.strip_frontmatter(src) == src
+
+
+class TestScanUnicodeStatusProperties:
+
+    @given(st.text())
+    @PILOT_SETTINGS
+    def test_returns_list_of_pairs(self, src):
+        # Property: output is always list of (int, str) tuples.
+        out = axe.scan_unicode_status(src)
+        assert isinstance(out, list)
+        for item in out:
+            assert isinstance(item, tuple) and len(item) == 2
+            line, msg = item
+            assert isinstance(line, int) and line >= 1
+            assert isinstance(msg, str) and msg
+
+    @given(st.text(alphabet=string.ascii_letters + string.digits + " \n",
+                   min_size=0, max_size=200))
+    @PILOT_SETTINGS
+    def test_no_status_chars_returns_empty(self, src):
+        # Property: input with no UNICODE_STATUS chars (✓✔⚠❌✗ⓘ) → empty.
+        # The alphabet excludes those symbols.
+        assert axe.scan_unicode_status(src) == []
+
+    def test_aria_hidden_wrapped_passes(self):
+        src = '<span aria-hidden="true">⚠</span>'
+        assert axe.scan_unicode_status(src) == []
+
+    def test_naked_status_symbol_flagged(self):
+        src = '<div>warning ⚠ here</div>'
+        out = axe.scan_unicode_status(src)
+        assert len(out) == 1
+
+
+class TestScanButtonsWithoutNameProperties:
+
+    @given(st.text(alphabet=string.ascii_letters + string.digits + " \n",
+                   min_size=0, max_size=200))
+    @PILOT_SETTINGS
+    def test_no_button_tag_returns_empty(self, src):
+        # Property: input with no `<button` substring → empty.
+        # Alphabet has no `<` so this is guaranteed.
+        assert axe.scan_buttons_without_name(src) == []
+
+    @given(st.text())
+    @PILOT_SETTINGS
+    def test_line_numbers_positive(self, src):
+        # Property: every reported line number is ≥ 1.
+        for line, _ in axe.scan_buttons_without_name(src):
+            assert line >= 1
+
+    def test_aria_label_passes(self):
+        src = '<button aria-label="close"></button>'
+        assert axe.scan_buttons_without_name(src) == []
+
+    def test_title_attr_passes(self):
+        src = '<button title="close"></button>'
+        assert axe.scan_buttons_without_name(src) == []
+
+    def test_empty_button_flagged(self):
+        src = '<button></button>'
+        out = axe.scan_buttons_without_name(src)
+        assert len(out) == 1
+
+
+class TestScanUnlabeledInputsProperties:
+
+    @given(st.text(alphabet=string.ascii_letters + string.digits + " \n",
+                   min_size=0, max_size=200))
+    @PILOT_SETTINGS
+    def test_no_input_or_textarea_returns_empty(self, src):
+        # Alphabet has no `<` so no `<input` / `<textarea` tags.
+        assert axe.scan_unlabeled_inputs(src) == []
+
+    def test_aria_label_passes(self):
+        assert axe.scan_unlabeled_inputs(
+            '<input type="text" aria-label="x" />') == []
+
+    def test_placeholder_passes(self):
+        # placeholder is treated as a label hint for screen readers.
+        assert axe.scan_unlabeled_inputs(
+            '<input type="text" placeholder="search" />') == []
+
+    def test_implicit_label_wrap_passes(self):
+        # PR #310 added support for <label>...<input/></label> implicit
+        # association. Lock that contract here.
+        src = '<label><span>name</span><input type="text" /></label>'
+        assert axe.scan_unlabeled_inputs(src) == []
+
+    def test_naked_input_flagged(self):
+        out = axe.scan_unlabeled_inputs('<input type="text" />')
+        assert len(out) == 1
+
+
+class TestScanColorOnlySeverityProperties:
+
+    @given(st.text(alphabet=string.ascii_letters + " \n", min_size=0, max_size=200))
+    @PILOT_SETTINGS
+    def test_no_severity_token_returns_empty(self, src):
+        # Property: input without any severity color token → empty.
+        # Alphabet excludes brackets so no className=... can match.
+        assert axe.scan_color_only_severity(src) == []
+
+    @given(st.text())
+    @PILOT_SETTINGS
+    def test_line_numbers_positive(self, src):
+        for line, _ in axe.scan_color_only_severity(src):
+            assert line >= 1
+
+    def test_border_signal_passes(self):
+        src = '<div className="text-[color:var(--da-color-error)] border-2">err</div>'
+        assert axe.scan_color_only_severity(src) == []
+
+    def test_font_bold_signal_passes(self):
+        src = '<div className="text-[color:var(--da-color-error)] font-bold">err</div>'
+        assert axe.scan_color_only_severity(src) == []
+
+    def test_font_semibold_signal_passes(self):
+        # PR #311 added font-semibold to accepted markers.
+        src = '<h4 className="text-[color:var(--da-color-success)] font-semibold">x</h4>'
+        assert axe.scan_color_only_severity(src) == []
+
+    def test_role_alert_passes(self):
+        src = '<div role="alert" className="text-[color:var(--da-color-error)]">err</div>'
+        assert axe.scan_color_only_severity(src) == []
+
+    def test_naked_severity_flagged(self):
+        src = '<div className="text-[color:var(--da-color-error)]">err</div>'
+        out = axe.scan_color_only_severity(src)
+        assert len(out) == 1
