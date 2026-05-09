@@ -33,6 +33,7 @@ func runWith(args []string) (int, string, string) {
 }
 
 func TestRun_NoArgsPrintsRootUsage(t *testing.T) {
+	t.Parallel()
 	code, _, errOut := runWith(nil)
 	if code != exitOK {
 		t.Errorf("code = %d, want %d", code, exitOK)
@@ -46,6 +47,7 @@ func TestRun_NoArgsPrintsRootUsage(t *testing.T) {
 }
 
 func TestRun_HelpFlagsExitClean(t *testing.T) {
+	t.Parallel()
 	for _, arg := range []string{"-h", "--help", "help"} {
 		t.Run(arg, func(t *testing.T) {
 			code, _, _ := runWith([]string{arg})
@@ -57,6 +59,7 @@ func TestRun_HelpFlagsExitClean(t *testing.T) {
 }
 
 func TestRun_VersionFlagsPrintBinaryName(t *testing.T) {
+	t.Parallel()
 	for _, arg := range []string{"-V", "--version", "version"} {
 		t.Run(arg, func(t *testing.T) {
 			code, out, _ := runWith([]string{arg})
@@ -71,6 +74,7 @@ func TestRun_VersionFlagsPrintBinaryName(t *testing.T) {
 }
 
 func TestRun_UnknownSubcommandReturnsCallerErr(t *testing.T) {
+	t.Parallel()
 	code, _, errOut := runWith([]string{"banana"})
 	if code != exitCallerErr {
 		t.Errorf("code = %d, want %d", code, exitCallerErr)
@@ -83,6 +87,7 @@ func TestRun_UnknownSubcommandReturnsCallerErr(t *testing.T) {
 // ─── import ────────────────────────────────────────────────────────
 
 func TestRunImport_BasicProm(t *testing.T) {
+	t.Parallel()
 	src := filepath.Join(fixtureRoot(t), "promrule_basic.yaml")
 	code, out, _ := runWith([]string{"import", "--input", src})
 	if code != exitOK {
@@ -106,6 +111,7 @@ func TestRunImport_BasicProm(t *testing.T) {
 }
 
 func TestRunImport_StrictPromOffLeavesPromCompatibleZero(t *testing.T) {
+	t.Parallel()
 	src := filepath.Join(fixtureRoot(t), "promrule_basic.yaml")
 	code, out, _ := runWith([]string{"import", "--input", src, "--validate-strict-prom=false"})
 	if code != exitOK {
@@ -123,6 +129,7 @@ func TestRunImport_StrictPromOffLeavesPromCompatibleZero(t *testing.T) {
 }
 
 func TestRunImport_VMOnlyPassesWithoutGate(t *testing.T) {
+	t.Parallel()
 	src := filepath.Join(fixtureRoot(t), "promrule_metricsql.yaml")
 	code, _, _ := runWith([]string{"import", "--input", src})
 	if code != exitOK {
@@ -131,6 +138,7 @@ func TestRunImport_VMOnlyPassesWithoutGate(t *testing.T) {
 }
 
 func TestRunImport_FailOnNonPortableTripsOnVMOnly(t *testing.T) {
+	t.Parallel()
 	src := filepath.Join(fixtureRoot(t), "promrule_metricsql.yaml")
 	code, _, errOut := runWith([]string{"import", "--input", src, "--fail-on-non-portable"})
 	if code != exitGateFail {
@@ -142,6 +150,7 @@ func TestRunImport_FailOnNonPortableTripsOnVMOnly(t *testing.T) {
 }
 
 func TestRunImport_FailOnNonPortableAutoElevatesStrictProm(t *testing.T) {
+	t.Parallel()
 	src := filepath.Join(fixtureRoot(t), "promrule_basic.yaml")
 	code, _, errOut := runWith([]string{
 		"import", "--input", src,
@@ -158,6 +167,7 @@ func TestRunImport_FailOnNonPortableAutoElevatesStrictProm(t *testing.T) {
 }
 
 func TestRunImport_FailOnAmbiguousTripsOnSyntaxError(t *testing.T) {
+	t.Parallel()
 	src := filepath.Join(fixtureRoot(t), "promrule_ambiguous.yaml")
 	code, _, errOut := runWith([]string{"import", "--input", src, "--fail-on-ambiguous"})
 	if code != exitGateFail {
@@ -169,6 +179,7 @@ func TestRunImport_FailOnAmbiguousTripsOnSyntaxError(t *testing.T) {
 }
 
 func TestRunImport_OutputFileWritesJSONAndDiagnostics(t *testing.T) {
+	t.Parallel()
 	tmp := t.TempDir()
 	outPath := filepath.Join(tmp, "result.json")
 	src := filepath.Join(fixtureRoot(t), "promrule_basic.yaml")
@@ -196,6 +207,7 @@ func TestRunImport_OutputFileWritesJSONAndDiagnostics(t *testing.T) {
 }
 
 func TestRunImport_MissingInputFlagReturnsCallerErr(t *testing.T) {
+	t.Parallel()
 	code, _, errOut := runWith([]string{"import"})
 	if code != exitCallerErr {
 		t.Errorf("code = %d, want %d", code, exitCallerErr)
@@ -206,6 +218,7 @@ func TestRunImport_MissingInputFlagReturnsCallerErr(t *testing.T) {
 }
 
 func TestRunImport_MissingFilePathReturnsCallerErr(t *testing.T) {
+	t.Parallel()
 	code, _, _ := runWith([]string{"import", "--input", "/this/does/not/exist.yaml"})
 	if code != exitCallerErr {
 		t.Errorf("code = %d, want %d", code, exitCallerErr)
@@ -213,6 +226,7 @@ func TestRunImport_MissingFilePathReturnsCallerErr(t *testing.T) {
 }
 
 func TestRunImport_GeneratedByOverridesBinaryStamp(t *testing.T) {
+	t.Parallel()
 	src := filepath.Join(fixtureRoot(t), "promrule_basic.yaml")
 	const stamp = "ci-job-99 da-parser@v2.8.0"
 	code, out, _ := runWith([]string{"import", "--input", src, "--generated-by", stamp})
@@ -229,6 +243,7 @@ func TestRunImport_GeneratedByOverridesBinaryStamp(t *testing.T) {
 }
 
 func TestRunImport_DefaultGeneratedByContainsBinaryName(t *testing.T) {
+	t.Parallel()
 	src := filepath.Join(fixtureRoot(t), "promrule_basic.yaml")
 	code, out, _ := runWith([]string{"import", "--input", src})
 	if code != exitOK {
@@ -246,6 +261,7 @@ func TestRunImport_DefaultGeneratedByContainsBinaryName(t *testing.T) {
 // ─── allowlist ─────────────────────────────────────────────────────
 
 func TestRunAllowlist_DefaultTextFormat(t *testing.T) {
+	t.Parallel()
 	code, out, _ := runWith([]string{"allowlist"})
 	if code != exitOK {
 		t.Errorf("code = %d", code)
@@ -259,6 +275,7 @@ func TestRunAllowlist_DefaultTextFormat(t *testing.T) {
 }
 
 func TestRunAllowlist_JSONFormatIncludesVersion(t *testing.T) {
+	t.Parallel()
 	code, out, _ := runWith([]string{"allowlist", "--format", "json"})
 	if code != exitOK {
 		t.Errorf("code = %d", code)
@@ -286,6 +303,7 @@ func TestRunAllowlist_JSONFormatIncludesVersion(t *testing.T) {
 }
 
 func TestRunAllowlist_BadFormatReturnsCallerErr(t *testing.T) {
+	t.Parallel()
 	code, _, errOut := runWith([]string{"allowlist", "--format", "xml"})
 	if code != exitCallerErr {
 		t.Errorf("code = %d, want %d", code, exitCallerErr)
@@ -298,6 +316,7 @@ func TestRunAllowlist_BadFormatReturnsCallerErr(t *testing.T) {
 // ─── stdin path (separate because it touches os.Stdin) ─────────────
 
 func TestReadInputBytes_StdinPath(t *testing.T) {
+	t.Parallel()
 	// We can't drive os.Stdin from runWith easily, so test
 	// readInputBytes directly with a temp pipe.
 	r, w, err := os.Pipe()

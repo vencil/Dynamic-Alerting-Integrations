@@ -146,6 +146,7 @@ func TestExitCodeForRefresh(t *testing.T) {
 // --- cmdRefresh: stdin input --------------------------------------
 
 func TestCmdRefresh_ReadsFromStdinWhenInputDash(t *testing.T) {
+	t.Parallel()
 	// We can't easily inject stdin into cmdRefresh (it uses os.Stdin),
 	// so test the lower-level flow: parse flags + readInputJSON("-",
 	// stdin, ...) confirms stdin support. (Stdin reading is exercised

@@ -89,6 +89,7 @@ func fixturePlanJSON() []byte {
 // --- Flag parsing --------------------------------------------------
 
 func TestApply_MissingPlanFlag(t *testing.T) {
+	t.Parallel()
 	stderr := &bytes.Buffer{}
 	code := cmdApply([]string{}, &bytes.Buffer{}, stderr)
 	if code != exitCallerErr {
@@ -100,6 +101,7 @@ func TestApply_MissingPlanFlag(t *testing.T) {
 }
 
 func TestApply_MissingEmitDirFlag(t *testing.T) {
+	t.Parallel()
 	stderr := &bytes.Buffer{}
 	code := cmdApply([]string{"--plan", "p.json"}, &bytes.Buffer{}, stderr)
 	if code != exitCallerErr {
@@ -111,6 +113,7 @@ func TestApply_MissingEmitDirFlag(t *testing.T) {
 }
 
 func TestApply_BadRepoFlag(t *testing.T) {
+	t.Parallel()
 	tmp := t.TempDir()
 	planFile := filepath.Join(tmp, "p.json")
 	mustWriteFile(t, planFile, fixturePlanJSON())
@@ -135,6 +138,7 @@ func TestApply_BadRepoFlag(t *testing.T) {
 // --- runApply happy path -------------------------------------------
 
 func TestRunApply_HappyPath_DryRun(t *testing.T) {
+	t.Parallel()
 	tmp := t.TempDir()
 	planFile := filepath.Join(tmp, "plan.json")
 	mustWriteFile(t, planFile, fixturePlanJSON())
@@ -190,6 +194,7 @@ func TestRunApply_HappyPath_DryRun(t *testing.T) {
 // --- runApply: bad Plan JSON -----------------------------------
 
 func TestRunApply_MalformedPlanJSON(t *testing.T) {
+	t.Parallel()
 	tmp := t.TempDir()
 	planFile := filepath.Join(tmp, "plan.json")
 	mustWriteFile(t, planFile, []byte(`{not valid JSON`))
@@ -216,6 +221,7 @@ func TestRunApply_MalformedPlanJSON(t *testing.T) {
 // --- runApply: empty Plan ----------------------------------------
 
 func TestRunApply_EmptyPlanRejected(t *testing.T) {
+	t.Parallel()
 	tmp := t.TempDir()
 	planFile := filepath.Join(tmp, "plan.json")
 	mustWriteFile(t, planFile, []byte(`{"items": []}`))
@@ -242,6 +248,7 @@ func TestRunApply_EmptyPlanRejected(t *testing.T) {
 // --- runApply: missing emit-dir ---------------------------------
 
 func TestRunApply_MissingEmitDir(t *testing.T) {
+	t.Parallel()
 	tmp := t.TempDir()
 	planFile := filepath.Join(tmp, "plan.json")
 	mustWriteFile(t, planFile, fixturePlanJSON())
@@ -266,6 +273,7 @@ func TestRunApply_MissingEmitDir(t *testing.T) {
 // --- Default-output behaviour (PR-5 self-review fix) -------------
 
 func TestRunApply_DefaultResultJSONIsSkipped_StdoutIsMarkdownOnly(t *testing.T) {
+	t.Parallel()
 	// Pre-fix bug: --result-json defaulted to "-" (stdout), so
 	// running with no overrides glued markdown report + JSON onto
 	// stdout. Fix: default to "" → skip JSON write entirely. This
@@ -305,6 +313,7 @@ func TestRunApply_DefaultResultJSONIsSkipped_StdoutIsMarkdownOnly(t *testing.T) 
 }
 
 func TestRunApply_ExplicitResultJSONDashWritesJSONToStdout(t *testing.T) {
+	t.Parallel()
 	// Customer who explicitly opts into both stdout outputs gets
 	// what they asked for (markdown then JSON, glued — their
 	// problem). Test pins that "-" still works.
@@ -341,6 +350,7 @@ func TestRunApply_ExplicitResultJSONDashWritesJSONToStdout(t *testing.T) {
 // --- mdCell helper -------------------------------------------------
 
 func TestMdCell_HandlesNewlinesAndPipes(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		in, want string
 	}{
@@ -360,6 +370,7 @@ func TestMdCell_HandlesNewlinesAndPipes(t *testing.T) {
 }
 
 func TestRenderApplyReport_MultiLineErrorMessageStaysOnOneRow(t *testing.T) {
+	t.Parallel()
 	// Pin: a multi-line ErrorMessage (typical for git/gh stderr)
 	// must not break the Markdown table by introducing newlines
 	// mid-row. Counts the number of `|` row separators between the
@@ -407,6 +418,7 @@ func TestRenderApplyReport_MultiLineErrorMessageStaysOnOneRow(t *testing.T) {
 // --- AllocateFiles warning ordering ----------------------------
 
 func TestRunApply_AllocateWarningsPrependedNotAppended(t *testing.T) {
+	t.Parallel()
 	// Self-review pin: allocation warnings come from a step that
 	// runs BEFORE Apply, so they should appear FIRST in the result
 	// Warnings slice — not after the orchestration's warnings.
@@ -479,6 +491,7 @@ func TestRunApply_AllocateWarningsPrependedNotAppended(t *testing.T) {
 // --- exitCodeForApply mapping ------------------------------------
 
 func TestExitCodeForApply(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		s    batchpr.ApplySummary
