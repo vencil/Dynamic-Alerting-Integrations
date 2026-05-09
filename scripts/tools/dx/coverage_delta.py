@@ -313,6 +313,72 @@ def format_text_report(report: DeltaReport, top_n: int = 10) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
+def format_markdown_report(report: DeltaReport, top_n: int = 10) -> str:
+    """Format DeltaReport as a Markdown block suitable for a PR comment.
+
+    Distinct from format_text_report: uses Markdown tables + headings
+    instead of plain indented lines, and includes a stable
+    `<!-- coverage-delta-bot -->` HTML comment marker so the workflow
+    can find-and-update an existing comment instead of accumulating
+    one comment per push.
+    """
+    sign = "+" if report.total_delta >= 0 else ""
+    direction = "📈" if report.total_delta > 0 else (
+        "📉" if report.total_delta < 0 else "➡️"
+    )
+
+    lines: list = [
+        "<!-- coverage-delta-bot -->",
+        "## Coverage delta",
+        "",
+        f"{direction} **{report.total_before:.1f}%** → "
+        f"**{report.total_after:.1f}%** ({sign}{report.total_delta:.2f}%)",
+        "",
+    ]
+
+    def _table(title: str, items, marker_emoji: str):
+        if not items:
+            return
+        sorted_items = sorted(items, key=lambda d: -abs(d.delta))[:top_n]
+        suffix = (
+            f" (top {top_n} of {len(items)})"
+            if len(items) > top_n else f" ({len(items)})"
+        )
+        lines.append(f"### {marker_emoji} {title}{suffix}")
+        lines.append("")
+        lines.append("| File | Before | After | Δ |")
+        lines.append("|---|---:|---:|---:|")
+        for d in sorted_items:
+            sd = "+" if d.delta >= 0 else ""
+            lines.append(
+                f"| `{d.filename}` | {d.before:.1f}% | "
+                f"{d.after:.1f}% | {sd}{d.delta:.1f}% |"
+            )
+        lines.append("")
+
+    _table("Improved", report.improved, "✅")
+    _table("Regressed", report.regressed, "⚠️")
+    _table("Newly tracked", report.added, "🆕")
+    _table("Removed", report.removed, "🗑")
+
+    if report.unchanged_count:
+        lines.append(f"_Unchanged: {report.unchanged_count} files._")
+        lines.append("")
+
+    if not (report.improved or report.regressed
+            or report.added or report.removed):
+        lines.append("_No per-file coverage changes detected._")
+        lines.append("")
+
+    return "\n".join(lines).rstrip() + "\n"
+
+
+# Stable marker the PR-comment workflow uses to find-and-update an
+# existing comment rather than accumulate one per push. Keep in sync
+# with the literal in format_markdown_report.
+PR_COMMENT_MARKER = "<!-- coverage-delta-bot -->"
+
+
 def evaluate_thresholds(
     report: DeltaReport,
     *,
@@ -363,8 +429,12 @@ def main(argv: Optional[list] = None) -> int:
         help="Emit JSON instead of human-readable text",
     )
     parser.add_argument(
+        "--markdown", action="store_true",
+        help="Emit Markdown PR-comment-ready output instead of text",
+    )
+    parser.add_argument(
         "--top", type=int, default=10,
-        help="Top N files per bucket to show in text mode (default: 10)",
+        help="Top N files per bucket to show in text/markdown mode (default: 10)",
     )
     parser.add_argument(
         "--max-total-regression", type=float, default=None,
@@ -385,8 +455,15 @@ def main(argv: Optional[list] = None) -> int:
 
     report = compute_delta(before, after)
 
+    if args.json and args.markdown:
+        print("ERROR: --json and --markdown are mutually exclusive",
+              file=sys.stderr)
+        return 2
+
     if args.json:
         print(json.dumps(report.to_dict(), indent=2))
+    elif args.markdown:
+        print(format_markdown_report(report, top_n=args.top))
     else:
         print(format_text_report(report, top_n=args.top))
 

@@ -1,0 +1,186 @@
+# Coverage delta — find-and-update PR comment with the per-file coverage
+# diff between this PR and the latest main-branch run.
+#
+# Wired in Gap 5 PR 2 (testing-quality memory roadmap). Consumes the
+# `coverage-py3.13` artifact uploaded by the existing python-tests job
+# in ci.yml; runs scripts/tools/dx/coverage_delta.py against this run's
+# coverage.xml + the latest main-branch run's coverage.xml; posts/updates
+# a PR comment using the stable `<!-- coverage-delta-bot -->` marker so
+# repeated pushes don't accumulate one comment per push.
+#
+# Failure handling
+# ----------------
+#
+# This workflow is INFORMATIONAL ONLY by design — it never fails the PR.
+# The script exits non-zero only if --max-{total,file}-regression is
+# passed; we deliberately omit those flags here. If a hard gate is
+# wanted later, add the flags + `continue-on-error: false`.
+#
+# Why a separate workflow (not a step in ci.yml)
+# ----------------------------------------------
+#
+# The job needs `pull-requests: write` to comment, but the rest of CI
+# runs with the default minimal token. Keeping this isolated avoids
+# expanding the blast radius of a compromised CI step that today only
+# needs read access. It also lets the job skip cleanly on push events
+# (where there's no PR to comment on) without complicating ci.yml's
+# job dependency graph.
+name: Coverage Delta
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+
+permissions:
+  pull-requests: write
+  contents: read
+  actions: read
+
+jobs:
+  delta:
+    name: Post coverage delta comment
+    runs-on: ubuntu-latest
+    # Only proceed when the triggering CI run was on a pull_request and
+    # finished successfully. (A failed CI run usually means coverage.xml
+    # is missing or partial — running delta on a partial baseline would
+    # report misleading regressions.)
+    if: >-
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'success'
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v6
+        with:
+          # Need the coverage_delta.py script + tests; full history not
+          # required.
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 1
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Download PR coverage artifact
+        # The triggering CI run uploaded `coverage-py3.13` as one of its
+        # artifacts. Fetch it into ./pr-coverage/.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p pr-coverage
+          gh run download "${{ github.event.workflow_run.id }}" \
+            --repo "${{ github.repository }}" \
+            --name coverage-py3.13 \
+            --dir pr-coverage \
+            || echo "::warning::PR coverage artifact missing — skipping delta"
+
+      - name: Find latest main-branch CI run with coverage
+        id: find-base
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # List recent successful CI runs on main and pick the most
+          # recent one that has the coverage-py3.13 artifact attached.
+          # Fall back to "no-base" if nothing usable found in the last
+          # 20 runs (workflow stays informational; no failure).
+          echo "base_run_id=" >> "$GITHUB_OUTPUT"
+          runs=$(gh run list \
+            --repo "${{ github.repository }}" \
+            --workflow "CI" \
+            --branch main \
+            --status success \
+            --limit 20 \
+            --json databaseId,headSha)
+          for row in $(echo "$runs" | jq -r '.[] | @base64'); do
+            id=$(echo "$row" | base64 --decode | jq -r '.databaseId')
+            sha=$(echo "$row" | base64 --decode | jq -r '.headSha')
+            # Check whether this run has the coverage artifact.
+            if gh api "repos/${{ github.repository }}/actions/runs/$id/artifacts" \
+                 --jq '.artifacts[].name' | grep -qx 'coverage-py3.13'; then
+              echo "base_run_id=$id" >> "$GITHUB_OUTPUT"
+              echo "base_sha=$sha" >> "$GITHUB_OUTPUT"
+              echo "Found base coverage run $id (sha=$sha)"
+              break
+            fi
+          done
+
+      - name: Download main-branch coverage artifact
+        if: steps.find-base.outputs.base_run_id != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p main-coverage
+          gh run download "${{ steps.find-base.outputs.base_run_id }}" \
+            --repo "${{ github.repository }}" \
+            --name coverage-py3.13 \
+            --dir main-coverage
+
+      - name: Compute coverage delta
+        if: steps.find-base.outputs.base_run_id != ''
+        id: delta
+        run: |
+          if [ ! -f main-coverage/coverage.xml ] || [ ! -f pr-coverage/coverage.xml ]; then
+            echo "::warning::missing coverage.xml on one side — skipping"
+            exit 0
+          fi
+          {
+            echo 'COMMENT<<COVERAGE_EOF'
+            python scripts/tools/dx/coverage_delta.py \
+              main-coverage/coverage.xml \
+              pr-coverage/coverage.xml \
+              --markdown
+            # Footer: link the base SHA so reviewers can verify which
+            # main-branch run we compared against.
+            echo ""
+            echo "_Base: \`${{ steps.find-base.outputs.base_sha }}\`_"
+            echo 'COVERAGE_EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Find PR number for this workflow_run
+        if: steps.delta.outputs.COMMENT != ''
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # workflow_run events don't expose the PR number directly;
+          # look it up by head SHA.
+          sha="${{ github.event.workflow_run.head_sha }}"
+          number=$(gh pr list \
+            --repo "${{ github.repository }}" \
+            --state open \
+            --search "$sha" \
+            --json number \
+            --jq '.[0].number')
+          if [ -z "$number" ]; then
+            echo "::warning::no open PR found for sha=$sha — skipping comment"
+          fi
+          echo "number=$number" >> "$GITHUB_OUTPUT"
+
+      - name: Post or update PR comment
+        if: steps.pr.outputs.number != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+          MARKER: "<!-- coverage-delta-bot -->"
+          BODY: ${{ steps.delta.outputs.COMMENT }}
+        run: |
+          # Find the existing bot comment (if any) by the stable marker.
+          existing=$(gh api \
+            "repos/${{ github.repository }}/issues/$PR_NUMBER/comments" \
+            --jq ".[] | select(.body | startswith(\"$MARKER\")) | .id" \
+            | head -n 1)
+
+          if [ -n "$existing" ]; then
+            echo "Updating existing comment $existing"
+            gh api \
+              --method PATCH \
+              "repos/${{ github.repository }}/issues/comments/$existing" \
+              -f body="$BODY"
+          else
+            echo "Posting new comment"
+            gh api \
+              --method POST \
+              "repos/${{ github.repository }}/issues/$PR_NUMBER/comments" \
+              -f body="$BODY"
+          fi
