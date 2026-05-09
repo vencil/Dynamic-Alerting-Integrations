@@ -19,13 +19,21 @@ Why hand-crafted vs `mutmut`/`cosmic-ray`:
 Usage:
   python tests/shared/_mutation_pilot.py [--target FUNC]
 
-Latest run (v2.8.0 audit ④ pilot): 42/44 caught (~95%) across 21
-functions. The 2 survivors are equivalent mutations (drop type-check
-guard before re.match's str() coercion; offset 3→0 in
-strip_frontmatter's `find("\\n---", 3)` — opening `---` is always at
-index 0, so the alternate offset matches the same closing tag for any
-valid frontmatter). See PR descriptions / commit messages for findings
-across batches.
+Latest run (v2.8.0 audit ④ pilot): 54/57 caught (~95%) across 26
+functions. The 3 survivors are all equivalent mutations:
+  - parse_duration_seconds: drop type-check before m.match's str()
+    coercion (str() catches the non-string case downstream).
+  - strip_frontmatter: offset 3→0 in `find("\\n---", 3)` — opening
+    `---` is always at index 0, so the alternate offset matches the
+    same closing tag for any valid frontmatter.
+  - _parse_front_matter: drop the explicit `startswith("---")` early
+    return — the subsequent `re.match(r"^---\\n…", …)` already rejects
+    non-frontmatter inputs, so the early return is redundant.
+
+The 5% survivor rate is the floor: real test gaps have been chased
+down across batches; what remains is true code-level redundancy that
+no behavioral test can pin without overspecifying the implementation.
+See PR descriptions / commit messages for findings across batches.
 """
 from __future__ import annotations
 
@@ -447,6 +455,115 @@ MUTATIONS: list[Mutation] = [
         fn_name="_resolve_binary",
         old='        env_override = os.environ.get(self.env_var, "").strip()\n        if env_override:\n            return (\n                env_override if os.path.isfile(env_override) else None\n            ), cleaned',
         new='        env_override = ""\n        if env_override:\n            return None, cleaned',
+    ),
+    # ── _substitute_tenant (_grar_merge) ─────────────────────────
+    Mutation(
+        target_file="scripts/tools/ops/_grar_merge.py",
+        test_file="tests/shared/test_property_tools.py",
+        label="substitute: drop dict recursion (nested {{tenant}} unchanged)",
+        fn_name="_substitute_tenant",
+        old="    if isinstance(obj, dict):\n        return {k: _substitute_tenant(v, tenant_name) for k, v in obj.items()}",
+        new="    if isinstance(obj, dict):\n        return obj",
+    ),
+    Mutation(
+        target_file="scripts/tools/ops/_grar_merge.py",
+        test_file="tests/shared/test_property_tools.py",
+        label="substitute: drop list recursion (nested {{tenant}} unchanged)",
+        fn_name="_substitute_tenant",
+        old="    if isinstance(obj, list):\n        return [_substitute_tenant(item, tenant_name) for item in obj]",
+        new="    if isinstance(obj, list):\n        return obj",
+    ),
+    Mutation(
+        target_file="scripts/tools/ops/_grar_merge.py",
+        test_file="tests/shared/test_property_tools.py",
+        label="substitute: empty replacement (placeholder removed but no name inserted)",
+        fn_name="_substitute_tenant",
+        old='        return obj.replace("{{tenant}}", tenant_name)',
+        new='        return obj.replace("{{tenant}}", "")',
+    ),
+    # ── _contains_tenant_placeholder (_grar_merge) ───────────────
+    Mutation(
+        target_file="scripts/tools/ops/_grar_merge.py",
+        test_file="tests/shared/test_property_tools.py",
+        label="contains: skip dict recursion (nested marker missed)",
+        fn_name="_contains_tenant_placeholder",
+        old="    if isinstance(obj, dict):\n        return any(_contains_tenant_placeholder(v) for v in obj.values())",
+        new="    if isinstance(obj, dict):\n        return False",
+    ),
+    Mutation(
+        target_file="scripts/tools/ops/_grar_merge.py",
+        test_file="tests/shared/test_property_tools.py",
+        label="contains: any → all (one missing marker masks the others)",
+        fn_name="_contains_tenant_placeholder",
+        old="    if isinstance(obj, list):\n        return any(_contains_tenant_placeholder(item) for item in obj)",
+        new="    if isinstance(obj, list):\n        return all(_contains_tenant_placeholder(item) for item in obj)",
+    ),
+    # ── merge_routing_with_defaults (_grar_merge) ────────────────
+    Mutation(
+        target_file="scripts/tools/ops/_grar_merge.py",
+        test_file="tests/shared/test_property_tools.py",
+        label="merge: defaults shadow tenant (precedence inverted)",
+        fn_name="merge_routing_with_defaults",
+        old="    merged = dict(defaults)\n    if isinstance(tenant_routing, dict):\n        for key, value in tenant_routing.items():\n            merged[key] = value",
+        new="    merged = dict(tenant_routing) if isinstance(tenant_routing, dict) else {}\n    for key, value in defaults.items():\n        merged[key] = value",
+    ),
+    Mutation(
+        target_file="scripts/tools/ops/_grar_merge.py",
+        test_file="tests/shared/test_property_tools.py",
+        label="merge: skip tenant substitution (markers leak through)",
+        fn_name="merge_routing_with_defaults",
+        old="    return _substitute_tenant(merged, tenant_name)",
+        new="    return merged",
+    ),
+    Mutation(
+        target_file="scripts/tools/ops/_grar_merge.py",
+        test_file="tests/shared/test_property_tools.py",
+        label="merge: in-place mutation (caller dict scrambled)",
+        fn_name="merge_routing_with_defaults",
+        old="    merged = dict(defaults)",
+        new="    merged = defaults",
+    ),
+    # ── _extract_host (_grar_validate) ───────────────────────────
+    Mutation(
+        target_file="scripts/tools/ops/_grar_validate.py",
+        test_file="tests/shared/test_property_tools.py",
+        label="extract_host: drop type-check (raises on non-string input)",
+        fn_name="_extract_host",
+        old="    if not value or not isinstance(value, str):\n        return None",
+        new="    if not value:\n        return None",
+    ),
+    Mutation(
+        target_file="scripts/tools/ops/_grar_validate.py",
+        test_file="tests/shared/test_property_tools.py",
+        label="extract_host: drop lower() (uppercase host leaks past allowlist)",
+        fn_name="_extract_host",
+        old='        return value.split(":")[0].lower() or None',
+        new='        return value.split(":")[0] or None',
+    ),
+    Mutation(
+        target_file="scripts/tools/ops/_grar_validate.py",
+        test_file="tests/shared/test_property_tools.py",
+        label="extract_host: keep port (host:port returns whole string)",
+        fn_name="_extract_host",
+        old='        return value.split(":")[0].lower() or None',
+        new='        return value.lower() or None',
+    ),
+    # ── parse_command_map (_lint_helpers) ────────────────────────
+    Mutation(
+        target_file="scripts/tools/lint/_lint_helpers.py",
+        test_file="tests/shared/test_property_tools.py tests/lint/test_check_cli_coverage.py",
+        label="parse_cmd_map: ignore closing brace (slurps text after }}",
+        fn_name="parse_command_map",
+        old='                if stripped == "}":\n                    break',
+        new='                if False:\n                    break',
+    ),
+    Mutation(
+        target_file="scripts/tools/lint/_lint_helpers.py",
+        test_file="tests/shared/test_property_tools.py tests/lint/test_check_cli_coverage.py",
+        label="parse_cmd_map: relax key regex (uppercase keys leak in)",
+        fn_name="parse_command_map",
+        old='                m = re.match(r\'"([a-z][a-z0-9-]+)":\\s*"([^"]+)"\', stripped)',
+        new='                m = re.match(r\'"([a-zA-Z][a-zA-Z0-9-]+)":\\s*"([^"]+)"\', stripped)',
     ),
 ]
 
