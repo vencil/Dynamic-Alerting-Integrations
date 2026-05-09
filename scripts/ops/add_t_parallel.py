@@ -44,9 +44,29 @@ RISKY = (
     # which logs via slog.Warn / slog.Info — production writes into the
     # captured buffer, racing the test's bytes.Buffer access. Caught
     # by CI run #25605708926 in TestSlogRequestLogger_EmitsStructuredLine
-    # → TestPutTenant_DirectMode race; this pattern was the PR #350
-    # tenant-api sweep's missed RISKY case.
+    # → TestPutTenant_DirectMode race; PR #350 tenant-api sweep's missed
+    # RISKY case (codified by PR #357).
     "slog.SetDefault",
+    # `withIsolatedMetrics(t)` in components/threshold-exporter/app/
+    # implements the global-swap pattern — saves+sets+restores a
+    # package-level `configMetrics` singleton via setConfigMetrics().
+    # Two parallel tests both calling it would race on the global, with
+    # whichever test ran second's `fresh` registry receiving observations
+    # from the first test's reload. Caught by PR #356 (config_* sweep)
+    # before landing.
+    "withIsolatedMetrics",
+    "setConfigMetrics",
+    # log.SetOutput / log.SetFlags swap the package-level stdlib logger.
+    # Tests that capture log output via `log.SetOutput(&buf)` race on the
+    # logger destination if multiple parallel tests do it — and worse, any
+    # other parallel test that calls log.Printf will write into whichever
+    # buffer happened to be set last, corrupting captured output and
+    # tripping the race detector on the &buf bytes.Buffer. Caught by
+    # PR #356 when -race surfaced bytes.Buffer races in
+    # TestMixedMode_DuplicateAcrossModes_RejectedAtLoad in the Linux
+    # dev container.
+    "log.SetOutput",
+    "log.SetFlags",
 )
 
 

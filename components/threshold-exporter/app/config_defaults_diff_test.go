@@ -12,6 +12,7 @@ import (
 // ============================================================
 
 func TestDefaultsPathLevel_RootIsGlobal(t *testing.T) {
+	t.Parallel()
 	root := filepath.FromSlash("/conf.d")
 	got := defaultsPathLevel(filepath.FromSlash("/conf.d/_defaults.yaml"), root)
 	if got != "global" {
@@ -20,6 +21,7 @@ func TestDefaultsPathLevel_RootIsGlobal(t *testing.T) {
 }
 
 func TestDefaultsPathLevel_OneLevelDeepIsDomain(t *testing.T) {
+	t.Parallel()
 	root := filepath.FromSlash("/conf.d")
 	got := defaultsPathLevel(filepath.FromSlash("/conf.d/finance/_defaults.yaml"), root)
 	if got != "domain" {
@@ -28,6 +30,7 @@ func TestDefaultsPathLevel_OneLevelDeepIsDomain(t *testing.T) {
 }
 
 func TestDefaultsPathLevel_TwoLevelsDeepIsRegion(t *testing.T) {
+	t.Parallel()
 	root := filepath.FromSlash("/conf.d")
 	got := defaultsPathLevel(filepath.FromSlash("/conf.d/finance/us-east/_defaults.yaml"), root)
 	if got != "region" {
@@ -36,6 +39,7 @@ func TestDefaultsPathLevel_TwoLevelsDeepIsRegion(t *testing.T) {
 }
 
 func TestDefaultsPathLevel_ThreeLevelsDeepIsEnv(t *testing.T) {
+	t.Parallel()
 	root := filepath.FromSlash("/conf.d")
 	got := defaultsPathLevel(filepath.FromSlash("/conf.d/finance/us-east/prod/_defaults.yaml"), root)
 	if got != "env" {
@@ -44,6 +48,7 @@ func TestDefaultsPathLevel_ThreeLevelsDeepIsEnv(t *testing.T) {
 }
 
 func TestDefaultsPathLevel_DeeperThanFourIsUnknown(t *testing.T) {
+	t.Parallel()
 	root := filepath.FromSlash("/conf.d")
 	got := defaultsPathLevel(filepath.FromSlash("/conf.d/a/b/c/d/e/_defaults.yaml"), root)
 	if got != "unknown" {
@@ -52,6 +57,7 @@ func TestDefaultsPathLevel_DeeperThanFourIsUnknown(t *testing.T) {
 }
 
 func TestDefaultsPathLevel_NonDescendantIsUnknown(t *testing.T) {
+	t.Parallel()
 	root := filepath.FromSlash("/conf.d")
 	got := defaultsPathLevel(filepath.FromSlash("/elsewhere/_defaults.yaml"), root)
 	if got != "unknown" {
@@ -66,6 +72,7 @@ func TestDefaultsPathLevel_NonDescendantIsUnknown(t *testing.T) {
 // path classifies as "global" not "domain". Production-named dirs
 // never start with `..`.
 func TestDefaultsPathLevel_SkipsK8sConfigMapSymlinkSegments(t *testing.T) {
+	t.Parallel()
 	root := filepath.FromSlash("/etc/config")
 	cases := []struct {
 		path string
@@ -90,6 +97,7 @@ func TestDefaultsPathLevel_SkipsK8sConfigMapSymlinkSegments(t *testing.T) {
 // ============================================================
 
 func TestWidestChangedScope_PicksShallowestChanged(t *testing.T) {
+	t.Parallel()
 	root := filepath.FromSlash("/conf.d")
 	chain := []string{
 		filepath.FromSlash("/conf.d/_defaults.yaml"),
@@ -112,6 +120,7 @@ func TestWidestChangedScope_PicksShallowestChanged(t *testing.T) {
 }
 
 func TestWidestChangedScope_NoneChangedReturnsEmpty(t *testing.T) {
+	t.Parallel()
 	root := filepath.FromSlash("/conf.d")
 	chain := []string{filepath.FromSlash("/conf.d/_defaults.yaml")}
 	hashes := map[string]string{chain[0]: "h-stable"}
@@ -125,6 +134,7 @@ func TestWidestChangedScope_NoneChangedReturnsEmpty(t *testing.T) {
 // ============================================================
 
 func TestParseDefaultsBytes_WrappedDefaultsKey(t *testing.T) {
+	t.Parallel()
 	b := []byte("defaults:\n  mysql_connections: 80\n")
 	got, err := parseDefaultsBytes(b)
 	if err != nil {
@@ -136,6 +146,7 @@ func TestParseDefaultsBytes_WrappedDefaultsKey(t *testing.T) {
 }
 
 func TestParseDefaultsBytes_NakedDict(t *testing.T) {
+	t.Parallel()
 	b := []byte("mysql_connections: 80\n")
 	got, err := parseDefaultsBytes(b)
 	if err != nil {
@@ -147,6 +158,7 @@ func TestParseDefaultsBytes_NakedDict(t *testing.T) {
 }
 
 func TestParseDefaultsBytes_EmptyReturnsEmptyMap(t *testing.T) {
+	t.Parallel()
 	got, err := parseDefaultsBytes([]byte("   \n  \n"))
 	if err != nil {
 		t.Fatalf("parse: %v", err)
@@ -157,6 +169,7 @@ func TestParseDefaultsBytes_EmptyReturnsEmptyMap(t *testing.T) {
 }
 
 func TestParseDefaultsBytes_InvalidYAMLReturnsError(t *testing.T) {
+	t.Parallel()
 	if _, err := parseDefaultsBytes([]byte("not: : valid: yaml: :\n")); err == nil {
 		t.Errorf("expected error for malformed YAML, got nil")
 	}
@@ -173,6 +186,7 @@ func sortedKeys(s []string) []string {
 }
 
 func TestChangedDefaultsKeys_IdenticalReturnsEmpty(t *testing.T) {
+	t.Parallel()
 	a := map[string]any{"x": 1, "y": "z"}
 	b := map[string]any{"x": 1, "y": "z"}
 	if got := changedDefaultsKeys(a, b); len(got) != 0 {
@@ -181,6 +195,7 @@ func TestChangedDefaultsKeys_IdenticalReturnsEmpty(t *testing.T) {
 }
 
 func TestChangedDefaultsKeys_AddedKey(t *testing.T) {
+	t.Parallel()
 	a := map[string]any{}
 	b := map[string]any{"new_key": 1}
 	got := sortedKeys(changedDefaultsKeys(a, b))
@@ -190,6 +205,7 @@ func TestChangedDefaultsKeys_AddedKey(t *testing.T) {
 }
 
 func TestChangedDefaultsKeys_RemovedKey(t *testing.T) {
+	t.Parallel()
 	a := map[string]any{"old_key": 1}
 	b := map[string]any{}
 	got := sortedKeys(changedDefaultsKeys(a, b))
@@ -199,6 +215,7 @@ func TestChangedDefaultsKeys_RemovedKey(t *testing.T) {
 }
 
 func TestChangedDefaultsKeys_ScalarValueChange(t *testing.T) {
+	t.Parallel()
 	a := map[string]any{"mysql_connections": 80}
 	b := map[string]any{"mysql_connections": 100}
 	got := sortedKeys(changedDefaultsKeys(a, b))
@@ -208,6 +225,7 @@ func TestChangedDefaultsKeys_ScalarValueChange(t *testing.T) {
 }
 
 func TestChangedDefaultsKeys_NestedSubkeyChangeDoesNotReportParent(t *testing.T) {
+	t.Parallel()
 	a := map[string]any{"thresholds": map[string]any{"cpu": 80, "memory": 70}}
 	b := map[string]any{"thresholds": map[string]any{"cpu": 90, "memory": 70}}
 	got := sortedKeys(changedDefaultsKeys(a, b))
@@ -217,6 +235,7 @@ func TestChangedDefaultsKeys_NestedSubkeyChangeDoesNotReportParent(t *testing.T)
 }
 
 func TestChangedDefaultsKeys_ArrayReplaceIsLeafChange(t *testing.T) {
+	t.Parallel()
 	a := map[string]any{"x": []any{1, 2}}
 	b := map[string]any{"x": []any{1, 2, 3}}
 	got := sortedKeys(changedDefaultsKeys(a, b))
@@ -226,12 +245,14 @@ func TestChangedDefaultsKeys_ArrayReplaceIsLeafChange(t *testing.T) {
 }
 
 func TestChangedDefaultsKeys_BothNilReturnsEmpty(t *testing.T) {
+	t.Parallel()
 	if got := changedDefaultsKeys(nil, nil); len(got) != 0 {
 		t.Errorf("expected empty, got %v", got)
 	}
 }
 
 func TestChangedDefaultsKeys_TypeChangeIsLeafChange(t *testing.T) {
+	t.Parallel()
 	a := map[string]any{"x": 80}                      // scalar
 	b := map[string]any{"x": map[string]any{"a": 1}}  // map
 	got := sortedKeys(changedDefaultsKeys(a, b))
@@ -245,6 +266,7 @@ func TestChangedDefaultsKeys_TypeChangeIsLeafChange(t *testing.T) {
 // ============================================================
 
 func TestTenantOverridesAll_AllTopLevelOverridden(t *testing.T) {
+	t.Parallel()
 	tenant := map[string]any{"mysql_connections": 100, "redis_connections": 50}
 	if !tenantOverridesAll(tenant, []string{"mysql_connections", "redis_connections"}) {
 		t.Errorf("expected true (all overridden)")
@@ -252,6 +274,7 @@ func TestTenantOverridesAll_AllTopLevelOverridden(t *testing.T) {
 }
 
 func TestTenantOverridesAll_PartialOverrideReturnsFalse(t *testing.T) {
+	t.Parallel()
 	tenant := map[string]any{"mysql_connections": 100}
 	if tenantOverridesAll(tenant, []string{"mysql_connections", "redis_connections"}) {
 		t.Errorf("expected false (redis_connections missing)")
@@ -259,6 +282,7 @@ func TestTenantOverridesAll_PartialOverrideReturnsFalse(t *testing.T) {
 }
 
 func TestTenantOverridesAll_NestedExactPath(t *testing.T) {
+	t.Parallel()
 	tenant := map[string]any{"thresholds": map[string]any{"cpu": 85}}
 	if !tenantOverridesAll(tenant, []string{"thresholds.cpu"}) {
 		t.Errorf("expected true (exact nested override)")
@@ -266,6 +290,7 @@ func TestTenantOverridesAll_NestedExactPath(t *testing.T) {
 }
 
 func TestTenantOverridesAll_ParentScalarOverridesWholeSubtree(t *testing.T) {
+	t.Parallel()
 	// Tenant replaces the whole `thresholds` block with a scalar →
 	// any path beneath `thresholds` is considered overridden.
 	tenant := map[string]any{"thresholds": "any-scalar"}
@@ -275,6 +300,7 @@ func TestTenantOverridesAll_ParentScalarOverridesWholeSubtree(t *testing.T) {
 }
 
 func TestTenantOverridesAll_NoOverlapReturnsFalse(t *testing.T) {
+	t.Parallel()
 	tenant := map[string]any{"unrelated_key": 1}
 	if tenantOverridesAll(tenant, []string{"thresholds.cpu"}) {
 		t.Errorf("expected false (tenant doesn't touch thresholds)")
@@ -282,12 +308,14 @@ func TestTenantOverridesAll_NoOverlapReturnsFalse(t *testing.T) {
 }
 
 func TestTenantOverridesAll_EmptyPathsReturnsTrue(t *testing.T) {
+	t.Parallel()
 	if !tenantOverridesAll(map[string]any{}, nil) {
 		t.Errorf("expected true (vacuous on empty paths)")
 	}
 }
 
 func TestTenantOverridesAll_NilValueIsNotOverride(t *testing.T) {
+	t.Parallel()
 	// YAML null → deepMerge "delete key" semantics → defaults still
 	// visible → not an override.
 	tenant := map[string]any{"mysql_connections": nil}
@@ -301,6 +329,7 @@ func TestTenantOverridesAll_NilValueIsNotOverride(t *testing.T) {
 // ============================================================
 
 func TestClassifyDefaultsNoOpEffect_CosmeticWhenNoKeyChanged(t *testing.T) {
+	t.Parallel()
 	dp := "/conf.d/_defaults.yaml"
 	chain := []string{dp}
 	prior := map[string]map[string]any{dp: {"mysql_connections": 80}}
@@ -316,6 +345,7 @@ func TestClassifyDefaultsNoOpEffect_CosmeticWhenNoKeyChanged(t *testing.T) {
 }
 
 func TestClassifyDefaultsNoOpEffect_ShadowedWhenTenantOverridesChangedKey(t *testing.T) {
+	t.Parallel()
 	dp := "/conf.d/_defaults.yaml"
 	chain := []string{dp}
 	prior := map[string]map[string]any{dp: {"mysql_connections": 80}}
@@ -332,6 +362,7 @@ func TestClassifyDefaultsNoOpEffect_ShadowedWhenTenantOverridesChangedKey(t *tes
 }
 
 func TestClassifyDefaultsNoOpEffect_CosmeticWhenTenantSourceUnparseable(t *testing.T) {
+	t.Parallel()
 	dp := "/conf.d/_defaults.yaml"
 	chain := []string{dp}
 	prior := map[string]map[string]any{dp: {"mysql_connections": 80}}
@@ -347,6 +378,7 @@ func TestClassifyDefaultsNoOpEffect_CosmeticWhenTenantSourceUnparseable(t *testi
 }
 
 func TestClassifyDefaultsNoOpEffect_CosmeticWhenPriorParseMissing(t *testing.T) {
+	t.Parallel()
 	dp := "/conf.d/_defaults.yaml"
 	chain := []string{dp}
 	// Cache miss for prior — simulates first tick after restart with
@@ -364,6 +396,7 @@ func TestClassifyDefaultsNoOpEffect_CosmeticWhenPriorParseMissing(t *testing.T) 
 }
 
 func TestClassifyDefaultsNoOpEffect_ShadowedAcrossMultipleChainEntries(t *testing.T) {
+	t.Parallel()
 	// Two defaults files in chain both moved; tenant overrides every
 	// changed key across both → shadowed.
 	dp1 := "/conf.d/_defaults.yaml"

@@ -22,6 +22,7 @@ import (
 // ============================================================
 
 func TestResolveSilentModes(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name       string
 		tenants    map[string]map[string]ScheduledValue
@@ -67,6 +68,7 @@ func TestResolveSilentModes(t *testing.T) {
 }
 
 func TestResolveAt_SkipsSilentKey(t *testing.T) {
+	t.Parallel()
 	// _silent_mode must NOT produce a user_threshold metric
 	cfg := &ThresholdConfig{
 		Defaults: map[string]float64{"mysql_connections": 80},
@@ -89,6 +91,7 @@ func TestResolveAt_SkipsSilentKey(t *testing.T) {
 }
 
 func TestResolveSilentModes_MixedTenants(t *testing.T) {
+	t.Parallel()
 	cfg := &ThresholdConfig{
 		Tenants: map[string]map[string]ScheduledValue{
 			"db-a": {"_silent_mode": SV("warning")},
@@ -127,6 +130,7 @@ func TestResolveSilentModes_MixedTenants(t *testing.T) {
 // ============================================================
 
 func TestResolveSeverityDedup(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name       string
 		tenants    map[string]map[string]ScheduledValue
@@ -177,6 +181,7 @@ func TestResolveSeverityDedup(t *testing.T) {
 }
 
 func TestResolveAt_SkipsSeverityDedupKey(t *testing.T) {
+	t.Parallel()
 	cfg := &ThresholdConfig{
 		Defaults: map[string]float64{"mysql_connections": 80},
 		Tenants: map[string]map[string]ScheduledValue{
@@ -202,6 +207,7 @@ func TestResolveAt_SkipsSeverityDedupKey(t *testing.T) {
 // ============================================================
 
 func TestResolveRouting_ValidConfig(t *testing.T) {
+	t.Parallel()
 	routingYAML := `receiver:
   type: "webhook"
   url: "https://webhook.example.com/alerts"
@@ -249,6 +255,7 @@ repeat_interval: "4h"`
 }
 
 func TestResolveRouting_GuardrailClamp(t *testing.T) {
+	t.Parallel()
 	// group_wait below minimum (5s), repeat_interval above maximum (72h)
 	routingYAML := `receiver:
   type: "webhook"
@@ -280,6 +287,7 @@ repeat_interval: "100h"`
 }
 
 func TestResolveRouting_MissingReceiver(t *testing.T) {
+	t.Parallel()
 	routingYAML := `group_wait: "30s"`
 
 	cfg := &ThresholdConfig{
@@ -298,6 +306,7 @@ func TestResolveRouting_MissingReceiver(t *testing.T) {
 }
 
 func TestResolveRouting_NoRoutingKey(t *testing.T) {
+	t.Parallel()
 	cfg := &ThresholdConfig{
 		Defaults: map[string]float64{"mysql_connections": 80},
 		Tenants: map[string]map[string]ScheduledValue{
@@ -314,6 +323,7 @@ func TestResolveRouting_NoRoutingKey(t *testing.T) {
 }
 
 func TestResolveRouting_MultiTenant(t *testing.T) {
+	t.Parallel()
 	routingA := `receiver:
   type: "webhook"
   url: "https://webhook-a.example.com/alerts"
@@ -359,6 +369,7 @@ repeat_interval: "2h"`
 }
 
 func TestResolveRouting_MinimalConfig(t *testing.T) {
+	t.Parallel()
 	routingYAML := `receiver:
   type: "webhook"
   url: "https://webhook.example.com/alerts"`
@@ -395,6 +406,7 @@ func TestResolveRouting_MinimalConfig(t *testing.T) {
 }
 
 func TestResolveAt_SkipsRoutingKey(t *testing.T) {
+	t.Parallel()
 	cfg := &ThresholdConfig{
 		Defaults: map[string]float64{"mysql_connections": 80},
 		Tenants: map[string]map[string]ScheduledValue{
@@ -419,6 +431,7 @@ func TestResolveAt_SkipsRoutingKey(t *testing.T) {
 // survive YAML unmarshalling → ScheduledValue → ResolveRouting pipeline.
 // This is the integration path: YAML file → UnmarshalYAML → ResolveRouting.
 func TestScheduledValue_RoutingMapRoundTrip(t *testing.T) {
+	t.Parallel()
 	yamlInput := `
 defaults:
   mysql_connections: 80
@@ -469,6 +482,7 @@ tenants:
 // TestFormatDuration_NoDay verifies formatDuration never outputs "d" suffix
 // (Prometheus/Alertmanager only supports s/m/h).
 func TestFormatDuration_NoDay(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		input time.Duration
 		want  string
@@ -493,6 +507,7 @@ func TestFormatDuration_NoDay(t *testing.T) {
 // ============================================================
 
 func TestCardinalityGuard(t *testing.T) {
+	t.Parallel()
 	defsWith20 := make(map[string]float64)
 	for i := 0; i < 20; i++ {
 		defsWith20[fmt.Sprintf("metric_%d", i)] = float64(i)
@@ -527,6 +542,7 @@ func TestCardinalityGuard(t *testing.T) {
 // ============================================================
 
 func TestValidateTenantKeys(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		cfg     ThresholdConfig
@@ -575,6 +591,7 @@ func TestValidateTenantKeys(t *testing.T) {
 // ============================================================
 
 func TestResolveSilentModes_Structured(t *testing.T) {
+	t.Parallel()
 	future := time.Now().Add(24 * time.Hour).Format(time.RFC3339)
 	past := time.Now().Add(-1 * time.Hour).Format(time.RFC3339)
 	tests := []struct {
@@ -641,6 +658,7 @@ func TestResolveSilentModes_Structured(t *testing.T) {
 // ============================================================
 
 func TestResolveMaintenanceExpiries(t *testing.T) {
+	t.Parallel()
 	future := time.Now().Add(24 * time.Hour).Format(time.RFC3339)
 	past := time.Now().Add(-2 * time.Hour).Format(time.RFC3339)
 	tests := []struct {
@@ -684,6 +702,7 @@ func TestResolveMaintenanceExpiries(t *testing.T) {
 }
 
 func TestResolveStateFilters_MaintenanceExpired(t *testing.T) {
+	t.Parallel()
 	// When structured _state_maintenance has expired, the state filter should NOT be emitted
 	past := time.Now().Add(-1 * time.Hour).Format(time.RFC3339)
 	yamlStr := "expires: " + past + "\ntarget: enable\n"
@@ -702,6 +721,7 @@ func TestResolveStateFilters_MaintenanceExpired(t *testing.T) {
 }
 
 func TestResolveStateFilters_MaintenanceActive(t *testing.T) {
+	t.Parallel()
 	// When structured _state_maintenance has future expires, the state filter should be emitted
 	future := time.Now().Add(24 * time.Hour).Format(time.RFC3339)
 	yamlStr := "expires: " + future + "\ntarget: enable\n"
@@ -723,6 +743,7 @@ func TestResolveStateFilters_MaintenanceActive(t *testing.T) {
 }
 
 func TestResolveStateFilters_MaintenanceScalarBackwardCompat(t *testing.T) {
+	t.Parallel()
 	// Scalar "enable" should still work as before
 	cfg := &ThresholdConfig{
 		StateFilters: map[string]StateFilter{
@@ -739,6 +760,7 @@ func TestResolveStateFilters_MaintenanceScalarBackwardCompat(t *testing.T) {
 }
 
 func TestIsMaintenanceActive(t *testing.T) {
+	t.Parallel()
 	future := time.Now().Add(24 * time.Hour).Format(time.RFC3339)
 	past := time.Now().Add(-1 * time.Hour).Format(time.RFC3339)
 	tests := []struct {

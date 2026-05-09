@@ -20,6 +20,7 @@ import (
 // ============================================================
 
 func TestScanDirFileHashes(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeTestFile(t, dir, "_defaults.yaml", `
 defaults:
@@ -50,6 +51,7 @@ tenants:
 }
 
 func TestScanDirFileHashes_SkipsHiddenAndSubdirs(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeTestFile(t, dir, "_defaults.yaml", `defaults: {}`)
 	writeTestFile(t, dir, ".hidden.yaml", `defaults: {}`)
@@ -66,6 +68,7 @@ func TestScanDirFileHashes_SkipsHiddenAndSubdirs(t *testing.T) {
 }
 
 func TestScanDirFileHashes_StableComposite(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeTestFile(t, dir, "a.yaml", `defaults: {x: 1}`)
 	writeTestFile(t, dir, "b.yaml", `tenants: {t1: {}}`)
@@ -78,6 +81,7 @@ func TestScanDirFileHashes_StableComposite(t *testing.T) {
 }
 
 func TestIncrementalLoad_InitialLoad(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeTestFile(t, dir, "_defaults.yaml", `
 defaults:
@@ -112,6 +116,7 @@ tenants:
 }
 
 func TestIncrementalLoad_FileModified(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeTestFile(t, dir, "_defaults.yaml", `
 defaults:
@@ -149,6 +154,7 @@ tenants:
 }
 
 func TestIncrementalLoad_FileAdded(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeTestFile(t, dir, "_defaults.yaml", `
 defaults:
@@ -186,6 +192,7 @@ tenants:
 }
 
 func TestIncrementalLoad_FileRemoved(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeTestFile(t, dir, "_defaults.yaml", `
 defaults:
@@ -229,6 +236,7 @@ tenants:
 }
 
 func TestIncrementalLoad_NoChange(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeTestFile(t, dir, "_defaults.yaml", `
 defaults:
@@ -254,6 +262,7 @@ defaults:
 }
 
 func TestIncrementalLoad_SingleFileModeFallback(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
 	writeTestFile(t, dir, "config.yaml", `
@@ -279,6 +288,7 @@ tenants:
 }
 
 func TestIncrementalLoad_BoundaryEnforcement(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeTestFile(t, dir, "_defaults.yaml", `
 defaults:
@@ -310,6 +320,7 @@ tenants:
 }
 
 func TestIncrementalLoad_ProfilesAfterIncremental(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeTestFile(t, dir, "_defaults.yaml", `
 defaults:
@@ -354,6 +365,7 @@ profiles:
 }
 
 func TestMergePartialConfigs_Empty(t *testing.T) {
+	t.Parallel()
 	merged := mergePartialConfigs(map[string]ThresholdConfig{})
 	if len(merged.Defaults) != 0 || len(merged.Tenants) != 0 {
 		t.Error("empty merge should produce empty config")
@@ -361,6 +373,7 @@ func TestMergePartialConfigs_Empty(t *testing.T) {
 }
 
 func TestMergePartialConfigs_DeterministicOrder(t *testing.T) {
+	t.Parallel()
 	configs := map[string]ThresholdConfig{
 		"b.yaml": {
 			Defaults: map[string]float64{"mysql_connections": 90},
@@ -377,6 +390,7 @@ func TestMergePartialConfigs_DeterministicOrder(t *testing.T) {
 }
 
 func TestApplyBoundaryRules_DefaultsFile(t *testing.T) {
+	t.Parallel()
 	partial := ThresholdConfig{
 		Defaults:     map[string]float64{"x": 1},
 		StateFilters: map[string]StateFilter{"f": {Severity: "warning"}},
@@ -391,6 +405,7 @@ func TestApplyBoundaryRules_DefaultsFile(t *testing.T) {
 }
 
 func TestApplyBoundaryRules_TenantFile(t *testing.T) {
+	t.Parallel()
 	partial := ThresholdConfig{
 		Defaults:     map[string]float64{"x": 1},
 		StateFilters: map[string]StateFilter{"f": {Severity: "warning"}},
@@ -409,6 +424,7 @@ func TestApplyBoundaryRules_TenantFile(t *testing.T) {
 }
 
 func TestFullDirLoad_InitializesCache(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeTestFile(t, dir, "_defaults.yaml", `
 defaults:
@@ -435,6 +451,7 @@ tenants:
 // TestIncrementalLoad_MultiOp verifies correct handling when multiple
 // operations occur in a single reload cycle: add + modify + remove.
 func TestIncrementalLoad_MultiOp(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeTestFile(t, dir, "_defaults.yaml", `
 defaults:
@@ -513,6 +530,7 @@ tenants:
 // TestIncrementalLoad_ScheduledValues verifies that scheduled (time-window)
 // values survive incremental reload correctly.
 func TestIncrementalLoad_ScheduledValues(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeTestFile(t, dir, "_defaults.yaml", `
 defaults:
@@ -568,6 +586,7 @@ tenants:
 // TestIncrementalLoad_DefaultsModified verifies that modifying _defaults.yaml
 // propagates correctly through incremental reload.
 func TestIncrementalLoad_DefaultsModified(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeTestFile(t, dir, "_defaults.yaml", `
 defaults:
@@ -616,6 +635,7 @@ defaults:
 // TestIncrementalLoad_CacheOnlyReparses verifies that only changed files
 // get re-parsed, not the entire directory.
 func TestIncrementalLoad_CacheOnlyReparses(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeTestFile(t, dir, "_defaults.yaml", `
 defaults:
