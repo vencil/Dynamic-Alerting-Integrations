@@ -36,6 +36,7 @@ import json
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 
 def run_cmd(cmd, dry_run=False):
@@ -58,7 +59,8 @@ def import_dashboard(dashboard_path, cm_name, namespace, dry_run=False):
     """Import a single Grafana dashboard JSON as a labeled ConfigMap."""
     results = []
 
-    if not os.path.isfile(dashboard_path):
+    dashboard_p = Path(dashboard_path)
+    if not dashboard_p.is_file():
         results.append({
             "action": "import",
             "status": "fail",
@@ -70,7 +72,7 @@ def import_dashboard(dashboard_path, cm_name, namespace, dry_run=False):
     try:
         with open(dashboard_path, encoding="utf-8") as f:
             dashboard = json.load(f)
-        title = dashboard.get("title", os.path.basename(dashboard_path))
+        title = dashboard.get("title", dashboard_p.name)
     except (json.JSONDecodeError, Exception) as e:
         results.append({
             "action": "import",
@@ -79,7 +81,7 @@ def import_dashboard(dashboard_path, cm_name, namespace, dry_run=False):
         })
         return results
 
-    filename = os.path.basename(dashboard_path)
+    filename = dashboard_p.name
 
     # Step 1: Create ConfigMap (using --dry-run=client to generate, then apply)
     create_cmd = [
@@ -228,7 +230,7 @@ def verify_dashboards(namespace):
 
 def auto_name(dashboard_path):
     """Generate a ConfigMap name from a dashboard filename."""
-    base = os.path.splitext(os.path.basename(dashboard_path))[0]
+    base = Path(dashboard_path).stem
     # Convert to safe k8s name: lowercase, hyphens
     safe = base.lower().replace("_", "-").replace(" ", "-")
     return f"grafana-{safe}"
@@ -283,13 +285,13 @@ def main():
         cm_name = args.name or auto_name(args.dashboard)
         dashboards.append((args.dashboard, cm_name))
     elif args.dashboard_dir:
-        if not os.path.isdir(args.dashboard_dir):
+        dash_dir = Path(args.dashboard_dir)
+        if not dash_dir.is_dir():
             print(f"ERROR: Directory not found: {args.dashboard_dir}", file=sys.stderr)
             sys.exit(1)
-        for fname in sorted(os.listdir(args.dashboard_dir)):
-            if fname.endswith(".json"):
-                fpath = os.path.join(args.dashboard_dir, fname)
-                dashboards.append((fpath, auto_name(fpath)))
+        for entry in sorted(dash_dir.glob("*.json")):
+            fpath = str(entry)
+            dashboards.append((fpath, auto_name(fpath)))
     else:
         parser.error("Provide --dashboard, --dashboard-dir, or --verify")
 

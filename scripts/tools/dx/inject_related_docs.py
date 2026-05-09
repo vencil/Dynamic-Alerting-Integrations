@@ -214,8 +214,12 @@ def process_file(
         lang = fm.get("lang", "zh")
         title = fm.get("title", Path(file_path).stem)
 
-        # Compute related docs
-        rel_path = os.path.relpath(file_path, os.path.dirname(file_path))
+        # Compute related docs.
+        # NOTE: this is `relpath(file, file's parent)` which always equals
+        # `Path(file).name`. Preserved as-is during the pathlib refactor;
+        # if the original intent was relpath against a higher directory,
+        # that's a separate latent bug to address in a behavior-changing PR.
+        rel_path = Path(file_path).name
         related = get_related_docs(rel_path, fm, all_docs, min_score)
 
         new_section = generate_related_section(related, lang)
@@ -274,31 +278,32 @@ def main():
     mode = "update" if args.update else ("check" if args.check else "dry-run")
     docs_dir = args.docs_dir
 
-    if not os.path.isdir(docs_dir):
+    docs_root = Path(docs_dir)
+    if not docs_root.is_dir():
         print(f"Error: docs directory not found: {docs_dir}", file=sys.stderr)
         sys.exit(1)
 
     # Scan all markdown files
     all_docs = {}
-    for root, dirs, files in os.walk(docs_dir):
-        for fname in files:
-            if fname.endswith(".md"):
-                fpath = os.path.join(root, fname)
-                try:
-                    with open(fpath, "r", encoding="utf-8") as f:
-                        content = f.read()
-                    fm, _ = extract_frontmatter(content)
-                    title = fm.get("title", fname.replace(".md", ""))
-                    rel_path = os.path.relpath(fpath, docs_dir)
-                    all_docs[rel_path] = (title, fm)
-                except OSError:
-                    pass
+    for fpath in docs_root.rglob("*.md"):
+        if not fpath.is_file():
+            continue
+        fname = fpath.name
+        try:
+            with open(fpath, "r", encoding="utf-8") as f:
+                content = f.read()
+            fm, _ = extract_frontmatter(content)
+            title = fm.get("title", fname.replace(".md", ""))
+            rel_path = str(fpath.relative_to(docs_root))
+            all_docs[rel_path] = (title, fm)
+        except OSError:
+            pass
 
     # Process each file
     changed_count = 0
     error_count = 0
     for file_path in all_docs.keys():
-        full_path = os.path.join(docs_dir, file_path)
+        full_path = str(docs_root / file_path)
         changed, error = process_file(full_path, all_docs, args.min_score, mode)
         if error:
             print(f"Error processing {file_path}: {error}", file=sys.stderr)
