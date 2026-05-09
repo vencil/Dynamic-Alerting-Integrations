@@ -19,7 +19,7 @@ Why hand-crafted vs `mutmut`/`cosmic-ray`:
 Usage:
   python tests/shared/_mutation_pilot.py [--target FUNC]
 
-Latest run (v2.8.0 audit ④ pilot): 54/57 caught (~95%) across 26
+Latest run (v2.8.0 audit ④ pilot): 67/70 caught (~96%) across 31
 functions. The 3 survivors are all equivalent mutations:
   - parse_duration_seconds: drop type-check before m.match's str()
     coercion (str() catches the non-string case downstream).
@@ -30,7 +30,12 @@ functions. The 3 survivors are all equivalent mutations:
     return — the subsequent `re.match(r"^---\\n…", …)` already rejects
     non-frontmatter inputs, so the early return is redundant.
 
-The 5% survivor rate is the floor: real test gaps have been chased
+Two further obvious-looking mutations on `latest_version_from_changelog`
+were found to be equivalent (anchored regex makes match≡search; CHANGELOG
+regex's capture always satisfies parse_version's shape) and skipped — see
+the inline note above that mutation entry.
+
+The 4% survivor rate is the floor: real test gaps have been chased
 down across batches; what remains is true code-level redundancy that
 no behavioral test can pin without overspecifying the implementation.
 See PR descriptions / commit messages for findings across batches.
@@ -564,6 +569,122 @@ MUTATIONS: list[Mutation] = [
         fn_name="parse_command_map",
         old='                m = re.match(r\'"([a-z][a-z0-9-]+)":\\s*"([^"]+)"\', stripped)',
         new='                m = re.match(r\'"([a-zA-Z][a-zA-Z0-9-]+)":\\s*"([^"]+)"\', stripped)',
+    ),
+    # ── parse_build_sh_tools (_lint_helpers) ─────────────────────
+    Mutation(
+        target_file="scripts/tools/lint/_lint_helpers.py",
+        test_file="tests/shared/test_property_tools.py",
+        label="parse_build_sh: skip basename (full paths leak through)",
+        fn_name="parse_build_sh_tools",
+        old="                if name:\n                    tools.add(os.path.basename(name))",
+        new="                if name:\n                    tools.add(name)",
+    ),
+    Mutation(
+        target_file="scripts/tools/lint/_lint_helpers.py",
+        test_file="tests/shared/test_property_tools.py",
+        label="parse_build_sh: ignore closing paren (slurps next array)",
+        fn_name="parse_build_sh_tools",
+        old='                if stripped == ")":\n                    break',
+        new='                if False:\n                    break',
+    ),
+    Mutation(
+        target_file="scripts/tools/lint/_lint_helpers.py",
+        test_file="tests/shared/test_property_tools.py",
+        label="parse_build_sh: drop comment skip (# lines included as tools)",
+        fn_name="parse_build_sh_tools",
+        old="                if not stripped or stripped.startswith(\"#\"):\n                    continue",
+        new="                if not stripped:\n                    continue",
+    ),
+    # ── latest_version_from_changelog (check_flaky_registry) ─────
+    Mutation(
+        target_file="scripts/tools/lint/check_flaky_registry.py",
+        test_file="tests/shared/test_property_tools.py tests/lint/test_check_flaky_registry.py",
+        label="latest_changelog: drop break (last match wins, not first)",
+        fn_name="latest_version_from_changelog",
+        old='        for line in f:\n            m = pattern.match(line)\n            if m:\n                try:\n                    return parse_version(m.group(1))\n                except ValueError:\n                    continue',
+        new='        last = None\n        for line in f:\n            m = pattern.match(line)\n            if m:\n                try:\n                    last = parse_version(m.group(1))\n                except ValueError:\n                    continue\n        return last',
+    ),
+    # Note: two more obvious mutations are equivalent so skipped:
+    #   - `re.match → re.search`: regex has `^` anchor + line-by-line scan;
+    #     `^` anchors to position 0 of `line`, identical to match.
+    #   - drop the `try: parse_version → except ValueError: continue`: the
+    #     CHANGELOG regex captures `v\d+\.\d+\.\d+` which always satisfies
+    #     parse_version's shape requirement, so the except is defensive
+    #     dead code at runtime.
+    Mutation(
+        target_file="scripts/tools/lint/check_flaky_registry.py",
+        test_file="tests/shared/test_property_tools.py tests/lint/test_check_flaky_registry.py",
+        label="latest_changelog: drop is_file check (raises FileNotFoundError)",
+        fn_name="latest_version_from_changelog",
+        old="    if not path.is_file():\n        return None",
+        new="    if False:\n        return None",
+    ),
+    # ── _apply_timing_params (_grar_merge) ───────────────────────
+    Mutation(
+        target_file="scripts/tools/ops/_grar_merge.py",
+        test_file="tests/shared/test_property_tools.py",
+        label="apply_timing: drop falsy guard (None/empty pass to clamp, broken)",
+        fn_name="_apply_timing_params",
+        old='        val = source_dict.get(param)\n        if val:',
+        new='        val = source_dict.get(param)\n        if True:',
+    ),
+    Mutation(
+        target_file="scripts/tools/ops/_grar_merge.py",
+        test_file="tests/shared/test_property_tools.py",
+        label="apply_timing: skip group_wait param (only 2 of 3 params handled)",
+        fn_name="_apply_timing_params",
+        old='    for param in ("group_wait", "group_interval", "repeat_interval"):',
+        new='    for param in ("group_interval", "repeat_interval"):',
+    ),
+    # ── validate_receiver_domains (_grar_validate) ───────────────
+    Mutation(
+        target_file="scripts/tools/ops/_grar_validate.py",
+        test_file="tests/shared/test_property_tools.py",
+        label="domains: drop empty-allowlist guard (always check, breaks empty)",
+        fn_name="validate_receiver_domains",
+        old="    if not allowed_domains or not isinstance(receiver_obj, dict):\n        return warnings",
+        new="    if not isinstance(receiver_obj, dict):\n        return warnings",
+    ),
+    Mutation(
+        target_file="scripts/tools/ops/_grar_validate.py",
+        test_file="tests/shared/test_property_tools.py",
+        label="domains: any → all (tightens to require ALL patterns match)",
+        fn_name="validate_receiver_domains",
+        old="        if not any(fnmatch.fnmatch(host, pat) for pat in allowed_domains):",
+        new="        if not all(fnmatch.fnmatch(host, pat) for pat in allowed_domains):",
+    ),
+    Mutation(
+        target_file="scripts/tools/ops/_grar_validate.py",
+        test_file="tests/shared/test_property_tools.py",
+        label="domains: invert match check (allowlist becomes denylist)",
+        fn_name="validate_receiver_domains",
+        old="        if not any(fnmatch.fnmatch(host, pat) for pat in allowed_domains):",
+        new="        if any(fnmatch.fnmatch(host, pat) for pat in allowed_domains):",
+    ),
+    # ── validate_tenant_keys (_grar_validate) ────────────────────
+    Mutation(
+        target_file="scripts/tools/ops/_grar_validate.py",
+        test_file="tests/shared/test_property_tools.py",
+        label="tenant_keys: drop reserved-keys allowlist (every reserved → warning)",
+        fn_name="validate_tenant_keys",
+        old="        if key in VALID_RESERVED_KEYS:\n            continue",
+        new="        if False:\n            continue",
+    ),
+    Mutation(
+        target_file="scripts/tools/ops/_grar_validate.py",
+        test_file="tests/shared/test_property_tools.py",
+        label="tenant_keys: drop _critical suffix resolution (suffix keys warn)",
+        fn_name="validate_tenant_keys",
+        old='        if key.endswith("_critical"):\n            base = key.removesuffix("_critical")\n            if base in defaults_keys:\n                continue',
+        new='        if False:\n            base = ""\n            if base in defaults_keys:\n                continue',
+    ),
+    Mutation(
+        target_file="scripts/tools/ops/_grar_validate.py",
+        test_file="tests/shared/test_property_tools.py",
+        label="tenant_keys: drop dimensional-key resolution ({labels} keys warn)",
+        fn_name="validate_tenant_keys",
+        old='        if "{" in key:\n            base = key.split("{")[0]\n            if base in defaults_keys:\n                continue',
+        new='        if False:\n            base = ""\n            if base in defaults_keys:\n                continue',
     ),
 ]
 
