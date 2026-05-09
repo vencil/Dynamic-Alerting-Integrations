@@ -71,6 +71,14 @@ if _LINT_DIR not in sys.path:
     sys.path.insert(0, _LINT_DIR)
 import check_flaky_registry as cfr  # noqa: E402
 
+# Routing helpers (PR-3a split modules) — pure functions used by the
+# generate_alertmanager_routes pipeline and re-exported from there for
+# backward-compat. We import the split modules directly to keep the
+# property tests close to the units under test.
+import _grar_merge as gm  # noqa: E402
+import _grar_validate as gv  # noqa: E402
+import _lint_helpers as lh  # noqa: E402
+
 
 # Hypothesis settings: keep the example budget tight so this file runs
 # under 1s in CI alongside the other 600+ tests.
@@ -1251,3 +1259,392 @@ class TestResolveBinaryProperties:
         d = _make_dispatcher()
         _, cleaned = d._resolve_binary(args)
         assert cleaned == args
+
+
+# ---------------------------------------------------------------------------
+# _substitute_tenant — recursive {{tenant}} placeholder replacement
+# ---------------------------------------------------------------------------
+# Pilot batch 6: dev-rule #2 ("禁止 hardcode tenant id") rests on this
+# function. Every Alertmanager route, every receiver URL, every
+# severity-dedup label gets {{tenant}} → tenant_name substitution before
+# being rendered. A regression here = silent cross-tenant data leak.
+
+class TestSubstituteTenantProperties:
+
+    @given(st.text(alphabet=string.ascii_lowercase + "-", min_size=1, max_size=15))
+    @PILOT_SETTINGS
+    def test_string_without_placeholder_unchanged(self, tenant):
+        # Property: strings with no {{tenant}} pass through identically.
+        for s in ["plain text", "no placeholder here", "tenant", "{{}}", ""]:
+            assert gm._substitute_tenant(s, tenant) == s
+
+    @given(
+        st.text(alphabet=string.ascii_letters + " ", min_size=0, max_size=20),
+        st.text(alphabet=string.ascii_letters + " ", min_size=0, max_size=20),
+        st.text(alphabet=string.ascii_lowercase + "-", min_size=1, max_size=15),
+    )
+    @PILOT_SETTINGS
+    def test_substitution_replaces_all_occurrences(self, prefix, suffix, tenant):
+        # Property: every {{tenant}} occurrence is replaced; final string
+        # has no remaining {{tenant}} markers.
+        s = f"{prefix}{{{{tenant}}}}{suffix}{{{{tenant}}}}"
+        result = gm._substitute_tenant(s, tenant)
+        assert "{{tenant}}" not in result
+        assert tenant in result
+
+    @given(
+        st.dictionaries(
+            keys=st.text(alphabet=string.ascii_letters, min_size=1, max_size=8),
+            values=st.text(alphabet=string.ascii_letters + " ", min_size=0, max_size=20),
+            max_size=4,
+        ),
+        st.text(alphabet=string.ascii_lowercase + "-", min_size=1, max_size=10),
+    )
+    @PILOT_SETTINGS
+    def test_dict_recursion_preserves_keys(self, d, tenant):
+        # Property: dict substitution preserves keys; only values are
+        # subject to substitution.
+        result = gm._substitute_tenant(d, tenant)
+        assert isinstance(result, dict)
+        assert set(result.keys()) == set(d.keys())
+
+    @given(
+        st.lists(
+            st.text(alphabet=string.ascii_letters + " ", max_size=15),
+            max_size=5,
+        ),
+        st.text(alphabet=string.ascii_lowercase + "-", min_size=1, max_size=10),
+    )
+    @PILOT_SETTINGS
+    def test_list_recursion_preserves_length(self, lst, tenant):
+        # Property: list substitution preserves length and order.
+        result = gm._substitute_tenant(lst, tenant)
+        assert isinstance(result, list)
+        assert len(result) == len(lst)
+
+    @given(st.one_of(
+        st.integers(),
+        st.floats(allow_nan=False, allow_infinity=False),
+        st.booleans(),
+        st.none(),
+    ))
+    @PILOT_SETTINGS
+    def test_non_container_non_string_unchanged(self, value):
+        # Property: ints / floats / bools / None pass through identically.
+        assert gm._substitute_tenant(value, "any-tenant") == value
+
+    def test_nested_recursion(self):
+        # Property: deeply-nested {{tenant}} markers are all substituted.
+        obj = {
+            "url": "http://{{tenant}}.example.com/api",
+            "labels": {"tenant": "{{tenant}}", "severity": "warning"},
+            "matchers": ["alertname=~{{tenant}}_.*", "{{tenant}} OR foo"],
+        }
+        out = gm._substitute_tenant(obj, "db-a")
+        assert "{{tenant}}" not in str(out), f"unsubstituted marker in {out!r}"
+        assert out["url"] == "http://db-a.example.com/api"
+        assert out["labels"]["tenant"] == "db-a"
+        assert out["matchers"] == ["alertname=~db-a_.*", "db-a OR foo"]
+
+    @given(st.text(alphabet=string.ascii_lowercase + "-", min_size=1, max_size=10))
+    @PILOT_SETTINGS
+    def test_idempotent_when_tenant_has_no_placeholder(self, tenant):
+        # Property: substituting a tenant name that itself contains no
+        # `{{tenant}}` is idempotent — running twice gives the same result.
+        # (If the tenant value contained `{{tenant}}`, the first pass would
+        # introduce more markers for the second pass to replace — we
+        # deliberately exclude that pathological case.)
+        obj = {"a": "{{tenant}}-x", "b": ["{{tenant}}", "y"]}
+        once = gm._substitute_tenant(obj, tenant)
+        twice = gm._substitute_tenant(once, tenant)
+        assert once == twice
+
+
+# ---------------------------------------------------------------------------
+# _contains_tenant_placeholder — recursive boolean sibling
+# ---------------------------------------------------------------------------
+
+class TestContainsTenantPlaceholderProperties:
+
+    @given(st.text(alphabet=string.ascii_letters + " ", min_size=0, max_size=30).filter(
+        lambda s: "{{tenant}}" not in s
+    ))
+    @PILOT_SETTINGS
+    def test_string_without_marker_returns_false(self, s):
+        assert gm._contains_tenant_placeholder(s) is False
+
+    @given(
+        st.text(alphabet=string.ascii_letters + " ", min_size=0, max_size=20),
+        st.text(alphabet=string.ascii_letters + " ", min_size=0, max_size=20),
+    )
+    @PILOT_SETTINGS
+    def test_string_with_marker_returns_true(self, prefix, suffix):
+        s = f"{prefix}{{{{tenant}}}}{suffix}"
+        assert gm._contains_tenant_placeholder(s) is True
+
+    @given(st.one_of(
+        st.integers(),
+        st.floats(allow_nan=False, allow_infinity=False),
+        st.booleans(),
+        st.none(),
+    ))
+    @PILOT_SETTINGS
+    def test_non_container_non_string_returns_false(self, value):
+        # Property: scalar non-string values can't contain placeholders.
+        assert gm._contains_tenant_placeholder(value) is False
+
+    def test_dict_recursion(self):
+        # Property: a dict where a deeply-nested value has the marker
+        # returns True overall.
+        obj = {"a": {"b": {"c": "no marker"}}}
+        assert gm._contains_tenant_placeholder(obj) is False
+        obj["a"]["b"]["c"] = "{{tenant}}-x"
+        assert gm._contains_tenant_placeholder(obj) is True
+
+    def test_list_recursion(self):
+        assert gm._contains_tenant_placeholder(["a", "b", {"c": "no"}]) is False
+        assert gm._contains_tenant_placeholder(
+            ["a", "b", {"c": "{{tenant}}"}]) is True
+
+    @given(
+        st.dictionaries(
+            keys=st.text(alphabet=string.ascii_letters, min_size=1, max_size=8),
+            values=st.text(alphabet=string.ascii_letters, min_size=0, max_size=20),
+            max_size=4,
+        ),
+        st.text(alphabet=string.ascii_lowercase + "-", min_size=1, max_size=10),
+    )
+    @PILOT_SETTINGS
+    def test_after_substitute_no_placeholders_remain(self, d, tenant):
+        # Property: pair-invariant. After _substitute_tenant runs,
+        # _contains_tenant_placeholder must return False (assuming the
+        # tenant name itself doesn't contain `{{tenant}}`).
+        substituted = gm._substitute_tenant(d, tenant)
+        assert gm._contains_tenant_placeholder(substituted) is False
+
+
+# ---------------------------------------------------------------------------
+# merge_routing_with_defaults — shallow merge with tenant substitution
+# ---------------------------------------------------------------------------
+
+class TestMergeRoutingWithDefaultsProperties:
+
+    @given(
+        st.dictionaries(
+            keys=st.sampled_from(["group_wait", "group_interval", "repeat_interval", "receiver"]),
+            values=st.text(min_size=1, max_size=10),
+            max_size=3,
+        ),
+        st.text(alphabet=string.ascii_lowercase + "-", min_size=1, max_size=10),
+    )
+    @PILOT_SETTINGS
+    def test_none_tenant_routing_returns_defaults_substituted(self, defaults, tenant):
+        # Property: if tenant_routing is None, the result is just the
+        # defaults with {{tenant}} substituted.
+        result = gm.merge_routing_with_defaults(defaults, None, tenant)
+        assert result == gm._substitute_tenant(defaults, tenant)
+
+    def test_tenant_overrides_defaults(self):
+        # Property: tenant key wins over defaults key (shallow override).
+        defaults = {"group_wait": "30s", "group_interval": "5m"}
+        tenant_routing = {"group_wait": "10s"}
+        result = gm.merge_routing_with_defaults(defaults, tenant_routing, "db-a")
+        assert result["group_wait"] == "10s"
+        assert result["group_interval"] == "5m"
+
+    def test_tenant_substitution_in_merged_result(self):
+        # Property: {{tenant}} markers anywhere in the merged dict get
+        # substituted to the tenant name.
+        defaults = {"receiver": "default-receiver-{{tenant}}"}
+        tenant_routing = {"new_key": "tenant-{{tenant}}"}
+        result = gm.merge_routing_with_defaults(defaults, tenant_routing, "db-x")
+        assert "{{tenant}}" not in str(result)
+        assert result["receiver"] == "default-receiver-db-x"
+        assert result["new_key"] == "tenant-db-x"
+
+    def test_lists_replaced_not_concatenated(self):
+        # Property: list-valued keys are REPLACED by tenant override,
+        # not concatenated with defaults. (Documented contract.)
+        defaults = {"group_by": ["alertname", "tenant"]}
+        tenant_routing = {"group_by": ["severity"]}
+        result = gm.merge_routing_with_defaults(defaults, tenant_routing, "db-a")
+        assert result["group_by"] == ["severity"]
+
+    @given(
+        st.dictionaries(
+            keys=st.text(alphabet=string.ascii_letters, min_size=1, max_size=8),
+            values=st.text(min_size=0, max_size=15),
+            max_size=4,
+        ),
+    )
+    @PILOT_SETTINGS
+    def test_defaults_dict_not_mutated(self, defaults):
+        # Property: defaults dict is not modified in place (caller may
+        # reuse it across many tenants).
+        snapshot = dict(defaults)
+        gm.merge_routing_with_defaults(defaults, {"x": "y"}, "tenant-1")
+        assert defaults == snapshot
+
+
+# ---------------------------------------------------------------------------
+# _extract_host — URL / host:port → hostname (lowercase)
+# ---------------------------------------------------------------------------
+# Used by validate_receiver_domains to enforce the SSRF-prevention domain
+# allowlist on outgoing webhooks. A bug here would either reject legitimate
+# receivers or fail-open on an unexpected URL shape.
+
+class TestExtractHostProperties:
+
+    @given(st.one_of(
+        st.none(),
+        st.just(""),
+        st.integers(),
+        st.lists(st.text()),
+    ))
+    @PILOT_SETTINGS
+    def test_invalid_inputs_return_none(self, junk):
+        # Property: None / empty / non-string → None.
+        assert gv._extract_host(junk) is None
+
+    @given(
+        st.text(alphabet=string.ascii_lowercase + ".", min_size=3, max_size=20).filter(
+            lambda s: "." in s and not s.startswith(".") and not s.endswith(".")
+        ),
+        st.integers(min_value=1, max_value=65535),
+    )
+    @PILOT_SETTINGS
+    def test_host_port_form_strips_port(self, host, port):
+        # Property: host:port → host (no port).
+        result = gv._extract_host(f"{host}:{port}")
+        assert result == host.lower()
+
+    @given(
+        st.sampled_from(["http", "https"]),
+        st.text(alphabet=string.ascii_lowercase + ".", min_size=3, max_size=20).filter(
+            lambda s: "." in s and not s.startswith(".") and not s.endswith(".")
+        ),
+    )
+    @PILOT_SETTINGS
+    def test_url_form_returns_hostname(self, scheme, host):
+        # Property: scheme://host[/path] → host (lowercase).
+        result = gv._extract_host(f"{scheme}://{host}/api/v1")
+        assert result == host.lower()
+
+    def test_uppercase_host_lowercased(self):
+        # Property: even from non-URL form, hostname is lowercased.
+        # (For URL form, urlparse already lowercases the hostname.)
+        assert gv._extract_host("EXAMPLE.COM:443") == "example.com"
+
+    def test_whitespace_stripped(self):
+        # Property: leading/trailing whitespace is stripped.
+        assert gv._extract_host("  example.com:443  ") == "example.com"
+
+    def test_url_without_path(self):
+        assert gv._extract_host("https://example.com") == "example.com"
+
+    def test_empty_after_strip_returns_none(self):
+        # Property: whitespace-only input → None.
+        assert gv._extract_host("   ") is None
+
+
+# ---------------------------------------------------------------------------
+# parse_command_map — entrypoint.py COMMAND_MAP parser
+# ---------------------------------------------------------------------------
+# Used by check_cli_coverage / check_build_completeness lints. A regression
+# here would cause CLI coverage drift checks to silently pass when the
+# entrypoint COMMAND_MAP and the cheat-sheet diverge.
+
+class TestParseCommandMapProperties:
+
+    def test_minimal_command_map(self, tmp_path):
+        # Property: a minimal valid COMMAND_MAP parses to the expected dict.
+        f = tmp_path / "entrypoint.py"
+        f.write_text(
+            'COMMAND_MAP = {\n'
+            '    "check-alert": "check_alert.py",\n'
+            '    "diagnose": "diagnose.py",\n'
+            '}\n',
+            encoding="utf-8",
+        )
+        result = lh.parse_command_map(f)
+        assert result == {
+            "check-alert": "check_alert.py",
+            "diagnose": "diagnose.py",
+        }
+
+    def test_empty_command_map(self, tmp_path):
+        # Property: empty `COMMAND_MAP = {}` returns empty dict.
+        f = tmp_path / "entrypoint.py"
+        f.write_text('COMMAND_MAP = {\n}\n', encoding="utf-8")
+        assert lh.parse_command_map(f) == {}
+
+    def test_parser_stops_at_closing_brace(self, tmp_path):
+        # Property: lines AFTER the closing `}` aren't included even if
+        # they look like dict entries.
+        f = tmp_path / "entrypoint.py"
+        f.write_text(
+            'COMMAND_MAP = {\n'
+            '    "real": "real.py",\n'
+            '}\n'
+            'OTHER = {\n'
+            '    "should-not-appear": "fake.py",\n'
+            '}\n',
+            encoding="utf-8",
+        )
+        result = lh.parse_command_map(f)
+        assert result == {"real": "real.py"}
+        assert "should-not-appear" not in result
+
+    def test_ignores_lines_before_command_map(self, tmp_path):
+        # Property: imports, comments, other code before COMMAND_MAP are
+        # ignored — even if they contain string-quoted lookalikes.
+        f = tmp_path / "entrypoint.py"
+        f.write_text(
+            '# A docstring with "fake-key": "fake.py"\n'
+            'import os  # "import-key": "import.py"\n'
+            'COMMAND_MAP = {\n'
+            '    "real": "real.py",\n'
+            '}\n',
+            encoding="utf-8",
+        )
+        result = lh.parse_command_map(f)
+        assert "fake-key" not in result
+        assert "import-key" not in result
+        assert result == {"real": "real.py"}
+
+    def test_only_lowercase_kebab_keys_match(self, tmp_path):
+        # Property: the regex only accepts `[a-z][a-z0-9-]+` keys. Keys
+        # with uppercase letters / underscores / leading digits do NOT
+        # match — they're dropped silently.
+        f = tmp_path / "entrypoint.py"
+        f.write_text(
+            'COMMAND_MAP = {\n'
+            '    "good-key": "good.py",\n'
+            '    "BadKey": "bad.py",\n'
+            '    "snake_key": "snake.py",\n'
+            '    "1leading": "digits.py",\n'
+            '}\n',
+            encoding="utf-8",
+        )
+        result = lh.parse_command_map(f)
+        assert "good-key" in result
+        assert "BadKey" not in result
+        assert "snake_key" not in result
+        assert "1leading" not in result
+
+    def test_keys_helper_returns_set(self, tmp_path):
+        # parse_command_map_keys returns a set (not a dict_keys view that
+        # would stale on dict mutation). Note: the regex requires
+        # `[a-z][a-z0-9-]+` (at least 2 chars), so single-char keys like
+        # "a" wouldn't match — use realistic 2+ char names.
+        f = tmp_path / "entrypoint.py"
+        f.write_text(
+            'COMMAND_MAP = {\n'
+            '    "alpha": "alpha.py",\n'
+            '    "beta": "beta.py",\n'
+            '}\n',
+            encoding="utf-8",
+        )
+        result = lh.parse_command_map_keys(f)
+        assert isinstance(result, set)
+        assert result == {"alpha", "beta"}
