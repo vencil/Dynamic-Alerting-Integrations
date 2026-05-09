@@ -38,6 +38,15 @@ RISKY = (
     "os.Chdir",
     "t.Setenv",
     "Metrics.",
+    # slog.SetDefault swaps the package-level slog default logger.
+    # Tests installing custom slog handler over a captured bytes.Buffer
+    # race against any other parallel test that calls production code
+    # which logs via slog.Warn / slog.Info — production writes into the
+    # captured buffer, racing the test's bytes.Buffer access. Caught
+    # by CI run #25605708926 in TestSlogRequestLogger_EmitsStructuredLine
+    # → TestPutTenant_DirectMode race; this pattern was the PR #350
+    # tenant-api sweep's missed RISKY case.
+    "slog.SetDefault",
 )
 
 
