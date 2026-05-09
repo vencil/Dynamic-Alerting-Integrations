@@ -24,6 +24,7 @@ import re
 import subprocess
 import sys
 from collections import defaultdict
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 # Add script dir to path for lib imports
@@ -146,8 +147,8 @@ def load_ignored_commits() -> List[str]:
         root = result.stdout.strip()
     except (OSError, subprocess.SubprocessError):
         return []
-    ignore_path = os.path.join(root, ".changelog-lint-ignore")
-    if not os.path.exists(ignore_path):
+    ignore_path = str(Path(root) / ".changelog-lint-ignore")
+    if not Path(ignore_path).exists():
         return []
     prefixes: List[str] = []
     try:

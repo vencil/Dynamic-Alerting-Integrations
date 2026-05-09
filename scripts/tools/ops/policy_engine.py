@@ -31,6 +31,7 @@ import os
 import re
 import sys
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Optional, Union
 
 # ---------------------------------------------------------------------------
@@ -503,17 +504,18 @@ def load_tenant_configs(config_dir: str) -> dict[str, dict]:
     """
     configs: dict[str, dict] = {}
 
-    if not os.path.isdir(config_dir):
+    base = Path(config_dir)
+    if not base.is_dir():
         return configs
 
-    for fname in sorted(os.listdir(config_dir)):
+    for entry in sorted(base.iterdir(), key=lambda p: p.name):
+        fname = entry.name
         if not fname.endswith((".yaml", ".yml")):
             continue
         if fname.startswith("_"):
             continue
 
-        fpath = os.path.join(config_dir, fname)
-        data = load_yaml_file(fpath)
+        data = load_yaml_file(str(entry))
         if not isinstance(data, dict):
             continue
 
@@ -524,7 +526,7 @@ def load_tenant_configs(config_dir: str) -> dict[str, dict]:
                     configs[tenant_name] = tenant_cfg
         else:
             # Flat format — filename (sans extension) is tenant name
-            tenant_name = os.path.splitext(fname)[0]
+            tenant_name = entry.stem
             configs[tenant_name] = data
 
     return configs
@@ -658,8 +660,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     rules: list[PolicyRule] = []
 
     # From _defaults.yaml in config-dir
-    defaults_path = os.path.join(args.config_dir, "_defaults.yaml")
-    if os.path.isfile(defaults_path):
+    defaults_path = str(Path(args.config_dir) / "_defaults.yaml")
+    if Path(defaults_path).is_file():
         rules.extend(load_policies(defaults_path))
 
     # From standalone policy file

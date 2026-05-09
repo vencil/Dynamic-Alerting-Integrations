@@ -10,14 +10,15 @@ This script is idempotent — it checks for existing tenant_metadata_info before
 import os
 import re
 import sys
+from pathlib import Path
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_python import write_text_secure  # noqa: E402
 
-RULE_PACKS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
-    os.path.dirname(os.path.abspath(__file__))))), "rule-packs")
+# Repo root is 4 levels up: scripts/tools/ops/inject_metadata_join.py.
+RULE_PACKS_DIR = str(Path(__file__).resolve().parents[3] / "rule-packs")
 
 METADATA_JOIN = """
     * on(tenant) group_left(runbook_url, owner, tier)
@@ -40,7 +41,7 @@ def process_file(filepath):
         content = f.read()
 
     if "tenant_metadata_info" in content:
-        print(f"  SKIP {os.path.basename(filepath)}: already has tenant_metadata_info")
+        print(f"  SKIP {Path(filepath).name}: already has tenant_metadata_info")
         return False
 
     lines = content.split("\n")
@@ -74,10 +75,10 @@ def process_file(filepath):
 
     if modified:
         write_text_secure(filepath, "\n".join(new_lines))
-        print(f"  MODIFIED {os.path.basename(filepath)}")
+        print(f"  MODIFIED {Path(filepath).name}")
         return True
 
-    print(f"  SKIP {os.path.basename(filepath)}: no alerts need metadata join")
+    print(f"  SKIP {Path(filepath).name}: no alerts need metadata join")
     return False
 
 
@@ -201,18 +202,16 @@ def main():
         description="Inject tenant_metadata_info group_left join into Rule Pack alert rules")
     parser.parse_args()
 
-    if not os.path.isdir(RULE_PACKS_DIR):
+    rule_packs = Path(RULE_PACKS_DIR)
+    if not rule_packs.is_dir():
         print(f"ERROR: Rule packs directory not found: {RULE_PACKS_DIR}", file=sys.stderr)
         sys.exit(1)
 
     count = 0
-    for fname in sorted(os.listdir(RULE_PACKS_DIR)):
-        if not fname.endswith(".yaml"):
-            continue
-        if fname == "rule-pack-operational.yaml":
+    for entry in sorted(rule_packs.glob("*.yaml")):
+        if entry.name == "rule-pack-operational.yaml":
             continue  # operational alerts don't use threshold joins
-        fpath = os.path.join(RULE_PACKS_DIR, fname)
-        if process_file(fpath):
+        if process_file(str(entry)):
             count += 1
     print(f"\nModified {count} Rule Pack files.")
 
