@@ -397,10 +397,15 @@ func TestParseHHMM(t *testing.T) {
 		{"23:59", 23, 59, true},
 		{"09:30", 9, 30, true},
 		{"  01:00  ", 1, 0, true}, // whitespace trimmed
-		{"24:00", 0, 0, false},   // invalid hour
-		{"12:60", 0, 0, false},   // invalid minute
-		{"abc", 0, 0, false},     // garbage
-		{"12", 0, 0, false},      // no colon
+		{"24:00", 0, 0, false},    // invalid hour (above upper bound)
+		{"12:60", 0, 0, false},    // invalid minute (above upper bound)
+		// Lower-bound rejection — surfaced as a real test gap by the
+		// Go mutation pilot (#348). Without these cases, dropping the
+		// `h < 0` / `m < 0` checks in parseHHMM doesn't fail any test.
+		{"-5:00", 0, 0, false},  // invalid hour (below lower bound)
+		{"12:-5", 0, 0, false},  // invalid minute (below lower bound)
+		{"abc", 0, 0, false},    // garbage
+		{"12", 0, 0, false},     // no colon
 	}
 
 	for _, tt := range tests {

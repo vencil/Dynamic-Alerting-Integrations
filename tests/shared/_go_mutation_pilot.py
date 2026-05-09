@@ -23,29 +23,39 @@ Targets
 -------
 
 `pkg/config/parse.go`
-  - parseHHMM         — pure HH:MM parser, range-checked (5 muts)
-  - matchTimeWindow   — same/cross-midnight branch (4 muts)
+  - parseHHMM         — pure HH:MM parser, range-checked (6 muts)
+  - matchTimeWindow   — same/cross-midnight branch (3 muts)
   - parsePromDuration — Prometheus-style "5m" / "4h" / "2d" parser (2 muts)
 
 `pkg/config/hierarchy.go`
   - deepMerge         — ADR-018 inheritance, _metadata skip, nil-delete (3 muts)
   - extractDefaultsBlock — pulls `defaults:` sub-tree, falls back to root (1 mut)
 
-Total: 14 mutations across 5 functions. Existing Go tests in the
-parent `package main` (e.g., config_hierarchy_test.go,
-config_dimensional_test.go, golden-parity tests) are the kill
-targets — the lowercase functions in `pkg/config` are exercised
-indirectly via the lowercase wrappers in
-`app/config_inheritance.go`. That's why the runner uses
+Total: 15 mutations across 5 functions. Existing Go tests in the
+parent `package main` (e.g., config_three_state_test.go for
+parseHHMM, config_hierarchy_test.go for deepMerge, golden-parity
+tests) are the kill targets — the lowercase functions in
+`pkg/config` are exercised indirectly via the lowercase wrappers
+in `app/config_inheritance.go`. That's why the runner uses
 `go test ./...` from `app/` instead of `./pkg/config/...`: the
 in-package tests for `pkg/config` only cover scope-resolution +
 benchmarks, not the parse/merge primitives.
 
-Latest run (Dev Container, on PR #348): 12/14 caught (~86%). The
-2 survivors are real test gaps — the existing Go suite doesn't
-cover (a) negative hour values in HH:MM (`"-5:00"`) and
-(b) HH:MM with leading whitespace (`" 12:30"`). Filed as
-follow-on for a future Go test addition.
+Run history
+-----------
+
+  PR #348 (initial): 12/14 caught (~86%). 2 survivors:
+    - parseHHMM: drop hour lower bound — REAL gap
+    - parseHHMM: drop outer TrimSpace — equivalent (see below)
+
+  This PR (gap closure): expects 14/15 caught (~93%). Closes the
+  hour-lower-bound gap by adding "-5:00" / "12:-5" cases to
+  TestParseHHMM, plus adds a symmetric "drop minute lower bound"
+  mutation that the new test cases also cover. The outer-TrimSpace
+  mutation is now KNOWN-EQUIVALENT and stays as a documented
+  noise-bin entry — no test can kill it without overspecifying
+  redundant trimming behavior the inner `strings.TrimSpace(parts[i])`
+  already provides.
 
 Usage
 -----
@@ -135,15 +145,30 @@ MUTATIONS: list[Mutation] = [
     Mutation(
         target_file="pkg/config/parse.go",
         test_target="./...",
+        label="parseHHMM: drop minute lower bound (m<0 accepted, e.g. 12:-5)",
+        fn_name="parseHHMM",
+        old="if err != nil || m < 0 || m > 59 {",
+        new="if err != nil || m > 59 {",
+    ),
+    Mutation(
+        target_file="pkg/config/parse.go",
+        test_target="./...",
         label="parseHHMM: drop format split check (single-token input passes)",
         fn_name="parseHHMM",
         old='if len(parts) != 2 {\n\t\treturn 0, 0, fmt.Errorf("invalid HH:MM format: %q", s)\n\t}',
         new='if false {\n\t\treturn 0, 0, fmt.Errorf("invalid HH:MM format: %q", s)\n\t}',
     ),
+    # NOTE: known equivalent mutation. The function applies
+    # `strings.TrimSpace` again on each part after SplitN
+    # (`strings.TrimSpace(parts[0])` / `parts[1]`), so the outer
+    # TrimSpace is redundant — removing it doesn't change behavior
+    # for any leading/trailing-whitespace input. Kept in the catalog
+    # as a documented equivalent so future readers don't try to
+    # "close" it by adding a redundant test.
     Mutation(
         target_file="pkg/config/parse.go",
         test_target="./...",
-        label="parseHHMM: drop TrimSpace (leading whitespace breaks parse)",
+        label="parseHHMM: drop outer TrimSpace (KNOWN EQUIVALENT — inner TrimSpace covers it)",
         fn_name="parseHHMM",
         old="s = strings.TrimSpace(s)\n\tparts := strings.SplitN(s, \":\", 2)",
         new="parts := strings.SplitN(s, \":\", 2)",
