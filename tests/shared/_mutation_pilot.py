@@ -19,9 +19,13 @@ Why hand-crafted vs `mutmut`/`cosmic-ray`:
 Usage:
   python tests/shared/_mutation_pilot.py [--target FUNC]
 
-Latest run (v2.8.0 audit ④ pilot): 12/13 caught (~92%); the 1 survivor
-is an equivalent mutation (redundant early-out check). See PR
-description / commit message for findings.
+Latest run (v2.8.0 audit ④ pilot): 42/44 caught (~95%) across 21
+functions. The 2 survivors are equivalent mutations (drop type-check
+guard before re.match's str() coercion; offset 3→0 in
+strip_frontmatter's `find("\\n---", 3)` — opening `---` is always at
+index 0, so the alternate offset matches the same closing tag for any
+valid frontmatter). See PR descriptions / commit messages for findings
+across batches.
 """
 from __future__ import annotations
 
@@ -353,6 +357,96 @@ MUTATIONS: list[Mutation] = [
         fn_name="format_json_report",
         old='    kwargs.setdefault("ensure_ascii", False)',
         new='    kwargs.setdefault("ensure_ascii", True)',
+    ),
+    # ── _validate_url_scheme (_lib_prometheus) ───────────────────
+    Mutation(
+        target_file="scripts/tools/_lib_prometheus.py",
+        test_file="tests/shared/test_property_tools.py",
+        label="url_scheme: invert allowlist check (in → not in)",
+        fn_name="_validate_url_scheme",
+        old="    if scheme not in _ALLOWED_SCHEMES:",
+        new="    if scheme in _ALLOWED_SCHEMES:",
+    ),
+    Mutation(
+        target_file="scripts/tools/_lib_prometheus.py",
+        test_file="tests/shared/test_property_tools.py",
+        label="url_scheme: drop scheme parsing (always pass)",
+        fn_name="_validate_url_scheme",
+        old="    scheme = urllib.parse.urlparse(url).scheme\n    if scheme not in _ALLOWED_SCHEMES:\n        return f\"Unsupported URL scheme: {scheme}\"\n    return None",
+        new="    return None",
+    ),
+    # ── detect_cli_lang (_lib_validation) ────────────────────────
+    Mutation(
+        target_file="scripts/tools/_lib_validation.py",
+        test_file="tests/shared/test_property_tools.py tests/shared/test_lib_python.py",
+        label="detect_lang: swap precedence (DA_LANG/LC_ALL/LANG → LANG/LC_ALL/DA_LANG)",
+        fn_name="detect_cli_lang",
+        old='for var in ("DA_LANG", "LC_ALL", "LANG"):',
+        new='for var in ("LANG", "LC_ALL", "DA_LANG"):',
+    ),
+    Mutation(
+        target_file="scripts/tools/_lib_validation.py",
+        test_file="tests/shared/test_property_tools.py tests/shared/test_lib_python.py",
+        label="detect_lang: default falls to 'zh' instead of 'en'",
+        fn_name="detect_cli_lang",
+        old='        if val.startswith("en"):\n            return "en"\n    return "en"',
+        new='        if val.startswith("en"):\n            return "en"\n    return "zh"',
+    ),
+    # ── i18n_text (_lib_validation) ──────────────────────────────
+    Mutation(
+        target_file="scripts/tools/_lib_validation.py",
+        test_file="tests/shared/test_property_tools.py tests/shared/test_lib_python.py",
+        label="i18n: swap zh/en branches (always returns wrong language)",
+        fn_name="i18n_text",
+        old='    return zh if detect_cli_lang() == "zh" else en',
+        new='    return en if detect_cli_lang() == "zh" else zh',
+    ),
+    # ── parse_version (check_flaky_registry) ─────────────────────
+    # Note on the obvious-looking `re.match → re.search` mutation: the
+    # _VERSION_RE pattern has explicit ^…$ anchors, so re.match and
+    # re.search are functionally equivalent for this regex (verified
+    # empirically). Skipped as a known-equivalent — would always survive
+    # without representing a real defect.
+    Mutation(
+        target_file="scripts/tools/lint/check_flaky_registry.py",
+        test_file="tests/shared/test_property_tools.py tests/lint/test_check_flaky_registry.py",
+        label="version: drop strip() (whitespace breaks parse)",
+        fn_name="parse_version",
+        old="    m = _VERSION_RE.match(s.strip())",
+        new="    m = _VERSION_RE.match(s)",
+    ),
+    Mutation(
+        target_file="scripts/tools/lint/check_flaky_registry.py",
+        test_file="tests/shared/test_property_tools.py tests/lint/test_check_flaky_registry.py",
+        label="version: drop cross-line guard (different prefixes compare)",
+        fn_name="__lt__",
+        old='        if self.prefix != other.prefix:\n            raise ValueError(\n                f"cannot compare versions across release lines: "\n                f"{self.prefix or \'<root>\'!r} vs {other.prefix or \'<root>\'!r}"\n            )',
+        new='        if False:\n            raise ValueError("never")',
+    ),
+    # ── _resolve_binary (_lib_godispatch) ────────────────────────
+    Mutation(
+        target_file="scripts/tools/_lib_godispatch.py",
+        test_file="tests/shared/test_property_tools.py",
+        label="resolve: drop isfile check on explicit (missing path returns string)",
+        fn_name="_resolve_binary",
+        old="        if explicit:\n            return (\n                explicit if os.path.isfile(explicit) else None\n            ), cleaned",
+        new="        if explicit:\n            return explicit, cleaned",
+    ),
+    Mutation(
+        target_file="scripts/tools/_lib_godispatch.py",
+        test_file="tests/shared/test_property_tools.py",
+        label="resolve: skip eq-form branch (--flag=value not stripped)",
+        fn_name="_resolve_binary",
+        old='            if a.startswith(eq_form):\n                explicit = a.split("=", 1)[1]\n                i += 1\n                continue',
+        new='            if False:\n                pass',
+    ),
+    Mutation(
+        target_file="scripts/tools/_lib_godispatch.py",
+        test_file="tests/shared/test_property_tools.py",
+        label="resolve: drop env-var fallback (only flag + PATH consulted)",
+        fn_name="_resolve_binary",
+        old='        env_override = os.environ.get(self.env_var, "").strip()\n        if env_override:\n            return (\n                env_override if os.path.isfile(env_override) else None\n            ), cleaned',
+        new='        env_override = ""\n        if env_override:\n            return None, cleaned',
     ),
 ]
 

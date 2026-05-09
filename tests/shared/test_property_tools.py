@@ -60,7 +60,16 @@ import generate_doc_map as gdm  # noqa: E402
 import generate_changelog as gc  # noqa: E402
 import _lib_validation as lv  # noqa: E402
 import _lib_io as lio  # noqa: E402
+import _lib_prometheus as lp  # noqa: E402
+import _lib_godispatch as lgd  # noqa: E402
 import axe_lite_static as axe  # noqa: E402
+
+# check_flaky_registry lives under scripts/tools/lint, not on sys.path
+# above (which only includes tools/, ops/, dx/). Add lint here.
+_LINT_DIR = os.path.join(_REPO_ROOT, "scripts", "tools", "lint")
+if _LINT_DIR not in sys.path:
+    sys.path.insert(0, _LINT_DIR)
+import check_flaky_registry as cfr  # noqa: E402
 
 
 # Hypothesis settings: keep the example budget tight so this file runs
@@ -68,6 +77,16 @@ import axe_lite_static as axe  # noqa: E402
 PILOT_SETTINGS = settings(
     max_examples=50,
     suppress_health_check=[HealthCheck.too_slow],
+    deadline=500,
+)
+
+# Variant for tests that use `monkeypatch` (function-scoped fixture). The
+# env state is reset by us inside each test before assertion, so the
+# fixture-not-reset warning is a false positive — suppress it.
+PILOT_SETTINGS_MONKEYPATCH = settings(
+    max_examples=50,
+    suppress_health_check=[HealthCheck.too_slow,
+                            HealthCheck.function_scoped_fixture],
     deadline=500,
 )
 
@@ -862,3 +881,373 @@ class TestFormatJsonReportProperties:
         s = lio.format_json_report({"k": "中文"}, ensure_ascii=True)
         assert "中文" not in s
         assert "\\u" in s
+
+
+# ---------------------------------------------------------------------------
+# _validate_url_scheme — SSRF allowlist (pure scheme dispatch)
+# ---------------------------------------------------------------------------
+# Pilot batch 5: small but security-relevant. Every http_* helper in
+# _lib_prometheus delegates to this; a regression here unblocks
+# `file://` / `gopher://` / etc. SSRF avenues for tools that build URLs
+# from user-supplied tenant config. Property tests pin the allowlist
+# (http / https) and the rejection-message contract.
+
+class TestValidateUrlSchemeProperties:
+
+    @given(st.sampled_from([
+        "http://localhost",
+        "https://example.com/path",
+        "http://10.0.0.1:9090/api/v1/query",
+        "https://prom.svc.cluster.local",
+    ]))
+    @PILOT_SETTINGS
+    def test_allowed_schemes_return_none(self, url):
+        # Property: http / https URLs always pass (return None = no error).
+        assert lp._validate_url_scheme(url) is None
+
+    @given(st.sampled_from([
+        "file:///etc/passwd",
+        "gopher://evil.example/_GET%20/",
+        "ftp://ftp.example.com/file",
+        "javascript:alert(1)",
+        "data:text/html,<script>alert(1)</script>",
+        "ldap://ldap.example.com/dc=root",
+    ]))
+    @PILOT_SETTINGS
+    def test_disallowed_schemes_return_error(self, url):
+        # Property: any scheme not in {http, https} returns a non-empty
+        # error message string.
+        result = lp._validate_url_scheme(url)
+        assert isinstance(result, str)
+        assert result, f"empty error for disallowed url {url!r}"
+        assert "Unsupported URL scheme" in result
+
+    @given(st.text(alphabet=string.ascii_lowercase, min_size=1, max_size=10).filter(
+        lambda s: s not in ("http", "https")
+    ))
+    @PILOT_SETTINGS
+    def test_arbitrary_scheme_rejected(self, scheme):
+        # Property: any scheme NOT exactly "http" / "https" is rejected.
+        url = f"{scheme}://example.com"
+        result = lp._validate_url_scheme(url)
+        assert result is not None, (
+            f"unexpected pass for scheme {scheme!r}: {url!r}"
+        )
+
+    def test_no_scheme_rejected(self):
+        # Property: bare hostname (no scheme) → rejected (urlparse returns "").
+        result = lp._validate_url_scheme("example.com/api")
+        assert result is not None
+        assert "Unsupported URL scheme" in result
+
+
+# ---------------------------------------------------------------------------
+# detect_cli_lang + i18n_text — bilingual CLI dispatcher
+# ---------------------------------------------------------------------------
+# Pilot batch 5: drives all bilingual error messages in da-tools. The
+# precedence order (DA_LANG > LC_ALL > LANG) is load-bearing — many CI
+# pipelines set LC_ALL=C.UTF-8 globally, and DA_LANG must be able to
+# override that. Property tests pin precedence + fallback contracts.
+
+class TestDetectCliLangProperties:
+
+    def test_da_lang_zh_overrides_others(self, monkeypatch):
+        # Property: DA_LANG=zh wins regardless of LC_ALL / LANG.
+        monkeypatch.setenv("DA_LANG", "zh_TW.UTF-8")
+        monkeypatch.setenv("LC_ALL", "en_US.UTF-8")
+        monkeypatch.setenv("LANG", "en_US.UTF-8")
+        assert lv.detect_cli_lang() == "zh"
+
+    def test_da_lang_en_overrides_others(self, monkeypatch):
+        # Property: DA_LANG=en wins over LC_ALL=zh.
+        monkeypatch.setenv("DA_LANG", "en_US.UTF-8")
+        monkeypatch.setenv("LC_ALL", "zh_TW.UTF-8")
+        monkeypatch.setenv("LANG", "zh_TW.UTF-8")
+        assert lv.detect_cli_lang() == "en"
+
+    def test_lc_all_used_when_da_lang_unset(self, monkeypatch):
+        # Property: when DA_LANG is missing, LC_ALL takes over.
+        monkeypatch.delenv("DA_LANG", raising=False)
+        monkeypatch.setenv("LC_ALL", "zh_CN.UTF-8")
+        monkeypatch.setenv("LANG", "en_US.UTF-8")
+        assert lv.detect_cli_lang() == "zh"
+
+    def test_lang_used_when_da_lang_and_lc_all_unset(self, monkeypatch):
+        # Property: LANG is the final fallback before defaulting to en.
+        monkeypatch.delenv("DA_LANG", raising=False)
+        monkeypatch.delenv("LC_ALL", raising=False)
+        monkeypatch.setenv("LANG", "zh_HK.UTF-8")
+        assert lv.detect_cli_lang() == "zh"
+
+    def test_default_is_en(self, monkeypatch):
+        # Property: with all three vars unset, return "en" (NOT empty / None).
+        monkeypatch.delenv("DA_LANG", raising=False)
+        monkeypatch.delenv("LC_ALL", raising=False)
+        monkeypatch.delenv("LANG", raising=False)
+        assert lv.detect_cli_lang() == "en"
+
+    @given(st.sampled_from(["C.UTF-8", "POSIX", "fr_FR.UTF-8", "ja_JP.UTF-8"]))
+    @PILOT_SETTINGS_MONKEYPATCH
+    def test_unknown_locales_default_to_en(self, monkeypatch, locale):
+        # Hypothesis fixture-ordering rule: pytest fixtures BEFORE
+        # @given strategy params.
+        # Property: any locale not starting with `zh` or `en` → "en".
+        monkeypatch.delenv("DA_LANG", raising=False)
+        monkeypatch.delenv("LC_ALL", raising=False)
+        monkeypatch.setenv("LANG", locale)
+        assert lv.detect_cli_lang() == "en"
+
+
+class TestI18nTextProperties:
+
+    @given(
+        st.text(alphabet=string.ascii_letters + " ", min_size=1, max_size=30),
+        st.text(alphabet=string.ascii_letters + " ", min_size=1, max_size=30),
+    )
+    @PILOT_SETTINGS_MONKEYPATCH
+    def test_returns_zh_in_zh_mode(self, monkeypatch, zh, en):
+        # Property: in zh mode, i18n_text returns the zh argument (regardless
+        # of how en is shaped).
+        monkeypatch.setenv("DA_LANG", "zh_TW.UTF-8")
+        assert lv.i18n_text(zh, en) == zh
+
+    @given(
+        st.text(alphabet=string.ascii_letters + " ", min_size=1, max_size=30),
+        st.text(alphabet=string.ascii_letters + " ", min_size=1, max_size=30),
+    )
+    @PILOT_SETTINGS_MONKEYPATCH
+    def test_returns_en_in_en_mode(self, monkeypatch, zh, en):
+        # Property: in en mode, i18n_text returns the en argument.
+        monkeypatch.setenv("DA_LANG", "en_US.UTF-8")
+        assert lv.i18n_text(zh, en) == en
+
+
+# ---------------------------------------------------------------------------
+# parse_version — semver-ish parser used by HA-10 flaky registry validator
+# ---------------------------------------------------------------------------
+# Pilot batch 5: drives the expire_at lifecycle gate (PR #328). A regression
+# here would either let malformed versions slip past the validator or block
+# legitimate prefixed versions like `exporter/v2.9.0`. Properties pin shape
+# acceptance, prefix preservation, and rejection of malformed input.
+
+class TestParseVersionProperties:
+
+    @given(
+        st.integers(min_value=0, max_value=100),
+        st.integers(min_value=0, max_value=100),
+        st.integers(min_value=0, max_value=100),
+    )
+    @PILOT_SETTINGS
+    def test_plain_version_round_trip(self, major, minor, patch):
+        # Property: vX.Y.Z parses to a Version with no prefix and matching ints.
+        s = f"v{major}.{minor}.{patch}"
+        v = cfr.parse_version(s)
+        assert v.prefix == ""
+        assert v.major == major
+        assert v.minor == minor
+        assert v.patch == patch
+        assert str(v) == s
+
+    @given(
+        st.text(alphabet=string.ascii_lowercase, min_size=1, max_size=10).filter(
+            lambda s: s[0].isalpha()
+        ),
+        st.integers(min_value=0, max_value=99),
+        st.integers(min_value=0, max_value=99),
+        st.integers(min_value=0, max_value=99),
+    )
+    @PILOT_SETTINGS
+    def test_prefixed_version_preserves_prefix(self, prefix, major, minor, patch):
+        # Property: prefix/vX.Y.Z parses with prefix preserved verbatim.
+        s = f"{prefix}/v{major}.{minor}.{patch}"
+        v = cfr.parse_version(s)
+        assert v.prefix == prefix
+        assert v.major == major
+        assert v.minor == minor
+        assert v.patch == patch
+        assert str(v) == s
+
+    @given(st.sampled_from([
+        "1.2.3",            # no v prefix
+        "v1.2",             # missing patch
+        "v1.2.3.4",         # extra component
+        "v1.2.x",           # non-numeric
+        "V1.2.3",           # uppercase V
+        "Exporter/v1.2.3",  # uppercase prefix
+        "exporter//v1.2.3", # double slash
+        "/v1.2.3",          # empty prefix
+        "",                 # empty
+        "v",                # bare v
+    ]))
+    @PILOT_SETTINGS
+    def test_malformed_versions_rejected(self, s):
+        # Property: malformed inputs raise ValueError (not silently parse).
+        with pytest.raises(ValueError):
+            cfr.parse_version(s)
+
+    @given(
+        st.integers(min_value=0, max_value=10),
+        st.integers(min_value=0, max_value=10),
+        st.integers(min_value=0, max_value=10),
+    )
+    @PILOT_SETTINGS
+    def test_ge_self(self, major, minor, patch):
+        # Property: every version is >= itself.
+        v = cfr.parse_version(f"v{major}.{minor}.{patch}")
+        assert v >= v
+
+    def test_lt_strictly_older(self):
+        # Property: lexicographic comparison on (major, minor, patch).
+        assert cfr.parse_version("v2.7.0") < cfr.parse_version("v2.8.0")
+        assert cfr.parse_version("v2.7.9") < cfr.parse_version("v2.8.0")
+        assert cfr.parse_version("v2.8.0") < cfr.parse_version("v2.8.1")
+
+    def test_cross_line_comparison_raises(self):
+        # Property: comparing across release lines (different prefix) raises.
+        # This is the guardrail that keeps `exporter/v2.9.0` from being
+        # compared against the platform v2.7.0 line.
+        a = cfr.parse_version("exporter/v2.9.0")
+        b = cfr.parse_version("v2.7.0")
+        with pytest.raises(ValueError):
+            _ = a < b
+
+    @given(
+        st.text(alphabet=" \t", min_size=1, max_size=4),
+        st.text(alphabet=" \t", min_size=1, max_size=4),
+    )
+    @PILOT_SETTINGS
+    def test_whitespace_stripped_before_parse(self, lpad, rpad):
+        # Mutation-pilot kill-test: dropping the `.strip()` would cause
+        # CHANGELOG entries with stray whitespace to fail parsing. The
+        # caller (latest_version_from_changelog) already does its own line
+        # parsing, but we want parse_version itself to be lenient — the
+        # CLI also accepts --current-version values that the user might
+        # quote with leading whitespace.
+        v = cfr.parse_version(f"{lpad}v2.7.0{rpad}")
+        assert v.major == 2 and v.minor == 7 and v.patch == 0
+
+
+# ---------------------------------------------------------------------------
+# _resolve_binary — arg parsing for da-tools Go-binary dispatchers
+# ---------------------------------------------------------------------------
+# Pilot batch 5: drives binary resolution for da-guard / da-batchpr /
+# da-parser. Two flag forms are accepted (`--flag value` AND `--flag=value`);
+# both must strip the flag pair from forwarded args, and both must record
+# the explicit override for later use. The space-form / equals-form parity
+# is exactly the kind of duplicated branch where mutation testing pays off.
+
+
+def _make_dispatcher() -> lgd.GoBinaryDispatcher:
+    """Build a dispatcher fixture matching the guard shim shape."""
+    return lgd.GoBinaryDispatcher(
+        binary_name="da-guard",
+        cli_alias="guard",
+        binary_flag="--da-guard-binary",
+        env_var="DA_GUARD_BINARY",
+        subcommands={"check", "verify"},
+        pass_subcommand=False,
+        usage_en="usage: guard ...",
+        usage_zh="用法: guard ...",
+    )
+
+
+class TestResolveBinaryProperties:
+
+    def test_no_flag_uses_path_lookup(self, monkeypatch):
+        # Property: with no override flag and no env var, fall back to
+        # shutil.which. We monkeypatch which to a sentinel so the test is
+        # hermetic.
+        monkeypatch.delenv("DA_GUARD_BINARY", raising=False)
+        monkeypatch.setattr(lgd.shutil, "which", lambda name: f"/path/{name}")
+        d = _make_dispatcher()
+        binary, cleaned = d._resolve_binary(["check", "-v"])
+        assert binary == "/path/da-guard"
+        # Args without the flag pass through untouched.
+        assert cleaned == ["check", "-v"]
+
+    def test_explicit_flag_space_form_strips_pair(self, monkeypatch, tmp_path):
+        # Property: `--da-guard-binary <path>` removes BOTH tokens from args.
+        binary_file = tmp_path / "da-guard"
+        binary_file.write_text("#!/bin/sh\n", encoding="utf-8")
+        d = _make_dispatcher()
+        binary, cleaned = d._resolve_binary([
+            "check", "--da-guard-binary", str(binary_file), "-v",
+        ])
+        assert binary == str(binary_file)
+        assert cleaned == ["check", "-v"]
+
+    def test_explicit_flag_equals_form_strips_token(self, monkeypatch, tmp_path):
+        # Property: `--da-guard-binary=<path>` removes the single token.
+        binary_file = tmp_path / "da-guard"
+        binary_file.write_text("#!/bin/sh\n", encoding="utf-8")
+        d = _make_dispatcher()
+        binary, cleaned = d._resolve_binary([
+            "check", f"--da-guard-binary={binary_file}", "-v",
+        ])
+        assert binary == str(binary_file)
+        assert cleaned == ["check", "-v"]
+
+    def test_explicit_flag_missing_file_returns_none(self, monkeypatch):
+        # Property: explicit override that doesn't exist → (None, cleaned).
+        monkeypatch.delenv("DA_GUARD_BINARY", raising=False)
+        d = _make_dispatcher()
+        binary, cleaned = d._resolve_binary([
+            "check", "--da-guard-binary", "/nonexistent/da-guard",
+        ])
+        assert binary is None
+        # The flag pair is still stripped even when the path is bad.
+        assert cleaned == ["check"]
+
+    def test_env_var_used_when_no_flag(self, monkeypatch, tmp_path):
+        # Property: $DA_GUARD_BINARY is consulted when no flag is passed.
+        binary_file = tmp_path / "da-guard"
+        binary_file.write_text("#!/bin/sh\n", encoding="utf-8")
+        monkeypatch.setenv("DA_GUARD_BINARY", str(binary_file))
+        d = _make_dispatcher()
+        binary, cleaned = d._resolve_binary(["check", "-v"])
+        assert binary == str(binary_file)
+        assert cleaned == ["check", "-v"]
+
+    def test_explicit_flag_beats_env_var(self, monkeypatch, tmp_path):
+        # Property: --flag wins over $ENV. The env var is the fallback.
+        env_binary = tmp_path / "env-da-guard"
+        env_binary.write_text("#!/bin/sh\n", encoding="utf-8")
+        flag_binary = tmp_path / "flag-da-guard"
+        flag_binary.write_text("#!/bin/sh\n", encoding="utf-8")
+        monkeypatch.setenv("DA_GUARD_BINARY", str(env_binary))
+        d = _make_dispatcher()
+        binary, _ = d._resolve_binary([
+            "check", "--da-guard-binary", str(flag_binary),
+        ])
+        assert binary == str(flag_binary)
+        assert binary != str(env_binary)
+
+    def test_trailing_bare_flag_silently_dropped(self, monkeypatch):
+        # Property: a trailing `--da-guard-binary` with no value is dropped
+        # without raising IndexError. (Documented in the docstring; this
+        # locks the behavior so a `len(args) - 1` mistake gets caught.)
+        monkeypatch.delenv("DA_GUARD_BINARY", raising=False)
+        monkeypatch.setattr(lgd.shutil, "which", lambda name: None)
+        d = _make_dispatcher()
+        binary, cleaned = d._resolve_binary(["check", "--da-guard-binary"])
+        # Bare flag is consumed; no override captured; falls through to which.
+        assert binary is None
+        assert cleaned == ["check"]
+
+    @given(
+        st.lists(
+            st.text(alphabet=string.ascii_letters + "-_", min_size=1, max_size=10).filter(
+                lambda s: s not in ("--da-guard-binary",) and not s.startswith("--da-guard-binary=")
+            ),
+            min_size=0, max_size=5,
+        ),
+    )
+    @PILOT_SETTINGS_MONKEYPATCH
+    def test_args_without_flag_pass_through_unchanged(self, monkeypatch, args):
+        # Property: when the binary flag isn't present, args are returned
+        # in the same order with no tokens removed.
+        monkeypatch.delenv("DA_GUARD_BINARY", raising=False)
+        monkeypatch.setattr(lgd.shutil, "which", lambda name: None)
+        d = _make_dispatcher()
+        _, cleaned = d._resolve_binary(args)
+        assert cleaned == args
