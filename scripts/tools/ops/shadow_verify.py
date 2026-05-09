@@ -39,6 +39,7 @@ import sys
 import urllib.parse
 from collections import defaultdict
 from datetime import datetime, timezone
+from pathlib import Path
 
 import yaml
 
@@ -67,7 +68,7 @@ def check_preflight(args):
 
     # 1. Mapping file exists
     if args.mapping:
-        if os.path.isfile(args.mapping):
+        if Path(args.mapping).is_file():
             with open(args.mapping, encoding="utf-8") as f:
                 mapping = yaml.safe_load(f) or {}
             pair_count = sum(1 for v in mapping.values()
@@ -169,7 +170,7 @@ def check_runtime(args):
 
     # 1. CSV report analysis
     csv_path = args.report_csv
-    if csv_path and os.path.isfile(csv_path):
+    if csv_path and Path(csv_path).is_file():
         mismatch_count = 0
         total_rows = 0
         tenants = set()
@@ -250,7 +251,7 @@ def check_convergence(args):
 
     # 1. cutover-readiness.json
     readiness_path = args.readiness_json
-    if readiness_path and os.path.isfile(readiness_path):
+    if readiness_path and Path(readiness_path).is_file():
         with open(readiness_path, encoding="utf-8") as f:
             report = json.load(f)
         ready = report.get("ready", False)
@@ -271,7 +272,7 @@ def check_convergence(args):
 
     # 2. 7-day zero-mismatch (from CSV)
     csv_path = args.report_csv
-    if csv_path and os.path.isfile(csv_path):
+    if csv_path and Path(csv_path).is_file():
         now = datetime.now(timezone.utc)
         recent_mismatches = 0
         recent_rows = 0

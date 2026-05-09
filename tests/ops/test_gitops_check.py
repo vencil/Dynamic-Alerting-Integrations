@@ -1040,8 +1040,11 @@ class TestErrorRecovery:
         with open(os.path.join(config_dir, "_defaults.yaml"), "w") as f:
             yaml.dump(defaults, f)
 
-        # Mock os.listdir to raise OSError
-        with patch("os.listdir", side_effect=OSError("Permission denied")):
+        # Mock Path.iterdir to raise OSError. (Earlier versions used
+        # os.listdir; the pathlib refactor switched to Path.iterdir,
+        # which raises identically on permission errors.)
+        with patch("pathlib.Path.iterdir",
+                    side_effect=OSError("Permission denied")):
             result = gc.check_local(config_dir)
 
         assert result.status == "fail"

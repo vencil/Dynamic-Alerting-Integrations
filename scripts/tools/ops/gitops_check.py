@@ -33,6 +33,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Optional
 
 import yaml
@@ -201,9 +202,10 @@ def check_repo(
 def check_local(dir_path: str) -> CheckResult:
     """Check local configuration directory structure and validity."""
     details = {"directory": dir_path}
+    base = Path(dir_path)
 
     # Check directory exists
-    if not os.path.isdir(dir_path):
+    if not base.is_dir():
         return CheckResult(
             check="local",
             status="fail",
@@ -215,8 +217,8 @@ def check_local(dir_path: str) -> CheckResult:
         )
 
     # Check _defaults.yaml exists
-    defaults_path = os.path.join(dir_path, "_defaults.yaml")
-    if not os.path.isfile(defaults_path):
+    defaults_path = str(base / "_defaults.yaml")
+    if not Path(defaults_path).is_file():
         return CheckResult(
             check="local",
             status="fail",
@@ -248,12 +250,13 @@ def check_local(dir_path: str) -> CheckResult:
     total_alerts = 0
 
     try:
-        for filename in sorted(os.listdir(dir_path)):
+        for entry in sorted(base.iterdir(), key=lambda p: p.name):
+            filename = entry.name
             if not filename.endswith(".yaml") or filename.startswith("_"):
                 continue
 
-            file_path = os.path.join(dir_path, filename)
-            if not os.path.isfile(file_path):
+            file_path = str(entry)
+            if not entry.is_file():
                 continue
 
             try:

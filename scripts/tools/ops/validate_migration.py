@@ -49,6 +49,7 @@ import json
 import time
 import argparse
 from datetime import datetime, timezone
+from pathlib import Path
 
 import yaml
 
@@ -200,8 +201,9 @@ def print_summary(all_results):
 
 def write_csv_report(all_results, output_dir):
     """將比對結果寫入 CSV。"""
-    os.makedirs(output_dir, exist_ok=True)
-    csv_path = os.path.join(output_dir, "validation-report.csv")
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    csv_path = str(out_dir / "validation-report.csv")
 
     buf = io.StringIO()
     # lineterminator='\n' — write_text_secure opens in text mode, which on
@@ -415,10 +417,11 @@ def main():
                 report = tracker.print_status()
                 if report["ready"]:
                     # Write convergence report and stop
-                    conv_path = args.convergence_output or os.path.join(
-                        args.output_dir, "cutover-readiness.json"
+                    conv_path = args.convergence_output or str(
+                        Path(args.output_dir) / "cutover-readiness.json"
                     )
-                    os.makedirs(os.path.dirname(conv_path) if os.path.dirname(conv_path) else ".", exist_ok=True)
+                    parent = Path(conv_path).parent
+                    parent.mkdir(parents=True, exist_ok=True)
                     write_json_secure(conv_path, report)
                     print(f"\n  Cutover readiness report: {conv_path}")
                     break
@@ -429,10 +432,11 @@ def main():
         if tracker and not tracker.compute_report()["ready"]:
             print(f"\n  Watch completed ({args.rounds} rounds) without full convergence.")
             final = tracker.compute_report()
-            conv_path = args.convergence_output or os.path.join(
-                args.output_dir, "cutover-readiness.json"
+            conv_path = args.convergence_output or str(
+                Path(args.output_dir) / "cutover-readiness.json"
             )
-            os.makedirs(os.path.dirname(conv_path) if os.path.dirname(conv_path) else ".", exist_ok=True)
+            parent = Path(conv_path).parent
+            parent.mkdir(parents=True, exist_ok=True)
             write_json_secure(conv_path, final)
             print(f"  Partial convergence report: {conv_path}")
 
