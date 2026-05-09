@@ -136,6 +136,7 @@ lang: zh
 | `check_doc_links.py` | 文件間交叉引用一致性檢查 |
 | `check_doc_reading_time.py` | 文件閱讀時間檢查工具。 |
 | `check_doc_template.py` | 文件模板合規性檢查工具。 |
+| `check_flaky_registry.py` | Validate `flaky-tests.yaml` schema + expire_at. |
 | `check_frontmatter_versions.py` | Frontmatter version global scan |
 | `check_glossary_coverage.py` | 術語表覆蓋率檢查 |
 | `check_hardcode_tenant.py` | Detect hardcoded tenant literals in PromQL label selectors (Rule #2). |
