@@ -37,6 +37,13 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
+        with:
+          # LFS materialization needed so existing baselines (under
+          # tests/e2e/*-snapshots/) are real PNGs when --update-snapshots
+          # decides whether to overwrite them. Without this, the workflow
+          # would compare against pointer-file "baselines" and always
+          # rewrite, even for unchanged visuals.
+          lfs: true
 
       - name: Set up Node.js 20
         uses: actions/setup-node@v5
