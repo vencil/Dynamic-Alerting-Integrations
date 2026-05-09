@@ -150,15 +150,39 @@ func TestResolve_UnknownTenant_Returns404Signal(t *testing.T) {
 	}
 }
 
-// TestWatchLoop_DebouncedReload_DetectsFileChange verifies the full
-// WatchLoop → triggerDebouncedReload → diffAndReload → new mergedHash
-// pipeline. Uses a 10ms debounce window and 20ms tick interval so the
-// test runs in well under 1 second.
+// TestWatchLoop_DebouncedReload_DetectsFileChange verifies the
+// detect-change → trigger debounced reload → diffAndReload → new
+// mergedHash pipeline.
+//
+// HA-11 (PR #325 follow-up): the previous version of this test was the
+// canonical entry in flaky-tests.yaml — it spun up WatchLoop in a
+// goroutine with a real 20ms ticker + 10ms debounce window, then polled
+// with a 3s deadline. CI runner load occasionally pushed the
+// tick + debounce + fsync + diff above 3s, producing a flake that ate
+// ~1h of release toil in v2.7.0 PR #26.
+//
+// The fix is architectural, not retry-based: route the test through
+// `tickOnce()` (extracted from WatchLoop's body) with a synchronous
+// debounce window (`NewConfigManagerWithDebounce(dir, 0)` makes
+// triggerDebouncedReload call diffAndReload inline). No goroutine, no
+// ticker, no time.Sleep, no waitFor — the test asserts deterministically
+// after a single tickOnce() call that the hash changed.
+//
+// The flat-scan/hierarchical-scan + debounce + atomic-swap pipeline is
+// still exercised end-to-end; only the timing primitives are replaced
+// with synchronous calls. Goroutine + ticker behavior is the WatchLoop
+// orchestration layer's concern, covered separately in tests that don't
+// need to assert content propagation.
 func TestWatchLoop_DebouncedReload_DetectsFileChange(t *testing.T) {
 	dir := t.TempDir()
 	writeHierarchicalFixture(t, dir, "90")
 
-	m := NewConfigManagerWithDebounce(dir, 10*time.Millisecond)
+	// debounce=0 makes triggerDebouncedReload synchronous (see
+	// config_debounce.go L82-92): the inline diffAndReload completes
+	// before triggerDebouncedReload returns. Combined with manual
+	// tickOnce() calls, the entire detect→reload pipeline is
+	// observable from a single synchronous test goroutine.
+	m := NewConfigManagerWithDebounce(dir, 0)
 	defer m.Close()
 	if err := m.Load(); err != nil {
 		t.Fatalf("Load: %v", err)
@@ -171,42 +195,31 @@ func TestWatchLoop_DebouncedReload_DetectsFileChange(t *testing.T) {
 		t.Fatalf("expected first merged_hash to be populated by Load")
 	}
 
-	stopCh := make(chan struct{})
-	done := make(chan struct{})
-	go func() {
-		m.WatchLoop(20*time.Millisecond, stopCh)
-		close(done)
-	}()
+	// Establish baseline: first tickOnce after Load should be a no-op
+	// (nothing has changed since Load populated the hierarchy maps).
+	m.tickOnce()
 
-	// Change tenant file content.
-	time.Sleep(30 * time.Millisecond) // wait a tick so WatchLoop baseline is armed
+	// Change tenant file content. detectChange uses scanDirHierarchical
+	// content hashes (not mtime), so we don't need mtime-tricks even on
+	// fast filesystems.
 	writeTestYAML(t, filepath.Join(dir, "team-a", "tenant-a.yaml"), `
 tenants:
   tenant-a:
     mysql_connections: "77"
 `)
-	// v2.8.0 A-10 fix (Issue #52, PR #54): no longer need `os.Chtimes(past)`
-	// trick — WatchLoop in hierarchical mode now uses scanDirHierarchical
-	// (recursive) instead of flat scanDirFileHashes, so nested tenant file
-	// writes are detected directly via content hash without mtime tricks.
 
-	// Wait up to 3s for the new hash to differ. CI runners under load occasionally
-	// need >1s for the 20ms WatchLoop tick + 10ms debounce + fsync + diff to
-	// complete; 3s is still bounded and well under the test-suite timeout.
-	ok := waitFor(t, 3*time.Second, func() bool {
-		m.mu.RLock()
-		defer m.mu.RUnlock()
-		curr := m.hierarchy.mergedHashes["tenant-a"]
-		return curr != "" && curr != firstHash
-	})
-	close(stopCh)
-	<-done
+	// Drive the polling cycle synchronously: detect → trigger →
+	// diffAndReload (inline because debounce==0) → atomic swap.
+	m.tickOnce()
 
-	if !ok {
-		m.mu.RLock()
-		curr := m.hierarchy.mergedHashes["tenant-a"]
-		m.mu.RUnlock()
-		t.Errorf("merged_hash did not update via WatchLoop: first=%s current=%s", firstHash, curr)
+	m.mu.RLock()
+	curr := m.hierarchy.mergedHashes["tenant-a"]
+	m.mu.RUnlock()
+	if curr == "" {
+		t.Errorf("merged_hash unset after tickOnce; first=%s", firstHash)
+	}
+	if curr == firstHash {
+		t.Errorf("merged_hash did not update: first=%s current=%s", firstHash, curr)
 	}
 }
 

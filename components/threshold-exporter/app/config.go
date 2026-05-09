@@ -591,39 +591,51 @@ func (m *ConfigManager) WatchLoop(interval time.Duration, stopCh <-chan struct{}
 			return
 		case <-ticker.C:
 		}
+		m.tickOnce()
+	}
+}
 
-		if m.isDir {
-			changed, reason, err := m.detectChange()
-			if err != nil {
-				log.Printf("WARN: cannot check config %s: %v", m.path, err)
-				continue
-			}
-			if changed {
-				log.Printf("Config changed, scheduling debounced reload...")
-				// v2.7.0: route through debounce even for flat mode so an
-				// ops tool that rapidly rewrites multiple files coalesces
-				// into a single reload.
-				m.triggerDebouncedReload(reason)
-			}
-			continue
-		}
-
-		// Single-file mode: full reload (no incremental benefit)
-		_, hash, err := loadFile(m.path)
+// tickOnce performs ONE iteration of the polling cycle (detect change →
+// trigger debounced reload, OR full single-file reload). Extracted from
+// WatchLoop so tests can drive the pipeline synchronously without the
+// real ticker — when paired with NewConfigManagerWithDebounce(dir, 0)
+// the entire detect→reload chain becomes deterministic, eliminating the
+// real-time-dependent flake that motivated HA-11.
+//
+// Production behavior is unchanged: WatchLoop still calls this on every
+// tick and the debounce path still gates the actual reload.
+func (m *ConfigManager) tickOnce() {
+	if m.isDir {
+		changed, reason, err := m.detectChange()
 		if err != nil {
 			log.Printf("WARN: cannot check config %s: %v", m.path, err)
-			continue
+			return
 		}
-
-		m.mu.RLock()
-		changed := hash != m.lastHash
-		m.mu.RUnlock()
-
 		if changed {
-			log.Printf("Config changed, reloading...")
-			if err := m.Load(); err != nil {
-				log.Printf("ERROR: failed to reload config: %v", err)
-			}
+			log.Printf("Config changed, scheduling debounced reload...")
+			// v2.7.0: route through debounce even for flat mode so an
+			// ops tool that rapidly rewrites multiple files coalesces
+			// into a single reload.
+			m.triggerDebouncedReload(reason)
+		}
+		return
+	}
+
+	// Single-file mode: full reload (no incremental benefit)
+	_, hash, err := loadFile(m.path)
+	if err != nil {
+		log.Printf("WARN: cannot check config %s: %v", m.path, err)
+		return
+	}
+
+	m.mu.RLock()
+	changed := hash != m.lastHash
+	m.mu.RUnlock()
+
+	if changed {
+		log.Printf("Config changed, reloading...")
+		if err := m.Load(); err != nil {
+			log.Printf("ERROR: failed to reload config: %v", err)
 		}
 	}
 }
