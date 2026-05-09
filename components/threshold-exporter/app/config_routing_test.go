@@ -13,6 +13,7 @@ import (
 // region ProfilesAndRouting — profile resolution, routing configuration, and profile merging
 
 func TestValidateTenantKeys_MetadataReservedKey(t *testing.T) {
+	t.Parallel()
 	cfg := &ThresholdConfig{
 		Defaults: map[string]float64{"mysql_connections": 80},
 		Tenants: map[string]map[string]ScheduledValue{
@@ -33,6 +34,7 @@ func TestValidateTenantKeys_MetadataReservedKey(t *testing.T) {
 // ============================================================
 
 func TestResolve_ProfileBasic(t *testing.T) {
+	t.Parallel()
 	// Profile provides value, tenant does NOT override → use profile value
 	cfg := &ThresholdConfig{
 		Defaults: map[string]float64{"mysql_connections": 80},
@@ -54,6 +56,7 @@ func TestResolve_ProfileBasic(t *testing.T) {
 }
 
 func TestResolve_ProfileOverriddenByTenant(t *testing.T) {
+	t.Parallel()
 	// Tenant overrides profile value → tenant wins
 	cfg := &ThresholdConfig{
 		Defaults: map[string]float64{"mysql_connections": 80},
@@ -78,6 +81,7 @@ func TestResolve_ProfileOverriddenByTenant(t *testing.T) {
 }
 
 func TestResolve_ProfileFallbackToDefaults(t *testing.T) {
+	t.Parallel()
 	// Profile does NOT define a metric → fall back to defaults
 	cfg := &ThresholdConfig{
 		Defaults: map[string]float64{"mysql_connections": 80, "mysql_cpu": 70},
@@ -109,6 +113,7 @@ func TestResolve_ProfileFallbackToDefaults(t *testing.T) {
 }
 
 func TestResolve_ProfileDisable(t *testing.T) {
+	t.Parallel()
 	// Tenant sets "disable" on a profile-defined metric → no metric exposed
 	cfg := &ThresholdConfig{
 		Defaults: map[string]float64{"mysql_connections": 80},
@@ -130,6 +135,7 @@ func TestResolve_ProfileDisable(t *testing.T) {
 }
 
 func TestResolve_ProfileNotFound(t *testing.T) {
+	t.Parallel()
 	// _profile references unknown profile → WARN + ignore, fall back to defaults
 	cfg := &ThresholdConfig{
 		Defaults: map[string]float64{"mysql_connections": 80},
@@ -149,6 +155,7 @@ func TestResolve_ProfileNotFound(t *testing.T) {
 }
 
 func TestResolve_ProfileWithSilentMode(t *testing.T) {
+	t.Parallel()
 	// Profile includes _silent_mode → tenant inherits
 	cfg := &ThresholdConfig{
 		Defaults: map[string]float64{"mysql_connections": 80},
@@ -173,6 +180,7 @@ func TestResolve_ProfileWithSilentMode(t *testing.T) {
 }
 
 func TestResolve_ProfileWithRouting(t *testing.T) {
+	t.Parallel()
 	// Profile includes _routing → tenant inherits routing config
 	routingYAML := "receiver:\n  type: \"webhook\"\n  url: \"https://noc.example.com/alerts\"\ngroup_wait: \"30s\""
 	cfg := &ThresholdConfig{
@@ -197,6 +205,7 @@ func TestResolve_ProfileWithRouting(t *testing.T) {
 }
 
 func TestResolve_ProfileWithMetadata(t *testing.T) {
+	t.Parallel()
 	// Profile includes _metadata → tenant inherits metadata
 	cfg := &ThresholdConfig{
 		Defaults: map[string]float64{"mysql_connections": 80},
@@ -229,6 +238,7 @@ func TestResolve_ProfileWithMetadata(t *testing.T) {
 }
 
 func TestResolve_ProfileWithScheduledValue(t *testing.T) {
+	t.Parallel()
 	// Profile value is a ScheduledValue → time windows resolve correctly
 	cfg := &ThresholdConfig{
 		Defaults: map[string]float64{"mysql_connections": 80},
@@ -261,6 +271,7 @@ func TestResolve_ProfileWithScheduledValue(t *testing.T) {
 }
 
 func TestResolve_ProfileWithCritical(t *testing.T) {
+	t.Parallel()
 	// Profile defines <metric>_critical → tenant inherits multi-tier severity
 	cfg := &ThresholdConfig{
 		Defaults: map[string]float64{"mysql_connections": 80},
@@ -294,6 +305,7 @@ func TestResolve_ProfileWithCritical(t *testing.T) {
 }
 
 func TestLoadDir_ProfilesBoundary(t *testing.T) {
+	t.Parallel()
 	// _profiles.yaml loads correctly; tenant file with profiles → WARN + ignore
 	dir := t.TempDir()
 	writeTestFile(t, dir, "_defaults.yaml", `
@@ -336,6 +348,7 @@ profiles:
 }
 
 func TestLoadDir_ProfilesMergeWithDefaults(t *testing.T) {
+	t.Parallel()
 	// Profile + defaults + tenant override coexist correctly
 	dir := t.TempDir()
 	writeTestFile(t, dir, "_defaults.yaml", `
@@ -397,6 +410,7 @@ tenants:
 }
 
 func TestValidateTenantKeys_ProfileRef(t *testing.T) {
+	t.Parallel()
 	// _profile referencing existing profile → no warning
 	cfg := &ThresholdConfig{
 		Defaults: map[string]float64{"mysql_connections": 80},

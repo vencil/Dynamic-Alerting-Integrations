@@ -77,6 +77,7 @@ func loadGolden(t *testing.T) []goldenEntry {
 // newline?). Fixture files are built by Python — parity is about reading the
 // exact same bytes.
 func TestGoldenParity_SourceHash(t *testing.T) {
+	t.Parallel()
 	entries := loadGolden(t)
 	root := goldenRepoRoot(t)
 
@@ -100,6 +101,7 @@ func TestGoldenParity_SourceHash(t *testing.T) {
 // TestGoldenParity_MergedHash is THE test — every drift here maps to one of
 // the 8 semantic traps in §8.11.2. Run this first when debugging parity.
 func TestGoldenParity_MergedHash(t *testing.T) {
+	t.Parallel()
 	entries := loadGolden(t)
 	root := goldenRepoRoot(t)
 
@@ -147,6 +149,7 @@ func TestGoldenParity_MergedHash(t *testing.T) {
 // by coincidence but different structural output). If merged_hash passes
 // but this fails, something semantically equivalent has shifted.
 func TestGoldenParity_EffectiveConfig(t *testing.T) {
+	t.Parallel()
 	entries := loadGolden(t)
 	root := goldenRepoRoot(t)
 
@@ -198,6 +201,7 @@ func TestGoldenParity_EffectiveConfig(t *testing.T) {
 // up the same defaults_chain that Python captured. Catches walker / chain
 // bugs independently of hash computation.
 func TestGoldenParity_ScannerChainOrder(t *testing.T) {
+	t.Parallel()
 	entries := loadGolden(t)
 	root := goldenRepoRoot(t)
 

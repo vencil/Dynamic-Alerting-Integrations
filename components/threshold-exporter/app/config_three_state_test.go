@@ -22,6 +22,7 @@ import (
 // ============================================================
 
 func TestScheduledValue_UnmarshalYAML_Scalar(t *testing.T) {
+	t.Parallel()
 	content := `
 tenants:
   db-a:
@@ -43,6 +44,7 @@ tenants:
 }
 
 func TestScheduledValue_UnmarshalYAML_Structured(t *testing.T) {
+	t.Parallel()
 	content := `
 tenants:
   db-a:
@@ -75,6 +77,7 @@ tenants:
 }
 
 func TestScheduledValue_UnmarshalYAML_MixedFormats(t *testing.T) {
+	t.Parallel()
 	content := `
 tenants:
   db-a:
@@ -102,6 +105,7 @@ tenants:
 }
 
 func TestScheduledValue_ResolveValue_NoOverrides(t *testing.T) {
+	t.Parallel()
 	sv := SV("70")
 	now := time.Date(2026, 1, 15, 3, 0, 0, 0, time.UTC) // 03:00 UTC
 	if got := sv.ResolveValue(now); got != "70" {
@@ -110,6 +114,7 @@ func TestScheduledValue_ResolveValue_NoOverrides(t *testing.T) {
 }
 
 func TestScheduledValue_ResolveValue_WindowMatch(t *testing.T) {
+	t.Parallel()
 	sv := SVScheduled("70",
 		TimeWindowOverride{Window: "01:00-09:00", Value: "1000"},
 	)
@@ -128,6 +133,7 @@ func TestScheduledValue_ResolveValue_WindowMatch(t *testing.T) {
 }
 
 func TestScheduledValue_ResolveValue_CrossMidnight(t *testing.T) {
+	t.Parallel()
 	sv := SVScheduled("70",
 		TimeWindowOverride{Window: "22:00-06:00", Value: "500"},
 	)
@@ -159,6 +165,7 @@ func TestScheduledValue_ResolveValue_CrossMidnight(t *testing.T) {
 }
 
 func TestScheduledValue_ResolveValue_FirstMatchWins(t *testing.T) {
+	t.Parallel()
 	sv := SVScheduled("70",
 		TimeWindowOverride{Window: "01:00-09:00", Value: "1000"},
 		TimeWindowOverride{Window: "03:00-06:00", Value: "2000"},
@@ -171,6 +178,7 @@ func TestScheduledValue_ResolveValue_FirstMatchWins(t *testing.T) {
 }
 
 func TestScheduledValue_ResolveValue_DisableWindow(t *testing.T) {
+	t.Parallel()
 	sv := SVScheduled("70",
 		TimeWindowOverride{Window: "01:00-09:00", Value: "disable"},
 	)
@@ -182,6 +190,7 @@ func TestScheduledValue_ResolveValue_DisableWindow(t *testing.T) {
 }
 
 func TestResolveAt_ScheduledOverride(t *testing.T) {
+	t.Parallel()
 	cfg := &ThresholdConfig{
 		Defaults: map[string]float64{"mysql_connections": 80},
 		Tenants: map[string]map[string]ScheduledValue{
@@ -215,6 +224,7 @@ func TestResolveAt_ScheduledOverride(t *testing.T) {
 }
 
 func TestResolveAt_ScheduledDisable(t *testing.T) {
+	t.Parallel()
 	cfg := &ThresholdConfig{
 		Defaults: map[string]float64{"mysql_connections": 80},
 		Tenants: map[string]map[string]ScheduledValue{
@@ -242,6 +252,7 @@ func TestResolveAt_ScheduledDisable(t *testing.T) {
 }
 
 func TestResolveAt_ScheduledCritical(t *testing.T) {
+	t.Parallel()
 	cfg := &ThresholdConfig{
 		Defaults: map[string]float64{"mysql_connections": 80},
 		Tenants: map[string]map[string]ScheduledValue{
@@ -278,6 +289,7 @@ func TestResolveAt_ScheduledCritical(t *testing.T) {
 }
 
 func TestResolveAt_ScheduledWithYAML(t *testing.T) {
+	t.Parallel()
 	content := `
 defaults:
   mysql_connections: 80
@@ -327,6 +339,7 @@ tenants:
 }
 
 func TestMatchTimeWindow(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		window string
 		hour   int
@@ -371,6 +384,7 @@ func TestMatchTimeWindow(t *testing.T) {
 }
 
 func TestMatchTimeWindow_NonUTCInput(t *testing.T) {
+	t.Parallel()
 	// Input in JST (+9), window is UTC. 03:00 JST = 18:00 UTC
 	jst := time.FixedZone("JST", 9*3600)
 	now := time.Date(2026, 1, 15, 3, 0, 0, 0, jst) // 18:00 UTC
@@ -387,6 +401,7 @@ func TestMatchTimeWindow_NonUTCInput(t *testing.T) {
 }
 
 func TestParseHHMM(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		input  string
 		wantH  int
@@ -432,6 +447,7 @@ func TestParseHHMM(t *testing.T) {
 // ============================================================
 
 func TestScheduledValue_String(t *testing.T) {
+	t.Parallel()
 	sv := SV("70")
 	if sv.String() != "70" {
 		t.Errorf("expected 70, got %q", sv.String())
@@ -448,6 +464,7 @@ func TestScheduledValue_String(t *testing.T) {
 // ============================================================
 
 func TestConfigManager_LoadDir_ScheduledValueMerge(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 
 	// _defaults.yaml: platform-managed defaults

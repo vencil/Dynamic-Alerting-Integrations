@@ -20,6 +20,7 @@ import (
 // ============================================================
 
 func TestParseKeyWithLabels(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		input       string
 		wantBase    string
@@ -84,6 +85,7 @@ func TestParseKeyWithLabels(t *testing.T) {
 }
 
 func TestResolve_DimensionalBasic(t *testing.T) {
+	t.Parallel()
 	cfg := &ThresholdConfig{
 		Defaults: map[string]float64{
 			"redis_memory": 80,
@@ -152,6 +154,7 @@ func TestResolve_DimensionalBasic(t *testing.T) {
 }
 
 func TestResolve_DimensionalDisable(t *testing.T) {
+	t.Parallel()
 	cfg := &ThresholdConfig{
 		Defaults: map[string]float64{},
 		Tenants: map[string]map[string]ScheduledValue{
@@ -172,6 +175,7 @@ func TestResolve_DimensionalDisable(t *testing.T) {
 }
 
 func TestResolve_DimensionalBackwardCompat(t *testing.T) {
+	t.Parallel()
 	// Non-dimensional config should still work identically
 	cfg := &ThresholdConfig{
 		Defaults: map[string]float64{
@@ -204,6 +208,7 @@ func TestResolve_DimensionalBackwardCompat(t *testing.T) {
 }
 
 func TestResolve_DimensionalWithDirMode(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 
 	writeTestFile(t, dir, "_defaults.yaml", `
@@ -251,6 +256,7 @@ tenants:
 // ============================================================
 
 func TestParseLabelsStringWithOp(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		input     string
 		wantExact map[string]string
@@ -282,6 +288,7 @@ func TestParseLabelsStringWithOp(t *testing.T) {
 }
 
 func TestResolve_RegexDimensional(t *testing.T) {
+	t.Parallel()
 	cfg := &ThresholdConfig{
 		Defaults: map[string]float64{
 			"oracle_tablespace": 80,
@@ -343,6 +350,7 @@ func TestResolve_RegexDimensional(t *testing.T) {
 }
 
 func TestResolve_RegexDimensionalWithYAML(t *testing.T) {
+	t.Parallel()
 	content := `
 defaults:
   oracle_tablespace: 80
@@ -379,6 +387,7 @@ tenants:
 }
 
 func TestResolve_RegexScheduled(t *testing.T) {
+	t.Parallel()
 	// B1 + B4 combined: regex dimensional with time-window override
 	cfg := &ThresholdConfig{
 		Defaults: map[string]float64{"oracle_tablespace": 80},
@@ -421,6 +430,7 @@ func TestResolve_RegexScheduled(t *testing.T) {
 // _critical suffix on regex dimensional keys has no effect.
 // Regex dimensional keys must use "value:severity" syntax instead.
 func TestResolve_RegexDimensionalCriticalNotSupported(t *testing.T) {
+	t.Parallel()
 	cfg := &ThresholdConfig{
 		Defaults: map[string]float64{
 			"oracle_tablespace": 90,

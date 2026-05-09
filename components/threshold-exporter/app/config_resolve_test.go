@@ -12,6 +12,7 @@ import (
 // region ThresholdResolution — basic Resolve/ResolveAt tests
 
 func TestResolve_ThreeState(t *testing.T) {
+	t.Parallel()
 	cfg := &ThresholdConfig{
 		Defaults: map[string]float64{
 			"mysql_connections": 80,
@@ -61,6 +62,7 @@ func TestResolve_ThreeState(t *testing.T) {
 }
 
 func TestResolve_DisableVariants(t *testing.T) {
+	t.Parallel()
 	cfg := &ThresholdConfig{
 		Defaults: map[string]float64{"mysql_connections": 80},
 		Tenants: map[string]map[string]ScheduledValue{
@@ -79,6 +81,7 @@ func TestResolve_DisableVariants(t *testing.T) {
 }
 
 func TestResolve_CustomSeverity(t *testing.T) {
+	t.Parallel()
 	cfg := &ThresholdConfig{
 		Defaults: map[string]float64{"mysql_connections": 80},
 		Tenants: map[string]map[string]ScheduledValue{
@@ -96,6 +99,7 @@ func TestResolve_CustomSeverity(t *testing.T) {
 }
 
 func TestResolve_EmptyTenants(t *testing.T) {
+	t.Parallel()
 	cfg := &ThresholdConfig{
 		Defaults: map[string]float64{"mysql_connections": 80},
 		Tenants:  map[string]map[string]ScheduledValue{},
@@ -108,6 +112,7 @@ func TestResolve_EmptyTenants(t *testing.T) {
 }
 
 func TestResolve_TenantWithNoOverrides(t *testing.T) {
+	t.Parallel()
 	cfg := &ThresholdConfig{
 		Defaults: map[string]float64{
 			"mysql_connections": 80,
@@ -135,6 +140,7 @@ func TestResolve_TenantWithNoOverrides(t *testing.T) {
 // region MetricKeyParsing — test helpers and key parsing
 
 func TestParseMetricKey(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		input              string
 		wantComp, wantMet string
@@ -160,6 +166,7 @@ func TestParseMetricKey(t *testing.T) {
 // --- Scenario C: State Filter Tests ---
 
 func TestResolveStateFilters_AllEnabled(t *testing.T) {
+	t.Parallel()
 	cfg := &ThresholdConfig{
 		Defaults: map[string]float64{"mysql_connections": 80},
 		StateFilters: map[string]StateFilter{
@@ -200,6 +207,7 @@ func TestResolveStateFilters_AllEnabled(t *testing.T) {
 }
 
 func TestResolveStateFilters_PerTenantDisable(t *testing.T) {
+	t.Parallel()
 	cfg := &ThresholdConfig{
 		Defaults:     map[string]float64{"mysql_connections": 80},
 		StateFilters: map[string]StateFilter{"container_crashloop": {Reasons: []string{"CrashLoopBackOff"}, Severity: "critical"}},
@@ -219,6 +227,7 @@ func TestResolveStateFilters_PerTenantDisable(t *testing.T) {
 }
 
 func TestResolveStateFilters_DisableVariants(t *testing.T) {
+	t.Parallel()
 	cfg := &ThresholdConfig{
 		Defaults:     map[string]float64{},
 		StateFilters: map[string]StateFilter{"container_crashloop": {Reasons: []string{"CrashLoopBackOff"}, Severity: "critical"}},
@@ -238,6 +247,7 @@ func TestResolveStateFilters_DisableVariants(t *testing.T) {
 }
 
 func TestResolveStateFilters_NoFilters(t *testing.T) {
+	t.Parallel()
 	cfg := &ThresholdConfig{
 		Defaults: map[string]float64{"mysql_connections": 80},
 		Tenants:  map[string]map[string]ScheduledValue{"db-a": {"mysql_connections": SV("70")}},
@@ -252,6 +262,7 @@ func TestResolveStateFilters_NoFilters(t *testing.T) {
 }
 
 func TestResolveStateFilters_DefaultSeverity(t *testing.T) {
+	t.Parallel()
 	cfg := &ThresholdConfig{
 		Defaults:     map[string]float64{},
 		StateFilters: map[string]StateFilter{"container_crashloop": {Reasons: []string{"CrashLoopBackOff"}}},
@@ -265,6 +276,7 @@ func TestResolveStateFilters_DefaultSeverity(t *testing.T) {
 }
 
 func TestResolve_IgnoresStateKeys(t *testing.T) {
+	t.Parallel()
 	cfg := &ThresholdConfig{
 		Defaults:     map[string]float64{"mysql_connections": 80},
 		StateFilters: map[string]StateFilter{"container_crashloop": {Reasons: []string{"CrashLoopBackOff"}, Severity: "critical"}},

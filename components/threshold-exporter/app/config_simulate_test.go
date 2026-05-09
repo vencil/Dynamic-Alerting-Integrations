@@ -35,6 +35,7 @@ import (
 // --- Layer 1: config.SimulateEffective unit tests ---------------------------
 
 func TestSimulate_BasicHierarchy(t *testing.T) {
+	t.Parallel()
 	defaults := []byte("defaults:\n  mysql_connections: 80\n  cpu_threshold: 75\n")
 	tenantBytes := []byte("tenants:\n  tenant-a:\n    mysql_connections: \"90\"\n")
 
@@ -68,6 +69,7 @@ func TestSimulate_BasicHierarchy(t *testing.T) {
 }
 
 func TestSimulate_NoDefaults(t *testing.T) {
+	t.Parallel()
 	tenantBytes := []byte("tenants:\n  tenant-flat:\n    cpu_threshold: 80\n")
 	resp, err := config.SimulateEffective(config.SimulateRequest{
 		TenantID:   "tenant-flat",
@@ -85,6 +87,7 @@ func TestSimulate_NoDefaults(t *testing.T) {
 }
 
 func TestSimulate_DeepChainOrdering(t *testing.T) {
+	t.Parallel()
 	// L0 sets X=1, L1 sets X=2, tenant overrides X=3 → expect X=3.
 	// Also: L0 sets Y=10, L1 inherits but overrides Z=20 → tenant
 	// inherits Y=10 from L0 and Z=20 from L1.
@@ -115,6 +118,7 @@ func TestSimulate_DeepChainOrdering(t *testing.T) {
 }
 
 func TestSimulate_TenantNotFound(t *testing.T) {
+	t.Parallel()
 	tenantBytes := []byte("tenants:\n  someone-else:\n    foo: 1\n")
 	_, err := config.SimulateEffective(config.SimulateRequest{
 		TenantID:   "missing",
@@ -126,6 +130,7 @@ func TestSimulate_TenantNotFound(t *testing.T) {
 }
 
 func TestSimulate_EmptyTenantID(t *testing.T) {
+	t.Parallel()
 	_, err := config.SimulateEffective(config.SimulateRequest{
 		TenantYAML: []byte("tenants:\n  t1:\n    x: 1\n"),
 	})
@@ -135,6 +140,7 @@ func TestSimulate_EmptyTenantID(t *testing.T) {
 }
 
 func TestSimulate_EmptyTenantYAML(t *testing.T) {
+	t.Parallel()
 	_, err := config.SimulateEffective(config.SimulateRequest{
 		TenantID: "t1",
 	})
@@ -144,6 +150,7 @@ func TestSimulate_EmptyTenantYAML(t *testing.T) {
 }
 
 func TestSimulate_MalformedTenantYAML(t *testing.T) {
+	t.Parallel()
 	_, err := config.SimulateEffective(config.SimulateRequest{
 		TenantID:   "t1",
 		TenantYAML: []byte("tenants:\n  t1:\n    [unclosed-bracket\n"),
@@ -156,6 +163,7 @@ func TestSimulate_MalformedTenantYAML(t *testing.T) {
 // --- Layer 2: simulateHandler HTTP tests -----------------------------
 
 func TestSimulateHandler_Happy(t *testing.T) {
+	t.Parallel()
 	body := config.SimulateRequest{
 		TenantID:          "tenant-a",
 		TenantYAML:        []byte("tenants:\n  tenant-a:\n    cpu_threshold: 70\n"),
@@ -188,6 +196,7 @@ func TestSimulateHandler_Happy(t *testing.T) {
 }
 
 func TestSimulateHandler_MethodNotAllowed(t *testing.T) {
+	t.Parallel()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/tenants/simulate", nil)
 	rec := httptest.NewRecorder()
 	simulateHandler()(rec, req)
@@ -197,6 +206,7 @@ func TestSimulateHandler_MethodNotAllowed(t *testing.T) {
 }
 
 func TestSimulateHandler_BadJSON(t *testing.T) {
+	t.Parallel()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/tenants/simulate",
 		strings.NewReader("not-json"))
 	rec := httptest.NewRecorder()
@@ -207,6 +217,7 @@ func TestSimulateHandler_BadJSON(t *testing.T) {
 }
 
 func TestSimulateHandler_TenantNotFound(t *testing.T) {
+	t.Parallel()
 	body := config.SimulateRequest{
 		TenantID:   "ghost",
 		TenantYAML: []byte("tenants:\n  alive:\n    x: 1\n"),
@@ -222,6 +233,7 @@ func TestSimulateHandler_TenantNotFound(t *testing.T) {
 }
 
 func TestSimulateHandler_BodyTooLarge(t *testing.T) {
+	t.Parallel()
 	// Build an oversized payload: 2 MiB of tenant YAML padding.
 	pad := strings.Repeat("a", 2<<20)
 	body := config.SimulateRequest{
@@ -239,6 +251,7 @@ func TestSimulateHandler_BodyTooLarge(t *testing.T) {
 }
 
 func TestSimulateHandler_EmptyBody(t *testing.T) {
+	t.Parallel()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/tenants/simulate", nil)
 	rec := httptest.NewRecorder()
 	simulateHandler()(rec, req)
@@ -251,6 +264,7 @@ func TestSimulateHandler_EmptyBody(t *testing.T) {
 }
 
 func TestSimulateHandler_MalformedDefaults(t *testing.T) {
+	t.Parallel()
 	// Defaults bytes that don't parse as YAML must surface as 400 from
 	// the handler — the contract is "preview will fail the same way a
 	// commit would fail".
@@ -270,6 +284,7 @@ func TestSimulateHandler_MalformedDefaults(t *testing.T) {
 }
 
 func TestSimulateHandler_UnknownField(t *testing.T) {
+	t.Parallel()
 	// DisallowUnknownFields surfaces typos in the request shape.
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/tenants/simulate",
 		strings.NewReader(`{"tenant_id":"t1","tenant_yaml":"YQ==","oops":1}`))
@@ -293,6 +308,7 @@ func TestSimulateHandler_UnknownField(t *testing.T) {
 // override at every level, plus a `_metadata` block in the tenant file
 // (which must be stripped by both paths).
 func TestSimulate_VsResolve_ParityHash(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 
 	// Layout:
@@ -361,6 +377,7 @@ func TestSimulate_VsResolve_ParityHash(t *testing.T) {
 // --- Source layer tests ---------------------------------------------
 
 func TestInMemoryConfigSource_FiltersByRoot(t *testing.T) {
+	t.Parallel()
 	files := map[string][]byte{
 		"/sim/a.yaml":         []byte("tenants:\n  a:\n    x: 1\n"),
 		"/sim/sub/b.yaml":     []byte("tenants:\n  b:\n    x: 2\n"),
@@ -392,6 +409,7 @@ func TestInMemoryConfigSource_FiltersByRoot(t *testing.T) {
 }
 
 func TestScanFromConfigSource_DuplicateTenantError(t *testing.T) {
+	t.Parallel()
 	files := map[string][]byte{
 		"/sim/team-a.yaml": []byte("tenants:\n  shared:\n    x: 1\n"),
 		"/sim/team-b.yaml": []byte("tenants:\n  shared:\n    x: 2\n"),

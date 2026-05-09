@@ -13,6 +13,7 @@ import (
 
 // TestDeepMerge_ScalarOverride — child scalar overwrites parent scalar.
 func TestDeepMerge_ScalarOverride(t *testing.T) {
+	t.Parallel()
 	base := map[string]any{"cpu": 70, "memory": 75}
 	over := map[string]any{"cpu": 85}
 	got := deepMerge(base, over)
@@ -31,6 +32,7 @@ func TestDeepMerge_ScalarOverride(t *testing.T) {
 
 // TestDeepMerge_NestedDictRecurse — nested dicts merge field-by-field.
 func TestDeepMerge_NestedDictRecurse(t *testing.T) {
+	t.Parallel()
 	base := map[string]any{
 		"threshold": map[string]any{"cpu": 70, "memory": 75},
 	}
@@ -54,6 +56,7 @@ func TestDeepMerge_NestedDictRecurse(t *testing.T) {
 // TestDeepMerge_ArrayReplaceNotConcat — KEY trap #7 from §8.11.2.
 // Arrays are REPLACED by the override, not concatenated.
 func TestDeepMerge_ArrayReplaceNotConcat(t *testing.T) {
+	t.Parallel()
 	base := map[string]any{
 		"receivers": []any{"email", "slack"},
 	}
@@ -74,6 +77,7 @@ func TestDeepMerge_ArrayReplaceNotConcat(t *testing.T) {
 // TestDeepMerge_NilDeletesKey — KEY trap #6 from §8.11.2.
 // YAML null (`~`) in override removes the key from result.
 func TestDeepMerge_NilDeletesKey(t *testing.T) {
+	t.Parallel()
 	base := map[string]any{
 		"alert_group": "baseline",
 		"threshold":   map[string]any{"cpu": 70, "memory": 75},
@@ -102,6 +106,7 @@ func TestDeepMerge_NilDeletesKey(t *testing.T) {
 // TestDeepMerge_MetadataNeverInherited — KEY trap #4 from §8.11.2.
 // `_metadata` in a parent is dropped when merging into a child.
 func TestDeepMerge_MetadataNeverInherited(t *testing.T) {
+	t.Parallel()
 	base := map[string]any{"threshold": map[string]any{"cpu": 70}}
 	// _metadata in the "override" side (which is where describe_tenant.py
 	// checks) should be ignored. But describe_tenant.py applies `merged =
@@ -127,6 +132,7 @@ func TestDeepMerge_MetadataNeverInherited(t *testing.T) {
 // fixture depth). Confirms recursion terminates and copies don't share
 // backing state.
 func TestDeepMerge_DeepNesting(t *testing.T) {
+	t.Parallel()
 	base := map[string]any{
 		"a": map[string]any{
 			"b": map[string]any{
@@ -167,6 +173,7 @@ func TestDeepMerge_DeepNesting(t *testing.T) {
 // a dict (or vice versa), child wins wholesale. This prevents a "dict expected"
 // panic and matches Python's `isinstance(... dict)` guard.
 func TestDeepMerge_TypeMismatchOverrides(t *testing.T) {
+	t.Parallel()
 	base := map[string]any{"x": "scalar"}
 	over := map[string]any{"x": map[string]any{"y": 1}}
 	got := deepMerge(base, over)
@@ -186,6 +193,7 @@ func TestDeepMerge_TypeMismatchOverrides(t *testing.T) {
 // TestCanonicalJSON_SortsKeysAndNoSpaces verifies byte-for-byte parity with
 // Python's json.dumps(..., sort_keys=True, separators=(",", ":"), ensure_ascii=False).
 func TestCanonicalJSON_SortsKeysAndNoSpaces(t *testing.T) {
+	t.Parallel()
 	data := map[string]any{
 		"z": 1,
 		"a": 2,
@@ -205,6 +213,7 @@ func TestCanonicalJSON_SortsKeysAndNoSpaces(t *testing.T) {
 // match Python's ensure_ascii=False (Go encoding/json's default SetEscapeHTML
 // would emit \u003c \u003e \u0026).
 func TestCanonicalJSON_NoHTMLEscape(t *testing.T) {
+	t.Parallel()
 	data := map[string]any{"s": "a<b>c&d"}
 	got, err := canonicalJSON(data)
 	if err != nil {
@@ -222,6 +231,7 @@ func TestCanonicalJSON_NoHTMLEscape(t *testing.T) {
 // maps must still have each element's keys sorted. This is trap #9 from
 // §8.11.2 (Python `sort_keys=True` recurses; we need Go to do the same).
 func TestCanonicalJSON_NestedArraysSortInnerMaps(t *testing.T) {
+	t.Parallel()
 	data := map[string]any{
 		"xs": []any{
 			map[string]any{"z": 1, "a": 2},
@@ -241,6 +251,7 @@ func TestCanonicalJSON_NestedArraysSortInnerMaps(t *testing.T) {
 // TestComputeMergedHash_NoDefaults — tenant with empty chain produces a
 // hash of just its own config. Mirrors the `flat` golden scenario.
 func TestComputeMergedHash_NoDefaults(t *testing.T) {
+	t.Parallel()
 	tenantYAML := []byte(`tenants:
   tenant-a:
     threshold:
@@ -262,6 +273,7 @@ func TestComputeMergedHash_NoDefaults(t *testing.T) {
 // TestComputeMergedHash_Deterministic — same input → same hash across calls.
 // Protects against map-iteration-order leaking into output.
 func TestComputeMergedHash_Deterministic(t *testing.T) {
+	t.Parallel()
 	tenantYAML := []byte(`tenants:
   t:
     a: 1
@@ -290,6 +302,7 @@ func TestComputeMergedHash_Deterministic(t *testing.T) {
 // TestComputeMergedHash_MissingTenantErrors — unknown tenant ID returns a
 // typed error rather than "" + silent success.
 func TestComputeMergedHash_MissingTenantErrors(t *testing.T) {
+	t.Parallel()
 	tenantYAML := []byte(`tenants:
   tenant-a:
     x: 1
@@ -307,6 +320,7 @@ func TestComputeMergedHash_MissingTenantErrors(t *testing.T) {
 // map[any]any when unmarshalling into `any`. We must convert so encoding/json
 // can sort keys (encoding/json errors on map[any]any).
 func TestNormalizeYAMLToJSON_MapAnyAnyConversion(t *testing.T) {
+	t.Parallel()
 	input := map[any]any{
 		"a": 1,
 		"b": map[any]any{"c": 2},
@@ -328,6 +342,7 @@ func TestNormalizeYAMLToJSON_MapAnyAnyConversion(t *testing.T) {
 // TestExtractDefaultsBlock_BothShapes — `defaults:` wrapper + naked dict
 // both supported per trap #3.
 func TestExtractDefaultsBlock_BothShapes(t *testing.T) {
+	t.Parallel()
 	wrapped := map[string]any{
 		"defaults": map[string]any{"cpu": 70},
 	}
