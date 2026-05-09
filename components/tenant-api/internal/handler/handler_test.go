@@ -613,7 +613,10 @@ func TestMetricsHandler(t *testing.T) {
 // --- MetricsMiddleware tests ---
 
 func TestMetricsMiddleware_CountsRequests(t *testing.T) {
-	t.Parallel()
+	// Intentionally NOT t.Parallel(): asserts on package-level singleton
+	// `Metrics.requestsTotal` via before/after delta. Other parallel tests
+	// also bump the counter, which races the delta check (CI saw
+	// "requestsTotal = 3, want 2"). Keep sequential.
 	before := Metrics.requestsTotal.Load()
 
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -632,7 +635,8 @@ func TestMetricsMiddleware_CountsRequests(t *testing.T) {
 }
 
 func TestMetricsMiddleware_CountsErrors(t *testing.T) {
-	t.Parallel()
+	// Intentionally NOT t.Parallel(): same shared-singleton concern as
+	// TestMetricsMiddleware_CountsRequests above.
 	before := Metrics.errorsTotal.Load()
 
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -651,7 +655,8 @@ func TestMetricsMiddleware_CountsErrors(t *testing.T) {
 }
 
 func TestMetricsMiddleware_NoErrorFor2xx(t *testing.T) {
-	t.Parallel()
+	// Intentionally NOT t.Parallel(): same shared-singleton concern as
+	// TestMetricsMiddleware_CountsRequests above.
 	before := Metrics.errorsTotal.Load()
 
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

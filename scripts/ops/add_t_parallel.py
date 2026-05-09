@@ -23,7 +23,22 @@ TEST_FUNC_RE = re.compile(r"^func (Test\w+)\(t \*testing\.T\) \{$")
 
 # Risky patterns: tests using these touch process-global state and CANNOT
 # safely run in parallel even within a package.
-RISKY = ("os.Setenv", "os.Unsetenv", "os.Chdir", "t.Setenv")
+#
+# History:
+#   - The first 4 entries (os.Setenv etc.) were the original RISKY guard.
+#   - "Metrics.requestsTotal" / "Metrics.errorsTotal" were added after CI
+#     run #25602108441 caught a race in TestMetricsMiddleware_CountsRequests
+#     ("requestsTotal = 3, want 2") — the 3 TestMetricsMiddleware_* tests
+#     read a package-level Prometheus singleton via a before/after delta,
+#     which collides under t.Parallel(). The substring match catches all
+#     three call sites because they share the "Metrics." prefix.
+RISKY = (
+    "os.Setenv",
+    "os.Unsetenv",
+    "os.Chdir",
+    "t.Setenv",
+    "Metrics.",
+)
 
 
 def find_function_body(lines: list[str], start_idx: int) -> tuple[int, int]:
