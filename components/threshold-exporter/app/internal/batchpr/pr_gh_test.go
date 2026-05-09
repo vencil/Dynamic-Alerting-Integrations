@@ -52,6 +52,7 @@ func newStubRunner() *stubRunner {
 }
 
 func TestGHPRClient_OpenPR_ParsesURL(t *testing.T) {
+	t.Parallel()
 	stub := newStubRunner()
 	stub.responses["pr create"] = stubResponse{
 		stdout: "Creating pull request for da-tools/c10/base-abc into main in vencil/Dynamic-Alerting-Integrations\n\nhttps://github.com/vencil/Dynamic-Alerting-Integrations/pull/130\n",
@@ -86,6 +87,7 @@ func TestGHPRClient_OpenPR_ParsesURL(t *testing.T) {
 }
 
 func TestGHPRClient_OpenPR_NoURLInOutput_Errors(t *testing.T) {
+	t.Parallel()
 	stub := newStubRunner()
 	stub.responses["pr create"] = stubResponse{stdout: "no URL printed at all"}
 	c := &GHPRClient{Repo: Repo{Owner: "o", Name: "r", BaseBranch: "main"}, run: stub}
@@ -96,6 +98,7 @@ func TestGHPRClient_OpenPR_NoURLInOutput_Errors(t *testing.T) {
 }
 
 func TestGHPRClient_OpenPR_RunErrorPropagates(t *testing.T) {
+	t.Parallel()
 	stub := newStubRunner()
 	stub.responses["pr create"] = stubResponse{err: errors.New("simulated")}
 	c := &GHPRClient{Repo: Repo{Owner: "o", Name: "r", BaseBranch: "main"}, run: stub}
@@ -106,6 +109,7 @@ func TestGHPRClient_OpenPR_RunErrorPropagates(t *testing.T) {
 }
 
 func TestGHPRClient_FindPRByBranch_HappyPath(t *testing.T) {
+	t.Parallel()
 	stub := newStubRunner()
 	rows := []map[string]any{{"number": 42, "url": "https://github.com/o/r/pull/42"}}
 	body, _ := json.Marshal(rows)
@@ -121,6 +125,7 @@ func TestGHPRClient_FindPRByBranch_HappyPath(t *testing.T) {
 }
 
 func TestGHPRClient_FindPRByBranch_EmptyArrayReturnsNilNil(t *testing.T) {
+	t.Parallel()
 	stub := newStubRunner()
 	stub.responses["pr list"] = stubResponse{stdout: "[]"}
 	c := &GHPRClient{Repo: Repo{Owner: "o", Name: "r", BaseBranch: "main"}, run: stub}
@@ -131,6 +136,7 @@ func TestGHPRClient_FindPRByBranch_EmptyArrayReturnsNilNil(t *testing.T) {
 }
 
 func TestGHPRClient_FindPRByBranch_ParseError(t *testing.T) {
+	t.Parallel()
 	stub := newStubRunner()
 	stub.responses["pr list"] = stubResponse{stdout: "not-json"}
 	c := &GHPRClient{Repo: Repo{Owner: "o", Name: "r", BaseBranch: "main"}, run: stub}
@@ -141,6 +147,7 @@ func TestGHPRClient_FindPRByBranch_ParseError(t *testing.T) {
 }
 
 func TestGHPRClient_UpdatePRDescription(t *testing.T) {
+	t.Parallel()
 	stub := newStubRunner()
 	c := &GHPRClient{Repo: Repo{Owner: "o", Name: "r", BaseBranch: "main"}, run: stub}
 	if err := c.UpdatePRDescription(context.Background(), 7, "new body"); err != nil {
@@ -158,6 +165,7 @@ func TestGHPRClient_UpdatePRDescription(t *testing.T) {
 }
 
 func TestGHPRClient_MissingRepoErrors(t *testing.T) {
+	t.Parallel()
 	c := &GHPRClient{Repo: Repo{}, run: newStubRunner()}
 	if _, err := c.OpenPR(context.Background(), OpenPRInput{}); err == nil {
 		t.Errorf("OpenPR with missing repo should error")
@@ -171,6 +179,7 @@ func TestGHPRClient_MissingRepoErrors(t *testing.T) {
 }
 
 func TestLastPRURL(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		in, want string
 	}{
@@ -190,6 +199,7 @@ func TestLastPRURL(t *testing.T) {
 }
 
 func TestPRNumberFromURL(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		url    string
 		want   int

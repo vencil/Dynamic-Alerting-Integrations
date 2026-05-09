@@ -30,6 +30,7 @@ func dirsByDomain(spec map[string][2]string) map[string]string {
 }
 
 func TestBuildPlan_ErrorsOnEmptyProposals(t *testing.T) {
+	t.Parallel()
 	_, err := BuildPlan(PlanInput{})
 	if err == nil {
 		t.Fatal("err = nil for empty proposals, want error")
@@ -37,6 +38,7 @@ func TestBuildPlan_ErrorsOnEmptyProposals(t *testing.T) {
 }
 
 func TestBuildPlan_ErrorsOnChunkByCountWithoutSize(t *testing.T) {
+	t.Parallel()
 	_, err := BuildPlan(PlanInput{
 		Proposals: []ProposalRef{fixtureProposal("t1")},
 		ChunkBy:   ChunkByCount,
@@ -47,6 +49,7 @@ func TestBuildPlan_ErrorsOnChunkByCountWithoutSize(t *testing.T) {
 }
 
 func TestBuildPlan_BasePRAlwaysFirst(t *testing.T) {
+	t.Parallel()
 	plan, err := BuildPlan(PlanInput{
 		Proposals:  []ProposalRef{fixtureProposal("t1", "t2")},
 		TenantDirs: dirsByDomain(map[string][2]string{"t1": {"dom-a", "r1"}, "t2": {"dom-a", "r1"}}),
@@ -71,6 +74,7 @@ func TestBuildPlan_BasePRAlwaysFirst(t *testing.T) {
 }
 
 func TestBuildPlan_ChunkByDomain_GroupsByFirstSegment(t *testing.T) {
+	t.Parallel()
 	prop := ProposalRef{
 		MemberTenantIDs: []string{"t-a1", "t-a2", "t-b1"},
 		Dialect:         "prom",
@@ -99,6 +103,7 @@ func TestBuildPlan_ChunkByDomain_GroupsByFirstSegment(t *testing.T) {
 }
 
 func TestBuildPlan_ChunkByRegion_GroupsByFirstTwoSegments(t *testing.T) {
+	t.Parallel()
 	prop := ProposalRef{
 		MemberTenantIDs: []string{"t1", "t2", "t3"},
 		Dialect:         "prom",
@@ -126,6 +131,7 @@ func TestBuildPlan_ChunkByRegion_GroupsByFirstTwoSegments(t *testing.T) {
 }
 
 func TestBuildPlan_ChunkByCount_FixedSize(t *testing.T) {
+	t.Parallel()
 	tenants := []string{"t1", "t2", "t3", "t4", "t5"}
 	dirs := make(map[string]string)
 	for _, t := range tenants {
@@ -156,6 +162,7 @@ func TestBuildPlan_ChunkByCount_FixedSize(t *testing.T) {
 }
 
 func TestBuildPlan_SoftCapSplitsOversizedDomain(t *testing.T) {
+	t.Parallel()
 	// Stress: 7 tenants all in same domain, ChunkSize=3 → expect 3
 	// chunks (3+3+1) prefixed `dom-x/part-NN`.
 	tenants := []string{"a", "b", "c", "d", "e", "f", "g"}
@@ -185,6 +192,7 @@ func TestBuildPlan_SoftCapSplitsOversizedDomain(t *testing.T) {
 }
 
 func TestBuildPlan_MissingTenantDirSurfacesAsWarning(t *testing.T) {
+	t.Parallel()
 	prop := ProposalRef{
 		MemberTenantIDs: []string{"known", "missing"},
 		Dialect:         "prom",
@@ -212,6 +220,7 @@ func TestBuildPlan_MissingTenantDirSurfacesAsWarning(t *testing.T) {
 }
 
 func TestBuildPlan_DefaultsToChunkByDomain(t *testing.T) {
+	t.Parallel()
 	prop := ProposalRef{
 		MemberTenantIDs: []string{"t1", "t2"},
 		Dialect:         "prom",
@@ -236,6 +245,7 @@ func TestBuildPlan_DefaultsToChunkByDomain(t *testing.T) {
 }
 
 func TestBuildPlan_TitlesNumberedConsistently(t *testing.T) {
+	t.Parallel()
 	tenants := []string{"a", "b", "c", "d"}
 	dirs := make(map[string]string)
 	dirs["a"] = "dom-x/r1/a"
@@ -263,6 +273,7 @@ func TestBuildPlan_TitlesNumberedConsistently(t *testing.T) {
 }
 
 func TestBuildPlan_BasePRTitleIncludesDialectMix(t *testing.T) {
+	t.Parallel()
 	plan, err := BuildPlan(PlanInput{
 		Proposals: []ProposalRef{
 			{MemberTenantIDs: []string{"t1"}, Dialect: "prom"},
@@ -282,6 +293,7 @@ func TestBuildPlan_BasePRTitleIncludesDialectMix(t *testing.T) {
 }
 
 func TestBuildPlan_DeterministicOutput(t *testing.T) {
+	t.Parallel()
 	// Same input two runs → byte-identical JSON. Catches any leaked
 	// map iteration order in the planner.
 	in := PlanInput{
@@ -320,6 +332,7 @@ func TestBuildPlan_DeterministicOutput(t *testing.T) {
 }
 
 func TestBuildPlan_SourceProposalIndicesMapBackToInput(t *testing.T) {
+	t.Parallel()
 	prop1 := ProposalRef{MemberTenantIDs: []string{"t1"}, Dialect: "prom"}
 	prop2 := ProposalRef{MemberTenantIDs: []string{"t2"}, Dialect: "metricsql"}
 	plan, err := BuildPlan(PlanInput{
@@ -354,6 +367,7 @@ func TestBuildPlan_SourceProposalIndicesMapBackToInput(t *testing.T) {
 }
 
 func TestBuildPlan_UnassignedDirGoesToBucket(t *testing.T) {
+	t.Parallel()
 	// Tenants placed at a TenantDirs path with no slashes still
 	// need to bucket somewhere — `<unassigned>` is the safe label
 	// so the chunk surfaces in the plan rather than vanishing.

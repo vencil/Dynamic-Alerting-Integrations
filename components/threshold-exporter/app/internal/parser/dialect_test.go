@@ -9,6 +9,7 @@ import (
 )
 
 func TestAnalyzeExpr_PortablePromQL(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ name, expr string }{
 		{"simple gauge ratio", "container_memory_usage_bytes / container_spec_memory_limit_bytes > 0.85"},
 		{"rate + sum", "sum by (job) (rate(http_requests_total[5m]))"},
@@ -34,6 +35,7 @@ func TestAnalyzeExpr_PortablePromQL(t *testing.T) {
 }
 
 func TestAnalyzeExpr_VMOnlyDialect(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name        string
 		expr        string
@@ -64,6 +66,7 @@ func TestAnalyzeExpr_VMOnlyDialect(t *testing.T) {
 }
 
 func TestAnalyzeExpr_AmbiguousOnSyntaxError(t *testing.T) {
+	t.Parallel()
 	d, vmOnly, err := AnalyzeExpr("sum(rate(foo[5m]")
 	if d != DialectAmbiguous {
 		t.Errorf("dialect = %q, want %q", d, DialectAmbiguous)
@@ -77,6 +80,7 @@ func TestAnalyzeExpr_AmbiguousOnSyntaxError(t *testing.T) {
 }
 
 func TestAnalyzeExpr_AmbiguousOnEmpty(t *testing.T) {
+	t.Parallel()
 	d, _, err := AnalyzeExpr("")
 	if d != DialectAmbiguous {
 		t.Errorf("dialect = %q, want %q", d, DialectAmbiguous)
@@ -94,6 +98,7 @@ func TestAnalyzeExpr_AmbiguousOnEmpty(t *testing.T) {
 // that regression by parsing a spread of expressions covering every
 // known shape and asserting we never hit the `default` arm.
 func TestVisitFuncNames_AllExprTypesCovered(t *testing.T) {
+	t.Parallel()
 	// Each expression below is chosen to surface one specific Expr
 	// concrete type when parsed by metricsql v0.87.0. The test
 	// records the set of types actually visited and compares to the
@@ -218,6 +223,7 @@ func tName(e any) string {
 }
 
 func TestIsVMOnlyFunction_CaseInsensitive(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		want bool

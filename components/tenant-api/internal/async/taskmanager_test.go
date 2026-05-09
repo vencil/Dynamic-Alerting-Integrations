@@ -9,6 +9,7 @@ import (
 
 // TestNewManager verifies Manager initialization.
 func TestNewManager(t *testing.T) {
+	t.Parallel()
 	m := NewManager(2)
 	defer m.Close()
 
@@ -22,6 +23,7 @@ func TestNewManager(t *testing.T) {
 
 // TestNewManagerDefaultWorkerCount verifies default worker count is 4.
 func TestNewManagerDefaultWorkerCount(t *testing.T) {
+	t.Parallel()
 	m := NewManager(0)
 	defer m.Close()
 
@@ -37,6 +39,7 @@ func TestNewManagerDefaultWorkerCount(t *testing.T) {
 // zero-cost TaskFunc can race to TaskCompleted before Get returns,
 // which makes the "pending or running" assertion flaky under -race in CI.
 func TestSubmitAndGet(t *testing.T) {
+	t.Parallel()
 	m := NewManager(1)
 	defer m.Close()
 
@@ -77,6 +80,7 @@ func TestSubmitAndGet(t *testing.T) {
 
 // TestGetNotFound verifies that Get returns false for non-existent tasks.
 func TestGetNotFound(t *testing.T) {
+	t.Parallel()
 	m := NewManager(1)
 	defer m.Close()
 
@@ -88,6 +92,7 @@ func TestGetNotFound(t *testing.T) {
 
 // TestWorkerCompletion verifies workers execute work functions and update state.
 func TestWorkerCompletion(t *testing.T) {
+	t.Parallel()
 	m := NewManager(1)
 	defer m.Close()
 
@@ -151,6 +156,7 @@ func TestWorkerCompletion(t *testing.T) {
 
 // TestWorkerFailure verifies workers handle errors and update state.
 func TestWorkerFailure(t *testing.T) {
+	t.Parallel()
 	m := NewManager(1)
 	defer m.Close()
 
@@ -191,6 +197,7 @@ func TestWorkerFailure(t *testing.T) {
 
 // TestComputeSummary verifies summary computation.
 func TestComputeSummary(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		results  []TaskResult
@@ -240,6 +247,7 @@ func TestComputeSummary(t *testing.T) {
 
 // TestDuplicateSubmit verifies that duplicate taskIDs return the existing task.
 func TestDuplicateSubmit(t *testing.T) {
+	t.Parallel()
 	m := NewManager(1)
 	defer m.Close()
 
@@ -263,6 +271,7 @@ func TestDuplicateSubmit(t *testing.T) {
 
 // TestClose verifies graceful shutdown.
 func TestClose(t *testing.T) {
+	t.Parallel()
 	m := NewManager(2)
 
 	// Submit a task and give it time to enter "running" state.
@@ -316,6 +325,7 @@ waitRunning:
 
 // TestContextCancellation verifies task functions respect context cancellation.
 func TestContextCancellation(t *testing.T) {
+	t.Parallel()
 	m := NewManager(1)
 	defer m.Close()
 
@@ -357,6 +367,7 @@ func TestContextCancellation(t *testing.T) {
 // is guaranteed to happen-before the snapshot — otherwise the worker could
 // race past the test and write a newer UpdatedAt than the test's bound.
 func TestTaskTimestamps(t *testing.T) {
+	t.Parallel()
 	m := NewManager(1)
 	defer m.Close()
 
@@ -387,6 +398,7 @@ func TestTaskTimestamps(t *testing.T) {
 
 // TestMultipleWorkers verifies multiple workers process tasks concurrently.
 func TestMultipleWorkers(t *testing.T) {
+	t.Parallel()
 	m := NewManager(4)
 	defer m.Close()
 

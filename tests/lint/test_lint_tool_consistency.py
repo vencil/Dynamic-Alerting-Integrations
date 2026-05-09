@@ -1,16 +1,23 @@
-"""Tests for lint_tool_consistency.py — interactive tool registry consistency."""
+"""Tests for lint_tool_consistency.py — interactive tool registry consistency.
+
+Merged from previous _extended split (PR test-refactor sweep). Each existing
+class has unique edge cases appended after its base methods; the
+TestCheckRelatedSymmetry class is new from the merge. Dropped from _extended:
+test methods that were duplicates of base (test_card_found / test_card_missing /
+test_audience_mismatch / test_key_present / test_key_missing / test_valid_related /
+test_missing_jsx_file / test_unknown_related_key / test_link_found / test_link_missing /
+test_no_appears_in / test_valid_flow / test_flow_unknown_tool / test_no_flows_file)
+plus TestParseRegistryExtended entirely (both methods were dups of base
+TestParseRegistry).
+"""
 from __future__ import annotations
 
-import os
-import sys
+import json
 import textwrap
 
 import pytest
 
-_TOOLS_DIR = os.path.join(os.path.dirname(__file__), '..', '..', 'scripts', 'tools', 'lint')
-sys.path.insert(0, _TOOLS_DIR)
-
-import lint_tool_consistency as ltc  # noqa: E402
+import lint_tool_consistency as ltc
 
 
 # ---------------------------------------------------------------------------
@@ -121,6 +128,20 @@ class TestCheckHubCards:
         ltc.check_hub_cards(tools, hub, errors, warnings)
         assert any("audience mismatch" in w for w in warnings)
 
+    # ── unique edge case (merged from _extended) ────────────────────────
+
+    def test_href_found_but_audience_unparseable(self):
+        tools = [{"key": "tool-a",
+                  "file": "interactive/tools/tool-a.jsx",
+                  "audience": []}]
+        # href found but without data-audience in expected pattern
+        hub_html = '''<div href="../jsx-loader.html?component=interactive/tools/tool-a.jsx"></div>'''
+        errors = []
+        warnings = []
+        ltc.check_hub_cards(tools, hub_html, errors, warnings)
+        assert len(warnings) == 1
+        assert "could not parse" in warnings[0]
+
 
 # ---------------------------------------------------------------------------
 # check_tool_meta
@@ -185,6 +206,34 @@ class TestCheckJsxFrontmatter:
         assert len(errors) == 1
         assert "not found" in errors[0]
 
+    # ── unique edge cases (merged from _extended) ───────────────────────
+
+    def test_no_frontmatter(self, patch_repo_root):
+        tmp_path = patch_repo_root(ltc, "PROJECT_ROOT")
+        jsx_dir = tmp_path / "tools" / "portal" / "src" / "interactive" / "tools"
+        jsx_dir.mkdir(parents=True)
+        jsx = jsx_dir / "tool-a.jsx"
+        jsx.write_text("// no frontmatter\ncontent", encoding="utf-8")
+        tools = [{"key": "tool-a", "file": "interactive/tools/tool-a.jsx"}]
+        errors = []
+        warnings = []
+        ltc.check_jsx_frontmatter(tools, errors, warnings)
+        assert len(warnings) == 1
+        assert "frontmatter" in warnings[0]
+
+    def test_no_related_in_frontmatter(self, patch_repo_root):
+        tmp_path = patch_repo_root(ltc, "PROJECT_ROOT")
+        jsx_dir = tmp_path / "tools" / "portal" / "src" / "interactive" / "tools"
+        jsx_dir.mkdir(parents=True)
+        jsx = jsx_dir / "tool-a.jsx"
+        jsx.write_text("---\ntitle: Tool A\n---\ncontent", encoding="utf-8")
+        tools = [{"key": "tool-a", "file": "interactive/tools/tool-a.jsx"}]
+        errors = []
+        warnings = []
+        ltc.check_jsx_frontmatter(tools, errors, warnings)
+        assert len(warnings) == 1
+        assert "related" in warnings[0]
+
 
 # ---------------------------------------------------------------------------
 # check_appears_in
@@ -220,6 +269,19 @@ class TestCheckAppearsIn:
         errors, warnings = [], []
         ltc.check_appears_in(tools, errors, warnings)
         assert len(errors) == 0
+
+    # ── unique edge case (merged from _extended) ────────────────────────
+
+    def test_nonexistent_md(self, patch_repo_root):
+        tmp_path = patch_repo_root(ltc, "PROJECT_ROOT")
+        tools = [{"key": "tool-a",
+                  "file": "interactive/tools/tool-a.jsx",
+                  "appears_in": ["docs/nonexistent.md"]}]
+        errors = []
+        warnings = []
+        ltc.check_appears_in(tools, errors, warnings)
+        assert len(errors) == 1
+        assert "non-existent" in errors[0]
 
 
 # ---------------------------------------------------------------------------
@@ -269,3 +331,83 @@ class TestCheckFlowComponents:
         errors, warnings = [], []
         ltc.check_flow_components(tools, errors, warnings)
         assert any("not found" in w for w in warnings)
+
+    # ── unique edge cases (merged from _extended) ───────────────────────
+
+    def test_empty_flows(self, patch_repo_root):
+        tmp_path = patch_repo_root(ltc, "PROJECT_ROOT")
+        assets = tmp_path / "docs" / "assets"
+        assets.mkdir(parents=True)
+        (assets / "flows.json").write_text('{"flows": {}}',
+                                           encoding="utf-8")
+        tools = []
+        errors = []
+        warnings = []
+        ltc.check_flow_components(tools, errors, warnings)
+        assert len(warnings) == 1
+        assert "no flows" in warnings[0]
+
+    def test_flow_missing_title(self, patch_repo_root):
+        tmp_path = patch_repo_root(ltc, "PROJECT_ROOT")
+        assets = tmp_path / "docs" / "assets"
+        assets.mkdir(parents=True)
+        flows = {"flows": {"onboard": {"steps": [
+            {"tool": "tool-a", "hint": "Do this"}
+        ]}}}
+        (assets / "flows.json").write_text(json.dumps(flows),
+                                           encoding="utf-8")
+        tools = [{"key": "tool-a"}]
+        errors = []
+        warnings = []
+        ltc.check_flow_components(tools, errors, warnings)
+        assert any("title" in w for w in warnings)
+
+    def test_flow_empty_steps(self, patch_repo_root):
+        tmp_path = patch_repo_root(ltc, "PROJECT_ROOT")
+        assets = tmp_path / "docs" / "assets"
+        assets.mkdir(parents=True)
+        flows = {"flows": {"empty-flow": {"steps": []}}}
+        (assets / "flows.json").write_text(json.dumps(flows),
+                                           encoding="utf-8")
+        tools = []
+        errors = []
+        warnings = []
+        ltc.check_flow_components(tools, errors, warnings)
+        assert any("no steps" in w for w in warnings)
+
+    def test_flow_bad_json(self, patch_repo_root):
+        tmp_path = patch_repo_root(ltc, "PROJECT_ROOT")
+        assets = tmp_path / "docs" / "assets"
+        assets.mkdir(parents=True)
+        (assets / "flows.json").write_text("{bad json", encoding="utf-8")
+        tools = []
+        errors = []
+        warnings = []
+        ltc.check_flow_components(tools, errors, warnings)
+        assert len(errors) == 1
+        assert "parse" in errors[0].lower()
+
+
+# ---------------------------------------------------------------------------
+# check_related_symmetry — new from _extended (no base class)
+# ---------------------------------------------------------------------------
+class TestCheckRelatedSymmetry:
+    """check_related_symmetry() tests."""
+
+    def test_symmetric(self):
+        tools = [
+            {"key": "a", "related": ["b"]},
+            {"key": "b", "related": ["a"]},
+        ]
+        warnings = []
+        ltc.check_related_symmetry(tools, warnings)
+        # Should pass without issues
+
+    def test_asymmetric(self):
+        tools = [
+            {"key": "a", "related": ["b"]},
+            {"key": "b", "related": []},
+        ]
+        warnings = []
+        ltc.check_related_symmetry(tools, warnings)
+        # Asymmetric is OK (informational only)

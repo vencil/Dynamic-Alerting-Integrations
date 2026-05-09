@@ -20,6 +20,7 @@ func makeProposal(exprTpl string, ids ...string) ExtractionProposal {
 }
 
 func TestProposalKey_StableAndDistinct(t *testing.T) {
+	t.Parallel()
 	p1 := makeProposal("avg(rate(x[5m])) > T", "rule-a", "rule-b", "rule-c")
 	p2 := makeProposal("avg(rate(x[5m])) > T", "rule-a", "rule-b", "rule-c")
 	if p1.Key() != p2.Key() {
@@ -43,6 +44,7 @@ func TestProposalKey_StableAndDistinct(t *testing.T) {
 }
 
 func TestScaffoldDecisions_NilSafeAndPopulated(t *testing.T) {
+	t.Parallel()
 	// Nil ProposalSet → empty scaffold, default policy, no panic.
 	d := ScaffoldDecisions(nil)
 	if d == nil {
@@ -77,6 +79,7 @@ func TestScaffoldDecisions_NilSafeAndPopulated(t *testing.T) {
 }
 
 func TestScaffoldDecisions_DefensiveCopyOfMembers(t *testing.T) {
+	t.Parallel()
 	// If ScaffoldDecisions stored a reference to MemberRuleIDs,
 	// mutating the underlying slice afterwards would corrupt the
 	// scaffold. This test pins the defensive copy contract.
@@ -93,6 +96,7 @@ func TestScaffoldDecisions_DefensiveCopyOfMembers(t *testing.T) {
 }
 
 func TestParseDecisions_RoundTrip(t *testing.T) {
+	t.Parallel()
 	original := &ProposalDecisions{
 		UndecidedPolicy: UndecidedSkip,
 		Proposals: []ProposalDecision{
@@ -137,6 +141,7 @@ func TestParseDecisions_RoundTrip(t *testing.T) {
 }
 
 func TestParseDecisions_EmptyAndWhitespaceTreatedAsEmpty(t *testing.T) {
+	t.Parallel()
 	for _, in := range [][]byte{
 		nil,
 		[]byte(""),
@@ -153,6 +158,7 @@ func TestParseDecisions_EmptyAndWhitespaceTreatedAsEmpty(t *testing.T) {
 }
 
 func TestParseDecisions_MalformedYAMLReturnsError(t *testing.T) {
+	t.Parallel()
 	bad := []byte("proposals: [this is not a list of maps\nkey: value")
 	_, err := ParseDecisions(bad)
 	if err == nil {
@@ -164,6 +170,7 @@ func TestParseDecisions_MalformedYAMLReturnsError(t *testing.T) {
 }
 
 func TestEncodeDecisions_NilErrors(t *testing.T) {
+	t.Parallel()
 	if _, err := EncodeDecisions(nil); err == nil {
 		t.Fatal("EncodeDecisions(nil) should error")
 	}
@@ -181,6 +188,7 @@ func makeProposalSet() (*ProposalSet, []ExtractionProposal) {
 }
 
 func TestApplyDecisions_NilDecisions_PassThrough(t *testing.T) {
+	t.Parallel()
 	_, props := makeProposalSet()
 	idx, warns := applyDecisions(props, nil)
 	if len(idx) != len(props) {
@@ -192,6 +200,7 @@ func TestApplyDecisions_NilDecisions_PassThrough(t *testing.T) {
 }
 
 func TestApplyDecisions_AcceptOneRejectOne(t *testing.T) {
+	t.Parallel()
 	_, props := makeProposalSet()
 	d := &ProposalDecisions{
 		Proposals: []ProposalDecision{
@@ -213,6 +222,7 @@ func TestApplyDecisions_AcceptOneRejectOne(t *testing.T) {
 }
 
 func TestApplyDecisions_PendingRespectsPolicy(t *testing.T) {
+	t.Parallel()
 	_, props := makeProposalSet()
 
 	// UndecidedEmit: pending rows still emit, with warning.
@@ -249,6 +259,7 @@ func TestApplyDecisions_PendingRespectsPolicy(t *testing.T) {
 }
 
 func TestApplyDecisions_MissingDecisionRespectsPolicy(t *testing.T) {
+	t.Parallel()
 	_, props := makeProposalSet()
 	// Decisions file with NO row for proposal[0].
 	d := &ProposalDecisions{
@@ -267,6 +278,7 @@ func TestApplyDecisions_MissingDecisionRespectsPolicy(t *testing.T) {
 }
 
 func TestApplyDecisions_StaleKeyWarns(t *testing.T) {
+	t.Parallel()
 	_, props := makeProposalSet()
 	// Decision references a key not present in current ProposalSet.
 	d := &ProposalDecisions{
@@ -282,6 +294,7 @@ func TestApplyDecisions_StaleKeyWarns(t *testing.T) {
 }
 
 func TestApplyDecisions_MemberDriftWarnsButHonorsVerdict(t *testing.T) {
+	t.Parallel()
 	_, props := makeProposalSet()
 	d := &ProposalDecisions{
 		Proposals: []ProposalDecision{
@@ -310,6 +323,7 @@ func TestApplyDecisions_MemberDriftWarnsButHonorsVerdict(t *testing.T) {
 }
 
 func TestApplyDecisions_UnknownVerdictTreatedAsPending(t *testing.T) {
+	t.Parallel()
 	_, props := makeProposalSet()
 	d := &ProposalDecisions{
 		UndecidedPolicy: UndecidedEmit,
@@ -334,6 +348,7 @@ func TestApplyDecisions_UnknownVerdictTreatedAsPending(t *testing.T) {
 }
 
 func TestApplyDecisions_DuplicateKeyWarns(t *testing.T) {
+	t.Parallel()
 	_, props := makeProposalSet()
 	d := &ProposalDecisions{
 		Proposals: []ProposalDecision{
@@ -350,6 +365,7 @@ func TestApplyDecisions_DuplicateKeyWarns(t *testing.T) {
 }
 
 func TestApplyDecisions_EmptyKeyEntriesTolerated(t *testing.T) {
+	t.Parallel()
 	_, props := makeProposalSet()
 	d := &ProposalDecisions{
 		Proposals: []ProposalDecision{
@@ -367,6 +383,7 @@ func TestApplyDecisions_EmptyKeyEntriesTolerated(t *testing.T) {
 // --- Integration: EmitProposals respects the filter --------------------
 
 func TestEmitProposals_DecisionsFilterIntegration(t *testing.T) {
+	t.Parallel()
 	// Two proposals; reject one via decisions; assert only the
 	// accepted one's artifacts land in EmissionOutput.Files.
 	rules := []parser.ParsedRule{
@@ -421,6 +438,7 @@ func TestEmitProposals_DecisionsFilterIntegration(t *testing.T) {
 }
 
 func TestEmitProposals_DecisionsScaffoldEmission(t *testing.T) {
+	t.Parallel()
 	set, _ := makeProposalSet()
 	rules := []parser.ParsedRule{
 		{SourceRuleID: "rule-a1", Expr: "vector(1)", Labels: map[string]string{"tenant": "ta"}, Dialect: "prom"},
@@ -466,6 +484,7 @@ func TestEmitProposals_DecisionsScaffoldEmission(t *testing.T) {
 }
 
 func TestEmitProposals_NoDecisionsBackwardCompat(t *testing.T) {
+	t.Parallel()
 	// Pinning the backward-compat contract: a call without
 	// Decisions/EmitDecisionsScaffold should produce IDENTICAL
 	// output to PR-2/PR-3.

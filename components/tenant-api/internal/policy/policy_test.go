@@ -25,6 +25,7 @@ const sampleDomainPolicyYAML = `domain_policies:
 `
 
 func TestNewManager_NoFile(t *testing.T) {
+	t.Parallel()
 	// When no policy file exists, manager should initialize with empty config
 	dir := t.TempDir()
 	m := NewManager(dir)
@@ -39,6 +40,7 @@ func TestNewManager_NoFile(t *testing.T) {
 }
 
 func TestNewManager_ValidFile(t *testing.T) {
+	t.Parallel()
 	// When policy file exists with valid content, manager should load it
 	dir, _ := testutil.MkTempYAML(t, "_domain_policy.yaml", sampleDomainPolicyYAML)
 
@@ -66,6 +68,7 @@ func TestNewManager_ValidFile(t *testing.T) {
 }
 
 func TestCheckWrite_NoPolicies(t *testing.T) {
+	t.Parallel()
 	// When no policies exist, all writes should be allowed
 	m := NewForTest(&DomainPolicyConfig{DomainPolicies: make(map[string]DomainPolicy)})
 
@@ -80,6 +83,7 @@ func TestCheckWrite_NoPolicies(t *testing.T) {
 }
 
 func TestCheckWrite_ForbiddenReceiver(t *testing.T) {
+	t.Parallel()
 	// When tenant is in a policy and receiver type is forbidden, write should be rejected
 	m := NewForTest(&DomainPolicyConfig{
 		DomainPolicies: map[string]DomainPolicy{
@@ -115,6 +119,7 @@ func TestCheckWrite_ForbiddenReceiver(t *testing.T) {
 }
 
 func TestCheckWrite_AllowedReceiver(t *testing.T) {
+	t.Parallel()
 	// When tenant is in a policy with allowed_receiver_types list, allowed type should pass
 	m := NewForTest(&DomainPolicyConfig{
 		DomainPolicies: map[string]DomainPolicy{
@@ -139,6 +144,7 @@ func TestCheckWrite_AllowedReceiver(t *testing.T) {
 }
 
 func TestCheckWrite_AllowedReceiverNotInList(t *testing.T) {
+	t.Parallel()
 	// When receiver type is not in the allowed list, write should be rejected
 	m := NewForTest(&DomainPolicyConfig{
 		DomainPolicies: map[string]DomainPolicy{
@@ -168,6 +174,7 @@ func TestCheckWrite_AllowedReceiverNotInList(t *testing.T) {
 }
 
 func TestCheckWrite_TenantNotInPolicy(t *testing.T) {
+	t.Parallel()
 	// When tenant is not in any policy, no violations should be returned
 	m := NewForTest(&DomainPolicyConfig{
 		DomainPolicies: map[string]DomainPolicy{
@@ -192,6 +199,7 @@ func TestCheckWrite_TenantNotInPolicy(t *testing.T) {
 }
 
 func TestCheckWrite_NestedRoutingFormat(t *testing.T) {
+	t.Parallel()
 	// Policy should also check the nested "_routing.receiver.type" patch format
 	m := NewForTest(&DomainPolicyConfig{
 		DomainPolicies: map[string]DomainPolicy{
@@ -216,6 +224,7 @@ func TestCheckWrite_NestedRoutingFormat(t *testing.T) {
 }
 
 func TestCheckWrite_BothForbiddenAndAllowed(t *testing.T) {
+	t.Parallel()
 	// When both allowed and forbidden lists are set, both constraints should be checked
 	m := NewForTest(&DomainPolicyConfig{
 		DomainPolicies: map[string]DomainPolicy{
@@ -259,6 +268,7 @@ func TestCheckWrite_BothForbiddenAndAllowed(t *testing.T) {
 }
 
 func TestCheckWrite_NoReceiverTypeInPatch(t *testing.T) {
+	t.Parallel()
 	// When patch doesn't contain receiver type, no violations should occur
 	m := NewForTest(&DomainPolicyConfig{
 		DomainPolicies: map[string]DomainPolicy{
@@ -284,6 +294,7 @@ func TestCheckWrite_NoReceiverTypeInPatch(t *testing.T) {
 }
 
 func TestPolicyForTenant(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name            string
 		tenantID        string
@@ -359,6 +370,7 @@ func TestPolicyForTenant(t *testing.T) {
 }
 
 func TestCheckWrite_MultipleViolations(t *testing.T) {
+	t.Parallel()
 	// Test that multiple violations are reported when receiver type violates multiple constraints
 	m := NewForTest(&DomainPolicyConfig{
 		DomainPolicies: map[string]DomainPolicy{
@@ -389,6 +401,7 @@ func TestCheckWrite_MultipleViolations(t *testing.T) {
 }
 
 func TestCheckWrite_EmptyConstraints(t *testing.T) {
+	t.Parallel()
 	// Test that policy with empty constraints doesn't restrict writes
 	m := NewForTest(&DomainPolicyConfig{
 		DomainPolicies: map[string]DomainPolicy{
@@ -413,6 +426,7 @@ func TestCheckWrite_EmptyConstraints(t *testing.T) {
 }
 
 func TestNewManager_InvalidYAML(t *testing.T) {
+	t.Parallel()
 	// When policy file contains invalid YAML, NewManager should handle gracefully
 	dir, _ := testutil.MkTempYAML(t, "_domain_policy.yaml", "{{invalid yaml")
 
@@ -426,6 +440,7 @@ func TestNewManager_InvalidYAML(t *testing.T) {
 }
 
 func TestWatchLoop(t *testing.T) {
+	t.Parallel()
 	// Test that policy changes are picked up by watch loop
 	// Start with empty policy file
 	dir, _ := testutil.MkTempYAML(t, "_domain_policy.yaml", "domain_policies: {}")

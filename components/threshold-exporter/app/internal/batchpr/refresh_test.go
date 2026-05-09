@@ -64,6 +64,7 @@ func runRefresh(t *testing.T, mutate func(in *RefreshInput, g *fakeGit, p *fakeP
 // --- Validation -------------------------------------------------
 
 func TestRefresh_RejectsEmptyRepoOwner(t *testing.T) {
+	t.Parallel()
 	in := fixtureRefreshInput(101)
 	in.Repo.Owner = ""
 	_, err := Refresh(context.Background(), in, newFakeGit(), newFakePR())
@@ -73,6 +74,7 @@ func TestRefresh_RejectsEmptyRepoOwner(t *testing.T) {
 }
 
 func TestRefresh_RejectsEmptyBaseBranch(t *testing.T) {
+	t.Parallel()
 	in := fixtureRefreshInput(101)
 	in.Repo.BaseBranch = ""
 	_, err := Refresh(context.Background(), in, newFakeGit(), newFakePR())
@@ -82,6 +84,7 @@ func TestRefresh_RejectsEmptyBaseBranch(t *testing.T) {
 }
 
 func TestRefresh_RejectsEmptyBaseMergedSHA(t *testing.T) {
+	t.Parallel()
 	in := fixtureRefreshInput(101)
 	in.BaseMergedSHA = ""
 	_, err := Refresh(context.Background(), in, newFakeGit(), newFakePR())
@@ -91,6 +94,7 @@ func TestRefresh_RejectsEmptyBaseMergedSHA(t *testing.T) {
 }
 
 func TestRefresh_RejectsNilGitClient(t *testing.T) {
+	t.Parallel()
 	in := fixtureRefreshInput(101)
 	_, err := Refresh(context.Background(), in, nil, newFakePR())
 	if err == nil || !strings.Contains(err.Error(), "GitClient") {
@@ -99,6 +103,7 @@ func TestRefresh_RejectsNilGitClient(t *testing.T) {
 }
 
 func TestRefresh_RejectsNilPRClient(t *testing.T) {
+	t.Parallel()
 	in := fixtureRefreshInput(101)
 	_, err := Refresh(context.Background(), in, newFakeGit(), nil)
 	if err == nil || !strings.Contains(err.Error(), "PRClient") {
@@ -107,6 +112,7 @@ func TestRefresh_RejectsNilPRClient(t *testing.T) {
 }
 
 func TestRefresh_RejectsZeroTargetPRNumber(t *testing.T) {
+	t.Parallel()
 	in := fixtureRefreshInput()
 	in.Targets = []RefreshTarget{{PRNumber: 0, BranchName: "x"}}
 	_, err := Refresh(context.Background(), in, newFakeGit(), newFakePR())
@@ -116,6 +122,7 @@ func TestRefresh_RejectsZeroTargetPRNumber(t *testing.T) {
 }
 
 func TestRefresh_RejectsEmptyTargetBranch(t *testing.T) {
+	t.Parallel()
 	in := fixtureRefreshInput()
 	in.Targets = []RefreshTarget{{PRNumber: 5, BranchName: ""}}
 	_, err := Refresh(context.Background(), in, newFakeGit(), newFakePR())
@@ -127,6 +134,7 @@ func TestRefresh_RejectsEmptyTargetBranch(t *testing.T) {
 // --- Empty Targets is a no-op ------------------------------------
 
 func TestRefresh_EmptyTargetsNoOp(t *testing.T) {
+	t.Parallel()
 	in := fixtureRefreshInput()
 	in.Targets = nil
 	r, err := Refresh(context.Background(), in, newFakeGit(), newFakePR())
@@ -144,6 +152,7 @@ func TestRefresh_EmptyTargetsNoOp(t *testing.T) {
 // --- Happy path: clean rebase across all targets ----------------
 
 func TestRefresh_HappyPath_AllClean(t *testing.T) {
+	t.Parallel()
 	r, g, p := runRefresh(t, nil)
 
 	if r.Summary.CleanCount != 2 {
@@ -172,6 +181,7 @@ func TestRefresh_HappyPath_AllClean(t *testing.T) {
 // --- Conflict path ----------------------------------------------
 
 func TestRefresh_ConflictsRecordedAndReportListsFiles(t *testing.T) {
+	t.Parallel()
 	r, _, p := runRefresh(t, func(in *RefreshInput, g *fakeGit, _ *fakePR) {
 		// Make PR 101's rebase report conflicts with 2 files.
 		g.rebaseOutcomes[branchFor(101)] = &RebaseOutcome{
@@ -209,6 +219,7 @@ func TestRefresh_ConflictsRecordedAndReportListsFiles(t *testing.T) {
 // --- Closed/merged PR skipped ---------------------------------
 
 func TestRefresh_ClosedPRSkipped(t *testing.T) {
+	t.Parallel()
 	r, g, p := runRefresh(t, func(in *RefreshInput, _ *fakeGit, p *fakePR) {
 		p.prDetails[101] = &PRDetails{Number: 101, State: PRStateClosed, HeadBranch: branchFor(101)}
 	})
@@ -234,6 +245,7 @@ func TestRefresh_ClosedPRSkipped(t *testing.T) {
 }
 
 func TestRefresh_MergedPRSkipped(t *testing.T) {
+	t.Parallel()
 	r, _, _ := runRefresh(t, func(in *RefreshInput, _ *fakeGit, p *fakePR) {
 		p.prDetails[101] = &PRDetails{Number: 101, State: PRStateMerged, HeadBranch: branchFor(101)}
 	})
@@ -246,6 +258,7 @@ func TestRefresh_MergedPRSkipped(t *testing.T) {
 }
 
 func TestRefresh_PostCommentOnSkippedFlagPostsComment(t *testing.T) {
+	t.Parallel()
 	r, _, p := runRefresh(t, func(in *RefreshInput, _ *fakeGit, p *fakePR) {
 		in.PostCommentOnSkipped = true
 		p.prDetails[101] = &PRDetails{Number: 101, State: PRStateClosed, HeadBranch: branchFor(101)}
@@ -264,6 +277,7 @@ func TestRefresh_PostCommentOnSkippedFlagPostsComment(t *testing.T) {
 // --- Dry-run ----------------------------------------------------
 
 func TestRefresh_DryRunDoesNoRemoteWork(t *testing.T) {
+	t.Parallel()
 	r, g, p := runRefresh(t, func(in *RefreshInput, _ *fakeGit, _ *fakePR) {
 		in.DryRun = true
 	})
@@ -286,6 +300,7 @@ func TestRefresh_DryRunDoesNoRemoteWork(t *testing.T) {
 // --- Failure paths ---------------------------------------------
 
 func TestRefresh_GetPRFailureRecordsStep(t *testing.T) {
+	t.Parallel()
 	r, _, _ := runRefresh(t, func(in *RefreshInput, _ *fakeGit, p *fakePR) {
 		p.getPRErr[101] = errors.New("API rate limited")
 	})
@@ -304,6 +319,7 @@ func TestRefresh_GetPRFailureRecordsStep(t *testing.T) {
 }
 
 func TestRefresh_RebaseHardErrorRecordsStep(t *testing.T) {
+	t.Parallel()
 	r, _, _ := runRefresh(t, func(in *RefreshInput, g *fakeGit, _ *fakePR) {
 		g.rebaseErr[branchFor(101)] = errors.New("not a git repo")
 	})
@@ -316,6 +332,7 @@ func TestRefresh_RebaseHardErrorRecordsStep(t *testing.T) {
 }
 
 func TestRefresh_PushFailureRecordsStep(t *testing.T) {
+	t.Parallel()
 	r, _, _ := runRefresh(t, func(in *RefreshInput, g *fakeGit, _ *fakePR) {
 		g.forcePushErr[branchFor(101)] = errors.New("remote rejected")
 	})
@@ -328,6 +345,7 @@ func TestRefresh_PushFailureRecordsStep(t *testing.T) {
 }
 
 func TestRefresh_CommentFailureRecordsStep(t *testing.T) {
+	t.Parallel()
 	r, _, _ := runRefresh(t, func(in *RefreshInput, _ *fakeGit, p *fakePR) {
 		p.commentErr[101] = errors.New("API timeout")
 	})
@@ -346,6 +364,7 @@ func TestRefresh_CommentFailureRecordsStep(t *testing.T) {
 // --- Per-target loop continues after one failure ---------------
 
 func TestRefresh_OneFailureDoesNotSinkBatch(t *testing.T) {
+	t.Parallel()
 	r, _, p := runRefresh(t, func(in *RefreshInput, g *fakeGit, _ *fakePR) {
 		// PR 101 fails on rebase; PR 102 should still process cleanly.
 		g.rebaseErr[branchFor(101)] = errors.New("disk full")
@@ -364,6 +383,7 @@ func TestRefresh_OneFailureDoesNotSinkBatch(t *testing.T) {
 // --- Custom comment body --------------------------------------
 
 func TestRefresh_CustomCommentBodyUsedAndSubstitutesBaseSHA(t *testing.T) {
+	t.Parallel()
 	_, _, p := runRefresh(t, func(in *RefreshInput, _ *fakeGit, _ *fakePR) {
 		in.CommentBody = "rebased onto <base-sha> — please review at your convenience"
 	})
@@ -379,6 +399,7 @@ func TestRefresh_CustomCommentBodyUsedAndSubstitutesBaseSHA(t *testing.T) {
 // --- Context cancellation -----------------------------------
 
 func TestRefresh_ContextCancellationStopsBatch(t *testing.T) {
+	t.Parallel()
 	ctx, cancel := context.WithCancel(context.Background())
 	in := fixtureRefreshInput(101, 102, 103)
 	cancel() // cancel immediately
@@ -403,6 +424,7 @@ func TestRefresh_ContextCancellationStopsBatch(t *testing.T) {
 // --- Report rendering ------------------------------------------
 
 func TestRefresh_ReportIncludesBasePRNumberAndShortSHA(t *testing.T) {
+	t.Parallel()
 	r, _, _ := runRefresh(t, nil)
 	if !strings.Contains(r.ReportMarkdown, "#100") {
 		t.Errorf("report should include Base PR number; got %q", r.ReportMarkdown)
@@ -413,6 +435,7 @@ func TestRefresh_ReportIncludesBasePRNumberAndShortSHA(t *testing.T) {
 }
 
 func TestRefresh_ReportFallsBackToShortSHAWhenNoPRNumber(t *testing.T) {
+	t.Parallel()
 	r, _, _ := runRefresh(t, func(in *RefreshInput, _ *fakeGit, _ *fakePR) {
 		in.BaseMergedPRNumber = 0
 	})
@@ -424,6 +447,7 @@ func TestRefresh_ReportFallsBackToShortSHAWhenNoPRNumber(t *testing.T) {
 // --- shortSHA helper -------------------------------------------
 
 func TestShortSHA_TruncatesAndPassesShortInputs(t *testing.T) {
+	t.Parallel()
 	if got := shortSHA("abcdef1234"); got != "abcdef1" {
 		t.Errorf("shortSHA('abcdef1234') = %q, want 'abcdef1'", got)
 	}

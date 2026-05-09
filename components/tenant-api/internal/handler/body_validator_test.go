@@ -14,6 +14,7 @@ import (
 // ─────────────────────────────────────────────────────────────────
 
 func TestValidateSilentMode(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name           string
 		input          string
@@ -71,6 +72,7 @@ func TestValidateSilentMode(t *testing.T) {
 }
 
 func TestValidateNonNegativeIntCap(t *testing.T) {
+	t.Parallel()
 	const cap = int64(3_600_000)
 	v := validateNonNegativeIntCap(cap)
 
@@ -110,6 +112,7 @@ func TestValidateNonNegativeIntCap(t *testing.T) {
 }
 
 func TestValidateProfileReference(t *testing.T) {
+	t.Parallel()
 	// Empty string MUST pass — customer can patch _profile: "" to
 	// clear the profile reference (downstream treats empty as "no
 	// profile", same semantic as missing key).
@@ -134,6 +137,7 @@ func TestValidateProfileReference(t *testing.T) {
 // ─────────────────────────────────────────────────────────────────
 
 func TestValidatePatchMap_ValidPassthrough(t *testing.T) {
+	t.Parallel()
 	patch := map[string]string{
 		"_silent_mode":     "warning",
 		"_timeout_ms":      "30000",
@@ -146,6 +150,7 @@ func TestValidatePatchMap_ValidPassthrough(t *testing.T) {
 }
 
 func TestValidatePatchMap_SingleViolation(t *testing.T) {
+	t.Parallel()
 	patch := map[string]string{
 		"_silent_mode": "purple-elephant",
 	}
@@ -162,6 +167,7 @@ func TestValidatePatchMap_SingleViolation(t *testing.T) {
 }
 
 func TestValidatePatchMap_MultipleViolations_AllReported(t *testing.T) {
+	t.Parallel()
 	// Per #134 spec: report ALL violations, not first-only — matches
 	// PR-2 forbidden-member listing UX (one round-trip to fix everything).
 	patch := map[string]string{
@@ -192,6 +198,7 @@ func TestValidatePatchMap_MultipleViolations_AllReported(t *testing.T) {
 }
 
 func TestValidatePatchMap_UnknownReservedKey_PassesThrough(t *testing.T) {
+	t.Parallel()
 	// Soft whitelist: _* keys not in registry pass through (only
 	// generic length cap applies). Catches new threshold-exporter
 	// keys without requiring tenant-api release.
@@ -204,6 +211,7 @@ func TestValidatePatchMap_UnknownReservedKey_PassesThrough(t *testing.T) {
 }
 
 func TestValidatePatchMap_OversizedKey(t *testing.T) {
+	t.Parallel()
 	hugeKey := strings.Repeat("k", maxPatchKeyLen+1)
 	patch := map[string]string{hugeKey: "value"}
 	v := validatePatchMap(patch, "operations[0].patch")
@@ -216,6 +224,7 @@ func TestValidatePatchMap_OversizedKey(t *testing.T) {
 }
 
 func TestValidatePatchMap_OversizedValue(t *testing.T) {
+	t.Parallel()
 	hugeValue := strings.Repeat("v", maxPatchValueLen+1)
 	patch := map[string]string{"some_metric": hugeValue}
 	v := validatePatchMap(patch, "operations[0].patch")
@@ -228,6 +237,7 @@ func TestValidatePatchMap_OversizedValue(t *testing.T) {
 }
 
 func TestValidatePatchMap_SilentMode_StructuredFormPassthrough(t *testing.T) {
+	t.Parallel()
 	// Production accepts BOTH scalar enum and structured YAML form:
 	//   "warning"                                         (scalar)
 	//   "target: warning\nexpires: 2099-12-31T00:00:00Z\n" (structured)
@@ -243,6 +253,7 @@ func TestValidatePatchMap_SilentMode_StructuredFormPassthrough(t *testing.T) {
 }
 
 func TestValidatePatchMap_ProfileReference_EmptyAllowed(t *testing.T) {
+	t.Parallel()
 	// Empty `_profile` / `_routing_profile` is a documented "clear
 	// the profile reference" semantic (downstream treats empty same
 	// as missing). Validator must NOT reject it. Locks the empty-
@@ -257,6 +268,7 @@ func TestValidatePatchMap_ProfileReference_EmptyAllowed(t *testing.T) {
 }
 
 func TestValidatePatchMap_BoundaryNumeric_ExactCapPasses(t *testing.T) {
+	t.Parallel()
 	// Boundary case for #134 acceptance: cap is INCLUSIVE.
 	// _timeout_ms cap = 3_600_000 → "3600000" must pass, "3600001" fail.
 	patch := map[string]string{"_timeout_ms": "3600000"}
@@ -275,6 +287,7 @@ func TestValidatePatchMap_BoundaryNumeric_ExactCapPasses(t *testing.T) {
 // ─────────────────────────────────────────────────────────────────
 
 func TestValidateStructTags_BatchRequest_RequiredOperations(t *testing.T) {
+	t.Parallel()
 	// Empty operations list rejected by struct tag (validate:"min=1").
 	// Note: handler also has its own len(req.Operations)==0 check; this
 	// test exercises the validator-level rule.
@@ -295,6 +308,7 @@ func TestValidateStructTags_BatchRequest_RequiredOperations(t *testing.T) {
 }
 
 func TestValidateStructTags_PutGroupRequest_LabelTooLong(t *testing.T) {
+	t.Parallel()
 	req := PutGroupRequest{
 		Label:       strings.Repeat("L", 257),
 		Description: "ok",
@@ -312,6 +326,7 @@ func TestValidateStructTags_PutGroupRequest_LabelTooLong(t *testing.T) {
 }
 
 func TestValidateStructTags_PutGroupRequest_DescriptionTooLong(t *testing.T) {
+	t.Parallel()
 	req := PutGroupRequest{
 		Label:       "ok",
 		Description: strings.Repeat("d", 4097),
@@ -326,6 +341,7 @@ func TestValidateStructTags_PutGroupRequest_DescriptionTooLong(t *testing.T) {
 }
 
 func TestValidateStructTags_PutGroupRequest_EmptyLabel(t *testing.T) {
+	t.Parallel()
 	req := PutGroupRequest{Label: ""}
 	v := validateStructTags(&req)
 	if len(v) == 0 {
@@ -334,6 +350,7 @@ func TestValidateStructTags_PutGroupRequest_EmptyLabel(t *testing.T) {
 }
 
 func TestValidateStructTags_ValidPutGroupRequest_NoViolations(t *testing.T) {
+	t.Parallel()
 	req := PutGroupRequest{
 		Label:       "ok",
 		Description: "fine",
@@ -349,6 +366,7 @@ func TestValidateStructTags_ValidPutGroupRequest_NoViolations(t *testing.T) {
 // ─────────────────────────────────────────────────────────────────
 
 func TestValidateFilterMap_ValidPassthrough(t *testing.T) {
+	t.Parallel()
 	filters := map[string]string{
 		"severity": "critical",
 		"team":     "platform",
@@ -359,6 +377,7 @@ func TestValidateFilterMap_ValidPassthrough(t *testing.T) {
 }
 
 func TestValidateFilterMap_OversizedValue(t *testing.T) {
+	t.Parallel()
 	filters := map[string]string{"x": strings.Repeat("v", maxFilterValueLen+1)}
 	v := validateFilterMap(filters, "filters")
 	if len(v) != 1 {
@@ -371,6 +390,7 @@ func TestValidateFilterMap_OversizedValue(t *testing.T) {
 // ─────────────────────────────────────────────────────────────────
 
 func TestWriteValidationErrors_JSONShape(t *testing.T) {
+	t.Parallel()
 	w := httptest.NewRecorder()
 	violations := []Violation{
 		{Field: "operations[0].patch[\"_timeout_ms\"]", Reason: "must be ≤ 3600000"},
@@ -414,6 +434,7 @@ func TestWriteValidationErrors_JSONShape(t *testing.T) {
 // gets 400 + violations BEFORE any per-op work happens.
 
 func TestBatchTenants_BodyValidation_RejectsBadValue(t *testing.T) {
+	t.Parallel()
 	// Fixture: one op with a bad _timeout_ms value
 	body := bytes.NewBufferString(`{
 		"operations": [
@@ -453,6 +474,7 @@ func TestBatchTenants_BodyValidation_RejectsBadValue(t *testing.T) {
 }
 
 func TestBatchTenants_BodyValidation_ReportsAllViolations(t *testing.T) {
+	t.Parallel()
 	// Two ops, both with bad values — response must list BOTH
 	body := bytes.NewBufferString(`{
 		"operations": [

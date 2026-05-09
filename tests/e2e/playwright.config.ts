@@ -22,8 +22,15 @@ export default defineConfig({
   forbidOnly: !!process.env.CI,
   /* Retry on CI only */
   retries: process.env.CI ? 1 : 0,
-  /* Opt out of parallel tests on CI. */
-  workers: process.env.CI ? 1 : undefined,
+  /* CI workers default. Local benchmarks at workers=4 + ThreadingHTTP
+   * server: 1.5 min vs workers=1 = 5.2 min (~3.5x). The CI workflow
+   * (.github/workflows/playwright.yml) passes `--workers=4` explicitly,
+   * which overrides this; aligning the default here so that a future
+   * workflow drop of the flag (or someone setting CI=true locally) lands
+   * on the actually-fast configuration instead of silently reverting to
+   * single-worker.
+   */
+  workers: process.env.CI ? 4 : undefined,
   /* Reporter to use. See https://playwright.dev/docs/test-reporters */
   reporter: 'html',
   /* Shared settings for all the projects below. See https://playwright.dev/docs/api/class-testoptions. */

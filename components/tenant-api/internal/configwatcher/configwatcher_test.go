@@ -64,6 +64,7 @@ func writeYAML(t *testing.T, dir, body string) string {
 }
 
 func TestNew_EmptyPath(t *testing.T) {
+	t.Parallel()
 	w, err := New("", "test", parseTestConfig, emptyTestConfig)
 	if err != nil {
 		t.Fatalf("New(\"\"): %v", err)
@@ -77,6 +78,7 @@ func TestNew_EmptyPath(t *testing.T) {
 }
 
 func TestNew_FileMissing_TreatedAsEmpty(t *testing.T) {
+	t.Parallel()
 	w, err := New(filepath.Join(t.TempDir(), "nope.yaml"), "test", parseTestConfig, emptyTestConfig)
 	if err != nil {
 		t.Fatalf("missing file should not error, got: %v", err)
@@ -87,6 +89,7 @@ func TestNew_FileMissing_TreatedAsEmpty(t *testing.T) {
 }
 
 func TestReload_PicksUpFileChange(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := writeYAML(t, dir, "foo: bar\n")
 
@@ -111,6 +114,7 @@ func TestReload_PicksUpFileChange(t *testing.T) {
 }
 
 func TestReload_HashSkipsUnchanged(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := writeYAML(t, dir, "foo: bar\n")
 
@@ -134,6 +138,7 @@ func TestReload_HashSkipsUnchanged(t *testing.T) {
 }
 
 func TestOverride_StoresValueAndClearsHash(t *testing.T) {
+	t.Parallel()
 	w, _ := New("", "test", parseTestConfig, emptyTestConfig)
 
 	override := &testConfig{Items: map[string]string{"injected": "value"}}
@@ -148,6 +153,7 @@ func TestOverride_StoresValueAndClearsHash(t *testing.T) {
 }
 
 func TestNewForTest_NoIO(t *testing.T) {
+	t.Parallel()
 	cfg := &testConfig{Items: map[string]string{"a": "1"}}
 	w := NewForTest("test", cfg)
 
@@ -175,6 +181,7 @@ func TestNewForTest_NoIO(t *testing.T) {
 }
 
 func TestWatchLoop_PicksUpChangeOnTick(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := writeYAML(t, dir, "foo: v1\n")
 	w, err := New(path, "test", parseTestConfig, emptyTestConfig)

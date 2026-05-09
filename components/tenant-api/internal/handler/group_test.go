@@ -90,6 +90,7 @@ const testGroupsYAML = `groups:
 // --- ListGroups tests ---
 
 func TestListGroups_Empty(t *testing.T) {
+	t.Parallel()
 	configDir := setupConfigDir(t, nil)
 	mgr := groups.NewManager(configDir)
 
@@ -113,6 +114,7 @@ func TestListGroups_Empty(t *testing.T) {
 }
 
 func TestListGroups_WithData(t *testing.T) {
+	t.Parallel()
 	configDir := setupConfigDir(t, nil)
 	setupGroupsFile(t, configDir, testGroupsYAML)
 	mgr := groups.NewManager(configDir)
@@ -153,6 +155,7 @@ func TestListGroups_WithData(t *testing.T) {
 // --- GetGroup tests ---
 
 func TestGetGroup_Success(t *testing.T) {
+	t.Parallel()
 	configDir := setupConfigDir(t, nil)
 	setupGroupsFile(t, configDir, testGroupsYAML)
 	mgr := groups.NewManager(configDir)
@@ -185,6 +188,7 @@ func TestGetGroup_Success(t *testing.T) {
 }
 
 func TestGetGroup_NotFound(t *testing.T) {
+	t.Parallel()
 	configDir := setupConfigDir(t, nil)
 	mgr := groups.NewManager(configDir)
 
@@ -199,6 +203,7 @@ func TestGetGroup_NotFound(t *testing.T) {
 }
 
 func TestGetGroup_InvalidID(t *testing.T) {
+	t.Parallel()
 	configDir := setupConfigDir(t, nil)
 	mgr := groups.NewManager(configDir)
 
@@ -215,6 +220,7 @@ func TestGetGroup_InvalidID(t *testing.T) {
 // --- PutGroup tests ---
 
 func TestPutGroup_Create(t *testing.T) {
+	t.Parallel()
 	configDir := setupConfigDir(t, nil)
 	initGitRepo(t, configDir)
 	mgr := groups.NewManager(configDir)
@@ -259,6 +265,7 @@ func TestPutGroup_Create(t *testing.T) {
 }
 
 func TestPutGroup_Update(t *testing.T) {
+	t.Parallel()
 	configDir := setupConfigDir(t, nil)
 	setupGroupsFile(t, configDir, testGroupsYAML)
 	initGitRepo(t, configDir)
@@ -288,6 +295,7 @@ func TestPutGroup_Update(t *testing.T) {
 }
 
 func TestPutGroup_MissingLabel(t *testing.T) {
+	t.Parallel()
 	configDir := setupConfigDir(t, nil)
 	mgr := groups.NewManager(configDir)
 	writer := newTestWriter(configDir)
@@ -307,6 +315,7 @@ func TestPutGroup_MissingLabel(t *testing.T) {
 }
 
 func TestPutGroup_InvalidJSON(t *testing.T) {
+	t.Parallel()
 	configDir := setupConfigDir(t, nil)
 	mgr := groups.NewManager(configDir)
 	writer := newTestWriter(configDir)
@@ -327,6 +336,7 @@ func TestPutGroup_InvalidJSON(t *testing.T) {
 // --- DeleteGroup tests ---
 
 func TestDeleteGroup_Success(t *testing.T) {
+	t.Parallel()
 	configDir := setupConfigDir(t, nil)
 	setupGroupsFile(t, configDir, testGroupsYAML)
 	initGitRepo(t, configDir)
@@ -356,6 +366,7 @@ func TestDeleteGroup_Success(t *testing.T) {
 }
 
 func TestDeleteGroup_NotFound(t *testing.T) {
+	t.Parallel()
 	configDir := setupConfigDir(t, nil)
 	mgr := groups.NewManager(configDir)
 	writer := newTestWriter(configDir)
@@ -375,6 +386,7 @@ func TestDeleteGroup_NotFound(t *testing.T) {
 // --- GroupBatch tests ---
 
 func TestGroupBatch_Success(t *testing.T) {
+	t.Parallel()
 	configDir := setupConfigDir(t, map[string]string{
 		"db-a.yaml": "tenants:\n  db-a:\n    mysql_connections: \"70\"\n",
 		"db-b.yaml": "tenants:\n  db-b:\n    mysql_connections: \"80\"\n",
@@ -415,6 +427,7 @@ func TestGroupBatch_Success(t *testing.T) {
 }
 
 func TestGroupBatch_GroupNotFound(t *testing.T) {
+	t.Parallel()
 	configDir := setupConfigDir(t, nil)
 	groupMgr := groups.NewManager(configDir)
 	writer := newTestWriter(configDir)
@@ -435,6 +448,7 @@ func TestGroupBatch_GroupNotFound(t *testing.T) {
 }
 
 func TestGroupBatch_EmptyPatch(t *testing.T) {
+	t.Parallel()
 	configDir := setupConfigDir(t, nil)
 	setupGroupsFile(t, configDir, testGroupsYAML)
 	groupMgr := groups.NewManager(configDir)
@@ -458,6 +472,7 @@ func TestGroupBatch_EmptyPatch(t *testing.T) {
 // --- ListTenants with metadata tests ---
 
 func TestListTenants_WithMetadata(t *testing.T) {
+	t.Parallel()
 	configDir := setupConfigDir(t, map[string]string{
 		"db-a.yaml": `tenants:
   db-a:

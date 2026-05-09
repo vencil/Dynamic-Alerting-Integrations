@@ -10,6 +10,7 @@ import (
 // --- path.go tests --------------------------------------------------
 
 func TestResolvePath_HappyPath(t *testing.T) {
+	t.Parallel()
 	m := map[string]any{
 		"thresholds": map[string]any{
 			"cpu": 0.9,
@@ -40,6 +41,7 @@ func TestResolvePath_HappyPath(t *testing.T) {
 }
 
 func TestResolvePath_EmptyPathReturnsRoot(t *testing.T) {
+	t.Parallel()
 	m := map[string]any{"x": 1}
 	got, ok := resolvePath(m, "")
 	if !ok || got == nil {
@@ -48,6 +50,7 @@ func TestResolvePath_EmptyPathReturnsRoot(t *testing.T) {
 }
 
 func TestResolvePath_ExplicitNullReturnsTrueAndNil(t *testing.T) {
+	t.Parallel()
 	m := map[string]any{"a": map[string]any{"b": nil}}
 	got, ok := resolvePath(m, "a.b")
 	if !ok {
@@ -59,6 +62,7 @@ func TestResolvePath_ExplicitNullReturnsTrueAndNil(t *testing.T) {
 }
 
 func TestFlattenLeaves_ScalarsAndNested(t *testing.T) {
+	t.Parallel()
 	m := map[string]any{
 		"a": 1,
 		"b": map[string]any{
@@ -92,6 +96,7 @@ func TestFlattenLeaves_ScalarsAndNested(t *testing.T) {
 // --- schema.go tests ------------------------------------------------
 
 func TestCheckRequiredFields_NoOpWhenNoRequiredFields(t *testing.T) {
+	t.Parallel()
 	got := checkRequiredFields(CheckInput{
 		EffectiveConfigs: map[string]map[string]any{"t1": {"a": 1}},
 		// RequiredFields nil → check is a no-op
@@ -102,6 +107,7 @@ func TestCheckRequiredFields_NoOpWhenNoRequiredFields(t *testing.T) {
 }
 
 func TestCheckRequiredFields_FlagsMissing(t *testing.T) {
+	t.Parallel()
 	got := checkRequiredFields(CheckInput{
 		EffectiveConfigs: map[string]map[string]any{
 			"complete":   {"thresholds": map[string]any{"cpu": 0.9}},
@@ -128,6 +134,7 @@ func TestCheckRequiredFields_FlagsMissing(t *testing.T) {
 }
 
 func TestCheckRequiredFields_FlagsExplicitNull(t *testing.T) {
+	t.Parallel()
 	got := checkRequiredFields(CheckInput{
 		EffectiveConfigs: map[string]map[string]any{
 			"nulled": {"thresholds": map[string]any{"cpu": nil}},
@@ -145,6 +152,7 @@ func TestCheckRequiredFields_FlagsExplicitNull(t *testing.T) {
 // --- redundant.go tests ---------------------------------------------
 
 func TestCheckRedundantOverrides_NoOpWhenInputsMissing(t *testing.T) {
+	t.Parallel()
 	cases := []CheckInput{
 		// no overrides
 		{NewDefaults: map[string]any{"x": 1}},
@@ -162,6 +170,7 @@ func TestCheckRedundantOverrides_NoOpWhenInputsMissing(t *testing.T) {
 }
 
 func TestCheckRedundantOverrides_FlagsScalarDuplicate(t *testing.T) {
+	t.Parallel()
 	got := checkRedundantOverrides(CheckInput{
 		NewDefaults: map[string]any{"thresholds": map[string]any{"cpu": 0.9}},
 		TenantOverrides: map[string]map[string]any{
@@ -184,6 +193,7 @@ func TestCheckRedundantOverrides_FlagsScalarDuplicate(t *testing.T) {
 }
 
 func TestCheckRedundantOverrides_SkipsStructuredValues(t *testing.T) {
+	t.Parallel()
 	// Maps and slices must NOT compare as redundant in PR-1 even
 	// when their contents look identical — this is the documented
 	// false-positive guardrail.
@@ -211,6 +221,7 @@ func TestCheckRedundantOverrides_SkipsStructuredValues(t *testing.T) {
 }
 
 func TestCheckRedundantOverrides_SkipsOverridesAbsentFromDefaults(t *testing.T) {
+	t.Parallel()
 	got := checkRedundantOverrides(CheckInput{
 		NewDefaults: map[string]any{"shared": 1},
 		TenantOverrides: map[string]map[string]any{
@@ -225,6 +236,7 @@ func TestCheckRedundantOverrides_SkipsOverridesAbsentFromDefaults(t *testing.T) 
 // --- PR-5: per-tenant defaults map (NewDefaultsByTenant) -----------
 
 func TestCheckRedundantOverrides_NewDefaultsByTenant_PerTenantMaps(t *testing.T) {
+	t.Parallel()
 	// Two tenants with DIFFERENT cascading defaults — t-db inherits
 	// `db/_defaults.yaml` (cpu=80), t-web inherits `web/_defaults.yaml`
 	// (cpu=70). Both tenants override cpu=80. Only t-db's override is
@@ -252,6 +264,7 @@ func TestCheckRedundantOverrides_NewDefaultsByTenant_PerTenantMaps(t *testing.T)
 }
 
 func TestCheckRedundantOverrides_NewDefaultsByTenant_PrecedesGlobal(t *testing.T) {
+	t.Parallel()
 	// When both fields are populated, per-tenant entry wins for
 	// tenants that have one; the global map covers the rest.
 	got := checkRedundantOverrides(CheckInput{
@@ -277,6 +290,7 @@ func TestCheckRedundantOverrides_NewDefaultsByTenant_PrecedesGlobal(t *testing.T
 }
 
 func TestCheckRedundantOverrides_NewDefaultsByTenant_NilEntrySkips(t *testing.T) {
+	t.Parallel()
 	// An explicit nil entry in the per-tenant map (e.g. tenant has no
 	// inherited defaults at all) suppresses the check for that tenant
 	// even if NewDefaults global is populated. Documents the
@@ -309,6 +323,7 @@ func TestCheckRedundantOverrides_NewDefaultsByTenant_NilEntrySkips(t *testing.T)
 }
 
 func TestCheckRedundantOverrides_NewDefaultsByTenant_TenantMissingFromBoth(t *testing.T) {
+	t.Parallel()
 	// A tenant in TenantOverrides but absent from BOTH defaults
 	// sources gets the redundant-override check skipped silently.
 	// Avoids the "single tenant in scope without defaults context"
@@ -330,6 +345,7 @@ func TestCheckRedundantOverrides_NewDefaultsByTenant_TenantMissingFromBoth(t *te
 // --- run.go integration tests --------------------------------------
 
 func TestCheckDefaultsImpact_ErrorsOnEmptyConfigs(t *testing.T) {
+	t.Parallel()
 	_, err := CheckDefaultsImpact(CheckInput{})
 	if err == nil {
 		t.Fatal("err = nil for empty EffectiveConfigs, want error")
@@ -337,6 +353,7 @@ func TestCheckDefaultsImpact_ErrorsOnEmptyConfigs(t *testing.T) {
 }
 
 func TestCheckDefaultsImpact_HappyPathZeroFindings(t *testing.T) {
+	t.Parallel()
 	r, err := CheckDefaultsImpact(CheckInput{
 		EffectiveConfigs: map[string]map[string]any{
 			"t1": {"thresholds": map[string]any{"cpu": 0.9}},
@@ -355,6 +372,7 @@ func TestCheckDefaultsImpact_HappyPathZeroFindings(t *testing.T) {
 }
 
 func TestCheckDefaultsImpact_PassedCountExcludesErroringTenants(t *testing.T) {
+	t.Parallel()
 	r, err := CheckDefaultsImpact(CheckInput{
 		EffectiveConfigs: map[string]map[string]any{
 			"good":      {"thresholds": map[string]any{"cpu": 0.9}},
@@ -383,6 +401,7 @@ func TestCheckDefaultsImpact_PassedCountExcludesErroringTenants(t *testing.T) {
 }
 
 func TestCheckDefaultsImpact_WarningsAlonePass(t *testing.T) {
+	t.Parallel()
 	r, err := CheckDefaultsImpact(CheckInput{
 		EffectiveConfigs: map[string]map[string]any{
 			"warned": {"thresholds": map[string]any{"cpu": 0.9}},
@@ -408,6 +427,7 @@ func TestCheckDefaultsImpact_WarningsAlonePass(t *testing.T) {
 }
 
 func TestCheckDefaultsImpact_FindingsSortedErrorsFirst(t *testing.T) {
+	t.Parallel()
 	r, err := CheckDefaultsImpact(CheckInput{
 		EffectiveConfigs: map[string]map[string]any{
 			"a": {"thresholds": map[string]any{}},
@@ -435,6 +455,7 @@ func TestCheckDefaultsImpact_FindingsSortedErrorsFirst(t *testing.T) {
 }
 
 func TestCheckDefaultsImpact_DeterministicOutput(t *testing.T) {
+	t.Parallel()
 	in := CheckInput{
 		EffectiveConfigs: map[string]map[string]any{
 			"t-c": {"thresholds": map[string]any{"cpu": 0.9}},
@@ -473,6 +494,7 @@ func TestCheckDefaultsImpact_DeterministicOutput(t *testing.T) {
 // --- render.go tests -----------------------------------------------
 
 func TestGuardReportMarkdown_NilSafe(t *testing.T) {
+	t.Parallel()
 	var r *GuardReport
 	got := r.Markdown()
 	if got == "" {
@@ -481,6 +503,7 @@ func TestGuardReportMarkdown_NilSafe(t *testing.T) {
 }
 
 func TestGuardReportMarkdown_AllClearMessage(t *testing.T) {
+	t.Parallel()
 	r, err := CheckDefaultsImpact(CheckInput{
 		EffectiveConfigs: map[string]map[string]any{"t1": {"x": 1}},
 	})
@@ -494,6 +517,7 @@ func TestGuardReportMarkdown_AllClearMessage(t *testing.T) {
 }
 
 func TestGuardReportMarkdown_RendersBothTablesWhenPresent(t *testing.T) {
+	t.Parallel()
 	r, err := CheckDefaultsImpact(CheckInput{
 		EffectiveConfigs: map[string]map[string]any{
 			"errored": {"thresholds": map[string]any{}},
@@ -531,6 +555,7 @@ func TestGuardReportMarkdown_RendersBothTablesWhenPresent(t *testing.T) {
 }
 
 func TestGuardReportMarkdown_EscapesPipeAndNewline(t *testing.T) {
+	t.Parallel()
 	// Build a finding manually with characters that would otherwise
 	// break a Markdown table row.
 	r := &GuardReport{

@@ -11,6 +11,7 @@ import (
 // ─── duration canonicalisation tests ────────────────────────────────
 
 func TestDurationToMillis(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		in   string
 		want int64
@@ -47,6 +48,7 @@ func TestDurationToMillis(t *testing.T) {
 }
 
 func TestBase26Encode_RoundTripStable(t *testing.T) {
+	t.Parallel()
 	// Encoding must be deterministic and unique per input — two calls
 	// with the same n produce the same string; different n produces
 	// different strings (within tested range).
@@ -73,6 +75,7 @@ func TestBase26Encode_RoundTripStable(t *testing.T) {
 }
 
 func TestBase26Encode_NegativeInputDefensiveOnly(t *testing.T) {
+	t.Parallel()
 	// We never expect negatives in production (parser rejects them)
 	// but the encoder shouldn't panic. The output is documented to
 	// prefix with 'n'; we just pin the contract.
@@ -83,6 +86,7 @@ func TestBase26Encode_NegativeInputDefensiveOnly(t *testing.T) {
 }
 
 func TestCanonicaliseDurations_BasicEquivalence(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name    string
 		a, b    string
@@ -109,6 +113,7 @@ func TestCanonicaliseDurations_BasicEquivalence(t *testing.T) {
 }
 
 func TestCanonicaliseDurations_LeavesNonRangeDurationsAlone(t *testing.T) {
+	t.Parallel()
 	// `offset 1h` is a duration outside `[]` — PR-5 deliberately
 	// doesn't canonicalise it (rare in customer corpora, more grammar
 	// edge cases). The expression should pass through unchanged.
@@ -123,6 +128,7 @@ func TestCanonicaliseDurations_LeavesNonRangeDurationsAlone(t *testing.T) {
 }
 
 func TestCanonicaliseDurations_PreservesIdentifiersWithNumbers(t *testing.T) {
+	t.Parallel()
 	// Identifiers like `http_requests_5xx` contain digits + letter
 	// combinations that look superficially like durations. The pattern
 	// requires `[...]` brackets, which protects identifiers. Pin this
@@ -136,6 +142,7 @@ func TestCanonicaliseDurations_PreservesIdentifiersWithNumbers(t *testing.T) {
 }
 
 func TestNormaliseExpr_BackwardsCompatNoOptions(t *testing.T) {
+	t.Parallel()
 	// PR-1 callers pass no options. Default behaviour must NOT do
 	// duration canonicalisation — `[5m]` vs `[300s]` stay separate.
 	a := normaliseExpr(`rate(foo[5m])`)
@@ -146,6 +153,7 @@ func TestNormaliseExpr_BackwardsCompatNoOptions(t *testing.T) {
 }
 
 func TestNormaliseExpr_WithCanonicalDurationsCollapses(t *testing.T) {
+	t.Parallel()
 	// Opt-in via WithCanonicalDurations() — same inputs that were
 	// distinct under strict now collapse to the same signature.
 	a := normaliseExpr(`rate(foo[5m])`, WithCanonicalDurations())
@@ -156,6 +164,7 @@ func TestNormaliseExpr_WithCanonicalDurationsCollapses(t *testing.T) {
 }
 
 func TestNormaliseExpr_FuzzyStillStripsNumbersAndStrings(t *testing.T) {
+	t.Parallel()
 	// The fuzzy pass adds duration canonicalisation BEFORE the
 	// numeric/string strip — both must still run afterwards. Catch
 	// regressions where the fuzzy path accidentally short-circuits.
@@ -190,6 +199,7 @@ func makeRule(id, expr, forVal, dialect string, labels map[string]string) parser
 }
 
 func TestBuildProposals_FuzzyOff_PreservesPR1Behavior(t *testing.T) {
+	t.Parallel()
 	// Two rules: one uses [5m], one uses [300s]. Strict signature
 	// keeps them apart. With EnableFuzzy=false (default), they stay
 	// in Unclustered.
@@ -210,6 +220,7 @@ func TestBuildProposals_FuzzyOff_PreservesPR1Behavior(t *testing.T) {
 }
 
 func TestBuildProposals_FuzzyOn_CollapsesDurationVariants(t *testing.T) {
+	t.Parallel()
 	rules := []parser.ParsedRule{
 		makeRule("file#g[0].r[0]", `rate(foo[5m]) > 0.9`, "5m", "prom", map[string]string{"severity": "warn"}),
 		makeRule("file#g[0].r[1]", `rate(foo[300s]) > 0.9`, "5m", "prom", map[string]string{"severity": "warn"}),
@@ -237,6 +248,7 @@ func TestBuildProposals_FuzzyOn_CollapsesDurationVariants(t *testing.T) {
 }
 
 func TestBuildProposals_StrictWinsOverFuzzy(t *testing.T) {
+	t.Parallel()
 	// 4 rules all use [5m] (strict cluster of 4 → high), plus 1 rule
 	// uses [300s] (would fuzzy-merge with the 4). The strict cluster
 	// must remain pure ConfidenceHigh; the lone [300s] rule goes to
@@ -274,6 +286,7 @@ func TestBuildProposals_StrictWinsOverFuzzy(t *testing.T) {
 }
 
 func TestBuildProposals_FuzzyDoesNotCrossDialects(t *testing.T) {
+	t.Parallel()
 	// Same expr template (after canonicalisation), same `for:`, but
 	// different dialects. Fuzzy MUST NOT merge — vendor-lock-in risk.
 	// 2 prom + 2 metricsql, all using [5m] / [300s] cross-references.
@@ -303,6 +316,7 @@ func TestBuildProposals_FuzzyDoesNotCrossDialects(t *testing.T) {
 }
 
 func TestBuildProposals_FuzzyDoesNotMergeAcrossForVariance(t *testing.T) {
+	t.Parallel()
 	// Same expr (after canonicalisation), same dialect, but different
 	// `for:`. PR-5 fuzzy keeps `for:` in the signature — these are
 	// usually intentional alert-tier separations and we don't merge
@@ -334,6 +348,7 @@ func TestBuildProposals_FuzzyDoesNotMergeAcrossForVariance(t *testing.T) {
 }
 
 func TestBuildProposals_FuzzyOutputDeterministic(t *testing.T) {
+	t.Parallel()
 	// Two BuildProposals runs over the same input + same opts produce
 	// byte-identical JSON. Pins the determinism contract for the
 	// fuzzy path (PR-1 already pins it for strict).
@@ -352,6 +367,7 @@ func TestBuildProposals_FuzzyOutputDeterministic(t *testing.T) {
 }
 
 func TestBuildProposals_FuzzyMixedHighAndMedium(t *testing.T) {
+	t.Parallel()
 	// 3 [5m] rules form a strict (high) cluster.
 	// 2 different rules — one [10m], one [600s] — form a fuzzy
 	// (medium) cluster.
@@ -387,6 +403,7 @@ func TestBuildProposals_FuzzyMixedHighAndMedium(t *testing.T) {
 }
 
 func TestBuildProposals_FuzzyEmptyInputStillErrors(t *testing.T) {
+	t.Parallel()
 	_, err := BuildProposals(nil, ClusterOptions{EnableFuzzy: true})
 	if err == nil {
 		t.Error("expected error on empty input regardless of fuzzy mode")
@@ -394,6 +411,7 @@ func TestBuildProposals_FuzzyEmptyInputStillErrors(t *testing.T) {
 }
 
 func TestBuildProposals_FuzzySingleResidueGoesToUnclustered(t *testing.T) {
+	t.Parallel()
 	// One rule alone in fuzzy bucket → still Unclustered (size <
 	// MinClusterSize).
 	rules := []parser.ParsedRule{
@@ -412,6 +430,7 @@ func TestBuildProposals_FuzzySingleResidueGoesToUnclustered(t *testing.T) {
 }
 
 func TestSignatureForFuzzy_DialectAndForStillSeparate(t *testing.T) {
+	t.Parallel()
 	// Pin the contract: signatureForFuzzy keeps for+dialect in the
 	// key, only loosens duration. A regression that drops `for:`
 	// from the fuzzy key would silently merge alert tiers.
@@ -427,6 +446,7 @@ func TestSignatureForFuzzy_DialectAndForStillSeparate(t *testing.T) {
 }
 
 func TestBuildProposals_FuzzyOnWithEmptyResidueNoOp(t *testing.T) {
+	t.Parallel()
 	// Pin the contract: when EnableFuzzy=true but every input rule
 	// already strict-clusters, fuzzyPassClusters runs over an empty
 	// residue and produces no proposals + no leftover. The output
@@ -466,6 +486,7 @@ func TestBuildProposals_FuzzyOnWithEmptyResidueNoOp(t *testing.T) {
 }
 
 func TestFuzzyReason_DistinctRawDurationsCount(t *testing.T) {
+	t.Parallel()
 	// fuzzyReason mentions the count when 2+ distinct raw durations
 	// collapse. Reviewers use this to gauge merge breadth.
 	members := []parser.ParsedRule{

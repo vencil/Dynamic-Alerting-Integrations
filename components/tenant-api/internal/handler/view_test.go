@@ -41,6 +41,7 @@ const testViewsYAML = `views:
 
 // TestListViews_Empty tests listing views when none exist.
 func TestListViews_Empty(t *testing.T) {
+	t.Parallel()
 	configDir := setupConfigDir(t, nil)
 	mgr := views.NewManager(configDir)
 
@@ -64,6 +65,7 @@ func TestListViews_Empty(t *testing.T) {
 
 // TestListViews_WithData tests listing views with existing data.
 func TestListViews_WithData(t *testing.T) {
+	t.Parallel()
 	configDir := setupConfigDir(t, nil)
 	setupViewsFile(t, configDir, testViewsYAML)
 	mgr := views.NewManager(configDir)
@@ -111,6 +113,7 @@ func TestListViews_WithData(t *testing.T) {
 
 // TestGetView_Success tests retrieving a single view.
 func TestGetView_Success(t *testing.T) {
+	t.Parallel()
 	configDir := setupConfigDir(t, nil)
 	setupViewsFile(t, configDir, testViewsYAML)
 	mgr := views.NewManager(configDir)
@@ -150,6 +153,7 @@ func TestGetView_Success(t *testing.T) {
 
 // TestGetView_NotFound tests retrieving a view that doesn't exist.
 func TestGetView_NotFound(t *testing.T) {
+	t.Parallel()
 	configDir := setupConfigDir(t, nil)
 	mgr := views.NewManager(configDir)
 
@@ -165,6 +169,7 @@ func TestGetView_NotFound(t *testing.T) {
 
 // TestGetView_InvalidID tests retrieving a view with an invalid ID.
 func TestGetView_InvalidID(t *testing.T) {
+	t.Parallel()
 	configDir := setupConfigDir(t, nil)
 	mgr := views.NewManager(configDir)
 
@@ -182,6 +187,7 @@ func TestGetView_InvalidID(t *testing.T) {
 
 // TestPutView_Create tests creating a new view.
 func TestPutView_Create(t *testing.T) {
+	t.Parallel()
 	configDir := setupConfigDir(t, nil)
 	initGitRepo(t, configDir)
 	mgr := views.NewManager(configDir)
@@ -248,6 +254,7 @@ func TestPutView_Create(t *testing.T) {
 
 // TestPutView_Update tests updating an existing view.
 func TestPutView_Update(t *testing.T) {
+	t.Parallel()
 	configDir := setupConfigDir(t, nil)
 	setupViewsFile(t, configDir, testViewsYAML)
 	initGitRepo(t, configDir)
@@ -292,6 +299,7 @@ func TestPutView_Update(t *testing.T) {
 
 // TestPutView_MissingLabel tests creating a view without a label.
 func TestPutView_MissingLabel(t *testing.T) {
+	t.Parallel()
 	configDir := setupConfigDir(t, nil)
 	mgr := views.NewManager(configDir)
 	writer := newTestWriter(configDir)
@@ -322,6 +330,7 @@ func TestPutView_MissingLabel(t *testing.T) {
 
 // TestPutView_EmptyFilters tests creating a view with empty filters.
 func TestPutView_EmptyFilters(t *testing.T) {
+	t.Parallel()
 	configDir := setupConfigDir(t, nil)
 	mgr := views.NewManager(configDir)
 	writer := newTestWriter(configDir)
@@ -345,6 +354,7 @@ func TestPutView_EmptyFilters(t *testing.T) {
 
 // TestPutView_InvalidJSON tests creating a view with malformed JSON.
 func TestPutView_InvalidJSON(t *testing.T) {
+	t.Parallel()
 	configDir := setupConfigDir(t, nil)
 	mgr := views.NewManager(configDir)
 	writer := newTestWriter(configDir)
@@ -364,6 +374,7 @@ func TestPutView_InvalidJSON(t *testing.T) {
 
 // TestPutView_InvalidViewID tests creating a view with an invalid ID.
 func TestPutView_InvalidViewID(t *testing.T) {
+	t.Parallel()
 	configDir := setupConfigDir(t, nil)
 	mgr := views.NewManager(configDir)
 	writer := newTestWriter(configDir)
@@ -389,6 +400,7 @@ func TestPutView_InvalidViewID(t *testing.T) {
 
 // TestDeleteView_Success tests deleting an existing view.
 func TestDeleteView_Success(t *testing.T) {
+	t.Parallel()
 	configDir := setupConfigDir(t, nil)
 	setupViewsFile(t, configDir, testViewsYAML)
 	initGitRepo(t, configDir)
@@ -434,6 +446,7 @@ func TestDeleteView_Success(t *testing.T) {
 
 // TestDeleteView_NotFound tests deleting a view that doesn't exist.
 func TestDeleteView_NotFound(t *testing.T) {
+	t.Parallel()
 	configDir := setupConfigDir(t, nil)
 	mgr := views.NewManager(configDir)
 	writer := newTestWriter(configDir)
@@ -451,6 +464,7 @@ func TestDeleteView_NotFound(t *testing.T) {
 
 // TestDeleteView_InvalidID tests deleting a view with an invalid ID.
 func TestDeleteView_InvalidID(t *testing.T) {
+	t.Parallel()
 	configDir := setupConfigDir(t, nil)
 	mgr := views.NewManager(configDir)
 	writer := newTestWriter(configDir)
@@ -468,6 +482,7 @@ func TestDeleteView_InvalidID(t *testing.T) {
 
 // TestPutView_Conflict tests handling a git conflict during view creation.
 func TestPutView_Conflict(t *testing.T) {
+	t.Parallel()
 	configDir := setupConfigDir(t, nil)
 	setupViewsFile(t, configDir, testViewsYAML)
 	initGitRepo(t, configDir)

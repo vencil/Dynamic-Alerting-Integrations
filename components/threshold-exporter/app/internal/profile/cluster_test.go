@@ -30,6 +30,7 @@ func loadFixtureRules(t *testing.T, name string) []parser.ParsedRule {
 }
 
 func TestBuildProposals_BasicClusterAndUnclustered(t *testing.T) {
+	t.Parallel()
 	rules := loadFixtureRules(t, "cluster_basic.yaml")
 	got, err := BuildProposals(rules, ClusterOptions{})
 	if err != nil {
@@ -67,6 +68,7 @@ func TestBuildProposals_BasicClusterAndUnclustered(t *testing.T) {
 }
 
 func TestBuildProposals_DialectSplitsClusters(t *testing.T) {
+	t.Parallel()
 	rules := loadFixtureRules(t, "cluster_dialect_split.yaml")
 	got, err := BuildProposals(rules, ClusterOptions{})
 	if err != nil {
@@ -93,6 +95,7 @@ func TestBuildProposals_DialectSplitsClusters(t *testing.T) {
 }
 
 func TestBuildProposals_LabelPartitioning(t *testing.T) {
+	t.Parallel()
 	rules := loadFixtureRules(t, "cluster_label_partition.yaml")
 	got, err := BuildProposals(rules, ClusterOptions{})
 	if err != nil {
@@ -121,6 +124,7 @@ func TestBuildProposals_LabelPartitioning(t *testing.T) {
 }
 
 func TestBuildProposals_MinClusterSizeRespected(t *testing.T) {
+	t.Parallel()
 	rules := loadFixtureRules(t, "cluster_basic.yaml")
 	// Set min=4; the HighCPU group has only 3 members so it must
 	// drop to Unclustered.
@@ -137,6 +141,7 @@ func TestBuildProposals_MinClusterSizeRespected(t *testing.T) {
 }
 
 func TestBuildProposals_EmptyInputErrors(t *testing.T) {
+	t.Parallel()
 	_, err := BuildProposals(nil, ClusterOptions{})
 	if err == nil {
 		t.Error("err = nil for empty input, want error")
@@ -144,6 +149,7 @@ func TestBuildProposals_EmptyInputErrors(t *testing.T) {
 }
 
 func TestBuildProposals_AmbiguousRulesGoToUnclustered(t *testing.T) {
+	t.Parallel()
 	// Fabricate an ambiguous rule (parser couldn't classify) — it
 	// has no usable signature, so the engine must surface it as
 	// Unclustered (default behaviour) rather than dropping silently.
@@ -184,6 +190,7 @@ func TestBuildProposals_AmbiguousRulesGoToUnclustered(t *testing.T) {
 }
 
 func TestBuildProposals_SkipAmbiguousDropsThemEntirely(t *testing.T) {
+	t.Parallel()
 	rules := []parser.ParsedRule{
 		{SourceRuleID: "x#0", Expr: "", Dialect: parser.DialectAmbiguous},
 		{SourceRuleID: "x#1", Expr: "up", Dialect: parser.DialectProm},
@@ -205,6 +212,7 @@ func TestBuildProposals_SkipAmbiguousDropsThemEntirely(t *testing.T) {
 }
 
 func TestBuildProposals_SavingsEstimate(t *testing.T) {
+	t.Parallel()
 	// 3 rules in cluster_basic share severity + for=5m + (alert in
 	// the cluster always shares severity but tenant varies).
 	// Shared field count for the HighCPU cluster:
@@ -225,6 +233,7 @@ func TestBuildProposals_SavingsEstimate(t *testing.T) {
 }
 
 func TestBuildProposals_DeterministicOutput(t *testing.T) {
+	t.Parallel()
 	// Run the same input through BuildProposals twice and assert
 	// the JSON serialisation is byte-identical. Catches the common
 	// "map iteration order leaked into output" regression.
@@ -252,6 +261,7 @@ func TestBuildProposals_DeterministicOutput(t *testing.T) {
 }
 
 func TestBuildProposals_OnlyEmptyExprsErrorsFromUpstream(t *testing.T) {
+	t.Parallel()
 	// Edge case: the caller hands in only ambiguous rules and asks
 	// to skip them. Result is an empty ProposalSet but no fatal
 	// error from BuildProposals (the upstream parser may legitimately
@@ -277,6 +287,7 @@ func TestBuildProposals_OnlyEmptyExprsErrorsFromUpstream(t *testing.T) {
 // invariant unit-testable in case the structural test (DialectSplits)
 // regresses without the fixture being updated.
 func TestSignatureFor_DialectIncluded(t *testing.T) {
+	t.Parallel()
 	a := parser.ParsedRule{Expr: "up == 0", For: "1m", Dialect: parser.DialectProm}
 	b := parser.ParsedRule{Expr: "up == 0", For: "1m", Dialect: parser.DialectMetricsQL}
 	if signatureFor(a) == signatureFor(b) {

@@ -1,13 +1,19 @@
-"""Extended tests for generate_alertmanager_routes.py — coverage boost.
+"""Orchestration-layer tests for generate_alertmanager_routes.py.
 
-Targets uncovered lines: render_output, load_base_config, assemble_configmap,
-apply_to_configmap (mocked), main() CLI paths (dry-run, validate, output-configmap,
+Companion to test_generate_alertmanager_routes.py (which covers route-graph
+construction). This file targets the OUTPUT/CLI orchestrator concern:
+render_output, load_base_config, assemble_configmap, apply_to_configmap
+(mocked kubectl), and main() CLI paths (dry-run, validate, output-configmap,
 apply, stdout).
+
+Renamed from test_generate_routes_extended.py in the test-refactor sweep —
+the suffix change captures the actual concern instead of a generic "extended".
+The two files stay split because the combined LOC (~2200) is too large for a
+single comprehensive test file.
 """
 import json
 import os
 import subprocess
-import sys
 import tempfile
 from unittest.mock import MagicMock, patch
 
