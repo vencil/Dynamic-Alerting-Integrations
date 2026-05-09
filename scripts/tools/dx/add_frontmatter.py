@@ -174,8 +174,8 @@ def extract_version(filepath: str, base_dir: str) -> str:
         pass
 
     # Fallback: try to read CLAUDE.md for version
-    claude_path = os.path.join(base_dir, 'CLAUDE.md')
-    if os.path.exists(claude_path):
+    claude_path = str(Path(base_dir) / 'CLAUDE.md')
+    if Path(claude_path).exists():
         try:
             with open(claude_path, 'r', encoding='utf-8') as f:
                 content = f.read()
@@ -213,7 +213,7 @@ def get_tags_and_audience(filepath: str) -> Tuple[List[str], List[str]]:
     check_path = filepath.replace(os.sep, '/')
 
     # Check root-level patterns first
-    filename = os.path.basename(filepath)
+    filename = Path(filepath).name
     for pattern, config in ROOT_LEVEL_PATTERNS.items():
         if re.match(pattern, filename):
             return config['tags'], config['audience']
@@ -277,7 +277,7 @@ def process_file(filepath: str, base_dir: str, dry_run: bool = False) -> Tuple[b
         return False, f"Already has front matter: {filepath}"
 
     # Extract metadata
-    filename = os.path.basename(filepath)
+    filename = Path(filepath).name
     lang = detect_language(filepath)
     version = extract_version(filepath, base_dir)
     title = extract_title(filepath, filename)
@@ -326,50 +326,50 @@ def find_markdown_files(base_dir: str) -> List[str]:
     """
     md_files = []
 
-    scan_dirs = [
-        os.path.join(base_dir, 'docs'),
-        os.path.join(base_dir, 'rule-packs'),
-        base_dir  # root level
-    ]
+    base_path = Path(base_dir)
+    docs_root = base_path / 'docs'
+    rule_packs_root = base_path / 'rule-packs'
+    scan_dirs = [docs_root, rule_packs_root, base_path]  # last = root level
 
     for scan_dir in scan_dirs:
-        if not os.path.isdir(scan_dir):
+        if not scan_dir.is_dir():
             continue
 
         for root, dirs, files in os.walk(scan_dir):
             # Skip node_modules and hidden dirs
             dirs[:] = [d for d in dirs if not d.startswith('.') and d != 'node_modules']
 
+            root_path = Path(root)
             for file in files:
                 if not file.endswith('.md'):
                     continue
-                filepath = os.path.join(root, file)
+                filepath = root_path / file
 
                 # Skip symlinks — never write through them.
-                if os.path.islink(filepath):
+                if filepath.is_symlink():
                     continue
 
                 # Only include if in expected locations
                 in_scope = (
-                    filepath.startswith(os.path.join(base_dir, 'docs')) or
-                    filepath.startswith(os.path.join(base_dir, 'rule-packs')) or
-                    (os.path.dirname(filepath) == base_dir and
+                    str(filepath).startswith(str(docs_root)) or
+                    str(filepath).startswith(str(rule_packs_root)) or
+                    (filepath.parent == base_path and
                      file in ['README.md', 'README.en.md', 'CHANGELOG.md'])
                 )
                 if not in_scope:
                     continue
 
                 # Apply shared exclusion list.
-                rel_path = os.path.relpath(filepath, base_dir)
+                rel_path = str(filepath.relative_to(base_path))
                 if _is_excluded(rel_path):
                     continue
 
-                md_files.append(filepath)
+                md_files.append(str(filepath))
 
     # Dedup: base_dir scan walks into docs/ and rule-packs/ too, so the
     # same file can be collected multiple times. Use a set keyed on the
     # canonical path, then re-sort.
-    return sorted(set(os.path.realpath(p) for p in md_files))
+    return sorted(set(str(Path(p).resolve()) for p in md_files))
 
 
 def main():
@@ -386,8 +386,8 @@ def main():
 
     args = parser.parse_args()
 
-    base_dir = os.path.abspath(args.base_dir)
-    if not os.path.isdir(base_dir):
+    base_dir = str(Path(args.base_dir).resolve())
+    if not Path(base_dir).is_dir():
         logger.error(f"Base directory not found: {base_dir}")
         return 1
 

@@ -29,6 +29,7 @@ import json
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 import yaml
 
@@ -94,18 +95,21 @@ def lookup_tenant_profile(tenant: str, config_dir: str | None) -> str | None:
 
     Returns profile name string or None.
     """
-    if not config_dir or not os.path.isdir(config_dir):
+    if not config_dir:
         return None
-    for fname in sorted(os.listdir(config_dir)):
+    base = Path(config_dir)
+    if not base.is_dir():
+        return None
+    for entry in sorted(base.iterdir(), key=lambda p: p.name):
+        fname = entry.name
         if not fname.endswith((".yaml", ".yml")):
             continue
         if fname.startswith("."):
             continue
-        fpath = os.path.join(config_dir, fname)
-        if not os.path.isfile(fpath):
+        if not entry.is_file():
             continue
         try:
-            with open(fpath, encoding="utf-8") as f:
+            with open(entry, encoding="utf-8") as f:
                 raw = yaml.safe_load(f)
         except (OSError, yaml.YAMLError):
             continue
@@ -137,11 +141,14 @@ def resolve_inheritance_chain(tenant: str, config_dir: str) -> dict[str, object]
       2. Profile Overlay (_profiles.yaml → profile keys fill-in)
       3. Tenant Override (tenant-specific keys)
     """
-    if not config_dir or not os.path.isdir(config_dir):
+    if not config_dir:
+        return None
+    base = Path(config_dir)
+    if not base.is_dir():
         return None
 
     # Layer 1: Global defaults
-    defaults_path = os.path.join(config_dir, "_defaults.yaml")
+    defaults_path = base / "_defaults.yaml"
     defaults_raw = {}
     try:
         with open(defaults_path, encoding="utf-8") as f:
@@ -152,14 +159,14 @@ def resolve_inheritance_chain(tenant: str, config_dir: str) -> dict[str, object]
 
     # Find tenant config
     tenant_overrides = {}
-    for fname in sorted(os.listdir(config_dir)):
+    for entry in sorted(base.iterdir(), key=lambda p: p.name):
+        fname = entry.name
         if not fname.endswith((".yaml", ".yml")):
             continue
         if fname.startswith("."):
             continue
-        fpath = os.path.join(config_dir, fname)
         try:
-            with open(fpath, encoding="utf-8") as f:
+            with open(entry, encoding="utf-8") as f:
                 raw = yaml.safe_load(f) or {}
         except (OSError, yaml.YAMLError):
             continue
@@ -181,7 +188,7 @@ def resolve_inheritance_chain(tenant: str, config_dir: str) -> dict[str, object]
     p_ref = tenant_overrides.get("_profile")
     if p_ref and isinstance(p_ref, str):
         profile_name = p_ref.strip()
-        profiles_path = os.path.join(config_dir, "_profiles.yaml")
+        profiles_path = base / "_profiles.yaml"
         try:
             with open(profiles_path, encoding="utf-8") as f:
                 raw = yaml.safe_load(f) or {}
