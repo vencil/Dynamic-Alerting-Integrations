@@ -49,3 +49,17 @@ Makefile    text eol=lf
 *.zip   binary
 *.woff  binary
 *.woff2 binary
+
+# Git LFS — visual regression baselines
+# ====================================
+# Playwright `toHaveScreenshot()` stores per-spec baselines under
+# `tests/e2e/<spec>-snapshots/`. Routing these PNGs through Git LFS keeps
+# the main pack lean even as baselines accumulate over time. Refines the
+# 2026-05-05 VR strategy decision (commit-to-git via Playwright built-in)
+# by activating the documented LFS escape route earlier than the original
+# >30-snapshots threshold — chosen to avoid lock-in to bloated history
+# now that VR is going live.
+#
+# `-text` overrides the earlier `* text=auto eol=lf` default so LFS sees
+# raw bytes (no line-ending normalization on what's logically opaque blobs).
+tests/e2e/*-snapshots/*.png filter=lfs diff=lfs merge=lfs -text

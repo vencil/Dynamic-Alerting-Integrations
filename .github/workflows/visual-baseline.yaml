@@ -37,6 +37,13 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
+        with:
+          # LFS materialization needed so existing baselines (under
+          # tests/e2e/*-snapshots/) are real PNGs when --update-snapshots
+          # decides whether to overwrite them. Without this, the workflow
+          # would compare against pointer-file "baselines" and always
+          # rewrite, even for unchanged visuals.
+          lfs: true
 
       - name: Set up Node.js 20
         uses: actions/setup-node@v5
@@ -74,8 +81,16 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: visual-baselines-${{ github.run_id }}
-          path: tests/e2e/__snapshots__/
+          # Playwright's default snapshotPathTemplate writes baselines to
+          # `<spec>-snapshots/<name>-<project>-<platform>.png`, NOT
+          # `__snapshots__/`. The earlier path was wrong — first activation
+          # attempt (run 25603462985) generated 3 PNGs but uploaded 0
+          # because this glob found nothing. Use a glob covering ALL
+          # `*-snapshots/` dirs under tests/e2e/ so future spec additions
+          # are auto-included.
+          path: tests/e2e/*-snapshots/
           retention-days: 14
+          if-no-files-found: error
 
       - name: Print next steps
         run: |
@@ -86,7 +101,8 @@ jobs:
 
           1. Download the artifact `visual-baselines-${{ github.run_id }}`
              from this run page.
-          2. Unzip into `tests/e2e/__snapshots__/` on a fresh branch.
+          2. Unzip into `tests/e2e/` on a fresh branch — preserves the
+             `<spec>-snapshots/` subdirectory layout that Playwright expects.
           3. Open a PR titled "chore(e2e): refresh visual baselines —
              ${{ inputs.reason }}".
           4. CI on the PR will compare current behaviour against these

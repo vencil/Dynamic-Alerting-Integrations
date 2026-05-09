@@ -3,7 +3,7 @@
   "version": "2.6.0",
   "description": "Playwright smoke tests for Dynamic Alerting Portal",
   "scripts": {
-    "test": "playwright test --grep-invert @visual",
+    "test": "playwright test",
     "test:ui": "playwright test --ui",
     "test:headed": "playwright test --headed",
     "test:debug": "playwright test --debug",

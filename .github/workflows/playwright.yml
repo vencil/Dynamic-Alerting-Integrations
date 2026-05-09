@@ -54,6 +54,12 @@ jobs:
         uses: actions/checkout@v6
         with:
           fetch-depth: 1
+          # LFS-tracked visual regression baselines under
+          # tests/e2e/*-snapshots/ must be materialized for Playwright
+          # toHaveScreenshot() to compare against. Without this, checkout
+          # leaves 130-byte pointer files on disk and Playwright sees the
+          # LFS metadata instead of the baseline PNG.
+          lfs: true
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
