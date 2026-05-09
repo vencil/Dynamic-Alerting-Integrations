@@ -19,10 +19,17 @@
  *   - Baselines MUST be generated on the same Ubuntu image CI uses.
  *     Don't run `--update-snapshots` on a Windows host — font rendering
  *     differs and you'll commit baselines that fail in CI.
- *   - To refresh a baseline: trigger the workflow_dispatch run of
- *     `nightly-race.yaml`-style updater (TODO: separate workflow), or
- *     run on a Linux dev container with: `npx playwright test visual.spec.ts --update-snapshots`
- *   - Commit the resulting PNGs in `tests/e2e/__snapshots__/visual.spec.ts/`
+ *   - To refresh a baseline:
+ *       gh workflow run visual-baseline.yaml \
+ *           --ref <branch> \
+ *           -f reason="<why>" \
+ *           -f spec="visual.spec.ts"
+ *     Then download the resulting `visual-baselines-<run_id>` artifact
+ *     and unzip into `tests/e2e/` (preserves the `<spec>-snapshots/`
+ *     subdir layout Playwright writes by default).
+ *   - Or run on a Linux dev container with:
+ *       npx playwright test visual.spec.ts --update-snapshots
+ *   - Commit the resulting PNGs in `tests/e2e/visual.spec.ts-snapshots/`.
  */
 import { test, expect, Page } from '@playwright/test';
 
@@ -148,13 +155,18 @@ test.describe('Visual regression baselines @visual', () => {
    *   2. fixme guard prevents the usual "skip until baseline lands" pattern
    *
    * Activation flow when ready:
-   *   1. Maintainer runs `Visual Regression Baseline Update` workflow
-   *      (.github/workflows/visual-baseline.yaml, workflow_dispatch).
-   *      Workflow updates ALL specs in visual.spec.ts on ubuntu-latest +
-   *      uploads __snapshots__/ folder as artifact.
-   *   2. Maintainer downloads + commits baselines under
-   *      tests/e2e/__snapshots__/visual.spec.ts/.
-   *   3. Same PR un-comments these blocks (delete the surrounding `/* ... *\/`).
+   *   1. Un-comment a block here (delete the surrounding `/* ... *\/`),
+   *      commit on a new branch, push.
+   *   2. Run the workflow against that branch:
+   *        gh workflow run visual-baseline.yaml --ref <branch> \
+   *            -f reason="<why>" -f spec="visual.spec.ts"
+   *      It uploads the regenerated `tests/e2e/*-snapshots/` dir as
+   *      `visual-baselines-<run_id>` artifact.
+   *   3. Download + unzip into `tests/e2e/` on the same branch.
+   *      `git add tests/e2e/visual.spec.ts-snapshots/<new>.png`, commit,
+   *      push, open PR.
+   *   4. CI on the PR runs the un-commented test against the new baseline;
+   *      should be green.
    *
    * Selection rationale: one tool per visual category, maximize catch-rate
    * per baseline. Skipping rich-data tools that change frequently
