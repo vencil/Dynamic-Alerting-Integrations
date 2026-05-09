@@ -42,6 +42,7 @@ import os
 import sys
 import urllib.parse
 from dataclasses import asdict, dataclass, field
+from pathlib import Path
 from typing import Any, Optional
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -655,7 +656,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    if not os.path.isdir(args.config_dir):
+    if not Path(args.config_dir).is_dir():
         msg = f"配置目錄不存在: {args.config_dir}" if _LANG == 'zh' else f"Config directory not found: {args.config_dir}"
         print(msg, file=sys.stderr)
         sys.exit(1)

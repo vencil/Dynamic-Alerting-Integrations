@@ -130,7 +130,7 @@ class OperatorChecker:
 
         expected = len(list(
             Path(self.args.rule_packs_dir).glob("rule-pack-*.yaml")
-        )) if os.path.isdir(self.args.rule_packs_dir) else 0
+        )) if Path(self.args.rule_packs_dir).is_dir() else 0
 
         status = "pass" if loaded == expected > 0 else ("warn" if loaded > 0 else "fail")
         detail = f"{loaded}/{expected}" if expected > 0 else f"{loaded}"

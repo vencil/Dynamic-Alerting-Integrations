@@ -36,6 +36,7 @@ import re
 import sys
 import textwrap
 from pathlib import Path
+from pathlib import Path
 
 import yaml
 
@@ -392,7 +393,7 @@ def scan_rule_files(pattern):
     Returns list of file paths.
     """
     files = glob.glob(pattern, recursive=True)
-    return sorted(f for f in files if os.path.isfile(f))
+    return sorted(f for f in files if Path(f).is_file())
 
 
 def classify_rule(rule):
@@ -560,12 +561,12 @@ def analyze_rule_files(file_paths, tenant_label=DEFAULT_TENANT_LABEL, metric_dic
                         "name": rule.get("record", ""),
                         "expr": rule.get("expr", ""),
                         "group": group_name,
-                        "file": os.path.basename(fpath),
+                        "file": Path(fpath).name,
                     })
                 elif rtype == "alert":
                     candidate = extract_threshold_candidates(rule, metric_dict)
                     candidate["group"] = group_name
-                    candidate["file"] = os.path.basename(fpath)
+                    candidate["file"] = Path(fpath).name
                     candidates.append(candidate)
 
     summary = {

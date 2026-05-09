@@ -44,6 +44,7 @@ import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
@@ -139,12 +140,12 @@ class GoBinaryDispatcher:
 
         if explicit:
             return (
-                explicit if os.path.isfile(explicit) else None
+                explicit if Path(explicit).is_file() else None
             ), cleaned
         env_override = os.environ.get(self.env_var, "").strip()
         if env_override:
             return (
-                env_override if os.path.isfile(env_override) else None
+                env_override if Path(env_override).is_file() else None
             ), cleaned
         return shutil.which(self.binary_name), cleaned
 

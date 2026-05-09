@@ -18,6 +18,7 @@ import argparse
 import json
 import os
 import sys
+from pathlib import Path
 
 import yaml
 
@@ -497,7 +498,7 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
 
-    if not os.path.isdir(args.config_dir):
+    if not Path(args.config_dir).is_dir():
         print(f"ERROR: config directory not found: {args.config_dir}",
               file=sys.stderr)
         return 1
