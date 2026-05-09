@@ -1,0 +1,139 @@
+name: Weekly Fuzz
+
+# P2-11 follow-on: weekly fuzz run for the Go fuzz functions in
+# `components/threshold-exporter/app/pkg/config/fuzz_test.go` (parsers
+# + deepMerge). The fuzz functions live behind the standard `go test
+# -fuzz=` flag and are NOT exercised by the main `go test ./...` suite,
+# so without a scheduled job they run only when a developer manually
+# remembers to invoke them.
+#
+# Why weekly, not nightly:
+#   - Fuzz signal is slow-drifting; new bugs appearing within a week
+#     of injection don't need 24-hour granularity.
+#   - 3 nightly jobs already exist (bench-record / nightly-race /
+#     nightly-mutation-pilot), all stacked at 03 UTC or 16-17 UTC. A
+#     4th nightly competes for the GitHub-hosted runner pool.
+#   - One weekly slot lets each fuzz function run for 5 minutes vs
+#     the ~45 seconds it would get under a 5-min/day budget — fuzz
+#     coverage is non-linear, longer single runs find deeper bugs.
+#
+# Why advisory-only (rc=0 even on findings):
+#   - Mirrors the nightly-mutation-pilot pattern.
+#   - A fuzz finding is a real bug to triage, not a "fix this PR"
+#     gate. Surface via Step Summary + artifact for human review.
+#   - The PR #350 fuzz pass already found + fixed one contract bug
+#     (parseMetricKey idx<0 → idx<=0); that's the kind of finding
+#     this job is meant to surface continuously.
+
+on:
+  schedule:
+    # Sunday 12:00 UTC = 20:00 Asia/Taipei (Sunday evening, off-hours,
+    # alone in the cron calendar — no overlap with nightly-* or bench-record).
+    - cron: "0 12 * * 0"
+  workflow_dispatch:
+    # Manual trigger lets a reviewer re-run the pilot before merging
+    # a fuzz-target-impacting PR.
+
+permissions:
+  contents: read
+
+concurrency:
+  # Multiple schedule + dispatch invocations on the same ref serialize
+  # rather than parallelize.
+  group: weekly-fuzz-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  go-fuzz:
+    name: Go Fuzz Pilot (pkg/config)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Go 1.26
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+
+      - name: Cache Go modules
+        uses: actions/cache@v5
+        with:
+          path: ~/go/pkg/mod
+          key: ${{ runner.os }}-go-1.26-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-1.26-
+
+      - name: Restore fuzz corpus from previous run
+        # Go fuzz writes interesting-input cases to
+        # testdata/fuzz/<FuzzXxx>/<hash>. Restoring across runs
+        # lets each week's fuzz build on last week's corpus instead
+        # of starting from the seed corpus every time. The cache key
+        # is intentionally generic so any prior run's cache is
+        # restored; restore-keys handles initial-run miss gracefully.
+        uses: actions/cache@v5
+        with:
+          path: components/threshold-exporter/app/pkg/config/testdata/fuzz/
+          key: fuzz-corpus-pkg-config-${{ github.run_id }}
+          restore-keys: |
+            fuzz-corpus-pkg-config-
+
+      - name: Run fuzz functions
+        id: fuzz
+        working-directory: components/threshold-exporter/app
+        # Run each fuzz for 5 minutes. set +e so a finding (exit 1)
+        # doesn't short-circuit the loop — we want every function's
+        # signal in this run.
+        run: |
+          set +e
+          rc=0
+          for fn in FuzzParseHHMM FuzzParsePromDuration FuzzClampDuration FuzzIsDisabled FuzzParseMetricKey FuzzDeepMerge; do
+            echo "::group::$fn"
+            go test ./pkg/config/ -run=^$ -fuzz="^${fn}$" -fuzztime=5m 2>&1 | tee "fuzz-${fn}.log"
+            this_rc=${PIPESTATUS[0]}
+            echo "$fn → rc=$this_rc"
+            if [ "$this_rc" -ne 0 ]; then
+              rc=1
+            fi
+            echo "::endgroup::"
+          done
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          # Workflow stays green regardless — advisory only.
+          exit 0
+
+      - name: Append fuzz summary to step summary
+        if: always()
+        working-directory: components/threshold-exporter/app
+        run: |
+          {
+            echo "## Weekly Fuzz Pilot — $(date -u +%Y-%m-%d)"
+            echo ""
+            echo "Aggregate result: \`rc=${{ steps.fuzz.outputs.rc }}\` (0 = no findings, 1 = at least one fuzz function found a failing input — see per-function logs below for the failing seed corpus path)."
+            echo ""
+            for fn in FuzzParseHHMM FuzzParsePromDuration FuzzClampDuration FuzzIsDisabled FuzzParseMetricKey FuzzDeepMerge; do
+              echo "### $fn"
+              echo ''
+              echo '```'
+              tail -n 12 "fuzz-${fn}.log" 2>/dev/null || echo "(no log)"
+              echo '```'
+              echo ''
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload corpus + per-function logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: weekly-fuzz-${{ github.run_id }}
+          # Two payloads:
+          #   1. testdata/fuzz/ — the persisted corpus + any failing seeds
+          #      (Go writes failing seeds as testdata/fuzz/<FuzzXxx>/<hash>
+          #      automatically; checking these into git later turns them
+          #      into permanent regression tests).
+          #   2. fuzz-*.log — per-function tee output for triage.
+          path: |
+            components/threshold-exporter/app/pkg/config/testdata/fuzz/
+            components/threshold-exporter/app/fuzz-*.log
+          retention-days: 30
+          if-no-files-found: warn
