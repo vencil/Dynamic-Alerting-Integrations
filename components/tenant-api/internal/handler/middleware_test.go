@@ -382,7 +382,13 @@ func TestRateLimitConfigFromEnv_Negative(t *testing.T) {
 // output by swapping in a JSON handler over a bytes.Buffer for the
 // duration of the test.
 func TestSlogRequestLogger_EmitsStructuredLine(t *testing.T) {
-	t.Parallel()
+	// Intentionally NOT t.Parallel(): swaps the package-level slog
+	// default logger via slog.SetDefault. Other parallel tests calling
+	// production code that does slog.Warn / slog.Info race against
+	// this test's bytes.Buffer (CI run #25605708926 surfaced the race
+	// via TestPutTenant_DirectMode → gitops.commitFileChange → slog.Warn
+	// writing into our captured buffer). Same global-swap concern as
+	// log.SetOutput; keep sequential.
 	t.Helper()
 	// Save + restore default logger.
 	origLogger := slog.Default()
@@ -436,7 +442,8 @@ func TestSlogRequestLogger_EmitsStructuredLine(t *testing.T) {
 // TestSlogRequestLogger_5xxLogsAtWarn ensures server errors get
 // elevated to WARN so log aggregators can alert on level alone.
 func TestSlogRequestLogger_5xxLogsAtWarn(t *testing.T) {
-	t.Parallel()
+	// Intentionally NOT t.Parallel(): same slog.SetDefault global-swap
+	// concern as TestSlogRequestLogger_EmitsStructuredLine above.
 	origLogger := slog.Default()
 	defer slog.SetDefault(origLogger)
 
