@@ -252,3 +252,110 @@ class TestLiveRepo:
             f"Live CHANGELOG has {len(all_findings)} placeholder(s):\n"
             + "\n".join(f"  - {f.render()}" for f in all_findings[:10])
         )
+
+
+# ---------------------------------------------------------------------------
+# Diff-aware paths (lint-policy.md §3 (b) class compliance)
+# ---------------------------------------------------------------------------
+class TestDiffAware:
+    @pytest.mark.timeout(15)
+    def test_filter_to_diff_added_keeps_only_added_line_findings(self, tmp_path):
+        """filter_to_diff_added: full scan finds 2 TBDs, but only line 5 is in diff
+        added set → output should be 1 finding."""
+        from unittest.mock import patch as _patch
+        path = tmp_path / "CHANGELOG.md"
+        path.write_text(
+            "## v1.0.0\n"             # line 1
+            "- entry one (TBD)\n"     # line 2 — pre-existing TBD
+            "- entry two clean\n"     # line 3
+            "\n"                      # line 4
+            "- entry three (TBD)\n",  # line 5 — newly added TBD
+            encoding="utf-8",
+        )
+        full_findings = lint.scan_source(path, path.read_text(encoding="utf-8"))
+        assert len(full_findings) == 2, "sanity: 2 TBDs in file"
+
+        # Mock: only line 5 was added
+        with _patch.object(lint, "get_diff_added_lines",
+                           return_value=[(5, "- entry three (TBD)")]):
+            filtered = lint.filter_to_diff_added(full_findings, path, "origin/main")
+        assert len(filtered) == 1
+        assert filtered[0].line == 5
+
+    @pytest.mark.timeout(15)
+    def test_filter_to_diff_added_falls_back_on_git_error(self, tmp_path):
+        """If git diff subprocess errors, return all findings (safer than silent suppress)."""
+        import subprocess
+        from unittest.mock import patch as _patch
+        path = tmp_path / "CHANGELOG.md"
+        path.write_text("- (TBD) entry\n", encoding="utf-8")
+        full_findings = lint.scan_source(path, path.read_text(encoding="utf-8"))
+
+        with _patch.object(
+            lint, "get_diff_added_lines",
+            side_effect=subprocess.CalledProcessError(1, "git"),
+        ):
+            filtered = lint.filter_to_diff_added(full_findings, path, "origin/main")
+        assert filtered == full_findings  # no filtering on error
+
+    @pytest.mark.timeout(15)
+    def test_diff_base_missing_returns_exit_2(self, tmp_path, capsys, monkeypatch):
+        """resolve_diff_base raising DiffBaseMissingError → main exits 2 with hint."""
+        clean = tmp_path / "CHANGELOG.md"
+        clean.write_text("## v1.0.0\n- Real feature\n", encoding="utf-8")
+        monkeypatch.setenv("LINT_DIFF_BASE", "origin/nonexistent-branch")
+
+        rc = lint.main(["--ci", str(clean)])
+        assert rc == 2
+        err = capsys.readouterr().err
+        assert "does not resolve" in err
+
+    @pytest.mark.timeout(15)
+    def test_bypass_tag_downgrades_to_warning(self, tmp_path, capsys, monkeypatch):
+        """Bypass tag in PR body → exit 0 with audit-trail warning."""
+        dirty = tmp_path / "CHANGELOG.md"
+        dirty.write_text("## v1.0.0\n- Feature (TBD)\n", encoding="utf-8")
+        monkeypatch.setenv(
+            "PR_BODY",
+            "bypass-lint: changelog-no-tbd\n"
+            "reason: This TBD intentional during release-prep window for accuracy here.\n",
+        )
+
+        rc = lint.main(["--ci", "--full-scan", str(dirty)])
+        assert rc == 0  # bypass wins
+        err = capsys.readouterr().err
+        assert "BYPASSED" in err
+
+    @pytest.mark.timeout(15)
+    def test_bypass_for_other_lint_does_not_match(self, tmp_path, capsys, monkeypatch):
+        """Bypass tag for a different lint name must NOT trigger."""
+        dirty = tmp_path / "CHANGELOG.md"
+        dirty.write_text("- (TBD) entry\n", encoding="utf-8")
+        monkeypatch.setenv(
+            "PR_BODY",
+            "bypass-lint: codename-leak\nreason: For a different lint entirely.\n",
+        )
+        rc = lint.main(["--ci", "--full-scan", str(dirty)])
+        assert rc == 1  # No match → still fails
+
+    @pytest.mark.timeout(15)
+    def test_pr_body_file_overrides_env(self, tmp_path, capsys, monkeypatch):
+        """--pr-body-file takes priority over $PR_BODY env var for bypass."""
+        dirty = tmp_path / "CHANGELOG.md"
+        dirty.write_text("- (TBD) entry\n", encoding="utf-8")
+
+        body_file = tmp_path / "pr_body.txt"
+        body_file.write_text(
+            "bypass-lint: changelog-no-tbd\n"
+            "reason: From the file rather than the env, testing precedence path.\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("PR_BODY", "no bypass here")
+
+        rc = lint.main([
+            "--ci", "--full-scan", str(dirty),
+            "--pr-body-file", str(body_file),
+        ])
+        assert rc == 0
+        err = capsys.readouterr().err
+        assert "BYPASSED" in err
