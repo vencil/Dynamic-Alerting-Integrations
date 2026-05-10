@@ -45,8 +45,8 @@ Go 測試**不在** `tests/`，而是與被測程式碼同目錄：
 | 看覆蓋率 | `make coverage`（HTML：`ARGS="--html"`） |
 | 跑 Playwright E2E | `make test-e2e` |
 | 跑 Playwright 單一 spec | `make test-e2e ARGS="saved-views.spec.ts"` |
-| 跑 Vitest portal 單元測試 | `make test-portal`（TD-030） |
-| Build portal ESM bundles | `make portal-build`（TD-030） |
+| 跑 Vitest portal 單元測試 | `make test-portal` |
+| Build portal ESM bundles | `make portal-build` |
 | 跑 Go 測試 | `make dc-go-test`（必須 dev container；host 端 Go 不可用） |
 | Skip 配額審計 | `make test-skip-audit`（budget=5） |
 
@@ -59,10 +59,10 @@ Go 測試**不在** `tests/`，而是與被測程式碼同目錄：
 | `Python Tests (3.13)` (ci.yml) | `pytest tests/ scripts/tools/`，跳過 3 個 `@slow` 測試（見下） |
 | `Go Tests (1.26)` (ci.yml) | `go test ./cmd/... ./internal/...`（tenant-api）+ `./...`（threshold-exporter） |
 | `Smoke Tests (Chromium)` (Playwright E2E workflow) | `tests/e2e/*.spec.ts`（排除 `@visual` tag） |
-| `Portal Tests` (ci.yml) | `tools/portal/tests/*.test.{ts,tsx}` Vitest 單元測試（TD-030 Option C；TD-042 monorepo restructure 後從 tests/portal/ 搬入） |
-| `Nightly Race Detector` (nightly-race.yaml) | Go `-race -count=10`，advisory only（TD-026） |
+| `Portal Tests` (ci.yml) | `tools/portal/tests/*.test.{ts,tsx}` Vitest 單元測試（ESM Option C；monorepo restructure 後從 tests/portal/ 搬入） |
+| `Nightly Race Detector` (nightly-race.yaml) | Go `-race -count=10`，advisory only |
 | `Lint Documentation` (ci.yml) | `make lint-docs`（含 changelog / link / structure check） |
-| `Visual Regression Baseline Update` (visual-baseline.yaml) | manual `workflow_dispatch`，重產 visual.spec.ts 基線（TD-029） |
+| `Visual Regression Baseline Update` (visual-baseline.yaml) | manual `workflow_dispatch`，重產 visual.spec.ts 基線（限 Ubuntu CI） |
 
 **CI 跳過的慢測試**（local 用 `make test` 會跑）：
 - `tests/shared/test_property.py` — Hypothesis property-based（`@slow`）
@@ -78,8 +78,8 @@ Go 測試**不在** `tests/`，而是與被測程式碼同目錄：
 測試跨檔案 / 基礎設施?                → tests/shared/test_<topic>.py
 測試 Go 程式碼?                       → 同檔案旁 *_test.go（不在 tests/）
 測試使用者操作 portal UI?              → tests/e2e/*.spec.ts
-要鎖視覺回歸（pixel-diff baseline）?  → tests/e2e/visual.spec.ts（Ubuntu CI 才能產基線，TD-029）
-要單元測試 portal JSX 元件邏輯?       → tools/portal/tests/<Component>.test.tsx（Vitest，TD-030 Option C / TD-042 restructure 後）
+要鎖視覺回歸（pixel-diff baseline）?  → tests/e2e/visual.spec.ts（Ubuntu CI 才能產基線）
+要單元測試 portal JSX 元件邏輯?       → tools/portal/tests/<Component>.test.tsx（Vitest，ESM Option C / monorepo restructure 後）
 測試前端跨工具效能 / 頁面載入?         → tests/e2e-bench/
 測試需要真實 DB / Prometheus / docker? → tests/scenarios/ + Makefile target
 ```
@@ -118,5 +118,5 @@ CI 失敗或 local flake → 查 [testing-playbook.md](../docs/internal/testing-
 
 - ⛔ **不要** hardcode tenant id（`db-a` / `db-b`）— 用 factory 產生 random id（dev-rule #2）
 - ⛔ **不要**自己寫 helper，先看 `factories.py` / `tests/e2e/fixtures/`
-- ⛔ **不要**對沒理由的 `time.Sleep`，用 ticker poll until condition（TD-019 / TD-024 模式）
-- ⛔ **不要**在 Go test 用 `assert.NoError` 在 setup 階段（fail-fast 用 `require.NoError`，TD-023）
+- ⛔ **不要**對沒理由的 `time.Sleep`，用 ticker poll until condition（見 testing-playbook §quiescence-pattern）
+- ⛔ **不要**在 Go test 用 `assert.NoError` 在 setup 階段（fail-fast 用 `require.NoError`）

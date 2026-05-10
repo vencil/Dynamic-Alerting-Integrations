@@ -1,14 +1,14 @@
 ---
-title: "Portal Build & Test (TECH-DEBT-030)"
+title: "Portal Build & Test"
 purpose: |
-  Foundation for Option C ES modules sweep — esbuild build pipeline +
-  Vitest unit-test harness. PR-A of a multi-PR series; subsequent PRs
-  migrate JSX tools from `window.__X` registration → ESM `export {}`.
+  ES modules build pipeline + Vitest unit-test harness for portal JSX tools.
+  Foundation for the multi-PR sweep that migrates tools from `window.__X`
+  registration to ESM `export {}`.
 audience: [contributors, ai-agent]
 lang: zh
 ---
 
-# Portal Build & Test (TD-030 foundation)
+# Portal Build & Test
 
 ## 怎麼用
 
@@ -26,7 +26,7 @@ make portal-build-watch
 make test-portal
 ```
 
-## 結構（TD-042 monorepo restructure 後）
+## 結構（monorepo restructure 後）
 
 ```
 tools/portal/
@@ -74,14 +74,14 @@ docs/interactive/index.html  # portal hub page — STAYS in docs/ (it's a real d
 
 ## 並存契約
 
-TD-030 sweep 期間 jsx-loader.html 與 dist bundle **同時存在**：
+ESM sweep 期間 jsx-loader.html 與 dist bundle **同時存在**：
 - 已遷移工具 → dist bundle
 - 未遷移工具 → jsx-loader.html
 - 兩條路徑都 work，瀏覽器不中斷
 
-最後 TD-030z PR 退役 jsx-loader.html。
+最終遷移完成後一次性 PR 退役 jsx-loader.html。
 
 ## 相關
-- TD-030 sub-issues: [#247-253](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/247)
+- ESM sweep tracking: [issues #247-253](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/247)
 - Project memory: `project_portal_vitest_choice.md`
-- 現役 jsx-loader doc: [`docs/internal/jsx-multi-file-pattern.md`](../../docs/internal/jsx-multi-file-pattern.md)（TD-030z 後改寫為歷史記錄）
+- 現役 jsx-loader doc: [`docs/internal/jsx-multi-file-pattern.md`](../../docs/internal/jsx-multi-file-pattern.md)（jsx-loader 退役後改寫為歷史記錄）
