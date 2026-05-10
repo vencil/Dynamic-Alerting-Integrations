@@ -211,12 +211,17 @@ vscode-git-on: ## 開啟 VS Code Git（手動開發用）
 	@python3 scripts/session-guards/vscode_git_toggle.py on
 
 .PHONY: session-cleanup
-session-cleanup: ## Session 結束或異常終止後的清理
+session-cleanup: ## Session 結束或異常終止後的清理。SCRATCH=1 加掃 %TEMP% / /c/tmp scratch；DRY=1 列出不刪
 	@python3 scripts/session-guards/vscode_git_toggle.py on 2>/dev/null || true
 	@bash scripts/session-guards/git_check_lock.sh --clean 2>/dev/null || true
 	@-pkill -f "[k]ubectl.*port-forward" 2>/dev/null; true
 	@rm -f _out.txt _err.txt 2>/dev/null || true
 	@python3 scripts/tools/lint/validate_planning_session_row.py 2>/dev/null || true
+	@if [ "$(SCRATCH)" = "1" ]; then \
+		python3 scripts/session-guards/cleanup_scratch.py $(if $(filter 1,$(DRY)),--dry-run,--apply); \
+	else \
+		echo "  (use SCRATCH=1 to also sweep %TEMP% / /c/tmp scratch; DRY=1 to preview)"; \
+	fi
 	@echo "✅ Session cleanup 完成"
 
 .PHONY: check-planning-bloat
@@ -862,3 +867,34 @@ vendor-check: ## 檢查 vendor/ 資源是否完整
 .PHONY: help
 help: ## 顯示說明
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
+
+.PHONY: help-escape
+help-escape: ## 列出所有 Windows / FUSE 逃生門工具（卡死時的速查）— audit-2026-04 §T1
+	@printf '\033[1m=== Vibe Escape-Hatch Tools (Windows / FUSE rescue) ===\033[0m\n'
+	@printf '\n\033[33mWhen FUSE / MCP / pre-commit blocks you, scan this first.\n'
+	@printf 'Do NOT write _*.bat / _*.ps1 yourself -- the harness will block it.\033[0m\n\n'
+	@printf '\033[1m-- Make targets --\033[0m\n'
+	@printf '  \033[36mwin-commit\033[0m         sandbox hook-gate -> Windows stage/commit/push\n'
+	@printf '                       (MSG=_msg.txt FILES="a b" [SKIP=h1,h2] [SKIP_HOOKS=1])\n'
+	@printf '  \033[36mfuse-commit\033[0m        pure-sandbox plumbing commit (bypasses .git/index.lock)\n'
+	@printf '                       (MSG=_msg.txt FILES="a b" [AMEND=1])\n'
+	@printf '  \033[36mfuse-locks\033[0m         detect phantom lock state in .git/\n'
+	@printf '  \033[36mfuse-reset\033[0m         FUSE cache rebuild (Level 1+3) for ghost files\n'
+	@printf '  \033[36mrecover-index\033[0m      atomic rebuild .git/index from HEAD (CHECK=1 to diagnose only)\n'
+	@printf '  \033[36msession-cleanup\033[0m    end-of-session cleanup\n\n'
+	@printf '\033[1m-- Windows-side wrappers (scripts/ops/, all whitelisted) --\033[0m\n'
+	@printf '  \033[36mwin_git_escape.bat\033[0m  status / add / commit-file / push / tag / branch / log /\n'
+	@printf '                       diff / preflight / pr-preflight / fix-hooks / raw <args>\n'
+	@printf '  \033[36mwin_gh.bat\033[0m          pr-checks / pr-view / pr-create / run-view / run-log /\n'
+	@printf '                       raw <args>     (8.3 short path + CRLF + ASCII enforced)\n'
+	@printf '  \033[36mwin_async_exec.ps1\033[0m  fire-and-forget for >60s ops (returns PID, polls log)\n'
+	@printf '  \033[36mwin_read_fresh.ps1\033[0m  Win32 ReadAllBytes -> bypass FUSE dentry cache\n\n'
+	@printf '\033[1m-- Sandbox-side helpers --\033[0m\n'
+	@printf '  \033[36mscripts/ops/run_hooks_sandbox.sh\033[0m   sandbox-side pre-commit gate\n'
+	@printf '                                    (covers Windows commit -no-verify gap)\n'
+	@printf '  \033[36mscripts/ops/fuse_plumbing_commit.py\033[0m phantom-lock-immune commit via plumbing\n'
+	@printf '  \033[36mscripts/ops/recover_index.sh\033[0m       atomic .git/index rebuild\n\n'
+	@printf '\033[1m-- Decision tree --\033[0m\n'
+	@printf '  See: docs/internal/windows-mcp-playbook.md "Git \xe6\x93\x8d\xe4\xbd\x9c\xe6\xb1\xba\xe7\xad\x96\xe6\xa8\xb9"\n'
+	@printf '       (#git-\xe6\x93\x8d\xe4\xbd\x9c\xe6\xb1\xba\xe7\xad\x96\xe6\xa8\xb9)\n'
+	@printf '  And:  docs/internal/dev-rules.md \xc2\xa711 (file hygiene decision tree)\n'
