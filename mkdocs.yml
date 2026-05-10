@@ -254,6 +254,7 @@ nav:
     - Shadow Monitoring 切換: scenarios/shadow-monitoring-cutover.md
     - 多叢集 Federation: scenarios/multi-cluster-federation.md
     - Tenant 生命週期: scenarios/tenant-lifecycle.md
+    - Multi-System Migration Playbook: scenarios/multi-system-migration-playbook.md
   - 參考:
     - da-tools CLI: cli-reference.md
     - CLI 速查表: cheat-sheet.md
