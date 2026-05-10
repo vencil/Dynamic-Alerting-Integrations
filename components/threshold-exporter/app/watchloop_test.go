@@ -6,14 +6,64 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jonboulle/clockwork"
 	"github.com/vencil/threshold-exporter/internal/testutil"
 )
+
+// startWatchLoopWithFakeClock spins up m.WatchLoop on a fresh
+// clockwork.FakeClock and returns the clock + a stop function. The
+// stop function closes stopCh and waits for the WatchLoop goroutine
+// to exit, eliminating the goroutine-leak risk that the previous
+// time.Sleep-based pattern had.
+//
+// Caller pattern (mirrors clockwork test idiom):
+//
+//	fakeClock, stop := startWatchLoopWithFakeClock(t, m, 50*time.Millisecond)
+//	defer stop()
+//	fakeClock.Advance(50 * time.Millisecond) // fire one tick
+//	fakeClock.BlockUntil(1)                  // wait until tickOnce returns + ticker re-arms
+//	// assert side effect via state poll, not via time.Sleep
+//
+// Replaces the TECH-DEBT-017 sleep-as-sync pattern (#4c-F).
+func startWatchLoopWithFakeClock(t *testing.T, m *ConfigManager, interval time.Duration) (*clockwork.FakeClock, func()) {
+	t.Helper()
+	fakeClock := clockwork.NewFakeClock()
+	m.SetClock(fakeClock)
+
+	stopCh := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		m.WatchLoop(interval, stopCh)
+		close(done)
+	}()
+
+	// Wait for WatchLoop's NewTicker to register a sleeper before any
+	// Advance call lands; otherwise Advance happens before the ticker
+	// exists and the next tick is delayed by `interval` of fake-time
+	// rather than firing immediately.
+	fakeClock.BlockUntil(1)
+
+	stop := func() {
+		close(stopCh)
+		// WatchLoop is parked on <-ticker.Chan(); fire one tick so the
+		// select races with <-stopCh and exits. Without this, close(done)
+		// never lands and the test deadlocks (or t.Cleanup races).
+		fakeClock.Advance(interval)
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Error("WatchLoop did not exit within 2s after stopCh close")
+		}
+	}
+	return fakeClock, stop
+}
 
 // ============================================================
 // WatchLoop Tests
 // ============================================================
 
 func TestWatchLoop_StopChannel(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeTestYAML(t, filepath.Join(dir, "_defaults.yaml"), `
 defaults:
@@ -33,29 +83,20 @@ tenants:
 		t.Fatalf("initial load failed: %v", err)
 	}
 
-	stopCh := make(chan struct{})
-	done := make(chan struct{})
+	// FakeClock + helper handles deterministic ticker registration
+	// AND clean goroutine shutdown. The previous time.Sleep(100ms)
+	// was non-deterministic flake bait (TECH-DEBT-017).
+	fakeClock, stop := startWatchLoopWithFakeClock(t, m, 50*time.Millisecond)
 
-	go func() {
-		m.WatchLoop(50*time.Millisecond, stopCh)
-		close(done)
-	}()
+	// Fire one tick so the loop is observably alive before we stop it.
+	fakeClock.Advance(50 * time.Millisecond)
+	fakeClock.BlockUntil(1) // wait for tickOnce → ticker re-arm
 
-	// Let it tick at least once
-	time.Sleep(100 * time.Millisecond)
-
-	// Stop it
-	close(stopCh)
-
-	select {
-	case <-done:
-		// WatchLoop exited — success
-	case <-time.After(2 * time.Second):
-		t.Error("WatchLoop did not stop within timeout")
-	}
+	stop() // closes stopCh + asserts WatchLoop exited within 2s
 }
 
 func TestWatchLoop_DetectsFileChange(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeTestYAML(t, filepath.Join(dir, "_defaults.yaml"), `
 defaults:
@@ -80,30 +121,34 @@ tenants:
 		t.Fatalf("initial config mismatch: defaults=%v", cfg.Defaults)
 	}
 
-	stopCh := make(chan struct{})
-	go m.WatchLoop(50*time.Millisecond, stopCh)
+	fakeClock, stop := startWatchLoopWithFakeClock(t, m, 50*time.Millisecond)
+	defer stop()
 
-	// Update a file
-	time.Sleep(100 * time.Millisecond)
+	// Update file BEFORE firing the tick so detectChange sees it on
+	// the very first tickOnce call.
 	writeTestYAML(t, filepath.Join(dir, "_defaults.yaml"), `
 defaults:
   mysql_connections: 95
 `)
 
-	// Wait for reload
-	time.Sleep(200 * time.Millisecond)
-	close(stopCh)
+	// Fire one tick → tickOnce → detectChange (true) →
+	// triggerDebouncedReload (sync mode since debounce.window=0 on
+	// struct-literal manager) → diffAndReload → cfg committed.
+	fakeClock.Advance(50 * time.Millisecond)
 
-	cfg = m.GetConfig()
-	if cfg == nil {
-		t.Fatal("config is nil after reload")
-	}
-	if cfg.Defaults["mysql_connections"] != 95 {
-		t.Errorf("expected mysql_connections=95 after reload, got %v", cfg.Defaults["mysql_connections"])
+	// State-poll for the reload to commit. Polling on observable
+	// state (not on time) is the deterministic substitute for the
+	// previous time.Sleep(200ms).
+	if !waitFor(t, 2*time.Second, func() bool {
+		c := m.GetConfig()
+		return c != nil && c.Defaults["mysql_connections"] == 95
+	}) {
+		t.Errorf("expected mysql_connections=95 after reload, got %v", m.GetConfig().Defaults["mysql_connections"])
 	}
 }
 
 func TestWatchLoop_SingleFileMode(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	configFile := filepath.Join(dir, "config.yaml")
 	writeTestYAML(t, configFile, `
@@ -122,11 +167,9 @@ tenants:
 		t.Fatalf("initial load failed: %v", err)
 	}
 
-	stopCh := make(chan struct{})
-	go m.WatchLoop(50*time.Millisecond, stopCh)
+	fakeClock, stop := startWatchLoopWithFakeClock(t, m, 50*time.Millisecond)
+	defer stop()
 
-	// Update file
-	time.Sleep(100 * time.Millisecond)
 	writeTestYAML(t, configFile, `
 defaults:
   mysql_connections: 100
@@ -135,20 +178,20 @@ tenants:
     mysql_connections: "110"
 `)
 
-	// Wait for reload
-	time.Sleep(200 * time.Millisecond)
-	close(stopCh)
+	// Single-file mode: tickOnce takes the loadFile branch directly
+	// (no debounce involvement).
+	fakeClock.Advance(50 * time.Millisecond)
 
-	cfg := m.GetConfig()
-	if cfg == nil {
-		t.Fatal("config is nil")
-	}
-	if cfg.Defaults["mysql_connections"] != 100 {
-		t.Errorf("expected 100, got %v", cfg.Defaults["mysql_connections"])
+	if !waitFor(t, 2*time.Second, func() bool {
+		c := m.GetConfig()
+		return c != nil && c.Defaults["mysql_connections"] == 100
+	}) {
+		t.Errorf("expected mysql_connections=100 after reload, got %v", m.GetConfig().Defaults["mysql_connections"])
 	}
 }
 
 func TestWatchLoop_Dir_InvalidFile(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeTestYAML(t, filepath.Join(dir, "_defaults.yaml"), `
 defaults:
@@ -163,21 +206,22 @@ defaults:
 		t.Fatalf("initial load failed: %v", err)
 	}
 
-	stopCh := make(chan struct{})
-	go m.WatchLoop(50*time.Millisecond, stopCh)
+	fakeClock, stop := startWatchLoopWithFakeClock(t, m, 50*time.Millisecond)
+	defer stop()
 
-	// Add an invalid YAML file — should not crash
-	time.Sleep(100 * time.Millisecond)
+	// Add an invalid YAML file — should not crash.
 	writeTestYAML(t, filepath.Join(dir, "bad.yaml"), `
 invalid: [yaml
 `)
 
-	time.Sleep(200 * time.Millisecond)
-	close(stopCh)
+	// Fire one tick and wait for the iteration to complete (ticker
+	// re-arms once tickOnce returns), proving WatchLoop survived the
+	// bad file without panicking.
+	fakeClock.Advance(50 * time.Millisecond)
+	fakeClock.BlockUntil(1)
 
-	// Should still have a valid config (partial load)
-	cfg := m.GetConfig()
-	if cfg == nil {
+	// Should still have a valid config (partial load).
+	if cfg := m.GetConfig(); cfg == nil {
 		t.Error("config should not be nil after bad file added")
 	}
 }
@@ -345,14 +389,16 @@ defaults:
 // ============================================================
 // WatchLoop — error in scan (dir deleted)
 //
-// TECH-DEBT-017: this test and TestWatchLoop_SingleFile_ErrorOnRead
-// below use time.Sleep as a synchronisation primitive and are
-// flake-prone under `go test -race` on Go 1.26 CI. Planned fix is
-// m.Stop()+sync.WaitGroup so the watcher goroutine is guaranteed
-// to have exited before os.Remove runs.
+// TECH-DEBT-017 (CLOSED in #4c-F): both this test and
+// TestWatchLoop_SingleFile_ErrorOnRead below previously used
+// time.Sleep as a synchronisation primitive and were flake-prone
+// under `go test -race` on Go 1.26 CI. Now uses
+// startWatchLoopWithFakeClock + Advance + BlockUntil for
+// deterministic tick fires + clean goroutine shutdown.
 // ============================================================
 
 func TestWatchLoop_Dir_ErrorOnScan(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeTestYAML(t, filepath.Join(dir, "_defaults.yaml"), `
 defaults:
@@ -367,16 +413,18 @@ defaults:
 		t.Fatalf("initial load failed: %v", err)
 	}
 
-	stopCh := make(chan struct{})
-	go m.WatchLoop(50*time.Millisecond, stopCh)
+	fakeClock, stop := startWatchLoopWithFakeClock(t, m, 50*time.Millisecond)
+	defer stop()
 
-	// Delete the dir to cause scan error
-	time.Sleep(80 * time.Millisecond)
+	// Delete the dir to cause scan error.
 	os.RemoveAll(dir)
-	time.Sleep(100 * time.Millisecond)
 
-	close(stopCh)
-	// Should not crash — just log warning
+	// Fire one tick → tickOnce sees the missing dir → logs warn →
+	// returns cleanly. BlockUntil proves we made it through the
+	// iteration without panic.
+	fakeClock.Advance(50 * time.Millisecond)
+	fakeClock.BlockUntil(1)
+	// Should not crash — just log warning. (No assertion; survival = pass.)
 }
 
 // ============================================================
@@ -384,6 +432,7 @@ defaults:
 // ============================================================
 
 func TestWatchLoop_SingleFile_ErrorOnRead(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	configFile := filepath.Join(dir, "config.yaml")
 	writeTestYAML(t, configFile, `
@@ -399,16 +448,16 @@ defaults:
 		t.Fatalf("initial load failed: %v", err)
 	}
 
-	stopCh := make(chan struct{})
-	go m.WatchLoop(50*time.Millisecond, stopCh)
+	fakeClock, stop := startWatchLoopWithFakeClock(t, m, 50*time.Millisecond)
+	defer stop()
 
-	// Delete the file to cause read error
-	time.Sleep(80 * time.Millisecond)
+	// Delete the file to cause read error.
 	os.Remove(configFile)
-	time.Sleep(100 * time.Millisecond)
 
-	close(stopCh)
-	// Should not crash
+	// Fire one tick; tickOnce hits the loadFile error branch and
+	// returns. Survival of the BlockUntil = no panic = pass.
+	fakeClock.Advance(50 * time.Millisecond)
+	fakeClock.BlockUntil(1)
 }
 
 // ============================================================
