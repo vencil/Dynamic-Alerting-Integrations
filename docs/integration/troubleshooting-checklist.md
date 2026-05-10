@@ -512,17 +512,214 @@ relabel_configs:
 - playbook §4 disk budget formula（Phase 1 narrative）
 - [VM Capacity Calculator](https://docs.victoriametrics.com/Single-server-VictoriaMetrics.html#capacity-planning)
 
-#### 1.4.4 Cardinality 暴漲（待補）
+#### 1.4.4 Cardinality 暴漲
 
-> 待補：`vm_cardinality_limit_rows_dropped_total` 開始有值、prometheus_tsdb_head_series 飆升、找出 high-cardinality label 並 relabel drop
+**Symptom**：
+- `vm_cardinality_limit_rows_dropped_total` 開始有非零值（VM ingest 開始拒收）
+- `prometheus_tsdb_head_series` 在短時間內飆升（小時級 5-10x 暴漲）
+- VM disk 增速跳水式變化（與 §1.4.3 互為前因 / 後果）
+- AM 收到 `cardinality limit exceeded` 之類的 platform alert
+
+**Quick diagnosis**：
+
+```bash
+# 1. 確認暴漲是真的（不是測量誤差）
+kubectl exec <prom-pod> -- wget -qO- \
+    'localhost:9090/api/v1/query?query=prometheus_tsdb_head_series'
+# 與 24h 前 metric 比對；正常增長率應 < 5%/day
+
+# 2. VM 端是否已開始 drop
+kubectl exec <vm-pod> -- wget -qO- \
+    'localhost:8428/api/v1/query?query=vm_cardinality_limit_rows_dropped_total'
+# 非零 = ingest 已被拒收；新 metric 正在丟失
+
+# 3. 找出爆量的 metric（top-20 by series count）
+kubectl exec <vm-pod> -- wget -qO- \
+    'localhost:8428/api/v1/series?match[]={__name__=~".+"}&limit=10000000' | \
+    jq '.data | group_by(.__name__) | map({metric: .[0].__name__, n: length}) | sort_by(-.n) | .[0:20]'
+
+# 4. 對某個爆量 metric 找出哪個 label 是兇手
+# 例：mysql_query_count 爆量
+kubectl exec <vm-pod> -- wget -qO- \
+    'localhost:8428/api/v1/series?match[]=mysql_query_count&limit=100000' | \
+    jq '.data[] | keys[]' | sort | uniq -c | sort -rn | head
+# 看哪個 label 出現次數遠大於 series count → 該 label 值多樣性高
+```
+
+**最常見原因**：**新 deploy 的 service 在 metric 內塞了高基數 label**——`request_id` / `trace_id` / `user_id` / 動態生成的 path / `pod_template_hash` / `controller-revision-hash` 等。
+
+**Fix（請按此順序考慮，反過來會自爆）**：
+
+> ☢️ **`labeldrop` 致命陷阱**：直覺反應是「拔掉 high-cardinality label」用 `action: labeldrop`。**這幾乎永遠是錯的**——拔掉 label 後**多個原本不同的 series 會被 collapse 成同一個 series**，VM/Prom 看到同一個 metric+label-set 多個 datapoint 會報 **`Duplicate sample for timestamp`**、寫入失敗、或更糟：dataset 被互相覆蓋、數值錯亂沒人發現。
+
+**正確的優先順序**：
+
+```yaml
+# 優先 1：drop 整個 metric（最安全）
+# 確認該 metric 真的不需要、或可從另外的 metric 推導出來
+relabel_configs:
+  - action: drop
+    source_labels: [__name__]
+    regex: 'noisy_metric_name|debug_request_count'
+```
+
+```yaml
+# 優先 2：drop 高基數 metric 的特定 label 值（保留 metric、限制範圍）
+# 例：保留 mysql_query_count 但只對特定 db_name 集合保留
+  - action: drop
+    source_labels: [__name__, db_name]
+    regex: 'mysql_query_count;ad_hoc_db_.*'
+```
+
+```yaml
+# 優先 3：labeldrop —— 必須 100% 確定該 label
+#   (a) 不是 metric 邏輯主鍵的一部分
+#   (b) 不是 PromQL 規則 / Grafana panel 任何 by(...) / on(...) / group_left(...) 的 key
+#   (c) 沒有任何下游 join 依賴
+# 然後才能用：
+  - action: labeldrop
+    regex: pod_template_hash|controller-revision-hash
+# 這兩個是公認的 K8s 雜訊 label、不參與業務 PromQL
+```
+
+**Fix 的施做位置**：
+
+```bash
+# vmagent 端（Option 1 dual-write）：改 vmagent ConfigMap relabel
+kubectl edit cm vmagent-config -n <vmagent-ns>
+kubectl rollout restart deployment vmagent -n <vmagent-ns>
+
+# Prom 端（Option 2 / 直接 scrape）：改 prometheus.yml relabel
+kubectl rollout restart statefulset prometheus -n <prom-ns>
+```
+
+**驗證**：
+
+```bash
+# 5-10 分鐘後重跑 step 1 - step 4，確認:
+# - prometheus_tsdb_head_series 增長率回到 < 5%/day
+# - vm_cardinality_limit_rows_dropped_total 不再增加
+# - top-20 列表不再被噪音 metric 佔滿
+```
+
+**If not this**：
+- (a) 暴漲不在新 metric 而在舊 metric 的某 label → service 開始把高基數值塞進老 metric；溯源到 source service 修
+- (b) 暴漲跨多個 metric 同步發生 → 通常是上游某共用 library 升級埋雷（如 OpenTelemetry SDK auto-instrumentation）
+- (c) 已 drop 但 series count 不下降 → drop 只阻擋新 series 進來，老 series 還在 retention 內；等 retention 到期才會掉、或縮 retention（記得讀 §1.4.3 disk zone）
+
+**Cross-ref**：
+- §1.4.3 VM disk 撐爆（cardinality 暴漲是它最常見的前因）
+- playbook §4 Phase 1 narrative「Cardinality budget watch」
+- [VM cardinality 官方 doc](https://docs.victoriametrics.com/FAQ.html#what-is-an-active-time-series)
 
 ---
 
 ### 1.5 Cutover/rollback 異常
 
-#### 1.5.1 HA Prom reload race（兩 replica 不同步，待補）
+#### 1.5.1 HA Prom reload race（兩 replica 不同步、AM dedup 失效雙重 page）
 
-> 待補：HA pair 的一個 replica SIGHUP 失敗、5 分鐘內 alert payload 一半帶 shadow 一半不帶、AM dedup 失敗。手動 SIGHUP 失敗的那 replica。
+**Symptom**：
+- HA Prom (replica-0 / replica-1) 在 cutover / config 變動後行為不一致
+- 同 alertname 在短時間內**收到兩次通知**（not 重複，是兩個不同 alert 物件）
+- AM `/api/v2/alerts` 看到 alert 物件**有兩筆**，labels 大致相同但**差一個 label**（典型是 `migration_status` / `replica` 之類）
+- on-call 工程師被 page 兩次、誤以為是真的 incident 而升級
+
+**為什麼這比「規則沒 reload」更糟**（重要前理解）：
+
+> ⚠️ **AM dedup 機制本質上是「label-set 全等才 dedup」**——兩個 replica 一個帶 `migration_status: shadow`、一個不帶，AM 視為**兩個完全不同的 alert**，dedup 不會發生。結果：
+>
+> - 帶 shadow label 的 alert → 進 `/dev/null` receiver
+> - **不帶 shadow label 的 alert → 進 production receiver、半夜 page**
+>
+> 客戶 ops 看到 page 完全合理、不會懷疑是 cutover artifact。事故時客戶只看到「AM 發了 production page」沒人會查 alert payload 裡 label set 的 N+1 個維度。修這類問題前必須先**讓客戶 ops 理解這不是 production incident，不要動 production**。
+
+**Quick diagnosis**：
+
+```bash
+# 1. 確認兩 replica 是否真的不同步
+for pod in prometheus-k8s-0 prometheus-k8s-1; do
+    ts=$(kubectl exec -n <prom-ns> $pod -- \
+        wget -qO- localhost:9090/api/v1/status/runtimeinfo | \
+        jq -r '.data.lastConfigTime // empty')
+    rev=$(kubectl exec -n <prom-ns> $pod -- \
+        wget -qO- localhost:9090/api/v1/status/config | \
+        jq -r '.data.yaml' | sha256sum | cut -c1-12)
+    echo "$pod: lastConfigTime=$ts configHash=$rev"
+done
+# expected: 兩 pod 的 lastConfigTime 與 configHash 都應一致；不一致 = race confirmed
+
+# 2. 確認 AM 收到的 alert 是否含 unexpected label
+kubectl exec -n <am-ns> <am-pod> -- \
+    wget -qO- 'localhost:9093/api/v2/alerts?filter=alertname=<name>' | \
+    jq '.[] | .labels'
+# expected for cutover-in-progress: 兩筆 alert，labels 差 1 個（migration_status / replica）
+
+# 3. 看 SIGHUP 是否真的失敗（log 找 reload error）
+kubectl logs -n <prom-ns> prometheus-k8s-1 --tail=200 | \
+    grep -iE 'reload|sighup|config'
+# expected if broken: "reloading config failed: ..." 或無 reload 紀錄
+```
+
+**最常見原因**：**replica-1 的 SIGHUP 失敗或 silently 沒處理**——可能是 OOM 邊緣、PromQL evaluation 卡住、或 ConfigMap projection 延遲（mount 還是舊 generation）。
+
+**Fix（依嚴重度分階段，先溫和後暴力）**：
+
+##### 階段 A — 溫和：手動 reload 落後的 replica
+
+```bash
+# 對落後的 replica 直接打 reload endpoint
+kubectl exec -n <prom-ns> prometheus-k8s-1 -- \
+    wget -qO- --post-data='' localhost:9090/-/reload
+# expected: 200 OK，5 秒後重跑 diagnosis step 1，兩 pod hash 應相同
+```
+
+##### 階段 B — 中等：強制 ConfigMap re-projection
+
+```bash
+# 如果階段 A 失敗（reload 自己 timeout / 報錯），可能是 ConfigMap mount 沒 refresh
+# Prometheus Operator 對 PrometheusRule CRD 的 reconcile 有時要 nudge
+kubectl annotate prometheusrule <rule-name> reload-nonce="$(date +%s)" --overwrite
+# 或對 raw ConfigMap
+kubectl get cm prometheus-config -o yaml | \
+    kubectl apply -f -   # re-apply 觸發 mount refresh
+```
+
+##### 階段 C — 暴力：直接刪 pod 讓 StatefulSet 重新拉
+
+```bash
+# ⚠️ 階段 A/B 都失敗時，replica 內部狀態可能已 corrupt（ticker queue / TSDB lock 卡死）
+# SIGHUP 對 corrupt 狀態無效，必須整個 pod 重起
+# StatefulSet 會自動把它拉回來、新 pod 從 ConfigMap 讀新 config
+kubectl delete pod prometheus-k8s-1 -n <prom-ns>
+
+# 等 ~30 秒新 pod ready
+kubectl wait --for=condition=ready pod prometheus-k8s-1 -n <prom-ns> --timeout=120s
+
+# 重跑 diagnosis step 1 確認兩 pod hash 同步
+```
+
+**為什麼 SIGHUP 不是萬能**：Prometheus reload 走 internal goroutine 排程，如果 evaluator 卡在某條 expensive PromQL、或 TSDB compaction 拿了 lock 沒釋放、或 process 已進入 `SIGKILL waiting` pseudo-state，SIGHUP 訊號會被丟進處理 queue 但永遠不被處理。**這時只有 process 級別重啟有效**。
+
+**Fix 後的 AM 端清理**：
+
+```bash
+# AM 內可能已累積兩筆 alert（一筆會自然 resolve、另一筆是真正的 truth）
+# 不要急著 silence——讓自然 evaluation cycle 修正
+# 5-10 分鐘後 AM 應只剩單一 alert 物件
+kubectl exec <am-pod> -- wget -qO- 'localhost:9093/api/v2/alerts?filter=alertname=<name>' | \
+    jq '.[].labels'
+# expected: 1 筆物件
+```
+
+**If not this**：
+- (a) 兩 replica 都 reload 成功但仍不同步 → 可能是 PrometheusRule CRD 多版本 / external_labels 不同 / 不同 sharding；查 Prometheus Operator 設定
+- (b) 反覆出現（修一次又壞）→ replica-1 有資源約束（memory limit 太低、PVC slow IO）；改 resource limits 或 storage class
+- (c) 整個 reload 系統都卡（兩 replica 都不 reload）→ Prometheus Operator 自己卡住；`kubectl rollout restart deployment prometheus-operator`
+
+**Cross-ref**：
+- playbook §12 Phase 3 catalog row 2「Rule reload race」
+- §13 walkthrough Phase 3「全量切換期 HA Prom 兩 pod 中一個 SIGHUP 失敗」（真實案例）
+- §1.2.1（單 replica reload 沒生效，與本節不同情境）
 
 #### 1.5.2 Dashboard 突然 No-Data（datasource UID drift）
 
@@ -840,13 +1037,116 @@ jq '.discovery.tier_a_static.tenant_id_violations | length' /tmp/state.json
 
 ---
 
-### 2.2 da-guard 4-layer 失敗（待補）
+### 2.2 da-guard 4-layer 失敗
 
-> 待補：4-layer = Schema / Routing / Cardinality / Redundant override。常見場景：
-> - Schema：欄位拼錯、required 欄位缺
-> - Routing：domain 沒對應到任何 tenant
-> - Cardinality：cardinality budget 超限
-> - Redundant override：tenant 設定與 Profile-as-Directory-Default 重複
+**Symptom**：
+- CI `da-guard` job fail
+- PR 等不到 merge、開發者陷入 push-wait-fail 循環
+
+**先：在 push 之前 local 跑掉這輪**
+
+> 💡 **CI 端等 5 分鐘 fail、改一行 commit 再等 5 分鐘**是 da-guard 最大的 productivity 殺手。本節**第一條建議**：所有 conf.d 變動 push 之前，跑 local validation。
+
+```bash
+# 透過 da-tools CLI（推薦）
+da-tools guard --conf-d conf.d/ --report
+
+# 或 dev container 統一入口（vibe 內）
+make dc-run CMD="da-tools guard --conf-d conf.d/ --report"
+
+# 或 Docker（無 dev container 環境）
+docker run --rm -v "$(pwd):/work" -w /work \
+    ghcr.io/vencil/da-tools:latest guard --conf-d conf.d/ --report
+# expected: 4 layer 各自 PASS / FAIL 報告，與 CI 等價
+```
+
+`make dc-run` 在 vibe 開發環境已對齊 CI 行為；本地綠 = CI 綠（除非 image cache 與 main HEAD 落差大）。
+
+---
+
+#### 2.2.1 Schema 層失敗
+
+**Symptom**：報告含 `Schema validation failed: <field>` 或 `unknown field` / `required field missing`
+
+**Quick diagnosis**：
+
+```bash
+# 看具體哪個檔、哪個欄位
+da-tools guard --conf-d conf.d/ --layer schema --verbose
+# expected: file path + JSON path + schema rule 違反
+```
+
+**最常見原因**：
+- 欄位名 typo（`severitiy` 而非 `severity`）
+- v2.7→v2.8 schema 升版引入新 required 欄位、舊 yaml 沒補
+- 直接從另一份 conf 抄但漏抄一段
+
+**Fix**：
+
+```bash
+# 看當前 schema 定義
+da-tools schema show --version current
+# 對照修 yaml，補欄位 / 改拼字
+
+# 重跑 layer
+da-tools guard --conf-d conf.d/ --layer schema
+```
+
+#### 2.2.2 Routing 層失敗
+
+**Symptom**：`Domain X has no matching tenant` 或 `Tenant Y has no domain anchor`
+
+**最常見原因**：新增 tenant yaml 但沒在 `_defaults.yaml` 或上層 directory 定義 domain；或 domain rename 沒同步 tenant 端。
+
+**Fix**：
+
+```bash
+# 列出 routing 圖
+da-tools guard --conf-d conf.d/ --layer routing --show-graph
+# 找出孤立節點，補對應 domain entry 或 tenant assignment
+```
+
+#### 2.2.3 Cardinality 層失敗
+
+**Symptom**：`Cardinality budget exceeded for <pack>: estimated N, budget M`
+
+**最常見原因**：新加 rule 拓展 label dimension（如 alert 加上 `region` label 跨 5 region 部署）；budget 沒同步調。
+
+**Fix（兩擇一）**：
+
+```bash
+# 選項 A：實際 cardinality 合理 → 提 budget
+# 在 _defaults.yaml 或 pack 的 _meta.yaml 加：
+cardinality_budget: <new_M>
+
+# 選項 B：cardinality 不合理 → 縮 rule scope
+# 例：把 region 改成 group_by 而非 alert label
+```
+
+#### 2.2.4 Redundant Override 層失敗
+
+**Symptom**：`Tenant <name> redefines field already set by Profile-as-Directory-Default`
+
+**最常見原因**：tenant yaml 寫了與上層 `_defaults.yaml` 完全相同的值——沒帶來 override 價值反而是噪音。
+
+**Fix**：
+
+```bash
+# 看哪些 redundant override
+da-tools guard --conf-d conf.d/ --layer redundant --show-diffs
+# 從 tenant yaml 移除與 default 相同的欄位
+# Profile-as-Directory-Default 會自動繼承
+```
+
+**If 4-layer 都 pass 但 CI 仍 fail**：
+- (a) image / version drift → CI 用較新 da-tools image，local 落後 → `docker pull ghcr.io/vencil/da-tools:latest` 或 `make dc-up` 重拉
+- (b) CI 還跑了 4-layer 之外的 lint（如 `pre-commit` hooks 定義在 repo-root `.pre-commit-config.yaml`）→ local 也跑 `pre-commit run --all-files`
+- (c) Conflict 與 main 已 merge 但 local branch 沒 rebase → `git rebase origin/main` 重跑
+
+**Cross-ref**：
+- [`docs/internal/dev-rules.md`](../internal/dev-rules.md) #4 Doc-as-Code（schema 變動須同步多個地方）
+- [Migration Toolkit Installation](../migration-toolkit-installation.md) — da-tools 安裝
+- [ADR-019 Profile-as-Directory-Default](../adr/019-profile-as-directory-default.md) — Redundant override 機制
 
 ### 2.3 Migration state inconsistency（待補）
 
@@ -871,6 +1171,8 @@ jq '.discovery.tier_a_static.tenant_id_violations | length' /tmp/state.json
 
 ## 4. 撰寫慣例（給後續 PR 補完用）
 
+### 4.1 Entry template
+
 每個 entry 必須含：
 
 1. **Symptom**：reader 會看到的字面現象（盡量寫成 Ctrl-F 搜得到的字）
@@ -881,9 +1183,64 @@ jq '.discovery.tier_a_static.tenant_id_violations | length' /tmp/state.json
 6. **Cross-ref**：回 playbook / ADR / integration doc
 
 **禁止**：
+
 - 純 narrative description（→ playbook）
 - 沒有 expected output 的 diagnostic command（讀者 paste 完不知道結果該長怎樣）
 - 「視情況而定」這類 hand-wave（要嘛具體要嘛拿掉）
+
+### 4.2 Runbook PR review SOP — 「will-this-actually-deploy-at-3am」
+
+> **本 SOP 是 runbook 類 PR（含本 checklist 所有後續 batch、未來其他 runbook）的必經 review 關卡。**
+
+Runbook 與 narrative doc 的 review 是兩個獨立的認知任務、必須**分開做兩輪**：
+
+| Review 維度 | 抓什麼 | 不抓什麼 |
+|---|---|---|
+| **Narrative review**（一般 doc review）| 文字流暢、結構合理、teaching arc 清楚、cross-ref 齊全 | runtime 副作用、production scale 行為、命令是否真能跑 |
+| **Deploy-readiness review**（runbook 必跑）| 每條命令在 production scale 跑下去**會不會自爆**、副作用、order matters | 文字優雅、語氣 |
+
+兩者都過才能 merge runbook 類 PR。
+
+#### Deploy-readiness review checklist
+
+對每個 entry 的每條命令、每段 YAML diff，問自己：
+
+- [ ] **Order matters？** 步驟順序錯了會造成更糟的後果嗎？（例：disk > 95% 縮 retention 觸發 LSM merge → ENOSPC self-immolation）
+- [ ] **GitOps reconcile？** 若操作走 K8s API 寫進 cluster state，GitOps controller 幾分鐘後會不會 revert？（例：Grafana API write vs ConfigMap provisioning）
+- [ ] **Push vs Pull？** 命令假設的資料流方向對嗎？（例：threshold-exporter 是 pull-based，failure mode 不該寫成「remoteWrite retry log」）
+- [ ] **Aggregation primary key？** 動 label 的操作會不會 collapse 不同 series 成同一個？（例：`labeldrop` 高基數 label → `Duplicate sample for timestamp`）
+- [ ] **Right diagnostic metric？** query 的 metric 真的反映你想抓的東西嗎？（例：`count(up)` 算的是 target 數，不是 series 數）
+- [ ] **資源量級對嗎？** 公式單位是 `bytes/datapoint` 還是 `bytes/series/day`？差 700×（例：disk budget 公式）
+- [ ] **「signal 會不會被沉默吞掉」？** SIGHUP / reload 對 corrupt 狀態無效時，runbook 有提供 brute-force fallback 嗎？（例：`kubectl delete pod` 強制重起）
+- [ ] **CAB / freeze / change window？** 修復步驟需要 push code 嗎？enterprise 客戶 freeze 期能跑嗎？runbook 有提供 freeze-friendly 替代路徑嗎？
+- [ ] **Local 端能跑嗎？** Build-class 問題（Part 2）有給 local validation 命令嗎？或者讓開發者在 CI 端盲改？
+
+#### 為什麼這個 SOP 必要（已驗證）
+
+本 checklist 的演化過程提供了 **5 個獨立 confirmation**：
+
+| PR | Narrative review 過後仍漏的 bug | 抓回方式 |
+|---|---|---|
+| #393 → #396 | dual-write Option 1 方向錯（Push→Prom 破壞 `up` metric） | Gemini deploy-readiness review |
+| #393 → #396 | NetworkPolicy failure mode 寫錯方向（exporter 是 pull、不是 push）| 同上 |
+| #393 → #396 | disk budget 公式單位錯 1000× | 同上 |
+| #396 follow-up | Option 2 漏 `queue_config` → reload 時 OOM / 503 | 同上 |
+| #399 | LSM disk fix 順序自爆 + Grafana API 戰 GitOps + `count(up)` 量錯 series | 同上 |
+
+每次都是同一個 pattern：narrative review 過了、deploy-readiness review 才抓到。
+
+**結論**：runbook PR 的 reviewer 必須**主動戴上 SRE 帽子重跑一遍**——不要假設「文章看起來合理 = 命令跑下去也合理」。
+
+#### 給 reviewer 的具體建議
+
+審 runbook PR 時：
+
+1. **Read for narrative**（第一輪）：先當一般 doc review，抓結構與文字
+2. **Read for deploy**（第二輪，必跑）：對著上面 checklist 一條條過。Skip 任何「我覺得應該 OK」的 shortcut——明確標 ✓ 或開 review comment。
+3. **Mental simulation**：對每個 fix step，想像「如果客戶在凌晨 2 點 disk 已 99%、cluster 又是 GitOps 管的、剛好撞 Q4 freeze——這條命令跑下去會發生什麼？」
+4. **Adversarial pattern matching**：把 entry 的 fix 與本 SOP 的 9 個 checklist item 強制配對；任何沒對到的點都該被質疑
+
+審完任何一個 deploy-readiness 維度沒過，就是 changes-requested。
 
 ---
 
@@ -904,13 +1261,14 @@ jq '.discovery.tier_a_static.tenant_id_violations | length' /tmp/state.json
 | Part 1 §1.5.2 Dashboard No-Data (UID drift) | ✅ ship（**本 PR**） |
 | Part 1 §1.6.1 Dual-write metric drift | ✅ ship（**本 PR**） |
 | Part 2 §2.1.2 Hardcoded tenant id | ✅ ship（**本 PR**） |
+| Part 1 §1.4.4 Cardinality 暴漲 | ✅ ship（**本 PR**，含 `labeldrop` 自爆陷阱） |
+| Part 1 §1.5.1 HA Prom reload race | ✅ ship（**本 PR**，含 AM dedup 失效 + `kubectl delete pod` brute-force fallback） |
+| Part 2 §2.2 da-guard 4-layer 失敗 | ✅ ship（**本 PR**，4 sub-layer + local-validation 命令） |
 | Part 1 §1.1.2 vmagent 抓到但 VM 沒 ingest | 🟡 placeholder |
-| Part 1 §1.4.4 Cardinality 暴漲 | 🟡 placeholder |
-| Part 1 §1.5.1 HA Prom reload race | 🟡 placeholder |
 | Part 1 §1.6.2 SLO dashboard 誤判 | 🟡 placeholder |
 | Part 2 §2.1.3 Orphan rule | 🟡 placeholder |
-| Part 2 §2.2 da-guard 4-layer 失敗 | 🟡 placeholder |
 | Part 2 §2.3 Migration state inconsistency | 🟡 placeholder |
-| §4 撰寫慣例 | ✅ ready |
+| §4.1 Entry template | ✅ ready |
+| §4.2 Runbook PR review SOP（will-this-actually-deploy-at-3am） | ✅ ship（**本 PR**） |
 
-**進度**：12/19 entries 已 ship（63%）。剩 7 個 placeholder。下一波 PR 候選優先級：§1.5.1 HA reload race（cutover 必踩）→ §1.4.4 cardinality（Phase 1 高頻）→ §2.2 da-guard（CI 高頻）。
+**進度**：15/19 entries 已 ship（79%）。剩 4 個 placeholder。下一波 PR 候選優先級：§2.3 Migration state inconsistency（Phase 0 衝突常見）→ §1.1.2 vmagent ingest gap → §1.6.2 SLO 誤判 → §2.1.3 Orphan rule。
