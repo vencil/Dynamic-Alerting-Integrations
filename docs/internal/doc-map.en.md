@@ -31,6 +31,7 @@ lang: en
 | `docs/adr/017-conf-d-directory-hierarchy-mixed-mode.md` (.en.md) | Platform Engineers, SREs, contributors | ADR-017: conf.d/ Directory Hierarchy + Mixed Mode + Migration Strategy |
 | `docs/adr/018-defaults-yaml-inheritance-dual-hash.md` (.en.md) | Platform Engineers, SREs, contributors | ADR-018: _defaults.yaml Inheritance Semantics + Dual-Hash Hot-Reload |
 | `docs/adr/019-profile-as-directory-default.md` (.en.md) | Platform Engineers, SREs, contributors | ADR-019: Profile-as-Directory-Default |
+| `docs/adr/020-planning-ssot.md` | Platform Engineers, contributors, ai-agents | ADR-020: Planning SSOT — Frontmatter Contract + Discovery-based Index |
 | `docs/api/README.md` (.en.md) | Platform Engineers, SREs | Threshold Exporter API Reference |
 | `docs/api/tenant-api-hardening.md` (.en.md) | platform-ops, sre, security | Tenant API Hardening (v2.8.0) |
 | `docs/architecture-and-design.md` (.en.md) | Platform Engineers | Architecture and Design — Multi-Tenant Dynamic Alerting Platform Technical Whitepaper |
@@ -47,7 +48,6 @@ lang: en
 | `docs/getting-started/for-platform-engineers.md` (.en.md) | Platform Engineers | Platform Engineer Quick Start Guide |
 | `docs/getting-started/for-tenants.md` (.en.md) | Tenants | Tenant Quick Start Guide |
 | `docs/getting-started/README.md` | All | 快速入門 — 角色導引 |
-| `docs/getting-started/wizard.jsx` | Tenants, Platform Engineers, Domain Experts (DBA) | Getting Started Wizard |
 | `docs/glossary.md` (.en.md) | All | Glossary |
 | `docs/governance-security.md` (.en.md) | Platform Engineers, Security & Compliance | Governance, Audit & Security Compliance |
 | `docs/grafana-dashboards.md` (.en.md) | Platform Engineers, SREs, DevOps | Grafana Dashboard Guide |
@@ -61,62 +61,6 @@ lang: en
 | `docs/integration/operator-prometheus-integration.md` (.en.md) | Platform Engineers | Operator Prometheus Integration Guide |
 | `docs/integration/operator-shadow-monitoring.md` (.en.md) | Platform Engineers | Operator Shadow Monitoring Strategy |
 | `docs/integration/prometheus-operator-integration.md` (.en.md) | Platform Engineers | Prometheus Operator Integration Guide (Hub) |
-| `docs/interactive/tools/_common/components/EmptyState.jsx` | All | _common — EmptyState |
-| `docs/interactive/tools/_common/components/ErrorBoundary.jsx` | All | _common — ErrorBoundary |
-| `docs/interactive/tools/_common/components/Loading.jsx` | All | _common — Loading |
-| `docs/interactive/tools/_common/README.md` | All | `_common/` — Shared Hooks, Utils, and Components for Portal Tools |
-| `docs/interactive/tools/alert-builder.jsx` | Platform Engineers, SREs, Tenants | Alert Builder Wizard |
-| `docs/interactive/tools/alert-noise-analyzer.jsx` | platform, Domain Experts (DBA) | Alert Noise Analyzer |
-| `docs/interactive/tools/alert-simulator.jsx` | Domain Experts (DBA), Tenants | Alert Simulator |
-| `docs/interactive/tools/alert-timeline.jsx` | Domain Experts (DBA), Tenants | Alert Timeline Replay |
-| `docs/interactive/tools/AlertPreviewTab.jsx` | Platform Engineers, Tenants | Alert Preview Tab |
-| `docs/interactive/tools/architecture-quiz.jsx` | Platform Engineers | Architecture Decision Quiz |
-| `docs/interactive/tools/capacity-planner.jsx` | Platform Engineers | Capacity Planner |
-| `docs/interactive/tools/cicd-setup-wizard.jsx` | Platform Engineers | CI/CD Setup Wizard |
-| `docs/interactive/tools/cli-playground.jsx` | Platform Engineers | da-tools CLI Playground |
-| `docs/interactive/tools/component-health.jsx` | Platform Engineers, Contributors | Component Health Dashboard |
-| `docs/interactive/tools/config-diff.jsx` | Platform Engineers | Config Version Diff |
-| `docs/interactive/tools/config-lint.jsx` | Platform Engineers, Tenants | Config Lint Report |
-| `docs/interactive/tools/cost-estimator.jsx` | Platform Engineers, SREs, management | Cost Estimator |
-| `docs/interactive/tools/dependency-graph.jsx` | Platform Engineers, Domain Experts (DBA) | Dependency Graph |
-| `docs/interactive/tools/deployment-wizard.jsx` | Platform Engineers, SREs, DevOps | Deployment Profile Wizard |
-| `docs/interactive/tools/glossary.jsx` | Platform Engineers, Domain Experts (DBA), Tenants | Interactive Glossary |
-| `docs/interactive/tools/health-dashboard.jsx` | Tenants, Platform Engineers | Tenant Health Dashboard |
-| `docs/interactive/tools/master-onboarding.jsx` | Platform Engineers, SREs, Tenants | Master Onboarding — Dual Entry |
-| `docs/interactive/tools/migration-roi-calculator.jsx` | maintainer | Migration ROI Calculator |
-| `docs/interactive/tools/migration-simulator.jsx` | Platform Engineers | Migration Dry-Run Simulator |
-| `docs/interactive/tools/multi-tenant-comparison.jsx` | platform, Domain Experts (DBA) | Multi-Tenant Comparison |
-| `docs/interactive/tools/notification-previewer.jsx` | Platform Engineers, Tenants | Notification Template Editor |
-| `docs/interactive/tools/onboarding-checklist.jsx` | Tenants, Platform Engineers, Domain Experts (DBA) | Onboarding Checklist Generator |
-| `docs/interactive/tools/operator-setup-wizard/components/StepReview.jsx` | All | Operator Setup Wizard — Step 5: Review & Generate |
-| `docs/interactive/tools/operator-setup-wizard.jsx` | Platform Engineers, SREs, DevOps | Operator Setup Wizard |
-| `docs/interactive/tools/platform-demo.jsx` | Platform Engineers, Domain Experts (DBA), Tenants | Platform Demo |
-| `docs/interactive/tools/platform-health.jsx` | Platform Engineers | Platform Health Dashboard |
-| `docs/interactive/tools/playground.jsx` | Platform Engineers, Tenants | YAML Playground |
-| `docs/interactive/tools/portal-shared.jsx` | Platform Engineers | Portal Shared Module |
-| `docs/interactive/tools/promql-tester.jsx` | Platform Engineers, Domain Experts (DBA) | Prometheus Query Tester |
-| `docs/interactive/tools/rbac-setup-wizard.jsx` | Platform Engineers, SREs | RBAC Setup Wizard |
-| `docs/interactive/tools/release-notes-generator.jsx` | maintainer | Release Notes Generator |
-| `docs/interactive/tools/roi-calculator.jsx` | maintainer | ROI Calculator |
-| `docs/interactive/tools/routing-trace.jsx` | Platform Engineers, SREs | Routing Trace Wizard |
-| `docs/interactive/tools/RoutingTraceTab.jsx` | Platform Engineers, Tenants | Routing Trace Tab |
-| `docs/interactive/tools/rule-pack-detail.jsx` | Platform Engineers, Domain Experts (DBA) | Rule Pack Detail Viewer |
-| `docs/interactive/tools/rule-pack-matrix.jsx` | Platform Engineers, Domain Experts (DBA) | Rule Pack Comparison Matrix |
-| `docs/interactive/tools/rule-pack-selector.jsx` | Platform Engineers, Domain Experts (DBA) | Rule Pack Selector |
-| `docs/interactive/tools/runbook-viewer.jsx` | Platform Engineers, Domain Experts (DBA) | Runbook Viewer |
-| `docs/interactive/tools/schema-explorer.jsx` | Platform Engineers, Domain Experts (DBA) | YAML Schema Explorer |
-| `docs/interactive/tools/self-service-portal.jsx` | Platform Engineers, Domain Experts (DBA), Tenants | Tenant Self-Service Portal |
-| `docs/interactive/tools/simulate-preview.jsx` | Platform Engineers, SREs, Tenants | Simulate Preview Widget |
-| `docs/interactive/tools/template-gallery.jsx` | Tenants, Platform Engineers | Config Template Gallery |
-| `docs/interactive/tools/tenant-manager/components/ApiNotificationToast.jsx` | All | Tenant Manager — ApiNotificationToast |
-| `docs/interactive/tools/tenant-manager/components/GroupSidebar.jsx` | All | Tenant Manager — GroupSidebar |
-| `docs/interactive/tools/tenant-manager/components/OverflowBanner.jsx` | All | Tenant Manager — OverflowBanner |
-| `docs/interactive/tools/tenant-manager/components/SavedViewsPanel.jsx` | All | Tenant Manager — SavedViewsPanel |
-| `docs/interactive/tools/tenant-manager/components/TenantCard.jsx` | All | Tenant Manager — TenantCard |
-| `docs/interactive/tools/tenant-manager.jsx` | Platform Engineers, SREs | Tenant Manager |
-| `docs/interactive/tools/threshold-calculator.jsx` | Domain Experts (DBA), Tenants | Threshold Calculator |
-| `docs/interactive/tools/threshold-heatmap.jsx` | Platform Engineers, Domain Experts (DBA), SREs | Threshold Heatmap |
-| `docs/interactive/tools/YamlValidatorTab.jsx` | Platform Engineers, Tenants | YAML Validator Tab |
 | `docs/interactive-tools.md` (.en.md) | All | Interactive Tools |
 | `docs/migration-engine.md` (.en.md) | Platform Engineers, DevOps | AST Migration Engine Architecture |
 | `docs/migration-guide.md` (.en.md) | Tenants, DevOps | Migration Guide — From Traditional Monitoring to Dynamic Alerting Platform |
