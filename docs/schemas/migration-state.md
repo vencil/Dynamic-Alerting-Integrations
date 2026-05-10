@@ -8,14 +8,7 @@ lang: zh
 
 # Migration State Schema (`.da/migration-state.json`)
 
-> **Status**: 🟡 Outline（v0.1，2026-05-10）— schema fields locked from
-> [multi-system-migration-playbook](../scenarios/multi-system-migration-playbook.md)
-> Phase 0 design. **未來會由 da-tools 程式碼 auto-generate 覆蓋本文件**——
-> 第一版手寫於此，後續切換 SSOT 為程式碼。
->
-> **Future SSOT**（v2.9）：`components/da-tools/app/migration_state.py` Pydantic model；
-> CI hook 自動從 model dump schema → 對比本 .md → drift fails.
-> 在那之前 manually maintained，CI cross-check 不可用。
+> **SSOT 演進**：本檔案是 schema 的手寫 SSOT（v1）。**未來會由 da-tools 程式碼 auto-generate 覆蓋本文件**——`components/da-tools/app/migration_state.py` Pydantic model + CI hook（v2.9 epic）。在程式碼 SSOT ship 之前，本檔 manually maintained，CI cross-check 不可用。
 
 ---
 
@@ -208,16 +201,3 @@ lang: zh
 
 `da-tools onboard --analyze` 預設 `--output .da/state/<cluster-name>.json`（從 `--cluster-name` flag 推），不再 default 到 single file。客戶單 cluster 不指定也仍 work（fallback to `.da/state/default.json`）。
 
----
-
-## Outline status
-
-| 段 | 狀態 |
-|---|---|
-| 用途 + dual output 設計 | ✅ outline ready |
-| Schema v1 JSON 範本 | ✅ outline ready |
-| 欄位語意（top-level / discovery / current_state / scope / gate_log） | ✅ outline ready |
-| 演進路線（v1 → v2 auto-gen） | ✅ outline ready |
-| Concrete examples per field（含 edge cases） | 🟡 待補（內文 PR） |
-
-**下一步**：本 outline 進 PR review；通過後 da-tools onboard --analyze 實作（v2.9 epic 的一部分）會引用本 schema 為合約。
