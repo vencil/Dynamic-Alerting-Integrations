@@ -226,11 +226,11 @@ Full ADR index: [docs/adr/](docs/adr/README.en.md)
 |----------|-------------|
 | [Architecture & Design](docs/architecture-and-design.en.md) | Core design, HA, Rule Pack architecture |
 | Getting Started (by role) | [Platform Engineer](docs/getting-started/for-platform-engineers.en.md) · [Domain Expert](docs/getting-started/for-domain-experts.en.md) · [Tenant](docs/getting-started/for-tenants.en.md) |
-| [Migration Guide](docs/migration-guide.en.md) | Onboarding flow, AST engine, Shadow Monitoring |
-| Integration guides | [BYO Prometheus](docs/integration/byo-prometheus-integration.en.md) · [BYO Alertmanager](docs/integration/byo-alertmanager-integration.en.md) · [Federation](docs/integration/federation-integration.en.md) · [GitOps](docs/integration/gitops-deployment.en.md) |
+| Migration paths | [Migration Guide](docs/migration-guide.en.md) (1/2-system: rules / rules+AM) · [Multi-System Playbook](docs/scenarios/multi-system-migration-playbook.md) (3-system: Prom→VM + rules + AM, **ZH only — EN translation scheduled**) · [Staged Adoption](docs/scenarios/staged-adoption-guide.md) (post-cutover `custom_*` → golden lifecycle, **ZH only**) |
+| Integration guides | [BYO Prometheus](docs/integration/byo-prometheus-integration.en.md) · [BYO Alertmanager](docs/integration/byo-alertmanager-integration.en.md) · [VictoriaMetrics](docs/integration/victoriametrics-integration.md) (**ZH only**) · [Federation](docs/integration/federation-integration.en.md) · [GitOps](docs/integration/gitops-deployment.en.md) |
 | [Custom Rule Governance](docs/custom-rule-governance.en.md) | Three-tier governance, CI linting |
 | [Benchmarks](docs/benchmarks.md) | Full benchmark data and methodology |
-| [Scenarios](docs/scenarios/) | 9 hands-on scenarios (Routing · Shadow · Federation · Lifecycle · GitOps · Lab) |
-| Day-2 Operations | [CLI Reference](docs/cli-reference.en.md) · [Cheat Sheet](docs/cheat-sheet.en.md) |
+| [Scenarios](docs/scenarios/) | 14 hands-on scenarios (includes migration paths above; others: Routing · Shadow · Federation · Lifecycle · GitOps · Lab) |
+| Day-2 Operations | [CLI Reference](docs/cli-reference.en.md) · [Cheat Sheet](docs/cheat-sheet.en.md) · [Troubleshooting (runtime)](docs/troubleshooting.en.md) · [Migration Troubleshooting](docs/integration/troubleshooting-checklist.md) (migration-phase symptom-keyed runbook, **ZH only**) |
 
 Full doc map: [doc-map.md](docs/internal/doc-map.md) · Tool map: [tool-map.md](docs/internal/tool-map.md)

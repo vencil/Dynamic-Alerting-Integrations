@@ -41,8 +41,11 @@ tar xzf da-guard.tar.gz && sudo install -m 0755 da-guard-linux-amd64 /usr/local/
 | **既有成熟監控體系** — 企業反向分析 | 自動生成遷移計畫 | `da-tools onboard` | ~10 min |
 | **已有傳統 alert rules** — 要遷移 | 自動轉換為三件套 | `da-tools migrate` | ~15 min |
 | **大型租戶 (1000+ 條)** — 企業級遷移 | Triage → Shadow → 切換 | `da-tools migrate --triage` + `da-tools validate` | ~1-2 週 |
+| **3-system 同時換**（換 storage backend Prom→VM **加上** 規則 **加上** AM routing） | 5-Phase invariants-driven model | 走 [Multi-System Migration Playbook](scenarios/multi-system-migration-playbook.md) | 13 週估算（真實常 ~27 週） |
+| **Cutover 後規則演化**（`custom_*` → golden、Rule Pack 升版） | Lifecycle pattern，不是一次性事件 | 走 [Staged Adoption Lifecycle](scenarios/staged-adoption-guide.md) | 持續 |
 | **不支援的 DB 類型** — 需擴展 | 手動建立 Recording + Alert Rules | 參見 [§9](#9-進階擴展不支援的-db-類型) | ~30 min |
 | **下架租戶/指標** | 安全移除 | `da-tools offboard` / `da-tools deprecate` | ~5 min |
+| **遷移過程出狀況** | symptom-keyed runbook | → [Migration Troubleshooting Checklist](integration/troubleshooting-checklist.md) | — |
 
 ```mermaid
 flowchart TD
@@ -791,6 +794,12 @@ da-tools deprecate mysql_slave_lag mysql_innodb_buffer_pool --execute
 | 資源 | 相關性 |
 |------|--------|
 | ["Migration Guide — From Traditional Monitoring to Dynamic Alerting Platform"] | ⭐⭐⭐ |
+| **進階遷移情境（本指南未涵蓋）** | |
+| [Multi-System Migration Playbook](scenarios/multi-system-migration-playbook.md)（3-system：Prom→VM + 規則 + AM 同時換）| ⭐⭐⭐ |
+| [Staged Adoption Lifecycle](scenarios/staged-adoption-guide.md)（cutover 後 `custom_*` → golden 漸進）| ⭐⭐⭐ |
+| [Migration Troubleshooting Checklist](integration/troubleshooting-checklist.md)（遷移過程 symptom-keyed runbook）| ⭐⭐⭐ |
+| [VictoriaMetrics Integration](integration/victoriametrics-integration.md)（VM stack 整合導覽）| ⭐⭐ |
+| **基礎參考** | |
 | ["Tenant 快速入門指南"](getting-started/for-tenants.md) | ⭐⭐ |
 | ["AST 遷移引擎架構"](./migration-engine.md) | ⭐⭐ |
 | ["da-tools CLI Reference"](./cli-reference.md) | ⭐⭐ |
