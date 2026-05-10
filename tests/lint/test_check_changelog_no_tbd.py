@@ -198,11 +198,17 @@ class TestHelpers:
 # main() integration
 # ---------------------------------------------------------------------------
 class TestMain:
+    """v2.8.0 lint-policy refactor (PR #383): tests use --full-scan to
+    exercise the file-content scan path. Diff-only mode (default) requires
+    git rev-parse against origin/main, which the tmp_path fixtures don't
+    provide. TestMainDiffMode below covers diff-only via the live repo.
+    """
+
     @pytest.mark.timeout(15)
     def test_main_clean_exit_0(self, tmp_path):
         clean = tmp_path / "CHANGELOG.md"
         clean.write_text("## v1.0.0\n- Real feature\n", encoding="utf-8")
-        rc = lint.main(["--ci", str(clean)])
+        rc = lint.main(["--ci", "--full-scan", str(clean)])
         assert rc == 0
 
     @pytest.mark.timeout(15)
@@ -212,7 +218,7 @@ class TestMain:
             "## v1.0.0\n- Feature shipped (TBD).\n",
             encoding="utf-8",
         )
-        rc = lint.main(["--ci", str(dirty)])
+        rc = lint.main(["--ci", "--full-scan", str(dirty)])
         assert rc == 1
         captured = capsys.readouterr()
         assert "1 placeholder" in captured.err
@@ -221,7 +227,7 @@ class TestMain:
     def test_main_dirty_no_ci_exit_0(self, tmp_path):
         dirty = tmp_path / "CHANGELOG.md"
         dirty.write_text("- TBD entry\n", encoding="utf-8")
-        rc = lint.main([str(dirty)])
+        rc = lint.main(["--full-scan", str(dirty)])
         assert rc == 0
 
 
