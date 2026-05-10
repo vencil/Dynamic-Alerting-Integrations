@@ -338,11 +338,13 @@ tenants:
 // ─────────────────────────────────────────────────────────────────
 
 func TestMixedMode_MidLevelDefaultsBlastRadiusScope(t *testing.T) {
-	fresh, _ := withIsolatedMetrics(t)
+	t.Parallel()
+	fresh, _ := freshMetrics(t)
 	root := t.TempDir()
 	writeMixedModeFixture(t, root)
 
 	mgr := NewConfigManager(root)
+	mgr.SetMetrics(fresh)
 	if err := mgr.Load(); err != nil {
 		t.Fatalf("Load: %v", err)
 	}

@@ -429,16 +429,13 @@ func TestScanDirHierarchical_K8sSymlinkLayout(t *testing.T) {
 // (config_hierarchy.go yaml.Unmarshal warn+return nil). This test nails
 // the behavior down AND exposes the observability hook.
 func TestScanDirHierarchical_MixedValidInvalid(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 
-	// Reset metrics so the parseFailures counter is fresh for assertion.
-	// Save+restore rather than nil-out in cleanup — getConfigMetrics does
-	// not re-init after sync.Once fires, so a nil substitution would crash
-	// subsequent tests in the same process.
-	origMetrics := getConfigMetrics()
-	freshMetrics := newConfigMetrics()
-	setConfigMetrics(freshMetrics)
-	t.Cleanup(func() { setConfigMetrics(origMetrics) })
+	// Per-test metrics instance — passed explicitly to the scanner via
+	// scanDirHierarchicalWithMetrics so observations land on `fresh` and
+	// not on the package-level singleton (parallel-safe; #4a).
+	fresh, _ := freshMetrics(t)
 
 	// Valid sibling — must survive the broken neighbor.
 	writeFile(t, filepath.Join(root, "team-a", "t-good.yaml"), `tenants:
@@ -459,7 +456,7 @@ func TestScanDirHierarchical_MixedValidInvalid(t *testing.T) {
       cpu: 70
 `)
 
-	tenants, _, hashes, _, _, err := scanDirHierarchical(root, nil)
+	tenants, _, hashes, _, _, err := scanDirHierarchicalWithMetrics(root, nil, fresh)
 	if err != nil {
 		t.Fatalf("scan should not return error on per-file parse failure: %v", err)
 	}
@@ -497,7 +494,7 @@ func TestScanDirHierarchical_MixedValidInvalid(t *testing.T) {
 	// the broken file's basename. Pulls counter value via the test-only
 	// collector API.
 	ch := make(chan prometheus.Metric, 1)
-	freshMetrics.parseFailures.WithLabelValues("broken.yaml").Collect(ch)
+	fresh.parseFailures.WithLabelValues("broken.yaml").Collect(ch)
 	close(ch)
 	var count float64
 	for m := range ch {
@@ -530,13 +527,14 @@ func TestScanDirHierarchical_MixedValidInvalid(t *testing.T) {
 // "_defaults.yaml"}[5m])) > 0` fires identically regardless of count
 // scale, so duplication is a feature (blast-radius signal), not noise.
 func TestRecomputeMergedHash_DefaultsParseFailureEmitsErrorAndMetric(t *testing.T) {
+	// NOT t.Parallel — log.SetOutput swaps a global stdlib logger; #4b
+	// will move this off the global eventually.
 	root := t.TempDir()
 
-	// Reset metrics + capture log output.
-	origMetrics := getConfigMetrics()
-	freshMetrics := newConfigMetrics()
-	setConfigMetrics(freshMetrics)
-	t.Cleanup(func() { setConfigMetrics(origMetrics) })
+	// Per-test metrics instance — routed via mgr.SetMetrics so the
+	// scanner observations land on `fresh` instead of the package
+	// singleton (parallel-friendly when paired with #4b).
+	fresh, _ := freshMetrics(t)
 
 	var logBuf bytes.Buffer
 	origOutput := log.Writer()
@@ -554,6 +552,7 @@ func TestRecomputeMergedHash_DefaultsParseFailureEmitsErrorAndMetric(t *testing.
 		"tenants:\n  t-b:\n    threshold:\n      cpu: 70\n")
 
 	mgr := NewConfigManager(root)
+	mgr.SetMetrics(fresh)
 	// Trigger the hierarchical recompute path. Load fails (or partially
 	// succeeds) — we don't care about the return value, only the
 	// observability side-effects (ERROR log + metric).
@@ -576,7 +575,7 @@ func TestRecomputeMergedHash_DefaultsParseFailureEmitsErrorAndMetric(t *testing.
 	// >= 2 for two tenants — but the metric API quirk makes >= 1 the
 	// safe assertion across both initial-scan and debounced-reload paths).
 	ch := make(chan prometheus.Metric, 1)
-	freshMetrics.parseFailures.WithLabelValues("_defaults.yaml").Collect(ch)
+	fresh.parseFailures.WithLabelValues("_defaults.yaml").Collect(ch)
 	close(ch)
 	var count float64
 	for m := range ch {

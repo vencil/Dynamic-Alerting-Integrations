@@ -8,8 +8,9 @@ package main
 // fixture → cold Load (populates parsedDefaults) → mutate → diffAndReload
 // → assert (reason, scope, effect, N) bucket observations.
 //
-// Each test runs with its own withIsolatedMetrics + t.TempDir so
-// counters don't bleed across runs (especially under -count=N -race).
+// Each test runs with its own freshMetrics (routed via SetMetrics) +
+// t.TempDir so counters don't bleed across runs (especially under
+// -count=N -race) and tests can run in parallel.
 
 import (
 	"os"
@@ -118,11 +119,13 @@ func reloadOnce(t *testing.T, m *ConfigManager) (int, int) {
 // We trigger ONE post-change reload so the assertion is: count=1,
 // sum=2 (two tenants in the bucket for that single observation).
 func TestBlastRadius_AppliedOnDefaultsChange(t *testing.T) {
-	fresh, _ := withIsolatedMetrics(t)
+	t.Parallel()
+	fresh, _ := freshMetrics(t)
 	dir := t.TempDir()
 	writeBlastRadiusFixture(t, dir)
 
 	m := NewConfigManagerWithDebounce(dir, 0)
+	m.SetMetrics(fresh)
 	defer m.Close()
 	if err := m.Load(); err != nil {
 		t.Fatalf("Load: %v", err)
@@ -159,11 +162,13 @@ defaults:
 // tenant-naive does not → merged_hash moves → applied (1).
 // Two distinct observations, one per (effect) bucket.
 func TestBlastRadius_ShadowedSplitFromApplied(t *testing.T) {
-	fresh, _ := withIsolatedMetrics(t)
+	t.Parallel()
+	fresh, _ := freshMetrics(t)
 	dir := t.TempDir()
 	writeBlastRadiusFixture(t, dir)
 
 	m := NewConfigManagerWithDebounce(dir, 0)
+	m.SetMetrics(fresh)
 	defer m.Close()
 	if err := m.Load(); err != nil {
 		t.Fatalf("Load: %v", err)
@@ -194,11 +199,13 @@ defaults:
 // with identical content + a YAML comment so the file hash moves but
 // no key changes. Both tenants land in cosmetic.
 func TestBlastRadius_CosmeticOnCommentEdit(t *testing.T) {
-	fresh, _ := withIsolatedMetrics(t)
+	t.Parallel()
+	fresh, _ := freshMetrics(t)
 	dir := t.TempDir()
 	writeBlastRadiusFixture(t, dir)
 
 	m := NewConfigManagerWithDebounce(dir, 0)
+	m.SetMetrics(fresh)
 	defer m.Close()
 	if err := m.Load(); err != nil {
 		t.Fatalf("Load: %v", err)
@@ -241,7 +248,8 @@ defaults:
 // defaults change resolved as `applied`. Adding tenant-third (which
 // overrides redis_connections only) closes the gap.
 func TestBlastRadius_MixedTickEmitsThreeDistinctBuckets(t *testing.T) {
-	fresh, _ := withIsolatedMetrics(t)
+	t.Parallel()
+	fresh, _ := freshMetrics(t)
 	dir := t.TempDir()
 	writeBlastRadiusFixture(t, dir)
 
@@ -255,6 +263,7 @@ tenants:
 `)
 
 	m := NewConfigManagerWithDebounce(dir, 0)
+	m.SetMetrics(fresh)
 	defer m.Close()
 	if err := m.Load(); err != nil {
 		t.Fatalf("Load: %v", err)
@@ -297,11 +306,13 @@ defaults:
 // TestBlastRadius_DeleteEmitsDeleteBucket — remove a tenant file → one
 // observation in (delete, tenant, applied) with sum=1.
 func TestBlastRadius_DeleteEmitsDeleteBucket(t *testing.T) {
-	fresh, _ := withIsolatedMetrics(t)
+	t.Parallel()
+	fresh, _ := freshMetrics(t)
 	dir := t.TempDir()
 	writeBlastRadiusFixture(t, dir)
 
 	m := NewConfigManagerWithDebounce(dir, 0)
+	m.SetMetrics(fresh)
 	defer m.Close()
 	if err := m.Load(); err != nil {
 		t.Fatalf("Load: %v", err)
@@ -322,11 +333,13 @@ func TestBlastRadius_DeleteEmitsDeleteBucket(t *testing.T) {
 // TestBlastRadius_NewTenantEmitsNewBucket — add a new tenant file → one
 // observation in (new, tenant, applied).
 func TestBlastRadius_NewTenantEmitsNewBucket(t *testing.T) {
-	fresh, _ := withIsolatedMetrics(t)
+	t.Parallel()
+	fresh, _ := freshMetrics(t)
 	dir := t.TempDir()
 	writeBlastRadiusFixture(t, dir)
 
 	m := NewConfigManagerWithDebounce(dir, 0)
+	m.SetMetrics(fresh)
 	defer m.Close()
 	if err := m.Load(); err != nil {
 		t.Fatalf("Load: %v", err)
@@ -349,11 +362,13 @@ tenants:
 // TestBlastRadius_UnchangedTickEmitsNothing — a diffAndReload with no
 // underlying file mutation produces zero observations across the board.
 func TestBlastRadius_UnchangedTickEmitsNothing(t *testing.T) {
-	fresh, _ := withIsolatedMetrics(t)
+	t.Parallel()
+	fresh, _ := freshMetrics(t)
 	dir := t.TempDir()
 	writeBlastRadiusFixture(t, dir)
 
 	m := NewConfigManagerWithDebounce(dir, 0)
+	m.SetMetrics(fresh)
 	defer m.Close()
 	if err := m.Load(); err != nil {
 		t.Fatalf("Load: %v", err)

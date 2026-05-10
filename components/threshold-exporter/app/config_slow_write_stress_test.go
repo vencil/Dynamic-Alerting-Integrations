@@ -123,10 +123,14 @@ func TestSlowWriteTornStateStress_FinalConvergence(t *testing.T) {
 		seed         = int64(0xB7_5_0_5_0)
 	)
 
-	fresh, _ := withIsolatedMetrics(t)
+	// Deliberately NOT t.Parallel — this stress test has timing-based
+	// assertions (debounceWin, stableWindow, settleTimeout) that sibling
+	// scheduler pressure can perturb. Run serially.
+	fresh, _ := freshMetrics(t)
 	dir := buildSlowWriteFixture(t, numFiles)
 
 	m := NewConfigManagerWithDebounce(dir, debounceWin)
+	m.SetMetrics(fresh)
 	defer m.Close()
 	if err := m.Load(); err != nil {
 		t.Fatalf("initial Load: %v", err)

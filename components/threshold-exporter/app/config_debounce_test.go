@@ -356,24 +356,26 @@ func TestPendingDebounceReasons_AccumulatesThenClears(t *testing.T) {
 // drive a fixed number of triggers, wait for quiescence, and
 // assert the contract directly.
 func TestFireDebounced_EmitsBatchAndDuration(t *testing.T) {
-	fresh, _ := withIsolatedMetrics(t)
+	t.Parallel()
+	fresh, _ := freshMetrics(t)
 	dir := t.TempDir()
 	writeHierarchicalFixture(t, dir, "90")
 
 	const numTriggers = 4
 	m := NewConfigManagerWithDebounce(dir, 50*time.Millisecond)
+	m.SetMetrics(fresh)
 	defer m.Close()
 	if err := m.Load(); err != nil {
 		t.Fatalf("Load: %v", err)
 	}
 
-	// Snapshot baseline samples — a prior test may have a leaked
-	// fireDebounced goroutine still mid-diffAndReload that lands its
-	// ObserveReloadDuration on `fresh` AFTER withIsolatedMetrics
-	// swapped (the global metric pointer was already `fresh` by the
-	// time the late goroutine called getConfigMetrics()). Asserting
-	// deltas instead of absolute counts isolates this test from any
-	// such leak.
+	// Snapshot baseline samples — even though we now own a per-test
+	// *configMetrics (no global swap), an in-flight fireDebounced
+	// goroutine from THIS test (started before t.Cleanup ran) can land
+	// an ObserveReloadDuration on `fresh` after our final read. Delta
+	// assertions tolerate that intra-test late observation. Cross-test
+	// leak is no longer a concern post-#4a (sibling tests use their
+	// own fresh).
 	baseReload := histogramSampleCount(t, fresh.reloadDuration)
 	baseBatchCount := histogramSampleCount(t, fresh.debounceBatch)
 	baseFire := m.DebounceFiredCount()
@@ -405,12 +407,13 @@ func TestFireDebounced_EmitsBatchAndDuration(t *testing.T) {
 		t.Fatalf("expected at least 1 fire, got %d (base=%d)", deltaFire, baseFire)
 	}
 
-	// Goroutine-leak race (per S#32 / S#35 / S#37): a prior test's
-	// fireDebounced may complete AFTER our withIsolatedMetrics swap. The
-	// S#35 fix asserted "deltaReload == deltaBatch lockstep" but that
-	// claim was WRONG — only batch + DebounceFiredCount() are atomic
-	// (Step 1+2 of fireDebounced under m.debounce.mu). Reload is observed
-	// AFTER diffAndReload (Step 4), making its leak window much wider:
+	// Goroutine-late-observation race (per S#32 / S#35 / S#37): an
+	// in-flight fireDebounced from earlier in THIS test may complete
+	// after our final read. The S#35 fix asserted "deltaReload ==
+	// deltaBatch lockstep" but that claim was WRONG — only batch +
+	// DebounceFiredCount() are atomic (Step 1+2 of fireDebounced under
+	// m.debounce.mu). Reload is observed AFTER diffAndReload (Step 4),
+	// making its leak window much wider:
 	//
 	//   fireDebounced steps:
 	//     1. ObserveDebounceBatch(len(reasons))   ← batch leaks here
@@ -465,11 +468,13 @@ func TestFireDebounced_EmitsBatchAndDuration(t *testing.T) {
 // stay accurate) but skips the batch histogram (no batching to
 // observe — folding "1" samples in would skew p50).
 func TestSyncFallback_EmitsReloadDurationButNoBatch(t *testing.T) {
-	fresh, _ := withIsolatedMetrics(t)
+	t.Parallel()
+	fresh, _ := freshMetrics(t)
 	dir := t.TempDir()
 	writeHierarchicalFixture(t, dir, "90")
 
 	m := NewConfigManagerWithDebounce(dir, 0)
+	m.SetMetrics(fresh)
 	defer m.Close()
 	if err := m.Load(); err != nil {
 		t.Fatalf("Load: %v", err)

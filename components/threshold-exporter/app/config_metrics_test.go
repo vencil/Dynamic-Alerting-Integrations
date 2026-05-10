@@ -19,24 +19,31 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
-// withIsolatedMetrics swaps in a fresh metrics instance for the duration
-// of t, restoring the previous instance on cleanup. The returned registry
-// has the fresh metrics pre-registered so testutil.CollectAndCount works.
-func withIsolatedMetrics(t *testing.T) (*configMetrics, *prometheus.Registry) {
+// freshMetrics creates a new *configMetrics + registers it in a fresh
+// prometheus.Registry. Does NOT swap the package-level singleton —
+// caller is responsible for routing the fresh instance to the code
+// under test, via one of:
+//   - m.SetMetrics(fresh)        — for ConfigManager-driven tests
+//   - scanDirHierarchicalWithMetrics(dir, nil, fresh)  — for scanner tests
+//   - fresh.IncReloadTrigger(...)                       — for direct
+//                                                          method-form helper tests
+//
+// Replaces the previous withIsolatedMetrics global-swap pattern (#4a).
+// Multiple parallel tests can each own their own *configMetrics
+// without racing the package-level singleton, unblocking t.Parallel.
+func freshMetrics(t *testing.T) (*configMetrics, *prometheus.Registry) {
 	t.Helper()
-	prev := getConfigMetrics()
 	fresh := newConfigMetrics()
-	setConfigMetrics(fresh)
 	reg := prometheus.NewRegistry()
 	registerConfigMetrics(reg, fresh)
-	t.Cleanup(func() { setConfigMetrics(prev) })
 	return fresh, reg
 }
 
 func TestObserveScanDuration_RecordsOneSample(t *testing.T) {
-	fresh, _ := withIsolatedMetrics(t)
+	t.Parallel()
+	fresh, _ := freshMetrics(t)
 
-	done := ObserveScanDuration()
+	done := fresh.ObserveScanDuration()
 	// Minimum sleep to avoid a zero-duration sample that could confuse
 	// bucket boundary assertions. 1ms is the smallest bucket.
 	done()
@@ -47,15 +54,16 @@ func TestObserveScanDuration_RecordsOneSample(t *testing.T) {
 }
 
 func TestScanDirHierarchical_IncrementsScanDuration(t *testing.T) {
-	fresh, _ := withIsolatedMetrics(t)
+	t.Parallel()
+	fresh, _ := freshMetrics(t)
 
 	dir := t.TempDir()
 	writeHierarchicalFixture(t, dir, "90")
 
-	if _, _, _, _, _, err := scanDirHierarchical(dir, nil); err != nil {
+	if _, _, _, _, _, err := scanDirHierarchicalWithMetrics(dir, nil, fresh); err != nil {
 		t.Fatalf("scan: %v", err)
 	}
-	if _, _, _, _, _, err := scanDirHierarchical(dir, nil); err != nil {
+	if _, _, _, _, _, err := scanDirHierarchicalWithMetrics(dir, nil, fresh); err != nil {
 		t.Fatalf("scan: %v", err)
 	}
 
@@ -79,13 +87,14 @@ func TestScanDirHierarchical_IncrementsScanDuration(t *testing.T) {
 }
 
 func TestIncReloadTrigger_AccumulatesPerReason(t *testing.T) {
-	fresh, _ := withIsolatedMetrics(t)
+	t.Parallel()
+	fresh, _ := freshMetrics(t)
 
-	IncReloadTrigger(ReloadReasonSource)
-	IncReloadTrigger(ReloadReasonSource)
-	IncReloadTrigger(ReloadReasonDefaults)
-	IncReloadTriggerBy(ReloadReasonNewTenant, 3)
-	IncReloadTriggerBy(ReloadReasonDelete, 0) // no-op
+	fresh.IncReloadTrigger(ReloadReasonSource)
+	fresh.IncReloadTrigger(ReloadReasonSource)
+	fresh.IncReloadTrigger(ReloadReasonDefaults)
+	fresh.IncReloadTriggerBy(ReloadReasonNewTenant, 3)
+	fresh.IncReloadTriggerBy(ReloadReasonDelete, 0) // no-op
 
 	checks := map[string]float64{
 		ReloadReasonSource:    2,
@@ -105,13 +114,14 @@ func TestIncReloadTrigger_AccumulatesPerReason(t *testing.T) {
 }
 
 func TestIncDefaultsNoop_AccumulatesTotal(t *testing.T) {
-	fresh, _ := withIsolatedMetrics(t)
+	t.Parallel()
+	fresh, _ := freshMetrics(t)
 
-	IncDefaultsNoop()
-	IncDefaultsNoop()
-	IncDefaultsNoopBy(5)
-	IncDefaultsNoopBy(0) // no-op
-	IncDefaultsNoopBy(-1) // no-op (defensive)
+	fresh.IncDefaultsNoop()
+	fresh.IncDefaultsNoop()
+	fresh.IncDefaultsNoopBy(5)
+	fresh.IncDefaultsNoopBy(0) // no-op
+	fresh.IncDefaultsNoopBy(-1) // no-op (defensive)
 
 	if got := testutil.ToFloat64(fresh.defaultsNoop); got != 7 {
 		t.Errorf("expected noop=7, got %v", got)
@@ -123,13 +133,14 @@ func TestIncDefaultsNoop_AccumulatesTotal(t *testing.T) {
 // ============================================================
 
 func TestIncDefaultsShadowed_AccumulatesTotal(t *testing.T) {
-	fresh, _ := withIsolatedMetrics(t)
+	t.Parallel()
+	fresh, _ := freshMetrics(t)
 
-	IncDefaultsShadowed()
-	IncDefaultsShadowed()
-	IncDefaultsShadowedBy(4)
-	IncDefaultsShadowedBy(0)  // no-op
-	IncDefaultsShadowedBy(-2) // no-op (defensive)
+	fresh.IncDefaultsShadowed()
+	fresh.IncDefaultsShadowed()
+	fresh.IncDefaultsShadowedBy(4)
+	fresh.IncDefaultsShadowedBy(0)  // no-op
+	fresh.IncDefaultsShadowedBy(-2) // no-op (defensive)
 
 	if got := testutil.ToFloat64(fresh.defaultsShadowed); got != 6 {
 		t.Errorf("expected shadowed=6, got %v", got)
@@ -137,10 +148,11 @@ func TestIncDefaultsShadowed_AccumulatesTotal(t *testing.T) {
 }
 
 func TestObserveBlastRadius_RecordsBucketAndSumCount(t *testing.T) {
-	fresh, _ := withIsolatedMetrics(t)
+	t.Parallel()
+	fresh, _ := freshMetrics(t)
 
 	// One observation: 21 tenants in (defaults, region, applied).
-	ObserveBlastRadius("defaults", "region", "applied", 21)
+	fresh.ObserveBlastRadius("defaults", "region", "applied", 21)
 
 	text, err := prometheusTextExport(fresh.blastRadius)
 	if err != nil {
@@ -162,10 +174,11 @@ func TestObserveBlastRadius_RecordsBucketAndSumCount(t *testing.T) {
 }
 
 func TestObserveBlastRadius_BucketBoundary(t *testing.T) {
+	t.Parallel()
 	// Verify N=21 lands in bucket le=25 (not le=5) by reading the
 	// Histogram's underlying proto via a per-test registry.
-	fresh, _ := withIsolatedMetrics(t)
-	ObserveBlastRadius("defaults", "region", "applied", 21)
+	fresh, _ := freshMetrics(t)
+	fresh.ObserveBlastRadius("defaults", "region", "applied", 21)
 
 	reg := prometheus.NewRegistry()
 	if err := reg.Register(fresh.blastRadius); err != nil {
@@ -208,10 +221,11 @@ func TestObserveBlastRadius_BucketBoundary(t *testing.T) {
 }
 
 func TestObserveBlastRadius_ZeroIsNoOp(t *testing.T) {
-	fresh, _ := withIsolatedMetrics(t)
+	t.Parallel()
+	fresh, _ := freshMetrics(t)
 
-	ObserveBlastRadius("defaults", "global", "applied", 0)
-	ObserveBlastRadius("defaults", "global", "applied", -5)
+	fresh.ObserveBlastRadius("defaults", "global", "applied", 0)
+	fresh.ObserveBlastRadius("defaults", "global", "applied", -5)
 
 	if got := testutil.CollectAndCount(fresh.blastRadius); got != 0 {
 		t.Errorf("expected 0 metric series after no-op observes, got %d", got)
@@ -219,12 +233,13 @@ func TestObserveBlastRadius_ZeroIsNoOp(t *testing.T) {
 }
 
 func TestObserveBlastRadius_DistinctLabelsCreateDistinctSeries(t *testing.T) {
-	fresh, _ := withIsolatedMetrics(t)
+	t.Parallel()
+	fresh, _ := freshMetrics(t)
 
-	ObserveBlastRadius("defaults", "region", "applied", 1)
-	ObserveBlastRadius("defaults", "region", "shadowed", 1)
-	ObserveBlastRadius("defaults", "region", "cosmetic", 1)
-	ObserveBlastRadius("source", "tenant", "applied", 1)
+	fresh.ObserveBlastRadius("defaults", "region", "applied", 1)
+	fresh.ObserveBlastRadius("defaults", "region", "shadowed", 1)
+	fresh.ObserveBlastRadius("defaults", "region", "cosmetic", 1)
+	fresh.ObserveBlastRadius("source", "tenant", "applied", 1)
 
 	if got := testutil.CollectAndCount(fresh.blastRadius); got != 4 {
 		t.Errorf("expected 4 distinct series, got %d", got)
@@ -236,9 +251,10 @@ func TestObserveBlastRadius_DistinctLabelsCreateDistinctSeries(t *testing.T) {
 // ============================================================
 
 func TestObserveReloadDuration_RecordsOneSample(t *testing.T) {
-	fresh, _ := withIsolatedMetrics(t)
+	t.Parallel()
+	fresh, _ := freshMetrics(t)
 
-	ObserveReloadDuration(150 * time.Millisecond)
+	fresh.ObserveReloadDuration(150 * time.Millisecond)
 
 	text, err := prometheusTextExport(fresh.reloadDuration)
 	if err != nil {
@@ -278,13 +294,14 @@ func TestObserveReloadDuration_RecordsOneSample(t *testing.T) {
 }
 
 func TestObserveDebounceBatch_RecordsBucketBoundary(t *testing.T) {
-	fresh, _ := withIsolatedMetrics(t)
+	t.Parallel()
+	fresh, _ := freshMetrics(t)
 
 	// Three observations across two buckets: 1, 7, 47.
 	// le=1 → 1; le=2 → 1; le=5 → 1; le=10 → 2 (1+7); le=50 → 3 (all);
-	ObserveDebounceBatch(1)
-	ObserveDebounceBatch(7)
-	ObserveDebounceBatch(47)
+	fresh.ObserveDebounceBatch(1)
+	fresh.ObserveDebounceBatch(7)
+	fresh.ObserveDebounceBatch(47)
 
 	reg := prometheus.NewRegistry()
 	if err := reg.Register(fresh.debounceBatch); err != nil {
@@ -323,9 +340,10 @@ func TestObserveDebounceBatch_RecordsBucketBoundary(t *testing.T) {
 }
 
 func TestObserveDebounceBatch_NegativeIsNoOp(t *testing.T) {
-	fresh, _ := withIsolatedMetrics(t)
+	t.Parallel()
+	fresh, _ := freshMetrics(t)
 
-	ObserveDebounceBatch(-1)
+	fresh.ObserveDebounceBatch(-1)
 
 	// Plain Histogram (not HistogramVec) is always present after
 	// registration; assert via sample count, not series count.
@@ -361,10 +379,11 @@ func histogramSampleCount(t *testing.T, h prometheus.Histogram) uint64 {
 // ============================================================
 
 func TestSetLastScanComplete_StoresUnixSeconds(t *testing.T) {
-	fresh, _ := withIsolatedMetrics(t)
+	t.Parallel()
+	fresh, _ := freshMetrics(t)
 
 	t0 := time.Now()
-	SetLastScanComplete(t0)
+	fresh.SetLastScanComplete(t0)
 
 	got := testutil.ToFloat64(fresh.lastScanComplete)
 	if int64(got) != t0.Unix() {
@@ -373,10 +392,11 @@ func TestSetLastScanComplete_StoresUnixSeconds(t *testing.T) {
 }
 
 func TestSetLastReloadComplete_StoresUnixSeconds(t *testing.T) {
-	fresh, _ := withIsolatedMetrics(t)
+	t.Parallel()
+	fresh, _ := freshMetrics(t)
 
 	t0 := time.Now()
-	SetLastReloadComplete(t0)
+	fresh.SetLastReloadComplete(t0)
 
 	got := testutil.ToFloat64(fresh.lastReloadComplete)
 	if int64(got) != t0.Unix() {
@@ -394,15 +414,16 @@ func TestSetLastReloadComplete_StoresUnixSeconds(t *testing.T) {
 // equal IF the sleep happens to span no second boundary, so the
 // assertion is `>=` not `>`.
 func TestSetLastScanComplete_MonotonicAdvance(t *testing.T) {
-	fresh, _ := withIsolatedMetrics(t)
+	t.Parallel()
+	fresh, _ := freshMetrics(t)
 
 	t1 := time.Now()
-	SetLastScanComplete(t1)
+	fresh.SetLastScanComplete(t1)
 	got1 := testutil.ToFloat64(fresh.lastScanComplete)
 
 	time.Sleep(10 * time.Millisecond)
 	t2 := time.Now()
-	SetLastScanComplete(t2)
+	fresh.SetLastScanComplete(t2)
 	got2 := testutil.ToFloat64(fresh.lastScanComplete)
 
 	if got2 < got1 {
@@ -415,13 +436,14 @@ func TestSetLastScanComplete_MonotonicAdvance(t *testing.T) {
 // (per S#32 lesson) — only assert "advanced past scan-start", not
 // "equals exact value".
 func TestScanDirHierarchical_StampsLastScanCompleteOnSuccess(t *testing.T) {
-	fresh, _ := withIsolatedMetrics(t)
+	t.Parallel()
+	fresh, _ := freshMetrics(t)
 	dir := t.TempDir()
 	writeHierarchicalFixture(t, dir, "90")
 
 	scanStart := time.Now().Unix()
 
-	if _, _, _, _, _, err := scanDirHierarchical(dir, nil); err != nil {
+	if _, _, _, _, _, err := scanDirHierarchicalWithMetrics(dir, nil, fresh); err != nil {
 		t.Fatalf("scan: %v", err)
 	}
 
@@ -436,13 +458,14 @@ func TestScanDirHierarchical_StampsLastScanCompleteOnSuccess(t *testing.T) {
 // distinct from a successful completion. Pre-set the gauge to a known
 // value, run a failing scan, assert no movement.
 func TestScanDirHierarchical_DoesNotStampOnError(t *testing.T) {
-	fresh, _ := withIsolatedMetrics(t)
+	t.Parallel()
+	fresh, _ := freshMetrics(t)
 
 	known := time.Unix(1700000000, 0)
-	SetLastScanComplete(known)
+	fresh.SetLastScanComplete(known)
 	before := testutil.ToFloat64(fresh.lastScanComplete)
 
-	if _, _, _, _, _, err := scanDirHierarchical("/nonexistent/path/that/does/not/exist", nil); err == nil {
+	if _, _, _, _, _, err := scanDirHierarchicalWithMetrics("/nonexistent/path/that/does/not/exist", nil, fresh); err == nil {
 		t.Fatal("expected error for nonexistent path")
 	}
 
@@ -455,11 +478,13 @@ func TestScanDirHierarchical_DoesNotStampOnError(t *testing.T) {
 // TestDiffAndReload_StampsLastReloadCompleteOnSuccess verifies the reload
 // gauge advances after a real diffAndReload (delta-based).
 func TestDiffAndReload_StampsLastReloadCompleteOnSuccess(t *testing.T) {
-	fresh, _ := withIsolatedMetrics(t)
+	t.Parallel()
+	fresh, _ := freshMetrics(t)
 	dir := t.TempDir()
 	writeHierarchicalFixture(t, dir, "90")
 
 	m := NewConfigManagerWithDebounce(dir, 0)
+	m.SetMetrics(fresh)
 	defer m.Close()
 	if err := m.Load(); err != nil {
 		t.Fatalf("Load: %v", err)
@@ -489,11 +514,13 @@ func TestDiffAndReload_StampsLastReloadCompleteOnSuccess(t *testing.T) {
 // gauge advanced while the swap was still in progress — exactly what
 // we want to forbid.
 func TestDiffAndReload_StampsAfterAtomicSwap(t *testing.T) {
-	fresh, _ := withIsolatedMetrics(t)
+	t.Parallel()
+	fresh, _ := freshMetrics(t)
 	dir := t.TempDir()
 	writeHierarchicalFixture(t, dir, "90")
 
 	m := NewConfigManagerWithDebounce(dir, 0)
+	m.SetMetrics(fresh)
 	defer m.Close()
 	if err := m.Load(); err != nil {
 		t.Fatalf("Load: %v", err)
@@ -516,12 +543,14 @@ func TestDiffAndReload_StampsAfterAtomicSwap(t *testing.T) {
 // TestDiffAndReload_EmitsMetricsForSourceChange ensures the full pipeline
 // (scan → diff → counter increment) hooks up end-to-end.
 func TestDiffAndReload_EmitsMetricsForSourceChange(t *testing.T) {
-	fresh, _ := withIsolatedMetrics(t)
+	t.Parallel()
+	fresh, _ := freshMetrics(t)
 
 	dir := t.TempDir()
 	writeHierarchicalFixture(t, dir, "90")
 
 	m := NewConfigManagerWithDebounce(dir, 0)
+	m.SetMetrics(fresh)
 	defer m.Close()
 	if err := m.Load(); err != nil {
 		t.Fatalf("Load: %v", err)
