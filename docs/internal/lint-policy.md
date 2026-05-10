@@ -177,14 +177,14 @@ PR 加入新 allowlist entry 時須在 PR description 答：
 
 ### (b) class — ~12 個
 
-| Lint | Allowlist 內容 | scope（須改 diff-only 的）|
+| Lint | Allowlist 內容 | diff-only 狀態 |
 |---|---|---|
-| `check_codename_leak.py` | 技術縮寫（SHA-256, RFC-, ISO-, UTF-8 等 12 條） | ⚠️ 須改 diff-only |
-| `check_repo_name.py` | `/workspaces/vibe-k8s-lab` 等 dev container 路徑 | ⚠️ 須改 diff-only |
-| `check_ad_hoc_git_scripts.py` | `scripts/ops/` 已 sanctioned scripts | ⚠️ 須改 diff-only |
-| `check_changelog_no_tbd.py` | HTML comment 內 / brackets 內的 TBD | ⚠️ 須改 diff-only |
-| `check_bat_ascii_purity.py` | 已知必要 non-ASCII | ⚠️ 須改 diff-only |
-| `check_design_token_usage.py` | hardcoded color allowlist (legacy theme) | ⚠️ 須改 diff-only |
+| `check_codename_leak.py` | 技術縮寫（SHA-256, RFC-, ISO-, UTF-8 等 12 條） | ✅ PR #382 |
+| `check_repo_name.py` | `/workspaces/vibe-k8s-lab` 等 dev container 路徑 | ✅ PR #383 |
+| `check_changelog_no_tbd.py` | HTML comment 內 / brackets 內的 TBD | ✅ PR #383 |
+| `check_ad_hoc_git_scripts.py` | `scripts/ops/` 已 sanctioned scripts | ✅ PR #387 |
+| `check_bat_ascii_purity.py` | 已知必要 non-ASCII | ✅ PR #387（pre-commit `files:` 自然 diff-aware）|
+| `check_design_token_usage.py` | hardcoded color allowlist (legacy theme) | ✅ PR #387 |
 | `check_dev_rules_enforcement.py` | dev-rules 內合法 placeholder | OK（diff-only acceptable） |
 | `check_dist_source_consistency.py` | excluded fixtures | OK |
 | `check_flaky_registry.py` | grandfathered tests | OK |

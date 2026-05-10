@@ -41,16 +41,43 @@ the same rules at pytest time. Defence-in-depth: pre-commit stops bad
 commits locally, pytest catches anything that slipped through or was
 added via the Windows-side ``--no-verify`` escape hatch.
 
+Lint class & scope (lint-policy.md §3)
+--------------------------------------
+Class **(b)** — negative pattern (forbidden bytes / line endings) +
+allowlist scope (only ``scripts/ops/*.bat``). Default invocation is
+already effectively **diff-aware** via pre-commit's ``files:`` filter
+(only staged .bat files reach this hook). For ad-hoc CLI invocation:
+
+* No paths, no flag → diff-aware (only files in current diff vs base)
+* ``--full-scan`` → scan every ``scripts/ops/*.bat``
+* Explicit paths → scan those (pre-commit pass-through)
+
+Bypass (per lint-policy.md §4):
+    Add to PR description body:
+        bypass-lint: bat-ascii-purity
+        reason: <≥30 words explaining why this case is legitimate>
+
 Exit codes
 ----------
-0 = all files OK
+0 = all files OK (or bypass matched)
 1 = one or more .bat files have violations
+2 = diff base ref missing — fix CI workflow's fetch-depth or base ref
 """
 from __future__ import annotations
 
 import argparse
+import os
+import subprocess
 import sys
 from pathlib import Path
+
+# Helpers from this lint family
+sys.path.insert(0, str(Path(__file__).parent))
+from _lint_helpers import (  # noqa: E402
+    DiffBaseMissingError,
+    parse_bypass_tag,
+    resolve_diff_base,
+)
 
 
 def find_repo_root() -> Path:
@@ -117,6 +144,37 @@ def scan_bat(path: Path) -> list[str]:
     return violations
 
 
+def _read_pr_body(pr_body_file: str | None) -> str | None:
+    """Read PR body from --pr-body-file or $PR_BODY env var."""
+    if pr_body_file:
+        try:
+            return Path(pr_body_file).read_text(encoding="utf-8")
+        except (FileNotFoundError, PermissionError) as e:
+            print(f"WARN: cannot read --pr-body-file {pr_body_file}: {e}", file=sys.stderr)
+    return os.environ.get("PR_BODY") or None
+
+
+def _diff_changed_bats(repo: Path, base: str) -> list[Path]:
+    """Return scripts/ops/*.bat changed in current diff vs base."""
+    try:
+        result = subprocess.run(
+            ["git", "diff", "--name-only", "--diff-filter=AM", base, "--",
+             "scripts/ops/*.bat"],
+            capture_output=True, text=True, cwd=str(repo),
+            check=True, timeout=10,
+        )
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return []
+    out: list[Path] = []
+    for rel in result.stdout.splitlines():
+        rel = rel.strip()
+        if rel and rel.endswith(".bat"):
+            full = repo / rel
+            if full.is_file():
+                out.append(full)
+    return out
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
@@ -130,16 +188,41 @@ def main() -> int:
         nargs="*",
         help=(
             "Explicit file paths to check (pre-commit passes the staged .bat "
-            "files here). If empty, scans all scripts/ops/*.bat."
+            "files here). If empty + no flag: diff-only. With --full-scan: "
+            "all scripts/ops/*.bat."
         ),
+    )
+    parser.add_argument(
+        "--full-scan", action="store_true",
+        help="Scan every scripts/ops/*.bat (manual audit; ignores diff).",
+    )
+    parser.add_argument(
+        "--diff-base", default=None,
+        help="Override diff base (default: $LINT_DIFF_BASE / $GITHUB_BASE_REF / origin/main).",
+    )
+    parser.add_argument(
+        "--pr-body-file", default=None,
+        help="Path to file containing PR body for bypass tag check.",
     )
     args = parser.parse_args()
 
     repo = find_repo_root()
+
+    # Determine which .bat files to scan
     if args.paths:
         bat_paths = [Path(p) for p in args.paths]
-    else:
+        scan_mode = "explicit-paths"
+    elif args.full_scan:
         bat_paths = sorted((repo / "scripts" / "ops").glob("*.bat"))
+        scan_mode = "full-scan"
+    else:
+        try:
+            base = args.diff_base or resolve_diff_base()
+        except DiffBaseMissingError as e:
+            print(f"ERROR: {e}", file=sys.stderr)
+            return 2
+        bat_paths = _diff_changed_bats(repo, base)
+        scan_mode = f"diff vs {base}"
 
     # Only apply the rule to scripts/ops/*.bat -- other .bat (e.g. dev-
     # container bind-mount scripts) don't go through Desktop Commander
@@ -166,13 +249,27 @@ def main() -> int:
     if not all_violations:
         return 0
 
+    # Bypass check (lint-policy.md §4)
+    pr_body = _read_pr_body(args.pr_body_file)
+    bypass_reason = parse_bypass_tag(pr_body, "bat-ascii-purity")
+
     print(
         "[check_bat_ascii_purity] FAIL: pitfall #45 rule violated in "
-        f"{len(filtered)} file(s) under scripts/ops/",
+        f"{len(filtered)} file(s) under scripts/ops/ (mode={scan_mode})",
         file=sys.stderr,
     )
     for line in all_violations:
         print(line, file=sys.stderr)
+
+    if bypass_reason:
+        print(
+            f"\n⚠️  BYPASSED via PR body: {bypass_reason}\n"
+            f"   {len(all_violations)} finding(s) above are author-acknowledged.\n"
+            f"   Reviewer must confirm bypass is justified.",
+            file=sys.stderr,
+        )
+        return 0
+
     print(
         "\n  Fix:\n"
         "    * Replace CJK headings in REM comments with ASCII prose, "
@@ -187,7 +284,10 @@ def main() -> int:
         "  byte >= 0x80 corrupts parser state on downstream lines, silently\n"
         "  breaking @echo off / setlocal / goto.\n"
         "\n  See docs/internal/windows-mcp-playbook.md pitfall #45 for the\n"
-        "  full byte-level analysis + dogfood proof.\n",
+        "  full byte-level analysis + dogfood proof.\n"
+        "  Or add to PR description (per lint-policy.md §4):\n"
+        "    bypass-lint: bat-ascii-purity\n"
+        "    reason: <≥30 words explaining why this case is legitimate>\n",
         file=sys.stderr,
     )
     return 1
