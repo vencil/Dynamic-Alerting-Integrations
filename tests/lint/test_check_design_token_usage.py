@@ -239,13 +239,20 @@ class TestScanResults:
 
 class TestCLISubprocess:
     def test_cli_subprocess_with_ci_flag(self):
-        """Test running the script via subprocess with --ci flag."""
+        """Test running the script via subprocess with --ci flag.
+
+        v2.8.0 lint-policy refactor: --full-scan needed because default is
+        now diff-only (lint-policy.md §3 (b) class), and the pytest CI
+        environment may not have a resolvable origin/main ref → exit 2.
+        """
         result = subprocess.run(  # subprocess-timeout: ignore
             [sys.executable, "-m", "scripts.tools.lint.check_design_token_usage",
-             "--ci"],
+             "--full-scan", "--ci"],
             cwd=REPO_ROOT,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
         )
         # The script will scan real project files. If there are violations,
         # exit code should be 1; otherwise 0.
@@ -254,10 +261,13 @@ class TestCLISubprocess:
     def test_cli_subprocess_without_ci_flag(self):
         """Test running the script via subprocess without --ci flag."""
         result = subprocess.run(  # subprocess-timeout: ignore
-            [sys.executable, "-m", "scripts.tools.lint.check_design_token_usage"],
+            [sys.executable, "-m", "scripts.tools.lint.check_design_token_usage",
+             "--full-scan"],
             cwd=REPO_ROOT,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
         )
         # Without --ci, should always exit 0 (display-only mode)
         assert result.returncode == 0
@@ -265,10 +275,13 @@ class TestCLISubprocess:
     def test_cli_output_contains_violations_info(self):
         """Verify script outputs violation information when violations exist."""
         result = subprocess.run(  # subprocess-timeout: ignore
-            [sys.executable, "-m", "scripts.tools.lint.check_design_token_usage"],
+            [sys.executable, "-m", "scripts.tools.lint.check_design_token_usage",
+             "--full-scan"],
             cwd=REPO_ROOT,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
         )
         # Output should contain helpful message or "TOTAL" summary
         assert "✓" in result.stdout or "TOTAL:" in result.stdout or "violation" in result.stdout.lower()

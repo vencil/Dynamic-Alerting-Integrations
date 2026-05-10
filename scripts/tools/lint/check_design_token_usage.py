@@ -40,6 +40,14 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, Tuple
 
+# Make stdout tolerate non-ASCII on Windows shells (cp950 / cp1252) — output
+# uses ✓ + Chinese strings which crash on cp-default consoles otherwise.
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, OSError):
+        pass
+
 # Helpers from this lint family
 sys.path.insert(0, str(Path(__file__).parent))
 from _lint_helpers import (  # noqa: E402
