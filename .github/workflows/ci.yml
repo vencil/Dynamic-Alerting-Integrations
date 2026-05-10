@@ -44,6 +44,12 @@ jobs:
         run: pip install pre-commit pyyaml
 
       - name: Run pre-commit hooks
+        # PR_BODY exposes the PR description body to bypass-aware lints.
+        # check_codename_leak.py reads it for `bypass-lint: codename-leak`
+        # tags per docs/internal/lint-policy.md §4. Empty string on push
+        # events (not a PR) — bypass simply not applicable in that mode.
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
         run: |
           pre-commit run tool-map-check --all-files
           pre-commit run doc-map-check --all-files
@@ -53,6 +59,10 @@ jobs:
           pre-commit run includes-sync --all-files
           pre-commit run platform-data-check --all-files
           pre-commit run repo-name-check --all-files
+          # Codename-leak guard runs in diff-only mode by default (lint-policy
+          # §3 (b) class). resolve_diff_base() auto-picks origin/$GITHUB_BASE_REF
+          # so the fetch-depth: 0 above is sufficient — no extra env wiring.
+          pre-commit run codename-leak-check --all-files
           pre-commit run tool-consistency-check --all-files
           pre-commit run structure-check --all-files
           pre-commit run routing-profiles-check --all-files

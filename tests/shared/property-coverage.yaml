@@ -173,6 +173,10 @@ modules:
       - parse_build_sh_tools
     excluded:
       parse_command_map_keys: "Trivial wrapper around parse_command_map; covered transitively"
+      resolve_diff_base: "Env-var lookup + git rev-parse subprocess wrapper; integration-tested via check_codename_leak --ci runs (smoke verified missing-base error path)"
+      get_diff_added_lines: "Subprocess wrapper around git diff --unified=0; parsing logic split into _parse_unified_zero_diff which has dedicated unit tests in test_check_codename_leak.py::TestDiffParsing"
+      _parse_unified_zero_diff: "Pure parser tested via 5 parametrized cases in test_check_codename_leak.py::TestDiffParsing covering simple add, multi-add hunk, deletion-only, mixed hunks with distinct line numbers, empty input"
+      parse_bypass_tag: "Regex matcher tested via 7 parametrized cases in test_check_codename_leak.py::TestBypassTag covering basic match, optional issue, wrong lint name, case-insensitive, empty body, multi-bypass disambiguation"
 
   scripts/tools/lint/check_flaky_registry.py:
     covered:

@@ -4,12 +4,17 @@
 v2.4.0: Extracted from duplicated code in check_build_completeness.py,
 check_cli_coverage.py, and tests/test_entrypoint.py.
 
+v2.8.0: Added diff-aware helpers for class (b)/(c) lints (per
+docs/internal/lint-policy.md): get_diff_added_lines, resolve_diff_base,
+parse_bypass_tag.
+
 Provides common parsers for entrypoint.py COMMAND_MAP and build.sh TOOL_FILES.
 """
 from __future__ import annotations
 
 import os
 import re
+import subprocess
 from pathlib import Path
 from typing import Dict, Set
 
@@ -102,3 +107,135 @@ def parse_build_sh_tools(path: Path | None = None) -> Set[str]:
                 if name:
                     tools.add(os.path.basename(name))
     return tools
+
+
+# ---------------------------------------------------------------------------
+# Diff-aware lint helpers (lint-policy.md compliance for class b/c lints)
+# ---------------------------------------------------------------------------
+
+
+class DiffBaseMissingError(RuntimeError):
+    """Raised when the diff base ref (e.g. origin/main) cannot be resolved.
+
+    Most common cause: GitHub Actions ``actions/checkout@v4`` defaults to
+    ``fetch-depth: 1`` (shallow clone), which leaves no ``origin/main`` in
+    the CI worker's ``.git`` directory. See ``docs/internal/lint-policy.md``
+    §"GitHub Actions 淺拷貝陷阱" — workflows running diff-aware lints must
+    set ``fetch-depth: 0`` (full history) or explicitly ``git fetch origin
+    <base-ref>`` before invoking the lint.
+    """
+
+
+def resolve_diff_base(env_var: str = "LINT_DIFF_BASE", default: str = "origin/main") -> str:
+    """Return the diff base ref, validating it actually exists locally.
+
+    Resolution order:
+
+    1. ``$LINT_DIFF_BASE`` env var (explicit override; useful for testing
+       a different branch base locally).
+    2. ``origin/$GITHUB_BASE_REF`` (auto-set by GitHub Actions on
+       ``pull_request`` events; means "the branch this PR targets").
+    3. ``origin/main`` default for local dev not on a PR branch.
+
+    Calls ``git rev-parse --verify`` to confirm the ref resolves; raises
+    ``DiffBaseMissingError`` with a fetch-depth hint if not — never
+    silently falls through to "scan everything", which would defeat the
+    diff-aware purpose per lint-policy.md.
+    """
+    base = os.environ.get(env_var)
+    if not base:
+        gh_base = os.environ.get("GITHUB_BASE_REF")
+        if gh_base:
+            base = f"origin/{gh_base}"
+        else:
+            base = default
+    result = subprocess.run(
+        ["git", "rev-parse", "--verify", "--quiet", f"{base}^{{commit}}"],
+        capture_output=True, text=True, cwd=str(REPO_ROOT), timeout=10,
+    )
+    if result.returncode != 0:
+        hint_branch = base.removeprefix("origin/")
+        raise DiffBaseMissingError(
+            f"git diff base ref '{base}' does not resolve in this repo.\n"
+            f"  - In CI: ensure actions/checkout@v4 uses fetch-depth: 0\n"
+            f"    (or `git fetch origin {hint_branch}` before lint)\n"
+            f"  - Locally: ensure you have an up-to-date `origin/main`\n"
+            f"    (run `git fetch origin main`)\n"
+            f"  - Override with $LINT_DIFF_BASE if your base branch differs\n"
+            f"  See docs/internal/lint-policy.md §\"GitHub Actions 淺拷貝陷阱\""
+        )
+    return base
+
+
+_HUNK_HEADER_RE = re.compile(r"^@@\s+-\d+(?:,\d+)?\s+\+(\d+)(?:,(\d+))?\s+@@")
+
+
+def _parse_unified_zero_diff(diff_text: str) -> list:
+    """Parse `git diff --unified=0` output and return added lines with line numbers."""
+    added = []
+    current_lineno = None
+    for line in diff_text.splitlines():
+        if line.startswith("@@"):
+            m = _HUNK_HEADER_RE.match(line)
+            current_lineno = int(m.group(1)) if m else None
+            continue
+        if current_lineno is None:
+            continue
+        if line.startswith("+++") or line.startswith("---"):
+            continue
+        if line.startswith("+"):
+            added.append((current_lineno, line[1:]))
+            current_lineno += 1
+        elif line.startswith("-"):
+            pass  # deleted lines don't advance new-file line counter
+        else:
+            current_lineno += 1  # context line — guard for non-unified=0
+    return added
+
+
+def get_diff_added_lines(file_path: Path, base: str) -> list:
+    """Return ``[(line_no, content), ...]`` for lines ADDED in current diff vs ``base``.
+
+    Parses ``git diff --unified=0`` hunks. Existing (unchanged) lines and
+    removed (``-``) lines are not returned. ``line_no`` is the line number
+    in the *current* (post-diff) file, suitable for citing in lint errors.
+
+    Returns ``[]`` if the file is identical to base. Returns all file lines
+    if the file is newly added in this diff (no base version).
+    """
+    if file_path.is_absolute():
+        try:
+            rel = file_path.relative_to(REPO_ROOT)
+        except ValueError:
+            rel = file_path
+    else:
+        rel = file_path
+    result = subprocess.run(
+        ["git", "diff", "--unified=0", "--no-color", base, "--", str(rel)],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        cwd=str(REPO_ROOT), check=True, timeout=30,
+    )
+    return _parse_unified_zero_diff(result.stdout)
+
+
+# PR-body bypass tag matcher per lint-policy.md §4. CI workflows pass
+# ${{ github.event.pull_request.body }} via env var or file flag.
+_BYPASS_TAG_RE = re.compile(
+    r"bypass-lint:\s*(?P<lint_name>[\w-]+)\s*\n\s*reason:\s*(?P<reason>.+?)(?=\n\s*issue:|\n\s*\n|\Z)",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def parse_bypass_tag(pr_body, lint_name: str):
+    """Return the bypass reason if ``pr_body`` contains a valid ``bypass-lint:
+    <lint_name>`` block, else None.
+
+    Spec from lint-policy.md §4: tag must be on its own line, followed by
+    ``reason:`` line. Optional ``issue: #NN`` after. Matched case-insensitively.
+    """
+    if not pr_body:
+        return None
+    for m in _BYPASS_TAG_RE.finditer(pr_body):
+        if m.group("lint_name").lower() == lint_name.lower():
+            return m.group("reason").strip()
+    return None
