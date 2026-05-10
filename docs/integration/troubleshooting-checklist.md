@@ -202,7 +202,7 @@ kubectl exec <new-vmagent-pod> -- wget -qO- localhost:8429/metrics | \
 - §1.4.1 vmagent OOMKilled（buffer 累積到 OOM 是這節的下游延伸）
 - §1.4.2 Prom OOM / vminsert 503（Option 2 路徑的同類問題）
 - §1.4.3 VM disk 撐爆（vminsert 5xx 最常見根因）
-- playbook §12 Phase 1 catalog row 7「vmagent `pending_data_bytes` 長期 > 0」
+- playbook §12 Phase 1: vmagent `pending_data_bytes` 長期 > 0
 
 ---
 
@@ -299,7 +299,7 @@ diff <(kubectl get cm am-config -o yaml) <previous-am-config>
 **If not this**：
 - AM `null` receiver 還在 catch shadow → 但 rule label 已拔，理論上不該 match shadow matcher。除非 routing 順序有 fall-through bug → 見 §1.3.1
 
-**Cross-ref**：playbook §6 Phase 3 narrative「常見錯誤：以為要改 AM config」+ playbook §12 Phase 3 catalog row 1
+**Cross-ref**：playbook §6 Phase 3 narrative「常見錯誤：以為要改 AM config」+ playbook §12 Phase 3: Canary tenant 真的 fire alert
 
 ---
 
@@ -405,7 +405,7 @@ da-tools silencer-drift-check \
 
 **Cross-ref**：
 - playbook §6 Phase 3 narrative「Disablement drift」
-- playbook §12 Phase 3 catalog row 4
+- playbook §12 Phase 3: AM silencer 對 v1 alertname mismatch v2
 - [staged-adoption-guide §7.3](../scenarios/staged-adoption-guide.md) — disablement drift 機制詳解（Rule Pack 升版時也是同一套，cutover 是首次套用）
 
 ---
@@ -622,7 +622,7 @@ relabel_configs:
 - (c) disk 增速跟 metric ingest 不匹配（增速異常）→ 可能是 background merge 失敗、index 重建，VM log 找 `merge` / `index` keyword
 
 **Cross-ref**：
-- playbook §12 Phase 1 catalog row 2「VM disk 撐爆」
+- playbook §12 Phase 1: VM disk 撐爆
 - playbook §4 disk budget formula（Phase 1 narrative）
 - [VM Capacity Calculator](https://docs.victoriametrics.com/Single-server-VictoriaMetrics.html#capacity-planning)
 
@@ -831,7 +831,7 @@ kubectl exec <am-pod> -- wget -qO- 'localhost:9093/api/v2/alerts?filter=alertnam
 - (c) 整個 reload 系統都卡（兩 replica 都不 reload）→ Prometheus Operator 自己卡住；`kubectl rollout restart deployment prometheus-operator`
 
 **Cross-ref**：
-- playbook §12 Phase 3 catalog row 2「Rule reload race」
+- playbook §12 Phase 3: Rule reload race
 - §13 walkthrough Phase 3「全量切換期 HA Prom 兩 pod 中一個 SIGHUP 失敗」（真實案例）
 - §1.2.1（單 replica reload 沒生效，與本節不同情境）
 
@@ -946,7 +946,7 @@ curl -sH "Authorization: Bearer $GRAFANA_TOKEN" \
 
 **Cross-ref**：
 - playbook §6 Phase 3 narrative「Grafana Datasource 切換」
-- playbook §12 Phase 4 catalog row 1「舊 Prom 關閉後某 Grafana dashboard 全紅」
+- playbook §12 Phase 4: 舊 Prom 關閉後某 Grafana dashboard 全紅
 - §13 walkthrough Phase 4「Grace Period 救了所有人」
 
 ---
@@ -1029,7 +1029,7 @@ kubectl rollout restart deployment vmagent -n <vmagent-ns>
 - (c) drift 來自 dual-write 期間正常的 retention 差異（Prom 已 GC 部分舊 data, VM 仍保留）→ 限定 query window 一致再比
 
 **Cross-ref**：
-- playbook §12 Phase 1 catalog row 5「dual-write metric drift > 5%」
+- playbook §12 Phase 1: dual-write metric drift > 5%
 - playbook §10 Gate 1 invariant 設計
 - playbook §4 Option 1 vs Option 2 narrative（Option 1 有 vmagent 自己的 scrape config，relabel 對齊是必檢項）
 
@@ -1107,7 +1107,7 @@ grep -rE 'ALERTS\{|alert_count' grafana-dashboards/
 - (c) SLO 定義模糊到只能用 alert 反推 → 與業務溝通正名 SLI；無捷徑
 
 **Cross-ref**：
-- playbook §12 Phase 3 catalog row 5「客戶 SLO calculation 因 alert volume 突降而誤判」
+- playbook §12 Phase 3: 客戶 SLO calculation 因 alert volume 突降而誤判
 - §13 walkthrough Phase 3「SLO 誤判」（真實案例：50→5 critical alert 客戶 SRE 花 3 天改 SLO 邏輯）
 - [Google SRE Workbook §3 — Implementing SLOs](https://sre.google/workbook/implementing-slos/)（SLI 設計原則）
 
@@ -1215,7 +1215,7 @@ jq '.discovery.tier_a_static.tenant_id_violations | length' /tmp/state.json
 - (c) violation 在 alert annotation 而非 expr → 可接受（annotation 是給 humans 看的不參與 routing）
 
 **Cross-ref**：
-- playbook §12 Phase 0 catalog row 3「Tier A 抓到 hardcoded tenant id」
+- playbook §12 Phase 0: Tier A 抓到 hardcoded tenant id
 - [`docs/internal/dev-rules.md`](../internal/dev-rules.md) #2 Tenant-Agnostic
 - playbook §3 Phase 0 narrative「客戶 Phase 0 通常的 surprise」
 
@@ -1295,7 +1295,7 @@ diff <(jq -r '.discovery.tier_a_static.orphan_rules[].name' /tmp/state.json | so
 - (c) Orphan 規則正在 fire 但客戶 ops 不確定該 prune 還是修 → **不要 prune**！先補 route 到一個臨時 channel（如 platform team 的 audit channel）觀察 1 週、確認 alert 是否真的需要
 
 **Cross-ref**：
-- playbook §12 Phase 0 catalog row 2「Tier A 撈到 100+ orphan rules」
+- playbook §12 Phase 0: Tier A 撈到 100+ orphan rules
 - playbook §3 Phase 0 narrative「Phase 0 通常的 surprise」（orphan 是最常見的客戶 surprise）
 - §2.2 da-guard 4-layer（Schema 層也會抓 receiver mismatch 之類的 orphan）
 
