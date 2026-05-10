@@ -80,7 +80,7 @@ filter_known() {
         | grep -v "mkdocs_static_i18n.*navigation.instant" \
         | grep -v "Excluding.*README.md.*conflicts with.*index.md" \
         | grep -vE "contains a link '\\./[^']+\\.en\\.md'" \
-        | grep -vE "Doc file 'CHANGELOG\\.md' contains a link 'docs/benchmarks\\.md" \
+        | grep -vE "Doc file 'CHANGELOG\\.md' contains a link 'docs/[^']+\\.md" \
         | grep -v "component-health-snapshot\\.json" \
         || true
 }
@@ -94,9 +94,13 @@ filter_known() {
 #   3. In-page language-switcher banners (./*.en.md) — handled correctly by
 #      static_i18n locale routing; mkdocs core still flags as missing.
 #      v2.7.1 doc hygiene added these to 101 files (113 nav issues → 0)
-#   4. CHANGELOG.md → docs/benchmarks.md link — CHANGELOG lives at repo root
-#      but is surfaced in MkDocs via docs/CHANGELOG.md symlink. Path is
-#      correct from GitHub viewer's POV; only MkDocs trips. Dual-purpose link
+#   4. CHANGELOG.md → docs/<any>.md links — CHANGELOG lives at repo root but is
+#      surfaced in MkDocs via docs/CHANGELOG.md symlink. The `docs/` prefix is
+#      correct from the GitHub viewer's POV (where CHANGELOG.md sits beside
+#      docs/), but MkDocs uses site-root semantics so `docs/X.md` resolves to
+#      a non-doc path. Dual-purpose links are unavoidable as long as CHANGELOG
+#      is rendered both on github.com and the MkDocs site. Generalised in PR
+#      #375 from the v2.7.1 single-target form (docs/benchmarks.md only).
 #   5. component-health-snapshot.json — gitignored regenerated artifact
 #      (component-health.jsx dashboard SSOT pointer for local users); committing
 #      a stale snapshot would create worse drift than the warning
