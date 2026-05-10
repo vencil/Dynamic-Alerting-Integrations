@@ -804,12 +804,12 @@ Tier C 不可用（無 Thanos / VM-long-retention / ELK alert log）。可接受
 
 #### Phase 1：Pre-flight — vmagent OOM、namespace collision、scope 縮小（4 週）
 
-VM topology 選 vmsingle（< 5M series 不需要 vmcluster）。disk budget 算 8 bytes/series/day × 4M × 30 days × 1.5 = ~1.4TB SSD per cluster，客戶 4 cluster 預算 ~6TB。
+VM topology 選 vmsingle（< 5M series 不需要 vmcluster）。disk budget 用對的公式：`0.7 byte/dp × 5760 dp/day (15s scrape) × 4M series × 30 days × 1.5 buffer ≈ 725GB SSD per cluster`，4 cluster 預算 ~3TB。客戶 SRE 一開始套用網路上某 blog 的 `8 bytes/series/day` 公式估出 < 4GB（顯然錯）；platform team 介入修正、引導用 [VM Capacity Calculator](https://docs.victoriametrics.com/Single-server-VictoriaMetrics.html#capacity-planning) 校驗。
 
-dual-write 走 Option 1 vmagent fan-out。第一週踩坑：
+dual-write 走 Option 1 Side-by-Side Dual Scrape：舊 Prom 完全不動、並行新部署一組 vmagent 抓同 targets + remote_write 給 VM。第一週踩坑：
 
-- **vmagent OOMKilled**：初次 dual-write、64Mi memory limit、4M series 直接撐爆。bump 到 1Gi + reduce `-remoteWrite.maxBlockSize` 後穩定（→ catalog Phase 1 第 1 條 anchor 對應）
-- **prod-apac vmagent 在 prod-us VM 看不到 metric**：firewall block 跨 region remote_write，NetworkPolicy 沒開 8480。客戶 network team 介入花 1 週才開通（→ catalog Phase 1 第 6 條 anchor 對應）
+- **vmagent OOMKilled**：初次部署用預設 64Mi memory limit、4M series 直接撐爆。bump 到 1Gi + reduce `-remoteWrite.maxBlockSize` 後穩定（→ catalog Phase 1 第 1 條 anchor 對應）
+- **prod-apac vmagent 抓不到 threshold-exporter metric**：NetworkPolicy ingress 沒開 exporter pod 8080 port 來自 vm NS 的流量。vmagent target page 顯示 `DOWN`、`scrape_duration_seconds` timeout。客戶 network team 介入 1 週才開通（→ catalog Phase 1 第 6 條 NetworkPolicy ingress anchor 對應）
 
 threshold-exporter 部署到 staging-eu，`user_threshold` metric 出現在 VM、確認可查。**故意不接 AM**（Phase 2 才接）。
 
