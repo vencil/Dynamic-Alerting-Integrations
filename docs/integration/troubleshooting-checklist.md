@@ -434,32 +434,77 @@ kubectl get statefulset <vm-sts> -o yaml | grep -A2 retentionPeriod
 
 **最常見原因**：**cardinality 估算嚴重失誤**——客戶宣稱 10k tenant labels 實際因 multi-region label combination 達 100k+。次常見：dual-write 期間 doubling 撞 cardinality 上限沒人盯。
 
-**Fix 路徑（依緊急程度）**：
+**Fix 路徑（依緊急程度，順序錯會自爆）**：
+
+> ⚠️ **極重要的 LSM 自爆陷阱**：VictoriaMetrics 是 LSM-tree 結構，background merge **需要先寫入合併後的新 block，才會刪除舊 block**（write amplification）。Disk > 95% 時若觸發 merge（包括縮 retention 重啟），VM 會在幾秒內把剩餘空間吃光、報 `no space left on device` 直接 crash、index 損壞。**Disk usage 是決定處置順序的唯一因素**，不是「緊急程度」。
+
+##### Disk > 95%（紅區）— 只有擴容是安全的
 
 ```bash
-# 立即（disk 已 > 95%，避免 crash）：暫時縮 retention
-# vmsingle: 重啟參數
-# -retentionPeriod=30d → -retentionPeriod=14d
-# 重啟會觸發 background merge 釋放空間（小時級）
-
-# 中期：加 disk
+# 唯一安全選項：PVC expand（需 StorageClass 支援 allowVolumeExpansion）
 kubectl edit pvc <vm-pvc>
-# 改 spec.resources.requests.storage（需 StorageClass 支援 expand）
+# 改 spec.resources.requests.storage 加 ~30%（例 1Ti → 1.5Ti）
+# 等 ~1-5 分鐘 PV 擴容完成（雲廠商側操作）
+kubectl get pvc <vm-pvc> -o jsonpath='{.status.capacity.storage}'
+# expected: 看到新值
+```
 
-# 長期：找出 high-cardinality label 並 drop
-# vmagent relabel 拋棄不必要 label：
-- action: labeldrop
-  regex: pod_template_hash|controller-revision-hash|<其他 noise>
+**若 StorageClass 不支援 expand 或 quota 卡住，最後手段（破壞性）**：
 
-# vmagent 也可整段 drop noisy metric
-- action: drop
-  source_labels: [__name__]
-  regex: container_(network|fs)_.+_total
+```bash
+# ☢️ 危險操作 — 手動刪舊 partition，會永久失去那段時間的資料
+# 僅在「已確認 PVC expand 完全不可行 + crash 在即」時使用
+
+# 1. exec 進 vmsingle / vmstorage pod
+kubectl exec -it <vm-pod> -- sh
+
+# 2. 列 partition（VM 預設按月分區，"YYYY_MM" 命名）
+ls -la /vm-data/data/small/  # 或 /vmstorage/data/small/ for vmcluster
+# expected: 2024_01/ 2024_02/ ...
+
+# 3. 找最舊的 partition（避開當前月）
+# 4. ☢️ 確認真的不再需要該段資料（compliance / audit / cold-storage backup 已完成）
+rm -rf /vm-data/data/small/2024_01
+
+# 5. VM 自動偵測 partition 移除、釋放 disk inode
+# 6. 重啟 vmsingle 確認 schema 一致
+```
+
+**為什麼縮 retention 在紅區是錯的**：
+- Retention shrink 觸發 merge 處理 partition pruning → merge 需要 >= 該 partition 大小的暫存空間
+- VM 預設按**月**分 partition（`-retentionPeriod=30d` 不會立刻刪今天的資料、只會刪整個過期月）
+- Disk 已紅區 = 沒有 buffer 給 merge 跑 → 立即 ENOSPC
+
+##### Disk 80-95%（橙區）— retention shrink 安全
+
+```bash
+# 此時還有 buffer 讓 merge 寫新 block，retention shrink 是合理選項
+# vmsingle 重啟參數
+# -retentionPeriod=30d → -retentionPeriod=14d
+kubectl edit statefulset <vmsingle-sts>
+# 改 spec.template.spec.containers[0].args
+
+# 重啟觸發 background merge 釋放（依 partition 大小，數十分鐘到數小時）
+# 期間 disk usage 會先**短暫上升**再下降（merge write amplification 正常現象）
+```
+
+##### Disk < 80%（綠區）— 結構性處理
+
+```yaml
+# 找出 high-cardinality label 並 drop（vmagent 端）
+relabel_configs:
+  - action: labeldrop
+    regex: pod_template_hash|controller-revision-hash|<其他 noise>
+
+# 整段 drop noisy metric
+  - action: drop
+    source_labels: [__name__]
+    regex: container_(network|fs)_.+_total
 ```
 
 **If not this**：
 - (a) disk 已 100%、VM crash 起不來 → 走 [VM 官方 disaster recovery](https://docs.victoriametrics.com/Single-server-VictoriaMetrics.html#data-recovery)；emergency 模式：`-storageDataPath` 指到新空盤啟 VM、舊 data 用 `vmctl` 慢慢匯入
-- (b) cardinality 暴漲是 **single bad metric** 引入（template metric label 沒 set）→ 直接 vmagent drop 該 metric 立竿見影
+- (b) cardinality 暴漲是 **single bad metric** 引入（template metric label 沒 set）→ vmagent drop 該 metric 立竿見影；但**仍須先擴容 disk**才能跑 merge
 - (c) disk 增速跟 metric ingest 不匹配（增速異常）→ 可能是 background merge 失敗、index 重建，VM log 找 `merge` / `index` keyword
 
 **Cross-ref**：
@@ -511,15 +556,60 @@ curl -sH "Authorization: Bearer $GRAFANA_TOKEN" \
 
 **Fix 兩階段**：
 
+##### 階段 1（立即止血）：grace period 舊 Prom 自動 fallback
+
 ```bash
-# 階段 1（立即止血）：如果舊 Prom 仍在 grace period（read-only 但活著）
+# 如果舊 Prom 仍在 grace period（read-only 但活著）
 # → dashboard 自動 fallback 不需動，先確認舊 datasource 仍可 query
 curl -sH "Authorization: Bearer $GRAFANA_TOKEN" \
     -X POST https://grafana.example.com/api/datasources/uid/<legacy-prom-uid>/health
 # expected: {"status": "OK"} → dashboard 仍可運作、安心 defer
+```
 
-# 階段 2（根除）：批次改 hardcoded UID
-# 對每個 dashboard 跑：
+##### 階段 2（根除）：先確認 dashboard 部署機制再選工具
+
+> ⚠️ **GitOps 校正回歸警告**：在 K8s 環境 dashboard 通常透過 **Grafana sidecar (kube-prometheus-stack)** 從 `ConfigMap` 動態載入；或 **ArgoCD / Flux 直接管 Grafana CRD**。如果用 Grafana API `POST /api/dashboards/db` 強制覆寫，**3-5 分鐘後** GitOps reconcile 會把 Git/ConfigMap 內舊 JSON sync 蓋回來、dashboard 又壞掉、on-call 陷入「修了又壞」無限輪迴。
+
+**先 grep 部署機制**：
+
+```bash
+# 1. 檢查 dashboard 是否由 ConfigMap provisioning
+kubectl get cm -n <grafana-ns> -l grafana_dashboard=1 -o name | head
+# 有結果 = sidecar provisioning，必須改 source 不是改 API
+
+# 2. 或檢查 ArgoCD Application
+kubectl get application -A | grep -i grafana
+# 有 result = ArgoCD 管，必須改 Git repo
+
+# 3. 或用 Grafana API 看 dashboard origin
+curl -sH "Authorization: Bearer $GRAFANA_TOKEN" \
+    https://grafana.example.com/api/dashboards/uid/<dash-uid> | \
+    jq '.meta | {provisioned, provisionedExternalId, isFolder, slug}'
+# .provisioned = true → 由 sidecar / file provisioner 部署，API 改不了
+```
+
+**Path A — Provisioned dashboard（GitOps / sidecar）**：必須改 source
+
+```bash
+# 1. clone Git repo
+git clone <dashboard-repo> && cd <repo>
+
+# 2. 改 dashboard JSON，全文 grep 改 UID
+find . -name "*.json" -exec sed -i 's/"<old-uid>"/"<new-uid>"/g' {} \;
+# 注意 sed -i 在 macOS / 部分檔案系統有差異，跨平台用 ripgrep + python 更穩
+
+# 3. PR + merge
+git add . && git commit -m "fix: migrate dashboard datasource UID old→new"
+git push origin <branch>
+# 4. 等 ArgoCD / sidecar reconcile（通常 < 5 分鐘）
+```
+
+**Path B — UI-created dashboard 或緊急臨時止血**：API overwrite
+
+```bash
+# 僅適用 .meta.provisioned == false 的 dashboard
+# 或客戶確認接受 "GitOps 會在 N 分鐘後蓋回，這是臨時止血" 的場景
+
 curl -sH "Authorization: Bearer $GRAFANA_TOKEN" \
     https://grafana.example.com/api/dashboards/uid/<dash-uid> | \
     jq '.dashboard | walk(if type == "object" and .uid == "<old-uid>" then .uid = "<new-uid>" else . end)' | \
@@ -530,11 +620,13 @@ curl -sH "Authorization: Bearer $GRAFANA_TOKEN" \
         https://grafana.example.com/api/dashboards/db
 ```
 
+**改完 audit**：跨整個 Git repo（Path A）或整個 Grafana instance（Path B）跑 `grep -rE '"uid":\s*"<old-uid>"'`，確保歸 0。
+
 **重點警告**：
 
-- **不要在 CAB freeze 期跑階段 2**——批次改 30+ dashboard 過不了 enterprise change review。grace period 的舊 Prom 是天然防禦，先靠它撐到 freeze 結束
-- **不要靠 Grafana UI bulk migrate**——它通常只改 panel-level datasource，hardcoded UID 在 JSON 內漏抓
-- 改完 audit：再跑一輪 `grep -E '"uid":\s*"<old-uid>"'` over all dashboard JSON，確保歸 0
+- **不要在 CAB freeze 期跑 Path A 的 PR + sync**——批次改 30+ dashboard 過不了 enterprise change review。grace period 的舊 Prom 是天然防禦，先靠它撐到 freeze 結束
+- **不要靠 Grafana UI bulk migrate**——它通常只改 panel-level datasource，hardcoded UID 在 JSON 內角落漏抓
+- **Path B 後若發現 dashboard 又變回舊 UID** = 部署機制其實是 provisioned，要改走 Path A
 
 **If not this**：
 - (a) datasource 還在但 query 仍 fail → 檢查 datasource 連線（健康檢查 endpoint）、auth header 是否變動
@@ -559,25 +651,44 @@ curl -sH "Authorization: Bearer $GRAFANA_TOKEN" \
 
 **Quick diagnosis**：
 
-```bash
-# 1. 取兩邊同個 metric 的 series count（10 分鐘 window 平均，避免單點 flap）
-PROM_COUNT=$(kubectl exec <prom-pod> -- wget -qO- \
-    'localhost:9090/api/v1/query?query=count(up)' | jq '.data.result[0].value[1] | tonumber')
-VM_COUNT=$(kubectl exec <vmselect-pod> -- wget -qO- \
-    'localhost:8481/select/0/prometheus/api/v1/query?query=count(up)' | jq '.data.result[0].value[1] | tonumber')
-echo "Prom: $PROM_COUNT, VM: $VM_COUNT, drift: $(awk "BEGIN{printf \"%.2f%%\", ($VM_COUNT-$PROM_COUNT)/$PROM_COUNT*100}")"
+> ⚠️ **不要用 `count(up)` 算 drift**——`up` 計的是 **scrape target 數**，不是 series 數。Prom 與 vmagent 各自抓 100 個 target，`count(up)` 都會 = 100、drift = 0%。但若 vmagent relabel 把某 target 的 50k 個 `staging_only_*` series drop 掉，這 50k 落差 `count(up)` 完全看不到。Drift detection 必須查**真正的 series count 或 ingest rate**。
 
-# 2. 找出哪些 metric 在 VM 多 / 少（用 promtool diff 或手動）
-# 列舉 Prom 有但 VM 沒有
+```bash
+# 1. 用 storage 端的真實 series count（最準）
+PROM_SERIES=$(kubectl exec <prom-pod> -- wget -qO- \
+    'localhost:9090/api/v1/query?query=prometheus_tsdb_head_series' | \
+    jq '.data.result[0].value[1] | tonumber')
+# VM 端：vmsingle 看 vm_cache_entries，vmstorage 看 vmstorage_cache_entries
+VM_SERIES=$(kubectl exec <vmsingle-pod> -- wget -qO- \
+    'localhost:8428/api/v1/query?query=vm_cache_entries{type="storage/hour_metric_ids"}' | \
+    jq '.data.result[0].value[1] | tonumber')
+echo "Prom: $PROM_SERIES, VM: $VM_SERIES, drift: $(awk "BEGIN{printf \"%.2f%%\", ($VM_SERIES-$PROM_SERIES)/$PROM_SERIES*100}")"
+
+# 2. 替代：比對 ingest rate（post-relabel sample rate，反映真實流入量）
+# Prom 端
+kubectl exec <prom-pod> -- wget -qO- \
+    'localhost:9090/api/v1/query?query=sum(rate(scrape_samples_post_metric_relabeling[5m]))'
+# vmagent 端
+kubectl exec <vmagent-pod> -- wget -qO- \
+    'localhost:8429/api/v1/query?query=sum(rate(vmagent_remotewrite_samples_sent_total[5m]))'
+# 兩者差 > 5% = drift；對短週期飆升 / 掉點更敏感
+
+# 3. 找出哪些 metric 在 VM 多 / 少（series-level diff）
 diff <(kubectl exec <prom-pod> -- wget -qO- 'localhost:9090/api/v1/label/__name__/values' | jq -r '.data[]' | sort) \
      <(kubectl exec <vmselect-pod> -- wget -qO- 'localhost:8481/select/0/prometheus/api/v1/label/__name__/values' | jq -r '.data[]' | sort) | \
     head -50
+# 列舉只在某一側存在的 metric name（typically Prom 有 vmagent drop 的）
 
-# 3. 比對 vmagent 與 Prom 的 scrape config
+# 4. 比對 vmagent 與 Prom 的 scrape / relabel config
 kubectl get cm vmagent-config -o yaml | grep -A3 'relabel'
 kubectl get cm prometheus-config -o yaml | grep -A3 'relabel'
 # 找差異
 ```
+
+**為什麼 step 1 用兩個不同 query**：
+- Prom 端：`prometheus_tsdb_head_series` 是 Prom 內部 metric、直接讀 storage head TS count、零誤差
+- VM 端：`vm_cache_entries{type="storage/hour_metric_ids"}` 是 VM 內部、讀 hour-level metric ID cache、近似於 active series count（>= 真實 series count，但 ratio 用來算 drift 仍精確）
+- 兩者都繞過 `count(up)` target-counting trap
 
 **最常見原因**：**vmagent relabel 與 Prom relabel 不同步**——客戶 Prom 端有一條 `__tmp_metric_name` 拋棄 staging-only metric 的 relabel rule，vmagent scrape config 抄漏了。VM 比 Prom 多 5-8% metric → drift fail。
 
