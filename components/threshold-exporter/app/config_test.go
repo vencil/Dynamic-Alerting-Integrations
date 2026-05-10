@@ -238,6 +238,7 @@ func TestClampDuration(t *testing.T) {
 // ============================================================
 
 func TestWatchLoop_Integration(t *testing.T) {
+	t.Parallel()
 	// Create temporary directory with initial config
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.yaml")
@@ -262,9 +263,11 @@ tenants:
 		t.Errorf("initial default: expected 80, got %.0f", cfg.Defaults["mysql_connections"])
 	}
 
-	// Start WatchLoop with short interval
-	stopCh := make(chan struct{})
-	go mgr.WatchLoop(100*time.Millisecond, stopCh)
+	// FakeClock + helper handles deterministic ticker registration AND
+	// clean goroutine shutdown. Replaces the previous wall-clock
+	// time.NewTicker poll loop + time.Sleep(200ms) tail (#4c-F).
+	fakeClock, stop := startWatchLoopWithFakeClock(t, mgr, 100*time.Millisecond)
+	defer stop()
 
 	// Modify config file
 	updatedContent := `
@@ -276,28 +279,19 @@ tenants:
 `
 	writeTestFile(t, dir, "config.yaml", updatedContent)
 
-	// Poll for config change with timeout
-	deadline := time.After(3 * time.Second)
-	ticker := time.NewTicker(50 * time.Millisecond)
-	defer ticker.Stop()
+	// Fire one tick → tickOnce → loadFile (single-file mode) → cfg
+	// committed.
+	fakeClock.Advance(100 * time.Millisecond)
 
-	var changed bool
-	for {
-		select {
-		case <-deadline:
-			t.Fatal("timeout waiting for config change")
-		case <-ticker.C:
-			cfg := mgr.GetConfig()
-			if cfg.Defaults["mysql_connections"] == 90 {
-				changed = true
-			}
-			if changed {
-				break
-			}
-		}
-		if changed {
-			break
-		}
+	// State-poll for the reload to commit. Polling on observable
+	// state (not on time) is the deterministic substitute for the
+	// previous time.NewTicker(50ms) busy-loop with 3s deadline.
+	if !waitFor(t, 3*time.Second, func() bool {
+		c := mgr.GetConfig()
+		return c != nil && c.Defaults["mysql_connections"] == 90
+	}) {
+		t.Fatalf("timeout waiting for config change; got %v",
+			mgr.GetConfig().Defaults["mysql_connections"])
 	}
 
 	// Verify updated config
@@ -308,10 +302,6 @@ tenants:
 	if cfg.Tenants["db-a"]["mysql_connections"].Default != "75" {
 		t.Errorf("updated tenant value: expected 75, got %s", cfg.Tenants["db-a"]["mysql_connections"].Default)
 	}
-
-	// Stop WatchLoop
-	close(stopCh)
-	time.Sleep(200 * time.Millisecond) // Allow goroutine to exit
 }
 
 // endregion
