@@ -205,7 +205,7 @@ sequenceDiagram
 
 **其他**：
 - Canary 比例 + 觀察窗：5% × 24h 是 minimum；推薦 **跨 1 個 ops cycle (typically 1 week)** 抓 weekly / monthly alerts
-- Connect：**staged adoption**（custom_ → golden）由獨立 **Staged Adoption Lifecycle** (`docs/scenarios/staged-adoption-guide.md`，I-2 待 ship 為 [PR #391](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/391)) 處理；**本 Phase 不重複那段內容**，只做 cutover 的 label flip
+- Connect：**staged adoption**（custom_ → golden）由獨立 [Staged Adoption Lifecycle](staged-adoption-guide.md) 處理；**本 Phase 不重複那段內容**，只做 cutover 的 label flip
 
 ### Cutover Checklist
 
@@ -246,7 +246,7 @@ sequenceDiagram
 ### 30 秒 TL;DR
 - 舊 Prom 進入 read-only（停 alerting evaluation）
 - N 天 grace period 後關 Prom
-- 漸進啟用 `_defaults.yaml` metric-split feature（連 **Staged Adoption Guide** (`docs/scenarios/staged-adoption-guide.md`，I-2 待 ship)）
+- 漸進啟用 `_defaults.yaml` metric-split feature（連 [Staged Adoption Lifecycle](staged-adoption-guide.md)）
 
 ### Architect Narrative（待寫）
 - 為什麼分 read-only → off 兩步：歷史 query 需求（compliance / SRE 回顧）
@@ -260,7 +260,7 @@ sequenceDiagram
 - [ ] 舊 Prom 移除 alert.rules.yml（純 read-only，仍可 query）
 - [ ] Grace period（建議 30 天）
 - [ ] Prom shutdown
-- [ ] 按 **Staged Adoption Guide** (`docs/scenarios/staged-adoption-guide.md`，I-2 待 ship) 漸進啟用 `_defaults.yaml`
+- [ ] 按 [Staged Adoption Lifecycle](staged-adoption-guide.md) 漸進啟用 `_defaults.yaml`
 - [ ] 更新客戶 internal docs / runbooks
 </details>
 
@@ -368,7 +368,7 @@ prod-rest         ✅       ✅       —        —        —
 - **Schema**：[`docs/schemas/migration-state.md`](../schemas/migration-state.md) — `.da/migration-state.json` 欄位 spec
 - **Shadow 機制深入**：[`docs/shadow-monitoring-sop.md`](../shadow-monitoring-sop.md)
 - **Rule-only migration**（1/2-system）：[`docs/migration-guide.md`](../migration-guide.md)
-- **Staged adoption**（custom_ → golden 漸進）：`docs/scenarios/staged-adoption-guide.md` — I-2，待 ship
+- **Staged adoption**（custom_ → golden 漸進）：[`docs/scenarios/staged-adoption-guide.md`](staged-adoption-guide.md) — I-2，已 ship
 - **Troubleshooting**：`docs/integration/troubleshooting-checklist.md` — I-4，待 ship
 - **VM integration entry**：`docs/integration/victoriametrics-integration.md` — I-3，待 ship
 

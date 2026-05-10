@@ -79,6 +79,7 @@ lang: en
 | `docs/scenarios/README.md` | All | 場景指南導覽 |
 | `docs/scenarios/shadow-audit.md` (.en.md) | Platform Engineers, Tenants | Scenario: Shadow Audit — Evaluate Alert Health Without Migration |
 | `docs/scenarios/shadow-monitoring-cutover.md` (.en.md) | Platform Engineers, SREs, DevOps, Tenants | Scenario: Shadow Monitoring — From Alert Health Assessment to Automated Cutover |
+| `docs/scenarios/staged-adoption-guide.md` | Platform Engineers, SREs, tenant-admins | Staged Rule Adoption Lifecycle |
 | `docs/scenarios/tenant-lifecycle.md` (.en.md) | All | Scenario: Complete Tenant Lifecycle Management |
 | `docs/schemas/migration-state.md` | Platform Engineers, SREs, automation | Migration State Schema (.da/migration-state.json) |
 | `docs/schemas/README.md` | Platform Engineers, Tenants | JSON Schema Reference |
