@@ -1140,7 +1140,7 @@ da-tools guard --conf-d conf.d/ --layer redundant --show-diffs
 
 **If 4-layer 都 pass 但 CI 仍 fail**：
 - (a) image / version drift → CI 用較新 da-tools image，local 落後 → `docker pull ghcr.io/vencil/da-tools:latest` 或 `make dc-up` 重拉
-- (b) CI 還跑了 4-layer 之外的 lint（如 [`pre-commit run`](../../.pre-commit-config.yaml)）→ local 也跑 `pre-commit run --all-files`
+- (b) CI 還跑了 4-layer 之外的 lint（如 `pre-commit` hooks 定義在 repo-root `.pre-commit-config.yaml`）→ local 也跑 `pre-commit run --all-files`
 - (c) Conflict 與 main 已 merge 但 local branch 沒 rebase → `git rebase origin/main` 重跑
 
 **Cross-ref**：
