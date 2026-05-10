@@ -31,6 +31,8 @@ Breaking / Upgrade 七塊清楚區分），那是目標形狀。
 
 ### Changed
 
+- **Test infrastructure — exporter 三個 global-swap antipatterns 拆掉，全部走 `ConfigManager` test-only setter 注入（v2.8.0, PRs #363–#369, ~7 PRs）** — 測試姿態從「solid」推到「robust」：(a) `withIsolatedMetrics` → `freshMetrics` + `m.SetMetrics`；(b) `log.SetOutput` → `m.SetLogger(testLogger)`；(c) WatchLoop / debounce 從 `time.Sleep` 等 ticker 改 `m.SetClock(fakeClock)` + `Advance` + state-poll。前述三類過去因 global state race 必須 serial 的測試現在 `t.Parallel`-eligible，full app pkg `-count=5 -race` 12.1s（previously 20.7s）。TECH-DEBT-017（WatchLoop time.Sleep flake）以 FakeClock 結構性關閉。AI agent quickref → `docs/internal/test-map.md` §測試注入 Seam + `CLAUDE.md` §測試注入 Seam。**v2.8.0 condensation 階段請以「測試達到的境界」粗顆粒重寫**，不要保留個別 PR 數字。
+
 - **commitlint `scope-enum` 重整為 deliverable-artifact + cross-cutting 的 18-scope 形狀（v2.8.0, contributor convention）** — 32-scope 雜燴砍半，確立 invariant「scope = PR 動到的產品介面 / 長期跨切關注點」。**Drop**：initiative / phase / 版號 scopes（`phase-a/b/c`、`v2.7.0`、`v2.8.0`）改用 PR labels；compound scopes（`dx+e2e`、`lint+tooling`）違反 conventional 的 one-scope 原則；歷史 0–1 次使用的占位 scopes（`planning`、`golden`、`session-init`、`config`、`tooling`、`adr`、`scanner`、`blast-radius`、`resilience`）。**Add**：`tenant-api` / `portal`（先前用 `phase-b` / `jsx` 偽裝）、`release`（取代 `chore(v2.X.0)` 版號式寫法，對齊 conventional）。**Keep**：`exporter` / `tools` / `helm` / `k8s` / `rule-packs` / `docs` / `ci` / `e2e` / `jsx` / `a11y` / `dx` / `ops` / `lint` / `audit` / `playbook`。`docs/internal/commit-convention.md` § Scope 同步重寫（drift check pass）；`scripts/tools/dx/pr_preflight.py` 動態讀 SOT 不受影響，僅清理 `dx+e2e` 註解；`tests/dx/test_preflight_msg_validator.py` 改 anchor 在穩定 scope 而非已 drop 的 `config/resilience`。
 
 ### Added
