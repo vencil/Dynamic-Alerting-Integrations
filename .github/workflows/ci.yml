@@ -63,6 +63,10 @@ jobs:
           # §3 (b) class). resolve_diff_base() auto-picks origin/$GITHUB_BASE_REF
           # so the fetch-depth: 0 above is sufficient — no extra env wiring.
           pre-commit run codename-leak-check --all-files
+          # changelog-no-tbd-check refactored to diff-only in PR #383 (V-4 batch).
+          # Was registered in .pre-commit-config.yaml since v2.7.x but never
+          # wired to CI Lint job — only ran on contributor's local pre-commit.
+          pre-commit run changelog-no-tbd-check --all-files
           pre-commit run tool-consistency-check --all-files
           pre-commit run structure-check --all-files
           pre-commit run routing-profiles-check --all-files
