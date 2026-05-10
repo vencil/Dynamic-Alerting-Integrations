@@ -10,6 +10,8 @@ lang: zh
 > **Language / 語言：** | **中文（當前）** | [English](./troubleshooting.en.md)
 
 > 相關文件：[Architecture](architecture-and-design.md) · [HA Design](architecture-and-design.md#4-高可用性設計-high-availability)
+>
+> **遷移期間的 troubleshooting**（dual-write、shadow、cutover、decommission 等場景）→ 走 [Migration Troubleshooting Checklist](integration/troubleshooting-checklist.md)；本頁聚焦平台**穩態運行**的故障排查。
 
 ## SHA-256 熱重新加載延遲
 
