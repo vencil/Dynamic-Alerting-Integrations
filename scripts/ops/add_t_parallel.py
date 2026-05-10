@@ -48,12 +48,14 @@ RISKY = (
     # RISKY case (codified by PR #357).
     "slog.SetDefault",
     # `withIsolatedMetrics(t)` in components/threshold-exporter/app/
-    # implements the global-swap pattern — saves+sets+restores a
-    # package-level `configMetrics` singleton via setConfigMetrics().
-    # Two parallel tests both calling it would race on the global, with
-    # whichever test ran second's `fresh` registry receiving observations
-    # from the first test's reload. Caught by PR #356 (config_* sweep)
-    # before landing.
+    # used to implement a global-swap pattern (saves+sets+restores a
+    # package-level `configMetrics` singleton via setConfigMetrics()).
+    # Two parallel tests calling it would race on the global, with the
+    # second test's `fresh` registry receiving observations from the
+    # first test's reload. Caught by PR #356 (config_* sweep) before
+    # landing. The helper itself was removed in PR #4a (replaced by
+    # freshMetrics + ConfigManager.SetMetrics field injection); kept
+    # in RISKY as a tripwire so a future re-introduction surfaces here.
     "withIsolatedMetrics",
     "setConfigMetrics",
     # log.SetOutput / log.SetFlags swap the package-level stdlib logger.

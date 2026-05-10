@@ -236,13 +236,14 @@ func TestConfigManager_LoadDir_EmptyDir(t *testing.T) {
 // same invariant as TestScanDirHierarchical_MixedValidInvalid for the
 // hierarchical path).
 func TestConfigManager_LoadDir_UnparseableDefaultsErrorAndMetric(t *testing.T) {
+	// NOT t.Parallel — log.SetOutput swaps a global stdlib logger; #4b
+	// will move this off the global eventually.
 	dir := t.TempDir()
 
-	// Reset metrics so parseFailures counter is fresh.
-	origMetrics := getConfigMetrics()
-	freshMetrics := newConfigMetrics()
-	setConfigMetrics(freshMetrics)
-	t.Cleanup(func() { setConfigMetrics(origMetrics) })
+	// Per-test metrics instance — routed via mgr.SetMetrics so the
+	// scanner observations land on `fresh` (parallel-friendly when
+	// paired with #4b).
+	fresh, _ := freshMetrics(t)
 
 	// Capture log output to verify ERROR-level promotion.
 	var logBuf bytes.Buffer
@@ -268,6 +269,7 @@ tenants:
 `)
 
 	mgr := NewConfigManager(dir)
+	mgr.SetMetrics(fresh)
 	// Load may succeed (defaults dropped, sibling tenant parses) — what we
 	// care about is the ERROR log + the metric.
 	_ = mgr.Load()
@@ -286,7 +288,7 @@ tenants:
 	// basename. This may run via loadDir (initial scan) — the counter
 	// pattern matches A-8d.
 	ch := make(chan prometheus.Metric, 1)
-	freshMetrics.parseFailures.WithLabelValues("_defaults.yaml").Collect(ch)
+	fresh.parseFailures.WithLabelValues("_defaults.yaml").Collect(ch)
 	close(ch)
 	var count float64
 	for m := range ch {

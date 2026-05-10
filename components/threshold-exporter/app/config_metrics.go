@@ -77,8 +77,12 @@ type configMetrics struct {
 }
 
 // Default metric instance used by the production server. Tests that want
-// isolation construct a fresh instance via newConfigMetrics() and install
-// it via setConfigMetrics before exercising scan paths.
+// isolation construct a fresh instance via newConfigMetrics() (or the
+// freshMetrics test helper) and inject it on the consumer via
+// ConfigManager.SetMetrics or scanDirHierarchicalWithMetrics — see #4a
+// for the global-swap migration. setConfigMetrics was removed; reading
+// from the singleton via getConfigMetrics is the only legitimate
+// production access path.
 var (
 	configMetricsOnce sync.Once
 	configMetricsInst *configMetrics
@@ -172,15 +176,6 @@ func getConfigMetrics() *configMetrics {
 	inst = configMetricsInst
 	configMetricsMu.RUnlock()
 	return inst
-}
-
-// setConfigMetrics swaps the active instance. Intended for tests that
-// need a fresh counter/histogram set per parallel run. Production code
-// should not call this.
-func setConfigMetrics(m *configMetrics) {
-	configMetricsMu.Lock()
-	configMetricsInst = m
-	configMetricsMu.Unlock()
 }
 
 // registerConfigMetrics installs all metrics on the given registry.
@@ -393,7 +388,8 @@ func (cm *configMetrics) SetLastScanComplete(t time.Time) {
 //
 // Called only on success — error paths leave the gauge at its previous
 // value so a transient scan failure does not look like a successful
-// completion. Tests that want a clean baseline observe via withIsolatedMetrics.
+// completion. Tests that want a clean baseline observe via freshMetrics
+// + m.SetMetrics injection (see config_metrics_test.go).
 func SetLastScanComplete(t time.Time) {
 	getConfigMetrics().SetLastScanComplete(t)
 }
