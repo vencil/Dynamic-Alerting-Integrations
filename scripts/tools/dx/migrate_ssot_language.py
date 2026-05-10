@@ -4,7 +4,7 @@
 ⚠️ DORMANT — v2.8.0 S#101 (2026-05-02) policy locked: ZH primary.
 
 This script's intended use case (ZH→EN SSOT migration) is NOT being pursued.
-Original v2.5.0 evaluation (`docs/internal/ssot-language-evaluation.md`)
+Original v2.5.0 evaluation (`docs/internal/archive/ssot-language-evaluation.md`)
 recommended Plan C "switch to EN SSOT" but the underlying premise
 ("open-source community SSOT should be EN") was never validated against
 actual contributor / customer base shape (which remains 100% Chinese-
@@ -45,7 +45,7 @@ silently cause migration drift on the file pairs it touches.
   # CI 驗證：檢查是否有未遷移的 .en.md 或已遷移但 frontmatter 不一致的檔案
   python3 scripts/tools/dx/migrate_ssot_language.py --check
 
-參考：docs/internal/ssot-language-evaluation.md §4 Migration Path（
+參考：docs/internal/archive/ssot-language-evaluation.md §4 Migration Path（
 status: superseded） + dev-rules.md §9b（trigger conditions）
 """
 

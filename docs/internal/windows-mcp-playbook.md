@@ -365,6 +365,13 @@ Remove-Item "C:/Users/<user>/AppData/Local/Temp/release-body.txt" -Force
 
 ## 已知陷阱速查
 
+> **Reading guide (audit-2026-04 §D4)** — 表內 62 條，新 session 不必逐條讀：
+>
+> - **Codified（hook / CI gate / tool 已攔住）**：#2-3, #14-15, #18, #27, #41, #43-46, #54-58, #60-62。除非改 hook 本身否則只要知道「有這個 hook」即可。
+> - **Active（仍需人工警覺）**：上述以外的編號 — 撞上重複問題時優先掃這集合。
+> - **新增 trap 慣例**：欄位「解法」起頭用 ✅ Codified / 🟢 Resolved / 🛡️ 標 codified 狀態；可被工具自動過濾。
+> - 整理理由：1031 行對新 session 是 cognitive load，但歷史 anchor 必須保留（外部 doc 用 `#已知陷阱速查` / `#陷阱-NN` 連表）。
+
 | # | 陷阱 | 解法 |
 |---|------|------|
 | 1 | docker exec stdout 為空 | `bash -c` 內重定向至 workspace 檔案 |
@@ -947,85 +954,65 @@ make win-commit MSG=_msg.txt FILES="scripts/ops/run_hooks_sandbox.sh docs/intern
 - Message 一律走檔案（`commit-file` 子命令）— 避開陷阱 #46（cmd 對 em-dash/CJK 引號解析崩潰）
 - Sandbox 側呼叫時自動 detect `cmd.exe`，不存在則印出可複製的 Windows 指令給 user 手動執行（那種情境下 hook-gate 仍會先跑，結果是 sandbox 驗過再手動收尾）
 
-### 修復層 D：Dev Container Push（pre-push hook 撈到無關 drift 時的備援）
+### 修復層 D：pre-push hook 撞到 pre-existing drift 時的處理
 
-**適用情境**：`.pre-commit-config.yaml` 未設 `default_stages`、或設為多 stage 時，`git push` 會觸發非 `pre-commit` stage 的全量 hook 跑。若其中任一 hook 掃全 repo 而非「只看 staged files」（例：`bilingual-structure-check` 掃 `.en.md` 整份對照），就可能因 **pre-existing drift**（非這次 commits 造成的）而擋住 push。PR #21 就踩到這個坑：`chore/structure-cleanup-2026-04-11` 的內容完全乾淨，但 pre-push 掃到 62 對 ZH/EN 檔案的舊 drift → 23 errors + 18 warnings。
+> 與修復層 C「替代路線 D」(pre-push hook spawn 失敗) 互補但根因不同：
+> 本節處理「pre-push hook 跑起來了、但掃到非本次 commits 的 pre-existing drift」。
 
-⚠️ **長期解在 Layer 3 不在這個章節**：如果你發現自己要走 Layer 1/2，那代表 `.pre-commit-config.yaml` 需要先確認 Layer 3 已套用。走 Layer 1/2 是「這次 PR 救火」，不是「下次可以當正規流程」。
+`default_stages` 一旦設為多 stage，`git push` 會觸發全量 hook（pre-commit
++ pre-push 都跑）。若某 hook 掃整個 repo 而不是只看 staged files
+（例：`bilingual-structure-check` 對 `.en.md` 整份做配對檢查），就會撞到
+**非這次 commits 造成的 pre-existing drift**。PR #21 就踩過：branch 內容
+乾淨，但 pre-push 掃出 62 對 ZH/EN 舊 drift → 23 errors + 18 warnings。
 
-#### Layer 1 — A/B 驗證 one-liner（機械化 self-check）
+⚠️ **長期解在 Layer 3，Layer 1/2 是救火不是常規流程**。
 
-pre-push hook 擋路時，第一件事：**證明失敗是否跟這次 commits 有關**。用 `git worktree` 跳到 base commit 重跑同一個 hook，若結果一樣 → drift 跟這次無關，可走 `--no-verify`；若結果不同 → 這次 commits 引入新問題，必須修。
+#### Layer 1 — A/B 驗證 one-liner（這次 PR 是不是無辜？）
 
 ```bash
-# 假設 broken hook 是 bilingual-structure-check，當前 branch 是 feat/xxx
+HOOK=bilingual-structure-check       # 改成你撞到的 hook id
 BASE=$(git merge-base HEAD origin/main)
 WT=/tmp/wt-$BASE
-
 git worktree add "$WT" "$BASE" 2>/dev/null || true
-cd "$WT"
-pre-commit run bilingual-structure-check --all-files > /tmp/wt-base.log 2>&1
+( cd "$WT"; pre-commit run "$HOOK" --all-files > /tmp/wt-base.log 2>&1 )
+pre-commit run "$HOOK" --all-files > /tmp/wt-head.log 2>&1
 ERR_BASE=$(grep -c "error:" /tmp/wt-base.log || echo 0)
-
-cd - >/dev/null
-pre-commit run bilingual-structure-check --all-files > /tmp/wt-head.log 2>&1
 ERR_HEAD=$(grep -c "error:" /tmp/wt-head.log || echo 0)
-
 echo "base=$ERR_BASE head=$ERR_HEAD"
-# base==head 且 >0 → 100% pre-existing drift，本次 PR 無辜
-# head > base → 這次引入了新問題，不要 --no-verify
 git worktree remove "$WT"
 ```
 
-同時驗證 CI **是否真的會跑這個 hook**（CI 用 `pre-commit run <id>` 按名字叫，不會自動跑全部）：
+判讀：
+- `base == head` 且 > 0 → **drift 與本次 PR 無關**，可走 Layer 2 救火
+- `head > base` → **本次 commits 引入新問題**，修掉，**不要 `--no-verify`**
+
+順便確認 CI **是否真的會跑這條 hook**（CI 用 `pre-commit run <id>` 按名字呼叫）：
 
 ```bash
-grep -r "<hook-id>" .github/workflows/ || echo "CI 沒叫這個 hook — pre-push 擋下來是 local-only false positive"
+grep -r "$HOOK" .github/workflows/ \
+  || echo "CI 沒叫這個 hook -- pre-push 擋下來是 local-only false positive"
 ```
 
-#### Layer 2 — 決策樹（明確 if-else）
-
-pre-push hook 失敗後，按順序回答：
+#### Layer 2 — 救火決策樹
 
 ```
-Q1. base/head error count 一樣嗎？（用 Layer 1 one-liner）
-    ├─ 否（head > base）→ 這次 commits 引入新問題，修掉，不要 --no-verify
-    └─ 是（pre-existing drift）→ 走 Q2
-
-
-### 修復層 D · pre-push drift 三層改進（Layer 1-3）
-
-與 §修復層 C · 替代路線 D 互補但不同根因：§替代路線 D 處理「pre-push hook spawn 失敗（Linux python 路徑寫死）」，本節處理「pre-push hook 跑起來了、但掃到**非本次 commits 的 pre-existing drift**」。Windows 原生 git + 容器 git 兩條路徑都可能遇到。
-
-**適用情境**：`.pre-commit-config.yaml` 未設 `default_stages`、或設為多 stage 時，`git push` 會觸發非 `pre-commit` stage 的全量 hook 跑。若其中任一 hook 掃全 repo 而非「只看 staged files」（例：`bilingual-structure-check` 掃 `.en.md` 整份對照），就可能因 **pre-existing drift**（非這次 commits 造成的）而擋住 push。PR #21 就踩到這個坑：`chore/structure-cleanup-2026-04-11` 的內容完全乾淨，但 pre-push 掃到 62 對 ZH/EN 檔案的舊 drift → 23 errors + 18 warnings。
-
-⚠️ **長期解在 Layer 3 不在這個章節**：如果你發現自己要走 Layer 1/2，那代表 `.pre-commit-config.yaml` 需要先確認 Layer 3 已套用。走 Layer 1/2 是「這次 PR 救火」，不是「下次可以當正規流程」。
-
-#### Layer 1 — A/B 驗證 one-liner（機械化 self-check）
-
-pre-push hook 擋路時，第一件事：**證明失敗是否跟這次 commits 有關**。用 `git worktree` 跳到 base commit 重跑同一個 hook，若結果一樣 → drift 跟這次無關，可走 `--no-verify`；若結果不同 → 這次 commits 引入新問題，必須修。
-
-```bash
-# 假設 broken hook 是 bilingual-structure-check，當前 branch 是 feat/xxx
-BASE=$(git merge-base HEAD origin/main)
-WT=/tmp/wt-$BASE
-
-git worktree add "$WT" "$BASE" 2>/dev/null || true
-cd "$WT"
-pre-commit run bilingual-structure-check --all-files > /tmp/wt-base.log 2>&1
-ERR_BASE=$(grep -c "error:" /tmp/wt-base.log || echo 0)
-
-cd - >/dev/null
-pre-commit run bilingual-structure-check --all-files > /tmp/wt-head.log 2>&1
-ERR_HEAD=$(grep -c "error:" /tmp/wt-head.log || echo 0)
-
-echo "base=$ERR_BASE head=$ERR_HEAD"
-# base==head 且 >0 → 100% pre-existing drift，本次 PR 無辜
-# head > base → 這次引入了新問題，不要 --no-verify
-git worktree remove "$WT"
+本次無辜？
+├─ 是（base==head）
+│   ├─ CI 也叫這個 hook  → 開後續 PR 修 drift；本 PR 用 `git push --no-verify`（標明原因）
+│   └─ CI 不叫            → 直接 `--no-verify`，PR description 寫一行為什麼
+└─ 否（head>base）        → 別走 Layer 1/2，先修。
 ```
 
-同時驗證 CI **是否真的會跑這個 hook**（CI 用 `pre-commit run <id>` 按名字叫，不會自動跑全部）:
+#### Layer 3 — 長期解：把 hook 鎖在 staged-only 範圍
 
-```bash
-grep -r "
+主流程在 `.pre-commit-config.yaml`：
+
+1. **`default_stages: [pre-commit]`**（v2.8.0 已套用，本 repo line 20）—
+   `git push` 不再觸發 pre-commit hook 全量跑。pre-push only 的 hook 必須
+   `stages: [pre-push]` 顯式 opt-in。
+2. **撈全 repo 的 hook 改寫成「只看 changed files」** — 改 entry script
+   讀 `pre-commit` 的 `pass_filenames`；或 `args: ['--', "$@"]` + 對應 entry
+   邏輯。`bilingual-structure-check` 已做此 refactor（PR #22）。
+3. **CI parity 由 `pre-commit run <hook> --all-files` 接住**，不再依賴
+   pre-push hook 的全量觸發。
+

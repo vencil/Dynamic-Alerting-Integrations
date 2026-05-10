@@ -780,8 +780,8 @@ done
 ## 相關文件
 
 - [`CLAUDE.md`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/CLAUDE.md) — 開發上下文指引
-- [`docs/internal/doc-map.md`](../internal/doc-map.md) — 文檔對照表
-- [`docs/internal/tool-map.md`](../internal/tool-map.md) — 工具清單
+- [`docs/internal/doc-map.md`](../doc-map.md) — 文檔對照表
+- [`docs/internal/tool-map.md`](../tool-map.md) — 工具清單
 - [`.pre-commit-config.yaml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/.pre-commit-config.yaml) — Lint hook 配置
-- [`docs/assets/tool-registry.yaml`](../assets/tool-registry.yaml) — 工具 metadata
-- [`docs/assets/platform-data.json`](../assets/platform-data.json) — Rule Pack 數據
+- [`docs/assets/tool-registry.yaml`](../../assets/tool-registry.yaml) — 工具 metadata
+- [`docs/assets/platform-data.json`](../../assets/platform-data.json) — Rule Pack 數據
