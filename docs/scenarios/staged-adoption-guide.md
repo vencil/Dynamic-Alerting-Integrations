@@ -65,9 +65,17 @@ lang: zh
 
 **Hard 必要條件**（缺一不可）：
 
-1. **Shadow 期數據佐證**：shadow monitoring 期間（multi-system migration playbook §5）至少 2 週，golden 與 custom_ 在 subset 條件上 100% 共觸發
-2. **Subset overlap = 100%**：custom_ 觸發的條件 golden 必觸發（**避免 catastrophic 假陰性**）
+1. **Shadow 期數據佐證**：shadow monitoring 期間（multi-system migration playbook §5）至少 2 週
+2. **Coverage gate（取代純 100% overlap）**：以下二擇一**並滿足對應子條件**：
+   - **(2a) Subset overlap = 100%**：custom_ 觸發的條件 golden 必觸發（避免 catastrophic 假陰性）— 適用「golden 是 custom_ 的等價或超集」情境
+   - **(2b) Intentional noise reduction**：custom_ 觸發但 golden 沒觸發的 case **每筆**滿足：
+     - domain owner 顯式分類為「intended noise filter」（不是 bug）
+     - reviewer 能 articulate 為什麼 golden 的 smarter logic（多 condition / time-window / threshold tuning）正確抑制了該 alert
+     - 對應的「為什麼這次沒叫」推理寫進 PR description（給未來 incident review 翻查）
+   - 嚴禁「reduction 因為 golden 漏抓 catastrophic case」混進 (2b)；若有疑慮 default 走 (2a)
 3. **多出的 alert 顯式 sign-off**：golden 比 custom_ 多觸發的 alert 不視為 bug、客戶確認是 design intent
+
+> **設計動機**（對抗 "100% overlap 悖論"）：直接寫死 100% overlap 會困住客戶在爛規則裡。範例：客戶舊 `custom_mysql_cpu` 是 `cpu > 80%`（一天叫 50 次），新 golden 是 `cpu > 80% AND io_wait > 20% for 5m`（一天叫 5 次該叫的）。Shadow 期 overlap 必然不到 100% — 但這是 **intended noise reduction**，不是 regression。Gate (2b) 給這條合理路徑。
 
 **Soft 加分條件**（任一滿足、推薦推進）：
 
@@ -87,7 +95,9 @@ lang: zh
 <summary>📋 Promotion gate checklist（給 executor）</summary>
 
 - [ ] Shadow 期 ≥ 2 週、無 alert noise（`da-tools shadow-verify --window=14d`）
-- [ ] Subset overlap = 100%（`da-tools shadow-verify --check-subset-overlap`）
+- [ ] **Coverage gate** 二擇一：
+  - [ ] (2a) Subset overlap = 100%（`da-tools shadow-verify --check-subset-overlap`）— 預設嚴格路徑
+  - [ ] (2b) Intentional noise reduction — overlap 不足 100% 時，每筆 missing case 在 PR description 含 domain owner 「為什麼這次沒叫」分類 + reviewer 推理
 - [ ] 多出 alert 列表已給 customer ops sign-off（PR description 含 sign-off 紀錄）
 - [ ] Customer ops 已熟悉 `git revert <batch-commit>` rollback path
 - [ ] Domain owner approval（Slack / email / PR review approval）
@@ -99,30 +109,39 @@ lang: zh
 ## 5. Batch sizing — 一次推多少
 
 ### 30-sec TL;DR
-- **預設 = 1 domain × 1 region**（典型 5-15 條規則）
-- 1000 tenant 客戶分 ~10 batches、每 batch 跨 1 ops cycle、總時程 ~10 週
+- **預設 = 1 domain × 1 region × canary tenant-group（5% tenants）**
+- 第一波只切 canary tenants 確認，再展開到該 region 全 tenant
+- 1000 tenant 客戶估 ~10 batches × (canary + full) × 1 ops cycle = ~10-12 週
 - 跑得快 = 風險高，沒救命的東西就慢慢推
 
 ### 決策原則
 
-| Batch 粒度 | 規則數 | 適用 | 風險 |
+| Batch 粒度 | 規則 × tenant 數 | 適用 | 風險 |
 |---|---|---|---|
-| **單規則** | 1 | 高風險 / 客戶第一次接觸 | 太慢，10000 規則需要太久 |
-| **1 domain × 1 region** | 5-15 | **預設** | 平衡點 |
-| **1 domain × 全 region** | 20-60 | domain 已成熟 / 第二批起 | 跨 region 變因擴大 |
-| **跨 domain bundle** | 50+ | 急著收尾、客戶已熟悉 | blast radius 大、不建議 |
+| **單規則 × canary tenants** | 1 × 5%-tenants | 高風險 / 客戶第一次接觸 | 最低風險，但太慢 |
+| **1 domain × 1 region × canary tenants**（**預設**）| 5-15 × 5%-tenants | 第一波 | 最佳平衡 |
+| **1 domain × 1 region × full tenants** | 5-15 × 100%-tenants | canary 跨 1 ops cycle 通過後 | 中等 |
+| **1 domain × 全 region × full tenants** | 20-60 × 100% | domain 已成熟 / 三批以上無事故 | 較高，跨 region 變因擴大 |
+| **跨 domain bundle × full tenants** | 50+ × 100% | 急著收尾、客戶已熟 | blast radius 大、不建議 |
 
-**為什麼 1 domain × 1 region 是預設**：
+**為什麼預設加 canary tenant 維度**：
 
-- Domain 隔離：MySQL alert 出問題不影響 Postgres alert
-- Region 隔離：staging-us-east 出問題不影響 prod-eu-west
-- 心智可管理：5-15 條規則，operator 一個工作日能跟完所有 alert
+- Multi-tenant 平台架構下，「1 domain × 1 region」已經是 1000 個 tenant 全切 — blast radius 太大
+- 先切 5% canary tenants（建議挑容忍度高的內部 / 早期合作客戶）→ 跨 1 ops cycle 觀察 → 確認沒問題 → 再展全 region tenant
+- 客戶通常會指定一些「dev / staging tenants」或「先行體驗組」當 canary 池
+- Domain 隔離 + Region 隔離 + Tenant 隔離 = **三層 blast radius 圍欄**
+
+### Canary tenant 選擇原則
+
+- **優先**：客戶內部 tenant、staging-only tenant、容忍度高的早期客戶
+- **避免**：production-critical tenant、客戶 SLA tier 最高的、客戶剛拉警報的
+- **數量**：5-10% 是甜蜜點；少於 5% 訊號太弱、多於 10% blast 範圍開始有意義
 
 ### 加速的條件
 
-- 第一批跨 1 ops cycle 完美（無 unexpected alert）→ 第二批可考慮 1 domain × 全 region
-- 連續 3 批無事故 → 可加大到跨 domain bundle
-- 但**永遠不要**跳過 ops cycle 觀察期，加速是規模、不是時間
+- 第一批 canary 跨 1 ops cycle 完美 → 推 full tenant 級
+- 連續 3 個 batch（canary + full）無事故 → 可加大到 1 domain × 全 region × full
+- 但**永遠不要**跳過 canary 階段，加速是規模、不是步驟
 
 <details>
 <summary>📋 Batch planning checklist</summary>
@@ -130,8 +149,10 @@ lang: zh
 - [ ] Inventory：列當前所有 `custom_*` 規則 + 對應可 promote 的 golden 規則
 - [ ] 分群：按 domain × region 切分
 - [ ] 排序：低風險 / 多訊號的 domain 先（DB / network 通常先；business KPI 後）
-- [ ] 第 1 批用最小粒度（5-10 規則）建立流程信心
-- [ ] PR description 含 mapping table（custom_ name → golden name）
+- [ ] **指定 canary tenant pool**：與客戶協商 5-10% 容忍度高的 tenants（內部 / staging / 早期合作）
+- [ ] 第 1 批：最小粒度（5-10 規則）× canary tenant pool — 建立流程信心
+- [ ] PR description 含 mapping table（custom_ name → golden name）+ canary tenant 清單
+- [ ] Canary 跨 1 ops cycle 後再 PR full-tenant promotion
 </details>
 
 ---
@@ -228,11 +249,28 @@ git revert <commit-sha>
 - 改 alert 語意（客戶 `custom_*` override 過時、變成 redundant）
 - breaking 既有 label（客戶 `custom_*` 還用舊 label 名）
 
+#### ⚠️ Disablement drift — 雙重告警災難的真實風險
+
+當客戶寫了 `custom_*` 規則，**通常意味著他們也在系統內 disable / silenced 了對應的 v1 golden 規則**（避免 custom_ 與 golden 同時叫造成 double-firing）。
+
+Rule Pack v2 升級時若**改了 alert name 或 label schema**，客戶針對 v1 的 disable 配置（例：`_defaults.yaml` 的 `disable: [<v1-name>]` 或 AM silencer 的 `matchers: [alertname="<v1-name>"]`）**可能 silently 失效**。後果：
+
+1. 客戶 `custom_*` 仍照常叫
+2. v2 golden（disable 沒命中）也跟著叫
+3. → **alert storm**（同 incident 兩條 alert paths 同時 page，PagerDuty 狂響）
+
 **SOP**：
-1. 跑 `da-tools rule-pack-diff --from=v1 --to=v2` 列差異點
-2. 對每個 `custom_*`：判斷 v2 是否吸收 → 若是，本 guide 的 promotion 流程跑
-3. 對 v2 改語意的：`custom_*` 重寫對齊 v2 schema 或留原樣
-4. 對 v2 breaking：必須要 promote（被動 forced upgrade）
+
+1. 跑 `da-tools rule-pack-diff --from=v1 --to=v2` 列差異點（含 alertname / label schema breaking changes）
+2. **Disablement drift check**：對每個客戶有 `custom_*` 的 alert，驗證對應的 disable 配置是否仍命中 v2：
+   - `_defaults.yaml` 的 disable list — 確認 v2 alertname 也在清單上（或加進去）
+   - AM 的 silencer matchers — 確認 v2 label schema 不會讓既有 matcher mismatch
+   - **缺哪一個就會 double-fire；補上才能 ship v2**
+3. 對每個 `custom_*`：判斷 v2 是否吸收 → 若是，本 guide 的 promotion 流程跑
+4. 對 v2 改語意的：`custom_*` 重寫對齊 v2 schema 或留原樣（**且** disable 配置同步更新）
+5. 對 v2 breaking：必須要 promote（被動 forced upgrade）
+
+**Audit hook 建議**（待 ship）：v2.9 加 `da-tools upgrade-check` 跑 v1→v2 升級時自動偵測 disablement drift，列「會 double-fire 的 alert」清單，merge 前須清零。
 
 ### 三情境的共同模式
 
