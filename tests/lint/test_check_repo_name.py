@@ -106,13 +106,19 @@ class TestConstants:
 # main (CLI)
 # ---------------------------------------------------------------------------
 class TestMain:
+    """v2.8.0 lint-policy refactor (PR #382/#383): tests use --full-scan to
+    exercise the os.walk-based path. Diff-only mode requires git rev-parse
+    in a real repo, which TestMainDiffMode covers separately."""
+
     def test_ci_mode_no_violations(self, capsys):
         with patch.object(crn, "REPO_ROOT", crn.Path("/nonexistent")):
             with patch("os.walk", return_value=[]):
-                with patch("sys.argv", ["check_repo_name.py", "--ci"]):
-                    crn.main()
+                with patch("sys.argv",
+                           ["check_repo_name.py", "--full-scan", "--ci"]):
+                    rc = crn.main()
+        assert rc == 0
         captured = capsys.readouterr()
-        assert "No wrong repo name found" in captured.out
+        assert "no wrong repo name found" in captured.out.lower()
 
     def test_ci_mode_with_violations(self, tmp_path, capsys):
         bad_file = tmp_path / "bad.md"
@@ -120,10 +126,10 @@ class TestMain:
                             encoding="utf-8")
 
         with patch.object(crn, "REPO_ROOT", tmp_path):
-            with patch("sys.argv", ["check_repo_name.py", "--ci"]):
-                with pytest.raises(SystemExit) as exc_info:
-                    crn.main()
-        assert exc_info.value.code == 1
+            with patch("sys.argv",
+                       ["check_repo_name.py", "--full-scan", "--ci"]):
+                rc = crn.main()
+        assert rc == 1
 
     def test_fix_mode_reports(self, tmp_path, capsys):
         bad_file = tmp_path / "fixme.md"
@@ -131,10 +137,19 @@ class TestMain:
                             encoding="utf-8")
 
         with patch.object(crn, "REPO_ROOT", tmp_path):
-            with patch("sys.argv", ["check_repo_name.py", "--fix"]):
-                crn.main()
+            with patch("sys.argv",
+                       ["check_repo_name.py", "--full-scan", "--fix"]):
+                rc = crn.main()
+        assert rc == 0
         captured = capsys.readouterr()
         assert "Fixed" in captured.out
+
+    def test_fix_mode_requires_full_scan(self, tmp_path, capsys):
+        """--fix without --full-scan must error (partial-line rewrites unsafe)."""
+        with patch.object(crn, "REPO_ROOT", tmp_path):
+            with patch("sys.argv", ["check_repo_name.py", "--fix"]):
+                rc = crn.main()
+        assert rc == 2  # error exit code
 
     def test_skips_excluded_dirs(self, tmp_path, capsys):
         git_dir = tmp_path / ".git"
@@ -144,7 +159,36 @@ class TestMain:
                             encoding="utf-8")
 
         with patch.object(crn, "REPO_ROOT", tmp_path):
-            with patch("sys.argv", ["check_repo_name.py"]):
-                crn.main()
+            with patch("sys.argv",
+                       ["check_repo_name.py", "--full-scan"]):
+                rc = crn.main()
+        assert rc == 0
         captured = capsys.readouterr()
-        assert "No wrong repo name found" in captured.out
+        assert "no wrong repo name found" in captured.out.lower()
+
+
+class TestBypass:
+    """Bypass tag mechanism per lint-policy.md §4."""
+
+    def test_bypass_tag_in_pr_body_downgrades_to_warning(
+        self, tmp_path, capsys, monkeypatch
+    ):
+        bad_file = tmp_path / "bad.md"
+        bad_file.write_text("https://github.com/vencil/vibe-k8s-lab\n",
+                            encoding="utf-8")
+
+        pr_body = (
+            "## Summary\n\n"
+            "bypass-lint: repo-name\n"
+            "reason: This PR intentionally references the historical repo name "
+            "for migration documentation purposes.\n"
+        )
+        monkeypatch.setenv("PR_BODY", pr_body)
+
+        with patch.object(crn, "REPO_ROOT", tmp_path):
+            with patch("sys.argv",
+                       ["check_repo_name.py", "--full-scan", "--ci"]):
+                rc = crn.main()
+        assert rc == 0  # bypass turns hard-fail into exit 0
+        captured = capsys.readouterr()
+        assert "BYPASSED" in captured.out
