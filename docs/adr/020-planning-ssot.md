@@ -57,21 +57,58 @@ lang: zh
 
 ```yaml
 ---
-id: TD-030 | S#74 | HA-11 | REG-7 | ADR-019  # 用既有 namespace，不引入 TRK-
+id: TRK-042 | S#74 | ADR-019    # 三 namespace 共存，見下方 namespace policy
 tracking_kind: tech-debt | feature | dx | regression | adr | sprint
 status: proposed | accepted | in-progress | done | abandoned | superseded
 domain: tenant-api | exporter | portal | docs | ci | rule-packs | ...
-supersedes: [TD-005, TD-010]  # optional：解決哪些舊條目
-superseded_by: TD-050           # optional：被誰取代
+supersedes: [TRK-005, TRK-010]  # optional：解決哪些舊條目
+superseded_by: TRK-050          # optional：被誰取代
 pr_ref: 375                     # done 後填，多筆用 list
 target_version: v2.9.0          # optional
 created_at: 2026-04-15
 updated_at: 2026-05-10
-owner: vencil                   # optional：誰負責
+owner: poyu                     # optional：誰負責
 ---
 ```
 
 **`tracking_kind`** 是專案私有 enum，避免 false-positive 撈到含 `id:`/`status:` 的無關 doc（如 OpenAPI spec、tutorial）。
+
+### Namespace Policy（三 namespace 共存）
+
+本 ADR 採三 namespace 並存策略：
+
+| Namespace | 用途 | 為什麼不合併 |
+|---|---|---|
+| **TRK-NNN** | 統一 debt/regression/dx tracking。**取代既有 TD-NN / HA-NN / REG-NN** 三個分散 namespace | 三者本質同類（都是「該修還沒修」狀態追蹤），分散是歷史包袱。AI/人類各自記三個 prefix 沒價值 |
+| **ADR-NNN** | 架構設計決策史 | ADR 是 **永久 design history**，不是 backlog。已被多處 user-facing doc / commit / external citation 引用（如 [README.md](../../README.md) 引用 ADR-007/ADR-018/ADR-019 等）；rename 等於重寫設計史，redirect mapping 永遠維護。語意上 ADR 與 TRK 也根本不同：ADR 是「**這個決策當時為什麼**」，TRK 是「**這個工作 done 了沒**」 |
+| **S#NNN** | Sprint planning ledger（時序性、跨 sprint 的階段標記） | S# 對應 sprint 內 work item，本質是時序 + 階段，跟跨 sprint 的持續債務不同。混入 TRK 會稀釋語意。Sprint 結束後若條目仍 open 才 promote 為 TRK（done 的 sprint 條目歸檔即可，不必 rename） |
+
+### TD-NN / HA-NN / REG-NN → TRK-NNN 遷移
+
+- **舊 ID 對映**：建 `docs/internal/planning-id-mapping.md` 含完整 TD/HA/REG → TRK 對映表 + redirect 說明
+- **既有引用 rewrite**：scan 全 repo（~207 處引用：79 TD + 128 HA/REG）批次替換為 TRK
+- **CHANGELOG-archive.md + docs/internal/archive/ 不動**：pre-v2.2.0 引用作歷史保留，redirect doc 解釋舊 ID 在現代是 TRK-NNN
+- **新條目從 v2.8.0 起一律 TRK-NNN**
+
+### Frontmatter 上 ADR / S# 的 id 寫法
+
+ADR 與 S# 的 frontmatter `id:` 維持原 namespace：
+
+```yaml
+# ADR
+id: ADR-020
+tracking_kind: adr
+
+# Sprint
+id: S#74
+tracking_kind: sprint
+
+# 統一 backlog (新)
+id: TRK-042
+tracking_kind: tech-debt | regression | dx
+```
+
+`generate_planning_index.py` 對三 namespace 一視同仁，但在 index UI 分組顯示。
 
 **Layer 2：Discovery-based Index Generator**
 
@@ -140,16 +177,29 @@ CLAUDE.md 起手式段加入：
 
 ## 為什麼不用其他方案
 
-### 替代方案 A：全 consolidate 到單一 `docs/tracking/` + 新 `TRK-NNN` namespace
+### 替代方案 A：**全** consolidate 到單一 namespace（含 ADR）
 
-**Gemini 提案**。優點是 AI 完全只需讀一處。缺點：
+**Gemini 原始提案 + Owner 初步傾向**。優點：AI 與人類只需熟悉一個 prefix。缺點：
 
-- ~150 個既有 ID（TD/S#/HA/REG/ADR）需重新編號
-- CHANGELOG / commit messages / code comments 大量引用要 rewrite 或建 redirect mapping
-- contributor 認知負擔（新 namespace 要熟悉）
-- 遷移成本估 60h+ vs 本 ADR 方案 25h
+- 79 處 TD-NN + 128 處 HA-NN/REG-NN + 232 處 S#NN 引用要 rewrite — 共 ~440 處
+- 19 份 ADR 重新編號 — **最高風險**：
+  - ADR 已被 user-facing docs（[README.md](../../README.md)、[architecture-and-design.md](../architecture-and-design.md)、各 component README）多處引用作 design citation
+  - ADR 也已在外部 commit messages / 客戶看的 changelog / GitHub issue 內被引用為 design history reference
+  - rename 等於重寫設計史，redirect mapping 須永久維護
+- ADR 與 backlog tracking 概念上不同類（design history vs work-in-progress tracking），合併稀釋兩者語意
+- 真實成本估算（grep 後重算）：~35-38h（不 skip pre-v2.2.0）/ ~30-35h（skip pre-v2.2.0；savings 僅 3-5h，因絕大多數引用已是 post-v2.2.0）
 
-**結論**：cost-benefit 不划算。AI 看到 `TD-030` 跟看到 `TRK-030` 一樣陌生，重點是有沒有索引能跳轉，不是 ID prefix 統一。
+**結論**：本 ADR 採 **Option C refined hybrid**，TD/HA/REG 合併為 TRK 但 ADR 與 S# 各自保留。原因是 ADR 不該動 + S# 概念不同類。Option A 與 hybrid 的成本差約 8-10h，全用在 ADR rename 上 — 該 8-10h 換來的「ADR 也進 TRK」反而是設計上的退步。
+
+### 替代方案 A'：保留所有既有 namespace（TD/S#/HA/REG/ADR），不引入新 TRK
+
+**本 ADR 起草早期傾向**。優點：零 rewrite 成本，純加 frontmatter。缺點：
+
+- TD / HA / REG 三個 namespace 本質同類（都是 debt/regression tracking），長期共存是歷史包袱
+- AI agent 與新 contributor 須學會 4 個 backlog-like prefix（TD/HA/REG/REG），對 onboarding 不友善
+- 不解決核心問題：fragmentation 不只是「散在不同檔」，也是「同一概念三個別名」
+
+**結論**：成本（~25h）僅比 Option C（~27h）省 2h，但放任 namespace fragmentation 永久存在，不划算。
 
 ### 替代方案 B：Polling-based Stale Check（無 active sync）
 
@@ -172,9 +222,15 @@ CLAUDE.md 起手式段加入：
 | 階段 | 內容 | effort |
 |---|---|---|
 | 1. ADR 與 spec ship | 本 ADR + frontmatter spec 定稿 | 4h |
-| 2. 工具實作 | `generate_planning_index.py` + `check_planning_status_sync.py` | 14h |
-| 3. Source migration | 8 處 source 全加 frontmatter（分批 PR）| ~10h |
-| 4. CLAUDE.md 起手式 + dev-rules.md 收編 | 強制 AI 必讀 index | 1h |
+| 2. **TD/HA/REG → TRK 對映 + rewrite** | 建 mapping table（`docs/internal/planning-id-mapping.md`）+ scan repo ~207 處引用批次替換 + redirect doc | 9-10h |
+| 3. 工具實作 | `generate_planning_index.py` + `check_planning_status_sync.py` | 12h |
+| 4. Source migration | 既有 backlog files 加 frontmatter，新 entries 一律 TRK-NNN | 6h |
+| 5. CLAUDE.md 起手式 + dev-rules.md 收編 + commit-convention.md 提到 TRK | 強制 AI 必讀 index | 2h |
+| **Total** | — | **~33-34h** |
+
+> 注意：因 grep 重算後實際引用數比初估的 60h 少很多，且 ADR/S# 不動省下大量 rename 成本，實際 Option C 成本落在 ~27-34h 區間（取決於 mapping table 多細、redirect doc 多嚴謹）。
+>
+> Pre-v2.2.0 引用（CHANGELOG-archive.md / docs/internal/archive/）**不動** — redirect doc 內標明「歷史 ID 在現代為 TRK-NNN」即可，savings 約 3-5h。
 
 ## 後果（Consequences）
 
@@ -184,11 +240,14 @@ CLAUDE.md 起手式段加入：
 - contributor onboarding：新人看 index 知道哪些事 in-flight、誰負責
 - maintainer 季度 review：從 8 處收斂變從 1 處 filter
 - PR review：CI 強制 status sync 杜絕「修了但沒回頭 close」漂移
-- 既有 namespace（TD/S#/HA/REG/ADR）保留，無 rename 成本
+- TD/HA/REG → TRK 統一後，backlog tracking 從三 prefix 收斂為一個，AI 與人都少記憶 2 個
+- ADR 與 S# 各自保留語意純度（design history vs sprint planning），不被混入 backlog tracking
 
 ### 負面
 
-- 既有 ~150 條 entries 需要分批加 frontmatter（一次性投資）
+- 一次性 rewrite 成本（~9-10h）：207 處引用批次替換 + 對映表
+- redirect doc 永久維護：CHANGELOG-archive 等歷史檔的舊 ID 須在 redirect 內查到 TRK 對映
+- 既有 ~50 條 active backlog entries 需要分批加 frontmatter（一次性投資）
 - 每條新 backlog 寫作摩擦增加（需填 7-10 個 frontmatter 欄位，但有 template）
 - discovery-based 對「不該被 index」的 doc（含巧合相符 frontmatter）需要 `tracking_kind:` enum 嚴格化
 - AI 必讀宣告增加 CLAUDE.md context 負擔（但 index 文件本身可短，~200 行 table）
