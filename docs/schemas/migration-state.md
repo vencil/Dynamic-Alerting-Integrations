@@ -157,6 +157,59 @@ lang: zh
 
 ---
 
+## Storage Layout（推薦：per-cluster file split）
+
+> **避免 X-Y matrix 場景下的 git merge conflict**——多 cluster 並行推進不同 phase 時，所有 automation 寫入同一檔會造成 GitOps repo 永無止境的衝突。
+
+### 推薦：per-cluster split
+
+```
+.da/
+├── state/
+│   ├── staging-us-east.json
+│   ├── prod-us-east.json
+│   └── prod-us-west.json
+└── manifest.json           # 列舉所有 state 檔
+```
+
+**好處**：
+- staging 推 Phase 4 時、prod 推 Phase 2 不互相 commit conflict
+- 每個 cluster ops team 改自己的檔、PR 不交叉
+- automation 寫 `--cluster-state .da/state/$CLUSTER.json` 即可單檔讀寫
+
+### Manifest 檔（discovery 用）
+
+```json
+{
+  "schema_version": "1.0",
+  "states": [
+    {"cluster": "staging-us-east", "path": ".da/state/staging-us-east.json"},
+    {"cluster": "prod-us-east", "path": ".da/state/prod-us-east.json"},
+    {"cluster": "prod-us-west", "path": ".da/state/prod-us-west.json"}
+  ]
+}
+```
+
+### 例外：單檔模式
+
+只在以下情境才合理：
+- **單 cluster 部署**（最常見的 small-scale customer）— 直接寫 `.da/migration-state.json`
+- **強 CI auto-rebase + retry 機制**已就位 — automation 對 push conflict 有明確 retry path
+
+若採單檔，**CI 必須具備**：
+
+1. write 前 `git pull --rebase`（pick up parallel writes）
+2. push 失敗 retry（exponential backoff，max 5 retries）
+3. retry 仍失敗 → 暫存 state diff、人工 reconcile
+
+否則建議直接走 per-cluster split。
+
+### Tools 慣例
+
+`da-tools onboard --analyze` 預設 `--output .da/state/<cluster-name>.json`（從 `--cluster-name` flag 推），不再 default 到 single file。客戶單 cluster 不指定也仍 work（fallback to `.da/state/default.json`）。
+
+---
+
 ## Outline status
 
 | 段 | 狀態 |
