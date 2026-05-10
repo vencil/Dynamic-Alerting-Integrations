@@ -367,7 +367,7 @@ Gate 3 通過條件：
 <summary>📋 Phase 2 Checklist</summary>
 
 **規則上 git**
-- [ ] 規則 commit 進 git（用 `da-tools migrate-conf-d` 或手動轉換從舊規則）
+- [ ] 規則 commit 進 git（用 dx-internal script `scripts/tools/dx/migrate_conf_d.py` 或手動轉換從舊規則。**注意**：此 script 是 dev tool 不是 public `da-tools` 命令；公開化追蹤 [issue #405](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/405) 最後 sub-task）
 - [ ] 所有規則 emit 的 alert 都帶 `migration_status: shadow` label
 - [ ] CI 對 conf.d 跑 schema validation + `da-tools alert-quality` 預檢
 

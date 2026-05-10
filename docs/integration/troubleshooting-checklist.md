@@ -391,11 +391,17 @@ amtool silence add \
     alertname=DatabaseDown_MySQL
 
 # 之後 systematic：跑 silencer 與 v2 alertname 的 reconcile
-da-tools silencer-drift-check \
-    --am-url http://<am>:9093 \
-    --rule-source conf.d/ \
-    --rule-pack-version v2.0.0
-# 工具會列出 「silencer matchers vs v2 alertname」mismatch list、產生 patch suggestion
+# ⚠️ da-tools silencer-drift-check 尚未 ship（追蹤：issue #405）
+# 在工具 ship 之前用手動 workaround：
+amtool silence query --alertmanager.url=http://<am>:9093 | \
+    awk '/alertname=/ {print $0}' > /tmp/active-silencers.txt
+# 對照當前 v2 規則的 alertname：
+grep -hE '^\s+- alert:' conf.d/**/*.yaml | awk '{print $3}' | sort -u > /tmp/v2-alertnames.txt
+# 找出 silencer 在用但 v2 沒有的 alertname（= drift）：
+comm -23 <(grep -oE 'alertname=[a-zA-Z_]+' /tmp/active-silencers.txt | sort -u) \
+         <(sed 's/^/alertname=/' /tmp/v2-alertnames.txt | sort -u)
+# 工具 ship 後改用：
+# da-tools silencer-drift-check --am-url ... --rule-source conf.d/ --rule-pack-version v2.0.0
 ```
 
 **If not this**：
@@ -1464,20 +1470,35 @@ da-tools onboard --analyze --cluster-name <cluster> \
 
 ```bash
 # 形狀 2：schema_version drift
-# 對所有 state 檔批次升級
+# ⚠️ da-tools state-migrate 尚未 ship（追蹤：issue #405）
+# 手動 workaround：用 jq 直接修
 for f in .da/state/*.json; do
-    da-tools state-migrate --input "$f" --target-schema 1.1 --in-place
+    # 看當前 schema_version
+    CURRENT=$(jq -r '.schema_version' "$f")
+    if [ "$CURRENT" = "1.0" ]; then
+        # 對應 schema 1.0 → 1.1 的具體欄位差異（參考 schema CHANGELOG）
+        # 範例：1.1 新增 gate_log[] 欄位
+        jq '.schema_version = "1.1" | .gate_log = (.gate_log // [])' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+    fi
 done
-# da-tools state-migrate 應為 idempotent；若已 1.1 直接 skip
 git add .da/state/
 git commit -m "chore: migrate all cluster state to schema 1.1"
+# 工具 ship 後改用：for f in ...; do da-tools state-migrate --input "$f" --target-schema 1.1; done
 ```
 
 ```bash
 # 形狀 3：manifest drift
-# 用 da-tools 重生 manifest（從實際檔案系統推）
-da-tools manifest regenerate --state-dir .da/state/ --output .da/manifest.json
-# 或人工修
+# ⚠️ da-tools manifest regenerate 尚未 ship（追蹤：issue #405）
+# 手動 workaround：用 ls + jq 從 state 檔重建 manifest
+jq -n --arg version "1.0" '{schema_version: $version, states: []}' > /tmp/manifest.json
+for f in .da/state/*.json; do
+    cluster=$(basename "$f" .json)
+    jq --arg c "$cluster" --arg p "$f" \
+        '.states += [{cluster: $c, path: $p}]' \
+        /tmp/manifest.json > /tmp/manifest.json.tmp && mv /tmp/manifest.json.tmp /tmp/manifest.json
+done
+mv /tmp/manifest.json .da/manifest.json
+# 或人工加單一 cluster：
 jq '.states += [{"cluster": "new-cluster", "path": ".da/state/new-cluster.json"}]' \
     .da/manifest.json > .da/manifest.json.new
 mv .da/manifest.json.new .da/manifest.json
@@ -1488,12 +1509,21 @@ mv .da/manifest.json.new .da/manifest.json
 ```bash
 # 若客戶仍在用單檔 .da/migration-state.json
 # → 立刻轉 per-cluster split（playbook §schema 推薦預設）
-da-tools state-split \
-    --input .da/migration-state.json \
-    --output-dir .da/state/ \
-    --auto-detect-clusters
-# da-tools 自動依 state JSON 內的 scope.clusters[] 拆檔
-# 拆完 commit 一次，未來 automation 都各寫各檔
+# ⚠️ da-tools state-split 尚未 ship（追蹤：issue #405）
+# 手動 workaround：用 jq 依 scope.clusters[] 拆檔
+mkdir -p .da/state/
+jq -c '.scope.clusters[]' .da/migration-state.json | while read -r cluster_obj; do
+    CLUSTER=$(echo "$cluster_obj" | jq -r '.name')
+    # 對應 cluster 從原 state 抽出對應欄位，組單 cluster state file
+    jq --arg c "$CLUSTER" \
+        '{schema_version, generated_at, generated_by, discovery, current_state, scope: {clusters: [.scope.clusters[] | select(.name == $c)], tenants_total, rule_packs_targeted, metric_split_planned}, gate_log}' \
+        .da/migration-state.json > ".da/state/${CLUSTER}.json"
+done
+# 拆完 commit、archive 舊單檔
+git add .da/state/
+git rm .da/migration-state.json
+git commit -m "chore: split migration state to per-cluster files"
+# 工具 ship 後改用：da-tools state-split --input .da/migration-state.json --output-dir .da/state/
 ```
 
 **If not this**：
