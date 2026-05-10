@@ -30,6 +30,75 @@ tests/
 
 v2.7.0 將 98 個 `test_*.py` 從 `tests/` 根目錄搬入 `ops/` / `dx/` / `lint/` / `shared/` 四個子目錄，與 `scripts/tools/` 的分類對齊。`conftest.py` 和 `factories.py` 留在根目錄，pytest 自動遞迴收集子目錄測試。
 
+## 測試注入 Seam (v2.8.0 後標準)
+
+> **適用範圍：** `components/threshold-exporter/app/*_test.go`（Go package main）。
+> v2.8.0 一連串 PR (#363–#369) 把三個 global-swap antipatterns 從測試中拆掉，
+> 改走 `ConfigManager` 上 mirror 自 `SetClock` 的 test-only setter 注入。寫新測試前**先用對 seam，不要再引入 global swap**；老的 helper 已經刪除。
+
+### 速查決策表
+
+| 測試要驗 | 用 | 不要再用 |
+|---|---|---|
+| metrics 寫入 | `fresh, _ := freshMetrics(t)` + `m.SetMetrics(fresh)` | ~~`withIsolatedMetrics(t)`~~（PR #365 移除） |
+| log 輸出 | `log.New(&buf, "", 0)` + `m.SetLogger(testLogger)` | ~~`log.SetOutput(&buf)`~~（PR #368 移除） |
+| WatchLoop / 計時 | `startWatchLoopWithFakeClock(t, m, interval)` + `Advance` + `waitFor(state)` | ~~`time.Sleep` 等 ticker / debounce~~（PR #369 移除 WatchLoop tests） |
+| Scanner 直接呼叫 | `scanDirHierarchicalWithMetrics(dir, nil, fresh, nil)` | (legacy `scanDirHierarchical(dir, nil)` 仍 OK) |
+
+### 完整 patterns
+
+**Metrics injection** — assert 計數 / histogram bucket：
+
+```go
+fresh, _ := freshMetrics(t)
+m := NewConfigManager(dir)
+m.SetMetrics(fresh)
+m.Load()
+// assert via fresh.parseFailures.WithLabelValues("_defaults.yaml")
+```
+
+**Logger injection** — assert log 內容：
+
+```go
+var buf bytes.Buffer
+testLogger := log.New(&buf, "", 0)
+m := NewConfigManager(dir)
+m.SetLogger(testLogger)
+m.Load()
+if !strings.Contains(buf.String(), "ERROR: skip unparseable") { ... }
+```
+
+**FakeClock for WatchLoop** — assert reload 觸發：
+
+```go
+fakeClock, stop := startWatchLoopWithFakeClock(t, m, 50*time.Millisecond)
+defer stop()
+writeTestYAML(t, ...)                  // mutate filesystem
+fakeClock.Advance(50 * time.Millisecond) // fire one tick
+if !waitFor(t, 2*time.Second, func() bool {
+    return m.GetConfig().Defaults["mysql_connections"] == 95
+}) { t.Fatal(...) }
+```
+
+### t.Parallel 加入決策
+
+新測試**預設加 `t.Parallel()`**。例外（不加）：
+1. 用 `time.Sleep` 等真實時間（`config_debounce_test.go` 的 file header 有解釋為何刻意保留 / `config_slow_write_stress_test.go` 是 timing-stress test）
+2. 含 `os.Setenv` / `t.Setenv` / `os.Chdir` 等 process-global mutation
+3. 含其他全域 swap（`Metrics.` / `slog.SetDefault` / `log.SetOutput` 等）
+
+完整 RISKY tuple 在 `scripts/ops/add_t_parallel.py`。該腳本是大量 `t.Parallel` insertion 的工具，但**手動加 `t.Parallel` 也應該先掃 RISKY tuple**（避免重新引入已知 race）。
+
+### 程式碼指引
+
+| 想找什麼 | 檔案 |
+|---|---|
+| 三個 setter + lazy getter 定義 | `components/threshold-exporter/app/config.go`（`SetMetrics` / `SetLogger` / `SetClock` + `getMetrics` / `getLogger`） |
+| `freshMetrics(t)` helper | `components/threshold-exporter/app/config_metrics_test.go` |
+| `startWatchLoopWithFakeClock(t, m, interval)` helper | `components/threshold-exporter/app/watchloop_test.go` |
+| `waitFor(t, d, cond)` poll helper | `components/threshold-exporter/app/config_debounce_test.go` |
+| RISKY tuple lint | `scripts/ops/add_t_parallel.py` |
+
 ## 測試基礎設施
 
 | 檔案 | 職責 |

@@ -29,3 +29,25 @@
 #   Revert subjects use Git's built-in "Revert ..." format which
 #   doesn't match conventional commits.
 9dae239e7941
+
+# ─────────────────────────────────────────────────────────────────────
+# Pre-v1.0 bootstrap-era commits — surfaced when test-infra docs PR
+# touched CHANGELOG.md and triggered the hook for the first time on
+# CHANGELOG-touching diffs (the hook only runs on CHANGELOG*.md edits;
+# previous CHANGELOG edits used PR titles, not commit-by-commit lint).
+# These predate the conventional-commits convention adoption (≈v1.0)
+# and rewriting main history is more disruptive than the policy escape.
+# ─────────────────────────────────────────────────────────────────────
+044888a47213  # "first commit" — repo bootstrap
+a9a8e806d9fd  # "imporve implement" — pre-convention
+7d1fa50a3b3b  # "remove unused doc" — pre-convention
+a98456fd03f4  # "shrink dev record" — pre-convention
+7d6acbe49192  # "update setting" — pre-convention
+be24ab5bcea1  # "implement scenario D" — pre-convention
+7d8befc00636  # "fix incorrect doc" — pre-convention
+0dc3219bd5e9  # "phase 2: support alert yaml pattern" — pre-convention
+2da4cf4912e7  # "Project Cleanup & Token Optimization" — pre-convention
+d34da255ceb2  # "Project Cleanup & Token Optimization" — pre-convention (dup of 2da4)
+a8d82fb363fd  # "v0.7.0 - Live Observability & Load Injection" — release-cut style
+876f65aa19c7  # "release v0.9.0: Ecosystem Integration..." — release-cut style
+690dceb4417a  # "v2.0.0-preview.2: Scalable Config Governance..." — release-cut style
