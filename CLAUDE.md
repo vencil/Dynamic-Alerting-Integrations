@@ -12,6 +12,8 @@ lang: zh
 
 Session 起手式 codified 為 **PreToolUse hook** (v2.8.0) — 第一次 `Bash`/`Write`/`Edit`/`MultiEdit` 自動跑 `scripts/session-guards/session-init.py`（關 VS Code Git + 寫 session marker），後續 O(1) no-op。手動觸發 / telemetry / dev-container 啟動 / session 結束清理 → 觸發 `vibe-workflow` skill 或 `make dc-*` / `make session-cleanup`。
 
+第二支 PreToolUse hook：`scripts/session-guards/preflight_bash.py`（audit-2026-04 §H1+H2）— 攔 `sed -i` + 掛載路徑（dev-rules #11，免 token 浪費 fix file hygiene）+ 攔 `_*.bat`/`_*.ps1`/`_*.cmd` 寫到 whitelist 之外（Trap #54 防再造輪子）。被擋時 stderr 直接告訴 Claude 該用什麼替代（Read+Edit / `win_git_escape.bat raw <args>`）。
+
 ### 設計原則：主路徑 / 逃生門
 
 > **主路徑**：Dev Container 層做所有事（code / test / commit / push）；優先 `make dc-*` 統一入口。
