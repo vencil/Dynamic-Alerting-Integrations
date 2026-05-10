@@ -330,19 +330,3 @@ multi-system-migration-playbook.md  ─ Phase 3 cutover (routing flip 完)
 - **Rule Pack 速查**：[`rule-packs/ALERT-REFERENCE.md`](../rule-packs/ALERT-REFERENCE.md)
 - **設計依據**：本文件框架由 PR #389 strategic discussion 結晶化，採 Gemini 「lifecycle pattern not migration step」觀點
 
----
-
-## 12. Outline status
-
-| 段 | 狀態 |
-|---|---|
-| §1-3 兩狀態 + staged 動機 + reading speed | ✅ first ship |
-| §4 Promotion 決策準則 + checklist | ✅ first ship |
-| §5 Batch sizing | ✅ first ship |
-| §6 Observation + rollback | ✅ first ship |
-| §7 三大情境 lifecycle 框架 | ✅ first ship |
-| §8-11 與其他 doc 關係、不適用情境、cross-refs | ✅ first ship |
-| §10 dashboard / metric 細節 | 🟡 部分（dashboard 待 v2.9 ship） |
-| Concrete customer walkthrough | 🟡 待補（後續 PR 加 1 個 representative example） |
-
-EN mirror 暫不 ship（同 [multi-system-migration-playbook](multi-system-migration-playbook.md)），等 outline review 通過後一起補。
