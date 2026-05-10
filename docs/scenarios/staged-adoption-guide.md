@@ -327,7 +327,7 @@ multi-system-migration-playbook.md  ─ Phase 3 cutover (routing flip 完)
 - **規則 namespace governance**：[`docs/custom-rule-governance.md`](../custom-rule-governance.md)
 - **Multi-system migration（cutover 期）**：[`docs/scenarios/multi-system-migration-playbook.md`](multi-system-migration-playbook.md)
 - **Shadow monitoring SOP**：[`docs/shadow-monitoring-sop.md`](../shadow-monitoring-sop.md)
-- **Rule Pack 速查**：[`rule-packs/ALERT-REFERENCE.md`](../../rule-packs/ALERT-REFERENCE.md)
+- **Rule Pack 速查**：[`rule-packs/ALERT-REFERENCE.md`](../rule-packs/ALERT-REFERENCE.md)
 - **設計依據**：本文件框架由 PR #389 strategic discussion 結晶化，採 Gemini 「lifecycle pattern not migration step」觀點
 
 ---
