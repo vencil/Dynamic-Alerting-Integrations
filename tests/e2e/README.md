@@ -5,8 +5,8 @@ purpose: |
   父 README（tests/README.md）回答「我要寫什麼測試該擺哪」；本檔回答
   「進到 tests/e2e/ 後，怎麼下手」。
 
-  TD-032a 對齊現況：24 specs / 136 tests / 5 fixtures。先前版本只列
-  5 個 critical path spec、未文件化任何 fixture 或 tag 語意，已隨本次
+  最新對齊現況：24 specs / 136 tests / 5 fixtures。先前版本只列
+  5 個 critical path spec、未文件化任何 fixture 或 tag 語意，已於本次
   改寫汰換。
 audience: [contributors, ai-agent]
 lang: zh
@@ -16,7 +16,7 @@ lang: zh
 
 父 README：[`tests/README.md`](../README.md)。先看父檔的決策樹（測試擺哪、CI 對應、跑法 cheat sheet）；本檔處理進到 `tests/e2e/` 之後的細節：tag 語意、fixture 契約、新 spec 模板、REG 編號制度。
 
-## 目前規模（TD-032a snapshot）
+## 目前規模（最新 snapshot）
 
 - **24 specs / 136 tests**（chromium-only smoke + 互動）
 - **5 fixtures**（`fixtures/`）：portal-tool-smoke / axe-helper / diagnostic-matchers / mock-data / test-helpers
@@ -49,7 +49,7 @@ lang: zh
 | | `assertNoAbsoluteRootHrefs(page)` | 找出 `href="/foo"` 樣式的絕對根路徑（REG-004 風險） | 不檢查 fragment / external link |
 | `axe-helper.ts` | `checkA11y(page, opts)` | 跑 axe-core WCAG 2.1 AA scan，回傳 `violations` | 不自動 fail；caller 自己決定 budget |
 | | `waitForPageReady(page, sel?)` | 等 networkidle + 可選的 selector visible（CI Python http.server 慢需要） | 不等 React mount 完成 |
-| `diagnostic-matchers.ts` | `toBeVisibleWithDiagnostics()` Playwright matcher | element 找不到時 dump 所有 `[data-testid]` 與 `aria-label` 到失敗訊息（S#98 / LL §11） | 不取代 `toBeVisible`；只在 cold-start 風險點用 |
+| `diagnostic-matchers.ts` | `toBeVisibleWithDiagnostics()` Playwright matcher | element 找不到時 dump 所有 `[data-testid]` 與 `aria-label` 到失敗訊息（見 testing-playbook §LL §11 cold-start） | 不取代 `toBeVisible`；只在 cold-start 風險點用 |
 | `mock-data.ts` | `mockUser` / `mockTenants` / `mockGroups` / `mockAlerts` / `mockBatchOperationResponse` 等常數 | 提供共用 mock fixture | 不自動掛 `page.route` |
 | `test-helpers.ts` | `waitForPortalReady(page)` / `mockApiEndpoint(...)` 等 | portal 級操作（不專屬單一 portal 工具） | 不取代 `portal-tool-smoke` 的 navigate |
 

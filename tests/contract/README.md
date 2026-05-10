@@ -50,7 +50,7 @@ CONTRACT_MAX_EXAMPLES=50 make contract-test
 
 ## CI 整合
 
-**已啟用**（TD-028 修復 spec drift 後）：在 `Go Tests (1.26)` job 末段，於 swag drift check 之後跑。`CONTRACT_MAX_EXAMPLES=5` 讓單次 CI ~10-20s。
+**已啟用**（spec-drift fix 之後）：在 `Go Tests (1.26)` job 末段，於 swag drift check 之後跑。`CONTRACT_MAX_EXAMPLES=5` 讓單次 CI ~10-20s。
 
 當前 CI step:
 ```yaml
