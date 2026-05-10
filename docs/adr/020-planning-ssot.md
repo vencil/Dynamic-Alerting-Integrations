@@ -98,6 +98,36 @@ owner: vencil                   # optional：誰負責
 
 CI 機制觸發時機：pre-merge GitHub Actions check（讀 PR body via `${{ github.event.pull_request.body }}`），或 pre-push hook 本地 dry-run。
 
+#### ⚠️ Implementation gotcha：Regex 邊界與大小寫
+
+Parse PR body 抓 close-marker 的 regex **必須** 同時滿足兩條件：
+
+1. **Word boundary `\b`**：避免 `TD-1` 誤匹配到 `TD-10` / `TD-100` / `TD-1000`
+2. **Case-insensitive**：開發者寫 `Resolves` / `resolves` / `RESOLVES` 都該認
+
+**正確 regex**：
+
+```python
+CLOSE_MARKER_RE = re.compile(
+    r"(?i)(?:resolves|closes|fixes|fix)\s+(TD-\d+|S#\d+|HA-\d+|REG-\d+|ADR-\d+)\b"
+)
+```
+
+注意 `(?i)` flag + namespace 後 `\b` 結尾。`S#` 的 `#` 不是 word char 所以 `\b` 在 `\d+` 後而不是 namespace 後。
+
+**測試 case 必須涵蓋**：
+
+```python
+# Should match
+"Resolves TD-30"           → TD-30
+"resolves td-030"          → TD-030 (case-insensitive)
+"Closes HA-11 and S#74"    → HA-11, S#74
+
+# Should NOT cross-match
+"Resolves TD-1 (not TD-10)"   → only TD-1
+"See TD-100 below"            → no match (no close marker prefix)
+```
+
 ### CLAUDE.md 必讀宣告
 
 CLAUDE.md 起手式段加入：

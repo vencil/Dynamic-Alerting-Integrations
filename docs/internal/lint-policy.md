@@ -69,6 +69,28 @@ def get_added_lines(file_path, base="origin/main"):
 
 統一在 `scripts/tools/lint/_lint_helpers.py` 提供 `get_diff_added_lines(filepath, base=None)` helper，所有 (b)/(c) class lint 共用，base 預設讀 `GITHUB_BASE_REF` env，回退 `origin/main`。
 
+### ⚠️ Implementation gotcha：GitHub Actions 淺拷貝陷阱
+
+`actions/checkout@v4` 預設 `fetch-depth: 1`（淺 clone，只拉當前 commit）。在 CI 上跑 `git diff origin/main` 會直接 fatal error，因為 `.git` 內根本沒有 `origin/main` ref 的歷史。
+
+**所有 (b)/(c) class lint 對應的 GitHub Actions workflow 必須**：
+
+```yaml
+- uses: actions/checkout@v4
+  with:
+    fetch-depth: 0    # full history — required for diff-only lints
+```
+
+或顯式 fetch base branch：
+
+```yaml
+- run: |
+    git fetch origin ${{ github.base_ref }}:base-ref
+    # then lint can use `base-ref` instead of `origin/main`
+```
+
+`_lint_helpers.get_diff_added_lines()` 應該偵測 base ref 不存在時 fail-loud（給清楚錯訊指向本節），不要 silent-fall-through 到「全檔掃描」假裝 diff-aware。
+
 ### Diff-aware drift 預期行為
 
 Lint 以 PR 目標分支當下 head 為 base；rebase 後 base 變動可能需 re-run CI。**這是預期行為**，不是 bug——它正是「合併後的最終狀態必須合法」的保證。
