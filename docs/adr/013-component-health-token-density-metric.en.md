@@ -11,34 +11,34 @@ lang: en
 > **Language / 語言：** **English (Current)** | [中文](./013-component-health-token-density-metric.md)
 
 > Consolidates two decisions:
-> - **DEC-08** (Day 1, planning §10): Tier classification refactored from single `appears_in` signal to five-dimensional weighted scoring
-> - **DEC-M** (Day 4, planning §19): New `token_density` auxiliary metric introduced
+> - **Tier classification algorithm**: Refactored from single `appears_in` signal to five-dimensional weighted scoring
+> - **`token_density` auxiliary metric**: Quantifies design-token migration completeness
 >
 > Both changes apply to `scripts/tools/dx/scan_component_health.py`, merged into a single ADR to avoid fragmentation.
 
 ## Status
 
-✅ **Accepted** (DEC-08 Day 1 + DEC-M Day 4, v2.7.0, 2026-04-16)
+✅ **Accepted** (v2.7.0, 2026-04-16)
 
 ## Background
 
-### Problem 1: Single-Signal Tier Classification Inaccuracy (DEC-08)
+### Problem 1: Single-Signal Tier Classification Inaccuracy
 
 The v2.6.x scanner relied solely on `appears_in` (number of documents referencing a tool) for Tier determination:
 - tenant-manager referenced in 6 documents → Tier 1
 - A portal tool with similar complexity but documented in only 1 file → Tier 3
 
-This resulted in **independent, high-value portal tools being systematically underestimated**. Tier classification directly impacts Phase .a0 migration ordering and regression budget allocation.
+This resulted in **independent, high-value portal tools being systematically underestimated**. Tier classification directly impacts token-migration ordering and regression budget allocation.
 
-### Problem 2: Group A/B/C Lacks Migration Completion Precision (DEC-M)
+### Problem 2: Group A/B/C Lacks Migration Completion Precision
 
-During Phase .a0 batches 3/4, the `token_group` classification (A/B/C = ≥80 / ≥20 / <20 tokens) proved too coarse:
+During later token-migration batches, the `token_group` classification (A/B/C = ≥80 / ≥20 / <20 tokens) proved too coarse:
 - 80 tokens + 0 palette → Group A
 - 80 tokens + 20 palette → Still Group A, but residual palette is significant
 
 ## Decision
 
-### Part 1: Five-Dimensional Weighted Tier Scoring (DEC-08)
+### Part 1: Five-Dimensional Weighted Tier Scoring
 
 ```python
 score = (
@@ -64,7 +64,7 @@ All `w_*` weights are currently set to **1** (equal weighting).
 | 10+ dimensions | Excessive maintenance cost; calibration requires regression data |
 | ML classifier | Insufficient data (38 tools); no labeled training set |
 
-### Part 2: token_density Auxiliary Metric (DEC-M)
+### Part 2: token_density Auxiliary Metric
 
 ```python
 token_density = tokens / (tokens + palette_hits)   # Range [0.0, 1.0]
@@ -99,19 +99,17 @@ Output example:
 
 ### Positive
 
-- Tier classification no longer systematically underestimates independent portal tools (corrects Day 1 ordering bias for tools like tenant-manager)
+- Tier classification no longer systematically underestimates independent portal tools (corrects early ordering bias for tools like tenant-manager)
 - Dashboard precisely shows "which tools need 1-2 more palettes"
 - Per-tool JSON output changes are additive; no breaking changes
-- Day 4 batch 4 migration ordering is more reasonable than Day 1
+- Subsequent token-migration batch ordering is more reasonable than the original single-signal version
 
 ### Negative / Risks
 
-1. **Five-dimensional weights are heuristic** — Equal weighting `w=1` lacks empirical calibration. **Mitigation**: After Phase .a concludes, retrospectively validate with actual migration outcomes; adjust if necessary.
+1. **Five-dimensional weights are heuristic** — Equal weighting `w=1` lacks empirical calibration. **Mitigation**: After v2.7.0 concludes, retrospectively validate with actual migration outcomes; adjust if necessary.
 2. **Density misinterpretation** — Risk of treating density=1.0 as "complete". **Mitigation**: `scan_component_health.py` docstring clarifies "density is a secondary signal".
-3. **Group thresholds (≥80/≥20/<20) remain hardcoded** — Sourced from Day 1 heuristic estimation. **Mitigation**: Recalibrate based on actual distribution after Phase .a concludes.
+3. **Group thresholds (≥80/≥20/<20) remain hardcoded** — Sourced from early heuristic estimation. **Mitigation**: Recalibrate based on actual distribution after v2.7.0 concludes.
 
 ## Related
 
 - `scripts/tools/dx/scan_component_health.py` (implementation)
-- `docs/internal/v2.7.0-planning.md` §10 DEC-08 + §19 DEC-M
-- `docs/internal/v2.7.0-day1to3-retrospective-review.md` §3.1 (DEC-08 retrospective)

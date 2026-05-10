@@ -145,7 +145,7 @@ v2.2.0 BYO documentation's Operator Appendix was only CRD example translation. U
 
 ## Addendum: Architecture Boundary Declaration (v2.6.0)
 
-> **Added in v2.6.0 Phase .a** — Formally documents core component responsibility boundaries to prevent scope creep.
+> Formally documents core component responsibility boundaries to prevent scope creep.
 
 ### Inviolable Boundaries
 

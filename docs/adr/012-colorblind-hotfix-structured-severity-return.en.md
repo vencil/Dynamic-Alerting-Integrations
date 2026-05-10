@@ -10,13 +10,12 @@ lang: en
 
 > **Language / 語言：** **English (Current)** | [中文](./012-colorblind-hotfix-structured-severity-return.md)
 
-> Originally recorded as **DEC-L (Sprint 0)** in `docs/internal/v2.7.0-planning.md §19`.
-> The hotfix was deployed on Day 4 AM; this ADR preserves the decision context for future
-> generalization to other color-dependent tools (platform-demo mode badges, health dashboard tier badges, etc.).
+> This ADR preserves the decision context so the same pattern can be generalized
+> to other color-dependent tools (platform-demo mode badges, health dashboard tier badges, etc.).
 
 ## Status
 
-✅ **Accepted** (v2.7.0 Day 4 Sprint 0, 2026-04-16) — hotfix landed; subsequent runtime WCAG verification CI-gated.
+✅ **Accepted** (v2.7.0, 2026-04-16) — hotfix landed; subsequent runtime WCAG verification CI-gated.
 
 ## Background
 
@@ -26,11 +25,11 @@ In the `threshold-heatmap.jsx` v2.6.0 implementation, cell severity was expresse
 (green-200 / yellow-200 / orange-200 / red-500). This violated **WCAG 1.4.1 Use of Color**: information was conveyed
 only through color, making it impossible for users with red-green color blindness to distinguish "medium" from "anomalous" values.
 
-### Why Sprint 0 Rather Than Full Migration
+### Why Hotfix Rather Than Full Migration
 
-1. Full palette-to-token migration (87 tailwind palette → 0) requires ~3 hours and would block the Phase .a0 batch 4 schedule
+1. Full palette-to-token migration (87 tailwind palette → 0) requires ~3 hours and would block the broader v2.7.0 design-token migration schedule
 2. WCAG 1.4.1 is a legal compliance risk (AA requirement), so we prioritize **remedying semantics** while **deferring color token migration**
-3. After the hotfix lands, threshold-heatmap's formal token migration remains a Phase .a0 closure task (§19 Day 5 candidate #5)
+3. After the hotfix lands, threshold-heatmap's formal token migration remained a v2.7.0 closure task
 
 ## Decision Drivers
 
@@ -91,18 +90,17 @@ This design ensures:
 
 ### Negative / Risks
 
-1. **Cross-platform font inconsistency**: ⚠⚠ width varies between Windows Consolas and macOS SF Mono, causing table misalignment. **Mitigation**: During formal Phase .a0 migration on Day 5, fix monospace font stack or switch to fixed-width Unicode blocks.
+1. **Cross-platform font inconsistency**: ⚠⚠ width varies between Windows Consolas and macOS SF Mono, causing table misalignment. **Mitigation**: During formal token migration, fix monospace font stack or switch to fixed-width Unicode blocks.
 2. **Screen reader announcement of `⚠⚠`**: NVDA / VoiceOver announces "Warning Sign Warning Sign". **Mitigation**: This hotfix relies on `ariaLabel` to override, but future callsites placing symbols directly will need reminding.
-3. **Dark mode contrast unverified**: Hotfix uses Tailwind palette (not migrated to tokens), which may fail contrast checks under `[data-theme="dark"]`. **Mitigation**: Sync contrast calculations during formal Phase .a0 token migration.
+3. **Dark mode contrast unverified**: Hotfix uses Tailwind palette (not migrated to tokens), which may fail contrast checks under `[data-theme="dark"]`. **Mitigation**: Sync contrast calculations during formal token migration.
 
 ### Further Tracking
 
-- `docs/internal/v2.7.0-day5-verification-triage.md` §3 lists CI gate for runtime verification
-- Phase .a0 Day 5 candidate #5: threshold-heatmap palette → token formal migration
+- Runtime WCAG validation CI gate (live since v2.7.0)
+- threshold-heatmap palette → token formal migration (v2.7.0 closure)
 
 ## Related
 
 - WCAG 2.1 — Success Criterion 1.4.1 Use of Color (Level A)
 - `docs/interactive/tools/threshold-heatmap.jsx`
-- `docs/internal/v2.7.0-planning.md` §19 DEC-L
-- `docs/internal/v2.7.0-day5-verification-triage.md` §3
+- [ADR-016: `[data-theme]` Single-track Dark Mode](016-data-theme-single-track-dark-mode.en.md) — prerequisite for downstream dark-mode contrast verification
