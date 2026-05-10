@@ -56,9 +56,13 @@ jobs:
           cache: "pip"
 
       - name: Install dependencies
+        # No requirements.txt at repo root — this project uses pyproject.toml +
+        # inline workflow deps. Mirror the canonical Python test dep set from
+        # ci.yml (the python-tests job) since the pilot re-runs the same
+        # hypothesis-backed property tests under pytest.
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install pyyaml croniter pytest pytest-cov pytest-timeout pytest-xdist promql-parser hypothesis
 
       - name: Run Python mutation pilot
         id: pilot
