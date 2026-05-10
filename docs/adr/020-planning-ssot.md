@@ -80,7 +80,7 @@ owner: poyu                     # optional：誰負責
 | Namespace | 用途 | 為什麼不合併 |
 |---|---|---|
 | **TRK-NNN** | 統一 debt/regression/dx tracking。**取代既有 TD-NN / HA-NN / REG-NN** 三個分散 namespace | 三者本質同類（都是「該修還沒修」狀態追蹤），分散是歷史包袱。AI/人類各自記三個 prefix 沒價值 |
-| **ADR-NNN** | 架構設計決策史 | ADR 是 **永久 design history**，不是 backlog。已被多處 user-facing doc / commit / external citation 引用（如 [README.md](../../README.md) 引用 ADR-007/ADR-018/ADR-019 等）；rename 等於重寫設計史，redirect mapping 永遠維護。語意上 ADR 與 TRK 也根本不同：ADR 是「**這個決策當時為什麼**」，TRK 是「**這個工作 done 了沒**」 |
+| **ADR-NNN** | 架構設計決策史 | ADR 是 **永久 design history**，不是 backlog。已被多處 user-facing doc / commit / external citation 引用（如 [README.md](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/README.md) 引用 ADR-007/ADR-018/ADR-019 等）；rename 等於重寫設計史，redirect mapping 永遠維護。語意上 ADR 與 TRK 也根本不同：ADR 是「**這個決策當時為什麼**」，TRK 是「**這個工作 done 了沒**」 |
 | **S#NNN** | Sprint planning ledger（時序性、跨 sprint 的階段標記） | S# 對應 sprint 內 work item，本質是時序 + 階段，跟跨 sprint 的持續債務不同。混入 TRK 會稀釋語意。Sprint 結束後若條目仍 open 才 promote 為 TRK（done 的 sprint 條目歸檔即可，不必 rename） |
 
 ### TD-NN / HA-NN / REG-NN → TRK-NNN 遷移
@@ -183,7 +183,7 @@ CLAUDE.md 起手式段加入：
 
 - 79 處 TD-NN + 128 處 HA-NN/REG-NN + 232 處 S#NN 引用要 rewrite — 共 ~440 處
 - 19 份 ADR 重新編號 — **最高風險**：
-  - ADR 已被 user-facing docs（[README.md](../../README.md)、[architecture-and-design.md](../architecture-and-design.md)、各 component README）多處引用作 design citation
+  - ADR 已被 user-facing docs（[README.md](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/README.md)、[architecture-and-design.md](../architecture-and-design.md)、各 component README）多處引用作 design citation
   - ADR 也已在外部 commit messages / 客戶看的 changelog / GitHub issue 內被引用為 design history reference
   - rename 等於重寫設計史，redirect mapping 須永久維護
 - ADR 與 backlog tracking 概念上不同類（design history vs work-in-progress tracking），合併稀釋兩者語意
