@@ -161,6 +161,7 @@ func TestMixedMode_RootDefaultsCascadeToBoth(t *testing.T) {
 // ─────────────────────────────────────────────────────────────────
 
 func TestMixedMode_DuplicateAcrossModes_RejectedAtLoad(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	writeTestYAML(t, filepath.Join(root, "_defaults.yaml"), `
 defaults:
@@ -183,14 +184,15 @@ tenants:
     mysql_connections: "200"
 `)
 
-	// Capture log to confirm the WARN-only path is NOT taken (post-fix
-	// the code returns error directly; WARN line should be absent).
+	// Per-test logger so the negative assertion (WARN line MUST NOT
+	// appear) is observed against THIS test's log output, not the
+	// global stdlib logger that sibling parallel tests would race on
+	// (#4b).
 	var logBuf bytes.Buffer
-	origOutput := log.Writer()
-	log.SetOutput(&logBuf)
-	t.Cleanup(func() { log.SetOutput(origOutput) })
+	testLogger := log.New(&logBuf, "", 0)
 
 	mgr := NewConfigManager(root)
+	mgr.SetLogger(testLogger)
 	err := mgr.Load()
 
 	// v2.8.x contract: Load must return error.

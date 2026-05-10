@@ -90,6 +90,7 @@ tenants:
 // ============================================================
 
 func TestLogConfigStats_Format(t *testing.T) {
+	t.Parallel()
 	cfg := &ThresholdConfig{
 		Defaults:     map[string]float64{"mysql_connections": 80, "mysql_cpu": 75},
 		Profiles:     map[string]map[string]ScheduledValue{"gold": {"mysql_connections": {Default: "100"}}},
@@ -107,16 +108,13 @@ func TestLogConfigStats_Format(t *testing.T) {
 		},
 	}
 
-	// Capture log output
+	// Per-test logger writing to a captured buffer — no global stdlib
+	// state mutation, so other parallel tests never observe our log
+	// stream and we never observe theirs (#4b).
 	var buf bytes.Buffer
-	orig := log.Writer()
-	log.SetOutput(&buf)
-	defer log.SetOutput(orig)
+	testLogger := log.New(&buf, "", 0)
 
-	// PR-F will replace the log.SetOutput global swap above with a
-	// per-test logger passed here. For PR-E (signature add) we pass
-	// log.Default() so the existing global swap still captures.
-	logConfigStats(log.Default(), cfg, "Test prefix")
+	logConfigStats(testLogger, cfg, "Test prefix")
 
 	output := buf.String()
 
@@ -381,6 +379,7 @@ func TestDetectConfigSource(t *testing.T) {
 // ============================================================
 
 func TestFailSafeReload_InvalidYAML(t *testing.T) {
+	t.Parallel()
 	// Create temp directory with valid config
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.yaml")
@@ -393,8 +392,15 @@ tenants:
 `
 	writeTestFile(t, dir, "config.yaml", validContent)
 
+	// Per-test logger so any log lines emitted during the failing
+	// reload land on our buffer (not the global stdlib logger),
+	// keeping this test parallel-safe (#4b).
+	var buf bytes.Buffer
+	testLogger := log.New(&buf, "", 0)
+
 	// Load initial valid config
 	mgr := NewConfigManager(configPath)
+	mgr.SetLogger(testLogger)
 	if err := mgr.Load(); err != nil {
 		t.Fatalf("Initial Load failed: %v", err)
 	}
@@ -404,12 +410,6 @@ tenants:
 	if cfg.Defaults["mysql_connections"] != 80 {
 		t.Errorf("initial config: expected 80, got %.0f", cfg.Defaults["mysql_connections"])
 	}
-
-	// Capture log output
-	var buf bytes.Buffer
-	oldOutput := log.Writer()
-	log.SetOutput(&buf)
-	defer log.SetOutput(oldOutput)
 
 	// Write invalid YAML
 	invalidContent := `
@@ -438,7 +438,11 @@ tenants:
 		t.Error("expected IsLoaded() = true after failed reload (fail-safe preserved)")
 	}
 
-	// Verify error was logged
+	// Informational: surface whatever (if anything) was logged during
+	// the failed reload. Single-file mode currently doesn't log on
+	// loadFile failure — the original log.SetOutput observation here
+	// has always been a no-op — but the capture stays so future log
+	// additions on the failure path are visible to the test author.
 	logOutput := buf.String()
 	if !strings.Contains(logOutput, "ERROR") && !strings.Contains(logOutput, "error") {
 		t.Logf("note: error logging may not include 'ERROR' string, log output was: %s", logOutput)

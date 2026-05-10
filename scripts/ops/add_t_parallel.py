@@ -67,6 +67,14 @@ RISKY = (
     # PR #356 when -race surfaced bytes.Buffer races in
     # TestMixedMode_DuplicateAcrossModes_RejectedAtLoad in the Linux
     # dev container.
+    #
+    # The exporter's package main test files no longer use log.SetOutput
+    # (#4b PR-F replaced the 4 capture sites with mgr.SetLogger(testLogger)
+    # injection through the ConfigManager.logger seam from #4b PR-D).
+    # Kept in RISKY as a tripwire so a future re-introduction surfaces here.
+    # config_bench_test.go's silenceLog(b) helper still calls log.SetOutput
+    # but it's a *testing.B benchmark scope (single-threaded by design)
+    # and would not trigger this lint anyway.
     "log.SetOutput",
     "log.SetFlags",
 )
