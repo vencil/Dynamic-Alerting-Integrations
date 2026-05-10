@@ -104,6 +104,18 @@ type ConfigManager struct {
 	// deeper applied to exporter (mirrors PR #354 in tenant-api).
 	clock clockwork.Clock
 
+	// metrics is this manager's *configMetrics instance. Production
+	// constructors plug in the package-level singleton via
+	// getConfigMetrics() so production behavior is unchanged. Tests can
+	// swap a fresh instance via SetMetrics for parallel-safe observation
+	// — foundation for #4a (drop withIsolatedMetrics global swap).
+	//
+	// Until follow-up PRs convert all ConfigManager methods + scanner
+	// signatures to use this field, the global getConfigMetrics()
+	// helpers are still in use by callsites. The field exists today
+	// as the injection seam.
+	metrics *configMetrics
+
 	// Sub-struct field groups — v2.8.0 PR-5 decomposed the original
 	// 14-mixed-fields ConfigManager into named concerns. Field accesses
 	// across the codebase use `m.flat.X` / `m.hierarchy.X` / `m.debounce.X`
@@ -136,6 +148,7 @@ func NewConfigManagerWithDebounce(path string, debounceWindow time.Duration) *Co
 		path:     path,
 		isDir:    isDir,
 		clock:    clockwork.NewRealClock(),
+		metrics:  getConfigMetrics(),
 		debounce: debouncerState{window: debounceWindow},
 	}
 }
@@ -149,6 +162,21 @@ func (m *ConfigManager) SetClock(c clockwork.Clock) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.clock = c
+}
+
+// SetMetrics swaps the *configMetrics instance this manager bumps.
+// Test-only — production code receives the package-level singleton
+// from the constructor. Tests use this to inject a fresh instance for
+// parallel-safe observation; mirrors SetClock. Foundation for #4a
+// (drop the withIsolatedMetrics global-swap pattern). Until the
+// follow-up PRs route ConfigManager methods through m.metrics +
+// thread *configMetrics through the top-level scanners, swapping
+// here only isolates the field access — code paths still using the
+// global helpers will keep racing on the singleton.
+func (m *ConfigManager) SetMetrics(metrics *configMetrics) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.metrics = metrics
 }
 
 // Mode returns "directory" or "single-file" for diagnostics.

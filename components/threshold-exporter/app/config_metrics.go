@@ -198,6 +198,27 @@ func registerConfigMetrics(reg prometheus.Registerer, m *configMetrics) {
 	reg.MustRegister(m.lastReloadComplete)
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// Method-form helpers on *configMetrics (foundation for #4a).
+//
+// Each top-level helper below has a sibling method on the receiver so
+// callers that own a *configMetrics instance can bump that instance's
+// counter directly — no global indirection. ConfigManager (after the
+// foundation lands) holds its own *configMetrics field; tests inject
+// a fresh instance via WithMetrics + assert against it without racing
+// the package-level singleton.
+//
+// Top-level functions stay for callers that don't own a ConfigManager
+// (collector.go, top-level scanners called outside ConfigManager).
+// They delegate to getConfigMetrics().<method>() — same behavior as
+// before, just one indirection deeper.
+// ─────────────────────────────────────────────────────────────────────
+
+// IncParseFailure (method form) — see top-level IncParseFailure for docs.
+func (cm *configMetrics) IncParseFailure(fileBasename string) {
+	cm.parseFailures.WithLabelValues(fileBasename).Inc()
+}
+
 // IncParseFailure bumps the parse-failure counter for a specific file
 // basename. Called from scanDirHierarchical whenever yaml.Unmarshal
 // returns an error for a non-_-prefixed tenant file. file_basename
@@ -205,7 +226,15 @@ func registerConfigMetrics(reg prometheus.Registerer, m *configMetrics) {
 // in practice — same tenant name across domains sums to one series.
 // v2.8.0 A-8d (Issue #52-adjacent observability gap from Gemini R3).
 func IncParseFailure(fileBasename string) {
-	getConfigMetrics().parseFailures.WithLabelValues(fileBasename).Inc()
+	getConfigMetrics().IncParseFailure(fileBasename)
+}
+
+// ObserveScanDuration (method form) — see top-level for docs.
+func (cm *configMetrics) ObserveScanDuration() func() {
+	t0 := time.Now()
+	return func() {
+		cm.scanDuration.Observe(time.Since(t0).Seconds())
+	}
 }
 
 // ObserveScanDuration starts a timer and returns a stop function that
@@ -219,10 +248,12 @@ func IncParseFailure(fileBasename string) {
 // directly (vs. prometheus.NewTimer) lets us share the t0 for both the
 // metric and the debug log without double-observing.
 func ObserveScanDuration() func() {
-	t0 := time.Now()
-	return func() {
-		getConfigMetrics().scanDuration.Observe(time.Since(t0).Seconds())
-	}
+	return getConfigMetrics().ObserveScanDuration()
+}
+
+// IncReloadTrigger (method form).
+func (cm *configMetrics) IncReloadTrigger(reason string) {
+	cm.reloadTriggers.WithLabelValues(reason).Inc()
 }
 
 // IncReloadTrigger bumps the reload counter for the given reason. Safe
@@ -230,31 +261,51 @@ func ObserveScanDuration() func() {
 // will happily create a new label value (operator can watch for drift
 // from the documented set in config_debounce.go).
 func IncReloadTrigger(reason string) {
-	getConfigMetrics().reloadTriggers.WithLabelValues(reason).Inc()
+	getConfigMetrics().IncReloadTrigger(reason)
+}
+
+// IncReloadTriggerBy (method form).
+func (cm *configMetrics) IncReloadTriggerBy(reason string, n int) {
+	if n <= 0 {
+		return
+	}
+	cm.reloadTriggers.WithLabelValues(reason).Add(float64(n))
 }
 
 // IncReloadTriggerBy bumps the counter by N (for the batch case where
 // diffAndReload reloads k tenants all with the same reason).
 func IncReloadTriggerBy(reason string, n int) {
-	if n <= 0 {
-		return
-	}
-	getConfigMetrics().reloadTriggers.WithLabelValues(reason).Add(float64(n))
+	getConfigMetrics().IncReloadTriggerBy(reason, n)
+}
+
+// IncDefaultsNoop (method form).
+func (cm *configMetrics) IncDefaultsNoop() {
+	cm.defaultsNoop.Inc()
 }
 
 // IncDefaultsNoop bumps the no-op counter. Called once per dependent
 // tenant whose merged_hash didn't move after a defaults file changed.
 func IncDefaultsNoop() {
-	getConfigMetrics().defaultsNoop.Inc()
+	getConfigMetrics().IncDefaultsNoop()
+}
+
+// IncDefaultsNoopBy (method form).
+func (cm *configMetrics) IncDefaultsNoopBy(n int) {
+	if n <= 0 {
+		return
+	}
+	cm.defaultsNoop.Add(float64(n))
 }
 
 // IncDefaultsNoopBy bumps the no-op counter by N. Used by diffAndReload
 // which computes the batch size without per-tenant allocations.
 func IncDefaultsNoopBy(n int) {
-	if n <= 0 {
-		return
-	}
-	getConfigMetrics().defaultsNoop.Add(float64(n))
+	getConfigMetrics().IncDefaultsNoopBy(n)
+}
+
+// IncDefaultsShadowed (method form).
+func (cm *configMetrics) IncDefaultsShadowed() {
+	cm.defaultsShadowed.Inc()
 }
 
 // IncDefaultsShadowed bumps the shadowed-defaults counter — called once
@@ -263,16 +314,29 @@ func IncDefaultsNoopBy(n int) {
 // (v2.8.0 Issue #61). Distinct from IncDefaultsNoop, which now counts
 // only cosmetic edits.
 func IncDefaultsShadowed() {
-	getConfigMetrics().defaultsShadowed.Inc()
+	getConfigMetrics().IncDefaultsShadowed()
+}
+
+// IncDefaultsShadowedBy (method form).
+func (cm *configMetrics) IncDefaultsShadowedBy(n int) {
+	if n <= 0 {
+		return
+	}
+	cm.defaultsShadowed.Add(float64(n))
 }
 
 // IncDefaultsShadowedBy bumps the shadowed counter by N for the batch
 // case (mirror of IncDefaultsNoopBy).
 func IncDefaultsShadowedBy(n int) {
+	getConfigMetrics().IncDefaultsShadowedBy(n)
+}
+
+// ObserveBlastRadius (method form).
+func (cm *configMetrics) ObserveBlastRadius(reason, scope, effect string, n int) {
 	if n <= 0 {
 		return
 	}
-	getConfigMetrics().defaultsShadowed.Add(float64(n))
+	cm.blastRadius.WithLabelValues(reason, scope, effect).Observe(float64(n))
 }
 
 // ObserveBlastRadius records one (reason, scope, effect) bucket
@@ -283,10 +347,12 @@ func IncDefaultsShadowedBy(n int) {
 // guarding) so the per-tick group-by emission loop in diffAndReload
 // can iterate over a sparse map without conditional logic.
 func ObserveBlastRadius(reason, scope, effect string, n int) {
-	if n <= 0 {
-		return
-	}
-	getConfigMetrics().blastRadius.WithLabelValues(reason, scope, effect).Observe(float64(n))
+	getConfigMetrics().ObserveBlastRadius(reason, scope, effect, n)
+}
+
+// ObserveReloadDuration (method form).
+func (cm *configMetrics) ObserveReloadDuration(d time.Duration) {
+	cm.reloadDuration.Observe(d.Seconds())
 }
 
 // ObserveReloadDuration records one diffAndReload elapsed-time sample
@@ -294,7 +360,15 @@ func ObserveBlastRadius(reason, scope, effect string, n int) {
 // and from the synchronous-fallback path in triggerDebouncedReload so
 // every reload contributes one sample regardless of debounce mode.
 func ObserveReloadDuration(d time.Duration) {
-	getConfigMetrics().reloadDuration.Observe(d.Seconds())
+	getConfigMetrics().ObserveReloadDuration(d)
+}
+
+// ObserveDebounceBatch (method form).
+func (cm *configMetrics) ObserveDebounceBatch(n int) {
+	if n < 0 {
+		return
+	}
+	cm.debounceBatch.Observe(float64(n))
 }
 
 // ObserveDebounceBatch records one debounce-window batch-size sample
@@ -304,10 +378,12 @@ func ObserveReloadDuration(d time.Duration) {
 // to observe, and folding "1" samples in would skew the p50 baseline
 // that ops use to detect debounce regressions.
 func ObserveDebounceBatch(n int) {
-	if n < 0 {
-		return
-	}
-	getConfigMetrics().debounceBatch.Observe(float64(n))
+	getConfigMetrics().ObserveDebounceBatch(n)
+}
+
+// SetLastScanComplete (method form).
+func (cm *configMetrics) SetLastScanComplete(t time.Time) {
+	cm.lastScanComplete.Set(float64(t.Unix()))
 }
 
 // SetLastScanComplete records the wall-clock unix seconds at successful
@@ -319,7 +395,12 @@ func ObserveDebounceBatch(n int) {
 // value so a transient scan failure does not look like a successful
 // completion. Tests that want a clean baseline observe via withIsolatedMetrics.
 func SetLastScanComplete(t time.Time) {
-	getConfigMetrics().lastScanComplete.Set(float64(t.Unix()))
+	getConfigMetrics().SetLastScanComplete(t)
+}
+
+// SetLastReloadComplete (method form).
+func (cm *configMetrics) SetLastReloadComplete(t time.Time) {
+	cm.lastReloadComplete.Set(float64(t.Unix()))
 }
 
 // SetLastReloadComplete records the wall-clock unix seconds at the
@@ -328,5 +409,5 @@ func SetLastScanComplete(t time.Time) {
 //
 // Called only on success path — see SetLastScanComplete docstring.
 func SetLastReloadComplete(t time.Time) {
-	getConfigMetrics().lastReloadComplete.Set(float64(t.Unix()))
+	getConfigMetrics().SetLastReloadComplete(t)
 }
