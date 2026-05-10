@@ -47,6 +47,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/jonboulle/clockwork"
 )
 
 // Reload trigger reasons — label values for the
@@ -79,6 +81,12 @@ const (
 // unfiltered for duplicates — a storm of 10 "source" events is itself a
 // signal and we want to count them as 10 increments.
 func (m *ConfigManager) triggerDebouncedReload(reason string) {
+	// Defensive: tests that build ConfigManager via struct literal won't
+	// have a clock; install a real one rather than nil-panic. Production
+	// constructors set it up via NewConfigManagerWithDebounce.
+	if m.clock == nil {
+		m.clock = clockwork.NewRealClock()
+	}
 	if m.debounce.window <= 0 {
 		// Synchronous fallback — useful for v2.6.0 parity tests and for
 		// the initial Load() bootstrap where we don't want to gate startup
@@ -95,7 +103,7 @@ func (m *ConfigManager) triggerDebouncedReload(reason string) {
 	m.debounce.pendingReasons = append(m.debounce.pendingReasons, reason)
 	if m.debounce.timer == nil {
 		// First event in this window — arm the timer.
-		m.debounce.timer = time.AfterFunc(m.debounce.window, m.fireDebounced)
+		m.debounce.timer = m.clock.AfterFunc(m.debounce.window, m.fireDebounced)
 		m.debounce.mu.Unlock()
 		return
 	}
@@ -114,7 +122,7 @@ func (m *ConfigManager) triggerDebouncedReload(reason string) {
 		// the same one. If Stop() returned false AND the timer was already
 		// nil'd by a completed fire, arm a fresh one.
 		if m.debounce.timer == nil {
-			m.debounce.timer = time.AfterFunc(m.debounce.window, m.fireDebounced)
+			m.debounce.timer = m.clock.AfterFunc(m.debounce.window, m.fireDebounced)
 		} else {
 			m.debounce.timer.Reset(m.debounce.window)
 		}

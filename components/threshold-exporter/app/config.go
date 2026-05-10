@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jonboulle/clockwork"
 	"gopkg.in/yaml.v3"
 )
 
@@ -75,10 +76,10 @@ type hierarchyState struct {
 // fast (just append to pendingReasons + reset timer).
 type debouncerState struct {
 	window         time.Duration
-	timer          *time.Timer // current pending reload; nil when idle
-	mu             sync.Mutex  // guards timer + pendingReasons
-	pendingReasons []string    // accumulates reload triggers during a window
-	fired          uint64      // count of fires; read via DebounceFiredCount()
+	timer          clockwork.Timer // current pending reload; nil when idle
+	mu             sync.Mutex      // guards timer + pendingReasons
+	pendingReasons []string        // accumulates reload triggers during a window
+	fired          uint64          // count of fires; read via DebounceFiredCount()
 }
 
 type ConfigManager struct {
@@ -93,6 +94,15 @@ type ConfigManager struct {
 	// Config info metric state (v2.3.0)
 	configSource string // "configmap", "operator", or "git-sync"
 	gitCommit    string // git commit hash from .git-revision file, or ""
+
+	// clock abstracts time.NewTicker / time.AfterFunc so tests can drive
+	// the WatchLoop ticker + debounce timer deterministically with a
+	// clockwork.FakeClock instead of time.Sleep'ing for real wall-clock
+	// elapses. Production constructors plug in clockwork.NewRealClock();
+	// test code uses SetClock to swap in a FakeClock and then
+	// `Advance(window)` to fire timers synchronously. Origin: HA-11
+	// deeper applied to exporter (mirrors PR #354 in tenant-api).
+	clock clockwork.Clock
 
 	// Sub-struct field groups — v2.8.0 PR-5 decomposed the original
 	// 14-mixed-fields ConfigManager into named concerns. Field accesses
@@ -125,8 +135,20 @@ func NewConfigManagerWithDebounce(path string, debounceWindow time.Duration) *Co
 	return &ConfigManager{
 		path:     path,
 		isDir:    isDir,
+		clock:    clockwork.NewRealClock(),
 		debounce: debouncerState{window: debounceWindow},
 	}
+}
+
+// SetClock swaps the clock used by WatchLoop's ticker + the debounce
+// timer. Test-only — production code constructs managers via
+// NewConfigManagerWithDebounce which installs a real clock. Calling
+// this AFTER WatchLoop has started is undefined (the ticker is bound
+// to whichever clock was current at NewTicker time).
+func (m *ConfigManager) SetClock(c clockwork.Clock) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.clock = c
 }
 
 // Mode returns "directory" or "single-file" for diagnostics.
@@ -581,7 +603,14 @@ func logConfigStats(cfg *ThresholdConfig, prefix string) {
 }
 
 func (m *ConfigManager) WatchLoop(interval time.Duration, stopCh <-chan struct{}) {
-	ticker := time.NewTicker(interval)
+	// Defensive: ConfigManager constructed via struct literal (test
+	// shortcut) wouldn't have called NewConfigManagerWithDebounce, so the
+	// clock field is nil. Fall back to a real clock; tests that want a
+	// fake clock must call SetClock before WatchLoop.
+	if m.clock == nil {
+		m.clock = clockwork.NewRealClock()
+	}
+	ticker := m.clock.NewTicker(interval)
 	defer ticker.Stop()
 
 	for {
@@ -589,7 +618,7 @@ func (m *ConfigManager) WatchLoop(interval time.Duration, stopCh <-chan struct{}
 		case <-stopCh:
 			log.Println("WatchLoop stopped")
 			return
-		case <-ticker.C:
+		case <-ticker.Chan():
 		}
 		m.tickOnce()
 	}
