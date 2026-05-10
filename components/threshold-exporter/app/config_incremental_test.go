@@ -32,7 +32,7 @@ tenants:
     mysql_connections: "70"
 `)
 
-	hashes, composite, _, _, err := scanDirFileHashes(dir, nil, nil)
+	hashes, composite, _, _, err := scanDirFileHashes(dir, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("scanDirFileHashes failed: %v", err)
 	}
@@ -58,7 +58,7 @@ func TestScanDirFileHashes_SkipsHiddenAndSubdirs(t *testing.T) {
 	os.MkdirAll(filepath.Join(dir, "subdir"), 0700)
 	writeTestFile(t, filepath.Join(dir, "subdir"), "extra.yaml", `defaults: {}`)
 
-	hashes, _, _, _, err := scanDirFileHashes(dir, nil, nil)
+	hashes, _, _, _, err := scanDirFileHashes(dir, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("failed: %v", err)
 	}
@@ -73,8 +73,8 @@ func TestScanDirFileHashes_StableComposite(t *testing.T) {
 	writeTestFile(t, dir, "a.yaml", `defaults: {x: 1}`)
 	writeTestFile(t, dir, "b.yaml", `tenants: {t1: {}}`)
 
-	_, hash1, _, _, _ := scanDirFileHashes(dir, nil, nil)
-	_, hash2, _, _, _ := scanDirFileHashes(dir, nil, nil)
+	_, hash1, _, _, _ := scanDirFileHashes(dir, nil, nil, nil)
+	_, hash2, _, _, _ := scanDirFileHashes(dir, nil, nil, nil)
 	if hash1 != hash2 {
 		t.Error("composite hash should be stable across calls with same content")
 	}
@@ -395,7 +395,7 @@ func TestApplyBoundaryRules_DefaultsFile(t *testing.T) {
 		Defaults:     map[string]float64{"x": 1},
 		StateFilters: map[string]StateFilter{"f": {Severity: "warning"}},
 	}
-	applyBoundaryRules("_defaults.yaml", &partial)
+	applyBoundaryRules("_defaults.yaml", &partial, nil)
 	if len(partial.Defaults) != 1 {
 		t.Error("defaults file should keep its defaults")
 	}
@@ -411,7 +411,7 @@ func TestApplyBoundaryRules_TenantFile(t *testing.T) {
 		StateFilters: map[string]StateFilter{"f": {Severity: "warning"}},
 		Profiles:     map[string]map[string]ScheduledValue{"p": {"k": SV("v")}},
 	}
-	applyBoundaryRules("db-a.yaml", &partial)
+	applyBoundaryRules("db-a.yaml", &partial, nil)
 	if partial.Defaults != nil {
 		t.Error("tenant file defaults should be cleared")
 	}

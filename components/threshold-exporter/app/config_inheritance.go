@@ -86,6 +86,13 @@ func computeSourceHash(tenantYAMLBytes []byte) string {
 // used when one tenant's merge fails while others succeed. Stays in
 // `package main` because the logging convention is exporter-specific
 // (the log.Printf format is read by ops dashboards).
-func logMergeSkip(tenantID, reason string, err error) {
-	log.Printf("WARN: skipping merged_hash for tenant=%s (%s): %v", tenantID, reason, err)
+//
+// logger may be nil → falls back to log.Default() (production safety).
+// Callers in ConfigManager methods pass m.getLogger() for #4b
+// per-test isolation.
+func logMergeSkip(logger *log.Logger, tenantID, reason string, err error) {
+	if logger == nil {
+		logger = log.Default()
+	}
+	logger.Printf("WARN: skipping merged_hash for tenant=%s (%s): %v", tenantID, reason, err)
 }

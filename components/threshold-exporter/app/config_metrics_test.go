@@ -24,7 +24,7 @@ import (
 // caller is responsible for routing the fresh instance to the code
 // under test, via one of:
 //   - m.SetMetrics(fresh)        — for ConfigManager-driven tests
-//   - scanDirHierarchicalWithMetrics(dir, nil, fresh)  — for scanner tests
+//   - scanDirHierarchicalWithMetrics(dir, nil, fresh, nil)  — for scanner tests
 //   - fresh.IncReloadTrigger(...)                       — for direct
 //                                                          method-form helper tests
 //
@@ -60,10 +60,10 @@ func TestScanDirHierarchical_IncrementsScanDuration(t *testing.T) {
 	dir := t.TempDir()
 	writeHierarchicalFixture(t, dir, "90")
 
-	if _, _, _, _, _, err := scanDirHierarchicalWithMetrics(dir, nil, fresh); err != nil {
+	if _, _, _, _, _, err := scanDirHierarchicalWithMetrics(dir, nil, fresh, nil); err != nil {
 		t.Fatalf("scan: %v", err)
 	}
-	if _, _, _, _, _, err := scanDirHierarchicalWithMetrics(dir, nil, fresh); err != nil {
+	if _, _, _, _, _, err := scanDirHierarchicalWithMetrics(dir, nil, fresh, nil); err != nil {
 		t.Fatalf("scan: %v", err)
 	}
 
@@ -443,7 +443,7 @@ func TestScanDirHierarchical_StampsLastScanCompleteOnSuccess(t *testing.T) {
 
 	scanStart := time.Now().Unix()
 
-	if _, _, _, _, _, err := scanDirHierarchicalWithMetrics(dir, nil, fresh); err != nil {
+	if _, _, _, _, _, err := scanDirHierarchicalWithMetrics(dir, nil, fresh, nil); err != nil {
 		t.Fatalf("scan: %v", err)
 	}
 
@@ -465,7 +465,7 @@ func TestScanDirHierarchical_DoesNotStampOnError(t *testing.T) {
 	fresh.SetLastScanComplete(known)
 	before := testutil.ToFloat64(fresh.lastScanComplete)
 
-	if _, _, _, _, _, err := scanDirHierarchicalWithMetrics("/nonexistent/path/that/does/not/exist", nil, fresh); err == nil {
+	if _, _, _, _, _, err := scanDirHierarchicalWithMetrics("/nonexistent/path/that/does/not/exist", nil, fresh, nil); err == nil {
 		t.Fatal("expected error for nonexistent path")
 	}
 

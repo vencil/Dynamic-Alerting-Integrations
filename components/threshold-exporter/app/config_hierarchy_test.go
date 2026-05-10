@@ -456,7 +456,7 @@ func TestScanDirHierarchical_MixedValidInvalid(t *testing.T) {
       cpu: 70
 `)
 
-	tenants, _, hashes, _, _, err := scanDirHierarchicalWithMetrics(root, nil, fresh)
+	tenants, _, hashes, _, _, err := scanDirHierarchicalWithMetrics(root, nil, fresh, nil)
 	if err != nil {
 		t.Fatalf("scan should not return error on per-file parse failure: %v", err)
 	}

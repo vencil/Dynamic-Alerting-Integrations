@@ -113,7 +113,10 @@ func TestLogConfigStats_Format(t *testing.T) {
 	log.SetOutput(&buf)
 	defer log.SetOutput(orig)
 
-	logConfigStats(cfg, "Test prefix")
+	// PR-F will replace the log.SetOutput global swap above with a
+	// per-test logger passed here. For PR-E (signature add) we pass
+	// log.Default() so the existing global swap still captures.
+	logConfigStats(log.Default(), cfg, "Test prefix")
 
 	output := buf.String()
 

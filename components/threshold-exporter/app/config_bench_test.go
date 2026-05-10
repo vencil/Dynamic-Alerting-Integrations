@@ -286,7 +286,7 @@ func BenchmarkScanDirFileHashes_100(b *testing.B) {
 	silenceLogs(b)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		scanDirFileHashes(dir, nil, nil)
+		scanDirFileHashes(dir, nil, nil, nil)
 	}
 }
 
@@ -310,10 +310,10 @@ func BenchmarkScanDirFileHashes_100_MtimeGuard(b *testing.B) {
 	silenceLogs(b)
 	backdateFiles(b, dir)
 	// Initial scan to populate mtime cache
-	hashes, _, mtimes, _, _ := scanDirFileHashes(dir, nil, nil)
+	hashes, _, mtimes, _, _ := scanDirFileHashes(dir, nil, nil, nil)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		scanDirFileHashes(dir, hashes, mtimes)
+		scanDirFileHashes(dir, hashes, mtimes, nil)
 	}
 }
 
@@ -401,7 +401,7 @@ func BenchmarkScanDirFileHashes_1000(b *testing.B) {
 	silenceLogs(b)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		scanDirFileHashes(dir, nil, nil)
+		scanDirFileHashes(dir, nil, nil, nil)
 	}
 }
 
@@ -410,10 +410,10 @@ func BenchmarkScanDirFileHashes_1000_MtimeGuard(b *testing.B) {
 	dir := buildDirConfig(b, 1000)
 	silenceLogs(b)
 	backdateFiles(b, dir)
-	hashes, _, mtimes, _, _ := scanDirFileHashes(dir, nil, nil)
+	hashes, _, mtimes, _, _ := scanDirFileHashes(dir, nil, nil, nil)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		scanDirFileHashes(dir, hashes, mtimes)
+		scanDirFileHashes(dir, hashes, mtimes, nil)
 	}
 }
 
