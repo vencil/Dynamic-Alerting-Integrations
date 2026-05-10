@@ -31,12 +31,17 @@
   },
   
   // [UPDATED] 環境建立後的自動化指令：
-  // 1. 安裝 Python 測試/工具依賴（PyYAML 為運行時，pytest-benchmark
-  //    為 tests/ops/test_benchmark.py 的效能基線；缺它會在 collection
-  //    階段炸 14 個 ERROR）
+  // 1. 安裝 Python 測試/工具依賴：
+  //    - pyyaml：運行時依賴
+  //    - pytest-benchmark：tests/ops/test_benchmark.py 的效能基線（缺它
+  //      collection 階段會炸 14 個 ERROR）
+  //    - mkdocs-material / mkdocs-static-i18n / pymdown-extensions：
+  //      `make lint-docs-mkdocs` 需要的三件組（dev-rules.md #4 Doc-as-Code
+  //      要求 docs/**.md push 前必跑此 lint；缺它就只能等 CI 回報 site-root
+  //      vs filesystem path 語意衝突）。PR #375 從踩到的痛中加進來。
   // 2. 安裝 Kind
   // 3. 建立 Cluster
-  "postCreateCommand": "pip3 install --user pyyaml pytest-benchmark && curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.20.0/kind-linux-amd64 && chmod +x ./kind && sudo mv ./kind /usr/local/bin/kind",
+  "postCreateCommand": "pip3 install --user pyyaml pytest-benchmark mkdocs-material mkdocs-static-i18n pymdown-extensions && curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.20.0/kind-linux-amd64 && chmod +x ./kind && sudo mv ./kind /usr/local/bin/kind",
 
   "customizations": {
     "vscode": {

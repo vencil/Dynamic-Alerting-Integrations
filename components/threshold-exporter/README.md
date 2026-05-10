@@ -1,7 +1,7 @@
 # Threshold Exporter (v2.7.0)
 
 <!-- 標題版號 = 最後 released tag；v2.8.0 in-flight feature 在內文以 **v2.8.0** inline 標記。
-     Phase .e release wrap 切五線 tag 時，本標題 + 下方 helm --version 跟著批次同步 bump。 -->
+     Release wrap 切五線 tag 時，本標題 + 下方 helm --version 跟著批次同步 bump。 -->
 
 > **核心 component** — 把 `conf.d/` YAML 配置轉成 Prometheus `user_threshold` 系列 metrics 的 config-driven exporter。Directory Scanner + 四層繼承 + Dual-Hash 熱重載 + Cardinality Guard。
 >
@@ -24,11 +24,11 @@
 
 | # | 能力 | 影響 |
 |---|------|------|
-| 1 | **客戶導入管線** — 三隻新 CLI：`da-parser`（PrometheusRule → ParseResult JSON）、`da-batchpr`（Hierarchy-aware Batch PR with apply / refresh / refresh-source 三 mode）、`da-guard`（pre-merge gate for `_defaults.yaml`） | 從「現有客戶手動寫 conf.d」到「kube-prometheus 客戶 onboarding 全自動化」，C-8 / C-9 / C-10 / C-12 軌道 |
-| 2 | **`/api/v1/tenants/simulate` ephemeral primitive** — POST 帶 base64 tenant.yaml + defaults chain，回傳 `merged_hash` + `effective_config` + 完整 inheritance preview。**無 disk IO，無 manager state mutation** | C-7b：CI 與 simulator UI 在 commit 前可預測 inheritance 影響；蓋過 `da-guard` 的 speculative 缺口 |
-| 3 | **Issue #61 metric 拆分 + Blast-Radius Histogram** — `da_config_defaults_change_noop_total` 收斂為純 cosmetic edits；`da_config_defaults_shadowed_total` 為新 counter 抓「被 tenant override 擋下」；`da_config_blast_radius_tenants_affected{reason, scope, effect}` 為新 histogram 量化每次 tick 受影響 tenant 分佈 | 既有 dashboard 用舊 noop counter 衡量「inheritance 擋下多少」需切到 shadowed counter |
+| 1 | **客戶導入管線** — 三隻新 CLI：`da-parser`（PrometheusRule → ParseResult JSON）、`da-batchpr`（Hierarchy-aware Batch PR with apply / refresh / refresh-source 三 mode）、`da-guard`（pre-merge gate for `_defaults.yaml`） | 從「現有客戶手動寫 conf.d」到「kube-prometheus 客戶 onboarding 全自動化」 |
+| 2 | **`/api/v1/tenants/simulate` ephemeral primitive** — POST 帶 base64 tenant.yaml + defaults chain，回傳 `merged_hash` + `effective_config` + 完整 inheritance preview。**無 disk IO，無 manager state mutation** | CI 與 simulator UI 在 commit 前可預測 inheritance 影響；補上 `da-guard` 的 speculative 缺口 |
+| 3 | **Defaults metric 拆分 + Blast-Radius Histogram** — `da_config_defaults_change_noop_total` 收斂為純 cosmetic edits；`da_config_defaults_shadowed_total` 為新 counter 抓「被 tenant override 擋下」；`da_config_blast_radius_tenants_affected{reason, scope, effect}` 為新 histogram 量化每次 tick 受影響 tenant 分佈 | 既有 dashboard 用舊 noop counter 衡量「inheritance 擋下多少」需切到 shadowed counter |
 | 4 | **Mixed-mode duplicate tenant 從 WARN → hard error** — 同 tenant id 同時出現在 flat + nested 路徑，`Load()` 直接拒絕 + 保留 `m.config` 為 nil（cold-start）或 prior known-good（hot-reload） | Breaking：先前 silently last-wins 的部署會在 v2.8.0 升級時 fail-loudly。詳 [issue #127](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/127) |
-| 5 | **ZH-primary policy lock** — 文件 SSOT 鎖中文，`foo.md`(ZH) + `foo.en.md`(EN) 雙寫；不執行 v2.5.0 規劃的 ZH→EN 遷移（[planning S#101](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/101)） | 本 README 含 codebase 內 dev rules 文件均為 ZH primary |
+| 5 | **ZH-primary policy lock** — 文件 SSOT 鎖中文，`foo.md`(ZH) + `foo.en.md`(EN) 雙寫；不執行 v2.5.0 規劃的 ZH→EN 遷移（[語言策略 issue #101](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/101)） | 本 README 含 codebase 內 dev rules 文件均為 ZH primary |
 
 > **升級路徑** — v2.7.0 → v2.8.0 升級風險點與 mitigation 見 [migration-guide.md](../../docs/migration-guide.md)。
 
@@ -179,7 +179,7 @@ JSON-input-first contract（每個 subcommand 讀 JSON 寫 JSON + Markdown repor
 
 | Subcommand | 作用 |
 |-----------|------|
-| `apply` | 從 C-9 emit + C-10 BuildPlan 開 / update tenant chunk PRs |
+| `apply` | 從 plan-builder emit + BuildPlan 開 / update tenant chunk PRs |
 | `refresh` | Base PR merged 後，rebase tenant branches 到新 main HEAD |
 | `refresh-source` | 把 data-layer hot-fix 重新 apply 到既有 tenant branches |
 

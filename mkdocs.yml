@@ -243,6 +243,7 @@ nav:
   - 遷移:
     - 遷移指南: migration-guide.md
     - 遷移引擎: migration-engine.md
+    - Migration Toolkit 安裝: migration-toolkit-installation.md
     - Shadow Monitoring SOP: shadow-monitoring-sop.md
   - 治理與安全:
     - 治理與安全: governance-security.md
