@@ -116,6 +116,21 @@ type ConfigManager struct {
 	// as the injection seam.
 	metrics *configMetrics
 
+	// logger is this manager's *log.Logger instance. Production
+	// constructors plug in log.Default() so production behavior is
+	// unchanged (every log.Printf in the package code today writes to
+	// log.Default's writer; routing through m.logger is a no-op for
+	// production). Tests can swap a per-test logger writing to a
+	// captured bytes.Buffer via SetLogger for parallel-safe log
+	// capture — foundation for #4b (drop log.SetOutput global swap).
+	//
+	// Until follow-up PRs convert all log.Printf callsites in package
+	// methods to m.getLogger().Printf and add WithLogger variants for
+	// scanner free functions, the package-level log.Default() is still
+	// the routing destination. The field exists today as the injection
+	// seam.
+	logger *log.Logger
+
 	// Sub-struct field groups — v2.8.0 PR-5 decomposed the original
 	// 14-mixed-fields ConfigManager into named concerns. Field accesses
 	// across the codebase use `m.flat.X` / `m.hierarchy.X` / `m.debounce.X`
@@ -149,6 +164,7 @@ func NewConfigManagerWithDebounce(path string, debounceWindow time.Duration) *Co
 		isDir:    isDir,
 		clock:    clockwork.NewRealClock(),
 		metrics:  getConfigMetrics(),
+		logger:   log.Default(),
 		debounce: debouncerState{window: debounceWindow},
 	}
 }
@@ -191,6 +207,37 @@ func (m *ConfigManager) getMetrics() *configMetrics {
 		m.metrics = getConfigMetrics()
 	}
 	return m.metrics
+}
+
+// SetLogger swaps the *log.Logger this manager writes Printf calls to.
+// Test-only — production code receives log.Default() from the
+// constructor. Tests use this to inject a per-test logger writing to a
+// captured bytes.Buffer for parallel-safe log capture; mirrors
+// SetMetrics. Foundation for #4b.
+func (m *ConfigManager) SetLogger(logger *log.Logger) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.logger = logger
+}
+
+// getLogger returns m.logger, lazy-initializing to log.Default() if
+// the constructor was bypassed (test struct-literal pattern). Always
+// returns a non-nil pointer so callers can write
+// `m.getLogger().Printf(...)` without nil-panic worry. Mirrors
+// getMetrics.
+func (m *ConfigManager) getLogger() *log.Logger {
+	m.mu.RLock()
+	lg := m.logger
+	m.mu.RUnlock()
+	if lg != nil {
+		return lg
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.logger == nil {
+		m.logger = log.Default()
+	}
+	return m.logger
 }
 
 // Mode returns "directory" or "single-file" for diagnostics.
