@@ -129,6 +129,7 @@ plugins:
             總覽: Overview
             CLI 速查表: CLI Cheat Sheet
             互動式工具: Interactive Tools
+            Migration Troubleshooting Checklist: Migration Troubleshooting Checklist
 
 markdown_extensions:
   # Tables
@@ -246,6 +247,7 @@ nav:
     - 遷移引擎: migration-engine.md
     - Migration Toolkit 安裝: migration-toolkit-installation.md
     - Shadow Monitoring SOP: shadow-monitoring-sop.md
+    - Migration Troubleshooting Checklist: integration/troubleshooting-checklist.md
   - 治理與安全:
     - 治理與安全: governance-security.md
     - Custom Rule 治理: custom-rule-governance.md
