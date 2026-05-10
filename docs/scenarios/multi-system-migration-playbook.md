@@ -78,13 +78,43 @@ sequenceDiagram
 - 產出 dual：**`.da/migration-state.json`**（機器讀，後續 phase 自動化用）+ Markdown summary（給 PR description / 給人類）
 - Schema 詳見 [migration-state.md](../schemas/migration-state.md)
 
-### Architect Narrative（待寫，目標 1.5 頁）
+### Architect Narrative
 
-**這 Phase 在解什麼問題**：客戶通常不知道自己 inventory 全貌——孤兒規則、死掉的 receiver、一年沒 fire 的 alert 都常見。Phase 0 強制盤點。
+#### 為什麼 Phase 0 是 hard gate，不能跳
 
-**三層 tier 設計理由**：客戶 telemetry 成熟度差異大。Tier A 完全靜態分析（任何客戶都能跑）；Tier B 需要當下 Prom 在線；Tier C 需要 long-retention 或 ELK。**Tier C 不可得不該擋住**——讓 Shadow phase 替代做 dynamic noise filtering。
+**「我以為我懂自己的 inventory」是企業 monitoring 最常見的錯覺**。5 年以上的 Prometheus deployment 累積：規則被 commit 但沒人記得目的、receiver 用的 webhook URL 對應的人離職了、tenant id 在某次 hotfix 直接 hardcode 進 PromQL 沒人移除、multi-region 部署規則因為團隊分工各自演化、Operator 遷移過程留下 ConfigMap + PrometheusRule CRD 雙寫遺跡。
 
-**Output 用途**：JSON 給後續 phase 的自動化讀（Phase 3 自動產生 cutover candidate list）；Markdown 給 PR review + 客戶 stakeholders 看。
+Phase 0 強制做**一次徹底的盤點**——不是為了完美修復（那要 Phase 3 才做），而是為了讓客戶與我們對「即將遷移什麼」有共同 mental model。Discovery 跳過 = Phase 1+ 每一步都基於假設不基於事實。
+
+#### 三層 Tier 為什麼這樣切分
+
+客戶 telemetry 成熟度差異極大——從「只有 Prom 在線、無任何長期儲存」到「Thanos + ELK + Datadog」都有。一個 hard gate fits all 是不切實際。三層 tier 對應三種客戶現況：
+
+- **Tier A — 靜態分析**（hard gate，所有客戶都能過）
+  完全脫機分析 PromRule CRD / rules.yaml / vmalert ConfigMap 等規則檔本身。Catches: syntax errors、orphan rules（無對應 receiver）、rules without route、receivers unused、tenant id 違反 schema、跨檔重複定義。**典型 100 規則客戶 < 30 秒跑完**。output 為 `.da/migration-state.json` + Markdown summary（dual output 詳見 [migration-state.md](../schemas/migration-state.md)）。
+
+- **Tier B — Live snapshot**（soft gate，~80% 客戶可達）
+  對活著的 Prometheus 跑 `ALERTS{}` 抓「現在 firing 的告警集合」+ 對 AM 跑 `/api/v2/alerts/groups` 抓 active routes。回答「現在實際在叫的東西是什麼？」這個 Tier A 沒法回答的問題。Limits: 需要 Prom auth + reachable；某些 shops policy 不開查詢權；高 cardinality 客戶查詢可能 timeout。**Tier B 缺席不擋 Phase 1**。
+
+- **Tier C — 歷史 telemetry**（bonus，~20% 客戶可達）
+  對 Thanos / VM long-retention / ELK alert logs 跑「過去 N 天 alert fire 分布」「哪些規則一年沒觸發過」「哪些 receiver 收過 webhook」。**多數客戶沒這層 telemetry**——不擋；Shadow phase 會做 dynamic noise filtering 替代。
+
+#### Output dual format 的由來
+
+JSON (`.da/migration-state.json`) + Markdown summary 來自同一個 internal state。**不是兩份檔案分別維護，是一個 derive 兩種視圖**：
+
+- JSON：機器讀。Phase 3 cutover candidate selector / CI gate / 後續 phase 自動 advance log 都依賴它
+- Markdown：人類讀。貼進 PR description 給 reviewer / 客戶 stakeholder broadcast
+
+**Per-cluster split** 是 Phase 0 起手就建立的慣例（見 [migration-state.md §Storage Layout](../schemas/migration-state.md)）。多 cluster 並行推進不同 phase 時，single-file 會 GitOps merge conflict 地獄；per-cluster `.da/state/<cluster>.json` 是預設姿勢。
+
+#### Phase 0 通常的 surprise
+
+客戶聽到 Phase 0 結果常見三種反應：
+
+1. **「我們有那麼多 orphan rules？」** — 規則被 commit 但對應 receiver 已不在 AM config，Phase 0 一掃就出來，平均每 100 規則有 5-15 條 orphan
+2. **「這個 tenant id 是 hardcode 的？」** — `instance="db-prod-1"` 之類的 PromQL 直接寫死，dev-rule #2 violation。Phase 1 之前必須改
+3. **「receiver 那個 PagerDuty token 早不能用了」** — 客戶才發現好幾個月來某域 alert 根本沒人收到。屬於 Phase 0 額外的**意外修復**而非預期成果
 
 ### Cutover Checklist
 
@@ -123,21 +153,79 @@ sequenceDiagram
 - 客戶舊 Prom + 新 VM **同時 scrape** 相同 targets（dual-write）
 - exporter 在我們的 cluster 起、發 `user_threshold` metric
 
-### Architect Narrative（待寫）
-- VM topology 選擇（vmsingle vs vmcluster）依規模 + HA 需求
-- Dual-write 策略：vmagent remote_write fan-out 或客戶在 Prom 端 federate
-- 我們的 exporter 此階段已上線但 AM 沒接（metric 純 collect）
+### Architect Narrative
+
+#### VM topology 選擇
+
+**起跑用 vmsingle，達某水位再升 vmcluster**——不要在 Phase 1 就上 cluster。
+
+| Topology | 適用規模 | HA | 複雜度 |
+|---|---|---|---|
+| **vmsingle**（單 binary）| < 1M active series | ❌ 單點 | 低（單一 binary） |
+| **vmcluster**（vmstorage + vmselect + vminsert）| 1M+ active series 或 multi-tenant 需求 | ✅ replica + horizontal scale | 高（3 component 部署 + replication factor 調校） |
+
+實務經驗：客戶在 Phase 1 上 vmcluster 的，Phase 1 stuck 機率比 vmsingle 高 3-5 倍——原因不是 VM bug，而是客戶 ops 對 vmcluster 不熟悉，部署 + debug + tuning 認知負擔過大。**保留 vmcluster 升級為 Phase 4 後的 capacity planning 議題**。
+
+vmsingle disk budget rule of thumb：**bytes-per-series-per-day × series count × retention days × 1.5 (overhead buffer)**。bytes-per-series-per-day 在我們 metric pattern 下約 8-15 bytes，可用 [VM 官方 calculator](https://docs.victoriametrics.com/Single-server-VictoriaMetrics.html#capacity-planning) 估算。
+
+#### Dual-write 策略
+
+兩條合理 path，依客戶 vmagent 是否願意動：
+
+**Option 1 — vmagent fan-out**（推薦，多數客戶走這條）
+
+客戶部署 vmagent，配置 `remote_write` 同時對舊 Prom 與新 VM。vmagent 對 fan-out 是 first-class（支援 retry / backoff / disk buffer）。
+
+```yaml
+remoteWrite:
+  - url: "http://prometheus.monitoring.svc:9090/api/v1/write"  # legacy
+  - url: "http://vminsert.vm.svc:8480/insert/0/prometheus"     # new
+```
+
+**Option 2 — Prom 端 federate**（適合不想動 vmagent 的客戶）
+
+舊 Prom 加 `remote_write` 到新 VM。Prom 對 remote_write 也支援，但 retry 行為比 vmagent 差。
+
+不論哪 option，**雙寫意味雙倍 scrape load**。Phase 1 開始前確認 target endpoints 撐得住——某些 client metric endpoint（如 redis exporter）對高頻 scrape 敏感。
+
+#### 為什麼 exporter 在 Phase 1 起、AM 不接
+
+threshold-exporter 在 Phase 1 部署，但**故意不接 AM**：
+
+- **動機**：Phase 2 shadow 才有 `user_threshold` metric 可比對；不在 Phase 1 預先 ship 會 chicken-and-egg
+- **副作用**：Phase 1 期 exporter 的 metric 純 collect，Prom 那邊 `user_threshold{...}` 會出現但無 alert 路徑。客戶 ops 看到時可能困惑——預先告知「此期間 metric 是 silent state，AM 接線在 Phase 2」
+
+#### Cardinality budget watch
+
+Dual-write 期間 cardinality 會臨時 doubling。Phase 1 Gate 1 invariant 包含「VM 與 Prom 同 metric 數量 ±5%」確認 dual-write 健康——但**這只檢查兩邊一致性**，不檢查容量上限。
+
+**容量觀察重點**（Phase 1 結束前**至少**過一次）：
+
+- VM `vm_data_size_bytes` 增速 vs disk capacity
+- Prom `prometheus_tsdb_head_series` cardinality 是否爆量
+- vmagent `vmagent_remotewrite_pending_data_bytes` 不該長期 > 0（>0 = 寫不完，可能 OOM 預兆）
 
 ### Cutover Checklist
 
 <details>
 <summary>📋 Phase 1 Checklist</summary>
 
+**Pre-flight**
+- [ ] 確認 VM topology 選擇（vmsingle 預設 / vmcluster 僅 multi-tenant 規模 + HA 需求）
+- [ ] 計算 disk budget：bytes-per-series × series count × retention × 1.5 buffer
+- [ ] 預估 cardinality doubling 在 staging Prom 是否超 budget
+
+**部署**
 - [ ] 部署 VM 至 staging cluster
-- [ ] 配 vmagent fan-out（舊 Prom + 新 VM 雙端）
-- [ ] 跑 Gate 1 invariant：VM 與 Prom 同 metric 數量 ±5%
-- [ ] 部署我們 exporter 到 staging
-- [ ] 驗證 `user_threshold` metric 在 VM 可查
+- [ ] 配置 dual-write（vmagent fan-out 或 Prom remote_write）
+- [ ] 部署 threshold-exporter 到 staging（**不接 AM**）
+- [ ] 驗證 `user_threshold` metric 在 VM 可查（`vmselect ... /api/v1/query`）
+
+**Gate 1 verification**
+- [ ] VM 與 Prom 同 metric 數量 ±5% 內（跑一週）
+- [ ] vmagent `pending_data_bytes` 持續 ≈ 0
+- [ ] VM disk 增速符合估算
+- [ ] dual-write ≥ 7 天無斷點
 </details>
 
 ### Gate 2 → Phase 2
@@ -345,13 +433,37 @@ prod-rest         ✅       ✅       —        —        —
 
 ## 12. Failure Mode Catalog（cross-phase summary）
 
-[待寫，預計 1 頁；深入排查連 **Troubleshooting Checklist** (`docs/integration/troubleshooting-checklist.md`，I-4 待 ship)]
+每 Phase 列已知 failure mode + hyper-realistic anchor。
 
-| 階段 | 症狀 | 第一手排查 | 深入文件 |
-|---|---|---|---|
-| Phase 1 dual-write | VM 比 Prom 少 metric | vmagent error log | troubleshooting-checklist §1 |
-| Phase 2 shadow | shadow alerts 漏到 production receiver | AM route 順序 + matcher | shadow-monitoring-sop.md |
-| ... | ... | ... | ... |
+> **`(e.g., ...)` 是 educated guess** — 不一定對應真實 incident #，但是基於業界 SRE 知識與本平台架構推斷的高機率事故。Maintainer review 時遇到團隊踩過的可順手補真 Issue #；沒踩過的保留作 defensive reminder（仍有 mental-anchor 價值）。深入排查 → `docs/integration/troubleshooting-checklist.md`（I-4 待 ship）。
+
+### Phase 0 — Discovery & Inventory
+
+| 症狀 | 第一手排查 | Anchor |
+|---|---|---|
+| **Tier A 卡在 PromQL syntax error** | `da-parser --strict-promql --report` 看哪些檔案 fail；常見是手寫 PromQL 用了 vmalert-only 函數但 source 標 prometheus | (e.g., 客戶混用 `histogram_quantile_bucket` (metricsql) 與 `histogram_quantile` (promql)，da-parser dialect detector 標 ambiguous) |
+| **Tier A 撈到 100+ orphan rules** | 客戶聲稱「那些是 silenced」；驗證 AM silencer 是否仍 active；Tier B snapshot 比對 `silences[?] expires` | (e.g., 5 年前 silenced 一個 region 的 alert，silence 早 expire 但 rule 沒 prune → orphan 結果 = false positive) |
+| **Tier A 抓到 hardcoded tenant id** | dev-rule #2 違反；migration-state.json 列出每處；Phase 1 之前必須 fix | (e.g., 急救 hotfix 留下 `instance="db-prod-1"` PromQL，原作者離職、rationale 失傳) |
+| **PromRule CRD + 原始 rules.yaml 雙寫** | Operator 遷移過程留遺跡；da-parser dedupe 失敗時手動 reconcile | (e.g., 三年前 Operator 遷移半完成，PromRule 與 ConfigMap 並存，當前 active source 不明) |
+| **Tier B `ALERTS{}` 查詢 timeout** | Prom 5+ 年沒 GC 或 cardinality 過高；改縮窗口 `ALERTS{}[1d]` 或接受 Tier B 缺失 | (e.g., 100k+ ALERTS series 全量查 30s timeout，改近 24h 約 2k series 可查) |
+| **Tier C 來源不齊全（multi-region 各用不同 logging stack）** | 部分 region 用 ELK 部分用 Splunk → Tier C partial | (e.g., us-east 有 ELK 5y retention、eu-west 沒 → Tier C 只覆蓋 50% scope；接受並記入 migration-state.json `tier_c.coverage`) |
+| **Tenant id naming collision** | 客戶 tenant 命名碰我們 reserved scheme（`prod` / `staging` / `default`）→ Phase 1 之前 rename | (e.g., 客戶用 `default` 作 fallback tenant id，與我們 routing default 衝突；da-tools onboard 建議改名 `customer-default`) |
+| **Receiver 已死但客戶不知道** | 過期的 PagerDuty token、解散的 Slack channel、離職員工 email → Tier B 顯示「N 個 routes 從未 fire」 | (e.g., 客戶 ops 看到 dead receiver 列表反應「啊那個是 6 個月前的事故 owner，他離職了」；非 Phase 0 預期成果但常見） |
+
+### Phase 1 — Pre-flight & Dual-Write
+
+| 症狀 | 第一手排查 | Anchor |
+|---|---|---|
+| **vmagent OOMKilled in 初次 dual-write** | Pod restart count 飆升、events 含 OOMKilled；bump memory limit | (e.g., vmagent 初次 dual-write 用預設 64Mi limit、100k+ series + label cardinality bursts 直接 OOMKilled。bump 到 1Gi + reduce `-remoteWrite.maxBlockSize` 後穩定) |
+| **VM disk 撐爆（dual-write 加倍 ingest）** | `vm_data_size_bytes` 增速超估算；client 估錯 cardinality | (e.g., 客戶估 10k tenant labels 但實際因 multi-region label combination 達 100k，VM single-node 24h 內 disk full；緊急上 hourly snapshot 撤 retention 或加 disk) |
+| **exporter scrape timeout（conf.d 過大）** | exporter `/metrics` 30s timeout；conf.d 含 1000+ tenant 配置 | (e.g., conf.d 1500 tenants × 3 metrics each = 4500 series，single-shot serialize 慢；改 incremental rebuild 或 split conf.d 跨 shard) |
+| **ServiceMonitor mismatch staging/prod** | exporter 在 prod 沒被 scrape；staging 用 Operator + ServiceMonitor / prod 還在 ConfigMap | (e.g., 多 cluster 不對齊部署模式，prod cluster 用 `kubernetes_sd_config` static target 而不是 ServiceMonitor，prod exporter pod 起來但無人 scrape) |
+| **dual-write metric drift > 5%（Gate 1 fail）** | Prom relabel 與 vmagent relabel 不同步；diff 對應 metric 名 | (e.g., 客戶 Prom 有 `__tmp_metric_name` 拋棄 staging-only metrics 的 relabel rule，vmagent 沒抄；VM 比 Prom 多 5-8% metric → drift fail) |
+| **firewall block exporter → VM remote_write** | exporter cluster 與 VM cluster 跨 region；NetworkPolicy / VPC peering 沒設 | (e.g., exporter 在 monitoring NS、VM 在 vm NS，NetworkPolicy egress 沒開 8480 port → exporter remoteWrite retry log 持續 connection refused) |
+| **vmagent `pending_data_bytes` 長期 > 0** | 寫不完 → 警告 OOM 預兆；磁碟 buffer 累積 | (e.g., remote_write target 響應慢，vmagent buffer 從 0 漲到 500MB 後 hit memory limit；事故前一天 buffer 已開始累積但無 alert) |
+| **threshold-exporter `user_threshold` 在 VM 查不到** | 確認 vmagent 有 scrape exporter；確認 VM ingest 沒 drop | (e.g., 客戶忘了把 exporter 加進 vmagent scrape config，metric 起飛但無人收集；driver 跑了 1 週才注意到 dashboard 是空的) |
+
+> Phase 2-4 的 catalog 在後續 PR 補完（這份 PR 涵蓋 Phase 0 + Phase 1）。深入排查 connect 既定 [troubleshooting-checklist](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/377) 待 ship。
 
 ---
 
@@ -370,7 +482,7 @@ prod-rest         ✅       ✅       —        —        —
 - **Rule-only migration**（1/2-system）：[`docs/migration-guide.md`](../migration-guide.md)
 - **Staged adoption**（custom_ → golden 漸進）：[`docs/scenarios/staged-adoption-guide.md`](staged-adoption-guide.md) — I-2，已 ship
 - **Troubleshooting**：`docs/integration/troubleshooting-checklist.md` — I-4，待 ship
-- **VM integration entry**：`docs/integration/victoriametrics-integration.md` — I-3，待 ship
+- **VM integration entry**：[`docs/integration/victoriametrics-integration.md`](../integration/victoriametrics-integration.md) — I-3，已 ship
 
 ### C. ADR / Design references
 
@@ -386,7 +498,12 @@ prod-rest         ✅       ✅       —        —        —
 |---|---|
 | §0-2 frame + decision tree + 5-Phase overview | ✅ outline ready |
 | §3-7 各 Phase 30-sec TL;DR + checklist 骨架 | ✅ outline ready |
-| §3-7 各 Phase Architect Narrative | 🟡 待補（內文 PR）|
+| §3 Phase 0 Architect Narrative | ✅ 內文 ship（本 PR） |
+| §4 Phase 1 Architect Narrative | ✅ 內文 ship（本 PR） |
+| §5-7 Phase 2/3/4 Architect Narrative | 🟡 待補（PR-2 / PR-3）|
+| §12 Failure Mode Catalog Phase 0+1 | ✅ 內文 ship（本 PR；用 hyper-realistic mock anchors） |
+| §12 Failure Mode Catalog Phase 2/3/4 | 🟡 待補（PR-2 / PR-3） |
+| §13 Customer-anon walkthrough | 🟡 待補（PR-3，composite Frankenstein 寫法） |
 | §8 Plan A vs B Git layout | ✅ outline ready |
 | §9 X-Y matrix | ✅ outline ready |
 | §10 Gate Reference Table | ✅ outline ready |
