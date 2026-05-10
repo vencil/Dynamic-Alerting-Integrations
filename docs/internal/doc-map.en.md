@@ -74,10 +74,12 @@ lang: en
 | `docs/scenarios/manage-at-scale.md` (.en.md) | Platform Engineers, operator, DevOps | Scenario: Managing at Scale — Thousand-Tenant Operations |
 | `docs/scenarios/multi-cluster-federation.md` (.en.md) | Platform Engineers | Scenario: Multi-Cluster Federation — Central Threshold + Edge Metrics |
 | `docs/scenarios/multi-domain-conf-layout.md` (.en.md) | Platform Engineers, operator, DevOps | Scenario: Multi-Domain Hierarchical Configuration — conf.d/ Directory Restructuring (v2.7.0) |
+| `docs/scenarios/multi-system-migration-playbook.md` | Platform Engineers, SREs, architects | Multi-System Migration Playbook (Outline) |
 | `docs/scenarios/README.md` | All | 場景指南導覽 |
 | `docs/scenarios/shadow-audit.md` (.en.md) | Platform Engineers, Tenants | Scenario: Shadow Audit — Evaluate Alert Health Without Migration |
 | `docs/scenarios/shadow-monitoring-cutover.md` (.en.md) | Platform Engineers, SREs, DevOps, Tenants | Scenario: Shadow Monitoring — From Alert Health Assessment to Automated Cutover |
 | `docs/scenarios/tenant-lifecycle.md` (.en.md) | All | Scenario: Complete Tenant Lifecycle Management |
+| `docs/schemas/migration-state.md` | Platform Engineers, SREs, automation | Migration State Schema (.da/migration-state.json) |
 | `docs/schemas/README.md` | Platform Engineers, Tenants | JSON Schema Reference |
 | `docs/shadow-monitoring-sop.md` (.en.md) | SREs, Platform Engineers | Shadow Monitoring SRE SOP |
 | `docs/troubleshooting.md` (.en.md) | Platform Engineers, SREs, Tenants | Troubleshooting and Edge Cases |

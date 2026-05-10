@@ -1,0 +1,170 @@
+---
+title: "Migration State Schema (.da/migration-state.json)"
+tags: [schema, migration, multi-system, automation]
+audience: [platform-engineers, sre, automation]
+version: v2.7.0
+lang: zh
+---
+
+# Migration State Schema (`.da/migration-state.json`)
+
+> **Status**: 🟡 Outline（v0.1，2026-05-10）— schema fields locked from
+> [multi-system-migration-playbook](../scenarios/multi-system-migration-playbook.md)
+> Phase 0 design. **未來會由 da-tools 程式碼 auto-generate 覆蓋本文件**——
+> 第一版手寫於此，後續切換 SSOT 為程式碼。
+>
+> **Future SSOT**（v2.9）：`components/da-tools/app/migration_state.py` Pydantic model；
+> CI hook 自動從 model dump schema → 對比本 .md → drift fails.
+> 在那之前 manually maintained，CI cross-check 不可用。
+
+---
+
+## 用途
+
+`da-tools onboard --analyze` 的 Phase 0 discovery 輸出。**Dual output**:
+
+| 形式 | 路徑 | 給誰 |
+|---|---|---|
+| JSON | `.da/migration-state.json`（commit 進客戶 GitOps repo）| 機器讀（後續 phase 自動化、cutover candidate selector、CI gate）|
+| Markdown summary | stdout / `migration-summary.md` | 人類讀（PR description、ops review、stakeholder broadcast）|
+
+兩個輸出**從同一個 internal state 派生**——保證一致。
+
+---
+
+## 為什麼 dual output（Gemini 對抗 reviewer 觀點）
+
+如果只產 Markdown，後續 Phase 3 的 cutover candidate selector / 自動清理腳本就**沒法讀**孤兒規則清單，automation 閉環斷掉。JSON 給機器、Markdown 給人類，是 SRE 工具鏈正確姿勢。
+
+---
+
+## Schema v1（outline）
+
+```json
+{
+  "schema_version": "1.0",
+  "generated_at": "2026-05-10T14:00:00Z",
+  "generated_by": "da-tools onboard --analyze v2.8.0",
+
+  "discovery": {
+    "tier_a_static": {
+      "rule_files_scanned": 42,
+      "rules_total": 380,
+      "syntax_errors": [],
+      "orphan_rules": [
+        {"name": "MyAlert", "file": "rules.yaml", "reason": "no matching receiver"}
+      ],
+      "rules_with_no_route": [],
+      "receivers_unused": [],
+      "tenant_id_violations": []
+    },
+    "tier_b_live_snapshot": {
+      "available": true,
+      "captured_at": "2026-05-10T13:55:00Z",
+      "currently_firing_count": 7,
+      "active_routes_hit": 12,
+      "alerts_by_severity": {"critical": 2, "warning": 5}
+    },
+    "tier_c_historical": {
+      "available": false,
+      "reason": "Customer has no Thanos / VM-long-retention / ELK"
+    }
+  },
+
+  "current_state": {
+    "phase": "0_discovery",
+    "plan_choice": null,
+    "started_at": "2026-05-10T14:00:00Z",
+    "completed_phases": []
+  },
+
+  "scope": {
+    "clusters": [
+      {"name": "staging-us-east", "stage": "0_discovery"},
+      {"name": "prod-us-east", "stage": "0_discovery"},
+      {"name": "prod-us-west", "stage": "0_discovery"}
+    ],
+    "tenants_total": 145,
+    "rule_packs_targeted": ["mysql", "postgres", "redis"],
+    "metric_split_planned": true
+  },
+
+  "gate_log": []
+}
+```
+
+---
+
+## 欄位語意（outline）
+
+### Top-level
+- **schema_version** — semver `"<major>.<minor>"`. v0.1 outline = `"1.0"`. Major bump = breaking field changes.
+- **generated_at** — ISO 8601 UTC.
+- **generated_by** — tool + version stamp.
+
+### `discovery.tier_a_static`
+- **rule_files_scanned** / **rules_total** — counts; sanity for client.
+- **syntax_errors** — list of `{file, line, message}`. Hard gate: must be 0.
+- **orphan_rules** — rule with no matching AM receiver (will silent-drop alerts).
+- **rules_with_no_route** — opposite: rule fires, no route configured.
+- **receivers_unused** — receiver defined but no rule routes to it.
+- **tenant_id_violations** — hardcoded tenant id (dev-rule #2 violation).
+
+### `discovery.tier_b_live_snapshot`
+- **available** — false if Prom unreachable / no permission. Don't block.
+- **currently_firing_count** — sanity for "what's actively noisy".
+- **active_routes_hit** — distinct AM routes that resolved at snapshot time.
+
+### `discovery.tier_c_historical`
+- **available** — typically false (most customers).
+- 若 available 則 `lookback_days` + 各 alert 的 fire/resolve histogram.
+
+### `current_state`
+- **phase** — enum `0_discovery | 1_preflight | 2_shadow | 3_cutover_canary | 3_cutover_full | 4_decommission`.
+- **plan_choice** — `A | B | null`. Null until Phase 1 starts.
+- **completed_phases** — append-only list（後續 Phase 自動 advance）.
+
+### `scope`
+- **clusters** — list with per-cluster X-Y matrix position（`stage` 對應該 cluster 的當前 phase；正交於整體 `current_state.phase`）.
+- **rule_packs_targeted** — which Rule Packs (Mysql / Postgres / Redis...) the customer plans to import.
+- **metric_split_planned** — boolean. True triggers `_defaults.yaml` adoption in Phase 4.
+
+### `gate_log`
+- 列已通過的 Gate：`{gate_id, passed_at, criteria_met}`. 後續 phase 機械讀此 log 決定能否 advance.
+
+---
+
+## 演進路線
+
+### v1 (本 outline)
+- 手寫 schema definition
+- da-tools 寫 Python dict → JSON dump
+- CI 不檢查 drift（風險 acceptable，schema 早期）
+
+### v2（v2.9 backlog）
+- Pydantic model 在 `components/da-tools/app/migration_state.py`
+- `da-tools onboard --analyze` import model + dump
+- CI hook：model schema → JSON Schema → 對比本 .md → drift fails
+- **本 .md 變成 generated artifact**（標 `<!-- AUTO-GENERATED, DO NOT EDIT -->`）
+
+---
+
+## 關聯
+
+- **使用者**：[multi-system-migration-playbook §3](../scenarios/multi-system-migration-playbook.md#3-phase-0-discovery-inventory) Phase 0
+- **schema 系列**：[docs/schemas/](README.md)（其他 schema 文件）
+- **Future SSOT**：v2.9 backlog（待開 issue）
+
+---
+
+## Outline status
+
+| 段 | 狀態 |
+|---|---|
+| 用途 + dual output 設計 | ✅ outline ready |
+| Schema v1 JSON 範本 | ✅ outline ready |
+| 欄位語意（top-level / discovery / current_state / scope / gate_log） | ✅ outline ready |
+| 演進路線（v1 → v2 auto-gen） | ✅ outline ready |
+| Concrete examples per field（含 edge cases） | 🟡 待補（內文 PR） |
+
+**下一步**：本 outline 進 PR review；通過後 da-tools onboard --analyze 實作（v2.9 epic 的一部分）會引用本 schema 為合約。
