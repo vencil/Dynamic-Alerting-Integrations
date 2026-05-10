@@ -187,14 +187,25 @@ sequenceDiagram
 ## 6. Phase 3 — Incremental Cutover
 
 ### 30 秒 TL;DR
-- Canary tenant（5-10%）先切：移 `migration_status: shadow` label → AM 自然激活新規則路徑
+- Canary tenant（5-10%）先切：在 **rule 配置檔**移除該 tenant 的 `migration_status: shadow` label → **rule evaluator (Prom / vmalert) reload** → 該 tenant 觸發的告警 payload 不再帶 shadow label → AM 既有 route table 自然把它送進 production receiver
 - 24h-1 ops cycle 觀察 → 推全量
-- Rollback path：**git revert** config commit 即恢復（< 5 分鐘）
+- Rollback path：**git revert** config commit → rule evaluator reload → shadow label 恢復 → 告警重新被 AM 既有 shadow matcher 路由到 /dev/null（< 5 分鐘）
 
 ### Architect Narrative（待寫）
-- 為什麼 AM cutover 不是獨立 stage（而是 Phase 3 副作用）：去掉 shadow label 後 AM route 自然失效；不需第二個 cutover step
+
+**關鍵機制澄清**（避免常見誤解）：
+
+> Phase 3 改的是**規則檔**（rule evaluator 端），不是 AM config。AM 既有的 route table（含 `migration_status="shadow"` matcher）**完全不變**。
+>
+> - **改動處**：rule 配置（Prom rules.yml / vmalert rule files）—— 拔除該 tenant 規則上的 `migration_status: shadow` label
+> - **觸發 reload 的對象**：rule evaluator (Prometheus / vmalert)，**不是** Alertmanager
+> - **AM 端的行為**：AM 收到不帶 shadow label 的 alert payload → 既有 route 的 shadow matcher 不 match → fall through 到 production receiver。AM config 完全沒動
+>
+> 這個分工是 Canary 之所以可行的原因：如果改 AM config 移除 shadow matcher，會一次影響所有 tenants（無法 canary）。改 per-tenant rule label 才能精準切 5-10% 子集。
+
+**其他**：
 - Canary 比例 + 觀察窗：5% × 24h 是 minimum；推薦 **跨 1 個 ops cycle (typically 1 week)** 抓 weekly / monthly alerts
-- Connect：**staged adoption** （custom_ → golden）由獨立 **Staged Adoption Guide** (`docs/scenarios/staged-adoption-guide.md`，I-2 待 ship) 處理；**本 Phase 不重複那段內容**，只做 cutover 的 routing flip
+- Connect：**staged adoption**（custom_ → golden）由獨立 **Staged Adoption Lifecycle** (`docs/scenarios/staged-adoption-guide.md`，I-2 待 ship 為 [PR #391](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/391)) 處理；**本 Phase 不重複那段內容**，只做 cutover 的 label flip
 
 ### Cutover Checklist
 
@@ -203,19 +214,23 @@ sequenceDiagram
 
 **Canary 階段**
 - [ ] 選擇 canary tenants（典型 5-10%）
-- [ ] git commit：移除 canary tenants 的 `migration_status: shadow` label
-- [ ] AM reload（自動）
+- [ ] git commit：在 **rule 配置檔** 移除 canary tenants 的 `migration_status: shadow` label（**不是** AM config）
+- [ ] **Rule evaluator (Prom / vmalert) reload**（自動 — 透過 GitOps reconcile 或 SIGHUP / `/-/reload`）—— **不是** AM reload
+- [ ] 驗證：該 tenant 觸發的下一個 alert payload 不再帶 `migration_status: shadow`
 - [ ] 24h 觀察期：alert 觸發率、receiver 響應、人為 incidents
 - [ ] Gate 4 通過 → 推全量
 
 **全量階段**
-- [ ] git commit：移除剩餘 tenants 的 shadow label
+- [ ] git commit：移除剩餘 tenants 的 shadow label（rule 端）
+- [ ] Rule evaluator reload
 - [ ] 觀察 ≥ 1 ops cycle（推薦 1 week）
 - [ ] Gate 5 通過 → Phase 4
 
 **Rollback**
-- [ ] git revert 對應 commit → AM reload → shadow label 恢復 → 新規則自動失效
+- [ ] git revert 對應 commit → rule evaluator reload → shadow label 恢復在 alert payload → AM 既有 shadow matcher 重新生效 → 告警再次路由到 /dev/null
 - [ ] **可逆性界線**：見 §11（config 全可逆 / 監控狀態半可逆 / 資料層不可逆）
+
+> **常見錯誤**：以為要改 AM config 移除 shadow matcher。**不要這麼做** —— 那會一次影響所有 tenants 無法 canary。
 </details>
 
 ### Gate 4（canary）→ 全量
