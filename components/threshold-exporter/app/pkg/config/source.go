@@ -39,7 +39,7 @@ package config
 import (
 	"crypto/sha256"
 	"fmt"
-	"path/filepath"
+	"path"
 	"sort"
 	"strings"
 
@@ -50,9 +50,13 @@ import (
 // header for why this is a single-method interface.
 type ConfigSource interface {
 	// YAMLFiles returns every *.yaml/*.yml file the source wants the
-	// merge engine to consider, keyed by absolute filepath.Clean'd
-	// path. The map is owned by the source — callers must treat byte
-	// slices as read-only.
+	// merge engine to consider, keyed by absolute Cleaned path. The
+	// path-cleaning scheme MUST match the caller's expectation — for
+	// InMemoryConfigSource, paths are POSIX (path.Clean); for any
+	// future disk-backed source, OS-native (filepath.Clean) would be
+	// appropriate. ScanFromConfigSource currently treats them as POSIX
+	// (only InMemory caller exists today). The map is owned by the
+	// source — callers must treat byte slices as read-only.
 	//
 	// rootPath is the conf.d/ root the caller intends to scan.
 	// In-memory sources may use it to filter their corpus; disk
@@ -80,19 +84,29 @@ func NewInMemoryConfigSource(files map[string][]byte) *InMemoryConfigSource {
 }
 
 // YAMLFiles returns the subset of the corpus whose paths are at or
-// under rootPath. Filtering is by string prefix on Cleaned paths;
-// callers should use forward slashes for in-memory paths to match
-// filepath.Clean on POSIX. On Windows the source still works because
-// filepath.Clean canonicalises both.
+// under rootPath. Filtering is by string prefix on POSIX-Cleaned paths
+// (path.Clean, not filepath.Clean) — InMemoryConfigSource is documented
+// as POSIX-only (see type comment) and `filepath.Clean` would convert
+// `/sim/x` to `\sim\x` on Windows, breaking the prefix match against
+// caller-supplied POSIX keys.
+//
+// History: original implementation used filepath.Clean here. On Windows
+// hosts that produced backslash-separated keys in the returned map,
+// which then mismatched the POSIX-keyed `files` map in
+// SimulateEffective when looking up DefaultsChain paths — the chain
+// resolved to nil bytes and inherited keys silently dropped from the
+// merged config. CI passed because Linux runners coincidentally share
+// the POSIX separator. Tracked under "Simulate Windows-host flake"
+// chip; fixed by switching to path.Clean.
 func (s *InMemoryConfigSource) YAMLFiles(rootPath string) (map[string][]byte, error) {
-	root := filepath.Clean(rootPath)
+	root := path.Clean(rootPath)
 	out := make(map[string][]byte, len(s.files))
 	for p, b := range s.files {
-		clean := filepath.Clean(p)
-		if clean != root && !strings.HasPrefix(clean, root+string(filepath.Separator)) {
+		clean := path.Clean(p)
+		if clean != root && !strings.HasPrefix(clean, root+"/") {
 			continue
 		}
-		lower := strings.ToLower(filepath.Base(clean))
+		lower := strings.ToLower(path.Base(clean))
 		if !strings.HasSuffix(lower, ".yaml") && !strings.HasSuffix(lower, ".yml") {
 			continue
 		}
@@ -116,7 +130,13 @@ func ScanFromConfigSource(src ConfigSource, rootPath string) (
 	graph *InheritanceGraph,
 	err error,
 ) {
-	absRoot := filepath.Clean(rootPath)
+	// path.Clean (POSIX) not filepath.Clean (OS-aware) — ScanFromConfigSource
+	// only feeds InMemoryConfigSource today (verified via `grep -rn
+	// ScanFromConfigSource components/threshold-exporter/app/`), and its
+	// contract is POSIX-only paths. Same Windows-host bug as YAMLFiles:
+	// filepath.Clean would convert `/sim` → `\sim` and break the prefix
+	// match against POSIX-keyed callers.
+	absRoot := path.Clean(rootPath)
 
 	corpus, cerr := src.YAMLFiles(absRoot)
 	if cerr != nil {
@@ -133,18 +153,22 @@ func ScanFromConfigSource(src ConfigSource, rootPath string) (
 	}
 	var decls []tenantDecl
 
-	for path, data := range corpus {
-		name := filepath.Base(path)
+	for p, data := range corpus {
+		// path.Base (POSIX) not filepath.Base — the loop variable was
+		// renamed from `path` to `p` to avoid shadowing the `path`
+		// package; same Windows-host fix family as YAMLFiles +
+		// CollectDefaultsChainPOSIX above.
+		name := path.Base(p)
 		// Hidden files skipped — match scanDirHierarchical.
 		if strings.HasPrefix(name, ".") {
 			continue
 		}
-		hashes[path] = fmt.Sprintf("%x", sha256.Sum256(data))
+		hashes[p] = fmt.Sprintf("%x", sha256.Sum256(data))
 
 		lower := strings.ToLower(name)
 		if strings.HasPrefix(name, "_") {
 			if lower == "_defaults.yaml" || lower == "_defaults.yml" {
-				defaults[path] = true
+				defaults[p] = true
 			}
 			// Other `_*.yaml` are hashed for completeness but not part
 			// of the inheritance graph (mirrors scanDirHierarchical).
@@ -164,13 +188,13 @@ func ScanFromConfigSource(src ConfigSource, rootPath string) (
 			// Production scanDirHierarchical logs+skips because a
 			// single broken file shouldn't take down the WatchLoop;
 			// here we want the 400 response.
-			return nil, nil, nil, nil, fmt.Errorf("parse %s: %w", path, perr)
+			return nil, nil, nil, nil, fmt.Errorf("parse %s: %w", p, perr)
 		}
 		if len(doc.Tenants) == 0 {
 			continue
 		}
 		for tid := range doc.Tenants {
-			decls = append(decls, tenantDecl{ID: tid, FilePath: path})
+			decls = append(decls, tenantDecl{ID: tid, FilePath: p})
 		}
 	}
 
@@ -193,10 +217,15 @@ func ScanFromConfigSource(src ConfigSource, rootPath string) (
 
 	for _, tid := range tenantIDs {
 		srcPath := tenants[tid]
-		dir := filepath.Dir(srcPath)
+		// path.Dir + CollectDefaultsChainPOSIX: in-memory contract is
+		// POSIX-only; filepath.Dir on Windows would convert /sim/foo to
+		// \sim and break the chain lookup against the POSIX-keyed
+		// defaults map (Simulate Windows-host flake — see
+		// CollectDefaultsChainPOSIX docstring for the full triage).
+		dir := path.Dir(srcPath)
 		chain, cached := chainCache[dir]
 		if !cached {
-			chain = CollectDefaultsChain(dir, absRoot, defaults)
+			chain = CollectDefaultsChainPOSIX(dir, absRoot, defaults)
 			chainCache[dir] = chain
 		}
 		graph.AddTenant(tid, chain)

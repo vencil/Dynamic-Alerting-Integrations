@@ -16,7 +16,10 @@ package config
 //   - .yaml wins over .yml when both exist at the same level
 //   - filepath.Clean'd paths so equality compares stable across calls
 
-import "path/filepath"
+import (
+	"path"
+	"path/filepath"
+)
 
 // InheritanceGraph tracks the defaults↔tenants dependency for a
 // hierarchical conf.d layout (ADR-017).
@@ -116,6 +119,56 @@ func CollectDefaultsChain(leafDir, root string, defaults map[string]bool) []stri
 	// Reverse to make chain[0] the top-most (L0) defaults and the last
 	// entry the nearest-to-tenant (Ln). Matches describe_tenant.py
 	// line 152.
+	for i, j := 0, len(chain)-1; i < j; i, j = i+1, j-1 {
+		chain[i], chain[j] = chain[j], chain[i]
+	}
+	return chain
+}
+
+// CollectDefaultsChainPOSIX is the POSIX-only sibling of CollectDefaultsChain.
+// Identical semantics, but uses path.* (always /) instead of filepath.* (OS-aware).
+//
+// Why a separate function: the disk scanner walks real filesystem paths where
+// filepath.* is correct (handles \\ on Windows). The in-memory scanner
+// (ScanFromConfigSource → simulate) walks synthetic POSIX paths under /sim,
+// where filepath.* on Windows would convert / to \\ and break the prefix +
+// map-key semantics — InMemoryConfigSource is documented as POSIX-only.
+//
+// History: discovered while triaging Simulate Windows-host flake (4 tests in
+// config_simulate_test.go failed locally on zh-TW Windows but passed on
+// Linux/CI). filepath.Dir("/sim/foo") on Windows returns "\\sim", which
+// missed the POSIX-keyed defaults map → empty chain → inherited keys
+// silently dropped from the merged config.
+func CollectDefaultsChainPOSIX(leafDir, root string, defaults map[string]bool) []string {
+	var chain []string
+	current := path.Clean(leafDir)
+	rootClean := path.Clean(root)
+
+	for {
+		// Prefer .yaml over .yml when both exist at the same level
+		// (same precedence rule as describe_tenant.py).
+		yamlPath := path.Join(current, "_defaults.yaml")
+		ymlPath := path.Join(current, "_defaults.yml")
+		if defaults[yamlPath] {
+			chain = append(chain, yamlPath)
+		} else if defaults[ymlPath] {
+			chain = append(chain, ymlPath)
+		}
+
+		if current == rootClean {
+			break
+		}
+		parent := path.Dir(current)
+		if parent == current {
+			// Reached filesystem root without hitting rootClean —
+			// shouldn't happen given the precondition, but don't loop.
+			break
+		}
+		current = parent
+	}
+
+	// Reverse to make chain[0] the top-most (L0) defaults and the last
+	// entry the nearest-to-tenant (Ln). Same as CollectDefaultsChain.
 	for i, j := 0, len(chain)-1; i < j; i, j = i+1, j-1 {
 		chain[i], chain[j] = chain[j], chain[i]
 	}
