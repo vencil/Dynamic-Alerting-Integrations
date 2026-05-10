@@ -9,6 +9,15 @@
             "command": "python \"$CLAUDE_PROJECT_DIR/scripts/session-guards/session-init.py\""
           }
         ]
+      },
+      {
+        "matcher": "Bash|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/scripts/session-guards/preflight_bash.py\""
+          }
+        ]
       }
     ]
   },
