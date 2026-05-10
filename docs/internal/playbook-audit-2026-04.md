@@ -2,8 +2,8 @@
 title: "Playbook Audit (2026-04 / 05) — 標準偏離、harness 強化、逃生門收編"
 tags: [internal, audit, governance]
 audience: [maintainer]
-version: v2.8.0
-verified-at-version: v2.8.0
+version: v2.7.0
+verified-at-version: v2.7.0
 lang: zh
 status: in-progress
 ---
