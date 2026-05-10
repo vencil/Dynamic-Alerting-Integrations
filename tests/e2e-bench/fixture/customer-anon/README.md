@@ -1,8 +1,9 @@
 # Customer anonymized fixture (gitignored)
 
-This directory holds customer-provided anonymized rule samples for
-**B-1 Phase 2 calibration gate** measurements. The actual sample files
-are **never** committed (`fixture/customer-anon/conf.d/` is in
+This directory holds customer-provided anonymized rule samples used by
+the e2e harness's **calibration gate** (compares run measurements
+against a customer baseline within ±30%). The actual sample files are
+**never** committed (`fixture/customer-anon/conf.d/` is in
 `.gitignore`); this README is the only file checked in.
 
 ## How customer samples arrive

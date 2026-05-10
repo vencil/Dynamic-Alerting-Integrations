@@ -1,4 +1,4 @@
-# E2E alert fire-through harness (B-1 Phase 2)
+# E2E alert fire-through harness
 
 Local-only harness measuring end-to-end alert latency through the full
 stack: tenant config write → exporter scan/reload → Prometheus scrape +
@@ -6,24 +6,40 @@ evaluation → Alertmanager dispatch → webhook receiver. Implements the
 5-anchor measurement protocol from
 [`docs/internal/design/phase-b-e2e-harness.md`](../../docs/internal/design/phase-b-e2e-harness.md).
 
-This is **PR-2 of 3** in the B-1 Phase 2 rollout — it stands up the
-stack and produces per-run JSON. Aggregation (P50/P95/P99 + bootstrap
-CI) and `make bench-e2e` Makefile target arrive in PR-3.
+The harness produces per-run JSON with the 5-anchor breakdown; an
+aggregator (`aggregate.py`) computes P50/P95/P99 + bootstrap 95% CI
+and applies the ±30% calibration gate against a customer-anon baseline.
 
-## Why local-only (not CI)
+## Why local-only (not CI on every PR)
 
 Per design doc §8.1: cold start (compose up + healthcheck + 30 runs ×
 2 phases + teardown) is ~5–8 minutes wall-clock. Running on every PR
-would dominate CI cost without producing actionable signal. PR-3 will
-gate this to a manually-dispatched workflow on `main`; for now,
-maintainer or operator runs on demand.
+would dominate CI cost without producing actionable signal. The nightly
+`bench-e2e-record.yaml` workflow (manually-dispatched on `main`) is the
+canonical CI invocation; for ad-hoc maintainer runs use `make bench-e2e`.
 
 ## Quick start (≥ 30-tenant fixture, ~5 min wall-clock)
+
+**Easiest** — from repo root:
+
+```bash
+make bench-e2e                   # 30 runs × synthetic-v2 (default)
+make bench-e2e COUNT=10          # quick sanity
+make bench-e2e E2E_FIXTURE_KIND=customer-anon   # if customer fixture staged
+make bench-e2e-aggregate         # aggregate the per-run JSONs
+```
+
+[`scripts/ops/bench_e2e_run.sh`](../../scripts/ops/bench_e2e_run.sh)
+wraps the entire fixture-stage → compose-up → run → cleanup sequence
+with EXIT-trap teardown (failure mid-script doesn't leave a dangling
+stack). The Makefile target shells out to it.
+
+**Manual** (when you need to inspect intermediate state):
 
 ```bash
 cd tests/e2e-bench
 
-# 1. Generate a fixture once (PR-1 tool — already merged in PR #78).
+# 1. Generate a fixture once.
 python3 ../../scripts/tools/dx/generate_tenant_fixture.py \
     --layout synthetic-v2 --count 1000 --with-defaults \
     --output fixture/synthetic-v2/conf.d --seed 42
@@ -59,18 +75,14 @@ cat bench-results/e2e-*.json | jq
 docker compose down -v
 ```
 
-**Easier path** (PR-3 integration): from repo root, `make bench-e2e`
-runs the entire 1-6 sequence with EXIT-trap cleanup (failure mid-
-script doesn't leave a dangling stack). See [`scripts/ops/bench_e2e_run.sh`](../../scripts/ops/bench_e2e_run.sh).
-
 ## Fixture kinds
 
 Three kinds, controlled by `E2E_FIXTURE_KIND` env (default `synthetic-v2`):
 
 | Kind | Source | Use |
 |---|---|---|
-| `synthetic-v1` | `--layout hierarchical` (uniform) | Phase 1 baseline reuse for delta comparisons |
-| `synthetic-v2` | `--layout synthetic-v2` (Zipf+power-law) | Phase 2 main baseline (default) |
+| `synthetic-v1` | `--layout hierarchical` (uniform) | Earlier-baseline reuse for delta comparisons |
+| `synthetic-v2` | `--layout synthetic-v2` (Zipf+power-law) | Main baseline (default) |
 | `customer-anon` | Out-of-band customer delivery (gitignored) | Calibration gate ±30% comparator |
 
 See `fixture/customer-anon/README.md` for the customer sample arrival
@@ -115,14 +127,20 @@ Per design §5.2 the resolve phase has `stage_ab_skipped=true` because
 the resolve path doesn't mutate the fixture (no scan/reload), so A/B
 are not measurable in the strict sense.
 
+`gate_status` is `"pending"` in **per-run** output by design — the
+calibration verdict is computed by `aggregate.py` against the customer
+baseline, not per-run. The aggregate JSON's `gate_status` is the real
+verdict (`passed` / `failed` / `voided`); see
+[`aggregate.py::determine_gate_status`](aggregate.py) for the matrix.
+
 ## Components
 
 | Service | Image / Build | Role |
 |---|---|---|
-| `threshold-exporter` | `build: ../../components/threshold-exporter/app` | Watches `fixture/active/conf.d/`, emits `user_threshold` + new `da_config_last_{scan,reload}_complete_unixtime_seconds` gauges (T1/T2 anchors, added in PR #78) |
-| `prometheus` | `prom/prometheus:v2.55.0` | Scrapes exporter + pushgateway; evaluates `actual_metric_value > user_threshold` rule |
+| `threshold-exporter` | `build: ../../components/threshold-exporter/app` | Watches `fixture/active/conf.d/`, emits `user_threshold` + `da_config_last_{scan,reload}_complete_unixtime_seconds` gauges (T1/T2 anchors) |
+| `prometheus` | `prom/prometheus:v3.11.2` | Scrapes exporter + pushgateway; evaluates `actual_metric_value > user_threshold` rule |
 | `pushgateway` | `prom/pushgateway:v1.10.0` | Receives driver-injected `actual_metric_value{tenant=bench-run-N}` |
-| `alertmanager` | `prom/alertmanager:v0.27.0` | Routes firing/resolved alerts to receiver (`send_resolved: true`) |
+| `alertmanager` | `prom/alertmanager:v0.32.0` | Routes firing/resolved alerts to receiver (`send_resolved: true`) |
 | `receiver` | `build: ./receiver` | Custom Go ring-buffer webhook target; `/posts?since=...&tenant_id=...` query API |
 | `driver` | `build: ./driver` | Python orchestrator; runs **inside** compose so all timestamps share the host kernel clock (no skew) |
 
@@ -134,15 +152,35 @@ each run in its own group → no cross-run dedup interference. Pushgateway
 metrics are explicitly DELETEd in the driver's `finally:` block to
 prevent stale state from bleeding into the next run.
 
-## Known limitations (closed in PR-3)
+## Calibration gate
 
-- **No aggregation**: per-run JSONs are individual; computing P50/P95/P99
-  + bootstrap 95% CI is PR-3 work.
-- **No `make bench-e2e` Makefile target**: invocation is manual until PR-3.
-- **No CI workflow**: by design (§8.1), this is local-only until the
-  PR-3 nightly workflow lands.
-- **`gate_status` always `pending`**: calibration logic that flips to
-  `passed/failed/voided` against customer-anon comparison is PR-3.
+`aggregate.py` reads the most recent `synthetic-v2` aggregate JSON and
+compares the current run's P95 against it within ±30%. The gate writes
+one of three statuses to the aggregate output:
+
+| Status | Meaning |
+|---|---|
+| `passed` | P95 within ±30% of customer baseline |
+| `failed` | P95 outside ±30% — investigate before merging |
+| `voided` | No customer baseline staged (no comparison done) |
+
+Design rationale: §6.5 of the e2e-harness design doc. The ±30% envelope
+absorbs CI runner-noise without admitting genuine regressions.
+
+## CI
+
+Two GitHub Actions workflows touch this harness:
+
+- **[`bench-e2e-record.yaml`](../../.github/workflows/bench-e2e-record.yaml)**
+  — manually-dispatched (`workflow_dispatch`); runs `make bench-e2e` and
+  uploads aggregate JSON as workflow artifact. Inputs: `fixture_kind` /
+  `count`. Use to refresh baselines or to capture a new measurement
+  on `main`.
+- **[`release-attach-bench-baseline.yaml`](../../.github/workflows/release-attach-bench-baseline.yaml)**
+  — attaches the latest `bench-baseline.txt` artifact to GitHub Releases
+  on tag push.
+
+There is no per-PR bench job by design (§8.1 cost rationale above).
 
 ## Failure modes & debugging
 
@@ -156,10 +194,13 @@ prevent stale state from bleeding into the next run.
 - **Receiver gets 0 posts**: Alertmanager → receiver route broken.
   Check `docker compose logs alertmanager` for webhook delivery errors;
   verify `http://localhost:9093/#/status` shows the receiver as healthy.
+- **`gate_status: voided`**: customer-anon fixture not staged. Either
+  stage one (see `fixture/customer-anon/README.md`) or accept voided
+  status for synthetic-only runs.
 
 ## Cross-refs
 
-- Design doc: `docs/internal/design/phase-b-e2e-harness.md`
-- Ops cookbook: `docs/internal/benchmark-playbook.md` §v2.8.0 Phase 2 e2e
-- PR #78 (B-1 Phase 2 PR-1): added the two timestamp gauges + synthetic-v2 fixture mode
-- PR #59 (B-1 Phase 1): synthetic baseline; this harness extends it to e2e
+- Design doc: [`docs/internal/design/phase-b-e2e-harness.md`](../../docs/internal/design/phase-b-e2e-harness.md)
+- Ops cookbook: [`docs/internal/benchmark-playbook.md`](../../docs/internal/benchmark-playbook.md) §e2e harness
+- Aggregate logic: [`aggregate.py`](aggregate.py) (calibration gate matrix)
+- Driver: [`driver/driver.py`](driver/driver.py)
