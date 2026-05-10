@@ -41,6 +41,14 @@ CHANGELOG.md + CLAUDE.md + README.md
 - CLI flag 增刪（影響 cli-reference.md）
 - Rule Pack 數量變更（影響 platform-data）
 
+**動 `docs/**.md` 或 `mkdocs.yml` push 前必跑 `make lint-docs-mkdocs`**：
+mkdocs strict build 用 site-root path 語意（`docs/` 是 root），與 pre-commit
+`check_doc_links.py` 的 filesystem 語意有 gap。例如 CHANGELOG.md 內寫
+`docs/X.md` 在 GitHub viewer 對，mkdocs 會回「target not found」。CI 會擋
+但要 push 後才知道；本地跑這個 target 是唯一的 fast feedback。Dev container
+`postCreateCommand` 已預裝三件組（`mkdocs-material` / `mkdocs-static-i18n` /
+`pymdown-extensions`，PR #375 後）；host shell 沒裝就先 pip install。
+
 ### #2 Tenant-Agnostic —— Go / PromQL / fixture 禁止 hardcode tenant id
 
 禁止寫 `db-a` / `foo` / `bar` / `prod-a` 這類具名 tenant。所有 tenant 都從 config / fixture 注入。違反會被測試 + lint hook 攔截。
