@@ -527,19 +527,15 @@ func TestScanDirHierarchical_MixedValidInvalid(t *testing.T) {
 // "_defaults.yaml"}[5m])) > 0` fires identically regardless of count
 // scale, so duplication is a feature (blast-radius signal), not noise.
 func TestRecomputeMergedHash_DefaultsParseFailureEmitsErrorAndMetric(t *testing.T) {
-	// NOT t.Parallel — log.SetOutput swaps a global stdlib logger; #4b
-	// will move this off the global eventually.
+	t.Parallel()
 	root := t.TempDir()
 
-	// Per-test metrics instance — routed via mgr.SetMetrics so the
-	// scanner observations land on `fresh` instead of the package
-	// singleton (parallel-friendly when paired with #4b).
+	// Per-test metrics + logger instances — routed via mgr.SetMetrics
+	// + mgr.SetLogger so observations land on `fresh`/`logBuf` instead
+	// of the package singletons (#4a + #4b; parallel-safe).
 	fresh, _ := freshMetrics(t)
-
 	var logBuf bytes.Buffer
-	origOutput := log.Writer()
-	log.SetOutput(&logBuf)
-	t.Cleanup(func() { log.SetOutput(origOutput) })
+	testLogger := log.New(&logBuf, "", 0)
 
 	// Poison-pill root _defaults.yaml.
 	writeFile(t, filepath.Join(root, "_defaults.yaml"),
@@ -553,6 +549,7 @@ func TestRecomputeMergedHash_DefaultsParseFailureEmitsErrorAndMetric(t *testing.
 
 	mgr := NewConfigManager(root)
 	mgr.SetMetrics(fresh)
+	mgr.SetLogger(testLogger)
 	// Trigger the hierarchical recompute path. Load fails (or partially
 	// succeeds) — we don't care about the return value, only the
 	// observability side-effects (ERROR log + metric).

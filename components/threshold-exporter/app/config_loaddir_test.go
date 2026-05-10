@@ -236,20 +236,15 @@ func TestConfigManager_LoadDir_EmptyDir(t *testing.T) {
 // same invariant as TestScanDirHierarchical_MixedValidInvalid for the
 // hierarchical path).
 func TestConfigManager_LoadDir_UnparseableDefaultsErrorAndMetric(t *testing.T) {
-	// NOT t.Parallel — log.SetOutput swaps a global stdlib logger; #4b
-	// will move this off the global eventually.
+	t.Parallel()
 	dir := t.TempDir()
 
-	// Per-test metrics instance — routed via mgr.SetMetrics so the
-	// scanner observations land on `fresh` (parallel-friendly when
-	// paired with #4b).
+	// Per-test metrics + logger instances — routed via mgr.SetMetrics
+	// + mgr.SetLogger so scanner observations land on `fresh`/`logBuf`
+	// instead of the package singletons (#4a + #4b; parallel-safe).
 	fresh, _ := freshMetrics(t)
-
-	// Capture log output to verify ERROR-level promotion.
 	var logBuf bytes.Buffer
-	origOutput := log.Writer()
-	log.SetOutput(&logBuf)
-	t.Cleanup(func() { log.SetOutput(origOutput) })
+	testLogger := log.New(&logBuf, "", 0)
 
 	// Poison-pill `_defaults.yaml`. Use a structurally broken YAML
 	// (unclosed brace) so yaml.Unmarshal definitively errors regardless
@@ -270,6 +265,7 @@ tenants:
 
 	mgr := NewConfigManager(dir)
 	mgr.SetMetrics(fresh)
+	mgr.SetLogger(testLogger)
 	// Load may succeed (defaults dropped, sibling tenant parses) — what we
 	// care about is the ERROR log + the metric.
 	_ = mgr.Load()
