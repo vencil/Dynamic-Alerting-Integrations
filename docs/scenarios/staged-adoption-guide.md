@@ -223,9 +223,11 @@ git revert <commit-sha>
 
 **觸發**：multi-system migration playbook 走完 Phase 3 全量 cutover（所有 custom_ 都 active），現在開始 promote 到 golden。
 
-**關鍵決策**：
-- 哪些規則有 golden 等價物（自動化工具 `da-tools rule-pack-mapping --suggest` 未 ship，追蹤：[issue #405](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/405)；目前 workflow：domain owner 對照 [Rule Pack ALERT-REFERENCE](../rule-packs/ALERT-REFERENCE.md) 手動比對 custom_ 與 golden alertname）
+**關鍵決策**（**這是 domain owner 業務判斷，不打算自動化**——見下方）：
+- 哪些規則有 golden 等價物：domain owner 對照 [Rule Pack ALERT-REFERENCE](../rule-packs/ALERT-REFERENCE.md) 手動比對 custom_ 與 golden 規則的觸發條件 + 語意
 - 哪些規則該留 custom_（無 Rule Pack 對應、客戶業務專屬）
+
+> 📝 **為什麼不做 `rule-pack-mapping --suggest` 工具**（追蹤：[issue #405](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/405)）：自動建議「custom_X 應 promote 到 golden Y」需要深度 PromQL 語意分析（AST + 等價判斷），準確率天花板低；建議錯了反而給客戶 false confidence。這類**業務語意判斷**保留為人類決策，不勉強自動化。`rule-pack-diff`（兩版本之間的機械差異）是 factual 工作，會做；`--suggest`（判斷哪條 custom 該 promote）是 judgment 工作，不會做。
 
 **結束條件**：所有 promote-able 都升級完，或客戶決定停在某個點。
 
