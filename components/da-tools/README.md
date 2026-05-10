@@ -1,7 +1,7 @@
 # da-tools (v2.7.0)
 
 <!-- 標題版號 = 最後 released tag；v2.8.0 in-flight feature 在內文以 **v2.8.0** inline 標記。
-     Phase .e release wrap 切五線 tag 時，本標題 + VERSION 檔 + 下方版號表跟著批次同步 bump。 -->
+     Release wrap 切五線 tag 時，本標題 + VERSION 檔 + 下方版號表跟著批次同步 bump。 -->
 
 > **核心 component** — 一顆 ~60 MB Alpine Python image，把 Dynamic Alerting 平台所需 45 個驗證 / 遷移 / 治理 CLI 工具裝在一起，**無需 clone repo、無需安裝 Python 依賴**，docker pull 即用。Platform Engineers / SREs / Tenants（DevOps）共用入口。
 >

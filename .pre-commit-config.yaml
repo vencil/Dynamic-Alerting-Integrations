@@ -210,6 +210,16 @@ repos:
         pass_filenames: false
         files: \.(md|yaml|yml|py|jsx|html|json)$
 
+      - id: codename-leak-check
+        name: Codename leak guard (Phase .c / Track A / TD-NNN in user-facing files)
+        entry: python3 -X utf8 scripts/tools/lint/check_codename_leak.py --ci
+        language: python
+        pass_filenames: false
+        # Re-run only when files in the path-allowlist (DEFAULT_SCAN_PATHS in
+        # the script) actually change. Match the same set here so unrelated
+        # commits don't pay the cost.
+        files: ^(README(\.en)?\.md|components/(da-tools|da-portal|threshold-exporter|tenant-api)/README\.md|components/da-tools/app/entrypoint\.py)$
+
       - id: commit-scope-doc-drift
         name: Commit scope drift (commit-convention.md vs .commitlintrc.yaml)
         entry: python3 -X utf8 scripts/tools/lint/check_commit_scope_doc.py --ci

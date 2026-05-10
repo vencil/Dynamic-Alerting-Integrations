@@ -70,20 +70,20 @@ def _build_help_text(lang):
 命令 (Federation — 多叢集):
     rule-pack-split   Rule Pack 分層拆分 (edge Part 1 + central Part 2+3)
 
-命令 (Guard — Dangling Defaults Guard, v2.8.0 C-12):
+命令 (Guard — Dangling Defaults Guard, v2.8.0):
     guard             驗證 conf.d/ 樹是否安全 (schema + routing + cardinality)
                       子命令: defaults-impact
 
-命令 (Phase B Track A — rollback verification, v2.8.0):
+命令 (Tenant Verify — rollback verification, v2.8.0):
     tenant-verify     列印 tenant 的 effective config + merged_hash；
-                      `--expect-merged-hash` 與快照比對 (B-4 rollback checklist)
+                      `--expect-merged-hash` 與快照比對 (rollback checklist)
                       `--all --json` 拍 pre-base snapshot 給 rollback 後 diff
 
-命令 (Batch PR — C-10 Migration Batch PR Pipeline, v2.8.0):
+命令 (Batch PR — Migration Batch PR Pipeline, v2.8.0):
     batch-pr          開出/更新 tenant chunk PRs，或於 Base merge 後 rebase。
                       子命令: apply / refresh / refresh-source
 
-命令 (Parser — C-8 PromRule parser, v2.8.0):
+命令 (Parser — PromRule parser, v2.8.0):
     parser            解析 PrometheusRule YAML，輸出 JSON ParseResult；
                       可選 strict-PromQL 相容性檢查 (anti-vendor-lock-in)。
                       子命令: import / allowlist
@@ -152,22 +152,22 @@ Commands (Operator-Native — CRD generation & validation):
 Commands (Federation — multi-cluster):
     rule-pack-split   Rule Pack stratification (edge Part 1 + central Parts 2+3)
 
-Commands (Guard — Dangling Defaults Guard, v2.8.0 C-12):
+Commands (Guard — Dangling Defaults Guard, v2.8.0):
     guard             Validate a conf.d/ tree (schema + routing + cardinality)
                       Subcommands: defaults-impact
 
-Commands (Phase B Track A — rollback verification, v2.8.0):
+Commands (Tenant Verify — rollback verification, v2.8.0):
     tenant-verify     Print tenant effective config + merged_hash;
                       `--expect-merged-hash` compares against a snapshot
-                      (B-4 rollback checklist item 6).
+                      (rollback checklist item 6).
                       `--all --json` snapshots pre-base state for diffing
                       after rollback.
 
-Commands (Batch PR — C-10 Migration Batch PR Pipeline, v2.8.0):
+Commands (Batch PR — Migration Batch PR Pipeline, v2.8.0):
     batch-pr          Open/update tenant chunk PRs, or rebase after Base merges.
                       Subcommands: apply / refresh / refresh-source
 
-Commands (Parser — C-8 PromRule parser, v2.8.0):
+Commands (Parser — PromRule parser, v2.8.0):
     parser            Parse PrometheusRule YAML to JSON ParseResult;
                       optional strict-PromQL portability check
                       (anti-vendor-lock-in). Subcommands: import / allowlist

@@ -29,6 +29,18 @@ Compare：v2.7.0 最終條目約 55 行（Scale / Token / Test / Benchmark / ADR
 Breaking / Upgrade 七塊清楚區分），那是目標形狀。
 -->
 
+### Highlights — 5-bullet 總覽
+
+> 想 30 秒掌握 v2.8.0：讀這裡。詳細逐條記錄在下方各 sub-section。
+
+- **客戶導入自動化** — 三隻新 CLI（`da-parser` / `da-batchpr` / `da-guard`）把 kube-prometheus 客戶現有的 `PrometheusRule` corpus 導入到本平台 `conf.d/` Profile-as-Directory 架構。1000 租戶導入從 1 週縮到 1 天。安裝路徑見 [Migration Toolkit Installation](docs/migration-toolkit-installation.md)。
+- **Tenant Manager 邁入 1000+ 租戶規模** — UI 直打 `/api/v1/tenants/search`（伺服端 search / pagination，page_size 預設 50 / 上限 500）取 live data；Saved Views frontend 接 v2.5.0 已存在的 backend CRUD；TenantCard 加 Alert Builder / Routing Trace deep link。
+- **Defaults 變動可預演** — `/api/v1/tenants/simulate` ephemeral primitive 讓 CI 與 UI 在 commit 前預測 `_defaults.yaml` 變動對 inheritance 的影響（無 disk IO、無 manager state mutation）；新 `da_config_blast_radius_tenants_affected` histogram 量化每次 tick 受影響的 tenant 分佈。
+- **Q2 2026 CVE 集中收斂** — Grafana / Prometheus 3.x / Alertmanager / oauth2-proxy / alpine-git / Python base / Go toolchain 一次 bump，清掉 50+ CVE（13 個 CRITICAL、35+ HIGH），涵蓋 auth bypass、RCE、memory safety、TLS DoS 等類別。詳見 umbrella issue [#100](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/100)。
+- **API 邊界硬化** — `tenant-api` body-content range validation 在邊界 fail-fast（patch key/value 超長、`_timeout_ms` 超過 1 小時、`_silent_mode` 非 enum 值等都直接 400 + 完整 violations array）；flat + nested mixed-mode 同 tenant id 重複從 WARN 升級為 hard error，避免 silently last-wins。
+
+---
+
 ### Changed
 
 - **Test infrastructure — exporter 三個 global-swap antipatterns 拆掉，全部走 `ConfigManager` test-only setter 注入（v2.8.0, PRs #363–#369, ~7 PRs）** — 測試姿態從「solid」推到「robust」：(a) `withIsolatedMetrics` → `freshMetrics` + `m.SetMetrics`；(b) `log.SetOutput` → `m.SetLogger(testLogger)`；(c) WatchLoop / debounce 從 `time.Sleep` 等 ticker 改 `m.SetClock(fakeClock)` + `Advance` + state-poll。前述三類過去因 global state race 必須 serial 的測試現在 `t.Parallel`-eligible，full app pkg `-count=5 -race` 12.1s（previously 20.7s）。TECH-DEBT-017（WatchLoop time.Sleep flake）以 FakeClock 結構性關閉。AI agent quickref → `docs/internal/test-map.md` §測試注入 Seam + `CLAUDE.md` §測試注入 Seam。**v2.8.0 condensation 階段請以「測試達到的境界」粗顆粒重寫**，不要保留個別 PR 數字。

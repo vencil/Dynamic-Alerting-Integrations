@@ -24,7 +24,7 @@
 - **`X-Request-ID` echo**：chi 注入的 request id 寫回 response header，方便 client 對 log
 - **Per-caller rate limit**：sliding-window，預設 100 req/min/caller，`TA_RATE_LIMIT_PER_MIN=0` 關閉
 - **RBAC**：`_rbac.yaml` 定義 group → tenant → permission，`atomic.Value` hot-reload（預設 30s）；缺少 `_rbac.yaml` 進入 open-read mode
-- **Tenant-scoped authz**（v2.8.0 B-6 PR-2）：group / view / batch / PR list / task results 的成員都會被 per-tenant RBAC 再過一次
+- **Tenant-scoped authz**（v2.8.0）：group / view / batch / PR list / task results 的成員都會被 per-tenant RBAC 再過一次
 - **GitOps Writer**：schema validation → YAML 寫入 → `git commit`（operator email 為 author，service account 為 committer）
 - **Conflict detection**：寫入後檢查 commit 的 parent；若 HEAD 在 read 跟 write 之間移動回 409
 - **Body-content validation**（issue #134）：fixed-shape 欄位走 go-playground/validator，`Patch` / `Filters` map 走 per-key registry，違反一次回完整 violations 陣列
@@ -51,9 +51,9 @@
 |--------|------|------|------|
 | `GET` | `/api/v1/me` | read | 回傳當前 caller 的 email + groups + RBAC 摘要 |
 | `GET` | `/api/v1/tenants` | read | 列出 RBAC 可見的租戶（含 silent / maintenance / `_metadata`） |
-| `GET` | `/api/v1/tenants/search` | read | **(v2.8.0 C-1)** 伺服端 search / filter / pagination；`q` / `environment` / `tier` / `domain` / `db_type` / `tag` / `page_size`（max 500）/ `offset` / `sort`。內含 30s snapshot cache，目標 1000 租戶下 p99 < 200ms。⚠️ numeric offset 仍是 v1 design — opaque cursor 未來換 |
+| `GET` | `/api/v1/tenants/search` | read | **(v2.8.0)** 伺服端 search / filter / pagination；`q` / `environment` / `tier` / `domain` / `db_type` / `tag` / `page_size`（max 500）/ `offset` / `sort`。內含 30s snapshot cache，目標 1000 租戶下 p99 < 200ms。⚠️ numeric offset 仍是 v1 design — opaque cursor 未來換 |
 | `GET` | `/api/v1/tenants/{id}` | read | 取得 raw YAML + resolved thresholds |
-| `GET` | `/api/v1/tenants/{id}/effective` | read | **(v2.7.0 B-3)** merged config + 來源鏈 + dual hashes（`source_hash` + `merged_hash`，16 hex），底層走 `pkg/config/hierarchy.ResolveEffective()`，ADR-018 L0→L3 繼承語義 |
+| `GET` | `/api/v1/tenants/{id}/effective` | read | **(v2.7.0)** merged config + 來源鏈 + dual hashes（`source_hash` + `merged_hash`，16 hex），底層走 `pkg/config/hierarchy.ResolveEffective()`，ADR-018 L0→L3 繼承語義 |
 | `PUT` | `/api/v1/tenants/{id}` | write | 寫入（validate → policy check → write → commit / PR） |
 | `POST` | `/api/v1/tenants/{id}/validate` | read | Dry-run 驗證 |
 | `POST` | `/api/v1/tenants/{id}/diff` | read | 預覽 unified diff |
@@ -268,5 +268,5 @@ Pre-commit hook (`.golangci.yml`) 與 repo 層 `make pr-preflight` 整合 — PR
 - 版本歷程：[CHANGELOG.md](../../CHANGELOG.md)
 - 架構決策：[ADR-009 commit-on-write CRUD](../../docs/adr/009-tenant-manager-crud-api.md)、[ADR-011 PR-based write-back](../../docs/adr/011-pr-based-writeback.md)
 - 設計深度：[architecture-and-design.md](../../docs/architecture-and-design.md)
-- API 細節：[docs/api/README.md](../../docs/api/README.md)、[tenant-api-hardening.md](../../docs/api/tenant-api-hardening.md)（v2.8.0 B-6 hardening 詳解）
+- API 細節：[docs/api/README.md](../../docs/api/README.md)、[tenant-api-hardening.md](../../docs/api/tenant-api-hardening.md)（v2.8.0 hardening 詳解）
 - Repo overview：[../../README.md](../../README.md)
