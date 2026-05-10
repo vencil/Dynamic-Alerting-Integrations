@@ -9,17 +9,39 @@ confuse external readers who have no access to the planning context.
 Scoped to T0 (public README) and T3 (component README + CLI --help) by
 default. CHANGELOG.md and docs/internal/** are intentionally allowed.
 
+Lint class: (b) per docs/internal/lint-policy.md (negative pattern + false-
+positive escape allowlist). Default scan scope: **diff-only** — only lines
+ADDED in the current PR's diff are checked, so engineer A's prior legitimate
+use doesn't get re-flagged when engineer B touches the same file. Override
+with --full-scan for occasional manual full-file audit.
+
 Usage:
-    python3 scripts/tools/lint/check_codename_leak.py [--ci] [--scope full]
+    # Diff-only (default; CI sets LINT_DIFF_BASE)
+    python3 scripts/tools/lint/check_codename_leak.py [--ci]
+
+    # Manual full-file scan (e.g., for periodic audit)
+    python3 scripts/tools/lint/check_codename_leak.py --full-scan [--ci]
+
+    # Wider exploratory scope (T1 + T2 docs)
+    python3 scripts/tools/lint/check_codename_leak.py --scope full
+
+Bypass (per lint-policy.md §4): if a finding is intentional, add to PR body:
+    bypass-lint: codename-leak
+    reason: <≥30 words explaining why this is legitimate>
+CI passes ${{ github.event.pull_request.body }} via $PR_BODY env var or
+--pr-body-file <path>; matched bypass turns hard-fail into warning + exit 0.
 
 Exit codes:
-    0  no leaks found
+    0  no leaks (or bypass matched with audit-trail warning)
     1  leaks found (with --ci)
+    2  diff base ref missing — fix CI workflow's fetch-depth or base ref
 """
 from __future__ import annotations
 
 import argparse
+import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -29,6 +51,15 @@ if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     except (AttributeError, OSError):
         pass
+
+# Helpers from this lint family
+sys.path.insert(0, str(Path(__file__).parent))
+from _lint_helpers import (  # noqa: E402
+    DiffBaseMissingError,
+    get_diff_added_lines,
+    parse_bypass_tag,
+    resolve_diff_base,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -93,8 +124,7 @@ PATTERNS: list[tuple[str, re.Pattern[str]]] = [
 ]
 
 # Substrings that look like a hit but are legitimate. Lines containing any of
-# these are skipped entirely (cheap-and-cheerful — refine if false negatives
-# show up).
+# these are skipped entirely.
 ALLOW_LINE_SUBSTRINGS = (
     "SHA-256",
     "SHA-1",
@@ -111,9 +141,32 @@ ALLOW_LINE_SUBSTRINGS = (
     "GHSA-",
 )
 
-# Files inside scanned dirs to skip (binary or generated).
 SKIP_FILE_NAMES = {".DS_Store"}
 SKIP_EXT = {".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".pdf", ".zip"}
+
+# Pure code-comment lines (not user-visible). These are skipped because
+# codenames in source-level comments are legitimate dev annotations — only
+# strings rendered to users (docstrings, --help output, README body) need
+# to be clean. Markdown HTML comments are NOT skipped: they show up in the
+# raw .md view that contributors browse on GitHub.
+_CODE_COMMENT_PREFIXES = {
+    ".py": ("#",),
+    ".sh": ("#",),
+    ".bash": ("#",),
+    ".go": ("//",),
+    ".js": ("//",),
+    ".ts": ("//",),
+    ".jsx": ("//",),
+    ".tsx": ("//",),
+}
+
+
+def _is_code_comment(line: str, suffix: str) -> bool:
+    prefixes = _CODE_COMMENT_PREFIXES.get(suffix)
+    if not prefixes:
+        return False
+    stripped = line.lstrip()
+    return any(stripped.startswith(p) for p in prefixes)
 
 
 def iter_files(scan_paths: list[str]) -> list[Path]:
@@ -147,32 +200,8 @@ def scan_line(line: str) -> list[tuple[str, str]]:
     return hits
 
 
-# Pure code-comment lines (not user-visible). These are skipped because
-# codenames in source-level comments are legitimate dev annotations — only
-# strings rendered to users (docstrings, --help output, README body) need
-# to be clean. Markdown HTML comments are NOT skipped: they show up in the
-# raw .md view that contributors browse on GitHub.
-_CODE_COMMENT_PREFIXES = {
-    ".py": ("#",),
-    ".sh": ("#",),
-    ".bash": ("#",),
-    ".go": ("//",),
-    ".js": ("//",),
-    ".ts": ("//",),
-    ".jsx": ("//",),
-    ".tsx": ("//",),
-}
-
-
-def _is_code_comment(line: str, suffix: str) -> bool:
-    prefixes = _CODE_COMMENT_PREFIXES.get(suffix)
-    if not prefixes:
-        return False
-    stripped = line.lstrip()
-    return any(stripped.startswith(p) for p in prefixes)
-
-
-def scan_file(path: Path) -> list[tuple[int, str, str, str]]:
+def scan_file_full(path: Path) -> list[tuple[int, str, str, str]]:
+    """Full-file scan (used by --full-scan and as fallback for newly-added files)."""
     try:
         text = path.read_text(encoding="utf-8")
     except (UnicodeDecodeError, PermissionError):
@@ -187,8 +216,45 @@ def scan_file(path: Path) -> list[tuple[int, str, str, str]]:
     return out
 
 
+def scan_file_diff(path: Path, base: str) -> list[tuple[int, str, str, str]]:
+    """Diff-only scan: only check lines ADDED in current diff vs ``base``.
+
+    For files that are newly added (no base version), git diff still emits
+    every line as added, so this returns the full content scanned. For files
+    not present in current diff, returns empty list.
+    """
+    try:
+        added_lines = get_diff_added_lines(path, base)
+    except subprocess.CalledProcessError:
+        # Unexpected git failure — fall back to full scan to err on safe side
+        # (better to flag too much than miss). resolve_diff_base() should have
+        # caught the common "base ref missing" case earlier.
+        return scan_file_full(path)
+    suffix = path.suffix.lower()
+    out: list[tuple[int, str, str, str]] = []
+    for line_no, line in added_lines:
+        if _is_code_comment(line, suffix):
+            continue
+        for label, match in scan_line(line):
+            out.append((line_no, label, match, line.rstrip()))
+    return out
+
+
+def _read_pr_body(pr_body_file: str | None) -> str | None:
+    """Read PR body from --pr-body-file or $PR_BODY env var."""
+    if pr_body_file:
+        try:
+            return Path(pr_body_file).read_text(encoding="utf-8")
+        except (FileNotFoundError, PermissionError) as e:
+            print(f"WARN: cannot read --pr-body-file {pr_body_file}: {e}", file=sys.stderr)
+    return os.environ.get("PR_BODY") or None
+
+
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__.strip().splitlines()[0])
+    parser = argparse.ArgumentParser(
+        description=__doc__.strip().splitlines()[0],
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     parser.add_argument(
         "--ci", action="store_true", help="Exit non-zero on any violation"
     )
@@ -198,28 +264,81 @@ def main() -> int:
         default="default",
         help="default: T0 + core component READMEs. full: also T1 + remaining T3.",
     )
+    parser.add_argument(
+        "--full-scan",
+        action="store_true",
+        help="Scan full file content (default is diff-only — recommended for CI).",
+    )
+    parser.add_argument(
+        "--diff-base",
+        default=None,
+        help="Override diff base (default: $LINT_DIFF_BASE env or origin/main).",
+    )
+    parser.add_argument(
+        "--pr-body-file",
+        default=None,
+        help="Path to file containing PR body for bypass tag check.",
+    )
     args = parser.parse_args()
 
     scan_paths = FULL_SCAN_PATHS if args.scope == "full" else DEFAULT_SCAN_PATHS
     files = iter_files(scan_paths)
 
-    total = 0
+    # Resolve scan mode
+    if args.full_scan:
+        scan_mode = "full-file"
+        scanner = lambda fp: scan_file_full(fp)  # noqa: E731
+    else:
+        try:
+            base = args.diff_base or resolve_diff_base()
+        except DiffBaseMissingError as e:
+            print(f"ERROR: {e}", file=sys.stderr)
+            return 2
+        scan_mode = f"diff vs {base}"
+        scanner = lambda fp: scan_file_diff(fp, base)  # noqa: E731
+
+    # Collect findings
+    findings: list[tuple[str, int, str, str, str]] = []
     for fp in files:
         rel = fp.relative_to(REPO_ROOT).as_posix()
-        for line_no, label, match, snippet in scan_file(fp):
-            print(f"  {rel}:{line_no}: [{label}] '{match}' — {snippet[:120]}")
-            total += 1
+        for line_no, label, match, snippet in scanner(fp):
+            findings.append((rel, line_no, label, match, snippet))
 
+    # Bypass check (lint-policy.md §4)
+    pr_body = _read_pr_body(args.pr_body_file)
+    bypass_reason = parse_bypass_tag(pr_body, "codename-leak")
+
+    # Emit
+    for rel, line_no, label, match, snippet in findings:
+        print(f"  {rel}:{line_no}: [{label}] '{match}' — {snippet[:120]}")
+
+    total = len(findings)
     if total == 0:
-        print(f"OK no codename leaks in {len(files)} file(s) (scope={args.scope}).")
+        print(
+            f"OK no codename leaks in {len(files)} file(s) "
+            f"(mode={scan_mode}, scope={args.scope})."
+        )
+        return 0
+
+    if bypass_reason:
+        print(
+            f"\n⚠️  BYPASSED via PR body: {bypass_reason}\n"
+            f"   {total} finding(s) above are author-acknowledged intentional.\n"
+            f"   This PR retains audit trail; reviewer must confirm bypass is justified."
+        )
         return 0
 
     print(
-        f"\nFAIL {total} codename leak(s) found in scope={args.scope}.\n"
+        f"\nFAIL {total} codename leak(s) (mode={scan_mode}, scope={args.scope}).\n"
         f"  Codenames (Phase .c / Track A / TD-NNN / PR-N / S#NN / HA-NN /\n"
         f"  letter-id like C-12) belong in CHANGELOG.md or docs/internal/**\n"
         f"  only — never in user-facing surfaces. Replace with feature names\n"
-        f"  or version labels."
+        f"  or version labels.\n"
+        f"\n"
+        f"  If a finding is intentional, add to PR description:\n"
+        f"    bypass-lint: codename-leak\n"
+        f"    reason: <≥30 words explaining why this is legitimate>\n"
+        f"  See docs/internal/lint-policy.md §4 for bypass spec."
     )
     return 1 if args.ci else 0
 
