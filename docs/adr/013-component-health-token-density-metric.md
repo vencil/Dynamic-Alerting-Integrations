@@ -11,34 +11,34 @@ lang: zh
 > **Language / 語言：** **中文 (Current)** | [English](./013-component-health-token-density-metric.en.md)
 
 > 合併了兩個決策：
-> - **DEC-08**（Day 1, planning §10）：Tier 分級改用五維加權替代 `appears_in` 單訊號
-> - **DEC-M**（Day 4, planning §19）：新增 `token_density` 輔助指標
+> - **Tier 分級演算法**：改用五維加權替代 `appears_in` 單訊號
+> - **token_density 輔助指標**：新增量化 design token 遷移完成度的指標
 >
 > 兩者皆作用在 `scripts/tools/dx/scan_component_health.py`，合併為單一 ADR 避免碎片化。
 
 ## 狀態
 
-✅ **Accepted**（DEC-08 Day 1 + DEC-M Day 4, v2.7.0, 2026-04-16）
+✅ **Accepted**（v2.7.0, 2026-04-16）
 
 ## 背景
 
-### 問題 1：Tier 分級單訊號失準（DEC-08）
+### 問題 1：Tier 分級單訊號失準
 
 v2.6.x scanner 用 `appears_in`（工具在幾份文件被引用）作為 Tier 唯一判斷：
 - tenant-manager 在 6 份文件被引用 → Tier 1
 - 同等複雜但只寫在 1 份文件的 portal 工具 → Tier 3
 
-這導致**獨立運作但高價值的 portal 工具被系統性低估**。Tier 分級直接影響 Phase .a0 migration 排序與 regression budget 分配。
+這導致**獨立運作但高價值的 portal 工具被系統性低估**。Tier 分級直接影響 token migration 排序與 regression budget 分配。
 
-### 問題 2：Group A/B/C 缺乏遷移完成度精度（DEC-M）
+### 問題 2：Group A/B/C 缺乏遷移完成度精度
 
-Phase .a0 批次 3/4 操作中發現 `token_group`（A/B/C = ≥80 / ≥20 / <20 tokens）只是粗分級：
+Token migration 批次操作中發現 `token_group`（A/B/C = ≥80 / ≥20 / <20 tokens）只是粗分級：
 - 80 tokens + 0 palette → Group A
 - 80 tokens + 20 palette → 仍 Group A，但殘留 palette 顯著
 
 ## 決策
 
-### Part 1：五維加權 Tier 評分（DEC-08）
+### Part 1：五維加權 Tier 評分
 
 ```python
 score = (
@@ -64,7 +64,7 @@ score = (
 | 10+ 維度 | 維護成本過高；校準需要 regression data |
 | ML 分類器 | 資料量太少（38 工具）；無 labeled training set |
 
-### Part 2：token_density 輔助指標（DEC-M）
+### Part 2：token_density 輔助指標
 
 ```python
 token_density = tokens / (tokens + palette_hits)   # 範圍 [0.0, 1.0]
@@ -99,19 +99,17 @@ token_density = tokens / (tokens + palette_hits)   # 範圍 [0.0, 1.0]
 
 ### 正面
 
-- Tier 分級不再系統性低估獨立 portal 工具（修正 tenant-manager 等 Day 1 排序偏差）
+- Tier 分級不再系統性低估獨立 portal 工具（修正 tenant-manager 等早期排序偏差）
 - Dashboard 精確顯示「哪些工具差 1-2 個 palette」
 - Per-tool JSON output 變更 additive，無 breaking change
-- Day 4 batch 4 migration 排序比 Day 1 更合理
+- 後續 token migration 批次排序比初版單訊號更合理
 
 ### 負面 / 風險
 
-1. **五維權重是 heuristic** — 均權 `w=1` 沒有 empirical 校準。**緩解**：Phase .a 結束後用實際 migration 成果回溯驗證，必要時調整。
+1. **五維權重是 heuristic** — 均權 `w=1` 沒有 empirical 校準。**緩解**：v2.7.0 結束後用實際 migration 成果回溯驗證，必要時調整。
 2. **Density 誤讀** — 可能把 density=1.0 當「完成」。**緩解**：`scan_component_health.py` docstring 標註「density is a secondary signal」。
-3. **Group 閾值 (≥80/≥20/<20) 仍硬編碼** — 來源是 Day 1 經驗估計。**緩解**：Phase .a 收束後以實際分布 recalibrate。
+3. **Group 閾值 (≥80/≥20/<20) 仍硬編碼** — 來源是早期經驗估計。**緩解**：v2.7.0 收束後以實際分布 recalibrate。
 
 ## 相關
 
 - `scripts/tools/dx/scan_component_health.py`（實作）
-- `docs/internal/v2.7.0-planning.md` §10 DEC-08 + §19 DEC-M
-- `docs/internal/v2.7.0-day1to3-retrospective-review.md` §3.1（DEC-08 retrospective）

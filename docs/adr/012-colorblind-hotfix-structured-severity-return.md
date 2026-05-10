@@ -10,13 +10,12 @@ lang: zh
 
 > **Language / 語言：** **中文 (Current)** | [English](./012-colorblind-hotfix-structured-severity-return.en.md)
 
-> Originally recorded as **DEC-L (Sprint 0)** in `docs/internal/v2.7.0-planning.md §19`.
-> Hotfix 已於 Day 4 AM 落地；本 ADR 保存決策脈絡以便未來 generalize 到其他
-> 顏色敏感工具（platform-demo mode badges, health dashboard tier badges 等）。
+> 本 ADR 保存決策脈絡，以便未來 generalize 到其他顏色敏感工具
+> （platform-demo mode badges、health dashboard tier badges 等）。
 
 ## 狀態
 
-✅ **Accepted**（v2.7.0 Day 4 Sprint 0, 2026-04-16）— hotfix 已 land；後續 runtime WCAG 驗證 CI-gated。
+✅ **Accepted**（v2.7.0, 2026-04-16）— hotfix 已 land；後續 runtime WCAG 驗證 CI-gated。
 
 ## 背景
 
@@ -26,11 +25,11 @@ lang: zh
 （green-200 / yellow-200 / orange-200 / red-500）。這違反 **WCAG 1.4.1 Use
 of Color**：資訊只透過色彩傳遞，紅綠色盲使用者無法區分「中」與「異常值」。
 
-### 為什麼是 Sprint 0 而非完整遷移
+### 為什麼採 hotfix 而非完整遷移
 
-1. 完整 palette → token 遷移（87 tailwind palette → 0）需 ~3 hr，會阻擋 Phase .a0 批次 4 時程
+1. 完整 palette → token 遷移（87 tailwind palette → 0）需 ~3 hr，會阻擋 v2.7.0 Design Token 大規模遷移時程
 2. WCAG 1.4.1 是法遵風險（AA 要求），優先**補救語意**，**顏色 token 遷移延後**
-3. 補丁落地後，threshold-heatmap 的 token 正式遷移仍為 Phase .a0 的收束任務（§19 Day 5 候選 #5）
+3. 補丁落地後，threshold-heatmap 的 token 正式遷移仍為 v2.7.0 收束任務
 
 ## 決策驅動力
 
@@ -91,18 +90,17 @@ function getCellSeverity(value, stats) {
 
 ### 負面 / 風險
 
-1. **字型跨平台不一致**：⚠⚠ 在 Windows Consolas vs macOS SF Mono 寬度不一，表格對齊會漂。**緩解**：Day 5 Phase .a0 正式遷移時固定 monospace font stack，或改用 fixed-width Unicode block。
+1. **字型跨平台不一致**：⚠⚠ 在 Windows Consolas vs macOS SF Mono 寬度不一，表格對齊會漂。**緩解**：正式遷移時固定 monospace font stack，或改用 fixed-width Unicode block。
 2. **`⚠⚠` 螢幕閱讀器朗讀**：NVDA / VoiceOver 會唸 "Warning Sign Warning Sign"。**緩解**：本 hotfix 靠 `ariaLabel` 覆蓋，但若未來其他 callsite 直接放 symbol 則需重提醒。
-3. **Dark mode 對比度未驗證**：hotfix 使用 Tailwind palette（未遷移到 token），在 `[data-theme="dark"]` 下可能 contrast fail。**緩解**：Phase .a0 正式遷移時同步計算對比度。
+3. **Dark mode 對比度未驗證**：hotfix 使用 Tailwind palette（未遷移到 token），在 `[data-theme="dark"]` 下可能 contrast fail。**緩解**：正式 token 遷移時同步計算對比度。
 
 ### 需進一步追蹤
 
-- `docs/internal/v2.7.0-day5-verification-triage.md` §3 列出 runtime 驗證的 CI gate
-- Phase .a0 Day 5 候選 #5：threshold-heatmap palette → token 正式遷移
+- Runtime WCAG 驗證 CI gate（v2.7.0 已啟用）
+- threshold-heatmap palette → token 正式遷移（v2.7.0 收束）
 
 ## 相關
 
 - WCAG 2.1 — Success Criterion 1.4.1 Use of Color (Level A)
 - `docs/interactive/tools/threshold-heatmap.jsx`
-- `docs/internal/v2.7.0-planning.md` §19 DEC-L
-- `docs/internal/v2.7.0-day5-verification-triage.md` §3
+- [ADR-016: `[data-theme]` 單軌 Dark Mode](016-data-theme-single-track-dark-mode.md) — 後續 dark mode 對比度驗收前提

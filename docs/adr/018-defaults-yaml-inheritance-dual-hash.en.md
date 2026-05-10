@@ -1,6 +1,6 @@
 ---
 title: "ADR-018: _defaults.yaml Inheritance Semantics + Dual-Hash Hot-Reload"
-tags: [adr, defaults, inheritance, hot-reload, dual-hash, phase-b, v2.7.0]
+tags: [adr, defaults, inheritance, hot-reload, dual-hash, v2.7.0]
 audience: [platform-engineers, sre, contributors]
 version: v2.7.0
 lang: en
@@ -10,12 +10,11 @@ lang: en
 
 > **Language / 語言：** **English (Current)** | [中文](./018-defaults-yaml-inheritance-dual-hash.md)
 
-> Phase .b B-1 (v2.7.0 Scale Foundation I).
-> Paired with [ADR-017](017-conf-d-directory-hierarchy-mixed-mode.en.md) (Directory Hierarchy).
+> Second building block of v2.7.0 Scale Foundation. Paired with [ADR-017](017-conf-d-directory-hierarchy-mixed-mode.en.md) (Directory Hierarchy).
 
 ## Status
 
-🟡 **Proposed** (v2.7.0 Phase .b, 2026-04-17)
+✅ **Accepted** (v2.7.0, 2026-04-19) — Multi-level `_defaults.yaml` inheritance, dual-hash hot-reload, and 300ms debounce shipped with v2.7.0; the noop-semantic split (`shadowed` / `cosmetic`) was added as a v2.8.0 amendment.
 
 ## Context
 
@@ -199,7 +198,7 @@ forcing full reload. Reload storms are unacceptable in 1000+ tenant environments
 
 ❌ Event loss in container mounts (NFS/FUSE/projected volume) is a known issue.
 Kernel watch limits (default 8192) are exhausted in thousand-tenant environments.
-v2.5.0 already validated periodic scan completes in < 200ms for 2000 tenants (confirmed by Phase .a baseline).
+v2.5.0 already validated periodic scan completes in < 200ms for 2000 tenants (confirmed by the v2.7.0 planning baseline).
 
 ### C: Array Concat (Instead of Replace)
 
@@ -214,7 +213,7 @@ Replace semantics are more intuitive and consistent with Helm values merge behav
 - **CLI**: New `describe-tenant` command expands effective config + shows inheritance sources
 - **Tenant API**: New `GET /api/v1/tenants/{id}/effective` endpoint
 - **Schema**: `tenant-config.schema.json` upgraded to support `_defaults.yaml` structure
-- **Benchmark**: Thousand-tenant + multi-layer inheritance scan performance needs comparison against Phase .a baseline
+- **Benchmark**: Thousand-tenant + multi-layer inheritance scan performance compared against the v2.7.0 planning baseline (validated)
 
 ## Related
 

@@ -1,6 +1,6 @@
 ---
 title: "ADR-018: _defaults.yaml 繼承語意 + dual-hash hot-reload"
-tags: [adr, defaults, inheritance, hot-reload, dual-hash, phase-b, v2.7.0]
+tags: [adr, defaults, inheritance, hot-reload, dual-hash, v2.7.0]
 audience: [platform-engineers, sre, contributors]
 version: v2.7.0
 lang: zh
@@ -10,12 +10,11 @@ lang: zh
 
 > **Language / 語言：** **中文 (Current)** | [English](./018-defaults-yaml-inheritance-dual-hash.en.md)
 
-> Phase .b B-1（v2.7.0 Scale Foundation I）。
-> 與 [ADR-017](017-conf-d-directory-hierarchy-mixed-mode.md)（目錄分層）為一組。
+> v2.7.0 Scale Foundation 第二塊。與 [ADR-017](017-conf-d-directory-hierarchy-mixed-mode.md)（目錄分層）為一組。
 
 ## 狀態
 
-🟡 **Proposed**（v2.7.0 Phase .b, 2026-04-17）
+✅ **Accepted**（v2.7.0, 2026-04-19）— 多層 `_defaults.yaml` 繼承 + dual-hash 熱重載 + 300ms debounce 已隨 v2.7.0 出貨；noop 語義拆分（`shadowed` / `cosmetic`）為 v2.8.0 amendment。
 
 ## 背景
 
@@ -200,7 +199,7 @@ elif any ancestor _defaults.yaml changed:
 
 ❌ 在 container mount（NFS/FUSE/projected volume）環境下事件遺失是已知問題。
 kernel watch 限制（default 8192）在千租戶環境會被用盡。
-v2.5.0 已驗證 periodic scan 在 2000 tenant 下 < 200ms（Phase .a baseline 確認）。
+v2.5.0 已驗證 periodic scan 在 2000 tenant 下 < 200ms（v2.7.0 規劃期 baseline 確認）。
 
 ### C: Array Concat（而非 Replace）
 
@@ -215,7 +214,7 @@ Replace 語意更直覺，且與 Helm values merge 行為一致。
 - **CLI**：新增 `describe-tenant` 可展開 effective config + 顯示繼承來源
 - **Tenant API**：新增 `GET /api/v1/tenants/{id}/effective` endpoint
 - **Schema**：`tenant-config.schema.json` 升級支援 `_defaults.yaml` 結構
-- **Benchmark**：千租戶 + 多層繼承的 scan 效能需對照 Phase .a baseline
+- **Benchmark**：千租戶 + 多層繼承的 scan 效能對照 v2.7.0 規劃期 baseline（已驗證）
 
 ## 相關
 

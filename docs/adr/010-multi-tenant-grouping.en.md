@@ -123,7 +123,7 @@ Structured fields (environment, domain, db_type) are better suited for UI filter
 
 ### Positive
 
-- Domain experts can create a group and batch-operate via UI in 3 minutes (Phase B review target)
+- Domain experts can create a group and batch-operate via UI in 3 minutes (v2.5.0 review target)
 - Multi-dimensional filtering keeps 100+ tenant environments navigable
 - `_groups.yaml` is under Git version control with complete audit trail
 

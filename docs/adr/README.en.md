@@ -20,9 +20,10 @@ New here? Pick based on your needs:
 - **Preparing to deploy**: [008 Operator Integration](./008-operator-native-integration-path.en.md) — ConfigMap vs Operator CRD dual-path
 - **Multi-cluster needs**: [004 Federation](./004-federation-central-exporter-first.en.md) + [006 Tenant Mapping](./006-tenant-mapping-topologies.en.md) — Federation architecture and topologies
 - **Management plane**: [009 Tenant API](./009-tenant-manager-crud-api.en.md) + [011 PR Write-back](./011-pr-based-write-back.en.md) — UI/API management and compliance workflows
-- **Scale / Config management (v2.7.0)**: [010 Multi-Tenant Grouping](./010-multi-tenant-grouping.en.md) + [017 conf.d/ directory hierarchy](./017-conf-d-directory-hierarchy-mixed-mode.en.md) + [018 inheritance engine + dual-hash](./018-defaults-yaml-inheritance-dual-hash.en.md) — thousand-tenant config organization and hot-reload
-- **Frontend quality governance (v2.7.0)**: [013 Component health + Token Density](./013-component-health-token-density-metric.en.md) + [014 TECH-DEBT budget isolation](./014-tech-debt-category-budget-isolation.en.md) + [015 Wizard token migration](./015-wizard-arbitrary-value-token-migration.en.md) + [016 data-theme single-track dark mode](./016-data-theme-single-track-dark-mode.en.md)
-- **Accessibility hotfix (v2.7.0)**: [012 threshold-heatmap colorblind patch](./012-colorblind-hotfix-structured-severity-return.en.md)
+- **Thousand-tenant Scale / Config management**: [010 Multi-Tenant Grouping](./010-multi-tenant-grouping.en.md) + [017 conf.d/ directory hierarchy](./017-conf-d-directory-hierarchy-mixed-mode.en.md) + [018 inheritance engine + dual-hash](./018-defaults-yaml-inheritance-dual-hash.en.md) — thousand-tenant config organization and hot-reload
+- **Frontend quality governance**: [013 Component health + Token Density](./013-component-health-token-density-metric.en.md) + [014 TECH-DEBT budget isolation](./014-tech-debt-category-budget-isolation.en.md) + [015 Wizard token migration](./015-wizard-arbitrary-value-token-migration.en.md) + [016 data-theme single-track dark mode](./016-data-theme-single-track-dark-mode.en.md)
+- **Accessibility patches**: [012 threshold-heatmap colorblind patch](./012-colorblind-hotfix-structured-severity-return.en.md)
+- **Customer-migration pipeline**: [019 Profile-as-Directory-Default](./019-profile-as-directory-default.en.md) — Profile Builder's default-vs-override rule when emitting into conf.d/
 
 ## ADR Index
 
@@ -44,9 +45,9 @@ New here? Pick based on your needs:
 | [014](#014-tech-debt-vs-regression-budget-isolation) | TECH-DEBT vs Regression Budget Isolation | ✅ Accepted | Split technical debt and user-visible regressions into two separate budgets to prevent TECH-DEBT from eroding REG budget; LL crossing 2 minor versions requires tri-choice (codify / automate / archive) |
 | [015](#015-wizard-token-arbitrary-value-migration-strategy) | Wizard Token Arbitrary-Value Migration Strategy (Option A) | ✅ Accepted | Use `bg-[color:var(--da-color-*)]` arbitrary-value rewrite for legacy `bg-slate-200`, avoiding Tailwind config expansion + completing full replacement in one commit |
 | [016](#016-data-theme-single-track-dark-mode) | `[data-theme]` Single-track Dark Mode (removing `dark:` variant) | ✅ Accepted | Unify dark mode under `[data-theme="dark"]` attribute, disabling Tailwind `dark:` variant to eliminate token/class dual-track issues |
-| [017](#017-confd-directory-hierarchy-mixed-mode) | conf.d/ Directory Hierarchy + Mixed Mode + Migration Strategy | 🟡 Proposed | Directory Scanner supports both flat and domain/region/env 3-level hierarchy; zero-downtime upgrade + optional `migrate-conf-d` tool |
-| [018](#018-defaultsyaml-inheritance-semantics-dual-hash-hot-reload) | `_defaults.yaml` Inheritance Semantics + dual-hash hot-reload | 🟡 Proposed | Deep merge with override (array replace, null-as-delete) + dual hash (source_hash + merged_hash) for precise reload trigger determination, paired with 300ms debounce |
-| [019](#019-profile-as-directory-default) | Profile-as-Directory-Default | 🟢 Accepted | C-9 PR-3: cluster-wide thresholds in `_defaults.yaml`; only divergent tenants write `<id>.yaml` overrides (median + sparse override). The cross-component "default vs override boundary" rule consumed by C-9/C-10/C-12. Translator heuristic details live in `translate.go`'s package header (single source of truth, no drift) |
+| [017](#017-confd-directory-hierarchy-mixed-mode) | conf.d/ Directory Hierarchy + Mixed Mode + Migration Strategy | ✅ Accepted | Directory Scanner supports both flat and domain/region/env 3-level hierarchy; zero-downtime upgrade + optional `migrate-conf-d` tool |
+| [018](#018-defaultsyaml-inheritance-semantics-dual-hash-hot-reload) | `_defaults.yaml` Inheritance Semantics + dual-hash hot-reload | ✅ Accepted | Deep merge with override (array replace, null-as-delete) + dual hash (source_hash + merged_hash) for precise reload trigger determination, paired with 300ms debounce |
+| [019](#019-profile-as-directory-default) | Profile-as-Directory-Default | ✅ Accepted | Cluster-wide thresholds in `_defaults.yaml`; only divergent tenants write `<id>.yaml` overrides (median + sparse override). The cross-component "default vs override boundary" rule consumed by Profile Builder, batch PR pipeline, and the Dangling Defaults Guard. Translator heuristic details live in `translate.go`'s package header (single source of truth, no drift) |
 
 ---
 
@@ -150,7 +151,7 @@ Fix WCAG 1.4.1 violation in v2.6.0 `threshold-heatmap.jsx` where severity was co
 
 **Document**: [`013-component-health-token-density-metric.en.md`](./013-component-health-token-density-metric.en.md)
 
-v2.7.0 Phase .a new baseline: 5-dimension weighted scoring (LOC 0-3 + Audience 0-2 + Phase 0-2 + Writer 0-2 + Recency -1~+1) with automatic Tier 1/2/3 classification. Introduce the `token_density = tokens / (tokens + palette_hits)` metric quantifying design-token migration progress across JSX tools (Group A/B/C). Consolidated from early DEC-08 and DEC-M planning decisions.
+v2.7.0 baseline: 5-dimension weighted scoring (LOC 0-3 + Audience 0-2 + Phase 0-2 + Writer 0-2 + Recency -1~+1) with automatic Tier 1/2/3 classification. Introduces the `token_density = tokens / (tokens + palette_hits)` metric quantifying design-token migration progress across JSX tools (Group A/B/C).
 
 ---
 
@@ -166,7 +167,7 @@ On top of the v2.6.x Regression Budget (P2/P3 fixes ≤ 15% of release effort), 
 
 **Document**: [`015-wizard-arbitrary-value-token-migration.en.md`](./015-wizard-arbitrary-value-token-migration.en.md)
 
-v2.7.0 Phase .a0 migrates `deployment-wizard.jsx` from legacy `bg-slate-200 / text-gray-700` palette to design tokens. **Option A** selected: `bg-[color:var(--da-color-*)]` arbitrary-value rewrite instead of expanding `tailwind.config`. Preserves the Tailwind utility style + token SSOT; subsequent rbac / cicd / threshold-heatmap batch 4 follow the same rule.
+v2.7.0 migrates `deployment-wizard.jsx` from legacy `bg-slate-200 / text-gray-700` palette to design tokens. **Option A** selected: `bg-[color:var(--da-color-*)]` arbitrary-value rewrite instead of expanding `tailwind.config`. Preserves the Tailwind utility style + token SSOT; subsequent rbac / cicd / threshold-heatmap migrations follow the same rule.
 
 ---
 
@@ -174,7 +175,7 @@ v2.7.0 Phase .a0 migrates `deployment-wizard.jsx` from legacy `bg-slate-200 / te
 
 **Document**: [`016-data-theme-single-track-dark-mode.en.md`](./016-data-theme-single-track-dark-mode.en.md)
 
-Fully remove the Tailwind `dark:` variant and unify dark mode under the `[data-theme="dark"]` attribute. The previous coexistence of class-based and attribute-based tracks caused tooltip/palette color drift and double maintenance cost. `jsx-loader` sets `data-theme` instead of toggling `class="dark"`; `tailwind.config.darkMode` is removed. A prerequisite for all subsequent Phase .a0 token migrations.
+Fully remove the Tailwind `dark:` variant and unify dark mode under the `[data-theme="dark"]` attribute. The previous coexistence of class-based and attribute-based tracks caused tooltip/palette color drift and double maintenance cost. `jsx-loader` sets `data-theme` instead of toggling `class="dark"`; `tailwind.config.darkMode` is removed. A prerequisite for all subsequent v2.7.0 token migrations.
 
 ---
 
@@ -182,7 +183,7 @@ Fully remove the Tailwind `dark:` variant and unify dark mode under the `[data-t
 
 **Document**: [`017-conf-d-directory-hierarchy-mixed-mode.en.md`](./017-conf-d-directory-hierarchy-mixed-mode.en.md)
 
-v2.7.0 Phase .b B-1. Directory Scanner supports both flat and `{domain}/{region}/{env}/` three-level structures, **without forcing migration**. Directory paths can infer default `_metadata.domain/region/environment` values; explicit fields in the file override. The `migrate-conf-d` tool is optional, supports `--dry-run` + `git mv` to preserve history. Resolves readability and blast-radius blind spots at 200+ tenants.
+First building block of v2.7.0 Scale Foundation. Directory Scanner supports both flat and `{domain}/{region}/{env}/` three-level structures, **without forcing migration**. Directory paths can infer default `_metadata.domain/region/environment` values; explicit fields in the file override. The `migrate-conf-d` tool is optional, supports `--dry-run` + `git mv` to preserve history. Resolves readability and blast-radius blind spots at 200+ tenants.
 
 ---
 
@@ -190,7 +191,7 @@ v2.7.0 Phase .b B-1. Directory Scanner supports both flat and `{domain}/{region}
 
 **Document**: [`018-defaults-yaml-inheritance-dual-hash.en.md`](./018-defaults-yaml-inheritance-dual-hash.en.md)
 
-v2.7.0 Phase .b B-1. Define multi-level `_defaults.yaml` inheritance semantics (L0 global → L1 domain → L2 region → L3 env → tenant) with deep merge with override (array replace, null-as-delete, `_metadata` not inherited). Dual hash: `source_hash` (tenant YAML file itself) + `merged_hash` (effective config canonical JSON) precisely determines reload trigger, avoiding reload storms when `_defaults.yaml` changes; 300ms debounce handles batch git pulls.
+Second building block of v2.7.0 Scale Foundation. Defines multi-level `_defaults.yaml` inheritance semantics (L0 global → L1 domain → L2 region → L3 env → tenant) with deep merge with override (array replace, null-as-delete, `_metadata` not inherited). Dual hash: `source_hash` (tenant YAML file itself) + `merged_hash` (effective config canonical JSON) precisely determines reload trigger, avoiding reload storms when `_defaults.yaml` changes; 300ms debounce handles batch git pulls.
 
 ---
 
@@ -198,7 +199,7 @@ v2.7.0 Phase .b B-1. Define multi-level `_defaults.yaml` inheritance semantics (
 
 **Document**: [`019-profile-as-directory-default.en.md`](./019-profile-as-directory-default.en.md)
 
-v2.8.0 Phase .c C-9 PR-3. Pins the cross-component design principle: cluster-wide thresholds live in `_defaults.yaml`; only tenants whose value diverges from the default write a `<id>.yaml` override (median + sparse override). The shape this principle dictates is consumed by C-9 emission, C-10 directory placement, C-11 packaging, and C-12 redundant-override guard semantics — getting this right at the ADR layer keeps all four components consistent. Translator heuristic details (metric_key 5-step ladder, median, cluster aggregation, operator handling) live in `internal/profile/translate.go`'s package header — single source of truth, no drift. Cross-component non-goals: directory inference (deferred to C-10 PR-3), dimensional/regex labels emission, auto-rewriting source PromRules, two-tier severity translation.
+v2.8.0 customer-migration pipeline — Profile Builder writing back to conf.d/. Pins the cross-component design principle: cluster-wide thresholds live in `_defaults.yaml`; only tenants whose value diverges from the default write a `<id>.yaml` override (median + sparse override). The shape this principle dictates is consumed by Profile Builder emission, the batch PR pipeline's directory placement, release packaging, and the Dangling Defaults Guard — getting this right at the ADR layer keeps all four components consistent. Translator heuristic details (metric_key 5-step ladder, median, cluster aggregation, operator handling) live in `internal/profile/translate.go`'s package header — single source of truth, no drift. Non-goals: directory inference (deferred to the batch PR pipeline), dimensional/regex labels emission, auto-rewriting source PromRules, two-tier severity translation.
 
 ---
 

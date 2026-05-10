@@ -10,12 +10,11 @@ lang: zh
 
 > **Language / 語言：** **中文 (Current)** | [English](./014-tech-debt-category-budget-isolation.en.md)
 
-> Originally recorded as **DEC-N** in `docs/internal/v2.7.0-planning.md §19`.
 > 此 ADR 補上 **governance guardrails**，避免 TECH-DEBT 成為 REG Budget 的逃生口。
 
 ## 狀態
 
-✅ **Accepted**（v2.7.0 Day 4, 2026-04-16）— 已 land 於 `docs/internal/known-regressions.md`，TECH-DEBT-001/002 為首批實例。
+✅ **Accepted**（v2.7.0, 2026-04-16）— 已 land 於 `docs/internal/known-regressions.md`，TECH-DEBT-001/002 為首批實例。
 
 ## 背景
 
@@ -25,7 +24,7 @@ lang: zh
 
 ### 新增類別的動機
 
-v2.7.0 Phase .a A-3 batch3 survey 發現：cicd-setup-wizard 與 config-lint 完全無 aria 標記。這些**不是 regression**（從未 work 過），而是**首發就欠缺 a11y 的 tech debt**。
+v2.7.0 a11y survey 發現：cicd-setup-wizard 與 config-lint 完全無 aria 標記。這些**不是 regression**（從未 work 過），而是**首發就欠缺 a11y 的 tech debt**。
 
 若硬塞進 REG registry：
 - 違反 REG 的定義（曾經 work 過現在壞）
@@ -35,7 +34,7 @@ v2.7.0 Phase .a A-3 batch3 survey 發現：cicd-setup-wizard 與 config-lint 完
 若完全不追蹤：
 - 知識在 commit message 裡散失
 - 無法在 Dashboard / CHANGELOG 顯示 debt backlog
-- Phase .a 的 a11y 覆蓋進度沒有量化觀測
+- a11y 覆蓋進度沒有量化觀測
 
 ## 決策驅動力
 
@@ -64,7 +63,7 @@ v2.7.0 Phase .a A-3 batch3 survey 發現：cicd-setup-wizard 與 config-lint 完
 
 1. **升級規則 A — 影響擴散**：若 TECH-DEBT 被用戶回報 3 次以上且影響同一 severity level，**必須**評估是否升級為 REG。評估由 Phase owner + maintainer 共同決定，紀錄在 `docs/internal/dev-rules.md`。
 
-2. **升級規則 B — 時間上限（退火）**：TECH-DEBT 跨越 **1 個 minor 版本** 未動 → 強制 triage（評審會議）；跨越 **2 個 minor 版本** 未動 → **自動升級為 REG** 或標為 `wontfix` 歸檔。由 `make playbook-freshness` 擴充到 `make tech-debt-freshness`（新 Makefile target, v2.7.0 收尾追加）。
+2. **升級規則 B — 時間上限（退火）**：TECH-DEBT 跨越 **1 個 minor 版本** 未動 → 強制 triage（評審會議）；跨越 **2 個 minor 版本** 未動 → **自動升級為 REG** 或標為 `wontfix` 歸檔。由 `make playbook-freshness` 擴充到 `make tech-debt-freshness`（新 Makefile target）。
 
 3. **反向分類禁止**：已存在的 REG 不可**降級**為 TECH-DEBT 來規避 Budget。若發現錯誤分類，走修正 PR 而非 reclassify。
 
@@ -72,8 +71,8 @@ v2.7.0 Phase .a A-3 batch3 survey 發現：cicd-setup-wizard 與 config-lint 完
 
 ### 首批實例
 
-- `TECH-DEBT-001`: cicd-setup-wizard 0 aria（P1, resolved Day 4）
-- `TECH-DEBT-002`: config-lint 0 aria + 錯誤區無 role=alert（P2, open, planned v2.7.0）
+- `TECH-DEBT-001`: cicd-setup-wizard 0 aria（P1, v2.7.0 內 resolved）
+- `TECH-DEBT-002`: config-lint 0 aria + 錯誤區無 role=alert（P2, planned v2.7.0）
 
 ## 拒絕的替代方案
 
@@ -95,11 +94,10 @@ v2.7.0 Phase .a A-3 batch3 survey 發現：cicd-setup-wizard 與 config-lint 完
 ### 負面 / 風險
 
 1. **Budget 逃逸口**：若治理規則鬆動，REG 可能被誤分類為 TECH-DEBT。**緩解**：升級規則 B 的時間上限 + 反向分類禁止規則。
-2. **多一層分類學習成本**：新 contributor 要理解兩個 category 的差別。**緩解**：`known-regressions.md` 開頭加 REG vs TECH-DEBT 判準流程圖（Day 5 追加）。
+2. **多一層分類學習成本**：新 contributor 要理解兩個 category 的差別。**緩解**：`known-regressions.md` 開頭加 REG vs TECH-DEBT 判準流程圖。
 3. **governance rules 還沒自動化**：升級規則 B 目前靠人工 triage；`make tech-debt-freshness` 尚未實作。**緩解**：v2.7.0 release 前完成該 Makefile target；若延後，至少在 `docs/internal/dev-rules.md` 加手動 checklist。
 
 ## 相關
 
 - `docs/internal/known-regressions.md`（承載定義 + 實例）
 - `docs/internal/dev-rules.md` §12 Branch + PR + 未來 §13 TECH-DEBT treatment
-- `docs/internal/v2.7.0-planning.md` §19 DEC-N + §20 Day 5 補丁

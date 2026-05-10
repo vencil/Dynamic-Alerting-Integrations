@@ -129,7 +129,7 @@ Batch operations consolidate into a **single PR** to avoid overwhelming reviewer
 | **Storage** | K8s Secret → env var `TA_GITHUB_TOKEN`; never in ConfigMap or YAML |
 | **Rotation policy** | 90-day expiry + Helm pre-upgrade hook to check validity |
 
-**GitLab mode** (`--write-mode pr-gitlab`, added in v2.6.0 Phase E):
+**GitLab mode** (`--write-mode pr-gitlab`, added in v2.6.0):
 
 | Item | Specification |
 |------|---------------|
@@ -166,12 +166,12 @@ tenant-api maintains an in-memory PR tracker (periodically syncing with GitHub A
 | Layer | File | Changes |
 |-------|------|---------|
 | **Config** | `cmd/server/main.go` | `-write-mode` flag (`direct` / `pr` / `pr-github` / `pr-gitlab`) + env vars |
-| **Platform Interface** | `internal/platform/platform.go` (v2.6.0 Phase E) | Provider-agnostic `Client` + `Tracker` interfaces |
+| **Platform Interface** | `internal/platform/platform.go` (v2.6.0) | Provider-agnostic `Client` + `Tracker` interfaces |
 | **Writer** | `internal/gitops/writer.go` | `WritePR()` method: branch → commit → push |
 | **GitHub Client** | `internal/github/client.go` | Wraps GitHub REST API, implements `platform.Client` |
 | **GitHub Tracker** | `internal/github/tracker.go` | In-memory pending PR cache + periodic sync, implements `platform.Tracker` |
-| **GitLab Client** | `internal/gitlab/client.go` (v2.6.0 Phase E) | Wraps GitLab REST API v4, implements `platform.Client` |
-| **GitLab Tracker** | `internal/gitlab/tracker.go` (v2.6.0 Phase E) | In-memory pending MR cache + periodic sync, implements `platform.Tracker` |
+| **GitLab Client** | `internal/gitlab/client.go` (v2.6.0) | Wraps GitLab REST API v4, implements `platform.Client` |
+| **GitLab Tracker** | `internal/gitlab/tracker.go` (v2.6.0) | In-memory pending MR cache + periodic sync, implements `platform.Tracker` |
 | **Handler** | `internal/handler/tenant_put.go` | Route by write mode → `Write()` or `WritePR()` via `platform.Client` |
 | **Handler** | `internal/handler/tenant_batch.go` | Batch PR/MR mode: consolidate into single PR/MR |
 | **Handler** | `internal/handler/pr.go` | `GET /api/v1/prs` endpoint via `platform.Tracker` |
@@ -228,7 +228,7 @@ Evaluated but costs outweigh benefits:
 
 | Alternative | Assessment | Reason for Rejection |
 |-------------|-----------|---------------------|
-| **GitLab MR** (instead of GitHub PR) | ✅ **Implemented** | v2.6.0 Phase E: `platform.Client` abstraction layer + `internal/gitlab/` package. Enabled via `--write-mode pr-gitlab` |
+| **GitLab MR** (instead of GitHub PR) | ✅ **Implemented** | v2.6.0: `platform.Client` abstraction layer + `internal/gitlab/` package. Enabled via `--write-mode pr-gitlab` |
 | **Custom approval queue** | Viable | Reinvents the wheel, lacks CI/CD integration, high maintenance cost |
 | **Git branch per-write + manual merge** | Viable | Poor UX; operators must leave UI for Git operations |
 | **Write-Ahead Log (WAL)** | Over-engineering | Tenant config doesn't need ACID-level persistence guarantees |

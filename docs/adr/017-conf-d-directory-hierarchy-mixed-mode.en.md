@@ -1,6 +1,6 @@
 ---
 title: "ADR-017: conf.d/ Directory Hierarchy + Mixed Mode + Migration Strategy"
-tags: [adr, conf.d, directory-scanner, hierarchy, migration, phase-b, v2.7.0]
+tags: [adr, conf.d, directory-scanner, hierarchy, migration, v2.7.0]
 audience: [platform-engineers, sre, contributors]
 version: v2.7.0
 lang: en
@@ -10,11 +10,11 @@ lang: en
 
 > **Language / 語言：** **English (Current)** | [中文](./017-conf-d-directory-hierarchy-mixed-mode.md)
 
-> Phase .b B-1 (v2.7.0 Scale Foundation I).
+> First building block of v2.7.0 Scale Foundation. Paired with [ADR-018](018-defaults-yaml-inheritance-dual-hash.en.md) (inheritance semantics).
 
 ## Status
 
-🟡 **Proposed** (v2.7.0 Phase .b, 2026-04-17)
+✅ **Accepted** (v2.7.0, 2026-04-19) — Directory Scanner mixed-mode support and the `migrate-conf-d` CLI shipped with v2.7.0.
 
 ## Context
 
@@ -26,7 +26,7 @@ At 200+ tenants, the flat structure introduces several pain points:
 3. **Opaque CI blast radius**: no quick way to assess impact scope of defaults changes
 4. **Metadata repetition**: every tenant must manually specify `_metadata.domain/region/environment`, duplicating what the directory structure already encodes
 
-Phase .a A-4's `generate_tenant_fixture.py` already supports `--hierarchical` mode (`domain/region/env` three-layer), validating the feasibility of hierarchical structure at 1000+ tenant scale.
+During v2.7.0 planning, `generate_tenant_fixture.py` was extended with a `--hierarchical` mode (`domain/region/env` three layers), validating the feasibility of hierarchical structure at 1000+ tenant scale.
 This ADR formalizes how the Directory Scanner supports this structure.
 
 ## Decision
@@ -96,7 +96,7 @@ An unnecessary burden for small deployments with only 10-20 tenants.
 ### B: Support Only Flat (Status Quo)
 
 ❌ Cannot address the readability and blast radius issues at 200+ tenants.
-Phase .a A-4 benchmarks proved hierarchical structure has no performance degradation.
+v2.7.0 planning benchmarks proved hierarchical structure has no performance degradation.
 
 ### C: Use External Index (DB/JSON) Instead of Directory Structure
 
@@ -106,10 +106,10 @@ Directory Scanner's design philosophy is "filesystem as source of truth."
 ## Consequences
 
 - **Directory Scanner**: Upgraded to recursive scan + mixed mode detection
-- **generate_tenant_fixture.py**: Already supports `--hierarchical` (Phase .a A-4)
+- **generate_tenant_fixture.py**: Supports `--hierarchical` for thousand-tenant fixture generation
 - **Prometheus metrics**: Directory depth does not affect metric labels (tenant-id remains the sole label key)
 - **CI/CD**: `migrate-conf-d --dry-run` can be added to PR checks
-- **Documentation**: New `docs/scenarios/multi-domain-conf-layout.md` required
+- **Documentation**: `docs/scenarios/multi-domain-conf-layout.md` added
 
 ## Related
 

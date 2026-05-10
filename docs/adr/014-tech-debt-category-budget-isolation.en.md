@@ -10,12 +10,11 @@ lang: en
 
 > **Language / 語言：** **English (Current)** | [中文](./014-tech-debt-category-budget-isolation.md)
 
-> Originally recorded as **DEC-N** in `docs/internal/v2.7.0-planning.md §19`.
 > This ADR supplements **governance guardrails** to prevent TECH-DEBT from becoming a loophole for the REG Budget.
 
 ## Status
 
-✅ **Accepted** (v2.7.0 Day 4, 2026-04-16) — Already incorporated into `docs/internal/known-regressions.md`, with TECH-DEBT-001/002 serving as the first examples.
+✅ **Accepted** (v2.7.0, 2026-04-16) — Already incorporated into `docs/internal/known-regressions.md`, with TECH-DEBT-001/002 serving as the first examples.
 
 ## Background
 
@@ -25,7 +24,7 @@ lang: en
 
 ### Motivation for the New Category
 
-The v2.7.0 Phase .a A-3 batch3 survey discovered that cicd-setup-wizard and config-lint have zero aria labels. These are **not regressions** (never worked before), but rather **tech debt from inception lacking a11y coverage**.
+A v2.7.0 a11y survey discovered that cicd-setup-wizard and config-lint have zero aria labels. These are **not regressions** (never worked before), but rather **tech debt from inception lacking a11y coverage**.
 
 If forced into the REG registry:
 - Violates the REG definition (something that once worked but now is broken)
@@ -35,7 +34,7 @@ If forced into the REG registry:
 If not tracked at all:
 - Knowledge gets lost in commit messages
 - No way to display debt backlog in Dashboard / CHANGELOG
-- No quantified observability of a11y coverage progress in Phase .a
+- No quantified observability of a11y coverage progress
 
 ## Decision Drivers
 
@@ -64,7 +63,7 @@ To prevent TECH-DEBT from becoming a loophole:
 
 1. **Escalation Rule A — Impact Spread**: If a TECH-DEBT is reported by users 3+ times at the same severity level, it **must** be evaluated for escalation to REG. The evaluation is decided jointly by the Phase owner and maintainers, recorded in `docs/internal/dev-rules.md`.
 
-2. **Escalation Rule B — Time Limit (Annealing)**: TECH-DEBT that remains untouched across **1 minor version** → forced triage (review meeting); across **2 minor versions** → **automatic escalation to REG** or marked as `wontfix` and archived. Implement via extending `make playbook-freshness` to `make tech-debt-freshness` (new Makefile target, added in v2.7.0 wrap-up).
+2. **Escalation Rule B — Time Limit (Annealing)**: TECH-DEBT that remains untouched across **1 minor version** → forced triage (review meeting); across **2 minor versions** → **automatic escalation to REG** or marked as `wontfix` and archived. Implement via extending `make playbook-freshness` to `make tech-debt-freshness` (new Makefile target).
 
 3. **No Reverse Reclassification**: Existing REGs cannot be **downgraded** to TECH-DEBT to circumvent Budget. If incorrect classification is discovered, open a correction PR rather than reclassifying.
 
@@ -72,8 +71,8 @@ To prevent TECH-DEBT from becoming a loophole:
 
 ### First Examples
 
-- `TECH-DEBT-001`: cicd-setup-wizard 0 aria (P1, resolved Day 4)
-- `TECH-DEBT-002`: config-lint 0 aria + no role=alert in error area (P2, open, planned v2.7.0)
+- `TECH-DEBT-001`: cicd-setup-wizard 0 aria (P1, resolved within v2.7.0)
+- `TECH-DEBT-002`: config-lint 0 aria + no role=alert in error area (P2, planned v2.7.0)
 
 ## Rejected Alternatives
 
@@ -95,11 +94,10 @@ To prevent TECH-DEBT from becoming a loophole:
 ### Negative / Risks
 
 1. **Budget Escape Hatch**: If governance rules loosen, REGs could be miscategorized as TECH-DEBT. **Mitigation**: Time limit in Escalation Rule B + no reverse reclassification rule.
-2. **Learning Curve for New Contributors**: Must understand the difference between two categories. **Mitigation**: Add REG vs TECH-DEBT decision flow diagram at the top of `known-regressions.md` (added Day 5).
+2. **Learning Curve for New Contributors**: Must understand the difference between two categories. **Mitigation**: Add REG vs TECH-DEBT decision flow diagram at the top of `known-regressions.md`.
 3. **Governance Rules Not Yet Automated**: Escalation Rule B currently relies on manual triage; `make tech-debt-freshness` not yet implemented. **Mitigation**: Implement the Makefile target before v2.7.0 release; if delayed, at least add a manual checklist to `docs/internal/dev-rules.md`.
 
 ## Related
 
 - `docs/internal/known-regressions.md` (host definitions + examples)
 - `docs/internal/dev-rules.md` §12 Branch + PR + future §13 TECH-DEBT treatment
-- `docs/internal/v2.7.0-planning.md` §19 DEC-N + §20 Day 5 patch
