@@ -167,16 +167,30 @@ func (m *ConfigManager) SetClock(c clockwork.Clock) {
 // SetMetrics swaps the *configMetrics instance this manager bumps.
 // Test-only — production code receives the package-level singleton
 // from the constructor. Tests use this to inject a fresh instance for
-// parallel-safe observation; mirrors SetClock. Foundation for #4a
-// (drop the withIsolatedMetrics global-swap pattern). Until the
-// follow-up PRs route ConfigManager methods through m.metrics +
-// thread *configMetrics through the top-level scanners, swapping
-// here only isolates the field access — code paths still using the
-// global helpers will keep racing on the singleton.
+// parallel-safe observation; mirrors SetClock. Foundation for #4a.
 func (m *ConfigManager) SetMetrics(metrics *configMetrics) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.metrics = metrics
+}
+
+// getMetrics returns m.getMetrics(), lazy-initializing to the global
+// singleton if the constructor was bypassed (test struct-literal
+// pattern). Always returns a non-nil pointer so callers can write
+// `m.getMetrics().IncReloadTrigger(...)` without nil-panic worry.
+func (m *ConfigManager) getMetrics() *configMetrics {
+	m.mu.RLock()
+	mm := m.metrics
+	m.mu.RUnlock()
+	if mm != nil {
+		return mm
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.metrics == nil {
+		m.metrics = getConfigMetrics()
+	}
+	return m.metrics
 }
 
 // Mode returns "directory" or "single-file" for diagnostics.
@@ -247,7 +261,7 @@ func (m *ConfigManager) Load() error {
 	var err error
 
 	if m.isDir {
-		cfg, hash, err = loadDir(m.path)
+		cfg, hash, err = loadDirWithMetrics(m.path, m.getMetrics())
 	} else {
 		cfg, hash, err = loadFile(m.path)
 	}
@@ -372,7 +386,7 @@ func (m *ConfigManager) IncrementalLoad() error {
 		if err := yaml.Unmarshal(data, &partial); err != nil {
 			// See loadDir — defaults parse failure silently nullifies the
 			// block; promote to ERROR + emit metric (cycle-6 RCA, archive §S#37d).
-			IncParseFailure(filepath.Base(fullPath))
+			m.getMetrics().IncParseFailure(filepath.Base(fullPath))
 			if strings.HasPrefix(name, "_") {
 				log.Printf("ERROR: skip unparseable defaults/profiles file %s: %v (entire block dropped — fix file or remove)", fullPath, err)
 			} else {
@@ -492,7 +506,7 @@ func (m *ConfigManager) fullDirLoad() error {
 		if err := yaml.Unmarshal(data, &partial); err != nil {
 			// See loadDir — defaults parse failure silently nullifies the
 			// block; promote to ERROR + emit metric (cycle-6 RCA, archive §S#37d).
-			IncParseFailure(filepath.Base(fullPath))
+			m.getMetrics().IncParseFailure(filepath.Base(fullPath))
 			if strings.HasPrefix(name, "_") {
 				log.Printf("ERROR: skip unparseable defaults/profiles file %s: %v (entire block dropped — fix file or remove)", fullPath, err)
 			} else {
@@ -536,7 +550,7 @@ func (m *ConfigManager) fullDirLoad() error {
 // merging in place so a failed scan doesn't leave torn state visible to
 // the /effective read path.
 func (m *ConfigManager) populateHierarchyState() error {
-	tenants, defaults, hashes, mtimes, graph, err := scanDirHierarchical(m.path, nil)
+	tenants, defaults, hashes, mtimes, graph, err := scanDirHierarchicalWithMetrics(m.path, nil, m.getMetrics())
 	if err != nil {
 		return err
 	}
@@ -732,7 +746,7 @@ func (m *ConfigManager) detectChange() (bool, string, error) {
 	m.mu.RUnlock()
 
 	if hierarchical {
-		_, _, newHashes, _, _, hErr := scanDirHierarchical(m.path, priorHierMtimes)
+		_, _, newHashes, _, _, hErr := scanDirHierarchicalWithMetrics(m.path, priorHierMtimes, m.getMetrics())
 		if hErr != nil {
 			return false, "", fmt.Errorf("hierarchical scan: %w", hErr)
 		}

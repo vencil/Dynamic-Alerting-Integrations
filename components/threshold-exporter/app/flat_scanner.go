@@ -71,7 +71,24 @@ func loadFile(path string) (ThresholdConfig, string, error) {
 //
 // Boundary rule: state_filters should only be defined in _defaults.yaml.
 // Tenant files should only contain a 'tenants' block. This is enforced with warnings.
+//
+// Legacy wrapper that uses the package-level metrics singleton. Production
+// code should call loadDirWithMetrics with their owned *configMetrics so
+// per-test isolation works (#4a).
 func loadDir(dir string) (ThresholdConfig, string, error) {
+	return loadDirWithMetrics(dir, getConfigMetrics())
+}
+
+// loadDirWithMetrics is the injectable variant of loadDir. Same behavior;
+// metric observations route to the caller-supplied *configMetrics
+// instead of getConfigMetrics(). Use this from production code paths
+// that own a ConfigManager.
+func loadDirWithMetrics(dir string, metrics *configMetrics) (ThresholdConfig, string, error) {
+	// Defensive: see scanDirHierarchicalWithMetrics for the same
+	// nil-fallback rationale (struct-literal test shortcut).
+	if metrics == nil {
+		metrics = getConfigMetrics()
+	}
 	merged := ThresholdConfig{
 		Defaults:     make(map[string]float64),
 		StateFilters: make(map[string]StateFilter),
@@ -121,7 +138,7 @@ func loadDir(dir string) (ThresholdConfig, string, error) {
 			// §S#37d) cost 5+ hours wall-clock because this signal lived at
 			// WARN. Promote to ERROR for `_*` files; emit parse_failure_total
 			// (v2.8.0 A-8d metric) so ops can alert.
-			IncParseFailure(filepath.Base(path))
+			metrics.IncParseFailure(filepath.Base(path))
 			if strings.HasPrefix(name, "_") {
 				log.Printf("ERROR: skip unparseable defaults/profiles file %s: %v (entire block dropped — fix file or remove)", path, err)
 			} else {

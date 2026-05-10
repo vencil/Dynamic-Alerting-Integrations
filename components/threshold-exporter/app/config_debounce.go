@@ -95,7 +95,7 @@ func (m *ConfigManager) triggerDebouncedReload(reason string) {
 		m.recordReason(reason)
 		t0 := time.Now()
 		m.diffAndReload()
-		ObserveReloadDuration(time.Since(t0))
+		m.getMetrics().ObserveReloadDuration(time.Since(t0))
 		return
 	}
 
@@ -156,11 +156,11 @@ func (m *ConfigManager) fireDebounced() {
 	// v2.8.0 B-3: observe debounce batch size (effectiveness signal)
 	// before the reload so the sample lands even if diffAndReload
 	// errors out. Sample count == fire count by construction.
-	ObserveDebounceBatch(len(reasons))
+	m.getMetrics().ObserveDebounceBatch(len(reasons))
 	atomic.AddUint64(&m.debounce.fired, 1)
 	t0 := time.Now()
 	_, _, err := m.diffAndReload()
-	ObserveReloadDuration(time.Since(t0))
+	m.getMetrics().ObserveReloadDuration(time.Since(t0))
 	if err != nil {
 		log.Printf("ERROR: debounced reload failed: %v", err)
 	}
@@ -271,7 +271,7 @@ func (m *ConfigManager) snapshotPriorState() reloadPriorState {
 // we keep using the hierarchical path because computeMergedHash with an
 // empty chain is well-defined.
 func (m *ConfigManager) scanAndCheckHierarchical(prior reloadPriorState) (reloadScanState, bool, error) {
-	tenants, defaults, hashes, mtimes, graph, scanErr := scanDirHierarchical(m.path, prior.mtimes)
+	tenants, defaults, hashes, mtimes, graph, scanErr := scanDirHierarchicalWithMetrics(m.path, prior.mtimes, m.getMetrics())
 	if scanErr != nil {
 		log.Printf("ERROR: hierarchical scan failed: %v", scanErr)
 		return reloadScanState{}, true, scanErr
@@ -394,10 +394,10 @@ func (m *ConfigManager) classifyAndCount(prior reloadPriorState, scan reloadScan
 		if sourceChanged {
 			res.reloaded++
 			if wasKnown {
-				IncReloadTrigger(ReloadReasonSource)
+				m.getMetrics().IncReloadTrigger(ReloadReasonSource)
 				buckets[emissionKey{ReloadReasonSource, "tenant", "applied"}]++
 			} else {
-				IncReloadTrigger(ReloadReasonNewTenant)
+				m.getMetrics().IncReloadTrigger(ReloadReasonNewTenant)
 				buckets[emissionKey{ReloadReasonNewTenant, "tenant", "applied"}]++
 			}
 		} else if defaultsChanged {
@@ -425,14 +425,14 @@ func (m *ConfigManager) classifyAndCount(prior reloadPriorState, scan reloadScan
 				}
 				switch effect {
 				case "shadowed":
-					IncDefaultsShadowed()
+					m.getMetrics().IncDefaultsShadowed()
 				default:
-					IncDefaultsNoop()
+					m.getMetrics().IncDefaultsNoop()
 				}
 				buckets[emissionKey{ReloadReasonDefaults, scope, effect}]++
 			} else {
 				res.reloaded++
-				IncReloadTrigger(ReloadReasonDefaults)
+				m.getMetrics().IncReloadTrigger(ReloadReasonDefaults)
 				buckets[emissionKey{ReloadReasonDefaults, scope, "applied"}]++
 			}
 		}
@@ -444,7 +444,7 @@ func (m *ConfigManager) classifyAndCount(prior reloadPriorState, scan reloadScan
 	for tid := range prior.tenantSources {
 		if _, stillKnown := scan.tenants[tid]; !stillKnown {
 			res.reloaded++
-			IncReloadTrigger(ReloadReasonDelete)
+			m.getMetrics().IncReloadTrigger(ReloadReasonDelete)
 			buckets[emissionKey{ReloadReasonDelete, "tenant", "applied"}]++
 		}
 	}
@@ -453,7 +453,7 @@ func (m *ConfigManager) classifyAndCount(prior reloadPriorState, scan reloadScan
 	// doesn't matter for Histogram observations; the per-key Observe
 	// is the only state mutation.
 	for k, n := range buckets {
-		ObserveBlastRadius(k.reason, k.scope, k.effect, n)
+		m.getMetrics().ObserveBlastRadius(k.reason, k.scope, k.effect, n)
 	}
 
 	return res
@@ -484,7 +484,7 @@ func (m *ConfigManager) installNewHierarchyState(scan reloadScanState, result re
 	m.hierarchy.parsedDefaults = result.newParsedDefaults
 	m.mu.Unlock()
 
-	SetLastReloadComplete(time.Now())
+	m.getMetrics().SetLastReloadComplete(time.Now())
 	return nil
 }
 
@@ -573,7 +573,7 @@ func (m *ConfigManager) recomputeMergedHash(tenantID, tenantFile string, default
 	}
 	h, mergeErr := computeMergedHash(tenantBytes, tenantID, chainBytes)
 	if mergeErr != nil {
-		emitParseFailureSignal(tenantID, tenantFile, defaultsChain, mergeErr)
+		emitParseFailureSignal(m.getMetrics(), tenantID, tenantFile, defaultsChain, mergeErr)
 	}
 	return h, mergeErr
 }
@@ -588,12 +588,16 @@ func (m *ConfigManager) recomputeMergedHash(tenantID, tenantFile string, default
 // with `parse defaults[%d]: %w` and tenant errors with `parse tenant: %w`
 // (config_inheritance.go). We string-match the prefix to map the index
 // back to defaultsChain[i] for filename attribution.
-func emitParseFailureSignal(tenantID, tenantFile string, defaultsChain []string, mergeErr error) {
+//
+// metrics is plumbed in (not the package global) so the caller's
+// ConfigManager.metrics instance is the bumped one — foundation for
+// per-test isolation (#4a).
+func emitParseFailureSignal(metrics *configMetrics, tenantID, tenantFile string, defaultsChain []string, mergeErr error) {
 	msg := mergeErr.Error()
 	for i, dp := range defaultsChain {
 		needle := fmt.Sprintf("parse defaults[%d]:", i)
 		if strings.Contains(msg, needle) {
-			IncParseFailure(filepath.Base(dp))
+			metrics.IncParseFailure(filepath.Base(dp))
 			log.Printf(
 				"ERROR: skip unparseable defaults/profiles file %s (chain index %d) for tenant=%s: %v (entire block dropped — fix file or remove)",
 				dp, i, tenantID, mergeErr,
@@ -605,6 +609,6 @@ func emitParseFailureSignal(tenantID, tenantFile string, defaultsChain []string,
 	// logMergeSkip caller path; still bump the per-file counter so ops
 	// can detect persistently broken tenant files.
 	if strings.Contains(msg, "parse tenant:") {
-		IncParseFailure(filepath.Base(tenantFile))
+		metrics.IncParseFailure(filepath.Base(tenantFile))
 	}
 }

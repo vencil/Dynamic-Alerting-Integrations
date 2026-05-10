@@ -96,6 +96,11 @@ func (e *DuplicateTenantError) Error() string {
 // optimization layered in Phase 3; Phase 1 always re-reads and re-hashes
 // (parity first, perf later). When non-nil it is currently ignored; tests
 // should pass nil.
+//
+// Legacy wrapper that uses the package-level metrics singleton. Production
+// code should call scanDirHierarchicalWithMetrics with their owned
+// *configMetrics so per-test isolation works (#4a). Tests that don't
+// care about metric isolation keep calling this form unchanged.
 func scanDirHierarchical(rootPath string, priorMtimes map[string]fileStat) (
 	tenants map[string]string,
 	defaults map[string]bool,
@@ -104,13 +109,39 @@ func scanDirHierarchical(rootPath string, priorMtimes map[string]fileStat) (
 	graph *InheritanceGraph,
 	err error,
 ) {
+	return scanDirHierarchicalWithMetrics(rootPath, priorMtimes, getConfigMetrics())
+}
+
+// scanDirHierarchicalWithMetrics is the injectable variant of
+// scanDirHierarchical. Same behavior; metric observations route to the
+// caller-supplied *configMetrics instead of getConfigMetrics(). Use this
+// from production code paths that own a ConfigManager: pass m.metrics so
+// the test-side SetMetrics injection actually shows up here too.
+//
+// Foundation for #4a: production callers migrate first; the legacy
+// wrapper above keeps test files green during the transition.
+func scanDirHierarchicalWithMetrics(rootPath string, priorMtimes map[string]fileStat, metrics *configMetrics) (
+	tenants map[string]string,
+	defaults map[string]bool,
+	hashes map[string]string,
+	mtimes map[string]fileStat,
+	graph *InheritanceGraph,
+	err error,
+) {
+	// Defensive: callers using struct-literal ConfigManager (test
+	// shortcut) may pass m.metrics == nil. Fall back to the global
+	// singleton — same behavior as the legacy scanDirHierarchical
+	// wrapper. Production callers always pass a real *configMetrics.
+	if metrics == nil {
+		metrics = getConfigMetrics()
+	}
 	_ = priorMtimes // reserved for Phase 3 (mtime-skip optimization)
 
 	// v2.7.0 Phase 4: record wall-clock duration for the scan so operators
 	// can alert on slow scans (e.g., >1s = filesystem regression). Done
 	// first so even error returns are observed — a scan that errors out
 	// fast is itself useful signal.
-	defer ObserveScanDuration()()
+	defer metrics.ObserveScanDuration()()
 
 	tenants = make(map[string]string)
 	defaults = make(map[string]bool)
@@ -208,7 +239,7 @@ func scanDirHierarchical(rootPath string, priorMtimes map[string]fileStat) (
 			// v2.8.0 A-8d: expose parse failure as a Prometheus counter so
 			// ops can alert on "tenant file persistently broken". label is
 			// basename (not full path) to cap cardinality.
-			IncParseFailure(filepath.Base(path))
+			metrics.IncParseFailure(filepath.Base(path))
 			return nil
 		}
 		if len(doc.Tenants) == 0 {
@@ -274,7 +305,7 @@ func scanDirHierarchical(rootPath string, priorMtimes map[string]fileStat) (
 	// harness anchor T1 + production stuck-scanner detection. Stamped only
 	// on success — error returns above leave the gauge at its previous
 	// value so a transient failure doesn't look like a completion.
-	SetLastScanComplete(time.Now())
+	metrics.SetLastScanComplete(time.Now())
 	return tenants, defaults, hashes, mtimes, graph, nil
 }
 
