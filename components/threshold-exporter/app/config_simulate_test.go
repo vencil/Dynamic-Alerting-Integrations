@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -400,9 +401,11 @@ func TestInMemoryConfigSource_FiltersByRoot(t *testing.T) {
 		t.Errorf("got %d files, want %d: %v", len(out), len(wantPaths), keysOf(out))
 	}
 	for _, p := range wantPaths {
-		// Cleaned path key — on POSIX this is byte-identical to the
-		// input; on Windows path.Clean would convert / → \.
-		if _, ok := out[filepath.Clean(p)]; !ok {
+		// path.Clean (POSIX), NOT filepath.Clean — InMemoryConfigSource
+		// is documented as POSIX-only (PR #358). filepath.Clean on Windows
+		// would convert "/sim/a.yaml" to "\sim\a.yaml", which never matches
+		// the POSIX-keyed output map.
+		if _, ok := out[path.Clean(p)]; !ok {
 			t.Errorf("missing %q in YAMLFiles output", p)
 		}
 	}
