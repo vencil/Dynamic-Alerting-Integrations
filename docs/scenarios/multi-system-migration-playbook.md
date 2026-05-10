@@ -180,7 +180,12 @@ bytes-per-datapoint × datapoints-per-day × series count × retention days × 1
 
 實際估算**請以 [VM 官方 Capacity Calculator](https://docs.victoriametrics.com/Single-server-VictoriaMetrics.html#capacity-planning) 為準**——它會把 churn / dedup / replication factor 一起納入，比 rule-of-thumb 公式精確。本公式只供 sanity check 與初次採購估算的數量級判斷。
 
-**反例**：早期 v0.1 outline 寫過「bytes-per-series-per-day ~8-15 bytes」是錯的——把 bytes/datapoint 與 bytes/series/day 混淆。100 萬 series × 15s scrape × 30 天若用 8 bytes/series/day 會算出 < 1GB，實際正確估算約 1.4TB 量級。Phase 1 disk 撐爆的事故多半出自這類算錯。
+**反例**：早期 v0.1 outline 寫過「bytes-per-series-per-day ~8-15 bytes」是錯的——把 bytes/datapoint 與 bytes/series/day 混淆。1M series × 15s scrape × 30 days 兩種算法的差異：
+
+- **錯**：`8 bytes/series/day × 1M × 30 × 1.5 ≈ 360 MB` ←算出 disk 需求 < 1GB，明顯有問題
+- **對**：`1 byte/dp × 5760 dp/day × 1M × 30 × 1.5 ≈ 260 GB`（5760 = 86400/15s scrape）
+
+兩者差 ~700 倍。Phase 1 disk 撐爆的事故多半出自這類算錯——把 bytes/series/day 誤當公式單位、實際數值卻在 bytes/datapoint 量級。
 
 #### Dual-write 策略
 
