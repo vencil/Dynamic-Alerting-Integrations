@@ -391,11 +391,21 @@ amtool silence add \
     alertname=DatabaseDown_MySQL
 
 # 之後 systematic：跑 silencer 與 v2 alertname 的 reconcile
-da-tools silencer-drift-check \
-    --am-url http://<am>:9093 \
-    --rule-source conf.d/ \
-    --rule-pack-version v2.0.0
-# 工具會列出 「silencer matchers vs v2 alertname」mismatch list、產生 patch suggestion
+# ⚠️ da-tools silencer-drift-check 尚未 ship（追蹤：issue #405）
+# Offline-first 設計：工具不會直接連 AM（避免 VPN/Ingress/Auth 邊界踩雷），
+# 而是吃 amtool 抓下來的 JSON 檔案。Workaround 流程也走同樣 pattern：
+
+# Step 1：在有權限的環境（bastion / kubectl exec / port-forward 後）抓 silencer
+amtool silence query -o json --alertmanager.url=http://<am>:9093 > active_silences.json
+
+# Step 2：local / CI 端比對（不需要 AM 連線）
+grep -hE '^\s+- alert:' conf.d/**/*.yaml | awk '{print $3}' | sort -u > /tmp/v2-alertnames.txt
+jq -r '.[].matchers[] | select(.name == "alertname") | .value' active_silences.json | sort -u > /tmp/silenced-alertnames.txt
+# Drift = silencer 還在用但 v2 conf.d 已沒有的 alertname
+comm -23 /tmp/silenced-alertnames.txt /tmp/v2-alertnames.txt
+
+# 工具 ship 後改用（檔案輸入、CI/GitHub Action 都能跑）：
+# da-tools silencer-drift-check --silences-file active_silences.json --rule-source conf.d/ --rule-pack-version v2.0.0
 ```
 
 **If not this**：
@@ -1462,22 +1472,34 @@ da-tools onboard --analyze --cluster-name <cluster> \
 # 重新 commit
 ```
 
+> 📝 **設計筆記**：state schema migration + manifest 重建是同類問題（兩者都是「修復 state 檔案系統到一致態」），未來會統一為單一聲明式命令 `da-tools state reconcile`（追蹤：[issue #405](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/405)）。在工具 ship 之前用以下 jq 流程；工具 ship 後就一行 `da-tools state reconcile --state-dir .da/state/` 自動偵測並修復。
+
 ```bash
-# 形狀 2：schema_version drift
-# 對所有 state 檔批次升級
+# 形狀 2：schema_version drift（手動 workaround）
 for f in .da/state/*.json; do
-    da-tools state-migrate --input "$f" --target-schema 1.1 --in-place
+    CURRENT=$(jq -r '.schema_version' "$f")
+    if [ "$CURRENT" = "1.0" ]; then
+        # 對應 schema 1.0 → 1.1 的具體欄位差異（參考 schema CHANGELOG）
+        # 範例：1.1 新增 gate_log[] 欄位
+        jq '.schema_version = "1.1" | .gate_log = (.gate_log // [])' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+    fi
 done
-# da-tools state-migrate 應為 idempotent；若已 1.1 直接 skip
 git add .da/state/
 git commit -m "chore: migrate all cluster state to schema 1.1"
 ```
 
 ```bash
-# 形狀 3：manifest drift
-# 用 da-tools 重生 manifest（從實際檔案系統推）
-da-tools manifest regenerate --state-dir .da/state/ --output .da/manifest.json
-# 或人工修
+# 形狀 3：manifest drift（手動 workaround）
+# 從實際 state 檔案系統重建 manifest
+jq -n --arg version "1.0" '{schema_version: $version, states: []}' > /tmp/manifest.json
+for f in .da/state/*.json; do
+    cluster=$(basename "$f" .json)
+    jq --arg c "$cluster" --arg p "$f" \
+        '.states += [{cluster: $c, path: $p}]' \
+        /tmp/manifest.json > /tmp/manifest.json.tmp && mv /tmp/manifest.json.tmp /tmp/manifest.json
+done
+mv /tmp/manifest.json .da/manifest.json
+# 或人工加單一 cluster：
 jq '.states += [{"cluster": "new-cluster", "path": ".da/state/new-cluster.json"}]' \
     .da/manifest.json > .da/manifest.json.new
 mv .da/manifest.json.new .da/manifest.json
@@ -1485,15 +1507,23 @@ mv .da/manifest.json.new .da/manifest.json
 
 **預防 / 結構性 Fix**：
 
+> 📝 **設計筆記**：single-file → per-cluster split 是一次性操作，**不打算做成 CLI 命令**（追蹤：[issue #405](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/405) — option (c) inline jq 設為 canonical）。以下 jq recipe 是正式建議的處置方式，不是臨時 workaround。
+
 ```bash
-# 若客戶仍在用單檔 .da/migration-state.json
-# → 立刻轉 per-cluster split（playbook §schema 推薦預設）
-da-tools state-split \
-    --input .da/migration-state.json \
-    --output-dir .da/state/ \
-    --auto-detect-clusters
-# da-tools 自動依 state JSON 內的 scope.clusters[] 拆檔
-# 拆完 commit 一次，未來 automation 都各寫各檔
+# 若客戶仍在用單檔 .da/migration-state.json → 立刻轉 per-cluster split
+# （playbook §schema 推薦預設、避免後續 GitOps merge conflict）
+mkdir -p .da/state/
+jq -c '.scope.clusters[]' .da/migration-state.json | while read -r cluster_obj; do
+    CLUSTER=$(echo "$cluster_obj" | jq -r '.name')
+    # 對應 cluster 從原 state 抽出對應欄位，組單 cluster state file
+    jq --arg c "$CLUSTER" \
+        '{schema_version, generated_at, generated_by, discovery, current_state, scope: {clusters: [.scope.clusters[] | select(.name == $c)], tenants_total, rule_packs_targeted, metric_split_planned}, gate_log}' \
+        .da/migration-state.json > ".da/state/${CLUSTER}.json"
+done
+# 拆完 commit、archive 舊單檔
+git add .da/state/
+git rm .da/migration-state.json
+git commit -m "chore: split migration state to per-cluster files"
 ```
 
 **If not this**：

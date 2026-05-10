@@ -367,7 +367,17 @@ Gate 3 通過條件：
 <summary>📋 Phase 2 Checklist</summary>
 
 **規則上 git**
-- [ ] 規則 commit 進 git（用 `da-tools migrate-conf-d` 或手動轉換從舊規則）
+- [ ] 規則 commit 進 git（從舊扁平結構 → `conf.d/<domain>/<region>/<tenant>.yaml` 階層；用 `git mv` 保留 history）
+  ```bash
+  # 範例：把舊 rules/<tenant>.yaml 移到階層結構
+  # 對每個 tenant，依其 _metadata.domain / region 決定目標路徑：
+  TENANT_FILE="rules/redis-prod-1.yaml"
+  DOMAIN=$(yq '._metadata.domain' "$TENANT_FILE")      # e.g., "redis"
+  REGION=$(yq '._metadata.region' "$TENANT_FILE")      # e.g., "us-east"
+  mkdir -p "conf.d/${DOMAIN}/${REGION}/"
+  git mv "$TENANT_FILE" "conf.d/${DOMAIN}/${REGION}/$(basename $TENANT_FILE)"
+  # 跑 da-tools validate-config 確認 conf.d 結構正確
+  ```
 - [ ] 所有規則 emit 的 alert 都帶 `migration_status: shadow` label
 - [ ] CI 對 conf.d 跑 schema validation + `da-tools alert-quality` 預檢
 

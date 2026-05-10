@@ -223,9 +223,11 @@ git revert <commit-sha>
 
 **觸發**：multi-system migration playbook 走完 Phase 3 全量 cutover（所有 custom_ 都 active），現在開始 promote 到 golden。
 
-**關鍵決策**：
-- 哪些規則有 golden 等價物（`da-tools rule-pack-mapping --suggest`）
+**關鍵決策**（**這是 domain owner 業務判斷，不打算自動化**——見下方）：
+- 哪些規則有 golden 等價物：domain owner 對照 [Rule Pack ALERT-REFERENCE](../rule-packs/ALERT-REFERENCE.md) 手動比對 custom_ 與 golden 規則的觸發條件 + 語意
 - 哪些規則該留 custom_（無 Rule Pack 對應、客戶業務專屬）
+
+> 📝 **為什麼不做 `rule-pack-mapping --suggest` 工具**（追蹤：[issue #405](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/405)）：自動建議「custom_X 應 promote 到 golden Y」需要深度 PromQL 語意分析（AST + 等價判斷），準確率天花板低；建議錯了反而給客戶 false confidence。這類**業務語意判斷**保留為人類決策，不勉強自動化。`rule-pack-diff`（兩版本之間的機械差異）是 factual 工作，會做；`--suggest`（判斷哪條 custom 該 promote）是 judgment 工作，不會做。
 
 **結束條件**：所有 promote-able 都升級完，或客戶決定停在某個點。
 
@@ -261,16 +263,19 @@ Rule Pack v2 升級時若**改了 alert name 或 label schema**，客戶針對 v
 
 **SOP**：
 
-1. 跑 `da-tools rule-pack-diff --from=v1 --to=v2` 列差異點（含 alertname / label schema breaking changes）
+1. 列 Rule Pack v1→v2 差異點（含 alertname / label schema breaking changes）
+   - **⚠️ `da-tools rule-pack-diff --from=v1 --to=v2` 尚未 ship**（追蹤：[issue #405](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/405)）
+   - **手動 workaround**：對照 Rule Pack 該版本的 `CHANGELOG.md`（[ADR-REFERENCE](../rule-packs/ALERT-REFERENCE.md) 列當前 stable alertname）+ `git diff rule-packs/<pack>/v1.0.0/...rule-packs/<pack>/v2.0.0/`
 2. **Disablement drift check**：對每個客戶有 `custom_*` 的 alert，驗證對應的 disable 配置是否仍命中 v2：
    - `_defaults.yaml` 的 disable list — 確認 v2 alertname 也在清單上（或加進去）
    - AM 的 silencer matchers — 確認 v2 label schema 不會讓既有 matcher mismatch
    - **缺哪一個就會 double-fire；補上才能 ship v2**
+   - 具體排查命令見 [troubleshooting-checklist §1.3.2](../integration/troubleshooting-checklist.md#132-silencer-mismatchdisablement-drift-double-fire-alert-storm)
 3. 對每個 `custom_*`：判斷 v2 是否吸收 → 若是，本 guide 的 promotion 流程跑
 4. 對 v2 改語意的：`custom_*` 重寫對齊 v2 schema 或留原樣（**且** disable 配置同步更新）
 5. 對 v2 breaking：必須要 promote（被動 forced upgrade）
 
-**Audit hook 建議**（待 ship）：v2.9 加 `da-tools upgrade-check` 跑 v1→v2 升級時自動偵測 disablement drift，列「會 double-fire 的 alert」清單，merge 前須清零。
+**Audit hook 建議**（追蹤 [issue #405](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/405)）：`da-tools upgrade-check` 跑 v1→v2 升級時自動偵測 disablement drift，列「會 double-fire 的 alert」清單，merge 前須清零。可能與 `silencer-drift-check` 合併實作。
 
 ### 三情境的共同模式
 
