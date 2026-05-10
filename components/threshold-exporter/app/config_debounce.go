@@ -162,7 +162,7 @@ func (m *ConfigManager) fireDebounced() {
 	_, _, err := m.diffAndReload()
 	m.getMetrics().ObserveReloadDuration(time.Since(t0))
 	if err != nil {
-		log.Printf("ERROR: debounced reload failed: %v", err)
+		m.getLogger().Printf("ERROR: debounced reload failed: %v", err)
 	}
 }
 
@@ -271,9 +271,9 @@ func (m *ConfigManager) snapshotPriorState() reloadPriorState {
 // we keep using the hierarchical path because computeMergedHash with an
 // empty chain is well-defined.
 func (m *ConfigManager) scanAndCheckHierarchical(prior reloadPriorState) (reloadScanState, bool, error) {
-	tenants, defaults, hashes, mtimes, graph, scanErr := scanDirHierarchicalWithMetrics(m.path, prior.mtimes, m.getMetrics())
+	tenants, defaults, hashes, mtimes, graph, scanErr := scanDirHierarchicalWithMetrics(m.path, prior.mtimes, m.getMetrics(), m.getLogger())
 	if scanErr != nil {
-		log.Printf("ERROR: hierarchical scan failed: %v", scanErr)
+		m.getLogger().Printf("ERROR: hierarchical scan failed: %v", scanErr)
 		return reloadScanState{}, true, scanErr
 	}
 
@@ -281,7 +281,7 @@ func (m *ConfigManager) scanAndCheckHierarchical(prior reloadPriorState) (reload
 	// hierarchical mode yet, stay on the flat path.
 	if !prior.hierarchicalMode && len(defaults) == 0 {
 		if ierr := m.IncrementalLoad(); ierr != nil {
-			log.Printf("ERROR: incremental load failed: %v", ierr)
+			m.getLogger().Printf("ERROR: incremental load failed: %v", ierr)
 			return reloadScanState{}, true, ierr
 		}
 		return reloadScanState{}, true, nil
@@ -335,12 +335,12 @@ func (m *ConfigManager) classifyAndCount(prior reloadPriorState, scan reloadScan
 		}
 		b, rerr := os.ReadFile(dp)
 		if rerr != nil {
-			log.Printf("WARN: parsedDefaults: read %s: %v", dp, rerr)
+			m.getLogger().Printf("WARN: parsedDefaults: read %s: %v", dp, rerr)
 			continue
 		}
 		parsed, perr := parseDefaultsBytes(b)
 		if perr != nil {
-			log.Printf("WARN: parsedDefaults: parse %s: %v", dp, perr)
+			m.getLogger().Printf("WARN: parsedDefaults: parse %s: %v", dp, perr)
 			continue
 		}
 		res.newParsedDefaults[dp] = parsed
@@ -380,7 +380,7 @@ func (m *ConfigManager) classifyAndCount(prior reloadPriorState, scan reloadScan
 
 		mh, mergeErr := m.recomputeMergedHash(tid, srcPath, defaultsChain)
 		if mergeErr != nil {
-			logMergeSkip(tid, "debounced-reload", mergeErr)
+			logMergeSkip(m.getLogger(), tid, "debounced-reload", mergeErr)
 			// Preserve any prior merged_hash we had so the /effective
 			// endpoint still serves the last-known-good value. Absent prior
 			// → mark empty (tenant will read as merge-failing).
@@ -470,7 +470,7 @@ func (m *ConfigManager) classifyAndCount(prior reloadPriorState, scan reloadScan
 // atomic-swap so the gauge cannot advance ahead of observable state.
 func (m *ConfigManager) installNewHierarchyState(scan reloadScanState, result reloadResult) error {
 	if err := m.fullDirLoad(); err != nil {
-		log.Printf("ERROR: fullDirLoad inside diffAndReload failed: %v", err)
+		m.getLogger().Printf("ERROR: fullDirLoad inside diffAndReload failed: %v", err)
 		return err
 	}
 
@@ -517,7 +517,7 @@ func (m *ConfigManager) diffAndReload() (reloaded, noOp int, err error) {
 	if !m.isDir {
 		// Single-file mode has no hierarchical concept — just reload.
 		if err := m.Load(); err != nil {
-			log.Printf("ERROR: single-file reload failed: %v", err)
+			m.getLogger().Printf("ERROR: single-file reload failed: %v", err)
 			return 0, 0, err
 		}
 		return 1, 0, nil
@@ -573,7 +573,7 @@ func (m *ConfigManager) recomputeMergedHash(tenantID, tenantFile string, default
 	}
 	h, mergeErr := computeMergedHash(tenantBytes, tenantID, chainBytes)
 	if mergeErr != nil {
-		emitParseFailureSignal(m.getMetrics(), tenantID, tenantFile, defaultsChain, mergeErr)
+		emitParseFailureSignal(m.getMetrics(), m.getLogger(), tenantID, tenantFile, defaultsChain, mergeErr)
 	}
 	return h, mergeErr
 }
@@ -589,16 +589,23 @@ func (m *ConfigManager) recomputeMergedHash(tenantID, tenantFile string, default
 // (config_inheritance.go). We string-match the prefix to map the index
 // back to defaultsChain[i] for filename attribution.
 //
-// metrics is plumbed in (not the package global) so the caller's
-// ConfigManager.metrics instance is the bumped one — foundation for
-// per-test isolation (#4a).
-func emitParseFailureSignal(metrics *configMetrics, tenantID, tenantFile string, defaultsChain []string, mergeErr error) {
+// metrics + logger are plumbed in (not the package globals) so the
+// caller's ConfigManager.metrics + ConfigManager.logger instances are
+// the routed ones — foundation for per-test isolation (#4a + #4b).
+// Either may be nil → falls back to the package singleton.
+func emitParseFailureSignal(metrics *configMetrics, logger *log.Logger, tenantID, tenantFile string, defaultsChain []string, mergeErr error) {
+	if metrics == nil {
+		metrics = getConfigMetrics()
+	}
+	if logger == nil {
+		logger = log.Default()
+	}
 	msg := mergeErr.Error()
 	for i, dp := range defaultsChain {
 		needle := fmt.Sprintf("parse defaults[%d]:", i)
 		if strings.Contains(msg, needle) {
 			metrics.IncParseFailure(filepath.Base(dp))
-			log.Printf(
+			logger.Printf(
 				"ERROR: skip unparseable defaults/profiles file %s (chain index %d) for tenant=%s: %v (entire block dropped — fix file or remove)",
 				dp, i, tenantID, mergeErr,
 			)

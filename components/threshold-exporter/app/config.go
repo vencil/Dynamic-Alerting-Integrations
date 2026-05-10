@@ -277,7 +277,7 @@ func (m *ConfigManager) commitConfig(cfg *ThresholdConfig, hash string, flatScan
 	// reloads.
 	m.detectConfigSource()
 
-	logConfigStats(cfg, logHeader)
+	logConfigStats(m.getLogger(), cfg, logHeader)
 }
 
 // runHierarchyScanReject runs populateHierarchyState with the
@@ -296,7 +296,7 @@ func (m *ConfigManager) runHierarchyScanReject(label string) error {
 		if errors.As(err, &dupErr) {
 			return fmt.Errorf("config rejected (mixed-mode duplicate tenant): %w", err)
 		}
-		log.Printf("WARN: hierarchical scan during %s failed: %v", label, err)
+		m.getLogger().Printf("WARN: hierarchical scan during %s failed: %v", label, err)
 	}
 	return nil
 }
@@ -308,7 +308,7 @@ func (m *ConfigManager) Load() error {
 	var err error
 
 	if m.isDir {
-		cfg, hash, err = loadDirWithMetrics(m.path, m.getMetrics())
+		cfg, hash, err = loadDirWithMetrics(m.path, m.getMetrics(), m.getLogger())
 	} else {
 		cfg, hash, err = loadFile(m.path)
 	}
@@ -368,7 +368,7 @@ func (m *ConfigManager) IncrementalLoad() error {
 	prevHash := m.lastHash
 	m.mu.RUnlock()
 
-	newHashes, compositeHash, newMtimes, dataCache, err := scanDirFileHashes(m.path, oldH, oldM)
+	newHashes, compositeHash, newMtimes, dataCache, err := scanDirFileHashes(m.path, oldH, oldM, m.getLogger())
 	if err != nil {
 		return err
 	}
@@ -424,7 +424,7 @@ func (m *ConfigManager) IncrementalLoad() error {
 			var rerr error
 			data, rerr = os.ReadFile(fullPath)
 			if rerr != nil {
-				log.Printf("WARN: skip unreadable file %s: %v", fullPath, rerr)
+				m.getLogger().Printf("WARN: skip unreadable file %s: %v", fullPath, rerr)
 				delete(newConfigs, name)
 				continue
 			}
@@ -435,15 +435,15 @@ func (m *ConfigManager) IncrementalLoad() error {
 			// block; promote to ERROR + emit metric (cycle-6 RCA, archive §S#37d).
 			m.getMetrics().IncParseFailure(filepath.Base(fullPath))
 			if strings.HasPrefix(name, "_") {
-				log.Printf("ERROR: skip unparseable defaults/profiles file %s: %v (entire block dropped — fix file or remove)", fullPath, err)
+				m.getLogger().Printf("ERROR: skip unparseable defaults/profiles file %s: %v (entire block dropped — fix file or remove)", fullPath, err)
 			} else {
-				log.Printf("WARN: skip unparseable file %s: %v", fullPath, err)
+				m.getLogger().Printf("WARN: skip unparseable file %s: %v", fullPath, err)
 			}
 			delete(newConfigs, name)
 			continue
 		}
 		// Apply boundary enforcement (same rules as loadDir)
-		applyBoundaryRules(name, &partial)
+		applyBoundaryRules(name, &partial, m.getLogger())
 		newConfigs[name] = partial
 	}
 
@@ -520,7 +520,7 @@ func (m *ConfigManager) IncrementalLoad() error {
 // Used for the initial load and as fallback for IncrementalLoad.
 func (m *ConfigManager) fullDirLoad() error {
 	// Compute per-file hashes (no mtime guard on first load)
-	perFileHashes, compositeHash, perFileMtimes, dataCache, err := scanDirFileHashes(m.path, nil, nil)
+	perFileHashes, compositeHash, perFileMtimes, dataCache, err := scanDirFileHashes(m.path, nil, nil, m.getLogger())
 	if err != nil {
 		return err
 	}
@@ -545,7 +545,7 @@ func (m *ConfigManager) fullDirLoad() error {
 			var rerr error
 			data, rerr = os.ReadFile(fullPath)
 			if rerr != nil {
-				log.Printf("WARN: skip unreadable file %s: %v", fullPath, rerr)
+				m.getLogger().Printf("WARN: skip unreadable file %s: %v", fullPath, rerr)
 				continue
 			}
 		}
@@ -555,13 +555,13 @@ func (m *ConfigManager) fullDirLoad() error {
 			// block; promote to ERROR + emit metric (cycle-6 RCA, archive §S#37d).
 			m.getMetrics().IncParseFailure(filepath.Base(fullPath))
 			if strings.HasPrefix(name, "_") {
-				log.Printf("ERROR: skip unparseable defaults/profiles file %s: %v (entire block dropped — fix file or remove)", fullPath, err)
+				m.getLogger().Printf("ERROR: skip unparseable defaults/profiles file %s: %v (entire block dropped — fix file or remove)", fullPath, err)
 			} else {
-				log.Printf("WARN: skip unparseable file %s: %v", fullPath, err)
+				m.getLogger().Printf("WARN: skip unparseable file %s: %v", fullPath, err)
 			}
 			continue
 		}
-		applyBoundaryRules(name, &partial)
+		applyBoundaryRules(name, &partial, m.getLogger())
 		fileConfigs[name] = partial
 	}
 
@@ -597,7 +597,7 @@ func (m *ConfigManager) fullDirLoad() error {
 // merging in place so a failed scan doesn't leave torn state visible to
 // the /effective read path.
 func (m *ConfigManager) populateHierarchyState() error {
-	tenants, defaults, hashes, mtimes, graph, err := scanDirHierarchicalWithMetrics(m.path, nil, m.getMetrics())
+	tenants, defaults, hashes, mtimes, graph, err := scanDirHierarchicalWithMetrics(m.path, nil, m.getMetrics(), m.getLogger())
 	if err != nil {
 		return err
 	}
@@ -613,7 +613,7 @@ func (m *ConfigManager) populateHierarchyState() error {
 		chain := graph.TenantDefaults[tid]
 		mh, mergeErr := m.recomputeMergedHash(tid, srcPath, chain)
 		if mergeErr != nil {
-			logMergeSkip(tid, "initial-hierarchy-scan", mergeErr)
+			logMergeSkip(m.getLogger(), tid, "initial-hierarchy-scan", mergeErr)
 			continue
 		}
 		newMergedHashes[tid] = mh
@@ -629,12 +629,12 @@ func (m *ConfigManager) populateHierarchyState() error {
 	for dp := range defaults {
 		b, rerr := os.ReadFile(dp)
 		if rerr != nil {
-			log.Printf("WARN: parsedDefaults cache: read %s: %v", dp, rerr)
+			m.getLogger().Printf("WARN: parsedDefaults cache: read %s: %v", dp, rerr)
 			continue
 		}
 		parsed, perr := parseDefaultsBytes(b)
 		if perr != nil {
-			log.Printf("WARN: parsedDefaults cache: parse %s: %v", dp, perr)
+			m.getLogger().Printf("WARN: parsedDefaults cache: parse %s: %v", dp, perr)
 			continue
 		}
 		newParsedDefaults[dp] = parsed
@@ -662,7 +662,11 @@ func (m *ConfigManager) populateHierarchyState() error {
 // At 1000 tenants, this saves ~4ms per reload (Resolve alone costs ~2-5ms).
 // The "resolved thresholds" count is estimated from tenant override counts
 // rather than running the full resolution pipeline.
-func logConfigStats(cfg *ThresholdConfig, prefix string) {
+// logger may be nil → falls back to log.Default() (production safety).
+func logConfigStats(logger *log.Logger, cfg *ThresholdConfig, prefix string) {
+	if logger == nil {
+		logger = log.Default()
+	}
 	// Cheap estimate: count total tenant overrides (each becomes ~1 resolved threshold)
 	overrideCount := 0
 	silentCount := 0
@@ -680,13 +684,13 @@ func logConfigStats(cfg *ThresholdConfig, prefix string) {
 		}
 	}
 
-	log.Printf("%s: %d defaults, %d profiles, %d state_filters, %d tenants, ~%d threshold overrides, %d state entries, %d silent modes",
+	logger.Printf("%s: %d defaults, %d profiles, %d state_filters, %d tenants, ~%d threshold overrides, %d state entries, %d silent modes",
 		prefix, len(cfg.Defaults), len(cfg.Profiles), len(cfg.StateFilters), len(cfg.Tenants),
 		overrideCount, stateCount, silentCount)
 
 	if warnings := cfg.ValidateTenantKeys(); len(warnings) > 0 {
 		for _, w := range warnings {
-			log.Printf("%s", w)
+			logger.Printf("%s", w)
 		}
 	}
 }
@@ -705,7 +709,7 @@ func (m *ConfigManager) WatchLoop(interval time.Duration, stopCh <-chan struct{}
 	for {
 		select {
 		case <-stopCh:
-			log.Println("WatchLoop stopped")
+			m.getLogger().Println("WatchLoop stopped")
 			return
 		case <-ticker.Chan():
 		}
@@ -726,11 +730,11 @@ func (m *ConfigManager) tickOnce() {
 	if m.isDir {
 		changed, reason, err := m.detectChange()
 		if err != nil {
-			log.Printf("WARN: cannot check config %s: %v", m.path, err)
+			m.getLogger().Printf("WARN: cannot check config %s: %v", m.path, err)
 			return
 		}
 		if changed {
-			log.Printf("Config changed, scheduling debounced reload...")
+			m.getLogger().Printf("Config changed, scheduling debounced reload...")
 			// v2.7.0: route through debounce even for flat mode so an
 			// ops tool that rapidly rewrites multiple files coalesces
 			// into a single reload.
@@ -742,7 +746,7 @@ func (m *ConfigManager) tickOnce() {
 	// Single-file mode: full reload (no incremental benefit)
 	_, hash, err := loadFile(m.path)
 	if err != nil {
-		log.Printf("WARN: cannot check config %s: %v", m.path, err)
+		m.getLogger().Printf("WARN: cannot check config %s: %v", m.path, err)
 		return
 	}
 
@@ -751,9 +755,9 @@ func (m *ConfigManager) tickOnce() {
 	m.mu.RUnlock()
 
 	if changed {
-		log.Printf("Config changed, reloading...")
+		m.getLogger().Printf("Config changed, reloading...")
 		if err := m.Load(); err != nil {
-			log.Printf("ERROR: failed to reload config: %v", err)
+			m.getLogger().Printf("ERROR: failed to reload config: %v", err)
 		}
 	}
 }
@@ -793,7 +797,7 @@ func (m *ConfigManager) detectChange() (bool, string, error) {
 	m.mu.RUnlock()
 
 	if hierarchical {
-		_, _, newHashes, _, _, hErr := scanDirHierarchicalWithMetrics(m.path, priorHierMtimes, m.getMetrics())
+		_, _, newHashes, _, _, hErr := scanDirHierarchicalWithMetrics(m.path, priorHierMtimes, m.getMetrics(), m.getLogger())
 		if hErr != nil {
 			return false, "", fmt.Errorf("hierarchical scan: %w", hErr)
 		}
@@ -811,7 +815,7 @@ func (m *ConfigManager) detectChange() (bool, string, error) {
 		return changed, ReloadReasonForced, nil
 	}
 
-	_, compositeHash, _, _, err := scanDirFileHashes(m.path, oldH, oldM)
+	_, compositeHash, _, _, err := scanDirFileHashes(m.path, oldH, oldM, m.getLogger())
 	if err != nil {
 		return false, "", err
 	}

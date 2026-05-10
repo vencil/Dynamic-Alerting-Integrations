@@ -72,22 +72,27 @@ func loadFile(path string) (ThresholdConfig, string, error) {
 // Boundary rule: state_filters should only be defined in _defaults.yaml.
 // Tenant files should only contain a 'tenants' block. This is enforced with warnings.
 //
-// Legacy wrapper that uses the package-level metrics singleton. Production
-// code should call loadDirWithMetrics with their owned *configMetrics so
-// per-test isolation works (#4a).
+// Legacy wrapper that uses the package-level metrics + logger singletons.
+// Production code should call loadDirWithMetrics with their owned
+// *configMetrics + *log.Logger so per-test isolation works (#4a + #4b).
 func loadDir(dir string) (ThresholdConfig, string, error) {
-	return loadDirWithMetrics(dir, getConfigMetrics())
+	return loadDirWithMetrics(dir, getConfigMetrics(), log.Default())
 }
 
 // loadDirWithMetrics is the injectable variant of loadDir. Same behavior;
-// metric observations route to the caller-supplied *configMetrics
-// instead of getConfigMetrics(). Use this from production code paths
-// that own a ConfigManager.
-func loadDirWithMetrics(dir string, metrics *configMetrics) (ThresholdConfig, string, error) {
+// metric observations + log lines route to the caller-supplied
+// *configMetrics + *log.Logger instead of the package singletons. Use
+// this from production code paths that own a ConfigManager. Either
+// argument may be nil → falls back to the package singleton (struct-
+// literal test shortcut).
+func loadDirWithMetrics(dir string, metrics *configMetrics, logger *log.Logger) (ThresholdConfig, string, error) {
 	// Defensive: see scanDirHierarchicalWithMetrics for the same
 	// nil-fallback rationale (struct-literal test shortcut).
 	if metrics == nil {
 		metrics = getConfigMetrics()
+	}
+	if logger == nil {
+		logger = log.Default()
 	}
 	merged := ThresholdConfig{
 		Defaults:     make(map[string]float64),
@@ -125,7 +130,7 @@ func loadDirWithMetrics(dir string, metrics *configMetrics) (ThresholdConfig, st
 		path := filepath.Join(dir, name)
 		data, err := os.ReadFile(path)
 		if err != nil {
-			log.Printf("WARN: skip unreadable file %s: %v", path, err)
+			logger.Printf("WARN: skip unreadable file %s: %v", path, err)
 			continue
 		}
 		hasher.Write(data)
@@ -140,9 +145,9 @@ func loadDirWithMetrics(dir string, metrics *configMetrics) (ThresholdConfig, st
 			// (v2.8.0 A-8d metric) so ops can alert.
 			metrics.IncParseFailure(filepath.Base(path))
 			if strings.HasPrefix(name, "_") {
-				log.Printf("ERROR: skip unparseable defaults/profiles file %s: %v (entire block dropped — fix file or remove)", path, err)
+				logger.Printf("ERROR: skip unparseable defaults/profiles file %s: %v (entire block dropped — fix file or remove)", path, err)
 			} else {
-				log.Printf("WARN: skip unparseable file %s: %v", path, err)
+				logger.Printf("WARN: skip unparseable file %s: %v", path, err)
 			}
 			continue
 		}
@@ -153,17 +158,17 @@ func loadDirWithMetrics(dir string, metrics *configMetrics) (ThresholdConfig, st
 		// Boundary enforcement: warn if tenant file contains state_filters, defaults, or profiles
 		if !isDefaultsFile {
 			if len(partial.StateFilters) > 0 {
-				log.Printf("WARN: state_filters found in %s — should only be in _defaults.yaml, ignoring", name)
+				logger.Printf("WARN: state_filters found in %s — should only be in _defaults.yaml, ignoring", name)
 				partial.StateFilters = nil
 			}
 			if len(partial.Defaults) > 0 {
-				log.Printf("WARN: defaults found in %s — should only be in _defaults.yaml, ignoring", name)
+				logger.Printf("WARN: defaults found in %s — should only be in _defaults.yaml, ignoring", name)
 				partial.Defaults = nil
 			}
 		}
 		if !isProfilesFile && !isDefaultsFile {
 			if len(partial.Profiles) > 0 {
-				log.Printf("WARN: profiles found in %s — should only be in _profiles.yaml, ignoring", name)
+				logger.Printf("WARN: profiles found in %s — should only be in _profiles.yaml, ignoring", name)
 				partial.Profiles = nil
 			}
 		}
@@ -215,7 +220,10 @@ func loadDirWithMetrics(dir string, metrics *configMetrics) (ThresholdConfig, st
 // files whose ModTime and Size match the previous scan reuse the cached SHA-256
 // without re-reading file contents. This reduces NoChange cost from O(N×read)
 // to O(N×stat) — typically 4-5× faster at 1000 tenants.
-func scanDirFileHashes(dir string, oldHashes map[string]string, oldMtimes map[string]fileStat) (map[string]string, string, map[string]fileStat, map[string][]byte, error) {
+func scanDirFileHashes(dir string, oldHashes map[string]string, oldMtimes map[string]fileStat, logger *log.Logger) (map[string]string, string, map[string]fileStat, map[string][]byte, error) {
+	if logger == nil {
+		logger = log.Default()
+	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, "", nil, nil, fmt.Errorf("read config dir %s: %w", dir, err)
@@ -234,7 +242,7 @@ func scanDirFileHashes(dir string, oldHashes map[string]string, oldMtimes map[st
 		if strings.HasSuffix(name, ".yaml") || strings.HasSuffix(name, ".yml") {
 			info, ierr := entry.Info()
 			if ierr != nil {
-				log.Printf("WARN: skip unreadable entry %s: %v", name, ierr)
+				logger.Printf("WARN: skip unreadable entry %s: %v", name, ierr)
 				continue
 			}
 			files = append(files, dirFile{name: name, info: info})
@@ -267,7 +275,7 @@ func scanDirFileHashes(dir string, oldHashes map[string]string, oldMtimes map[st
 
 		data, rerr := os.ReadFile(fullPath)
 		if rerr != nil {
-			log.Printf("WARN: skip unreadable file %s: %v", f.name, rerr)
+			logger.Printf("WARN: skip unreadable file %s: %v", f.name, rerr)
 			continue
 		}
 		h := fmt.Sprintf("%x", sha256.Sum256(data))
@@ -296,23 +304,27 @@ func scanDirFileHashes(dir string, oldHashes map[string]string, oldMtimes map[st
 // Falls back to full Load() for single-file mode or first-time load.
 // applyBoundaryRules enforces the boundary convention: state_filters and
 // defaults only in _defaults.yaml, profiles only in _profiles.yaml.
-func applyBoundaryRules(name string, partial *ThresholdConfig) {
+// logger may be nil → falls back to log.Default() (production safety).
+func applyBoundaryRules(name string, partial *ThresholdConfig, logger *log.Logger) {
+	if logger == nil {
+		logger = log.Default()
+	}
 	isDefaultsFile := strings.HasPrefix(name, "_")
 	isProfilesFile := name == "_profiles.yaml" || name == "_profiles.yml"
 
 	if !isDefaultsFile {
 		if len(partial.StateFilters) > 0 {
-			log.Printf("WARN: state_filters found in %s — should only be in _defaults.yaml, ignoring", name)
+			logger.Printf("WARN: state_filters found in %s — should only be in _defaults.yaml, ignoring", name)
 			partial.StateFilters = nil
 		}
 		if len(partial.Defaults) > 0 {
-			log.Printf("WARN: defaults found in %s — should only be in _defaults.yaml, ignoring", name)
+			logger.Printf("WARN: defaults found in %s — should only be in _defaults.yaml, ignoring", name)
 			partial.Defaults = nil
 		}
 	}
 	if !isProfilesFile && !isDefaultsFile {
 		if len(partial.Profiles) > 0 {
-			log.Printf("WARN: profiles found in %s — should only be in _profiles.yaml, ignoring", name)
+			logger.Printf("WARN: profiles found in %s — should only be in _profiles.yaml, ignoring", name)
 			partial.Profiles = nil
 		}
 	}

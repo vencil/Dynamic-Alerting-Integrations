@@ -97,10 +97,11 @@ func (e *DuplicateTenantError) Error() string {
 // (parity first, perf later). When non-nil it is currently ignored; tests
 // should pass nil.
 //
-// Legacy wrapper that uses the package-level metrics singleton. Production
-// code should call scanDirHierarchicalWithMetrics with their owned
-// *configMetrics so per-test isolation works (#4a). Tests that don't
-// care about metric isolation keep calling this form unchanged.
+// Legacy wrapper that uses the package-level metrics + logger singletons.
+// Production code should call scanDirHierarchicalWithMetrics with their
+// owned *configMetrics + *log.Logger so per-test isolation works (#4a +
+// #4b). Tests that don't care about isolation keep calling this form
+// unchanged.
 func scanDirHierarchical(rootPath string, priorMtimes map[string]fileStat) (
 	tenants map[string]string,
 	defaults map[string]bool,
@@ -109,18 +110,21 @@ func scanDirHierarchical(rootPath string, priorMtimes map[string]fileStat) (
 	graph *InheritanceGraph,
 	err error,
 ) {
-	return scanDirHierarchicalWithMetrics(rootPath, priorMtimes, getConfigMetrics())
+	return scanDirHierarchicalWithMetrics(rootPath, priorMtimes, getConfigMetrics(), log.Default())
 }
 
 // scanDirHierarchicalWithMetrics is the injectable variant of
-// scanDirHierarchical. Same behavior; metric observations route to the
-// caller-supplied *configMetrics instead of getConfigMetrics(). Use this
-// from production code paths that own a ConfigManager: pass m.metrics so
-// the test-side SetMetrics injection actually shows up here too.
+// scanDirHierarchical. Same behavior; metric observations + log lines
+// route to the caller-supplied *configMetrics + *log.Logger instead of
+// the package singletons. Use this from production code paths that own
+// a ConfigManager: pass m.getMetrics() / m.getLogger() so the test-side
+// SetMetrics + SetLogger injections actually show up here too. Either
+// argument may be nil → falls back to the package singleton (struct-
+// literal test shortcut).
 //
-// Foundation for #4a: production callers migrate first; the legacy
-// wrapper above keeps test files green during the transition.
-func scanDirHierarchicalWithMetrics(rootPath string, priorMtimes map[string]fileStat, metrics *configMetrics) (
+// Foundation for #4a + #4b: production callers migrate first; the
+// legacy wrapper above keeps test files green during the transition.
+func scanDirHierarchicalWithMetrics(rootPath string, priorMtimes map[string]fileStat, metrics *configMetrics, logger *log.Logger) (
 	tenants map[string]string,
 	defaults map[string]bool,
 	hashes map[string]string,
@@ -134,6 +138,9 @@ func scanDirHierarchicalWithMetrics(rootPath string, priorMtimes map[string]file
 	// wrapper. Production callers always pass a real *configMetrics.
 	if metrics == nil {
 		metrics = getConfigMetrics()
+	}
+	if logger == nil {
+		logger = log.Default()
 	}
 	_ = priorMtimes // reserved for Phase 3 (mtime-skip optimization)
 
@@ -173,7 +180,7 @@ func scanDirHierarchicalWithMetrics(rootPath string, priorMtimes map[string]file
 			// Tolerate individual unreadable entries (e.g. permissions on a
 			// junk dir). Log and continue — matches Python's rglob behavior
 			// which silently skips on OS errors.
-			log.Printf("WARN: walk error at %s: %v", path, werr)
+			logger.Printf("WARN: walk error at %s: %v", path, werr)
 			return nil
 		}
 		name := d.Name()
@@ -201,13 +208,13 @@ func scanDirHierarchicalWithMetrics(rootPath string, priorMtimes map[string]file
 
 		data, rerr := os.ReadFile(path)
 		if rerr != nil {
-			log.Printf("WARN: cannot read %s: %v", path, rerr)
+			logger.Printf("WARN: cannot read %s: %v", path, rerr)
 			return nil
 		}
 
 		entryInfo, ierr := d.Info()
 		if ierr != nil {
-			log.Printf("WARN: cannot stat %s: %v", path, ierr)
+			logger.Printf("WARN: cannot stat %s: %v", path, ierr)
 			return nil
 		}
 
@@ -235,7 +242,7 @@ func scanDirHierarchicalWithMetrics(rootPath string, priorMtimes map[string]file
 			Tenants map[string]yaml.Node `yaml:"tenants"`
 		}
 		if perr := yaml.Unmarshal(data, &doc); perr != nil {
-			log.Printf("WARN: cannot parse %s: %v", path, perr)
+			logger.Printf("WARN: cannot parse %s: %v", path, perr)
 			// v2.8.0 A-8d: expose parse failure as a Prometheus counter so
 			// ops can alert on "tenant file persistently broken". label is
 			// basename (not full path) to cap cardinality.
