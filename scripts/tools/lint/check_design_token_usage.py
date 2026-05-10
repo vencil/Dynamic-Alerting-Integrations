@@ -12,17 +12,50 @@
   - 0px, 1px, 2px（邊框 / hairline）不檢查
   - design-tokens.css 本身不掃描（定義端）
 
+Lint class & scope (lint-policy.md §3)
+--------------------------------------
+Class **(b)** — negative pattern + token-exempt allowlist.
+Default scope: **diff-only** — only lines ADDED in current diff vs base
+emit findings. Override with --full-scan for periodic manual audit.
+
+Bypass (per lint-policy.md §4):
+    Add to PR description body:
+        bypass-lint: design-token-usage
+        reason: <≥30 words explaining why this case is legitimate>
+
 用法:
+    # Diff-only (default; CI sets LINT_DIFF_BASE / GITHUB_BASE_REF)
     python3 scripts/tools/lint/check_design_token_usage.py [--ci]
-    python3 scripts/tools/lint/check_design_token_usage.py --ci && echo "All clean"
+
+    # Full-scan (manual audit)
+    python3 scripts/tools/lint/check_design_token_usage.py --full-scan [--ci]
 """
 
 import argparse
+import os
 import re
+import subprocess
 import sys
 from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, Tuple
+
+# Make stdout tolerate non-ASCII on Windows shells (cp950 / cp1252) — output
+# uses ✓ + Chinese strings which crash on cp-default consoles otherwise.
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, OSError):
+        pass
+
+# Helpers from this lint family
+sys.path.insert(0, str(Path(__file__).parent))
+from _lint_helpers import (  # noqa: E402
+    DiffBaseMissingError,
+    get_diff_added_lines,
+    parse_bypass_tag,
+    resolve_diff_base,
+)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 JSX_TOOLS_DIR = REPO_ROOT / "docs" / "interactive" / "tools"
@@ -139,8 +172,12 @@ def check_hardcoded_px_values(content: str, filename: str) -> List[Dict]:
     return issues
 
 
-def scan_jsx_files() -> Tuple[Dict[str, List[Dict]], Dict[str, List[Dict]]]:
-    """Scan all JSX files for design token violations.
+def scan_jsx_files(diff_base: str | None = None) -> Tuple[Dict[str, List[Dict]], Dict[str, List[Dict]]]:
+    """Scan JSX files for design token violations.
+
+    If ``diff_base`` is None: full-scan all JSX files in JSX_TOOLS_DIR + WIZARD_DIR.
+    If ``diff_base`` is a ref: only flag findings on lines ADDED in the current
+    diff vs that base. Existing pre-existing violations are not re-emitted.
 
     Returns (hex_issues_by_file, px_issues_by_file).
     """
@@ -165,17 +202,37 @@ def scan_jsx_files() -> Tuple[Dict[str, List[Dict]], Dict[str, List[Dict]]]:
 
             rel_path = str(jsx_file.relative_to(REPO_ROOT))
 
-            # Check hex colors
+            # Run full scan to get all findings
             hex_found = check_hardcoded_hex_colors(content, jsx_file.name)
+            px_found = check_hardcoded_px_values(content, jsx_file.name)
+
+            # If diff-only, filter findings to lines actually added in current diff
+            if diff_base is not None:
+                try:
+                    added_lines = {ln for ln, _ in get_diff_added_lines(jsx_file, diff_base)}
+                except subprocess.CalledProcessError:
+                    # Git error — keep all findings (safer than silent suppress)
+                    added_lines = None
+                if added_lines is not None:
+                    hex_found = [h for h in hex_found if h["line"] in added_lines]
+                    px_found = [h for h in px_found if h["line"] in added_lines]
+
             if hex_found:
                 hex_issues[rel_path] = hex_found
-
-            # Check px values
-            px_found = check_hardcoded_px_values(content, jsx_file.name)
             if px_found:
                 px_issues[rel_path] = px_found
 
     return dict(hex_issues), dict(px_issues)
+
+
+def _read_pr_body(pr_body_file: str | None) -> str | None:
+    """Read PR body from --pr-body-file or $PR_BODY env var."""
+    if pr_body_file:
+        try:
+            return Path(pr_body_file).read_text(encoding="utf-8")
+        except (FileNotFoundError, PermissionError) as e:
+            print(f"WARN: cannot read --pr-body-file {pr_body_file}: {e}", file=sys.stderr)
+    return os.environ.get("PR_BODY") or None
 
 
 # ---------------------------------------------------------------------------
@@ -192,15 +249,39 @@ def main():
         action="store_true",
         help="CI 模式: 有違規時 exit 1"
     )
+    parser.add_argument(
+        "--full-scan", action="store_true",
+        help="Scan ALL existing violations (default: diff-only — only added lines).",
+    )
+    parser.add_argument(
+        "--diff-base", default=None,
+        help="Override diff base (default: $LINT_DIFF_BASE / $GITHUB_BASE_REF / origin/main).",
+    )
+    parser.add_argument(
+        "--pr-body-file", default=None,
+        help="Path to file containing PR body for bypass tag check.",
+    )
     args = parser.parse_args()
 
-    hex_issues, px_issues = scan_jsx_files()
+    # Resolve scan mode
+    if args.full_scan:
+        scan_mode = "full-scan"
+        diff_base = None
+    else:
+        try:
+            diff_base = args.diff_base or resolve_diff_base()
+        except DiffBaseMissingError as e:
+            print(f"ERROR: {e}", file=sys.stderr)
+            sys.exit(2)
+        scan_mode = f"diff vs {diff_base}"
+
+    hex_issues, px_issues = scan_jsx_files(diff_base=diff_base)
 
     all_files = set(hex_issues.keys()) | set(px_issues.keys())
     total_violations = 0
 
     if not all_files:
-        print("✓ 設計 token 使用檢查通過。")
+        print(f"✓ 設計 token 使用檢查通過 (mode={scan_mode})。")
         sys.exit(0)
 
     # Print results grouped by file
@@ -224,10 +305,28 @@ def main():
         print()
 
     # Summary
-    print(f"TOTAL: {total_violations} violation(s) in {len(all_files)} file(s)")
+    print(f"TOTAL: {total_violations} violation(s) in {len(all_files)} file(s) (mode={scan_mode})")
+
+    # Bypass check (lint-policy.md §4)
+    pr_body = _read_pr_body(args.pr_body_file)
+    bypass_reason = parse_bypass_tag(pr_body, "design-token-usage")
+    if bypass_reason:
+        print(
+            f"\n⚠️  BYPASSED via PR body: {bypass_reason}\n"
+            f"   {total_violations} finding(s) above are author-acknowledged.\n"
+            f"   Reviewer must confirm bypass is justified."
+        )
+        sys.exit(0)
 
     # Exit with appropriate code
     if args.ci and total_violations > 0:
+        print(
+            "\nFix: replace hardcoded values with --da-* tokens, OR add\n"
+            "  /* token-exempt */ on the line if intentional.\n"
+            "Or add to PR description (per lint-policy.md §4):\n"
+            "  bypass-lint: design-token-usage\n"
+            "  reason: <≥30 words explaining why this is legitimate>",
+        )
         sys.exit(1)
     sys.exit(0)
 

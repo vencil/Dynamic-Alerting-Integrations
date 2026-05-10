@@ -67,6 +67,12 @@ jobs:
           # Was registered in .pre-commit-config.yaml since v2.7.x but never
           # wired to CI Lint job — only ran on contributor's local pre-commit.
           pre-commit run changelog-no-tbd-check --all-files
+          # The next 3 (b) class lints completed V-4 in a follow-up PR.
+          # Wired here for the same reason — pre-commit path filters might
+          # not trigger on every PR, but lints should run always.
+          pre-commit run ad-hoc-git-scripts-check --all-files
+          pre-commit run bat-ascii-purity-check --all-files
+          pre-commit run design-token-usage --all-files
           pre-commit run tool-consistency-check --all-files
           pre-commit run structure-check --all-files
           pre-commit run routing-profiles-check --all-files
