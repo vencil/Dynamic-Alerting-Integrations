@@ -115,6 +115,8 @@ TOOL_FILES=(
     ops/config_history.py
     ops/gitops_check.py
     ops/drift_detect.py
+    # v2.8.0 #405 Cat A — Migration State reconciliation
+    ops/state_reconcile.py
     # v2.3.0 Operator-native tools
     ops/operator_generate.py
     ops/operator_check.py

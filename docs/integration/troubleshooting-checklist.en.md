@@ -1473,10 +1473,25 @@ da-tools onboard --analyze --cluster-name <cluster> \
 # Re-commit
 ```
 
-> 📝 **Design note**: state schema migration + manifest rebuild are the same kind of problem (both "repair the state filesystem to a consistent state"); future plan is to unify them as a single declarative command `da-tools state reconcile` (tracked: [issue #405](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/405)). Until that ships, use the following jq flow; once shipped it'll be a one-liner `da-tools state reconcile --state-dir .da/state/` that auto-detects and repairs.
+> ✅ **2026-05-11 update — tool shipped** ([issue #405](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/405) Category A done). Schema migration + manifest rebuild are unified as one declarative command:
+>
+> ```bash
+> # Single-command detect + repair (covers Shape 2 + Shape 3)
+> da-tools state-reconcile --state-dir .da/state/
+>
+> # CI gate: dry-run mode; exit 1 when changes are needed
+> da-tools state-reconcile --ci --dry-run
+>
+> # Automation-friendly JSON output
+> da-tools state-reconcile --json
+> ```
+>
+> Tool behaviour: (1) scan `.da/state/*.json`, (2) validate `schema_version` against the current version (future 1.1 / 1.2 bumps walk the migration chain registered in `MIGRATIONS`), (3) rebuild `.da/manifest.json` from the filesystem (manifest = derived view, state files = source of truth). After adding a cluster or bumping schema, run once and the directory is consistent.
+>
+> **The manual jq flow below is retained** as a backup for "tool unavailable / emergency" situations (airgapped environments, no Python runtime, or when a custom transformation is needed).
 
 ```bash
-# Shape 2: schema_version drift (manual workaround)
+# Shape 2: schema_version drift (manual workaround, used when tool unavailable)
 for f in .da/state/*.json; do
     CURRENT=$(jq -r '.schema_version' "$f")
     if [ "$CURRENT" = "1.0" ]; then
@@ -1490,7 +1505,7 @@ git commit -m "chore: migrate all cluster state to schema 1.1"
 ```
 
 ```bash
-# Shape 3: manifest drift (manual workaround)
+# Shape 3: manifest drift (manual workaround, used when tool unavailable)
 # Rebuild manifest from the actual state-file filesystem
 jq -n --arg version "1.0" '{schema_version: $version, states: []}' > /tmp/manifest.json
 for f in .da/state/*.json; do

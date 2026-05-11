@@ -107,6 +107,7 @@ These tools only need HTTP access to Prometheus API and can run from anywhere.
 |---------|---------|-------------------|
 | `init` | Project skeleton generation (CI/CD + conf.d + Kustomize overlays) | `--ci <platform>` or interactive mode |
 | `gitops-check` | GitOps Native Mode readiness validation (repo / local / sidecar) | `<subcommand>` |
+| `state-reconcile` | Migration state directory declarative reconciliation (schema_version validation + manifest rebuild) | `--state-dir <dir>` (default `.da/state`) |
 
 ### Operator + Federation Tools
 
@@ -1390,6 +1391,57 @@ da-tools gitops-check local --dir /data/config/conf.d
 
 # Check sidecar deployment
 da-tools gitops-check sidecar --namespace monitoring --json
+```
+
+---
+
+#### state-reconcile
+
+Declarative reconciliation of the migration state directory — scans `.da/state/*.json`, validates `schema_version`, and rebuilds `.da/manifest.json` from the filesystem. Replaces the manual jq workflow described in [troubleshooting-checklist §schema_version drift / manifest drift](integration/troubleshooting-checklist.en.md) ([issue #405](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/405) Category A).
+
+```bash
+da-tools state-reconcile [options]
+```
+
+**Main Parameters**
+
+| Parameter | Purpose | Default |
+|-----------|---------|---------|
+| `--state-dir <dir>` | Directory with per-cluster state files | `.da/state` |
+| `--manifest-path <path>` | Manifest file path | `.da/manifest.json` |
+| `--dry-run` | Report needed changes without writing | (off) |
+| `--ci` | **Pair with `--dry-run`** for a check-only CI gate (exit 1 when changes would be needed). Unresolvable drift always exits 1 regardless of `--ci`. Using `--ci` alone (no `--dry-run`) still applies changes | (off) |
+| `--json` | Emit JSON structured report | text mode |
+
+**Exit Codes**
+
+| Code | Description |
+|------|-------------|
+| `0` | State directory consistent (or changes applied successfully) |
+| `1` | Unresolvable schema drift; or `--ci` mode with pending changes |
+| `2` | Caller error (bad arguments etc.) |
+
+**Why a single declarative command, not micro-commands**
+
+Schema migration (upgrade state files) and manifest rebuild (regenerate from filesystem) are the same kind of problem — repairing the state directory to a consistent state. Splitting them into two commands forces users to remember the execution order. This tool's one-liner ("make .da/ consistent") covers both. Schema migrations are registered in `MIGRATIONS` (empty for v1.0; add an entry when v1.1 ships).
+
+**Examples**
+
+```bash
+# Basic: detect and repair
+da-tools state-reconcile
+
+# Custom location
+da-tools state-reconcile --state-dir custom/states/ --manifest-path custom/manifest.json
+
+# Dry-run to preview changes
+da-tools state-reconcile --dry-run
+
+# CI gate: exit 1 on drift
+da-tools state-reconcile --ci --dry-run
+
+# Automation-friendly JSON
+da-tools state-reconcile --json
 ```
 
 ---

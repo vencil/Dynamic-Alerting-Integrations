@@ -49,6 +49,8 @@ Breaking / Upgrade 七塊清楚區分），那是目標形狀。
 
 ### Added
 
+- **`da-tools state-reconcile` 新命令 — 遷移狀態目錄聲明式一致化（v2.8.0, [issue #405](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/405) Category A）** — 取代 [troubleshooting-checklist §schema_version drift / manifest drift](docs/integration/troubleshooting-checklist.md) 兩段手動 jq 流程，統一為「make `.da/` consistent」一句話。掃 `.da/state/*.json` → 驗 `schema_version` 對齊現行版本（未來 1.1/1.2 引入時走 `MIGRATIONS` registry 自動 migrate）→ 從檔案系統重建 `.da/manifest.json`（manifest 是 derived view，state 檔是 SOT）。提供 `--dry-run` 預覽、`--ci` gate（dry-run + 偵測到漂移時 exit 1）、`--json` 結構化輸出。Exit codes：0 一致 / 1 unresolvable drift 或 CI pending / 2 caller error。手動 jq 流程在文件中保留為 airgapped / 工具不可用時的備援。Issue #405 Category B/D 餘下 tools 仍 backlog。
+
 - **Portal ESM build + Vitest unit-test foundation（v2.8.0, [TD-030a #247](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/247) of TD-030 Option C sweep）** — first PR of a multi-PR sweep that retires `jsx-loader.html` and migrates all 77 portal JSX/JS files to ES modules. This foundation PR is **pure infrastructure**: `tools/portal/build.mjs` (esbuild, frontmatter strip, manifest-driven), `tools/portal/vitest.config.ts` (jsdom + RTL + frontmatter plugin), Makefile targets (`portal-build` / `portal-build-watch` / `test-portal`), new `Portal Tests` CI job. Manifest starts empty; subsequent PRs (TD-030b..f) add entries as they migrate. jsx-loader.html stays functional for not-yet-migrated tools — TD-030z does the final retirement. User explicitly accepted v2.8.0 release delay as the cost of this architectural cleanup; see project memory `project_portal_vitest_choice.md`.
 
 ### Removed
