@@ -11,11 +11,11 @@ lang: zh
 > 跨檔分散的計畫追蹤（tech-debt / dx-backlog / known-regression / future-roadmap / sprint planning）統一治理。
 > 對 AI agent 解決 context fragmentation；對人類 contributor 提供單一索引入口。
 >
-> **EN mirror**：本 ADR 仍在 `Proposed` 階段；待 `Accepted` 後 ship `020-planning-ssot.en.md`（與 ADR-019 對齊的雙語策略）。
+> **EN mirror**：本 ADR 已 `Accepted`；EN 翻譯 tracked under [issue #409](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/409)（與 ADR-019 對齊的雙語策略）。
 
 ## 狀態
 
-🟡 **Proposed**（PR #TBD，2026-05-10 起草）
+✅ **Accepted**（PR [#375](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/375)，v2.8.0）
 
 ## 背景
 
