@@ -466,6 +466,52 @@ def test_main_clean_diff_text(v1_path, capsys):
     assert rc == 0
 
 
+def test_diff_same_name_count_mismatch_recorded(tmp_path):
+    """If the same alertname appears 2× in v1 but 1× in v2 (or vice versa),
+    the count mismatch must be captured in count_anomalies — not silently
+    swallowed by the zip pairing. Catches pathological rule packs that
+    duplicate alertnames (well-formed packs don't, but this defends).
+    """
+    v1 = _pack_from("""
+        groups:
+          - name: g1
+            rules:
+              - alert: FooAlert
+                expr: up
+                labels: {severity: warning}
+          - name: g2
+            rules:
+              - alert: FooAlert
+                expr: down
+                labels: {severity: warning}
+    """)
+    v2 = _pack_from("""
+        groups:
+          - name: g1
+            rules:
+              - alert: FooAlert
+                expr: up
+                labels: {severity: warning}
+    """)
+    r = rpd.diff_packs(v1, v2)
+    assert len(r["count_anomalies"]) == 1
+    anomaly = r["count_anomalies"][0]
+    assert anomaly["name"] == "FooAlert"
+    assert anomaly["v1_count"] == 2
+    assert anomaly["v2_count"] == 1
+    assert r["counts"]["count_anomalies"] == 1
+
+
+def test_main_json_includes_input_paths(v1_path, v2_path, capsys):
+    """JSON output must include from_path / to_path so automation can
+    correlate diff reports with the inputs that produced them."""
+    rc = rpd.main(["--from", str(v1_path), "--to", str(v2_path), "--json"])
+    assert rc == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["from_path"] == str(v1_path)
+    assert report["to_path"] == str(v2_path)
+
+
 def test_main_json_roundtrip_for_label_value_tuple(tmp_path, capsys):
     """JSON output's label_values_changed tuples must round-trip as
     arrays (not blow up serialisation)."""

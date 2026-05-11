@@ -44,6 +44,7 @@ Exit codes:
 from __future__ import annotations
 
 import argparse
+import itertools
 import json
 import sys
 from collections import defaultdict
@@ -197,13 +198,31 @@ def diff_packs(v1: dict, v2: dict) -> dict:
 
     modified: list[dict] = []
     breaking: list[dict] = []
+    count_anomalies: list[dict] = []
     for name in sorted(v1_names & v2_names):
-        # Same-named rules might appear multiple times per group; pair them
-        # element-wise (first v1 with first v2, etc.). Customers rarely
-        # duplicate alertnames so this is mostly the [0] vs [0] case.
+        # Same-named rules CAN appear multiple times per group, though
+        # this is pathological in well-formed rule packs (canonical packs
+        # have unique alertnames). zip_longest preserves visibility into
+        # count mismatches — if v1 has 2 instances of "FooAlert" and v2
+        # has 1, the second pairing yields (v1_rule, None) and is
+        # captured as a missing-counterpart in count_anomalies instead of
+        # being silently dropped.
         v1_rules = v1_index[name]
         v2_rules = v2_index[name]
-        for v1_rule, v2_rule in zip(v1_rules, v2_rules):
+        if len(v1_rules) != len(v2_rules):
+            count_anomalies.append(
+                {
+                    "name": name,
+                    "v1_count": len(v1_rules),
+                    "v2_count": len(v2_rules),
+                    "reason": "same name appears different number of times in v1 vs v2",
+                }
+            )
+        for v1_rule, v2_rule in itertools.zip_longest(v1_rules, v2_rules):
+            if v1_rule is None or v2_rule is None:
+                # Count mismatch — already recorded above; skip
+                # per-field comparison (no counterpart to compare).
+                continue
             change = _classify_modification(v1_rule, v2_rule)
             if any(
                 [
@@ -243,6 +262,7 @@ def diff_packs(v1: dict, v2: dict) -> dict:
         "breaking_modifications": breaking,
         "added_alert_names": added_alert_names,
         "removed_alert_names": removed_alert_names,
+        "count_anomalies": count_anomalies,
         "counts": {
             "v1_total_rules": sum(len(v) for v in v1_index.values()),
             "v2_total_rules": sum(len(v) for v in v2_index.values()),
@@ -250,6 +270,7 @@ def diff_packs(v1: dict, v2: dict) -> dict:
             "removed": len(removed),
             "modified": len(modified),
             "breaking": len(breaking),
+            "count_anomalies": len(count_anomalies),
         },
     }
 
@@ -319,10 +340,22 @@ def render_text(report: dict, *, from_path: str, to_path: str) -> None:
             print(f"    ~ {entry['name']}  ({', '.join(notes)})")
         print()
 
+    if report.get("count_anomalies"):
+        print(
+            f"⚠️  Same-name count anomalies ({len(report['count_anomalies'])} — "
+            f"name appears different number of times in v1 vs v2):"
+        )
+        for a in report["count_anomalies"]:
+            print(
+                f"    ? {a['name']}: v1={a['v1_count']}× v2={a['v2_count']}×"
+            )
+        print()
+
     if (
         not report["added"]
         and not report["removed"]
         and not report["modified"]
+        and not report.get("count_anomalies")
     ):
         print("✓ No differences detected.")
 
@@ -394,6 +427,10 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     report = diff_packs(v1, v2)
+    # P1: include input paths in the report so JSON consumers can correlate
+    # automation outputs with what was compared.
+    report["from_path"] = str(from_path)
+    report["to_path"] = str(to_path)
 
     if args.json:
         # `json.dumps` serialises Python tuples as JSON arrays natively,
