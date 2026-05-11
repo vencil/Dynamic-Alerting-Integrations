@@ -48,6 +48,7 @@ New here? Pick based on your needs:
 | [017](#017-confd-directory-hierarchy-mixed-mode) | conf.d/ Directory Hierarchy + Mixed Mode + Migration Strategy | ✅ Accepted | Directory Scanner supports both flat and domain/region/env 3-level hierarchy; zero-downtime upgrade + optional `migrate-conf-d` tool |
 | [018](#018-defaultsyaml-inheritance-semantics-dual-hash-hot-reload) | `_defaults.yaml` Inheritance Semantics + dual-hash hot-reload | ✅ Accepted | Deep merge with override (array replace, null-as-delete) + dual hash (source_hash + merged_hash) for precise reload trigger determination, paired with 300ms debounce |
 | [019](#019-profile-as-directory-default) | Profile-as-Directory-Default | ✅ Accepted | Cluster-wide thresholds in `_defaults.yaml`; only divergent tenants write `<id>.yaml` overrides (median + sparse override). The cross-component "default vs override boundary" rule consumed by Profile Builder, batch PR pipeline, and the Dangling Defaults Guard. Translator heuristic details live in `translate.go`'s package header (single source of truth, no drift) |
+| [021](#021-tenant-federation-label-injection-proxy-over-self-built-endpoint) | Tenant Federation — Label-Injection Proxy over Self-Built Endpoint | 🟡 Proposed | Tenant pulls own metrics subset back to tenant-side infra for self-managed federation. Adopts vmauth (VM customers) / prom-label-proxy (Prom customers) as label-enforced read proxy; platform does NOT self-build endpoint. 2-tier policy (platform whitelist + tenant subset) + 4h TTL token (no server-side revocation) + blast radius trio (concurrency / timeout / series cap) |
 
 ---
 
@@ -200,6 +201,14 @@ Second building block of v2.7.0 Scale Foundation. Defines multi-level `_defaults
 **Document**: [`019-profile-as-directory-default.en.md`](./019-profile-as-directory-default.en.md)
 
 v2.8.0 customer-migration pipeline — Profile Builder writing back to conf.d/. Pins the cross-component design principle: cluster-wide thresholds live in `_defaults.yaml`; only tenants whose value diverges from the default write a `<id>.yaml` override (median + sparse override). The shape this principle dictates is consumed by Profile Builder emission, the batch PR pipeline's directory placement, release packaging, and the Dangling Defaults Guard — getting this right at the ADR layer keeps all four components consistent. Translator heuristic details (metric_key 5-step ladder, median, cluster aggregation, operator handling) live in `internal/profile/translate.go`'s package header — single source of truth, no drift. Non-goals: directory inference (deferred to the batch PR pipeline), dimensional/regex labels emission, auto-rewriting source PromRules, two-tier severity translation.
+
+---
+
+## 021: Tenant Federation — Label-Injection Proxy over Self-Built Endpoint
+
+**Document**: [`021-tenant-federation.md`](./021-tenant-federation.md) (ZH-primary; EN mirror deferred to `Accepted` state per ADR-020 pattern)
+
+v2.8.0 draft, targets v2.9.0 epic. Covers the cross-boundary federation scenario (complementary to ADR-004's platform-internal multi-cluster federation): tenants pull a subset of their own metrics back to tenant-side infra for self-managed federation. Adopts **vmauth** (VM customers) / **prom-label-proxy** (Prom customers) as a label-enforced read proxy; the platform does NOT self-build an endpoint (label-sanitization in a self-built impl is a multi-tenant breach landmine — production-hardened proxies have years of corner-case coverage). MVP 2-tier policy (platform whitelist + tenant subset) — domain layer drops to Future Work. Token: 4h TTL + no server-side revocation list (explicit trade-off: simpler impl in exchange for a 4h exposure window). Blast radius trio (all required): `max_concurrent_requests_per_token` / `request_timeout_seconds` / `max_series_per_response`. Implementation epic (~56h) tracked at issue [#380](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/380) IV-2.
 
 ---
 
