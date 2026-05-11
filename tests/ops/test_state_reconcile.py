@@ -474,3 +474,136 @@ def test_main_unresolvable_drift_exits_1(state_dir, manifest_path):
         ]
     )
     assert rc == 1
+
+
+# ─── Atomicity + line-endings + manifest-exclusion (round-2 review) ───
+
+
+def test_write_json_uses_lf_line_endings(tmp_path):
+    """write_json must write LF regardless of host OS. Windows hosts otherwise
+    translate \\n → \\r\\n via universal newlines, producing CRLF state files
+    in customer GitOps repos that get read on Linux CI → constant merge noise."""
+    p = tmp_path / "manifest.json"
+    sr.write_json(p, {"schema_version": "1.0", "states": []})
+    raw = p.read_bytes()
+    assert b"\r\n" not in raw, (
+        f"Found CRLF in output; expected LF only. Bytes: {raw!r}"
+    )
+    assert raw.endswith(b"\n"), "Expected trailing LF"
+
+
+def test_write_json_atomic_no_temp_leftover(tmp_path):
+    """After a successful write_json, no .tmp leftover should remain in
+    the target directory."""
+    p = tmp_path / "manifest.json"
+    sr.write_json(p, {"schema_version": "1.0", "states": []})
+    leftover = list(tmp_path.glob("*.tmp"))
+    assert leftover == [], f"Expected no .tmp leftover, found: {leftover}"
+
+
+def test_write_json_atomic_overwrites_existing(tmp_path):
+    """Replacing an existing file via atomic write must succeed (not error
+    on 'file exists' from the temp-rename path)."""
+    p = tmp_path / "manifest.json"
+    sr.write_json(p, {"schema_version": "1.0", "states": []})  # initial
+    sr.write_json(p, {"schema_version": "1.0", "states": [{"cluster": "x"}]})
+    data = json.loads(p.read_text(encoding="utf-8"))
+    assert data["states"] == [{"cluster": "x"}]
+
+
+def test_write_json_atomic_preserves_original_on_crash(tmp_path, monkeypatch):
+    """If write fails (simulated by patching os.replace to raise), the
+    original file content must remain intact AND the temp file must be
+    cleaned up. This is the whole point of the atomic temp-then-rename
+    pattern."""
+    p = tmp_path / "manifest.json"
+    sr.write_json(p, {"schema_version": "1.0", "states": [{"cluster": "orig"}]})
+
+    def _explode(*args, **kwargs):
+        raise OSError("simulated crash")
+
+    monkeypatch.setattr(sr.os, "replace", _explode)
+    with pytest.raises(OSError, match="simulated crash"):
+        sr.write_json(p, {"schema_version": "1.0", "states": [{"cluster": "new"}]})
+
+    # Original file untouched
+    data = json.loads(p.read_text(encoding="utf-8"))
+    assert data["states"] == [{"cluster": "orig"}], (
+        "Original file was modified despite write failure — atomic guarantee broken"
+    )
+    # No temp leftover after exception
+    leftover = list(tmp_path.glob(".*.tmp"))
+    assert leftover == [], (
+        f"Expected no .tmp leftover after exception, found: {leftover}. "
+        f"This would litter customer .da/ directory across aborted runs."
+    )
+
+
+def test_reconcile_excludes_manifest_from_state_files(tmp_path):
+    """If --state-dir contains the manifest file (e.g. --state-dir .da/
+    where manifest sits as .da/manifest.json), the manifest must not be
+    treated as a state file — otherwise reconcile picks it up, adds a
+    phantom cluster called "manifest", grows the manifest on every run."""
+    # Layout: tmp/.da/state.json (real cluster) + tmp/.da/manifest.json
+    flat_dir = tmp_path / ".da"
+    flat_dir.mkdir()
+    manifest_path = flat_dir / "manifest.json"
+
+    # Real cluster
+    (flat_dir / "cluster-a.json").write_text(
+        json.dumps({"schema_version": "1.0"}), encoding="utf-8"
+    )
+
+    # Run reconcile with state_dir == flat_dir (manifest sibling, same dir)
+    r = sr.reconcile(flat_dir, manifest_path)
+
+    # Only the real cluster should be counted
+    assert r["state_file_count"] == 1
+
+    # Read the produced manifest and confirm no "manifest" cluster entry
+    data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    cluster_names = {s["cluster"] for s in data["states"]}
+    assert cluster_names == {"cluster-a"}
+    assert "manifest" not in cluster_names
+
+    # Run reconcile again — must be idempotent (no growth on re-run)
+    r2 = sr.reconcile(flat_dir, manifest_path)
+    assert r2["state_file_count"] == 1
+    assert r2["manifest_change"] is None  # already consistent
+
+
+def test_reconcile_state_dir_missing_distinct_from_empty(tmp_path, capsys):
+    """state_dir typo (path doesn't exist) should produce a more pointed
+    message than legitimately-empty state_dir, since the former is
+    almost always a user mistake."""
+    # Case 1: nonexistent path
+    missing = tmp_path / "nope" / "state"
+    manifest = tmp_path / "manifest.json"
+    rc = sr.main(["--state-dir", str(missing), "--manifest-path", str(manifest)])
+    out_missing = capsys.readouterr().out
+    assert "does not exist" in out_missing
+    assert rc == 0  # nonexistent → empty manifest written → exit 0
+
+    # Case 2: existing but empty
+    empty = tmp_path / "empty_state"
+    empty.mkdir()
+    manifest2 = tmp_path / "manifest2.json"
+    rc = sr.main(["--state-dir", str(empty), "--manifest-path", str(manifest2)])
+    out_empty = capsys.readouterr().out
+    assert "No state files found" in out_empty
+    assert "does not exist" not in out_empty
+    assert rc == 0
+
+
+def test_reconcile_report_includes_state_dir_missing_flag(tmp_path):
+    """JSON output should expose state_dir_missing for automation that
+    wants to distinguish typo from empty."""
+    missing = tmp_path / "nope"
+    manifest = tmp_path / "manifest.json"
+    r = sr.reconcile(missing, manifest)
+    assert r["state_dir_missing"] is True
+
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    r = sr.reconcile(empty, manifest)
+    assert r["state_dir_missing"] is False

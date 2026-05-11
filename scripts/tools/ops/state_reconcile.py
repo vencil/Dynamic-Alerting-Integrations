@@ -45,7 +45,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
+import tempfile
 from pathlib import Path
 
 # Current schema version — keep aligned with docs/schemas/migration-state.md.
@@ -181,11 +183,45 @@ def build_manifest(state_files: list[Path], state_dir: Path) -> dict:
 
 
 def write_json(path: Path, data: dict) -> None:
-    """Write JSON with stable formatting (2-space indent, trailing newline)."""
-    path.write_text(
-        json.dumps(data, indent=2, ensure_ascii=False) + "\n",
-        encoding="utf-8",
+    """Write JSON atomically with stable formatting.
+
+    Atomicity: write to a sibling temp file, then `os.replace()` to the
+    target. `os.replace` is atomic on POSIX + Windows (Python 3.3+);
+    crash mid-write leaves the original target file untouched. Without
+    this, a crash between `truncate` and `write` corrupts customer
+    state files in their GitOps repo.
+
+    Cleanup discipline: any failure path (write error, replace error,
+    SystemExit, KeyboardInterrupt) removes the temp file. Without this,
+    aborted runs leave `.manifest.json.XXXX.tmp` litter in the customer's
+    `.da/` directory that they have to manually clean up.
+
+    Line endings: explicit `newline="\\n"` to keep LF regardless of OS
+    default. Windows hosts otherwise translate `\\n` → `\\r\\n` via
+    universal newlines, producing CRLF files in customer GitOps repos
+    that read on Linux CI — causes constant merge noise.
+    """
+    payload = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
+    # mkstemp returns (fd, abs_path). Same dir as target → same filesystem
+    # → guaranteed atomic os.replace.
+    fd, tmp_name = tempfile.mkstemp(
+        dir=str(path.parent),
+        prefix=f".{path.name}.",
+        suffix=".tmp",
     )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
+            f.write(payload)
+        os.replace(tmp_name, path)
+    except BaseException:
+        # Clean up temp on any failure — including KeyboardInterrupt /
+        # SystemExit. Suppress OSError on unlink (temp already gone) so
+        # the original exception still propagates.
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
 
 
 def reconcile(
@@ -198,6 +234,7 @@ def reconcile(
     report: dict = {
         "state_dir": str(state_dir),
         "manifest_path": str(manifest_path),
+        "state_dir_missing": not state_dir.exists(),
         "schema_migrations": [],
         "schema_drift_unresolvable": [],
         "manifest_change": None,
@@ -205,6 +242,21 @@ def reconcile(
     }
 
     state_files = find_state_files(state_dir)
+
+    # Exclude the manifest file itself from being treated as a state file.
+    # Without this, a caller setting --state-dir to the same directory that
+    # holds .da/manifest.json (e.g. --state-dir .da/) would have the manifest
+    # picked up by the glob, then added to itself as a phantom cluster
+    # "manifest" on every run.
+    try:
+        manifest_resolved = manifest_path.resolve()
+    except (OSError, RuntimeError):
+        manifest_resolved = None
+    if manifest_resolved is not None:
+        state_files = [
+            sf for sf in state_files if sf.resolve() != manifest_resolved
+        ]
+
     report["state_file_count"] = len(state_files)
 
     # 1. Schema validation + migration per file
@@ -282,7 +334,16 @@ def render_text(report: dict, *, dry_run: bool) -> None:
     """Print human-readable summary of the reconciliation report."""
     count = report["state_file_count"]
     if count == 0:
-        print(f"⚠️  No state files found in {report['state_dir']}")
+        if report.get("state_dir_missing"):
+            # Distinguish typo'd path from legitimately empty directory.
+            # Both result in 0 state files but the user experience should
+            # differ — typo'd path is almost certainly a mistake.
+            print(
+                f"⚠️  state-dir does not exist: {report['state_dir']} "
+                f"(check --state-dir; expected typical .da/state/)"
+            )
+        else:
+            print(f"⚠️  No state files found in {report['state_dir']}")
     else:
         print(f"Scanned {count} state file(s) in {report['state_dir']}")
 
