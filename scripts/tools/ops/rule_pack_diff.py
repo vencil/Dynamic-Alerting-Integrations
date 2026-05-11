@@ -29,11 +29,30 @@ What counts as breaking (triggers exit 1 in --ci mode):
 
 What is reported but NOT flagged breaking:
     - PromQL expression changes (semantic equivalence is undecidable;
-      flag for human review but don't auto-classify)
+      flag for human review but don't auto-classify). Trailing/leading
+      whitespace differences are normalised away — `expr: |` (literal
+      block; pyyaml appends \\n) and `expr: "..."` (quoted) with the
+      same PromQL body compare equal.
     - Annotation changes (informational; no operational impact)
     - `for:` duration changes (alert still fires on same condition,
       just at a different latency)
     - Same-name count anomalies (informational; pathological packs only)
+
+Known limitations (out of MVP scope, document for follow-up):
+
+    - Group-level fields (`interval`, `partial_response_strategy`,
+      group-level `labels:`) are not compared. A v1→v2 upgrade that
+      bumps a group's `interval` from 15s to 60s reduces alert
+      sensitivity but this tool will report "no diff". Customers
+      doing a critical-path upgrade should also `diff` the
+      `groups[*]` fields outside of `rules[*]` manually.
+    - Rule fields not in the comparison set (e.g. `keep_firing_for`
+      added in newer Prometheus versions) are not diffed. None of the
+      shipped rule packs use these as of v2.8.0; revisit when they
+      appear.
+    - `expr:` semantic equivalence is not decided. A rewrite from
+      `up == 0` to `absent(up)` is reported as `expr_changed` even
+      though they mean similar things — left to the human reviewer.
 
 Inputs are file paths to YAML; no assumption about repository layout.
 Typical invocation:
@@ -93,6 +112,17 @@ def load_rule_pack(path: Path) -> dict | None:
             file=sys.stderr,
         )
         return None
+    # `groups:` must be a list (or absent → treated as []). If a user puts
+    # a dict or scalar there, the silent fallback in extract_rules would
+    # produce a misleading empty diff. Better to fail loudly.
+    groups = data.get("groups")
+    if groups is not None and not isinstance(groups, list):
+        print(
+            f"ERROR: {path} top-level `groups:` must be a list, got "
+            f"{type(groups).__name__}",
+            file=sys.stderr,
+        )
+        return None
     return data
 
 
@@ -148,11 +178,29 @@ def _label_value_diff(v1: dict, v2: dict) -> dict[str, tuple]:
     return out
 
 
+def _normalize_expr(value) -> str | None:
+    """Strip leading/trailing whitespace from a PromQL expr for comparison.
+
+    Why: YAML's literal block (`expr: |`) appends a trailing `\\n` while
+    quoted scalars (`expr: "..."`) don't, so byte-identical PromQL written
+    in two different YAML styles compares unequal and triggers a false-
+    positive `expr_changed`. Trailing whitespace is semantically irrelevant
+    to PromQL — strip it before the equality check.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value.strip()
+    # Non-string expr is a YAML schema violation; pass through for the
+    # later equality check to surface as `expr_changed` regardless.
+    return value
+
+
 def _classify_modification(v1: dict, v2: dict) -> dict:
     """Compare two same-named rules. Return a change descriptor.
 
     Fields:
-        expr_changed: bool       — PromQL `expr:` differs
+        expr_changed: bool       — PromQL `expr:` differs (whitespace-normalised)
         labels_added: set        — keys in v2.labels not in v1.labels
         labels_removed: set      — keys in v1.labels not in v2.labels
         label_values_changed: {key: (v1_val, v2_val)} — value-only changes
@@ -163,7 +211,8 @@ def _classify_modification(v1: dict, v2: dict) -> dict:
     l1_keys = _label_keys(v1)
     l2_keys = _label_keys(v2)
     return {
-        "expr_changed": v1.get("expr") != v2.get("expr"),
+        "expr_changed": _normalize_expr(v1.get("expr"))
+        != _normalize_expr(v2.get("expr")),
         "labels_added": sorted(l2_keys - l1_keys),
         "labels_removed": sorted(l1_keys - l2_keys),
         "label_values_changed": _label_value_diff(v1, v2),

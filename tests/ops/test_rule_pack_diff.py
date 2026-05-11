@@ -86,6 +86,21 @@ def test_load_rule_pack_top_level_not_mapping(tmp_path, capsys):
     assert "did not parse to a YAML mapping" in err
 
 
+def test_load_rule_pack_groups_not_a_list_explicit_error(tmp_path, capsys):
+    """If `groups:` is a dict or scalar instead of a list, fail loudly
+    rather than silently producing an empty diff. Without this, a typo
+    like `groups: {g1: rules}` (intended as a list of group dicts but
+    accidentally written as a dict) would parse, produce zero rules,
+    and report 'no differences' — masking the real malformed input."""
+    p = tmp_path / "broken.yaml"
+    p.write_text("groups:\n  g1: rules\n", encoding="utf-8")
+    data = rpd.load_rule_pack(p)
+    assert data is None
+    err = capsys.readouterr().err
+    assert "must be a list" in err
+    assert "dict" in err
+
+
 # ─── extract_rules ────────────────────────────────────────────────────
 
 
@@ -167,6 +182,50 @@ def test_extract_rules_skips_rules_without_name(tmp_path):
 
 
 # ─── _classify_modification / _is_breaking ────────────────────────────
+
+
+def test_normalize_expr_strips_trailing_newline():
+    """YAML literal block (`expr: |`) appends \\n; quoted scalar doesn't.
+    Without normalisation the same PromQL written in two styles would
+    compare unequal and trigger a false-positive expr_changed flag."""
+    assert rpd._normalize_expr("rate(x[5m])\n") == "rate(x[5m])"
+    assert rpd._normalize_expr("rate(x[5m])") == "rate(x[5m])"
+    assert rpd._normalize_expr("  rate(x[5m])  ") == "rate(x[5m])"
+
+
+def test_normalize_expr_none():
+    assert rpd._normalize_expr(None) is None
+
+
+def test_classify_no_expr_change_when_only_yaml_style_differs():
+    """A v1 using `expr: |` literal-block and v2 using `expr: "..."`
+    quoted scalar with the same PromQL body must NOT produce
+    expr_changed — that would noise up every Rule Pack PR that reformats
+    YAML scalar style."""
+    import yaml as _yaml
+    v1_pack = _yaml.safe_load(
+        "groups:\n"
+        "  - name: g\n"
+        "    rules:\n"
+        "      - alert: A\n"
+        "        expr: |\n"
+        "          rate(x[5m])\n"
+        "        labels: {severity: warning}\n"
+    )
+    v2_pack = _yaml.safe_load(
+        'groups:\n'
+        '  - name: g\n'
+        '    rules:\n'
+        '      - alert: A\n'
+        '        expr: "rate(x[5m])"\n'
+        '        labels: {severity: warning}\n'
+    )
+    r = rpd.diff_packs(v1_pack, v2_pack)
+    assert r["modified"] == [], (
+        "Same PromQL in different YAML scalar styles should not be reported "
+        f"as expr_changed; got: {r['modified']}"
+    )
+    assert r["counts"]["breaking"] == 0
 
 
 def test_classify_no_change():
