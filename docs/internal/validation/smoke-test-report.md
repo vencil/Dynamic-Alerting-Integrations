@@ -10,7 +10,7 @@ lang: zh
 
 > **Scope**: 對 [`docs/integration/troubleshooting-checklist.md`](../../integration/troubleshooting-checklist.md) 內所有 `jq` / `amtool` / `promtool` / `yq` 命令做**離線語法驗證**，避免凌晨 on-call 拿到 typo 命令。
 >
-> **Tool**: [`scripts/tools/lint/smoke_test_i4_runbook.sh`](../../../scripts/tools/lint/smoke_test_i4_runbook.sh)（30 assertions across 19 entries）
+> **Tool**: [`scripts/tools/lint/smoke_test_i4_runbook.sh`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/scripts/tools/lint/smoke_test_i4_runbook.sh)（30 assertions across 19 entries）
 >
 > **Run cadence**: maintainer 在 I-4 內文 PR review 時手動跑一遍；未來可考慮加進 CI（需 dev container 裝 amtool / promtool / yq）
 
@@ -84,6 +84,6 @@ lang: zh
 
 ## Source of truth
 
-- Test script: [`scripts/tools/lint/smoke_test_i4_runbook.sh`](../../../scripts/tools/lint/smoke_test_i4_runbook.sh)
+- Test script: [`scripts/tools/lint/smoke_test_i4_runbook.sh`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/scripts/tools/lint/smoke_test_i4_runbook.sh)
 - I-4 source: [`docs/integration/troubleshooting-checklist.md`](../../integration/troubleshooting-checklist.md)
 - Methodology origin: post-#377 retrospective Q2 + [I-4 §4.2 deploy-readiness review SOP](../../integration/troubleshooting-checklist.md#42-runbook-pr-review-sop-will-this-actually-deploy-at-3am)
