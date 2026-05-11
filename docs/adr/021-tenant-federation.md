@@ -152,11 +152,13 @@ config 才能發現是 data-layer 沒打 label。是個典型的 silent-failure 
 | Prometheus | `--query.max-samples`（單 query sample 總數上限） + `--query.timeout`（global query 超時） | 防 OOM-by-query |
 | VictoriaMetrics | `-search.maxUniqueTimeseries`（單 query 唯一 series 上限） + `-search.maxSamplesPerQuery` + `-search.maxQueryDuration` | 同上 |
 
-平台必須在 v2.9.0 部署時**強制配置**這些 flag。建議起始 range（IV-2 依實際 customer query pattern tuning）：
+平台必須在 v2.9.0 部署時**強制配置**這些 flag。**Starting default**（與下方 §Default 值 rationale 表一致；IV-2 觀察實際 customer query pattern 後 tuning）：
 
-- Prom `--query.max-samples`：5M–50M（Prom 預設 50M；federation read 比 internal eval 更該嚴，但太嚴會擋合法 dashboard，5M 是「典型 1000 series × 1d @ 30s scrape ≈ 3M」之上的保守起點）
-- VM `-search.maxUniqueTimeseries`：50k–300k（VM 預設 300k；同樣 federation 該嚴一些）
-- 兩者 query timeout 都 30s（與 Layer 2 timeout 對齊）
+| Flag | Starting default | Tuning range | Rationale |
+|---|---|---|---|
+| Prom `--query.max-samples` | 5M | 5M–50M（Prom native 預設 50M）| federation read 比 internal eval 嚴；5M 是「典型 1000 series × 1d @ 30s scrape ≈ 3M」之上的保守起點，IV-2 觀察 false-positive 再放寬 |
+| VM `-search.maxUniqueTimeseries` | 100k | 50k–300k（VM native 預設 300k）| 同上邏輯；100k 對應「能撐 cluster-wide dashboard panel 但擋 `count by (instance) (...)` 意外高基查詢」 |
+| Prom `--query.timeout` / VM `-search.maxQueryDuration` | 30s | 與 Layer 2 timeout 對齊 | Defense-in-depth：gateway timeout 沒切斷時 storage 自己會超時 |
 
 #### Layer 2 — API Gateway / Ingress（per-token concurrency + per-token rate limit）
 
