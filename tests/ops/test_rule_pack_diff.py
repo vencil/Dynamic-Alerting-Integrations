@@ -324,8 +324,10 @@ def test_diff_breaking_label_schema_change():
 
 
 def test_diff_record_rules_not_in_alert_subsets():
-    """Recording rules are tracked but excluded from added_alert_names /
-    removed_alert_names since silencer matchers don't apply to them."""
+    """Recording rules tracked separately from alerts: appear in
+    added_record_names (not added_alert_names) so customers can see
+    both classes — silencer impact (alerts) vs downstream-expr-break
+    impact (records) — without merging them."""
     v1 = _pack_from("""
         groups:
           - name: g
@@ -345,9 +347,82 @@ def test_diff_record_rules_not_in_alert_subsets():
     r = rpd.diff_packs(v1, v2)
     assert r["added"] == ["r2"]
     assert r["added_alert_names"] == [], (
-        "Recording rule additions should not appear in added_alert_names "
-        "since silencers don't apply"
+        "Recording rule additions should not appear in added_alert_names"
     )
+    assert r["added_record_names"] == ["r2"], (
+        "Recording rule additions should appear in added_record_names"
+    )
+
+
+def test_diff_empty_pack_pair_cold_start():
+    """Both inputs are empty rule packs (groups: []) — the cold-start
+    scenario for a brand-new pack being first-staged. Tool must handle
+    gracefully without crashing."""
+    empty1 = _pack_from("groups: []\n")
+    empty2 = _pack_from("groups: []\n")
+    r = rpd.diff_packs(empty1, empty2)
+    assert r["added"] == []
+    assert r["removed"] == []
+    assert r["modified"] == []
+    assert r["breaking_modifications"] == []
+    assert r["added_alert_names"] == []
+    assert r["removed_alert_names"] == []
+    assert r["added_record_names"] == []
+    assert r["removed_record_names"] == []
+    assert r["counts"]["v1_total_rules"] == 0
+    assert r["counts"]["v2_total_rules"] == 0
+
+
+def test_diff_removed_recording_rule_in_record_subset():
+    """Removed recording rule must appear in removed_record_names so
+    customers see it in the upgrade audit — without this, removed
+    records are invisible to text-output users and CI gate alike."""
+    v1 = _pack_from("""
+        groups:
+          - name: g
+            rules:
+              - record: tenant:foo:rate5m
+                expr: rate(x[5m])
+              - alert: A
+                expr: up
+                labels: {severity: warning}
+    """)
+    v2 = _pack_from("""
+        groups:
+          - name: g
+            rules:
+              - alert: A
+                expr: up
+                labels: {severity: warning}
+    """)
+    r = rpd.diff_packs(v1, v2)
+    assert "tenant:foo:rate5m" in r["removed"]
+    assert r["removed_alert_names"] == []
+    assert r["removed_record_names"] == ["tenant:foo:rate5m"]
+
+
+def test_main_text_output_lists_removed_records(tmp_path, capsys):
+    """Regression guard: removed recording rules must appear in text
+    output. Previously they were silently invisible (only alerts were
+    listed), so customers reading the report would think v2 was safer
+    than it is."""
+    v1 = _write_pack(tmp_path / "v1.yaml", """
+        groups:
+          - name: g
+            rules:
+              - record: tenant:dropped:rate5m
+                expr: rate(x[5m])
+    """)
+    v2 = _write_pack(tmp_path / "v2.yaml", """
+        groups:
+          - name: g
+            rules: []
+    """)
+    rc = rpd.main(["--from", str(v1), "--to", str(v2)])
+    out = capsys.readouterr().out
+    assert "Removed recording rules" in out
+    assert "tenant:dropped:rate5m" in out
+    assert "downstream alerts referencing these expressions will break" in out
 
 
 def test_diff_counts_summary():

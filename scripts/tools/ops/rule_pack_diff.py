@@ -13,15 +13,27 @@ Use case (per docs/scenarios/staged-adoption-guide.md §7.3):
     point at the right targets and don't silently fail → alert storm
     from v1-silencer-misses-v2-alert double-firing.
 
-What counts as breaking:
-    - Alert removed or renamed         → matchers on alertname break
+What counts as breaking (triggers exit 1 in --ci mode):
+
+  Removal-class (affects v1 names not in v2):
+    - Alert removed or renamed      → AM silencer matchers on alertname
+                                       silently miss; double-fire risk
+    - Recording rule removed        → downstream alert expressions
+                                       referencing the metric_name produce
+                                       empty/error results
+
+  Modification-class (per `_is_breaking`):
     - Label key added or removed       → matchers checking that key break
-    - Label value strict-equality change → matchers with equality break
+    - Label value strict-equality change → equality matchers miss
+    - Alert ↔ record kind swap         → silencers don't apply to records
 
 What is reported but NOT flagged breaking:
     - PromQL expression changes (semantic equivalence is undecidable;
       flag for human review but don't auto-classify)
     - Annotation changes (informational; no operational impact)
+    - `for:` duration changes (alert still fires on same condition,
+      just at a different latency)
+    - Same-name count anomalies (informational; pathological packs only)
 
 Inputs are file paths to YAML; no assumption about repository layout.
 Typical invocation:
@@ -246,13 +258,24 @@ def diff_packs(v1: dict, v2: dict) -> dict:
                 if _is_breaking(change):
                     breaking.append(entry)
 
-    # Convenience subsets: alert-only added / removed (silencer matchers
-    # typically key on alertname, so customers care most about these).
+    # Convenience subsets by kind. Both matter operationally for v1→v2
+    # upgrades but the failure modes differ:
+    #   - removed alerts → AM silencer matchers on alertname silently miss
+    #     (double-fire risk during upgrade)
+    #   - removed records → downstream rule expressions referencing the
+    #     recording rule's metric_name produce empty/error results
+    # Customers (and the --ci CI gate) care about both.
     added_alert_names = sorted(
         n for n in added if any(r["_kind"] == "alert" for r in v2_index[n])
     )
     removed_alert_names = sorted(
         n for n in removed if any(r["_kind"] == "alert" for r in v1_index[n])
+    )
+    added_record_names = sorted(
+        n for n in added if any(r["_kind"] == "record" for r in v2_index[n])
+    )
+    removed_record_names = sorted(
+        n for n in removed if any(r["_kind"] == "record" for r in v1_index[n])
     )
 
     return {
@@ -262,6 +285,8 @@ def diff_packs(v1: dict, v2: dict) -> dict:
         "breaking_modifications": breaking,
         "added_alert_names": added_alert_names,
         "removed_alert_names": removed_alert_names,
+        "added_record_names": added_record_names,
+        "removed_record_names": removed_record_names,
         "count_anomalies": count_anomalies,
         "counts": {
             "v1_total_rules": sum(len(v) for v in v1_index.values()),
@@ -297,9 +322,21 @@ def render_text(report: dict, *, from_path: str, to_path: str) -> None:
             print(f"    - {name}")
         print()
 
+    if report.get("removed_record_names"):
+        print("⚠️  Removed recording rules (downstream alerts referencing these expressions will break):")
+        for name in report["removed_record_names"]:
+            print(f"    - {name}")
+        print()
+
     if report["added_alert_names"]:
         print("➕ Added alerts:")
         for name in report["added_alert_names"]:
+            print(f"    + {name}")
+        print()
+
+    if report.get("added_record_names"):
+        print("➕ Added recording rules:")
+        for name in report["added_record_names"]:
             print(f"    + {name}")
         print()
 
