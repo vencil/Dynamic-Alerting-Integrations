@@ -58,7 +58,7 @@ lang: zh
 
 **檢查方式**：見 [doc-map.md § Change Impact Matrix](doc-map.md)，列出每種變更類型要連動哪些文件。
 
-**docs/**.md push 前必跑 `make lint-docs-mkdocs`**：mkdocs strict build 用 site-root path 語意（`docs/` 是 root），與 pre-commit `check_doc_links.py` 的 filesystem 語意有 gap — 例如 `../../CHANGELOG.md` 在 filesystem 對但 mkdocs 視為跳出 site 而 fail。CI 會擋但要 push 後才知道；本地跑這個 target 取得 fast feedback。
+**mkdocs strict semantic gate（自動）**：mkdocs strict build 用 site-root path 語意（`docs/` 是 root），與 pre-commit `check_doc_links.py` 的 filesystem 語意有 gap — 例如 `../../CHANGELOG.md` 在 filesystem 對但 mkdocs 視為跳出 site 而 fail。**v2.8.0 自動化** by `mkdocs-strict-pre-push` hook（`scripts/ops/pre_push_mkdocs_strict.sh`，issue #412）：當推送含 `docs/**/*.md` / `mkdocs.yml` / `README.md` 變動時自動跑 strict check。Tier 1：native mkdocs 安裝即自動 block on fail；Tier 2：mkdocs 未安裝則 WARN + CI backstop。Bypass：`MKDOCS_STRICT_BYPASS=1 git push`（emergency only）。本地驗證仍可手動 `bash scripts/tools/lint/mkdocs_strict_check.sh`。
 
 ### 5. SAST：7 條安全 review 準則
 
