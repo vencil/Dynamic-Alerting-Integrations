@@ -472,40 +472,36 @@ func TestSlogRequestLogger_5xxLogsAtWarn(t *testing.T) {
 // PR-11/11: rate-limiter polish (rejections counter, sweeper)
 // ─────────────────────────────────────────────────────────────────
 
-// TestRateLimit_RejectionsCounter verifies the package-level
-// rejection counter increments once per blocked request and is
-// readable via RateLimitMetrics().
+// TestRateLimit_RejectionsCounter verifies the rejection counter
+// increments once per blocked request.
+//
+// Uses the lower-level limiter directly (newRateLimiter) instead of
+// the RateLimit() constructor + RateLimitMetrics() path. Reason: the
+// constructor mutates package-level `activeLimiter` (see middleware.go
+// docstring: "tests that want isolation construct their own limiters
+// via newRateLimiter"). With every RateLimit-using test in this package
+// running under t.Parallel(), the global pointer flips mid-test and
+// RateLimitMetrics() reads from someone else's limiter — observed as
+// "rejections delta = 1, want 3" CI flake.
+//
+// Format coverage of the /metrics endpoint lives in
+// TestMetricsHandler_IncludesRateLimitMetrics.
 func TestRateLimit_RejectionsCounter(t *testing.T) {
 	t.Parallel()
-	cfg := RateLimitConfig{RequestsPerMinute: 1}
-	stop := make(chan struct{})
-	defer close(stop)
-	mw := RateLimit(cfg, stop)
-
-	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})
-	wrapped := mw(inner)
-
-	// Snapshot baseline so the test is independent of any earlier
-	// limiter activity in the same process.
-	baselineRejections, _ := RateLimitMetrics()
+	l := newRateLimiter(RateLimitConfig{RequestsPerMinute: 1})
+	caller := "ratelimit-counter-test@example.com"
+	now := time.Now()
 
 	// First request passes; next 3 are rejected.
 	for i := 0; i < 4; i++ {
-		req := httptest.NewRequest("GET", "/x", nil)
-		req.Header.Set("X-Forwarded-Email", "ratelimit-counter-test@example.com")
-		w := httptest.NewRecorder()
-		wrapped.ServeHTTP(w, req)
+		l.allow(caller, now)
 	}
 
-	gotRejections, gotActive := RateLimitMetrics()
-	delta := gotRejections - baselineRejections
-	if delta != 3 {
-		t.Errorf("rejections delta = %d, want 3", delta)
+	if got := l.Rejections(); got != 3 {
+		t.Errorf("rejections = %d, want 3", got)
 	}
-	if gotActive < 1 {
-		t.Errorf("active callers = %d, want >= 1", gotActive)
+	if got := l.activeCallers(); got < 1 {
+		t.Errorf("active callers = %d, want >= 1", got)
 	}
 }
 
