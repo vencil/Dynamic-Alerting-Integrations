@@ -25,7 +25,7 @@ lang: zh
 
 ---
 
-## 為什麼 dual output（Gemini 對抗 reviewer 觀點）
+## 為什麼 dual output（automation closure 觀點）
 
 如果只產 Markdown，後續 Phase 3 的 cutover candidate selector / 自動清理腳本就**沒法讀**孤兒規則清單，automation 閉環斷掉。JSON 給機器、Markdown 給人類，是 SRE 工具鏈正確姿勢。
 

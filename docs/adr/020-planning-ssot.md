@@ -179,7 +179,7 @@ CLAUDE.md 起手式段加入：
 
 ### 替代方案 A：**全** consolidate 到單一 namespace（含 ADR）
 
-**Gemini 原始提案 + Owner 初步傾向**。優點：AI 與人類只需熟悉一個 prefix。缺點：
+**早期設計提案 + Owner 初步傾向**。優點：AI 與人類只需熟悉一個 prefix。缺點：
 
 - 79 處 TD-NN + 128 處 HA-NN/REG-NN + 232 處 S#NN 引用要 rewrite — 共 ~440 處
 - 19 份 ADR 重新編號 — **最高風險**：
@@ -213,7 +213,7 @@ CLAUDE.md 起手式段加入：
 
 `generate_planning_index.py` 寫死 8 個檔案路徑掃。
 
-**問題**（Gemini 對抗 reviewer 點出）：下個月新建 `docs/internal/security-backlog.md` 會被遺忘加入清單，新 source 對 AI 隱形。
+**問題**（adversarial review 點出）：下個月新建 `docs/internal/security-backlog.md` 會被遺忘加入清單，新 source 對 AI 隱形。
 
 **結論**：採 discovery-based（glob + frontmatter 過濾）。
 

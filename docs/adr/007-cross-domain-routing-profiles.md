@@ -99,7 +99,7 @@ domain_policies:
 
 ### 為何拒絕三層 Contact Profile 模型
 
-Gemini 分析中提出的三層模型（Contact Profile → Routing Profile → Domain Policy）存在過度工程化的風險：
+設計討論中曾提出的三層模型（Contact Profile → Routing Profile → Domain Policy）存在過度工程化的風險：
 
 - **Contact Profile 與 Alertmanager Receiver 重疊**：contact 資訊（Slack channel、PagerDuty key）已在 Alertmanager `receivers` 中定義，額外抽象增加同步成本
 - **三層合併語意複雜**：四方合併（defaults → contact → profile → tenant）的覆蓋順序難以預測，調試成本高

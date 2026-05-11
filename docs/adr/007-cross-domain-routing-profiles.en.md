@@ -99,7 +99,7 @@ domain_policies:
 
 ### Why Reject Three-Layer Contact Profile Model
 
-The three-layer model proposed in the Gemini analysis (Contact Profile → Routing Profile → Domain Policy) carries over-engineering risk:
+A three-layer model that surfaced during design discussion (Contact Profile → Routing Profile → Domain Policy) carries over-engineering risk:
 
 - **Contact Profile Overlaps with Alertmanager Receiver**: Contact information (Slack channels, PagerDuty keys) is already defined in Alertmanager `receivers`; an additional abstraction increases synchronization cost
 - **Three-Layer Merge Semantics Complexity**: Four-way merging (defaults → contact → profile → tenant) has unpredictable override ordering, high debugging cost

@@ -561,7 +561,7 @@ Breaking / Upgrade 七塊清楚區分），那是目標形狀。
   - **PR-2 / PR-3 預告**：PR-2 = docker-compose stack + host driver；PR-3 = aggregation + Makefile target + workflow + playbook 完整化（以 synthetic-v2 跑出第一份 baseline）
 
 - **Migration playbook — Emergency Rollback Procedures（v2.8.0 B-4，doc-only）** — `docs/scenarios/incremental-migration-playbook.md` + `.en.md` 新增 `Emergency Rollback Procedures` 章節，覆蓋 Phase .c batch-PR pipeline cutover 後的整批退版流程：(1) 退版順序 = merge 順序的嚴格反序（inner tenant PR 先 / outer `_defaults.yaml` 最後 / cascading defaults 按 inner→outer 退）；(2) WatchLoop debounce 驗收 PromQL 對接 v2.8.0 B-3 加入的 `da_config_reload_duration_seconds_count` 與 `da_config_debounce_batch_size`；(3) Staging rehearsal hard gate（cutover 前 2 週）；(4) 退版時間預算表（基於 PR #59 Phase 1 baseline，1000-tenant / 5000-tenant 各四種動作）；(5) 8-項驗證 checklist 含 `merged_hash` 收斂、PromQL counter delta、Alertmanager Silenced 清空。配合 Phase .c C-10 pipeline。工具層 `make rollback-dryrun` / `da-tools batch-pr rollback` 列入 v2.8.x backlog
-- **Issue #76 — pre-tag bench gate 3-phase rollout（issue-only，無 code）** — Spawn task C 落地：開 GitHub issue 規範 Phase 1（已 land PR #65）→ Phase 2（main-only hard gate at 3× median-of-5）→ Phase 3（PR-level after Larger Runners）的 entry conditions、acceptance criteria、Gemini「不要 hard gate」反論點 + PR #59 50% within-run variance 反駁。Phase 2 / 3 實作不在此 issue 範圍
+- **Issue #76 — pre-tag bench gate 3-phase rollout（issue-only，無 code）** — Spawn task C 落地：開 GitHub issue 規範 Phase 1（已 land PR #65）→ Phase 2（main-only hard gate at 3× median-of-5）→ Phase 3（PR-level after Larger Runners）的 entry conditions、acceptance criteria、adversarial review「不要 hard gate」反論點 + PR #59 50% within-run variance 反駁。Phase 2 / 3 實作不在此 issue 範圍
 
 - **Phase .b debounce observability + slow-write stress + PR #69 self-review follow-ups（v2.8.0 B-3 + B-7 + Issue #61 polish）**
   - **B-3 reload-duration histogram** `da_config_reload_duration_seconds` (buckets `[0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30]`s) — 觀測 `diffAndReload` 端到端耗時（scan + per-tenant merge + blast-radius emit + fullDirLoad + atomic swap），`fireDebounced` 與 sync-fallback 都 emit 一次 sample。給 Phase 2 hard SLO sign-off 的 p99 訊號用，以及 driver 「300ms debounce 是否過長」的實證依據
@@ -650,7 +650,7 @@ Breaking / Upgrade 七塊清楚區分），那是目標形狀。
 - **Phase .a Scanner correctness + test harness bundle（v2.8.0, A-10 fix + A-8b + A-8d + LL ext）**
   - **A-10 product fix — WatchLoop hierarchical scan awareness**（`components/threshold-exporter/app/config.go` WatchLoop block, [Issue #52](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/52)）：root cause — WatchLoop 在 hierarchical mode 下仍用 flat-only `scanDirFileHashes`（`os.ReadDir(dir)` + `IsDir()` skip），看不到 `conf.d/<domain>/<region>/tenant.yaml` 等 nested tenant file 的變動，所以 file 改動**永遠不觸發 reload**；測試靠 `os.Chtimes(now-5s)` 詭技偶然湊效率才 pass。改為在 hierarchical mode 走 `scanDirHierarchical`（recursive）+ per-file hash diff。`TestWatchLoop_DebouncedReload_DetectsFileChange` 從 Chtimes 版本改為直接寫檔觸發，dev container `-race -count=30` → **30/30 PASS**（修前 1/30 flake）
   - **A-8b `TestScanDirHierarchical_K8sSymlinkLayout`**（planning §12.2）：K8s ConfigMap mount pattern invariant lock — file-symlinks ARE followed (`os.ReadFile` resolves)、dir-symlinks NOT recursed（`filepath.WalkDir` lstat semantics），防止未來 Go stdlib 升級悄悄 regress
-  - **A-8d `TestScanDirHierarchical_MixedValidInvalid` + 新 metric `da_config_parse_failure_total{file_basename}`**：poison-pill chaos — malformed YAML 不污染 sibling 正常 file 的發現 / 掃描；broken file 仍進 hash 表（change detection 可感知 recovery）；**新 Counter** 提供「tenant 檔持續損壞」的 ops observability signal（Gemini R3 #3 原提案，per-file error-skip 邏輯本就存在，這批純加 metric exposure + behavior lock）
+  - **A-8d `TestScanDirHierarchical_MixedValidInvalid` + 新 metric `da_config_parse_failure_total{file_basename}`**：poison-pill chaos — malformed YAML 不污染 sibling 正常 file 的發現 / 掃描；broken file 仍進 hash 表（change detection 可感知 recovery）；**新 Counter** 提供「tenant 檔持續損壞」的 ops observability signal（外部 cross-review 提案，per-file error-skip 邏輯本就存在，這批純加 metric exposure + behavior lock）
   - **Testing-playbook §v2.8.0 LL #3 extension** — 本地 commit-msg hook（PR #44 C2）**只驗 header**，不驗 body/footer；CI commitlint 多驗 `footer-max-line-length` 等 body 規則。PR #51 self-review commit 本地過、CI 擋（long pytest path 被當 footer），force-push 修。暫時 mitigation + 長期 enforcement 併入 Issue #53
   - A-8c 已於 PR #51 merge；A-8 family 至此 b/c/d 三件齊。僅 A-8 Golden Parity `hypothesis` 擴充（基礎已在 codebase）還可後續做
 
@@ -813,7 +813,7 @@ Breaking / Upgrade 七塊清楚區分），那是目標形狀。
   - 60,000 char safety limit：即使 fell-through（例如單一 tenant 有上千欄位變動），也會 auto-fallback 到 summary-only 或最後手段硬截斷
   - 新增 `--artifact-hint` CLI flag，`.github/workflows/blast-radius.yml` 對應 pass workflow run URL，讓 reviewer 看 summary-only comment 時能一鍵跳去 artifact
   - 9 tests 於 `tests/ops/test_blast_radius.py::TestPRCommentLengthGuard`：1000-tenant、超長 field diff、Tier C count-only、artifact hint rendering 等情境均驗證 output 長度 < 65,536
-  - 發現來源：Gemini R2 cross-review；實測 1000-tenant Tier A 場景原輸出 ~260 KB，超限 4 倍
+  - 發現來源：外部 cross-review；實測 1000-tenant Tier A 場景原輸出 ~260 KB，超限 4 倍
 
 
 
