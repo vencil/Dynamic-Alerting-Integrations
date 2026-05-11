@@ -76,7 +76,7 @@ lang: zh
 | `docs/scenarios/manage-at-scale.md` (.en.md) | Platform Engineers, operator, DevOps | 場景：千租戶規模管理 |
 | `docs/scenarios/multi-cluster-federation.md` (.en.md) | Platform Engineers | 場景：多叢集聯邦架構 — 中央閾值 + 邊緣指標 |
 | `docs/scenarios/multi-domain-conf-layout.md` (.en.md) | Platform Engineers, operator, DevOps | 場景：多域名階層式配置 — conf.d/ 目錄結構重構（v2.7.0） |
-| `docs/scenarios/multi-system-migration-playbook.md` | Platform Engineers, SREs, architects | Multi-System Migration Playbook |
+| `docs/scenarios/multi-system-migration-playbook.md` (.en.md) | Platform Engineers, SREs, architects | Multi-System Migration Playbook |
 | `docs/scenarios/README.md` | All | 場景指南導覽 |
 | `docs/scenarios/shadow-audit.md` (.en.md) | Platform Engineers, Tenants | 場景：Shadow Audit — 告警品質評估 |
 | `docs/scenarios/shadow-monitoring-cutover.md` (.en.md) | Platform Engineers, SREs, DevOps, Tenants | 場景：Shadow Monitoring — 從告警健康評估到全自動切換 |
