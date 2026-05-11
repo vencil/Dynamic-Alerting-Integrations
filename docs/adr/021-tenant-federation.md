@@ -37,7 +37,7 @@ updated_at: 2026-05-11
   - 整合到自己既有 Grafana dashboard / oncall workflow
   - 自管告警 evaluation（不依賴平台 Alertmanager）
 
-**注意定位**：這不是「平台幫客戶 federation」（那是 [ADR-004](./004-federation-central-exporter-first.md)），是「**客戶從平台拉自己的 metrics 出去**」。資料流向相反，trust boundary 也不同。
+**注意定位**：這不是「平台幫客戶 federation」（那是 [ADR-004](./004-federation-central-exporter-first.md)），是「**客戶從平台拉自己的 metrics 出去**」。資料流向相反，trust boundary 也不同——ADR-004 是「平台信任邊緣叢集（同組織內 N 個 cluster）」的 inbound 場景；ADR-021 是「平台對客戶（cross-org）」的 outbound 場景，被取走的資料離開平台控制邊界後就可能被 tenant 自己再轉、再存、再泄。Multi-tenant isolation 與 audit 需求因此更嚴格。
 
 ### 既有 federation 架構覆蓋空白
 
@@ -126,7 +126,13 @@ federation:
 |---|---|---|
 | `max_concurrent_requests_per_token` | 超過時 HTTP 429 + audit log | 防 tenant 並發轟炸 |
 | `request_timeout_seconds` | 超時 HTTP 504 + audit log | 防 unbounded query 拖垮 storage |
-| `max_series_per_response` | 超量直接 truncate + HTTP 413 | 防 high-cardinality scan 把記憶體吃光 |
+| `max_series_per_response` | 超量 → HTTP 413 + audit log（**reject 而非 truncate**——truncate 會讓 tenant dashboard 顯示誤導性的「不完整但無警告」資料，明確拒絕 + 引導 tenant 加 label filter 才是正解） | 防 high-cardinality scan 把記憶體吃光 |
+
+**Default 值 rationale**（IV-2 implementation 可依實測調整）：
+
+- `max_concurrent_requests_per_token: 4` — 一個 tenant 的 Grafana / 自管 alert eval / oncall 並行查詢通常 ≤ 3。4 留一格 headroom 但擋住明顯 abuse。Helm value 可調
+- `request_timeout_seconds: 30` — 30s 是「正常 dashboard / oncall query 的舒適區上限」（Grafana 預設 query timeout 也在 30s 附近）。Tenant 若有需要長跑的離線分析應該透過 batch export（Future Work），不是 federation 即時 path。Helm value 可調
+- `max_series_per_response: 100000` — 100k series 是「能撐住一張 cluster-wide dashboard panel」與「不至於 OOM single proxy pod」的中間值。`up` metric 全 fleet 視 cluster 規模通常 1k–10k；100k 給合理 group-by 留空間，擋住 `count by (instance) (...)` 這類意外高基查詢
 
 **三件組缺一不可**：缺並發 cap 等於開門讓 tenant DoS；缺 timeout 等於開門讓 tenant 跑 30 分鐘的 query；缺 series cap 等於開門讓 tenant 拉 `up` 全 fleet。
 
@@ -167,13 +173,15 @@ federation:
 
 「給 tenant 後端 Prom 開 read-only user，靠 storage 層 RBAC 做隔離。」
 
-**問題**：
+**對 VM 客戶**：VictoriaMetrics 沒有 native multi-tenant RBAC；vmauth 本身就是補這缺口的 label-injection 機制——這條路其實是 Plan D 的別名，不另算選項。
+
+**對 Prom 客戶**：
 
 1. **Prometheus 本身沒 multi-tenant RBAC**：要靠 Cortex / Mimir 這種第三方層做，但既有平台後端不是 Mimir（看 `byo-prometheus-integration.md`，平台**不**強制客戶用特定後端）
-2. **VictoriaMetrics 有 vmauth 但本質就是 label-injection proxy** — 等於兜了一圈回到方案 D
-3. **PromQL injection**：tenant 可以寫 `count by (tenant_id) (up)` 之類的 query 探測其他 tenant 是否存在；純 RBAC 擋不掉這類 metadata leakage
+2. **PromQL metadata leakage**：tenant 可以寫 `count by (tenant_id) (up)` 之類的 query 探測其他 tenant 是否存在；純 RBAC（檔案級權限 / basic auth）擋不掉這類查詢層資料外洩。**proxy 方案如 prom-label-proxy 在 query path 強制注入 `{tenant_id="<X>"}` matcher 才擋得住**——這正是它存在的原因
+3. **Audit 缺口**：純 RBAC 只記「誰連線」，不記「誰拉了什麼 query / 多少 series」；compliance 要求的查詢層稽核做不到
 
-**結論**：拒絕。沒有 universal 後端 RBAC；prom-label-proxy 本來就是補這缺口的方案。
+**結論**：拒絕（對 Prom 客戶為實質拒絕，對 VM 客戶為 Plan D 別名）。沒有 universal 後端 RBAC；prom-label-proxy 本來就是補這缺口的方案。
 
 ### 替代方案 C：Push-based（remote_write to tenant）
 
@@ -216,7 +224,7 @@ federation:
 | 6. 文件 | `docs/integration/tenant-federation.md` user-facing guide + Helm chart README + sample policy | 8h |
 | **IV-2 Total (excluding IV-1)** | — | **~44h** + ADR 12h = **~56h** |
 
-**Effort 估算與 [issue #380](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/380) 一致**。IV-2 拆 sub-issue 在 v2.9.0 epic kickoff 時做，不在本 ADR 範圍。
+**Effort 估算**：本表 IV-2 line items 加總 44h，加 IV-1 (12h) = 全 epic 56h。對應 [issue #380](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/380) IV-2 body 的 "Total: ~56h"——issue body 的 line items 加總實為 44h，"56h" 應是包含 IV-1 的 epic 全體，本表明示拆分以避免歧義。IV-2 拆 sub-issue 在 v2.9.0 epic kickoff 時做，不在本 ADR 範圍。
 
 ## 後果（Consequences）
 
@@ -256,7 +264,7 @@ federation:
 - **[ADR-004 (Federation — Central-Exporter-First)](./004-federation-central-exporter-first.md)** — 平台內部多叢集 federation。本 ADR 與之**互補**（platform-internal vs cross-boundary），非取代
 - **[ADR-009 (Tenant Manager CRUD API)](./009-tenant-manager-crud-api.md)** — tenant-api 既有 endpoint pattern，本 ADR 的 token endpoint 沿用其 conventions
 - **[`docs/integration/federation-integration.md`](../integration/federation-integration.md)** — ADR-004 的 user-facing guide；本 ADR 將有對應 `docs/integration/tenant-federation.md`（IV-2 ship 時）
-- **[`docs/integration/victoriametrics-integration.md`](../integration/victoriametrics-integration.md)** — §F1 已預先 cross-link 本 ADR + 註明 v2.9 epic
+- **[`docs/integration/victoriametrics-integration.md`](../integration/victoriametrics-integration.md)** — §7「已知 gap / Future Work」table 已預先 cross-link 本 ADR + 註明 v2.9 epic
 - **[Issue #380](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/380)** — IV-1 deliverable（本 ADR）+ IV-2 implementation epic
 
 ## 相關資源
