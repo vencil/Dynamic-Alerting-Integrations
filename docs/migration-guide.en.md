@@ -42,7 +42,7 @@ Full command listing, hash verification, and air-gapped flow: [`migration-toolki
 | **Existing Traditional Alert Rules** — Need migration | Auto-convert to three-piece set | `da-tools migrate` | ~15 min |
 | **Large Tenant (1000+ rules)** — Enterprise-grade migration | Triage → Shadow → Switchover | `da-tools migrate --triage` + `da-tools validate` | ~1-2 weeks |
 | **3-system simultaneous swap** (storage backend Prom→VM **plus** rules **plus** AM routing) | 5-Phase invariants-driven model | Follow [Multi-System Migration Playbook](scenarios/multi-system-migration-playbook.md) (**ZH only — [#409](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/409)**) | 13-week estimate (real-world often ~27 weeks) |
-| **Post-cutover rule evolution** (`custom_*` → golden, Rule Pack upgrades) | Lifecycle pattern, not one-time event | Follow [Staged Adoption Lifecycle](scenarios/staged-adoption-guide.md) (**ZH only — [#409](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/409)**) | Ongoing |
+| **Post-cutover rule evolution** (`custom_*` → golden, Rule Pack upgrades) | Lifecycle pattern, not one-time event | Follow [Staged Adoption Lifecycle](scenarios/staged-adoption-guide.en.md) | Ongoing |
 | **Unsupported DB Type** — Need extension | Manual Recording + Alert Rules creation | See [§9](#9-advanced-extending-unsupported-db-types) | ~30 min |
 | **Offboarding Tenant/Metrics** | Safe removal | `da-tools offboard` / `da-tools deprecate` | ~5 min |
 | **Issues during migration** | symptom-keyed runbook | → [Migration Troubleshooting Checklist](integration/troubleshooting-checklist.md) (**ZH only — [#409](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/409)**) | — |
@@ -796,7 +796,7 @@ Three-step automation:
 | ["Migration Guide — 遷移指南"](./migration-guide.md) | ⭐⭐⭐ |
 | **Advanced migration scenarios (not covered in this guide)** | |
 | [Multi-System Migration Playbook](scenarios/multi-system-migration-playbook.md) (3-system: Prom→VM + rules + AM simultaneously; **ZH only — [#409](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/409)**) | ⭐⭐⭐ |
-| [Staged Adoption Lifecycle](scenarios/staged-adoption-guide.md) (post-cutover `custom_*` → golden; **ZH only — [#409](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/409)**) | ⭐⭐⭐ |
+| [Staged Adoption Lifecycle](scenarios/staged-adoption-guide.en.md) (post-cutover `custom_*` → golden) | ⭐⭐⭐ |
 | [Migration Troubleshooting Checklist](integration/troubleshooting-checklist.md) (migration-phase symptom-keyed runbook; **ZH only — [#409](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/409)**) | ⭐⭐⭐ |
 | [VictoriaMetrics Integration](integration/victoriametrics-integration.en.md) (VM stack integration guide) | ⭐⭐ |
 | **Foundation** | |
