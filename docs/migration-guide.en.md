@@ -45,7 +45,7 @@ Full command listing, hash verification, and air-gapped flow: [`migration-toolki
 | **Post-cutover rule evolution** (`custom_*` → golden, Rule Pack upgrades) | Lifecycle pattern, not one-time event | Follow [Staged Adoption Lifecycle](scenarios/staged-adoption-guide.en.md) | Ongoing |
 | **Unsupported DB Type** — Need extension | Manual Recording + Alert Rules creation | See [§9](#9-advanced-extending-unsupported-db-types) | ~30 min |
 | **Offboarding Tenant/Metrics** | Safe removal | `da-tools offboard` / `da-tools deprecate` | ~5 min |
-| **Issues during migration** | symptom-keyed runbook | → [Migration Troubleshooting Checklist](integration/troubleshooting-checklist.md) (**ZH only — [#409](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/409)**) | — |
+| **Issues during migration** | symptom-keyed runbook | → [Migration Troubleshooting Checklist](integration/troubleshooting-checklist.en.md) | — |
 
 ```mermaid
 flowchart TD
@@ -797,7 +797,7 @@ Three-step automation:
 | **Advanced migration scenarios (not covered in this guide)** | |
 | [Multi-System Migration Playbook](scenarios/multi-system-migration-playbook.en.md) (3-system: Prom→VM + rules + AM simultaneously) | ⭐⭐⭐ |
 | [Staged Adoption Lifecycle](scenarios/staged-adoption-guide.en.md) (post-cutover `custom_*` → golden) | ⭐⭐⭐ |
-| [Migration Troubleshooting Checklist](integration/troubleshooting-checklist.md) (migration-phase symptom-keyed runbook; **ZH only — [#409](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/409)**) | ⭐⭐⭐ |
+| [Migration Troubleshooting Checklist](integration/troubleshooting-checklist.en.md) (migration-phase symptom-keyed runbook) | ⭐⭐⭐ |
 | [VictoriaMetrics Integration](integration/victoriametrics-integration.en.md) (VM stack integration guide) | ⭐⭐ |
 | **Foundation** | |
 | ["Tenant Quick Start Guide"](getting-started/for-tenants.en.md) | ⭐⭐ |
