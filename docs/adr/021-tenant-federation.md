@@ -101,40 +101,117 @@ updated_at: 2026-05-11
 
 **Domain layer**（讓 tenant 內再分 sub-team scope）**留 Future Work**。理由：v2.9.0 customer base 是「單一 SRE/NOC team 拉自己 tenant 全部」，sub-team scope 是更晚的需求；現在做會增加 2-tier → 3-tier schema 複雜度，但無 customer signal。
 
+### 前提約束（Prerequisites — IV-2 blocker，**adversarial review surfaced**）
+
+#### Data-layer Label Enrichment Guarantee
+
+所有 platform whitelist 列入的 metric，平台**必須**確保在 ingest / scrape 階段
+（Prometheus `scrape_configs.relabel_configs`、VictoriaMetrics `relabel_config`、
+或統一 ingestion pipeline）已可靠注入 `tenant_id` label。
+
+**為什麼這是 prerequisite**：proxy 在 query path 強制把 `{tenant_id="<X>"}` 注入到所有
+selector。如果某 metric 原生不帶 `tenant_id` label，query 結果就是 empty vector——
+tenant 看到「dashboard 空白」，會報修「federation 壞了」，SRE 要從 token 一路查到 scrape
+config 才能發現是 data-layer 沒打 label。是個典型的 silent-failure 地雷。
+
+**典型踩坑 metric 來源**（無 tenant_id native label）：
+
+- `container_*`（cAdvisor）
+- `node_*`（node-exporter）
+- `kube_*`（kube-state-metrics）
+- 任何透過 federation 從上游 Prom 抓進來、上游沒打 tenant label 的 metric
+
+**強制 admission validator**：whitelist 加入新 metric 時，IV-2 須實作的 admission validator
+要驗「**過去 24h 該 metric 在後端 storage 至少有一筆帶 `tenant_id` label 的 sample**」
+（類似 cardinality guard 的設計：admission 時間發現問題，而非 tenant 報修才發現）。
+
 ### Token model
 
 | 屬性 | 設計選擇 | 理由 / trade-off |
 |---|---|---|
 | **簽發方** | tenant-api `/api/v1/federation/tokens` POST | 與既有 tenant-api auth pipeline 一致；不另起 service |
 | **TTL** | 4h（hardcoded MVP，Helm value 可調） | 4h 在「短到撤銷不重要」與「長到 ops 不痛苦」之間平衡 |
-| **撤銷機制** | ⚠️ **無 server-side revocation list**（MVP） | Trade-off：避免 token revocation table 的 cache / propagation / TTL 複雜度。換來的代價：token 洩漏後最多曝險 4h。對 v2.9.0 MVP 可接受；compliance 客戶觸發時改設計 |
+| **撤銷機制** | ⚠️ **無 server-side revocation list**（MVP）。⚠️⚠️ **Compensating control 強制要求**：API Gateway 必須實作嚴格 per-token + per-IP rate limiting（見 §Blast radius Layer 2），確保 4h 曝險窗內外洩 token 即便被併發濫用也無法把後端 storage CPU 打滿 | Trade-off：避免 token revocation table 的 cache / propagation / TTL 複雜度。換來代價：token 洩漏後**最多** 4h 曝險（前提：gateway rate limit 確實到位；缺它則 4h 曝險升級為 4h DoS 樂園）。Gateway rate limit **不是** nice-to-have，是放棄 revocation 的對價 |
 | **Scope binding** | token 內 embed `tenant_id` claim，proxy 強制 inject | proxy 不能信 query string 帶的 tenant_id |
 | **Refresh** | 過期前 tenant 自行重新簽發；無 sliding refresh | 簡化實作；4h 重簽對 self-service tenant 不痛 |
 
-### Blast radius 三件組（必須全部到位）
+### Blast radius：3-layer defense（**proxy 一個人擋不住**——adversarial review surfaced）
 
-```yaml
-# vmauth / prom-label-proxy 共通 config schema
-federation:
-  blast_radius:
-    max_concurrent_requests_per_token: 4    # 並發查詢上限
-    request_timeout_seconds: 30             # 單一 query 超時
-    max_series_per_response: 100000         # 單 query 結果 series 上限
+> ⚠️ **架構幻覺修正**：本 ADR 早期 draft 把三件組（concurrency / timeout / series cap）全
+> 放在 proxy layer，**這是錯的**。`prom-label-proxy` 是極輕量的 label-injection middleware：
+> 它解析 PromQL AST 注入 label，然後**把 request 原封不動轉給後端**，不解析 response body
+> （所以無法擋 series cap），也不追蹤 per-token state（所以無法做 per-token concurrency）。
+> `vmauth` 雖有 per-user concurrency / timeout 原生支援，但 series cap 同樣不在它職責。
+>
+> 正確架構：blast radius 三件組要**分布在三層**，每層做它最適合的事。
+
+#### Layer 1 — Storage backend（series / sample 上限）
+
+| 後端 | Flag / Config | 防護對象 |
+|---|---|---|
+| Prometheus | `--query.max-samples`（單 query sample 總數上限） + `--query.timeout`（global query 超時） | 防 OOM-by-query |
+| VictoriaMetrics | `-search.maxUniqueTimeseries`（單 query 唯一 series 上限） + `-search.maxSamplesPerQuery` + `-search.maxQueryDuration` | 同上 |
+
+平台必須在 v2.9.0 部署時**強制配置**這些 flag。建議起始 range（IV-2 依實際 customer query pattern tuning）：
+
+- Prom `--query.max-samples`：5M–50M（Prom 預設 50M；federation read 比 internal eval 更該嚴，但太嚴會擋合法 dashboard，5M 是「典型 1000 series × 1d @ 30s scrape ≈ 3M」之上的保守起點）
+- VM `-search.maxUniqueTimeseries`：50k–300k（VM 預設 300k；同樣 federation 該嚴一些）
+- 兩者 query timeout 都 30s（與 Layer 2 timeout 對齊）
+
+#### Layer 2 — API Gateway / Ingress（per-token concurrency + per-token rate limit）
+
+`prom-label-proxy` 沒有 per-token concurrency 原生支援 → 必須由前置 **API Gateway**（Nginx /
+Envoy / Traefik，依平台 Helm 既有 ingress 選擇）擋。Gateway 從 JWT claim 解出 `token_id`，
+用它當 rate-limit key。
+
+`vmauth` 對 VM 客戶可走原生 per-user rate limit（`max_concurrent_requests` / `max_request_duration`
+on user config），不一定要 gateway 也行——但**為了統一架構**，建議仍走 gateway layer 集中
+管理（Helm chart 可選 mode A: gateway-only / mode B: gateway + vmauth 雙層；後者對 VM 客戶
+是 defense-in-depth）。
+
+```nginx
+# 概念示意（zone 宣告與 JWT claim 抽取為簡化展示，實際 Helm chart 須補完整）
+http {
+    # zone 宣告（http context；key 為 JWT token_id，由 njs/auth_request 抽出後寫到 $token_id）
+    limit_req_zone  $token_id zone=per_token_rl:10m  rate=10r/s;
+    limit_conn_zone $token_id zone=per_token_conn:10m;
+
+    server {
+        location /federation/ {
+            limit_req zone=per_token_rl burst=20 nodelay;  # 10 req/s sustained, burst 20
+            limit_conn per_token_conn 4;                   # 4 concurrent per token
+            proxy_read_timeout 30s;
+            proxy_send_timeout 30s;
+            proxy_pass http://prom-label-proxy/;
+        }
+    }
+}
 ```
 
-| 控制項 | 觸發行為 | 防護對象 |
-|---|---|---|
-| `max_concurrent_requests_per_token` | 超過時 HTTP 429 + audit log | 防 tenant 並發轟炸 |
-| `request_timeout_seconds` | 超時 HTTP 504 + audit log | 防 unbounded query 拖垮 storage |
-| `max_series_per_response` | 超量 → HTTP 413 + audit log（**reject 而非 truncate**——truncate 會讓 tenant dashboard 顯示誤導性的「不完整但無警告」資料，明確拒絕 + 引導 tenant 加 label filter 才是正解） | 防 high-cardinality scan 把記憶體吃光 |
+**Rate limit key 抽取**：Nginx `js_set`（NJS）/ Envoy `header_to_metadata_filter` 從
+`Authorization: Bearer <jwt>` 解出 token claim 寫到變數，用 `token_id` 當 limit key
+（**不是用 IP**，否則公司 NAT 後所有 tenant 互相影響）。完整 Helm template 細節
+留 IV-2 sub-issue。
 
-**Default 值 rationale**（IV-2 implementation 可依實測調整）：
+#### Layer 3 — Proxy（label injection + audit log）
 
-- `max_concurrent_requests_per_token: 4` — 一個 tenant 的 Grafana / 自管 alert eval / oncall 並行查詢通常 ≤ 3。4 留一格 headroom 但擋住明顯 abuse。Helm value 可調
-- `request_timeout_seconds: 30` — 30s 是「正常 dashboard / oncall query 的舒適區上限」（Grafana 預設 query timeout 也在 30s 附近）。Tenant 若有需要長跑的離線分析應該透過 batch export（Future Work），不是 federation 即時 path。Helm value 可調
-- `max_series_per_response: 100000` — 100k series 是「能撐住一張 cluster-wide dashboard panel」與「不至於 OOM single proxy pod」的中間值。`up` metric 全 fleet 視 cluster 規模通常 1k–10k；100k 給合理 group-by 留空間，擋住 `count by (instance) (...)` 這類意外高基查詢
+`vmauth` / `prom-label-proxy` 在此層只做兩件事：
 
-**三件組缺一不可**：缺並發 cap 等於開門讓 tenant DoS；缺 timeout 等於開門讓 tenant 跑 30 分鐘的 query；缺 series cap 等於開門讓 tenant 拉 `up` 全 fleet。
+1. **Label injection**：強制把 `{tenant_id="<X>"}` 注入所有 selector（核心安全保證）
+2. **Audit log**：記錄被改寫後的 query（給 platform ops 觀察 tenant 行為）
+
+#### Default 值 rationale（IV-2 實測可調）
+
+| 控制項 | 預設值 | Where | Rationale |
+|---|---|---|---|
+| Concurrency / token | 4 | Gateway L7 | 一個 tenant 的 Grafana / 自管 alert eval / oncall 並行 query 通常 ≤ 3；4 留 headroom 擋明顯 abuse |
+| Request timeout | 30s | Gateway L7 + storage backend | Grafana 預設 query timeout 在 30s 附近；長跑離線分析應走 batch export 非 federation 即時 path |
+| Series per query | 100k | Storage backend | 100k series 是「撐得起 cluster-wide dashboard panel」與「不至於 OOM」的中間值；擋住 `count by (instance) (...)` 類意外高基查詢 |
+| Sample per query | 5M | Storage backend | 與 series cap 互補：tenant 可能拉低基數但長時段範圍 |
+
+**三層缺一不可，且職責不可錯位**：proxy 擋 label 注入；storage 擋 query 資源；gateway 擋
+token-level abuse。錯放層（例如指望 proxy 擋 series cap）= 實作 IV-2 時工程師會發現做不到，
+最後還是得自寫 middleware，**違背本 ADR 不自寫 endpoint 的初衷**。
 
 ### Audit log + anomaly metric
 
@@ -200,17 +277,18 @@ federation:
 
 優點（vs A/B/C）：
 
-- **Engineering cost**：~56h（一個 v2.9.0 epic）vs 自寫 6+ months
-- **安全性**：兩個 proxy 都是 multi-year production-hardened
+- **Engineering cost**：~56h IV-2（adversarial review 後從 44h 上調，見 §實作計畫）vs 自寫 6+ months
+- **Label injection 安全性**：兩個 proxy 在 label injection / query rewrite 範疇是 multi-year production-hardened（**注意 scope 限定**：proxy 不負責 series cap / 並發控制——那些靠 storage backend + API gateway，見 §Blast radius 3-layer。但每層用的都是 well-established 工具，不是自寫）
 - **Ecosystem 對齊**：VM 客戶看到 vmauth = 熟悉、Prom 客戶看到 prom-label-proxy = 熟悉，沒新東西要學
 - **後端解耦**：proxy 在「客戶 → 後端 storage」中間，後端 storage 換什麼（Prom / VM / Mimir）proxy 都吃
 
 缺點（已接受）：
 
 - 兩個 proxy 兩套 config schema 要維護（platform Helm chart 抽象掉 90%，剩 10% 是兩邊原生差異）
-- vmauth 與 prom-label-proxy 的 feature parity 不 100%（series cap 在兩邊都有但語法不同），platform 文件須交代差異
+- vmauth 與 prom-label-proxy 的 feature parity 不對稱（vmauth 有 per-user concurrency / timeout 原生支援，prom-label-proxy 全靠 API gateway 補；本 ADR 統一走 gateway layer 集中管理）
+- **3 component coordination**（proxy + gateway + storage backend）比自寫單 endpoint 多三套變動點，每次 upstream 升級要 multi-layer regression
 
-**結論**：採用。本 ADR 主決策。
+**結論**：採用。本 ADR 主決策。Multi-component 缺點 acceptable，因為每層都是 well-established 工具，不是自寫——比自寫 endpoint 的單點變成「全平台單點 multi-tenant breach 風險」要好。
 
 ## 實作計畫
 
@@ -218,28 +296,41 @@ federation:
 |---|---|---|
 | 1. ADR draft + review | 本 ADR ship + Gemini cross-check | 12h（本階段 = IV-1） |
 | 2. Proxy 整合 + Helm chart | vmauth / prom-label-proxy 部署 + platform 抽象層 config | 8h |
-| 3. Token endpoint | tenant-api `POST/GET/DELETE /api/v1/federation/tokens` + token signing + persistence | 12h |
-| 4. Policy schema + validator | 2-tier whitelist/subset schema + admission validator + JSON schema for tenant API | 10h |
-| 5. Audit log + anomaly metric | Structured log + sentinel alert + Grafana dashboard fragment | 6h |
-| 6. 文件 | `docs/integration/tenant-federation.md` user-facing guide + Helm chart README + sample policy | 8h |
-| **IV-2 Total (excluding IV-1)** | — | **~44h** + ADR 12h = **~56h** |
+| 3. API Gateway rate-limit Helm chart support | Nginx/Envoy templates + JWT token claim extraction（**adversarial review surfaced**——proxy 沒 per-token concurrency 原生支援，必須 gateway 補） | 5h |
+| 4. Storage backend tuning | Helm chart 加 `--query.max-samples` / `-search.maxUniqueTimeseries` 等 flag 預設 + tuning guide | 2h |
+| 5. Token endpoint | tenant-api `POST/GET/DELETE /api/v1/federation/tokens` + token signing + persistence | 12h |
+| 6. Policy schema + admission validator | 2-tier whitelist/subset schema + JSON schema + **tenant_id label-enrichment 驗證**（**adversarial review surfaced**——擋 empty-vector silent failure） | 13h |
+| 7. Audit log + anomaly metric | Structured log + sentinel alert + Grafana dashboard fragment | 6h |
+| 8. 文件 | `docs/integration/tenant-federation.md` user-facing guide + Helm chart README + sample policy + **3-layer architecture 文件** | 10h |
+| **IV-2 Total (excluding IV-1)** | — | **~56h** + ADR 12h = **~68h** |
 
-**Effort 估算**：本表 IV-2 line items 加總 44h，加 IV-1 (12h) = 全 epic 56h。對應 [issue #380](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/380) IV-2 body 的 "Total: ~56h"——issue body 的 line items 加總實為 44h，"56h" 應是包含 IV-1 的 epic 全體，本表明示拆分以避免歧義。IV-2 拆 sub-issue 在 v2.9.0 epic kickoff 時做，不在本 ADR 範圍。
+**Effort 估算（adversarial review 後上修）**：原 [issue #380](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/380) IV-2 body 估 44h，但其架構假設「proxy 一個人擋所有 blast radius」是 architecture hallucination（見 §Blast radius adversarial review note）。修正為 3-layer defense 後增加：
+
+- Gateway rate-limit Helm 抽象（+5h，line 3）
+- Storage backend tuning section（+2h，line 4）
+- Admission validator tenant_id enrichment 驗證（+3h 進 line 6 = 10h → 13h）
+- 3-layer 架構文件（+2h 進 line 8 = 8h → 10h）
+
+合計 +12h，IV-2 從 44h → 56h，全 epic 從 56h → 68h。
+
+IV-2 拆 sub-issue 在 v2.9.0 epic kickoff 時做，不在本 ADR 範圍；最終 effort 以 sub-issue 拆分後實測為準。
 
 ## 後果（Consequences）
 
 ### 正面
 
 - Tenant 拿到 standards-compliant federation 介面（Prom remote_read / VM read API），整合既有 oncall workflow 零摩擦
-- Platform engineering cost 從 6+ months 壓到 56h
-- Multi-tenant isolation 由 production-hardened proxy 保證，非自寫
+- Platform engineering cost 從 6+ months 壓到 68h
+- Multi-tenant **label-level** isolation 由 production-hardened proxy 保證；resource isolation 由 storage backend 強制；rate isolation 由 API gateway 強制——三層每層都是 well-established 工具，不是自寫
 - 後端 storage 演進不影響 federation 介面（proxy 抽象層解耦）
 - 2-tier policy 讓 platform 與 tenant 各自有 audit-able 控制點
 
 ### 負面
 
 - 兩套 proxy 兩套 config 要維護（Helm chart 抽象 + 文件交代差異）
-- Token TTL 4h + 無 revocation list = token 洩漏曝險窗 4h，明寫 trade-off
+- **3-component coordination**（proxy + API gateway + storage backend）——每次 upstream 升級要 multi-layer regression；任一層配錯都會造成 silent failure 或安全破口
+- Token TTL 4h + 無 revocation list = token 洩漏曝險窗 4h；**critical dependency on gateway rate limit**——gateway 配錯 → 4h 變 DoS 樂園
+- **Data-layer prerequisite**：所有 whitelist 列入的 metric 必須在 ingest/scrape 階段帶 `tenant_id` label；admission validator 是 IV-2 必需，不是 nice-to-have
 - Domain layer scope 在 MVP 缺席，sub-team 客戶來時要 schema migration
 - vmauth / prom-label-proxy 任一上游 break change，platform Helm chart 須同步更新
 - Audit log size：每個 federation request 寫一筆 → tenant 高頻拉時 log volume 不小，需 retention policy
@@ -248,6 +339,7 @@ federation:
 
 - 新 tenant-api endpoint 一組（`/api/v1/federation/*`）— 比照既有 `/api/v1/events` / `/api/v1/tenants` 風格
 - 文件多一份 `docs/integration/tenant-federation.md` — 客戶 onboarding 多一條閱讀路徑（與 [`federation-integration.md`](../integration/federation-integration.md) ADR-004 平行）
+- 新增 platform Grafana dashboard：3-layer rejection rate（gateway 429 / proxy 4xx / storage 5xx）給 platform ops 觀察 blast radius hit rate
 
 ## Future Work
 
