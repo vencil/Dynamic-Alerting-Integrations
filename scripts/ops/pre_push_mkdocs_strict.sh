@@ -75,8 +75,13 @@ if [ -z "$UPSTREAM" ]; then
     fi
 fi
 
-# Use --diff-filter=ACMR to include Added/Copied/Modified/Renamed (skip Deleted)
-CHANGED=$(git diff --name-only --diff-filter=ACMR "$UPSTREAM"...HEAD 2>/dev/null || echo "")
+# --diff-filter=ACMRD — Added/Copied/Modified/Renamed/Deleted.
+# CRITICAL: 'D' (deleted) MUST be included. Deleting a doc is precisely the
+# failure mode that breaks mkdocs strict: dangling nav entries pointing at
+# the deleted file, broken cross-refs from other docs that linked to it.
+# Skipping 'D' would silently bypass exactly the case this hook is supposed
+# to catch.
+CHANGED=$(git diff --name-only --diff-filter=ACMRD "$UPSTREAM"...HEAD 2>/dev/null || echo "")
 
 # Filter to doc-affecting files
 DOC_CHANGES=$(echo "$CHANGED" | grep -E '^(docs/.*\.(md|jsx|html)$|mkdocs\.yml$|README\.md$|README\.en\.md$|CHANGELOG\.md$)' || true)
