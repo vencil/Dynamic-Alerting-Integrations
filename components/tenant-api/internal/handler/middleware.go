@@ -295,10 +295,15 @@ func RateLimitMetrics() (rejections int64, activeCallers int) {
 }
 
 // RateLimit returns chi middleware that throttles per-caller
-// request rate. Skipped paths are exempt; everything else is
-// counted. Over-cap responses return JSON with the same shape
-// the rest of the API uses (error key) plus a code and
-// retry_after_s field for programmatic clients.
+// request rate, plus a handle to the underlying limiter for
+// callers that need direct counter readback (tests, future
+// explicit /metrics injection). Skipped paths are exempt;
+// everything else is counted. Over-cap responses return JSON
+// with the same shape the rest of the API uses (error key) plus
+// a code and retry_after_s field for programmatic clients.
+//
+// The returned `*rateLimiter` is nil when cfg.RequestsPerMinute
+// <= 0 (limiter disabled — middleware is a no-op pass-through).
 //
 // `stopCh` controls the bucket-sweeper goroutine lifecycle. Pass
 // the same stop channel main.go uses to terminate hot-reload
@@ -306,11 +311,19 @@ func RateLimitMetrics() (rejections int64, activeCallers int) {
 // Tests that don't want a background sweeper can pass a fresh
 // channel and never close it (the sweeper sleeps until interval
 // or stopCh; idle cost is one ticker per process).
-func RateLimit(cfg RateLimitConfig, stopCh <-chan struct{}) func(http.Handler) http.Handler {
+//
+// Most production callers can discard the second return value
+// (`mw, _ := RateLimit(...)`); /metrics still finds the limiter
+// via activeLimiter. Tests that need to assert counter values
+// MUST use the returned limiter directly — activeLimiter is a
+// package-level pointer overwritten by every RateLimit() call,
+// so under t.Parallel() RateLimitMetrics() may read someone
+// else's limiter.
+func RateLimit(cfg RateLimitConfig, stopCh <-chan struct{}) (func(http.Handler) http.Handler, *rateLimiter) {
 	if cfg.RequestsPerMinute <= 0 {
 		// Limiter disabled: hand back the identity middleware so
 		// the chain composes cleanly.
-		return func(next http.Handler) http.Handler { return next }
+		return func(next http.Handler) http.Handler { return next }, nil
 	}
 	// Production limiters get the sweeper; the activeLimiter
 	// pointer is updated so /metrics finds the right one even
@@ -322,7 +335,7 @@ func RateLimit(cfg RateLimitConfig, stopCh <-chan struct{}) func(http.Handler) h
 	}()
 	limiter := newRateLimiterWithSweep(cfg, sweepStop)
 	activeLimiter.Store(limiter)
-	return func(next http.Handler) http.Handler {
+	mw := func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if cfg.SkipPaths != nil && cfg.SkipPaths[r.URL.Path] {
 				next.ServeHTTP(w, r)
@@ -346,6 +359,7 @@ func RateLimit(cfg RateLimitConfig, stopCh <-chan struct{}) func(http.Handler) h
 			next.ServeHTTP(w, r)
 		})
 	}
+	return mw, limiter
 }
 
 // ─────────────────────────────────────────────────────────────────

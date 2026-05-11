@@ -189,7 +189,7 @@ func TestCodeFromStatus(t *testing.T) {
 func TestRateLimit_EnvelopeShape(t *testing.T) {
 	t.Parallel()
 	cfg := RateLimitConfig{RequestsPerMinute: 1}
-	mw := RateLimit(cfg, make(chan struct{}))
+	mw, _ := RateLimit(cfg, make(chan struct{}))
 
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)

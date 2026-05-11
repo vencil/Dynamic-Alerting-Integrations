@@ -233,7 +233,11 @@ func main() {
 	}
 	// PR-11/11: stopCh terminates the limiter's bucket-sweeper
 	// goroutine alongside the rbac/policy/tracker WatchLoops.
-	r.Use(handler.RateLimit(rlCfg, stopCh))
+	// The second return value (limiter handle) is for tests;
+	// /metrics finds the limiter via activeLimiter, set inside
+	// RateLimit().
+	rlMw, _ := handler.RateLimit(rlCfg, stopCh)
+	r.Use(rlMw)
 
 	// Health / readiness / metrics (no auth)
 	r.Get("/health", handler.Health)
