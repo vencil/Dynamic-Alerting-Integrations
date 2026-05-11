@@ -419,7 +419,7 @@ Gate 3 通過條件：
 - 24h-1 ops cycle 觀察 → 推全量
 - Rollback path：**git revert** config commit → rule evaluator reload → shadow label 恢復 → 告警重新被 AM 既有 shadow matcher 路由到 /dev/null（< 5 分鐘）
 
-### Architect Narrative（待寫）
+### Architect Narrative
 
 **關鍵機制澄清**（避免常見誤解）：
 
