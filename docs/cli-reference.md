@@ -109,6 +109,7 @@ da-tools <command> --help
 | `init` | 專案骨架產生（CI/CD + conf.d + Kustomize overlays） | `--ci <platform>` 或互動模式 |
 | `gitops-check` | GitOps Native Mode 就緒度驗證（repo / local / sidecar） | `<subcommand>` |
 | `state-reconcile` | 遷移狀態目錄聲明式一致化（schema_version 驗證 + manifest 重建） | `--state-dir <dir>`（預設 `.da/state`） |
+| `rule-pack-diff` | Rule Pack 兩版本機械比對（added / removed / breaking label schema） | `--from <v1.yaml> --to <v2.yaml>` |
 
 ### Operator + Federation 工具
 
@@ -1340,6 +1341,60 @@ da-tools state-reconcile --ci --dry-run
 # 自動化讀取
 da-tools state-reconcile --json
 ```
+
+---
+
+#### rule-pack-diff
+
+Rule Pack 兩版本機械比對——掃 `groups[*].rules[*]` 的 `alert` / `record` entries，分類為 added / removed / modified / breaking label schema。取代 [staged-adoption-guide §7.3](scenarios/staged-adoption-guide.md) 中的「人工對照 CHANGELOG + git diff」流程（[issue #405](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/405) Category D）。
+
+```bash
+da-tools rule-pack-diff --from <v1.yaml> --to <v2.yaml> [options]
+```
+
+**主要參數**
+
+| 參數 | 用途 |
+|------|------|
+| `--from <path>` | 舊版本 Rule Pack YAML 路徑 |
+| `--to <path>` | 新版本 Rule Pack YAML 路徑 |
+| `--json` | 輸出 JSON 結構化報告 |
+| `--ci` | breaking changes 偵測到時 exit 1（CI gate）—— breaking 定義：alert 被移除、label key 增減、label value 變動、alert↔record kind 互換 |
+
+**Breaking 判定 vs 不 breaking（informational）**
+
+| 變動 | 是否 breaking |
+|---|---|
+| Alert 移除 / 改名 | ⚠️ breaking（silencer matcher on alertname 失效） |
+| Label key 增 / 減 | ⚠️ breaking（matcher 上的 key 不存在 / 多出來） |
+| Label value 變（如 `severity: warning → critical`） | ⚠️ breaking（嚴格相等 matcher 失效） |
+| Alert ↔ record kind 互換 | ⚠️ breaking（silencer 對 recording rule 無效） |
+| PromQL `expr` 變 | 📝 informational（語意等價無法自動判定） |
+| Annotation 變 | 📝 informational |
+| `for:` duration 變 | 📝 informational |
+
+**典型用法**
+
+```bash
+# 從 git 抽兩個版本比對
+git show v1.0.0:rule-packs/rule-pack-mariadb.yaml > /tmp/v1.yaml
+git show v2.0.0:rule-packs/rule-pack-mariadb.yaml > /tmp/v2.yaml
+da-tools rule-pack-diff --from /tmp/v1.yaml --to /tmp/v2.yaml
+
+# CI gate：breaking 偵測到擋 merge
+da-tools rule-pack-diff --from /tmp/v1.yaml --to /tmp/v2.yaml --ci
+
+# 自動化讀取
+da-tools rule-pack-diff --from /tmp/v1.yaml --to /tmp/v2.yaml --json
+```
+
+**Exit codes**
+
+| Code | 含義 |
+|------|------|
+| 0 | 比對完成（無 breaking changes；或無 `--ci` 即便有 breaking 也 0） |
+| 1 | `--ci` 模式偵測到 breaking changes |
+| 2 | caller error（檔案不存在 / 解析失敗 / 參數錯） |
 
 ---
 
