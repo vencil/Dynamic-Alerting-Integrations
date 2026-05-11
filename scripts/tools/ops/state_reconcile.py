@@ -25,14 +25,20 @@ Usage:
   da-tools state-reconcile                          # default --state-dir .da/state/
   da-tools state-reconcile --state-dir custom/      # custom location
   da-tools state-reconcile --dry-run                # report changes, do not write
-  da-tools state-reconcile --ci                     # exit 1 if dry-run shows changes
-                                                    # needed (suitable for CI gate)
+  da-tools state-reconcile --dry-run --ci           # CI gate: dry-run AND exit 1
+                                                    # if changes pending — typical
+                                                    # pre-merge check
   da-tools state-reconcile --json                   # machine-readable JSON output
+
+The --ci flag is paired with --dry-run for a check-only gate: it
+treats "changes would be needed" as a CI failure. Without --dry-run,
+--ci simply applies changes (still exit 1 if unresolvable drift remains).
+Unresolvable drift always exits 1 regardless of --ci.
 
 Exit codes:
   0  state directory consistent (or all changes applied successfully)
-  1  unresolvable schema drift (e.g. missing schema_version) — or, in --ci mode,
-     changes are needed but --dry-run skipped applying them
+  1  unresolvable schema drift (e.g. missing schema_version field) — or, in
+     --ci --dry-run mode, changes are pending and were not applied
   2  caller error (bad arguments / missing state directory when not --json)
 """
 from __future__ import annotations
@@ -79,13 +85,47 @@ def read_state(filepath: Path) -> tuple[dict | None, str | None]:
         return None, f"invalid JSON: {exc}"
 
 
+def normalize_schema_version(value) -> str | None:
+    """Coerce a parsed schema_version to canonical string form.
+
+    State files SHOULD declare `"schema_version": "1.0"` (string per
+    docs/schemas/migration-state.md), but a user editing the JSON by hand
+    might write `"schema_version": 1.0` (numeric). Without coercion, the
+    equality check `1.0 == "1.0"` is False and we falsely report drift
+    with a confusing "no migration from 1.0 to 1.0" message.
+
+    Coerce numeric values to a "<major>.<minor>" string. Return None for
+    missing or non-coercible values; caller treats None as "missing field".
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        # bool is a subclass of int — exclude explicitly so True/False
+        # don't get coerced to "1.0"/"0.0"
+        return None
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (int, float)):
+        # 1.0 → "1.0"; 1 → "1.0" (treat bare int as major-only)
+        if float(value).is_integer():
+            return f"{int(value)}.0"
+        return str(float(value))
+    return None  # arrays / dicts / other — not a valid schema_version
+
+
 def apply_migration_chain(
     state: dict, from_version: str, to_version: str
 ) -> tuple[dict | None, str | None]:
-    """Apply registered migrations to walk from from_version to to_version.
+    """Apply a single registered migration step from from_version to to_version.
 
-    Returns (migrated_state, error_message). When no migration path exists,
-    returns (None, reason).
+    Returns (migrated_state, error_message). When no direct migration is
+    registered, returns (None, reason).
+
+    NOTE: name says "chain" but MVP impl is single-hop — looks up
+    (from_version, to_version) directly in MIGRATIONS. For multi-step paths
+    (e.g. 1.0 → 1.2 via 1.1), register the direct hop or refactor to BFS
+    when the second migration lands. For v1.0 only there is no prior
+    version to migrate from, so this is dormant.
     """
     if from_version == to_version:
         return state, None
@@ -98,21 +138,40 @@ def apply_migration_chain(
     )
 
 
+def _state_dir_path_prefix(state_dir: Path) -> str:
+    """Compute the manifest `path` prefix used when listing state files.
+
+    Default-case behaviour (`state_dir = Path(".da/state")`) keeps the
+    canonical ".da/state/<file>" shape from migration-state.md. Custom
+    locations (e.g. `--state-dir custom/states/`) preserve the caller-
+    provided path so the manifest stays self-consistent.
+
+    Uses POSIX-style separators so the manifest reads identically on
+    Windows + Linux CI (state files are committed to a GitOps repo;
+    cross-platform stability matters).
+    """
+    # Path.as_posix() normalises Windows backslashes to forward slashes
+    # and strips trailing separators.
+    posix = state_dir.as_posix().rstrip("/")
+    return posix if posix else "."
+
+
 def build_manifest(state_files: list[Path], state_dir: Path) -> dict:
     """Build manifest.json content from the filesystem state.
 
-    `path` field is recorded relative to repo root (canonical form `.da/state/X.json`)
-    so the manifest is portable across checkouts regardless of CWD.
+    `path` field is recorded relative to the caller-supplied `state_dir`,
+    so manifest entries match wherever the caller pointed (default
+    `.da/state` → ".da/state/<file>"; custom `custom/states` →
+    "custom/states/<file>"). The manifest is portable across checkouts
+    as long as caller invokes the tool from the same CWD.
     """
+    prefix = _state_dir_path_prefix(state_dir)
     states = []
-    # Manifest paths are recorded as .da/<state-dir-basename>/<file>
-    # so callers checking out the repo from any CWD can resolve them.
-    rel_root = f".da/{state_dir.name}"
     for sf in state_files:
         states.append(
             {
                 "cluster": sf.stem,
-                "path": f"{rel_root}/{sf.name}",
+                "path": f"{prefix}/{sf.name}",
             }
         )
     return {
@@ -157,10 +216,19 @@ def reconcile(
             )
             continue
 
-        sv = data.get("schema_version")
+        sv_raw = data.get("schema_version")
+        sv = normalize_schema_version(sv_raw)
         if sv is None:
+            # Distinguish "missing" from "non-coercible" (e.g. dict, bool)
+            if sv_raw is None:
+                reason = "missing schema_version field"
+            else:
+                reason = (
+                    f"schema_version has unsupported type "
+                    f"{type(sv_raw).__name__}: {sv_raw!r}"
+                )
             report["schema_drift_unresolvable"].append(
-                {"file": str(sf), "reason": "missing schema_version field"}
+                {"file": str(sf), "reason": reason}
             )
             continue
 
@@ -294,8 +362,10 @@ def main(argv: list[str] | None = None) -> int:
         "--ci",
         action="store_true",
         help=(
-            "Exit 1 when changes are needed (in --dry-run mode) or any drift "
-            "remains. Suitable for CI gate."
+            "Pair with --dry-run for a check-only CI gate: exit 1 when "
+            "changes would be needed. Unresolvable drift always exits 1 "
+            "regardless of --ci. Without --dry-run, --ci has no effect on "
+            "the apply path (changes still get applied)."
         ),
     )
     ap.add_argument(

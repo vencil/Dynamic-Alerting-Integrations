@@ -1307,7 +1307,7 @@ da-tools state-reconcile [options]
 | `--state-dir <dir>` | 含 per-cluster state 檔的目錄 | `.da/state` |
 | `--manifest-path <path>` | manifest 檔路徑 | `.da/manifest.json` |
 | `--dry-run` | 只報告需改動，不寫入 | 無 |
-| `--ci` | dry-run 偵測到需改動或有 unresolvable drift 時 exit 1（CI gate 用） | 無 |
+| `--ci` | **配合 `--dry-run` 用**：check-only CI gate，dry-run 偵測到需改動時 exit 1。Unresolvable drift 永遠 exit 1（不需 `--ci`）。單獨用 `--ci`（無 `--dry-run`）仍會 apply changes | 無 |
 | `--json` | 輸出 JSON 結構化報告 | 文字模式 |
 
 **Exit codes**

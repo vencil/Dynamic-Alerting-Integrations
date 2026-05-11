@@ -1410,7 +1410,7 @@ da-tools state-reconcile [options]
 | `--state-dir <dir>` | Directory with per-cluster state files | `.da/state` |
 | `--manifest-path <path>` | Manifest file path | `.da/manifest.json` |
 | `--dry-run` | Report needed changes without writing | (off) |
-| `--ci` | Exit 1 in dry-run when changes are needed, or when unresolvable drift remains (CI gate) | (off) |
+| `--ci` | **Pair with `--dry-run`** for a check-only CI gate (exit 1 when changes would be needed). Unresolvable drift always exits 1 regardless of `--ci`. Using `--ci` alone (no `--dry-run`) still applies changes | (off) |
 | `--json` | Emit JSON structured report | text mode |
 
 **Exit Codes**

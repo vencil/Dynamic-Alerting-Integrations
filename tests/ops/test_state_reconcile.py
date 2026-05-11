@@ -111,6 +111,46 @@ def test_read_state_missing_file(state_dir):
     assert "cannot read" in err
 
 
+# ─── normalize_schema_version ─────────────────────────────────────────
+
+
+def test_normalize_schema_version_string_passthrough():
+    assert sr.normalize_schema_version("1.0") == "1.0"
+    assert sr.normalize_schema_version("1.1") == "1.1"
+
+
+def test_normalize_schema_version_float_coerced():
+    # User hand-edits JSON: "schema_version": 1.0 (numeric) → coerce to "1.0".
+    # Without this, equality vs "1.0" string fails and we false-report drift.
+    assert sr.normalize_schema_version(1.0) == "1.0"
+    assert sr.normalize_schema_version(2.0) == "2.0"
+
+
+def test_normalize_schema_version_int_coerced():
+    # Bare int: treat as major-only.
+    assert sr.normalize_schema_version(1) == "1.0"
+
+
+def test_normalize_schema_version_non_integer_float():
+    # Future minor like 1.5 → "1.5".
+    assert sr.normalize_schema_version(1.5) == "1.5"
+
+
+def test_normalize_schema_version_none():
+    assert sr.normalize_schema_version(None) is None
+
+
+def test_normalize_schema_version_bool_rejected():
+    # bool is an int subclass; must NOT coerce True/False to "1.0"/"0.0".
+    assert sr.normalize_schema_version(True) is None
+    assert sr.normalize_schema_version(False) is None
+
+
+def test_normalize_schema_version_collection_rejected():
+    assert sr.normalize_schema_version([1, 0]) is None
+    assert sr.normalize_schema_version({"major": 1}) is None
+
+
 # ─── apply_migration_chain ────────────────────────────────────────────
 
 
@@ -153,6 +193,37 @@ def test_build_manifest_empty(state_dir):
     assert manifest == {"schema_version": "1.0", "states": []}
 
 
+def test_build_manifest_custom_state_dir_path_prefix(tmp_path):
+    """Manifest `path` field must reflect caller-supplied state_dir, not
+    a hard-coded `.da/<basename>`. This caught a real bug where custom
+    locations like `custom/states/` produced manifest entries pointing
+    to nonexistent `.da/states/<file>`."""
+    custom = tmp_path / "custom" / "states"
+    custom.mkdir(parents=True)
+    _write_state(custom, "cluster-x")
+    files = sr.find_state_files(custom)
+
+    # Relative-form state_dir → preserve as-is in manifest
+    rel = Path("custom/states")
+    manifest = sr.build_manifest(files, rel)
+    assert manifest["states"][0]["path"] == "custom/states/cluster-x.json"
+
+    # Default `.da/state` still produces canonical shape
+    manifest_default = sr.build_manifest(files, Path(".da/state"))
+    assert manifest_default["states"][0]["path"] == ".da/state/cluster-x.json"
+
+
+def test_build_manifest_uses_posix_separators_on_windows():
+    """Path separators in manifest must be POSIX-style for cross-platform
+    GitOps repos (state files committed on Windows + read on Linux CI)."""
+    # Path-like input with backslashes (simulating Windows-style CWD form);
+    # Path normalises via as_posix in our helper
+    state_dir = Path("nested") / "states"
+    manifest = sr.build_manifest([Path(state_dir / "c.json")], state_dir)
+    assert manifest["states"][0]["path"] == "nested/states/c.json"
+    assert "\\" not in manifest["states"][0]["path"]
+
+
 def test_build_manifest_multiple(state_dir):
     _write_state(state_dir, "prod-us-east")
     _write_state(state_dir, "prod-us-west")
@@ -163,9 +234,10 @@ def test_build_manifest_multiple(state_dir):
         "prod-us-east",
         "prod-us-west",
     }
-    # Path is canonical .da/<dirname>/<file>
+    # Path uses the actual state_dir prefix (POSIX form) + filename.
+    expected_prefix = state_dir.as_posix().rstrip("/")
     for s in manifest["states"]:
-        assert s["path"].startswith(".da/state/")
+        assert s["path"].startswith(f"{expected_prefix}/")
         assert s["path"].endswith(".json")
 
 
@@ -212,6 +284,43 @@ def test_reconcile_unresolvable_drift_missing_version(state_dir, manifest_path):
     r = sr.reconcile(state_dir, manifest_path)
     assert len(r["schema_drift_unresolvable"]) == 1
     assert "missing schema_version" in r["schema_drift_unresolvable"][0]["reason"]
+
+
+def test_reconcile_numeric_schema_version_normalised(state_dir, manifest_path):
+    """A hand-edited state file with numeric schema_version (1.0 not "1.0")
+    must be treated as the equivalent string version. Without normalisation
+    the equality vs CURRENT_SCHEMA_VERSION fails and we report bogus drift."""
+    p = state_dir / "cluster-num.json"
+    p.write_text(
+        json.dumps(
+            {
+                "schema_version": 1.0,  # numeric, not string
+                "generated_at": "2026-05-12T00:00:00Z",
+                "generated_by": "test",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    r = sr.reconcile(state_dir, manifest_path)
+    # No drift reported — numeric 1.0 normalised to "1.0" matches CURRENT.
+    assert r["schema_drift_unresolvable"] == []
+    assert r["schema_migrations"] == []
+
+
+def test_reconcile_unsupported_schema_version_type(state_dir, manifest_path):
+    """schema_version of dict / bool / list → unresolvable with a typed reason."""
+    p = state_dir / "cluster-weird.json"
+    p.write_text(
+        json.dumps({"schema_version": {"major": 1, "minor": 0}}),
+        encoding="utf-8",
+    )
+
+    r = sr.reconcile(state_dir, manifest_path)
+    assert len(r["schema_drift_unresolvable"]) == 1
+    reason = r["schema_drift_unresolvable"][0]["reason"]
+    assert "unsupported type" in reason
+    assert "dict" in reason
 
 
 def test_reconcile_unresolvable_drift_old_version(state_dir, manifest_path):
