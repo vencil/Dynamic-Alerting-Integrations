@@ -64,6 +64,24 @@ repos:
         pass_filenames: false
         stages: [pre-push]
 
+      # --- MkDocs strict semantic gate (pre-push only) ---
+      # Catches site-root-vs-filesystem-path link errors that pre-commit
+      # check_doc_links.py misses (different semantic model). Hit 5+ PRs
+      # in close succession (#391/#375/#400/#406/#411) before this hook
+      # was added. Issue #412 documents the recurrence pattern.
+      #
+      # Tier 1: native mkdocs → run + block on failure
+      # Tier 2: no mkdocs → WARN, don't block (CI is backstop)
+      #
+      # Escape hatch: MKDOCS_STRICT_BYPASS=1 git push
+      - id: mkdocs-strict-pre-push
+        name: "Guard: mkdocs strict (site-root semantic check) when docs changed"
+        entry: bash scripts/ops/pre_push_mkdocs_strict.sh
+        language: system
+        always_run: true
+        pass_filenames: false
+        stages: [pre-push]
+
       # --- sed -i damage detection (after hygiene fixer) ---
       - id: sed-damage-guard
         name: "Guard: detect sed -i damage"
