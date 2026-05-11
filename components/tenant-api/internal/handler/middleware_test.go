@@ -91,7 +91,8 @@ func TestRequestIDResponse_NoOpWhenContextEmpty(t *testing.T) {
 func TestRateLimit_AllowsUnderCap(t *testing.T) {
 	t.Parallel()
 	cfg := RateLimitConfig{RequestsPerMinute: 3}
-	handler := RateLimit(cfg, make(chan struct{}))(http.HandlerFunc(
+	mw, _ := RateLimit(cfg, make(chan struct{}))
+	handler := mw(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
 		}))
@@ -110,7 +111,8 @@ func TestRateLimit_AllowsUnderCap(t *testing.T) {
 func TestRateLimit_BlocksAtCap(t *testing.T) {
 	t.Parallel()
 	cfg := RateLimitConfig{RequestsPerMinute: 2}
-	handler := RateLimit(cfg, make(chan struct{}))(http.HandlerFunc(
+	mw, _ := RateLimit(cfg, make(chan struct{}))
+	handler := mw(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
 		}))
@@ -165,7 +167,8 @@ func TestRateLimit_PerCallerIsolation(t *testing.T) {
 	t.Parallel()
 	// Alice's bucket overflowing must NOT affect Bob's bucket.
 	cfg := RateLimitConfig{RequestsPerMinute: 1}
-	handler := RateLimit(cfg, make(chan struct{}))(http.HandlerFunc(
+	mw, _ := RateLimit(cfg, make(chan struct{}))
+	handler := mw(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
 		}))
@@ -205,7 +208,8 @@ func TestRateLimit_SkipPathsExempt(t *testing.T) {
 	// cap=1 they should return 200 indefinitely.
 	cfg := DefaultRateLimit()
 	cfg.RequestsPerMinute = 1
-	handler := RateLimit(cfg, make(chan struct{}))(http.HandlerFunc(
+	mw, _ := RateLimit(cfg, make(chan struct{}))
+	handler := mw(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
 		}))
@@ -225,7 +229,8 @@ func TestRateLimit_DisabledWhenZero(t *testing.T) {
 	// requestsPerMinute=0 → middleware degrades to a no-op pass-
 	// through. The same identity can call any number of times.
 	cfg := RateLimitConfig{RequestsPerMinute: 0}
-	handler := RateLimit(cfg, make(chan struct{}))(http.HandlerFunc(
+	mw, _ := RateLimit(cfg, make(chan struct{}))
+	handler := mw(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
 		}))
@@ -245,7 +250,8 @@ func TestRateLimit_FallbackToIPWhenNoEmail(t *testing.T) {
 	t.Parallel()
 	// No X-Forwarded-Email → bucket by X-Real-IP.
 	cfg := RateLimitConfig{RequestsPerMinute: 1}
-	handler := RateLimit(cfg, make(chan struct{}))(http.HandlerFunc(
+	mw, _ := RateLimit(cfg, make(chan struct{}))
+	handler := mw(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
 		}))
@@ -472,35 +478,41 @@ func TestSlogRequestLogger_5xxLogsAtWarn(t *testing.T) {
 // PR-11/11: rate-limiter polish (rejections counter, sweeper)
 // ─────────────────────────────────────────────────────────────────
 
-// TestRateLimit_RejectionsCounter verifies the rejection counter
-// increments once per blocked request.
+// TestRateLimit_RejectionsCounter verifies that every blocked request
+// through the RateLimit middleware increments the limiter's rejection
+// counter exactly once.
 //
-// Uses the lower-level limiter directly (newRateLimiter) instead of
-// the RateLimit() constructor + RateLimitMetrics() path. Reason: the
-// constructor mutates package-level `activeLimiter` (see middleware.go
-// docstring: "tests that want isolation construct their own limiters
-// via newRateLimiter"). With every RateLimit-using test in this package
-// running under t.Parallel(), the global pointer flips mid-test and
-// RateLimitMetrics() reads from someone else's limiter — observed as
-// "rejections delta = 1, want 3" CI flake.
-//
-// Format coverage of the /metrics endpoint lives in
-// TestMetricsHandler_IncludesRateLimitMetrics.
+// Uses the limiter handle returned by RateLimit (rather than reading
+// the package-level activeLimiter via RateLimitMetrics) so the test
+// is decoupled from global state — under t.Parallel, every concurrent
+// RateLimit(...) call overwrites activeLimiter, and a RateLimitMetrics
+// read can land on someone else's limiter. The middleware path + the
+// counter logic + the rateLimitCaller header extraction are still
+// exercised end-to-end via wrapped.ServeHTTP.
 func TestRateLimit_RejectionsCounter(t *testing.T) {
 	t.Parallel()
-	l := newRateLimiter(RateLimitConfig{RequestsPerMinute: 1})
-	caller := "ratelimit-counter-test@example.com"
-	now := time.Now()
+	cfg := RateLimitConfig{RequestsPerMinute: 1}
+	stop := make(chan struct{})
+	defer close(stop)
+	mw, limiter := RateLimit(cfg, stop)
+
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	wrapped := mw(inner)
 
 	// First request passes; next 3 are rejected.
 	for i := 0; i < 4; i++ {
-		l.allow(caller, now)
+		req := httptest.NewRequest("GET", "/x", nil)
+		req.Header.Set("X-Forwarded-Email", "ratelimit-counter-test@example.com")
+		w := httptest.NewRecorder()
+		wrapped.ServeHTTP(w, req)
 	}
 
-	if got := l.Rejections(); got != 3 {
+	if got := limiter.Rejections(); got != 3 {
 		t.Errorf("rejections = %d, want 3", got)
 	}
-	if got := l.activeCallers(); got < 1 {
+	if got := limiter.activeCallers(); got < 1 {
 		t.Errorf("active callers = %d, want >= 1", got)
 	}
 }
