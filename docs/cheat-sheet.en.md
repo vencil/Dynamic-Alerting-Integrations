@@ -53,6 +53,7 @@ da-tools command quick reference. Full docs at [cli-reference.en.md](cli-referen
 | `config-history` | Config snapshot & history tracking (snapshot / log / show / diff) | --config-dir <PATH>, -m <MSG>, --limit <N> | `da-tools config-history --help` |
 | `gitops-check` | GitOps Native Mode readiness validation (repo / local / sidecar) | --url <URL>, --dir <PATH>, --namespace <NS> | `da-tools gitops-check --help` |
 | `state-reconcile` | Migration state directory reconciliation (.da/state/ schema validation + .da/manifest.json rebuild, #405 Cat A) | --state-dir <DIR>, --manifest-path <PATH>, --dry-run, --ci, --json | `da-tools state-reconcile --help` |
+| `rule-pack-diff` | Mechanical diff between two Rule Pack versions (added / removed / breaking label schema, #405 Cat D) | --from <V1.YAML>, --to <V2.YAML>, --json, --ci | `da-tools rule-pack-diff --help` |
 | `operator-generate` | Operator CRD generation (PrometheusRule / AlertmanagerConfig / ServiceMonitor) | --rule-packs-dir <DIR>, --config-dir <DIR>, --namespace, --split, --apply | `da-tools operator-generate --help` |
 | `operator-check` | Operator CRD deployment status verification (5 checks + diagnostic report) | --namespace <NS>, --json | `da-tools operator-check --help` |
 | `migrate-to-operator` | Read ConfigMap-based rules, produce equivalent CRD YAML + 6-stage migration plan | --source-dir <DIR>, --dry-run, --receiver-template | `da-tools migrate-to-operator --help` |
@@ -97,6 +98,7 @@ da-tools command quick reference. Full docs at [cli-reference.en.md](cli-referen
   - `config-history` — Config snapshot & history tracking
   - `gitops-check` — GitOps Native Mode readiness validation
   - `state-reconcile` — Migration state directory reconciliation (schema validation + manifest rebuild)
+  - `rule-pack-diff` — Mechanical diff between two Rule Pack versions (upgrade audit)
 
 - **Operator + Federation**
   - `operator-generate` — Operator CRD generation (PrometheusRule / AlertmanagerConfig / ServiceMonitor)

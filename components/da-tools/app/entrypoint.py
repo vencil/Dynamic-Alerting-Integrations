@@ -62,6 +62,7 @@ def _build_help_text(lang):
     config-history    配置快照與歷史追蹤 (snapshot / log / diff / show)
     gitops-check      GitOps Native Mode 就緒度驗證 (repo / local / sidecar)
     state-reconcile   遷移狀態目錄聲明式一致化 (.da/state/ schema 驗證 + .da/manifest.json 重建)
+    rule-pack-diff    Rule Pack 兩版本機械比對 (added / removed / breaking label schema)
 
 命令 (Operator-Native — CRD 產生與驗證):
     operator-generate 產出 PrometheusRule / AlertmanagerConfig / ServiceMonitor CRD YAML
@@ -145,6 +146,7 @@ Commands (File System — offline):
     config-history    Config snapshot & history tracker (snapshot / log / diff / show)
     gitops-check      GitOps Native Mode readiness validation (repo / local / sidecar)
     state-reconcile   Migration state directory declarative reconciliation (.da/state/ schema + .da/manifest.json rebuild)
+    rule-pack-diff    Mechanical diff between two Rule Pack versions (added / removed / breaking label schema)
 
 Commands (Operator-Native — CRD generation & validation):
     operator-generate Generate PrometheusRule / AlertmanagerConfig / ServiceMonitor CRD YAML
@@ -244,6 +246,9 @@ COMMAND_MAP = {
     # v2.8.0 — Migration State reconciliation (issue #405 Category A)
     # Replaces manual jq workflow for schema_version drift + manifest drift.
     "state-reconcile": "state_reconcile.py",
+    # v2.8.0 — Rule Pack version diff (issue #405 Category D)
+    # Mechanical comparison of two Rule Pack YAML versions for upgrade audits.
+    "rule-pack-diff": "rule_pack_diff.py",
     # Group D: Operator-native (CRD generation + validation)
     "operator-generate": "operator_generate.py",
     "operator-check": "operator_check.py",

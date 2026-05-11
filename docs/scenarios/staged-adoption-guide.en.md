@@ -264,8 +264,14 @@ If a Rule Pack v2 upgrade **changes the alert name or label schema**, the custom
 **SOP**:
 
 1. List the diff points between Rule Pack v1 and v2 (alertname / label-schema breaking changes)
-   - **⚠️ `da-tools rule-pack-diff --from=v1 --to=v2` is not yet shipped** (tracked: [issue #405](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/405))
-   - **Manual workaround**: cross-reference the Rule Pack version's `CHANGELOG.md` ([ALERT-REFERENCE](../rule-packs/ALERT-REFERENCE.en.md) lists current stable alertnames) + `git diff rule-packs/<pack>/v1.0.0/...rule-packs/<pack>/v2.0.0/`
+   - **✅ `da-tools rule-pack-diff --from <v1.yaml> --to <v2.yaml>`** ([issue #405](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/405) Category D, shipped 2026-05-12) — outputs added / removed / breaking-label-schema categories; `--ci` mode exits 1 on breaking changes. Typical invocation:
+
+     ```bash
+     git show v1.0.0:rule-packs/rule-pack-mariadb.yaml > /tmp/v1.yaml
+     git show v2.0.0:rule-packs/rule-pack-mariadb.yaml > /tmp/v2.yaml
+     da-tools rule-pack-diff --from /tmp/v1.yaml --to /tmp/v2.yaml
+     ```
+   - **Manual fallback** (when the tool is unavailable): cross-reference the Rule Pack version's `CHANGELOG.md` ([ALERT-REFERENCE](../rule-packs/ALERT-REFERENCE.en.md) lists current stable alertnames) + `git diff rule-packs/<pack>/v1.0.0/...rule-packs/<pack>/v2.0.0/`
 2. **Disablement drift check**: for every alert where the customer has a `custom_*`, verify the corresponding disable config still hits v2:
    - `_defaults.yaml`'s disable list — confirm the v2 alertname is on the list (or add it)
    - AM's silencer matchers — confirm the v2 label schema doesn't make existing matchers miss

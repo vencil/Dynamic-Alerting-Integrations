@@ -64,6 +64,7 @@ lang: zh
 | `patch_config.py` | Patch threshold-config ConfigMap for a specific tenant. |
 | `policy_engine.py` | Policy-as-Code 引擎（Path A — 內建 DSL）。 |
 | `policy_opa_bridge.py` | OPA (Open Policy Agent) bridge for tenant config policy evaluation. |
+| `rule_pack_diff.py` | Rule Pack version diff for upgrade audits. |
 | `scaffold_tenant.py` | Interactive tenant config generator for Dynamic Alerting. |
 | `shadow_verify.py` | Shadow Monitoring readiness and convergence verification. |
 | `state_reconcile.py` | Migration State directory reconciliation. |

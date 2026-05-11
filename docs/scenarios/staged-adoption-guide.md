@@ -264,8 +264,14 @@ Rule Pack v2 升級時若**改了 alert name 或 label schema**，客戶針對 v
 **SOP**：
 
 1. 列 Rule Pack v1→v2 差異點（含 alertname / label schema breaking changes）
-   - **⚠️ `da-tools rule-pack-diff --from=v1 --to=v2` 尚未 ship**（追蹤：[issue #405](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/405)）
-   - **手動 workaround**：對照 Rule Pack 該版本的 `CHANGELOG.md`（[ADR-REFERENCE](../rule-packs/ALERT-REFERENCE.md) 列當前 stable alertname）+ `git diff rule-packs/<pack>/v1.0.0/...rule-packs/<pack>/v2.0.0/`
+   - **✅ `da-tools rule-pack-diff --from <v1.yaml> --to <v2.yaml>`** ([issue #405](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/405) Category D，2026-05-12 shipped) — 輸出 added / removed / breaking label schema 分類，`--ci` 模式 breaking changes 時 exit 1。典型用法：
+
+     ```bash
+     git show v1.0.0:rule-packs/rule-pack-mariadb.yaml > /tmp/v1.yaml
+     git show v2.0.0:rule-packs/rule-pack-mariadb.yaml > /tmp/v2.yaml
+     da-tools rule-pack-diff --from /tmp/v1.yaml --to /tmp/v2.yaml
+     ```
+   - **手動 fallback**（工具不可用時）：對照 Rule Pack 該版本的 `CHANGELOG.md`（[ADR-REFERENCE](../rule-packs/ALERT-REFERENCE.md) 列當前 stable alertname）+ `git diff rule-packs/<pack>/v1.0.0/...rule-packs/<pack>/v2.0.0/`
 2. **Disablement drift check**：對每個客戶有 `custom_*` 的 alert，驗證對應的 disable 配置是否仍命中 v2：
    - `_defaults.yaml` 的 disable list — 確認 v2 alertname 也在清單上（或加進去）
    - AM 的 silencer matchers — 確認 v2 label schema 不會讓既有 matcher mismatch

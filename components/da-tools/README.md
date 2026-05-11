@@ -166,6 +166,7 @@ docker run --rm \
 | `operator-generate` | 產出 PrometheusRule / AlertmanagerConfig / ServiceMonitor CRD YAML | `--config-dir <dir>` |
 | `operator-check` | 驗證 Operator CRD 部署狀態（5 項檢查 + 診斷） | `--namespace <ns>` |
 | `rule-pack-split` | Rule Pack 分層拆分（edge Part 1 + central Parts 2+3） | `--rule-pack <file>` |
+| `rule-pack-diff` ✨v2.8.0 | Rule Pack 兩版本機械比對（added / removed / breaking label schema），upgrade audit 用（#405 Cat D） | `--from <v1.yaml> --to <v2.yaml>` |
 
 ### 4.9 Decommission
 

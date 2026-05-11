@@ -108,6 +108,7 @@ These tools only need HTTP access to Prometheus API and can run from anywhere.
 | `init` | Project skeleton generation (CI/CD + conf.d + Kustomize overlays) | `--ci <platform>` or interactive mode |
 | `gitops-check` | GitOps Native Mode readiness validation (repo / local / sidecar) | `<subcommand>` |
 | `state-reconcile` | Migration state directory declarative reconciliation (schema_version validation + manifest rebuild) | `--state-dir <dir>` (default `.da/state`) |
+| `rule-pack-diff` | Mechanical diff between two Rule Pack versions (added / removed / breaking label schema) | `--from <v1.yaml> --to <v2.yaml>` |
 
 ### Operator + Federation Tools
 
@@ -1443,6 +1444,60 @@ da-tools state-reconcile --ci --dry-run
 # Automation-friendly JSON
 da-tools state-reconcile --json
 ```
+
+---
+
+#### rule-pack-diff
+
+Mechanical diff between two Rule Pack versions — walks `groups[*].rules[*]` `alert` / `record` entries and classifies into added / removed / modified / breaking-label-schema. Replaces the "manually cross-reference CHANGELOG + git diff" workflow in [staged-adoption-guide §7.3](scenarios/staged-adoption-guide.en.md) ([issue #405](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/405) Category D).
+
+```bash
+da-tools rule-pack-diff --from <v1.yaml> --to <v2.yaml> [options]
+```
+
+**Main Parameters**
+
+| Parameter | Purpose |
+|-----------|---------|
+| `--from <path>` | Older Rule Pack YAML path |
+| `--to <path>` | Newer Rule Pack YAML path |
+| `--json` | Emit JSON structured report |
+| `--ci` | Exit 1 on breaking changes (CI gate). Breaking = alert removed, label key added/removed, label value change, alert↔record kind swap |
+
+**Breaking vs informational changes**
+
+| Change | Breaking? |
+|---|---|
+| Alert removed / renamed | ⚠️ breaking (silencer matchers on alertname silently miss) |
+| Label key added / removed | ⚠️ breaking (matcher key absent / extra) |
+| Label value change (e.g. `severity: warning → critical`) | ⚠️ breaking (equality matchers miss) |
+| Alert ↔ record kind swap | ⚠️ breaking (silencers don't apply to recording rules) |
+| PromQL `expr` change | 📝 informational (semantic equivalence undecidable) |
+| Annotation change | 📝 informational |
+| `for:` duration change | 📝 informational |
+
+**Examples**
+
+```bash
+# Compare two versions extracted from git
+git show v1.0.0:rule-packs/rule-pack-mariadb.yaml > /tmp/v1.yaml
+git show v2.0.0:rule-packs/rule-pack-mariadb.yaml > /tmp/v2.yaml
+da-tools rule-pack-diff --from /tmp/v1.yaml --to /tmp/v2.yaml
+
+# CI gate: block merge on breaking changes
+da-tools rule-pack-diff --from /tmp/v1.yaml --to /tmp/v2.yaml --ci
+
+# Automation-friendly JSON
+da-tools rule-pack-diff --from /tmp/v1.yaml --to /tmp/v2.yaml --json
+```
+
+**Exit codes**
+
+| Code | Meaning |
+|------|---------|
+| 0 | Diff completed (no breaking changes; or no `--ci` so breaking still exits 0) |
+| 1 | `--ci` mode detected breaking changes |
+| 2 | Caller error (file missing / parse failure / bad arg) |
 
 ---
 
