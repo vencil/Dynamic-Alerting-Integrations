@@ -26,6 +26,7 @@ on:
       - "CLAUDE.md"
       - "mkdocs.yml"
       - "scripts/tools/**/*.py"
+      - "scripts/tools/lint/**/*.sh"
       - ".github/workflows/docs-ci.yaml"
       - ".pre-commit-config.yaml"
   # head-blob-hygiene also runs on every push so historical drift is caught
@@ -317,6 +318,52 @@ jobs:
             --only versions,tool_map,doc_map,rule_pack_stats,changelog,glossary,includes,repo_name \
             --ci
 
+  i4-runbook-smoke-test:
+    # Validates every jq / amtool / promtool / yq invocation in
+    # docs/integration/troubleshooting-checklist.md against mock JSON/YAML
+    # fixtures. Catches typos before customers do at 3am on-call.
+    #
+    # Per post-#377 retrospective Q2 + Gemini's "don't defer this to CI;
+    # manual scripts bit-rot regardless of churn rate". Tool downloads
+    # are ~10s total on ubuntu-latest (jq/curl already built-in).
+    name: I-4 Runbook Smoke Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install amtool / promtool / yq
+        # jq + curl already on ubuntu-latest. Pin versions explicitly so
+        # CI catches doc breakage on tool upgrade, not silently passes.
+        run: |
+          set -euo pipefail
+          AMTOOL_VERSION=0.27.0
+          PROMTOOL_VERSION=2.50.0
+          YQ_VERSION=4.40.5
+
+          cd /tmp
+          curl -fsSL -o amtool.tar.gz \
+            "https://github.com/prometheus/alertmanager/releases/download/v${AMTOOL_VERSION}/alertmanager-${AMTOOL_VERSION}.linux-amd64.tar.gz"
+          tar xzf amtool.tar.gz
+          sudo install -m 0755 "alertmanager-${AMTOOL_VERSION}.linux-amd64/amtool" /usr/local/bin/
+
+          curl -fsSL -o prom.tar.gz \
+            "https://github.com/prometheus/prometheus/releases/download/v${PROMTOOL_VERSION}/prometheus-${PROMTOOL_VERSION}.linux-amd64.tar.gz"
+          tar xzf prom.tar.gz
+          sudo install -m 0755 "prometheus-${PROMTOOL_VERSION}.linux-amd64/promtool" /usr/local/bin/
+
+          curl -fsSL -o /tmp/yq \
+            "https://github.com/mikefarah/yq/releases/download/v${YQ_VERSION}/yq_linux_amd64"
+          sudo install -m 0755 /tmp/yq /usr/local/bin/yq
+
+          echo "--- tool versions ---"
+          jq --version
+          yq --version
+          amtool --version 2>&1 | head -1
+          promtool --version 2>&1 | head -1
+
+      - name: Run I-4 runbook smoke test
+        run: bash scripts/tools/lint/smoke_test_i4_runbook.sh
+
   all-checks:
     name: All Documentation Checks
     runs-on: ubuntu-latest
@@ -329,6 +376,7 @@ jobs:
       - check-coverage
       - mkdocs-build
       - drift-checks
+      - i4-runbook-smoke-test
     steps:
       - name: Check results
         run: |
@@ -339,13 +387,15 @@ jobs:
           echo "check-coverage: ${{ needs.check-coverage.result }}"
           echo "mkdocs-build: ${{ needs.mkdocs-build.result }}"
           echo "drift-checks: ${{ needs.drift-checks.result }}"
+          echo "i4-runbook-smoke-test: ${{ needs.i4-runbook-smoke-test.result }}"
           if [[ "${{ needs.validate-mermaid.result }}" == "failure" || \
                 "${{ needs.check-links.result }}" == "failure" || \
                 "${{ needs.head-blob-hygiene.result }}" == "failure" || \
                 "${{ needs.check-frontmatter.result }}" == "failure" || \
                 "${{ needs.check-coverage.result }}" == "failure" || \
                 "${{ needs.mkdocs-build.result }}" == "failure" || \
-                "${{ needs.drift-checks.result }}" == "failure" ]]; then
+                "${{ needs.drift-checks.result }}" == "failure" || \
+                "${{ needs.i4-runbook-smoke-test.result }}" == "failure" ]]; then
             echo "::error::One or more documentation checks failed"
             exit 1
           fi

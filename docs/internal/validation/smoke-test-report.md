@@ -62,21 +62,27 @@ lang: zh
 ❌ **kubectl exec 進到的 pod 行為**：`kubectl exec <pod> -- wget ...` 語法 OK，但實際 pod 是否有 `wget` / `curl` 取決於 image。Mitigation: I-4 entries 多處用 `wget -qO-` 因為 Prom / VM official image 都有。
 ❌ **跨命令 pipeline 邏輯**：smoke 只看單一命令；`A | B` 兩條都過，組合在一起的語意是否合理仍須人 review。
 
-## 自動化 / CI integration（候選）
+## 自動化 / CI integration
 
-目前 smoke test 是**手動跑**。可考慮：
+Smoke test 在 **CI 自動執行**（`.github/workflows/docs-ci.yaml` 的 `i4-runbook-smoke-test` job），觸發條件：
 
-| 階段 | 自動化 | 成本 |
-|---|---|---|
-| 現在 | maintainer 在 I-4 內文 PR review 時手動跑 | 0 |
-| Phase 1 | pre-commit hook 在 I-4 變動時跑（需 dev container 啟動）| 中 |
-| Phase 2 | CI job 跑 smoke + 比對 fixtures 與 Prom upstream changelog | 高 |
+- `docs/**/*.md` 任何變動
+- `scripts/tools/lint/**/*.sh` 任何變動
+- `mkdocs.yml` 變動
 
-建議**先停在現在**——I-4 內文 churn 已低，maintainer 手動 cadence 夠用；自動化是 follow-up TD。
+**Tool versions pinned**（CI 與本地一致）：
+- amtool: 0.27.0（prometheus/alertmanager release）
+- promtool: 2.50.0（prometheus/prometheus release）
+- yq: v4.40.5（mikefarah/yq release）
+- jq: ubuntu-latest 內建（~1.6+）
 
-## Future expansion
+**CI 成本**：~10s 工具下載 + ~5s smoke test = ~15s/PR（針對 docs PR 才觸發；不影響其他類 PR）
 
-當 #405 工具 ship 後，smoke test 應加 assertions：
+**為什麼自動化而非手動 cadence**：手動腳本一定 bit-rot——即使 churn 低，工具版本升級 / Prom API 結構變動 / 新 entry 加入時都需要重跑。依賴 maintainer 記憶等於押注未來不會出錯（[§4.2.1 self-review meta-lesson](../../integration/troubleshooting-checklist.md#421-self-review-是必要不充分important-meta-lesson) 已記錄這個失敗模式）。
+
+### Future expansion
+
+當 [issue #405](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/405) 工具 ship 後，smoke test 加入 assertions：
 
 - `da-tools state reconcile`（替代 state-migrate + manifest-regenerate）— 跑在 mock state-dir 上驗 idempotency
 - `da-tools silencer-drift-check --silences-file ...`（offline-first 設計）— 用 mock JSON 驗 drift detection
