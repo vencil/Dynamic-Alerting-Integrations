@@ -798,7 +798,7 @@ Three-step automation:
 | [Multi-System Migration Playbook](scenarios/multi-system-migration-playbook.md) (3-system: Prom→VM + rules + AM simultaneously; **ZH only — [#409](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/409)**) | ⭐⭐⭐ |
 | [Staged Adoption Lifecycle](scenarios/staged-adoption-guide.md) (post-cutover `custom_*` → golden; **ZH only — [#409](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/409)**) | ⭐⭐⭐ |
 | [Migration Troubleshooting Checklist](integration/troubleshooting-checklist.md) (migration-phase symptom-keyed runbook; **ZH only — [#409](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/409)**) | ⭐⭐⭐ |
-| [VictoriaMetrics Integration](integration/victoriametrics-integration.md) (VM stack integration guide; **ZH only — [#409](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/409)**) | ⭐⭐ |
+| [VictoriaMetrics Integration](integration/victoriametrics-integration.en.md) (VM stack integration guide) | ⭐⭐ |
 | **Foundation** | |
 | ["Tenant Quick Start Guide"](getting-started/for-tenants.en.md) | ⭐⭐ |
 | ["AST Migration Engine Architecture"] | ⭐⭐ |
