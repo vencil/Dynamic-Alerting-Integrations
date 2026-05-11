@@ -156,6 +156,7 @@ docker run --rm \
 | `config-history` | 配置快照與歷史追蹤（子命令：`snapshot` / `log` / `diff` / `show`） | `snapshot --config-dir <dir>` |
 | `gitops-check` | GitOps Native Mode 就緒度驗證（repo / local / sidecar 三模式） | `--mode <m> --config-dir <dir>` |
 | `tenant-verify` ✨v2.8.0 | 印 tenant effective config + merged_hash；`--expect-merged-hash` 比對快照（rollback 驗證） | `<tenant> --conf-d <dir>` |
+| `state-reconcile` ✨v2.8.0 | 遷移狀態目錄聲明式一致化（`.da/state/*.json` schema 驗證 + `.da/manifest.json` 重建），取代 troubleshooting checklist §schema/manifest drift 手動 jq 流程（#405 Cat A） | `--state-dir <dir>`（預設 `.da/state`） |
 
 ### 4.8 Migrate（Operator-Native / Federation）
 

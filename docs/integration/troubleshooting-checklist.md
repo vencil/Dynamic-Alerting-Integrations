@@ -1472,10 +1472,25 @@ da-tools onboard --analyze --cluster-name <cluster> \
 # 重新 commit
 ```
 
-> 📝 **設計筆記**：state schema migration + manifest 重建是同類問題（兩者都是「修復 state 檔案系統到一致態」），未來會統一為單一聲明式命令 `da-tools state reconcile`（追蹤：[issue #405](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/405)）。在工具 ship 之前用以下 jq 流程；工具 ship 後就一行 `da-tools state reconcile --state-dir .da/state/` 自動偵測並修復。
+> ✅ **2026-05-11 update — 工具已 ship**（[issue #405](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/405) Category A 完成）。schema migration + manifest 重建統一為單一聲明式命令：
+>
+> ```bash
+> # 一行偵測 + 修復（形狀 2 + 形狀 3 統一）
+> da-tools state-reconcile --state-dir .da/state/
+>
+> # CI gate：dry-run 模式，發現需改動時 exit 1
+> da-tools state-reconcile --ci --dry-run
+>
+> # 自動化讀取 JSON
+> da-tools state-reconcile --json
+> ```
+>
+> 工具行為：(1) 掃 `.da/state/*.json` (2) 驗 schema_version 對齊現行版本（未來引入 1.1 / 1.2 時走註冊在 `MIGRATIONS` 內的遷移函式）(3) 從檔案系統重建 `.da/manifest.json`（manifest 是 derived view，state 檔是 source of truth）。新增 cluster 後跑一次即同步 manifest；schema bump 後跑一次自動 migrate。
+>
+> **下面的手動 jq 流程保留** 作為「工具不可用 / 緊急救援」備援（airgapped 環境、無 Python runtime、或要客製化 transformation 時）。
 
 ```bash
-# 形狀 2：schema_version drift（手動 workaround）
+# 形狀 2：schema_version drift（手動 workaround，工具不可用時用）
 for f in .da/state/*.json; do
     CURRENT=$(jq -r '.schema_version' "$f")
     if [ "$CURRENT" = "1.0" ]; then
@@ -1489,7 +1504,7 @@ git commit -m "chore: migrate all cluster state to schema 1.1"
 ```
 
 ```bash
-# 形狀 3：manifest drift（手動 workaround）
+# 形狀 3：manifest drift（手動 workaround，工具不可用時用）
 # 從實際 state 檔案系統重建 manifest
 jq -n --arg version "1.0" '{schema_version: $version, states: []}' > /tmp/manifest.json
 for f in .da/state/*.json; do

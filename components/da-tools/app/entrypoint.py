@@ -61,6 +61,7 @@ def _build_help_text(lang):
     init              在客戶 repo 初始化 Dynamic Alerting 整合骨架 (CI/CD + conf.d + Kustomize)
     config-history    配置快照與歷史追蹤 (snapshot / log / diff / show)
     gitops-check      GitOps Native Mode 就緒度驗證 (repo / local / sidecar)
+    state-reconcile   遷移狀態目錄聲明式一致化 (.da/state/ schema 驗證 + .da/manifest.json 重建)
 
 命令 (Operator-Native — CRD 產生與驗證):
     operator-generate 產出 PrometheusRule / AlertmanagerConfig / ServiceMonitor CRD YAML
@@ -143,6 +144,7 @@ Commands (File System — offline):
     init              Bootstrap Dynamic Alerting integration in your repo (CI/CD + conf.d + Kustomize)
     config-history    Config snapshot & history tracker (snapshot / log / diff / show)
     gitops-check      GitOps Native Mode readiness validation (repo / local / sidecar)
+    state-reconcile   Migration state directory declarative reconciliation (.da/state/ schema + .da/manifest.json rebuild)
 
 Commands (Operator-Native — CRD generation & validation):
     operator-generate Generate PrometheusRule / AlertmanagerConfig / ServiceMonitor CRD YAML
@@ -239,6 +241,9 @@ COMMAND_MAP = {
     "init": "init_project.py",
     "config-history": "config_history.py",
     "gitops-check": "gitops_check.py",
+    # v2.8.0 — Migration State reconciliation (issue #405 Category A)
+    # Replaces manual jq workflow for schema_version drift + manifest drift.
+    "state-reconcile": "state_reconcile.py",
     # Group D: Operator-native (CRD generation + validation)
     "operator-generate": "operator_generate.py",
     "operator-check": "operator_check.py",

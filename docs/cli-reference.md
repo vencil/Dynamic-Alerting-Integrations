@@ -108,6 +108,7 @@ da-tools <command> --help
 |------|------|----------|
 | `init` | 專案骨架產生（CI/CD + conf.d + Kustomize overlays） | `--ci <platform>` 或互動模式 |
 | `gitops-check` | GitOps Native Mode 就緒度驗證（repo / local / sidecar） | `<subcommand>` |
+| `state-reconcile` | 遷移狀態目錄聲明式一致化（schema_version 驗證 + manifest 重建） | `--state-dir <dir>`（預設 `.da/state`） |
 
 ### Operator + Federation 工具
 
@@ -1287,6 +1288,57 @@ da-tools gitops-check local --dir /data/config/conf.d
 
 # 檢查 sidecar 部署
 da-tools gitops-check sidecar --namespace monitoring --json
+```
+
+---
+
+#### state-reconcile
+
+遷移狀態目錄聲明式一致化——掃描 `.da/state/*.json` 驗證 `schema_version` 並從檔案系統重建 `.da/manifest.json`。取代 [troubleshooting-checklist §schema_version drift / manifest drift](integration/troubleshooting-checklist.md) 中的手動 jq 流程（[issue #405](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/405) Category A）。
+
+```bash
+da-tools state-reconcile [options]
+```
+
+**主要參數**
+
+| 參數 | 用途 | 預設 |
+|------|------|------|
+| `--state-dir <dir>` | 含 per-cluster state 檔的目錄 | `.da/state` |
+| `--manifest-path <path>` | manifest 檔路徑 | `.da/manifest.json` |
+| `--dry-run` | 只報告需改動，不寫入 | 無 |
+| `--ci` | dry-run 偵測到需改動或有 unresolvable drift 時 exit 1（CI gate 用） | 無 |
+| `--json` | 輸出 JSON 結構化報告 | 文字模式 |
+
+**Exit codes**
+
+| Code | 含義 |
+|------|------|
+| 0 | state 目錄一致（或已成功套用變更） |
+| 1 | 有 unresolvable schema drift；或 `--ci` 模式下 dry-run 偵測到需改動 |
+| 2 | caller error（參數錯誤等） |
+
+**為什麼是 single declarative command 而非 micro-commands**
+
+schema migration（state 檔升版）與 manifest 重建（從 filesystem 派生）是同類「修復 state 目錄到一致態」問題；分成兩支命令會強迫使用者記住執行順序。本工具一句話「make .da/ consistent」涵蓋兩者。Schema migration 走 `MIGRATIONS` registry（v1.0 尚無遷移；v1.1 引入時加註冊即可）。
+
+**範例**
+
+```bash
+# 基本：偵測並修復
+da-tools state-reconcile
+
+# 自訂位置
+da-tools state-reconcile --state-dir custom/states/ --manifest-path custom/manifest.json
+
+# Dry-run 看會改什麼
+da-tools state-reconcile --dry-run
+
+# CI gate：偵測到漂移就 exit 1
+da-tools state-reconcile --ci --dry-run
+
+# 自動化讀取
+da-tools state-reconcile --json
 ```
 
 ---

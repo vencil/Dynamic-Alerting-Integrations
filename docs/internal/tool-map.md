@@ -66,6 +66,7 @@ lang: zh
 | `policy_opa_bridge.py` | OPA (Open Policy Agent) bridge for tenant config policy evaluation. |
 | `scaffold_tenant.py` | Interactive tenant config generator for Dynamic Alerting. |
 | `shadow_verify.py` | Shadow Monitoring readiness and convergence verification. |
+| `state_reconcile.py` | Migration State directory reconciliation. |
 | `threshold_recommend.py` | 閾值推薦引擎。 |
 | `validate_config.py` | One-stop configuration validation. |
 | `validate_migration.py` | Shadow Monitoring 驗證工具。 |
