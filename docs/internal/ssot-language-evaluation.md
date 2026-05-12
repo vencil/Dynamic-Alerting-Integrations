@@ -5,7 +5,7 @@ audience: [maintainers]
 tags: [internal, planning, i18n, language-strategy]
 status: superseded
 lang: zh
-version: v2.7.0
+version: v2.8.0
 ---
 
 > ## ⚠️ Status: SUPERSEDED by v2.8.0 S#101 (2026-05-02)
@@ -617,7 +617,7 @@ done
   ## v2.6.0
 
   - **BREAKING: 語言策略切換** — 文檔現以英文為主 SSOT，中文為輔
-    - doc pair 現為 .md (en) + .zh.md (zh)，反向於 v2.7.0
+    - doc pair 現為 .md (en) + .zh.md (zh)，反向於 v2.8.0
     - lint hook 邏輯已適配
     - JSX i18n 參數順序反轉為 __t(en, zh)
     - 告警樣板優先英文 annotation，fallback 中文

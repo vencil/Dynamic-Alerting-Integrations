@@ -2,7 +2,7 @@
 title: "Multi-System Migration Playbook"
 tags: [migration, playbook, scenarios, multi-system, hybrid-format]
 audience: [platform-engineers, sre, architects]
-version: v2.7.0
+version: v2.8.0
 lang: en
 ---
 

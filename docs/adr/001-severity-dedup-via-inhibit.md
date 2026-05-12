@@ -2,7 +2,7 @@
 title: "ADR-001: 嚴重度 Dedup 採用 Inhibit 規則"
 tags: [adr, architecture]
 audience: [platform-engineers]
-version: v2.7.0
+version: v2.8.0
 lang: zh
 ---
 

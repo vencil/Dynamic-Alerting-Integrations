@@ -2,7 +2,7 @@
 title: "性能分析與基準測試 (Performance Analysis & Benchmarks)"
 tags: [performance, benchmarks]
 audience: [platform-engineer, sre]
-version: v2.7.0
+version: v2.8.0
 lang: zh
 ---
 # 性能分析與基準測試 (Performance Analysis & Benchmarks)
@@ -18,7 +18,7 @@ lang: zh
 - **Python in-process（§7 §10 §13）**：Cowork VM sandbox（Ubuntu 22.04, Python 3.12, tmpfs `/tmp`）
 - **Synthetic fixtures**（§10, §12 B-1）：`scripts/tools/dx/generate_tenant_fixture.py` @ seed=42
 
-所有數據於 v2.7.0 統一採集；§12 B-1 Scale Gate 1000-tenant 實測於 2026-04-18 在 v2.7.0-final（merge commit `b808610`）完成。
+所有數據於 v2.8.0 統一採集；§12 B-1 Scale Gate 1000-tenant 實測於 2026-04-18 在 v2.7.0-final（merge commit `b808610`）完成。
 
 ---
 
