@@ -86,6 +86,21 @@ jobs:
   # Outputs feed the matrix + compare jobs.
   preflight:
     name: Preflight (override check + merge-base)
+    # Filter out unrelated `labeled` events before spinning up runners.
+    # The workflow trigger includes `[labeled]` so we can honor a freshly-
+    # applied override label, but a `labeled` event for some OTHER label
+    # (e.g. `bug`, `needs-review`) shouldn't burn 4-5 min of bench time —
+    # no code changed, the result would be identical to the prior commit's
+    # bench-gate run. Skip the whole workflow for those events.
+    # Conditions that DO run preflight (and therefore bench/compare):
+    #   - opened / synchronize / reopened (real PR activity)
+    #   - labeled where the label is our override (need to honor it)
+    # Skipped jobs cascade: bench/compare have `needs: preflight`, so they
+    # also skip automatically when preflight skips.
+    # [Gemini round-9 redundant-wait catch.]
+    if: |
+      github.event.action != 'labeled'
+      || github.event.label.name == 'override: bench-regress-ok'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:

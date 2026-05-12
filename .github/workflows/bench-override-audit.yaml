@@ -182,46 +182,73 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Remove the label. On fork PRs this might fail if token is read-only,
-          # but `pull_request_target` ensures we have write perms regardless of
-          # fork status. The `|| true` is defensive for the unlikely case where
-          # the label was removed by something else between the event firing
-          # and us getting here.
-          gh pr edit "$PR_NUMBER" --repo "$REPO" \
-            --remove-label "override: bench-regress-ok" || true
+          # Attempt label removal and POST COMMENT ONLY ON SUCCESS.
+          #
+          # Previous version did `gh pr edit ... || true` then unconditionally
+          # posted the "we removed your label" comment. That created a "ghost
+          # comment" bug: if a maintainer (or another bot) had already removed
+          # the label between the synchronize event firing and this job
+          # running, `gh pr edit --remove-label` would fail (label not on PR),
+          # the `|| true` would swallow the failure, and we'd then post a
+          # confusing notification claiming we removed something that was
+          # already gone. From the dev's POV: "the label isn't there, why is
+          # the bot yelling at me?"
+          #
+          # Fix: only post the educational comment when the removal actually
+          # succeeded. If it failed (already removed, race, API issue), log
+          # the no-op to the step summary but stay silent in the PR thread.
+          # [Gemini round-9 ghost-comment catch.]
+          if gh pr edit "$PR_NUMBER" --repo "$REPO" \
+               --remove-label "override: bench-regress-ok"; then
+            # Successful removal — post the explanatory comment.
+            body=$(awk 'NR==1 {match($0, /[^ ]/); pad = RSTART - 1} {if (length($0) >= pad) print substr($0, pad + 1); else print ""}' <<EOF
+            ⚠️ **Override label auto-stripped after new commit**
 
-          # Same awk-dedent trick as the audit step; YAML literal block forces
-          # leading whitespace on heredoc body, awk strips the common prefix.
-          body=$(awk 'NR==1 {match($0, /[^ ]/); pad = RSTART - 1} {if (length($0) >= pad) print substr($0, pad + 1); else print ""}' <<EOF
-          ⚠️ **Override label auto-stripped after new commit**
+            The \`override: bench-regress-ok\` label was previously applied but has been
+            automatically removed because new commits were pushed to this PR by \`@$PUSHER\`.
 
-          The \`override: bench-regress-ok\` label was previously applied but has been
-          automatically removed because new commits were pushed to this PR by \`@$PUSHER\`.
+            New HEAD: \`$NEW_HEAD_SHA\`
 
-          New HEAD: \`$NEW_HEAD_SHA\`
+            Override is **per-commit-state**, not per-PR. The earlier maintainer approval
+            was tied to a specific set of commits whose perf trade-off was reviewed; new
+            commits may introduce additional regressions not covered by that approval.
 
-          Override is **per-commit-state**, not per-PR. The earlier maintainer approval
-          was tied to a specific set of commits whose perf trade-off was reviewed; new
-          commits may introduce additional regressions not covered by that approval.
+            If the override should remain in effect after these new commits:
 
-          If the override should remain in effect after these new commits:
+            1. A **maintainer** must review the new commits' perf impact.
+            2. If still acceptable, re-apply \`override: bench-regress-ok\` (the audit
+               will re-verify the role and \`bench-gate-pr.yaml\` will honor it for that
+               specific labeled event only).
 
-          1. A **maintainer** must review the new commits' perf impact.
-          2. If still acceptable, re-apply \`override: bench-regress-ok\` (the audit
-             will re-verify the role and \`bench-gate-pr.yaml\` will honor it for that
-             specific labeled event only).
+            — Bench Override Audit / strip-stale job
+            EOF
+            )
+            gh pr comment "$PR_NUMBER" --repo "$REPO" --body "$body"
 
-          — Bench Override Audit / strip-stale job
-          EOF
-          )
-          gh pr comment "$PR_NUMBER" --repo "$REPO" --body "$body"
-
-          {
-            echo "## Override label STRIPPED (stale after new commit)"
-            echo ""
-            echo "Pusher: \`$PUSHER\` — new HEAD: \`$NEW_HEAD_SHA\`."
-            echo ""
-            echo "Bench gate will now re-evaluate this commit normally. Maintainer must"
-            echo "re-apply the override label if the perf trade-off remains acceptable"
-            echo "after reviewing the new commits."
-          } >> "$GITHUB_STEP_SUMMARY"
+            {
+              echo "## Override label STRIPPED (stale after new commit)"
+              echo ""
+              echo "Pusher: \`$PUSHER\` — new HEAD: \`$NEW_HEAD_SHA\`."
+              echo ""
+              echo "Bench gate will now re-evaluate this commit normally. Maintainer must"
+              echo "re-apply the override label if the perf trade-off remains acceptable"
+              echo "after reviewing the new commits."
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            # Removal failed — most likely the label was already gone (race
+            # with manual maintainer removal, or another bot beat us to it).
+            # Stay silent in the PR comment thread to avoid the ghost notice;
+            # log to step summary so the no-op is visible if anyone digs in.
+            echo "::notice::Label removal failed — likely already removed by another actor. Skipping notification comment."
+            {
+              echo "## Override label strip — NO-OP"
+              echo ""
+              echo "Attempted to strip \`override: bench-regress-ok\` but \`gh pr edit --remove-label\`"
+              echo "failed. Most likely the label was already removed between the synchronize event"
+              echo "firing (snapshot took label as present) and this job running. **No notification"
+              echo "comment was posted** to avoid a 'ghost notification' contradicting the PR's"
+              echo "actual state."
+              echo ""
+              echo "Pusher: \`$PUSHER\` — new HEAD: \`$NEW_HEAD_SHA\`."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
