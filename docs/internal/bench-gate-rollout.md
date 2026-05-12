@@ -8,7 +8,12 @@ lang: zh
 
 # Pre-Tag Benchmark Regression Gate — 3-Phase Rollout Plan
 
-> **Status**: Phase 1 ✅ landed (PR #65 / issue #60); Phase 2 ⏳ awaiting nightly data accumulation (issue #67, target ~2026-05-23); Phase 3 ⏸️ long-term (depends on Larger Runners adoption).
+> **Status (2026-05-12 update)**:
+> - Phase 1 ✅ landed (PR #65 / issue #60); informational nightly continues as trend monitor.
+> - Phase 2 **REDESIGNED** via issue [#433](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/433) (supersedes closed #67). Original window-based readiness check was structurally unattainable due to mid-cycle perf-affecting refactors. New design splits into **Tier 1** (PR-time, base-vs-PR, blame correctness) + **Tier 2** (release-time, release-vs-release, cumulative quality). First Tier 1 workflow lands via the same #433 W2 deliverable.
+> - Phase 3 collapsed into Tier 1's conditional Larger Runners escalation (FP rate > 10% / 2 weeks trigger).
+>
+> **Below sections describe the ORIGINAL window-based plan** — kept for historical reference; the live design is in #433 + the new workflow file `.github/workflows/bench-gate-pr.yaml`.
 >
 > **Source of truth** for the rollout plan. The original RFC was issue [#60](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/60); the staged-rollout breakdown was previously only in issue [#76](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/76)'s body and now lives here for searchability and to satisfy #76 acceptance #1.
 
