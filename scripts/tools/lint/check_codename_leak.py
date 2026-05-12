@@ -67,39 +67,67 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 # excluded — codenames are legitimate there. Expand the list as cleanup batches
 # move to new tiers.
 DEFAULT_SCAN_PATHS = [
+    # T0 — public README
     "README.md",
     "README.en.md",
+    # T3 — component README + entrypoint help text
     "components/da-tools/README.md",
     "components/da-portal/README.md",
     "components/threshold-exporter/README.md",
     "components/tenant-api/README.md",
     "components/da-tools/app/entrypoint.py",
-]
-
-# Wider set used by --scope full. Adds T1 (end-user docs) + remaining T3.
-FULL_SCAN_PATHS = DEFAULT_SCAN_PATHS + [
+    # T1 — end-user docs (v2.8.0 #462: expanded into default scope after
+    # observed customer-facing leakage in benchmarks.md / cli-reference / etc).
+    # docs/internal/** intentionally excluded — codenames are legitimate there.
+    # Single-file entries are listed in both `.md` and `.en.md` forms to ensure
+    # both language editions are covered (directory entries cover both via
+    # rglob, but single-file entries do not).
     "docs/getting-started",
     "docs/migration-guide.md",
+    "docs/migration-guide.en.md",
     "docs/migration-engine.md",
+    "docs/migration-engine.en.md",
     "docs/migration-toolkit-installation.md",
+    "docs/migration-toolkit-installation.en.md",
     "docs/integration",
     "docs/scenarios",
     "docs/troubleshooting.md",
+    "docs/troubleshooting.en.md",
     "docs/cheat-sheet.md",
+    "docs/cheat-sheet.en.md",
     "docs/cli-reference.md",
+    "docs/cli-reference.en.md",
     "docs/architecture-and-design.md",
+    "docs/architecture-and-design.en.md",
     "docs/glossary.md",
+    "docs/glossary.en.md",
     "docs/governance-security.md",
+    "docs/governance-security.en.md",
     "docs/custom-rule-governance.md",
+    "docs/custom-rule-governance.en.md",
     "docs/benchmarks.md",
+    "docs/benchmarks.en.md",
     "docs/api",
     "docs/design",
     "docs/adr",
-    "helm",
+    "docs/shadow-monitoring-sop.md",
+    "docs/shadow-monitoring-sop.en.md",
+    "docs/vcs-integration-guide.md",
+    "docs/grafana-dashboards.md",
+    "docs/grafana-dashboards.en.md",
+    "docs/interactive-tools.md",
+    "docs/interactive-tools.en.md",
     "rule-packs/README.md",
-    "tests",
     "tools/portal/README.md",
     "operator-manifests/README.md",
+]
+
+# Wider set used by --scope full. Adds helm/ + tests/ where some internal
+# fixtures + lint self-tests legitimately reference codenames. Reserved for
+# manual periodic audit, not CI default.
+FULL_SCAN_PATHS = DEFAULT_SCAN_PATHS + [
+    "helm",
+    "tests",
 ]
 
 # Codename patterns. Each has a regex + a short label for the violation
@@ -111,6 +139,11 @@ PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     # as "Phase A: Triage / Phase B: Convert"; the internal-codename-paired
     # use ("Phase B Track A") is caught via Track instead.
     ("Phase .a/.b/.c letter", re.compile(r"\bPhase\s+\.[a-e]\b")),
+    # Note: "Phase 2 / Phase 3" digit form intentionally NOT added — too many
+    # FPs from legitimate prose ("Phase 1: Mtime Guard" as algorithm step,
+    # "Phase 0-2 scoring" in journey-density metric, etc). The B-1 Phase 2
+    # anti-pattern is already caught via the B-1 letter-prefix id below; we
+    # rely on that to gate the entire phrase rather than the suffix alone.
     ("Track A/B/C letter", re.compile(r"\bTrack\s+[A-E]\b")),
     ("Wave N", re.compile(r"\bWave\s+\d+\b")),
     ("TD-NNN ticket", re.compile(r"\bTD-\d{2,}\b")),
@@ -121,6 +154,23 @@ PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     # things at start-of-word so "ABC-12" doesn't match.
     ("Letter-prefix planning id", re.compile(r"(?<![A-Za-z0-9])[A-E]-\d{1,3}\b")),
     ("PR-N internal id", re.compile(r"\bPR-\d+[a-z]?\b")),
+    # Decision-tag codenames: DEC-B, DEC-F, etc. Used in v2.8.0/v2.9.0
+    # closure threads to label cross-cutting maintainer decisions. Customer
+    # docs should name the decision outcome, not the internal tag.
+    ("DEC-X decision tag", re.compile(r"\bDEC-[A-Z]\b")),
+    # Release-suffix codenames: "v2.7.0-final", "v2.8.0-rc1", etc. The
+    # public release is just "v2.7.0" — the "-final" / "-rc" suffix is an
+    # internal staging marker (which of the many candidate builds actually
+    # became the tag). Customer docs reference plain semver.
+    (
+        "version -final/-rc suffix",
+        re.compile(r"\bv\d+\.\d+\.\d+-(?:final|alpha|beta|rc\d*)\b"),
+    ),
+    # Note: R0/R1/R2 release-train ids intentionally NOT added. The pattern
+    # \bR[0-3]\b has too many false positives (CPU registers, region tier
+    # labels, etc.) and the only actual leakage observed is in internal docs.
+    # If customer-facing leakage emerges, add a more contextual pattern like
+    # \brelease\s+R[0-3]\b instead of the bare token.
 ]
 
 # Substrings that look like a hit but are legitimate. Lines containing any of
@@ -143,6 +193,22 @@ ALLOW_LINE_SUBSTRINGS = (
 
 SKIP_FILE_NAMES = {".DS_Store"}
 SKIP_EXT = {".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".pdf", ".zip"}
+
+# Per-file allowlist — files where codenames are the documented subject
+# matter, not incidental leakage. These are excluded from the scan entirely
+# because the ADR/spec literally explains the codename namespace using
+# representative examples (S#74, HA-11, TD-NNN, TRK-NNN, etc).
+#
+# Keep this list short. Adding here means accepting that the file IS internal
+# planning content even though it lives under docs/. The long-term fix is to
+# move the file to docs/internal/, but the move requires updating mkdocs nav
+# and cross-refs across the repo, which is out of scope for v2.8.0 #462.
+PER_FILE_ALLOWLIST = (
+    # ADR-020 documents the TRK-NNN planning-id namespace system itself.
+    # Migration tables (TD-022 → TRK-222, HA-11 → TRK-011) and regex spec
+    # examples ("Resolves TD-30 → TD-30") are core content, not leakage.
+    "docs/adr/020-planning-ssot.md",
+)
 
 # Pure code-comment lines (not user-visible). These are skipped because
 # codenames in source-level comments are legitimate dev annotations — only
@@ -170,13 +236,15 @@ def _is_code_comment(line: str, suffix: str) -> bool:
 
 
 def iter_files(scan_paths: list[str]) -> list[Path]:
+    allowlist_paths = {(REPO_ROOT / rel).resolve() for rel in PER_FILE_ALLOWLIST}
     out: list[Path] = []
     for entry in scan_paths:
         p = REPO_ROOT / entry
         if not p.exists():
             continue
         if p.is_file():
-            out.append(p)
+            if p.resolve() not in allowlist_paths:
+                out.append(p)
             continue
         for child in p.rglob("*"):
             if not child.is_file():
@@ -184,6 +252,8 @@ def iter_files(scan_paths: list[str]) -> list[Path]:
             if child.name in SKIP_FILE_NAMES:
                 continue
             if child.suffix.lower() in SKIP_EXT:
+                continue
+            if child.resolve() in allowlist_paths:
                 continue
             out.append(child)
     return out

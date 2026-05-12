@@ -48,7 +48,7 @@ Our official support boundaries for the VM ecosystem:
 | **vmsingle / vmcluster (vmstorage + vmselect + vminsert)** | Metric storage backend; threshold-exporter `remote_write` target | ✅ Full | This platform **does not replace** your VM; non-invasive integration (the design principle in [`byo-prometheus-integration.md`](byo-prometheus-integration.en.md) §1 applies equally to VM) |
 | **vmalert** | Rule evaluator; can load our Rule Pack | ✅ Full | This platform's Rule Pack is pure standard PromQL; vmalert evaluates it directly (see [`byo-prometheus-integration.md`](byo-prometheus-integration.en.md)) |
 | **vmauth** | Auth proxy; multi-tenant isolation front line | ⚠️ Documentation thin | The tenant-federation ADR ([issue #380](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/380)) will use vmauth for forced label injection; current federation scope is primarily platform-internal |
-| **MetricsQL extensions** | Non-portable function detection | ✅ Full | `da-parser` `vm_only_functions.yaml` allowlist + freshness CI gate (details in [`cli-reference.md`](../cli-reference.en.md) §C-8 MetricsQL-as-Superset) |
+| **MetricsQL extensions** | Non-portable function detection | ✅ Full | `da-parser` `vm_only_functions.yaml` allowlist + freshness CI gate (details in [`cli-reference.md`](../cli-reference.en.md) §MetricsQL-as-Superset PromRule parser) |
 
 ---
 
@@ -102,7 +102,7 @@ conf.d/ tree (GitOps merge)
 - **`vm_only_functions.yaml` allowlist**: lists MetricsQL-exclusive functions (e.g., `histogram_quantile_bucket`, `increase_prometheus`), aligned with the [VM `metricsql` package](https://docs.victoriametrics.com/MetricsQL/)
 - **CI freshness gate**: `vm_only_functions_freshness_test.go` automatically detects new functions when MetricsQL upgrades, avoiding silent misses
 
-Detailed CLI + JSON ParseResult schema: [`cli-reference.md` §C-8 MetricsQL-as-Superset PromRule parser](../cli-reference.en.md) (L2320-2397).
+Detailed CLI + JSON ParseResult schema: [`cli-reference.md` §MetricsQL-as-Superset PromRule parser](../cli-reference.en.md) (L2320-2397).
 
 ### 5.3 Anti-vendor-lock-in commitment
 
@@ -137,7 +137,7 @@ That playbook assumes "mature multi-system ops" and covers Phase 0 three-tier di
 |---|---|
 | **Design philosophy**: non-invasive, Rule Pack pure PromQL | [`byo-prometheus-integration.md` §1](byo-prometheus-integration.en.md) |
 | **vmalert load Rule Pack**: implementation details | [`byo-prometheus-integration.md` §Advanced](byo-prometheus-integration.en.md) |
-| **da-parser MetricsQL handling**: CLI + JSON spec | [`cli-reference.md` §C-8](../cli-reference.en.md) |
+| **da-parser MetricsQL handling**: CLI + JSON spec | [`cli-reference.md` §MetricsQL-as-Superset](../cli-reference.en.md) |
 | **Multi-system migration** (Prom→VM + rules + AM simultaneously) | [`multi-system-migration-playbook.md`](../scenarios/multi-system-migration-playbook.md) (**ZH only — [#409](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/409)**) |
 | **Federation design** (platform-internal multi-cluster) | [`federation-integration.md`](federation-integration.en.md) |
 | **Tenant federation** (pulling metrics back to the customer side) | [issue #380](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/380) (v2.9 epic) |

@@ -220,7 +220,7 @@ Debounce is tunable via `--scan-debounce=<duration>`; recommended 100ms-500ms un
 | `da_config_defaults_shadowed_total` | counter | **v2.8.0 (Issue #61)** — defaults change blocked by a tenant override (split out from `noop_total`) |
 | `da_config_blast_radius_tenants_affected` | histogram | **v2.8.0 (Issue #61)** — per-tick affected-tenants distribution, labels = `reason / scope / effect`, buckets `[1, 5, 25, 100, 500, 1000, 2500, 5000, 10000]` |
 
-**Tenant API `/effective` Endpoint (v2.7.0, B-3 delivery)**
+**Tenant API `/effective` Endpoint (v2.7.0 delivery)**
 
 ```
 GET /api/v1/tenants/{id}/effective

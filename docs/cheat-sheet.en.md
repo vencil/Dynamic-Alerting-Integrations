@@ -60,10 +60,10 @@ da-tools command quick reference. Full docs at [cli-reference.en.md](cli-referen
 | `migrate-to-operator` | Read ConfigMap-based rules, produce equivalent CRD YAML + 6-stage migration plan | --source-dir <DIR>, --dry-run, --receiver-template | `da-tools migrate-to-operator --help` |
 | `rule-pack-split` | Rule Pack hierarchical split (edge Part 1 + central Parts 2+3) | --rule-packs-dir <DIR>, --output-dir <DIR>, --scenario | `da-tools rule-pack-split --help` |
 | `opa-evaluate` | OPA Rego policy evaluation bridge (OPA integration) | --config-dir <PATH>, --opa-url <URL>, --opa-binary, --policy-path, --dry-run | `da-tools opa-evaluate --help` |
-| `guard` | Dangling Defaults Guard (C-12 PR-4); shells out to the `da-guard` Go binary to validate conf.d/ schema + routing + cardinality | defaults-impact subcommand + --config-dir <PATH>, --scope, --required-fields, --cardinality-limit, --format md\|json | `da-tools guard --help` |
-| `batch-pr` | Migration Batch PR Pipeline (C-10 PR-5); shells out to the `da-batchpr` Go binary for apply / refresh / refresh-source orchestration | apply\|refresh\|refresh-source subcommands + --plan, --emit-dir, --input, --patches-dir, --workdir, --repo, --dry-run | `da-tools batch-pr --help` |
-| `parser` | PromRule parser (C-8 PR-2); shells out to the `da-parser` Go binary for PrometheusRule YAML parsing + dialect / VM-only / strict-PromQL portability classification | import\|allowlist subcommands + --input, --output, --validate-strict-prom, --fail-on-non-portable, --fail-on-ambiguous | `da-tools parser --help` |
-| `tenant-verify` | Print tenant effective config + merged_hash (Phase B Track A; B-4 rollback checklist item 6) | <tenant-id>, --conf-d <PATH>, --expect-merged-hash <H>, --all, --json | `da-tools tenant-verify --help` |
+| `guard` | Dangling Defaults Guard (v2.8.0); shells out to the `da-guard` Go binary to validate conf.d/ schema + routing + cardinality | defaults-impact subcommand + --config-dir <PATH>, --scope, --required-fields, --cardinality-limit, --format md\|json | `da-tools guard --help` |
+| `batch-pr` | Migration Batch PR Pipeline (v2.8.0); shells out to the `da-batchpr` Go binary for apply / refresh / refresh-source orchestration | apply\|refresh\|refresh-source subcommands + --plan, --emit-dir, --input, --patches-dir, --workdir, --repo, --dry-run | `da-tools batch-pr --help` |
+| `parser` | PromRule parser (v2.8.0); shells out to the `da-parser` Go binary for PrometheusRule YAML parsing + dialect / VM-only / strict-PromQL portability classification | import\|allowlist subcommands + --input, --output, --validate-strict-prom, --fail-on-non-portable, --fail-on-ambiguous | `da-tools parser --help` |
+| `tenant-verify` | Print tenant effective config + merged_hash (v2.8.0; incremental migration playbook rollback checklist item 6) | <tenant-id>, --conf-d <PATH>, --expect-merged-hash <H>, --all, --json | `da-tools tenant-verify --help` |
 
 ## Quick Tips
 

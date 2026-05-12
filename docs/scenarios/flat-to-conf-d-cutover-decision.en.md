@@ -35,7 +35,7 @@ The platform **supports both layouts coexisting** (mixed mode), but this is inte
 | **< 50 tenants, no organizational segmentation needs** | ⏸️ **Don't migrate** | Cascading defaults / blast-radius scope benefits < cognitive cost of maintaining two layouts |
 | **50-200 tenants, single BU/team management** | 🟡 **Either way** | Tipping point — depends whether you anticipate cross-region growth next quarter. If yes, migrate now |
 | **200+ tenants, multi-BU/region/env segmentation** | 🟢 **Migrate** | YAML line savings via cascading defaults + blast-radius scope signal are hard wins |
-| **GitOps PR flow on customer side** (C-10 batch-pr in plan) | 🟢 **Migrate** | Hierarchy-aware chunking defaults to per-domain PR slicing; flat layout forces a single mega-PR |
+| **GitOps PR flow on customer side** (da-batchpr in plan) | 🟢 **Migrate** | Hierarchy-aware chunking defaults to per-domain PR slicing; flat layout forces a single mega-PR |
 | **Anticipating cross-region/env defaults next quarter** (region-specific thresholds) | 🟢 **Migrate** | Flat has no place for region-level `_defaults.yaml`; migration cost only grows over time |
 | **Customer's `_defaults.yaml` rarely changes** (pure flat with hardcoded thresholds) | ⏸️ **Don't migrate** | Hierarchical's core benefit is cascading mutations — without them, only the maintenance cost remains |
 
@@ -46,15 +46,15 @@ The platform **fully supports** flat layout (since v2.7.0; no EOL planned), but 
 - **Cascading defaults**: change a threshold once → all dependent tenants in that region/env update automatically; flat requires per-tenant edits
 - **Blast-radius scope signal**: dashboard `da_config_blast_radius_tenants_affected{scope=domain}` always reads `tenant` in flat mode — no impact-radius visibility
 - **Natural GitOps PR chunking**: large flat changes go as a single PR; hierarchy-aware chunking auto-slices into per-domain PRs
-- **Hierarchy-aware rollback during migration** (B-4): the incremental migration playbook's reverse-order rollback assumes hierarchy; flat can only revert PR-by-PR
+- **Hierarchy-aware rollback during migration**: the incremental migration playbook's reverse-order rollback assumes hierarchy; flat can only revert PR-by-PR
 
 ### 2.2 Cost of migrating
 
 | One-time cost | Ongoing cost |
 |---|---|
 | Cutover-period mixed-mode scan slowdown (§4 quantitative) | `_metadata.{domain,region,environment}` must be maintained per tenant YAML |
-| Multi-person collaboration conflict surface grows (more `_defaults.yaml` files across dirs) | GitOps merge conflicts may span multiple dirs; needs `da-tools batch-pr` tooling (Phase .c C-10) |
-| One-time staging rehearsal (B-4 hard gate) | Operators must understand `defaultsPathLevel` to predict affected-tenant counts |
+| Multi-person collaboration conflict surface grows (more `_defaults.yaml` files across dirs) | GitOps merge conflicts may span multiple dirs; needs `da-tools batch-pr` tooling (v2.8.0) |
+| One-time staging rehearsal (v2.8.0 staging rehearsal hard gate) | Operators must understand `defaultsPathLevel` to predict affected-tenant counts |
 
 ---
 
@@ -104,7 +104,7 @@ Flat tenants at root have no path-derived metadata. Effects:
 
 ### 4.1 Expected degradation — measurement pending
 
-planning §B-5 sets the threshold "mixed mode vs same total-tenant-count pure hierarchical, **≥ 10% degradation** triggers a follow-up improvement PR".
+Performance gate: "mixed mode vs same total-tenant-count pure hierarchical, **≥ 10% degradation** triggers a follow-up improvement PR".
 
 **Current dev-container measurement is inconclusive** — `n=3` single-shot data was overly contaminated by fixture-create cost (`once.Do` writing 1000 yaml files), and the mixed fixture's cascading defaults count (9 `_defaults.yaml` = 1 root + 8 L1) is far fewer than the pure-hier 1000T's 201 (L0+L1+L2+L3 fully cascaded). Post-warmup comparison sometimes shows mixed mode being *faster* on some ops.
 
@@ -142,7 +142,7 @@ sum(rate(da_config_reload_trigger_total[5m])) by (reason)
 |---|---|---|
 | Pre-flight | `migrate_conf_d.py --dry-run` lists **all** files to move + warns on missing `_metadata` | Run dry-run + complete metadata |
 | Mixed-mode transient | Both layouts coexist OK; root defaults cascade, blast-radius scope correct | Monitor §4.3 PromQL; grep duplicate-ID WARN |
-| Cutover complete (pure hierarchical) | Performance returns to baseline, all cascading + blast-radius features available | Run staging rehearsal rollback test (B-4 hard gate) |
+| Cutover complete (pure hierarchical) | Performance returns to baseline, all cascading + blast-radius features available | Run staging rehearsal rollback test (v2.8.0 hard gate) |
 
 ### 5.2 Upgrade / rollback safety
 
@@ -166,4 +166,4 @@ Any of the following warrants paging vencil on-call:
 - ADR-018: [Defaults YAML inheritance + dual-hash hot-reload](../adr/018-defaults-yaml-inheritance-dual-hash.en.md)
 - Migration tool: `scripts/tools/dx/migrate_conf_d.py`
 - Migration playbook: [`incremental-migration-playbook.en.md`](incremental-migration-playbook.en.md)
-- B-1 Phase 1 baseline measurement: [`benchmark-playbook.md` §v2.8.0 1000-Tenant Hierarchical Baseline](../internal/benchmark-playbook.md) (internal)
+- 1000-tenant hierarchical baseline measurement: [`benchmark-playbook.md` §v2.8.0 1000-Tenant Hierarchical Baseline](../internal/benchmark-playbook.md) (internal)

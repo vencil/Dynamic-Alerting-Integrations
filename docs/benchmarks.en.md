@@ -72,7 +72,7 @@ lang: en
 
 **Environment**: Dev Container (Intel Core 7 240H, Go 1.26.2 linux/amd64), `buildDirConfig` synthetic fixture, each tenant with 8 metric thresholds (including scheduled overrides + regex dimensional).
 
-**Baseline measured at v2.7.0-final** (2026-04-18, [`b808610`](https://github.com/vencil/Dynamic-Alerting-Integrations/commit/b808610), `-benchtime=3s -count=3`); the scan path is unchanged in v2.8.0, and **bench-gate-pr Tier 1 CI gate** validates this baseline against every PR for regression.
+**Baseline measured at v2.7.0** (2026-04-18, [`b808610`](https://github.com/vencil/Dynamic-Alerting-Integrations/commit/b808610), `-benchtime=3s -count=3`); the scan path is unchanged in v2.8.0, and **bench-gate-pr Tier 1 CI gate** validates this baseline against every PR for regression.
 
 | Path | 100 tenants | **1000 tenants** | Meaning |
 |---|---:|---:|---|
@@ -96,7 +96,7 @@ lang: en
 
 ## 4. v2.8.0 end-to-end Alert Fire-Through baseline
 
-v2.8.0 B-1 Phase 2 shipped the **5-anchor end-to-end alert fire-through harness** (`tests/e2e-bench/`), covering the full chain from `conf.d/` write → exporter reload → Prometheus alert trigger → Alertmanager dispatch → webhook receiver.
+v2.8.0 shipped the **5-anchor end-to-end alert fire-through harness** (`tests/e2e-bench/`), covering the full chain from `conf.d/` write → exporter reload → Prometheus alert trigger → Alertmanager dispatch → webhook receiver.
 
 **Harness composition**: 6-service docker-compose stack (threshold-exporter / Prometheus / pushgateway / Alertmanager / receiver / driver) + statistical aggregator (n=30 + bootstrap 95% CI) + Tier 1 fail-fast smoke gate.
 
@@ -116,7 +116,7 @@ v2.8.0 B-1 Phase 2 shipped the **5-anchor end-to-end alert fire-through harness*
 
 **Run via**: `make bench-e2e` (local) + nightly `bench-record.yaml` workflow.
 
-> **Methodology note**: These figures are rigorously measured on the synthetic-v2 fixture (Zipf + power-law tenant distribution; n=30 + bootstrap 95% CI), passing the v2.8.0 release-readiness gate. Customers seeking an SLA contract anchor can re-validate against their actual workload shape via the [DEC-B customer-anon corpus calibration](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/142) (±30% gate) — those revalidated numbers then become the contract anchor. Calibration flow + ops details: [Benchmark Playbook §Phase 2 calibration](internal/benchmark-playbook.md#v280-phase-2-e2e-alert-fire-through-b-1-phase-2).
+> **Methodology note**: These figures are rigorously measured on the synthetic-v2 fixture (Zipf + power-law tenant distribution; n=30 + bootstrap 95% CI), passing the v2.8.0 release-readiness gate. Customers seeking an SLA contract anchor can re-validate against their actual workload shape via the [customer-anon corpus calibration](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/142) (±30% gate) — those revalidated numbers then become the contract anchor. Calibration flow + ops details: [Benchmark Playbook §v2.8.0 e2e alert fire-through calibration](internal/benchmark-playbook.md#v280-phase-2-e2e-alert-fire-through-b-1-phase-2).
 
 ---
 

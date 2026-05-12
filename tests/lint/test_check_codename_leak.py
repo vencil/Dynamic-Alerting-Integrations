@@ -67,6 +67,14 @@ class TestPatternDetection:
             ("Done in PR-2d", "PR-N internal id"),
             ("Item C-12 done", "Letter-prefix planning id"),
             ("Item B-4 status", "Letter-prefix planning id"),
+            # v2.8.0 #462: extended patterns
+            ("Tracking via DEC-B decision", "DEC-X decision tag"),
+            ("Tracked under DEC-F resolution", "DEC-X decision tag"),
+            ("Baseline taken on v2.7.0-final", "version -final/-rc suffix"),
+            ("Cut from v2.8.0-rc1 build", "version -final/-rc suffix"),
+            ("Pre-release v3.0.0-alpha noted", "version -final/-rc suffix"),
+            # B-1 Phase 2 case: B-1 alone is enough to catch the leak.
+            ("v2.8.0 B-1 Phase 2 landed", "Letter-prefix planning id"),
         ],
     )
     def test_codename_patterns_flagged(self, line, expected_label_substr):
@@ -86,6 +94,16 @@ class TestPatternDetection:
             "Use the v2.8.0 release notes for details.",
             # Code identifier with letter-digit but not in 1-3 digit range
             "version 2-1-0 release",
+            # v2.8.0 #462: plain semver without -final/-rc suffix must NOT flag
+            "Released as v2.8.0 on 2026-05-12.",
+            "Run tools/v2.7.0 for the prior contract.",
+            # "DEC" alone (no -<letter>) must NOT flag (used in DECision prose)
+            "DECoration is fine on the wall.",
+            # Legit algorithm-phase prose with digit must NOT flag (we dropped
+            # the Phase N digit pattern due to high FP rate on these uses).
+            "Phase 1: Mtime Guard — Quick Filtering",
+            "Journey Phase 0-2 (onboarding=2, operate=1, explore=0)",
+            "Phase 2: Per-File Hash Diff",
         ],
     )
     def test_clean_lines_not_flagged(self, line):

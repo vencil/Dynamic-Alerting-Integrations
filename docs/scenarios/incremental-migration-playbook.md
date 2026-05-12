@@ -526,7 +526,7 @@ EOF
 > **適用情境**：客戶 cutover 後發現結構性 bug（例：parser 吃掉 label / Dangling Guard 誤判 / 大量 false positive），需要把 Base Infrastructure PR + 多個 tenant PR 整批退版。
 > 與「階段 0/1/2/3 回滾」的差異：那些是試點期單一域的回退；本節是 cutover 後 batch PR pipeline 的整體退版，要處理 cascading defaults 與 hierarchical 依賴。
 >
-> **此程序為 v2.8.0 B-4 新增**（配合 Phase .c C-10 Batch PR Pipeline 的 hierarchy-aware chunking 設計）。
+> **此程序為 v2.8.0 新增**（配合 Migration Batch PR Pipeline 的 hierarchy-aware chunking 設計）。
 
 ### 退版順序：merge 順序的嚴格反序
 
@@ -541,11 +541,11 @@ EOF
 
 **為什麼 inner 先退**：tenant PR 不退而先退 outer `_defaults.yaml`，會讓 inner tenant 的 `effective_config` 瞬間落到「outer defaults 已退、tenant override 還在」的混合態 —— inheritance graph 計算的 merged_hash 會與 base PR merge 前的歷史值都不相符。
 
-### WatchLoop debounce 驗收（與 B-3 觀測 metrics 連動）
+### WatchLoop debounce 驗收（與 v2.7.0 觀測 metrics 連動）
 
 退版 wave 期間 git-sync 會把多個 commit 在 ~50-300ms 內依序 apply，觸發連續 fsnotify 事件。`config_debounce.go` 的 sliding-window debounce 必須把整個 wave 收斂為**單次** reload，中間態禁止誤 fire alert。
 
-**驗證 metrics**（v2.8.0 B-3 PR #75 加入）：
+**驗證 metrics**（v2.8.0 PR #75 加入）：
 
 ```promql
 # 退版 wave 期間，預期 sliding window 把所有 reload 觸發合併為單次 fire：
@@ -559,7 +559,7 @@ sum(rate(da_config_debounce_batch_size_sum[5m]))
 sum(rate(da_config_debounce_batch_size_count[5m]))
 ```
 
-**新增 test case（v2.8.0 follow-up，預定排在 C-10 實作 PR）**：`TestDebouncedReload_RollbackWave` —— 模擬 N 個 git-sync commit 反序 apply、debounce window 100ms，斷言 fire count 永遠 = 1（與 B-7 `TestSlowWriteTornStateStress` 同 pattern，差別在「反向時間序列 + cascading defaults 同步退」）。設計細節留待 C-10 PR。
+**新增 test case（v2.8.0 follow-up，預定排在 Migration Batch PR Pipeline 實作 PR）**：`TestDebouncedReload_RollbackWave` —— 模擬 N 個 git-sync commit 反序 apply、debounce window 100ms，斷言 fire count 永遠 = 1（與 `TestSlowWriteTornStateStress` 同 pattern，差別在「反向時間序列 + cascading defaults 同步退」）。設計細節留待 batch-PR pipeline 實作 PR。
 
 ### Staging rehearsal 強制（cutover 前 2 週）
 
@@ -573,7 +573,7 @@ Rehearsal 內容：
 
 ### 退版時間預算表（基於 Phase 1 baseline @ 1000-tenant，PR #59）
 
-> **數據來源**：`config_hierarchy_bench_test.go` PR #59 baseline（B-1 Phase 1 1000/2000/5000-tenant scaling characterization）。
+> **數據來源**：`config_hierarchy_bench_test.go` PR #59 baseline（1000/2000/5000-tenant scaling characterization）。
 > **適用範圍**：tenant 數 ≤ 1000 視為 baseline；2000-5000 套 §「Phase 1 scaling characterization」線性外推（5×=4.6-5.4×）。
 
 | 退版動作 | 1000-tenant 預算 | 5000-tenant 預算 | 來源 |
@@ -606,7 +606,7 @@ Rehearsal 內容：
 - `da-tools batch-pr rollback --plan` —— 從 Base PR # 反推完整退版順序，產出 markdown plan 給 ops review
 - `da-tools batch-pr rollback --execute` —— 自動執行反序 revert，每步等 git-sync apply + reload 收斂後才前進
 
-這些工具不在 B-4 文件 PR 範圍，但本節定義的程序為其 specification。
+這些工具不在本文件 PR 範圍，但本節定義的程序為其 specification。
 
 ---
 

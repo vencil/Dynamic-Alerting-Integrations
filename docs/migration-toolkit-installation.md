@@ -10,7 +10,7 @@ lang: zh
 
 > **Language / 語言：** **中文 (Current)** | [English](./migration-toolkit-installation.en.md)
 
-> **適用版本**：`tools/v2.8.0` 起（C-11 packaging 落地後的所有 release）。  
+> **適用版本**：`tools/v2.8.0` 起（Migration Toolkit packaging 落地後的所有 release）。  
 > 早期版本（≤ `tools/v2.7.0`）只有 Docker image 一條交付路徑。
 
 ## 為什麼需要 Migration Toolkit
@@ -18,19 +18,19 @@ lang: zh
 把客戶現有的 Prometheus alerting rule corpus（PromRule CRD / Alertmanager YAML）導入到 Dynamic Alerting Platform 的 conf.d/ Profile-as-Directory-Default 架構（[ADR-019](adr/019-profile-as-directory-default.md)），需要一連串工具串接：
 
 ```
-PromRule corpus → C-8 parser → C-9 cluster + translator → C-10 batch PR → C-12 guard validation → conf.d/
+PromRule corpus → da-parser → profile-builder cluster + translator → da-batchpr → da-guard validation → conf.d/
 ```
 
-C-11 Migration Toolkit 把這條 pipeline 打包成可離線跑、可在 air-gapped 環境跑、可 自動驗 binary integrity 的客戶可用工具集。
+Migration Toolkit 把這條 pipeline 打包成可離線跑、可在 air-gapped 環境跑、可 自動驗 binary integrity 的客戶可用工具集。
 
 **目前包含**：
 
 | 工具 | 介面 | 用途 |
 |---|---|---|
 | `da-tools` | Python CLI | 既有 41+ 個運維 / 配置生成 / 政策評估子命令；新增 `guard` + `batch-pr` + `parser` 子命令 wrapping da-guard / da-batchpr / da-parser |
-| `da-guard` | Go binary | C-12 Dangling Defaults Guard CLI（schema / routing / cardinality / redundant-override 四層檢查）|
-| `da-batchpr` | Go binary | C-10 Migration Batch PR Pipeline CLI（apply / refresh / refresh-source 子命令；plan → 開 PR → Base merge 後 rebase / data-layer hot-fix）|
-| `da-parser` | Go binary | C-8 PromRule parser CLI（import / allowlist 子命令；strict-PromQL 相容性檢查 + dialect / VM-only 函數分類；anti-vendor-lock-in）|
+| `da-guard` | Go binary | Dangling Defaults Guard CLI（schema / routing / cardinality / redundant-override 四層檢查）|
+| `da-batchpr` | Go binary | Migration Batch PR Pipeline CLI（apply / refresh / refresh-source 子命令；plan → 開 PR → Base merge 後 rebase / data-layer hot-fix）|
+| `da-parser` | Go binary | PromRule parser CLI（import / allowlist 子命令；strict-PromQL 相容性檢查 + dialect / VM-only 函數分類；anti-vendor-lock-in）|
 
 ## 三種交付路徑
 
@@ -65,7 +65,7 @@ docker run --rm \
 
 **內含**：Python `da-tools` CLI + bundled `da-guard` / `da-batchpr` / `da-parser` Linux/amd64 binaries（`/usr/local/bin/`）。`da-tools guard` / `da-tools batch-pr` / `da-tools parser` 子命令會自動在 image 內找到對應 binary，不需另外設 `$DA_GUARD_BINARY` / `$DA_BATCHPR_BINARY` / `$DA_PARSER_BINARY`。
 
-**Trivy CVE scan** 在 release 時自動跑（`CRITICAL` / `HIGH` 級別 fail-fast）。Image SBOM + 簽章在 `tools/v2.8.0` Release notes 列出（cosign 簽章 PR-3 deferred）。
+**Trivy CVE scan** 在 release 時自動跑（`CRITICAL` / `HIGH` 級別 fail-fast）。Image SBOM + 簽章在 `tools/v2.8.0` Release notes 列出（cosign 簽章為後續迭代項目）。
 
 ---
 
@@ -73,7 +73,7 @@ docker run --rm \
 
 每個 Release 提供三組 6 個 cross-compiled binary（共 18 個 archive）：
 
-**`da-guard`**（C-12 Dangling Defaults Guard）：
+**`da-guard`**（Dangling Defaults Guard）：
 
 | OS | ARCH | 檔名 |
 |---|---|---|
@@ -84,7 +84,7 @@ docker run --rm \
 | Windows | amd64 | `da-guard-windows-amd64.zip` |
 | Windows | arm64 | `da-guard-windows-arm64.zip` |
 
-**`da-batchpr`**（C-10 Migration Batch PR Pipeline，v2.8.0 起）：
+**`da-batchpr`**（Migration Batch PR Pipeline，v2.8.0 起）：
 
 | OS | ARCH | 檔名 |
 |---|---|---|
@@ -95,7 +95,7 @@ docker run --rm \
 | Windows | amd64 | `da-batchpr-windows-amd64.zip` |
 | Windows | arm64 | `da-batchpr-windows-arm64.zip` |
 
-**`da-parser`**（C-8 PromRule parser，v2.8.0 起）：
+**`da-parser`**（PromRule parser，v2.8.0 起）：
 
 | OS | ARCH | 檔名 |
 |---|---|---|
@@ -328,7 +328,7 @@ da-guard --config-dir . --required-fields cpu --format md
 
 預期輸出：`✅ No findings — defaults change is safe to merge.`（或 `❌ N errors found, M warnings`）
 
-CI 整合範例見 [`.github/workflows/guard-defaults-impact.yml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/.github/workflows/guard-defaults-impact.yml)（C-12 PR-5 的 customer template，可整份 copy 過去）。
+CI 整合範例見 [`.github/workflows/guard-defaults-impact.yml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/.github/workflows/guard-defaults-impact.yml)（da-guard 的 customer template，可整份 copy 過去）。
 
 ## 故障排除
 
