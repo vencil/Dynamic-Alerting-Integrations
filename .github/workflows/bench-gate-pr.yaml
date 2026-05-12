@@ -107,12 +107,17 @@ jobs:
             ${{ runner.os }}-go-1.26-
             ${{ runner.os }}-go-
 
-      - name: Install benchstat (pinned version)
+      - name: Install benchstat
         if: steps.check_override.outputs.skip != 'true'
         run: |
-          # Pin to a specific revision so benchstat output format doesn't
-          # change under us across runs. Update via deliberate PR.
-          go install golang.org/x/perf/cmd/benchstat@v0.0.0-20250214135030-bdfe27c054fa
+          # @latest is acceptable here: benchstat's output format has been
+          # stable for ~2 years (last breaking format change was the
+          # 2023 table redesign). Pin to a specific module version IF
+          # output parsing in the next step starts mis-classifying — that
+          # would be a clear signal that the format moved under us.
+          # Until then, @latest avoids the rot of stale pins to revisions
+          # that may be GC'd by the Go module proxy.
+          go install golang.org/x/perf/cmd/benchstat@latest
           benchstat -h 2>&1 | head -5 || true
 
       # CRITICAL: compute merge-base ourselves. Do NOT use origin/main HEAD
