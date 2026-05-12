@@ -458,7 +458,27 @@ def compute_exit_code(report: dict, *, ci: bool) -> int:
 # ─── Main ─────────────────────────────────────────────────────────────
 
 
+def _try_utf8_stdout() -> None:
+    """Best-effort: reconfigure stdout to UTF-8 with replacement errors.
+
+    The text output uses emoji (➕, ⚠️, ?) that legacy Windows consoles
+    (cp950 / cp936 / cp1252) cannot encode → UnicodeEncodeError crash.
+    Modern terminals (UTF-8 Linux, macOS, Windows Terminal, Docker
+    Alpine bundle) handle them natively. This guard rescues Windows-
+    host devs running `python rule_pack_diff.py ...` directly in
+    legacy cmd.exe / older PowerShell.
+
+    Same helper as silencer_drift_check / state_reconcile — duplicated
+    rather than shared because the tools are otherwise self-contained.
+    """
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, OSError):
+        pass
+
+
 def main(argv: list[str] | None = None) -> int:
+    _try_utf8_stdout()
     ap = argparse.ArgumentParser(
         description="Mechanical diff between two Rule Pack YAML versions.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
