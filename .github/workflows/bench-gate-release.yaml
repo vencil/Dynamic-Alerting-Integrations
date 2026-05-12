@@ -53,8 +53,10 @@ on:
         required: false
 
 permissions:
-  contents: write   # gh release view + post comment require write
-  actions: read     # for any artifact ops
+  # Read-only is sufficient: we don't mutate release notes (would clobber
+  # maintainer text), don't commit, don't download cross-workflow artifacts.
+  # `gh release view` and `git checkout` both work with contents: read.
+  contents: read
 
 jobs:
   tier2:
@@ -290,18 +292,47 @@ jobs:
             echo "regression=false" >> "$GITHUB_OUTPUT"
           fi
 
+          # Defensive INCONCLUSIVE check — Tier 2 is single-runner sequential
+          # so heterogeneous CPU should be STRUCTURALLY impossible (same VM
+          # for both benches). But: if runner provisioning ever changes
+          # (e.g., GH migrates to a different runner image, or some bizarre
+          # mid-job VM swap), benchstat could silently produce split per-CPU
+          # tables with no delta rows → grep finds no `+X%` matches →
+          # regression=false → workflow exits 0 → silent system (Trap 14
+          # recurrence). Add the same defense-in-depth as Tier 1 v5.
+          cpu_lines=$(grep -E '^cpu:' "$RUNNER_TEMP/bench-out/benchstat.txt" 2>/dev/null | sort -u || true)
+          inconclusive=false
+          if [ -n "$cpu_lines" ] && [ "$(echo "$cpu_lines" | wc -l)" -gt 1 ]; then
+            inconclusive=true
+            cpu_count=$(echo "$cpu_lines" | wc -l)
+            echo "::error::Heterogeneous CPUs detected ($cpu_count distinct) IN A SINGLE-RUNNER JOB. This shouldn't be possible in Tier 2's single-runner topology — investigate runner provisioning. CPUs observed:"
+            echo "$cpu_lines"
+            {
+              echo "inconclusive_cpus<<__CPUEOF__"
+              echo "$cpu_lines"
+              echo "__CPUEOF__"
+            } >> "$GITHUB_OUTPUT"
+          fi
+          echo "inconclusive=$inconclusive" >> "$GITHUB_OUTPUT"
+
       - name: Render comparison step summary
         if: steps.refs.outputs.no_prior == 'false'
         env:
           REGRESSION: ${{ steps.compare.outputs.regression }}
           REGRESSIONS_LIST: ${{ steps.compare.outputs.regressions }}
+          INCONCLUSIVE: ${{ steps.compare.outputs.inconclusive }}
+          INCONCLUSIVE_CPUS: ${{ steps.compare.outputs.inconclusive_cpus }}
           PRIOR_REF: ${{ steps.refs.outputs.prior_ref }}
           PRIOR_SHA: ${{ steps.refs.outputs.prior_sha }}
           CURRENT_REF: ${{ steps.refs.outputs.current_ref }}
           CURRENT_SHA: ${{ steps.refs.outputs.current_sha }}
         run: |
           {
-            if [ "$REGRESSION" = "true" ]; then
+            # INCONCLUSIVE takes precedence — when CPUs differ, "no regression"
+            # is a LIE because the comparison didn't actually happen.
+            if [ "$INCONCLUSIVE" = "true" ]; then
+              echo "## ⚠️ Tier 2 — INCONCLUSIVE (unexpected heterogeneous CPUs)"
+            elif [ "$REGRESSION" = "true" ]; then
               echo "## ⚠️ Tier 2 — Cumulative drift flagged (informational)"
             else
               echo "## ✅ Tier 2 — No notable cumulative drift between releases"
@@ -330,6 +361,17 @@ jobs:
             echo '```'
             cat "$RUNNER_TEMP/bench-out/benchstat.txt"
             echo '```'
+            if [ "$INCONCLUSIVE" = "true" ]; then
+              echo ""
+              echo "### ⚠️ Inconclusive — unexpected heterogeneous CPUs"
+              echo ""
+              echo "Tier 2's single-runner sequential topology should make this structurally"
+              echo "impossible (same VM for both benches → same CPU). If you're seeing this,"
+              echo "investigate runner provisioning (GH image change? mid-job VM swap?). CPUs observed:"
+              echo '```'
+              echo "$INCONCLUSIVE_CPUS"
+              echo '```'
+            fi
             if [ "$REGRESSION" = "true" ]; then
               echo ""
               echo "### Drift flagged (≥10% slowdown at p<0.05)"
@@ -380,14 +422,20 @@ jobs:
       #
       # workflow_dispatch (pre-tag manual review) also benefits: maintainer
       # sees a red check → reads step summary → decides whether to tag.
-      - name: Fail workflow on regression — alerting via GitHub's email-on-failure
-        if: steps.compare.outputs.regression == 'true'
+      - name: Fail workflow on regression or inconclusive — alerting via email-on-failure
+        if: steps.compare.outputs.regression == 'true' || steps.compare.outputs.inconclusive == 'true'
         run: |
-          echo "::error::Cumulative perf drift (≥10% at p<0.05) detected between releases."
-          echo "::error::This workflow is failing INTENTIONALLY to trigger GitHub's email-on-failure notification."
-          echo "::error::The release itself is NOT blocked — it is already published. Tier 2 only INFORMS; the maintainer decides whether to:"
-          echo "::error::  - Acknowledge the drift in release notes (free-form)"
-          echo "::error::  - Open a perf follow-up issue for the next release"
-          echo "::error::  - Revert / hotfix for severe user-visible regression"
-          echo "::error::Read the step summary for the full benchstat report."
+          if [ "${{ steps.compare.outputs.inconclusive }}" = "true" ]; then
+            echo "::error::Tier 2 run INCONCLUSIVE — heterogeneous CPUs detected in single-runner job (shouldn't be possible). Investigate runner provisioning."
+            echo "::error::This workflow is failing INTENTIONALLY to trigger GitHub's email-on-failure notification."
+            echo "::error::The release itself is NOT blocked — it is already published. Read step summary to debug."
+          else
+            echo "::error::Cumulative perf drift (≥10% at p<0.05) detected between releases."
+            echo "::error::This workflow is failing INTENTIONALLY to trigger GitHub's email-on-failure notification."
+            echo "::error::The release itself is NOT blocked — it is already published. Tier 2 only INFORMS; the maintainer decides whether to:"
+            echo "::error::  - Acknowledge the drift in release notes (free-form)"
+            echo "::error::  - Open a perf follow-up issue for the next release"
+            echo "::error::  - Revert / hotfix for severe user-visible regression"
+            echo "::error::Read the step summary for the full benchstat report."
+          fi
           exit 1
