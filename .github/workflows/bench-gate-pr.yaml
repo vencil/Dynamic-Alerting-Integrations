@@ -549,6 +549,21 @@ jobs:
           # gawk / mawk / BSD awk. We find the "+X.XX%" token via match
           # (returns position+length), substr the number out (strip the
           # leading + and trailing %), and compare.
+          #
+          # CRITICAL `|| true`: `grep` returns 1 when nothing matches.
+          # With `set -euo pipefail`, that propagates through the pipeline
+          # and aborts the script via `set -e` on the command substitution
+          # assignment (recent bash behavior). The "no regressions found"
+          # path is the HAPPY PATH — gate should pass — but without
+          # `|| true` it crashes the script and marks the gate as failed.
+          # PR #437's first run worked only because false positives at the
+          # default α=0.05 were always populating grep's output, masking
+          # this bug. PR #440 v4 with tighter α and magnitude floor often
+          # finds zero matches (correct behavior) and triggered the crash.
+          # Also: heterogeneous runner CPUs (AMD EPYC vs Intel Xeon in
+          # Azure's pool) cause benchstat to split output into per-CPU
+          # tables without comparison columns, which is ANOTHER way to
+          # legitimately get zero matches. Both should be a pass.
           MAGNITUDE_FLOOR_PCT=5.0
           regressions=$(grep -E '[[:space:]]\+[0-9]+\.[0-9]+%[[:space:]]*\(p=' \
                           "$RUNNER_TEMP/bench-merged/benchstat.txt" \
@@ -561,7 +576,20 @@ jobs:
                               num = substr($0, RSTART + 1, RLENGTH - 2) + 0
                               if (num >= floor) print
                             }
-                          }')
+                          }' || true)
+
+          # Detect runner CPU heterogeneity — when Azure's pool assigns
+          # different CPU types to base vs pr shards, benchstat correctly
+          # refuses to do a cross-CPU comparison and outputs split tables
+          # without delta columns. This is a free-tier-runner limitation;
+          # log it so the noise is visible (don't fail — there's nothing
+          # the gate can do about it). Larger Runners (Tier 1 escalation
+          # path) would fix this by pinning hardware.
+          cpu_lines=$(grep -E '^cpu:' "$RUNNER_TEMP/bench-merged/benchstat.txt" 2>/dev/null | sort -u || true)
+          if [ -n "$cpu_lines" ] && [ "$(echo "$cpu_lines" | wc -l)" -gt 1 ]; then
+            echo "::warning::Heterogeneous CPUs detected across base/pr shards — benchstat split output, some benches not comparable. CPUs seen:"
+            echo "$cpu_lines"
+          fi
 
           if [ -n "$regressions" ]; then
             echo "regression=true" >> "$GITHUB_OUTPUT"
