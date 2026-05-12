@@ -1,10 +1,16 @@
-FROM golang:1.26.2-alpine3.22 AS builder
+FROM golang:1.26.3-alpine3.22 AS builder
 
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 
+# main package files live at app root; pkg/ holds the config library
+# that config_hierarchy.go / config_inheritance.go / config_parse.go
+# import (extracted as a proper library in PR-7/PR-8 during v2.8.0).
+# Both must be COPY'd or `go build` fails with "no required module
+# provides package github.com/vencil/threshold-exporter/pkg/config".
 COPY *.go ./
+COPY pkg ./pkg
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /threshold-exporter .
 
 FROM gcr.io/distroless/static-debian12:nonroot
