@@ -442,7 +442,7 @@ da-tools maintenance-scheduler --config-dir conf.d/ --alertmanager http://alertm
 | ["BYO Alertmanager Integration Guide"] | ⭐⭐⭐ |
 | ["Bring Your Own Prometheus (BYOP) — 現有監控架構整合指南"](./byo-prometheus-integration.md) | ⭐⭐⭐ |
 | ["Threshold Exporter API Reference"](../api/README.md) | ⭐⭐ |
-| ["性能分析與基準測試 (Performance Analysis & Benchmarks)"](../benchmarks.md) | ⭐⭐ |
+| ["性能基準 (Performance Benchmarks)"](../benchmarks.md) | ⭐⭐ |
 | ["da-tools CLI Reference"](../cli-reference.md) | ⭐⭐ |
 | ["Grafana Dashboard 導覽"](../grafana-dashboards.md) | ⭐⭐ |
 | ["進階場景與測試覆蓋"](../internal/test-coverage-matrix.md) | ⭐⭐ |

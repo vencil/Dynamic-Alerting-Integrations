@@ -769,3 +769,92 @@ BENCH_OUT_DIR=/tmp/b1_out bash /workspaces/vibe-k8s-lab/scripts/tools/ops/bench_
 cat /tmp/b1_out/bench.out.txt
 ```
 
+---
+
+## Engineering Reference Benchmarks
+
+> v2.8.0 benchmarks.md customer-first 重寫時，以下「工程參考用」micro-bench 數據從 customer-facing perf doc 搬到本 playbook（per [PR #460](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/460)）。**Audience**：要做 perf regression analysis / 確認 specific 數字級距 的 maintainer + SRE，不適合給 prospective customer 看。
+
+### Go Micro-Bench — `Resolve` 系列 (threshold-exporter config 解析)
+
+`config_bench_test.go` 量測 threshold-exporter 設定解析效能（`go test -bench=. -benchmem -count=5`, Intel Core 7 240H）：
+
+| Benchmark | ns/op (median) | B/op | allocs/op |
+|---|---:|---:|---:|
+| `Resolve_10Tenants_Scalar` | 19,590 | 26,488 | 61 |
+| `Resolve_100Tenants_Scalar` | 163,839 | 202,777 | 520 |
+| `Resolve_1000Tenants_Scalar` | 4,076,536 | 3,848,575 | 5,039 |
+| `ResolveAt_10Tenants_Mixed` | 71,536 | 40,032 | 271 |
+| `ResolveAt_100Tenants_Mixed` | 927,426 | 461,872 | 2,621 |
+| `ResolveAt_1000Tenants_Mixed` | 10,274,749 | 5,244,817 | 26,054 |
+| `ResolveAt_NightWindow_1000` | 8,438,156 | 5,220,583 | 25,055 |
+| `ResolveSilentModes_1000` | 156,172 | 187,218 | 10 |
+
+10→100→1000 租戶呈線性增長，1000 租戶完整 `ResolveAt`（含排程式閾值）在 ~10ms 以內。`ResolveSilentModes_1000` 僅 156µs，flag metric 查詢近乎零成本。
+
+**與 Rule Evaluation 的關係**：[benchmarks.md §2](../benchmarks.md#2-為什麼能-scale-架構保證-om-向量匹配) 量測 Prometheus 規則評估（O(M)，與租戶數無關），本表量測 threshold-exporter 設定解析（O(N)，線性增長）。兩者互補：最關鍵瓶頸（規則評估）恆定，次要成本（設定解析）1000 租戶仍僅 ~10ms，遠低於 15 秒抓取週期。
+
+### Synthetic Fixture Generation 速率對照
+
+`scripts/tools/dx/generate_tenant_fixture.py` — 合成 `conf.d/` 產生速度與輸出規模（seed=42）：
+
+| Tenants | Layout | Files | Size (KB) | Gen Time (s) | Avg File Size (bytes) |
+|---:|:---|---:|---:|---:|---:|
+| 100 | flat | 101 | 71.4 | 0.045 | 724 |
+| 100 | hierarchical | 107 | 73.1 | 0.055 | 699 |
+| 500 | flat | 501 | 363.9 | 0.076 | 744 |
+| 500 | hierarchical | 509 | 367.5 | 0.106 | 739 |
+| 1,000 | flat | 1,001 | 723.9 | 0.116 | 741 |
+| 1,000 | hierarchical | 1,009 | 727.2 | 0.133 | 738 |
+| 2,000 | flat | 2,001 | 1,446.5 | 0.203 | 740 |
+| 2,000 | hierarchical | 2,009 | 1,449.9 | 0.212 | 739 |
+
+**觀察**：
+- **線性擴展**：Gen time 與 tenant 數接近線性（100→2000 = 20× tenants, ~4.5× time），I/O 為主要瓶頸
+- **Layout 差異微小**：hierarchical 多出 `mkdir -p` 開銷約 5-15%，可忽略
+- **平均檔案大小穩定**：~740 bytes/file，不隨規模變化
+- **Seed 可重現性已驗證**：同一 seed 兩次生成產出 byte-identical 輸出
+
+Fixture 供 §v2.8.0 1000-Tenant Hierarchical Baseline (上方) 與 §Phase 2 e2e harness 使用。**ADR-017 引用**：[`docs/adr/017-conf-d-directory-hierarchy-mixed-mode.md`](../adr/017-conf-d-directory-hierarchy-mixed-mode.md) flat vs hierarchical 效能對照即此表。
+
+### Schema Validation — `validate_tenant_keys`
+
+`scripts/tools/ops/validate_config.py` 內 `validate_tenant_keys()` 逐 tenant 驗證 key 合法性（20 輪 in-process median）：
+
+| Tenants | Median |
+|---:|---:|
+| 10 | 0.010 ms |
+| 100 | 0.128 ms |
+| 500 | 0.498 ms |
+| 1,000 | 0.978 ms |
+
+純 dict 操作，1000 tenant < 1ms，可安全嵌入 hot-reload path。
+
+### pytest-benchmark 微觀基線
+
+`pytest -m benchmark`（min_rounds=20, warmup=on）。用於版本間趨勢偵測：
+
+| 測試 | Median | Rounds | 說明 |
+|---|---:|---:|---|
+| `test_parse_integer` | ~102 ns | 100,161 | `parse_duration_seconds` 最快路徑 |
+| `test_parse_seconds` | ~634 ns | 164,555 | 含字串解析 |
+| `test_parse_minutes` | ~624 ns | 168,039 | 含字串解析 |
+| `test_parse_hours` | ~619 ns | 168,663 | 含字串解析 |
+| `test_format_seconds` | ~128 ns | 80,167 | `format_duration` |
+| `test_format_minutes` | ~160 ns | 59,443 | format 分鐘 |
+| `test_format_hours` | ~147 ns | 70,872 | format 小時 |
+| `test_within_bounds` | ~796 ns | 131,303 | `validate_and_clamp` (無 clamp) |
+| `test_clamped` | ~1.2 µs | 85,129 | `validate_and_clamp` (含 clamp) |
+
+### Route Generation 工具鏈（pytest-benchmark in-process）
+
+`generate_alertmanager_routes.py` 將 tenant YAML 轉 Alertmanager route + receiver + inhibit。純 generation 邏輯（不含 Python 啟動 / 載入 YAML），合成 tenant 規格：6 種 receiver type 輪替、`_severity_dedup` 啟用：
+
+| Tenants | Median | Rounds |
+|---:|---:|---:|
+| 10 | ~38 µs | 27,678 |
+| 50 | ~197 µs | 5,415 |
+| 100 | ~394 µs | 2,773 |
+
+純邏輯 sub-millisecond，CLI 啟動開銷（Python interp + import）佔 CLI wall time 的 ~55-70%。
+

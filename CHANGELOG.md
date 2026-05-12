@@ -886,7 +886,7 @@ v2.7.0 把租戶配置的資料結構升級為可支撐千租戶規模（`conf.d
 | `IncrementalLoad + MtimeGuard` | 1.30 ms | 加 mtime 短路（86x 快於 cold） |
 | `MergePartialConfigs_1000` | 653 us | 階層 merge 本身 |
 
-SLO：cold load 112 ms / 1000 tenants；reload 熱路徑 1.30 ms 相對於預設 15 s scan_interval 僅 0.0087%，幾乎零 overhead。完整報告見 [`benchmarks.md §12`](docs/benchmarks.md#12-incremental-hot-reload-b-1-scale-gate)。
+SLO：cold load 112 ms / 1000 tenants；reload 熱路徑 1.30 ms 相對於預設 15 s scan_interval 僅 0.0087%，幾乎零 overhead。完整報告見 [`benchmarks.md §3 v2.8.0 Scale Gate`](docs/benchmarks.md#3-v280-scale-gate-1000-tenant-實測)。
 
 ### ADR 新增（ADR-012~018，7 條）
 

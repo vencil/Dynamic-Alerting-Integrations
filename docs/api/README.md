@@ -597,7 +597,7 @@ kubectl logs <pod-name> -n monitoring | tail -50
 |------|--------|
 | ["Threshold Exporter API Reference"](README.md) | ⭐⭐⭐ |
 | ["da-tools CLI Reference"](../cli-reference.md) | ⭐⭐⭐ |
-| ["性能分析與基準測試 (Performance Analysis & Benchmarks)"](../benchmarks.md) | ⭐⭐ |
+| ["性能基準 (Performance Benchmarks)"](../benchmarks.md) | ⭐⭐ |
 | ["BYO Alertmanager 整合指南"](../integration/byo-alertmanager-integration.md) | ⭐⭐ |
 | ["Bring Your Own Prometheus (BYOP) — 現有監控架構整合指南"](../integration/byo-prometheus-integration.md) | ⭐⭐ |
 | ["da-tools Quick Reference"](../cheat-sheet.md) | ⭐⭐ |
