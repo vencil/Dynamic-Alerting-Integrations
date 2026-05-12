@@ -22,6 +22,7 @@ lang: zh
 | Under-Load Bench | [§Under-Load Bench 注意事項](#under-load-bench-注意事項) |
 | **PR-time bench gate 看懂 + 處理 regression** | [§Tier 1 PR-Time Bench Gate Operations](#tier-1-pr-time-bench-gate-operations) |
 | **Override label 申請 / per-event semantics** | [§Override 申請流程](#override-申請流程) |
+| **Release-time cumulative drift report (Tier 2)** | [§Tier 2 Release-Time Bench Gate Operations](#tier-2-release-time-bench-gate-operations) |
 | 踩坑記錄 | [§踩坑記錄](#踩坑記錄-lessons-learned) |
 
 ---
@@ -250,8 +251,96 @@ Topology: single-runner sequential (base bench → drop_caches → pr bench → 
 ### Cross-references
 
 - **Design**：[`bench-gate-rollout.md`](bench-gate-rollout.md) — Tier 1 + Tier 2 split rationale、Scapegoat Trap / Noisy Neighbor Illusion / Broken Window / hardware floor escalation 設計
-- **Codified gotchas**：user memory `feedback_github_actions_workflow_gotchas.md` — 10 traps from 10 rounds of adversarial review (Virtual-merge HEAD / Labeled trigger / fetch-depth / fork-PR write / fabricated SHA / Partial shard / alpha vs confidence / Ghost Green race / Blanket Immunity / Redundant Wait + Ghost Comment + Zero-regression crash)
-- **Issue tracker**：[#433](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/433) — W1 ✅ / W2 ✅ / W3 (FP rate observation, ~2 weeks) / W4 (Tier 2 release-time workflow)
+- **Codified gotchas**：user memory `feedback_github_actions_workflow_gotchas.md` — 13 traps from 12 rounds of adversarial review (Virtual-merge HEAD / Labeled trigger / fetch-depth / fork-PR write / fabricated SHA / Partial shard / alpha vs confidence / Ghost Green race / Blanket Immunity / Redundant Wait + Ghost Comment + Zero-regression crash / hetero CPU silent FN / sharding-on-hetero-pool antipattern / sequential dirty workspace + timeout tightrope)
+- **Issue tracker**：[#433](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/433) — W1 ✅ / W2 ✅ / W3 (FP rate observation, ~2 weeks) / W4 ✅ (Tier 2 shipped)
+
+---
+
+## Tier 2 Release-Time Bench Gate Operations
+
+> **Source of truth**：`.github/workflows/bench-gate-release.yaml`。設計 rationale 見 [`bench-gate-rollout.md`](bench-gate-rollout.md) Tier 1 + Tier 2 split。
+
+### 概觀
+
+| 項目 | 值 |
+|---|---|
+| 工作流檔案 | `.github/workflows/bench-gate-release.yaml` |
+| 觸發條件 | `release: published`（自動）+ `workflow_dispatch`（手動 pre-tag review） |
+| Scope filter | 只跑 `v*` platform tags（exporter/v*, tools/v*, portal/v*, tenant-api/v* 不在 scope）|
+| 拓樸 | 單 runner sequential（同 Tier 1 v5）：checkout prior tag → bench → drop_caches → clean workspace → checkout current tag → bench → benchstat |
+| Wall time | ~20-25 min |
+| 統計判定 | `benchstat -alpha=0.05` AND `|Δ| ≥ 10%`（looser than Tier 1's 0.01 / 5%）|
+| 結果遞送 | **Step summary**（不 mutate release notes、不 post comment 到 release）+ **workflow failure on regression**（觸發 GitHub email 通知 maintainer）|
+| Blocking? | **❌ 不阻擋 release**（release 已 published；workflow 在那之後跑）。但偵測到 drift 會故意 `exit 1` 標紅燈 — 這是 alerting 機制（GitHub 只在 workflow fail 時寄信通知 maintainer，綠燈無通知）|
+| Override | 無 label 機制；maintainer 自行在 release notes 文字承認 drift 即可 |
+
+### 「Fail to inform, not fail to block」設計
+
+Tier 2 在偵測到 drift 時故意 `exit 1` 讓 workflow 顯紅燈。這**不是** release blocker（release 在這個 workflow 觸發前已經 published 了，事後失敗無法 un-publish），而是**通知機制**：
+
+- ❌ Workflow exit 0（綠燈）→ GitHub 不寄任何通知 email → maintainer 永遠不會主動點開綠燈 workflow 讀 step summary → drift 報告等於沒寫
+- ✅ Workflow exit 1（紅燈）→ GitHub 自動寄 "Workflow Failed" email 給 maintainer → maintainer 收信點進來看 step summary → 真正讀到 drift 報告
+
+這個取捨叫 **Fail to inform, not fail to block**。在 GitHub Actions 的 UX model 下，沒有更好的 silent-pass alternative — 自動 post 到 release notes 會 clobber maintainer 手打的文字，自動發 issue 會 spam 兒 issue tracker。Workflow failure 是當下最 idiomatic 的「請看一下這個」訊號。
+
+副作用：release 列表上會看到 release 旁邊一個紅 X check。**這不代表 release 有問題**，只代表「Tier 2 偵測到值得 review 的 drift」。Maintainer 看了 step summary 後可選擇：
+
+1. **承認** — 在 release notes 補一段 perf trade-off rationale
+2. **跟進** — 開 perf follow-up issue 給下個 release 處理
+3. **嚴重時** — hotfix release（罕見；通常 Tier 1 已先 catch 過了）
+
+
+
+| 維度 | Tier 1 (PR-time) | Tier 2 (release-time) |
+|---|---|---|
+| 目的 | catch per-PR regression（blame correct）| catch 累積 release drift（user-visible scale）|
+| Trigger | PR events (opened / synchronize / labeled) | `release: published` |
+| 比對基準 | merge-base | 前一個 `v*` release tag |
+| 統計閾值 | α=0.01 + 5% floor | α=0.05 + 10% floor |
+| 嚴格度 | 高（catch per-PR diff intent）| 低（只抓 user-visible drift）|
+| Blocking? | ✅ blocks merge | ❌ informational |
+| Override | label `override: bench-regress-ok`（admin/maintain only, per-event）| free-form release notes acknowledgment |
+| Wall time | ~20 min | ~20-25 min |
+
+### 為什麼 Tier 2 threshold 比 Tier 1 鬆
+
+Tier 1 的職責是「每個 PR 不要偷偷塞 perf regression」— 嚴格的 α=0.01 + 5% 適合 catch 小但故意的 regression。
+
+Tier 2 的職責是「告訴 maintainer release 之間有沒有累積 drift」— 跨多週 / 數十個 PR，runner variance 累積、Go 版本變動、依賴升級 etc. 都會貢獻 noise。若用 Tier 1 等級閾值，幾乎每個 release 都會 flag 一堆 ±5% drift；雜訊掩蓋真正的 user-visible regression。10% magnitude floor 配 α=0.05 → 大概是「客戶實際會抱怨」的 scale。
+
+### 第一個 release 行為
+
+v2.8.0 是 Tier 2 上線後的第一個 release。`git describe` 找不到比它更早的 `v*` tag（除了 v2.7.0，但 v2.7.0 的 bench-baseline 資產 predates PR #117），workflow 會輸出：
+
+```
+## ℹ️ Tier 2 — No prior baseline to compare against
+Current release: v2.8.0
+No prior v* tag found in history. This is expected for the first
+platform release after Tier 2 went live. Subsequent releases will
+compare against this one.
+```
+
+第一個有意義的 Tier 2 比對是 v2.9.0 vs v2.8.0（兩邊都會 freshly re-bench 在同一個 runner）。
+
+### Pre-tag manual review
+
+Maintainer 想在 tag 前先看 drift：
+
+```bash
+gh workflow run bench-gate-release.yaml \
+  --repo vencil/Dynamic-Alerting-Integrations \
+  --ref main \
+  -f prior_ref=v2.8.0 \
+  -f current_ref=$(git rev-parse main)
+```
+
+workflow_dispatch 跑完後讀 step summary，決定要不要 tag。
+
+### Cross-references (Tier 2 段)
+
+- **設計**：[`bench-gate-rollout.md`](bench-gate-rollout.md)（同 Tier 1）
+- **資產供應**：`.github/workflows/release-attach-bench-baseline.yaml`（PR #117）— 把 nightly bench-record artifact 附到每個 release 作為 trend record。**注意：Tier 2 不依賴此資產**（會 freshly re-bench prior tag），但資產可作獨立的 long-term 趨勢檢視工具
+- **Nightly source**：`.github/workflows/bench-record.yaml` — 每天 03:00 UTC 跑，artifact 留 90 天
 
 ---
 
