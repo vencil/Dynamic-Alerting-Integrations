@@ -149,11 +149,14 @@ grep "ns/op" /tmp/bench.txt   # 僅看結果行
 | 工作流檔案 | `.github/workflows/bench-gate-pr.yaml` |
 | 觸發條件 | `pull_request: [opened, synchronize, reopened, labeled]` + path filter |
 | Path filter | `components/threshold-exporter/app/**` / `rule-packs/**` / 此 workflow 自己 |
-| Sharding | 3 shards × 2 sides (base + pr) = 6 並行 bench job |
-| Wall time | ~4-5 min（限於最慢 shard） |
+| 拓樸 | **單 runner sequential**：checkout merge-base → bench base → drop_caches → checkout pr → bench pr → benchstat（v5, 2026-05-12）|
+| Wall time | **~20 min**（base ~10 min + pr ~10 min + ~3 min plumbing），deterministic |
 | 統計判定 | `benchstat -alpha=0.01` AND `|Δ| ≥ 5%` 雙閾值 |
+| INCONCLUSIVE 率 | **~0%**（單 runner = CPU 100% 同構 by construction）|
 | Override label | `override: bench-regress-ok`（admin/maintain only） |
 | Override 語意 | **Per-event, per-commit-state** — 不是 per-PR |
+
+> **設計演進**：v1 (parallel 2 runners) → v2 (sharded 6 runners, ~4 min wall) → v5 (single runner sequential, ~20 min deterministic)。v2 sharded design 因 GH-hosted runner pool 有 3+ CPU 類型、6-runner 全同構機率僅 ~1.7%，造成 ~98% INCONCLUSIVE 率被迫退役。v5 用「同 VM 跑兩次」徹底繞開 CPU 異質性。詳：[`bench-gate-rollout.md`](bench-gate-rollout.md) + memory `feedback_github_actions_workflow_gotchas.md` Trap 11/12。
 
 ### 觸發條件深掘
 
@@ -163,7 +166,17 @@ grep "ns/op" /tmp/bench.txt   # 僅看結果行
 - `rule-packs/**` — rule pack YAML
 - `.github/workflows/bench-gate-pr.yaml` — 工作流自己（用於 dogfood self-test）
 
-`[labeled]` event 只在 label 名稱**就是** `override: bench-regress-ok` 時觸發 preflight（其他無關 label 如 `bug` / `needs-review` 會被 job-level `if:` 過濾掉，整個 workflow skip 不浪費 4-5 min runner）。
+`[labeled]` event 只在 label 名稱**就是** `override: bench-regress-ok` 時觸發 preflight（其他無關 label 如 `bug` / `needs-review` 會被 job-level `if:` 過濾掉，整個 workflow skip 不浪費 ~20 min runner）。
+
+### Cache-warmth 偏差緩解（v5 single-runner 特有）
+
+兩次 bench 在同 VM 跑時，OS page cache 在第二輪（pr）已熱，可能讓 pr bench 系統性報快 ~1-3%。Workflow 在兩次 bench 之間做：
+
+```bash
+sudo sh -c "sync; echo 3 > /proc/sys/vm/drop_caches"
+```
+
+`drop_caches=3` flush page cache + dentries + inodes。GH-hosted runner 有 passwordless sudo 可執行。若 drop 失敗 → 印 `::warning::` 不阻擋（剩餘 ~1-3% bias 仍遠低於 5% magnitude floor，影響有限）。
 
 ### 看懂 step summary
 
@@ -172,8 +185,8 @@ grep "ns/op" /tmp/bench.txt   # 僅看結果行
 ```
 ## ✅ Bench Gate — no statistically significant regression
 Compared PR HEAD (<sha>) against merge-base (<sha>).
-Gate threshold: p < 0.01 AND |Δ| ≥ 5% (statistical significance ... + magnitude floor).
-Sharding: 3 shards × 2 sides = 6 parallel bench jobs.
+Gate threshold: p < 0.01 AND |Δ| ≥ 5% (... + magnitude floor).
+Topology: single-runner sequential (base bench → drop_caches → pr bench → benchstat) — eliminates CPU heterogeneity by construction.
 
 ### Full benchstat output
 < benchstat 2-column comparison >
@@ -188,7 +201,7 @@ Sharding: 3 shards × 2 sides = 6 parallel bench jobs.
 < 通過雙閾值的 benchmark 行 >
 ```
 
-如果看到 `::warning::Heterogeneous CPUs detected ...` — 表示這次 Azure runner pool 分到不同 CPU（AMD EPYC vs Intel Xeon），benchstat 拒絕 cross-CPU 比較、部分 benchmark 沒有 delta 欄位。**這是 free-tier-runner 限制**，不是你 PR 的問題，重跑 (close+reopen PR 或 push 空 commit) 通常可換到一致 CPU。
+理論上 v5 不該再出現 `INCONCLUSIVE` — 同 runner 同 VM 不可能有 hetero CPU。若真的出現代表 runner provisioning 有問題（GH 改了 image？），值得 issue 進來查。
 
 ### Regression 偵測到怎麼辦
 
@@ -226,12 +239,13 @@ Sharding: 3 shards × 2 sides = 6 parallel bench jobs.
 
 | 症狀 | 原因 | 處理 |
 |---|---|---|
-| `::error::Heterogeneous CPUs detected ... INCONCLUSIVE` | Azure runner pool 隨機 CPU 配置 → benchstat 拒絕 cross-CPU 比對 | **首選 "Re-run failed jobs" 直到 CPU 一致** — Azure pool 隨機性通常一兩次就 lands consistent。⚠️ 背景：benchstat 拒絕比對時受影響 benchmark 沒有 delta rows → 偵測腳本抓不到衰退 → 若沒此 INCONCLUSIVE 防線，gate 會 silent pass（false negative）。Workflow 已強制 INCONCLUSIVE = fail，可重跑直到 lands homogeneous CPU。**Override 反模式**：技術上 maintainer apply `override: bench-regress-ok` 會讓 compare job 整個 skip（含這個 INCONCLUSIVE 檢查），but 通常不該這樣做 — 沒有 comparison data 可作 trade-off 判斷，盲 override 等於放行 unknown risk。例外情況：CPU 反覆異質且 release critical path 趕時間，maintainer 自負風險。長期解法：Larger Runners（Tier 1 hardware-floor escalation path） |
-| `::error::Missing shard artifacts` | 某個 bench shard timeout（15 min）或 runner flake | 重跑；若反覆出現查 shard timeout 是不是合理 |
+| `::error::Heterogeneous CPUs detected ... INCONCLUSIVE` | v5 single-runner 拓樸下不該發生；若真的見到代表 GH runner provisioning 有變 | 開 issue 查 runner image；同時點 "Re-run failed jobs" 看是不是 flake |
+| `::warning::drop_caches failed` | GH runner sudo / capabilities 限制 | 不阻擋；接受 ~1-3% pr-favorable cache-warmth bias（仍遠低於 5% floor）|
 | Override label 一直被 revert | applier 不是 admin/maintain（或 audit 工作流故障） | 確認 applier role；查 `bench-override-audit` 工作流 log |
 | Label 自動消失（push 後） | **WAI** — per-event semantics | Maintainer 重新審核新 commit 後 re-apply |
 | 整個 workflow skip 不跑 | path filter 沒匹配（doc-only PR） | 正常行為，不需處理 |
 | labeled-of-bug-label 不跑 bench | round-9 redundant-wait 修正 | 正常行為，不浪費 CI |
+| Wall time > 25 min | runner load 高 / build cache cold / Go module download 慢 | 通常下次 PR build cache 暖了就回 ~20 min；持續異常查 runner metrics |
 
 ### Cross-references
 

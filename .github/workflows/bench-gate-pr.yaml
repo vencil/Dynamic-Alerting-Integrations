@@ -7,49 +7,55 @@ name: Bench Gate (PR-time, Tier 1)
 # "did this specific diff make things slower?" rather than "is main slower
 # than the last release?" (that's Tier 2's job; release-time-only).
 #
-# Wall-time history:
-#   - Sequential design (concept): ~10 min (5 min/bench × 2 sides).
-#   - 2026-05-12 v1: parallel base+pr matrix → ~11 min wall (decomposition
-#     showed `make benchmark-report` itself is ~10 min for 19 benchmarks;
-#     plumbing only ~1 min — original "5 min/bench" estimate was based on
-#     the 13-benchmark count before #128 added mixed-mode).
-#   - 2026-05-12 v2 (this file): shard benchmarks across N runners per side.
-#     N=3 → 6 parallel bench jobs (3 shards × 2 sides).
-#     Expected wall: ~4-5 min (limited by slowest shard).
-#     CI cost: ~24 bench-minutes vs ~20 before (+20% for ~55% wall savings).
+# Wall-time + reliability history:
+#   - v1 (PR #435): parallel base+pr matrix → ~11 min wall, 2 runners.
+#     Worked but found later to be inconsistent due to heterogeneous CPU
+#     pool (AMD EPYC / Intel Xeon randomly assigned).
+#   - v2 (PR #437): sharded base+pr into 3 shards × 2 sides = 6 runners.
+#     Wall dropped to ~4-5 min but INCONCLUSIVE rate spiked to ~98%
+#     because P(6 runners same CPU) ≈ 1.7% with the observed 3-CPU pool.
+#   - v3/v4 (PR #440): added Ghost-Green race + Blanket-Immunity defenses
+#     + INCONCLUSIVE enforcement on hetero CPU (closed silent false-neg).
+#     Correct gate behavior surfaced the structural sharding problem.
+#   - v5 (this file, PR #444): single-runner sequential bench.
+#     P(homogeneous CPU) = 100% by construction (same VM for both runs).
+#     Wall back up to ~20 min but DETERMINISTIC vs v2's stochastic re-runs.
+#     Eliminates INCONCLUSIVE entirely. Cache-warmth bias between base/pr
+#     bench mitigated by `drop_caches` between the two runs. CI minutes
+#     same as v1 (~20 min total).
 #
-# Sharding rationale:
-#   - Each benchmark still runs COUNT=6 samples on a single runner (no
-#     statistical effect — sharding partitions BENCHMARKS, not COUNTS).
-#   - Modulo partition (bench[i] → shard (i mod N)) is deterministic and
-#     auto-balances when new benches are added. No manual list to maintain.
-#   - Source-grep enumeration is ~0.1s (vs ~30-60s if we used `go test
-#     -bench -benchtime=1ns` for enumeration — that still runs each
-#     bench's heavy setup phase before the 1ns timed portion).
-#   - Tail-variance amplification: 6 runners vs 2 means more chance of
-#     hitting a slow noisy-neighbor runner. Acceptable trade for the
-#     wall-time win; if FP rate climbs, escalation path is Larger Runners.
+# Why this is the right design on free-tier runners:
+#   - GH-hosted ubuntu-latest pool is heterogeneous (AMD EPYC 7763,
+#     AMD EPYC 9V74, Intel Xeon 8370C observed). Any horizontally-
+#     sharded design has structurally-low P(all-same-CPU) and gets
+#     stuck on INCONCLUSIVE.
+#   - Sequential same-runner has perfect CPU homogeneity by definition.
+#   - Temporal locality on a single VM (10-min window) yields lower
+#     noise floor than cross-VM comparison.
+#   - The wall-time loss vs sharded is acceptable in exchange for
+#     deterministic ~20 min vs stochastic 4-min-or-stuck.
 #
-#   - 2026-05-12 v3 (superseded): timeline-API based applier verification
-#     to close "Ghost Green" race (Gemini round-7). Replaced by v4 below
-#     since timeline-based check still allows "Blanket Immunity" — a
-#     maintainer's earlier labeling stays valid in the timeline forever,
-#     even after the dev pushes new regressions.
-#   - 2026-05-12 v4 (this revision): close both Ghost Green AND Blanket
-#     Immunity Trap (Gemini round-8) by switching to event-scoped honor
-#     semantics. Preflight honors the override label ONLY when (a) the
-#     triggering event itself is `labeled`, (b) the label that was just
-#     applied is OUR override label, AND (c) the applier (sender on a
-#     labeled event = the labeler) has admin or maintain role. Any other
-#     event (opened, synchronize, reopened, labeled-of-other-label) →
-#     treat label as absent regardless of presence on PR. Per-event
-#     semantics force maintainer re-approval on each push.
-#     The companion `bench-override-audit.yaml` auto-strips the label
-#     on `synchronize` events as a UX cleanup so the stale label doesn't
-#     visually persist.
+# Override + governance defenses (UNCHANGED from v4):
+#   - Override label `override: bench-regress-ok` (admin/maintain only)
+#   - Event-scoped honor: skip honored ONLY on `labeled` event with our
+#     specific label name AND admin/maintain sender role. Per-event,
+#     per-commit-state semantics. Companion bench-override-audit.yaml
+#     enforces role + auto-strips stale label on synchronize.
+#   - Gemini round-7 (Ghost Green) + round-8 (Blanket Immunity) defenses
+#     remain via the preflight check_override step.
+#
+# Regression detection (UNCHANGED from v4):
+#   - benchstat `-alpha=0.01` (NOT `-confidence` — that's the geomean CI
+#     width knob, not the per-bench significance threshold).
+#   - Plus magnitude floor: only fail on `|Δ| ≥ 5%`. Free-tier within-run
+#     noise is ~1-3% — pure statistical significance is too sensitive
+#     when noise exceeds the effect size.
+#   - The 5% floor is tightenable to 3% when Larger Runners are adopted
+#     (Tier 1 hardware-floor escalation path per bench-gate-rollout.md).
 #
 # See: issue #433, issue #67 (closed/superseded), bench-record.yaml (nightly),
-#      memory feedback `feedback_github_actions_workflow_gotchas.md`.
+#      memory feedback `feedback_github_actions_workflow_gotchas.md`
+#      (Traps 7-12 codify the SRE defenses learned across v1-v5).
 
 on:
   pull_request:
@@ -69,34 +75,17 @@ permissions:
   contents: read
   pull-requests: write  # for posting the result comment
 
-env:
-  # Number of bench shards per side. 3 shards × 2 sides = 6 parallel bench
-  # jobs. Increasing this further reduces wall time but raises CI cost
-  # (each shard pays ~30s setup-go + cache-restore overhead independently)
-  # and tail-variance risk (more runners = higher P(at least one slow)).
-  # 3 chosen empirically for the current ~19-benchmark suite — gives
-  # ~6-7 benchmarks/shard, balancing wall time vs runner count.
-  # Master bench filter: kept in sync with Makefile `benchmark-report`
-  # target. Update both together when bench scope changes.
-  SHARDS_TOTAL: 3
-  BENCH_MASTER_FILTER: '_1000(_|$)|MixedMode|Simulate_DeepChain'
-
 jobs:
   # Job 1: cheap preflight. Computes merge-base, checks override label.
-  # Outputs feed the matrix + compare jobs.
+  # Outputs feed the bench job.
   preflight:
     name: Preflight (override check + merge-base)
-    # Filter out unrelated `labeled` events before spinning up runners.
+    # Filter out unrelated `labeled` events before spinning up the runner.
     # The workflow trigger includes `[labeled]` so we can honor a freshly-
     # applied override label, but a `labeled` event for some OTHER label
-    # (e.g. `bug`, `needs-review`) shouldn't burn 4-5 min of bench time —
+    # (e.g. `bug`, `needs-review`) shouldn't burn ~20 min of bench time —
     # no code changed, the result would be identical to the prior commit's
     # bench-gate run. Skip the whole workflow for those events.
-    # Conditions that DO run preflight (and therefore bench/compare):
-    #   - opened / synchronize / reopened (real PR activity)
-    #   - labeled where the label is our override (need to honor it)
-    # Skipped jobs cascade: bench/compare have `needs: preflight`, so they
-    # also skip automatically when preflight skips.
     # [Gemini round-9 redundant-wait catch.]
     if: |
       github.event.action != 'labeled'
@@ -107,32 +96,12 @@ jobs:
       skip: ${{ steps.check_override.outputs.skip }}
       merge_base_sha: ${{ steps.merge_base.outputs.sha }}
     steps:
-      # Override label honor logic — TWO ROUNDS of attack hardening codified:
-      #
-      # Round-7 (Ghost Green race): bench-gate preflight (~5s) finishes
-      # before bench-override-audit (~20s) on the same `labeled` event. A
-      # naive "label present → skip" preflight would short-circuit GREEN
-      # before audit gets a chance to revert.
-      #
-      # Round-8 (Blanket Immunity Trap): even with timeline-based applier
-      # verification, the override is treated as valid for the entire PR
-      # lifetime. Maintainer approves a 6% regression → label applied. Dev
-      # then pushes a new commit with a 500% regression. `synchronize` fires.
-      # Timeline still shows the maintainer as last labeler. Preflight
-      # honors skip. Catastrophic regression slips through silently.
-      #
-      # The fix unifies both rounds: honor the label ONLY when the
-      # triggering event ITSELF is `labeled` for our specific label name.
-      # On any other event (opened, synchronize, reopened, labeled-of-some-
-      # other-label), the override label is treated as ABSENT regardless
-      # of whether it's still on the PR. This makes override "per-event,
-      # per-commit-state", not "per-PR".
-      #
-      # UX consequence: maintainers must re-apply the label after each push
-      # that should remain overridden. Companion workflow
-      # `bench-override-audit.yaml` auto-strips on synchronize to surface
-      # the staleness clearly. This is intentional zero-trust friction —
-      # the alternative is silent acceptance of post-approval regressions.
+      # Override label honor logic — closes Ghost Green race (round-7) and
+      # Blanket Immunity Trap (round-8) by event-scoped honor: skip only
+      # when (a) THIS event is `labeled`, (b) the label is OUR override,
+      # AND (c) the applier (sender on labeled event) has admin or maintain
+      # role. Any other event treats the label as absent regardless of
+      # whether it's still on the PR.
       - name: Check override label (event-scoped + applier-role verified)
         id: check_override
         env:
@@ -145,9 +114,6 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Zero-trust gate: honor only when THIS event is the labeled
-          # event for our specific label. Everything else falls through
-          # to skip=false (run benches normally).
           if [ "$EVENT_ACTION" != "labeled" ]; then
             echo "Event action is '$EVENT_ACTION' (not 'labeled'). Override (if any) ignored."
             echo "skip=false" >> "$GITHUB_OUTPUT"
@@ -199,9 +165,8 @@ jobs:
             } >> "$GITHUB_STEP_SUMMARY"
           fi
 
-      # CRITICAL: fetch-depth: 0 is required for `git merge-base` to find
-      # the true PR divergence point. Default depth=1 only fetches HEAD,
-      # which makes merge-base fail or return the wrong commit.
+      # CRITICAL: fetch-depth: 0 required for `git merge-base`. See
+      # comments on the bench-job checkout for the same gotcha.
       - name: Checkout with full history
         if: steps.check_override.outputs.skip != 'true'
         uses: actions/checkout@v6
@@ -242,43 +207,27 @@ jobs:
           echo "  vs $base_ref"
           echo "  vs PR HEAD ($pr_head)"
 
-  # Job 2: parallel matrix. Runs bench sharded across 3 shards × 2 sides
-  # = 6 jobs concurrently. Wall-time win: ~4-5 min vs ~11 min unsharded.
+  # Job 2: single runner sequential bench (base then pr) + compare.
+  # See top-of-file comment for the v5 design rationale — the structural
+  # answer to GH-hosted runner pool heterogeneity.
   bench:
-    name: Bench (${{ matrix.side }} shard ${{ matrix.shard }})
+    name: Bench + Compare (single-runner sequential)
     needs: preflight
     if: needs.preflight.outputs.skip != 'true'
     runs-on: ubuntu-latest
-    # Reduced from 20 min: each shard runs ~1/3 of benches, expected ~4 min
-    # actual + ~2 min setup overhead. 15 min gives generous headroom.
-    timeout-minutes: 15
-    strategy:
-      fail-fast: false  # if one shard fails, we still want the others
-      matrix:
-        side: [base, pr]
-        # NOTE: keep length in sync with env.SHARDS_TOTAL. Hardcoded here
-        # because GitHub Actions matrix doesn't read env vars directly.
-        # If SHARDS_TOTAL changes, update both.
-        shard: [0, 1, 2]
+    # Budget: ~10 min base bench + ~10 min pr bench + ~3 min setup/checkout/
+    # benchstat overhead = ~23 min nominal. 40 min cap gives headroom for
+    # slow runners + Go module download flakes + Azure pool variance, AND
+    # leaves enough buffer for the step summary + fail-gate steps to actually
+    # render before a hard-kill. A tighter 30 min budget risks hard-killing
+    # mid-output, which leaves the dev with a red check and no diagnostic.
+    # [Gemini round-12 timeout-tightrope catch.]
+    timeout-minutes: 40
     steps:
-      - name: Resolve checkout ref for ${{ matrix.side }}
-        id: ref
-        env:
-          MERGE_BASE: ${{ needs.preflight.outputs.merge_base_sha }}
-          PR_HEAD: ${{ github.event.pull_request.head.sha }}
-        run: |
-          if [ "${{ matrix.side }}" = "base" ]; then
-            echo "sha=$MERGE_BASE" >> "$GITHUB_OUTPUT"
-          else
-            echo "sha=$PR_HEAD" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Checkout ${{ matrix.side }} (${{ steps.ref.outputs.sha }})
+      - name: Checkout repo (full history for both base + pr commits)
         uses: actions/checkout@v6
         with:
-          ref: ${{ steps.ref.outputs.sha }}
-          # No fetch-depth needed here — we have an explicit ref. Default
-          # shallow is faster than full history.
+          fetch-depth: 0  # need history to walk to merge-base
 
       - name: Set up Go 1.26
         uses: actions/setup-go@v6
@@ -287,9 +236,10 @@ jobs:
 
       # Cache BOTH Go module cache AND build cache. The latter ($HOME/.cache/
       # go-build) stores compiled package objects — restoring it saves the
-      # 20–40s compile phase of `go test -bench`. Go's build cache is
-      # content-addressed internally, so stale entries are silently ignored
-      # rather than producing wrong binaries. Safe to share across PRs.
+      # 20–40s compile phase of the first `go test -bench`. The second bench
+      # (pr) reuses what the first bench (base) added, so its compile is
+      # near-instant. Go's build cache is content-addressed; safe across
+      # PRs and across the base→pr checkout.
       - name: Cache Go modules + build
         uses: actions/cache@v5
         with:
@@ -301,208 +251,108 @@ jobs:
             ${{ runner.os }}-go-1.26-
             ${{ runner.os }}-go-
 
-      # Enumerate benchmarks via source grep (NOT via `go test -bench
-      # -benchtime=1ns` — that approach still runs every bench's heavy
-      # setup phase, e.g. FullDirLoad_1000 creates 1000 YAML files
-      # before timing). Source-grep is ~0.1s and exact for our naming
-      # convention (`func Benchmark<Name>(b *testing.B)`).
-      #
-      # Partition: bench[i] → shard (i mod SHARDS_TOTAL). Deterministic,
-      # auto-balances new benches, identical regex on base+pr sides
-      # (assuming source order is identical — true unless PR adds/removes
-      # benches, in which case benchstat correctly reports "missing on
-      # base" / "missing on pr" for those).
-      - name: Enumerate + partition benchmarks (shard ${{ matrix.shard }} / ${{ env.SHARDS_TOTAL }})
-        id: partition
-        env:
-          SHARD: ${{ matrix.shard }}
-          TOTAL: ${{ env.SHARDS_TOTAL }}
-          MASTER_FILTER: ${{ env.BENCH_MASTER_FILTER }}
+      - name: Install benchstat (do early; cache the compiled binary)
+        run: |
+          # @latest acceptable: benchstat output format stable for ~2 years.
+          # Pin to a specific version if next version's output ever breaks
+          # the regression-detection grep/awk.
+          go install golang.org/x/perf/cmd/benchstat@latest
+          benchstat -h 2>&1 | head -5 || true
+
+      # Stash the bench harness OUTSIDE the checkout so both base and pr
+      # benches use the SAME wrapper script regardless of which commit's
+      # tree is currently checked out. Without this, a PR that modifies
+      # bench_wrapper.sh would cause the base bench to use the old wrapper
+      # and the pr bench to use the new one — unfair comparison.
+      - name: Stash bench harness (use same version on both sides)
+        run: |
+          mkdir -p "$RUNNER_TEMP/bench-harness"
+          cp scripts/tools/ops/bench_wrapper.sh "$RUNNER_TEMP/bench-harness/"
+          cp scripts/tools/ops/bench_filter.go "$RUNNER_TEMP/bench-harness/"
+          # bench_wrapper.sh resolves SCRIPT_DIR via BASH_SOURCE; the filter
+          # is referenced as $SCRIPT_DIR/bench_filter.go. Keeping them in
+          # the same /tmp dir preserves that resolution.
+
+      - name: Checkout merge-base for base bench
+        run: git checkout ${{ needs.preflight.outputs.merge_base_sha }}
+
+      - name: Run base benchmark
         run: |
           set -euo pipefail
-          # Find all `func Benchmark<Name>(...)` in the exporter app + subpkgs.
-          # `grep -rh` reads files recursively, stripping filename prefix.
-          # `sed` extracts the bench name token. `grep -E "$MASTER_FILTER"`
-          # applies the same regex Go's `-bench` flag would.
-          all_benches=$(grep -rh "^func Benchmark" components/threshold-exporter/app \
-                       | sed -n 's/^func \(Benchmark[A-Za-z0-9_]*\).*/\1/p' \
-                       | grep -E "$MASTER_FILTER" \
-                       | sort -u)
-
-          if [ -z "$all_benches" ]; then
-            echo "::error::Source-grep found 0 benchmarks matching '$MASTER_FILTER' — check filter regex"
-            exit 1
-          fi
-
-          total_count=$(echo "$all_benches" | wc -l)
-
-          # Partition: awk NR is 1-indexed; ((NR-1) % TOTAL) gives 0-indexed
-          # shard ID matching matrix.shard.
-          shard_benches=$(echo "$all_benches" | awk -v shard="$SHARD" -v total="$TOTAL" \
-                                                    '((NR-1) % total) == shard {print}')
-
-          if [ -z "$shard_benches" ]; then
-            # Defensive: only triggers if SHARDS_TOTAL > total benchmark
-            # count (impossible with 3 shards × 19 benches, but possible
-            # if filter is narrowed without reducing SHARDS_TOTAL).
-            echo "::warning::Shard $SHARD got 0 benchmarks (total=$total_count, shards=$TOTAL)"
-            regex='^__SHARD_EMPTY__$'  # impossible match → skips cleanly
-          else
-            # Build regex: ^(NameA|NameB|...)$ for exact-match shard.
-            # paste -sd '|' joins lines with `|`. Anchors prevent prefix
-            # matches (e.g. without ^...$, `Benchmark_1000` would match
-            # `Benchmark_1000_NoChange` and pull it into the wrong shard).
-            regex="^($(echo "$shard_benches" | paste -sd '|' -))$"
-          fi
-
-          echo "shard_filter=$regex" >> "$GITHUB_OUTPUT"
-          shard_count=$(echo "$shard_benches" | grep -c . || echo 0)
-          {
-            echo "## Bench partition — ${{ matrix.side }} shard $SHARD / $TOTAL"
-            echo ""
-            echo "Total benchmarks (master filter): **$total_count**"
-            echo "Benchmarks in this shard: **$shard_count**"
-            echo ""
-            echo "Filter regex:"
-            echo '```'
-            echo "$regex"
-            echo '```'
-            echo ""
-            echo "Benchmarks assigned to this shard:"
-            echo "$shard_benches" | sed 's/^/- /'
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      # Direct bench_wrapper.sh invocation rather than `make benchmark-report`:
-      # Makefile hardcodes the master `-bench` filter; sharding needs a
-      # per-shard override. Plumbing a BENCH= override through Makefile
-      # works but requires fragile bash-quoting of the default value
-      # (special chars `(`, `|`, `$` in the regex). Direct invocation is
-      # cleaner and CI is the right place to know wrapper-script details.
-      - name: Run benchmark suite (shard ${{ matrix.shard }})
-        env:
-          BENCH_FILTER: ${{ steps.partition.outputs.shard_filter }}
-        run: |
-          set -euo pipefail
-          mkdir -p .build
-          echo "[bench-shard ${{ matrix.shard }}] running with filter: $BENCH_FILTER"
-          echo "[bench-shard ${{ matrix.shard }}] count=6 benchtime=3s timeout=15m"
+          mkdir -p "$RUNNER_TEMP/bench-out"
+          echo "[bench-base] running on commit $(git rev-parse HEAD)"
           cd components/threshold-exporter/app
-          BENCH_OUT_DIR="$GITHUB_WORKSPACE/.build" \
-            bash "$GITHUB_WORKSPACE/scripts/tools/ops/bench_wrapper.sh" \
-            -bench="$BENCH_FILTER" \
+          BENCH_OUT_DIR="$RUNNER_TEMP/bench-out" \
+            bash "$RUNNER_TEMP/bench-harness/bench_wrapper.sh" \
+            -bench='_1000(_|$)|MixedMode|Simulate_DeepChain' \
             -benchmem \
             -count=6 \
             -run='^$' \
             -timeout=15m \
             -benchtime=3s \
             ./...
-          cp "$GITHUB_WORKSPACE/.build/bench.out.txt" \
-             "$GITHUB_WORKSPACE/.build/bench-baseline.txt"
-          line_count=$(wc -l < "$GITHUB_WORKSPACE/.build/bench-baseline.txt")
-          echo "[bench-shard ${{ matrix.shard }}] wrote bench-baseline.txt ($line_count lines)"
+          cp "$RUNNER_TEMP/bench-out/bench.out.txt" \
+             "$RUNNER_TEMP/bench-out/bench-base.txt"
+          echo "[bench-base] wrote $(wc -l < "$RUNNER_TEMP/bench-out/bench-base.txt") lines"
 
-      - name: Upload bench artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: bench-${{ matrix.side }}-shard${{ matrix.shard }}
-          path: .build/bench-baseline.txt
-          retention-days: 7
-          if-no-files-found: error
-
-  # Job 3: sequential — pull all shard artifacts, concat per side, benchstat.
-  compare:
-    name: Compare (benchstat)
-    needs: [preflight, bench]
-    if: needs.preflight.outputs.skip != 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - name: Set up Go 1.26 (for benchstat)
-        uses: actions/setup-go@v6
-        with:
-          go-version: "1.26"
-
-      - name: Install benchstat
+      # Cache-warmth mitigation: OS page cache holds files read during the
+      # base bench; if not flushed, the pr bench gets warm-cache I/O and
+      # systematically reports ~1-3% faster than it would on a cold start.
+      # drop_caches=3 evicts pagecache + dentries + inodes. GH-hosted
+      # runners have passwordless sudo. The `|| echo warning` keeps the
+      # workflow running if drop_caches is unavailable (e.g., container
+      # ran without proper capabilities) — bias would still be small
+      # relative to the 5% magnitude floor, but should be flagged.
+      - name: Drop OS caches between base and pr benches
         run: |
-          # @latest is acceptable: benchstat's output format has been
-          # stable for ~2 years. Pin to a specific module version IF
-          # output parsing in the next step starts mis-classifying.
-          go install golang.org/x/perf/cmd/benchstat@latest
-          benchstat -h 2>&1 | head -5 || true
+          sudo sh -c "sync; echo 3 > /proc/sys/vm/drop_caches" \
+            && echo "::notice::OS page cache dropped between base and pr benches" \
+            || echo "::warning::drop_caches failed — pr bench may show ~1-3% cache-warmth bias"
 
-      - name: Download bench artifacts (all shards both sides)
-        uses: actions/download-artifact@v6
-        with:
-          path: ${{ runner.temp }}/bench
+      # CRITICAL: clean the workspace before the second checkout.
+      # `go test -bench` may modify tracked files (go.sum if a dep resolution
+      # changes) or leave untracked files (benchmark temp dirs that didn't
+      # clean up). A subsequent `git checkout <other-sha>` then fails with
+      # "your local changes would be overwritten by checkout" → step fails,
+      # whole gate dies on a Git hygiene issue rather than perf reasons.
+      #
+      # `git reset --hard HEAD` reverts any tracked-file modifications.
+      # `git clean -fd` removes untracked files + directories (NOT ignored;
+      # we don't pass -x because gitignored locations like ~/.cache/go-build
+      # live in $HOME outside the workspace anyway, and we want to preserve
+      # any .build/ contents in case future steps need them — though for v5
+      # we write outputs to $RUNNER_TEMP/bench-out, outside the workspace).
+      #
+      # Safe to nuke aggressively because the bench harness itself is
+      # already stashed in $RUNNER_TEMP/bench-harness (see earlier step).
+      # [Gemini round-12 dirty-workspace-trap catch.]
+      - name: Clean workspace between base and pr bench
+        run: |
+          git reset --hard HEAD
+          git clean -fd
+          git status --short || true  # diagnostic for debugging
 
-      # Concat per-side: benchstat accepts the standard Go bench output
-      # format which is line-oriented (header lines + `Benchmark... N ns/op`
-      # rows). Concatenating multiple shards' files just gives benchstat
-      # more rows per side, which is exactly what it expects. The duplicate
-      # "goos:/goarch:/pkg:" header lines per shard don't confuse benchstat
-      # — it treats them as section breaks.
-      #
-      # CRITICAL: enumerate shards explicitly via `seq 0..N-1` rather than
-      # globbing `bench-base-shard*`. Two distinct gotchas:
-      #
-      # (1) Glob order is LEXICOGRAPHIC — at SHARDS_TOTAL >= 10 this gives
-      #     shard0, shard1, shard10, shard2, ..., shard9 — benchstat output
-      #     row order becomes non-deterministic (cosmetic issue in step
-      #     summary; statistical pairing by name is unaffected, but
-      #     reviewers expecting consistent layout get confused).
-      #     [Gemini round-5 SRE catch.]
-      #
-      # (2) MORE IMPORTANTLY: glob silently accepts PARTIAL shards. If one
-      #     bench job hits the 15-min timeout or hits a runner flake, its
-      #     artifact never uploads; the glob just skips it; benchstat
-      #     compares an incomplete bench set; the gate passes despite a
-      #     chunk of the suite never running. Hidden gate-failure mode.
-      #     Explicit `seq` loop with existence check fails fast instead.
-      - name: Merge shard artifacts
-        id: merge
+      - name: Checkout PR head for pr bench
+        run: git checkout ${{ github.event.pull_request.head.sha }}
+
+      - name: Run pr benchmark
         run: |
           set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/bench-merged"
-
-          base_files=()
-          pr_files=()
-          missing=()
-
-          # SHARDS_TOTAL is workflow-level env var; exported to step shell.
-          for i in $(seq 0 $((SHARDS_TOTAL - 1))); do
-            base_f="$RUNNER_TEMP/bench/bench-base-shard$i/bench-baseline.txt"
-            pr_f="$RUNNER_TEMP/bench/bench-pr-shard$i/bench-baseline.txt"
-
-            if [ -f "$base_f" ]; then
-              base_files+=("$base_f")
-            else
-              missing+=("base shard $i ($base_f)")
-            fi
-
-            if [ -f "$pr_f" ]; then
-              pr_files+=("$pr_f")
-            else
-              missing+=("pr shard $i ($pr_f)")
-            fi
-          done
-
-          if [ ${#missing[@]} -gt 0 ]; then
-            echo "::error::Missing shard artifacts — partial bench data would silently weaken the gate."
-            echo "::error::Hard-failing here so the regression isn't hidden."
-            for m in "${missing[@]}"; do
-              echo "::error::  - missing: $m"
-            done
-            echo "Available artifacts:"
-            ls -la "$RUNNER_TEMP/bench/" || true
-            exit 2
-          fi
-
-          # base_files / pr_files are now numerically-ordered shard0..shardN-1.
-          cat "${base_files[@]}" > "$RUNNER_TEMP/bench-merged/base.txt"
-          cat "${pr_files[@]}"   > "$RUNNER_TEMP/bench-merged/pr.txt"
-
-          echo "Merged base ($SHARDS_TOTAL shards, ordered 0..$((SHARDS_TOTAL - 1))): $(wc -l < "$RUNNER_TEMP/bench-merged/base.txt") lines"
-          echo "Merged pr   ($SHARDS_TOTAL shards, ordered 0..$((SHARDS_TOTAL - 1))): $(wc -l < "$RUNNER_TEMP/bench-merged/pr.txt") lines"
+          mkdir -p "$RUNNER_TEMP/bench-out"
+          echo "[bench-pr] running on commit $(git rev-parse HEAD)"
+          cd components/threshold-exporter/app
+          BENCH_OUT_DIR="$RUNNER_TEMP/bench-out" \
+            bash "$RUNNER_TEMP/bench-harness/bench_wrapper.sh" \
+            -bench='_1000(_|$)|MixedMode|Simulate_DeepChain' \
+            -benchmem \
+            -count=6 \
+            -run='^$' \
+            -timeout=15m \
+            -benchtime=3s \
+            ./...
+          cp "$RUNNER_TEMP/bench-out/bench.out.txt" \
+             "$RUNNER_TEMP/bench-out/bench-pr.txt"
+          echo "[bench-pr] wrote $(wc -l < "$RUNNER_TEMP/bench-out/bench-pr.txt") lines"
 
       - name: Compare with benchstat
         id: compare
@@ -514,94 +364,46 @@ jobs:
         #   -confidence c  (default 0.95)  → width of the displayed
         #                                    geomean ± confidence interval
         #
-        # Previous version of this workflow used `-confidence=0.99`
-        # believing it tightened regression flagging — IT DID NOT. With
-        # default α=0.05, p-values up to 0.05 were still being flagged
-        # with `+` (e.g. PR #437 self-test showed `+1.14% (p=0.026)`
-        # marked significant despite our intent of "99% confidence"). The
-        # gate has been enforcing 0.95 the entire time. Use `-alpha=0.01`
-        # to actually tighten significance.
-        #
-        # Additionally: free-tier GH runners exhibit ~1-5% within-bench
-        # variance on YAML-only diffs (i.e. zero code change). Pure
-        # statistical significance is too sensitive when within-run noise
-        # is wider than the effect size — even α=0.01 still flagged
-        # several +1.5-3% deltas on the PR #437 self-test. Industry
-        # standard for CI perf gates: combine α AND |Δ| floor. We require
-        # both p < 0.01 AND |Δ| ≥ 5% to fail the gate. The 5% floor is
-        # tightenable to 3% once Larger Runners are adopted (per the
-        # rollout doc's hardware-floor escalation trigger).
+        # Previous versions used `-confidence=0.99` thinking it tightened
+        # regression flagging — IT DID NOT. Use `-alpha=0.01` to actually
+        # tighten significance. Plus a 5% magnitude floor (industry-standard
+        # dual-threshold) to filter sub-noise FPs. [PR #437 round-6 catch.]
         run: |
           set -euo pipefail
           benchstat -alpha=0.01 \
-            "$RUNNER_TEMP/bench-merged/base.txt" \
-            "$RUNNER_TEMP/bench-merged/pr.txt" \
-            | tee "$RUNNER_TEMP/bench-merged/benchstat.txt"
+            "$RUNNER_TEMP/bench-out/bench-base.txt" \
+            "$RUNNER_TEMP/bench-out/bench-pr.txt" \
+            | tee "$RUNNER_TEMP/bench-out/benchstat.txt"
 
           # Two-tier regression detection:
           # (1) benchstat already filters by α=0.01 (only `+` rows are
           #     statistically significant slowdowns).
           # (2) We additionally require |Δ| ≥ MAGNITUDE_FLOOR_PCT to
-          #     filter out noise-floor false positives on free-tier
-          #     runners (well-documented in bench-gate-rollout.md as the
-          #     "Noisy Neighbor Illusion").
-          # POSIX awk syntax (2-arg match()) for portability across
-          # gawk / mawk / BSD awk. We find the "+X.XX%" token via match
-          # (returns position+length), substr the number out (strip the
-          # leading + and trailing %), and compare.
-          #
-          # CRITICAL `|| true`: `grep` returns 1 when nothing matches.
-          # With `set -euo pipefail`, that propagates through the pipeline
-          # and aborts the script via `set -e` on the command substitution
-          # assignment (recent bash behavior). The "no regressions found"
-          # path is the HAPPY PATH — gate should pass — but without
-          # `|| true` it crashes the script and marks the gate as failed.
-          # PR #437's first run worked only because false positives at the
-          # default α=0.05 were always populating grep's output, masking
-          # this bug. PR #440 v4 with tighter α and magnitude floor often
-          # finds zero matches (correct behavior) and triggered the crash.
-          # Also: heterogeneous runner CPUs (AMD EPYC vs Intel Xeon in
-          # Azure's pool) cause benchstat to split output into per-CPU
-          # tables without comparison columns, which is ANOTHER way to
-          # legitimately get zero matches. Both should be a pass.
+          #     filter out noise-floor false positives.
+          # POSIX awk for portability. `|| true` tolerates "no matches"
+          # (the happy path — zero regressions) so pipefail doesn't
+          # crash the script.
           MAGNITUDE_FLOOR_PCT=5.0
           regressions=$(grep -E '[[:space:]]\+[0-9]+\.[0-9]+%[[:space:]]*\(p=' \
-                          "$RUNNER_TEMP/bench-merged/benchstat.txt" \
+                          "$RUNNER_TEMP/bench-out/benchstat.txt" \
                         | grep -v geomean \
                         | awk -v floor="$MAGNITUDE_FLOOR_PCT" '{
                             if (match($0, /\+[0-9]+\.[0-9]+%/)) {
-                              # RSTART points at "+", RLENGTH covers "+X.XX%"
-                              # Strip leading + (offset by 1) and trailing %
-                              # (length-2). RSTART/RLENGTH set by match().
                               num = substr($0, RSTART + 1, RLENGTH - 2) + 0
                               if (num >= floor) print
                             }
                           }' || true)
 
-          # Detect runner CPU heterogeneity — this is a HARD-FAIL condition,
-          # NOT a warning. [Gemini round-11 catch.]
-          #
-          # When Azure's free-tier-runner pool assigns different CPU types
-          # to base vs pr shards (AMD EPYC vs Intel Xeon), benchstat
-          # CORRECTLY refuses cross-CPU comparison and outputs split per-CPU
-          # tables WITHOUT delta columns for the affected benchmarks. The
-          # regression-detection grep then finds zero `+X.XX% (p=...)` rows
-          # for those benches → `regressions` is empty → gate goes GREEN
-          # despite never having actually evaluated those benchmarks against
-          # each other. A real regression in the affected packages could
-          # silently merge to main, masked by the CPU mismatch.
-          #
-          # Earlier comment "informational gap, can't mask regression" was
-          # WRONG — it absolutely can. Mark the run as INCONCLUSIVE so the
-          # gate fails and the dev is forced to re-run until shards land
-          # on a consistent CPU. Larger Runners (Tier 1 escalation path
-          # per bench-gate-rollout.md) eliminate this by pinning hardware.
-          cpu_lines=$(grep -E '^cpu:' "$RUNNER_TEMP/bench-merged/benchstat.txt" 2>/dev/null | sort -u || true)
+          # Defensive INCONCLUSIVE check — single-runner sequential makes
+          # this structurally impossible (same VM = same CPU by definition),
+          # but the check is kept as defense-in-depth in case anything in
+          # the runner provisioning changes. Cost is ~50ms.
+          cpu_lines=$(grep -E '^cpu:' "$RUNNER_TEMP/bench-out/benchstat.txt" 2>/dev/null | sort -u || true)
           inconclusive=false
           if [ -n "$cpu_lines" ] && [ "$(echo "$cpu_lines" | wc -l)" -gt 1 ]; then
             inconclusive=true
             cpu_count=$(echo "$cpu_lines" | wc -l)
-            echo "::error::Heterogeneous CPUs detected ($cpu_count distinct) across base/pr shards. benchstat refuses cross-CPU comparison, so a real regression could be silently masked. This run is INCONCLUSIVE — re-run via 'Re-run failed jobs' in the GitHub Actions UI until shards land on a consistent CPU. CPUs observed:"
+            echo "::error::Heterogeneous CPUs detected ($cpu_count distinct) IN A SINGLE-RUNNER JOB. This shouldn't be possible; investigate runner provisioning. CPUs observed:"
             echo "$cpu_lines"
             {
               echo "inconclusive_cpus<<__CPUEOF__"
@@ -631,10 +433,6 @@ jobs:
           INCONCLUSIVE_CPUS: ${{ steps.compare.outputs.inconclusive_cpus }}
         run: |
           {
-            # Three terminal states. Inconclusive (CPU mismatch) takes
-            # precedence because we can't trust the regression flag when
-            # benchstat couldn't actually compare. Don't show "✅ no
-            # regression" if the comparison didn't actually happen.
             if [ "$INCONCLUSIVE" = "true" ]; then
               echo "## ⚠️ Bench Gate — INCONCLUSIVE (heterogeneous runner CPUs)"
             elif [ "$REGRESSION" = "true" ]; then
@@ -646,31 +444,21 @@ jobs:
             echo "Compared PR HEAD (\`${{ github.event.pull_request.head.sha }}\`)"
             echo "against merge-base (\`${{ needs.preflight.outputs.merge_base_sha }}\`)."
             echo "Gate threshold: **p < 0.01 AND |Δ| ≥ 5%** (statistical significance via \`benchstat -alpha=0.01\` + magnitude floor for free-tier-runner noise resistance)."
-            echo "Sharding: ${{ env.SHARDS_TOTAL }} shards × 2 sides = $((${{ env.SHARDS_TOTAL }} * 2)) parallel bench jobs."
+            echo "Topology: **single-runner sequential** (base bench → drop_caches → pr bench → benchstat) — eliminates CPU heterogeneity by construction."
             echo ""
             if [ "$INCONCLUSIVE" = "true" ]; then
-              echo "### ⚠️ Inconclusive — heterogeneous CPUs"
+              echo "### ⚠️ Inconclusive — heterogeneous CPUs (unexpected)"
               echo ""
-              echo "Bench shards landed on different CPU types. benchstat refuses to"
-              echo "compare across CPUs, so this run **cannot reliably detect regression**"
-              echo "for the affected packages. Treating as inconclusive (not pass) because"
-              echo "a real regression could be hidden in the un-compared benches."
-              echo ""
-              echo "CPUs observed:"
+              echo "Single-runner topology should make this structurally impossible."
+              echo "If you see this, investigate runner provisioning. CPUs observed:"
               echo '```'
               echo "$INCONCLUSIVE_CPUS"
               echo '```'
               echo ""
-              echo "**Action**: click **Re-run failed jobs** in the GitHub Actions UI"
-              echo "(top-right of this run page). The Azure runner pool is heterogeneous,"
-              echo "so a re-run typically lands on consistent CPUs. Larger Runners would"
-              echo "eliminate this (Tier 1 hardware-floor escalation path; see"
-              echo "[bench-gate-rollout.md](../../docs/internal/bench-gate-rollout.md))."
-              echo ""
             fi
             echo "### Full benchstat output"
             echo '```'
-            cat "$RUNNER_TEMP/bench-merged/benchstat.txt"
+            cat "$RUNNER_TEMP/bench-out/benchstat.txt"
             echo '```'
             if [ "$REGRESSION" = "true" ]; then
               echo ""
@@ -691,8 +479,7 @@ jobs:
         if: steps.compare.outputs.regression == 'true' || steps.compare.outputs.inconclusive == 'true'
         run: |
           if [ "${{ steps.compare.outputs.inconclusive }}" = "true" ]; then
-            echo "::error::Gate run INCONCLUSIVE — heterogeneous runner CPUs across base/pr shards prevented benchstat from making a comparison for affected benchmarks."
-            echo "::error::Re-run via 'Re-run failed jobs' in the GitHub Actions UI until shards land on a consistent CPU. Do NOT override this — a real regression could be hidden."
+            echo "::error::Gate run INCONCLUSIVE — heterogeneous runner CPUs in a single-runner job. Investigate runner provisioning."
           else
             echo "::error::Statistically significant perf regression detected vs merge-base."
             echo "::error::See benchstat output in the step summary."
