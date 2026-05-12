@@ -2,7 +2,7 @@
 title: "da-tools Quick Reference"
 tags: [reference, cli, cheat-sheet]
 audience: [all]
-version: v2.7.0
+version: v2.8.0
 lang: zh
 ---
 

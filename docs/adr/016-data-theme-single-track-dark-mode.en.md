@@ -2,7 +2,7 @@
 title: "ADR-016: Migrate comprehensively to `[data-theme]` single-track dark mode, remove Tailwind `dark:` variant"
 tags: [adr, design-tokens, dark-mode, v2.7.0]
 audience: [frontend-developers, designers, maintainers]
-version: v2.7.0
+version: v2.8.0
 lang: en
 ---
 

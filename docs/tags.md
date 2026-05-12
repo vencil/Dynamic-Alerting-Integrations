@@ -2,7 +2,7 @@
 title: "標籤索引"
 tags: []
 audience: [all]
-version: v2.7.0
+version: v2.8.0
 lang: zh
 ---
 # 標籤索引

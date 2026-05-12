@@ -2,7 +2,7 @@
 title: "Phase 2 E2E Harness — Alert Fire-through Latency Design (archived)"
 tags: [design, internal, phase-b, benchmark, archived]
 audience: [maintainers, platform-engineers]
-version: v2.7.0
+version: v2.8.0
 status: archived
 archived-at: 2026-04-26
 archived-reason: "Implementation shipped (PR #78/#79/#80/#85/#86/#88/#90/#105/#112). First synthetic-v2 baselines landed (1000-tenant run 24951460457 + 5000-tenant run 24955478536, n=30 each, 2026-04-26). See benchmark-playbook.md §v2.8.0 Phase 2 e2e for live ops content + numbers."
@@ -23,7 +23,7 @@ lang: zh
 # Phase 2 E2E Harness — Alert Fire-through Latency Design
 
 > **受眾**：Maintainers、Platform Engineers
-> **版本**：v2.7.0（草案 → v2.8.0 phase .b 完整 land）
+> **版本**：v2.8.0（草案 → v2.8.0 phase .b 完整 land）
 > **狀態**：`archived` — 實作完成 (PR #78/#79/#80/#85/#86/#88/#90/#105/#112) + 首批 baseline 落地，本文件停留在最後 implementation 完成時的狀態，後續變更請改 `benchmark-playbook.md`
 >
 > **相關文件**：[Benchmark Playbook](../../benchmark-playbook.md) · [Architecture & Design](../../../architecture-and-design.md) · [PR #59 Phase 1 baseline](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/59)

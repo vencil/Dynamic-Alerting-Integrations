@@ -2,7 +2,7 @@
 title: "ADR-011: PR-based Write-back 模式"
 tags: [adr, architecture, gitops, pr, write-back]
 audience: [platform-engineers, developers]
-version: v2.7.0
+version: v2.8.0
 lang: zh
 ---
 

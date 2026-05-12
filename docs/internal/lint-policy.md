@@ -2,7 +2,7 @@
 title: "Lint Policy"
 tags: [internal, lint, dx, governance]
 audience: [contributors, maintainers]
-version: v2.7.0
+version: v2.8.0
 lang: zh
 ---
 

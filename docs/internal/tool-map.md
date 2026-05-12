@@ -2,7 +2,7 @@
 title: "工具導覽 (Tool Map)"
 tags: [tooling, navigation, internal]
 audience: [maintainers, ai-agent]
-version: v2.7.0
+version: v2.8.0
 lang: zh
 ---
 
