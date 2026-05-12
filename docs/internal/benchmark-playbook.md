@@ -270,11 +270,26 @@ Topology: single-runner sequential (base bench → drop_caches → pr bench → 
 | 拓樸 | 單 runner sequential（同 Tier 1 v5）：checkout prior tag → bench → drop_caches → clean workspace → checkout current tag → bench → benchstat |
 | Wall time | ~20-25 min |
 | 統計判定 | `benchstat -alpha=0.05` AND `|Δ| ≥ 10%`（looser than Tier 1's 0.01 / 5%）|
-| 結果遞送 | **Step summary only**（不 mutate release notes、不 post comment 到 release）|
-| Blocking? | **❌ 純 informational** — 不阻擋 release |
+| 結果遞送 | **Step summary**（不 mutate release notes、不 post comment 到 release）+ **workflow failure on regression**（觸發 GitHub email 通知 maintainer）|
+| Blocking? | **❌ 不阻擋 release**（release 已 published；workflow 在那之後跑）。但偵測到 drift 會故意 `exit 1` 標紅燈 — 這是 alerting 機制（GitHub 只在 workflow fail 時寄信通知 maintainer，綠燈無通知）|
 | Override | 無 label 機制；maintainer 自行在 release notes 文字承認 drift 即可 |
 
-### Tier 1 vs Tier 2 對照
+### 「Fail to inform, not fail to block」設計
+
+Tier 2 在偵測到 drift 時故意 `exit 1` 讓 workflow 顯紅燈。這**不是** release blocker（release 在這個 workflow 觸發前已經 published 了，事後失敗無法 un-publish），而是**通知機制**：
+
+- ❌ Workflow exit 0（綠燈）→ GitHub 不寄任何通知 email → maintainer 永遠不會主動點開綠燈 workflow 讀 step summary → drift 報告等於沒寫
+- ✅ Workflow exit 1（紅燈）→ GitHub 自動寄 "Workflow Failed" email 給 maintainer → maintainer 收信點進來看 step summary → 真正讀到 drift 報告
+
+這個取捨叫 **Fail to inform, not fail to block**。在 GitHub Actions 的 UX model 下，沒有更好的 silent-pass alternative — 自動 post 到 release notes 會 clobber maintainer 手打的文字，自動發 issue 會 spam 兒 issue tracker。Workflow failure 是當下最 idiomatic 的「請看一下這個」訊號。
+
+副作用：release 列表上會看到 release 旁邊一個紅 X check。**這不代表 release 有問題**，只代表「Tier 2 偵測到值得 review 的 drift」。Maintainer 看了 step summary 後可選擇：
+
+1. **承認** — 在 release notes 補一段 perf trade-off rationale
+2. **跟進** — 開 perf follow-up issue 給下個 release 處理
+3. **嚴重時** — hotfix release（罕見；通常 Tier 1 已先 catch 過了）
+
+
 
 | 維度 | Tier 1 (PR-time) | Tier 2 (release-time) |
 |---|---|---|

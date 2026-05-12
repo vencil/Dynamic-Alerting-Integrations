@@ -314,10 +314,17 @@ jobs:
             echo "Topology: single-runner sequential (Trap 12 defense — same CPU on both benches)."
             echo ""
             echo "**Tier 2 is INFORMATIONAL** — this report does NOT block the release."
+            echo "(The release was already published before this workflow ran. Tier 2 only INFORMS.)"
+            echo ""
+            echo "**Note on workflow status**: this workflow **deliberately fails (red X)** when"
+            echo "drift is flagged. GitHub only sends maintainer-email notifications on workflow"
+            echo "FAILURE — a green ✅ would mean nobody ever reads this report. The red X here"
+            echo "is the alerting mechanism, NOT a release-blocker."
+            echo ""
             echo "Maintainer reviews flagged drift (if any) and decides whether to:"
             echo "- Accept (document acknowledgment in release notes)"
             echo "- Investigate (open a perf issue, target a follow-up release)"
-            echo "- Revert (only for severe drift the release shouldn't carry)"
+            echo "- Revert/hotfix (only for severe drift the release shouldn't carry)"
             echo ""
             echo "### Full benchstat output"
             echo '```'
@@ -352,3 +359,35 @@ jobs:
           echo "::notice::Tier 2 report rendered to step summary."
           echo "::notice::View at: https://github.com/$REPO/actions/runs/${{ github.run_id }}"
           echo "::notice::Maintainer: read step summary; acknowledge any flagged drift in release notes or open a perf follow-up issue."
+
+      # CRITICAL alerting design — "Fail to inform", not "Fail to block".
+      # [Gemini round-1 Tier-2 catch / Trap 14.]
+      #
+      # Earlier draft of this workflow had no fail step because "Tier 2 is
+      # informational, doesn't block releases". That's a UX trap: GitHub
+      # only emails the repo maintainer when a workflow FAILS (red X).
+      # Green workflows produce zero notifications — no human ever
+      # proactively opens a green check to read a step summary.
+      #
+      # If Tier 2 finds a 20% release-over-release regression but exits 0,
+      # the maintainer never sees the report. The whole gate is invisible.
+      #
+      # The fix preserves "not blocking" semantics by exploiting the
+      # event-timing: Tier 2 fires AFTER `release: published`, so the
+      # release is already public. The workflow failing AFTER cannot
+      # un-publish anything. "Failure" here means ONLY "notify the
+      # maintainer", not "block release publication".
+      #
+      # workflow_dispatch (pre-tag manual review) also benefits: maintainer
+      # sees a red check → reads step summary → decides whether to tag.
+      - name: Fail workflow on regression — alerting via GitHub's email-on-failure
+        if: steps.compare.outputs.regression == 'true'
+        run: |
+          echo "::error::Cumulative perf drift (≥10% at p<0.05) detected between releases."
+          echo "::error::This workflow is failing INTENTIONALLY to trigger GitHub's email-on-failure notification."
+          echo "::error::The release itself is NOT blocked — it is already published. Tier 2 only INFORMS; the maintainer decides whether to:"
+          echo "::error::  - Acknowledge the drift in release notes (free-form)"
+          echo "::error::  - Open a perf follow-up issue for the next release"
+          echo "::error::  - Revert / hotfix for severe user-visible regression"
+          echo "::error::Read the step summary for the full benchstat report."
+          exit 1
