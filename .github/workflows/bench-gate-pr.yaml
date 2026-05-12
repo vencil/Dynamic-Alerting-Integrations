@@ -335,26 +335,68 @@ jobs:
       # more rows per side, which is exactly what it expects. The duplicate
       # "goos:/goarch:/pkg:" header lines per shard don't confuse benchstat
       # — it treats them as section breaks.
+      #
+      # CRITICAL: enumerate shards explicitly via `seq 0..N-1` rather than
+      # globbing `bench-base-shard*`. Two distinct gotchas:
+      #
+      # (1) Glob order is LEXICOGRAPHIC — at SHARDS_TOTAL >= 10 this gives
+      #     shard0, shard1, shard10, shard2, ..., shard9 — benchstat output
+      #     row order becomes non-deterministic (cosmetic issue in step
+      #     summary; statistical pairing by name is unaffected, but
+      #     reviewers expecting consistent layout get confused).
+      #     [Gemini round-5 SRE catch.]
+      #
+      # (2) MORE IMPORTANTLY: glob silently accepts PARTIAL shards. If one
+      #     bench job hits the 15-min timeout or hits a runner flake, its
+      #     artifact never uploads; the glob just skips it; benchstat
+      #     compares an incomplete bench set; the gate passes despite a
+      #     chunk of the suite never running. Hidden gate-failure mode.
+      #     Explicit `seq` loop with existence check fails fast instead.
       - name: Merge shard artifacts
         id: merge
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/bench-merged"
-          # Glob expands to bench-{base,pr}-shard0/1/2 directories.
-          base_files=("$RUNNER_TEMP"/bench/bench-base-shard*/bench-baseline.txt)
-          pr_files=("$RUNNER_TEMP"/bench/bench-pr-shard*/bench-baseline.txt)
 
-          if [ ${#base_files[@]} -eq 0 ] || [ ${#pr_files[@]} -eq 0 ]; then
-            echo "::error::Missing shard artifacts — base=${#base_files[@]} pr=${#pr_files[@]}"
+          base_files=()
+          pr_files=()
+          missing=()
+
+          # SHARDS_TOTAL is workflow-level env var; exported to step shell.
+          for i in $(seq 0 $((SHARDS_TOTAL - 1))); do
+            base_f="$RUNNER_TEMP/bench/bench-base-shard$i/bench-baseline.txt"
+            pr_f="$RUNNER_TEMP/bench/bench-pr-shard$i/bench-baseline.txt"
+
+            if [ -f "$base_f" ]; then
+              base_files+=("$base_f")
+            else
+              missing+=("base shard $i ($base_f)")
+            fi
+
+            if [ -f "$pr_f" ]; then
+              pr_files+=("$pr_f")
+            else
+              missing+=("pr shard $i ($pr_f)")
+            fi
+          done
+
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::Missing shard artifacts — partial bench data would silently weaken the gate."
+            echo "::error::Hard-failing here so the regression isn't hidden."
+            for m in "${missing[@]}"; do
+              echo "::error::  - missing: $m"
+            done
+            echo "Available artifacts:"
             ls -la "$RUNNER_TEMP/bench/" || true
             exit 2
           fi
 
+          # base_files / pr_files are now numerically-ordered shard0..shardN-1.
           cat "${base_files[@]}" > "$RUNNER_TEMP/bench-merged/base.txt"
           cat "${pr_files[@]}"   > "$RUNNER_TEMP/bench-merged/pr.txt"
 
-          echo "Merged base (${#base_files[@]} shards): $(wc -l < "$RUNNER_TEMP/bench-merged/base.txt") lines"
-          echo "Merged pr   (${#pr_files[@]} shards): $(wc -l < "$RUNNER_TEMP/bench-merged/pr.txt") lines"
+          echo "Merged base ($SHARDS_TOTAL shards, ordered 0..$((SHARDS_TOTAL - 1))): $(wc -l < "$RUNNER_TEMP/bench-merged/base.txt") lines"
+          echo "Merged pr   ($SHARDS_TOTAL shards, ordered 0..$((SHARDS_TOTAL - 1))): $(wc -l < "$RUNNER_TEMP/bench-merged/pr.txt") lines"
 
       - name: Compare with benchstat
         id: compare
