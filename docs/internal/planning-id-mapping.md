@@ -2,7 +2,7 @@
 title: "Planning ID Mapping — Legacy → TRK Redirect"
 tags: [internal, dx, planning, redirect]
 audience: [contributors, ai-agents]
-version: v2.8.1
+version: v2.7.0
 lang: zh
 ---
 
@@ -105,7 +105,8 @@ SOT 在 [`dx-tooling-backlog.md`](dx-tooling-backlog.md)。
 | TD-034 | TRK-234 | （配對 TRK-233 codify S6 規則）|
 | TD-035 | TRK-235 | `skipA11y: true` debt 藏起來，audit 顯示 13/17 多餘 |
 | TD-036 | TRK-236 | pre-commit hook（Plan C）擋 `^const \w+\s*=\s*window\.__\w+\s*;` |
-| TD-039 | TRK-239 | `check_dist_source_consistency.py` + `check_skip_a11y_justification.py` |
+| TD-039 | TRK-239 | `check_dist_source_consistency.py` + `check_skip_a11y_justification.py`（兩支 lint **docstring 仍寫 `TD-039`** — 它們也是 `tool-map.md` 自動生成的來源；tool-map 因此沿用 `TD-039`。重寫 docstring 會牽動 `check_skip_a11y_justification.py` 的 `RE_JUSTIFICATION = r"//\s*skipA11y:\s*TD-\d+\b"` 正則 + 所有 E2E spec 內已存在的 `// skipA11y: TD-040 ...` 註解；留待 chunk 2b 引入新 lint 時一併處理）|
+| TD-040 | TRK-240 | `// skipA11y: TD-040` justification ID（同上，docstring + 正則 + spec 註解整套留待 chunk 2b）|
 
 ## 不在 mapping 範圍
 

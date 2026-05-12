@@ -64,8 +64,11 @@ lang: en
 | `patch_config.py` | Patch threshold-config ConfigMap for a specific tenant. |
 | `policy_engine.py` | Policy-as-Code 引擎（Path A — 內建 DSL）。 |
 | `policy_opa_bridge.py` | OPA (Open Policy Agent) bridge for tenant config policy evaluation. |
+| `rule_pack_diff.py` | Rule Pack version diff for upgrade audits. |
 | `scaffold_tenant.py` | Interactive tenant config generator for Dynamic Alerting. |
 | `shadow_verify.py` | Shadow Monitoring readiness and convergence verification. |
+| `silencer_drift_check.py` | Alertmanager silence drift auditor. |
+| `state_reconcile.py` | Migration State directory reconciliation. |
 | `threshold_recommend.py` | 閾值推薦引擎。 |
 | `validate_config.py` | One-stop configuration validation. |
 | `validate_migration.py` | Shadow Monitoring 驗證工具。 |
@@ -133,7 +136,7 @@ lang: en
 | `check_design_token_usage.py` | JSX 設計 token 使用完整性 lint |
 | `check_dev_rules_enforcement.py` | detect doc-drift in dev-rules.md. |
 | `check_devrules_size.py` | Dev-rules 尺寸上限檢查。 |
-| `check_dist_source_consistency.py` | Catch portal dist commits without matching source change (testing-playbook §LL §2, TRK-239). |
+| `check_dist_source_consistency.py` | Catch portal dist commits without matching source change (testing-playbook §LL §2, TD-039). |
 | `check_doc_freshness.py` | 文件新鮮度檢查工具。 |
 | `check_doc_links.py` | 文件間交叉引用一致性檢查 |
 | `check_doc_reading_time.py` | 文件閱讀時間檢查工具。 |
@@ -162,7 +165,7 @@ lang: en
 | `check_property_coverage.py` | Property-pilot coverage drift detector. |
 | `check_repo_name.py` | Prevent wrong repository name in source files. |
 | `check_routing_profiles.py` | Lint routing profiles and domain policies (ADR-007). |
-| `check_skip_a11y_justification.py` | Require ticket-justification for `skipA11y: true` in E2E specs (testing-playbook §LL §5, TRK-239). |
+| `check_skip_a11y_justification.py` | Require ticket-justification for `skipA11y: true` in E2E specs (testing-playbook §LL §5, TD-039). |
 | `check_structure.py` | Project structure enforcement. |
 | `check_subprocess_timeout.py` | flag subprocess calls without explicit timeout. |
 | `check_techdebt_drift.py` | TECH-DEBT / REG registry drift checker. |
@@ -182,6 +185,7 @@ lang: en
 
 ## Shared Libraries
 
+- `scripts/tools/_lib_compat.py`: Cross-platform compatibility helpers for Dynamic Alerting CLI tools.
 - `scripts/tools/_lib_constants.py`: Domain constants for Dynamic Alerting platform.
 - `scripts/tools/_lib_godispatch.py`: Shared dispatcher for da-tools subcommands that wrap a Go binary.
 - `scripts/tools/_lib_io.py`: File I/O and YAML helpers for Dynamic Alerting platform.
