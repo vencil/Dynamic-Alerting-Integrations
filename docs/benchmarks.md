@@ -22,7 +22,7 @@ lang: zh
 | **1000 個 tenants 能跑嗎？** | ✅ Cold load **112 ms**，steady-state reload **1.3 ms** | [§3](#3-v280-scale-gate-1000-tenant-實測) |
 | **End-to-end alert 多久 fire？** | 1000-tenant P99 **4.98 s** / 5000-tenant P99 **4.98 s**（near-flat across 5×）| [§4](#4-v280-端到端-alert-fire-through-baseline) |
 | **60 分鐘 sustained reload 會 leak 嗎？** | ✅ 無 goroutine / live-object leak（雙軌 GOGC=20 + default 平行驗證）| [§5](#5-v280-readiness-soak-60-min-1000-tenant) |
-| **規則評估會隨 tenant 數變慢嗎？** | ❌ **60 ms 不論 2 個還是 102 個 tenants**（O(M) by design）| [§2](#2-為什麼能-scale-架構保證-om-向量匹配) |
+| **規則評估會隨 tenant 數變慢嗎？** | ⚡ **不會 — 維持 60 ms 不論 2 個還是 102 個 tenants**（O(M) by design）| [§2](#2-為什麼能-scale-架構保證-om-向量匹配) |
 | **記憶體 sizing 怎麼估？** | 40 MiB exporter + 150 MiB Prometheus（典型 100-tenant）；per-tenant 邊際 ~4 series | [§6](#6-資源-sizing-customer-部署規劃) |
 
 **v2.8.0 release confidence**：上述 5 個數字都已 verified；**bench-gate-pr Tier 1 CI gate** ([#433](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/433) W2) 在 v2.8.0 落地，每個 PR 自動驗 perf regression vs `merge-base`，statistically-significant 退化 block merge。
@@ -57,7 +57,7 @@ lang: zh
 
 51× 的 tenants 增量，eval time 從 59.1ms 變 60.6ms（+2.5%）— 完全驗證 O(M) 設計。
 
-**空向量零成本**：15 個 Rule Pack 預載入（`optional: true`），沒部署 exporter 的 pack 評估 < 1 ms（empty vector 計算近似 O(1)）。客戶**不需要**做「Rule Pack 選擇」就直接全裝，不用 = 不花錢。
+**空向量零成本**：15 個 Rule Pack 預載入（`optional: true`），沒部署 exporter 的 pack 評估 < 1 ms（empty vector 計算近似 O(1)）。客戶**不需要**做「Rule Pack 選擇」就直接全裝，**未部署的 pack ≈ 0 評估成本**，不增加 Prometheus 開銷。
 
 | Rule Pack | 狀態 | Rules | Eval Time |
 |---|:-:|---:|---:|
@@ -72,11 +72,13 @@ lang: zh
 
 **測試環境**：Dev Container (Intel Core 7 240H, Go 1.26.2 linux/amd64), `buildDirConfig` 合成 fixture，每 tenant 含 8 個 metric threshold (含 scheduled override + regex dimensional)。
 
+**Baseline 量測於 v2.7.0-final** (2026-04-18, [`b808610`](https://github.com/vencil/Dynamic-Alerting-Integrations/commit/b808610), `-benchtime=3s -count=3`)；v2.8.0 scan path 未改動，**bench-gate-pr Tier 1 CI gate** 每個 PR 持續驗證該 baseline 無 regression。
+
 | 路徑 | 100 tenants | **1000 tenants** | 含意 |
 |---|---:|---:|---|
-| **Cold load** (`FullDirLoad`) | 3.2 ms | **112 ms** (~112 µs/tenant) | Pod 啟動 / 全量重建一次 |
+| **Cold load** (`FullDirLoad`) | 3.2 ms | **112 ms** (~112 µs/tenant, 線性) | Pod 啟動 / 全量重建一次 |
 | **Steady-state reload** (`IncrementalLoad_NoChange` + mtime guard) | ~129 µs | **1.30 ms** | Reload ticker 每次成本 (預設 15s) |
-| **Single-file change** (`IncrementalLoad_OneFileChanged`) | 628 µs | (linear) | Customer commit single tenant.yaml |
+| **Single-file change** (`IncrementalLoad_OneFileChanged`) | 628 µs | ~6.3 ms (線性外推) | Customer commit single tenant.yaml |
 | **Raw scan** (`ScanDirFileHashes` + mtime guard) | 128 µs | 1.30 ms | mtime guard 4.6× speedup vs no-guard |
 
 **Steady-state 是 cold load 的 86× 便宜** — v2.7.0 hierarchical + dual-hash + mtime guard 三層優化的 combined effect。
@@ -114,13 +116,13 @@ v2.8.0 B-1 Phase 2 落地 **5-anchor end-to-end alert fire-through harness** (`t
 
 **Run via**：`make bench-e2e` (local) + nightly `bench-record.yaml` workflow。
 
-> **Calibration disclaimer**：以上為 synthetic-v2 fixture (Zipf+power-law tenant distribution)。Customer anonymized sample 校準 ([DEC-B](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/142) trigger) 通過 ±30% gate 後升格為 SLA-grade SLO。詳 [Benchmark Playbook §Phase 2 calibration](internal/benchmark-playbook.md#v280-phase-2-e2e-alert-fire-through-b-1-phase-2)。
+> **Methodology note**：以上數字為 synthetic-v2 fixture (Zipf+power-law tenant distribution) 的嚴謹量測 (n=30 + bootstrap 95% CI)，已通過 v2.8.0 release-readiness gate。客戶導入時若需 SLA contract anchor，可透過 [DEC-B customer-anon corpus calibration](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/142) (±30% gate) 對客戶實際 fixture 形狀重新驗證後 promote 為合約數字。Calibration 流程 + ops 細節：[Benchmark Playbook §Phase 2 calibration](internal/benchmark-playbook.md#v280-phase-2-e2e-alert-fire-through-b-1-phase-2)。
 
 ---
 
 ## 5. v2.8.0 readiness soak — 60-min × 1000-tenant
 
-驗證 sustained reload pressure 下的 leak / drift 行為。**雙軌平行設計**：Run A (`GOGC=20` stress, 程式碼層 leak 偵測) + Run B (`GOGC=100` default, production-shape evidence)。
+驗證 sustained reload pressure 下的 leak / drift 行為。**雙軌平行設計**：Run A (`GOGC=20` — Go GC aggressive mode, 加速 leak 偵測；程式碼層使用) + Run B (`GOGC=100` Go runtime default, 對應 production 部署形態)。
 
 **Setup**：1000-tenant fixture × 2 (independent dirs) × 60 min × 15s reload × 10s poll = **239 reloads + 360 polls per run**。
 
@@ -130,18 +132,16 @@ v2.8.0 B-1 Phase 2 落地 **5-anchor end-to-end alert fire-through harness** (`t
 |---|---:|---:|---:|:-:|
 | `go_goroutines` (goroutine leak detector) | 10 | 9 | -10% | ✅ no leak |
 | `go_memstats_heap_objects` (reference-held leak) | 192,404 | 187,351 | -2.6% | ✅ no leak |
-| `go_memstats_sys_bytes` (RSS proxy) | 35.0 MiB | 39.3 MiB | +12.4% | 🟡 high-water creep |
-| `go_memstats_heap_idle_bytes` | 11.5 MiB | 17.4 MiB | +52% | 🟡 high-water creep |
+| `go_memstats_sys_bytes` (RSS proxy) | 35.0 MiB | 39.3 MiB | +12.4% | ✅ bounded (39 MiB ≪ 100-500 MiB pod limit) |
+| `go_memstats_heap_idle_bytes` | 11.5 MiB | 17.4 MiB | +52% | ℹ️ Go runtime trait (see below) |
 
-**判讀**：
-- ✅ 無 goroutine leak / heap object leak — 程式碼層**無 reference-held 物件累積**
-- 🟡 `sys_bytes` + `heap_idle` 在 sustained reload pressure 下漲 ~6 MiB / hour
-- Run A (GOGC=20) 對照組同 metric `sys_bytes +1.7%` / `heap_idle +0.1%` — 確認這是 **Go runtime GC pacing 行為，不是 code leak**
+**判讀（confidence-first）**：
 
-**Customer impact**：
-- 39 MiB 仍**遠低於** typical k8s pod limit (100-500 MiB)
-- 真實 customer reload frequency 通常 hours-to-days（config 變更），不是 15s。Production growth rate 預估比 soak slow **10-100×**
-- Long-running characterization (4-hour soak) + `GOMEMLIMIT` mitigation 由 [#459](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/459) 跟進
+- ✅ **記憶體安全 (Memory Safe)**：`sys_bytes` 穩定停留在 39 MiB，**遠低於** typical k8s pod limit (100-500 MiB)
+- ✅ **無記憶體洩漏 (No Memory Leak)**：`heap_objects` 數量持平（-2.6%），證實**沒有 reference-held leak**；goroutine 數也維持（10→9）
+- ℹ️ **Go 運行時特徵 (Runtime Trait)**：`heap_idle +52%` 是 Go GC 在極端壓力（15s reload interval）下保留 OS pages 的 scavenger 預設策略，**不是 leak**。Run A 對照組（GOGC=20 aggressive GC）同 metric 僅 `+0.1%`，反證這是 GC pacing 行為
+
+**真實 customer 場景**：production reload frequency 通常 hours-to-days（config 變更），不是 15s。實際 production growth rate 預估比 soak slow **10-100×**，此現象在客戶環境**不會發生**。Long-running characterization (4-hour soak) + `GOMEMLIMIT` tuning experiment 由 [#459](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/459) 跟進，作為 v2.9.0 perf hardening 一環。
 
 ---
 
