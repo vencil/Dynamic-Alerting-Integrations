@@ -18,41 +18,61 @@ Close W3 when ANY of these stopping conditions hits:
     - ≥30 Tier 1 runs (sufficient statistical power for borderline)
     - ≥200 total PRs to repo (hard-cap fallback)
 
-Categorization
---------------
-Each Tier 1 run is bucketed into one of:
+Categorization (revised after self-review; see "Bug history" below)
+------------------------------------------------------------------
+For each merged PR, look at the LATEST Tier 1 run + current PR label state:
 
-    passed              gate green; no regression detected
-    failed-real         gate red; PR subsequently had new commits pushed
-                          (= dev fixed the code) AND eventually merged.
-                          Treated as TRUE POSITIVE for FP-rate math.
-    failed-override     gate red; override label was eventually applied
-                          AND PR merged. Treated as FALSE POSITIVE
-                          (maintainer accepted the gate's flag as either
-                          a deliberate trade-off OR not-actually-a-regression).
-    failed-inconclusive gate red due to INCONCLUSIVE state. v5 single-runner
-                          should make this structurally impossible; if observed,
-                          flag as a workflow bug (NOT counted in FP rate).
-    open                PR still open / no terminal signal yet (excluded).
+    passed-clean        workflow success + no override label
+                          = gate happy, no maintainer intervention needed.
+                          Counts as TRUE NEGATIVE.
+
+    override-applied    override label currently on PR (and PR merged)
+                          = maintainer applied override, the merging run
+                          honored it (skip=true → workflow conclusion was
+                          actually "success" even though no bench ran).
+                          Counts as FALSE POSITIVE signal — maintainer
+                          believed the gate flag was either a deliberate
+                          trade-off OR not-actually-a-regression.
+
+    merged-despite-red  workflow failure + PR merged + no override label
+                          = maintainer manually merged with red gate
+                          (only possible without branch protection on
+                          this check). Counts as FALSE POSITIVE-LIKE
+                          signal — the gate was ignored.
+
+    open                PR still open; no terminal signal yet (excluded).
     unmerged            PR closed without merge (excluded).
 
-FP rate = failed-override / (failed-override + failed-real)
+FP rate = (override-applied + merged-despite-red)
+       / (override-applied + merged-despite-red + passed-clean)
+
+Bug history (v1 → v2, this revision)
+------------------------------------
+v1 of this tool had a categorization bug: it bucketed override-skipped
+runs as `passed` because workflow conclusion is "success" when preflight
+short-circuits via skip=true (bench/compare jobs cascade-skip via
+`needs:` + `if:`). That UNDER-COUNTED FPs significantly — any PR with
+override label applied would appear "passing cleanly". v2 (this file)
+categorizes by maintainer-action-signal (label state + merge outcome)
+rather than workflow_conclusion alone.
 
 Limitations / honest caveats
 ----------------------------
-1. "failed-real" heuristic assumes a code fix when dev pushes after a red gate.
-   In practice, "dev pushed again then re-ran" could also be a flake. The
-   heuristic OVER-counts TPs (under-counts FPs), so the actual FP rate is
-   probably ≥ what this tool reports. For W3 decisions, "≥ X" is the
-   conservative bound — escalating when this tool says > 25% is justified.
+1. We can't distinguish "override accepted real regression as a deliberate
+   trade-off" from "override applied because gate was wrong (true FP)".
+   Both count toward the FP-rate metric. For W3's "is the gate annoying
+   enough to warrant Larger Runners" question, the conflation is acceptable
+   — both represent "maintainer felt the gate verdict was not actionable".
 
-2. We exclude open PRs (no terminal signal) and unmerged PRs. If many PRs
-   are stuck open with red bench-gate, that's a separate signal worth noting
-   manually.
+2. We don't distinguish workflow-flake (network, timeout, etc.) from
+   true regression in the `merged-despite-red` bucket. If the workflow
+   itself flakes often, this bucket inflates. Look at workflow conclusion
+   distribution (`gh run list --workflow bench-gate-pr.yaml`) separately
+   for flake signal.
 
-3. We don't try to detect "the dev pushed a no-op rebase to re-trigger CI"
-   (which would be a flake-recovery pattern). Such cases would show up as
-   "failed-real" here. Real-world FP rate may be slightly higher than reported.
+3. Open / unmerged PRs are excluded. If many PRs are stuck open with red
+   bench-gate, that's a separate signal worth noting manually (the gate
+   is acting as a soft blocker on developer pace).
 
 Usage
 -----
@@ -130,24 +150,30 @@ class RunRecord:
             self.bucket = "unmerged"
             return
 
-        # PR merged.
+        # PR merged. Categorize by maintainer-action-signal:
+        # - Override label present? → maintainer overrode the gate
+        # - Workflow success + no override? → gate happy, no intervention
+        # - Workflow failure + no override + merged? → maintainer ignored
+        #   red gate and merged anyway (only possible w/o branch protection)
+        #
+        # Check override BEFORE workflow_conclusion because the override
+        # path produces workflow_conclusion="success" (preflight short-
+        # circuits → bench/compare cascade-skip → workflow overall green).
+        # v1 of this tool checked conclusion first and missed override-
+        # skipped runs entirely — bucketed them as `passed`. See module
+        # docstring's "Bug history" for context.
+        has_override = OVERRIDE_LABEL in self.pr_labels
+
+        if has_override:
+            self.bucket = "override-applied"
+            return
+
         if self.workflow_conclusion == "success":
-            self.bucket = "passed"
+            self.bucket = "passed-clean"
             return
 
-        # Workflow failed. Check why.
-        # Note: we can't easily distinguish "regression" vs "inconclusive"
-        # without parsing the workflow's step summary. As a proxy: check
-        # if the override label was applied to the PR.
-        if OVERRIDE_LABEL in self.pr_labels:
-            self.bucket = "failed-override"
-            return
-
-        # Failed without override → assume dev fixed via code change.
-        # Could also be inconclusive that resolved on re-run; we'd need to
-        # parse step summaries to distinguish. For now treat as "real
-        # regression dev fixed" (over-counts TP slightly; see limitations).
-        self.bucket = "failed-real"
+        # Workflow failure + merged + no override.
+        self.bucket = "merged-despite-red"
 
 
 def _gh(cmd: list[str], timeout: int = 60) -> str:
@@ -186,16 +212,20 @@ def list_tier1_runs(limit: int) -> list[dict]:
         sys.exit(2)
 
 
-def find_pr_for_run(run_id: int) -> Optional[dict]:
-    """Resolve a workflow run to its PR. Returns None if no associated PR."""
+def find_pr_for_run(head_sha: str) -> Optional[dict]:
+    """Resolve a workflow run's head SHA to its PR via GitHub commit-pulls API.
+
+    `gh run view --json pullRequests` is NOT a valid field (despite intuition);
+    the correct path is /repos/{owner}/{repo}/commits/{sha}/pulls which lists
+    PRs containing a given commit. Returns the first match (usually one PR per
+    commit; multi-PR cherry-picks are rare in this repo).
+    """
     try:
         out = _gh([
-            "run", "view", str(run_id),
-            "--repo", REPO,
-            "--json", "pullRequests",
+            "api", f"repos/{REPO}/commits/{head_sha}/pulls",
+            "--jq", "[.[] | {number, state, url}]",
         ])
-        data = json.loads(out)
-        prs = data.get("pullRequests", [])
+        prs = json.loads(out)
         return prs[0] if prs else None
     except (subprocess.CalledProcessError, json.JSONDecodeError, IndexError):
         return None
@@ -224,10 +254,13 @@ def collect_records(limit: int, verbose: bool = False) -> list[RunRecord]:
 
     for i, run in enumerate(runs, 1):
         if verbose:
-            print(f"  [{i}/{len(runs)}] resolving run {run['databaseId']}...",
+            print(f"  [{i}/{len(runs)}] resolving run {run['databaseId']} "
+                  f"(sha={run['headSha'][:8]})...",
                   file=sys.stderr)
-        pr = find_pr_for_run(run["databaseId"])
+        pr = find_pr_for_run(run["headSha"])
         if not pr:
+            if verbose:
+                print(f"    no PR found for sha {run['headSha'][:8]}", file=sys.stderr)
             continue
         pr_number = pr.get("number")
         if not pr_number or pr_number in seen_prs:
@@ -236,10 +269,13 @@ def collect_records(limit: int, verbose: bool = False) -> list[RunRecord]:
         seen_prs.add(pr_number)
 
         state, labels = get_pr_terminal_state(pr_number)
+        # Construct human-readable PR URL (the commits/pulls API returns the
+        # API URL, not the github.com/.../pull/N URL we want for display).
+        human_url = f"https://github.com/{REPO}/pull/{pr_number}"
         rec = RunRecord(
             run_id=run["databaseId"],
             pr_number=pr_number,
-            pr_url=pr.get("url"),
+            pr_url=human_url,
             workflow_conclusion=run.get("conclusion", "unknown"),
             pr_state=state,
             pr_labels=labels,
@@ -252,29 +288,27 @@ def collect_records(limit: int, verbose: bool = False) -> list[RunRecord]:
 def compute_stats(records: list[RunRecord]) -> dict:
     """Aggregate categorized records into FP rate + bucket counts."""
     buckets = {
-        "passed": 0,
-        "failed-real": 0,
-        "failed-override": 0,
-        "failed-inconclusive": 0,
+        "passed-clean": 0,
+        "override-applied": 0,
+        "merged-despite-red": 0,
         "open": 0,
         "unmerged": 0,
     }
     for r in records:
         buckets[r.bucket] = buckets.get(r.bucket, 0) + 1
 
-    # FP rate denominator: merged PRs with terminal gate signal.
-    fp_denom = buckets["failed-real"] + buckets["failed-override"]
-    fp_rate = (buckets["failed-override"] / fp_denom * 100) if fp_denom else 0.0
-
-    total_with_signal = (
-        buckets["passed"] + buckets["failed-real"]
-        + buckets["failed-override"] + buckets["failed-inconclusive"]
-    )
+    # FP numerator: override-applied + merged-despite-red.
+    # Both indicate the maintainer felt the gate verdict was not actionable.
+    fp_count = buckets["override-applied"] + buckets["merged-despite-red"]
+    # FP denominator: merged PRs with terminal gate signal.
+    total_with_signal = buckets["passed-clean"] + fp_count
+    fp_rate = (fp_count / total_with_signal * 100) if total_with_signal else 0.0
 
     return {
         "total_unique_prs": len(records),
         "buckets": buckets,
-        "fp_denominator": fp_denom,
+        "fp_count": fp_count,
+        "fp_denominator": total_with_signal,
         "fp_rate_pct": round(fp_rate, 2),
         "total_with_signal": total_with_signal,
         "stopping_condition": _check_stopping(buckets, fp_rate, total_with_signal),
@@ -317,19 +351,19 @@ def render_markdown(stats: dict, records: list[RunRecord], verbose: bool) -> str
     lines.append("")
     lines.append(f"- **Unique PRs scanned**: {stats['total_unique_prs']}")
     lines.append(f"- **With terminal signal** (excludes open / unmerged): {stats['total_with_signal']}")
-    lines.append(f"- **FP-rate denominator** (failed-real + failed-override): {stats['fp_denominator']}")
+    lines.append(f"- **FP rate denominator** (passed-clean + override-applied + merged-despite-red): {stats['fp_denominator']}")
+    lines.append(f"- **FP numerator** (override-applied + merged-despite-red): {stats['fp_count']}")
     lines.append(f"- **FP rate**: **{stats['fp_rate_pct']}%**")
     lines.append("")
     lines.append("## Bucket counts")
     lines.append("")
-    lines.append("| Bucket | Count | Meaning |")
-    lines.append("|---|---|---|")
-    lines.append(f"| passed | {b['passed']} | Gate green; no regression detected |")
-    lines.append(f"| failed-real | {b['failed-real']} | Gate red; dev pushed code fix; merged → counted as TP |")
-    lines.append(f"| failed-override | {b['failed-override']} | Gate red; override label applied; merged → counted as FP |")
-    lines.append(f"| failed-inconclusive | {b['failed-inconclusive']} | Gate INCONCLUSIVE (v5 should = 0; nonzero indicates provisioning bug) |")
-    lines.append(f"| open | {b['open']} | PR still open; no terminal signal yet (excluded) |")
-    lines.append(f"| unmerged | {b['unmerged']} | PR closed without merge (excluded) |")
+    lines.append("| Bucket | Count | Meaning | Counts as FP? |")
+    lines.append("|---|---|---|---|")
+    lines.append(f"| passed-clean | {b['passed-clean']} | Gate green + no override label | TN (no) |")
+    lines.append(f"| override-applied | {b['override-applied']} | Override label present + merged | **YES** |")
+    lines.append(f"| merged-despite-red | {b['merged-despite-red']} | Workflow failed + merged + no override (no branch protection) | **YES** |")
+    lines.append(f"| open | {b['open']} | PR still open; no terminal signal yet | excluded |")
+    lines.append(f"| unmerged | {b['unmerged']} | PR closed without merge | excluded |")
     lines.append("")
     lines.append("## W3 closure status")
     lines.append("")
@@ -353,10 +387,14 @@ def render_markdown(stats: dict, records: list[RunRecord], verbose: bool) -> str
 
     lines.append("## Notes / caveats")
     lines.append("")
-    lines.append("- `failed-real` is a heuristic: \"PR merged after red gate + no override\" → assumed code-fix.")
-    lines.append("  Could over-count TPs if a flake resolved on re-run. Actual FP rate may be slightly higher.")
-    lines.append("- Inconclusive bucket is approximate — distinguishing from `failed-real` requires parsing each")
-    lines.append("  workflow run's step summary (out of scope for v1 of this tool).")
+    lines.append("- FP rate conflates \"deliberate trade-off override\" with \"true FP override\". Both")
+    lines.append("  count toward the metric; for W3's \"is the gate annoying?\" question this is fine.")
+    lines.append("- `merged-despite-red` requires inspecting whether the failure was a real regression")
+    lines.append("  or a workflow flake (network / timeout). If many runs land here AND the workflow")
+    lines.append("  conclusion distribution shows lots of cancelled/error, the gate has a flake problem")
+    lines.append("  (worth fixing) separate from a perf-regression problem.")
+    lines.append("- Open / unmerged PRs are excluded. If many PRs are stuck open with red bench-gate,")
+    lines.append("  that's a separate \"gate as soft blocker\" signal worth noting manually.")
     lines.append("- Run with `--verbose` to inspect per-PR rows.")
     return "\n".join(lines)
 
