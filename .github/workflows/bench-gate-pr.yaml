@@ -30,6 +30,24 @@ name: Bench Gate (PR-time, Tier 1)
 #     hitting a slow noisy-neighbor runner. Acceptable trade for the
 #     wall-time win; if FP rate climbs, escalation path is Larger Runners.
 #
+#   - 2026-05-12 v3 (superseded): timeline-API based applier verification
+#     to close "Ghost Green" race (Gemini round-7). Replaced by v4 below
+#     since timeline-based check still allows "Blanket Immunity" — a
+#     maintainer's earlier labeling stays valid in the timeline forever,
+#     even after the dev pushes new regressions.
+#   - 2026-05-12 v4 (this revision): close both Ghost Green AND Blanket
+#     Immunity Trap (Gemini round-8) by switching to event-scoped honor
+#     semantics. Preflight honors the override label ONLY when (a) the
+#     triggering event itself is `labeled`, (b) the label that was just
+#     applied is OUR override label, AND (c) the applier (sender on a
+#     labeled event = the labeler) has admin or maintain role. Any other
+#     event (opened, synchronize, reopened, labeled-of-other-label) →
+#     treat label as absent regardless of presence on PR. Per-event
+#     semantics force maintainer re-approval on each push.
+#     The companion `bench-override-audit.yaml` auto-strips the label
+#     on `synchronize` events as a UX cleanup so the stale label doesn't
+#     visually persist.
+#
 # See: issue #433, issue #67 (closed/superseded), bench-record.yaml (nightly),
 #      memory feedback `feedback_github_actions_workflow_gotchas.md`.
 
@@ -68,29 +86,117 @@ jobs:
   # Outputs feed the matrix + compare jobs.
   preflight:
     name: Preflight (override check + merge-base)
+    # Filter out unrelated `labeled` events before spinning up runners.
+    # The workflow trigger includes `[labeled]` so we can honor a freshly-
+    # applied override label, but a `labeled` event for some OTHER label
+    # (e.g. `bug`, `needs-review`) shouldn't burn 4-5 min of bench time —
+    # no code changed, the result would be identical to the prior commit's
+    # bench-gate run. Skip the whole workflow for those events.
+    # Conditions that DO run preflight (and therefore bench/compare):
+    #   - opened / synchronize / reopened (real PR activity)
+    #   - labeled where the label is our override (need to honor it)
+    # Skipped jobs cascade: bench/compare have `needs: preflight`, so they
+    # also skip automatically when preflight skips.
+    # [Gemini round-9 redundant-wait catch.]
+    if: |
+      github.event.action != 'labeled'
+      || github.event.label.name == 'override: bench-regress-ok'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
       skip: ${{ steps.check_override.outputs.skip }}
       merge_base_sha: ${{ steps.merge_base.outputs.sha }}
     steps:
-      # Override label early-exit (governance: branch-protection-rule
-      # controls who can apply the label; see issue #433 W2).
-      - name: Check for override label
+      # Override label honor logic — TWO ROUNDS of attack hardening codified:
+      #
+      # Round-7 (Ghost Green race): bench-gate preflight (~5s) finishes
+      # before bench-override-audit (~20s) on the same `labeled` event. A
+      # naive "label present → skip" preflight would short-circuit GREEN
+      # before audit gets a chance to revert.
+      #
+      # Round-8 (Blanket Immunity Trap): even with timeline-based applier
+      # verification, the override is treated as valid for the entire PR
+      # lifetime. Maintainer approves a 6% regression → label applied. Dev
+      # then pushes a new commit with a 500% regression. `synchronize` fires.
+      # Timeline still shows the maintainer as last labeler. Preflight
+      # honors skip. Catastrophic regression slips through silently.
+      #
+      # The fix unifies both rounds: honor the label ONLY when the
+      # triggering event ITSELF is `labeled` for our specific label name.
+      # On any other event (opened, synchronize, reopened, labeled-of-some-
+      # other-label), the override label is treated as ABSENT regardless
+      # of whether it's still on the PR. This makes override "per-event,
+      # per-commit-state", not "per-PR".
+      #
+      # UX consequence: maintainers must re-apply the label after each push
+      # that should remain overridden. Companion workflow
+      # `bench-override-audit.yaml` auto-strips on synchronize to surface
+      # the staleness clearly. This is intentional zero-trust friction —
+      # the alternative is silent acceptance of post-approval regressions.
+      - name: Check override label (event-scoped + applier-role verified)
         id: check_override
         env:
-          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          EVENT_ACTION: ${{ github.event.action }}
+          EVENT_LABEL_NAME: ${{ github.event.label.name }}
+          SENDER: ${{ github.event.sender.login }}
         run: |
-          if echo "$LABELS" | grep -q '"override: bench-regress-ok"'; then
+          set -euo pipefail
+
+          # Zero-trust gate: honor only when THIS event is the labeled
+          # event for our specific label. Everything else falls through
+          # to skip=false (run benches normally).
+          if [ "$EVENT_ACTION" != "labeled" ]; then
+            echo "Event action is '$EVENT_ACTION' (not 'labeled'). Override (if any) ignored."
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ "$EVENT_LABEL_NAME" != "override: bench-regress-ok" ]; then
+            echo "Labeled event was for '$EVENT_LABEL_NAME' (different label). Override (if any) ignored."
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # The override label was JUST applied in THIS event. Verify role
+          # of the applier. On `labeled` events, github.event.sender is the
+          # actor who applied the label.
+          if permission=$(gh api "repos/$REPO/collaborators/$SENDER/permission" \
+                            --jq '.permission' 2>/dev/null); then
+            echo "Sender $SENDER role: $permission"
+          else
+            echo "::warning::Could not fetch role for $SENDER (404 / API error). Treating as unauthorized."
+            permission="none"
+          fi
+
+          if [ "$permission" = "admin" ] || [ "$permission" = "maintain" ]; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "::notice::Bench gate skipped via 'override: bench-regress-ok' label"
-            echo "## Bench Gate — SKIPPED via override label" >> "$GITHUB_STEP_SUMMARY"
-            echo "" >> "$GITHUB_STEP_SUMMARY"
-            echo "PR has \`override: bench-regress-ok\` label applied by a maintainer." >> "$GITHUB_STEP_SUMMARY"
-            echo "Performance regression is accepted as a documented trade-off." >> "$GITHUB_STEP_SUMMARY"
-            echo "Audit trail: this skip is permanently logged on the merge commit." >> "$GITHUB_STEP_SUMMARY"
+            echo "::notice::Override accepted — $SENDER ($permission). Valid for THIS run only."
+            {
+              echo "## Bench Gate — SKIPPED via override label"
+              echo ""
+              echo "Label applied by \`$SENDER\` (role: \`$permission\`)."
+              echo ""
+              echo "**Per-event semantics**: This override is valid only for the bench-gate run"
+              echo "triggered by this exact \`labeled\` event. Any subsequent push (\`synchronize\`)"
+              echo "will force re-evaluation without this skip; the maintainer must re-apply the"
+              echo "label after reviewing the new commits if the override should remain in effect."
+              echo ""
+              echo "Audit trail: this skip is permanently logged on the merge commit."
+            } >> "$GITHUB_STEP_SUMMARY"
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Override label applied by $SENDER ($permission) — not authorized. Ignoring."
+            {
+              echo "## Bench Gate — UNAUTHORIZED override ignored"
+              echo ""
+              echo "Label \`override: bench-regress-ok\` was applied by \`$SENDER\` (role: \`$permission\`),"
+              echo "but only \`admin\` or \`maintain\` roles can authorize override. **Label is being ignored**"
+              echo "and benches will run normally. The companion \`bench-override-audit.yaml\` workflow"
+              echo "should auto-revert this label and post a comment with the proper request flow."
+            } >> "$GITHUB_STEP_SUMMARY"
           fi
 
       # CRITICAL: fetch-depth: 0 is required for `git merge-base` to find
@@ -443,6 +549,21 @@ jobs:
           # gawk / mawk / BSD awk. We find the "+X.XX%" token via match
           # (returns position+length), substr the number out (strip the
           # leading + and trailing %), and compare.
+          #
+          # CRITICAL `|| true`: `grep` returns 1 when nothing matches.
+          # With `set -euo pipefail`, that propagates through the pipeline
+          # and aborts the script via `set -e` on the command substitution
+          # assignment (recent bash behavior). The "no regressions found"
+          # path is the HAPPY PATH — gate should pass — but without
+          # `|| true` it crashes the script and marks the gate as failed.
+          # PR #437's first run worked only because false positives at the
+          # default α=0.05 were always populating grep's output, masking
+          # this bug. PR #440 v4 with tighter α and magnitude floor often
+          # finds zero matches (correct behavior) and triggered the crash.
+          # Also: heterogeneous runner CPUs (AMD EPYC vs Intel Xeon in
+          # Azure's pool) cause benchstat to split output into per-CPU
+          # tables without comparison columns, which is ANOTHER way to
+          # legitimately get zero matches. Both should be a pass.
           MAGNITUDE_FLOOR_PCT=5.0
           regressions=$(grep -E '[[:space:]]\+[0-9]+\.[0-9]+%[[:space:]]*\(p=' \
                           "$RUNNER_TEMP/bench-merged/benchstat.txt" \
@@ -455,7 +576,20 @@ jobs:
                               num = substr($0, RSTART + 1, RLENGTH - 2) + 0
                               if (num >= floor) print
                             }
-                          }')
+                          }' || true)
+
+          # Detect runner CPU heterogeneity — when Azure's pool assigns
+          # different CPU types to base vs pr shards, benchstat correctly
+          # refuses to do a cross-CPU comparison and outputs split tables
+          # without delta columns. This is a free-tier-runner limitation;
+          # log it so the noise is visible (don't fail — there's nothing
+          # the gate can do about it). Larger Runners (Tier 1 escalation
+          # path) would fix this by pinning hardware.
+          cpu_lines=$(grep -E '^cpu:' "$RUNNER_TEMP/bench-merged/benchstat.txt" 2>/dev/null | sort -u || true)
+          if [ -n "$cpu_lines" ] && [ "$(echo "$cpu_lines" | wc -l)" -gt 1 ]; then
+            echo "::warning::Heterogeneous CPUs detected across base/pr shards — benchstat split output, some benches not comparable. CPUs seen:"
+            echo "$cpu_lines"
+          fi
 
           if [ -n "$regressions" ]; then
             echo "regression=true" >> "$GITHUB_OUTPUT"
