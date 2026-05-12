@@ -14,7 +14,7 @@ lang: en
 
 ## Status
 
-✅ **Accepted** (v2.7.0, 2026-04-16) — Already incorporated into `docs/internal/known-regressions.md`, with TECH-DEBT-001/002 serving as the first examples.
+✅ **Accepted** (v2.7.0, 2026-04-16) — Originally incorporated into `docs/internal/known-regressions.md` (later phantom-deleted in v2.8.0 Phase .a), with TRK-201/202 serving as the first examples.
 
 ## Background
 
@@ -71,8 +71,8 @@ To prevent TECH-DEBT from becoming a loophole:
 
 ### First Examples
 
-- `TECH-DEBT-001`: cicd-setup-wizard 0 aria (P1, resolved within v2.7.0)
-- `TECH-DEBT-002`: config-lint 0 aria + no role=alert in error area (P2, planned v2.7.0)
+- `TRK-201`: cicd-setup-wizard 0 aria (P1, resolved within v2.7.0)
+- `TRK-202`: config-lint 0 aria + no role=alert in error area (P2, planned v2.7.0)
 
 ## Rejected Alternatives
 
@@ -89,7 +89,7 @@ To prevent TECH-DEBT from becoming a loophole:
 
 - REG Budget returns to its original purpose: tracking "genuine regressions"
 - Debt backlog can be aggregated (e.g., "v2.7.0 closed 3 TECH-DEBTs")
-- TECH-DEBT-001's same-day resolution pattern proves this category enables "rapid discovery → same-day fix" cycles
+- TRK-201's same-day resolution pattern proves this category enables "rapid discovery → same-day fix" cycles
 
 ### Negative / Risks
 

@@ -46,7 +46,7 @@ lang: zh
 |---------|-----|--------|----------|
 | `portal-tool-smoke.ts` | `loadPortalTool(page, key)` | navigate 到 `../assets/jsx-loader.html?component=<key>`，等 `document.title` mount + `networkidle` | 不 mock API；不點任何按鈕；不等特定 testid |
 | | `runToolSmokeChecks(page, opts)` | title regex match + 無 "Failed to load" + axe WCAG 2.1 AA（**0 critical violations** 預設嚴格 gate） | 不測互動；不測 form submission |
-| | `assertNoAbsoluteRootHrefs(page)` | 找出 `href="/foo"` 樣式的絕對根路徑（REG-004 風險） | 不檢查 fragment / external link |
+| | `assertNoAbsoluteRootHrefs(page)` | 找出 `href="/foo"` 樣式的絕對根路徑（TRK-104 風險） | 不檢查 fragment / external link |
 | `axe-helper.ts` | `checkA11y(page, opts)` | 跑 axe-core WCAG 2.1 AA scan，回傳 `violations` | 不自動 fail；caller 自己決定 budget |
 | | `waitForPageReady(page, sel?)` | 等 networkidle + 可選的 selector visible（CI Python http.server 慢需要） | 不等 React mount 完成 |
 | `diagnostic-matchers.ts` | `toBeVisibleWithDiagnostics()` Playwright matcher | element 找不到時 dump 所有 `[data-testid]` 與 `aria-label` 到失敗訊息（見 testing-playbook §LL §11 cold-start） | 不取代 `toBeVisible`；只在 cold-start 風險點用 |
@@ -76,7 +76,7 @@ test.describe('<Tool Display Name> @critical', () => {
     });
   });
 
-  test('uses portal-safe hrefs (REG-004 regression guard)', async ({ page }) => {
+  test('uses portal-safe hrefs (TRK-104 regression guard)', async ({ page }) => {
     await loadPortalTool(page, '<tool-registry-key>');
     await assertNoAbsoluteRootHrefs(page);
   });
@@ -91,8 +91,8 @@ test.describe('<Tool Display Name> @critical', () => {
 
 | 編號 | 防的是 |
 |------|--------|
-| REG-001 | （reserved — 在 source comments 內標註的第一個 cataloged regression） |
-| REG-004 | **portal-safe hrefs**：絕對根路徑 `href="/foo"` 在 portal sub-path 部署會 404；`assertNoAbsoluteRootHrefs` helper 防守此類 |
+| TRK-101 | （reserved — 在 source comments 內標註的第一個 cataloged regression） |
+| TRK-104 | **portal-safe hrefs**：絕對根路徑 `href="/foo"` 在 portal sub-path 部署會 404；`assertNoAbsoluteRootHrefs` helper 防守此類 |
 
 **新 regression test 的 SOP**：
 1. 找下一個沒用過的 `REG-NNN`（`grep -rhoE "REG-[0-9]+" tests/ docs/interactive/` 確認）

@@ -72,7 +72,7 @@ v2.7.0 必須把它吃進 token 系統，但三種遷移路徑互有取捨：
 - arbitrary value 的 CSS 最終輸出未經 Tailwind tree-shake 整合，**bundle size 增約 2–4%**
   （暫不優化；後續評估是否引入 postcss preset）
 - **Runtime axe-core 後續發現的 `--da-color-tag-bg` + `--da-color-muted` 對比不足
-  不是 Option A 造成的 → 是 token 定義層問題（TECH-DEBT-003），但 Option A
+  不是 Option A 造成的 → 是 token 定義層問題（TRK-203），但 Option A
   放大了影響面（每個用到這對 token 的 step indicator 都會吃到同一個 bug）**
 - **Retrospective 教訓**：Option A 讓「token 定義層的缺陷」一次被多個工具吸收，
   表面看是「一次改完整個畫面」的好處，實務是「token 本身不達 AA 時，
@@ -88,4 +88,4 @@ v2.7.0 必須把它吃進 token 系統，但三種遷移路徑互有取捨：
 - `docs/getting-started/wizard.jsx`（實作）
 - Commit `ec07914`
 - [ADR-016: `[data-theme]` 單軌 Dark Mode](016-data-theme-single-track-dark-mode.md) — 配對的 dark mode 決策
-- TECH-DEBT-003（後續 runtime contrast audit 發現的 token-pair 對比問題，非本 ADR 直接造成）
+- TRK-203（後續 runtime contrast audit 發現的 token-pair 對比問題，非本 ADR 直接造成）

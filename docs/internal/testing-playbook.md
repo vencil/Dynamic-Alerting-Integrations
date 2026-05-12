@@ -948,7 +948,7 @@ The closed-vs-open check originally codified for lints generalises to **feature 
 
 ### 13. CI E2E hang → 在 local 重現拿到真實錯誤訊息再動手（PR #257 case）
 
-**現象**：PR #257（TD-030 Option C portal ESM dist-bundle）的 Smoke Tests E2E job 在 CI 多次卡到 GitHub Actions 10-min 強制 cancel。Default dot reporter 只看到 80 個 `·` 然後沒下文，沒有任何錯誤訊息浮現。
+**現象**：PR #257（TRK-230 Option C portal ESM dist-bundle）的 Smoke Tests E2E job 在 CI 多次卡到 GitHub Actions 10-min 強制 cancel。Default dot reporter 只看到 80 個 `·` 然後沒下文，沒有任何錯誤訊息浮現。
 
 **反模式（這次踩的）**：把「CI hang」當成 CI 環境特有的怪事，直接針對症狀做 CI-side 實驗：
 - 把 `<script type="module">` 的 onload handler 從「立刻隱藏 loading」改成「等 onload 才隱藏」
@@ -1308,18 +1308,18 @@ if hierErr := m.populateHierarchyState(); hierErr != nil {
 
 本節的三個 pattern 不限於 `tenant-api/internal/async`。任何具備 **worker goroutine + shared mutex + 可變 timestamp/status** 的 Go 套件（如 `ws/hub`、`gitops/reconcile`）都該用同樣的三條 checklist 掃過：(a) 初始狀態斷言是否寫死 pending/running、(b) time bounds 是否跨過 Get/snapshot、(c) 是否只跑 `-count=1`。
 
-## v2.8.0 Lessons Learned — Portal E2E coverage push + ESM dist regression（2026-05-07, TD-032..TD-035）
+## v2.8.0 Lessons Learned — Portal E2E coverage push + ESM dist regression（2026-05-07, TRK-232..TRK-235）
 
-> **觸發**：TD-032 系列把 portal E2E 從 15/43 工具覆蓋拉到 43/43，期間意外觸發了 PR-E（template-gallery 修復）的 esbuild rebuild → 20 個既存 spec 在 main 上靜默壞掉。Root cause 不是 chunk loading order race（早期假設），而是 esbuild `define + globalThis side-effect` 模式的 chunk-split 失效。本節 codify 三條規則，避免同類「rebuild artifact 變化炸測試」在後續 portal 工作再現。
+> **觸發**：TRK-232 系列把 portal E2E 從 15/43 工具覆蓋拉到 43/43，期間意外觸發了 PR-E（template-gallery 修復）的 esbuild rebuild → 20 個既存 spec 在 main 上靜默壞掉。Root cause 不是 chunk loading order race（早期假設），而是 esbuild `define + globalThis side-effect` 模式的 chunk-split 失效。本節 codify 三條規則，避免同類「rebuild artifact 變化炸測試」在後續 portal 工作再現。
 >
 > **Authority**：本節為「ESM dist-bundle + esbuild splitting + 跨 chunk module-load order」class 的 design rule。違反會出現「workers=N race」、「`Cannot destructure property of undefined`」、「`No data-testid elements visible` smoke timeout」這三種症狀，但 root cause 是同一個。
 
 ### 1. 不要對 `window.__X` 全域做 module-scope no-fallback 讀取
 
-**現象（TD-033 修的 PR-E-pre 行為）**：
+**現象（TRK-233 修的 PR-E-pre 行為）**：
 
 ```jsx
-// portal-shared.jsx — pre-TD-033/034 pattern
+// portal-shared.jsx — pre-TRK-233/234 pattern
 const RULE_PACK_DATA = window.__RULE_PACK_DATA;   // (1) module-scope no-fallback read
 const styles = window.__styles;                   // (2) ditto in tenant-manager components
 const { useState } = React;                       // (3) destructure with esbuild `define` rewrite
@@ -1353,7 +1353,7 @@ esbuild 的 dep graph 強制 import-target 在 importer 之前 evaluate；這是
 
 ### 3. 並行測試（workers>1）只在 module-load order 完全 deterministic 後才安全
 
-**現象（TD-032e 第一次嘗試的 path-not-taken）**：CI smoke E2E 撞 10 min cap → 試 `--workers=2` 想拉到 5 min cap 內 → 60 個 spec fail（後縮到 20 fail）→ 誤診為 workers=N race，實際是 §1 的 module-load order race 在 parallel browser context 下放大。
+**現象（TRK-232e 第一次嘗試的 path-not-taken）**：CI smoke E2E 撞 10 min cap → 試 `--workers=2` 想拉到 5 min cap 內 → 60 個 spec fail（後縮到 20 fail）→ 誤診為 workers=N race，實際是 §1 的 module-load order race 在 parallel browser context 下放大。
 
 **辨識訊號**：
 - `Cannot destructure property X of <global> as it is undefined`
@@ -1367,13 +1367,13 @@ esbuild 的 dep graph 強制 import-target 在 importer 之前 evaluate；這是
 
 ### 4. 加 smoke test 的副作用：暴露既有的 prod bug
 
-**現象（TD-032e 順手撈到）**：給 template-gallery 加第一個 smoke spec → React error #130 → ErrorBoundary fallback render → **每個用戶開 template-gallery 都看到 broken page**，已經壞了至少一個版本但因為沒有 spec 沒人發現。
+**現象（TRK-232e 順手撈到）**：給 template-gallery 加第一個 smoke spec → React error #130 → ErrorBoundary fallback render → **每個用戶開 template-gallery 都看到 broken page**，已經壞了至少一個版本但因為沒有 spec 沒人發現。
 
 **Durable rule**：**新 spec failed 的第一假設是「真 bug」不是「spec 寫錯」**。先看 ErrorBoundary fallback 有沒有出現、`document.title` 有沒有 mount、有沒有 React error。確認 spec 邏輯沒問題之前，不要急著加 `skipA11y: true` 或 `expectedTitleMatch` 放寬。
 
 ### 5. axe critical=0 是合理 gate；non-critical 用 budget 而非 skip
 
-**現象（TD-035）**：PR-C/D/E 為了快速 ship 給 17 個工具加 `skipA11y: true`，把 a11y debt 完全藏起來。Audit 後實際只有 12 個有 critical 違反（form labels / select-name），13 個本來就乾淨，根本不需要 skip。
+**現象（TRK-235）**：PR-C/D/E 為了快速 ship 給 17 個工具加 `skipA11y: true`，把 a11y debt 完全藏起來。Audit 後實際只有 12 個有 critical 違反（form labels / select-name），13 個本來就乾淨，根本不需要 skip。
 
 **Durable rule**：
 - **`runToolSmokeChecks` 預設 `allowedNonCriticalViolations: 0` + `skipA11y: false`** — 不要為了 ship 一個 spec 把 a11y 整個關掉
@@ -1383,7 +1383,7 @@ esbuild 的 dep graph 強制 import-target 在 importer 之前 evaluate；這是
 
 ### 6. CI runtime 治理：reporter 比 timeout 重要
 
-**現象（TD-032e CI debug）**：CI 用 default dot reporter（`···×F×F×T×F×F×F···`），看 log 完全不知道哪些 spec 失敗，要下載 HTML artifact 再翻——對「reproduce locally first」原則是反向 friction。
+**現象（TRK-232e CI debug）**：CI 用 default dot reporter（`···×F×F×T×F×F×F···`），看 log 完全不知道哪些 spec 失敗，要下載 HTML artifact 再翻——對「reproduce locally first」原則是反向 friction。
 
 **Durable rule**：CI 的 playwright invocation 永遠用 `--reporter=list,html`：
 - `list` 在 stdout 直接印每個 spec 名稱 + 時長 + ✓/✘

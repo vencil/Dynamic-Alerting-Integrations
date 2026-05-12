@@ -85,10 +85,12 @@ owner: poyu                     # optional：誰負責
 
 ### TD-NN / HA-NN / REG-NN → TRK-NNN 遷移
 
-- **舊 ID 對映**：建 `docs/internal/planning-id-mapping.md` 含完整 TD/HA/REG → TRK 對映表 + redirect 說明
-- **既有引用 rewrite**：scan 全 repo（~207 處引用：79 TD + 128 HA/REG）批次替換為 TRK
+> **狀態（v2.8.1-dx-interim）**：chunk 1 已落地 — [`docs/internal/planning-id-mapping.md`](../internal/planning-id-mapping.md) 與全 repo 批次 rewrite 完成。實際 footprint 為 ~73 處（前估 ~207 處，重 grep 後修正；見 [issue #379 footprint correction comment](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/379)）。本 ADR 文內 `TD-NN` / `HA-NN` / `REG-NN` 字樣**刻意保留**——它們是政策論述本身的引用，而非追蹤項目參照。
+
+- **舊 ID 對映**：見 [`docs/internal/planning-id-mapping.md`](../internal/planning-id-mapping.md)（含完整 TECH-DEBT / TD / HA / REG → TRK 對映表 + redirect 說明 + 三段編號分區邏輯）
+- **既有引用 rewrite**：~73 處批次替換為 TRK（TD-022 → TRK-222、HA-11 → TRK-011、REG-004 → TRK-104 等；分區範圍見 mapping doc）
 - **CHANGELOG-archive.md + docs/internal/archive/ 不動**：pre-v2.2.0 引用作歷史保留，redirect doc 解釋舊 ID 在現代是 TRK-NNN
-- **新條目從 v2.8.0 起一律 TRK-NNN**
+- **新條目從 v2.8.1 起一律 TRK-NNN**（新分配從 TRK-300+ 開始）
 
 ### Frontmatter 上 ADR / S# 的 id 寫法
 

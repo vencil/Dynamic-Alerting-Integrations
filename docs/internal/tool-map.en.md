@@ -64,8 +64,11 @@ lang: en
 | `patch_config.py` | Patch threshold-config ConfigMap for a specific tenant. |
 | `policy_engine.py` | Policy-as-Code 引擎（Path A — 內建 DSL）。 |
 | `policy_opa_bridge.py` | OPA (Open Policy Agent) bridge for tenant config policy evaluation. |
+| `rule_pack_diff.py` | Rule Pack version diff for upgrade audits. |
 | `scaffold_tenant.py` | Interactive tenant config generator for Dynamic Alerting. |
 | `shadow_verify.py` | Shadow Monitoring readiness and convergence verification. |
+| `silencer_drift_check.py` | Alertmanager silence drift auditor. |
+| `state_reconcile.py` | Migration State directory reconciliation. |
 | `threshold_recommend.py` | 閾值推薦引擎。 |
 | `validate_config.py` | One-stop configuration validation. |
 | `validate_migration.py` | Shadow Monitoring 驗證工具。 |
@@ -182,6 +185,7 @@ lang: en
 
 ## Shared Libraries
 
+- `scripts/tools/_lib_compat.py`: Cross-platform compatibility helpers for Dynamic Alerting CLI tools.
 - `scripts/tools/_lib_constants.py`: Domain constants for Dynamic Alerting platform.
 - `scripts/tools/_lib_godispatch.py`: Shared dispatcher for da-tools subcommands that wrap a Go binary.
 - `scripts/tools/_lib_io.py`: File I/O and YAML helpers for Dynamic Alerting platform.
