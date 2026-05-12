@@ -158,13 +158,19 @@ PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     # closure threads to label cross-cutting maintainer decisions. Customer
     # docs should name the decision outcome, not the internal tag.
     ("DEC-X decision tag", re.compile(r"\bDEC-[A-Z]\b")),
-    # Release-suffix codenames: "v2.7.0-final", "v2.8.0-rc1", etc. The
-    # public release is just "v2.7.0" — the "-final" / "-rc" suffix is an
-    # internal staging marker (which of the many candidate builds actually
-    # became the tag). Customer docs reference plain semver.
+    # Release-suffix codenames: "v2.7.0-final", "v2.8.0-rc1",
+    # "v2.0.0-preview.4", etc. The public release is just "v2.7.0" — the
+    # "-final" / "-rc" / "-preview" suffix is an internal staging marker
+    # (which of the many candidate builds actually became the tag).
+    # `preview\d*` covers "preview", "preview2", "preview.4" (the trailing
+    # `.4` lies past the word boundary so the match stops at `preview` —
+    # fine for line-level leak detection). Customer docs reference plain
+    # semver.
     (
-        "version -final/-rc suffix",
-        re.compile(r"\bv\d+\.\d+\.\d+-(?:final|alpha|beta|rc\d*)\b"),
+        "version -final/-rc/-preview suffix",
+        re.compile(
+            r"\bv\d+\.\d+\.\d+-(?:final|alpha|beta|rc\d*|preview\d*)\b"
+        ),
     ),
     # Note: R0/R1/R2 release-train ids intentionally NOT added. The pattern
     # \bR[0-3]\b has too many false positives (CPU registers, region tier

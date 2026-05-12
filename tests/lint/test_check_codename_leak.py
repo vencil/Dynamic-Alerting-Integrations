@@ -70,9 +70,15 @@ class TestPatternDetection:
             # v2.8.0 #462: extended patterns
             ("Tracking via DEC-B decision", "DEC-X decision tag"),
             ("Tracked under DEC-F resolution", "DEC-X decision tag"),
-            ("Baseline taken on v2.7.0-final", "version -final/-rc suffix"),
-            ("Cut from v2.8.0-rc1 build", "version -final/-rc suffix"),
-            ("Pre-release v3.0.0-alpha noted", "version -final/-rc suffix"),
+            ("Baseline taken on v2.7.0-final", "version -final/-rc/-preview suffix"),
+            ("Cut from v2.8.0-rc1 build", "version -final/-rc/-preview suffix"),
+            ("Pre-release v3.0.0-alpha noted", "version -final/-rc/-preview suffix"),
+            # v2.0.0-preview series existed in this repo; both bare and
+            # dotted suffix variants must flag (regex stops at the word
+            # boundary after "preview", which is sufficient for line-level
+            # leak detection).
+            ("Baseline tagged at v2.0.0-preview.4", "version -final/-rc/-preview suffix"),
+            ("Try v3.0.0-preview2 candidate", "version -final/-rc/-preview suffix"),
             # B-1 Phase 2 case: B-1 alone is enough to catch the leak.
             ("v2.8.0 B-1 Phase 2 landed", "Letter-prefix planning id"),
         ],
