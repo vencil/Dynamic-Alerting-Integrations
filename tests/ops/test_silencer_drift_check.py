@@ -38,20 +38,31 @@ def _write(path: Path, content: str) -> Path:
     return path
 
 
+_SENTINEL: list = []  # used as default sentinel to distinguish None vs empty
+
+
 def _silence(
     *,
     id_: str = "abc123",
-    matchers: list | None = None,
+    matchers: list | None = _SENTINEL,
     state: str | None = "active",
     comment: str = "",
     created_by: str = "",
 ) -> dict:
-    """Build a minimal silence dict matching amtool silence query -o json shape."""
+    """Build a minimal silence dict matching amtool silence query -o json shape.
+
+    Pass `matchers=[]` explicitly to test malformed-empty-matchers behavior;
+    omit the kwarg entirely for the default Foo-alertname matcher.
+    """
+    if matchers is _SENTINEL:
+        actual_matchers = [
+            {"name": "alertname", "value": "FooAlert", "isEqual": True, "isRegex": False}
+        ]
+    else:
+        actual_matchers = matchers
     s = {
         "id": id_,
-        "matchers": matchers or [
-            {"name": "alertname", "value": "FooAlert", "isEqual": True, "isRegex": False}
-        ],
+        "matchers": actual_matchers,
         "comment": comment,
         "createdBy": created_by,
         "startsAt": "2026-05-01T00:00:00Z",
@@ -340,13 +351,46 @@ def test_silence_all_matchers_must_match():
     assert not sdc.silence_matches_alert(silence, alert)
 
 
-def test_silence_no_matchers_is_universal():
-    """Defensive: a silence with empty matchers list would match everything.
-    Real AM silences always have matchers, but malformed input shouldn't
-    surface as a false orphan."""
-    silence = {"matchers": []}
-    alert = {"labels": {"alertname": "Anything"}}
-    assert sdc.silence_matches_alert(silence, alert)
+# ─── detect_malformed ─────────────────────────────────────────────────
+
+
+def test_detect_malformed_well_formed():
+    s = _silence()
+    assert sdc.detect_malformed(s) is None
+
+
+def test_detect_malformed_empty_matchers():
+    """Real AM silences always have matchers; empty list is a signal that
+    the JSON was hand-edited or corrupted. Must be flagged, not silently
+    treated as 'universal match' (which would hide the bad input)."""
+    s = _silence(matchers=[])
+    reason = sdc.detect_malformed(s)
+    assert reason is not None
+    assert "empty" in reason
+
+
+def test_detect_malformed_matchers_missing_or_wrong_type():
+    s = {"id": "x"}  # no matchers field at all
+    assert sdc.detect_malformed(s) is not None
+
+    s = {"id": "x", "matchers": "not a list"}
+    reason = sdc.detect_malformed(s)
+    assert reason is not None
+    assert "expected a non-empty JSON array" in reason
+
+
+def test_detect_malformed_matcher_missing_name():
+    s = _silence(matchers=[{"value": "foo", "isEqual": True, "isRegex": False}])
+    reason = sdc.detect_malformed(s)
+    assert reason is not None
+    assert "missing or non-string 'name'" in reason
+
+
+def test_detect_malformed_matcher_non_dict():
+    s = _silence(matchers=["not a dict"])
+    reason = sdc.detect_malformed(s)
+    assert reason is not None
+    assert "not a JSON object" in reason
 
 
 # ─── is_silence_active ────────────────────────────────────────────────
@@ -441,6 +485,37 @@ def test_drift_inactive_included_when_flagged():
     silences = [_silence(id_="dead", state="expired")]
     r = sdc.check_drift(silences, alerts, include_inactive=True)
     assert r["counts"]["orphans"] == 1
+
+
+def test_drift_partitions_malformed_separately():
+    """Malformed silences must go into malformed_silences, NOT be
+    silently classified as 'not orphan' just because the empty-matcher
+    fallback used to match everything. This is the round-1 self-review
+    regression guard: round 0 had `silence with empty matchers → match
+    everything → never orphan` which masked bad JSON input."""
+    alerts = [{"name": "A", "labels": {"alertname": "A"}, "source": "x", "group": "g"}]
+    silences = [
+        _silence(id_="good"),
+        _silence(id_="bad-empty", matchers=[]),
+        _silence(id_="bad-noname", matchers=[{"value": "v", "isEqual": True, "isRegex": False}]),
+    ]
+    r = sdc.check_drift(silences, alerts)
+    # Two malformed surfaced separately
+    assert r["counts"]["malformed"] == 2
+    malformed_ids = {m["silence_id"] for m in r["malformed_silences"]}
+    assert malformed_ids == {"bad-empty", "bad-noname"}
+    # `good` silence's default Foo matcher doesn't match `A` → orphan
+    assert r["counts"]["orphans"] == 1
+    assert r["orphans"][0]["silence_id"] == "good"
+
+
+def test_drift_ci_exits_1_on_malformed():
+    """--ci mode must fail not just on orphans but also on malformed
+    silences — that's a corruption signal automation should not pass."""
+    alerts = [{"name": "A", "labels": {"alertname": "A"}, "source": "x", "group": "g"}]
+    silences = [_silence(id_="mal", matchers=[])]
+    r = sdc.check_drift(silences, alerts)
+    assert sdc.compute_exit_code(r, ci=True) == 1
 
 
 def test_drift_multi_matcher_label_drift():

@@ -50,6 +50,14 @@ Exit codes:
     1  --ci mode detected orphaned silences
     2  caller error (file missing, parse failure, bad arg)
 
+Malformed-silence handling:
+    Silences with empty matchers or matchers missing the `name` field
+    are partitioned into a separate `malformed_silences` report rather
+    than silently classified as "not orphan" (the naive universal-match
+    fallback would mask hand-edited / corrupted JSON). In --ci mode,
+    malformed silences also fail the gate alongside orphans — that's a
+    corruption signal automation should block on.
+
 Known limitations (out of MVP scope, document for follow-up):
     - `_defaults.yaml` disable-list drift is NOT checked. Issue #405
       Category B included an `upgrade-check` framing for this; deferred
@@ -61,6 +69,10 @@ Known limitations (out of MVP scope, document for follow-up):
       literally, which means a silence using a specific tenant value
       won't match the templated rule — false positive orphan. Workaround:
       audit by group, not literal value, for templated alerts.
+    - Runtime semantics not modeled: a silence whose matchers DO match
+      an alert in the rule source is classified non-orphan, even if the
+      alert never actually fires (e.g. its `expr:` always returns
+      empty). This tool is a static analyzer over the rule source.
 """
 from __future__ import annotations
 
@@ -231,14 +243,40 @@ def matcher_applies(matcher: dict, alert_labels: dict[str, str]) -> bool:
     return match if is_equal else not match
 
 
-def silence_matches_alert(silence: dict, alert: dict) -> bool:
-    """A silence matches an alert iff ALL its matchers match."""
-    matchers = silence.get("matchers") or []
+def detect_malformed(silence: dict) -> str | None:
+    """Inspect a silence for structural issues. Returns the reason if
+    malformed, else None.
+
+    Why this matters: a silence with no matchers OR a matcher missing
+    `name` cannot meaningfully participate in the orphan check. The naive
+    "match everything if no matchers" behaviour would silently classify
+    a malformed silence as not-orphan (false negative). Real AM silences
+    always have well-formed matchers (the AM API rejects bad input on
+    create); seeing one in a JSON dump means the JSON was hand-edited
+    or corrupted — exactly the case we want to surface, not hide.
+    """
+    matchers = silence.get("matchers")
+    if not isinstance(matchers, list):
+        kind = type(matchers).__name__ if matchers is not None else "missing"
+        return f"matchers field is {kind}, expected a non-empty JSON array"
     if not matchers:
-        # A silence with no matchers would match everything; treat as a
-        # degenerate case. Real AM silences always have at least one
-        # matcher, but defend against malformed input.
-        return True
+        return "matchers list is empty (real AM silences always have matchers)"
+    for i, m in enumerate(matchers):
+        if not isinstance(m, dict):
+            return f"matcher[{i}] is not a JSON object"
+        name = m.get("name")
+        if not name or not isinstance(name, str):
+            return f"matcher[{i}] missing or non-string 'name' field"
+    return None
+
+
+def silence_matches_alert(silence: dict, alert: dict) -> bool:
+    """A silence matches an alert iff ALL its matchers match.
+
+    Caller must have already filtered out malformed silences via
+    `detect_malformed`; this function assumes well-formed matchers.
+    """
+    matchers = silence.get("matchers") or []
     return all(matcher_applies(m, alert["labels"]) for m in matchers)
 
 
@@ -285,10 +323,27 @@ def check_drift(
     For each silence in scope (active by default), iterate every alert
     in the corpus; if NO alert matches all the silence's matchers, the
     silence is orphaned — it can no longer suppress anything.
+
+    Malformed silences (empty matchers, missing matcher name, etc.) are
+    partitioned into `malformed_silences` separately. Without this, the
+    naive code-path would classify them as "not orphan" (because the
+    universal-match fallback for empty matchers hides them), masking
+    bad JSON input.
     """
     in_scope: list[dict] = []
+    malformed: list[dict] = []
     skipped_inactive = 0
     for s in silences:
+        reason = detect_malformed(s)
+        if reason is not None:
+            malformed.append(
+                {
+                    "silence_id": s.get("id", "<unknown>"),
+                    "reason": reason,
+                    "raw_matchers": s.get("matchers"),
+                }
+            )
+            continue
         if include_inactive or is_silence_active(s):
             in_scope.append(s)
         else:
@@ -316,10 +371,12 @@ def check_drift(
         "silences_inactive_skipped": skipped_inactive,
         "alerts_total": len(alerts),
         "orphans": orphans,
+        "malformed_silences": malformed,
         "counts": {
             "silences_total": len(silences),
             "in_scope": len(in_scope),
             "inactive_skipped": skipped_inactive,
+            "malformed": len(malformed),
             "alerts": len(alerts),
             "orphans": len(orphans),
         },
@@ -356,7 +413,8 @@ def render_text(
     print(
         f"Summary: {c['silences_total']} silences total / "
         f"{c['in_scope']} in scope (active) / "
-        f"{c['inactive_skipped']} inactive skipped"
+        f"{c['inactive_skipped']} inactive skipped / "
+        f"{c.get('malformed', 0)} malformed"
     )
     print(
         f"         {c['alerts']} alerts loaded / "
@@ -368,6 +426,15 @@ def render_text(
         print("⚠️  Errors loading rule source:")
         for e in errors:
             print(f"    {e}")
+        print()
+
+    if report.get("malformed_silences"):
+        print(
+            "⚠️  Malformed silences (cannot participate in orphan check — "
+            "JSON likely hand-edited or corrupted):"
+        )
+        for m in report["malformed_silences"]:
+            print(f"    silence {m['silence_id']}: {m['reason']}")
         print()
 
     if report["orphans"]:
@@ -388,8 +455,16 @@ def render_text(
 
 
 def compute_exit_code(report: dict, *, ci: bool) -> int:
-    """0 unless --ci AND orphans present."""
-    if ci and report["counts"]["orphans"] > 0:
+    """0 unless --ci AND (orphans OR malformed silences) present.
+
+    Malformed silences in --ci mode also fail the gate — they're a
+    signal that the input JSON is corrupted or hand-mangled, which
+    should block any automated workflow downstream of this check.
+    """
+    if ci and (
+        report["counts"]["orphans"] > 0
+        or report["counts"].get("malformed", 0) > 0
+    ):
         return 1
     return 0
 
