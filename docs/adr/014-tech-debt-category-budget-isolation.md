@@ -14,7 +14,7 @@ lang: zh
 
 ## 狀態
 
-✅ **Accepted**（v2.7.0, 2026-04-16）— 已 land 於 `docs/internal/known-regressions.md`，TECH-DEBT-001/002 為首批實例。
+✅ **Accepted**（v2.7.0, 2026-04-16）— 已 land 於 `docs/internal/known-regressions.md`（後 phantom-deleted, v2.8.0 Phase .a），TRK-201/202 為首批實例。
 
 ## 背景
 
@@ -71,8 +71,8 @@ v2.7.0 a11y survey 發現：cicd-setup-wizard 與 config-lint 完全無 aria 標
 
 ### 首批實例
 
-- `TECH-DEBT-001`: cicd-setup-wizard 0 aria（P1, v2.7.0 內 resolved）
-- `TECH-DEBT-002`: config-lint 0 aria + 錯誤區無 role=alert（P2, planned v2.7.0）
+- `TRK-201`: cicd-setup-wizard 0 aria（P1, v2.7.0 內 resolved）
+- `TRK-202`: config-lint 0 aria + 錯誤區無 role=alert（P2, planned v2.7.0）
 
 ## 拒絕的替代方案
 
@@ -89,7 +89,7 @@ v2.7.0 a11y survey 發現：cicd-setup-wizard 與 config-lint 完全無 aria 標
 
 - REG Budget 回到「真正 regression」的本意
 - Debt backlog 可 aggregation 計算（e.g. "v2.7.0 close 了 3 個 TECH-DEBT"）
-- TECH-DEBT-001 同日 resolved 的 pattern 證明此類別可做「短期發現 → 當日修復」循環
+- TRK-201 同日 resolved 的 pattern 證明此類別可做「短期發現 → 當日修復」循環
 
 ### 負面 / 風險
 

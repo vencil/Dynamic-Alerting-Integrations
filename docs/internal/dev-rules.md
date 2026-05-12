@@ -218,9 +218,9 @@ Phase .a0 token 遷移期間確立的慣例，適用所有 JSX 互動工具。
 
 ### S2. Playwright spec 含 `assertNoAbsoluteRootHrefs` 守門
 
-**規則**：每個新 Playwright spec 須呼叫 `assertNoAbsoluteRootHrefs(page)`（`tests/e2e/fixtures/portal-tool-smoke.ts` 提供），防止 REG-004 類型的硬編碼絕對根路徑（`href="/xxx"`）再犯。
+**規則**：每個新 Playwright spec 須呼叫 `assertNoAbsoluteRootHrefs(page)`（`tests/e2e/fixtures/portal-tool-smoke.ts` 提供），防止 TRK-104 類型的硬編碼絕對根路徑（`href="/xxx"`）再犯。
 
-**為什麼**：portal 透過 `jsx-loader.html?component=<key>` 載入工具，絕對根路徑全部 404（REG-004 root cause）。長期解是 `jsx-loader.navigate(key)` helper（規畫 v2.8.0 Portal Navigation Refactor），短期靠 test-layer guard 防退化。
+**為什麼**：portal 透過 `jsx-loader.html?component=<key>` 載入工具，絕對根路徑全部 404（TRK-104 root cause；前 REG-004，對映見 [planning-id-mapping.md](planning-id-mapping.md)）。長期解是 `jsx-loader.navigate(key)` helper（規畫 v2.8.0 Portal Navigation Refactor），短期靠 test-layer guard 防退化。
 
 **實作**：`assertNoAbsoluteRootHrefs` 掃描所有 `<a href>` 是否為 portal-safe 路徑（相對 / external / fragment）。Day 3 首次落地（commit `ca48275`），`deployment-wizard.spec.ts` 和 `wizard.spec.ts` 已採用。
 
@@ -236,7 +236,7 @@ Phase .a0 token 遷移期間確立的慣例，適用所有 JSX 互動工具。
 
 **反例：容器已有 focusable children 時勿再套 `tabIndex={0}`**（v2.8.0 Phase .a 追加補充）：若捲動容器內已經放了會吃 Tab 焦點的元素（`<button>`、`<a href>`、`<input>`、`<select>`、`[tabindex="0"]` 等），**容器自己應走 `tabIndex={-1}`**（或乾脆省略），避免 Tab 序列產生容器→內部元素的雙 stop。axe 在這種情況本來就不會觸發 `scrollable-region-focusable`（容器「有 focusable descendants」）；本規則適用範圍就是「容器是捲動區但內部沒 tabbable 元素」的純資訊顯示區塊（heatmap cells / preview panels）。
 
-**反 / 正例**（v2.7.0 實際踩過，TECH-DEBT-006 / -009）：
+**反 / 正例**（v2.7.0 實際踩過，TRK-206 / -209 — 前 TECH-DEBT-006 / -009，對映見 [planning-id-mapping.md](planning-id-mapping.md)）：
 
 ```jsx
 // ❌ overflow-auto / overflowY:'auto' 容器無 tabIndex／accessible name
@@ -260,7 +260,7 @@ Phase .a0 token 遷移期間確立的慣例，適用所有 JSX 互動工具。
 2. `aria-label={t('zh', 'en')}` — 雙語 token
 3. `aria-labelledby="<existing-id>"`
 
-**為什麼**：axe-core `label` / `select-name` rule 為 CRITICAL 等級。Placeholder **不是** accessible name（screen reader 只讀 "edit text"），視覺 label 但未 `htmlFor` 關聯也不成。v2.7.0 Day 5 retrospective 單次 runtime axe 掃到 TECH-DEBT-008 / -011 / -012 三個 CRITICAL violation，全源自此規則被忽略。
+**為什麼**：axe-core `label` / `select-name` rule 為 CRITICAL 等級。Placeholder **不是** accessible name（screen reader 只讀 "edit text"），視覺 label 但未 `htmlFor` 關聯也不成。v2.7.0 Day 5 retrospective 單次 runtime axe 掃到 TRK-208 / -211 / -212 三個 CRITICAL violation（前 TECH-DEBT-008 / -011 / -012；對映見 [planning-id-mapping.md](planning-id-mapping.md)），全源自此規則被忽略。
 
 **實作檢查**：互動工具 PR 送審前，手動 `grep -n '<\(input\|select\|textarea\)' <tool>.jsx` 配 `grep -n 'aria-label\|htmlFor' <tool>.jsx`，確認每個 form element 都有對應的 accessible name。
 
@@ -268,9 +268,9 @@ Phase .a0 token 遷移期間確立的慣例，適用所有 JSX 互動工具。
 
 **規則**：在 `docs/assets/design-tokens.css` 定義文字色 / foreground token 時，如果 consumer 包含**語意背景亮度差異 > 40%** 的場景（例：hero dark bg `#0f172a` vs tile 白 / 淺灰），**必須 split 為兩個 token**。**禁止**把「hero muted」與「tile muted」用同一 token 服務。
 
-**為什麼**：WCAG 2.1 AA 要求文字對背景達 4.5:1 對比。單一色值在 dark bg 上高對比（白灰系列）→ 同一色值在 light bg 上必然低對比，反之亦然。Phase .a0 PR#1 Day 5 retrospective 踩過這坑（TECH-DEBT-007：`--da-color-hero-muted` 用 `gray-400` 一口氣套在 hero dark bg + card light bg + SVG white bg 上，axe-core 在 multi-tenant-comparison 報出 40 nodes color-contrast 違規）。v2.8.0 Phase .a PR#1c 用 token-split 徹底解決——保留 `--da-color-hero-muted` 給 hero dark bg，新增 `--da-color-tile-muted` 給 tile / card / SVG 永遠亮底的 consumers。
+**為什麼**：WCAG 2.1 AA 要求文字對背景達 4.5:1 對比。單一色值在 dark bg 上高對比（白灰系列）→ 同一色值在 light bg 上必然低對比，反之亦然。Phase .a0 PR#1 Day 5 retrospective 踩過這坑（TRK-207：`--da-color-hero-muted` 用 `gray-400` 一口氣套在 hero dark bg + card light bg + SVG white bg 上，axe-core 在 multi-tenant-comparison 報出 40 nodes color-contrast 違規）。v2.8.0 Phase .a PR#1c 用 token-split 徹底解決——保留 `--da-color-hero-muted` 給 hero dark bg，新增 `--da-color-tile-muted` 給 tile / card / SVG 永遠亮底的 consumers。
 
-**反 / 正例**（TECH-DEBT-007：一 token 服務兩種背景 → PR#1c token-split）：
+**反 / 正例**（TRK-207：一 token 服務兩種背景 → PR#1c token-split）：
 
 ```css
 /* ❌ 一個 token 服務兩種背景 */
@@ -295,15 +295,15 @@ Phase .a0 token 遷移期間確立的慣例，適用所有 JSX 互動工具。
 
 **命名慣例**：`--da-color-<surface>-<intent>`，`<surface>` 明示語意背景族群（`hero` / `tile` / `card` / `chip` / `toast` 等），`<intent>` 為 foreground 角色（`muted` / `accent` / `strong` / `danger` 等）。避免 `--da-color-muted`（無 surface scope）這類涵蓋過廣的命名。
 
-**雙主題翻色 caveat**：如果 surface 本身會在 `[data-theme="dark"]` 翻色（例：MetricCard light `#f8fafc` → dark `#334155`），**token-split 仍不夠**，需再 split 為 light / dark mode 各自的值（在 `[data-theme="dark"]` 區塊 override）；或改走 theme-aware JSX conditional（useTheme hook）。此情境見 TECH-DEBT-016（PR#1c 分析衍生，L133 MetricCard subStyle 雙背景問題，另案追蹤）。
+**雙主題翻色 caveat**：如果 surface 本身會在 `[data-theme="dark"]` 翻色（例：MetricCard light `#f8fafc` → dark `#334155`），**token-split 仍不夠**，需再 split 為 light / dark mode 各自的值（在 `[data-theme="dark"]` 區塊 override）；或改走 theme-aware JSX conditional（useTheme hook）。此情境見 TRK-216（前 TECH-DEBT-016，對映見 [planning-id-mapping.md](planning-id-mapping.md)；PR#1c 分析衍生，L133 MetricCard subStyle 雙背景問題，另案追蹤）。
 
 **收束驗收**：(1) design-tokens.css 每個 foreground token 須有 JSDoc-style 註解標明「allowed bg contexts + contrast ratio」；(2) axe-core `color-contrast` rule 在 light + dark dual-mode 皆 0 violations；(3) design-system-guide.md §TL;DR 的「Token 速查」應列出 surface scope 分類。
 
-### S6. JSX 工具一律 ESM import，禁止 module-scope `window.__X` 無 fallback 讀取（TD-033/034 新增）
+### S6. JSX 工具一律 ESM import，禁止 module-scope `window.__X` 無 fallback 讀取（TRK-233/234 新增）
 
 **規則**：`tools/portal/src/interactive/tools/**` 下的 `.jsx` / `.js`，**禁止** module-scope 寫 `const X = window.__X;` / `const X = globalThis.__X;`（無 fallback）。React hooks 同理——禁 `const { useState } = React;`，必須 `import { useState } from 'react';`。
 
-**為什麼**：portal 走 ESM dist-bundle（TD-030 Option C）後，esbuild `splitting: true` 切出的 chunk 之間 evaluation 順序非 deterministic——consumer chunk 可能在 `window.__X` 設定的 chunk 之前 evaluate → 讀到 `undefined` → render 失敗。TD-033 的 PR-E rebuild 觸發過一次，20 個 spec 在 main 上靜默壞掉直到 audit 才發現。
+**為什麼**：portal 走 ESM dist-bundle（TRK-230 Option C）後，esbuild `splitting: true` 切出的 chunk 之間 evaluation 順序非 deterministic——consumer chunk 可能在 `window.__X` 設定的 chunk 之前 evaluate → 讀到 `undefined` → render 失敗。TRK-233 的 PR-E rebuild 觸發過一次，20 個 spec 在 main 上靜默壞掉直到 audit 才發現。
 
 **反 / 正例**：
 
@@ -322,7 +322,7 @@ import { useState } from 'react';
 const t = window.__t || ((zh, en) => en);
 ```
 
-**實作檢查**：pre-commit hook（TD-036 Plan C）grep `^const \w+\s*=\s*window\.__\w+\s*;` 阻擋此 pattern。配套：`tools/portal/build.mjs` 禁用 `define: { React: ... }` 之類把 bare identifier rewrite 成 global 讀取的技巧——任何 esbuild splitting 都會打破假設。
+**實作檢查**：pre-commit hook（TRK-236 Plan C）grep `^const \w+\s*=\s*window\.__\w+\s*;` 阻擋此 pattern。配套：`tools/portal/build.mjs` 禁用 `define: { React: ... }` 之類把 bare identifier rewrite 成 global 讀取的技巧——任何 esbuild splitting 都會打破假設。
 
 ## §T 工具生命週期（v2.8.0 Phase .a A-5b 新增）
 
@@ -367,11 +367,11 @@ tools:
 
 ### P1. Commit trailer 必含 `Resolves <ID>`（追蹤項目修復時）
 
-修復已登錄的追蹤項目（`known-regressions.md` 的 `TECH-DEBT-XXX` / `REG-XXX`，或 `v2.8.0-planning.md` §12.4 的 `Trap #N`）時，commit message 必須含 trailer：`Resolves TECH-DEBT-005` / `Fixes Trap #12` / `Closes REG-003`（動詞大小寫不敏感）。
+修復已登錄的追蹤項目（`TRK-NNN` 統一 namespace；或 `windows-mcp-playbook.md` 的 `Trap #N`）時，commit message 必須含 trailer：`Resolves TRK-205` / `Fixes Trap #12` / `Closes TRK-103`（動詞大小寫不敏感）。
 
-**原因**：沒有 trailer 時 registry 與 git log 失聯，下次 session 會把已修項目當新項目再 audit 一次。
+**原因**：沒有 trailer 時 backlog frontmatter 的 `status:` 與 git log 失聯，下次 session 會把已修項目當新項目再 audit 一次。
 
-**自動化攔截**：pre-push hook `check-techdebt-drift`（`scripts/tools/lint/check_techdebt_drift.py`）。Class A（trailer 指向仍 `open` 的 ID）exit 1 擋住 push；Class B（registry 已 resolved 但無 trailer）僅印資訊。純文件 / 純 refactor / 跨多項目的批次清理可不寫 trailer，改在 body 用 prose 列 IDs。
+**Namespace（v2.8.1）+ 自動化攔截**：原 `TECH-DEBT-NNN` / `TD-NN` / `HA-NN` / `REG-NNN` 統一為 `TRK-NNN`（[ADR-020](../adr/020-planning-ssot.md) Option C；對映見 [`planning-id-mapping.md`](planning-id-mapping.md)）；過渡期舊 ID 仍 work，CI 自動翻譯但 warn。Lint `check-techdebt-drift` 因 `known-regressions.md` 已 phantom-delete 變 no-op，後續由 [issue #379](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/379) chunk 2b `check_planning_status_sync.py` 取代。純文件 / 純 refactor / 跨多項目批次清理可不寫 trailer，改在 body 用 prose 列 IDs。
 
 ### P2. PR Scope Drift（由 `check_pr_scope_drift` hook 強制，v2.8.0 Phase .a 新增）
 

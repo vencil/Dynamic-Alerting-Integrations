@@ -73,7 +73,7 @@ with reasons, serving as a waiver list for future audits.
 - Arbitrary value CSS outputs bypass Tailwind tree-shake consolidation; **bundle size grows ~2–4%**
   (optimization deferred; postcss preset to be evaluated later)
 - **Subsequent runtime axe-core discovery: `--da-color-tag-bg` + `--da-color-muted` insufficient contrast
-  not caused by Option A → token definition layer issue (TECH-DEBT-003), but Option A
+  not caused by Option A → token definition layer issue (TRK-203), but Option A
   amplified impact surface (every step indicator using this token pair absorbs the same bug)**
 - **Retrospective lesson**: Option A lets "token definition layer flaws" be absorbed by multiple tools,
   appearing as benefit of "complete UI fix at once", but in practice means "when tokens fail AA,
@@ -90,4 +90,4 @@ with reasons, serving as a waiver list for future audits.
 - `docs/getting-started/wizard.jsx` (implementation)
 - Commit `ec07914`
 - [ADR-016: `[data-theme]` Single-track Dark Mode](016-data-theme-single-track-dark-mode.en.md) — paired dark mode decision
-- TECH-DEBT-003 (token-pair contrast issue surfaced by later runtime contrast audit, not directly caused by this ADR)
+- TRK-203 (token-pair contrast issue surfaced by later runtime contrast audit, not directly caused by this ADR)

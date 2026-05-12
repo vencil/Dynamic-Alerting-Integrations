@@ -108,7 +108,7 @@ v2.5.0 存在三套平行的 CSS 系統，導致色彩、間距、字型等 desi
 
 **Hero（深色 hero 區塊專屬）**
 - `--da-color-hero-bg` / `--da-color-hero-fg`：深色 hero card 的底/文字
-- `--da-color-hero-muted`：deep navy (#0f172a) 上 7.2:1 AA pass；**不得**用於 light bg（TECH-DEBT-007）
+- `--da-color-hero-muted`：deep navy (#0f172a) 上 7.2:1 AA pass；**不得**用於 light bg（TRK-207）
 - `--da-color-hero-accent`：hero 內部的 accent highlight
 
 **Tile（淺色 tile / SVG 白底專屬）**
@@ -125,7 +125,7 @@ v2.5.0 存在三套平行的 CSS 系統，導致色彩、間距、字型等 desi
 - `--da-color-border`：邊框色
 - `--da-color-border-subtle`：細線邊框色
 
-> **Token 歷史**：v2.8.0 Phase .a PR #34（Token Audit）將 `primary/secondary/*-light/*-dark` 家族收斂為 `accent/hero-*/tile-*` 語義命名空間；PR#1c（`ec21f13`）完成 `hero-muted` ↔ `tile-muted` token-split（詳見 dev-rules.md §S5 + TECH-DEBT-007）。若看到舊 `--da-color-primary` 引用，為遷移殘留，請 refactor 為 `--da-color-accent`。
+> **Token 歷史**：v2.8.0 Phase .a PR #34（Token Audit）將 `primary/secondary/*-light/*-dark` 家族收斂為 `accent/hero-*/tile-*` 語義命名空間；PR#1c（`ec21f13`）完成 `hero-muted` ↔ `tile-muted` token-split（詳見 dev-rules.md §S5 + TRK-207）。若看到舊 `--da-color-primary` 引用，為遷移殘留，請 refactor 為 `--da-color-accent`。
 
 ### 3.2 語義色（Semantic Colors）
 
