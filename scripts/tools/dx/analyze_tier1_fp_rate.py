@@ -1,22 +1,47 @@
 #!/usr/bin/env python3
-"""analyze_tier1_fp_rate.py — Tier 1 bench-gate FP rate observer (issue #433 W3).
+"""analyze_tier1_fp_rate.py — Tier 1 bench-gate friction-rate observer (issue #433 W3).
 
 Purpose
 -------
-Issue #433 W3 closure requires observing the Tier 1 bench-gate's false-positive
-(FP) rate over an accumulation of real PR traffic. This tool queries recent
-`bench-gate-pr.yaml` workflow runs, categorizes each, and computes the FP rate.
+Issue #433 W3 closure requires observing how often the Tier 1 bench-gate
+requires maintainer intervention (override label applied, or PR merged despite
+a red gate). This tool queries recent `bench-gate-pr.yaml` workflow runs and
+the corresponding PR states, categorizes each merged PR, and computes a
+"friction rate".
+
+⚠️ IMPORTANT — what this metric IS and ISN'T (post-Gemini-W3-review)
+-------------------------------------------------------------------
+The metric reported is **friction rate**, NOT a strict false-positive rate.
+This tool inspects only the TERMINAL state of each PR (latest run + current
+labels), so the categorization is subject to a fundamental **survivorship
+bias**:
+
+    Scenario: a real perf regression PR. Tier 1 catches it (red gate).
+              Dev fixes the code. Subsequent run is green. PR merges.
+
+    This is a TRUE POSITIVE for the gate — exactly why the gate exists.
+    But to this tool, the PR's terminal state is "workflow success + no
+    override + merged" → bucketed as `passed-clean`. The TP catch is
+    INVISIBLE in the report.
+
+Consequence: this tool **measures friction (interventions)** but **cannot
+quantify the gate's defensive value (caught bugs)**. The friction rate is
+an UPPER BOUND on the unwanted-friction count, not a "true FP rate".
+
+For W3's actual question ("is the gate annoying enough to escalate to Larger
+Runners?"), friction rate IS the right metric — escalation cost is justified
+when intervention frequency is high regardless of whether each was a true FP
+or a deliberate trade-off. Just be honest about what the number represents.
 
 Decision matrix (per #433 W3 spec, post-v5 reality):
 
-    FP rate < 10%  → ✅ no escalation needed; W3 closeable
-    FP rate 10-25% → ⏳ review root cause (within-runner variance vs workflow bug)
-    FP rate > 25%  → 🚨 escalation PR: switch runs-on to ubuntu-latest-4-cores
+    Friction rate < 10%  → ✅ no escalation; W3 closeable
+    Friction rate 10-25% → ⏳ review root cause (within-runner variance vs flake)
+    Friction rate > 25%  → 🚨 escalation PR: switch runs-on to ubuntu-latest-4-cores
 
-Close W3 when ANY of these stopping conditions hits:
-    - ≥10 Tier 1 runs AND FP rate clearly above/below 10% (clear-signal early close)
-    - ≥30 Tier 1 runs (sufficient statistical power for borderline)
-    - ≥200 total PRs to repo (hard-cap fallback)
+Per the simplified W3 framing (judgment call, not threshold-driven), these
+ranges are guides, not hard cutoffs. Eyeball the bucket distribution; if
+0-1 overrides out of 5-10 PRs → fine. If ≥30% interventions → broken.
 
 Categorization (revised after self-review; see "Bug history" below)
 ------------------------------------------------------------------
@@ -43,8 +68,10 @@ For each merged PR, look at the LATEST Tier 1 run + current PR label state:
     open                PR still open; no terminal signal yet (excluded).
     unmerged            PR closed without merge (excluded).
 
-FP rate = (override-applied + merged-despite-red)
-       / (override-applied + merged-despite-red + passed-clean)
+friction rate = (override-applied + merged-despite-red)
+              / (override-applied + merged-despite-red + passed-clean)
+
+(NOT counted in denominator: open / unmerged / merged-other-state)
 
 Bug history (v1 → v2, this revision)
 ------------------------------------
@@ -121,9 +148,12 @@ REPO = "vencil/Dynamic-Alerting-Integrations"
 WORKFLOW = "bench-gate-pr.yaml"
 OVERRIDE_LABEL = "override: bench-regress-ok"
 
-# FP-rate thresholds for W3 decision (per issue #433).
-FP_RATE_OK = 10.0       # below = no escalation
-FP_RATE_REVIEW = 25.0   # 10-25 = review; above 25 = escalate
+# Friction-rate thresholds for W3 decision (per issue #433).
+# Naming note: "friction rate" not "FP rate" because the metric measures
+# maintainer-intervention frequency, not strict false-positives. See module
+# docstring "What this metric IS and ISN'T" for the survivorship-bias caveat.
+FRICTION_RATE_OK = 10.0      # below = no escalation
+FRICTION_RATE_REVIEW = 25.0  # 10-25 = review; above 25 = escalate
 
 
 @dataclass
@@ -172,8 +202,18 @@ class RunRecord:
             self.bucket = "passed-clean"
             return
 
-        # Workflow failure + merged + no override.
-        self.bucket = "merged-despite-red"
+        # Workflow failed-class. Be explicit about `failure` vs other states
+        # (`cancelled`, `timed_out`, `skipped`, `action_required`, `neutral`).
+        # `merged-despite-red` should ONLY count actual workflow `failure`
+        # — a cancelled run (concurrency cancel-in-progress) merged-after
+        # is NOT maintainer ignoring a red gate. [Gemini round-W3 catch.]
+        if self.workflow_conclusion == "failure":
+            self.bucket = "merged-despite-red"
+            return
+
+        # Non-success, non-failure (cancelled / timed_out / skipped / etc.)
+        # → ambiguous. Don't inflate the friction count with these.
+        self.bucket = "merged-other-state"
 
 
 def _gh(cmd: list[str], timeout: int = 60) -> str:
@@ -286,83 +326,94 @@ def collect_records(limit: int, verbose: bool = False) -> list[RunRecord]:
 
 
 def compute_stats(records: list[RunRecord]) -> dict:
-    """Aggregate categorized records into FP rate + bucket counts."""
+    """Aggregate categorized records into friction rate + bucket counts."""
     buckets = {
         "passed-clean": 0,
         "override-applied": 0,
         "merged-despite-red": 0,
+        "merged-other-state": 0,  # cancelled / timed_out / skipped / etc.
         "open": 0,
         "unmerged": 0,
     }
     for r in records:
         buckets[r.bucket] = buckets.get(r.bucket, 0) + 1
 
-    # FP numerator: override-applied + merged-despite-red.
-    # Both indicate the maintainer felt the gate verdict was not actionable.
-    fp_count = buckets["override-applied"] + buckets["merged-despite-red"]
-    # FP denominator: merged PRs with terminal gate signal.
-    total_with_signal = buckets["passed-clean"] + fp_count
-    fp_rate = (fp_count / total_with_signal * 100) if total_with_signal else 0.0
+    # Friction numerator: maintainer interventions.
+    friction_count = buckets["override-applied"] + buckets["merged-despite-red"]
+    # Denominator: merged PRs with clear terminal gate signal. EXCLUDE
+    # `merged-other-state` (cancelled/timed_out/skipped — ambiguous as to
+    # whether the gate had any opinion) so it doesn't inflate the rate.
+    total_with_signal = buckets["passed-clean"] + friction_count
+    friction_rate = (friction_count / total_with_signal * 100) if total_with_signal else 0.0
 
     return {
         "total_unique_prs": len(records),
         "buckets": buckets,
-        "fp_count": fp_count,
-        "fp_denominator": total_with_signal,
-        "fp_rate_pct": round(fp_rate, 2),
+        "friction_count": friction_count,
+        "friction_denominator": total_with_signal,
+        "friction_rate_pct": round(friction_rate, 2),
         "total_with_signal": total_with_signal,
-        "stopping_condition": _check_stopping(buckets, fp_rate, total_with_signal),
-        "recommendation": _recommend(fp_rate, total_with_signal),
+        "stopping_condition": _check_stopping(buckets, friction_rate, total_with_signal),
+        "recommendation": _recommend(friction_rate, total_with_signal),
     }
 
 
-def _check_stopping(buckets: dict, fp_rate: float, total: int) -> str:
+def _check_stopping(buckets: dict, friction_rate: float, total: int) -> str:
     """Which W3 stopping condition is hit (if any)."""
-    # Clear-signal early close: ≥10 runs AND result clearly above/below 10%.
-    if total >= 10 and (fp_rate < 5.0 or fp_rate > 20.0):
-        return "early-close (≥10 runs + clear signal)"
+    # Clear-signal early close: ≥5-10 runs AND result clearly above/below 10%
+    # (matches the simplified W3 framing — judgment call, not hard threshold).
+    if total >= 5 and (friction_rate < 5.0 or friction_rate > 20.0):
+        return "clear signal — close-able by judgment"
     if total >= 30:
-        return "statistical-power threshold (≥30 runs)"
-    if total < 10:
-        return f"insufficient data ({total}/10 minimum)"
-    return f"continue accumulating ({total} runs so far, borderline FP={fp_rate:.1f}%)"
+        return "ample data — close-able by judgment"
+    if total < 5:
+        return f"insufficient data ({total}/5 minimum for meaningful signal)"
+    return f"continue accumulating ({total} runs so far, borderline friction={friction_rate:.1f}%)"
 
 
-def _recommend(fp_rate: float, total: int) -> str:
-    """W3 decision recommendation."""
-    if total < 10:
-        return "🟡 INSUFFICIENT_DATA — wait for more Tier 1 runs"
-    if fp_rate < FP_RATE_OK:
-        return f"✅ NO_ESCALATION — FP rate {fp_rate:.1f}% < {FP_RATE_OK}% target"
-    if fp_rate < FP_RATE_REVIEW:
-        return (f"⏳ REVIEW_NEEDED — FP rate {fp_rate:.1f}% in 10-25% borderline; "
-                "investigate root cause before Larger Runners")
-    return (f"🚨 ESCALATE — FP rate {fp_rate:.1f}% > {FP_RATE_REVIEW}%; "
-            "open PR to switch runs-on to ubuntu-latest-4-cores")
+def _recommend(friction_rate: float, total: int) -> str:
+    """W3 decision recommendation (judgment guidance, not a hard rule)."""
+    if total < 5:
+        return "🟡 INSUFFICIENT_DATA — wait for more Tier 1 runs (~5 minimum)"
+    if friction_rate < FRICTION_RATE_OK:
+        return f"✅ LOW_FRICTION — friction rate {friction_rate:.1f}% < {FRICTION_RATE_OK}%; no escalation likely needed"
+    if friction_rate < FRICTION_RATE_REVIEW:
+        return (f"⏳ MODERATE_FRICTION — friction rate {friction_rate:.1f}% in 10-25%; "
+                "review root cause before deciding on Larger Runners")
+    return (f"🚨 HIGH_FRICTION — friction rate {friction_rate:.1f}% > {FRICTION_RATE_REVIEW}%; "
+            "consider escalation PR to switch runs-on to ubuntu-latest-4-cores")
 
 
 def render_markdown(stats: dict, records: list[RunRecord], verbose: bool) -> str:
     """Render the report as Markdown."""
     lines: list[str] = []
-    lines.append("# Tier 1 Bench-Gate FP Rate Observation (issue #433 W3)")
+    lines.append("# Tier 1 Bench-Gate Friction-Rate Observation (issue #433 W3)")
     lines.append("")
     b = stats["buckets"]
     lines.append("## Summary")
     lines.append("")
     lines.append(f"- **Unique PRs scanned**: {stats['total_unique_prs']}")
-    lines.append(f"- **With terminal signal** (excludes open / unmerged): {stats['total_with_signal']}")
-    lines.append(f"- **FP rate denominator** (passed-clean + override-applied + merged-despite-red): {stats['fp_denominator']}")
-    lines.append(f"- **FP numerator** (override-applied + merged-despite-red): {stats['fp_count']}")
-    lines.append(f"- **FP rate**: **{stats['fp_rate_pct']}%**")
+    lines.append(f"- **With clear terminal signal** (passed-clean + interventions): {stats['total_with_signal']}")
+    lines.append(f"- **Friction denominator**: {stats['friction_denominator']}")
+    lines.append(f"- **Friction numerator** (override-applied + merged-despite-red): {stats['friction_count']}")
+    lines.append(f"- **Friction rate**: **{stats['friction_rate_pct']}%**")
+    lines.append("")
+    lines.append("> **⚠️ Friction rate is NOT a strict FP rate.** This tool can only see")
+    lines.append("> terminal PR states (latest run + current labels), so any PR where the")
+    lines.append("> gate caught a real regression → dev fixed it → green merge is bucketed")
+    lines.append("> as `passed-clean`. The metric measures **maintainer-intervention**")
+    lines.append("> **frequency**, not true FPs. See module docstring for the survivorship-")
+    lines.append("> bias explanation.")
     lines.append("")
     lines.append("## Bucket counts")
     lines.append("")
-    lines.append("| Bucket | Count | Meaning | Counts as FP? |")
+    lines.append("| Bucket | Count | Meaning | Counts as friction? |")
     lines.append("|---|---|---|---|")
-    lines.append(f"| passed-clean | {b['passed-clean']} | Gate green + no override label | TN (no) |")
-    lines.append(f"| override-applied | {b['override-applied']} | Override label present + merged | **YES** |")
-    lines.append(f"| merged-despite-red | {b['merged-despite-red']} | Workflow failed + merged + no override (no branch protection) | **YES** |")
-    lines.append(f"| open | {b['open']} | PR still open; no terminal signal yet | excluded |")
+    lines.append(f"| passed-clean | {b['passed-clean']} | Merged + workflow success + no override | NO (clean) |")
+    lines.append(f"| override-applied | {b['override-applied']} | Merged + override label present | **YES** |")
+    lines.append(f"| merged-despite-red | {b['merged-despite-red']} | Merged + workflow `failure` + no override | **YES** |")
+    lines.append(f"| merged-other-state | {b['merged-other-state']} | Merged + workflow cancelled/timed_out/skipped/etc. | excluded (ambiguous) |")
+    lines.append(f"| open | {b['open']} | PR still open | excluded |")
     lines.append(f"| unmerged | {b['unmerged']} | PR closed without merge | excluded |")
     lines.append("")
     lines.append("## W3 closure status")
@@ -387,14 +438,39 @@ def render_markdown(stats: dict, records: list[RunRecord], verbose: bool) -> str
 
     lines.append("## Notes / caveats")
     lines.append("")
-    lines.append("- FP rate conflates \"deliberate trade-off override\" with \"true FP override\". Both")
-    lines.append("  count toward the metric; for W3's \"is the gate annoying?\" question this is fine.")
-    lines.append("- `merged-despite-red` requires inspecting whether the failure was a real regression")
-    lines.append("  or a workflow flake (network / timeout). If many runs land here AND the workflow")
-    lines.append("  conclusion distribution shows lots of cancelled/error, the gate has a flake problem")
-    lines.append("  (worth fixing) separate from a perf-regression problem.")
-    lines.append("- Open / unmerged PRs are excluded. If many PRs are stuck open with red bench-gate,")
-    lines.append("  that's a separate \"gate as soft blocker\" signal worth noting manually.")
+    lines.append("### Survivorship bias — friction ≠ false positives")
+    lines.append("")
+    lines.append("This tool can only see terminal states (latest run + current labels).")
+    lines.append("A real Tier 1 win — gate catches regression, dev fixes code, green merge —")
+    lines.append("looks identical to \"nothing was ever wrong\" from this vantage point. **Caught**")
+    lines.append("**bugs are invisible** in the report; only **interventions** are visible.")
+    lines.append("")
+    lines.append("Consequence: friction rate is an UPPER BOUND on \"unwanted friction\". The")
+    lines.append("actual false-positive rate cannot be derived from this tool alone — it would")
+    lines.append("require timeline traversal per PR (out of scope for v1).")
+    lines.append("")
+    lines.append("For W3's \"is the gate annoying enough to escalate to Larger Runners?\" question,")
+    lines.append("friction rate IS the right metric: escalation cost is justified by intervention")
+    lines.append("frequency regardless of whether each intervention was a true FP or a deliberate")
+    lines.append("trade-off. Just don't claim this is measuring \"FP rate\".")
+    lines.append("")
+    lines.append("### Bucket conflation")
+    lines.append("")
+    lines.append("- `override-applied` conflates \"true FP override\" with \"deliberate trade-off")
+    lines.append("  override\". Both count as friction; both motivate Larger Runners if frequent.")
+    lines.append("- `merged-despite-red` could be a real regression maintainer accepted OR a")
+    lines.append("  workflow flake (network / timeout) maintainer ignored. If many PRs land here")
+    lines.append("  AND raw workflow conclusion shows lots of `failure`, investigate flake source")
+    lines.append("  separately (`gh run list --workflow bench-gate-pr.yaml --json conclusion`).")
+    lines.append("- `merged-other-state` (cancelled/timed_out/skipped) is **excluded** from the")
+    lines.append("  friction denominator — these states are ambiguous as to whether the gate")
+    lines.append("  even had an opinion.")
+    lines.append("")
+    lines.append("### Exclusions")
+    lines.append("")
+    lines.append("- Open / unmerged PRs are excluded from rate math. If many PRs are stuck open")
+    lines.append("  with red bench-gate, that's a separate \"gate as soft blocker\" signal worth")
+    lines.append("  noting manually.")
     lines.append("- Run with `--verbose` to inspect per-PR rows.")
     return "\n".join(lines)
 
