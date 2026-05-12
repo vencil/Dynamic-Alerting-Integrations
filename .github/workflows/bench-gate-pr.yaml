@@ -7,11 +7,28 @@ name: Bench Gate (PR-time, Tier 1)
 # "did this specific diff make things slower?" rather than "is main slower
 # than the last release?" (that's Tier 2's job; release-time-only).
 #
-# Wall-time optimization (2026-05-12): split into 3 jobs to run base and
-# PR benchmarks in PARALLEL. Sequential design = ~10 min (5 min/bench ×
-# 2); parallel matrix = ~5 min wall (limited by slower of two runners).
-# CI minute consumption is unchanged (still 2× bench runs); only wall
-# time is the win.
+# Wall-time history:
+#   - Sequential design (concept): ~10 min (5 min/bench × 2 sides).
+#   - 2026-05-12 v1: parallel base+pr matrix → ~11 min wall (decomposition
+#     showed `make benchmark-report` itself is ~10 min for 19 benchmarks;
+#     plumbing only ~1 min — original "5 min/bench" estimate was based on
+#     the 13-benchmark count before #128 added mixed-mode).
+#   - 2026-05-12 v2 (this file): shard benchmarks across N runners per side.
+#     N=3 → 6 parallel bench jobs (3 shards × 2 sides).
+#     Expected wall: ~4-5 min (limited by slowest shard).
+#     CI cost: ~24 bench-minutes vs ~20 before (+20% for ~55% wall savings).
+#
+# Sharding rationale:
+#   - Each benchmark still runs COUNT=6 samples on a single runner (no
+#     statistical effect — sharding partitions BENCHMARKS, not COUNTS).
+#   - Modulo partition (bench[i] → shard (i mod N)) is deterministic and
+#     auto-balances when new benches are added. No manual list to maintain.
+#   - Source-grep enumeration is ~0.1s (vs ~30-60s if we used `go test
+#     -bench -benchtime=1ns` for enumeration — that still runs each
+#     bench's heavy setup phase before the 1ns timed portion).
+#   - Tail-variance amplification: 6 runners vs 2 means more chance of
+#     hitting a slow noisy-neighbor runner. Acceptable trade for the
+#     wall-time win; if FP rate climbs, escalation path is Larger Runners.
 #
 # See: issue #433, issue #67 (closed/superseded), bench-record.yaml (nightly),
 #      memory feedback `feedback_github_actions_workflow_gotchas.md`.
@@ -33,6 +50,18 @@ concurrency:
 permissions:
   contents: read
   pull-requests: write  # for posting the result comment
+
+env:
+  # Number of bench shards per side. 3 shards × 2 sides = 6 parallel bench
+  # jobs. Increasing this further reduces wall time but raises CI cost
+  # (each shard pays ~30s setup-go + cache-restore overhead independently)
+  # and tail-variance risk (more runners = higher P(at least one slow)).
+  # 3 chosen empirically for the current ~19-benchmark suite — gives
+  # ~6-7 benchmarks/shard, balancing wall time vs runner count.
+  # Master bench filter: kept in sync with Makefile `benchmark-report`
+  # target. Update both together when bench scope changes.
+  SHARDS_TOTAL: 3
+  BENCH_MASTER_FILTER: '_1000(_|$)|MixedMode|Simulate_DeepChain'
 
 jobs:
   # Job 1: cheap preflight. Computes merge-base, checks override label.
@@ -107,27 +136,41 @@ jobs:
           echo "  vs $base_ref"
           echo "  vs PR HEAD ($pr_head)"
 
-  # Job 2: parallel matrix. Runs bench on base + PR concurrently.
-  # Wall-time win: ~5 min instead of ~10 min sequential.
+  # Job 2: parallel matrix. Runs bench sharded across 3 shards × 2 sides
+  # = 6 jobs concurrently. Wall-time win: ~4-5 min vs ~11 min unsharded.
   bench:
-    name: Bench (${{ matrix.side }})
+    name: Bench (${{ matrix.side }} shard ${{ matrix.shard }})
     needs: preflight
     if: needs.preflight.outputs.skip != 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # Reduced from 20 min: each shard runs ~1/3 of benches, expected ~4 min
+    # actual + ~2 min setup overhead. 15 min gives generous headroom.
+    timeout-minutes: 15
     strategy:
-      fail-fast: false  # if base bench fails, we still want PR's result
+      fail-fast: false  # if one shard fails, we still want the others
       matrix:
-        include:
-          - side: base
-            ref: ${{ needs.preflight.outputs.merge_base_sha }}
-          - side: pr
-            ref: ${{ github.event.pull_request.head.sha }}
+        side: [base, pr]
+        # NOTE: keep length in sync with env.SHARDS_TOTAL. Hardcoded here
+        # because GitHub Actions matrix doesn't read env vars directly.
+        # If SHARDS_TOTAL changes, update both.
+        shard: [0, 1, 2]
     steps:
-      - name: Checkout ${{ matrix.side }} (${{ matrix.ref }})
+      - name: Resolve checkout ref for ${{ matrix.side }}
+        id: ref
+        env:
+          MERGE_BASE: ${{ needs.preflight.outputs.merge_base_sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [ "${{ matrix.side }}" = "base" ]; then
+            echo "sha=$MERGE_BASE" >> "$GITHUB_OUTPUT"
+          else
+            echo "sha=$PR_HEAD" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout ${{ matrix.side }} (${{ steps.ref.outputs.sha }})
         uses: actions/checkout@v6
         with:
-          ref: ${{ matrix.ref }}
+          ref: ${{ steps.ref.outputs.sha }}
           # No fetch-depth needed here — we have an explicit ref. Default
           # shallow is faster than full history.
 
@@ -152,18 +195,115 @@ jobs:
             ${{ runner.os }}-go-1.26-
             ${{ runner.os }}-go-
 
-      - name: Run benchmark suite
-        run: make benchmark-report
+      # Enumerate benchmarks via source grep (NOT via `go test -bench
+      # -benchtime=1ns` — that approach still runs every bench's heavy
+      # setup phase, e.g. FullDirLoad_1000 creates 1000 YAML files
+      # before timing). Source-grep is ~0.1s and exact for our naming
+      # convention (`func Benchmark<Name>(b *testing.B)`).
+      #
+      # Partition: bench[i] → shard (i mod SHARDS_TOTAL). Deterministic,
+      # auto-balances new benches, identical regex on base+pr sides
+      # (assuming source order is identical — true unless PR adds/removes
+      # benches, in which case benchstat correctly reports "missing on
+      # base" / "missing on pr" for those).
+      - name: Enumerate + partition benchmarks (shard ${{ matrix.shard }} / ${{ env.SHARDS_TOTAL }})
+        id: partition
+        env:
+          SHARD: ${{ matrix.shard }}
+          TOTAL: ${{ env.SHARDS_TOTAL }}
+          MASTER_FILTER: ${{ env.BENCH_MASTER_FILTER }}
+        run: |
+          set -euo pipefail
+          # Find all `func Benchmark<Name>(...)` in the exporter app + subpkgs.
+          # `grep -rh` reads files recursively, stripping filename prefix.
+          # `sed` extracts the bench name token. `grep -E "$MASTER_FILTER"`
+          # applies the same regex Go's `-bench` flag would.
+          all_benches=$(grep -rh "^func Benchmark" components/threshold-exporter/app \
+                       | sed -n 's/^func \(Benchmark[A-Za-z0-9_]*\).*/\1/p' \
+                       | grep -E "$MASTER_FILTER" \
+                       | sort -u)
+
+          if [ -z "$all_benches" ]; then
+            echo "::error::Source-grep found 0 benchmarks matching '$MASTER_FILTER' — check filter regex"
+            exit 1
+          fi
+
+          total_count=$(echo "$all_benches" | wc -l)
+
+          # Partition: awk NR is 1-indexed; ((NR-1) % TOTAL) gives 0-indexed
+          # shard ID matching matrix.shard.
+          shard_benches=$(echo "$all_benches" | awk -v shard="$SHARD" -v total="$TOTAL" \
+                                                    '((NR-1) % total) == shard {print}')
+
+          if [ -z "$shard_benches" ]; then
+            # Defensive: only triggers if SHARDS_TOTAL > total benchmark
+            # count (impossible with 3 shards × 19 benches, but possible
+            # if filter is narrowed without reducing SHARDS_TOTAL).
+            echo "::warning::Shard $SHARD got 0 benchmarks (total=$total_count, shards=$TOTAL)"
+            regex='^__SHARD_EMPTY__$'  # impossible match → skips cleanly
+          else
+            # Build regex: ^(NameA|NameB|...)$ for exact-match shard.
+            # paste -sd '|' joins lines with `|`. Anchors prevent prefix
+            # matches (e.g. without ^...$, `Benchmark_1000` would match
+            # `Benchmark_1000_NoChange` and pull it into the wrong shard).
+            regex="^($(echo "$shard_benches" | paste -sd '|' -))$"
+          fi
+
+          echo "shard_filter=$regex" >> "$GITHUB_OUTPUT"
+          shard_count=$(echo "$shard_benches" | grep -c . || echo 0)
+          {
+            echo "## Bench partition — ${{ matrix.side }} shard $SHARD / $TOTAL"
+            echo ""
+            echo "Total benchmarks (master filter): **$total_count**"
+            echo "Benchmarks in this shard: **$shard_count**"
+            echo ""
+            echo "Filter regex:"
+            echo '```'
+            echo "$regex"
+            echo '```'
+            echo ""
+            echo "Benchmarks assigned to this shard:"
+            echo "$shard_benches" | sed 's/^/- /'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Direct bench_wrapper.sh invocation rather than `make benchmark-report`:
+      # Makefile hardcodes the master `-bench` filter; sharding needs a
+      # per-shard override. Plumbing a BENCH= override through Makefile
+      # works but requires fragile bash-quoting of the default value
+      # (special chars `(`, `|`, `$` in the regex). Direct invocation is
+      # cleaner and CI is the right place to know wrapper-script details.
+      - name: Run benchmark suite (shard ${{ matrix.shard }})
+        env:
+          BENCH_FILTER: ${{ steps.partition.outputs.shard_filter }}
+        run: |
+          set -euo pipefail
+          mkdir -p .build
+          echo "[bench-shard ${{ matrix.shard }}] running with filter: $BENCH_FILTER"
+          echo "[bench-shard ${{ matrix.shard }}] count=6 benchtime=3s timeout=15m"
+          cd components/threshold-exporter/app
+          BENCH_OUT_DIR="$GITHUB_WORKSPACE/.build" \
+            bash "$GITHUB_WORKSPACE/scripts/tools/ops/bench_wrapper.sh" \
+            -bench="$BENCH_FILTER" \
+            -benchmem \
+            -count=6 \
+            -run='^$' \
+            -timeout=15m \
+            -benchtime=3s \
+            ./...
+          cp "$GITHUB_WORKSPACE/.build/bench.out.txt" \
+             "$GITHUB_WORKSPACE/.build/bench-baseline.txt"
+          line_count=$(wc -l < "$GITHUB_WORKSPACE/.build/bench-baseline.txt")
+          echo "[bench-shard ${{ matrix.shard }}] wrote bench-baseline.txt ($line_count lines)"
 
       - name: Upload bench artifact
         uses: actions/upload-artifact@v7
         with:
-          name: bench-${{ matrix.side }}
+          name: bench-${{ matrix.side }}-shard${{ matrix.shard }}
           path: .build/bench-baseline.txt
           retention-days: 7
           if-no-files-found: error
 
-  # Job 3: sequential — pull both matrix artifacts, run benchstat.
+  # Job 3: sequential — pull all shard artifacts, concat per side, benchstat.
   compare:
     name: Compare (benchstat)
     needs: [preflight, bench]
@@ -184,30 +324,138 @@ jobs:
           go install golang.org/x/perf/cmd/benchstat@latest
           benchstat -h 2>&1 | head -5 || true
 
-      - name: Download bench artifacts
+      - name: Download bench artifacts (all shards both sides)
         uses: actions/download-artifact@v6
         with:
           path: ${{ runner.temp }}/bench
 
+      # Concat per-side: benchstat accepts the standard Go bench output
+      # format which is line-oriented (header lines + `Benchmark... N ns/op`
+      # rows). Concatenating multiple shards' files just gives benchstat
+      # more rows per side, which is exactly what it expects. The duplicate
+      # "goos:/goarch:/pkg:" header lines per shard don't confuse benchstat
+      # — it treats them as section breaks.
+      #
+      # CRITICAL: enumerate shards explicitly via `seq 0..N-1` rather than
+      # globbing `bench-base-shard*`. Two distinct gotchas:
+      #
+      # (1) Glob order is LEXICOGRAPHIC — at SHARDS_TOTAL >= 10 this gives
+      #     shard0, shard1, shard10, shard2, ..., shard9 — benchstat output
+      #     row order becomes non-deterministic (cosmetic issue in step
+      #     summary; statistical pairing by name is unaffected, but
+      #     reviewers expecting consistent layout get confused).
+      #     [Gemini round-5 SRE catch.]
+      #
+      # (2) MORE IMPORTANTLY: glob silently accepts PARTIAL shards. If one
+      #     bench job hits the 15-min timeout or hits a runner flake, its
+      #     artifact never uploads; the glob just skips it; benchstat
+      #     compares an incomplete bench set; the gate passes despite a
+      #     chunk of the suite never running. Hidden gate-failure mode.
+      #     Explicit `seq` loop with existence check fails fast instead.
+      - name: Merge shard artifacts
+        id: merge
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/bench-merged"
+
+          base_files=()
+          pr_files=()
+          missing=()
+
+          # SHARDS_TOTAL is workflow-level env var; exported to step shell.
+          for i in $(seq 0 $((SHARDS_TOTAL - 1))); do
+            base_f="$RUNNER_TEMP/bench/bench-base-shard$i/bench-baseline.txt"
+            pr_f="$RUNNER_TEMP/bench/bench-pr-shard$i/bench-baseline.txt"
+
+            if [ -f "$base_f" ]; then
+              base_files+=("$base_f")
+            else
+              missing+=("base shard $i ($base_f)")
+            fi
+
+            if [ -f "$pr_f" ]; then
+              pr_files+=("$pr_f")
+            else
+              missing+=("pr shard $i ($pr_f)")
+            fi
+          done
+
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::Missing shard artifacts — partial bench data would silently weaken the gate."
+            echo "::error::Hard-failing here so the regression isn't hidden."
+            for m in "${missing[@]}"; do
+              echo "::error::  - missing: $m"
+            done
+            echo "Available artifacts:"
+            ls -la "$RUNNER_TEMP/bench/" || true
+            exit 2
+          fi
+
+          # base_files / pr_files are now numerically-ordered shard0..shardN-1.
+          cat "${base_files[@]}" > "$RUNNER_TEMP/bench-merged/base.txt"
+          cat "${pr_files[@]}"   > "$RUNNER_TEMP/bench-merged/pr.txt"
+
+          echo "Merged base ($SHARDS_TOTAL shards, ordered 0..$((SHARDS_TOTAL - 1))): $(wc -l < "$RUNNER_TEMP/bench-merged/base.txt") lines"
+          echo "Merged pr   ($SHARDS_TOTAL shards, ordered 0..$((SHARDS_TOTAL - 1))): $(wc -l < "$RUNNER_TEMP/bench-merged/pr.txt") lines"
+
       - name: Compare with benchstat
         id: compare
+        # IMPORTANT — benchstat has TWO distinct flags that look similar
+        # but do entirely different things:
+        #
+        #   -alpha α       (default 0.05)  → significance threshold for
+        #                                    the +/-/~ markers per-bench
+        #   -confidence c  (default 0.95)  → width of the displayed
+        #                                    geomean ± confidence interval
+        #
+        # Previous version of this workflow used `-confidence=0.99`
+        # believing it tightened regression flagging — IT DID NOT. With
+        # default α=0.05, p-values up to 0.05 were still being flagged
+        # with `+` (e.g. PR #437 self-test showed `+1.14% (p=0.026)`
+        # marked significant despite our intent of "99% confidence"). The
+        # gate has been enforcing 0.95 the entire time. Use `-alpha=0.01`
+        # to actually tighten significance.
+        #
+        # Additionally: free-tier GH runners exhibit ~1-5% within-bench
+        # variance on YAML-only diffs (i.e. zero code change). Pure
+        # statistical significance is too sensitive when within-run noise
+        # is wider than the effect size — even α=0.01 still flagged
+        # several +1.5-3% deltas on the PR #437 self-test. Industry
+        # standard for CI perf gates: combine α AND |Δ| floor. We require
+        # both p < 0.01 AND |Δ| ≥ 5% to fail the gate. The 5% floor is
+        # tightenable to 3% once Larger Runners are adopted (per the
+        # rollout doc's hardware-floor escalation trigger).
         run: |
-          # confidence=0.99 is stricter than Tier 2's 0.95 — we want fewer
-          # false positives at PR time (developer friction is worse than
-          # letting a borderline case slip to Tier 2 catch).
-          benchstat -confidence=0.99 \
-            "$RUNNER_TEMP/bench/bench-base/bench-baseline.txt" \
-            "$RUNNER_TEMP/bench/bench-pr/bench-baseline.txt" \
-            | tee "$RUNNER_TEMP/bench/benchstat.txt"
+          set -euo pipefail
+          benchstat -alpha=0.01 \
+            "$RUNNER_TEMP/bench-merged/base.txt" \
+            "$RUNNER_TEMP/bench-merged/pr.txt" \
+            | tee "$RUNNER_TEMP/bench-merged/benchstat.txt"
 
-          # Regression detection: benchstat's modern output marks
-          # statistically-significant regressions with "+X.XX%" delta.
-          # Insignificant changes show as "~". We grep for "+digit%" with a
-          # p-value, excluding the geomean aggregate.
+          # Two-tier regression detection:
+          # (1) benchstat already filters by α=0.01 (only `+` rows are
+          #     statistically significant slowdowns).
+          # (2) We additionally require |Δ| ≥ MAGNITUDE_FLOOR_PCT to
+          #     filter out noise-floor false positives on free-tier
+          #     runners (well-documented in bench-gate-rollout.md as the
+          #     "Noisy Neighbor Illusion").
+          # POSIX awk syntax (2-arg match()) for portability across
+          # gawk / mawk / BSD awk. We find the "+X.XX%" token via match
+          # (returns position+length), substr the number out (strip the
+          # leading + and trailing %), and compare.
+          MAGNITUDE_FLOOR_PCT=5.0
           regressions=$(grep -E '[[:space:]]\+[0-9]+\.[0-9]+%[[:space:]]*\(p=' \
-            "$RUNNER_TEMP/bench/benchstat.txt" \
-            | grep -v "geomean" \
-            || true)
+                          "$RUNNER_TEMP/bench-merged/benchstat.txt" \
+                        | grep -v geomean \
+                        | awk -v floor="$MAGNITUDE_FLOOR_PCT" '{
+                            if (match($0, /\+[0-9]+\.[0-9]+%/)) {
+                              # RSTART points at "+", RLENGTH covers "+X.XX%"
+                              # Strip leading + (offset by 1) and trailing %
+                              # (length-2). RSTART/RLENGTH set by match().
+                              num = substr($0, RSTART + 1, RLENGTH - 2) + 0
+                              if (num >= floor) print
+                            }
+                          }')
 
           if [ -n "$regressions" ]; then
             echo "regression=true" >> "$GITHUB_OUTPUT"
@@ -235,11 +483,12 @@ jobs:
             echo ""
             echo "Compared PR HEAD (\`${{ github.event.pull_request.head.sha }}\`)"
             echo "against merge-base (\`${{ needs.preflight.outputs.merge_base_sha }}\`)."
-            echo "Statistical threshold: \`benchstat -confidence=0.99\`."
+            echo "Gate threshold: **p < 0.01 AND |Δ| ≥ 5%** (statistical significance via \`benchstat -alpha=0.01\` + magnitude floor for free-tier-runner noise resistance)."
+            echo "Sharding: ${{ env.SHARDS_TOTAL }} shards × 2 sides = $((${{ env.SHARDS_TOTAL }} * 2)) parallel bench jobs."
             echo ""
             echo "### Full benchstat output"
             echo '```'
-            cat "$RUNNER_TEMP/bench/benchstat.txt"
+            cat "$RUNNER_TEMP/bench-merged/benchstat.txt"
             echo '```'
             if [ "$REGRESSION" = "true" ]; then
               echo ""
