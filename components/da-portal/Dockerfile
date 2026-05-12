@@ -49,7 +49,9 @@ COPY --chown=nginx:nginx components/da-portal/nginx.conf /etc/nginx/conf.d/defau
 COPY --chown=nginx:nginx docs/interactive/ /usr/share/nginx/html/interactive/
 
 # ── Getting Started Wizard ────────────────────────────────────
-COPY --chown=nginx:nginx docs/getting-started/wizard.jsx /usr/share/nginx/html/getting-started/wizard.jsx
+# Path follows the portal monorepo restructure (PR #279, TD-042, 2026-05-07):
+# wizard.jsx moved from docs/getting-started/ to tools/portal/src/getting-started/.
+COPY --chown=nginx:nginx tools/portal/src/getting-started/wizard.jsx /usr/share/nginx/html/getting-started/wizard.jsx
 
 # ── Shared assets (loader, data, registry, flows) ─────────────
 COPY --chown=nginx:nginx docs/assets/jsx-loader.html     /usr/share/nginx/html/assets/jsx-loader.html
