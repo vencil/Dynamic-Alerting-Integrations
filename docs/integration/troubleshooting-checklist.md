@@ -391,21 +391,25 @@ amtool silence add \
     alertname=DatabaseDown_MySQL
 
 # 之後 systematic：跑 silencer 與 v2 alertname 的 reconcile
-# ⚠️ da-tools silencer-drift-check 尚未 ship（追蹤：issue #405）
-# Offline-first 設計：工具不會直接連 AM（避免 VPN/Ingress/Auth 邊界踩雷），
-# 而是吃 amtool 抓下來的 JSON 檔案。Workaround 流程也走同樣 pattern：
+# ✅ da-tools silencer-drift-check 已 ship（2026-05-12，issue #405 Category B）
+# Offline-first 設計：工具不直接連 AM（避免 VPN/Ingress/Auth 邊界踩雷），
+# 吃 amtool 抓下來的 JSON 檔案。標準流程：
 
 # Step 1：在有權限的環境（bastion / kubectl exec / port-forward 後）抓 silencer
 amtool silence query -o json --alertmanager.url=http://<am>:9093 > active_silences.json
 
-# Step 2：local / CI 端比對（不需要 AM 連線）
+# Step 2：local / CI 端比對（不需要 AM 連線）—— 一行命令
+da-tools silencer-drift-check --silences-file active_silences.json --rule-source rule-packs/
+
+# 含完整 matcher 邏輯（isEqual / isRegex 4 combinations，不只 alertname=
+# 還含 severity=、team= 等 label-value 漂移）。CI gate：加 --ci 偵測到 orphan
+# exit 1。Machine-readable：加 --json。
+
+# 手動 fallback（airgapped / 工具不可用時）—— 只比 alertname=、不處理多 matcher：
 grep -hE '^\s+- alert:' conf.d/**/*.yaml | awk '{print $3}' | sort -u > /tmp/v2-alertnames.txt
 jq -r '.[].matchers[] | select(.name == "alertname") | .value' active_silences.json | sort -u > /tmp/silenced-alertnames.txt
 # Drift = silencer 還在用但 v2 conf.d 已沒有的 alertname
 comm -23 /tmp/silenced-alertnames.txt /tmp/v2-alertnames.txt
-
-# 工具 ship 後改用（檔案輸入、CI/GitHub Action 都能跑）：
-# da-tools silencer-drift-check --silences-file active_silences.json --rule-source conf.d/ --rule-pack-version v2.0.0
 ```
 
 **If not this**：

@@ -119,6 +119,8 @@ TOOL_FILES=(
     ops/state_reconcile.py
     # v2.8.0 #405 Cat D — Rule Pack version diff for upgrade audits
     ops/rule_pack_diff.py
+    # v2.8.0 #405 Cat B — AM silence drift auditor (offline, eats amtool dump)
+    ops/silencer_drift_check.py
     # v2.3.0 Operator-native tools
     ops/operator_generate.py
     ops/operator_check.py

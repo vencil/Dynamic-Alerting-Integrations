@@ -110,6 +110,7 @@ da-tools <command> --help
 | `gitops-check` | GitOps Native Mode 就緒度驗證（repo / local / sidecar） | `<subcommand>` |
 | `state-reconcile` | 遷移狀態目錄聲明式一致化（schema_version 驗證 + manifest 重建） | `--state-dir <dir>`（預設 `.da/state`） |
 | `rule-pack-diff` | Rule Pack 兩版本機械比對（added / removed / breaking label schema） | `--from <v1.yaml> --to <v2.yaml>` |
+| `silencer-drift-check` | AM silence 對 v2 rule pack 漂移偵測（offline，吃 amtool dump） | `--silences-file <json> --rule-source <path>` |
 
 ### Operator + Federation 工具
 
@@ -1395,6 +1396,65 @@ da-tools rule-pack-diff --from /tmp/v1.yaml --to /tmp/v2.yaml --json
 | 0 | 比對完成（無 breaking changes；或無 `--ci` 即便有 breaking 也 0） |
 | 1 | `--ci` 模式偵測到 breaking changes |
 | 2 | caller error（檔案不存在 / 解析失敗 / 參數錯） |
+
+---
+
+#### silencer-drift-check
+
+Alertmanager silence 對 v2 rule pack 漂移偵測——吃 `amtool silence query -o json` dump + rule pack source，列出**已沒有任何 v2 alert 命中所有 matchers** 的 silence。取代 [troubleshooting-checklist §1.3.2](integration/troubleshooting-checklist.md) 的手動 `jq + comm` 比對流程（[issue #405](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/405) Category B）。
+
+**Offline-first 設計**：工具**不**直接連 AM——避免 VPN / Ingress / Auth-proxy 邊界踩雷，可在 CI / GitHub Action 等無 AM 網路連線環境直接跑。
+
+```bash
+da-tools silencer-drift-check --silences-file <silences.json> --rule-source <path> [options]
+```
+
+**主要參數**
+
+| 參數 | 用途 |
+|------|------|
+| `--silences-file <path>` | `amtool silence query -o json` 輸出的 JSON 檔（必須） |
+| `--rule-source <path>` | Rule pack YAML 檔或目錄（遞迴掃 `*.yaml`/`*.yml`；無 `groups:` root 的檔案 silently 跳過，如 `_defaults.yaml`） |
+| `--include-inactive` | 包含 expired / pending silence。預設只檢 active 那批 |
+| `--json` | 輸出 JSON 結構化報告 |
+| `--ci` | 偵測到 orphan silence 時 exit 1（CI gate） |
+
+**Matcher 完整語意**
+
+工具實作 AM matcher 的 4 種組合（不是只比 `alertname=`）：
+
+| `isEqual` | `isRegex` | 語意 |
+|---|---|---|
+| true | false | `label == value` |
+| false | false | `label != value` |
+| true | true | `label =~ value`（Go regex，**fullmatch**） |
+| false | true | `label !~ value` |
+
+Silence 命中 alert 的條件：**所有 matchers 都對該 alert 的 label set 命中**。Label set 包含 implicit `alertname=<name>` + rule 的 `labels:` block。**Absent label 視為空字串**（AM 慣例）。
+
+**Exit codes**
+
+| Code | 含義 |
+|------|------|
+| 0 | 無 orphan silence（或有 orphan 但無 `--ci`） |
+| 1 | `--ci` 模式偵測到 orphan |
+| 2 | caller error（檔案不存在、JSON parse 失敗、`--rule-source` 空目錄等） |
+
+**典型用法**
+
+```bash
+# Step 1: 在有 AM 連線的環境抓 silences
+amtool silence query -o json --alertmanager.url=http://<am>:9093 > silences.json
+
+# Step 2: 離線比對（不需 AM 連線）
+da-tools silencer-drift-check --silences-file silences.json --rule-source rule-packs/
+
+# CI gate：merge 前擋住會 silently miss 的 silence
+da-tools silencer-drift-check --silences-file silences.json --rule-source rule-packs/ --ci
+
+# 自動化讀取
+da-tools silencer-drift-check --silences-file silences.json --rule-source rule-packs/ --json
+```
 
 ---
 
