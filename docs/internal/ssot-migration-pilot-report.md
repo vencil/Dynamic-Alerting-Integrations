@@ -5,7 +5,7 @@ audience: [maintainers]
 tags: [internal, planning, i18n, language-strategy]
 status: completed-pilot-only
 lang: zh
-version: v2.7.0
+version: v2.8.0
 ---
 
 > ## ⚠️ Execution-phase cancelled by v2.8.0 S#101 (2026-05-02)

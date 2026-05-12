@@ -29,3 +29,11 @@ docs/interactive/tools/portal-shared.jsx
 # 25+ test imports across 9 test files keep working unchanged.
 # Genuine refactor, not damage.
 scripts/tools/ops/generate_alertmanager_routes.py
+
+# PR #460: customer-first benchmarks.md rewrite (v2.2.0→v2.8.0 perspective).
+# 488 → 209 lines (-57%) zh / 536 → 209 lines (-61%) en. Toolchain micro-bench
+# detail moved to docs/internal/benchmark-playbook.md §Engineering Reference
+# Benchmarks. Merge of main into chore/v280-bump-docs-sweep replays the shrink
+# from HEAD's pre-#460 size. Genuine content refactor, not damage.
+docs/benchmarks.md
+docs/benchmarks.en.md

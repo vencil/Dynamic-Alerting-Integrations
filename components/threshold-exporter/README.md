@@ -1,4 +1,4 @@
-# Threshold Exporter (v2.7.0)
+# Threshold Exporter (v2.8.0)
 
 <!-- 標題版號 = 最後 released tag；v2.8.0 in-flight feature 在內文以 **v2.8.0** inline 標記。
      Release wrap 切五線 tag 時，本標題 + 下方 helm --version 跟著批次同步 bump。 -->

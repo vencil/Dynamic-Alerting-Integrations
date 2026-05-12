@@ -3,7 +3,7 @@ title: DX Tooling Backlog
 tags: [dx, tooling, backlog, internal]
 audience: [maintainers, contributors]
 lang: zh
-version: v2.7.0
+version: v2.8.0
 ---
 
 # DX Tooling Backlog
@@ -507,7 +507,7 @@ v2.3.0 完成四子模組拆分。下一步將散落在多個工具中的重複 
 
 **v2.6.0 已完成**：`generate_alertmanager_routes.py`（21 helpers extracted）+ `init_project.py`（6 helpers extracted）。
 
-**v2.7.0 進度**：未推進，且 `scaffold_tenant.py` 於 v2.7.0 新增 `--topology=1:N`、`--mapping-instance`、`--mapping-filter`、`--routing-profile` 參數後反而略為增長；`validate_docs_versions.py` 同理（1,032 → 1,109 行，因加入歷史版本 skip 規則）。**重新確認：大型工具的「每次小改」會讓瘦身壓力持續累積，必須排入 minor release 的明確 phase 才會發生。**
+**v2.7.0 進度**：未推進，且 `scaffold_tenant.py` 於 v2.8.0 新增 `--topology=1:N`、`--mapping-instance`、`--mapping-filter`、`--routing-profile` 參數後反而略為增長；`validate_docs_versions.py` 同理（1,032 → 1,109 行，因加入歷史版本 skip 規則）。**重新確認：大型工具的「每次小改」會讓瘦身壓力持續累積，必須排入 minor release 的明確 phase 才會發生。**
 
 **殘留**：3 支 1,000+ 行工具待重構：
 

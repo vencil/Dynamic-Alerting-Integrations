@@ -2,7 +2,7 @@
 title: "Scenario: Multi-Cluster Federation — Central Threshold + Edge Metrics"
 tags: [scenario, federation, multi-cluster]
 audience: [platform-engineer]
-version: v2.7.0
+version: v2.8.0
 lang: en
 ---
 # Scenario: Multi-Cluster Federation — Central Threshold + Edge Metrics
