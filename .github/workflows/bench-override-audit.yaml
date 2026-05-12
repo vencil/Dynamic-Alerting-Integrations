@@ -11,12 +11,19 @@ name: Bench Override Audit
 #   verdict), unrestricted application = anyone with Triage could merge
 #   a regression by labelling.
 #
-# What this workflow does:
-#   On every label-application event, check whether (a) the label is
-#   the override one and (b) the user who applied it has Admin or
-#   Maintain role. If applied by anyone with a lower role, revert the
-#   label, post an explanatory comment, and fail the workflow so the
-#   PR check status reflects the unauthorized attempt.
+# What this workflow does — TWO jobs covering the override label lifecycle:
+#
+#   Job `audit`: on `labeled` event, if the override label was just applied,
+#     check whether the sender has Admin or Maintain role. If not, revert
+#     + comment + fail the workflow.
+#
+#   Job `strip-stale`: on `synchronize` event (new code pushed to PR), if
+#     the override label is still on the PR, strip it. Closes the "Blanket
+#     Immunity Trap" — without this, a maintainer's earlier approval of an
+#     old commit's perf trade-off would transfer to a subsequent commit
+#     that may introduce a new (uninspected) regression. Per-event override
+#     semantics: maintainer must re-apply the label after each push that
+#     should remain overridden.
 #
 # Self-bootstrap safety:
 #   The audit's allowlist is "admin/maintain". The only role that can
@@ -44,7 +51,7 @@ on:
   # ("don't checkout PR head; don't run PR scripts") is satisfied because
   # there is no checkout step at all.
   pull_request_target:
-    types: [labeled]
+    types: [labeled, synchronize]
 
 permissions:
   pull-requests: write  # remove label + post comment
@@ -145,3 +152,76 @@ jobs:
           # and (incorrectly) decided to skip during the brief window when
           # the label was present.
           exit 1
+
+  # Round-8 "Blanket Immunity Trap" defense (Gemini round-8 catch).
+  # Override should be tied to a specific code state, not the PR as a whole.
+  # On every push (`synchronize` event), if the override label is still on
+  # the PR, strip it — forcing the maintainer to re-review the new commits
+  # and re-apply if the override should remain in effect. Without this, a
+  # 6% accepted regression could grow into a 500% silent regression on the
+  # next push and bench-gate's per-event check (which already handles this
+  # for the gate decision) wouldn't surface the staleness visibly.
+  strip-stale:
+    name: Strip stale override label after new commits
+    # Conditions: (a) event is synchronize, AND (b) the override label is
+    # currently on the PR. Both checks needed — synchronize-without-label
+    # is a normal push and shouldn't do anything.
+    if: |
+      github.event.action == 'synchronize'
+      && contains(github.event.pull_request.labels.*.name, 'override: bench-regress-ok')
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Remove stale override label and notify
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          NEW_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PUSHER: ${{ github.event.sender.login }}
+        run: |
+          set -euo pipefail
+
+          # Remove the label. On fork PRs this might fail if token is read-only,
+          # but `pull_request_target` ensures we have write perms regardless of
+          # fork status. The `|| true` is defensive for the unlikely case where
+          # the label was removed by something else between the event firing
+          # and us getting here.
+          gh pr edit "$PR_NUMBER" --repo "$REPO" \
+            --remove-label "override: bench-regress-ok" || true
+
+          # Same awk-dedent trick as the audit step; YAML literal block forces
+          # leading whitespace on heredoc body, awk strips the common prefix.
+          body=$(awk 'NR==1 {match($0, /[^ ]/); pad = RSTART - 1} {if (length($0) >= pad) print substr($0, pad + 1); else print ""}' <<EOF
+          ⚠️ **Override label auto-stripped after new commit**
+
+          The \`override: bench-regress-ok\` label was previously applied but has been
+          automatically removed because new commits were pushed to this PR by \`@$PUSHER\`.
+
+          New HEAD: \`$NEW_HEAD_SHA\`
+
+          Override is **per-commit-state**, not per-PR. The earlier maintainer approval
+          was tied to a specific set of commits whose perf trade-off was reviewed; new
+          commits may introduce additional regressions not covered by that approval.
+
+          If the override should remain in effect after these new commits:
+
+          1. A **maintainer** must review the new commits' perf impact.
+          2. If still acceptable, re-apply \`override: bench-regress-ok\` (the audit
+             will re-verify the role and \`bench-gate-pr.yaml\` will honor it for that
+             specific labeled event only).
+
+          — Bench Override Audit / strip-stale job
+          EOF
+          )
+          gh pr comment "$PR_NUMBER" --repo "$REPO" --body "$body"
+
+          {
+            echo "## Override label STRIPPED (stale after new commit)"
+            echo ""
+            echo "Pusher: \`$PUSHER\` — new HEAD: \`$NEW_HEAD_SHA\`."
+            echo ""
+            echo "Bench gate will now re-evaluate this commit normally. Maintainer must"
+            echo "re-apply the override label if the perf trade-off remains acceptable"
+            echo "after reviewing the new commits."
+          } >> "$GITHUB_STEP_SUMMARY"
