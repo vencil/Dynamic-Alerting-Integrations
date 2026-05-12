@@ -578,18 +578,38 @@ jobs:
                             }
                           }' || true)
 
-          # Detect runner CPU heterogeneity — when Azure's pool assigns
-          # different CPU types to base vs pr shards, benchstat correctly
-          # refuses to do a cross-CPU comparison and outputs split tables
-          # without delta columns. This is a free-tier-runner limitation;
-          # log it so the noise is visible (don't fail — there's nothing
-          # the gate can do about it). Larger Runners (Tier 1 escalation
-          # path) would fix this by pinning hardware.
+          # Detect runner CPU heterogeneity — this is a HARD-FAIL condition,
+          # NOT a warning. [Gemini round-11 catch.]
+          #
+          # When Azure's free-tier-runner pool assigns different CPU types
+          # to base vs pr shards (AMD EPYC vs Intel Xeon), benchstat
+          # CORRECTLY refuses cross-CPU comparison and outputs split per-CPU
+          # tables WITHOUT delta columns for the affected benchmarks. The
+          # regression-detection grep then finds zero `+X.XX% (p=...)` rows
+          # for those benches → `regressions` is empty → gate goes GREEN
+          # despite never having actually evaluated those benchmarks against
+          # each other. A real regression in the affected packages could
+          # silently merge to main, masked by the CPU mismatch.
+          #
+          # Earlier comment "informational gap, can't mask regression" was
+          # WRONG — it absolutely can. Mark the run as INCONCLUSIVE so the
+          # gate fails and the dev is forced to re-run until shards land
+          # on a consistent CPU. Larger Runners (Tier 1 escalation path
+          # per bench-gate-rollout.md) eliminate this by pinning hardware.
           cpu_lines=$(grep -E '^cpu:' "$RUNNER_TEMP/bench-merged/benchstat.txt" 2>/dev/null | sort -u || true)
+          inconclusive=false
           if [ -n "$cpu_lines" ] && [ "$(echo "$cpu_lines" | wc -l)" -gt 1 ]; then
-            echo "::warning::Heterogeneous CPUs detected across base/pr shards — benchstat split output, some benches not comparable. CPUs seen:"
+            inconclusive=true
+            cpu_count=$(echo "$cpu_lines" | wc -l)
+            echo "::error::Heterogeneous CPUs detected ($cpu_count distinct) across base/pr shards. benchstat refuses cross-CPU comparison, so a real regression could be silently masked. This run is INCONCLUSIVE — re-run via 'Re-run failed jobs' in the GitHub Actions UI until shards land on a consistent CPU. CPUs observed:"
             echo "$cpu_lines"
+            {
+              echo "inconclusive_cpus<<__CPUEOF__"
+              echo "$cpu_lines"
+              echo "__CPUEOF__"
+            } >> "$GITHUB_OUTPUT"
           fi
+          echo "inconclusive=$inconclusive" >> "$GITHUB_OUTPUT"
 
           if [ -n "$regressions" ]; then
             echo "regression=true" >> "$GITHUB_OUTPUT"
@@ -607,9 +627,17 @@ jobs:
         env:
           REGRESSION: ${{ steps.compare.outputs.regression }}
           REGRESSIONS_LIST: ${{ steps.compare.outputs.regressions }}
+          INCONCLUSIVE: ${{ steps.compare.outputs.inconclusive }}
+          INCONCLUSIVE_CPUS: ${{ steps.compare.outputs.inconclusive_cpus }}
         run: |
           {
-            if [ "$REGRESSION" = "true" ]; then
+            # Three terminal states. Inconclusive (CPU mismatch) takes
+            # precedence because we can't trust the regression flag when
+            # benchstat couldn't actually compare. Don't show "✅ no
+            # regression" if the comparison didn't actually happen.
+            if [ "$INCONCLUSIVE" = "true" ]; then
+              echo "## ⚠️ Bench Gate — INCONCLUSIVE (heterogeneous runner CPUs)"
+            elif [ "$REGRESSION" = "true" ]; then
               echo "## ❌ Bench Gate — REGRESSION DETECTED"
             else
               echo "## ✅ Bench Gate — no statistically significant regression"
@@ -620,6 +648,26 @@ jobs:
             echo "Gate threshold: **p < 0.01 AND |Δ| ≥ 5%** (statistical significance via \`benchstat -alpha=0.01\` + magnitude floor for free-tier-runner noise resistance)."
             echo "Sharding: ${{ env.SHARDS_TOTAL }} shards × 2 sides = $((${{ env.SHARDS_TOTAL }} * 2)) parallel bench jobs."
             echo ""
+            if [ "$INCONCLUSIVE" = "true" ]; then
+              echo "### ⚠️ Inconclusive — heterogeneous CPUs"
+              echo ""
+              echo "Bench shards landed on different CPU types. benchstat refuses to"
+              echo "compare across CPUs, so this run **cannot reliably detect regression**"
+              echo "for the affected packages. Treating as inconclusive (not pass) because"
+              echo "a real regression could be hidden in the un-compared benches."
+              echo ""
+              echo "CPUs observed:"
+              echo '```'
+              echo "$INCONCLUSIVE_CPUS"
+              echo '```'
+              echo ""
+              echo "**Action**: click **Re-run failed jobs** in the GitHub Actions UI"
+              echo "(top-right of this run page). The Azure runner pool is heterogeneous,"
+              echo "so a re-run typically lands on consistent CPUs. Larger Runners would"
+              echo "eliminate this (Tier 1 hardware-floor escalation path; see"
+              echo "[bench-gate-rollout.md](../../docs/internal/bench-gate-rollout.md))."
+              echo ""
+            fi
             echo "### Full benchstat output"
             echo '```'
             cat "$RUNNER_TEMP/bench-merged/benchstat.txt"
@@ -639,10 +687,15 @@ jobs:
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Fail gate on regression
-        if: steps.compare.outputs.regression == 'true'
+      - name: Fail gate on regression or inconclusive
+        if: steps.compare.outputs.regression == 'true' || steps.compare.outputs.inconclusive == 'true'
         run: |
-          echo "::error::Statistically significant perf regression detected vs merge-base."
-          echo "::error::See benchstat output in the step summary."
-          echo "::error::Override via maintainer-applied label 'override: bench-regress-ok'."
+          if [ "${{ steps.compare.outputs.inconclusive }}" = "true" ]; then
+            echo "::error::Gate run INCONCLUSIVE — heterogeneous runner CPUs across base/pr shards prevented benchstat from making a comparison for affected benchmarks."
+            echo "::error::Re-run via 'Re-run failed jobs' in the GitHub Actions UI until shards land on a consistent CPU. Do NOT override this — a real regression could be hidden."
+          else
+            echo "::error::Statistically significant perf regression detected vs merge-base."
+            echo "::error::See benchstat output in the step summary."
+            echo "::error::Override via maintainer-applied label 'override: bench-regress-ok'."
+          fi
           exit 1

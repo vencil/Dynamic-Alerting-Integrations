@@ -197,7 +197,7 @@ Sharding: 3 shards × 2 sides = 6 parallel bench jobs.
 1. **檢查 benchstat 輸出**，flagged regression 是哪些 benchmark？
 2. **這是真的 regression 嗎？**
    - **是真的** — 你的 diff 引入了 perf 問題：fix code（O(n²) 改 O(n log n)、減少 allocations、加 cache 等）後重 push
-   - **看起來像 noise** — 同 benchmark 在 nightly `bench-record.yaml` 沒這個趨勢？close + reopen PR re-run；或押個空 commit (`git commit --allow-empty`) trigger 重跑。GH-hosted runner ~10% FP rate per design（[bench-gate-rollout.md](bench-gate-rollout.md) hardware floor 段）
+   - **看起來像 noise** — 同 benchmark 在 nightly `bench-record.yaml` 沒這個趨勢？到 GitHub Actions UI 的 Checks panel 右上點 **"Re-run failed jobs"** 重跑。GH-hosted runner ~10% FP rate per design（[bench-gate-rollout.md](bench-gate-rollout.md) hardware floor 段）。**不要**用 `git commit --allow-empty` 或 close+reopen PR 重跑 — 那會污染 git history + 觸發無關的 webhook noise（Slack / Jira / labels）
    - **是 deliberate trade-off**（正確性修補 / 安全 patch / 演算法本質約束）→ 申請 override（下節）
 
 3. **重跑後仍 fail** → 多半是真的 regression，不要靠 retry 蒙混
@@ -226,7 +226,7 @@ Sharding: 3 shards × 2 sides = 6 parallel bench jobs.
 
 | 症狀 | 原因 | 處理 |
 |---|---|---|
-| `::warning::Heterogeneous CPUs detected` | Azure runner pool 隨機 CPU 配置 | 重跑換 CPU；或忽略部分 missing comparison（無法 mask 真 regression — 只是 informational gap） |
+| `::error::Heterogeneous CPUs detected ... INCONCLUSIVE` | Azure runner pool 隨機 CPU 配置 → benchstat 拒絕 cross-CPU 比對 | **必須 Re-run failed jobs 直到 CPU 一致**。⚠️ 警告：benchstat 拒絕比對時受影響 benchmark 沒有 delta rows → 偵測腳本抓不到衰退 → **gate 會 silent pass**（false negative）。**絕不能 override 跳過** — 真 regression 可能被 mask 入 main。Workflow 已改為這種情況強制 fail（標 INCONCLUSIVE），dev 必須重跑換 CPU。長期解法：Larger Runners(Tier 1 escalation path) |
 | `::error::Missing shard artifacts` | 某個 bench shard timeout（15 min）或 runner flake | 重跑；若反覆出現查 shard timeout 是不是合理 |
 | Override label 一直被 revert | applier 不是 admin/maintain（或 audit 工作流故障） | 確認 applier role；查 `bench-override-audit` 工作流 log |
 | Label 自動消失（push 後） | **WAI** — per-event semantics | Maintainer 重新審核新 commit 後 re-apply |
@@ -666,6 +666,3 @@ BENCH_OUT_DIR=/tmp/b1_out bash /workspaces/vibe-k8s-lab/scripts/tools/ops/bench_
 cat /tmp/b1_out/bench.out.txt
 ```
 
----
-
-> 本文件從 [Testing Playbook](testing-playbook.md) § Performance Benchmark 獨立拆分（v2.0.0-preview.4）。
