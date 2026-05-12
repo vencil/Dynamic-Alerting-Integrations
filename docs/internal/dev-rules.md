@@ -220,7 +220,7 @@ Phase .a0 token 遷移期間確立的慣例，適用所有 JSX 互動工具。
 
 **規則**：每個新 Playwright spec 須呼叫 `assertNoAbsoluteRootHrefs(page)`（`tests/e2e/fixtures/portal-tool-smoke.ts` 提供），防止 TRK-104 類型的硬編碼絕對根路徑（`href="/xxx"`）再犯。
 
-**為什麼**：portal 透過 `jsx-loader.html?component=<key>` 載入工具，絕對根路徑全部 404（TRK-104 root cause；前 REG-004，對映見 [planning-id-mapping.md](planning-id-mapping.md)）。長期解是 `jsx-loader.navigate(key)` helper（規畫 v2.8.0 Portal Navigation Refactor），短期靠 test-layer guard 防退化。
+**為什麼**：portal 透過 `jsx-loader.html?component=<key>` 載入工具，絕對根路徑全部 404（TRK-104 root cause）。長期解是 `jsx-loader.navigate(key)` helper（規畫 v2.8.0 Portal Navigation Refactor），短期靠 test-layer guard 防退化。
 
 **實作**：`assertNoAbsoluteRootHrefs` 掃描所有 `<a href>` 是否為 portal-safe 路徑（相對 / external / fragment）。Day 3 首次落地（commit `ca48275`），`deployment-wizard.spec.ts` 和 `wizard.spec.ts` 已採用。
 
@@ -236,7 +236,7 @@ Phase .a0 token 遷移期間確立的慣例，適用所有 JSX 互動工具。
 
 **反例：容器已有 focusable children 時勿再套 `tabIndex={0}`**（v2.8.0 Phase .a 追加補充）：若捲動容器內已經放了會吃 Tab 焦點的元素（`<button>`、`<a href>`、`<input>`、`<select>`、`[tabindex="0"]` 等），**容器自己應走 `tabIndex={-1}`**（或乾脆省略），避免 Tab 序列產生容器→內部元素的雙 stop。axe 在這種情況本來就不會觸發 `scrollable-region-focusable`（容器「有 focusable descendants」）；本規則適用範圍就是「容器是捲動區但內部沒 tabbable 元素」的純資訊顯示區塊（heatmap cells / preview panels）。
 
-**反 / 正例**（v2.7.0 實際踩過，TRK-206 / -209 — 前 TECH-DEBT-006 / -009，對映見 [planning-id-mapping.md](planning-id-mapping.md)）：
+**反 / 正例**（v2.7.0 實際踩過，TRK-206 / -209）：
 
 ```jsx
 // ❌ overflow-auto / overflowY:'auto' 容器無 tabIndex／accessible name
@@ -260,7 +260,7 @@ Phase .a0 token 遷移期間確立的慣例，適用所有 JSX 互動工具。
 2. `aria-label={t('zh', 'en')}` — 雙語 token
 3. `aria-labelledby="<existing-id>"`
 
-**為什麼**：axe-core `label` / `select-name` rule 為 CRITICAL 等級。Placeholder **不是** accessible name（screen reader 只讀 "edit text"），視覺 label 但未 `htmlFor` 關聯也不成。v2.7.0 Day 5 retrospective 單次 runtime axe 掃到 TRK-208 / -211 / -212 三個 CRITICAL violation（前 TECH-DEBT-008 / -011 / -012；對映見 [planning-id-mapping.md](planning-id-mapping.md)），全源自此規則被忽略。
+**為什麼**：axe-core `label` / `select-name` rule 為 CRITICAL 等級。Placeholder **不是** accessible name（screen reader 只讀 "edit text"），視覺 label 但未 `htmlFor` 關聯也不成。v2.7.0 Day 5 retrospective 單次 runtime axe 掃到 TRK-208 / -211 / -212 三個 CRITICAL violation，全源自此規則被忽略。
 
 **實作檢查**：互動工具 PR 送審前，手動 `grep -n '<\(input\|select\|textarea\)' <tool>.jsx` 配 `grep -n 'aria-label\|htmlFor' <tool>.jsx`，確認每個 form element 都有對應的 accessible name。
 
@@ -295,7 +295,7 @@ Phase .a0 token 遷移期間確立的慣例，適用所有 JSX 互動工具。
 
 **命名慣例**：`--da-color-<surface>-<intent>`，`<surface>` 明示語意背景族群（`hero` / `tile` / `card` / `chip` / `toast` 等），`<intent>` 為 foreground 角色（`muted` / `accent` / `strong` / `danger` 等）。避免 `--da-color-muted`（無 surface scope）這類涵蓋過廣的命名。
 
-**雙主題翻色 caveat**：如果 surface 本身會在 `[data-theme="dark"]` 翻色（例：MetricCard light `#f8fafc` → dark `#334155`），**token-split 仍不夠**，需再 split 為 light / dark mode 各自的值（在 `[data-theme="dark"]` 區塊 override）；或改走 theme-aware JSX conditional（useTheme hook）。此情境見 TRK-216（前 TECH-DEBT-016，對映見 [planning-id-mapping.md](planning-id-mapping.md)；PR#1c 分析衍生，L133 MetricCard subStyle 雙背景問題，另案追蹤）。
+**雙主題翻色 caveat**：如果 surface 本身會在 `[data-theme="dark"]` 翻色（例：MetricCard light `#f8fafc` → dark `#334155`），**token-split 仍不夠**，需再 split 為 light / dark mode 各自的值（在 `[data-theme="dark"]` 區塊 override）；或改走 theme-aware JSX conditional（useTheme hook）。此情境見 TRK-216（PR#1c 分析衍生，L133 MetricCard subStyle 雙背景問題，另案追蹤）。
 
 **收束驗收**：(1) design-tokens.css 每個 foreground token 須有 JSDoc-style 註解標明「allowed bg contexts + contrast ratio」；(2) axe-core `color-contrast` rule 在 light + dark dual-mode 皆 0 violations；(3) design-system-guide.md §TL;DR 的「Token 速查」應列出 surface scope 分類。
 
