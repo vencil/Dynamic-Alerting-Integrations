@@ -114,5 +114,5 @@ Directory Scanner 的設計哲學是「檔案系統即 source of truth」。
 ## 相關
 
 - [ADR-018: _defaults.yaml 繼承語意 + dual-hash hot-reload](018-defaults-yaml-inheritance-dual-hash.md)
-- [Benchmark Report §10 «Synthetic Fixture Generation»](../benchmarks.md#synthetic-fixture-generation) — flat vs hierarchical 效能對照
+- [Benchmark Playbook §Synthetic Fixture Generation](../internal/benchmark-playbook.md#synthetic-fixture-generation-速率對照) — flat vs hierarchical 效能對照
 - [ADR-006: Tenant Mapping Topologies](006-tenant-mapping-topologies.md)

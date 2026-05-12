@@ -25,7 +25,7 @@ Config-driven multi-tenant alerting platform built on Prometheus `group_left` ve
 | Rule count | 5,000+ (grows linearly with tenants) | 237 (fixed, O(M)) |
 | New tenant onboarding | 1–3 days (PR → Review → Deploy) | < 5 minutes (scaffold → validate → reload) |
 | Prometheus memory | ~600MB+ | ~154MB |
-| Rule evaluation time | Grows linearly with tenants | 60ms (same for 2 or 102 tenants, [Benchmark](docs/benchmarks.md#1-向量匹配複雜度分析)) |
+| Rule evaluation time | Grows linearly with tenants | 60ms (same for 2 or 102 tenants, [Benchmark](docs/benchmarks.en.md#2-why-it-scales-om-vector-matching)) |
 | Tenant knowledge required | PromQL + Alertmanager config | YAML threshold values |
 
 ---

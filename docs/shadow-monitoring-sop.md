@@ -433,7 +433,7 @@ da-tools grafana-import \
 | ["AST 遷移引擎架構"](./migration-engine.md) | ⭐⭐ |
 | ["場景：Shadow Monitoring 全自動切換工作流"](scenarios/shadow-monitoring-cutover.md) | ⭐⭐ |
 | ["Threshold Exporter API Reference"](api/README.md) | ⭐⭐ |
-| ["性能分析與基準測試 (Performance Analysis & Benchmarks)"](./benchmarks.md) | ⭐⭐ |
+| ["性能基準 (Performance Benchmarks)"](./benchmarks.md) | ⭐⭐ |
 | ["BYO Alertmanager 整合指南"](integration/byo-alertmanager-integration.md) | ⭐⭐ |
 | ["Bring Your Own Prometheus (BYOP) — 現有監控架構整合指南"](integration/byo-prometheus-integration.md) | ⭐⭐ |
 | ["da-tools CLI Reference"](./cli-reference.md) | ⭐⭐ |
