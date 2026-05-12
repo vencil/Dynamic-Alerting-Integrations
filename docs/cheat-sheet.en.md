@@ -54,6 +54,7 @@ da-tools command quick reference. Full docs at [cli-reference.en.md](cli-referen
 | `gitops-check` | GitOps Native Mode readiness validation (repo / local / sidecar) | --url <URL>, --dir <PATH>, --namespace <NS> | `da-tools gitops-check --help` |
 | `state-reconcile` | Migration state directory reconciliation (.da/state/ schema validation + .da/manifest.json rebuild, #405 Cat A) | --state-dir <DIR>, --manifest-path <PATH>, --dry-run, --ci, --json | `da-tools state-reconcile --help` |
 | `rule-pack-diff` | Mechanical diff between two Rule Pack versions (added / removed / breaking label schema, #405 Cat D) | --from <V1.YAML>, --to <V2.YAML>, --json, --ci | `da-tools rule-pack-diff --help` |
+| `silencer-drift-check` | AM silence drift audit against v2 rule pack (offline, eats amtool dump, #405 Cat B) | --silences-file <JSON>, --rule-source <PATH>, --include-inactive, --json, --ci | `da-tools silencer-drift-check --help` |
 | `operator-generate` | Operator CRD generation (PrometheusRule / AlertmanagerConfig / ServiceMonitor) | --rule-packs-dir <DIR>, --config-dir <DIR>, --namespace, --split, --apply | `da-tools operator-generate --help` |
 | `operator-check` | Operator CRD deployment status verification (5 checks + diagnostic report) | --namespace <NS>, --json | `da-tools operator-check --help` |
 | `migrate-to-operator` | Read ConfigMap-based rules, produce equivalent CRD YAML + 6-stage migration plan | --source-dir <DIR>, --dry-run, --receiver-template | `da-tools migrate-to-operator --help` |
@@ -99,6 +100,7 @@ da-tools command quick reference. Full docs at [cli-reference.en.md](cli-referen
   - `gitops-check` — GitOps Native Mode readiness validation
   - `state-reconcile` — Migration state directory reconciliation (schema validation + manifest rebuild)
   - `rule-pack-diff` — Mechanical diff between two Rule Pack versions (upgrade audit)
+  - `silencer-drift-check` — Alertmanager silence drift audit (offline; required at cutover)
 
 - **Operator + Federation**
   - `operator-generate` — Operator CRD generation (PrometheusRule / AlertmanagerConfig / ServiceMonitor)

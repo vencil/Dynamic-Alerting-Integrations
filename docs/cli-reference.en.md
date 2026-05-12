@@ -109,6 +109,7 @@ These tools only need HTTP access to Prometheus API and can run from anywhere.
 | `gitops-check` | GitOps Native Mode readiness validation (repo / local / sidecar) | `<subcommand>` |
 | `state-reconcile` | Migration state directory declarative reconciliation (schema_version validation + manifest rebuild) | `--state-dir <dir>` (default `.da/state`) |
 | `rule-pack-diff` | Mechanical diff between two Rule Pack versions (added / removed / breaking label schema) | `--from <v1.yaml> --to <v2.yaml>` |
+| `silencer-drift-check` | AM silence drift audit against v2 rule pack (offline, eats amtool dump) | `--silences-file <json> --rule-source <path>` |
 
 ### Operator + Federation Tools
 
@@ -1498,6 +1499,65 @@ da-tools rule-pack-diff --from /tmp/v1.yaml --to /tmp/v2.yaml --json
 | 0 | Diff completed (no breaking changes; or no `--ci` so breaking still exits 0) |
 | 1 | `--ci` mode detected breaking changes |
 | 2 | Caller error (file missing / parse failure / bad arg) |
+
+---
+
+#### silencer-drift-check
+
+Alertmanager silence drift audit against the v2 rule pack — consumes an `amtool silence query -o json` dump + a rule pack source, lists silences whose matchers no longer match **any** alert in the rule source. Replaces the manual `jq + comm` workflow in [troubleshooting-checklist §1.3.2](integration/troubleshooting-checklist.en.md) ([issue #405](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/405) Category B).
+
+**Offline-first design**: the tool does NOT connect to AM directly — avoiding VPN / Ingress / Auth-proxy boundary pitfalls. It runs in CI / GitHub Action environments without any AM network connectivity.
+
+```bash
+da-tools silencer-drift-check --silences-file <silences.json> --rule-source <path> [options]
+```
+
+**Main Parameters**
+
+| Parameter | Purpose |
+|-----------|---------|
+| `--silences-file <path>` | Path to `amtool silence query -o json` output (required) |
+| `--rule-source <path>` | Rule pack YAML file or directory (recursive `*.yaml`/`*.yml`; files without a `groups:` root such as `_defaults.yaml` are silently skipped) |
+| `--include-inactive` | Include expired / pending silences. Default: only active silences are checked |
+| `--json` | Emit machine-readable JSON instead of human-readable text |
+| `--ci` | Exit 1 on orphan silences (CI gate) |
+
+**Full matcher semantics**
+
+The tool implements all four AM matcher combinations (not just `alertname=`):
+
+| `isEqual` | `isRegex` | Semantics |
+|---|---|---|
+| true | false | `label == value` |
+| false | false | `label != value` |
+| true | true | `label =~ value` (Go regex, **fullmatch**) |
+| false | true | `label !~ value` |
+
+A silence matches an alert iff **all matchers** match the alert's label set. Label set includes the implicit `alertname=<name>` plus the rule's `labels:` block. **Absent labels are treated as empty strings** (AM convention).
+
+**Exit codes**
+
+| Code | Meaning |
+|------|---------|
+| 0 | No orphan silences (or orphans present but no `--ci`) |
+| 1 | `--ci` mode detected orphans |
+| 2 | Caller error (file missing / JSON parse failure / `--rule-source` empty) |
+
+**Examples**
+
+```bash
+# Step 1: grab silences in a network-accessible environment
+amtool silence query -o json --alertmanager.url=http://<am>:9093 > silences.json
+
+# Step 2: offline comparison (no AM access needed)
+da-tools silencer-drift-check --silences-file silences.json --rule-source rule-packs/
+
+# CI gate: block merge on orphan silences
+da-tools silencer-drift-check --silences-file silences.json --rule-source rule-packs/ --ci
+
+# Automation-friendly JSON
+da-tools silencer-drift-check --silences-file silences.json --rule-source rule-packs/ --json
+```
 
 ---
 

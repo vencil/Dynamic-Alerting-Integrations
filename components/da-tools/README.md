@@ -167,6 +167,7 @@ docker run --rm \
 | `operator-check` | 驗證 Operator CRD 部署狀態（5 項檢查 + 診斷） | `--namespace <ns>` |
 | `rule-pack-split` | Rule Pack 分層拆分（edge Part 1 + central Parts 2+3） | `--rule-pack <file>` |
 | `rule-pack-diff` ✨v2.8.0 | Rule Pack 兩版本機械比對（added / removed / breaking label schema），upgrade audit 用（#405 Cat D） | `--from <v1.yaml> --to <v2.yaml>` |
+| `silencer-drift-check` ✨v2.8.0 | AM silence 對 v2 rule pack 漂移偵測（offline，吃 amtool silence query -o json dump），cutover 必跑（#405 Cat B） | `--silences-file <json> --rule-source <path>` |
 
 ### 4.9 Decommission
 

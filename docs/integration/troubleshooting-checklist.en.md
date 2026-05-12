@@ -391,22 +391,27 @@ amtool silence add \
     alertname=DatabaseDown_MySQL
 
 # Then systematic: reconcile silencers against the v2 alertname set
-# ⚠️ da-tools silencer-drift-check is not yet shipped (tracked: issue #405)
-# Offline-first design: the tool won't directly connect to AM (avoids
+# ✅ da-tools silencer-drift-check shipped (2026-05-12, issue #405 Category B)
+# Offline-first design: the tool does NOT connect to AM directly (avoids
 # VPN/Ingress/Auth boundary pitfalls); it consumes a JSON file pulled
-# down by amtool. The workaround follows the same pattern:
+# down by amtool. Standard flow:
 
 # Step 1: in a permissioned environment (bastion / kubectl exec / after port-forward), grab the silencers
 amtool silence query -o json --alertmanager.url=http://<am>:9093 > active_silences.json
 
-# Step 2: compare locally / in CI (no AM connection needed)
+# Step 2: compare locally / in CI (no AM connection needed) — one-liner
+da-tools silencer-drift-check --silences-file active_silences.json --rule-source rule-packs/
+
+# Includes full matcher semantics (isEqual / isRegex four-combinations;
+# checks not just alertname= but also severity=, team=, and any other
+# label-value drift). CI gate: add --ci to exit 1 on orphans.
+# Machine-readable: add --json for structured output.
+
+# Manual fallback (airgapped / tool unavailable) — alertname-only,
+# misses multi-matcher silences:
 grep -hE '^\s+- alert:' conf.d/**/*.yaml | awk '{print $3}' | sort -u > /tmp/v2-alertnames.txt
 jq -r '.[].matchers[] | select(.name == "alertname") | .value' active_silences.json | sort -u > /tmp/silenced-alertnames.txt
-# Drift = silencer still uses an alertname that no longer exists in v2 conf.d
 comm -23 /tmp/silenced-alertnames.txt /tmp/v2-alertnames.txt
-
-# Once the tool ships, use this instead (file input; works in CI / GitHub Action):
-# da-tools silencer-drift-check --silences-file active_silences.json --rule-source conf.d/ --rule-pack-version v2.0.0
 ```
 
 **If not this**:

@@ -63,6 +63,7 @@ def _build_help_text(lang):
     gitops-check      GitOps Native Mode 就緒度驗證 (repo / local / sidecar)
     state-reconcile   遷移狀態目錄聲明式一致化 (.da/state/ schema 驗證 + .da/manifest.json 重建)
     rule-pack-diff    Rule Pack 兩版本機械比對 (added / removed / breaking label schema)
+    silencer-drift-check  AM silence 對 v2 rule pack 漂移偵測 (offline，吃 amtool silence query -o json)
 
 命令 (Operator-Native — CRD 產生與驗證):
     operator-generate 產出 PrometheusRule / AlertmanagerConfig / ServiceMonitor CRD YAML
@@ -147,6 +148,7 @@ Commands (File System — offline):
     gitops-check      GitOps Native Mode readiness validation (repo / local / sidecar)
     state-reconcile   Migration state directory declarative reconciliation (.da/state/ schema + .da/manifest.json rebuild)
     rule-pack-diff    Mechanical diff between two Rule Pack versions (added / removed / breaking label schema)
+    silencer-drift-check  AM silence drift audit against v2 rule pack (offline, eats amtool silence query -o json)
 
 Commands (Operator-Native — CRD generation & validation):
     operator-generate Generate PrometheusRule / AlertmanagerConfig / ServiceMonitor CRD YAML
@@ -249,6 +251,9 @@ COMMAND_MAP = {
     # v2.8.0 — Rule Pack version diff (issue #405 Category D)
     # Mechanical comparison of two Rule Pack YAML versions for upgrade audits.
     "rule-pack-diff": "rule_pack_diff.py",
+    # v2.8.0 — Alertmanager silence drift auditor (issue #405 Category B)
+    # Offline check: silences JSON dump + rule pack source → list orphan silences.
+    "silencer-drift-check": "silencer_drift_check.py",
     # Group D: Operator-native (CRD generation + validation)
     "operator-generate": "operator_generate.py",
     "operator-check": "operator_check.py",

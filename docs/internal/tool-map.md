@@ -67,6 +67,7 @@ lang: zh
 | `rule_pack_diff.py` | Rule Pack version diff for upgrade audits. |
 | `scaffold_tenant.py` | Interactive tenant config generator for Dynamic Alerting. |
 | `shadow_verify.py` | Shadow Monitoring readiness and convergence verification. |
+| `silencer_drift_check.py` | Alertmanager silence drift auditor. |
 | `state_reconcile.py` | Migration State directory reconciliation. |
 | `threshold_recommend.py` | 閾值推薦引擎。 |
 | `validate_config.py` | One-stop configuration validation. |
