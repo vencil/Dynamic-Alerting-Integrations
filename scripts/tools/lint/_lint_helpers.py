@@ -33,6 +33,9 @@ BUILD_EXEMPT = frozenset({
     # v2.8.0 PR-2 — shared dispatcher absorbs ~95% of guard /
     # batchpr / parser dispatcher boilerplate. Library, not CLI.
     "_lib_godispatch.py",
+    # v2.8.0 PR #432 — cross-platform compat helpers (try_utf8_stdout
+    # consolidated from 4 callsites). Library, not CLI.
+    "_lib_compat.py",
     # v2.8.0 PR-3a — generate_alertmanager_routes.py split into 5 helpers.
     # These are library modules consumed by the main file via re-export,
     # not CLI commands themselves.
