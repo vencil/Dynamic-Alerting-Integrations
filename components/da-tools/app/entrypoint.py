@@ -236,10 +236,21 @@ def _resolve_script_path(script_name):
     """Resolve `script_name` to an existing file path, with local-dev fallback.
 
     Docker image path: TOOLS_DIR/script_name (assembled flat by build.sh).
-    Local dev fallback: search _LOCAL_SOURCE_DIRS under the repo root.
+    Local dev fallback: search _LOCAL_SOURCE_DIRS under the repo root, in
+    the declared order. If the same basename exists in multiple source
+    dirs (unlikely by project convention but not impossible), the
+    first match wins — `ops/` is the most populous canonical dir, so
+    it's first, then `dx/`, then `scripts/tools/` root.
+
+    Defensively basenames `script_name` before joining so a hypothetical
+    future caller passing a path-with-separator value can't escape the
+    intended search roots. Today all values come from the hardcoded
+    `COMMAND_MAP` so script_name is always a bare filename, but the
+    guard keeps the helper safe for re-use.
 
     Returns (resolved_path or None, searched_paths list).
     """
+    script_name = os.path.basename(script_name)
     searched = []
     primary = os.path.join(TOOLS_DIR, script_name)
     searched.append(primary)
