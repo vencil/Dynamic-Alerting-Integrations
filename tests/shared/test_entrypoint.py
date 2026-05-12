@@ -156,6 +156,65 @@ class TestRunToolErrors:
             entrypoint.run_tool("nonexistent_tool_xyz.py", [])
         assert exc_info.value.code == 1
 
+    def test_missing_script_lists_searched_paths(self, capsys):
+        """錯誤訊息應列出所有掃過的 paths（local-dev fallback transparency）。"""
+        with pytest.raises(SystemExit):
+            entrypoint.run_tool("nonexistent_tool_xyz.py", [])
+        err = capsys.readouterr().err
+        # Primary path (Docker image / TOOLS_DIR) always searched first
+        assert "components" in err or "Searched paths" in err or "已搜尋" in err
+        assert "nonexistent_tool_xyz.py" in err
+
+
+# ── _resolve_script_path: local-dev fallback ──────────────────────
+
+
+class TestResolveScriptPathFallback:
+    """_resolve_script_path() Docker-image path + local-dev source fallback。
+
+    Docker image: build.sh flattens scripts into TOOLS_DIR → primary lookup hits.
+    Local dev: scripts at scripts/tools/{ops,dx,}/ → fallback walks repo root.
+    """
+
+    def test_resolves_existing_source_script(self):
+        """check-alert exists at scripts/tools/ops/check_alert.py — fallback finds it."""
+        path, searched = entrypoint._resolve_script_path("check_alert.py")
+        assert path is not None, f"failed to resolve check_alert.py; searched={searched}"
+        assert path.endswith(os.path.join("scripts", "tools", "ops", "check_alert.py")) or \
+               path.endswith(os.path.join("components", "da-tools", "app", "check_alert.py"))
+
+    def test_resolves_three_new_v280_tools(self):
+        """v2.8.0 PR #422/#424/#431 new tools live at scripts/tools/ops/."""
+        for script in ("state_reconcile.py", "rule_pack_diff.py",
+                       "silencer_drift_check.py"):
+            path, _ = entrypoint._resolve_script_path(script)
+            assert path is not None, f"failed to resolve {script}"
+
+    def test_returns_none_for_missing(self):
+        """Truly missing script returns None + non-empty searched list."""
+        path, searched = entrypoint._resolve_script_path("definitely_missing_xyz.py")
+        assert path is None
+        assert len(searched) >= 1  # at least TOOLS_DIR was tried
+
+    def test_searched_includes_tools_dir_first(self):
+        """First search path is always TOOLS_DIR (Docker image layout primary)."""
+        _, searched = entrypoint._resolve_script_path("definitely_missing_xyz.py")
+        assert searched[0].startswith(entrypoint.TOOLS_DIR)
+
+    def test_find_repo_root_walks_up(self, tmp_path):
+        """_find_repo_root walks up to find .git (file or dir)."""
+        # Simulate a nested dir structure with .git at top
+        (tmp_path / ".git").write_text("gitdir: /elsewhere\n")  # worktree-style .git file
+        nested = tmp_path / "a" / "b" / "c"
+        nested.mkdir(parents=True)
+        assert entrypoint._find_repo_root(str(nested)) == str(tmp_path)
+
+    def test_find_repo_root_returns_none_without_git(self, tmp_path):
+        """No .git on the path → None."""
+        nested = tmp_path / "a" / "b"
+        nested.mkdir(parents=True)
+        assert entrypoint._find_repo_root(str(nested)) is None
+
 
 # ── print_usage ────────────────────────────────────────────────────
 

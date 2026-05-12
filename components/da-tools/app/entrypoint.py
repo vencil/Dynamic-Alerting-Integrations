@@ -204,6 +204,60 @@ def detect_cli_lang():
 TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
 _LANG = detect_cli_lang()
 
+# Local-dev fallback search paths (relative to repo root).
+# Docker image (build.sh) assembles all scripts flat into TOOLS_DIR,
+# so the first lookup hits. Local dev (running entrypoint.py from
+# components/da-tools/app/ in the checkout) needs to find scripts at
+# their canonical source locations.
+_LOCAL_SOURCE_DIRS = (
+    "scripts/tools/ops",
+    "scripts/tools/dx",
+    "scripts/tools",
+)
+
+
+def _find_repo_root(start_dir):
+    """Walk up from `start_dir` to find a directory containing `.git`.
+
+    `.git` can be a directory (regular checkout) or a file (worktree).
+    Returns None if no `.git` is found before reaching the filesystem root.
+    """
+    cur = os.path.abspath(start_dir)
+    while True:
+        if os.path.exists(os.path.join(cur, ".git")):
+            return cur
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            return None
+        cur = parent
+
+
+def _resolve_script_path(script_name):
+    """Resolve `script_name` to an existing file path, with local-dev fallback.
+
+    Docker image path: TOOLS_DIR/script_name (assembled flat by build.sh).
+    Local dev fallback: search _LOCAL_SOURCE_DIRS under the repo root.
+
+    Returns (resolved_path or None, searched_paths list).
+    """
+    searched = []
+    primary = os.path.join(TOOLS_DIR, script_name)
+    searched.append(primary)
+    if os.path.isfile(primary):
+        return primary, searched
+
+    repo_root = _find_repo_root(TOOLS_DIR)
+    if repo_root is None:
+        return None, searched
+
+    for subdir in _LOCAL_SOURCE_DIRS:
+        candidate = os.path.join(repo_root, subdir, script_name)
+        searched.append(candidate)
+        if os.path.isfile(candidate):
+            return candidate, searched
+
+    return None, searched
+
 # Map subcommand names to script filenames
 COMMAND_MAP = {
     # Group A: Prometheus API only (portable)
@@ -334,10 +388,17 @@ def inject_prometheus_env(args):
 
 def run_tool(script_name, args):
     """Load and execute a tool script by rewriting sys.argv."""
-    script_path = os.path.join(TOOLS_DIR, script_name)
+    script_path, searched = _resolve_script_path(script_name)
 
-    if not os.path.isfile(script_path):
-        print(f"Error: Tool script not found: {script_path}", file=sys.stderr)
+    if script_path is None:
+        if _LANG == 'zh':
+            print(f"錯誤: 找不到工具腳本 {script_name}", file=sys.stderr)
+            print("已搜尋以下路徑：", file=sys.stderr)
+        else:
+            print(f"Error: Tool script not found: {script_name}", file=sys.stderr)
+            print("Searched paths:", file=sys.stderr)
+        for path in searched:
+            print(f"  {path}", file=sys.stderr)
         sys.exit(1)
 
     # Rewrite sys.argv so argparse in each tool sees correct arguments
