@@ -133,6 +133,42 @@ graph TB
 3. **Projected Volume** 掛載 15 個獨立規則包，零 PR 衝突，各團隊獨立擁有
 4. **Prometheus** 使用 `group_left` 向量匹配與用戶閾值進行聯接，實現 O(M) 複雜度（相比傳統 O(M×N)：固定 M 條規則 vs N×M 線性增長）
 
+### 1.3 客戶導入與 GitOps 治理管線 (Day-0 / Day-1 / Day-2)
+
+v2.8.0 引入的客戶導入管線把「Day-0 把既有 PromRule corpus 轉進來」「Day-1 用 GitOps PR 切塊治理」「Day-2 運行期熱重載」三階段串成一條可離線跑、可在 air-gapped 跑、可獨立驗 supply-chain 的端到端流程：
+
+```mermaid
+graph LR
+    subgraph Day0["Day-0: Customer Migration (v2.8.0 新增)"]
+        PR["PromRule corpus<br/>(CRD / YAML)"] -->|da-parser| JSON["Canonical JSON<br/>+ prom_portable flag"]
+        JSON -->|da-tools profile build| PB["Profile Builder<br/>(cluster + median ADR-019)"]
+    end
+
+    subgraph Day1["Day-1: GitOps Hierarchy-Aware 治理"]
+        PB -->|da-batchpr apply| PR1["Base Infrastructure PR<br/>(_defaults.yaml)"]
+        PB -->|da-batchpr apply| PR2["Tenant Override PRs<br/>(&lt;id&gt;.yaml — Blocked by Base)"]
+        PR1 -.->|refresh --base-merged| PR2
+        PR1 -->|da-guard CI gate| LINT["sticky PR comment<br/>(Schema / Routing / Cardinality / Redundant-override)"]
+        PR2 -->|da-guard CI gate| LINT
+    end
+
+    subgraph Day2["Day-2: Runtime (v2.7.0 Scale Foundation I)"]
+        LINT -->|Merge| GIT["Git repo (conf.d/)"]
+        GIT -->|ArgoCD / Flux| CM["ConfigMap"]
+        CM -->|dual-hash hot-reload| TE["threshold-exporter"]
+    end
+
+    style Day0 fill:#fff3e0,stroke:#d6b656
+    style Day1 fill:#e8f4fd,stroke:#1a73e8
+    style Day2 fill:#e8f5e9,stroke:#43a047
+```
+
+**全週期治理特色：**
+- **零 vendor lock-in**：`da-parser` 保留 `prom_portable: bool`，遷入 VictoriaMetrics 後仍能識別「可回 Prom」的子集
+- **GitOps PR 切塊正確順序**：Base PR 先 merge → tenant PRs 自動 rebase（`refresh --base-merged`）；parser bug fix 走 `refresh --source-rule-ids` 細粒度重生 patch PR
+- **CI 自動把關**：`da-guard` 四層檢查 sticky PR comment（marker-based update 不灌訊息）+ artifact 14d retention
+- **三條交付路徑**：Docker / static binary 6-arch / air-gapped tar，每路徑 cosign keyless 簽 + SBOM SPDX/CycloneDX；客戶 `make verify-release` 一鍵驗
+
 ---
 
 ## 設計概念總覽
@@ -152,9 +188,9 @@ graph TB
 | **Rule Packs** | 跨團隊並行開發零 PR 衝突 | 15 個 Projected Volume + 三部分結構 + 雙語 Annotation | [design/rule-packs.md](design/rule-packs.md) |
 | **效能架構** | 500+ tenant 毫秒級處理，資源成本近乎不隨租戶數增長 | Pre-computed Recording Rule、O(M) 複雜度、Cardinality Guard | [design/config-driven.md](design/config-driven.md) |
 | **高可用性 (HA)** | SLA 99.9%+ 警報可靠度，滾動更新零中斷 | 2 副本、PDB、`max by(tenant)` 防雙倍計算 | [design/high-availability.md](design/high-availability.md) |
-| **繼承引擎 (Inheritance Engine)** 🟢 *v2.7.0 已發布* | 配置乾淨化、減少重複、多層次預設管理 | `_defaults.yaml` 於 domain/region/env 層提供可繼承的預設（L0→L1→L2→L3 深合併、array 替換、null-as-delete）(ADR-018)、雙雜湊 (source_hash + merged_hash) 精確熱重載 + 300ms debounce 防 ConfigMap symlink rotation 連動、平坦與階層式 conf.d/ 共存 (ADR-017)。**v2.7.0 交付**：Go 生產路徑 (`config_debounce.go` + `config_metrics.go` + `populateHierarchyState()` + `--scan-debounce` flag) + 3 個新 Prometheus metric (`da_config_scan_duration_seconds` / `da_config_reload_trigger_total{reason}` / `da_config_defaults_change_noop_total`) + Tenant API `GET /tenants/{id}/effective` + `da-tools describe-tenant` / `migrate-conf-d` CLI | [design/config-driven.md](design/config-driven.md) |
-| **客戶導入管線 (Customer Migration Pipeline)** 🟢 *v2.8.0 已交付* | 把客戶既有 PromRule corpus → conf.d/ 的 5-step pipeline 完整 codify；anti-vendor-lock-in（保留 `prom_portable` 標記）；GitOps Hierarchy-Aware 切 PR；零 orphan tenant 風險 | **5-step chain**：`da-parser` (PromRule→JSON, dialect detect + VM-only allowlist + StrictPromQLValidator + provenance header) → `da-tools profile build` (cluster + Profile-as-Directory-Default 萃取，median 演算 ADR-019) → `da-batchpr apply` (Hierarchy-Aware 分塊：Base Infrastructure PR 先, tenant PRs 標 `Blocked by:`) → `da-batchpr refresh --base-merged` (Base merge 後自動 rebase tenant PRs) / `--source-rule-ids` (parser bug 後 data-layer hot-fix 細粒度重生) → `da-guard` (Schema / Routing / Cardinality / Redundant-override 四層檢查，CI workflow 貼 sticky PR comment) | [migration-toolkit-installation.md](migration-toolkit-installation.md) · [ADR-019](adr/019-profile-as-directory-default.md) |
-| **/simulate Endpoint + Ephemeral Graph** 🟢 *v2.8.0 已交付* | tenant.yaml dry-run preview（不污染 watch loop）；Import Journey / simulator widget / Profile Builder 共用同一 merge code path；防止 simulate 與 commit-後實際結果發散 | `pkg/config/source.go` 新增 `ConfigSource` interface + `InMemoryConfigSource`；`POST /api/v1/tenants/simulate` 走同一條 `computeEffectiveConfig`+`computeMergedHash`；CI gate `TestSimulate_VsResolve_ParityHash` 鎖死「simulate=commit-後 preview」契約 | [design/config-driven.md](design/config-driven.md) |
+| **繼承引擎 (Inheritance Engine)** 🟢 *v2.7.0 已發布* | 配置乾淨化、減少重複、多層次預設管理 | `_defaults.yaml` L0→L3 深合併（ADR-018）+ 雙雜湊（source_hash + merged_hash）精確熱重載 + 300ms debounce 防 ConfigMap symlink rotation；扁平與階層式 conf.d/ 共存（ADR-017）。詳細交付物見 [design/config-driven.md](design/config-driven.md) | [design/config-driven.md](design/config-driven.md) |
+| **客戶導入管線 (Customer Migration Pipeline)** 🟢 *v2.8.0 已交付* | 客戶 PromRule corpus → conf.d/ 全自動化；anti-vendor-lock-in；GitOps Hierarchy-Aware 切 PR；零 orphan tenant 風險 | 5-step migration chain（`da-parser` → `profile build` → `da-batchpr` → `da-guard`）。完整圖示見 §1.3，逐步細節見 [migration-toolkit-installation.md](migration-toolkit-installation.md) · [ADR-019](adr/019-profile-as-directory-default.md) | [migration-toolkit-installation.md](migration-toolkit-installation.md) |
+| **/simulate Endpoint + Ephemeral Graph** 🟢 *v2.8.0 已交付* | tenant.yaml dry-run preview（不污染 watch loop）；Import Journey / simulator widget / Profile Builder 共用同一 merge code path；防止 simulate 與 commit-後實際結果發散 | 抽出 `ConfigSource` interface，讓 `/simulate`（dry-run）與底層 WatchLoop 共用同一套 `computeEffectiveConfig`+`computeMergedHash` 解析狀態機，**保證預覽與生產結果 100% 收斂不發散**；CI gate `TestSimulate_VsResolve_ParityHash` 鎖死契約 | [design/config-driven.md](design/config-driven.md) |
 | **Migration Toolkit 三條交付路徑** 🟢 *v2.8.0 已交付* | 滿足從 internet-connected 到 air-gapped (金融/政府/軍工) 全光譜客戶部署環境；客戶可獨立驗 supply-chain provenance | (a) Docker pull `ghcr.io/vencil/da-tools` (b) Static binary 6-arch cross-compile (linux/darwin/windows × amd64/arm64) (c) Air-gapped tar (`docker save` export)。每路徑 cosign keyless 簽 + SBOM SPDX/CycloneDX；客戶 `make verify-release` 一鍵驗 | [migration-toolkit-installation.md](migration-toolkit-installation.md) |
 | **未來路線** | 權限 × 可觀測性閉環 × 智慧化 | Field-level RBAC、Auto-Discovery、DaC、Anomaly-Aware Threshold | [design/roadmap-future.md](design/roadmap-future.md) |
 

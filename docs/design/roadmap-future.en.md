@@ -74,18 +74,21 @@ Upgraded "text rule → reviewer convention → AI reminder" to lint hooks that 
 
 ---
 
-## Deferred to v2.9.0 (explicitly out of v2.8.0 scope)
+## v2.9.0 Direction: Production-Grade Hardening (Customer Hardening)
 
-| Item | Why deferred | Tracking |
-|---|---|---|
-| **EN-first Bilingual SSOT — Full Migration** | v2.8.0 reverse — premise (open-source should be EN) was never validated; existing customers and contributors are all Chinese-native | [#145](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/145) re-evaluation triggers codified |
-| **Field-level RBAC** | v2.8.0 prioritizes the customer migration pipeline; RBAC split needs middleware + OpenAPI + Portal UI three-layer changes — large scope | Pair with v2.9.0 customer hardening pass 2 |
-| **Tenant Auto-Discovery** | Needs sidecar mode design + `discover_instance_mappings.py` rework, scope-orthogonal to v2.8.0 customer migration pipeline | Driven by first onboarding customer's actual needs |
-| **Grafana Dashboard as Code** | Needs `scaffold_tenant.py --grafana` and platform-data.json rework | Exploratory; no customer hard ask |
-| **Customer onboarding hardening pass 2** | 4-hr soak / customer-anon corpus / migration playbook walkthrough rehearsal | [#140](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/140) / [#141](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/141) / [#142](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/142) |
-| **tenant-api remaining items** | SSE per-client idle timeout / server timeout + body-size moved to Helm value | [#143](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/143) / [#144](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/144) |
-| **Mixed-mode authoritative perf characterization** | Needs 28+ nightly bench-record data points (wall-clock-bound) | [#128](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/128) |
-| **Pre-tag bench gate** (release-time hard gate) | Needs main-only hard gate + Larger Runners | [#67](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/67) |
+v2.9.0 shifts from "feature stacking" to "battle-hardening". Based on first onboarding customer feedback, we polish quality and stability rather than expanding the surface area.
+
+**Live tracking** — All development tasks, bug fixes, and progress are tracked on the GitHub Milestone (avoids the inevitable drift between static docs and the live issue tree):
+
+👉 **[v2.9.0 Milestone — Customer Hardening](https://github.com/vencil/Dynamic-Alerting-Integrations/milestone/1)**
+
+**Core focus areas:**
+
+- **Stability hardening** — 4-hr soak / real customer corpus calibration / stricter release-time bench gate (main-only hard gate + Larger Runners)
+- **Permission granularity** — Field-level RBAC to support more complex enterprise authorization models
+- **Security governance** — Glossary-driven codename gate Layer 2 (self-healing; replaces the positive-enumeration whack-a-mole pattern)
+- **Ops automation** — Rule Pack × threshold-calculator data flow closure evaluation / Local try-it-yourself onboarding (exporter / tenant-api / portal / da-tools standalone paths)
+- **Migration tooling polish** — tenant-api SSE per-client idle timeout / server timeout & body-size moved to Helm value
 
 ---
 
