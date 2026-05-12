@@ -1,0 +1,229 @@
+name: Bench Gate (PR-time, Tier 1)
+
+# Phase 2 — Tier 1 of bench gating redesign (issue #433, supersedes #67).
+#
+# Purpose: catch performance regression introduced BY THIS PR vs its merge-base.
+# This is the "blame attribution correct" tier — answers the question
+# "did this specific diff make things slower?" rather than "is main slower
+# than the last release?" (that's Tier 2's job; release-time-only).
+#
+# Why base-vs-PR, not vs release tag:
+#   The Scapegoat Trap (Gemini SRE-adversarial review): in a long release
+#   cycle, accumulated background drift across N already-merged PRs would
+#   make innocent later PRs fail a release-tag-based gate. base-vs-PR
+#   attributes blame correctly to the diff that introduced the regression.
+#
+# Override mechanism (governed, not free):
+#   For PRs where a perf regression is a deliberate trade-off (e.g., a
+#   safety check that costs 10% perf but fixes a bug), the maintainer
+#   applies the GitHub label `override: bench-regress-ok`. This skips the
+#   gate AND emits an annotation for the audit trail. Branch protection
+#   rule MUST restrict label application to the maintainers team — without
+#   that, the override becomes PR-template boilerplate within months
+#   (Broken Window pattern).
+#
+# Trigger types:
+#   `labeled` is REQUIRED in addition to opened/synchronize/reopened —
+#   without it, applying the override label doesn't re-run CI, leaving
+#   the PR stuck red (Gemini round-2 catch).
+#
+# Hardware floor:
+#   Starting on ubuntu-latest-2-cores. If observed false-positive rate
+#   exceeds 10% over 2 weeks of PR exercise, MANDATORY escalation to
+#   Larger Runners (see issue #433 W3 decision gate). The empirical
+#   max/min variance on standard runners is 1.36×–2.13× per analyzer
+#   data from 2026-05-12 — benchstat at confidence=0.99 should absorb
+#   most of that, but live-fire observation will tell.
+#
+# See: issue #433, issue #67 (closed/superseded), bench-record.yaml (nightly).
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+    paths:
+      # Only run when the threshold-exporter is touched; skip doc-only PRs.
+      - 'components/threshold-exporter/app/**'
+      - 'rule-packs/**'
+      - '.github/workflows/bench-gate-pr.yaml'
+
+concurrency:
+  # Cancel in-flight runs for the same PR (rapid pushes shouldn't queue
+  # bench runs; only the latest commit matters).
+  group: bench-gate-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write  # for posting the result comment
+
+jobs:
+  bench-gate:
+    name: PR vs merge-base bench comparison
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      # Early-exit on override label. Must come FIRST — before any
+      # checkout / bench work — to keep override PRs cheap.
+      - name: Check for override label
+        id: check_override
+        env:
+          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: |
+          if echo "$LABELS" | grep -q '"override: bench-regress-ok"'; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Bench gate skipped via 'override: bench-regress-ok' label"
+            echo "## Bench Gate — SKIPPED via override label" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "PR has \`override: bench-regress-ok\` label applied by a maintainer." >> "$GITHUB_STEP_SUMMARY"
+            echo "Performance regression is accepted as a documented trade-off." >> "$GITHUB_STEP_SUMMARY"
+            echo "Audit trail: this skip is permanently logged on the merge commit." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # CRITICAL: fetch-depth: 0 is required for `git merge-base` to find
+      # the true PR divergence point. Default depth=1 only fetches HEAD,
+      # which makes merge-base fail or return the wrong commit.
+      - name: Checkout with full history
+        if: steps.check_override.outputs.skip != 'true'
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go 1.26
+        if: steps.check_override.outputs.skip != 'true'
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+
+      - name: Cache Go modules
+        if: steps.check_override.outputs.skip != 'true'
+        uses: actions/cache@v5
+        with:
+          path: ~/go/pkg/mod
+          key: ${{ runner.os }}-go-1.26-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-1.26-
+            ${{ runner.os }}-go-
+
+      - name: Install benchstat (pinned version)
+        if: steps.check_override.outputs.skip != 'true'
+        run: |
+          # Pin to a specific revision so benchstat output format doesn't
+          # change under us across runs. Update via deliberate PR.
+          go install golang.org/x/perf/cmd/benchstat@v0.0.0-20250214135030-bdfe27c054fa
+          benchstat -h 2>&1 | head -5 || true
+
+      # CRITICAL: compute merge-base ourselves. Do NOT use origin/main HEAD
+      # as the base — that would mix in commits that landed on main AFTER
+      # the PR branched, attributing other authors' code to this PR.
+      - name: Compute merge-base
+        if: steps.check_override.outputs.skip != 'true'
+        id: merge_base
+        run: |
+          base_ref="origin/${{ github.base_ref }}"
+          base_sha=$(git merge-base HEAD "$base_ref")
+          if [ -z "$base_sha" ]; then
+            echo "::error::Could not compute merge-base with $base_ref"
+            exit 2
+          fi
+          echo "sha=$base_sha" >> "$GITHUB_OUTPUT"
+          echo "Merge-base: $base_sha (vs $base_ref)"
+
+      - name: Run bench on merge-base (baseline)
+        if: steps.check_override.outputs.skip != 'true'
+        run: |
+          # Stash any worktree state (none expected on a CI runner, but defensive).
+          git checkout "${{ steps.merge_base.outputs.sha }}"
+          make benchmark-report
+          mkdir -p "$RUNNER_TEMP/bench"
+          cp .build/bench-baseline.txt "$RUNNER_TEMP/bench/base.txt"
+          # Clean up so the next bench run starts from a fresh tree.
+          rm -rf .build
+
+      - name: Run bench on PR HEAD
+        if: steps.check_override.outputs.skip != 'true'
+        run: |
+          git checkout "${{ github.event.pull_request.head.sha }}"
+          make benchmark-report
+          mkdir -p "$RUNNER_TEMP/bench"
+          cp .build/bench-baseline.txt "$RUNNER_TEMP/bench/pr.txt"
+
+      - name: Compare with benchstat
+        if: steps.check_override.outputs.skip != 'true'
+        id: compare
+        run: |
+          # confidence=0.99 is stricter than Tier 2's 0.95 — we want fewer
+          # false positives at PR time (developer friction is worse than
+          # letting a borderline case slip to Tier 2 catch).
+          benchstat -confidence=0.99 \
+            "$RUNNER_TEMP/bench/base.txt" \
+            "$RUNNER_TEMP/bench/pr.txt" \
+            | tee "$RUNNER_TEMP/bench/benchstat.txt"
+
+          # Regression detection: benchstat's modern output marks
+          # statistically-significant regressions with "+X.XX%" delta.
+          # Insignificant changes show as "~". We grep for "+digit%" with a
+          # p-value, excluding the geomean aggregate (redundant with the
+          # per-bench rows).
+          regressions=$(grep -E '[[:space:]]\+[0-9]+\.[0-9]+%[[:space:]]*\(p=' \
+            "$RUNNER_TEMP/bench/benchstat.txt" \
+            | grep -v "geomean" \
+            || true)
+
+          if [ -n "$regressions" ]; then
+            echo "regression=true" >> "$GITHUB_OUTPUT"
+            {
+              echo "regressions<<__EOF__"
+              echo "$regressions"
+              echo "__EOF__"
+            } >> "$GITHUB_OUTPUT"
+          else
+            echo "regression=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Render PR comment + step summary
+        if: steps.check_override.outputs.skip != 'true' && always()
+        env:
+          REGRESSION: ${{ steps.compare.outputs.regression }}
+          REGRESSIONS_LIST: ${{ steps.compare.outputs.regressions }}
+        run: |
+          # Step summary first (always rendered)
+          {
+            if [ "$REGRESSION" = "true" ]; then
+              echo "## ❌ Bench Gate — REGRESSION DETECTED"
+            else
+              echo "## ✅ Bench Gate — no statistically significant regression"
+            fi
+            echo ""
+            echo "Compared PR HEAD (\`${{ github.event.pull_request.head.sha }}\`)"
+            echo "against merge-base (\`${{ steps.merge_base.outputs.sha }}\`)."
+            echo "Statistical threshold: \`benchstat -confidence=0.99\`."
+            echo ""
+            echo "### Full benchstat output"
+            echo '```'
+            cat "$RUNNER_TEMP/bench/benchstat.txt"
+            echo '```'
+            if [ "$REGRESSION" = "true" ]; then
+              echo ""
+              echo "### Regressions flagged"
+              echo '```'
+              echo "$REGRESSIONS_LIST"
+              echo '```'
+              echo ""
+              echo "If this regression is a deliberate correctness/safety trade-off,"
+              echo "request a maintainer to apply the label \`override: bench-regress-ok\`."
+              echo "The PR will re-run CI on label application (handled via this"
+              echo "workflow's \`types: [labeled]\` trigger) and be skipped with an"
+              echo "audit-trail annotation."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Fail gate on regression
+        if: steps.check_override.outputs.skip != 'true' && steps.compare.outputs.regression == 'true'
+        run: |
+          echo "::error::Statistically significant perf regression detected vs merge-base."
+          echo "::error::See benchstat output in the step summary."
+          echo "::error::Override via maintainer-applied label 'override: bench-regress-ok'."
+          exit 1
