@@ -400,24 +400,62 @@ jobs:
 
       - name: Compare with benchstat
         id: compare
+        # IMPORTANT — benchstat has TWO distinct flags that look similar
+        # but do entirely different things:
+        #
+        #   -alpha α       (default 0.05)  → significance threshold for
+        #                                    the +/-/~ markers per-bench
+        #   -confidence c  (default 0.95)  → width of the displayed
+        #                                    geomean ± confidence interval
+        #
+        # Previous version of this workflow used `-confidence=0.99`
+        # believing it tightened regression flagging — IT DID NOT. With
+        # default α=0.05, p-values up to 0.05 were still being flagged
+        # with `+` (e.g. PR #437 self-test showed `+1.14% (p=0.026)`
+        # marked significant despite our intent of "99% confidence"). The
+        # gate has been enforcing 0.95 the entire time. Use `-alpha=0.01`
+        # to actually tighten significance.
+        #
+        # Additionally: free-tier GH runners exhibit ~1-5% within-bench
+        # variance on YAML-only diffs (i.e. zero code change). Pure
+        # statistical significance is too sensitive when within-run noise
+        # is wider than the effect size — even α=0.01 still flagged
+        # several +1.5-3% deltas on the PR #437 self-test. Industry
+        # standard for CI perf gates: combine α AND |Δ| floor. We require
+        # both p < 0.01 AND |Δ| ≥ 5% to fail the gate. The 5% floor is
+        # tightenable to 3% once Larger Runners are adopted (per the
+        # rollout doc's hardware-floor escalation trigger).
         run: |
           set -euo pipefail
-          # confidence=0.99 is stricter than Tier 2's 0.95 — we want fewer
-          # false positives at PR time (developer friction is worse than
-          # letting a borderline case slip to Tier 2 catch).
-          benchstat -confidence=0.99 \
+          benchstat -alpha=0.01 \
             "$RUNNER_TEMP/bench-merged/base.txt" \
             "$RUNNER_TEMP/bench-merged/pr.txt" \
             | tee "$RUNNER_TEMP/bench-merged/benchstat.txt"
 
-          # Regression detection: benchstat's modern output marks
-          # statistically-significant regressions with "+X.XX%" delta.
-          # Insignificant changes show as "~". We grep for "+digit%" with a
-          # p-value, excluding the geomean aggregate.
+          # Two-tier regression detection:
+          # (1) benchstat already filters by α=0.01 (only `+` rows are
+          #     statistically significant slowdowns).
+          # (2) We additionally require |Δ| ≥ MAGNITUDE_FLOOR_PCT to
+          #     filter out noise-floor false positives on free-tier
+          #     runners (well-documented in bench-gate-rollout.md as the
+          #     "Noisy Neighbor Illusion").
+          # POSIX awk syntax (2-arg match()) for portability across
+          # gawk / mawk / BSD awk. We find the "+X.XX%" token via match
+          # (returns position+length), substr the number out (strip the
+          # leading + and trailing %), and compare.
+          MAGNITUDE_FLOOR_PCT=5.0
           regressions=$(grep -E '[[:space:]]\+[0-9]+\.[0-9]+%[[:space:]]*\(p=' \
-            "$RUNNER_TEMP/bench-merged/benchstat.txt" \
-            | grep -v "geomean" \
-            || true)
+                          "$RUNNER_TEMP/bench-merged/benchstat.txt" \
+                        | grep -v geomean \
+                        | awk -v floor="$MAGNITUDE_FLOOR_PCT" '{
+                            if (match($0, /\+[0-9]+\.[0-9]+%/)) {
+                              # RSTART points at "+", RLENGTH covers "+X.XX%"
+                              # Strip leading + (offset by 1) and trailing %
+                              # (length-2). RSTART/RLENGTH set by match().
+                              num = substr($0, RSTART + 1, RLENGTH - 2) + 0
+                              if (num >= floor) print
+                            }
+                          }')
 
           if [ -n "$regressions" ]; then
             echo "regression=true" >> "$GITHUB_OUTPUT"
@@ -445,7 +483,7 @@ jobs:
             echo ""
             echo "Compared PR HEAD (\`${{ github.event.pull_request.head.sha }}\`)"
             echo "against merge-base (\`${{ needs.preflight.outputs.merge_base_sha }}\`)."
-            echo "Statistical threshold: \`benchstat -confidence=0.99\`."
+            echo "Gate threshold: **p < 0.01 AND |Δ| ≥ 5%** (statistical significance via \`benchstat -alpha=0.01\` + magnitude floor for free-tier-runner noise resistance)."
             echo "Sharding: ${{ env.SHARDS_TOTAL }} shards × 2 sides = $((${{ env.SHARDS_TOTAL }} * 2)) parallel bench jobs."
             echo ""
             echo "### Full benchstat output"
