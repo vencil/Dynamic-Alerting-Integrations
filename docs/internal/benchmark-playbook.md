@@ -20,6 +20,8 @@ lang: zh
 | Dev Container 內執行 | [§在 Dev Container 內執行](#在-dev-container-內執行) |
 | Routing Bench | [§Routing Bench 注意事項](#routing-bench-注意事項) |
 | Under-Load Bench | [§Under-Load Bench 注意事項](#under-load-bench-注意事項) |
+| **PR-time bench gate 看懂 + 處理 regression** | [§Tier 1 PR-Time Bench Gate Operations](#tier-1-pr-time-bench-gate-operations) |
+| **Override label 申請 / per-event semantics** | [§Override 申請流程](#override-申請流程) |
 | 踩坑記錄 | [§踩坑記錄](#踩坑記錄-lessons-learned) |
 
 ---
@@ -136,6 +138,109 @@ grep "ns/op" /tmp/bench.txt   # 僅看結果行
 
 ---
 
+## Tier 1 PR-Time Bench Gate Operations
+
+> **Source of truth**：`.github/workflows/bench-gate-pr.yaml` + `.github/workflows/bench-override-audit.yaml`。本節是 operational 對應文件 — 設計理由見 [`bench-gate-rollout.md`](bench-gate-rollout.md)、10 個 SRE 防線 codification 見 user memory `feedback_github_actions_workflow_gotchas.md`。
+
+### 概觀
+
+| 項目 | 值 |
+|---|---|
+| 工作流檔案 | `.github/workflows/bench-gate-pr.yaml` |
+| 觸發條件 | `pull_request: [opened, synchronize, reopened, labeled]` + path filter |
+| Path filter | `components/threshold-exporter/app/**` / `rule-packs/**` / 此 workflow 自己 |
+| Sharding | 3 shards × 2 sides (base + pr) = 6 並行 bench job |
+| Wall time | ~4-5 min（限於最慢 shard） |
+| 統計判定 | `benchstat -alpha=0.01` AND `|Δ| ≥ 5%` 雙閾值 |
+| Override label | `override: bench-regress-ok`（admin/maintain only） |
+| Override 語意 | **Per-event, per-commit-state** — 不是 per-PR |
+
+### 觸發條件深掘
+
+只有 PR 動到下列 path 才會跑（doc-only PR 自動 skip 整個 gate）：
+
+- `components/threshold-exporter/app/**` — exporter Go 程式碼
+- `rule-packs/**` — rule pack YAML
+- `.github/workflows/bench-gate-pr.yaml` — 工作流自己（用於 dogfood self-test）
+
+`[labeled]` event 只在 label 名稱**就是** `override: bench-regress-ok` 時觸發 preflight（其他無關 label 如 `bug` / `needs-review` 會被 job-level `if:` 過濾掉，整個 workflow skip 不浪費 4-5 min runner）。
+
+### 看懂 step summary
+
+成功時：
+
+```
+## ✅ Bench Gate — no statistically significant regression
+Compared PR HEAD (<sha>) against merge-base (<sha>).
+Gate threshold: p < 0.01 AND |Δ| ≥ 5% (statistical significance ... + magnitude floor).
+Sharding: 3 shards × 2 sides = 6 parallel bench jobs.
+
+### Full benchstat output
+< benchstat 2-column comparison >
+```
+
+失敗時：
+
+```
+## ❌ Bench Gate — REGRESSION DETECTED
+... 同上 ...
+### Regressions flagged
+< 通過雙閾值的 benchmark 行 >
+```
+
+如果看到 `::warning::Heterogeneous CPUs detected ...` — 表示這次 Azure runner pool 分到不同 CPU（AMD EPYC vs Intel Xeon），benchstat 拒絕 cross-CPU 比較、部分 benchmark 沒有 delta 欄位。**這是 free-tier-runner 限制**，不是你 PR 的問題，重跑 (close+reopen PR 或 push 空 commit) 通常可換到一致 CPU。
+
+### Regression 偵測到怎麼辦
+
+**Decision tree**：
+
+1. **檢查 benchstat 輸出**，flagged regression 是哪些 benchmark？
+2. **這是真的 regression 嗎？**
+   - **是真的** — 你的 diff 引入了 perf 問題：fix code（O(n²) 改 O(n log n)、減少 allocations、加 cache 等）後重 push
+   - **看起來像 noise** — 同 benchmark 在 nightly `bench-record.yaml` 沒這個趨勢？到 GitHub Actions UI 的 Checks panel 右上點 **"Re-run failed jobs"** 重跑。GH-hosted runner ~10% FP rate per design（[bench-gate-rollout.md](bench-gate-rollout.md) hardware floor 段）。**不要**用 `git commit --allow-empty` 或 close+reopen PR 重跑 — 那會污染 git history + 觸發無關的 webhook noise（Slack / Jira / labels）
+   - **是 deliberate trade-off**（正確性修補 / 安全 patch / 演算法本質約束）→ 申請 override（下節）
+
+3. **重跑後仍 fail** → 多半是真的 regression，不要靠 retry 蒙混
+
+### Override 申請流程
+
+> ⚠️ **per-event, per-commit-state 語意**：override label 只對「應用 label 那一次 bench-gate 觸發」有效。任何後續 `synchronize`（push 新 commit）會自動 strip label + 強制重新評估。Maintainer 必須**每次 push 後重新審核並 re-apply**（如果新 commit 仍應 override）。
+
+**作為 PR contributor**：
+
+1. **在 PR description 寫明 trade-off rationale**：
+   - 哪個 benchmark regressed、幅度多少（貼 benchstat 輸出）
+   - 為什麼可以接受（正確性 / 安全 / 演算法約束）
+   - 後續 perf 回收計畫（若有）
+2. **Comment ping maintainer review**（不要自己貼 label — Triage 角色貼也會被 audit revert）
+
+**作為 maintainer**：
+
+1. 讀 contributor 的 trade-off rationale
+2. 同意 → 點 PR 的 Labels → apply `override: bench-regress-ok`
+3. **每次 dev push 新 commit 後 label 會自動 strip** — 看 PR comment thread，若新 commit 不影響 perf 判定，re-apply label
+
+權限驗證流程：bench-gate preflight 用 `gh api collaborators/{user}/permission` 查 label applier 角色，**只有 admin / maintain 才認可 skip**。其他角色（write / triage）→ `bench-override-audit.yaml` 自動 revert label + 留教學 comment + workflow exit 1（紅燈）。
+
+### Troubleshooting
+
+| 症狀 | 原因 | 處理 |
+|---|---|---|
+| `::error::Heterogeneous CPUs detected ... INCONCLUSIVE` | Azure runner pool 隨機 CPU 配置 → benchstat 拒絕 cross-CPU 比對 | **首選 "Re-run failed jobs" 直到 CPU 一致** — Azure pool 隨機性通常一兩次就 lands consistent。⚠️ 背景：benchstat 拒絕比對時受影響 benchmark 沒有 delta rows → 偵測腳本抓不到衰退 → 若沒此 INCONCLUSIVE 防線，gate 會 silent pass（false negative）。Workflow 已強制 INCONCLUSIVE = fail，可重跑直到 lands homogeneous CPU。**Override 反模式**：技術上 maintainer apply `override: bench-regress-ok` 會讓 compare job 整個 skip（含這個 INCONCLUSIVE 檢查），but 通常不該這樣做 — 沒有 comparison data 可作 trade-off 判斷，盲 override 等於放行 unknown risk。例外情況：CPU 反覆異質且 release critical path 趕時間，maintainer 自負風險。長期解法：Larger Runners（Tier 1 hardware-floor escalation path） |
+| `::error::Missing shard artifacts` | 某個 bench shard timeout（15 min）或 runner flake | 重跑；若反覆出現查 shard timeout 是不是合理 |
+| Override label 一直被 revert | applier 不是 admin/maintain（或 audit 工作流故障） | 確認 applier role；查 `bench-override-audit` 工作流 log |
+| Label 自動消失（push 後） | **WAI** — per-event semantics | Maintainer 重新審核新 commit 後 re-apply |
+| 整個 workflow skip 不跑 | path filter 沒匹配（doc-only PR） | 正常行為，不需處理 |
+| labeled-of-bug-label 不跑 bench | round-9 redundant-wait 修正 | 正常行為，不浪費 CI |
+
+### Cross-references
+
+- **Design**：[`bench-gate-rollout.md`](bench-gate-rollout.md) — Tier 1 + Tier 2 split rationale、Scapegoat Trap / Noisy Neighbor Illusion / Broken Window / hardware floor escalation 設計
+- **Codified gotchas**：user memory `feedback_github_actions_workflow_gotchas.md` — 10 traps from 10 rounds of adversarial review (Virtual-merge HEAD / Labeled trigger / fetch-depth / fork-PR write / fabricated SHA / Partial shard / alpha vs confidence / Ghost Green race / Blanket Immunity / Redundant Wait + Ghost Comment + Zero-regression crash)
+- **Issue tracker**：[#433](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/433) — W1 ✅ / W2 ✅ / W3 (FP rate observation, ~2 weeks) / W4 (Tier 2 release-time workflow)
+
+---
+
 ## 踩坑記錄 (Lessons Learned)
 
 ### Alertmanager email_configs.to 格式問題 (v2.0.0-preview.4)
@@ -203,7 +308,11 @@ func silenceLogs(b *testing.B) {
 >
 > 本節數字為 Phase 1 synthetic fixture 量測，**不能直接寫進客戶合約 SLA**。definitive SLO sign-off 必須等 Phase 2 customer anonymized sample 校準後重跑（DEC-B in v2.8.0-planning §10）。下游文件（pitch deck / proposal / 客戶 onboarding 文件）若引用本節數字，**必須**附帶「Phase 1 synthetic baseline」前綴。
 >
-> **Pre-tag bench regression gate**: Phase 1 (報告但不阻擋) 已落地。完整 3-phase rollout（含 Phase 2 main-only hard gate + Phase 3 PR-level gate 的 entry conditions / acceptance criteria / window invalidation）見 [`bench-gate-rollout.md`](bench-gate-rollout.md)。
+> **Bench regression gate**:
+> - Phase 1 (nightly informational) 已落地（`bench-record.yaml`）。
+> - Phase 2 **redesigned** via issue [#433](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/433) (supersedes closed #67) — split into **Tier 1** (PR-time, base-vs-PR, blame correctness) + **Tier 2** (release-time, release-vs-release, cumulative drift). Tier 1 已 ship 並啟用：`.github/workflows/bench-gate-pr.yaml`。Tier 2 待 W4 開發。
+> - 完整 design + 5 個 SRE 防線 codification + hardware floor escalation：[`bench-gate-rollout.md`](bench-gate-rollout.md)。
+> - PR-time operational flow（觸發條件 / step summary 解讀 / regression 處理 / override 申請）：[§Tier 1 PR-Time Bench Gate Operations](#tier-1-pr-time-bench-gate-operations) below。
 
 > **Scope + honest caveats**：
 >
@@ -557,6 +666,3 @@ BENCH_OUT_DIR=/tmp/b1_out bash /workspaces/vibe-k8s-lab/scripts/tools/ops/bench_
 cat /tmp/b1_out/bench.out.txt
 ```
 
----
-
-> 本文件從 [Testing Playbook](testing-playbook.md) § Performance Benchmark 獨立拆分（v2.0.0-preview.4）。
