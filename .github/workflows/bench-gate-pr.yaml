@@ -120,21 +120,39 @@ jobs:
           go install golang.org/x/perf/cmd/benchstat@latest
           benchstat -h 2>&1 | head -5 || true
 
-      # CRITICAL: compute merge-base ourselves. Do NOT use origin/main HEAD
-      # as the base — that would mix in commits that landed on main AFTER
-      # the PR branched, attributing other authors' code to this PR.
+      # CRITICAL: compute merge-base ourselves. Two distinct gotchas:
+      #
+      # (1) Do NOT use origin/<base> HEAD as the base directly — that
+      #     would mix in commits that landed on main AFTER the PR
+      #     branched, attributing other authors' code to this PR.
+      #
+      # (2) Do NOT pass `HEAD` to `git merge-base` either. On the
+      #     `pull_request` event, actions/checkout checks out a virtual
+      #     merge commit (refs/pull/<num>/merge) whose two parents are
+      #     (PR_HEAD, origin/<base> CURRENT). Calling `git merge-base
+      #     HEAD origin/<base>` returns origin/<base> itself, because
+      #     origin/<base> is a direct parent of the virtual merge ←
+      #     defeats the Scapegoat Trap defense (Gemini round-3 catch).
+      #
+      # Correct: pass `${{ github.event.pull_request.head.sha }}`
+      # explicitly — the ACTUAL PR head, not the virtual merge node —
+      # so `git merge-base` walks back through the PR's commit ancestry
+      # to find the true branching point.
       - name: Compute merge-base
         if: steps.check_override.outputs.skip != 'true'
         id: merge_base
         run: |
           base_ref="origin/${{ github.base_ref }}"
-          base_sha=$(git merge-base HEAD "$base_ref")
+          pr_head="${{ github.event.pull_request.head.sha }}"
+          base_sha=$(git merge-base "$pr_head" "$base_ref")
           if [ -z "$base_sha" ]; then
-            echo "::error::Could not compute merge-base with $base_ref"
+            echo "::error::Could not compute merge-base between $pr_head and $base_ref"
             exit 2
           fi
           echo "sha=$base_sha" >> "$GITHUB_OUTPUT"
-          echo "Merge-base: $base_sha (vs $base_ref)"
+          echo "Merge-base (true PR divergence point): $base_sha"
+          echo "  vs $base_ref"
+          echo "  vs PR HEAD ($pr_head)"
 
       - name: Run bench on merge-base (baseline)
         if: steps.check_override.outputs.skip != 'true'
