@@ -50,6 +50,15 @@ import sys
 import tempfile
 from pathlib import Path
 
+# Pull `try_utf8_stdout` from the shared compat lib at scripts/tools/.
+# Two sys.path inserts: _THIS_DIR for Docker flat layout (all .py files
+# in /app/), parent for repo subdir layout (scripts/tools/_lib_compat.py).
+# See _lib_compat.py module docstring for rationale.
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _THIS_DIR)
+sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
+from _lib_compat import try_utf8_stdout  # noqa: E402
+
 # Current schema version — keep aligned with docs/schemas/migration-state.md.
 # Bump when introducing a breaking schema change AND adding a corresponding
 # entry to MIGRATIONS below.
@@ -393,30 +402,8 @@ def compute_exit_code(report: dict, *, ci: bool, dry_run: bool) -> int:
     return 0
 
 
-def _try_utf8_stdout() -> None:
-    """Best-effort: reconfigure stdout to UTF-8 with replacement errors.
-
-    The text output uses emoji (✓, ⚠️) that legacy Windows consoles
-    (cp950 / cp936 / cp1252) cannot encode → UnicodeEncodeError crash.
-    Modern terminals (UTF-8 Linux, macOS, Windows Terminal, Docker
-    Alpine bundle) handle them natively. This guard rescues Windows-
-    host devs running `python state_reconcile.py ...` directly in
-    legacy cmd.exe / older PowerShell.
-
-    Same helper as silencer_drift_check / rule_pack_diff — duplicated
-    rather than shared because the tools are otherwise self-contained
-    and the function is small + stable.
-    """
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    except (AttributeError, OSError):
-        # capsys / non-stream stdout don't support reconfigure;
-        # older Python (<3.7) lacks it. Either way fall through.
-        pass
-
-
 def main(argv: list[str] | None = None) -> int:
-    _try_utf8_stdout()
+    try_utf8_stdout()
     ap = argparse.ArgumentParser(
         description="Reconcile migration state directory (schema + manifest).",
         formatter_class=argparse.RawDescriptionHelpFormatter,

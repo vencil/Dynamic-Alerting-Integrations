@@ -78,10 +78,18 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+
+# Pull `try_utf8_stdout` from the shared compat lib at scripts/tools/.
+# See _lib_compat.py module docstring for the rationale + sys.path layout.
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _THIS_DIR)
+sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
+from _lib_compat import try_utf8_stdout  # noqa: E402
 
 try:
     import yaml
@@ -472,34 +480,8 @@ def compute_exit_code(report: dict, *, ci: bool) -> int:
 # ─── Main ─────────────────────────────────────────────────────────────
 
 
-def _try_utf8_stdout() -> None:
-    """Best-effort: reconfigure stdout to UTF-8 with replacement errors.
-
-    Why: this tool's text output uses emoji characters (⚠️, ✓) that the
-    legacy Windows console (cp950 / cp936 / cp1252) cannot encode and
-    will crash with `UnicodeEncodeError`. Modern terminals (UTF-8 Linux,
-    macOS, Windows Terminal, Docker Alpine bundle) handle them natively.
-    The tool ships in a Docker Alpine image (utf-8 by default) so the
-    happy path is fine; this guard rescues Windows-host devs running
-    the script directly via `python silencer_drift_check.py ...` in
-    the legacy `cmd.exe` / older PowerShell console.
-
-    `errors='replace'` substitutes "?" for any character the chosen
-    codec still can't represent, instead of crashing. `reconfigure`
-    is a no-op on streams that don't support it (e.g. when stdout is
-    redirected to a non-TTY by some buggy wrapper).
-    """
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    except (AttributeError, OSError):
-        # Older Python (<3.7) lacks reconfigure; non-stream stdout
-        # (capsys, custom wrapper) may also raise. Either way, fall
-        # through — output may have replacement chars but won't crash.
-        pass
-
-
 def main(argv: list[str] | None = None) -> int:
-    _try_utf8_stdout()
+    try_utf8_stdout()
     ap = argparse.ArgumentParser(
         description=(
             "Audit Alertmanager silences against rule pack alerts; "

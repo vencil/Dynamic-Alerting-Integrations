@@ -66,6 +66,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import re
 import shutil
 import statistics
@@ -75,6 +76,18 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable
+
+# Pull `try_utf8_stdout` from the shared compat lib at scripts/tools/.
+# Two sys.path inserts: parent (`scripts/tools/`) for the repo layout
+# where _lib_compat.py lives one directory up, and self-dir for the
+# Docker flat layout where every file sits in /app/. analyze_bench_history
+# is NOT bundled into the Docker image (dev-only tool), so only the
+# parent insert is functionally required; the self-dir insert is kept
+# for parity with sibling ops/ tools that do get bundled.
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _THIS_DIR)
+sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
+from _lib_compat import try_utf8_stdout  # noqa: E402
 
 REPO = "vencil/Dynamic-Alerting-Integrations"
 WORKFLOW_FILE = "bench-record.yaml"
@@ -359,28 +372,8 @@ def render_markdown_table(
     return "\n".join(lines)
 
 
-def _try_utf8_stdout() -> None:
-    """Best-effort: reconfigure stdout to UTF-8 with replacement errors.
-
-    The text output uses Unicode characters (≤, →, ✓) that legacy
-    Windows consoles (cp950 / cp936 / cp1252) cannot encode → crash with
-    `UnicodeEncodeError`. This guard rescues Windows-host devs running
-    `python analyze_bench_history.py ...` directly in legacy cmd.exe /
-    older PowerShell.
-
-    Same helper as state_reconcile / rule_pack_diff / silencer_drift_check
-    in scripts/tools/ops/ — duplicated rather than shared because each
-    tool stays self-contained and the function is ~5 lines, stable. If
-    this pattern spreads to 10+ tools, refactor to a shared lib.
-    """
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    except (AttributeError, OSError):
-        pass
-
-
 def main() -> int:
-    _try_utf8_stdout()
+    try_utf8_stdout()
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--limit", type=int, default=28,
                         help="Number of recent successful runs to analyze (default: 28).")

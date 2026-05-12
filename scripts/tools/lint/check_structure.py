@@ -36,6 +36,7 @@ ALLOWED_TOOLS_ROOT = {
     "_lib_validation.py",
     "_lib_prometheus.py",
     "_lib_godispatch.py",  # v2.8.0 PR-2: shared dispatcher for guard / batchpr / parser
+    "_lib_compat.py",      # v2.8.0 PR #432: cross-platform compat helpers (try_utf8_stdout)
     "metric-dictionary.yaml",
     "validate_all.py",
     "vendor_download.sh",
