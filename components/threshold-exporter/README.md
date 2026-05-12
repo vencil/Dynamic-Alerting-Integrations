@@ -195,7 +195,7 @@ Quick-start：
 
 ```bash
 helm install threshold-exporter \
-  oci://ghcr.io/vencil/charts/threshold-exporter --version 2.7.0 \
+  oci://ghcr.io/vencil/charts/threshold-exporter --version 2.8.0 \
   -n monitoring --create-namespace -f values-override.yaml
 ```
 

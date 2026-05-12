@@ -105,7 +105,7 @@ spec:
     spec:
       containers:
         - name: collector
-          image: ghcr.io/vencil/da-tools:v2.7.0
+          image: ghcr.io/vencil/da-tools:v2.8.0
           command: ["python3", "-m", "http.server", "8080"]
           ports:
             - containerPort: 8080

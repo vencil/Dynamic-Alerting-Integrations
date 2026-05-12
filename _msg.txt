@@ -1,0 +1,122 @@
+chore(release): v2.8.0 Phase .e wrap-up — CHANGELOG distill + front-matter refresh + bench baseline
+
+This bundle prepares everything needed for the v2.8.0 release tag push,
+leaving the actual `git tag` + Release publish to the maintainer.
+
+## E-5.a — CHANGELOG distill
+Cut `[Unreleased]` (842 lines of in-progress narration) to `## [v2.8.0]`
+(~70 lines, 7 sections matching v2.7.0 entry shape):
+- Highlights — 5 bullets
+- 客戶導入管線 (5-step chain) — new pillar
+- Scale Foundation III — 1000-tenant baseline + bench-gate Tier 1/2
+- Customer-Facing Surface — Search API / Tenant Manager / Onboarding / Smart Views
+- 測試與 CI 基礎設施 — global-swap removal / Policy-as-Code lint / hardening
+- 文件治理 — codename sweep / TRK / benchmarks rewrite / bump_docs
+- Benchmark — 4-row table (cold load / steady-state reload / simulate / e2e fire-through)
+- ADR 新增 (ADR-019/020/021)
+- Breaking changes — duplicate tenant id / body validation / open-mode authz
+- Upgrade notes
+
+New empty `[Unreleased]` template kept for v2.9.0 work to populate.
+
+## E-5.a-bis — Project-face refresh
+
+**README.md / README.en.md** (breadth-first; SRE-evaluator audience):
+- Version badge v2.7.0 → v2.8.0
+- Bilingual badge 73 → 77 pairs (actual count)
+- Python tools count 130/121 → 157 (per `bump_docs --sync-counts` detection)
+- Doc files 118/129 → 198 (77 bilingual pairs)
+- Existing v2.8.0 Migration Toolkit / Customer Migration Pipeline sections retained
+  (already covered the release scope adequately)
+
+**docs/architecture-and-design.md / .en.md** (depth-first; architect/contributor audience):
+- §5 Future Roadmap table: v2.8.0 status flipped from "In Development (release wrap-up)"
+  to "Shipped (2026-05-12)" with all delivered items listed; added v2.9.0 In Planning
+  row (Glossary Layer 2 / 4-hr soak / DEC-F / Local try-it-yourself onboarding)
+- Spoke pointer description: "v2.7.0 計畫中 → 長期探索方向" → "v2.8.0 已交付項目 +
+  v2.9.0+ 長期探索方向"
+- Removed stale "v2.7.0 execution records see internal/v2.7.0-planning.md" line
+  (planning archives are maintainer-local gitignored, not browseable on GitHub)
+- Existing 設計概念總覽 table already has v2.8.0 features marked 🟢; no change
+
+## E-5.b — GitHub Release body draft
+
+`docs/internal/v2.8.0-release-body.md` — owner copy-paste-able draft for
+`gh release create v2.8.0` (and the four sibling component tags). Distilled
+from the CHANGELOG §v2.8.0 entry, English-first since GitHub Release pages
+have broader reach. Marked internal/ (not in mkdocs site).
+
+## E-4 — Cross-review focal points
+
+`docs/internal/v2.8.0-release-review-focal-points.md` — survey doc for owner
++ external reviewer covering: 4 pillars / high-risk measurement surfaces
+(benchmark numbers / soak finding / 4-hr soak deferral) / wide-impact small
+changes (bump_docs / codename sweep / PR template) / debatable design choices
+(SSOT lock / Layer 1 enumeration / 3 delivery paths / batch-pr JSON contract)
+/ known follow-up debt elevated to GitHub issues.
+
+## E-3.a — dev-rules.md verified-at-version v2.6.0 → v2.8.0
+
+Content was already v2.8.0-current (references `code-driven (v2.8.0, S#83
+PR #173)`); only the metadata label was stale.
+
+## E-3.b — LL annealing review
+
+Inspected v2.1.0 / v2.2.0 / v2.6.x / v2.7.0 / v2.8.0 Lessons-Learned
+sections in `docs/internal/testing-playbook.md`. v2.1.0-v2.6.x items
+already carry 🛡️ automated markers + archive callouts (annealing has
+been ongoing). `make playbook-freshness-ll` (informational, exit 0)
+flags 5 LL section headers still bearing old version labels as TODO
+for wholesale archive — deferred to v2.9.0 cycle since none introduce
+new risk for v2.8.0 release. v2.7.0 + v2.8.0 LL entries are still
+within the 2-minor freshness window.
+
+## E-2.c — `make benchmark-report` v2.8.0 baseline
+
+Ran in dev container, 60.554s for `pkg/config` package. Output:
+`.build/bench-baseline.txt` (146 lines, 20 KB) — covers `*_1000`
+benchmarks + MixedMode + Simulate_DeepChain. Used as evidence input
+for benchmarks.md numbers (`FullDirLoad_1000` 112 ms / `Incremental
+Load_1000_NoChange` 1.3 ms remain consistent with v2.7.0 baseline).
+Issue #60 Phase 1 informational — trend tracking left for nightly cron.
+
+## Component VERSION bump (tools/exporter/tenant-api)
+
+`bump_docs.py --tools 2.8.0 --exporter 2.8.0 --tenant-api 2.8.0`:
+PR #439 only bumped the platform line; this bundle bumps the three
+component-specific release lines (45 single-line edits across
+`components/da-tools/app/VERSION` + helm Chart.yaml + Dockerfile
+LABEL + image-tag references + scenarios installation snippets +
+README examples). Required before the four component-prefixed tags
+(`exporter/v2.8.0` / `tools/v2.8.0` / `portal/v2.8.0` /
+`tenant-api/v2.8.0`) can be pushed.
+
+## Pre-tag gate status
+
+- ✅ `bump_docs.py --check` — all version references consistent
+- ✅ `make benchmark-report` — `.build/bench-baseline.txt` produced
+- ℹ️ `check_playbook_freshness.py --scan-ll` — exit 0; 5 informational
+  LL annealing reminders (v2.1.0-v2.6.x sections; pre-existing tech
+  debt, not v2.8.0-introduced; deferred to v2.9.0)
+- ⏭️ `make lint-docs` — Windows cp950 codec issue blocks local run;
+  CI will verify on PR
+
+## Next step (NOT in this PR)
+
+E-5.c — 5-line tag push + GitHub Release publish:
+
+```
+git tag v2.8.0
+git tag exporter/v2.8.0
+git tag tools/v2.8.0
+git tag portal/v2.8.0
+git tag tenant-api/v2.8.0
+git push origin v2.8.0 exporter/v2.8.0 tools/v2.8.0 portal/v2.8.0 tenant-api/v2.8.0
+gh release create v2.8.0 --notes-file docs/internal/v2.8.0-release-body.md
+# (and four sibling releases for the component tags)
+```
+
+This is the **destructive / publishing** step that requires explicit
+maintainer authorization — not automated in this PR.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>

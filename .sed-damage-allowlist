@@ -37,3 +37,11 @@ scripts/tools/ops/generate_alertmanager_routes.py
 # from HEAD's pre-#460 size. Genuine content refactor, not damage.
 docs/benchmarks.md
 docs/benchmarks.en.md
+
+# v2.8.0 Phase .e E-5.a CHANGELOG distill: [Unreleased] section 842 lines
+# of in-progress narration condensed to ## [v2.8.0] heading + 70 lines
+# following v2.7.0 entry shape (7 sections). Total file shrinks ~46%
+# (1868 → 1026 lines) — same content moved to internal planning archive
+# (gitignored) per the editorial guideline at the top of the file. This
+# is the documented release-cut pattern, not damage.
+CHANGELOG.md

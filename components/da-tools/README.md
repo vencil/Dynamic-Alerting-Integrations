@@ -356,8 +356,8 @@ DA_LANG=en docker run --rm ghcr.io/vencil/da-tools migrate --help
 | 元件 | 版號 | Git Tag | 內容 |
 |------|------|---------|------|
 | 平台文件 | v2.8.0 | `v2.7.0` | 整體釋出版本 |
-| threshold-exporter | v2.7.0 | `exporter/v2.7.0` | Go binary（含 da-guard / da-batchpr / da-parser） |
-| **da-tools** | **v2.7.0** | **`tools/v2.7.0`** | 本 image（45 個 Python CLI + 3 個 bundled Go binary） |
+| threshold-exporter | v2.8.0 | `exporter/v2.8.0` | Go binary（含 da-guard / da-batchpr / da-parser） |
+| **da-tools** | **v2.8.0** | **`tools/v2.8.0`** | 本 image（45 個 Python CLI + 3 個 bundled Go binary） |
 | da-portal | v2.7.0 | `portal/v2.7.0` | Interactive Tools Hub image |
 | tenant-api | v2.7.0 | `tenant-api/v2.7.0` | Go HTTP API |
 
@@ -376,7 +376,7 @@ cd components/da-tools/app
 ./build.sh
 
 # Build 指定版號（同步寫進 image label + VERSION 檔內容）
-./build.sh 2.7.0
+./build.sh 2.8.0
 
 # Assemble-only mode（CI 用，給 Buildx 接 multi-arch build）
 ./build.sh --assemble-only
@@ -408,7 +408,7 @@ spec:
     spec:
       containers:
         - name: da-tools
-          image: ghcr.io/vencil/da-tools:v2.7.0
+          image: ghcr.io/vencil/da-tools:v2.8.0
           env:
             - name: PROMETHEUS_URL
               value: "http://prometheus.monitoring.svc.cluster.local:9090"
