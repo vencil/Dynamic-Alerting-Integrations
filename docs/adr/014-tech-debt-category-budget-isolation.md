@@ -14,7 +14,7 @@ lang: zh
 
 ## 狀態
 
-✅ **Accepted**（v2.7.0, 2026-04-16）— 已 land 於 `docs/internal/known-regressions.md`（後 phantom-deleted, v2.8.0 Phase .a），TRK-201/202 為首批實例。
+✅ **Accepted**（v2.7.0, 2026-04-16）— 已 land 於 `docs/internal/known-regressions.md`（後 phantom-deleted 於 v2.8.0），TRK-201/202 為首批實例。
 
 ## 背景
 

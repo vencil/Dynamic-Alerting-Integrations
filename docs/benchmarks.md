@@ -72,7 +72,7 @@ lang: zh
 
 **測試環境**：Dev Container (Intel Core 7 240H, Go 1.26.2 linux/amd64), `buildDirConfig` 合成 fixture，每 tenant 含 8 個 metric threshold (含 scheduled override + regex dimensional)。
 
-**Baseline 量測於 v2.7.0-final** (2026-04-18, [`b808610`](https://github.com/vencil/Dynamic-Alerting-Integrations/commit/b808610), `-benchtime=3s -count=3`)；v2.8.0 scan path 未改動，**bench-gate-pr Tier 1 CI gate** 每個 PR 持續驗證該 baseline 無 regression。
+**Baseline 量測於 v2.7.0** (2026-04-18, [`b808610`](https://github.com/vencil/Dynamic-Alerting-Integrations/commit/b808610), `-benchtime=3s -count=3`)；v2.8.0 scan path 未改動，**bench-gate-pr Tier 1 CI gate** 每個 PR 持續驗證該 baseline 無 regression。
 
 | 路徑 | 100 tenants | **1000 tenants** | 含意 |
 |---|---:|---:|---|
@@ -96,7 +96,7 @@ lang: zh
 
 ## 4. v2.8.0 端到端 Alert Fire-Through baseline
 
-v2.8.0 B-1 Phase 2 落地 **5-anchor end-to-end alert fire-through harness** (`tests/e2e-bench/`)，覆蓋從 `conf.d/` 寫入 → exporter reload → Prometheus alert trigger → Alertmanager dispatch → webhook receiver 的完整鏈。
+v2.8.0 落地 **5-anchor end-to-end alert fire-through harness** (`tests/e2e-bench/`)，覆蓋從 `conf.d/` 寫入 → exporter reload → Prometheus alert trigger → Alertmanager dispatch → webhook receiver 的完整鏈。
 
 **Harness composition**：6-service docker-compose stack（threshold-exporter / Prometheus / pushgateway / Alertmanager / receiver / driver）+ statistical aggregator (n=30 + bootstrap 95% CI) + Tier 1 fail-fast smoke gate。
 
@@ -116,7 +116,7 @@ v2.8.0 B-1 Phase 2 落地 **5-anchor end-to-end alert fire-through harness** (`t
 
 **Run via**：`make bench-e2e` (local) + nightly `bench-record.yaml` workflow。
 
-> **Methodology note**：以上數字為 synthetic-v2 fixture (Zipf+power-law tenant distribution) 的嚴謹量測 (n=30 + bootstrap 95% CI)，已通過 v2.8.0 release-readiness gate。客戶導入時若需 SLA contract anchor，可透過 [DEC-B customer-anon corpus calibration](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/142) (±30% gate) 對客戶實際 fixture 形狀重新驗證後 promote 為合約數字。Calibration 流程 + ops 細節：[Benchmark Playbook §Phase 2 calibration](internal/benchmark-playbook.md#v280-phase-2-e2e-alert-fire-through-b-1-phase-2)。
+> **Methodology note**：以上數字為 synthetic-v2 fixture (Zipf+power-law tenant distribution) 的嚴謹量測 (n=30 + bootstrap 95% CI)，已通過 v2.8.0 release-readiness gate。客戶導入時若需 SLA contract anchor，可透過 [customer-anon corpus calibration](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/142) (±30% gate) 對客戶實際 fixture 形狀重新驗證後 promote 為合約數字。Calibration 流程 + ops 細節：[Benchmark Playbook §v2.8.0 e2e alert fire-through calibration](internal/benchmark-playbook.md#v280-phase-2-e2e-alert-fire-through-b-1-phase-2)。
 
 ---
 

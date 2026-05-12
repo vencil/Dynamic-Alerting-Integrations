@@ -5,11 +5,11 @@ audience: platform-ops, sre, security
 verified-at-version: v2.8.0
 ---
 
-# Tenant API Hardening — v2.8.0 Phase B Track C
+# Tenant API Hardening — v2.8.0
 
-> The v2.7.0 tenant-api already shipped basic RBAC plus the standard chi middleware chain (RequestID / RealIP / Logger / Recoverer / Timeout 30s). This v2.8.0 Phase B Track C bundle is the "pre-customer-onboarding hardening" pass: filling three production gaps — **rate limiting**, **X-Request-ID response header echo**, and **tenant-scoped authz on Groups / Views / Task / PR endpoints**.
+> The v2.7.0 tenant-api already shipped basic RBAC plus the standard chi middleware chain (RequestID / RealIP / Logger / Recoverer / Timeout 30s). This v2.8.0 bundle is the "pre-customer-onboarding hardening" pass: filling three production gaps — **rate limiting**, **X-Request-ID response header echo**, and **tenant-scoped authz on Groups / Views / Task / PR endpoints**.
 >
-> Companion PRs: PR-1 (middleware bundle) + PR-2 (tenant-scoped authz).
+> Companion tracks: middleware bundle + tenant-scoped authz.
 
 ---
 
@@ -105,7 +105,7 @@ From then on, grepping backend logs for `cust-incident-2026-04-29-001` pins down
 
 ## 3. Tenant-Scoped Authorization
 
-v2.7.0 RBAC enforced `PermRead` / `PermWrite` at the route level via `rbacMgr.Middleware(perm, tenantIDFn)` — correct for "single tenant from path param" endpoints, but with information-disclosure gaps on endpoints that accept a **list of tenants** in the request body or **return cross-tenant data**. v2.8.0 Track C PR-2 closes those four-endpoint gaps.
+v2.7.0 RBAC enforced `PermRead` / `PermWrite` at the route level via `rbacMgr.Middleware(perm, tenantIDFn)` — correct for "single tenant from path param" endpoints, but with information-disclosure gaps on endpoints that accept a **list of tenants** in the request body or **return cross-tenant data**. v2.8.0 tenant-scoped authz closes those four-endpoint gaps.
 
 ### 3.1 Affected endpoints + behaviour change
 
@@ -130,7 +130,7 @@ A 403 on `GET /api/v1/prs?tenant=db-secret` would **leak the existence of `db-se
 
 ### 3.4 Why `_metadata` path-inference is NOT in scope
 
-ADR-017 mentions "if a flat tenant lacks `_metadata.{domain,region,environment}`, the scanner can infer them from parent directories." That's a **migration tool** feature (`migrate_conf_d.py`), not runtime tenant-api. Track C deliberately doesn't expand RBAC core behaviour.
+ADR-017 mentions "if a flat tenant lacks `_metadata.{domain,region,environment}`, the scanner can infer them from parent directories." That's a **migration tool** feature (`migrate_conf_d.py`), not runtime tenant-api. This hardening deliberately doesn't expand RBAC core behaviour.
 
 ### 3.5 Open-mode RBAC behaviour (no `_rbac.yaml`)
 
@@ -140,7 +140,7 @@ ADR-017 mentions "if a flat tenant lacks `_metadata.{domain,region,environment}`
 | `PermWrite` | **Denied** (don't let a missing config silently allow writes) |
 | `PermAdmin` | **Denied** |
 
-→ In open-mode environments, `PutGroup` / `DeleteGroup` will be blocked by PR-2's new tenant-scoped check (since PermWrite is denied). This is intentional: production hardening shouldn't degrade to "anyone can write" just because the operator forgot to deploy `_rbac.yaml`.
+→ In open-mode environments, `PutGroup` / `DeleteGroup` will be blocked by the new tenant-scoped check (since PermWrite is denied). This is intentional: production hardening shouldn't degrade to "anyone can write" just because the operator forgot to deploy `_rbac.yaml`.
 
 ### 3.6 Error message design
 
@@ -183,11 +183,11 @@ For dev environments without `_rbac.yaml`:
 - Reads still pass through (v2.7.0 behaviour preserved)
 - **Writes now require `_rbac.yaml`**: add a minimal config such as `groups: [{name: dev, tenants: ["*"], permissions: [admin]}]`
 
-Without the fix, PUT/DELETE Groups will hit the new PR-2 check and return 403. The fix itself is ~5 lines of YAML and doesn't block v2.7.0 → v2.8.0 upgrade.
+Without the fix, PUT/DELETE Groups will hit the new tenant-scoped check and return 403. The fix itself is ~5 lines of YAML and doesn't block v2.7.0 → v2.8.0 upgrade.
 
 ---
 
-## 5. Known gaps (out of Track C scope)
+## 5. Known gaps (out of this hardening scope)
 
 ### 5.1 ~~Body-content range validation~~ (C4 ✅ landed v2.8.x via [issue #134](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/134))
 
@@ -223,15 +223,15 @@ Without the fix, PUT/DELETE Groups will hit the new PR-2 check and return 403. T
 }
 ```
 
-ALL violations are listed (not first-only) — same UX as PR-2's forbidden-tenant listing. One round-trip lets the operator fix everything.
+ALL violations are listed (not first-only) — same UX as the tenant-scoped check's forbidden-tenant listing. One round-trip lets the operator fix everything.
 
 ### 5.2 Server-level timeout / body-size still hardcoded
 
-`http.Server{ReadTimeout: 15s, WriteTimeout: 30s, IdleTimeout: 60s}` and the 1MB body limit are baked into code. When customer ops need different per-environment values, expose via Helm value. **Track C deliberately doesn't expand this surface** — defaults are within reasonable range.
+`http.Server{ReadTimeout: 15s, WriteTimeout: 30s, IdleTimeout: 60s}` and the 1MB body limit are baked into code. When customer ops need different per-environment values, expose via Helm value. **This hardening deliberately doesn't expand this surface** — defaults are within reasonable range.
 
 ### 5.3 SSE client idle timeout
 
-The `/api/v1/events` SSE hub has no per-client idle timeout (slow clients hold a goroutine indefinitely). Track C doesn't address this — it's a separate SSE-specific hardening path, decoupled from RBAC / rate limiting.
+The `/api/v1/events` SSE hub has no per-client idle timeout (slow clients hold a goroutine indefinitely). This hardening doesn't address it — it's a separate SSE-specific hardening path, decoupled from RBAC / rate limiting.
 
 ---
 
@@ -242,5 +242,5 @@ The `/api/v1/events` SSE hub has no per-client idle timeout (slow clients hold a
 - Tenant ID validation (pre-existing): `components/tenant-api/internal/handler/sanitize.go`
 - RBAC core: `components/tenant-api/internal/rbac/` (since v2.5.0)
 - ADR-009: oauth2-proxy sidecar integration
-- Tests: `components/tenant-api/internal/handler/middleware_test.go` (15 cases, PR-1) + `authz_test.go` (14 cases, PR-2)
-- v2.7.0 B-3: Tenant API basic — provided the RBAC framework that this hardening completes
+- Tests: `components/tenant-api/internal/handler/middleware_test.go` (15 cases, middleware bundle) + `authz_test.go` (14 cases, tenant-scoped authz)
+- v2.7.0: Tenant API basic — provided the RBAC framework that this hardening completes

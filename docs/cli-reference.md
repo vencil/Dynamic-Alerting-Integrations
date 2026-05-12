@@ -147,10 +147,10 @@ da-tools <command> --help
 | `config-diff` | 兩目錄配置差異比對（GitOps PR review） | `--old-dir <dir> --new-dir <dir>` |
 | `evaluate-policy` | Policy-as-Code DSL 評估引擎 | `--config-dir <dir>` |
 | `opa-evaluate` | OPA Rego 策略評估橋接（OPA 整合） | `--config-dir <dir>` |
-| `guard` | Dangling Defaults Guard 包裝（C-12 PR-4），shell-out 至 `da-guard` Go binary | `defaults-impact --config-dir <dir>` |
-| `batch-pr` | Migration Batch PR Pipeline 包裝（C-10 PR-5），shell-out 至 `da-batchpr` Go binary | `apply\|refresh\|refresh-source [flags]` |
-| `parser` | PromRule parser 包裝（C-8 PR-2），shell-out 至 `da-parser` Go binary；strict-PromQL 相容性檢查 + dialect 分類 | `import\|allowlist [flags]` |
-| `tenant-verify` | 印 tenant effective config + merged_hash（Phase B Track A，B-4 rollback checklist） | `<tenant-id> [--conf-d <dir>] [--expect-merged-hash <hash>]` 或 `--all --json` |
+| `guard` | Dangling Defaults Guard 包裝（v2.8.0），shell-out 至 `da-guard` Go binary | `defaults-impact --config-dir <dir>` |
+| `batch-pr` | Migration Batch PR Pipeline 包裝（v2.8.0），shell-out 至 `da-batchpr` Go binary | `apply\|refresh\|refresh-source [flags]` |
+| `parser` | PromRule parser 包裝（v2.8.0），shell-out 至 `da-parser` Go binary；strict-PromQL 相容性檢查 + dialect 分類 | `import\|allowlist [flags]` |
+| `tenant-verify` | 印 tenant effective config + merged_hash（v2.8.0；incremental migration playbook rollback checklist） | `<tenant-id> [--conf-d <dir>] [--expect-merged-hash <hash>]` 或 `--all --json` |
 | `test-notification` | 多通道通知連通性測試（驗證 receiver 可達性） | `--config-dir <dir>` |
 | `threshold-recommend` | 閾值推薦引擎（基於歷史 P50/P95/P99 數據） | `--config-dir <dir>` + `--prometheus <url>` |
 | `explain-route` | 路由合併管線除錯器（四層展開 + 設定檔擴展，ADR-007） | `--config-dir <dir>` |
@@ -2338,7 +2338,7 @@ da-tools opa-evaluate --config-dir conf.d/ --dry-run
 
 #### guard
 
-Dangling Defaults Guard（v2.8.0 Phase .c C-12 PR-4）。Python 包裝 shell-out 到 `da-guard` Go binary，驗證 `conf.d/` 樹是否安全（schema / routing / cardinality 三層）。
+Dangling Defaults Guard（v2.8.0）。Python 包裝 shell-out 到 `da-guard` Go binary，驗證 `conf.d/` 樹是否安全（schema / routing / cardinality 三層）。
 
 **用法**
 
@@ -2396,13 +2396,13 @@ da-tools guard defaults-impact --config-dir conf.d/ \
     --format json --output guard-report.json
 ```
 
-**範圍簡化（vs planning §C-12）**：PR-4 是 *當前工作樹* 驗證器（讀取磁碟現狀）；CI / pre-commit 流程下與「給 _defaults.yaml 變更預測影響」delta-aware 模型等價（變更 commit / push 前已寫到磁碟）。Speculative simulation 留 C-7b `/simulate`。同 repo 內 `components/threshold-exporter/README.md` 有完整設計理由與三層檢查說明（不在 MkDocs site 內，請從 GitHub 端開啟）。
+**範圍簡化**：`da-guard` 是 *當前工作樹* 驗證器（讀取磁碟現狀）；CI / pre-commit 流程下與「給 _defaults.yaml 變更預測影響」delta-aware 模型等價（變更 commit / push 前已寫到磁碟）。Speculative simulation 留 `/simulate` endpoint。同 repo 內 `components/threshold-exporter/README.md` 有完整設計理由與三層檢查說明（不在 MkDocs site 內，請從 GitHub 端開啟）。
 
 ---
 
 #### batch-pr
 
-C-10 Migration Batch PR Pipeline（v2.8.0 Phase .c C-10 PR-1..5）。Python 包裝 shell-out 到 `da-batchpr` Go binary，把 customer 的 PromRule corpus 走完「emit → 開 PR → review → Base merge → tenant rebase → 必要時 data-layer hot-fix」整套流程。
+Migration Batch PR Pipeline（v2.8.0）。Python 包裝 shell-out 到 `da-batchpr` Go binary，把 customer 的 PromRule corpus 走完「emit → 開 PR → review → Base merge → tenant rebase → 必要時 data-layer hot-fix」整套流程。
 
 **用法**
 
@@ -2414,7 +2414,7 @@ da-tools batch-pr <subcommand> [flags]
 
 | 子命令 | 說明 |
 |---|---|
-| `apply` | 從 Plan + C-9 emit 輸出開出（或更新）tenant chunk PR；走 Hierarchy-Aware chunking（Base Infrastructure PR + per-domain tenant chunks） |
+| `apply` | 從 Plan + profile-builder emit 輸出開出（或更新）tenant chunk PR；走 Hierarchy-Aware chunking（Base Infrastructure PR + per-domain tenant chunks） |
 | `refresh` | Base PR merge 後對 `Blocked by` tenant branches 跑 `git rebase --onto <merged-sha>`，conflict 落地到 `refresh-report.md` |
 | `refresh-source` | 已知一組 source rule 因 parser 修 bug 導致 emission 變化時，把對應 tenant PR 的受影響檔案重寫 + 推上去（data-layer hot-fix）|
 
@@ -2431,7 +2431,7 @@ da-tools batch-pr <subcommand> [flags]
 | Flag | 預設 | 說明 |
 |---|---|---|
 | `--plan <path>` | （必填）| Plan JSON（從 `BuildPlan` 序列化） |
-| `--emit-dir <dir>` | （必填）| C-9 emit 輸出目錄；CLI walk + AllocateFiles bucketing |
+| `--emit-dir <dir>` | （必填）| profile-builder emit 輸出目錄；CLI walk + AllocateFiles bucketing |
 | `--repo <owner/name>` | （必填）| GitHub repo |
 | `--workdir <dir>` | （必填）| 本地 clone（git ops 的 CWD） |
 | `--base-branch <name>` | `main` | 新 PR 的 base |
@@ -2463,7 +2463,7 @@ da-tools batch-pr <subcommand> [flags]
 **範例**
 
 ```bash
-# 開 PR：把 C-9 emit 輸出 push 進 customer repo
+# 開 PR：把 profile-builder emit 輸出 push 進 customer repo
 da-tools batch-pr apply \
     --plan plan.json --emit-dir ./emit/ \
     --repo vencil/customer --workdir ./customer-repo
@@ -2478,13 +2478,13 @@ da-tools batch-pr refresh-source \
     --workdir ./customer-repo
 ```
 
-**Honest scope（C-10 PR-5 v1）**：JSON-input-first 是 v1 contract（machine-friendly + automation-friendly）；convenience flags（`--base-merged-sha N`、`--source-rule-ids id1,id2,id3`）defer 後續 polish PR。Python 包裝走 shell-out 同 `guard` pattern，binary 由 `tools/v*` Release / da-tools docker image bundle 提供。
+**Honest scope（v2.8.0 v1）**：JSON-input-first 是 v1 contract（machine-friendly + automation-friendly）；convenience flags（`--base-merged-sha N`、`--source-rule-ids id1,id2,id3`）defer 後續 polish。Python 包裝走 shell-out 同 `guard` pattern，binary 由 `tools/v*` Release / da-tools docker image bundle 提供。
 
 ---
 
 #### parser
 
-C-8 MetricsQL-as-Superset PromRule parser（v2.8.0 Phase .c C-8 PR-2）。Python 包裝 shell-out 到 `da-parser` Go binary，把 customer 的 `PrometheusRule` CRD YAML 解析為標準 `ParsedRule` JSON，per rule 標註 dialect（`prom` / `metricsql` / `ambiguous`）+ VM-only function 列表 + `prom_compatible: bool`（用 `prometheus/promql/parser` 跑 strict 相容性檢查）。
+MetricsQL-as-Superset PromRule parser（v2.8.0）。Python 包裝 shell-out 到 `da-parser` Go binary，把 customer 的 `PrometheusRule` CRD YAML 解析為標準 `ParsedRule` JSON，per rule 標註 dialect（`prom` / `metricsql` / `ambiguous`）+ VM-only function 列表 + `prom_compatible: bool`（用 `prometheus/promql/parser` 跑 strict 相容性檢查）。
 
 **用法**
 
@@ -2514,7 +2514,7 @@ da-tools parser <subcommand> [flags]
 | `--input <path>` | （必填）| PrometheusRule YAML 路徑；`-` = stdin |
 | `--output <path>` | `-`（stdout） | JSON ParseResult 輸出路徑 |
 | `--generated-by <stamp>` | `da-parser@<version>` | 寫入 `Provenance.GeneratedBy`（CI job id 等） |
-| `--validate-strict-prom` | true | 對每條 rule 跑 `prometheus/promql/parser`（PR-2 預設開，anti-vendor-lock-in） |
+| `--validate-strict-prom` | true | 對每條 rule 跑 `prometheus/promql/parser`（v2.8.0 預設開，anti-vendor-lock-in） |
 | `--fail-on-non-portable` | false | 任一 rule `prom_compatible=false` → exit 1（自動 imply `--validate-strict-prom`） |
 | `--fail-on-ambiguous` | false | 任一 rule `dialect=ambiguous` → exit 1 |
 
@@ -2548,7 +2548,7 @@ helm template ... | da-tools parser import --input -
 da-tools parser allowlist --format json
 ```
 
-**輸出 ParsedRule schema 重點欄位**（v2.8.0 PR-2）：
+**輸出 ParsedRule schema 重點欄位**（v2.8.0）：
 
 | 欄位 | 型別 | 說明 |
 |---|---|---|
@@ -2558,7 +2558,7 @@ da-tools parser allowlist --format json
 | `vm_only_functions` | []string | 該 rule 用到的 VM-only 函數，sorted |
 | `analyze_error` | string | metricsql parse 失敗訊息（dialect=ambiguous 時填）|
 | `strict_prom_error` | string | `prometheus/promql/parser` 失敗訊息（PromCompatible=false 時填）|
-| `source_rule_id` | string | `<source-file>#groups[i].rules[j]` — C-10 `refresh --source-rule-ids` 的反向查詢 key |
+| `source_rule_id` | string | `<source-file>#groups[i].rules[j]` — `da-batchpr refresh --source-rule-ids` 的反向查詢 key |
 | `provenance` | object | `generated_by` / `source_file` / `parsed_at` / `source_checksum`（rule batch 共用）|
 
 **Anti-vendor-lock-in 承諾**：customer 用 `--fail-on-non-portable` 跑完一個 corpus 全綠時，這批 rule 在 vanilla Prometheus 上**也**能 evaluate。前提是 `vm_only_functions.yaml` 的版本 pin 與 go.mod 中的 metricsql 版本一致——**freshness CI gate** (`vm_only_functions_freshness_test.go`) 確保 metricsql 升版時不會 silently 漏掉新函數。
@@ -2567,7 +2567,7 @@ da-tools parser allowlist --format json
 
 #### tenant-verify
 
-印一個 tenant 的 effective config + `merged_hash`（v2.8.0 Phase B Track A）。設計用來支援 `docs/scenarios/incremental-migration-playbook.md` §Emergency Rollback Procedures 第 6 項驗證 checklist：rollback 後 tenant `merged_hash` 必須回到 Base PR merge 前快照。重用 `describe_tenant.py` 的 `ConfDScanner` 做 inheritance + canonical-hash，本工具是薄 CLI ergonomics 層（簡潔輸出 + exit code）。
+印一個 tenant 的 effective config + `merged_hash`（v2.8.0）。設計用來支援 `docs/scenarios/incremental-migration-playbook.md` §Emergency Rollback Procedures 第 6 項驗證 checklist：rollback 後 tenant `merged_hash` 必須回到 Base PR merge 前快照。重用 `describe_tenant.py` 的 `ConfDScanner` 做 inheritance + canonical-hash，本工具是薄 CLI ergonomics 層（簡潔輸出 + exit code）。
 
 ```bash
 # 印單一 tenant 的 effective config + merged_hash
@@ -2597,7 +2597,7 @@ da-tools tenant-verify db-fin-a --conf-d conf.d/ \
 |---|---|
 | 0 | tenant 存在；若有 `--expect-merged-hash` 則一致 |
 | 1 | usage / IO 錯誤（缺 tenant_id、conf-d 找不到、`--all` + `--expect-*` 互斥等）|
-| 2 | tenant 不存在，或 `--expect-merged-hash` 不一致（B-4 checklist 第 6 項擋下訊號）|
+| 2 | tenant 不存在，或 `--expect-merged-hash` 不一致（incremental migration playbook checklist 第 6 項擋下訊號）|
 
 ---
 

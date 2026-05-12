@@ -35,7 +35,7 @@ verified-at-version: v2.8.0
 | **< 50 tenant，無組織分群需求** | ⏸️ **不遷** | hierarchical 帶來的 cascading defaults / blast-radius scope 收益 < 你維護兩種 layout 認知成本 |
 | **50-200 tenant，單一 BU/team 管理** | 🟡 **可遷可不遷** | tipping point — 看你是否預期下個季度跨 region 擴。若是，先遷 |
 | **200+ tenant，多 BU/region/env 分群** | 🟢 **遷** | cascading defaults 省的 YAML 行數 + blast-radius 的 scope 訊號是 hard wins |
-| **客戶端有 GitOps PR 流程**（C-10 batch-pr 規劃中）| 🟢 **遷** | hierarchy-aware chunking 預設按 domain 切 PR，扁平 layout 只能單一 mega-PR |
+| **客戶端有 GitOps PR 流程**（da-batchpr 規劃中）| 🟢 **遷** | hierarchy-aware chunking 預設按 domain 切 PR，扁平 layout 只能單一 mega-PR |
 | **預期下個 quarter 引入跨 region/env defaults**（threshold 因 region 不同）| 🟢 **遷** | flat 沒地方放 region 級 `_defaults.yaml`；遷 cost 只增不減，越早越好 |
 | **客戶端 `_defaults.yaml` 一年內幾乎不動**（純 flat 寫死 thresholds）| ⏸️ **不遷** | hierarchical 的核心收益是 cascading 改動 — 用不到就沒收益，只剩維護成本 |
 
@@ -46,15 +46,15 @@ verified-at-version: v2.8.0
 - **Cascading defaults**：threshold 改一處 → 整個 region/env 受影響的 tenants 全部更新；扁平要逐 tenant 改
 - **Blast-radius scope 訊號**：alerts dashboard 上 `da_config_blast_radius_tenants_affected{scope=domain}` 在扁平 mode 永遠是 `tenant`，看不出影響範圍
 - **GitOps PR 自然分塊**：扁平大型變更只能單一 PR，hierarchy-aware chunking 自動按 domain 切多個小 PR
-- **遷移時的 hierarchy-aware rollback**（B-4）：incremental migration playbook 的反序退版表預設 hierarchy；扁平只能逐 PR revert
+- **遷移時的 hierarchy-aware rollback**：incremental migration playbook 的反序退版表預設 hierarchy；扁平只能逐 PR revert
 
 ### 2.2 遷的代價
 
 | 一次性成本 | 持續性成本 |
 |---|---|
 | Cutover 期間 mixed mode 掃描變慢（§4 量化）| `_metadata.{domain,region,environment}` 必須在每個 tenant YAML 維護 |
-| 多人協作時 conflict surface 變大（多目錄 `_defaults.yaml`）| GitOps merge 衝突可能跨多目錄，需要 `da-tools batch-pr` 工具協助 (Phase .c C-10) |
-| 一次性 staging rehearsal（B-4 hard gate）| Operator 要會看 `defaultsPathLevel` 推算受影響 tenants |
+| 多人協作時 conflict surface 變大（多目錄 `_defaults.yaml`）| GitOps merge 衝突可能跨多目錄，需要 `da-tools batch-pr` 工具協助 (v2.8.0) |
+| 一次性 staging rehearsal（v2.8.0 staging rehearsal hard gate）| Operator 要會看 `defaultsPathLevel` 推算受影響 tenants |
 
 ---
 
@@ -104,7 +104,7 @@ verified-at-version: v2.8.0
 
 ### 4.1 預期 degradation — 量測待定
 
-planning §B-5 設「mixed mode 與同 tenant 數的 pure hierarchical 比較，degradation **≥ 10%** 即觸發 follow-up 改善 PR」。
+Performance gate：mixed mode 與同 tenant 數的 pure hierarchical 比較，degradation **≥ 10%** 即觸發 follow-up 改善 PR。
 
 **目前 dev container 量測 inconclusive**——n=3 single-shot 的數字過度受 fixture-create 成本（once.Do 1000 yaml 寫入）污染，且 mixed fixture 的 cascading defaults 數量（9 個 `_defaults.yaml` = 1 root + 8 L1）遠少於 pure-hier 1000T 的 201 個（L0+L1+L2+L3 完整 cascading），post-warmup 比較反而看到 mixed 在某些 op 上更快。
 
@@ -142,7 +142,7 @@ sum(rate(da_config_reload_trigger_total[5m])) by (reason)
 |---|---|---|
 | Cutover 前（pre-flight）| `migrate_conf_d.py --dry-run` 印出**所有**待移動檔案 + 缺 `_metadata` 警告 | 跑 dry-run + 補完 metadata |
 | Cutover 期間（mixed mode 暫態）| 兩種 layout 並存 OK，root defaults cascade、blast-radius scope 正確 | 監看 §4.3 PromQL；duplicate ID grep WARN |
-| Cutover 完成（pure hierarchical）| 性能回到 baseline，所有 cascading + blast-radius features 全可用 | 跑 staging rehearsal 退版測試（B-4 hard gate）|
+| Cutover 完成（pure hierarchical）| 性能回到 baseline，所有 cascading + blast-radius features 全可用 | 跑 staging rehearsal 退版測試（v2.8.0 hard gate）|
 
 ### 5.2 升級 / 退版安全
 
@@ -166,4 +166,4 @@ sum(rate(da_config_reload_trigger_total[5m])) by (reason)
 - ADR-018：[Defaults YAML inheritance + dual-hash hot-reload](../adr/018-defaults-yaml-inheritance-dual-hash.md)
 - 遷移工具：`scripts/tools/dx/migrate_conf_d.py`
 - 遷移操作手冊：[`incremental-migration-playbook.md`](incremental-migration-playbook.md)
-- B-1 Phase 1 baseline 量測：[`benchmark-playbook.md` §v2.8.0 1000-Tenant Hierarchical Baseline](../internal/benchmark-playbook.md)（internal）
+- 1000-tenant hierarchical baseline 量測：[`benchmark-playbook.md` §v2.8.0 1000-Tenant Hierarchical Baseline](../internal/benchmark-playbook.md)（internal）

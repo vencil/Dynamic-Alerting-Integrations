@@ -10,7 +10,7 @@ lang: en
 
 > **Language / 語言：** **English (Current)** | [中文](./migration-toolkit-installation.md)
 
-> **Applies to**: `tools/v2.8.0` and later (every Release after C-11 packaging lands).  
+> **Applies to**: `tools/v2.8.0` and later (every Release after Migration Toolkit packaging lands).  
 > Older releases (≤ `tools/v2.7.0`) only ship the Docker image delivery path.
 
 ## Why a Migration Toolkit
@@ -18,19 +18,19 @@ lang: en
 Importing a customer's existing Prometheus alerting rule corpus (PromRule CRDs / Alertmanager YAML) into the Dynamic Alerting Platform's conf.d/ Profile-as-Directory-Default architecture ([ADR-019](adr/019-profile-as-directory-default.en.md)) requires a chain of tools:
 
 ```
-PromRule corpus → C-8 parser → C-9 cluster + translator → C-10 batch PR → C-12 guard validation → conf.d/
+PromRule corpus → da-parser → profile-builder cluster + translator → da-batchpr → da-guard validation → conf.d/
 ```
 
-C-11 Migration Toolkit packages this pipeline into a customer-runnable bundle that works offline, in air-gapped environments, and with verifiable binary integrity.
+The Migration Toolkit packages this pipeline into a customer-runnable bundle that works offline, in air-gapped environments, and with verifiable binary integrity.
 
 **Currently included**:
 
 | Tool | Interface | Purpose |
 |---|---|---|
 | `da-tools` | Python CLI | 41+ existing ops / config-gen / policy-eval subcommands; new `guard` + `batch-pr` + `parser` subcommands wrapping da-guard / da-batchpr / da-parser |
-| `da-guard` | Go binary | C-12 Dangling Defaults Guard CLI (schema / routing / cardinality / redundant-override 4-tier check) |
-| `da-batchpr` | Go binary | C-10 Migration Batch PR Pipeline CLI (apply / refresh / refresh-source subcommands; plan → open PRs → rebase after Base merge / data-layer hot-fix) |
-| `da-parser` | Go binary | C-8 PromRule parser CLI (import / allowlist subcommands; strict-PromQL compatibility check + dialect / VM-only function classification; anti-vendor-lock-in) |
+| `da-guard` | Go binary | Dangling Defaults Guard CLI (schema / routing / cardinality / redundant-override 4-tier check) |
+| `da-batchpr` | Go binary | Migration Batch PR Pipeline CLI (apply / refresh / refresh-source subcommands; plan → open PRs → rebase after Base merge / data-layer hot-fix) |
+| `da-parser` | Go binary | PromRule parser CLI (import / allowlist subcommands; strict-PromQL compatibility check + dialect / VM-only function classification; anti-vendor-lock-in) |
 
 ## Three delivery paths
 
@@ -65,7 +65,7 @@ docker run --rm \
 
 **Contents**: Python `da-tools` CLI + bundled `da-guard` / `da-batchpr` / `da-parser` Linux/amd64 binaries at `/usr/local/bin/`. The `da-tools guard` / `da-tools batch-pr` / `da-tools parser` subcommands auto-locate their respective binaries inside the image — no need to set `$DA_GUARD_BINARY` / `$DA_BATCHPR_BINARY` / `$DA_PARSER_BINARY`.
 
-**Trivy CVE scan** runs automatically at release time (`CRITICAL` / `HIGH` severities fail-fast). The image SBOM + signatures are listed in the `tools/v2.8.0` Release notes (cosign signing deferred to PR-3).
+**Trivy CVE scan** runs automatically at release time (`CRITICAL` / `HIGH` severities fail-fast). The image SBOM + signatures are listed in the `tools/v2.8.0` Release notes (cosign signing is a planned follow-up).
 
 ---
 
@@ -73,7 +73,7 @@ docker run --rm \
 
 Each Release ships three sets of 6 cross-compiled binaries (18 archives total):
 
-**`da-guard`** (C-12 Dangling Defaults Guard):
+**`da-guard`** (Dangling Defaults Guard):
 
 | OS | ARCH | Filename |
 |---|---|---|
@@ -84,7 +84,7 @@ Each Release ships three sets of 6 cross-compiled binaries (18 archives total):
 | Windows | amd64 | `da-guard-windows-amd64.zip` |
 | Windows | arm64 | `da-guard-windows-arm64.zip` |
 
-**`da-batchpr`** (C-10 Migration Batch PR Pipeline, v2.8.0+):
+**`da-batchpr`** (Migration Batch PR Pipeline, v2.8.0+):
 
 | OS | ARCH | Filename |
 |---|---|---|
@@ -95,7 +95,7 @@ Each Release ships three sets of 6 cross-compiled binaries (18 archives total):
 | Windows | amd64 | `da-batchpr-windows-amd64.zip` |
 | Windows | arm64 | `da-batchpr-windows-arm64.zip` |
 
-**`da-parser`** (C-8 PromRule parser, v2.8.0+):
+**`da-parser`** (PromRule parser, v2.8.0+):
 
 | OS | ARCH | Filename |
 |---|---|---|
@@ -336,7 +336,7 @@ da-guard --config-dir . --required-fields cpu --format md
 
 Expected output: `✅ No findings — defaults change is safe to merge.` (or `❌ N errors found, M warnings`).
 
-For CI integration, see [`.github/workflows/guard-defaults-impact.yml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/.github/workflows/guard-defaults-impact.yml) — the C-12 PR-5 customer template, copy-paste ready.
+For CI integration, see [`.github/workflows/guard-defaults-impact.yml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/.github/workflows/guard-defaults-impact.yml) — the da-guard customer template, copy-paste ready.
 
 ## Troubleshooting
 

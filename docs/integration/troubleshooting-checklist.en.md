@@ -1166,7 +1166,7 @@ echo 'YOUR_EXPR_HERE' | metricsql parse
 - (a) typo (extra / missing parenthesis) → promtool message will point it out
 - (b) Non-existent function name → confirm PromQL version (recording rule vs alerting rule support differs)
 
-**Cross-ref**: playbook §12 Phase 0 catalog row "Tier A blocked on PromQL syntax error" + [cli-reference §C-8 MetricsQL-as-Superset](../cli-reference.en.md)
+**Cross-ref**: playbook §12 Phase 0 catalog row "Tier A blocked on PromQL syntax error" + [cli-reference §MetricsQL-as-Superset PromRule parser](../cli-reference.en.md)
 
 ---
 

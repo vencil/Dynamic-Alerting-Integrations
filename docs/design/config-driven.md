@@ -221,7 +221,7 @@ Debounce 可透過 `--scan-debounce=<duration>` 調整；壓測建議 100ms-500m
 | `da_config_defaults_shadowed_total` | counter | **v2.8.0 (Issue #61)** — defaults 變更被 tenant override 擋下的次數（從 `noop_total` 拆出） |
 | `da_config_blast_radius_tenants_affected` | histogram | **v2.8.0 (Issue #61)** — 每 tick 受影響 tenant 分佈，labels = `reason / scope / effect`，buckets `[1, 5, 25, 100, 500, 1000, 2500, 5000, 10000]` |
 
-**Tenant API `/effective` endpoint（v2.7.0 B-3 delivery）**
+**Tenant API `/effective` endpoint（v2.7.0 delivery）**
 
 ```
 GET /api/v1/tenants/{id}/effective

@@ -14,7 +14,7 @@ lang: en
 
 ## Status
 
-✅ **Accepted** (v2.7.0, 2026-04-16) — Originally incorporated into `docs/internal/known-regressions.md` (later phantom-deleted in v2.8.0 Phase .a), with TRK-201/202 serving as the first examples.
+✅ **Accepted** (v2.7.0, 2026-04-16) — Originally incorporated into `docs/internal/known-regressions.md` (later phantom-deleted in v2.8.0), with TRK-201/202 serving as the first examples.
 
 ## Background
 

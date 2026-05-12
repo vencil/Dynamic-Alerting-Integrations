@@ -143,10 +143,10 @@ These tools operate on local YAML files and don't require network.
 | `config-diff` | Directory-level config diff (GitOps PR review) | `--old-dir <dir> --new-dir <dir>` |
 | `evaluate-policy` | Policy-as-Code DSL evaluation engine | `--config-dir <dir>` |
 | `opa-evaluate` | OPA Rego policy evaluation bridge (OPA integration) | `--config-dir <dir>` |
-| `guard` | Dangling Defaults Guard wrapper (C-12 PR-4); shells out to the `da-guard` Go binary | `defaults-impact --config-dir <dir>` |
-| `batch-pr` | Migration Batch PR Pipeline wrapper (C-10 PR-5); shells out to the `da-batchpr` Go binary | `apply\|refresh\|refresh-source [flags]` |
-| `parser` | PromRule parser wrapper (C-8 PR-2); shells out to the `da-parser` Go binary; strict-PromQL portability check + dialect classification | `import\|allowlist [flags]` |
-| `tenant-verify` | Print tenant effective config + merged_hash (Phase B Track A; B-4 rollback checklist) | `<tenant-id> [--conf-d <dir>] [--expect-merged-hash <hash>]` or `--all --json` |
+| `guard` | Dangling Defaults Guard wrapper (v2.8.0); shells out to the `da-guard` Go binary | `defaults-impact --config-dir <dir>` |
+| `batch-pr` | Migration Batch PR Pipeline wrapper (v2.8.0); shells out to the `da-batchpr` Go binary | `apply\|refresh\|refresh-source [flags]` |
+| `parser` | PromRule parser wrapper (v2.8.0); shells out to the `da-parser` Go binary; strict-PromQL portability check + dialect classification | `import\|allowlist [flags]` |
+| `tenant-verify` | Print tenant effective config + merged_hash (v2.8.0; incremental migration playbook rollback checklist) | `<tenant-id> [--conf-d <dir>] [--expect-merged-hash <hash>]` or `--all --json` |
 | `test-notification` | Multi-channel notification connectivity testing | `--config-dir <dir>` |
 | `threshold-recommend` | Threshold recommendation engine (historical P50/P95/P99) | `--config-dir <dir>` + `--prometheus <url>` |
 | `explain-route` | Routing merge pipeline debugger (four-layer expansion + profile, ADR-007) | `--config-dir <dir>` |
@@ -2593,7 +2593,7 @@ da-tools opa-evaluate --config-dir conf.d/ --dry-run
 
 #### guard
 
-Dangling Defaults Guard (v2.8.0 Phase .c C-12 PR-4). Python wrapper that shells out to the `da-guard` Go binary to validate a `conf.d/` tree across schema / routing / cardinality.
+Dangling Defaults Guard (v2.8.0). Python wrapper that shells out to the `da-guard` Go binary to validate a `conf.d/` tree across schema / routing / cardinality.
 
 **Usage**
 
@@ -2651,13 +2651,13 @@ da-tools guard defaults-impact --config-dir conf.d/ \
     --format json --output guard-report.json
 ```
 
-**Scope simplification (vs planning §C-12)**: PR-4 ships a *current-working-tree* validator (reads conf.d/ from disk as-is). Equivalent to the planning's "delta-aware" model in CI / pre-commit flows because by the time the tool runs, the proposed change is already on disk. Speculative simulation is out of scope (handled per-tenant by C-7b `/simulate`). The full design rationale and three-layer check explainer live in `components/threshold-exporter/README.md` (outside the MkDocs site — open from GitHub).
+**Scope simplification**: `da-guard` ships a *current-working-tree* validator (reads conf.d/ from disk as-is). Equivalent to a "delta-aware" model in CI / pre-commit flows because by the time the tool runs, the proposed change is already on disk. Speculative simulation is out of scope (handled per-tenant by the `/simulate` endpoint). The full design rationale and three-layer check explainer live in `components/threshold-exporter/README.md` (outside the MkDocs site — open from GitHub).
 
 ---
 
 #### batch-pr
 
-C-10 Migration Batch PR Pipeline (v2.8.0 Phase .c C-10 PR-1..5). Python wrapper that shells out to the `da-batchpr` Go binary; takes a customer's PromRule corpus through the full "emit → open PRs → review → Base merge → tenant rebase → optional data-layer hot-fix" loop.
+Migration Batch PR Pipeline (v2.8.0). Python wrapper that shells out to the `da-batchpr` Go binary; takes a customer's PromRule corpus through the full "emit → open PRs → review → Base merge → tenant rebase → optional data-layer hot-fix" loop.
 
 **Usage**
 
@@ -2669,7 +2669,7 @@ da-tools batch-pr <subcommand> [flags]
 
 | Subcommand | Purpose |
 |---|---|
-| `apply` | Open (or update) tenant chunk PRs from a Plan + C-9 emit output. Uses Hierarchy-Aware chunking (Base Infrastructure PR + per-domain tenant chunks). |
+| `apply` | Open (or update) tenant chunk PRs from a Plan + profile-builder emit output. Uses Hierarchy-Aware chunking (Base Infrastructure PR + per-domain tenant chunks). |
 | `refresh` | After the Base PR merges, run `git rebase --onto <merged-sha>` against every `Blocked by` tenant branch; conflicts surface in `refresh-report.md`. |
 | `refresh-source` | When a parser bug fix changes the emission for a known set of source rules, rewrite the affected files in the corresponding tenant PRs and push the patch (data-layer hot-fix). |
 
@@ -2686,7 +2686,7 @@ If not found, prints install hints (download from a `tools/v*` release / `cd com
 | Flag | Default | Purpose |
 |---|---|---|
 | `--plan <path>` | (required) | Plan JSON (serialised from `BuildPlan`). |
-| `--emit-dir <dir>` | (required) | C-9 emit output directory; CLI walks it + runs AllocateFiles bucketing. |
+| `--emit-dir <dir>` | (required) | profile-builder emit output directory; CLI walks it + runs AllocateFiles bucketing. |
 | `--repo <owner/name>` | (required) | GitHub repo. |
 | `--workdir <dir>` | (required) | Local clone (CWD for git ops). |
 | `--base-branch <name>` | `main` | Branch the new PRs target. |
@@ -2718,7 +2718,7 @@ If not found, prints install hints (download from a `tools/v*` release / `cd com
 **Examples**
 
 ```bash
-# Open PRs: push C-9 emit output into the customer repo
+# Open PRs: push profile-builder emit output into the customer repo
 da-tools batch-pr apply \
     --plan plan.json --emit-dir ./emit/ \
     --repo vencil/customer --workdir ./customer-repo
@@ -2733,13 +2733,13 @@ da-tools batch-pr refresh-source \
     --workdir ./customer-repo
 ```
 
-**Honest scope (C-10 PR-5 v1)**: JSON-input-first is the v1 contract (machine + automation friendly); convenience flags (`--base-merged-sha N`, `--source-rule-ids id1,id2,id3`) are deferred to a future polish PR. The Python wrapper shells out using the same pattern as `guard`; binaries ship via `tools/v*` Releases and the da-tools docker image.
+**Honest scope (v2.8.0 v1)**: JSON-input-first is the v1 contract (machine + automation friendly); convenience flags (`--base-merged-sha N`, `--source-rule-ids id1,id2,id3`) are deferred to a future polish. The Python wrapper shells out using the same pattern as `guard`; binaries ship via `tools/v*` Releases and the da-tools docker image.
 
 ---
 
 #### parser
 
-C-8 MetricsQL-as-Superset PromRule parser (v2.8.0 Phase .c C-8 PR-2). The Python wrapper shells out to the `da-parser` Go binary, which parses customer `PrometheusRule` CRD YAML into a canonical `ParsedRule` JSON record per rule, annotated with dialect (`prom` / `metricsql` / `ambiguous`), the list of VM-only functions used, and `prom_compatible: bool` (computed via the upstream `prometheus/promql/parser`).
+MetricsQL-as-Superset PromRule parser (v2.8.0). The Python wrapper shells out to the `da-parser` Go binary, which parses customer `PrometheusRule` CRD YAML into a canonical `ParsedRule` JSON record per rule, annotated with dialect (`prom` / `metricsql` / `ambiguous`), the list of VM-only functions used, and `prom_compatible: bool` (computed via the upstream `prometheus/promql/parser`).
 
 **Usage**
 
@@ -2769,7 +2769,7 @@ If none resolves, prints install hints (download from `tools/v*` release / `cd c
 | `--input <path>` | (required) | PrometheusRule YAML path; `-` reads from stdin |
 | `--output <path>` | `-` (stdout) | JSON ParseResult output path |
 | `--generated-by <stamp>` | `da-parser@<version>` | Stamped into `Provenance.GeneratedBy` (e.g. CI job ID) |
-| `--validate-strict-prom` | true | Run `prometheus/promql/parser` per rule (PR-2 default — anti-vendor-lock-in) |
+| `--validate-strict-prom` | true | Run `prometheus/promql/parser` per rule (v2.8.0 default — anti-vendor-lock-in) |
 | `--fail-on-non-portable` | false | Exit 1 if any rule has `prom_compatible=false` (auto-implies `--validate-strict-prom`) |
 | `--fail-on-ambiguous` | false | Exit 1 if any rule has `dialect=ambiguous` |
 
@@ -2803,7 +2803,7 @@ helm template ... | da-tools parser import --input -
 da-tools parser allowlist --format json
 ```
 
-**ParsedRule schema highlights** (v2.8.0 PR-2):
+**ParsedRule schema highlights** (v2.8.0):
 
 | Field | Type | Description |
 |---|---|---|
@@ -2813,7 +2813,7 @@ da-tools parser allowlist --format json
 | `vm_only_functions` | []string | Sorted list of VM-only functions used in this rule |
 | `analyze_error` | string | metricsql parse error (populated when `dialect=ambiguous`) |
 | `strict_prom_error` | string | `prometheus/promql/parser` error (populated when `PromCompatible=false`) |
-| `source_rule_id` | string | `<source-file>#groups[i].rules[j]` — reverse-lookup key for C-10 `refresh --source-rule-ids` |
+| `source_rule_id` | string | `<source-file>#groups[i].rules[j]` — reverse-lookup key for `da-batchpr refresh --source-rule-ids` |
 | `provenance` | object | `generated_by` / `source_file` / `parsed_at` / `source_checksum` (shared across the rule batch) |
 
 **Anti-vendor-lock-in promise**: when a customer corpus passes `--fail-on-non-portable` cleanly, every rule is also evaluable on a vanilla Prometheus server. Validity rests on `vm_only_functions.yaml`'s version pin matching the metricsql dep in go.mod — the **freshness CI gate** (`vm_only_functions_freshness_test.go`) ensures upstream version bumps don't silently miss new functions.
@@ -2822,7 +2822,7 @@ da-tools parser allowlist --format json
 
 #### tenant-verify
 
-Print a tenant's effective config + `merged_hash` (v2.8.0 Phase B Track A). Supports the verification checklist in `docs/scenarios/incremental-migration-playbook.md` §Emergency Rollback Procedures item 6: after a rollback wave, every tenant's `merged_hash` must return to the pre-Base-PR snapshot. Reuses `describe_tenant.py`'s `ConfDScanner` for inheritance + canonical-hash; this tool is a thin CLI ergonomics layer (terse output + exit code).
+Print a tenant's effective config + `merged_hash` (v2.8.0). Supports the verification checklist in `docs/scenarios/incremental-migration-playbook.md` §Emergency Rollback Procedures item 6: after a rollback wave, every tenant's `merged_hash` must return to the pre-Base-PR snapshot. Reuses `describe_tenant.py`'s `ConfDScanner` for inheritance + canonical-hash; this tool is a thin CLI ergonomics layer (terse output + exit code).
 
 ```bash
 # Print effective config + merged_hash for one tenant
@@ -2852,7 +2852,7 @@ da-tools tenant-verify db-fin-a --conf-d conf.d/ \
 |---|---|
 | 0 | Tenant exists; if `--expect-merged-hash` supplied, it matched |
 | 1 | Usage / IO error (missing tenant_id, conf-d not found, `--all` + `--expect-*` mutually exclusive, etc.) |
-| 2 | Tenant not found OR `--expect-merged-hash` mismatch (this is the B-4 checklist item 6 stop-signal) |
+| 2 | Tenant not found OR `--expect-merged-hash` mismatch (this is the incremental migration playbook checklist item 6 stop-signal) |
 
 ---
 

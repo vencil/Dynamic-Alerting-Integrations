@@ -526,7 +526,7 @@ EOF
 > **Applies to**: structural bug discovered after customer cutover (e.g. parser eats labels / Dangling Guard false positives / mass false alerts) requiring batch reversal of a Base Infrastructure PR plus multiple tenant PRs.
 > Distinct from per-phase 0/1/2/3 rollback above (single-domain pilot retreat); this section covers post-cutover batch-PR pipeline reversal with cascading defaults and hierarchical dependencies.
 >
-> **Added in v2.8.0 B-4** to complement the Phase .c C-10 Batch PR Pipeline hierarchy-aware chunking design.
+> **Added in v2.8.0** to complement the Migration Batch PR Pipeline hierarchy-aware chunking design.
 
 ### Rollback order: strict reverse of merge order
 
@@ -541,11 +541,11 @@ EOF
 
 **Why inner first**: if you revert outer `_defaults.yaml` before tenant PRs, inner tenants briefly land in a hybrid state — "outer defaults already reverted, tenant override still present" — and the inheritance graph's merged_hash will not match any pre-Base-PR historical value.
 
-### WatchLoop debounce verification (linked to B-3 metrics)
+### WatchLoop debounce verification (linked to v2.7.0 metrics)
 
 During a rollback wave, git-sync applies multiple commits sequentially within ~50-300ms, firing consecutive fsnotify events. The `config_debounce.go` sliding-window debounce must collapse the entire wave into a **single** reload — intermediate state must NOT fire alerts.
 
-**Verification metrics** (added in v2.8.0 B-3, PR #75):
+**Verification metrics** (added in v2.8.0, PR #75):
 
 ```promql
 # During rollback wave, sliding window should collapse all reload triggers into one fire:
@@ -560,7 +560,7 @@ sum(rate(da_config_debounce_batch_size_sum[5m]))
 sum(rate(da_config_debounce_batch_size_count[5m]))
 ```
 
-**New test case (v2.8.0 follow-up, scheduled with C-10 implementation PR)**: `TestDebouncedReload_RollbackWave` — simulates N git-sync commits applied in reverse order with 100ms debounce window, asserts fire count always == 1 (same pattern as B-7 `TestSlowWriteTornStateStress`, but with reversed time series + cascading defaults retreating in lockstep). Detailed design deferred to the C-10 PR.
+**New test case (v2.8.0 follow-up, scheduled with Migration Batch PR Pipeline implementation)**: `TestDebouncedReload_RollbackWave` — simulates N git-sync commits applied in reverse order with 100ms debounce window, asserts fire count always == 1 (same pattern as `TestSlowWriteTornStateStress`, but with reversed time series + cascading defaults retreating in lockstep). Detailed design deferred to the batch-PR pipeline implementation PR.
 
 ### Staging rehearsal mandatory (T-2 weeks before cutover)
 
@@ -574,7 +574,7 @@ Rehearsal contents:
 
 ### Rollback time budget (based on Phase 1 baseline @ 1000-tenant, PR #59)
 
-> **Source**: `config_hierarchy_bench_test.go` PR #59 baseline (B-1 Phase 1 1000/2000/5000-tenant scaling characterization).
+> **Source**: `config_hierarchy_bench_test.go` PR #59 baseline (1000/2000/5000-tenant scaling characterization).
 > **Scope**: ≤ 1000 tenants = baseline; 2000-5000 use the §"Phase 1 scaling characterization" linear extrapolation (5×=4.6-5.4×).
 
 | Rollback action | 1000-tenant budget | 5000-tenant budget | Source |
@@ -607,7 +607,7 @@ Rehearsal contents:
 - `da-tools batch-pr rollback --plan` — given a Base PR #, derive the full reverse-order plan and output a markdown plan for ops review
 - `da-tools batch-pr rollback --execute` — automated reverse-order revert; waits for git-sync apply + reload settle between steps
 
-These tools are out of scope for the B-4 doc PR but the procedures defined here are their specification.
+These tools are out of scope for this doc PR but the procedures defined here are their specification.
 
 ---
 

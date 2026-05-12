@@ -147,7 +147,7 @@ Structured fields (environment, domain, db_type) are better suited for UI filter
 - Multi-dimensional filtering (environment / domain / db_type dropdown)
 - Group sidebar + auth-aware UI
 - Environment / domain dimension RBAC (`_rbac.yaml` dimension filtering)
-- Optimistic update + 409 conflict toast (v2.5.0-final)
+- Optimistic update + 409 conflict toast (v2.5.0)
 
 **Remaining**:
 1. **Filter-based auto-membership** (v2.7.0+ candidate): Enable `filters` field to automatically match tenants into groups based on metadata, reducing manual maintenance

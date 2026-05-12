@@ -1164,7 +1164,7 @@ echo 'YOUR_EXPR_HERE' | metricsql parse
 - (a) typo（多 / 少括號）→ promtool 訊息會直接指出
 - (b) 不存在的 function name → 確認 PromQL 版本（recording rule 與 alerting rule 支援不同）
 
-**Cross-ref**：playbook §12 Phase 0 catalog row「Tier A 卡在 PromQL syntax error」+ [cli-reference §C-8 MetricsQL-as-Superset](../cli-reference.md)
+**Cross-ref**：playbook §12 Phase 0 catalog row「Tier A 卡在 PromQL syntax error」+ [cli-reference §MetricsQL-as-Superset PromRule parser](../cli-reference.md)
 
 ---
 
