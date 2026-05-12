@@ -30,6 +30,15 @@ name: Bench Gate (PR-time, Tier 1)
 #     hitting a slow noisy-neighbor runner. Acceptable trade for the
 #     wall-time win; if FP rate climbs, escalation path is Larger Runners.
 #
+#   - 2026-05-12 v3 (this revision): close "Ghost Green" race vs the
+#     companion bench-override-audit.yaml. Both workflows fire on the
+#     same `labeled` event; preflight is much faster than audit (~5s
+#     vs ~20s). Without the change, preflight could mark skip=true
+#     based on label presence ALONE before audit gets a chance to
+#     revert. Fix: preflight queries the timeline API for who LAST
+#     applied this specific label, then verifies their repo role —
+#     only honors skip when applier is admin or maintain.
+#
 # See: issue #433, issue #67 (closed/superseded), bench-record.yaml (nightly),
 #      memory feedback `feedback_github_actions_workflow_gotchas.md`.
 
@@ -74,23 +83,88 @@ jobs:
       skip: ${{ steps.check_override.outputs.skip }}
       merge_base_sha: ${{ steps.merge_base.outputs.sha }}
     steps:
-      # Override label early-exit (governance: branch-protection-rule
-      # controls who can apply the label; see issue #433 W2).
-      - name: Check for override label
+      # Override label early-exit + authorization re-check.
+      #
+      # Why re-check authorization here even though `bench-override-audit.yaml`
+      # already enforces it: defense-in-depth against the "Ghost Green" race.
+      # Both workflows fire on the same `labeled` event:
+      #   - bench-gate-pr.yaml preflight runs in ~5s
+      #   - bench-override-audit.yaml runs in ~20s (API call + label removal)
+      # If the audit hasn't finished by the time preflight checks for the
+      # label, preflight would see it present, mark skip=true, and the whole
+      # workflow would short-circuit GREEN. The audit's red check would still
+      # fire, but if branch protection isn't set to require the audit, the PR
+      # could merge with the bypass intact.
+      # Solution: bench-gate validates the LABEL APPLIER's role itself via
+      # the timeline API. Even if the unauthorized label is still on the PR
+      # when preflight runs, preflight won't honor it.
+      #
+      # [Gemini round-7 race-condition catch.]
+      - name: Check for override label and verify applier authorization
         id: check_override
         env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
           LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
         run: |
-          if echo "$LABELS" | grep -q '"override: bench-regress-ok"'; then
+          set -euo pipefail
+
+          # Step 1: label presence. Fast path — if not labeled, exit early.
+          if ! echo "$LABELS" | grep -q '"override: bench-regress-ok"'; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "No override label present — bench gate will run normally."
+            exit 0
+          fi
+
+          # Step 2: who LAST applied this specific label? Use timeline API
+          # rather than github.event.sender — sender is the actor of the
+          # CURRENT event (could be a `synchronize` push, not the labeler).
+          # `--paginate` defensive for PRs with many label events; filter by
+          # event=="labeled" AND label.name match; pick the last one
+          # (chronologically most recent applier).
+          last_applier=$(gh api "repos/$REPO/issues/$PR_NUMBER/timeline" --paginate \
+            --jq '[.[] | select(.event == "labeled" and .label.name == "override: bench-regress-ok")] | last | .actor.login // empty')
+
+          if [ -z "$last_applier" ]; then
+            # Label is present but no labeled event found — shouldn't happen
+            # normally. Treat as unauthorized for safety.
+            echo "::warning::Override label present but no labeled event in timeline. Treating as unauthorized."
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Step 3: applier's effective repo role.
+          if permission=$(gh api "repos/$REPO/collaborators/$last_applier/permission" \
+                            --jq '.permission' 2>/dev/null); then
+            echo "Most recent labeler: $last_applier ($permission)"
+          else
+            echo "::warning::Could not fetch role for $last_applier (404 / API error). Treating as unauthorized."
+            permission="none"
+          fi
+
+          # Step 4: only honor skip if admin or maintain.
+          if [ "$permission" = "admin" ] || [ "$permission" = "maintain" ]; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "::notice::Bench gate skipped via 'override: bench-regress-ok' label"
-            echo "## Bench Gate — SKIPPED via override label" >> "$GITHUB_STEP_SUMMARY"
-            echo "" >> "$GITHUB_STEP_SUMMARY"
-            echo "PR has \`override: bench-regress-ok\` label applied by a maintainer." >> "$GITHUB_STEP_SUMMARY"
-            echo "Performance regression is accepted as a documented trade-off." >> "$GITHUB_STEP_SUMMARY"
-            echo "Audit trail: this skip is permanently logged on the merge commit." >> "$GITHUB_STEP_SUMMARY"
+            echo "::notice::Bench gate skipped — label applied by $last_applier ($permission)"
+            {
+              echo "## Bench Gate — SKIPPED via override label"
+              echo ""
+              echo "Label applied by \`$last_applier\` (role: \`$permission\`)."
+              echo "Performance regression accepted as a documented trade-off."
+              echo "Audit trail: this skip is permanently logged on the merge commit."
+            } >> "$GITHUB_STEP_SUMMARY"
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Override label present but applied by $last_applier ($permission) — not authorized. Running benches normally; bench-override-audit.yaml should auto-revert this label."
+            {
+              echo "## Bench Gate — UNAUTHORIZED override ignored"
+              echo ""
+              echo "Label \`override: bench-regress-ok\` was applied by \`$last_applier\` (role: \`$permission\`),"
+              echo "but only \`admin\` or \`maintain\` roles can authorize override. **Label is being ignored**"
+              echo "and benches will run normally. The companion \`bench-override-audit.yaml\` workflow"
+              echo "should auto-revert this label and post a comment with the proper request flow."
+            } >> "$GITHUB_STEP_SUMMARY"
           fi
 
       # CRITICAL: fetch-depth: 0 is required for `git merge-base` to find
