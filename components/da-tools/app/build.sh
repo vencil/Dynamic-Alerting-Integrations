@@ -156,6 +156,10 @@ TOOL_FILES=(
     # Shared library sub-modules
     _lib_constants.py
     _lib_validation.py
+    # v2.8.0 — cross-platform compat helpers (try_utf8_stdout etc.)
+    # Imported by state_reconcile / rule_pack_diff / silencer_drift_check.
+    # Stdlib-only by design; safe to bundle without extra deps.
+    _lib_compat.py
     _lib_prometheus.py
     _lib_io.py
     # v2.8.0 PR-2 — shared dispatcher for the three Go-binary
