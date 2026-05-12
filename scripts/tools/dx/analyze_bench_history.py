@@ -359,7 +359,28 @@ def render_markdown_table(
     return "\n".join(lines)
 
 
+def _try_utf8_stdout() -> None:
+    """Best-effort: reconfigure stdout to UTF-8 with replacement errors.
+
+    The text output uses Unicode characters (≤, →, ✓) that legacy
+    Windows consoles (cp950 / cp936 / cp1252) cannot encode → crash with
+    `UnicodeEncodeError`. This guard rescues Windows-host devs running
+    `python analyze_bench_history.py ...` directly in legacy cmd.exe /
+    older PowerShell.
+
+    Same helper as state_reconcile / rule_pack_diff / silencer_drift_check
+    in scripts/tools/ops/ — duplicated rather than shared because each
+    tool stays self-contained and the function is ~5 lines, stable. If
+    this pattern spreads to 10+ tools, refactor to a shared lib.
+    """
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, OSError):
+        pass
+
+
 def main() -> int:
+    _try_utf8_stdout()
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--limit", type=int, default=28,
                         help="Number of recent successful runs to analyze (default: 28).")
