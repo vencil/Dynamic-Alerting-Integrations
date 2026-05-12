@@ -32,6 +32,7 @@ lang: en
 | `docs/adr/018-defaults-yaml-inheritance-dual-hash.md` (.en.md) | Platform Engineers, SREs, contributors | ADR-018: _defaults.yaml Inheritance Semantics + Dual-Hash Hot-Reload |
 | `docs/adr/019-profile-as-directory-default.md` (.en.md) | Platform Engineers, SREs, contributors | ADR-019: Profile-as-Directory-Default |
 | `docs/adr/020-planning-ssot.md` | Platform Engineers, contributors, ai-agents | ADR-020: Planning SSOT — Frontmatter Contract + Discovery-based Index |
+| `docs/adr/021-tenant-federation.md` | Platform Engineers, contributors | ADR-021: Tenant Federation — Label-Injection Proxy over Self-Built Endpoint |
 | `docs/api/README.md` (.en.md) | Platform Engineers, SREs | Threshold Exporter API Reference |
 | `docs/api/tenant-api-hardening.md` (.en.md) | platform-ops, sre, security | Tenant API Hardening (v2.8.0) |
 | `docs/architecture-and-design.md` (.en.md) | Platform Engineers | Architecture and Design — Multi-Tenant Dynamic Alerting Platform Technical Whitepaper |
@@ -61,7 +62,8 @@ lang: en
 | `docs/integration/operator-prometheus-integration.md` (.en.md) | Platform Engineers | Operator Prometheus Integration Guide |
 | `docs/integration/operator-shadow-monitoring.md` (.en.md) | Platform Engineers | Operator Shadow Monitoring Strategy |
 | `docs/integration/prometheus-operator-integration.md` (.en.md) | Platform Engineers | Prometheus Operator Integration Guide (Hub) |
-| `docs/integration/victoriametrics-integration.md` | Platform Engineers, SREs, vm-operators | VictoriaMetrics 整合指南 |
+| `docs/integration/troubleshooting-checklist.md` (.en.md) | SREs, on-call, Platform Engineers, migration-engineers | Troubleshooting Checklist |
+| `docs/integration/victoriametrics-integration.md` (.en.md) | Platform Engineers, SREs, vm-operators | VictoriaMetrics Integration Guide |
 | `docs/interactive-tools.md` (.en.md) | All | Interactive Tools |
 | `docs/migration-engine.md` (.en.md) | Platform Engineers, DevOps | AST Migration Engine Architecture |
 | `docs/migration-guide.md` (.en.md) | Tenants, DevOps | Migration Guide — From Traditional Monitoring to Dynamic Alerting Platform |
@@ -75,11 +77,11 @@ lang: en
 | `docs/scenarios/manage-at-scale.md` (.en.md) | Platform Engineers, operator, DevOps | Scenario: Managing at Scale — Thousand-Tenant Operations |
 | `docs/scenarios/multi-cluster-federation.md` (.en.md) | Platform Engineers | Scenario: Multi-Cluster Federation — Central Threshold + Edge Metrics |
 | `docs/scenarios/multi-domain-conf-layout.md` (.en.md) | Platform Engineers, operator, DevOps | Scenario: Multi-Domain Hierarchical Configuration — conf.d/ Directory Restructuring (v2.7.0) |
-| `docs/scenarios/multi-system-migration-playbook.md` | Platform Engineers, SREs, architects | Multi-System Migration Playbook (Outline) |
+| `docs/scenarios/multi-system-migration-playbook.md` (.en.md) | Platform Engineers, SREs, architects | Multi-System Migration Playbook |
 | `docs/scenarios/README.md` | All | 場景指南導覽 |
 | `docs/scenarios/shadow-audit.md` (.en.md) | Platform Engineers, Tenants | Scenario: Shadow Audit — Evaluate Alert Health Without Migration |
 | `docs/scenarios/shadow-monitoring-cutover.md` (.en.md) | Platform Engineers, SREs, DevOps, Tenants | Scenario: Shadow Monitoring — From Alert Health Assessment to Automated Cutover |
-| `docs/scenarios/staged-adoption-guide.md` | Platform Engineers, SREs, tenant-admins | Staged Rule Adoption Lifecycle |
+| `docs/scenarios/staged-adoption-guide.md` (.en.md) | Platform Engineers, SREs, tenant-admins | Staged Rule Adoption Lifecycle |
 | `docs/scenarios/tenant-lifecycle.md` (.en.md) | All | Scenario: Complete Tenant Lifecycle Management |
 | `docs/schemas/migration-state.md` | Platform Engineers, SREs, automation | Migration State Schema (.da/migration-state.json) |
 | `docs/schemas/README.md` | Platform Engineers, Tenants | JSON Schema Reference |

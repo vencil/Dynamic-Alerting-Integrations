@@ -2,7 +2,7 @@
 title: "CLAUDE.md — AI 開發上下文指引"
 tags: [ai-agent, onboarding, internal]
 audience: [ai-agent, maintainers]
-version: v2.7.0
+version: v2.8.0
 lang: zh
 ---
 

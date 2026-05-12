@@ -2,7 +2,7 @@
 title: "Changelog"
 tags: [changelog, releases]
 audience: [all]
-version: v2.7.0
+version: v2.8.0
 lang: zh
 ---
 # Changelog
@@ -695,7 +695,7 @@ Breaking / Upgrade 七塊清楚區分），那是目標形狀。
   - 詳見 `v2.8.0-planning-archive.md §S#21`
 
 - **Phase .a SSOT drift cleanup bundle（v2.8.0, A-2 + docs/design-system-guide 殘留 refs + §12.4 traps codify）**：延續 PR #49 的 bundle 做法，把 Phase .a 軌道一剩下的純文件收尾一次處理。三項同屬「code/canonical state 已往前走，但 authoritative docs 沒跟上」的 SSOT drift 類型，彼此零耦合但 theme 一致：
-  - **A-2 — `docs/interactive/changelog.html` 補 v2.1-v2.6 時間線（TRK-103 resolved）**：原檔只有 v2.0.0 + v1.10-v1.13 五張卡片，缺 v2.1 ~ v2.6 共 6 個 minor release。手工新增 6 張 `version-entry` card（對應 `CHANGELOG.md` L377-895 各版 release notes 的 highlight 摘要 + date + hl-tag + stats-bar），v2.6.0 標記 `badge-current CURRENT`，v2.0.0 移除過時的 CURRENT badge。**TRK-103** 登記於 v2.7.0 CHANGELOG L172（「TRK-103 changelog.html 修復延至 v2.8.0」）至此 resolved；`known-regressions.md` 本身已於 Session #16 per radical-delete policy phantom-deleted（registry 與 main 代碼一致即可不寫 retro-narrative），故 TRK-103 resolution 不再回寫 registry row，僅記於本條。
+  - **A-2 — `docs/interactive/changelog.html` 補 v2.1-v2.6 時間線（TRK-103 resolved）**：原檔只有 v2.0.0 + v1.10-v1.13 五張卡片，缺 v2.1 ~ v2.6 共 6 個 minor release。手工新增 6 張 `version-entry` card（對應 `CHANGELOG.md` L377-895 各版 release notes 的 highlight 摘要 + date + hl-tag + stats-bar），v2.6.0 標記 `badge-current CURRENT`，v2.0.0 移除過時的 CURRENT badge。**TRK-103** 登記於 `v2.7.0` CHANGELOG L172（「TRK-103 changelog.html 修復延至 v2.8.0」）至此 resolved；`known-regressions.md` 本身已於 Session #16 per radical-delete policy phantom-deleted（registry 與 main 代碼一致即可不寫 retro-narrative），故 TRK-103 resolution 不再回寫 registry row，僅記於本條。
   - **`docs/internal/design-system-guide.md` 殘留 stale token refs 更新**：PR #34 Token Audit 完成後 guide 未同步——(i) §3.1 整段 `primary/secondary` 家族描述改寫為 `accent/hero-*/tile-*` canonical namespace（對應 PR #34 → PR#1c 的 token-split），附 token 歷史導覽段；(ii) §3.3 Icon 色表 6 row 全部更新（validation/cli/rules/wizard/dashboard/chart 的 light+dark 值與 `design-tokens.css` SSOT 對齊，如 icon-cli `#2563eb` → `#f59e0b` 是語意改色不是值 drift）+ 附註 `*-bg` variant 配套使用規則；(iii) §3.4 `phase-*` → `journey-*` token 整段 rename（token 名 + 值 + dark mode 欄同步）；(iv) §3.5 mode-silent/mode-maintenance 兩 row 色值對齊；(v) 3 處內文 `--da-color-primary` 引用全改 `--da-color-accent`（§Category table / focus-visible CSS / legacy alias example）；(vi) L26 次要文字 `#64748b` → `#475569`（TRK-207 post-fix canonical 值）；(vii) front-matter `version: v2.7.0 → v2.8.0`（內容已反映 v2.8.0 canonical token 狀態）。
   - **`docs/internal/windows-mcp-playbook.md` 新增 trap #58-#61**（codify `v2.8.0-planning.md §12.4` 中仍 open 的環境 trap）：#58 `make git-preflight` 把自身 bash 當活 git 程序誤判（self-PID filter missing；手動繞道 + 長期解 A-12 子項 v）；#59 `.git/HEAD` 被 NUL byte 填到 57 bytes 使 `git rev-parse HEAD` fatal（FUSE write-cache loss 的變體，附 `printf 'ref: refs/heads/<br>\n' > .git/HEAD` 直接 rewrite）；#60 `generate_doc_map.py` 長 I/O regen 在 FUSE 被 fsync 中斷 → HEAD corruption + 全檔假 "new file"（`make recover-index` 救急 + 長期 `--safe` atomic rename 提案）；#61 PowerShell `Out-File -Encoding utf8` / `Set-Content -Encoding utf8` **強制加 BOM** 使 commit message 首字被污染、commitlint 連環 fail（與 pitfall #32 JSON BOM 區別，這條針對 commit-msg；正解 `[IO.File]::WriteAllText($p, $m, [Text.UTF8Encoding]::new($false))` + filter-branch batch de-BOM SOP）。
   - **`docs/internal/{testing,benchmark,windows-mcp,github-release}-playbook.md` `verified-at-version: v2.7.0 → v2.8.0`**：dogfood PR #49 A-6 新工具 `bump_playbook_versions.py --to v2.8.0` 4 檔一次 bump 成功（驗證工具正確性 + 對齊本批 trap 新增後的複查狀態）。
