@@ -55,4 +55,4 @@ lang: zh
 
 - [`component-health-snapshot.json`](./component-health-snapshot.json)（即時資料 SSOT，由 `component-health.jsx` dashboard 消費）
 - [`tool-registry.yaml`](../assets/tool-registry.yaml)（互動工具 SOT）
-- [Benchmark Playbook §Toolchain](./benchmark-playbook.md)（效能層面 — 工具鏈 micro-bench 自 v2.8.0 起 owned by Playbook）
+- [Benchmark Playbook §Engineering Reference Benchmarks](./benchmark-playbook.md#engineering-reference-benchmarks)（效能層面 — 工具鏈 micro-bench 自 v2.8.0 起 owned by Playbook）

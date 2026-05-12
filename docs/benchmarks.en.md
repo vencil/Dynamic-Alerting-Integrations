@@ -202,8 +202,8 @@ Validates leak / drift behavior under sustained reload pressure. **Dual-track pa
 
 | Topic | Document |
 |---|---|
-| **Full micro-bench numbers** (Resolve_*, IncrementalLoad_*, ScanDirFileHashes_*) | [Benchmark Playbook §Go Micro-Bench](internal/benchmark-playbook.md) |
-| **Internal tool benchmarks** (route generation / pytest micros / Policy-as-Code / Cardinality forecast / Schema validation / Synthetic fixture gen) | [Benchmark Playbook §Toolchain](internal/benchmark-playbook.md) |
-| **Measurement caveats & ops** (port-forward stability / `BENCH_OUT_DIR` isolation / `bench_wrapper.sh`) | [Benchmark Playbook §Ops](internal/benchmark-playbook.md) |
+| **Full micro-bench numbers** (`Resolve_*` family / synthetic fixture gen / schema validation / pytest-benchmark) | [Benchmark Playbook §Engineering Reference Benchmarks](internal/benchmark-playbook.md#engineering-reference-benchmarks) |
+| **`IncrementalLoad_*` / `ScanDirFileHashes_*` 1000-tenant baseline** | [Benchmark Playbook §v2.8.0 1000-Tenant Hierarchical Baseline](internal/benchmark-playbook.md#v280-1000-tenant-hierarchical-baseline-phase-1-b-1) |
+| **Measurement caveats & ops** (port-forward stability / `BENCH_OUT_DIR` isolation / `bench_wrapper.sh`) | [Benchmark Playbook §Lessons Learned](internal/benchmark-playbook.md#踩坑記錄-lessons-learned) |
 | **bench-gate-pr CI mechanism** (Tier 1 / override label / sharding) | [Bench Gate Rollout](internal/bench-gate-rollout.md) · `.github/workflows/bench-gate-pr.yaml` |
 | **Architecture & ADR references** | [Architecture & Design](architecture-and-design.en.md) · [ADR-017](adr/017-conf-d-directory-hierarchy-mixed-mode.en.md) · [ADR-018](adr/018-defaults-yaml-inheritance-dual-hash.en.md) |

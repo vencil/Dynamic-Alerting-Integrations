@@ -162,7 +162,7 @@ PR #59 三點實測（3-run median ms，[benchmark-playbook.md §Scaling Charact
 2. 本文件 frontmatter `version` bump → 對應 release tag
 3. 各 talking point 數字更新為 B-1 Phase 2 量測值；保留 Phase 1 數字於附錄供對照
 4. 移除「pending B-1 Phase 2」前綴；引入正式 SLO 條款引用
-5. **`docs/benchmarks.md` §12 同步升級**為 v2.8.0 calibrated baseline（雙語）— 公開 canonical perf doc 才算正式 promote。本文件「客戶語言版本」+「不要這樣講」永遠 stays internal（pedagogical artifact 不該進 canonical reference）
+5. **`docs/benchmarks.md` §3 + §4 同步升級**為 v2.8.0 calibrated baseline（雙語）— 公開 canonical perf doc 才算正式 promote。本文件「客戶語言版本」+「不要這樣講」永遠 stays internal（pedagogical artifact 不該進 canonical reference）。（注：PR #460 已 promote 第一輪 synthetic-v2 數字至 §3/§4；本條 trigger 在 customer calibration 後再次升級）
 
 ---
 

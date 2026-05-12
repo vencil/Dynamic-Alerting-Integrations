@@ -804,6 +804,6 @@ da-tools cardinality-forecast --prometheus http://prometheus:9090 --warn-days 30
 da-tools diagnose <tenant> --config-dir conf.d/
 ```
 
-> threshold-exporter 層面的 micro-benchmark（config reload 延遲）見 [benchmarks.md](../benchmarks.md)。漸進式遷移指南見 [incremental-migration-playbook](../scenarios/incremental-migration-playbook.md)。
+> threshold-exporter 的 config reload 延遲基線 (1000-tenant cold 112 ms / steady reload 1.30 ms) 見 [benchmarks.md §3 v2.8.0 Scale Gate](../benchmarks.md#3-v280-scale-gate-1000-tenant-實測)；engineering-reference 完整 `Resolve_*` 系列見 [Benchmark Playbook §Engineering Reference Benchmarks](../internal/benchmark-playbook.md#engineering-reference-benchmarks)。漸進式遷移指南見 [incremental-migration-playbook](../scenarios/incremental-migration-playbook.md)。
 
 ### 2.14 Tenant Management API Architecture (ADR-009)

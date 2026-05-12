@@ -156,7 +156,7 @@ da-tools validate-config --config-dir ./conf.d/
 | ["Grafana Dashboard 導覽"](./grafana-dashboards.md) | ⭐⭐⭐ |
 | ["da-tools CLI Reference"](./cli-reference.md) | ⭐⭐ |
 | ["Threshold Exporter API Reference"](api/README.md) | ⭐⭐ |
-| ["性能分析與基準測試 (Performance Analysis & Benchmarks)"](./benchmarks.md) | ⭐⭐ |
+| ["性能基準 (Performance Benchmarks)"](./benchmarks.md) | ⭐⭐ |
 | ["BYO Alertmanager 整合指南"](integration/byo-alertmanager-integration.md) | ⭐⭐ |
 | ["Bring Your Own Prometheus (BYOP) — 現有監控架構整合指南"](integration/byo-prometheus-integration.md) | ⭐⭐ |
 | ["Operator Prometheus 整合"](integration/prometheus-operator-integration.md) | ⭐⭐ |
