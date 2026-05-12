@@ -22,7 +22,7 @@ This document provides Platform Engineers and Site Reliability Engineers (SREs) 
 - **Config-Driven Design Deep Dive** → [design/config-driven.en.md](design/config-driven.en.md) — The core mechanism that eliminates N×M config explosion; zero additional rule maintenance per new tenant
 - **Rule Packs & Projected Volume** → [design/rule-packs.en.md](design/rule-packs.en.md) — 15 independent rule packs with zero PR conflicts, enabling cross-team parallel development
 - **High Availability (HA) Deep Dive** → [design/high-availability.en.md](design/high-availability.en.md) — Achieving 99.9%+ alert reliability SLA with zero monitoring blind spots during maintenance
-- **Future Roadmap** → [design/roadmap-future.en.md](design/roadmap-future.en.md) — Operator-native integration, PR-based change review, automated Dashboard generation, and more
+- **Future Roadmap** → [design/roadmap-future.en.md](design/roadmap-future.en.md) — v2.8.0 delivered items + v2.9.0+ long-term exploration directions
 
 **Standalone topic documents:**
 - **Benchmarks** → [benchmarks.en.md](benchmarks.en.md)
@@ -142,6 +142,42 @@ graph TB
 3. **Projected Volume** mounts 15 independent rule packs, zero PR conflicts, each team independently owns their rules
 4. **Prometheus** uses `group_left` vector matching to join with user thresholds, achieving O(M) complexity
 
+### 1.3 Customer Migration & GitOps Governance Pipeline (Day-0 / Day-1 / Day-2)
+
+The v2.8.0 customer migration pipeline strings together three lifecycle phases — "Day-0 import existing PromRule corpus", "Day-1 GitOps PR splitting & governance", "Day-2 runtime hot-reload" — into an end-to-end flow that runs offline, in air-gapped environments, and with independently-verifiable supply-chain provenance:
+
+```mermaid
+graph LR
+    subgraph Day0["Day-0: Customer Migration (new in v2.8.0)"]
+        PR["PromRule corpus<br/>(CRD / YAML)"] -->|da-parser| JSON["Canonical JSON<br/>+ prom_portable flag"]
+        JSON -->|da-tools profile build| PB["Profile Builder<br/>(cluster + median ADR-019)"]
+    end
+
+    subgraph Day1["Day-1: GitOps Hierarchy-Aware Governance"]
+        PB -->|da-batchpr apply| PR1["Base Infrastructure PR<br/>(_defaults.yaml)"]
+        PB -->|da-batchpr apply| PR2["Tenant Override PRs<br/>(&lt;id&gt;.yaml — Blocked by Base)"]
+        PR1 -.->|refresh --base-merged| PR2
+        PR1 -->|da-guard CI gate| LINT["sticky PR comment<br/>(Schema / Routing / Cardinality / Redundant-override)"]
+        PR2 -->|da-guard CI gate| LINT
+    end
+
+    subgraph Day2["Day-2: Runtime (v2.7.0 Scale Foundation I)"]
+        LINT -->|Merge| GIT["Git repo (conf.d/)"]
+        GIT -->|ArgoCD / Flux| CM["ConfigMap"]
+        CM -->|dual-hash hot-reload| TE["threshold-exporter"]
+    end
+
+    style Day0 fill:#fff3e0,stroke:#d6b656
+    style Day1 fill:#e8f4fd,stroke:#1a73e8
+    style Day2 fill:#e8f5e9,stroke:#43a047
+```
+
+**Full-lifecycle governance features:**
+- **Zero vendor lock-in**: `da-parser` keeps `prom_portable: bool`, so customers retain visibility into the "still-portable-to-Prom" subset even after migrating to VictoriaMetrics
+- **GitOps PR ordering is enforced**: Base PR merges first → tenant PRs auto-rebase (`refresh --base-merged`); parser bug fixes go through `refresh --source-rule-ids` for granular patch regeneration
+- **CI gates are stickyness-aware**: `da-guard` posts a marker-based sticky PR comment (no message spam) + uploads artifacts with 14d retention
+- **Three delivery paths**: Docker / static binary 6-arch / air-gapped tar — every path cosign-keyless-signed + SBOM SPDX/CycloneDX; customer `make verify-release` verifies in one command
+
 ---
 
 ## Design Concepts Overview
@@ -159,9 +195,9 @@ The following table summarizes core design concepts, each with a standalone in-d
 | **Rule Packs & Projected Volume** | 15 independent rule packs, three-part structure, bilingual annotations | [design/rule-packs.en.md](design/rule-packs.en.md) |
 | **Performance Architecture** | Pre-computed Recording Rules vs Runtime Aggregation, O(M) vs O(M×N), Cardinality Guard | [design/config-driven.en.md](design/config-driven.en.md) |
 | **High Availability (HA)** | 2 replica deployment, RollingUpdate, PodDisruptionBudget, `max by(tenant)` prevents double-counting | [design/high-availability.en.md](design/high-availability.en.md) |
-| **Inheritance Engine** 🟢 *Shipped in v2.7.0* | `_defaults.yaml` at domain/region/env layers providing inheritable defaults (L0→L1→L2→L3 deep merge, array replacement, null-as-delete) (ADR-018); dual-hash (`source_hash` + `merged_hash`) precise hot-reload + 300ms debounce to absorb ConfigMap symlink rotation; flat and hierarchical `conf.d/` coexist (ADR-017). **v2.7.0 deliverables**: Go production path (`config_debounce.go` + `config_metrics.go` + `populateHierarchyState()` + `--scan-debounce` flag) + 3 new Prometheus metrics (`da_config_scan_duration_seconds` / `da_config_reload_trigger_total{reason}` / `da_config_defaults_change_noop_total`) + Tenant API `GET /tenants/{id}/effective` + `da-tools describe-tenant` / `migrate-conf-d` CLIs | [design/config-driven.en.md](design/config-driven.en.md) |
-| **Customer Migration Pipeline** 🟢 *Delivered in v2.8.0* | Codifies the full 5-step pipeline mapping a customer's existing PromRule corpus → conf.d/; anti-vendor-lock-in (`prom_portable` flag retained); GitOps Hierarchy-Aware PR splitting; zero orphan-tenant risk | **5-step chain**: `da-parser` (PromRule→JSON, dialect detect + VM-only allowlist + StrictPromQLValidator + provenance header) → `da-tools profile build` (cluster + Profile-as-Directory-Default extraction, median algorithm ADR-019) → `da-batchpr apply` (Hierarchy-Aware chunking: Base Infrastructure PR first, tenant PRs marked `Blocked by:`) → `da-batchpr refresh --base-merged` (auto-rebase tenant PRs after Base merge) / `--source-rule-ids` (parser-bug data-layer hot-fix granular regen) → `da-guard` (Schema / Routing / Cardinality / Redundant-override 4-layer check, CI workflow posts sticky PR comment) | [migration-toolkit-installation.en.md](migration-toolkit-installation.en.md) · [ADR-019](adr/019-profile-as-directory-default.en.md) |
-| **/simulate Endpoint + Ephemeral Graph** 🟢 *Delivered in v2.8.0* | tenant.yaml dry-run preview (no watch-loop pollution); Import Journey / simulator widget / Profile Builder share the same merge code path; prevents simulate-vs-commit divergence | `pkg/config/source.go` adds `ConfigSource` interface + `InMemoryConfigSource`; `POST /api/v1/tenants/simulate` walks the same `computeEffectiveConfig`+`computeMergedHash`; CI gate `TestSimulate_VsResolve_ParityHash` locks the "simulate=post-commit preview" contract | [design/config-driven.en.md](design/config-driven.en.md) |
+| **Inheritance Engine** 🟢 *Shipped in v2.7.0* | Cleaner configs, less duplication, multi-layer default management | `_defaults.yaml` L0→L3 deep merge (ADR-018) + dual-hash (`source_hash` + `merged_hash`) precise hot-reload + 300ms debounce to absorb ConfigMap symlink rotation; flat and hierarchical `conf.d/` coexist (ADR-017). Detailed deliverables in [design/config-driven.en.md](design/config-driven.en.md) | [design/config-driven.en.md](design/config-driven.en.md) |
+| **Customer Migration Pipeline** 🟢 *Delivered in v2.8.0* | Fully automates a customer's PromRule corpus → conf.d/; anti-vendor-lock-in; GitOps Hierarchy-Aware PR splitting; zero orphan-tenant risk | 5-step migration chain (`da-parser` → `profile build` → `da-batchpr` → `da-guard`). Full diagram in §1.3; step-by-step details in [migration-toolkit-installation.en.md](migration-toolkit-installation.en.md) · [ADR-019](adr/019-profile-as-directory-default.en.md) | [migration-toolkit-installation.en.md](migration-toolkit-installation.en.md) |
+| **/simulate Endpoint + Ephemeral Graph** 🟢 *Delivered in v2.8.0* | tenant.yaml dry-run preview (no watch-loop pollution); Import Journey / simulator widget / Profile Builder share the same merge code path; prevents simulate-vs-commit divergence | Extracts a `ConfigSource` interface so `/simulate` (dry-run) and the underlying WatchLoop share the same `computeEffectiveConfig`+`computeMergedHash` state machine, **guaranteeing 100% convergence between preview and production results**; CI gate `TestSimulate_VsResolve_ParityHash` locks the contract | [design/config-driven.en.md](design/config-driven.en.md) |
 | **Migration Toolkit Three Delivery Paths** 🟢 *Delivered in v2.8.0* | Covers the full spectrum from internet-connected to air-gapped (finance/government/defense) customer deployment environments; customers can independently verify supply-chain provenance | (a) Docker pull `ghcr.io/vencil/da-tools` (b) Static binary 6-arch cross-compile (linux/darwin/windows × amd64/arm64) (c) Air-gapped tar (`docker save` export). Every path signed via cosign keyless + SBOM in SPDX/CycloneDX; one-shot customer helper `make verify-release` | [migration-toolkit-installation.en.md](migration-toolkit-installation.en.md) |
 | **Future Roadmap** | Field-level RBAC, Tenant Auto-Discovery, Anomaly-Aware Threshold, Dashboard as Code, etc. | [design/roadmap-future.en.md](design/roadmap-future.en.md) |
 
@@ -265,11 +301,12 @@ spec:
 
 | Timeline | Theme | Focus |
 |----------|-------|-------|
-| **v2.7.0 Shipped** | Scale Foundation + Component Robustness | `conf.d/` directory hierarchy + `_defaults.yaml` inheritance engine (ADR-017/018), Go production path complete (`config_debounce.go` + `config_metrics.go` + Tenant API `/effective` endpoint + dual-hash hot-reload), Blast Radius CI bot ✅, Tier 1 component health snapshot ✅, 1000-tenant synthetic fixture ✅, SSOT language Phase 1 pilot ✅ |
-| **v2.8.0 In Development** (release wrap-up) | Customer migration pipeline + Scale production validation + automation consolidation | **Completed**: (a) v2.7.0 tech-debt closure + Policy-as-Code automation (56 pre-commit hooks); (b) Scale Foundation III (1000-tenant SLO measurement + Tenant API hardening + mixed-mode validation); (c) **Customer migration pipeline 5-step chain** (da-parser → Profile Builder (ADR-019) → Hierarchy-Aware Batch PR (da-batchpr) + refresh modes → Dangling Defaults Guard (da-guard) with sticky PR comment workflow) + **/simulate endpoint + ephemeral graph** + **Server-side Search API + virtualized Tenant Manager** + **Master Onboarding Dual Entry** (5/5 wizards: cicd-setup → deployment → alert-builder → routing-trace → tenant-manager) + **Smart Views frontend integration** + **Migration Toolkit three delivery paths (Docker / static binary 6-arch / air-gapped tar) + cosign keyless signing + SBOM SPDX/CycloneDX**; (d) **ZH-primary SSOT policy lock** (reverses v2.5.0-era EN-first SSOT proposal; full ZH→EN migration NOT pursued after §LL §12a Q4 premise validation 4-question audit fully fails). **Release wrap-up remaining**: 4-hr soak / `make pre-tag` / `make benchmark-report` / 5-line tags |
+| **v2.7.0 Shipped** | Scale Foundation I + Component Robustness | `conf.d/` directory hierarchy + `_defaults.yaml` inheritance engine (ADR-017/018), Go production path complete (`config_debounce.go` + `config_metrics.go` + Tenant API `/effective` endpoint + dual-hash hot-reload), Blast Radius CI bot, Tier 1 component health snapshot, 1000-tenant synthetic fixture |
+| **v2.8.0 Shipped** (2026-05-12) | Customer migration pipeline + 1000-tenant scale validation + automation consolidation | (a) **Customer migration pipeline 5-step chain** (da-parser → Profile Builder ([ADR-019](adr/019-profile-as-directory-default.en.md)) → Hierarchy-Aware Batch PR (da-batchpr) + refresh modes → Dangling Defaults Guard (da-guard) with sticky PR comment workflow); (b) **/simulate endpoint + ephemeral graph**; (c) **Server-side Search API + virtualized Tenant Manager**; (d) **Master Onboarding Dual Entry** (5/5 wizards: cicd-setup → deployment → alert-builder → routing-trace → tenant-manager) + **Smart Views frontend integration**; (e) **Migration Toolkit three delivery paths** (Docker / static binary 6-arch / air-gapped tar) + cosign keyless signing + SBOM SPDX/CycloneDX; (f) **Policy-as-Code automation** (56 pre-commit hooks: 39 auto + 14 manual + 3 pre-push); (g) **Scale Foundation III** (1000-tenant SLO measurements: cold load 112 ms / steady-state reload 1.3 ms / 5-anchor e2e fire-through baseline) + **Tenant API hardening** (rate limit + X-Request-ID + tenant-scoped authz + body-content range validation) + mixed-mode duplicate tenant id promoted to hard error; (h) **ZH-primary SSOT policy lock** |
+| **v2.9.0 In Planning** | Harden from first customer's actual usage | Glossary-driven codename gate Layer 2 (self-healing) · 4-hr soak + customer-anon corpus calibration · Rule Pack × threshold-calculator data flow evaluation · Local try-it-yourself onboarding (exporter / tenant-api / portal / da-tools standalone) |
 | **Long-term Exploration** | Intelligence × Decoupling | Anomaly-Aware Threshold, Log-to-Metric Bridge, Multi-Format Export, CRD, ChatOps, Field-level RBAC, Tenant Auto-Discovery |
 
-**Complete roadmap and technical plan** [design/roadmap-future.en.md](design/roadmap-future.en.md) · DX tooling improvements see [dx-tooling-backlog.md](internal/dx-tooling-backlog.md) · v2.7.0 execution records see `internal/v2.7.0-planning.md` (internal-only planning doc, browsable on GitHub)
+**Complete roadmap and technical plan** [design/roadmap-future.en.md](design/roadmap-future.en.md) · DX tooling improvements see [dx-tooling-backlog.md](internal/dx-tooling-backlog.md)
 
 ---
 

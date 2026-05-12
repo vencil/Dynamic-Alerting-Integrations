@@ -50,16 +50,16 @@ Every GitHub Release (`tools/v*` tag) ships assets for all three paths; pick whi
 
 ```bash
 # Pull latest stable (version is synced by bump_docs.py at release time)
-docker pull ghcr.io/vencil/da-tools:v2.7.0
+docker pull ghcr.io/vencil/da-tools:v2.8.0
 
 # Run a one-shot command
-docker run --rm ghcr.io/vencil/da-tools:v2.7.0 --help
-docker run --rm ghcr.io/vencil/da-tools:v2.7.0 guard --help
+docker run --rm ghcr.io/vencil/da-tools:v2.8.0 --help
+docker run --rm ghcr.io/vencil/da-tools:v2.8.0 guard --help
 
 # Mount conf.d in to run guard
 docker run --rm \
     -v "$(pwd)/conf.d:/conf.d:ro" \
-    ghcr.io/vencil/da-tools:v2.7.0 \
+    ghcr.io/vencil/da-tools:v2.8.0 \
     guard defaults-impact --config-dir /conf.d --required-fields cpu,memory
 ```
 
@@ -181,14 +181,14 @@ sha256sum --check da-tools-image.tar.gz.sha256
 
 # 4. Inside the air-gapped environment, load into local Docker
 gunzip -c da-tools-image.tar.gz | docker load
-# Prints: Loaded image: ghcr.io/vencil/da-tools:v2.7.0
+# Prints: Loaded image: ghcr.io/vencil/da-tools:v2.8.0
 
 # 5. Re-tag to your internal registry (optional)
-docker tag ghcr.io/vencil/da-tools:v2.7.0 internal-registry.corp/da-tools:v2.7.0
-docker push internal-registry.corp/da-tools:v2.7.0
+docker tag ghcr.io/vencil/da-tools:v2.8.0 internal-registry.corp/da-tools:v2.8.0
+docker push internal-registry.corp/da-tools:v2.8.0
 ```
 
-After that, internal CI / pre-commit hooks use `internal-registry.corp/da-tools:v2.7.0` directly. The `da-guard` binary is bundled at `/usr/local/bin/da-guard` inside the image — no separate transfer needed.
+After that, internal CI / pre-commit hooks use `internal-registry.corp/da-tools:v2.8.0` directly. The `da-guard` binary is bundled at `/usr/local/bin/da-guard` inside the image — no separate transfer needed.
 
 ### Pure binary also works in air-gapped
 

@@ -24,7 +24,7 @@ lang: zh
 | [Config-Driven 設計](design/config-driven.md) | 三態配置、Directory Scanner、多層嚴重度、排程式閾值、路由、Tenant API |
 | [Rule Packs 與 Projected Volume](design/rule-packs.md) | 15 個規則包、三部分結構、雙語 Annotation |
 | [高可用性 (HA)](design/high-availability.md) | 2 副本策略、PDB、滾動更新、SLA 99.9%+ |
-| [未來擴展路線](design/roadmap-future.md) | v2.7.0 計畫中 → 長期探索方向 |
+| [未來擴展路線](design/roadmap-future.md) | v2.8.0 已交付項目 + v2.9.0+ 長期探索方向 |
 
 **專題文件：** [性能基準](benchmarks.md) · [治理與安全](governance-security.md) · [故障排查](troubleshooting.md) · [進階場景](internal/test-coverage-matrix.md) · [遷移引擎](migration-engine.md) · [VCS 整合](vcs-integration-guide.md)
 
@@ -133,6 +133,42 @@ graph TB
 3. **Projected Volume** 掛載 15 個獨立規則包，零 PR 衝突，各團隊獨立擁有
 4. **Prometheus** 使用 `group_left` 向量匹配與用戶閾值進行聯接，實現 O(M) 複雜度（相比傳統 O(M×N)：固定 M 條規則 vs N×M 線性增長）
 
+### 1.3 客戶導入與 GitOps 治理管線 (Day-0 / Day-1 / Day-2)
+
+v2.8.0 引入的客戶導入管線把「Day-0 把既有 PromRule corpus 轉進來」「Day-1 用 GitOps PR 切塊治理」「Day-2 運行期熱重載」三階段串成一條可離線跑、可在 air-gapped 跑、可獨立驗 supply-chain 的端到端流程：
+
+```mermaid
+graph LR
+    subgraph Day0["Day-0: Customer Migration (v2.8.0 新增)"]
+        PR["PromRule corpus<br/>(CRD / YAML)"] -->|da-parser| JSON["Canonical JSON<br/>+ prom_portable flag"]
+        JSON -->|da-tools profile build| PB["Profile Builder<br/>(cluster + median ADR-019)"]
+    end
+
+    subgraph Day1["Day-1: GitOps Hierarchy-Aware 治理"]
+        PB -->|da-batchpr apply| PR1["Base Infrastructure PR<br/>(_defaults.yaml)"]
+        PB -->|da-batchpr apply| PR2["Tenant Override PRs<br/>(&lt;id&gt;.yaml — Blocked by Base)"]
+        PR1 -.->|refresh --base-merged| PR2
+        PR1 -->|da-guard CI gate| LINT["sticky PR comment<br/>(Schema / Routing / Cardinality / Redundant-override)"]
+        PR2 -->|da-guard CI gate| LINT
+    end
+
+    subgraph Day2["Day-2: Runtime (v2.7.0 Scale Foundation I)"]
+        LINT -->|Merge| GIT["Git repo (conf.d/)"]
+        GIT -->|ArgoCD / Flux| CM["ConfigMap"]
+        CM -->|dual-hash hot-reload| TE["threshold-exporter"]
+    end
+
+    style Day0 fill:#fff3e0,stroke:#d6b656
+    style Day1 fill:#e8f4fd,stroke:#1a73e8
+    style Day2 fill:#e8f5e9,stroke:#43a047
+```
+
+**全週期治理特色：**
+- **零 vendor lock-in**：`da-parser` 保留 `prom_portable: bool`，遷入 VictoriaMetrics 後仍能識別「可回 Prom」的子集
+- **GitOps PR 切塊正確順序**：Base PR 先 merge → tenant PRs 自動 rebase（`refresh --base-merged`）；parser bug fix 走 `refresh --source-rule-ids` 細粒度重生 patch PR
+- **CI 自動把關**：`da-guard` 四層檢查 sticky PR comment（marker-based update 不灌訊息）+ artifact 14d retention
+- **三條交付路徑**：Docker / static binary 6-arch / air-gapped tar，每路徑 cosign keyless 簽 + SBOM SPDX/CycloneDX；客戶 `make verify-release` 一鍵驗
+
 ---
 
 ## 設計概念總覽
@@ -152,9 +188,9 @@ graph TB
 | **Rule Packs** | 跨團隊並行開發零 PR 衝突 | 15 個 Projected Volume + 三部分結構 + 雙語 Annotation | [design/rule-packs.md](design/rule-packs.md) |
 | **效能架構** | 500+ tenant 毫秒級處理，資源成本近乎不隨租戶數增長 | Pre-computed Recording Rule、O(M) 複雜度、Cardinality Guard | [design/config-driven.md](design/config-driven.md) |
 | **高可用性 (HA)** | SLA 99.9%+ 警報可靠度，滾動更新零中斷 | 2 副本、PDB、`max by(tenant)` 防雙倍計算 | [design/high-availability.md](design/high-availability.md) |
-| **繼承引擎 (Inheritance Engine)** 🟢 *v2.7.0 已發布* | 配置乾淨化、減少重複、多層次預設管理 | `_defaults.yaml` 於 domain/region/env 層提供可繼承的預設（L0→L1→L2→L3 深合併、array 替換、null-as-delete）(ADR-018)、雙雜湊 (source_hash + merged_hash) 精確熱重載 + 300ms debounce 防 ConfigMap symlink rotation 連動、平坦與階層式 conf.d/ 共存 (ADR-017)。**v2.7.0 交付**：Go 生產路徑 (`config_debounce.go` + `config_metrics.go` + `populateHierarchyState()` + `--scan-debounce` flag) + 3 個新 Prometheus metric (`da_config_scan_duration_seconds` / `da_config_reload_trigger_total{reason}` / `da_config_defaults_change_noop_total`) + Tenant API `GET /tenants/{id}/effective` + `da-tools describe-tenant` / `migrate-conf-d` CLI | [design/config-driven.md](design/config-driven.md) |
-| **客戶導入管線 (Customer Migration Pipeline)** 🟢 *v2.8.0 已交付* | 把客戶既有 PromRule corpus → conf.d/ 的 5-step pipeline 完整 codify；anti-vendor-lock-in（保留 `prom_portable` 標記）；GitOps Hierarchy-Aware 切 PR；零 orphan tenant 風險 | **5-step chain**：`da-parser` (PromRule→JSON, dialect detect + VM-only allowlist + StrictPromQLValidator + provenance header) → `da-tools profile build` (cluster + Profile-as-Directory-Default 萃取，median 演算 ADR-019) → `da-batchpr apply` (Hierarchy-Aware 分塊：Base Infrastructure PR 先, tenant PRs 標 `Blocked by:`) → `da-batchpr refresh --base-merged` (Base merge 後自動 rebase tenant PRs) / `--source-rule-ids` (parser bug 後 data-layer hot-fix 細粒度重生) → `da-guard` (Schema / Routing / Cardinality / Redundant-override 四層檢查，CI workflow 貼 sticky PR comment) | [migration-toolkit-installation.md](migration-toolkit-installation.md) · [ADR-019](adr/019-profile-as-directory-default.md) |
-| **/simulate Endpoint + Ephemeral Graph** 🟢 *v2.8.0 已交付* | tenant.yaml dry-run preview（不污染 watch loop）；Import Journey / simulator widget / Profile Builder 共用同一 merge code path；防止 simulate 與 commit-後實際結果發散 | `pkg/config/source.go` 新增 `ConfigSource` interface + `InMemoryConfigSource`；`POST /api/v1/tenants/simulate` 走同一條 `computeEffectiveConfig`+`computeMergedHash`；CI gate `TestSimulate_VsResolve_ParityHash` 鎖死「simulate=commit-後 preview」契約 | [design/config-driven.md](design/config-driven.md) |
+| **繼承引擎 (Inheritance Engine)** 🟢 *v2.7.0 已發布* | 配置乾淨化、減少重複、多層次預設管理 | `_defaults.yaml` L0→L3 深合併（ADR-018）+ 雙雜湊（source_hash + merged_hash）精確熱重載 + 300ms debounce 防 ConfigMap symlink rotation；扁平與階層式 conf.d/ 共存（ADR-017）。詳細交付物見 [design/config-driven.md](design/config-driven.md) | [design/config-driven.md](design/config-driven.md) |
+| **客戶導入管線 (Customer Migration Pipeline)** 🟢 *v2.8.0 已交付* | 客戶 PromRule corpus → conf.d/ 全自動化；anti-vendor-lock-in；GitOps Hierarchy-Aware 切 PR；零 orphan tenant 風險 | 5-step migration chain（`da-parser` → `profile build` → `da-batchpr` → `da-guard`）。完整圖示見 §1.3，逐步細節見 [migration-toolkit-installation.md](migration-toolkit-installation.md) · [ADR-019](adr/019-profile-as-directory-default.md) | [migration-toolkit-installation.md](migration-toolkit-installation.md) |
+| **/simulate Endpoint + Ephemeral Graph** 🟢 *v2.8.0 已交付* | tenant.yaml dry-run preview（不污染 watch loop）；Import Journey / simulator widget / Profile Builder 共用同一 merge code path；防止 simulate 與 commit-後實際結果發散 | 抽出 `ConfigSource` interface，讓 `/simulate`（dry-run）與底層 WatchLoop 共用同一套 `computeEffectiveConfig`+`computeMergedHash` 解析狀態機，**保證預覽與生產結果 100% 收斂不發散**；CI gate `TestSimulate_VsResolve_ParityHash` 鎖死契約 | [design/config-driven.md](design/config-driven.md) |
 | **Migration Toolkit 三條交付路徑** 🟢 *v2.8.0 已交付* | 滿足從 internet-connected 到 air-gapped (金融/政府/軍工) 全光譜客戶部署環境；客戶可獨立驗 supply-chain provenance | (a) Docker pull `ghcr.io/vencil/da-tools` (b) Static binary 6-arch cross-compile (linux/darwin/windows × amd64/arm64) (c) Air-gapped tar (`docker save` export)。每路徑 cosign keyless 簽 + SBOM SPDX/CycloneDX；客戶 `make verify-release` 一鍵驗 | [migration-toolkit-installation.md](migration-toolkit-installation.md) |
 | **未來路線** | 權限 × 可觀測性閉環 × 智慧化 | Field-level RBAC、Auto-Discovery、DaC、Anomaly-Aware Threshold | [design/roadmap-future.md](design/roadmap-future.md) |
 
@@ -262,11 +298,12 @@ spec:
 
 | 時程 | 主題 | 重點方向 |
 |------|------|---------|
-| **v2.7.0 已發布** | Scale Foundation + 元件健壯化 | `conf.d/` 目錄分層 + `_defaults.yaml` 繼承引擎（ADR-017/018）、Go 生產路徑完成（`config_debounce.go` + `config_metrics.go` + Tenant API `/effective` endpoint + dual-hash 熱重載）、Blast Radius CI bot ✅、Tier 1 元件健康度快照 ✅、1000-tenant synthetic fixture ✅、SSOT 語言 Phase 1 試點 ✅ |
-| **v2.8.0 開發中**（release 收尾中）| 客戶導入管線 + Scale 生產驗證 + 自動化收斂 | **已完成**：(a) v2.7.0 技術債收斂 + Policy-as-Code 自動化（56 pre-commit hooks）；(b) Scale Foundation III（千租戶 SLO 量測 + Tenant API hardening + mixed-mode 驗證）；(c) **客戶導入管線 5-step chain**（da-parser → Profile Builder (ADR-019) → Hierarchy-Aware Batch PR (da-batchpr) + refresh modes → Dangling Defaults Guard (da-guard) with sticky PR comment workflow）+ **/simulate endpoint + ephemeral graph** + **Server-side Search API + virtualized Tenant Manager** + **Master Onboarding Dual Entry**（5/5 wizards：cicd-setup → deployment → alert-builder → routing-trace → tenant-manager）+ **Smart Views frontend integration** + **Migration Toolkit 三條交付路徑（Docker / static binary 6-arch / air-gapped tar）+ cosign keyless 簽章 + SBOM SPDX/CycloneDX**；(d) **ZH-primary SSOT policy lock**（reverse v2.5.0-era EN-first SSOT 提案，套 §LL §12a Q4 premise validation 後 4-question audit 全方位 fail；ZH→EN 全量遷移不執行）。**Release 收尾待跑**：4-hr soak / `make pre-tag` / `make benchmark-report` / 五線 tag |
+| **v2.7.0 已發布** | Scale Foundation I + 元件健壯化 | `conf.d/` 目錄分層 + `_defaults.yaml` 繼承引擎（ADR-017/018）、Go 生產路徑完成（`config_debounce.go` + `config_metrics.go` + Tenant API `/effective` endpoint + dual-hash 熱重載）、Blast Radius CI bot、Tier 1 元件健康度快照、1000-tenant synthetic fixture |
+| **v2.8.0 已發布**（2026-05-12）| 客戶導入管線 + 千租戶 Scale 驗證 + 自動化收斂 | (a) **客戶導入管線 5-step chain**（da-parser → Profile Builder ([ADR-019](adr/019-profile-as-directory-default.md)) → Hierarchy-Aware Batch PR (da-batchpr) + refresh modes → Dangling Defaults Guard (da-guard) with sticky PR comment workflow）；(b) **/simulate endpoint + ephemeral graph**；(c) **Server-side Search API + virtualized Tenant Manager**；(d) **Master Onboarding Dual Entry**（5/5 wizards：cicd-setup → deployment → alert-builder → routing-trace → tenant-manager）+ **Smart Views frontend integration**；(e) **Migration Toolkit 三條交付路徑**（Docker / static binary 6-arch / air-gapped tar）+ cosign keyless 簽章 + SBOM SPDX/CycloneDX；(f) **Policy-as-Code 自動化**（56 pre-commit hooks：39 auto + 14 manual + 3 pre-push）；(g) **Scale Foundation III**（千租戶 SLO 量測：cold load 112 ms / steady-state reload 1.3 ms / 5-anchor e2e fire-through baseline）+ **Tenant API hardening**（rate limit + X-Request-ID + tenant-scoped authz + body-content range validation）+ mixed-mode duplicate tenant id 改 hard error；(h) **ZH-primary SSOT policy lock** |
+| **v2.9.0 規劃中** | 從第一個客戶的實際使用 harden | Glossary-driven codename gate Layer 2 (self-healing) · 4-hr soak + customer-anon corpus calibration · Rule Pack × threshold-calculator 資料流評估 · Local try-it-yourself onboarding（exporter / tenant-api / portal / da-tools standalone） |
 | **長期探索** | 智慧化 × 去耦合 | Anomaly-Aware Threshold、Log-to-Metric Bridge、Multi-Format Export、CRD、ChatOps、Field-level RBAC、Tenant Auto-Discovery |
 
-**完整路線圖與技術規劃見** [design/roadmap-future.md](design/roadmap-future.md) · DX 工具改善見 [dx-tooling-backlog.md](internal/dx-tooling-backlog.md) · v2.7.0 執行紀錄見 `internal/v2.7.0-planning.md`（internal-only planning doc，GitHub 上直接瀏覽此路徑）
+**完整路線圖與技術規劃見** [design/roadmap-future.md](design/roadmap-future.md) · DX 工具改善見 [dx-tooling-backlog.md](internal/dx-tooling-backlog.md)
 
 ---
 
