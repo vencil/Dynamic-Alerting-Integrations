@@ -12,7 +12,7 @@ lang: zh
 > - Phase 1 ✅ landed (PR #65 / issue #60); informational nightly continues as trend monitor.
 > - Phase 2 **REDESIGNED** via issue [#433](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/433) (supersedes closed #67). Original window-based readiness check was structurally unattainable due to mid-cycle perf-affecting refactors. New design splits into **Tier 1** (PR-time, base-vs-PR, blame correctness) + **Tier 2** (release-time, release-vs-release, cumulative quality).
 > - **W2 ✅ Tier 1 shipped**: PRs #435 (initial parallel design) → #437 (sharding attempt — later rolled back when free-tier runner pool heterogeneity proved structurally fatal) → #440 (governance hardening: Ghost Green + Blanket Immunity defenses + audit workflow) → #450 (**v5 single-runner sequential** — final topology). Plus #443 docs.
-> - **W4 ✅ Tier 2 shipped**: PR #452 — single-runner sequential prior-vs-current release comparison, α=0.05 + 10% magnitude floor, **informational only** (does not block release).
+> - **W4 ✅ Tier 2 shipped**: PR #458 — single-runner sequential prior-vs-current release comparison, α=0.05 + 10% magnitude floor, **informational only** (does not block release).
 > - **W3 ongoing**: FP rate observation over real-PR traffic. v5's single-runner sequential drives INCONCLUSIVE rate to ~0% on free-tier; Phase 3 (Larger Runners) escalation now bound only to user-visible FP rate, not infrastructure noise.
 >
 > **Below sections describe the ORIGINAL window-based plan** — kept for historical reference; the live design is in #433 + the new workflow file `.github/workflows/bench-gate-pr.yaml`.
