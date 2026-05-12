@@ -147,7 +147,7 @@ Phase 4: Incremental Merge
 
 **Atomic Swap**: `RWMutex` protects atomic updates of config/hash/cache. Read side (Prometheus scrape) uses `RLock()`, reload uses `Lock()`, ensuring scrape never reads half-updated state.
 
-**Performance characteristics** (benchmark data see [§11](../benchmarks.en.md#11-under-load-benchmark-mode-100-synthetic-tenants)):
+**Performance characteristics** (benchmark data see [§3 v2.8.0 Scale Gate](../benchmarks.en.md#3-v280-scale-gate-1000-tenant-measured)):
 
 | Scenario | Latency | Code Path |
 |----------|---------|-----------|
