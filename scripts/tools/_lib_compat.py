@@ -60,6 +60,30 @@ def try_utf8_stdout() -> None:
     Call site:
         Add `try_utf8_stdout()` as the first line of `main()`. Idempotent —
         safe to call multiple times.
+
+    Scope note (post-PR #432 audit):
+        Currently called from four tools (state_reconcile, rule_pack_diff,
+        silencer_drift_check, analyze_bench_history) that ship in v2.8.0.
+        A grep for `print.*[✓⚠➕→]` reveals 20+ additional ops/ and dx/
+        tools that ALSO emit emoji to stdout and would crash on the same
+        legacy Windows codecs. They were NOT migrated in PR #432 because
+        the existing user base hasn't filed bug reports — those tools are
+        most often invoked inside the Docker image (Alpine UTF-8) or
+        modern Windows Terminal (UTF-8), where the crash doesn't trigger.
+        Apply this helper proactively when next touching one of those
+        tools; don't sweep all 20+ in a single PR (high diff cost,
+        low immediate user impact).
+
+    sys.path side-effect note:
+        Tools importing this helper use the standard sys.path insert
+        pattern (see lint_custom_rules.py et al.). This pollutes the
+        importer's sys.path globally and is technically a side-effect
+        at module import time. Verified via the 137-test suite (state-
+        reconcile + rule-pack-diff + silencer-drift-check) that this
+        doesn't break pytest, since conftest.py manages test sys.path
+        independently. Live with it; cleaner alternatives (e.g.
+        package-relative imports) would require restructuring scripts/
+        tools/ into proper Python packages — out of scope.
     """
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
