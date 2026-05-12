@@ -226,7 +226,7 @@ Sharding: 3 shards × 2 sides = 6 parallel bench jobs.
 
 | 症狀 | 原因 | 處理 |
 |---|---|---|
-| `::error::Heterogeneous CPUs detected ... INCONCLUSIVE` | Azure runner pool 隨機 CPU 配置 → benchstat 拒絕 cross-CPU 比對 | **必須 Re-run failed jobs 直到 CPU 一致**。⚠️ 警告：benchstat 拒絕比對時受影響 benchmark 沒有 delta rows → 偵測腳本抓不到衰退 → **gate 會 silent pass**（false negative）。**絕不能 override 跳過** — 真 regression 可能被 mask 入 main。Workflow 已改為這種情況強制 fail（標 INCONCLUSIVE），dev 必須重跑換 CPU。長期解法：Larger Runners(Tier 1 escalation path) |
+| `::error::Heterogeneous CPUs detected ... INCONCLUSIVE` | Azure runner pool 隨機 CPU 配置 → benchstat 拒絕 cross-CPU 比對 | **首選 "Re-run failed jobs" 直到 CPU 一致** — Azure pool 隨機性通常一兩次就 lands consistent。⚠️ 背景：benchstat 拒絕比對時受影響 benchmark 沒有 delta rows → 偵測腳本抓不到衰退 → 若沒此 INCONCLUSIVE 防線，gate 會 silent pass（false negative）。Workflow 已強制 INCONCLUSIVE = fail，可重跑直到 lands homogeneous CPU。**Override 反模式**：技術上 maintainer apply `override: bench-regress-ok` 會讓 compare job 整個 skip（含這個 INCONCLUSIVE 檢查），but 通常不該這樣做 — 沒有 comparison data 可作 trade-off 判斷，盲 override 等於放行 unknown risk。例外情況：CPU 反覆異質且 release critical path 趕時間，maintainer 自負風險。長期解法：Larger Runners（Tier 1 hardware-floor escalation path） |
 | `::error::Missing shard artifacts` | 某個 bench shard timeout（15 min）或 runner flake | 重跑；若反覆出現查 shard timeout 是不是合理 |
 | Override label 一直被 revert | applier 不是 admin/maintain（或 audit 工作流故障） | 確認 applier role；查 `bench-override-audit` 工作流 log |
 | Label 自動消失（push 後） | **WAI** — per-event semantics | Maintainer 重新審核新 commit 後 re-apply |
