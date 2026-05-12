@@ -136,10 +136,17 @@ jobs:
         with:
           go-version: "1.26"
 
-      - name: Cache Go modules
+      # Cache BOTH Go module cache AND build cache. The latter ($HOME/.cache/
+      # go-build) stores compiled package objects — restoring it saves the
+      # 20–40s compile phase of `go test -bench`. Go's build cache is
+      # content-addressed internally, so stale entries are silently ignored
+      # rather than producing wrong binaries. Safe to share across PRs.
+      - name: Cache Go modules + build
         uses: actions/cache@v5
         with:
-          path: ~/go/pkg/mod
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
           key: ${{ runner.os }}-go-1.26-${{ hashFiles('**/go.sum') }}
           restore-keys: |
             ${{ runner.os }}-go-1.26-
