@@ -68,7 +68,7 @@ SOT 在 [`dx-tooling-backlog.md`](dx-tooling-backlog.md)。
 
 ### REG-NNN → TRK-101 ~ 199（產品 / portal regression registry）
 
-> `known-regressions.md` 於 [Session #16 radical-delete policy phantom-deleted](../../CHANGELOG.md)，REG 條目分散於各 PR commit / playbook 引用。
+> `known-regressions.md` 於 [Session #16 radical-delete policy phantom-deleted](../CHANGELOG.md)，REG 條目分散於各 PR commit / playbook 引用。
 
 | Legacy | TRK | 主題 |
 |---|---|---|
@@ -133,7 +133,7 @@ SOT 在 [`dx-tooling-backlog.md`](dx-tooling-backlog.md)。
 
 ## CHANGELOG-archive 與 docs/internal/archive 不動
 
-[CHANGELOG-archive.md](../../CHANGELOG-archive.md) + [docs/internal/archive/](archive/) 的歷史敘述**不重寫**——pre-v2.2.0 引用作歷史保留，需要對應 TRK 時來查本表。
+`CHANGELOG-archive.md`（repo root）+ `docs/internal/archive/` 的歷史敘述**不重寫**——pre-v2.2.0 引用作歷史保留，需要對應 TRK 時來查本表。
 
 ## 後續工作
 
