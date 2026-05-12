@@ -216,9 +216,13 @@ jobs:
     if: needs.preflight.outputs.skip != 'true'
     runs-on: ubuntu-latest
     # Budget: ~10 min base bench + ~10 min pr bench + ~3 min setup/checkout/
-    # benchstat overhead. 30 min cap gives headroom for slow runners without
-    # masking pathological slowness.
-    timeout-minutes: 30
+    # benchstat overhead = ~23 min nominal. 40 min cap gives headroom for
+    # slow runners + Go module download flakes + Azure pool variance, AND
+    # leaves enough buffer for the step summary + fail-gate steps to actually
+    # render before a hard-kill. A tighter 30 min budget risks hard-killing
+    # mid-output, which leaves the dev with a red check and no diagnostic.
+    # [Gemini round-12 timeout-tightrope catch.]
+    timeout-minutes: 40
     steps:
       - name: Checkout repo (full history for both base + pr commits)
         uses: actions/checkout@v6
@@ -304,6 +308,29 @@ jobs:
           sudo sh -c "sync; echo 3 > /proc/sys/vm/drop_caches" \
             && echo "::notice::OS page cache dropped between base and pr benches" \
             || echo "::warning::drop_caches failed — pr bench may show ~1-3% cache-warmth bias"
+
+      # CRITICAL: clean the workspace before the second checkout.
+      # `go test -bench` may modify tracked files (go.sum if a dep resolution
+      # changes) or leave untracked files (benchmark temp dirs that didn't
+      # clean up). A subsequent `git checkout <other-sha>` then fails with
+      # "your local changes would be overwritten by checkout" → step fails,
+      # whole gate dies on a Git hygiene issue rather than perf reasons.
+      #
+      # `git reset --hard HEAD` reverts any tracked-file modifications.
+      # `git clean -fd` removes untracked files + directories (NOT ignored;
+      # we don't pass -x because gitignored locations like ~/.cache/go-build
+      # live in $HOME outside the workspace anyway, and we want to preserve
+      # any .build/ contents in case future steps need them — though for v5
+      # we write outputs to $RUNNER_TEMP/bench-out, outside the workspace).
+      #
+      # Safe to nuke aggressively because the bench harness itself is
+      # already stashed in $RUNNER_TEMP/bench-harness (see earlier step).
+      # [Gemini round-12 dirty-workspace-trap catch.]
+      - name: Clean workspace between base and pr bench
+        run: |
+          git reset --hard HEAD
+          git clean -fd
+          git status --short || true  # diagnostic for debugging
 
       - name: Checkout PR head for pr bench
         run: git checkout ${{ github.event.pull_request.head.sha }}
