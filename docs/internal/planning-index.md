@@ -19,11 +19,39 @@ lang: zh
 ## 索引
 
 <!-- PLANNING_INDEX_START -->
-### proposed (1)
+### in-progress (2)
+
+| ID | Kind | Title | Domain | PR | Source |
+|----|------|-------|--------|------|--------|
+| `TRK-006` | dx | TRK-006: Skip budget CI gate | ci | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
+| `TRK-010` | dx | TRK-010: Flake 自動重試 CI Policy（不是盲目全域 retry） | ci | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
+
+### proposed (16)
 
 | ID | Kind | Title | Domain | PR | Source |
 |----|------|-------|--------|------|--------|
 | `ADR-021` | adr | ADR-021: Tenant Federation — Label-Injection Proxy over Self-Built Endpoint | tenant-api | — | [docs/adr/021-tenant-federation.md](../adr/021-tenant-federation.md) |
+| `TRK-001` | dx | TRK-001: `check_noqa_hygiene.py` — noqa/nosec 必要性驗證 | ci | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
+| `TRK-002` | dx | TRK-002: `make test-impact` — 變更影響測試自動縮減 | ci | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
+| `TRK-003` | dx | TRK-003: Pre-commit hook CI gate | ci | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
+| `TRK-004` | dx | TRK-004: Lint tool self-test framework（negative fixtures） | ci | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
+| `TRK-005` | dx | TRK-005: `check_test_isolation.py` — 測試隔離驗證 | ci | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
+| `TRK-007` | dx | TRK-007: Lint test coverage 補齊（18 支缺測試） | ci | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
+| `TRK-008` | dx | TRK-008: CI ignore 文件化與 test-map 更新 | docs | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
+| `TRK-009` | dx | TRK-009: Coverage source 一致性 lint | ci | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
+| `TRK-012` | dx | TRK-012: ADR / 內部連結檔名一致性 Lint | docs | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
+| `TRK-013` | dx | TRK-013: Spoke 文件 Freshness Gate（防「空頭支票」） | docs | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
+| `TRK-014` | dx | TRK-014: FUSE-side Git Write 防護 Wrapper | ops | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
+| `TRK-015` | dx | TRK-015: Session 起手式 PATH+PATHEXT Smoke Test | ops | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
+| `TRK-016` | dx | TRK-016: CHANGELOG 計數一致性 Lint（tool count / JSX count / hook count） | ci | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
+| `TRK-017` | dx | TRK-017: Desktop Commander 長命令 Watchdog Wrapper | ops | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
+| `TRK-018` | dx | TRK-018: `engineering:testing-strategy` Skill 驅動的測試設計還債 | ci | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
+
+### done (1)
+
+| ID | Kind | Title | Domain | PR | Source |
+|----|------|-------|--------|------|--------|
+| `TRK-011` | dx | TRK-011: Fake-Clock 注入（根因修復 Go 時間相依測試） | exporter | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
 
 
 <!-- PLANNING_INDEX_END -->

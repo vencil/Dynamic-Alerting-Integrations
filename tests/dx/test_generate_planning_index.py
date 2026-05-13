@@ -189,6 +189,59 @@ class TestSectionYamlDiscovery:
         )
         assert list(gpi._discover_section_yaml(tmp_path)) == []
 
+    def test_heading_does_not_span_multiple_sections(self, tmp_path):
+        r"""Pinned during PR #379 chunk 3 self-fix.
+
+        With ``re.DOTALL`` and a plain ``.+?`` heading group, the regex would
+        backtrack the heading match across MULTIPLE H2/H3 sections plus arbitrary
+        prose looking for the next ``\`\`\`yaml`` fence — so the title cell would
+        render as the entire content from the first H2 in the file all the way
+        down to the first TRK section that actually had a yaml block. The fix
+        is to constrain heading to non-newline chars (``[^\n]+?``).
+
+        This fixture reproduces the original failure: a leading H2 with no yaml
+        block, lots of prose between, then a tracked entry. Without the fix the
+        captured title contained the whole prose blob.
+        """
+        p = tmp_path / "docs" / "backlog.md"
+        p.parent.mkdir(parents=True)
+        p.write_text(
+            textwrap.dedent(
+                """\
+                ## Status Legend
+
+                - **proposed** — identified but not started
+                - **in-progress** — current iteration
+
+                ---
+
+                ## Backlog Group A
+
+                ### Some Untracked Item
+
+                Body prose with no yaml.
+
+                ### TRK-700: Real Tracked Item
+
+                ```yaml
+                id: TRK-700
+                tracking_kind: dx
+                status: proposed
+                ```
+
+                Body content.
+                """
+            ),
+            encoding="utf-8",
+        )
+        entries = list(gpi._discover_section_yaml(tmp_path))
+        assert len(entries) == 1
+        # The title must be EXACTLY the heading line — not a multi-line capture
+        # that swept up "Status Legend", "Backlog Group A", "Some Untracked Item",
+        # etc.
+        assert entries[0].title == "TRK-700: Real Tracked Item"
+        assert "\n" not in entries[0].title
+
 
 # ---------------------------------------------------------------------------
 # Source 3 — flaky-tests.yaml
