@@ -81,6 +81,7 @@ lang: en
 | `_atomic_write.py` | Atomic write helper for regen tools (v2.8.0 Trap #60 mitigation). |
 | `add_frontmatter.py` | Add YAML front matter to documentation files for MkDocs/Docusaurus integration. |
 | `analyze_bench_history.py` | Aggregate bench-record nightly history into per-benchmark stats. |
+| `analyze_tier1_fp_rate.py` | Tier 1 bench-gate friction-rate observer (issue #433 W3). |
 | `axe_lite_static.py` | Axe-lite: static WCAG heuristics for JSX files (Phase .a0 Day 5 verification). |
 | `bump_docs.py` | 版號一致性管理工具 |
 | `bump_playbook_versions.py` | Bump `verified-at-version:` front-matter across the 4 operational playbooks. |
@@ -157,6 +158,7 @@ lang: en
 | `check_open_encoding.py` | flag open() text-mode calls without encoding=. |
 | `check_orphan_docs.py` | 孤兒文件偵測 |
 | `check_path_metadata_consistency.py` | Warn when conf.d/ hierarchical path disagrees with tenant `_metadata`. |
+| `check_planning_status_sync.py` | CI-time PR-trailer ↔ frontmatter sync gate. |
 | `check_playbook_freshness.py` | Playbook 知識退火檢查工具。 |
 | `check_playwright_rtl_drift.py` | Detect React Testing Library API names in Playwright specs (S#96, mechanical safety net for testing-playbook §LL §10). |
 | `check_portal_bundle_size.py` | Portal dist bundle size budget gate. |
