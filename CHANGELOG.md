@@ -11,6 +11,10 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 
 ## [Unreleased]
 
+### 文件治理
+
+- **ADR 索引自動化**（issue [#378](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/378) II-2）：新工具 `scripts/dx/generate_adr_index.py` 從 `docs/adr/` frontmatter + `## 狀態` 區塊自動渲染表至 `docs/architecture-and-design.md` 的 `<!-- ADR_INDEX_START/END -->` 哨點之間。新增 ADR 漏接 hub 索引的問題（ADR-019/020/021 都曾如此）由 pre-commit drift gate `adr-index-check` 機械擋下；本地用 `make adr-index` 重新渲染。Top-level pre-commit hook 計數 48 → 49 auto-stage。
+
 <!-- Editorial guideline（建立於 2026-04-23, refreshed v2.8.0 closure）：
 
 本節是下一版 in-progress 工作暫存區；**entries 目標長度：每筆 3-6 行面向
