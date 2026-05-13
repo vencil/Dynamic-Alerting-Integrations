@@ -62,6 +62,10 @@ TARGET_DOC = REPO_ROOT / "docs" / "internal" / "planning-index.md"
 SENTINEL_START = "<!-- PLANNING_INDEX_START -->"
 SENTINEL_END = "<!-- PLANNING_INDEX_END -->"
 
+# Used to build absolute GitHub URLs for source files outside the mkdocs site
+# (`docs/` tree). Edit if forking.
+GITHUB_BLOB_BASE = "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main"
+
 # Per ADR-020 §Frontmatter Contract.
 TRACKING_KINDS = {"tech-debt", "feature", "dx", "regression", "adr", "sprint"}
 STATUSES = {
@@ -126,10 +130,35 @@ class PlanningEntry:
     owner: str = ""
 
     def source_link(self) -> str:
-        """Markdown link to source. Adds `#L<n>` GitHub anchor when line is known."""
-        if self.source_line:
-            return f"[{self.source_path}:{self.source_line}](../../{self.source_path}#L{self.source_line})"
-        return f"[{self.source_path}](../../{self.source_path})"
+        """Markdown link to source.
+
+        Path-resolution rules (avoids the mkdocs-strict ``../../`` jump-out-of-site
+        warning that PR #476 self-review caught for migration-guide.md):
+
+        - **Source under ``docs/``** → site-relative path from ``docs/internal/``
+          (one ``../`` to reach site root). ``#L<n>`` is intentionally omitted for
+          ``.md`` sources because GitHub renders markdown and never anchors to
+          source-line numbers there.
+        - **Source outside ``docs/``** (scripts/, components/, flaky-tests.yaml, …)
+          → absolute GitHub URL; not part of the mkdocs site at all. ``#L<n>``
+          anchors work on GitHub's blob view for code files.
+        """
+        is_md = self.source_path.endswith(".md")
+        if self.source_path.startswith("docs/"):
+            rel_from_internal = self.source_path[len("docs/"):]
+            href = f"../{rel_from_internal}"
+            if self.source_line and not is_md:
+                href += f"#L{self.source_line}"
+        else:
+            href = f"{GITHUB_BLOB_BASE}/{self.source_path}"
+            if self.source_line and not is_md:
+                href += f"#L{self.source_line}"
+        display = (
+            f"{self.source_path}:{self.source_line}"
+            if self.source_line and not is_md
+            else self.source_path
+        )
+        return f"[{display}]({href})"
 
 
 class PlanningParseError(ValueError):

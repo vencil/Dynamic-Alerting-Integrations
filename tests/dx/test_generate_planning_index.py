@@ -333,6 +333,45 @@ class TestRender:
 
 
 # ---------------------------------------------------------------------------
+# Source link generation — mkdocs-site-aware
+# ---------------------------------------------------------------------------
+class TestSourceLink:
+    """Locks the path-resolution contract added during PR #480 self-review.
+
+    Without this contract, sources under `docs/` would render with `../../docs/...`
+    paths that work in GitHub filesystem view but trip mkdocs strict (same site-root
+    vs filesystem semantic gap as PR #476 self-review caught in migration-guide.md).
+    """
+
+    def test_md_source_under_docs_uses_site_relative_no_line_anchor(self):
+        e = gpi.PlanningEntry(
+            id="ADR-021", title="Foo", tracking_kind="adr", status="proposed",
+            source_path="docs/adr/021-tenant-federation.md", source_line=7,
+        )
+        # Site-relative from docs/internal/: one `../` then drop `docs/` prefix.
+        # No `#L<n>` because rendered .md doesn't honour line-jump in either viewer.
+        assert e.source_link() == (
+            "[docs/adr/021-tenant-federation.md](../adr/021-tenant-federation.md)"
+        )
+
+    def test_code_source_outside_docs_uses_github_url_with_line(self):
+        e = gpi.PlanningEntry(
+            id="TRK-700", title="x", tracking_kind="tech-debt", status="in-progress",
+            source_path="tools/portal/thing.ts", source_line=42,
+        )
+        expected_href = f"{gpi.GITHUB_BLOB_BASE}/tools/portal/thing.ts#L42"
+        assert e.source_link() == f"[tools/portal/thing.ts:42]({expected_href})"
+
+    def test_yaml_source_outside_docs_no_line_anchor_when_zero(self):
+        e = gpi.PlanningEntry(
+            id="TRK-600", title="x", tracking_kind="regression", status="accepted",
+            source_path="flaky-tests.yaml", source_line=0,
+        )
+        expected_href = f"{gpi.GITHUB_BLOB_BASE}/flaky-tests.yaml"
+        assert e.source_link() == f"[flaky-tests.yaml]({expected_href})"
+
+
+# ---------------------------------------------------------------------------
 # End-to-end CLI
 # ---------------------------------------------------------------------------
 class TestMainCli:

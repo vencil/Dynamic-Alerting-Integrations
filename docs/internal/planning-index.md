@@ -23,7 +23,7 @@ lang: zh
 
 | ID | Kind | Title | Domain | PR | Source |
 |----|------|-------|--------|------|--------|
-| `ADR-021` | adr | ADR-021: Tenant Federation — Label-Injection Proxy over Self-Built Endpoint | tenant-api | — | [docs/adr/021-tenant-federation.md](../../docs/adr/021-tenant-federation.md) |
+| `ADR-021` | adr | ADR-021: Tenant Federation — Label-Injection Proxy over Self-Built Endpoint | tenant-api | — | [docs/adr/021-tenant-federation.md](../adr/021-tenant-federation.md) |
 
 
 <!-- PLANNING_INDEX_END -->
