@@ -42,7 +42,7 @@ purpose: |
   Closure deps: none. Pure class component using React global.
 ---
 
-import { Component } from "react";  // TD-033 ESM import
+import { Component } from "react";  // TRK-233 ESM import
 
 const FALLBACK_BOX_STYLE = {
   padding: '24px',
@@ -140,7 +140,7 @@ class ErrorBoundary extends Component {
 
 window.__ErrorBoundary = ErrorBoundary;
 
-// TD-030c: ESM export for esbuild bundle + Vitest. Both `window.__X`
-// and `export { X }` removed in TD-030z when jsx-loader retires.
+// TRK-230c: ESM export for esbuild bundle + Vitest. Both `window.__X`
+// and `export { X }` removed in TRK-230z when jsx-loader retires.
 // <!-- jsx-loader-compat: ignore -->
 export { ErrorBoundary };

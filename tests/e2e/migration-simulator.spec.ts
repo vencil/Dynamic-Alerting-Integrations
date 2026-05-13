@@ -1,5 +1,5 @@
 /**
- * Migration Dry-Run Simulator — smoke spec (TD-032d).
+ * Migration Dry-Run Simulator — smoke spec (TRK-232d).
  *
  * See tests/e2e/README.md for the smoke-spec template + rationale.
  */
@@ -18,7 +18,7 @@ test.describe('Migration Dry-Run Simulator @critical', () => {
     });
   });
 
-  test('uses portal-safe hrefs (REG-004 regression guard)', async ({ page }) => {
+  test('uses portal-safe hrefs (TRK-104 regression guard)', async ({ page }) => {
     await loadPortalTool(page, 'migration-simulator');
     await assertNoAbsoluteRootHrefs(page);
   });

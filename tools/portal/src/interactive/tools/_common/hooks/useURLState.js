@@ -39,7 +39,7 @@ purpose: |
     - No SSR concern (jsx-loader is browser-only).
 ---
 
-import { useState, useEffect, useCallback } from "react";  // TD-033 ESM import
+import { useState, useEffect, useCallback } from "react";  // TRK-233 ESM import
 
 function useURLState(keys) {
   // Read once on mount; subsequent updates flow through setKey/reset.
@@ -101,7 +101,7 @@ function useURLState(keys) {
 // Register on window for orchestrator pickup.
 window.__useURLState = useURLState;
 
-// TD-030c: ESM export for esbuild bundle + Vitest. Both `window.__X`
-// and `export { X }` removed in TD-030z when jsx-loader retires.
+// TRK-230c: ESM export for esbuild bundle + Vitest. Both `window.__X`
+// and `export { X }` removed in TRK-230z when jsx-loader retires.
 // <!-- jsx-loader-compat: ignore -->
 export { useURLState };

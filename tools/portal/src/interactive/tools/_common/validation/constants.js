@@ -58,6 +58,6 @@ window.__TIMING_GUARDRAILS = TIMING_GUARDRAILS;
 window.__UNSAFE_KEYS = UNSAFE_KEYS;
 window.__MAX_YAML_SIZE = MAX_YAML_SIZE;
 
-// TD-030c: ESM exports for esbuild bundle + Vitest. Removed in TD-030z.
+// TRK-230c: ESM exports for esbuild bundle + Vitest. Removed in TRK-230z.
 // <!-- jsx-loader-compat: ignore -->
 export { RESERVED_KEYS, RESERVED_PREFIXES, RECEIVER_TYPES, RECEIVER_REQUIRED, TIMING_GUARDRAILS, UNSAFE_KEYS, MAX_YAML_SIZE };

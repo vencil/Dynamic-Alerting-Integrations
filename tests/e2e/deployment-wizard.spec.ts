@@ -1,14 +1,14 @@
 /**
  * Deployment Profile Wizard — E2E smoke test (Phase .a A-6, v2.7.0)
  *
- * PRIMARY PURPOSE: REG-004 regression guard.
+ * PRIMARY PURPOSE: TRK-104 regression guard.
  *
- * REG-004 is the v2.5.0 regression in which deployment-wizard.jsx shipped
+ * TRK-104 is the v2.5.0 regression in which deployment-wizard.jsx shipped
  * `href="/..."` absolute-root links. When the docs site is served from a
  * sub-path (GitHub Pages project sites, nested MkDocs builds, or the Cowork
  * preview shell), absolute-root hrefs break navigation because they resolve
  * against the hosting origin rather than the portal base. See:
- *   - docs/internal/known-regressions.md § REG-004
+ *   - docs/internal/known-regressions.md § TRK-104
  *   - docs/internal/v2.7.0-planning.md § Phase .a A-6
  *
  * This spec's hardest assertion is `assertNoAbsoluteRootHrefs` — that single
@@ -21,7 +21,7 @@
  *   validation of the deployment wizard's user flows. The name reflects the
  *   component under test; the scope is:
  *     (a) component mount/render smoke,
- *     (b) REG-004 link-shape guard (THE reason this file exists),
+ *     (b) TRK-104 link-shape guard (THE reason this file exists),
  *     (c) a11y budget check (Phase .a0 batch 4 token-migration guardrail).
  *   It deliberately does NOT cover: step-N data validation, form submission,
  *   profile download, edge cases in tier selection, cross-step state persistence,
@@ -35,10 +35,10 @@
  *   - Page title matches expected pattern (Deployment|Wizard)
  *   - Step UI renders at least one tier selection card
  *   - NO absolute-root (`href="/..."` / `action="/..."`) attributes exist
- *     anywhere in the rendered DOM (REG-004 guard)
+ *     anywhere in the rendered DOM (TRK-104 guard)
  *   - axe-core WCAG 2.1 AA: 0 Critical violations
  *     (Day 5 runtime finding: step indicator --da-color-tag-bg + --da-color-muted
- *      pair fails AA contrast → TECH-DEBT-003, tracked in known-regressions.md)
+ *      pair fails AA contrast → TRK-203, tracked in known-regressions.md)
  */
 import { test, expect } from '@playwright/test';
 import {
@@ -76,11 +76,11 @@ test.describe('Deployment Profile Wizard @critical', () => {
     await expect(tierCard.first()).toBeVisible({ timeout: 10000 });
   });
 
-  test('uses portal-safe hrefs (REG-004 regression guard)', async ({ page }) => {
+  test('uses portal-safe hrefs (TRK-104 regression guard)', async ({ page }) => {
     await loadPortalTool(page, 'deployment-wizard');
 
-    // THIS is the canonical REG-004 assertion. If this test fails it means
-    // deployment-wizard has re-introduced the pattern that caused REG-004
+    // THIS is the canonical TRK-104 assertion. If this test fails it means
+    // deployment-wizard has re-introduced the pattern that caused TRK-104
     // in v2.5.0: `href="/foo"` (absolute-root) rather than `href="foo"`
     // or `href="../foo"` (portal-relative).
     //

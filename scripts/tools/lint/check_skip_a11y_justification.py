@@ -62,9 +62,11 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 # whitespace and trailing comma.
 RE_SKIP_TRUE = re.compile(r"\bskipA11y\s*:\s*true\b")
 
-# A justification comment: `// skipA11y: TD-NNN <free text>` within the
-# preceding lines. The TD number is required so the debt is tracked.
-RE_JUSTIFICATION = re.compile(r"//\s*skipA11y:\s*TD-\d+\b")
+# A justification comment: `// skipA11y: TRK-NNN <free text>` (or the legacy
+# `TD-NNN` form, accepted during the v2.8.1 namespace transition window) within
+# the preceding lines. The ticket number is required so the debt is tracked.
+# Letter suffix on TRK ids (e.g. TRK-230c) is permitted; legacy TD-NN has none.
+RE_JUSTIFICATION = re.compile(r"//\s*skipA11y:\s*(?:TRK-\d+[a-z]?|TD-\d+)\b")
 
 LOOKBACK_LINES = 3
 

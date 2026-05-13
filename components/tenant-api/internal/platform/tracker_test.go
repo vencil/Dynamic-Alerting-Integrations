@@ -397,7 +397,7 @@ func TestWatchLoop_RunsInitialSync(t *testing.T) {
 
 func TestWatchLoop_TickerTriggersAdditionalSyncs(t *testing.T) {
 	t.Parallel()
-	// HA-11 deeper: this test was a documented flake on GH-hosted runners
+	// TRK-011 deeper: this test was a documented flake on GH-hosted runners
 	// (CI run 25602108441 saw "lister call count = 1, want >= 2"). The old
 	// version slept 180ms hoping for at least one 50ms ticker fire — under
 	// CPU steal / GC pauses on shared runners, the sleep could return before

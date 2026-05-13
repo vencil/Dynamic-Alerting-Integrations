@@ -1,6 +1,6 @@
 """Tests for scripts/tools/lint/check_jsx_i18n.py.
 
-Gap 4 (HA-7 backlog) — third lint self-test (P1). Auto-hook lint at
+Gap 4 (TRK-007 backlog) — third lint self-test (P1). Auto-hook lint at
 301 LOC, previously zero unit-test coverage.
 
 The lint exists specifically because of the v2.3.0 bug class:
@@ -349,12 +349,12 @@ class TestRunChecks:
         )
 
     def test_no_tool_meta_skips_sync_check(self, tmp_path, monkeypatch):
-        # Property: TD-030z — when TOOL_META is absent (legacy
+        # Property: TRK-230z — when TOOL_META is absent (legacy
         # renderJSX function gone), the sync check is skipped entirely.
         # Other checks still run.
         loader = tmp_path / "jsx-loader.html"
         loader.write_text(
-            "// TOOL_META was removed in TD-030z\n"
+            "// TOOL_META was removed in TRK-230z\n"
             "var CUSTOM_FLOW_MAP = {\n"
             "  'orphan-flow': { },\n"
             "};\n"

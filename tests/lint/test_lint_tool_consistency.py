@@ -290,7 +290,7 @@ class TestCheckAppearsIn:
 class TestCheckFlowComponents:
     def test_valid_flow(self, patch_repo_root):
         tmp_path = patch_repo_root(ltc, "PROJECT_ROOT")
-        # TD-042: flow component paths now resolve against tools/portal/src/
+        # TRK-242: flow component paths now resolve against tools/portal/src/
         # (after stripping leading "./" / "../"); flows.json itself stays
         # under docs/assets/.
         assets = tmp_path / "docs" / "assets"

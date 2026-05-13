@@ -1,5 +1,5 @@
 /**
- * Unit + property-based tests for parseYaml — TD-032b (#TBD).
+ * Unit + property-based tests for parseYaml — TRK-232b (#TBD).
  *
  * The parser is a hand-rolled YAML subset for tenant config (see
  * `_common/validation/yaml-parser.js` docstring for rationale —

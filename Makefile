@@ -346,7 +346,7 @@ dc-go-test: ## 在 Dev Container 內跑 go test ./...（Go 僅在 container 內�
 	@bash scripts/ops/dx-run.sh go test ./...
 
 .PHONY: api-docs
-api-docs: ## Generate OpenAPI spec from tenant-api swag annotations (TECH-DEBT-021)
+api-docs: ## Generate OpenAPI spec from tenant-api swag annotations (TRK-221)
 	@# swag CLI installs lazily inside the Dev Container. Generated artefacts
 	@# (docs/swagger.json, swagger.yaml, docs.go) are committed to git so CI
 	@# can drift-check via `make api-docs && git diff --exit-code
@@ -362,7 +362,7 @@ api-docs: ## Generate OpenAPI spec from tenant-api swag annotations (TECH-DEBT-0
 		swag init -g cmd/server/main.go -o ./docs --parseInternal --parseDependency'
 
 .PHONY: contract-test
-contract-test: ## 跑 schemathesis 契約測試 (TECH-DEBT-022) — build → start tenant-api → fuzz spec
+contract-test: ## 跑 schemathesis 契約測試 (TRK-222) — build → start tenant-api → fuzz spec
 	@# Runner builds tenant-api, starts it on a random port, runs schemathesis
 	@# against components/tenant-api/docs/swagger.json, tears down. CONTRACT_MAX_EXAMPLES
 	@# defaults to 10 (CI-friendly); bump for local investigation. Requires
@@ -739,7 +739,7 @@ test-e2e: ## Portal E2E 煙霧測試 (Playwright, 需 Node.js ≥ 20，排除 @v
 	@cd tests/e2e && npm test -- $(ARGS)
 
 .PHONY: test-e2e-visual
-test-e2e-visual: ## Visual regression test (TD-029)，比對 baseline png；CI 不跑，需 baseline 已存在
+test-e2e-visual: ## Visual regression test (TRK-229)，比對 baseline png；CI 不跑，需 baseline 已存在
 	@cd tests/e2e && npm run test:visual -- $(ARGS)
 
 .PHONY: test-e2e-visual-update
@@ -753,19 +753,19 @@ test-e2e-visual-update: ## ⛔ 重產 visual baseline。**只能在 Ubuntu** 跑
 	@cd tests/e2e && npm run test:visual:update -- $(ARGS)
 
 .PHONY: portal-build
-portal-build: ## Build portal ESM bundles (TD-030 Option C; entries listed in tools/portal/manifest.json)
+portal-build: ## Build portal ESM bundles (TRK-230 Option C; entries listed in tools/portal/manifest.json)
 	@cd tools/portal && npm run build
 
 .PHONY: portal-build-watch
-portal-build-watch: ## Watch-mode portal build for dev iteration (TD-030)
+portal-build-watch: ## Watch-mode portal build for dev iteration (TRK-230)
 	@cd tools/portal && npm run build:watch
 
 .PHONY: test-portal
-test-portal: ## Vitest unit tests for portal components (TD-030; tests in tests/portal/)
+test-portal: ## Vitest unit tests for portal components (TRK-230; tests in tests/portal/)
 	@cd tools/portal && npm run test
 
 .PHONY: portal-bundle-budget
-portal-bundle-budget: ## Check portal dist bundle size budgets (TD-032a; per-tool 100KB / shared chunk 200KB / total 4MB)
+portal-bundle-budget: ## Check portal dist bundle size budgets (TRK-232a; per-tool 100KB / shared chunk 200KB / total 4MB)
 	@python3 scripts/tools/lint/check_portal_bundle_size.py --ci
 
 .PHONY: test-skip-audit

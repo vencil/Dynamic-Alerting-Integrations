@@ -13,7 +13,7 @@ dependencies: [
 ---
 
 import React, { useState, useMemo, useCallback } from 'react';
-// TD-030e: ESM imports (jsx-loader rewrites to window reads on legacy).
+// TRK-230e: ESM imports (jsx-loader rewrites to window reads on legacy).
 import { RBAC_STEPS as STEPS, RBAC_PERMISSION_HIERARCHY as PERMISSION_HIERARCHY, RBAC_ENVIRONMENTS as ENVIRONMENTS, RBAC_DOMAIN_EXAMPLES as DOMAIN_EXAMPLES } from './rbac-setup-wizard/fixtures/wizard-defaults.js';
 import { rbacGenerateYaml as generateRbacYaml, rbacValidate as validateRbac } from './rbac-setup-wizard/utils/generators.js';
 // PR-portal-11: per-step subtree boundary (see operator-setup-wizard).

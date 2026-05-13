@@ -394,7 +394,7 @@ test.describe('Tenant Manager × Wizard Deep-Link @critical', () => {
     expect(labels).toContain(SPECIAL_TENANT);
   });
 
-  // TECH-DEBT-020 (#225): scan the tenant-manager landing view (the
+  // TRK-220 (#225): scan the tenant-manager landing view (the
   // host page from which the deep-link footer renders) for WCAG 2.1 AA
   // violations. If new violations surface, register them in
   // `docs/internal/frontend-quality-backlog.md` rather than relaxing

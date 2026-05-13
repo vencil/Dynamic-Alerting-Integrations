@@ -5,7 +5,7 @@
  *   - jsx-loader loads rbac-setup-wizard without 404 / JS error
  *   - Page title matches expected pattern
  *   - Core UI: role/permission selection step visible
- *   - No REG-004-style hardcoded portal-absolute hrefs
+ *   - No TRK-104-style hardcoded portal-absolute hrefs
  *   - axe-core WCAG 2.1 AA: 0 Critical violations
  */
 import { test, expect } from '@playwright/test';
@@ -39,7 +39,7 @@ test.describe('RBAC Setup Wizard @critical', () => {
     await expect(permStep).toBeVisible({ timeout: 10000 });
   });
 
-  test('uses portal-safe hrefs (REG-004 regression guard)', async ({ page }) => {
+  test('uses portal-safe hrefs (TRK-104 regression guard)', async ({ page }) => {
     await loadPortalTool(page, 'rbac-setup-wizard');
     await assertNoAbsoluteRootHrefs(page);
   });

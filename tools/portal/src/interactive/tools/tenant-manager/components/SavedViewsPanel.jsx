@@ -45,12 +45,12 @@ purpose: |
                                        reload, save, remove }
 ---
 
-// TD-033: ESM dist-bundle chunk order is non-deterministic;
+// TRK-233: ESM dist-bundle chunk order is non-deterministic;
 // `window.__styles` may be undefined when this module evaluates.
 // Import the canonical export instead. See tenant-manager/styles.js.
 import { styles } from '../styles.js';
 
-import { useState, useMemo } from "react";  // TD-033 ESM import
+import { useState, useMemo } from "react";  // TRK-233 ESM import
 const t = window.__t || ((zh, en) => en);
 
 /**
@@ -398,8 +398,8 @@ function SavedViewsPanel({ currentFilters, onApplyView, canWrite, savedViews }) 
 // Register on window for orchestrator pickup.
 window.__SavedViewsPanel = SavedViewsPanel;
 
-// TD-030b: ESM export. `filtersToViewMap` is the pure utility used by
+// TRK-230b: ESM export. `filtersToViewMap` is the pure utility used by
 // the panel's "Save current..." flow — first-batch unit-test target.
-// Removed in TD-030z.
+// Removed in TRK-230z.
 // <!-- jsx-loader-compat: ignore -->
 export { SavedViewsPanel, filtersToViewMap };

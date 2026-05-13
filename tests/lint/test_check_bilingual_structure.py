@@ -1,6 +1,6 @@
 """Tests for scripts/tools/lint/check_bilingual_structure.py.
 
-Gap 4 (HA-7 backlog) — fourth lint self-test, the last P1 in the
+Gap 4 (TRK-007 backlog) — fourth lint self-test, the last P1 in the
 chain. Auto-hook lint at 426 LOC, previously zero unit-test coverage.
 
 The lint exists specifically because of the v2.3.0 bug where

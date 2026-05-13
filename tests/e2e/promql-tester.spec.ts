@@ -1,5 +1,5 @@
 /**
- * PromQL Tester — smoke spec (TD-032d).
+ * PromQL Tester — smoke spec (TRK-232d).
  *
  * See tests/e2e/README.md for the smoke-spec template + rationale.
  */
@@ -19,7 +19,7 @@ test.describe('PromQL Tester @critical', () => {
     });
   });
 
-  test('uses portal-safe hrefs (REG-004 regression guard)', async ({ page }) => {
+  test('uses portal-safe hrefs (TRK-104 regression guard)', async ({ page }) => {
     await loadPortalTool(page, 'promql-tester');
     await assertNoAbsoluteRootHrefs(page);
   });

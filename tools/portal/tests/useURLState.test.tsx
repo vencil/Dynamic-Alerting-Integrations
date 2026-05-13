@@ -1,5 +1,5 @@
 /**
- * Unit tests for useURLState hook — Vitest next-batch (after TD-032b).
+ * Unit tests for useURLState hook — Vitest next-batch (after TRK-232b).
  *
  * Hook contract from `_common/hooks/useURLState.js`:
  *   - Initial state read from window.location.search; keys not present

@@ -136,7 +136,7 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// this drain, races between Broadcast and cancel can drop in-flight
 	// events on the floor — which surfaces as flaky tests that "fix"
 	// themselves with a time.Sleep before cancel (the anti-pattern that
-	// TECH-DEBT-019 removes).
+	// TRK-219 removes).
 	for {
 		select {
 		case <-r.Context().Done():

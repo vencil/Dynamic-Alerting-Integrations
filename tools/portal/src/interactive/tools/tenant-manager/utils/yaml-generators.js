@@ -48,6 +48,6 @@ function generateSilentModeYaml(tenants) {
 window.__generateMaintenanceYaml = generateMaintenanceYaml;
 window.__generateSilentModeYaml = generateSilentModeYaml;
 
-// TD-030b: ESM exports. Removed in TD-030z.
+// TRK-230b: ESM exports. Removed in TRK-230z.
 // <!-- jsx-loader-compat: ignore -->
 export { generateMaintenanceYaml, generateSilentModeYaml };

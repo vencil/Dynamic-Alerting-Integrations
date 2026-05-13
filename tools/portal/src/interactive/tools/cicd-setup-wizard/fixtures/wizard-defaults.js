@@ -62,6 +62,6 @@ window.__CICD_RULE_PACKS = CICD_RULE_PACKS;
 window.__CICD_CI_OPTIONS = CICD_CI_OPTIONS;
 window.__CICD_DEPLOY_OPTIONS = CICD_DEPLOY_OPTIONS;
 
-// TD-030e: ESM exports. Removed in TD-030z.
+// TRK-230e: ESM exports. Removed in TRK-230z.
 // <!-- jsx-loader-compat: ignore -->
 export { CICD_STEPS, CICD_RULE_PACKS, CICD_CI_OPTIONS, CICD_DEPLOY_OPTIONS };

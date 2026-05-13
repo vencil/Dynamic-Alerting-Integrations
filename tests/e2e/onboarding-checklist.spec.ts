@@ -1,5 +1,5 @@
 /**
- * Onboarding Checklist Generator — smoke spec (TD-032d).
+ * Onboarding Checklist Generator — smoke spec (TRK-232d).
  *
  * See tests/e2e/README.md for the smoke-spec template + rationale.
  */
@@ -18,7 +18,7 @@ test.describe('Onboarding Checklist @critical', () => {
     });
   });
 
-  test('uses portal-safe hrefs (REG-004 regression guard)', async ({ page }) => {
+  test('uses portal-safe hrefs (TRK-104 regression guard)', async ({ page }) => {
     await loadPortalTool(page, 'onboarding-checklist');
     await assertNoAbsoluteRootHrefs(page);
   });

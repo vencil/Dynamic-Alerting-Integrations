@@ -166,7 +166,7 @@ def run_checks() -> Tuple[List[Dict], Dict]:
 
     # Check 1: TOOL_META ↔ CUSTOM_FLOW_MAP key consistency
     #
-    # TD-030z note: TOOL_META lived inside the legacy `renderJSX` function
+    # TRK-230z note: TOOL_META lived inside the legacy `renderJSX` function
     # that drove the in-page "Related tools footer" for the fetch+Babel
     # path. That function (and TOOL_META with it) was removed when every
     # tool migrated to the ESM dist-bundle entrypoint. CUSTOM_FLOW_MAP

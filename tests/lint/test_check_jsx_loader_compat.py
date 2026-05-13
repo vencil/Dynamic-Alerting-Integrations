@@ -138,11 +138,11 @@ class TestNonAllowlistImportRule:
         ],
     )
     def test_relative_imports_pass(self, src):
-        # TD-030 transitional: relative imports are rewritten by jsx-loader
+        # TRK-230 transitional: relative imports are rewritten by jsx-loader
         # transformImports → window.__X reads, and consumed natively by the
         # esbuild dist-bundle path. Both routes work, so the lint must NOT
         # flag them. Removed from this allowance when jsx-loader retires
-        # (TD-030z) — at that point relative imports are the only mechanism
+        # (TRK-230z) — at that point relative imports are the only mechanism
         # and there's nothing to lint against.
         assert _scan(src) == []
 

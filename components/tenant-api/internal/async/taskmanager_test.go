@@ -288,7 +288,7 @@ func TestClose(t *testing.T) {
 
 	m.Submit(taskID, fn)
 
-	// TD-024: replace blind 50ms sleep with a poll for "task is actually
+	// TRK-224: replace blind 50ms sleep with a poll for "task is actually
 	// being run by a worker" — the original sleep was a hack to give the
 	// worker time to pick up the work item. Polling for TaskRunning is
 	// deterministic and fast.

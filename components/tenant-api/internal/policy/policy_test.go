@@ -464,7 +464,7 @@ func TestWatchLoop(t *testing.T) {
     constraints: {}`
 	testutil.WriteYAML(t, dir, "_domain_policy.yaml", newPolicy)
 
-	// TD-024: replace blind 200ms sleep with poll-until-loaded. The 100ms
+	// TRK-224: replace blind 200ms sleep with poll-until-loaded. The 100ms
 	// WatchLoop tick + 200ms sleep was tight on slow CI. Now we poll for
 	// up to 2s with 5ms granularity.
 	deadline := time.NewTimer(2 * time.Second)

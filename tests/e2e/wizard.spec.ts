@@ -5,7 +5,7 @@
  *   This is SMOKE coverage, not comprehensive E2E. It proves:
  *     - the tool loads without 404 / JS error
  *     - the first visible contract (role cards, Start-Here badge) renders
- *     - REG-004-style absolute hrefs don't leak
+ *     - TRK-104-style absolute hrefs don't leak
  *     - 0 Critical axe violations (with a budget of 2 non-Critical for the
  *       known amber Start-Here badge borderline contrast — see wizard.md §A11y)
  *   It does NOT cover:
@@ -21,7 +21,7 @@
  *   - jsx-loader.html?component=wizard loads without 404
  *   - Page title matches expected pattern
  *   - Role selector renders (wizard is role-pick-first)
- *   - No REG-004-style hardcoded portal-absolute hrefs leak in
+ *   - No TRK-104-style hardcoded portal-absolute hrefs leak in
  *   - axe-core WCAG 2.1 AA: 0 Critical violations
  *
  * Uses the shared portal-tool-smoke helpers so new specs stay concise.
@@ -59,9 +59,9 @@ test.describe('Getting Started Wizard @critical', () => {
     await expect(roleCard.first()).toBeVisible({ timeout: 10000 });
   });
 
-  test('uses portal-safe hrefs (REG-004 regression guard)', async ({ page }) => {
+  test('uses portal-safe hrefs (TRK-104 regression guard)', async ({ page }) => {
     await loadPortalTool(page, 'wizard');
-    // Guard against the pattern that caused REG-004 in deployment-wizard.
+    // Guard against the pattern that caused TRK-104 in deployment-wizard.
     // Any tool that introduces `href="/foo"` will fail here.
     await assertNoAbsoluteRootHrefs(page);
   });

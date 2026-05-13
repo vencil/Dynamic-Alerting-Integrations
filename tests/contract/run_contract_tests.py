@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-TECH-DEBT-022: schemathesis contract tests for tenant-api.
+TRK-222: schemathesis contract tests for tenant-api.
 
 Spins up tenant-api against a temp config dir, runs schemathesis against
 the OpenAPI spec at components/tenant-api/docs/swagger.json, and tears

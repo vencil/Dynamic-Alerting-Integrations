@@ -30,7 +30,7 @@ purpose: |
   `window.__X = X;` self-registration pattern this file uses.
 ---
 
-import { useState, useEffect, useMemo } from "react";  // TD-033 ESM import
+import { useState, useEffect, useMemo } from "react";  // TRK-233 ESM import
 
 // Defensive explicit imports (per S#70 self-review): no shared
 // globals needed — this hook is pure-DOM + React state.
@@ -134,7 +134,7 @@ function useVirtualGrid({ items, rowHeight, columnCount, containerRef, overscan 
 // Register on window for orchestrator pickup.
 window.__useVirtualGrid = useVirtualGrid;
 
-// TD-030c: ESM export for esbuild bundle + Vitest. Both `window.__X`
-// and `export { X }` removed in TD-030z when jsx-loader retires.
+// TRK-230c: ESM export for esbuild bundle + Vitest. Both `window.__X`
+// and `export { X }` removed in TRK-230z when jsx-loader retires.
 // <!-- jsx-loader-compat: ignore -->
 export { useVirtualGrid };

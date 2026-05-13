@@ -54,7 +54,7 @@ purpose: |
   controls. A 403 response from PUT/DELETE bubbles up via onError.
 ---
 
-import { useState, useEffect, useCallback, useRef } from "react";  // TD-033 ESM import
+import { useState, useEffect, useCallback, useRef } from "react";  // TRK-233 ESM import
 
 const VIEWS_ENDPOINT = '/api/v1/views';
 
@@ -196,6 +196,6 @@ function useSavedViews(onError) {
 // Register on window for orchestrator pickup.
 window.__useSavedViews = useSavedViews;
 
-// TD-030b: ESM export. Removed in TD-030z.
+// TRK-230b: ESM export. Removed in TRK-230z.
 // <!-- jsx-loader-compat: ignore -->
 export { useSavedViews };

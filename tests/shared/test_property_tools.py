@@ -1031,7 +1031,7 @@ class TestI18nTextProperties:
 
 
 # ---------------------------------------------------------------------------
-# parse_version — semver-ish parser used by HA-10 flaky registry validator
+# parse_version — semver-ish parser used by TRK-010 flaky registry validator
 # ---------------------------------------------------------------------------
 # Pilot batch 5: drives the expire_at lifecycle gate (PR #328). A regression
 # here would either let malformed versions slip past the validator or block
@@ -1737,7 +1737,7 @@ class TestParseBuildShToolsProperties:
 # ---------------------------------------------------------------------------
 # latest_version_from_changelog — newest `## [vX.Y.Z]` heading from CHANGELOG
 # ---------------------------------------------------------------------------
-# Pilot batch 7. Drives the HA-10 expire_at lifecycle gate (PR #328).
+# Pilot batch 7. Drives the TRK-010 expire_at lifecycle gate (PR #328).
 # Returns the FIRST matching heading because CHANGELOG.md is reverse-
 # chronological. A regression that picked the LAST match would pin the
 # expire_at gate to the oldest version forever.

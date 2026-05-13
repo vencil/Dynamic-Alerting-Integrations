@@ -354,6 +354,6 @@ function AlertPreviewTab() {
 /* Register for dependency loading */
 window.__AlertPreviewTab = AlertPreviewTab;
 
-// TD-030f: ESM export. Removed in TD-030z.
+// TRK-230f: ESM export. Removed in TRK-230z.
 // <!-- jsx-loader-compat: ignore -->
 export { AlertPreviewTab };

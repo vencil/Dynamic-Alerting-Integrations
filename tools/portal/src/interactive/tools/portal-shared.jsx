@@ -47,9 +47,9 @@ const t = window.__t || ((zh, en) => en);
  * comment.
  * ──────────────────────────────────────────────────────────────────── */
 
-// TD-034: replace 19 module-scope `window.__X` reads with explicit
+// TRK-234: replace 19 module-scope `window.__X` reads with explicit
 // ESM imports. Same pattern that broke saved-views / tenant-manager
-// in TD-033 (PR-E rebuild reshuffled chunks → consumer chunk loaded
+// in TRK-233 (PR-E rebuild reshuffled chunks → consumer chunk loaded
 // before producer chunk → undefined). These were latent — the
 // data-providing modules happened to evaluate first under the
 // previous chunk graph — but a future rebuild could re-expose them.

@@ -88,6 +88,6 @@ window.__OSW_CLUSTER_TYPES = OSW_CLUSTER_TYPES;
 window.__OSW_RECEIVER_TYPES = OSW_RECEIVER_TYPES;
 window.__OSW_RULE_MODES = OSW_RULE_MODES;
 
-// TD-030e: ESM exports. Removed in TD-030z.
+// TRK-230e: ESM exports. Removed in TRK-230z.
 // <!-- jsx-loader-compat: ignore -->
 export { OSW_STEPS, OSW_DEMO_TENANTS, OSW_OPERATOR_VERSIONS, OSW_CLUSTER_TYPES, OSW_RECEIVER_TYPES, OSW_RULE_MODES };

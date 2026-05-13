@@ -1,4 +1,4 @@
-# flaky-tests.yaml — Per-test retry policy registry (HA-10)
+# flaky-tests.yaml — Per-test retry policy registry (TRK-010)
 #
 # Why this file exists
 # --------------------
@@ -36,7 +36,7 @@
 
 known_flakes: []
 # Empty registry. The TestWatchLoop_DebouncedReload_DetectsFileChange
-# entry was removed when HA-11 landed (root-cause fix): the test no
+# entry was removed when TRK-011 landed (root-cause fix): the test no
 # longer uses real ticker / time.Sleep / poll-with-deadline. It now
 # drives the detect→reload pipeline synchronously via a tickOnce()
 # helper extracted from WatchLoop's body, with debounce=0 forcing the
@@ -44,7 +44,7 @@ known_flakes: []
 # failure of that test is now a real regression — not a flake to retry.
 #
 # This is the "registry shrinks as root causes get fixed" path the
-# HA-10 design (PR #325) baked in via expire_at: an entry buys time
+# TRK-010 design (PR #325) baked in via expire_at: an entry buys time
 # until the root-cause fix lands; once it lands, the entry leaves.
 # The wrapper still works; it just has no entries to act on, which is
 # the intended end-state.

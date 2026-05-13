@@ -24,7 +24,7 @@ import (
 //	fakeClock.BlockUntil(1)                  // wait until tickOnce returns + ticker re-arms
 //	// assert side effect via state poll, not via time.Sleep
 //
-// Replaces the TECH-DEBT-017 sleep-as-sync pattern (#4c-F).
+// Replaces the TRK-217 sleep-as-sync pattern (#4c-F).
 func startWatchLoopWithFakeClock(t *testing.T, m *ConfigManager, interval time.Duration) (*clockwork.FakeClock, func()) {
 	t.Helper()
 	fakeClock := clockwork.NewFakeClock()
@@ -85,7 +85,7 @@ tenants:
 
 	// FakeClock + helper handles deterministic ticker registration
 	// AND clean goroutine shutdown. The previous time.Sleep(100ms)
-	// was non-deterministic flake bait (TECH-DEBT-017).
+	// was non-deterministic flake bait (TRK-217).
 	fakeClock, stop := startWatchLoopWithFakeClock(t, m, 50*time.Millisecond)
 
 	// Fire one tick so the loop is observably alive before we stop it.
@@ -389,7 +389,7 @@ defaults:
 // ============================================================
 // WatchLoop — error in scan (dir deleted)
 //
-// TECH-DEBT-017 (CLOSED in #4c-F): both this test and
+// TRK-217 (CLOSED in #4c-F): both this test and
 // TestWatchLoop_SingleFile_ErrorOnRead below previously used
 // time.Sleep as a synchronisation primitive and were flake-prone
 // under `go test -race` on Go 1.26 CI. Now uses

@@ -1,5 +1,5 @@
 /**
- * Vitest setup — TECH-DEBT-030 Option C foundation.
+ * Vitest setup — TRK-230 Option C foundation.
  *
  * Runs ONCE per test file, BEFORE the test file imports any portal
  * component. Injects window globals that components read at module-load

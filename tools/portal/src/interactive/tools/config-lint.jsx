@@ -406,7 +406,7 @@ export default function ConfigLint() {
               </div>
             </div>
 
-            {/* Findings — role="alert" so screen readers announce parser errors immediately (TECH-DEBT-002 fix). */}
+            {/* Findings — role="alert" so screen readers announce parser errors immediately (TRK-202 fix). */}
             <div className="space-y-3 max-h-96 overflow-y-auto" role="alert" aria-live="polite" aria-atomic="false" aria-label={t('Lint 結果清單', 'Lint findings')}>
               {!results.ok && (
                 <div className="p-4 bg-[color:var(--da-color-error-soft)] border border-[color:var(--da-color-error)]/30 rounded-xl text-sm text-[color:var(--da-color-error)]">

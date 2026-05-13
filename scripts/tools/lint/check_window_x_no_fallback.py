@@ -3,7 +3,7 @@
 
 Why this exists
 ---------------
-TD-033 (PR #270) traced a 20-spec regression in main back to module-
+TRK-233 (PR #270) traced a 20-spec regression in main back to module-
 scope `const X = window.__X;` reads (no fallback) in JSX components.
 PR-E (#269) rebuilt the portal dist for an unrelated template-gallery
 fix; esbuild's chunk-allocation heuristic reshuffled which chunks
@@ -44,7 +44,7 @@ Output / severity
 -----------------
 Auto-stage FATAL on any finding. Per-line escape if there's a real
 reason (e.g. illustrative example in a comment); none expected in
-practice after TD-033 / TD-034.
+practice after TRK-233 / TRK-234.
 
 Usage
 -----
@@ -145,7 +145,7 @@ def scan(paths: List[Path]) -> List[Tuple[Path, int, str, str]]:
 
 
 def collect_default_paths() -> List[Path]:
-    # TD-042 monorepo restructure: portal source moved from docs/* to
+    # TRK-242 monorepo restructure: portal source moved from docs/* to
     # tools/portal/src/*. Old paths kept as fallback for any future
     # contributor splitting source back into docs/ (shouldn't happen,
     # but cheap insurance).
@@ -206,7 +206,7 @@ def main() -> int:
     print("Allowed: `const t = window.__t || ((zh, en) => en);` — fallback form is fine.")
     print("Per-line escape (rare, illustrative-only): place `<!-- window-x-no-fallback: ignore -->` within 3 lines above.")
     print()
-    print("Background: see dev-rules.md §S6 + testing-playbook.md (TD-033/034 LL).")
+    print("Background: see dev-rules.md §S6 + testing-playbook.md (TRK-233/034 LL).")
 
     if args.ci:
         return 1

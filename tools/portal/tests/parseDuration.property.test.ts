@@ -1,5 +1,5 @@
 /**
- * Property-based tests for parseDuration — TD-032b (#TBD).
+ * Property-based tests for parseDuration — TRK-232b (#TBD).
  *
  * The smoke test in parseDuration.test.ts pins point examples
  * ('30s' / '5m' / '2h' / '1d'). This file uses fast-check to fuzz

@@ -5,7 +5,7 @@
  *   - jsx-loader loads config-lint without 404 / JS error
  *   - Page title matches expected pattern
  *   - Core UI: input area for config/YAML and result display
- *   - No REG-004-style hardcoded portal-absolute hrefs
+ *   - No TRK-104-style hardcoded portal-absolute hrefs
  *   - axe-core WCAG 2.1 AA: 0 Critical violations
  */
 import { test, expect } from '@playwright/test';
@@ -34,7 +34,7 @@ test.describe('Config Lint @critical', () => {
     await expect(input).toBeVisible({ timeout: 10000 });
   });
 
-  test('uses portal-safe hrefs (REG-004 regression guard)', async ({ page }) => {
+  test('uses portal-safe hrefs (TRK-104 regression guard)', async ({ page }) => {
     await loadPortalTool(page, 'config-lint');
     await assertNoAbsoluteRootHrefs(page);
   });
@@ -49,7 +49,7 @@ test.describe('Config Lint @critical', () => {
     //   - config-lint.jsx:410 `<div role="alert" aria-label="Lint findings">` — findings
     // Both are always rendered (findings region is just empty when no issues),
     // so we assert the presence of either region. This doubles as a
-    // TECH-DEBT-002 regression guard (the role="alert" fix).
+    // TRK-202 regression guard (the role="alert" fix).
     const summary = page.getByRole('status');
     const findings = page.getByRole('alert');
     // Either region being attached to the DOM proves the a11y contract holds.

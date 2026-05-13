@@ -1,9 +1,9 @@
 /**
- * Config Version Diff — smoke spec (TD-032c).
+ * Config Version Diff — smoke spec (TRK-232c).
  *
  * Minimum gate: tool loads via jsx-loader (dist bundle resolves),
  * page body has no "Failed to load" / 404, axe sees 0 critical
- * accessibility violations, hrefs are portal-safe (REG-004).
+ * accessibility violations, hrefs are portal-safe (TRK-104).
  *
  * Add interaction tests inside this describe as the tool's flow
  * stabilizes — don't open a second spec file per tool.
@@ -24,7 +24,7 @@ test.describe('Config Version Diff @critical', () => {
     });
   });
 
-  test('uses portal-safe hrefs (REG-004 regression guard)', async ({ page }) => {
+  test('uses portal-safe hrefs (TRK-104 regression guard)', async ({ page }) => {
     await loadPortalTool(page, 'config-diff');
     await assertNoAbsoluteRootHrefs(page);
   });

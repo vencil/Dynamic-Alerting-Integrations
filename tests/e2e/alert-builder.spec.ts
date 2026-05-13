@@ -8,7 +8,7 @@
  *   - Step navigation: fill Step 0 (identity) → click Next → Step 1 visible
  *   - Step 0 Next button gated on valid input (disabled when blank)
  *   - Final review step renders YAML output containing the alert name
- *   - No REG-004-style hardcoded portal-absolute hrefs
+ *   - No TRK-104-style hardcoded portal-absolute hrefs
  *   - axe-core WCAG 2.1 AA: 0 Critical violations
  */
 import { test, expect } from '@playwright/test';
@@ -99,7 +99,7 @@ test.describe('Alert Builder Wizard @critical', () => {
     await expect(yaml).toContainText('severity: warning');
   });
 
-  test('uses portal-safe hrefs (REG-004 regression guard)', async ({ page }) => {
+  test('uses portal-safe hrefs (TRK-104 regression guard)', async ({ page }) => {
     await loadPortalTool(page, 'alert-builder');
     await assertNoAbsoluteRootHrefs(page);
   });

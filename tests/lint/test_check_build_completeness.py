@@ -1,6 +1,6 @@
 """Tests for scripts/tools/lint/check_build_completeness.py.
 
-Gap 4 (HA-7 backlog) — second lint self-test in the chain (after
+Gap 4 (TRK-007 backlog) — second lint self-test in the chain (after
 test_check_metric_dictionary). Auto-hook lint at 133 LOC, previously
 zero unit-test coverage. The bidirectional COMMAND_MAP ↔ build.sh
 TOOL_FILES sync logic is exactly the kind of multi-branch lint

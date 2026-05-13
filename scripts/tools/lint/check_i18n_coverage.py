@@ -470,7 +470,7 @@ def main():
     # Determine base directories
     script_dir = Path(__file__).parent
     repo_root = script_dir.parent.parent.parent
-    # TD-042 monorepo restructure: JSX source moved from docs/ to
+    # TRK-242 monorepo restructure: JSX source moved from docs/ to
     # tools/portal/src/. Scan that subtree for the JSX coverage check.
     portal_src_dir = repo_root / "tools" / "portal" / "src"
     rule_pack_dir = repo_root / "rule-packs"

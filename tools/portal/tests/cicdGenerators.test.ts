@@ -1,5 +1,5 @@
 /**
- * Unit + property tests for cicd-setup-wizard generators — TD-032b (#TBD).
+ * Unit + property tests for cicd-setup-wizard generators — TRK-232b (#TBD).
  *
  * The four generators (`cicdGenerateInitCommand` / `Docker` /
  * `FileTree` / `GitHubActionsPreview`) are pure functions with no

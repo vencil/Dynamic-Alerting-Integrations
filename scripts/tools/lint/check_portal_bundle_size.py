@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """check_portal_bundle_size.py — Portal dist bundle size budget gate.
 
-TD-032a (#TBD). After TD-030 Option C migrated all 43 portal JSX tools
+TRK-232a (#TBD). After TRK-230 Option C migrated all 43 portal JSX tools
 to ESM dist-bundle, the dist directory has no upstream gate against
 silent dependency bloat. This script enforces three budgets:
 

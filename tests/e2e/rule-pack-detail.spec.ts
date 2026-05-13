@@ -1,9 +1,9 @@
 /**
- * Rule Pack Detail — smoke spec (TD-032e).
+ * Rule Pack Detail — smoke spec (TRK-232e).
  *
  * See tests/e2e/README.md for the smoke-spec template + rationale.
  *
- * skipA11y default — TD-032c/d found the majority of newly-tested
+ * skipA11y default — TRK-232c/d found the majority of newly-tested
  * tools have pre-existing WCAG 2.1 AA debt (form labels / select-name).
  * Setting skipA11y: true upfront and revisiting if the verification
  * run shows this tool is clean (then we'd remove the skip).
@@ -21,7 +21,7 @@ test.describe('Rule Pack Detail @critical', () => {
     await runToolSmokeChecks(page, { allowedNonCriticalViolations: 2 });
   });
 
-  test('uses portal-safe hrefs (REG-004 regression guard)', async ({ page }) => {
+  test('uses portal-safe hrefs (TRK-104 regression guard)', async ({ page }) => {
     await loadPortalTool(page, 'rule-pack-detail');
     await assertNoAbsoluteRootHrefs(page);
   });

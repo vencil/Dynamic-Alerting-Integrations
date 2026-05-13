@@ -14,7 +14,7 @@ purpose: |
   ARIA / keyboard nav semantics preserved.
 ---
 
-// TD-033: ESM dist-bundle chunk order is non-deterministic;
+// TRK-233: ESM dist-bundle chunk order is non-deterministic;
 // `window.__styles` may be undefined when this module evaluates
 // (the path `entry → tenant-manager.jsx → GroupSidebar.jsx` doesn't
 // guarantee styles.js evaluates first under esbuild's chunk
@@ -23,11 +23,11 @@ purpose: |
 // History: PR-2d's `const styles = window.__styles;` worked under
 // Babel-standalone (the legacy jsx-loader runtime) because the
 // indirect-eval frame leaked `const styles` to global scope. After
-// TD-030z retired the Babel runtime, the legacy reasoning no longer
+// TRK-230z retired the Babel runtime, the legacy reasoning no longer
 // applies and the lookup is exposed to chunk-arrival races.
 import { styles } from '../styles.js';
 
-import { useState } from "react";  // TD-033 ESM import
+import { useState } from "react";  // TRK-233 ESM import
 
 function GroupSidebar({ groups, activeGroupId, onSelectGroup, onCreateGroup, onDeleteGroup, canWrite }) {
   const [showCreate, setShowCreate] = useState(false);
@@ -152,6 +152,6 @@ function GroupSidebar({ groups, activeGroupId, onSelectGroup, onCreateGroup, onD
 // Register on window for orchestrator pickup.
 window.__GroupSidebar = GroupSidebar;
 
-// TD-030b: ESM export. Removed in TD-030z.
+// TRK-230b: ESM export. Removed in TRK-230z.
 // <!-- jsx-loader-compat: ignore -->
 export { GroupSidebar };

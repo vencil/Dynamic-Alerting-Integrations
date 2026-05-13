@@ -1,7 +1,7 @@
 /**
  * Smoke unit test for `_common/validation/yaml-parser.js` parseDuration.
  *
- * First Vitest test landing in the repo (TD-030c). Validates that the
+ * First Vitest test landing in the repo (TRK-230c). Validates that the
  * frontmatter-stripping plugin + ESM-named-export wiring actually work
  * end-to-end against a real `_common` file. Future PRs add deeper
  * coverage; this is a tracer bullet.

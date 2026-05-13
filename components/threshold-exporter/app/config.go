@@ -100,7 +100,7 @@ type ConfigManager struct {
 	// clockwork.FakeClock instead of time.Sleep'ing for real wall-clock
 	// elapses. Production constructors plug in clockwork.NewRealClock();
 	// test code uses SetClock to swap in a FakeClock and then
-	// `Advance(window)` to fire timers synchronously. Origin: HA-11
+	// `Advance(window)` to fire timers synchronously. Origin: TRK-011
 	// deeper applied to exporter (mirrors PR #354 in tenant-api).
 	clock clockwork.Clock
 
@@ -722,7 +722,7 @@ func (m *ConfigManager) WatchLoop(interval time.Duration, stopCh <-chan struct{}
 // WatchLoop so tests can drive the pipeline synchronously without the
 // real ticker — when paired with NewConfigManagerWithDebounce(dir, 0)
 // the entire detect→reload chain becomes deterministic, eliminating the
-// real-time-dependent flake that motivated HA-11.
+// real-time-dependent flake that motivated TRK-011.
 //
 // Production behavior is unchanged: WatchLoop still calls this on every
 // tick and the debounce path still gates the actual reload.

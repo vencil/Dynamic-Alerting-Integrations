@@ -1,6 +1,6 @@
 """Tests for scripts/tools/lint/check_metric_dictionary.py.
 
-Gap 4 (HA-7 backlog) — lint tool self-test coverage. This is the
+Gap 4 (TRK-007 backlog) — lint tool self-test coverage. This is the
 P1 entry for `check_metric_dictionary.py`. Pattern from the playbook:
 ≥1 positive case (`--ci` exit 0) + ≥1 negative case (intentional
 violation → caller-error) + unit-level coverage of the parsers.

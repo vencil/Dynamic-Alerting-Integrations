@@ -74,7 +74,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 _IGNORE_MARKER = "<!-- jsx-loader-compat: ignore -->"
 _IGNORE_LOOKBACK_LINES = 3
 
-_DEFAULT_SCAN_DIR = PROJECT_ROOT / "tools" / "portal" / "src" / "interactive"  # TD-042
+_DEFAULT_SCAN_DIR = PROJECT_ROOT / "tools" / "portal" / "src" / "interactive"  # TRK-242
 _DEFAULT_SCAN_EXTS = (".jsx",)
 
 # Allowlist of import sources that jsx-loader.html transformImports()
@@ -164,10 +164,10 @@ def scan_source(path: Path, source: str) -> list[JsxLoaderCompatFinding]:
         m = _IMPORT_RE.match(line)
         if m:
             source_name = m.group(1)
-            # TD-030 transitional: relative imports (`./` or `../`) are
+            # TRK-230 transitional: relative imports (`./` or `../`) are
             # rewritten by jsx-loader.html transformImports → window.__X
             # reads. The dist-bundle path uses them natively. Both work.
-            # Removed when jsx-loader retires (TD-030z) — at that point
+            # Removed when jsx-loader retires (TRK-230z) — at that point
             # relative imports are the only path and this rule reduces
             # to "no bare specifiers other than the React allowlist".
             is_relative = source_name.startswith("./") or source_name.startswith("../")

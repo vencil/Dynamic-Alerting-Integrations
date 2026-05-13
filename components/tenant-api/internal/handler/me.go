@@ -44,7 +44,7 @@ func (d *Deps) Me() http.HandlerFunc {
 			return
 		}
 		groups := rbac.RequestGroups(r)
-		// TD-028: schemathesis caught nil-vs-array drift. Normalise so JSON
+		// TRK-228: schemathesis caught nil-vs-array drift. Normalise so JSON
 		// encodes [] not null — the spec declares these fields as `array`.
 		if groups == nil {
 			groups = []string{}
@@ -61,7 +61,7 @@ func (d *Deps) Me() http.HandlerFunc {
 
 		// Build the response. AccessibleTenants explicitly starts as a
 		// non-nil empty slice so users with no group memberships still see
-		// `"accessible_tenants": []` rather than `null` (TD-028).
+		// `"accessible_tenants": []` rather than `null` (TRK-228).
 		resp := MeResponse{
 			Email:             email,
 			User:              user,

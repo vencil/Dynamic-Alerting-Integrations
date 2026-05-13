@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """check_flaky_registry.py — Validate `flaky-tests.yaml` schema + expire_at.
 
-HA-10 observability layer (PR #325/#326 follow-up). Closes the design
+TRK-010 observability layer (PR #325/#326 follow-up). Closes the design
 loop on the flaky-test retry registry: every entry MUST have a tracked
 issue + a deadline version, and the deadline MUST advance the
 root-cause fix forward. Without this validator, entries can sit forever

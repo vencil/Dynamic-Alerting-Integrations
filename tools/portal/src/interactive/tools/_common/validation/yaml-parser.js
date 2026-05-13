@@ -118,6 +118,6 @@ function parseYaml(text) {
 window.__parseDuration = parseDuration;
 window.__parseYaml = parseYaml;
 
-// TD-030c: ESM exports for esbuild bundle + Vitest. Removed in TD-030z.
+// TRK-230c: ESM exports for esbuild bundle + Vitest. Removed in TRK-230z.
 // <!-- jsx-loader-compat: ignore -->
 export { parseDuration, parseYaml };

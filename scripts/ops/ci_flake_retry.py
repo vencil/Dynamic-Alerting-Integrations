@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """ci_flake_retry.py — Surgical Go-test retry wrapper using flaky-tests.yaml.
 
-Audit ⑥ "Legacy" — codifies HA-10 from docs/internal/dx-tooling-backlog.md.
+Audit ⑥ "Legacy" — codifies TRK-010 from docs/internal/dx-tooling-backlog.md.
 
 Why this exists
 ---------------

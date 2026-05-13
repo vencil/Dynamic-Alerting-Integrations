@@ -1,6 +1,6 @@
 name: Nightly Race Detector
 
-# TECH-DEBT-026 (#235): nightly Go race detector with -count=10.
+# TRK-226 (#235): nightly Go race detector with -count=10.
 #
 # Why nightly + advisory: race detector is a sampling tool. -count=1 (used
 # in PR-blocking ci.yml) won't surface low-probability races; -count=10 on
