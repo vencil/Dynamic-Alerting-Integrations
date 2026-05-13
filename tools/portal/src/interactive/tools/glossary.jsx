@@ -12,7 +12,7 @@ dependencies: [
 
 import React, { useState } from 'react';
 // PR-portal-8: shared empty-state replaces inline "No terms" div.
-// TD-030f: ESM import — jsx-loader transformImports rewrites to window read.
+// TRK-230f: ESM import — jsx-loader transformImports rewrites to window read.
 import { EmptyState } from './_common/components/EmptyState.jsx';
 
 const t = window.__t || ((zh, en) => en);

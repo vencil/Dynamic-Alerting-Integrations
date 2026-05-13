@@ -10,7 +10,7 @@
  *   - Click Wizard card → 5-step Wizard path renders (cicd / deploy CTAs;
  *     alert-builder + routing-trace marked "Planned")
  *   - Back button returns to choice screen
- *   - No REG-004-style hardcoded portal-absolute hrefs
+ *   - No TRK-104-style hardcoded portal-absolute hrefs
  *   - axe-core WCAG 2.1 AA: 0 Critical violations
  */
 import { test, expect } from '@playwright/test';
@@ -94,7 +94,7 @@ test.describe('Master Onboarding @critical', () => {
     await expect(page.getByTestId('onboarding-card-wizard')).toBeVisible();
   });
 
-  test('uses portal-safe hrefs (REG-004 regression guard)', async ({ page }) => {
+  test('uses portal-safe hrefs (TRK-104 regression guard)', async ({ page }) => {
     await loadPortalTool(page, 'master-onboarding');
     await assertNoAbsoluteRootHrefs(page);
   });

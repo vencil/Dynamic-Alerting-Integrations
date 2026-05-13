@@ -23,9 +23,9 @@ purpose: |
   loads them before this component.
 ---
 
-import { useState, useCallback } from "react";  // TD-033 ESM import
+import { useState, useCallback } from "react";  // TRK-233 ESM import
 
-// TD-030e: ESM imports for sibling utilities. jsx-loader transformImports
+// TRK-230e: ESM imports for sibling utilities. jsx-loader transformImports
 // rewrites to `const X = window.__X`; esbuild bundles natively.
 import { generateOperatorCommand, generateMigrationCommand, generateAlertmanagerConfigPreview } from '../utils/generators.js';
 
@@ -273,6 +273,6 @@ function StepReview({ config }) {
 
 window.__StepReview = StepReview;
 
-// TD-030e: ESM export. Removed in TD-030z.
+// TRK-230e: ESM export. Removed in TRK-230z.
 // <!-- jsx-loader-compat: ignore -->
 export { StepReview };

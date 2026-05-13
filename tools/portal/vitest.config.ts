@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 
 /**
- * Vitest config for portal unit tests — TD-042 monorepo restructure.
+ * Vitest config for portal unit tests — TRK-242 monorepo restructure.
  *
  * After the restructure, source / tests / config all live under
  * `tools/portal/`. The path-alias maze that bridged the old 3-way

@@ -58,7 +58,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 JSX_DIRS = [
     # JSX source moved from docs/(interactive|getting-started)/ to
     # tools/portal/src/* during the portal Vite/esbuild reorg
-    # (TD-030). The dist bundle ends up under docs/assets/dist/,
+    # (TRK-230). The dist bundle ends up under docs/assets/dist/,
     # but the scanner targets the readable source.
     PROJECT_ROOT / "tools" / "portal" / "src" / "interactive" / "tools",
     PROJECT_ROOT / "tools" / "portal" / "src" / "getting-started",

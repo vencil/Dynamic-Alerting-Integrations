@@ -1,5 +1,5 @@
 /**
- * Visual regression — TECH-DEBT-029 (#243)
+ * Visual regression — TRK-229 (#243)
  *
  * Playwright `toHaveScreenshot()` baselines for portal pages, captured
  * to `tests/e2e/__snapshots__/` and compared on every CI run.
@@ -143,7 +143,7 @@ test.describe('Visual regression baselines @visual', () => {
 
   /*
    * ───────────────────────────────────────────────────────────────────
-   * TD-038 expansion (Plan A) — 5 staged baselines across categories.
+   * TRK-238 expansion (Plan A) — 5 staged baselines across categories.
    *
    * Status: PARKED as block comment.
    *

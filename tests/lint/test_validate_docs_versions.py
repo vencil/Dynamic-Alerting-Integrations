@@ -1,6 +1,6 @@
 """Tests for scripts/tools/lint/validate_docs_versions.py.
 
-Gap 4 (HA-7 backlog) — fifth lint self-test, the **P0** entry. The
+Gap 4 (TRK-007 backlog) — fifth lint self-test, the **P0** entry. The
 file is 1109 LOC of mixed concerns (~25 check_* functions); rather
 than chase 100% coverage, this PR focuses on the load-bearing
 public surface:

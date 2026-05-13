@@ -219,7 +219,7 @@ class TestFlakyTestsDiscovery:
     def test_legacy_entry_without_tracking_kind_skipped(self, tmp_path):
         p = tmp_path / "flaky-tests.yaml"
         p.write_text(
-            "- test: LegacyFlake\n  pattern: ^Legacy$\n  tracked_by: HA-10\n",
+            "- test: LegacyFlake\n  pattern: ^Legacy$\n  tracked_by: TRK-010\n",
             encoding="utf-8",
         )
         assert list(gpi._discover_flaky_tests(p, tmp_path)) == []

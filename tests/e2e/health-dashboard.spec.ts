@@ -1,8 +1,8 @@
 /**
- * Health Dashboard — smoke spec (TD-032e).
+ * Health Dashboard — smoke spec (TRK-232e).
  *
  * See tests/e2e/README.md for the smoke-spec template + rationale.
- * skipA11y: defaulting on per TD-032c/d a11y-debt pattern (revisit
+ * skipA11y: defaulting on per TRK-232c/d a11y-debt pattern (revisit
  * if local verification shows this tool is clean).
  */
 import { test } from '@playwright/test';
@@ -18,7 +18,7 @@ test.describe('Health Dashboard @critical', () => {
     await runToolSmokeChecks(page, { allowedNonCriticalViolations: 1 });
   });
 
-  test('uses portal-safe hrefs (REG-004 regression guard)', async ({ page }) => {
+  test('uses portal-safe hrefs (TRK-104 regression guard)', async ({ page }) => {
     await loadPortalTool(page, 'health-dashboard');
     await assertNoAbsoluteRootHrefs(page);
   });

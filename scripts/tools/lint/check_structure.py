@@ -43,7 +43,7 @@ ALLOWED_TOOLS_ROOT = {
     "__init__.py",       # in case it's ever added
 }
 
-# Allowed .jsx locations (relative to PROJECT_ROOT) — TD-042 monorepo restructure
+# Allowed .jsx locations (relative to PROJECT_ROOT) — TRK-242 monorepo restructure
 ALLOWED_JSX_DIRS = {
     "tools/portal/src/interactive/tools",
     "tools/portal/src/getting-started",

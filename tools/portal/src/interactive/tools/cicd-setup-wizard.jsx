@@ -13,7 +13,7 @@ dependencies: [
 ---
 
 import React, { useState, useMemo } from 'react';
-// TD-030e: ESM imports.
+// TRK-230e: ESM imports.
 import { CICD_STEPS as STEPS, CICD_RULE_PACKS as RULE_PACKS, CICD_CI_OPTIONS as CI_OPTIONS, CICD_DEPLOY_OPTIONS as DEPLOY_OPTIONS } from './cicd-setup-wizard/fixtures/wizard-defaults.js';
 import { cicdGenerateInitCommand as generateInitCommand, cicdGenerateDockerCommand as generateDockerCommand, cicdGenerateFileTree as generateFileTree, cicdGenerateGitHubActionsPreview as generateGitHubActionsPreview } from './cicd-setup-wizard/utils/generators.js';
 // PR-portal-11: per-step subtree boundary (see operator-setup-wizard).

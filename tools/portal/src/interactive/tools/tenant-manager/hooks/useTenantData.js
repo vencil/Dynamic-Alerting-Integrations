@@ -32,7 +32,7 @@ purpose: |
   Same shape as the inline version pre-PR-2d-Phase-2.
 ---
 
-import { useState, useEffect } from "react";  // TD-033 ESM import
+import { useState, useEffect } from "react";  // TRK-233 ESM import
 
 // Pull deps from window globals (registered by orchestrator's earlier
 // dependencies: DEMO_TENANTS / DEMO_GROUPS).
@@ -272,6 +272,6 @@ function useTenantData({ setApiNotification, t, q = '' }) {
 // Register on window for orchestrator pickup.
 window.__useTenantData = useTenantData;
 
-// TD-030b: ESM export. Removed in TD-030z.
+// TRK-230b: ESM export. Removed in TRK-230z.
 // <!-- jsx-loader-compat: ignore -->
 export { useTenantData };

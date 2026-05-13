@@ -1192,7 +1192,7 @@ groups:
 // caller has no group memberships, `groups` and `accessible_tenants` must
 // serialise as `[]`, not `null`. The spec (swagger.json) declares both as
 // arrays; rendering as `null` violates the contract and was the original
-// TD-028 schemathesis finding (#242).
+// TRK-228 schemathesis finding (#242).
 func TestMe_EmptyGroupsRendersAsArray(t *testing.T) {
 	t.Parallel()
 	rbacMgr := newRBACManager(t, "")

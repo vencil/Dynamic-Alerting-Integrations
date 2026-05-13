@@ -76,6 +76,6 @@ const DEMO_GROUPS = {
 window.__DEMO_TENANTS = DEMO_TENANTS;
 window.__DEMO_GROUPS = DEMO_GROUPS;
 
-// TD-030b: ESM exports. Removed in TD-030z.
+// TRK-230b: ESM exports. Removed in TRK-230z.
 // <!-- jsx-loader-compat: ignore -->
 export { DEMO_TENANTS, DEMO_GROUPS };

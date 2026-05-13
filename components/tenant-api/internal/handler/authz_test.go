@@ -271,7 +271,7 @@ func TestGetTask_FiltersResultsByTenantAccess(t *testing.T) {
 			{TenantID: "db-secret", Status: "ok"},
 		}, nil
 	})
-	// TD-024: use shared pollUntilTerminal (defined in async_test.go) instead
+	// TRK-224: use shared pollUntilTerminal (defined in async_test.go) instead
 	// of the blind for/sleep loop.
 	pollUntilTerminal(t, taskMgr, task.ID, time.Second)
 	taskID := task.ID
@@ -313,7 +313,7 @@ func TestGetTask_NoAccessibleResults_Returns403(t *testing.T) {
 	task := taskMgr.Submit("test-task", func(ctx context.Context) ([]async.TaskResult, error) {
 		return []async.TaskResult{{TenantID: "db-secret", Status: "ok"}}, nil
 	})
-	// TD-024: use shared pollUntilTerminal (see async_test.go).
+	// TRK-224: use shared pollUntilTerminal (see async_test.go).
 	pollUntilTerminal(t, taskMgr, task.ID, time.Second)
 	taskID := task.ID
 

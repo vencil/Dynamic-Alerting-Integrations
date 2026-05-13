@@ -34,7 +34,7 @@ export interface ToolSmokeOptions {
  * Navigate to a JSX tool via jsx-loader.
  * Assumes Playwright `baseURL` is set to `<root>/interactive/`, so the loader
  * lives at `../assets/jsx-loader.html?component=<key>` (matches the portal's
- * relative-path convention — do NOT use absolute root paths, see REG-004).
+ * relative-path convention — do NOT use absolute root paths, see TRK-104).
  *
  * @param page     Playwright Page
  * @param toolKey  Tool registry key (e.g. "wizard", "deployment-wizard")
@@ -107,9 +107,9 @@ export async function runToolSmokeChecks(
 /**
  * Assert that all `<a href>` elements inside the tool use portal-safe paths.
  * Portal-safe = relative (./, ../) or external (https?, mailto:, tel:) or fragment (#).
- * Absolute root paths like `href="/template-gallery"` are portal 404 risks (see REG-004).
+ * Absolute root paths like `href="/template-gallery"` are portal 404 risks (see TRK-104).
  *
- * Useful for catching REG-004-style regressions in new tools during smoke.
+ * Useful for catching TRK-104-style regressions in new tools during smoke.
  */
 export async function assertNoAbsoluteRootHrefs(page: Page): Promise<void> {
   const badHrefs = await page.evaluate(() => {
@@ -121,6 +121,6 @@ export async function assertNoAbsoluteRootHrefs(page: Page): Promise<void> {
 
   expect(
     badHrefs,
-    `Hardcoded portal-absolute hrefs found (see REG-004):\n${badHrefs.join('\n')}`
+    `Hardcoded portal-absolute hrefs found (see TRK-104):\n${badHrefs.join('\n')}`
   ).toHaveLength(0);
 }

@@ -11,12 +11,12 @@ dependencies: [
 ---
 
 import React, { useState, useMemo, useEffect } from 'react';
-// TD-032e fix: ESM dist-bundle path doesn't pre-populate window.__Loading
+// TRK-232e fix: ESM dist-bundle path doesn't pre-populate window.__Loading
 // before this module evaluates (the entry imports TemplateGallery
 // directly, not Loading), so the legacy `window.__Loading` lookup
 // returned undefined and React threw #130 on first render. Import the
 // named ESM export instead. The jsx-loader fallback path is gone
-// (TD-030z); window.__Loading is no longer authoritative.
+// (TRK-230z); window.__Loading is no longer authoritative.
 import { Loading } from './_common/components/Loading.jsx';
 
 const t = window.__t || ((zh, en) => en);

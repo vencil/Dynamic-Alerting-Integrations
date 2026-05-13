@@ -135,7 +135,7 @@ def patch_repo_root(monkeypatch, tmp_path):
 
     Why this exists: 60+ tests across 13 files were repeating
     `monkeypatch.setattr(my_module, "REPO_ROOT", tmp_path)` (or `PROJECT_ROOT`,
-    `CLAUDE_MD`, etc.) verbatim. The audit's TD-042 sweep showed how easily
+    `CLAUDE_MD`, etc.) verbatim. The audit's TRK-242 sweep showed how easily
     one renamed constant breaks every test that hard-codes the attribute
     name; this fixture funnels them through one indirection.
 

@@ -100,6 +100,6 @@ window.__generateMigrationCommand = generateMigrationCommand;
 window.__generateAlertmanagerConfigPreview = generateAlertmanagerConfigPreview;
 window.__getReceiverConfig = getReceiverConfig;
 
-// TD-030e: ESM exports. Removed in TD-030z.
+// TRK-230e: ESM exports. Removed in TRK-230z.
 // <!-- jsx-loader-compat: ignore -->
 export { validateTenantName, generateOperatorCommand, generateMigrationCommand, generateAlertmanagerConfigPreview, getReceiverConfig };

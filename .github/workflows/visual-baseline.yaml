@@ -1,6 +1,6 @@
 name: Visual Regression Baseline Update
 
-# TECH-DEBT-029 (#243): manual workflow_dispatch to regenerate Playwright
+# TRK-229 (#243): manual workflow_dispatch to regenerate Playwright
 # visual-regression baselines on the same Ubuntu image CI uses.
 #
 # Why a dedicated workflow: baselines MUST come from a deterministic

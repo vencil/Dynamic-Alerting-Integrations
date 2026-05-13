@@ -6,7 +6,7 @@ on:
       - main
       - develop
     paths:
-      # TD-042: portal source moved to tools/portal/src/. Watch the
+      # TRK-242: portal source moved to tools/portal/src/. Watch the
       # whole portal package (source + build config + manifest) so any
       # change that affects bundle output triggers smoke. Also watch
       # docs/interactive/index.html which is the runtime entry loader.
@@ -33,8 +33,8 @@ jobs:
   test:
     name: Smoke Tests (Chromium)
     runs-on: ubuntu-latest
-    # TD-033: 10-min cap restored. The TD-032e investigation traced
-    # the workers=N failures to a stale TD-031 build hack — `define:
+    # TRK-233: 10-min cap restored. The TRK-232e investigation traced
+    # the workers=N failures to a stale TRK-231 build hack — `define:
     # { React: 'globalThis.__bundledReact' }` paired with a side-
     # effect entry import. The destructure pattern `const { useState }
     # = React;` in 11 component files (rewritten to read the global)
@@ -120,7 +120,7 @@ jobs:
 
       - name: Run Playwright smoke tests
         working-directory: tests/e2e
-        # TD-033 perf settings:
+        # TRK-233 perf settings:
         #   --workers=4    parallelize across 4 playwright workers.
         #                  ubuntu-latest runners have 4 vCPUs; the portal
         #                  server is multi-threaded (serve_threaded.py)

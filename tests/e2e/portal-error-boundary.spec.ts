@@ -1,12 +1,12 @@
 import { test, expect } from '@playwright/test';
 
 /**
- * Portal Error Boundary — E2E (PR-portal-2 → TD-030z)
+ * Portal Error Boundary — E2E (PR-portal-2 → TRK-230z)
  *
  * Validates that the ESM dist-bundle path mounts tools without showing
  * an error-boundary fallback for known-good tools.
  *
- * **TD-030z scope reduction**: scenarios 2 (render-time throw) and 3
+ * **TRK-230z scope reduction**: scenarios 2 (render-time throw) and 3
  * (dep-load 404) tested the LEGACY jsx-loader fetch + Babel transform
  * path. That path is gone — every tool loads via `<script type="module"
  * src="../assets/dist/<name>.js">`. Render-error coverage now lives
@@ -29,7 +29,7 @@ test.describe('Portal ErrorBoundary', () => {
   });
 
   test('missing dist bundle — surfaces script load error', async ({ page }) => {
-    // TD-030z: dist-bundle-only world. If a `?component=<name>` doesn't
+    // TRK-230z: dist-bundle-only world. If a `?component=<name>` doesn't
     // resolve to an existing dist file, jsx-loader's `loadDistBundle`
     // appends a `<script type="module">` whose load fails → script.onerror
     // calls showError → user-readable message replaces the loading spinner.

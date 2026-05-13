@@ -6,7 +6,7 @@
  *   - Page title matches expected pattern
  *   - Core UI: heatmap grid/table renders
  *   - Colorblind accessibility: Unicode severity symbols present (ADR-012 hotfix)
- *   - No REG-004-style hardcoded portal-absolute hrefs
+ *   - No TRK-104-style hardcoded portal-absolute hrefs
  *   - axe-core WCAG 2.1 AA: 0 Critical violations
  */
 import { test, expect } from '@playwright/test';
@@ -36,7 +36,7 @@ test.describe('Threshold Heatmap @critical', () => {
     await expect(grid).toBeVisible({ timeout: 10000 });
   });
 
-  test('uses portal-safe hrefs (REG-004 regression guard)', async ({ page }) => {
+  test('uses portal-safe hrefs (TRK-104 regression guard)', async ({ page }) => {
     await loadPortalTool(page, 'threshold-heatmap');
     await assertNoAbsoluteRootHrefs(page);
   });

@@ -33,7 +33,7 @@ purpose: |
   Closure deps: none. Pure functional component using React global.
 ---
 
-import { useEffect } from "react";  // TD-033 ESM import
+import { useEffect } from "react";  // TRK-233 ESM import
 
 const SPINNER_KEYFRAMES = '@keyframes daSpin { to { transform: rotate(360deg); } }';
 const SIZES = { sm: 16, md: 28, lg: 44 };
@@ -88,7 +88,7 @@ function Loading({ message, size, testid }) {
 
 window.__Loading = Loading;
 
-// TD-030c: ESM export for esbuild bundle + Vitest. Both `window.__X`
-// and `export { X }` removed in TD-030z when jsx-loader retires.
+// TRK-230c: ESM export for esbuild bundle + Vitest. Both `window.__X`
+// and `export { X }` removed in TRK-230z when jsx-loader retires.
 // <!-- jsx-loader-compat: ignore -->
 export { Loading };

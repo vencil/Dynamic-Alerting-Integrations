@@ -180,7 +180,7 @@ def check_jsx_frontmatter(tools: list, errors: list, warnings: list):
     """Verify each JSX file exists and its related keys reference valid tools."""
     registry_keys = {t["key"] for t in tools}
 
-    # TD-042: registry's `file:` values are kept in legacy form
+    # TRK-242: registry's `file:` values are kept in legacy form
     # ("interactive/tools/X.jsx" / "getting-started/X.jsx"), now resolved
     # against tools/portal/src/ instead of docs/.
     portal_src = PROJECT_ROOT / "tools" / "portal" / "src"
@@ -304,7 +304,7 @@ def check_flow_components(tools: list, errors: list, warnings: list):
                     f"tool '{tool_key}' not in tool-registry.yaml"
                 )
 
-            # Check component file exists. TD-042: legacy component paths
+            # Check component file exists. TRK-242: legacy component paths
             # like "../interactive/tools/X.jsx" resolved relative to
             # jsx-loader.html (in docs/assets/) used to land at
             # docs/interactive/tools/X.jsx. Post-restructure they live at
@@ -357,7 +357,7 @@ def check_markdown_tool_links(tools: list, errors: list, warnings: list):
                 site_url = m.group(1).rstrip("/")
                 break
 
-    # Collect valid JSX files. TD-042 monorepo restructure: portal source
+    # Collect valid JSX files. TRK-242 monorepo restructure: portal source
     # moved from docs/ to tools/portal/src/. The md-link convention still
     # uses paths relative to the OLD docs/ root (e.g. "interactive/tools/X.jsx"),
     # so collect from the new location but key by the legacy convention.

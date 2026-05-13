@@ -13,7 +13,7 @@ import (
 // waitForClientCount polls h.ClientCount() until it matches want or the
 // timeout expires. Mirrors the ticker-with-deadline pattern in
 // async/taskmanager_test.go to replace blind time.Sleep — see
-// TECH-DEBT-019.
+// TRK-219.
 func waitForClientCount(t *testing.T, h *Hub, want int, timeout time.Duration) {
 	t.Helper()
 	deadline := time.NewTimer(timeout)
@@ -212,7 +212,7 @@ func TestSSEEndpoint(t *testing.T) {
 		close(done)
 	}()
 
-	// Wait until the handler has subscribed (no time.Sleep — see TECH-DEBT-019).
+	// Wait until the handler has subscribed (no time.Sleep — see TRK-219).
 	waitForClientCount(t, h, 1, time.Second)
 
 	// Broadcast an event
@@ -307,7 +307,7 @@ func TestSSEStreamingFormat(t *testing.T) {
 		close(done)
 	}()
 
-	// Wait until the handler has subscribed (no time.Sleep — see TECH-DEBT-019).
+	// Wait until the handler has subscribed (no time.Sleep — see TRK-219).
 	waitForClientCount(t, h, 1, time.Second)
 
 	// Broadcast an event

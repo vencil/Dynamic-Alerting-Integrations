@@ -23,7 +23,7 @@ from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent.parent.parent
-PORTAL_SRC = PROJECT_ROOT / "tools" / "portal" / "src"  # TD-042 monorepo restructure
+PORTAL_SRC = PROJECT_ROOT / "tools" / "portal" / "src"  # TRK-242 monorepo restructure
 
 # Directories to scan
 SCAN_DIRS = [

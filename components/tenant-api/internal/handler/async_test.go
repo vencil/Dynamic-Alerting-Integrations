@@ -1,5 +1,5 @@
 // Tests for the `?async=true` query path of batch handlers.
-// Closes TECH-DEBT-018 (#223): tenant-api async path test gap.
+// Closes TRK-218 (#223): tenant-api async path test gap.
 //
 // Coverage gap before this file:
 //   - 0 tests asserted on http.StatusAccepted from a batch handler
@@ -12,7 +12,7 @@
 //   - Verify a submitted task actually reaches a terminal state via the
 //     manager (proves the goroutine pool wiring is correct), using a
 //     poll-with-deadline pattern instead of time.Sleep (avoids the flake
-//     anti-pattern tracked separately by TECH-DEBT-017/-019).
+//     anti-pattern tracked separately by TRK-217/-019).
 package handler
 
 import (

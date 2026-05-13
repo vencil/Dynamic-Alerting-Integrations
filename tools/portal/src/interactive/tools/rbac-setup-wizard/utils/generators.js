@@ -75,6 +75,6 @@ function rbacValidate(groups) {
 window.__rbacGenerateYaml = rbacGenerateYaml;
 window.__rbacValidate = rbacValidate;
 
-// TD-030e: ESM exports. Removed in TD-030z.
+// TRK-230e: ESM exports. Removed in TRK-230z.
 // <!-- jsx-loader-compat: ignore -->
 export { rbacGenerateYaml, rbacValidate };

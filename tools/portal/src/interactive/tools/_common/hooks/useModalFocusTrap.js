@@ -22,7 +22,7 @@ purpose: |
   descendants of modalRef.current, focus auto-applies on open.
 ---
 
-import { useRef, useEffect } from "react";  // TD-033 ESM import
+import { useRef, useEffect } from "react";  // TRK-233 ESM import
 
 function useModalFocusTrap(modalType, setModalType) {
   const modalRef = useRef(null);
@@ -61,7 +61,7 @@ function useModalFocusTrap(modalType, setModalType) {
 // Register on window for orchestrator pickup.
 window.__useModalFocusTrap = useModalFocusTrap;
 
-// TD-030c: ESM export for esbuild bundle + Vitest. Both `window.__X`
-// and `export { X }` removed in TD-030z when jsx-loader retires.
+// TRK-230c: ESM export for esbuild bundle + Vitest. Both `window.__X`
+// and `export { X }` removed in TRK-230z when jsx-loader retires.
 // <!-- jsx-loader-compat: ignore -->
 export { useModalFocusTrap };

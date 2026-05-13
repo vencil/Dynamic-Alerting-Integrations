@@ -1,6 +1,6 @@
 /**
  * Dist-bundle entry for `tenant-manager` — TECH-DEBT-030b' (orchestrator
- * + dist-loader machinery, deferred from TD-030b).
+ * + dist-loader machinery, deferred from TRK-230b).
  *
  * jsx-loader.html detects `../assets/dist/tenant-manager.js` exists and
  * loads it as `<script type="module">`. This entry imports the orchestrator
@@ -18,7 +18,7 @@
  * a side-effect of importing the dual-track files), so window globals are
  * populated for any downstream consumer that still reads them.
  */
-// TD-033/034: component files now use direct ESM React imports
+// TRK-233/034: component files now use direct ESM React imports
 // (`import { useState } from 'react'`); no global side-effect setup
 // needed. The earlier _setup-globals.js + globalThis.__bundledReact
 // path was retired.

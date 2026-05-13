@@ -92,7 +92,7 @@ function EmptyState({ icon, title, description, actionLabel, onAction, testid })
 
 window.__EmptyState = EmptyState;
 
-// TD-030c: ESM export for esbuild bundle + Vitest. Both `window.__X`
-// and `export { X }` removed in TD-030z when jsx-loader retires.
+// TRK-230c: ESM export for esbuild bundle + Vitest. Both `window.__X`
+// and `export { X }` removed in TRK-230z when jsx-loader retires.
 // <!-- jsx-loader-compat: ignore -->
 export { EmptyState };

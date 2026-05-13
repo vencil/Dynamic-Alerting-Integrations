@@ -27,7 +27,7 @@ purpose: |
     - the value, but only updated after `delayMs` ms of stability.
 ---
 
-import { useState, useEffect } from "react";  // TD-033 ESM import
+import { useState, useEffect } from "react";  // TRK-233 ESM import
 
 function useDebouncedValue(value, delayMs) {
   const [debounced, setDebounced] = useState(value);
@@ -48,9 +48,9 @@ function useDebouncedValue(value, delayMs) {
 // Register on window for orchestrator pickup.
 window.__useDebouncedValue = useDebouncedValue;
 
-// TD-030c: ESM export for esbuild bundle + Vitest. Browser jsx-loader
+// TRK-230c: ESM export for esbuild bundle + Vitest. Browser jsx-loader
 // strips this line before script-mode eval (see jsx-loader.html). Both
-// `window.__X` and `export { X }` removed in TD-030z when jsx-loader
+// `window.__X` and `export { X }` removed in TRK-230z when jsx-loader
 // retires entirely.
 // <!-- jsx-loader-compat: ignore -->
 export { useDebouncedValue };

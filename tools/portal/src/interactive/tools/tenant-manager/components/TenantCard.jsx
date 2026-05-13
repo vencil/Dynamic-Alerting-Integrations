@@ -32,7 +32,7 @@ purpose: |
     - onHoverLeave:    () => void — sets `hoveredCard = null`
 ---
 
-// TD-033: ESM dist-bundle chunk order is non-deterministic;
+// TRK-233: ESM dist-bundle chunk order is non-deterministic;
 // `window.__styles` may be undefined when this module evaluates.
 // Import the canonical export instead. See tenant-manager/styles.js.
 import { styles } from '../styles.js';
@@ -209,6 +209,6 @@ function TenantCard({
 // Register on window for orchestrator pickup.
 window.__TenantCard = TenantCard;
 
-// TD-030b: ESM export. Removed in TD-030z.
+// TRK-230b: ESM export. Removed in TRK-230z.
 // <!-- jsx-loader-compat: ignore -->
 export { TenantCard };

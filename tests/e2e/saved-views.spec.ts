@@ -317,7 +317,7 @@ test.describe('Saved Views (Smart Views) @critical', () => {
     await expect(page.getByTestId('saved-views-delete-select')).toHaveCount(0);
   });
 
-  // TECH-DEBT-020 (#225): scan the populated saved-views panel for WCAG 2.1
+  // TRK-220 (#225): scan the populated saved-views panel for WCAG 2.1
   // AA violations. Uses the views-list state (richest UI for this spec).
   // If new violations surface, register them in
   // `docs/internal/frontend-quality-backlog.md` rather than relaxing this

@@ -154,7 +154,7 @@ func TestResolve_UnknownTenant_Returns404Signal(t *testing.T) {
 // detect-change → trigger debounced reload → diffAndReload → new
 // mergedHash pipeline.
 //
-// HA-11 (PR #325 follow-up): the previous version of this test was the
+// TRK-011 (PR #325 follow-up): the previous version of this test was the
 // canonical entry in flaky-tests.yaml — it spun up WatchLoop in a
 // goroutine with a real 20ms ticker + 10ms debounce window, then polled
 // with a 3s deadline. CI runner load occasionally pushed the

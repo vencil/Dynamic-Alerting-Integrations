@@ -27,7 +27,7 @@ dependencies: [
 
 import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 
-// TD-030 (Option C): orchestrator deps via ESM imports. Both browser
+// TRK-230 (Option C): orchestrator deps via ESM imports. Both browser
 // path (jsx-loader transforms relative imports → `const X = window.__X;`
 // reads — see jsx-loader.html transformImports) and dist-bundle path
 // (esbuild bundles them natively) work from the same source.

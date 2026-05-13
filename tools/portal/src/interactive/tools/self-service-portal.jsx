@@ -9,7 +9,7 @@ dependencies: [portal-shared.jsx, YamlValidatorTab.jsx, AlertPreviewTab.jsx, Rou
 ---
 
 import React, { useState } from 'react';
-// TD-030f: ESM imports — tabs + ErrorBoundary.
+// TRK-230f: ESM imports — tabs + ErrorBoundary.
 import { YamlValidatorTab } from './YamlValidatorTab.jsx';
 import { AlertPreviewTab } from './AlertPreviewTab.jsx';
 import { RoutingTraceTab } from './RoutingTraceTab.jsx';

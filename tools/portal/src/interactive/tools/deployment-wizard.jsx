@@ -20,9 +20,9 @@ dependencies: [
 //   * DEC-F (C): removed all Tailwind `dark:` variants; rely on `[data-theme="dark"]`
 //     attribute + design-tokens.css to swap `--da-color-*` automatically.
 //   * DEC-G (B): Portal-wide slate->gray unification is implicit here.
-//   * REG-004: hardcoded portal paths replaced with proper jsx-loader URLs.
+//   * TRK-104: hardcoded portal paths replaced with proper jsx-loader URLs.
 import React, { useState, useMemo } from 'react';
-// TD-030e: ESM imports.
+// TRK-230e: ESM imports.
 import { DEPLOY_STEPS as STEPS, DEPLOY_TIERS as TIERS, DEPLOY_ENVIRONMENTS as ENVIRONMENTS, DEPLOY_TENANT_SIZES as TENANT_SIZES, DEPLOY_OAUTH2_PROVIDERS as OAUTH2_PROVIDERS, DEPLOY_RULE_PACKS as RULE_PACKS } from './deployment-wizard/fixtures/wizard-defaults.js';
 import { deployGenerateHelmValues as generateHelmValues } from './deployment-wizard/utils/generators.js';
 

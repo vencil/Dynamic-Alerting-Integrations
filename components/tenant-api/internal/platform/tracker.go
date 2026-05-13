@@ -39,7 +39,7 @@ type PollingTracker struct {
 	// of waiting for real wall-clock ticks. Production constructors plug in
 	// clockwork.NewRealClock(); test code can use SetClock to swap in
 	// clockwork.NewFakeClock and then `Advance(syncInterval)` to fire ticks
-	// synchronously. Origin: HA-11 deeper (TestWatchLoop_TickerTriggersAdditionalSyncs
+	// synchronously. Origin: TRK-011 deeper (TestWatchLoop_TickerTriggersAdditionalSyncs
 	// flake on GH-hosted runners; PR #350 caught the symptom, this fix
 	// addresses the root cause).
 	clock clockwork.Clock

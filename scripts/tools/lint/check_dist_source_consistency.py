@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""check_dist_source_consistency.py — Catch portal dist commits without matching source change (testing-playbook §LL §2, TD-039).
+"""check_dist_source_consistency.py — Catch portal dist commits without matching source change (testing-playbook §LL §2, TRK-239).
 
 Why this exists
 ---------------
-TD-033 (PR #270) traced a 20-spec regression in main back to PR-E
+TRK-233 (PR #270) traced a 20-spec regression in main back to PR-E
 (#269) committing a regenerated `docs/assets/dist/` while only the
 JSX source for ONE tool (`template-gallery.jsx`) had visibly changed.
 The esbuild rebuild reshuffled chunk allocations across all 43 tools,
@@ -64,7 +64,7 @@ from typing import List, Set
 # Source-of-rebuild signals — if a commit stages dist AND any of these,
 # the rebuild was intentional.
 #
-# TD-042 monorepo restructure: portal source moved from docs/* to
+# TRK-242 monorepo restructure: portal source moved from docs/* to
 # tools/portal/src/*. Patterns updated accordingly.
 SOURCE_PATTERNS = [
     # Entry scripts — adding / modifying entries triggers chunk rebuild
@@ -73,7 +73,7 @@ SOURCE_PATTERNS = [
     lambda p: p == "tools/portal/build.mjs",
     lambda p: p == "tools/portal/manifest.json",
     lambda p: p.startswith("tools/portal/shims/") and p.endswith(".js"),
-    # JSX/JS source files (post-TD-042)
+    # JSX/JS source files (post-TRK-242)
     lambda p: p.startswith("tools/portal/src/") and (p.endswith(".jsx") or p.endswith(".js")),
 ]
 
@@ -165,7 +165,7 @@ def main() -> int:
     print("  Why: PR-E (#269) committed regenerated dist on a chunk reshuffle")
     print("  triggered by ONE source change. Reviewer attention was on the")
     print("  visible source change; the hidden dist drift broke 20 specs in")
-    print("  main (TD-033). This hook catches that pattern at commit time.")
+    print("  main (TRK-233). This hook catches that pattern at commit time.")
     print()
     print("  If this is a legitimate dist-only commit (rare — e.g. CI bot")
     print("  regenerating artifacts), escape with: BYPASS_DIST_CHECK=1 git commit")

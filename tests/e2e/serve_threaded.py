@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Threaded HTTP server for portal E2E tests (TD-032e P1 perf).
+"""Threaded HTTP server for portal E2E tests (TRK-232e P1 perf).
 
 Why this exists
 ---------------
