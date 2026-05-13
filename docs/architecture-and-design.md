@@ -309,7 +309,7 @@ spec:
 
 ## 6. ADR 索引 (Architecture Decision Records)
 
-> 自動產生 — 由 [`scripts/dx/generate_adr_index.py`](../scripts/dx/generate_adr_index.py) 從 `docs/adr/` frontmatter + `## 狀態` 區塊重新渲染。**新增或修改 ADR 後跑 `make adr-index`**；pre-commit drift gate 會擋 stale 表。
+> 自動產生 — `scripts/dx/generate_adr_index.py` 從 `docs/adr/` frontmatter + `## 狀態` 區塊重新渲染。**新增或修改 ADR 後跑 `make adr-index`**；pre-commit drift gate 會擋 stale 表。
 
 <!-- ADR_INDEX_START -->
 | ADR | 標題 | 狀態 | 版本 |
