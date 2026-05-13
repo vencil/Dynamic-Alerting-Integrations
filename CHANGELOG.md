@@ -13,6 +13,7 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 
 ### 文件治理
 
+- **Migration Guide hub slim**（issue [#378](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/378) II-1）：`docs/migration-guide.md` 從 808 行瘦身至 357 行 (-56%)，雙語同步。新增 §5-Step 高階流程 作為中心導航（從 toolkit 安裝到 cutover 收斂的 5 步表格 + 各步驟 anchor 連到對應章節 / spoke）；§0-§13 各章節保留 anchor ID（byte-for-byte，舊書籤不失效），body 收斂為 2-4 句摘要 + 連到 `cli-reference.md` / `migration-engine.md` / `shadow-monitoring-sop.md` / `scenarios/incremental-migration-playbook.md` / `scenarios/multi-system-migration-playbook.md` 等既有 spoke。§7 維度標籤（無 clean spoke）以壓縮 inline 形式保留。`### Q:` FAQ 全保留。
 - **ADR 索引自動化**（issue [#378](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/378) II-2）：新工具 `scripts/dx/generate_adr_index.py` 從 `docs/adr/` frontmatter + `## 狀態` 區塊自動渲染表至 `docs/architecture-and-design.md` 的 `<!-- ADR_INDEX_START/END -->` 哨點之間。新增 ADR 漏接 hub 索引的問題（ADR-019/020/021 都曾如此）由 pre-commit drift gate `adr-index-check` 機械擋下；本地用 `make adr-index` 重新渲染。Top-level pre-commit hook 計數 48 → 49 auto-stage。
 
 <!-- Editorial guideline（建立於 2026-04-23, refreshed v2.8.0 closure）：

@@ -9,59 +9,58 @@ lang: en
 
 > **Language / 語言：** **English (Current)** | [中文](migration-guide.md)
 
-> Migrate from traditional Prometheus alerting to the dynamic multi-tenant threshold architecture.
-> **Other Documents:** [README](index.md) (Overview) · [Architecture & Design](architecture-and-design.md) (Technical Depth) · [Rule Packs](rule-packs/README.md) (Rule Pack Directory)
+> A **task-routing hub** for migrating from traditional Prometheus alerting to the dynamic multi-tenant threshold architecture. This document uses a decision table + 5-step high-level flow to route readers to the correct detail spoke; tool-level command depth lives in [cli-reference.md](cli-reference.md), and the end-to-end zero-downtime path lives in the [Incremental Migration Playbook](scenarios/incremental-migration-playbook.en.md).
 >
-> **First time migrating?** Start with the [Incremental Migration Playbook](scenarios/incremental-migration-playbook.en.md) — a 4-phase zero-downtime action guide with CLI commands and rollback steps at every stage. This document is a tool-level reference for looking up individual command details during migration.
-
-> **⚠️ Migration Safety Guarantee:** The migration process on this platform is designed to be **progressive and reversible**. Your legacy rules don't need to be switched all at once—new rules via the `custom_` prefix are completely isolated from existing rules and can be validated in parallel through Shadow Monitoring for weeks before deciding to switch. Any stage can be safely rolled back: the Projected Volume's `optional: true` mechanism ensures that deleting any rule pack will not affect Prometheus operation.
+> **First time migrating?** Start with the [Incremental Migration Playbook](scenarios/incremental-migration-playbook.en.md); multi-system simultaneous swaps (Prom→VM + rules + AM) follow the [Multi-System Migration Playbook](scenarios/multi-system-migration-playbook.en.md).
 >
-> **Tip:** All `da-tools` commands can be executed directly via Docker (`docker run --rm --network=host ghcr.io/vencil/da-tools:v2.8.0 <cmd>`). The examples below use the simplified `da-tools <cmd>` notation.
+> **⚠️ Migration Safety Guarantee:** The flow is **incremental and rollback-friendly**. The `custom_` prefix isolates new rules from legacy ones; Projected Volume's `optional: true` lets you unmount any rule pack at any time without affecting Prometheus.
+>
+> **Tip:** All `da-tools` commands can run directly via Docker (`docker run --rm --network=host ghcr.io/vencil/da-tools:v2.8.0 <cmd>`); examples below use the shorthand `da-tools <cmd>`.
 
 ## Install the Migration Toolkit (v2.8.0+)
 
-Before migrating, install the toolkit. Pick one of three paths (Docker / static binary / air-gapped tar) — full guide in [`migration-toolkit-installation.en.md`](migration-toolkit-installation.en.md). The two most common commands:
+Install the toolkit before starting. Three delivery paths (Docker / static binary 6-arch / air-gapped tar) — pick any one:
 
 ```bash
 # Path A: Docker pull from ghcr.io (simplest)
 docker pull ghcr.io/vencil/da-tools:v2.8.0
 
-# Path B: Download static binary onto PATH
+# Path B: Download a static binary to PATH
 curl -fsSLo da-guard.tar.gz https://github.com/vencil/Dynamic-Alerting-Integrations/releases/download/tools/v2.7.0/da-guard-linux-amd64.tar.gz
 tar xzf da-guard.tar.gz && sudo install -m 0755 da-guard-linux-amd64 /usr/local/bin/da-guard
 ```
 
-Full command listing, hash verification, and air-gapped flow: [`migration-toolkit-installation.en.md`](migration-toolkit-installation.en.md).
+Full command set, hash verification, air-gapped flow, cosign keyless verification: see [`migration-toolkit-installation.md`](migration-toolkit-installation.en.md).
 
 ## Where Are You? (你在哪個階段？)
 
-| Your Situation | Recommended Path | Tool (`da-tools` command) | Estimated Time |
-|----------|----------|------|---------|
-| **New Tenant** — First time onboarding | Interactive configuration generation | `da-tools scaffold` | ~5 min |
-| **Existing Mature Monitoring System** — Enterprise reverse analysis | Auto-generate migration plan | `da-tools onboard` | ~10 min |
-| **Existing Traditional Alert Rules** — Need migration | Auto-convert to three-piece set | `da-tools migrate` | ~15 min |
-| **Large Tenant (1000+ rules)** — Enterprise-grade migration | Triage → Shadow → Switchover | `da-tools migrate --triage` + `da-tools validate` | ~1-2 weeks |
-| **3-system simultaneous swap** (storage backend Prom→VM **plus** rules **plus** AM routing) | 5-Phase invariants-driven model | Follow [Multi-System Migration Playbook](scenarios/multi-system-migration-playbook.en.md) | 13-week estimate (real-world often ~27 weeks) |
-| **Post-cutover rule evolution** (`custom_*` → golden, Rule Pack upgrades) | Lifecycle pattern, not one-time event | Follow [Staged Adoption Lifecycle](scenarios/staged-adoption-guide.en.md) | Ongoing |
-| **Unsupported DB Type** — Need extension | Manual Recording + Alert Rules creation | See [§9](#9-advanced-extending-unsupported-db-types) | ~30 min |
-| **Offboarding Tenant/Metrics** | Safe removal | `da-tools offboard` / `da-tools deprecate` | ~5 min |
-| **Issues during migration** | symptom-keyed runbook | → [Migration Troubleshooting Checklist](integration/troubleshooting-checklist.en.md) | — |
+| Your Scenario | Recommended Path | Tool (`da-tools` command) | Estimated Time |
+|---------------|------------------|---------------------------|----------------|
+| **Brand-new tenant** — first onboarding | Interactive tenant-config generation | `da-tools scaffold` | ~5 min |
+| **Existing mature monitoring** — enterprise reverse analysis | Auto-generate migration plan | `da-tools onboard` | ~10 min |
+| **Have legacy alert rules** — need to migrate | Auto-convert to the three-piece set | `da-tools migrate` | ~15 min |
+| **Large tenant (1000+ rules)** — enterprise migration | Triage → Shadow → switchover | `da-tools migrate --triage` + `da-tools validate` | ~1-2 weeks |
+| **3-system simultaneous swap** (storage backend Prom→VM **plus** rules **plus** AM routing) | 5-Phase invariants-driven model | Follow the [Multi-System Migration Playbook](scenarios/multi-system-migration-playbook.en.md) | 13-week estimate (typically ~27 weeks in practice) |
+| **Post-cutover rule evolution** (`custom_*` → golden, Rule Pack upgrades) | Lifecycle pattern, not a one-time event | Follow the [Staged Adoption Lifecycle](scenarios/staged-adoption-guide.en.md) | Ongoing |
+| **Unsupported DB type** — need extension | Manually create Recording + Alert Rules | See [§9](#9-advanced-extending-unsupported-db-types) | ~30 min |
+| **Offboarding a tenant/metric** | Safe removal | `da-tools offboard` / `da-tools deprecate` | ~5 min |
+| **Migration trouble** | Symptom-keyed runbook | → [Migration Troubleshooting Checklist](integration/troubleshooting-checklist.en.md) | — |
 
 ```mermaid
 flowchart TD
     Start["Start Migration"] --> Q0{"Existing<br/>Alertmanager/<br/>Rules/Scrape?"}
-    Q0 -->|"Mature monitoring"| S0["da-tools onboard<br/>Reverse analysis → Migration plan"]
+    Q0 -->|"Mature monitoring"| S0["da-tools onboard<br/>Reverse analysis → migration plan"]
     Q0 -->|"None"| Q1{"Existing<br/>alert rules?"}
     S0 --> Q1
-    Q1 -->|"None"| S1["da-tools scaffold<br/>Interactive configuration"]
-    Q1 -->|"Yes"| Q2{"Number of rules?"}
-    Q2 -->|"< 100 rules"| S2["da-tools migrate<br/>--dry-run preview"]
-    Q2 -->|"100+ rules"| S3["da-tools migrate<br/>--triage categorization"]
+    Q1 -->|"None"| S1["da-tools scaffold<br/>Interactive config generation"]
+    Q1 -->|"Yes"| Q2{"Rule count?"}
+    Q2 -->|"< 100"| S2["da-tools migrate<br/>--dry-run preview"]
+    Q2 -->|"100+"| S3["da-tools migrate<br/>--triage classify"]
     S2 --> V["da-tools validate-config<br/>One-stop validation"]
     S3 --> S4["Shadow Monitoring<br/>da-tools validate"]
-    S4 --> S5["Progressive switchover<br/>(weeks of parallel observation)"]
+    S4 --> S5["Gradual switchover<br/>(weeks of parallel observation)"]
     S1 --> V
-    V --> Done["Complete"]
+    V --> Done["Done"]
     S5 --> Done
 
     style Done fill:#c8e6c9,stroke:#2e7d32
@@ -70,211 +69,84 @@ flowchart TD
 
 ## Zero-Friction Onboarding
 
-This platform comes pre-loaded with **15 Rule Pack ConfigMaps** (MariaDB, PostgreSQL, Kubernetes, Redis, MongoDB, Elasticsearch, Oracle, DB2, ClickHouse, Kafka, RabbitMQ, JVM, Nginx, Operational, and Platform self-monitoring), distributed across independent ConfigMaps via Kubernetes **Projected Volume** architecture. Each Rule Pack contains a complete three-piece set: Normalization Recording Rules + Threshold Normalization + Alert Rules.
+The platform preloads **15 Rule Pack ConfigMaps** (MariaDB, PostgreSQL, Kubernetes, Redis, MongoDB, Elasticsearch, Oracle, DB2, ClickHouse, Kafka, RabbitMQ, JVM, Nginx, Operational, Platform self-monitoring) and distributes them via **Projected Volume**. Each Rule Pack ships the three-piece set: Normalization Recording Rules + Threshold Normalization + Alert Rules. **Rule Packs without a deployed exporter produce no metrics and trigger no false alerts.** After adding an exporter, you only configure `_defaults.yaml` + tenant YAML. See [design/rule-packs.en.md](design/rule-packs.en.md).
 
-**Rule Packs without deployed exporters won't generate metrics, and alerts won't fire incorrectly (near-zero cost)**. After adding a new exporter, you only need to configure `_defaults.yaml` + tenant YAML without modifying Prometheus configuration.
+## 5-Step High-Level Flow
+
+The standard path from zero to cutover. Each step only lists the trigger commands; click the anchor to drop into the matching section / spoke for parameter details.
+
+| Step | Action | Primary Tool | Details |
+|------|--------|--------------|---------|
+| **Step 1** | Install Toolkit | `docker pull ghcr.io/vencil/da-tools:v2.8.0` or static binary | [`migration-toolkit-installation.md`](migration-toolkit-installation.en.md) |
+| **Step 2** | Reverse-analyze existing monitoring (if any) → produce migration plan | `da-tools onboard --alertmanager-config ... --rule-files ...` | [§0](#0-enterprise-grade-reverse-analysis-da-tools-onboard) · [cli-reference §onboard](cli-reference.md#onboard) |
+| **Step 3** | Generate / convert tenant config + the rule three-piece set | `da-tools scaffold` (greenfield) / `da-tools migrate` (existing rules) | [§1](#1-new-tenant-quick-onboarding-da-tools-scaffold) · [§2](#2-existing-rule-migration-da-tools-migrate) · [cli-reference §scaffold](cli-reference.md#scaffold) · [§migrate](cli-reference.md#migrate) |
+| **Step 4** | Deploy threshold-exporter + one-stop validation | `helm upgrade ... oci://...` + `da-tools validate-config` + `da-tools diagnose <tenant>` | [§3](#3-deploy-threshold-exporter) · [§6](#6-post-migration-verification) · [tenant-lifecycle onboarding stage](scenarios/tenant-lifecycle.en.md) |
+| **Step 5** | Shadow Monitoring → cutover → convergence (required when ≥100 rules) | `da-tools validate --watch --auto-detect-convergence` → `da-tools cutover --readiness-json` | [§11](#11-enterprise-grade-migration-large-tenant-1000-rules) · [Shadow Monitoring SOP](shadow-monitoring-sop.en.md) · [Incremental Migration Playbook](scenarios/incremental-migration-playbook.en.md) |
+
+> **Unsure which path to take?** The [§Where Are You?](#where-are-you-你在哪個階段) decision table + mermaid above is the routing entry point. Multi-system swap invariants and the 13-week timeline: [Multi-System Migration Playbook](scenarios/multi-system-migration-playbook.en.md).
 
 ---
 
 ## 0. Enterprise-Grade Reverse Analysis — da-tools onboard
 
-For enterprises with mature monitoring systems, `onboard_platform.py` supports **reverse analysis** of existing configurations to automatically generate migration plans:
+For enterprises with mature monitoring stacks, `da-tools onboard` **reverse-analyzes** Alertmanager / Prometheus rules / scrape config and produces a migration plan:
 
-```bash
-# Analyze existing Alertmanager configuration
-da-tools onboard --alertmanager-config /data/alertmanager.yml -o /data/migration-plan/
+- Outputs `extracted-tenants.yaml` (auto-identified tenants + receiver mapping)
+- Outputs `migration-plan.csv` (rule buckets: `auto` / `review` / `skip` / `use_golden`)
+- Outputs `relabel-config-suggestions.txt` (scrape relabel for Tenant-NS mapping)
 
-# Analyze existing Prometheus rules
-da-tools onboard --rule-files '/data/rules/*.yml' -o /data/migration-plan/
-
-# Analyze scrape config (for Tenant-NS mapping)
-da-tools onboard --scrape-config /data/prometheus.yml -o /data/migration-plan/ --tenant-label cluster
-
-# Analyze everything at once (three phases combined)
-da-tools onboard --alertmanager-config /data/alertmanager.yml \
-                  --rule-files '/data/rules/*.yml' \
-                  --scrape-config /data/prometheus.yml \
-                  --tenant-label cluster -o /data/migration-plan/
-```
-
-### Tool Output
-
-| File | Description |
-|------|------|
-| `extracted-tenants.yaml` | Auto-identified tenant list with Alertmanager receiver mapping |
-| `migration-plan.csv` | Rule bucketing list (auto/review/skip/use_golden) + mapping recommendations |
-| `relabel-config-suggestions.txt` | Prometheus scrape config relabel snippet (for Tenant-NS mapping) |
-
-After reverse analysis completes, you can directly use `extracted-tenants.yaml` as input to `scaffold` and `migrate` to accelerate enterprise migration onboarding.
+Complete flag matrix + scrape-config parser details: [`cli-reference.md#onboard`](cli-reference.md#onboard). The output files can feed directly into `scaffold` / `migrate`, accelerating enterprise onboarding.
 
 ---
 
 ## 1. New Tenant Quick Onboarding — da-tools scaffold
 
-For brand-new tenants, use the interactive generator to complete setup in 30 seconds:
+For brand-new tenants, the interactive generator completes setup in 30 seconds:
 
 ```bash
-# CLI mode — one-liner
 da-tools scaffold --tenant redis-prod --db redis,mariadb --non-interactive -o /data
-
-# With N:1 namespace-tenant mapping
-da-tools scaffold --tenant redis-prod --db redis,mariadb --namespaces ns1,ns2,ns3 \
-                  --non-interactive -o /data
-
-# With routing configuration — output includes complete routing config
-da-tools scaffold --tenant redis-prod --db redis,mariadb \
-                  --routing-receiver "https://hooks.slack.com/services/T../B../xxx" \
-                  --routing-receiver-type slack --non-interactive -o /data
-
-# View supported DB types and metrics
-da-tools scaffold --catalog
 ```
 
-### Tool Output
+Outputs: `_defaults.yaml` + `<tenant>.yaml` + `scaffold-report.txt` (+ `relabel-config-snippet.yaml` when `--namespaces` is specified). Full flag set, `--routing-receiver`, `--catalog`, `--from-onboard <hints>` pipeline: [`cli-reference.md#scaffold`](cli-reference.md#scaffold).
 
-| File | Description |
-|------|------|
-| `_defaults.yaml` | Platform global defaults (contains all selected DB metrics) |
-| `<tenant>.yaml` | Tenant override configuration (contains three-state examples + `_routing` + `_severity_dedup`) |
-| `scaffold-report.txt` | Deployment steps and Rule Pack status summary |
-| `relabel-config-snippet.yaml` | Prometheus relabel_configs snippet (only output when `--namespaces` is used) |
-
-All core Rule Packs (including self-monitoring) are pre-loaded via Projected Volume on the platform. Output configs can be directly copied to `conf.d/` for use without additional mounting.
-
-### Injection into K8s Cluster
-
-The files produced by scaffold need to be injected into the `threshold-config` ConfigMap so that threshold-exporter can read them:
-
-```bash
-# Method A (recommended): Helm values override — OCI registry
-#   Merge the output tenant config into values-override.yaml, then helm upgrade
-helm upgrade threshold-exporter \
-  oci://ghcr.io/vencil/charts/threshold-exporter --version 2.8.0 \
-  -n monitoring -f values-override.yaml
-
-# Method B: Direct ConfigMap reconstruction (suitable for non-Helm environments)
-kubectl create configmap threshold-config \
-  --from-file=conf.d/ \
-  -n monitoring --dry-run=client -o yaml | kubectl apply -f -
-```
-
-After ConfigMap changes, exporter will auto hot-reload within 1-3 minutes (K8s propagation + SHA-256 watcher) without needing to restart Pods.
-
-> For detailed three injection methods (Helm / kubectl / GitOps), see [threshold-exporter README — K8s Deployment and Configuration Management](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md#k8s-deployment-and-configuration-management).
+The three ConfigMap injection paths (Helm / kubectl / GitOps): [threshold-exporter README — K8s Deployment](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md#k8s-部署與配置管理).
 
 ---
 
 ## 2. Existing Rule Migration — da-tools migrate
 
-Teams with existing traditional Prometheus alert rules can use the auto-conversion tool (v4 — AST + regex dual-engine):
+Teams with legacy Prometheus alert rules use the auto-conversion tool (v4 — dual AST + regex engine; falls back to regex when PromQL AST parsing fails):
 
 ```bash
-# Preview mode — no file output, only analysis results
-da-tools migrate /data/legacy-rules.yml --dry-run
-
-# Formal conversion — output to output/
-da-tools migrate /data/legacy-rules.yml -o /data/output
-
-# Triage + Dry Run (recommended for enterprise migration)
-da-tools migrate /data/legacy-rules.yml -o /data/output --dry-run --triage
-
-# Force regex mode (don't use AST engine)
-da-tools migrate /data/legacy-rules.yml --no-ast
+da-tools migrate /data/legacy-rules.yml --dry-run            # Preview
+da-tools migrate /data/legacy-rules.yml -o /data/output      # Production conversion
+da-tools migrate /data/legacy-rules.yml --triage -o /data/output  # Large-tenant bucketing
 ```
 
-> The tool uses the PromQL AST engine (`promql-parser`) by default to precisely identify metric names and automatically inject the `custom_` prefix and `tenant` label. When AST parsing fails, it automatically falls back to regex, ensuring backward compatibility.
+The tool automatically handles:
 
-### Three Processing Scenarios
+- **Three input scenarios**: `✅ clean parse` / `⚠️ complex expression (with warning box)` / `🚨 unparseable (emits LLM Prompt)`
+- **Three-piece output**: `tenant-config.yaml` + `platform-recording-rules.yaml` + `platform-alert-rules.yaml` + `migration-report.txt`
+- **Auto-Suppression**: warning + critical pairs for the same metric are auto-matched, and the warning alert gets a second-tier `unless` clause injected
+- **Aggregation-mode heuristic**: 6 heuristic rules guess `sum` / `max` automatically and emit an ASCII warning box asking the user to confirm
 
-| Scenario | Trigger Condition | Tool Behavior |
-|------|----------|----------|
-| ✅ **Perfect Parse** | Simple `metric > value` | Auto-produce complete three-piece set |
-| ⚠️ **Complex Expression** | Contains `rate()`, `[5m]`, math operations | Produce three-piece set + ASCII warning box requesting aggregation mode confirmation |
-| 🚨 **Cannot Parse** | `absent()`, `predict_linear()`, etc. | Don't produce, instead provide Prompt suitable for LLM |
-
-### The Tool Output "Three-Piece Set"
-
-Conversion produces 4 files:
-
-| File | Description |
-|------|------|
-| `tenant-config.yaml` | YAML snippet that tenant needs to fill into `db-*.yaml` |
-| `platform-recording-rules.yaml` | Platform team's normalized Recording Rules (valid YAML, includes `groups:` boilerplate) |
-| `platform-alert-rules.yaml` | Alert Rules including `group_left` + `unless maintenance` + Auto-Suppression |
-| `migration-report.txt` | Conversion summary and LLM Prompt for unparsed rules |
-
-### Deploy to K8s Cluster
-
-The converted three-piece set needs to be deployed to different locations:
-
-```bash
-# 1. tenant-config.yaml → merge into threshold-config ConfigMap
-#    Merge tenant-config.yaml content into conf.d/<tenant>.yaml, then update ConfigMap
-kubectl create configmap threshold-config \
-  --from-file=conf.d/ \
-  -n monitoring --dry-run=client -o yaml | kubectl apply -f -
-
-# 2. Recording Rules + Alert Rules → create as independent ConfigMap, mounted to Prometheus
-kubectl create configmap prometheus-rules-custom \
-  --from-file=platform-recording-rules.yaml \
-  --from-file=platform-alert-rules.yaml \
-  -n monitoring --dry-run=client -o yaml | kubectl apply -f -
-
-# 3. Ensure Prometheus Projected Volume includes this ConfigMap
-#    If using Helm, add new source in values.yaml;
-#    If already have custom rule pack slot, ConfigMap auto-mounts after creation
-```
-
-> **Helm users**: You can also integrate recording/alert rules into Helm chart values for centralized management. See [threshold-exporter README](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md#k8s-deployment-and-configuration-management).
-
-### Aggregation Mode Intelligent Guessing
-
-For complex expressions, the tool automatically guesses `sum` or `max` based on 6 heuristic rules. Guessed recording rules carry a prominent ASCII warning box, reminding users to confirm the aggregation mode (`sum`=cluster total, `max`=single point bottleneck) before copy-pasting. If unsure, re-run with `--interactive` mode.
-
-### Auto-Suppression
-
-When input rules include both warning and critical versions (same base metric key), the tool automatically pairs them and injects a second-layer `unless` clause (Auto-Suppression) into the warning alert, ensuring that when critical fires, warning is suppressed. Pairing logic: warning key `custom_X` pairs with critical key `custom_X_critical`. If only single severity exists, no injection occurs.
+AST engine depth (why `promql-parser` beats regex) + the full heuristic rule set + Auto-Suppression pairing logic: [`migration-engine.en.md`](migration-engine.en.md). CLI flag matrix: [`cli-reference.md#migrate`](cli-reference.md#migrate). Three-piece-set deployment locations (ConfigMap merge vs independent mount): [threshold-exporter README](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md#k8s-部署與配置管理).
 
 ---
 
 ## 3. Deploy threshold-exporter
 
-> **Config Separation Principle**: Both Helm chart and Docker image **do not include test tenant data**. The `thresholdConfig.tenants` in `values.yaml` defaults to empty. You need to inject your own tenant configuration through values-override or GitOps (see [§1 Injection into K8s Cluster](#injection-into-k8s-cluster)). Development/test environments use `environments/local/threshold-exporter.yaml`, which already includes db-a and db-b example tenants.
+> **Config separation principle**: Neither the Helm chart nor the Docker image ships **test tenant data**. `values.yaml`'s `thresholdConfig.tenants` defaults to empty; you inject your own settings via values-override / GitOps. Development uses `environments/local/threshold-exporter.yaml` (already includes db-a / db-b samples).
 
-### Option A (Recommended): OCI Registry
+Three deployment options:
 
-```bash
-# Production deployment — install chart from OCI registry with custom values-override to inject tenant config
-helm upgrade --install threshold-exporter \
-  oci://ghcr.io/vencil/charts/threshold-exporter --version 2.8.0 \
-  -n monitoring --create-namespace \
-  -f values-override.yaml
-```
+- **Option A (Recommended)**: OCI Registry — `helm upgrade --install threshold-exporter oci://ghcr.io/vencil/charts/threshold-exporter --version 2.8.0 -n monitoring -f values-override.yaml`
+- **Option B**: Local build — `docker build` + `kind load` + `make component-deploy`
+- **Option C**: Operator CRD path — `da-tools operator-generate`, replacing ConfigMap mounting (suitable when kube-prometheus-stack is already installed)
 
-> No need to clone the repo or specify image tag—the chart already has the corresponding image version bound.
+Comparison and decision guidance for the two paths: [Deployment Decision Matrix](getting-started/decision-matrix.en.md). Full Helm values, Operator CRD migration, and "Use da-tools in K8s Cluster" mode: [threshold-exporter README](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md#k8s-部署與配置管理) · [Operator integration guides](integration/operator-prometheus-integration.en.md).
 
-### Option B: Local Build
-
-```bash
-cd components/threshold-exporter/app
-docker build -t threshold-exporter:dev .
-kind load docker-image threshold-exporter:dev --name dynamic-alerting-cluster
-make component-deploy COMP=threshold-exporter ENV=local
-```
-
-### Option C: Operator CRD Path
-
-For environments with kube-prometheus-stack already installed, use `operator-generate` to produce PrometheusRule CRD, replacing ConfigMap mounting:
-
-```bash
-da-tools operator-generate --config-dir conf.d/ --rule-packs rule-packs/ \
-  --output-dir operator-manifests/ --gitops
-kubectl apply -f operator-manifests/
-```
-
-For detailed comparison and decision guidance between the two paths, see [Deployment Decision Matrix](getting-started/decision-matrix.md).
-
-### Verify Deployment
+Deployment verification:
 
 ```bash
 kubectl get pods -n monitoring -l app=threshold-exporter
@@ -282,527 +154,204 @@ curl -s http://localhost:8080/metrics | grep user_threshold
 curl -s http://localhost:8080/api/v1/config | python3 -m json.tool
 ```
 
-### Use da-tools in K8s Cluster
-
-da-tools can also run directly as K8s Job (`image: ghcr.io/vencil/da-tools:v2.8.0`), eliminating port-forward setup. In-cluster da-tools can directly access Prometheus through K8s Service (`http://prometheus.monitoring.svc.cluster.local:9090`), suitable for commands like `check-alert`, `validate`, `baseline` that need Prometheus API.
-
-> Job output can be retrieved via `kubectl cp`, then injected into `threshold-config` ConfigMap. For long-running Shadow Monitoring Job examples, see [§11 Enterprise-Grade Migration Phase B](#phase-b-conversion-shadow-monitoring).
-
 ---
 
 ## 4. Real-World Examples: Five Migration Scenarios
 
-Using Percona MariaDB Alert Rules as template, demonstrate complete migration path.
+Using Percona MariaDB Alert Rules as the template, 5 common migration patterns are showcased (basic numeric comparison / multi-tier severity / replication lag / rate metrics / percentage calculation). Each scenario applies the same three-piece template — only the metric name and Tenant Config key change. The platform-side Alert Rule structure is always `(metric_recording) > on(tenant) group_left (threshold) unless on(tenant) (maintenance == 1)`.
 
-### 4.1 Basic Value Comparison (Connection Count)
-
-**Traditional approach**:
-```yaml
-- alert: MySQLTooManyConnections
-  expr: mysql_global_status_threads_connected > 100
-  for: 5m
-  labels: { severity: warning }
-```
-
-**Migration three-piece set**:
-```yaml
-# 1. Recording Rule (Platform)
-- record: tenant:mysql_threads_connected:max
-  expr: max by(tenant) (mysql_global_status_threads_connected)
-
-# 2. Alert Rule (Platform) — group_left + unless maintenance
-- alert: MariaDBHighConnections
-  expr: |
-    (
-      tenant:mysql_threads_connected:max
-      > on(tenant) group_left
-      tenant:alert_threshold:connections
-    )
-    unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
-  for: 5m
-  labels: { severity: warning }
-
-# 3. Tenant Config (Tenant)
-tenants:
-  db-a:
-    mysql_connections: "100"
-```
-
-### 4.2-4.5 Other Common Patterns — Quick Reference Table
-
-The three-piece set structure demonstrated in 4.1 above applies to all scenarios. The table below lists key differences for common metrics:
-
-| Scenario | Original Metric | Recording Rule | Tenant Config Example | Special Notes |
-|----------|---------|----------------|-------------------|---------|
-| **4.2 Multi-layer Severity** | `mysql_global_status_threads_connected` | `max by(tenant) (...)` | `mysql_connections: "100"` + `mysql_connections_critical: "150"` | Alert Rule automatically handles `_critical` degradation logic |
-| **4.3 Replication Lag** | `mysql_slave_status_seconds_behind_master` | `max by(tenant) (...)` | `mysql_slave_lag: "30"` or `"disable"` | Max for "weakest link" (most lagging slave) |
-| **4.4 Rate Metric** | `rate(mysql_global_status_slow_queries[5m])` | `sum by(tenant) (rate(...))` | `mysql_slow_queries: "0.1"` | Sum for "cluster total" (slow queries overall) |
-| **4.5 Percentage Calculation** | `buffer_pool_pages_data / buffer_pool_pages_total * 100` | `max by(...) (...) / max by(...) (...) * 100` | `mysql_innodb_buffer_pool: "95"` | Percentage calculation completes in Recording Rule |
-
-> **Summary:** Sections 4.2-4.5 simply apply the 4.1 three-piece template by changing the metric name and tenant config key. Platform-side alert rule structure remains consistent. See [Rule Packs ALERT-REFERENCE](rule-packs/ALERT-REFERENCE.md) for actual rules.
+Complete 5-scenario comparison table (Recording Rule patterns, Tenant Config examples, rationale for `sum` vs `max`) + actual golden rule samples: [Rule Packs ALERT-REFERENCE](rule-packs/ALERT-REFERENCE.md).
 
 ---
 
 ## 5. Alertmanager Routing Migration
 
-### Traditional (based on instance)
+Migrating from "instance-based dispatch" to "tenant-based dispatch": use `tenant` as the first-dimension group_by, with nested routes for severity tiering.
 
-```yaml
-route:
-  group_by: ['alertname', 'instance']
-  routes:
-    - matchers: [instance=~"db-a-.*"]
-      receiver: "team-a-slack"
-```
-
-### After Migration (based on tenant)
-
-```yaml
-route:
-  group_by: ['tenant', 'alertname']
-  routes:
-    - matchers: [tenant="db-a"]
-      receiver: "team-a-slack"
-      routes:
-        - matchers: [severity="critical"]
-          receiver: "team-a-pagerduty"
-```
-
-Route first by `tenant` dimension, supporting nested routing for severity layering.
-
-### Config-Driven Routing 
-
-Tenants can configure the `_routing` section in their own YAML, with the platform tool auto-producing Alertmanager route + receiver config.
-
-> **v1.3.0 Breaking Change**: `receiver` changed from pure URL string to structured object (with `type` field). format is no longer compatible.
-
-Six receiver types supported: `webhook`, `email`, `slack`, `teams`, `rocketchat`, `pagerduty`.
-
-```yaml
-# tenant YAML (conf.d/db-a.yaml)
-tenants:
-  db-a:
-    mysql_connections: "70"
-    _routing:
-      receiver:
-        type: "webhook"
-        url: "https://hooks.slack.com/services/T00/B00/xxx"
-      group_by: ["alertname", "severity"]
-      group_wait: "30s"
-      repeat_interval: "4h"
-```
+**Config-Driven Routing**: tenants set `_routing` in their own YAML, and the platform tooling auto-generates Alertmanager route + receiver config. Six receiver types: `webhook` / `email` / `slack` / `teams` / `rocketchat` / `pagerduty`.
 
 ```bash
-# Validate config legality (including webhook domain allowlist check)
-da-tools generate-routes --config-dir conf.d/ --validate --policy .github/custom-rule-policy.yaml
-
-# Produce Alertmanager fragment
+da-tools generate-routes --config-dir conf.d/ --validate \
+                         --policy .github/custom-rule-policy.yaml
 da-tools generate-routes --config-dir conf.d/ -o alertmanager-routes.yaml
-
-# One-stop merge into Alertmanager ConfigMap + reload 
 da-tools generate-routes --config-dir conf.d/ --apply --yes
 ```
 
-Platform has guardrails for timing parameters (group_wait 5s–5m, group_interval 5s–5m, repeat_interval 1m–72h), with out-of-range values automatically clamped. Complete receiver type examples and Go template message customization details see [BYO Alertmanager Integration Guide §5](integration/byo-alertmanager-integration.md#5-receiver-類型).
+The platform enforces guardrails on timing parameters (`group_wait` 5s–5m, `group_interval` 5s–5m, `repeat_interval` 1m–72h); out-of-range values are auto-clamped.
 
-### Advanced Routing Features
+Full receiver-type schema, Go template customization, Per-rule Routing Overrides, Silent / Maintenance Mode, Platform Enforced Routing: [BYO Alertmanager Integration Guide](integration/byo-alertmanager-integration.en.md). `_routing` schema and routing-profile hierarchy: [Architecture & Design §Design Concepts Overview](architecture-and-design.en.md) → Alert Routing.
 
-| Feature | Description | Details |
-|---------|-------------|---------|
-| Per-rule Routing Overrides | `_routing.overrides[]` specify different receiver for specific alertname/metric_group | [BYO Alertmanager §7](integration/byo-alertmanager-integration.md#7-per-rule-routing-overrides) |
-| Silent / Maintenance Mode | `_silent_mode` / `_state_maintenance` + `expires` auto-expiry | [Architecture §2.7](architecture-and-design.md) |
-| Platform Enforced Routing | `_routing_enforced` ensures NOC receives all alerts (dual-channel) | [BYO Alertmanager §8](integration/byo-alertmanager-integration.md#8-platform-enforced-routing) |
+> **v1.3.0 Breaking Change**: `receiver` changed from a plain URL string to a structured object (with a `type` field). The v1.2.0 format is no longer compatible.
 
 ---
 
 ## 6. Post-Migration Verification
 
 ```bash
-# 0. One-stop config validation (recommended to run before deployment, v1.7.0)
-da-tools validate-config --config-dir /data/conf.d
-
-# 1. Confirm thresholds output correctly
-curl -s http://localhost:8080/metrics | grep 'user_threshold{.*connections'
-
-# 2. Confirm Alert status
-da-tools check-alert MariaDBHighConnections db-a
-
-# 3. Tenant health check (includes operational_mode, threshold parsing, alert status)
-da-tools diagnose db-a
+da-tools validate-config --config-dir /data/conf.d         # One-stop
+da-tools check-alert MariaDBHighConnections db-a           # Alert status
+da-tools diagnose db-a                                     # Tenant health overview
 ```
 
-### Complete Verification Checklist
+Full verification checklist (YAML validation, alert state, three-state testing, routing, operational_mode, blind-spot scan): [Tenant Lifecycle §Onboarding Stage](scenarios/tenant-lifecycle.en.md).
 
-See [Tenant Lifecycle — Onboarding Phase](scenarios/tenant-lifecycle.md#階段-12上線day-0) for the complete verification checklist, covering YAML validation, alert status, three-state testing, routing, operational_mode confirmation, and blind spot scanning.
-
-### Post-Migration: Tenant Self-Management
-
-After migration completes, Tenants can self-manage the following in their own YAML (via PR → CI → GitOps workflow, without Platform Team intervention):
-
-| Configuration | Description | Example |
-|------|------|------|
-| Threshold three-state | Custom value / omit for default / `"disable"` to disable | `mysql_connections: "70"` |
-| `_critical` suffix | Multi-layer severity | `mysql_connections_critical: "95"` |
-| `_routing` | Notification routing (6 receiver types) | `receiver: {type: "slack", ...}` |
-| `_routing.overrides[]` | Specific alert uses different receiver | `alertname: "..."` + `receiver: {...}` |
-| `_silent_mode` | Silent mode (TSDB has record but no notification) | `{target: "all", expires: "..."}` |
-| `_state_maintenance` | Maintenance mode (completely no firing) | Same as above, supports `expires` auto-expiry |
-| `_severity_dedup` | Severity deduplication | `enabled: true` |
-
-Platform Team controlled settings (in `_defaults.yaml`) include global defaults, `_routing_defaults`, `_routing_enforced`. See [GitOps Deployment Guide §7](integration/gitops-deployment.en.md#7-tenant-self-service-configuration-scope).
+**Post-migration tenant self-service scope**: three-state thresholds, `_critical` suffix, `_routing` (+ overrides), `_silent_mode`, `_state_maintenance`, `_severity_dedup`. Platform Team controls `_routing_defaults` and `_routing_enforced` in `_defaults.yaml`. Details: [GitOps Deployment Guide §7](integration/gitops-deployment.en.md).
 
 ---
 
 ## 7. Dimensional Labels — Multi-DB Type Support
 
-When the platform supports multiple DB types like Redis, ES, MongoDB, the same metric can set different thresholds by "dimension".
-
-### Syntax
+When the platform supports Redis / ES / MongoDB, the same metric can have different thresholds per "dimension". YAML keys containing `{` must be wrapped in double quotes:
 
 ```yaml
 tenants:
   redis-prod:
-    redis_queue_length: "1000"                              # global default
-    "redis_queue_length{queue=\"order-processing\"}": "100"  # strict
-    "redis_queue_length{queue=\"analytics\"}": "5000"        # loose
-    "redis_queue_length{queue=\"temp\"}": "disable"          # disabled
-```
-
-Multiple labels:
-```yaml
+    redis_queue_length: "1000"                                # Global default
+    "redis_queue_length{queue=\"order-processing\"}": "100"   # Strict
+    "redis_queue_length{queue=\"analytics\"}": "5000"         # Loose
+    "redis_queue_length{queue=\"temp\"}": "disable"           # Disabled
+    # Multiple labels:
     "mongodb_collection_count{database=\"orders\",collection=\"transactions\"}": "10000000"
 ```
 
-### Design Constraints
+**Design constraints**:
 
-| Constraint | Description |
-|------|------|
-| **YAML needs quotes** | Keys containing `{` must be wrapped in double quotes |
-| **`_critical` suffix not supported** | Use `"value:severity"` syntax instead, e.g., `"500:critical"` |
-| **Tenant-only** | Dimensional keys don't inherit from `defaults`, only allowed in tenant config |
-| **Three-state still applies** | Value=Custom, omit=Default (basic key only), `"disable"`=Disabled |
+| Constraint | Note |
+|------------|------|
+| YAML quoting required | Keys containing `{` must be wrapped in double quotes |
+| No `_critical` suffix | Use `"value:severity"` syntax instead, e.g. `"500:critical"` |
+| Tenant-only | Dimension keys do not inherit from `defaults`; allowed only in tenant config |
+| Three-state still applies | Value=Custom, omitted=Default (basic key only), `"disable"`=Disabled |
 
-### Platform Team PromQL Adaptation (Important)
-
-Dimensional labels must appear in Recording Rule's `by()` and Alert Rule's `on()`:
-
-```yaml
-# Recording Rule — must by(tenant, queue)
-- record: tenant:redis_queue_length:max
-  expr: max by(tenant, queue) (redis_queue_length)
-
-# Threshold Normalization — must by(tenant, queue)
-- record: tenant:alert_threshold:redis_queue_length
-  expr: max by(tenant, queue) (user_threshold{metric="redis_queue_length"})
-
-# Alert Rule — must on(tenant, queue) group_left
-- alert: RedisQueueTooLong
-  expr: |
-    (
-      tenant:redis_queue_length:max
-      > on(tenant, queue) group_left
-      tenant:alert_threshold:redis_queue_length
-    )
-    unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
-```
-
-### Reference Templates
-
-In `components/threshold-exporter/config/conf.d/examples/` directory:
-
-| File | DB Type | Dimension Example |
-|------|---------|----------|
-| `redis-tenant.yaml` | Redis | queue, db |
-| `elasticsearch-tenant.yaml` | Elasticsearch | index, node |
-| `mongodb-tenant.yaml` | MongoDB | database, collection |
-| `_defaults-multidb.yaml` | Multi-DB global default | (no dimensions) |
+**Platform-team PromQL adaptation**: the dimension label must appear in both the Recording Rule's `by()` and the Alert Rule's `on()`. Template + full Recording / Alert / Threshold Normalization three-piece set: [Rule Packs ALERT-REFERENCE](rule-packs/ALERT-REFERENCE.md). Redis / ES / MongoDB dimension examples live under `components/threshold-exporter/config/conf.d/examples/`.
 
 ---
 
 ## 8. LLM-Assisted Manual Conversion
 
-When `da-tools migrate` encounters unparseable rules, it produces a Prompt suitable for direct LLM input. The `migration-report.txt` includes a ready-to-use LLM System Prompt template that guides the LLM to extract thresholds, produce Recording Rules (with sum/max reasoning), Alert Rules (with `group_left` + `unless maintenance`), and flag items needing platform extra handling.
+When `da-tools migrate` hits an unparseable rule (e.g. `absent()` / `predict_linear()`), `migration-report.txt` emits a System Prompt template you can hand straight to an LLM. The template guides the LLM to extract thresholds, produce a Recording Rule (with `sum` / `max` rationale), produce an Alert Rule (with `group_left` + `unless maintenance`), and flag items that need platform-side handling. Full prompt structure and post-processing rules: [`migration-engine.en.md`](migration-engine.en.md).
 
 ---
 
 ## 9. Advanced: Extending Unsupported DB Types
 
-The platform pre-loads 15 Rule Pack ConfigMaps, covering MariaDB, PostgreSQL, Redis, MongoDB, Elasticsearch, Oracle, DB2, ClickHouse, Kafka, RabbitMQ, JVM, Nginx, Kubernetes, Operational and Platform self-monitoring. To support DB types without Rule Packs, you need to manually create a normalization layer.
+The preloaded 15 Rule Packs already cover mainstream DBs / middleware (MariaDB / PostgreSQL / Redis / MongoDB / Elasticsearch / Oracle / DB2 / ClickHouse / Kafka / RabbitMQ / JVM / Nginx / Kubernetes / Operational / Platform self-monitoring). Adding a new rule pack requires a manual normalization layer.
 
-### Normalization Naming Convention
+**Normalization naming**: `tenant:<component>_<metric>:<aggregation_function>`
 
-```
-tenant:<component>_<metric>:<aggregation_function>
-```
+**Aggregation mode** — Ask: "If one node breaches and others are fine, is that a problem?" Yes → `max by(tenant)` (weakest link); No → `sum by(tenant)` (cluster total).
 
-| Raw Metric | After Normalization | Description |
-|----------|----------|------|
-| `mysql_global_status_threads_connected` | `tenant:mysql_threads_connected:max` | Single-point ceiling, take max |
-| `rate(mysql_global_status_slow_queries[5m])` | `tenant:mysql_slow_queries:rate5m` | Cluster summed rate |
+**Build steps**: Recording Rule → Threshold Normalization Rule → Alert Rule (with `group_left` + `unless maintenance`) → standalone ConfigMap → add source in projected volume → add default in `_defaults.yaml` → produce tenant config via `da-tools scaffold`.
 
-### Aggregation Mode Selection — Max vs. Sum
-
-Decision matrix:
-```
-Ask yourself: "If one node exceeds threshold and others are normal, is there a problem?"
-  ├── Yes → max by(tenant) (weakest link)
-  └── No → sum by(tenant) (cluster total)
-```
-
-**max by(tenant)** — resources with "single-point physical limits" (connection limit, disk space, replication lag).
-
-**sum by(tenant)** — assess "overall system load" (slow queries, traffic, CPU usage).
-
-### Creation Steps
-
-1. Create Recording Rule (normalization layer)
-2. Create Threshold Normalization Rule
-3. Create Alert Rule (includes `group_left` + `unless maintenance`)
-4. Create independent ConfigMap (`configmap-rules-<db>.yaml`)
-5. Add new source to projected volume in `deployment-prometheus.yaml`
-6. Add default threshold to `_defaults.yaml`
-7. Use `da-tools scaffold` to generate tenant config
-
-Complete Rule Pack structure see [rule-packs/README.md](rule-packs/README.md).
+Full Rule Pack structure (three-piece set patterns, bilingual annotation conventions, `alert_threshold:*` naming): [rule-packs/README.md](rule-packs/README.md) · [design/rule-packs.en.md](design/rule-packs.en.md).
 
 ---
 
 ## 10. FAQ
 
-### Q: How long does threshold-config take to take effect after modification?
+### Q: How long after editing threshold-config does the change take effect?
 
-Exporter reloads every 30 seconds, K8s ConfigMap propagation is about 1-2 minutes. Expected 1-3 minutes total.
+The exporter reloads every 30 seconds; K8s ConfigMap propagation takes ~1-2 minutes. Expect 1-3 minutes total.
 
-### Q: What needs to be changed when adding a new metric?
+### Q: What needs to change to add a new metric?
 
-For supported DB types (with Rule Pack): only add default value to `_defaults.yaml` + add threshold to tenant YAML. For unsupported DB: need to additionally create Recording Rule + Alert Rule + ConfigMap.
+Supported DB types (with a Rule Pack): only add the default in `_defaults.yaml` + the threshold in tenant YAML. Unsupported DBs: also need a Recording Rule + Alert Rule + ConfigMap (see [§9](#9-advanced-extending-unsupported-db-types)).
 
-### Q: Can old and new coexist during migration transition?
+### Q: Can the old and new alerts coexist during the migration window?
 
-Yes. The new architecture's alerts use different alertnames, no conflict. Recommend deploying new alerts first to observe, then remove old rules after confirming behavior matches.
+Yes. New-architecture alerts use different alertname values and don't collide. Recommended: deploy the new alerts first, observe, confirm behavioral equivalence, then remove the old rules.
 
-### Q: Can dimensional keys be configured in defaults?
+### Q: Can dimension keys be set under defaults?
 
-No. Dimensional keys are tenant-only because each tenant's queues/indices/databases are different, global defaults make no sense.
+No. Dimension keys are a tenant-only feature, because each tenant's queue / index / database differs — a global default has no useful meaning.
 
-### Q: How to specify critical for dimensional key?
+### Q: How do you mark a dimension key as critical?
 
-Use `"value:severity"` syntax: `"redis_queue_length{queue=\"orders\"}": "500:critical"`.
+Use the `"value:severity"` syntax: `"redis_queue_length{queue=\"orders\"}": "500:critical"`.
 
-### Q: How to confirm hot-reload succeeded?
+### Q: How do you confirm hot-reload succeeded?
 
 ```bash
 kubectl logs -n monitoring -l app=threshold-exporter --tail=20
-# Expected: "Config loaded (directory): X defaults, Y state_filters, Z tenants, N resolved thresholds, M resolved state filters"
+# Expected: "Config loaded (directory): X defaults, Y state_filters, Z tenants, ..."
 ```
 
 ---
 
 ## 11. Enterprise-Grade Migration — Large Tenant (1000+ rules)
 
-For large tenants with 1600+ rules, the following three-phase migration strategy is recommended:
-
-```
-Phase A              Phase B                    Phase C
-Triage Analysis      Shadow Monitoring          Switchover & Convergence
-(~1 day)             (~1-2 weeks)               (~1 day)
-┌──────────┐     ┌──────────────────────┐    ┌──────────────┐
-│ migrate   │     │ validate --watch     │    │ Remove old   │
-│ --triage  │────►│ --tolerance 0.001    │───►│ Enable golden│
-│ CSV bucket│     │ Continuous comparison│    │ diagnose     │
-└──────────┘     └──────────────────────┘    └──────────────┘
-```
-
-### Phase A: Triage Analysis
+Large tenants with 1000+ rules adopt a three-phase strategy: **Phase A Triage Analysis** (~1 day) → **Phase B Shadow Monitoring** (~1-2 weeks) → **Phase C Switchover & Convergence** (~1 day).
 
 ```bash
-# Produce CSV bucketing report — batch decision in Excel
+# Phase A: Triage bucketing (auto / review / skip / use_golden)
 da-tools migrate /data/legacy-rules.yml --triage -o /data/triage_output/
-```
 
-Tool automatically buckets rules into four categories:
-
-| Triage Action | Description | Recommended Handling |
-|---------------|------|----------|
-| `auto` | Simple expression, auto-convertible | Directly adopt |
-| `review` | Complex expression, aggregation mode guessed | Confirm in CSV |
-| `skip` | Cannot auto-convert | Pass to LLM or manual handling |
-| `use_golden` | Dictionary matched to golden standard | Use `da-tools scaffold` to set threshold directly |
-
-### Phase B: Conversion + Shadow Monitoring
-
-```bash
-# 1. Formal conversion (auto add custom_ prefix)
+# Phase B: deploy shadow rules + continuous comparison (often wrapped as a K8s Job running 1-2 weeks)
 da-tools migrate /data/legacy-rules.yml -o /data/migration_output/
-
-# 2. Deploy new rules (with shadow label, don't trigger notifications)
-kubectl apply -f migration_output/platform-recording-rules.yaml
-kubectl apply -f migration_output/platform-alert-rules.yaml
-
-# 3. Intercept shadow alerts in Alertmanager
-# Configure route: matchers: [migration_status="shadow"] → null receiver
-
-# 4. Continuously compare old and new Recording Rule values (in cluster)
 da-tools validate --mapping /data/prefix-mapping.yaml \
-                  --tolerance 0.001 --watch --interval 60 --rounds 1440
+                  --tolerance 0.001 --watch --interval 60 --rounds 1440 \
+                  --auto-detect-convergence --stability-window 5
 
-# Or local dev: first port-forward, then execute above command
-kubectl port-forward svc/prometheus 9090:9090 -n monitoring &
-```
-
-**Long-term Shadow Monitoring (K8s Job)**: Large customers should package `da-tools validate --watch` as a K8s Job running in-cluster for 1-2 weeks (e.g., `--interval 300 --rounds 4032` = every 5 minutes × 14 days). For K8s Job pattern, see [§3 Use da-tools in K8s Cluster](#use-da-tools-in-k8s-cluster).
-
-### Phase C: Switchover & Convergence
-
-After running 1-2 weeks with `da-tools validate` continuously comparing all rule pair outputs, confirm all mismatches have been investigated and resolved:
-
-**Automated Switchover **:
-
-```bash
-# Dry run preview
+# Phase C: one-command cutover after convergence
 da-tools cutover --readiness-json /data/cutover-readiness.json --tenant db-a --dry-run
-
-# Execute switchover (auto completes: stop Job → remove old rules → remove label → remove shadow route → verify)
 da-tools cutover --readiness-json /data/cutover-readiness.json --tenant db-a
+da-tools batch-diagnose && da-tools blind-spot --config-dir /data/conf.d
 ```
 
-`cutover-readiness.json` is auto-produced by `validate --auto-detect-convergence` when convergence criteria are met. If manually confirming convergence (no readiness JSON), use `--force` to skip readiness check. See [Shadow Monitoring SOP §7](shadow-monitoring-sop.md#7-退出-shadow-monitoring).
-
-> **Tip**: Before switchover, use `da-tools shadow-verify all` for a one-command full readiness check (preflight + runtime + convergence), replacing manual step-by-step verification.
-
-**Manual Switchover Steps** (if not using automated tool):
-
-1. Remove old rules
-2. Remove `migration_status: shadow` label from new rules
-3. Progressively enable golden Rule Packs to replace `custom_` rules
-4. Reference `prefix-mapping.yaml` for convergence tracking
-
-**Post-Switchover Verification**:
-
-```bash
-# Batch health check
-da-tools batch-diagnose
-
-# Monitor blind spot scan — confirm all cluster DB instances have corresponding tenant config
-da-tools blind-spot --config-dir /data/conf.d
-```
-
-`blind-spot` lists instances in cluster running exporters but not covered by tenant config (blind spots). After migration, recommend running regularly (e.g., when adding new exporters) to ensure all DB instances are protected by threshold monitoring.
-
-### Metric Dictionary Auto-Matching
-
-`da-tools migrate` (v4) has built-in heuristic dictionary (`metric-dictionary.yaml`) to auto-match traditional metrics to golden standards:
-
-```
-📖 MySQLTooManyConnections: recommend using golden standard MariaDBHighConnections (da-tools scaffold)
-```
-
-Platform Team can directly edit `scripts/tools/metric-dictionary.yaml` to expand dictionary without code changes.
-
-### Migration Automation Tools
-
-The following tools reduce manual intervention in large migrations:
-
-| Tool | Usage | Effect |
-|------|------|------|
-| **Onboard→Scaffold pipeline** | `onboard` → `scaffold --from-onboard <hints>` | One-click migration prep  |
-| **Auto-convergence detection** | `validate --auto-detect-convergence --stability-window 5` | Auto-produce `cutover-readiness.json` after N consecutive matches  |
-| **One-command cutover** | `cutover --readiness-json <path> --tenant <t>` | Single command completes full Shadow Monitoring switchover  |
-| **Post-cutover health report** | `batch-diagnose` | Auto-discover tenants → parallel `diagnose` → health score  |
-| **Blind spot discovery** | `blind-spot --config-dir <dir>` | Scan cluster targets vs tenant config for blind spots  |
-| **Rule Pack gap analysis** | `analyze-gaps --config <path>` | Three-layer matching analyze `custom_` rules to official Rule Packs  |
-| **Threshold backtest** | `backtest --git-diff --prometheus <url>` | PR threshold changes 7-day history backtest + risk level  |
-| **Config diff** | `config-diff --old-dir <old> --new-dir <new>` | Directory-level config diff blast radius report  |
-| **Config patch preview** | `patch-config --diff <tenant> <metric> <value>` | Single metric live before/after comparison  |
+Full SOP (shadow route interception, `migration_status` label, K8s Job sample, the `shadow-verify all` shortcut, convergence detection, `prefix-mapping.yaml`, Metric Dictionary golden-standard match, plus `backtest` / `config-diff` / `patch-config` and other automation tools): [Shadow Monitoring SRE SOP](shadow-monitoring-sop.en.md) · [Incremental Migration Playbook](scenarios/incremental-migration-playbook.en.md). CLI deep dive: [`cli-reference.md`](cli-reference.md) under the matching command anchor.
 
 ---
 
 ## 12. Rule Pack Dynamic Toggle
 
-All 15 Rule Pack ConfigMaps have `optional: true` in Projected Volume, allowing selective unloading.
-
-### Unload Unnecessary Rule Packs
+All 15 Rule Pack projected-volume entries use `optional: true`, allowing on-demand unmount / re-enable:
 
 ```bash
-# Large customer has own MariaDB rules, disable golden standard to avoid conflicts
+# Unmount (e.g. when you bring your own MariaDB rules and want the golden pack off)
 kubectl delete cm prometheus-rules-mariadb -n monitoring
 
-# Prometheus will gracefully ignore missing ConfigMap on next reload
-# No Prometheus restart needed
-```
-
-### Re-enable
-
-```bash
-# Recreate ConfigMap from rule-packs/ directory
+# Re-enable
 kubectl create configmap prometheus-rules-mariadb \
   --from-file=rule-pack-mariadb.yaml=rule-packs/rule-pack-mariadb.yaml \
   -n monitoring
 ```
 
-### Typical Scenarios
-
-| Customer Type | Recommended Rule Pack Setting |
-|----------|---------------------|
-| New tenant | Keep all (default) |
-| Self-supplied MariaDB rules | Disable `prometheus-rules-mariadb` |
-| Redis only | Disable MariaDB, MongoDB, Elasticsearch |
-| All self-supplied | Keep only `prometheus-rules-platform` (self-monitoring) |
+Prometheus handles this on the next reload — no pod restart needed. Typical customer-scenario decision matrix (keep all / partial unmount / fully BYO → platform self-monitoring only): [design/rule-packs.en.md](design/rule-packs.en.md). Projected Volume `optional` design rationale: [ADR-005](adr/005-projected-volume-for-rule-packs.en.md).
 
 ---
 
 ## 13. Offboarding Process — Tenant and Rule/Metric
 
-### Tenant Offboarding
-
 ```bash
-# Pre-check mode — confirm no external dependencies
-da-tools offboard db-a
+da-tools offboard db-a              # Pre-check (no external dependency)
+da-tools offboard db-a --execute    # Execute after confirmation
 
-# Execute after confirmation
-da-tools offboard db-a --execute
+da-tools deprecate mysql_slave_lag             # Preview
+da-tools deprecate mysql_slave_lag --execute   # Apply changes
+da-tools deprecate mysql_slave_lag mysql_innodb_buffer_pool --execute  # Batch
 ```
 
-Pre-check items: config file existence, cross-file reference scanning, configured metrics list.
+Offboarding effects: threshold-exporter clears thresholds on next reload (30s) → Prometheus drops the vector on next scrape → related alerts resolve automatically. Pre-check details and the three-step automation (set `"disable"` in `_defaults.yaml` → sweep tenant config residue → emit ConfigMap cleanup guidance): [`cli-reference.md#offboard`](cli-reference.md#offboard) · [`#deprecate`](cli-reference.md#deprecate).
 
-After offboarding effects:
-- threshold-exporter auto-clears thresholds on next reload (30s)
-- Prometheus vectors disappear on next scrape
-- All related Alerts auto-resolve
-- **Does not affect other Tenants**
-
-### Rule/Metric Offboarding
-
-```bash
-# Preview mode
-da-tools deprecate mysql_slave_lag
-
-# Execute (modify files)
-da-tools deprecate mysql_slave_lag --execute
-
-# Batch processing
-da-tools deprecate mysql_slave_lag mysql_innodb_buffer_pool --execute
-```
-
-Three-step automation:
-1. Set to `"disable"` in `_defaults.yaml`
-2. Scan and clean residuals in all tenant configs
-3. Produce ConfigMap cleanup guidance (manual execution in next Release Cycle)
+---
 
 ## Related Resources
 
 | Resource | Relevance |
 |----------|-----------|
-| ["Migration Guide — 遷移指南"](./migration-guide.md) | ⭐⭐⭐ |
 | **Advanced migration scenarios (not covered in this guide)** | |
-| [Multi-System Migration Playbook](scenarios/multi-system-migration-playbook.en.md) (3-system: Prom→VM + rules + AM simultaneously) | ⭐⭐⭐ |
-| [Staged Adoption Lifecycle](scenarios/staged-adoption-guide.en.md) (post-cutover `custom_*` → golden) | ⭐⭐⭐ |
-| [Migration Troubleshooting Checklist](integration/troubleshooting-checklist.en.md) (migration-phase symptom-keyed runbook) | ⭐⭐⭐ |
-| [VictoriaMetrics Integration](integration/victoriametrics-integration.en.md) (VM stack integration guide) | ⭐⭐ |
-| **Foundation** | |
-| ["Tenant Quick Start Guide"](getting-started/for-tenants.en.md) | ⭐⭐ |
-| ["AST Migration Engine Architecture"] | ⭐⭐ |
-| ["da-tools CLI Reference"] | ⭐⭐ |
-| ["Domain Expert (DBA) Quick Start Guide"](getting-started/for-domain-experts.en.md) | ⭐⭐ |
-| ["Platform Engineer Quick Start Guide"](getting-started/for-platform-engineers.en.md) | ⭐⭐ |
-| ["Shadow Monitoring SRE SOP"] | ⭐⭐ |
+| [Multi-System Migration Playbook](scenarios/multi-system-migration-playbook.en.md) (3-system: Prom→VM + rules + AM simultaneous swap) | ⭐⭐⭐ |
+| [Incremental Migration Playbook](scenarios/incremental-migration-playbook.en.md) (four-phase zero-downtime runbook) | ⭐⭐⭐ |
+| [Staged Adoption Lifecycle](scenarios/staged-adoption-guide.en.md) (post-cutover `custom_*` → golden progression) | ⭐⭐⭐ |
+| [Migration Troubleshooting Checklist](integration/troubleshooting-checklist.en.md) (symptom-keyed runbook for the migration process) | ⭐⭐⭐ |
+| [Shadow Monitoring SRE SOP](./shadow-monitoring-sop.en.md) | ⭐⭐⭐ |
+| **Tool & Engine Reference** | |
+| [`migration-toolkit-installation.md`](migration-toolkit-installation.en.md) (three delivery paths + cosign keyless verification) | ⭐⭐⭐ |
+| [`cli-reference.md`](./cli-reference.md) (all `da-tools` commands + flag matrix) | ⭐⭐⭐ |
+| [AST Migration Engine Architecture](./migration-engine.en.md) (promql-parser + heuristics + Auto-Suppression) | ⭐⭐ |
+| [VictoriaMetrics Integration](integration/victoriametrics-integration.en.md) (VM stack integration walkthrough) | ⭐⭐ |
+| **Role Quick Starts** | |
+| [Tenant Quick Start](getting-started/for-tenants.en.md) | ⭐⭐ |
+| [Domain Expert (DBA) Quick Start](getting-started/for-domain-experts.en.md) | ⭐⭐ |
+| [Platform Engineer Quick Start](getting-started/for-platform-engineers.en.md) | ⭐⭐ |
+| [Deployment Decision Matrix](getting-started/decision-matrix.en.md) (ConfigMap vs Operator CRD) | ⭐⭐ |
