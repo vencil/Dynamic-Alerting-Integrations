@@ -24,6 +24,17 @@ from typing import List
 
 import yaml
 
+# Reuse the atomic-write helper already shared by generate_doc_map.py /
+# generate_tool_map.py. It defaults to `newline="\n"` (forces LF so the same
+# regen run on Windows and Linux produces byte-identical output — without it,
+# Path.write_text translates "\n" to os.linesep and Windows local invocations
+# emit CRLF, creating noise diffs even though .gitattributes normalises on
+# commit) and writes via a sibling .tmp + os.replace, defending against FUSE
+# Trap #60 mid-flush corruption.
+_TOOLS_DX = Path(__file__).resolve().parent.parent / "tools" / "dx"
+sys.path.insert(0, str(_TOOLS_DX))
+from _atomic_write import atomic_write_text  # noqa: E402
+
 # Make stdout tolerate non-ASCII on Windows shells (cp950, cp1252).
 if hasattr(sys.stdout, "reconfigure"):
     try:
@@ -222,7 +233,7 @@ def main() -> int:
     if new == current:
         print(f"OK: no change ({len(entries)} entries)")
     else:
-        args.target.write_text(new, encoding="utf-8")
+        atomic_write_text(args.target, new)
         print(f"WROTE: {rel_target} ({len(entries)} entries)")
     return 0
 

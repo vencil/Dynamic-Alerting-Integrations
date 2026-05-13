@@ -315,6 +315,24 @@ class TestMainCli:
         assert "no change" in proc.stdout
         assert target.read_text(encoding="utf-8") == once
 
+    def test_write_forces_lf_newlines(self, tiny_repo):
+        """Regen output must be LF on every platform — see PR #475 self-review
+        issue A. Without atomic_write_text(newline='\\n'), Path.write_text on
+        Windows translates '\\n' into '\\r\\n' and the same regen produces
+        byte-different output across hosts; `.gitattributes eol=lf` masks the
+        diff at commit time but the working-copy `--check` step still drifts.
+        """
+        adr_dir, target = tiny_repo
+        self._run("--write", "--adr-dir", str(adr_dir), "--target", str(target))
+        # Read in binary mode to bypass Python's universal-newlines translation;
+        # we want to see exactly what bytes hit disk.
+        raw = target.read_bytes()
+        assert b"\r\n" not in raw, (
+            "Regenerated file contains CRLF — atomic_write_text(newline='\\n') "
+            "is supposed to force LF on every platform."
+        )
+        assert raw.endswith(b"\n"), "File should terminate with a final LF."
+
     def test_mode_flag_required(self, tiny_repo):
         adr_dir, target = tiny_repo
         # Neither --check nor --write → argparse exit code 2.
