@@ -307,6 +307,41 @@ spec:
 
 ---
 
+## 6. ADR 索引 (Architecture Decision Records)
+
+> 自動產生 — `scripts/dx/generate_adr_index.py` 從 `docs/adr/` frontmatter + `## 狀態` 區塊重新渲染。**新增或修改 ADR 後跑 `make adr-index`**；pre-commit drift gate 會擋 stale 表。
+
+<!-- ADR_INDEX_START -->
+| ADR | 標題 | 狀態 | 版本 |
+|-----|------|------|------|
+| ADR-001 | [嚴重度 Dedup 採用 Inhibit 規則](adr/001-severity-dedup-via-inhibit.md) | ✅ Accepted | v1.0.0 |
+| ADR-002 | [OCI Registry 替代 ChartMuseum](adr/002-oci-registry-over-chartmuseum.md) | ✅ Accepted | v1.12.0 |
+| ADR-003 | [Sentinel Alert 模式](adr/003-sentinel-alert-pattern.md) | ✅ Accepted | v1.0.0 |
+| ADR-004 | [Federation 架構——中央 Exporter 優先](adr/004-federation-central-exporter-first.md) | ✅ Accepted | v1.12.0 |
+| ADR-005 | [投影卷掛載 Rule Pack](adr/005-projected-volume-for-rule-packs.md) | ✅ Accepted | v1.0.0 |
+| ADR-006 | [租戶映射拓撲 (1:1, N:1, 1:N)](adr/006-tenant-mapping-topologies.md) | ✅ Accepted | v2.1.0 |
+| ADR-007 | [跨域路由設定檔與域策略](adr/007-cross-domain-routing-profiles.md) | ✅ Accepted | v2.1.0 |
+| ADR-008 | [Operator-Native 整合路徑](adr/008-operator-native-integration-path.md) | ✅ Accepted | v2.3.0 |
+| ADR-009 | [Tenant Manager CRUD API 架構](adr/009-tenant-manager-crud-api.md) | ✅ Accepted | v2.4.0 |
+| ADR-010 | [Multi-Tenant Grouping Architecture](adr/010-multi-tenant-grouping.md) | ✅ Accepted | v2.5.0 |
+| ADR-011 | [PR-based Write-back 模式](adr/011-pr-based-write-back.md) | ✅ Accepted | v2.6.0 |
+| ADR-012 | [threshold-heatmap 色盲補丁 — 結構化 severity 返回值](adr/012-colorblind-hotfix-structured-severity-return.md) | ✅ Accepted | v2.7.0 |
+| ADR-013 | [Component Health Scanner — Tier 評分演算法與 token_density 輔助指標](adr/013-component-health-token-density-metric.md) | ✅ Accepted | v2.7.0 |
+| ADR-014 | [TECH-DEBT 類別與 REG Budget 隔離](adr/014-tech-debt-category-budget-isolation.md) | ✅ Accepted | v2.7.0 |
+| ADR-015 | [wizard.jsx design token 遷移採 Option A（Tailwind arbitrary value 全改寫）](adr/015-wizard-arbitrary-value-token-migration.md) | ✅ Accepted | v2.7.0 |
+| ADR-016 | [全面改用 `[data-theme]` 單軌 dark mode，移除 Tailwind `dark:` 變體](adr/016-data-theme-single-track-dark-mode.md) | ✅ Accepted | v2.7.0 |
+| ADR-017 | [conf.d/ 目錄分層 + 混合模式 + 遷移策略](adr/017-conf-d-directory-hierarchy-mixed-mode.md) | ✅ Accepted | v2.7.0 |
+| ADR-018 | [_defaults.yaml 繼承語意 + dual-hash hot-reload](adr/018-defaults-yaml-inheritance-dual-hash.md) | ✅ Accepted | v2.7.0 |
+| ADR-019 | [Profile-as-Directory-Default](adr/019-profile-as-directory-default.md) | 🟢 Accepted | v2.8.0 |
+| ADR-020 | [Planning SSOT — Frontmatter Contract + Discovery-based Index](adr/020-planning-ssot.md) | ✅ Accepted | v2.8.0 |
+| ADR-021 | [Tenant Federation — Label-Injection Proxy over Self-Built Endpoint](adr/021-tenant-federation.md) | 🟡 Proposed | v2.8.0 |
+
+<!-- ADR_INDEX_END -->
+
+ADR 完整檔案見 [`docs/adr/`](adr/)；EN mirror 位於每份 ADR 的 `.en.md` sibling（ZH 為 SSOT primary）。
+
+---
+
 ## 拆分文件 (Extracted Topic Documents)
 
 以下章節已拆分為獨立文件，便於角色聚焦閱讀：

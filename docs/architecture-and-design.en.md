@@ -310,6 +310,14 @@ spec:
 
 ---
 
+## 6. ADR Index (Architecture Decision Records)
+
+> Per ZH-primary SSOT policy, the live ADR index table is rendered into [`architecture-and-design.md`](architecture-and-design.md#6-adr-索引-architecture-decision-records) by `scripts/dx/generate_adr_index.py`. ADR source files live in [`docs/adr/`](adr/); each ADR has an `.en.md` sibling for the English translation.
+
+ADR file naming: `NNN-kebab-case.md` (ZH) + `NNN-kebab-case.en.md` (EN). Status is recorded in each ADR's `## Status` (`## 狀態` in ZH) section. To refresh the auto-rendered table after editing an ADR, run `make adr-index`; CI / pre-commit `adr-index-check` blocks merges with stale tables.
+
+---
+
 ## Extracted Topic Documents
 
 The following sections have been extracted into standalone documents for focused, role-based reading:
