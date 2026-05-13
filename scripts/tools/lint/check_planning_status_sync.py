@@ -282,6 +282,31 @@ def _format_json(hits: List[TrailerHit], issues: List[ValidationIssue]) -> str:
     return json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
 
 
+def _emit_gha_warnings(issues: List[ValidationIssue]) -> None:
+    """Emit `::warning::` workflow-command lines so issues render as inline
+    annotations on the GitHub Actions PR check UI (not just buried in step log).
+
+    Without these, soft-warn mode (exit 0) is invisible — the check shows
+    green and the warnings only surface if a reviewer clicks into the step
+    output. The GHA workflow-command syntax is plaintext + a magic prefix;
+    runs as a no-op outside GHA (the runner is what interprets it).
+
+    Newlines + commas need URL-escaping per
+    https://docs.github.com/en/actions/using-workflows/workflow-commands-for-github-actions
+    """
+    for issue in issues:
+        # Single-line %xx-escape for newlines / commas / colons that would
+        # otherwise terminate the workflow command.
+        msg = (
+            issue.detail
+            .replace("%", "%25")
+            .replace("\r", "%0D")
+            .replace("\n", "%0A")
+        )
+        # `title=` shows up as the annotation header in the PR Checks tab.
+        print(f"::warning title=planning-sync ({issue.kind})::{issue.id}: {msg}")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description="Validate PR trailers ↔ planning frontmatter sync (ADR-020 Layer 3).",
@@ -325,6 +350,13 @@ def main() -> int:
     report = _format_json(hits, issues) if args.json else _format_human(hits, issues)
     sink = sys.stderr if issues else sys.stdout
     sink.write(report)
+
+    # When running inside GitHub Actions, additionally emit `::warning::`
+    # workflow-command lines so each issue surfaces as a UI annotation on the
+    # PR Checks tab — soft-warn is otherwise invisible (the check is green and
+    # the stderr message is buried in the step log).
+    if issues and os.environ.get("GITHUB_ACTIONS") == "true":
+        _emit_gha_warnings(issues)
 
     if issues and (args.strict or args.ci):
         return 1

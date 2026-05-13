@@ -179,6 +179,54 @@ class TestExtractTrailers:
         with pytest.raises(cps.CheckError, match="base ref"):
             cps.extract_trailers("origin/nonexistent", repo_root=tmp_git_repo)
 
+    def test_comma_separated_multi_ids_on_single_trailer_line(self, tmp_git_repo):
+        """Captures a real authoring style: `Resolves: TRK-228, TRK-229`. The
+        parser must split tokens by whitespace and strip trailing `,;`.
+
+        Caught during PR #481 self-review — pinned here so a future regex
+        regression doesn't silently drop one of the IDs.
+        """
+        _commit(
+            tmp_git_repo,
+            "feat: x\n\nbody\n\nResolves: TRK-228, TRK-229\n",
+        )
+        ids = sorted(h.id for h in cps.extract_trailers("origin/main", repo_root=tmp_git_repo))
+        assert ids == ["TRK-228", "TRK-229"]
+
+
+# ---------------------------------------------------------------------------
+# GitHub Actions inline annotations
+# ---------------------------------------------------------------------------
+class TestGhaAnnotations:
+    """Soft-warn mode is invisible without `::warning::` workflow commands —
+    pinned during PR #481 self-review.
+    """
+
+    def test_emits_workflow_command_per_issue(self, capsys):
+        issues = [
+            cps.ValidationIssue(id="TRK-1", kind="status-not-done", detail="foo"),
+            cps.ValidationIssue(id="TRK-2", kind="missing-entry", detail="bar"),
+        ]
+        cps._emit_gha_warnings(issues)
+        out = capsys.readouterr().out
+        assert "::warning title=planning-sync (status-not-done)::TRK-1: foo" in out
+        assert "::warning title=planning-sync (missing-entry)::TRK-2: bar" in out
+
+    def test_escapes_newlines_and_percent_in_detail(self, capsys):
+        """`\\n` and `%` would otherwise terminate / corrupt the GHA command."""
+        issues = [
+            cps.ValidationIssue(
+                id="TRK-9",
+                kind="status-not-done",
+                detail="multi\nline\n%detail",
+            ),
+        ]
+        cps._emit_gha_warnings(issues)
+        out = capsys.readouterr().out
+        assert "%0A" in out  # newlines escaped
+        assert "%25" in out  # literal % escaped before %0A substitution
+        assert "\n" not in out.rstrip("\n")  # no raw newlines mid-line
+
 
 # ---------------------------------------------------------------------------
 # validate_sync — pure function, three failure modes
