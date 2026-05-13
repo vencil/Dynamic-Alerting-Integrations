@@ -1,0 +1,68 @@
+name: Planning Status Sync
+
+# Runs the `check_planning_status_sync.py` lint on every PR. Validates that
+# `Resolves|Closes|Fixes <ID>` commit trailers in the PR range point at planning
+# entries whose frontmatter is consistent (`status: done` + `pr_ref:` matching
+# the current PR number).
+#
+# Default behaviour is **soft-warn** (exit 0 with annotations) per ADR-020
+# Layer 3 — the check appears as a neutral indicator on the PR, not a red
+# block. Flip on `--strict` once contributor adoption is high enough that
+# false-positives have decayed.
+#
+# CRITICAL: `actions/checkout@v4` MUST set `fetch-depth: 0` so that
+# `<base>..HEAD` resolves. Without it, `git log` fatals with "unknown revision"
+# and the lint silently returns no findings.
+
+on:
+  pull_request:
+    # `edited` lets PR-body amendments re-trigger the lint without close/reopen.
+    types: [opened, synchronize, reopened, edited]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  planning-status-sync:
+    name: Validate planning trailers ↔ frontmatter
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Required for `git log origin/main..HEAD` trailer extraction.
+          # Without this the default shallow checkout (1 commit) makes the
+          # range-spec unresolvable and the lint emits no findings — silently
+          # negating the gate. See ADR-020 §Implementation gotcha + #379
+          # chunk 2b spec.
+          fetch-depth: 0
+          # Probe the merge base, not the PR head, so we have the same commit
+          # set the maintainer will see post-merge.
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      - name: Install dependencies
+        run: pip install pyyaml
+
+      - name: Resolve base ref
+        id: base
+        run: |
+          BASE_BRANCH="${{ github.event.pull_request.base.ref }}"
+          # `actions/checkout` does not auto-create an `origin/<branch>` ref for
+          # the base; fetch it explicitly so `--base origin/${BASE_BRANCH}`
+          # works inside the lint.
+          git fetch --no-tags --depth=0 origin "${BASE_BRANCH}"
+          echo "ref=origin/${BASE_BRANCH}" >> "$GITHUB_OUTPUT"
+
+      - name: Check planning status sync
+        # Soft-warn by default (exit 0 with annotations). Flip `--strict` on
+        # once adoption stabilises.
+        run: |
+          python3 -X utf8 scripts/tools/lint/check_planning_status_sync.py \
+            --base "${{ steps.base.outputs.ref }}" \
+            --pr-number "${{ github.event.pull_request.number }}"
