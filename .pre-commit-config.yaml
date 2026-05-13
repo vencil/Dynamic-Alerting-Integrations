@@ -134,6 +134,14 @@ repos:
         files: ^(docs/adr/[0-9].*\.md|docs/architecture-and-design\.md|scripts/dx/generate_adr_index\.py)$
         additional_dependencies: ['pyyaml']
 
+      - id: planning-index-check
+        name: Planning index drift in docs/internal/planning-index.md
+        entry: python3 -X utf8 scripts/dx/generate_planning_index.py --check
+        language: python
+        pass_filenames: false
+        files: ^(docs/.*\.md|flaky-tests\.yaml|scripts/dx/generate_planning_index\.py|docs/internal/planning-index\.md)$
+        additional_dependencies: ['pyyaml']
+
       - id: rule-pack-stats-check
         name: Rule Pack stats drift
         entry: python3 -X utf8 scripts/tools/dx/generate_rule_pack_stats.py --check
