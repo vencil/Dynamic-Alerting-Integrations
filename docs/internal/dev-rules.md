@@ -371,7 +371,7 @@ tools:
 
 **原因**：沒有 trailer 時 backlog frontmatter 的 `status:` 與 git log 失聯，下次 session 會把已修項目當新項目再 audit 一次。
 
-**Namespace（v2.8.1）+ 自動化攔截**：原 `TECH-DEBT-NNN` / `TD-NN` / `HA-NN` / `REG-NNN` 統一為 `TRK-NNN`（[ADR-020](../adr/020-planning-ssot.md) Option C；對映見 [`planning-id-mapping.md`](planning-id-mapping.md)）；過渡期舊 ID 仍 work，CI 自動翻譯但 warn。Lint `check-techdebt-drift` 因 `known-regressions.md` 已 phantom-delete 變 no-op，後續由 [issue #379](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/379) chunk 2b `check_planning_status_sync.py` 取代。純文件 / 純 refactor / 跨多項目批次清理可不寫 trailer，改在 body 用 prose 列 IDs。
+**Namespace + frontmatter（v2.8.1）**：原 `TECH-DEBT-NNN` / `TD-NN` / `HA-NN` / `REG-NNN` 統一為 `TRK-NNN`（[ADR-020](../adr/020-planning-ssot.md) Option C；對映見 [`planning-id-mapping.md`](planning-id-mapping.md)）；過渡期舊 ID 仍 work，CI 自動翻譯但 warn。新 planning entry 必填 frontmatter `id: TRK-NNN` / `tracking_kind` / `status`，done 後補 `pr_ref:`（完整 schema + 三 namespace 平行政策見 [ADR-020 §Frontmatter Contract / §Namespace Policy](../adr/020-planning-ssot.md#三層設計)）；chunk 2a `generate_planning_index.py` 待落地後會掃 frontmatter 產 derived view。Lint `check-techdebt-drift` 已 phantom-no-op，由 [issue #379](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/379) chunk 2b `check_planning_status_sync.py` 取代。純文件 / 純 refactor / 跨多項目批次清理可不寫 trailer，改在 body 用 prose 列 IDs。
 
 ### P2. PR Scope Drift（由 `check_pr_scope_drift` hook 強制，v2.8.0 Phase .a 新增）
 

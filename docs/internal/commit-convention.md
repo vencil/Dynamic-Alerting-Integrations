@@ -83,6 +83,73 @@ A brief, imperative description of the change (lowercase, no period):
 - ❌ "Added validation"
 - ❌ "Fixed cardinality limit check."
 
+## Footer / Trailers
+
+Optional trailers go on separate lines after a blank line below the body. Use them for tracking-system links and authorship.
+
+### Planning ID trailer (`Resolves TRK-NNN`) — v2.8.1+ namespace policy
+
+When a commit resolves a registered tracking item, include a trailer naming the ID:
+
+```
+Resolves TRK-228
+Closes TRK-103
+Fixes Trap #12
+```
+
+The verb (`Resolves` / `Closes` / `Fixes` / `Fix`) is **case-insensitive**; the ID itself must be `\b`-bounded so that `TRK-1` does not eat `TRK-100`. CI's `check_planning_status_sync.py` (chunk 2b, pending) verifies that the matching `frontmatter status:` flips to `done` and the `pr_ref:` field is populated in the same PR.
+
+**Namespace rules (effective v2.8.1, per [ADR-020 §Namespace Policy](../adr/020-planning-ssot.md#namespace-policy三-namespace-共存)):**
+
+- **`TRK-NNN`** is the **only** namespace for new tracking items — unifies the legacy `TECH-DEBT-NNN` / `TD-NN` / `HA-NN` / `REG-NN` four-way split. Numeric ranges encode the source namespace (see [`planning-id-mapping.md`](planning-id-mapping.md) §編號分區).
+- Legacy IDs in old commit messages / external citations still work during the transition window — CI auto-translates via the mapping doc but emits a warning. New commits must use `TRK-NNN`.
+- **`ADR-NNN`** (architecture decision history) and **`S#NNN`** (sprint ledger) remain independent namespaces — referencing them in commit body is informational, **no auto-close behaviour** (they are not backlog items).
+
+**Edge cases that do not need a trailer:**
+
+- Pure refactors / pure docs touch-ups not tied to a registered TRK item
+- Cross-cutting cleanup spanning many TRK items (list the IDs in prose in the body instead)
+- Hot-fix / revert commits (refer back to the original PR / commit hash)
+
+> **See also:** [`dev-rules.md` §P1](dev-rules.md) for the rationale (why the trailer matters for `status:` ↔ git-log linkage) and the frontmatter spec the trailer is paired with.
+
+### GitHub issue auto-close
+
+GitHub itself parses these verbs against `#NNN` style references to auto-close issues on PR merge:
+
+```
+Fixes #228
+Closes #242
+```
+
+This is **orthogonal** to the TRK trailer above — issues live in GitHub; TRK items live in the repo. A PR commonly carries both:
+
+```
+Resolves TRK-228
+Fixes #242
+```
+
+### Co-Authorship
+
+For paired / agent-assisted work:
+
+```
+Co-Authored-By: Name <email>
+```
+
+Example complete commit message:
+
+```
+fix(exporter): tighten cardinality guard for nested group_left joins
+
+Adds an upper bound on cross-product cardinality during PromQL rule
+evaluation so that misbehaving rule packs cannot OOM the exporter.
+
+Resolves TRK-228
+Fixes #242
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+```
+
 ## Common Scenarios
 
 ### Adding a Feature
