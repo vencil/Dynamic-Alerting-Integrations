@@ -55,8 +55,10 @@ jobs:
           BASE_BRANCH="${{ github.event.pull_request.base.ref }}"
           # `actions/checkout` does not auto-create an `origin/<branch>` ref for
           # the base; fetch it explicitly so `--base origin/${BASE_BRANCH}`
-          # works inside the lint.
-          git fetch --no-tags --depth=0 origin "${BASE_BRANCH}"
+          # works inside the lint. `--depth=0` is invalid (depth needs a
+          # positive integer); we rely on the unshallow state already set up
+          # by `fetch-depth: 0` in the checkout step.
+          git fetch --no-tags origin "${BASE_BRANCH}"
           echo "ref=origin/${BASE_BRANCH}" >> "$GITHUB_OUTPUT"
 
       - name: Check planning status sync
