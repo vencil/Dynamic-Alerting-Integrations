@@ -88,25 +88,43 @@ SOT 在 [`dx-tooling-backlog.md`](dx-tooling-backlog.md)。
 | TECH-DEBT-007 | TRK-207 | design-system token canonical 值校正（次要文字 `#475569`）|
 | TECH-DEBT-008 | TRK-208 | form element accessible name CRITICAL violation |
 | TECH-DEBT-009 | TRK-209 | (dev-rules 縮寫引用 `-009` — early-era) |
+| TECH-DEBT-010 | TRK-210 | known-regressions registry parser fixture（`test_check_techdebt_drift.py`；historical / phantom-no-op lint 將由 chunk 2b 取代）|
 | TECH-DEBT-011 | TRK-211 | (dev-rules 縮寫引用 `-011` — Day 5 runtime axe a11y violation) |
 | TECH-DEBT-012 | TRK-212 | (dev-rules 縮寫引用 `-012` — 同上) |
 | TECH-DEBT-016 | TRK-216 | MetricCard subStyle 雙背景 dark mode |
 | TECH-DEBT-017 | TRK-217 | WatchLoop time.Sleep flake → FakeClock 結構性修復（v2.8.0 PRs #363–#369）|
+| TECH-DEBT-018 | TRK-218 | tenant-api async path 測試補洞（[issue #223](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/223)）|
+| TECH-DEBT-019 | TRK-219 | tenant-api WebSocket hub housekeeping（含後續可被刪除的 dead-path 標記）|
+| TECH-DEBT-020 | TRK-220 | Playwright axe-core a11y spec 從 6 條擴展到 23 條（[issue #225](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/225)；tenant-manager / saved-views 等多個面板的 WCAG 2.1 掃描皆屬此擴展）|
 | TECH-DEBT-021 | TRK-221 | `make api-docs` Makefile target / tenant-api swag → OpenAPI spec pipeline（v2.8.0 [#226](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/226)）|
 | TECH-DEBT-022 ≡ TD-022 | TRK-222 | schemathesis 契約測試（[issue #231](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/231)）|
-| TD-028 | TRK-228 | `/api/v1/me` JSON wire shape nil-vs-empty-array drift（[issue #242](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/242)）|
-| TD-030 | TRK-230 | Portal ESM build + Vitest（[issue #247](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/247) Option C sweep）|
+| TD-024 | TRK-224 | tenant-api taskmanager / authz 測試以 `pollUntilTerminal` 取代 50ms blind sleep（async terminal-state assertion）|
+| TECH-DEBT-026 | TRK-226 | nightly Go race detector `-count=10`（[issue #235](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/235)；`.github/workflows/nightly-race.yaml`）|
+| TD-028 ≡ TECH-DEBT-028 | TRK-228 | `/api/v1/me` JSON wire shape nil-vs-empty-array drift（[issue #242](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/242)）|
+| TD-029 ≡ TECH-DEBT-029 | TRK-229 | (historic alias slot; 0 current code refs — 保留供舊 PR / commit message 引用對應) |
+| TD-030 ≡ TECH-DEBT-030 | TRK-230 | Portal ESM build + Vitest（[issue #247](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/247) Option C sweep）|
 | TD-030a | TRK-230a | sub-PR a — foundation |
 | TD-030b | TRK-230b | sub-PR b — first wave migration |
+| TD-030c | TRK-230c | sub-PR c — `_common/components/` ESM exports（EmptyState、ErrorBoundary 等）|
+| TD-030e | TRK-230e | sub-PR e — cicd-setup-wizard fixtures + generators ESM exports（後在 TD-030z 移除）|
+| TD-030f | TRK-230f | sub-PR f — `AlertPreviewTab` / `glossary.jsx` ESM imports（jsx-loader `transformImports` 改寫為 window read）|
 | TD-030z | TRK-230z | sub-PR z — `jsx-loader.html` 最終下架 |
+| TD-031 | TRK-231 | (historic; 0 current code refs — 保留供舊 PR / commit message 引用對應) |
 | TD-032 | TRK-232 | Portal E2E coverage push（v2.8.0 LL）|
+| TD-032a | TRK-232a | sub-PR a — `check_portal_bundle_size.py` lint（post TD-030 Option C migration）|
+| TD-032b | TRK-232b | sub-PR b — cicd-setup-wizard generators property + unit tests |
+| TD-032c | TRK-232c | sub-PR c — Alert Noise Analyzer / Alert Simulator E2E smoke specs |
+| TD-032d | TRK-232d | sub-PR d — Migration ROI Calculator / Migration Dry-Run Simulator E2E smoke specs |
 | TD-032e | TRK-232e | sub-PR e — debug iteration |
 | TD-033 | TRK-233 | PR-E rebuild ESM dist regression（chunk-split eval order）|
 | TD-034 | TRK-234 | （配對 TRK-233 codify S6 規則）|
 | TD-035 | TRK-235 | `skipA11y: true` debt 藏起來，audit 顯示 13/17 多餘 |
 | TD-036 | TRK-236 | pre-commit hook（Plan C）擋 `^const \w+\s*=\s*window\.__\w+\s*;` |
+| TD-037 | TRK-237 | pre-commit hook S6 — 禁 module-scope `const X = window.__X;` no-fallback reads（hook id `window-x-no-fallback-check`，entry `check_window_x_no_fallback.py`；TRK-236 為前身 draft "Plan C"，已收編於此 hook）|
+| TD-038 | TRK-238 | Visual regression baseline 擴張 — Playwright `toHaveScreenshot` 5 staged baselines（Plan A 跨類別覆蓋）|
 | TD-039 | TRK-239 | `check_dist_source_consistency.py` + `check_skip_a11y_justification.py`（兩支 lint **docstring 仍寫 `TD-039`** — 它們也是 `tool-map.md` 自動生成的來源；tool-map 因此沿用 `TD-039`。重寫 docstring 會牽動 `check_skip_a11y_justification.py` 的 `RE_JUSTIFICATION = r"//\s*skipA11y:\s*TD-\d+\b"` 正則 + 所有 E2E spec 內已存在的 `// skipA11y: TD-040 ...` 註解；留待 chunk 2b 引入新 lint 時一併處理）|
 | TD-040 | TRK-240 | `// skipA11y: TD-040` justification ID（同上，docstring + 正則 + spec 註解整套留待 chunk 2b）|
+| TD-042 ≡ TECH-DEBT-042 | TRK-242 | monorepo restructure — portal source 從 `docs/*` 遷至 `tools/portal/*`；`check_dist_source_consistency.py` + `.pre-commit-config.yaml` file-hygiene exclude 也帶有此標 |
 
 ## 不在 mapping 範圍
 
@@ -114,6 +132,7 @@ SOT 在 [`dx-tooling-backlog.md`](dx-tooling-backlog.md)。
 - **`S#NNN`** — sprint planning ledger，保留原 namespace（時序語意不同於 TRK）
 - **`Trap #N`**（[`windows-mcp-playbook.md`](windows-mcp-playbook.md)）— 環境 trap catalogue，獨立 namespace
 - **`pitfall #N`**（[`windows-mcp-playbook.md`](windows-mcp-playbook.md)）— 同上
+- **`TECH-DEBT-0071`**（合成 fixture）— `tests/lint/test_check_techdebt_drift.py` 的 boundary-regex 測試字串，驗證 `\bTECH-DEBT-007\b` 不會誤吃 `-0071`。**非真實 ticket**，不分配 TRK
 
 ## 引用慣例（v2.8.1+）
 
