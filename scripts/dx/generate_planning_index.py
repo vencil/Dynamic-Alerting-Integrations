@@ -81,8 +81,15 @@ FRONTMATTER_RE = re.compile(r"\A---\s*\n(.*?)\n---\s*\n", re.DOTALL)
 
 # Embedded YAML code block after an H2/H3 heading. Captures the YAML body for downstream
 # parsing. Heading line + optional blank lines + `\`\`\`yaml\n<body>\n\`\`\``.
+#
+# `(?P<heading>[^\n]+?)` (NOT `.+?`) is critical: with `re.DOTALL`, plain `.+?` matches
+# newlines too, so a non-greedy backtrack lets the heading group span MULTIPLE H2/H3
+# sections and arbitrary prose looking for the next ```yaml fence. That bug surfaced in
+# #379 chunk 3 — the planning-index title cell rendered as the entire content from the
+# first H2 in the file all the way down to the first TRK section that had a yaml block.
+# Constraining heading to non-newline chars confines the match to one line.
 SECTION_YAML_RE = re.compile(
-    r"^(#{2,3})\s+(?P<heading>.+?)\s*\n+```ya?ml\s*\n(?P<body>.*?)\n```\s*$",
+    r"^(#{2,3})\s+(?P<heading>[^\n]+?)\s*\n+```ya?ml\s*\n(?P<body>.*?)\n```\s*$",
     re.DOTALL | re.MULTILINE,
 )
 
