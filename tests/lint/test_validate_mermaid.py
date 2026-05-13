@@ -156,9 +156,17 @@ class TestValidateFile:
     # ── unique edge cases (merged from _extended) ───────────────────────
 
     @pytest.mark.skipif(
-        sys.platform == "win32",
-        reason="os.chmod(0o000) is a no-op on Windows NTFS (uses ACLs, not POSIX mode); "
-               "the file stays readable and this test's read-error path cannot be exercised.",
+        sys.platform == "win32"
+        or (hasattr(os, "geteuid") and os.geteuid() == 0),
+        reason="os.chmod(0o000) is a no-op in two environments where the read "
+               "permission bit is bypassed and the file stays readable: "
+               "(1) Windows NTFS uses ACLs, not POSIX mode bits — the chmod "
+               "call is silently dropped; "
+               "(2) Linux root (the dev-container default user, plus most CI "
+               "runners) — the kernel grants superuser access regardless of "
+               "mode bits. The test's read-error path simply cannot be exercised "
+               "in either case. Caught when PR #482's full pytest run tripped "
+               "this assertion under docker-root.",
     )
     def test_file_read_error(self, tmp_path):
         """Non-readable file returns error."""
