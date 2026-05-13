@@ -158,9 +158,54 @@ curl -s http://localhost:8080/api/v1/config | python3 -m json.tool
 
 ## 4. 實戰範例：五種遷移場景
 
-以 Percona MariaDB Alert Rules 為範本展示 5 種常見遷移模式（基本數值比較 / 多層嚴重度 / Replication Lag / Rate 指標 / 百分比計算）。每種場景套用同一個三件套模板，只改指標名稱與 Tenant Config 的 key；平台側 Alert Rule 結構始終為 `(metric_recording) > on(tenant) group_left (threshold) unless on(tenant) (maintenance == 1)`。
+以 Percona MariaDB Alert Rules 為範本展示 5 種常見遷移模式。每種場景套用同一個三件套模板，只改指標名稱與 Tenant Config 的 key；平台側 Alert Rule 結構始終為 `(metric_recording) > on(tenant) group_left (threshold) unless on(tenant) (maintenance == 1)`。
 
-完整 5 場景對照表（Recording Rule 寫法、Tenant Config 範例、`sum` vs `max` 選擇理由）+ 實際黃金規則樣本：[Rule Packs ALERT-REFERENCE](rule-packs/ALERT-REFERENCE.md)。
+### 4.1 基本數值比較 (連線數)
+
+**傳統寫法**：
+
+```yaml
+- alert: MySQLTooManyConnections
+  expr: mysql_global_status_threads_connected > 100
+  for: 5m
+  labels: { severity: warning }
+```
+
+**遷移三件套**：
+
+```yaml
+# 1. Recording Rule (平台)
+- record: tenant:mysql_threads_connected:max
+  expr: max by(tenant) (mysql_global_status_threads_connected)
+
+# 2. Alert Rule (平台) — group_left + unless maintenance
+- alert: MariaDBHighConnections
+  expr: |
+    (
+      tenant:mysql_threads_connected:max
+      > on(tenant) group_left
+      tenant:alert_threshold:connections
+    )
+    unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
+  for: 5m
+  labels: { severity: warning }
+
+# 3. Tenant Config (租戶)
+tenants:
+  db-a:
+    mysql_connections: "100"
+```
+
+### 4.2-4.5 其他常見模式 — 快速參考表
+
+| 場景 | 原始指標 | Recording Rule | Tenant Config 範例 | 特殊說明 |
+|------|---------|----------------|-------------------|---------|
+| **4.2 多層嚴重度** | `mysql_global_status_threads_connected` | `max by(tenant) (...)` | `mysql_connections: "100"` + `mysql_connections_critical: "150"` | Alert Rule 自動處理 `_critical` 降級邏輯 |
+| **4.3 Replication Lag** | `mysql_slave_status_seconds_behind_master` | `max by(tenant) (...)` | `mysql_slave_lag: "30"` 或 `"disable"` | Max 用於「最弱環節」(最落後的 slave) |
+| **4.4 Rate 指標** | `rate(mysql_global_status_slow_queries[5m])` | `sum by(tenant) (rate(...))` | `mysql_slow_queries: "0.1"` | Sum 用於「叢集總量」 |
+| **4.5 百分比計算** | `buffer_pool_pages_data / buffer_pool_pages_total * 100` | `max by(...) (...) / max by(...) (...) * 100` | `mysql_innodb_buffer_pool: "95"` | 百分比計算在 Recording Rule 完成 |
+
+> 4.2-4.5 只需套用 4.1 三件套模板，改指標名與 Tenant Config 的 key；平台側 Alert Rule 結構始終如一。Rule Pack 設計與三件套契約：[design/rule-packs.md](design/rule-packs.md)。實際黃金規則告警列表：[Rule Packs ALERT-REFERENCE](rule-packs/ALERT-REFERENCE.md)。
 
 ---
 
@@ -223,7 +268,7 @@ tenants:
 | Tenant-only | 維度 key 不繼承 `defaults`，僅允許在租戶設定中 |
 | 三態仍適用 | 數值=Custom, 省略=Default (僅基本 key), `"disable"`=停用 |
 
-**平台團隊 PromQL 適配**：維度 label 必須同時出現在 Recording Rule 的 `by()` 與 Alert Rule 的 `on()` 中。範本與完整 Recording / Alert / Threshold Normalization 三件套：[Rule Packs ALERT-REFERENCE](rule-packs/ALERT-REFERENCE.md)。Redis / ES / MongoDB 維度範例：`components/threshold-exporter/config/conf.d/examples/`。
+**平台團隊 PromQL 適配**：維度 label 必須同時出現在 Recording Rule 的 `by()` 與 Alert Rule 的 `on()` 中。三件套契約與 `tenant:<metric>:<agg>` 命名規範：[design/rule-packs.md](design/rule-packs.md)。Redis / ES / MongoDB 維度範例：`components/threshold-exporter/config/conf.d/examples/`。
 
 ---
 

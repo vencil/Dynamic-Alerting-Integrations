@@ -80,7 +80,7 @@ The standard path from zero to cutover. Each step only lists the trigger command
 | **Step 1** | Install Toolkit | `docker pull ghcr.io/vencil/da-tools:v2.8.0` or static binary | [`migration-toolkit-installation.md`](migration-toolkit-installation.en.md) |
 | **Step 2** | Reverse-analyze existing monitoring (if any) → produce migration plan | `da-tools onboard --alertmanager-config ... --rule-files ...` | [§0](#0-enterprise-grade-reverse-analysis-da-tools-onboard) · [cli-reference §onboard](cli-reference.md#onboard) |
 | **Step 3** | Generate / convert tenant config + the rule three-piece set | `da-tools scaffold` (greenfield) / `da-tools migrate` (existing rules) | [§1](#1-new-tenant-quick-onboarding-da-tools-scaffold) · [§2](#2-existing-rule-migration-da-tools-migrate) · [cli-reference §scaffold](cli-reference.md#scaffold) · [§migrate](cli-reference.md#migrate) |
-| **Step 4** | Deploy threshold-exporter + one-stop validation | `helm upgrade ... oci://...` + `da-tools validate-config` + `da-tools diagnose <tenant>` | [§3](#3-deploy-threshold-exporter) · [§6](#6-post-migration-verification) · [tenant-lifecycle onboarding stage](scenarios/tenant-lifecycle.en.md) |
+| **Step 4** | Deploy threshold-exporter + one-stop validation | `helm upgrade ... oci://...` + `da-tools validate-config` + `da-tools diagnose <tenant>` | [§3](#3-deploy-threshold-exporter) · [§6](#6-post-migration-verification) · [tenant-lifecycle onboarding stage](scenarios/tenant-lifecycle.en.md#phase-12-onboarding-day-0) |
 | **Step 5** | Shadow Monitoring → cutover → convergence (required when ≥100 rules) | `da-tools validate --watch --auto-detect-convergence` → `da-tools cutover --readiness-json` | [§11](#11-enterprise-grade-migration-large-tenant-1000-rules) · [Shadow Monitoring SOP](shadow-monitoring-sop.en.md) · [Incremental Migration Playbook](scenarios/incremental-migration-playbook.en.md) |
 
 > **Unsure which path to take?** The [§Where Are You?](#where-are-you-你在哪個階段) decision table + mermaid above is the routing entry point. Multi-system swap invariants and the 13-week timeline: [Multi-System Migration Playbook](scenarios/multi-system-migration-playbook.en.md).
@@ -158,9 +158,54 @@ curl -s http://localhost:8080/api/v1/config | python3 -m json.tool
 
 ## 4. Real-World Examples: Five Migration Scenarios
 
-Using Percona MariaDB Alert Rules as the template, 5 common migration patterns are showcased (basic numeric comparison / multi-tier severity / replication lag / rate metrics / percentage calculation). Each scenario applies the same three-piece template — only the metric name and Tenant Config key change. The platform-side Alert Rule structure is always `(metric_recording) > on(tenant) group_left (threshold) unless on(tenant) (maintenance == 1)`.
+Using Percona MariaDB Alert Rules as the template, 5 common migration patterns are showcased. Each scenario applies the same three-piece template — only the metric name and Tenant Config key change. The platform-side Alert Rule structure is always `(metric_recording) > on(tenant) group_left (threshold) unless on(tenant) (maintenance == 1)`.
 
-Complete 5-scenario comparison table (Recording Rule patterns, Tenant Config examples, rationale for `sum` vs `max`) + actual golden rule samples: [Rule Packs ALERT-REFERENCE](rule-packs/ALERT-REFERENCE.md).
+### 4.1 Basic Numeric Comparison (Connections)
+
+**Legacy:**
+
+```yaml
+- alert: MySQLTooManyConnections
+  expr: mysql_global_status_threads_connected > 100
+  for: 5m
+  labels: { severity: warning }
+```
+
+**Migrated three-piece set:**
+
+```yaml
+# 1. Recording Rule (platform)
+- record: tenant:mysql_threads_connected:max
+  expr: max by(tenant) (mysql_global_status_threads_connected)
+
+# 2. Alert Rule (platform) — group_left + unless maintenance
+- alert: MariaDBHighConnections
+  expr: |
+    (
+      tenant:mysql_threads_connected:max
+      > on(tenant) group_left
+      tenant:alert_threshold:connections
+    )
+    unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
+  for: 5m
+  labels: { severity: warning }
+
+# 3. Tenant Config (tenant)
+tenants:
+  db-a:
+    mysql_connections: "100"
+```
+
+### 4.2-4.5 Other Common Patterns — Quick Reference
+
+| Scenario | Source Metric | Recording Rule | Tenant Config Example | Notes |
+|----------|---------------|----------------|----------------------|-------|
+| **4.2 Multi-tier severity** | `mysql_global_status_threads_connected` | `max by(tenant) (...)` | `mysql_connections: "100"` + `mysql_connections_critical: "150"` | Alert Rule handles `_critical` downgrade logic automatically |
+| **4.3 Replication Lag** | `mysql_slave_status_seconds_behind_master` | `max by(tenant) (...)` | `mysql_slave_lag: "30"` or `"disable"` | Max captures the "weakest link" (slowest slave) |
+| **4.4 Rate metric** | `rate(mysql_global_status_slow_queries[5m])` | `sum by(tenant) (rate(...))` | `mysql_slow_queries: "0.1"` | Sum reflects cluster-wide load |
+| **4.5 Percentage** | `buffer_pool_pages_data / buffer_pool_pages_total * 100` | `max by(...) (...) / max by(...) (...) * 100` | `mysql_innodb_buffer_pool: "95"` | Percentage computed in the Recording Rule |
+
+> 4.2-4.5 reuse the 4.1 three-piece template — only the metric name and Tenant Config key change; the platform-side Alert Rule structure is always identical. Rule Pack design + three-piece contract: [design/rule-packs.en.md](design/rule-packs.en.md). Actual golden alert listings: [Rule Packs ALERT-REFERENCE](rule-packs/ALERT-REFERENCE.md).
 
 ---
 
@@ -193,9 +238,9 @@ da-tools check-alert MariaDBHighConnections db-a           # Alert status
 da-tools diagnose db-a                                     # Tenant health overview
 ```
 
-Full verification checklist (YAML validation, alert state, three-state testing, routing, operational_mode, blind-spot scan): [Tenant Lifecycle §Onboarding Stage](scenarios/tenant-lifecycle.en.md).
+Full verification checklist (YAML validation, alert state, three-state testing, routing, operational_mode, blind-spot scan): [Tenant Lifecycle §Onboarding Stage](scenarios/tenant-lifecycle.en.md#phase-12-onboarding-day-0).
 
-**Post-migration tenant self-service scope**: three-state thresholds, `_critical` suffix, `_routing` (+ overrides), `_silent_mode`, `_state_maintenance`, `_severity_dedup`. Platform Team controls `_routing_defaults` and `_routing_enforced` in `_defaults.yaml`. Details: [GitOps Deployment Guide §7](integration/gitops-deployment.en.md).
+**Post-migration tenant self-service scope**: three-state thresholds, `_critical` suffix, `_routing` (+ overrides), `_silent_mode`, `_state_maintenance`, `_severity_dedup`. Platform Team controls `_routing_defaults` and `_routing_enforced` in `_defaults.yaml`. Details: [GitOps Deployment Guide §7](integration/gitops-deployment.en.md#7-tenant-self-service-configuration-scope).
 
 ---
 
@@ -223,7 +268,7 @@ tenants:
 | Tenant-only | Dimension keys do not inherit from `defaults`; allowed only in tenant config |
 | Three-state still applies | Value=Custom, omitted=Default (basic key only), `"disable"`=Disabled |
 
-**Platform-team PromQL adaptation**: the dimension label must appear in both the Recording Rule's `by()` and the Alert Rule's `on()`. Template + full Recording / Alert / Threshold Normalization three-piece set: [Rule Packs ALERT-REFERENCE](rule-packs/ALERT-REFERENCE.md). Redis / ES / MongoDB dimension examples live under `components/threshold-exporter/config/conf.d/examples/`.
+**Platform-team PromQL adaptation**: the dimension label must appear in both the Recording Rule's `by()` and the Alert Rule's `on()`. Three-piece contract + `tenant:<metric>:<agg>` naming convention: [design/rule-packs.en.md](design/rule-packs.en.md). Redis / ES / MongoDB dimension examples live under `components/threshold-exporter/config/conf.d/examples/`.
 
 ---
 
