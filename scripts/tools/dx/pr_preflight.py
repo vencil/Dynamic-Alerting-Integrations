@@ -480,6 +480,95 @@ def check_pr_title(title: str, repo_root: Path, max_length: int = 70) -> int:
     return 0
 
 
+def check_pass2_trailer_strict(repo_root: Path, base_ref: str = "origin/main") -> int:
+    """Validate at least one commit in `<base_ref>..HEAD` has a Self-Review-Pass-2
+    trailer. Used as a CI strict-mode gate (issue #454).
+
+    Why this lives here, not in a standalone script:
+      - Reuses pr_preflight's existing commit-msg validation infrastructure
+        (the `check_commit_msg_file` / `check_pr_title` family of single-purpose
+        exit-early modes).
+      - Same conventions (sys.executable subprocess, repo_root parameter).
+
+    Why git's native trailer parser (not regex):
+      Git enforces "trailers must be in the bottom paragraph after a blank
+      line" — regex doesn't. `--format=%(trailers:key=...)` also handles
+      case-insensitivity (`Self-review-pass-2` vs `Self-Review-Pass-2`) and
+      multi-line folded values for free. The day-2 review on #454 settled
+      this design point explicitly.
+
+    Why empty range is SKIP (not FAIL):
+      `<base>..HEAD` can be empty if HEAD is on the base ref or behind it.
+      Failing in that state would false-flag PRs that aren't even branched
+      ahead — a state that should be caught by check_branch_identity /
+      check_behind_main instead.
+
+    Returns:
+      0 = PASS (trailer present somewhere in range, or range is empty)
+      1 = FAIL (range non-empty, no trailer in any commit, or git error)
+    """
+    # Probe the range is non-empty BEFORE asking for trailers — distinguishes
+    # "PR has no commits ahead of base" (SKIP) from "PR has commits but none
+    # carry the trailer" (FAIL). Routed through `run()` so FileNotFoundError
+    # (no git on PATH) and TimeoutExpired collapse into uniform rc=127 / 124
+    # synthetic CompletedProcess values rather than crashing the gate.
+    count_proc = run(
+        ["git", "rev-list", "--count", f"{base_ref}..HEAD"],
+        timeout=10,
+    )
+    if count_proc.returncode != 0:
+        stderr = (count_proc.stderr or "").strip()
+        print(f"❌ git rev-list {base_ref}..HEAD failed: {stderr}", file=sys.stderr)
+        print(
+            f"   Common cause: '{base_ref}' not in local refs. In GitHub Actions,\n"
+            "   ensure `actions/checkout@v4` uses `fetch-depth: 0` and that the\n"
+            "   base branch is explicitly fetched (see workflows/planning-status-sync.yaml).",
+            file=sys.stderr,
+        )
+        return 1
+
+    if count_proc.stdout.strip() == "0":
+        print(
+            f"⏭️  No commits in {base_ref}..HEAD; skipping Self-Review-Pass-2 trailer check."
+        )
+        return 0
+
+    log_proc = run(
+        [
+            "git", "log", f"{base_ref}..HEAD",
+            "--format=%(trailers:key=Self-Review-Pass-2,valueonly=true,unfold=true)",
+        ],
+        timeout=10,
+    )
+    if log_proc.returncode != 0:
+        stderr = (log_proc.stderr or "").strip()
+        print(f"❌ git log {base_ref}..HEAD failed: {stderr}", file=sys.stderr)
+        return 1
+
+    if log_proc.stdout.strip():
+        return 0
+
+    print(
+        "❌ PR is missing the `Self-Review-Pass-2:` trailer in every commit "
+        f"between {base_ref} and HEAD.\n"
+        "\n"
+        "   Add to ANY commit message (the trailer must be on its own line\n"
+        "   in the bottom paragraph, separated from the body by a blank line):\n"
+        "\n"
+        "     Self-Review-Pass-2: dogfood mutated <function>, "
+        "<test_name> caught (✓)\n"
+        "\n"
+        "   Or amend the last commit:\n"
+        "     git commit --amend  # append the trailer line, save\n"
+        "     git push --force-with-lease\n"
+        "\n"
+        "   See testing-playbook §LL v2.8.0 §5 / §6 for what `Self-Review-Pass-2`\n"
+        "   actually attests to (intentional-break dogfood, not just \"I read it\").",
+        file=sys.stderr,
+    )
+    return 1
+
+
 def find_repo_root() -> Path:
     """從 cwd 向上找 .git 目錄。"""
     current = Path.cwd()
@@ -947,6 +1036,18 @@ def main() -> int:
         default=70,
         help="PR title 長度上限（預設 70；CLAUDE.md PR creation convention）",
     )
+    parser.add_argument(
+        "--check-pass2-trailer-strict",
+        action="store_true",
+        help="Validate at least one commit in <base-ref>..HEAD carries a "
+             "Self-Review-Pass-2: trailer; exit 1 if missing (#454 strict CI gate)",
+    )
+    parser.add_argument(
+        "--base-ref",
+        default="origin/main",
+        help="Base ref for trailer-scan range (default: origin/main). "
+             "Pair with `actions/checkout@v4 fetch-depth: 0` in CI.",
+    )
     args = parser.parse_args()
 
     # cd to repo root
@@ -960,6 +1061,8 @@ def main() -> int:
         return check_pr_title(
             args.check_pr_title, repo_root, max_length=args.pr_title_max_length
         )
+    if args.check_pass2_trailer_strict:
+        return check_pass2_trailer_strict(repo_root, base_ref=args.base_ref)
 
     report = PreflightReport()
 
