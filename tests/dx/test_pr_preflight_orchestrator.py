@@ -381,3 +381,163 @@ class TestMainOrchestrator:
         out = capsys.readouterr().out
         assert "Local hooks" in out
         assert "已跳過" in out  # SKIP message
+
+
+# ---------------------------------------------------------------------------
+# check_pass2_trailer_strict — issue #454
+# ---------------------------------------------------------------------------
+# This is the CI strict-mode gate for Self-Review-Pass-2: trailers. Tests
+# stub subprocess.run so no real git state is touched. We rely on git's
+# native --format=%(trailers:key=...) parser, so we don't need to test
+# case-insensitivity / multi-line folding ourselves — those are git's
+# responsibility, and re-asserting them here would only verify our mock.
+class TestCheckPass2TrailerStrict:
+    @staticmethod
+    def _cp(returncode: int = 0, stdout: str = "", stderr: str = ""):
+        return _subprocess.CompletedProcess(
+            args=[], returncode=returncode, stdout=stdout, stderr=stderr,
+        )
+
+    def _stub_subprocess(self, monkeypatch, count_result, log_result=None):
+        """Stub pr_preflight.run() (the helper that wraps subprocess.run with
+        uniform timeout / FileNotFoundError handling) with a 2-call sequence.
+
+        First call = `git rev-list --count`; second = `git log --format=...`.
+        Pass log_result=None to verify the second call wasn't reached
+        (used for the empty-range SKIP path).
+        """
+        calls = {"i": 0}
+        results = [count_result] + ([log_result] if log_result is not None else [])
+
+        def fake_run(cmd, *args, **kwargs):
+            i = calls["i"]
+            calls["i"] += 1
+            if i >= len(results):
+                raise AssertionError(
+                    f"Unexpected pp.run call #{i + 1}: cmd={cmd}"
+                )
+            return results[i]
+
+        monkeypatch.setattr(pp, "run", fake_run)
+        return calls
+
+    def test_trailer_present_returns_zero(self, monkeypatch, tmp_path):
+        """At least one commit in range carries the trailer → exit 0."""
+        self._stub_subprocess(
+            monkeypatch,
+            count_result=self._cp(0, "3\n"),
+            log_result=self._cp(0, "dogfood mutated foo(), test_bar caught (✓)\n"),
+        )
+        assert pp.check_pass2_trailer_strict() == 0
+
+    def test_no_trailer_in_any_commit_fails_with_amend_hint(self, monkeypatch, tmp_path, capsys):
+        """Range non-empty but trailer absent → exit 1 + helpful stderr."""
+        self._stub_subprocess(
+            monkeypatch,
+            count_result=self._cp(0, "2\n"),
+            log_result=self._cp(0, ""),  # empty stdout = no trailers found
+        )
+        rc = pp.check_pass2_trailer_strict()
+        assert rc == 1
+        err = capsys.readouterr().err
+        assert "Self-Review-Pass-2" in err
+        assert "git commit --amend" in err  # actionable recovery hint
+        assert "force-with-lease" in err  # safe push variant
+
+    def test_empty_range_skips_with_zero(self, monkeypatch, tmp_path, capsys):
+        """No commits in <base>..HEAD → SKIP (exit 0), don't false-fail.
+
+        Catches the case where HEAD is on base or behind it — should be
+        caught by check_branch_identity / check_behind_main, not this gate.
+        """
+        calls = self._stub_subprocess(
+            monkeypatch,
+            count_result=self._cp(0, "0\n"),
+            log_result=None,  # log call must NOT happen
+        )
+        assert pp.check_pass2_trailer_strict() == 0
+        assert calls["i"] == 1, "git log should not be invoked when range is empty"
+        out = capsys.readouterr().out
+        assert "skipping" in out.lower()
+
+    def test_rev_list_failure_returns_one_with_checkout_hint(self, monkeypatch, tmp_path, capsys):
+        """Common CI failure: `actions/checkout@v4` shallow clone makes
+        origin/main unresolvable. Error message must point at fetch-depth: 0.
+        """
+        self._stub_subprocess(
+            monkeypatch,
+            count_result=self._cp(
+                128, "",
+                "fatal: ambiguous argument 'origin/main..HEAD': "
+                "unknown revision or path not in the working tree.",
+            ),
+            log_result=None,  # log call must NOT happen if rev-list failed
+        )
+        rc = pp.check_pass2_trailer_strict()
+        assert rc == 1
+        err = capsys.readouterr().err
+        assert "fetch-depth: 0" in err  # actionable CI guidance
+        assert "actions/checkout@v4" in err
+
+    def test_log_failure_returns_one(self, monkeypatch, tmp_path, capsys):
+        """Less common: rev-list succeeds but log fails (e.g. corrupt repo).
+        Still surface the underlying git error."""
+        self._stub_subprocess(
+            monkeypatch,
+            count_result=self._cp(0, "1\n"),
+            log_result=self._cp(128, "", "fatal: bad revision"),
+        )
+        rc = pp.check_pass2_trailer_strict()
+        assert rc == 1
+        err = capsys.readouterr().err
+        assert "git log" in err
+        assert "bad revision" in err
+
+    def test_custom_base_ref_threaded_through(self, monkeypatch, tmp_path):
+        """The base_ref kwarg must reach the git commands (so the workflow
+        can pass origin/<base_branch> from pull_request.base.ref)."""
+        captured_cmds = []
+
+        def fake_run(cmd, *args, **kwargs):
+            captured_cmds.append(cmd)
+            return self._cp(0, "1\n" if len(captured_cmds) == 1 else "trailer\n")
+
+        monkeypatch.setattr(pp, "run", fake_run)
+        pp.check_pass2_trailer_strict(base_ref="origin/develop")
+        # Both git invocations should embed origin/develop, not origin/main.
+        assert any("origin/develop..HEAD" in arg for arg in captured_cmds[0])
+        assert any("origin/develop..HEAD" in arg for arg in captured_cmds[1])
+
+    def test_git_not_on_path_surfaces_uniform_error(self, monkeypatch, tmp_path, capsys):
+        """`pp.run()` collapses FileNotFoundError into rc=127 synthetic
+        CompletedProcess. Verify the check surfaces this without crashing."""
+        # rc=127 = "command not found" (POSIX convention pp.run encodes).
+        self._stub_subprocess(
+            monkeypatch,
+            count_result=self._cp(127, "", "command not found: git"),
+            log_result=None,
+        )
+        rc = pp.check_pass2_trailer_strict()
+        assert rc == 1
+        err = capsys.readouterr().err
+        assert "git rev-list" in err
+        assert "command not found" in err
+
+    def test_cli_flag_dispatches_to_function(self, monkeypatch, tmp_path, cli_argv):
+        """`--check-pass2-trailer-strict` short-circuits main() like the
+        sibling --check-commit-msg / --check-pr-title fast paths."""
+        monkeypatch.setattr(pp, "find_repo_root", lambda: tmp_path)
+        monkeypatch.setattr(os, "chdir", lambda p: None)
+        called = {"n": 0, "base_ref": None}
+
+        def fake_check(base_ref="origin/main"):
+            called["n"] += 1
+            called["base_ref"] = base_ref
+            return 0
+
+        monkeypatch.setattr(pp, "check_pass2_trailer_strict", fake_check)
+        cli_argv("pr_preflight.py", "--check-pass2-trailer-strict",
+                 "--base-ref", "origin/release-2.9")
+        assert pp.main() == 0
+        assert called["n"] == 1
+        assert called["base_ref"] == "origin/release-2.9"

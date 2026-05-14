@@ -69,13 +69,17 @@ pre-commit run --hook-stage manual --all-files        # Manual hooks (heavier)
 - [ ] I'm NOT confusing `pass` with `pytest.skip("TODO")` in stub methods (silent green vs xfail-style visible — see PR #171 amend Fix 2)
 - [ ] I'm NOT reactively expanding the PR scope to fix things I noticed during self-review without bumping the PR description / commits accordingly
 
-### Optional: trailer in last commit
+### `Self-Review-Pass-2:` trailer (expected default)
 
-For PRs where you ran intentional-break dogfood, include the result in commit message:
+Add to **any** commit message in this PR (CI strict-mode gate via `self-review-pass2.yaml` — soft-fail today, will flip to hard-fail once adoption plateaus, #454):
 
 ```
 Self-Review-Pass-2: dogfood mutated <function>; <test_name> caught (✓)
 ```
+
+The trailer must be on its own line in the bottom paragraph, separated from the body by a blank line — that's the git native trailer convention the check enforces (case-insensitive, multi-line values OK).
+
+Skip only if the PR is **doc-only / chore-only with zero logic change**; in that case state so in the Summary section above so the soft-fail status row is interpretable.
 
 ---
 

@@ -1,0 +1,61 @@
+name: Self-Review-Pass-2 Trailer
+
+# Validates that at least one commit in `origin/<base>..HEAD` carries a
+# `Self-Review-Pass-2:` trailer (per testing-playbook §LL v2.8.0 §5/§6 —
+# intentional-break dogfood). Issue #454.
+#
+# Soft-fail (continue-on-error) until trailer-adoption stabilises; the check
+# still surfaces as a separate status row on the PR so reviewers see the
+# state. Flip `continue-on-error` off once the default expectation is uniform.
+#
+# CRITICAL: `actions/checkout@v4` MUST use `fetch-depth: 0`. Without it the
+# default shallow checkout (1 commit) makes `origin/<base>..HEAD` unresolvable
+# and the lint silently passes the empty-range branch — negating the gate.
+# Same trap as `.github/workflows/planning-status-sync.yaml`.
+
+on:
+  pull_request:
+    # `edited` lets commit message amendments via web UI re-trigger; for force
+    # pushes the standard `synchronize` covers it.
+    types: [opened, synchronize, reopened, edited]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  self-review-pass2:
+    name: Validate Self-Review-Pass-2 trailer
+    runs-on: ubuntu-latest
+    # Soft-fail rollout: status appears but doesn't block merge until adoption
+    # plateaus. Track #454 follow-up to flip off.
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Required for `git log origin/<base>..HEAD` trailer extraction.
+          # See workflow header note + ADR-020 §Implementation gotcha.
+          fetch-depth: 0
+          # Probe the PR head, not the auto-generated merge ref.
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      - name: Resolve base ref
+        id: base
+        run: |
+          BASE_BRANCH="${{ github.event.pull_request.base.ref }}"
+          # actions/checkout doesn't always materialise `origin/<branch>`;
+          # fetch it explicitly so the trailer scan can resolve the range.
+          git fetch --no-tags origin "${BASE_BRANCH}"
+          echo "ref=origin/${BASE_BRANCH}" >> "$GITHUB_OUTPUT"
+
+      - name: Check Self-Review-Pass-2 trailer
+        run: |
+          python3 -X utf8 scripts/tools/dx/pr_preflight.py \
+            --check-pass2-trailer-strict \
+            --base-ref "${{ steps.base.outputs.ref }}"
