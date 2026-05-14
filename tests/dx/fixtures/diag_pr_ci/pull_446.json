@@ -1,0 +1,11 @@
+{
+  "number": 446,
+  "title": "feat(dx): example PR for tests",
+  "state": "open",
+  "merged": false,
+  "html_url": "https://github.com/foo/bar/pull/446",
+  "head": {
+    "sha": "abc123def456abc123def456abc123def456abcd",
+    "ref": "feature/example"
+  }
+}

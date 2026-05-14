@@ -202,6 +202,10 @@ pr-preflight: ## PR 收尾前檢查（branch / conflict / hooks / scope-drift / 
 pr-preflight-quick: ## PR 快速檢查（跳過 local hooks）
 	@python3 scripts/tools/dx/pr_preflight.py --skip-hooks $(ARGS)
 
+.PHONY: diag-pr
+diag-pr: ## PR CI 自動排障（#446；ARGS="<PR-N>" 或 ARGS="<PR-N> --json"）
+	@python3 scripts/tools/dx/diag_pr_ci.py $(ARGS)
+
 .PHONY: vscode-git-off
 vscode-git-off: ## 關閉 VS Code Git（Agent session 用）
 	@python3 scripts/session-guards/vscode_git_toggle.py off

@@ -1,0 +1,20 @@
+[
+  {
+    "path": "src/foo/bar.py",
+    "start_line": 42,
+    "annotation_level": "failure",
+    "message": "AssertionError: expected 3, got 4"
+  },
+  {
+    "path": "src/foo/bar.py",
+    "start_line": 87,
+    "annotation_level": "failure",
+    "message": "TypeError: 'NoneType' object is not iterable"
+  },
+  {
+    "path": "tests/test_foo.py",
+    "start_line": 15,
+    "annotation_level": "warning",
+    "message": "deprecated fixture pattern"
+  }
+]

@@ -1,0 +1,27 @@
+{
+  "total_count": 2,
+  "jobs": [
+    {
+      "id": 88001,
+      "name": "test (linux, py3.13)",
+      "status": "completed",
+      "conclusion": "failure",
+      "html_url": "https://github.com/foo/bar/actions/runs/55002/job/88001",
+      "steps": [
+        {"name": "Set up Python", "status": "completed", "conclusion": "success"},
+        {"name": "Install deps", "status": "completed", "conclusion": "success"},
+        {"name": "Run pytest", "status": "completed", "conclusion": "failure"}
+      ]
+    },
+    {
+      "id": 88002,
+      "name": "test (linux, py3.12)",
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/foo/bar/actions/runs/55002/job/88002",
+      "steps": [
+        {"name": "Run pytest", "status": "completed", "conclusion": "success"}
+      ]
+    }
+  ]
+}
