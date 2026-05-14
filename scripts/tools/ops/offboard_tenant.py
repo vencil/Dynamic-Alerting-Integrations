@@ -27,6 +27,14 @@ import argparse
 from pathlib import Path
 import yaml
 
+# Pull `try_utf8_stdout` from the shared compat lib at scripts/tools/.
+# Migrated in #489 Phase B (was missing encoding setup → would crash on
+# legacy Windows cp950/cp936 consoles when printing emoji to stdout).
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, str(_THIS_DIR))
+sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
+from _lib_compat import try_utf8_stdout  # noqa: E402
+
 
 def find_config_file(tenant, config_dir):
     """尋找 tenant 的設定檔案。"""
@@ -157,6 +165,7 @@ def execute_offboard(tenant, config_dir):
 
 def main():
     """CLI entry point: 安全的 Tenant 下架工具。."""
+    try_utf8_stdout()
     parser = argparse.ArgumentParser(
         description="安全的 Tenant 下架工具 — Pre-check + 安全移除"
     )

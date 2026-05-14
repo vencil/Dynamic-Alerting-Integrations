@@ -29,6 +29,13 @@ from typing import Dict, List, Optional, Tuple
 
 # Add script dir to path for lib imports
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Pull `try_utf8_stdout` from the shared compat lib at scripts/tools/.
+# Migrated in #489 Phase B (was missing encoding setup → would crash on
+# legacy Windows cp950/cp936 consoles when printing emoji to stdout).
+sys.path.insert(0, str(_THIS_DIR))
+sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
+from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo tools root
 from _lib_python import write_text_secure  # noqa: E402
 
@@ -308,6 +315,7 @@ def lint_changelog(changelog_path: str = "CHANGELOG.md") -> List[str]:
 
 def main() -> int:
     """CLI entry point: Generate CHANGELOG draft entries from conventional commits."""
+    try_utf8_stdout()
     parser = argparse.ArgumentParser(
         description="Generate CHANGELOG draft from conventional commits"
     )

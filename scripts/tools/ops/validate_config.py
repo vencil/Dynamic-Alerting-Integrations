@@ -42,6 +42,13 @@ from pathlib import Path
 
 # Add script dir to path for lib imports
 _THIS_DIR = Path(__file__).resolve().parent
+
+# Pull `try_utf8_stdout` from the shared compat lib at scripts/tools/.
+# Migrated in #489 Phase B (was missing encoding setup → would crash on
+# legacy Windows cp950/cp936 consoles when printing emoji to stdout).
+sys.path.insert(0, str(_THIS_DIR))
+sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
+from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, str(_THIS_DIR))  # Docker flat layout
 sys.path.insert(0, str(_THIS_DIR.parent))  # Repo subdir layout
 from _lib_python import detect_cli_lang  # noqa: E402
@@ -560,6 +567,7 @@ def print_report(results: list[dict[str, object]], as_json: bool = False) -> Non
 # ============================================================
 def main() -> None:
     """CLI entry point: One-stop configuration validation."""
+    try_utf8_stdout()
     parser = argparse.ArgumentParser(
         description=_h('description'))
     parser.add_argument("--config-dir", required=True,

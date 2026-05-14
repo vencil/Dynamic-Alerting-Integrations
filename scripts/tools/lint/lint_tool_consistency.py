@@ -23,6 +23,14 @@ import re
 import sys
 from pathlib import Path
 
+# Pull `try_utf8_stdout` from the shared compat lib at scripts/tools/.
+# Migrated in #489 Phase B (was missing encoding setup → would crash on
+# legacy Windows cp950/cp936 consoles when printing emoji to stdout).
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, str(_THIS_DIR))
+sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
+from _lib_compat import try_utf8_stdout  # noqa: E402
+
 # Resolve project root (three levels up: scripts/tools/lint/ -> repo root)
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent.parent.parent
@@ -440,6 +448,7 @@ def check_markdown_tool_links(tools: list, errors: list, warnings: list):
 # ---------------------------------------------------------------------------
 def main():
     """CLI entry point: 互動工具一致性驗證."""
+    try_utf8_stdout()
     parser = argparse.ArgumentParser(description="Lint tool consistency")
     parser.add_argument("--json", action="store_true", help="Output as JSON")
     parser.add_argument(

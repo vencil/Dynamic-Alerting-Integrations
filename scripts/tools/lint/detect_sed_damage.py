@@ -31,6 +31,15 @@ import argparse
 import subprocess
 import sys
 from pathlib import Path
+import os
+
+# Pull `try_utf8_stdout` from the shared compat lib at scripts/tools/.
+# Migrated in #489 Phase B (was missing encoding setup → would crash on
+# legacy Windows cp950/cp936 consoles when printing emoji to stdout).
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, str(_THIS_DIR))
+sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
+from _lib_compat import try_utf8_stdout  # noqa: E402
 
 # Repo root: this file is at <repo>/scripts/tools/lint/detect_sed_damage.py
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -119,6 +128,7 @@ def check_file(path: str, allowlist: set[str] | None = None) -> list[str]:
 
 
 def main() -> int:
+    try_utf8_stdout()
     parser = argparse.ArgumentParser(
         description="Detect sed -i damage on staged files",
     )

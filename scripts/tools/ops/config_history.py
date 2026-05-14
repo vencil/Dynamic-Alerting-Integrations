@@ -22,6 +22,14 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+# Pull `try_utf8_stdout` from the shared compat lib at scripts/tools/.
+# Migrated in #489 Phase B (was missing encoding setup → would crash on
+# legacy Windows cp950/cp936 consoles when printing emoji to stdout).
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, str(_THIS_DIR))
+sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
+from _lib_compat import try_utf8_stdout  # noqa: E402
+
 def _detect_lang():
     """Detect CLI language."""
     for var in ('DA_LANG', 'LC_ALL', 'LANG'):
@@ -283,6 +291,7 @@ def cmd_diff(config_dir, id_a, id_b):
 
 
 def main():
+    try_utf8_stdout()
     parser = argparse.ArgumentParser(
         description=_t('Config Snapshot & History — 配置快照與歷史追蹤',
                        'Config Snapshot & History — track configuration changes over time'))

@@ -17,6 +17,13 @@ import sys
 from pathlib import Path
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Pull `try_utf8_stdout` from the shared compat lib at scripts/tools/.
+# Migrated in #489 Phase B (was missing encoding setup → would crash on
+# legacy Windows cp950/cp936 consoles when printing emoji to stdout).
+sys.path.insert(0, str(_THIS_DIR))
+sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
+from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))
 from _lib_python import detect_cli_lang, http_get_json  # noqa: E402
@@ -270,6 +277,7 @@ class OperatorChecker:
 
 
 def main():
+    try_utf8_stdout()
     parser = argparse.ArgumentParser(
         description="Verify Prometheus Operator CRD deployment status",
         formatter_class=argparse.RawDescriptionHelpFormatter,

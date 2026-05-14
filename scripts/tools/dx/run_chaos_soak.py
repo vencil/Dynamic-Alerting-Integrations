@@ -76,6 +76,15 @@ import urllib.request
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+import os
+
+# Pull `try_utf8_stdout` from the shared compat lib at scripts/tools/.
+# Migrated in #489 Phase B (was missing encoding setup → would crash on
+# legacy Windows cp950/cp936 consoles when printing emoji to stdout).
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, str(_THIS_DIR))
+sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
+from _lib_compat import try_utf8_stdout  # noqa: E402
 
 # Metrics we extract from /metrics (Prometheus text format).
 # Adding new ones here automatically extends the timeseries CSV.
@@ -185,6 +194,7 @@ def trigger_reload(config_dir: Path) -> bool:
 
 
 def main() -> int:
+    try_utf8_stdout()
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[1])
     parser.add_argument("--target-url", required=True,
                         help="threshold-exporter URL (e.g. http://localhost:8080)")

@@ -19,6 +19,15 @@ import re
 import sys
 from pathlib import Path
 from typing import Optional, Tuple
+import os
+
+# Pull `try_utf8_stdout` from the shared compat lib at scripts/tools/.
+# Migrated in #489 Phase B (was missing encoding setup → would crash on
+# legacy Windows cp950/cp936 consoles when printing emoji to stdout).
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, str(_THIS_DIR))
+sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
+from _lib_compat import try_utf8_stdout  # noqa: E402
 
 # Playbook 檔案清單（相對於 repo root）
 PLAYBOOK_PATHS = [
@@ -146,6 +155,7 @@ def scan_ll_entries(filepath: Path, current: Tuple[int, int, int]) -> list:
 
 
 def main() -> None:
+    try_utf8_stdout()
     parser = argparse.ArgumentParser(
         description="檢查 Playbook verified-at-version 是否需要知識退火"
     )

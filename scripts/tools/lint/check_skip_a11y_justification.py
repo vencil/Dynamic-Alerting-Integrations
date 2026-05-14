@@ -55,6 +55,15 @@ import re
 import sys
 from pathlib import Path
 from typing import List, Tuple
+import os
+
+# Pull `try_utf8_stdout` from the shared compat lib at scripts/tools/.
+# Migrated in #489 Phase B (was missing encoding setup → would crash on
+# legacy Windows cp950/cp936 consoles when printing emoji to stdout).
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, str(_THIS_DIR))
+sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
+from _lib_compat import try_utf8_stdout  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 
@@ -144,6 +153,7 @@ def collect_default_paths() -> List[Path]:
 
 
 def main() -> int:
+    try_utf8_stdout()
     parser = argparse.ArgumentParser(
         description="Require TD-ticket justification for skipA11y: true (testing-playbook §LL §5)."
     )

@@ -34,6 +34,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional, Union
 
+# Pull `try_utf8_stdout` from the shared compat lib at scripts/tools/.
+# Migrated in #489 Phase B (was missing encoding setup → would crash on
+# legacy Windows cp950/cp936 consoles when printing emoji to stdout).
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, str(_THIS_DIR))
+sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
+from _lib_compat import try_utf8_stdout  # noqa: E402
+
 # ---------------------------------------------------------------------------
 # Repo-layout import compatibility (stripped in Docker build)
 # ---------------------------------------------------------------------------
@@ -652,6 +660,7 @@ def build_parser(lang: str = "en") -> argparse.ArgumentParser:
 
 def main(argv: Optional[list[str]] = None) -> int:
     """CLI 進入點。"""
+    try_utf8_stdout()
     lang = detect_cli_lang()
     parser = build_parser(lang)
     args = parser.parse_args(argv)

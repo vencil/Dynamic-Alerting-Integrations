@@ -34,6 +34,15 @@ import importlib.util
 import json
 import sys
 from pathlib import Path
+import os
+
+# Pull `try_utf8_stdout` from the shared compat lib at scripts/tools/.
+# Migrated in #489 Phase B (was missing encoding setup → would crash on
+# legacy Windows cp950/cp936 consoles when printing emoji to stdout).
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, str(_THIS_DIR))
+sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
+from _lib_compat import try_utf8_stdout  # noqa: E402
 
 # Lazy-import describe_tenant — same dir, can't relative-import in script mode
 _TOOL_DIR = Path(__file__).resolve().parent
@@ -105,6 +114,7 @@ def _print_human(info: dict) -> None:
 
 
 def main() -> int:
+    try_utf8_stdout()
     parser = argparse.ArgumentParser(
         prog="da-tools tenant-verify",
         description=__doc__.split("\n\n")[0],

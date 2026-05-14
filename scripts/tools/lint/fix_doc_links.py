@@ -16,6 +16,14 @@ import re
 import sys
 import argparse
 
+# Pull `try_utf8_stdout` from the shared compat lib at scripts/tools/.
+# Migrated in #489 Phase B (was missing encoding setup → would crash on
+# legacy Windows cp950/cp936 consoles when printing emoji to stdout).
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, str(_THIS_DIR))
+sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
+from _lib_compat import try_utf8_stdout  # noqa: E402
+
 DOCS_DIR = os.path.join(os.path.dirname(__file__), '..', '..', 'docs')
 DOCS_DIR = os.path.normpath(DOCS_DIR)
 
@@ -146,6 +154,7 @@ def fix_links_in_file(filepath, dry_run=False, verbose=False):
 
 def main():
     """CLI entry point: Auto-fix broken MkDocs cross-reference links."""
+    try_utf8_stdout()
     parser = argparse.ArgumentParser(description='Fix broken MkDocs links')
     parser.add_argument('--dry-run', action='store_true', help='Preview fixes without writing')
     parser.add_argument('--verbose', '-v', action='store_true', help='Show details')
