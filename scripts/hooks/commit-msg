@@ -26,18 +26,34 @@ if [ ! -f "$PREFLIGHT" ]; then
     exit 0
 fi
 
-# Resolve a python interpreter that exists. session-init.py auto-heals the
-# pre-commit shebang but commit-msg runs in a plain shell, so we try common
-# candidates ourselves.
-for PY in python3 python /usr/bin/python3 /usr/local/bin/python3; do
-    if command -v "$PY" >/dev/null 2>&1; then
+# Resolve a python interpreter that exists AND actually runs. session-init.py
+# auto-heals the pre-commit shebang but commit-msg runs in a plain shell, so we
+# try common candidates ourselves.
+#
+# Windows note: on fresh Windows installs %LOCALAPPDATA%\Microsoft\WindowsApps
+# ships a `python3.exe` "App Execution Alias" stub that passes `command -v` but
+# exits 49 with "Python was not found; run without arguments to install from
+# the Microsoft Store..." — see windows-mcp-playbook trap #63. We probe each
+# candidate with `--version` to skip the stub, and include the `py` launcher
+# (Python.org's canonical Windows entry point) ahead of `python3`.
+PYTHON=""
+for PY in "py -3" "py" python3 python /usr/bin/python3 /usr/local/bin/python3; do
+    # Extract the first token (executable name) for `command -v` lookup.
+    EXE="${PY%% *}"
+    if command -v "$EXE" >/dev/null 2>&1; then
+        # Probe that the interpreter actually executes. Intentional unquoted
+        # expansion so "py -3" splits into two tokens.
+        if ! $PY --version >/dev/null 2>&1; then
+            continue
+        fi
         PYTHON="$PY"
         break
     fi
 done
-if [ -z "${PYTHON:-}" ]; then
-    # No python — can't validate; don't block.
+if [ -z "$PYTHON" ]; then
+    # No working python — can't validate; don't block.
     exit 0
 fi
 
-"$PYTHON" "$PREFLIGHT" --check-commit-msg "$COMMIT_MSG_FILE"
+# Intentional unquoted expansion so "py -3" splits into two tokens.
+$PYTHON "$PREFLIGHT" --check-commit-msg "$COMMIT_MSG_FILE"

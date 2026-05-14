@@ -714,8 +714,13 @@ def check_scope_drift() -> CheckResult:
     這是 code-driven §P2 rule 的執行點，偵測 PR 準備 merge 時仍有散落
     在工作目錄、未納入此 PR commit 的 drift（典型 PR #40 肇因）。
     """
+    # Use sys.executable instead of bare "python3" — on Windows hosts where
+    # the MS Store Python stub squats in %LOCALAPPDATA%\Microsoft\WindowsApps
+    # (passes CreateProcess lookup but exits 49), bare "python3" launches the
+    # stub instead of the real interpreter that's already running this script.
+    # See windows-mcp-playbook trap #63.
     r = run(
-        ["python3", "-X", "utf8", "scripts/tools/lint/check_pr_scope_drift.py"],
+        [sys.executable, "-X", "utf8", "scripts/tools/lint/check_pr_scope_drift.py"],
         timeout=60,
     )
     if r.returncode == 0:

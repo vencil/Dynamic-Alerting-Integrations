@@ -80,6 +80,24 @@ class TestCheckToolMap:
                 f"expected `-X utf8` in cmd, got {cmd!r}"
             )
 
+    def test_uses_sys_executable_not_bare_python3(self, tmp_path):
+        """Regression guard for #436: bare \"python3\" launches the MS Store
+        App Execution Alias stub on fresh Windows hosts and exits 49. Must use
+        sys.executable so the already-running interpreter dispatches the
+        child. See windows-mcp-playbook trap #63."""
+        with patch("check_pr_scope_drift.run",
+                   return_value=(0, "up to date", "")) as mock_run:
+            cpsd.check_tool_map(tmp_path)
+            args, _ = mock_run.call_args
+            cmd = args[0]
+            assert cmd[0] == sys.executable, (
+                f"expected cmd[0] == sys.executable ({sys.executable!r}), "
+                f"got {cmd[0]!r} — bare 'python3' hits the Windows MS Store stub"
+            )
+            assert cmd[0] != "python3", (
+                "must not pass bare 'python3' — see #436 / playbook trap #63"
+            )
+
     def test_distinguishes_generator_crash_from_drift(self, tmp_path):
         """When the generator itself crashes (Traceback in stderr), the message
         must flag it as a generator crash, NOT as tool-map drift — otherwise

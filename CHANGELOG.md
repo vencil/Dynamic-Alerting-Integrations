@@ -11,6 +11,10 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 
 ## [Unreleased]
 
+### DX
+
+- **Windows MS Store Python stub 防呆**（issue [#436](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/436)）：Windows 11 fresh install 在 `%LOCALAPPDATA%\Microsoft\WindowsApps\` 放的 `python3.exe` App Execution Alias placeholder 通過 `command -v` 但執行回 exit 49（`Python was not found; run without arguments to install from the Microsoft Store`），讓 `scripts/hooks/commit-msg` 每次 commit 被擋 + `scripts/tools/dx/pr_preflight.py::check_scope_drift()` 永遠回報 `❌ Scope drift`。修法兩面：(i) commit-msg shell candidate list 改 `"py -3" "py" python3 python ...` 並加 `--version` probe（stub 失敗即跳下一個 candidate）；(ii) `pr_preflight.py` + `scripts/tools/lint/check_pr_scope_drift.py` 的 subprocess invocation 用 `sys.executable` 取代 bare `"python3"`，由當前 interpreter self-fork 繞過 `CreateProcess` PATH lookup。Regression test 鎖 `cmd[0] == sys.executable`（`tests/lint/test_check_pr_scope_drift.py::TestCheckToolMap::test_uses_sys_executable_not_bare_python3` + `tests/dx/test_pr_preflight_checks.py::TestCheckScopeDrift::test_uses_sys_executable_not_bare_python3`）。Trap codify 至 [windows-mcp-playbook §已知陷阱速查 #63](docs/internal/windows-mcp-playbook.md#已知陷阱速查)。Dev Container / WSL / Linux 不受影響（無 MS Store stub）。
+
 ### 文件治理
 
 - **ADR frontmatter migration — #379 chunk 3 wrap-up**：ADR-001 ~ ADR-019（19 個檔案）加 ADR-020 frontmatter spec 欄位（`id` / `tracking_kind: adr` / `status: accepted` / `domain: <subsystem>` / `created_at` 從 `git log --diff-filter=A` 取首 commit 日期 / `updated_at: 2026-05-13`）。Status 從各 ADR 既有 `## 狀態` H2 區塊解析（emoji + bold name），mapping `Accepted/Extended → accepted`、`Proposed → proposed`、`Rejected → abandoned`、`Superseded → superseded`。Domain 來自 hand-authored mapping table（per-ADR judgment）。ADR-020 自身 self-bootstrap（之前是 SSOT spec 但沒套用自身規則）。`docs/internal/planning-index.md` 從 19 → 39 entries（accepted 20 / in-progress 2 / proposed 16 / done 1）。**Note**：`adr-index` 渲染不變，因 chunk 2a `generate_adr_index.py` 用 `## 狀態` 區塊解析、不依賴 frontmatter。`frontend-quality-backlog.md` 為 meta-policy 文件（無 entry）skip migration；`v2.8.0-planning*.md` + `known-regressions.md` phantom-deleted skip。
