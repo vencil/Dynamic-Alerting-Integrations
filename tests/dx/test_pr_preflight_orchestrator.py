@@ -428,7 +428,7 @@ class TestCheckPass2TrailerStrict:
             count_result=self._cp(0, "3\n"),
             log_result=self._cp(0, "dogfood mutated foo(), test_bar caught (✓)\n"),
         )
-        assert pp.check_pass2_trailer_strict(tmp_path) == 0
+        assert pp.check_pass2_trailer_strict() == 0
 
     def test_no_trailer_in_any_commit_fails_with_amend_hint(self, monkeypatch, tmp_path, capsys):
         """Range non-empty but trailer absent → exit 1 + helpful stderr."""
@@ -437,7 +437,7 @@ class TestCheckPass2TrailerStrict:
             count_result=self._cp(0, "2\n"),
             log_result=self._cp(0, ""),  # empty stdout = no trailers found
         )
-        rc = pp.check_pass2_trailer_strict(tmp_path)
+        rc = pp.check_pass2_trailer_strict()
         assert rc == 1
         err = capsys.readouterr().err
         assert "Self-Review-Pass-2" in err
@@ -455,7 +455,7 @@ class TestCheckPass2TrailerStrict:
             count_result=self._cp(0, "0\n"),
             log_result=None,  # log call must NOT happen
         )
-        assert pp.check_pass2_trailer_strict(tmp_path) == 0
+        assert pp.check_pass2_trailer_strict() == 0
         assert calls["i"] == 1, "git log should not be invoked when range is empty"
         out = capsys.readouterr().out
         assert "skipping" in out.lower()
@@ -473,7 +473,7 @@ class TestCheckPass2TrailerStrict:
             ),
             log_result=None,  # log call must NOT happen if rev-list failed
         )
-        rc = pp.check_pass2_trailer_strict(tmp_path)
+        rc = pp.check_pass2_trailer_strict()
         assert rc == 1
         err = capsys.readouterr().err
         assert "fetch-depth: 0" in err  # actionable CI guidance
@@ -487,7 +487,7 @@ class TestCheckPass2TrailerStrict:
             count_result=self._cp(0, "1\n"),
             log_result=self._cp(128, "", "fatal: bad revision"),
         )
-        rc = pp.check_pass2_trailer_strict(tmp_path)
+        rc = pp.check_pass2_trailer_strict()
         assert rc == 1
         err = capsys.readouterr().err
         assert "git log" in err
@@ -503,7 +503,7 @@ class TestCheckPass2TrailerStrict:
             return self._cp(0, "1\n" if len(captured_cmds) == 1 else "trailer\n")
 
         monkeypatch.setattr(pp, "run", fake_run)
-        pp.check_pass2_trailer_strict(tmp_path, base_ref="origin/develop")
+        pp.check_pass2_trailer_strict(base_ref="origin/develop")
         # Both git invocations should embed origin/develop, not origin/main.
         assert any("origin/develop..HEAD" in arg for arg in captured_cmds[0])
         assert any("origin/develop..HEAD" in arg for arg in captured_cmds[1])
@@ -517,7 +517,7 @@ class TestCheckPass2TrailerStrict:
             count_result=self._cp(127, "", "command not found: git"),
             log_result=None,
         )
-        rc = pp.check_pass2_trailer_strict(tmp_path)
+        rc = pp.check_pass2_trailer_strict()
         assert rc == 1
         err = capsys.readouterr().err
         assert "git rev-list" in err
@@ -530,7 +530,7 @@ class TestCheckPass2TrailerStrict:
         monkeypatch.setattr(os, "chdir", lambda p: None)
         called = {"n": 0, "base_ref": None}
 
-        def fake_check(repo_root, base_ref="origin/main"):
+        def fake_check(base_ref="origin/main"):
             called["n"] += 1
             called["base_ref"] = base_ref
             return 0

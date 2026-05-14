@@ -480,7 +480,7 @@ def check_pr_title(title: str, repo_root: Path, max_length: int = 70) -> int:
     return 0
 
 
-def check_pass2_trailer_strict(repo_root: Path, base_ref: str = "origin/main") -> int:
+def check_pass2_trailer_strict(base_ref: str = "origin/main") -> int:
     """Validate at least one commit in `<base_ref>..HEAD` has a Self-Review-Pass-2
     trailer. Used as a CI strict-mode gate (issue #454).
 
@@ -488,7 +488,10 @@ def check_pass2_trailer_strict(repo_root: Path, base_ref: str = "origin/main") -
       - Reuses pr_preflight's existing commit-msg validation infrastructure
         (the `check_commit_msg_file` / `check_pr_title` family of single-purpose
         exit-early modes).
-      - Same conventions (sys.executable subprocess, repo_root parameter).
+      - main() chdir's to repo_root before dispatch, so git commands run in
+        the right cwd without us threading the path through. Siblings
+        check_commit_msg_file / check_pr_title take repo_root because they
+        read `.commitlintrc.yaml`; this gate has no on-disk config to load.
 
     Why git's native trailer parser (not regex):
       Git enforces "trailers must be in the bottom paragraph after a blank
@@ -555,7 +558,7 @@ def check_pass2_trailer_strict(repo_root: Path, base_ref: str = "origin/main") -
         "   Add to ANY commit message (the trailer must be on its own line\n"
         "   in the bottom paragraph, separated from the body by a blank line):\n"
         "\n"
-        "     Self-Review-Pass-2: dogfood mutated <function>, "
+        "     Self-Review-Pass-2: dogfood mutated <function>; "
         "<test_name> caught (✓)\n"
         "\n"
         "   Or amend the last commit:\n"
@@ -1062,7 +1065,7 @@ def main() -> int:
             args.check_pr_title, repo_root, max_length=args.pr_title_max_length
         )
     if args.check_pass2_trailer_strict:
-        return check_pass2_trailer_strict(repo_root, base_ref=args.base_ref)
+        return check_pass2_trailer_strict(base_ref=args.base_ref)
 
     report = PreflightReport()
 
