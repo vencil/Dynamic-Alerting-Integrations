@@ -80,6 +80,21 @@ jobs:
             ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/threshold-exporter:v${{ steps.version.outputs.VERSION }}
             ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/threshold-exporter:latest
 
+      # --- L3 supply-chain digest verification (#445 AC iii) ---
+      # Verifies the image at Chart.yaml `appVersion` tag actually exists
+      # in GHCR + captures digest for the release audit trail. For
+      # threshold-exporter, appVersion==chart-version==tag-version, so
+      # this is effectively "confirm what we just pushed is queryable".
+      # For other components where appVersion ≠ chart-version (e.g.
+      # tenant-api at chart 2.8.0 + appVersion 2.7.0), this verifies the
+      # chart's claimed binary version still has a corresponding image.
+      # See docs/internal/secret-leak-remediation-sop.md for the full
+      # L0/L1/L2/L3 framing.
+      - name: Verify image digest (#445 AC iii)
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
+        run: bash scripts/ops/verify_release_digest.sh threshold-exporter helm/threshold-exporter/Chart.yaml
+
       # --- Helm chart (before scan so Trivy failure doesn't block distribution) ---
       - name: Set up Helm
         uses: azure/setup-helm@v4
@@ -198,6 +213,15 @@ jobs:
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/da-tools:v${{ steps.version.outputs.VERSION }}
             ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/da-tools:latest
+
+      # --- L3 supply-chain digest verification (#445 AC iii) ---
+      # da-tools has no Helm chart — components/da-tools/app/VERSION is the
+      # SoT, and we verify the image at v${VERSION} directly. Catches
+      # silent push failure or VERSION/tag drift.
+      - name: Verify image digest (#445 AC iii)
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
+        run: bash scripts/ops/verify_release_digest.sh da-tools
 
       - name: Scan image with Trivy
         uses: aquasecurity/trivy-action@0.35.0
@@ -433,6 +457,18 @@ jobs:
         id: version
         run: echo "VERSION=${GITHUB_REF_NAME#portal/v}" >> "$GITHUB_OUTPUT"
 
+      - name: Verify Chart.yaml version matches tag
+        # Added with #445 AC iii — release-portal previously lacked this
+        # consistency gate that release-exporter / release-tenant-api
+        # already had.
+        run: |
+          CHART_VER=$(grep '^version:' helm/da-portal/Chart.yaml | awk '{print $2}')
+          if [ "$CHART_VER" != "${{ steps.version.outputs.VERSION }}" ]; then
+            echo "ERROR: helm/da-portal/Chart.yaml version ($CHART_VER) != tag (${{ steps.version.outputs.VERSION }})"
+            echo "Run: make bump-docs PORTAL=${{ steps.version.outputs.VERSION }}"
+            exit 1
+          fi
+
       - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
@@ -455,6 +491,12 @@ jobs:
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/da-portal:v${{ steps.version.outputs.VERSION }}
             ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/da-portal:latest
+
+      # --- L3 supply-chain digest verification (#445 AC iii) ---
+      - name: Verify image digest (#445 AC iii)
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
+        run: bash scripts/ops/verify_release_digest.sh da-portal helm/da-portal/Chart.yaml
 
       - name: Scan image with Trivy
         uses: aquasecurity/trivy-action@0.35.0
@@ -506,6 +548,19 @@ jobs:
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/tenant-api:v${{ steps.version.outputs.VERSION }}
             ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/tenant-api:latest
+
+      # --- L3 supply-chain digest verification (#445 AC iii) ---
+      # ⚠️ tenant-api intentionally has Chart.yaml appVersion ≠ version
+      # (chart 2.8.0 wraps appVersion 2.7.0 — chart-template changes can
+      # decouple from binary changes). The verification therefore probes
+      # `:v${appVersion}` (the chart's claimed binary version), NOT the
+      # tag-version we just pushed. This catches "chart claims a binary
+      # version with no corresponding published image" while permitting
+      # the legitimate decoupling.
+      - name: Verify image digest (#445 AC iii)
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
+        run: bash scripts/ops/verify_release_digest.sh tenant-api helm/tenant-api/Chart.yaml
 
       # --- Helm chart ---
       - name: Set up Helm
