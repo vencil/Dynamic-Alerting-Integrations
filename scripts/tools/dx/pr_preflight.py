@@ -25,7 +25,6 @@
 """
 
 import argparse
-import io
 import os
 import re
 import subprocess
@@ -35,10 +34,17 @@ from enum import Enum
 from pathlib import Path
 from typing import List, Optional
 
-# Windows console 預設 cp950/cp936 無法印 emoji — 強制 UTF-8
-if sys.stdout.encoding and sys.stdout.encoding.lower().startswith("cp"):
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+# Pull `try_utf8_stdout` from the shared compat lib at scripts/tools/.
+# Modern pattern (PR #432, 2026-05-12): main()-scoped UTF-8 reconfigure
+# via _lib_compat.try_utf8_stdout(), not the legacy module-level
+# `io.TextIOWrapper(sys.stdout.buffer, ...)` side-effect-on-import.
+# Migrated from the legacy pattern in #489 (Phase A) — pr_preflight runs
+# on every commit on Windows hosts, so its emoji-print path is on the
+# hot path. See _lib_compat.py docstring for rationale.
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _THIS_DIR)
+sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
+from _lib_compat import try_utf8_stdout  # noqa: E402
 
 
 class Status(Enum):
@@ -1009,6 +1015,10 @@ def check_pr_mergeable(pr_number: Optional[int] = None) -> CheckResult:
 
 
 def main() -> int:
+    # First line: reconfigure stdout for legacy Windows consoles before any
+    # emoji-print might happen. Idempotent + defensive (try/except inside
+    # the helper); see _lib_compat.py docstring for rationale.
+    try_utf8_stdout()
     parser = argparse.ArgumentParser(
         description="PR Preflight Check — branch 收尾前的自動化檢查",
         formatter_class=argparse.RawDescriptionHelpFormatter,
