@@ -43,18 +43,25 @@ Usage
 from __future__ import annotations
 
 import argparse
-import io
 import json
+import os
 import re
 import subprocess
 import sys
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
-# Windows cp950 / cp936 consoles can't encode ✅⚠️❌ — fail-safe to UTF-8.
-if sys.stdout.encoding and sys.stdout.encoding.lower().startswith("cp"):
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+# Pull `try_utf8_stdout` from the shared compat lib at scripts/tools/.
+# Modern pattern (PR #432, 2026-05-12): main()-scoped UTF-8 reconfigure
+# via _lib_compat.try_utf8_stdout(), not the legacy module-level
+# `io.TextIOWrapper(sys.stdout.buffer, ...)` side-effect-on-import.
+# Two sys.path inserts: parent (`scripts/tools/`) for the repo layout
+# where _lib_compat.py lives one directory up, and self-dir for the
+# Docker flat layout where every file sits in /app/.
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _THIS_DIR)
+sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
+from _lib_compat import try_utf8_stdout  # noqa: E402
 
 
 # Exit codes — documented in module docstring, kept as module constants so
@@ -620,6 +627,10 @@ def format_markdown(diag: PrDiag, max_annotations_per_check: int = 5) -> str:
 
 
 def main() -> int:
+    # First line: reconfigure stdout for legacy Windows consoles before any
+    # emoji-print might happen. Idempotent + defensive (try/except inside
+    # the helper); see _lib_compat docstring for rationale.
+    try_utf8_stdout()
     parser = argparse.ArgumentParser(
         description="Summarize failing CI checks for a PR via gh api (#446).",
         formatter_class=argparse.RawDescriptionHelpFormatter,
