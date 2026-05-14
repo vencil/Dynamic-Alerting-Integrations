@@ -79,8 +79,12 @@ def check_tool_map(repo: Path) -> tuple[bool, str]:
     finding a drift — we surface that distinction so the caller does not
     waste time investigating a phantom `tool-map.md` diff.
     """
+    # Use sys.executable rather than bare "python3" — on Windows hosts the
+    # MS Store Python stub at %LOCALAPPDATA%\Microsoft\WindowsApps\python3.exe
+    # passes CreateProcess lookup but exits 49 with "Python was not found".
+    # See windows-mcp-playbook trap #63.
     rc, stdout, stderr = run(
-        ["python3", "-X", "utf8", "scripts/tools/dx/generate_tool_map.py", "--check"],
+        [sys.executable, "-X", "utf8", "scripts/tools/dx/generate_tool_map.py", "--check"],
         repo,
     )
     combined = (stdout + stderr).strip()

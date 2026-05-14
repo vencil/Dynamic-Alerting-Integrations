@@ -274,6 +274,29 @@ class TestCheckScopeDrift:
         assert result.status == pp.Status.FAIL
         assert "no output" in result.message
 
+    def test_uses_sys_executable_not_bare_python3(self, monkeypatch):
+        """Regression guard for #436: bare 'python3' launches the MS Store
+        App Execution Alias stub on fresh Windows hosts (exits 49 with
+        'Python was not found') — see windows-mcp-playbook trap #63. The
+        subprocess must dispatch through sys.executable so the already-running
+        interpreter forks the child."""
+        captured = {}
+
+        def fake_run(cmd, *a, **kw):
+            captured["cmd"] = cmd
+            return _cp(0, "")
+
+        monkeypatch.setattr(pp, "run", fake_run)
+        pp.check_scope_drift()
+        cmd = captured["cmd"]
+        assert cmd[0] == sys.executable, (
+            f"expected cmd[0] == sys.executable ({sys.executable!r}), "
+            f"got {cmd[0]!r} — bare 'python3' hits the Windows MS Store stub"
+        )
+        assert cmd[0] != "python3", (
+            "must not pass bare 'python3' — see #436 / playbook trap #63"
+        )
+
 
 # ---------------------------------------------------------------------------
 # check_ci_status
