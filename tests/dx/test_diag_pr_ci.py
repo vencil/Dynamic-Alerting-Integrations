@@ -205,6 +205,27 @@ class TestCheckPrerequisites:
             dpc.check_prerequisites()
         assert exc_info.value.code == dpc.EXIT_NETWORK_BLOCKED
 
+    def test_exit_3_when_auth_status_times_out(self, monkeypatch, capsys):
+        """Round-3 self-review fix: step 2 (`gh auth status`) validates the
+        token over the network, so its 5s timeout is a real possibility.
+        TimeoutExpired must be caught and routed to exit 3 (network bucket)
+        — not propagated as an uncaught exception. Mirrors step 1 + step 3
+        timeout handling for consistency."""
+        def fake_run(cmd, **kw):
+            if cmd[:2] == ["gh", "--version"]:
+                return _cp(0, "", "")
+            if cmd[:3] == ["gh", "auth", "status"]:
+                raise subprocess.TimeoutExpired(cmd, 5)
+            return _cp(0, "", "")
+
+        monkeypatch.setattr(dpc.subprocess, "run", fake_run)
+        with pytest.raises(SystemExit) as exc_info:
+            dpc.check_prerequisites()
+        assert exc_info.value.code == dpc.EXIT_NETWORK_BLOCKED
+        err = capsys.readouterr().err
+        assert "timed out" in err
+        assert "Windows MCP" in err  # Cowork-VM fallback hint
+
     def test_exit_2_when_api_probe_returns_non_proxy_error(self, monkeypatch, capsys):
         """Auth-class probe failure (e.g. token expired) routes to exit 2
         with a re-login hint, not exit 3 (which is for network/proxy)."""

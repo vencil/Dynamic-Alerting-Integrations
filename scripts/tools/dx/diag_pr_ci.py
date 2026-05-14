@@ -170,11 +170,24 @@ def check_prerequisites() -> None:
         sys.exit(EXIT_PREREQ_MISSING)
 
     # Step 2: authenticated. `gh auth status` exits non-zero if not logged in.
-    auth = subprocess.run(
-        ["gh", "auth", "status"],
-        capture_output=True, text=True, encoding="utf-8",
-        errors="replace", timeout=5, check=False,
-    )
+    # It also hits the network to validate the token, so a 5s timeout is a
+    # real possibility on degraded networks — route to exit 3 (same bucket
+    # as step 3's network probe) with the same Cowork-VM fallback hint.
+    # Mirrors step 1's TimeoutExpired handling for consistency.
+    try:
+        auth = subprocess.run(
+            ["gh", "auth", "status"],
+            capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=5, check=False,
+        )
+    except subprocess.TimeoutExpired:
+        print(
+            "⚠️  `gh auth status` timed out (5s) — auth validates over the network.\n"
+            "   Likely cause: proxy / network issue.\n"
+            "   Switch to Windows MCP or Dev Container and retry.",
+            file=sys.stderr,
+        )
+        sys.exit(EXIT_NETWORK_BLOCKED)
     if auth.returncode != 0:
         print(
             "❌ `gh` is not authenticated.\n"
