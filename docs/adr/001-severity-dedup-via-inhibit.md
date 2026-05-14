@@ -4,8 +4,13 @@ tags: [adr, architecture]
 audience: [platform-engineers]
 version: v2.8.0
 lang: zh
+id: ADR-001
+tracking_kind: adr
+status: accepted
+domain: exporter
+created_at: 2026-03-13
+updated_at: 2026-05-13
 ---
-
 # ADR-001: 嚴重度 Dedup 採用 Inhibit 規則
 
 > **Language / 語言：** **中文 (Current)** | [English](./001-severity-dedup-via-inhibit.en.md)

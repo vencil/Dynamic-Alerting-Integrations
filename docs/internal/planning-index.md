@@ -26,6 +26,31 @@ lang: zh
 | `TRK-006` | dx | TRK-006: Skip budget CI gate | ci | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
 | `TRK-010` | dx | TRK-010: Flake 自動重試 CI Policy（不是盲目全域 retry） | ci | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
 
+### accepted (20)
+
+| ID | Kind | Title | Domain | PR | Source |
+|----|------|-------|--------|------|--------|
+| `ADR-001` | adr | ADR-001: 嚴重度 Dedup 採用 Inhibit 規則 | exporter | — | [docs/adr/001-severity-dedup-via-inhibit.md](../adr/001-severity-dedup-via-inhibit.md) |
+| `ADR-002` | adr | ADR-002: OCI Registry 替代 ChartMuseum | helm | — | [docs/adr/002-oci-registry-over-chartmuseum.md](../adr/002-oci-registry-over-chartmuseum.md) |
+| `ADR-003` | adr | ADR-003: Sentinel Alert 模式 | exporter | — | [docs/adr/003-sentinel-alert-pattern.md](../adr/003-sentinel-alert-pattern.md) |
+| `ADR-004` | adr | ADR-004: Federation 架構——中央 Exporter 優先 | exporter | — | [docs/adr/004-federation-central-exporter-first.md](../adr/004-federation-central-exporter-first.md) |
+| `ADR-005` | adr | ADR-005: 投影卷掛載 Rule Pack | k8s | — | [docs/adr/005-projected-volume-for-rule-packs.md](../adr/005-projected-volume-for-rule-packs.md) |
+| `ADR-006` | adr | ADR-006: 租戶映射拓撲 (1:1, N:1, 1:N) | exporter | — | [docs/adr/006-tenant-mapping-topologies.md](../adr/006-tenant-mapping-topologies.md) |
+| `ADR-007` | adr | ADR-007: 跨域路由設定檔與域策略 | tenant-api | — | [docs/adr/007-cross-domain-routing-profiles.md](../adr/007-cross-domain-routing-profiles.md) |
+| `ADR-008` | adr | ADR-008: Operator-Native 整合路徑 | k8s | — | [docs/adr/008-operator-native-integration-path.md](../adr/008-operator-native-integration-path.md) |
+| `ADR-009` | adr | ADR-009: Tenant Manager CRUD API 架構 | tenant-api | — | [docs/adr/009-tenant-manager-crud-api.md](../adr/009-tenant-manager-crud-api.md) |
+| `ADR-010` | adr | ADR-010: Multi-Tenant Grouping Architecture | tenant-api | — | [docs/adr/010-multi-tenant-grouping.md](../adr/010-multi-tenant-grouping.md) |
+| `ADR-011` | adr | ADR-011: PR-based Write-back 模式 | tenant-api | — | [docs/adr/011-pr-based-write-back.md](../adr/011-pr-based-write-back.md) |
+| `ADR-012` | adr | ADR-012: threshold-heatmap 色盲補丁 — 結構化 severity 返回值 | portal | — | [docs/adr/012-colorblind-hotfix-structured-severity-return.md](../adr/012-colorblind-hotfix-structured-severity-return.md) |
+| `ADR-013` | adr | ADR-013: Component Health Scanner — Tier 評分演算法與 token_density 輔助指標 | dx | — | [docs/adr/013-component-health-token-density-metric.md](../adr/013-component-health-token-density-metric.md) |
+| `ADR-014` | adr | ADR-014: TECH-DEBT 類別與 REG Budget 隔離 | docs | — | [docs/adr/014-tech-debt-category-budget-isolation.md](../adr/014-tech-debt-category-budget-isolation.md) |
+| `ADR-015` | adr | ADR-015: wizard.jsx design token 遷移採 Option A（Tailwind arbitrary value 全改寫） | portal | — | [docs/adr/015-wizard-arbitrary-value-token-migration.md](../adr/015-wizard-arbitrary-value-token-migration.md) |
+| `ADR-016` | adr | ADR-016: 全面改用 `[data-theme]` 單軌 dark mode，移除 Tailwind `dark:` 變體 | portal | — | [docs/adr/016-data-theme-single-track-dark-mode.md](../adr/016-data-theme-single-track-dark-mode.md) |
+| `ADR-017` | adr | ADR-017: conf.d/ 目錄分層 + 混合模式 + 遷移策略 | exporter | — | [docs/adr/017-conf-d-directory-hierarchy-mixed-mode.md](../adr/017-conf-d-directory-hierarchy-mixed-mode.md) |
+| `ADR-018` | adr | ADR-018: _defaults.yaml 繼承語意 + dual-hash hot-reload | exporter | — | [docs/adr/018-defaults-yaml-inheritance-dual-hash.md](../adr/018-defaults-yaml-inheritance-dual-hash.md) |
+| `ADR-019` | adr | ADR-019: Profile-as-Directory-Default | tools | — | [docs/adr/019-profile-as-directory-default.md](../adr/019-profile-as-directory-default.md) |
+| `ADR-020` | adr | ADR-020: Planning SSOT — Frontmatter Contract + Discovery-based Index | docs | — | [docs/adr/020-planning-ssot.md](../adr/020-planning-ssot.md) |
+
 ### proposed (16)
 
 | ID | Kind | Title | Domain | PR | Source |

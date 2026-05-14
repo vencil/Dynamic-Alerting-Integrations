@@ -4,8 +4,13 @@ tags: [adr, architecture, api, tenant-management]
 audience: [platform-engineers, developers]
 version: v2.8.0
 lang: zh
+id: ADR-009
+tracking_kind: adr
+status: accepted
+domain: tenant-api
+created_at: 2026-04-05
+updated_at: 2026-05-13
 ---
-
 # ADR-009: Tenant Manager CRUD API 架構
 
 > **Language / 語言：** **中文 (Current)** | [English](./009-tenant-manager-crud-api.en.md)

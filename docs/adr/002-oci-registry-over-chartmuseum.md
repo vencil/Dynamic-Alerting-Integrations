@@ -4,8 +4,13 @@ tags: [adr, architecture]
 audience: [platform-engineers]
 version: v2.8.0
 lang: zh
+id: ADR-002
+tracking_kind: adr
+status: accepted
+domain: helm
+created_at: 2026-03-13
+updated_at: 2026-05-13
 ---
-
 # ADR-002: OCI Registry 替代 ChartMuseum
 
 > **Language / 語言：** **中文 (Current)** | [English](./002-oci-registry-over-chartmuseum.en.md)

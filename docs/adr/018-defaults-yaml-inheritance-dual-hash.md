@@ -4,8 +4,13 @@ tags: [adr, defaults, inheritance, hot-reload, dual-hash, v2.7.0]
 audience: [platform-engineers, sre, contributors]
 version: v2.8.0
 lang: zh
+id: ADR-018
+tracking_kind: adr
+status: accepted
+domain: exporter
+created_at: 2026-04-18
+updated_at: 2026-05-13
 ---
-
 # ADR-018: _defaults.yaml 繼承語意 + dual-hash hot-reload
 
 > **Language / 語言：** **中文 (Current)** | [English](./018-defaults-yaml-inheritance-dual-hash.en.md)

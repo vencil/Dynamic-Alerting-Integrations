@@ -4,8 +4,13 @@ tags: [adr, profile-builder, conf-d, v2.8.0]
 audience: [platform-engineers, sre, contributors]
 version: v2.8.0
 lang: zh
+id: ADR-019
+tracking_kind: adr
+status: accepted
+domain: tools
+created_at: 2026-04-27
+updated_at: 2026-05-13
 ---
-
 # ADR-019: Profile-as-Directory-Default
 
 > **Language / 語言：** **中文 (Current)** | [English](./019-profile-as-directory-default.en.md)

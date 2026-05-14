@@ -4,8 +4,13 @@ tags: [adr, architecture, groups, tenant-management]
 audience: [platform-engineers, developers]
 version: v2.8.0
 lang: zh
+id: ADR-010
+tracking_kind: adr
+status: accepted
+domain: tenant-api
+created_at: 2026-04-06
+updated_at: 2026-05-13
 ---
-
 # ADR-010: Multi-Tenant Grouping Architecture
 
 > **Language / 語言：** **中文 (Current)** | [English](./010-multi-tenant-grouping.en.md)

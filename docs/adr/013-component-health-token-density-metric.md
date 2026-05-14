@@ -4,8 +4,13 @@ tags: [adr, metrics, component-health, design-tokens, tier-scoring, v2.7.0]
 audience: [frontend-developers, platform-engineers, maintainers]
 version: v2.8.0
 lang: zh
+id: ADR-013
+tracking_kind: adr
+status: accepted
+domain: dx
+created_at: 2026-04-18
+updated_at: 2026-05-13
 ---
-
 # ADR-013: Component Health Scanner — Tier 評分演算法與 token_density 輔助指標
 
 > **Language / 語言：** **中文 (Current)** | [English](./013-component-health-token-density-metric.en.md)

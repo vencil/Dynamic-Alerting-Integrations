@@ -4,6 +4,12 @@ tags: [adr, dx, planning, ai-agent, governance]
 audience: [platform-engineers, contributors, ai-agents]
 version: v2.8.0
 lang: zh
+id: ADR-020
+tracking_kind: adr
+status: accepted
+domain: docs
+created_at: 2026-05-10
+updated_at: 2026-05-13
 ---
 
 # ADR-020: Planning SSOT — Frontmatter Contract + Discovery-based Index
