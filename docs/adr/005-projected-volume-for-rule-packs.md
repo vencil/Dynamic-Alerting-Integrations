@@ -4,8 +4,13 @@ tags: [adr, architecture]
 audience: [platform-engineers]
 version: v2.8.0
 lang: zh
+id: ADR-005
+tracking_kind: adr
+status: accepted
+domain: k8s
+created_at: 2026-03-13
+updated_at: 2026-05-13
 ---
-
 # ADR-005: 投影卷掛載 Rule Pack
 
 > **Language / 語言：** **中文 (Current)** | [English](./005-projected-volume-for-rule-packs.en.md)

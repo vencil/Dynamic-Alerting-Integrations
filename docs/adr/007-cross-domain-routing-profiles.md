@@ -4,8 +4,13 @@ tags: [adr, architecture]
 audience: [platform-engineers]
 version: v2.8.0
 lang: zh
+id: ADR-007
+tracking_kind: adr
+status: accepted
+domain: tenant-api
+created_at: 2026-03-16
+updated_at: 2026-05-13
 ---
-
 # ADR-007: 跨域路由設定檔與域策略
 
 > **Language / 語言：** **中文 (Current)** | [English](./007-cross-domain-routing-profiles.en.md)

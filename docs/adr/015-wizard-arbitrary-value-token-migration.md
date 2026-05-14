@@ -4,8 +4,13 @@ tags: [adr, design-tokens, v2.7.0]
 audience: [frontend-developers, maintainers]
 version: v2.8.0
 lang: zh
+id: ADR-015
+tracking_kind: adr
+status: accepted
+domain: portal
+created_at: 2026-04-18
+updated_at: 2026-05-13
 ---
-
 # ADR-015: wizard.jsx design token 遷移採 Option A（Tailwind arbitrary value 全改寫）
 
 > **Language / 語言：** **中文 (Current)** | [English](./015-wizard-arbitrary-value-token-migration.en.md)

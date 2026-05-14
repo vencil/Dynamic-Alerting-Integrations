@@ -4,8 +4,13 @@ tags: [adr, conf.d, directory-scanner, hierarchy, migration, v2.7.0]
 audience: [platform-engineers, sre, contributors]
 version: v2.8.0
 lang: zh
+id: ADR-017
+tracking_kind: adr
+status: accepted
+domain: exporter
+created_at: 2026-04-18
+updated_at: 2026-05-13
 ---
-
 # ADR-017: conf.d/ 目錄分層 + 混合模式 + 遷移策略
 
 > **Language / 語言：** **中文 (Current)** | [English](./017-conf-d-directory-hierarchy-mixed-mode.en.md)

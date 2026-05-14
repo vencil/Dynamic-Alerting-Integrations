@@ -4,8 +4,13 @@ tags: [adr, governance, tech-debt, regressions, budget, v2.7.0]
 audience: [platform-engineers, tech-leads]
 version: v2.8.0
 lang: zh
+id: ADR-014
+tracking_kind: adr
+status: accepted
+domain: docs
+created_at: 2026-04-18
+updated_at: 2026-05-13
 ---
-
 # ADR-014: TECH-DEBT 類別與 REG Budget 隔離
 
 > **Language / 語言：** **中文 (Current)** | [English](./014-tech-debt-category-budget-isolation.en.md)

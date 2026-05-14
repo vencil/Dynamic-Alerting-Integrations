@@ -4,8 +4,13 @@ tags: [adr, accessibility, wcag, portal, v2.7.0]
 audience: [frontend-developers, design-system-maintainers]
 version: v2.8.0
 lang: zh
+id: ADR-012
+tracking_kind: adr
+status: accepted
+domain: portal
+created_at: 2026-04-18
+updated_at: 2026-05-13
 ---
-
 # ADR-012: threshold-heatmap 色盲補丁 — 結構化 severity 返回值
 
 > **Language / 語言：** **中文 (Current)** | [English](./012-colorblind-hotfix-structured-severity-return.en.md)

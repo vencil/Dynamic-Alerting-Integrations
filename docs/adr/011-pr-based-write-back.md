@@ -4,8 +4,13 @@ tags: [adr, architecture, gitops, pr, write-back]
 audience: [platform-engineers, developers]
 version: v2.8.0
 lang: zh
+id: ADR-011
+tracking_kind: adr
+status: accepted
+domain: tenant-api
+created_at: 2026-04-07
+updated_at: 2026-05-13
 ---
-
 # ADR-011: PR-based Write-back 模式
 
 > **Language / 語言：** **中文 (Current)** | [English](./011-pr-based-write-back.en.md)

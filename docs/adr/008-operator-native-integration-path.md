@@ -4,8 +4,13 @@ tags: [adr, architecture, operator]
 audience: [platform-engineers]
 version: v2.8.0
 lang: zh
+id: ADR-008
+tracking_kind: adr
+status: accepted
+domain: k8s
+created_at: 2026-04-04
+updated_at: 2026-05-13
 ---
-
 # ADR-008: Operator-Native 整合路徑
 
 > **Language / 語言：** **中文 (Current)** | [English](./008-operator-native-integration-path.en.md)

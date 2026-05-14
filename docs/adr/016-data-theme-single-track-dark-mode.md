@@ -4,8 +4,13 @@ tags: [adr, design-tokens, dark-mode, v2.7.0]
 audience: [frontend-developers, designers, maintainers]
 version: v2.8.0
 lang: zh
+id: ADR-016
+tracking_kind: adr
+status: accepted
+domain: portal
+created_at: 2026-04-18
+updated_at: 2026-05-13
 ---
-
 # ADR-016: 全面改用 `[data-theme]` 單軌 dark mode，移除 Tailwind `dark:` 變體
 
 > **Language / 語言：** **中文 (Current)** | [English](./016-data-theme-single-track-dark-mode.en.md)

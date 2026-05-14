@@ -4,8 +4,13 @@ tags: [adr, architecture]
 audience: [platform-engineers]
 version: v2.8.0
 lang: zh
+id: ADR-004
+tracking_kind: adr
+status: accepted
+domain: exporter
+created_at: 2026-04-07
+updated_at: 2026-05-13
 ---
-
 # ADR-004: Federation 架構——中央 Exporter 優先
 
 > **Language / 語言：** **中文 (Current)** | [English](./004-federation-central-exporter-first.en.md)
