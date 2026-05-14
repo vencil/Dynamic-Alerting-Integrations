@@ -30,6 +30,15 @@ import json
 import sys
 from pathlib import Path
 from typing import Dict, List
+import os
+
+# Pull `try_utf8_stdout` from the shared compat lib at scripts/tools/.
+# Migrated in #489 Phase B (was missing encoding setup → would crash on
+# legacy Windows cp950/cp936 consoles when printing emoji to stdout).
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, str(_THIS_DIR))
+sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
+from _lib_compat import try_utf8_stdout  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 DIST_DIR = REPO_ROOT / "docs" / "assets" / "dist"
@@ -129,6 +138,7 @@ def run_check() -> tuple[List[Dict], Dict]:
 
 
 def main() -> int:
+    try_utf8_stdout()
     parser = argparse.ArgumentParser(description="Portal dist bundle size budget")
     parser.add_argument("--ci", action="store_true", help="exit 1 on violation")
     parser.add_argument("--json", action="store_true", help="JSON output")

@@ -35,6 +35,13 @@ from pathlib import Path
 
 # Add script dir to path for lib imports
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Pull `try_utf8_stdout` from the shared compat lib at scripts/tools/.
+# Migrated in #489 Phase B (was missing encoding setup → would crash on
+# legacy Windows cp950/cp936 consoles when printing emoji to stdout).
+sys.path.insert(0, str(_THIS_DIR))
+sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
+from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo tools root
 from _lib_python import write_text_secure  # noqa: E402
 
@@ -174,6 +181,7 @@ def generate_abbreviations_file(abbreviations: dict) -> str:
 
 def main():
     """CLI entry point: Sync abbreviations from glossary.md to MkDocs snippet."""
+    try_utf8_stdout()
     parser = argparse.ArgumentParser(
         description="Sync abbreviations from glossary.md to MkDocs snippet file."
     )

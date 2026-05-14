@@ -17,6 +17,15 @@ import argparse
 import re
 import sys
 from pathlib import Path
+import os
+
+# Pull `try_utf8_stdout` from the shared compat lib at scripts/tools/.
+# Migrated in #489 Phase B (was missing encoding setup → would crash on
+# legacy Windows cp950/cp936 consoles when printing emoji to stdout).
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, str(_THIS_DIR))
+sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
+from _lib_compat import try_utf8_stdout  # noqa: E402
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent.parent.parent
@@ -149,6 +158,7 @@ def suggest(tools: list, top_n: int = 3) -> dict:
 
 def main():
     """CLI entry point: 基於 audience 重疊 + tags 相似度推薦 related tools."""
+    try_utf8_stdout()
     parser = argparse.ArgumentParser(description="Suggest related tools")
     parser.add_argument("--top", type=int, default=3, help="Number of suggestions")
     parser.add_argument("--show-scores", action="store_true", help="Show similarity scores")

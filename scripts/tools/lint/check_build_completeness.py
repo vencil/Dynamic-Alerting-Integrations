@@ -23,6 +23,15 @@ from _lint_helpers import (
     ENTRYPOINT_PATH,
     BUILD_SH_PATH,
 )
+import os
+
+# Pull `try_utf8_stdout` from the shared compat lib at scripts/tools/.
+# Migrated in #489 Phase B (was missing encoding setup → would crash on
+# legacy Windows cp950/cp936 consoles when printing emoji to stdout).
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, str(_THIS_DIR))
+sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
+from _lib_compat import try_utf8_stdout  # noqa: E402
 
 
 def check_bidirectional(command_map: dict, build_tools: set) -> list:
@@ -97,6 +106,7 @@ def format_json_report(errors: list, command_map: dict, build_tools: set) -> str
 
 
 def main():
+    try_utf8_stdout()
     parser = argparse.ArgumentParser(
         description="build.sh ↔ COMMAND_MAP 雙向同步檢查")
     parser.add_argument("--ci", action="store_true",

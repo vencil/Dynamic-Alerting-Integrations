@@ -23,6 +23,15 @@ import sys
 import re
 from pathlib import Path
 from typing import List, Tuple, Optional
+import os
+
+# Pull `try_utf8_stdout` from the shared compat lib at scripts/tools/.
+# Migrated in #489 Phase B (was missing encoding setup → would crash on
+# legacy Windows cp950/cp936 consoles when printing emoji to stdout).
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, str(_THIS_DIR))
+sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
+from _lib_compat import try_utf8_stdout  # noqa: E402
 
 # 嘗試導入共用函式庫
 try:
@@ -274,6 +283,7 @@ class ReadingTimeChecker:
 
 def main():
     """CLI 入口點。"""
+    try_utf8_stdout()
     parser = argparse.ArgumentParser(
         description=i18n_text(
             "檢查 Markdown 文件的閱讀時間是否超過閾值",

@@ -53,6 +53,14 @@ import sys
 import tempfile
 from pathlib import Path
 
+# Pull `try_utf8_stdout` from the shared compat lib at scripts/tools/.
+# Migrated in #489 Phase B (was missing encoding setup → would crash on
+# legacy Windows cp950/cp936 consoles when printing emoji to stdout).
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, str(_THIS_DIR))
+sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
+from _lib_compat import try_utf8_stdout  # noqa: E402
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 
 JSX_DIRS = [
@@ -328,6 +336,7 @@ def _ensure_babel(node_modules: Path) -> bool:
 
 def main() -> int:
     """CLI entry point: Validate JSX files parse correctly via Babel standalone."""
+    try_utf8_stdout()
     parser = argparse.ArgumentParser(description="Lint JSX files with Babel standalone")
     parser.add_argument("--ci", action="store_true", help="Exit 1 on Babel parse errors")
     parser.add_argument(

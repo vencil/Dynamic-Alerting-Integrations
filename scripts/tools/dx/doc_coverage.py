@@ -20,6 +20,14 @@ from collections import defaultdict
 from typing import Dict, List, Tuple, Set
 from dataclasses import dataclass, asdict
 
+# Pull `try_utf8_stdout` from the shared compat lib at scripts/tools/.
+# Migrated in #489 Phase B (was missing encoding setup → would crash on
+# legacy Windows cp950/cp936 consoles when printing emoji to stdout).
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, str(_THIS_DIR))
+sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
+from _lib_compat import try_utf8_stdout  # noqa: E402
+
 
 @dataclass
 class FileCoverage:
@@ -510,6 +518,7 @@ class DocCoverageAnalyzer:
 
 def main():
     """CLI entry point: 文件覆蓋率 Dashboard."""
+    try_utf8_stdout()
     parser = argparse.ArgumentParser(
         description="Documentation coverage dashboard"
     )

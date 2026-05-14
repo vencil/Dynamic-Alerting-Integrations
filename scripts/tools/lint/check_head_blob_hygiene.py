@@ -50,6 +50,15 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
+import os
+
+# Pull `try_utf8_stdout` from the shared compat lib at scripts/tools/.
+# Migrated in #489 Phase B (was missing encoding setup → would crash on
+# legacy Windows cp950/cp936 consoles when printing emoji to stdout).
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, str(_THIS_DIR))
+sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
+from _lib_compat import try_utf8_stdout  # noqa: E402
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
@@ -374,6 +383,7 @@ def _fix_working_copy(path: str, original: bytes) -> tuple[bool, str]:
 
 def main() -> int:
     """CLI entry point: scan HEAD blobs for hygiene defects."""
+    try_utf8_stdout()
     parser = argparse.ArgumentParser(
         description="Scan committed HEAD blobs for NUL bytes, missing EOF newlines, "
         "and truncated YAML/JSON."

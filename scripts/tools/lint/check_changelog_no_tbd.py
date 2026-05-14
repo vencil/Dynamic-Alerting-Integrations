@@ -80,6 +80,14 @@ from _lint_helpers import (  # noqa: E402
     resolve_diff_base,
 )
 
+# Pull `try_utf8_stdout` from the shared compat lib at scripts/tools/.
+# Migrated in #489 Phase B (was missing encoding setup → would crash on
+# legacy Windows cp950/cp936 consoles when printing emoji to stdout).
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, str(_THIS_DIR))
+sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
+from _lib_compat import try_utf8_stdout  # noqa: E402
+
 _IGNORE_MARKER = "<!-- changelog-no-tbd: ignore -->"
 _IGNORE_LOOKBACK_LINES = 3
 
@@ -248,6 +256,7 @@ def _compute_exit_code(*, ci: bool, n_findings: int) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    try_utf8_stdout()
     parser = argparse.ArgumentParser(
         description="Detect TBD/TODO placeholders in CHANGELOG (Self-review Gap A.c)",
     )

@@ -65,6 +65,15 @@ import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+import os
+
+# Pull `try_utf8_stdout` from the shared compat lib at scripts/tools/.
+# Migrated in #489 Phase B (was missing encoding setup → would crash on
+# legacy Windows cp950/cp936 consoles when printing emoji to stdout).
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, str(_THIS_DIR))
+sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
+from _lib_compat import try_utf8_stdout  # noqa: E402
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 DOCS_ROOT = PROJECT_ROOT / "docs"
@@ -204,6 +213,7 @@ def collect_html_files() -> list[Path]:
 
 def main() -> int:
     """CLI entry point: scan raw HTML docs for link-pattern violations."""
+    try_utf8_stdout()
     parser = argparse.ArgumentParser(
         description="Lint raw HTML files under docs/ for MkDocs-incompatible link patterns."
     )

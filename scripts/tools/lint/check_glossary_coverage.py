@@ -18,6 +18,14 @@ from pathlib import Path
 from collections import Counter
 from typing import Set, Dict
 
+# Pull `try_utf8_stdout` from the shared compat lib at scripts/tools/.
+# Migrated in #489 Phase B (was missing encoding setup → would crash on
+# legacy Windows cp950/cp936 consoles when printing emoji to stdout).
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, str(_THIS_DIR))
+sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
+from _lib_compat import try_utf8_stdout  # noqa: E402
+
 
 class GlossaryCoverageChecker:
     """掃描文件中的術語，比對 glossary.md 覆蓋率。"""
@@ -177,6 +185,7 @@ class GlossaryCoverageChecker:
 
 
 def main():
+    try_utf8_stdout()
     parser = argparse.ArgumentParser(
         description="Check glossary coverage for frequently-used backtick terms"
     )
