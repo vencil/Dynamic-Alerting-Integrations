@@ -113,6 +113,47 @@ class TestGhApi:
         with pytest.raises(ValueError, match="non-JSON"):
             dpc.gh_api("/x")
 
+    def test_paginated_call_uses_longer_default_timeout(self, monkeypatch):
+        """Gemini point 2 (TAKE): `gh --paginate` internally retries with
+        backoff on rate-limit / 5xx, so the wall-clock can exceed the
+        per-call 30s budget on big fan-outs (Matrix builds, monorepo-scale
+        annotation counts). Paginated requests should get a longer cap."""
+        captured = {}
+
+        def fake_run(cmd, **kw):
+            captured["timeout"] = kw.get("timeout")
+            return _cp(0, "[]", "")
+
+        monkeypatch.setattr(dpc.subprocess, "run", fake_run)
+        dpc.gh_api("/x", paginate=True)
+        assert captured["timeout"] == dpc.GH_API_TIMEOUT_PAGINATED
+        assert captured["timeout"] > dpc.GH_API_TIMEOUT_DEFAULT
+
+    def test_non_paginated_call_uses_default_timeout(self, monkeypatch):
+        captured = {}
+
+        def fake_run(cmd, **kw):
+            captured["timeout"] = kw.get("timeout")
+            return _cp(0, "{}", "")
+
+        monkeypatch.setattr(dpc.subprocess, "run", fake_run)
+        dpc.gh_api("/x")
+        assert captured["timeout"] == dpc.GH_API_TIMEOUT_DEFAULT
+
+    def test_explicit_timeout_overrides_default(self, monkeypatch):
+        """Caller-supplied timeout takes precedence over the paginate-based
+        default — preserves the original API for any future caller that
+        wants tighter control."""
+        captured = {}
+
+        def fake_run(cmd, **kw):
+            captured["timeout"] = kw.get("timeout")
+            return _cp(0, "{}", "")
+
+        monkeypatch.setattr(dpc.subprocess, "run", fake_run)
+        dpc.gh_api("/x", paginate=True, timeout=5)
+        assert captured["timeout"] == 5
+
     def test_timeout_collapses_into_gh_api_error_with_rc_124(self, monkeypatch):
         """Round-2 self-review fix: subprocess.TimeoutExpired must not leak
         as an uncaught exception. The 3s prereq probe can pass and then a
@@ -204,6 +245,71 @@ class TestCheckPrerequisites:
         with pytest.raises(SystemExit) as exc_info:
             dpc.check_prerequisites()
         assert exc_info.value.code == dpc.EXIT_NETWORK_BLOCKED
+
+    def test_exit_2_when_rate_limit_exhausted(self, monkeypatch, capsys):
+        """Gemini point 1 (TAKE): /rate_limit returns 200 OK even when
+        remaining=0. Without parsing the payload, the tool would proceed
+        and 403 on the first real endpoint, routing to EXIT_INTERNAL_ERROR
+        — misleading. Inspect `rate.remaining`, fail early with the reset
+        timestamp."""
+        def fake_run(cmd, **kw):
+            if cmd[:2] == ["gh", "--version"]:
+                return _cp(0, "", "")
+            if cmd[:3] == ["gh", "auth", "status"]:
+                return _cp(0, "", "")
+            if cmd[:3] == ["gh", "api", "/rate_limit"]:
+                # Real GitHub /rate_limit shape — quota exhausted but the
+                # endpoint itself succeeds.
+                return _cp(0, json.dumps({
+                    "rate": {"limit": 5000, "remaining": 2, "reset": 1735689600}
+                }), "")
+            return _cp(0, "", "")
+
+        monkeypatch.setattr(dpc.subprocess, "run", fake_run)
+        with pytest.raises(SystemExit) as exc_info:
+            dpc.check_prerequisites()
+        assert exc_info.value.code == dpc.EXIT_PREREQ_MISSING
+        err = capsys.readouterr().err
+        assert "rate limit nearly exhausted" in err
+        assert "remaining=2" in err
+        assert "Reset at:" in err  # ISO-8601 timestamp from the reset epoch
+
+    def test_passes_when_rate_limit_healthy(self, monkeypatch):
+        """Sanity counterpart to the exhausted test — healthy quota
+        (remaining well above the floor) must NOT trip the early-exit."""
+        def fake_run(cmd, **kw):
+            if cmd[:2] == ["gh", "--version"]:
+                return _cp(0, "", "")
+            if cmd[:3] == ["gh", "auth", "status"]:
+                return _cp(0, "", "")
+            if cmd[:3] == ["gh", "api", "/rate_limit"]:
+                return _cp(0, json.dumps({
+                    "rate": {"limit": 5000, "remaining": 4500, "reset": 1735689600}
+                }), "")
+            return _cp(0, "", "")
+
+        monkeypatch.setattr(dpc.subprocess, "run", fake_run)
+        dpc.check_prerequisites()  # returns None on success
+
+    def test_rate_limit_non_json_warns_but_continues(self, monkeypatch, capsys):
+        """Defensive: if /rate_limit returns 200 with malformed JSON
+        (shouldn't happen but might on GitHub Enterprise quirks), warn
+        on stderr and proceed rather than crashing the tool. The check
+        is a defensive add-on; it should never become a new way to break
+        the tool on otherwise-healthy networks."""
+        def fake_run(cmd, **kw):
+            if cmd[:2] == ["gh", "--version"]:
+                return _cp(0, "", "")
+            if cmd[:3] == ["gh", "auth", "status"]:
+                return _cp(0, "", "")
+            if cmd[:3] == ["gh", "api", "/rate_limit"]:
+                return _cp(0, "not json at all", "")
+            return _cp(0, "", "")
+
+        monkeypatch.setattr(dpc.subprocess, "run", fake_run)
+        dpc.check_prerequisites()  # must NOT exit
+        err = capsys.readouterr().err
+        assert "non-JSON" in err
 
     def test_exit_3_when_auth_status_times_out(self, monkeypatch, capsys):
         """Round-3 self-review fix: step 2 (`gh auth status`) validates the
@@ -298,6 +404,50 @@ class TestDiagnosePr:
         assert len(actions_drill) == 1, "Actions jobs must be fetched exactly once"
         annotation_calls = [e for e in endpoints if "annotations" in e]
         assert len(annotation_calls) == 2, "both failed checks attempt annotations"
+
+    def test_drill_gated_on_app_slug_not_just_url_pattern(self, monkeypatch):
+        """Gemini point 3 (TAKE): the original regex `/actions/runs/(\\d+)`
+        would also match a 3rd-party SaaS check-run whose details_url
+        happens to contain that substring — and 404 when probed against
+        the Actions jobs endpoint. The deterministic gate is
+        `app.slug == "github-actions"`, with the regex used only for
+        run_id extraction AFTER the slug check passes."""
+        # Build a synthetic external check-run whose URL would trip the
+        # old regex heuristic but whose app.slug is decisively not Actions.
+        fake_external = {
+            "id": 9999,
+            "name": "Third-Party SaaS Scanner",
+            "conclusion": "failure",
+            "details_url": "https://saas.example.com/proxy/actions/runs/42/report",
+            "output": {"summary": ""},
+            "app": {"slug": "some-saas-app"},  # NOT github-actions
+        }
+        cr_payload = json.dumps({"total_count": 1, "check_runs": [fake_external]})
+
+        def router(cmd, **kw):
+            endpoint = cmd[-1]
+            if "/pulls/" in endpoint:
+                return _cp(0, _load_fixture("pull_446.json"), "")
+            if "/commits/" in endpoint and "/check-runs" in endpoint:
+                return _cp(0, cr_payload, "")
+            if endpoint.endswith("/check-runs/9999/annotations"):
+                return _cp(0, "[]", "")
+            # Critically: NO /actions/runs/.../jobs call should be made.
+            if "/actions/runs/" in endpoint and "/jobs" in endpoint:
+                raise AssertionError(
+                    f"Should NOT drill Actions jobs for non-Actions check: {endpoint}"
+                )
+            raise AssertionError(f"Unexpected endpoint in test: {endpoint}")
+
+        with patch.object(dpc.subprocess, "run", side_effect=router):
+            diag = dpc.diagnose_pr("foo", "bar", 446)
+
+        # The check still surfaces as failed (URL has /actions/runs/ so
+        # the OLD code would have set workflow_run_id), but with the new
+        # slug-based gate it's correctly NOT drilled as Actions.
+        ext = diag.failed_checks[0]
+        assert ext.workflow_run_id is None
+        assert ext.jobs == []
 
     def test_jobs_fetch_error_does_not_abort_flow(self, monkeypatch, capsys):
         """If `gh api /actions/runs/.../jobs` fails (e.g. ephemeral 502),

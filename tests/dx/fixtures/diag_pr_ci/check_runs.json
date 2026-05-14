@@ -6,28 +6,32 @@
       "name": "build",
       "conclusion": "success",
       "details_url": "https://github.com/foo/bar/actions/runs/55001/job/66001",
-      "output": {"summary": ""}
+      "output": {"summary": ""},
+      "app": {"slug": "github-actions"}
     },
     {
       "id": 7002,
       "name": "test (linux)",
       "conclusion": "failure",
       "details_url": "https://github.com/foo/bar/actions/runs/55002/job/66002",
-      "output": {"summary": "3 tests failed"}
+      "output": {"summary": "3 tests failed"},
+      "app": {"slug": "github-actions"}
     },
     {
       "id": 7003,
       "name": "CodeCov",
       "conclusion": "failure",
       "details_url": "https://codecov.io/gh/foo/bar/pull/446",
-      "output": {"summary": "coverage dropped below threshold"}
+      "output": {"summary": "coverage dropped below threshold"},
+      "app": {"slug": "codecov"}
     },
     {
       "id": 7004,
       "name": "ruff",
       "conclusion": "pending",
       "details_url": "https://github.com/foo/bar/actions/runs/55004/job/66004",
-      "output": {"summary": ""}
+      "output": {"summary": ""},
+      "app": {"slug": "github-actions"}
     }
   ]
 }

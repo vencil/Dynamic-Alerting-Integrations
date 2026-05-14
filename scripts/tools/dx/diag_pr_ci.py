@@ -64,6 +64,19 @@ EXIT_INTERNAL_ERROR = 1
 EXIT_PREREQ_MISSING = 2
 EXIT_NETWORK_BLOCKED = 3
 
+# Rate-limit safety floor: bail out of the prereq probe if `gh api /rate_limit`
+# reports `remaining < this`. 10 leaves room for the tool's own 4 endpoints
+# plus headroom for the user retrying once. The endpoint itself returns 200
+# even when remaining=0 — the only signal is the JSON payload.
+RATE_LIMIT_SAFETY_FLOOR = 10
+
+# Default subprocess timeout for `gh api` calls. Paginated endpoints get a
+# higher cap because `gh --paginate` internally retries with backoff on
+# rate-limit / 5xx, and a 30s wall clock can be hit on huge fan-out
+# (Matrix builds with >30 check-runs, monorepo-scale annotation counts).
+GH_API_TIMEOUT_DEFAULT = 30
+GH_API_TIMEOUT_PAGINATED = 90
+
 
 # ─── Errors ─────────────────────────────────────────────────────────────
 
@@ -86,7 +99,7 @@ class GhApiError(RuntimeError):
 # ─── gh api wrapper ─────────────────────────────────────────────────────
 
 
-def gh_api(path: str, paginate: bool = False, timeout: int = 30) -> Any:
+def gh_api(path: str, paginate: bool = False, timeout: int | None = None) -> Any:
     """Call `gh api <path>` and parse JSON stdout.
 
     Args:
@@ -95,15 +108,21 @@ def gh_api(path: str, paginate: bool = False, timeout: int = 30) -> Any:
         When the endpoint returns an object containing a paginated array
         (e.g. `/check-runs` whose array is under `.check_runs`), gh joins
         the arrays internally — callers don't need to merge pages manually.
-      timeout: per-call timeout in seconds. gh's own retry/backoff sits
-        under this.
+      timeout: per-call timeout in seconds. If None, defaults to
+        `GH_API_TIMEOUT_PAGINATED` (90s) when paginate=True else
+        `GH_API_TIMEOUT_DEFAULT` (30s). Paginated calls get a longer cap
+        because gh's internal retry/backoff on rate-limit or 5xx can
+        accumulate wall-clock time across the fan-out.
 
     Returns parsed JSON (dict | list).
 
     Raises:
-      GhApiError: gh exited non-zero.
+      GhApiError: gh exited non-zero, OR the subprocess timed out
+        (collapsed to rc=124 so callers get one error class to handle).
       ValueError: stdout was not parseable JSON.
     """
+    if timeout is None:
+        timeout = GH_API_TIMEOUT_PAGINATED if paginate else GH_API_TIMEOUT_DEFAULT
     cmd = ["gh", "api"]
     if paginate:
         cmd.append("--paginate")
@@ -230,6 +249,46 @@ def check_prerequisites() -> None:
         print(
             f"❌ `gh api /rate_limit` probe failed: {probe.stderr.strip()}\n"
             "   Run `gh auth status` and `gh auth refresh` to diagnose.",
+            file=sys.stderr,
+        )
+        sys.exit(EXIT_PREREQ_MISSING)
+
+    # `/rate_limit` returns 200 OK even when quota is exhausted — only the
+    # JSON payload's `rate.remaining` reveals it. Without this check the
+    # tool proceeds, then fails on the FIRST real endpoint call with a
+    # 403 "API rate limit exceeded", which routes to EXIT_INTERNAL_ERROR
+    # — uninformative and misleading. Inspect remaining and fail early
+    # with EXIT_PREREQ_MISSING + the reset timestamp.
+    try:
+        rate_info = json.loads(probe.stdout)
+        remaining = rate_info.get("rate", {}).get("remaining")
+        reset_ts = rate_info.get("rate", {}).get("reset")
+    except (json.JSONDecodeError, AttributeError):
+        # Malformed /rate_limit response — surface the raw stdout, don't
+        # silently swallow.
+        print(
+            f"⚠️  `gh api /rate_limit` returned non-JSON; continuing anyway: "
+            f"{probe.stdout[:120]}",
+            file=sys.stderr,
+        )
+        return
+
+    if remaining is not None and remaining < RATE_LIMIT_SAFETY_FLOOR:
+        reset_hint = ""
+        if reset_ts:
+            # Reset is an epoch second per GitHub's API contract. Format
+            # as ISO-8601 UTC so the user can `date -d` or just eyeball.
+            import datetime as _dt
+            reset_hint = (
+                "   Reset at: "
+                + _dt.datetime.fromtimestamp(reset_ts, tz=_dt.timezone.utc).isoformat()
+                + "\n"
+            )
+        print(
+            f"❌ GitHub API rate limit nearly exhausted "
+            f"(remaining={remaining}, floor={RATE_LIMIT_SAFETY_FLOOR}).\n"
+            f"{reset_hint}"
+            "   Wait for reset, or `gh auth login` with a different account.",
             file=sys.stderr,
         )
         sys.exit(EXIT_PREREQ_MISSING)
@@ -406,7 +465,14 @@ def diagnose_pr(owner: str, repo: str, pr_number: int) -> PrDiag:
 def _drill_failed_check(
     owner: str, repo: str, cr: dict[str, Any]
 ) -> CheckDiag:
-    """Drill a failed check-run: fetch jobs (if Actions) + annotations."""
+    """Drill a failed check-run: fetch jobs (if Actions) + annotations.
+
+    Actions check identification uses `app.slug == "github-actions"` from
+    the check-run payload (deterministic), not just URL-pattern matching
+    on `details_url`. A 3rd-party app whose URL happens to contain
+    `/actions/runs/<N>/` (rare but possible) would otherwise be mis-drilled
+    into the Actions jobs endpoint and 404.
+    """
     check = CheckDiag(
         check_run_id=cr["id"],
         name=cr.get("name", "<unnamed>"),
@@ -415,7 +481,8 @@ def _drill_failed_check(
         summary=(cr.get("output", {}) or {}).get("summary", "") or "",
     )
 
-    match = _RUN_ID_RE.search(check.details_url)
+    is_actions_check = (cr.get("app", {}) or {}).get("slug") == "github-actions"
+    match = _RUN_ID_RE.search(check.details_url) if is_actions_check else None
     if match:
         check.workflow_run_id = int(match.group(1))
         try:
