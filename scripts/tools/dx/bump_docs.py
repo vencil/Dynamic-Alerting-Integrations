@@ -2,7 +2,7 @@
 """bump_docs.py — 版號一致性管理工具
 
 掃描 repo 中的文件、Chart.yaml、VERSION 檔案，批次更新版號引用。
-四條版號線獨立管理：--platform / --exporter / --tools / --tenant-api。
+五條版號線獨立管理：--platform / --exporter / --tools / --portal / --tenant-api。
 
 Chart.yaml version 與 appVersion 同步，統一由 --exporter 管理。
 --exporter 同時更新：Chart.yaml version + appVersion + image tag + OCI chart references。
@@ -13,6 +13,9 @@ Chart.yaml version 與 appVersion 同步，統一由 --exporter 管理。
 
   # 更新 da-tools 版號 (所有 image tag + VERSION)
   python3 scripts/tools/bump_docs.py --tools 1.1.0
+
+  # 更新 da-portal 版號 (Chart.yaml + README 標題 + image tag + OCI chart)
+  python3 scripts/tools/bump_docs.py --portal 2.8.0
 
   # 更新 tenant-api 版號 (Chart.yaml + Dockerfile LABEL + image tag)
   python3 scripts/tools/bump_docs.py --tenant-api 2.4.0
@@ -74,6 +77,7 @@ REPO_ROOT = SCRIPT_DIR.parent.parent.parent  # scripts/tools/dx/ -> repo root
 CHART_YAML = REPO_ROOT / "helm" / "threshold-exporter" / "Chart.yaml"
 DA_TOOLS_VERSION = REPO_ROOT / "components" / "da-tools" / "app" / "VERSION"
 TENANT_API_CHART_YAML = REPO_ROOT / "helm" / "tenant-api" / "Chart.yaml"
+DA_PORTAL_CHART_YAML = REPO_ROOT / "helm" / "da-portal" / "Chart.yaml"
 
 # ---------------------------------------------------------------------------
 # Replacement rules per version line
@@ -137,12 +141,15 @@ def _build_tools_rules():
         "replacement": lambda v: f"./build.sh {v}",
     })
 
-    # da-tools README version header
+    # da-tools README H1 title — `# da-tools (vX.Y.Z)`. This replaced the
+    # old `**版本**：X.Y.Z（獨立版號` rule, which matched nothing after the
+    # README adopted the `# component (vX.Y.Z)` title format — a dead rule
+    # is exactly how that title silently drifted to a stale version.
     rules.append({
         "file": "components/da-tools/README.md",
-        "desc": "da-tools README version header",
-        "pattern": r"\*\*版本\*\*：[0-9]+\.[0-9]+\.[0-9]+（獨立版號",
-        "replacement": lambda v: f"**版本**：{v}（獨立版號",
+        "desc": "da-tools README title version",
+        "pattern": r"# da-tools \(v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?\)",
+        "replacement": lambda v: f"# da-tools (v{v})",
     })
 
     # da-tools README version strategy table
@@ -485,9 +492,9 @@ def _build_platform_rules():
     })
     rules.append({
         "file": "components/da-tools/README.md",
-        "desc": "da-tools version strategy table (platform row)",
-        "pattern": r"\| 平台文件 \| v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?",
-        "replacement": lambda v: f"| 平台文件 | v{v}",
+        "desc": "da-tools version strategy table (platform row + git tag)",
+        "pattern": r"\| 平台文件 \| v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)? \| `v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?`",
+        "replacement": lambda v: f"| 平台文件 | v{v} | `v{v}`",
     })
 
     # Front matter `version: vX.Y.Z` in all docs/ .md and .jsx files
@@ -638,15 +645,86 @@ def _build_platform_rules():
     return rules
 
 
+def _build_portal_rules():
+    """Build version replacement rules for da-portal.
+
+    da-portal is the 5th release line (`portal/v*`). It was historically
+    NOT covered by bump_docs.py at all — no `portal` line existed — which
+    is why its README title and helm `--version` silently drifted to a
+    stale v2.7.0 after the v2.8.0 release (`--check` had no rule to catch
+    it). Covers Chart.yaml, the README title / OCI chart ref / image tag,
+    and the da-portal row of the da-tools README versioning table.
+
+    Returns list of rule dicts for the 'portal' version line.
+    """
+    rules = []
+
+    # helm/da-portal/Chart.yaml version + appVersion
+    rules.append({
+        "file": "helm/da-portal/Chart.yaml",
+        "desc": "da-portal Chart.yaml version",
+        "pattern": r"^version:\s*[0-9]+\.[0-9]+\.[0-9]+",
+        "replacement": lambda v: f"version: {v}",
+    })
+    rules.append({
+        "file": "helm/da-portal/Chart.yaml",
+        "desc": "da-portal Chart.yaml appVersion",
+        "pattern": r'^appVersion:\s*"[0-9]+\.[0-9]+\.[0-9]+"',
+        "replacement": lambda v: f'appVersion: "{v}"',
+    })
+
+    # da-portal README H1 title — `# da-portal (vX.Y.Z)`
+    rules.append({
+        "file": "components/da-portal/README.md",
+        "desc": "da-portal README title version",
+        "pattern": r"# da-portal \(v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?\)",
+        "replacement": lambda v: f"# da-portal (v{v})",
+    })
+
+    # da-portal README OCI chart --version
+    rules.append({
+        "file": "components/da-portal/README.md",
+        "desc": "da-portal OCI chart --version in README",
+        "pattern": r"oci://ghcr\.io/vencil/charts/da-portal --version [0-9]+\.[0-9]+\.[0-9]+",
+        "replacement": lambda v: f"oci://ghcr.io/vencil/charts/da-portal --version {v}",
+    })
+
+    # da-portal image tag in README
+    rules.append({
+        "file": "components/da-portal/README.md",
+        "desc": "da-portal image tag in README",
+        "pattern": r"ghcr\.io/vencil/da-portal:v?[0-9]+\.[0-9]+\.[0-9]+",
+        "replacement": lambda v: f"ghcr.io/vencil/da-portal:v{v}",
+    })
+
+    # da-tools README versioning table — da-portal row (version + git tag)
+    rules.append({
+        "file": "components/da-tools/README.md",
+        "desc": "da-portal version in da-tools strategy table",
+        "pattern": r"\| da-portal \| v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?",
+        "replacement": lambda v: f"| da-portal | v{v}",
+    })
+    rules.append({
+        "file": "components/da-tools/README.md",
+        "desc": "da-portal git tag in da-tools strategy table",
+        "pattern": r"`portal/v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?`",
+        "replacement": lambda v: f"`portal/v{v}`",
+    })
+
+    return rules
+
+
 def _build_rules():
     """Build all version replacement rules, grouped by version line.
 
-    Returns {"platform": [...], "exporter": [...], "tools": [...], "tenant-api": [...]}.
+    Returns {"platform": [...], "exporter": [...], "tools": [...],
+    "portal": [...], "tenant-api": [...]}.
     """
     return {
         "platform": _build_platform_rules(),
         "exporter": _build_exporter_rules(),
         "tools": _build_tools_rules(),
+        "portal": _build_portal_rules(),
         "tenant-api": _build_tenant_api_rules(),
     }
 
@@ -986,6 +1064,15 @@ def read_current_versions():
         if re.match(r"^[0-9]+\.[0-9]+\.[0-9]+$", ver):
             versions["tools"] = ver
 
+    # Portal version from da-portal Chart.yaml (version == appVersion).
+    if DA_PORTAL_CHART_YAML.exists():
+        content = DA_PORTAL_CHART_YAML.read_text(encoding="utf-8")
+        m = re.search(
+            r'^appVersion:\s*"([0-9]+\.[0-9]+\.[0-9]+)"', content, re.MULTILINE
+        )
+        if m:
+            versions["portal"] = m.group(1)
+
     return versions
 
 
@@ -1195,6 +1282,8 @@ def main():
                         help="New exporter version (e.g. 0.6.0)")
     parser.add_argument("--tools", metavar="VER",
                         help="New da-tools version (e.g. 0.2.0)")
+    parser.add_argument("--portal", metavar="VER",
+                        help="New da-portal version (e.g. 2.8.0)")
     parser.add_argument("--tenant-api", metavar="VER",
                         help="New tenant-api version (e.g. 2.4.0)")
     parser.add_argument("--check", action="store_true",
@@ -1286,7 +1375,7 @@ def main():
         unmatched = 0
         missing = 0
 
-        for line in ("platform", "exporter", "tools", "tenant-api"):
+        for line in ("platform", "exporter", "tools", "portal", "tenant-api"):
             ver = versions.get(line)
             if not ver:
                 print(f"\n⚠️  {line}: version not found in source-of-truth")
@@ -1351,7 +1440,8 @@ def main():
         sys.exit(1 if unmatched > 0 else 0)
 
     # --check mode: read current versions and verify all references match
-    if args.check and not (args.platform or args.exporter or args.tools):
+    if args.check and not (args.platform or args.exporter or args.tools
+                           or args.portal):
         versions = read_current_versions()
         if not versions:
             print("ERROR: Cannot read current versions from source files", file=sys.stderr)
@@ -1378,7 +1468,8 @@ def main():
             sys.exit(0)
 
     # Explicit bump mode
-    if not (args.platform or args.exporter or args.tools or args.tenant_api):
+    if not (args.platform or args.exporter or args.tools or args.portal
+            or args.tenant_api):
         parser.print_help()
         sys.exit(1)
 
@@ -1388,6 +1479,7 @@ def main():
     for line, new_ver in [("platform", args.platform),
                           ("exporter", args.exporter),
                           ("tools", args.tools),
+                          ("portal", args.portal),
                           ("tenant-api", args.tenant_api)]:
         if not new_ver:
             continue

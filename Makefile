@@ -705,11 +705,12 @@ lint-new-script: ## Run all CLI/SAST conventions on a single new lint script (PR
 version-show: ## 顯示目前三條版號線
 	@python3 ./scripts/tools/dx/bump_docs.py --show-current
 
-bump-docs: ## 更新版號引用 (使用: make bump-docs PLATFORM=0.10.0 TOOLS=0.2.0 EXPORTER=0.6.0)
+bump-docs: ## 更新版號引用 (使用: make bump-docs PLATFORM=0.10.0 TOOLS=0.2.0 EXPORTER=0.6.0 PORTAL=2.8.0)
 	@python3 ./scripts/tools/dx/bump_docs.py \
 		$(if $(PLATFORM),--platform $(PLATFORM)) \
 		$(if $(EXPORTER),--exporter $(EXPORTER)) \
-		$(if $(TOOLS),--tools $(TOOLS))
+		$(if $(TOOLS),--tools $(TOOLS)) \
+		$(if $(PORTAL),--portal $(PORTAL))
 
 # ----------------------------------------------------------
 # Python 測試 & 覆蓋率
