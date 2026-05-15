@@ -94,12 +94,19 @@ declare -a SCAN_PATHS=()
 declare -a IGNORE_PATTERNS=()
 if [ -f "${IGNORE_FILE}" ]; then
   while IFS= read -r line; do
+    # Trim leading + trailing whitespace before any interpretation. ERE
+    # patterns never carry significant edge whitespace, and leaving
+    # leading whitespace in (a) breaks the comment/blank skip below for
+    # indented lines and (b) bakes literal spaces into the regex, which
+    # silently fails-open (the pattern then matches no path → the file
+    # gets scanned anyway). Trim-first makes both correct.
+    line="${line#"${line%%[![:space:]]*}"}"   # strip leading whitespace
+    line="${line%"${line##*[![:space:]]}"}"   # strip trailing whitespace
     # Skip blank lines and comments (leading # after optional whitespace).
     case "${line}" in
       ''|'#'*) continue ;;
     esac
-    # Trim trailing whitespace.
-    IGNORE_PATTERNS+=("${line%"${line##*[![:space:]]}"}")
+    IGNORE_PATTERNS+=("${line}")
   done < "${IGNORE_FILE}"
 fi
 
