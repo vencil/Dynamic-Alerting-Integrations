@@ -480,6 +480,14 @@ v2.8.0 期間發現 planning.md `§12.1 Session Ledger（Working Log）`型 appe
 
 L2 不落 repo 與 retention 門檻有可辯駁餘地（社群化專案 transparent governance 收益 / 單機 gitignored 風險 / 「跨 2 minor」門檻主觀性等）。完整反向論點與 v2.9.0 重新評估觸發條件見 `v2.8.0-planning-archive.md §12.6 Dissent`（archive 為 maintainer-local、gitignored；anchor slug `126-planning-artifact-policy-dissent-archived-2026-04-19`）。
 
+## 安全紀律（Secret Hygiene，v2.8.1 #445 新增）
+
+Secret leak 防線是 L0/L1/L2/L3 四層：L0 GitHub native push-protection（repo 設定，#470）／ L1 pre-commit hook `secrets-scan-staged`（本地，可被 `--no-verify` 繞）／ L2 server-side `secret-scan.yml`（GitHub 基礎設施上跑，**不可繞**）／ L3 release-time image digest verification（`scripts/ops/verify_release_digest.sh`）。完整守備邊界表、provider rotate cheat-sheet、incident 5-step response 全在 [`secret-leak-remediation-sop.md`](secret-leak-remediation-sop.md)。
+
+1. **不得 `git commit --no-verify` 繞過 secret scan** — L1 可繞，但 L2 server-side 不可繞、會在 push 後擋下同一個 finding。`--no-verify` 只是把 leak 帶進本地 clone 多撐幾分鐘，SOP 的 rotate-first 時鐘已經在走。誤判（test fixture／known-fake string）的合法 escape 是 `.trufflehogignore`（repo root，path regex，L1 hook script 自行讀取）或 inline `# trufflehog:ignore`（行尾，trufflehog-native），**不是** `--no-verify`。
+2. **Secret 推上 public repo → 立即進 SOP** — `secret-leak-remediation-sop.md` 鐵律 ASSUME COMPROMISE / ROTATE FIRST：先去 provider console revoke/rotate，洗 git history 是次要善後。任何 contributor 都有 unilateral 授權執行 rotate，不必等 approve。
+3. **罰則** — `--no-verify` 繞過 secret scan 屬 process violation，須記入 incident post-mortem（SOP Step 5，blameless 但留痕）。重複發生 → 檢討是否將 L1 升格為更難繞過的機制（如 server-side `pull_request` 必跑 + 必過）。
+
 ## 常被違反 Top 4（CLAUDE.md 會保留這四條）
 
 根據歷史 LL 與 pre-commit 攔截記錄，以下四條最容易被違反：
@@ -497,3 +505,4 @@ L2 不落 repo 與 retention 門檻有可辯駁餘地（社群化專案 transpar
 | v2.8.0 | 新增 §T 工具生命週期（A-5b scan_component_health archived opt-in）|
 | v2.8.0 Phase .a | 新增 §P1 Commit trailer 紀律 + pre-push hook `check-techdebt-drift`（Trap #12 三層防禦的「規範層 + 攔截層」）|
 | v2.8.0 Phase .a | 新增 §A 產出物治理（L1/L2/L3 taxonomy + retention rule + §A6 v2.9.0+ Session Ledger 退場）：由 `v2.8.0-planning.md §12.6` 搬入 SSOT；compact-pressure 分析催生 §A6 退場政策 |
+| v2.8.1 | 新增 §安全紀律（Secret Hygiene，#445 AC iv）：`--no-verify` 嚴禁政策 + L0/L1/L2/L3 四層防線指引。size cap 500→520（§安全紀律 為實質新內容，`--no-verify` ban 是無法 code-enforce 的純文字規則） |

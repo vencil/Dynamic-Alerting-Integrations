@@ -29,8 +29,13 @@ import sys
 from pathlib import Path
 
 # 上限。v2.8.0 Phase .a：500 行硬上限。
+# v2.8.1 (#445 AC iv)：500 → 520。新增 §安全紀律（Secret Hygiene）—
+#   L0/L1/L2/L3 四層防線指引 + `--no-verify` 嚴禁政策。後者是無法
+#   code-enforce 的純文字規則（`--no-verify` 本質上就是跳過 hook），屬
+#   正當的 L4 規範成長；prune/promote 不適用（該節描述的掃描本身已是
+#   L1/L2 hook，無可再 promote）。
 # 調整門檻時需同時修改 CHANGELOG 並在 PR body 寫理由（不可偷偷放寬）。
-MAX_LINES = 500
+MAX_LINES = 520
 
 # 相對於 repo root
 DEV_RULES_PATH = "docs/internal/dev-rules.md"
