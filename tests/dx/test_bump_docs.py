@@ -24,11 +24,13 @@ import bump_docs  # noqa: E402
 class TestBuildRules:
     """測試 _build_rules() 規則結構。"""
 
-    def test_returns_three_lines(self):
+    def test_returns_all_version_lines(self):
         rules = bump_docs._build_rules()
         assert "platform" in rules
         assert "exporter" in rules
         assert "tools" in rules
+        assert "portal" in rules
+        assert "tenant-api" in rules
 
     def test_all_rules_have_required_keys(self):
         rules = bump_docs._build_rules()
@@ -46,6 +48,12 @@ class TestBuildRules:
         rules = bump_docs._build_rules()
         tool_files = [r["file"] for r in rules["tools"]]
         assert any("da-tools" in f for f in tool_files)
+
+    def test_portal_rules_reference_da_portal(self):
+        """da-portal 規則應引用 da-portal 相關檔案（5th release line）。"""
+        rules = bump_docs._build_rules()
+        portal_files = [r["file"] for r in rules["portal"]]
+        assert any("da-portal" in f for f in portal_files)
 
     def test_platform_rules_reference_chart(self):
         """Chart.yaml 版號規則應存在於 exporter rules（chart 版號 = exporter 版號）。"""
@@ -197,6 +205,8 @@ class TestReadCurrentVersions:
             assert "exporter" in versions
         if bump_docs.DA_TOOLS_VERSION.exists():
             assert "tools" in versions
+        if bump_docs.DA_PORTAL_CHART_YAML.exists():
+            assert "portal" in versions
 
 
 class TestFilterByScope:
