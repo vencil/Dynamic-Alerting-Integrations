@@ -2,8 +2,8 @@
 title: "Secret Leak Remediation SOP"
 tags: [documentation, security, sop, incident-response]
 audience: [maintainers, on-call, contributors]
-version: v2.8.1
-verified-at-version: v2.8.1
+version: v2.8.0
+verified-at-version: v2.8.0
 lang: zh
 ---
 # Secret Leak Remediation SOP
