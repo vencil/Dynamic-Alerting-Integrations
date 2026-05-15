@@ -352,13 +352,27 @@ class TestCIWorkflowSync:
 
 
 class TestBumpDocsToolsRuleCoverage:
-    """bump_docs.py tools_rules 必須涵蓋 da-tools README header version。"""
+    """bump_docs.py tools rules 必須涵蓋 da-tools README 標題版號。"""
 
-    def test_readme_header_rule_exists(self):
-        """bump_docs tools_rules 包含 da-tools README version header 規則。"""
+    def test_readme_title_rule_exists(self):
+        """bump_docs tools rules 有規則匹配 da-tools README H1 標題版號。
+
+        Behavioural check — keyed on the rule *pattern*, not its ``desc``
+        string. The previous version asserted ``"version header" in desc``,
+        which broke the moment the rule was (correctly) renamed to
+        "da-tools README title version". A pattern-based check survives
+        future desc edits and tests what actually matters: that the
+        ``# da-tools (vX.Y.Z)`` title format is covered by some rule.
+        """
+        import re
         import bump_docs
         rules = bump_docs._build_rules()
-        tools_descs = [r["desc"] for r in rules["tools"]]
-        header_rules = [d for d in tools_descs if "version header" in d.lower()]
-        assert len(header_rules) >= 1, \
-            "bump_docs 沒有涵蓋 da-tools README version header 的規則"
+        sample = "# da-tools (v9.9.9)"
+        matched = [
+            r for r in rules["tools"]
+            if "pattern" in r and re.search(r["pattern"], sample, re.MULTILINE)
+        ]
+        assert len(matched) >= 1, (
+            "bump_docs 沒有涵蓋 da-tools README 標題版號 "
+            "(# da-tools (vX.Y.Z)) 的規則"
+        )
