@@ -1,7 +1,7 @@
-# da-portal (v2.7.0)
+# da-portal (v2.8.0)
 
-<!-- 標題版號 = 最後 released tag；v2.8.0 in-flight feature 在內文以 **v2.8.0** inline 標記。
-     Release wrap 切五線 tag 時，本標題 + 下方 helm --version 跟著批次同步 bump 為 v2.8.0。 -->
+<!-- 標題版號 = 最後 released tag（目前 v2.8.0）；下一版 in-flight feature 在內文以 inline 版號標記。
+     Release wrap 切五線 tag 時，本標題 + 下方 helm --version 跟著批次同步 bump。 -->
 
 > **核心 component** — 把 Dynamic Alerting 的 43 個互動工具（Hub + Wizard + Tenant Manager + Self-Service Portal）封進一顆 ~12 MB nginx-alpine image，**zero build step**（瀏覽器端 Babel standalone 轉譯 JSX），給內網 / air-gapped 環境離線使用。
 >
@@ -57,7 +57,7 @@ docker run -p 8080:80 ghcr.io/vencil/da-portal:v2.8.0
 
 ```bash
 helm install da-portal \
-  oci://ghcr.io/vencil/charts/da-portal --version 2.7.0 \
+  oci://ghcr.io/vencil/charts/da-portal --version 2.8.0 \
   -n monitoring --create-namespace \
   -f values-override.yaml
 ```
@@ -198,7 +198,7 @@ docker run -p 8080:80 \
 
 | 症狀 | 可能原因 | 解法 |
 |------|---------|------|
-| Hub 載入後白屏 | 某 JSX parse 失敗 + 沒 ErrorBoundary | 開 DevTools console；單檔修；v2.8.0+ 規劃加 ErrorBoundary（見 [PR roadmap](#)） |
+| Hub 載入後白屏 | 某 JSX parse 失敗 + 沒 ErrorBoundary | 開 DevTools console 找出 parse 失敗的 JSX 單檔修復；ErrorBoundary 為已知缺口，未來版本補強 |
 | 404 on `/healthz` | 舊 image（< v2.3.0） | 重 build：`make portal-image` |
 | CORS error on Tenant API | nginx proxy upstream 錯 | 改 `nginx.conf` 的 `proxy_pass`，或在 K8s 確認 `tenant-api` Service 存在於 `monitoring` namespace |
 | Tenant Manager 顯示 demo-mode toast | `/api/v1/tenants/search` 回 404 / 5xx | 確認 Tenant API 跑著且 RBAC 有 read 權限；也可能是純靜態部署（無 backend），demo mode 為 expected |

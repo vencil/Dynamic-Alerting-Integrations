@@ -1,6 +1,6 @@
 # Threshold Exporter (v2.8.0)
 
-<!-- 標題版號 = 最後 released tag；v2.8.0 in-flight feature 在內文以 **v2.8.0** inline 標記。
+<!-- 標題版號 = 最後 released tag（目前 v2.8.0）；下一版 in-flight feature 在內文以 inline 版號標記。
      Release wrap 切五線 tag 時，本標題 + 下方 helm --version 跟著批次同步 bump。 -->
 
 > **核心 component** — 把 `conf.d/` YAML 配置轉成 Prometheus `user_threshold` 系列 metrics 的 config-driven exporter。Directory Scanner + 四層繼承 + Dual-Hash 熱重載 + Cardinality Guard。
