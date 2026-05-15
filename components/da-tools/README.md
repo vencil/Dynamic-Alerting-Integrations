@@ -1,6 +1,6 @@
-# da-tools (v2.7.0)
+# da-tools (v2.8.0)
 
-<!-- 標題版號 = 最後 released tag；v2.8.0 in-flight feature 在內文以 **v2.8.0** inline 標記。
+<!-- 標題版號 = 最後 released tag（目前 v2.8.0）；下一版 in-flight feature 在內文以 inline 版號標記。
      Release wrap 切五線 tag 時，本標題 + VERSION 檔 + 下方版號表跟著批次同步 bump。 -->
 
 > **核心 component** — 一顆 ~60 MB Alpine Python image，把 Dynamic Alerting 平台所需 45 個驗證 / 遷移 / 治理 CLI 工具裝在一起，**無需 clone repo、無需安裝 Python 依賴**，docker pull 即用。Platform Engineers / SREs / Tenants（DevOps）共用入口。
@@ -38,7 +38,7 @@
 ## 3. Quick Start
 
 ```bash
-# 抓 image（v2.8.0 釋出後改用 v2.8.0 tag）
+# 抓 image（quick-start 用 :latest 即可；production 請釘特定版號如 :v2.8.0）
 docker pull ghcr.io/vencil/da-tools:latest
 
 # Help / Version
@@ -355,13 +355,13 @@ DA_LANG=en docker run --rm ghcr.io/vencil/da-tools migrate --help
 
 | 元件 | 版號 | Git Tag | 內容 |
 |------|------|---------|------|
-| 平台文件 | v2.8.0 | `v2.7.0` | 整體釋出版本 |
+| 平台文件 | v2.8.0 | `v2.8.0` | 整體釋出版本 |
 | threshold-exporter | v2.8.0 | `exporter/v2.8.0` | Go binary（含 da-guard / da-batchpr / da-parser） |
 | **da-tools** | **v2.8.0** | **`tools/v2.8.0`** | 本 image（45 個 Python CLI + 3 個 bundled Go binary） |
-| da-portal | v2.7.0 | `portal/v2.7.0` | Interactive Tools Hub image |
-| tenant-api | v2.7.0 | `tenant-api/v2.7.0` | Go HTTP API |
+| da-portal | v2.8.0 | `portal/v2.8.0` | Interactive Tools Hub image |
+| tenant-api | v2.8.0 | `tenant-api/v2.8.0` | Go HTTP API |
 
-> v2.8.0 in-flight feature 在 §2 What's New 與命令表用 ✨v2.8.0 標註；release 收尾切五線 tag 時，本 README 標題與 [VERSION](app/VERSION) 跟著批次同步 bump。
+> §2 What's New 與命令表的 ✨v2.8.0 標記表示該命令於 v2.8.0 引入；下一版 in-flight 命令沿用同款 inline 標記。Release 收尾切五線 tag 時，本 README 標題與 [VERSION](app/VERSION) 跟著批次同步 bump。
 
 CI/CD 由 `tools/v*` tag 觸發，不受平台文件 / exporter 變更影響。
 
