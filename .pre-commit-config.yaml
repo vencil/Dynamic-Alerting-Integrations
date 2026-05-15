@@ -90,6 +90,24 @@ repos:
         types: [text]
         files: \.(md|yaml|yml|py|jsx|json)$
 
+      # --- L1 secret-scan (#445 AC i) ---
+      # trufflehog filesystem mode on staged text files only. Runs offline
+      # (--no-verification); the L2 server-side workflow (secret-scan.yml,
+      # #445 AC ii / Chunk 4) does the verified-API counterpart. False-
+      # positive escapes via `.trufflehogignore` (path regex) or inline
+      # `# trufflehog:ignore` comments. ⛔ `git commit --no-verify` to
+      # bypass is forbidden — L2 will catch the same finding on push and
+      # the SOP's Rotate-First rule already started ticking. See
+      # docs/internal/secret-leak-remediation-sop.md.
+      - id: secrets-scan-staged
+        name: "🔐 L1 secret-scan (trufflehog on staged files)"
+        entry: bash scripts/tools/lint/check_secrets_staged.sh
+        language: system
+        types: [text]
+        # Exclude the .trufflehogignore file itself (it contains regex
+        # examples in comments that some scanners flag).
+        exclude: ^\.trufflehogignore$
+
       # --- Fast drift checks (< 5s each) ---
       - id: tool-map-check
         name: Tool map coverage
