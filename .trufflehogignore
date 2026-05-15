@@ -1,8 +1,12 @@
 # .trufflehogignore — false-positive escape list for the secret-scan hooks
 #
 # Read by `scripts/tools/lint/check_secrets_staged.sh` (#445 AC i, L1).
-# The L2 server-side workflow `.github/workflows/secret-scan.yml`
-# (#445 AC ii, Chunk 4 — not yet landed) will consume the same file.
+# This is an L1-only path-exclusion file: the L2 server-side workflow
+# `.github/workflows/secret-scan.yml` (#445 AC ii) scans with
+# `trufflehog git` mode and does NOT consume this file. L2 is the
+# unbypassable gate by design — sharing a silencing list with it would
+# weaken that. For an L2 false positive use the per-line
+# `# trufflehog:ignore` escape (documented near the bottom of this file).
 #
 # IMPORTANT — who interprets this file:
 #   trufflehog's `filesystem` subcommand has no stable native
