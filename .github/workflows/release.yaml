@@ -93,6 +93,7 @@ jobs:
       - name: Verify image digest (#445 AC iii)
         env:
           VERSION: ${{ steps.version.outputs.VERSION }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bash scripts/ops/verify_release_digest.sh threshold-exporter helm/threshold-exporter/Chart.yaml
 
       # --- Helm chart (before scan so Trivy failure doesn't block distribution) ---
@@ -221,6 +222,7 @@ jobs:
       - name: Verify image digest (#445 AC iii)
         env:
           VERSION: ${{ steps.version.outputs.VERSION }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bash scripts/ops/verify_release_digest.sh da-tools
 
       - name: Scan image with Trivy
@@ -496,6 +498,7 @@ jobs:
       - name: Verify image digest (#445 AC iii)
         env:
           VERSION: ${{ steps.version.outputs.VERSION }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bash scripts/ops/verify_release_digest.sh da-portal helm/da-portal/Chart.yaml
 
       - name: Scan image with Trivy
@@ -560,6 +563,7 @@ jobs:
       - name: Verify image digest (#445 AC iii)
         env:
           VERSION: ${{ steps.version.outputs.VERSION }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bash scripts/ops/verify_release_digest.sh tenant-api helm/tenant-api/Chart.yaml
 
       # --- Helm chart ---
