@@ -24,7 +24,10 @@
 #   0 — clean (no findings); OR no staged files left after .trufflehogignore
 #       filtering; OR no staged text files at all; OR trufflehog binary
 #       absent (degraded — see below)
-#   1 — scan found a secret / errored
+#   1 — scan found a secret (trufflehog exit 183), OR trufflehog itself
+#       errored (any other non-zero — blocked fail-closed). The two cases
+#       get DIFFERENT messages so a contributor doesn't run the
+#       rotate-first SOP for what is actually a tool/environment error.
 #
 # Missing-binary policy — soft-skip with a loud warning, NOT block:
 #   If `trufflehog` is not on PATH the hook prints a prominent install
@@ -64,8 +67,12 @@ to restore L1 protection (one-time):
   Linux:    curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh \
               | sudo sh -s -- -b /usr/local/bin
   macOS:    brew install trufflehog
-  Windows:  scoop install trufflehog   (or use WSL)
-  Go:       go install github.com/trufflesecurity/trufflehog/v3@latest
+  Windows:  download the windows_amd64 archive from
+            https://github.com/trufflesecurity/trufflehog/releases
+            (or `scoop install trufflehog` if you use scoop; or use WSL)
+
+  NOTE: `go install .../trufflehog/v3@latest` does NOT work — trufflehog's
+  go.mod has replace directives that block `go install`. Use install.sh.
 
 After install, verify with: trufflehog --version
 
@@ -133,7 +140,24 @@ if [ "${SCAN_RC}" -eq 0 ]; then
   exit 0
 fi
 
-# Non-zero: trufflehog found something OR errored. Either way, block.
+# trufflehog with `--fail` exits EXACTLY 183 when it detects findings.
+# Any OTHER non-zero is the tool itself erroring (bad args, crash,
+# unreadable path, …). Distinguish: a contributor should not be sent
+# down the rotate-first SOP for what is actually a scanner malfunction.
+if [ "${SCAN_RC}" -ne 183 ]; then
+  printf '%s\n' "" \
+    "❌ trufflehog exited ${SCAN_RC} (not its findings code 183) — the scan" \
+    "   TOOL errored rather than detecting a secret. Commit blocked" \
+    "   fail-closed: a malfunctioning scanner must not silently pass." \
+    "" \
+    "   Review the trufflehog output above. If it is an environment issue" \
+    "   (bad path, crash, version mismatch), fix it and recommit. This is" \
+    "   NOT necessarily a secret leak — do not run the rotation SOP unless" \
+    "   the output actually shows a credential." >&2
+  exit 1
+fi
+
+# SCAN_RC == 183 — genuine findings.
 cat >&2 <<'EOF'
 
 🚨 Detected one or more potential secrets in staged files (see output above).
