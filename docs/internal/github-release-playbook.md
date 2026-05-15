@@ -95,6 +95,8 @@ git ls-remote --heads origin     # 應列出 remote branches
 make version-check        # 確認全 repo 版號一致
 ```
 
+> **Release-time L3 digest verification（#445 AC iii）**：tag push 後 `release.yaml` 的 4 個 release job 各會自動跑一個 `Verify image digest` step（共用 `scripts/ops/verify_release_digest.sh`）— `skopeo inspect` 確認剛 push 的 image 在 GHCR 真的存在，並比對 Chart.yaml `appVersion`。silent push 失敗 / Chart.yaml appVersion claim 無對應 image → release job fail。此步驟在 CI 自動執行，**不需手動跑**；本地 `make version-check` 仍是打 tag 前的必要前置。
+
 ### Step 2: Commit & Push
 
 ```bash
