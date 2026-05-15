@@ -1,0 +1,42 @@
+# .trufflehogignore — false-positive escape list for the secret-scan hooks
+#
+# Read by `scripts/tools/lint/check_secrets_staged.sh` (#445 AC i, L1).
+# The L2 server-side workflow `.github/workflows/secret-scan.yml`
+# (#445 AC ii, Chunk 4 — not yet landed) will consume the same file.
+#
+# IMPORTANT — who interprets this file:
+#   trufflehog's `filesystem` subcommand has no stable native
+#   `--exclude-paths` flag, so the L1 hook SCRIPT reads this file itself:
+#   each non-comment non-blank line is treated as a POSIX ERE regex and
+#   matched (via `grep -E`) against each staged file path BEFORE the path
+#   list is handed to trufflehog. It is NOT auto-detected by trufflehog.
+#
+# Format: one ERE regex per non-comment non-blank line. The pattern is
+# matched against the staged file path as pre-commit passes it (repo-root-
+# relative, forward slashes). Examples:
+#   tests/fixtures/secret-leak-test/      → any path under that dir
+#   ^vendor/                              → anything in vendor/
+#   \.example\.env$                       → files ending in .example.env
+#
+# When to add a path here:
+#   ✓ Test fixture file that intentionally contains a fake-shaped secret
+#     (e.g. tests/fixtures/secret-leak-test/*.env)
+#   ✓ Vendored 3rd-party file with known irrelevant tokens (e.g. example
+#     config from upstream docs imported verbatim)
+#   ✓ Generated file with known-bogus high-entropy strings (e.g. minified JS
+#     vendored bundles)
+#
+# When NOT to add:
+#   ✗ Files containing your own real secret you "trust" — that's exactly
+#     what L1 is meant to catch. Add to a `.gitignore`'d local env file instead.
+#   ✗ Files containing customer data / PII — handle via secure storage,
+#     not by silencing the scanner.
+#
+# When `.trufflehogignore` is too coarse (e.g. one line in a 1000-line file),
+# prefer the per-line escape:
+#
+#     password = "fake-test-value"  # trufflehog:ignore
+#
+# This file is intentionally empty initially — patterns get added as false
+# positives surface in real PRs. See docs/internal/secret-leak-remediation-sop.md
+# for the full L0/L1/L2/L3 framing.
