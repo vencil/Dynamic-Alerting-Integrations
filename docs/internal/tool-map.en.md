@@ -182,6 +182,7 @@ lang: en
 | `lint_html_doc_links.py` | Raw HTML doc-link validator for MkDocs output. |
 | `lint_jsx_babel.py` | Validate JSX files parse correctly via Babel standalone. |
 | `lint_tool_consistency.py` | 互動工具一致性驗證 |
+| `trufflehog_to_sarif.py` | convert trufflehog JSON findings to SARIF 2.1.0 |
 | `validate_docs_versions.py` | 文件版號與計數一致性檢查 |
 | `validate_mermaid.py` | Mermaid 圖渲染驗證 |
 | `validate_planning_session_row.py` | Detect bloated §12.1 Session Ledger rows in versioned planning docs. |

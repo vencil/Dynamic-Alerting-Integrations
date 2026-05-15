@@ -1,0 +1,3 @@
+{"DetectorName":"AWS","Verified":true,"Raw":"<test-fixture-not-a-real-secret-verified-case>","SourceMetadata":{"Data":{"Git":{"file":"deploy/config.sh","line":42,"commit":"abc123","email":"dev@example.com"}}}}
+{"DetectorName":"GitHubToken","Verified":false,"VerificationError":"context deadline exceeded","Raw":"<test-fixture-not-a-real-secret-unknown-case>","SourceMetadata":{"Data":{"Git":{"file":"scripts/ci.sh","line":7,"commit":"def456"}}}}
+{"DetectorName":"SlackWebhook","Verified":false,"Raw":"<test-fixture-not-a-real-secret-unverified-case>","SourceMetadata":{"Data":{"Filesystem":{"file":"docs/example.md","line":15}}}}

@@ -1,0 +1,2 @@
+{"DetectorName":"GenericApiKey","Verified":false,"Raw":"<test-fixture-not-a-real-secret-generic>","SourceMetadata":{"Data":{"Filesystem":{"file":"src/app.py","line":88}}}}
+{"DetectorName":"PrivateKey","Verified":false,"VerificationError":"no verifier","Raw":"<test-fixture-not-a-real-secret-privatekey>","SourceMetadata":{"Data":{"Git":{"file":"keys/test.pem","line":1}}}}
