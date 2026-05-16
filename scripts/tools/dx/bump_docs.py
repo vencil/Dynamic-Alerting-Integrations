@@ -528,7 +528,17 @@ def _build_platform_rules():
         "replacement": lambda v: f"> **v{v}**",
     })
 
-    # Inline version text: `於 v2.0.0 統一採集` or similar inline version strings in doc content
+    # Inline version text: `於 v2.0.0 統一採集` or similar inline version
+    # strings in doc content.
+    #
+    # `skip_released_changelog`: CHANGELOG.md is scanned via the docs/**/*.md
+    # glob (docs/CHANGELOG.md symlinks to the root CHANGELOG.md). Version
+    # strings inside released `## [vX.Y.Z]` entries are historical facts —
+    # `於 v2.8.0` there records what v2.8.0 did, it is not a pointer to the
+    # current version — so they must never be bumped. Without this flag the
+    # rule false-matched "已於 v2.8.0 phantom-delete" and tried to flip it to
+    # v2.8.1 (PR #503; the stop-gap there was to reword 於→在 to dodge the
+    # regex). See _split_at_released_changelog().
     rules.append({
         "file": "__glob__",
         "glob_dir": "docs",
@@ -536,6 +546,7 @@ def _build_platform_rules():
         "desc": "inline version text in doc content",
         "pattern": r"於\s+v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?(?=\s|\）|。)",
         "replacement": lambda v: f"於 v{v}",
+        "skip_released_changelog": True,
     })
 
     # **版本**：vX.Y.Z（與... pattern common in doc headers
@@ -1111,10 +1122,40 @@ def _expand_glob_rules(rules):
                     "desc": f"{rule['desc'].split(' in ')[0]} in {rel}",
                     "pattern": rule["pattern"],
                     "replacement": rule["replacement"],
+                    "skip_released_changelog": rule.get(
+                        "skip_released_changelog", False),
                 })
         else:
             expanded.append(rule)
     return expanded
+
+
+# Keep-a-Changelog released-version heading: `## [vX.Y.Z]`. Everything from
+# the first such heading downward is frozen history. `## [Unreleased]` does
+# not match this, so in-flight content above the first cut version stays
+# scannable.
+_RELEASED_CHANGELOG_HEADING = re.compile(
+    r"^## \[v[0-9]+\.[0-9]+\.[0-9]+", re.MULTILINE)
+
+
+def _split_at_released_changelog(content):
+    """Split `content` into (live, frozen) at the first released-version
+    CHANGELOG heading.
+
+    Released CHANGELOG entries record what shipped in a past version, so the
+    version strings inside them are historical facts that bump_docs must not
+    rewrite (PR #503: `已於 v2.8.0 phantom-delete` is a v2.8.0 fact, not a
+    stale reference to the current version). Returns the in-flight prefix as
+    `live` and the frozen entries as `frozen`; `live + frozen == content`.
+
+    Files with no `## [vX.Y.Z]` heading (every doc except CHANGELOG) come
+    back as fully-live with an empty `frozen`, so callers can treat this as
+    a no-op for them.
+    """
+    m = _RELEASED_CHANGELOG_HEADING.search(content)
+    if not m:
+        return content, ""
+    return content[:m.start()], content[m.start():]
 
 
 def apply_rules(rules, new_version, check_only=False, dry_run=False):
@@ -1125,6 +1166,10 @@ def apply_rules(rules, new_version, check_only=False, dry_run=False):
         new_version: Target version string.
         check_only: If True, don't modify files (for --check mode).
         dry_run: If True, don't modify files but show before→after diffs.
+
+    A rule may set `skip_released_changelog: True` to exclude frozen
+    `## [vX.Y.Z]` CHANGELOG entries from its scan (see
+    _split_at_released_changelog).
     """
     rules = _expand_glob_rules(rules)
     changes = []
@@ -1151,14 +1196,21 @@ def apply_rules(rules, new_version, check_only=False, dry_run=False):
         pattern = rule["pattern"]
         replacement = rule["replacement"](new_version)
 
-        matches = re.findall(pattern, content, re.MULTILINE)
+        # Released CHANGELOG entries are frozen history — never bump version
+        # refs inside them. `frozen_tail` is "" for ordinary files.
+        scan_text, frozen_tail = content, ""
+        if rule.get("skip_released_changelog"):
+            scan_text, frozen_tail = _split_at_released_changelog(content)
+
+        matches = re.findall(pattern, scan_text, re.MULTILINE)
         if not matches:
             changes.append(("OK", rule["desc"], "no match (may already be updated)"))
             continue
 
         needs_update = any(m != replacement for m in matches)
         if needs_update:
-            new_content = re.sub(pattern, replacement, content, flags=re.MULTILINE)
+            new_content = re.sub(pattern, replacement, scan_text,
+                                 flags=re.MULTILINE) + frozen_tail
             # Build diff detail
             unique_old = sorted(set(matches))
             diff_detail = (f"replaced {len(matches)} occurrence(s): "
@@ -1416,7 +1468,11 @@ def main():
                         print(f"       expected: {replacement.strip()}")
                     continue
 
-                matches = re.findall(pattern, content, re.MULTILINE)
+                scan_text = content
+                if rule.get("skip_released_changelog"):
+                    scan_text, _ = _split_at_released_changelog(content)
+
+                matches = re.findall(pattern, scan_text, re.MULTILINE)
                 if not matches:
                     matched += 1
                     print(f"  ✅ {desc}")
