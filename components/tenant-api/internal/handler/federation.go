@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"time"
@@ -65,6 +66,7 @@ func toFederationTokenRecord(r federation.Record) FederationTokenRecord {
 // @Success     201  {object} CreateFederationTokenResponse
 // @Failure     400  {object} map[string]string
 // @Failure     403  {object} map[string]string
+// @Failure     409  {object} map[string]string
 // @Failure     500  {object} map[string]string
 // @Router      /api/v1/federation/tokens [post]
 func (d *Deps) CreateFederationToken() http.HandlerFunc {
@@ -103,6 +105,10 @@ func (d *Deps) CreateFederationToken() http.HandlerFunc {
 
 		token, rec, err := d.Federation.Issue(req.TenantID, rbac.RequestEmail(r), req.Description)
 		if err != nil {
+			if errors.Is(err, federation.ErrTokenLimitReached) {
+				writeJSONErrorWithCode(w, r, http.StatusConflict, CodeConflict, err.Error())
+				return
+			}
 			writeJSONError(w, r, http.StatusInternalServerError, "issue federation token: "+err.Error())
 			return
 		}

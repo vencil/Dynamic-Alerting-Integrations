@@ -53,6 +53,17 @@ const tokenIDPrefix = "ftk_"
 // at load time rather than allowed to sign tokens.
 const minRSAKeyBits = 2048
 
+// maxTokensPerTenant caps the live federation tokens one tenant may
+// hold. It is an abuse guard, not a precise quota — concurrent
+// issuance may exceed it slightly, which is acceptable. A tenant with
+// this many live 4h tokens is almost certainly misbehaving (an
+// issuance loop, or never letting old tokens expire).
+const maxTokensPerTenant = 16
+
+// ErrTokenLimitReached is returned by Issue when the tenant already
+// holds maxTokensPerTenant live tokens.
+var ErrTokenLimitReached = errors.New("federation: tenant federation-token limit reached")
+
 // Claims is the JWT payload of a federation token.
 //
 // TenantID and TokenID are the cross-component contract fixed by
@@ -140,6 +151,9 @@ func (m *Manager) TTL() time.Duration { return m.ttl }
 // re-display it, so the caller must surface it to the operator once.
 func (m *Manager) Issue(tenantID, issuedBy, description string) (string, Record, error) {
 	now := time.Now()
+	if live := m.store.list(tenantID, now); len(live) >= maxTokensPerTenant {
+		return "", Record{}, ErrTokenLimitReached
+	}
 	tokenID, err := newTokenID()
 	if err != nil {
 		return "", Record{}, err

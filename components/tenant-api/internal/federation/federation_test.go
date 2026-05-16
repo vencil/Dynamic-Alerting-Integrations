@@ -5,6 +5,7 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -292,5 +293,37 @@ func TestNewManager_RejectsWeakKey(t *testing.T) {
 	}
 	if _, err := NewManager(path, filepath.Join(t.TempDir(), "s.json"), time.Hour); err == nil {
 		t.Fatal("expected an error for a sub-2048-bit RSA signing key")
+	}
+}
+
+func TestIssue_EnforcesTokenLimit(t *testing.T) {
+	t.Parallel()
+	m := newTestManager(t, time.Hour)
+	for i := 0; i < maxTokensPerTenant; i++ {
+		if _, _, err := m.Issue("tenant-cap", "u@example.com", ""); err != nil {
+			t.Fatalf("Issue %d: %v", i, err)
+		}
+	}
+	if _, _, err := m.Issue("tenant-cap", "u@example.com", ""); !errors.Is(err, ErrTokenLimitReached) {
+		t.Fatalf("Issue past cap = %v, want ErrTokenLimitReached", err)
+	}
+	// A different tenant is unaffected by another tenant's cap.
+	if _, _, err := m.Issue("tenant-other", "u@example.com", ""); err != nil {
+		t.Fatalf("Issue for a different tenant: %v", err)
+	}
+}
+
+func TestNewStore_RemovesStaleTempFile(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "s.json")
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, []byte("[]"), 0o600); err != nil {
+		t.Fatalf("write stale tmp: %v", err)
+	}
+	if _, err := newStore(path); err != nil {
+		t.Fatalf("newStore: %v", err)
+	}
+	if _, err := os.Stat(tmp); !os.IsNotExist(err) {
+		t.Errorf("stale .tmp file was not removed (stat err = %v)", err)
 	}
 }

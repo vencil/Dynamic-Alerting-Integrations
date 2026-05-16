@@ -211,6 +211,9 @@ func main() {
 		if *federationStore == "" {
 			slog.Warn("federation token store is on os.TempDir; set TA_FEDERATION_STORE to a persistent volume for production")
 		}
+		if len(rbacMgr.Get().Groups) == 0 {
+			slog.Warn("federation endpoint enabled but RBAC is in open mode — every token issuance will be denied (admin permission required); supply --rbac")
+		}
 	}
 
 	// Wire all handler dependencies into a single struct (PR-4/11).

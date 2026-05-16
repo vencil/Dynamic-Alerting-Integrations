@@ -38,6 +38,10 @@ type store struct {
 // mutation.
 func newStore(path string) (*store, error) {
 	s := &store{path: path, recs: make(map[string]Record)}
+	// Drop a stale temp file left by a crash mid-flush (write-temp +
+	// rename). It is at most a partial / unrenamed write; the real file
+	// is the authoritative state, so the temp is just litter.
+	_ = os.Remove(path + ".tmp")
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return s, nil
