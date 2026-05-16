@@ -503,6 +503,6 @@ Secret leak 防線是 L0/L1/L2/L3 四層：L0 GitHub native push-protection（re
 |------|------|
 | v2.6.0 | 從 `CLAUDE.md` 搬出，作為 11 條規範的 SSOT |
 | v2.8.0 | 新增 §T 工具生命週期（A-5b scan_component_health archived opt-in）|
-| v2.8.0 Phase .a | 新增 §P1 Commit trailer 紀律 + 對應 pre-push 攔截 hook（Trap #12 三層防禦的「規範層 + 攔截層」；該 hook 於 v2.8.1 隨 `known-regressions.md` 撤除而移除）|
+| v2.8.0 Phase .a | 新增 §P1 Commit trailer 紀律 + 對應 pre-push 攔截 hook（Trap #12 三層防禦的「規範層 + 攔截層」；該 hook 後因 `known-regressions.md` 撤除而移除）|
 | v2.8.0 Phase .a | 新增 §A 產出物治理（L1/L2/L3 taxonomy + retention rule + §A6 v2.9.0+ Session Ledger 退場）：由 `v2.8.0-planning.md §12.6` 搬入 SSOT；compact-pressure 分析催生 §A6 退場政策 |
 | v2.8.1 | 新增 §安全紀律（Secret Hygiene，#445 AC iv）：`--no-verify` 嚴禁政策 + L0/L1/L2/L3 四層防線指引。size cap 500→520（§安全紀律 為實質新內容，`--no-verify` ban 是無法 code-enforce 的純文字規則） |
