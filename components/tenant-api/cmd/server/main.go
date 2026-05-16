@@ -274,7 +274,7 @@ func main() {
 			r.With(rbacMgr.Middleware(rbac.PermRead, handler.TenantIDFromPath)).
 				Post("/validate", deps.ValidateTenant())
 
-			// v2.7.0 B-3 (ADR-017/018): merged effective config + dual hashes.
+			// v2.7.0 B-3 (ADR-016/017): merged effective config + dual hashes.
 			r.With(rbacMgr.Middleware(rbac.PermRead, handler.TenantIDFromPath)).
 				Get("/effective", deps.GetTenantEffective())
 		})

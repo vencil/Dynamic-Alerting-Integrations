@@ -40,7 +40,7 @@ func init() {
 	flag.StringVar(&configDir, "config-dir", "", "Path to threshold config directory (multi-file mode)")
 	flag.StringVar(&listenAddr, "listen", ":8080", "HTTP listen address")
 	flag.DurationVar(&reloadInterval, "reload-interval", 30*time.Second, "Config reload interval")
-	// v2.7.0 (ADR-017/018): coalesce bursts of file changes into a single
+	// v2.7.0 (ADR-016/017): coalesce bursts of file changes into a single
 	// hierarchical reload. Set to 0 to disable (synchronous reload per
 	// detected diff, matching v2.6.0 behavior).
 	flag.DurationVar(&scanDebounce, "scan-debounce", DefaultDebounceWindow, "Debounce window for hierarchical conf.d reload (0 disables)")

@@ -130,7 +130,7 @@ A 403 on `GET /api/v1/prs?tenant=db-secret` would **leak the existence of `db-se
 
 ### 3.4 Why `_metadata` path-inference is NOT in scope
 
-ADR-017 mentions "if a flat tenant lacks `_metadata.{domain,region,environment}`, the scanner can infer them from parent directories." That's a **migration tool** feature (`migrate_conf_d.py`), not runtime tenant-api. This hardening deliberately doesn't expand RBAC core behaviour.
+ADR-016 mentions "if a flat tenant lacks `_metadata.{domain,region,environment}`, the scanner can infer them from parent directories." That's a **migration tool** feature (`migrate_conf_d.py`), not runtime tenant-api. This hardening deliberately doesn't expand RBAC core behaviour.
 
 ### 3.5 Open-mode RBAC behaviour (no `_rbac.yaml`)
 

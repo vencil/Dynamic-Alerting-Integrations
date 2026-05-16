@@ -1,21 +1,21 @@
 ---
-title: "ADR-018: _defaults.yaml 繼承語意 + dual-hash hot-reload"
+title: "ADR-017: _defaults.yaml 繼承語意 + dual-hash hot-reload"
 tags: [adr, defaults, inheritance, hot-reload, dual-hash, v2.7.0]
 audience: [platform-engineers, sre, contributors]
 version: v2.8.0
 lang: zh
-id: ADR-018
+id: ADR-017
 tracking_kind: adr
 status: accepted
 domain: exporter
 created_at: 2026-04-18
 updated_at: 2026-05-13
 ---
-# ADR-018: _defaults.yaml 繼承語意 + dual-hash hot-reload
+# ADR-017: _defaults.yaml 繼承語意 + dual-hash hot-reload
 
-> **Language / 語言：** **中文 (Current)** | [English](./018-defaults-yaml-inheritance-dual-hash.en.md)
+> **Language / 語言：** **中文 (Current)** | [English](./017-defaults-yaml-inheritance-dual-hash.en.md)
 
-> v2.7.0 Scale Foundation 第二塊。與 [ADR-017](017-conf-d-directory-hierarchy-mixed-mode.md)（目錄分層）為一組。
+> v2.7.0 Scale Foundation 第二塊。與 [ADR-016](016-conf-d-directory-hierarchy-mixed-mode.md)（目錄分層）為一組。
 
 ## 狀態
 
@@ -24,7 +24,7 @@ updated_at: 2026-05-13
 ## 背景
 
 v2.6.x 的 `_defaults.yaml` 僅在 flat `conf.d/` 根目錄存在一份全局 defaults。
-引入 ADR-017 的分層目錄後，需要定義多層 `_defaults.yaml` 的繼承語意：
+引入 ADR-016 的分層目錄後，需要定義多層 `_defaults.yaml` 的繼承語意：
 
 - 哪些層級可以放 `_defaults.yaml`？
 - 父子層 defaults 如何 merge？
@@ -60,7 +60,7 @@ conf.d/
 - **Array/List 欄位**：**replace，不 concat**（避免語意歧義 — "我覆蓋了 group_by，怎麼多出舊值？"）
 - **Scalar 欄位**：子層覆蓋父層
 - **Null / 空值**：顯式 `null` 會刪除父層的值（opt-out pattern）
-- **`_metadata` 欄位不繼承**：每個 tenant 的 `_metadata` 僅來自自身 YAML + 路徑推斷（ADR-017）
+- **`_metadata` 欄位不繼承**：每個 tenant 的 `_metadata` 僅來自自身 YAML + 路徑推斷（ADR-016）
 
 ```yaml
 # L0 _defaults.yaml
@@ -223,6 +223,6 @@ Replace 語意更直覺，且與 Helm values merge 行為一致。
 
 ## 相關
 
-- [ADR-017: conf.d/ 目錄分層 + 混合模式](017-conf-d-directory-hierarchy-mixed-mode.md)
+- [ADR-016: conf.d/ 目錄分層 + 混合模式](016-conf-d-directory-hierarchy-mixed-mode.md)
 - [Benchmark Report §3 v2.8.0 Scale Gate](../benchmarks.md#3-v280-scale-gate-1000-tenant-實測) — dual-hash 1000-tenant 實測 + SLO 判讀
 - [architecture-and-design.md §設計概念](../architecture-and-design.md#設計概念總覽)

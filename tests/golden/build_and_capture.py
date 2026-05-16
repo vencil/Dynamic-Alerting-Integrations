@@ -3,7 +3,7 @@
 Build 7 golden fixture scenarios, run describe_tenant.py against each,
 capture expected source_hash + merged_hash, emit golden.json.
 
-Scenarios cover every deep_merge / inheritance semantic in ADR-018
+Scenarios cover every deep_merge / inheritance semantic in ADR-017
 so the Go port can verify byte-for-byte parity.
 """
 from __future__ import annotations

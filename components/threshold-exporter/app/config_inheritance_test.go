@@ -3,7 +3,7 @@ package main
 // Unit tests for deepMerge + canonicalJSON + computeMergedHash isolated
 // from the golden fixtures. The golden parity test (config_golden_parity_test.go)
 // drives the full Python-parity path; these tests cover individual semantic
-// rules from ADR-018 so that a regression can be localized quickly.
+// rules from ADR-017 so that a regression can be localized quickly.
 
 import (
 	"reflect"

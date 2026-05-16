@@ -18,7 +18,7 @@ DX tooling improvements are tracked in [dx-tooling-backlog.md](../internal/dx-to
 
 ## v2.8.0 Delivered (release wrap-up in progress)
 
-The Scale Foundation I laid in v2.7.0 (`conf.d/` hierarchy + `_defaults.yaml` inheritance + dual-hash + `/effective`) + component robustness (Design Token migration across 9 JSX tools + Component Health + dark mode ADR-016) + test infrastructure (1000-tenant fixture + Blast Radius CI bot) evolved in v2.8.0 into a **complete customer-deployable pipeline + Scale production validation + automation consolidation**.
+The Scale Foundation I laid in v2.7.0 (`conf.d/` hierarchy + `_defaults.yaml` inheritance + dual-hash + `/effective`) + component robustness (Design Token migration across 9 JSX tools + Component Health + dark mode ADR-015) + test infrastructure (1000-tenant fixture + Blast Radius CI bot) evolved in v2.8.0 into a **complete customer-deployable pipeline + Scale production validation + automation consolidation**.
 
 ### Customer Migration Pipeline — 5-step chain ✅
 
@@ -29,7 +29,7 @@ PromRule corpus → da-parser → da-tools profile build → da-batchpr apply �
 ```
 
 - **`da-parser`**: Dialect detection (prom / metricsql / ambiguous) + VM-only function allowlist (`vm_only_functions.yaml` via `go:embed`, CI freshness gate detects new metricsql upstream functions) + `StrictPromQLValidator` + provenance header (`generated_by` / `source_rule_id` / `parsed_at` / `source_checksum`). The `prom_portable: bool` flag lets customers identify the "can-go-back-to-Prom" subset after migrating to VM — a concrete anti-vendor-lock-in commitment.
-- **`da-tools profile build`**: Cluster similar rules → median algorithm picks the cluster's shared threshold → write `_defaults.yaml`, deviating tenants write `<id>.yaml` containing override-only keys; opt-in fuzzy matching applies duration-equivalence canonicalisation (`[5m]` ≡ `[300s]` ≡ `[300000ms]`); follows [ADR-019](../adr/019-profile-as-directory-default.en.md) Profile-as-Directory-Default.
+- **`da-tools profile build`**: Cluster similar rules → median algorithm picks the cluster's shared threshold → write `_defaults.yaml`, deviating tenants write `<id>.yaml` containing override-only keys; opt-in fuzzy matching applies duration-equivalence canonicalisation (`[5m]` ≡ `[300s]` ≡ `[300000ms]`); follows [ADR-018](../adr/018-profile-as-directory-default.en.md) Profile-as-Directory-Default.
 - **`da-batchpr apply`**: Hierarchy-Aware chunking — `_defaults.yaml` changes go in a Base Infrastructure PR; per-tenant PRs marked `Blocked by:`. `refresh --base-merged` auto-rebases downstream after Base merge; `refresh --source-rule-ids` regenerates patch PRs at fine granularity for parser bug fixes.
 - **`da-guard`**: Schema / Routing / Cardinality / Redundant-override 4-layer check; `.github/workflows/guard-defaults-impact.yml` runs automatically + posts sticky PR comment (marker-based update vs create) + uploads artifact with 14d retention.
 
@@ -110,7 +110,7 @@ v2.9.0 shifts from "feature stacking" to "battle-hardening". Based on first onbo
 
 | Version | Theme | Milestones |
 |---------|-------|-----------|
-| v2.7.0 | Scale Foundation × Component Robustness × Test Infrastructure | ADR-012~018 (7 new), `conf.d/` hierarchy + `_defaults.yaml` inheritance, dual-hash hot-reload, `/effective` endpoint, 5-dim Component Health, Design Token migration across 9 JSX tools |
+| v2.7.0 | Scale Foundation × Component Robustness × Test Infrastructure | ADR-012~017 (6 new), `conf.d/` hierarchy + `_defaults.yaml` inheritance, dual-hash hot-reload, `/effective` endpoint, 5-dim Component Health, Design Token migration across 9 JSX tools |
 | v2.6.0 | Operator × PR Write-back × Design System | ADR-011, GitLab MR, axe-core WCAG |
 | v2.5.0 | Multi-Tenant Grouping × E2E Testing | Playwright foundation, Saved Views |
 | v2.4.0 | Tenant Management API × pkg/config | REST API RBAC, Portal UI |

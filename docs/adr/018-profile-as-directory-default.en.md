@@ -1,17 +1,17 @@
 ---
-title: "ADR-019: Profile-as-Directory-Default"
+title: "ADR-018: Profile-as-Directory-Default"
 tags: [adr, profile-builder, conf-d, v2.8.0]
 audience: [platform-engineers, sre, contributors]
 version: v2.8.0
 lang: en
 ---
 
-# ADR-019: Profile-as-Directory-Default
+# ADR-018: Profile-as-Directory-Default
 
-> **Language / 語言：** **English (Current)** | [中文](./019-profile-as-directory-default.md)
+> **Language / 語言：** **English (Current)** | [中文](./018-profile-as-directory-default.md)
 
 > Profile Builder component of the v2.8.0 customer-migration pipeline.
-> Paired with [ADR-017](017-conf-d-directory-hierarchy-mixed-mode.en.md) (Directory Hierarchy) + [ADR-018](018-defaults-yaml-inheritance-dual-hash.en.md) (Inheritance Semantics).
+> Paired with [ADR-016](016-conf-d-directory-hierarchy-mixed-mode.en.md) (Directory Hierarchy) + [ADR-017](017-defaults-yaml-inheritance-dual-hash.en.md) (Inheritance Semantics).
 
 ## Status
 
@@ -23,7 +23,7 @@ The Profile Builder clusters a customer's PromRule corpus into "structurally sim
 
 1. **One full tenant.yaml per tenant** — N structurally similar rules become N files; even with `_defaults.yaml` inheritance, every tenant repeats every key. Classic GitOps anti-pattern.
 2. **Pour everything into `_defaults.yaml`, no tenant.yaml** — loses per-tenant fine-tuning.
-3. **Cluster-wide values in `_defaults.yaml`, only divergent tenants get a `<id>.yaml` override** — ADR-018's deepMerge already supports sparse override; the question is "what value goes in default?" and "which tenants count as 'truly different'?". Without an explicit rule each operator interprets it differently.
+3. **Cluster-wide values in `_defaults.yaml`, only divergent tenants get a `<id>.yaml` override** — ADR-017's deepMerge already supports sparse override; the question is "what value goes in default?" and "which tenants count as 'truly different'?". Without an explicit rule each operator interprets it differently.
 
 The Profile Builder ships both a translator (extracts threshold scalars from PromRule expressions) and emission (writes the cluster's decisions into a conf.d tree). The translator's heuristics are internal-package territory (see the `internal/profile/translate.go` package header); but "what shape does emission produce" is a cross-component decision affecting the batch PR pipeline's directory placement, the redundant-override guard's semantics, and release packaging — ADR territory.
 
@@ -36,7 +36,7 @@ The Profile Builder ships both a translator (extracts threshold scalars from Pro
 Concrete rules (implemented by `emit_translated.go`; the translator package header carries metric_key / median / cluster-aggregation heuristic details):
 
 - The `_defaults.yaml` `defaults: {<metric_key>: <threshold>}` carries the cluster **median** (not mean — single-outlier resilience).
-- Member threshold == cluster default → **no tenant file** (rely on ADR-018 inheritance).
+- Member threshold == cluster default → **no tenant file** (rely on ADR-017 inheritance).
 - Member threshold != cluster default → write `<id>.yaml` carrying ONLY the override for this `metric_key`.
 
 Example input (3 PromRules, thresholds 80 / 80 / 1500):
@@ -73,21 +73,21 @@ Translator-internal algorithms (the metric_key 5-step ladder, majority vote, med
 
 ## Interactions
 
-### With ADR-018 (deepMerge)
+### With ADR-017 (deepMerge)
 
-This ADR's emission relies on ADR-018's:
+This ADR's emission relies on ADR-017's:
 
 - **null-as-delete**: tenants who want to explicitly clear a value can still do so (emission uses explicit numbers, never null).
 - **map deep-merge**: each tenant file lists ONLY keys that differ from `_defaults.yaml`; runtime ResolveAt fills the rest from defaults.
 - **scalar override**: tenant string values (e.g. `"1500"`) override the default numeric; runtime uses strconv to convert back to float at ResolveAt time.
 
-### With ADR-017 (Directory Hierarchy)
+### With ADR-016 (Directory Hierarchy)
 
-Emission's `<RootPrefix>/<ProposalDir>/` maps to ADR-017's directory levels. **The caller** (the batch PR pipeline is the primary user) decides whether `ProposalDirs[i]` lands at L1 / L2 / L3. **The Profile Builder does NOT infer directory placement**; that's the batch PR pipeline's job.
+Emission's `<RootPrefix>/<ProposalDir>/` maps to ADR-016's directory levels. **The caller** (the batch PR pipeline is the primary user) decides whether `ProposalDirs[i]` lands at L1 / L2 / L3. **The Profile Builder does NOT infer directory placement**; that's the batch PR pipeline's job.
 
 ### With the Dangling Defaults Guard
 
-Emission produces native ADR-018 deepMerge shapes, so the guard applies naturally:
+Emission produces native ADR-017 deepMerge shapes, so the guard applies naturally:
 
 - Schema validation: metric_key required-fields check.
 - Cardinality guard: predicted-metric-count includes emission's metric_key entries.

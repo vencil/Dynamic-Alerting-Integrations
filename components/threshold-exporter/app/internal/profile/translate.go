@@ -8,7 +8,7 @@ package profile
 // `_defaults.yaml` carries `shared_expr_template`, `dialect`, etc.,
 // but NOT the structured scalar fields (`metric_key: numeric_value`)
 // that the threshold-exporter runtime actually consumes via
-// ADR-018 deepMerge + config_resolve.go::ResolveAt.
+// ADR-017 deepMerge + config_resolve.go::ResolveAt.
 //
 // The gap is real because PrometheusRule expressions look like
 //   `mysql_global_status_threads_connected > 800`
@@ -27,10 +27,10 @@ package profile
 //
 // The cross-cutting design principle this translator enables —
 // "Profile-as-Directory-Default" (cluster median in `_defaults.yaml`,
-// only divergent tenants get override files) — lives in ADR-019.
+// only divergent tenants get override files) — lives in ADR-018.
 // Heuristic + algorithmic decisions for the translator itself are
 // documented inline below (single source of truth for translator
-// behaviour; ADR-019 stays slim and only carries the cross-component
+// behaviour; ADR-018 stays slim and only carries the cross-component
 // principles).
 //
 //
@@ -74,7 +74,7 @@ package profile
 //   - PerTenantOverrides → only emit for members whose value
 //     diverges from default_threshold. Tenants matching default
 //     get NO override entry (deepMerge fall-through). This is
-//     the "Profile-as-Directory-Default" line-savings ADR-019 §1
+//     the "Profile-as-Directory-Default" line-savings ADR-018 §1
 //     promises, made concrete.
 //
 //
@@ -112,7 +112,7 @@ package profile
 // corpus still gets max value.
 //
 //
-// PR-3 INTENTIONAL NON-GOALS (also pinned in ADR-019)
+// PR-3 INTENTIONAL NON-GOALS (also pinned in ADR-018)
 // ---------------------------------------------------
 //   - `==` / `!=` operator translation. Equality on a numeric
 //     metric vs scalar is rarely "threshold" semantics.
@@ -139,7 +139,7 @@ import (
 
 // MetricKeyLabel is the conventional label customers add to a
 // PrometheusRule when they want explicit control over the
-// translator's metric_key choice. ADR-019 §metric-key-resolution
+// translator's metric_key choice. ADR-018 §metric-key-resolution
 // defines the resolution order: explicit label wins; alert/record
 // snake-case fallback; opaque-rule fallback last.
 const MetricKeyLabel = "metric_key"
@@ -187,7 +187,7 @@ type RuleTranslation struct {
 
 	// Operator is the comparison operator from the rule's expression
 	// (`>`, `>=`, `<`, `<=`). Surfaced so future emission layers can
-	// preserve direction semantics if/when ADR-019 §1 grows from
+	// preserve direction semantics if/when ADR-018 §1 grows from
 	// "value-only" to "value+direction".
 	Operator string `json:"operator,omitempty"`
 
@@ -237,7 +237,7 @@ func TranslateRule(rule parser.ParsedRule) (RuleTranslation, error) {
 	out.Threshold = cmp.threshold
 	out.Operator = cmp.op
 
-	// metric_key resolution — ADR-019 §metric-key-resolution order.
+	// metric_key resolution — ADR-018 §metric-key-resolution order.
 	out.MetricKey, out.Status, out.Warnings = resolveMetricKey(rule, cmp.metricExpr)
 
 	// Severity from rule labels (default warning).
@@ -366,7 +366,7 @@ func extractFirstMetricExpr(e metricsql.Expr) *metricsql.MetricExpr {
 // isComparisonOp returns true for operators the translator
 // recognises as numeric thresholds. `==`/`!=` are deliberately
 // excluded — equality on a numeric metric vs scalar is rarely a
-// "threshold" semantics; ADR-019 lists this as an explicit non-goal.
+// "threshold" semantics; ADR-018 lists this as an explicit non-goal.
 func isComparisonOp(op string) bool {
 	switch op {
 	case ">", ">=", "<", "<=":
@@ -393,7 +393,7 @@ func flipComparisonOp(op string) string {
 	return op
 }
 
-// resolveMetricKey applies the ADR-019 §metric-key-resolution order:
+// resolveMetricKey applies the ADR-018 §metric-key-resolution order:
 //
 //  1. Explicit label `metric_key: <value>` on the rule wins. No
 //     warning needed — the customer chose this on purpose.

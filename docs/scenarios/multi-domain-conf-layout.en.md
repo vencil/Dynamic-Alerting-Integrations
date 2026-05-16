@@ -9,7 +9,7 @@ lang: en
 
 > **Language / 語言：** **English (Current)** | [中文](./multi-domain-conf-layout.md)
 
-> **v2.8.0** | Related docs: [ADR-017 (Architecture Decision)](../adr/017-conf-d-directory-hierarchy-mixed-mode.md), [ADR-018 (Inheritance)](../adr/018-defaults-yaml-inheritance-dual-hash.md)
+> **v2.8.0** | Related docs: [ADR-016 (Architecture Decision)](../adr/016-conf-d-directory-hierarchy-mixed-mode.md), [ADR-017 (Inheritance)](../adr/017-defaults-yaml-inheritance-dual-hash.md)
 
 ## Background and Problem
 
@@ -353,8 +353,8 @@ da-tools describe-tenant --generate-report --format json --output audit.json
 
 | Resource | Relevance |
 |----------|-----------|
-| [ADR-017: Hierarchical conf.d Design Decision](../adr/017-conf-d-directory-hierarchy-mixed-mode.md) | ⭐⭐⭐ |
-| [ADR-018: Inheritance & Dual-Hash](../adr/018-defaults-yaml-inheritance-dual-hash.md) | ⭐⭐⭐ |
+| [ADR-016: Hierarchical conf.d Design Decision](../adr/016-conf-d-directory-hierarchy-mixed-mode.md) | ⭐⭐⭐ |
+| [ADR-017: Inheritance & Dual-Hash](../adr/017-defaults-yaml-inheritance-dual-hash.md) | ⭐⭐⭐ |
 | [`da-tools` CLI Reference](../cli-reference.md) | ⭐⭐ |
 | ["Scenario: Complete Tenant Lifecycle Management"](tenant-lifecycle.md) | ⭐⭐ |
 | ["Scenario: Multi-Cluster Federation Architecture"](multi-cluster-federation.md) | ⭐ |

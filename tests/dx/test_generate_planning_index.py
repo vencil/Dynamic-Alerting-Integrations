@@ -398,13 +398,13 @@ class TestSourceLink:
 
     def test_md_source_under_docs_uses_site_relative_no_line_anchor(self):
         e = gpi.PlanningEntry(
-            id="ADR-021", title="Foo", tracking_kind="adr", status="proposed",
-            source_path="docs/adr/021-tenant-federation.md", source_line=7,
+            id="ADR-020", title="Foo", tracking_kind="adr", status="proposed",
+            source_path="docs/adr/020-tenant-federation.md", source_line=7,
         )
         # Site-relative from docs/internal/: one `../` then drop `docs/` prefix.
         # No `#L<n>` because rendered .md doesn't honour line-jump in either viewer.
         assert e.source_link() == (
-            "[docs/adr/021-tenant-federation.md](../adr/021-tenant-federation.md)"
+            "[docs/adr/020-tenant-federation.md](../adr/020-tenant-federation.md)"
         )
 
     def test_code_source_outside_docs_uses_github_url_with_line(self):

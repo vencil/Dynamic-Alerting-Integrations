@@ -6,7 +6,7 @@ package profile
 //   - TranslateRule: AST shape recognition for the supported
 //     "<expr> {>|>=|<|<=} <number>" form, plus failure modes
 //     (parse error, vector comparison, no comparison at all).
-//   - resolveMetricKey: ADR-019 §metric-key-resolution order
+//   - resolveMetricKey: ADR-018 §metric-key-resolution order
 //     (explicit label → alert/record snake_case → inner metric →
 //     skipped).
 //   - TranslateProposal: cluster-level aggregation, majority vote,
@@ -222,7 +222,7 @@ func TestTranslateRule_EmptyExprErrors(t *testing.T) {
 
 func TestTranslateRule_EqualityOperatorSkipped(t *testing.T) {
 	t.Parallel()
-	// `==` is intentionally not supported (ADR-019 §non-goals).
+	// `==` is intentionally not supported (ADR-018 §non-goals).
 	r := parser.ParsedRule{
 		SourceRuleID: "x", Alert: "X",
 		Expr: `metric_x == 0`,

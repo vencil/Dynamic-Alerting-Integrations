@@ -20,10 +20,10 @@ New here? Pick based on your needs:
 - **Preparing to deploy**: [008 Operator Integration](./008-operator-native-integration-path.en.md) — ConfigMap vs Operator CRD dual-path
 - **Multi-cluster needs**: [004 Federation](./004-federation-central-exporter-first.en.md) + [006 Tenant Mapping](./006-tenant-mapping-topologies.en.md) — Federation architecture and topologies
 - **Management plane**: [009 Tenant API](./009-tenant-manager-crud-api.en.md) + [011 PR Write-back](./011-pr-based-write-back.en.md) — UI/API management and compliance workflows
-- **Thousand-tenant Scale / Config management**: [010 Multi-Tenant Grouping](./010-multi-tenant-grouping.en.md) + [017 conf.d/ directory hierarchy](./017-conf-d-directory-hierarchy-mixed-mode.en.md) + [018 inheritance engine + dual-hash](./018-defaults-yaml-inheritance-dual-hash.en.md) — thousand-tenant config organization and hot-reload
-- **Frontend quality governance**: [013 Component health + Token Density](./013-component-health-token-density-metric.en.md) + [014 TECH-DEBT budget isolation](./014-tech-debt-category-budget-isolation.en.md) + [015 Wizard token migration](./015-wizard-arbitrary-value-token-migration.en.md) + [016 data-theme single-track dark mode](./016-data-theme-single-track-dark-mode.en.md)
+- **Thousand-tenant Scale / Config management**: [010 Multi-Tenant Grouping](./010-multi-tenant-grouping.en.md) + [016 conf.d/ directory hierarchy](./016-conf-d-directory-hierarchy-mixed-mode.en.md) + [017 inheritance engine + dual-hash](./017-defaults-yaml-inheritance-dual-hash.en.md) — thousand-tenant config organization and hot-reload
+- **Frontend quality governance**: [013 Component health + Token Density](./013-component-health-token-density-metric.en.md) + [014 Wizard token migration](./014-wizard-arbitrary-value-token-migration.en.md) + [015 data-theme single-track dark mode](./015-data-theme-single-track-dark-mode.en.md)
 - **Accessibility patches**: [012 threshold-heatmap colorblind patch](./012-colorblind-hotfix-structured-severity-return.en.md)
-- **Customer-migration pipeline**: [019 Profile-as-Directory-Default](./019-profile-as-directory-default.en.md) — Profile Builder's default-vs-override rule when emitting into conf.d/
+- **Customer-migration pipeline**: [018 Profile-as-Directory-Default](./018-profile-as-directory-default.en.md) — Profile Builder's default-vs-override rule when emitting into conf.d/
 
 ## ADR Index
 
@@ -42,13 +42,13 @@ New here? Pick based on your needs:
 | [011](#011-pr-based-write-back-mode) | PR-based Write-back Mode | ✅ Accepted | Dual-mode architecture (direct commit / pull request), supporting GitHub PR and GitLab MR |
 | [012](#012-threshold-heatmap-colorblind-patch) | threshold-heatmap Colorblind Patch — Structured Severity Return | ✅ Accepted | Fix WCAG 1.4.1 violation: replace color-only output with `{severity, color, ariaLabel}` structure to support colorblind readability |
 | [013](#013-component-health-and-token-density-metric) | Component Health and Token Density Metric | ✅ Accepted | 5-dimension weighted scoring (LOC+Audience+Phase+Writer+Recency) with automatic Tier 1/2/3 classification; introduce `token_density` metric quantifying token migration progress |
-| [014](#014-tech-debt-vs-regression-budget-isolation) | TECH-DEBT vs Regression Budget Isolation | ✅ Accepted | Split technical debt and user-visible regressions into two separate budgets to prevent TECH-DEBT from eroding REG budget; LL crossing 2 minor versions requires tri-choice (codify / automate / archive) |
-| [015](#015-wizard-token-arbitrary-value-migration-strategy) | Wizard Token Arbitrary-Value Migration Strategy (Option A) | ✅ Accepted | Use `bg-[color:var(--da-color-*)]` arbitrary-value rewrite for legacy `bg-slate-200`, avoiding Tailwind config expansion + completing full replacement in one commit |
-| [016](#016-data-theme-single-track-dark-mode) | `[data-theme]` Single-track Dark Mode (removing `dark:` variant) | ✅ Accepted | Unify dark mode under `[data-theme="dark"]` attribute, disabling Tailwind `dark:` variant to eliminate token/class dual-track issues |
-| [017](#017-confd-directory-hierarchy-mixed-mode) | conf.d/ Directory Hierarchy + Mixed Mode + Migration Strategy | ✅ Accepted | Directory Scanner supports both flat and domain/region/env 3-level hierarchy; zero-downtime upgrade + optional `migrate-conf-d` tool |
-| [018](#018-defaultsyaml-inheritance-semantics-dual-hash-hot-reload) | `_defaults.yaml` Inheritance Semantics + dual-hash hot-reload | ✅ Accepted | Deep merge with override (array replace, null-as-delete) + dual hash (source_hash + merged_hash) for precise reload trigger determination, paired with 300ms debounce |
-| [019](#019-profile-as-directory-default) | Profile-as-Directory-Default | ✅ Accepted | Cluster-wide thresholds in `_defaults.yaml`; only divergent tenants write `<id>.yaml` overrides (median + sparse override). The cross-component "default vs override boundary" rule consumed by Profile Builder, batch PR pipeline, and the Dangling Defaults Guard. Translator heuristic details live in `translate.go`'s package header (single source of truth, no drift) |
-| [021](#021-tenant-federation-label-injection-proxy-over-self-built-endpoint) | Tenant Federation — Label-Injection Proxy over Self-Built Endpoint | 🟡 Proposed | Tenant pulls own metrics subset back to tenant-side infra for self-managed federation. Adopts vmauth (VM customers) / prom-label-proxy (Prom customers) as label-enforced read proxy; platform does NOT self-build endpoint. 2-tier policy (platform whitelist + tenant subset) + 4h TTL token (no server-side revocation, **compensating control**: gateway rate limit mandatory) + **3-layer blast radius** (storage backend series/sample cap + gateway per-token rate limit + proxy label injection) + data-layer prerequisite (whitelisted metrics must natively carry `tenant_id` label, admission validator enforces) |
+| [014](#014-wizard-token-arbitrary-value-migration-strategy) | Wizard Token Arbitrary-Value Migration Strategy (Option A) | ✅ Accepted | Use `bg-[color:var(--da-color-*)]` arbitrary-value rewrite for legacy `bg-slate-200`, avoiding Tailwind config expansion + completing full replacement in one commit |
+| [015](#015-data-theme-single-track-dark-mode) | `[data-theme]` Single-track Dark Mode (removing `dark:` variant) | ✅ Accepted | Unify dark mode under `[data-theme="dark"]` attribute, disabling Tailwind `dark:` variant to eliminate token/class dual-track issues |
+| [016](#016-confd-directory-hierarchy-mixed-mode) | conf.d/ Directory Hierarchy + Mixed Mode + Migration Strategy | ✅ Accepted | Directory Scanner supports both flat and domain/region/env 3-level hierarchy; zero-downtime upgrade + optional `migrate-conf-d` tool |
+| [017](#017-defaultsyaml-inheritance-semantics-dual-hash-hot-reload) | `_defaults.yaml` Inheritance Semantics + dual-hash hot-reload | ✅ Accepted | Deep merge with override (array replace, null-as-delete) + dual hash (source_hash + merged_hash) for precise reload trigger determination, paired with 300ms debounce |
+| [018](#018-profile-as-directory-default) | Profile-as-Directory-Default | ✅ Accepted | Cluster-wide thresholds in `_defaults.yaml`; only divergent tenants write `<id>.yaml` overrides (median + sparse override). The cross-component "default vs override boundary" rule consumed by Profile Builder, batch PR pipeline, and the Dangling Defaults Guard. Translator heuristic details live in `translate.go`'s package header (single source of truth, no drift) |
+| [019](#019-planning-ssot-frontmatter-contract-discovery-based-index) | Planning SSOT — Frontmatter Contract + Discovery-based Index | ✅ Accepted | Unify scattered planning tracking (tech-debt / dx-backlog / known-regression / roadmap / sprint) under a per-entry frontmatter contract + discovery-based index generator + active CI status-sync check. Consolidates TD/HA/REG into the TRK namespace; ADR and S# kept as separate namespaces |
+| [020](#020-tenant-federation-label-injection-proxy-over-self-built-endpoint) | Tenant Federation — Label-Injection Proxy over Self-Built Endpoint | 🟡 Proposed | Tenant pulls own metrics subset back to tenant-side infra for self-managed federation. Adopts vmauth (VM customers) / prom-label-proxy (Prom customers) as label-enforced read proxy; platform does NOT self-build endpoint. 2-tier policy (platform whitelist + tenant subset) + 4h TTL token (no server-side revocation, **compensating control**: gateway rate limit mandatory) + **3-layer blast radius** (storage backend series/sample cap + gateway per-token rate limit + proxy label injection) + data-layer prerequisite (whitelisted metrics must natively carry `tenant_id` label, admission validator enforces) |
 
 ---
 
@@ -156,57 +156,57 @@ v2.7.0 baseline: 5-dimension weighted scoring (LOC 0-3 + Audience 0-2 + Phase 0-
 
 ---
 
-## 014: TECH-DEBT vs Regression Budget Isolation
+## 014: Wizard Token Arbitrary-Value Migration Strategy
 
-**Document**: [`014-tech-debt-category-budget-isolation.en.md`](./014-tech-debt-category-budget-isolation.en.md)
-
-On top of the v2.6.x Regression Budget (P2/P3 fixes ≤ 15% of release effort), add a "TECH-DEBT" category with its own independent budget (4%), preventing technical debt from consuming user-visible regression-fix time. LLs crossing 2 minor versions must take one of three paths: codify into formal rules, mark 🛡️ automated, or archive under `archive/`. Provides a mechanism for Playbook knowledge annealing.
-
----
-
-## 015: Wizard Token Arbitrary-Value Migration Strategy
-
-**Document**: [`015-wizard-arbitrary-value-token-migration.en.md`](./015-wizard-arbitrary-value-token-migration.en.md)
+**Document**: [`014-wizard-arbitrary-value-token-migration.en.md`](./014-wizard-arbitrary-value-token-migration.en.md)
 
 v2.7.0 migrates `deployment-wizard.jsx` from legacy `bg-slate-200 / text-gray-700` palette to design tokens. **Option A** selected: `bg-[color:var(--da-color-*)]` arbitrary-value rewrite instead of expanding `tailwind.config`. Preserves the Tailwind utility style + token SSOT; subsequent rbac / cicd / threshold-heatmap migrations follow the same rule.
 
 ---
 
-## 016: `[data-theme]` Single-track Dark Mode
+## 015: `[data-theme]` Single-track Dark Mode
 
-**Document**: [`016-data-theme-single-track-dark-mode.en.md`](./016-data-theme-single-track-dark-mode.en.md)
+**Document**: [`015-data-theme-single-track-dark-mode.en.md`](./015-data-theme-single-track-dark-mode.en.md)
 
 Fully remove the Tailwind `dark:` variant and unify dark mode under the `[data-theme="dark"]` attribute. The previous coexistence of class-based and attribute-based tracks caused tooltip/palette color drift and double maintenance cost. `jsx-loader` sets `data-theme` instead of toggling `class="dark"`; `tailwind.config.darkMode` is removed. A prerequisite for all subsequent v2.7.0 token migrations.
 
 ---
 
-## 017: conf.d/ Directory Hierarchy + Mixed Mode
+## 016: conf.d/ Directory Hierarchy + Mixed Mode
 
-**Document**: [`017-conf-d-directory-hierarchy-mixed-mode.en.md`](./017-conf-d-directory-hierarchy-mixed-mode.en.md)
+**Document**: [`016-conf-d-directory-hierarchy-mixed-mode.en.md`](./016-conf-d-directory-hierarchy-mixed-mode.en.md)
 
 First building block of v2.7.0 Scale Foundation. Directory Scanner supports both flat and `{domain}/{region}/{env}/` three-level structures, **without forcing migration**. Directory paths can infer default `_metadata.domain/region/environment` values; explicit fields in the file override. The `migrate-conf-d` tool is optional, supports `--dry-run` + `git mv` to preserve history. Resolves readability and blast-radius blind spots at 200+ tenants.
 
 ---
 
-## 018: `_defaults.yaml` Inheritance Semantics + dual-hash hot-reload
+## 017: `_defaults.yaml` Inheritance Semantics + dual-hash hot-reload
 
-**Document**: [`018-defaults-yaml-inheritance-dual-hash.en.md`](./018-defaults-yaml-inheritance-dual-hash.en.md)
+**Document**: [`017-defaults-yaml-inheritance-dual-hash.en.md`](./017-defaults-yaml-inheritance-dual-hash.en.md)
 
 Second building block of v2.7.0 Scale Foundation. Defines multi-level `_defaults.yaml` inheritance semantics (L0 global → L1 domain → L2 region → L3 env → tenant) with deep merge with override (array replace, null-as-delete, `_metadata` not inherited). Dual hash: `source_hash` (tenant YAML file itself) + `merged_hash` (effective config canonical JSON) precisely determines reload trigger, avoiding reload storms when `_defaults.yaml` changes; 300ms debounce handles batch git pulls.
 
 ---
 
-## 019: Profile-as-Directory-Default
+## 018: Profile-as-Directory-Default
 
-**Document**: [`019-profile-as-directory-default.en.md`](./019-profile-as-directory-default.en.md)
+**Document**: [`018-profile-as-directory-default.en.md`](./018-profile-as-directory-default.en.md)
 
 v2.8.0 customer-migration pipeline — Profile Builder writing back to conf.d/. Pins the cross-component design principle: cluster-wide thresholds live in `_defaults.yaml`; only tenants whose value diverges from the default write a `<id>.yaml` override (median + sparse override). The shape this principle dictates is consumed by Profile Builder emission, the batch PR pipeline's directory placement, release packaging, and the Dangling Defaults Guard — getting this right at the ADR layer keeps all four components consistent. Translator heuristic details (metric_key 5-step ladder, median, cluster aggregation, operator handling) live in `internal/profile/translate.go`'s package header — single source of truth, no drift. Non-goals: directory inference (deferred to the batch PR pipeline), dimensional/regex labels emission, auto-rewriting source PromRules, two-tier severity translation.
 
 ---
 
-## 021: Tenant Federation — Label-Injection Proxy over Self-Built Endpoint
+## 019: Planning SSOT — Frontmatter Contract + Discovery-based Index
 
-**Document**: [`021-tenant-federation.md`](./021-tenant-federation.md) (ZH-primary; EN mirror deferred to `Accepted` state per ADR-020 pattern)
+**Document**: [`019-planning-ssot.md`](./019-planning-ssot.md) (ZH-primary; EN mirror tracked under issue [#409](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/409))
+
+Unify the scattered "future plans / known issues / in-flight work" (previously spread across 8+ sources: CHANGELOG `[Unreleased]`, dx-tooling-backlog, frontend-quality-backlog, sprint planning ledger, roadmap-future, per-ADR Future Work, code comments, flaky-tests registry) under a three-layer design: a per-entry frontmatter contract, a discovery-based index generator (`generate_planning_index.py`), and an active CI status-sync check. Consolidates the TD/HA/REG namespaces into a single `TRK-NNN` namespace; `ADR-NNN` and `S#NNN` are kept as separate namespaces (ADR is permanent design history, not backlog tracking).
+
+---
+
+## 020: Tenant Federation — Label-Injection Proxy over Self-Built Endpoint
+
+**Document**: [`020-tenant-federation.md`](./020-tenant-federation.md) (ZH-primary; EN mirror deferred to `Accepted` state per ADR-019 pattern)
 
 v2.8.0 draft, targets v2.9.0 epic. Covers the cross-boundary federation scenario (complementary to ADR-004's platform-internal multi-cluster federation): tenants pull a subset of their own metrics back to tenant-side infra for self-managed federation. Adopts **vmauth** (VM customers) / **prom-label-proxy** (Prom customers) as a label-enforced read proxy; the platform does NOT self-build an endpoint (label-sanitization in a self-built impl is a multi-tenant breach landmine — production-hardened proxies have years of corner-case coverage). MVP 2-tier policy (platform whitelist + tenant subset) — domain layer drops to Future Work. Token: 4h TTL + no server-side revocation list (explicit trade-off: simpler impl in exchange for a 4h exposure window; **compensating control is mandatory** — gateway rate limit must be in place or 4h becomes a DoS playground). Blast radius defense is **3-layer** (adversarial review surfaced that a thin proxy cannot enforce series caps or per-token concurrency alone): storage backend handles series/sample limits (Prom `--query.max-samples` / VM `-search.maxUniqueTimeseries`), API gateway handles per-token rate limit + timeout (Nginx/Envoy with JWT claim extraction), proxy handles label injection + audit only. Data-layer prerequisite: whitelisted metrics must natively carry `tenant_id` label, enforced by admission validator. Implementation epic (~68h after adversarial review revision) tracked at issue [#380](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/380) IV-2.
 

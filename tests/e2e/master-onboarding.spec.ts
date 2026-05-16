@@ -51,9 +51,9 @@ test.describe('Master Onboarding @critical', () => {
     // Key CTAs — match by the actual rendered LINK text (not desc prose
     // that may mention the same token). Step 1 link: "View installation
     // guide" (en) / "查看安裝指南" (zh). Step 2: "CLI Reference" (both
-    // langs). Step 3: "ADR-019" (both langs). getByRole('link', name)
+    // langs). Step 3: "ADR-018" (both langs). getByRole('link', name)
     // avoids strict-mode collision with description prose (e.g. step 3
-    // desc text references ADR-019 AND the CTA link is "ADR-019 →").
+    // desc text references ADR-018 AND the CTA link is "ADR-018 →").
     await expect(
       page.getByRole('link', { name: /installation guide|安裝指南/i })
     ).toBeVisible();
@@ -61,7 +61,7 @@ test.describe('Master Onboarding @critical', () => {
       page.getByRole('link', { name: /CLI Reference/i })
     ).toBeVisible();
     await expect(
-      page.getByRole('link', { name: /ADR-019/ })
+      page.getByRole('link', { name: /ADR-018/ })
     ).toBeVisible();
   });
 

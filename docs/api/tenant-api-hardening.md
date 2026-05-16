@@ -130,7 +130,7 @@ v2.7.0 的 RBAC 透過 `rbacMgr.Middleware(perm, tenantIDFn)` 在路由層做 `P
 
 ### 3.4 為什麼 `_metadata` 路徑推斷不在範圍內
 
-ADR-017 提到「flat tenant 缺 `_metadata.{domain,region,environment}` 時可從父目錄路徑推斷」— 這是**遷移工具**（`migrate_conf_d.py`）的功能，runtime tenant-api 不做。本次硬化不擴 RBAC core 行為。
+ADR-016 提到「flat tenant 缺 `_metadata.{domain,region,environment}` 時可從父目錄路徑推斷」— 這是**遷移工具**（`migrate_conf_d.py`）的功能，runtime tenant-api 不做。本次硬化不擴 RBAC core 行為。
 
 ### 3.5 Open-mode RBAC（缺 `_rbac.yaml`）行為
 

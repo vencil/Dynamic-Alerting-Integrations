@@ -1,16 +1,16 @@
 ---
-title: "ADR-017: conf.d/ Directory Hierarchy + Mixed Mode + Migration Strategy"
+title: "ADR-016: conf.d/ Directory Hierarchy + Mixed Mode + Migration Strategy"
 tags: [adr, conf.d, directory-scanner, hierarchy, migration, v2.7.0]
 audience: [platform-engineers, sre, contributors]
 version: v2.8.0
 lang: en
 ---
 
-# ADR-017: conf.d/ Directory Hierarchy + Mixed Mode + Migration Strategy
+# ADR-016: conf.d/ Directory Hierarchy + Mixed Mode + Migration Strategy
 
-> **Language / 語言：** **English (Current)** | [中文](./017-conf-d-directory-hierarchy-mixed-mode.md)
+> **Language / 語言：** **English (Current)** | [中文](./016-conf-d-directory-hierarchy-mixed-mode.md)
 
-> First building block of v2.7.0 Scale Foundation. Paired with [ADR-018](018-defaults-yaml-inheritance-dual-hash.en.md) (inheritance semantics).
+> First building block of v2.7.0 Scale Foundation. Paired with [ADR-017](017-defaults-yaml-inheritance-dual-hash.en.md) (inheritance semantics).
 
 ## Status
 
@@ -113,6 +113,6 @@ Directory Scanner's design philosophy is "filesystem as source of truth."
 
 ## Related
 
-- [ADR-018: _defaults.yaml Inheritance Semantics + Dual-Hash Hot-Reload](018-defaults-yaml-inheritance-dual-hash.md)
+- [ADR-017: _defaults.yaml Inheritance Semantics + Dual-Hash Hot-Reload](017-defaults-yaml-inheritance-dual-hash.md)
 - [Benchmark Playbook §Synthetic Fixture Generation](../internal/benchmark-playbook.md#synthetic-fixture-generation-速率對照) — flat vs hierarchical performance comparison
 - [ADR-006: Tenant Mapping Topologies](006-tenant-mapping-topologies.en.md)

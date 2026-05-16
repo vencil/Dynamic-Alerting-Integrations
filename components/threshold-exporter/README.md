@@ -103,7 +103,7 @@
 | `_*.yaml`（如 `_defaults.yaml`） | `defaults` / `state_filters` / `tenants`（但通常只放 defaults） | — |
 | `<tenant>.yaml` | 僅 `tenants`（含其子鍵 `_metadata` / `_silent_mode` / `_state_maintenance` / `_severity_dedup`） | 其他區塊自動忽略 + WARN log |
 
-### 四層繼承（ADR-018, v2.7.0+）
+### 四層繼承（ADR-017, v2.7.0+）
 
 ```
 conf.d/

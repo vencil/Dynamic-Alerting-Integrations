@@ -15,7 +15,7 @@ lang: zh
 
 ## 為什麼需要 Migration Toolkit
 
-把客戶現有的 Prometheus alerting rule corpus（PromRule CRD / Alertmanager YAML）導入到 Dynamic Alerting Platform 的 conf.d/ Profile-as-Directory-Default 架構（[ADR-019](adr/019-profile-as-directory-default.md)），需要一連串工具串接：
+把客戶現有的 Prometheus alerting rule corpus（PromRule CRD / Alertmanager YAML）導入到 Dynamic Alerting Platform 的 conf.d/ Profile-as-Directory-Default 架構（[ADR-018](adr/018-profile-as-directory-default.md)），需要一連串工具串接：
 
 ```
 PromRule corpus → da-parser → profile-builder cluster + translator → da-batchpr → da-guard validation → conf.d/
@@ -346,5 +346,5 @@ CI 整合範例見 [`.github/workflows/guard-defaults-impact.yml`](https://githu
 
 - [`migration-guide.md`](migration-guide.md) — 整體遷移流程
 - [`scenarios/incremental-migration-playbook.md`](scenarios/incremental-migration-playbook.md) — 增量遷移 playbook（含 Emergency Rollback Procedures）
-- [`adr/019-profile-as-directory-default.md`](adr/019-profile-as-directory-default.md) — 為什麼 conf.d/ 走 sparse-override 形狀
+- [`adr/018-profile-as-directory-default.md`](adr/018-profile-as-directory-default.md) — 為什麼 conf.d/ 走 sparse-override 形狀
 - [`cli-reference.md` § guard](cli-reference.md#guard) — `da-tools guard defaults-impact` 完整選項

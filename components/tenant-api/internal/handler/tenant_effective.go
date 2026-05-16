@@ -1,7 +1,7 @@
 package handler
 
 // ============================================================
-// GET /api/v1/tenants/{id}/effective — v2.7.0 (ADR-017 + ADR-018)
+// GET /api/v1/tenants/{id}/effective — v2.7.0 (ADR-016 + ADR-017)
 // ============================================================
 //
 // Returns the *merged* effective config for one tenant: _defaults.yaml chain

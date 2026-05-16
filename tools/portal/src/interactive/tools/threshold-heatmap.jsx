@@ -8,7 +8,7 @@ related: [rule-pack-matrix, capacity-planner, multi-tenant-comparison]
 ---
 
 /**
- * Design Token Migration (ADR-015 / DEC-A)
+ * Design Token Migration (ADR-014 / DEC-A)
  * ==========================================
  * This component uses design tokens via arbitrary Tailwind values (--da-color-*)
  * instead of hardcoded Tailwind color palette classes. This ensures consistency

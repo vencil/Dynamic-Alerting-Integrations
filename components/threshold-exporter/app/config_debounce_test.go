@@ -220,7 +220,7 @@ func TestDiffAndReload_HierarchicalMode_SourceChange(t *testing.T) {
 	}
 }
 
-// TestDiffAndReload_DefaultsChangeNoOp verifies ADR-018's "quiet defaults
+// TestDiffAndReload_DefaultsChangeNoOp verifies ADR-017's "quiet defaults
 // edit" detection: a _defaults.yaml key that is completely shadowed by a
 // tenant override must NOT bump merged_hash and must increment the no-op
 // counter instead.

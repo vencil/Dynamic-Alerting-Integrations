@@ -9,7 +9,7 @@ lang: en
 
 > **Language / 語言：** **English (Current)** | [中文](./manage-at-scale.md)
 
-> **v2.8.0** | Related docs: [multi-domain-conf-layout](multi-domain-conf-layout.en.md), [ADR-017](../adr/017-conf-d-directory-hierarchy-mixed-mode.en.md), [ADR-018](../adr/018-defaults-yaml-inheritance-dual-hash.en.md), [tenant-lifecycle](tenant-lifecycle.en.md)
+> **v2.8.0** | Related docs: [multi-domain-conf-layout](multi-domain-conf-layout.en.md), [ADR-016](../adr/016-conf-d-directory-hierarchy-mixed-mode.en.md), [ADR-017](../adr/017-defaults-yaml-inheritance-dual-hash.en.md), [tenant-lifecycle](tenant-lifecycle.en.md)
 
 ## Overview
 
@@ -270,7 +270,7 @@ Expected result: `"affected_tenants": 0`. Any non-zero result indicates configur
 | Resource | Relevance |
 |----------|-----------|
 | [Scenario: Multi-Domain Hierarchical Configuration](multi-domain-conf-layout.en.md) | ⭐⭐⭐ |
-| [ADR-017: Hierarchical conf.d Design Decision](../adr/017-conf-d-directory-hierarchy-mixed-mode.en.md) | ⭐⭐⭐ |
-| [ADR-018: Inheritance & Dual-Hash](../adr/018-defaults-yaml-inheritance-dual-hash.en.md) | ⭐⭐⭐ |
+| [ADR-016: Hierarchical conf.d Design Decision](../adr/016-conf-d-directory-hierarchy-mixed-mode.en.md) | ⭐⭐⭐ |
+| [ADR-017: Inheritance & Dual-Hash](../adr/017-defaults-yaml-inheritance-dual-hash.en.md) | ⭐⭐⭐ |
 | [Scenario: Complete Tenant Lifecycle Management](tenant-lifecycle.en.md) | ⭐⭐ |
 | [`da-tools` CLI Reference](../cli-reference.en.md) | ⭐⭐ |

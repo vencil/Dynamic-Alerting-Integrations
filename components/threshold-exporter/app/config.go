@@ -38,7 +38,7 @@ type flatScanState struct {
 	mtimes  map[string]fileStat        // filename → mtime+size for quick skip (v2.1.0)
 }
 
-// hierarchyState bundles the v2.7.0+ ADR-017/018 hierarchical-mode caches.
+// hierarchyState bundles the v2.7.0+ ADR-016/017 hierarchical-mode caches.
 // `enabled` is auto-detected on first load: if scanDirHierarchical finds
 // at least one `_defaults.yaml` at any depth AND the top-level scan path
 // is a directory, we keep hierarchical state populated alongside the flat

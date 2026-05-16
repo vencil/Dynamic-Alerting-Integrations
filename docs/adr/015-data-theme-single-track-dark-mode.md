@@ -1,19 +1,19 @@
 ---
-title: "ADR-016: 全面改用 `[data-theme]` 單軌 dark mode，移除 Tailwind `dark:` 變體"
+title: "ADR-015: 全面改用 `[data-theme]` 單軌 dark mode，移除 Tailwind `dark:` 變體"
 tags: [adr, design-tokens, dark-mode, v2.7.0]
 audience: [frontend-developers, designers, maintainers]
 version: v2.8.0
 lang: zh
-id: ADR-016
+id: ADR-015
 tracking_kind: adr
 status: accepted
 domain: portal
 created_at: 2026-04-18
 updated_at: 2026-05-13
 ---
-# ADR-016: 全面改用 `[data-theme]` 單軌 dark mode，移除 Tailwind `dark:` 變體
+# ADR-015: 全面改用 `[data-theme]` 單軌 dark mode，移除 Tailwind `dark:` 變體
 
-> **Language / 語言：** **中文 (Current)** | [English](./016-data-theme-single-track-dark-mode.en.md)
+> **Language / 語言：** **中文 (Current)** | [English](./015-data-theme-single-track-dark-mode.en.md)
 
 > 此決策是 v2.7.0 後續所有 token 遷移都仰賴的前提，獨立成 ADR。
 
@@ -42,7 +42,7 @@ v2.6.x 之前，portal JSX 有兩套 dark mode 機制並存：
 
 1. `[data-theme]` 是 design-tokens.css 的 SSOT；若要讓 token 有實質價值，
    不能有第二套並行系統
-2. ADR-015（Option A arbitrary-value 改寫）把所有顏色吃進 token，`dark:` 就變成殘影
+2. ADR-014（Option A arbitrary-value 改寫）把所有顏色吃進 token，`dark:` 就變成殘影
 3. 維持雙軌的唯一理由是「既有 tailwind pattern 熟悉」— 價值低於系統一致性
 
 ## 決策
@@ -92,5 +92,5 @@ v2.6.x 之前，portal JSX 有兩套 dark mode 機制並存：
 ## 關聯
 
 - Commit `8634ea2`（deployment-wizard 遷移，首次落地）
-- [ADR-015: Wizard Token Arbitrary-Value 遷移策略](015-wizard-arbitrary-value-token-migration.md) — 兩者一起構成 v2.7.0 標準遷移套件
+- [ADR-014: Wizard Token Arbitrary-Value 遷移策略](014-wizard-arbitrary-value-token-migration.md) — 兩者一起構成 v2.7.0 標準遷移套件
 - TRK-205（palette 殘留導致 dark mode 斷層的案例）

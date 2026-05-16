@@ -57,11 +57,11 @@ const IMPORT_STEPS = [
     id: 'profile',
     title: () => t('3. 聚類建議 Profile', '3. Cluster proposals into Profile'),
     desc: () => t(
-      'C-9 Profile Builder 把 parser 輸出聚類成 _defaults.yaml 候選；接受 / 拒絕 / 編輯每組建議；輸出 conf.d/ 目錄結構（Profile-as-Directory-Default, ADR-019）。',
-      'C-9 Profile Builder clusters parser output into _defaults.yaml proposals; accept / reject / edit each group; emits conf.d/ directory shape (Profile-as-Directory-Default, ADR-019).'
+      'C-9 Profile Builder 把 parser 輸出聚類成 _defaults.yaml 候選；接受 / 拒絕 / 編輯每組建議；輸出 conf.d/ 目錄結構（Profile-as-Directory-Default, ADR-018）。',
+      'C-9 Profile Builder clusters parser output into _defaults.yaml proposals; accept / reject / edit each group; emits conf.d/ directory shape (Profile-as-Directory-Default, ADR-018).'
     ),
-    cta: () => t('ADR-019', 'ADR-019'),
-    href: docUrl('docs/adr/019-profile-as-directory-default.md'),
+    cta: () => t('ADR-018', 'ADR-018'),
+    href: docUrl('docs/adr/018-profile-as-directory-default.md'),
     cmd: 'da-tools profile build \\\n  --input parsed.json \\\n  --decisions decisions.yaml \\\n  --enable-fuzzy   # opt-in duration-equivalence',
   },
   {
@@ -79,8 +79,8 @@ const IMPORT_STEPS = [
     id: 'guard',
     title: () => t('5. Guard 驗證 Base PR', '5. Guard validates Base PR'),
     desc: () => t(
-      'C-12 Dangling Defaults Guard 自動 PR-time 驗證：(i) Schema validator (ii) ADR-017/018 routing guardrails (iii) Cardinality guard。任一 tenant orphan / cycle / cardinality 超標 → block merge。',
-      'C-12 Dangling Defaults Guard auto-runs at PR time: (i) Schema validator (ii) ADR-017/018 routing guardrails (iii) Cardinality guard. Any orphan tenant / route cycle / cardinality breach → block merge.'
+      'C-12 Dangling Defaults Guard 自動 PR-time 驗證：(i) Schema validator (ii) ADR-016/017 routing guardrails (iii) Cardinality guard。任一 tenant orphan / cycle / cardinality 超標 → block merge。',
+      'C-12 Dangling Defaults Guard auto-runs at PR time: (i) Schema validator (ii) ADR-016/017 routing guardrails (iii) Cardinality guard. Any orphan tenant / route cycle / cardinality breach → block merge.'
     ),
     cta: () => t('查看 guard workflow', 'View guard workflow'),
     href: `${REPO_BASE}/.github/workflows/guard-defaults-impact.yml`,

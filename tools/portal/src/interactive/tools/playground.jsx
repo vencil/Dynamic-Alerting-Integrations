@@ -11,7 +11,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 
 const t = window.__t || ((zh, en) => en);
 
-// [ADR-015 / DEC-A] Migrated from hardcoded Tailwind palette colors (gray-50, blue-500, etc.)
+// [ADR-014 / DEC-A] Migrated from hardcoded Tailwind palette colors (gray-50, blue-500, etc.)
 // to design tokens using arbitrary-value pattern (bg-[color:var(--da-color-*)])
 // This enables consistent theming and dark mode support via CSS variables.
 

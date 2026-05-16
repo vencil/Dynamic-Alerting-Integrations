@@ -7,7 +7,7 @@ Tests core areas:
   3. Drift detection symmetry (manifest comparison)
   4. YAML round-trip parsing (dict -> yaml -> dict)
   5. Kustomization builder (apiVersion/kind + resources)
-  6. deep_merge algebraic properties (ADR-018 semantics, v2.8.0 A-8)
+  6. deep_merge algebraic properties (ADR-017 semantics, v2.8.0 A-8)
 """
 from __future__ import annotations
 
@@ -486,10 +486,10 @@ class TestKustomizationBuilder:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Property-based Tests: deep_merge (ADR-018 semantics, v2.8.0 A-8)
+# Property-based Tests: deep_merge (ADR-017 semantics, v2.8.0 A-8)
 # ─────────────────────────────────────────────────────────────────────────────
 #
-# ADR-018 override rules (see scripts/tools/dx/describe_tenant.py:34):
+# ADR-017 override rules (see scripts/tools/dx/describe_tenant.py:34):
 #   - Dict fields  → deep merge (child adds new keys, overrides same keys)
 #   - Array fields → REPLACE (not concat)
 #   - Scalar       → child overrides parent
@@ -517,7 +517,7 @@ _scalar = st.one_of(
     st.text(alphabet='abcdef0123456789-_', min_size=0, max_size=12),
 )
 
-# Small arrays of scalars (no nesting: ADR-018 says arrays are replaced wholesale,
+# Small arrays of scalars (no nesting: ADR-017 says arrays are replaced wholesale,
 # so internal structure is irrelevant to merge semantics).
 _array = st.lists(
     st.one_of(
@@ -584,7 +584,7 @@ def _well_formed_overrides(max_leaves: int = 10):
 
 
 class TestDeepMergeProperties:
-    """Property-based tests for deep_merge under ADR-018 override semantics."""
+    """Property-based tests for deep_merge under ADR-017 override semantics."""
 
     # ---- P1 Identity ----------------------------------------------------------
 
@@ -617,8 +617,8 @@ class TestDeepMergeProperties:
           - 1st merge: base lacks 'a', so `result["a"] = deepcopy({"b": None})` — None preserved verbatim.
           - 2nd merge: base now has dict at 'a', recursion fires, None-delete kicks in → {"a": {}}.
 
-        This is a latent quirk versus the ADR-018 contract (None = delete at any depth).
-        Fixing it needs coordinated Go/Python change + ADR-018 clarification; out of
+        This is a latent quirk versus the ADR-017 contract (None = delete at any depth).
+        Fixing it needs coordinated Go/Python change + ADR-017 clarification; out of
         scope for A-8 (test-harness expansion). Test pins current behavior so any
         future fix must update this assertion deliberately.
         """
@@ -723,7 +723,7 @@ class TestDeepMergeProperties:
         assert deep_merge({"k": 1}, {"k": 2}) == {"k": 2}
 
     def test_array_is_replaced_not_concatenated(self):
-        """ADR-018: arrays REPLACE, never concat (differs from common "merge" intuition)."""
+        """ADR-017: arrays REPLACE, never concat (differs from common "merge" intuition)."""
         result = deep_merge({"tags": ["a", "b"]}, {"tags": ["c"]})
         assert result == {"tags": ["c"]}
 

@@ -157,7 +157,7 @@ Phase 4: Incremental Merge
 
 **Fallback**: If cache is empty or corrupted, automatically fall back to `fullDirLoad()` (full load).
 
-#### Hierarchical conf.d/ + Inheritance Engine (v2.7.0, ADR-017 / ADR-018)
+#### Hierarchical conf.d/ + Inheritance Engine (v2.7.0, ADR-016 / ADR-017)
 
 v2.7.0 upgrades `conf.d/` from a flat layout to a four-level hierarchical directory, introducing `_defaults.yaml` inheritance semantics, dual-hash hot-reload, and 300ms debounce. The flat mode (v2.1.0) remains fully compatible; hierarchical and flat layouts can be mixed freely.
 
@@ -270,8 +270,8 @@ da-tools migrate-conf-d --conf-d conf.d/ --output-plan migration.json # output m
 
 **ADR References**
 
-- [ADR-017: `conf.d/` hierarchical directory + mixed-mode migration](../adr/017-conf-d-directory-hierarchy-mixed-mode.en.md)
-- [ADR-018: `_defaults.yaml` inheritance + dual-hash hot-reload](../adr/018-defaults-yaml-inheritance-dual-hash.en.md)
+- [ADR-016: `conf.d/` hierarchical directory + mixed-mode migration](../adr/016-conf-d-directory-hierarchy-mixed-mode.en.md)
+- [ADR-017: `_defaults.yaml` inheritance + dual-hash hot-reload](../adr/017-defaults-yaml-inheritance-dual-hash.en.md)
 
 ### 2.3 Tenant-Namespace Mapping
 

@@ -16,7 +16,7 @@ package main
 //
 //   da_config_defaults_change_noop_total   (Counter)
 //     incremented when a defaults file changed but no dependent tenant's
-//     merged_hash moved (ADR-018 "quiet defaults edit"). v2.8.0 Issue #61
+//     merged_hash moved (ADR-017 "quiet defaults edit"). v2.8.0 Issue #61
 //     narrowed the semantics to *cosmetic-only* edits — shadowed cases now
 //     leak into da_config_defaults_shadowed_total below.
 //
@@ -95,7 +95,7 @@ func newConfigMetrics() *configMetrics {
 	return &configMetrics{
 		scanDuration: prometheus.NewHistogram(prometheus.HistogramOpts{
 			Name: "da_config_scan_duration_seconds",
-			Help: "Duration of a hierarchical conf.d scan (v2.7.0, ADR-017). Observed once per scanDirHierarchical call.",
+			Help: "Duration of a hierarchical conf.d scan (v2.7.0, ADR-016). Observed once per scanDirHierarchical call.",
 			// Buckets tuned for 1000-tenant scans on ext4 (p50 ~20ms, p99
 			// ~150ms in the benchmark) plus slack for FUSE/NFS mounts.
 			Buckets: []float64{0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5},
@@ -114,7 +114,7 @@ func newConfigMetrics() *configMetrics {
 		}, []string{"file_basename"}),
 		defaultsShadowed: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "da_config_defaults_shadowed_total",
-			Help: "Count of dependent tenants for whom a defaults change was effectively blocked because every changed key is overridden by that tenant's source YAML (v2.8.0 Issue #61, ADR-018 inheritance). Distinct from da_config_defaults_change_noop_total which counts cosmetic edits with no semantic key movement.",
+			Help: "Count of dependent tenants for whom a defaults change was effectively blocked because every changed key is overridden by that tenant's source YAML (v2.8.0 Issue #61, ADR-017 inheritance). Distinct from da_config_defaults_change_noop_total which counts cosmetic edits with no semantic key movement.",
 		}),
 		blastRadius: prometheus.NewHistogramVec(prometheus.HistogramOpts{
 			Name: "da_config_blast_radius_tenants_affected",

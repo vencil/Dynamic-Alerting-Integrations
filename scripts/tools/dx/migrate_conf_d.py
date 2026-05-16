@@ -7,7 +7,7 @@ Usage:
     python3 scripts/tools/dx/migrate_conf_d.py --conf-d conf.d/ --dry-run --infer-from metadata
 
 Generates `git mv` commands to restructure flat tenant YAML files into
-domain/region/env/ subdirectories (ADR-017). Uses git mv to preserve
+domain/region/env/ subdirectories (ADR-016). Uses git mv to preserve
 file history.
 
 Modes:
@@ -178,7 +178,7 @@ def generate_git_commands(actions: list[dict], conf_d: Path) -> list[str]:
 def main() -> None:
     try_utf8_stdout()
     parser = argparse.ArgumentParser(
-        description="Migrate flat conf.d/ to hierarchical layout (ADR-017).",
+        description="Migrate flat conf.d/ to hierarchical layout (ADR-016).",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )

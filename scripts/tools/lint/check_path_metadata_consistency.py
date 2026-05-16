@@ -2,7 +2,7 @@
 """Warn when conf.d/ hierarchical path disagrees with tenant `_metadata`.
 
 Implements the design contract from `docs/schemas/tenant-config.schema.json`
-(`definitions.metadata.$comment`, ADR-017):
+(`definitions.metadata.$comment`, ADR-016):
 
     When files are in hierarchical conf.d/ (domain/region/env/), the
     directory path infers default values for domain, region, and

@@ -5,7 +5,7 @@ name: Planning Status Sync
 # entries whose frontmatter is consistent (`status: done` + `pr_ref:` matching
 # the current PR number).
 #
-# Default behaviour is **soft-warn** (exit 0 with annotations) per ADR-020
+# Default behaviour is **soft-warn** (exit 0 with annotations) per ADR-019
 # Layer 3 — the check appears as a neutral indicator on the PR, not a red
 # block. Flip on `--strict` once contributor adoption is high enough that
 # false-positives have decayed.
@@ -34,7 +34,7 @@ jobs:
           # Required for `git log origin/main..HEAD` trailer extraction.
           # Without this the default shallow checkout (1 commit) makes the
           # range-spec unresolvable and the lint emits no findings — silently
-          # negating the gate. See ADR-020 §Implementation gotcha + #379
+          # negating the gate. See ADR-019 §Implementation gotcha + #379
           # chunk 2b spec.
           fetch-depth: 0
           # Probe the merge base, not the PR head, so we have the same commit

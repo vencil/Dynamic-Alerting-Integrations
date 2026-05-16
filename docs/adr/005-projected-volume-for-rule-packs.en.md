@@ -129,7 +129,7 @@ volumes:
 
 ## References
 
-- [`rule-packs/README.md`](../rule-packs/README.md) — Rule Pack directory structure and list
+- [`rule-packs/README.md`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/rule-packs/README.md) — Rule Pack directory structure and list
 - [`docs/getting-started/for-platform-engineers.en.md`](../getting-started/for-platform-engineers.md) §Rule Pack Configuration — Custom Rule Pack guide
 - [Kubernetes Projected Volume Official Documentation](https://kubernetes.io/docs/concepts/storage/projected-volumes/)
 

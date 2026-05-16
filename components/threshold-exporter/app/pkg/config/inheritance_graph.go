@@ -22,7 +22,7 @@ import (
 )
 
 // InheritanceGraph tracks the defaults↔tenants dependency for a
-// hierarchical conf.d layout (ADR-017).
+// hierarchical conf.d layout (ADR-016).
 //
 //   - TenantDefaults[tenantID]   → L0..Ln defaults paths (root first).
 //     Used by ComputeMergedHash and the /effective handler.

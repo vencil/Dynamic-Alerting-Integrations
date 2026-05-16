@@ -35,7 +35,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           # Required for `git log origin/<base>..HEAD` trailer extraction.
-          # See workflow header note + ADR-020 §Implementation gotcha.
+          # See workflow header note + ADR-019 §Implementation gotcha.
           fetch-depth: 0
           # Probe the PR head, not the auto-generated merge ref.
           ref: ${{ github.event.pull_request.head.sha }}

@@ -1424,7 +1424,7 @@ da-tools guard --conf-d conf.d/ --layer redundant --show-diffs
 **Cross-ref**：
 - [`docs/internal/dev-rules.md`](../internal/dev-rules.md) #4 Doc-as-Code（schema 變動須同步多個地方）
 - [Migration Toolkit Installation](../migration-toolkit-installation.md) — da-tools 安裝
-- [ADR-019 Profile-as-Directory-Default](../adr/019-profile-as-directory-default.md) — Redundant override 機制
+- [ADR-018 Profile-as-Directory-Default](../adr/018-profile-as-directory-default.md) — Redundant override 機制
 
 ### 2.3 Migration state inconsistency（per-cluster state 檔不同步）
 
@@ -1568,7 +1568,7 @@ git commit -m "chore: split migration state to per-cluster files"
 | BYO Prometheus integration | [`integration/byo-prometheus-integration.md`](byo-prometheus-integration.md) |
 | BYO Alertmanager integration | [`integration/byo-alertmanager-integration.md`](byo-alertmanager-integration.md) |
 | VictoriaMetrics integration | [`integration/victoriametrics-integration.md`](victoriametrics-integration.md) |
-| ADR-019 Profile-as-Directory-Default | [`adr/019-profile-as-directory-default.md`](../adr/019-profile-as-directory-default.md) |
+| ADR-018 Profile-as-Directory-Default | [`adr/018-profile-as-directory-default.md`](../adr/018-profile-as-directory-default.md) |
 
 ---
 

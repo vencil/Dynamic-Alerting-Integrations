@@ -815,7 +815,7 @@ cat /tmp/b1_out/bench.out.txt
 - **平均檔案大小穩定**：~740 bytes/file，不隨規模變化
 - **Seed 可重現性已驗證**：同一 seed 兩次生成產出 byte-identical 輸出
 
-Fixture 供 §v2.8.0 1000-Tenant Hierarchical Baseline (上方) 與 §Phase 2 e2e harness 使用。**ADR-017 引用**：[`docs/adr/017-conf-d-directory-hierarchy-mixed-mode.md`](../adr/017-conf-d-directory-hierarchy-mixed-mode.md) flat vs hierarchical 效能對照即此表。
+Fixture 供 §v2.8.0 1000-Tenant Hierarchical Baseline (上方) 與 §Phase 2 e2e harness 使用。**ADR-016 引用**：[`docs/adr/016-conf-d-directory-hierarchy-mixed-mode.md`](../adr/016-conf-d-directory-hierarchy-mixed-mode.md) flat vs hierarchical 效能對照即此表。
 
 ### Schema Validation — `validate_tenant_keys`
 

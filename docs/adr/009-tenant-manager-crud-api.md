@@ -150,7 +150,7 @@ v2.4.0 的主要用戶場景是低頻操作（每次操作間隔 ≥1 秒），p
 
 - `components/tenant-api/` — API server 實作
 - `components/threshold-exporter/pkg/config/` — 共用 config 解析 package
-- `docs/interactive/tools/tenant-manager.jsx` — Portal 前端
+- `tools/portal/src/interactive/tools/tenant-manager.jsx` — Portal 前端
 - `docs/governance-security.md §2` — Schema validation 雙端一致性要求
 - [oauth2-proxy 官方文件](https://oauth2-proxy.github.io/oauth2-proxy/) — IdP 設定參考
 - [swaggo/swag](https://github.com/swaggo/swag) — Go annotation → swagger.yaml

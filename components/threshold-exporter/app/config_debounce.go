@@ -493,7 +493,7 @@ func (m *ConfigManager) installNewHierarchyState(scan reloadScanState, result re
 // count of tenants actually reloaded and the count of no-op defaults
 // changes (a defaults file changed but none of its dependent tenants'
 // merged_hash moved — the "quiet defaults edit" case described in
-// ADR-018 §Reload Decisions).
+// ADR-017 §Reload Decisions).
 //
 // v2.8.0 PR-3 decomposed the original 216-line implementation into
 // four named steps without changing semantics:

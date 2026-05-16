@@ -7,7 +7,7 @@ package batchpr
 // PlanItem. AllocateFiles is the canonical splitter the CLI / UI
 // will call between Emit and Apply.
 //
-// Allocation rules (Profile-as-Directory-Default — ADR-019 §1):
+// Allocation rules (Profile-as-Directory-Default — ADR-018 §1):
 //
 //   1. Any path matching `_defaults.yaml` (basename) → Base PR.
 //      The Base Infrastructure PR carries every cascading defaults

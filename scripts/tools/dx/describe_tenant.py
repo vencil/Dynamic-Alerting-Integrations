@@ -9,7 +9,7 @@ Usage:
     python3 scripts/tools/dx/describe_tenant.py --all --conf-d PATH --output effective.json
 
 Resolves the full inheritance chain (L0→L1→L2→L3→tenant) using deep merge
-with override semantics (ADR-018). Array fields are replaced, not concatenated.
+with override semantics (ADR-017). Array fields are replaced, not concatenated.
 
 Output: JSON or YAML of the effective (merged) config.
 """
@@ -36,13 +36,13 @@ except ImportError:
     yaml = None  # fallback to simple parser
 
 # ---------------------------------------------------------------------------
-# Deep merge logic (ADR-018 semantics)
+# Deep merge logic (ADR-017 semantics)
 # ---------------------------------------------------------------------------
 
 def deep_merge(base: dict, override: dict) -> dict:
     """Deep merge two dicts. Override wins for scalars and arrays; dicts recurse.
 
-    ADR-018 rules:
+    ADR-017 rules:
     - Dict fields: deep merge (child adds new keys, overrides same keys)
     - Array fields: REPLACE (not concat)
     - Scalar fields: child overrides parent
@@ -230,7 +230,7 @@ class ConfDScanner:
 def main() -> None:
     try_utf8_stdout()
     parser = argparse.ArgumentParser(
-        description="Describe effective tenant config with _defaults.yaml inheritance (ADR-018).",
+        description="Describe effective tenant config with _defaults.yaml inheritance (ADR-017).",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
@@ -407,7 +407,7 @@ def main() -> None:
             "baseline_merged_hash": baseline_merged_hash,
             "what_if_merged_hash": what_if_merged_hash,
             "merged_hash_changed": hash_changed,
-            "would_trigger_reload": hash_changed,  # per ADR-018 dual-hash logic
+            "would_trigger_reload": hash_changed,  # per ADR-017 dual-hash logic
             "removed_keys": only_baseline,
             "added_keys": only_what_if,
             "changed_keys": changed,

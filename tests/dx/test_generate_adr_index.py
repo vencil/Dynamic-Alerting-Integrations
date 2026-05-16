@@ -349,7 +349,7 @@ class TestMainCli:
 class TestRealCorpus:
     def test_all_shipped_adrs_parse(self):
         files = gai.discover_adrs()
-        assert len(files) >= 21, "expected at least 21 ZH ADRs in docs/adr/"
+        assert len(files) >= 20, "expected at least 20 ZH ADRs in docs/adr/"
         for f in files:
             entry = gai.parse_adr(f)
             assert entry.title, f"{f.name}: empty title"

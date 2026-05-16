@@ -35,7 +35,7 @@ lang: zh
 |---|---|---|
 | **v2.2.0** | flat `conf.d/` + per-file SHA-256 + mtime guard | 100-tenant cold load **3.2 ms** baseline |
 | **v2.5.0** | Multi-tenant Grouping + Saved Views (API layer，per-tenant perf 不變) | — |
-| **v2.7.0** | **Hierarchical scan + dual-hash + populateHierarchyState** ([ADR-017](adr/017-conf-d-directory-hierarchy-mixed-mode.md) / [ADR-018](adr/018-defaults-yaml-inheritance-dual-hash.md)) | **1000-tenant cold 112 ms; steady reload 86× cheaper than cold** |
+| **v2.7.0** | **Hierarchical scan + dual-hash + populateHierarchyState** ([ADR-016](adr/016-conf-d-directory-hierarchy-mixed-mode.md) / [ADR-017](adr/017-defaults-yaml-inheritance-dual-hash.md)) | **1000-tenant cold 112 ms; steady reload 86× cheaper than cold** |
 | **v2.8.0** | **5-anchor e2e fire-through harness + bench-gate-pr Tier 1 CI + 60-min readiness soak** | 1000/5000-tenant SLO baseline; per-PR statistical regression gate |
 
 **遷移影響**：v2.2.0 → v2.8.0 的 conf.d/ schema 向後相容。Flat layout 直接 work，hierarchical layout 為 opt-in（放 `_defaults.yaml` 在子目錄即自動啟用）。客戶不需重寫 tenant YAML。
@@ -206,4 +206,4 @@ v2.8.0 落地 **5-anchor end-to-end alert fire-through harness** (`tests/e2e-ben
 | **`IncrementalLoad_*` / `ScanDirFileHashes_*` 1000-tenant baseline** | [Benchmark Playbook §v2.8.0 1000-Tenant Hierarchical Baseline](internal/benchmark-playbook.md#v280-1000-tenant-hierarchical-baseline-phase-1-b-1) |
 | **量測踩坑 & ops** (port-forward stability / `BENCH_OUT_DIR` isolation / `bench_wrapper.sh`) | [Benchmark Playbook §踩坑記錄 Lessons Learned](internal/benchmark-playbook.md#踩坑記錄-lessons-learned) |
 | **Bench-gate-pr CI 機制** (Tier 1 / override label / sharding) | [Bench Gate Rollout](internal/bench-gate-rollout.md) · `.github/workflows/bench-gate-pr.yaml` |
-| **Architecture & ADR 引用** | [Architecture & Design](architecture-and-design.md) · [ADR-017](adr/017-conf-d-directory-hierarchy-mixed-mode.md) · [ADR-018](adr/018-defaults-yaml-inheritance-dual-hash.md) |
+| **Architecture & ADR 引用** | [Architecture & Design](architecture-and-design.md) · [ADR-016](adr/016-conf-d-directory-hierarchy-mixed-mode.md) · [ADR-017](adr/017-defaults-yaml-inheritance-dual-hash.md) |

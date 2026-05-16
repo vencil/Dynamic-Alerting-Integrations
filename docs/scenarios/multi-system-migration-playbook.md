@@ -613,7 +613,7 @@ kubectl scale statefulset prometheus-k8s --replicas=0 -n monitoring
 
 #### `_defaults.yaml` metric-split 為什麼留到 Phase 4 之後
 
-`_defaults.yaml`（[Profile-as-Directory-Default](../adr/019-profile-as-directory-default.md) 機制）是平台 v2.8.0 的 metric-split feature——讓 tenant 用目錄繼承的 default 規則自動套用。**故意不在 Phase 2/3 啟用**：
+`_defaults.yaml`（[Profile-as-Directory-Default](../adr/018-profile-as-directory-default.md) 機制）是平台 v2.8.0 的 metric-split feature——讓 tenant 用目錄繼承的 default 規則自動套用。**故意不在 Phase 2/3 啟用**：
 
 - **Phase 2 shadow** 期間：客戶在分辨「是新系統 noise 還是 _defaults 設計疏漏」，雙重變因不可控
 - **Phase 3 cutover** 期間：cutover 已是高風險窗口，再疊加 metric-split 啟用會讓 incident root cause 難判

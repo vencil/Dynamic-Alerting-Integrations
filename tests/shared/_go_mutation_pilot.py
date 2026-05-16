@@ -28,7 +28,7 @@ Targets
   - parsePromDuration — Prometheus-style "5m" / "4h" / "2d" parser (2 muts)
 
 `pkg/config/hierarchy.go`
-  - deepMerge         — ADR-018 inheritance, _metadata skip, nil-delete (3 muts)
+  - deepMerge         — ADR-017 inheritance, _metadata skip, nil-delete (3 muts)
   - extractDefaultsBlock — pulls `defaults:` sub-tree, falls back to root (1 mut)
 
 Total: 15 mutations across 5 functions. Existing Go tests in the

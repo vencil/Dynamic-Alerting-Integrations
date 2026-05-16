@@ -11,7 +11,7 @@ verified-at-version: v2.8.0
 > - **遷移逐步操作手冊** → [`incremental-migration-playbook.md`](incremental-migration-playbook.md)
 > - **退版程序** → `incremental-migration-playbook.md` §Emergency Rollback Procedures（[文件](incremental-migration-playbook.md)）
 > - **遷移工具** → `scripts/tools/dx/migrate_conf_d.py` (`--dry-run` / `--apply`)
-> - **架構設計理由** → [`docs/adr/017-conf-d-directory-hierarchy-mixed-mode.md`](../adr/017-conf-d-directory-hierarchy-mixed-mode.md)
+> - **架構設計理由** → [`docs/adr/016-conf-d-directory-hierarchy-mixed-mode.md`](../adr/016-conf-d-directory-hierarchy-mixed-mode.md)
 
 ---
 
@@ -162,8 +162,8 @@ sum(rate(da_config_reload_trigger_total[5m])) by (reason)
 
 ## 6. 相關文件
 
-- ADR-017：[`conf.d/` directory hierarchy + mixed mode 決策](../adr/017-conf-d-directory-hierarchy-mixed-mode.md)
-- ADR-018：[Defaults YAML inheritance + dual-hash hot-reload](../adr/018-defaults-yaml-inheritance-dual-hash.md)
+- ADR-016：[`conf.d/` directory hierarchy + mixed mode 決策](../adr/016-conf-d-directory-hierarchy-mixed-mode.md)
+- ADR-017：[Defaults YAML inheritance + dual-hash hot-reload](../adr/017-defaults-yaml-inheritance-dual-hash.md)
 - 遷移工具：`scripts/tools/dx/migrate_conf_d.py`
 - 遷移操作手冊：[`incremental-migration-playbook.md`](incremental-migration-playbook.md)
 - 1000-tenant hierarchical baseline 量測：[`benchmark-playbook.md` §v2.8.0 1000-Tenant Hierarchical Baseline](../internal/benchmark-playbook.md)（internal）

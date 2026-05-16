@@ -22,7 +22,7 @@ package main
 // for invoking yaml.Unmarshal + that normalization pipe before calling
 // changedDefaultsKeys/tenantOverridesAll.
 //
-// See Issue #61 (RFC) and ADR-018 (defaults inheritance + dual-hash).
+// See Issue #61 (RFC) and ADR-017 (defaults inheritance + dual-hash).
 
 import (
 	"path/filepath"
@@ -221,7 +221,7 @@ func collectDefaultsDiff(prefix string, a, b any, out *[]string) {
 // well-defined for tests.
 //
 // "Set" means present and not nil; YAML null is treated as "not
-// overridden" because deepMerge treats null as "delete key" (ADR-018
+// overridden" because deepMerge treats null as "delete key" (ADR-017
 // semantic trap #6) which leaves the defaults value visible.
 func tenantOverridesAll(tenantSrc map[string]any, dotPaths []string) bool {
 	if len(dotPaths) == 0 {

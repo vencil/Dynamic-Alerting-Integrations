@@ -30,7 +30,7 @@ package guard
 //   - prefix `_silent_`        (silent modes; ResolveSilentModes)
 //   - prefix `_routing`        (routing block; ResolveRouting)
 //   - exact match `_severity_dedup` (ADR-001)
-//   - exact match `_metadata`  (ADR-018: never inherited, never resolved)
+//   - exact match `_metadata`  (ADR-017: never inherited, never resolved)
 //
 // What this counter MISSES:
 //   - Dimensional expansion. A YAML like `redis_keys{db="db0"}` and
@@ -42,7 +42,7 @@ package guard
 //
 //   - Tenant-disabled metrics. The effective config is post-merge,
 //     so tenant overrides that explicitly disable a default (YAML
-//     null per ADR-018) are already removed by the merge engine
+//     null per ADR-017) are already removed by the merge engine
 //     before the guard sees them. So the count is correctly
 //     post-disable. ✓
 //

@@ -9,7 +9,7 @@ lang: zh
 
 > **Language / 語言：** **中文 (Current)** | [English](./multi-domain-conf-layout.en.md)
 
-> **v2.8.0** | 相關文件：[ADR-017（架構決策）](../adr/017-conf-d-directory-hierarchy-mixed-mode.md)、[ADR-018（繼承機制）](../adr/018-defaults-yaml-inheritance-dual-hash.md)
+> **v2.8.0** | 相關文件：[ADR-016（架構決策）](../adr/016-conf-d-directory-hierarchy-mixed-mode.md)、[ADR-017（繼承機制）](../adr/017-defaults-yaml-inheritance-dual-hash.md)
 
 ## 背景與問題
 
@@ -353,8 +353,8 @@ da-tools describe-tenant --generate-report --format json --output audit.json
 
 | 資源 | 相關性 |
 |------|--------|
-| [ADR-017：階層式 conf.d 設計決策](../adr/017-conf-d-directory-hierarchy-mixed-mode.md) | ⭐⭐⭐ |
-| [ADR-018：繼承機制與雙重雜湊](../adr/018-defaults-yaml-inheritance-dual-hash.md) | ⭐⭐⭐ |
+| [ADR-016：階層式 conf.d 設計決策](../adr/016-conf-d-directory-hierarchy-mixed-mode.md) | ⭐⭐⭐ |
+| [ADR-017：繼承機制與雙重雜湊](../adr/017-defaults-yaml-inheritance-dual-hash.md) | ⭐⭐⭐ |
 | [`da-tools` CLI 參考](../cli-reference.md) | ⭐⭐ |
 | ["場景：租戶完整生命週期管理"](tenant-lifecycle.md) | ⭐⭐ |
 | ["場景：多叢集聯邦架構"](multi-cluster-federation.md) | ⭐ |

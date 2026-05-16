@@ -1,11 +1,11 @@
 package main
 
 // ============================================================
-// Hierarchical conf.d/ scanner (ADR-017)
+// Hierarchical conf.d/ scanner (ADR-016)
 // ============================================================
 //
 // v2.6.0 `loadDir` / `scanDirFileHashes` only scan the top-level conf.d/
-// directory (flat mode). ADR-017 extends conf.d/ to a *hierarchical* layout
+// directory (flat mode). ADR-016 extends conf.d/ to a *hierarchical* layout
 // where `_defaults.yaml` can appear at every directory level (L0 root, L1
 // domain, L2 subdomain, L3 leaf) and is inherited by tenant files deeper in
 // the tree. This file adds that recursive walk without disturbing the

@@ -20,10 +20,10 @@ lang: zh
 - **準備部署**：[008 Operator 整合路徑](./008-operator-native-integration-path.md) — ConfigMap vs Operator CRD 雙路徑選擇
 - **多叢集需求**：[004 Federation](./004-federation-central-exporter-first.md) + [006 租戶映射](./006-tenant-mapping-topologies.md) — Federation 架構與拓撲
 - **管理平面**：[009 Tenant API](./009-tenant-manager-crud-api.md) + [011 PR Write-back](./011-pr-based-write-back.md) — UI/API 管理與合規流程
-- **千租戶 Scale / Config 管理**：[010 Multi-Tenant Grouping](./010-multi-tenant-grouping.md) + [017 conf.d/ 目錄分層](./017-conf-d-directory-hierarchy-mixed-mode.md) + [018 繼承引擎 + dual-hash](./018-defaults-yaml-inheritance-dual-hash.md) — 千租戶 config 組織與 hot-reload
-- **Frontend 品質治理**：[013 元件健康度 + Token Density](./013-component-health-token-density-metric.md) + [014 TECH-DEBT 預算隔離](./014-tech-debt-category-budget-isolation.md) + [015 Wizard token 遷移](./015-wizard-arbitrary-value-token-migration.md) + [016 data-theme 單軌 dark mode](./016-data-theme-single-track-dark-mode.md)
+- **千租戶 Scale / Config 管理**：[010 Multi-Tenant Grouping](./010-multi-tenant-grouping.md) + [016 conf.d/ 目錄分層](./016-conf-d-directory-hierarchy-mixed-mode.md) + [017 繼承引擎 + dual-hash](./017-defaults-yaml-inheritance-dual-hash.md) — 千租戶 config 組織與 hot-reload
+- **Frontend 品質治理**：[013 元件健康度 + Token Density](./013-component-health-token-density-metric.md) + [014 Wizard token 遷移](./014-wizard-arbitrary-value-token-migration.md) + [015 data-theme 單軌 dark mode](./015-data-theme-single-track-dark-mode.md)
 - **Accessibility 修補**：[012 threshold-heatmap 色盲補丁](./012-colorblind-hotfix-structured-severity-return.md)
-- **客戶導入管線**：[019 Profile-as-Directory-Default](./019-profile-as-directory-default.md) — Profile Builder 寫回 conf.d/ 的 default vs override 邊界
+- **客戶導入管線**：[018 Profile-as-Directory-Default](./018-profile-as-directory-default.md) — Profile Builder 寫回 conf.d/ 的 default vs override 邊界
 
 ## ADR 索引
 
@@ -42,13 +42,13 @@ lang: zh
 | [011](#011-pr-based-write-back-模式) | PR-based Write-back 模式 | ✅ Accepted | 雙模式架構（direct / pr），支援 GitHub PR 與 GitLab MR |
 | [012](#012-threshold-heatmap-色盲補丁) | threshold-heatmap 色盲補丁 — 結構化 severity 返回值 | ✅ Accepted | 修正 WCAG 1.4.1 違反：以 `{severity, color, ariaLabel}` 取代僅色彩輸出，支援色盲可讀性 |
 | [013](#013-元件健康度與-token-density-指標) | 元件健康度與 Token Density 指標 | ✅ Accepted | 以 5 維度加權（LOC+Audience+Phase+Writer+Recency）評分並自動分 Tier 1/2/3；引入 `token_density` metric 量化 token 遷移進度 |
-| [014](#014-tech-debt-vs-regression-預算隔離) | TECH-DEBT vs Regression 預算隔離 | ✅ Accepted | 將技術債與使用者可見退化分為兩組 budget，避免 TECH-DEBT 侵蝕 REG budget；LL 跨 2 minor 版本必須三選一（固化/自動化/歸檔） |
-| [015](#015-wizard-token-arbitrary-value-遷移策略) | Wizard Token Arbitrary-Value 遷移策略 (Option A) | ✅ Accepted | `bg-[color:var(--da-color-*)]` arbitrary-value 改寫 legacy `bg-slate-200`，避免 Tailwind config 擴充 + 同 commit 完成全替換 |
-| [016](#016-data-theme-單軌-dark-mode) | `[data-theme]` 單軌 Dark Mode（移除 `dark:` 變體） | ✅ Accepted | 統一以 `[data-theme="dark"]` attribute 管理 dark mode，禁用 Tailwind `dark:` 變體，消除 token/class 雙軌問題 |
-| [017](#017-confd-目錄分層-混合模式) | conf.d/ 目錄分層 + 混合模式 + 遷移策略 | ✅ Accepted | Directory Scanner 同時支援 flat 與 domain/region/env 3 層結構；零中斷升級 + `migrate-conf-d` 可選工具 |
-| [018](#018-defaultsyaml-繼承語意-dual-hash-hot-reload) | `_defaults.yaml` 繼承語意 + dual-hash hot-reload | ✅ Accepted | Deep merge with override（array replace、null-as-delete）+ 雙 hash（source_hash + merged_hash）精準判定 reload 觸發，配 300ms debounce |
-| [019](#019-profile-as-directory-default) | Profile-as-Directory-Default | ✅ Accepted | Cluster 共通閾值放 `_defaults.yaml`，只有偏離 default 的 tenant 寫 `<id>.yaml` override（median + sparse override）；跨 Profile Builder / batch PR pipeline / Dangling Defaults Guard 共通的「default vs override 邊界」決策。Translator 演算法細節留 `translate.go` package header（避免雙寫漂移）|
-| [021](#021-tenant-federation-label-injection-proxy-over-self-built-endpoint) | Tenant Federation — Label-Injection Proxy over Self-Built Endpoint | 🟡 Proposed | Tenant 拉自己 metrics 回 tenant 側自管 federation。採 vmauth（VM 客戶）/ prom-label-proxy（Prom 客戶）做 label-enforced read proxy，不自寫 endpoint。2-tier policy（platform whitelist + tenant subset）+ 4h TTL token（無 server-side revocation，**對價條件**：gateway rate limit 必須到位）+ **3-layer blast radius**（storage backend series/sample cap + gateway per-token rate limit + proxy label injection）+ data-layer prerequisite（whitelist metric 必須 native 帶 `tenant_id` label，admission validator 把關）|
+| [014](#014-wizard-token-arbitrary-value-遷移策略) | Wizard Token Arbitrary-Value 遷移策略 (Option A) | ✅ Accepted | `bg-[color:var(--da-color-*)]` arbitrary-value 改寫 legacy `bg-slate-200`，避免 Tailwind config 擴充 + 同 commit 完成全替換 |
+| [015](#015-data-theme-單軌-dark-mode) | `[data-theme]` 單軌 Dark Mode（移除 `dark:` 變體） | ✅ Accepted | 統一以 `[data-theme="dark"]` attribute 管理 dark mode，禁用 Tailwind `dark:` 變體，消除 token/class 雙軌問題 |
+| [016](#016-confd-目錄分層-混合模式) | conf.d/ 目錄分層 + 混合模式 + 遷移策略 | ✅ Accepted | Directory Scanner 同時支援 flat 與 domain/region/env 3 層結構；零中斷升級 + `migrate-conf-d` 可選工具 |
+| [017](#017-defaultsyaml-繼承語意-dual-hash-hot-reload) | `_defaults.yaml` 繼承語意 + dual-hash hot-reload | ✅ Accepted | Deep merge with override（array replace、null-as-delete）+ 雙 hash（source_hash + merged_hash）精準判定 reload 觸發，配 300ms debounce |
+| [018](#018-profile-as-directory-default) | Profile-as-Directory-Default | ✅ Accepted | Cluster 共通閾值放 `_defaults.yaml`，只有偏離 default 的 tenant 寫 `<id>.yaml` override（median + sparse override）；跨 Profile Builder / batch PR pipeline / Dangling Defaults Guard 共通的「default vs override 邊界」決策。Translator 演算法細節留 `translate.go` package header（避免雙寫漂移）|
+| [019](#019-planning-ssot-frontmatter-contract-discovery-based-index) | Planning SSOT — Frontmatter Contract + Discovery-based Index | ✅ Accepted | 跨檔分散的計畫追蹤（tech-debt / dx-backlog / known-regression / roadmap / sprint）以 frontmatter contract + discovery-based index generator + active CI status-sync check 統一治理；TD/HA/REG 合併為 TRK namespace，ADR 與 S# 各自保留 |
+| [020](#020-tenant-federation-label-injection-proxy-over-self-built-endpoint) | Tenant Federation — Label-Injection Proxy over Self-Built Endpoint | 🟡 Proposed | Tenant 拉自己 metrics 回 tenant 側自管 federation。採 vmauth（VM 客戶）/ prom-label-proxy（Prom 客戶）做 label-enforced read proxy，不自寫 endpoint。2-tier policy（platform whitelist + tenant subset）+ 4h TTL token（無 server-side revocation，**對價條件**：gateway rate limit 必須到位）+ **3-layer blast radius**（storage backend series/sample cap + gateway per-token rate limit + proxy label injection）+ data-layer prerequisite（whitelist metric 必須 native 帶 `tenant_id` label，admission validator 把關）|
 
 ---
 
@@ -156,61 +156,59 @@ v2.7.0 新基線：以 5 維度加權（LOC 0-3 + Audience 0-2 + Phase 0-2 + Wri
 
 ---
 
-## 014: TECH-DEBT vs Regression 預算隔離
+## 014: Wizard Token Arbitrary-Value 遷移策略
 
-**文件**: [`014-tech-debt-category-budget-isolation.md`](./014-tech-debt-category-budget-isolation.md)
-
-在 v2.6.x 的 Regression Budget（P2/P3 修復 ≤ 當版工時 15%）上新增「TECH-DEBT」分類，與 REG 獨立 budget（4%），避免技術債佔用面向使用者的退化修復時間。LL 跨越 2 個 minor 版本強制三選一：固化規範、🛡️ 自動化、或歸檔 `archive/`。為 Playbook 知識退火提供機制保障。
-
----
-
-## 015: Wizard Token Arbitrary-Value 遷移策略
-
-**文件**: [`015-wizard-arbitrary-value-token-migration.md`](./015-wizard-arbitrary-value-token-migration.md)
+**文件**: [`014-wizard-arbitrary-value-token-migration.md`](./014-wizard-arbitrary-value-token-migration.md)
 
 v2.7.0 將 `deployment-wizard.jsx` 從 legacy `bg-slate-200 / text-gray-700` palette 遷至 design tokens：選用 **Option A** — `bg-[color:var(--da-color-*)]` arbitrary-value 改寫，而非擴充 `tailwind.config`。保留 Tailwind utility 書寫風格 + token SSOT；後續 rbac / cicd / threshold-heatmap 沿用同規則。
 
 ---
 
-## 016: `[data-theme]` 單軌 Dark Mode
+## 015: `[data-theme]` 單軌 Dark Mode
 
-**文件**: [`016-data-theme-single-track-dark-mode.md`](./016-data-theme-single-track-dark-mode.md)
+**文件**: [`015-data-theme-single-track-dark-mode.md`](./015-data-theme-single-track-dark-mode.md)
 
 全面移除 Tailwind `dark:` 變體，統一以 `[data-theme="dark"]` attribute 管理 dark mode。此前 class-based 與 attribute-based 雙軌並存造成 tooltip/palette 配色錯位與維護雙成本。`jsx-loader` 改為設定 `data-theme` 而非 toggle `class="dark"`；`tailwind.config.darkMode` 移除。為 v2.7.0 所有後續 token 遷移的前提。
 
 ---
 
-## 017: conf.d/ 目錄分層 + 混合模式
+## 016: conf.d/ 目錄分層 + 混合模式
 
-**文件**: [`017-conf-d-directory-hierarchy-mixed-mode.md`](./017-conf-d-directory-hierarchy-mixed-mode.md)
+**文件**: [`016-conf-d-directory-hierarchy-mixed-mode.md`](./016-conf-d-directory-hierarchy-mixed-mode.md)
 
 v2.7.0 Scale Foundation 第一塊。Directory Scanner 同時支援 flat 與 `{domain}/{region}/{env}/` 三層結構，**不強制遷移**。目錄路徑可推斷 `_metadata.domain/region/environment` 預設值；檔案內明確設定欄位時 override。`migrate-conf-d` 工具為可選、支援 `--dry-run` + `git mv` 保留歷史。解決 200+ tenant 的可讀性與 blast radius 盲點。
 
 ---
 
-## 018: `_defaults.yaml` 繼承語意 + dual-hash hot-reload
+## 017: `_defaults.yaml` 繼承語意 + dual-hash hot-reload
 
-**文件**: [`018-defaults-yaml-inheritance-dual-hash.md`](./018-defaults-yaml-inheritance-dual-hash.md)
+**文件**: [`017-defaults-yaml-inheritance-dual-hash.md`](./017-defaults-yaml-inheritance-dual-hash.md)
 
 v2.7.0 Scale Foundation 第二塊。定義多層 `_defaults.yaml` 的繼承語意（L0 全域 → L1 domain → L2 region → L3 env → tenant），deep merge with override（array replace、null-as-delete、`_metadata` 不繼承）。雙 hash：`source_hash`（tenant YAML 檔案本身）+ `merged_hash`（effective config canonical JSON）精準判定 reload 觸發，避免 `_defaults.yaml` 變動時的 reload 風暴；300ms debounce 處理 batch git pull。
 
 ---
 
----
+## 018: Profile-as-Directory-Default
 
-## 019: Profile-as-Directory-Default
+**文件**: [`018-profile-as-directory-default.md`](./018-profile-as-directory-default.md)
 
-**文件**: [`019-profile-as-directory-default.md`](./019-profile-as-directory-default.md)
-
-v2.8.0 客戶導入管線 — Profile Builder 寫回 conf.d/。釘死「cluster 共通閾值放 `_defaults.yaml`，只有偏離 default 的 tenant 寫 `<id>.yaml` override」這條跨組件 design principle — 影響 emission 形狀、batch PR pipeline 的 directory placement、release packaging、Dangling Defaults Guard 一致性。配合 ADR-018 deepMerge / ADR-017 目錄分層。Translator 演算法細節（metric_key ladder、median、cluster aggregation、operator handling）留在 `internal/profile/translate.go` package header — 單一 source of truth，避免雙寫漂移。Non-goals 明示：directory inference（batch PR pipeline 範疇）、dimensional/regex labels emission、auto-rewrite source PromRule、two-tier severity translation。
+v2.8.0 客戶導入管線 — Profile Builder 寫回 conf.d/。釘死「cluster 共通閾值放 `_defaults.yaml`，只有偏離 default 的 tenant 寫 `<id>.yaml` override」這條跨組件 design principle — 影響 emission 形狀、batch PR pipeline 的 directory placement、release packaging、Dangling Defaults Guard 一致性。配合 ADR-017 deepMerge / ADR-016 目錄分層。Translator 演算法細節（metric_key ladder、median、cluster aggregation、operator handling）留在 `internal/profile/translate.go` package header — 單一 source of truth，避免雙寫漂移。Non-goals 明示：directory inference（batch PR pipeline 範疇）、dimensional/regex labels emission、auto-rewrite source PromRule、two-tier severity translation。
 
 ---
 
-## 021: Tenant Federation — Label-Injection Proxy over Self-Built Endpoint
+## 019: Planning SSOT — Frontmatter Contract + Discovery-based Index
 
-**文件**: [`021-tenant-federation.md`](./021-tenant-federation.md)
+**文件**: [`019-planning-ssot.md`](./019-planning-ssot.md)
 
-v2.8.0 起草，targets v2.9.0 epic。涵蓋 cross-boundary federation 場景（與 ADR-004 platform-internal 互補）：tenant 把自己 metrics 子集拉回 tenant 側 infra 自管。採 **vmauth**（VM 客戶）/ **prom-label-proxy**（Prom 客戶）做 label-enforced rewriting，**不自寫 endpoint**（label sanitization 在自寫實作是 multi-tenant breach 地雷；現成 proxy production-hardened）。MVP 2-tier policy（platform whitelist + tenant subset）— Domain layer drop 到 Future Work。Token：4h TTL + 無 server-side revocation list（明寫 trade-off：簡化實作換 4h 曝險窗）。Blast radius 三件組必須全部到位：`max_concurrent_requests_per_token` / `request_timeout_seconds` / `max_series_per_response`。實作 epic（~56h）在 issue [#380](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/380) IV-2。
+將跨檔分散的「未來計畫 / 已知問題 / 進行中工作」（原散落 8+ 處：CHANGELOG `[Unreleased]`、dx-tooling-backlog、frontend-quality-backlog、sprint planning ledger、roadmap-future、各 ADR Future Work、code 註解、flaky-tests registry）以三層設計統一治理：每個 planning entry 的 frontmatter contract、discovery-based index generator（`generate_planning_index.py`）、active CI status-sync check。TD/HA/REG 三個 namespace 合併為單一 `TRK-NNN`；`ADR-NNN` 與 `S#NNN` 各自保留（ADR 為永久 design history，非 backlog tracking）。
+
+---
+
+## 020: Tenant Federation — Label-Injection Proxy over Self-Built Endpoint
+
+**文件**: [`020-tenant-federation.md`](./020-tenant-federation.md)
+
+v2.8.0 起草，targets v2.9.0 epic。涵蓋 cross-boundary federation 場景（與 ADR-004 platform-internal 互補）：tenant 把自己 metrics 子集拉回 tenant 側 infra 自管。採 **vmauth**（VM 客戶）/ **prom-label-proxy**（Prom 客戶）做 label-enforced read proxy，**不自寫 endpoint**（label sanitization 在自寫實作是 multi-tenant breach 地雷；現成 proxy production-hardened）。MVP 2-tier policy（platform whitelist + tenant subset）— Domain layer drop 到 Future Work。Token：4h TTL + 無 server-side revocation list（明寫 trade-off：簡化實作換 4h 曝險窗，對價條件為 gateway rate limit 必須到位）。Blast radius 採 **3-layer defense**：storage backend 擋 series/sample cap、API gateway 擋 per-token rate limit + timeout、proxy 只做 label injection + audit。Data-layer prerequisite：whitelist metric 必須 native 帶 `tenant_id` label，由 admission validator 把關。實作 epic（~70h，adversarial review 後上修）在 issue [#380](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/380) IV-2。
 
 ---
 

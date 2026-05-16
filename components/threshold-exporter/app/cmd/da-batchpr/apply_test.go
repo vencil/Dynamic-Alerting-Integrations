@@ -142,7 +142,7 @@ func TestRunApply_HappyPath_DryRun(t *testing.T) {
 	tmp := t.TempDir()
 	planFile := filepath.Join(tmp, "plan.json")
 	mustWriteFile(t, planFile, fixturePlanJSON())
-	// Use AllocateFiles' ADR-019 layout: _defaults.yaml goes to base,
+	// Use AllocateFiles' ADR-018 layout: _defaults.yaml goes to base,
 	// tenant files go to tenant items.
 	emitDir := filepath.Join(tmp, "emit")
 	mustWriteFile(t, filepath.Join(emitDir, "conf.d/_defaults.yaml"), []byte("defaults"))

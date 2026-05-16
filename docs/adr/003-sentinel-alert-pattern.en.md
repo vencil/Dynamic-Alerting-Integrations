@@ -110,7 +110,7 @@ exporter (tenant_silent_mode)
 
 - [`docs/architecture-and-design.en.md`](../architecture-and-design.md) §2.7 — Tri-state operational mode detailed design
 - [`docs/architecture-and-design.en.md`](../architecture-and-design.md) §2.8 — Dedup and Sentinel interaction mechanism
-- [`rule-packs/README.md`](../rule-packs/README.md) — Rule Packs overview (includes Sentinel Recording Rules)
+- [`rule-packs/README.md`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/rule-packs/README.md) — Rule Packs overview (includes Sentinel Recording Rules)
 
 ## Related Resources
 

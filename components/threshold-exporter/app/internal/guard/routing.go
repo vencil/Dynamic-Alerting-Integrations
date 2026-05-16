@@ -5,7 +5,7 @@ package guard
 //
 // SCOPE REDIRECT FROM PLANNING SPEC
 // ----------------------------------
-// Planning row §C-12 layer (ii) describes "ADR-017/018 Routing
+// Planning row §C-12 layer (ii) describes "ADR-016/017 Routing
 // Guardrails — routing tree cycle detection + orphaned route
 // detection". That description assumes an Alertmanager-style
 // graph where receivers can reference routes and back-edges are
