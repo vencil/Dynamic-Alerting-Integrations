@@ -85,9 +85,9 @@
 |--------|------|------|------|
 | `POST` | `/api/v1/federation/tokens` | admin（對 body 的 `tenant_id`） | 簽發短效 RS256 JWT（預設 4h）供租戶向 label-injection proxy 拉取自己的 metrics 子集；signed token 只在回應中出現一次 |
 | `GET` | `/api/v1/federation/tokens?tenant_id=<id>` | admin（對 query 的 `tenant_id`） | 列出該租戶未過期的 token record（不含 JWT 本體） |
-| `DELETE` | `/api/v1/federation/tokens/{id}` | admin（對 token 的 tenant） | 移除 token bookkeeping record；MVP 無 server-side revocation，JWT 至 `exp` 前仍有效 |
+| `DELETE` | `/api/v1/federation/tokens/{id}` | admin（對 token 的 tenant） | 撤銷 token：移除 bookkeeping record 並把 token id 寫入 gateway 消費的 revoked set；最終一致，約 1-2 分鐘內隨 ConfigMap projected-volume sync 生效（ADR-020 Posture B） |
 
-`--federation-key` 未設時整個 endpoint 不註冊。詳 [ADR-020](../../docs/adr/020-tenant-federation.md)。
+token record 存於跨 replica 共用的 Kubernetes ConfigMap（ADR-020 Posture B；`--federation-store` 指定其名、Helm chart 預建），tenant-api 維持 stateless、可多 replica。濫用防線：每租戶同時最多 16 個有效 token + 每分鐘簽發上限，超出分別回 `409` / `429`。`--federation-key` 未設時整個 endpoint 不註冊。詳 [ADR-020](../../docs/adr/020-tenant-federation.md)。
 
 ## Operational concerns
 
@@ -179,7 +179,8 @@ data: {"type":"config_change","tenant_id":"db-a-prod","timestamp":"2026-05-03T10
 | `TA_GITLAB_API_URL` | (空) | 自託管 GitLab URL |
 | `GIT_COMMITTER_NAME` / `GIT_COMMITTER_EMAIL` | (空) | service account 身份；空時 fallback 到 author |
 | `TA_FEDERATION_KEY` | (空 = 停用) | **(v2.9.0)** RS256 私鑰 PEM 路徑；簽發 federation token 用，空則 `/api/v1/federation/*` 不註冊 |
-| `TA_FEDERATION_STORE` | (空 = `os.TempDir`) | **(v2.9.0)** federation token record store（JSON）路徑；production 應指向持久卷 |
+| `TA_FEDERATION_STORE` | `tenant-federation-store` | **(v2.9.0)** 存放 federation token record 的 ConfigMap 名稱（ADR-020 Posture B）；由 Helm chart 預建 |
+| `TA_FEDERATION_NAMESPACE` | (空 = pod 自身 namespace) | **(v2.9.0)** federation store ConfigMap 所在 namespace |
 | `TA_FEDERATION_TOKEN_TTL` | `4h` | **(v2.9.0)** federation token 效期（Go duration string） |
 
 ### RBAC YAML

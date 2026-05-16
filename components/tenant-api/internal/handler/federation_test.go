@@ -237,7 +237,7 @@ func TestDeleteFederationToken_Success(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200, body: %s", w.Code, w.Body.String())
 	}
-	if _, ok := fed.Get(rec.TokenID); ok {
+	if _, ok, _ := fed.Get(rec.TokenID); ok {
 		t.Error("token record should be gone after delete")
 	}
 }
@@ -279,7 +279,7 @@ func TestDeleteFederationToken_ForbiddenWithoutAdmin(t *testing.T) {
 	if w.Code != http.StatusForbidden {
 		t.Errorf("status = %d, want 403", w.Code)
 	}
-	if _, ok := fed.Get(rec.TokenID); !ok {
+	if _, ok, _ := fed.Get(rec.TokenID); !ok {
 		t.Error("token record should survive a forbidden delete")
 	}
 }
@@ -319,5 +319,36 @@ func TestListFederationTokens_RejectsInvalidTenantID(t *testing.T) {
 
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400", w.Code)
+	}
+}
+
+// --- mint rate limit ---
+
+func TestCreateFederationToken_RateLimited(t *testing.T) {
+	t.Parallel()
+	rbacMgr := newRBACManager(t, fedAdminRBAC)
+	d := &Deps{RBAC: rbacMgr, Federation: newTestFederation(t)}
+	h := wrapWithRBACMiddleware(d.CreateFederationToken(), rbacMgr, rbac.PermRead, nil)
+
+	post := func() int {
+		req := httptest.NewRequest("POST", "/api/v1/federation/tokens",
+			bytes.NewBufferString(`{"tenant_id":"tenant-burst"}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Forwarded-Email", "ops@example.com")
+		req.Header.Set("X-Forwarded-Groups", "fed-admins")
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		return w.Code
+	}
+
+	// federation.maxMintsPerWindow is 5 (unexported); the 6th mint in
+	// the window must be rejected with 429.
+	for i := 0; i < 5; i++ {
+		if code := post(); code != http.StatusCreated {
+			t.Fatalf("POST %d within rate limit: status %d, want 201", i, code)
+		}
+	}
+	if code := post(); code != http.StatusTooManyRequests {
+		t.Errorf("POST past rate limit: status %d, want 429", code)
 	}
 }

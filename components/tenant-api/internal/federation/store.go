@@ -72,16 +72,18 @@ func (s *store) put(r Record) error {
 }
 
 // get returns the Record for tokenID. Expired-but-unpruned records are
-// still returned; liveness is the caller's concern.
-func (s *store) get(tokenID string) (Record, bool) {
+// still returned; liveness is the caller's concern. The error return
+// is always nil — it exists to satisfy the RecordStore interface,
+// whose ConfigMap implementation can fail.
+func (s *store) get(tokenID string) (Record, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	r, ok := s.recs[tokenID]
-	return r, ok
+	return r, ok, nil
 }
 
 // list returns the non-expired Records for tenantID, oldest first.
-func (s *store) list(tenantID string, now time.Time) []Record {
+func (s *store) list(tenantID string, now time.Time) ([]Record, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := make([]Record, 0)
@@ -91,12 +93,15 @@ func (s *store) list(tenantID string, now time.Time) []Record {
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].IssuedAt.Before(out[j].IssuedAt) })
-	return out
+	return out, nil
 }
 
-// remove deletes the Record for tokenID and persists the store. It
-// reports whether a record was present.
-func (s *store) remove(tokenID string) (bool, error) {
+// revoke removes the Record for tokenID and persists the store,
+// reporting whether a record was present. The JSON store is the
+// unit-test backend only and has no gateway-facing revoked set, so the
+// expiresAt argument is unused here — the production ConfigMap store
+// (configmap_store.go) is what writes the revoked set.
+func (s *store) revoke(tokenID string, _ time.Time) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, ok := s.recs[tokenID]; !ok {

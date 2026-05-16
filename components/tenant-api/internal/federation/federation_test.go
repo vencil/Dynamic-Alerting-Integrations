@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -36,10 +37,20 @@ func writeTestKey(t *testing.T) (string, *rsa.PrivateKey) {
 	return path, key
 }
 
+// newJSONStore returns a fresh JSON-file RecordStore under t.TempDir().
+func newJSONStore(t *testing.T) RecordStore {
+	t.Helper()
+	st, err := newStore(filepath.Join(t.TempDir(), "store.json"))
+	if err != nil {
+		t.Fatalf("newStore: %v", err)
+	}
+	return st
+}
+
 func newTestManager(t *testing.T, ttl time.Duration) *Manager {
 	t.Helper()
 	keyPath, _ := writeTestKey(t)
-	m, err := NewManager(keyPath, filepath.Join(t.TempDir(), "store.json"), ttl)
+	m, err := NewManager(keyPath, newJSONStore(t), ttl)
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
@@ -51,7 +62,7 @@ func newTestManager(t *testing.T, ttl time.Duration) *Manager {
 
 func TestNewManager_EmptyKeyPathDisablesFeature(t *testing.T) {
 	t.Parallel()
-	m, err := NewManager("", "", 0)
+	m, err := NewManager("", nil, 0)
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
@@ -80,7 +91,7 @@ func TestNewManager_AcceptsPKCS1Key(t *testing.T) {
 	if err := os.WriteFile(path, pemBytes, 0o600); err != nil {
 		t.Fatalf("write key: %v", err)
 	}
-	m, err := NewManager(path, filepath.Join(t.TempDir(), "s.json"), time.Hour)
+	m, err := NewManager(path, newJSONStore(t), time.Hour)
 	if err != nil {
 		t.Fatalf("NewManager with PKCS#1 key: %v", err)
 	}
@@ -95,15 +106,35 @@ func TestNewManager_RejectsBadKey(t *testing.T) {
 	if err := os.WriteFile(path, []byte("not a pem file"), 0o600); err != nil {
 		t.Fatalf("write file: %v", err)
 	}
-	if _, err := NewManager(path, filepath.Join(t.TempDir(), "s.json"), time.Hour); err == nil {
+	if _, err := NewManager(path, newJSONStore(t), time.Hour); err == nil {
 		t.Fatal("expected an error for a malformed key file")
+	}
+}
+
+func TestNewManager_RejectsWeakKey(t *testing.T) {
+	t.Parallel()
+	key, err := rsa.GenerateKey(rand.Reader, 1024)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	der, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatalf("marshal key: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "weak.pem")
+	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
+	if err := os.WriteFile(path, pemBytes, 0o600); err != nil {
+		t.Fatalf("write key: %v", err)
+	}
+	if _, err := NewManager(path, newJSONStore(t), time.Hour); err == nil {
+		t.Fatal("expected an error for a sub-2048-bit RSA signing key")
 	}
 }
 
 func TestIssue_SignsVerifiableJWT(t *testing.T) {
 	t.Parallel()
 	keyPath, key := writeTestKey(t)
-	m, err := NewManager(keyPath, filepath.Join(t.TempDir(), "store.json"), time.Hour)
+	m, err := NewManager(keyPath, newJSONStore(t), time.Hour)
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
@@ -155,6 +186,11 @@ func TestIssue_SignsVerifiableJWT(t *testing.T) {
 	if claims.Subject != "tenant-alpha" {
 		t.Errorf("claim sub = %q", claims.Subject)
 	}
+	// iat is backdated by clockSkewLeeway so a fast signer clock cannot
+	// place it in a verifier's future.
+	if iat := claims.IssuedAt.Time; iat.After(before) {
+		t.Errorf("claim iat = %v, want <= issuance time %v (backdated)", iat, before)
+	}
 	exp := claims.ExpiresAt.Time
 	if exp.Before(before.Add(time.Hour-time.Minute)) || exp.After(time.Now().Add(time.Hour+time.Minute)) {
 		t.Errorf("claim exp = %v, want ~1h from issuance", exp)
@@ -193,7 +229,10 @@ func TestManager_ListGetDelete(t *testing.T) {
 		t.Fatalf("Issue: %v", err)
 	}
 
-	listA := m.List("tenant-a")
+	listA, err := m.List("tenant-a")
+	if err != nil {
+		t.Fatalf("List(tenant-a): %v", err)
+	}
 	if len(listA) != 2 {
 		t.Fatalf("List(tenant-a) = %d records, want 2", len(listA))
 	}
@@ -201,30 +240,73 @@ func TestManager_ListGetDelete(t *testing.T) {
 	if !gotIDs[recA1.TokenID] || !gotIDs[recA2.TokenID] {
 		t.Errorf("List(tenant-a) missing an issued token: %v", gotIDs)
 	}
-	if got := m.List("tenant-b"); len(got) != 1 || got[0].TokenID != recB1.TokenID {
-		t.Errorf("List(tenant-b) = %v, want [%s]", got, recB1.TokenID)
+	if got, err := m.List("tenant-b"); err != nil || len(got) != 1 || got[0].TokenID != recB1.TokenID {
+		t.Errorf("List(tenant-b) = (%v, %v), want [%s]", got, err, recB1.TokenID)
 	}
-	if got := m.List("tenant-unknown"); len(got) != 0 {
-		t.Errorf("List(tenant-unknown) = %d, want 0", len(got))
+	if got, err := m.List("tenant-unknown"); err != nil || len(got) != 0 {
+		t.Errorf("List(tenant-unknown) = (%d, %v), want 0", len(got), err)
 	}
 
-	got, ok := m.Get(recA1.TokenID)
-	if !ok || got.TenantID != "tenant-a" {
-		t.Errorf("Get(%s) = (%+v, %v)", recA1.TokenID, got, ok)
+	got, ok, err := m.Get(recA1.TokenID)
+	if err != nil || !ok || got.TenantID != "tenant-a" {
+		t.Errorf("Get(%s) = (%+v, %v, %v)", recA1.TokenID, got, ok, err)
 	}
-	if _, ok := m.Get("ftk_does_not_exist"); ok {
+	if _, ok, _ := m.Get("ftk_does_not_exist"); ok {
 		t.Error("Get of an unknown token reported present")
 	}
 
-	deleted, err := m.Delete(recA1.TokenID)
+	deleted, err := m.Delete(recA1.TokenID, recA1.ExpiresAt)
 	if err != nil || !deleted {
 		t.Fatalf("Delete(%s) = (%v, %v), want (true, nil)", recA1.TokenID, deleted, err)
 	}
-	if got := m.List("tenant-a"); len(got) != 1 {
-		t.Errorf("List(tenant-a) after delete = %d, want 1", len(got))
+	if got, err := m.List("tenant-a"); err != nil || len(got) != 1 {
+		t.Errorf("List(tenant-a) after delete = (%d, %v), want 1", len(got), err)
 	}
-	if deleted, _ := m.Delete(recA1.TokenID); deleted {
+	if deleted, _ := m.Delete(recA1.TokenID, recA1.ExpiresAt); deleted {
 		t.Error("second Delete of the same token reported a deletion")
+	}
+}
+
+func TestIssue_EnforcesTokenLimit(t *testing.T) {
+	t.Parallel()
+	m := newTestManager(t, time.Hour)
+	now := time.Now()
+	// Seed the store to the cap directly: a loop of Issue calls would
+	// trip the mint rate limit long before reaching maxTokensPerTenant.
+	for i := 0; i < maxTokensPerTenant; i++ {
+		rec := Record{
+			TokenID:   fmt.Sprintf("ftk_seed%02d", i),
+			TenantID:  "tenant-cap",
+			IssuedAt:  now,
+			ExpiresAt: now.Add(time.Hour),
+		}
+		if err := m.store.put(rec); err != nil {
+			t.Fatalf("seed put %d: %v", i, err)
+		}
+	}
+	if _, _, err := m.Issue("tenant-cap", "u@example.com", ""); !errors.Is(err, ErrTokenLimitReached) {
+		t.Fatalf("Issue past cap = %v, want ErrTokenLimitReached", err)
+	}
+	// A different tenant is unaffected by another tenant's cap.
+	if _, _, err := m.Issue("tenant-other", "u@example.com", ""); err != nil {
+		t.Fatalf("Issue for a different tenant: %v", err)
+	}
+}
+
+func TestIssue_EnforcesMintRateLimit(t *testing.T) {
+	t.Parallel()
+	m := newTestManager(t, time.Hour)
+	for i := 0; i < maxMintsPerWindow; i++ {
+		if _, _, err := m.Issue("tenant-fast", "u@example.com", ""); err != nil {
+			t.Fatalf("Issue %d within rate limit: %v", i, err)
+		}
+	}
+	if _, _, err := m.Issue("tenant-fast", "u@example.com", ""); !errors.Is(err, ErrMintRateLimited) {
+		t.Fatalf("Issue past rate limit = %v, want ErrMintRateLimited", err)
+	}
+	// A different tenant has its own independent window.
+	if _, _, err := m.Issue("tenant-slow", "u@example.com", ""); err != nil {
+		t.Fatalf("Issue for a different tenant: %v", err)
 	}
 }
 
@@ -244,11 +326,14 @@ func TestStore_ListExcludesExpiredButGetReturnsIt(t *testing.T) {
 		t.Fatalf("put dead: %v", err)
 	}
 
-	got := st.list("t", now)
+	got, err := st.list("t", now)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
 	if len(got) != 1 || got[0].TokenID != "ftk_live" {
 		t.Errorf("list = %v, want only ftk_live", got)
 	}
-	if _, ok := st.get("ftk_dead"); !ok {
+	if _, ok, _ := st.get("ftk_dead"); !ok {
 		t.Error("get should still return an expired-but-unpruned record")
 	}
 }
@@ -270,7 +355,10 @@ func TestStore_Persistence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen store: %v", err)
 	}
-	got, ok := st2.get("ftk_persist")
+	got, ok, err := st2.get("ftk_persist")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
 	if !ok {
 		t.Fatal("record was not reloaded from disk")
 	}
@@ -279,40 +367,26 @@ func TestStore_Persistence(t *testing.T) {
 	}
 }
 
-func TestNewManager_RejectsWeakKey(t *testing.T) {
+func TestStore_RevokeRemovesRecord(t *testing.T) {
 	t.Parallel()
-	key, err := rsa.GenerateKey(rand.Reader, 1024)
+	st, err := newStore(filepath.Join(t.TempDir(), "s.json"))
 	if err != nil {
-		t.Fatalf("generate key: %v", err)
+		t.Fatalf("newStore: %v", err)
 	}
-	der, err := x509.MarshalPKCS8PrivateKey(key)
-	if err != nil {
-		t.Fatalf("marshal key: %v", err)
+	now := time.Now()
+	rec := Record{TokenID: "ftk_rev", TenantID: "t", IssuedAt: now, ExpiresAt: now.Add(time.Hour)}
+	if err := st.put(rec); err != nil {
+		t.Fatalf("put: %v", err)
 	}
-	path := filepath.Join(t.TempDir(), "weak.pem")
-	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
-	if err := os.WriteFile(path, pemBytes, 0o600); err != nil {
-		t.Fatalf("write key: %v", err)
+	deleted, err := st.revoke("ftk_rev", rec.ExpiresAt)
+	if err != nil || !deleted {
+		t.Fatalf("revoke = (%v, %v), want (true, nil)", deleted, err)
 	}
-	if _, err := NewManager(path, filepath.Join(t.TempDir(), "s.json"), time.Hour); err == nil {
-		t.Fatal("expected an error for a sub-2048-bit RSA signing key")
+	if _, ok, _ := st.get("ftk_rev"); ok {
+		t.Error("record should be gone after revoke")
 	}
-}
-
-func TestIssue_EnforcesTokenLimit(t *testing.T) {
-	t.Parallel()
-	m := newTestManager(t, time.Hour)
-	for i := 0; i < maxTokensPerTenant; i++ {
-		if _, _, err := m.Issue("tenant-cap", "u@example.com", ""); err != nil {
-			t.Fatalf("Issue %d: %v", i, err)
-		}
-	}
-	if _, _, err := m.Issue("tenant-cap", "u@example.com", ""); !errors.Is(err, ErrTokenLimitReached) {
-		t.Fatalf("Issue past cap = %v, want ErrTokenLimitReached", err)
-	}
-	// A different tenant is unaffected by another tenant's cap.
-	if _, _, err := m.Issue("tenant-other", "u@example.com", ""); err != nil {
-		t.Fatalf("Issue for a different tenant: %v", err)
+	if deleted, _ := st.revoke("ftk_rev", rec.ExpiresAt); deleted {
+		t.Error("second revoke of the same token reported a deletion")
 	}
 }
 

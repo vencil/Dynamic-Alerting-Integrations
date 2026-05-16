@@ -15,15 +15,20 @@ package main
 // middle.
 
 import (
+	"fmt"
 	"log"
 	"log/slog"
 	"os"
+	"strings"
 	"time"
 
+	"github.com/vencil/tenant-api/internal/federation"
 	gh "github.com/vencil/tenant-api/internal/github"
 	gl "github.com/vencil/tenant-api/internal/gitlab"
 	"github.com/vencil/tenant-api/internal/handler"
 	"github.com/vencil/tenant-api/internal/platform"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 )
 
 // prBackendFlags are the CLI-flag values consumed by wirePRBackend.
@@ -99,4 +104,73 @@ func wirePRBackend(f prBackendFlags) (platform.Client, platform.Tracker, handler
 		slog.Info("direct write mode (commit-on-write)")
 		return nil, nil, handler.WriteModeDirect
 	}
+}
+
+// federationFlags are the CLI-flag values consumed by wireFederation.
+type federationFlags struct {
+	KeyPath       string        // --federation-key (empty disables the endpoint)
+	ConfigMapName string        // --federation-store (the store ConfigMap name)
+	Namespace     string        // --federation-namespace (empty → pod's own namespace)
+	TTL           time.Duration // --federation-token-ttl
+}
+
+// wireFederation builds the federation-token Manager backed by the
+// ConfigMap RecordStore (ADR-020 Posture B). It also returns the
+// resolved store namespace so the caller can log where the store
+// actually lives (it may have been derived, not passed explicitly).
+//
+// An empty KeyPath disables the feature: it returns (nil, "", nil)
+// *before* touching Kubernetes, so a deployment that does not use
+// federation needs neither an in-cluster client nor any ConfigMap RBAC.
+//
+// The store ConfigMap must already exist — the Helm chart pre-creates
+// it (sub-issue IV-2m) so tenant-api's RBAC can be get+update on one
+// resourceName with no namespace-wide create. NewConfigMapStore fails
+// loud on NotFound.
+func wireFederation(f federationFlags) (*federation.Manager, string, error) {
+	if f.KeyPath == "" {
+		return nil, "", nil
+	}
+	cfg, err := rest.InClusterConfig()
+	if err != nil {
+		return nil, "", fmt.Errorf("federation: in-cluster k8s config: %w", err)
+	}
+	client, err := kubernetes.NewForConfig(cfg)
+	if err != nil {
+		return nil, "", fmt.Errorf("federation: build k8s client: %w", err)
+	}
+	ns := f.Namespace
+	if ns == "" {
+		ns, err = inClusterNamespace()
+		if err != nil {
+			return nil, "", fmt.Errorf("federation: resolve namespace: %w", err)
+		}
+	}
+	store, err := federation.NewConfigMapStore(client, ns, f.ConfigMapName)
+	if err != nil {
+		return nil, "", err
+	}
+	mgr, err := federation.NewManager(f.KeyPath, store, f.TTL)
+	if err != nil {
+		return nil, "", err
+	}
+	return mgr, ns, nil
+}
+
+// inClusterNamespace reads the pod's own namespace from the
+// service-account projected volume — the standard path every
+// in-cluster pod carries. An operator can bypass this with
+// --federation-namespace (e.g. running the store ConfigMap in a
+// dedicated monitoring namespace).
+func inClusterNamespace() (string, error) {
+	const saNamespacePath = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
+	b, err := os.ReadFile(saNamespacePath)
+	if err != nil {
+		return "", fmt.Errorf("read %s (set --federation-namespace to override): %w", saNamespacePath, err)
+	}
+	ns := strings.TrimSpace(string(b))
+	if ns == "" {
+		return "", fmt.Errorf("%s is empty", saNamespacePath)
+	}
+	return ns, nil
 }
