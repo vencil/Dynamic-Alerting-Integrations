@@ -1,0 +1,32 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "federation-proxy.name" . }}-netpol
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "federation-proxy.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "federation-proxy.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    # Only the federation API gateway (IV-2b / #507) may reach the proxy
+    # port. prom-label-proxy trusts the tenant header; that trust is only
+    # sound if no other pod can deliver a request here. Without this rule
+    # the 3-layer defence degrades into bypassable speed bumps (ADR-020).
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.gatewaySelector | nindent 14 }}
+          {{- if .Values.networkPolicy.gatewayNamespace }}
+          namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.gatewayNamespace }}
+          {{- end }}
+      ports:
+        - port: {{ .Values.listenPort }}
+          protocol: TCP
+{{- end }}

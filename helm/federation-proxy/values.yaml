@@ -1,0 +1,115 @@
+# federation-proxy Helm values
+# Reference: ADR-020 — Tenant Federation, Layer 3 (read-path isolation)
+#
+# This chart deploys prom-label-proxy as the federation read proxy. It
+# fronts ANY Prometheus-HTTP-API-compatible backend (Prometheus, Thanos
+# Query, or VictoriaMetrics single-node / vmselect) and force-injects a
+# per-tenant label matcher into every PromQL selector — query API AND
+# metadata APIs — so tenant A can never read tenant B's series.
+#
+# A VictoriaMetrics *cluster* does NOT use this chart: cluster isolation
+# is accountID-path routing, which the federation API gateway (IV-2b)
+# does directly via URL rewrite. vmauth was evaluated and dropped — it
+# is an auth router keyed on a static auth.yml and cannot consume the
+# dynamically-issued federation JWT. See the chart README.
+
+replicaCount: 2
+
+image:
+  repository: quay.io/prometheuscommunity/prom-label-proxy
+  tag: "v0.13.0"
+  pullPolicy: IfNotPresent
+
+# Upstream backend — any Prometheus-HTTP-API-compatible endpoint
+# (Prometheus, Thanos Query, VictoriaMetrics single-node / vmselect).
+upstream:
+  url: "http://prometheus.monitoring.svc:9090"
+
+# Tenant isolation. The proxy injects {<label>="<value>"} into every
+# selector. The value is read from an HTTP header set by the federation
+# API gateway (IV-2b / #507) AFTER it verifies the JWT — the proxy never
+# trusts a client-supplied tenant id. headerName must match what the
+# gateway sets, and the gateway MUST strip any inbound copy of it.
+tenant:
+  label: tenant_id
+  headerName: X-Tenant-Id
+
+# Port prom-label-proxy listens on (plain HTTP — TLS terminates at the
+# gateway; this proxy is cluster-internal behind a NetworkPolicy).
+listenPort: 8080
+
+service:
+  type: ClusterIP
+  port: 8080
+
+# NetworkPolicy — SECURITY-CRITICAL, not optional. The proxy trusts the
+# tenant header; that trust only holds if traffic cannot reach the proxy
+# except via the gateway. Disabled, any in-cluster pod could set the
+# header and impersonate any tenant — the 3-layer defence collapses
+# into bypassable speed bumps (ADR-020).
+networkPolicy:
+  enabled: true
+  # Pod-selector labels of the federation API gateway (IV-2b / #507) —
+  # the ONLY permitted ingress source for the proxy port.
+  gatewaySelector:
+    app.kubernetes.io/name: federation-gateway
+  # Namespace the gateway runs in. Empty = same namespace as the proxy.
+  gatewayNamespace: ""
+
+# Horizontal autoscaling. prom-label-proxy parses PromQL into an AST,
+# injects the matcher, and re-serialises — a CPU-bound operation. On a
+# shared pod a tenant sending complex queries within its rate limit can
+# still starve neighbours, so scale on CPU (ADR-020 Gemini round-6).
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 70
+
+# Resource requests/limits. A CPU limit bounds the blast radius of a
+# single expensive query; the request feeds the HPA CPU calculation.
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+# GOMEMLIMIT — Go soft memory ceiling. prom-label-proxy parses PromQL into
+# an AST; under a burst that churns the Go heap. GOMEMLIMIT makes the
+# runtime GC *before* it slams the cgroup hard limit and the pod is
+# OOMKilled. Keep it ~10% below resources.limits.memory — it bounds the Go
+# heap; the binary's own RSS sits on top.
+goMemLimit: "230MiB"
+
+# Graceful shutdown. A federation query may run up to 30s (ADR-020 Layer 1
+# cap). On scale-down / rollout the pod must drain in-flight queries, not
+# be SIGKILLed mid-query (which surfaces to Grafana as a 502).
+#   preStopSleepSeconds — pod sleeps this long after SIGTERM before the
+#     process is signalled, so the Service endpoint is withdrawn first and
+#     no new request races into a terminating pod. The native preStop.sleep
+#     action needs Kubernetes >= 1.29 (enforced via Chart.yaml kubeVersion).
+#   terminationGracePeriodSeconds — must exceed preStopSleep + the 30s max
+#     query so an in-flight query can finish before SIGKILL.
+preStopSleepSeconds: 5
+terminationGracePeriodSeconds: 45
+
+# PodDisruptionBudget — keeps the federation read path up during VOLUNTARY
+# disruptions (node drain, cluster upgrade). Without it a drain can evict
+# every replica at once. maxUnavailable caps concurrent voluntary evictions
+# regardless of how far the HPA has scaled out.
+podDisruptionBudget:
+  enabled: true
+  maxUnavailable: 1
+
+# Pod security context (non-root, unprivileged).
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65534
+  runAsGroup: 65534
+  seccompProfile:
+    type: RuntimeDefault
+
+# Extra pod annotations.
+podAnnotations: {}

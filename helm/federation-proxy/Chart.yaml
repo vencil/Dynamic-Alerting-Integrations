@@ -1,0 +1,19 @@
+apiVersion: v2
+name: federation-proxy
+description: Tenant federation label-injection proxy (ADR-020 Layer 3) — prom-label-proxy that force-injects a per-tenant matcher into every PromQL query and metadata-API call
+type: application
+# version: Helm Chart 版本（隨 Chart 結構/模板變更升級）
+version: 0.1.0
+# appVersion: pinned prom-label-proxy release
+appVersion: "v0.13.0"
+# kubeVersion: the deployment uses the native preStop.sleep lifecycle
+# action, beta-on-by-default since Kubernetes 1.29.
+kubeVersion: ">=1.29.0-0"
+keywords:
+  - dynamic-alerting
+  - tenant-federation
+  - prom-label-proxy
+  - multi-tenancy
+home: https://github.com/vencil/Dynamic-Alerting-Integrations
+maintainers:
+  - name: vencil

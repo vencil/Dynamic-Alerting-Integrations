@@ -1,0 +1,95 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "federation-proxy.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "federation-proxy.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "federation-proxy.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "federation-proxy.labels" . | nindent 8 }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "federation-proxy.name" . }}
+      # prom-label-proxy never calls the Kubernetes API — drop the token.
+      automountServiceAccountToken: false
+      # Must exceed preStopSleepSeconds + the 30s max federation query so an
+      # in-flight query can finish before SIGKILL (ADR-020 Layer 1 cap).
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      # Spread replicas across nodes. Soft (preferred) so a small cluster
+      # can still schedule — but without it the scheduler may co-locate
+      # both replicas on one node, and a single node failure then takes out
+      # the whole federation read path.
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    {{- include "federation-proxy.selectorLabels" . | nindent 20 }}
+                topologyKey: kubernetes.io/hostname
+      containers:
+        - name: prom-label-proxy
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          args:
+            - -label={{ .Values.tenant.label }}
+            # Per-tenant value comes from a gateway-set header, never the
+            # client — the gateway verifies the JWT first (ADR-020 Layer 3).
+            - -header-name={{ .Values.tenant.headerName }}
+            - -upstream={{ .Values.upstream.url }}
+            - -insecure-listen-address=0.0.0.0:{{ .Values.listenPort }}
+            # Hardcoded, NOT values-overridable (#506 AC): -enable-label-apis
+            # extends enforcement to /api/v1/labels and /api/v1/label/<name>/
+            # values; without it those leak cross-tenant topology to Grafana
+            # variable dropdowns. (/api/v1/series is enforced regardless.)
+            - -enable-label-apis
+          env:
+            # Go soft memory limit — GC before the cgroup hard limit
+            # OOMKills the pod (AST parsing under a burst churns the heap).
+            - name: GOMEMLIMIT
+              value: {{ .Values.goMemLimit | quote }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.listenPort }}
+              protocol: TCP
+          lifecycle:
+            # Sleep after SIGTERM so the Service endpoint is withdrawn
+            # before the process stops — no new request races into a dying
+            # pod. Native sleep action requires Kubernetes >= 1.29.
+            preStop:
+              sleep:
+                seconds: {{ .Values.preStopSleepSeconds }}
+          readinessProbe:
+            tcpSocket:
+              port: {{ .Values.listenPort }}
+            initialDelaySeconds: 3
+            periodSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            tcpSocket:
+              port: {{ .Values.listenPort }}
+            initialDelaySeconds: 5
+            periodSeconds: 15
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}

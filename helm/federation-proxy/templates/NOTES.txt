@@ -1,0 +1,17 @@
+federation-proxy installed — ADR-020 Layer 3 (federation read-path isolation).
+
+  Service : {{ include "federation-proxy.name" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.port }}
+  Upstream: {{ .Values.upstream.url }}
+
+prom-label-proxy force-injects {{ .Values.tenant.label }}="<tenant>" into every
+PromQL selector and metadata-API call. The tenant id is read from the
+{{ .Values.tenant.headerName }} header: the federation API gateway (IV-2b / #507)
+MUST set it from the verified JWT and strip any client-supplied copy.
+{{ if not .Values.networkPolicy.enabled }}
+WARNING: networkPolicy.enabled=false. The proxy trusts the gateway-set
+tenant header; without the NetworkPolicy any in-cluster pod can bypass
+the gateway and impersonate a tenant. Enable it before exposing federation.
+{{ end -}}
+Audit logging is NOT performed here — prom-label-proxy emits no structured
+audit log. Per-request audit (tenant_id, token_id, query) belongs to the
+gateway (IV-2b / #507).
