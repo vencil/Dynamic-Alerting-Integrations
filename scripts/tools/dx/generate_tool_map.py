@@ -19,7 +19,9 @@ from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
+sys.path.insert(0, str(SCRIPT_DIR.parent))
 from _atomic_write import atomic_write_text  # noqa: E402
+from _lib_versions import read_platform_version  # noqa: E402
 
 REPO_ROOT = SCRIPT_DIR.parent.parent.parent
 TOOLS_ROOT = REPO_ROOT / "scripts" / "tools"
@@ -123,6 +125,7 @@ def gather_tools() -> dict:
 def generate_tool_map(categorized: dict, lang: str = "zh") -> str:
     """Generate tool-map.md content."""
     headers = CATEGORY_HEADERS[lang]
+    platform_version = read_platform_version()
 
     if lang == "en":
         lines = [
@@ -130,7 +133,7 @@ def generate_tool_map(categorized: dict, lang: str = "zh") -> str:
             'title: "Tool Map"',
             "tags: [tooling, navigation, internal]",
             "audience: [maintainers, ai-agent]",
-            "version: v2.8.1",
+            f"version: {platform_version}",
             "lang: en",
             "---",
             "",
@@ -147,7 +150,7 @@ def generate_tool_map(categorized: dict, lang: str = "zh") -> str:
             'title: "工具導覽 (Tool Map)"',
             "tags: [tooling, navigation, internal]",
             "audience: [maintainers, ai-agent]",
-            "version: v2.8.1",
+            f"version: {platform_version}",
             "lang: zh",
             "---",
             "",

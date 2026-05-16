@@ -475,3 +475,122 @@ class TestPhaseAddedCountRules:
         sample = "專案有 **39 個 JSX 互動工具**，Source of Truth 檔案："
         m = _re.search(rule["pattern"], sample)
         assert m, "JSX-count pattern must match the dev-rules.md SOP heading."
+
+
+class TestSkipReleasedChangelog:
+    """PR #503 regression — the inline-version-text rule must not bump
+    historical version refs frozen inside released `## [vX.Y.Z]` CHANGELOG
+    entries.
+
+    The rule scans docs/**/*.md and docs/CHANGELOG.md symlinks to the root
+    CHANGELOG. Before the fix it false-matched a `已於 v<old>` sentence in
+    the latest released entry and wanted to flip that past-release fact to
+    the version being bumped to.
+
+    Fixtures use synthetic versions (0.x.0) — the same convention as the
+    rest of this file — so they never read as the real platform version.
+    """
+
+    def _inline_rule(self):
+        """The real `inline version text in doc content` platform rule."""
+        platform_rules = bump_docs._build_rules()["platform"]
+        inline = [r for r in platform_rules
+                  if r.get("desc") == "inline version text in doc content"]
+        assert len(inline) == 1, "expected exactly one inline-version rule"
+        return inline[0]
+
+    def test_inline_rule_opts_into_skip(self):
+        """The shipped rule carries skip_released_changelog."""
+        assert self._inline_rule().get("skip_released_changelog") is True
+
+    def test_split_helper_splits_at_first_released_heading(self):
+        content = (
+            "# Changelog\n\n"
+            "## [Unreleased]\n\n- 進行中\n\n"
+            "## [v0.2.0] — synthetic (2026-01-02)\n\n- 已於 v0.1.0 刪除\n\n"
+            "## [v0.1.0]\n\n- 更早的條目\n"
+        )
+        live, frozen = bump_docs._split_at_released_changelog(content)
+        assert live + frozen == content
+        assert "## [Unreleased]" in live
+        assert "## [v0.2.0]" in frozen
+        assert "## [v0.1.0]" in frozen
+        assert "已於 v0.1.0" in frozen
+
+    def test_split_helper_noop_without_released_heading(self):
+        """Ordinary docs (no `## [vX.Y.Z]`) come back fully-live."""
+        content = "# 指南\n\n本指南對應於 v0.1.0 平台。\n"
+        live, frozen = bump_docs._split_at_released_changelog(content)
+        assert live == content
+        assert frozen == ""
+
+    def test_historical_ref_in_released_section_not_bumped(
+            self, tmp_path, monkeypatch):
+        """#503 case: a `已於 v<old>` fact inside the latest released entry
+        stays put when the platform version is bumped."""
+        docs = tmp_path / "docs"
+        docs.mkdir()
+        changelog = docs / "CHANGELOG.md"
+        changelog.write_text(
+            "# Changelog\n\n"
+            "## [Unreleased]\n\n"
+            "- 待發佈內容。\n\n"
+            "## [v0.2.0] — synthetic release (2026-01-02)\n\n"
+            "- `some-doc.md` 已於 v0.1.0 被 phantom-delete。\n",
+            encoding="utf-8",
+        )
+        os.chmod(changelog,
+                 stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
+        monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+
+        changes = bump_docs.apply_rules(
+            [self._inline_rule()], "0.2.0", check_only=False)
+
+        result = changelog.read_text(encoding="utf-8")
+        # Historical fact left intact — not flipped to the bump target.
+        assert "已於 v0.1.0 被 phantom-delete" in result
+        assert "v0.2.0 被 phantom-delete" not in result
+        assert "UPDATE" not in [c[0] for c in changes]
+
+    def test_inline_ref_in_ordinary_doc_still_bumped(
+            self, tmp_path, monkeypatch):
+        """A doc with no released-version heading is unaffected by the skip
+        — the inline rule still bumps `於 vX.Y.Z` there (no over-skip)."""
+        docs = tmp_path / "docs"
+        docs.mkdir()
+        guide = docs / "guide.md"
+        guide.write_text(
+            "# 平台指南\n\n本指南對應於 v0.1.0 平台。\n",
+            encoding="utf-8",
+        )
+        os.chmod(guide,
+                 stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
+        monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+
+        changes = bump_docs.apply_rules(
+            [self._inline_rule()], "0.2.0", check_only=False)
+
+        assert "對應於 v0.2.0 平台" in guide.read_text(encoding="utf-8")
+        assert "UPDATE" in [c[0] for c in changes]
+
+    def test_check_clean_when_only_frozen_drift(self, tmp_path, monkeypatch):
+        """--check reports no drift when the only stale ref is inside a
+        frozen released entry, and leaves the file untouched."""
+        docs = tmp_path / "docs"
+        docs.mkdir()
+        changelog = docs / "CHANGELOG.md"
+        changelog.write_text(
+            "# Changelog\n\n"
+            "## [Unreleased]\n\n- 待發佈。\n\n"
+            "## [v0.1.0] — synthetic initial (2026-01-01)\n\n"
+            "- 行為於 v0.0.9 調整。\n",
+            encoding="utf-8",
+        )
+        os.chmod(changelog,
+                 stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
+        monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+
+        changes = bump_docs.apply_rules(
+            [self._inline_rule()], "0.2.0", check_only=True)
+        assert "UPDATE" not in [c[0] for c in changes]
+        assert "行為於 v0.0.9 調整" in changelog.read_text(encoding="utf-8")

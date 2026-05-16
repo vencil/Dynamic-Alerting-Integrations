@@ -29,6 +29,9 @@ from typing import List
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent.parent.parent  # scripts/tools/dx/ -> repo root
 
+sys.path.insert(0, str(SCRIPT_DIR.parent))
+from _lib_versions import read_platform_version, read_da_tools_version  # noqa: E402
+
 # ---------------------------------------------------------------------------
 # Bilingual templates
 # ---------------------------------------------------------------------------
@@ -188,24 +191,7 @@ def _extract_key_flags(section: str) -> str:
 
 def _read_versions():
     """Read platform and da-tools versions from source-of-truth files."""
-    # Platform version from CLAUDE.md
-    version = 'v2.8.1'  # fallback
-    claude_md = REPO_ROOT / 'CLAUDE.md'
-    if claude_md.exists():
-        content = claude_md.read_text(encoding='utf-8')
-        m = re.search(r'專案概覽 \((v[0-9]+\.[0-9]+[^)]+)\)', content)
-        if m:
-            version = m.group(1)
-
-    # da-tools version from VERSION file
-    tools_version = '1.11.0'  # fallback
-    ver_file = REPO_ROOT / 'components' / 'da-tools' / 'app' / 'VERSION'
-    if ver_file.exists():
-        tv = ver_file.read_text(encoding='utf-8').strip()
-        if re.match(r'^[0-9]+\.[0-9]+\.[0-9]+$', tv):
-            tools_version = tv
-
-    return version, tools_version
+    return read_platform_version(), read_da_tools_version()
 
 
 def create_cheat_sheet_content(commands: List[dict], version: str,

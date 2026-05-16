@@ -31,6 +31,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lib_versions import read_platform_version  # noqa: E402
 
 REPO_ROOT = SCRIPT_DIR.parent.parent.parent
 DOC_MAP_ZH = REPO_ROOT / "docs" / "internal" / "doc-map.md"
@@ -378,6 +379,7 @@ def gather_docs(lang: str = "zh", include_adr: bool = False) -> list:
 def generate_doc_map(lang: str = "zh", include_adr: bool = False) -> str:
     """Generate the full doc-map content."""
     entries = gather_docs(lang, include_adr=include_adr)
+    platform_version = read_platform_version()
 
     if lang == "en":
         lines = [
@@ -385,7 +387,7 @@ def generate_doc_map(lang: str = "zh", include_adr: bool = False) -> str:
             'title: "Documentation Map"',
             "tags: [documentation, navigation, internal]",
             "audience: [maintainers, ai-agent]",
-            "version: v2.8.1",
+            f"version: {platform_version}",
             "lang: en",
             "---",
             "",
@@ -403,7 +405,7 @@ def generate_doc_map(lang: str = "zh", include_adr: bool = False) -> str:
             'title: "文件導覽 (Documentation Map)"',
             "tags: [documentation, navigation, internal]",
             "audience: [maintainers, ai-agent]",
-            "version: v2.8.1",
+            f"version: {platform_version}",
             "lang: zh",
             "---",
             "",
