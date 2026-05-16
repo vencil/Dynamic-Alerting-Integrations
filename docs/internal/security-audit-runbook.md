@@ -2,7 +2,7 @@
 title: "Security Audit Runbook"
 tags: [documentation, security, governance]
 audience: [maintainer, ai-agent]
-version: v2.8.0
+version: v2.8.1
 verified-at-version: v2.8.0
 lang: zh
 ---

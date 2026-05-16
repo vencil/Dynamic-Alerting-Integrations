@@ -2,7 +2,7 @@
 title: "Planning Index — Discovery-based Backlog View"
 tags: [internal, dx, planning, derived-view]
 audience: [contributors, ai-agents]
-version: v2.8.0
+version: v2.8.1
 lang: zh
 ---
 

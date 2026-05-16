@@ -2,7 +2,7 @@
 title: "快速入門 — 角色導引"
 tags: [documentation, getting-started]
 audience: [all]
-version: v2.8.0
+version: v2.8.1
 lang: zh
 ---
 # 快速入門 — 選擇你的角色

@@ -2,7 +2,7 @@
 title: "Operator Shadow Monitoring Strategy"
 tags: [operator, shadow-monitoring, migration]
 audience: [platform-engineer]
-version: v2.8.0
+version: v2.8.1
 lang: en
 ---
 # Operator Shadow Monitoring Strategy

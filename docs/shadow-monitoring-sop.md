@@ -2,7 +2,7 @@
 title: "Shadow Monitoring SRE SOP"
 tags: [migration, shadow-monitoring, sop]
 audience: [sre, platform-engineer]
-version: v2.8.0
+version: v2.8.1
 lang: zh
 ---
 # Shadow Monitoring SRE SOP

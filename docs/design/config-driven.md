@@ -2,7 +2,7 @@
 title: "Config-Driven 架構設計 — 三態配置、動態路由、Tenant API"
 tags: [architecture, config-driven, design]
 audience: [platform-engineer, devops]
-version: v2.8.0
+version: v2.8.1
 lang: zh
 parent: architecture-and-design.md
 ---

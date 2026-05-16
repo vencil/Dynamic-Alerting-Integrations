@@ -2,7 +2,7 @@
 title: "Changelog"
 tags: [changelog, releases]
 audience: [all]
-version: v2.8.0
+version: v2.8.1
 lang: zh
 ---
 # Changelog
@@ -10,6 +10,12 @@ lang: zh
 All notable changes to the **Dynamic Alerting Integrations** project will be documented in this file.
 
 ## [Unreleased]
+
+<!-- 下一版 in-flight 工作暫存區。每筆 entry 目標 3-6 行使用者重點 + 一行指回內部 artifact；session 過程 / FUSE trap / 完整 commit list 不入此處。release 收尾時做最終 condensation 並切正式 `## [vX.Y.Z]` heading。 -->
+
+---
+
+## [v2.8.1] — secret-scan 四層防線 + Planning SSOT + DX 工具鏈收斂 (2026-05-16)
 
 ### Security
 
@@ -48,22 +54,6 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 - **Planning index 自動化**（issue [#379](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/379) chunk 2a）：新工具 `scripts/dx/generate_planning_index.py` 實作 ADR-019 Layer 2 — 從 4 個 source（`docs/**/*.md` top-of-file frontmatter / 嵌入式 yaml block / `flaky-tests.yaml` / code-comment `// TECH-DEBT(id=...)` 註解）發現帶 `tracking_kind:` 的 planning entry，分組（按 status × tracking_kind）渲染到 `docs/internal/planning-index.md` 哨點區塊。每個 entry 連結回 source path + line number。pre-commit drift gate `planning-index-check` + `make planning-index` 本地刷新。Top-level pre-commit hook 計數 49 → 50 auto-stage。
 - **Migration Guide hub slim**（issue [#378](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/378) II-1）：`docs/migration-guide.md` 從 808 行瘦身至 357 行 (-56%)，雙語同步。新增 §5-Step 高階流程 作為中心導航（從 toolkit 安裝到 cutover 收斂的 5 步表格 + 各步驟 anchor 連到對應章節 / spoke）；§0-§13 各章節保留 anchor ID（byte-for-byte，舊書籤不失效），body 收斂為 2-4 句摘要 + 連到 `cli-reference.md` / `migration-engine.md` / `shadow-monitoring-sop.md` / `scenarios/incremental-migration-playbook.md` / `scenarios/multi-system-migration-playbook.md` 等既有 spoke。§7 維度標籤（無 clean spoke）以壓縮 inline 形式保留。`### Q:` FAQ 全保留。
 - **ADR 索引自動化**（issue [#378](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/378) II-2）：新工具 `scripts/dx/generate_adr_index.py` 從 `docs/adr/` frontmatter + `## 狀態` 區塊自動渲染表至 `docs/architecture-and-design.md` 的 `<!-- ADR_INDEX_START/END -->` 哨點之間。新增 ADR 漏接 hub 索引的問題（ADR-018/019/020 都曾如此）由 pre-commit drift gate `adr-index-check` 機械擋下；本地用 `make adr-index` 重新渲染。Top-level pre-commit hook 計數 48 → 49 auto-stage。
-
-<!-- Editorial guideline（建立於 2026-04-23, refreshed v2.8.0 closure）：
-
-本節是下一版 in-progress 工作暫存區；**entries 目標長度：每筆 3-6 行面向
-使用者的重點 + 一行 `詳見 planning §N` / `commit <sha>` 指回內部 artifacts**。
-不要在此處記錄 session 過程、FUSE trap 實測、Cowork day-by-day、完整 commit
-list、每個 hook 名單等——該類內容屬於：
-
-  - docs/internal/<version>-planning-archive.md
-  - commit messages / PR discussion
-
-Phase .e E-5 會做最終 condensation + 切正式 `## [vX.Y.Z]` heading；若每筆
-bundle entry 都 ~30 行敘事，E-5 會變成重寫而非潤飾。請自律。
-
-Compare：v2.7.0 / v2.8.0 最終條目約 70-90 行（7-9 塊清楚區分），那是目標形狀。
--->
 
 ---
 

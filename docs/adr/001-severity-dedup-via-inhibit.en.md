@@ -2,7 +2,7 @@
 title: "ADR-001: Severity Dedup via Inhibit Rules"
 tags: [adr, architecture]
 audience: [platform-engineers]
-version: v2.8.0
+version: v2.8.1
 lang: en
 ---
 

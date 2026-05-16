@@ -2,7 +2,7 @@
 title: Lessons Learned Archive
 tags: [archive, lessons-learned, internal]
 audience: [platform-engineers, sres, contributor]
-version: v2.8.0
+version: v2.8.1
 lang: zh
 ---
 

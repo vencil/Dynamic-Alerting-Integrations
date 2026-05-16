@@ -2,7 +2,7 @@
 title: "ADR-018: Profile-as-Directory-Default"
 tags: [adr, profile-builder, conf-d, v2.8.0]
 audience: [platform-engineers, sre, contributors]
-version: v2.8.0
+version: v2.8.1
 lang: en
 ---
 

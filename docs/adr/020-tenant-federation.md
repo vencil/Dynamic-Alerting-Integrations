@@ -2,7 +2,7 @@
 title: "ADR-020: Tenant Federation — Label-Injection Proxy over Self-Built Endpoint"
 tags: [adr, federation, multi-tenant, security]
 audience: [platform-engineers, contributors]
-version: v2.8.0
+version: v2.8.1
 lang: zh
 id: ADR-020
 tracking_kind: adr

@@ -2,7 +2,7 @@
 title: "VictoriaMetrics 整合指南"
 tags: [integration, victoriametrics, vmagent, vmalert, metricsql]
 audience: [platform-engineers, sre, vm-operators]
-version: v2.8.0
+version: v2.8.1
 lang: zh
 ---
 

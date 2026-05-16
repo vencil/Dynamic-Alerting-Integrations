@@ -2,7 +2,7 @@
 title: "Component Health Snapshot (v2.7.0 Phase .a baseline)"
 tags: [internal, component-health, design-tokens, playwright]
 audience: [maintainer, ui-engineer]
-version: v2.8.0
+version: v2.8.1
 lang: zh
 ---
 # Component Health Snapshot (v2.7.0 Phase .a baseline)
