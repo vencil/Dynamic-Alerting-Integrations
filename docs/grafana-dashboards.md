@@ -2,7 +2,7 @@
 title: "Grafana Dashboard 導覽"
 tags: [monitoring, grafana, dashboard, operations]
 audience: [platform-engineer, sre, devops]
-version: v2.8.0
+version: v2.8.1
 lang: zh
 ---
 
@@ -10,7 +10,7 @@ lang: zh
 
 > **Language / 語言：** **中文 (Current)** | [English](./grafana-dashboards.en.md)
 
-> **v2.8.0** | 適用對象：Platform Engineer、SRE、DevOps
+> **v2.8.1** | 適用對象：Platform Engineer、SRE、DevOps
 >
 > 相關文件：[Architecture](./architecture-and-design.md) · [Troubleshooting](./troubleshooting.md) · [Shadow Monitoring SOP](./shadow-monitoring-sop.md)
 

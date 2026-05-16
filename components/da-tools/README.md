@@ -355,7 +355,7 @@ DA_LANG=en docker run --rm ghcr.io/vencil/da-tools migrate --help
 
 | 元件 | 版號 | Git Tag | 內容 |
 |------|------|---------|------|
-| 平台文件 | v2.8.0 | `v2.8.0` | 整體釋出版本 |
+| 平台文件 | v2.8.1 | `v2.8.1` | 整體釋出版本 |
 | threshold-exporter | v2.8.0 | `exporter/v2.8.0` | Go binary（含 da-guard / da-batchpr / da-parser） |
 | **da-tools** | **v2.8.0** | **`tools/v2.8.0`** | 本 image（45 個 Python CLI + 3 個 bundled Go binary） |
 | da-portal | v2.8.0 | `portal/v2.8.0` | Interactive Tools Hub image |

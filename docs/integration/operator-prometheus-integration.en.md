@@ -2,7 +2,7 @@
 title: "Operator Prometheus Integration Guide"
 tags: [operator, prometheus, integration]
 audience: [platform-engineer]
-version: v2.8.0
+version: v2.8.1
 lang: en
 ---
 # Operator Prometheus Integration Guide

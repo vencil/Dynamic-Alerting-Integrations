@@ -2,7 +2,7 @@
 title: "I-4 Runbook Smoke Test Report"
 tags: [validation, runbook, troubleshooting, smoke-test]
 audience: [maintainers, sre]
-version: v2.8.0
+version: v2.8.1
 lang: zh
 ---
 

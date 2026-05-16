@@ -2,7 +2,7 @@
 title: "ADR-003: Sentinel Alert 模式"
 tags: [adr, architecture]
 audience: [platform-engineers]
-version: v2.8.0
+version: v2.8.1
 lang: zh
 id: ADR-003
 tracking_kind: adr

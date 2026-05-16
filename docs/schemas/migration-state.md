@@ -2,7 +2,7 @@
 title: "Migration State Schema (.da/migration-state.json)"
 tags: [schema, migration, multi-system, automation]
 audience: [platform-engineers, sre, automation]
-version: v2.8.0
+version: v2.8.1
 lang: zh
 ---
 

@@ -2,7 +2,7 @@
 title: "前端品質待辦 (Frontend Quality Backlog)"
 tags: [internal, testing, playwright, a11y, quality]
 audience: [maintainers, ai-agent]
-version: v2.8.0
+version: v2.8.1
 lang: zh
 ---
 

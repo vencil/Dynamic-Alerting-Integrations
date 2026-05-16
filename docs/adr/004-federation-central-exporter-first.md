@@ -2,7 +2,7 @@
 title: "ADR-004: Federation 架構——中央 Exporter 優先"
 tags: [adr, architecture]
 audience: [platform-engineers]
-version: v2.8.0
+version: v2.8.1
 lang: zh
 id: ADR-004
 tracking_kind: adr

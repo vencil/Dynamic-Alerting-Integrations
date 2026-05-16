@@ -2,7 +2,7 @@
 title: "BYO Alertmanager 整合指南"
 tags: [integration, alertmanager]
 audience: [platform-engineer, sre]
-version: v2.8.0
+version: v2.8.1
 lang: zh
 ---
 # BYO Alertmanager 整合指南

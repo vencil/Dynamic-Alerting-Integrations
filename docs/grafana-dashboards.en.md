@@ -2,7 +2,7 @@
 title: "Grafana Dashboard Guide"
 tags: [monitoring, grafana, dashboard, operations]
 audience: [platform-engineer, sre, devops]
-version: v2.8.0
+version: v2.8.1
 lang: en
 ---
 
@@ -10,7 +10,7 @@ lang: en
 
 > **Language / 語言：** **English (Current)** | [中文](./grafana-dashboards.md)
 
-> **v2.8.0** | Audience: Platform Engineers, SREs, DevOps
+> **v2.8.1** | Audience: Platform Engineers, SREs, DevOps
 >
 > Related docs: [Architecture] · [Troubleshooting] · [Shadow Monitoring SOP]
 

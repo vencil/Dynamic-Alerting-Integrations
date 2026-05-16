@@ -2,7 +2,7 @@
 title: "Performance Benchmarks"
 tags: [performance, benchmarks]
 audience: [platform-engineer, sre]
-version: v2.8.0
+version: v2.8.1
 lang: en
 ---
 # Performance Benchmarks

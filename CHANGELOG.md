@@ -2,7 +2,7 @@
 title: "Changelog"
 tags: [changelog, releases]
 audience: [all]
-version: v2.8.0
+version: v2.8.1
 lang: zh
 ---
 # Changelog
@@ -10,6 +10,12 @@ lang: zh
 All notable changes to the **Dynamic Alerting Integrations** project will be documented in this file.
 
 ## [Unreleased]
+
+<!-- 下一版 in-flight 工作暫存區。每筆 entry 目標 3-6 行使用者重點 + 一行指回內部 artifact；session 過程 / FUSE trap / 完整 commit list 不入此處。release 收尾時做最終 condensation 並切正式 `## [vX.Y.Z]` heading。 -->
+
+---
+
+## [v2.8.1] — secret-scan 四層防線 + Planning SSOT + DX 工具鏈收斂 (2026-05-16)
 
 ### Security
 
@@ -27,7 +33,7 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 
 ### DX
 
-- **移除 phantom no-op lint `check-techdebt-drift`**：`check_techdebt_drift.py` 的資料來源 `docs/internal/known-regressions.md` 已於 v2.8.0 phantom-delete，該 lint 隨即 graceful 退化為永遠 exit 0 的 no-op（`parse_registry()` 對缺檔回空 dict → `main()` 印「nothing to check」return 0）；其職責由繼任者 `check_planning_status_sync.py`（issue [#379](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/379) chunk 2b，ADR-019 Layer 3 — 從 PR commit trailer 驗 planning entry status sync）接手。移除 `scripts/tools/lint/check_techdebt_drift.py` + `tests/lint/test_check_techdebt_drift.py` + `.pre-commit-config.yaml` 的 `check-techdebt-drift` pre-push hook，pre-push hook 計數 4 → 3（`CLAUDE.md` 同步）；`tool-map.md` / `.en.md` 重新產生，`dev-rules.md` §P1 與 `planning-id-mapping.md` §影響的 lint 引用更新。
+- **移除 phantom no-op lint `check-techdebt-drift`**：`check_techdebt_drift.py` 的資料來源 `docs/internal/known-regressions.md` 已在 v2.8.0 被 phantom-delete，該 lint 隨即 graceful 退化為永遠 exit 0 的 no-op（`parse_registry()` 對缺檔回空 dict → `main()` 印「nothing to check」return 0）；其職責由繼任者 `check_planning_status_sync.py`（issue [#379](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/379) chunk 2b，ADR-019 Layer 3 — 從 PR commit trailer 驗 planning entry status sync）接手。移除 `scripts/tools/lint/check_techdebt_drift.py` + `tests/lint/test_check_techdebt_drift.py` + `.pre-commit-config.yaml` 的 `check-techdebt-drift` pre-push hook，pre-push hook 計數 4 → 3（`CLAUDE.md` 同步）；`tool-map.md` / `.en.md` 重新產生，`dev-rules.md` §P1 與 `planning-id-mapping.md` §影響的 lint 引用更新。
 
 - **`_lib_compat.try_utf8_stdout()` Phase B sweep — 77 tools migrated**（issue [#489](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/489) Phase B）：對 scripts/tools/ 下 77 個 emit emoji 但無 stdout encoding 設定的工具（CLI tier — `def main(...)` 入口、非 library module）以 ast-based sweep 加入 `from _lib_compat import try_utf8_stdout` + `try_utf8_stdout()` 為 main() 第一行。Script 處理三類 edge case：(1) 多行 `from X import (a, b, c)` block — 用 ast `end_lineno` 找閉括號位置，不破壞 import；(2) `def main(): """docstring"""` — 偵測 first body node 是否為 docstring，是的話 `try_utf8_stdout()` 注入到 docstring 之後（保留 docstring 性質）；(3) 既有 `_THIS_DIR = Path(__file__).resolve().parent`（5 個檔案）— 偵測到不 clobber，重用既有變數並 `str(_THIS_DIR)` wrap 讓 `sys.path.insert` 對 Path/str 都通；anchor 點放在既有 `_THIS_DIR =` 之後（避免 NameError）。1 個 library module（`_grar_render.py` — 無 `def main()`，被 `generate_alertmanager_routes.py` import）刻意跳過（library 不該動 stdout）。7241 個 pytest 全綠（3 個 pre-existing flakes 與本次無關，stash-verified）。本次後 `grep -rn '^[^#]*sys\.stdout *= *io' scripts/` 回空 — legacy module-level pattern 完全退役（Phase A 退 `pr_preflight.py` + Phase B 退 77 個從未設定的工具 = 全部）。Phase B 與 Phase A 同 issue 但因 scope 大、commit 巨拆成獨立 PR 易 review。Method-level note：兩輪 sweep script bug 都靠 pytest catch（不是 ast parsing — ast OK 但 runtime semantic 錯）— 提醒「parses cleanly」≠「runs correctly」，full test 必跑。
 
@@ -48,22 +54,6 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 - **Planning index 自動化**（issue [#379](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/379) chunk 2a）：新工具 `scripts/dx/generate_planning_index.py` 實作 ADR-019 Layer 2 — 從 4 個 source（`docs/**/*.md` top-of-file frontmatter / 嵌入式 yaml block / `flaky-tests.yaml` / code-comment `// TECH-DEBT(id=...)` 註解）發現帶 `tracking_kind:` 的 planning entry，分組（按 status × tracking_kind）渲染到 `docs/internal/planning-index.md` 哨點區塊。每個 entry 連結回 source path + line number。pre-commit drift gate `planning-index-check` + `make planning-index` 本地刷新。Top-level pre-commit hook 計數 49 → 50 auto-stage。
 - **Migration Guide hub slim**（issue [#378](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/378) II-1）：`docs/migration-guide.md` 從 808 行瘦身至 357 行 (-56%)，雙語同步。新增 §5-Step 高階流程 作為中心導航（從 toolkit 安裝到 cutover 收斂的 5 步表格 + 各步驟 anchor 連到對應章節 / spoke）；§0-§13 各章節保留 anchor ID（byte-for-byte，舊書籤不失效），body 收斂為 2-4 句摘要 + 連到 `cli-reference.md` / `migration-engine.md` / `shadow-monitoring-sop.md` / `scenarios/incremental-migration-playbook.md` / `scenarios/multi-system-migration-playbook.md` 等既有 spoke。§7 維度標籤（無 clean spoke）以壓縮 inline 形式保留。`### Q:` FAQ 全保留。
 - **ADR 索引自動化**（issue [#378](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/378) II-2）：新工具 `scripts/dx/generate_adr_index.py` 從 `docs/adr/` frontmatter + `## 狀態` 區塊自動渲染表至 `docs/architecture-and-design.md` 的 `<!-- ADR_INDEX_START/END -->` 哨點之間。新增 ADR 漏接 hub 索引的問題（ADR-018/019/020 都曾如此）由 pre-commit drift gate `adr-index-check` 機械擋下；本地用 `make adr-index` 重新渲染。Top-level pre-commit hook 計數 48 → 49 auto-stage。
-
-<!-- Editorial guideline（建立於 2026-04-23, refreshed v2.8.0 closure）：
-
-本節是下一版 in-progress 工作暫存區；**entries 目標長度：每筆 3-6 行面向
-使用者的重點 + 一行 `詳見 planning §N` / `commit <sha>` 指回內部 artifacts**。
-不要在此處記錄 session 過程、FUSE trap 實測、Cowork day-by-day、完整 commit
-list、每個 hook 名單等——該類內容屬於：
-
-  - docs/internal/<version>-planning-archive.md
-  - commit messages / PR discussion
-
-Phase .e E-5 會做最終 condensation + 切正式 `## [vX.Y.Z]` heading；若每筆
-bundle entry 都 ~30 行敘事，E-5 會變成重寫而非潤飾。請自律。
-
-Compare：v2.7.0 / v2.8.0 最終條目約 70-90 行（7-9 塊清楚區分），那是目標形狀。
--->
 
 ---
 
