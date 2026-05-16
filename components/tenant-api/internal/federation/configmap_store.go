@@ -143,7 +143,10 @@ func (s *configMapStore) mutate(apply func(*storeDoc)) error {
 		apply(doc)
 		doc.SchemaVersion = storeSchemaVersion
 
-		raw, err := json.MarshalIndent(doc, "", "  ")
+		// Compact, not indented: store.json is machine-read/written
+		// state, and a ConfigMap has a hard ~1MiB ceiling — indentation
+		// would burn 20-30% of that budget for readability nobody needs.
+		raw, err := json.Marshal(doc)
 		if err != nil {
 			return err
 		}
@@ -253,7 +256,10 @@ func pruneDoc(doc *storeDoc, now time.Time) {
 }
 
 // revokedText renders the gateway-facing revoked.txt: one token_id per
-// line, non-expired entries only.
+// line, non-expired entries only. The format is deliberately neutral —
+// a plain id list any consumer can parse — not tailored to one gateway
+// (e.g. Nginx `map` `<id> 1;` syntax). The gateway-specific encoding is
+// settled when the gateway is built (sub-issue IV-2b), not guessed here.
 func revokedText(revoked []revokedEntry, now time.Time) string {
 	var b strings.Builder
 	for _, e := range revoked {

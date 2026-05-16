@@ -56,6 +56,26 @@ func TestMintLimiter_DeniedAttemptNotRecorded(t *testing.T) {
 	}
 }
 
+func TestMintLimiter_EvictsIdleTenants(t *testing.T) {
+	t.Parallel()
+	l := newMintLimiter()
+	t0 := time.Now()
+	l.allow("tenant-gone", t0)
+	if len(l.hits) != 1 {
+		t.Fatalf("expected 1 tracked tenant after a mint, got %d", len(l.hits))
+	}
+	// A later mint by a different tenant, past tenant-gone's window,
+	// must evict tenant-gone's now-stale key — otherwise the map leaks
+	// one key per tenant that ever minted and never returned.
+	l.allow("tenant-other", t0.Add(mintWindow+time.Second))
+	if _, ok := l.hits["tenant-gone"]; ok {
+		t.Error("idle tenant key was not evicted — mintLimiter map leaks")
+	}
+	if _, ok := l.hits["tenant-other"]; !ok {
+		t.Error("the active tenant's key should still be tracked")
+	}
+}
+
 func TestMintLimiter_PerTenantIsolation(t *testing.T) {
 	t.Parallel()
 	l := newMintLimiter()
