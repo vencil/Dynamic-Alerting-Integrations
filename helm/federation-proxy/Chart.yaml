@@ -6,6 +6,9 @@ type: application
 version: 0.1.0
 # appVersion: pinned prom-label-proxy release
 appVersion: "v0.13.0"
+# kubeVersion: the deployment uses the native preStop.sleep lifecycle
+# action, beta-on-by-default since Kubernetes 1.29.
+kubeVersion: ">=1.29.0-0"
 keywords:
   - dynamic-alerting
   - tenant-federation

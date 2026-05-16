@@ -71,10 +71,37 @@ autoscaling:
 resources:
   requests:
     cpu: 100m
-    memory: 64Mi
+    memory: 128Mi
   limits:
     cpu: 500m
-    memory: 128Mi
+    memory: 256Mi
+
+# GOMEMLIMIT — Go soft memory ceiling. prom-label-proxy parses PromQL into
+# an AST; under a burst that churns the Go heap. GOMEMLIMIT makes the
+# runtime GC *before* it slams the cgroup hard limit and the pod is
+# OOMKilled. Keep it ~10% below resources.limits.memory — it bounds the Go
+# heap; the binary's own RSS sits on top.
+goMemLimit: "230MiB"
+
+# Graceful shutdown. A federation query may run up to 30s (ADR-020 Layer 1
+# cap). On scale-down / rollout the pod must drain in-flight queries, not
+# be SIGKILLed mid-query (which surfaces to Grafana as a 502).
+#   preStopSleepSeconds — pod sleeps this long after SIGTERM before the
+#     process is signalled, so the Service endpoint is withdrawn first and
+#     no new request races into a terminating pod. The native preStop.sleep
+#     action needs Kubernetes >= 1.29 (enforced via Chart.yaml kubeVersion).
+#   terminationGracePeriodSeconds — must exceed preStopSleep + the 30s max
+#     query so an in-flight query can finish before SIGKILL.
+preStopSleepSeconds: 5
+terminationGracePeriodSeconds: 45
+
+# PodDisruptionBudget — keeps the federation read path up during VOLUNTARY
+# disruptions (node drain, cluster upgrade). Without it a drain can evict
+# every replica at once. maxUnavailable caps concurrent voluntary evictions
+# regardless of how far the HPA has scaled out.
+podDisruptionBudget:
+  enabled: true
+  maxUnavailable: 1
 
 # Pod security context (non-root, unprivileged).
 podSecurityContext:

@@ -71,6 +71,25 @@ stdout would be brittle. Per-request audit (tenant_id, token_id, rewritten
 query) is the gateway's responsibility (IV-2b / #507), where the JWT is
 already decoded.
 
+## Resiliency
+
+Production HA is more than `replicaCount: 2` — the chart hardens four
+failure modes:
+
+- **Node failure** — a soft `podAntiAffinity` spreads replicas across
+  nodes, so losing one node does not take out the read path.
+- **Voluntary disruption** — a `PodDisruptionBudget` (`maxUnavailable: 1`)
+  keeps a replica serving through node drains and cluster upgrades.
+- **Mid-query termination** — on scale-down / rollout a native
+  `preStop.sleep` lets the Service endpoint drain before SIGTERM, and
+  `terminationGracePeriodSeconds` (45s, > the 30s max query) lets an
+  in-flight query finish instead of surfacing a 502.
+- **OOMKill** — `GOMEMLIMIT` makes the Go runtime GC before it reaches
+  the cgroup memory hard limit.
+
+The native `preStop.sleep` action requires **Kubernetes >= 1.29**,
+enforced by the chart's `kubeVersion` constraint.
+
 ## Key values
 
 | Key | Default | Notes |
@@ -81,6 +100,10 @@ already decoded.
 | `networkPolicy.enabled` | `true` | Security-critical — see above |
 | `networkPolicy.gatewaySelector` | `app.kubernetes.io/name: federation-gateway` | Pod labels of the only allowed ingress source |
 | `autoscaling.targetCPUUtilizationPercentage` | `70` | Query rewriting is CPU-bound |
+| `resources.limits.memory` | `256Mi` | Bump in tandem with `goMemLimit` |
+| `goMemLimit` | `230MiB` | `GOMEMLIMIT` env — keep ~10% below the memory limit |
+| `terminationGracePeriodSeconds` | `45` | Must exceed `preStopSleepSeconds` + the 30s max query |
+| `podDisruptionBudget.enabled` | `true` | Voluntary-disruption protection |
 
 prom-label-proxy image is pinned: `quay.io/prometheuscommunity/prom-label-proxy:v0.13.0`.
 
