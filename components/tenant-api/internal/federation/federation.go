@@ -47,6 +47,12 @@ const issuer = "tenant-api"
 // prefix keeps those lines greppable.
 const tokenIDPrefix = "ftk_"
 
+// minRSAKeyBits is the smallest RSA modulus accepted for the signing
+// key. Below 2048 bits a forged signature becomes computationally
+// feasible, so a weak key is a silent vulnerability — it is rejected
+// at load time rather than allowed to sign tokens.
+const minRSAKeyBits = 2048
+
 // Claims is the JWT payload of a federation token.
 //
 // TenantID and TokenID are the cross-component contract fixed by
@@ -198,7 +204,7 @@ func newTokenID() (string, error) {
 
 // loadPrivateKey reads an RSA private key from a PEM file, accepting
 // both PKCS#8 (BEGIN PRIVATE KEY) and PKCS#1 (BEGIN RSA PRIVATE KEY)
-// encodings.
+// encodings. A key smaller than minRSAKeyBits is rejected.
 func loadPrivateKey(path string) (*rsa.PrivateKey, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -208,14 +214,27 @@ func loadPrivateKey(path string) (*rsa.PrivateKey, error) {
 	if block == nil {
 		return nil, errors.New("no PEM block found in key file")
 	}
-	if k, err := x509.ParsePKCS8PrivateKey(block.Bytes); err == nil {
+	key, err := parseRSAPrivateKey(block.Bytes)
+	if err != nil {
+		return nil, err
+	}
+	if bits := key.N.BitLen(); bits < minRSAKeyBits {
+		return nil, fmt.Errorf("RSA signing key is %d-bit, want at least %d-bit", bits, minRSAKeyBits)
+	}
+	return key, nil
+}
+
+// parseRSAPrivateKey decodes DER bytes as an RSA private key, trying
+// PKCS#8 first then PKCS#1.
+func parseRSAPrivateKey(der []byte) (*rsa.PrivateKey, error) {
+	if k, err := x509.ParsePKCS8PrivateKey(der); err == nil {
 		rk, ok := k.(*rsa.PrivateKey)
 		if !ok {
 			return nil, fmt.Errorf("key is %T, want an RSA private key", k)
 		}
 		return rk, nil
 	}
-	rk, err := x509.ParsePKCS1PrivateKey(block.Bytes)
+	rk, err := x509.ParsePKCS1PrivateKey(der)
 	if err != nil {
 		return nil, fmt.Errorf("parse RSA private key: %w", err)
 	}

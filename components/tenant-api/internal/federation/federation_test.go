@@ -274,3 +274,23 @@ func TestStore_Persistence(t *testing.T) {
 		t.Errorf("reloaded record = %+v", got)
 	}
 }
+
+func TestNewManager_RejectsWeakKey(t *testing.T) {
+	t.Parallel()
+	key, err := rsa.GenerateKey(rand.Reader, 1024)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	der, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatalf("marshal key: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "weak.pem")
+	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
+	if err := os.WriteFile(path, pemBytes, 0o600); err != nil {
+		t.Fatalf("write key: %v", err)
+	}
+	if _, err := NewManager(path, filepath.Join(t.TempDir(), "s.json"), time.Hour); err == nil {
+		t.Fatal("expected an error for a sub-2048-bit RSA signing key")
+	}
+}

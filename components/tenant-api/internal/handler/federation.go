@@ -84,6 +84,14 @@ func (d *Deps) CreateFederationToken() http.HandlerFunc {
 			writeValidationErrors(w, r, violations)
 			return
 		}
+		// Reject path-traversal / non-simple tenant IDs — the same gate
+		// the other tenant-scoped handlers use, applied here for
+		// consistency and defence-in-depth (the RBAC check below is the
+		// real bar).
+		if err := ValidateTenantID(req.TenantID); err != nil {
+			writeJSONError(w, r, http.StatusBadRequest, err.Error())
+			return
+		}
 
 		// Federation token issuance is data egress — require admin on
 		// the target tenant (ADR-020 Wave-0 decision 5).
@@ -124,6 +132,10 @@ func (d *Deps) ListFederationTokens() http.HandlerFunc {
 		tenantID := r.URL.Query().Get("tenant_id")
 		if tenantID == "" {
 			writeJSONError(w, r, http.StatusBadRequest, "query parameter tenant_id is required")
+			return
+		}
+		if err := ValidateTenantID(tenantID); err != nil {
+			writeJSONError(w, r, http.StatusBadRequest, err.Error())
 			return
 		}
 

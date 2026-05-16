@@ -283,3 +283,41 @@ func TestDeleteFederationToken_ForbiddenWithoutAdmin(t *testing.T) {
 		t.Error("token record should survive a forbidden delete")
 	}
 }
+
+// --- tenant_id validation ---
+
+func TestCreateFederationToken_RejectsInvalidTenantID(t *testing.T) {
+	t.Parallel()
+	rbacMgr := newRBACManager(t, fedAdminRBAC)
+	d := &Deps{RBAC: rbacMgr, Federation: newTestFederation(t)}
+
+	req := httptest.NewRequest("POST", "/api/v1/federation/tokens",
+		bytes.NewBufferString(`{"tenant_id":"../escape"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Forwarded-Email", "ops@example.com")
+	req.Header.Set("X-Forwarded-Groups", "fed-admins")
+
+	w := httptest.NewRecorder()
+	wrapWithRBACMiddleware(d.CreateFederationToken(), rbacMgr, rbac.PermRead, nil).ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", w.Code)
+	}
+}
+
+func TestListFederationTokens_RejectsInvalidTenantID(t *testing.T) {
+	t.Parallel()
+	rbacMgr := newRBACManager(t, fedAdminRBAC)
+	d := &Deps{RBAC: rbacMgr, Federation: newTestFederation(t)}
+
+	req := httptest.NewRequest("GET", "/api/v1/federation/tokens?tenant_id=../escape", nil)
+	req.Header.Set("X-Forwarded-Email", "ops@example.com")
+	req.Header.Set("X-Forwarded-Groups", "fed-admins")
+
+	w := httptest.NewRecorder()
+	wrapWithRBACMiddleware(d.ListFederationTokens(), rbacMgr, rbac.PermRead, nil).ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", w.Code)
+	}
+}

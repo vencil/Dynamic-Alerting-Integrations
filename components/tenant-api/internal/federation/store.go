@@ -20,6 +20,13 @@ import (
 // signed JWTs remain valid (verification is stateless) until they
 // expire. For production the store path should point at a mounted
 // volume; see main.go's --federation-store flag.
+//
+// MVP constraint: the store is pod-local. With tenant-api scaled past
+// one replica, GET listings become per-replica and inconsistent
+// (token signing and proxy-side verification are unaffected — both are
+// stateless). v2.9.0 ships with replicaCount=1; a multi-replica
+// deployment needs a shared store, which is also the prerequisite for
+// a future server-side revocation list.
 type store struct {
 	path string
 	mu   sync.Mutex
