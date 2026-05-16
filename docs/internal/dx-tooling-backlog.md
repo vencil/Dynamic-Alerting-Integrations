@@ -444,7 +444,7 @@ updated_at: 2026-05-13
 ```
 
 
-**問題來源**：v2.7.0 doc-sync 過程，config-driven.md + .en.md 第一次寫入的連結是 `017-confd-hierarchy.md` + `018-defaults-inheritance-hot-reload.md`，實際檔名是 `017-conf-d-directory-hierarchy-mixed-mode.md` + `018-defaults-yaml-inheritance-dual-hash.md`。`doc-links-check` hook 只檢查 HTTP 連結，**內部相對路徑連結只要 target file 存在就 pass**，但**檔名改版本會漏抓**。
+**問題來源**：v2.7.0 doc-sync 過程，config-driven.md + .en.md 第一次寫入的連結是 `017-confd-hierarchy.md` + `018-defaults-inheritance-hot-reload.md`，實際檔名是 `016-conf-d-directory-hierarchy-mixed-mode.md` + `017-defaults-yaml-inheritance-dual-hash.md`。`doc-links-check` hook 只檢查 HTTP 連結，**內部相對路徑連結只要 target file 存在就 pass**，但**檔名改版本會漏抓**。
 
 **設計**：新增 `scripts/tools/lint/check_internal_link_filenames.py`：
 
@@ -455,7 +455,7 @@ updated_at: 2026-05-13
 **挑戰**：匹配規則容易產生 false positive。建議先採「只對 ADR 目錄啟用，且要求連結 context 內提及 ADR 編號」的保守策略：
 
 ```python
-# 若連結 context 提及 "ADR-017"，則 target 必須命中 017- 開頭的檔名
+# 若連結 context 提及 "ADR-016"，則 target 必須命中 017- 開頭的檔名
 ```
 
 **前置**：無
@@ -483,7 +483,7 @@ v2.7.0:
   must_mention_if_touched:
     - "config-driven.md": ["conf.d", "_defaults.yaml", "dual-hash", "/effective"]
     - "metrics-architecture.md": ["da_config_scan_duration_seconds", "da_config_reload_trigger_total"]
-    - "architecture-and-design.md": ["ADR-017", "ADR-018", "Component Health"]
+    - "architecture-and-design.md": ["ADR-016", "ADR-017", "Component Health"]
 ```
 
 2. 對於 front-matter 標記 `version: v2.7.0` 的 spoke 文件，grep body 必須命中對照表的 N 個關鍵字

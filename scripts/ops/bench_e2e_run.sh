@@ -121,7 +121,7 @@ cp -r "$FIXTURE_SOURCE_DIR/." fixture/active/conf.d/
 # per-run-*.json showed T1+T2 advance correctly (PR #86 fix worked) but
 # T3=0, T4=0 → alert never fired → metric absent from Prometheus.
 #
-# `_defaults.yaml` lives at root of conf.d/ (root scope per ADR-018).
+# `_defaults.yaml` lives at root of conf.d/ (root scope per ADR-017).
 # Append `bench_trigger: 50` if the file already exists; else create it.
 # Value 50 is below driver fire-phase actual=200 (alert fires) and
 # above driver resolve-phase actual=50 (alert resolves) … wait, no:

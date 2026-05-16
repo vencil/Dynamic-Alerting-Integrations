@@ -1,14 +1,14 @@
 ---
-title: "ADR-015: wizard.jsx design token migration adopts Option A (full Tailwind arbitrary value rewrite)"
+title: "ADR-014: wizard.jsx design token migration adopts Option A (full Tailwind arbitrary value rewrite)"
 tags: [adr, design-tokens, v2.7.0]
 audience: [frontend-developers, maintainers]
 version: v2.8.0
 lang: en
 ---
 
-# ADR-015: wizard.jsx design token migration adopts Option A (full Tailwind arbitrary value rewrite)
+# ADR-014: wizard.jsx design token migration adopts Option A (full Tailwind arbitrary value rewrite)
 
-> **Language / 語言：** **English (Current)** | [中文](./015-wizard-arbitrary-value-token-migration.md)
+> **Language / 語言：** **English (Current)** | [中文](./014-wizard-arbitrary-value-token-migration.md)
 
 > This decision shaped the token-migration pattern used by every subsequent
 > JSX tool in v2.7.0, so it warrants its own ADR for new tools to follow.
@@ -21,7 +21,7 @@ landed 69 occurrences rewritten, 19 state-specific colors explicitly retained.
 
 ## Background
 
-wizard.jsx (`docs/getting-started/wizard.jsx`, ~900 LOC at the time) was the
+wizard.jsx (`tools/portal/src/getting-started/wizard.jsx`, ~900 LOC at the time) was the
 "largest design system decoupling case":
 **0% token adoption**, 100% Tailwind core palette (slate/blue/emerald/amber/red)
 hardcoded, flagship onboarding tool but completely ignoring `--da-color-*` tokens.
@@ -40,7 +40,7 @@ involved different trade-offs:
 1. wizard is the flagship; **using it as a "new pattern" example** has the highest value
 2. The true power of `var(--da-color-*)` is automatic token swapping on `[data-theme="dark"]`,
    while Tailwind `dark:` variant requires double-ups for every class → Option A naturally wins
-   after ADR-016 selects single-track `[data-theme]` routing
+   after ADR-015 selects single-track `[data-theme]` routing
 3. Option B leaving half Tailwind results in "looks migrated but dark mode still broken" →
    quality debt becomes more hidden
 4. Option C defers the entire onboarding core work; risk unacceptable
@@ -65,7 +65,7 @@ with reasons, serving as a waiver list for future audits.
 ### Positive
 - **Establishes the v2.7.0 standard migration pattern**: subsequent deployment-wizard, rbac, cicd,
   threshold-heatmap migrations all follow Option A rewrite style and waiver annotations
-- Dark mode cleanly aligns with ADR-016 (`[data-theme]` single-track routing)
+- Dark mode cleanly aligns with ADR-015 (`[data-theme]` single-track routing)
 - New developers only need to inspect wizard.jsx diff to understand how to migrate the next tool
 
 ### Negative / Risks
@@ -87,7 +87,7 @@ with reasons, serving as a waiver list for future audits.
 
 ## Cross-References
 
-- `docs/getting-started/wizard.jsx` (implementation)
+- `tools/portal/src/getting-started/wizard.jsx` (implementation)
 - Commit `ec07914`
-- [ADR-016: `[data-theme]` Single-track Dark Mode](016-data-theme-single-track-dark-mode.en.md) — paired dark mode decision
+- [ADR-015: `[data-theme]` Single-track Dark Mode](015-data-theme-single-track-dark-mode.en.md) — paired dark mode decision
 - TRK-203 (token-pair contrast issue surfaced by later runtime contrast audit, not directly caused by this ADR)

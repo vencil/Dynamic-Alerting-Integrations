@@ -1,10 +1,10 @@
 ---
-title: "ADR-020: Planning SSOT — Frontmatter Contract + Discovery-based Index"
+title: "ADR-019: Planning SSOT — Frontmatter Contract + Discovery-based Index"
 tags: [adr, dx, planning, ai-agent, governance]
 audience: [platform-engineers, contributors, ai-agents]
 version: v2.8.0
 lang: zh
-id: ADR-020
+id: ADR-019
 tracking_kind: adr
 status: accepted
 domain: docs
@@ -12,12 +12,12 @@ created_at: 2026-05-10
 updated_at: 2026-05-13
 ---
 
-# ADR-020: Planning SSOT — Frontmatter Contract + Discovery-based Index
+# ADR-019: Planning SSOT — Frontmatter Contract + Discovery-based Index
 
 > 跨檔分散的計畫追蹤（tech-debt / dx-backlog / known-regression / future-roadmap / sprint planning）統一治理。
 > 對 AI agent 解決 context fragmentation；對人類 contributor 提供單一索引入口。
 >
-> **EN mirror**：本 ADR 已 `Accepted`；EN 翻譯 tracked under [issue #409](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/409)（與 ADR-019 對齊的雙語策略）。
+> **EN mirror**：本 ADR 已 `Accepted`；EN 翻譯 tracked under [issue #409](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/409)（與 ADR-018 對齊的雙語策略）。
 
 ## 狀態
 
@@ -63,7 +63,7 @@ updated_at: 2026-05-13
 
 ```yaml
 ---
-id: TRK-042 | S#74 | ADR-019    # 三 namespace 共存，見下方 namespace policy
+id: TRK-042 | S#74 | ADR-018    # 三 namespace 共存，見下方 namespace policy
 tracking_kind: tech-debt | feature | dx | regression | adr | sprint
 status: proposed | accepted | in-progress | done | abandoned | superseded
 domain: tenant-api | exporter | portal | docs | ci | rule-packs | ...
@@ -86,7 +86,7 @@ owner: poyu                     # optional：誰負責
 | Namespace | 用途 | 為什麼不合併 |
 |---|---|---|
 | **TRK-NNN** | 統一 debt/regression/dx tracking。**取代既有 TD-NN / HA-NN / REG-NN** 三個分散 namespace | 三者本質同類（都是「該修還沒修」狀態追蹤），分散是歷史包袱。AI/人類各自記三個 prefix 沒價值 |
-| **ADR-NNN** | 架構設計決策史 | ADR 是 **永久 design history**，不是 backlog。已被多處 user-facing doc / commit / external citation 引用（如 [README.md](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/README.md) 引用 ADR-007/ADR-018/ADR-019 等）；rename 等於重寫設計史，redirect mapping 永遠維護。語意上 ADR 與 TRK 也根本不同：ADR 是「**這個決策當時為什麼**」，TRK 是「**這個工作 done 了沒**」 |
+| **ADR-NNN** | 架構設計決策史 | ADR 是 **永久 design history**，不是 backlog。已被多處 user-facing doc / commit / external citation 引用（如 [README.md](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/README.md) 引用 ADR-007/ADR-017/ADR-018 等）；rename 等於重寫設計史，redirect mapping 永遠維護。語意上 ADR 與 TRK 也根本不同：ADR 是「**這個決策當時為什麼**」，TRK 是「**這個工作 done 了沒**」 |
 | **S#NNN** | Sprint planning ledger（時序性、跨 sprint 的階段標記） | S# 對應 sprint 內 work item，本質是時序 + 階段，跟跨 sprint 的持續債務不同。混入 TRK 會稀釋語意。Sprint 結束後若條目仍 open 才 promote 為 TRK（done 的 sprint 條目歸檔即可，不必 rename） |
 
 ### TD-NN / HA-NN / REG-NN → TRK-NNN 遷移
@@ -104,7 +104,7 @@ ADR 與 S# 的 frontmatter `id:` 維持原 namespace：
 
 ```yaml
 # ADR
-id: ADR-020
+id: ADR-019
 tracking_kind: adr
 
 # Sprint

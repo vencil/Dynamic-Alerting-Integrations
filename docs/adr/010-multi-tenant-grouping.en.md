@@ -164,5 +164,5 @@ Structured fields (environment, domain, db_type) are better suited for UI filter
 - `components/tenant-api/internal/groups/groups.go` — Group manager implementation
 - `components/tenant-api/internal/handler/group.go` — Group CRUD handlers
 - `components/tenant-api/internal/handler/group_batch.go` — Group batch handler
-- `docs/interactive/tools/tenant-manager.jsx` — UI implementation
+- `tools/portal/src/interactive/tools/tenant-manager.jsx` — UI implementation
 - `scripts/tools/dx/generate_tenant_metadata.py` — Metadata generator with multi-dimension grouping

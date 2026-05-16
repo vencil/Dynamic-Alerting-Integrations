@@ -102,5 +102,5 @@ This design ensures:
 ## Related
 
 - WCAG 2.1 — Success Criterion 1.4.1 Use of Color (Level A)
-- `docs/interactive/tools/threshold-heatmap.jsx`
-- [ADR-016: `[data-theme]` Single-track Dark Mode](016-data-theme-single-track-dark-mode.en.md) — prerequisite for downstream dark-mode contrast verification
+- `tools/portal/src/interactive/tools/threshold-heatmap.jsx`
+- [ADR-015: `[data-theme]` Single-track Dark Mode](015-data-theme-single-track-dark-mode.en.md) — prerequisite for downstream dark-mode contrast verification

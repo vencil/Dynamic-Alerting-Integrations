@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for describe_tenant.py — Effective tenant config resolution with ADR-018 semantics."""
+"""Tests for describe_tenant.py — Effective tenant config resolution with ADR-017 semantics."""
 
 import json
 import os
@@ -25,7 +25,7 @@ import describe_tenant as dt  # noqa: E402
 # ---------------------------------------------------------------------------
 
 class TestDeepMerge:
-    """Tests for deep_merge() — ADR-018 semantics."""
+    """Tests for deep_merge() — ADR-017 semantics."""
 
     def test_deep_merge_basic(self):
         base = {"a": 1, "b": {"x": 10}}

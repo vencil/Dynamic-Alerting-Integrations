@@ -1,14 +1,14 @@
 ---
-title: "ADR-016: Migrate comprehensively to `[data-theme]` single-track dark mode, remove Tailwind `dark:` variant"
+title: "ADR-015: Migrate comprehensively to `[data-theme]` single-track dark mode, remove Tailwind `dark:` variant"
 tags: [adr, design-tokens, dark-mode, v2.7.0]
 audience: [frontend-developers, designers, maintainers]
 version: v2.8.0
 lang: en
 ---
 
-# ADR-016: Migrate comprehensively to `[data-theme]` single-track dark mode, remove Tailwind `dark:` variant
+# ADR-015: Migrate comprehensively to `[data-theme]` single-track dark mode, remove Tailwind `dark:` variant
 
-> **Language / 語言：** **English (Current)** | [中文](./016-data-theme-single-track-dark-mode.md)
+> **Language / 語言：** **English (Current)** | [中文](./015-data-theme-single-track-dark-mode.md)
 
 > This decision is the prerequisite upon which every subsequent v2.7.0 token migration depends,
 > warranting an independent ADR.
@@ -37,7 +37,7 @@ The two mechanisms **lacked integration**: toggling the class did not toggle the
 
 1. `[data-theme]` is the SSOT (Single Source of Truth) for design-tokens.css; if we want tokens to have
    substantive value, we cannot have a second parallel system
-2. ADR-015 (Option A arbitrary-value rewrite) ingests all colors into tokens, making `dark:` a vestigial remnant
+2. ADR-014 (Option A arbitrary-value rewrite) ingests all colors into tokens, making `dark:` a vestigial remnant
 3. The only justification for maintaining dual tracks is "familiarity with existing tailwind patterns" — this is
    outweighed by system consistency
 
@@ -89,5 +89,5 @@ Implementation requirements:
 ## References
 
 - Commit `8634ea2` (deployment-wizard migration, first landing)
-- [ADR-015: Wizard Token Arbitrary-Value Migration Strategy](015-wizard-arbitrary-value-token-migration.en.md) — together they form the v2.7.0 standard migration toolkit
+- [ADR-014: Wizard Token Arbitrary-Value Migration Strategy](014-wizard-arbitrary-value-token-migration.en.md) — together they form the v2.7.0 standard migration toolkit
 - TRK-205 (palette remnants causing dark mode gap)

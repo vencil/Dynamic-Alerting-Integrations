@@ -60,7 +60,7 @@ func renderProposalMarkdown(propIdx int, prop ExtractionProposal, tenantKey stri
 	}
 
 	out.WriteString("\n---\n\n")
-	out.WriteString("_PR-2 emission: this artifact tree is intermediate. PR-3 will translate it into the final ADR-018 conf.d/ shape._\n")
+	out.WriteString("_PR-2 emission: this artifact tree is intermediate. PR-3 will translate it into the final ADR-017 conf.d/ shape._\n")
 	return out.String()
 }
 
@@ -129,7 +129,7 @@ func renderTranslatedProposalMarkdown(propIdx int, prop ExtractionProposal, tran
 	out.WriteString("---\n\n")
 	out.WriteString("_PR-3 emission: this proposal is conf.d-ready (deepMerge-compatible). Review_  \n")
 	out.WriteString("_`_defaults.yaml` and per-tenant `<id>.yaml` then commit; the threshold-exporter_  \n")
-	out.WriteString("_runtime ResolveAt path consumes them via ADR-018 inheritance._\n")
+	out.WriteString("_runtime ResolveAt path consumes them via ADR-017 inheritance._\n")
 	return out.String()
 }
 

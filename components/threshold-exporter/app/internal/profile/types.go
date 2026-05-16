@@ -1,7 +1,7 @@
 // Package profile is the v2.8.0 Phase .c C-9 Profile Builder. It
 // consumes ParsedRule records emitted by internal/parser (C-8) and
 // proposes how to map them into the conf.d/ Profile-as-Directory-
-// Default architecture (ADR-019, in flight): a few `_defaults.yaml`
+// Default architecture (ADR-018, in flight): a few `_defaults.yaml`
 // files at appropriate directory levels + thin per-tenant overrides,
 // instead of N copies of nearly-identical tenant.yaml files (the
 // GitOps anti-pattern Phase .c is built to prevent).
@@ -10,13 +10,13 @@
 // computation that identifies "these N rules look similar; here's
 // what their shared structure is and what varies per tenant". The
 // builder reports proposals; it does NOT yet emit conf.d/ YAML
-// files. That's PR-2's responsibility once ADR-019 locks down the
+// files. That's PR-2's responsibility once ADR-018 locks down the
 // directory-vs-file boundary semantics.
 //
 // Future PRs in the C-9 family:
 //   - PR-2: emit `_defaults.yaml` + tenant.yaml from accepted
 //     proposals (interactive accept / reject loop).
-//   - PR-3: ADR-019 Profile-as-Directory-Default written + linked.
+//   - PR-3: ADR-018 Profile-as-Directory-Default written + linked.
 //   - PR-4: UI surface for "XX tenants will inherit this Profile,
 //     est. YY lines saved" semi-automatic accept loop.
 //

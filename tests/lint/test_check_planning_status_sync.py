@@ -131,10 +131,10 @@ class TestExtractTrailers:
     def test_multiple_trailer_keys_per_commit(self, tmp_git_repo):
         _commit(
             tmp_git_repo,
-            "feat: thing\n\nbody\n\nResolves: TRK-1\nFixes: ADR-020\n",
+            "feat: thing\n\nbody\n\nResolves: TRK-1\nFixes: ADR-019\n",
         )
         ids = {h.id for h in cps.extract_trailers("origin/main", repo_root=tmp_git_repo)}
-        assert ids == {"TRK-1", "ADR-020"}
+        assert ids == {"TRK-1", "ADR-019"}
 
     def test_trailer_without_blank_line_above_not_matched(self, tmp_git_repo):
         """git treats the trailer block as starting only AFTER a blank line below the body."""
@@ -322,7 +322,7 @@ class TestMainCli:
 class TestIdRegex:
     @pytest.mark.parametrize(
         "candidate",
-        ["TRK-001", "TRK-228", "TRK-230c", "ADR-020", "S#74"],
+        ["TRK-001", "TRK-228", "TRK-230c", "ADR-019", "S#74"],
     )
     def test_live_namespaces_match(self, candidate):
         assert cps.ID_RE.match(candidate) is not None

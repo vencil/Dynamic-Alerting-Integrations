@@ -25,14 +25,13 @@ lang: zh
 | `docs/adr/011-pr-based-write-back.md` (.en.md) | Platform Engineers, developers | ADR-011: PR-based Write-back 模式 |
 | `docs/adr/012-colorblind-hotfix-structured-severity-return.md` (.en.md) | frontend-developers, design-system-maintainers | ADR-012: threshold-heatmap 色盲補丁 — 結構化 severity 返回值 |
 | `docs/adr/013-component-health-token-density-metric.md` (.en.md) | frontend-developers, Platform Engineers, maintainers | ADR-013: Component Health Scanner — Tier 評分演算法與 token_density 輔助指標 |
-| `docs/adr/014-tech-debt-category-budget-isolation.md` (.en.md) | Platform Engineers, tech-leads | ADR-014: TECH-DEBT 類別與 REG Budget 隔離 |
-| `docs/adr/015-wizard-arbitrary-value-token-migration.md` (.en.md) | frontend-developers, maintainers | ADR-015: wizard.jsx design token 遷移採 Option A（Tailwind arbitrary value 全改寫） |
-| `docs/adr/016-data-theme-single-track-dark-mode.md` (.en.md) | frontend-developers, designers, maintainers | ADR-016: 全面改用 `[data-theme]` 單軌 dark mode，移除 Tailwind `dark:` 變體 |
-| `docs/adr/017-conf-d-directory-hierarchy-mixed-mode.md` (.en.md) | Platform Engineers, SREs, contributors | ADR-017: conf.d/ 目錄分層 + 混合模式 + 遷移策略 |
-| `docs/adr/018-defaults-yaml-inheritance-dual-hash.md` (.en.md) | Platform Engineers, SREs, contributors | ADR-018: _defaults.yaml 繼承語意 + dual-hash hot-reload |
-| `docs/adr/019-profile-as-directory-default.md` (.en.md) | Platform Engineers, SREs, contributors | ADR-019: Profile-as-Directory-Default |
-| `docs/adr/020-planning-ssot.md` | Platform Engineers, contributors, ai-agents | ADR-020: Planning SSOT — Frontmatter Contract + Discovery-based Index |
-| `docs/adr/021-tenant-federation.md` | Platform Engineers, contributors | ADR-021: Tenant Federation — Label-Injection Proxy over Self-Built Endpoint |
+| `docs/adr/014-wizard-arbitrary-value-token-migration.md` (.en.md) | frontend-developers, maintainers | ADR-014: wizard.jsx design token 遷移採 Option A（Tailwind arbitrary value 全改寫） |
+| `docs/adr/015-data-theme-single-track-dark-mode.md` (.en.md) | frontend-developers, designers, maintainers | ADR-015: 全面改用 `[data-theme]` 單軌 dark mode，移除 Tailwind `dark:` 變體 |
+| `docs/adr/016-conf-d-directory-hierarchy-mixed-mode.md` (.en.md) | Platform Engineers, SREs, contributors | ADR-016: conf.d/ 目錄分層 + 混合模式 + 遷移策略 |
+| `docs/adr/017-defaults-yaml-inheritance-dual-hash.md` (.en.md) | Platform Engineers, SREs, contributors | ADR-017: _defaults.yaml 繼承語意 + dual-hash hot-reload |
+| `docs/adr/018-profile-as-directory-default.md` (.en.md) | Platform Engineers, SREs, contributors | ADR-018: Profile-as-Directory-Default |
+| `docs/adr/019-planning-ssot.md` | Platform Engineers, contributors, ai-agents | ADR-019: Planning SSOT — Frontmatter Contract + Discovery-based Index |
+| `docs/adr/020-tenant-federation.md` | Platform Engineers, contributors | ADR-020: Tenant Federation — Label-Injection Proxy over Self-Built Endpoint |
 | `docs/api/README.md` (.en.md) | Platform Engineers, SREs | Threshold Exporter API Reference |
 | `docs/api/tenant-api-hardening.md` (.en.md) | platform-ops, sre, security | Tenant API Hardening (v2.8.0) |
 | `docs/architecture-and-design.md` (.en.md) | Platform Engineers | 架構與設計 — 動態多租戶警報平台技術白皮書 |

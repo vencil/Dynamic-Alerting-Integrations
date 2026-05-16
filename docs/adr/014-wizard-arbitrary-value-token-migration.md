@@ -1,19 +1,19 @@
 ---
-title: "ADR-015: wizard.jsx design token 遷移採 Option A（Tailwind arbitrary value 全改寫）"
+title: "ADR-014: wizard.jsx design token 遷移採 Option A（Tailwind arbitrary value 全改寫）"
 tags: [adr, design-tokens, v2.7.0]
 audience: [frontend-developers, maintainers]
 version: v2.8.0
 lang: zh
-id: ADR-015
+id: ADR-014
 tracking_kind: adr
 status: accepted
 domain: portal
 created_at: 2026-04-18
 updated_at: 2026-05-13
 ---
-# ADR-015: wizard.jsx design token 遷移採 Option A（Tailwind arbitrary value 全改寫）
+# ADR-014: wizard.jsx design token 遷移採 Option A（Tailwind arbitrary value 全改寫）
 
-> **Language / 語言：** **中文 (Current)** | [English](./015-wizard-arbitrary-value-token-migration.en.md)
+> **Language / 語言：** **中文 (Current)** | [English](./014-wizard-arbitrary-value-token-migration.en.md)
 
 > 此決策塑造了 v2.7.0 後續所有 JSX 工具的 token 遷移模式，
 > 故獨立成 ADR 以便日後新工具沿用同一改寫風格。
@@ -26,7 +26,7 @@ updated_at: 2026-05-13
 
 ## 背景
 
-wizard.jsx（`docs/getting-started/wizard.jsx`，當時 ~900 LOC）是「最大 design
+wizard.jsx（`tools/portal/src/getting-started/wizard.jsx`，當時 ~900 LOC）是「最大 design
 system 脫鉤案例」：**0% token 採用**、100% Tailwind core palette
 （slate/blue/emerald/amber/red）硬編碼、是 portal flagship onboarding
 工具但完全不吃 `--da-color-*` token。
@@ -43,7 +43,7 @@ v2.7.0 必須把它吃進 token 系統，但三種遷移路徑互有取捨：
 
 1. wizard 是 flagship，**拿它當「新寫法」示範**的價值最高
 2. `var(--da-color-*)` 的真正威力是 `[data-theme="dark"]` 時 token 自動換色，
-   Tailwind `dark:` 變體需要 double up 每個類別 → Option A 在 ADR-016 選定
+   Tailwind `dark:` 變體需要 double up 每個類別 → Option A 在 ADR-015 選定
    `[data-theme]` 單軌後自然勝出
 3. Option B 留一半 Tailwind 的結果是「看起來已經遷但 dark mode 依舊壞」→
    品質負債反而更隱蔽
@@ -69,7 +69,7 @@ v2.7.0 必須把它吃進 token 系統，但三種遷移路徑互有取捨：
 ### 正面
 - **設立 v2.7.0 標準 migration pattern**：後續 deployment-wizard、rbac、cicd、
   threshold-heatmap 等工具都直接沿用 Option A 的改寫風格與 waiver 註解
-- dark mode 與 ADR-016（`[data-theme]` 單軌）乾淨對齊
+- dark mode 與 ADR-015（`[data-theme]` 單軌）乾淨對齊
 - 新加入的開發者只要看 wizard.jsx diff 就知道怎麼遷下一個工具
 
 ### 負面 / 風險
@@ -90,7 +90,7 @@ v2.7.0 必須把它吃進 token 系統，但三種遷移路徑互有取捨：
 
 ## 關聯
 
-- `docs/getting-started/wizard.jsx`（實作）
+- `tools/portal/src/getting-started/wizard.jsx`（實作）
 - Commit `ec07914`
-- [ADR-016: `[data-theme]` 單軌 Dark Mode](016-data-theme-single-track-dark-mode.md) — 配對的 dark mode 決策
+- [ADR-015: `[data-theme]` 單軌 Dark Mode](015-data-theme-single-track-dark-mode.md) — 配對的 dark mode 決策
 - TRK-203（後續 runtime contrast audit 發現的 token-pair 對比問題，非本 ADR 直接造成）

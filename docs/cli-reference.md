@@ -1111,7 +1111,7 @@ da-tools describe-tenant db-a --format json
 
 將平坦 conf.d/ 遷移至階層式佈局（domain / region / env 層級）。
 
-**用途**：大規模配置重組；實現配置重用與繼承；邁向 ADR-017/018 混合模式。
+**用途**：大規模配置重組；實現配置重用與繼承；邁向 ADR-016/017 混合模式。
 
 **語法**
 

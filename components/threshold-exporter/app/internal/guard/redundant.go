@@ -4,7 +4,7 @@ package guard
 //
 // Premise: a tenant.yaml field that has the same value as the new
 // `_defaults.yaml` at the same dotted path carries no information.
-// At runtime ADR-018 deepMerge produces the same effective value
+// At runtime ADR-017 deepMerge produces the same effective value
 // either way, so the override is dead weight that:
 //   - Bloats per-tenant YAML (the GitOps anti-pattern Phase .c
 //     fights).

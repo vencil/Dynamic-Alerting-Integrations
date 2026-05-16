@@ -85,7 +85,7 @@ func TestRun_MissingRequired_ExitsOne(t *testing.T) {
 	writeTree(t, tmp, map[string]string{
 		"conf.d/_defaults.yaml": "defaults:\n  cpu: 70\n",
 		"conf.d/tenant-a.yaml":  "tenants:\n  tenant-a:\n    cpu: 80\n",
-		// tenant-b has cpu null in its override → ADR-018 says null
+		// tenant-b has cpu null in its override → ADR-017 says null
 		// deletes the inherited default, so the merged map ends up
 		// with cpu absent. The guard should flag this as missing.
 		"conf.d/tenant-b.yaml": "tenants:\n  tenant-b:\n    cpu: ~\n",

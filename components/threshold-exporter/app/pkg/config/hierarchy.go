@@ -1,7 +1,7 @@
 package config
 
 // ============================================================
-// Hierarchical config resolver (ADR-017 + ADR-018) — public API
+// Hierarchical config resolver (ADR-016 + ADR-017) — public API
 // ============================================================
 //
 // This file provides a standalone hierarchy resolver that does not depend on
@@ -440,7 +440,7 @@ func canonicalJSON(data any) ([]byte, error) {
 // having to switch every call site to a config-qualified name.
 // ============================================================
 
-// DeepMerge implements ADR-018 inheritance semantics. See `deepMerge`
+// DeepMerge implements ADR-017 inheritance semantics. See `deepMerge`
 // for the rule list.
 func DeepMerge(base, override map[string]any) map[string]any {
 	return deepMerge(base, override)

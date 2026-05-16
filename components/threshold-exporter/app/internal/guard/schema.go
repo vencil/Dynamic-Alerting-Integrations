@@ -8,7 +8,7 @@ package guard
 // SeverityError finding scoped to that tenant + field.
 //
 // Why nil is treated as "missing" rather than "explicitly cleared":
-// in ADR-018 deepMerge semantics, YAML null in an override DELETES
+// in ADR-017 deepMerge semantics, YAML null in an override DELETES
 // the inherited key, so a tenant that arrives at the schema check
 // with `field=nil` at a required path has effectively opted out of
 // the requirement. That's exactly the dangling-defaults scenario
@@ -62,7 +62,7 @@ func checkRequiredFields(input CheckInput) []Finding {
 					TenantID: tenantID,
 					Field:    field,
 					Message: fmt.Sprintf(
-						"required field %q is present but null in tenant %q's effective config (YAML null deletes inherited keys per ADR-018)",
+						"required field %q is present but null in tenant %q's effective config (YAML null deletes inherited keys per ADR-017)",
 						field, tenantID),
 				})
 			}

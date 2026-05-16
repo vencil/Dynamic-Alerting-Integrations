@@ -11,7 +11,7 @@ verified-at-version: v2.8.0
 > - **Step-by-step migration** → [`incremental-migration-playbook.en.md`](incremental-migration-playbook.en.md)
 > - **Rollback procedures** → [`incremental-migration-playbook.en.md` §Emergency Rollback Procedures](incremental-migration-playbook.en.md#emergency-rollback-procedures)
 > - **Migration tool** → `scripts/tools/dx/migrate_conf_d.py` (`--dry-run` / `--apply`)
-> - **Architecture rationale** → [`docs/adr/017-conf-d-directory-hierarchy-mixed-mode.en.md`](../adr/017-conf-d-directory-hierarchy-mixed-mode.en.md)
+> - **Architecture rationale** → [`docs/adr/016-conf-d-directory-hierarchy-mixed-mode.en.md`](../adr/016-conf-d-directory-hierarchy-mixed-mode.en.md)
 
 ---
 
@@ -162,8 +162,8 @@ Any of the following warrants paging vencil on-call:
 
 ## 6. Related docs
 
-- ADR-017: [`conf.d/` directory hierarchy + mixed mode decision](../adr/017-conf-d-directory-hierarchy-mixed-mode.en.md)
-- ADR-018: [Defaults YAML inheritance + dual-hash hot-reload](../adr/018-defaults-yaml-inheritance-dual-hash.en.md)
+- ADR-016: [`conf.d/` directory hierarchy + mixed mode decision](../adr/016-conf-d-directory-hierarchy-mixed-mode.en.md)
+- ADR-017: [Defaults YAML inheritance + dual-hash hot-reload](../adr/017-defaults-yaml-inheritance-dual-hash.en.md)
 - Migration tool: `scripts/tools/dx/migrate_conf_d.py`
 - Migration playbook: [`incremental-migration-playbook.en.md`](incremental-migration-playbook.en.md)
 - 1000-tenant hierarchical baseline measurement: [`benchmark-playbook.md` §v2.8.0 1000-Tenant Hierarchical Baseline](../internal/benchmark-playbook.md) (internal)

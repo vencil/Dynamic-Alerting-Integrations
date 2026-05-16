@@ -10,7 +10,7 @@ the actual guard logic lives in Go for two reasons:
   1. The guard library (components/.../internal/guard) operates on
      the same effective-config maps the threshold-exporter produces
      at runtime — duplicating in Python would invite drift.
-  2. ADR-018 deepMerge semantics live in pkg/config/. Python
+  2. ADR-017 deepMerge semantics live in pkg/config/. Python
      reproductions of that merge (the Python toolkit has its own,
      used by `describe_tenant.py`) are golden-fixture-tested for
      parity but every additional caller multiplies the contract

@@ -210,10 +210,10 @@ SKIP_EXT = {".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".pdf", ".zip"}
 # move the file to docs/internal/, but the move requires updating mkdocs nav
 # and cross-refs across the repo, which is out of scope for v2.8.0 #462.
 PER_FILE_ALLOWLIST = (
-    # ADR-020 documents the TRK-NNN planning-id namespace system itself.
+    # ADR-019 documents the TRK-NNN planning-id namespace system itself.
     # Migration tables (TD-022 → TRK-222, HA-11 → TRK-011) and regex spec
     # examples ("Resolves TD-30 → TD-30") are core content, not leakage.
-    "docs/adr/020-planning-ssot.md",
+    "docs/adr/019-planning-ssot.md",
 )
 
 # Pure code-comment lines (not user-visible). These are skipped because

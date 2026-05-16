@@ -1,21 +1,21 @@
 ---
-title: "ADR-017: conf.d/ 目錄分層 + 混合模式 + 遷移策略"
+title: "ADR-016: conf.d/ 目錄分層 + 混合模式 + 遷移策略"
 tags: [adr, conf.d, directory-scanner, hierarchy, migration, v2.7.0]
 audience: [platform-engineers, sre, contributors]
 version: v2.8.0
 lang: zh
-id: ADR-017
+id: ADR-016
 tracking_kind: adr
 status: accepted
 domain: exporter
 created_at: 2026-04-18
 updated_at: 2026-05-13
 ---
-# ADR-017: conf.d/ 目錄分層 + 混合模式 + 遷移策略
+# ADR-016: conf.d/ 目錄分層 + 混合模式 + 遷移策略
 
-> **Language / 語言：** **中文 (Current)** | [English](./017-conf-d-directory-hierarchy-mixed-mode.en.md)
+> **Language / 語言：** **中文 (Current)** | [English](./016-conf-d-directory-hierarchy-mixed-mode.en.md)
 
-> v2.7.0 Scale Foundation 第一塊。與 [ADR-018](018-defaults-yaml-inheritance-dual-hash.md)（繼承語意）為一組。
+> v2.7.0 Scale Foundation 第一塊。與 [ADR-017](017-defaults-yaml-inheritance-dual-hash.md)（繼承語意）為一組。
 
 ## 狀態
 
@@ -118,6 +118,6 @@ Directory Scanner 的設計哲學是「檔案系統即 source of truth」。
 
 ## 相關
 
-- [ADR-018: _defaults.yaml 繼承語意 + dual-hash hot-reload](018-defaults-yaml-inheritance-dual-hash.md)
+- [ADR-017: _defaults.yaml 繼承語意 + dual-hash hot-reload](017-defaults-yaml-inheritance-dual-hash.md)
 - [Benchmark Playbook §Synthetic Fixture Generation](../internal/benchmark-playbook.md#synthetic-fixture-generation-速率對照) — flat vs hierarchical 效能對照
 - [ADR-006: Tenant Mapping Topologies](006-tenant-mapping-topologies.md)

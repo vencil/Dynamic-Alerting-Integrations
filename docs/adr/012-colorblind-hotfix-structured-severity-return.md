@@ -107,5 +107,5 @@ function getCellSeverity(value, stats) {
 ## 相關
 
 - WCAG 2.1 — Success Criterion 1.4.1 Use of Color (Level A)
-- `docs/interactive/tools/threshold-heatmap.jsx`
-- [ADR-016: `[data-theme]` 單軌 Dark Mode](016-data-theme-single-track-dark-mode.md) — 後續 dark mode 對比度驗收前提
+- `tools/portal/src/interactive/tools/threshold-heatmap.jsx`
+- [ADR-015: `[data-theme]` 單軌 Dark Mode](015-data-theme-single-track-dark-mode.md) — 後續 dark mode 對比度驗收前提

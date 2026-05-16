@@ -1,14 +1,14 @@
 """
 Golden parity test for describe_tenant.py deep_merge + inheritance.
 
-This test is the trump card for ADR-018 semantic verification:
+This test is the trump card for ADR-017 semantic verification:
 - Runs describe_tenant.py against 8 deterministic fixture scenarios
 - Compares source_hash + merged_hash + effective_config against golden.json
 - If any hash diverges, either:
     (a) Python describe_tenant.py logic changed → bug or intentional update (regen golden)
     (b) A Go port produces different hashes → semantic drift, fix the Go side
 
-Fixtures cover every deep_merge rule from ADR-018:
+Fixtures cover every deep_merge rule from ADR-017:
 - flat:              no defaults chain
 - l0-only:           root _defaults + tenant override (scalar)
 - full-l0-l3:        4-level inheritance, array replace, tenant override
@@ -116,7 +116,7 @@ def test_merge_parity_go(golden: dict):
         threshold-exporter dump-merged --conf-d <path> --tenant <id>
     emitting JSON: {"source_hash": "...", "merged_hash": "...", "effective_config": {...}}
 
-    This is the single most important test for ADR-018 conformance.
+    This is the single most important test for ADR-017 conformance.
     Any divergence = immediate blocker on v2.7.0 tag.
     """
     binary = _go_binary_path()
@@ -138,7 +138,7 @@ def test_merge_parity_go(golden: dict):
     assert go_result["source_hash"] == golden["source_hash"], \
         f"Go source_hash != Python for {golden['scenario']}"
     assert go_result["merged_hash"] == golden["merged_hash"], \
-        f"Go merged_hash != Python for {golden['scenario']} — ADR-018 semantic drift"
+        f"Go merged_hash != Python for {golden['scenario']} — ADR-017 semantic drift"
     # effective_config parity is stricter — catches ordering / type-coercion drift
     assert go_result["effective_config"] == golden["effective_config"], \
         f"Go effective_config != Python for {golden['scenario']}"

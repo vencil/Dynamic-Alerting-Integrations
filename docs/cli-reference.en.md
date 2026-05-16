@@ -1214,7 +1214,7 @@ da-tools describe-tenant db-a --format json
 
 Migrate a flat conf.d/ directory to a hierarchical layout (domain / region / env levels).
 
-**Purpose**: Large-scale config restructuring; enable config reuse and inheritance; move toward ADR-017/018 mixed mode.
+**Purpose**: Large-scale config restructuring; enable config reuse and inheritance; move toward ADR-016/017 mixed mode.
 
 **Syntax**
 

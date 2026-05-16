@@ -115,7 +115,7 @@ exporter (tenant_silent_mode)
 
 - [`docs/architecture-and-design.md`](../architecture-and-design.md) §2.7 — 三態運營模式詳細設計
 - [`docs/architecture-and-design.md`](../architecture-and-design.md) §2.8 — Dedup 與 Sentinel 交互機制
-- [`../rule-packs/README.md`](../rule-packs/README.md) — Rule Packs 總覽（含 Sentinel Recording Rules）
+- [`rule-packs/README.md`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/rule-packs/README.md) — Rule Packs 總覽（含 Sentinel Recording Rules）
 
 ## 相關資源
 

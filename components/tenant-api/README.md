@@ -53,7 +53,7 @@
 | `GET` | `/api/v1/tenants` | read | 列出 RBAC 可見的租戶（含 silent / maintenance / `_metadata`） |
 | `GET` | `/api/v1/tenants/search` | read | **(v2.8.0)** 伺服端 search / filter / pagination；`q` / `environment` / `tier` / `domain` / `db_type` / `tag` / `page_size`（max 500）/ `offset` / `sort`。內含 30s snapshot cache，目標 1000 租戶下 p99 < 200ms。⚠️ numeric offset 仍是 v1 design — opaque cursor 未來換 |
 | `GET` | `/api/v1/tenants/{id}` | read | 取得 raw YAML + resolved thresholds |
-| `GET` | `/api/v1/tenants/{id}/effective` | read | **(v2.7.0)** merged config + 來源鏈 + dual hashes（`source_hash` + `merged_hash`，16 hex），底層走 `pkg/config/hierarchy.ResolveEffective()`，ADR-018 L0→L3 繼承語義 |
+| `GET` | `/api/v1/tenants/{id}/effective` | read | **(v2.7.0)** merged config + 來源鏈 + dual hashes（`source_hash` + `merged_hash`，16 hex），底層走 `pkg/config/hierarchy.ResolveEffective()`，ADR-017 L0→L3 繼承語義 |
 | `PUT` | `/api/v1/tenants/{id}` | write | 寫入（validate → policy check → write → commit / PR） |
 | `POST` | `/api/v1/tenants/{id}/validate` | read | Dry-run 驗證 |
 | `POST` | `/api/v1/tenants/{id}/diff` | read | 預覽 unified diff |

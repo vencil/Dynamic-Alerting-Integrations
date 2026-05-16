@@ -10,9 +10,9 @@
  *       known amber Start-Here badge borderline contrast — see wizard.md §A11y)
  *   It does NOT cover:
  *     - full multi-step traversal (role → scenario → config generation)
- *     - the 19 state-specific color waivers from ADR-017 (DEC-A)
+ *     - the 19 state-specific color waivers from ADR-016 (DEC-A)
  *     - token-layer contrast issues on wizard (Day 5 retrospective runtime
- *       axe showed wizard itself has 0 violations — ADR-017 Option A
+ *       axe showed wizard itself has 0 violations — ADR-016 Option A
  *       validated in this spec's axe coverage)
  *   For broader Phase .a0 a11y picture across all migrated tools, see
  *   `_axe-audit-day1to3.spec.ts` and `_axe-audit-day4.spec.ts`.

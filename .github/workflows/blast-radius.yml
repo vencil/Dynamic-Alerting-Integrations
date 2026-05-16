@@ -1,7 +1,7 @@
 # blast-radius.yml — Blast Radius Report (v2.7.0+) for hierarchical conf.d/
 #
 # Evolution of config-diff.yaml for hierarchical conf.d/ with _defaults.yaml
-# inheritance (ADR-017/018). Uses describe-tenant --all to compute effective
+# inheritance (ADR-016/017). Uses describe-tenant --all to compute effective
 # configs on both base and PR, then blast_radius.py to diff and classify.
 #
 # Tiers:

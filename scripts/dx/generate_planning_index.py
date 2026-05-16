@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """generate_planning_index.py — Auto-render the unified planning index.
 
-Implements [ADR-020](docs/adr/020-planning-ssot.md) Layer 2 (Discovery-based Index Generator)
+Implements [ADR-019](docs/adr/019-planning-ssot.md) Layer 2 (Discovery-based Index Generator)
 + [#379](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/379) chunk 2a deliverable.
 
 Sources (each entry filtered to require ``tracking_kind:`` in the enum)
@@ -66,7 +66,7 @@ SENTINEL_END = "<!-- PLANNING_INDEX_END -->"
 # (`docs/` tree). Edit if forking.
 GITHUB_BLOB_BASE = "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main"
 
-# Per ADR-020 §Frontmatter Contract.
+# Per ADR-019 §Frontmatter Contract.
 TRACKING_KINDS = {"tech-debt", "feature", "dx", "regression", "adr", "sprint"}
 STATUSES = {
     "proposed", "accepted", "in-progress", "done", "abandoned", "superseded",
@@ -407,7 +407,7 @@ def render_index(entries: List[PlanningEntry]) -> str:
     """Render the index body that lives between the sentinel markers."""
     if not entries:
         return (
-            "_目前 discovery 沒有任何 entry。各 source 加上 ADR-020 §Frontmatter Contract_\n"
+            "_目前 discovery 沒有任何 entry。各 source 加上 ADR-019 §Frontmatter Contract_\n"
             "_要求的 `tracking_kind:` / `id:` / `status:` 欄位後會自動出現於此。_\n"
         )
     # Group by status, preserving STATUS_ORDER.
@@ -451,7 +451,7 @@ def replace_sentinel_block(content: str, body: str) -> str:
 # ---------------------------------------------------------------------------
 def main() -> int:
     ap = argparse.ArgumentParser(
-        description="Generate the unified planning index (ADR-020 Layer 2).",
+        description="Generate the unified planning index (ADR-019 Layer 2).",
     )
     mode = ap.add_mutually_exclusive_group(required=True)
     mode.add_argument("--check", action="store_true", help="exit 1 if rendered output drifts")

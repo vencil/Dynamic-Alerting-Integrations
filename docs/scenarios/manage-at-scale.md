@@ -9,7 +9,7 @@ lang: zh
 
 > **Language / 語言：** **中文 (Current)** | [English](./manage-at-scale.en.md)
 
-> **v2.8.0** | 相關文件：[multi-domain-conf-layout](multi-domain-conf-layout.md)、[ADR-017](../adr/017-conf-d-directory-hierarchy-mixed-mode.md)、[ADR-018](../adr/018-defaults-yaml-inheritance-dual-hash.md)、[tenant-lifecycle](tenant-lifecycle.md)
+> **v2.8.0** | 相關文件：[multi-domain-conf-layout](multi-domain-conf-layout.md)、[ADR-016](../adr/016-conf-d-directory-hierarchy-mixed-mode.md)、[ADR-017](../adr/017-defaults-yaml-inheritance-dual-hash.md)、[tenant-lifecycle](tenant-lifecycle.md)
 
 ## 概述
 
@@ -270,7 +270,7 @@ python3 scripts/tools/ops/blast_radius.py \
 | 資源 | 相關性 |
 |------|--------|
 | [場景：多域名階層式配置](multi-domain-conf-layout.md) | ⭐⭐⭐ |
-| [ADR-017：階層式 conf.d 設計決策](../adr/017-conf-d-directory-hierarchy-mixed-mode.md) | ⭐⭐⭐ |
-| [ADR-018：繼承機制與雙重雜湊](../adr/018-defaults-yaml-inheritance-dual-hash.md) | ⭐⭐⭐ |
+| [ADR-016：階層式 conf.d 設計決策](../adr/016-conf-d-directory-hierarchy-mixed-mode.md) | ⭐⭐⭐ |
+| [ADR-017：繼承機制與雙重雜湊](../adr/017-defaults-yaml-inheritance-dual-hash.md) | ⭐⭐⭐ |
 | [場景：租戶完整生命週期管理](tenant-lifecycle.md) | ⭐⭐ |
 | [`da-tools` CLI 參考](../cli-reference.md) | ⭐⭐ |

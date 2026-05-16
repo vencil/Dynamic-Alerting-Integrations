@@ -8,7 +8,7 @@ lang: zh
 
 # Planning ID Mapping — Legacy → TRK Redirect
 
-> **本文件用途**：[ADR-020](../adr/020-planning-ssot.md) 採 **Option C refined hybrid**——把舊的 `TECH-DEBT-NNN` / `TD-NN` / `HA-NN` / `REG-NNN` 四個 namespace 統一為單一 `TRK-NNN`。本文是 **redirect 表**：當你在 commit / PR / 文件 / external citation 看到舊 ID，到這裡查對應的現代 `TRK-NNN`。
+> **本文件用途**：[ADR-019](../adr/019-planning-ssot.md) 採 **Option C refined hybrid**——把舊的 `TECH-DEBT-NNN` / `TD-NN` / `HA-NN` / `REG-NNN` 四個 namespace 統一為單一 `TRK-NNN`。本文是 **redirect 表**：當你在 commit / PR / 文件 / external citation 看到舊 ID，到這裡查對應的現代 `TRK-NNN`。
 >
 > **這不是 backlog**，只是 ID 翻譯表。Backlog 本體（current status / pr_ref / owner）放在各自 source frontmatter，最終透過 `scripts/dx/generate_planning_index.py`（issue [#379](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/379) chunk 2a）匯出 `planning-index.md`。
 
@@ -80,15 +80,15 @@ SOT 在 [`dx-tooling-backlog.md`](dx-tooling-backlog.md)。
 
 | Legacy | TRK | 主題 |
 |---|---|---|
-| TECH-DEBT-001 | TRK-201 | (early-era debt tracking — 參見 ADR-014/015/016 引用脈絡) |
+| TECH-DEBT-001 | TRK-201 | (early-era debt tracking) |
 | TECH-DEBT-002 | TRK-202 | (early-era) |
 | TECH-DEBT-003 | TRK-203 | (early-era) |
-| TECH-DEBT-005 | TRK-205 | palette 殘留導致 dark mode 斷層（ADR-016 cited）|
+| TECH-DEBT-005 | TRK-205 | palette 殘留導致 dark mode 斷層（ADR-015 cited）|
 | TECH-DEBT-006 | TRK-206 | scrollable container axe-core a11y |
 | TECH-DEBT-007 | TRK-207 | design-system token canonical 值校正（次要文字 `#475569`）|
 | TECH-DEBT-008 | TRK-208 | form element accessible name CRITICAL violation |
 | TECH-DEBT-009 | TRK-209 | (dev-rules 縮寫引用 `-009` — early-era) |
-| TECH-DEBT-010 | TRK-210 | known-regressions registry parser fixture（`test_check_techdebt_drift.py`；historical / phantom-no-op lint 將由 chunk 2b 取代）|
+| TECH-DEBT-010 | TRK-210 | (early-era) known-regressions registry parser 相關 |
 | TECH-DEBT-011 | TRK-211 | (dev-rules 縮寫引用 `-011` — Day 5 runtime axe a11y violation) |
 | TECH-DEBT-012 | TRK-212 | (dev-rules 縮寫引用 `-012` — 同上) |
 | TECH-DEBT-016 | TRK-216 | MetricCard subStyle 雙背景 dark mode |
@@ -128,17 +128,15 @@ SOT 在 [`dx-tooling-backlog.md`](dx-tooling-backlog.md)。
 
 ## 不在 mapping 範圍
 
-- **`ADR-NNN`** — 架構決策 ID，永不重編號（ADR-020 namespace policy）
+- **`ADR-NNN`** — 架構決策 ID，永不重編號（ADR-019 namespace policy）
 - **`S#NNN`** — sprint planning ledger，保留原 namespace（時序語意不同於 TRK）
 - **`Trap #N`**（[`windows-mcp-playbook.md`](windows-mcp-playbook.md)）— 環境 trap catalogue，獨立 namespace
 - **`pitfall #N`**（[`windows-mcp-playbook.md`](windows-mcp-playbook.md)）— 同上
-- **`TECH-DEBT-0071`**（合成 fixture）— `tests/lint/test_check_techdebt_drift.py` 的 boundary-regex 測試字串，驗證 `\bTECH-DEBT-007\b` 不會誤吃 `-0071`。**非真實 ticket**，不分配 TRK
-
 ## 引用慣例（v2.8.1+）
 
 ```
 ✅ 新 entry / commit / PR body / 文件： Resolves TRK-228
-✅ 引用歷史記載: 依 source 原文保留（如 ADR-014 內的 TECH-DEBT-XXX 字樣若是歷史敘述則照原樣）
+✅ 引用歷史記載: 依 source 原文保留（如 ADR-019 內的 TD-NN / HA-NN / REG-NN 字樣若是政策論述引用則照原樣）
 ⚠️ 過渡期 PR body 寫 `Resolves TD-028` 仍可 work，CI 透過本 mapping 自動翻譯，但會 emit warning「用 TRK-228 取代」
 ```
 
@@ -146,7 +144,7 @@ SOT 在 [`dx-tooling-backlog.md`](dx-tooling-backlog.md)。
 
 | 工具 | 狀態 |
 |---|---|
-| `scripts/tools/lint/check_techdebt_drift.py` | **phantom no-op**（`known-regressions.md` 已 phantom-delete）。chunk 4（issue [#379](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/379) III-2b）用新的 `check_planning_status_sync.py` 取代 |
+| ~~`scripts/tools/lint/check_techdebt_drift.py`~~ | **已移除** — `known-regressions.md` 撤除後成 phantom no-op；繼任者 `check_planning_status_sync.py`（chunk 2b，ADR-019 Layer 3）已上線 |
 | `scripts/dx/generate_planning_index.py` | chunk 2a 新增，掃 frontmatter 產 `planning-index.md` |
 | Pre-commit hooks | 暫不擋舊 ID（過渡期）；chunk 5 收編後正式 deprecate |
 
@@ -165,7 +163,7 @@ SOT 在 [`dx-tooling-backlog.md`](dx-tooling-backlog.md)。
 
 ## 關聯
 
-- [ADR-020](../adr/020-planning-ssot.md) — 本 mapping 的政策依據
+- [ADR-019](../adr/019-planning-ssot.md) — 本 mapping 的政策依據
 - [issue #379](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/379) — 本 mapping 是 chunk 1 deliverable
 - [dev-rules.md §P1](dev-rules.md) — commit trailer 規範
 - [dx-tooling-backlog.md](dx-tooling-backlog.md) — TRK-001~018 的 source

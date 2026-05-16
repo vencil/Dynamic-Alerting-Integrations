@@ -1,16 +1,16 @@
 ---
-title: "ADR-018: _defaults.yaml Inheritance Semantics + Dual-Hash Hot-Reload"
+title: "ADR-017: _defaults.yaml Inheritance Semantics + Dual-Hash Hot-Reload"
 tags: [adr, defaults, inheritance, hot-reload, dual-hash, v2.7.0]
 audience: [platform-engineers, sre, contributors]
 version: v2.8.0
 lang: en
 ---
 
-# ADR-018: _defaults.yaml Inheritance Semantics + Dual-Hash Hot-Reload
+# ADR-017: _defaults.yaml Inheritance Semantics + Dual-Hash Hot-Reload
 
-> **Language / 語言：** **English (Current)** | [中文](./018-defaults-yaml-inheritance-dual-hash.md)
+> **Language / 語言：** **English (Current)** | [中文](./017-defaults-yaml-inheritance-dual-hash.md)
 
-> Second building block of v2.7.0 Scale Foundation. Paired with [ADR-017](017-conf-d-directory-hierarchy-mixed-mode.en.md) (Directory Hierarchy).
+> Second building block of v2.7.0 Scale Foundation. Paired with [ADR-016](016-conf-d-directory-hierarchy-mixed-mode.en.md) (Directory Hierarchy).
 
 ## Status
 
@@ -19,7 +19,7 @@ lang: en
 ## Context
 
 The v2.6.x `_defaults.yaml` only exists as a single global defaults file in the flat `conf.d/` root.
-With ADR-017's hierarchical directories, we need to define multi-layer `_defaults.yaml` inheritance semantics:
+With ADR-016's hierarchical directories, we need to define multi-layer `_defaults.yaml` inheritance semantics:
 
 - Which directory levels can contain `_defaults.yaml`?
 - How do parent-child defaults merge?
@@ -55,7 +55,7 @@ Inheritance order: **L0 → L1 → L2 → L3 → tenant YAML** (later overrides 
 - **Array/List fields**: **replace, not concat** (avoids ambiguity — "I overrode group_by, why are old values there?")
 - **Scalar fields**: child overrides parent
 - **Null / empty values**: explicit `null` deletes parent's value (opt-out pattern)
-- **`_metadata` fields do not inherit**: each tenant's `_metadata` comes only from its own YAML + path inference (ADR-017)
+- **`_metadata` fields do not inherit**: each tenant's `_metadata` comes only from its own YAML + path inference (ADR-016)
 
 ```yaml
 # L0 _defaults.yaml
@@ -217,6 +217,6 @@ Replace semantics are more intuitive and consistent with Helm values merge behav
 
 ## Related
 
-- [ADR-017: conf.d/ Directory Hierarchy + Mixed Mode](017-conf-d-directory-hierarchy-mixed-mode.en.md)
+- [ADR-016: conf.d/ Directory Hierarchy + Mixed Mode](016-conf-d-directory-hierarchy-mixed-mode.en.md)
 - [Benchmark Report §3 v2.8.0 Scale Gate](../benchmarks.en.md#3-v280-scale-gate-1000-tenant-measured) — dual-hash 1000-tenant measurements + SLO interpretation
 - [architecture-and-design.md §Design Concepts](../architecture-and-design.md#設計概念總覽)

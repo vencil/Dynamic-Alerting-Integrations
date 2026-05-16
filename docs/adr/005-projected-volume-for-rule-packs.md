@@ -134,7 +134,7 @@ volumes:
 
 ## 參考資料
 
-- [`../rule-packs/README.md`](../rule-packs/README.md) — Rule Pack 目錄結構與清單
+- [`rule-packs/README.md`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/rule-packs/README.md) — Rule Pack 目錄結構與清單
 - [`docs/getting-started/for-platform-engineers.md`](../getting-started/for-platform-engineers.md) §Rule Pack 配置 — 自定義 Rule Pack 指南
 - [Kubernetes Projected Volume 官方文件](https://kubernetes.io/docs/concepts/storage/projected-volumes/)
 

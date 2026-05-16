@@ -10,7 +10,7 @@ Modes:
     --write   apply the rendered table to the target file
 
 Why discovery-based (not hand-curated): each new ADR previously required a hub-doc edit
-that was easy to forget. ADR-019 / ADR-020 / ADR-021 all reached merge before any hub
+that was easy to forget. ADR-018 / ADR-019 / ADR-020 all reached merge before any hub
 cross-reference was added. Pre-commit drift gate kills that class of bug.
 """
 from __future__ import annotations

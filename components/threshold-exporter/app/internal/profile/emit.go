@@ -7,7 +7,7 @@ package profile
 // SCOPE NOTE — INTERMEDIATE FORMAT, NOT YET conf.d-READY
 // -------------------------------------------------------
 // PR-2 emits a "structured proposal artifact" tree, not the final
-// conf.d/ shape that ADR-018's deepMerge engine consumes. The gap:
+// conf.d/ shape that ADR-017's deepMerge engine consumes. The gap:
 //
 //   - PromRule expressions look like
 //     `avg(rate(node_cpu_seconds_total{tenant="t"}[5m])) > 0.85`.
@@ -16,7 +16,7 @@ package profile
 //     needs a PromRule→threshold translator that can extract
 //     metric_name + threshold_value from the AST.
 //
-//   - That translator is its own design problem (PR-3 + ADR-019).
+//   - That translator is its own design problem (PR-3 + ADR-018).
 //     PR-2 ships the artifact emission layer that the translator
 //     will plug into without re-doing the emission code.
 //
@@ -88,7 +88,7 @@ type EmissionInput struct {
 	// false (default) preserves PR-2 backwards-compat for tooling
 	// already integrated against intermediate format. The cross-
 	// cutting "Profile-as-Directory-Default" principle that the
-	// conf.d-shape emission realises is documented in ADR-019;
+	// conf.d-shape emission realises is documented in ADR-018;
 	// translator heuristics + cluster aggregation rules + status
 	// semantics live in the `translate.go` package header.
 	Translate bool `json:"translate,omitempty"`
@@ -124,7 +124,7 @@ type EmissionInput struct {
 
 // EmissionLayout maps proposals to target directories. Caller-
 // supplied; PR-2 doesn't infer directory structure (that's PR-3's
-// ADR-019 job).
+// ADR-018 job).
 type EmissionLayout struct {
 	// ProposalDirs[i] is the directory (relative to RootPrefix) the
 	// emitter will write proposal i's artifacts into. Length must
@@ -364,7 +364,7 @@ func membersForProposal(prop ExtractionProposal, ruleIndex map[string]parser.Par
 //     warnings so reviewers see the soft spots.
 //   - per-tenant `<id>.yaml` carries `tenants: {<id>: {<metric_key>:
 //     "<value>"}}` only when the tenant's threshold differs from the
-//     cluster default — keeping tenant.yaml minimal per ADR-019's
+//     cluster default — keeping tenant.yaml minimal per ADR-018's
 //     "Profile-as-Directory-Default" goal.
 //   - `PROPOSAL.md` is unchanged from the intermediate path; it
 //     summarises the cluster for reviewers.
@@ -415,7 +415,7 @@ func emitTranslatedProposal(
 			if !hasOverride {
 				// Tenant matches the default → no tenant.yaml needed
 				// (deepMerge falls through to _defaults.yaml). This is
-				// the GitOps anti-pattern fix that ADR-019 §1
+				// the GitOps anti-pattern fix that ADR-018 §1
 				// motivated.
 				continue
 			}
@@ -427,7 +427,7 @@ func emitTranslatedProposal(
 						// per config_resolve.go::ResolveAt). Translator
 						// emits the bare numeric string; severity
 						// override would need explicit translator
-						// extension and is ADR-019 §non-goals for PR-3.
+						// extension and is ADR-018 §non-goals for PR-3.
 						translation.MetricKey: formatThresholdString(override),
 					},
 				},
@@ -499,7 +499,7 @@ func joinClean(parts ...string) string {
 //
 // PR-2 takes the conservative route: replace `/` and `\` with `-`,
 // strip leading dots (no hidden files), pass everything else
-// through. Future PR-3 may need stricter rules once ADR-019
+// through. Future PR-3 may need stricter rules once ADR-018
 // pins the tenant-id grammar.
 func safeFilename(s string) string {
 	if s == "" {

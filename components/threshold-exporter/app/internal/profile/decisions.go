@@ -15,7 +15,7 @@ package profile
 //
 // Today (without PR-4) `EmitProposals` emits every proposal. That's
 // a fine "preview shape of the customer's corpus" mode but it
-// doesn't model the human-in-the-loop step ADR-019 §non-goals
+// doesn't model the human-in-the-loop step ADR-018 §non-goals
 // explicitly defers to: a reviewer SHOULD be able to accept some
 // clusters and reject others before any conf.d/ commit lands.
 //

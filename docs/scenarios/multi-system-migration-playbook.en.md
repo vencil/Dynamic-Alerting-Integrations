@@ -613,7 +613,7 @@ kubectl scale statefulset prometheus-k8s --replicas=0 -n monitoring
 
 #### Why `_defaults.yaml` metric-split waits until after Phase 4
 
-`_defaults.yaml` (the [Profile-as-Directory-Default](../adr/019-profile-as-directory-default.en.md) mechanism) is the platform v2.8.0 metric-split feature — it lets tenants inherit directory-default rules automatically. **Deliberately not enabled in Phase 2/3**:
+`_defaults.yaml` (the [Profile-as-Directory-Default](../adr/018-profile-as-directory-default.en.md) mechanism) is the platform v2.8.0 metric-split feature — it lets tenants inherit directory-default rules automatically. **Deliberately not enabled in Phase 2/3**:
 
 - **Phase 2 shadow**: the customer is distinguishing "is this new-system noise or a `_defaults` design oversight?" — too many variables in flight
 - **Phase 3 cutover**: cutover is already a high-risk window; layering metric-split activation on top makes incident root-cause analysis hard

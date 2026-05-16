@@ -1,10 +1,10 @@
 ---
-title: "ADR-021: Tenant Federation — Label-Injection Proxy over Self-Built Endpoint"
+title: "ADR-020: Tenant Federation — Label-Injection Proxy over Self-Built Endpoint"
 tags: [adr, federation, multi-tenant, security]
 audience: [platform-engineers, contributors]
 version: v2.8.0
 lang: zh
-id: ADR-021
+id: ADR-020
 tracking_kind: adr
 status: proposed
 domain: tenant-api
@@ -12,7 +12,7 @@ created_at: 2026-05-11
 updated_at: 2026-05-11
 ---
 
-# ADR-021: Tenant Federation — Label-Injection Proxy over Self-Built Endpoint
+# ADR-020: Tenant Federation — Label-Injection Proxy over Self-Built Endpoint
 
 > Tenant-user 拉取**自己**的 metrics 子集回 tenant 側 infra 自管 federation。
 > 平台**不自寫** federation endpoint，採 vmauth（VM 客戶）/ prom-label-proxy（Prom 客戶）做 label-enforced rewriting。
@@ -23,7 +23,7 @@ updated_at: 2026-05-11
 
 🟡 **Proposed**（issue [#380](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/380) IV-1 deliverable，v2.8.0 起草）
 
-> EN mirror：本 ADR 進入 `Accepted` 後再起 EN 翻譯（對齊 ADR-020 雙語策略）。
+> EN mirror：本 ADR 進入 `Accepted` 後再起 EN 翻譯（對齊 ADR-019 雙語策略）。
 
 ## 背景
 
@@ -37,7 +37,7 @@ updated_at: 2026-05-11
   - 整合到自己既有 Grafana dashboard / oncall workflow
   - 自管告警 evaluation（不依賴平台 Alertmanager）
 
-**注意定位**：這不是「平台幫客戶 federation」（那是 [ADR-004](./004-federation-central-exporter-first.md)），是「**客戶從平台拉自己的 metrics 出去**」。資料流向相反，trust boundary 也不同——ADR-004 是「平台信任邊緣叢集（同組織內 N 個 cluster）」的 inbound 場景；ADR-021 是「平台對客戶（cross-org）」的 outbound 場景，被取走的資料離開平台控制邊界後就可能被 tenant 自己再轉、再存、再泄。Multi-tenant isolation 與 audit 需求因此更嚴格。
+**注意定位**：這不是「平台幫客戶 federation」（那是 [ADR-004](./004-federation-central-exporter-first.md)），是「**客戶從平台拉自己的 metrics 出去**」。資料流向相反，trust boundary 也不同——ADR-004 是「平台信任邊緣叢集（同組織內 N 個 cluster）」的 inbound 場景；ADR-020 是「平台對客戶（cross-org）」的 outbound 場景，被取走的資料離開平台控制邊界後就可能被 tenant 自己再轉、再存、再泄。Multi-tenant isolation 與 audit 需求因此更嚴格。
 
 ### 既有 federation 架構覆蓋空白
 
@@ -129,7 +129,7 @@ config 才能發現是 data-layer 沒打 label。是個典型的 silent-failure 
 | 有 sample 但**無** `tenant_id` label | ⛔ **Hard block** | True positive failure mode——scrape config 沒打 label，這時讓 metric 進 whitelist 就是埋 empty-vector 地雷 |
 | 過去 24h 完全無 sample | ⚠️ **WARN，不 block**——要求 admin 顯式 `--force` 才能通過 | Cold start（新 tenant deploy 新 service）/ sparse metric（`critical_error_count` 週發一次）都是合法情境；hard block 會卡死合法 whitelist 更新 |
 
-`--force` bypass 路徑必須寫進 audit log：「Bypassed label enrichment check by `<user>`: reason=`<cold-start|sparse-metric|other>`」。**為什麼不直接 hard block 全部**：cardinality guard 也是 soft gate 設計（[ADR-018](./018-defaults-yaml-inheritance-dual-hash.md) precedent）——平台級防護要區分「結構性錯誤（hard block）」與「資料時序性缺漏（warn + 人工確認）」，否則 false positive 把合法 ops 鎖死。
+`--force` bypass 路徑必須寫進 audit log：「Bypassed label enrichment check by `<user>`: reason=`<cold-start|sparse-metric|other>`」。**為什麼不直接 hard block 全部**：cardinality guard 也是 soft gate 設計（[ADR-017](./017-defaults-yaml-inheritance-dual-hash.md) precedent）——平台級防護要區分「結構性錯誤（hard block）」與「資料時序性缺漏（warn + 人工確認）」，否則 false positive 把合法 ops 鎖死。
 
 ### Token model
 

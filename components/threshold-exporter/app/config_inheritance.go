@@ -25,7 +25,7 @@ import (
 	"github.com/vencil/threshold-exporter/pkg/config"
 )
 
-// deepMerge implements ADR-018 inheritance semantics — see
+// deepMerge implements ADR-017 inheritance semantics — see
 // pkg/config.DeepMerge for the rule list.
 func deepMerge(base, override map[string]any) map[string]any {
 	return config.DeepMerge(base, override)

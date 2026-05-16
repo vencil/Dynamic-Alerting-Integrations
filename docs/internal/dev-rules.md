@@ -371,7 +371,7 @@ tools:
 
 **原因**：沒有 trailer 時 backlog frontmatter 的 `status:` 與 git log 失聯，下次 session 會把已修項目當新項目再 audit 一次。
 
-**Namespace + frontmatter（v2.8.1）**：原 `TECH-DEBT-NNN` / `TD-NN` / `HA-NN` / `REG-NNN` 統一為 `TRK-NNN`（[ADR-020](../adr/020-planning-ssot.md) Option C；對映見 [`planning-id-mapping.md`](planning-id-mapping.md)）；過渡期舊 ID 仍 work，CI 自動翻譯但 warn。新 planning entry 必填 frontmatter `id: TRK-NNN` / `tracking_kind` / `status`，done 後補 `pr_ref:`（完整 schema + 三 namespace 平行政策見 [ADR-020 §Frontmatter Contract / §Namespace Policy](../adr/020-planning-ssot.md#三層設計)）；chunk 2a `generate_planning_index.py` 待落地後會掃 frontmatter 產 derived view。Lint `check-techdebt-drift` 已 phantom-no-op，由 [issue #379](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/379) chunk 2b `check_planning_status_sync.py` 取代。純文件 / 純 refactor / 跨多項目批次清理可不寫 trailer，改在 body 用 prose 列 IDs。
+**Namespace + frontmatter（v2.8.1）**：原 `TECH-DEBT-NNN` / `TD-NN` / `HA-NN` / `REG-NNN` 統一為 `TRK-NNN`（[ADR-019](../adr/019-planning-ssot.md) Option C；對映見 [`planning-id-mapping.md`](planning-id-mapping.md)）；過渡期舊 ID 仍 work，CI 自動翻譯但 warn。新 planning entry 必填 frontmatter `id: TRK-NNN` / `tracking_kind` / `status`，done 後補 `pr_ref:`（完整 schema + 三 namespace 平行政策見 [ADR-019 §Frontmatter Contract / §Namespace Policy](../adr/019-planning-ssot.md#三層設計)）；chunk 2a `generate_planning_index.py` 待落地後會掃 frontmatter 產 derived view。追蹤項目 status sync 由 `check_planning_status_sync.py`（[issue #379](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/379) chunk 2b，ADR-019 Layer 3）強制。純文件 / 純 refactor / 跨多項目批次清理可不寫 trailer，改在 body 用 prose 列 IDs。
 
 ### P2. PR Scope Drift（由 `check_pr_scope_drift` hook 強制，v2.8.0 Phase .a 新增）
 
@@ -503,6 +503,6 @@ Secret leak 防線是 L0/L1/L2/L3 四層：L0 GitHub native push-protection（re
 |------|------|
 | v2.6.0 | 從 `CLAUDE.md` 搬出，作為 11 條規範的 SSOT |
 | v2.8.0 | 新增 §T 工具生命週期（A-5b scan_component_health archived opt-in）|
-| v2.8.0 Phase .a | 新增 §P1 Commit trailer 紀律 + pre-push hook `check-techdebt-drift`（Trap #12 三層防禦的「規範層 + 攔截層」）|
+| v2.8.0 Phase .a | 新增 §P1 Commit trailer 紀律 + 對應 pre-push 攔截 hook（Trap #12 三層防禦的「規範層 + 攔截層」；該 hook 於 v2.8.1 隨 `known-regressions.md` 撤除而移除）|
 | v2.8.0 Phase .a | 新增 §A 產出物治理（L1/L2/L3 taxonomy + retention rule + §A6 v2.9.0+ Session Ledger 退場）：由 `v2.8.0-planning.md §12.6` 搬入 SSOT；compact-pressure 分析催生 §A6 退場政策 |
 | v2.8.1 | 新增 §安全紀律（Secret Hygiene，#445 AC iv）：`--no-verify` 嚴禁政策 + L0/L1/L2/L3 四層防線指引。size cap 500→520（§安全紀律 為實質新內容，`--no-verify` ban 是無法 code-enforce 的純文字規則） |

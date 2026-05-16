@@ -42,7 +42,7 @@ graph TD
     end
 
     subgraph PL["Platform Layer"]
-        TE["threshold-exporter ×2 HA<br/>conf.d/ Hierarchy / Dual-Hash Hot-Reload<br/>(ADR-017/018, v2.7.0)"]
+        TE["threshold-exporter ×2 HA<br/>conf.d/ Hierarchy / Dual-Hash Hot-Reload<br/>(ADR-016/017, v2.7.0)"]
         RP["Projected Volume<br/>15 Rule Packs"]
     end
 
@@ -179,7 +179,7 @@ Tri-state mode (Normal / Silent / Maintenance with `expires` auto-expiry) · Fou
 | Day-to-day ops | `diagnose` health check · `patch-config` safe updates · `check-alert` alert status · `maintenance-scheduler` scheduled silence · `explain-route` routing debugger |
 | Quality governance | `validate-config` all-in-one validation · `alert-quality` quality scoring · Policy-as-Code · `cardinality-forecast` trend prediction · `backtest-threshold` historical replay |
 | Config inheritance (v2.7.0) | `describe-tenant` shows defaults chain + merged config (with `--what-if` simulation / `--show-sources` / `--diff`) · `migrate-conf-d` automated flat → hierarchy migration (`--dry-run` default / `--apply` executes `git mv` preserving history) |
-| Customer onboarding pipeline (v2.8.0) | `da-parser` PromRule → JSON parser (dialect detection + VM-only function allowlist + strict-PromQL compatibility check + provenance header) · `da-tools profile build` cluster + Profile-as-Directory-Default extraction ([ADR-019](docs/adr/019-profile-as-directory-default.en.md), median-based defaults) · `da-batchpr apply` Hierarchy-Aware Batch PR creation (Base Infrastructure PR first / per-tenant PRs marked `Blocked by:`) · `da-batchpr refresh --base-merged` auto-rebase tenant PRs after Base merge · `da-batchpr refresh --source-rule-ids` parser-bug data-layer hot-fix granular regen · `da-guard` Dangling Defaults Guard (schema / routing / cardinality / redundant-override 4-layer check; CI workflow posts sticky PR comment) |
+| Customer onboarding pipeline (v2.8.0) | `da-parser` PromRule → JSON parser (dialect detection + VM-only function allowlist + strict-PromQL compatibility check + provenance header) · `da-tools profile build` cluster + Profile-as-Directory-Default extraction ([ADR-018](docs/adr/018-profile-as-directory-default.en.md), median-based defaults) · `da-batchpr apply` Hierarchy-Aware Batch PR creation (Base Infrastructure PR first / per-tenant PRs marked `Blocked by:`) · `da-batchpr refresh --base-merged` auto-rebase tenant PRs after Base merge · `da-batchpr refresh --source-rule-ids` parser-bug data-layer hot-fix granular regen · `da-guard` Dangling Defaults Guard (schema / routing / cardinality / redundant-override 4-layer check; CI workflow posts sticky PR comment) |
 | Adoption acceleration | `init` project scaffold · `config-history` snapshot tracking · `gitops-check` GitOps validation · `demo-showcase` demo script |
 
 All tools packaged in `da-tools` container (`docker run --rm ghcr.io/vencil/da-tools`). Full CLI reference: [da-tools CLI](docs/cli-reference.en.md) · [Cheat Sheet](docs/cheat-sheet.en.md) · [Interactive Tools Index](docs/interactive-tools.md)
@@ -211,9 +211,9 @@ Full installation paths and signature verification flow: [Migration Toolkit Inst
 | Projected Volume Isolation | 15 independent Rule Pack ConfigMaps, zero PR conflicts | [ADR-005](docs/adr/005-projected-volume-for-rule-packs.en.md) |
 | Config-Driven Full Chain | Thresholds → routing → notifications → behavior control, all YAML-driven | — |
 | Four-Layer Routing Merge | defaults → profile → tenant → enforced + domain policy constraints | [ADR-007](docs/adr/007-cross-domain-routing-profiles.en.md) |
-| conf.d/ Hierarchical Directory (v2.7.0) | `conf.d/<domain>/<region>/<tenant>.yaml` multi-layer paths; flat and hierarchical layouts coexist | [ADR-017](docs/adr/017-conf-d-directory-hierarchy-mixed-mode.en.md) |
-| `_defaults.yaml` Inheritance + Dual-Hash Hot-Reload (v2.7.0) | L0→L1→L2→L3 deep merge + null-as-delete + `source_hash`/`merged_hash` precise reload + 300ms debounce | [ADR-018](docs/adr/018-defaults-yaml-inheritance-dual-hash.en.md) |
-| Profile-as-Directory-Default (v2.8.0) | Cluster shared thresholds go in `_defaults.yaml` (cluster median); only deviating tenants write `<id>.yaml` containing override-only keys; rejects 50-tenant.yaml-copy GitOps anti-pattern | [ADR-019](docs/adr/019-profile-as-directory-default.en.md) |
+| conf.d/ Hierarchical Directory (v2.7.0) | `conf.d/<domain>/<region>/<tenant>.yaml` multi-layer paths; flat and hierarchical layouts coexist | [ADR-016](docs/adr/016-conf-d-directory-hierarchy-mixed-mode.en.md) |
+| `_defaults.yaml` Inheritance + Dual-Hash Hot-Reload (v2.7.0) | L0→L1→L2→L3 deep merge + null-as-delete + `source_hash`/`merged_hash` precise reload + 300ms debounce | [ADR-017](docs/adr/017-defaults-yaml-inheritance-dual-hash.en.md) |
+| Profile-as-Directory-Default (v2.8.0) | Cluster shared thresholds go in `_defaults.yaml` (cluster median); only deviating tenants write `<id>.yaml` containing override-only keys; rejects 50-tenant.yaml-copy GitOps anti-pattern | [ADR-018](docs/adr/018-profile-as-directory-default.en.md) |
 | Security Guardrails Built-in | Webhook Domain Allowlist · Schema Validation · Cardinality Guard · Dangling Defaults Guard (v2.8.0, [`da-guard`](docs/migration-toolkit-installation.en.md)) | — |
 
 Full ADR index: [docs/adr/](docs/adr/README.en.md)

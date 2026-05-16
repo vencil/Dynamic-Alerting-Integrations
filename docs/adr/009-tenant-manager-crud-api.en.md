@@ -145,7 +145,7 @@ v2.4.0's primary user scenario is low-frequency operations (≥1 second between 
 
 - `components/tenant-api/` — API server implementation
 - `components/threshold-exporter/pkg/config/` — Shared config parsing package
-- `docs/interactive/tools/tenant-manager.jsx` — Portal frontend
+- `tools/portal/src/interactive/tools/tenant-manager.jsx` — Portal frontend
 - `docs/governance-security.md §2` — Schema validation dual-consistency requirements
 - [oauth2-proxy documentation](https://oauth2-proxy.github.io/oauth2-proxy/) — IdP configuration reference
 - [swaggo/swag](https://github.com/swaggo/swag) — Go annotation → swagger.yaml

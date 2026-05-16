@@ -15,7 +15,7 @@ lang: en
 
 ## Why a Migration Toolkit
 
-Importing a customer's existing Prometheus alerting rule corpus (PromRule CRDs / Alertmanager YAML) into the Dynamic Alerting Platform's conf.d/ Profile-as-Directory-Default architecture ([ADR-019](adr/019-profile-as-directory-default.en.md)) requires a chain of tools:
+Importing a customer's existing Prometheus alerting rule corpus (PromRule CRDs / Alertmanager YAML) into the Dynamic Alerting Platform's conf.d/ Profile-as-Directory-Default architecture ([ADR-018](adr/018-profile-as-directory-default.en.md)) requires a chain of tools:
 
 ```
 PromRule corpus → da-parser → profile-builder cluster + translator → da-batchpr → da-guard validation → conf.d/
@@ -354,5 +354,5 @@ For further issues, open a [GitHub issue](https://github.com/vencil/Dynamic-Aler
 
 - [`migration-guide.en.md`](migration-guide.en.md) — Overall migration flow
 - [`scenarios/incremental-migration-playbook.en.md`](scenarios/incremental-migration-playbook.en.md) — Incremental migration playbook (incl. Emergency Rollback Procedures)
-- [`adr/019-profile-as-directory-default.en.md`](adr/019-profile-as-directory-default.en.md) — Why conf.d/ uses sparse-override shape
+- [`adr/018-profile-as-directory-default.en.md`](adr/018-profile-as-directory-default.en.md) — Why conf.d/ uses sparse-override shape
 - [`cli-reference.en.md` § guard](cli-reference.en.md#guard) — Full `da-tools guard defaults-impact` flag reference

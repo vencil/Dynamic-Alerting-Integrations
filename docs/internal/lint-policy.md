@@ -11,7 +11,7 @@ lang: zh
 > 對 [`scripts/tools/lint/check_*.py`](../../scripts/tools/lint/) 50 個 lint 工具的分類、scope、bypass 機制、allowlist 治理。
 > 觸發來自 PR #375 retrospective 對 (b)/(c) class lint anti-pattern 的識別。
 >
-> **EN mirror**：本文件仍在 outline 階段；待 [ADR-020](../adr/020-planning-ssot.md) Accepted 後與 lint-policy 一併 ship `lint-policy.en.md`。
+> **EN mirror**：本文件仍在 outline 階段；待 [ADR-019](../adr/019-planning-ssot.md) Accepted 後與 lint-policy 一併 ship `lint-policy.en.md`。
 
 ## 1. 為什麼需要 lint policy
 
@@ -167,7 +167,7 @@ PR 加入新 allowlist entry 時須在 PR description 答：
 
 ## 6. 50 個現存 lint 分類表（first cut）
 
-> 完整表格將在 [ADR-020](../adr/020-planning-ssot.md) 工具實作完成後由 `generate_planning_index.py` 自動產出 `planning-index.md`；此處先列分類 summary。
+> 完整表格將在 [ADR-019](../adr/019-planning-ssot.md) 工具實作完成後由 `generate_planning_index.py` 自動產出 `planning-index.md`；此處先列分類 summary。
 
 ### (a) class — ~36 個
 
@@ -190,7 +190,7 @@ PR 加入新 allowlist entry 時須在 PR description 答：
 | `check_flaky_registry.py` | grandfathered tests | OK |
 | `check_head_blob_hygiene.py` | 已知 large fixtures | OK |
 | `check_jsx_i18n.py` | 已 i18n marker 標記過 | OK |
-| `check_planning_status_sync.py` | （待 ADR-020 ship 後新增）| OK |
+| `check_planning_status_sync.py` | （待 ADR-019 ship 後新增）| OK |
 
 **Action item**：上述 6 個 (b) class lint 在 PR ship 後（V-2 phase）批次 refactor 為 diff-only。
 
@@ -229,6 +229,6 @@ PR 新增 lint 須在 PR description 答：
 
 ## 關聯
 
-- 本文件與 [ADR-020](../adr/020-planning-ssot.md) 同 PR ship；ADR-020 的 `check_planning_status_sync.py` 是新 (b) class lint
+- 本文件與 [ADR-019](../adr/019-planning-ssot.md) 同 PR ship；ADR-019 的 `check_planning_status_sync.py` 是新 (b) class lint
 - 與 [dev-rules.md #4 Doc-as-Code](dev-rules.md) 配合：dev-rules 規範作者該做什麼，本文件規範自動化該擋什麼
 - bypass 機制觸發來自 PR #375 對 lint hard-block + full-file scan 的 collateral damage 識別

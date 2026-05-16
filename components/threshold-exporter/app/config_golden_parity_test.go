@@ -1,13 +1,13 @@
 package main
 
-// Golden parity test — the TRUMP CARD for ADR-018 conformance.
+// Golden parity test — the TRUMP CARD for ADR-017 conformance.
 //
 // This test reads tests/golden/golden.json (captured from Python
 // describe_tenant.py) and runs the Go computeMergedHash + computeSourceHash
 // against the same 8 fixtures. Byte-for-byte hash equality is required;
 // any divergence is a §8.11.2 semantic trap and a ship blocker.
 //
-// Fixtures cover every deep_merge rule from ADR-018:
+// Fixtures cover every deep_merge rule from ADR-017:
 //   flat              — no defaults chain
 //   l0-only           — root _defaults + tenant override (scalar)
 //   full-l0-l3        — 4-level inheritance, array replace, tenant override
