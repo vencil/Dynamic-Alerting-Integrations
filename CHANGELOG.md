@@ -13,6 +13,10 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 
 <!-- 下一版 in-flight 工作暫存區。每筆 entry 目標 3-6 行使用者重點 + 一行指回內部 artifact；session 過程 / FUSE trap / 完整 commit list 不入此處。release 收尾時做最終 condensation 並切正式 `## [vX.Y.Z]` heading。 -->
 
+### Added
+
+- **Tenant federation token endpoint（ADR-020 IV-2d，issue [#509](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/509)）**：tenant-api 新增 `POST` / `GET` / `DELETE /api/v1/federation/tokens` — 為租戶簽發短效（預設 4h）RS256 JWT，供其向 label-injection proxy（vmauth / prom-label-proxy）拉取自己的 metrics 子集回租戶側 infra 自管（ADR-020 §Token model）。簽發需對目標租戶具 `admin` 權限（資料域外持出，門檻高於 config write）；token claim 帶 `tenant_id` / `token_id`，為 proxy 注入 label 與 gateway 取 rate-limit key 的跨組件契約。MVP 無 server-side revocation — `DELETE` 僅移除 bookkeeping record，JWT 至 `exp` 前仍有效（補償控制為 IV-2b gateway rate limit）。新增 `internal/federation` package（RS256 簽章器 + JSON 檔案 token record store，刻意不入 git conf.d）；`--federation-key` 未設時整個 endpoint 不註冊。詳 [ADR-020](docs/adr/020-tenant-federation.md)。
+
 ---
 
 ## [v2.8.1] — secret-scan 四層防線 + Planning SSOT + DX 工具鏈收斂 (2026-05-16)

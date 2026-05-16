@@ -21,6 +21,7 @@ package handler
 
 import (
 	"github.com/vencil/tenant-api/internal/async"
+	"github.com/vencil/tenant-api/internal/federation"
 	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/groups"
 	"github.com/vencil/tenant-api/internal/platform"
@@ -74,6 +75,12 @@ type Deps struct {
 
 	// Views manages saved filter views (`_views.yaml`).
 	Views *views.Manager
+
+	// Federation signs tenant federation tokens (ADR-020 IV-2d).
+	// Optional — nil when no signing key is configured, in which case
+	// main.go leaves the /federation routes unregistered, so handlers
+	// reading it are never reached with a nil value.
+	Federation *federation.Manager
 
 	// Tasks runs async batch operations behind a goroutine pool.
 	Tasks *async.Manager
