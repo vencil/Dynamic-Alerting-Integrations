@@ -23,7 +23,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"syscall"
 	"time"
 
@@ -136,8 +135,10 @@ func main() {
 	// An empty --federation-key disables the endpoint entirely.
 	federationKey := flag.String("federation-key", envOrDefault("TA_FEDERATION_KEY", ""),
 		"Path to the RS256 private key (PEM) for signing federation tokens. Empty disables the federation endpoint.")
-	federationStore := flag.String("federation-store", envOrDefault("TA_FEDERATION_STORE", ""),
-		"Path to the federation token record store (JSON). Defaults to <os.TempDir>/tenant-api-federation-tokens.json.")
+	federationStore := flag.String("federation-store", envOrDefault("TA_FEDERATION_STORE", "tenant-federation-store"),
+		"Name of the ConfigMap holding the federation token record store (ADR-020 Posture B). The Helm chart pre-creates it.")
+	federationNamespace := flag.String("federation-namespace", envOrDefault("TA_FEDERATION_NAMESPACE", ""),
+		"Namespace of the federation store ConfigMap. Empty uses the pod's own namespace.")
 	federationTTL := flag.Duration("federation-token-ttl",
 		parseDurationOrDefault(os.Getenv("TA_FEDERATION_TOKEN_TTL"), federation.DefaultTTL),
 		"Federation token lifetime (default 4h; ADR-020 §Token model)")
@@ -195,22 +196,23 @@ func main() {
 	})
 
 	// v2.9.0 ADR-020 IV-2d: federation token signer. Optional — when
-	// --federation-key is unset NewManager returns nil and the
-	// /federation routes below stay unregistered.
-	fedStorePath := *federationStore
-	if fedStorePath == "" {
-		fedStorePath = filepath.Join(os.TempDir(), "tenant-api-federation-tokens.json")
-	}
-	federationMgr, err := federation.NewManager(*federationKey, fedStorePath, *federationTTL)
+	// --federation-key is unset wireFederation returns nil and the
+	// /federation routes below stay unregistered. Posture B: token
+	// records live in a Kubernetes ConfigMap so tenant-api stays
+	// stateless and can run multi-replica.
+	federationMgr, err := wireFederation(federationFlags{
+		KeyPath:       *federationKey,
+		ConfigMapName: *federationStore,
+		Namespace:     *federationNamespace,
+		TTL:           *federationTTL,
+	})
 	if err != nil {
 		log.Fatalf("FATAL: federation init: %v", err)
 	}
 	if federationMgr != nil {
 		slog.Info("federation token endpoint enabled",
-			"token_ttl", federationMgr.TTL(), "store", fedStorePath)
-		if *federationStore == "" {
-			slog.Warn("federation token store is on os.TempDir; set TA_FEDERATION_STORE to a persistent volume for production")
-		}
+			"token_ttl", federationMgr.TTL(),
+			"store_configmap", *federationStore, "store_namespace", *federationNamespace)
 		if len(rbacMgr.Get().Groups) == 0 {
 			slog.Warn("federation endpoint enabled but RBAC is in open mode — every token issuance will be denied (admin permission required); supply --rbac")
 		}

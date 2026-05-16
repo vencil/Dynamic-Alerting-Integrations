@@ -64,6 +64,15 @@ const docTemplate = `{
                                 "type": "string"
                             }
                         }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
                     }
                 }
             },
@@ -124,6 +133,15 @@ const docTemplate = `{
                             }
                         }
                     },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
@@ -138,14 +156,14 @@ const docTemplate = `{
         },
         "/api/v1/federation/tokens/{id}": {
             "delete": {
-                "description": "Removes a federation token's bookkeeping record. NOTE: per ADR-020 there is no server-side revocation — a still-valid JWT remains usable until it expires. Requires admin permission on the token's tenant.",
+                "description": "Revokes a federation token — removes its record and adds it to the gateway revoked set. NOTE: revocation is eventually consistent and propagates to the gateway within ~1-2 minutes (ADR-020 Posture B). Requires admin permission on the token's tenant.",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
                     "federation"
                 ],
-                "summary": "Delete a federation token record",
+                "summary": "Revoke a federation token",
                 "parameters": [
                     {
                         "type": "string",

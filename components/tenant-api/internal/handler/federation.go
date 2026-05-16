@@ -67,6 +67,7 @@ func toFederationTokenRecord(r federation.Record) FederationTokenRecord {
 // @Failure     400  {object} map[string]string
 // @Failure     403  {object} map[string]string
 // @Failure     409  {object} map[string]string
+// @Failure     429  {object} map[string]string
 // @Failure     500  {object} map[string]string
 // @Router      /api/v1/federation/tokens [post]
 func (d *Deps) CreateFederationToken() http.HandlerFunc {
@@ -105,11 +106,14 @@ func (d *Deps) CreateFederationToken() http.HandlerFunc {
 
 		token, rec, err := d.Federation.Issue(req.TenantID, rbac.RequestEmail(r), req.Description)
 		if err != nil {
-			if errors.Is(err, federation.ErrTokenLimitReached) {
+			switch {
+			case errors.Is(err, federation.ErrTokenLimitReached):
 				writeJSONErrorWithCode(w, r, http.StatusConflict, CodeConflict, err.Error())
-				return
+			case errors.Is(err, federation.ErrMintRateLimited):
+				writeJSONErrorWithCode(w, r, http.StatusTooManyRequests, CodeRateLimited, err.Error())
+			default:
+				writeJSONError(w, r, http.StatusInternalServerError, "issue federation token: "+err.Error())
 			}
-			writeJSONError(w, r, http.StatusInternalServerError, "issue federation token: "+err.Error())
 			return
 		}
 
@@ -132,6 +136,7 @@ func (d *Deps) CreateFederationToken() http.HandlerFunc {
 // @Success     200 {array}  FederationTokenRecord
 // @Failure     400 {object} map[string]string
 // @Failure     403 {object} map[string]string
+// @Failure     500 {object} map[string]string
 // @Router      /api/v1/federation/tokens [get]
 func (d *Deps) ListFederationTokens() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -151,7 +156,11 @@ func (d *Deps) ListFederationTokens() http.HandlerFunc {
 			return
 		}
 
-		recs := d.Federation.List(tenantID)
+		recs, err := d.Federation.List(tenantID)
+		if err != nil {
+			writeJSONError(w, r, http.StatusInternalServerError, "list federation tokens: "+err.Error())
+			return
+		}
 		resp := make([]FederationTokenRecord, 0, len(recs))
 		for _, rec := range recs {
 			resp = append(resp, toFederationTokenRecord(rec))
@@ -164,13 +173,13 @@ func (d *Deps) ListFederationTokens() http.HandlerFunc {
 
 // DeleteFederationToken handles DELETE /api/v1/federation/tokens/{id}.
 //
-// Removes the bookkeeping record for a token. Per ADR-020 there is no
-// server-side revocation list: a still-valid JWT keeps working until
-// its expiry even after this call. DELETE exists so operators can tidy
-// the listing and so a future revocation feature has a hook.
+// Revokes the token (ADR-020 Posture B): the bookkeeping record is
+// removed and the token id is added to the revoked set the API gateway
+// consults. Revocation is eventually consistent — it propagates to the
+// gateway within the ConfigMap projected-volume sync window (~1-2 min).
 //
-// @Summary     Delete a federation token record
-// @Description Removes a federation token's bookkeeping record. NOTE: per ADR-020 there is no server-side revocation — a still-valid JWT remains usable until it expires. Requires admin permission on the token's tenant.
+// @Summary     Revoke a federation token
+// @Description Revokes a federation token — removes its record and adds it to the gateway revoked set. NOTE: revocation is eventually consistent and propagates to the gateway within ~1-2 minutes (ADR-020 Posture B). Requires admin permission on the token's tenant.
 // @Tags        federation
 // @Produce     json
 // @Param       id path string true "Token ID"
@@ -183,7 +192,11 @@ func (d *Deps) DeleteFederationToken() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		tokenID := chi.URLParam(r, "id")
 
-		rec, ok := d.Federation.Get(tokenID)
+		rec, ok, err := d.Federation.Get(tokenID)
+		if err != nil {
+			writeJSONError(w, r, http.StatusInternalServerError, "look up federation token: "+err.Error())
+			return
+		}
 		if !ok {
 			writeJSONError(w, r, http.StatusNotFound, "federation token not found: "+tokenID)
 			return
@@ -195,9 +208,9 @@ func (d *Deps) DeleteFederationToken() http.HandlerFunc {
 			return
 		}
 
-		deleted, err := d.Federation.Delete(tokenID)
+		deleted, err := d.Federation.Delete(tokenID, rec.ExpiresAt)
 		if err != nil {
-			writeJSONError(w, r, http.StatusInternalServerError, "delete federation token: "+err.Error())
+			writeJSONError(w, r, http.StatusInternalServerError, "revoke federation token: "+err.Error())
 			return
 		}
 		if !deleted {
@@ -207,8 +220,9 @@ func (d *Deps) DeleteFederationToken() http.HandlerFunc {
 
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{
-			"status":   "ok",
+			"status":   "revocation_initiated",
 			"token_id": tokenID,
+			"detail":   "revocation propagates to the gateway within ~2 minutes",
 		})
 	}
 }

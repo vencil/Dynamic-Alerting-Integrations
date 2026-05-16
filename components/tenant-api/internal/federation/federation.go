@@ -8,15 +8,16 @@
 // signature with the public half of the key and never call back here, so
 // verification is fully stateless.
 //
-// MVP scope (ADR-020 §Token model):
-//   - No server-side revocation list. A leaked token stays valid until
-//     its exp claim (≤ TTL). The compensating control is the API-gateway
-//     per-token rate limit (sub-issue IV-2b). DELETE removes only the
-//     local bookkeeping Record — it does not invalidate the JWT.
-//   - Token Records are operational state (machine-written on every
-//     issuance, high churn). They persist to a dedicated JSON store,
-//     deliberately NOT to the git-backed conf.d directory, so issuance
-//     does not generate a commit per token.
+// Storage (ADR-020 Posture B):
+//   - Token Records are operational state — machine-written on every
+//     issuance, high churn. The production store is a shared Kubernetes
+//     ConfigMap (configmap_store.go) so tenant-api stays stateless and
+//     can run multi-replica. The JSON-file store (store.go) is retained
+//     only as the unit-test backend.
+//   - DELETE is a real revocation: the token id is written to a revoked
+//     set that the API gateway consults (sub-issue IV-2b). A revoked
+//     token is rejected within the ConfigMap projected-volume sync
+//     window (~1-2 min).
 package federation
 
 import (
@@ -48,6 +49,12 @@ const issuer = "tenant-api"
 // replay). ADR-020 Wave-0 decision 3.
 const audience = "tenant-federation"
 
+// clockSkewLeeway backdates the JWT `iat` claim. A signer clock a few
+// seconds ahead of the verifier would otherwise place `iat` in the
+// verifier's future and get a just-issued token rejected (ADR-020;
+// Gemini round-7 review). The gateway verifier sets a matching leeway.
+const clockSkewLeeway = time.Minute
+
 // tokenIDPrefix namespaces the public token handle. The audit log
 // (sub-issue IV-2f) records a token_id_prefix, so a recognisable
 // prefix keeps those lines greppable.
@@ -69,6 +76,10 @@ const maxTokensPerTenant = 16
 // ErrTokenLimitReached is returned by Issue when the tenant already
 // holds maxTokensPerTenant live tokens.
 var ErrTokenLimitReached = errors.New("federation: tenant federation-token limit reached")
+
+// ErrMintRateLimited is returned by Issue when a tenant mints tokens
+// faster than the per-tenant rate limit allows.
+var ErrMintRateLimited = errors.New("federation: token mint rate limit exceeded")
 
 // Claims is the JWT payload of a federation token.
 //
@@ -97,16 +108,17 @@ type Record struct {
 // expired reports whether the record is past its expiry as of now.
 func (r Record) expired(now time.Time) bool { return now.After(r.ExpiresAt) }
 
-// RecordStore is the persistence backend for token Records. The MVP
-// ships the JSON-file store (store.go); ADR-020 Wave-0 decision 4
-// targets a ConfigMap-backed implementation (sub-issue IV-2n) so
-// tenant-api can run multi-replica. The interface methods are
-// unexported — it is implemented only within this package.
+// RecordStore is the persistence backend for token Records. Two
+// implementations exist: the production ConfigMap-backed store
+// (configmap_store.go) and the JSON-file store (store.go, unit tests
+// only). Every method may touch a network-backed store, so all may
+// fail. The interface methods are unexported — it is implemented only
+// within this package.
 type RecordStore interface {
 	put(r Record) error
-	get(tokenID string) (Record, bool)
-	list(tenantID string, now time.Time) []Record
-	remove(tokenID string) (bool, error)
+	get(tokenID string) (Record, bool, error)
+	list(tenantID string, now time.Time) ([]Record, error)
+	revoke(tokenID string, expiresAt time.Time) (bool, error)
 }
 
 // Manager signs federation tokens and tracks issued-token Records.
@@ -116,17 +128,19 @@ type Manager struct {
 	key   *rsa.PrivateKey
 	ttl   time.Duration
 	store RecordStore
+	mints *mintLimiter
 }
 
 // NewManager loads the RS256 signing key from keyPath (a PEM file,
-// PKCS#1 or PKCS#8) and opens the Record store at storePath. A
-// non-positive ttl falls back to DefaultTTL.
+// PKCS#1 or PKCS#8) and builds a Manager around the given RecordStore.
+// A non-positive ttl falls back to DefaultTTL. The caller constructs
+// the store — NewConfigMapStore in production.
 //
 // When keyPath is empty NewManager returns (nil, nil): the federation
 // feature is then disabled and the caller leaves the /federation
 // routes unregistered — the same optional-dependency pattern main.go
 // uses for the PR tracker.
-func NewManager(keyPath, storePath string, ttl time.Duration) (*Manager, error) {
+func NewManager(keyPath string, store RecordStore, ttl time.Duration) (*Manager, error) {
 	if keyPath == "" {
 		return nil, nil
 	}
@@ -137,11 +151,7 @@ func NewManager(keyPath, storePath string, ttl time.Duration) (*Manager, error) 
 	if ttl <= 0 {
 		ttl = DefaultTTL
 	}
-	st, err := newStore(storePath)
-	if err != nil {
-		return nil, fmt.Errorf("federation: open token store: %w", err)
-	}
-	return &Manager{key: key, ttl: ttl, store: st}, nil
+	return &Manager{key: key, ttl: ttl, store: store, mints: newMintLimiter()}, nil
 }
 
 // NewManagerForTest builds a Manager around an in-memory signing key,
@@ -156,7 +166,7 @@ func NewManagerForTest(key *rsa.PrivateKey, storePath string, ttl time.Duration)
 	if err != nil {
 		return nil, err
 	}
-	return &Manager{key: key, ttl: ttl, store: st}, nil
+	return &Manager{key: key, ttl: ttl, store: st, mints: newMintLimiter()}, nil
 }
 
 // TTL returns the configured token lifetime.
@@ -169,7 +179,14 @@ func (m *Manager) TTL() time.Duration { return m.ttl }
 // re-display it, so the caller must surface it to the operator once.
 func (m *Manager) Issue(tenantID, issuedBy, description string) (string, Record, error) {
 	now := time.Now()
-	if live := m.store.list(tenantID, now); len(live) >= maxTokensPerTenant {
+	if !m.mints.allow(tenantID, now) {
+		return "", Record{}, ErrMintRateLimited
+	}
+	live, err := m.store.list(tenantID, now)
+	if err != nil {
+		return "", Record{}, fmt.Errorf("federation: check token limit: %w", err)
+	}
+	if len(live) >= maxTokensPerTenant {
 		return "", Record{}, ErrTokenLimitReached
 	}
 	tokenID, err := newTokenID()
@@ -183,7 +200,7 @@ func (m *Manager) Issue(tenantID, issuedBy, description string) (string, Record,
 			Issuer:    issuer,
 			Subject:   tenantID,
 			Audience:  jwt.ClaimStrings{audience},
-			IssuedAt:  jwt.NewNumericDate(now),
+			IssuedAt:  jwt.NewNumericDate(now.Add(-clockSkewLeeway)),
 			ExpiresAt: jwt.NewNumericDate(now.Add(m.ttl)),
 		},
 	}
@@ -206,23 +223,23 @@ func (m *Manager) Issue(tenantID, issuedBy, description string) (string, Record,
 }
 
 // List returns the non-expired Records for tenantID, oldest first.
-func (m *Manager) List(tenantID string) []Record {
+func (m *Manager) List(tenantID string) ([]Record, error) {
 	return m.store.list(tenantID, time.Now())
 }
 
 // Get returns the Record for tokenID, or false if no such record
 // exists. An expired-but-not-yet-pruned record is still returned —
 // callers that care about liveness check ExpiresAt themselves.
-func (m *Manager) Get(tokenID string) (Record, bool) {
+func (m *Manager) Get(tokenID string) (Record, bool, error) {
 	return m.store.get(tokenID)
 }
 
-// Delete removes the bookkeeping Record for tokenID and reports
-// whether a record was present. Per ADR-020 there is no server-side
-// revocation: a still-valid JWT keeps working until its exp even
-// after its Record is deleted.
-func (m *Manager) Delete(tokenID string) (bool, error) {
-	return m.store.remove(tokenID)
+// Delete revokes a token: it removes the bookkeeping Record and adds
+// the token id to the revoked set (ADR-020 Posture B). expiresAt is
+// the token's JWT expiry — the revoked entry self-prunes once past it.
+// Reports whether a record was present.
+func (m *Manager) Delete(tokenID string, expiresAt time.Time) (bool, error) {
+	return m.store.revoke(tokenID, expiresAt)
 }
 
 // newTokenID returns a fresh public token handle: tokenIDPrefix plus
