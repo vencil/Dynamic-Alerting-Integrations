@@ -200,7 +200,7 @@ func main() {
 	// /federation routes below stay unregistered. Posture B: token
 	// records live in a Kubernetes ConfigMap so tenant-api stays
 	// stateless and can run multi-replica.
-	federationMgr, err := wireFederation(federationFlags{
+	federationMgr, federationNS, err := wireFederation(federationFlags{
 		KeyPath:       *federationKey,
 		ConfigMapName: *federationStore,
 		Namespace:     *federationNamespace,
@@ -212,7 +212,7 @@ func main() {
 	if federationMgr != nil {
 		slog.Info("federation token endpoint enabled",
 			"token_ttl", federationMgr.TTL(),
-			"store_configmap", *federationStore, "store_namespace", *federationNamespace)
+			"store_configmap", *federationStore, "store_namespace", federationNS)
 		if len(rbacMgr.Get().Groups) == 0 {
 			slog.Warn("federation endpoint enabled but RBAC is in open mode — every token issuance will be denied (admin permission required); supply --rbac")
 		}
