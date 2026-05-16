@@ -15,7 +15,7 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 
 ### Added
 
-- **Tenant federation token endpoint（ADR-020 IV-2d，issue [#509](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/509)）**：tenant-api 新增 `POST` / `GET` / `DELETE /api/v1/federation/tokens` — 為租戶簽發短效（預設 4h）RS256 JWT，供其向 label-injection proxy（vmauth / prom-label-proxy）拉取自己的 metrics 子集回租戶側 infra 自管（ADR-020 §Token model）。簽發需對目標租戶具 `admin` 權限（資料域外持出，門檻高於 config write）；token claim 帶 `tenant_id` / `token_id`，為 proxy 注入 label 與 gateway 取 rate-limit key 的跨組件契約。MVP 無 server-side revocation — `DELETE` 僅移除 bookkeeping record，JWT 至 `exp` 前仍有效（補償控制為 IV-2b gateway rate limit）。新增 `internal/federation` package（RS256 簽章器 + JSON 檔案 token record store，刻意不入 git conf.d）；`--federation-key` 未設時整個 endpoint 不註冊。詳 [ADR-020](docs/adr/020-tenant-federation.md)。
+- **Tenant federation token endpoint（ADR-020 IV-2d，issue [#509](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/509)）**：tenant-api 新增 `POST` / `GET` / `DELETE /api/v1/federation/tokens` — 為租戶簽發短效（預設 4h）RS256 JWT，供其向 label-injection proxy（vmauth / prom-label-proxy）拉取自己的 metrics 子集回租戶側 infra 自管（ADR-020 §Token model）。簽發需對目標租戶具 `admin` 權限（資料域外持出，門檻高於 config write）；token claim 帶 `tenant_id` / `token_id`（proxy 注入 label、gateway 取 rate-limit key 的跨組件契約）+ `aud=tenant-federation`（防 cross-service replay）。MVP 無 server-side revocation — `DELETE` 僅移除 bookkeeping record，JWT 至 `exp` 前仍有效（補償控制為 IV-2b gateway rate limit）。新增 `internal/federation` package（RS256 簽章器 + JSON 檔案 token record store，刻意不入 git conf.d）；`--federation-key` 未設時整個 endpoint 不註冊。詳 [ADR-020](docs/adr/020-tenant-federation.md)。
 
 ---
 

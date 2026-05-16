@@ -149,6 +149,9 @@ func TestIssue_SignsVerifiableJWT(t *testing.T) {
 	if claims.Issuer != "tenant-api" {
 		t.Errorf("claim iss = %q, want tenant-api", claims.Issuer)
 	}
+	if len(claims.Audience) != 1 || claims.Audience[0] != "tenant-federation" {
+		t.Errorf("claim aud = %v, want [tenant-federation]", claims.Audience)
+	}
 	if claims.Subject != "tenant-alpha" {
 		t.Errorf("claim sub = %q", claims.Subject)
 	}

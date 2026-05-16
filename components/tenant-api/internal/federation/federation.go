@@ -42,6 +42,12 @@ const DefaultTTL = 4 * time.Hour
 // issuer is the JWT `iss` claim — identifies tenant-api as the signer.
 const issuer = "tenant-api"
 
+// audience is the JWT `aud` claim. Binding every federation token to a
+// single audience lets a verifier reject a token replayed against any
+// other API that happens to trust the same signing key (cross-service
+// replay). ADR-020 Wave-0 decision 3.
+const audience = "tenant-federation"
+
 // tokenIDPrefix namespaces the public token handle. The audit log
 // (sub-issue IV-2f) records a token_id_prefix, so a recognisable
 // prefix keeps those lines greppable.
@@ -91,13 +97,25 @@ type Record struct {
 // expired reports whether the record is past its expiry as of now.
 func (r Record) expired(now time.Time) bool { return now.After(r.ExpiresAt) }
 
+// RecordStore is the persistence backend for token Records. The MVP
+// ships the JSON-file store (store.go); ADR-020 Wave-0 decision 4
+// targets a ConfigMap-backed implementation (sub-issue IV-2n) so
+// tenant-api can run multi-replica. The interface methods are
+// unexported — it is implemented only within this package.
+type RecordStore interface {
+	put(r Record) error
+	get(tokenID string) (Record, bool)
+	list(tenantID string, now time.Time) []Record
+	remove(tokenID string) (bool, error)
+}
+
 // Manager signs federation tokens and tracks issued-token Records.
 // It is safe for concurrent use: the signing key is immutable after
 // construction and the store guards its own state.
 type Manager struct {
 	key   *rsa.PrivateKey
 	ttl   time.Duration
-	store *store
+	store RecordStore
 }
 
 // NewManager loads the RS256 signing key from keyPath (a PEM file,
@@ -164,6 +182,7 @@ func (m *Manager) Issue(tenantID, issuedBy, description string) (string, Record,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    issuer,
 			Subject:   tenantID,
+			Audience:  jwt.ClaimStrings{audience},
 			IssuedAt:  jwt.NewNumericDate(now),
 			ExpiresAt: jwt.NewNumericDate(now.Add(m.ttl)),
 		},
