@@ -534,11 +534,12 @@ def _build_platform_rules():
     # `skip_released_changelog`: CHANGELOG.md is scanned via the docs/**/*.md
     # glob (docs/CHANGELOG.md symlinks to the root CHANGELOG.md). Version
     # strings inside released `## [vX.Y.Z]` entries are historical facts —
-    # `於 v2.8.0` there records what v2.8.0 did, it is not a pointer to the
-    # current version — so they must never be bumped. Without this flag the
-    # rule false-matched "已於 v2.8.0 phantom-delete" and tried to flip it to
-    # v2.8.1 (PR #503; the stop-gap there was to reword 於→在 to dodge the
-    # regex). See _split_at_released_changelog().
+    # `於 v<old>` there records what a past release did, not a pointer to
+    # the current version — so they must never be bumped. Without this flag
+    # the rule false-matched a historical `已於 v<old> …` sentence and tried
+    # to flip it to the version being bumped to (PR #503; the stop-gap there
+    # was to reword 於→在 to dodge the regex). See
+    # _split_at_released_changelog().
     rules.append({
         "file": "__glob__",
         "glob_dir": "docs",
@@ -1144,9 +1145,10 @@ def _split_at_released_changelog(content):
 
     Released CHANGELOG entries record what shipped in a past version, so the
     version strings inside them are historical facts that bump_docs must not
-    rewrite (PR #503: `已於 v2.8.0 phantom-delete` is a v2.8.0 fact, not a
-    stale reference to the current version). Returns the in-flight prefix as
-    `live` and the frozen entries as `frozen`; `live + frozen == content`.
+    rewrite (PR #503: a `已於 v<old> …` sentence in a released entry was a
+    fact about that past release, not a stale current-version reference).
+    Returns the in-flight prefix as `live` and the frozen entries as
+    `frozen`; `live + frozen == content`.
 
     Files with no `## [vX.Y.Z]` heading (every doc except CHANGELOG) come
     back as fully-live with an empty `frozen`, so callers can treat this as
