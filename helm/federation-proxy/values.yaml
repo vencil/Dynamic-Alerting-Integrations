@@ -1,63 +1,40 @@
 # federation-proxy Helm values
 # Reference: ADR-020 — Tenant Federation, Layer 3 (read-path isolation)
 #
-# Layer 3 enforces per-tenant isolation on the federation read path.
-# Two proxy engines, selected by proxy.engine — they isolate by DIFFERENT
-# mechanisms, so pick by your storage backend:
+# This chart deploys prom-label-proxy as the federation read proxy. It
+# fronts ANY Prometheus-HTTP-API-compatible backend (Prometheus, Thanos
+# Query, or VictoriaMetrics single-node / vmselect) and force-injects a
+# per-tenant label matcher into every PromQL selector — query API AND
+# metadata APIs — so tenant A can never read tenant B's series.
 #
-#   prom-label-proxy — rewrites PromQL, force-injecting {<label>="<X>"}
-#                      into every selector AND metadata-API call. Use for
-#                      Prometheus, Thanos, or VictoriaMetrics SINGLE-NODE.
-#   vmauth           — VictoriaMetrics auth router. It does NOT inject a
-#                      label matcher; isolation is by routing each tenant
-#                      to its cluster path /select/<accountID>/prometheus.
-#                      Use ONLY for a VictoriaMetrics CLUSTER. See README.
-
-proxy:
-  # prom-label-proxy | vmauth
-  engine: prom-label-proxy
+# A VictoriaMetrics *cluster* does NOT use this chart: cluster isolation
+# is accountID-path routing, which the federation API gateway (IV-2b)
+# does directly via URL rewrite. vmauth was evaluated and dropped — it
+# is an auth router keyed on a static auth.yml and cannot consume the
+# dynamically-issued federation JWT. See the chart README.
 
 replicaCount: 2
 
-# ── prom-label-proxy engine ──────────────────────────────────────────
-promLabelProxy:
-  image:
-    repository: quay.io/prometheuscommunity/prom-label-proxy
-    tag: "v0.13.0"
-    pullPolicy: IfNotPresent
-  # Upstream backend — any Prometheus-HTTP-API-compatible endpoint
-  # (Prometheus, Thanos Query, VictoriaMetrics single-node / vmselect).
-  upstream:
-    url: "http://prometheus.monitoring.svc:9090"
-  # Tenant isolation. The proxy injects {<label>="<value>"} into every
-  # selector. The value is read from an HTTP header set by the federation
-  # API gateway (IV-2b / #507) AFTER it verifies the JWT — the proxy
-  # never trusts a client-supplied tenant id. headerName must match what
-  # the gateway sets, and the gateway MUST strip any inbound copy of it.
-  tenant:
-    label: tenant_id
-    headerName: X-Tenant-Id
+image:
+  repository: quay.io/prometheuscommunity/prom-label-proxy
+  tag: "v0.13.0"
+  pullPolicy: IfNotPresent
 
-# ── vmauth engine (VictoriaMetrics cluster only) ─────────────────────
-vmauth:
-  image:
-    repository: victoriametrics/vmauth
-    tag: "v1.143.0"
-    pullPolicy: IfNotPresent
-  # vmauth -auth.config, mounted from a ConfigMap. Operator-supplied: it
-  # is the routing table to per-tenant cluster paths. The src_paths regex
-  # MUST stay a catch-all (/api/v1/.+) so metadata endpoints are routed
-  # and isolated too — narrowing it to /api/v1/query leaks metadata
-  # (#506 AC). Replace the placeholder accountID/url_prefix per tenant.
-  authConfig: |
-    users:
-      - username: federation
-        url_map:
-          - src_paths:
-              - "/api/v1/.+"
-            url_prefix: "http://vmselect.monitoring.svc:8481/select/0/prometheus/"
+# Upstream backend — any Prometheus-HTTP-API-compatible endpoint
+# (Prometheus, Thanos Query, VictoriaMetrics single-node / vmselect).
+upstream:
+  url: "http://prometheus.monitoring.svc:9090"
 
-# Port the proxy listens on (plain HTTP — TLS is terminated at the
+# Tenant isolation. The proxy injects {<label>="<value>"} into every
+# selector. The value is read from an HTTP header set by the federation
+# API gateway (IV-2b / #507) AFTER it verifies the JWT — the proxy never
+# trusts a client-supplied tenant id. headerName must match what the
+# gateway sets, and the gateway MUST strip any inbound copy of it.
+tenant:
+  label: tenant_id
+  headerName: X-Tenant-Id
+
+# Port prom-label-proxy listens on (plain HTTP — TLS terminates at the
 # gateway; this proxy is cluster-internal behind a NetworkPolicy).
 listenPort: 8080
 
@@ -65,11 +42,11 @@ service:
   type: ClusterIP
   port: 8080
 
-# NetworkPolicy — SECURITY-CRITICAL, not optional. prom-label-proxy
-# trusts the tenant header; vmauth trusts the routing it is handed. That
-# trust only holds if traffic cannot reach the proxy except via the
-# gateway. Disabled, any in-cluster pod could set the header / hit a
-# tenant path directly — the 3-layer defence collapses (ADR-020).
+# NetworkPolicy — SECURITY-CRITICAL, not optional. The proxy trusts the
+# tenant header; that trust only holds if traffic cannot reach the proxy
+# except via the gateway. Disabled, any in-cluster pod could set the
+# header and impersonate any tenant — the 3-layer defence collapses
+# into bypassable speed bumps (ADR-020).
 networkPolicy:
   enabled: true
   # Pod-selector labels of the federation API gateway (IV-2b / #507) —
@@ -79,9 +56,10 @@ networkPolicy:
   # Namespace the gateway runs in. Empty = same namespace as the proxy.
   gatewayNamespace: ""
 
-# Horizontal autoscaling. Query rewriting / routing is CPU-bound, so a
-# query-heavy tenant can starve neighbours on a shared pod — scale on
-# CPU (ADR-020 Gemini round-6 review).
+# Horizontal autoscaling. prom-label-proxy parses PromQL into an AST,
+# injects the matcher, and re-serialises — a CPU-bound operation. On a
+# shared pod a tenant sending complex queries within its rate limit can
+# still starve neighbours, so scale on CPU (ADR-020 Gemini round-6).
 autoscaling:
   enabled: true
   minReplicas: 2

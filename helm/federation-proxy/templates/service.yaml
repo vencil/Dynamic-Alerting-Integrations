@@ -1,6 +1,3 @@
-{{- if not (has .Values.proxy.engine (list "prom-label-proxy" "vmauth")) }}
-{{- fail (printf "federation-proxy: proxy.engine must be \"prom-label-proxy\" or \"vmauth\", got %q" .Values.proxy.engine) }}
-{{- end }}
 apiVersion: v1
 kind: Service
 metadata:
