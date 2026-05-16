@@ -79,6 +79,8 @@ updated_at: 2026-05-11
 3. **Policy schema validation**（platform whitelist + tenant subset 兩層）
 4. **Audit log + anomaly metric**（誰拉了什麼、拉多少、是否超 cap）
 
+> **實作修正（IV-2a, [#506](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/506)）**：上方「vmauth（VM 客戶）/ prom-label-proxy（Prom 客戶）」的配對隱含「兩者都能注入 `tenant_id` label」——**這對 vmauth 不成立**。vmauth 是 auth router：它不解析 PromQL、不注入 label matcher，多租戶靠把使用者路由到 VictoriaMetrics **cluster** 的 `accountID` 路徑（`/select/<id>/prometheus/`）達成，對**單機** VM 無法隔離。修正後的引擎對應：`prom-label-proxy` 用於 Prometheus / Thanos / VictoriaMetrics 單機（VM 相容 Prom query API，prom-label-proxy 直接 front），`vmauth` 僅用於 VictoriaMetrics cluster。詳 `helm/federation-proxy` chart README。
+
 ### MVP 範圍（2-tier policy）
 
 ```

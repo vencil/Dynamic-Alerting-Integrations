@@ -1,0 +1,19 @@
+{{- if not (has .Values.proxy.engine (list "prom-label-proxy" "vmauth")) }}
+{{- fail (printf "federation-proxy: proxy.engine must be \"prom-label-proxy\" or \"vmauth\", got %q" .Values.proxy.engine) }}
+{{- end }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "federation-proxy.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "federation-proxy.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    {{- include "federation-proxy.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.service.port }}
+      targetPort: {{ .Values.listenPort }}
+      protocol: TCP

@@ -1,0 +1,72 @@
+{{- if eq .Values.proxy.engine "vmauth" }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "federation-proxy.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "federation-proxy.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "federation-proxy.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "federation-proxy.labels" . | nindent 8 }}
+      annotations:
+        # Roll the pods when the routing config changes.
+        checksum/config: {{ include (print $.Template.BasePath "/configmap-vmauth.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "federation-proxy.name" . }}
+      # vmauth never calls the Kubernetes API — drop the token.
+      automountServiceAccountToken: false
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: vmauth
+          image: "{{ .Values.vmauth.image.repository }}:{{ .Values.vmauth.image.tag }}"
+          imagePullPolicy: {{ .Values.vmauth.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          args:
+            - -auth.config=/etc/vmauth/auth.yml
+            - -httpListenAddr=:{{ .Values.listenPort }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.listenPort }}
+              protocol: TCP
+          volumeMounts:
+            - name: auth-config
+              mountPath: /etc/vmauth
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.listenPort }}
+            initialDelaySeconds: 3
+            periodSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.listenPort }}
+            initialDelaySeconds: 5
+            periodSeconds: 15
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: auth-config
+          configMap:
+            name: {{ include "federation-proxy.name" . }}-vmauth
+{{- end }}
