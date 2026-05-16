@@ -18,6 +18,183 @@ const docTemplate = `{
     "host": "{{.Host}}",
     "basePath": "{{.BasePath}}",
     "paths": {
+        "/api/v1/federation/tokens": {
+            "get": {
+                "description": "Returns the non-expired federation token records for the tenant named by the tenant_id query parameter. Requires admin permission on that tenant. The signed JWTs themselves are not returned.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "federation"
+                ],
+                "summary": "List a tenant's federation tokens",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Tenant ID",
+                        "name": "tenant_id",
+                        "in": "query",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/internal_handler.FederationTokenRecord"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "post": {
+                "description": "Mints a short-lived RS256 JWT for the named tenant (ADR-020). Requires admin permission on the tenant. The signed token is returned once and is not retrievable afterwards.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "federation"
+                ],
+                "summary": "Issue a tenant federation token",
+                "parameters": [
+                    {
+                        "description": "Token request",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_handler.CreateFederationTokenRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/internal_handler.CreateFederationTokenResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/federation/tokens/{id}": {
+            "delete": {
+                "description": "Removes a federation token's bookkeeping record. NOTE: per ADR-020 there is no server-side revocation — a still-valid JWT remains usable until it expires. Requires admin permission on the token's tenant.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "federation"
+                ],
+                "summary": "Delete a federation token record",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Token ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/v1/groups": {
             "get": {
                 "description": "Returns tenant groups visible to the authenticated user, filtered by RBAC.",
@@ -1089,6 +1266,34 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_handler.CreateFederationTokenRequest": {
+            "type": "object",
+            "required": [
+                "tenant_id"
+            ],
+            "properties": {
+                "description": {
+                    "type": "string",
+                    "maxLength": 256
+                },
+                "tenant_id": {
+                    "type": "string",
+                    "maxLength": 128,
+                    "minLength": 1
+                }
+            }
+        },
+        "internal_handler.CreateFederationTokenResponse": {
+            "type": "object",
+            "properties": {
+                "record": {
+                    "$ref": "#/definitions/internal_handler.FederationTokenRecord"
+                },
+                "token": {
+                    "type": "string"
+                }
+            }
+        },
         "internal_handler.DiffRequest": {
             "type": "object",
             "properties": {
@@ -1108,6 +1313,29 @@ const docTemplate = `{
                     "type": "boolean"
                 },
                 "tenant_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_handler.FederationTokenRecord": {
+            "type": "object",
+            "properties": {
+                "description": {
+                    "type": "string"
+                },
+                "expires_at": {
+                    "type": "string"
+                },
+                "issued_at": {
+                    "type": "string"
+                },
+                "issued_by": {
+                    "type": "string"
+                },
+                "tenant_id": {
+                    "type": "string"
+                },
+                "token_id": {
                     "type": "string"
                 }
             }

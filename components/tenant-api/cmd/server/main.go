@@ -23,12 +23,14 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/vencil/tenant-api/internal/async"
+	"github.com/vencil/tenant-api/internal/federation"
 	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/groups"
 	"github.com/vencil/tenant-api/internal/handler"
@@ -129,6 +131,17 @@ func main() {
 	idleTimeout := flag.Duration("idle-timeout",
 		parseDurationOrDefault(os.Getenv("TA_IDLE_TIMEOUT"), 60*time.Second),
 		"HTTP server idle timeout (default 60s; TA_IDLE_TIMEOUT)")
+
+	// v2.9.0 ADR-020 IV-2d: tenant federation token endpoint.
+	// An empty --federation-key disables the endpoint entirely.
+	federationKey := flag.String("federation-key", envOrDefault("TA_FEDERATION_KEY", ""),
+		"Path to the RS256 private key (PEM) for signing federation tokens. Empty disables the federation endpoint.")
+	federationStore := flag.String("federation-store", envOrDefault("TA_FEDERATION_STORE", ""),
+		"Path to the federation token record store (JSON). Defaults to <os.TempDir>/tenant-api-federation-tokens.json.")
+	federationTTL := flag.Duration("federation-token-ttl",
+		parseDurationOrDefault(os.Getenv("TA_FEDERATION_TOKEN_TTL"), federation.DefaultTTL),
+		"Federation token lifetime (default 4h; ADR-020 §Token model)")
+
 	flag.Parse()
 
 	// PR-10/11: structured (JSON) logging via slog. Configure before
@@ -181,6 +194,28 @@ func main() {
 		ReloadInterval: *reloadInterval,
 	})
 
+	// v2.9.0 ADR-020 IV-2d: federation token signer. Optional — when
+	// --federation-key is unset NewManager returns nil and the
+	// /federation routes below stay unregistered.
+	fedStorePath := *federationStore
+	if fedStorePath == "" {
+		fedStorePath = filepath.Join(os.TempDir(), "tenant-api-federation-tokens.json")
+	}
+	federationMgr, err := federation.NewManager(*federationKey, fedStorePath, *federationTTL)
+	if err != nil {
+		log.Fatalf("FATAL: federation init: %v", err)
+	}
+	if federationMgr != nil {
+		slog.Info("federation token endpoint enabled",
+			"token_ttl", federationMgr.TTL(), "store", fedStorePath)
+		if *federationStore == "" {
+			slog.Warn("federation token store is on os.TempDir; set TA_FEDERATION_STORE to a persistent volume for production")
+		}
+		if len(rbacMgr.Get().Groups) == 0 {
+			slog.Warn("federation endpoint enabled but RBAC is in open mode — every token issuance will be denied (admin permission required); supply --rbac")
+		}
+	}
+
 	// Wire all handler dependencies into a single struct (PR-4/11).
 	// Every handler is now a method on *deps; pass-through positional
 	// args are gone.
@@ -191,6 +226,7 @@ func main() {
 		Policy:      policyMgr,
 		Groups:      groupMgr,
 		Views:       viewMgr,
+		Federation:  federationMgr,
 		Tasks:       taskMgr,
 		PRClient:    prClient,
 		PRTracker:   prTracker,
@@ -331,6 +367,22 @@ func main() {
 		// Real-time event stream (v2.6.0 — SSE for config change notifications)
 		r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
 			Get("/events", eventHub.ServeHTTP)
+
+		// Federation token endpoint (v2.9.0 — ADR-020 IV-2d).
+		// Registered only when a signing key is configured. Route-level
+		// middleware checks authentication; per-tenant admin permission
+		// is enforced inside each handler because the tenant ID is in
+		// the body / query / token record, not the URL path.
+		if federationMgr != nil {
+			r.Route("/federation/tokens", func(r chi.Router) {
+				r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
+					Post("/", deps.CreateFederationToken())
+				r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
+					Get("/", deps.ListFederationTokens())
+				r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
+					Delete("/{id}", deps.DeleteFederationToken())
+			})
+		}
 	})
 
 	// ── HTTP server with graceful shutdown ────────────────────────────────────

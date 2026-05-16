@@ -79,6 +79,16 @@
 | `GET` | `/api/v1/prs` | read | Pending PR / MR 列表；caller 不可讀的 `tenant_id` 自動隱藏；`?tenant=<id>` 不可讀回空陣列（避免 existence oracle） |
 | `GET` | `/api/v1/events` | read | SSE 即時事件流（config_change） |
 
+### Federation（v2.9.0 — ADR-020）
+
+| Method | Path | 權限 | 說明 |
+|--------|------|------|------|
+| `POST` | `/api/v1/federation/tokens` | admin（對 body 的 `tenant_id`） | 簽發短效 RS256 JWT（預設 4h）供租戶向 label-injection proxy 拉取自己的 metrics 子集；signed token 只在回應中出現一次 |
+| `GET` | `/api/v1/federation/tokens?tenant_id=<id>` | admin（對 query 的 `tenant_id`） | 列出該租戶未過期的 token record（不含 JWT 本體） |
+| `DELETE` | `/api/v1/federation/tokens/{id}` | admin（對 token 的 tenant） | 移除 token bookkeeping record；MVP 無 server-side revocation，JWT 至 `exp` 前仍有效 |
+
+`--federation-key` 未設時整個 endpoint 不註冊。詳 [ADR-020](../../docs/adr/020-tenant-federation.md)。
+
 ## Operational concerns
 
 ### Limits + caps
@@ -168,6 +178,9 @@ data: {"type":"config_change","tenant_id":"db-a-prod","timestamp":"2026-05-03T10
 | `TA_GITLAB_TARGET_BRANCH` | `main` | MR target |
 | `TA_GITLAB_API_URL` | (空) | 自託管 GitLab URL |
 | `GIT_COMMITTER_NAME` / `GIT_COMMITTER_EMAIL` | (空) | service account 身份；空時 fallback 到 author |
+| `TA_FEDERATION_KEY` | (空 = 停用) | **(v2.9.0)** RS256 私鑰 PEM 路徑；簽發 federation token 用，空則 `/api/v1/federation/*` 不註冊 |
+| `TA_FEDERATION_STORE` | (空 = `os.TempDir`) | **(v2.9.0)** federation token record store（JSON）路徑；production 應指向持久卷 |
+| `TA_FEDERATION_TOKEN_TTL` | `4h` | **(v2.9.0)** federation token 效期（Go duration string） |
 
 ### RBAC YAML
 
