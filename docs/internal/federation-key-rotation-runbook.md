@@ -56,7 +56,14 @@ da-tools fed-key --namespace monitoring | kubectl apply -f -
 2. **先更新 gateway**:把合併後的 `federation-jwks.json` 設進
    federation-gateway 的 `jwt.jwks`、`helm upgrade` gateway。此刻 gateway
    同時接受**舊鑰或新鑰**簽的 token。
-3. **等 gateway rollout 完成**(chart 依 jwks ConfigMap checksum 自動滾)。
+3. **等 gateway rollout 完成** —— chart 依 jwks ConfigMap checksum 自動滾
+   pod;**務必用指令確認、不可只靠肉眼**:
+   ```sh
+   kubectl rollout status deployment/federation-gateway -n monitoring
+   ```
+   ⚠️ 此步是 race 防線:若**舊** gateway pod 尚未終止就跳到步驟 4,新私鑰
+   簽出的 token 帶**新 `kid`**,打到 JWKS 還沒更新的舊 pod 會被回 `401`。
+   `rollout status` 回 0 代表所有 pod 都已載入合併後 JWKS,才可往下。
 4. **再套用新私鑰**:`kubectl apply -f new-signing-key.secret.yaml`,並
    `helm upgrade` / 重啟 tenant-api 載入新私鑰。此後新 token 用新 `kid`。
 5. 舊 `kid` 的 token 在 4h TTL 內仍驗得過(舊公鑰還在 JWKS)。
@@ -82,7 +89,10 @@ da-tools fed-key --namespace monitoring | kubectl apply -f -
    ```
    同 §2 step 1:`umask 077` subshell 讓私鑰檔建檔即 `0600`。
 2. `helm upgrade` gateway,`jwt.jwks` 設成**只有新鑰**的 JWKS —— 舊公鑰
-   立即從 JWKS 移除。所有舊鑰簽的 token(含偽造的)即刻全部失效。
+   立即從 JWKS 移除。所有舊鑰簽的 token(含偽造的)即刻全部失效。接著
+   `kubectl rollout status deployment/federation-gateway -n monitoring`
+   等 rollout 完成 —— 否則步驟 3 後重新簽發的新 token 會打到尚未更新的
+   舊 gateway pod 被回 `401`。
 3. `kubectl apply -f new-signing-key.secret.yaml` + 重啟 tenant-api。
 4. 已合法簽發的舊 token 會一起失效 —— 緊急情境下安全性 > 可用性,接受
    租戶需重新取得 token。
