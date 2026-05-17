@@ -1,0 +1,152 @@
+# federation-gateway Helm values
+# Reference: ADR-020 — Tenant Federation, Layer 2 (API gateway)
+#
+# The gateway sits in front of the Layer 3 proxy (IV-2a federation-proxy)
+# and is the compensating control for not having a server-side token
+# revocation list at signing time. Per request, in cheap-before-expensive
+# order, Envoy:
+#   1. coarse per-client-IP rate limit  (anti-flood before any crypto)
+#   2. RS256 JWT verify + jwt_cache     (envoy.filters.http.jwt_authn)
+#   3. revoked-set check + tenant wiring (Lua filter)
+#   4. per-token + per-tenant rate limit (Sybil defense)
+#
+# A request only reaches the upstream if all four pass.
+
+# prom-label-proxy | vm-cluster
+#   prom-label-proxy — inject the verified tenant id as a trusted header
+#                      and forward to the federation-proxy service (IV-2a).
+#   vm-cluster       — rewrite the path to /select/<tenant_id>/prometheus/
+#                      and forward to a VictoriaMetrics cluster vmselect
+#                      (ADR-020: VM-cluster isolation is accountID routing,
+#                      done here rather than by a Layer 3 proxy).
+mode: prom-label-proxy
+
+replicaCount: 2
+
+image:
+  repository: envoyproxy/envoy
+  # distroless: nonroot, no shell, core binary only — the production tag.
+  tag: "distroless-v1.38.0"
+  pullPolicy: IfNotPresent
+
+# ── JWT verification (ADR-020 §Token model) ──────────────────────────
+# The gateway verifies the federation RS256 JWT with the PUBLIC half of
+# tenant-api's signing key, supplied as a JWKS document. issuer/audience
+# MUST match what tenant-api signs (internal/federation: iss=tenant-api,
+# aud=tenant-federation). The keypair is produced by IV-2l (#518); until
+# then paste the public JWKS into `jwks`.
+jwt:
+  issuer: tenant-api
+  audience: tenant-federation
+  # Clock-skew leeway — tenant-api may sign a few seconds ahead of the
+  # gateway's clock; without leeway a just-issued token's iat lands in
+  # the verifier's future and 401s (ADR-020 round-7).
+  clockSkewSeconds: 60
+  # Verified-JWT cache size — repeat presentations of the same token skip
+  # the RSA signature check (the expensive step).
+  cacheSize: 1000
+  # JWKS JSON (RSA public key, kty=RSA / alg=RS256). Not secret — it is a
+  # public key. The empty default is a keyless JWKS that Envoy refuses to
+  # start with (fail-loud CrashLoopBackOff) — a real deploy MUST set it.
+  jwks: ""
+
+# ── Upstream ─────────────────────────────────────────────────────────
+upstream:
+  # prom-label-proxy mode: the federation-proxy Service (IV-2a).
+  # vm-cluster mode: a vmselect host:port.
+  host: federation-proxy.monitoring.svc
+  port: 8080
+
+# ── Revoked set (ADR-020 Posture B) ──────────────────────────────────
+# tenant-api writes revoked.txt into the tenant-federation-store ConfigMap
+# (#520). The gateway mounts that key as a (tmpfs-backed) projected volume
+# and the Lua filter checks token_id against it. Eventually consistent:
+# a revocation propagates within the ConfigMap sync window + reloadInterval.
+revokedSet:
+  configMapName: tenant-federation-store
+  key: revoked.txt
+  # How often each Envoy worker re-reads the (tmpfs) revoked file. The
+  # read is a microsecond memory read gated to once per worker per
+  # interval — not a hot-path disk stall.
+  reloadIntervalSeconds: 30
+
+# ── Rate limits ──────────────────────────────────────────────────────
+# All limits are per-Envoy-instance: with N replicas behind the Service
+# the effective ceiling is N x the value. This is deliberate — the rate
+# limit is a SOFT / approximate control; the HARD cap is Layer-1 storage
+# (--query.max-samples / -search.maxUniqueTimeseries). Keep defaults low
+# for multi-replica headroom (ADR-020 round-3).
+rateLimit:
+  # Coarse per-source-IP anti-flood, evaluated before JWT crypto so a
+  # garbage-JWT flood is dropped without spending an RSA verify.
+  perIp:
+    maxTokens: 200          # burst
+    tokensPerFill: 100      # 100 r/s sustained
+    fillInterval: "1s"
+    maxDynamicDescriptors: 10000
+  # Per-token: the per-leaked-token abuse ceiling. Tuning corridor
+  # 15-60 r/m (ADR-020 §Blast radius Layer 2).
+  perToken:
+    maxTokens: 10           # burst — opening a ~10-panel dashboard
+    tokensPerFill: 15       # 15 r/m sustained
+    fillInterval: "60s"
+    maxDynamicDescriptors: 4096
+  # Per-tenant: caps a tenant that round-robins its <=16 live tokens to
+  # multiply its quota (Sybil). Above per-token, well below 16x it.
+  perTenant:
+    maxTokens: 20
+    tokensPerFill: 60       # 60 r/m sustained
+    fillInterval: "60s"
+    maxDynamicDescriptors: 1024
+
+listenPort: 8080
+
+service:
+  type: ClusterIP
+  port: 8080
+
+# NetworkPolicy — restricts who may reach the gateway. The gateway is the
+# federation entrypoint; ingress should come only from the cluster ingress
+# controller / the namespaces that expose it. Empty allowedNamespaces =
+# allow the listen port from anywhere in the cluster.
+networkPolicy:
+  enabled: true
+  allowedNamespaces: []
+
+# Horizontal autoscaling — JWT verify (RSA) + PromQL pass-through is
+# CPU-bound; scale on CPU.
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 8
+  targetCPUUtilizationPercentage: 70
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 96Mi
+  limits:
+    cpu: "1"
+    memory: 256Mi
+
+# Graceful shutdown — a federation query may run up to 30s; on rollout /
+# scale-down the gateway must drain in-flight requests, not 502 them.
+preStopSleepSeconds: 5
+terminationGracePeriodSeconds: 45
+
+# PodDisruptionBudget — keeps the federation entrypoint up through node
+# drains / cluster upgrades.
+podDisruptionBudget:
+  enabled: true
+  maxUnavailable: 1
+
+# Pod security context (non-root, unprivileged). The distroless Envoy
+# image already runs as nonroot uid 101.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 101
+  runAsGroup: 101
+  seccompProfile:
+    type: RuntimeDefault
+
+podAnnotations: {}

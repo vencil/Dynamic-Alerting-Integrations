@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "federation-gateway.name" . }}-jwks
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "federation-gateway.labels" . | nindent 4 }}
+data:
+  # JWKS public key for verifying the federation RS256 JWT. A public key
+  # is not secret, so a ConfigMap is appropriate. The empty default is a
+  # KEYLESS JWKS — Envoy refuses to start with it and the pod
+  # CrashLoopBackOffs. That is the intended fail-loud: a gateway with no
+  # verification key must not run. Set jwt.jwks before deploying.
+  # IV-2l (#518) produces the keypair.
+  jwks.json: |
+    {{- .Values.jwt.jwks | default "{\"keys\":[]}" | nindent 4 }}

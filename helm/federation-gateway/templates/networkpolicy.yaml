@@ -1,0 +1,29 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "federation-gateway.name" . }}-netpol
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "federation-gateway.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "federation-gateway.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - ports:
+        - port: {{ .Values.listenPort }}
+          protocol: TCP
+      {{- with .Values.networkPolicy.allowedNamespaces }}
+      # Restrict ingress to the named namespaces (e.g. the cluster ingress
+      # controller's namespace). Empty list = allow the port cluster-wide.
+      from:
+        {{- range . }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ . }}
+        {{- end }}
+      {{- end }}
+{{- end }}

@@ -1,0 +1,116 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "federation-gateway.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "federation-gateway.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "federation-gateway.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "federation-gateway.labels" . | nindent 8 }}
+      annotations:
+        # Roll the pods when the Envoy config or the JWKS changes.
+        checksum/envoy: {{ include (print $.Template.BasePath "/configmap-envoy.yaml") . | sha256sum }}
+        checksum/jwks: {{ include (print $.Template.BasePath "/configmap-jwks.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "federation-gateway.name" . }}
+      # Envoy never calls the Kubernetes API — drop the token.
+      automountServiceAccountToken: false
+      # Must exceed preStopSleepSeconds + the 30s max federation query so an
+      # in-flight query drains before SIGKILL instead of 502-ing.
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      # Spread replicas across nodes — soft, so a small cluster still
+      # schedules. The gateway is the federation entrypoint; co-locating
+      # both replicas on one node makes a single node failure total.
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    {{- include "federation-gateway.selectorLabels" . | nindent 20 }}
+                topologyKey: kubernetes.io/hostname
+      containers:
+        - name: envoy
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - -c
+            - /etc/envoy/envoy.yaml
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          ports:
+            - name: http
+              containerPort: {{ .Values.listenPort }}
+              protocol: TCP
+          volumeMounts:
+            - name: envoy-config
+              mountPath: /etc/envoy
+              readOnly: true
+            - name: jwks
+              mountPath: /etc/jwks
+              readOnly: true
+            # Whole-ConfigMap mount (NOT subPath) so kubelet keeps the
+            # projected revoked.txt updated — Posture B revocation depends
+            # on it (subPath mounts do not receive updates).
+            - name: revoked
+              mountPath: /etc/revoked
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+          lifecycle:
+            # Drain the Service endpoint before SIGTERM so no new request
+            # races into a terminating pod. Native sleep needs k8s >= 1.29.
+            preStop:
+              sleep:
+                seconds: {{ .Values.preStopSleepSeconds }}
+          readinessProbe:
+            tcpSocket:
+              port: {{ .Values.listenPort }}
+            initialDelaySeconds: 3
+            periodSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            tcpSocket:
+              port: {{ .Values.listenPort }}
+            initialDelaySeconds: 5
+            periodSeconds: 15
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: envoy-config
+          configMap:
+            name: {{ include "federation-gateway.name" . }}-envoy
+        - name: jwks
+          configMap:
+            name: {{ include "federation-gateway.name" . }}-jwks
+        - name: revoked
+          configMap:
+            # The tenant-federation-store ConfigMap is created by tenant-api
+            # (#520), not this chart. optional: true keeps the gateway
+            # schedulable before that exists — the Lua then fails open
+            # (nothing known-revoked; the 4h TTL still bounds exposure).
+            name: {{ .Values.revokedSet.configMapName }}
+            optional: true
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 16Mi

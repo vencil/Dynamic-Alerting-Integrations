@@ -1,0 +1,13 @@
+{{- include "federation-gateway.validateMode" . -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "federation-gateway.name" . }}-envoy
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "federation-gateway.labels" . | nindent 4 }}
+data:
+  envoy.yaml: |
+    {{- tpl (.Files.Get "files/envoy.yaml") . | nindent 4 }}
+  revoked_check.lua: |
+    {{- tpl (.Files.Get "files/revoked_check.lua") . | nindent 4 }}
