@@ -43,6 +43,7 @@ lang: zh
 | `drift_detect.py` | Cross-Cluster Configuration Drift Detection |
 | `explain_route.py` | Routing merge pipeline debugger (ADR-007). |
 | `federation_check.py` | Multi-cluster federation integration verification. |
+| `federation_keygen.py` | federation JWT 簽章金鑰的生成 / 輪替工具。 |
 | `generate_alertmanager_routes.py` | Generate Alertmanager route + receiver + inhibit config from tenant YAML. |
 | `generate_rule_pack_split.py` | Split Rule Packs into edge (Part 1) and central (Parts 2+3) YAML files. |
 | `generate_tenant_mapping_rules.py` | Generate Prometheus Recording Rules for 1:N tenant mapping. |

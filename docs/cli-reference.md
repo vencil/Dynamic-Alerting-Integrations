@@ -119,6 +119,7 @@ da-tools <command> --help
 | `operator-generate` | Rule Packs + Tenant 配置 → PrometheusRule / AlertmanagerConfig / ServiceMonitor CRD YAML | `--rule-packs-dir <dir>` |
 | `operator-check` | Operator CRD 部署狀態驗證（5 項檢查 + 診斷報告） | （自動探索或 `--namespace <ns>`） |
 | `rule-pack-split` | Rule Pack 分層拆分（edge Part 1 + central Parts 2+3），Federation Scenario B | `--rule-packs-dir <dir>` |
+| `fed-key` | 產生 / 輪替 federation JWT 簽章金鑰（ADR-020 IV-2l）：私鑰 Secret manifest → stdout、公鑰 JWKS → 檔案 | （無，bootstrap 預設）/ `--rotate --existing-jwks <file>` |
 
 ### 配置生成工具
 
@@ -780,6 +781,52 @@ da-tools federation-check central --prometheus http://central:9090 --json
 |------|------|
 | `0` | 所有檢查通過 |
 | `1` | 一項或多項檢查失敗 |
+
+---
+
+#### fed-key
+
+產生 / 輪替 federation JWT 簽章金鑰（ADR-020 IV-2l）。
+
+**用途**：tenant-api 用 RS256 私鑰簽 federation token，federation-gateway 用對應公鑰的 JWKS 驗章。本工具產 RSA keypair，並輸出兩個下游 artifact：私鑰 → Kubernetes Secret manifest（stdout，不落地）；公鑰 → JWKS 檔。每把公鑰的 `kid` 是它的 RFC 7638 JWK thumbprint，與 tenant-api 端算出的 `kid` header 天然一致。
+
+**語法**
+
+```bash
+da-tools fed-key [options]
+```
+
+**選項**
+
+| 選項 | 說明 | 預設值 |
+|------|------|--------|
+| `--rotate` | 輪替模式：把新公鑰併入 `--existing-jwks`（舊+新並存） | false |
+| `--existing-jwks <PATH>` | 要併入的現有 JWKS 檔（`--rotate` 必需） | （無） |
+| `--jwks-out <PATH>` | JWKS 輸出路徑 | `./federation-jwks.json` |
+| `--namespace <NS>` | Secret manifest 的 namespace | `monitoring` |
+| `--secret-name <NAME>` | Secret 名稱 | `tenant-federation-signing-key` |
+| `--secret-key <KEY>` | Secret 內的 data key | `federation-signing-key.pem` |
+| `--key-bits <N>` | RSA modulus 大小（tenant-api 拒收 < 2048） | `2048` |
+
+**範例**
+
+```bash
+# 首次 bootstrap：私鑰直接套用，JWKS 寫到 ./federation-jwks.json
+da-tools fed-key | kubectl apply -f -
+
+# 計畫性輪替：新公鑰併入現有 JWKS（輪替順序見 key-rotation runbook）
+da-tools fed-key --rotate --existing-jwks federation-jwks.json \
+  --jwks-out federation-jwks.json > new-signing-key.secret.yaml
+```
+
+> 完整輪替 / 緊急汰換流程見 [`federation-key-rotation-runbook.md`](internal/federation-key-rotation-runbook.md)。
+
+**結束碼**
+
+| 代碼 | 說明 |
+|------|------|
+| `0` | 金鑰已產生 |
+| `1` | openssl 不存在、`--existing-jwks` 無法讀取、或參數錯誤 |
 
 ---
 

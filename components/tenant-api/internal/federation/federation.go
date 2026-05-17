@@ -23,11 +23,15 @@ package federation
 import (
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"math/big"
 	"os"
 	"time"
 
@@ -126,6 +130,7 @@ type RecordStore interface {
 // construction and the store guards its own state.
 type Manager struct {
 	key   *rsa.PrivateKey
+	kid   string // RFC 7638 thumbprint of the public key; the JWT `kid`.
 	ttl   time.Duration
 	store RecordStore
 	mints *mintLimiter
@@ -151,7 +156,7 @@ func NewManager(keyPath string, store RecordStore, ttl time.Duration) (*Manager,
 	if ttl <= 0 {
 		ttl = DefaultTTL
 	}
-	return &Manager{key: key, ttl: ttl, store: store, mints: newMintLimiter()}, nil
+	return &Manager{key: key, kid: keyID(&key.PublicKey), ttl: ttl, store: store, mints: newMintLimiter()}, nil
 }
 
 // NewManagerForTest builds a Manager around an in-memory signing key,
@@ -166,7 +171,7 @@ func NewManagerForTest(key *rsa.PrivateKey, storePath string, ttl time.Duration)
 	if err != nil {
 		return nil, err
 	}
-	return &Manager{key: key, ttl: ttl, store: st, mints: newMintLimiter()}, nil
+	return &Manager{key: key, kid: keyID(&key.PublicKey), ttl: ttl, store: st, mints: newMintLimiter()}, nil
 }
 
 // TTL returns the configured token lifetime.
@@ -204,7 +209,11 @@ func (m *Manager) Issue(tenantID, issuedBy, description string) (string, Record,
 			ExpiresAt: jwt.NewNumericDate(now.Add(m.ttl)),
 		},
 	}
-	signed, err := jwt.NewWithClaims(jwt.SigningMethodRS256, claims).SignedString(m.key)
+	tok := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	// Stamp the key id so the gateway verifier selects the right JWKS key
+	// by `kid` rather than trying every key (ADR-020 IV-2l).
+	tok.Header["kid"] = m.kid
+	signed, err := tok.SignedString(m.key)
 	if err != nil {
 		return "", Record{}, fmt.Errorf("federation: sign token: %w", err)
 	}
@@ -289,4 +298,25 @@ func parseRSAPrivateKey(der []byte) (*rsa.PrivateKey, error) {
 		return nil, fmt.Errorf("parse RSA private key: %w", err)
 	}
 	return rk, nil
+}
+
+// keyID returns the RFC 7638 JWK thumbprint of an RSA public key: the
+// SHA-256 of the canonical JWK — the required members {e, kty, n} in
+// lexicographic order, no whitespace — base64url-encoded. It is stamped
+// on every issued token as the `kid` header so the gateway verifier
+// selects the matching JWKS key by id. Without it a JWKS holding more
+// than one key (as during a rotation) forces the verifier to try each
+// key, multiplying the RSA cost of a bad-signature flood. The
+// `da-tools fed-key` tool computes the identical thumbprint for the
+// JWKS, so signer and verifier agree on the kid by construction.
+func keyID(pub *rsa.PublicKey) string {
+	// json.Marshal of a map emits keys in lexicographic order with no
+	// whitespace — exactly RFC 7638's canonical form.
+	canonical, _ := json.Marshal(map[string]string{
+		"e":   base64.RawURLEncoding.EncodeToString(big.NewInt(int64(pub.E)).Bytes()),
+		"kty": "RSA",
+		"n":   base64.RawURLEncoding.EncodeToString(pub.N.Bytes()),
+	})
+	sum := sha256.Sum256(canonical)
+	return base64.RawURLEncoding.EncodeToString(sum[:])
 }
