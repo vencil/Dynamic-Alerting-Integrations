@@ -65,14 +65,17 @@ def _generate_keypair(bits: int):
     """Generate an RSA keypair via openssl. Returns (private_pem, jwk).
 
     openssl is shelled out to deliberately — it keeps this tool free of a
-    third-party crypto dependency, and `openssl genrsa` always uses the
-    public exponent 65537 (AQAB), so e is fixed for keys we generate.
+    third-party crypto dependency. `openssl genpkey` is the modern key
+    generator (`genrsa` is deprecated as of OpenSSL 3.0); its RSA default
+    public exponent is 65537 (AQAB), so e is fixed for keys we generate.
+    `genpkey` emits a PKCS#8 PEM, which tenant-api's loader accepts.
     """
-    # timeout: openssl genrsa is sub-second even for 4096-bit keys; 60s is a
-    # generous ceiling that still guarantees the tool can never hang (S#74).
+    # timeout: openssl key generation is sub-second even for 4096-bit keys;
+    # 60s is a generous ceiling that still guarantees no hang (S#74).
     try:
         priv_pem = subprocess.run(
-            ["openssl", "genrsa", str(bits)],
+            ["openssl", "genpkey", "-algorithm", "RSA",
+             "-pkeyopt", f"rsa_keygen_bits:{bits}"],
             capture_output=True, check=True, timeout=60,
         ).stdout.decode("ascii")
         modulus = subprocess.run(
@@ -87,10 +90,11 @@ def _generate_keypair(bits: int):
     except subprocess.CalledProcessError as exc:
         sys.exit(f"error: openssl failed: {exc.stderr.decode('utf-8', 'replace').strip()}")
 
-    # `openssl rsa -modulus` prints `Modulus=<HEX>`.
+    # `openssl rsa -modulus` prints `Modulus=<HEX>` (it reads the PKCS#8
+    # key on stdin fine; only `genrsa` is deprecated, not `rsa`).
     mod_hex = modulus.split("=", 1)[1]
     n_b64u = _b64u(bytes.fromhex(mod_hex))
-    e_b64u = "AQAB"  # 65537 — openssl genrsa's fixed public exponent
+    e_b64u = "AQAB"  # 65537 — openssl genpkey's default RSA public exponent
     jwk = {
         "kty": "RSA",
         "alg": "RS256",
@@ -182,7 +186,8 @@ def main() -> int:
         sys.exit(
             "error: refusing to write the private-key Secret manifest to a terminal.\n"
             "Pipe it straight to kubectl:  da-tools fed-key | kubectl apply -f -\n"
-            "or redirect it to a file:     da-tools fed-key > signing-key.secret.yaml"
+            "(to stage it for a rotation, see the key-rotation runbook — it saves\n"
+            " the manifest under a restrictive umask so the key file is not world-readable)."
         )
 
     priv_pem, jwk = _generate_keypair(args.key_bits)

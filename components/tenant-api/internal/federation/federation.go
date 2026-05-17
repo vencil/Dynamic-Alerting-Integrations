@@ -310,12 +310,21 @@ func parseRSAPrivateKey(der []byte) (*rsa.PrivateKey, error) {
 // `da-tools fed-key` tool computes the identical thumbprint for the
 // JWKS, so signer and verifier agree on the kid by construction.
 func keyID(pub *rsa.PublicKey) string {
-	// json.Marshal of a map emits keys in lexicographic order with no
-	// whitespace — exactly RFC 7638's canonical form.
-	canonical, _ := json.Marshal(map[string]string{
-		"e":   base64.RawURLEncoding.EncodeToString(big.NewInt(int64(pub.E)).Bytes()),
-		"kty": "RSA",
-		"n":   base64.RawURLEncoding.EncodeToString(pub.N.Bytes()),
+	// RFC 7638's canonical JWK is the required RSA members {e, kty, n}
+	// only, lexicographically ordered, no whitespace. A struct (rather
+	// than a map) pins that member set explicitly and lays the fields out
+	// in the required order, so the JSON shape is visible at a glance
+	// instead of resting on json.Marshal's map-key sorting. Adding a
+	// member would change the thumbprint — TestKeyID_RFC7638Vector is the
+	// regression guard that pins the output to the spec's example.
+	canonical, _ := json.Marshal(struct {
+		E   string `json:"e"`
+		Kty string `json:"kty"`
+		N   string `json:"n"`
+	}{
+		E:   base64.RawURLEncoding.EncodeToString(big.NewInt(int64(pub.E)).Bytes()),
+		Kty: "RSA",
+		N:   base64.RawURLEncoding.EncodeToString(pub.N.Bytes()),
 	})
 	sum := sha256.Sum256(canonical)
 	return base64.RawURLEncoding.EncodeToString(sum[:])

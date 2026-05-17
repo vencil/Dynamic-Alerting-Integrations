@@ -45,11 +45,14 @@ da-tools fed-key --namespace monitoring | kubectl apply -f -
 
 1. **產新金鑰、併入現有 JWKS**(私鑰存檔,先不套用):
    ```sh
-   da-tools fed-key --rotate --existing-jwks federation-jwks.json \
-     --jwks-out federation-jwks.json > new-signing-key.secret.yaml
+   ( umask 077 && da-tools fed-key --rotate --existing-jwks federation-jwks.json \
+       --jwks-out federation-jwks.json > new-signing-key.secret.yaml )
    ```
    `federation-jwks.json` 現含**舊+新兩把**公鑰;新私鑰 Secret 在
    `new-signing-key.secret.yaml`。
+   ⚠️ **`umask 077` 不可省**:`>` 重導向建檔的權限由 shell umask 決定,預設
+   常是 `0644`(全機器可讀)。該檔內含私鑰 PEM,故用 subshell `umask 077`
+   讓它**建檔即 `0600`**,沒有任何 world-readable 的時間窗。套用後即刪除。
 2. **先更新 gateway**:把合併後的 `federation-jwks.json` 設進
    federation-gateway 的 `jwt.jwks`、`helm upgrade` gateway。此刻 gateway
    同時接受**舊鑰或新鑰**簽的 token。
@@ -73,8 +76,11 @@ da-tools fed-key --namespace monitoring | kubectl apply -f -
 是 per-token 機制,**擋不住**無法窮舉的偽造 token id —— 唯一的處置是立刻
 汰換金鑰,且**不做 grace overlap**:
 
-1. `da-tools fed-key --namespace monitoring > new-signing-key.secret.yaml`
-   (產全新金鑰;**不要** `--rotate`,新 JWKS 只含新鑰)。
+1. 產全新金鑰(**不要** `--rotate`,新 JWKS 只含新鑰):
+   ```sh
+   ( umask 077 && da-tools fed-key --namespace monitoring > new-signing-key.secret.yaml )
+   ```
+   同 §2 step 1:`umask 077` subshell 讓私鑰檔建檔即 `0600`。
 2. `helm upgrade` gateway,`jwt.jwks` 設成**只有新鑰**的 JWKS —— 舊公鑰
    立即從 JWKS 移除。所有舊鑰簽的 token(含偽造的)即刻全部失效。
 3. `kubectl apply -f new-signing-key.secret.yaml` + 重啟 tenant-api。
@@ -85,12 +91,14 @@ da-tools fed-key --namespace monitoring | kubectl apply -f -
 
 ## 注意事項
 
-- 私鑰只透過 `da-tools fed-key` 的 stdout(Secret manifest)流動 ——
-  不要把 PEM 存成檔案或貼進剪貼簿。`> file.yaml` 存的是 **Secret
-  manifest**(計畫性輪替需要),私鑰本身仍只在該 manifest 內。
+- 私鑰只透過 `da-tools fed-key` 的 stdout(Secret manifest)流動。首次
+  bootstrap 直接 `| kubectl apply`、私鑰不落地最理想。計畫性輪替 / 緊急
+  汰換**需要**先把 Secret manifest 存檔(見 §2 / §3)—— 此時**務必**用
+  `( umask 077 && ... > file )` subshell,讓私鑰檔建檔即 `0600`;`>` 預設
+  靠 shell umask(常是 `0644`,全機器可讀),含私鑰的檔不可如此。套用後刪檔。
 - `fed-key` 偵測到 stdout 是互動式終端時會**直接拒絕並 exit 1** —— 避免
   漏接 `| kubectl` / `> file` 時把私鑰印上螢幕、殘留在終端 scrollback。
   故所有呼叫務必接 pipe 或重導向。
-- `da-tools fed-key` shell-out 到 `openssl`,預設 RSA-2048(tenant-api
-  拒收 < 2048-bit)。
+- `da-tools fed-key` shell-out 到 `openssl genpkey`(`genrsa` 在 OpenSSL
+  3.0 已棄用),預設 RSA-2048(tenant-api 拒收 < 2048-bit)。
 - JWKS 是公鑰,非機密 —— 可正常存放 / 進 git / 進 Helm values。
