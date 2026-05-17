@@ -36,6 +36,22 @@ A request reaches the upstream only if all checks pass.
   and forward to a VictoriaMetrics cluster vmselect. VM-cluster isolation is
   accountID-path routing, so no Layer 3 proxy is needed (ADR-020).
 
+### Supported read APIs
+
+Which read APIs a tenant can call through the gateway depends on the mode:
+
+- **`prom-label-proxy`** — the query family (`/api/v1/query`,
+  `/api/v1/query_range`, `/api/v1/series`, `/api/v1/labels`,
+  `/api/v1/label/<name>/values`) and `/federate`. prom-label-proxy enforces
+  the tenant label only on those text-based APIs, so **Prometheus
+  `remote_read` (`/api/v1/read`) is not supported** — its Snappy-framed
+  protobuf body cannot be label-scoped. The gateway returns `403` for
+  `/api/v1/read` rather than forward a request Layer 3 cannot make
+  tenant-safe; tenants poll `/api/v1/query[_range]` instead.
+- **`vm-cluster`** — the full VictoriaMetrics `/select/<id>/prometheus/…`
+  surface, `remote_read` included: the path rewrite scopes every request to
+  the tenant's accountID, so no per-API allow-listing is needed.
+
 ## Security model
 
 - **Header spoofing is structurally impossible.** The Lua filter sets the
@@ -103,6 +119,9 @@ query). `preStop.sleep` requires **Kubernetes ≥ 1.29** (chart `kubeVersion`).
   soft"). Cluster-consistent limiting would need an external RLS service.
 - `/federate` enforcement is the Layer 3 proxy's / E2E suite's concern
   (#512); this gateway does not special-case it.
+- `prom-label-proxy` mode does not support Prometheus `remote_read`
+  (`/api/v1/read`) — the gateway `403`s it (see "Supported read APIs").
+  `vm-cluster` mode supports it via accountID-path routing.
 
 ## Install
 

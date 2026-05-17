@@ -3,7 +3,7 @@ name: federation-gateway
 description: Tenant federation API gateway (ADR-020 Layer 2) — Envoy that verifies the RS256 federation JWT, checks the revoked set, and per-token / per-tenant rate-limits before forwarding to the Layer 3 proxy
 type: application
 # version: Helm Chart 版本（隨 Chart 結構/模板變更升級）
-version: 0.1.0
+version: 0.1.1
 # appVersion: pinned Envoy release
 appVersion: "v1.38.0"
 # kubeVersion: the deployment uses the native preStop.sleep lifecycle
