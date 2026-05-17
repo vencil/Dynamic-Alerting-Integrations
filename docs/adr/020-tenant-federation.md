@@ -9,7 +9,7 @@ tracking_kind: adr
 status: proposed
 domain: tenant-api
 created_at: 2026-05-11
-updated_at: 2026-05-11
+updated_at: 2026-05-17
 ---
 
 # ADR-020: Tenant Federation — Label-Injection Proxy over Self-Built Endpoint
@@ -111,7 +111,7 @@ updated_at: 2026-05-11
 
 #### Data-layer Label Enrichment Guarantee
 
-> **IV-2.0 audit 修正（[#505](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/505)）**：本平台 data-layer 既有的租戶 label 名為 **`tenant`**，非 `tenant_id`（Prometheus relabel `target_label: tenant`、threshold-exporter、15 個 rule pack 全用 `tenant`）。本 ADR 原稿以 `tenant_id` 為 label 名是 prose 與實作的落差；federation 一律對齊 `tenant`，`helm/federation-proxy` 的 `-label` 已改 `tenant`。本 ADR prose 凡指「proxy 注入到 metric 的 label」一律已對齊為 `tenant`。JWT claim 仍名 `tenant_id`（claim 名與 metric label 名為獨立命名空間，互不要求一致）—— §Token model 與 token JSON 範例的 `tenant_id` 即 claim，不受此修正影響。盤點詳 [`federation-label-enrichment-audit.md`](../internal/federation-label-enrichment-audit.md)。
+> **IV-2.0 audit 修正（[#505](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/505)）**：本平台 data-layer 既有的租戶 label 名為 **`tenant`**，非 `tenant_id`（Prometheus relabel `target_label: tenant`、threshold-exporter、tenant-scoped rule pack 一律 `on(tenant)`）。本 ADR 原稿以 `tenant_id` 為 label 名是 prose 與實作的落差；federation 一律對齊 `tenant`，`helm/federation-proxy` 的 `-label` 已改 `tenant`。本 ADR prose 凡指「proxy 注入到 metric 的 label」一律已對齊為 `tenant`。JWT claim 仍名 `tenant_id`（claim 名與 metric label 名為獨立命名空間，互不要求一致）—— §Token model 與 token JSON 範例的 `tenant_id` 即 claim，不受此修正影響。盤點詳 [`federation-label-enrichment-audit.md`](../internal/federation-label-enrichment-audit.md)。
 
 所有 platform whitelist 列入的 metric，平台**必須**確保在 ingest / scrape 階段
 （Prometheus `scrape_configs.relabel_configs`、VictoriaMetrics `relabel_config`、

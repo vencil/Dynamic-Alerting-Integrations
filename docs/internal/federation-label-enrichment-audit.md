@@ -22,7 +22,7 @@ audit 最重要的發現不是「某些 metric 缺 label」，而是 **label 的
 
 | 層 | 租戶 label 名 | 證據 |
 |---|---|---|
-| Data layer（實際） | **`tenant`** | `k8s/03-monitoring/configmap-prometheus.yaml` job `tenant-exporters` relabel `target_label: tenant`；`components/threshold-exporter/app/collector.go` `labelNames := []string{"tenant", ...}`；`k8s/03-monitoring/configmap-rules-*.yaml` 15 個 rule pack 全部 `on(tenant)` join / `by(tenant)` 聚合 |
+| Data layer（實際） | **`tenant`** | `k8s/03-monitoring/configmap-prometheus.yaml` job `tenant-exporters` relabel `target_label: tenant`；`components/threshold-exporter/app/collector.go` `labelNames := []string{"tenant", ...}`；`k8s/03-monitoring/configmap-rules-*.yaml` 中 DB / middleware 類 rule pack（13/15）一律 `on(tenant)` join / `by(tenant)` 聚合（其餘 2 個 `operational` / `platform` 為不分租戶的平台內部規則，亦不用 `tenant_id`） |
 | Federation proxy（IV-2a #506 已 merge） | `tenant_id` | `helm/federation-proxy/values.yaml` `tenant.label: tenant_id` → `prom-label-proxy -label=tenant_id` |
 | ADR-020 prose | `tenant_id` | §前提約束 / 四層路由圖 / §實作計畫 多處寫 `{tenant_id="<X>"}` |
 
@@ -32,7 +32,7 @@ audit 最重要的發現不是「某些 metric 缺 label」，而是 **label 的
 
 ### 決議
 
-Federation **對齊平台既有的 `tenant`**。反方向（把平台 15 個 rule pack + relabel config + threshold-exporter Go code + 整合文件全部改名 `tenant_id`）是大規模 breaking change，排除。
+Federation **對齊平台既有的 `tenant`**。反方向（把平台的 relabel config + threshold-exporter Go code + 13 個 tenant-scoped rule pack + 整合文件全部改名 `tenant_id`）是大規模 breaking change，排除。
 
 最小且充分的修正點是 `prom-label-proxy` 的 `-label` flag —— 它是「注入到 metric 的 label 名」的唯一決定點。JWT claim 名為 `tenant_id`、gateway 的 `x-tenant-id` header 名 **不需要改**：claim / header 名與 metric label 名是獨立命名空間，proxy 取 claim 的「值」、用 `-label` 指定的「名字」注入。
 
@@ -67,6 +67,11 @@ issue #505 的 PR 一併處理：
 - **`container_*`（raw cAdvisor）**：原生無 `tenant`。注意：衍生的 `tenant:container_*:` recording-rule metric **是** eligible —— 租戶若要容器 CPU / 記憶體，whitelist 應收 recording-rule 形式，不收 raw cAdvisor。
 - **`kube_*`（kube-state-metrics）**：原生無 `tenant`，且自平台 namespace 抓取。
 - **`node_*`**：未抓取。
+
+## 範圍界線（本 audit 不涵蓋）
+
+- **Label 的「值」對應**：本 audit 確認 label 的**名字**（`tenant`）以及各 metric family 是否帶它。proxy 注入的 `{tenant="<v>"}` 中 `<v>` 來自 federation token 的 `tenant_id` claim 值，必須等於 data-layer `tenant` label 的值（job `tenant-exporters` 由 K8s namespace 推導）。「token 的租戶識別值 == namespace == `tenant` label 值」這個 value-contract **不在本 audit 範圍** —— 標籤名修對是必要、非充分條件，value-contract 由 IV-2j 端到端整合測試（#516）驗證。
+- **VictoriaMetrics cluster 路徑**：ADR-020 的 vm-cluster federation 走 gateway URL-rewrite 到 `/select/<accountID>/`（accountID 路由，非 label injection）—— label enrichment 對該路徑不適用。本盤點僅涵蓋 prom-label-proxy（front Prometheus / Thanos / VictoriaMetrics 單機）路徑。
 
 ## Follow-up
 
