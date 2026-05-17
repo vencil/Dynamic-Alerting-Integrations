@@ -3,7 +3,7 @@ name: federation-proxy
 description: Tenant federation label-injection proxy (ADR-020 Layer 3) — prom-label-proxy that force-injects a per-tenant matcher into every PromQL query and metadata-API call
 type: application
 # version: Helm Chart 版本（隨 Chart 結構/模板變更升級）
-version: 0.1.0
+version: 0.1.1
 # appVersion: pinned prom-label-proxy release
 appVersion: "v0.13.0"
 # kubeVersion: the deployment uses the native preStop.sleep lifecycle
