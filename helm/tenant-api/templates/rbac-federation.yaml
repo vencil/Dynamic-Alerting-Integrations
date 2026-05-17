@@ -1,0 +1,37 @@
+{{- if .Values.federation.enabled }}
+# tenant-api's only Kubernetes API access: get + update on the single
+# federation token-store ConfigMap (ADR-020 Posture B, issue #519).
+# resourceNames pins the grant to that one object — a compromised pod
+# cannot enumerate or rewrite any other ConfigMap in the namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "tenant-api.name" . }}-federation
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "tenant-api.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["{{ .Values.federation.store.configMapName }}"]
+    # get: NewConfigMapStore probes existence + every store read.
+    # update: the optimistic-concurrency write in configMapStore.mutate.
+    # No create — configmap-federation-store.yaml pre-creates it.
+    verbs: ["get", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "tenant-api.name" . }}-federation
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "tenant-api.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "tenant-api.name" . }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "tenant-api.name" . }}-federation
+{{- end }}

@@ -1,0 +1,23 @@
+{{- if .Values.federation.enabled }}
+# Federation token record store (ADR-020 Posture B, issue #519).
+#
+# tenant-api owns store.json (its source of truth) and revoked.txt (the
+# gateway-facing projection) at RUNTIME. This chart only pre-creates the
+# object — empty — so tenant-api's RBAC needs get+update on one resourceName
+# and never a namespace-wide `create`.
+#
+# The `data` block is deliberately omitted: rendering store.json here would
+# make every `helm upgrade` reset it and wipe live tokens. Helm's three-way
+# merge leaves keys it never templated alone. `resource-policy: keep` further
+# protects the store from `helm uninstall`.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.federation.store.configMapName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "tenant-api.labels" . | nindent 4 }}
+    app.kubernetes.io/component: federation-token-store
+  annotations:
+    helm.sh/resource-policy: keep
+{{- end }}
