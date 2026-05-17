@@ -1102,11 +1102,13 @@ t.Logf("debounce fires: %d (informational, not asserted)", fireCount)
 assert h.GetSampleSum() == numFiles
 // (b) every mutated tenant advanced
 assert mergedHash[tid] != baseline[tid] for all tid
-// (c) fire count not absurd (catches genuinely-broken debounce)
-assert h.GetSampleCount() <= 2  // CI-jitter envelope
+// (c) fired windows can never outnumber triggers — the ONLY
+//     deterministic _count bound (see below for why no
+//     smaller bound is safe).
+assert h.GetSampleCount() <= numFiles
 ```
 
-**Why `_count <= 2` not `_count == 1`**: a 50-write burst with 5-25ms gaps under a 100ms window legitimately splits into 1 OR 2 fired windows depending on scheduler jitter. Both are contract-compliant. `_count <= 2` is the **CI-jitter envelope** — outside this means debounce is genuinely broken (e.g. window not coalescing). The test FAILS bench injection of "skip every-other trigger" via `_sum=25 != 50` (verified during PR #159 implementation).
+**Why no *small* `_count` bound**: an earlier revision of this test asserted `_count <= 2` as a "CI-jitter envelope", reasoning that a 50-write burst with 5-25ms gaps under a 100ms window "legitimately splits into 1 OR 2 fired windows". That reasoning is wrong, and the assertion flaked on PR #526 and PR #530 — under a loaded `-race` runner a *healthy* debounce split the burst into **19** windows (sleeps overran the 100ms window). `_count` (fired-window count) is irreducibly wall-clock-dependent: there is **no scheduler-independent threshold** between "broken debounce" and "slow runner", so no small bound is both deterministic and meaningful. Asserting one re-introduces the exact lesson-§2 anti-pattern this worked example exists to demonstrate the fix for. The only deterministic upper bound is `_count <= numFiles` — a window only fires after a trigger armed its timer, so fired windows can never outnumber triggers; exceeding `numFiles` is a genuine spurious/duplicate-fire bug. The "window never coalesces" bug class (`_count == numFiles`) is *not* catchable here — it is covered deterministically by `config_debounce_test.go`'s back-to-back-trigger tests (no inter-trigger sleep → no wall-clock dependence). The lost-trigger bug class is still caught here directly: bench injection of "skip every-other trigger" fails via the deterministic, unchanged `_sum == numFiles` assertion (`_sum=25 != 50`, verified during PR #159 implementation).
 
 **Reusable helper** (`config_slow_write_stress_test.go`):
 
