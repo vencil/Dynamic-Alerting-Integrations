@@ -216,6 +216,8 @@ http {
 （**不是用 IP**，否則公司 NAT 後所有 tenant 互相影響）。完整 Helm template 細節
 留 IV-2 sub-issue。
 
+> **實作（IV-2b, [#507](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/507)）**：上方 nginx 區塊為概念示意；gateway 正式以 **Envoy** 實作，交付為 `helm/federation-gateway` chart。選 Envoy 的關鍵：最不能錯的 RS256 驗章交給原生 `jwt_authn` filter（純設定、audited、無 alg-confusion footgun）。filter chain cheap-before-expensive：per-IP `local_ratelimit` → `jwt_authn` → Lua（revoked-set 查驗 + tenant header 覆寫）→ per-token / per-tenant `local_ratelimit` → router。per-token + per-tenant 雙層限流以 wildcard descriptor 達成（防單 token 濫用 + 防 round-robin ≤16 token 的 Sybil）。revoked-set 由 Lua filter time-gated 重讀 ConfigMap projected volume。詳 `helm/federation-gateway` chart README。
+
 #### Layer 3 — Proxy（label injection + audit log）
 
 `vmauth` / `prom-label-proxy` 在此層只做兩件事：

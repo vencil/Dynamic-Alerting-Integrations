@@ -1,0 +1,24 @@
+federation-gateway installed — ADR-020 Layer 2 (federation API gateway).
+
+  Mode    : {{ .Values.mode }}
+  Service : {{ include "federation-gateway.name" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.port }}
+  Upstream: {{ .Values.upstream.host }}:{{ .Values.upstream.port }}
+
+Per request, in cheap-before-expensive order, Envoy runs: per-IP rate
+limit -> RS256 JWT verify -> revoked-set check + tenant wiring (Lua) ->
+per-token rate limit -> per-tenant rate limit -> forward upstream.
+{{ if not .Values.jwt.jwks }}
+WARNING: jwt.jwks is empty — the gateway ships a keyless JWKS and Envoy
+will NOT start with it (the pod CrashLoopBackOffs). This is intended
+fail-loud: a gateway with no verification key must not run. Set jwt.jwks
+to the public JWKS of tenant-api's RS256 signing key. The keypair is
+produced by IV-2l (#518).
+{{ end -}}
+Revocation is eventually consistent: tenant-api writes revoked.txt into
+the {{ .Values.revokedSet.configMapName }} ConfigMap; each Envoy worker
+re-reads it every {{ .Values.revokedSet.reloadIntervalSeconds }}s. A
+revoked token stops working within that window + the ConfigMap sync lag.
+
+The rate limits are per-Envoy-instance — with N replicas the effective
+ceiling is N x the configured value. They are a SOFT control; the hard
+blast-radius cap is Layer-1 storage (ADR-020 §Blast radius).

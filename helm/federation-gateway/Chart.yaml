@@ -1,0 +1,20 @@
+apiVersion: v2
+name: federation-gateway
+description: Tenant federation API gateway (ADR-020 Layer 2) — Envoy that verifies the RS256 federation JWT, checks the revoked set, and per-token / per-tenant rate-limits before forwarding to the Layer 3 proxy
+type: application
+# version: Helm Chart 版本（隨 Chart 結構/模板變更升級）
+version: 0.1.0
+# appVersion: pinned Envoy release
+appVersion: "v1.38.0"
+# kubeVersion: the deployment uses the native preStop.sleep lifecycle
+# action, beta-on-by-default since Kubernetes 1.29.
+kubeVersion: ">=1.29.0-0"
+keywords:
+  - dynamic-alerting
+  - tenant-federation
+  - envoy
+  - api-gateway
+  - multi-tenancy
+home: https://github.com/vencil/Dynamic-Alerting-Integrations
+maintainers:
+  - name: vencil
