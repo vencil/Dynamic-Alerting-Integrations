@@ -4,9 +4,11 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"math/big"
 	"os"
 	"path/filepath"
 	"strings"
@@ -194,6 +196,76 @@ func TestIssue_SignsVerifiableJWT(t *testing.T) {
 	exp := claims.ExpiresAt.Time
 	if exp.Before(before.Add(time.Hour-time.Minute)) || exp.After(time.Now().Add(time.Hour+time.Minute)) {
 		t.Errorf("claim exp = %v, want ~1h from issuance", exp)
+	}
+}
+
+func TestIssue_StampsKeyID(t *testing.T) {
+	t.Parallel()
+	keyPath, key := writeTestKey(t)
+	m, err := NewManager(keyPath, newJSONStore(t), time.Hour)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	signed, _, err := m.Issue("tenant-kid", "u@example.com", "")
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+
+	tok, err := jwt.ParseWithClaims(signed, &Claims{}, func(*jwt.Token) (interface{}, error) {
+		return &key.PublicKey, nil
+	})
+	if err != nil {
+		t.Fatalf("ParseWithClaims: %v", err)
+	}
+	kid, ok := tok.Header["kid"].(string)
+	if !ok || kid == "" {
+		t.Fatalf("token header kid = %v, want a non-empty string", tok.Header["kid"])
+	}
+	// The kid is the RFC 7638 thumbprint of the signing key's public half
+	// — the same value `da-tools fed-key` independently writes into the
+	// JWKS, so the gateway's jwt_authn resolves the key by kid.
+	if want := keyID(&key.PublicKey); kid != want {
+		t.Errorf("kid = %q, want RFC 7638 thumbprint %q", kid, want)
+	}
+}
+
+func TestKeyID_StableAndShaped(t *testing.T) {
+	t.Parallel()
+	_, key := writeTestKey(t)
+	kid := keyID(&key.PublicKey)
+	// SHA-256 base64url (no padding) is always 43 characters.
+	if len(kid) != 43 {
+		t.Errorf("keyID = %q (len %d), want a 43-char base64url SHA-256", kid, len(kid))
+	}
+	// Deterministic — the same key always thumbprints to the same kid.
+	if again := keyID(&key.PublicKey); again != kid {
+		t.Errorf("keyID not deterministic: %q then %q", kid, again)
+	}
+	// A different key yields a different kid.
+	_, other := writeTestKey(t)
+	if keyID(&other.PublicKey) == kid {
+		t.Error("two distinct keys produced the same kid")
+	}
+}
+
+func TestKeyID_RFC7638Vector(t *testing.T) {
+	t.Parallel()
+	// The published RFC 7638 §3.1 worked example. Pinning keyID to it
+	// locks the thumbprint algorithm to the spec — so the kid stays
+	// interoperable with the `da-tools fed-key` JWKS regardless of any
+	// future refactor of either side.
+	const (
+		rfcN   = "0vx7agoebGcQSuuPiLJXZptN9nndrQmbXEps2aiAFbWhM78LhWx4cbbfAAtVT86zwu1RK7aPFFxuhDR1L6tSoc_BJECPebWKRXjBZCiFV4n3oknjhMstn64tZ_2W-5JsGY4Hc5n9yBXArwl93lqt7_RN5w6Cf0h4QyQ5v-65YGjQR0_FDW2QvzqY368QQMicAtaSqzs8KJZgnYb9c7d0zgdAZHzu6qMQvRL5hajrn1n91CbOpbISD08qNLyrdkt-bFTWhAI4vMQFh6WeZu0fM4lFd2NcRwr3XPksINHaQ-G_xBniIqbw0Ls1jF44-csFCur-kEgU8awapJzKnqDKgw"
+		rfcKid = "NzbLsXh8uDCcd-6MNwXF4W_7noWXFZAfHkxZsRGC9Xs"
+	)
+	nBytes, err := base64.RawURLEncoding.DecodeString(rfcN)
+	if err != nil {
+		t.Fatalf("decode RFC 7638 modulus: %v", err)
+	}
+	pub := &rsa.PublicKey{N: new(big.Int).SetBytes(nBytes), E: 65537} // e = AQAB
+	if got := keyID(pub); got != rfcKid {
+		t.Errorf("keyID(RFC 7638 example) = %q, want %q", got, rfcKid)
 	}
 }
 

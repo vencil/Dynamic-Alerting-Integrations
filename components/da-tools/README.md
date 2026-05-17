@@ -84,7 +84,7 @@ docker run --rm \
 | **GitOps** | 產 Alertmanager fragment、批次 PR、快照比對 | `generate-routes`、`batch-pr`、`config-history`、`gitops-check`、`tenant-verify` |
 | **Migrate** | ConfigMap → Operator CRD、edge/central 拆分 | `migrate-to-operator`、`operator-generate`、`operator-check`、`rule-pack-split` |
 | **Decommission** | 下架 tenant、棄用 metric | `offboard`、`deprecate` |
-| **Bridge** | 整合外掛 AM / Federation / 通知 | `byo-check`、`test-notification`、`federation-check` |
+| **Bridge** | 整合外掛 AM / Federation / 通知 | `byo-check`、`test-notification`、`federation-check`、`fed-key` |
 
 ### 4.1 Discover
 
@@ -183,6 +183,7 @@ docker run --rm \
 | `byo-check` | BYO Alertmanager 整合前檢（endpoint + 配置驗證） | `--alertmanager <url>` |
 | `test-notification` | 多通道通知連通性測試（驗 receiver 可達性） | `--config-dir <dir>` |
 | `federation-check` | Prometheus Federation 健康檢查 | `--prometheus <url>` |
+| `fed-key` | 產生 / 輪替 federation JWT 簽章金鑰（ADR-020 IV-2l：私鑰 Secret + 公鑰 JWKS） | （無，bootstrap）/ `--rotate` |
 
 ---
 

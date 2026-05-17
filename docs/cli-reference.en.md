@@ -118,6 +118,7 @@ These tools only need HTTP access to Prometheus API and can run from anywhere.
 | `operator-generate` | Rule Packs + Tenant config → PrometheusRule / AlertmanagerConfig / ServiceMonitor CRD YAML | `--rule-packs-dir <dir>` |
 | `operator-check` | Operator CRD deployment status verification (5 checks + diagnostic report) | (auto-discover or `--namespace <ns>`) |
 | `rule-pack-split` | Rule Pack hierarchical split (edge Part 1 + central Parts 2+3), Federation Scenario B | `--rule-packs-dir <dir>` |
+| `fed-key` | Generate / rotate the federation JWT signing keypair (ADR-020 IV-2l): private-key Secret manifest → stdout, public JWKS → file | (none, bootstrap default) / `--rotate --existing-jwks <file>` |
 
 ### Configuration Generation Tools
 
@@ -883,6 +884,52 @@ da-tools federation-check central --prometheus http://central:9090 --json
 |------|-------------|
 | `0` | All checks passed |
 | `1` | One or more checks failed |
+
+---
+
+#### fed-key
+
+Generate / rotate the federation JWT signing keypair (ADR-020 IV-2l).
+
+**Purpose**: tenant-api signs federation tokens with an RS256 private key; federation-gateway verifies them against the matching public key's JWKS. This tool generates an RSA keypair and emits the two downstream artifacts: the private key → a Kubernetes Secret manifest (stdout, never written to disk); the public key → a JWKS file. Each public key's `kid` is its RFC 7638 JWK thumbprint, which matches the `kid` header tenant-api computes by construction.
+
+**Syntax**
+
+```bash
+da-tools fed-key [options]
+```
+
+**Options**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--rotate` | Rotation mode: merge the new public key into `--existing-jwks` (old + new coexist) | false |
+| `--existing-jwks <PATH>` | Current JWKS file to merge into (required with `--rotate`) | (none) |
+| `--jwks-out <PATH>` | JWKS output path | `./federation-jwks.json` |
+| `--namespace <NS>` | Namespace for the Secret manifest | `monitoring` |
+| `--secret-name <NAME>` | Secret name | `tenant-federation-signing-key` |
+| `--secret-key <KEY>` | Data key inside the Secret | `federation-signing-key.pem` |
+| `--key-bits <N>` | RSA modulus size (tenant-api rejects < 2048) | `2048` |
+
+**Examples**
+
+```bash
+# First bootstrap: private key applied directly, JWKS written to ./federation-jwks.json
+da-tools fed-key | kubectl apply -f -
+
+# Planned rotation: new public key merged into the existing JWKS (rotation order: see runbook)
+da-tools fed-key --rotate --existing-jwks federation-jwks.json \
+  --jwks-out federation-jwks.json > new-signing-key.secret.yaml
+```
+
+> Full rotation / emergency-replacement procedure: [`federation-key-rotation-runbook.md`](internal/federation-key-rotation-runbook.md).
+
+**Exit Codes**
+
+| Code | Description |
+|------|-------------|
+| `0` | Key generated |
+| `1` | openssl missing, `--existing-jwks` unreadable, or invalid arguments |
 
 ---
 

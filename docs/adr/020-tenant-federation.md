@@ -147,6 +147,8 @@ config 才能發現是 data-layer 沒打 label。是個典型的 silent-failure 
 | **Scope binding** | token 內 embed `tenant_id` claim，proxy 強制 inject | proxy 不能信 query string 帶的 tenant_id |
 | **Refresh** | 過期前 tenant 自行重新簽發；無 sliding refresh | 簡化實作；4h 重簽對 self-service tenant 不痛 |
 
+> **實作（IV-2l, [#518](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/518)）**：RS256 簽章金鑰的生成 / 輪替由 `da-tools fed-key` 負責 —— 私鑰吐成 Kubernetes Secret manifest（不落地）、公鑰吐成 JWKS 供 gateway。每把公鑰的 `kid` 為其 **RFC 7638 thumbprint**;tenant-api 簽 token 時對載入金鑰算同一 thumbprint、注入 `kid` header,故 gateway `jwt_authn` 可用 `kid` O(1) 選鑰(輪替期 JWKS 多鑰並存也不會放大壞簽章 flood 的 RSA 成本)。計畫性輪替走 grace-period overlap、私鑰外洩走緊急汰換 —— 標準流程見 [`federation-key-rotation-runbook.md`](../internal/federation-key-rotation-runbook.md)。
+
 ### Blast radius：3-layer defense（**proxy 一個人擋不住**——adversarial review surfaced）
 
 > ⚠️ **架構幻覺修正**：本 ADR 早期 draft 把三件組（concurrency / timeout / series cap）全

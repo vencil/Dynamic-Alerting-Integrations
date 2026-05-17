@@ -128,6 +128,8 @@ TOOL_FILES=(
     ops/migrate_to_operator.py
     # v2.3.0 Federation tools
     ops/generate_rule_pack_split.py
+    # ADR-020 IV-2l (#518) — federation JWT signing-key generation / rotation
+    ops/federation_keygen.py
     # v2.8.0 Phase .c C-12 — Dangling Defaults Guard dispatcher
     # (shells out to the `da-guard` Go binary; see scripts/tools/ops/guard_dispatch.py)
     ops/guard_dispatch.py
