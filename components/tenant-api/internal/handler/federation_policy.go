@@ -20,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/vencil/tenant-api/internal/federation"
@@ -169,11 +170,21 @@ func (d *Deps) PutFederationPolicy() http.HandlerFunc {
 	}
 }
 
+// admissionConcurrency caps how many admission checks run in parallel.
+// Each check is two cheap /api/v1/series index queries; a bounded
+// fan-out keeps a large whitelist PUT well inside the request timeout
+// without opening an unreasonable number of connections to the backend.
+const admissionConcurrency = 8
+
 // runFederationAdmission checks each metric being newly added to the
 // whitelist (relative to the current snapshot) through the admission
 // validator. A nil validator — no --federation-prometheus-url
 // configured — means admission is disabled; the write proceeds
 // schema-checked only. Already-whitelisted metrics are not re-checked.
+//
+// Checks run concurrently (bounded by admissionConcurrency): a metric's
+// check can take up to the validator's per-check timeout, so a large
+// PUT must not run them strictly sequentially.
 func (d *Deps) runFederationAdmission(ctx context.Context, proposed *federation.FederationPolicyConfig) []federation.AdmissionResult {
 	if d.AdmissionValidator == nil {
 		return nil
@@ -182,24 +193,43 @@ func (d *Deps) runFederationAdmission(ctx context.Context, proposed *federation.
 	for _, e := range d.FederationPolicy.Get().Whitelist {
 		current[e.Metric] = true
 	}
-	var results []federation.AdmissionResult
+	var newMetrics []string
 	for _, e := range proposed.Whitelist {
-		if current[e.Metric] {
-			continue
+		if !current[e.Metric] {
+			newMetrics = append(newMetrics, e.Metric)
 		}
-		res, err := d.AdmissionValidator.Check(ctx, e.Metric)
-		if err != nil {
-			// An indeterminate result (timeout / backend unreachable)
-			// maps to the soft gate: a metric that cannot be queried
-			// cannot be proven bad, so it warns rather than hard-blocks.
-			res = federation.AdmissionResult{
-				Metric: e.Metric,
-				State:  federation.AdmissionWarn,
-				Reason: "admission check could not be completed: " + err.Error(),
-			}
-		}
-		results = append(results, res)
 	}
+	if len(newMetrics) == 0 {
+		return nil
+	}
+
+	// Each goroutine writes its own distinct index of `results`, so the
+	// slice needs no lock and the output order matches newMetrics.
+	results := make([]federation.AdmissionResult, len(newMetrics))
+	sem := make(chan struct{}, admissionConcurrency)
+	var wg sync.WaitGroup
+	for i, metric := range newMetrics {
+		wg.Add(1)
+		go func(i int, metric string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			res, err := d.AdmissionValidator.Check(ctx, metric)
+			if err != nil {
+				// An indeterminate result (timeout / backend
+				// unreachable) maps to the soft gate: a metric that
+				// cannot be queried cannot be proven bad, so it warns
+				// rather than hard-blocks.
+				res = federation.AdmissionResult{
+					Metric: metric,
+					State:  federation.AdmissionWarn,
+					Reason: "admission check could not be completed: " + err.Error(),
+				}
+			}
+			results[i] = res
+		}(i, metric)
+	}
+	wg.Wait()
 	return results
 }
 

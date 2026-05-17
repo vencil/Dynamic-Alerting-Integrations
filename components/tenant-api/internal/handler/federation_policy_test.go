@@ -33,6 +33,36 @@ func fakePrometheus(t *testing.T, tenantless, present []map[string]string) strin
 	return srv.URL
 }
 
+// fakePromPerMetric mocks the Series API keyed on the metric NAME:
+// metrics listed in hardBlock return a tenant-less series (hard block),
+// every other metric passes. Used to verify the concurrent admission
+// fan-out maps each verdict back to the correct metric.
+func fakePromPerMetric(t *testing.T, hardBlock ...string) string {
+	t.Helper()
+	blocked := make(map[string]bool, len(hardBlock))
+	for _, m := range hardBlock {
+		blocked[m] = true
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sel := r.URL.Query().Get("match[]")
+		metric := sel
+		if i := strings.IndexByte(sel, '{'); i >= 0 {
+			metric = sel[:i]
+		}
+		var data []map[string]string
+		if strings.Contains(sel, `tenant=""`) {
+			if blocked[metric] {
+				data = []map[string]string{{"__name__": metric}}
+			}
+		} else {
+			data = []map[string]string{{"__name__": metric, "tenant": "db-a"}}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"status": "success", "data": data})
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL
+}
+
 // lastCommitMessage returns the full message of the most recent commit
 // in dir — used to assert the --force bypass trailer landed in git.
 func lastCommitMessage(t *testing.T, dir string) string {
@@ -215,6 +245,31 @@ func TestPutFederationPolicy_AdmissionPass(t *testing.T) {
 		fedReq(t, "PUT", "/api/v1/federation/policy", "", "", `{"whitelist":[{"metric":"m"}]}`))
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (admission pass), body: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestPutFederationPolicy_AdmissionMultipleMetricsConcurrent(t *testing.T) {
+	t.Parallel()
+	configDir := setupConfigDir(t, nil)
+	initGitRepo(t, configDir)
+	// Five metrics added in one PUT; m3 is the only hard block. The
+	// admission checks run concurrently — this verifies the fan-out
+	// maps each verdict back to the right metric (m3, not m1/m2/...).
+	promURL := fakePromPerMetric(t, "m3")
+	d := &Deps{
+		ConfigDir:          configDir,
+		Writer:             newTestWriter(configDir),
+		FederationPolicy:   federation.NewPolicyManager(configDir),
+		AdmissionValidator: federation.NewAdmissionValidator(promURL),
+		RBAC:               newRBACManager(t, platformAdminRBAC),
+	}
+	body := `{"whitelist":[{"metric":"m1"},{"metric":"m2"},{"metric":"m3"},{"metric":"m4"},{"metric":"m5"}]}`
+	w := executeWithRBAC(t, d.PutFederationPolicy(), fedReq(t, "PUT", "/api/v1/federation/policy", "", "", body))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (m3 hard block), body: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"metric":"m3"`) || !strings.Contains(w.Body.String(), "hard_block") {
+		t.Errorf("response should flag m3 as hard_block; body: %s", w.Body.String())
 	}
 }
 
