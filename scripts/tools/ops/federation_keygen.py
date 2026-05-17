@@ -182,6 +182,10 @@ def main() -> int:
     with open(args.jwks_out, "w", encoding="utf-8") as fh:
         json.dump(jwks, fh, indent=2)
         fh.write("\n")
+    # JWKS carries only public keys — world-readable is correct (it ships in
+    # the gateway's Helm values / git). Set 0o644 explicitly so the file's
+    # permissions are intentional rather than umask-dependent.
+    os.chmod(args.jwks_out, 0o644)
 
     # stdout: ONLY the Secret manifest, so `| kubectl apply -f -` is clean.
     sys.stdout.write(_secret_manifest(
@@ -189,7 +193,8 @@ def main() -> int:
 
     # stderr: operator guidance — never mixed into the piped manifest.
     print(f"\n[fed-key] new signing key, kid={jwk['kid']}", file=sys.stderr)
-    print(f"[fed-key] private key  -> stdout (Secret {args.namespace}/{args.secret_name})",
+    print(f"[fed-key] private key  -> stdout as a Secret manifest "
+          f"(namespace {args.namespace}) — pipe it to `kubectl apply -f -`",
           file=sys.stderr)
     print(f"[fed-key] public JWKS  -> {args.jwks_out} "
           f"({len(jwks['keys'])} key(s)) — set it as federation-gateway jwt.jwks",
