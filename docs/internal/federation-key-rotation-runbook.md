@@ -88,6 +88,9 @@ da-tools fed-key --namespace monitoring | kubectl apply -f -
 - 私鑰只透過 `da-tools fed-key` 的 stdout(Secret manifest)流動 ——
   不要把 PEM 存成檔案或貼進剪貼簿。`> file.yaml` 存的是 **Secret
   manifest**(計畫性輪替需要),私鑰本身仍只在該 manifest 內。
+- `fed-key` 偵測到 stdout 是互動式終端時會**直接拒絕並 exit 1** —— 避免
+  漏接 `| kubectl` / `> file` 時把私鑰印上螢幕、殘留在終端 scrollback。
+  故所有呼叫務必接 pipe 或重導向。
 - `da-tools fed-key` shell-out 到 `openssl`,預設 RSA-2048(tenant-api
   拒收 < 2048-bit)。
 - JWKS 是公鑰,非機密 —— 可正常存放 / 進 git / 進 Helm values。

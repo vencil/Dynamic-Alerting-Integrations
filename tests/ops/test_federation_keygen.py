@@ -149,6 +149,22 @@ def test_main_rejects_weak_key_bits(monkeypatch):
         fk.main()
 
 
+def test_main_refuses_tty_stdout(monkeypatch):
+    """A bare interactive run (stdout is a tty) must refuse — the private
+    key must never land in the operator's terminal scrollback buffer."""
+    class _TTYStdout:
+        def isatty(self):
+            return True
+
+        def write(self, _s):  # the guard must exit before any write
+            raise AssertionError("private key written despite the tty guard")
+
+    monkeypatch.setattr(sys, "argv", ["fed-key"])
+    monkeypatch.setattr(sys, "stdout", _TTYStdout())
+    with pytest.raises(SystemExit):
+        fk.main()
+
+
 @_needs_openssl
 def test_main_bootstrap_emits_secret_and_jwks(tmp_path, monkeypatch, capsys):
     jwks_out = tmp_path / "federation-jwks.json"

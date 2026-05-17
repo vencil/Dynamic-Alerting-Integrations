@@ -172,6 +172,19 @@ def main() -> int:
     if args.key_bits < 2048:
         parser.error("--key-bits must be >= 2048 (tenant-api rejects weaker signing keys)")
 
+    # TTY guard: the private-key Secret manifest goes to stdout for a pipe.
+    # If stdout is an interactive terminal the operator forgot the `| kubectl`
+    # — refuse, rather than printing the private key into their terminal
+    # scrollback buffer where it lingers (a real leak the no-disk design is
+    # meant to avoid). A pipe or `> file` redirect is not a tty, so the
+    # documented invocations are unaffected.
+    if sys.stdout.isatty():
+        sys.exit(
+            "error: refusing to write the private-key Secret manifest to a terminal.\n"
+            "Pipe it straight to kubectl:  da-tools fed-key | kubectl apply -f -\n"
+            "or redirect it to a file:     da-tools fed-key > signing-key.secret.yaml"
+        )
+
     priv_pem, jwk = _generate_keypair(args.key_bits)
 
     if args.rotate:
