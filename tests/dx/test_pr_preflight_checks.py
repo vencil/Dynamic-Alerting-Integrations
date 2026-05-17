@@ -374,7 +374,10 @@ class TestCheckPRMergeable:
         assert result.status == pp.Status.WARN
         assert "rate limit" in result.detail
 
-    def test_conflicting_fails(self, monkeypatch):
+    def test_conflicting_warns(self, monkeypatch):
+        # CONFLICTING reflects GitHub's view of the pushed PR head; a
+        # conflict resolved locally but not yet pushed still reports it,
+        # so this is a WARN — a FAIL would deadlock the resolving push.
         payload = {
             "mergeable": "CONFLICTING",
             "mergeStateStatus": "DIRTY",
@@ -382,7 +385,7 @@ class TestCheckPRMergeable:
         }
         _stub_run_constant(monkeypatch, _cp(0, json.dumps(payload)))
         result = pp.check_pr_mergeable()
-        assert result.status == pp.Status.FAIL
+        assert result.status == pp.Status.WARN
         assert "衝突" in result.message
 
     def test_blocked_without_review_warns(self, monkeypatch):
