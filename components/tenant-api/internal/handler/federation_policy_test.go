@@ -6,11 +6,43 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/vencil/tenant-api/internal/federation"
 )
+
+// fakePrometheus mocks the Prometheus Series API for handler-level
+// admission tests. It distinguishes the validator's two probes by the
+// `match[]` selector: the hard-block probe carries `tenant=""`.
+//   - tenantless: series returned for the `{tenant=""}` probe (a
+//     non-empty value triggers a hard block).
+//   - present:    series returned for the bare-metric existence probe.
+func fakePrometheus(t *testing.T, tenantless, present []map[string]string) string {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		data := present
+		if strings.Contains(r.URL.Query().Get("match[]"), `tenant=""`) {
+			data = tenantless
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"status": "success", "data": data})
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL
+}
+
+// lastCommitMessage returns the full message of the most recent commit
+// in dir — used to assert the --force bypass trailer landed in git.
+func lastCommitMessage(t *testing.T, dir string) string {
+	t.Helper()
+	out, err := exec.Command("git", "-C", dir, "log", "-1", "--format=%B").CombinedOutput()
+	if err != nil {
+		t.Fatalf("git log: %v\n%s", err, out)
+	}
+	return string(out)
+}
 
 // platformAdminRBAC grants admin on every tenant ("*"-scoped) to the
 // test caller's `platform-admins` group — i.e. a platform admin.
@@ -101,6 +133,88 @@ func TestPutFederationPolicy_Success(t *testing.T) {
 	// The handler reloads the manager — the new whitelist is live.
 	if !d.FederationPolicy.IsWhitelisted("mysql_up") {
 		t.Error("IsWhitelisted(mysql_up) = false after PUT, want true")
+	}
+}
+
+func TestPutFederationPolicy_AdmissionHardBlock(t *testing.T) {
+	t.Parallel()
+	configDir := setupConfigDir(t, nil)
+	initGitRepo(t, configDir)
+	// The {tenant=""} probe returns a series — metric `m` has series
+	// with no tenant label. Hard block: not whitelistable, not forceable.
+	promURL := fakePrometheus(t, []map[string]string{{"__name__": "m", "instance": "x"}}, nil)
+	d := &Deps{
+		ConfigDir:          configDir,
+		Writer:             newTestWriter(configDir),
+		FederationPolicy:   federation.NewPolicyManager(configDir),
+		AdmissionValidator: federation.NewAdmissionValidator(promURL),
+		RBAC:               newRBACManager(t, platformAdminRBAC),
+	}
+	w := executeWithRBAC(t, d.PutFederationPolicy(),
+		fedReq(t, "PUT", "/api/v1/federation/policy", "", "", `{"whitelist":[{"metric":"m"}]}`))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (hard block), body: %s", w.Code, w.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(configDir, "_federation_policy.yaml")); !os.IsNotExist(err) {
+		t.Error("whitelist file should NOT be written on a hard block")
+	}
+}
+
+func TestPutFederationPolicy_AdmissionWarnNeedsForce(t *testing.T) {
+	t.Parallel()
+	configDir := setupConfigDir(t, nil)
+	initGitRepo(t, configDir)
+	// Both probes empty — no samples in the window → soft Warn.
+	promURL := fakePrometheus(t, nil, nil)
+	d := &Deps{
+		ConfigDir:          configDir,
+		Writer:             newTestWriter(configDir),
+		FederationPolicy:   federation.NewPolicyManager(configDir),
+		AdmissionValidator: federation.NewAdmissionValidator(promURL),
+		RBAC:               newRBACManager(t, platformAdminRBAC),
+	}
+	// No force → rejected.
+	w := executeWithRBAC(t, d.PutFederationPolicy(),
+		fedReq(t, "PUT", "/api/v1/federation/policy", "", "", `{"whitelist":[{"metric":"m"}]}`))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (warn, no force)", w.Code)
+	}
+	// force without a reason → rejected.
+	w = executeWithRBAC(t, d.PutFederationPolicy(),
+		fedReq(t, "PUT", "/api/v1/federation/policy", "", "", `{"whitelist":[{"metric":"m"}],"force":true}`))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (force without reason)", w.Code)
+	}
+	// force + reason → accepted, and the bypass is recorded in git.
+	w = executeWithRBAC(t, d.PutFederationPolicy(),
+		fedReq(t, "PUT", "/api/v1/federation/policy", "", "", `{"whitelist":[{"metric":"m"}],"force":true,"reason":"cold-start: new cluster"}`))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (force + reason), body: %s", w.Code, w.Body.String())
+	}
+	msg := lastCommitMessage(t, configDir)
+	if !strings.Contains(msg, "[Bypass-Validator]") || !strings.Contains(msg, "cold-start: new cluster") {
+		t.Errorf("commit message missing the bypass trailer:\n%s", msg)
+	}
+}
+
+func TestPutFederationPolicy_AdmissionPass(t *testing.T) {
+	t.Parallel()
+	configDir := setupConfigDir(t, nil)
+	initGitRepo(t, configDir)
+	// {tenant=""} empty + existence probe non-empty → every series
+	// carries the tenant label → Pass, no force needed.
+	promURL := fakePrometheus(t, nil, []map[string]string{{"__name__": "m", "tenant": "db-a"}})
+	d := &Deps{
+		ConfigDir:          configDir,
+		Writer:             newTestWriter(configDir),
+		FederationPolicy:   federation.NewPolicyManager(configDir),
+		AdmissionValidator: federation.NewAdmissionValidator(promURL),
+		RBAC:               newRBACManager(t, platformAdminRBAC),
+	}
+	w := executeWithRBAC(t, d.PutFederationPolicy(),
+		fedReq(t, "PUT", "/api/v1/federation/policy", "", "", `{"whitelist":[{"metric":"m"}]}`))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (admission pass), body: %s", w.Code, w.Body.String())
 	}
 }
 

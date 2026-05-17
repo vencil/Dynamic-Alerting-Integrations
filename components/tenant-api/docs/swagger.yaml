@@ -279,6 +279,17 @@ definitions:
           $ref: '#/definitions/github_com_vencil_tenant-api_internal_platform.PRInfo'
         type: array
     type: object
+  internal_handler.PutFederationPolicyRequest:
+    properties:
+      force:
+        type: boolean
+      reason:
+        type: string
+      whitelist:
+        items:
+          $ref: '#/definitions/github_com_vencil_tenant-api_internal_federation.WhitelistEntry'
+        type: array
+    type: object
   internal_handler.PutGroupRequest:
     properties:
       description:
@@ -431,12 +442,12 @@ paths:
       consumes:
       - application/json
       parameters:
-      - description: Whitelist
+      - description: Whitelist + optional admission force/reason
         in: body
         name: body
         required: true
         schema:
-          $ref: '#/definitions/github_com_vencil_tenant-api_internal_federation.FederationPolicyConfig'
+          $ref: '#/definitions/internal_handler.PutFederationPolicyRequest'
       produces:
       - application/json
       responses:
@@ -448,8 +459,7 @@ paths:
         "400":
           description: Bad Request
           schema:
-            additionalProperties:
-              type: string
+            additionalProperties: true
             type: object
         "403":
           description: Forbidden
