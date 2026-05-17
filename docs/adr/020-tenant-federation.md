@@ -132,15 +132,21 @@ config 才能發現是 data-layer 沒打 label。是個典型的 silent-failure 
 - `kube_*`（kube-state-metrics）
 - 任何透過 federation 從上游 Prom 抓進來、上游沒打 tenant label 的 metric
 
-**Admission validator（soft gate + force override，**adversarial review surfaced**）**：whitelist 加入新 metric 時，IV-2 admission validator 對「過去 24h 該 metric 在後端 storage 至少有一筆帶 `tenant` label 的 sample」做檢查。**輸出分三種**：
+**Admission validator（soft gate + force override，**adversarial review surfaced**）**：whitelist 加入新 metric 時，IV-2 admission validator 對「過去 24h 該 metric 在後端 storage 至少有一筆帶 `tenant` label 的 sample」做檢查。
+
+> **IV-2e 實作（PR-B）**：檢查只走 **Series metadata API**（`GET /api/v1/series`），不用 range query —— 後者會把 24h raw sample 載進記憶體、對高基數 metric 把 Prometheus 打到 OOM。探測用 `metric{tenant!=""}` 把過濾下推 TSDB inverted index（近零成本）;每次呼叫三重 bound（`limit=1` + `io.LimitReader` + `context` 5s timeout），validator 自身不會變成 resource sink。後端不可達 / timeout 視為 WARN（查不到無法證明 metric 壞）。另含 **PII label-name heuristic**（round-6）：metric 的 label 名命中 `email`/`customer`/`user_ip` 等樣式 → 列為 advisory soft warning（非 hard block，heuristic 必然不精準）。
+>
+> **共用 metric 修正（Gemini red-team）**：hard-block 的判準是「**沒有任何** series 帶 `tenant` label」，**不是**「有 series 缺 label」。K8s 共享叢集裡 `up` / `container_*` 等 metric,租戶 pod 帶 `tenant`、平台 pod（kube-system / API server）不帶 —— proxy 注入 `{tenant="<X>"}` 已把每個租戶隔離到自己的 series,平台那些無 label 的 series 無害。若以「任一 series 缺 label」為準則,會把所有 K8s 原生 metric 永久 hard-block。故探測 `metric{tenant!=""}`：非空即 Pass。
+
+**輸出分三種**：
 
 | 觀察結果 | Validator 行為 | 為何 |
 |---|---|---|
-| 有 sample 且帶 `tenant` label | ✅ Pass | 預期情境 |
-| 有 sample 但**無** `tenant` label | ⛔ **Hard block** | True positive failure mode——scrape config 沒打 label，這時讓 metric 進 whitelist 就是埋 empty-vector 地雷 |
+| metric 有帶 `tenant` label 的 series | ✅ Pass | 該 metric 可 federate;共用 metric 上同時存在的無 `tenant` 平台 series 不影響（proxy 注入 `{tenant="<X>"}` 自動隔離） |
+| metric 有 sample、但**沒有任何** series 帶 `tenant` label | ⛔ **Hard block** | True positive failure mode——scrape config 沒打 label，federate 後對所有租戶都是 empty vector |
 | 過去 24h 完全無 sample | ⚠️ **WARN，不 block**——要求 admin 顯式 `--force` 才能通過 | Cold start（新 tenant deploy 新 service）/ sparse metric（`critical_error_count` 週發一次）都是合法情境；hard block 會卡死合法 whitelist 更新 |
 
-`--force` bypass 路徑必須寫進 audit log：「Bypassed label enrichment check by `<user>`: reason=`<cold-start|sparse-metric|other>`」。**為什麼不直接 hard block 全部**：cardinality guard 也是 soft gate 設計（[ADR-017](./017-defaults-yaml-inheritance-dual-hash.md) precedent）——平台級防護要區分「結構性錯誤（hard block）」與「資料時序性缺漏（warn + 人工確認）」，否則 false positive 把合法 ops 鎖死。
+`--force` bypass 路徑必須寫進 audit log：「Bypassed label enrichment check by `<user>`: reason=`<cold-start|sparse-metric|other>`」。**IV-2e 實作（PR-B）**：`--force` 同時寫進該次 git commit message 的 `[Bypass-Validator]` trailer（operator + reason + metrics）—— commit message 是 GitOps 不可繞、不會 rotate 的稽核軌跡;slog audit line 仍寫,但 commit trailer 才是固化的那一份（見 #510 G2）。hard block **不可** `--force`。**為什麼不直接 hard block 全部**：cardinality guard 也是 soft gate 設計（[ADR-017](./017-defaults-yaml-inheritance-dual-hash.md) precedent）——平台級防護要區分「結構性錯誤（hard block）」與「資料時序性缺漏（warn + 人工確認）」，否則 false positive 把合法 ops 鎖死。
 
 ### Token model
 

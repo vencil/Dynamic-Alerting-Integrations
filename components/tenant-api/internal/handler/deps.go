@@ -87,6 +87,13 @@ type Deps struct {
 	// 2-tier policy is independent of token signing.
 	FederationPolicy *federation.PolicyManager
 
+	// AdmissionValidator runs the data-layer label-enrichment check
+	// when a metric is added to the federation whitelist (ADR-020
+	// IV-2e). Optional — nil when --federation-prometheus-url is unset,
+	// in which case PutFederationPolicy skips admission and the
+	// whitelist edit is schema-checked only.
+	AdmissionValidator *federation.AdmissionValidator
+
 	// Tasks runs async batch operations behind a goroutine pool.
 	Tasks *async.Manager
 

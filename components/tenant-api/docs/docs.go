@@ -49,12 +49,12 @@ const docTemplate = `{
                 "summary": "Replace the platform federation whitelist",
                 "parameters": [
                     {
-                        "description": "Whitelist",
+                        "description": "Whitelist + optional admission force/reason",
                         "name": "body",
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/github_com_vencil_tenant-api_internal_federation.FederationPolicyConfig"
+                            "$ref": "#/definitions/internal_handler.PutFederationPolicyRequest"
                         }
                     }
                 ],
@@ -70,9 +70,7 @@ const docTemplate = `{
                         "description": "Bad Request",
                         "schema": {
                             "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "additionalProperties": true
                         }
                     },
                     "403": {
@@ -1687,6 +1685,23 @@ const docTemplate = `{
                     "type": "array",
                     "items": {
                         "$ref": "#/definitions/github_com_vencil_tenant-api_internal_platform.PRInfo"
+                    }
+                }
+            }
+        },
+        "internal_handler.PutFederationPolicyRequest": {
+            "type": "object",
+            "properties": {
+                "force": {
+                    "type": "boolean"
+                },
+                "reason": {
+                    "type": "string"
+                },
+                "whitelist": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_vencil_tenant-api_internal_federation.WhitelistEntry"
                     }
                 }
             }

@@ -145,8 +145,13 @@ func (w *Writer) WriteViewsFile(authorEmail, yamlContent string) error {
 
 // WriteFederationPolicyFile validates, persists, and commits the
 // platform federation whitelist (_federation_policy.yaml). ADR-020 IV-2e.
-func (w *Writer) WriteFederationPolicyFile(authorEmail, yamlContent string) error {
-	return w.writeSpecialFile("_federation_policy.yaml", "federation-policy", authorEmail, yamlContent)
+//
+// An optional trailer is appended to the commit message body — used to
+// record an admission-validator `--force` bypass (operator + reason)
+// directly in git history, the only durable audit trail in a GitOps
+// system (ADR-020 IV-2e; stdout logs rotate away).
+func (w *Writer) WriteFederationPolicyFile(authorEmail, yamlContent string, trailer ...string) error {
+	return w.writeSpecialFile("_federation_policy.yaml", "federation-policy", authorEmail, yamlContent, trailer...)
 }
 
 // WriteFederationSubsetFile validates, persists, and commits one
@@ -184,7 +189,7 @@ func (w *Writer) WriteFederationSubsetFile(tenantID, authorEmail, yamlContent st
 // writeSpecialFile is a shared implementation for writing _groups.yaml, _views.yaml, etc.
 // These files use the same mutex and conflict detection as tenant writes — only
 // the validation step differs (basic YAML well-formedness, not full schema).
-func (w *Writer) writeSpecialFile(filename, entityType, authorEmail, yamlContent string) error {
+func (w *Writer) writeSpecialFile(filename, entityType, authorEmail, yamlContent string, trailer ...string) error {
 	// Basic YAML validity check (special files don't have a schema).
 	var raw map[string]interface{}
 	if err := yaml.Unmarshal([]byte(yamlContent), &raw); err != nil {
@@ -199,6 +204,7 @@ func (w *Writer) writeSpecialFile(filename, entityType, authorEmail, yamlContent
 		entityType,
 		authorEmail,
 		[]byte(yamlContent),
+		trailer...,
 	)
 }
 
@@ -215,7 +221,7 @@ func (w *Writer) writeSpecialFile(filename, entityType, authorEmail, yamlContent
 // from our commit's parent (someone else pushed between our read and
 // our write). Non-git environments skip conflict detection but still
 // return commit errors verbatim.
-func (w *Writer) commitFileChange(filePath, commitTag, authorEmail string, content []byte) error {
+func (w *Writer) commitFileChange(filePath, commitTag, authorEmail string, content []byte, trailer ...string) error {
 	headBefore, err := w.currentHEAD()
 	if err != nil {
 		// Proceed without conflict detection in non-git environments.
@@ -227,7 +233,7 @@ func (w *Writer) commitFileChange(filePath, commitTag, authorEmail string, conte
 		return fmt.Errorf("write file: %w", err)
 	}
 
-	if err := w.gitCommit(filePath, commitTag, authorEmail); err != nil {
+	if err := w.gitCommit(filePath, commitTag, authorEmail, trailer...); err != nil {
 		slog.Warn("gitops: commit failed", "commit_tag", commitTag, "error", err)
 		return fmt.Errorf("git commit: %w", err)
 	}
@@ -279,7 +285,7 @@ func (w *Writer) commitParent() (string, error) {
 // environment variables (set in the K8s Deployment). This keeps the audit trail clean:
 //   - author  = the human operator (from X-Forwarded-Email via oauth2-proxy)
 //   - committer = the service account (da-portal@dynamic-alerting.local)
-func (w *Writer) gitCommit(filePath, tenantID, authorEmail string) error {
+func (w *Writer) gitCommit(filePath, tenantID, authorEmail string, trailer ...string) error {
 	// Stage the file
 	addCmd := exec.Command("git", "-C", w.gitDir, "add", filePath)
 	if out, err := addCmd.CombinedOutput(); err != nil {
@@ -295,6 +301,12 @@ func (w *Writer) gitCommit(filePath, tenantID, authorEmail string) error {
 
 	msg := fmt.Sprintf("tenant/%s: update via portal\n\nTimestamp: %s\nSource: da-portal/tenant-manager",
 		tenantID, time.Now().UTC().Format(time.RFC3339))
+	// Optional trailer — appended to the message body so an audit
+	// annotation (e.g. an admission-validator --force bypass) is
+	// permanently bound to the commit, not just an ephemeral log line.
+	if len(trailer) > 0 && trailer[0] != "" {
+		msg += "\n\n" + trailer[0]
+	}
 
 	// author name defaults to email prefix when no display name is available
 	authorName := authorEmail

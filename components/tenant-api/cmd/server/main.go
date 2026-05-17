@@ -142,6 +142,10 @@ func main() {
 	federationTTL := flag.Duration("federation-token-ttl",
 		parseDurationOrDefault(os.Getenv("TA_FEDERATION_TOKEN_TTL"), federation.DefaultTTL),
 		"Federation token lifetime (default 4h; ADR-020 §Token model)")
+	// v2.9.0 ADR-020 IV-2e: federation admission validator backend.
+	federationPrometheusURL := flag.String("federation-prometheus-url",
+		envOrDefault("TA_FEDERATION_PROMETHEUS_URL", ""),
+		"Base URL of the Prometheus/VictoriaMetrics backend the federation admission validator queries (Series API). Empty disables admission.")
 
 	flag.Parse()
 
@@ -184,6 +188,14 @@ func main() {
 	// metric whitelist (`_federation_policy.yaml`). Per-tenant subsets
 	// live in separate files, read on demand by the handler.
 	federationPolicyMgr := federation.NewPolicyManager(*configDir)
+
+	// v2.9.0 ADR-020 IV-2e: federation admission validator. nil when
+	// --federation-prometheus-url is unset — admission is then disabled
+	// and whitelist edits are schema-checked only.
+	federationValidator := federation.NewAdmissionValidator(*federationPrometheusURL)
+	if federationValidator == nil {
+		slog.Info("federation admission validator disabled — set --federation-prometheus-url to enable")
+	}
 
 	// v2.6.0: Async task manager for batch operations
 	taskMgr := async.NewManager(4) // 4 worker goroutines
@@ -233,9 +245,10 @@ func main() {
 		Policy:      policyMgr,
 		Groups:      groupMgr,
 		Views:       viewMgr,
-		Federation:       federationMgr,
-		FederationPolicy: federationPolicyMgr,
-		Tasks:            taskMgr,
+		Federation:         federationMgr,
+		FederationPolicy:   federationPolicyMgr,
+		AdmissionValidator: federationValidator,
+		Tasks:              taskMgr,
 		PRClient:    prClient,
 		PRTracker:   prTracker,
 		WriteMode:   wm,
