@@ -2,7 +2,10 @@ package federation
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -110,6 +113,73 @@ func TestConfigMapStore_PrunesExpired(t *testing.T) {
 	}
 	if _, ok, _ := st.get("ftk_exp"); ok {
 		t.Error("expired record should have been pruned by a later mutation")
+	}
+}
+
+func TestConfigMapStore_PutEnforcesTenantCap(t *testing.T) {
+	t.Parallel()
+	st, _ := newFakeConfigMapStore(t)
+	now := time.Now()
+	// Fill one tenant up to the cap.
+	for i := 0; i < maxTokensPerTenant; i++ {
+		r := Record{
+			TokenID:   fmt.Sprintf("ftk_cap%02d", i),
+			TenantID:  "tenant-cap",
+			IssuedAt:  now,
+			ExpiresAt: now.Add(time.Hour),
+		}
+		if err := st.put(r); err != nil {
+			t.Fatalf("put %d within the cap: %v", i, err)
+		}
+	}
+	// The next new token for that tenant is rejected.
+	over := Record{TokenID: "ftk_over", TenantID: "tenant-cap", IssuedAt: now, ExpiresAt: now.Add(time.Hour)}
+	if err := st.put(over); !errors.Is(err, ErrTokenLimitReached) {
+		t.Fatalf("put past the cap = %v, want ErrTokenLimitReached", err)
+	}
+	// A different tenant has its own independent cap.
+	other := Record{TokenID: "ftk_other", TenantID: "tenant-other", IssuedAt: now, ExpiresAt: now.Add(time.Hour)}
+	if err := st.put(other); err != nil {
+		t.Fatalf("put for a different tenant: %v", err)
+	}
+	// Re-putting an existing token id is an idempotent replace, not a new
+	// token — it must not be rejected even with the tenant at the cap.
+	replace := Record{TokenID: "ftk_cap00", TenantID: "tenant-cap", IssuedBy: "u@example.com", IssuedAt: now, ExpiresAt: now.Add(2 * time.Hour)}
+	if err := st.put(replace); err != nil {
+		t.Fatalf("idempotent re-put at the cap: %v", err)
+	}
+}
+
+func TestConfigMapStore_ConcurrentPutNeverExceedsCap(t *testing.T) {
+	t.Parallel()
+	st, _ := newFakeConfigMapStore(t)
+	now := time.Now()
+	// Far more concurrent issuers than the cap, all for one tenant — the
+	// TOCTOU regression. A list()-then-put() check in the caller would
+	// let many of these slip through; the cap lives inside the write
+	// transaction, so the stored count can never exceed it.
+	const goroutines = maxTokensPerTenant * 2
+	var wg sync.WaitGroup
+	for i := 0; i < goroutines; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_ = st.put(Record{
+				TokenID:   fmt.Sprintf("ftk_race%03d", i),
+				TenantID:  "tenant-race",
+				IssuedAt:  now,
+				ExpiresAt: now.Add(time.Hour),
+			})
+		}(i)
+	}
+	wg.Wait()
+	live, err := st.list("tenant-race", now)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(live) > maxTokensPerTenant {
+		t.Fatalf("concurrent issuance stored %d tokens, cap is %d — TOCTOU not closed",
+			len(live), maxTokensPerTenant)
 	}
 }
 

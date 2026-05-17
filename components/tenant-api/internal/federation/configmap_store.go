@@ -124,7 +124,13 @@ func parseStoreDoc(raw string) (*storeDoc, error) {
 // the standard client-go optimistic-concurrency loop (exponential
 // backoff, retries only on a ResourceVersion conflict). It prunes
 // expired entries on every write and regenerates revoked.txt.
-func (s *configMapStore) mutate(apply func(*storeDoc)) error {
+//
+// apply runs against freshly-loaded state on every retry attempt and
+// may return an error to abort the write (e.g. a per-tenant cap that is
+// only known once the current records are in hand). A non-conflict
+// error from apply propagates out unretried — so a check inside apply
+// is an atomic compare-and-swap, not a TOCTOU.
+func (s *configMapStore) mutate(apply func(*storeDoc) error) error {
 	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		ctx, cancel := context.WithTimeout(context.Background(), k8sCallTimeout)
 		defer cancel()
@@ -140,7 +146,9 @@ func (s *configMapStore) mutate(apply func(*storeDoc)) error {
 
 		now := time.Now()
 		pruneDoc(doc, now)
-		apply(doc)
+		if err := apply(doc); err != nil {
+			return err
+		}
 		doc.SchemaVersion = storeSchemaVersion
 
 		// Compact, not indented: store.json is machine-read/written
@@ -161,15 +169,29 @@ func (s *configMapStore) mutate(apply func(*storeDoc)) error {
 	})
 }
 
+// put inserts (or idempotently replaces) a Record. The per-tenant cap
+// is enforced HERE, inside the RetryOnConflict closure, against the
+// freshly-loaded document — never as a list()-then-put() in the caller,
+// which across tenant-api replicas is a TOCTOU race that lets the cap
+// be overrun. pruneDoc has already dropped expired records, so every
+// doc.Records entry counted below is live.
 func (s *configMapStore) put(r Record) error {
-	return s.mutate(func(doc *storeDoc) {
+	return s.mutate(func(doc *storeDoc) error {
+		live := 0
 		for i := range doc.Records {
 			if doc.Records[i].TokenID == r.TokenID {
-				doc.Records[i] = r
-				return
+				doc.Records[i] = r // same token id — idempotent replace
+				return nil
+			}
+			if doc.Records[i].TenantID == r.TenantID {
+				live++
 			}
 		}
+		if live >= maxTokensPerTenant {
+			return ErrTokenLimitReached
+		}
 		doc.Records = append(doc.Records, r)
+		return nil
 	})
 }
 
@@ -210,7 +232,7 @@ func (s *configMapStore) list(tenantID string, now time.Time) ([]Record, error) 
 // already gone (it may have been pruned while the JWT is still live).
 func (s *configMapStore) revoke(tokenID string, expiresAt time.Time) (bool, error) {
 	found := false
-	err := s.mutate(func(doc *storeDoc) {
+	err := s.mutate(func(doc *storeDoc) error {
 		kept := doc.Records[:0]
 		for _, r := range doc.Records {
 			if r.TokenID == tokenID {
@@ -223,10 +245,11 @@ func (s *configMapStore) revoke(tokenID string, expiresAt time.Time) (bool, erro
 
 		for _, e := range doc.Revoked {
 			if e.TokenID == tokenID {
-				return // already revoked
+				return nil // already revoked
 			}
 		}
 		doc.Revoked = append(doc.Revoked, revokedEntry{TokenID: tokenID, ExpiresAt: expiresAt})
+		return nil
 	})
 	if err != nil {
 		return false, err

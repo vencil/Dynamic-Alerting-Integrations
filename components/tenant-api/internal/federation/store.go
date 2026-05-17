@@ -62,11 +62,26 @@ func newStore(path string) (*store, error) {
 	return s, nil
 }
 
-// put inserts or replaces a Record and persists the store.
+// put inserts or replaces a Record and persists the store. Inserting a
+// new token id is rejected once the tenant holds maxTokensPerTenant
+// live records — the cap check and the insert happen under the same
+// mutex, so the check cannot race the insert (the configMapStore makes
+// the equivalent guarantee inside its RetryOnConflict closure).
 func (s *store) put(r Record) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.pruneLocked(time.Now())
+	if _, replacing := s.recs[r.TokenID]; !replacing {
+		live := 0
+		for _, rec := range s.recs {
+			if rec.TenantID == r.TenantID {
+				live++
+			}
+		}
+		if live >= maxTokensPerTenant {
+			return ErrTokenLimitReached
+		}
+	}
 	s.recs[r.TokenID] = r
 	return s.flushLocked()
 }
