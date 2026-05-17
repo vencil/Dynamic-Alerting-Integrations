@@ -180,6 +180,11 @@ func main() {
 	// v2.5.0: Saved Views for tenant-manager UI
 	viewMgr := views.NewManager(*configDir)
 
+	// v2.9.0 ADR-020 IV-2e: federation 2-tier policy — the platform
+	// metric whitelist (`_federation_policy.yaml`). Per-tenant subsets
+	// live in separate files, read on demand by the handler.
+	federationPolicyMgr := federation.NewPolicyManager(*configDir)
+
 	// v2.6.0: Async task manager for batch operations
 	taskMgr := async.NewManager(4) // 4 worker goroutines
 
@@ -228,8 +233,9 @@ func main() {
 		Policy:      policyMgr,
 		Groups:      groupMgr,
 		Views:       viewMgr,
-		Federation:  federationMgr,
-		Tasks:       taskMgr,
+		Federation:       federationMgr,
+		FederationPolicy: federationPolicyMgr,
+		Tasks:            taskMgr,
 		PRClient:    prClient,
 		PRTracker:   prTracker,
 		WriteMode:   wm,
@@ -240,6 +246,7 @@ func main() {
 	stopCh := make(chan struct{})
 	go rbacMgr.WatchLoop(*reloadInterval, stopCh)
 	go policyMgr.WatchLoop(*reloadInterval, stopCh)
+	go federationPolicyMgr.WatchLoop(*reloadInterval, stopCh)
 	if prTracker != nil {
 		go prTracker.WatchLoop(stopCh)
 	}
@@ -315,6 +322,14 @@ func main() {
 			// v2.7.0 B-3 (ADR-016/017): merged effective config + dual hashes.
 			r.With(rbacMgr.Middleware(rbac.PermRead, handler.TenantIDFromPath)).
 				Get("/effective", deps.GetTenantEffective())
+
+			// Federation metric subset (v2.9.0 — ADR-020 IV-2e). PUT's
+			// tenant-admin check is inside the handler (route middleware
+			// only confirms authentication + read on the tenant).
+			r.With(rbacMgr.Middleware(rbac.PermRead, handler.TenantIDFromPath)).
+				Get("/federation", deps.GetTenantFederation())
+			r.With(rbacMgr.Middleware(rbac.PermRead, handler.TenantIDFromPath)).
+				Put("/federation", deps.PutTenantFederation())
 		})
 
 		// Batch operations — route-level middleware checks read (authenticated),
@@ -369,6 +384,17 @@ func main() {
 		// Real-time event stream (v2.6.0 — SSE for config change notifications)
 		r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
 			Get("/events", eventHub.ServeHTTP)
+
+		// Federation 2-tier policy — platform whitelist (v2.9.0 —
+		// ADR-020 IV-2e). Always registered: the policy is independent
+		// of token signing. PUT's platform-admin check is in the
+		// handler; route-level middleware only confirms authentication.
+		r.Route("/federation/policy", func(r chi.Router) {
+			r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
+				Get("/", deps.GetFederationPolicy())
+			r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
+				Put("/", deps.PutFederationPolicy())
+		})
 
 		// Federation token endpoint (v2.9.0 — ADR-020 IV-2d).
 		// Registered only when a signing key is configured. Route-level

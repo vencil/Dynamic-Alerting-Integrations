@@ -46,6 +46,25 @@ definitions:
         format: float64
         type: number
     type: object
+  github_com_vencil_tenant-api_internal_federation.FederationPolicyConfig:
+    properties:
+      whitelist:
+        items:
+          $ref: '#/definitions/github_com_vencil_tenant-api_internal_federation.WhitelistEntry'
+        type: array
+    type: object
+  github_com_vencil_tenant-api_internal_federation.FederationSubset:
+    properties:
+      metrics:
+        items:
+          type: string
+        type: array
+    type: object
+  github_com_vencil_tenant-api_internal_federation.WhitelistEntry:
+    properties:
+      metric:
+        type: string
+    type: object
   github_com_vencil_tenant-api_internal_platform.PRInfo:
     properties:
       created_at:
@@ -396,6 +415,57 @@ info:
   title: Tenant API
   version: v2.8.0
 paths:
+  /api/v1/federation/policy:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/github_com_vencil_tenant-api_internal_federation.FederationPolicyConfig'
+      summary: Get the platform federation whitelist
+      tags:
+      - federation
+    put:
+      consumes:
+      - application/json
+      parameters:
+      - description: Whitelist
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/github_com_vencil_tenant-api_internal_federation.FederationPolicyConfig'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Replace the platform federation whitelist
+      tags:
+      - federation
   /api/v1/federation/tokens:
     get:
       description: Returns the non-expired federation token records for the tenant
@@ -933,6 +1003,74 @@ paths:
       summary: Get tenant effective (merged) config
       tags:
       - tenants
+  /api/v1/tenants/{id}/federation:
+    get:
+      parameters:
+      - description: Tenant ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/github_com_vencil_tenant-api_internal_federation.FederationSubset'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get a tenant's federation metric subset
+      tags:
+      - federation
+    put:
+      consumes:
+      - application/json
+      parameters:
+      - description: Tenant ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Metric subset
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/github_com_vencil_tenant-api_internal_federation.FederationSubset'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Replace a tenant's federation metric subset
+      tags:
+      - federation
   /api/v1/tenants/{id}/validate:
     post:
       consumes:
