@@ -74,6 +74,43 @@ rbac:
         tenants: ["*"]
         permissions: [read]
 
+# ── Tenant federation (ADR-020 IV-2m, issue #519) ───────────────────────────
+# Disabled by default. When enabled, tenant-api exposes
+# /api/v1/federation/tokens so a tenant can mint short-lived RS256 JWTs and
+# pull its own metric subset out to tenant-side infrastructure.
+#
+# Enabling on an existing deployment:
+#   1. Generate the signing key — the private key never touches disk or git,
+#      it streams straight from the pipe into etcd:
+#        da-tools fed-key | kubectl apply -n <release-namespace> -f -
+#      This creates Secret `tenant-federation-signing-key` and writes the
+#      public JWKS to ./federation-jwks.json (feed that to federation-gateway).
+#   2. helm upgrade <release> helm/tenant-api --set federation.enabled=true
+#      The chart then pre-creates the (empty) token-store ConfigMap, adds the
+#      get+update RBAC, mounts the signing-key Secret, and passes the three
+#      --federation-* flags. tenant-api owns store.json at runtime; the chart
+#      never templates it, so `helm upgrade` cannot wipe live tokens.
+federation:
+  enabled: false
+
+  # RS256 signing key. NOT created by this chart — generate it out-of-band
+  # with `da-tools fed-key` (ADR-020 IV-2l) so the private key reaches etcd
+  # straight off a pipe. These two values must match that Secret.
+  signingKey:
+    secretName: tenant-federation-signing-key
+    secretKey: federation-signing-key.pem
+
+  # Token record store. This chart pre-creates the ConfigMap (empty);
+  # tenant-api populates store.json / revoked.txt at runtime. The name must
+  # match the federation-gateway chart's revoked-set source.
+  store:
+    configMapName: tenant-federation-store
+
+  # Federation token lifetime, passed as --federation-token-ttl (Go duration).
+  # Matches the binary default; with Posture B server-side revocation an
+  # operator may safely raise this.
+  tokenTTL: 4h
+
 service:
   type: ClusterIP
   # Port 80 → oauth2-proxy (4180) — external traffic

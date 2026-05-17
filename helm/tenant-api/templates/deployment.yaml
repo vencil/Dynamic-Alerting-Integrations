@@ -22,6 +22,11 @@ spec:
         {{- end }}
     spec:
       serviceAccountName: {{ include "tenant-api.name" . }}
+      {{- if .Values.federation.enabled }}
+      # Federation needs the in-cluster API client (ConfigMap token store);
+      # the ServiceAccount disables automount by default, so opt back in.
+      automountServiceAccountToken: true
+      {{- end }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
 
@@ -74,6 +79,11 @@ spec:
             - --git-dir=/conf.d
             - --rbac=/etc/rbac/_rbac.yaml
             - --reload-interval={{ .Values.tenantApi.reloadInterval }}
+            {{- if .Values.federation.enabled }}
+            - --federation-key=/etc/federation/{{ .Values.federation.signingKey.secretKey }}
+            - --federation-store={{ .Values.federation.store.configMapName }}
+            - --federation-token-ttl={{ .Values.federation.tokenTTL }}
+            {{- end }}
           env:
             - name: GIT_COMMITTER_NAME
               value: {{ .Values.tenantApi.gitCommitterName | quote }}
@@ -91,6 +101,11 @@ spec:
               readOnly: true
             - name: git-tmp
               mountPath: /tmp
+            {{- if .Values.federation.enabled }}
+            - name: federation-signing-key
+              mountPath: /etc/federation
+              readOnly: true
+            {{- end }}
           resources:
             {{- toYaml .Values.resources.tenantApi | nindent 12 }}
           readinessProbe:
@@ -174,3 +189,13 @@ spec:
           emptyDir:
             medium: Memory
             sizeLimit: 16Mi
+
+        {{- if .Values.federation.enabled }}
+        # RS256 private key for signing federation tokens. defaultMode 0440 so
+        # the fsGroup (65534, matching runAsGroup) can read it; the file owner
+        # is root, so an owner-only mode would lock the non-root process out.
+        - name: federation-signing-key
+          secret:
+            secretName: {{ .Values.federation.signingKey.secretName }}
+            defaultMode: 0440
+        {{- end }}
