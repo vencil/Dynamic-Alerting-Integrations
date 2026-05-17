@@ -65,6 +65,17 @@ blast-radius cap is Layer 1 — the storage backend's `--query.max-samples` /
 `-search.maxUniqueTimeseries` (ADR-020 §Blast radius). Keep the per-token
 default low (15 r/m; corridor 15–60) for multi-replica headroom.
 
+## Client IP behind a load balancer
+
+The per-IP limiter keys on the client IP Envoy resolves. The HCM runs
+`use_remote_address: true`, but behind a cloud LB / ingress the resolved
+address is still the **LB's** IP unless `network.xffTrustedHops` is set to
+the number of trusted L7 proxies in front of the gateway. Left wrong, the
+per-IP limit collapses to a single shared bucket for the whole platform —
+one noisy tenant then 429s everyone. There is no safe universal default;
+confirm `xffTrustedHops` against the deployment topology (0 = directly
+exposed, 1 = one ingress, …).
+
 ## Key values
 
 | Key | Default | Notes |
@@ -75,6 +86,7 @@ default low (15 r/m; corridor 15–60) for multi-replica headroom.
 | `jwt.clockSkewSeconds` | `60` | Leeway for signer/verifier clock drift |
 | `upstream.host` / `upstream.port` | `federation-proxy.monitoring.svc` / `8080` | The Layer 3 proxy, or a vmselect |
 | `revokedSet.configMapName` | `tenant-federation-store` | ConfigMap tenant-api writes `revoked.txt` into |
+| `network.xffTrustedHops` | `0` | Trusted L7 proxy hops — see "Client IP behind a load balancer". No safe universal default |
 | `rateLimit.perToken.*` / `perTenant.*` / `perIp.*` | see values.yaml | Token-bucket params; tuning corridors in comments |
 | `networkPolicy.allowedNamespaces` | `[]` | Restrict ingress; empty = cluster-wide on the listen port |
 

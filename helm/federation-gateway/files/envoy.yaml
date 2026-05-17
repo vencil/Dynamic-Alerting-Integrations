@@ -25,6 +25,16 @@ static_resources:
                 "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
                 stat_prefix: federation_gateway
                 codec_type: AUTO
+                # Resolve the real client IP from X-Forwarded-For. Without
+                # this, behind a cloud LB / ingress the per-IP rate limiter
+                # keys on the LB's IP — every tenant collapses into one
+                # shared bucket and one noisy tenant 429s the whole platform.
+                use_remote_address: true
+                # Trusted L7 proxy hops in front of this gateway. MUST match
+                # the deployment topology: 0 = gateway directly exposed,
+                # 1 = one ingress / LB, etc. A wrong value silently breaks
+                # per-IP rate limiting — see the chart README.
+                xff_num_trusted_hops: {{ .Values.network.xffTrustedHops }}
                 # ── Audit log (ADR-020 §Audit log; moved here from IV-2a) ──
                 # One JSON line per request, with the cryptographically
                 # verified claims pulled from jwt_authn dynamic metadata.
@@ -123,6 +133,11 @@ static_resources:
                     typed_config:
                       "@type": type.googleapis.com/envoy.extensions.filters.http.local_ratelimit.v3.LocalRateLimit
                       stat_prefix: fed_gw_per_token
+                      # Emit x-ratelimit-{limit,remaining,reset} so a tenant
+                      # 429'd here can back off precisely. Only this filter
+                      # emits them — three filters writing the same headers
+                      # would collide; per-token is the tenant's primary quota.
+                      enable_x_ratelimit_headers: DRAFT_VERSION_03
                       token_bucket:
                         max_tokens: 1000000
                         tokens_per_fill: 1000000

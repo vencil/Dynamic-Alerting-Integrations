@@ -26,26 +26,37 @@ local revoked_loaded_at = 0
 -- a projected volume — projected volumes are tmpfs (memory) backed, so
 -- this read is a microsecond memory copy, not a disk seek. It is gated to
 -- once per RELOAD_INTERVAL per worker, so it never stalls the hot path.
-local function reload_revoked(now)
-  local f = io.open(REVOKED_FILE, "r")
-  if not f then
-    -- Missing / not yet written by tenant-api => nothing known-revoked.
-    -- Fail OPEN: the 4h token TTL still bounds exposure, whereas failing
-    -- closed would take the whole gateway down on a transient mount glitch.
-    revoked = {}
-    revoked_loaded_at = now
-    return
-  end
-  local set = {}
-  for line in f:lines() do
-    local id = line:gsub("%s+", "")
-    if id ~= "" then
-      set[id] = true
+--
+-- The whole read is wrapped in pcall: io.open returns nil on failure (a
+-- missing file is handled), but file:lines() can RAISE on a mid-read error
+-- (a projected-volume swap, an odd inode/permission state). An uncaught
+-- Lua error would make Envoy 500 the request — pcall keeps it fail-open.
+local function reload_revoked(handle, now)
+  local ok, err = pcall(function()
+    local f = io.open(REVOKED_FILE, "r")
+    if not f then
+      -- Missing / not yet written by tenant-api => nothing known-revoked.
+      revoked = {}
+      return
     end
-  end
-  f:close()
-  revoked = set
+    local set = {}
+    for line in f:lines() do
+      local id = line:gsub("%s+", "")
+      if id ~= "" then
+        set[id] = true
+      end
+    end
+    f:close()
+    revoked = set
+  end)
+  -- Advance the gate even on failure so a broken read does not re-attempt
+  -- on every request. On a hard IO error the previous revoked set is kept
+  -- and the gateway keeps serving — fail OPEN, never 500. The 4h token TTL
+  -- still bounds exposure.
   revoked_loaded_at = now
+  if not ok then
+    handle:logWarn("federation: revoked-set reload failed: " .. tostring(err))
+  end
 end
 
 function envoy_on_request(handle)
@@ -62,7 +73,7 @@ function envoy_on_request(handle)
 
   local now = os.time()
   if now - revoked_loaded_at >= RELOAD_INTERVAL then
-    reload_revoked(now)
+    reload_revoked(handle, now)
   end
   if revoked[token_id] then
     handle:respond({[":status"] = "403"}, "federation: token revoked")

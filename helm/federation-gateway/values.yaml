@@ -101,9 +101,26 @@ rateLimit:
 
 listenPort: 8080
 
+# Envoy worker-thread count. Envoy otherwise defaults to one worker per
+# NODE CPU — far more than a CPU-limited pod can use, which wastes context
+# switches and multiplies the per-worker revoked-set cache. Keep this
+# roughly aligned with resources.limits.cpu.
+concurrency: 2
+
 service:
   type: ClusterIP
   port: 8080
+
+# X-Forwarded-For handling. The per-IP rate limiter keys on the client IP
+# Envoy resolves. Behind a cloud LB / ingress that resolution needs the
+# trusted-hop count, or it collapses to the LB's IP — one shared per-IP
+# bucket for the WHOLE platform, where one noisy tenant 429s everyone.
+# Set xffTrustedHops to the number of trusted L7 proxies in front of this
+# gateway: 0 = directly exposed, 1 = one ingress / LB, 2 = LB + ingress.
+# There is no safe universal default — a wrong value silently breaks
+# per-IP limiting, so confirm it against the deployment topology.
+network:
+  xffTrustedHops: 0
 
 # NetworkPolicy — restricts who may reach the gateway. The gateway is the
 # federation entrypoint; ingress should come only from the cluster ingress
