@@ -3,7 +3,7 @@
 Layer 3 of the ADR-020 tenant-federation defence: the read-path proxy that
 enforces per-tenant isolation. It deploys [prom-label-proxy](https://github.com/prometheus-community/prom-label-proxy)
 between the federation API gateway (IV-2b / #507) and the metrics storage
-backend, and force-injects `{tenant_id="<X>"}` into every PromQL selector —
+backend, and force-injects `{tenant="<X>"}` into every PromQL selector —
 query API **and** metadata APIs — so tenant A can never read tenant B's data.
 
 Source issue: [#506](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/506) (IV-2a) ·
@@ -58,8 +58,8 @@ variable dropdowns. (`/api/v1/series` is enforced regardless.)
 
 `-error-on-replace` is **deliberately not set**. prom-label-proxy's default
 is to *silently override* the managed label: a client query that already
-carries `tenant_id="tenant-B"` is rewritten to the gateway-supplied
-`tenant_id="tenant-A"`. Isolation is identical either way — the enforced
+carries `tenant="tenant-B"` is rewritten to the gateway-supplied
+`tenant="tenant-A"`. Isolation is identical either way — the enforced
 matcher always wins — but silent override is zero-friction: an SRE can
 copy a PromQL straight off a platform dashboard (labels and all) and it
 just works, instead of getting a `400`.
@@ -95,7 +95,7 @@ enforced by the chart's `kubeVersion` constraint.
 | Key | Default | Notes |
 |---|---|---|
 | `upstream.url` | `http://prometheus.monitoring.svc:9090` | Any Prometheus-API backend (Prometheus / Thanos / VM single-node) |
-| `tenant.label` | `tenant_id` | Metric label enforced on every selector |
+| `tenant.label` | `tenant` | Metric label enforced on every selector — must match the platform data-layer label (#505 audit) |
 | `tenant.headerName` | `X-Tenant-Id` | Gateway-set header carrying the verified tenant id |
 | `networkPolicy.enabled` | `true` | Security-critical — see above |
 | `networkPolicy.gatewaySelector` | `app.kubernetes.io/name: federation-gateway` | Pod labels of the only allowed ingress source |

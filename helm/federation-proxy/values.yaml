@@ -31,7 +31,13 @@ upstream:
 # trusts a client-supplied tenant id. headerName must match what the
 # gateway sets, and the gateway MUST strip any inbound copy of it.
 tenant:
-  label: tenant_id
+  # MUST match the per-tenant label the platform's data layer actually
+  # carries — the Prometheus relabel `target_label: tenant`, the
+  # threshold-exporter, and every rule pack use `tenant` (NOT `tenant_id`).
+  # A mismatch makes the injected matcher hit zero series: every federated
+  # query returns an empty vector. See the IV-2.0 audit:
+  # docs/internal/federation-label-enrichment-audit.md (#505).
+  label: tenant
   headerName: X-Tenant-Id
 
 # Port prom-label-proxy listens on (plain HTTP — TLS terminates at the
