@@ -5,11 +5,19 @@ package federation
 // Two tiers, deliberately in SEPARATE files:
 //
 //   - Platform whitelist — _federation_policy.yaml at the config-dir
-//     root, maintainer-managed. The set of metrics any tenant is
-//     allowed to pull via federation.
+//     root, maintainer-managed. The platform-curated catalogue of
+//     metrics offered for federation.
 //   - Tenant subset — conf.d/_federation/<tenant>.yaml, one file per
 //     tenant, tenant-self-managed. The metrics one tenant selected;
 //     every entry must be contained in the platform whitelist.
+//
+// The whitelist is a GOVERNANCE / discovery mechanism, not a
+// query-time security boundary. prom-label-proxy enforces only
+// `{tenant="<X>"}` label injection and has no metric-name allowlist,
+// so cross-tenant isolation holds regardless of the whitelist — a
+// tenant querying a non-whitelisted metric simply gets its own series
+// for it. The whitelist drives the UI catalogue, the admission
+// validator, and tenant-subset curation. See ADR-020 §MVP 範圍.
 //
 // Why one file per tenant and not a single shared document: tenant-api
 // is commit-on-write GitOps. A shared subsets file would serialise
@@ -151,6 +159,35 @@ func ValidateWhitelist(cfg *FederationPolicyConfig) []PolicyViolation {
 		}
 	}
 	return v
+}
+
+// EffectiveSubset returns subset filtered to metrics still present in
+// the platform whitelist — read-repair (ADR-020 IV-2e).
+//
+// The stored per-tenant subset file can go stale: a metric valid when
+// the tenant selected it may later be removed from the platform
+// whitelist. Rather than scan and rewrite every tenant file when the
+// whitelist shrinks (a GitOps mass-commit hazard), readers intersect
+// the stored subset against the live whitelist. The file itself is
+// left alone — it self-heals on the tenant's next write, which is
+// re-validated against the current whitelist.
+//
+// The whitelist is a governance mechanism, not a query-time security
+// boundary (see ADR-020 §MVP 範圍 — cross-tenant isolation is enforced
+// solely by the proxy's `tenant` label injection), so an over-broad
+// stored subset is a consistency wart, not a breach.
+func EffectiveSubset(subset *FederationSubset, whitelist *FederationPolicyConfig) *FederationSubset {
+	allowed := make(map[string]bool, len(whitelist.Whitelist))
+	for _, e := range whitelist.Whitelist {
+		allowed[e.Metric] = true
+	}
+	out := &FederationSubset{Metrics: []string{}}
+	for _, m := range subset.Metrics {
+		if allowed[m] {
+			out.Metrics = append(out.Metrics, m)
+		}
+	}
+	return out
 }
 
 // ValidateSubset checks a tenant's proposed subset against the platform

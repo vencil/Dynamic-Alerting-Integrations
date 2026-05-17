@@ -118,10 +118,16 @@ func (d *Deps) PutFederationPolicy() http.HandlerFunc {
 }
 
 // GetTenantFederation handles GET /api/v1/tenants/{id}/federation —
-// returns one tenant's federation metric subset. A tenant with no
-// subset file yet gets an empty subset.
+// returns one tenant's *effective* federation metric subset. A tenant
+// with no subset file yet gets an empty subset.
 //
-// @Summary     Get a tenant's federation metric subset
+// Read-repair: the response is the stored subset intersected with the
+// live platform whitelist. The stored file can go stale when the
+// whitelist shrinks; intersecting on read returns a subset that is
+// always consistent with the current policy without rewriting the file
+// (ADR-020 IV-2e).
+//
+// @Summary     Get a tenant's effective federation metric subset
 // @Tags        federation
 // @Produce     json
 // @Param       id path string true "Tenant ID"
@@ -141,7 +147,7 @@ func (d *Deps) GetTenantFederation() http.HandlerFunc {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(subset)
+		_ = json.NewEncoder(w).Encode(federation.EffectiveSubset(subset, d.FederationPolicy.Get()))
 	}
 }
 

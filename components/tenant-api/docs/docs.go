@@ -947,7 +947,7 @@ const docTemplate = `{
                 "tags": [
                     "federation"
                 ],
-                "summary": "Get a tenant's federation metric subset",
+                "summary": "Get a tenant's effective federation metric subset",
                 "parameters": [
                     {
                         "type": "string",

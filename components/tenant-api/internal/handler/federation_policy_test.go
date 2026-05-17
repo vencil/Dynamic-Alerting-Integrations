@@ -191,6 +191,38 @@ func TestPutTenantFederation_Success(t *testing.T) {
 	}
 }
 
+func TestGetTenantFederation_ReadRepairDropsStaleMetric(t *testing.T) {
+	t.Parallel()
+	configDir := setupConfigDir(t, nil)
+	// Simulate a subset file that went stale: it still lists redis_up,
+	// but the platform whitelist now allows only mysql_up.
+	fedDir := filepath.Join(configDir, "_federation")
+	if err := os.MkdirAll(fedDir, 0755); err != nil {
+		t.Fatalf("mkdir _federation: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(fedDir, "db-a.yaml"),
+		[]byte("metrics:\n  - mysql_up\n  - redis_up\n"), 0644); err != nil {
+		t.Fatalf("write stale subset: %v", err)
+	}
+	mgr := federation.NewPolicyManagerForTest(&federation.FederationPolicyConfig{
+		Whitelist: []federation.WhitelistEntry{{Metric: "mysql_up"}},
+	})
+	d := &Deps{ConfigDir: configDir, FederationPolicy: mgr, RBAC: newRBACManager(t, "")}
+
+	w := executeWithRBAC(t, d.GetTenantFederation(), fedReq(t, "GET", "/api/v1/tenants/db-a/federation", "id", "db-a", ""))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body: %s", w.Code, w.Body.String())
+	}
+	var got federation.FederationSubset
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	// redis_up is no longer whitelisted — read-repair drops it.
+	if len(got.Metrics) != 1 || got.Metrics[0] != "mysql_up" {
+		t.Errorf("effective metrics = %v, want [mysql_up]", got.Metrics)
+	}
+}
+
 func TestGetTenantFederation_NoFileYieldsEmptySubset(t *testing.T) {
 	t.Parallel()
 	configDir := setupConfigDir(t, nil)

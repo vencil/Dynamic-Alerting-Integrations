@@ -142,6 +142,52 @@ func TestValidateSubsetEmptyWhitelistRejectsEverything(t *testing.T) {
 	}
 }
 
+func TestEffectiveSubset(t *testing.T) {
+	whitelist := &FederationPolicyConfig{Whitelist: []WhitelistEntry{
+		{Metric: "mysql_up"},
+		{Metric: "pg_up"},
+	}}
+	tests := []struct {
+		name  string
+		stored []string
+		want  []string
+	}{
+		{
+			name:   "all metrics whitelisted — unchanged",
+			stored: []string{"mysql_up", "pg_up"},
+			want:   []string{"mysql_up", "pg_up"},
+		},
+		{
+			name:   "stale metric dropped — read-repair",
+			stored: []string{"mysql_up", "redis_up", "pg_up"},
+			want:   []string{"mysql_up", "pg_up"},
+		},
+		{
+			name:   "every metric stale — empty effective subset",
+			stored: []string{"redis_up", "kafka_up"},
+			want:   []string{},
+		},
+		{
+			name:   "empty subset stays empty",
+			stored: []string{},
+			want:   []string{},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := EffectiveSubset(&FederationSubset{Metrics: tt.stored}, whitelist)
+			if len(got.Metrics) != len(tt.want) {
+				t.Fatalf("EffectiveSubset() = %v, want %v", got.Metrics, tt.want)
+			}
+			for i := range tt.want {
+				if got.Metrics[i] != tt.want[i] {
+					t.Errorf("EffectiveSubset()[%d] = %q, want %q", i, got.Metrics[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
 func TestParsePolicyConfig(t *testing.T) {
 	doc := []byte("whitelist:\n  - metric: mysql_up\n  - metric: pg_up\n")
 	cfg, err := parsePolicyConfig(doc)

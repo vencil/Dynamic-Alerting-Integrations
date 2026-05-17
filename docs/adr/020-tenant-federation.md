@@ -97,13 +97,14 @@ updated_at: 2026-05-17
 │ Tenant subset (tenant-self-managed via API)   │
 │ Tenant 從 whitelist 中選自己要拉的子集        │
 └───────────────────────────────────────────────┘
-                    ↓ enforce at proxy
+                    ↓ inform（非 enforce）
 ┌───────────────────────────────────────────────┐
-│ vmauth / prom-label-proxy                     │
+│ prom-label-proxy                              │
 │ 強制注入 tenant="<X>" 到所有 query            │
-│ 拒絕白名單外的 metric_name                    │
 └───────────────────────────────────────────────┘
 ```
+
+> **Enforcement model（IV-2e 實作修正）**：上圖第 3 層原列「拒絕白名單外的 metric_name」是 architectural hallucination —— prom-label-proxy **只做 label 注入、無 metric-name allowlist 能力**，gateway 也無法可靠地用 regex 從 PromQL AST 攔截 metric name。故 **whitelist 在 query path 不被強制執行**。跨租戶隔離 100% 來自 proxy 的 `{tenant="<X>"}` 注入：租戶若查 whitelist 外的 metric，proxy 一樣注入它自己的 tenant label，它只會拿到自己的資料（查自己的 custom metric 因此是 feature，不是漏洞）。**whitelist 的定位是 governance / discovery** —— 決定 UI catalogue、admission validator（IV-2e）的檢查標的、租戶 subset 策展的依據，**不是** hard data-plane security boundary。tenant subset ⊆ whitelist 的不變式同理為治理一致性、非安全邊界：靜態檔案過期時以 read-repair（讀取端取交集）修復，不掃改租戶檔。
 
 **Domain layer**（讓 tenant 內再分 sub-team scope）**留 Future Work**。理由：v2.9.0 customer base 是「單一 SRE/NOC team 拉自己 tenant 全部」，sub-team scope 是更晚的需求；現在做會增加 2-tier → 3-tier schema 複雜度，但無 customer signal。
 
