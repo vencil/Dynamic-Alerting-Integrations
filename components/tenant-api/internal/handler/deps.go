@@ -78,9 +78,14 @@ type Deps struct {
 
 	// Federation signs tenant federation tokens (ADR-020 IV-2d).
 	// Optional — nil when no signing key is configured, in which case
-	// main.go leaves the /federation routes unregistered, so handlers
-	// reading it are never reached with a nil value.
+	// main.go leaves the /federation/tokens routes unregistered, so
+	// handlers reading it are never reached with a nil value.
 	Federation *federation.Manager
+
+	// FederationPolicy holds the platform federation whitelist
+	// (ADR-020 IV-2e, `_federation_policy.yaml`). Always wired — the
+	// 2-tier policy is independent of token signing.
+	FederationPolicy *federation.PolicyManager
 
 	// Tasks runs async batch operations behind a goroutine pool.
 	Tasks *async.Manager

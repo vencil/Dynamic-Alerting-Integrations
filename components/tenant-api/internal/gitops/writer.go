@@ -143,6 +143,44 @@ func (w *Writer) WriteViewsFile(authorEmail, yamlContent string) error {
 	return w.writeSpecialFile("_views.yaml", "views", authorEmail, yamlContent)
 }
 
+// WriteFederationPolicyFile validates, persists, and commits the
+// platform federation whitelist (_federation_policy.yaml). ADR-020 IV-2e.
+func (w *Writer) WriteFederationPolicyFile(authorEmail, yamlContent string) error {
+	return w.writeSpecialFile("_federation_policy.yaml", "federation-policy", authorEmail, yamlContent)
+}
+
+// WriteFederationSubsetFile validates, persists, and commits one
+// tenant's federation metric subset to _federation/<tenantID>.yaml
+// (ADR-020 IV-2e). One file per tenant on purpose: a tenant's
+// self-service subset edits never contend on a shared git object, so
+// concurrent edits across tenants cannot conflict. The _federation/
+// directory is created on first write.
+func (w *Writer) WriteFederationSubsetFile(tenantID, authorEmail, yamlContent string) error {
+	// Basic YAML validity check (the schema check is the caller's job).
+	var raw map[string]interface{}
+	if err := yaml.Unmarshal([]byte(yamlContent), &raw); err != nil {
+		return fmt.Errorf("invalid YAML: %w", err)
+	}
+
+	// MkdirAll is idempotent and git-independent — done before taking
+	// the write lock so a filesystem syscall never serialises behind
+	// the (git-bound) write path.
+	dir := filepath.Join(w.configDir, "_federation")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("create _federation dir: %w", err)
+	}
+
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	return w.commitFileChange(
+		filepath.Join(dir, tenantID+".yaml"),
+		"federation/"+tenantID,
+		authorEmail,
+		[]byte(yamlContent),
+	)
+}
+
 // writeSpecialFile is a shared implementation for writing _groups.yaml, _views.yaml, etc.
 // These files use the same mutex and conflict detection as tenant writes — only
 // the validation step differs (basic YAML well-formedness, not full schema).

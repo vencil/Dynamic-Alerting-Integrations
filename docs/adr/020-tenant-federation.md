@@ -97,13 +97,16 @@ updated_at: 2026-05-17
 │ Tenant subset (tenant-self-managed via API)   │
 │ Tenant 從 whitelist 中選自己要拉的子集        │
 └───────────────────────────────────────────────┘
-                    ↓ enforce at proxy
+                    ↓ inform（非 enforce）
 ┌───────────────────────────────────────────────┐
-│ vmauth / prom-label-proxy                     │
+│ prom-label-proxy                              │
 │ 強制注入 tenant="<X>" 到所有 query            │
-│ 拒絕白名單外的 metric_name                    │
 └───────────────────────────────────────────────┘
 ```
+
+> **Enforcement model（IV-2e 實作修正）**：上圖第 3 層原列「拒絕白名單外的 metric_name」是 architectural hallucination —— prom-label-proxy **只做 label 注入、無 metric-name allowlist 能力**，gateway 也無法可靠地用 regex 從 PromQL AST 攔截 metric name。故 **whitelist 在 query path 不被強制執行**。跨租戶隔離 100% 來自 proxy 的 `{tenant="<X>"}` 注入：租戶若查 whitelist 外的 metric，proxy 一樣注入它自己的 tenant label，它只會拿到自己的資料（查自己的 custom metric 因此是 feature，不是漏洞）。**whitelist 的定位是 governance / discovery** —— 決定 UI catalogue、admission validator（IV-2e）的檢查標的、租戶 subset 策展的依據，**不是** hard data-plane security boundary。tenant subset ⊆ whitelist 的不變式同理為治理一致性、非安全邊界：靜態檔案過期時以 read-repair（讀取端取交集）修復，不掃改租戶檔。
+>
+> **⚠️ Hard-revocation 警告**：承上 —— whitelist 不在 query path 強制執行，所以**從 whitelist 移除一個 metric 無法阻斷對它的查詢**。read-repair 只擋「發現」（GET 不再列出它），擋不住「已知名稱的查詢」：已知該 metric 名稱的租戶仍可直接對 gateway 送該 PromQL、無阻礙地拉到自己的資料。**若需緊急阻斷某 metric 被 federate（例如該 metric 被發現夾帶 PII），改 whitelist 無效**——必須在 **ingestion 階段**處理：Prometheus / VictoriaMetrics 的 `relabel_configs` 以 `drop` action 丟棄該 metric，或調整底層存取權限。federation proxy 不具備阻擋特定 metric 的能力。
 
 **Domain layer**（讓 tenant 內再分 sub-team scope）**留 Future Work**。理由：v2.9.0 customer base 是「單一 SRE/NOC team 拉自己 tenant 全部」，sub-team scope 是更晚的需求；現在做會增加 2-tier → 3-tier schema 複雜度，但無 customer signal。
 
