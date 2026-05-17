@@ -60,6 +60,22 @@ static_resources:
                     - name: federation
                       domains: ["*"]
                       routes:
+                        {{- if eq .Values.mode "prom-label-proxy" }}
+                        # Prometheus remote_read (/api/v1/read) is Snappy-framed
+                        # protobuf; prom-label-proxy enforces the tenant label
+                        # only on the text query APIs, so it cannot scope a
+                        # remote_read body. Reject it at the gateway rather than
+                        # forward a request Layer 3 cannot make tenant-safe.
+                        # (vm-cluster mode is exempt — revoked_check.lua rewrites
+                        # the path into the tenant's /select/<id>/ account, which
+                        # scopes remote_read as well.)
+                        - match:
+                            path: "/api/v1/read"
+                          direct_response:
+                            status: 403
+                            body:
+                              inline_string: "federation gateway: remote_read (/api/v1/read) is not supported for this tenant; use /api/v1/query or /api/v1/query_range\n"
+                        {{- end }}
                         - match:
                             prefix: "/"
                           route:

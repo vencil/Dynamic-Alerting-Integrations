@@ -23,6 +23,7 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 ### Fixed
 
 - **Federation token 每租戶 16-上限的 TOCTOU 競態（issue [#527](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/527)）**：`Manager.Issue` 原以「`store.list()` 數一次 → 比對 `>= maxTokensPerTenant` → `store.put()`」的 check-then-act 把關每租戶 token 上限,但 list 與 put 是兩次獨立 store 往返。多 replica 併發簽發同一租戶時,各 replica 都 `list()` 看到 < 16 → 都 `put()` append,16 上限被擊穿、Sybil 防線失效。修正把上限檢查**下推進 store 的寫入交易**:`configMapStore.put` 在 `RetryOnConflict` 閉包內、對當次載入的最新文件清點該租戶 live record,達上限即回 `ErrTokenLimitReached`(閉包每次 retry 都對新狀態重檢,故 check 與 append 是單一 atomic compare-and-swap);in-memory `store.put` 在同一把 mutex 下做等價檢查。`Manager.Issue` 移除前置 list 檢查,改由 `put` 單點權威把關。
+- **Federation gateway 在 prom-label-proxy 模式拒絕 `remote_read`（issue [#529](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/529)）**：`helm/federation-gateway` 原以單一 `prefix: "/"` route 轉發所有路徑。`prom-label-proxy` 模式下,upstream 的 prom-label-proxy 只對文字查詢 API（`/api/v1/query[_range]`、`/series`、`/labels`、`/federate` 等）強制注入 tenant label —— Prometheus `remote_read`（`/api/v1/read`,Snappy-framed protobuf body）不在其列、無法被 label-scope。新增條件式 Envoy route:`prom-label-proxy` 模式對 `/api/v1/read` 直接回 `direct_response` 403,不再把 Layer 3 無法做租戶隔離的請求轉下去。`vm-cluster` 模式不受影響 —— `revoked_check.lua` 會把路徑改寫進租戶的 `/select/<id>/` accountID 空間,`remote_read` 連同隔離一併成立。gateway chart README 新增「Supported read APIs」段說明各模式可用的讀取 API;chart version `0.1.0`→`0.1.1`。`envoy --mode validate` 通過。
 
 ### DX
 
