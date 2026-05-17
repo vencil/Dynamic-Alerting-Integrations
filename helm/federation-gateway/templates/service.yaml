@@ -5,6 +5,14 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "federation-gateway.labels" . | nindent 4 }}
+  annotations:
+    # Scrape the mtail sidecar's federation-audit metrics (ADR-020
+    # IV-2f). The monitoring-components Prometheus job discovers
+    # annotated Services in the monitoring namespace — install the
+    # chart there for tenant_federation_requests_total to be collected.
+    prometheus.io/scrape: "true"
+    prometheus.io/port: {{ .Values.auditLog.mtail.port | quote }}
+    prometheus.io/path: /metrics
 spec:
   type: {{ .Values.service.type }}
   selector:
@@ -13,4 +21,8 @@ spec:
     - name: http
       port: {{ .Values.service.port }}
       targetPort: {{ .Values.listenPort }}
+      protocol: TCP
+    - name: metrics
+      port: {{ .Values.auditLog.mtail.port }}
+      targetPort: metrics
       protocol: TCP

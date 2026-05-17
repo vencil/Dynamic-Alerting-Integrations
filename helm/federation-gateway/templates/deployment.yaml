@@ -17,9 +17,12 @@ spec:
       labels:
         {{- include "federation-gateway.labels" . | nindent 8 }}
       annotations:
-        # Roll the pods when the Envoy config or the JWKS changes.
+        # Roll the pods when the Envoy config, JWKS, or an audit-sidecar
+        # ConfigMap changes.
         checksum/envoy: {{ include (print $.Template.BasePath "/configmap-envoy.yaml") . | sha256sum }}
         checksum/jwks: {{ include (print $.Template.BasePath "/configmap-jwks.yaml") . | sha256sum }}
+        checksum/mtail: {{ include (print $.Template.BasePath "/configmap-mtail.yaml") . | sha256sum }}
+        checksum/logrotate: {{ include (print $.Template.BasePath "/configmap-logrotate.yaml") . | sha256sum }}
         {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -77,6 +80,10 @@ spec:
               readOnly: true
             - name: tmp
               mountPath: /tmp
+            # Audit-log emptyDir (ADR-020 IV-2f) — Envoy writes sink 2,
+            # the mtail / logrotate sidecars share the same volume.
+            - name: audit-log
+              mountPath: /var/log/federation
           lifecycle:
             # Drain the Service endpoint before SIGTERM so no new request
             # races into a terminating pod. Native sleep needs k8s >= 1.29.
@@ -97,6 +104,70 @@ spec:
             failureThreshold: 3
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+        # ── mtail sidecar (ADR-020 IV-2f) ────────────────────────────
+        # Tails the Envoy audit access log (sink 2) and turns it into
+        # tenant_federation_requests_total{tenant,status}. Prometheus
+        # scrapes it via the metrics port annotated on the Service.
+        - name: mtail
+          image: "{{ .Values.auditLog.image.repository }}:{{ .Values.auditLog.image.tag }}"
+          imagePullPolicy: {{ .Values.auditLog.image.pullPolicy }}
+          command: ["/usr/local/bin/mtail"]
+          args:
+            - --logtostderr
+            - --progs
+            - /etc/mtail
+            - --logs
+            - {{ .Values.auditLog.path | quote }}
+            - --port
+            - {{ .Values.auditLog.mtail.port | quote }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          ports:
+            - name: metrics
+              containerPort: {{ .Values.auditLog.mtail.port }}
+              protocol: TCP
+          volumeMounts:
+            # Read-only: mtail only tails. logrotate (below) owns rotation.
+            - name: audit-log
+              mountPath: /var/log/federation
+              readOnly: true
+            - name: mtail-progs
+              mountPath: /etc/mtail
+              readOnly: true
+          resources:
+            {{- toYaml .Values.auditLog.mtail.resources | nindent 12 }}
+        # ── logrotate sidecar (ADR-020 IV-2f) ────────────────────────
+        # Caps the audit-log emptyDir so a high-pull tenant can never
+        # grow it large enough to evict the pod. Rotation is rename +
+        # Envoy admin /reopen_logs (lossless — no copytruncate gap).
+        - name: logrotate
+          image: "{{ .Values.auditLog.image.repository }}:{{ .Values.auditLog.image.tag }}"
+          imagePullPolicy: {{ .Values.auditLog.image.pullPolicy }}
+          command:
+            - /bin/sh
+            - -c
+            - >
+              while true; do
+              logrotate -s /var/log/federation/.logrotate.status
+              /etc/logrotate.d/federation-audit.conf;
+              sleep {{ .Values.auditLog.logrotate.intervalSeconds }};
+              done
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: audit-log
+              mountPath: /var/log/federation
+            - name: logrotate-config
+              mountPath: /etc/logrotate.d
+              readOnly: true
+          resources:
+            {{- toYaml .Values.auditLog.logrotate.resources | nindent 12 }}
       volumes:
         - name: envoy-config
           configMap:
@@ -116,3 +187,15 @@ spec:
           emptyDir:
             medium: Memory
             sizeLimit: 16Mi
+        # Audit-log mirror (ADR-020 IV-2f). Disk-backed (NOT medium:
+        # Memory) — a ~150 MiB rotated log mirror should not cost RAM.
+        # Ephemeral on purpose: the durable trail is Envoy's stdout sink.
+        - name: audit-log
+          emptyDir:
+            sizeLimit: {{ .Values.auditLog.volumeSizeLimit }}
+        - name: mtail-progs
+          configMap:
+            name: {{ include "federation-gateway.name" . }}-mtail
+        - name: logrotate-config
+          configMap:
+            name: {{ include "federation-gateway.name" . }}-logrotate

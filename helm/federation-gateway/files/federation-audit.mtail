@@ -1,0 +1,38 @@
+# federation-audit.mtail (ADR-020 IV-2f, #511)
+#
+# Derives tenant_federation_requests_total{tenant,status} from the
+# federation-gateway's Envoy JSON access log. mtail has no JSON parser,
+# so the two fields it needs are pulled by regex; the raw HTTP status
+# code is bucketed into the IV-2f status enum
+# (ok / rate_limited / auth_failed / bad_request / backend_error).
+#
+# The audit log itself keeps the raw HTTP code (see files/envoy.yaml);
+# only this metric's `status` label is the bucketed enum.
+
+counter tenant_federation_requests_total by tenant, status
+
+# tenant_id precedes status in the access-log JSON (see the envoy.yaml
+# json_format field order), so one regex captures both. The status value
+# may be emitted quoted or unquoted depending on the Envoy version, so
+# the surrounding quotes are optional. A greedy `.*` lands on the real
+# trailing status field, never a "status" substring inside `query`.
+/"tenant_id":"(?P<tenant>[^"]*)".*"status":"?(?P<code>\d+)"?/ {
+    $code >= 200 && $code < 300 {
+        tenant_federation_requests_total[$tenant, "ok"]++
+    }
+    $code == 429 {
+        tenant_federation_requests_total[$tenant, "rate_limited"]++
+    }
+    $code == 401 || $code == 403 {
+        tenant_federation_requests_total[$tenant, "auth_failed"]++
+    }
+    # Other 4xx - notably 400 / 422, how the storage backend rejects a
+    # query that trips --query.max-samples (the blast-radius signal
+    # ADR-020 keeps after dropping the impossible rejected_whitelist).
+    $code >= 400 && $code < 500 && $code != 429 && $code != 401 && $code != 403 {
+        tenant_federation_requests_total[$tenant, "bad_request"]++
+    }
+    $code >= 500 {
+        tenant_federation_requests_total[$tenant, "backend_error"]++
+    }
+}
