@@ -133,6 +133,14 @@ func (q *seriesQuerier) matchingSeries(ctx context.Context, selector string, win
 	if err != nil {
 		return nil, err
 	}
+	// A body at the cap means the LimitReader truncated mid-document.
+	// Short-circuit with a precise error rather than let json.Unmarshal
+	// emit a misleading "unexpected end of JSON input" — `limit=1`
+	// keeps real responses tiny, so hitting the cap means the backend
+	// ignored `limit` on a very-high-cardinality metric.
+	if len(body) >= maxResponseBytes {
+		return nil, fmt.Errorf("prometheus /api/v1/series response exceeded the %d-byte cap — metric cardinality too high to validate", maxResponseBytes)
+	}
 	var sr struct {
 		Status string              `json:"status"`
 		Data   []map[string]string `json:"data"`
@@ -178,33 +186,48 @@ func NewAdmissionValidator(prometheusURL string) *AdmissionValidator {
 // timeout, malformed response); the caller decides how to treat that —
 // ADR-020 maps an indeterminate result to the soft-gate (Warn) path,
 // since an un-queryable metric cannot be proven bad.
+// The hard-block test is "does NO series carry the tenant label", not
+// "does ANY series lack it". In a shared Kubernetes cluster the same
+// metric (`up`, `container_*`, `rest_client_requests_total`) has
+// tenant-labelled series for tenant pods AND unlabelled series for
+// platform pods (kube-system, the API server). The proxy injects
+// `{tenant="<X>"}` and isolates each tenant to its own series, so the
+// unlabelled platform series are harmless — blocking a metric just
+// because they exist would make every K8s-native metric permanently
+// un-whitelistable. The true failure mode is a metric whose series
+// carry NO tenant label at all: federation then yields an empty vector
+// for everyone.
 func (v *AdmissionValidator) Check(ctx context.Context, metric string) (AdmissionResult, error) {
 	ctx, cancel := context.WithTimeout(ctx, v.timeout)
 	defer cancel()
 
-	// Query A — hard-block probe. `metric{tenant=""}` matches only
-	// series that lack the tenant label; the TSDB index resolves it
-	// without touching sample chunks. A non-empty result is the
-	// true-positive failure mode.
-	missing, err := v.q.matchingSeries(ctx, metric+`{`+tenantLabel+`=""}`, v.window, 1)
+	// Query A — tenant-labelled series. `metric{tenant!=""}` matches
+	// series that DO carry the label; the TSDB index resolves it
+	// without touching sample chunks. A non-empty result means the
+	// metric is federatable, and the returned series is a real
+	// tenant-level sample for the PII scan — so the heuristic sees
+	// business labels, not a platform series picked by `limit`'s
+	// arbitrary truncation.
+	labelled, err := v.q.matchingSeries(ctx, metric+`{`+tenantLabel+`!=""}`, v.window, 1)
 	if err != nil {
 		return AdmissionResult{}, err
 	}
-	if len(missing) > 0 {
+	if len(labelled) > 0 {
 		return AdmissionResult{
-			Metric: metric,
-			State:  AdmissionHardBlock,
-			Reason: fmt.Sprintf("metric %q has series with no %q label; federating it would return an empty vector for tenants — fix the scrape/relabel config first", metric, tenantLabel),
+			Metric:    metric,
+			State:     AdmissionPass,
+			Reason:    fmt.Sprintf("metric %q has series carrying the %q label", metric, tenantLabel),
+			PIILabels: scanPIILabels(labelled[0]),
 		}, nil
 	}
 
-	// Query B — existence. `limit=1` caps the response; the single
-	// returned series doubles as the sample for the PII label scan.
-	present, err := v.q.matchingSeries(ctx, metric, v.window, 1)
+	// No tenant-labelled series. Query B — does the metric exist at
+	// all? `limit=1` caps the response.
+	any, err := v.q.matchingSeries(ctx, metric, v.window, 1)
 	if err != nil {
 		return AdmissionResult{}, err
 	}
-	if len(present) == 0 {
+	if len(any) == 0 {
 		return AdmissionResult{
 			Metric: metric,
 			State:  AdmissionWarn,
@@ -212,13 +235,12 @@ func (v *AdmissionValidator) Check(ctx context.Context, metric string) (Admissio
 		}, nil
 	}
 
-	// Query A empty + Query B non-empty → every series carries the
-	// tenant label. Pass, with an advisory PII scan of the label names.
+	// The metric has data but NO series carries the tenant label —
+	// federating it would return an empty vector for every tenant.
 	return AdmissionResult{
-		Metric:    metric,
-		State:     AdmissionPass,
-		Reason:    fmt.Sprintf("metric %q is present and every series carries the %q label", metric, tenantLabel),
-		PIILabels: scanPIILabels(present[0]),
+		Metric: metric,
+		State:  AdmissionHardBlock,
+		Reason: fmt.Sprintf("metric %q has samples but no series carries a %q label; federating it would return an empty vector for every tenant — fix the scrape/relabel config first", metric, tenantLabel),
 	}, nil
 }
 

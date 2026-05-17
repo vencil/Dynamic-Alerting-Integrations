@@ -2,7 +2,9 @@ package handler
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -16,16 +18,16 @@ import (
 
 // fakePrometheus mocks the Prometheus Series API for handler-level
 // admission tests. It distinguishes the validator's two probes by the
-// `match[]` selector: the hard-block probe carries `tenant=""`.
-//   - tenantless: series returned for the `{tenant=""}` probe (a
-//     non-empty value triggers a hard block).
-//   - present:    series returned for the bare-metric existence probe.
-func fakePrometheus(t *testing.T, tenantless, present []map[string]string) string {
+// `match[]` selector: the tenant-labelled probe carries `tenant!=""`.
+//   - labelled: series returned for the `{tenant!=""}` probe (a
+//     non-empty value yields Pass).
+//   - all:      series returned for the bare-metric existence probe.
+func fakePrometheus(t *testing.T, labelled, all []map[string]string) string {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		data := present
-		if strings.Contains(r.URL.Query().Get("match[]"), `tenant=""`) {
-			data = tenantless
+		data := all
+		if strings.Contains(r.URL.Query().Get("match[]"), `tenant!=""`) {
+			data = labelled
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"status": "success", "data": data})
 	}))
@@ -34,9 +36,10 @@ func fakePrometheus(t *testing.T, tenantless, present []map[string]string) strin
 }
 
 // fakePromPerMetric mocks the Series API keyed on the metric NAME:
-// metrics listed in hardBlock return a tenant-less series (hard block),
-// every other metric passes. Used to verify the concurrent admission
-// fan-out maps each verdict back to the correct metric.
+// metrics listed in hardBlock have no tenant-labelled series (so they
+// hard-block), every other metric has one (so it passes). Used to
+// verify the concurrent admission fan-out maps each verdict back to the
+// correct metric.
 func fakePromPerMetric(t *testing.T, hardBlock ...string) string {
 	t.Helper()
 	blocked := make(map[string]bool, len(hardBlock))
@@ -50,12 +53,14 @@ func fakePromPerMetric(t *testing.T, hardBlock ...string) string {
 			metric = sel[:i]
 		}
 		var data []map[string]string
-		if strings.Contains(sel, `tenant=""`) {
-			if blocked[metric] {
-				data = []map[string]string{{"__name__": metric}}
+		if strings.Contains(sel, `tenant!=""`) {
+			// tenant-labelled probe: empty for blocked metrics.
+			if !blocked[metric] {
+				data = []map[string]string{{"__name__": metric, "tenant": "db-a"}}
 			}
 		} else {
-			data = []map[string]string{{"__name__": metric, "tenant": "db-a"}}
+			// bare existence probe: every metric has data.
+			data = []map[string]string{{"__name__": metric}}
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"status": "success", "data": data})
 	}))
@@ -170,9 +175,9 @@ func TestPutFederationPolicy_AdmissionHardBlock(t *testing.T) {
 	t.Parallel()
 	configDir := setupConfigDir(t, nil)
 	initGitRepo(t, configDir)
-	// The {tenant=""} probe returns a series — metric `m` has series
-	// with no tenant label. Hard block: not whitelistable, not forceable.
-	promURL := fakePrometheus(t, []map[string]string{{"__name__": "m", "instance": "x"}}, nil)
+	// No tenant-labelled series, but the metric has data — hard block:
+	// not whitelistable, not forceable.
+	promURL := fakePrometheus(t, nil, []map[string]string{{"__name__": "m", "instance": "x"}})
 	d := &Deps{
 		ConfigDir:          configDir,
 		Writer:             newTestWriter(configDir),
@@ -231,9 +236,8 @@ func TestPutFederationPolicy_AdmissionPass(t *testing.T) {
 	t.Parallel()
 	configDir := setupConfigDir(t, nil)
 	initGitRepo(t, configDir)
-	// {tenant=""} empty + existence probe non-empty → every series
-	// carries the tenant label → Pass, no force needed.
-	promURL := fakePrometheus(t, nil, []map[string]string{{"__name__": "m", "tenant": "db-a"}})
+	// A tenant-labelled series exists → Pass, no force needed.
+	promURL := fakePrometheus(t, []map[string]string{{"__name__": "m", "tenant": "db-a"}}, nil)
 	d := &Deps{
 		ConfigDir:          configDir,
 		Writer:             newTestWriter(configDir),
@@ -270,6 +274,57 @@ func TestPutFederationPolicy_AdmissionMultipleMetricsConcurrent(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), `"metric":"m3"`) || !strings.Contains(w.Body.String(), "hard_block") {
 		t.Errorf("response should flag m3 as hard_block; body: %s", w.Body.String())
+	}
+}
+
+func TestPutFederationPolicy_RejectsTooManyNewMetrics(t *testing.T) {
+	t.Parallel()
+	configDir := setupConfigDir(t, nil)
+	initGitRepo(t, configDir)
+	d := &Deps{
+		ConfigDir:          configDir,
+		Writer:             newTestWriter(configDir),
+		FederationPolicy:   federation.NewPolicyManager(configDir),
+		AdmissionValidator: federation.NewAdmissionValidator(fakePrometheus(t, nil, nil)),
+		RBAC:               newRBACManager(t, platformAdminRBAC),
+	}
+	// One more than the cap — rejected before any admission call.
+	var sb strings.Builder
+	sb.WriteString(`{"whitelist":[`)
+	for i := 1; i <= maxNewMetricsPerRequest+1; i++ {
+		if i > 1 {
+			sb.WriteByte(',')
+		}
+		fmt.Fprintf(&sb, `{"metric":"m%d"}`, i)
+	}
+	sb.WriteString(`]}`)
+	w := executeWithRBAC(t, d.PutFederationPolicy(), fedReq(t, "PUT", "/api/v1/federation/policy", "", "", sb.String()))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (too many new metrics)", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "too many new metrics") {
+		t.Errorf("body should explain the per-request cap; got: %s", w.Body.String())
+	}
+}
+
+func TestPutFederationPolicy_CancelledContextSkipsGitWrite(t *testing.T) {
+	t.Parallel()
+	configDir := setupConfigDir(t, nil)
+	initGitRepo(t, configDir)
+	// Validator disabled so admission is skipped — isolates the
+	// point-of-no-return context guard right before the git write.
+	d := &Deps{
+		ConfigDir:        configDir,
+		Writer:           newTestWriter(configDir),
+		FederationPolicy: federation.NewPolicyManager(configDir),
+		RBAC:             newRBACManager(t, platformAdminRBAC),
+	}
+	req := fedReq(t, "PUT", "/api/v1/federation/policy", "", "", `{"whitelist":[{"metric":"m"}]}`)
+	ctx, cancel := context.WithCancel(req.Context())
+	cancel() // the request is already aborted (server timeout / client gone)
+	_ = executeWithRBAC(t, d.PutFederationPolicy(), req.WithContext(ctx))
+	if _, err := os.Stat(filepath.Join(configDir, "_federation_policy.yaml")); !os.IsNotExist(err) {
+		t.Error("a cancelled request must not write the whitelist file (zombie write)")
 	}
 }
 

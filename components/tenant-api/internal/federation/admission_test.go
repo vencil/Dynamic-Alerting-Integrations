@@ -10,12 +10,12 @@ import (
 )
 
 // fakeProm is a stand-in Prometheus Series API. It distinguishes the
-// validator's two probes by the `match[]` selector: the hard-block
-// probe carries `tenant=""`, the existence probe does not.
+// validator's two probes by the `match[]` selector: the tenant-labelled
+// probe carries `tenant!=""`, the existence probe carries no matcher.
 type fakeProm struct {
-	missing []map[string]string // series for the `{tenant=""}` probe
-	present []map[string]string // series for the bare-metric probe
-	status  int                 // when non-zero, respond with this HTTP status
+	labelled []map[string]string // series for the `{tenant!=""}` probe
+	all      []map[string]string // series for the bare-metric probe
+	status   int                 // when non-zero, respond with this HTTP status
 }
 
 func (f *fakeProm) server(t *testing.T) *httptest.Server {
@@ -25,9 +25,9 @@ func (f *fakeProm) server(t *testing.T) *httptest.Server {
 			w.WriteHeader(f.status)
 			return
 		}
-		data := f.present
-		if strings.Contains(r.URL.Query().Get("match[]"), `tenant=""`) {
-			data = f.missing
+		data := f.all
+		if strings.Contains(r.URL.Query().Get("match[]"), `tenant!=""`) {
+			data = f.labelled
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"status": "success", "data": data})
 	}))
@@ -55,29 +55,31 @@ func TestAdmissionCheck(t *testing.T) {
 		wantPII   []string
 	}{
 		{
-			name:      "hard block — a series lacks the tenant label",
-			fake:      fakeProm{missing: []map[string]string{{"__name__": "m", "instance": "x"}}},
+			name:      "hard block — metric has data but no series carries the tenant label",
+			fake:      fakeProm{labelled: nil, all: []map[string]string{{"__name__": "m", "instance": "x"}}},
 			wantState: AdmissionHardBlock,
 		},
 		{
 			name:      "warn — no samples in the window",
-			fake:      fakeProm{missing: nil, present: nil},
+			fake:      fakeProm{labelled: nil, all: nil},
 			wantState: AdmissionWarn,
 		},
 		{
-			name: "pass — every series carries the tenant label",
+			name:      "pass — a tenant-labelled series exists",
+			fake:      fakeProm{labelled: []map[string]string{{"__name__": "m", "tenant": "db-a", "instance": "x"}}},
+			wantState: AdmissionPass,
+		},
+		{
+			name: "pass — shared metric: tenant series exist, unlabelled platform series do NOT block",
 			fake: fakeProm{
-				missing: nil,
-				present: []map[string]string{{"__name__": "m", "tenant": "db-a", "instance": "x"}},
+				labelled: []map[string]string{{"__name__": "m", "tenant": "db-a"}},
+				all:      []map[string]string{{"__name__": "m"}, {"__name__": "m", "tenant": "db-a"}},
 			},
 			wantState: AdmissionPass,
 		},
 		{
-			name: "pass with PII advisory — a label name looks like PII",
-			fake: fakeProm{
-				missing: nil,
-				present: []map[string]string{{"__name__": "m", "tenant": "db-a", "customer_email": "a@b.c"}},
-			},
+			name:      "pass with PII advisory — a tenant series label name looks like PII",
+			fake:      fakeProm{labelled: []map[string]string{{"__name__": "m", "tenant": "db-a", "customer_email": "a@b.c"}}},
 			wantState: AdmissionPass,
 			wantPII:   []string{"customer_email"},
 		},

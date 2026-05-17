@@ -117,34 +117,53 @@ func (d *Deps) PutFederationPolicy() http.HandlerFunc {
 			return
 		}
 
-		// Admission — only metrics being newly ADDED (vs the current
+		// Admission — metrics being newly ADDED (vs the current
 		// whitelist) are checked for data-layer tenant-label enrichment.
-		hard, soft := partitionAdmission(d.runFederationAdmission(r.Context(), &cfg))
-		if len(hard) > 0 {
-			writeErrorEnvelope(w, r, http.StatusBadRequest, ErrorResponse{
-				Error: "federation admission: hard block — metric(s) have series without the tenant label and cannot be whitelisted",
-				Code:  CodeInvalidBody,
-				Extra: map[string]any{"admission": hard},
-			})
-			return
-		}
-		if len(soft) > 0 && !req.Force {
-			writeErrorEnvelope(w, r, http.StatusBadRequest, ErrorResponse{
-				Error: "federation admission: soft warning(s) — re-submit with force=true and a reason to proceed",
-				Code:  CodeInvalidBody,
-				Extra: map[string]any{"admission": soft},
-			})
-			return
-		}
+		// Skipped entirely when no validator is configured.
 		trailer := ""
-		if len(soft) > 0 { // force is true here
-			if strings.TrimSpace(req.Reason) == "" {
-				writeJSONError(w, r, http.StatusBadRequest, "force=true requires a non-empty reason")
+		if d.AdmissionValidator != nil {
+			added := addedFederationMetrics(d.FederationPolicy.Get(), &cfg)
+			if len(added) > maxNewMetricsPerRequest {
+				writeJSONError(w, r, http.StatusBadRequest, fmt.Sprintf(
+					"too many new metrics in one request (%d; max %d) — split the change into smaller PUTs so admission validation stays within the request timeout",
+					len(added), maxNewMetricsPerRequest))
 				return
 			}
-			trailer = bypassTrailer(email, req.Reason, soft)
-			slog.Warn("federation whitelist admission bypassed",
-				"user", email, "reason", req.Reason, "metrics", admissionMetrics(soft))
+			hard, soft := partitionAdmission(d.runAdmissionChecks(r.Context(), added))
+			if len(hard) > 0 {
+				writeErrorEnvelope(w, r, http.StatusBadRequest, ErrorResponse{
+					Error: "federation admission: hard block — metric(s) have data but no series carries the tenant label and cannot be whitelisted",
+					Code:  CodeInvalidBody,
+					Extra: map[string]any{"admission": hard},
+				})
+				return
+			}
+			if len(soft) > 0 && !req.Force {
+				writeErrorEnvelope(w, r, http.StatusBadRequest, ErrorResponse{
+					Error: "federation admission: soft warning(s) — re-submit with force=true and a reason to proceed",
+					Code:  CodeInvalidBody,
+					Extra: map[string]any{"admission": soft},
+				})
+				return
+			}
+			if len(soft) > 0 { // force is true here
+				if strings.TrimSpace(req.Reason) == "" {
+					writeJSONError(w, r, http.StatusBadRequest, "force=true requires a non-empty reason")
+					return
+				}
+				trailer = bypassTrailer(email, req.Reason, soft)
+				slog.Warn("federation whitelist admission bypassed",
+					"user", email, "reason", req.Reason, "metrics", admissionMetrics(soft))
+			}
+		}
+
+		// Point of no return — the next call writes to git. If the
+		// request context is already done (the server's 30s timeout
+		// fired, or the client disconnected), bail: a 504 has already
+		// gone back, and committing now would leave git state diverged
+		// from what the caller believes happened (a zombie write).
+		if r.Context().Err() != nil {
+			return
 		}
 
 		yamlBytes, err := yaml.Marshal(&cfg)
@@ -170,45 +189,53 @@ func (d *Deps) PutFederationPolicy() http.HandlerFunc {
 	}
 }
 
+// maxNewMetricsPerRequest caps how many metrics a single whitelist PUT
+// may newly add. Each addition costs an admission check; without a cap
+// a very large PUT could run past the server's request timeout, after
+// which every still-pending check fails fast and degrades to a
+// misleading Warn — training the operator to blanket-`--force` (Gemini
+// timeout-avalanche review). 30 additions at admissionConcurrency=8
+// stay well inside a 30s budget.
+const maxNewMetricsPerRequest = 30
+
 // admissionConcurrency caps how many admission checks run in parallel.
 // Each check is two cheap /api/v1/series index queries; a bounded
 // fan-out keeps a large whitelist PUT well inside the request timeout
 // without opening an unreasonable number of connections to the backend.
 const admissionConcurrency = 8
 
-// runFederationAdmission checks each metric being newly added to the
-// whitelist (relative to the current snapshot) through the admission
-// validator. A nil validator — no --federation-prometheus-url
-// configured — means admission is disabled; the write proceeds
-// schema-checked only. Already-whitelisted metrics are not re-checked.
-//
-// Checks run concurrently (bounded by admissionConcurrency): a metric's
-// check can take up to the validator's per-check timeout, so a large
-// PUT must not run them strictly sequentially.
-func (d *Deps) runFederationAdmission(ctx context.Context, proposed *federation.FederationPolicyConfig) []federation.AdmissionResult {
-	if d.AdmissionValidator == nil {
-		return nil
+// addedFederationMetrics returns the metric names in proposed that are
+// not already in current — the set a whitelist PUT newly introduces.
+func addedFederationMetrics(current, proposed *federation.FederationPolicyConfig) []string {
+	have := make(map[string]bool, len(current.Whitelist))
+	for _, e := range current.Whitelist {
+		have[e.Metric] = true
 	}
-	current := make(map[string]bool)
-	for _, e := range d.FederationPolicy.Get().Whitelist {
-		current[e.Metric] = true
-	}
-	var newMetrics []string
+	var added []string
 	for _, e := range proposed.Whitelist {
-		if !current[e.Metric] {
-			newMetrics = append(newMetrics, e.Metric)
+		if !have[e.Metric] {
+			added = append(added, e.Metric)
 		}
 	}
-	if len(newMetrics) == 0 {
+	return added
+}
+
+// runAdmissionChecks runs the admission validator over metrics
+// concurrently (bounded by admissionConcurrency): a metric's check can
+// take up to the validator's per-check timeout, so a batch must not run
+// strictly sequentially. Returns nil when the validator is disabled or
+// metrics is empty.
+func (d *Deps) runAdmissionChecks(ctx context.Context, metrics []string) []federation.AdmissionResult {
+	if d.AdmissionValidator == nil || len(metrics) == 0 {
 		return nil
 	}
 
 	// Each goroutine writes its own distinct index of `results`, so the
-	// slice needs no lock and the output order matches newMetrics.
-	results := make([]federation.AdmissionResult, len(newMetrics))
+	// slice needs no lock and the output order matches `metrics`.
+	results := make([]federation.AdmissionResult, len(metrics))
 	sem := make(chan struct{}, admissionConcurrency)
 	var wg sync.WaitGroup
-	for i, metric := range newMetrics {
+	for i, metric := range metrics {
 		wg.Add(1)
 		go func(i int, metric string) {
 			defer wg.Done()
@@ -251,9 +278,20 @@ func partitionAdmission(results []federation.AdmissionResult) (hard, soft []fede
 // bypassTrailer renders the git commit-message trailer that records an
 // admission `--force` bypass — operator, reason, and the metrics waved
 // through — so the audit trail is bound to the commit itself.
+//
+// user and reason are sanitised first: a caller-supplied CR/LF in the
+// reason would otherwise forge extra trailer lines (e.g. a fake
+// `Approved-By:`) and break the integrity of the audit record.
 func bypassTrailer(user, reason string, soft []federation.AdmissionResult) string {
 	return fmt.Sprintf("[Bypass-Validator] Federation admission bypassed by %s.\nReason: %s\nMetrics: %s",
-		user, reason, strings.Join(admissionMetrics(soft), ", "))
+		sanitizeTrailerField(user), sanitizeTrailerField(reason),
+		strings.Join(admissionMetrics(soft), ", "))
+}
+
+// sanitizeTrailerField collapses CR and LF in a value to spaces so it
+// cannot inject newlines into a git commit-message trailer.
+func sanitizeTrailerField(s string) string {
+	return strings.NewReplacer("\r", " ", "\n", " ").Replace(strings.TrimSpace(s))
 }
 
 // admissionMetrics extracts the metric names from a result slice.
