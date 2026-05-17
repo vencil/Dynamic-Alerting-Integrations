@@ -213,14 +213,32 @@ func TestSlowWriteTornStateStress_FinalConvergence(t *testing.T) {
 			mismatches, len(baseline))
 	}
 
-	// (1) Batch histogram: every trigger coalesced into SOME fire.
-	//     `_sum` MUST equal numFiles regardless of how many windows
-	//     fired (contract-stable assertion). `_count` is intentionally
-	//     NOT asserted exact — it can legitimately be 1 or 2 under
-	//     loaded CI; both states are compliant per the rewrite rationale
-	//     (see file header for issue #157 history). If `_count > 2` we
-	//     do flag — that's outside the realistic CI-jitter envelope and
-	//     suggests debounce is genuinely misbehaving.
+	// (1) Batch histogram contract — two assertions, both deterministic:
+	//
+	//   `_sum == numFiles`: every triggerDebouncedReload appended exactly
+	//   one reason, and post-quiescence every reason has been consumed by
+	//   some fired window. This is the load-bearing, contract-stable
+	//   assertion — it catches the lost-trigger bug class and holds
+	//   regardless of how the burst split across windows.
+	//
+	//   `_count <= numFiles`: a window only fires after a trigger armed
+	//   its timer, so fired windows can never outnumber triggers.
+	//   Exceeding numFiles means a window fired with no reasons behind it
+	//   — a spurious/duplicate fire, a genuine debounce bug.
+	//
+	// What is deliberately NOT asserted: any *small* upper bound on
+	// `_count`. `_count` (fired-window count) is wall-clock-dependent —
+	// exactly the claim the issue #157 rewrite removed (see file header,
+	// and assertion (3) which logs the same quantity as "informational,
+	// NOT asserted exact"). An earlier revision asserted `_count <= 2` as
+	// a "runner-jitter envelope"; that flaked on PR #526 and PR #530 when
+	// a healthy debounce under loaded `-race` CI legitimately split the
+	// 50-write burst into 19 windows (sleeps overran the 100ms window).
+	// There is no scheduler-independent threshold between "broken
+	// debounce" and "slow runner", so no small bound can be both
+	// meaningful and deterministic. The "window never coalesces" bug
+	// class (`_count == numFiles`) is covered deterministically by
+	// config_debounce_test.go's back-to-back-trigger tests, not here.
 	reg := prometheus.NewRegistry()
 	if err := reg.Register(fresh.debounceBatch); err != nil {
 		t.Fatalf("register debounceBatch: %v", err)
@@ -241,10 +259,10 @@ func TestSlowWriteTornStateStress_FinalConvergence(t *testing.T) {
 				t.Errorf("debounceBatch: expected at least 1 fired window, got %d",
 					h.GetSampleCount())
 			}
-			if h.GetSampleCount() > 2 {
-				t.Errorf("debounceBatch: _count=%d exceeds runner-jitter envelope (≤2); "+
-					"debounce may be misbehaving (sliding window not coalescing)",
-					h.GetSampleCount())
+			if h.GetSampleCount() > numFiles {
+				t.Errorf("debounceBatch: _count=%d exceeds numFiles=%d — a window "+
+					"fired without a trigger arming it (spurious/duplicate fire)",
+					h.GetSampleCount(), numFiles)
 			}
 		}
 	}

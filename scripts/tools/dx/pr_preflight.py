@@ -990,10 +990,16 @@ def check_pr_mergeable(pr_number: Optional[int] = None) -> CheckResult:
     review = data.get("reviewDecision", "")
 
     if mergeable == "CONFLICTING":
+        # WARN, not FAIL: this is GitHub's view of the *pushed* PR head,
+        # which lags local state. A conflict resolved locally (rebase /
+        # merge) but not yet pushed still reports CONFLICTING here — a
+        # FAIL would deadlock the very push that resolves it. The local
+        # merge dry-run (check_conflict) is the authoritative pre-push
+        # conflict gate; this check is informational, like BLOCKED below.
         return CheckResult(
             "PR mergeable",
-            Status.FAIL,
-            f"GitHub 偵測到衝突（state={state}）",
+            Status.WARN,
+            f"GitHub 偵測到衝突（state={state}）— 若已在本地解衝突，push 後會重新判定",
         )
     if state == "BLOCKED":
         reason = "需要 review approval" if review != "APPROVED" else "其他 branch protection rule"

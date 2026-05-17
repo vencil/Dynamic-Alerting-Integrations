@@ -71,10 +71,11 @@ const tokenIDPrefix = "ftk_"
 const minRSAKeyBits = 2048
 
 // maxTokensPerTenant caps the live federation tokens one tenant may
-// hold. It is an abuse guard, not a precise quota — concurrent
-// issuance may exceed it slightly, which is acceptable. A tenant with
-// this many live 4h tokens is almost certainly misbehaving (an
-// issuance loop, or never letting old tokens expire).
+// hold. A tenant with this many live 4h tokens is almost certainly
+// misbehaving (an issuance loop, or never letting old tokens expire).
+// The cap is enforced inside the store's write transaction (see the
+// RecordStore.put implementations), so it holds even under concurrent
+// issuance across replicas — not as a best-effort check in the caller.
 const maxTokensPerTenant = 16
 
 // ErrTokenLimitReached is returned by Issue when the tenant already
@@ -187,13 +188,6 @@ func (m *Manager) Issue(tenantID, issuedBy, description string) (string, Record,
 	if !m.mints.allow(tenantID, now) {
 		return "", Record{}, ErrMintRateLimited
 	}
-	live, err := m.store.list(tenantID, now)
-	if err != nil {
-		return "", Record{}, fmt.Errorf("federation: check token limit: %w", err)
-	}
-	if len(live) >= maxTokensPerTenant {
-		return "", Record{}, ErrTokenLimitReached
-	}
 	tokenID, err := newTokenID()
 	if err != nil {
 		return "", Record{}, err
@@ -225,7 +219,14 @@ func (m *Manager) Issue(tenantID, issuedBy, description string) (string, Record,
 		IssuedAt:    now,
 		ExpiresAt:   now.Add(m.ttl),
 	}
+	// store.put enforces maxTokensPerTenant inside its write transaction
+	// — the authoritative, race-free check. A list()-then-put() here
+	// would be a multi-replica TOCTOU: concurrent issuance could each
+	// observe < cap and each append.
 	if err := m.store.put(rec); err != nil {
+		if errors.Is(err, ErrTokenLimitReached) {
+			return "", Record{}, ErrTokenLimitReached
+		}
 		return "", Record{}, fmt.Errorf("federation: persist token record: %w", err)
 	}
 	return signed, rec, nil
