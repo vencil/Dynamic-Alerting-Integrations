@@ -162,13 +162,17 @@ func (w *Writer) WriteFederationSubsetFile(tenantID, authorEmail, yamlContent st
 		return fmt.Errorf("invalid YAML: %w", err)
 	}
 
-	w.mu.Lock()
-	defer w.mu.Unlock()
-
+	// MkdirAll is idempotent and git-independent — done before taking
+	// the write lock so a filesystem syscall never serialises behind
+	// the (git-bound) write path.
 	dir := filepath.Join(w.configDir, "_federation")
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("create _federation dir: %w", err)
 	}
+
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
 	return w.commitFileChange(
 		filepath.Join(dir, tenantID+".yaml"),
 		"federation/"+tenantID,
