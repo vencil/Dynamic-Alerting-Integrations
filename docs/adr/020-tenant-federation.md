@@ -293,7 +293,7 @@ audit log **分兩個維度，物理分離**。
 }
 ```
 
-- **`query`**：Envoy access log 無 native 的 request-body 變數，故由 Lua filter（`revoked_check.lua`）**統一抽取**——GET 從 URL query-string、POST 從 `application/x-www-form-urlencoded` body——取 `query=` 或 `match[]=`（metadata API），URL-decode、截斷 2048 字元後寫入 dynamic metadata。GET/POST 走同一條抽取路徑，輸出格式一致（避免 GET 印整段 URI、POST 印純 PromQL 的「雙頭蛇」格式分裂）。
+- **`query`**：Envoy access log 無 native 的 request-body 變數，故由獨立的 audit Lua filter（`audit_extract.lua`）**統一抽取**——GET 從 URL query-string、POST 從 `application/x-www-form-urlencoded` body——取 `query=` 或 `match[]=`（metadata API），URL-decode、截斷 2048 字元後寫入 dynamic metadata。GET/POST 走同一條抽取路徑，輸出格式一致（避免 GET 印整段 URI、POST 印純 PromQL 的「雙頭蛇」格式分裂）。**filter 順序**：auth Lua（`revoked_check.lua`，撤銷檢查 + header 注入）在限流器**前**、`buffer` + audit Lua 在限流器**後**——被限流拒絕的請求不進 Envoy 記憶體緩衝（限流真正 bound 住 buffer 用量，而非馬後炮）。
 - **`status`**：access log 記**原始 HTTP code**；下游 metric 的 `status` label 才是分桶 enum。
 - **砍除 `matched_whitelist_rule`**：Data Plane Mirage（白名單只是治理／探索工具，非查詢期安全邊界——見 §前提約束）已確認白名單不在查詢路徑執行，查詢路徑沒有「規則匹配」這回事，無從對應。
 - **砍除 `series_returned`**：Envoy 不該 buffer 並解 Prometheus response body（JSON / Snappy-protobuf）來數 series——成本過高。blast-radius 的**執行**靠 storage 的 `--query.max-samples`，不靠 log 算。
@@ -303,6 +303,7 @@ audit log **分兩個維度，物理分離**。
 | enum | HTTP | 意義 |
 |---|---|---|
 | `ok` | 2xx | 成功 |
+| `client_aborted` | 0 / 499 | client 在收到回應前中斷連線（如 Grafana 切換時間範圍 / 下拉選單時取消查詢）；非平台拒絕，不計入 rejection rate |
 | `rate_limited` | 429 | gateway 限流 |
 | `auth_failed` | 401 / 403 | JWT 驗證失敗 / token 撤銷 |
 | `bad_request` | 其他 4xx（含 422）| 錯誤請求；422 = storage `--query.max-samples` 超標（blast-radius 觸發訊號） |

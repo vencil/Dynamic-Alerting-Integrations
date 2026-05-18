@@ -6,8 +6,13 @@
 -- Per request it: (1) pulls the verified tenant_id / token_id claims,
 -- (2) checks token_id against the revoked set, (3) wires the verified
 -- tenant identity downstream, (4) exposes the rate-limit keys as headers
--- for the local_rate_limit filters that follow, (5) extracts the PromQL
--- selector into dynamic metadata for the IV-2f audit log.
+-- for the local_rate_limit filters that follow.
+--
+-- This filter runs BEFORE the rate limiters (it writes the keys they
+-- need) and therefore before the buffer filter — it must not read the
+-- request body. The IV-2f audit-query extraction (which needs the
+-- buffered body) is a separate Lua filter, audit_extract.lua, placed
+-- after the buffer so a rejected request is never buffered.
 
 local MODE = "{{ .Values.mode }}"
 local REVOKED_FILE = "/etc/revoked/{{ .Values.revokedSet.key }}"
@@ -21,39 +26,6 @@ local PAYLOAD_KEY = "fed_payload"
 -- its own copy and reloads it on a time gate (see envoy_on_request).
 local revoked = {}
 local revoked_loaded_at = 0
-
--- ── Audit-query extraction (ADR-020 IV-2f) ───────────────────────────
--- The federation audit log records the PromQL / selector a tenant sent.
--- It must be ONE consistent field whether the tenant used GET (selector
--- in the URL query-string) or POST (selector in an urlencoded form body)
--- — a mixed-shape field breaks downstream log analysis. So extraction is
--- unified here in Lua and exposed as dynamic metadata; the access log
--- just reads %DYNAMIC_METADATA(envoy.filters.http.lua:audit_query)%.
-local AUDIT_QUERY_MAX = 2048
-
--- url_decode reverses application/x-www-form-urlencoded encoding: '+' is
--- a space, '%XX' is a byte. PromQL is full of characters that always
--- arrive encoded ('{' '}' '[' ']' '"' spaces), so the raw param value is
--- unreadable without this.
-local function url_decode(s)
-  s = s:gsub("+", " ")
-  s = s:gsub("%%(%x%x)", function(h) return string.char(tonumber(h, 16)) end)
-  return s
-end
-
--- extract_audit_query pulls the tenant's selector out of a raw urlencoded
--- `key=value&...` string (a GET query-string or a POST form body): the
--- `query=` param (/query, /query_range) or, failing that, `match[]=`
--- (the metadata APIs — /series, /labels, /label/<name>/values, the
--- cross-tenant-leak surface ADR-020 calls out). Returns the URL-decoded
--- value, or "" when neither param is present.
-local function extract_audit_query(s)
-  if not s or s == "" then return "" end
-  local hay = "&" .. s  -- prefix so the first param matches &key= too
-  local raw = hay:match("&query=([^&]*)") or hay:match("&match%[%]=([^&]*)")
-  if not raw then return "" end
-  return url_decode(raw)
-end
 
 -- reload_revoked re-reads the revoked-token file into `revoked`.
 -- The file is a key of the tenant-federation-store ConfigMap, mounted as
@@ -104,32 +76,6 @@ function envoy_on_request(handle)
   end
   local tenant_id = tostring(payload.tenant_id)
   local token_id = tostring(payload.token_id)
-
-  -- Audit: capture the selector for the access log's `query` field BEFORE
-  -- the revoked-set / rate-limit gates and the (vm-cluster) path rewrite,
-  -- so a revoked or rate-limited token's query attempt is still recorded
-  -- — that is a security signal worth keeping. The request body is
-  -- already buffered by the envoy.filters.http.buffer filter that runs
-  -- immediately before this one.
-  local audit_query = ""
-  local method = handle:headers():get(":method")
-  if method == "GET" then
-    audit_query = extract_audit_query(
-      (handle:headers():get(":path") or ""):match("%?(.*)$"))
-  elseif method == "POST" then
-    local ct = handle:headers():get("content-type") or ""
-    if ct:find("application/x-www-form-urlencoded", 1, true) then
-      local body = handle:body()
-      if body and body:length() > 0 then
-        audit_query = extract_audit_query(body:getBytes(0, body:length()))
-      end
-    end
-  end
-  if #audit_query > AUDIT_QUERY_MAX then
-    audit_query = audit_query:sub(1, AUDIT_QUERY_MAX)
-  end
-  handle:streamInfo():dynamicMetadata():set(
-    "envoy.filters.http.lua", "audit_query", audit_query)
 
   local now = os.time()
   if now - revoked_loaded_at >= RELOAD_INTERVAL then

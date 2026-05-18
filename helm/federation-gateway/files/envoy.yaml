@@ -3,9 +3,11 @@
 # Static bootstrap, no xDS control plane.
 #
 # HTTP filter chain, cheap-before-expensive:
-#   per-IP rate limit -> JWT verify -> buffer -> Lua (revoked + tenant
-#   wiring + audit-query extraction) -> per-token rate limit
-#   -> per-tenant rate limit -> router
+#   per-IP rate limit -> JWT verify -> Lua (revoked + tenant wiring)
+#   -> per-token rate limit -> per-tenant rate limit -> buffer
+#   -> Lua (audit-query extraction) -> router
+# The body buffer sits AFTER the rate limiters so a rejected request is
+# never buffered into Envoy memory — the rate limit bounds buffer cost.
 admin:
   address:
     socket_address:
@@ -161,28 +163,17 @@ static_resources:
                             prefix: "/"
                           requires:
                             provider_name: federation_jwt
-                  # 3. Buffer the request body so the Lua filter can read
-                  #    POST PromQL queries (Grafana posts query_range as
-                  #    application/x-www-form-urlencoded). Runs AFTER jwt_authn
-                  #    so a forged-token flood is rejected before its body is
-                  #    ever buffered. max_request_bytes is generous (1 MiB) —
-                  #    a Grafana panel can post a selector with hundreds of
-                  #    pod names; too small a cap would 413 a legit query.
-                  - name: envoy.filters.http.buffer
-                    typed_config:
-                      "@type": type.googleapis.com/envoy.extensions.filters.http.buffer.v3.Buffer
-                      # `| int` — Helm parses values.yaml numbers as float64;
-                      # without it a 7-digit byte count renders in scientific
-                      # notation (1.048576e+06) and Envoy rejects the uint32.
-                      max_request_bytes: {{ .Values.auditLog.maxRequestBytes | int }}
-                  # 4. Revoked-set check + verified-identity wiring + audit
-                  #    query extraction.
-                  - name: envoy.filters.http.lua
+                  # 3. Revoked-set check + verified-identity wiring. Must
+                  #    run before the rate limiters: it writes the
+                  #    x-fed-token-id / x-tenant-id headers they key on.
+                  #    Reads headers only — NOT the body — so no buffer is
+                  #    needed here (the audit body read is filter 7).
+                  - name: envoy.filters.http.lua.auth
                     typed_config:
                       "@type": type.googleapis.com/envoy.extensions.filters.http.lua.v3.Lua
                       default_source_code:
                         filename: /etc/envoy/revoked_check.lua
-                  # 5. Per-token rate limit — the leaked-token abuse ceiling.
+                  # 4. Per-token rate limit — the leaked-token abuse ceiling.
                   - name: envoy.filters.http.local_ratelimit.per_token
                     typed_config:
                       "@type": type.googleapis.com/envoy.extensions.filters.http.local_ratelimit.v3.LocalRateLimit
@@ -214,7 +205,7 @@ static_resources:
                             tokens_per_fill: {{ .Values.rateLimit.perToken.tokensPerFill }}
                             fill_interval: {{ .Values.rateLimit.perToken.fillInterval }}
                       max_dynamic_descriptors: {{ .Values.rateLimit.perToken.maxDynamicDescriptors }}
-                  # 6. Per-tenant rate limit — caps a tenant round-robining
+                  # 5. Per-tenant rate limit — caps a tenant round-robining
                   #    its <=16 live tokens to multiply its quota (Sybil).
                   - name: envoy.filters.http.local_ratelimit.per_tenant
                     typed_config:
@@ -242,7 +233,32 @@ static_resources:
                             tokens_per_fill: {{ .Values.rateLimit.perTenant.tokensPerFill }}
                             fill_interval: {{ .Values.rateLimit.perTenant.fillInterval }}
                       max_dynamic_descriptors: {{ .Values.rateLimit.perTenant.maxDynamicDescriptors }}
-                  # 7. Router — must be the last HTTP filter.
+                  # 6. Buffer the request body so the audit Lua (filter 7)
+                  #    can read POST PromQL bodies. Placed AFTER the rate
+                  #    limiters ON PURPOSE: a rate-limited request is
+                  #    rejected upstream of here and is never buffered into
+                  #    Envoy memory — only a request that will actually be
+                  #    forwarded pays the buffer cost, so the rate limit
+                  #    genuinely bounds buffer memory. max_request_bytes is
+                  #    1 MiB — a Grafana panel can post a selector with
+                  #    hundreds of pod names; too small a cap would 413 a
+                  #    legitimate query.
+                  - name: envoy.filters.http.buffer
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.buffer.v3.Buffer
+                      # `| int` — Helm parses values.yaml numbers as float64;
+                      # without it a 7-digit byte count renders in scientific
+                      # notation (1.048576e+06) and Envoy rejects the uint32.
+                      max_request_bytes: {{ .Values.auditLog.maxRequestBytes | int }}
+                  # 7. Audit-query extraction — reads the buffered body and
+                  #    writes the PromQL selector into dynamic metadata for
+                  #    the access log's `query` field.
+                  - name: envoy.filters.http.lua.audit
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.lua.v3.Lua
+                      default_source_code:
+                        filename: /etc/envoy/audit_extract.lua
+                  # 8. Router — must be the last HTTP filter.
                   - name: envoy.filters.http.router
                     typed_config:
                       "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router

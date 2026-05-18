@@ -193,9 +193,13 @@ auditLog:
   # for a Grafana selector with hundreds of pod names yet far below a
   # memory-exhaustion risk; too small a cap would 413 a legit query.
   maxRequestBytes: 1048576
-  # emptyDir size cap — the backstop against a runaway evicting the pod.
-  # logrotate keeps the live + rotated files well under this.
-  volumeSizeLimit: 256Mi
+  # emptyDir size cap. Deliberately generous: it is disk-backed (NOT
+  # medium: Memory) so a 1 GiB cap costs node ephemeral storage, not RAM.
+  # The headroom matters under a log flood — a malicious tenant spraying
+  # rejected (429) requests still produces one audit line each; logrotate
+  # must win the race before the emptyDir fills and Kubelet evicts the
+  # pod. 1 GiB + the 10s logrotate loop below leaves a wide margin.
+  volumeSizeLimit: 1Gi
   # The mtail + logrotate sidecars share one image, built from
   # audit-sidecar/Dockerfile. Override repository before deploying.
   image:
@@ -219,8 +223,11 @@ auditLog:
     sizeMB: 50
     # Rotated files kept. Disk ceiling ~= sizeMB * (keep + 1).
     keep: 2
-    # How often the loop re-checks the file size.
-    intervalSeconds: 300
+    # How often the loop re-checks the file size. Kept SHORT (seconds,
+    # not minutes): a log flood of rejected requests can add several
+    # MiB/s, so a minute-scale interval would let the emptyDir balloon
+    # between rotations and risk a Kubelet eviction. 10s reacts fast.
+    intervalSeconds: 10
     resources:
       requests:
         cpu: 5m

@@ -18,11 +18,12 @@ Per request, **cheap checks before expensive ones** (Envoy HTTP filter chain):
 |---|--------|---------|
 | 1 | `local_ratelimit` (per-IP) | Coarse anti-flood — sheds a forged-token flood **before** any RSA verify is spent |
 | 2 | `jwt_authn` | RS256 verify (signature / `exp` / `aud` / `iss`) with a local JWKS + a verified-token cache |
-| 3 | `buffer` | Buffers the request body (≤ 1 MiB) so the Lua filter can read POST PromQL bodies for the audit log. After `jwt_authn` — a forged-token flood is never buffered |
-| 4 | `lua` | Revoked-set check; wires the verified `tenant_id` / `token_id` downstream; extracts the PromQL selector into dynamic metadata for the audit log |
-| 5 | `local_ratelimit` (per-token) | Leaked-token abuse ceiling, keyed on `token_id` |
-| 6 | `local_ratelimit` (per-tenant) | Sybil ceiling, keyed on `tenant_id` (a tenant round-robining its ≤16 live tokens) |
-| 7 | `router` | Forward to the upstream |
+| 3 | `lua` (auth) | Revoked-set check; wires the verified `tenant_id` / `token_id` into the headers the rate limiters key on. Reads headers only — runs **before** the buffer |
+| 4 | `local_ratelimit` (per-token) | Leaked-token abuse ceiling, keyed on `token_id` |
+| 5 | `local_ratelimit` (per-tenant) | Sybil ceiling, keyed on `tenant_id` (a tenant round-robining its ≤16 live tokens) |
+| 6 | `buffer` | Buffers the request body (≤ 1 MiB) for the audit Lua. **After** the rate limiters — a rejected request is never buffered into Envoy memory, so the rate limit bounds buffer cost |
+| 7 | `lua` (audit) | Reads the buffered POST body / GET query-string, extracts the PromQL selector into dynamic metadata for the audit log's `query` field |
+| 8 | `router` | Forward to the upstream |
 
 A request reaches the upstream only if all checks pass.
 
