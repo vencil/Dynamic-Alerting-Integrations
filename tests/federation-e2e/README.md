@@ -28,7 +28,7 @@ This harness follows the same precedent, for three reasons:
 It does not exercise the **K8s orchestration layer** — the `Deployment`
 spec, ConfigMap *projected-volume* atomic swap, the sidecar wiring,
 `NetworkPolicy`, pod eviction. Those are out of #516's scope (the
-request-path E2E). The revocation scenario (S5) tests the gateway Lua's
+request-path E2E). The revocation scenario (S4) tests the gateway Lua's
 revocation *logic* by rewriting the bind-mounted `revoked.txt`; the
 kubelet projected-volume swap itself is not covered — if that ever
 needs coverage it is a targeted chart-level follow-up, not a reason to

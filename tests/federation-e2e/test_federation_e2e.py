@@ -94,8 +94,10 @@ def test_s4_revocation_propagation(gateway_url, signer):
     try:
         # Revoke: rewrite the bind-mounted revoked.txt in place (same
         # inode, so the gateway container sees it). The Lua re-reads on
-        # its reload gate (rendered to 2s for the E2E).
-        revoked_file.write_text(token_id + "\n")
+        # its reload gate (rendered to 2s for the E2E). newline="\n" is
+        # pinned so a Windows-host driver writes a Unix revoked set (no
+        # CR), matching what tenant-api writes in production.
+        revoked_file.write_text(token_id + "\n", newline="\n")
 
         # After the reload interval the gateway rejects it. Poll slowly
         # (1s) so this probe does not itself deplete the rate limiter.

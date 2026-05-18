@@ -12,8 +12,10 @@ import requests
 
 from helpers import load_signing, query, result_series, sign_token
 
-GATEWAY_URL = "http://localhost:" + os.environ.get("E2E_GATEWAY_PORT", "18080")
-MTAIL_URL = "http://localhost:" + os.environ.get("E2E_MTAIL_PORT", "13903")
+# 127.0.0.1, not localhost: the compose stack publishes the ports on
+# IPv4; `localhost` can resolve to IPv6 ::1 first and miss the binding.
+GATEWAY_URL = "http://127.0.0.1:" + os.environ.get("E2E_GATEWAY_PORT", "18080")
+MTAIL_URL = "http://127.0.0.1:" + os.environ.get("E2E_MTAIL_PORT", "13903")
 
 
 @pytest.fixture(scope="session")
@@ -46,8 +48,14 @@ def _stack_ready(signer):
     """End-to-end readiness probe. compose healthchecks only prove each
     container's own health; this proves the full chain serves — gateway
     -> proxy -> Prometheus, with the fixture scraped — before any
-    scenario runs. Fails fast so scenarios don't each burn a timeout."""
-    _, token = signer("db-a")
+    scenario runs. Fails fast so scenarios don't each burn a timeout.
+
+    Probes as db-b, not db-a: each poll that reaches the gateway spends
+    a per-tenant rate-limit token, and this loop can run up to 120s. db-b
+    has fixture data (so the full-chain check is real) but no scenario
+    spends db-b's token budget, so a slow startup cannot deplete the
+    db-a bucket S1/S2/S7/S8 share."""
+    _, token = signer("db-b")
     deadline = time.monotonic() + 120.0
     while time.monotonic() < deadline:
         try:
