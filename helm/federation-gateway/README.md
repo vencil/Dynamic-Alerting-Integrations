@@ -50,9 +50,11 @@ Which read APIs a tenant can call through the gateway depends on the mode:
   protobuf body cannot be label-scoped. The gateway returns `403` for
   `/api/v1/read` and any sub-path rather than forward a request Layer 3
   cannot make tenant-safe; tenants poll `/api/v1/query[_range]` instead.
-  The request path is canonicalised before routing (`merge_slashes` /
-  `normalize_path`) and the block is a path-segment prefix, so a
-  non-canonical variant — a trailing slash or `/api/v1//read` — cannot
+  The request path is fully canonicalised before routing — `merge_slashes`,
+  `normalize_path`, and `path_with_escaped_slashes_action` (which decodes a
+  percent-encoded slash `%2F`, the one octet RFC 3986 normalisation leaves
+  encoded) — and the block is a path-segment prefix, so no non-canonical
+  variant — a trailing slash, `/api/v1//read`, or `/api/v1%2Fread` — can
   slip past the guard into the upstream.
 - **`vm-cluster`** — the full VictoriaMetrics `/select/<id>/prometheus/…`
   surface, `remote_read` included: the path rewrite scopes every request to

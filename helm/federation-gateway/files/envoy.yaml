@@ -47,6 +47,22 @@ static_resources:
                 # (ADR-020 §Blast radius Layer 3).
                 merge_slashes: true
                 normalize_path: true
+                {{- if eq .Values.mode "prom-label-proxy" }}
+                # normalize_path percent-decodes only UNRESERVED octets per
+                # RFC 3986 §6.2.2.2 (%72 -> r, %2e -> .); a percent-encoded
+                # RESERVED slash (%2F) is deliberately left encoded — decoding
+                # it would change the path's segment structure. So %72ead-style
+                # variants already hit the reject route, but /api/v1%2Fread
+                # still slips past path_separated_prefix into the catch-all and
+                # is forwarded to a Layer 3 proxy that cannot tenant-scope
+                # remote_read. UNESCAPE_AND_FORWARD decodes %2F (and %5C)
+                # before routing, so the path is fully canonical and the
+                # /api/v1/read 403 guard cannot be bypassed. Scoped to
+                # prom-label-proxy mode: that is the only mode carrying the
+                # guard; vm-cluster does its own Lua path rewrite and is left
+                # untouched (hardens #542; ADR-020 §Blast radius Layer 3).
+                path_with_escaped_slashes_action: UNESCAPE_AND_FORWARD
+                {{- end }}
                 # ── Audit log (ADR-020 §Audit log; IV-2f) ──────────────
                 # One JSON line per request, with the cryptographically
                 # verified claims pulled from jwt_authn dynamic metadata.
