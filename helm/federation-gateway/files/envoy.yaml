@@ -38,6 +38,15 @@ static_resources:
                 # 1 = one ingress / LB, etc. A wrong value silently breaks
                 # per-IP rate limiting — see the chart README.
                 xff_num_trusted_hops: {{ .Values.network.xffTrustedHops }}
+                # Canonicalise the request path BEFORE routing. merge_slashes
+                # collapses /api/v1//read -> /api/v1/read; normalize_path
+                # applies RFC 3986 (. / .. / %2e dot-segments). Without these a
+                # non-canonical path slips past the /api/v1/read reject route
+                # below into the catch-all and is forwarded to a Layer 3 proxy
+                # that cannot tenant-scope remote_read — a cross-tenant leak
+                # (ADR-020 §Blast radius Layer 3).
+                merge_slashes: true
+                normalize_path: true
                 # ── Audit log (ADR-020 §Audit log; IV-2f) ──────────────
                 # One JSON line per request, with the cryptographically
                 # verified claims pulled from jwt_authn dynamic metadata.
@@ -96,8 +105,13 @@ static_resources:
                         # (vm-cluster mode is exempt — revoked_check.lua rewrites
                         # the path into the tenant's /select/<id>/ account, which
                         # scopes remote_read as well.)
+                        # path_separated_prefix, not an exact `path:` match: an
+                        # exact match is bypassed by a trailing slash
+                        # (/api/v1/read/), so block /api/v1/read and every
+                        # sub-path. It matches only at path-segment boundaries,
+                        # so a sibling like /api/v1/readiness is NOT over-matched.
                         - match:
-                            path: "/api/v1/read"
+                            path_separated_prefix: "/api/v1/read"
                           direct_response:
                             status: 403
                             body:
