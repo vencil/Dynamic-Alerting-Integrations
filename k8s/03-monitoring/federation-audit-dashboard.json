@@ -1,0 +1,238 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "description": "ADR-020 IV-2f (#511) federation data-plane audit. Source metric: tenant_federation_requests_total{tenant,status}, emitted by the mtail sidecar in helm/federation-gateway from the Envoy audit access log.",
+  "panels": [
+    {
+      "title": "Federation Requests /s (5m)",
+      "description": "Total federation request rate across all tenants",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "targets": [{
+        "expr": "sum(rate(tenant_federation_requests_total[5m]))",
+        "legendFormat": ""
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "unit": "reqps",
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }] }
+        }
+      },
+      "options": { "colorMode": "background", "graphMode": "area", "textMode": "value" }
+    },
+    {
+      "title": "Rejection Rate (5m)",
+      "description": "Fraction of federation requests rejected (rate_limited / auth_failed / bad_request / backend_error). Excludes client_aborted - a client cancelling its own query is not a platform rejection. Mirrors the FederationRejectionRateAnomaly alert.",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "targets": [{
+        "expr": "sum(rate(tenant_federation_requests_total{status=~\"rate_limited|auth_failed|bad_request|backend_error\"}[5m])) / clamp_min(sum(rate(tenant_federation_requests_total[5m])), 0.0001)",
+        "legendFormat": ""
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "unit": "percentunit",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 0.2 },
+              { "color": "red", "value": 0.5 }
+            ]
+          }
+        }
+      },
+      "options": { "colorMode": "background", "graphMode": "none", "textMode": "value" }
+    },
+    {
+      "title": "Active Federation Tenants",
+      "description": "Distinct tenants that have sent at least one federation request",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "targets": [{
+        "expr": "count(count by(tenant) (tenant_federation_requests_total)) or vector(0)",
+        "legendFormat": ""
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }] }
+        }
+      },
+      "options": { "colorMode": "background", "graphMode": "none", "textMode": "value" }
+    },
+    {
+      "title": "Backend Errors /s (5m)",
+      "description": "5xx from the storage backend — a platform fault, not a tenant rejection",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "targets": [{
+        "expr": "sum(rate(tenant_federation_requests_total{status=\"backend_error\"}[5m]))",
+        "legendFormat": ""
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "unit": "reqps",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 0.05 }
+            ]
+          }
+        }
+      },
+      "options": { "colorMode": "background", "graphMode": "none", "textMode": "value" }
+    },
+    {
+      "title": "Request Rate by Status",
+      "description": "Federation request rate broken down by the IV-2f status enum (stacked)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 16, "x": 0, "y": 4 },
+      "targets": [{
+        "expr": "sum by(status) (rate(tenant_federation_requests_total[5m]))",
+        "legendFormat": "{{ status }}"
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "unit": "reqps",
+          "custom": { "fillOpacity": 30, "lineWidth": 1, "drawStyle": "line", "stacking": { "mode": "normal", "group": "A" } }
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "ok" }, "properties": [{ "id": "color", "value": { "fixedColor": "green", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "client_aborted" }, "properties": [{ "id": "color", "value": { "fixedColor": "blue", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "rate_limited" }, "properties": [{ "id": "color", "value": { "fixedColor": "yellow", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "auth_failed" }, "properties": [{ "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "bad_request" }, "properties": [{ "id": "color", "value": { "fixedColor": "super-light-orange", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "backend_error" }, "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }] }
+        ]
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "title": "Requests by Status (1h)",
+      "description": "Share of federation requests by status over the last hour",
+      "type": "piechart",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 4 },
+      "targets": [{
+        "expr": "sum by(status) (increase(tenant_federation_requests_total[1h]))",
+        "legendFormat": "{{ status }}"
+      }],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "ok" }, "properties": [{ "id": "color", "value": { "fixedColor": "green", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "client_aborted" }, "properties": [{ "id": "color", "value": { "fixedColor": "blue", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "rate_limited" }, "properties": [{ "id": "color", "value": { "fixedColor": "yellow", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "auth_failed" }, "properties": [{ "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "backend_error" }, "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }] }
+        ]
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "right" }, "pieType": "donut" }
+    },
+    {
+      "title": "3-Layer Rejection Rate",
+      "description": "Where federation requests are rejected, by ADR-020 defence layer: Layer 2 gateway (429 rate-limited), auth / request rejected (401/403 + other 4xx), Layer 1 storage backend (5xx).",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "targets": [
+        {
+          "expr": "sum(rate(tenant_federation_requests_total{status=\"rate_limited\"}[5m]))",
+          "legendFormat": "Gateway — rate limited (429)"
+        },
+        {
+          "expr": "sum(rate(tenant_federation_requests_total{status=~\"auth_failed|bad_request\"}[5m]))",
+          "legendFormat": "Auth / request rejected (4xx)"
+        },
+        {
+          "expr": "sum(rate(tenant_federation_requests_total{status=\"backend_error\"}[5m]))",
+          "legendFormat": "Storage backend error (5xx)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "unit": "reqps",
+          "custom": { "fillOpacity": 20, "lineWidth": 2, "drawStyle": "line", "pointSize": 5 }
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "Gateway — rate limited (429)" }, "properties": [{ "id": "color", "value": { "fixedColor": "yellow", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "Auth / request rejected (4xx)" }, "properties": [{ "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "Storage backend error (5xx)" }, "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }] }
+        ]
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "title": "Requests per Tenant (5m rate)",
+      "description": "Federation request rate per tenant — watch for one tenant dominating the gateway",
+      "type": "barchart",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "targets": [{
+        "expr": "sum by(tenant) (rate(tenant_federation_requests_total[5m]))",
+        "legendFormat": "{{ tenant }}"
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "unit": "reqps"
+        }
+      },
+      "options": { "orientation": "horizontal", "showValue": "always", "barWidth": 0.7 }
+    },
+    {
+      "title": "Per-Tenant Request Breakdown",
+      "description": "Federation request rate per tenant and status (10m rate). One row per tenant+status.",
+      "type": "table",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 20 },
+      "targets": [{
+        "expr": "sum by(tenant, status) (rate(tenant_federation_requests_total[10m]))",
+        "legendFormat": "",
+        "format": "table",
+        "instant": true
+      }],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": { "Time": true, "__name__": true, "job": true, "instance": true },
+            "renameByName": {
+              "tenant": "Tenant",
+              "status": "Status",
+              "Value": "Req/sec (10m)"
+            }
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "reqps" },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Status" },
+            "properties": [{ "id": "custom.displayMode", "value": "color-background" }, { "id": "mappings", "value": [
+              { "type": "value", "options": { "ok": { "color": "green", "index": 0 }, "client_aborted": { "color": "blue", "index": 5 }, "rate_limited": { "color": "yellow", "index": 1 }, "auth_failed": { "color": "orange", "index": 2 }, "bad_request": { "color": "super-light-orange", "index": 3 }, "backend_error": { "color": "red", "index": 4 } } }
+            ] }]
+          }
+        ]
+      },
+      "options": { "showHeader": true, "footer": { "enablePagination": true } }
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["dynamic-alerting", "federation", "multi-tenant"],
+  "templating": { "list": [] },
+  "time": { "from": "now-6h", "to": "now" },
+  "timepicker": {},
+  "timezone": "",
+  "title": "Federation Audit — Tenant Federation",
+  "uid": "federation-audit",
+  "version": 1
+}

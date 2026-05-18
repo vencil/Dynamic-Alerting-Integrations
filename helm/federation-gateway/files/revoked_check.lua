@@ -7,6 +7,12 @@
 -- (2) checks token_id against the revoked set, (3) wires the verified
 -- tenant identity downstream, (4) exposes the rate-limit keys as headers
 -- for the local_rate_limit filters that follow.
+--
+-- This filter runs BEFORE the rate limiters (it writes the keys they
+-- need) and therefore before the buffer filter — it must not read the
+-- request body. The IV-2f audit-query extraction (which needs the
+-- buffered body) is a separate Lua filter, audit_extract.lua, placed
+-- after the buffer so a rejected request is never buffered.
 
 local MODE = "{{ .Values.mode }}"
 local REVOKED_FILE = "/etc/revoked/{{ .Values.revokedSet.key }}"

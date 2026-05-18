@@ -18,10 +18,12 @@ Per request, **cheap checks before expensive ones** (Envoy HTTP filter chain):
 |---|--------|---------|
 | 1 | `local_ratelimit` (per-IP) | Coarse anti-flood — sheds a forged-token flood **before** any RSA verify is spent |
 | 2 | `jwt_authn` | RS256 verify (signature / `exp` / `aud` / `iss`) with a local JWKS + a verified-token cache |
-| 3 | `lua` | Revoked-set check; wires the verified `tenant_id` / `token_id` downstream |
+| 3 | `lua` (auth) | Revoked-set check; wires the verified `tenant_id` / `token_id` into the headers the rate limiters key on. Reads headers only — runs **before** the buffer |
 | 4 | `local_ratelimit` (per-token) | Leaked-token abuse ceiling, keyed on `token_id` |
 | 5 | `local_ratelimit` (per-tenant) | Sybil ceiling, keyed on `tenant_id` (a tenant round-robining its ≤16 live tokens) |
-| 6 | `router` | Forward to the upstream |
+| 6 | `buffer` | Buffers the request body (≤ 1 MiB) for the audit Lua. **After** the rate limiters — a rejected request is never buffered into Envoy memory, so the rate limit bounds buffer cost |
+| 7 | `lua` (audit) | Reads the buffered POST body / GET query-string, extracts the PromQL selector into dynamic metadata for the audit log's `query` field |
+| 8 | `router` | Forward to the upstream |
 
 A request reaches the upstream only if all checks pass.
 
@@ -81,6 +83,47 @@ blast-radius cap is Layer 1 — the storage backend's `--query.max-samples` /
 `-search.maxUniqueTimeseries` (ADR-020 §Blast radius). Keep the per-token
 default low (15 r/m; corridor 15–60) for multi-replica headroom.
 
+## Audit log & metrics (ADR-020 IV-2f)
+
+Envoy writes one JSON line per federation request to **two sinks** of
+identical shape (`ts` / `tenant_id` / `token_id` / `method` / `path` /
+`query` / `status` / `duration_ms`):
+
+- **`stdout`** — the durable, collector-ready compliance trail. Shipping
+  it to a central store (Loki / SIEM) is follow-up
+  [#539](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/539);
+  until then it rides the standard container-log path.
+- **an `emptyDir` file** — tailed by the **`mtail` sidecar**, which emits
+  `tenant_federation_requests_total{tenant,status}` on `:3903`. This file
+  is a per-pod metrics feed, *not* the system of record — it is an
+  `emptyDir`, never a PVC (a `ReadWriteOnce` PVC cannot be mounted by the
+  multi-replica gateway at all).
+
+`query` is extracted by the audit Lua filter (`audit_extract.lua`)
+uniformly from the GET query-string and the POST form body, so it is one
+consistent PromQL string regardless of HTTP method; `path` is truncated
+to 2048 chars.
+
+A **`logrotate` sidecar** caps the `emptyDir` mirror: it rotates at
+`auditLog.logrotate.sizeMB` MiB, keeps `auditLog.logrotate.keep`
+rotations (≈ `sizeMB × (keep + 1)` ceiling), and triggers Envoy's admin
+`/reopen_logs` so no line is lost. Both sidecars share one image built
+from [`audit-sidecar/Dockerfile`](audit-sidecar/Dockerfile) (Alpine +
+`mtail` + `logrotate`) — build and Trivy-scan it like any component
+image, then set `auditLog.image.repository`.
+
+The metric is scraped via the `prometheus.io/scrape` annotations on the
+Service — **install the chart in the `monitoring` namespace** so the
+`monitoring-components` Prometheus job discovers it. The
+`FederationRejectionRateAnomaly` alert and the `federation-audit` Grafana
+dashboard live under `k8s/03-monitoring/`.
+
+`auditLog.enabled: false` drops the whole metrics pipeline — both
+sidecars, the `emptyDir` mirror and the scrape — leaving only the stdout
+audit log. Use it to run the gateway before the audit-sidecar image is
+built and published, so a missing image can never crash-loop a sidecar
+and hold the gateway pod out of its Service.
+
 ## Client IP behind a load balancer
 
 The per-IP limiter keys on the client IP Envoy resolves. The HCM runs
@@ -105,6 +148,11 @@ exposed, 1 = one ingress, …).
 | `network.xffTrustedHops` | `0` | Trusted L7 proxy hops — see "Client IP behind a load balancer". No safe universal default |
 | `rateLimit.perToken.*` / `perTenant.*` / `perIp.*` | see values.yaml | Token-bucket params; tuning corridors in comments |
 | `networkPolicy.allowedNamespaces` | `[]` | Restrict ingress; empty = cluster-wide on the listen port |
+| `auditLog.enabled` | `true` | Master switch for the metrics pipeline (mtail + logrotate sidecars, `emptyDir` mirror, scrape). `false` keeps only the stdout audit log |
+| `auditLog.maxRequestBytes` | `1048576` | Request-body buffer cap (1 MiB) — bounds the POST body the Lua audit filter reads |
+| `auditLog.volumeSizeLimit` | `256Mi` | `emptyDir` cap for the audit-log mirror |
+| `auditLog.image.repository` | `federation-audit-sidecar` | mtail + logrotate sidecar image — build from `audit-sidecar/Dockerfile` |
+| `auditLog.logrotate.sizeMB` / `.keep` | `50` / `2` | Rotate the mirror at this size; keep this many rotations |
 
 ## Resiliency
 

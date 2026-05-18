@@ -4,7 +4,10 @@
 #
 # HTTP filter chain, cheap-before-expensive:
 #   per-IP rate limit -> JWT verify -> Lua (revoked + tenant wiring)
-#   -> per-token rate limit -> per-tenant rate limit -> router
+#   -> per-token rate limit -> per-tenant rate limit -> buffer
+#   -> Lua (audit-query extraction) -> router
+# The body buffer sits AFTER the rate limiters so a rejected request is
+# never buffered into Envoy memory — the rate limit bounds buffer cost.
 admin:
   address:
     socket_address:
@@ -35,25 +38,49 @@ static_resources:
                 # 1 = one ingress / LB, etc. A wrong value silently breaks
                 # per-IP rate limiting — see the chart README.
                 xff_num_trusted_hops: {{ .Values.network.xffTrustedHops }}
-                # ── Audit log (ADR-020 §Audit log; moved here from IV-2a) ──
+                # ── Audit log (ADR-020 §Audit log; IV-2f) ──────────────
                 # One JSON line per request, with the cryptographically
                 # verified claims pulled from jwt_authn dynamic metadata.
+                # Two sinks, identical shape (YAML anchor):
+                #  • stdout      — the durable, collector-ready compliance
+                #    trail. A node-level log shipper carrying this to a
+                #    central store is the IV-2f follow-up (#539); until then
+                #    it rides the standard container-log path.
+                #  • emptyDir file — tailed by the mtail sidecar to derive
+                #    tenant_federation_requests_total. Ephemeral by design:
+                #    a metrics feed, not the system of record.
                 access_log:
                   - name: envoy.access_loggers.file
                     typed_config:
                       "@type": type.googleapis.com/envoy.extensions.access_loggers.file.v3.FileAccessLog
                       path: /dev/stdout
                       log_format:
-                        json_format:
+                        json_format: &audit_json
                           ts: "%START_TIME%"
                           tenant_id: "%DYNAMIC_METADATA(envoy.filters.http.jwt_authn:fed_payload:tenant_id)%"
                           token_id: "%DYNAMIC_METADATA(envoy.filters.http.jwt_authn:fed_payload:token_id)%"
                           method: "%REQ(:METHOD)%"
-                          path: "%REQ(:PATH)%"
+                          # Truncated — a tenant can pack a multi-KB selector
+                          # into a GET ?query=; an unbounded :path bloats
+                          # every audit line.
+                          path: "%REQ(:PATH):2048%"
+                          # Unified PromQL / selector, extracted by the Lua
+                          # filter from the GET query-string OR the POST form
+                          # body, so this field is one consistent shape
+                          # regardless of HTTP method (see revoked_check.lua).
+                          query: "%DYNAMIC_METADATA(envoy.filters.http.lua:audit_query)%"
                           status: "%RESPONSE_CODE%"
                           duration_ms: "%DURATION%"
                           upstream: "%UPSTREAM_HOST%"
                           response_flags: "%RESPONSE_FLAGS%"
+                  {{- if .Values.auditLog.enabled }}
+                  - name: envoy.access_loggers.file
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.access_loggers.file.v3.FileAccessLog
+                      path: {{ .Values.auditLog.path | quote }}
+                      log_format:
+                        json_format: *audit_json
+                  {{- end }}
                 route_config:
                   name: federation_routes
                   virtual_hosts:
@@ -138,8 +165,12 @@ static_resources:
                             prefix: "/"
                           requires:
                             provider_name: federation_jwt
-                  # 3. Revoked-set check + verified-identity wiring.
-                  - name: envoy.filters.http.lua
+                  # 3. Revoked-set check + verified-identity wiring. Must
+                  #    run before the rate limiters: it writes the
+                  #    x-fed-token-id / x-tenant-id headers they key on.
+                  #    Reads headers only — NOT the body — so no buffer is
+                  #    needed here (the audit body read is filter 7).
+                  - name: envoy.filters.http.lua.auth
                     typed_config:
                       "@type": type.googleapis.com/envoy.extensions.filters.http.lua.v3.Lua
                       default_source_code:
@@ -204,7 +235,32 @@ static_resources:
                             tokens_per_fill: {{ .Values.rateLimit.perTenant.tokensPerFill }}
                             fill_interval: {{ .Values.rateLimit.perTenant.fillInterval }}
                       max_dynamic_descriptors: {{ .Values.rateLimit.perTenant.maxDynamicDescriptors }}
-                  # 6. Router — must be the last HTTP filter.
+                  # 6. Buffer the request body so the audit Lua (filter 7)
+                  #    can read POST PromQL bodies. Placed AFTER the rate
+                  #    limiters ON PURPOSE: a rate-limited request is
+                  #    rejected upstream of here and is never buffered into
+                  #    Envoy memory — only a request that will actually be
+                  #    forwarded pays the buffer cost, so the rate limit
+                  #    genuinely bounds buffer memory. max_request_bytes is
+                  #    1 MiB — a Grafana panel can post a selector with
+                  #    hundreds of pod names; too small a cap would 413 a
+                  #    legitimate query.
+                  - name: envoy.filters.http.buffer
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.buffer.v3.Buffer
+                      # `| int` — Helm parses values.yaml numbers as float64;
+                      # without it a 7-digit byte count renders in scientific
+                      # notation (1.048576e+06) and Envoy rejects the uint32.
+                      max_request_bytes: {{ .Values.auditLog.maxRequestBytes | int }}
+                  # 7. Audit-query extraction — reads the buffered body and
+                  #    writes the PromQL selector into dynamic metadata for
+                  #    the access log's `query` field.
+                  - name: envoy.filters.http.lua.audit
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.lua.v3.Lua
+                      default_source_code:
+                        filename: /etc/envoy/audit_extract.lua
+                  # 8. Router — must be the last HTTP filter.
                   - name: envoy.filters.http.router
                     typed_config:
                       "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router

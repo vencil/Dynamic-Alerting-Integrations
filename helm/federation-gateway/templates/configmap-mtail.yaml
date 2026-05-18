@@ -1,0 +1,15 @@
+{{- if .Values.auditLog.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "federation-gateway.name" . }}-mtail
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "federation-gateway.labels" . | nindent 4 }}
+data:
+  # mtail program — derives tenant_federation_requests_total{tenant,status}
+  # from the Envoy audit access log (ADR-020 IV-2f). Plain Files.Get, not
+  # tpl: the program carries no Helm values and uses literal { } blocks.
+  federation-audit.mtail: |
+    {{- .Files.Get "files/federation-audit.mtail" | nindent 4 }}
+{{- end }}

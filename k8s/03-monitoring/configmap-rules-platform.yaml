@@ -105,3 +105,63 @@ data:
                 global defaults are diverging from how tenants actually
                 consume them — investigate which defaults are being touched
                 without effect.
+
+      # ============================================================
+      # Federation Audit (ADR-020 IV-2f, issue #511)
+      # Monitors the federation data plane via the metric
+      # tenant_federation_requests_total{tenant,status}, emitted by the
+      # mtail sidecar in helm/federation-gateway. status enum:
+      # ok | rate_limited | auth_failed | bad_request | backend_error.
+      # Actionable alerts (severity: warning) — the issue calls them
+      # "sentinel alerts" loosely; they are not severity:none inhibit
+      # sentinels.
+      # ============================================================
+      - name: federation-audit
+        rules:
+          # Tenant-side rejection surge: >50% of a tenant's federation
+          # requests rejected (rate-limited / auth-failed / bad-request)
+          # for 15m. The second clause floors it at ~1 rejection/min so a
+          # single fluke on a near-idle tenant cannot trip it.
+          - alert: FederationRejectionRateAnomaly
+            expr: |
+              (
+                sum by (tenant) (
+                  rate(tenant_federation_requests_total{status=~"rate_limited|auth_failed|bad_request"}[10m])
+                )
+                /
+                sum by (tenant) (rate(tenant_federation_requests_total[10m]))
+              ) > 0.5
+              and
+              sum by (tenant) (
+                rate(tenant_federation_requests_total{status=~"rate_limited|auth_failed|bad_request"}[10m])
+              ) > 0.0167
+            for: 15m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Federation requests for {{ $labels.tenant }} are mostly rejected"
+              description: |
+                Over 50% of tenant {{ $labels.tenant }}'s federation requests
+                have been rejected (rate-limited / auth-failed / bad-request)
+                for 15m. Check the federation-audit dashboard — likely a
+                leaked or misconfigured token, a tenant exceeding its rate
+                limit, or whitelist / subset drift.
+
+          # Platform-fault signal — 5xx from the storage backend, kept
+          # separate from the tenant-side rejections above (a backend
+          # error is the platform's fault, not the tenant's).
+          - alert: FederationGatewayBackendErrors
+            expr: |
+              sum by (tenant) (
+                rate(tenant_federation_requests_total{status="backend_error"}[10m])
+              ) > 0.05
+            for: 10m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Federation backend errors for {{ $labels.tenant }}"
+              description: |
+                The federation storage backend is returning 5xx for tenant
+                {{ $labels.tenant }} (>3/min for 10m). This is a platform
+                fault, not a tenant rejection — check the Layer 3 proxy and
+                the storage backend.

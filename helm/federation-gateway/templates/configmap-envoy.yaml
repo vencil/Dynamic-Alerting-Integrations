@@ -11,3 +11,5 @@ data:
     {{- tpl (.Files.Get "files/envoy.yaml") . | nindent 4 }}
   revoked_check.lua: |
     {{- tpl (.Files.Get "files/revoked_check.lua") . | nindent 4 }}
+  audit_extract.lua: |
+    {{- tpl (.Files.Get "files/audit_extract.lua") . | nindent 4 }}

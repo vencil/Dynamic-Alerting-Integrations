@@ -231,12 +231,13 @@ http {
 
 > **實作（IV-2b, [#507](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/507)）**：上方 nginx 區塊為概念示意；gateway 正式以 **Envoy** 實作，交付為 `helm/federation-gateway` chart。選 Envoy 的關鍵：最不能錯的 RS256 驗章交給原生 `jwt_authn` filter（純設定、audited、無 alg-confusion footgun）。filter chain cheap-before-expensive：per-IP `local_ratelimit` → `jwt_authn` → Lua（revoked-set 查驗 + tenant header 覆寫）→ per-token / per-tenant `local_ratelimit` → router。per-token + per-tenant 雙層限流以 wildcard descriptor 達成（防單 token 濫用 + 防 round-robin ≤16 token 的 Sybil）。revoked-set 由 Lua filter time-gated 重讀 ConfigMap projected volume。詳 `helm/federation-gateway` chart README。
 
-#### Layer 3 — Proxy（label injection + audit log）
+#### Layer 3 — Proxy（label injection）
 
-`vmauth` / `prom-label-proxy` 在此層只做兩件事：
+`vmauth` / `prom-label-proxy` 在此層只做一件事：
 
 1. **Label injection**：強制把 `{tenant="<X>"}` 注入所有 selector（核心安全保證）
-2. **Audit log**：記錄被改寫後的 query（給 platform ops 觀察 tenant 行為）
+
+> **Audit log 不在此層**：access log 由 **Layer 2 gateway** 產出（見下方 §Audit log + anomaly metric），因為只有 gateway 持有 jwt_authn 驗證過的 claims（`tenant_id` / `token_id`）；Layer 3 proxy 看不到 token。
 
 **⚠️ Metadata API 防護承諾（adversarial review surfaced，critical）**：
 
@@ -271,22 +272,65 @@ token-level abuse。錯放層（例如指望 proxy 擋 series cap）= 實作 IV-
 
 ### Audit log + anomaly metric
 
-每個 federation request 記錄：
+> **IV-2f 實作修正（[#511](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/511)）**：原 schema 的 `matched_whitelist_rule` 與 `series_returned` 為**幽靈欄位**，IV-2f 實作時砍除（理由見下）；audit 維度物理拆成 data-plane / control-plane 兩塊。
+
+audit log **分兩個維度，物理分離**。
+
+#### Data-plane audit（誰查了什麼）
+
+由 **Layer 2 gateway（Envoy）** 產出，不經 tenant-api。每個 federation request 一筆 JSON：
 
 ```jsonc
 {
   "ts": "2026-05-11T10:23:00Z",
   "tenant_id": "db-anonymized-001",
-  "token_id_prefix": "ftk_8a3f",
-  "query": "rate(http_requests_total[5m])",
-  "matched_whitelist_rule": "rate-aggregations-v1",
-  "series_returned": 4231,
-  "duration_ms": 1843,
-  "status": "ok" | "rejected_whitelist" | "rejected_blast_radius" | "auth_failed"
+  "token_id": "ftk_8a3f...",
+  "method": "POST",
+  "path": "/api/v1/query_range",              // 截斷 2048 字元
+  "query": "rate(http_requests_total[5m])",   // Lua 統一抽取，見下
+  "status": 200,                              // 原始 HTTP code
+  "duration_ms": 1843
 }
 ```
 
-新 metric `tenant_federation_requests_total{tenant,status}` + sentinel alert（rejection rate 異常上升 → notify platform ops）。
+- **`query`**：Envoy access log 無 native 的 request-body 變數，故由獨立的 audit Lua filter（`audit_extract.lua`）**統一抽取**——GET 從 URL query-string、POST 從 `application/x-www-form-urlencoded` body——取 `query=` 或 `match[]=`（metadata API），URL-decode、截斷 2048 字元後寫入 dynamic metadata。GET/POST 走同一條抽取路徑，輸出格式一致（避免 GET 印整段 URI、POST 印純 PromQL 的「雙頭蛇」格式分裂）。**filter 順序**：auth Lua（`revoked_check.lua`，撤銷檢查 + header 注入）在限流器**前**、`buffer` + audit Lua 在限流器**後**——被限流拒絕的請求不進 Envoy 記憶體緩衝（限流真正 bound 住 buffer 用量，而非馬後炮）。
+- **`status`**：access log 記**原始 HTTP code**；下游 metric 的 `status` label 才是分桶 enum。
+- **砍除 `matched_whitelist_rule`**：Data Plane Mirage（白名單只是治理／探索工具，非查詢期安全邊界——見 §前提約束）已確認白名單不在查詢路徑執行，查詢路徑沒有「規則匹配」這回事，無從對應。
+- **砍除 `series_returned`**：Envoy 不該 buffer 並解 Prometheus response body（JSON / Snappy-protobuf）來數 series——成本過高。blast-radius 的**執行**靠 storage 的 `--query.max-samples`，不靠 log 算。
+
+新 metric **`tenant_federation_requests_total{tenant,status}`** 由 gateway pod 的 **mtail sidecar** tail access log 產出（Envoy 原生 stats 無法產生 per-tenant 高基數 label）。`status` label 為 HTTP code 分桶 enum：
+
+| enum | HTTP | 意義 |
+|---|---|---|
+| `ok` | 2xx | 成功 |
+| `client_aborted` | 0 / 499 | client 在收到回應前中斷連線（如 Grafana 切換時間範圍 / 下拉選單時取消查詢）；非平台拒絕，不計入 rejection rate |
+| `rate_limited` | 429 | gateway 限流 |
+| `auth_failed` | 401 / 403 | JWT 驗證失敗 / token 撤銷 |
+| `bad_request` | 其他 4xx（含 422）| 錯誤請求；422 = storage `--query.max-samples` 超標（blast-radius 觸發訊號） |
+| `backend_error` | 5xx | 平台故障 |
+
+> 原 enum 的 `rejected_whitelist` 砍除——Data Plane Mirage 下查詢路徑不執行白名單，此狀態不可能發生。
+
+配 alert `FederationRejectionRateAnomaly`（per-tenant rejection ratio 異常 → `severity: warning`，notify platform ops；非 `severity: none` inhibit sentinel）。
+
+> **Metric 邊界**：mtail 以 `tenant_id` 為必要分桶欄位，故**純 JWT 驗證失敗**的請求（偽造 / 過期 token —— jwt_authn 在 claim 注入前就 401，access log 無 `tenant_id`）**不計入** `tenant_federation_requests_total`：它們無有效租戶、不屬 per-tenant 用量，屬攻擊噪音，由 Envoy `jwt_authn` 自身的 stats 觀測。被撤銷的 token 不同 —— 那是合法 JWT（claim 已注入）、由 revoked set 擋下的 403，正常計入 `auth_failed`。
+
+#### Control-plane audit（誰授權了什麼）
+
+federation 控制平面操作（簽發／撤銷 token、改 whitelist／subset、`--force` bypass）的稽核軌跡**是既有的兩個持久層，不需另建 store**：
+
+- **token 生命週期** → `tenant-federation-store` ConfigMap 內的 token `Record`（`token_id` / `tenant_id` / `issued_by` / `issued_at` / `expires_at`）+ revoked set。
+- **whitelist / subset 變更** → GitOps commit 歷史，每次變更一個 commit，帶 author 與（`--force` 時）bypass trailer（ADR-009 / 011）。
+- tenant-api 的 slog request log 為輔助訊號（走 stderr，非持久查詢來源）。
+
+#### 持久化邊界（IV-2f 的已知 trade-off）
+
+data-plane audit log 的**持久、可中央查詢的合規儲存不在 IV-2f 範圍內**。平台目前無 log 聚合 stack（無 Loki / ELK / Fluentd / Vector）；把 audit log 寫 per-pod PVC 是 cloud-native anti-pattern——RWO PVC 在 gateway 的 `replicaCount>1` / `podAntiAffinity` 下根本無法多副本掛載，RWX 則拖入 NFS／EFS 依賴。IV-2f 交付的是：
+
+1. **aggregate 層**——`tenant_federation_requests_total` 進 Prometheus，本即 durable + queryable（誰拉多少、拒絕率多少）。
+2. **per-request 層**——結構化 JSON 寫 gateway stdout（collector-ready），持久度等同 node container-log 輪替，**尚非中央可查**；另有一份 in-pod emptyDir mirror 供 mtail，為 ephemeral metrics feed，非系統紀錄。
+
+真正的中央 forensic log store（node-level log shipper + Loki／SIEM + retention policy）為 follow-up [#539](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/539)。觸發條件：合規客戶要求中央 forensic 查詢，或 stdout audit log volume 超出 node container-log 輪替可用保留。
 
 ## 為什麼不用其他方案
 

@@ -163,7 +163,84 @@ podSecurityContext:
   runAsNonRoot: true
   runAsUser: 101
   runAsGroup: 101
+  # fsGroup so the audit-log emptyDir is group-writable by every
+  # container: Envoy (uid 101) writes it, the mtail / logrotate sidecars
+  # read and rotate it. Without fsGroup the sidecars cannot touch a file
+  # Envoy created (ADR-020 IV-2f).
+  fsGroup: 101
   seccompProfile:
     type: RuntimeDefault
 
 podAnnotations: {}
+
+# ── Audit log + anomaly metric (ADR-020 IV-2f, #511) ─────────────────
+# Envoy writes one JSON line per federation request to TWO sinks
+# (files/envoy.yaml access_log):
+#   * stdout         — the durable, collector-ready compliance trail.
+#     Shipping it to a central store (Loki / SIEM) is the IV-2f
+#     follow-up #539; until then it rides the container-log path.
+#   * the emptyDir file below — tailed by the mtail sidecar to derive
+#     tenant_federation_requests_total{tenant,status}. EPHEMERAL by
+#     design: a per-pod metrics feed, not the system of record.
+# It is an emptyDir, NOT a PVC: a single ReadWriteOnce PVC cannot be
+# mounted by the gateway's replicaCount>1 / podAntiAffinity pods at all,
+# and a ReadWriteMany PVC would drag in NFS/EFS for throwaway data.
+auditLog:
+  # Master switch for the in-pod metrics pipeline — the mtail + logrotate
+  # sidecars, the emptyDir mirror they share, and the
+  # tenant_federation_requests_total scrape. true (default) renders all
+  # of it. Set false to run the gateway WITHOUT those sidecars: a
+  # missing or broken audit-sidecar image can then never crash-loop a
+  # sidecar and hold the whole gateway pod out of its Service. The
+  # stdout audit log (the durable compliance trail, with the `query`
+  # field) is emitted either way — this only gates the metrics pipeline.
+  enabled: true
+  # Sink-2 file path. Its parent directory is the emptyDir mount point.
+  path: /var/log/federation/audit.log
+  # Request-body buffer cap (envoy.filters.http.buffer). The Lua filter
+  # reads POST PromQL bodies from this buffer. 1 MiB is generous enough
+  # for a Grafana selector with hundreds of pod names yet far below a
+  # memory-exhaustion risk; too small a cap would 413 a legit query.
+  maxRequestBytes: 1048576
+  # emptyDir size cap. Deliberately generous: it is disk-backed (NOT
+  # medium: Memory) so a 1 GiB cap costs node ephemeral storage, not RAM.
+  # The headroom matters under a log flood — a malicious tenant spraying
+  # rejected (429) requests still produces one audit line each; logrotate
+  # must win the race before the emptyDir fills and Kubelet evicts the
+  # pod. 1 GiB + the 10s logrotate loop below leaves a wide margin.
+  volumeSizeLimit: 1Gi
+  # The mtail + logrotate sidecars share one image, built from
+  # audit-sidecar/Dockerfile. Override repository before deploying.
+  image:
+    repository: federation-audit-sidecar
+    tag: "3.0.8"
+    pullPolicy: IfNotPresent
+  # mtail — tails sink 2, exposes the metric on this port; the Service
+  # carries the prometheus.io/scrape annotations for it.
+  mtail:
+    port: 3903
+    resources:
+      requests:
+        cpu: 10m
+        memory: 32Mi
+      limits:
+        cpu: 100m
+        memory: 64Mi
+  # logrotate — caps the emptyDir mirror. Runs on a sleep loop, no cron.
+  logrotate:
+    # Rotate once the live file exceeds this size (MiB).
+    sizeMB: 50
+    # Rotated files kept. Disk ceiling ~= sizeMB * (keep + 1).
+    keep: 2
+    # How often the loop re-checks the file size. Kept SHORT (seconds,
+    # not minutes): a log flood of rejected requests can add several
+    # MiB/s, so a minute-scale interval would let the emptyDir balloon
+    # between rotations and risk a Kubelet eviction. 10s reacts fast.
+    intervalSeconds: 10
+    resources:
+      requests:
+        cpu: 5m
+        memory: 16Mi
+      limits:
+        cpu: 50m
+        memory: 32Mi

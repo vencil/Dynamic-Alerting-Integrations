@@ -1,0 +1,31 @@
+{{- if .Values.auditLog.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "federation-gateway.name" . }}-logrotate
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "federation-gateway.labels" . | nindent 4 }}
+data:
+  # logrotate config for the audit-log emptyDir mirror (ADR-020 IV-2f).
+  # The mirror only feeds the mtail sidecar; the durable trail is Envoy's
+  # stdout sink, so this just stops the emptyDir from evicting the pod.
+  federation-audit.conf: |
+    {{ .Values.auditLog.path }} {
+      size {{ .Values.auditLog.logrotate.sizeMB }}M
+      rotate {{ .Values.auditLog.logrotate.keep }}
+      missingok
+      notifempty
+      nocompress
+      # nocreate — Envoy recreates the file when it reopens its fd, so
+      # logrotate must not pre-create it (a non-root logrotate cannot
+      # chown a created file anyway).
+      nocreate
+      # Rename + reopen, NOT copytruncate: logrotate renames the live
+      # file, then Envoy reopens its access-log fd onto a fresh file.
+      # No copy window means no lost lines.
+      postrotate
+        wget -q -O /dev/null --post-data='' http://127.0.0.1:9901/reopen_logs || true
+      endscript
+    }
+{{- end }}
