@@ -329,7 +329,7 @@ jobs:
     name: I-4 Runbook Smoke Test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install amtool / promtool / yq
         # jq + curl already on ubuntu-latest. Pin versions explicitly so
