@@ -84,7 +84,11 @@ services:
       - ./rendered/jwks.json:/etc/jwks/jwks.json:ro
       # NOT read-only: the S4 revocation scenario rewrites this in place.
       - ./rendered/revoked.txt:/etc/revoked/revoked.txt
-      - audit-log:/var/log/federation
+      # Audit-log dir — a bind mount, not a named volume: the gateway
+      # runs as the distroless image's non-root uid (65532) and a named
+      # volume is created root-owned, so it could not create audit.log
+      # there. The runner makes rendered/audit-log/ mode 0777.
+      - ./rendered/audit-log:/var/log/federation
     ports:
       - "${E2E_GATEWAY_PORT:-18080}:8080"
     depends_on:
@@ -105,14 +109,10 @@ services:
       - "--port=3903"
     volumes:
       - ./rendered/federation-audit.mtail:/etc/mtail/federation-audit.mtail:ro
-      - audit-log:/var/log/federation:ro
+      # Same bind-mounted audit-log dir the gateway writes; read-only here.
+      - ./rendered/audit-log:/var/log/federation:ro
     ports:
       - "${E2E_MTAIL_PORT:-13903}:3903"
     depends_on:
       federation-gateway:
         condition: service_started
-
-volumes:
-  # Shared between the gateway (writes the audit access log) and mtail
-  # (tails it) — the docker-compose stand-in for the in-pod emptyDir.
-  audit-log:

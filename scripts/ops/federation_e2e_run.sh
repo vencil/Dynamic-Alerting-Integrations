@@ -106,9 +106,15 @@ PYEOF
 "$PY" "$E2E_DIR/gen_keys.py" "$RENDERED"
 
 # ---------------------------------------------------------------------------
-# Step 4: empty revoked set (S4 rewrites it in place at runtime).
+# Step 4: empty revoked set (S4 rewrites it in place) + the audit-log
+# dir. The latter is a 0777 bind-mount target: the gateway runs as the
+# distroless Envoy image's non-root uid (65532) and must be able to
+# create the access-log file there; the mtail sidecar (uid 101) reads
+# it. A docker named volume would be root-owned and break that write.
 # ---------------------------------------------------------------------------
 : > "$RENDERED/revoked.txt"
+mkdir -p "$RENDERED/audit-log"
+chmod 0777 "$RENDERED/audit-log"
 
 # ---------------------------------------------------------------------------
 # Step 5: bring the stack up (--build for the mtail audit-sidecar image).
