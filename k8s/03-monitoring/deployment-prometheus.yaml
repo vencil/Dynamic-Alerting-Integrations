@@ -39,6 +39,25 @@ spec:
             # 生產環境請搭配 NetworkPolicy 限制僅允許 configmap-reload sidecar 存取，
             # 或使用 auth proxy 保護。
             - "--web.enable-lifecycle"
+            # ── Federation blast-radius Layer 1 (ADR-020 IV-2c, #508) ──
+            # Hard query caps so a tenant federation read cannot OOM or
+            # hang this Prometheus. This server backs BOTH platform rule
+            # evaluation AND federation reads (it is the federation-proxy
+            # upstream), and both flags are GLOBAL — they bound every
+            # query, not just federation ones. The values are the
+            # federation-driven starting points from ADR-020 §Blast
+            # radius Layer 1; raise them if internal rule evaluation
+            # false-positives (Prometheus native defaults: 50000000 / 2m).
+            #
+            # --query.max-samples — total samples a single query may
+            #   load into memory. 5M (tuning range 5M–50M): sits above a
+            #   typical 1000-series × 1d @30s scrape (~3M), a
+            #   conservative federation starting point.
+            - "--query.max-samples=5000000"
+            # --query.timeout — 30s, aligned with the Layer 2 gateway's
+            #   30s route timeout (defense-in-depth: if the gateway does
+            #   not cut a slow query, storage times out on its own).
+            - "--query.timeout=30s"
           ports:
             - containerPort: 9090
               name: http
