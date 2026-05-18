@@ -5,6 +5,7 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "federation-gateway.labels" . | nindent 4 }}
+  {{- if .Values.auditLog.enabled }}
   annotations:
     # Scrape the mtail sidecar's federation-audit metrics (ADR-020
     # IV-2f). The monitoring-components Prometheus job discovers
@@ -13,6 +14,7 @@ metadata:
     prometheus.io/scrape: "true"
     prometheus.io/port: {{ .Values.auditLog.mtail.port | quote }}
     prometheus.io/path: /metrics
+  {{- end }}
 spec:
   type: {{ .Values.service.type }}
   selector:
@@ -22,7 +24,9 @@ spec:
       port: {{ .Values.service.port }}
       targetPort: {{ .Values.listenPort }}
       protocol: TCP
+    {{- if .Values.auditLog.enabled }}
     - name: metrics
       port: {{ .Values.auditLog.mtail.port }}
       targetPort: metrics
       protocol: TCP
+    {{- end }}

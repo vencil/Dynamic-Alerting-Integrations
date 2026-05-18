@@ -186,6 +186,15 @@ podAnnotations: {}
 # mounted by the gateway's replicaCount>1 / podAntiAffinity pods at all,
 # and a ReadWriteMany PVC would drag in NFS/EFS for throwaway data.
 auditLog:
+  # Master switch for the in-pod metrics pipeline — the mtail + logrotate
+  # sidecars, the emptyDir mirror they share, and the
+  # tenant_federation_requests_total scrape. true (default) renders all
+  # of it. Set false to run the gateway WITHOUT those sidecars: a
+  # missing or broken audit-sidecar image can then never crash-loop a
+  # sidecar and hold the whole gateway pod out of its Service. The
+  # stdout audit log (the durable compliance trail, with the `query`
+  # field) is emitted either way — this only gates the metrics pipeline.
+  enabled: true
   # Sink-2 file path. Its parent directory is the emptyDir mount point.
   path: /var/log/federation/audit.log
   # Request-body buffer cap (envoy.filters.http.buffer). The Lua filter

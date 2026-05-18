@@ -1,3 +1,4 @@
+{{- if .Values.auditLog.enabled }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -27,3 +28,4 @@ data:
         wget -q -O /dev/null --post-data='' http://127.0.0.1:9901/reopen_logs || true
       endscript
     }
+{{- end }}

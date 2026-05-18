@@ -313,6 +313,8 @@ audit log **分兩個維度，物理分離**。
 
 配 alert `FederationRejectionRateAnomaly`（per-tenant rejection ratio 異常 → `severity: warning`，notify platform ops；非 `severity: none` inhibit sentinel）。
 
+> **Metric 邊界**：mtail 以 `tenant_id` 為必要分桶欄位，故**純 JWT 驗證失敗**的請求（偽造 / 過期 token —— jwt_authn 在 claim 注入前就 401，access log 無 `tenant_id`）**不計入** `tenant_federation_requests_total`：它們無有效租戶、不屬 per-tenant 用量，屬攻擊噪音，由 Envoy `jwt_authn` 自身的 stats 觀測。被撤銷的 token 不同 —— 那是合法 JWT（claim 已注入）、由 revoked set 擋下的 403，正常計入 `auth_failed`。
+
 #### Control-plane audit（誰授權了什麼）
 
 federation 控制平面操作（簽發／撤銷 token、改 whitelist／subset、`--force` bypass）的稽核軌跡**是既有的兩個持久層，不需另建 store**：

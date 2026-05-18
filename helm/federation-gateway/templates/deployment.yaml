@@ -21,8 +21,10 @@ spec:
         # ConfigMap changes.
         checksum/envoy: {{ include (print $.Template.BasePath "/configmap-envoy.yaml") . | sha256sum }}
         checksum/jwks: {{ include (print $.Template.BasePath "/configmap-jwks.yaml") . | sha256sum }}
+        {{- if .Values.auditLog.enabled }}
         checksum/mtail: {{ include (print $.Template.BasePath "/configmap-mtail.yaml") . | sha256sum }}
         checksum/logrotate: {{ include (print $.Template.BasePath "/configmap-logrotate.yaml") . | sha256sum }}
+        {{- end }}
         {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -80,10 +82,12 @@ spec:
               readOnly: true
             - name: tmp
               mountPath: /tmp
+            {{- if .Values.auditLog.enabled }}
             # Audit-log emptyDir (ADR-020 IV-2f) — Envoy writes sink 2,
             # the mtail / logrotate sidecars share the same volume.
             - name: audit-log
               mountPath: /var/log/federation
+            {{- end }}
           lifecycle:
             # Drain the Service endpoint before SIGTERM so no new request
             # races into a terminating pod. Native sleep needs k8s >= 1.29.
@@ -104,6 +108,7 @@ spec:
             failureThreshold: 3
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+        {{- if .Values.auditLog.enabled }}
         # ── mtail sidecar (ADR-020 IV-2f) ────────────────────────────
         # Tails the Envoy audit access log (sink 2) and turns it into
         # tenant_federation_requests_total{tenant,status}. Prometheus
@@ -168,6 +173,7 @@ spec:
               readOnly: true
           resources:
             {{- toYaml .Values.auditLog.logrotate.resources | nindent 12 }}
+        {{- end }}
       volumes:
         - name: envoy-config
           configMap:
@@ -187,6 +193,7 @@ spec:
           emptyDir:
             medium: Memory
             sizeLimit: 16Mi
+        {{- if .Values.auditLog.enabled }}
         # Audit-log mirror (ADR-020 IV-2f). Disk-backed (NOT medium:
         # Memory) — a ~150 MiB rotated log mirror should not cost RAM.
         # Ephemeral on purpose: the durable trail is Envoy's stdout sink.
@@ -199,3 +206,4 @@ spec:
         - name: logrotate-config
           configMap:
             name: {{ include "federation-gateway.name" . }}-logrotate
+        {{- end }}

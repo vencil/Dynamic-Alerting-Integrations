@@ -99,9 +99,10 @@ identical shape (`ts` / `tenant_id` / `token_id` / `method` / `path` /
   `emptyDir`, never a PVC (a `ReadWriteOnce` PVC cannot be mounted by the
   multi-replica gateway at all).
 
-`query` is extracted by the Lua filter uniformly from the GET
-query-string and the POST form body, so it is one consistent PromQL
-string regardless of HTTP method; `path` is truncated to 2048 chars.
+`query` is extracted by the audit Lua filter (`audit_extract.lua`)
+uniformly from the GET query-string and the POST form body, so it is one
+consistent PromQL string regardless of HTTP method; `path` is truncated
+to 2048 chars.
 
 A **`logrotate` sidecar** caps the `emptyDir` mirror: it rotates at
 `auditLog.logrotate.sizeMB` MiB, keeps `auditLog.logrotate.keep`
@@ -116,6 +117,12 @@ Service — **install the chart in the `monitoring` namespace** so the
 `monitoring-components` Prometheus job discovers it. The
 `FederationRejectionRateAnomaly` alert and the `federation-audit` Grafana
 dashboard live under `k8s/03-monitoring/`.
+
+`auditLog.enabled: false` drops the whole metrics pipeline — both
+sidecars, the `emptyDir` mirror and the scrape — leaving only the stdout
+audit log. Use it to run the gateway before the audit-sidecar image is
+built and published, so a missing image can never crash-loop a sidecar
+and hold the gateway pod out of its Service.
 
 ## Client IP behind a load balancer
 
@@ -141,6 +148,7 @@ exposed, 1 = one ingress, …).
 | `network.xffTrustedHops` | `0` | Trusted L7 proxy hops — see "Client IP behind a load balancer". No safe universal default |
 | `rateLimit.perToken.*` / `perTenant.*` / `perIp.*` | see values.yaml | Token-bucket params; tuning corridors in comments |
 | `networkPolicy.allowedNamespaces` | `[]` | Restrict ingress; empty = cluster-wide on the listen port |
+| `auditLog.enabled` | `true` | Master switch for the metrics pipeline (mtail + logrotate sidecars, `emptyDir` mirror, scrape). `false` keeps only the stdout audit log |
 | `auditLog.maxRequestBytes` | `1048576` | Request-body buffer cap (1 MiB) — bounds the POST body the Lua audit filter reads |
 | `auditLog.volumeSizeLimit` | `256Mi` | `emptyDir` cap for the audit-log mirror |
 | `auditLog.image.repository` | `federation-audit-sidecar` | mtail + logrotate sidecar image — build from `audit-sidecar/Dockerfile` |
