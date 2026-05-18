@@ -6,10 +6,10 @@ version: v2.8.1
 lang: zh
 id: ADR-020
 tracking_kind: adr
-status: proposed
+status: accepted
 domain: tenant-api
 created_at: 2026-05-11
-updated_at: 2026-05-17
+updated_at: 2026-05-19
 ---
 
 # ADR-020: Tenant Federation — Label-Injection Proxy over Self-Built Endpoint
@@ -21,9 +21,9 @@ updated_at: 2026-05-17
 
 ## 狀態
 
-🟡 **Proposed**（issue [#380](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/380) IV-1 deliverable，v2.8.0 起草）
+✅ **Accepted**（issue [#380](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/380) IV-1 deliverable，v2.8.0 起草；v2.9.0 IV-2 epic 實作期間經 owner Posture B 拍板正式昇格，見 Wave-0 [#504](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/504)）
 
-> EN mirror：本 ADR 進入 `Accepted` 後再起 EN 翻譯（對齊 ADR-019 雙語策略）。
+> EN mirror：原規劃「進入 `Accepted` 後再起 EN 翻譯」已不執行 —— S#101 語言政策定案「中文為主 SSOT、不執行 ZH→EN 遷移」後，ADR EN mirror 慣例停止（ADR-019 同樣無 EN mirror）。本 ADR 不另製 `.en.md`。
 
 ## 背景
 
