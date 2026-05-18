@@ -58,10 +58,16 @@ spec:
             #   the two are coupled. Raising the cap toward 50M needs a
             #   correspondingly larger memory limit.
             - "--query.max-samples=5000000"
-            # --query.timeout — 30s, aligned with the Layer 2 gateway's
-            #   30s route timeout (defense-in-depth: if the gateway does
-            #   not cut a slow query, storage times out on its own).
-            - "--query.timeout=30s"
+            # --query.timeout — 25s, deliberately SHORTER than the Layer
+            #   2 gateway's 30s route timeout (cascading timeouts, NOT
+            #   equal). The inner layer must fire first: Prometheus then
+            #   kills the slow query, frees its memory, and returns a
+            #   precise error code the gateway logs accurately. Equal
+            #   timeouts race — the gateway's timer starts earlier (at
+            #   request arrival), so it would 504 the client first while
+            #   Prometheus keeps churning and its clean error goes
+            #   nowhere. 25s leaves a ~5s margin over hop latency / skew.
+            - "--query.timeout=25s"
           ports:
             - containerPort: 9090
               name: http

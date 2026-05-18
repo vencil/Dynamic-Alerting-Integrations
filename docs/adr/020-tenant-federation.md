@@ -183,7 +183,7 @@ config 才能發現是 data-layer 沒打 label。是個典型的 silent-failure 
 |---|---|---|---|
 | Prom `--query.max-samples` | 5M | 5M–50M（Prom native 預設 50M）| federation read 比 internal eval 嚴；5M 是「典型 1000 series × 1d @ 30s scrape ≈ 3M」之上的保守起點，IV-2 觀察 false-positive 再放寬 |
 | VM `-search.maxUniqueTimeseries` | 100k | 50k–300k（VM native 預設 300k）| 同上邏輯；100k 對應「能撐 cluster-wide dashboard panel 但擋 `count by (instance) (...)` 意外高基查詢」 |
-| Prom `--query.timeout` / VM `-search.maxQueryDuration` | 30s | 與 Layer 2 timeout 對齊 | Defense-in-depth：gateway timeout 沒切斷時 storage 自己會超時 |
+| Prom `--query.timeout` / VM `-search.maxQueryDuration` | 25s（storage；gateway 維持 30s）| storage < gateway | **Cascading timeout（非等值）**：storage 須**短於** gateway —— inner layer 先逾時才能砍 query、釋放記憶體並回精確 error code 給 gateway 記錄。兩層相等會 race：gateway 計時較早起跑、會先 504，Prometheus 卻還在跑、clean error 無處可回 |
 
 #### Layer 2 — API Gateway / Ingress（per-token concurrency + per-token rate limit）
 
@@ -262,7 +262,7 @@ Proxy 的 enforcement 必須**同時涵蓋 Query API 與 Metadata API**，否則
 | 控制項 | 預設值 | Where | Rationale |
 |---|---|---|---|
 | Concurrency / token | 4 | Gateway L7 | 一個 tenant 的 Grafana / 自管 alert eval / oncall 並行 query 通常 ≤ 3；4 留 headroom 擋明顯 abuse |
-| Request timeout | 30s | Gateway L7 + storage backend | Grafana 預設 query timeout 在 30s 附近；長跑離線分析應走 batch export 非 federation 即時 path |
+| Request timeout | gateway 30s / storage 25s | Gateway L7 + storage backend | Grafana 預設 query timeout 在 30s 附近；長跑離線分析應走 batch export 非 federation 即時 path。storage 取 25s（< gateway）為 **cascading timeout** —— inner 先逾時、乾淨回錯;等值會 race |
 | Series per query | 100k | Storage backend | 100k series 是「撐得起 cluster-wide dashboard panel」與「不至於 OOM」的中間值；擋住 `count by (instance) (...)` 類意外高基查詢 |
 | Sample per query | 5M | Storage backend | 與 series cap 互補：tenant 可能拉低基數但長時段範圍 |
 
