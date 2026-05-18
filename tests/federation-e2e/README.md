@@ -61,7 +61,7 @@ drives the stack through the gateway's published port.
 |---|----------|---------|
 | S1 | Happy path | signed token → gateway verify → proxy injects `{tenant="db-a"}` → 200, only db-a series |
 | S2 | Cross-tenant isolation | db-a token + a `{tenant="db-b"}` selector / metadata APIs → zero db-b leak (subsumes #512) |
-| S3 | JWT enforcement | missing / forged-signature / wrong-`iss` token → 401 |
+| S3 | JWT enforcement | missing / forged-signature / wrong-`iss` / expired token → 401 |
 | S4 | Revocation propagation | revoke a token → after the Lua reload interval → 403 |
 | S5 | Sybil / rate limit | N tokens hammering the per-tenant limiter → 429 |
 | S6 | Oversized payload | a 1.5 MiB request body → Envoy buffer filter → 413 |

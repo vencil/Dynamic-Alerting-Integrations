@@ -56,8 +56,9 @@ def test_s2_cross_tenant_isolation(gateway_url, signer):
 
 
 def test_s3_jwt_enforcement(gateway_url, signer):
-    """S3 — the gateway rejects a missing token, a forged signature, and
-    a wrong issuer, all with 401 (before any tenant wiring)."""
+    """S3 — the gateway rejects a missing token, a forged signature, a
+    wrong issuer, and an expired token, all with 401 (before any tenant
+    wiring)."""
     params = {"query": "process_open_fds"}
 
     # No Authorization header.
@@ -78,6 +79,16 @@ def test_s3_jwt_enforcement(gateway_url, signer):
     bad_iss = gateway_request(gateway_url, "/api/v1/query", token=wrong_iss,
                               params=params)
     assert bad_iss.status_code == 401, bad_iss.status_code
+
+    # Expired token — exp is an hour in the past, far beyond the 60s
+    # jwt_authn clock-skew leeway (jwt.clockSkewSeconds), so the verdict
+    # is unambiguous. The short token TTL is the security backstop —
+    # there is no server-side allowlist — so exp enforcement is asserted
+    # explicitly; an over-wide clock skew would also surface here.
+    _, expired = signer("db-a", ttl_seconds=-3600)
+    expired_resp = gateway_request(gateway_url, "/api/v1/query",
+                                   token=expired, params=params)
+    assert expired_resp.status_code == 401, expired_resp.status_code
 
 
 def test_s4_revocation_propagation(gateway_url, signer):
