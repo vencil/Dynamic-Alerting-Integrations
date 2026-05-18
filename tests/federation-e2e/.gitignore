@@ -1,0 +1,6 @@
+# Rendered chart configs + the throwaway federation keypair — produced
+# by scripts/ops/federation_e2e_run.sh on every run, never committed.
+rendered/
+.venv/
+__pycache__/
+.pytest_cache/

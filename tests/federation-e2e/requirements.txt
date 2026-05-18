@@ -1,0 +1,13 @@
+# Federation E2E venv dependencies (ADR-020 IV-2j, #516). The runner
+# (scripts/ops/federation_e2e_run.sh) installs these FIRST, then runs
+# every Python step — config render-extract, keygen, the pytest driver —
+# inside the venv, so the harness needs nothing on the system python.
+pytest==8.3.4
+requests==2.32.3
+# RS256 token signing — the driver mints federation JWTs with the same
+# claim shape tenant-api uses (see README, fidelity boundary).
+PyJWT==2.10.1
+cryptography==44.0.0
+# Used by the runner to extract the rendered config out of the
+# `helm template` ConfigMap output.
+PyYAML==6.0.2

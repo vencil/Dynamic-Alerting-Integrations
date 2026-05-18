@@ -1,0 +1,122 @@
+# Federation E2E harness — ADR-020 IV-2j (#516). Local + CI; NOT part of
+# `make test` / pre-commit. Launched by scripts/ops/federation_e2e_run.sh,
+# which renders the gateway config from the REAL Helm chart into
+# rendered/ before `compose up` (see README — no configuration drift).
+#
+# Stack: fixture-exporter -> prometheus <- federation-proxy <- federation-gateway
+#        federation-gateway --audit log--> mtail
+# The pytest driver runs on the HOST against the published gateway port.
+
+services:
+  # Static tenant-labelled metrics for db-a / db-b, scraped by Prometheus.
+  # nginx serves the .prom file as text/plain (see fixtures/nginx.conf).
+  fixture-exporter:
+    image: nginx:1.27-alpine
+    volumes:
+      - ./fixtures/metrics.prom:/usr/share/nginx/html/metrics:ro
+      - ./fixtures/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    expose:
+      - "80"
+    healthcheck:
+      # 127.0.0.1, not localhost: nginx `listen 80` binds IPv4-only
+      # (0.0.0.0:80); BusyBox wget resolves `localhost` to ::1 first and
+      # gets "Connection refused", so the container never goes healthy.
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/metrics"]
+      interval: 2s
+      timeout: 1s
+      retries: 30
+
+  # Layer 1 storage backend (the federation-proxy upstream).
+  prometheus:
+    image: prom/prometheus:v3.11.2
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=2h"
+      # Layer 1 blast-radius cap (ADR-020 IV-2c). Set LOW for the E2E:
+      # the fixture exposes ~16 series per tenant, so an all-series
+      # instant query (S7) loads 16 samples and trips a cap of 12, while
+      # ordinary single-family scenario queries (<=6 series) stay under.
+      # Deterministic — instant-query samples == series count, no
+      # time-window math. Tune E2E_MAX_SAMPLES if the fixture changes.
+      - "--query.max-samples=${E2E_MAX_SAMPLES:-12}"
+      # Cascading timeout (< the gateway's 30s route timeout).
+      - "--query.timeout=25s"
+    expose:
+      - "9090"
+    depends_on:
+      fixture-exporter:
+        condition: service_healthy
+    healthcheck:
+      # 127.0.0.1 for the same IPv4-only reason as fixture-exporter.
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9090/-/ready"]
+      interval: 2s
+      timeout: 1s
+      retries: 30
+
+  # Layer 3 — prom-label-proxy. Forces {tenant="<X>"} onto every query
+  # and metadata request. Args mirror helm/federation-proxy (the SoT);
+  # --enable-label-apis covers /series /labels /label/<n>/values.
+  federation-proxy:
+    image: quay.io/prometheuscommunity/prom-label-proxy:v0.13.0
+    # Args mirror helm/federation-proxy/templates/deployment.yaml (the
+    # SoT) verbatim — single-dash flags, same order.
+    command:
+      - "-label=tenant"
+      - "-header-name=X-Tenant-Id"
+      - "-upstream=http://prometheus:9090"
+      - "-insecure-listen-address=0.0.0.0:8080"
+      - "-enable-label-apis"
+    expose:
+      - "8080"
+    depends_on:
+      prometheus:
+        condition: service_healthy
+
+  # Layer 2 — Envoy gateway. Config is rendered from the real Helm chart
+  # into rendered/ by the runner (helm template). The distroless image
+  # has no shell/wget, so there is no compose healthcheck — the pytest
+  # driver does its own end-to-end readiness probe.
+  federation-gateway:
+    image: envoyproxy/envoy:distroless-v1.38.0
+    command: ["-c", "/etc/envoy/envoy.yaml"]
+    volumes:
+      - ./rendered/envoy.yaml:/etc/envoy/envoy.yaml:ro
+      - ./rendered/revoked_check.lua:/etc/envoy/revoked_check.lua:ro
+      - ./rendered/audit_extract.lua:/etc/envoy/audit_extract.lua:ro
+      - ./rendered/jwks.json:/etc/jwks/jwks.json:ro
+      # NOT read-only: the S4 revocation scenario rewrites this in place.
+      - ./rendered/revoked.txt:/etc/revoked/revoked.txt
+      # Audit-log dir — a bind mount, not a named volume: the gateway
+      # runs as the distroless image's non-root uid (65532) and a named
+      # volume is created root-owned, so it could not create audit.log
+      # there. The runner makes rendered/audit-log/ mode 0777.
+      - ./rendered/audit-log:/var/log/federation
+    ports:
+      - "${E2E_GATEWAY_PORT:-18080}:8080"
+    depends_on:
+      federation-proxy:
+        condition: service_started
+
+  # mtail sidecar — tails the gateway's audit access log off the shared
+  # volume and exposes tenant_federation_requests_total. Built from the
+  # real audit-sidecar image (helm/federation-gateway/audit-sidecar).
+  mtail:
+    build:
+      context: ../../helm/federation-gateway/audit-sidecar
+    command:
+      - "mtail"
+      - "--logtostderr"
+      - "--progs=/etc/mtail"
+      - "--logs=/var/log/federation/audit.log"
+      - "--port=3903"
+    volumes:
+      - ./rendered/federation-audit.mtail:/etc/mtail/federation-audit.mtail:ro
+      # Same bind-mounted audit-log dir the gateway writes; read-only here.
+      - ./rendered/audit-log:/var/log/federation:ro
+    ports:
+      - "${E2E_MTAIL_PORT:-13903}:3903"
+    depends_on:
+      federation-gateway:
+        condition: service_started

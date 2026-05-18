@@ -100,6 +100,10 @@ bench-e2e: ## B-1 Phase 2 e2e harness — local-only (5-8 min wall-clock). COUNT
 bench-e2e-aggregate: ## Aggregate existing per-run-*.json under tests/e2e-bench/bench-results/ without re-running the stack. ARGS=--baseline-glob '...' --gate-threshold-pct 30
 	@cd tests/e2e-bench && python3 aggregate.py $(ARGS)
 
+.PHONY: federation-e2e
+federation-e2e: ## ADR-020 IV-2j (#516) federation request-path E2E — docker-compose gateway/proxy/storage, renders the real chart config, runs the pytest scenarios. NOT part of `make test`.
+	@bash ./scripts/ops/federation_e2e_run.sh
+
 .PHONY: test-alert
 test-alert: ## 硬體故障/服務中斷測試 — Kill process 模擬 Hard Outage (使用: make test-alert TENANT=db-b)
 	@./scripts/test-alert.sh $(TENANT)
@@ -717,7 +721,7 @@ bump-docs: ## 更新版號引用 (使用: make bump-docs PLATFORM=0.10.0 TOOLS=0
 # ----------------------------------------------------------
 .PHONY: test
 test: ## 執行 Python 單元測試 (pytest)
-	@python3 -m pytest tests/ -v --tb=short $(ARGS)
+	@python3 -m pytest tests/ --ignore=tests/federation-e2e -v --tb=short $(ARGS)
 
 .PHONY: test-fast
 test-fast: ## 全套 pytest 平行加速（xdist -n auto，~2-3x；CI 同設定）
@@ -729,11 +733,11 @@ test-fast: ## 全套 pytest 平行加速（xdist -n auto，~2-3x；CI 同設定�
 	##
 	## Sequential default (`make test`) stays as the friendly path for
 	## debugging (works with pdb, deterministic test order).
-	@python3 -m pytest tests/ -n auto --tb=short $(ARGS)
+	@python3 -m pytest tests/ --ignore=tests/federation-e2e -n auto --tb=short $(ARGS)
 
 .PHONY: coverage
 coverage: ## 測試覆蓋率報告 (使用: make coverage ARGS="--html" 產生 HTML)
-	@python3 -m pytest tests/ \
+	@python3 -m pytest tests/ --ignore=tests/federation-e2e \
 		--cov --cov-report=term-missing \
 		$(if $(findstring --html,$(ARGS)),--cov-report=html:.build/htmlcov) \
 		--tb=short -q
@@ -776,7 +780,7 @@ portal-bundle-budget: ## Check portal dist bundle size budgets (TRK-232a; per-to
 .PHONY: test-skip-audit
 test-skip-audit: ## 審計 skipped tests 數量（超過 budget 則失敗）
 	@echo "=== Test Skip Audit ==="
-	@SKIP_COUNT=$$(python3 -m pytest tests/ --tb=no -q 2>&1 \
+	@SKIP_COUNT=$$(python3 -m pytest tests/ --ignore=tests/federation-e2e --tb=no -q 2>&1 \
 		| grep -Eo '[0-9]+ skipped' | grep -Eo '^[0-9]+' || echo 0); \
 	BUDGET=5; \
 	echo "  Skip count: $$SKIP_COUNT / budget: $$BUDGET"; \
