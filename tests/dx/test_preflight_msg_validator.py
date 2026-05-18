@@ -471,3 +471,62 @@ def test_cli_bom_check_precedes_body_validation(tmp_path: Path) -> None:
     # handled first with a targeted diagnostic.
     assert "type '" not in proc.stderr
     assert "subject is empty" not in proc.stderr
+
+
+# ---------------------------------------------------------------------------
+# Self-Review-Pass-2 trailer placement (validate_pass2_trailer_placement)
+# ---------------------------------------------------------------------------
+
+
+def test_cli_check_commit_msg_accepts_well_formed_pass2_trailer(tmp_path: Path) -> None:
+    """All trailers in one contiguous bottom paragraph → exit 0."""
+    msg = tmp_path / "m.txt"
+    msg.write_text(
+        "feat(dx): thing\n\nbody line\n\n"
+        "Refs: #1\n"
+        "Self-Review-Pass-2: dogfood mutated foo; test_foo caught\n"
+        "Co-authored-by: A B <a@example.com>\n",
+        encoding="utf-8",
+    )
+    proc = _run_cli("--check-commit-msg", str(msg))
+    assert proc.returncode == 0, f"stderr={proc.stderr}"
+
+
+def test_cli_check_commit_msg_rejects_blank_split_pass2_trailer(tmp_path: Path) -> None:
+    """A blank line between Self-Review-Pass-2 and Co-authored-by ejects it
+    from the bottom paragraph → exit 1 (the #543 failure mode)."""
+    msg = tmp_path / "m.txt"
+    msg.write_text(
+        "feat(dx): thing\n\nbody line\n\n"
+        "Refs: #1\n"
+        "Self-Review-Pass-2: dogfood mutated foo; test_foo caught\n"
+        "\n"
+        "Co-authored-by: A B <a@example.com>\n",
+        encoding="utf-8",
+    )
+    proc = _run_cli("--check-commit-msg", str(msg))
+    assert proc.returncode == 1
+    assert "Self-Review-Pass-2" in proc.stderr
+
+
+def test_cli_check_commit_msg_rejects_non_trailer_line_in_block(tmp_path: Path) -> None:
+    """A bare `Resolves #N` (no colon) inside the block disqualifies it →
+    exit 1 (the #515 / #522 failure mode)."""
+    msg = tmp_path / "m.txt"
+    msg.write_text(
+        "feat(dx): thing\n\nbody line\n\n"
+        "Self-Review-Pass-2: dogfood mutated foo; test_foo caught\n"
+        "Resolves #1\n",
+        encoding="utf-8",
+    )
+    proc = _run_cli("--check-commit-msg", str(msg))
+    assert proc.returncode == 1
+    assert "Self-Review-Pass-2" in proc.stderr
+
+
+def test_cli_check_commit_msg_no_pass2_trailer_is_fine(tmp_path: Path) -> None:
+    """The trailer is not required on every commit — its absence is OK."""
+    msg = tmp_path / "m.txt"
+    msg.write_text("feat(dx): thing\n\nbody line\n", encoding="utf-8")
+    proc = _run_cli("--check-commit-msg", str(msg))
+    assert proc.returncode == 0, f"stderr={proc.stderr}"
