@@ -1,0 +1,8 @@
+# Federation E2E driver dependencies (ADR-020 IV-2j, #516).
+# Installed into a throwaway venv by scripts/ops/federation_e2e_run.sh.
+pytest==8.3.4
+requests==2.32.3
+# RS256 token signing — the driver mints federation JWTs with the same
+# claim shape tenant-api uses (see README, fidelity boundary).
+PyJWT==2.10.1
+cryptography==44.0.0

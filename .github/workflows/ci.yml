@@ -377,3 +377,30 @@ jobs:
 
       - name: Lint documentation
         run: make lint-docs
+
+  federation-e2e:
+    name: Federation E2E (ADR-020 IV-2j)
+    runs-on: ubuntu-latest
+    # Dedicated job — the docker-compose federation request-path E2E
+    # (#516). Runs parallel to the lint/unit jobs; it is NOT part of
+    # `make test` / pre-commit and is excluded from the coverage gate.
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      # The runner extracts the rendered chart configs with PyYAML
+      # before standing up the compose stack + its own driver venv.
+      - name: Install PyYAML for the runner
+        run: pip install pyyaml
+
+      - name: Run federation E2E
+        run: bash scripts/ops/federation_e2e_run.sh

@@ -1,0 +1,56 @@
+# Fixture metrics for the federation E2E (ADR-020 IV-2j, #516).
+# Two tenants — db-a and db-b — each with the same metric families so
+# cross-tenant isolation (S2) can be proven by the `tenant` label of the
+# returned series. db-a values are ~100x, db-b values are ~7x, a second
+# signal that no db-b series leaks into a db-a query.
+#
+# ~16 series per tenant. Enough that an S7 query_range over a wide range
+# with a fine step blows past the deliberately-low --query.max-samples,
+# while an ordinary instant query stays far under it.
+#
+# Metric name `up` is intentionally avoided — it collides with the
+# synthetic per-target `up` Prometheus generates.
+
+# HELP http_requests_total Total HTTP requests.
+# TYPE http_requests_total counter
+http_requests_total{tenant="db-a",method="get",code="200"} 100
+http_requests_total{tenant="db-a",method="get",code="500"} 101
+http_requests_total{tenant="db-a",method="post",code="200"} 102
+http_requests_total{tenant="db-a",method="post",code="500"} 103
+http_requests_total{tenant="db-a",method="delete",code="200"} 104
+http_requests_total{tenant="db-a",method="delete",code="500"} 105
+http_requests_total{tenant="db-b",method="get",code="200"} 7
+http_requests_total{tenant="db-b",method="get",code="500"} 8
+http_requests_total{tenant="db-b",method="post",code="200"} 9
+http_requests_total{tenant="db-b",method="post",code="500"} 10
+http_requests_total{tenant="db-b",method="delete",code="200"} 11
+http_requests_total{tenant="db-b",method="delete",code="500"} 12
+
+# HELP node_cpu_seconds_total CPU seconds by mode.
+# TYPE node_cpu_seconds_total counter
+node_cpu_seconds_total{tenant="db-a",cpu="0",mode="user"} 110
+node_cpu_seconds_total{tenant="db-a",cpu="0",mode="system"} 111
+node_cpu_seconds_total{tenant="db-a",cpu="0",mode="idle"} 112
+node_cpu_seconds_total{tenant="db-a",cpu="1",mode="user"} 113
+node_cpu_seconds_total{tenant="db-a",cpu="1",mode="system"} 114
+node_cpu_seconds_total{tenant="db-a",cpu="1",mode="idle"} 115
+node_cpu_seconds_total{tenant="db-b",cpu="0",mode="user"} 13
+node_cpu_seconds_total{tenant="db-b",cpu="0",mode="system"} 14
+node_cpu_seconds_total{tenant="db-b",cpu="0",mode="idle"} 15
+node_cpu_seconds_total{tenant="db-b",cpu="1",mode="user"} 16
+node_cpu_seconds_total{tenant="db-b",cpu="1",mode="system"} 17
+node_cpu_seconds_total{tenant="db-b",cpu="1",mode="idle"} 18
+
+# HELP mysql_global_status_threads_connected Connected MySQL threads.
+# TYPE mysql_global_status_threads_connected gauge
+mysql_global_status_threads_connected{tenant="db-a",instance="mysql-0"} 120
+mysql_global_status_threads_connected{tenant="db-a",instance="mysql-1"} 121
+mysql_global_status_threads_connected{tenant="db-a",instance="mysql-2"} 122
+mysql_global_status_threads_connected{tenant="db-b",instance="mysql-0"} 19
+mysql_global_status_threads_connected{tenant="db-b",instance="mysql-1"} 20
+mysql_global_status_threads_connected{tenant="db-b",instance="mysql-2"} 21
+
+# HELP process_open_fds Open file descriptors.
+# TYPE process_open_fds gauge
+process_open_fds{tenant="db-a"} 130
+process_open_fds{tenant="db-b"} 22

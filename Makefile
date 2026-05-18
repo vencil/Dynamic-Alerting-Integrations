@@ -100,6 +100,10 @@ bench-e2e: ## B-1 Phase 2 e2e harness — local-only (5-8 min wall-clock). COUNT
 bench-e2e-aggregate: ## Aggregate existing per-run-*.json under tests/e2e-bench/bench-results/ without re-running the stack. ARGS=--baseline-glob '...' --gate-threshold-pct 30
 	@cd tests/e2e-bench && python3 aggregate.py $(ARGS)
 
+.PHONY: federation-e2e
+federation-e2e: ## ADR-020 IV-2j (#516) federation request-path E2E — docker-compose gateway/proxy/storage, renders the real chart config, runs the pytest scenarios. NOT part of `make test`.
+	@bash ./scripts/ops/federation_e2e_run.sh
+
 .PHONY: test-alert
 test-alert: ## 硬體故障/服務中斷測試 — Kill process 模擬 Hard Outage (使用: make test-alert TENANT=db-b)
 	@./scripts/test-alert.sh $(TENANT)
