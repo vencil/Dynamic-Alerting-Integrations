@@ -10,7 +10,7 @@ name: Planning Status Sync
 # block. Flip on `--strict` once contributor adoption is high enough that
 # false-positives have decayed.
 #
-# CRITICAL: `actions/checkout@v4` MUST set `fetch-depth: 0` so that
+# CRITICAL: `actions/checkout@v6` MUST set `fetch-depth: 0` so that
 # `<base>..HEAD` resolves. Without it, `git log` fatals with "unknown revision"
 # and the lint silently returns no findings.
 
@@ -29,7 +29,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           # Required for `git log origin/main..HEAD` trailer extraction.
           # Without this the default shallow checkout (1 commit) makes the
