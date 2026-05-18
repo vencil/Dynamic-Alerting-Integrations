@@ -52,7 +52,11 @@ spec:
             # --query.max-samples — total samples a single query may
             #   load into memory. 5M (tuning range 5M–50M): sits above a
             #   typical 1000-series × 1d @30s scrape (~3M), a
-            #   conservative federation starting point.
+            #   conservative federation starting point. NOTE: this cap is
+            #   only a real OOM guard if resources.limits.memory below is
+            #   sized to hold a near-cap query plus the TSDB baseline —
+            #   the two are coupled. Raising the cap toward 50M needs a
+            #   correspondingly larger memory limit.
             - "--query.max-samples=5000000"
             # --query.timeout — 30s, aligned with the Layer 2 gateway's
             #   30s route timeout (defense-in-depth: if the gateway does
@@ -74,9 +78,14 @@ spec:
             requests:
               cpu: 100m
               memory: 256Mi
+            # memory limit is coupled to --query.max-samples above: a
+            # near-cap (5M-sample) query plus the TSDB baseline must fit,
+            # or the cgroup OOM-killer fires before max-samples can
+            # cleanly reject — defeating the cap. 1Gi suits this lab
+            # scale; size up for production data volume or a higher cap.
             limits:
               cpu: 500m
-              memory: 512Mi
+              memory: 1Gi
           readinessProbe:
             httpGet:
               path: /-/ready
