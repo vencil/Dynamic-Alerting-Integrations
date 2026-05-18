@@ -12,35 +12,42 @@
 
 counter tenant_federation_requests_total by tenant, status
 
-# tenant_id precedes status in the access-log JSON (see the envoy.yaml
-# json_format field order), so one regex captures both. The status value
-# may be emitted quoted or unquoted depending on the Envoy version, so
-# the surrounding quotes are optional. A greedy `.*` lands on the real
-# trailing status field, never a "status" substring inside `query`.
-/"tenant_id":"(?P<tenant>[^"]*)".*"status":"?(?P<code>\d+)"?/ {
-    $code >= 200 && $code < 300 {
-        tenant_federation_requests_total[$tenant, "ok"]++
-    }
-    # Client aborted before a response (Envoy logs status 0; some setups
-    # remap to 499) - e.g. Grafana cancelling a query on a time-range or
-    # dropdown change. Distinct from a rejection: its own bucket so a
-    # surge of impatient cancels is visible, not silently dropped.
-    $code == 0 || $code == 499 {
-        tenant_federation_requests_total[$tenant, "client_aborted"]++
-    }
-    $code == 429 {
-        tenant_federation_requests_total[$tenant, "rate_limited"]++
-    }
-    $code == 401 || $code == 403 {
-        tenant_federation_requests_total[$tenant, "auth_failed"]++
-    }
-    # Other 4xx - notably 400 / 422, how the storage backend rejects a
-    # query that trips --query.max-samples (the blast-radius signal
-    # ADR-020 keeps after dropping the impossible rejected_whitelist).
-    $code >= 400 && $code < 500 && $code != 429 && $code != 401 && $code != 403 && $code != 499 {
-        tenant_federation_requests_total[$tenant, "bad_request"]++
-    }
-    $code >= 500 {
-        tenant_federation_requests_total[$tenant, "backend_error"]++
+# tenant_id and status are both top-level keys of the JSON access log,
+# but Envoy emits json_format keys in alphabetical order regardless of
+# the field order in files/envoy.yaml -- so on the wire `status` comes
+# BEFORE `tenant_id`. mtail has no JSON parser, so the two keys are
+# captured by separate nested patterns: the metric never depends on the
+# key order. `[{,]` anchors each match to a real JSON key, so a `status`
+# or `tenant_id` substring inside the `query` value cannot false-match.
+# The status value may be emitted quoted or unquoted depending on the
+# Envoy version, so the surrounding quotes are optional.
+/[{,]"tenant_id":"(?P<tenant>[^"]*)"/ {
+    /[{,]"status":"?(?P<code>\d+)"?/ {
+        $code >= 200 && $code < 300 {
+            tenant_federation_requests_total[$tenant, "ok"]++
+        }
+        # Client aborted before a response (Envoy logs status 0; some
+        # setups remap to 499) - e.g. Grafana cancelling a query on a
+        # time-range or dropdown change. Distinct from a rejection: its
+        # own bucket so a surge of impatient cancels is visible, not
+        # silently dropped.
+        $code == 0 || $code == 499 {
+            tenant_federation_requests_total[$tenant, "client_aborted"]++
+        }
+        $code == 429 {
+            tenant_federation_requests_total[$tenant, "rate_limited"]++
+        }
+        $code == 401 || $code == 403 {
+            tenant_federation_requests_total[$tenant, "auth_failed"]++
+        }
+        # Other 4xx - notably 400 / 422, how the storage backend rejects
+        # a query that trips --query.max-samples (the blast-radius signal
+        # ADR-020 keeps after dropping the impossible rejected_whitelist).
+        $code >= 400 && $code < 500 && $code != 429 && $code != 401 && $code != 403 && $code != 499 {
+            tenant_federation_requests_total[$tenant, "bad_request"]++
+        }
+        $code >= 500 {
+            tenant_federation_requests_total[$tenant, "backend_error"]++
+        }
     }
 }

@@ -6,7 +6,8 @@ type: application
 # 0.2.0 — ADR-020 IV-2f: audit-log dual sink + mtail / logrotate sidecars
 # 0.2.1 — ADR-020 IV-2b: close /api/v1/read 403 route-bypass (path canonicalisation)
 # 0.2.2 — ADR-020 IV-2b: close the residual %2F escaped-slash 403 bypass
-version: 0.2.2
+# 0.2.3 — ADR-020 IV-2f: fix mtail regex — Envoy sorts JSON keys, audit metric never emitted
+version: 0.2.3
 # appVersion: pinned Envoy release
 appVersion: "v1.38.0"
 # kubeVersion: the deployment uses the native preStop.sleep lifecycle
