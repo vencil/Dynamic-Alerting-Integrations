@@ -299,6 +299,66 @@ class TestCheckScopeDrift:
 
 
 # ---------------------------------------------------------------------------
+# _soft_fail_check_names
+# ---------------------------------------------------------------------------
+class TestSoftFailCheckNames:
+    @staticmethod
+    def _write_wf(wf_dir: Path, fname: str, body: str) -> None:
+        wf_dir.mkdir(parents=True, exist_ok=True)
+        (wf_dir / fname).write_text(body, encoding="utf-8")
+
+    def test_continue_on_error_job_is_collected(self, tmp_path, monkeypatch):
+        wf = tmp_path / ".github" / "workflows"
+        self._write_wf(
+            wf, "soft.yml",
+            "name: Soft WF\njobs:\n  j:\n    name: Soft Check\n"
+            "    continue-on-error: true\n    runs-on: ubuntu-latest\n",
+        )
+        self._write_wf(
+            wf, "hard.yml",
+            "name: Hard WF\njobs:\n  j:\n    name: Hard Check\n"
+            "    runs-on: ubuntu-latest\n",
+        )
+        monkeypatch.chdir(tmp_path)
+        names = pp._soft_fail_check_names()
+        assert "Soft Check" in names
+        assert "Hard Check" not in names
+
+    def test_unnamed_job_falls_back_to_job_id(self, tmp_path, monkeypatch):
+        wf = tmp_path / ".github" / "workflows"
+        self._write_wf(
+            wf, "soft.yaml",
+            "jobs:\n  my-job:\n    continue-on-error: true\n"
+            "    runs-on: ubuntu-latest\n",
+        )
+        monkeypatch.chdir(tmp_path)
+        assert "my-job" in pp._soft_fail_check_names()
+
+    def test_no_workflows_dir_returns_empty(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        assert pp._soft_fail_check_names() == set()
+
+    def test_unparseable_workflow_is_skipped(self, tmp_path, monkeypatch):
+        wf = tmp_path / ".github" / "workflows"
+        self._write_wf(wf, "broken.yml", "jobs: [this is: not valid yaml")
+        monkeypatch.chdir(tmp_path)
+        # No crash; the broken file contributes nothing.
+        assert pp._soft_fail_check_names() == set()
+
+    def test_quoted_true_continue_on_error_is_collected(self, tmp_path, monkeypatch):
+        # GitHub accepts `continue-on-error: "true"` (quoted) — YAML parses
+        # it as the string "true", not bool True. It must still count.
+        wf = tmp_path / ".github" / "workflows"
+        self._write_wf(
+            wf, "q.yml",
+            'name: Q\njobs:\n  j:\n    name: Quoted Soft\n'
+            '    continue-on-error: "true"\n    runs-on: ubuntu-latest\n',
+        )
+        monkeypatch.chdir(tmp_path)
+        assert "Quoted Soft" in pp._soft_fail_check_names()
+
+
+# ---------------------------------------------------------------------------
 # check_ci_status
 # ---------------------------------------------------------------------------
 class TestCheckCIStatus:
@@ -357,6 +417,35 @@ class TestCheckCIStatus:
         result = pp.check_ci_status()
         assert result.status == pp.Status.WARN
         assert "解析" in result.message
+
+    def test_soft_fail_check_only_warns_not_fails(self, monkeypatch):
+        # A red check that is continue-on-error must NOT FAIL preflight —
+        # it cannot block the merge, so it must not wedge the marker gate
+        # (the #543 deadlock fix).
+        checks = [
+            {"name": "Lint", "state": "SUCCESS", "bucket": "pass"},
+            {"name": "Soft Check", "state": "FAILURE", "bucket": "fail"},
+        ]
+        _stub_run_constant(monkeypatch, _cp(0, json.dumps(checks)))
+        monkeypatch.setattr(pp, "_soft_fail_check_names", lambda: {"Soft Check"})
+        result = pp.check_ci_status()
+        assert result.status == pp.Status.WARN
+        assert "soft-fail" in result.message
+
+    def test_hard_failure_alongside_soft_still_fails(self, monkeypatch):
+        # A real (non-soft) red check still FAILs; the headline count
+        # excludes the soft one so it reflects only merge-blocking failures.
+        checks = [
+            {"name": "Real Check", "state": "FAILURE", "bucket": "fail"},
+            {"name": "Soft Check", "state": "FAILURE", "bucket": "fail"},
+        ]
+        _stub_run_constant(monkeypatch, _cp(0, json.dumps(checks)))
+        monkeypatch.setattr(pp, "_soft_fail_check_names", lambda: {"Soft Check"})
+        monkeypatch.setattr(pp, "_classify_ci_failures", lambda failed: "")
+        result = pp.check_ci_status()
+        assert result.status == pp.Status.FAIL
+        assert "1 failed" in result.message
+        assert "Real Check" in result.detail
 
 
 # ---------------------------------------------------------------------------

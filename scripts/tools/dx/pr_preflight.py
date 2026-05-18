@@ -374,6 +374,68 @@ def detect_commit_msg_bom(path: Path) -> Optional[str]:
     return None
 
 
+def validate_pass2_trailer_placement(all_lines: list[str]) -> list[str]:
+    """If the message carries a `Self-Review-Pass-2:` line, verify git's
+    native trailer parser recognises it as a trailer.
+
+    Git treats only the *contiguous bottom paragraph* as trailers. A blank
+    line — or a non-`Key: value` line — inside that block silently ejects
+    every line above it: `Self-Review-Pass-2:` is then not a trailer, the
+    CI gate `Validate Self-Review-Pass-2 trailer` fails, and (because that
+    gate is soft-fail) it slips by until a reviewer notices. Catch it
+    locally, before the first push — the #543 / #515 / #522 failure.
+
+    Returns [E]/[W]-prefixed findings (parity with validate_commit_msg_body).
+    Empty = the line is absent (the trailer is not required on every
+    commit) OR it is correctly placed.
+    """
+    if not any(
+        re.match(r"\s*Self-Review-Pass-2\s*:", ln, re.IGNORECASE)
+        for ln in all_lines
+        if not ln.startswith("#")
+    ):
+        return []
+    # Parse with git's own trailer engine — the same logic the CI gate's
+    # `%(trailers:key=...)` uses; a regex would not honour the "contiguous
+    # bottom paragraph" rule (see check_pass2_trailer_strict). Strip `#`
+    # comment lines first: at commit-msg time the file still carries git's
+    # "# Please enter..." template, and that trailing comment block would
+    # otherwise be mistaken for the bottom paragraph (false positive).
+    import tempfile
+
+    clean = "\n".join(ln for ln in all_lines if not ln.startswith("#"))
+    tmp_name = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".txt", encoding="utf-8", delete=False
+        ) as fh:
+            fh.write(clean + "\n")
+            tmp_name = fh.name
+        proc = run(["git", "interpret-trailers", "--parse", tmp_name], timeout=10)
+    finally:
+        if tmp_name:
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
+    if proc.returncode != 0:
+        return [
+            "[W] could not verify Self-Review-Pass-2 trailer placement "
+            "(git interpret-trailers unavailable)"
+        ]
+    if re.search(r"(?im)^\s*Self-Review-Pass-2\s*:", proc.stdout or ""):
+        return []
+    return [
+        "[E] `Self-Review-Pass-2:` is present but git does NOT parse it as "
+        "a trailer. Every trailer line (Refs / Self-Review-Pass-2 / "
+        "Co-authored-by) must sit in ONE contiguous bottom paragraph -- a "
+        "blank line or a non-`Key: value` line between them splits the "
+        "block and drops the lines above it. Fix: remove blank lines "
+        "inside the trailer block. Verify: `git interpret-trailers "
+        "--parse <msg> | grep Self-Review-Pass-2`."
+    ]
+
+
 def check_commit_msg_file(path: Path, repo_root: Path) -> int:
     """Validate a commit-msg file (first non-comment line is the header).
 
@@ -436,6 +498,7 @@ def check_commit_msg_file(path: Path, repo_root: Path) -> int:
 
     header_errors = validate_conventional_header(header, type_enum, scope_enum)
     body_findings = validate_commit_msg_body(all_lines)
+    body_findings = body_findings + validate_pass2_trailer_placement(all_lines)
 
     # Split body findings into errors ([E]) vs warnings ([W]).
     body_errors = [e for e in body_findings if e.startswith("[E]")]
@@ -836,6 +899,51 @@ def check_scope_drift() -> CheckResult:
     return CheckResult("Scope drift", Status.FAIL, headline, detail=detail)
 
 
+def _soft_fail_check_names() -> set[str]:
+    """Check names whose workflow job is `continue-on-error: true`.
+
+    A `continue-on-error` job that fails still reports as `fail` in
+    `gh pr checks`, but it does NOT block the PR merge — it is advisory.
+    `check_ci_status` uses this to downgrade a CI status that is red ONLY
+    on such checks from FAIL to WARN, so a soft-fail check (e.g. "Validate
+    Self-Review-Pass-2 trailer") can never wedge the pre-push preflight
+    marker gate — the #543 deadlock.
+
+    Scans `.github/workflows/*.{yml,yaml}`. The check name GitHub reports
+    is the job's `name:` (or the job id when unnamed). Best-effort: an
+    unreadable / unparseable workflow contributes nothing, so an
+    unrecognised check stays HARD — never silently soften a real blocker.
+    """
+    names: set[str] = set()
+    wf_dir = Path(".github/workflows")
+    if not wf_dir.is_dir():
+        return names
+    try:
+        import yaml  # PyYAML — already a repo dependency
+    except ImportError:
+        return names
+    for wf in sorted([*wf_dir.glob("*.yml"), *wf_dir.glob("*.yaml")]):
+        try:
+            data = yaml.safe_load(wf.read_text(encoding="utf-8"))
+        except (yaml.YAMLError, OSError, UnicodeDecodeError):
+            continue
+        jobs = data.get("jobs") if isinstance(data, dict) else None
+        if not isinstance(jobs, dict):
+            continue
+        for job_id, job in jobs.items():
+            if not isinstance(job, dict):
+                continue
+            # `continue-on-error: true` (bool) and the quoted `"true"`
+            # form both mark a job non-blocking; GitHub accepts either.
+            # An expression (`${{ ... }}`) cannot be evaluated statically
+            # → leave the check HARD (the safe default).
+            coe = job.get("continue-on-error")
+            if coe is True or coe == "true":
+                name = job.get("name")
+                names.add(name if isinstance(name, str) and name else str(job_id))
+    return names
+
+
 def _classify_ci_failures(failed_checks: list) -> str:
     """A/B 分類：比對 main 最近一次 CI run，判斷失敗是 pre-existing 還是 this-PR 引入。
 
@@ -939,16 +1047,39 @@ def check_ci_status(pr_number: Optional[int] = None) -> CheckResult:
     passed = [c for c in checks if c.get("bucket") == "pass"]
 
     if failed:
-        detail = "\n".join(f"· {c['name']}" for c in failed)
-        # A/B 分類：比對 main 的 CI 狀態，區分 pre-existing vs this-PR failure
-        ab_note = _classify_ci_failures(failed)
-        if ab_note:
-            detail += f"\n{ab_note}"
+        # A `continue-on-error: true` workflow job reports as `fail` in
+        # `gh pr checks` but does NOT block the merge. Split it out so a
+        # soft-fail check (e.g. "Validate Self-Review-Pass-2 trailer")
+        # cannot wedge the pre-push preflight-marker gate — the #543
+        # deadlock. Hard failures still FAIL; soft-only red → WARN.
+        soft_names = _soft_fail_check_names()
+        hard_failed = [c for c in failed if c.get("name") not in soft_names]
+        soft_failed = [c for c in failed if c.get("name") in soft_names]
+        if hard_failed:
+            detail = "\n".join(f"· {c['name']}" for c in hard_failed)
+            for c in soft_failed:
+                detail += f"\n· {c['name']} (continue-on-error — non-blocking)"
+            # A/B 分類：比對 main 的 CI 狀態，區分 pre-existing vs this-PR failure
+            ab_note = _classify_ci_failures(hard_failed)
+            if ab_note:
+                detail += f"\n{ab_note}"
+            return CheckResult(
+                "CI status",
+                Status.FAIL,
+                f"{len(hard_failed)} failed / {len(passed)} passed "
+                f"/ {len(pending)} pending",
+                detail=detail,
+            )
+        # Red, but only on continue-on-error checks → advisory, not blocking.
         return CheckResult(
             "CI status",
-            Status.FAIL,
-            f"{len(failed)} failed / {len(passed)} passed / {len(pending)} pending",
-            detail=detail,
+            Status.WARN,
+            f"{len(soft_failed)} soft-fail check(s) red, non-blocking "
+            f"/ {len(passed)} passed / {len(pending)} pending",
+            detail="\n".join(
+                f"· {c['name']} (continue-on-error — does not block merge)"
+                for c in soft_failed
+            ),
         )
     if pending:
         names = ", ".join(c["name"] for c in pending[:3])
