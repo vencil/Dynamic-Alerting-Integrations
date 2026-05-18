@@ -174,14 +174,14 @@ jobs:
         #   test_benchmark.py    — Performance baselines (@benchmark @slow)
         #   test_pipeline_integration.py — End-to-end pipeline test
         # These run locally via `make test` and are tracked in test-map.md.
-        run: pytest tests/ scripts/tools/ --ignore=tests/shared/test_property.py --ignore=tests/ops/test_benchmark.py --ignore=tests/shared/test_pipeline_integration.py --tb=short -q --co -q
+        run: pytest tests/ scripts/tools/ --ignore=tests/shared/test_property.py --ignore=tests/ops/test_benchmark.py --ignore=tests/shared/test_pipeline_integration.py --ignore=tests/federation-e2e --tb=short -q --co -q
 
       - name: Run pytest with coverage
         # Coverage source is defined in pyproject.toml [tool.coverage.run]
         # Do NOT use --cov=<path> here — it overrides pyproject.toml source list
         # and would silently exclude components/da-tools/app from measurement.
         # -n auto: parallel execution via pytest-xdist (see Install step).
-        run: pytest tests/ --ignore=tests/shared/test_property.py --ignore=tests/ops/test_benchmark.py --ignore=tests/shared/test_pipeline_integration.py -x --tb=short -n auto --cov --cov-report=xml --cov-fail-under=75
+        run: pytest tests/ --ignore=tests/shared/test_property.py --ignore=tests/ops/test_benchmark.py --ignore=tests/shared/test_pipeline_integration.py --ignore=tests/federation-e2e -x --tb=short -n auto --cov --cov-report=xml --cov-fail-under=75
 
       - name: Upload coverage artifact
         if: always()
@@ -384,6 +384,11 @@ jobs:
     # Dedicated job — the docker-compose federation request-path E2E
     # (#516). Runs parallel to the lint/unit jobs; it is NOT part of
     # `make test` / pre-commit and is excluded from the coverage gate.
+    # The job only reads the repo (checkout -> render -> compose ->
+    # pytest); cap GITHUB_TOKEN accordingly (CodeQL actions/missing-
+    # workflow-permissions).
+    permissions:
+      contents: read
     timeout-minutes: 20
     steps:
       - name: Checkout code
@@ -397,10 +402,7 @@ jobs:
         with:
           python-version: "3.13"
 
-      # The runner extracts the rendered chart configs with PyYAML
-      # before standing up the compose stack + its own driver venv.
-      - name: Install PyYAML for the runner
-        run: pip install pyyaml
-
+      # The runner is self-contained — it builds its own venv and runs
+      # every Python step (render-extract, keygen, pytest) inside it.
       - name: Run federation E2E
         run: bash scripts/ops/federation_e2e_run.sh

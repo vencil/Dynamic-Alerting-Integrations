@@ -6,12 +6,14 @@
 # throwaway federation keypair, brings the docker-compose stack up, runs
 # the pytest driver against the published gateway port, and tears down.
 #
-# Local-only convenience: `make federation-e2e`. In CI it is a dedicated
-# job (see .github/workflows/ci.yml) — NOT part of `make test` /
-# pre-commit, and excluded from the unit-test coverage gate.
+# Self-contained: every Python step runs inside the driver venv, so the
+# only host prerequisites are python3 (for `venv`), helm and docker.
+# `make federation-e2e` runs it locally; in CI it is a dedicated job
+# (see .github/workflows/ci.yml) — NOT part of `make test` / pre-commit,
+# and excluded from the unit-test coverage gate.
 #
-# Steps: 1 render chart configs · 2 keypair · 3 empty revoked set ·
-#        4 driver venv · 5 compose up · 6 pytest · 7 logs-on-fail · 8 down
+# Steps: 1 driver venv · 2 render chart configs · 3 keypair · 4 empty
+#        revoked set · 5 compose up · 6 pytest · 7 logs-on-fail · 8 down
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -19,6 +21,8 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 E2E_DIR="$REPO_ROOT/tests/federation-e2e"
 RENDERED="$E2E_DIR/rendered"
 GATEWAY_CHART="$REPO_ROOT/helm/federation-gateway"
+VENV="$E2E_DIR/.venv"
+PY="$VENV/bin/python"
 
 # Cleanup trap — any mid-script failure (set -e) must not leave compose
 # resources running (port/volume residue would break the next run).
@@ -34,7 +38,17 @@ trap _cleanup EXIT
 cd "$E2E_DIR"
 
 # ---------------------------------------------------------------------------
-# Step 1: render the gateway config from the REAL Helm chart.
+# Step 1: driver venv FIRST. The render-extract (PyYAML) and keygen
+# (cryptography) steps below run inside it, so the harness never depends
+# on the caller having those on the system python — it works the same
+# locally and in CI.
+# ---------------------------------------------------------------------------
+echo "[fed-e2e] preparing driver venv"
+python3 -m venv "$VENV"
+"$VENV/bin/pip" install -q --disable-pip-version-check -r "$E2E_DIR/requirements.txt"
+
+# ---------------------------------------------------------------------------
+# Step 2: render the gateway config from the REAL Helm chart.
 #
 # Test values: a moderate per-tenant rate limit (30/min) — high enough
 # that the data scenarios sharing the db-a bucket never trip it, low
@@ -44,7 +58,7 @@ cd "$E2E_DIR"
 # auditLog.enabled so envoy.yaml renders the second access-log sink the
 # mtail service tails.
 # ---------------------------------------------------------------------------
-echo "[fed-e2e] rendering chart configs + keypair into rendered/"
+echo "[fed-e2e] rendering chart configs into rendered/"
 rm -rf "$RENDERED"
 mkdir -p "$RENDERED"
 
@@ -70,7 +84,7 @@ helm template fed "$GATEWAY_CHART" \
     --set auditLog.enabled=true \
     > /tmp/fed-e2e-cm-mtail.yaml
 
-python3 - "$RENDERED" <<'PYEOF'
+"$PY" - "$RENDERED" <<'PYEOF'
 import sys
 import yaml
 
@@ -87,22 +101,14 @@ print("[fed-e2e] rendered envoy.yaml + revoked_check.lua + "
 PYEOF
 
 # ---------------------------------------------------------------------------
-# Step 2: throwaway federation keypair + JWKS.
+# Step 3: throwaway federation keypair + JWKS.
 # ---------------------------------------------------------------------------
-python3 "$E2E_DIR/gen_keys.py" "$RENDERED"
+"$PY" "$E2E_DIR/gen_keys.py" "$RENDERED"
 
 # ---------------------------------------------------------------------------
-# Step 3: empty revoked set (S4 rewrites it in place at runtime).
+# Step 4: empty revoked set (S4 rewrites it in place at runtime).
 # ---------------------------------------------------------------------------
 : > "$RENDERED/revoked.txt"
-
-# ---------------------------------------------------------------------------
-# Step 4: driver venv.
-# ---------------------------------------------------------------------------
-VENV="$E2E_DIR/.venv"
-echo "[fed-e2e] preparing driver venv"
-python3 -m venv "$VENV"
-"$VENV/bin/pip" install -q --disable-pip-version-check -r "$E2E_DIR/requirements.txt"
 
 # ---------------------------------------------------------------------------
 # Step 5: bring the stack up (--build for the mtail audit-sidecar image).
