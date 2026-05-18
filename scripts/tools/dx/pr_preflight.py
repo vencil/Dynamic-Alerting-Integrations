@@ -931,9 +931,14 @@ def _soft_fail_check_names() -> set[str]:
         if not isinstance(jobs, dict):
             continue
         for job_id, job in jobs.items():
-            # Only a literal `true` softens the check. An expression
-            # (`${{ ... }}`) cannot be evaluated statically → keep it HARD.
-            if isinstance(job, dict) and job.get("continue-on-error") is True:
+            if not isinstance(job, dict):
+                continue
+            # `continue-on-error: true` (bool) and the quoted `"true"`
+            # form both mark a job non-blocking; GitHub accepts either.
+            # An expression (`${{ ... }}`) cannot be evaluated statically
+            # → leave the check HARD (the safe default).
+            coe = job.get("continue-on-error")
+            if coe is True or coe == "true":
                 name = job.get("name")
                 names.add(name if isinstance(name, str) and name else str(job_id))
     return names

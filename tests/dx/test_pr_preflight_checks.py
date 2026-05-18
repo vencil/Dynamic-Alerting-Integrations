@@ -345,6 +345,18 @@ class TestSoftFailCheckNames:
         # No crash; the broken file contributes nothing.
         assert pp._soft_fail_check_names() == set()
 
+    def test_quoted_true_continue_on_error_is_collected(self, tmp_path, monkeypatch):
+        # GitHub accepts `continue-on-error: "true"` (quoted) — YAML parses
+        # it as the string "true", not bool True. It must still count.
+        wf = tmp_path / ".github" / "workflows"
+        self._write_wf(
+            wf, "q.yml",
+            'name: Q\njobs:\n  j:\n    name: Quoted Soft\n'
+            '    continue-on-error: "true"\n    runs-on: ubuntu-latest\n',
+        )
+        monkeypatch.chdir(tmp_path)
+        assert "Quoted Soft" in pp._soft_fail_check_names()
+
 
 # ---------------------------------------------------------------------------
 # check_ci_status
