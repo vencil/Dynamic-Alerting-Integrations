@@ -106,6 +106,31 @@ data:
                 consume them — investigate which defaults are being touched
                 without effect.
 
+          # --- Prometheus Rule Evaluation Health (ADR-020 IV-2c, #508) ---
+          # The federation blast-radius caps (--query.max-samples /
+          # --query.timeout) are GLOBAL — they also bound this
+          # Prometheus's own recording / alerting rule evaluation. A
+          # cluster-wide aggregation rule can exceed the sample cap and
+          # then fail SILENTLY: recording rules serve stale data and
+          # alerts built on them stop firing. This alert is the tripwire
+          # so that friendly-fire is never silent.
+          - alert: PrometheusRuleEvaluationFailing
+            expr: increase(prometheus_rule_evaluation_failures_total[10m]) > 0
+            for: 15m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Prometheus rule evaluation failing in group {{ $labels.rule_group }}"
+              description: |
+                Rule group {{ $labels.rule_group }} has had evaluation
+                failures for 15m. Recording rules then serve stale data,
+                and alerts built on them silently stop firing — the
+                platform goes blind. A likely cause is a rule query
+                exceeding the global --query.max-samples cap (ADR-020
+                IV-2c); inspect the failing rule on /rules and either
+                optimise it or raise the cap + the Prometheus memory
+                limit together.
+
       # ============================================================
       # Federation Audit (ADR-020 IV-2f, issue #511)
       # Monitors the federation data plane via the metric

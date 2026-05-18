@@ -39,6 +39,35 @@ spec:
             # 生產環境請搭配 NetworkPolicy 限制僅允許 configmap-reload sidecar 存取，
             # 或使用 auth proxy 保護。
             - "--web.enable-lifecycle"
+            # ── Federation blast-radius Layer 1 (ADR-020 IV-2c, #508) ──
+            # Hard query caps so a tenant federation read cannot OOM or
+            # hang this Prometheus. This server backs BOTH platform rule
+            # evaluation AND federation reads (it is the federation-proxy
+            # upstream), and both flags are GLOBAL — they bound every
+            # query, not just federation ones. The values are the
+            # federation-driven starting points from ADR-020 §Blast
+            # radius Layer 1; raise them if internal rule evaluation
+            # false-positives (Prometheus native defaults: 50000000 / 2m).
+            #
+            # --query.max-samples — total samples a single query may
+            #   load into memory. 5M (tuning range 5M–50M): sits above a
+            #   typical 1000-series × 1d @30s scrape (~3M), a
+            #   conservative federation starting point. NOTE: this cap is
+            #   only a real OOM guard if resources.limits.memory below is
+            #   sized to hold a near-cap query plus the TSDB baseline —
+            #   the two are coupled. Raising the cap toward 50M needs a
+            #   correspondingly larger memory limit.
+            - "--query.max-samples=5000000"
+            # --query.timeout — 25s, deliberately SHORTER than the Layer
+            #   2 gateway's 30s route timeout (cascading timeouts, NOT
+            #   equal). The inner layer must fire first: Prometheus then
+            #   kills the slow query, frees its memory, and returns a
+            #   precise error code the gateway logs accurately. Equal
+            #   timeouts race — the gateway's timer starts earlier (at
+            #   request arrival), so it would 504 the client first while
+            #   Prometheus keeps churning and its clean error goes
+            #   nowhere. 25s leaves a ~5s margin over hop latency / skew.
+            - "--query.timeout=25s"
           ports:
             - containerPort: 9090
               name: http
@@ -55,9 +84,14 @@ spec:
             requests:
               cpu: 100m
               memory: 256Mi
+            # memory limit is coupled to --query.max-samples above: a
+            # near-cap (5M-sample) query plus the TSDB baseline must fit,
+            # or the cgroup OOM-killer fires before max-samples can
+            # cleanly reject — defeating the cap. 1Gi suits this lab
+            # scale; size up for production data volume or a higher cap.
             limits:
               cpu: 500m
-              memory: 512Mi
+              memory: 1Gi
           readinessProbe:
             httpGet:
               path: /-/ready
