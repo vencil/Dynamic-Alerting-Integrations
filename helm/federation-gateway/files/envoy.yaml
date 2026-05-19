@@ -112,6 +112,23 @@ static_resources:
                     - name: federation
                       domains: ["*"]
                       routes:
+                        {{- if .Values.emergencyGlobalBlock }}
+                        # Emergency global kill switch (#551). When
+                        # emergencyGlobalBlock is true this top route matches
+                        # every path and direct_responds 503 — no request
+                        # reaches the Layer 3 proxy or the storage backend.
+                        # Flip it in a federation incident (a prom-label-proxy
+                        # 0-day, a storage meltdown) to shed all federation
+                        # load at once. The tcpSocket probes keep passing (the
+                        # listener still accepts), so the pod is not killed and
+                        # the switch flips back cleanly. See the chart README.
+                        - match:
+                            prefix: "/"
+                          direct_response:
+                            status: 503
+                            body:
+                              inline_string: "federation gateway: emergency global block active — all federation traffic is suspended\n"
+                        {{- end }}
                         {{- if eq .Values.mode "prom-label-proxy" }}
                         # Prometheus remote_read (/api/v1/read) is Snappy-framed
                         # protobuf; prom-label-proxy enforces the tenant label
