@@ -281,7 +281,7 @@ audit log（issue [#511](https://github.com/vencil/Dynamic-Alerting-Integrations
 | `bad_request` | 其他 4xx（含 422）| 錯誤請求；422 = storage `--query.max-samples` 超標（blast-radius 觸發訊號） |
 | `backend_error` | 5xx | 平台故障 |
 
-配 alert `FederationRejectionRateAnomaly`（per-tenant rejection ratio 異常 → `severity: warning`，notify platform ops；非 `severity: none` inhibit sentinel）。
+配 alert `FederationRejectionRateAnomaly`（per-tenant rejection ratio 異常 → `severity: warning`，notify platform ops；非 `severity: none` inhibit sentinel）。該規則 join `tenant_metadata_info`，只評估仍在 conf.d 的活躍租戶 —— 已退租租戶的殭屍 token 持續被 `403` 拒絕（撤銷後、4h TTL 未到期前計入 `auth_failed`，見下「Metric 邊界」）不會誤報（[#550](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/550)）。
 
 > **Metric 邊界**：mtail 以 `tenant_id` 為必要分桶欄位，故**純 JWT 驗證失敗**的請求（偽造 / 過期 token —— `jwt_authn` 在 claim 注入前就 401，access log 無 `tenant_id`）**不計入** `tenant_federation_requests_total`：它們無有效租戶、不屬 per-tenant 用量，屬攻擊噪音，由 Envoy `jwt_authn` 自身的 stats 觀測。被撤銷的 token 不同 —— 那是合法 JWT（claim 已注入）、由 revoked set 擋下的 403，正常計入 `auth_failed`。
 
