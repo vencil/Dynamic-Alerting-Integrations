@@ -178,11 +178,13 @@ def test_s8_remote_read_blocked(gateway_url, signer):
 
 def test_s9_metadata_api_surface(gateway_url, signer):
     """S9 — full Prom HTTP API surface audit (IV-2g, #512). Two
-    guarantees: (a) every metadata endpoint prom-label-proxy serves is
-    tenant-scoped — a db-a token sees zero db-b topology; (b) every
+    guarantees: (a) every endpoint prom-label-proxy serves — query,
+    metadata, rules/alerts — is tenant-scoped, so a db-a token sees
+    zero db-b topology; (b) every
     endpoint it does NOT scope (platform internals, admin, scrape
-    topology) is unreachable — never a 200 — so nothing leaks by
-    passthrough. See README §Metadata API surface audit for the table."""
+    topology, the remote_write ingest path) is unreachable — never a
+    200 — so nothing leaks, and nothing can be written, by passthrough.
+    See README §Metadata API surface audit for the table."""
     _, token = signer("db-a")
 
     # (a) Metadata endpoints are tenant-scoped.
@@ -194,6 +196,19 @@ def test_s9_metadata_api_surface(gateway_url, signer):
     assert rows, "expected db-a series"
     leaked = [s for s in rows if s.get("tenant") != "db-a"]
     assert not leaked, f"cross-tenant series leaked via /series: {leaked}"
+
+    # A multi-valued match[] is a union of selectors — prom-label-proxy
+    # must rewrite EVERY element, not just the first. A second matcher
+    # that explicitly asks for {tenant="db-b"} must still come back
+    # scoped to db-a (the proxy overrides the tenant matcher).
+    multi = gateway_request(
+        gateway_url, "/api/v1/series", token=token,
+        params=[("match[]", "process_open_fds"),
+                ("match[]", '{tenant="db-b"}')])
+    assert multi.status_code == 200, multi.text
+    multi_leak = [s for s in multi.json()["data"]
+                  if s.get("tenant") != "db-a"]
+    assert not multi_leak, f"multi match[] bypass leaked db-b: {multi_leak}"
 
     # /label/tenant/values is the definitive cross-tenant signal — the
     # db-a token must see its own tenant value and no other.
@@ -207,6 +222,16 @@ def test_s9_metadata_api_surface(gateway_url, signer):
     labels = gateway_request(gateway_url, "/api/v1/labels", token=token)
     assert labels.status_code == 200, labels.text
 
+    # /rules and /alerts are served and tenant-filtered by the proxy —
+    # they must stay served (200), not regress to a 404 or, worse, a
+    # passthrough that would expose the platform's own rule PromQL.
+    # (The E2E loads no rule files, so this asserts the proxy keeps
+    # them on its allowlist; the filtering depth is the proxy's own
+    # documented behaviour.)
+    for path in ("/api/v1/rules", "/api/v1/alerts"):
+        resp = gateway_request(gateway_url, path, token=token)
+        assert resp.status_code == 200, (path, resp.status_code, resp.text)
+
     # (b) Un-scopable endpoints are unreachable. prom-label-proxy
     # registers handlers only for the APIs it can tenant-scope and 404s
     # everything else — it never passes an unknown path through. This
@@ -218,6 +243,7 @@ def test_s9_metadata_api_surface(gateway_url, signer):
         ("/api/v1/status/config", "GET"),              # platform prometheus.yml
         ("/api/v1/status/tsdb", "GET"),                # TSDB cardinality stats
         ("/api/v1/admin/tsdb/delete_series", "POST"),  # destructive admin
+        ("/api/v1/write", "POST"),                     # remote_write ingest
     ):
         resp = gateway_request(gateway_url, path, token=token, method=method,
                                data=b"" if method == "POST" else None)

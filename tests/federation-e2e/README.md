@@ -85,6 +85,7 @@ it never passes an unknown endpoint through unscoped.
 | `/api/v1/rules`, `/api/v1/alerts` | proxy filters by tenant | ✅ tenant-scoped |
 | `/federate` | proxy injects `{tenant="<X>"}` | ✅ tenant-scoped |
 | `/api/v1/read` (remote_read) | gateway `direct_response` 403 | ✅ blocked — Snappy body is not label-scopable (S8) |
+| `/api/v1/write` (remote_write), `/api/v1/otlp/v1/metrics` (OTLP) | no proxy handler → 404 | ✅ unreachable — no tenant-reachable ingest path |
 | `/api/v1/metadata`, `/targets`, `/targets/metadata` | no proxy handler → 404 | ✅ unreachable |
 | `/api/v1/status/*` (config / flags / tsdb / runtimeinfo / …) | no proxy handler → 404 | ✅ unreachable |
 | `/api/v1/admin/tsdb/*` (delete_series / clean_tombstones) | no proxy handler → 404 | ✅ unreachable |
@@ -92,12 +93,15 @@ it never passes an unknown endpoint through unscoped.
 | VM `/api/v1/status/active_queries` | no proxy handler → 404 | ✅ unreachable |
 | `/metrics`, `/-/healthy` | no proxy handler → 404 | ✅ unreachable |
 
-No endpoint leaks cross-tenant data or platform topology. The only
-endpoint the gateway must block explicitly is `/api/v1/read` (S8) —
+No endpoint leaks cross-tenant data or platform topology, and no
+write or ingest path is tenant-reachable. The only endpoint the
+gateway must block explicitly is `/api/v1/read` (S8) —
 prom-label-proxy *would* proxy it but cannot inject a label into the
 Snappy-framed protobuf body. S9 asserts a representative slice of the
-"unreachable" rows, so a future prom-label-proxy version that adds an
-unsafe passthrough handler is caught as a regression.
+"unreachable" rows — and that a multi-valued `match[]` array is
+rewritten element-wise — so a future prom-label-proxy version that
+adds an unsafe passthrough handler, or a partial-rewrite bug, is
+caught as a regression.
 
 ## Run
 
