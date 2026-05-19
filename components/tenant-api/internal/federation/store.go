@@ -111,6 +111,22 @@ func (s *store) list(tenantID string, now time.Time) ([]Record, error) {
 	return out, nil
 }
 
+// listAll returns every non-expired Record across all tenants, oldest
+// first. Used by the OrphanDetector (#521); the GET listing uses the
+// per-tenant list instead.
+func (s *store) listAll(now time.Time) ([]Record, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]Record, 0, len(s.recs))
+	for _, r := range s.recs {
+		if !r.expired(now) {
+			out = append(out, r)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].IssuedAt.Before(out[j].IssuedAt) })
+	return out, nil
+}
+
 // revoke removes the Record for tokenID and persists the store,
 // reporting whether a record was present. The JSON store is the
 // unit-test backend only and has no gateway-facing revoked set, so the

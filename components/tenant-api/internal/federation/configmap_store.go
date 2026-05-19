@@ -227,6 +227,25 @@ func (s *configMapStore) list(tenantID string, now time.Time) ([]Record, error) 
 	return out, nil
 }
 
+// listAll returns every non-expired Record across all tenants, oldest
+// first. Used by the OrphanDetector (#521).
+func (s *configMapStore) listAll(now time.Time) ([]Record, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), k8sCallTimeout)
+	defer cancel()
+	_, doc, err := s.load(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Record, 0)
+	for _, r := range doc.Records {
+		if !r.expired(now) {
+			out = append(out, r)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].IssuedAt.Before(out[j].IssuedAt) })
+	return out, nil
+}
+
 // revoke removes the bookkeeping Record and adds the token to the
 // revoked set. It records the revocation even when the Record is
 // already gone (it may have been pruned while the JWT is still live).
