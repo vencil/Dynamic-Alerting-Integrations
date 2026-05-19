@@ -264,6 +264,15 @@ func main() {
 		go prTracker.WatchLoop(stopCh)
 	}
 
+	// v2.9.0 ADR-020 #521: federation offboarding orphan detector.
+	// Warn-only — flags zombie tokens / stale subset files for the
+	// offboarding runbook; never auto-revokes (a transient conf.d
+	// glitch must not nuke live tenants' tokens).
+	if federationMgr != nil {
+		go federation.NewOrphanDetector(*configDir, federationMgr.ListAllRecords).
+			Run(*reloadInterval, stopCh)
+	}
+
 	// ── Router ────────────────────────────────────────────────────────────────
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)

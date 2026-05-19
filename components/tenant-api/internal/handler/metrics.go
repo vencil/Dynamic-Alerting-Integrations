@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"sync/atomic"
 	"time"
+
+	"github.com/vencil/tenant-api/internal/federation"
 )
 
 // Metrics tracks basic request counters exposed at /metrics.
@@ -84,4 +86,14 @@ func MetricsHandler(w http.ResponseWriter, r *http.Request) {
 	_, _ = fmt.Fprintf(w, "# HELP tenant_api_rate_limit_active_callers Number of callers with at least one request inside the rolling window.\n")
 	_, _ = fmt.Fprintf(w, "# TYPE tenant_api_rate_limit_active_callers gauge\n")
 	_, _ = fmt.Fprintf(w, "tenant_api_rate_limit_active_callers %d\n", activeCallers)
+
+	// ADR-020 #521: federation artifacts left by an incomplete tenant
+	// offboarding. Non-zero ⇒ work docs/internal/tenant-offboarding-runbook.md.
+	orphanTokens, orphanSubsets := federation.OrphanCounts()
+	_, _ = fmt.Fprintf(w, "# HELP tenant_api_federation_orphaned_tokens Live federation token records whose tenant is no longer in conf.d.\n")
+	_, _ = fmt.Fprintf(w, "# TYPE tenant_api_federation_orphaned_tokens gauge\n")
+	_, _ = fmt.Fprintf(w, "tenant_api_federation_orphaned_tokens %d\n", orphanTokens)
+	_, _ = fmt.Fprintf(w, "# HELP tenant_api_federation_orphaned_subset_files Stale conf.d/_federation/<tenant>.yaml subset files whose tenant is no longer in conf.d.\n")
+	_, _ = fmt.Fprintf(w, "# TYPE tenant_api_federation_orphaned_subset_files gauge\n")
+	_, _ = fmt.Fprintf(w, "tenant_api_federation_orphaned_subset_files %d\n", orphanSubsets)
 }

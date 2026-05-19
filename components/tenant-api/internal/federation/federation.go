@@ -123,6 +123,7 @@ type RecordStore interface {
 	put(r Record) error
 	get(tokenID string) (Record, bool, error)
 	list(tenantID string, now time.Time) ([]Record, error)
+	listAll(now time.Time) ([]Record, error)
 	revoke(tokenID string, expiresAt time.Time) (bool, error)
 }
 
@@ -235,6 +236,13 @@ func (m *Manager) Issue(tenantID, issuedBy, description string) (string, Record,
 // List returns the non-expired Records for tenantID, oldest first.
 func (m *Manager) List(tenantID string) ([]Record, error) {
 	return m.store.list(tenantID, time.Now())
+}
+
+// ListAllRecords returns every non-expired token Record across all
+// tenants. Used by the OrphanDetector (#521) to spot tokens whose
+// tenant has left conf.d; GET /federation/tokens uses per-tenant List.
+func (m *Manager) ListAllRecords() ([]Record, error) {
+	return m.store.listAll(time.Now())
 }
 
 // Get returns the Record for tokenID, or false if no such record
