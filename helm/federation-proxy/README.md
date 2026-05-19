@@ -9,6 +9,9 @@ query API **and** metadata APIs — so tenant A can never read tenant B's data.
 Source issue: [#506](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/506) (IV-2a) ·
 Design: [ADR-020](../../docs/adr/020-tenant-federation.md) §Blast radius Layer 3.
 
+Tenant-side usage — how a tenant gets a token and points its Prometheus /
+Grafana at the federation gateway — is [`docs/integration/tenant-federation.md`](../../docs/integration/tenant-federation.md).
+
 ## Backend coverage — and why there is no vmauth
 
 prom-label-proxy fronts **any Prometheus-HTTP-API-compatible backend**:
