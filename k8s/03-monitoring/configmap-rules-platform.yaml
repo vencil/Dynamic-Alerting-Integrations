@@ -146,7 +146,18 @@ data:
           # Tenant-side rejection surge: >50% of a tenant's federation
           # requests rejected (rate-limited / auth-failed / bad-request)
           # for 15m. The second clause floors it at ~1 rejection/min so a
-          # single fluke on a near-idle tenant cannot trip it.
+          # single fluke on a near-idle tenant cannot trip it. The third
+          # clause — `and on(tenant) tenant_metadata_info` — scopes the
+          # alert to tenants still in conf.d (#550): an offboarded tenant
+          # whose client keeps polling with a revoked-but-unexpired token
+          # bills 100% auth_failed until the 4h TTL runs out, and without
+          # this clause the alert pages platform ops about a tenant that
+          # no longer exists. tenant_metadata_info is emitted (=1) by
+          # threshold-exporter for every conf.d tenant, so a removed
+          # tenant drops out of the join. Trade-off: if threshold-exporter
+          # is down the join empties and this alert is silenced —
+          # acceptable for a warning, and that outage is separately
+          # alerted.
           - alert: FederationRejectionRateAnomaly
             expr: |
               (
@@ -160,6 +171,8 @@ data:
               sum by (tenant) (
                 rate(tenant_federation_requests_total{status=~"rate_limited|auth_failed|bad_request"}[10m])
               ) > 0.0167
+              and on (tenant)
+              tenant_metadata_info
             for: 15m
             labels:
               severity: warning

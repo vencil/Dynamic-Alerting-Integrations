@@ -97,6 +97,27 @@ tenant-api 內建一個**被動偵測器**：週期性掃描，若發現 federat
 
 > 為什麼不做「自動撤銷的 reconciler」：自動依「租戶不在 conf.d」推論去撤銷，在 conf.d 暫態異常（GitOps sync 中、設定壞檔）時會誤殺活租戶的憑證。低風險問題不值得用一個有誤殺風險的常駐自動化去解 —— 偵測（warn）給了安全網卻零誤殺風險。詳 [#521](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/521) 的決策討論。
 
+## 已退租租戶持續打 gateway —— 告警與殘留流量
+
+退租後，**租戶端的 Grafana data source / CronJob 不知道自己被退租**，會繼續每 ~30s 帶舊 token 打 gateway。兩個階段：
+
+| 階段 | 時間 | gateway 回應 | 計入 `tenant_federation_requests_total`？ |
+|---|---|---|---|
+| 撤銷後、token 未到期 | 撤銷後 ≤ 4h（至 token 原 TTL 到期）| `403` —— 撤銷 token 仍是合法 JWT，claim 已注入 | **計入** `{status="auth_failed"}` |
+| token 到期後 | > 4h | `401` —— `jwt_authn` 在 claim 注入前就擋下 | **不計入** —— access log 無 `tenant_id`（ADR-020 §Audit log「Metric 邊界」）|
+
+### `FederationRejectionRateAnomaly` 不會對已退租租戶誤報
+
+`FederationRejectionRateAnomaly`（`k8s/03-monitoring/configmap-rules-platform.yaml`）自 [#550](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/550) 起在規則尾端 join `and on (tenant) tenant_metadata_info` —— 只評估**仍在 conf.d** 的租戶。完成步驟 3（`git rm conf.d/<tenant>.yaml`）後，threshold-exporter 重載、該租戶的 `tenant_metadata_info` 序列消失，告警的 join 隨之把它排除：殭屍 token 在上表階段一造成的 100% `auth_failed` **不會**再讓平台 ops 被一個已不存在的租戶 call 醒。
+
+> 若你**仍**看到此告警對某已退租租戶觸發 —— 代表步驟 3 沒做完（`conf.d/<tenant>.yaml` 還在 repo），threshold-exporter 仍在發該租戶的 `tenant_metadata_info`。回到 §步驟 補完。
+
+### 殘留流量本身（選用清理）
+
+即使告警已不誤報，已退租租戶那條注定失敗的輪詢仍是**無謂的 gateway 負載**（階段一還會在 audit log 留 403 噪音）。真正的修法在對方手上 —— **通知已退租客戶關掉他們的 Grafana data source / CronJob**。
+
+對方不配合、殘留流量造成困擾時，可在 ingress / WAF 層（或 gateway per-IP）block 對方來源 IP。這是**選用**清理、非必要步驟：gateway 的 per-IP 限流本就壓得住洪流，階段二的 `401` 也很便宜（`jwt_authn` 直接擋、不進 audit log、不進 metric）。
+
 ## 反面 —— 不要這樣做
 
 - **不要**用 `git push --force` 或繞過 PR review 來「快速」offboard —— offboarding 是低頻操作，沒有快的需求，走正常 PR。
