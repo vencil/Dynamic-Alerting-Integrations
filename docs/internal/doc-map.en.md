@@ -61,6 +61,7 @@ lang: en
 | `docs/integration/operator-prometheus-integration.md` (.en.md) | Platform Engineers | Operator Prometheus Integration Guide |
 | `docs/integration/operator-shadow-monitoring.md` (.en.md) | Platform Engineers | Operator Shadow Monitoring Strategy |
 | `docs/integration/prometheus-operator-integration.md` (.en.md) | Platform Engineers | Prometheus Operator Integration Guide (Hub) |
+| `docs/integration/tenant-federation.md` | Platform Engineers, SREs | Tenant Federation Integration Guide |
 | `docs/integration/troubleshooting-checklist.md` (.en.md) | SREs, on-call, Platform Engineers, migration-engineers | Troubleshooting Checklist |
 | `docs/integration/victoriametrics-integration.md` (.en.md) | Platform Engineers, SREs, vm-operators | VictoriaMetrics Integration Guide |
 | `docs/interactive-tools.md` (.en.md) | All | Interactive Tools |

@@ -125,7 +125,7 @@ conf.d/ 樹（GitOps merge）
 | 項目 | 現況 | 路線圖 |
 |---|---|---|
 | **MetricsQL → PromQL 自動轉換工具** | 不存在 | 目前只做 dialect detection + portability 標識；轉換需手動。若客戶要求 v2.9 backlog 評估 |
-| **vmauth-based tenant federation** | 設計階段 | 見 [issue #380](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/380)（v2.9 epic）— ADR 採 vmauth + label-enforced rewriting + 4h TTL token |
+| **Tenant federation（拉自己的 metrics 回租戶側）** | ✅ 已交付（v2.9.0）| 見 [`tenant-federation.md`](tenant-federation.md) / [ADR-020](../adr/020-tenant-federation.md)。採 **prom-label-proxy** label-injection + 4h TTL RS256 token（非 vmauth —— vmauth 是 auth router、不注入 label，理由見 ADR §為什麼不用其他方案）；VM 單機走 prom-label-proxy，VM cluster 由 gateway URL-rewrite 到 `/select/<accountID>/` 路徑 |
 | **vmalert-specific shadow monitoring** | 用 [`shadow-monitoring-sop.md`](../shadow-monitoring-sop.md) 的 `migration_status: shadow` label 機制即可 | vmalert 對 `migration_status` matcher 同樣支援 → 無 vm-specific 文件需求 |
 | **VM-optimized rule pack variants** | 不存在 | 我們 Rule Pack 純 PromQL；理論上若需 metricsql performance optimization（如 `histogram_quantile_bucket`）可開新 pack；目前無此 customer signal |
 
