@@ -21,6 +21,16 @@
 #                      done here rather than by a Layer 3 proxy).
 mode: prom-label-proxy
 
+# Emergency global kill switch (#551). false in steady state. Set true
+# — via a GitOps commit — to make the gateway direct_respond 503 to
+# EVERY request: no traffic reaches the Layer 3 proxy or the storage
+# backend. Use it in a federation incident (a prom-label-proxy 0-day, a
+# storage meltdown) to shed all federation load at once, instead of
+# revoking tenants' tokens one by one. Takes effect after the GitOps
+# sync + pod reload (~3 min); for an instant cut see the chart README
+# ("Emergency global block").
+emergencyGlobalBlock: false
+
 replicaCount: 2
 
 image:

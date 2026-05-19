@@ -92,6 +92,24 @@ blast-radius cap is Layer 1 — the storage backend's `--query.max-samples` /
 `-search.maxUniqueTimeseries` (ADR-020 §Blast radius). Keep the per-token
 default low (15 r/m; corridor 15–60) for multi-replica headroom.
 
+## Emergency global block
+
+A federation-wide kill switch for an incident — a `prom-label-proxy`
+0-day, a storage-backend meltdown — when shedding *all* federation load
+at once beats revoking tenants' tokens one by one.
+
+Set `emergencyGlobalBlock: true` (a GitOps commit). Every request then
+gets a `direct_response` **503** at the gateway — nothing reaches the
+Layer 3 proxy or the storage backend. The `tcpSocket` probes still pass
+(the listener keeps accepting), so the pods are not killed and the
+switch flips back cleanly once the incident is over.
+
+It takes effect after the GitOps sync + pod reload — **~3 min**. If you
+cannot wait, `kubectl scale deploy/<release>-federation-gateway
+--replicas=0` cuts traffic instantly, but it drops in-flight requests
+and is not recorded in Git — prefer the value flip, and reconcile the
+replica count afterwards.
+
 ## Audit log & metrics (ADR-020 IV-2f)
 
 Envoy writes one JSON line per federation request to **two sinks** of
@@ -149,6 +167,7 @@ exposed, 1 = one ingress, …).
 | Key | Default | Notes |
 |---|---|---|
 | `mode` | `prom-label-proxy` | `prom-label-proxy` \| `vm-cluster` |
+| `emergencyGlobalBlock` | `false` | Incident kill switch — `true` ⇒ a `direct_response` 503 to every request (see "Emergency global block") |
 | `jwt.jwks` | `""` | **Required.** Public JWKS of tenant-api's RS256 key. Empty ⇒ keyless JWKS ⇒ Envoy refuses to start (fail-loud CrashLoopBackOff). Produced by IV-2l (#518) |
 | `jwt.issuer` / `jwt.audience` | `tenant-api` / `tenant-federation` | Must match what tenant-api signs |
 | `jwt.clockSkewSeconds` | `60` | Leeway for signer/verifier clock drift |
