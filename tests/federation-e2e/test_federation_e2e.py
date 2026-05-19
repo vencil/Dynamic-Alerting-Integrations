@@ -3,10 +3,11 @@
 Each test walks a real request through the gateway -> proxy -> storage
 chain. See README for the design and the fidelity boundary.
 
-Tenant assignment is deliberate: the data scenarios (S1/S2/S7/S8) share
-the `db-a` bucket and stay far under the rendered 30/min per-tenant rate
-limit; the rate-limit / payload / revocation scenarios use their own
-throwaway tenants so they cannot deplete each other's bucket.
+Tenant assignment is deliberate: the data scenarios (S1/S2/S7/S8/S9)
+share the `db-a` bucket and stay far under the rendered 30/min
+per-tenant rate limit; the rate-limit / payload / revocation scenarios
+use their own throwaway tenants so they cannot deplete each other's
+bucket.
 """
 from helpers import (RENDERED, assert_eventually, expect_positive,
                      expect_status, fresh_rsa_pem, gateway_request,
@@ -25,9 +26,10 @@ def test_s1_happy_path(gateway_url, signer):
 
 
 def test_s2_cross_tenant_isolation(gateway_url, signer):
-    """S2 — a db-a token cannot reach db-b data by any route: an explicit
-    {tenant="db-b"} selector, a bare selector, or the metadata APIs.
-    (Folds in #512's metadata-leak coverage.)"""
+    """S2 — a db-a token cannot reach db-b data on the query path: an
+    explicit {tenant="db-b"} selector is rewritten back to db-a, and a
+    bare selector returns only db-a series. Metadata-API isolation and
+    the full HTTP-API surface audit are S9."""
     _, token = signer("db-a")
 
     # An explicit cross-tenant selector is forced back to db-a by the
@@ -40,19 +42,6 @@ def test_s2_cross_tenant_isolation(gateway_url, signer):
     resp2 = query(gateway_url, token, "http_requests_total")
     assert resp2.status_code == 200, resp2.text
     assert tenants_in(resp2) == {"db-a"}
-
-    # Metadata API /series must not leak db-b topology.
-    series = gateway_request(gateway_url, "/api/v1/series", token=token,
-                             params={"match[]": "http_requests_total"})
-    assert series.status_code == 200, series.text
-    for metric in series.json()["data"]:
-        assert metric.get("tenant") == "db-a", metric
-
-    # Metadata API /label/tenant/values must show only db-a.
-    values = gateway_request(gateway_url, "/api/v1/label/tenant/values",
-                             token=token)
-    assert values.status_code == 200, values.text
-    assert set(values.json()["data"]) <= {"db-a"}, values.json()
 
 
 def test_s3_jwt_enforcement(gateway_url, signer):
@@ -185,3 +174,79 @@ def test_s8_remote_read_blocked(gateway_url, signer):
         resp = gateway_request(gateway_url, path, token=token,
                                method="POST", data=b"")
         assert resp.status_code == 403, (path, resp.status_code)
+
+
+def test_s9_metadata_api_surface(gateway_url, signer):
+    """S9 — full Prom HTTP API surface audit (IV-2g, #512). Two
+    guarantees: (a) every endpoint prom-label-proxy serves — query,
+    metadata, rules/alerts — is tenant-scoped, so a db-a token sees
+    zero db-b topology; (b) every
+    endpoint it does NOT scope (platform internals, admin, scrape
+    topology, the remote_write ingest path) is unreachable — never a
+    200 — so nothing leaks, and nothing can be written, by passthrough.
+    See README §Metadata API surface audit for the table."""
+    _, token = signer("db-a")
+
+    # (a) Metadata endpoints are tenant-scoped.
+    # /series over EVERY series — each row carries only the db-a tenant.
+    series = gateway_request(gateway_url, "/api/v1/series", token=token,
+                             params={"match[]": '{__name__=~".+"}'})
+    assert series.status_code == 200, series.text
+    rows = series.json()["data"]
+    assert rows, "expected db-a series"
+    leaked = [s for s in rows if s.get("tenant") != "db-a"]
+    assert not leaked, f"cross-tenant series leaked via /series: {leaked}"
+
+    # A multi-valued match[] is a union of selectors — prom-label-proxy
+    # must rewrite EVERY element, not just the first. A second matcher
+    # that explicitly asks for {tenant="db-b"} must still come back
+    # scoped to db-a (the proxy overrides the tenant matcher).
+    multi = gateway_request(
+        gateway_url, "/api/v1/series", token=token,
+        params=[("match[]", "process_open_fds"),
+                ("match[]", '{tenant="db-b"}')])
+    assert multi.status_code == 200, multi.text
+    multi_leak = [s for s in multi.json()["data"]
+                  if s.get("tenant") != "db-a"]
+    assert not multi_leak, f"multi match[] bypass leaked db-b: {multi_leak}"
+
+    # /label/tenant/values is the definitive cross-tenant signal — the
+    # db-a token must see its own tenant value and no other.
+    values = gateway_request(gateway_url, "/api/v1/label/tenant/values",
+                             token=token)
+    assert values.status_code == 200, values.text
+    assert values.json()["data"] == ["db-a"], values.json()
+
+    # /labels is served and scoped (label *names* are tenant-agnostic;
+    # the leak surface is label values, asserted above).
+    labels = gateway_request(gateway_url, "/api/v1/labels", token=token)
+    assert labels.status_code == 200, labels.text
+
+    # /rules and /alerts are served and tenant-filtered by the proxy —
+    # they must stay served (200), not regress to a 404 or, worse, a
+    # passthrough that would expose the platform's own rule PromQL.
+    # (The E2E loads no rule files, so this asserts the proxy keeps
+    # them on its allowlist; the filtering depth is the proxy's own
+    # documented behaviour.)
+    for path in ("/api/v1/rules", "/api/v1/alerts"):
+        resp = gateway_request(gateway_url, path, token=token)
+        assert resp.status_code == 200, (path, resp.status_code, resp.text)
+
+    # (b) Un-scopable endpoints are unreachable. prom-label-proxy
+    # registers handlers only for the APIs it can tenant-scope and 404s
+    # everything else — it never passes an unknown path through. This
+    # asserts that allowlist holds, so a future passthrough handler
+    # (a platform-topology or admin leak) is caught as a regression.
+    for path, method in (
+        ("/api/v1/targets", "GET"),                    # scrape topology
+        ("/api/v1/metadata", "GET"),                   # metric-name catalogue
+        ("/api/v1/status/config", "GET"),              # platform prometheus.yml
+        ("/api/v1/status/tsdb", "GET"),                # TSDB cardinality stats
+        ("/api/v1/admin/tsdb/delete_series", "POST"),  # destructive admin
+        ("/api/v1/write", "POST"),                     # remote_write ingest
+    ):
+        resp = gateway_request(gateway_url, path, token=token, method=method,
+                               data=b"" if method == "POST" else None)
+        assert resp.status_code != 200, \
+            f"{path} reachable (HTTP {resp.status_code}) — topology/admin leak"
+        assert resp.status_code in (403, 404), (path, resp.status_code)
