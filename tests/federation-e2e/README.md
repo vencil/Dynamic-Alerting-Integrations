@@ -60,13 +60,44 @@ drives the stack through the gateway's published port.
 | # | Scenario | Asserts |
 |---|----------|---------|
 | S1 | Happy path | signed token → gateway verify → proxy injects `{tenant="db-a"}` → 200, only db-a series |
-| S2 | Cross-tenant isolation | db-a token + a `{tenant="db-b"}` selector / metadata APIs → zero db-b leak (subsumes #512) |
+| S2 | Cross-tenant isolation | db-a token + an explicit `{tenant="db-b"}` selector / bare selector → query path returns only db-a series |
 | S3 | JWT enforcement | missing / forged-signature / wrong-`iss` / expired token → 401 |
 | S4 | Revocation propagation | revoke a token → after the Lua reload interval → 403 |
 | S5 | Sybil / rate limit | N tokens hammering the per-tenant limiter → 429 |
 | S6 | Oversized payload | a 1.5 MiB request body → Envoy buffer filter → 413 |
 | S7 | Storage cap | a deliberately heavy query trips `--query.max-samples` → 422, audit log records it |
 | S8 | remote_read blocked | `/api/v1/read` and a trailing-slash variant → 403 |
+| S9 | Metadata API surface audit | every metadata endpoint tenant-scoped (db-a token, zero db-b topology); un-scopable endpoints (`/targets`, `/status/*`, `/admin/*`, `/metadata`) unreachable — never 200 (IV-2g #512) |
+
+## Metadata API surface audit (IV-2g)
+
+S9 exercises the **full** Prometheus HTTP API surface — not just the
+query APIs — so a cross-tenant *metadata* leak (Grafana variable
+dropdowns, scrape topology, platform internals) cannot slip through.
+The audit result: prom-label-proxy registers handlers only for the
+APIs it can tenant-scope, and returns **404** for every other path —
+it never passes an unknown endpoint through unscoped.
+
+| Endpoint(s) | Behaviour | Verdict |
+|---|---|---|
+| `/api/v1/query`, `/query_range`, `/query_exemplars` | proxy injects `{tenant="<X>"}` | ✅ tenant-scoped |
+| `/api/v1/series`, `/labels`, `/label/<name>/values` | proxy injects `{tenant="<X>"}` | ✅ tenant-scoped |
+| `/api/v1/rules`, `/api/v1/alerts` | proxy filters by tenant | ✅ tenant-scoped |
+| `/federate` | proxy injects `{tenant="<X>"}` | ✅ tenant-scoped |
+| `/api/v1/read` (remote_read) | gateway `direct_response` 403 | ✅ blocked — Snappy body is not label-scopable (S8) |
+| `/api/v1/metadata`, `/targets`, `/targets/metadata` | no proxy handler → 404 | ✅ unreachable |
+| `/api/v1/status/*` (config / flags / tsdb / runtimeinfo / …) | no proxy handler → 404 | ✅ unreachable |
+| `/api/v1/admin/tsdb/*` (delete_series / clean_tombstones) | no proxy handler → 404 | ✅ unreachable |
+| `/api/v1/alertmanagers`, `/format_query`, `/notifications` | no proxy handler → 404 | ✅ unreachable |
+| VM `/api/v1/status/active_queries` | no proxy handler → 404 | ✅ unreachable |
+| `/metrics`, `/-/healthy` | no proxy handler → 404 | ✅ unreachable |
+
+No endpoint leaks cross-tenant data or platform topology. The only
+endpoint the gateway must block explicitly is `/api/v1/read` (S8) —
+prom-label-proxy *would* proxy it but cannot inject a label into the
+Snappy-framed protobuf body. S9 asserts a representative slice of the
+"unreachable" rows, so a future prom-label-proxy version that adds an
+unsafe passthrough handler is caught as a regression.
 
 ## Run
 
