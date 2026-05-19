@@ -241,6 +241,7 @@ nav:
     - BYO Alertmanager: integration/byo-alertmanager-integration.md
     - VictoriaMetrics 整合: integration/victoriametrics-integration.md
     - Federation: integration/federation-integration.md
+    - Tenant Federation: integration/tenant-federation.md
     - GitOps 部署: integration/gitops-deployment.md
   - 遷移:
     - 遷移指南: migration-guide.md

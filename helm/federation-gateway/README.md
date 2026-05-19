@@ -10,6 +10,9 @@ Built on **Envoy** (`envoyproxy/envoy:distroless-v1.38.0`).
 Source issue: [#507](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/507) (IV-2b) ·
 Design: [ADR-020](../../docs/adr/020-tenant-federation.md) §Blast radius Layer 2.
 
+Tenant-side usage — how a tenant gets a token and points its Prometheus /
+Grafana at this gateway — is [`docs/integration/tenant-federation.md`](../../docs/integration/tenant-federation.md).
+
 ## Request pipeline
 
 Per request, **cheap checks before expensive ones** (Envoy HTTP filter chain):

@@ -28,6 +28,8 @@ lang: zh
 
 不適用的場景：單叢集部署（直接參考主 README）。
 
+> **方向別搞混**：本文件是**平台內部**跨叢集 federation（邊緣 → 中央，inbound）。若你要的是「**租戶把自己的 metrics 拉出平台邊界**」（cross-boundary、outbound、ADR-020），那是另一篇 —— 見 [`tenant-federation.md`](tenant-federation.md)。
+
 ### 1.2 架構選擇：中央評估 vs 邊緣評估
 
 | 面向 | 中央評估 | 邊緣評估 |
