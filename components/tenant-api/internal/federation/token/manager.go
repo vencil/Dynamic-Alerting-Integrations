@@ -18,7 +18,7 @@
 //     set that the API gateway consults (sub-issue IV-2b). A revoked
 //     token is rejected within the ConfigMap projected-volume sync
 //     window (~1-2 min).
-package federation
+package token
 
 import (
 	"crypto/rand"

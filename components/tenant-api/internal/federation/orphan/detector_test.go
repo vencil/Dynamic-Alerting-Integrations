@@ -1,4 +1,4 @@
-package federation
+package orphan
 
 import (
 	"os"
@@ -6,11 +6,13 @@ import (
 	"reflect"
 	"sort"
 	"testing"
+
+	"github.com/vencil/tenant-api/internal/federation/token"
 )
 
 func TestScanOrphans(t *testing.T) {
 	known := map[string]struct{}{"db-a": {}, "db-b": {}}
-	records := []Record{
+	records := []token.Record{
 		{TokenID: "ftk_live_a", TenantID: "db-a"},
 		{TokenID: "ftk_zombie", TenantID: "db-gone"},
 		{TokenID: "ftk_live_b", TenantID: "db-b"},
@@ -30,7 +32,7 @@ func TestScanOrphans(t *testing.T) {
 func TestScanOrphans_AllKnown(t *testing.T) {
 	known := map[string]struct{}{"db-a": {}}
 	rep := scanOrphans(known,
-		[]Record{{TokenID: "t1", TenantID: "db-a"}},
+		[]token.Record{{TokenID: "t1", TenantID: "db-a"}},
 		[]string{"db-a"})
 	if !rep.empty() {
 		t.Errorf("expected no orphans, got %+v", rep)
@@ -49,7 +51,7 @@ func TestScanOrphans_Empty(t *testing.T) {
 // observes and never revokes, so there is no misfire to guard against.
 func TestScanOrphans_AllOrphaned(t *testing.T) {
 	rep := scanOrphans(map[string]struct{}{},
-		[]Record{{TokenID: "t1", TenantID: "db-a"}, {TokenID: "t2", TenantID: "db-b"}},
+		[]token.Record{{TokenID: "t1", TenantID: "db-a"}, {TokenID: "t2", TenantID: "db-b"}},
 		[]string{"db-a"})
 	if len(rep.Tokens) != 2 || len(rep.Subsets) != 1 {
 		t.Errorf("expected 2 tokens + 1 subset orphaned, got %+v", rep)

@@ -17,7 +17,7 @@ func Health(w http.ResponseWriter, r *http.Request) {
 // stat-able (e.g. ConfigMap mount failed, PV detached). Returns 200
 // only when the directory is readable, so K8s drains traffic away
 // from a pod whose tenant data the app cannot serve.
-func (d *Deps) Ready() http.HandlerFunc {
+func Ready(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 

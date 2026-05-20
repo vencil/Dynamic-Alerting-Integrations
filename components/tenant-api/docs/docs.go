@@ -31,7 +31,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/github_com_vencil_tenant-api_internal_federation.FederationPolicyConfig"
+                            "$ref": "#/definitions/github_com_vencil_tenant-api_internal_federation_fedpolicy.Config"
                         }
                     }
                 }
@@ -959,7 +959,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/github_com_vencil_tenant-api_internal_federation.FederationSubset"
+                            "$ref": "#/definitions/github_com_vencil_tenant-api_internal_federation_fedpolicy.Subset"
                         }
                     },
                     "400": {
@@ -998,7 +998,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/github_com_vencil_tenant-api_internal_federation.FederationSubset"
+                            "$ref": "#/definitions/github_com_vencil_tenant-api_internal_federation_fedpolicy.Subset"
                         }
                     }
                 ],
@@ -1344,18 +1344,18 @@ const docTemplate = `{
                 }
             }
         },
-        "github_com_vencil_tenant-api_internal_federation.FederationPolicyConfig": {
+        "github_com_vencil_tenant-api_internal_federation_fedpolicy.Config": {
             "type": "object",
             "properties": {
                 "whitelist": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/github_com_vencil_tenant-api_internal_federation.WhitelistEntry"
+                        "$ref": "#/definitions/github_com_vencil_tenant-api_internal_federation_fedpolicy.WhitelistEntry"
                     }
                 }
             }
         },
-        "github_com_vencil_tenant-api_internal_federation.FederationSubset": {
+        "github_com_vencil_tenant-api_internal_federation_fedpolicy.Subset": {
             "type": "object",
             "properties": {
                 "metrics": {
@@ -1366,7 +1366,7 @@ const docTemplate = `{
                 }
             }
         },
-        "github_com_vencil_tenant-api_internal_federation.WhitelistEntry": {
+        "github_com_vencil_tenant-api_internal_federation_fedpolicy.WhitelistEntry": {
             "type": "object",
             "properties": {
                 "metric": {
@@ -1701,7 +1701,7 @@ const docTemplate = `{
                 "whitelist": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/github_com_vencil_tenant-api_internal_federation.WhitelistEntry"
+                        "$ref": "#/definitions/github_com_vencil_tenant-api_internal_federation_fedpolicy.WhitelistEntry"
                     }
                 }
             }

@@ -32,7 +32,7 @@ type MeResponse struct {
 // @Success     200 {object} MeResponse
 // @Failure     401 {object} map[string]string
 // @Router      /api/v1/me [get]
-func (d *Deps) Me() http.HandlerFunc {
+func Me(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		email := rbac.RequestEmail(r)
 		if email == "" {

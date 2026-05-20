@@ -46,21 +46,21 @@ definitions:
         format: float64
         type: number
     type: object
-  github_com_vencil_tenant-api_internal_federation.FederationPolicyConfig:
+  github_com_vencil_tenant-api_internal_federation_fedpolicy.Config:
     properties:
       whitelist:
         items:
-          $ref: '#/definitions/github_com_vencil_tenant-api_internal_federation.WhitelistEntry'
+          $ref: '#/definitions/github_com_vencil_tenant-api_internal_federation_fedpolicy.WhitelistEntry'
         type: array
     type: object
-  github_com_vencil_tenant-api_internal_federation.FederationSubset:
+  github_com_vencil_tenant-api_internal_federation_fedpolicy.Subset:
     properties:
       metrics:
         items:
           type: string
         type: array
     type: object
-  github_com_vencil_tenant-api_internal_federation.WhitelistEntry:
+  github_com_vencil_tenant-api_internal_federation_fedpolicy.WhitelistEntry:
     properties:
       metric:
         type: string
@@ -287,7 +287,7 @@ definitions:
         type: string
       whitelist:
         items:
-          $ref: '#/definitions/github_com_vencil_tenant-api_internal_federation.WhitelistEntry'
+          $ref: '#/definitions/github_com_vencil_tenant-api_internal_federation_fedpolicy.WhitelistEntry'
         type: array
     type: object
   internal_handler.PutGroupRequest:
@@ -434,7 +434,7 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/github_com_vencil_tenant-api_internal_federation.FederationPolicyConfig'
+            $ref: '#/definitions/github_com_vencil_tenant-api_internal_federation_fedpolicy.Config'
       summary: Get the platform federation whitelist
       tags:
       - federation
@@ -1027,7 +1027,7 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/github_com_vencil_tenant-api_internal_federation.FederationSubset'
+            $ref: '#/definitions/github_com_vencil_tenant-api_internal_federation_fedpolicy.Subset'
         "400":
           description: Bad Request
           schema:
@@ -1051,7 +1051,7 @@ paths:
         name: body
         required: true
         schema:
-          $ref: '#/definitions/github_com_vencil_tenant-api_internal_federation.FederationSubset'
+          $ref: '#/definitions/github_com_vencil_tenant-api_internal_federation_fedpolicy.Subset'
       produces:
       - application/json
       responses:

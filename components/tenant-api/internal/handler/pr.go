@@ -41,7 +41,7 @@ type PRListResponse struct {
 // @Param       tenant query  string false "Filter by tenant ID"
 // @Success     200   {object} PRListResponse
 // @Router      /api/v1/prs [get]
-func (d *Deps) ListPRs() http.HandlerFunc {
+func ListPRs(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		idpGroups := rbac.RequestGroups(r)
 		tenantFilter := r.URL.Query().Get("tenant")

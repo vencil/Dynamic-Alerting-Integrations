@@ -52,7 +52,7 @@ type GroupBatchResponse struct {
 // @Failure     400   {object} map[string]string
 // @Failure     404   {object} map[string]string
 // @Router      /api/v1/groups/{id}/batch [post]
-func (d *Deps) GroupBatch() http.HandlerFunc {
+func GroupBatch(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		groupID := chi.URLParam(r, "id")
 		if err := groups.ValidateGroupID(groupID); err != nil {

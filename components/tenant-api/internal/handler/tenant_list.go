@@ -41,7 +41,7 @@ type TenantSummary struct {
 // @Success     200 {array}  TenantSummary
 // @Failure     500 {object} map[string]string
 // @Router      /api/v1/tenants [get]
-func (d *Deps) ListTenants() http.HandlerFunc {
+func ListTenants(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		idpGroups := rbac.RequestGroups(r)
 

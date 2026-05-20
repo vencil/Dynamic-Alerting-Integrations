@@ -132,7 +132,7 @@ type SearchResponse struct {
 // Response: SearchResponse (see above) on 200, structured JSON error
 // otherwise. RBAC filtering is applied identically to ListTenants —
 // callers without metadata access see fewer rows.
-func (d *Deps) SearchTenants() http.HandlerFunc {
+func SearchTenants(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		idpGroups := rbac.RequestGroups(r)
 

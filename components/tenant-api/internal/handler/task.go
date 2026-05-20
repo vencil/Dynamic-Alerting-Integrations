@@ -27,7 +27,7 @@ import (
 //   - all accessible → return Task as-is
 //   - empty original (Task with no Results yet — still running) →
 //     return Task as-is (no tenants disclosed yet)
-func (d *Deps) GetTask() http.HandlerFunc {
+func GetTask(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		taskID := chi.URLParam(r, "id")
 

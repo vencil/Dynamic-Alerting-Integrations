@@ -44,7 +44,7 @@ import (
 // @Failure     404  {object} map[string]string
 // @Failure     500  {object} map[string]string
 // @Router      /api/v1/tenants/{id}/effective [get]
-func (d *Deps) GetTenantEffective() http.HandlerFunc {
+func GetTenantEffective(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		tenantID := chi.URLParam(r, "id")
 		if err := ValidateTenantID(tenantID); err != nil {

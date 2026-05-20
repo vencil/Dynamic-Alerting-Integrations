@@ -33,7 +33,7 @@ type GroupResponse struct {
 // @Produce     json
 // @Success     200 {array}  GroupResponse
 // @Router      /api/v1/groups [get]
-func (d *Deps) ListGroups() http.HandlerFunc {
+func ListGroups(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		idpGroups := rbac.RequestGroups(r)
 		rbacCfg := d.RBAC.Get()
@@ -92,7 +92,7 @@ func tenantIDFromString(s string) string { return s }
 // @Failure     400  {object} map[string]string
 // @Failure     404  {object} map[string]string
 // @Router      /api/v1/groups/{id} [get]
-func (d *Deps) GetGroup() http.HandlerFunc {
+func GetGroup(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		groupID := chi.URLParam(r, "id")
 		if err := groups.ValidateGroupID(groupID); err != nil {
@@ -154,7 +154,7 @@ type PutGroupRequest struct {
 // @Failure     403  {object} map[string]string
 // @Failure     409  {object} map[string]string
 // @Router      /api/v1/groups/{id} [put]
-func (d *Deps) PutGroup() http.HandlerFunc {
+func PutGroup(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		groupID := chi.URLParam(r, "id")
 		if err := groups.ValidateGroupID(groupID); err != nil {
@@ -254,7 +254,7 @@ func (d *Deps) PutGroup() http.HandlerFunc {
 // @Failure     404 {object} map[string]string
 // @Failure     409 {object} map[string]string
 // @Router      /api/v1/groups/{id} [delete]
-func (d *Deps) DeleteGroup() http.HandlerFunc {
+func DeleteGroup(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		groupID := chi.URLParam(r, "id")
 		if err := groups.ValidateGroupID(groupID); err != nil {

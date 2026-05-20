@@ -1,4 +1,4 @@
-package federation
+package fedpolicy
 
 // Federation policy — the 2-tier metric allowlist (ADR-020 IV-2e).
 //
@@ -48,16 +48,16 @@ type WhitelistEntry struct {
 	Metric string `yaml:"metric" json:"metric"`
 }
 
-// FederationPolicyConfig is the parsed _federation_policy.yaml: the
+// Config is the parsed _federation_policy.yaml: the
 // platform-wide federation whitelist.
-type FederationPolicyConfig struct {
+type Config struct {
 	Whitelist []WhitelistEntry `yaml:"whitelist" json:"whitelist"`
 }
 
-// FederationSubset is the parsed conf.d/_federation/<tenant>.yaml: the
+// Subset is the parsed conf.d/_federation/<tenant>.yaml: the
 // metric subset one tenant selected for federation. Every metric must
 // be present in the platform whitelist (the 2-tier containment rule).
-type FederationSubset struct {
+type Subset struct {
 	Metrics []string `yaml:"metrics" json:"metrics"`
 }
 
@@ -73,38 +73,38 @@ type PolicyViolation struct {
 // legitimate federation targets.
 var metricNameRE = regexp.MustCompile(`^[a-zA-Z_:][a-zA-Z0-9_:]*$`)
 
-// PolicyManager holds the hot-reloadable platform whitelist. The
+// Manager holds the hot-reloadable platform whitelist. The
 // reload machinery lives in the embedded configwatcher.Watcher; this
 // type only adds the whitelist-specific lookup.
-type PolicyManager struct {
-	*configwatcher.Watcher[FederationPolicyConfig]
+type Manager struct {
+	*configwatcher.Watcher[Config]
 }
 
-// NewPolicyManager creates a PolicyManager reading _federation_policy.yaml
+// NewManager creates a Manager reading _federation_policy.yaml
 // from configDir. A missing file is not an error — configwatcher stores
 // an empty whitelist, and an empty whitelist simply means no metric is
 // federatable yet.
-func NewPolicyManager(configDir string) *PolicyManager {
+func NewManager(configDir string) *Manager {
 	path := filepath.Join(configDir, "_federation_policy.yaml")
 	w, err := configwatcher.New(path, "federation-policy", parsePolicyConfig, emptyPolicyConfig)
 	if err != nil {
 		slog.Warn("federation policy: initial load failed", "error", err)
 	}
-	return &PolicyManager{Watcher: w}
+	return &Manager{Watcher: w}
 }
 
-// NewPolicyManagerForTest returns a PolicyManager pre-populated with cfg
+// NewManagerForTest returns a Manager pre-populated with cfg
 // and no file path. WatchLoop / Reload become no-ops. For unit tests.
-func NewPolicyManagerForTest(cfg *FederationPolicyConfig) *PolicyManager {
-	return &PolicyManager{Watcher: configwatcher.NewForTest("federation-policy", cfg)}
+func NewManagerForTest(cfg *Config) *Manager {
+	return &Manager{Watcher: configwatcher.NewForTest("federation-policy", cfg)}
 }
 
-func emptyPolicyConfig() *FederationPolicyConfig {
-	return &FederationPolicyConfig{Whitelist: []WhitelistEntry{}}
+func emptyPolicyConfig() *Config {
+	return &Config{Whitelist: []WhitelistEntry{}}
 }
 
-func parsePolicyConfig(data []byte) (*FederationPolicyConfig, error) {
-	var cfg FederationPolicyConfig
+func parsePolicyConfig(data []byte) (*Config, error) {
+	var cfg Config
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, err
 	}
@@ -116,7 +116,7 @@ func parsePolicyConfig(data []byte) (*FederationPolicyConfig, error) {
 
 // IsWhitelisted reports whether metric is in the current platform
 // whitelist snapshot.
-func (m *PolicyManager) IsWhitelisted(metric string) bool {
+func (m *Manager) IsWhitelisted(metric string) bool {
 	for _, e := range m.Get().Whitelist {
 		if e.Metric == metric {
 			return true
@@ -127,8 +127,8 @@ func (m *PolicyManager) IsWhitelisted(metric string) bool {
 
 // ParseSubset decodes a per-tenant subset file. An empty document
 // yields an empty (non-nil) subset.
-func ParseSubset(data []byte) (*FederationSubset, error) {
-	var s FederationSubset
+func ParseSubset(data []byte) (*Subset, error) {
+	var s Subset
 	if err := yaml.Unmarshal(data, &s); err != nil {
 		return nil, err
 	}
@@ -142,7 +142,7 @@ func ParseSubset(data []byte) (*FederationSubset, error) {
 // must carry a non-empty, syntactically valid metric name, and no
 // metric may appear twice. Returns an empty slice when the whitelist
 // is well-formed.
-func ValidateWhitelist(cfg *FederationPolicyConfig) []PolicyViolation {
+func ValidateWhitelist(cfg *Config) []PolicyViolation {
 	var v []PolicyViolation
 	seen := make(map[string]bool, len(cfg.Whitelist))
 	for i, e := range cfg.Whitelist {
@@ -176,12 +176,12 @@ func ValidateWhitelist(cfg *FederationPolicyConfig) []PolicyViolation {
 // boundary (see ADR-020 §MVP 範圍 — cross-tenant isolation is enforced
 // solely by the proxy's `tenant` label injection), so an over-broad
 // stored subset is a consistency wart, not a breach.
-func EffectiveSubset(subset *FederationSubset, whitelist *FederationPolicyConfig) *FederationSubset {
+func EffectiveSubset(subset *Subset, whitelist *Config) *Subset {
 	allowed := make(map[string]bool, len(whitelist.Whitelist))
 	for _, e := range whitelist.Whitelist {
 		allowed[e.Metric] = true
 	}
-	out := &FederationSubset{Metrics: []string{}}
+	out := &Subset{Metrics: []string{}}
 	for _, m := range subset.Metrics {
 		if allowed[m] {
 			out.Metrics = append(out.Metrics, m)
@@ -195,7 +195,7 @@ func EffectiveSubset(subset *FederationSubset, whitelist *FederationPolicyConfig
 // the subset, and present in the whitelist — the 2-tier containment
 // rule: a tenant subset can never exceed the platform whitelist.
 // Returns an empty slice when the subset is valid.
-func ValidateSubset(subset *FederationSubset, whitelist *FederationPolicyConfig) []PolicyViolation {
+func ValidateSubset(subset *Subset, whitelist *Config) []PolicyViolation {
 	allowed := make(map[string]bool, len(whitelist.Whitelist))
 	for _, e := range whitelist.Whitelist {
 		allowed[e.Metric] = true

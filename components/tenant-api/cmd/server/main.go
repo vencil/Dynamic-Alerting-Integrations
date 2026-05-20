@@ -29,7 +29,9 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/vencil/tenant-api/internal/async"
-	"github.com/vencil/tenant-api/internal/federation"
+	"github.com/vencil/tenant-api/internal/federation/fedpolicy"
+	"github.com/vencil/tenant-api/internal/federation/orphan"
+	"github.com/vencil/tenant-api/internal/federation/token"
 	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/groups"
 	"github.com/vencil/tenant-api/internal/handler"
@@ -140,7 +142,7 @@ func main() {
 	federationNamespace := flag.String("federation-namespace", envOrDefault("TA_FEDERATION_NAMESPACE", ""),
 		"Namespace of the federation store ConfigMap. Empty uses the pod's own namespace.")
 	federationTTL := flag.Duration("federation-token-ttl",
-		parseDurationOrDefault(os.Getenv("TA_FEDERATION_TOKEN_TTL"), federation.DefaultTTL),
+		parseDurationOrDefault(os.Getenv("TA_FEDERATION_TOKEN_TTL"), token.DefaultTTL),
 		"Federation token lifetime (default 4h; ADR-020 §Token model)")
 	// v2.9.0 ADR-020 IV-2e: federation admission validator backend.
 	federationPrometheusURL := flag.String("federation-prometheus-url",
@@ -187,12 +189,12 @@ func main() {
 	// v2.9.0 ADR-020 IV-2e: federation 2-tier policy — the platform
 	// metric whitelist (`_federation_policy.yaml`). Per-tenant subsets
 	// live in separate files, read on demand by the handler.
-	federationPolicyMgr := federation.NewPolicyManager(*configDir)
+	federationPolicyMgr := fedpolicy.NewManager(*configDir)
 
 	// v2.9.0 ADR-020 IV-2e: federation admission validator. nil when
 	// --federation-prometheus-url is unset — admission is then disabled
 	// and whitelist edits are schema-checked only.
-	federationValidator := federation.NewAdmissionValidator(*federationPrometheusURL)
+	federationValidator := fedpolicy.NewAdmissionValidator(*federationPrometheusURL)
 	if federationValidator == nil {
 		slog.Info("federation admission validator disabled — set --federation-prometheus-url to enable")
 	}
@@ -269,7 +271,7 @@ func main() {
 	// offboarding runbook; never auto-revokes (a transient conf.d
 	// glitch must not nuke live tenants' tokens).
 	if federationMgr != nil {
-		go federation.NewOrphanDetector(*configDir, federationMgr.ListAllRecords).
+		go orphan.NewDetector(*configDir, federationMgr.ListAllRecords).
 			Run(*reloadInterval, stopCh)
 	}
 
@@ -308,99 +310,99 @@ func main() {
 
 	// Health / readiness / metrics (no auth)
 	r.Get("/health", handler.Health)
-	r.Get("/ready", deps.Ready())
+	r.Get("/ready", handler.Ready(deps))
 	r.Get("/metrics", handler.MetricsHandler)
 
 	// API v1 — all routes require identity headers (injected by oauth2-proxy)
 	r.Route("/api/v1", func(r chi.Router) {
 		// Identity endpoint (no specific permission required, just authenticated)
 		r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
-			Get("/me", deps.Me())
+			Get("/me", handler.Me(deps))
 
 		// Tenant list (read permission, no specific tenant ID)
 		// v2.5.0: RBAC-filtered — only returns tenants the user can access
 		r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
-			Get("/tenants", deps.ListTenants())
+			Get("/tenants", handler.ListTenants(deps))
 
 		// v2.8.0 Phase .c C-1: server-side search / filter / pagination.
 		// Snapshot cache (30s TTL) shared across requests via Deps.SearchCache.
 		r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
-			Get("/tenants/search", deps.SearchTenants())
+			Get("/tenants/search", handler.SearchTenants(deps))
 
 		// Per-tenant routes
 		r.Route("/tenants/{id}", func(r chi.Router) {
 			r.With(rbacMgr.Middleware(rbac.PermRead, handler.TenantIDFromPath)).
-				Get("/", deps.GetTenant())
+				Get("/", handler.GetTenant(deps))
 
 			r.With(rbacMgr.Middleware(rbac.PermRead, handler.TenantIDFromPath)).
-				Post("/diff", deps.DiffTenant())
+				Post("/diff", handler.DiffTenant(deps))
 
 			r.With(rbacMgr.Middleware(rbac.PermWrite, handler.TenantIDFromPath)).
-				Put("/", deps.PutTenant())
+				Put("/", handler.PutTenant(deps))
 
 			r.With(rbacMgr.Middleware(rbac.PermRead, handler.TenantIDFromPath)).
-				Post("/validate", deps.ValidateTenant())
+				Post("/validate", handler.ValidateTenant(deps))
 
 			// v2.7.0 B-3 (ADR-016/017): merged effective config + dual hashes.
 			r.With(rbacMgr.Middleware(rbac.PermRead, handler.TenantIDFromPath)).
-				Get("/effective", deps.GetTenantEffective())
+				Get("/effective", handler.GetTenantEffective(deps))
 
 			// Federation metric subset (v2.9.0 — ADR-020 IV-2e). PUT's
 			// tenant-admin check is inside the handler (route middleware
 			// only confirms authentication + read on the tenant).
 			r.With(rbacMgr.Middleware(rbac.PermRead, handler.TenantIDFromPath)).
-				Get("/federation", deps.GetTenantFederation())
+				Get("/federation", handler.GetTenantFederation(deps))
 			r.With(rbacMgr.Middleware(rbac.PermRead, handler.TenantIDFromPath)).
-				Put("/federation", deps.PutTenantFederation())
+				Put("/federation", handler.PutTenantFederation(deps))
 		})
 
 		// Batch operations — route-level middleware checks read (authenticated),
 		// per-tenant write permission is enforced inside the handler.
 		r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
-			Post("/tenants/batch", deps.BatchTenants())
+			Post("/tenants/batch", handler.BatchTenants(deps))
 
 		// Group management (v2.5.0) — RBAC-filtered list.
 		r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
-			Get("/groups", deps.ListGroups())
+			Get("/groups", handler.ListGroups(deps))
 
 		r.Route("/groups/{id}", func(r chi.Router) {
 			r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
-				Get("/", deps.GetGroup())
+				Get("/", handler.GetGroup(deps))
 
 			r.With(rbacMgr.Middleware(rbac.PermWrite, nil)).
-				Put("/", deps.PutGroup())
+				Put("/", handler.PutGroup(deps))
 
 			r.With(rbacMgr.Middleware(rbac.PermWrite, nil)).
-				Delete("/", deps.DeleteGroup())
+				Delete("/", handler.DeleteGroup(deps))
 
 			r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
-				Post("/batch", deps.GroupBatch())
+				Post("/batch", handler.GroupBatch(deps))
 		})
 
 		// Saved Views (v2.5.0 Phase C)
 		r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
-			Get("/views", deps.ListViews())
+			Get("/views", handler.ListViews(deps))
 
 		r.Route("/views/{id}", func(r chi.Router) {
 			r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
-				Get("/", deps.GetView())
+				Get("/", handler.GetView(deps))
 
 			r.With(rbacMgr.Middleware(rbac.PermWrite, nil)).
-				Put("/", deps.PutView())
+				Put("/", handler.PutView(deps))
 
 			r.With(rbacMgr.Middleware(rbac.PermWrite, nil)).
-				Delete("/", deps.DeleteView())
+				Delete("/", handler.DeleteView(deps))
 		})
 
 		// Task polling (v2.6.0 — async batch operations)
 		r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
-			Get("/tasks/{id}", deps.GetTask())
+			Get("/tasks/{id}", handler.GetTask(deps))
 
 		// PR/MR tracking (v2.6.0 Phase C — ADR-011 PR-based write-back)
 		// Works for both GitHub PRs and GitLab MRs via platform.Tracker
 		if prTracker != nil {
 			r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
-				Get("/prs", deps.ListPRs())
+				Get("/prs", handler.ListPRs(deps))
 		}
 
 		// Real-time event stream (v2.6.0 — SSE for config change notifications)
@@ -413,9 +415,9 @@ func main() {
 		// handler; route-level middleware only confirms authentication.
 		r.Route("/federation/policy", func(r chi.Router) {
 			r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
-				Get("/", deps.GetFederationPolicy())
+				Get("/", handler.GetFederationPolicy(deps))
 			r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
-				Put("/", deps.PutFederationPolicy())
+				Put("/", handler.PutFederationPolicy(deps))
 		})
 
 		// Federation token endpoint (v2.9.0 — ADR-020 IV-2d).
@@ -426,11 +428,11 @@ func main() {
 		if federationMgr != nil {
 			r.Route("/federation/tokens", func(r chi.Router) {
 				r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
-					Post("/", deps.CreateFederationToken())
+					Post("/", handler.CreateFederationToken(deps))
 				r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
-					Get("/", deps.ListFederationTokens())
+					Get("/", handler.ListFederationTokens(deps))
 				r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
-					Delete("/{id}", deps.DeleteFederationToken())
+					Delete("/{id}", handler.DeleteFederationToken(deps))
 			})
 		}
 	})

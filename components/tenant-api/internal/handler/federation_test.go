@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vencil/tenant-api/internal/federation"
+	"github.com/vencil/tenant-api/internal/federation/token"
 	"github.com/vencil/tenant-api/internal/rbac"
 )
 
@@ -28,15 +28,15 @@ const fedViewerRBAC = `groups:
     permissions: [read]
 `
 
-// newTestFederation builds a federation.Manager backed by a freshly
+// newTestFederation builds a token.Manager backed by a freshly
 // generated in-memory RSA key and a store under t.TempDir().
-func newTestFederation(t *testing.T) *federation.Manager {
+func newTestFederation(t *testing.T) *token.Manager {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatalf("generate key: %v", err)
 	}
-	m, err := federation.NewManagerForTest(key, filepath.Join(t.TempDir(), "fed-store.json"), time.Hour)
+	m, err := token.NewManagerForTest(key, filepath.Join(t.TempDir(), "fed-store.json"), time.Hour)
 	if err != nil {
 		t.Fatalf("NewManagerForTest: %v", err)
 	}
@@ -57,7 +57,7 @@ func TestCreateFederationToken_Success(t *testing.T) {
 	req.Header.Set("X-Forwarded-Groups", "fed-admins")
 
 	w := httptest.NewRecorder()
-	wrapWithRBACMiddleware(d.CreateFederationToken(), rbacMgr, rbac.PermRead, nil).ServeHTTP(w, req)
+	wrapWithRBACMiddleware(CreateFederationToken(d), rbacMgr, rbac.PermRead, nil).ServeHTTP(w, req)
 
 	if w.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201, body: %s", w.Code, w.Body.String())
@@ -95,7 +95,7 @@ func TestCreateFederationToken_ForbiddenWithoutAdmin(t *testing.T) {
 	req.Header.Set("X-Forwarded-Groups", "fed-viewers")
 
 	w := httptest.NewRecorder()
-	wrapWithRBACMiddleware(d.CreateFederationToken(), rbacMgr, rbac.PermRead, nil).ServeHTTP(w, req)
+	wrapWithRBACMiddleware(CreateFederationToken(d), rbacMgr, rbac.PermRead, nil).ServeHTTP(w, req)
 
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403, body: %s", w.Code, w.Body.String())
@@ -114,7 +114,7 @@ func TestCreateFederationToken_MissingTenantID(t *testing.T) {
 	req.Header.Set("X-Forwarded-Groups", "fed-admins")
 
 	w := httptest.NewRecorder()
-	wrapWithRBACMiddleware(d.CreateFederationToken(), rbacMgr, rbac.PermRead, nil).ServeHTTP(w, req)
+	wrapWithRBACMiddleware(CreateFederationToken(d), rbacMgr, rbac.PermRead, nil).ServeHTTP(w, req)
 
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400", w.Code)
@@ -133,7 +133,7 @@ func TestCreateFederationToken_InvalidJSON(t *testing.T) {
 	req.Header.Set("X-Forwarded-Groups", "fed-admins")
 
 	w := httptest.NewRecorder()
-	wrapWithRBACMiddleware(d.CreateFederationToken(), rbacMgr, rbac.PermRead, nil).ServeHTTP(w, req)
+	wrapWithRBACMiddleware(CreateFederationToken(d), rbacMgr, rbac.PermRead, nil).ServeHTTP(w, req)
 
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400", w.Code)
@@ -162,7 +162,7 @@ func TestListFederationTokens_Success(t *testing.T) {
 	req.Header.Set("X-Forwarded-Groups", "fed-admins")
 
 	w := httptest.NewRecorder()
-	wrapWithRBACMiddleware(d.ListFederationTokens(), rbacMgr, rbac.PermRead, nil).ServeHTTP(w, req)
+	wrapWithRBACMiddleware(ListFederationTokens(d), rbacMgr, rbac.PermRead, nil).ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200, body: %s", w.Code, w.Body.String())
@@ -191,7 +191,7 @@ func TestListFederationTokens_MissingTenantID(t *testing.T) {
 	req.Header.Set("X-Forwarded-Groups", "fed-admins")
 
 	w := httptest.NewRecorder()
-	wrapWithRBACMiddleware(d.ListFederationTokens(), rbacMgr, rbac.PermRead, nil).ServeHTTP(w, req)
+	wrapWithRBACMiddleware(ListFederationTokens(d), rbacMgr, rbac.PermRead, nil).ServeHTTP(w, req)
 
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400", w.Code)
@@ -208,7 +208,7 @@ func TestListFederationTokens_ForbiddenWithoutAdmin(t *testing.T) {
 	req.Header.Set("X-Forwarded-Groups", "fed-viewers")
 
 	w := httptest.NewRecorder()
-	wrapWithRBACMiddleware(d.ListFederationTokens(), rbacMgr, rbac.PermRead, nil).ServeHTTP(w, req)
+	wrapWithRBACMiddleware(ListFederationTokens(d), rbacMgr, rbac.PermRead, nil).ServeHTTP(w, req)
 
 	if w.Code != http.StatusForbidden {
 		t.Errorf("status = %d, want 403", w.Code)
@@ -232,7 +232,7 @@ func TestDeleteFederationToken_Success(t *testing.T) {
 	req.Header.Set("X-Forwarded-Groups", "fed-admins")
 
 	w := httptest.NewRecorder()
-	wrapWithRBACMiddleware(d.DeleteFederationToken(), rbacMgr, rbac.PermRead, nil).ServeHTTP(w, req)
+	wrapWithRBACMiddleware(DeleteFederationToken(d), rbacMgr, rbac.PermRead, nil).ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200, body: %s", w.Code, w.Body.String())
@@ -252,7 +252,7 @@ func TestDeleteFederationToken_NotFound(t *testing.T) {
 	req.Header.Set("X-Forwarded-Groups", "fed-admins")
 
 	w := httptest.NewRecorder()
-	wrapWithRBACMiddleware(d.DeleteFederationToken(), rbacMgr, rbac.PermRead, nil).ServeHTTP(w, req)
+	wrapWithRBACMiddleware(DeleteFederationToken(d), rbacMgr, rbac.PermRead, nil).ServeHTTP(w, req)
 
 	if w.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want 404", w.Code)
@@ -274,7 +274,7 @@ func TestDeleteFederationToken_ForbiddenWithoutAdmin(t *testing.T) {
 	req.Header.Set("X-Forwarded-Groups", "fed-viewers")
 
 	w := httptest.NewRecorder()
-	wrapWithRBACMiddleware(d.DeleteFederationToken(), rbacMgr, rbac.PermRead, nil).ServeHTTP(w, req)
+	wrapWithRBACMiddleware(DeleteFederationToken(d), rbacMgr, rbac.PermRead, nil).ServeHTTP(w, req)
 
 	if w.Code != http.StatusForbidden {
 		t.Errorf("status = %d, want 403", w.Code)
@@ -298,7 +298,7 @@ func TestCreateFederationToken_RejectsInvalidTenantID(t *testing.T) {
 	req.Header.Set("X-Forwarded-Groups", "fed-admins")
 
 	w := httptest.NewRecorder()
-	wrapWithRBACMiddleware(d.CreateFederationToken(), rbacMgr, rbac.PermRead, nil).ServeHTTP(w, req)
+	wrapWithRBACMiddleware(CreateFederationToken(d), rbacMgr, rbac.PermRead, nil).ServeHTTP(w, req)
 
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400", w.Code)
@@ -315,7 +315,7 @@ func TestListFederationTokens_RejectsInvalidTenantID(t *testing.T) {
 	req.Header.Set("X-Forwarded-Groups", "fed-admins")
 
 	w := httptest.NewRecorder()
-	wrapWithRBACMiddleware(d.ListFederationTokens(), rbacMgr, rbac.PermRead, nil).ServeHTTP(w, req)
+	wrapWithRBACMiddleware(ListFederationTokens(d), rbacMgr, rbac.PermRead, nil).ServeHTTP(w, req)
 
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400", w.Code)
@@ -328,7 +328,7 @@ func TestCreateFederationToken_RateLimited(t *testing.T) {
 	t.Parallel()
 	rbacMgr := newRBACManager(t, fedAdminRBAC)
 	d := &Deps{RBAC: rbacMgr, Federation: newTestFederation(t)}
-	h := wrapWithRBACMiddleware(d.CreateFederationToken(), rbacMgr, rbac.PermRead, nil)
+	h := wrapWithRBACMiddleware(CreateFederationToken(d), rbacMgr, rbac.PermRead, nil)
 
 	post := func() int {
 		req := httptest.NewRequest("POST", "/api/v1/federation/tokens",

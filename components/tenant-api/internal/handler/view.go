@@ -29,7 +29,7 @@ type ViewResponse struct {
 // @Produce     json
 // @Success     200 {array}  ViewResponse
 // @Router      /api/v1/views [get]
-func (d *Deps) ListViews() http.HandlerFunc {
+func ListViews(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		list := d.Views.ListViews()
 		resp := make([]ViewResponse, 0, len(list))
@@ -57,7 +57,7 @@ func (d *Deps) ListViews() http.HandlerFunc {
 // @Failure     400 {object} map[string]string
 // @Failure     404 {object} map[string]string
 // @Router      /api/v1/views/{id} [get]
-func (d *Deps) GetView() http.HandlerFunc {
+func GetView(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		viewID := chi.URLParam(r, "id")
 		if err := views.ValidateViewID(viewID); err != nil {
@@ -107,7 +107,7 @@ type PutViewRequest struct {
 // @Failure     400  {object} map[string]string
 // @Failure     409  {object} map[string]string
 // @Router      /api/v1/views/{id} [put]
-func (d *Deps) PutView() http.HandlerFunc {
+func PutView(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		viewID := chi.URLParam(r, "id")
 		if err := views.ValidateViewID(viewID); err != nil {
@@ -191,7 +191,7 @@ func (d *Deps) PutView() http.HandlerFunc {
 // @Failure     404 {object} map[string]string
 // @Failure     409 {object} map[string]string
 // @Router      /api/v1/views/{id} [delete]
-func (d *Deps) DeleteView() http.HandlerFunc {
+func DeleteView(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		viewID := chi.URLParam(r, "id")
 		if err := views.ValidateViewID(viewID); err != nil {

@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/vencil/tenant-api/internal/federation"
+	"github.com/vencil/tenant-api/internal/federation/token"
 	"github.com/vencil/tenant-api/internal/rbac"
 )
 
@@ -38,7 +38,7 @@ type CreateFederationTokenResponse struct {
 	Record FederationTokenRecord `json:"record"`
 }
 
-func toFederationTokenRecord(r federation.Record) FederationTokenRecord {
+func toFederationTokenRecord(r token.Record) FederationTokenRecord {
 	return FederationTokenRecord{
 		TokenID:     r.TokenID,
 		TenantID:    r.TenantID,
@@ -70,7 +70,7 @@ func toFederationTokenRecord(r federation.Record) FederationTokenRecord {
 // @Failure     429  {object} map[string]string
 // @Failure     500  {object} map[string]string
 // @Router      /api/v1/federation/tokens [post]
-func (d *Deps) CreateFederationToken() http.HandlerFunc {
+func CreateFederationToken(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 		if err != nil {
@@ -104,12 +104,12 @@ func (d *Deps) CreateFederationToken() http.HandlerFunc {
 			return
 		}
 
-		token, rec, err := d.Federation.Issue(req.TenantID, rbac.RequestEmail(r), req.Description)
+		jwt, rec, err := d.Federation.Issue(req.TenantID, rbac.RequestEmail(r), req.Description)
 		if err != nil {
 			switch {
-			case errors.Is(err, federation.ErrTokenLimitReached):
+			case errors.Is(err, token.ErrTokenLimitReached):
 				writeJSONErrorWithCode(w, r, http.StatusConflict, CodeConflict, err.Error())
-			case errors.Is(err, federation.ErrMintRateLimited):
+			case errors.Is(err, token.ErrMintRateLimited):
 				writeJSONErrorWithCode(w, r, http.StatusTooManyRequests, CodeRateLimited, err.Error())
 			default:
 				writeJSONError(w, r, http.StatusInternalServerError, "issue federation token: "+err.Error())
@@ -120,7 +120,7 @@ func (d *Deps) CreateFederationToken() http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
 		_ = json.NewEncoder(w).Encode(CreateFederationTokenResponse{
-			Token:  token,
+			Token:  jwt,
 			Record: toFederationTokenRecord(rec),
 		})
 	}
@@ -138,7 +138,7 @@ func (d *Deps) CreateFederationToken() http.HandlerFunc {
 // @Failure     403 {object} map[string]string
 // @Failure     500 {object} map[string]string
 // @Router      /api/v1/federation/tokens [get]
-func (d *Deps) ListFederationTokens() http.HandlerFunc {
+func ListFederationTokens(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		tenantID := r.URL.Query().Get("tenant_id")
 		if tenantID == "" {
@@ -188,7 +188,7 @@ func (d *Deps) ListFederationTokens() http.HandlerFunc {
 // @Failure     404 {object} map[string]string
 // @Failure     500 {object} map[string]string
 // @Router      /api/v1/federation/tokens/{id} [delete]
-func (d *Deps) DeleteFederationToken() http.HandlerFunc {
+func DeleteFederationToken(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		tokenID := chi.URLParam(r, "id")
 
