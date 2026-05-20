@@ -54,7 +54,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/internal_handler.PutFederationPolicyRequest"
+                            "$ref": "#/definitions/internal_handler_federation.PutFederationPolicyRequest"
                         }
                     }
                 ],
@@ -119,7 +119,7 @@ const docTemplate = `{
                         "schema": {
                             "type": "array",
                             "items": {
-                                "$ref": "#/definitions/internal_handler.FederationTokenRecord"
+                                "$ref": "#/definitions/internal_handler_federation.FederationTokenRecord"
                             }
                         }
                     },
@@ -171,7 +171,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/internal_handler.CreateFederationTokenRequest"
+                            "$ref": "#/definitions/internal_handler_federation.CreateFederationTokenRequest"
                         }
                     }
                 ],
@@ -179,7 +179,7 @@ const docTemplate = `{
                     "201": {
                         "description": "Created",
                         "schema": {
-                            "$ref": "#/definitions/internal_handler.CreateFederationTokenResponse"
+                            "$ref": "#/definitions/internal_handler_federation.CreateFederationTokenResponse"
                         }
                     },
                     "400": {
@@ -1493,34 +1493,6 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_handler.CreateFederationTokenRequest": {
-            "type": "object",
-            "required": [
-                "tenant_id"
-            ],
-            "properties": {
-                "description": {
-                    "type": "string",
-                    "maxLength": 256
-                },
-                "tenant_id": {
-                    "type": "string",
-                    "maxLength": 128,
-                    "minLength": 1
-                }
-            }
-        },
-        "internal_handler.CreateFederationTokenResponse": {
-            "type": "object",
-            "properties": {
-                "record": {
-                    "$ref": "#/definitions/internal_handler.FederationTokenRecord"
-                },
-                "token": {
-                    "type": "string"
-                }
-            }
-        },
         "internal_handler.DiffRequest": {
             "type": "object",
             "properties": {
@@ -1540,29 +1512,6 @@ const docTemplate = `{
                     "type": "boolean"
                 },
                 "tenant_id": {
-                    "type": "string"
-                }
-            }
-        },
-        "internal_handler.FederationTokenRecord": {
-            "type": "object",
-            "properties": {
-                "description": {
-                    "type": "string"
-                },
-                "expires_at": {
-                    "type": "string"
-                },
-                "issued_at": {
-                    "type": "string"
-                },
-                "issued_by": {
-                    "type": "string"
-                },
-                "tenant_id": {
-                    "type": "string"
-                },
-                "token_id": {
                     "type": "string"
                 }
             }
@@ -1685,23 +1634,6 @@ const docTemplate = `{
                     "type": "array",
                     "items": {
                         "$ref": "#/definitions/github_com_vencil_tenant-api_internal_platform.PRInfo"
-                    }
-                }
-            }
-        },
-        "internal_handler.PutFederationPolicyRequest": {
-            "type": "object",
-            "properties": {
-                "force": {
-                    "type": "boolean"
-                },
-                "reason": {
-                    "type": "string"
-                },
-                "whitelist": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/github_com_vencil_tenant-api_internal_federation_fedpolicy.WhitelistEntry"
                     }
                 }
             }
@@ -1890,6 +1822,74 @@ const docTemplate = `{
                 },
                 "label": {
                     "type": "string"
+                }
+            }
+        },
+        "internal_handler_federation.CreateFederationTokenRequest": {
+            "type": "object",
+            "required": [
+                "tenant_id"
+            ],
+            "properties": {
+                "description": {
+                    "type": "string",
+                    "maxLength": 256
+                },
+                "tenant_id": {
+                    "type": "string",
+                    "maxLength": 128,
+                    "minLength": 1
+                }
+            }
+        },
+        "internal_handler_federation.CreateFederationTokenResponse": {
+            "type": "object",
+            "properties": {
+                "record": {
+                    "$ref": "#/definitions/internal_handler_federation.FederationTokenRecord"
+                },
+                "token": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_handler_federation.FederationTokenRecord": {
+            "type": "object",
+            "properties": {
+                "description": {
+                    "type": "string"
+                },
+                "expires_at": {
+                    "type": "string"
+                },
+                "issued_at": {
+                    "type": "string"
+                },
+                "issued_by": {
+                    "type": "string"
+                },
+                "tenant_id": {
+                    "type": "string"
+                },
+                "token_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_handler_federation.PutFederationPolicyRequest": {
+            "type": "object",
+            "properties": {
+                "force": {
+                    "type": "boolean"
+                },
+                "reason": {
+                    "type": "string"
+                },
+                "whitelist": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_vencil_tenant-api_internal_federation_fedpolicy.WhitelistEntry"
+                    }
                 }
             }
         }

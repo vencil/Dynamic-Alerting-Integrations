@@ -61,13 +61,13 @@ func GetView(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		viewID := chi.URLParam(r, "id")
 		if err := views.ValidateViewID(viewID); err != nil {
-			writeJSONError(w, r,http.StatusBadRequest, err.Error())
+			WriteJSONError(w, r,http.StatusBadRequest, err.Error())
 			return
 		}
 
 		v, ok := d.Views.GetView(viewID)
 		if !ok {
-			writeJSONError(w, r,http.StatusNotFound, "view not found: "+viewID)
+			WriteJSONError(w, r,http.StatusNotFound, "view not found: "+viewID)
 			return
 		}
 
@@ -111,7 +111,7 @@ func PutView(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		viewID := chi.URLParam(r, "id")
 		if err := views.ValidateViewID(viewID); err != nil {
-			writeJSONError(w, r,http.StatusBadRequest, err.Error())
+			WriteJSONError(w, r,http.StatusBadRequest, err.Error())
 			return
 		}
 
@@ -119,13 +119,13 @@ func PutView(d *Deps) http.HandlerFunc {
 
 		body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 		if err != nil {
-			writeJSONError(w, r,http.StatusBadRequest, "failed to read request body: "+err.Error())
+			WriteJSONError(w, r,http.StatusBadRequest, "failed to read request body: "+err.Error())
 			return
 		}
 
 		var req PutViewRequest
 		if err := json.Unmarshal(body, &req); err != nil {
-			writeJSONError(w, r,http.StatusBadRequest, "invalid JSON: "+err.Error())
+			WriteJSONError(w, r,http.StatusBadRequest, "invalid JSON: "+err.Error())
 			return
 		}
 
@@ -134,10 +134,10 @@ func PutView(d *Deps) http.HandlerFunc {
 		// Filters element-count; per-pair Filters value length goes
 		// through validateFilterMap because validator's `dive` doesn't
 		// surface the offending key in the violation field path.
-		violations := validateStructTags(&req)
+		violations := ValidateStructTags(&req)
 		violations = append(violations, validateFilterMap(req.Filters, "filters")...)
 		if len(violations) > 0 {
-			writeValidationErrors(w, r,violations)
+			WriteValidationErrors(w, r,violations)
 			return
 		}
 
@@ -157,16 +157,16 @@ func PutView(d *Deps) http.HandlerFunc {
 
 		yamlBytes, err := views.MarshalConfig(newCfg)
 		if err != nil {
-			writeJSONError(w, r,http.StatusInternalServerError, "marshal views: "+err.Error())
+			WriteJSONError(w, r,http.StatusInternalServerError, "marshal views: "+err.Error())
 			return
 		}
 
 		if err := d.Writer.WriteViewsFile(email, string(yamlBytes)); err != nil {
 			if errors.Is(err, gitops.ErrConflict) {
-				writeJSONError(w, r,http.StatusConflict, err.Error())
+				WriteJSONError(w, r,http.StatusConflict, err.Error())
 				return
 			}
-			writeJSONError(w, r,http.StatusInternalServerError, err.Error())
+			WriteJSONError(w, r,http.StatusInternalServerError, err.Error())
 			return
 		}
 
@@ -195,7 +195,7 @@ func DeleteView(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		viewID := chi.URLParam(r, "id")
 		if err := views.ValidateViewID(viewID); err != nil {
-			writeJSONError(w, r,http.StatusBadRequest, err.Error())
+			WriteJSONError(w, r,http.StatusBadRequest, err.Error())
 			return
 		}
 
@@ -203,7 +203,7 @@ func DeleteView(d *Deps) http.HandlerFunc {
 
 		cfg := d.Views.Get()
 		if _, ok := cfg.Views[viewID]; !ok {
-			writeJSONError(w, r,http.StatusNotFound, "view not found: "+viewID)
+			WriteJSONError(w, r,http.StatusNotFound, "view not found: "+viewID)
 			return
 		}
 
@@ -218,16 +218,16 @@ func DeleteView(d *Deps) http.HandlerFunc {
 
 		yamlBytes, err := views.MarshalConfig(newCfg)
 		if err != nil {
-			writeJSONError(w, r,http.StatusInternalServerError, "marshal views: "+err.Error())
+			WriteJSONError(w, r,http.StatusInternalServerError, "marshal views: "+err.Error())
 			return
 		}
 
 		if err := d.Writer.WriteViewsFile(email, string(yamlBytes)); err != nil {
 			if errors.Is(err, gitops.ErrConflict) {
-				writeJSONError(w, r,http.StatusConflict, err.Error())
+				WriteJSONError(w, r,http.StatusConflict, err.Error())
 				return
 			}
-			writeJSONError(w, r,http.StatusInternalServerError, err.Error())
+			WriteJSONError(w, r,http.StatusInternalServerError, err.Error())
 			return
 		}
 

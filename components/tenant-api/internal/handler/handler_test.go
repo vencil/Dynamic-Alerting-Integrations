@@ -933,12 +933,12 @@ func TestLoadMergedConfig_WithStateFilters(t *testing.T) {
 	}
 }
 
-// --- writeJSONError tests ---
+// --- WriteJSONError tests ---
 
 func TestWriteJSONError(t *testing.T) {
 	t.Parallel()
 	w := httptest.NewRecorder()
-	writeJSONError(w, nil, http.StatusNotFound, "not found")
+	WriteJSONError(w, nil, http.StatusNotFound, "not found")
 
 	if w.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusNotFound)
@@ -959,7 +959,7 @@ func TestWriteJSONError(t *testing.T) {
 func TestWriteJSONError_InternalError(t *testing.T) {
 	t.Parallel()
 	w := httptest.NewRecorder()
-	writeJSONError(w, nil, http.StatusInternalServerError, "something broke")
+	WriteJSONError(w, nil, http.StatusInternalServerError, "something broke")
 
 	if w.Code != http.StatusInternalServerError {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusInternalServerError)

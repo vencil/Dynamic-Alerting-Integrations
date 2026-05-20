@@ -96,13 +96,13 @@ func GetGroup(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		groupID := chi.URLParam(r, "id")
 		if err := groups.ValidateGroupID(groupID); err != nil {
-			writeJSONError(w, r,http.StatusBadRequest, err.Error())
+			WriteJSONError(w, r,http.StatusBadRequest, err.Error())
 			return
 		}
 
 		g, ok := d.Groups.GetGroup(groupID)
 		if !ok {
-			writeJSONError(w, r,http.StatusNotFound, "group not found: "+groupID)
+			WriteJSONError(w, r,http.StatusNotFound, "group not found: "+groupID)
 			return
 		}
 
@@ -158,7 +158,7 @@ func PutGroup(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		groupID := chi.URLParam(r, "id")
 		if err := groups.ValidateGroupID(groupID); err != nil {
-			writeJSONError(w, r,http.StatusBadRequest, err.Error())
+			WriteJSONError(w, r,http.StatusBadRequest, err.Error())
 			return
 		}
 
@@ -167,13 +167,13 @@ func PutGroup(d *Deps) http.HandlerFunc {
 
 		body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 		if err != nil {
-			writeJSONError(w, r,http.StatusBadRequest, "failed to read request body: "+err.Error())
+			WriteJSONError(w, r,http.StatusBadRequest, "failed to read request body: "+err.Error())
 			return
 		}
 
 		var req PutGroupRequest
 		if err := json.Unmarshal(body, &req); err != nil {
-			writeJSONError(w, r,http.StatusBadRequest, "invalid JSON: "+err.Error())
+			WriteJSONError(w, r,http.StatusBadRequest, "invalid JSON: "+err.Error())
 			return
 		}
 
@@ -181,10 +181,10 @@ func PutGroup(d *Deps) http.HandlerFunc {
 		// rules cover Label / Description / Members; per-pair Filters
 		// length checks need the imperative path because validator's
 		// `dive` doesn't render the offending key in the field path.
-		violations := validateStructTags(&req)
+		violations := ValidateStructTags(&req)
 		violations = append(violations, validateFilterMap(req.Filters, "filters")...)
 		if len(violations) > 0 {
-			writeValidationErrors(w, r,violations)
+			WriteValidationErrors(w, r,violations)
 			return
 		}
 
@@ -194,7 +194,7 @@ func PutGroup(d *Deps) http.HandlerFunc {
 		// error so the operator can fix in one round-trip rather
 		// than discovering them one-at-a-time.
 		if forbidden := tenantsLackingPermission(d.RBAC, idpGroups, req.Members, rbac.PermWrite); len(forbidden) > 0 {
-			writeJSONError(w, r,http.StatusForbidden,
+			WriteJSONError(w, r,http.StatusForbidden,
 				"insufficient permission to write group with forbidden member tenants: "+
 					strings.Join(forbidden, ", "))
 			return
@@ -217,16 +217,16 @@ func PutGroup(d *Deps) http.HandlerFunc {
 
 		yamlBytes, err := groups.MarshalConfig(newCfg)
 		if err != nil {
-			writeJSONError(w, r,http.StatusInternalServerError, "marshal groups: "+err.Error())
+			WriteJSONError(w, r,http.StatusInternalServerError, "marshal groups: "+err.Error())
 			return
 		}
 
 		if err := d.Writer.WriteGroupsFile(email, string(yamlBytes)); err != nil {
 			if errors.Is(err, gitops.ErrConflict) {
-				writeJSONError(w, r,http.StatusConflict, err.Error())
+				WriteJSONError(w, r,http.StatusConflict, err.Error())
 				return
 			}
-			writeJSONError(w, r,http.StatusInternalServerError, err.Error())
+			WriteJSONError(w, r,http.StatusInternalServerError, err.Error())
 			return
 		}
 
@@ -258,7 +258,7 @@ func DeleteGroup(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		groupID := chi.URLParam(r, "id")
 		if err := groups.ValidateGroupID(groupID); err != nil {
-			writeJSONError(w, r,http.StatusBadRequest, err.Error())
+			WriteJSONError(w, r,http.StatusBadRequest, err.Error())
 			return
 		}
 
@@ -268,7 +268,7 @@ func DeleteGroup(d *Deps) http.HandlerFunc {
 		cfg := d.Groups.Get()
 		existing, ok := cfg.Groups[groupID]
 		if !ok {
-			writeJSONError(w, r,http.StatusNotFound, "group not found: "+groupID)
+			WriteJSONError(w, r,http.StatusNotFound, "group not found: "+groupID)
 			return
 		}
 
@@ -279,7 +279,7 @@ func DeleteGroup(d *Deps) http.HandlerFunc {
 		// service surface against teams who depend on dashboards
 		// keyed off that group.
 		if forbidden := tenantsLackingPermission(d.RBAC, idpGroups, existing.Members, rbac.PermWrite); len(forbidden) > 0 {
-			writeJSONError(w, r,http.StatusForbidden,
+			WriteJSONError(w, r,http.StatusForbidden,
 				"insufficient permission to delete group with forbidden member tenants: "+
 					strings.Join(forbidden, ", "))
 			return
@@ -296,16 +296,16 @@ func DeleteGroup(d *Deps) http.HandlerFunc {
 
 		yamlBytes, err := groups.MarshalConfig(newCfg)
 		if err != nil {
-			writeJSONError(w, r,http.StatusInternalServerError, "marshal groups: "+err.Error())
+			WriteJSONError(w, r,http.StatusInternalServerError, "marshal groups: "+err.Error())
 			return
 		}
 
 		if err := d.Writer.WriteGroupsFile(email, string(yamlBytes)); err != nil {
 			if errors.Is(err, gitops.ErrConflict) {
-				writeJSONError(w, r,http.StatusConflict, err.Error())
+				WriteJSONError(w, r,http.StatusConflict, err.Error())
 				return
 			}
-			writeJSONError(w, r,http.StatusInternalServerError, err.Error())
+			WriteJSONError(w, r,http.StatusInternalServerError, err.Error())
 			return
 		}
 

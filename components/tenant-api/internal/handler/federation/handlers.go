@@ -1,4 +1,4 @@
-package handler
+package federation
 
 import (
 	"encoding/json"
@@ -9,6 +9,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/vencil/tenant-api/internal/federation/token"
+	"github.com/vencil/tenant-api/internal/handler"
 	"github.com/vencil/tenant-api/internal/rbac"
 )
 
@@ -70,36 +71,36 @@ func toFederationTokenRecord(r token.Record) FederationTokenRecord {
 // @Failure     429  {object} map[string]string
 // @Failure     500  {object} map[string]string
 // @Router      /api/v1/federation/tokens [post]
-func CreateFederationToken(d *Deps) http.HandlerFunc {
+func CreateFederationToken(d *handler.Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 		if err != nil {
-			writeJSONError(w, r, http.StatusBadRequest, "failed to read request body: "+err.Error())
+			handler.WriteJSONError(w, r, http.StatusBadRequest, "failed to read request body: "+err.Error())
 			return
 		}
 
 		var req CreateFederationTokenRequest
 		if err := json.Unmarshal(body, &req); err != nil {
-			writeJSONError(w, r, http.StatusBadRequest, "invalid JSON: "+err.Error())
+			handler.WriteJSONError(w, r, http.StatusBadRequest, "invalid JSON: "+err.Error())
 			return
 		}
-		if violations := validateStructTags(&req); len(violations) > 0 {
-			writeValidationErrors(w, r, violations)
+		if violations := handler.ValidateStructTags(&req); len(violations) > 0 {
+			handler.WriteValidationErrors(w, r, violations)
 			return
 		}
 		// Reject path-traversal / non-simple tenant IDs — the same gate
 		// the other tenant-scoped handlers use, applied here for
 		// consistency and defence-in-depth (the RBAC check below is the
 		// real bar).
-		if err := ValidateTenantID(req.TenantID); err != nil {
-			writeJSONError(w, r, http.StatusBadRequest, err.Error())
+		if err := handler.ValidateTenantID(req.TenantID); err != nil {
+			handler.WriteJSONError(w, r, http.StatusBadRequest, err.Error())
 			return
 		}
 
 		// Federation token issuance is data egress — require admin on
 		// the target tenant (ADR-020 Wave-0 decision 5).
 		if !d.RBAC.HasPermission(rbac.RequestGroups(r), req.TenantID, rbac.PermAdmin) {
-			writeJSONErrorWithCode(w, r, http.StatusForbidden, CodeForbidden,
+			handler.WriteJSONErrorWithCode(w, r, http.StatusForbidden, handler.CodeForbidden,
 				"admin permission required on tenant "+req.TenantID+" to issue a federation token")
 			return
 		}
@@ -108,11 +109,11 @@ func CreateFederationToken(d *Deps) http.HandlerFunc {
 		if err != nil {
 			switch {
 			case errors.Is(err, token.ErrTokenLimitReached):
-				writeJSONErrorWithCode(w, r, http.StatusConflict, CodeConflict, err.Error())
+				handler.WriteJSONErrorWithCode(w, r, http.StatusConflict, handler.CodeConflict, err.Error())
 			case errors.Is(err, token.ErrMintRateLimited):
-				writeJSONErrorWithCode(w, r, http.StatusTooManyRequests, CodeRateLimited, err.Error())
+				handler.WriteJSONErrorWithCode(w, r, http.StatusTooManyRequests, handler.CodeRateLimited, err.Error())
 			default:
-				writeJSONError(w, r, http.StatusInternalServerError, "issue federation token: "+err.Error())
+				handler.WriteJSONError(w, r, http.StatusInternalServerError, "issue federation token: "+err.Error())
 			}
 			return
 		}
@@ -138,27 +139,27 @@ func CreateFederationToken(d *Deps) http.HandlerFunc {
 // @Failure     403 {object} map[string]string
 // @Failure     500 {object} map[string]string
 // @Router      /api/v1/federation/tokens [get]
-func ListFederationTokens(d *Deps) http.HandlerFunc {
+func ListFederationTokens(d *handler.Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		tenantID := r.URL.Query().Get("tenant_id")
 		if tenantID == "" {
-			writeJSONError(w, r, http.StatusBadRequest, "query parameter tenant_id is required")
+			handler.WriteJSONError(w, r, http.StatusBadRequest, "query parameter tenant_id is required")
 			return
 		}
-		if err := ValidateTenantID(tenantID); err != nil {
-			writeJSONError(w, r, http.StatusBadRequest, err.Error())
+		if err := handler.ValidateTenantID(tenantID); err != nil {
+			handler.WriteJSONError(w, r, http.StatusBadRequest, err.Error())
 			return
 		}
 
 		if !d.RBAC.HasPermission(rbac.RequestGroups(r), tenantID, rbac.PermAdmin) {
-			writeJSONErrorWithCode(w, r, http.StatusForbidden, CodeForbidden,
+			handler.WriteJSONErrorWithCode(w, r, http.StatusForbidden, handler.CodeForbidden,
 				"admin permission required on tenant "+tenantID)
 			return
 		}
 
 		recs, err := d.Federation.List(tenantID)
 		if err != nil {
-			writeJSONError(w, r, http.StatusInternalServerError, "list federation tokens: "+err.Error())
+			handler.WriteJSONError(w, r, http.StatusInternalServerError, "list federation tokens: "+err.Error())
 			return
 		}
 		resp := make([]FederationTokenRecord, 0, len(recs))
@@ -188,33 +189,33 @@ func ListFederationTokens(d *Deps) http.HandlerFunc {
 // @Failure     404 {object} map[string]string
 // @Failure     500 {object} map[string]string
 // @Router      /api/v1/federation/tokens/{id} [delete]
-func DeleteFederationToken(d *Deps) http.HandlerFunc {
+func DeleteFederationToken(d *handler.Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		tokenID := chi.URLParam(r, "id")
 
 		rec, ok, err := d.Federation.Get(tokenID)
 		if err != nil {
-			writeJSONError(w, r, http.StatusInternalServerError, "look up federation token: "+err.Error())
+			handler.WriteJSONError(w, r, http.StatusInternalServerError, "look up federation token: "+err.Error())
 			return
 		}
 		if !ok {
-			writeJSONError(w, r, http.StatusNotFound, "federation token not found: "+tokenID)
+			handler.WriteJSONError(w, r, http.StatusNotFound, "federation token not found: "+tokenID)
 			return
 		}
 
 		if !d.RBAC.HasPermission(rbac.RequestGroups(r), rec.TenantID, rbac.PermAdmin) {
-			writeJSONErrorWithCode(w, r, http.StatusForbidden, CodeForbidden,
+			handler.WriteJSONErrorWithCode(w, r, http.StatusForbidden, handler.CodeForbidden,
 				"admin permission required on tenant "+rec.TenantID)
 			return
 		}
 
 		deleted, err := d.Federation.Delete(tokenID, rec.ExpiresAt)
 		if err != nil {
-			writeJSONError(w, r, http.StatusInternalServerError, "revoke federation token: "+err.Error())
+			handler.WriteJSONError(w, r, http.StatusInternalServerError, "revoke federation token: "+err.Error())
 			return
 		}
 		if !deleted {
-			writeJSONError(w, r, http.StatusNotFound, "federation token not found: "+tokenID)
+			handler.WriteJSONError(w, r, http.StatusNotFound, "federation token not found: "+tokenID)
 			return
 		}
 

@@ -48,17 +48,17 @@ func GetTenantEffective(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		tenantID := chi.URLParam(r, "id")
 		if err := ValidateTenantID(tenantID); err != nil {
-			writeJSONError(w, r,http.StatusBadRequest, err.Error())
+			WriteJSONError(w, r,http.StatusBadRequest, err.Error())
 			return
 		}
 
 		ec, err := cfg.ResolveEffective(d.ConfigDir, tenantID)
 		if err != nil {
 			if errors.Is(err, cfg.ErrTenantNotFound) {
-				writeJSONError(w, r,http.StatusNotFound, "tenant not found: "+tenantID)
+				WriteJSONError(w, r,http.StatusNotFound, "tenant not found: "+tenantID)
 				return
 			}
-			writeJSONError(w, r,http.StatusInternalServerError, err.Error())
+			WriteJSONError(w, r,http.StatusInternalServerError, err.Error())
 			return
 		}
 

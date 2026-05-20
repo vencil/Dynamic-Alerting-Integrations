@@ -349,7 +349,7 @@ func RateLimit(cfg RateLimitConfig, stopCh <-chan struct{}) (func(http.Handler) 
 				// libs (e.g. http.Client wrappers) honor the header
 				// without parsing JSON.
 				w.Header().Set("Retry-After", fmt.Sprintf("%d", retryAfter))
-				writeErrorEnvelope(w, r, http.StatusTooManyRequests, ErrorResponse{
+				WriteErrorEnvelope(w, r, http.StatusTooManyRequests, ErrorResponse{
 					Error:       fmt.Sprintf("rate limit exceeded for %s; try again in %ds", caller, retryAfter),
 					Code:        CodeRateLimited,
 					RetryAfterS: retryAfter,

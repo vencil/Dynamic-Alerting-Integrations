@@ -149,25 +149,6 @@ definitions:
       tenant_id:
         type: string
     type: object
-  internal_handler.CreateFederationTokenRequest:
-    properties:
-      description:
-        maxLength: 256
-        type: string
-      tenant_id:
-        maxLength: 128
-        minLength: 1
-        type: string
-    required:
-    - tenant_id
-    type: object
-  internal_handler.CreateFederationTokenResponse:
-    properties:
-      record:
-        $ref: '#/definitions/internal_handler.FederationTokenRecord'
-      token:
-        type: string
-    type: object
   internal_handler.DiffRequest:
     properties:
       proposed:
@@ -181,21 +162,6 @@ definitions:
       has_diff:
         type: boolean
       tenant_id:
-        type: string
-    type: object
-  internal_handler.FederationTokenRecord:
-    properties:
-      description:
-        type: string
-      expires_at:
-        type: string
-      issued_at:
-        type: string
-      issued_by:
-        type: string
-      tenant_id:
-        type: string
-      token_id:
         type: string
     type: object
   internal_handler.GroupBatchRequest:
@@ -277,17 +243,6 @@ definitions:
       pending_prs:
         items:
           $ref: '#/definitions/github_com_vencil_tenant-api_internal_platform.PRInfo'
-        type: array
-    type: object
-  internal_handler.PutFederationPolicyRequest:
-    properties:
-      force:
-        type: boolean
-      reason:
-        type: string
-      whitelist:
-        items:
-          $ref: '#/definitions/github_com_vencil_tenant-api_internal_federation_fedpolicy.WhitelistEntry'
         type: array
     type: object
   internal_handler.PutGroupRequest:
@@ -415,6 +370,51 @@ definitions:
       label:
         type: string
     type: object
+  internal_handler_federation.CreateFederationTokenRequest:
+    properties:
+      description:
+        maxLength: 256
+        type: string
+      tenant_id:
+        maxLength: 128
+        minLength: 1
+        type: string
+    required:
+    - tenant_id
+    type: object
+  internal_handler_federation.CreateFederationTokenResponse:
+    properties:
+      record:
+        $ref: '#/definitions/internal_handler_federation.FederationTokenRecord'
+      token:
+        type: string
+    type: object
+  internal_handler_federation.FederationTokenRecord:
+    properties:
+      description:
+        type: string
+      expires_at:
+        type: string
+      issued_at:
+        type: string
+      issued_by:
+        type: string
+      tenant_id:
+        type: string
+      token_id:
+        type: string
+    type: object
+  internal_handler_federation.PutFederationPolicyRequest:
+    properties:
+      force:
+        type: boolean
+      reason:
+        type: string
+      whitelist:
+        items:
+          $ref: '#/definitions/github_com_vencil_tenant-api_internal_federation_fedpolicy.WhitelistEntry'
+        type: array
+    type: object
 info:
   contact: {}
   description: |-
@@ -447,7 +447,7 @@ paths:
         name: body
         required: true
         schema:
-          $ref: '#/definitions/internal_handler.PutFederationPolicyRequest'
+          $ref: '#/definitions/internal_handler_federation.PutFederationPolicyRequest'
       produces:
       - application/json
       responses:
@@ -494,7 +494,7 @@ paths:
           description: OK
           schema:
             items:
-              $ref: '#/definitions/internal_handler.FederationTokenRecord'
+              $ref: '#/definitions/internal_handler_federation.FederationTokenRecord'
             type: array
         "400":
           description: Bad Request
@@ -529,14 +529,14 @@ paths:
         name: body
         required: true
         schema:
-          $ref: '#/definitions/internal_handler.CreateFederationTokenRequest'
+          $ref: '#/definitions/internal_handler_federation.CreateFederationTokenRequest'
       produces:
       - application/json
       responses:
         "201":
           description: Created
           schema:
-            $ref: '#/definitions/internal_handler.CreateFederationTokenResponse'
+            $ref: '#/definitions/internal_handler_federation.CreateFederationTokenResponse'
         "400":
           description: Bad Request
           schema:

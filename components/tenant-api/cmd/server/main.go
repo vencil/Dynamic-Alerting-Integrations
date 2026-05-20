@@ -35,6 +35,7 @@ import (
 	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/groups"
 	"github.com/vencil/tenant-api/internal/handler"
+	"github.com/vencil/tenant-api/internal/handler/federation"
 	"github.com/vencil/tenant-api/internal/policy"
 	"github.com/vencil/tenant-api/internal/rbac"
 	"github.com/vencil/tenant-api/internal/views"
@@ -351,9 +352,9 @@ func main() {
 			// tenant-admin check is inside the handler (route middleware
 			// only confirms authentication + read on the tenant).
 			r.With(rbacMgr.Middleware(rbac.PermRead, handler.TenantIDFromPath)).
-				Get("/federation", handler.GetTenantFederation(deps))
+				Get("/federation", federation.GetTenantFederation(deps))
 			r.With(rbacMgr.Middleware(rbac.PermRead, handler.TenantIDFromPath)).
-				Put("/federation", handler.PutTenantFederation(deps))
+				Put("/federation", federation.PutTenantFederation(deps))
 		})
 
 		// Batch operations — route-level middleware checks read (authenticated),
@@ -415,9 +416,9 @@ func main() {
 		// handler; route-level middleware only confirms authentication.
 		r.Route("/federation/policy", func(r chi.Router) {
 			r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
-				Get("/", handler.GetFederationPolicy(deps))
+				Get("/", federation.GetFederationPolicy(deps))
 			r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
-				Put("/", handler.PutFederationPolicy(deps))
+				Put("/", federation.PutFederationPolicy(deps))
 		})
 
 		// Federation token endpoint (v2.9.0 — ADR-020 IV-2d).
@@ -428,11 +429,11 @@ func main() {
 		if federationMgr != nil {
 			r.Route("/federation/tokens", func(r chi.Router) {
 				r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
-					Post("/", handler.CreateFederationToken(deps))
+					Post("/", federation.CreateFederationToken(deps))
 				r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
-					Get("/", handler.ListFederationTokens(deps))
+					Get("/", federation.ListFederationTokens(deps))
 				r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
-					Delete("/{id}", handler.DeleteFederationToken(deps))
+					Delete("/{id}", federation.DeleteFederationToken(deps))
 			})
 		}
 	})

@@ -33,7 +33,7 @@ func GetTask(d *Deps) http.HandlerFunc {
 
 		task, ok := d.Tasks.Get(taskID)
 		if !ok {
-			writeErrorEnvelope(w, r, http.StatusNotFound, ErrorResponse{
+			WriteErrorEnvelope(w, r, http.StatusNotFound, ErrorResponse{
 				Error: "task_not_found",
 				Code:  CodeTaskNotFound,
 				Extra: map[string]any{
@@ -52,7 +52,7 @@ func GetTask(d *Deps) http.HandlerFunc {
 			// Caller has zero access to any of the touched tenants.
 			// 403 (not 404) — the task exists, just none of its
 			// tenants are within the caller's RBAC scope.
-			writeJSONError(w, r,http.StatusForbidden,
+			WriteJSONError(w, r,http.StatusForbidden,
 				"insufficient permission to read task results: caller has no access to any of the task's tenants")
 			return
 		}

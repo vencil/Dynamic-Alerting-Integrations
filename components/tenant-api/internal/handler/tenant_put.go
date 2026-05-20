@@ -52,14 +52,14 @@ func PutTenant(d *Deps) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
 		tenantID := chi.URLParam(r, "id")
 		if err := ValidateTenantID(tenantID); err != nil {
-			writeJSONError(rw, r,http.StatusBadRequest, err.Error())
+			WriteJSONError(rw, r,http.StatusBadRequest, err.Error())
 			return
 		}
 		email := rbac.RequestEmail(r)
 
 		body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20)) // 1 MB limit
 		if err != nil {
-			writeJSONError(rw, r,http.StatusBadRequest, "failed to read request body: "+err.Error())
+			WriteJSONError(rw, r,http.StatusBadRequest, "failed to read request body: "+err.Error())
 			return
 		}
 
@@ -77,7 +77,7 @@ func PutTenant(d *Deps) http.HandlerFunc {
 			// Check for existing pending PR/MR
 			if d.PRTracker.HasPendingPR(tenantID) {
 				existingPR, _ := d.PRTracker.PendingPRForTenant(tenantID)
-				writeErrorEnvelope(rw, r, http.StatusConflict, ErrorResponse{
+				WriteErrorEnvelope(rw, r, http.StatusConflict, ErrorResponse{
 					Error: "pending_pr_exists",
 					Code:  CodePendingPR,
 					Extra: map[string]any{
@@ -92,7 +92,7 @@ func PutTenant(d *Deps) http.HandlerFunc {
 			// Create feature branch + commit
 			result, err := d.Writer.WritePR(tenantID, email, string(body))
 			if err != nil {
-				writeJSONError(rw, r,http.StatusInternalServerError, "PR write failed: "+err.Error())
+				WriteJSONError(rw, r,http.StatusInternalServerError, "PR write failed: "+err.Error())
 				return
 			}
 
@@ -107,7 +107,7 @@ func PutTenant(d *Deps) http.HandlerFunc {
 			)
 			if err != nil {
 				provider := d.PRClient.ProviderName()
-				writeJSONError(rw, r,http.StatusServiceUnavailable, fmt.Sprintf("%s PR/MR creation failed: %s", provider, err.Error()))
+				WriteJSONError(rw, r,http.StatusServiceUnavailable, fmt.Sprintf("%s PR/MR creation failed: %s", provider, err.Error()))
 				return
 			}
 
@@ -125,10 +125,10 @@ func PutTenant(d *Deps) http.HandlerFunc {
 		// Default: direct commit-on-write (ADR-009)
 		if err := d.Writer.Write(tenantID, email, string(body)); err != nil {
 			if errors.Is(err, gitops.ErrConflict) {
-				writeJSONError(rw, r,http.StatusConflict, err.Error())
+				WriteJSONError(rw, r,http.StatusConflict, err.Error())
 				return
 			}
-			writeJSONError(rw, r,http.StatusBadRequest, err.Error())
+			WriteJSONError(rw, r,http.StatusBadRequest, err.Error())
 			return
 		}
 

@@ -1,4 +1,4 @@
-package handler
+package federation
 
 // Federation policy handlers (ADR-020 IV-2e) — the 2-tier metric
 // allowlist:
@@ -24,6 +24,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/vencil/tenant-api/internal/federation/fedpolicy"
+	"github.com/vencil/tenant-api/internal/handler"
 	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/rbac"
 	"gopkg.in/yaml.v3"
@@ -31,10 +32,10 @@ import (
 
 // toViolations adapts federation schema failures to the handler's
 // validation-error shape (both are {field, reason} — a plain copy).
-func toViolations(pv []fedpolicy.PolicyViolation) []Violation {
-	out := make([]Violation, len(pv))
+func toViolations(pv []fedpolicy.PolicyViolation) []handler.Violation {
+	out := make([]handler.Violation, len(pv))
 	for i, v := range pv {
-		out[i] = Violation{Field: v.Field, Reason: v.Reason}
+		out[i] = handler.Violation{Field: v.Field, Reason: v.Reason}
 	}
 	return out
 }
@@ -47,7 +48,7 @@ func toViolations(pv []fedpolicy.PolicyViolation) []Violation {
 // @Produce     json
 // @Success     200 {object} fedpolicy.Config
 // @Router      /api/v1/federation/policy [get]
-func GetFederationPolicy(d *Deps) http.HandlerFunc {
+func GetFederationPolicy(d *handler.Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(d.FederationPolicy.Get())
@@ -89,10 +90,10 @@ type PutFederationPolicyRequest struct {
 // @Failure     403  {object} map[string]string
 // @Failure     409  {object} map[string]string
 // @Router      /api/v1/federation/policy [put]
-func PutFederationPolicy(d *Deps) http.HandlerFunc {
+func PutFederationPolicy(d *handler.Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !d.RBAC.HasPermission(rbac.RequestGroups(r), "*", rbac.PermAdmin) {
-			writeJSONErrorWithCode(w, r, http.StatusForbidden, CodeForbidden,
+			handler.WriteJSONErrorWithCode(w, r, http.StatusForbidden, handler.CodeForbidden,
 				"platform admin permission required to edit the federation whitelist")
 			return
 		}
@@ -100,12 +101,12 @@ func PutFederationPolicy(d *Deps) http.HandlerFunc {
 
 		body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 		if err != nil {
-			writeJSONError(w, r, http.StatusBadRequest, "failed to read request body: "+err.Error())
+			handler.WriteJSONError(w, r, http.StatusBadRequest, "failed to read request body: "+err.Error())
 			return
 		}
 		var req PutFederationPolicyRequest
 		if err := json.Unmarshal(body, &req); err != nil {
-			writeJSONError(w, r, http.StatusBadRequest, "invalid JSON: "+err.Error())
+			handler.WriteJSONError(w, r, http.StatusBadRequest, "invalid JSON: "+err.Error())
 			return
 		}
 		cfg := fedpolicy.Config{Whitelist: req.Whitelist}
@@ -113,7 +114,7 @@ func PutFederationPolicy(d *Deps) http.HandlerFunc {
 			cfg.Whitelist = []fedpolicy.WhitelistEntry{}
 		}
 		if pv := fedpolicy.ValidateWhitelist(&cfg); len(pv) > 0 {
-			writeValidationErrors(w, r, toViolations(pv))
+			handler.WriteValidationErrors(w, r, toViolations(pv))
 			return
 		}
 
@@ -124,31 +125,31 @@ func PutFederationPolicy(d *Deps) http.HandlerFunc {
 		if d.AdmissionValidator != nil {
 			added := addedFederationMetrics(d.FederationPolicy.Get(), &cfg)
 			if len(added) > maxNewMetricsPerRequest {
-				writeJSONError(w, r, http.StatusBadRequest, fmt.Sprintf(
+				handler.WriteJSONError(w, r, http.StatusBadRequest, fmt.Sprintf(
 					"too many new metrics in one request (%d; max %d) — split the change into smaller PUTs so admission validation stays within the request timeout",
 					len(added), maxNewMetricsPerRequest))
 				return
 			}
 			hard, soft := partitionAdmission(runAdmissionChecks(d, r.Context(), added))
 			if len(hard) > 0 {
-				writeErrorEnvelope(w, r, http.StatusBadRequest, ErrorResponse{
+				handler.WriteErrorEnvelope(w, r, http.StatusBadRequest, handler.ErrorResponse{
 					Error: "federation admission: hard block — metric(s) have data but no series carries the tenant label and cannot be whitelisted",
-					Code:  CodeInvalidBody,
+					Code:  handler.CodeInvalidBody,
 					Extra: map[string]any{"admission": hard},
 				})
 				return
 			}
 			if len(soft) > 0 && !req.Force {
-				writeErrorEnvelope(w, r, http.StatusBadRequest, ErrorResponse{
+				handler.WriteErrorEnvelope(w, r, http.StatusBadRequest, handler.ErrorResponse{
 					Error: "federation admission: soft warning(s) — re-submit with force=true and a reason to proceed",
-					Code:  CodeInvalidBody,
+					Code:  handler.CodeInvalidBody,
 					Extra: map[string]any{"admission": soft},
 				})
 				return
 			}
 			if len(soft) > 0 { // force is true here
 				if strings.TrimSpace(req.Reason) == "" {
-					writeJSONError(w, r, http.StatusBadRequest, "force=true requires a non-empty reason")
+					handler.WriteJSONError(w, r, http.StatusBadRequest, "force=true requires a non-empty reason")
 					return
 				}
 				trailer = bypassTrailer(email, req.Reason, soft)
@@ -168,15 +169,15 @@ func PutFederationPolicy(d *Deps) http.HandlerFunc {
 
 		yamlBytes, err := yaml.Marshal(&cfg)
 		if err != nil {
-			writeJSONError(w, r, http.StatusInternalServerError, "marshal whitelist: "+err.Error())
+			handler.WriteJSONError(w, r, http.StatusInternalServerError, "marshal whitelist: "+err.Error())
 			return
 		}
 		if err := d.Writer.WriteFederationPolicyFile(email, string(yamlBytes), trailer); err != nil {
 			if errors.Is(err, gitops.ErrConflict) {
-				writeJSONError(w, r, http.StatusConflict, err.Error())
+				handler.WriteJSONError(w, r, http.StatusConflict, err.Error())
 				return
 			}
-			writeJSONError(w, r, http.StatusInternalServerError, err.Error())
+			handler.WriteJSONError(w, r, http.StatusInternalServerError, err.Error())
 			return
 		}
 		_ = d.FederationPolicy.Reload()
@@ -225,7 +226,7 @@ func addedFederationMetrics(current, proposed *fedpolicy.Config) []string {
 // take up to the validator's per-check timeout, so a batch must not run
 // strictly sequentially. Returns nil when the validator is disabled or
 // metrics is empty.
-func runAdmissionChecks(d *Deps, ctx context.Context, metrics []string) []fedpolicy.AdmissionResult {
+func runAdmissionChecks(d *handler.Deps, ctx context.Context, metrics []string) []fedpolicy.AdmissionResult {
 	if d.AdmissionValidator == nil || len(metrics) == 0 {
 		return nil
 	}
@@ -320,16 +321,16 @@ func admissionMetrics(results []fedpolicy.AdmissionResult) []string {
 // @Success     200 {object} fedpolicy.Subset
 // @Failure     400 {object} map[string]string
 // @Router      /api/v1/tenants/{id}/federation [get]
-func GetTenantFederation(d *Deps) http.HandlerFunc {
+func GetTenantFederation(d *handler.Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		tenantID := chi.URLParam(r, "id")
-		if err := ValidateTenantID(tenantID); err != nil {
-			writeJSONError(w, r, http.StatusBadRequest, err.Error())
+		if err := handler.ValidateTenantID(tenantID); err != nil {
+			handler.WriteJSONError(w, r, http.StatusBadRequest, err.Error())
 			return
 		}
 		subset, err := readFederationSubset(d, tenantID)
 		if err != nil {
-			writeJSONError(w, r, http.StatusInternalServerError, "read federation subset: "+err.Error())
+			handler.WriteJSONError(w, r, http.StatusInternalServerError, "read federation subset: "+err.Error())
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -356,15 +357,15 @@ func GetTenantFederation(d *Deps) http.HandlerFunc {
 // @Failure     403  {object} map[string]string
 // @Failure     409  {object} map[string]string
 // @Router      /api/v1/tenants/{id}/federation [put]
-func PutTenantFederation(d *Deps) http.HandlerFunc {
+func PutTenantFederation(d *handler.Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		tenantID := chi.URLParam(r, "id")
-		if err := ValidateTenantID(tenantID); err != nil {
-			writeJSONError(w, r, http.StatusBadRequest, err.Error())
+		if err := handler.ValidateTenantID(tenantID); err != nil {
+			handler.WriteJSONError(w, r, http.StatusBadRequest, err.Error())
 			return
 		}
 		if !d.RBAC.HasPermission(rbac.RequestGroups(r), tenantID, rbac.PermAdmin) {
-			writeJSONErrorWithCode(w, r, http.StatusForbidden, CodeForbidden,
+			handler.WriteJSONErrorWithCode(w, r, http.StatusForbidden, handler.CodeForbidden,
 				"admin permission required on tenant "+tenantID+" to edit its federation subset")
 			return
 		}
@@ -372,12 +373,12 @@ func PutTenantFederation(d *Deps) http.HandlerFunc {
 
 		body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 		if err != nil {
-			writeJSONError(w, r, http.StatusBadRequest, "failed to read request body: "+err.Error())
+			handler.WriteJSONError(w, r, http.StatusBadRequest, "failed to read request body: "+err.Error())
 			return
 		}
 		var subset fedpolicy.Subset
 		if err := json.Unmarshal(body, &subset); err != nil {
-			writeJSONError(w, r, http.StatusBadRequest, "invalid JSON: "+err.Error())
+			handler.WriteJSONError(w, r, http.StatusBadRequest, "invalid JSON: "+err.Error())
 			return
 		}
 		if subset.Metrics == nil {
@@ -385,21 +386,21 @@ func PutTenantFederation(d *Deps) http.HandlerFunc {
 		}
 		// 2-tier containment: the subset must not exceed the whitelist.
 		if pv := fedpolicy.ValidateSubset(&subset, d.FederationPolicy.Get()); len(pv) > 0 {
-			writeValidationErrors(w, r, toViolations(pv))
+			handler.WriteValidationErrors(w, r, toViolations(pv))
 			return
 		}
 
 		yamlBytes, err := yaml.Marshal(&subset)
 		if err != nil {
-			writeJSONError(w, r, http.StatusInternalServerError, "marshal subset: "+err.Error())
+			handler.WriteJSONError(w, r, http.StatusInternalServerError, "marshal subset: "+err.Error())
 			return
 		}
 		if err := d.Writer.WriteFederationSubsetFile(tenantID, email, string(yamlBytes)); err != nil {
 			if errors.Is(err, gitops.ErrConflict) {
-				writeJSONError(w, r, http.StatusConflict, err.Error())
+				handler.WriteJSONError(w, r, http.StatusConflict, err.Error())
 				return
 			}
-			writeJSONError(w, r, http.StatusInternalServerError, err.Error())
+			handler.WriteJSONError(w, r, http.StatusInternalServerError, err.Error())
 			return
 		}
 
@@ -415,7 +416,7 @@ func PutTenantFederation(d *Deps) http.HandlerFunc {
 // readFederationSubset loads conf.d/_federation/<tenantID>.yaml. A
 // missing file is not an error — it means the tenant has selected no
 // federation metrics yet, which yields an empty subset.
-func readFederationSubset(d *Deps, tenantID string) (*fedpolicy.Subset, error) {
+func readFederationSubset(d *handler.Deps, tenantID string) (*fedpolicy.Subset, error) {
 	path := filepath.Join(d.ConfigDir, "_federation", tenantID+".yaml")
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {

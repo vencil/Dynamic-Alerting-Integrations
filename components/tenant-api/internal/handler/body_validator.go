@@ -70,14 +70,14 @@ func newValidatorInstance() *validator.Validate {
 	return v
 }
 
-// validateStructTags runs struct-tag validation against any request struct
+// ValidateStructTags runs struct-tag validation against any request struct
 // and converts errors into the canonical Violation slice. Empty result =
 // the struct passed all tag rules.
 //
 // Note: this only handles the fixed-shape fields. Map-shaped fields
 // like Patch / Filters need per-key validation via validatePatchMap /
 // validateFilterMap.
-func validateStructTags(req interface{}) []Violation {
+func ValidateStructTags(req interface{}) []Violation {
 	if err := validatorInstance.Struct(req); err != nil {
 		var validationErrs validator.ValidationErrors
 		if errors.As(err, &validationErrs) {
@@ -314,5 +314,5 @@ func validateFilterMap(filters map[string]string, fieldPrefix string) []Violatio
 	return violations
 }
 
-// writeValidationErrors and the canonical error envelope live in
+// WriteValidationErrors and the canonical error envelope live in
 // errors.go (PR-9/11 unification).
