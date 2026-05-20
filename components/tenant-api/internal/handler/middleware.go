@@ -452,3 +452,39 @@ func RateLimitConfigFromEnv(envValue string) (cfg RateLimitConfig, malformed boo
 	cfg.RequestsPerMinute = n
 	return cfg, false
 }
+
+// ─────────────────────────────────────────────────────────────────
+// Request body size limit (issue #144)
+// ─────────────────────────────────────────────────────────────────
+
+// DefaultMaxBodyBytes is the request-body cap applied by every
+// write handler via `io.LimitReader(r.Body, d.MaxBodyBytes)`. 1 MiB
+// fits even the largest realistic tenant YAML (deeply-nested rule
+// pack with hundreds of thresholds) with order-of-magnitude
+// headroom, while keeping a single oversize POST from holding
+// 100 MB in memory long enough to OOM the pod. Operators tuning
+// for atypical payloads override via `TA_MAX_BODY_BYTES`.
+const DefaultMaxBodyBytes int64 = 1 << 20
+
+// MaxBodyBytesFromEnv reads `TA_MAX_BODY_BYTES` and returns
+// (bytes, malformed). Mirrors RateLimitConfigFromEnv: returns the
+// default fallback on any out-of-range / unparseable input AND
+// flags malformed so the caller can WARN at startup. Zero is NOT
+// a valid value — a 0-byte cap would reject every write and is
+// almost certainly a config error, so it's treated as malformed.
+//
+// Recognised values:
+//   - empty / absent → 1<<20 (default), malformed=false
+//   - any positive integer → that integer, malformed=false
+//   - "0", negative, or unparseable → default, **malformed=true**
+func MaxBodyBytesFromEnv(envValue string) (n int64, malformed bool) {
+	v := strings.TrimSpace(envValue)
+	if v == "" {
+		return DefaultMaxBodyBytes, false
+	}
+	var parsed int64
+	if _, err := fmt.Sscanf(v, "%d", &parsed); err != nil || parsed <= 0 {
+		return DefaultMaxBodyBytes, true
+	}
+	return parsed, false
+}

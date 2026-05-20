@@ -73,7 +73,7 @@ func toFederationTokenRecord(r token.Record) FederationTokenRecord {
 // @Router      /api/v1/federation/tokens [post]
 func CreateFederationToken(d *handler.Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+		body, err := io.ReadAll(io.LimitReader(r.Body, d.MaxBody()))
 		if err != nil {
 			handler.WriteJSONError(w, r, http.StatusBadRequest, "failed to read request body: "+err.Error())
 			return

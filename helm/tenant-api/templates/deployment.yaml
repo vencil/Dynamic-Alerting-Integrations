@@ -89,6 +89,30 @@ spec:
               value: {{ .Values.tenantApi.gitCommitterName | quote }}
             - name: GIT_COMMITTER_EMAIL
               value: {{ .Values.tenantApi.gitCommitterEmail | quote }}
+            # Server tuning (issue #144). The binary has working
+            # defaults built in; emit env vars only when the chart
+            # has them so a default deploy doesn't churn the env
+            # block on every helm upgrade.
+            {{- with .Values.tenantApi.server }}
+            {{- with .timeouts }}
+            {{- if .read }}
+            - name: TA_READ_TIMEOUT
+              value: {{ .read | quote }}
+            {{- end }}
+            {{- if .write }}
+            - name: TA_WRITE_TIMEOUT
+              value: {{ .write | quote }}
+            {{- end }}
+            {{- if .idle }}
+            - name: TA_IDLE_TIMEOUT
+              value: {{ .idle | quote }}
+            {{- end }}
+            {{- end }}
+            {{- if .maxBodyBytes }}
+            - name: TA_MAX_BODY_BYTES
+              value: {{ .maxBodyBytes | quote }}
+            {{- end }}
+            {{- end }}
           ports:
             - name: api
               containerPort: 8080
