@@ -1,4 +1,4 @@
-package handler
+package federation
 
 import (
 	"bytes"
@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/vencil/tenant-api/internal/federation/token"
+	"github.com/vencil/tenant-api/internal/handler"
 	"github.com/vencil/tenant-api/internal/rbac"
 )
 
@@ -48,7 +49,7 @@ func newTestFederation(t *testing.T) *token.Manager {
 func TestCreateFederationToken_Success(t *testing.T) {
 	t.Parallel()
 	rbacMgr := newRBACManager(t, fedAdminRBAC)
-	d := &Deps{RBAC: rbacMgr, Federation: newTestFederation(t)}
+	d := &handler.Deps{RBAC: rbacMgr, Federation: newTestFederation(t)}
 
 	req := httptest.NewRequest("POST", "/api/v1/federation/tokens",
 		bytes.NewBufferString(`{"tenant_id":"tenant-alpha","description":"grafana pull"}`))
@@ -86,7 +87,7 @@ func TestCreateFederationToken_Success(t *testing.T) {
 func TestCreateFederationToken_ForbiddenWithoutAdmin(t *testing.T) {
 	t.Parallel()
 	rbacMgr := newRBACManager(t, fedViewerRBAC)
-	d := &Deps{RBAC: rbacMgr, Federation: newTestFederation(t)}
+	d := &handler.Deps{RBAC: rbacMgr, Federation: newTestFederation(t)}
 
 	req := httptest.NewRequest("POST", "/api/v1/federation/tokens",
 		bytes.NewBufferString(`{"tenant_id":"tenant-alpha"}`))
@@ -105,7 +106,7 @@ func TestCreateFederationToken_ForbiddenWithoutAdmin(t *testing.T) {
 func TestCreateFederationToken_MissingTenantID(t *testing.T) {
 	t.Parallel()
 	rbacMgr := newRBACManager(t, fedAdminRBAC)
-	d := &Deps{RBAC: rbacMgr, Federation: newTestFederation(t)}
+	d := &handler.Deps{RBAC: rbacMgr, Federation: newTestFederation(t)}
 
 	req := httptest.NewRequest("POST", "/api/v1/federation/tokens",
 		bytes.NewBufferString(`{"description":"no tenant"}`))
@@ -124,7 +125,7 @@ func TestCreateFederationToken_MissingTenantID(t *testing.T) {
 func TestCreateFederationToken_InvalidJSON(t *testing.T) {
 	t.Parallel()
 	rbacMgr := newRBACManager(t, fedAdminRBAC)
-	d := &Deps{RBAC: rbacMgr, Federation: newTestFederation(t)}
+	d := &handler.Deps{RBAC: rbacMgr, Federation: newTestFederation(t)}
 
 	req := httptest.NewRequest("POST", "/api/v1/federation/tokens",
 		bytes.NewBufferString("not json"))
@@ -155,7 +156,7 @@ func TestListFederationTokens_Success(t *testing.T) {
 	if _, _, err := fed.Issue("tenant-b", "ops@example.com", "other"); err != nil {
 		t.Fatalf("Issue: %v", err)
 	}
-	d := &Deps{RBAC: rbacMgr, Federation: fed}
+	d := &handler.Deps{RBAC: rbacMgr, Federation: fed}
 
 	req := httptest.NewRequest("GET", "/api/v1/federation/tokens?tenant_id=tenant-a", nil)
 	req.Header.Set("X-Forwarded-Email", "ops@example.com")
@@ -184,7 +185,7 @@ func TestListFederationTokens_Success(t *testing.T) {
 func TestListFederationTokens_MissingTenantID(t *testing.T) {
 	t.Parallel()
 	rbacMgr := newRBACManager(t, fedAdminRBAC)
-	d := &Deps{RBAC: rbacMgr, Federation: newTestFederation(t)}
+	d := &handler.Deps{RBAC: rbacMgr, Federation: newTestFederation(t)}
 
 	req := httptest.NewRequest("GET", "/api/v1/federation/tokens", nil)
 	req.Header.Set("X-Forwarded-Email", "ops@example.com")
@@ -201,7 +202,7 @@ func TestListFederationTokens_MissingTenantID(t *testing.T) {
 func TestListFederationTokens_ForbiddenWithoutAdmin(t *testing.T) {
 	t.Parallel()
 	rbacMgr := newRBACManager(t, fedViewerRBAC)
-	d := &Deps{RBAC: rbacMgr, Federation: newTestFederation(t)}
+	d := &handler.Deps{RBAC: rbacMgr, Federation: newTestFederation(t)}
 
 	req := httptest.NewRequest("GET", "/api/v1/federation/tokens?tenant_id=tenant-a", nil)
 	req.Header.Set("X-Forwarded-Email", "viewer@example.com")
@@ -225,7 +226,7 @@ func TestDeleteFederationToken_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Issue: %v", err)
 	}
-	d := &Deps{RBAC: rbacMgr, Federation: fed}
+	d := &handler.Deps{RBAC: rbacMgr, Federation: fed}
 
 	req := newRequestWithChiParam("DELETE", "/api/v1/federation/tokens/"+rec.TokenID, "id", rec.TokenID, nil)
 	req.Header.Set("X-Forwarded-Email", "ops@example.com")
@@ -245,7 +246,7 @@ func TestDeleteFederationToken_Success(t *testing.T) {
 func TestDeleteFederationToken_NotFound(t *testing.T) {
 	t.Parallel()
 	rbacMgr := newRBACManager(t, fedAdminRBAC)
-	d := &Deps{RBAC: rbacMgr, Federation: newTestFederation(t)}
+	d := &handler.Deps{RBAC: rbacMgr, Federation: newTestFederation(t)}
 
 	req := newRequestWithChiParam("DELETE", "/api/v1/federation/tokens/ftk_missing", "id", "ftk_missing", nil)
 	req.Header.Set("X-Forwarded-Email", "ops@example.com")
@@ -267,7 +268,7 @@ func TestDeleteFederationToken_ForbiddenWithoutAdmin(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Issue: %v", err)
 	}
-	d := &Deps{RBAC: rbacMgr, Federation: fed}
+	d := &handler.Deps{RBAC: rbacMgr, Federation: fed}
 
 	req := newRequestWithChiParam("DELETE", "/api/v1/federation/tokens/"+rec.TokenID, "id", rec.TokenID, nil)
 	req.Header.Set("X-Forwarded-Email", "viewer@example.com")
@@ -289,7 +290,7 @@ func TestDeleteFederationToken_ForbiddenWithoutAdmin(t *testing.T) {
 func TestCreateFederationToken_RejectsInvalidTenantID(t *testing.T) {
 	t.Parallel()
 	rbacMgr := newRBACManager(t, fedAdminRBAC)
-	d := &Deps{RBAC: rbacMgr, Federation: newTestFederation(t)}
+	d := &handler.Deps{RBAC: rbacMgr, Federation: newTestFederation(t)}
 
 	req := httptest.NewRequest("POST", "/api/v1/federation/tokens",
 		bytes.NewBufferString(`{"tenant_id":"../escape"}`))
@@ -308,7 +309,7 @@ func TestCreateFederationToken_RejectsInvalidTenantID(t *testing.T) {
 func TestListFederationTokens_RejectsInvalidTenantID(t *testing.T) {
 	t.Parallel()
 	rbacMgr := newRBACManager(t, fedAdminRBAC)
-	d := &Deps{RBAC: rbacMgr, Federation: newTestFederation(t)}
+	d := &handler.Deps{RBAC: rbacMgr, Federation: newTestFederation(t)}
 
 	req := httptest.NewRequest("GET", "/api/v1/federation/tokens?tenant_id=../escape", nil)
 	req.Header.Set("X-Forwarded-Email", "ops@example.com")
@@ -327,7 +328,7 @@ func TestListFederationTokens_RejectsInvalidTenantID(t *testing.T) {
 func TestCreateFederationToken_RateLimited(t *testing.T) {
 	t.Parallel()
 	rbacMgr := newRBACManager(t, fedAdminRBAC)
-	d := &Deps{RBAC: rbacMgr, Federation: newTestFederation(t)}
+	d := &handler.Deps{RBAC: rbacMgr, Federation: newTestFederation(t)}
 	h := wrapWithRBACMiddleware(CreateFederationToken(d), rbacMgr, rbac.PermRead, nil)
 
 	post := func() int {

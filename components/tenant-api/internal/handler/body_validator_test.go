@@ -283,7 +283,7 @@ func TestValidatePatchMap_BoundaryNumeric_ExactCapPasses(t *testing.T) {
 }
 
 // ─────────────────────────────────────────────────────────────────
-// validateStructTags — struct-level rules
+// ValidateStructTags — struct-level rules
 // ─────────────────────────────────────────────────────────────────
 
 func TestValidateStructTags_BatchRequest_RequiredOperations(t *testing.T) {
@@ -292,7 +292,7 @@ func TestValidateStructTags_BatchRequest_RequiredOperations(t *testing.T) {
 	// Note: handler also has its own len(req.Operations)==0 check; this
 	// test exercises the validator-level rule.
 	req := BatchRequest{Operations: []BatchOperation{}}
-	v := validateStructTags(&req)
+	v := ValidateStructTags(&req)
 	if len(v) == 0 {
 		t.Fatal("expected violations on empty Operations slice")
 	}
@@ -313,7 +313,7 @@ func TestValidateStructTags_PutGroupRequest_LabelTooLong(t *testing.T) {
 		Label:       strings.Repeat("L", 257),
 		Description: "ok",
 	}
-	v := validateStructTags(&req)
+	v := ValidateStructTags(&req)
 	if len(v) == 0 {
 		t.Fatal("expected violation for label > 256 chars")
 	}
@@ -331,7 +331,7 @@ func TestValidateStructTags_PutGroupRequest_DescriptionTooLong(t *testing.T) {
 		Label:       "ok",
 		Description: strings.Repeat("d", 4097),
 	}
-	v := validateStructTags(&req)
+	v := ValidateStructTags(&req)
 	if len(v) == 0 {
 		t.Fatal("expected violation for description > 4096 chars")
 	}
@@ -343,7 +343,7 @@ func TestValidateStructTags_PutGroupRequest_DescriptionTooLong(t *testing.T) {
 func TestValidateStructTags_PutGroupRequest_EmptyLabel(t *testing.T) {
 	t.Parallel()
 	req := PutGroupRequest{Label: ""}
-	v := validateStructTags(&req)
+	v := ValidateStructTags(&req)
 	if len(v) == 0 {
 		t.Fatal("expected violation for empty label")
 	}
@@ -356,7 +356,7 @@ func TestValidateStructTags_ValidPutGroupRequest_NoViolations(t *testing.T) {
 		Description: "fine",
 		Members:     []string{"db-a", "db-b"},
 	}
-	if v := validateStructTags(&req); len(v) != 0 {
+	if v := ValidateStructTags(&req); len(v) != 0 {
 		t.Errorf("expected no violations, got: %+v", v)
 	}
 }
@@ -386,7 +386,7 @@ func TestValidateFilterMap_OversizedValue(t *testing.T) {
 }
 
 // ─────────────────────────────────────────────────────────────────
-// writeValidationErrors — JSON shape contract
+// WriteValidationErrors — JSON shape contract
 // ─────────────────────────────────────────────────────────────────
 
 func TestWriteValidationErrors_JSONShape(t *testing.T) {
@@ -396,7 +396,7 @@ func TestWriteValidationErrors_JSONShape(t *testing.T) {
 		{Field: "operations[0].patch[\"_timeout_ms\"]", Reason: "must be ≤ 3600000"},
 		{Field: "operations[0].patch[\"_silent_mode\"]", Reason: "must be one of ..."},
 	}
-	writeValidationErrors(w, nil, violations)
+	WriteValidationErrors(w, nil, violations)
 
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400", w.Code)

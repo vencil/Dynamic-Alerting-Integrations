@@ -56,7 +56,7 @@ func GroupBatch(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		groupID := chi.URLParam(r, "id")
 		if err := groups.ValidateGroupID(groupID); err != nil {
-			writeJSONError(w, r,http.StatusBadRequest, err.Error())
+			WriteJSONError(w, r,http.StatusBadRequest, err.Error())
 			return
 		}
 
@@ -65,22 +65,22 @@ func GroupBatch(d *Deps) http.HandlerFunc {
 
 		g, ok := d.Groups.GetGroup(groupID)
 		if !ok {
-			writeJSONError(w, r,http.StatusNotFound, "group not found: "+groupID)
+			WriteJSONError(w, r,http.StatusNotFound, "group not found: "+groupID)
 			return
 		}
 
 		var req GroupBatchRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeJSONError(w, r,http.StatusBadRequest, "invalid JSON: "+err.Error())
+			WriteJSONError(w, r,http.StatusBadRequest, "invalid JSON: "+err.Error())
 			return
 		}
 		if len(req.Patch) == 0 {
-			writeJSONError(w, r,http.StatusBadRequest, "patch must not be empty")
+			WriteJSONError(w, r,http.StatusBadRequest, "patch must not be empty")
 			return
 		}
 
 		if len(g.Members) == 0 {
-			writeJSONError(w, r,http.StatusBadRequest, "group has no members")
+			WriteJSONError(w, r,http.StatusBadRequest, "group has no members")
 			return
 		}
 

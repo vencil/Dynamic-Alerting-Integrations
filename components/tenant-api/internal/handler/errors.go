@@ -5,7 +5,7 @@ package handler
 // Pre-PR-9 there were six different shapes for an error response
 // scattered across the handler package:
 //
-//   * writeJSONError       → {error}
+//   * WriteJSONError       → {error}
 //   * writeValidationErrors→ {error, code, violations}
 //   * writePolicyViolation → {error, violations, help, action}
 //   * RateLimit middleware → {error, code, retry_after_s}
@@ -114,12 +114,12 @@ func (e ErrorResponse) MarshalJSON() ([]byte, error) {
 	return json.Marshal(out)
 }
 
-// writeErrorEnvelope is the canonical error response writer. All
+// WriteErrorEnvelope is the canonical error response writer. All
 // other helpers in this file funnel through here.
 //
 // `r` may be nil for test-only call sites; production handlers
 // always have r in scope so request_id population is automatic.
-func writeErrorEnvelope(w http.ResponseWriter, r *http.Request, status int, env ErrorResponse) {
+func WriteErrorEnvelope(w http.ResponseWriter, r *http.Request, status int, env ErrorResponse) {
 	if env.RequestID == "" && r != nil {
 		env.RequestID = middleware.GetReqID(r.Context())
 	}
@@ -128,33 +128,33 @@ func writeErrorEnvelope(w http.ResponseWriter, r *http.Request, status int, env 
 	_ = json.NewEncoder(w).Encode(env)
 }
 
-// writeJSONError emits a simple error envelope: {error, code,
+// WriteJSONError emits a simple error envelope: {error, code,
 // request_id}. The `code` is inferred from the HTTP status when
 // not supplied explicitly — see codeFromStatus.
 //
 // Pre-PR-9 signature was (w, status, msg); migrated to include `r`
 // so request_id is populated. Test-only call sites that don't have
 // a request can pass nil (request_id will simply be omitted).
-func writeJSONError(w http.ResponseWriter, r *http.Request, status int, msg string) {
-	writeErrorEnvelope(w, r, status, ErrorResponse{
+func WriteJSONError(w http.ResponseWriter, r *http.Request, status int, msg string) {
+	WriteErrorEnvelope(w, r, status, ErrorResponse{
 		Error: msg,
 		Code:  codeFromStatus(status),
 	})
 }
 
-// writeJSONErrorWithCode lets callers override the inferred code
+// WriteJSONErrorWithCode lets callers override the inferred code
 // with an explicit machine-readable token (e.g. RATE_LIMITED,
 // PENDING_PR_EXISTS). Use this when the error class is more
 // specific than "any 400".
-func writeJSONErrorWithCode(w http.ResponseWriter, r *http.Request, status int, code, msg string) {
-	writeErrorEnvelope(w, r, status, ErrorResponse{
+func WriteJSONErrorWithCode(w http.ResponseWriter, r *http.Request, status int, code, msg string) {
+	WriteErrorEnvelope(w, r, status, ErrorResponse{
 		Error: msg,
 		Code:  code,
 	})
 }
 
 // codeFromStatus returns a default code for HTTP statuses without
-// a more-specific one provided. Keeps simple writeJSONError calls
+// a more-specific one provided. Keeps simple WriteJSONError calls
 // emitting useful machine-readable codes without forcing every
 // call site to think about it.
 func codeFromStatus(status int) string {
@@ -175,7 +175,7 @@ func codeFromStatus(status int) string {
 	return ""
 }
 
-// writeValidationErrors emits the canonical 400 response with a
+// WriteValidationErrors emits the canonical 400 response with a
 // `violations` array. Caller has decided there's at least one
 // violation; this just renders the response.
 //
@@ -189,8 +189,8 @@ func codeFromStatus(status int) string {
 //	  "request_id": "...",
 //	  "violations": [{"field": "...", "reason": "..."}]
 //	}
-func writeValidationErrors(w http.ResponseWriter, r *http.Request, violations []Violation) {
-	writeErrorEnvelope(w, r, http.StatusBadRequest, ErrorResponse{
+func WriteValidationErrors(w http.ResponseWriter, r *http.Request, violations []Violation) {
+	WriteErrorEnvelope(w, r, http.StatusBadRequest, ErrorResponse{
 		Error:      "validation failed",
 		Code:       CodeInvalidBody,
 		Violations: violations,
@@ -201,7 +201,7 @@ func writeValidationErrors(w http.ResponseWriter, r *http.Request, violations []
 // violations. The pre-PR-9 shape included a `help` URL and an
 // actionable `action` string; both preserved.
 func writePolicyViolation(w http.ResponseWriter, r *http.Request, violations []policy.Violation) {
-	writeErrorEnvelope(w, r, http.StatusForbidden, ErrorResponse{
+	WriteErrorEnvelope(w, r, http.StatusForbidden, ErrorResponse{
 		Error:   "domain policy violation",
 		Code:    CodePolicyViolation,
 		PolicyV: violations,

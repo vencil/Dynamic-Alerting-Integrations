@@ -79,11 +79,11 @@ func BatchTenants(d *Deps) http.HandlerFunc {
 
 		var req BatchRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeJSONError(rw, r,http.StatusBadRequest, "invalid JSON: "+err.Error())
+			WriteJSONError(rw, r,http.StatusBadRequest, "invalid JSON: "+err.Error())
 			return
 		}
 		if len(req.Operations) == 0 {
-			writeJSONError(rw, r,http.StatusBadRequest, "operations list is empty")
+			WriteJSONError(rw, r,http.StatusBadRequest, "operations list is empty")
 			return
 		}
 
@@ -91,13 +91,13 @@ func BatchTenants(d *Deps) http.HandlerFunc {
 		// Track C C4). Run BEFORE any RBAC / per-op work so a malformed
 		// body fails fast with the full violation list (one round-trip
 		// for the operator to fix everything, not retry-and-discover).
-		violations := validateStructTags(&req)
+		violations := ValidateStructTags(&req)
 		for i, op := range req.Operations {
 			fieldPrefix := fmt.Sprintf("operations[%d].patch", i)
 			violations = append(violations, validatePatchMap(op.Patch, fieldPrefix)...)
 		}
 		if len(violations) > 0 {
-			writeValidationErrors(rw, r,violations)
+			WriteValidationErrors(rw, r,violations)
 			return
 		}
 
@@ -148,7 +148,7 @@ func BatchTenants(d *Deps) http.HandlerFunc {
 
 			result, err := d.Writer.WritePRBatch(batchOps, email)
 			if err != nil {
-				writeJSONError(rw, r,http.StatusInternalServerError, "PR/MR batch write failed: "+err.Error())
+				WriteJSONError(rw, r,http.StatusInternalServerError, "PR/MR batch write failed: "+err.Error())
 				return
 			}
 
@@ -170,7 +170,7 @@ func BatchTenants(d *Deps) http.HandlerFunc {
 			)
 			if err != nil {
 				provider := d.PRClient.ProviderName()
-				writeJSONError(rw, r,http.StatusServiceUnavailable, fmt.Sprintf("%s PR/MR creation failed: %s", provider, err.Error()))
+				WriteJSONError(rw, r,http.StatusServiceUnavailable, fmt.Sprintf("%s PR/MR creation failed: %s", provider, err.Error()))
 				return
 			}
 

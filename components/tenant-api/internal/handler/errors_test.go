@@ -25,7 +25,7 @@ func TestWriteJSONError_AddsCodeAndRequestID(t *testing.T) {
 	t.Parallel()
 	w := httptest.NewRecorder()
 	r := requestWithID("GET", "/x", "req-abc-123")
-	writeJSONError(w, r, http.StatusNotFound, "thing not found")
+	WriteJSONError(w, r, http.StatusNotFound, "thing not found")
 
 	if w.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want 404", w.Code)
@@ -48,7 +48,7 @@ func TestWriteJSONError_AddsCodeAndRequestID(t *testing.T) {
 func TestWriteJSONError_NilRequestOmitsRequestID(t *testing.T) {
 	t.Parallel()
 	w := httptest.NewRecorder()
-	writeJSONError(w, nil, http.StatusBadRequest, "bad")
+	WriteJSONError(w, nil, http.StatusBadRequest, "bad")
 	var resp map[string]any
 	_ = json.Unmarshal(w.Body.Bytes(), &resp)
 	if _, has := resp["request_id"]; has {
@@ -64,7 +64,7 @@ func TestWriteValidationErrors_Shape(t *testing.T) {
 		{Field: "label", Reason: "is required"},
 		{Field: "members", Reason: "must not exceed 1000 items"},
 	}
-	writeValidationErrors(w, r, violations)
+	WriteValidationErrors(w, r, violations)
 
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400", w.Code)
@@ -129,7 +129,7 @@ func TestErrorResponse_ExtraInlinedAtTopLevel(t *testing.T) {
 	t.Parallel()
 	w := httptest.NewRecorder()
 	r := requestWithID("POST", "/x", "req-extra")
-	writeErrorEnvelope(w, r, http.StatusConflict, ErrorResponse{
+	WriteErrorEnvelope(w, r, http.StatusConflict, ErrorResponse{
 		Error: "pending_pr_exists",
 		Code:  CodePendingPR,
 		Extra: map[string]any{

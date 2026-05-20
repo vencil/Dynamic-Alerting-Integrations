@@ -36,18 +36,18 @@ func GetTenant(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		tenantID := chi.URLParam(r, "id")
 		if err := ValidateTenantID(tenantID); err != nil {
-			writeJSONError(w, r,http.StatusBadRequest, err.Error())
+			WriteJSONError(w, r,http.StatusBadRequest, err.Error())
 			return
 		}
 
 		filePath := filepath.Join(d.ConfigDir, tenantID+".yaml")
 		data, err := os.ReadFile(filePath)
 		if os.IsNotExist(err) {
-			writeJSONError(w, r,http.StatusNotFound, "tenant not found: "+tenantID)
+			WriteJSONError(w, r,http.StatusNotFound, "tenant not found: "+tenantID)
 			return
 		}
 		if err != nil {
-			writeJSONError(w, r,http.StatusInternalServerError, err.Error())
+			WriteJSONError(w, r,http.StatusInternalServerError, err.Error())
 			return
 		}
 

@@ -1,4 +1,4 @@
-package handler
+package federation
 
 import (
 	"bytes"
@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/vencil/tenant-api/internal/federation/fedpolicy"
+	"github.com/vencil/tenant-api/internal/handler"
 )
 
 // fakePrometheus mocks the Prometheus Series API for handler-level
@@ -112,7 +113,7 @@ func fedReq(t *testing.T, method, path, paramKey, paramVal, body string) *http.R
 func TestGetFederationPolicy_Empty(t *testing.T) {
 	t.Parallel()
 	configDir := setupConfigDir(t, nil)
-	d := &Deps{
+	d := &handler.Deps{
 		FederationPolicy: fedpolicy.NewManager(configDir),
 		RBAC:             newRBACManager(t, ""),
 	}
@@ -133,7 +134,7 @@ func TestPutFederationPolicy_ForbiddenForNonPlatformAdmin(t *testing.T) {
 	t.Parallel()
 	configDir := setupConfigDir(t, nil)
 	initGitRepo(t, configDir)
-	d := &Deps{
+	d := &handler.Deps{
 		ConfigDir:        configDir,
 		Writer:           newTestWriter(configDir),
 		FederationPolicy: fedpolicy.NewManager(configDir),
@@ -151,7 +152,7 @@ func TestPutFederationPolicy_Success(t *testing.T) {
 	t.Parallel()
 	configDir := setupConfigDir(t, nil)
 	initGitRepo(t, configDir)
-	d := &Deps{
+	d := &handler.Deps{
 		ConfigDir:        configDir,
 		Writer:           newTestWriter(configDir),
 		FederationPolicy: fedpolicy.NewManager(configDir),
@@ -178,7 +179,7 @@ func TestPutFederationPolicy_AdmissionHardBlock(t *testing.T) {
 	// No tenant-labelled series, but the metric has data — hard block:
 	// not whitelistable, not forceable.
 	promURL := fakePrometheus(t, nil, []map[string]string{{"__name__": "m", "instance": "x"}})
-	d := &Deps{
+	d := &handler.Deps{
 		ConfigDir:          configDir,
 		Writer:             newTestWriter(configDir),
 		FederationPolicy:   fedpolicy.NewManager(configDir),
@@ -201,7 +202,7 @@ func TestPutFederationPolicy_AdmissionWarnNeedsForce(t *testing.T) {
 	initGitRepo(t, configDir)
 	// Both probes empty — no samples in the window → soft Warn.
 	promURL := fakePrometheus(t, nil, nil)
-	d := &Deps{
+	d := &handler.Deps{
 		ConfigDir:          configDir,
 		Writer:             newTestWriter(configDir),
 		FederationPolicy:   fedpolicy.NewManager(configDir),
@@ -238,7 +239,7 @@ func TestPutFederationPolicy_AdmissionPass(t *testing.T) {
 	initGitRepo(t, configDir)
 	// A tenant-labelled series exists → Pass, no force needed.
 	promURL := fakePrometheus(t, []map[string]string{{"__name__": "m", "tenant": "db-a"}}, nil)
-	d := &Deps{
+	d := &handler.Deps{
 		ConfigDir:          configDir,
 		Writer:             newTestWriter(configDir),
 		FederationPolicy:   fedpolicy.NewManager(configDir),
@@ -260,7 +261,7 @@ func TestPutFederationPolicy_AdmissionMultipleMetricsConcurrent(t *testing.T) {
 	// admission checks run concurrently — this verifies the fan-out
 	// maps each verdict back to the right metric (m3, not m1/m2/...).
 	promURL := fakePromPerMetric(t, "m3")
-	d := &Deps{
+	d := &handler.Deps{
 		ConfigDir:          configDir,
 		Writer:             newTestWriter(configDir),
 		FederationPolicy:   fedpolicy.NewManager(configDir),
@@ -281,7 +282,7 @@ func TestPutFederationPolicy_RejectsTooManyNewMetrics(t *testing.T) {
 	t.Parallel()
 	configDir := setupConfigDir(t, nil)
 	initGitRepo(t, configDir)
-	d := &Deps{
+	d := &handler.Deps{
 		ConfigDir:          configDir,
 		Writer:             newTestWriter(configDir),
 		FederationPolicy:   fedpolicy.NewManager(configDir),
@@ -313,7 +314,7 @@ func TestPutFederationPolicy_CancelledContextSkipsGitWrite(t *testing.T) {
 	initGitRepo(t, configDir)
 	// Validator disabled so admission is skipped — isolates the
 	// point-of-no-return context guard right before the git write.
-	d := &Deps{
+	d := &handler.Deps{
 		ConfigDir:        configDir,
 		Writer:           newTestWriter(configDir),
 		FederationPolicy: fedpolicy.NewManager(configDir),
@@ -332,7 +333,7 @@ func TestPutFederationPolicy_RejectsInvalidMetricName(t *testing.T) {
 	t.Parallel()
 	configDir := setupConfigDir(t, nil)
 	initGitRepo(t, configDir)
-	d := &Deps{
+	d := &handler.Deps{
 		ConfigDir:        configDir,
 		Writer:           newTestWriter(configDir),
 		FederationPolicy: fedpolicy.NewManager(configDir),
@@ -349,7 +350,7 @@ func TestPutTenantFederation_ForbiddenWithoutTenantAdmin(t *testing.T) {
 	t.Parallel()
 	configDir := setupConfigDir(t, nil)
 	initGitRepo(t, configDir)
-	d := &Deps{
+	d := &handler.Deps{
 		ConfigDir:        configDir,
 		Writer:           newTestWriter(configDir),
 		FederationPolicy: fedpolicy.NewManager(configDir),
@@ -371,7 +372,7 @@ func TestPutTenantFederation_RejectsMetricOutsideWhitelist(t *testing.T) {
 	mgr := fedpolicy.NewManagerForTest(&fedpolicy.Config{
 		Whitelist: []fedpolicy.WhitelistEntry{{Metric: "mysql_up"}},
 	})
-	d := &Deps{
+	d := &handler.Deps{
 		ConfigDir:        configDir,
 		Writer:           newTestWriter(configDir),
 		FederationPolicy: mgr,
@@ -395,7 +396,7 @@ func TestPutTenantFederation_Success(t *testing.T) {
 	mgr := fedpolicy.NewManagerForTest(&fedpolicy.Config{
 		Whitelist: []fedpolicy.WhitelistEntry{{Metric: "mysql_up"}, {Metric: "pg_up"}},
 	})
-	d := &Deps{
+	d := &handler.Deps{
 		ConfigDir:        configDir,
 		Writer:           newTestWriter(configDir),
 		FederationPolicy: mgr,
@@ -431,7 +432,7 @@ func TestGetTenantFederation_ReadRepairDropsStaleMetric(t *testing.T) {
 	mgr := fedpolicy.NewManagerForTest(&fedpolicy.Config{
 		Whitelist: []fedpolicy.WhitelistEntry{{Metric: "mysql_up"}},
 	})
-	d := &Deps{ConfigDir: configDir, FederationPolicy: mgr, RBAC: newRBACManager(t, "")}
+	d := &handler.Deps{ConfigDir: configDir, FederationPolicy: mgr, RBAC: newRBACManager(t, "")}
 
 	w := executeWithRBAC(t, GetTenantFederation(d), fedReq(t, "GET", "/api/v1/tenants/db-a/federation", "id", "db-a", ""))
 	if w.Code != http.StatusOK {
@@ -450,7 +451,7 @@ func TestGetTenantFederation_ReadRepairDropsStaleMetric(t *testing.T) {
 func TestGetTenantFederation_NoFileYieldsEmptySubset(t *testing.T) {
 	t.Parallel()
 	configDir := setupConfigDir(t, nil)
-	d := &Deps{
+	d := &handler.Deps{
 		ConfigDir:        configDir,
 		FederationPolicy: fedpolicy.NewManager(configDir),
 		RBAC:             newRBACManager(t, ""),

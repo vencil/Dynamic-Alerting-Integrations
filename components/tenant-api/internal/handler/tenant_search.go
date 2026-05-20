@@ -138,13 +138,13 @@ func SearchTenants(d *Deps) http.HandlerFunc {
 
 		params, err := parseSearchParams(r)
 		if err != nil {
-			writeJSONError(w, r,http.StatusBadRequest, err.Error())
+			WriteJSONError(w, r,http.StatusBadRequest, err.Error())
 			return
 		}
 
 		all, err := d.SearchCache.snapshot(d.ConfigDir)
 		if err != nil {
-			writeJSONError(w, r,http.StatusInternalServerError, err.Error())
+			WriteJSONError(w, r,http.StatusInternalServerError, err.Error())
 			return
 		}
 
