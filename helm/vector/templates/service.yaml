@@ -1,0 +1,31 @@
+{{- if .Values.metrics.enabled }}
+# Vector self-telemetry Service. Only rendered when metrics.enabled is
+# true — the prometheus_exporter sink lives inside the same DaemonSet
+# pod, so this is a node-local pod-IP scrape target (no load balance
+# semantics, no per-pod endpoint slicing needed). Without this Service
+# operators have to rely on pod-IP scrape annotations, which works but
+# breaks Prometheus's relabel-by-service-name convention.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "vector.name" . }}-metrics
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "vector.labels" . | nindent 4 }}
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: {{ .Values.metrics.port | quote }}
+    prometheus.io/path: /metrics
+spec:
+  # Headless: each Vector pod is independent — there is no "pick a
+  # backend" routing. ClusterIP would silently collapse N nodes into
+  # one address and the scrape would only see one node's stats.
+  clusterIP: None
+  selector:
+    {{- include "vector.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: metrics
+      port: {{ .Values.metrics.port }}
+      targetPort: metrics
+      protocol: TCP
+{{- end }}

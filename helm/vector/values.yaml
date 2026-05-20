@@ -89,7 +89,9 @@ affinity: {}
 # Vector exposes a Prometheus exporter on this port (internal_metrics
 # source + prometheus_exporter sink). Disabled by default in Phase 1;
 # enable once the cluster has Prometheus scraping in place to track
-# shipper health (events_in / events_out / dropped).
+# shipper health (events_in / events_out / dropped). Enabling renders a
+# headless Service (templates/service.yaml) so Prometheus can scrape by
+# service name rather than pod-IP annotations.
 metrics:
   enabled: false
   port: 9598

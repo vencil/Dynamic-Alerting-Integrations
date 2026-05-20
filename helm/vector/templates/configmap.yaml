@@ -20,6 +20,14 @@ data:
   # See #539 §3 for the load-bearing schema choices and the explicit
   # rejection of `exists(.tenant_id)` as a demux key.
   vector.yaml: |
+    # Vector's default data_dir is /var/lib/vector, which lives on the
+    # container's root filesystem — and the DaemonSet locks that down
+    # with readOnlyRootFilesystem:true. Point Vector at the hostPath
+    # volume the DaemonSet mounts (templates/daemonset.yaml) so it has
+    # somewhere writable for source state + sink buffers across pod
+    # restarts.
+    data_dir: /vector-data-dir
+
     api:
       enabled: false
 
@@ -57,7 +65,9 @@ data:
         source: |
           parsed, err = parse_json(.message)
           if err == null && is_object(parsed) {
-            . = merge(., object!(parsed), deep: true) ?? .
+            # merge(object, object, deep:true) is infallible — no `??`
+            # needed (Vector 0.55+ rejects unnecessary error coalescing).
+            . = merge(., object!(parsed), deep: true)
             .log_type = "federation_audit"
           } else {
             .log_type = "gateway_operational"
