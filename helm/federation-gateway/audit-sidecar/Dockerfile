@@ -5,8 +5,9 @@
 #                 and exposes tenant_federation_requests_total on :3903.
 #   * logrotate - caps that emptyDir mirror so it can never grow large
 #                 enough to evict the pod. The durable audit trail is the
-#                 Envoy stdout sink (central-collection follow-up #539),
-#                 not this file.
+#                 Envoy stdout sink, picked up by the helm/vector
+#                 DaemonSet and shipped to helm/victorialogs (#539 Phase 1
+#                 platform log aggregation) — not this file.
 #
 # Build (from this directory):
 #   docker build -t <registry>/federation-audit-sidecar:3.0.8 .

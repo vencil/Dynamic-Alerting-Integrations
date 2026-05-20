@@ -225,9 +225,9 @@ Without the fix, PUT/DELETE Groups will hit the new tenant-scoped check and retu
 
 ALL violations are listed (not first-only) — same UX as the tenant-scoped check's forbidden-tenant listing. One round-trip lets the operator fix everything.
 
-### 5.2 Server-level timeout / body-size still hardcoded
+### 5.2 Server-level timeout / body-size config — moved to Helm (v2.9.0, #144)
 
-`http.Server{ReadTimeout: 15s, WriteTimeout: 30s, IdleTimeout: 60s}` and the 1MB body limit are baked into code. When customer ops need different per-environment values, expose via Helm value. **This hardening deliberately doesn't expand this surface** — defaults are within reasonable range.
+`http.Server{ReadTimeout, WriteTimeout, IdleTimeout}` and the per-handler body cap are now driven by `TA_READ_TIMEOUT` / `TA_WRITE_TIMEOUT` / `TA_IDLE_TIMEOUT` / `TA_MAX_BODY_BYTES` env vars and exposed through `helm/tenant-api` `tenantApi.server.{timeouts.{read,write,idle},maxBodyBytes}` values. Defaults match the v2.8.0 hardcoded values (15s / 30s / 60s / 1 MiB), so a default upgrade is a no-op; malformed env → `slog.Warn` + fallback.
 
 ### 5.3 SSE client idle timeout
 

@@ -1,0 +1,97 @@
+# vector Helm values
+# Reference: #539 — Platform log aggregation (Vector + VictoriaLogs).
+#
+# Node DaemonSet. Tails container stdout/stderr via Vector's
+# kubernetes_logs source, runs a VRL demux transform (parse_json on
+# .message + stream-field tagging), and ships into VictoriaLogs.
+#
+# Phase 1 scope: federation-gateway only (extra_label_selector). When
+# consumer #2 (#552 chargeback query log) lands, extend the selector or
+# add a second source — do NOT widen this DaemonSet to a general
+# platform log roll-up without revisiting #539 §7 (non-goals).
+
+image:
+  repository: timberio/vector
+  # distroless-libc: no shell, no package manager — production tag.
+  tag: "0.55.0-distroless-libc"
+  pullPolicy: IfNotPresent
+
+# Where to ship logs. Default points at the in-cluster VictoriaLogs
+# Service from the sibling helm/victorialogs chart, in the same
+# namespace as Vector is installed in (override `victorialogs.host` if
+# the store lives in a different namespace).
+victorialogs:
+  # FQDN of the VictoriaLogs Service. ".svc" form keeps it
+  # namespace-agnostic.
+  host: "victorialogs.monitoring.svc"
+  port: 9428
+  # Optional VictoriaLogs multi-tenancy. (AccountID=0, ProjectID=0) is
+  # the default tenant — fine for Phase 1 single-tenant store.
+  accountId: ""
+  projectId: ""
+
+# Scope of the kubernetes_logs source — which pods to tail.
+# Phase 1 default: federation-gateway only (per #539 §1 trigger and §7
+# non-goals — "not a general platform log roll-up"). Empty selector =
+# tail every pod on the node; only use that for chart smoke-tests.
+source:
+  extraLabelSelector: "app.kubernetes.io/name=federation-gateway"
+  extraNamespaceLabelSelector: ""
+  # Glob for log file paths. Vector default is fine — left here as the
+  # override seam.
+  extraFieldSelector: ""
+
+# Stream fields VictoriaLogs splits on. Per #539 §3 load-bearing schema:
+# bounded keys only. pod_name / token_id / query are intentionally NOT
+# here — they are high-cardinality data fields, not stream fields.
+# Order is preserved in the sink URL.
+streamFields:
+  - app
+  - k8s_namespace
+  - log_type
+  - tenant_id
+  - status
+
+# Pod-level: kubernetes_logs needs to read hostPath
+# /var/log/pods + /var/log/containers, which are typically root-owned.
+# Vector runs as root to read them and drops all capabilities except
+# DAC_READ_SEARCH — the minimum to read root-owned files without other
+# elevated privileges.
+podSecurityContext:
+  fsGroup: 0
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  runAsUser: 0
+  runAsNonRoot: false
+  capabilities:
+    drop: ["ALL"]
+    add: ["DAC_READ_SEARCH"]
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+# Tolerations — DaemonSet pattern is to schedule everywhere, including
+# tainted nodes (e.g. control-plane). Default empty for least-privilege;
+# override per cluster.
+tolerations: []
+nodeSelector: {}
+affinity: {}
+
+# Vector exposes a Prometheus exporter on this port (internal_metrics
+# source + prometheus_exporter sink). Disabled by default in Phase 1;
+# enable once the cluster has Prometheus scraping in place to track
+# shipper health (events_in / events_out / dropped).
+metrics:
+  enabled: false
+  port: 9598
+
+podAnnotations: {}

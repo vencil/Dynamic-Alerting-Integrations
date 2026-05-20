@@ -13,6 +13,17 @@ data:
         url: http://prometheus.monitoring.svc.cluster.local:9090
         isDefault: true
         editable: true
+      # VictoriaLogs — central log store for federation-gateway audit +
+      # operational streams (#539 Phase 1). The plugin is installed via
+      # GF_INSTALL_PLUGINS on the Grafana Deployment; if Grafana cannot
+      # reach the internet at startup the datasource will show as
+      # "Unknown plugin" until the install completes.
+      - name: VictoriaLogs
+        type: victoriametrics-logs-datasource
+        access: proxy
+        url: http://victorialogs.monitoring.svc.cluster.local:9428
+        isDefault: false
+        editable: true
 
   dashboards.yaml: |
     apiVersion: 1

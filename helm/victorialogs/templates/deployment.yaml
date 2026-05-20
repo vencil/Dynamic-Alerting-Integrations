@@ -1,0 +1,100 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "victorialogs.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "victorialogs.labels" . | nindent 4 }}
+spec:
+  # Single pod by design (#539 §3 — operational-simplicity choice).
+  # Recreate strategy because the PVC is RWO: a RollingUpdate would
+  # block forever waiting for the new pod to attach a volume the old
+  # pod still holds.
+  replicas: {{ .Values.replicaCount }}
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "victorialogs.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "victorialogs.labels" . | nindent 8 }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "victorialogs.name" . }}
+      automountServiceAccountToken: false
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: victorialogs
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - "-storageDataPath=/storage"
+            - "-httpListenAddr=:{{ .Values.listenPort }}"
+            - "-retentionPeriod={{ .Values.retentionPeriod }}"
+            {{- range .Values.extraArgs }}
+            - {{ . | quote }}
+            {{- end }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.listenPort }}
+              protocol: TCP
+          volumeMounts:
+            - name: storage
+              mountPath: /storage
+            # readOnlyRootFilesystem: true above means the binary cannot
+            # write to /tmp by default — give it a memory-backed scratch
+            # for query intermediates / merges.
+            - name: tmp
+              mountPath: /tmp
+          readinessProbe:
+            httpGet:
+              # /health returns 200 once the storage is mounted and the
+              # HTTP listener is up — the right readiness gate for "can
+              # Vector start pushing".
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            failureThreshold: 5
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: storage
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "victorialogs.name" . }}-data
+          {{- else }}
+          # Volatile: ephemeral storage, retention bounded by pod life.
+          # Only sensible for chart smoke-tests / CI.
+          emptyDir: {}
+          {{- end }}
+        - name: tmp
+          emptyDir:
+            medium: Memory
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

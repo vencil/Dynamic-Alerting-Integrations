@@ -1,0 +1,36 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "vector.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "vector.labels" . | nindent 4 }}
+---
+# kubernetes_logs needs list+watch on pods/namespaces/nodes to enrich
+# tailed log lines with k8s metadata. Read-only, cluster-wide — Vector
+# runs as a DaemonSet and must see every pod on its node.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "vector.name" . }}
+  labels:
+    {{- include "vector.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "namespaces", "nodes"]
+    verbs: ["list", "watch", "get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "vector.name" . }}
+  labels:
+    {{- include "vector.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "vector.name" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "vector.name" . }}
+    namespace: {{ .Release.Namespace }}

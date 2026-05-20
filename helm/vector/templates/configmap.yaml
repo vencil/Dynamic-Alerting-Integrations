@@ -1,0 +1,118 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "vector.name" . }}-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "vector.labels" . | nindent 4 }}
+data:
+  # Vector config (YAML form). Pipeline:
+  #   kubernetes_logs(source)
+  #     │
+  #     └─▶ demux(transform, VRL)
+  #            │ parse_json(.message)
+  #            │   success → log_type=federation_audit + merge parsed fields
+  #            │   fail    → log_type=gateway_operational (raw .message kept)
+  #            │ stream-field promotion: app / k8s_namespace
+  #            │
+  #            └─▶ victorialogs(sink, elasticsearch _bulk)
+  #
+  # See #539 §3 for the load-bearing schema choices and the explicit
+  # rejection of `exists(.tenant_id)` as a demux key.
+  vector.yaml: |
+    api:
+      enabled: false
+
+    sources:
+      kubernetes_logs:
+        type: kubernetes_logs
+        {{- with .Values.source.extraLabelSelector }}
+        extra_label_selector: {{ . | quote }}
+        {{- end }}
+        {{- with .Values.source.extraNamespaceLabelSelector }}
+        extra_namespace_label_selector: {{ . | quote }}
+        {{- end }}
+        {{- with .Values.source.extraFieldSelector }}
+        extra_field_selector: {{ . | quote }}
+        {{- end }}
+        # Trust the kubelet-rotated files; do not chase opened-then-deleted
+        # files past one rotation (avoids tailing into the void).
+        glob_minimum_cooldown_ms: 1000
+      {{- if .Values.metrics.enabled }}
+      internal_metrics:
+        type: internal_metrics
+      {{- end }}
+
+    transforms:
+      demux:
+        type: remap
+        inputs:
+          - kubernetes_logs
+        # VRL — see #539 §3.
+        # CRITICAL: filter on parse-success, NOT on exists(.tenant_id).
+        # JWT-failure requests have no tenant_id (jwt_authn rejected
+        # before claim injection) but are forensically valuable.
+        # CRITICAL: do NOT drop operational logs — route them to a
+        # separate stream so Envoy stderr stays centrally queryable.
+        source: |
+          parsed, err = parse_json(.message)
+          if err == null && is_object(parsed) {
+            . = merge(., object!(parsed), deep: true) ?? .
+            .log_type = "federation_audit"
+          } else {
+            .log_type = "gateway_operational"
+          }
+          # Stream-field promotion (bounded keys → top-level so the
+          # elasticsearch sink can list them under _stream_fields).
+          .app = to_string(.kubernetes.container_name) ?? "unknown"
+          .k8s_namespace = to_string(.kubernetes.pod_namespace) ?? "unknown"
+          # pod_name is a DATA field (HPA churn would explode a stream
+          # index — see #539 §3 schema table). Keep it at top-level
+          # under its own key, do NOT add it to streamFields.
+          .pod_name = to_string(.kubernetes.pod_name) ?? ""
+          .pod_node = to_string(.kubernetes.pod_node_name) ?? ""
+          # Status is a stream field — coerce to string for stable
+          # streaming (mixed string/int across the stream tree would
+          # split it).
+          if exists(.status) {
+            .status = to_string(.status) ?? ""
+          }
+          # Drop the .kubernetes blob now that the keys we need are
+          # promoted — keeps the per-line payload small.
+          del(.kubernetes)
+
+    sinks:
+      victorialogs:
+        type: elasticsearch
+        inputs:
+          - demux
+        endpoints:
+          - http://{{ .Values.victorialogs.host }}:{{ .Values.victorialogs.port }}/insert/elasticsearch/
+        api_version: v8
+        compression: gzip
+        healthcheck:
+          enabled: false
+        query:
+          _msg_field: message
+          _time_field: timestamp
+          _stream_fields: {{ join "," .Values.streamFields | quote }}
+        {{- if or .Values.victorialogs.accountId .Values.victorialogs.projectId }}
+        request:
+          headers:
+            {{- with .Values.victorialogs.accountId }}
+            AccountID: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.victorialogs.projectId }}
+            ProjectID: {{ . | quote }}
+            {{- end }}
+        {{- end }}
+      {{- if .Values.metrics.enabled }}
+      # Vector self-telemetry — events_in / events_out / dropped /
+      # buffer_events. Each node scrapes its local Vector via the pod
+      # IP (Prometheus scrape annotations live on the DaemonSet pod).
+      prometheus:
+        type: prometheus_exporter
+        inputs:
+          - internal_metrics
+        address: 0.0.0.0:{{ .Values.metrics.port }}
+      {{- end }}

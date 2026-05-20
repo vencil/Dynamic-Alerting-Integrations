@@ -1,0 +1,23 @@
+vector installed — log shipper (#539 Phase 1).
+
+  Image       : {{ .Values.image.repository }}:{{ .Values.image.tag }}
+  Source      : kubernetes_logs (extra_label_selector: {{ .Values.source.extraLabelSelector | default "<all>" | quote }})
+  Sink        : http://{{ .Values.victorialogs.host }}:{{ .Values.victorialogs.port }}/insert/elasticsearch/
+  Stream keys : {{ join "," .Values.streamFields }}
+
+Pipeline (per #539 §3):
+  parse_json(.message) — success → log_type=federation_audit
+                       — fail    → log_type=gateway_operational
+
+Operational logs are NOT dropped — they ride the gateway_operational
+stream so Envoy stderr stays centrally queryable for the first time.
+
+Smoke-test from a node:
+  kubectl logs -n {{ .Release.Namespace }} -l app.kubernetes.io/name={{ include "vector.name" . }} --tail=20
+
+Verify ingest at the store:
+  kubectl exec -n monitoring deploy/victorialogs -- \
+    wget -qO- 'http://localhost:9428/select/logsql/query?query=*' | head
+{{ if .Values.metrics.enabled }}
+Vector self-telemetry on :{{ .Values.metrics.port }}/metrics (pod-IP scrape).
+{{- end -}}
