@@ -46,6 +46,23 @@ data:
         # Trust the kubelet-rotated files; do not chase opened-then-deleted
         # files past one rotation (avoids tailing into the void).
         glob_minimum_cooldown_ms: 1000
+      {{- range .Values.additionalSources }}
+      # Additional kubernetes_logs source — see values.yaml
+      # `additionalSources` for why we need >1 (label-key heterogeneity
+      # across the platform's pods).
+      {{ .name }}:
+        type: kubernetes_logs
+        {{- with .extraLabelSelector }}
+        extra_label_selector: {{ . | quote }}
+        {{- end }}
+        {{- with .extraNamespaceLabelSelector }}
+        extra_namespace_label_selector: {{ . | quote }}
+        {{- end }}
+        {{- with .extraFieldSelector }}
+        extra_field_selector: {{ . | quote }}
+        {{- end }}
+        glob_minimum_cooldown_ms: 1000
+      {{- end }}
       {{- if .Values.metrics.enabled }}
       internal_metrics:
         type: internal_metrics
@@ -56,6 +73,9 @@ data:
         type: remap
         inputs:
           - kubernetes_logs
+          {{- range .Values.additionalSources }}
+          - {{ .name }}
+          {{- end }}
         # VRL — see #539 §3.
         # CRITICAL: filter on parse-success, NOT on exists(.tenant_id).
         # JWT-failure requests have no tenant_id (jwt_authn rejected
@@ -68,7 +88,51 @@ data:
             # merge(object, object, deep:true) is infallible — no `??`
             # needed (Vector 0.55+ rejects unnecessary error coalescing).
             . = merge(., object!(parsed), deep: true)
-            .log_type = "federation_audit"
+            # Discriminate the two parse-success shapes (#539 Phase 2):
+            # Prometheus query log entries have `params.query` — they
+            # come from the same Vector source but are a different log
+            # type and need their own stream so chargeback aggregation
+            # doesn't confuse a 1× heavy query with 1× audit row.
+            # Federation gateway audit JSON does NOT have params.query
+            # (its query field is top-level, not under params).
+            if exists(.params.query) {
+              .log_type = "prometheus_query_log"
+              # Recover tenant_id from the post-prom-label-proxy query.
+              # The data-layer label is `tenant` (NOT `tenant_id`) per
+              # PR #505 / federation-label-enrichment-audit.md —
+              # federation-proxy injects `{tenant="X"}` before the query
+              # hits Prometheus. The JWT claim is still named `tenant_id`
+              # but the metric LABEL is `tenant`; this regex matches the
+              # latter (what's in params.query). Extract conservatively
+              # — if no match, leave .tenant_id absent so the offline
+              # aggregator buckets the row as `platform` rather than
+              # mis-bill a tenant.
+              q = to_string(.params.query) ?? ""
+              matches = parse_regex(q, r'\btenant="(?P<tenant>[^"]+)"') ?? {}
+              if exists(matches.tenant) {
+                .tenant_id = matches.tenant
+              }
+              # Rule / alert evaluations carry a `ruleGroup` field in
+              # the query log entry. They are platform-internal load
+              # regardless of what selectors appear in their expression,
+              # so they MUST NOT be billed to a tenant — override any
+              # regex-extracted tenant_id.
+              if exists(.ruleGroup) {
+                del(.tenant_id)
+              }
+              # Hoist the cost-bearing stats fields to top-level so
+              # LogsQL `stats sum(samples_scanned)` works without a
+              # nested-path dance. Source field names match Prometheus
+              # query log v2.45+ schema. Prometheus emits *Total*Time
+              # in **seconds** (float, e.g. 0.000052 = 52μs) — keep the
+              # native unit in the field name; the offline aggregator's
+              # CSV column matches.
+              .samples_scanned = .stats.samples.totalQueryableSamples
+              .exec_time_s = .stats.timings.execTotalTime
+              .eval_time_s = .stats.timings.evalTotalTime
+            } else {
+              .log_type = "federation_audit"
+            }
           } else {
             .log_type = "gateway_operational"
           }

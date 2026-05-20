@@ -1,0 +1,160 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "chargeback.name" . }}-script
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "chargeback.labels" . | nindent 4 }}
+data:
+  # Stdlib-only Python (no pip install at runtime, no network beyond
+  # the VictoriaLogs query). Each line of the LogsQL response is one
+  # JSON object — stream-parse rather than build a giant list to keep
+  # memory bounded if the window grows.
+  aggregate.py: |
+    #!/usr/bin/env python3
+    """
+    Federation chargeback aggregator (#539 Phase 2 / #552).
+
+    Queries VictoriaLogs for `log_type=prometheus_query_log` entries
+    over the configured window, sums `samples_scanned` + `exec_time_s`
+    per tenant, writes a CSV report. Rows with no tenant_id are bucketed
+    as "platform" (rule evaluation, alert evaluation) and reported
+    separately — useful for sanity-checking but NOT billable.
+
+    Exit codes:
+      0  success — CSV written
+      1  VictoriaLogs query failed (network, 5xx, malformed response)
+      2  output write failed (PVC full, permission)
+      3  argv / env misuse
+    """
+    import csv
+    import datetime as dt
+    import json
+    import math
+    import os
+    import pathlib
+    import sys
+    import urllib.parse
+    import urllib.request
+
+    VL_URL = os.environ["VICTORIALOGS_URL"]
+    WINDOW_H = int(os.environ.get("WINDOW_HOURS", "24"))
+    OUT_DIR = pathlib.Path(os.environ["OUTPUT_DIR"])
+    RETENTION_DAYS = int(os.environ.get("RETENTION_DAYS", "90"))
+    ACCOUNT_ID = os.environ.get("ACCOUNT_ID", "")
+    PROJECT_ID = os.environ.get("PROJECT_ID", "")
+
+    # ── Step 1: build the LogsQL query ─────────────────────────────────
+    # NOTE: tenant_id is a STREAM field (#539 §3 schema), so `stats by
+    # (tenant_id)` is index-aided. samples_scanned / exec_time_s are
+    # data fields — VictoriaLogs sums them per stream slot.
+    # `_time:1d` is LogsQL's window filter (interpreted relative to
+    # query time).
+    #
+    # The exec_time_ms / eval_time_ms columns query the LEGACY field
+    # names emitted by helm/vector 0.2.0 (chart 0.1.0 of this aggreg-
+    # ator) — they hold the same seconds-valued data, just under the
+    # wrong unit label (self-review rename in chart 0.1.1). Including
+    # them keeps the 24h upgrade-transition CSV correct; once
+    # VictoriaLogs's retention rolls the legacy rows out, `sum()`
+    # returns NaN for those stream slots and Python coalesces to 0.
+    window = f"{WINDOW_H}h"
+    query = (
+        f"_time:{window} AND log_type:prometheus_query_log "
+        f"| stats by (tenant_id) "
+        f"sum(samples_scanned) as samples_scanned, "
+        f"sum(exec_time_s) as exec_time_s, "
+        f"sum(exec_time_ms) as exec_time_ms_legacy, "
+        f"count() as queries"
+    )
+
+    def _coalesce_seconds(row):
+        """Sum exec_time_s + exec_time_ms_legacy, treating NaN/missing
+        as 0. Returns float seconds. Both fields hold seconds (the
+        pre-0.1.1 _ms label was a misnomer); summing is correct."""
+        total = 0.0
+        for key in ("exec_time_s", "exec_time_ms_legacy"):
+            raw = row.get(key)
+            if raw is None or raw == "":
+                continue
+            try:
+                f = float(raw)
+            except (TypeError, ValueError):
+                continue
+            if math.isnan(f):
+                continue
+            total += f
+        return total
+
+    # ── Step 2: query VictoriaLogs ────────────────────────────────────
+    req = urllib.request.Request(
+        f"{VL_URL}/select/logsql/query?query={urllib.parse.quote(query)}",
+        headers={"Accept": "application/json"},
+    )
+    if ACCOUNT_ID:
+        req.add_header("AccountID", ACCOUNT_ID)
+    if PROJECT_ID:
+        req.add_header("ProjectID", PROJECT_ID)
+
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r:
+            body = r.read().decode("utf-8")
+    except Exception as e:
+        print(f"ERROR: VictoriaLogs query failed: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    # VictoriaLogs returns newline-delimited JSON (one row per stream
+    # group). Empty body = no data in window — write a header-only CSV
+    # so downstream consumers see "file exists, zero tenants" rather
+    # than guessing whether the job ran.
+    rows = []
+    for line in body.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rows.append(json.loads(line))
+        except json.JSONDecodeError as e:
+            # One malformed row shouldn't kill the report; log and skip.
+            print(f"WARN: skipping malformed row: {e}: {line[:200]}", file=sys.stderr)
+
+    # ── Step 3: write CSV ──────────────────────────────────────────────
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    today = dt.date.today().isoformat()
+    out_path = OUT_DIR / f"chargeback-{today}.csv"
+
+    try:
+        with out_path.open("w", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(["tenant_id", "samples_scanned", "exec_time_s", "queries", "window_hours", "generated_at"])
+            # Python 3.13 deprecated utcnow() — use timezone-aware now.
+            generated_at = dt.datetime.now(dt.timezone.utc).isoformat()
+            for row in rows:
+                tenant = row.get("tenant_id") or "platform"
+                w.writerow([
+                    tenant,
+                    row.get("samples_scanned", 0),
+                    _coalesce_seconds(row),
+                    row.get("queries", 0),
+                    WINDOW_H,
+                    generated_at,
+                ])
+    except OSError as e:
+        print(f"ERROR: writing {out_path} failed: {e}", file=sys.stderr)
+        sys.exit(2)
+
+    # ── Step 4: retention prune ───────────────────────────────────────
+    # Delete chargeback-YYYY-MM-DD.csv files older than RETENTION_DAYS.
+    cutoff = dt.date.today() - dt.timedelta(days=RETENTION_DAYS)
+    pruned = 0
+    for f in OUT_DIR.glob("chargeback-*.csv"):
+        try:
+            date_str = f.stem.removeprefix("chargeback-")
+            file_date = dt.date.fromisoformat(date_str)
+        except ValueError:
+            continue
+        if file_date < cutoff:
+            f.unlink()
+            pruned += 1
+
+    print(f"OK: wrote {out_path} ({len(rows)} tenants); pruned {pruned} files older than {cutoff}")

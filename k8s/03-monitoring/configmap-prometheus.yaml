@@ -8,6 +8,20 @@ data:
     global:
       scrape_interval: 15s
       evaluation_interval: 15s
+      # Federation chargeback (#539 Phase 2). Each PromQL query is
+      # logged as one JSON line with params.query / params.start_time /
+      # stats.samples.totalQueryableSamples / stats.timings.* — the
+      # accurate per-tenant cost signal (#552 records why the gateway
+      # access-log count of *requests* is insufficient: a heavy and a
+      # light query bill identically there). Writing to /dev/stderr
+      # interleaves with Prometheus's own stderr; Vector demuxes by
+      # JSON-shape (presence of `params.query`) → log_type=
+      # prometheus_query_log stream in VictoriaLogs. tenant_id is
+      # recoverable because federation-proxy has already injected
+      # {tenant_id="X"} into params.query by the time Prometheus
+      # logs it (the platform's own rule evaluations have no
+      # tenant_id selector — distinguishable at offline aggregation).
+      query_log_file: /dev/stderr
 
     alerting:
       alertmanagers:

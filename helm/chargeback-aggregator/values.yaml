@@ -1,0 +1,92 @@
+# chargeback-aggregator Helm values
+# Reference: #539 Phase 2 / #552 — federation chargeback aggregation.
+#
+# Daily CronJob that queries VictoriaLogs for the last `windowHours` of
+# `log_type=prometheus_query_log` entries and emits a per-tenant CSV
+# report (samples_scanned + exec_time + query_count). Per #552 the
+# gateway access-log request count is insufficient for billing — a
+# heavy and a light query cost the same number of requests — so this
+# pipeline reads from the storage-side query log (where the cost
+# stats actually live) via the Phase 1 log-aggregation pipeline.
+
+image:
+  # Pure stdlib — `requests` not needed since urllib handles the HTTP.
+  # Pinning to the official slim image keeps the bug surface small.
+  repository: python
+  tag: "3.13-slim"
+  pullPolicy: IfNotPresent
+
+# Where the report lands. PVC because: CronJob output that nobody reads
+# is worthless, and writing to stdout-only would push the chargeback
+# burden onto whatever scrapes container logs (defeating the point of
+# offline aggregation). PVC is RWX-capable if your storage class
+# supports it (kubectl get sc -o yaml | grep -i RWX), otherwise the
+# CSV is only readable by another pod in the same node.
+output:
+  pvcSize: 5Gi
+  storageClass: ""
+  # Number of daily reports to keep. CronJob clears anything older
+  # before writing today's. 90d covers a typical billing-cycle dispute
+  # window; bump if your finance team retains longer.
+  retentionDays: 90
+
+# VictoriaLogs endpoint to query. Default matches helm/victorialogs
+# installed in the monitoring namespace.
+victorialogs:
+  url: "http://victorialogs.monitoring.svc.cluster.local:9428"
+  # Multi-tenancy headers if the store is shared. (AccountID=0,
+  # ProjectID=0) is the default tenant; leave empty.
+  accountId: ""
+  projectId: ""
+
+# Aggregation window. 24h matches the daily cadence; bump to 168h
+# (7d) if you want overlapping windows for reconciliation.
+windowHours: 24
+
+# CronJob schedule. Daily at 02:00 (UTC unless cluster overrides) —
+# clear of the rule-evaluation peak. cron-format. Pause via
+# `--set schedule="@never"` (alias for "0 5 31 2 *" — a non-existent
+# date so it never fires) when reconciliation work needs the report
+# generation paused without uninstalling the chart.
+schedule: "0 2 * * *"
+
+# Per CronJob spec — keeps the controller from spawning a parallel run
+# if a previous one is still running (e.g. VictoriaLogs is slow). The
+# aggregator is idempotent (same day overwrites) but parallel runs
+# would race on the file write.
+concurrencyPolicy: Forbid
+
+# Job history retention — keep enough completed runs to debug a
+# missing day's report.
+successfulJobsHistoryLimit: 7
+failedJobsHistoryLimit: 7
+
+# Pod security: stdlib-only Python, no shell, drop everything.
+podSecurityContext:
+  fsGroup: 1000
+  runAsNonRoot: true
+  runAsUser: 1000
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+# Surface a manual-run Job in addition to the CronJob. When true a
+# Helm `helm template ... | kubectl apply -f -` (or chart install)
+# also creates a one-shot Job that runs immediately — useful for
+# bootstrap smoke-test or after-incident catch-up. Default off so
+# steady-state installs don't spam Job objects.
+manualJob:
+  enabled: false
