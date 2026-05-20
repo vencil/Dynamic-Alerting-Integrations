@@ -1,24 +1,9 @@
 name: Security Audit (Python SAST)
 
-# Python SAST gate — bandit baseline for dev-rules.md Rule #5 (#455).
-#
-# Initial rollout: WARN-ONLY for a 2-week soak period from the merge of
-# #455. Failing findings surface as a warning step + an annotation on the
-# PR, but `continue-on-error: true` lets the job pass. After the soak,
-# flip `continue-on-error` to `false` to make findings hard-fail.
-#
-# Why warn-only first: false-positive flood would block unrelated PRs
-# while the team learns the bandit ruleset. The 2-week window lets
-# real findings surface and triage without disrupting throughput.
-# Mirror of how `secret-scan.yml` started warn-only before its flip.
-#
-# Scope: `scripts/tools/` + `components/da-tools/` (the same paths the
-# baseline triage in #455 covered). Other Python directories (tests/,
-# .venv/, vendor/) are excluded via .bandit per AC.
-#
-# Severity / confidence floor mirrors AC: `-ll -ii` = MEDIUM severity
-# AND MEDIUM confidence. LOW would flood with style noise; HIGH would
-# skip the bulk of Rule #5's enumerated risks.
+# bandit gate for dev-rules.md Rule #5 (#455). WARN-ONLY for 2 weeks
+# post-merge; flip `continue-on-error` to `false` afterwards.
+# Scope: scripts/tools/** + components/da-tools/** (other Python dirs
+# excluded via .bandit). Floor `-ll -ii` = MEDIUM severity × confidence.
 
 on:
   pull_request:
@@ -37,7 +22,6 @@ on:
       - ".github/workflows/security-audit.yaml"
   workflow_dispatch: {}
 
-# Least-privilege per repo convention (mirrors secret-scan.yml § perms).
 permissions:
   contents: read
 
@@ -59,25 +43,19 @@ jobs:
           python-version: "3.13"
 
       - name: Install bandit
+        # Pinned to the dev-container version so local/CI behaviour matches.
         run: |
           set -euo pipefail
-          # Pinned bandit version — the dev container ships 1.9.4; pin
-          # CI to the same major so behaviour stays parity. Lockstep with
-          # the dev container avoids "passes local, fails CI" drift.
           python3 -m pip install --quiet --upgrade pip
           python3 -m pip install --quiet 'bandit==1.9.4'
           bandit --version
 
       - name: Run bandit (medium severity + confidence)
         id: bandit
-        # WARN-ONLY for 2-week soak from #455 merge. Flip to false to
-        # make findings hard-fail once false-positive triage is stable.
+        # warn-only soak — flip to false to hard-fail after triage stabilizes.
         continue-on-error: true
         run: |
           set -euo pipefail
-          # `-c .bandit` reads exclude_dirs and any project-wide skips.
-          # `-ll` = MEDIUM severity floor; `-ii` = MEDIUM confidence
-          # floor. JSON output for the next step's findings count.
           bandit -c .bandit \
             -r scripts/tools components/da-tools \
             -ll -ii \

@@ -74,7 +74,13 @@ lang: zh
 
 **為什麼**：這 7 條是歷史踩坑的累積，全都至少炸過一次。
 
-**檢查方式**：✅ **code-driven (warn-only soak, v2.9.0 #455)** — `bandit` profile (`-ll -ii` = MEDIUM severity + MEDIUM confidence) gates `scripts/tools/**` + `components/da-tools/**` via `.github/workflows/security-audit.yaml`. Config: `.bandit` (excludes `tests/`, `.venv/`, `__pycache__/`, `vendor/`). False-positive / acceptable-risk suppression uses inline `# nosec B<ID>  # rationale` (dual-hash syntax avoids bandit's prose-as-test-id warnings). **Soak period**: workflow runs with `continue-on-error: true` for 2 weeks from #455 merge; flip to hard-fail once false-positive triage is stable. Bandit's built-in checks cover Rule #5 items 2 (B602/B603/B605 shell), 4 (B506 yaml_load), 5 (B105/B106 hardcoded password — partial), 6 (B301 pickle / B307 eval / B102 exec); items 1 (encoding), 3 (chmod 0o777), 7 (stderr routing) remain reviewer convention as bandit has no native rule for them. Local run: `bandit -c .bandit -r scripts/tools components/da-tools -ll -ii`.
+**檢查方式**：✅ **code-driven (warn-only soak, v2.9.0 #455)**
+
+- **Gate**: `bandit -ll -ii` (MEDIUM severity × MEDIUM confidence) over `scripts/tools/**` + `components/da-tools/**` via `.github/workflows/security-audit.yaml`; config in `.bandit`.
+- **Soak**: workflow `continue-on-error: true` for 2 weeks post-merge → flip to hard-fail once triage stabilizes.
+- **Suppression**: inline `# nosec B<ID>  # rationale` (dual-hash; em-dash / single-hash gets parsed as test IDs and emits warnings).
+- **Coverage vs the 7 items**: bandit natively gates items 2/4/5/6 (shell B602/B603/B605, yaml_load B506, hardcoded password B105/B106 partial, eval/exec/pickle B102/B301/B307); items 1/3/7 (encoding, chmod 0o777, stderr routing) have no native bandit rule and remain reviewer convention.
+- **Local run**: `bandit -c .bandit -r scripts/tools components/da-tools -ll -ii`.
 
 **細節**：見 [governance-security.md](../governance-security.md)。
 

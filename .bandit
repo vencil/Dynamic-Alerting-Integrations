@@ -1,23 +1,6 @@
-# Bandit configuration for Python SAST baseline (issue #455).
-#
-# dev-rules.md Rule #5 codification — replaces reviewer-convention with
-# code-driven SAST. See CHANGELOG `### Added` for v2.9.0.
-#
-# Baseline scope:
-#   bandit -r scripts/tools components/da-tools -ll -ii
-#
-# Severity / confidence floor:
-#   -ll  = MEDIUM severity and above
-#   -ii  = MEDIUM confidence and above
-# (LOW would flood the report with style-class findings; HIGH would skip
-# the bulk of XML-parse / weak-hash issues that Rule #5 specifically
-# enumerates.)
-#
-# Excludes:
-#   tests/             — pytest fixtures intentionally use assert / hardcoded creds
-#   .venv/             — third-party deps not in scope
-#   __pycache__/       — compiled .pyc artifacts
-#   vendor/            — vendored dependencies (see _lib_compat.py)
+# Bandit config for dev-rules.md Rule #5 (#455).
+# Floor: -ll -ii = MEDIUM severity × confidence.
+# Suppression: inline `# nosec B<ID>  # rationale` (no global skips).
 
 exclude_dirs:
   - tests
@@ -27,8 +10,3 @@ exclude_dirs:
   - vendor
   - scripts/tools/vendor
   - components/da-tools/app/tests
-
-# No global `skips:` — per-finding nosec annotations are preferred so
-# each suppression carries explicit rationale (auditable, greppable).
-# Add a category-wide skip only when bandit produces systemic false
-# positives that cannot be addressed per-site.
