@@ -102,7 +102,7 @@ def http_post_json(
         data = None
         if payload is not None:
             data = json.dumps(payload).encode("utf-8")
-        with urllib.request.urlopen(req, data=data, timeout=timeout) as resp:
+        with urllib.request.urlopen(req, data=data, timeout=timeout) as resp:  # nosec B310  #scheme validated by _validate_url_scheme upstream
             body = resp.read().decode("utf-8")
             return (json.loads(body) if body else {}), None
     except urllib.error.HTTPError as exc:
@@ -155,7 +155,7 @@ def http_request_with_retry(
             data = None
             if payload is not None:
                 data = json.dumps(payload).encode("utf-8")
-            with urllib.request.urlopen(req, data=data, timeout=timeout) as resp:
+            with urllib.request.urlopen(req, data=data, timeout=timeout) as resp:  # nosec B310  #scheme validated by _validate_url_scheme upstream
                 body = resp.read().decode("utf-8")
                 return json.loads(body) if body else {}
         except urllib.error.HTTPError as exc:

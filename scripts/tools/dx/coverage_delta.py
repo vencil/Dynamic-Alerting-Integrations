@@ -135,7 +135,7 @@ def parse_cobertura(path: Path) -> CoverageReport:
     if not path.is_file():
         raise FileNotFoundError(f"coverage report not found: {path}")
     try:
-        tree = ET.parse(path)
+        tree = ET.parse(path)  # nosec B314  #input is pytest-cov-generated Cobertura XML on local FS, not external/untrusted (defusedxml dep avoided)
     except ET.ParseError as e:
         raise ValueError(f"malformed Cobertura XML at {path}: {e}") from e
     root = tree.getroot()

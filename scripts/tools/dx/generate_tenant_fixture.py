@@ -142,7 +142,7 @@ def _gen_receiver(rng: random.Random, tenant_id: str) -> dict:
         base["webhook_url"] = f"https://outlook.office.com/webhook/{tenant_id}"
         base["send_resolved"] = True
     elif rtype == "pagerduty":
-        base["routing_key"] = hashlib.md5(tenant_id.encode()).hexdigest()[:24]
+        base["routing_key"] = hashlib.md5(tenant_id.encode(), usedforsecurity=False).hexdigest()[:24]
         base["severity"] = "critical"
     return base
 

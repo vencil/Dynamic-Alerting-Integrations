@@ -1,0 +1,86 @@
+name: Security Audit (Python SAST)
+
+# bandit gate for dev-rules.md Rule #5 (#455). WARN-ONLY for 2 weeks
+# post-merge; flip `continue-on-error` to `false` afterwards.
+# Scope: scripts/tools/** + components/da-tools/** (other Python dirs
+# excluded via .bandit). Floor `-ll -ii` = MEDIUM severity × confidence.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "scripts/tools/**/*.py"
+      - "components/da-tools/**/*.py"
+      - ".bandit"
+      - ".github/workflows/security-audit.yaml"
+  push:
+    branches: [main]
+    paths:
+      - "scripts/tools/**/*.py"
+      - "components/da-tools/**/*.py"
+      - ".bandit"
+      - ".github/workflows/security-audit.yaml"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-audit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bandit:
+    name: Python SAST (bandit -ll -ii)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Install bandit
+        # Pinned to the dev-container version so local/CI behaviour matches.
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet --upgrade pip
+          python3 -m pip install --quiet 'bandit==1.9.4'
+          bandit --version
+
+      - name: Run bandit (medium severity + confidence)
+        id: bandit
+        # warn-only soak — flip to false to hard-fail after triage stabilizes.
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          bandit -c .bandit \
+            -r scripts/tools components/da-tools \
+            -ll -ii \
+            -f json \
+            -o bandit-report.json
+
+      - name: Summarize findings
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ ! -f bandit-report.json ]; then
+            echo "::warning::bandit-report.json not produced (scan step failed before output)"
+            exit 0
+          fi
+          n=$(python3 -c "import json,sys; print(len(json.load(open('bandit-report.json'))['results']))")
+          echo "bandit findings (MEDIUM+ severity & confidence): $n"
+          if [ "$n" -gt 0 ]; then
+            echo "::warning::bandit found $n MEDIUM+ severity/confidence finding(s) — see uploaded report. WARN-ONLY during soak."
+            python3 -c "import json; r=json.load(open('bandit-report.json'))['results']; [print(f\"  [{i['test_id']} sev={i['issue_severity']}] {i['filename']}:{i['line_number']} — {i['issue_text'][:120]}\") for i in r]"
+          fi
+
+      - name: Upload bandit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bandit-report
+          path: bandit-report.json
+          retention-days: 14

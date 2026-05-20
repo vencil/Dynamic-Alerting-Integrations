@@ -47,8 +47,8 @@ def check_edge(prom_url):
     import urllib.error
     import urllib.request
     try:
-        req = urllib.request.Request(f"{prom_url}/-/healthy")  # nosec B310
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        req = urllib.request.Request(f"{prom_url}/-/healthy")  # nosec B310  #operator-supplied internal Prometheus URL
+        with urllib.request.urlopen(req, timeout=10) as resp:  # nosec B310  #see Request line above
             resp.read()
         checks.append({
             "check": "edge_prometheus_reachable",
@@ -119,8 +119,8 @@ def check_edge(prom_url):
     # 4. Federate endpoint accessible
     federate_url = f"{prom_url}/federate?match[]=" + urllib.parse.quote('{tenant!=""}')
     try:
-        req = urllib.request.Request(federate_url)  # nosec B310
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        req = urllib.request.Request(federate_url)  # nosec B310  #operator-supplied internal Prometheus URL
+        with urllib.request.urlopen(req, timeout=10) as resp:  # nosec B310  #see Request line above
             content = resp.read().decode()
         line_count = len(content.strip().split("\n")) if content.strip() else 0
         checks.append({
@@ -146,8 +146,8 @@ def check_central(prom_url):
     import urllib.error
     import urllib.request
     try:
-        req = urllib.request.Request(f"{prom_url}/-/healthy")  # nosec B310
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        req = urllib.request.Request(f"{prom_url}/-/healthy")  # nosec B310  #operator-supplied internal Prometheus URL
+        with urllib.request.urlopen(req, timeout=10) as resp:  # nosec B310  #see Request line above
             resp.read()
         checks.append({
             "check": "central_prometheus_reachable",

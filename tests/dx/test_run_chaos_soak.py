@@ -120,6 +120,15 @@ class TestFetchMetrics:
         monkeypatch.setattr(rcs.urllib.request, "urlopen", boom)
         assert rcs.fetch_metrics("http://localhost:8080") is None
 
+    def test_non_http_scheme_rejected(self, monkeypatch, capsys):
+        # SSRF guard (#455): scheme allowlist short-circuits before urlopen.
+        # Fail loud if any test calls urlopen — the guard must prevent that.
+        monkeypatch.setattr(rcs.urllib.request, "urlopen",
+                            lambda *a, **kw: pytest.fail("urlopen called for non-http(s) URL"))
+        assert rcs.fetch_metrics("file:///etc/passwd") is None
+        err = capsys.readouterr().err
+        assert "non-http(s) scheme" in err
+
     def test_strips_trailing_slash_from_url(self, monkeypatch):
         captured = {}
 

@@ -96,8 +96,8 @@ def check_preflight(args):
     import urllib.error
     try:
         import urllib.request
-        req = urllib.request.Request(f"{prom_url}/-/healthy")  # nosec B310
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        req = urllib.request.Request(f"{prom_url}/-/healthy")  # nosec B310  #operator-supplied internal Prometheus URL
+        with urllib.request.urlopen(req, timeout=10) as resp:  # nosec B310  #see Request line above
             healthy = resp.read().decode().strip()
         checks.append({
             "check": "prometheus_healthy",

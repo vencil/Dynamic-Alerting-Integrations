@@ -46,8 +46,8 @@ def check_prometheus(args):
     import urllib.error
     import urllib.request
     try:
-        req = urllib.request.Request(f"{prom_url}/-/healthy")  # nosec B310
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        req = urllib.request.Request(f"{prom_url}/-/healthy")  # nosec B310  #operator-supplied internal Prometheus URL
+        with urllib.request.urlopen(req, timeout=10) as resp:  # nosec B310  #see Request line above
             resp.read()
         checks.append({
             "check": "prometheus_reachable",
@@ -227,8 +227,8 @@ def check_alertmanager(args):
     import urllib.error
     import urllib.request
     try:
-        req = urllib.request.Request(f"{am_url}/-/ready")  # nosec B310
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        req = urllib.request.Request(f"{am_url}/-/ready")  # nosec B310  #operator-supplied internal Alertmanager URL
+        with urllib.request.urlopen(req, timeout=10) as resp:  # nosec B310  #see Request line above
             resp.read()
         checks.append({
             "check": "alertmanager_ready",

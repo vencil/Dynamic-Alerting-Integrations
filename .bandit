@@ -1,0 +1,12 @@
+# Bandit config for dev-rules.md Rule #5 (#455).
+# Floor: -ll -ii = MEDIUM severity × confidence.
+# Suppression: inline `# nosec B<ID>  # rationale` (no global skips).
+
+exclude_dirs:
+  - tests
+  - .venv
+  - venv
+  - __pycache__
+  - vendor
+  - scripts/tools/vendor
+  - components/da-tools/app/tests
