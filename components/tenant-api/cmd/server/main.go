@@ -134,6 +134,12 @@ func main() {
 		parseDurationOrDefault(os.Getenv("TA_IDLE_TIMEOUT"), 60*time.Second),
 		"HTTP server idle timeout (default 60s; TA_IDLE_TIMEOUT)")
 
+	// #144: request body size cap. Pre-issue this was hardcoded to
+	// 1<<20 in every write handler; now configurable via env so
+	// operators with atypical payloads (e.g. tenants with deeply-
+	// nested rule packs) can raise it without rebuilding.
+	maxBodyBytesEnv := os.Getenv("TA_MAX_BODY_BYTES")
+
 	// v2.9.0 ADR-020 IV-2d: tenant federation token endpoint.
 	// An empty --federation-key disables the endpoint entirely.
 	federationKey := flag.String("federation-key", envOrDefault("TA_FEDERATION_KEY", ""),
@@ -296,6 +302,17 @@ func main() {
 			"env_value", *rateLimitPerMin,
 			"default_per_min", rlCfg.RequestsPerMinute)
 	}
+
+	// #144: parse TA_MAX_BODY_BYTES. Empty / valid → no warn;
+	// malformed (negative, zero, non-numeric) → WARN + fallback.
+	maxBodyBytes, mbbMalformed := handler.MaxBodyBytesFromEnv(maxBodyBytesEnv)
+	if mbbMalformed {
+		slog.Warn("max body bytes env malformed, falling back to default",
+			"env_value", maxBodyBytesEnv,
+			"default_bytes", maxBodyBytes)
+	}
+	deps.MaxBodyBytes = maxBodyBytes
+	slog.Info("request body size limit", "max_bytes", maxBodyBytes)
 	if rlCfg.RequestsPerMinute > 0 {
 		slog.Info("rate limiter enabled", "per_min_per_caller", rlCfg.RequestsPerMinute)
 	} else {

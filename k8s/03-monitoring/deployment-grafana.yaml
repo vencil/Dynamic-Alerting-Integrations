@@ -46,6 +46,12 @@ spec:
                   key: admin-password
             - name: GF_USERS_ALLOW_SIGN_UP
               value: "false"
+            # VictoriaLogs datasource plugin (#539 Phase 1). Grafana
+            # installs from grafana.com at first boot — air-gapped
+            # clusters MUST pre-bake the plugin into a custom image and
+            # remove this env var.
+            - name: GF_INSTALL_PLUGINS
+              value: "victoriametrics-logs-datasource"
           volumeMounts:
             - name: provisioning-datasources
               mountPath: /etc/grafana/provisioning/datasources/datasources.yaml

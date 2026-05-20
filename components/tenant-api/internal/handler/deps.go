@@ -115,4 +115,24 @@ type Deps struct {
 	// Shared across requests so the 30s TTL has effect — see
 	// tenant_search.go for design notes.
 	SearchCache *tenantSnapshotCache
+
+	// MaxBodyBytes caps the request body every write handler will
+	// read via `io.LimitReader`. Wired from `TA_MAX_BODY_BYTES`
+	// (default 1 MiB; see DefaultMaxBodyBytes / MaxBodyBytesFromEnv
+	// in middleware.go). Read via d.MaxBody() so a zero value (e.g.
+	// in tests that construct Deps literally) falls back to the
+	// default instead of rejecting every write.
+	MaxBodyBytes int64
+}
+
+// MaxBody returns d.MaxBodyBytes with a fallback to
+// DefaultMaxBodyBytes when unset (zero / negative). Handlers should
+// call this rather than reading the field directly so test
+// fixtures that build Deps without wiring MaxBodyBytes keep
+// working unchanged.
+func (d *Deps) MaxBody() int64 {
+	if d.MaxBodyBytes <= 0 {
+		return DefaultMaxBodyBytes
+	}
+	return d.MaxBodyBytes
 }

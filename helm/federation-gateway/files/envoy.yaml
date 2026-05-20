@@ -68,9 +68,10 @@ static_resources:
                 # verified claims pulled from jwt_authn dynamic metadata.
                 # Two sinks, identical shape (YAML anchor):
                 #  • stdout      — the durable, collector-ready compliance
-                #    trail. A node-level log shipper carrying this to a
-                #    central store is the IV-2f follow-up (#539); until then
-                #    it rides the standard container-log path.
+                #    trail. The Vector DaemonSet + VictoriaLogs central
+                #    store wires this end-to-end (#539 Phase 1); install
+                #    helm/vector + helm/victorialogs to query history
+                #    past pod recycling.
                 #  • emptyDir file — tailed by the mtail sidecar to derive
                 #    tenant_federation_requests_total. Ephemeral by design:
                 #    a metrics feed, not the system of record.

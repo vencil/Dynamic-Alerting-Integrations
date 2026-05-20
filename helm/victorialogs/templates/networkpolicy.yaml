@@ -1,0 +1,30 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "victorialogs.name" . }}-netpol
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "victorialogs.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "victorialogs.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - ports:
+        - port: {{ .Values.listenPort }}
+          protocol: TCP
+      {{- with .Values.networkPolicy.allowedNamespaces }}
+      # Restrict ingress to named namespaces (e.g. the Vector DaemonSet's
+      # namespace + the monitoring namespace where Grafana queries from).
+      # Empty list = allow the port cluster-wide.
+      from:
+        {{- range . }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ . }}
+        {{- end }}
+      {{- end }}
+{{- end }}

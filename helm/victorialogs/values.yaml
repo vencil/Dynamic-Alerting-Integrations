@@ -1,0 +1,104 @@
+# victorialogs Helm values
+# Reference: #539 — Platform log aggregation (Vector + VictoriaLogs).
+#
+# Single-pod deployment. Per #539 §3 the operational-simplicity selection
+# of VictoriaLogs (single binary, no object-storage ring / compactor /
+# memcached) is the explicit rationale — do NOT shard this into a
+# cluster topology without revisiting the ADR. PVC-backed storage; pod
+# recycles do not lose history.
+#
+# Hard rule (#539 §2): producers MUST NEVER HTTP-push directly here.
+# The shipper (Vector DaemonSet) tails container stdout and pushes;
+# log-store downtime must not wedge the producer (the federation
+# gateway, etc.). This values.yaml does not expose any direct-push
+# convenience knob on purpose.
+
+replicaCount: 1
+
+image:
+  repository: victoriametrics/victoria-logs
+  tag: "v1.50.0"
+  pullPolicy: IfNotPresent
+
+# HTTP listen port for ingestion + query. VictoriaLogs default is 9428.
+# The Vector sink in #539 Phase 1 hits :9428/insert/elasticsearch/ and
+# Grafana queries the same port via /select/logsql/query.
+listenPort: 9428
+
+# Retention window. Per #539 §5: "Phase 1 default: TBD — typical
+# ops/forensic 30–90 days. Revisit when an explicit compliance
+# requirement names a window." 30d is the conservative entry point;
+# operators override per environment via Helm values.
+retentionPeriod: "30d"
+
+# Extra command-line flags. VictoriaLogs has "sane defaults" for most
+# knobs (per upstream); the chart only sets retention + listen + data
+# path. Add overrides here without forking the deployment template.
+# Example: ["-loggerLevel=WARN", "-storage.minFreeDiskSpaceBytes=10GB"]
+extraArgs: []
+
+# Persistent storage. The pod loses history without this — VictoriaLogs
+# stores indexed data on disk. Size = (ingest rate × retention window)
+# plus headroom; 10Gi is a small-cluster default sized for the
+# federation-gateway audit stream only. Re-estimate when #552
+# (chargeback query log) joins as consumer #2.
+persistence:
+  enabled: true
+  size: 10Gi
+  # storageClass: "" leaves the cluster default storage class to
+  # provision; set explicitly to pin a class.
+  storageClass: ""
+  accessModes:
+    - ReadWriteOnce
+
+# Pod-level security: non-root, drop all capabilities. VictoriaLogs
+# binary needs only read/write under -storageDataPath.
+podSecurityContext:
+  fsGroup: 1000
+  runAsNonRoot: true
+  runAsUser: 1000
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: 1
+    memory: 1Gi
+
+service:
+  type: ClusterIP
+  # Same port for ingestion + Grafana queries. Splitting them would
+  # require two listeners — VictoriaLogs ships one.
+  port: 9428
+
+# Optional Prometheus scrape annotations on the Service. The pod
+# exposes /metrics on the same port as ingestion.
+serviceMonitor:
+  enabled: false
+prometheusScrapeAnnotations:
+  enabled: true
+
+# NetworkPolicy — Phase 1 default permits ingress from all namespaces
+# (the Vector DaemonSet runs in kube-system; Grafana queries from the
+# monitoring namespace). Override `allowedNamespaces` to lock down.
+networkPolicy:
+  enabled: false
+  allowedNamespaces: []
+
+# Pod placement. Single pod has no affinity rules; if scaled up the
+# chart user is expected to add an anti-affinity block manually since
+# the upstream design is single-binary.
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+podAnnotations: {}

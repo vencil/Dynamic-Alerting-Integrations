@@ -45,7 +45,7 @@ func DiffTenant(d *Deps) http.HandlerFunc {
 			return
 		}
 
-		body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+		body, err := io.ReadAll(io.LimitReader(r.Body, d.MaxBody()))
 		if err != nil {
 			WriteJSONError(rw, r,http.StatusBadRequest, "failed to read request body: "+err.Error())
 			return

@@ -42,6 +42,25 @@ tenantApi:
   gitCommitterName: "da-portal"
   gitCommitterEmail: "da-portal@dynamic-alerting.local"
 
+  # HTTP server tuning (issue #144). Defaults match the binary's
+  # hardcoded values pre-#144 so a default Helm upgrade is a no-op;
+  # override only when an environment needs different headroom.
+  # All four keys read by tenant-api as TA_* env vars (binary parses
+  # malformed values back to the default and logs WARN at startup).
+  server:
+    timeouts:
+      # Long-tail writes (PR-mode batch with N tenants × WritePR
+      # commit latency) brushed up against 30s pre-PR-11; raise if
+      # your deployment commits large batches.
+      read: "15s"
+      write: "30s"
+      idle: "60s"
+    # Request body size cap. 1 MiB fits even the largest realistic
+    # tenant YAML (deeply-nested rule pack) with order-of-magnitude
+    # headroom. Raise only for atypical payloads — a higher cap
+    # widens the OOM blast radius of a single POST.
+    maxBodyBytes: 1048576
+
 # conf.d volume: holds tenant YAML files and the git repository.
 # For production, set type=pvc and provide a storageClass.
 # For Kind dev, set type=hostPath and provide path.

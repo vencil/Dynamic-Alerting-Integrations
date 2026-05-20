@@ -378,6 +378,82 @@ func TestRateLimitConfigFromEnv_Negative(t *testing.T) {
 	}
 }
 
+// ─────────────────────────────────────────────────────────────────
+// MaxBodyBytesFromEnv tests (issue #144)
+// ─────────────────────────────────────────────────────────────────
+
+func TestMaxBodyBytesFromEnv_Default(t *testing.T) {
+	t.Parallel()
+	n, malformed := MaxBodyBytesFromEnv("")
+	if n != DefaultMaxBodyBytes {
+		t.Errorf("empty env: bytes = %d, want %d", n, DefaultMaxBodyBytes)
+	}
+	if malformed {
+		t.Error("empty env should NOT be flagged malformed (it's the legitimate 'unset' case)")
+	}
+}
+
+func TestMaxBodyBytesFromEnv_PositiveOverride(t *testing.T) {
+	t.Parallel()
+	n, malformed := MaxBodyBytesFromEnv("5242880") // 5 MiB
+	if n != 5_242_880 {
+		t.Errorf("env=5242880: bytes = %d, want 5242880", n)
+	}
+	if malformed {
+		t.Error("explicit valid integer should NOT be flagged malformed")
+	}
+}
+
+func TestMaxBodyBytesFromEnv_Zero(t *testing.T) {
+	t.Parallel()
+	// Unlike the rate limiter, zero is NOT a valid value — it would
+	// reject every write. Treat as malformed so operators get a WARN
+	// instead of a silent regression.
+	n, malformed := MaxBodyBytesFromEnv("0")
+	if n != DefaultMaxBodyBytes {
+		t.Errorf("env=0: bytes = %d, want default %d (fallback)", n, DefaultMaxBodyBytes)
+	}
+	if !malformed {
+		t.Error("explicit 0 must be flagged malformed (a 0-byte cap rejects every write)")
+	}
+}
+
+func TestMaxBodyBytesFromEnv_Malformed(t *testing.T) {
+	t.Parallel()
+	n, malformed := MaxBodyBytesFromEnv("not-a-number")
+	if n != DefaultMaxBodyBytes {
+		t.Errorf("malformed env: bytes = %d, want default %d", n, DefaultMaxBodyBytes)
+	}
+	if !malformed {
+		t.Error("'not-a-number' must be flagged malformed so operators don't ship typo'd env vars silently")
+	}
+}
+
+func TestMaxBodyBytesFromEnv_Negative(t *testing.T) {
+	t.Parallel()
+	n, malformed := MaxBodyBytesFromEnv("-1")
+	if n != DefaultMaxBodyBytes {
+		t.Errorf("negative env: bytes = %d, want default %d", n, DefaultMaxBodyBytes)
+	}
+	if !malformed {
+		t.Error("negative number must be flagged malformed")
+	}
+}
+
+// Deps.MaxBody fallback: tests that build Deps without wiring
+// MaxBodyBytes must still get a non-zero limit so existing
+// fixtures keep working.
+func TestDeps_MaxBody_FallbackOnUnset(t *testing.T) {
+	t.Parallel()
+	d := &Deps{} // MaxBodyBytes zero — simulates legacy test fixture
+	if got := d.MaxBody(); got != DefaultMaxBodyBytes {
+		t.Errorf("unset MaxBodyBytes: MaxBody() = %d, want default %d", got, DefaultMaxBodyBytes)
+	}
+	d.MaxBodyBytes = 2048
+	if got := d.MaxBody(); got != 2048 {
+		t.Errorf("MaxBodyBytes=2048: MaxBody() = %d, want 2048", got)
+	}
+}
 
 // ─────────────────────────────────────────────────────────────────
 // SlogRequestLogger tests (PR-10/11)

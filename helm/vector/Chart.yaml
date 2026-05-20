@@ -1,0 +1,17 @@
+apiVersion: v2
+name: vector
+description: Vector node DaemonSet — tails container stdout/stderr, VRL-demuxes federation-gateway audit JSON from Envoy operational text, ships into VictoriaLogs (#539 Phase 1). Sink-agnostic; the same shipper feeds the Phase 3 SIEM fan-out when needed.
+type: application
+# version: Helm Chart 版本（隨 Chart 結構/模板變更升級）
+# 0.1.0 — #539 Phase 1: initial chart (DaemonSet + RBAC + VRL demux + VictoriaLogs sink)
+version: 0.1.0
+# appVersion: pinned Vector release
+appVersion: "0.55.0"
+keywords:
+  - dynamic-alerting
+  - log-aggregation
+  - vector
+  - observability
+home: https://github.com/vencil/Dynamic-Alerting-Integrations
+maintainers:
+  - name: vencil

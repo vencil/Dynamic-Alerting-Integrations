@@ -1,0 +1,17 @@
+apiVersion: v2
+name: victorialogs
+description: Single-pod VictoriaLogs — central store for the platform log-aggregation pipeline (#539 Phase 1). Consumer #1 is the federation-gateway audit log (ADR-020 IV-2f); consumer #2 is the chargeback query log (#552). Vector DaemonSet ships into this store.
+type: application
+# version: Helm Chart 版本（隨 Chart 結構/模板變更升級）
+# 0.1.0 — #539 Phase 1: initial chart (single pod + PVC + retention flag)
+version: 0.1.0
+# appVersion: pinned VictoriaLogs release
+appVersion: "v1.50.0"
+keywords:
+  - dynamic-alerting
+  - log-aggregation
+  - victorialogs
+  - observability
+home: https://github.com/vencil/Dynamic-Alerting-Integrations
+maintainers:
+  - name: vencil

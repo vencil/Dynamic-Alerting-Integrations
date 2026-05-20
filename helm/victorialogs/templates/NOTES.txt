@@ -1,0 +1,20 @@
+victorialogs installed — central log store (#539 Phase 1).
+
+  Service     : {{ include "victorialogs.name" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.port }}
+  Retention   : {{ .Values.retentionPeriod }}
+  Persistence : {{ if .Values.persistence.enabled }}{{ .Values.persistence.size }} PVC{{ else }}emptyDir (data lost on pod restart — TEST ONLY){{ end }}
+
+Ingest URL  (Vector elasticsearch sink, with /):
+  http://{{ include "victorialogs.name" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.port }}/insert/elasticsearch/
+
+Query URL (Grafana VictoriaLogs datasource):
+  http://{{ include "victorialogs.name" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.port }}
+
+Hard rule (#539 §2): producers MUST NOT HTTP-push directly here. Logs
+arrive only via the Vector DaemonSet tailing container stdout. A
+log-store outage must never wedge the federation gateway.
+{{ if not .Values.persistence.enabled }}
+WARNING: persistence.enabled=false — VictoriaLogs is running on an
+emptyDir. The audit trail evaporates with the pod. Acceptable for chart
+smoke-tests; never for any environment expected to query history.
+{{ end -}}
