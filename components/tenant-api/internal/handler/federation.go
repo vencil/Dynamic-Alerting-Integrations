@@ -70,7 +70,7 @@ func toFederationTokenRecord(r token.Record) FederationTokenRecord {
 // @Failure     429  {object} map[string]string
 // @Failure     500  {object} map[string]string
 // @Router      /api/v1/federation/tokens [post]
-func (d *Deps) CreateFederationToken() http.HandlerFunc {
+func CreateFederationToken(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 		if err != nil {
@@ -138,7 +138,7 @@ func (d *Deps) CreateFederationToken() http.HandlerFunc {
 // @Failure     403 {object} map[string]string
 // @Failure     500 {object} map[string]string
 // @Router      /api/v1/federation/tokens [get]
-func (d *Deps) ListFederationTokens() http.HandlerFunc {
+func ListFederationTokens(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		tenantID := r.URL.Query().Get("tenant_id")
 		if tenantID == "" {
@@ -188,7 +188,7 @@ func (d *Deps) ListFederationTokens() http.HandlerFunc {
 // @Failure     404 {object} map[string]string
 // @Failure     500 {object} map[string]string
 // @Router      /api/v1/federation/tokens/{id} [delete]
-func (d *Deps) DeleteFederationToken() http.HandlerFunc {
+func DeleteFederationToken(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		tokenID := chi.URLParam(r, "id")
 

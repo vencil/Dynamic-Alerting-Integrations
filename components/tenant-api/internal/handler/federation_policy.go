@@ -47,7 +47,7 @@ func toViolations(pv []fedpolicy.PolicyViolation) []Violation {
 // @Produce     json
 // @Success     200 {object} fedpolicy.Config
 // @Router      /api/v1/federation/policy [get]
-func (d *Deps) GetFederationPolicy() http.HandlerFunc {
+func GetFederationPolicy(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(d.FederationPolicy.Get())
@@ -89,7 +89,7 @@ type PutFederationPolicyRequest struct {
 // @Failure     403  {object} map[string]string
 // @Failure     409  {object} map[string]string
 // @Router      /api/v1/federation/policy [put]
-func (d *Deps) PutFederationPolicy() http.HandlerFunc {
+func PutFederationPolicy(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !d.RBAC.HasPermission(rbac.RequestGroups(r), "*", rbac.PermAdmin) {
 			writeJSONErrorWithCode(w, r, http.StatusForbidden, CodeForbidden,
@@ -129,7 +129,7 @@ func (d *Deps) PutFederationPolicy() http.HandlerFunc {
 					len(added), maxNewMetricsPerRequest))
 				return
 			}
-			hard, soft := partitionAdmission(d.runAdmissionChecks(r.Context(), added))
+			hard, soft := partitionAdmission(runAdmissionChecks(d, r.Context(), added))
 			if len(hard) > 0 {
 				writeErrorEnvelope(w, r, http.StatusBadRequest, ErrorResponse{
 					Error: "federation admission: hard block — metric(s) have data but no series carries the tenant label and cannot be whitelisted",
@@ -225,7 +225,7 @@ func addedFederationMetrics(current, proposed *fedpolicy.Config) []string {
 // take up to the validator's per-check timeout, so a batch must not run
 // strictly sequentially. Returns nil when the validator is disabled or
 // metrics is empty.
-func (d *Deps) runAdmissionChecks(ctx context.Context, metrics []string) []fedpolicy.AdmissionResult {
+func runAdmissionChecks(d *Deps, ctx context.Context, metrics []string) []fedpolicy.AdmissionResult {
 	if d.AdmissionValidator == nil || len(metrics) == 0 {
 		return nil
 	}
@@ -320,14 +320,14 @@ func admissionMetrics(results []fedpolicy.AdmissionResult) []string {
 // @Success     200 {object} fedpolicy.Subset
 // @Failure     400 {object} map[string]string
 // @Router      /api/v1/tenants/{id}/federation [get]
-func (d *Deps) GetTenantFederation() http.HandlerFunc {
+func GetTenantFederation(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		tenantID := chi.URLParam(r, "id")
 		if err := ValidateTenantID(tenantID); err != nil {
 			writeJSONError(w, r, http.StatusBadRequest, err.Error())
 			return
 		}
-		subset, err := d.readFederationSubset(tenantID)
+		subset, err := readFederationSubset(d, tenantID)
 		if err != nil {
 			writeJSONError(w, r, http.StatusInternalServerError, "read federation subset: "+err.Error())
 			return
@@ -356,7 +356,7 @@ func (d *Deps) GetTenantFederation() http.HandlerFunc {
 // @Failure     403  {object} map[string]string
 // @Failure     409  {object} map[string]string
 // @Router      /api/v1/tenants/{id}/federation [put]
-func (d *Deps) PutTenantFederation() http.HandlerFunc {
+func PutTenantFederation(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		tenantID := chi.URLParam(r, "id")
 		if err := ValidateTenantID(tenantID); err != nil {
@@ -415,7 +415,7 @@ func (d *Deps) PutTenantFederation() http.HandlerFunc {
 // readFederationSubset loads conf.d/_federation/<tenantID>.yaml. A
 // missing file is not an error — it means the tenant has selected no
 // federation metrics yet, which yields an empty subset.
-func (d *Deps) readFederationSubset(tenantID string) (*fedpolicy.Subset, error) {
+func readFederationSubset(d *Deps, tenantID string) (*fedpolicy.Subset, error) {
 	path := filepath.Join(d.ConfigDir, "_federation", tenantID+".yaml")
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {

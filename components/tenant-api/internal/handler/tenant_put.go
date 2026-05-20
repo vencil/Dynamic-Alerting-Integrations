@@ -48,7 +48,7 @@ type PutTenantResponse struct {
 // @Failure     409   {object} map[string]string
 // @Failure     500   {object} map[string]string
 // @Router      /api/v1/tenants/{id} [put]
-func (d *Deps) PutTenant() http.HandlerFunc {
+func PutTenant(d *Deps) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
 		tenantID := chi.URLParam(r, "id")
 		if err := ValidateTenantID(tenantID); err != nil {
@@ -100,7 +100,7 @@ func (d *Deps) PutTenant() http.HandlerFunc {
 			// PR-6/11: shared with BatchTenants via createPRAndRegister.
 			prTitle := fmt.Sprintf("[tenant-api] Update %s configuration", tenantID)
 			prBody := fmt.Sprintf("**Operator:** %s\n**Source:** tenant-manager UI\n**Tenant:** %s", email, tenantID)
-			pr, err := d.createPRAndRegister(
+			pr, err := createPRAndRegister(d, 
 				prTitle, prBody, result.BranchName,
 				[]string{"tenant-api", "auto-generated"},
 				[]string{tenantID},

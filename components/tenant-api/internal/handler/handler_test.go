@@ -92,7 +92,7 @@ func TestHealth(t *testing.T) {
 func TestReady(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	handler := (&Deps{ConfigDir: dir}).Ready()
+	handler := Ready(&Deps{ConfigDir: dir})
 
 	req := httptest.NewRequest("GET", "/ready", nil)
 	w := httptest.NewRecorder()
@@ -119,7 +119,7 @@ func TestReady(t *testing.T) {
 func TestReady_MissingDir(t *testing.T) {
 	t.Parallel()
 	missing := filepath.Join(t.TempDir(), "does-not-exist")
-	handler := (&Deps{ConfigDir: missing}).Ready()
+	handler := Ready(&Deps{ConfigDir: missing})
 
 	req := httptest.NewRequest("GET", "/ready", nil)
 	w := httptest.NewRecorder()
@@ -146,7 +146,7 @@ func TestReady_NotADirectory(t *testing.T) {
 	if err := os.WriteFile(filePath, []byte("not a dir"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	handler := (&Deps{ConfigDir: filePath}).Ready()
+	handler := Ready(&Deps{ConfigDir: filePath})
 
 	req := httptest.NewRequest("GET", "/ready", nil)
 	w := httptest.NewRecorder()
@@ -165,7 +165,7 @@ func TestGetTenant_Success(t *testing.T) {
 		"db-a.yaml": "tenants:\n  db-a:\n    _silent_mode: \"warning\"\n",
 	})
 
-	h := (&Deps{ConfigDir: configDir}).GetTenant()
+	h := GetTenant(&Deps{ConfigDir: configDir})
 	req := newRequestWithChiParam("GET", "/api/v1/tenants/db-a", "id", "db-a", nil)
 	w := httptest.NewRecorder()
 	h(w, req)
@@ -189,7 +189,7 @@ func TestGetTenant_NotFound(t *testing.T) {
 	t.Parallel()
 	configDir := setupConfigDir(t, nil)
 
-	h := (&Deps{ConfigDir: configDir}).GetTenant()
+	h := GetTenant(&Deps{ConfigDir: configDir})
 	req := newRequestWithChiParam("GET", "/api/v1/tenants/nonexistent", "id", "nonexistent", nil)
 	w := httptest.NewRecorder()
 	h(w, req)
@@ -203,7 +203,7 @@ func TestGetTenant_InvalidID(t *testing.T) {
 	t.Parallel()
 	configDir := setupConfigDir(t, nil)
 
-	h := (&Deps{ConfigDir: configDir}).GetTenant()
+	h := GetTenant(&Deps{ConfigDir: configDir})
 	req := newRequestWithChiParam("GET", "/api/v1/tenants/../etc", "id", "../etc", nil)
 	w := httptest.NewRecorder()
 	h(w, req)
@@ -220,7 +220,7 @@ func TestGetTenant_WithDefaults(t *testing.T) {
 		"db-a.yaml":      "tenants:\n  db-a:\n    mysql_connections: \"70\"\n",
 	})
 
-	h := (&Deps{ConfigDir: configDir}).GetTenant()
+	h := GetTenant(&Deps{ConfigDir: configDir})
 	req := newRequestWithChiParam("GET", "/api/v1/tenants/db-a", "id", "db-a", nil)
 	w := httptest.NewRecorder()
 	h(w, req)
@@ -244,7 +244,7 @@ func TestGetTenant_EmptyID(t *testing.T) {
 	t.Parallel()
 	configDir := setupConfigDir(t, nil)
 
-	h := (&Deps{ConfigDir: configDir}).GetTenant()
+	h := GetTenant(&Deps{ConfigDir: configDir})
 	req := newRequestWithChiParam("GET", "/api/v1/tenants/", "id", "", nil)
 	w := httptest.NewRecorder()
 	h(w, req)
@@ -260,7 +260,7 @@ func TestListTenants_Empty(t *testing.T) {
 	t.Parallel()
 	configDir := setupConfigDir(t, nil)
 
-	h := (&Deps{ConfigDir: configDir, RBAC: newRBACManager(t, "")}).ListTenants()
+	h := ListTenants(&Deps{ConfigDir: configDir, RBAC: newRBACManager(t, "")})
 	req := httptest.NewRequest("GET", "/api/v1/tenants", nil)
 	w := httptest.NewRecorder()
 	h(w, req)
@@ -284,7 +284,7 @@ func TestListTenants_MultipleTenants(t *testing.T) {
 		"db-b.yaml": "tenants:\n  db-b:\n    _state_maintenance: \"enable\"\n",
 	})
 
-	h := (&Deps{ConfigDir: configDir, RBAC: newRBACManager(t, "")}).ListTenants()
+	h := ListTenants(&Deps{ConfigDir: configDir, RBAC: newRBACManager(t, "")})
 	req := httptest.NewRequest("GET", "/api/v1/tenants", nil)
 	w := httptest.NewRecorder()
 	h(w, req)
@@ -326,7 +326,7 @@ func TestListTenants_SkipsHiddenAndDefaults(t *testing.T) {
 		"not-yaml.txt":   "not yaml",
 	})
 
-	h := (&Deps{ConfigDir: configDir, RBAC: newRBACManager(t, "")}).ListTenants()
+	h := ListTenants(&Deps{ConfigDir: configDir, RBAC: newRBACManager(t, "")})
 	req := httptest.NewRequest("GET", "/api/v1/tenants", nil)
 	w := httptest.NewRecorder()
 	h(w, req)
@@ -346,7 +346,7 @@ func TestListTenants_WithYmlExtension(t *testing.T) {
 		"db-c.yml": "tenants:\n  db-c:\n    mysql_cpu: \"75\"\n",
 	})
 
-	h := (&Deps{ConfigDir: configDir, RBAC: newRBACManager(t, "")}).ListTenants()
+	h := ListTenants(&Deps{ConfigDir: configDir, RBAC: newRBACManager(t, "")})
 	req := httptest.NewRequest("GET", "/api/v1/tenants", nil)
 	w := httptest.NewRecorder()
 	h(w, req)
@@ -370,7 +370,7 @@ func TestListTenants_MalformedYAML(t *testing.T) {
 		"db-a.yaml": "tenants:\n  db-a:\n    mysql_cpu: \"80\"\n",
 	})
 
-	h := (&Deps{ConfigDir: configDir, RBAC: newRBACManager(t, "")}).ListTenants()
+	h := ListTenants(&Deps{ConfigDir: configDir, RBAC: newRBACManager(t, "")})
 	req := httptest.NewRequest("GET", "/api/v1/tenants", nil)
 	w := httptest.NewRecorder()
 	h(w, req)
@@ -396,7 +396,7 @@ func TestValidateTenant_Valid(t *testing.T) {
 		"_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
 	})
 
-	h := (&Deps{ConfigDir: configDir}).ValidateTenant()
+	h := ValidateTenant(&Deps{ConfigDir: configDir})
 	body := bytes.NewBufferString("tenants:\n  db-a:\n    mysql_connections: \"70\"\n")
 	req := newRequestWithChiParam("POST", "/api/v1/tenants/db-a/validate", "id", "db-a", body)
 	w := httptest.NewRecorder()
@@ -418,7 +418,7 @@ func TestValidateTenant_InvalidID(t *testing.T) {
 	t.Parallel()
 	configDir := setupConfigDir(t, nil)
 
-	h := (&Deps{ConfigDir: configDir}).ValidateTenant()
+	h := ValidateTenant(&Deps{ConfigDir: configDir})
 	body := bytes.NewBufferString("tenants:\n  bad:\n    x: \"1\"\n")
 	req := newRequestWithChiParam("POST", "/api/v1/tenants/../bad/validate", "id", "../bad", body)
 	w := httptest.NewRecorder()
@@ -433,7 +433,7 @@ func TestValidateTenant_WithWarnings(t *testing.T) {
 	t.Parallel()
 	configDir := setupConfigDir(t, nil) // no defaults
 
-	h := (&Deps{ConfigDir: configDir}).ValidateTenant()
+	h := ValidateTenant(&Deps{ConfigDir: configDir})
 	// unknown_key is not in defaults and not a reserved key -> warning
 	body := bytes.NewBufferString("tenants:\n  db-a:\n    unknown_key_xyz: \"70\"\n")
 	req := newRequestWithChiParam("POST", "/api/v1/tenants/db-a/validate", "id", "db-a", body)
@@ -459,7 +459,7 @@ func TestDiffTenant_NewTenant_JSON(t *testing.T) {
 	configDir := setupConfigDir(t, nil)
 	gw := newTestWriter(configDir)
 
-	h := (&Deps{Writer: gw}).DiffTenant()
+	h := DiffTenant(&Deps{Writer: gw})
 	reqBody, _ := json.Marshal(DiffRequest{Proposed: "tenants:\n  new-db:\n    cpu: \"80\"\n"})
 	body := bytes.NewBuffer(reqBody)
 	req := newRequestWithChiParam("POST", "/api/v1/tenants/new-db/diff", "id", "new-db", body)
@@ -493,7 +493,7 @@ func TestDiffTenant_NoDiff(t *testing.T) {
 	})
 	gw := newTestWriter(configDir)
 
-	h := (&Deps{Writer: gw}).DiffTenant()
+	h := DiffTenant(&Deps{Writer: gw})
 	reqBody, _ := json.Marshal(DiffRequest{Proposed: content})
 	body := bytes.NewBuffer(reqBody)
 	req := newRequestWithChiParam("POST", "/api/v1/tenants/db-a/diff", "id", "db-a", body)
@@ -520,7 +520,7 @@ func TestDiffTenant_RawYAML(t *testing.T) {
 	})
 	gw := newTestWriter(configDir)
 
-	h := (&Deps{Writer: gw}).DiffTenant()
+	h := DiffTenant(&Deps{Writer: gw})
 	body := bytes.NewBufferString("tenants:\n  db-a:\n    cpu: \"90\"\n")
 	req := newRequestWithChiParam("POST", "/api/v1/tenants/db-a/diff", "id", "db-a", body)
 	req.Header.Set("Content-Type", "application/yaml")
@@ -544,7 +544,7 @@ func TestDiffTenant_InvalidID(t *testing.T) {
 	configDir := setupConfigDir(t, nil)
 	gw := newTestWriter(configDir)
 
-	h := (&Deps{Writer: gw}).DiffTenant()
+	h := DiffTenant(&Deps{Writer: gw})
 	req := newRequestWithChiParam("POST", "/api/v1/tenants/../bad/diff", "id", "../bad", nil)
 	w := httptest.NewRecorder()
 	h(w, req)
@@ -560,7 +560,7 @@ func TestDiffTenant_JSONAutoDetect(t *testing.T) {
 	configDir := setupConfigDir(t, nil)
 	gw := newTestWriter(configDir)
 
-	h := (&Deps{Writer: gw}).DiffTenant()
+	h := DiffTenant(&Deps{Writer: gw})
 	reqBody, _ := json.Marshal(DiffRequest{Proposed: "tenants:\n  db-x:\n    cpu: \"80\"\n"})
 	body := bytes.NewBuffer(reqBody)
 	req := newRequestWithChiParam("POST", "/api/v1/tenants/db-x/diff", "id", "db-x", body)
@@ -681,7 +681,7 @@ func TestPutTenant_InvalidID(t *testing.T) {
 	configDir := setupConfigDir(t, nil)
 	gw := newTestWriter(configDir)
 
-	h := (&Deps{Writer: gw, Policy: policy.NewManager(configDir), WriteMode: WriteModeDirect}).PutTenant()
+	h := PutTenant(&Deps{Writer: gw, Policy: policy.NewManager(configDir), WriteMode: WriteModeDirect})
 	body := bytes.NewBufferString("tenants:\n  bad:\n    x: \"1\"\n")
 	req := newRequestWithChiParam("PUT", "/api/v1/tenants/../bad", "id", "../bad", body)
 	w := httptest.NewRecorder()
@@ -697,7 +697,7 @@ func TestPutTenant_EmptyID(t *testing.T) {
 	configDir := setupConfigDir(t, nil)
 	gw := newTestWriter(configDir)
 
-	h := (&Deps{Writer: gw, Policy: policy.NewManager(configDir), WriteMode: WriteModeDirect}).PutTenant()
+	h := PutTenant(&Deps{Writer: gw, Policy: policy.NewManager(configDir), WriteMode: WriteModeDirect})
 	body := bytes.NewBufferString("tenants:\n  test:\n    x: \"1\"\n")
 	req := newRequestWithChiParam("PUT", "/api/v1/tenants/", "id", "", body)
 	w := httptest.NewRecorder()
@@ -714,7 +714,7 @@ func TestPutTenant_ValidationFailure(t *testing.T) {
 	configDir := setupConfigDir(t, nil)
 	gw := newTestWriter(configDir)
 
-	h := (&Deps{Writer: gw, Policy: policy.NewManager(configDir), WriteMode: WriteModeDirect}).PutTenant()
+	h := PutTenant(&Deps{Writer: gw, Policy: policy.NewManager(configDir), WriteMode: WriteModeDirect})
 	// Valid ID but YAML doesn't contain the matching tenant section
 	body := bytes.NewBufferString("tenants:\n  other-tenant:\n    x: \"1\"\n")
 	req := newRequestWithChiParam("PUT", "/api/v1/tenants/db-a", "id", "db-a", body)
@@ -732,7 +732,7 @@ func TestPutTenant_InvalidYAML(t *testing.T) {
 	configDir := setupConfigDir(t, nil)
 	gw := newTestWriter(configDir)
 
-	h := (&Deps{Writer: gw, Policy: policy.NewManager(configDir), WriteMode: WriteModeDirect}).PutTenant()
+	h := PutTenant(&Deps{Writer: gw, Policy: policy.NewManager(configDir), WriteMode: WriteModeDirect})
 	body := bytes.NewBufferString("{{invalid yaml")
 	req := newRequestWithChiParam("PUT", "/api/v1/tenants/db-a", "id", "db-a", body)
 	w := httptest.NewRecorder()
@@ -751,7 +751,7 @@ func TestBatchTenants_EmptyOperations(t *testing.T) {
 	gw := newTestWriter(configDir)
 	rbacMgr := newRBACManager(t, "")
 
-	h := (&Deps{Writer: gw, ConfigDir: configDir, RBAC: rbacMgr, Policy: policy.NewManager(configDir), WriteMode: WriteModeDirect}).BatchTenants()
+	h := BatchTenants(&Deps{Writer: gw, ConfigDir: configDir, RBAC: rbacMgr, Policy: policy.NewManager(configDir), WriteMode: WriteModeDirect})
 	reqBody, _ := json.Marshal(BatchRequest{Operations: []BatchOperation{}})
 	body := bytes.NewBuffer(reqBody)
 	req := httptest.NewRequest("POST", "/api/v1/tenants/batch", body)
@@ -770,7 +770,7 @@ func TestBatchTenants_InvalidJSON(t *testing.T) {
 	gw := newTestWriter(configDir)
 	rbacMgr := newRBACManager(t, "")
 
-	h := (&Deps{Writer: gw, ConfigDir: configDir, RBAC: rbacMgr, Policy: policy.NewManager(configDir), WriteMode: WriteModeDirect}).BatchTenants()
+	h := BatchTenants(&Deps{Writer: gw, ConfigDir: configDir, RBAC: rbacMgr, Policy: policy.NewManager(configDir), WriteMode: WriteModeDirect})
 	body := bytes.NewBufferString("{invalid json")
 	req := httptest.NewRequest("POST", "/api/v1/tenants/batch", body)
 	req.Header.Set("Content-Type", "application/json")
@@ -788,7 +788,7 @@ func TestBatchTenants_InvalidTenantID(t *testing.T) {
 	gw := newTestWriter(configDir)
 	rbacMgr := newRBACManager(t, "")
 
-	h := (&Deps{Writer: gw, ConfigDir: configDir, RBAC: rbacMgr, Policy: policy.NewManager(configDir), WriteMode: WriteModeDirect}).BatchTenants()
+	h := BatchTenants(&Deps{Writer: gw, ConfigDir: configDir, RBAC: rbacMgr, Policy: policy.NewManager(configDir), WriteMode: WriteModeDirect})
 	reqBody, _ := json.Marshal(BatchRequest{
 		Operations: []BatchOperation{
 			{TenantID: "../bad", Patch: map[string]string{"_silent_mode": "warning"}},
@@ -823,7 +823,7 @@ func TestBatchTenants_PermissionDenied(t *testing.T) {
     permissions: [read]
 `)
 
-	h := (&Deps{Writer: gw, ConfigDir: configDir, RBAC: rbacMgr, Policy: policy.NewManager(configDir), WriteMode: WriteModeDirect}).BatchTenants()
+	h := BatchTenants(&Deps{Writer: gw, ConfigDir: configDir, RBAC: rbacMgr, Policy: policy.NewManager(configDir), WriteMode: WriteModeDirect})
 	reqBody, _ := json.Marshal(BatchRequest{
 		Operations: []BatchOperation{
 			{TenantID: "db-a", Patch: map[string]string{"_silent_mode": "warning"}},
@@ -998,7 +998,7 @@ func TestFullRouter_GetTenant(t *testing.T) {
 
 	r := chi.NewRouter()
 	r.With(rbacMgr.Middleware(rbac.PermRead, TenantIDFromPath)).
-		Get("/api/v1/tenants/{id}", (&Deps{ConfigDir: configDir}).GetTenant())
+		Get("/api/v1/tenants/{id}", GetTenant(&Deps{ConfigDir: configDir}))
 
 	req := httptest.NewRequest("GET", "/api/v1/tenants/db-a", nil)
 	req.Header.Set("X-Forwarded-Email", "test@example.com")
@@ -1025,7 +1025,7 @@ func TestFullRouter_GetTenant_Unauthorized(t *testing.T) {
 
 	r := chi.NewRouter()
 	r.With(rbacMgr.Middleware(rbac.PermRead, TenantIDFromPath)).
-		Get("/api/v1/tenants/{id}", (&Deps{ConfigDir: configDir}).GetTenant())
+		Get("/api/v1/tenants/{id}", GetTenant(&Deps{ConfigDir: configDir}))
 
 	// No identity headers
 	req := httptest.NewRequest("GET", "/api/v1/tenants/db-a", nil)
@@ -1051,7 +1051,7 @@ func TestFullRouter_GetTenant_Forbidden(t *testing.T) {
 
 	r := chi.NewRouter()
 	r.With(rbacMgr.Middleware(rbac.PermRead, TenantIDFromPath)).
-		Get("/api/v1/tenants/{id}", (&Deps{ConfigDir: configDir}).GetTenant())
+		Get("/api/v1/tenants/{id}", GetTenant(&Deps{ConfigDir: configDir}))
 
 	req := httptest.NewRequest("GET", "/api/v1/tenants/db-a", nil)
 	req.Header.Set("X-Forwarded-Email", "test@example.com")
@@ -1078,7 +1078,7 @@ func TestFullRouter_ListTenants(t *testing.T) {
 
 	r := chi.NewRouter()
 	r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
-		Get("/api/v1/tenants", (&Deps{ConfigDir: configDir, RBAC: newRBACManager(t, "")}).ListTenants())
+		Get("/api/v1/tenants", ListTenants(&Deps{ConfigDir: configDir, RBAC: newRBACManager(t, "")}))
 
 	req := httptest.NewRequest("GET", "/api/v1/tenants", nil)
 	req.Header.Set("X-Forwarded-Email", "test@example.com")
@@ -1160,7 +1160,7 @@ groups:
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			handler := (&Deps{RBAC: rbacMgr}).Me()
+			handler := Me(&Deps{RBAC: rbacMgr})
 
 			// Create request and inject RBAC context
 			req := httptest.NewRequest("GET", "/api/v1/me", nil)
@@ -1196,7 +1196,7 @@ groups:
 func TestMe_EmptyGroupsRendersAsArray(t *testing.T) {
 	t.Parallel()
 	rbacMgr := newRBACManager(t, "")
-	handler := (&Deps{RBAC: rbacMgr}).Me()
+	handler := Me(&Deps{RBAC: rbacMgr})
 
 	// No X-Forwarded-Groups header — caller has no group memberships.
 	req := httptest.NewRequest("GET", "/api/v1/me", nil)
@@ -1232,7 +1232,7 @@ func TestMeMissingIdentity(t *testing.T) {
 	t.Parallel()
 	rbacMgr := newRBACManager(t, "")
 
-	handler := (&Deps{RBAC: rbacMgr}).Me()
+	handler := Me(&Deps{RBAC: rbacMgr})
 	req := httptest.NewRequest("GET", "/api/v1/me", nil)
 	// Intentionally omit X-Forwarded-Email
 
@@ -1251,7 +1251,7 @@ func TestMeEmptyEmailDirect(t *testing.T) {
 	t.Parallel()
 	rbacMgr := newRBACManager(t, "")
 
-	handler := (&Deps{RBAC: rbacMgr}).Me()
+	handler := Me(&Deps{RBAC: rbacMgr})
 	req := httptest.NewRequest("GET", "/api/v1/me", nil)
 	// No middleware — RequestEmail(r) returns "" from empty context
 

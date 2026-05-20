@@ -85,7 +85,7 @@ func TestBatchTenants_Async_ReturnsTaskID(t *testing.T) {
 	req.Header.Set("X-Forwarded-Email", "test@example.com")
 
 	w := httptest.NewRecorder()
-	deps.BatchTenants()(w, req)
+	BatchTenants(deps)(w, req)
 
 	if w.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want %d (Accepted), body: %s", w.Code, http.StatusAccepted, w.Body.String())
@@ -142,7 +142,7 @@ func TestBatchTenants_Async_TaskCompletes(t *testing.T) {
 	req.Header.Set("X-Forwarded-Email", "test@example.com")
 
 	w := httptest.NewRecorder()
-	deps.BatchTenants()(w, req)
+	BatchTenants(deps)(w, req)
 
 	if w.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want %d (Accepted), body: %s", w.Code, http.StatusAccepted, w.Body.String())
@@ -196,7 +196,7 @@ func TestGroupBatch_Async_ReturnsTaskID(t *testing.T) {
 	req.Header.Set("X-Forwarded-Email", "test@example.com")
 
 	w := httptest.NewRecorder()
-	deps.GroupBatch()(w, req)
+	GroupBatch(deps)(w, req)
 
 	if w.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want %d (Accepted), body: %s", w.Code, http.StatusAccepted, w.Body.String())

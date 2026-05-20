@@ -72,7 +72,7 @@ type BatchResponse struct {
 // @Success     202  {object} map[string]interface{}
 // @Failure     400  {object} map[string]string
 // @Router      /api/v1/tenants/batch [post]
-func (d *Deps) BatchTenants() http.HandlerFunc {
+func BatchTenants(d *Deps) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
 		email := rbac.RequestEmail(r)
 		groups := rbac.RequestGroups(r)
@@ -163,7 +163,7 @@ func (d *Deps) BatchTenants() http.HandlerFunc {
 			}
 			prBody := fmt.Sprintf("**Operator:** %s\n**Source:** tenant-manager UI (batch)\n**Tenants:** %s",
 				email, strings.Join(tenantList, ", "))
-			pr, err := d.createPRAndRegister(
+			pr, err := createPRAndRegister(d, 
 				prTitle, prBody, result.BranchName,
 				[]string{"tenant-api", "auto-generated", "batch"},
 				tenantList,

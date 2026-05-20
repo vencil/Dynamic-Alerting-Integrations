@@ -28,7 +28,7 @@ type ValidateResponse struct {
 // @Success     200   {object} ValidateResponse
 // @Failure     400   {object} map[string]string
 // @Router      /api/v1/tenants/{id}/validate [post]
-func (d *Deps) ValidateTenant() http.HandlerFunc {
+func ValidateTenant(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		tenantID := chi.URLParam(r, "id")
 		if err := ValidateTenantID(tenantID); err != nil {

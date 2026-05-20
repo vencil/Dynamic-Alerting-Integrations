@@ -37,7 +37,7 @@ type DiffResponse struct {
 // @Failure     400   {object} map[string]string
 // @Failure     500   {object} map[string]string
 // @Router      /api/v1/tenants/{id}/diff [post]
-func (d *Deps) DiffTenant() http.HandlerFunc {
+func DiffTenant(d *Deps) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
 		tenantID := chi.URLParam(r, "id")
 		if err := ValidateTenantID(tenantID); err != nil {

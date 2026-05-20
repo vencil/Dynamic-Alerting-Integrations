@@ -39,7 +39,7 @@ import (
 // All tenantIDs MUST be non-empty. Empty input is a caller bug
 // (would register a no-tenant PR that PendingPRForTenant cannot
 // resolve, leaving the PR un-trackable).
-func (d *Deps) createPRAndRegister(
+func createPRAndRegister(d *Deps,
 	title, body, branchName string,
 	labels []string,
 	tenantIDs []string,

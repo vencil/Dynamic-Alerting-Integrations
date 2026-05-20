@@ -116,7 +116,7 @@ func TestGetFederationPolicy_Empty(t *testing.T) {
 		FederationPolicy: fedpolicy.NewManager(configDir),
 		RBAC:             newRBACManager(t, ""),
 	}
-	w := executeWithRBAC(t, d.GetFederationPolicy(), fedReq(t, "GET", "/api/v1/federation/policy", "", "", ""))
+	w := executeWithRBAC(t, GetFederationPolicy(d), fedReq(t, "GET", "/api/v1/federation/policy", "", "", ""))
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200, body: %s", w.Code, w.Body.String())
 	}
@@ -141,7 +141,7 @@ func TestPutFederationPolicy_ForbiddenForNonPlatformAdmin(t *testing.T) {
 		RBAC: newRBACManager(t, scopedAdminRBAC),
 	}
 	body := `{"whitelist":[{"metric":"mysql_up"}]}`
-	w := executeWithRBAC(t, d.PutFederationPolicy(), fedReq(t, "PUT", "/api/v1/federation/policy", "", "", body))
+	w := executeWithRBAC(t, PutFederationPolicy(d), fedReq(t, "PUT", "/api/v1/federation/policy", "", "", body))
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403, body: %s", w.Code, w.Body.String())
 	}
@@ -158,7 +158,7 @@ func TestPutFederationPolicy_Success(t *testing.T) {
 		RBAC:             newRBACManager(t, platformAdminRBAC),
 	}
 	body := `{"whitelist":[{"metric":"mysql_up"},{"metric":"tenant:cpu:rate5m"}]}`
-	w := executeWithRBAC(t, d.PutFederationPolicy(), fedReq(t, "PUT", "/api/v1/federation/policy", "", "", body))
+	w := executeWithRBAC(t, PutFederationPolicy(d), fedReq(t, "PUT", "/api/v1/federation/policy", "", "", body))
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200, body: %s", w.Code, w.Body.String())
 	}
@@ -185,7 +185,7 @@ func TestPutFederationPolicy_AdmissionHardBlock(t *testing.T) {
 		AdmissionValidator: fedpolicy.NewAdmissionValidator(promURL),
 		RBAC:               newRBACManager(t, platformAdminRBAC),
 	}
-	w := executeWithRBAC(t, d.PutFederationPolicy(),
+	w := executeWithRBAC(t, PutFederationPolicy(d),
 		fedReq(t, "PUT", "/api/v1/federation/policy", "", "", `{"whitelist":[{"metric":"m"}]}`))
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400 (hard block), body: %s", w.Code, w.Body.String())
@@ -209,19 +209,19 @@ func TestPutFederationPolicy_AdmissionWarnNeedsForce(t *testing.T) {
 		RBAC:               newRBACManager(t, platformAdminRBAC),
 	}
 	// No force → rejected.
-	w := executeWithRBAC(t, d.PutFederationPolicy(),
+	w := executeWithRBAC(t, PutFederationPolicy(d),
 		fedReq(t, "PUT", "/api/v1/federation/policy", "", "", `{"whitelist":[{"metric":"m"}]}`))
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400 (warn, no force)", w.Code)
 	}
 	// force without a reason → rejected.
-	w = executeWithRBAC(t, d.PutFederationPolicy(),
+	w = executeWithRBAC(t, PutFederationPolicy(d),
 		fedReq(t, "PUT", "/api/v1/federation/policy", "", "", `{"whitelist":[{"metric":"m"}],"force":true}`))
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400 (force without reason)", w.Code)
 	}
 	// force + reason → accepted, and the bypass is recorded in git.
-	w = executeWithRBAC(t, d.PutFederationPolicy(),
+	w = executeWithRBAC(t, PutFederationPolicy(d),
 		fedReq(t, "PUT", "/api/v1/federation/policy", "", "", `{"whitelist":[{"metric":"m"}],"force":true,"reason":"cold-start: new cluster"}`))
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (force + reason), body: %s", w.Code, w.Body.String())
@@ -245,7 +245,7 @@ func TestPutFederationPolicy_AdmissionPass(t *testing.T) {
 		AdmissionValidator: fedpolicy.NewAdmissionValidator(promURL),
 		RBAC:               newRBACManager(t, platformAdminRBAC),
 	}
-	w := executeWithRBAC(t, d.PutFederationPolicy(),
+	w := executeWithRBAC(t, PutFederationPolicy(d),
 		fedReq(t, "PUT", "/api/v1/federation/policy", "", "", `{"whitelist":[{"metric":"m"}]}`))
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (admission pass), body: %s", w.Code, w.Body.String())
@@ -268,7 +268,7 @@ func TestPutFederationPolicy_AdmissionMultipleMetricsConcurrent(t *testing.T) {
 		RBAC:               newRBACManager(t, platformAdminRBAC),
 	}
 	body := `{"whitelist":[{"metric":"m1"},{"metric":"m2"},{"metric":"m3"},{"metric":"m4"},{"metric":"m5"}]}`
-	w := executeWithRBAC(t, d.PutFederationPolicy(), fedReq(t, "PUT", "/api/v1/federation/policy", "", "", body))
+	w := executeWithRBAC(t, PutFederationPolicy(d), fedReq(t, "PUT", "/api/v1/federation/policy", "", "", body))
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400 (m3 hard block), body: %s", w.Code, w.Body.String())
 	}
@@ -298,7 +298,7 @@ func TestPutFederationPolicy_RejectsTooManyNewMetrics(t *testing.T) {
 		fmt.Fprintf(&sb, `{"metric":"m%d"}`, i)
 	}
 	sb.WriteString(`]}`)
-	w := executeWithRBAC(t, d.PutFederationPolicy(), fedReq(t, "PUT", "/api/v1/federation/policy", "", "", sb.String()))
+	w := executeWithRBAC(t, PutFederationPolicy(d), fedReq(t, "PUT", "/api/v1/federation/policy", "", "", sb.String()))
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400 (too many new metrics)", w.Code)
 	}
@@ -322,7 +322,7 @@ func TestPutFederationPolicy_CancelledContextSkipsGitWrite(t *testing.T) {
 	req := fedReq(t, "PUT", "/api/v1/federation/policy", "", "", `{"whitelist":[{"metric":"m"}]}`)
 	ctx, cancel := context.WithCancel(req.Context())
 	cancel() // the request is already aborted (server timeout / client gone)
-	_ = executeWithRBAC(t, d.PutFederationPolicy(), req.WithContext(ctx))
+	_ = executeWithRBAC(t, PutFederationPolicy(d), req.WithContext(ctx))
 	if _, err := os.Stat(filepath.Join(configDir, "_federation_policy.yaml")); !os.IsNotExist(err) {
 		t.Error("a cancelled request must not write the whitelist file (zombie write)")
 	}
@@ -339,7 +339,7 @@ func TestPutFederationPolicy_RejectsInvalidMetricName(t *testing.T) {
 		RBAC:             newRBACManager(t, platformAdminRBAC),
 	}
 	body := `{"whitelist":[{"metric":"bad-name"}]}`
-	w := executeWithRBAC(t, d.PutFederationPolicy(), fedReq(t, "PUT", "/api/v1/federation/policy", "", "", body))
+	w := executeWithRBAC(t, PutFederationPolicy(d), fedReq(t, "PUT", "/api/v1/federation/policy", "", "", body))
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400, body: %s", w.Code, w.Body.String())
 	}
@@ -357,7 +357,7 @@ func TestPutTenantFederation_ForbiddenWithoutTenantAdmin(t *testing.T) {
 		RBAC: newRBACManager(t, scopedAdminRBAC),
 	}
 	body := `{"metrics":["mysql_up"]}`
-	w := executeWithRBAC(t, d.PutTenantFederation(), fedReq(t, "PUT", "/api/v1/tenants/db-b/federation", "id", "db-b", body))
+	w := executeWithRBAC(t, PutTenantFederation(d), fedReq(t, "PUT", "/api/v1/tenants/db-b/federation", "id", "db-b", body))
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403, body: %s", w.Code, w.Body.String())
 	}
@@ -379,7 +379,7 @@ func TestPutTenantFederation_RejectsMetricOutsideWhitelist(t *testing.T) {
 	}
 	// redis_up is not in the whitelist — the 2-tier containment rule rejects it.
 	body := `{"metrics":["mysql_up","redis_up"]}`
-	w := executeWithRBAC(t, d.PutTenantFederation(), fedReq(t, "PUT", "/api/v1/tenants/db-a/federation", "id", "db-a", body))
+	w := executeWithRBAC(t, PutTenantFederation(d), fedReq(t, "PUT", "/api/v1/tenants/db-a/federation", "id", "db-a", body))
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400, body: %s", w.Code, w.Body.String())
 	}
@@ -402,11 +402,11 @@ func TestPutTenantFederation_Success(t *testing.T) {
 		RBAC:             newRBACManager(t, scopedAdminRBAC), // admin on db-a
 	}
 	body := `{"metrics":["mysql_up"]}`
-	w := executeWithRBAC(t, d.PutTenantFederation(), fedReq(t, "PUT", "/api/v1/tenants/db-a/federation", "id", "db-a", body))
+	w := executeWithRBAC(t, PutTenantFederation(d), fedReq(t, "PUT", "/api/v1/tenants/db-a/federation", "id", "db-a", body))
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200, body: %s", w.Code, w.Body.String())
 	}
-	subset, err := d.readFederationSubset("db-a")
+	subset, err := readFederationSubset(d, "db-a")
 	if err != nil {
 		t.Fatalf("readFederationSubset: %v", err)
 	}
@@ -433,7 +433,7 @@ func TestGetTenantFederation_ReadRepairDropsStaleMetric(t *testing.T) {
 	})
 	d := &Deps{ConfigDir: configDir, FederationPolicy: mgr, RBAC: newRBACManager(t, "")}
 
-	w := executeWithRBAC(t, d.GetTenantFederation(), fedReq(t, "GET", "/api/v1/tenants/db-a/federation", "id", "db-a", ""))
+	w := executeWithRBAC(t, GetTenantFederation(d), fedReq(t, "GET", "/api/v1/tenants/db-a/federation", "id", "db-a", ""))
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200, body: %s", w.Code, w.Body.String())
 	}
@@ -455,7 +455,7 @@ func TestGetTenantFederation_NoFileYieldsEmptySubset(t *testing.T) {
 		FederationPolicy: fedpolicy.NewManager(configDir),
 		RBAC:             newRBACManager(t, ""),
 	}
-	w := executeWithRBAC(t, d.GetTenantFederation(), fedReq(t, "GET", "/api/v1/tenants/db-a/federation", "id", "db-a", ""))
+	w := executeWithRBAC(t, GetTenantFederation(d), fedReq(t, "GET", "/api/v1/tenants/db-a/federation", "id", "db-a", ""))
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200, body: %s", w.Code, w.Body.String())
 	}

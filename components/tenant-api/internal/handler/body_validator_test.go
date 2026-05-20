@@ -446,7 +446,7 @@ func TestBatchTenants_BodyValidation_RejectsBadValue(t *testing.T) {
 	gw := newTestWriter(configDir)
 	rbacMgr := newRBACManager(t, "")
 
-	h := (&Deps{Writer: gw, ConfigDir: configDir, RBAC: rbacMgr, WriteMode: WriteModeDirect}).BatchTenants()
+	h := BatchTenants(&Deps{Writer: gw, ConfigDir: configDir, RBAC: rbacMgr, WriteMode: WriteModeDirect})
 	req := httptest.NewRequest("POST", "/api/v1/tenants/batch", body)
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -487,7 +487,7 @@ func TestBatchTenants_BodyValidation_ReportsAllViolations(t *testing.T) {
 	gw := newTestWriter(configDir)
 	rbacMgr := newRBACManager(t, "")
 
-	h := (&Deps{Writer: gw, ConfigDir: configDir, RBAC: rbacMgr, WriteMode: WriteModeDirect}).BatchTenants()
+	h := BatchTenants(&Deps{Writer: gw, ConfigDir: configDir, RBAC: rbacMgr, WriteMode: WriteModeDirect})
 	req := httptest.NewRequest("POST", "/api/v1/tenants/batch", body)
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
