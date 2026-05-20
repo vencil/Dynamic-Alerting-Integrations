@@ -62,7 +62,8 @@ lang: zh
 
 ### 5. SAST：7 條安全 review 準則
 
-**規則**：以下 7 條安全準則是歷史踩坑累積，全都至少炸過一次，**code review 時 reviewer 須主動檢查**（v2.8.0, PR #169：原文宣稱 "pre-commit 跑 7 條 SAST 規則" 實為 doc-drift，repo 中無對應 lint scripts；real lint via `bandit` profile 已排入 backlog）：
+**規則**：以下 7 條安全準則是歷史踩坑累積，全都至少炸過一次：
+
 1. encoding 檢查（強制 UTF-8 without BOM）
 2. shell 安全（禁用 `shell=True` + unvalidated input）
 3. chmod 檢查（禁止 0o777）
@@ -72,6 +73,8 @@ lang: zh
 7. stderr routing（CLI 錯誤訊息必須走 stderr 而非 stdout）
 
 **為什麼**：這 7 條是歷史踩坑的累積，全都至少炸過一次。
+
+**檢查方式**：✅ **code-driven (warn-only soak, v2.9.0 #455)** — `bandit` profile (`-ll -ii` = MEDIUM severity + MEDIUM confidence) gates `scripts/tools/**` + `components/da-tools/**` via `.github/workflows/security-audit.yaml`. Config: `.bandit` (excludes `tests/`, `.venv/`, `__pycache__/`, `vendor/`). False-positive / acceptable-risk suppression uses inline `# nosec B<ID>  # rationale` (dual-hash syntax avoids bandit's prose-as-test-id warnings). **Soak period**: workflow runs with `continue-on-error: true` for 2 weeks from #455 merge; flip to hard-fail once false-positive triage is stable. Bandit's built-in checks cover Rule #5 items 2 (B602/B603/B605 shell), 4 (B506 yaml_load), 5 (B105/B106 hardcoded password — partial), 6 (B301 pickle / B307 eval / B102 exec); items 1 (encoding), 3 (chmod 0o777), 7 (stderr routing) remain reviewer convention as bandit has no native rule for them. Local run: `bandit -c .bandit -r scripts/tools components/da-tools -ll -ii`.
 
 **細節**：見 [governance-security.md](../governance-security.md)。
 

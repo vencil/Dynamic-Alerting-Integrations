@@ -72,6 +72,7 @@ import signal
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -151,8 +152,11 @@ def parse_metrics(text: str) -> dict[str, float]:
 def fetch_metrics(target_url: str, timeout_sec: float = 5.0) -> dict[str, float] | None:
     """GET <target>/metrics and parse. Returns None on network error."""
     url = target_url.rstrip("/") + "/metrics"
+    if urllib.parse.urlparse(url).scheme not in ("http", "https"):
+        print(f"[error] /metrics fetch rejected: non-http(s) scheme in {url!r}", file=sys.stderr)
+        return None
     try:
-        with urllib.request.urlopen(url, timeout=timeout_sec) as resp:
+        with urllib.request.urlopen(url, timeout=timeout_sec) as resp:  # nosec B310  #scheme validated above
             text = resp.read().decode("utf-8", errors="replace")
         return parse_metrics(text)
     except (urllib.error.URLError, TimeoutError, OSError) as exc:

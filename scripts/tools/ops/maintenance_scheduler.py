@@ -372,10 +372,10 @@ def push_metrics(pushgateway_url, created, skipped, errors, duration_s):
 
     url = f"{pushgateway_url}/metrics/job/maintenance-scheduler"
     try:
-        req = urllib.request.Request(url, method="POST")
+        req = urllib.request.Request(url, method="POST")  # nosec B310  #operator-supplied internal Pushgateway URL
         req.add_header("Content-Type", "text/plain")
         data = body.encode("utf-8")
-        with urllib.request.urlopen(req, data=data, timeout=5) as resp:
+        with urllib.request.urlopen(req, data=data, timeout=5) as resp:  # nosec B310  #see Request line above
             resp.read()
         print(f"  Pushed metrics to {pushgateway_url}")
     except (urllib.error.URLError, ValueError, OSError) as e:

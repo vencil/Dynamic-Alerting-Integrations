@@ -1,0 +1,108 @@
+name: Security Audit (Python SAST)
+
+# Python SAST gate — bandit baseline for dev-rules.md Rule #5 (#455).
+#
+# Initial rollout: WARN-ONLY for a 2-week soak period from the merge of
+# #455. Failing findings surface as a warning step + an annotation on the
+# PR, but `continue-on-error: true` lets the job pass. After the soak,
+# flip `continue-on-error` to `false` to make findings hard-fail.
+#
+# Why warn-only first: false-positive flood would block unrelated PRs
+# while the team learns the bandit ruleset. The 2-week window lets
+# real findings surface and triage without disrupting throughput.
+# Mirror of how `secret-scan.yml` started warn-only before its flip.
+#
+# Scope: `scripts/tools/` + `components/da-tools/` (the same paths the
+# baseline triage in #455 covered). Other Python directories (tests/,
+# .venv/, vendor/) are excluded via .bandit per AC.
+#
+# Severity / confidence floor mirrors AC: `-ll -ii` = MEDIUM severity
+# AND MEDIUM confidence. LOW would flood with style noise; HIGH would
+# skip the bulk of Rule #5's enumerated risks.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "scripts/tools/**/*.py"
+      - "components/da-tools/**/*.py"
+      - ".bandit"
+      - ".github/workflows/security-audit.yaml"
+  push:
+    branches: [main]
+    paths:
+      - "scripts/tools/**/*.py"
+      - "components/da-tools/**/*.py"
+      - ".bandit"
+      - ".github/workflows/security-audit.yaml"
+  workflow_dispatch: {}
+
+# Least-privilege per repo convention (mirrors secret-scan.yml § perms).
+permissions:
+  contents: read
+
+concurrency:
+  group: security-audit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bandit:
+    name: Python SAST (bandit -ll -ii)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Install bandit
+        run: |
+          set -euo pipefail
+          # Pinned bandit version — the dev container ships 1.9.4; pin
+          # CI to the same major so behaviour stays parity. Lockstep with
+          # the dev container avoids "passes local, fails CI" drift.
+          python3 -m pip install --quiet --upgrade pip
+          python3 -m pip install --quiet 'bandit==1.9.4'
+          bandit --version
+
+      - name: Run bandit (medium severity + confidence)
+        id: bandit
+        # WARN-ONLY for 2-week soak from #455 merge. Flip to false to
+        # make findings hard-fail once false-positive triage is stable.
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          # `-c .bandit` reads exclude_dirs and any project-wide skips.
+          # `-ll` = MEDIUM severity floor; `-ii` = MEDIUM confidence
+          # floor. JSON output for the next step's findings count.
+          bandit -c .bandit \
+            -r scripts/tools components/da-tools \
+            -ll -ii \
+            -f json \
+            -o bandit-report.json
+
+      - name: Summarize findings
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ ! -f bandit-report.json ]; then
+            echo "::warning::bandit-report.json not produced (scan step failed before output)"
+            exit 0
+          fi
+          n=$(python3 -c "import json,sys; print(len(json.load(open('bandit-report.json'))['results']))")
+          echo "bandit findings (MEDIUM+ severity & confidence): $n"
+          if [ "$n" -gt 0 ]; then
+            echo "::warning::bandit found $n MEDIUM+ severity/confidence finding(s) — see uploaded report. WARN-ONLY during soak."
+            python3 -c "import json; r=json.load(open('bandit-report.json'))['results']; [print(f\"  [{i['test_id']} sev={i['issue_severity']}] {i['filename']}:{i['line_number']} — {i['issue_text'][:120]}\") for i in r]"
+          fi
+
+      - name: Upload bandit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bandit-report
+          path: bandit-report.json
+          retention-days: 14

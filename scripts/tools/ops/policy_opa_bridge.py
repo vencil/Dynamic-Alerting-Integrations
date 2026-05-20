@@ -205,11 +205,11 @@ def call_opa_rest(
     endpoint = f"{opa_url.rstrip('/')}/v1/data/{package}/violations"
 
     request_body = json.dumps({"input": input_data}).encode("utf-8")
-    req = Request(endpoint, data=request_body, method="POST")
+    req = Request(endpoint, data=request_body, method="POST")  # nosec B310  #operator-supplied internal OPA URL
     req.add_header("Content-Type", "application/json")
 
     try:
-        with urlopen(req, timeout=10) as response:
+        with urlopen(req, timeout=10) as response:  # nosec B310  #see Request line above
             response_data = json.loads(response.read().decode("utf-8"))
             result = response_data.get("result", [])
             if isinstance(result, list):
