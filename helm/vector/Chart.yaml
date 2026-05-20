@@ -4,7 +4,9 @@ description: Vector node DaemonSet — tails container stdout/stderr, VRL-demuxe
 type: application
 # version: Helm Chart 版本（隨 Chart 結構/模板變更升級）
 # 0.1.0 — #539 Phase 1: initial chart (DaemonSet + RBAC + VRL demux + VictoriaLogs sink)
-version: 0.1.0
+# 0.1.1 — #539: add headless Service for Prometheus scrape when metrics.enabled
+# 0.1.2 — #539: VRL merge() lost unnecessary `??`; set data_dir to hostPath mount (readOnlyRootFilesystem broke /var/lib/vector default)
+version: 0.1.2
 # appVersion: pinned Vector release
 appVersion: "0.55.0"
 keywords:

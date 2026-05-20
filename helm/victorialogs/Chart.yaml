@@ -4,7 +4,8 @@ description: Single-pod VictoriaLogs — central store for the platform log-aggr
 type: application
 # version: Helm Chart 版本（隨 Chart 結構/模板變更升級）
 # 0.1.0 — #539 Phase 1: initial chart (single pod + PVC + retention flag)
-version: 0.1.0
+# 0.1.1 — #539: default persistence.size 10Gi→30Gi to match runbook §5 capacity estimate
+version: 0.1.1
 # appVersion: pinned VictoriaLogs release
 appVersion: "v1.50.0"
 keywords:

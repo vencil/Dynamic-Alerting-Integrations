@@ -145,6 +145,24 @@ NOTES.txt 會印警告）。
   user），同上需 host 端配合，或
 - 在該 namespace 例外放行 root。
 
+### 4.4 升 Vector 版本時的 VRL 編譯爆炸
+
+Vector ≥ 0.55 把 `unnecessary error coalescing operation` 從 warning
+升成編譯錯，pod 直接 crashloop（首跑 #539 smoke-test 中招）。VRL
+的 infallible 運算（例如 `merge(object!, object!, deep:true)`、
+`to_string(string)`）後面**不要**接 `??` fallback —— 編譯器會說
+「this expression can't fail」。升版前先 `helm template vector
+./helm/vector | yq '... | .data."vector.yaml"' | vector validate
+--config-yaml /dev/stdin` 本地驗一次。
+
+### 4.5 Vector `data_dir` vs `readOnlyRootFilesystem`
+
+Vector 預設 `data_dir: /var/lib/vector`（容器 root 下）；本 chart 開
+`containerSecurityContext.readOnlyRootFilesystem: true`，兩者直接撞
+「Could not create subdirectory ... Read-only file system」。所以
+configmap.yaml 顯式設 `data_dir: /vector-data-dir`，對齊 daemonset.yaml
+hostPath 掛載點。**改掛載路徑時兩處要同步**，否則 pod 起不來。
+
 ## 5. Capacity / Retention
 
 預設 `retentionPeriod=30d` + `persistence.size=10Gi`，依 federation

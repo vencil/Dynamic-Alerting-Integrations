@@ -38,13 +38,15 @@ retentionPeriod: "30d"
 extraArgs: []
 
 # Persistent storage. The pod loses history without this — VictoriaLogs
-# stores indexed data on disk. Size = (ingest rate × retention window)
-# plus headroom; 10Gi is a small-cluster default sized for the
-# federation-gateway audit stream only. Re-estimate when #552
-# (chargeback query log) joins as consumer #2.
+# stores indexed data on disk. Default size sized for federation audit
+# at ~50 RPS × 1 KB/line × 30d × 1.3 overhead ≈ 130 GB raw → ≈ 13 GB
+# at VictoriaLogs's typical ~10× compression; 30Gi gives ~2× headroom
+# for traffic spikes and the operational stream. Re-estimate when #552
+# (chargeback query log) joins as consumer #2. Formula + worked example
+# in docs/internal/platform-log-aggregation-runbook.md §5.
 persistence:
   enabled: true
-  size: 10Gi
+  size: 30Gi
   # storageClass: "" leaves the cluster default storage class to
   # provision; set explicitly to pin a class.
   storageClass: ""
