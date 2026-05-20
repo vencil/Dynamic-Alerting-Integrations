@@ -1,4 +1,4 @@
-package federation
+package orphan
 
 import (
 	"log/slog"
@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/vencil/tenant-api/internal/federation/token"
 )
 
 // federationSubsetDir is the conf.d subdirectory holding per-tenant
@@ -15,7 +17,7 @@ import (
 // X lives at conf.d/_federation/X.yaml.
 const federationSubsetDir = "_federation"
 
-// orphanedTokens / orphanedSubsets hold the most recent OrphanDetector
+// orphanedTokens / orphanedSubsets hold the most recent Detector
 // scan result, exposed to the /metrics handler via OrphanCounts. They
 // are gauges — each scan overwrites them; both are 0 before the first
 // scan and when no detector runs.
@@ -25,7 +27,7 @@ var (
 )
 
 // OrphanCounts returns the federation-artifact orphan counts from the
-// most recent OrphanDetector scan: live token Records, and subset
+// most recent Detector scan: live token Records, and subset
 // files, whose owning tenant is no longer present in conf.d. Consumed
 // by the tenant-api /metrics endpoint (handler.MetricsHandler).
 func OrphanCounts() (tokens, subsetFiles int64) {
@@ -46,7 +48,7 @@ func (r OrphanReport) empty() bool {
 // scanOrphans diffs federation artifacts against the set of tenants
 // currently present in conf.d. Pure function — no I/O — so the diff
 // logic is unit-testable without a filesystem or a ConfigMap.
-func scanOrphans(known map[string]struct{}, records []Record, subsetTenants []string) OrphanReport {
+func scanOrphans(known map[string]struct{}, records []token.Record, subsetTenants []string) OrphanReport {
 	var rep OrphanReport
 	for _, r := range records {
 		if _, ok := known[r.TenantID]; !ok {
@@ -125,7 +127,7 @@ func tenantIDFromFile(name string) (string, bool) {
 	}
 }
 
-// OrphanDetector periodically reports federation artifacts left behind
+// Detector periodically reports federation artifacts left behind
 // by an incomplete tenant offboarding — live token Records and
 // conf.d/_federation/<tenant>.yaml subset files whose owning tenant is
 // no longer in conf.d (ADR-020 #521).
@@ -136,22 +138,22 @@ func tenantIDFromFile(name string) (string, bool) {
 // risk misfiring on a transient conf.d glitch (a GitOps sync in flight,
 // a broken file); a warn-only detector gives the same safety net with
 // zero misfire risk. See docs/internal/tenant-offboarding-runbook.md.
-type OrphanDetector struct {
+type Detector struct {
 	configDir string
-	records   func() ([]Record, error)
+	records   func() ([]token.Record, error)
 }
 
-// NewOrphanDetector builds a detector. records lists every live token
+// NewDetector builds a detector. records lists every live token
 // Record across all tenants (Manager.ListAllRecords).
-func NewOrphanDetector(configDir string, records func() ([]Record, error)) *OrphanDetector {
-	return &OrphanDetector{configDir: configDir, records: records}
+func NewDetector(configDir string, records func() ([]token.Record, error)) *Detector {
+	return &Detector{configDir: configDir, records: records}
 }
 
 // scanOnce runs one detection pass: it updates the orphan gauges and
 // emits a WARN log if anything is orphaned. A read error on conf.d or
 // on the token store aborts the pass WITHOUT touching the gauges — a
 // transient failure must never be read as "everything is orphaned".
-func (d *OrphanDetector) scanOnce() {
+func (d *Detector) scanOnce() {
 	known, err := scanKnownTenants(d.configDir)
 	if err != nil {
 		slog.Warn("federation orphan detector: cannot scan conf.d, skipping pass", "error", err)
@@ -178,7 +180,7 @@ func (d *OrphanDetector) scanOnce() {
 }
 
 // Run scans once immediately, then every interval, until stopCh closes.
-func (d *OrphanDetector) Run(interval time.Duration, stopCh <-chan struct{}) {
+func (d *Detector) Run(interval time.Duration, stopCh <-chan struct{}) {
 	d.scanOnce()
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()

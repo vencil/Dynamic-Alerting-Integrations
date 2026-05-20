@@ -1,4 +1,4 @@
-package federation
+package fedpolicy
 
 import (
 	"strings"
@@ -47,7 +47,7 @@ func TestValidateWhitelist(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := ValidateWhitelist(&FederationPolicyConfig{Whitelist: tt.whitelist})
+			got := ValidateWhitelist(&Config{Whitelist: tt.whitelist})
 			if len(got) != tt.wantCount {
 				t.Fatalf("ValidateWhitelist() = %d violations %+v, want %d", len(got), got, tt.wantCount)
 			}
@@ -64,7 +64,7 @@ func TestValidateWhitelist(t *testing.T) {
 }
 
 func TestValidateSubset(t *testing.T) {
-	whitelist := &FederationPolicyConfig{Whitelist: []WhitelistEntry{
+	whitelist := &Config{Whitelist: []WhitelistEntry{
 		{Metric: "mysql_up"},
 		{Metric: "pg_up"},
 		{Metric: "tenant:cpu:rate5m"},
@@ -118,7 +118,7 @@ func TestValidateSubset(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := ValidateSubset(&FederationSubset{Metrics: tt.metrics}, whitelist)
+			got := ValidateSubset(&Subset{Metrics: tt.metrics}, whitelist)
 			if len(got) != tt.wantCount {
 				t.Fatalf("ValidateSubset() = %d violations %+v, want %d", len(got), got, tt.wantCount)
 			}
@@ -134,8 +134,8 @@ func TestValidateSubsetEmptyWhitelistRejectsEverything(t *testing.T) {
 	// failure — a tenant cannot federate metrics the platform has not
 	// allowed.
 	got := ValidateSubset(
-		&FederationSubset{Metrics: []string{"mysql_up"}},
-		&FederationPolicyConfig{Whitelist: []WhitelistEntry{}},
+		&Subset{Metrics: []string{"mysql_up"}},
+		&Config{Whitelist: []WhitelistEntry{}},
 	)
 	if len(got) != 1 {
 		t.Fatalf("ValidateSubset() against empty whitelist = %d violations, want 1", len(got))
@@ -143,7 +143,7 @@ func TestValidateSubsetEmptyWhitelistRejectsEverything(t *testing.T) {
 }
 
 func TestEffectiveSubset(t *testing.T) {
-	whitelist := &FederationPolicyConfig{Whitelist: []WhitelistEntry{
+	whitelist := &Config{Whitelist: []WhitelistEntry{
 		{Metric: "mysql_up"},
 		{Metric: "pg_up"},
 	}}
@@ -175,7 +175,7 @@ func TestEffectiveSubset(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := EffectiveSubset(&FederationSubset{Metrics: tt.stored}, whitelist)
+			got := EffectiveSubset(&Subset{Metrics: tt.stored}, whitelist)
 			if len(got.Metrics) != len(tt.want) {
 				t.Fatalf("EffectiveSubset() = %v, want %v", got.Metrics, tt.want)
 			}
@@ -227,7 +227,7 @@ func TestParseSubset(t *testing.T) {
 }
 
 func TestIsWhitelisted(t *testing.T) {
-	m := NewPolicyManagerForTest(&FederationPolicyConfig{Whitelist: []WhitelistEntry{
+	m := NewManagerForTest(&Config{Whitelist: []WhitelistEntry{
 		{Metric: "mysql_up"},
 	}})
 	if !m.IsWhitelisted("mysql_up") {

@@ -1,4 +1,4 @@
-package federation
+package fedpolicy
 
 // Admission validator (ADR-020 IV-2e) — the data-layer label-enrichment
 // gate for the federation whitelist.

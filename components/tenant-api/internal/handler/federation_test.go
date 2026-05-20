@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vencil/tenant-api/internal/federation"
+	"github.com/vencil/tenant-api/internal/federation/token"
 	"github.com/vencil/tenant-api/internal/rbac"
 )
 
@@ -28,15 +28,15 @@ const fedViewerRBAC = `groups:
     permissions: [read]
 `
 
-// newTestFederation builds a federation.Manager backed by a freshly
+// newTestFederation builds a token.Manager backed by a freshly
 // generated in-memory RSA key and a store under t.TempDir().
-func newTestFederation(t *testing.T) *federation.Manager {
+func newTestFederation(t *testing.T) *token.Manager {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatalf("generate key: %v", err)
 	}
-	m, err := federation.NewManagerForTest(key, filepath.Join(t.TempDir(), "fed-store.json"), time.Hour)
+	m, err := token.NewManagerForTest(key, filepath.Join(t.TempDir(), "fed-store.json"), time.Hour)
 	if err != nil {
 		t.Fatalf("NewManagerForTest: %v", err)
 	}

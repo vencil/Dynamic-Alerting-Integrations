@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/vencil/tenant-api/internal/federation"
+	"github.com/vencil/tenant-api/internal/federation/token"
 	"github.com/vencil/tenant-api/internal/rbac"
 )
 
@@ -38,7 +38,7 @@ type CreateFederationTokenResponse struct {
 	Record FederationTokenRecord `json:"record"`
 }
 
-func toFederationTokenRecord(r federation.Record) FederationTokenRecord {
+func toFederationTokenRecord(r token.Record) FederationTokenRecord {
 	return FederationTokenRecord{
 		TokenID:     r.TokenID,
 		TenantID:    r.TenantID,
@@ -104,12 +104,12 @@ func (d *Deps) CreateFederationToken() http.HandlerFunc {
 			return
 		}
 
-		token, rec, err := d.Federation.Issue(req.TenantID, rbac.RequestEmail(r), req.Description)
+		jwt, rec, err := d.Federation.Issue(req.TenantID, rbac.RequestEmail(r), req.Description)
 		if err != nil {
 			switch {
-			case errors.Is(err, federation.ErrTokenLimitReached):
+			case errors.Is(err, token.ErrTokenLimitReached):
 				writeJSONErrorWithCode(w, r, http.StatusConflict, CodeConflict, err.Error())
-			case errors.Is(err, federation.ErrMintRateLimited):
+			case errors.Is(err, token.ErrMintRateLimited):
 				writeJSONErrorWithCode(w, r, http.StatusTooManyRequests, CodeRateLimited, err.Error())
 			default:
 				writeJSONError(w, r, http.StatusInternalServerError, "issue federation token: "+err.Error())
@@ -120,7 +120,7 @@ func (d *Deps) CreateFederationToken() http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
 		_ = json.NewEncoder(w).Encode(CreateFederationTokenResponse{
-			Token:  token,
+			Token:  jwt,
 			Record: toFederationTokenRecord(rec),
 		})
 	}

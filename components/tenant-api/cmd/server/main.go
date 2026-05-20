@@ -29,7 +29,9 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/vencil/tenant-api/internal/async"
-	"github.com/vencil/tenant-api/internal/federation"
+	"github.com/vencil/tenant-api/internal/federation/fedpolicy"
+	"github.com/vencil/tenant-api/internal/federation/orphan"
+	"github.com/vencil/tenant-api/internal/federation/token"
 	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/groups"
 	"github.com/vencil/tenant-api/internal/handler"
@@ -140,7 +142,7 @@ func main() {
 	federationNamespace := flag.String("federation-namespace", envOrDefault("TA_FEDERATION_NAMESPACE", ""),
 		"Namespace of the federation store ConfigMap. Empty uses the pod's own namespace.")
 	federationTTL := flag.Duration("federation-token-ttl",
-		parseDurationOrDefault(os.Getenv("TA_FEDERATION_TOKEN_TTL"), federation.DefaultTTL),
+		parseDurationOrDefault(os.Getenv("TA_FEDERATION_TOKEN_TTL"), token.DefaultTTL),
 		"Federation token lifetime (default 4h; ADR-020 §Token model)")
 	// v2.9.0 ADR-020 IV-2e: federation admission validator backend.
 	federationPrometheusURL := flag.String("federation-prometheus-url",
@@ -187,12 +189,12 @@ func main() {
 	// v2.9.0 ADR-020 IV-2e: federation 2-tier policy — the platform
 	// metric whitelist (`_federation_policy.yaml`). Per-tenant subsets
 	// live in separate files, read on demand by the handler.
-	federationPolicyMgr := federation.NewPolicyManager(*configDir)
+	federationPolicyMgr := fedpolicy.NewManager(*configDir)
 
 	// v2.9.0 ADR-020 IV-2e: federation admission validator. nil when
 	// --federation-prometheus-url is unset — admission is then disabled
 	// and whitelist edits are schema-checked only.
-	federationValidator := federation.NewAdmissionValidator(*federationPrometheusURL)
+	federationValidator := fedpolicy.NewAdmissionValidator(*federationPrometheusURL)
 	if federationValidator == nil {
 		slog.Info("federation admission validator disabled — set --federation-prometheus-url to enable")
 	}
@@ -269,7 +271,7 @@ func main() {
 	// offboarding runbook; never auto-revokes (a transient conf.d
 	// glitch must not nuke live tenants' tokens).
 	if federationMgr != nil {
-		go federation.NewOrphanDetector(*configDir, federationMgr.ListAllRecords).
+		go orphan.NewDetector(*configDir, federationMgr.ListAllRecords).
 			Run(*reloadInterval, stopCh)
 	}
 

@@ -23,7 +23,7 @@ import (
 	"sync"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/vencil/tenant-api/internal/federation"
+	"github.com/vencil/tenant-api/internal/federation/fedpolicy"
 	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/rbac"
 	"gopkg.in/yaml.v3"
@@ -31,7 +31,7 @@ import (
 
 // toViolations adapts federation schema failures to the handler's
 // validation-error shape (both are {field, reason} — a plain copy).
-func toViolations(pv []federation.PolicyViolation) []Violation {
+func toViolations(pv []fedpolicy.PolicyViolation) []Violation {
 	out := make([]Violation, len(pv))
 	for i, v := range pv {
 		out[i] = Violation{Field: v.Field, Reason: v.Reason}
@@ -45,7 +45,7 @@ func toViolations(pv []federation.PolicyViolation) []Violation {
 // @Summary     Get the platform federation whitelist
 // @Tags        federation
 // @Produce     json
-// @Success     200 {object} federation.FederationPolicyConfig
+// @Success     200 {object} fedpolicy.Config
 // @Router      /api/v1/federation/policy [get]
 func (d *Deps) GetFederationPolicy() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -60,7 +60,7 @@ func (d *Deps) GetFederationPolicy() http.HandlerFunc {
 // PII-looking label name); a hard block — a metric whose series lack
 // the tenant label — is never bypassable.
 type PutFederationPolicyRequest struct {
-	Whitelist []federation.WhitelistEntry `json:"whitelist"`
+	Whitelist []fedpolicy.WhitelistEntry `json:"whitelist"`
 	Force     bool                        `json:"force"`
 	Reason    string                      `json:"reason"`
 }
@@ -108,11 +108,11 @@ func (d *Deps) PutFederationPolicy() http.HandlerFunc {
 			writeJSONError(w, r, http.StatusBadRequest, "invalid JSON: "+err.Error())
 			return
 		}
-		cfg := federation.FederationPolicyConfig{Whitelist: req.Whitelist}
+		cfg := fedpolicy.Config{Whitelist: req.Whitelist}
 		if cfg.Whitelist == nil {
-			cfg.Whitelist = []federation.WhitelistEntry{}
+			cfg.Whitelist = []fedpolicy.WhitelistEntry{}
 		}
-		if pv := federation.ValidateWhitelist(&cfg); len(pv) > 0 {
+		if pv := fedpolicy.ValidateWhitelist(&cfg); len(pv) > 0 {
 			writeValidationErrors(w, r, toViolations(pv))
 			return
 		}
@@ -206,7 +206,7 @@ const admissionConcurrency = 8
 
 // addedFederationMetrics returns the metric names in proposed that are
 // not already in current — the set a whitelist PUT newly introduces.
-func addedFederationMetrics(current, proposed *federation.FederationPolicyConfig) []string {
+func addedFederationMetrics(current, proposed *fedpolicy.Config) []string {
 	have := make(map[string]bool, len(current.Whitelist))
 	for _, e := range current.Whitelist {
 		have[e.Metric] = true
@@ -225,14 +225,14 @@ func addedFederationMetrics(current, proposed *federation.FederationPolicyConfig
 // take up to the validator's per-check timeout, so a batch must not run
 // strictly sequentially. Returns nil when the validator is disabled or
 // metrics is empty.
-func (d *Deps) runAdmissionChecks(ctx context.Context, metrics []string) []federation.AdmissionResult {
+func (d *Deps) runAdmissionChecks(ctx context.Context, metrics []string) []fedpolicy.AdmissionResult {
 	if d.AdmissionValidator == nil || len(metrics) == 0 {
 		return nil
 	}
 
 	// Each goroutine writes its own distinct index of `results`, so the
 	// slice needs no lock and the output order matches `metrics`.
-	results := make([]federation.AdmissionResult, len(metrics))
+	results := make([]fedpolicy.AdmissionResult, len(metrics))
 	sem := make(chan struct{}, admissionConcurrency)
 	var wg sync.WaitGroup
 	for i, metric := range metrics {
@@ -247,9 +247,9 @@ func (d *Deps) runAdmissionChecks(ctx context.Context, metrics []string) []feder
 				// unreachable) maps to the soft gate: a metric that
 				// cannot be queried cannot be proven bad, so it warns
 				// rather than hard-blocks.
-				res = federation.AdmissionResult{
+				res = fedpolicy.AdmissionResult{
 					Metric: metric,
-					State:  federation.AdmissionWarn,
+					State:  fedpolicy.AdmissionWarn,
 					Reason: "admission check could not be completed: " + err.Error(),
 				}
 			}
@@ -263,12 +263,12 @@ func (d *Deps) runAdmissionChecks(ctx context.Context, metrics []string) []feder
 // partitionAdmission splits admission results into hard blocks and soft
 // warnings. A Pass carrying PII-looking label names is a soft warning
 // (it wants reviewer judgement), not a clean pass.
-func partitionAdmission(results []federation.AdmissionResult) (hard, soft []federation.AdmissionResult) {
+func partitionAdmission(results []fedpolicy.AdmissionResult) (hard, soft []fedpolicy.AdmissionResult) {
 	for _, res := range results {
 		switch {
-		case res.State == federation.AdmissionHardBlock:
+		case res.State == fedpolicy.AdmissionHardBlock:
 			hard = append(hard, res)
-		case res.State == federation.AdmissionWarn || len(res.PIILabels) > 0:
+		case res.State == fedpolicy.AdmissionWarn || len(res.PIILabels) > 0:
 			soft = append(soft, res)
 		}
 	}
@@ -282,7 +282,7 @@ func partitionAdmission(results []federation.AdmissionResult) (hard, soft []fede
 // user and reason are sanitised first: a caller-supplied CR/LF in the
 // reason would otherwise forge extra trailer lines (e.g. a fake
 // `Approved-By:`) and break the integrity of the audit record.
-func bypassTrailer(user, reason string, soft []federation.AdmissionResult) string {
+func bypassTrailer(user, reason string, soft []fedpolicy.AdmissionResult) string {
 	return fmt.Sprintf("[Bypass-Validator] Federation admission bypassed by %s.\nReason: %s\nMetrics: %s",
 		sanitizeTrailerField(user), sanitizeTrailerField(reason),
 		strings.Join(admissionMetrics(soft), ", "))
@@ -295,7 +295,7 @@ func sanitizeTrailerField(s string) string {
 }
 
 // admissionMetrics extracts the metric names from a result slice.
-func admissionMetrics(results []federation.AdmissionResult) []string {
+func admissionMetrics(results []fedpolicy.AdmissionResult) []string {
 	out := make([]string, len(results))
 	for i, res := range results {
 		out[i] = res.Metric
@@ -317,7 +317,7 @@ func admissionMetrics(results []federation.AdmissionResult) []string {
 // @Tags        federation
 // @Produce     json
 // @Param       id path string true "Tenant ID"
-// @Success     200 {object} federation.FederationSubset
+// @Success     200 {object} fedpolicy.Subset
 // @Failure     400 {object} map[string]string
 // @Router      /api/v1/tenants/{id}/federation [get]
 func (d *Deps) GetTenantFederation() http.HandlerFunc {
@@ -333,7 +333,7 @@ func (d *Deps) GetTenantFederation() http.HandlerFunc {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(federation.EffectiveSubset(subset, d.FederationPolicy.Get()))
+		_ = json.NewEncoder(w).Encode(fedpolicy.EffectiveSubset(subset, d.FederationPolicy.Get()))
 	}
 }
 
@@ -350,7 +350,7 @@ func (d *Deps) GetTenantFederation() http.HandlerFunc {
 // @Accept      json
 // @Produce     json
 // @Param       id   path string true "Tenant ID"
-// @Param       body body federation.FederationSubset true "Metric subset"
+// @Param       body body fedpolicy.Subset true "Metric subset"
 // @Success     200  {object} map[string]any
 // @Failure     400  {object} map[string]string
 // @Failure     403  {object} map[string]string
@@ -375,7 +375,7 @@ func (d *Deps) PutTenantFederation() http.HandlerFunc {
 			writeJSONError(w, r, http.StatusBadRequest, "failed to read request body: "+err.Error())
 			return
 		}
-		var subset federation.FederationSubset
+		var subset fedpolicy.Subset
 		if err := json.Unmarshal(body, &subset); err != nil {
 			writeJSONError(w, r, http.StatusBadRequest, "invalid JSON: "+err.Error())
 			return
@@ -384,7 +384,7 @@ func (d *Deps) PutTenantFederation() http.HandlerFunc {
 			subset.Metrics = []string{}
 		}
 		// 2-tier containment: the subset must not exceed the whitelist.
-		if pv := federation.ValidateSubset(&subset, d.FederationPolicy.Get()); len(pv) > 0 {
+		if pv := fedpolicy.ValidateSubset(&subset, d.FederationPolicy.Get()); len(pv) > 0 {
 			writeValidationErrors(w, r, toViolations(pv))
 			return
 		}
@@ -415,14 +415,14 @@ func (d *Deps) PutTenantFederation() http.HandlerFunc {
 // readFederationSubset loads conf.d/_federation/<tenantID>.yaml. A
 // missing file is not an error — it means the tenant has selected no
 // federation metrics yet, which yields an empty subset.
-func (d *Deps) readFederationSubset(tenantID string) (*federation.FederationSubset, error) {
+func (d *Deps) readFederationSubset(tenantID string) (*fedpolicy.Subset, error) {
 	path := filepath.Join(d.ConfigDir, "_federation", tenantID+".yaml")
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return &federation.FederationSubset{Metrics: []string{}}, nil
+		return &fedpolicy.Subset{Metrics: []string{}}, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	return federation.ParseSubset(data)
+	return fedpolicy.ParseSubset(data)
 }

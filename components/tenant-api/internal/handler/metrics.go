@@ -6,7 +6,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/vencil/tenant-api/internal/federation"
+	"github.com/vencil/tenant-api/internal/federation/orphan"
 )
 
 // Metrics tracks basic request counters exposed at /metrics.
@@ -89,7 +89,7 @@ func MetricsHandler(w http.ResponseWriter, r *http.Request) {
 
 	// ADR-020 #521: federation artifacts left by an incomplete tenant
 	// offboarding. Non-zero ⇒ work docs/internal/tenant-offboarding-runbook.md.
-	orphanTokens, orphanSubsets := federation.OrphanCounts()
+	orphanTokens, orphanSubsets := orphan.OrphanCounts()
 	_, _ = fmt.Fprintf(w, "# HELP tenant_api_federation_orphaned_tokens Live federation token records whose tenant is no longer in conf.d.\n")
 	_, _ = fmt.Fprintf(w, "# TYPE tenant_api_federation_orphaned_tokens gauge\n")
 	_, _ = fmt.Fprintf(w, "tenant_api_federation_orphaned_tokens %d\n", orphanTokens)

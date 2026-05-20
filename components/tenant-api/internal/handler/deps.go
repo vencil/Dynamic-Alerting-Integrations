@@ -21,7 +21,8 @@ package handler
 
 import (
 	"github.com/vencil/tenant-api/internal/async"
-	"github.com/vencil/tenant-api/internal/federation"
+	"github.com/vencil/tenant-api/internal/federation/fedpolicy"
+	"github.com/vencil/tenant-api/internal/federation/token"
 	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/groups"
 	"github.com/vencil/tenant-api/internal/platform"
@@ -80,19 +81,19 @@ type Deps struct {
 	// Optional — nil when no signing key is configured, in which case
 	// main.go leaves the /federation/tokens routes unregistered, so
 	// handlers reading it are never reached with a nil value.
-	Federation *federation.Manager
+	Federation *token.Manager
 
 	// FederationPolicy holds the platform federation whitelist
 	// (ADR-020 IV-2e, `_federation_policy.yaml`). Always wired — the
 	// 2-tier policy is independent of token signing.
-	FederationPolicy *federation.PolicyManager
+	FederationPolicy *fedpolicy.Manager
 
 	// AdmissionValidator runs the data-layer label-enrichment check
 	// when a metric is added to the federation whitelist (ADR-020
 	// IV-2e). Optional — nil when --federation-prometheus-url is unset,
 	// in which case PutFederationPolicy skips admission and the
 	// whitelist edit is schema-checked only.
-	AdmissionValidator *federation.AdmissionValidator
+	AdmissionValidator *fedpolicy.AdmissionValidator
 
 	// Tasks runs async batch operations behind a goroutine pool.
 	Tasks *async.Manager

@@ -22,7 +22,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/vencil/tenant-api/internal/federation"
+	"github.com/vencil/tenant-api/internal/federation/token"
 	gh "github.com/vencil/tenant-api/internal/github"
 	gl "github.com/vencil/tenant-api/internal/gitlab"
 	"github.com/vencil/tenant-api/internal/handler"
@@ -127,7 +127,7 @@ type federationFlags struct {
 // it (sub-issue IV-2m) so tenant-api's RBAC can be get+update on one
 // resourceName with no namespace-wide create. NewConfigMapStore fails
 // loud on NotFound.
-func wireFederation(f federationFlags) (*federation.Manager, string, error) {
+func wireFederation(f federationFlags) (*token.Manager, string, error) {
 	if f.KeyPath == "" {
 		return nil, "", nil
 	}
@@ -146,11 +146,11 @@ func wireFederation(f federationFlags) (*federation.Manager, string, error) {
 			return nil, "", fmt.Errorf("federation: resolve namespace: %w", err)
 		}
 	}
-	store, err := federation.NewConfigMapStore(client, ns, f.ConfigMapName)
+	store, err := token.NewConfigMapStore(client, ns, f.ConfigMapName)
 	if err != nil {
 		return nil, "", err
 	}
-	mgr, err := federation.NewManager(f.KeyPath, store, f.TTL)
+	mgr, err := token.NewManager(f.KeyPath, store, f.TTL)
 	if err != nil {
 		return nil, "", err
 	}
