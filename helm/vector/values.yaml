@@ -41,6 +41,24 @@ source:
   # override seam.
   extraFieldSelector: ""
 
+# Additional kubernetes_logs sources (#539 Phase 2 +). Each entry
+# renders an independent kubernetes_logs source feeding the same demux
+# transform. Use this to tail pods whose labels don't unify with the
+# primary `source.extraLabelSelector` (e.g. Prometheus uses `app=
+# prometheus`, gateway uses `app.kubernetes.io/name=federation-gateway`
+# — no single selector matches both). Each entry MUST have a unique
+# `name` (becomes the Vector source id).
+#
+# Phase 2 enables the prometheus entry to route per-query cost data
+# into the same VictoriaLogs store; see #552 for why this is the
+# correct chargeback source (gateway access-log request count cannot
+# distinguish heavy vs light queries).
+additionalSources: []
+  # - name: prometheus_query_log
+  #   extraLabelSelector: "app=prometheus"
+  #   extraNamespaceLabelSelector: ""
+  #   extraFieldSelector: ""
+
 # Stream fields VictoriaLogs splits on. Per #539 §3 load-bearing schema:
 # bounded keys only. pod_name / token_id / query are intentionally NOT
 # here — they are high-cardinality data fields, not stream fields.

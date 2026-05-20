@@ -1,0 +1,28 @@
+chargeback-aggregator installed — federation chargeback CronJob (#539 Phase 2).
+
+  Schedule    : {{ .Values.schedule }}
+  Window      : {{ .Values.windowHours }}h per run
+  Source      : {{ .Values.victorialogs.url }} (LogsQL `log_type:prometheus_query_log`)
+  Output      : PVC {{ include "chargeback.name" . }}-reports ({{ .Values.output.pvcSize }}), filename chargeback-YYYY-MM-DD.csv
+  Retention   : {{ .Values.output.retentionDays }} days
+
+Manual / smoke-test run (one-off Job mirroring the CronJob template):
+  helm upgrade {{ .Release.Name }} . -n {{ .Release.Namespace }} \
+    --reuse-values --set manualJob.enabled=true
+
+Read latest report:
+  kubectl exec -n {{ .Release.Namespace }} job/{{ include "chargeback.name" . }}-manual \
+    -- cat /reports/chargeback-$(date -u +%F).csv
+
+Tail CronJob runs:
+  kubectl logs -n {{ .Release.Namespace }} -l app.kubernetes.io/name={{ include "chargeback.name" . }} --tail=50
+
+Hard rule (#552): the gateway access-log request count cannot bill — a
+heavy and a light query cost the same number of requests. This pipe-
+line reads from `prometheus_query_log` (where `samples_scanned` /
+`exec_time_s` actually live) and aggregates **offline**, so a slow
+chargeback run never wedges the federation hot path.
+
+Rows with empty `tenant_id` are bucketed as `platform` — these come
+from Prometheus's own rule / alert evaluations (no tenant_id selector).
+Useful for sanity-checking the platform's own load, NOT billable.

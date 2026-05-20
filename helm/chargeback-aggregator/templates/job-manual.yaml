@@ -1,0 +1,77 @@
+{{- if .Values.manualJob.enabled }}
+# One-shot bootstrap / smoke-test Job. Mirrors the CronJob template
+# spec exactly so what runs here is what runs on the cron schedule —
+# no drift between manual and scheduled execution.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "chargeback.name" . }}-manual
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "chargeback.labels" . | nindent 4 }}
+  annotations:
+    # Lets `helm upgrade --reuse-values` re-run by deleting the prior
+    # Job; without this you have to `kubectl delete job` by hand.
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  template:
+    metadata:
+      labels:
+        {{- include "chargeback.labels" . | nindent 8 }}
+      annotations:
+        checksum/script: {{ include (print $.Template.BasePath "/configmap-script.yaml") . | sha256sum }}
+    spec:
+      serviceAccountName: {{ include "chargeback.name" . }}
+      automountServiceAccountToken: false
+      restartPolicy: OnFailure
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: aggregator
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["python3", "/opt/aggregate.py"]
+          env:
+            - name: VICTORIALOGS_URL
+              value: {{ .Values.victorialogs.url | quote }}
+            - name: WINDOW_HOURS
+              value: {{ .Values.windowHours | quote }}
+            - name: OUTPUT_DIR
+              value: /reports
+            - name: RETENTION_DAYS
+              value: {{ .Values.output.retentionDays | quote }}
+            {{- with .Values.victorialogs.accountId }}
+            - name: ACCOUNT_ID
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.victorialogs.projectId }}
+            - name: PROJECT_ID
+              value: {{ . | quote }}
+            {{- end }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          volumeMounts:
+            - name: script
+              mountPath: /opt/aggregate.py
+              subPath: aggregate.py
+              readOnly: true
+            - name: reports
+              mountPath: /reports
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: script
+          configMap:
+            name: {{ include "chargeback.name" . }}-script
+            defaultMode: 0555
+        - name: reports
+          persistentVolumeClaim:
+            claimName: {{ include "chargeback.name" . }}-reports
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 32Mi
+{{- end }}

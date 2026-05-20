@@ -1,0 +1,76 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "chargeback.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "chargeback.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.schedule | quote }}
+  concurrencyPolicy: {{ .Values.concurrencyPolicy }}
+  successfulJobsHistoryLimit: {{ .Values.successfulJobsHistoryLimit }}
+  failedJobsHistoryLimit: {{ .Values.failedJobsHistoryLimit }}
+  jobTemplate:
+    spec:
+      # Roll a script ConfigMap change → next CronJob run uses the
+      # new bytes (Kubelet projected-volume sync, ~1min).
+      template:
+        metadata:
+          labels:
+            {{- include "chargeback.labels" . | nindent 12 }}
+          annotations:
+            checksum/script: {{ include (print $.Template.BasePath "/configmap-script.yaml") . | sha256sum }}
+        spec:
+          serviceAccountName: {{ include "chargeback.name" . }}
+          automountServiceAccountToken: false
+          restartPolicy: OnFailure
+          securityContext:
+            {{- toYaml .Values.podSecurityContext | nindent 12 }}
+          containers:
+            - name: aggregator
+              image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              command: ["python3", "/opt/aggregate.py"]
+              env:
+                - name: VICTORIALOGS_URL
+                  value: {{ .Values.victorialogs.url | quote }}
+                - name: WINDOW_HOURS
+                  value: {{ .Values.windowHours | quote }}
+                - name: OUTPUT_DIR
+                  value: /reports
+                - name: RETENTION_DAYS
+                  value: {{ .Values.output.retentionDays | quote }}
+                {{- with .Values.victorialogs.accountId }}
+                - name: ACCOUNT_ID
+                  value: {{ . | quote }}
+                {{- end }}
+                {{- with .Values.victorialogs.projectId }}
+                - name: PROJECT_ID
+                  value: {{ . | quote }}
+                {{- end }}
+              securityContext:
+                {{- toYaml .Values.containerSecurityContext | nindent 16 }}
+              volumeMounts:
+                - name: script
+                  mountPath: /opt/aggregate.py
+                  subPath: aggregate.py
+                  readOnly: true
+                - name: reports
+                  mountPath: /reports
+                # readOnlyRootFilesystem: true → Python wants /tmp.
+                - name: tmp
+                  mountPath: /tmp
+              resources:
+                {{- toYaml .Values.resources | nindent 16 }}
+          volumes:
+            - name: script
+              configMap:
+                name: {{ include "chargeback.name" . }}-script
+                defaultMode: 0555
+            - name: reports
+              persistentVolumeClaim:
+                claimName: {{ include "chargeback.name" . }}-reports
+            - name: tmp
+              emptyDir:
+                medium: Memory
+                sizeLimit: 32Mi

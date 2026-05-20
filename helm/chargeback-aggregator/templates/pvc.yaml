@@ -1,0 +1,31 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "chargeback.name" . }}-reports
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "chargeback.labels" . | nindent 4 }}
+  annotations:
+    # The CSV history IS the audit trail. `helm uninstall chargeback`
+    # without this annotation would silently drop 90 days of billable
+    # data — the kind of operation finance teams subpoena. Match the
+    # pattern used in helm/tenant-api/templates/pvc.yaml +
+    # configmap-federation-store.yaml for similar runtime-state
+    # resources. Operators who genuinely want to wipe reports must
+    # `kubectl delete pvc` explicitly after uninstall.
+    helm.sh/resource-policy: keep
+spec:
+  # ReadWriteOnce because the CronJob's concurrencyPolicy: Forbid
+  # already ensures at most one writer at a time; bumping to RWX is
+  # only needed if you mount the reports into a second pod (e.g. a
+  # web viewer) — most clusters don't support RWX without an
+  # additional driver (NFS, EFS, etc.). When you do, override
+  # `output.pvcSize` and add `accessModes` here.
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .Values.output.pvcSize | quote }}
+  {{- with .Values.output.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
