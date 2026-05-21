@@ -203,3 +203,53 @@ data:
                 {{ $labels.tenant }} (>3/min for 10m). This is a platform
                 fault, not a tenant rejection — check the Layer 3 proxy and
                 the storage backend.
+
+          # ── Audit pipeline liveness (#566 X-4) ──────────────────────
+          # `tenant_federation_requests_total` is emitted by the gateway
+          # mtail sidecar (#511 IV-2f) every time a request lands. If the
+          # metric goes absent for 10m something upstream is wrong — pod
+          # crashloop / mtail-sidecar dead / network partition between
+          # Prometheus and the gateway. A "0 audit rows in last 24h" CSV
+          # in chargeback is otherwise ambiguous between "tenant didn't
+          # use" / "audit pipeline broke" / "operator wiped data"; this
+          # alert names the second case.
+          - alert: FederationAuditPipelineSilent
+            expr: absent_over_time(tenant_federation_requests_total[10m])
+            for: 5m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Federation audit pipeline has produced zero rows for 10m"
+              description: |
+                No `tenant_federation_requests_total` samples in the last
+                10m — federation gateway audit pipeline is broken. Check
+                (a) gateway pods Running, (b) mtail-sidecar logs, (c) the
+                Prometheus scrape target. If both gateway + sidecar are
+                healthy the silence may indicate genuine zero traffic
+                (suppress the alert during planned maintenance).
+
+          # ── Vector buffer overflow → audit row loss (#566 T1-4) ─────
+          # Requires Vector chart `metrics.enabled=true` + a Prometheus
+          # scrape target on the headless Service. With buffers wired to
+          # `when_full: drop_newest` (the §2-mandated default for fan-out
+          # sinks), back-pressure cannot wedge VictoriaLogs — but it WILL
+          # silently drop SIEM-bound events. Without this alert the only
+          # signal is reading Vector logs.
+          - alert: VectorBufferEventsDropped
+            expr: |
+              sum by (component_id) (
+                rate(vector_buffer_discarded_events_total[5m])
+              ) > 0
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Vector sink {{ $labels.component_id }} dropping events for 5m"
+              description: |
+                The Vector sink's buffer is overflowing — events are being
+                dropped (drop_newest policy). Either downstream is too
+                slow (scale the SIEM / VictoriaLogs replica), or
+                upstream burst exceeds buffer size (increase
+                `_buffer_max_events` for that sink in helm/vector
+                values). For compliance-relevant streams this is an
+                audit-trail integrity event — investigate immediately.

@@ -14,6 +14,9 @@ image:
   repository: timberio/vector
   # distroless-libc: no shell, no package manager — production tag.
   tag: "0.55.0-distroless-libc"
+  # Optional digest pin (#566 T5). See helm/victorialogs/values.yaml
+  # for rationale + how to fetch.
+  digest: ""
   pullPolicy: IfNotPresent
 
 # Where to ship logs. Default points at the in-cluster VictoriaLogs
@@ -112,6 +115,24 @@ additionalSinks: []
   #   encoding:
   #     codec: json
   #   _buffer_when_full: drop_newest
+
+# Defense-in-depth filter for audit-row spoofing (#566 T2-1). Vector
+# only tails pods matching `source.extraLabelSelector`; if anyone with
+# pod-create permission deploys a sibling pod with that label, their
+# stdout becomes "audit rows" indistinguishable from real ones — pure
+# label-trust failure.
+#
+# The mitigation here is best-effort: after demux, if a row's
+# `log_type=federation_audit` but the pod's owner (ReplicaSet name)
+# doesn't match the expected gateway-deployment prefix, reclassify as
+# `log_type=suspicious_audit`. Sets up an alert/dashboard signal for
+# active spoofing; the real fix is RBAC stopping spoofer pods from
+# being created at all.
+#
+# Empty `prefix` disables the check (skip the VRL clause entirely);
+# useful if your gateway Deployment has a non-default name.
+audit:
+  gatewayPodOwnerPrefix: "federation-gateway-"
 
 # Stream fields VictoriaLogs splits on. Per #539 §3 load-bearing schema:
 # bounded keys only. pod_name / token_id / query are intentionally NOT

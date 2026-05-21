@@ -170,6 +170,60 @@ class TestVector:
         assert "§2 hard rule" in r.stderr
 
     @_needs_helm
+    def test_vrl_origin_filter_default_on(self, repo_root: Path) -> None:
+        """#566 T2-1: VRL must reclassify federation_audit rows whose
+        pod_owner doesn't match the gateway Deployment prefix as
+        suspicious_audit. If someone removes the filter the spoof
+        detection silently disappears."""
+        docs = _render(repo_root / "helm/vector")
+        cm = [d for d in docs if d.get("kind") == "ConfigMap" and "vector-config" in d["metadata"]["name"]][0]
+        vrl = yaml.safe_load(cm["data"]["vector.yaml"])["transforms"]["demux"]["source"]
+        assert "suspicious_audit" in vrl
+        assert "starts_with(owner" in vrl
+        assert '"federation-gateway-"' in vrl
+
+    @_needs_helm
+    def test_vrl_origin_filter_disabled_with_empty_prefix(self, repo_root: Path) -> None:
+        """Empty audit.gatewayPodOwnerPrefix disables the check (escape hatch
+        for non-default Deployment names). Must skip the VRL clause entirely
+        — leaving a no-op `if starts_with("", ...)` would be a foot-gun."""
+        docs = _render(repo_root / "helm/vector", sets={"audit.gatewayPodOwnerPrefix": ""})
+        cm = [d for d in docs if d.get("kind") == "ConfigMap" and "vector-config" in d["metadata"]["name"]][0]
+        vrl = yaml.safe_load(cm["data"]["vector.yaml"])["transforms"]["demux"]["source"]
+        assert "suspicious_audit" not in vrl
+
+    @_needs_helm
+    def test_vrl_origin_filter_nil_audit_block_safe(self, repo_root: Path) -> None:
+        """`helm upgrade --reuse-values` from 0.3.x → 0.4.0 doesn't carry the
+        new `audit:` map; without nil-safe templating the render panics with
+        `nil pointer evaluating interface{}.gatewayPodOwnerPrefix`. Exercise
+        the upgrade path by deleting the whole audit block."""
+        docs = _render(repo_root / "helm/vector", sets={"audit": "null"})
+        cm = [d for d in docs if d.get("kind") == "ConfigMap" and "vector-config" in d["metadata"]["name"]][0]
+        # Render must succeed; the clause is correctly absent (treated as empty).
+        vrl = yaml.safe_load(cm["data"]["vector.yaml"])["transforms"]["demux"]["source"]
+        assert "suspicious_audit" not in vrl
+
+    @_needs_helm
+    def test_image_digest_knob(self, repo_root: Path) -> None:
+        """#566 T5: image.digest empty → `repo:tag`; digest set →
+        `repo:tag@sha256:...`. Templating the @-form wrong silently
+        ships a colon-without-digest and kubelet falls back to tag pulls
+        — defeating the pinning."""
+        # Empty default → no @
+        docs = _render(repo_root / "helm/vector")
+        ds = [d for d in docs if d.get("kind") == "DaemonSet"][0]
+        img = ds["spec"]["template"]["spec"]["containers"][0]["image"]
+        assert "@" not in img, "default empty digest must NOT add @"
+        # Set digest → @sha256: appended
+        docs = _render(repo_root / "helm/vector", sets={
+            "image.digest": "sha256:0123456789abcdef",
+        })
+        ds = [d for d in docs if d.get("kind") == "DaemonSet"][0]
+        img = ds["spec"]["template"]["spec"]["containers"][0]["image"]
+        assert img.endswith("@sha256:0123456789abcdef")
+
+    @_needs_helm
     def test_extra_env_renders_into_daemonset(self, repo_root: Path) -> None:
         """Phase 3 self-review: SIEM creds need to flow via extraEnv. If the
         knob doesn't render, the documented example silently breaks (token

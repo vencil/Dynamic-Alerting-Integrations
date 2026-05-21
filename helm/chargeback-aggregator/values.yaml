@@ -14,6 +14,9 @@ image:
   # Pinning to the official slim image keeps the bug surface small.
   repository: python
   tag: "3.13-slim"
+  # Optional digest pin (#566 T5). See helm/victorialogs/values.yaml
+  # for rationale + how to fetch.
+  digest: ""
   pullPolicy: IfNotPresent
 
 # Where the report lands. PVC because: CronJob output that nobody reads

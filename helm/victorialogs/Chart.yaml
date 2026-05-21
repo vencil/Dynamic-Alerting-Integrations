@@ -6,7 +6,8 @@ type: application
 # 0.1.0 — #539 Phase 1: initial chart (single pod + PVC + retention flag)
 # 0.1.1 — #539: default persistence.size 10Gi→30Gi to match runbook §5 capacity estimate
 # 0.1.2 — #539 red-team T2-2: NetworkPolicy enabled by default, locks :9428 to vector + chargeback + grafana (HTTP API has no built-in auth, in-cluster pods could `wget DELETE`)
-version: 0.1.2
+# 0.1.3 — #566 T5: image.digest knob (supply-chain pinning); default empty so existing deploys are no-op
+version: 0.1.3
 # appVersion: pinned VictoriaLogs release
 appVersion: "v1.50.0"
 keywords:

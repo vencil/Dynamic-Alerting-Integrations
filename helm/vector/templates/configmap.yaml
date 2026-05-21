@@ -82,6 +82,19 @@ data:
         # before claim injection) but are forensically valuable.
         # CRITICAL: do NOT drop operational logs — route them to a
         # separate stream so Envoy stderr stays centrally queryable.
+        #
+        # ── Refactor watermark (#566 Q6) ────────────────────────────
+        # This single `remap` transform now demuxes FOUR log shapes:
+        #   1. federation_audit  (parse_json ok, no params.query)
+        #   2. prometheus_query_log (parse_json ok, has params.query)
+        #   3. gateway_operational (parse_json fail)
+        #   4. suspicious_audit  (1 + pod_owner spoof guard)
+        # 71+ lines, 4 branches, 1 post-filter — readable today but
+        # adding a 5th shape (e.g. tenant-side audit, audit_signed)
+        # justifies splitting into a Vector `route` transform fanning
+        # to per-shape `remap`s. Don't refactor preemptively — wait
+        # until a real 5th consumer arrives so the routing keys come
+        # from concrete need, not speculation.
         source: |
           parsed, err = parse_json(.message)
           if err == null && is_object(parsed) {
@@ -136,6 +149,27 @@ data:
           } else {
             .log_type = "gateway_operational"
           }
+          {{- /* `(dict "..." .Values.audit).gatewayPodOwnerPrefix` survives
+                 a missing-or-null .Values.audit map — operators on the
+                 0.3.x → 0.4.0 upgrade path with `helm upgrade --reuse-values`
+                 won't have the new `audit:` block in their stored values,
+                 and the naive `.Values.audit.gatewayPodOwnerPrefix` form
+                 nil-pointer-panics the template render. */}}
+          {{- with (default dict .Values.audit).gatewayPodOwnerPrefix }}
+          # Origin spoof check (#566 T2-1): a `federation_audit` row should
+          # come from a pod owned by the federation-gateway Deployment's
+          # ReplicaSet (kubernetes.pod_owner like "federation-gateway-xyz").
+          # If the JSON shape says audit but the pod_owner doesn't match,
+          # someone deployed a sibling pod with the right label and is
+          # injecting forged rows. Reclassify so it's queryable + alertable
+          # in its own stream rather than mixing with real audit data.
+          if .log_type == "federation_audit" {
+            owner = to_string(.kubernetes.pod_owner) ?? ""
+            if !starts_with(owner, {{ . | quote }}) {
+              .log_type = "suspicious_audit"
+            }
+          }
+          {{- end }}
           # Stream-field promotion (bounded keys → top-level so the
           # elasticsearch sink can list them under _stream_fields).
           .app = to_string(.kubernetes.container_name) ?? "unknown"

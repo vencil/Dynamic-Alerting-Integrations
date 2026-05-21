@@ -18,6 +18,15 @@ replicaCount: 1
 image:
   repository: victoriametrics/victoria-logs
   tag: "v1.50.0"
+  # Optional digest pin (#566 T5 — supply-chain hardening). When set,
+  # the rendered image becomes `repo:tag@sha256:...` and kubelet pulls
+  # by digest (immutable; upstream tag-swap cannot substitute). Get
+  # the digest with:
+  #   docker buildx imagetools inspect <repo>:<tag> | grep Digest
+  # Empty (default) keeps `repo:tag` form — vulnerable to upstream
+  # registry compromise but matches existing chart convention. Flip
+  # the moment you have a supply-chain threat model that names this.
+  digest: ""
   pullPolicy: IfNotPresent
 
 # HTTP listen port for ingestion + query. VictoriaLogs default is 9428.
