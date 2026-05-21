@@ -205,6 +205,85 @@ class TestVector:
         assert "suspicious_audit" not in vrl
 
     @_needs_helm
+    def test_additional_sink_buffer_memory_default(self, repo_root: Path) -> None:
+        """#566 B-1: default `memory` buffer (current Phase 3 behavior) — no
+        regression on existing deployments."""
+        docs = _render(repo_root / "helm/vector", sets={
+            "additionalSinks[0].name": "t",
+            "additionalSinks[0].type": "http",
+            "additionalSinks[0].uri": "http://x",
+        })
+        cm = [d for d in docs if d.get("kind") == "ConfigMap" and "vector-config" in d["metadata"]["name"]][0]
+        sink = yaml.safe_load(cm["data"]["vector.yaml"])["sinks"]["t"]
+        buf = sink["buffer"]
+        assert buf["type"] == "memory"
+        assert buf["when_full"] == "drop_newest"
+        assert buf["max_events"] == 10000
+        assert "max_size" not in buf, "memory buffer must not get max_size (Vector rejects)"
+
+    @_needs_helm
+    def test_additional_sink_buffer_disk_mode(self, repo_root: Path) -> None:
+        """#566 B-1: `_buffer_type: disk` renders disk buffer with `max_size`
+        (bytes) instead of `max_events`. Vector rejects the wrong knob, so
+        the chart must switch field names — getting this wrong = sink fails
+        to start with a config-validation error."""
+        docs = _render(repo_root / "helm/vector", sets={
+            "additionalSinks[0].name": "t",
+            "additionalSinks[0].type": "http",
+            "additionalSinks[0].uri": "http://x",
+            "additionalSinks[0]._buffer_type": "disk",
+        })
+        cm = [d for d in docs if d.get("kind") == "ConfigMap" and "vector-config" in d["metadata"]["name"]][0]
+        buf = yaml.safe_load(cm["data"]["vector.yaml"])["sinks"]["t"]["buffer"]
+        assert buf["type"] == "disk"
+        assert buf["when_full"] == "drop_newest"  # §2 stays default even with disk
+        assert "max_size" in buf
+        assert "max_events" not in buf, "disk buffer must not get max_events (Vector rejects)"
+
+    @_needs_helm
+    def test_additional_sink_buffer_disk_max_size_renders_as_integer(self, repo_root: Path) -> None:
+        """#566 B-1 runtime catch: helm/sprig round-trips large numbers
+        through float, so `max_size: 268435488` rendered as `2.68435488e+08`
+        — Vector's BufferConfig rejects with an unhelpful "untagged enum"
+        error. The `| int64` cast forces integer rendering. Without it,
+        every operator who sets a disk buffer size between 2^28 and 2^53
+        hits a cryptic config-parse failure."""
+        docs = _render(repo_root / "helm/vector", sets={
+            "additionalSinks[0].name": "t",
+            "additionalSinks[0].type": "http",
+            "additionalSinks[0]._buffer_type": "disk",
+            "additionalSinks[0]._buffer_max_size": "268435488",  # 256 MiB + 32 bytes — the smallest accepted size
+        })
+        cm = [d for d in docs if d.get("kind") == "ConfigMap" and "vector-config" in d["metadata"]["name"]][0]
+        # parse-then-introspect: PyYAML would silently coerce the float
+        # form back to a number; the bug is in the STRING form Vector sees
+        # before parsing. So inspect the raw text.
+        raw = cm["data"]["vector.yaml"]
+        # Find the max_size line within the t sink block
+        for line in raw.splitlines():
+            if "max_size:" in line:
+                value_part = line.split("max_size:", 1)[1].strip()
+                assert value_part == "268435488", (
+                    f"max_size must render as bare integer, got {value_part!r} "
+                    "(float scientific notation breaks Vector's BufferConfig parser)"
+                )
+                break
+        else:
+            raise AssertionError("max_size line not found in rendered vector.yaml")
+
+    @_needs_helm
+    def test_additional_sink_buffer_unknown_type_fails(self, repo_root: Path) -> None:
+        """Anything other than memory/disk must fail template render —
+        otherwise Vector starts but the buffer config is wrong."""
+        r = _render_failing(repo_root / "helm/vector", {
+            "additionalSinks[0].name": "t",
+            "additionalSinks[0].type": "http",
+            "additionalSinks[0]._buffer_type": "ramdisk",
+        })
+        assert r.returncode != 0
+        assert "must be" in r.stderr and "memory" in r.stderr
+
+    @_needs_helm
     def test_image_digest_knob(self, repo_root: Path) -> None:
         """#566 T5: image.digest empty → `repo:tag`; digest set →
         `repo:tag@sha256:...`. Templating the @-form wrong silently

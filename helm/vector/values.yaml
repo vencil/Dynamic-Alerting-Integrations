@@ -106,6 +106,24 @@ additionalSinks: []
   #   _buffer_when_full: drop_newest
   #   _buffer_max_events: 10000
   #
+  # Example — compliance-strict variant with disk buffer (#566 B-1):
+  # `_buffer_type: disk` writes Vector's per-sink buffer into the
+  # hostPath data dir (already mounted at /var/lib/vector) so events
+  # survive Vector pod restart + OOM-kill (X-3 audit-timeline-gap fix).
+  # max_size is bytes (Vector rejects max_events on disk buffers); the
+  # default 1 GiB covers ~1h SIEM outage at moderate audit rate.
+  # Still `drop_newest` to preserve §2 (VictoriaLogs primary unaffected
+  # even when disk fills) — see runbook §7.3 for compliance-vs-§2
+  # trade-off.
+  # - name: splunk_durable
+  #   type: splunk_hec_logs
+  #   inputs: [demux]
+  #   endpoint: https://splunk.example.com:8088
+  #   default_token: ${SPLUNK_TOKEN}
+  #   _buffer_type: disk
+  #   _buffer_when_full: drop_newest
+  #   _buffer_max_size: 5368709120  # 5 GiB — longer compliance window
+  #
   # Example — generic syslog escape hatch:
   # - name: syslog_archive
   #   type: socket

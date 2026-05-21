@@ -188,6 +188,17 @@ data:
           # Drop the .kubernetes blob now that the keys we need are
           # promoted — keeps the per-line payload small.
           del(.kubernetes)
+          # Audit-signing schema seam (#566 X-2 reserve). Producer-side
+          # signing (federation-gateway HMACs each audit JSON line with
+          # a short-lived key) lets the SIEM verify "this row really came
+          # from the gateway, not from a compromised Vector forging
+          # rows" — the missing chain-of-custody primitive. Not shipped
+          # yet (needs key-distribution + gateway-side change), but the
+          # field shape is preserved here: if `.audit_signature` /
+          # `.audit_signed_at` arrive in the source JSON they're passed
+          # through to sinks verbatim instead of being dropped by the
+          # implicit field policy. No-op today; ready when gateway-side
+          # signing lands.
 
     sinks:
       victorialogs:
@@ -238,7 +249,7 @@ data:
       {{- end }}
       {{ $sink.name }}:
         {{- range $k, $v := $sink }}
-        {{- if and (ne $k "name") (ne $k "_buffer_when_full") (ne $k "_buffer_max_events") }}
+        {{- if and (ne $k "name") (ne $k "_buffer_when_full") (ne $k "_buffer_max_events") (ne $k "_buffer_type") (ne $k "_buffer_max_size") }}
         {{ $k }}: {{- if kindIs "map" $v }}
           {{- toYaml $v | nindent 10 }}
         {{- else if kindIs "slice" $v }}
@@ -248,10 +259,32 @@ data:
         {{- end }}
         {{- end }}
         {{- if not (hasKey $sink "buffer") }}
+        {{- /* Auto-wrap buffer (#566 B-1): default `memory` preserves the
+               Phase 3 behavior; `disk` opt-in survives Vector pod restart +
+               node OOM-kill (X-3 audit timeline gap). Disk buffer writes
+               into Vector's data_dir (the hostPath /var/lib/vector mount
+               from daemonset.yaml) under `<sink_id>/buffer/`; no PVC
+               required, but a node failure still loses the buffer (PVC
+               support is a follow-up if cluster-level durability matters).
+               max_size vs max_events is determined by type — Vector
+               rejects max_events on disk buffers and vice versa. */}}
+        {{- $bufType := default "memory" $sink._buffer_type }}
         buffer:
-          type: memory
+          type: {{ $bufType | quote }}
           when_full: {{ default "drop_newest" $sink._buffer_when_full | quote }}
+          {{- if eq $bufType "memory" }}
           max_events: {{ default 10000 $sink._buffer_max_events }}
+          {{- else if eq $bufType "disk" }}
+          # 1 GiB default — covers ~1h SIEM outage at moderate audit rate.
+          # Tune up if your compliance window is longer or audit rate higher.
+          # `| int64` forces integer rendering — without it large values
+          # (>2^28-ish) round-trip through Helm as float scientific notation
+          # (e.g. `2.68435488e+08`) which Vector's BufferConfig parser
+          # rejects with an unhelpful "untagged enum" error.
+          max_size: {{ default 1073741824 $sink._buffer_max_size | int64 }}
+          {{- else }}
+          {{- fail (printf "additionalSinks[%s]._buffer_type: must be \"memory\" or \"disk\", got %q" $sink.name $bufType) }}
+          {{- end }}
         {{- end }}
       {{- end }}
       {{- if .Values.metrics.enabled }}

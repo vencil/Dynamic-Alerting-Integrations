@@ -12,7 +12,8 @@ type: application
 # 0.3.1 — #539: self-review — extraEnv/extraEnvFrom knob (SIEM creds), template guard against _buffer_when_full=block (foot-gun for §2 rule)
 # 0.3.2 — #539 red-team T4-4: close §2-guard bypass — operator-supplied `buffer:` block with when_full=block now also fails loud
 # 0.4.0 — #566 T2-1: VRL gateway-origin filter (suspicious_audit reclassification); image.digest knob (T5); nil-safe `audit:` block lookup to survive `helm upgrade --reuse-values` from 0.3.x
-version: 0.4.0
+# 0.5.0 — #566 batch B: additionalSinks `_buffer_type: disk` mode (X-3); fail-loud guard on unknown buffer type; VRL audit-signing schema seam reserved (X-2)
+version: 0.5.0
 # appVersion: pinned Vector release
 appVersion: "0.55.0"
 keywords:
