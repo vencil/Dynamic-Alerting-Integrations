@@ -86,6 +86,13 @@ resources:
     cpu: 500m
     memory: 256Mi
 
+# Extra environment variables — #566 Q5, mirrors helm/vector pattern
+# so operators have one consistent shape across the log-aggregation
+# charts. Useful if you want to override script behavior via env
+# (e.g. ACCOUNT_ID / PROJECT_ID from a multi-tenant VictoriaLogs Secret).
+extraEnv: []
+extraEnvFrom: []
+
 # Surface a manual-run Job in addition to the CronJob. When true a
 # Helm `helm template ... | kubectl apply -f -` (or chart install)
 # also creates a one-shot Job that runs immediately — useful for

@@ -29,6 +29,7 @@ data:
     """
     import csv
     import datetime as dt
+    import hashlib
     import json
     import math
     import os
@@ -143,8 +144,48 @@ data:
         print(f"ERROR: writing {out_path} failed: {e}", file=sys.stderr)
         sys.exit(2)
 
-    # ── Step 4: retention prune ───────────────────────────────────────
-    # Delete chargeback-YYYY-MM-DD.csv files older than RETENTION_DAYS.
+    # ── Step 4: integrity hash + append-only manifest (#566 T2-4) ──────
+    # The CSV sits on a PVC; anyone with `kubectl exec` into a pod that
+    # mounts it can rewrite arbitrary days' bills. Finance audit needs
+    # tamper detection. Two-layer:
+    #   (a) sidecar .sha256 file in `sha256sum -c` format — finance
+    #       pipeline / spot-check verifies each CSV individually
+    #   (b) manifest.jsonl is **append-only** — every successful run
+    #       writes one line `{date, sha256, generated_at, rows}`. A
+    #       tamperer who edits chargeback-2026-05-21.csv to under-bill
+    #       a tenant has to ALSO edit the manifest line for that date
+    #       AND not leave a gap — possible but raises the bar.
+    # NOT a substitute for compliance-grade WORM storage (that's #566
+    # X-2 / SIEM-side; see runbook §7.3). This is "tamper-evident",
+    # not "tamper-proof" — operator with PVC write can still rewrite
+    # both files; the manifest just makes it more conspicuous.
+    csv_bytes = out_path.read_bytes()
+    csv_sha = hashlib.sha256(csv_bytes).hexdigest()
+    hash_path = out_path.with_suffix(".csv.sha256")
+    # `sha256sum -c <file>.sha256` expects `<hash>  <filename>` format
+    # (two spaces, basename only).
+    hash_path.write_text(f"{csv_sha}  {out_path.name}\n", encoding="utf-8")
+
+    manifest_path = OUT_DIR / "manifest.jsonl"
+    manifest_entry = {
+        "date": today,
+        "csv": out_path.name,
+        "sha256": csv_sha,
+        "generated_at": generated_at,
+        "tenant_rows": len(rows),
+        "window_hours": WINDOW_H,
+    }
+    # Append (not overwrite) — historical entries persist across runs.
+    # Idempotent re-runs for the same date append a new entry; manifest
+    # readers should pick the latest entry per `date` field, OR investigate
+    # if multiple entries for one date with different sha256 appear.
+    with manifest_path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(manifest_entry, separators=(",", ":")) + "\n")
+
+    # ── Step 5: retention prune ───────────────────────────────────────
+    # Delete chargeback-YYYY-MM-DD.csv (+ its .sha256 sidecar) older than
+    # RETENTION_DAYS. Manifest is NEVER pruned — it's the audit trail
+    # that survives the rolling CSV window.
     cutoff = dt.date.today() - dt.timedelta(days=RETENTION_DAYS)
     pruned = 0
     for f in OUT_DIR.glob("chargeback-*.csv"):
@@ -155,6 +196,13 @@ data:
             continue
         if file_date < cutoff:
             f.unlink()
+            # Prune the .sha256 sidecar too — orphan hashes are misleading.
+            sidecar = f.with_suffix(".csv.sha256")
+            if sidecar.exists():
+                sidecar.unlink()
             pruned += 1
 
-    print(f"OK: wrote {out_path} ({len(rows)} tenants); pruned {pruned} files older than {cutoff}")
+    print(
+        f"OK: wrote {out_path} ({len(rows)} tenants, sha256={csv_sha[:12]}…); "
+        f"manifest appended; pruned {pruned} files older than {cutoff}"
+    )

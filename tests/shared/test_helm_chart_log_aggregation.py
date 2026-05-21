@@ -351,6 +351,71 @@ class TestChargebackAggregator:
         py_compile.compile(path, doraise=True)
 
     @_needs_helm
+    def test_aggregate_writes_sha256_sidecar(self, repo_root: Path) -> None:
+        """#566 T2-4: every chargeback CSV gets a `.sha256` sidecar in
+        `sha256sum -c` format so finance can spot-verify. If anyone
+        removes the hash write, tamper detection silently degrades."""
+        docs = _render(repo_root / "helm/chargeback-aggregator")
+        cm = [d for d in docs if d.get("kind") == "ConfigMap" and "script" in d["metadata"]["name"]][0]
+        script = cm["data"]["aggregate.py"]
+        assert "hashlib.sha256" in script
+        assert ".csv.sha256" in script
+        # sha256sum format: "<hash>  <filename>" (two spaces, basename only)
+        assert '{csv_sha}  {out_path.name}' in script
+
+    @_needs_helm
+    def test_aggregate_appends_to_manifest(self, repo_root: Path) -> None:
+        """#566 T2-4 layer 2: append-only manifest.jsonl persists every
+        run's hash + metadata. Must be `a` (append) not `w` (write) —
+        getting this wrong = every run wipes prior history, defeating
+        the tamper-detection point."""
+        docs = _render(repo_root / "helm/chargeback-aggregator")
+        cm = [d for d in docs if d.get("kind") == "ConfigMap" and "script" in d["metadata"]["name"]][0]
+        script = cm["data"]["aggregate.py"]
+        assert "manifest.jsonl" in script
+        assert 'manifest_path.open("a"' in script, "manifest MUST be append-only"
+        # Retention prune logic must skip the manifest
+        assert "Manifest is NEVER pruned" in script
+
+    @_needs_helm
+    def test_aggregate_prunes_sha256_sidecar_with_csv(self, repo_root: Path) -> None:
+        """When the CSV is pruned past retention, the .sha256 sidecar
+        MUST also be deleted — orphan hashes referring to deleted CSVs
+        are misleading evidence."""
+        docs = _render(repo_root / "helm/chargeback-aggregator")
+        cm = [d for d in docs if d.get("kind") == "ConfigMap" and "script" in d["metadata"]["name"]][0]
+        script = cm["data"]["aggregate.py"]
+        assert "sidecar = f.with_suffix" in script
+        assert "sidecar.unlink()" in script
+
+    @_needs_helm
+    def test_chargeback_extra_env_renders(self, repo_root: Path) -> None:
+        """#566 Q5: chargeback CronJob accepts extraEnv (same shape as
+        helm/vector). Without this, operators with multi-tenant
+        VictoriaLogs can't wire account creds via Secret refs."""
+        docs = _render(repo_root / "helm/chargeback-aggregator", sets={
+            "extraEnv[0].name": "VICTORIALOGS_ACCOUNT_KEY",
+            "extraEnv[0].value": "k",
+        })
+        cj = [d for d in docs if d.get("kind") == "CronJob"][0]
+        env = cj["spec"]["jobTemplate"]["spec"]["template"]["spec"]["containers"][0]["env"]
+        names = {e["name"] for e in env}
+        assert "VICTORIALOGS_ACCOUNT_KEY" in names
+
+    @_needs_helm
+    def test_victorialogs_extra_env_renders(self, repo_root: Path) -> None:
+        """#566 Q5: victorialogs accepts extraEnv too — needed for
+        future `-httpAuthKey` Secret-ref wiring without forking chart."""
+        docs = _render(repo_root / "helm/victorialogs", sets={
+            "extraEnv[0].name": "HTTP_AUTH_KEY",
+            "extraEnv[0].value": "k",
+        })
+        dep = [d for d in docs if d.get("kind") == "Deployment"][0]
+        env = dep["spec"]["template"]["spec"]["containers"][0].get("env", [])
+        names = {e["name"] for e in env}
+        assert "HTTP_AUTH_KEY" in names
+
+    @_needs_helm
     def test_aggregate_queries_both_legacy_and_current_unit_field(self, repo_root: Path) -> None:
         """Phase 2 NaN-coalesce fix: during chart-upgrade transition window
         VictoriaLogs has rows under both `exec_time_ms` (legacy 0.1.0) and

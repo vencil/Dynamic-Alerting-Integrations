@@ -62,6 +62,14 @@ persistence:
   accessModes:
     - ReadWriteOnce
 
+# Extra environment variables — #566 Q5, mirroring helm/vector pattern
+# so operators have one consistent shape across the log-aggregation
+# charts. VictoriaLogs accepts a few sensitive env vars (e.g. authKeys
+# for HTTP API protection beyond the NetworkPolicy perimeter); wire
+# them via Secret refs here.
+extraEnv: []
+extraEnvFrom: []
+
 # Pod-level security: non-root, drop all capabilities. VictoriaLogs
 # binary needs only read/write under -storageDataPath.
 podSecurityContext:
