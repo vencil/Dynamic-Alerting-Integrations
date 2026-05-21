@@ -5,7 +5,8 @@ type: application
 # version: Helm Chart 版本（隨 Chart 結構/模板變更升級）
 # 0.1.0 — #539 Phase 2: initial chart (CronJob + Python script + PVC output)
 # 0.1.1 — #539: self-review — exec_time_ms→_s (correctness), PVC resource-policy: keep, query both _s + _ms legacy across upgrade window
-version: 0.1.1
+# 0.1.2 — #566 T5: image.digest knob (supply-chain pinning); default empty so existing deploys are no-op
+version: 0.1.2
 # appVersion: pinned python image
 appVersion: "3.13"
 keywords:
