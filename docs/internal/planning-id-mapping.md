@@ -126,6 +126,23 @@ SOT 在 [`dx-tooling-backlog.md`](dx-tooling-backlog.md)。
 | TD-040 | TRK-240 | `// skipA11y: TD-040` justification ID（同上，docstring + 正則 + spec 註解整套留待 chunk 2b）|
 | TD-042 ≡ TECH-DEBT-042 | TRK-242 | monorepo restructure — portal source 從 `docs/*` 遷至 `tools/portal/*`；`check_dist_source_consistency.py` + `.pre-commit-config.yaml` file-hygiene exclude 也帶有此標 |
 
+### TRK-300+ — post-migration 新分配（無 legacy 對映）
+
+> 此區段**不是 redirect**（無舊 ID 來源），而是 v2.8.1+ 直接以 `TRK-NNN` 新登錄的 tracking entry 索引。backlog 本體（status / owner / pr_ref）在各 issue body + frontmatter；本表給 `TRK ↔ GitHub issue` 快查。
+
+| TRK | Issue | 主題 | Epic |
+|---|---|---|---|
+| TRK-300 | [#570](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/570) | AI Tooling Hardening（epic：AI agent 與 Vibe 規則體系交界系統性問題收斂） | — |
+| TRK-301 | [#571](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/571) | Plugin prune + CLAUDE.md skill 優先級宣告 | TRK-300 |
+| TRK-302 | [#572](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/572) | High-freq feedback 提升進 CLAUDE.md root | TRK-300 |
+| TRK-303 | [#573](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/573) | Adversarial self-review 第 6 lens — Mermaid / C4 drift | TRK-300 |
+| TRK-304 | [#574](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/574) | Hook/Skill 邊界稽核矩陣（`hook-vs-skill-coverage.md`） | TRK-300 |
+| TRK-305 | [#575](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/575) | `vibe-subagent-review` skill — IaC-aware blast radius（complements #448） | TRK-300 |
+| TRK-306 | [#576](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/576) | `vibe-release` skill — extends #474 Layer 3 | TRK-300 |
+| TRK-307 | [#577](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/577) | `audit_rules_drift.py` + 季度 cron（rule compaction） | TRK-300 |
+| TRK-308 | [#578](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/578) | `vibe-brainstorm` skill（deferred → post-ADR-020） | TRK-300 |
+| TRK-309 | [#579](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/579) | Upstream skill-system FR tracker（Anthropic / Cowork；backlog，無 milestone） | TRK-300 |
+
 ## 不在 mapping 範圍
 
 - **`ADR-NNN`** — 架構決策 ID，永不重編號（ADR-019 namespace policy）

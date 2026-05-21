@@ -55,6 +55,7 @@ lang: zh
 - `CHANGELOG.md` — Unreleased 區
 - `CLAUDE.md` — 若影響 Agent routing 或計數
 - `README.md` / `README.en.md` — 若影響使用者第一眼看到的資訊
+- `docs/architecture-and-design.md` 的 **Mermaid / C4 架構圖** — 若變更動到 sequence / data-flow / component boundary（視為 schema 等級需同步項；對應 adversarial self-review 第 6 lens，TRK-303）
 
 **檢查方式**：見 [doc-map.md § Change Impact Matrix](doc-map.md)，列出每種變更類型要連動哪些文件。
 
