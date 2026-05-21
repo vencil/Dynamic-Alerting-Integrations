@@ -8,7 +8,10 @@ type: application
 # 0.1.2 — #539: VRL merge() lost unnecessary `??`; set data_dir to hostPath mount (readOnlyRootFilesystem broke /var/lib/vector default)
 # 0.2.0 — #539 Phase 2: additionalSources list + third VRL branch for prometheus_query_log (chargeback consumer #2, see #552)
 # 0.2.1 — #539: self-review — exec_time/eval_time fields renamed _ms→_s to match Prometheus's native unit (seconds, not ms)
-version: 0.2.1
+# 0.3.0 — #539 Phase 3: additionalSinks free-form list for SIEM fan-out (compliance branch), auto-wrapped with buffer.when_full=drop_newest so SIEM downtime cannot back-pressure VictoriaLogs (§2 hard rule)
+# 0.3.1 — #539: self-review — extraEnv/extraEnvFrom knob (SIEM creds), template guard against _buffer_when_full=block (foot-gun for §2 rule)
+# 0.3.2 — #539 red-team T4-4: close §2-guard bypass — operator-supplied `buffer:` block with when_full=block now also fails loud
+version: 0.3.2
 # appVersion: pinned Vector release
 appVersion: "0.55.0"
 keywords:

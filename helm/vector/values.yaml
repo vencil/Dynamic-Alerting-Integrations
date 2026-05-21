@@ -59,6 +59,60 @@ additionalSources: []
   #   extraNamespaceLabelSelector: ""
   #   extraFieldSelector: ""
 
+# Fan-out sinks — #539 Phase 3 compliance branch. Each entry is a
+# free-form Vector sink config (passed through verbatim into the
+# rendered vector.yaml under `sinks:`), wired to the same `demux`
+# transform output as the primary VictoriaLogs sink. Use this to fan
+# out to an external SIEM when strict compliance (tamper-evidence /
+# WORM / legal hold) arrives — those guarantees live on the SIEM
+# side; VictoriaLogs (like Loki) cannot provide them. The Vector
+# multi-sink design is what keeps this branch reachable without
+# reconfiguring the upstream pipeline.
+#
+# CRITICAL (#539 §2 hard rule): producer-side outages MUST NOT wedge
+# the primary VictoriaLogs delivery path. Each entry's
+# `_buffer_when_full` knob controls what happens when the sink's
+# downstream is slow:
+#   - "drop_newest" (default below): when the sink's buffer fills, NEW
+#     events are dropped — primary delivery to VictoriaLogs is never
+#     blocked. Acceptable for compliance branches because the primary
+#     log is still in VictoriaLogs; SIEM is a fan-out, not the SoR.
+#   - "block": SIEM downtime back-pressures the entire pipeline,
+#     including primary delivery. DO NOT USE for fan-out — defeats
+#     the §2 hard rule. Only valid when SIEM is the system of record
+#     (i.e. this chart is being used in compliance-only mode and
+#     VictoriaLogs is disabled).
+#
+# The chart wraps each entry with `buffer: {type: memory, when_full:
+# <_buffer_when_full>, max_events: <_buffer_max_events>}` unless the
+# entry already specifies its own `buffer:` block (advanced operators
+# can opt into disk buffers etc.). Pop those two `_` keys before
+# splatting the rest into the Vector config.
+#
+# Each entry MUST have a unique `name` (becomes the Vector sink id);
+# do NOT name an entry `victorialogs` (collides with the built-in
+# primary sink). Naming conflicts surface at chart lint as a duplicate
+# YAML key — fail-loud.
+additionalSinks: []
+  # Example — splunk_hec for tamper-evident compliance trail:
+  # - name: splunk_compliance
+  #   type: splunk_hec_logs
+  #   inputs: [demux]                  # MUST be demux for VRL-tagged events
+  #   endpoint: https://splunk.example.com:8088
+  #   default_token: ${SPLUNK_TOKEN}   # via envFrom secret
+  #   _buffer_when_full: drop_newest
+  #   _buffer_max_events: 10000
+  #
+  # Example — generic syslog escape hatch:
+  # - name: syslog_archive
+  #   type: socket
+  #   mode: tcp
+  #   inputs: [demux]
+  #   address: syslog-collector.security.svc:6514
+  #   encoding:
+  #     codec: json
+  #   _buffer_when_full: drop_newest
+
 # Stream fields VictoriaLogs splits on. Per #539 §3 load-bearing schema:
 # bounded keys only. pod_name / token_id / query are intentionally NOT
 # here — they are high-cardinality data fields, not stream fields.
@@ -96,6 +150,19 @@ resources:
   limits:
     cpu: 500m
     memory: 512Mi
+
+# Extra environment variables for the Vector container — primarily for
+# wiring SIEM credentials into `additionalSinks` entries that reference
+# them as `${VAR}` (Vector expands env vars at config load time).
+# Examples:
+#   extraEnvFrom:
+#     - secretRef: {name: siem-credentials}    # all keys become env vars
+#   extraEnv:
+#     - name: SPLUNK_TOKEN
+#       valueFrom: {secretKeyRef: {name: splunk-hec, key: token}}
+# Mount your Secret into the namespace this chart installs into.
+extraEnv: []
+extraEnvFrom: []
 
 # Tolerations — DaemonSet pattern is to schedule everywhere, including
 # tainted nodes (e.g. control-plane). Default empty for least-privilege;
