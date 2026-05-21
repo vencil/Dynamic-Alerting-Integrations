@@ -142,6 +142,7 @@ SOT 在 [`dx-tooling-backlog.md`](dx-tooling-backlog.md)。
 | TRK-307 | [#577](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/577) | `audit_rules_drift.py` + 季度 cron（rule compaction） | TRK-300 |
 | TRK-308 | [#578](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/578) | `vibe-brainstorm` skill（deferred → post-ADR-020） | TRK-300 |
 | TRK-309 | [#579](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/579) | Upstream skill-system FR tracker（Anthropic / Cowork；backlog，無 milestone） | TRK-300 |
+| TRK-310 | [#581](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/581) | epic #570 收尾 — CLAUDE.md 瘦身 + 淨 token 核算 | TRK-300 |
 
 ## 不在 mapping 範圍
 
