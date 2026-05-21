@@ -264,6 +264,28 @@ kubectl get pod -n monitoring -l app.kubernetes.io/name=vector  # Running
 SIEM owner（通常是 SecOps 團隊）扛 chain-of-custody；平台只負責
 delivery 不漏 row（buffer.events_dropped metric 是該被告警的）。
 
+### 7.3.1 §2 vs compliance — 真實 trade-off（#566 T3-1）
+
+§2 hard rule（`drop_newest`，SIEM 掛時丟新事件 / 不阻 VictoriaLogs）
+跟 compliance（**不可漏任何 row**）**根本衝突**。SIEM down window 內
+時機性 attacker 動手，VictoriaLogs 仍有 row 但 SIEM 沒收到 → SIEM
+端的 forensic timeline 真空、operator 砍 VictoriaLogs row 後沒
+evidence chain。
+
+三條設計路徑、各自的取捨：
+
+| 模式 | `_buffer_type` | `_buffer_when_full` | 取捨 |
+|---|---|---|---|
+| **availability-first（預設）** | `memory` | `drop_newest` | SIEM 掛 → 丟 row 不阻流。VictoriaLogs 仍正常。**Vector pod 重啟也丟 in-memory buffer 的 row**（X-3 timeline gap） |
+| **compliance-degraded（多數合規場景）** | `disk` | `drop_newest` | SIEM 掛 → 寫 disk buffer。pod 重啟不丟（hostPath 持久）→ SIEM 恢復後 drain。max_size 滿才開始 drop。**§2 仍守**（VictoriaLogs 不被影響） |
+| **compliance-strict（SIEM 是 SoR）** | `disk` | `block`（自帶 `buffer:` block override 才能設） | SIEM 掛 → Vector 整個 back-pressure，VictoriaLogs 也卡。**§2 被打破**，但只在 VictoriaLogs *沒部署*的 compliance-only 拓樸下合理（log primary path 走 SIEM、不需要 VictoriaLogs） |
+
+**chart 預設走 availability-first**（同 Phase 3 行為）。compliance 客戶
+進來時：第一步切 `_buffer_type: disk`（X-3 修了 OOM-kill timeline 洞），
+看 disk buffer 容量夠不夠 cover 該客戶 SLA-定義的 SIEM downtime
+window。第二步才考慮 strict mode（disable VictoriaLogs）—— 那是
+產品定位變更等級。
+
 ### 7.4 Failure modes
 
 | 症狀 | 原因 | 救法 |
