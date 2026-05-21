@@ -1,4 +1,18 @@
 {{- if .Values.networkPolicy.enabled }}
+# T2-2 mitigation (#539 red-team): VictoriaLogs has no built-in auth
+# on its HTTP listener — ingest + query + DELETE all share :9428. The
+# §2 hard rule guards the producer side (gateway → stdout, not direct
+# push) but does not protect the store itself from compromised
+# in-cluster pods. This NetworkPolicy locks the port to the four
+# legitimate consumers: the Vector DaemonSet (ingest), the chargeback
+# CronJob (query), Grafana (query), and same-pod loopback (probes).
+# Any other pod in the cluster — including a freshly attacker-deployed
+# one in the same namespace — cannot reach :9428.
+#
+# Building auth (`-httpAuthKey`) into the chart is the deeper fix and
+# is tracked as a separate follow-up; NetworkPolicy is the minimum
+# bar that closes the most-likely exploit path without forcing every
+# consumer to learn a token-rotation story.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -16,15 +30,16 @@ spec:
     - ports:
         - port: {{ .Values.listenPort }}
           protocol: TCP
-      {{- with .Values.networkPolicy.allowedNamespaces }}
-      # Restrict ingress to named namespaces (e.g. the Vector DaemonSet's
-      # namespace + the monitoring namespace where Grafana queries from).
-      # Empty list = allow the port cluster-wide.
       from:
-        {{- range . }}
+        {{- /* Same-namespace pod selectors — the four legitimate consumers. */}}
+        {{- range .Values.networkPolicy.allowedPodSelectors }}
+        - podSelector:
+            {{- toYaml . | nindent 12 }}
+        {{- end }}
+        {{- /* Cross-namespace allowance — empty list = no cross-ns ingress. */}}
+        {{- range .Values.networkPolicy.allowedNamespaces }}
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: {{ . }}
         {{- end }}
-      {{- end }}
 {{- end }}

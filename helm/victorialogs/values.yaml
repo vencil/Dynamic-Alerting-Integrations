@@ -89,11 +89,29 @@ serviceMonitor:
 prometheusScrapeAnnotations:
   enabled: true
 
-# NetworkPolicy — Phase 1 default permits ingress from all namespaces
-# (the Vector DaemonSet runs in kube-system; Grafana queries from the
-# monitoring namespace). Override `allowedNamespaces` to lock down.
+# NetworkPolicy — locks the :9428 HTTP API (ingest + query + DELETE,
+# all unauthenticated) to the legitimate consumers. T2-2 mitigation
+# from the #539 red-team: any in-cluster pod that can reach :9428 can
+# wipe history (`wget DELETE`), so the producer-side §2 hard rule is
+# necessary-but-not-sufficient — the store itself needs a perimeter.
+#
+# Defaults (same-namespace consumers, the common install topology):
+#   - Vector DaemonSet (ingest)              app.kubernetes.io/name=vector
+#   - chargeback-aggregator CronJob (query)  app.kubernetes.io/name=chargeback-aggregator
+#   - Grafana (query)                        app=grafana  (k8s/03-monitoring label)
+#
+# Cross-namespace consumers go in `allowedNamespaces`. Setting
+# `enabled: false` reverts to no policy (cluster-wide reachable);
+# only acceptable for chart smoke-tests, never for steady-state.
 networkPolicy:
-  enabled: false
+  enabled: true
+  allowedPodSelectors:
+    - matchLabels:
+        app.kubernetes.io/name: vector
+    - matchLabels:
+        app.kubernetes.io/name: chargeback-aggregator
+    - matchLabels:
+        app: grafana
   allowedNamespaces: []
 
 # Pod placement. Single pod has no affinity rules; if scaled up the

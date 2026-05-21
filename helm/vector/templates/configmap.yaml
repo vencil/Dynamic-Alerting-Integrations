@@ -180,6 +180,46 @@ data:
             ProjectID: {{ . | quote }}
             {{- end }}
         {{- end }}
+      {{- range $sink := .Values.additionalSinks }}
+      # ── additionalSinks (#539 Phase 3 fan-out) ───────────────────
+      # Wrapped with `buffer: {when_full: <_buffer_when_full>}` so the
+      # primary VictoriaLogs sink CANNOT be back-pressured by this
+      # sink's downstream (the §2 hard rule). Operators who explicitly
+      # want disk-backed buffering can provide their own `buffer:`
+      # block — we detect that and skip the auto-wrap.
+      {{- /* Fail-loud guard: when_full=block violates the §2 hard rule
+             (SIEM downtime would back-pressure primary VictoriaLogs).
+             Two paths to catch:
+               (a) the shorthand `_buffer_when_full: block`
+               (b) a self-provided `buffer:` block whose `when_full: block`
+                   would have silently bypassed (a) — caught by the
+                   #539 red-team review pass (T4-4). */}}
+      {{- if and (hasKey $sink "_buffer_when_full") (eq (toString $sink._buffer_when_full) "block") }}
+        {{- fail (printf "additionalSinks[%s]._buffer_when_full: \"block\" violates the #539 §2 hard rule (SIEM downtime would wedge primary VictoriaLogs delivery). Use drop_newest (default) or drop_oldest. If you genuinely need block semantics (SIEM is system of record), provide your own `buffer:` block explicitly." $sink.name) }}
+      {{- end }}
+      {{- if hasKey $sink "buffer" }}
+        {{- if eq (toString (default "" $sink.buffer.when_full)) "block" }}
+          {{- fail (printf "additionalSinks[%s].buffer.when_full: \"block\" violates the #539 §2 hard rule (SIEM downtime would wedge primary VictoriaLogs delivery). Even when providing your own `buffer:` block to override the chart's auto-wrap, when_full MUST NOT be `block` for fan-out sinks. If this sink is the system of record (compliance-only mode with VictoriaLogs disabled) the §2 rule does not apply — but that mode is not yet first-class in this chart." $sink.name) }}
+        {{- end }}
+      {{- end }}
+      {{ $sink.name }}:
+        {{- range $k, $v := $sink }}
+        {{- if and (ne $k "name") (ne $k "_buffer_when_full") (ne $k "_buffer_max_events") }}
+        {{ $k }}: {{- if kindIs "map" $v }}
+          {{- toYaml $v | nindent 10 }}
+        {{- else if kindIs "slice" $v }}
+          {{- toYaml $v | nindent 10 }}
+        {{- else }} {{ $v | toYaml }}
+        {{- end }}
+        {{- end }}
+        {{- end }}
+        {{- if not (hasKey $sink "buffer") }}
+        buffer:
+          type: memory
+          when_full: {{ default "drop_newest" $sink._buffer_when_full | quote }}
+          max_events: {{ default 10000 $sink._buffer_max_events }}
+        {{- end }}
+      {{- end }}
       {{- if .Values.metrics.enabled }}
       # Vector self-telemetry — events_in / events_out / dropped /
       # buffer_events. Each node scrapes its local Vector via the pod
