@@ -73,6 +73,32 @@ kubectl exec -n monitoring job/chargeback-aggregator-manual -- cat /reports/char
 # 沒 tenant_id 的 row 會 bucket 成 tenant=platform（rule eval / alert eval，不可計費）
 ```
 
+## 2.1 Tamper-evident verification（#566 T2-4）
+
+每筆 CSV 旁邊都會寫一個 `.csv.sha256` sidecar（`sha256sum -c` 格式）+ append 一筆到 `manifest.jsonl`。Finance pipeline / audit verifier：
+
+```sh
+# 方法 1：cron job 本身印出 sha256 prefix（最快的健檢）
+kubectl logs -n monitoring job/chargeback-aggregator-manual | grep sha256
+
+# 方法 2：操作員端用 sha256sum -c 驗證單一 CSV（標準 GNU coreutils）
+kubectl run vfy --rm -i --restart=Never --image=busybox:1.36 \
+  --overrides='{"spec":{"containers":[{"name":"v","image":"busybox:1.36","workingDir":"/reports","command":["sh","-c","sha256sum -c chargeback-'$(date -u +%F)'.csv.sha256"],"volumeMounts":[{"name":"r","mountPath":"/reports"}]}],"volumes":[{"name":"r","persistentVolumeClaim":{"claimName":"chargeback-aggregator-reports"}}]}}' \
+  -n monitoring
+# 期望：chargeback-YYYY-MM-DD.csv: OK
+# 若 FAILED → CSV 被改動過、跟 sidecar 對不上 → 對照 manifest.jsonl 看是否有
+# 多筆 entry（重跑）或單筆 entry hash 跟 sidecar 不符（tamper）
+
+# 方法 3：append-only manifest 看 30 天 hash 序列
+kubectl exec -n monitoring deploy/<reader-pod> -- cat /reports/manifest.jsonl | jq .
+# 每天一筆（重跑會多筆同 date）；hash 跟對應 .csv.sha256 必須一致
+```
+
+**重要**：這是 **tamper-evident**（有 operator 改動的訊號），**不是
+tamper-proof**（operator with PVC write 仍可同時改 CSV + .sha256 +
+manifest 三檔造假）。compliance-grade WORM 是 #566 X-2 / SIEM 端的
+責任，見 [`platform-log-aggregation-runbook.md`](platform-log-aggregation-runbook.md) §7.3。
+
 ## 3. Tenant attribution
 
 Prometheus query log 不會原生帶 `tenant_id`。federation-proxy（IV-2a）在 query 進 Prometheus **之前**注入 `{tenant="X"}`，所以 logged query string 帶有 `tenant="X"` selector。VRL 用 regex 抽出來。

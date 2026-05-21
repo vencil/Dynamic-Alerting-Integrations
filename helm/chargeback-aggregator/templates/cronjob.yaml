@@ -48,6 +48,13 @@ spec:
                 - name: PROJECT_ID
                   value: {{ . | quote }}
                 {{- end }}
+                {{- with .Values.extraEnv }}
+                {{- toYaml . | nindent 16 }}
+                {{- end }}
+              {{- with .Values.extraEnvFrom }}
+              envFrom:
+                {{- toYaml . | nindent 16 }}
+              {{- end }}
               securityContext:
                 {{- toYaml .Values.containerSecurityContext | nindent 16 }}
               volumeMounts:
