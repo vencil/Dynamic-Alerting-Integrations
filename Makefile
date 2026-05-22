@@ -540,17 +540,19 @@ pre-tag: version-check lint-docs playbook-freshness-ll benchmark-report-warn doc
 # failure aborts pre-tag); trivy-scan-all is informational (prints CVEs but
 # does not block — same stance as Layer 1 / #448).
 .PHONY: docker-build-all trivy-scan-all
-docker-build-all: ## 建 3 個自包含 component image（local --load，無 push；#474 Layer 2）
+docker-build-all: ## 建 4 個 production component image（local --load，無 push；#474 Layer 2）
 	@docker buildx build --load -t local-test:threshold-exporter components/threshold-exporter/app
 	@mkdir -p docs/assets/vendor  # da-portal COPYs vendor/（空目錄即可，runtime CDN fallback）
 	@docker buildx build --load -t local-test:da-portal -f components/da-portal/Dockerfile .
 	@docker buildx build --load -t local-test:tenant-api -f components/tenant-api/Dockerfile .
-	@# da-tools 排除：Dockerfile COPY 預編 Go binary（da-guard/da-batchpr/da-parser），
-	@# release.yaml 先 cross-compile；naive build 會 "da-parser: not found"。詳見
-	@# component-docker-build.yaml matrix 註解。
+	@# da-tools：stub build.sh-assembled tools/ + 預編 Go binary（COPY-path smoke，不編 Go；
+	@# Dockerfile 只 COPY+chmod 不執行 binary，故 stub 可驗 COPY 路徑 / 語法）。
+	@mkdir -p components/da-tools/app/tools
+	@touch components/da-tools/app/da-guard components/da-tools/app/da-batchpr components/da-tools/app/da-parser
+	@docker buildx build --load -t local-test:da-tools components/da-tools/app
 
-trivy-scan-all: docker-build-all ## Trivy CVE scan 3 個 image（informational：印出但不擋，#448）
-	@for img in threshold-exporter da-portal tenant-api; do \
+trivy-scan-all: docker-build-all ## Trivy CVE scan 4 個 image（informational：印出但不擋，#448）
+	@for img in threshold-exporter da-portal tenant-api da-tools; do \
 	  echo "[trivy] local-test:$$img"; \
 	  trivy image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 0 local-test:$$img || true; \
 	done

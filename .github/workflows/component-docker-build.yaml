@@ -29,6 +29,7 @@ on:
       - "components/threshold-exporter/app/**"
       - "components/tenant-api/**"
       - "components/da-portal/**"
+      - "components/da-tools/app/**"
       - "docs/interactive/**"        # da-portal Dockerfile COPY source
       - "tools/portal/src/**"        # da-portal COPY source (post TD-042 restructure)
       - "docs/assets/**"             # da-portal COPY source
@@ -49,23 +50,23 @@ jobs:
     strategy:
       fail-fast: false  # build all components so one break doesn't mask another
       matrix:
-        # Only the 3 SELF-CONTAINED Dockerfiles (build from source inside Docker /
-        # COPY in-repo assets). These are exactly where source-COPY paths can drift
-        # — the #472 (da-portal moved file) and #473 (exporter pkg/ COPY) incident
-        # classes. Verified to build locally during #474 self-review.
-        #
-        # da-tools is INTENTIONALLY EXCLUDED: its Dockerfile COPYs pre-built Go
-        # binaries (da-guard / da-batchpr / da-parser) that release.yaml cross-
-        # compiles in a separate matrix BEFORE the docker build. A bare `docker
-        # build` here fails on "da-parser: not found" (confirmed locally). Smoke-
-        # testing it would require replicating the full Go cross-compile, which is
-        # release-pipeline territory; the Go binaries are already built+tested by
-        # the regular Go CI. Residual risk (renamed binary COPY path) is low (stable
-        # names) and surfaces in release.yaml. Revisit if da-tools image breaks recur.
+        # All 4 production Dockerfiles. 3 are self-contained (build from source in
+        # Docker / COPY in-repo assets): threshold-exporter, da-portal, tenant-api —
+        # exactly where source-COPY paths drift (#472 da-portal moved file, #473
+        # exporter pkg/ COPY). da-tools COPYs pre-built Go binaries + a build.sh-
+        # assembled tools/ dir; we STUB those (empty tools/ + touch'd binaries, see
+        # the stub step) so `docker build` validates the Dockerfile COPY *paths* +
+        # syntax — the #472/#473 class — WITHOUT the Go cross-compile (that stays in
+        # release.yaml; binary functionality is covered by Go CI). The stub proves
+        # COPY targets resolve, not that binaries run. All 4 verified building
+        # locally during #474 self-review (da-tools via the same stub).
         include:
           - name: threshold-exporter
             context: components/threshold-exporter/app
             dockerfile: components/threshold-exporter/app/Dockerfile
+          - name: da-tools
+            context: components/da-tools/app
+            dockerfile: components/da-tools/app/Dockerfile
           - name: da-portal
             context: .
             dockerfile: components/da-portal/Dockerfile
@@ -86,6 +87,21 @@ jobs:
       - name: Ensure da-portal vendor dir exists
         if: matrix.name == 'da-portal'
         run: mkdir -p docs/assets/vendor
+
+      # da-tools Dockerfile COPYs a build.sh-assembled tools/ dir + 3 pre-built Go
+      # binaries (da-guard / da-batchpr / da-parser). For a COPY-PATH smoke test we
+      # stub them (empty dir + zero-byte files) instead of running the Go cross-
+      # compile — the Dockerfile only COPY+chmod's the binaries (never RUNs them at
+      # build time), so a stub validates COPY-path correctness + Dockerfile syntax
+      # (#472/#473 class) at ~zero cost. Binary functionality is covered by Go CI.
+      # Verified locally during #474 self-review (build succeeds with this stub).
+      - name: Stub da-tools build inputs (COPY-path smoke only)
+        if: matrix.name == 'da-tools'
+        run: |
+          mkdir -p components/da-tools/app/tools
+          touch components/da-tools/app/da-guard \
+                components/da-tools/app/da-batchpr \
+                components/da-tools/app/da-parser
 
       # Hard gate: build must succeed. Catches #472/#473-class dormant breaks.
       - name: Build image (load, no push)
