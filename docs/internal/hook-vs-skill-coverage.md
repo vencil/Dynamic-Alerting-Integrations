@@ -160,4 +160,5 @@ lang: zh
 - [CLAUDE.md §Pre-commit 品質閘門](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/CLAUDE.md)
 - [`dev-rules.md`](dev-rules.md)（12 規範 + §P trailer 紀律）
 - [`.pre-commit-config.yaml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/.pre-commit-config.yaml)（hook SSOT）
+- [`skill-system-feature-requests.md`](skill-system-feature-requests.md)（本表是 Vibe 內部能做的；upstream 需 Anthropic/Cowork 做的見該表，TRK-309）
 - epic [#570](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/570) / TRK-307（季度 audit 消費本表）/ TRK-310（CLAUDE.md 瘦身參考本表 overlap 段）
