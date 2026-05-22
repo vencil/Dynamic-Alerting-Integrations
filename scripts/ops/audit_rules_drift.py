@@ -394,7 +394,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument(
         "--memory-dir",
         type=Path,
-        default=DEFAULT_MEMORY,
+        default=None,
         help="memory feedback 卡目錄（預設 ~/.claude/.../memory）",
     )
     ap.add_argument(
@@ -406,14 +406,24 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--stdout", action="store_true", help="只印到 stdout，不寫檔")
     args = ap.parse_args(argv)
 
+    # 顯式 --memory-dir typo 要報錯，而非靜默當「memory 不存在」(lens 8)。
+    # 預設路徑不存在 = CI / 非 maintainer 機器的正常情形 → graceful skip。
+    explicit_memory = args.memory_dir is not None
+    memory_dir = args.memory_dir if explicit_memory else DEFAULT_MEMORY
+    memory_available = memory_dir.is_dir()
+    if explicit_memory and not memory_available:
+        sys.stderr.write(
+            f"error: --memory-dir 指定的路徑不存在：{memory_dir}（typo？）。\n"
+        )
+        return 2
+
     dev_rules = load_dev_rules()
     hooks = load_hooks()
     skills = load_skills()
-    memory_available = args.memory_dir.is_dir()
-    feedback = load_feedback(args.memory_dir) if memory_available else []
+    feedback = load_feedback(memory_dir) if memory_available else []
 
     report = render_report(
-        dev_rules, hooks, skills, feedback, args.memory_dir, memory_available
+        dev_rules, hooks, skills, feedback, memory_dir, memory_available
     )
 
     if args.stdout:
