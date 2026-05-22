@@ -17,9 +17,11 @@ release-wrap-up 情境（**非**一般 dev）：「release 收尾 / 進入 phase
 |---|---|---|
 | **GA**（component 有變更） | v2.8.0 | 五線中有 code change 的線：`v*` / `exporter/v*` / `tools/v*` / `portal/v*` / `tenant-api/v*` |
 | **Interim DX**（僅平台 / 內部工具） | v2.8.1 | 通常只 `v*`（platform tag）；component binary 不變則不推其 tag |
-| **Hotfix** | 假想 v2.8.2 | 只推受影響那一線 |
+| **Hotfix** | 假想 v2.8.2 | 受影響 component tag（觸發 build/image）**＋ 平台 `v*` tag**（見下「錨點鐵則」） |
 
-**鐵則**：版號不變的 component **不推** tag（dev-rule #7）。
+**錨點鐵則**：平台 `v*` tag **不觸發 build，但它是 GitHub Release 的錨點**——release body（含 hotfix 的「what changed」）與**客戶下載 binary 的入口**都掛在平台版號上（playbook Step 3 / line 171）。所以**任何**有 release notes 的發布（含只動單一 component 的 hotfix）都要推平台 `v*` tag；CHANGELOG 是平台版號文件，hotfix 改了它＝平台版號 bump，與「版號不變不推」一致。
+
+**鐵則**：版號*內容*不變的 component **不推**其 component tag（dev-rule #7）。但平台 `v*` 因 release-notes 變動幾乎總是 bump（除非該 component 自帶獨立 release）。
 
 ## 收尾流程
 
