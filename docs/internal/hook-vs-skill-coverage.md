@@ -94,13 +94,14 @@ lang: zh
 
 ---
 
-## 5. 本地 skills（3）— 🧠 advisory，AI 自覺觸發
+## 5. 本地 skills（4）— 🧠 advisory，AI 自覺觸發
 
 | Skill | 涵蓋 | owner 性質 | 與 hook 關係 |
 |---|---|---|---|
 | `vibe-workflow` | 起手式、7 陷阱、FUSE/docker/port-forward | advisory（起手式部分已被 session-init hook 機械化） | **補集**：hook 做機械起手式，skill 講「卡住時怎麼救」 |
 | `vibe-dev-rules` | 12 規範 + Top 4 | advisory（多數規範有對應 hook，但 commit 前提醒靠 skill） | **前置**：在 hook 擋下之前先自覺（省 push cycle） |
 | `vibe-playbook-nav` | 任務→Playbook 章節路由 | advisory | 無對應 hook（純導航） |
+| `vibe-subagent-review` | IaC-aware 兩階段 review（code spec→quality / IaC blast-radius） | advisory（cross-file 語義層，機械 SAST 抓不到） | **補集 #448**：機械層單檔 SAST 由 #448；本 skill 顧跨檔 cascade（TRK-305） |
 
 > 優先級仲裁見 [CLAUDE.md §Skill 優先級宣告](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/CLAUDE.md)（TRK-301）：衝突時 `vibe-*` supersede 環境層 generic skill。
 
@@ -137,7 +138,7 @@ lang: zh
 |---|---|---|---|
 | **推銷語言**（dev-rule #6） | 👁️ reviewer-only（明文「未由 pre-commit hook 自動掃描」） | 進 repo 才被 review 退 | dev-rules backlog 有 keyword-scan lint 候選 |
 | **架構圖 drift**（Mermaid/C4） | 🧠 skill-advised（TRK-303 第 6 lens）+ dev-rule #4 | code 改了圖沒同步 | 人工 lens；6 個月後評估 auto-detector |
-| **IaC cross-file cascade** | ❌ 無（既有 lint 只做單檔 SAST，見 #448） | 改 selector 連動 NetworkPolicy/ServiceMonitor 漏改 | TRK-305 `vibe-subagent-review`（規劃中） |
+| **IaC cross-file cascade** | 🧠 `vibe-subagent-review`（TRK-305 已上線）；機械層仍待 #448 | 改 selector 連動 NetworkPolicy/ServiceMonitor 漏改 | skill 補語義層；#448 補機械層 SAST |
 | **SAST 7 條的 1/3/7**（encoding/chmod/stderr） | 👁️ reviewer convention（bandit 只 native 蓋 2/4/5/6） | 進 repo | dev-rule #5 已明列；reviewer 把關 |
 
 ---

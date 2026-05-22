@@ -32,11 +32,12 @@ Session 起手式 codified 為 **PreToolUse hook** (v2.8.0) — 第一次 `Bash`
 
 ## Skill 體系
 
-Vibe 專案內建 **三個本地 skills**（`.claude/skills/`），在對應情境自動觸發：
+Vibe 專案內建 **四個本地 skills**（`.claude/skills/`），在對應情境自動觸發：
 
 - **`vibe-workflow`** — session 起手式、7 個常見陷阱、標準開發工作流（session 開始或遇到 FUSE / docker / port-forward 類問題時自動觸發）
 - **`vibe-dev-rules`** — 12 條開發規範 + Top 4 違反熱點（commit / push / refactor 前自動觸發）
 - **`vibe-playbook-nav`** — 任務→Playbook 章節路由（涉及 K8s / docker / release / conf.d / benchmark / E2E 時自動觸發）
+- **`vibe-subagent-review`** — IaC-aware 兩階段 review（code 走 spec→quality、IaC 走 blast-radius）（multi-file PR / `Agent` 跑完後、commit 前自動觸發；TRK-305）
 
 環境層 skills（`docx` / `pptx` / `xlsx` / `pdf` / `engineering:*` / `data:*` / `design:*` / `marketing:*` 等）**Claude 可自主判斷使用**，不需逐次徵詢：
 
