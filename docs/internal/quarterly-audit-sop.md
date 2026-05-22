@@ -42,6 +42,16 @@ report 寫到 `docs/internal/audit-reports/rules-drift-YYYY-MM.md`（atomic writ
 
 跑季度 audit 時，順手巡檢 [`skill-system-feature-requests.md`](skill-system-feature-requests.md) 的 FR-01~06：上游（Anthropic / Cowork）是否已**靜默**解決任一項（skill-spec 改版常不大肆宣傳，該表的被動 trigger 抓不到）？已解決的標 ✅ / 移除。此步把那份「upstream 願望表」綁進 recurring 主動流程，避免它變成不準確的技術債。
 
+## 編輯 always-on context 後：recall test（TRK-310 驗證的方法）
+
+動到 always-on tier-1 context（CLAUDE.md 高頻地雷 / dev-rules Top 4 / skill 清單）後——尤其**為瘦身而壓縮**時——跑 recall test 驗死線沒被埋：
+
+1. 開**乾淨 subagent**（`Agent` general-purpose），只餵改後的 CLAUDE.md，要它窮舉所有 must-follow / ⛔ 規則（禁讀其他檔、禁腦補）。
+2. 比對 ground truth（5 條高頻地雷 + dev-rules Top 4）：**critical 規則須 100% 被抽出**；漏任一條 = 壓過頭，回補 salience（獨立 bullet / ⛔ / bold）。
+3. subagent 標「模糊 / 半條」的多半是被 inline 的 advisory——可接受（**salience 分級**：critical 保持 atomic、advisory 可壓）。
+
+**為何用 recall 不用密度數字**：行數 / 字元是誤導 proxy（TRK-310 實測 CLAUDE.md 行數 −1 但 token +19%）。該守的是「critical 規則冷讀 100% 可抽出」，與總大小無關。密度加權公式（如外審提的 ACT 40/40/20）是杜撰精確度；recall 是 pass/fail 實測。
+
 ## 裁決原則（重要）
 
 - **只產 report，不自動修改**。所有合併 / 刪除 / 下放都人工決定 — speculative 自動清理會誤刪仍有效的規則。
