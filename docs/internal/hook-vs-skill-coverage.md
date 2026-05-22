@@ -25,7 +25,7 @@ lang: zh
 
 死亡組合：以為某事是 hook-enforced（其實是 reviewer-only）→ 不做 → reviewer 退件 / 進 repo。本表就是消除這種誤判。
 
-> **📊 Count reconciliation（建表時實測）**：pre-commit hook 實測 **50 auto + 14 manual + 3 pre-push = 67**（以 [`.pre-commit-config.yaml`](../../.pre-commit-config.yaml) `stages:` 為準）。CLAUDE.md / dev-rules 記為「51 auto + 13 manual + 3 pre-push」——**總數 67 相同，但 auto/manual 切分漂 1**（`jsx-babel-check-strict-linecount` 已從 pre-commit 改為 `stages: [manual]`，CLAUDE.md 計數未跟）。**這本身就是本表論點的活例**：count split drift 無任何 lint 攔（count 一致性 lint 多半驗總數或特定生成檔，不驗此 inline split）。建議 TRK-310 校正 CLAUDE.md 計數時一併處理。
+> **📊 Count reconciliation（建表時實測）**：pre-commit hook 實測 **50 auto + 14 manual + 3 pre-push = 67**（以 [`.pre-commit-config.yaml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/.pre-commit-config.yaml) `stages:` 為準）。CLAUDE.md / dev-rules 記為「51 auto + 13 manual + 3 pre-push」——**總數 67 相同，但 auto/manual 切分漂 1**（`jsx-babel-check-strict-linecount` 已從 pre-commit 改為 `stages: [manual]`，CLAUDE.md 計數未跟）。**這本身就是本表論點的活例**：count split drift 無任何 lint 攔（count 一致性 lint 多半驗總數或特定生成檔，不驗此 inline split）。建議 TRK-310 校正 CLAUDE.md 計數時一併處理。
 
 ---
 
@@ -54,7 +54,7 @@ lang: zh
 
 ## 3. Pre-commit auto hooks（50）— 🔧 機械，commit 時自動
 
-> 完整定義見 [`.pre-commit-config.yaml`](../../.pre-commit-config.yaml)。下表按職能分組；**AI 不需在 review 階段重做這些**——commit 時自動跑，失敗會擋。
+> 完整定義見 [`.pre-commit-config.yaml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/.pre-commit-config.yaml)。下表按職能分組；**AI 不需在 review 階段重做這些**——commit 時自動跑，失敗會擋。
 
 | 職能群 | hook ids | 對應規範 | 涵蓋 |
 |---|---|---|---|
@@ -90,7 +90,7 @@ lang: zh
 | `md-yaml-drift-check` | MD YAML 範例 ↔ schema | 改 schema 範例後 |
 | `playwright-e2e` | Portal E2E smoke | 改 portal 後 |
 
-> 上表 14 個確為實測 `stages: [manual]`（含 `jsx-babel-check-strict-linecount` — 即 CLAUDE.md「13」漏算的那個）。以 [`.pre-commit-config.yaml`](../../.pre-commit-config.yaml) 為 SSOT。
+> 上表 14 個確為實測 `stages: [manual]`（含 `jsx-babel-check-strict-linecount` — 即 CLAUDE.md「13」漏算的那個）。以 [`.pre-commit-config.yaml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/.pre-commit-config.yaml) 為 SSOT。
 
 ---
 
@@ -102,7 +102,7 @@ lang: zh
 | `vibe-dev-rules` | 12 規範 + Top 4 | advisory（多數規範有對應 hook，但 commit 前提醒靠 skill） | **前置**：在 hook 擋下之前先自覺（省 push cycle） |
 | `vibe-playbook-nav` | 任務→Playbook 章節路由 | advisory | 無對應 hook（純導航） |
 
-> 優先級仲裁見 [CLAUDE.md §Skill 優先級宣告](../../CLAUDE.md)（TRK-301）：衝突時 `vibe-*` supersede 環境層 generic skill。
+> 優先級仲裁見 [CLAUDE.md §Skill 優先級宣告](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/CLAUDE.md)（TRK-301）：衝突時 `vibe-*` supersede 環境層 generic skill。
 
 ---
 
@@ -153,7 +153,7 @@ lang: zh
 
 ## 關聯
 
-- [CLAUDE.md §Pre-commit 品質閘門](../../CLAUDE.md)
+- [CLAUDE.md §Pre-commit 品質閘門](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/CLAUDE.md)
 - [`dev-rules.md`](dev-rules.md)（12 規範 + §P trailer 紀律）
-- [`.pre-commit-config.yaml`](../../.pre-commit-config.yaml)（hook SSOT）
+- [`.pre-commit-config.yaml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/.pre-commit-config.yaml)（hook SSOT）
 - epic [#570](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/570) / TRK-307（季度 audit 消費本表）/ TRK-310（CLAUDE.md 瘦身參考本表 overlap 段）
