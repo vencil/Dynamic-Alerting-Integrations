@@ -61,9 +61,15 @@ lang: zh
 
 ## 重新評估觸發
 
+被動（事件驅動）：
+
 - Anthropic / Cowork 釋出 skill-spec 改版時（對照本表哪些已被官方解決）
 - Vibe baseline token 突然增加（暗示 skill ecosystem 改了）
 - 新增 ≥5 個內部 / 外部 skill 時（routing 開銷再評估）
+
+主動（recurring，避免本表爛成「許願墓地」）：
+
+- **綁定 TRK-307 季度 audit**：每季跑 `make audit-rules` 時，巡檢本表 FR-01~06 — 上游是否已**靜默**解決任一項（spec 改版常不大肆宣傳，被動 trigger 抓不到）。SOP 步驟見 [`quarterly-audit-sop.md` §附帶巡檢](quarterly-audit-sop.md)。
 
 ## 附錄：糾錯（觀察到的具體描述缺陷）
 
