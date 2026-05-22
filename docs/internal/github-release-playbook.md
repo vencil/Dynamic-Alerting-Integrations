@@ -113,10 +113,26 @@ git push origin main
 make version-check              # 版號一致性 — 必須 ✅
 make lint-docs                  # 文件 lint — 必須 0 failed
 pre-commit run --all-files      # auto hooks — 必須全過
-make pre-tag                    # 一鍵整合（包含以上全部）
+make pre-tag                    # 一鍵整合（含以上 + docker-build-all + trivy-scan-all）
 ```
 
 任何一項失敗 → 修正 → 重新驗證 → 才能進入 Step 3。
+
+**#474 Layer 2 — artifact build 也要 pre-tag 驗**：`make pre-tag` 現含 `docker-build-all`（建 4 個 production image，**hard gate**）+ `trivy-scan-all`（CVE scan，**informational**，#448）。理由：`release.yaml` 在 tag push 才 build image，build break（#472/#473-class — moved-file COPY / 缺 pkg COPY）會在最糟的時機才爆。**需 docker (buildx) + trivy 在 PATH** — 在 maintainer 機器 / dev container 跑，非 bare host。PR 階段的對應防線是 `.github/workflows/component-docker-build.yaml`（#474 Layer 1）。
+
+> **Release wrap-up agent discipline（#474 Layer 3）**：tag push 前，wrap-up agent **必須**跑 `make pre-tag`（含 docker-build-all + trivy-scan-all），或手動等價指令。Makefile 是 authoritative-but-incomplete contract — agent 負責 audit「Makefile 涵蓋什麼 vs `release.yaml` 實際做什麼」。這是 #468 author-time checklist 的 release 類比：機械 gate 漏的，discipline gate 補。系統化版本見 TRK-306 `vibe-release` skill（規劃中）。
+
+#### Trigger-asymmetry workflow audit（#474 generalization）
+
+只在罕見事件觸發的 workflow（`push.tags` / `schedule` / `release.published` / `workflow_dispatch`）會在兩次觸發間累積 breakage，且在最糟時機才爆。每條這類 workflow 都該問：**有沒有 PR-time 的 dry-run 等價物？**
+
+| Workflow | Trigger | PR-time dry-run? |
+|---|---|---|
+| `release.yaml` | `push.tags` | ✅ #474 `component-docker-build.yaml`（本 PR 新增） |
+| `release-attach-bench-baseline.yaml` | `release.published` | ❌ 低風險（fail-soft attach） |
+| `bench-record.yaml` | `schedule` + `workflow_dispatch` | ✅ 已有手動 dispatch |
+| `nightly-race.yaml` / `nightly-mutation-pilot.yaml` | `schedule` | ⬜ 待評估加 `workflow_dispatch` |
+| `weekly-fuzz.yaml` | `schedule` | ⬜ 待評估 |
 
 ### Step 3: 建立 Tag
 
