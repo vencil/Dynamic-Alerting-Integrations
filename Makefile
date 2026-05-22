@@ -647,6 +647,10 @@ planning-index: ## 重新渲染 docs/internal/planning-index.md（修改任何 s
 planning-index-check: ## 驗證 planning-index.md freshness（pre-commit 已掛同等檢查）
 	@python3 ./scripts/dx/generate_planning_index.py --check
 
+.PHONY: audit-rules
+audit-rules: ## 季度 rule-corpus drift 稽核（dev-rules/hooks/skills/feedback；TRK-307，report → docs/internal/audit-reports/）
+	@python3 ./scripts/ops/audit_rules_drift.py
+
 .PHONY: lint-docs-mkdocs
 lint-docs-mkdocs: ## mkdocs 嚴格 build 檢查（catch site-root vs filesystem path 歧義）— 動 docs/**.md push 前必跑
 	@# Single source of truth：本 target + .github/workflows/docs-ci.yaml `MkDocs Build Verification`
