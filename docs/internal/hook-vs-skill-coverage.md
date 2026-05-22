@@ -25,7 +25,9 @@ lang: zh
 
 死亡組合：以為某事是 hook-enforced（其實是 reviewer-only）→ 不做 → reviewer 退件 / 進 repo。本表就是消除這種誤判。
 
-> **📊 Count reconciliation（建表時實測）**：pre-commit hook 實測 **50 auto + 14 manual + 3 pre-push = 67**（以 [`.pre-commit-config.yaml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/.pre-commit-config.yaml) `stages:` 為準）。CLAUDE.md / dev-rules 記為「51 auto + 13 manual + 3 pre-push」——**總數 67 相同，但 auto/manual 切分漂 1**（`jsx-babel-check-strict-linecount` 已從 pre-commit 改為 `stages: [manual]`，CLAUDE.md 計數未跟）。**這本身就是本表論點的活例**：count split drift 無任何 lint 攔（count 一致性 lint 多半驗總數或特定生成檔，不驗此 inline split）。建議 TRK-310 校正 CLAUDE.md 計數時一併處理。
+> **📊 Count reconciliation**：pre-commit hook 為 **51 auto + 13 manual + 3 pre-push = 67**，與 CLAUDE.md 宣告一致。
+>
+> **更正（TRK-307）**：本表初版（PR #582）曾誤記「50 auto + 14 manual」並反指 CLAUDE.md 計數漂移——那是用 grep `stages:\s*\[manual\]` 數的結果，**配到了 `jsx-babel-check-strict-linecount` 的註解行**（該 hook 註解明寫 "Auto-stage (NOT manual)"，曾被提議 manual 但 PR #162 改回 auto）。TRK-307 的 `audit_rules_drift.py` 用 **YAML parse**（非 grep）重數，確認 51/13/3，CLAUDE.md 一直是對的。**教訓：hook 計數要 YAML parse，grep 會配到註解 / 文字**——audit 工具上線首次執行即抓出此自埋誤差。
 
 ---
 
@@ -52,7 +54,7 @@ lang: zh
 
 ---
 
-## 3. Pre-commit auto hooks（50）— 🔧 機械，commit 時自動
+## 3. Pre-commit auto hooks（51）— 🔧 機械，commit 時自動
 
 > 完整定義見 [`.pre-commit-config.yaml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/.pre-commit-config.yaml)。下表按職能分組；**AI 不需在 review 階段重做這些**——commit 時自動跑，失敗會擋。
 
@@ -69,7 +71,7 @@ lang: zh
 
 ---
 
-## 4. Pre-commit manual hooks（14）— 🔧 機械但**需手動觸發**
+## 4. Pre-commit manual hooks（13）— 🔧 機械但**需手動觸發**
 
 > 不在 commit 時自動跑；`pre-commit run --hook-stage manual --all-files` 或 `make lint-docs` 觸發。**這類最容易被 AI 誤當「自動會擋」**——其實不會，得記得手動跑（或 CI 才擋）。
 
@@ -78,7 +80,6 @@ lang: zh
 | `schema-check` | Go→JSON Schema drift | 改 Go struct / schema 後 |
 | `translation-check` | 雙語結構一致 | 改外部面向 ZH 文件後 |
 | `flow-e2e-check` | Guided Flow E2E smoke | 改 portal flow 後 |
-| `jsx-babel-check-strict-linecount` | JSX 行數 soft-cap | 改大 JSX 後 |
 | `i18n-coverage-check` | i18n 覆蓋報告 | 改 i18n 後 |
 | `check-doc-reading-time` | >15 min 需拆 | 寫長文件後 |
 | `check-doc-freshness` | >90 天 stale | 定期 |
@@ -90,7 +91,7 @@ lang: zh
 | `md-yaml-drift-check` | MD YAML 範例 ↔ schema | 改 schema 範例後 |
 | `playwright-e2e` | Portal E2E smoke | 改 portal 後 |
 
-> 上表 14 個確為實測 `stages: [manual]`（含 `jsx-babel-check-strict-linecount` — 即 CLAUDE.md「13」漏算的那個）。以 [`.pre-commit-config.yaml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/.pre-commit-config.yaml) 為 SSOT。
+> 上表 13 個為 YAML-parse 確認的 `stages: [manual]`。`jsx-babel-check-strict-linecount` **不在此列**（它是 auto-stage；初版誤列，TRK-307 已更正）。以 [`.pre-commit-config.yaml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/.pre-commit-config.yaml) 為 SSOT，計數用 YAML parse（見 `audit_rules_drift.py`）。
 
 ---
 
