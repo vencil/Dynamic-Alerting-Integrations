@@ -95,7 +95,7 @@ lang: zh
 
 ---
 
-## 5. 本地 skills（4）— 🧠 advisory，AI 自覺觸發
+## 5. 本地 skills（6）— 🧠 advisory，AI 自覺觸發
 
 | Skill | 涵蓋 | owner 性質 | 與 hook 關係 |
 |---|---|---|---|
@@ -103,6 +103,8 @@ lang: zh
 | `vibe-dev-rules` | 12 規範 + Top 4 | advisory（多數規範有對應 hook，但 commit 前提醒靠 skill） | **前置**：在 hook 擋下之前先自覺（省 push cycle） |
 | `vibe-playbook-nav` | 任務→Playbook 章節路由 | advisory | 無對應 hook（純導航） |
 | `vibe-subagent-review` | IaC-aware 兩階段 review（code spec→quality / IaC blast-radius） | advisory（cross-file 語義層，機械 SAST 抓不到） | **補集 #448**：機械層單檔 SAST 由 #448；本 skill 顧跨檔 cascade（TRK-305） |
+| `vibe-release` | 五線版號 release 收尾 SOP（pre-tag / project-face / milestone-link） | advisory（release 紀律；docker+Trivy 部分已被 #474 機械化進 pre-tag） | **延伸**：#474 把 Layer 1/2 機械化，本 skill 系統化 Layer 3 discipline（TRK-306） |
+| `vibe-brainstorm` | 設計階段 Socratic ideation（MVP / trade-off / defer-trigger + 外審） | advisory（純設計流程） | 無對應 hook（設計階段，無 code 可機械驗）（TRK-308） |
 
 > 優先級仲裁見 [CLAUDE.md §Skill 優先級宣告](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/CLAUDE.md)（TRK-301）：衝突時 `vibe-*` supersede 環境層 generic skill。
 
