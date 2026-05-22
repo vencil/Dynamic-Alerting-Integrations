@@ -523,13 +523,37 @@ version-check: ## 檢查版號一致性 (CI lint 用)
 	@python3 ./scripts/tools/dx/bump_docs.py --check
 
 .PHONY: pre-tag
-pre-tag: version-check lint-docs playbook-freshness-ll benchmark-report-warn ## ⛔ Pre-tag 品質閘門（所有檢查必須通過才能打 tag；benchmark-report informational）
+pre-tag: version-check lint-docs playbook-freshness-ll benchmark-report-warn docker-build-all trivy-scan-all ## ⛔ Pre-tag 品質閘門（所有檢查必須通過才能打 tag；benchmark-report + trivy informational）
 	@echo ""
 	@echo "============================================================"
 	@echo "  Pre-tag Gate: version-check ✅  lint-docs ✅  playbook-freshness ✅"
+	@echo "  Docker build (4 components) ✅  Trivy CVE scan (informational)"
 	@echo "  Bench baseline: .build/bench-baseline.txt (informational, issue #60 Phase 1)"
 	@echo "  Safe to create tags."
 	@echo "============================================================"
+
+# --- #474 Layer 2: local pre-tag Docker build + Trivy gate ---
+# release.yaml builds these 4 images at tag push; building them locally in
+# pre-tag catches #472/#473-class build breaks BEFORE the tag, not after.
+# Needs docker (buildx) + trivy on PATH — run on the maintainer machine /
+# dev container, not a bare host. docker-build-all is a HARD gate (build
+# failure aborts pre-tag); trivy-scan-all is informational (prints CVEs but
+# does not block — same stance as Layer 1 / #448).
+.PHONY: docker-build-all trivy-scan-all
+docker-build-all: ## 建 3 個自包含 component image（local --load，無 push；#474 Layer 2）
+	@docker buildx build --load -t local-test:threshold-exporter components/threshold-exporter/app
+	@mkdir -p docs/assets/vendor  # da-portal COPYs vendor/（空目錄即可，runtime CDN fallback）
+	@docker buildx build --load -t local-test:da-portal -f components/da-portal/Dockerfile .
+	@docker buildx build --load -t local-test:tenant-api -f components/tenant-api/Dockerfile .
+	@# da-tools 排除：Dockerfile COPY 預編 Go binary（da-guard/da-batchpr/da-parser），
+	@# release.yaml 先 cross-compile；naive build 會 "da-parser: not found"。詳見
+	@# component-docker-build.yaml matrix 註解。
+
+trivy-scan-all: docker-build-all ## Trivy CVE scan 3 個 image（informational：印出但不擋，#448）
+	@for img in threshold-exporter da-portal tenant-api; do \
+	  echo "[trivy] local-test:$$img"; \
+	  trivy image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 0 local-test:$$img || true; \
+	done
 
 .PHONY: playbook-freshness-ll
 playbook-freshness-ll: ## 檢查 Playbook + LL 條目知識退火狀態（pre-tag 時自動執行）

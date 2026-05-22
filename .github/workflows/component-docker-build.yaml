@@ -1,0 +1,109 @@
+name: Component Docker Build (PR smoke)
+
+# Issue #474 — Layer 1 of the trigger-asymmetry safety net.
+#
+# Problem it solves: PR CI tests the *code* (Go Tests / Portal Tests / lint),
+# but release.yaml (on: push.tags) tests the *artifact* (the production image).
+# Anything that only breaks at image-build time has ZERO pre-tag coverage and
+# only surfaces at tag push — the worst possible moment. v2.8.0 release hit 2
+# such dormant bugs in 30 min (#472 portal Dockerfile moved-file COPY, #473
+# exporter pkg/ COPY missing). This workflow runs `docker build` against the
+# 4 production Dockerfiles on every PR that touches their build inputs, so
+# build breakage fails at the introducing PR, not at release.
+#
+# Cost: ~30-60 s per component, only on PRs touching the paths below.
+# No registry push (forked PRs work — `load: true` is local-daemon only).
+#
+# Trivy CVE scan: **informational at PR time (exit-code 0)**, NOT blocking.
+# This deviates from #474's literal "exit-code 1" wording, deliberately:
+# issue #448 (same author, later v2 rewrite) argues a blocking CVE scan at
+# PR time lets a fresh upstream base-image CVE block UNRELATED PRs with no
+# warning. We keep the build a hard gate (deterministic, blames this diff)
+# and surface CVEs as visible-but-non-blocking output. release.yaml's own
+# image CVE scan is likewise treated as informational (#448). Flip to
+# exit-code 1 here only if the project decides PR-time CVE-blocking is wanted.
+
+on:
+  pull_request:
+    paths:
+      - "components/threshold-exporter/app/**"
+      - "components/tenant-api/**"
+      - "components/da-portal/**"
+      - "docs/interactive/**"        # da-portal Dockerfile COPY source
+      - "tools/portal/src/**"        # da-portal COPY source (post TD-042 restructure)
+      - "docs/assets/**"             # da-portal COPY source
+      - "docs/.nojekyll"             # da-portal COPY source (rarely changes, but it IS a COPY input)
+      - ".github/workflows/component-docker-build.yaml"
+
+concurrency:
+  group: component-docker-build-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false  # build all components so one break doesn't mask another
+      matrix:
+        # Only the 3 SELF-CONTAINED Dockerfiles (build from source inside Docker /
+        # COPY in-repo assets). These are exactly where source-COPY paths can drift
+        # — the #472 (da-portal moved file) and #473 (exporter pkg/ COPY) incident
+        # classes. Verified to build locally during #474 self-review.
+        #
+        # da-tools is INTENTIONALLY EXCLUDED: its Dockerfile COPYs pre-built Go
+        # binaries (da-guard / da-batchpr / da-parser) that release.yaml cross-
+        # compiles in a separate matrix BEFORE the docker build. A bare `docker
+        # build` here fails on "da-parser: not found" (confirmed locally). Smoke-
+        # testing it would require replicating the full Go cross-compile, which is
+        # release-pipeline territory; the Go binaries are already built+tested by
+        # the regular Go CI. Residual risk (renamed binary COPY path) is low (stable
+        # names) and surfaces in release.yaml. Revisit if da-tools image breaks recur.
+        include:
+          - name: threshold-exporter
+            context: components/threshold-exporter/app
+            dockerfile: components/threshold-exporter/app/Dockerfile
+          - name: da-portal
+            context: .
+            dockerfile: components/da-portal/Dockerfile
+          - name: tenant-api
+            context: .
+            dockerfile: components/tenant-api/Dockerfile
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # da-portal Dockerfile COPYs docs/assets/vendor/ (offline-mode assets that
+      # release.yaml populates via vendor_download.sh). For a build SMOKE test we
+      # only need the dir to exist — image falls back to CDN at runtime when empty.
+      # Without this the build fails on "docs/assets/vendor: not found" (caught by
+      # local `docker build` during #474 self-review — static YAML check would not).
+      - name: Ensure da-portal vendor dir exists
+        if: matrix.name == 'da-portal'
+        run: mkdir -p docs/assets/vendor
+
+      # Hard gate: build must succeed. Catches #472/#473-class dormant breaks.
+      - name: Build image (load, no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          load: true
+          tags: local-pr-test/${{ matrix.name }}:pr
+
+      # Informational (exit-code 0, see header). Same severity/ignore-unfixed
+      # contract as release.yaml so PR-time output matches release-time output.
+      - name: Trivy CVE scan (informational)
+        uses: aquasecurity/trivy-action@0.35.0
+        with:
+          image-ref: local-pr-test/${{ matrix.name }}:pr
+          format: table
+          exit-code: 0
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+        continue-on-error: true
