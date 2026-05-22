@@ -52,6 +52,10 @@ report 寫到 `docs/internal/audit-reports/rules-drift-YYYY-MM.md`（atomic writ
 
 **為何用 recall 不用密度數字**：行數 / 字元是誤導 proxy（TRK-310 實測 CLAUDE.md 行數 −1 但 token +19%）。該守的是「critical 規則冷讀 100% 可抽出」，與總大小無關。密度加權公式（如外審提的 ACT 40/40/20）是杜撰精確度；recall 是 pass/fail 實測。
 
+## vibe-* skill 汰除（dead-weight 防治；epic #570 retrospective）
+
+每季 audit 逐一檢查每個本地 `vibe-*` skill **過去一季是否在其領域內被實際觸發**（subagent-review: multi-file PR review；release: 發版；brainstorm: 設計討論；workflow/dev-rules/playbook-nav: 日常）。**連續 2 季 0 觸發 = dead weight，audit 時強制刪除**（對齊 `feedback_speculative_drift_prefer_remove`）。觸發案例寫進 CHANGELOG / PR body 當佐證。**理由**：epic #570 交付 3 個新 skill 但收尾時 subagent-review/release **0 觸發**、brainstorm 僅 1（Gap A）；無問責機制會養出沒人用的 skill。
+
 ## 裁決原則（重要）
 
 - **只產 report，不自動修改**。所有合併 / 刪除 / 下放都人工決定 — speculative 自動清理會誤刪仍有效的規則。

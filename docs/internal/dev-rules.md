@@ -403,15 +403,15 @@ tools:
 
 **Why**：v2.8.0 Phase 2 e2e harness saga（cycle-1 ~ cycle-6）累積燒掉 ~5 hours wall-clock + 對應 GHA minutes。S#45 archive permission lesson — agent 在 PR #105 merge 後直接 trigger 1000-tenant + 5000-tenant 兩支 workflow，runtime 擋住 5000 等候明確 user "go"。CI passing ≠ user consent；user 同意一個 trigger ≠ 同意後續 trigger。
 
-**How to apply**：標準互動 SOP：
-1. PR merges
-2. agent 等 user "merged" 確認（不主動執行下一步）
-3. agent 等 user 對下一個動作的明確指令（"go trigger 5000" / "rerun the failed one" / etc.）
-4. agent 才 `gh workflow run …`
+**How to apply**：SOP — PR merge → 等 user "merged" 確認（不主動執行下一步）→ 等 user 對下一動作的明確指令（"go trigger 5000" 等）→ 才 `gh workflow run`。
 
 不適用於：cheap workflows（lint / commitlint / unit-test re-run）、user-explicit `/loop` 或 schedule 已 codified 的 cron。本條只擋成本高且需要 ad-hoc 評估的人為觸發。
 
 **自動化攔截**：runtime 已示範（cycle-6 阻擋 5000-tenant trigger）；本條為文字版 codification — 未來若加 hook 可走 `pre-bash-tool` 攔 `gh workflow run` + 檢查 workflow basename。
+
+### P4. 數據 claim 須附量測；新機制須附驗證法（epic #570 retrospective）
+
+**規則**：PR 宣稱的數字（token / 行數 / coverage / 節省）須附**可重現量測指令**（`wc` / `git diff --stat` / recall subagent）；新機制的 PR body 須含「**怎麼證明它有效**」（harness run / CI job / recall test）。無量測佐證的數字 claim = 杜撰（#570 燒過：110 行 / 138 peak / ~1000 token 省全是估值，實測 CLAUDE.md token 反而 +19%；line count 等 proxy 會誤導）。
 
 ## §A 產出物治理（Planning Artifact Policy，v2.8.0 Phase .a 新增）
 
