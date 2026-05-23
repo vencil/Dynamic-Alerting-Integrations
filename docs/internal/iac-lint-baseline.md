@@ -2,7 +2,7 @@
 title: "IaC Lint Baseline — Container/k8s SAST residual findings"
 tags: [internal, lint, security, iac, ci]
 audience: [contributors, maintainers]
-version: v2.9.0
+version: v2.8.1
 lang: zh
 ---
 
