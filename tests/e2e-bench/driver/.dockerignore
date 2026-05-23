@@ -1,0 +1,12 @@
+# Container SAST baseline — epic #448 / TRK-311 (Layer 1).
+# Build context: tests/e2e-bench/driver/. The Dockerfile COPYs driver.py
+# only; baseline entries are a uniform hygiene floor (no-op here) and keep
+# any stray .env / *.log out of the bench image context.
+/.git/
+/.github/
+/scripts/
+/tests/
+/docs/
+*.md
+*.log
+.env*

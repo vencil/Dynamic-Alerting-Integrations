@@ -36,3 +36,6 @@ RUN apk add --no-cache logrotate \
 COPY --from=fetch /usr/local/bin/mtail /usr/local/bin/mtail
 # Match the gateway pod's non-root uid/gid (podSecurityContext: 101).
 USER 101:101
+# rationale: sidecar (mtail + logrotate) co-scheduled in the gateway pod —
+# health is governed by the pod's probes on the primary Envoy container, not
+# an image-level HEALTHCHECK on this auxiliary container.

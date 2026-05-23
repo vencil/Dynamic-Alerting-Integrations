@@ -143,6 +143,11 @@ SOT 在 [`dx-tooling-backlog.md`](dx-tooling-backlog.md)。
 | TRK-308 | [#578](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/578) | `vibe-brainstorm` skill（deferred → post-ADR-020） | TRK-300 |
 | TRK-309 | [#579](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/579) | Upstream skill-system FR tracker（Anthropic / Cowork；backlog，無 milestone） | TRK-300 |
 | TRK-310 | [#581](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/581) | epic #570 收尾 — CLAUDE.md 瘦身 + 淨 token 核算 | TRK-300 |
+| TRK-311 | [#592](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/592) | Container SAST Layer 1 — Dockerfile（hadolint + Vibe wrapper + .dockerignore） | [#448](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/448) |
+| TRK-312 | [#593](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/593) | Container SAST Layer 2 — Helm template security（kube-linter dual-mode + rationale wrapper） | [#448](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/448) |
+| TRK-313 | [#594](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/594) | Container SAST Layer 3 — Helm values secret-shape lint | [#448](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/448) |
+| TRK-314 | [#595](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/595) | Container SAST Layer 4 stub + CI integration + branch protection | [#448](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/448) |
+| TRK-315 | [#596](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/596) | Container SAST — hybrid-policy codify + consolidated baseline + epic closure | [#448](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/448) |
 
 ## 不在 mapping 範圍
 

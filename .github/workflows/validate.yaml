@@ -50,7 +50,10 @@ jobs:
       # fail with "No module named pytest" on every run. The same
       # ignores are applied to match ci.yml's test collection and
       # keep the two workflows in sync.
-      - run: pip install pyyaml croniter pytest pytest-cov promql-parser hypothesis
+      # pathspec: check_iac_vibe_rules.py (Container SAST L1, #448/TRK-311)
+      # imports it; its unit tests in tests/lint/ need it. Keep in sync with
+      # ci.yml's Python Tests job and nightly-mutation-pilot.yaml.
+      - run: pip install pyyaml croniter pytest pytest-cov promql-parser hypothesis pathspec
       - run: python -m pytest tests/ --ignore=tests/shared/test_property.py --ignore=tests/ops/test_benchmark.py --ignore=tests/shared/test_pipeline_integration.py --ignore=tests/federation-e2e -v
 
   go-tests:
