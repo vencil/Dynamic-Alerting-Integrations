@@ -115,9 +115,14 @@ DOCKERIGNORE_BASELINE: list[tuple[str, str]] = [
     (".env*", ".env"),
 ]
 
-# Directories never scanned for Dockerfiles (sibling worktrees check out the
-# same tree and would double-count).
-SKIP_DIR_PARTS = {".claude", ".git"}
+# Directories never scanned for Dockerfiles:
+#   .claude/.git       — sibling worktrees check out the same tree (double-count)
+#   node_modules/.venv — third-party vendored trees may ship their own
+#                        Dockerfiles; flagging those as "unregistered" would be
+#                        a false-positive BLOCK on a dev machine where the dir
+#                        exists (CI lint job has neither, so this is a
+#                        local-pre-commit safety net).
+SKIP_DIR_PARTS = {".claude", ".git", "node_modules", ".venv", "venv"}
 
 
 # ---------------------------------------------------------------------------
