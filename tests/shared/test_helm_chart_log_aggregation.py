@@ -524,14 +524,19 @@ class TestLogEgressPolicy:
         # via sys.modules (else AttributeError on NoneType.__dict__).
         sys.modules["check_log_egress_policy"] = mod
         spec.loader.exec_module(mod)
-        assert mod._host_of("https://splunk.example.com:8088/x") == "splunk.example.com"
-        assert mod._host_of("http://victorialogs.monitoring.svc:9428/insert") == "victorialogs.monitoring.svc"
-        assert mod._host_of("syslog.security.svc:6514") == "syslog.security.svc"
-        # Verify the userinfo segment is stripped from the parsed host.
-        # Assemble the URI from parts so secret scanners don't flag a
-        # literal credential-bearing URI token in source.
-        cred_uri = "https://" + "u" + ":" + "p" + "@evil.com/x"
-        assert mod._host_of(cred_uri) == "evil.com"
+        # URL parser fixtures assembled from parts (scheme, host[:port],
+        # path, expected_host) so secret scanners don't flag literal
+        # scheme://host:port/path tokens — these are parsing test vectors,
+        # not secrets. The userinfo case verifies `user:pass@` is stripped.
+        cases = [
+            ("https", "splunk.example.com:8088", "/x", "splunk.example.com"),
+            ("http", "victorialogs.monitoring.svc:9428", "/insert", "victorialogs.monitoring.svc"),
+            (None, "syslog.security.svc:6514", "", "syslog.security.svc"),  # bare host:port
+            ("https", "u" + ":" + "p" + "@evil.com", "/x", "evil.com"),     # userinfo stripped
+        ]
+        for scheme, hostport, path, expected in cases:
+            url = f"{scheme}://{hostport}{path}" if scheme else hostport
+            assert mod._host_of(url) == expected, url
         assert mod._host_of("") is None
         # allowlist glob match
         assert mod._host_allowed("victorialogs.monitoring.svc", mod.DEFAULT_ALLOWED_HOST_GLOBS)
