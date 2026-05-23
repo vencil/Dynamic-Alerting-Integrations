@@ -295,6 +295,48 @@ window。第二步才考慮 strict mode（disable VictoriaLogs）—— 那是
 | SIEM 端只收到 raw Envoy 行不是 JSON | `inputs:` 設成 `[kubernetes_logs]` 而非 `[demux]` | 改 inputs，`helm upgrade` |
 | dropped-events metric 一直爆高 | SIEM 處理慢於進入速度 | 調大 `_buffer_max_events`；或 SIEM 端擴容 |
 
+## 7.5 Egress / tamper hardening（#566 batch D）
+
+紅隊 T4-1/T4-2（惡意 `additionalSinks` 把 audit row 外洩）+ T3-2/T3-3
+（`kubectl edit cm` 篡改 VRL / aggregator script 無 Git 軌跡）是
+**兩條不同攻擊路徑**，要兩種不同防線。
+
+### 7.5.1 GitOps 路徑：egress allowlist gate（已實作）
+
+`scripts/tools/lint/check_log_egress_policy.py`（`make lint-egress`）在
+**PR / pre-deploy 階段**渲染 log-aggregation charts，擋三件事：
+
+1. `additionalSinks[].{endpoints,uri}` 的 host 不在 allowlist
+2. 覆寫 `VECTOR_*` 保留 env（非 downward-API fieldRef 形式）
+3. sensitive-named env（`*TOKEN*`/`*KEY*`/`*SECRET*`…）用字面 `value:`
+   而非 `valueFrom.secretKeyRef`
+
+```sh
+# 對 committed env-values 跑（CI 已在 Python Tests job 跑同邏輯的 pytest）
+make lint-egress ARGS="--values helm/values-prod-vector.yaml --allow-host splunk.example.com"
+```
+
+政策也以 illustrative rego 鏡像在 [`policies/examples/log-egress.rego`](../../policies/examples/log-egress.rego)
+（同 repo 其他 rego examples），core rules 寫成解耦形式 —— 未來真要上
+**OPA Gatekeeper runtime admission** 時只需薄 wrapper 接 `AdmissionReview`，
+規則不必重寫。
+
+### 7.5.2 Runtime 路徑：GitOps-only write boundary（production checklist）
+
+egress gate **只擋 GitOps PR 路徑**。有 `kubectl` / `helm --set` 權限的
+operator 直接改叢集，gate 不會被觸發。Production 真正的防線是 RBAC +
+GitOps self-heal，**不在 chart 內、是部署叢集的責任**：
+
+| 控制 | 做法 | 效果 |
+|---|---|---|
+| **人類無寫權** | Production 的人類 RoleBinding **不得**有 `update`/`patch`/`delete` on `deployments`/`configmaps`/`secrets`；只有 ArgoCD / Flux 的 ServiceAccount 能寫 cluster | 直接 `kubectl edit cm` 改 VRL → 被 RBAC 拒（T3-2/3-3 真正 fix） |
+| **GitOps self-heal** | 把平台自身的 Helm release 也納入 ArgoCD `selfHeal: true` / Flux `interval` 自動同步（**注意**：目前 `gitops-deployment.md` 的 GitOps scope 只到 `conf.d/` 租戶配置，**尚未**涵蓋平台 Helm chart —— 要擴 scope） | 即使有人手動篡改 ConfigMap，GitOps controller 數分鐘內覆寫回 Git 版本，把 window-of-compromise 壓到 sync interval |
+
+> ⚠️ kind reference cluster 裡大家都 cluster-admin，上述 RBAC 邊界是
+> **production 部署 checklist**，不在 demo 環境 enforce。但這是把 T3
+> 從「偵測」升級到「預防 + 自癒」的唯一正解 —— 比自建 drift-detector
+> CronJob 更省、更可靠（借力既有 GitOps controller，不增元件）。
+
 ## Refs
 
 - 源 issue：[#539](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/539)

@@ -659,6 +659,10 @@ lint-docs: ## 一站式文件 lint（versions + drift + tool consistency，支�
 		--only versions,tool_map,doc_map,rule_pack_stats,changelog,glossary,includes,platform_data,tool_consistency \
 		$(ARGS)
 
+.PHONY: lint-egress
+lint-egress: ## #566 T4 — log-aggregation 圖表 egress allowlist + env-override gate（需 helm；ARGS="--values prod.yaml --allow-host siem.example.com"）
+	@python3 ./scripts/tools/lint/check_log_egress_policy.py --ci $(ARGS)
+
 .PHONY: adr-index adr-index-check
 adr-index: ## 重新渲染 docs/architecture-and-design.md 的 ADR 索引表（新增/修改 ADR 後跑）
 	@python3 ./scripts/dx/generate_adr_index.py --write

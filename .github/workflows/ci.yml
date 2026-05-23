@@ -148,6 +148,14 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
 
+      # Helm chart invariant tests (tests/shared/test_helm_*.py) are gated
+      # on `helm` being on PATH (shutil.which); without it they SILENTLY
+      # SKIP in CI — the whole #539/#566 chart-test suite (NetworkPolicy
+      # lockdown, VRL demux rules, buffer guards, egress allowlist, etc.)
+      # would provide zero CI coverage. setup-helm makes them real gates.
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+
       - name: Cache pip packages
         uses: actions/cache@v5
         with:

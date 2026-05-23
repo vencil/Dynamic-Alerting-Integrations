@@ -425,3 +425,106 @@ class TestChargebackAggregator:
         cm = [d for d in docs if d.get("kind") == "ConfigMap" and "script" in d["metadata"]["name"]][0]
         script = cm["data"]["aggregate.py"]
         assert "exec_time_s" in script and "exec_time_ms_legacy" in script
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# #566 batch D — log-egress policy gate (check_log_egress_policy.py)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _egress_lint(repo_root: Path, extra_args: list[str]) -> subprocess.CompletedProcess:
+    """Run the egress gate; return CompletedProcess (caller asserts rc/stdout)."""
+    cmd = ["python3", str(repo_root / "scripts/tools/lint/check_log_egress_policy.py")] + extra_args
+    return subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=60, cwd=repo_root)
+
+
+class TestLogEgressPolicy:
+    """#566 T4-1/T4-2 — egress allowlist + env-override gate."""
+
+    @_needs_helm
+    def test_default_charts_pass(self, repo_root: Path) -> None:
+        """Default chart values (empty additionalSinks, only the chart's own
+        fieldRef VECTOR_SELF_* env) must pass — no false positive on the
+        legitimate downward-API env."""
+        r = _egress_lint(repo_root, ["--ci"])
+        assert r.returncode == 0, f"default charts should pass:\n{r.stdout}\n{r.stderr}"
+
+    @_needs_helm
+    def test_malicious_sink_url_blocked(self, repo_root: Path) -> None:
+        """A sink pointing at a non-allowlisted host is the T4-1 exfil
+        primitive — must be an ERROR."""
+        r = _egress_lint(repo_root, [
+            "--chart", "helm/vector",
+            "--set", "additionalSinks[0].name=exfil",
+            "--set", "additionalSinks[0].type=http",
+            "--set", "additionalSinks[0].uri=http://attacker.evil.com/x",
+            "--set", "additionalSinks[0].inputs[0]=demux",
+            "--ci",
+        ])
+        assert r.returncode == 1
+        assert "attacker.evil.com" in r.stdout
+
+    @_needs_helm
+    def test_allowlisted_sink_passes(self, repo_root: Path) -> None:
+        """An explicitly allowlisted SIEM host passes — the gate permits
+        reviewed egress."""
+        r = _egress_lint(repo_root, [
+            "--chart", "helm/vector",
+            "--set", "additionalSinks[0].name=splunk",
+            "--set", "additionalSinks[0].type=http",
+            "--set", "additionalSinks[0].uri=https://splunk.example.com:8088/x",
+            "--set", "additionalSinks[0].inputs[0]=demux",
+            "--allow-host", "splunk.example.com",
+            "--ci",
+        ])
+        assert r.returncode == 0, f"{r.stdout}\n{r.stderr}"
+
+    @_needs_helm
+    def test_reserved_env_literal_override_blocked(self, repo_root: Path) -> None:
+        """Overriding a VECTOR_* reserved var with a literal value hijacks
+        the pipeline — T4-2. Must be ERROR. (The chart's own fieldRef form
+        of the same vars must NOT trip — covered by test_default_charts_pass.)"""
+        r = _egress_lint(repo_root, [
+            "--chart", "helm/vector",
+            "--set", "extraEnv[0].name=VECTOR_SELF_NODE_NAME",
+            "--set", "extraEnv[0].value=attacker-controlled",
+            "--ci",
+        ])
+        assert r.returncode == 1
+        assert "VECTOR_SELF_NODE_NAME" in r.stdout
+
+    @_needs_helm
+    def test_sensitive_env_literal_blocked(self, repo_root: Path) -> None:
+        """A sensitive-named env via literal value (hardcoded secret /
+        attacker-substitutable credential) is ERROR; the valueFrom path is
+        the supported way (not asserted here — needs a Secret to exist)."""
+        r = _egress_lint(repo_root, [
+            "--chart", "helm/vector",
+            "--set", "extraEnv[0].name=SPLUNK_TOKEN",
+            "--set", "extraEnv[0].value=hardcoded-secret",
+            "--ci",
+        ])
+        assert r.returncode == 1
+        assert "SPLUNK_TOKEN" in r.stdout
+
+    def test_host_extraction_helper(self, repo_root: Path) -> None:
+        """Unit-test the host parser directly (no helm needed) — the
+        allowlist decision hinges on it parsing host out of url/host:port."""
+        import importlib.util
+        import sys
+        spec = importlib.util.spec_from_file_location(
+            "check_log_egress_policy",
+            repo_root / "scripts/tools/lint/check_log_egress_policy.py",
+        )
+        mod = importlib.util.module_from_spec(spec)
+        # Register before exec so @dataclass can resolve cls.__module__
+        # via sys.modules (else AttributeError on NoneType.__dict__).
+        sys.modules["check_log_egress_policy"] = mod
+        spec.loader.exec_module(mod)
+        assert mod._host_of("https://splunk.example.com:8088/x") == "splunk.example.com"
+        assert mod._host_of("http://victorialogs.monitoring.svc:9428/insert") == "victorialogs.monitoring.svc"
+        assert mod._host_of("syslog.security.svc:6514") == "syslog.security.svc"
+        assert mod._host_of("https://user:pass@evil.com/x") == "evil.com"  # creds stripped
+        assert mod._host_of("") is None
+        # allowlist glob match
+        assert mod._host_allowed("victorialogs.monitoring.svc", mod.DEFAULT_ALLOWED_HOST_GLOBS)
+        assert not mod._host_allowed("attacker.evil.com", mod.DEFAULT_ALLOWED_HOST_GLOBS)
