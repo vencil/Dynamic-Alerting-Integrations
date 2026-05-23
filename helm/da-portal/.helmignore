@@ -21,5 +21,9 @@
 tox.ini
 .testing
 *.orig
-**/README.md
-**/VALUES.md
+# NB: Helm's .helmignore matcher does NOT support `**` (it errors
+# "double-star (**) syntax is not supported" and aborts `helm template` /
+# `helm install`). A bare basename already matches at any depth, so use
+# `README.md` not `**/README.md`. (Caught by Layer 2 SAST — TRK-312.)
+README.md
+VALUES.md

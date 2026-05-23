@@ -149,6 +149,46 @@ jobs:
             --policy .github/custom-rule-policy.yaml \
             --ci
 
+  iac-helm-sast:
+    # Container/k8s SAST Layer 2 (#448 / TRK-312): Helm template security.
+    # Dedicated job (not folded into Lint) because it renders 9 charts via
+    # helm + kube-linter (~1-2 min) — runs in parallel so it doesn't slow the
+    # fast Lint job. helm comes from setup-helm; kube-linter is installed as a
+    # binary (best-effort) with the wrapper's Docker fallback as backstop.
+    name: Container SAST L2 (Helm)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.16.4
+
+      - name: Set up kube-linter (best-effort; wrapper falls back to Docker)
+        # Pin matches KUBE_LINTER_VERSION in scripts/tools/lint/check_iac_helm.py
+        # + .kube-linter.yaml expectations. If the download ever 404s, the
+        # wrapper's `docker run stackrox/kube-linter` fallback still runs Mode B.
+        run: |
+          KL=v0.7.4
+          if curl -fsSL -o /tmp/kl.tar.gz \
+              "https://github.com/stackrox/kube-linter/releases/download/${KL}/kube-linter-linux.tar.gz"; then
+            tar -xzf /tmp/kl.tar.gz -C /tmp
+            sudo install -m0755 /tmp/kube-linter /usr/local/bin/kube-linter
+            kube-linter version
+          else
+            echo "::warning::kube-linter binary install failed; check_iac_helm.py uses the Docker fallback"
+          fi
+
+      - name: Run Container SAST Layer 2 (Helm)
+        run: python3 scripts/tools/lint/check_iac_helm.py --ci
+
   python-tests:
     name: Python Tests (${{ matrix.python }})
     runs-on: ubuntu-latest

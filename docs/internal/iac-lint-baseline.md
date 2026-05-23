@@ -40,9 +40,27 @@ lang: zh
 
 INFO（不列管，僅記錄）：`components/da-tools/app/Dockerfile:12` DL3059（multiple consecutive RUN）。
 
-## Layer 2 — Helm template（TRK-312）
+## Layer 2 — Helm template（TRK-312，kube-linter + Vibe wrapper）
 
-_待 TRK-312 落地後增補（kube-linter dual-mode + trivy config baseline）。_
+跑法：`python3 scripts/tools/lint/check_iac_helm.py`（CI job「Container SAST L2 (Helm)」；本地 on-demand：`pre-commit run iac-helm-sast-check --hook-stage manual --all-files`）。引擎：**單一 kube-linter**（render-then-lint）+ Mode A 源碼掃描 + wrapper `capabilities.add` 規則。**trivy-config 不採用**（與 kube-linter 對 K8s misconfig 高度重疊、雙引擎會 desync；trivy 仍是既有的 image-CVE informational scan，不同關注點）。
+
+**例外採中央註冊表**（`check_iac_helm.py` 的 `EXEMPTIONS` dict，非 in-chart 註解——`helm template` 會剝掉註解，且集中式給 SecOps 單一稽核面）。
+
+**Baseline 截至 2026-05-23**：9 個 chart × values variants，**0 Critical** ✅ / 5 baseline-High（中央豁免）/ 3 INFO。
+
+| # | Chart:check | severity | Rationale（= EXEMPTIONS 登記） | 退場 / 修補 |
+|---|---|---|---|---|
+| 1 | `mariadb-instance:run-as-non-root` | High | mariadb 官方 image 啟動需 root 以 chown data dir 後降權 | 改 rootless mariadb image 才可解；政策性保留 |
+| 2 | `mariadb-instance:no-read-only-root-fs` | High | mariadb-server 需可寫 `/var/lib/mysql` data dir | 同 #1 |
+| 3 | `tenant-api:no-read-only-root-fs` | High | tenant-api gitops writer shells out to git，需可寫工作區 | **修補候選**：把 git workdir 移到 writable volume + readOnlyRootFilesystem:true |
+| 4 | `vector:run-as-non-root` | High | log-collector DaemonSet 需 root 讀 `/var/log/pods` host log | 架構事實；保留 |
+| 5 | `vector:capabilities-add` | High | `DAC_READ_SEARCH` — 讀其他 UID 擁有的 host log（配 root 需求） | 架構事實；保留 |
+
+INFO（不列管）：`federation-gateway` / `federation-proxy` / `threshold-exporter` 的 `pdb-unhealthy-pod-eviction-policy`（PDB best-practice，非急；可於 PDB 補 `unhealthyPodEvictionPolicy: AlwaysAllow`）。
+
+**附帶修復（L2 catch）**：`helm/da-portal/.helmignore` 用了 Helm 不支援的 `**/` glob（`**/README.md`），導致 `helm template` / `helm install` 直接中止（helm 3 + 4 皆然）——da-portal chart 原本無法 render，CI 也沒任何地方 render 它故長期未爆。已改為 bare `README.md`（任意深度仍 match）。
+
+> **嚴重度門檻**：Critical（`privileged-container` / `privilege-escalation-container` / `host-network` / `host-pid` / `host-ipc` / `docker-sock`）→ BLOCK 無 escape；High（`run-as-non-root` / `no-read-only-root-fs` / `unset-cpu·memory-requirements` / wrapper `capabilities-add`）→ 須登記 EXEMPTIONS 才豁免，否則 BLOCK；其餘 kube-linter check → INFO。
 
 ## Layer 3 — Helm values secret-shape（TRK-313）
 
