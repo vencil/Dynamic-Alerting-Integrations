@@ -316,8 +316,8 @@ window。第二步才考慮 strict mode（disable VictoriaLogs）—— 那是
 make lint-egress ARGS="--values helm/values-prod-vector.yaml --allow-host splunk.example.com"
 ```
 
-政策也以 illustrative rego 鏡像在 [`policies/examples/log-egress.rego`](../../policies/examples/log-egress.rego)
-（同 repo 其他 rego examples），core rules 寫成解耦形式 —— 未來真要上
+政策也以 illustrative rego 鏡像在 `policies/examples/log-egress.rego`
+（repo 路徑、不入 mkdocs 站台；同其他 rego examples），core rules 寫成解耦形式 —— 未來真要上
 **OPA Gatekeeper runtime admission** 時只需薄 wrapper 接 `AdmissionReview`，
 規則不必重寫。
 
