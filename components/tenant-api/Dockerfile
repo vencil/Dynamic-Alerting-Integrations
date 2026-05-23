@@ -54,6 +54,10 @@ CMD ["--addr=:8080", "--config-dir=/conf.d"]
 
 EXPOSE 8080
 
+# rationale: K8s liveness/readiness probes own health checking for this
+# service (see helm/tenant-api); an image-level HEALTHCHECK would duplicate
+# them and is skipped under the orchestrator.
+
 # Labels (OCI image spec)
 LABEL org.opencontainers.image.title="tenant-api" \
       org.opencontainers.image.description="Tenant Management API — Dynamic Alerting Platform" \

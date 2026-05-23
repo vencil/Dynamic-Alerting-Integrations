@@ -1,0 +1,13 @@
+# Container SAST baseline — epic #448 / TRK-311 (Layer 1).
+# Build context: components/threshold-exporter/app/ (component-docker-build.yaml).
+# Dir exclusions anchored (/) to this context root; *.md / *.log / .env*
+# unanchored. The Dockerfile COPYs go.mod/go.sum/*.go/pkg only — these
+# baseline entries are a uniform hygiene floor (mostly no-op here).
+/.git/
+/.github/
+/scripts/
+/tests/
+/docs/
+*.md
+*.log
+.env*

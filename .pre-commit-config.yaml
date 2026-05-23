@@ -108,6 +108,24 @@ repos:
         # examples in comments that some scanners flag).
         exclude: ^\.trufflehogignore$
 
+      # --- Container/k8s IaC SAST Layer 1 (#448 / TRK-311) ---
+      # Hybrid policy: hadolint engine + Vibe wrapper. The wrapper drives
+      # hadolint (binary on PATH, else `docker run hadolint/hadolint`) over
+      # every Dockerfile, applies the epic #448 severity->action mapping
+      # (error=BLOCK / warning=baseline-WARN), and adds project rules:
+      # HEALTHCHECK-or-rationale, no over-broad COPY, and .dockerignore
+      # baseline at each build-context root. BLOCK findings fail the commit;
+      # WARN/INFO are recorded in docs/internal/iac-lint-baseline.md.
+      # Layers 2-4 (Helm template / values / k8s manifest) land via TRK-312
+      # ~ TRK-314. CI wires this in .github/workflows/ci.yml (Lint job).
+      - id: iac-sast-check
+        name: "Container SAST L1: Dockerfile (hadolint + Vibe wrapper)"
+        entry: python3 -X utf8 scripts/tools/lint/check_iac_vibe_rules.py --ci
+        language: python
+        pass_filenames: false
+        files: '(^|/)Dockerfile$|(^|/)\.dockerignore$|^\.hadolint\.yaml$|^scripts/tools/lint/check_iac_vibe_rules\.py$'
+        additional_dependencies: ['pathspec']
+
       # --- Fast drift checks (< 5s each) ---
       - id: tool-map-check
         name: Tool map coverage

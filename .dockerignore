@@ -1,0 +1,27 @@
+# Container SAST baseline — epic #448 / TRK-311 (Layer 1).
+#
+# This repo root is the BUILD CONTEXT for da-portal and tenant-api
+# (component-docker-build.yaml uses `context: .` for both). Docker reads
+# .dockerignore from the context root, so this file governs what those two
+# image builds receive. Keeping .git history, CI/test/script/doc trees,
+# secrets and logs out of the context shrinks the upload and prevents
+# secret/.env leakage into images.
+#
+# Dir exclusions are ANCHORED (leading /) to the repo root so same-named
+# subdirs under copied source (e.g. components/**/tests/) are not pruned.
+# *.md / *.log / .env* are intentionally unanchored — drop them at any depth.
+/.git/
+/.github/
+/scripts/
+/tests/
+/docs/
+*.md
+*.log
+.env*
+
+# Re-include the static assets da-portal's Dockerfile COPYs from the repo-root
+# context. Without these the da-portal image build fails ("not found") because
+# the /docs/ exclusion above would prune them from the context.
+!/docs/interactive/
+!/docs/assets/
+!/docs/.nojekyll

@@ -1,0 +1,13 @@
+# Container SAST baseline — epic #448 / TRK-311 (Layer 1).
+# Build context: helm/federation-gateway/audit-sidecar/. The Dockerfile only
+# COPYs from build stages (COPY --from=...), so nothing from the host context
+# enters the image; this baseline is a uniform hygiene floor that also keeps
+# any stray .env / *.log out of the context upload.
+/.git/
+/.github/
+/scripts/
+/tests/
+/docs/
+*.md
+*.log
+.env*

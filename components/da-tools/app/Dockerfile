@@ -70,6 +70,9 @@ RUN ln -s /opt/da-tools/entrypoint.py /usr/local/bin/da-tools && \
 
 ENV PROMETHEUS_URL=""
 
+# rationale: CLI toolkit (one-shot `da-tools <cmd>` invocations), not a
+# long-running service — a container HEALTHCHECK is not meaningful.
+
 RUN addgroup -g 10001 -S nonroot && \
     adduser -S -D -H -u 10001 -h /nonexistent -s /sbin/nologin -G nonroot nonroot
 USER nonroot:nonroot

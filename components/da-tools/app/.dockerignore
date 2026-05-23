@@ -1,3 +1,14 @@
+# Container SAST baseline — epic #448 / TRK-311 (Layer 1).
+# Build context: components/da-tools/app/ (component-docker-build.yaml).
+# Dir exclusions anchored (/) to this context root; *.md / *.log / .env*
+# unanchored. build.sh runs on the host to assemble tools/ — it is not a
+# COPY input, so keep it out of the image context.
+/.git/
+/.github/
+/scripts/
+/tests/
+/docs/
+*.md
+*.log
+.env*
 build.sh
-.dockerignore
-README.md

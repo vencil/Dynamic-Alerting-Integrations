@@ -43,6 +43,18 @@ jobs:
       - name: Install dependencies
         run: pip install pre-commit pyyaml
 
+      # Container SAST Layer 1 (#448 / TRK-311): the iac-sast-check hook drives
+      # hadolint. Install the binary so the wrapper uses it directly (no docker
+      # image pull on the runner). Pin matches HADOLINT_VERSION in
+      # scripts/tools/lint/check_iac_vibe_rules.py and .hadolint.yaml.
+      - name: Set up hadolint
+        run: |
+          HADOLINT_VERSION=v2.12.0
+          sudo curl -fsSL -o /usr/local/bin/hadolint \
+            "https://github.com/hadolint/hadolint/releases/download/${HADOLINT_VERSION}/hadolint-Linux-x86_64"
+          sudo chmod +x /usr/local/bin/hadolint
+          hadolint --version
+
       - name: Run pre-commit hooks
         # PR_BODY exposes the PR description body to bypass-aware lints.
         # check_codename_leak.py reads it for `bypass-lint: codename-leak`
@@ -83,6 +95,11 @@ jobs:
           # progress. Codebase has 0 soft-cap warnings as of S#72;
           # this hook keeps it that way going forward.
           pre-commit run jsx-babel-check-strict-linecount --all-files
+          # Container SAST Layer 1 (#448 / TRK-311): hadolint + Vibe wrapper
+          # over all Dockerfiles. BLOCK findings fail the Lint job; WARN/INFO
+          # are recorded in docs/internal/iac-lint-baseline.md. hadolint binary
+          # installed in the "Set up hadolint" step above (wrapper uses PATH).
+          pre-commit run iac-sast-check --all-files
 
   lint-rule-packs:
     # Custom Prometheus rule-pack governance linter.

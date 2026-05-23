@@ -1,0 +1,36 @@
+# hadolint config — Container SAST Layer 1 (TRK-311, epic #448)
+#
+# Engine: hadolint v2.12.0, run containerized (no host install):
+#   docker run --rm -i hadolint/hadolint:v2.12.0 hadolint --config <this> <Dockerfile>
+# The Vibe wrapper scripts/tools/lint/check_iac_vibe_rules.py consumes
+# `hadolint --format json` and applies the epic #448 severity->action
+# mapping plus project-specific rules (HEALTHCHECK-or-rationale,
+# .dockerignore baseline, over-broad COPY). See docs/internal/lint-policy.md.
+#
+# AC1 rule set (DL3007 / DL3008 / DL3009 / DL3018 / DL3019 / DL3025) is all
+# ON by hadolint default — we do NOT silence it. The blocks below only tune
+# severity for the wrapper's BLOCK/WARN reduction.
+
+failure-threshold: error
+
+# Base-image registries we publish from / pull bases from. Keeps DL3026
+# (use only allowed registries) meaningful without flagging our own bases.
+trustedRegistries:
+  - docker.io
+  - gcr.io
+  - ghcr.io
+
+override:
+  # :latest (or untagged) base images are a reproducibility + supply-chain
+  # risk -> promote to error so the wrapper treats it as Critical (BLOCK).
+  error:
+    - DL3007
+  # apk version pinning. The platform deliberately uses `apk --no-cache` +
+  # monthly rebuild + Trivy CRITICAL/HIGH gate instead of brittle Alpine
+  # version pins (Alpine drops old package versions from the repo quickly,
+  # which turns a pinned `apk add pkg=x.y.z` into a hard build break). Kept
+  # at warning => wrapper maps to baseline High (non-blocking), recorded in
+  # docs/internal/iac-lint-baseline.md. Rationale mirrors the comment in
+  # components/da-portal/Dockerfile.
+  warning:
+    - DL3018

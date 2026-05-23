@@ -6,4 +6,6 @@
 FROM python:3.13.13-alpine3.22
 WORKDIR /app
 COPY driver.py /app/driver.py
+# rationale: one-shot benchmark driver — runs to completion inside the
+# compose stack and exits; a long-running HEALTHCHECK is not applicable.
 ENTRYPOINT ["python3", "/app/driver.py"]
