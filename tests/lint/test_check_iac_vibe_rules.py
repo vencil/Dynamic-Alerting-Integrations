@@ -159,6 +159,85 @@ class TestClassify:
 
 
 # ---------------------------------------------------------------------------
+# Engine location (monkeypatched — no real hadolint/docker invoked)
+# ---------------------------------------------------------------------------
+class TestEngineLocate:
+    def test_prefers_binary(self, monkeypatch):
+        monkeypatch.setattr(
+            iac.shutil, "which",
+            lambda n: "/usr/bin/hadolint" if n == "hadolint" else None,
+        )
+        assert iac.locate_engine() == ("binary", "/usr/bin/hadolint")
+
+    def test_docker_fallback(self, monkeypatch):
+        monkeypatch.setattr(
+            iac.shutil, "which",
+            lambda n: "/usr/bin/docker" if n == "docker" else None,
+        )
+        assert iac.locate_engine() == ("docker", None)
+
+    def test_none_available(self, monkeypatch):
+        monkeypatch.setattr(iac.shutil, "which", lambda n: None)
+        assert iac.locate_engine() == (None, None)
+
+
+# ---------------------------------------------------------------------------
+# collect_findings — aggregation + level->action, run_hadolint stubbed
+# ---------------------------------------------------------------------------
+class TestCollectFindings:
+    def test_hadolint_levels_classified(self, monkeypatch):
+        monkeypatch.setattr(iac, "run_hadolint", lambda dfs: [
+            {"file": "components/da-tools/app/Dockerfile", "line": 1,
+             "code": "DL9999", "level": "error", "message": "boom"},
+            {"file": "components/da-tools/app/Dockerfile", "line": 2,
+             "code": "DL3018", "level": "warning", "message": "pin"},
+            {"file": "components/da-tools/app/Dockerfile", "line": 3,
+             "code": "DL3059", "level": "info", "message": "consolidate"},
+        ])
+        f = iac.collect_findings(["components/da-tools/app/Dockerfile"])
+        assert any("DL9999" in x for x in f["BLOCK"])
+        assert any("DL3018" in x for x in f["WARN"])
+        assert any("DL3059" in x for x in f["INFO"])
+
+    def test_unregistered_dockerfile_blocks(self, monkeypatch):
+        monkeypatch.setattr(iac, "run_hadolint", lambda dfs: [])
+        f = iac.collect_findings(["some/random/Dockerfile"])
+        assert any("unregistered" in x.lower() for x in f["BLOCK"])
+
+    def test_engine_unavailable_sets_sentinel(self, monkeypatch):
+        monkeypatch.setattr(iac, "run_hadolint", lambda dfs: None)
+        f = iac.collect_findings(["components/da-tools/app/Dockerfile"])
+        assert "__engine_error__" in f
+
+
+# ---------------------------------------------------------------------------
+# main() exit codes (run_hadolint stubbed; real repo files are clean)
+# ---------------------------------------------------------------------------
+class TestMainExitCodes:
+    def test_list_returns_zero(self, monkeypatch):
+        monkeypatch.setattr(sys, "argv", ["prog", "--list"])
+        assert iac.main() == 0
+
+    def test_clean_returns_zero(self, monkeypatch):
+        monkeypatch.setattr(iac, "run_hadolint", lambda dfs: [])
+        monkeypatch.setattr(sys, "argv", ["prog", "--ci"])
+        assert iac.main() == 0
+
+    def test_block_returns_one_with_ci(self, monkeypatch):
+        monkeypatch.setattr(iac, "run_hadolint", lambda dfs: [
+            {"file": "x", "line": 1, "code": "DL3007",
+             "level": "error", "message": "no :latest"}])
+        monkeypatch.setattr(sys, "argv", ["prog", "--ci"])
+        monkeypatch.delenv("PR_BODY", raising=False)
+        assert iac.main() == 1
+
+    def test_engine_unavailable_returns_three(self, monkeypatch):
+        monkeypatch.setattr(iac, "run_hadolint", lambda dfs: None)
+        monkeypatch.setattr(sys, "argv", ["prog", "--ci"])
+        assert iac.main() == 3
+
+
+# ---------------------------------------------------------------------------
 # Registry integrity — every Dockerfile in the tree must be registered
 # ---------------------------------------------------------------------------
 class TestRegistry:
