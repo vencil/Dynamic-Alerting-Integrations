@@ -15,10 +15,19 @@ integration is covered when CI runs the iac-sast-check hook end-to-end):
 """
 from __future__ import annotations
 
+import importlib.util
 import os
 import sys
 
 import pytest
+
+# pathspec is a hard dependency of the V3 .dockerignore check. It's installed
+# in every workflow that runs this suite (ci.yml / validate.yaml /
+# nightly-mutation-pilot.yaml). The skipif below is a safety net: if some
+# future runner forgets the dep, the V3 tests SKIP instead of hard-failing —
+# a hard fail on the first CI run wedges the pre-push preflight-marker gate
+# (the bootstrap deadlock), and that escape is human-only.
+_HAS_PATHSPEC = importlib.util.find_spec("pathspec") is not None
 
 _TOOLS_DIR = os.path.join(
     os.path.dirname(__file__), "..", "..", "scripts", "tools", "lint"
@@ -109,6 +118,7 @@ class TestBroadCopy:
 # ---------------------------------------------------------------------------
 # V3 .dockerignore baseline (pathspec)
 # ---------------------------------------------------------------------------
+@pytest.mark.skipif(not _HAS_PATHSPEC, reason="pathspec not installed — V3 baseline check unavailable")
 class TestDockerignoreBaseline:
     def test_complete_baseline_no_gaps(self):
         text = "/.git/\n/.github/\n/scripts/\n/tests/\n/docs/\n*.md\n*.log\n.env*\n"
