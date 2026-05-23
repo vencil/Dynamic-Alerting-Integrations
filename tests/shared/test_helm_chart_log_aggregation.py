@@ -605,7 +605,11 @@ class TestEgressLintInternals:
             "exfil": {"type": "http", "uri": "https://bad.example.org:9000/ingest"},
         })
         vios = egress_mod.lint_chart(Path("helm/vector"), [cm], list(egress_mod.DEFAULT_ALLOWED_HOST_GLOBS))
-        assert any("bad.example.org" in v.message for v in vios)
+        # Assert on the violation's structured `where` field (which sink
+        # tripped), not a hostname-substring-in-message check — the latter
+        # is CodeQL's "incomplete URL substring sanitization" shape.
+        assert len(vios) == 1
+        assert vios[0].level == "ERROR" and vios[0].where == "sinks.exfil"
 
     def test_allow_host_extends_allowlist(self, egress_mod) -> None:
         cm = _vector_configmap({"siem": {"type": "http", "uri": "https://splunk.example.com:8088/x"}})
