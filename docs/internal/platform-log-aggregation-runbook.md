@@ -337,6 +337,22 @@ GitOps self-heal，**不在 chart 內、是部署叢集的責任**：
 > 從「偵測」升級到「預防 + 自癒」的唯一正解 —— 比自建 drift-detector
 > CronJob 更省、更可靠（借力既有 GitOps controller，不增元件）。
 
+## 7.6 殘餘風險 / 未強化項（deferred — 追蹤於 #566）
+
+紅隊 9 項已交付 5 項 + X-2 schema seam（見 §7.3.1 / §7.5）。以下 4 項
+為**已知、被接受、暫不強化**的殘餘攻擊面 —— 依「不超前需求建設」原則，
+待 compliance 客戶 / 威脅模型需求浮現再 pick off。incident triage 時要
+知道這條邊界**目前不被偵測 / 不被擋**：
+
+| # | 殘餘風險 | 目前邊界 |
+|---|---|---|
+| **T2-3** | Vector DaemonSet 以 root + `DAC_READ_SEARCH` 讀整個 node 的 `/var/log/pods` —— 被 RCE 後可讀同 node 上**所有** pod stdout，非僅 gateway | 未縮限;fix shape 是 distroless + `nobody` user + host 端 `/var/log/pods` group-readable 協調，需 host-side 配合 |
+| **T3-2/3** | `kubectl edit cm` 篡改 chargeback script / Vector VRL（改演算法 under-bill、改路由）**不留 GitOps commit trace** | §7.5.2 的 RBAC + GitOps self-heal 是正解;但在該邊界**未 enforce** 的環境（kind demo、或 GitOps scope 尚未涵蓋平台 Helm chart 者）**無 in-cluster drift detector** —— 疑似竄改須手動 diff live ConfigMap vs chart baseline |
+| **X-2** | 被 RCE 的 Vector 可偽造與真實**無異**的 audit row（timestamp / tenant_id / query 皆可填），SIEM 無法 attest「此 row 真的來自 gateway」 | 無 producer-side 簽章;#568 已預留 schema seam，full chain-of-custody 是 gateway-side 架構改動，待真實 compliance 客戶觸發（屆時開 ADR） |
+| **T5** | chart image 以 tag pin（`timberio/vector:0.55.0-…` 等），非 `@sha256:` digest;upstream registry 被攻陷即拉到惡意 binary | chart-local digest knob 已有（#567），但**無 repo-wide 強制 hook** —— 全域 enforce 屬 platform 供應鏈 backlog，非 #539-specific |
+
+> 狀態與 fix shape 以 [#566](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/566) 為 SSOT;本表只列「operator 該知道的殘餘邊界」，不重複 issue 內的 severity / rollout 細節。
+
 ## Refs
 
 - 源 issue：[#539](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/539)
