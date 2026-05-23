@@ -1,0 +1,37 @@
+# kube-linter config — Container/k8s SAST Layer 2 (TRK-312, epic #448).
+#
+# Engine for Mode B (render-then-lint). The Vibe wrapper
+# scripts/tools/lint/check_iac_helm.py runs `helm template <chart> | kube-linter
+# lint --config .kube-linter.yaml --format json` and applies the epic #448
+# severity->action mapping + a CENTRALIZED exemption registry (the wrapper's
+# EXEMPTIONS dict + docs/internal/iac-lint-baseline.md) — NOT in-chart
+# annotations. Rationale for centralized-not-in-chart: `helm template` strips
+# comments (capabilities driven by values via `toYaml` lose them entirely),
+# and one audit surface beats grepping every chart (SecOps single-pane).
+#
+# namespace handling (issue #448 day-2 hint 1): the wrapper renders with
+# `--namespace=lint-test` (solution (a)), so we do NOT silence unset-namespace
+# here — the rendered objects carry a namespace and the default checks stay
+# meaningful. This config carries NO `exclude` entries on purpose: a global
+# exclude would drop a guard for EVERY chart, whereas per-(chart,check)
+# exemptions live in the wrapper registry (self-referential rationale per AC2:
+# our own lint config also avoids blanket mutes).
+checks:
+  # Keep kube-linter's curated default set...
+  doNotAutoAddDefaults: false
+  # ...and explicitly enable the Critical-tier checks so coverage is
+  # deterministic even if kube-linter changes its defaults. (privileged /
+  # host-* / docker-sock / privilege-escalation map to Critical->BLOCK in the
+  # wrapper; the rest are default-on High checks.) Listing an already-default
+  # check is a harmless no-op.
+  include:
+    - privileged-container
+    - privilege-escalation-container
+    - host-network
+    - host-pid
+    - host-ipc
+    - docker-sock
+    - run-as-non-root
+    - no-read-only-root-fs
+    - unset-cpu-requirements
+    - unset-memory-requirements

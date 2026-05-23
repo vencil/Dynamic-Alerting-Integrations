@@ -126,6 +126,27 @@ repos:
         files: '(^|/)Dockerfile$|(^|/)\.dockerignore$|^\.hadolint\.yaml$|^scripts/tools/lint/check_iac_vibe_rules\.py$'
         additional_dependencies: ['pathspec']
 
+      # --- Container/k8s IaC SAST Layer 2 (#448 / TRK-312) ---
+      # Helm template security: `helm template <chart> | kube-linter` (Mode B)
+      # + source scan for ALLOW_EMPTY/INSECURE (Mode A) + capabilities.add
+      # rule. Severity->action with a CENTRALIZED exemption registry (in
+      # check_iac_helm.py; mirrored to docs/internal/iac-lint-baseline.md).
+      # MANUAL stage on purpose: rendering 9 charts via helm+kube-linter is
+      # ~1-2 min — too slow for every commit. The hard gate is the dedicated
+      # CI job "Container SAST L2 (Helm)" in ci.yml; run locally on demand:
+      #   pre-commit run iac-helm-sast-check --hook-stage manual --all-files
+      # Engines: helm + kube-linter on PATH (CI), else Docker fallback.
+      - id: iac-helm-sast-check
+        name: "Container SAST L2: Helm template (kube-linter + Vibe wrapper)"
+        entry: python3 -X utf8 scripts/tools/lint/check_iac_helm.py --ci
+        # language: python (not system) so `python3` resolves to pre-commit's
+        # venv interpreter — `system` would hit the MS Store python3 shim on
+        # Windows hosts (windows-mcp-playbook trap #63). No deps: pure stdlib.
+        language: python
+        pass_filenames: false
+        files: '(^|/)helm/.*\.(ya?ml|tpl)$|^\.kube-linter\.yaml$|^scripts/tools/lint/check_iac_helm\.py$'
+        stages: [manual]
+
       # --- Fast drift checks (< 5s each) ---
       - id: tool-map-check
         name: Tool map coverage

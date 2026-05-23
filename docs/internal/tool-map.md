@@ -151,6 +151,7 @@ lang: zh
 | `check_head_blob_hygiene.py` | Inspect committed HEAD blobs for corruption. |
 | `check_hub_badge_drift.py` | detect hardcoded tool counts in the Hub UI (PR-portal-7). |
 | `check_i18n_coverage.py` | check_i18n_coverage.py |
+| `check_iac_helm.py` | Container/k8s IaC SAST, Layer 2 (Helm templates). |
 | `check_iac_vibe_rules.py` | Container/k8s IaC SAST, Layer 1 (Dockerfile). |
 | `check_includes_sync.py` | Check that Chinese and English include snippets stay in sync. |
 | `check_jsx_i18n.py` | JSX 工具 i18n 完整性 lint |
