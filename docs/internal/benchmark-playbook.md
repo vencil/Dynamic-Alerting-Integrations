@@ -141,7 +141,7 @@ grep "ns/op" /tmp/bench.txt   # 僅看結果行
 
 ## Tier 1 PR-Time Bench Gate Operations
 
-> **Source of truth**：`.github/workflows/bench-gate-pr.yaml` + `.github/workflows/bench-override-audit.yaml`。本節是 operational 對應文件 — 設計理由見 [`bench-gate-rollout.md`](bench-gate-rollout.md)、10 個 SRE 防線 codification 見 user memory `feedback_github_actions_workflow_gotchas.md`。
+> **Source of truth**：`.github/workflows/bench-gate-pr.yaml` + `.github/workflows/bench-override-audit.yaml`。本節是 operational 對應文件 — 10 個 SRE 防線 codification 見 user memory `feedback_github_actions_workflow_gotchas.md`。
 
 ### 概觀
 
@@ -157,7 +157,7 @@ grep "ns/op" /tmp/bench.txt   # 僅看結果行
 | Override label | `override: bench-regress-ok`（admin/maintain only） |
 | Override 語意 | **Per-event, per-commit-state** — 不是 per-PR |
 
-> **設計演進**：v1 (parallel 2 runners) → v2 (sharded 6 runners, ~4 min wall) → v5 (single runner sequential, ~20 min deterministic)。v2 sharded design 因 GH-hosted runner pool 有 3+ CPU 類型、6-runner 全同構機率僅 ~1.7%，造成 ~98% INCONCLUSIVE 率被迫退役。v5 用「同 VM 跑兩次」徹底繞開 CPU 異質性。詳：[`bench-gate-rollout.md`](bench-gate-rollout.md) + memory `feedback_github_actions_workflow_gotchas.md` Trap 11/12。
+> **設計演進**：v1 (parallel 2 runners) → v2 (sharded 6 runners, ~4 min wall) → v5 (single runner sequential, ~20 min deterministic)。v2 sharded design 因 GH-hosted runner pool 有 3+ CPU 類型、6-runner 全同構機率僅 ~1.7%，造成 ~98% INCONCLUSIVE 率被迫退役。v5 用「同 VM 跑兩次」徹底繞開 CPU 異質性。詳：memory `feedback_github_actions_workflow_gotchas.md` Trap 11/12。
 
 ### 觸發條件深掘
 
@@ -211,7 +211,7 @@ Topology: single-runner sequential (base bench → drop_caches → pr bench → 
 1. **檢查 benchstat 輸出**，flagged regression 是哪些 benchmark？
 2. **這是真的 regression 嗎？**
    - **是真的** — 你的 diff 引入了 perf 問題：fix code（O(n²) 改 O(n log n)、減少 allocations、加 cache 等）後重 push
-   - **看起來像 noise** — 同 benchmark 在 nightly `bench-record.yaml` 沒這個趨勢？到 GitHub Actions UI 的 Checks panel 右上點 **"Re-run failed jobs"** 重跑。GH-hosted runner ~10% FP rate per design（[bench-gate-rollout.md](bench-gate-rollout.md) hardware floor 段）。**不要**用 `git commit --allow-empty` 或 close+reopen PR 重跑 — 那會污染 git history + 觸發無關的 webhook noise（Slack / Jira / labels）
+   - **看起來像 noise** — 同 benchmark 在 nightly `bench-record.yaml` 沒這個趨勢？到 GitHub Actions UI 的 Checks panel 右上點 **"Re-run failed jobs"** 重跑。GH-hosted runner ~10% FP rate per design（hardware floor）。**不要**用 `git commit --allow-empty` 或 close+reopen PR 重跑 — 那會污染 git history + 觸發無關的 webhook noise（Slack / Jira / labels）
    - **是 deliberate trade-off**（正確性修補 / 安全 patch / 演算法本質約束）→ 申請 override（下節）
 
 3. **重跑後仍 fail** → 多半是真的 regression，不要靠 retry 蒙混
@@ -250,7 +250,7 @@ Topology: single-runner sequential (base bench → drop_caches → pr bench → 
 
 ### Cross-references
 
-- **Design**：[`bench-gate-rollout.md`](bench-gate-rollout.md) — Tier 1 + Tier 2 split rationale、Scapegoat Trap / Noisy Neighbor Illusion / Broken Window / hardware floor escalation 設計
+- **Design rationale**（原 `bench-gate-rollout.md`，已隨內部 doc 清理移除）：Tier 1 + Tier 2 split、Scapegoat Trap / Noisy Neighbor Illusion / Broken Window / hardware floor escalation
 - **Codified gotchas**：user memory `feedback_github_actions_workflow_gotchas.md` — 13 traps from 12 rounds of adversarial review (Virtual-merge HEAD / Labeled trigger / fetch-depth / fork-PR write / fabricated SHA / Partial shard / alpha vs confidence / Ghost Green race / Blanket Immunity / Redundant Wait + Ghost Comment + Zero-regression crash / hetero CPU silent FN / sharding-on-hetero-pool antipattern / sequential dirty workspace + timeout tightrope)
 - **Issue tracker**：[#433](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/433) — W1 ✅ / W2 ✅ / W3 (FP rate observation, ~2 weeks) / W4 ✅ (Tier 2 shipped)
 
@@ -258,7 +258,7 @@ Topology: single-runner sequential (base bench → drop_caches → pr bench → 
 
 ## Tier 2 Release-Time Bench Gate Operations
 
-> **Source of truth**：`.github/workflows/bench-gate-release.yaml`。設計 rationale 見 [`bench-gate-rollout.md`](bench-gate-rollout.md) Tier 1 + Tier 2 split。
+> **Source of truth**：`.github/workflows/bench-gate-release.yaml`（Tier 1 + Tier 2 split rationale）。
 
 ### 概觀
 
@@ -338,7 +338,7 @@ workflow_dispatch 跑完後讀 step summary，決定要不要 tag。
 
 ### Cross-references (Tier 2 段)
 
-- **設計**：[`bench-gate-rollout.md`](bench-gate-rollout.md)（同 Tier 1）
+- **設計**：見 Tier 1 段 Cross-references（原 `bench-gate-rollout.md` 已隨內部 doc 清理移除）
 - **資產供應**：`.github/workflows/release-attach-bench-baseline.yaml`（PR #117）— 把 nightly bench-record artifact 附到每個 release 作為 trend record。**注意：Tier 2 不依賴此資產**（會 freshly re-bench prior tag），但資產可作獨立的 long-term 趨勢檢視工具
 - **Nightly source**：`.github/workflows/bench-record.yaml` — 每天 03:00 UTC 跑，artifact 留 90 天
 
@@ -414,7 +414,7 @@ func silenceLogs(b *testing.B) {
 > **Bench regression gate**:
 > - Phase 1 (nightly informational) 已落地（`bench-record.yaml`）。
 > - Phase 2 **redesigned** via issue [#433](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/433) (supersedes closed #67) — split into **Tier 1** (PR-time, base-vs-PR, blame correctness) + **Tier 2** (release-time, release-vs-release, cumulative drift). Tier 1 已 ship 並啟用：`.github/workflows/bench-gate-pr.yaml`。Tier 2 待 W4 開發。
-> - 完整 design + 5 個 SRE 防線 codification + hardware floor escalation：[`bench-gate-rollout.md`](bench-gate-rollout.md)。
+> - 完整 design + 5 個 SRE 防線 codification + hardware floor escalation：codified gotchas 見 memory `feedback_github_actions_workflow_gotchas.md`（原 `bench-gate-rollout.md` 已移除）。
 > - PR-time operational flow（觸發條件 / step summary 解讀 / regression 處理 / override 申請）：[§Tier 1 PR-Time Bench Gate Operations](#tier-1-pr-time-bench-gate-operations) below。
 
 > **Scope + honest caveats**：

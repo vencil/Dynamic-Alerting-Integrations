@@ -205,5 +205,5 @@ v2.8.0 落地 **5-anchor end-to-end alert fire-through harness** (`tests/e2e-ben
 | **完整 micro-bench numbers** (`Resolve_*` 系列 / synthetic fixture gen / schema validation / pytest-benchmark) | [Benchmark Playbook §Engineering Reference Benchmarks](internal/benchmark-playbook.md#engineering-reference-benchmarks) |
 | **`IncrementalLoad_*` / `ScanDirFileHashes_*` 1000-tenant baseline** | [Benchmark Playbook §v2.8.0 1000-Tenant Hierarchical Baseline](internal/benchmark-playbook.md#v280-1000-tenant-hierarchical-baseline-phase-1-b-1) |
 | **量測踩坑 & ops** (port-forward stability / `BENCH_OUT_DIR` isolation / `bench_wrapper.sh`) | [Benchmark Playbook §踩坑記錄 Lessons Learned](internal/benchmark-playbook.md#踩坑記錄-lessons-learned) |
-| **Bench-gate-pr CI 機制** (Tier 1 / override label / sharding) | [Bench Gate Rollout](internal/bench-gate-rollout.md) · `.github/workflows/bench-gate-pr.yaml` |
+| **Bench-gate-pr CI 機制** (Tier 1 / override label / sharding) | `.github/workflows/bench-gate-pr.yaml` |
 | **Architecture & ADR 引用** | [Architecture & Design](architecture-and-design.md) · [ADR-016](adr/016-conf-d-directory-hierarchy-mixed-mode.md) · [ADR-017](adr/017-defaults-yaml-inheritance-dual-hash.md) |
