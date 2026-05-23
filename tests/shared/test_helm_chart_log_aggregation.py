@@ -536,3 +536,145 @@ class TestLogEgressPolicy:
         # allowlist glob match
         assert mod._host_allowed("victorialogs.monitoring.svc", mod.DEFAULT_ALLOWED_HOST_GLOBS)
         assert not mod._host_allowed("attacker.evil.com", mod.DEFAULT_ALLOWED_HOST_GLOBS)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# #566 batch D — in-process unit tests for the egress lint internals.
+# These call lint_chart()/_iter_* directly with synthetic manifests (no helm,
+# no subprocess) so coverage.py actually measures the rule logic — the
+# subprocess-based tests above exercise behavior but don't count toward coverage.
+# ──────────────────────────────────────────────────────────────────────────────
+
+@pytest.fixture(scope="session")
+def egress_mod(repo_root: Path):
+    import importlib.util
+    import sys
+    spec = importlib.util.spec_from_file_location(
+        "check_log_egress_policy",
+        repo_root / "scripts/tools/lint/check_log_egress_policy.py",
+    )
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["check_log_egress_policy"] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _vector_configmap(sinks: dict) -> dict:
+    """Build a synthetic Vector ConfigMap manifest with an embedded
+    vector.yaml carrying the given sinks dict."""
+    return {
+        "kind": "ConfigMap",
+        "metadata": {"name": "vector-config"},
+        "data": {"vector.yaml": yaml.safe_dump({"sinks": sinks})},
+    }
+
+
+def _workload(kind: str, env: list[dict]) -> dict:
+    """Build a synthetic workload manifest (Deployment/DaemonSet/CronJob)
+    with one container carrying the given env list."""
+    container = {"name": "vector", "env": env}
+    if kind == "CronJob":
+        return {"kind": kind, "spec": {"jobTemplate": {"spec": {"template": {"spec": {"containers": [container]}}}}}}
+    return {"kind": kind, "spec": {"template": {"spec": {"containers": [container]}}}}
+
+
+class TestEgressLintInternals:
+    """In-process coverage of check_log_egress_policy.lint_chart + helpers."""
+
+    def test_allowlisted_sink_no_violation(self, egress_mod, repo_root: Path) -> None:
+        cm = _vector_configmap({
+            "victorialogs": {"type": "elasticsearch",
+                             "endpoints": ["http://victorialogs.monitoring.svc:9428/insert/elasticsearch/"]},
+        })
+        vios = egress_mod.lint_chart(Path("helm/vector"), [cm], list(egress_mod.DEFAULT_ALLOWED_HOST_GLOBS))
+        assert vios == []
+
+    def test_nonallowlisted_sink_endpoint_violation(self, egress_mod) -> None:
+        cm = _vector_configmap({
+            "exfil": {"type": "http", "endpoints": ["http://attacker.example.net/x"]},
+        })
+        vios = egress_mod.lint_chart(Path("helm/vector"), [cm], list(egress_mod.DEFAULT_ALLOWED_HOST_GLOBS))
+        assert len(vios) == 1
+        assert vios[0].level == "ERROR"
+        assert "non-allowlisted" in vios[0].message
+
+    def test_sink_uri_scalar_form_checked(self, egress_mod) -> None:
+        """http sinks use `uri` (scalar) not `endpoints` (list) — both paths
+        must be inspected."""
+        cm = _vector_configmap({
+            "exfil": {"type": "http", "uri": "https://bad.example.org:9000/ingest"},
+        })
+        vios = egress_mod.lint_chart(Path("helm/vector"), [cm], list(egress_mod.DEFAULT_ALLOWED_HOST_GLOBS))
+        assert any("bad.example.org" in v.message for v in vios)
+
+    def test_allow_host_extends_allowlist(self, egress_mod) -> None:
+        cm = _vector_configmap({"siem": {"type": "http", "uri": "https://splunk.example.com:8088/x"}})
+        globs = list(egress_mod.DEFAULT_ALLOWED_HOST_GLOBS) + ["splunk.example.com"]
+        assert egress_mod.lint_chart(Path("helm/vector"), [cm], globs) == []
+
+    def test_reserved_env_fieldref_allowed(self, egress_mod) -> None:
+        """The chart's own VECTOR_SELF_* via fieldRef must NOT be flagged."""
+        m = _workload("DaemonSet", [
+            {"name": "VECTOR_SELF_NODE_NAME", "valueFrom": {"fieldRef": {"fieldPath": "spec.nodeName"}}},
+        ])
+        assert egress_mod.lint_chart(Path("helm/vector"), [m], []) == []
+
+    def test_reserved_env_literal_violation(self, egress_mod) -> None:
+        m = _workload("DaemonSet", [{"name": "VECTOR_SELF_NODE_NAME", "value": "pwned"}])
+        vios = egress_mod.lint_chart(Path("helm/vector"), [m], [])
+        assert len(vios) == 1 and "reserved" in vios[0].message.lower()
+
+    def test_reserved_env_secretref_also_violation(self, egress_mod) -> None:
+        """A reserved var sourced from a Secret (not fieldRef) is still an
+        override — only fieldRef is the legitimate form."""
+        m = _workload("DaemonSet", [
+            {"name": "VECTOR_SECRET_THING", "valueFrom": {"secretKeyRef": {"name": "s", "key": "k"}}},
+        ])
+        vios = egress_mod.lint_chart(Path("helm/vector"), [m], [])
+        assert len(vios) == 1
+
+    def test_sensitive_env_literal_violation(self, egress_mod) -> None:
+        m = _workload("CronJob", [{"name": "SPLUNK_TOKEN", "value": "hardcoded"}])
+        vios = egress_mod.lint_chart(Path("helm/chargeback-aggregator"), [m], [])
+        assert len(vios) == 1 and "valueFrom" in vios[0].message
+
+    def test_sensitive_env_valuefrom_allowed(self, egress_mod) -> None:
+        m = _workload("Deployment", [
+            {"name": "SPLUNK_TOKEN", "valueFrom": {"secretKeyRef": {"name": "splunk", "key": "token"}}},
+        ])
+        assert egress_mod.lint_chart(Path("helm/vector"), [m], []) == []
+
+    def test_unparseable_embedded_vector_yaml_is_error(self, egress_mod) -> None:
+        cm = {"kind": "ConfigMap", "metadata": {"name": "vector-config"},
+              "data": {"vector.yaml": "sinks: [unclosed"}}
+        vios = egress_mod.lint_chart(Path("helm/vector"), [cm], [])
+        assert any("unparseable" in v.message for v in vios)
+
+    def test_iter_container_envs_covers_all_kinds(self, egress_mod) -> None:
+        for kind in ("Deployment", "DaemonSet", "StatefulSet", "Job", "CronJob"):
+            m = _workload(kind, [{"name": "X", "value": "1"}])
+            envs = list(egress_mod._iter_container_envs(m))
+            assert envs and envs[0][1]["name"] == "X", f"{kind} env not iterated"
+        # unknown kind yields nothing
+        assert list(egress_mod._iter_container_envs({"kind": "Service", "spec": {}})) == []
+
+    def test_main_skips_nonexistent_chart_and_exits_clean(self, egress_mod, capsys) -> None:
+        """main() with a chart dir that has no Chart.yaml renders nothing,
+        reports no violations, exits 0 — covers the arg-parse + skip +
+        clean-exit path without needing helm."""
+        egress_mod.main(["--chart", "/nonexistent-chart-dir"])
+        out = capsys.readouterr().out
+        assert "no violations" in out
+
+    def test_main_json_output_path(self, egress_mod, capsys, monkeypatch) -> None:
+        """--json path: stub render_chart so no helm is needed, feed a bad
+        sink, assert JSON violations are emitted + SystemExit(1)."""
+        bad_cm = _vector_configmap({"exfil": {"type": "http", "uri": "http://attacker.example.net/x"}})
+        monkeypatch.setattr(egress_mod, "render_chart", lambda *a, **k: [bad_cm])
+        # Point at a real chart dir so the Chart.yaml existence check passes.
+        with pytest.raises(SystemExit) as exc:
+            egress_mod.main(["--chart", "helm/vector", "--json"])
+        assert exc.value.code == 1
+        import json as _json
+        payload = _json.loads(capsys.readouterr().out)
+        assert any("non-allowlisted" in v["message"] for v in payload)
