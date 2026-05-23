@@ -22,6 +22,14 @@
 # Re-include the static assets da-portal's Dockerfile COPYs from the repo-root
 # context. Without these the da-portal image build fails ("not found") because
 # the /docs/ exclusion above would prune them from the context.
+#
+# NOTE: REQUIRES BuildKit. This exclude-then-re-include (`/docs/` then
+# `!/docs/interactive/`) works under BuildKit (CI uses docker/setup-buildx;
+# `make pre-tag` uses buildx; Docker 23+ defaults to BuildKit). The LEGACY
+# builder (`DOCKER_BUILDKIT=0`) abandons an excluded dir and IGNORES the
+# re-include → a local `docker build -f components/da-portal/Dockerfile .`
+# fails with "docs/interactive: not found". Fix on such hosts: enable
+# BuildKit (`DOCKER_BUILDKIT=1` / `docker buildx build`).
 !/docs/interactive/
 !/docs/assets/
 !/docs/.nojekyll

@@ -18,6 +18,12 @@ project-specific rules that hadolint cannot express:
       the issue body labelled this "DL3025"; the real DL3025 is "use JSON
       notation for CMD/ENTRYPOINT" (kept ON by default) — the broad-COPY
       intent has no native hadolint rule, hence this wrapper rule.
+      Scope (accepted residual risk): V2 targets the catastrophic
+      context-root sweep (bare ``.`` / ``./`` / ``*`` pulls secrets/temp
+      files into the image). Directory-constrained globs like ``src/*`` or
+      ``/*.py`` are NOT flagged — they carry a dir constraint and aren't the
+      whole-context vector; full coverage would need an AST parser (ROI-
+      negative for this floor).
 
   V3  .dockerignore fix-then-enforce — each Dockerfile's *build context root*
       must have a .dockerignore covering the mandated baseline. The context
