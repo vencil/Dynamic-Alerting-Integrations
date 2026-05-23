@@ -191,7 +191,11 @@ jobs:
         # has 4 vCPUs; local benchmark on 16-core showed 3.95x at -n
         # auto (160s -> 40s) and 2.51x at -n 4 (160s -> 63s). CI uses
         # -n auto which resolves to 4 here.
-        run: pip install pyyaml croniter pytest pytest-cov pytest-timeout pytest-xdist promql-parser hypothesis
+        # pathspec: check_iac_vibe_rules.py (Container SAST L1, #448/TRK-311)
+        # uses it for .dockerignore baseline matching; its unit tests import
+        # the module, so the dep must be explicit here (not relied on
+        # transitively).
+        run: pip install pyyaml croniter pytest pytest-cov pytest-timeout pytest-xdist promql-parser hypothesis pathspec
 
       - name: Collect tests
         # CI skips 3 slow/benchmark test suites for speed:

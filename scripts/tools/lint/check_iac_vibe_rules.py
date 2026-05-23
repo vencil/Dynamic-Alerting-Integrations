@@ -198,9 +198,25 @@ def dockerignore_baseline_gaps(dockerignore_text: str) -> list[str]:
     """
     import pathspec
 
-    spec = pathspec.PathSpec.from_lines(
-        "gitwildmatch", dockerignore_text.splitlines()
-    )
+    # Strip a leading "/" (root anchor) from each pattern before building the
+    # coverage spec. We only care *whether* a baseline dir is excluded, not the
+    # anchoring nuance — and pathspec versions disagree on whether a
+    # root-anchored dir pattern (`/tests/`) matches a root-level path
+    # (`tests/probe`). Normalising to the unanchored form (`tests/`) matches
+    # consistently across versions while keeping the shipped files anchored
+    # (anchored is intentional — see the .dockerignore headers — so that e.g.
+    # `components/tenant-api/docs/` is NOT pruned from a repo-root build). The
+    # `!` negation prefix is preserved so re-includes still subtract.
+    norm_lines: list[str] = []
+    for raw in dockerignore_text.splitlines():
+        s = raw.strip()
+        if s.startswith("!/"):
+            norm_lines.append("!" + s[2:])
+        elif s.startswith("/"):
+            norm_lines.append(s[1:])
+        else:
+            norm_lines.append(raw)
+    spec = pathspec.PathSpec.from_lines("gitwildmatch", norm_lines)
     return [
         label
         for label, probe in DOCKERIGNORE_BASELINE
