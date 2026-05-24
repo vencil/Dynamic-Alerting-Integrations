@@ -18,6 +18,22 @@ service:
 exporter:
   listenAddr: ":8080"
   reloadInterval: "30s"    # How often to check config file for changes
+  # #459 memory levers (default off = unchanged Go runtime behavior).
+  # Reach for these only under abnormally high reload cadence; see
+  # docs/integration/deployment-sizing.md before tuning.
+  #
+  # goMemLimit: Go soft heap ceiling (GOMEMLIMIT env, Go 1.19+). Empty =
+  # unset (effectively unlimited). When set, the runtime paces GC harder
+  # near the limit and returns idle pages to the OS sooner — the primary
+  # bound on go_memstats_sys_bytes / heap_idle creep. Accepts the Go suffix
+  # form, e.g. "96MiB". Keep it ABOVE steady-state heap_inuse and BELOW the
+  # container memory limit (a good start: ~75% of resources.limits.memory).
+  goMemLimit: ""
+  # freeOsMemAfterReload: call runtime/debug.FreeOSMemory() after each reload
+  # (one extra STW GC per reload). Off by default; turn on only if GOMEMLIMIT
+  # alone doesn't bound the creep AND reload cadence is low enough that the
+  # per-reload GC cost is negligible.
+  freeOsMemAfterReload: false
 
 # Threshold config (embedded in ConfigMap)
 # This is the actual alerting threshold configuration.

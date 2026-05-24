@@ -54,6 +54,7 @@ lang: zh
 | `docs/index.md` (.en.md) | All | Dynamic Alerting Platform — 首頁 |
 | `docs/integration/byo-alertmanager-integration.md` (.en.md) | Platform Engineers, SREs | BYO Alertmanager 整合指南 |
 | `docs/integration/byo-prometheus-integration.md` (.en.md) | Platform Engineers, SREs | Bring Your Own Prometheus (BYOP) — 現有監控架構整合指南 |
+| `docs/integration/deployment-sizing.md` (.en.md) | Platform Engineers, SREs, DevOps | 部署容量規劃指南 |
 | `docs/integration/federation-integration.md` (.en.md) | Platform Engineers | Federation Integration Guide |
 | `docs/integration/gitops-deployment.md` (.en.md) | Platform Engineers, DevOps | GitOps 部署指南 |
 | `docs/integration/operator-alertmanager-integration.md` (.en.md) | Platform Engineers | Operator Alertmanager 整合指南 |

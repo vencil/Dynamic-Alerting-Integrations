@@ -103,6 +103,10 @@ TRACKED_METRICS = (
     "go_memstats_alloc_bytes",          # current live heap
     "go_memstats_heap_inuse_bytes",     # heap pages actively used
     "go_memstats_heap_idle_bytes",      # heap pages held but unused
+    "go_memstats_heap_released_bytes",  # idle pages returned to OS (#459: the
+                                        # direct return-to-OS signal — rises
+                                        # when GOMEMLIMIT / FreeOSMemory levers
+                                        # reclaim the heap_idle high-water creep)
     "go_memstats_heap_objects",         # live object count (proxy for leak)
     "go_gc_duration_seconds_count",     # cumulative GC count (informational)
 )

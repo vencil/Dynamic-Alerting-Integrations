@@ -58,12 +58,12 @@ type flatScanState struct {
 // 1000-tenant baseline; scales linearly with tree size.
 type hierarchyState struct {
 	enabled        bool
-	tenantSources  map[string]string          // tenantID → absolute tenant file path
-	hashes         map[string]string          // absolute Clean path → 64-char SHA-256
-	mtimes         map[string]fileStat        // absolute Clean path → mtime+size
-	mergedHashes   map[string]string          // tenantID → 16-char merged_hash
-	graph          *InheritanceGraph          // defaults↔tenants dependency map
-	parsedDefaults map[string]map[string]any  // absolute Clean path → parsed defaults dict
+	tenantSources  map[string]string         // tenantID → absolute tenant file path
+	hashes         map[string]string         // absolute Clean path → 64-char SHA-256
+	mtimes         map[string]fileStat       // absolute Clean path → mtime+size
+	mergedHashes   map[string]string         // tenantID → 16-char merged_hash
+	graph          *InheritanceGraph         // defaults↔tenants dependency map
+	parsedDefaults map[string]map[string]any // absolute Clean path → parsed defaults dict
 }
 
 // debouncerState bundles the v2.7.0 Phase 3 burst-coalescing fields.
@@ -130,6 +130,15 @@ type ConfigManager struct {
 	// the routing destination. The field exists today as the injection
 	// seam.
 	logger *log.Logger
+
+	// freeOSMemAfterReload, when true, makes the reload pipeline call
+	// runtime/debug.FreeOSMemory() after each diffAndReload so the Go
+	// runtime returns idle heap pages to the OS instead of holding the
+	// high-water mark. Opt-in lever for #459 (sys_bytes / heap_idle creep
+	// under sustained reload); default false = unchanged behavior. Set
+	// once at startup from the -free-os-mem-after-reload flag, before
+	// WatchLoop starts.
+	freeOSMemAfterReload bool
 
 	// Sub-struct field groups — v2.8.0 PR-5 decomposed the original
 	// 14-mixed-fields ConfigManager into named concerns. Field accesses
@@ -238,6 +247,27 @@ func (m *ConfigManager) getLogger() *log.Logger {
 		m.logger = log.Default()
 	}
 	return m.logger
+}
+
+// SetFreeOSMemAfterReload toggles the post-reload runtime/debug.FreeOSMemory()
+// call (#459). Production wires this from the -free-os-mem-after-reload flag
+// in main(); call it before WatchLoop starts. Default (never called) is
+// false, preserving the pre-#459 behavior where the Go runtime decides
+// return-to-OS pacing on its own.
+func (m *ConfigManager) SetFreeOSMemAfterReload(enabled bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.freeOSMemAfterReload = enabled
+}
+
+// freeOSMemEnabled reads the lever under RLock. Mirrors getMetrics/getLogger:
+// the flag is set once before WatchLoop starts, but the read happens on the
+// reload goroutine, so the RLock keeps the race detector quiet against a
+// test that toggles it concurrently.
+func (m *ConfigManager) freeOSMemEnabled() bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.freeOSMemAfterReload
 }
 
 // Mode returns "directory" or "single-file" for diagnostics.
@@ -477,8 +507,8 @@ func (m *ConfigManager) IncrementalLoad() error {
 
 		merged = ThresholdConfig{
 			Defaults:     prev.Defaults,     // shared (immutable between patches)
-			StateFilters: prev.StateFilters,  // shared
-			Profiles:     prev.Profiles,      // shared
+			StateFilters: prev.StateFilters, // shared
+			Profiles:     prev.Profiles,     // shared
 			Tenants:      make(map[string]map[string]ScheduledValue, len(prev.Tenants)),
 		}
 		// Shallow-copy tenants map (keys only, values are immutable per-tenant maps)
@@ -837,13 +867,13 @@ func (m *ConfigManager) GetConfig() *ThresholdConfig {
 // Field naming matches describe_tenant.py JSON output + tenant-api Go
 // shape to keep cross-language consumers drop-in compatible.
 type EffectiveConfig struct {
-	TenantID      string            // tenant identifier
-	SourceFile    string            // absolute path to tenant YAML
-	SourceHash    string            // SHA-256[:16] of raw tenant bytes
-	MergedHash    string            // SHA-256[:16] of canonical merged JSON
-	DefaultsChain []string          // L0→Ln defaults file paths (root first)
-	Config        map[string]any    // merged tenant config (full dict)
-	Warnings      []string          // merge-time warnings (currently empty)
+	TenantID      string         // tenant identifier
+	SourceFile    string         // absolute path to tenant YAML
+	SourceHash    string         // SHA-256[:16] of raw tenant bytes
+	MergedHash    string         // SHA-256[:16] of canonical merged JSON
+	DefaultsChain []string       // L0→Ln defaults file paths (root first)
+	Config        map[string]any // merged tenant config (full dict)
+	Warnings      []string       // merge-time warnings (currently empty)
 }
 
 // Resolve returns the effective config for one tenant, computed on

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 // waitFor polls `cond` until it returns true or the timeout expires. Returns
@@ -511,6 +512,61 @@ func TestSyncFallback_EmitsReloadDurationButNoBatch(t *testing.T) {
 	}
 	if gotBatch != 0 {
 		t.Errorf("sync fallback should NOT observe debounce batch; got _count=%d", gotBatch)
+	}
+}
+
+// TestFreeOSMemory_DisabledByDefault_NoCounterBump pins the #459 default:
+// without the lever, a reload must NOT issue debug.FreeOSMemory(), so the
+// counter stays at 0. The window=0 sync path makes the reload run inline,
+// so the assertion needs no clock/quiescence dance.
+func TestFreeOSMemory_DisabledByDefault_NoCounterBump(t *testing.T) {
+	t.Parallel()
+	fresh, _ := freshMetrics(t)
+	dir := t.TempDir()
+	writeHierarchicalFixture(t, dir, "90")
+
+	m := NewConfigManagerWithDebounce(dir, 0)
+	m.SetMetrics(fresh)
+	defer m.Close()
+	if err := m.Load(); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	// Lever left at its zero-value default — no SetFreeOSMemAfterReload call.
+
+	m.triggerDebouncedReload(ReloadReasonSource)
+
+	if got := testutil.ToFloat64(fresh.freeOSMemory); got != 0 {
+		t.Errorf("lever off: da_config_free_os_memory_total should be 0, got %v", got)
+	}
+}
+
+// TestFreeOSMemory_EnabledBumpsCounterPerReload verifies the lever fires
+// exactly once per reload cycle. The window=0 sync path runs diffAndReload
+// (and therefore maybeFreeOSMemory) inline on the calling goroutine, so N
+// triggers deterministically yield N increments — even though each reload
+// is a content no-op, maybeFreeOSMemory is keyed off the lever, not off
+// reloaded>0, matching the production "free after every reload window".
+func TestFreeOSMemory_EnabledBumpsCounterPerReload(t *testing.T) {
+	t.Parallel()
+	fresh, _ := freshMetrics(t)
+	dir := t.TempDir()
+	writeHierarchicalFixture(t, dir, "90")
+
+	m := NewConfigManagerWithDebounce(dir, 0)
+	m.SetMetrics(fresh)
+	m.SetFreeOSMemAfterReload(true)
+	defer m.Close()
+	if err := m.Load(); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	const reloads = 3
+	for i := 0; i < reloads; i++ {
+		m.triggerDebouncedReload(ReloadReasonSource)
+	}
+
+	if got := testutil.ToFloat64(fresh.freeOSMemory); got != float64(reloads) {
+		t.Errorf("lever on: expected da_config_free_os_memory_total=%d (one FreeOSMemory per sync reload), got %v", reloads, got)
 	}
 }
 
