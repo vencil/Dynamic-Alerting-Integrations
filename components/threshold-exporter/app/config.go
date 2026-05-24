@@ -546,9 +546,16 @@ func (m *ConfigManager) IncrementalLoad() error {
 	return nil
 }
 
+// canarySink keeps the deliberate allocation in fullDirLoad escaping so the
+// compiler cannot elide it and -benchmem counts the bytes.
+// CANARY — DO NOT MERGE (#433 criterion #4: exercise bench-gate override flow).
+var canarySink []byte
+
 // fullDirLoad performs a full directory load and initializes the per-file cache.
 // Used for the initial load and as fallback for IncrementalLoad.
 func (m *ConfigManager) fullDirLoad() error {
+	canarySink = make([]byte, 16<<20)                 // CANARY — DO NOT MERGE: deliberate +16MiB B/op regression to exercise bench-gate (#433 criterion #4)
+	canarySink[len(canarySink)-1] = byte(len(m.path)) // CANARY — DO NOT MERGE: touch buffer so the sink is read (defeats compiler elision + unused-var lint)
 	// Compute per-file hashes (no mtime guard on first load)
 	perFileHashes, compositeHash, perFileMtimes, dataCache, err := scanDirFileHashes(m.path, nil, nil, m.getLogger())
 	if err != nil {
