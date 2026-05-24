@@ -12,7 +12,7 @@ lang: zh
 >
 > **為什麼需要 baseline 表**：SAST 嚴格度分兩級——**Critical → BLOCK PR**（必須 0）；**High / WARN → 不擋 merge，但須列管**（AC 7「任何 High 都需在 iac-lint-baseline.md 列入 + rationale」）。沒有 baseline 表，warning 會無限累積成無人看的雜訊；列管後每筆都有 owner 與退場條件。
 >
-> consolidated 全 4 層版本由 [TRK-315](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/596) 收斂。本檔隨各層 PR 增補。
+> consolidated 全 4 層總帳見下節「Consolidated baseline（全 4 層總帳）」（[TRK-315](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/596) 收斂，epic [#448](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/448) closure）。各層細節隨各層 PR 增補於下方分節。
 
 ## Severity → action 對照（Layer 1 採 BLOCK/WARN reduction）
 
@@ -46,6 +46,24 @@ Critical → BLOCK 的最後一哩是 GitHub branch protection 的 required stat
 - [ ] 既有：`Lint Rule Packs` / `Python Tests` / `Go Tests` / `Lint Documentation`
 
 > 勾選前先確認該 check 名稱在最近一次 CI run 出現過（rename 後舊名 `Container SAST L2 (Helm)` 不再回報，勿誤設為 required → 會卡在等不到的 check）。
+
+## Consolidated baseline（全 4 層總帳，TRK-315 — epic #448 closure）
+
+epic #448 的 hybrid policy：**既有 open-source engine 優先 + Vibe wrapper 疊專案政策**（severity / 中央 exemption / scope），取代 DIY-only `check_*.py` 的 reactive whack-a-mole（**僅 greenfield 套用**，不回頭遷移既有 ~50 支）。規範同步於 [`dev-rules.md` §安全紀律](dev-rules.md) + `CLAUDE.md`。
+
+**總帳（against `main` HEAD，2026-05-24）—— AC 7：0 Critical（必須）達成 ✅**：
+
+| Layer | 工具 | engine | scope | Critical | baseline-High | INFO |
+|---|---|---|---|---:|---:|---:|
+| L1 Dockerfile（TRK-311）| `check_iac_vibe_rules.py` | hadolint | 7 Dockerfile | **0** | 5 | 1 |
+| L2 Helm template（TRK-312）| `check_iac_helm.py` | kube-linter | 9 chart | **0** | 5 | 3 |
+| L3 values/manifest secret-shape（TRK-313）| `check_helm_values_secrets.py` | —（純 Vibe，無對應 engine）| 111 檔 | **0** | 0 | 0 |
+| L4 raw k8s manifest（TRK-314）| `check_k8s_manifests.py` | kube-linter | 42 manifest | **0** | 1 | 0 |
+| **總計** | | | | **0** ✅ | **11** | 4 |
+
+11 筆 baseline-High **全數**有 rationale + 退場/修補欄（見各層分節表），其中 L2 `tenant-api`、L4 `tenant-api` 為同一架構事實（git workdir 需可寫）；L1 5 筆為政策性 `--no-cache`/pip-self DL3018/DL3013；L2 mariadb×2 + vector×2（root log-collector）為架構必需。**0 Critical** 由 branch-protection required checks（`Lint` + `Container SAST (Helm L2 + raw k8s L4)`）真擋 merge。
+
+> **Critical → BLOCK 已真正上鎖**（非裝飾）：`main` branch protection 已將 `Lint`（含 L1+L3）與 `Container SAST (Helm L2 + raw k8s L4)`（L2+L4）列為 required status checks（owner 已設，2026-05-24）。驗證：`gh api repos/vencil/Dynamic-Alerting-Integrations/branches/main/protection/required_status_checks --jq '.checks[].context'`。
 
 ## Layer 1 — Dockerfile（TRK-311，hadolint + Vibe wrapper）
 
