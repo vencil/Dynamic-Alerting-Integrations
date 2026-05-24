@@ -62,9 +62,19 @@ INFO（不列管）：`federation-gateway` / `federation-proxy` / `threshold-exp
 
 > **嚴重度門檻**：Critical（`privileged-container` / `privilege-escalation-container` / `host-network` / `host-pid` / `host-ipc` / `docker-sock`）→ BLOCK 無 escape；High（`run-as-non-root` / `no-read-only-root-fs` / `unset-cpu·memory-requirements` / wrapper `capabilities-add`）→ 須登記 EXEMPTIONS 才豁免，否則 BLOCK；其餘 kube-linter check → INFO。
 
-## Layer 3 — Helm values secret-shape（TRK-313）
+## Layer 3 — Helm values secret-shape（TRK-313，純 Vibe wrapper）
 
-_待 TRK-313 落地後增補。_
+跑法：`python3 scripts/tools/lint/check_helm_values_secrets.py`（hook `helm-values-secrets-check`，default stage，diff-only；`--full-scan` 做週期 audit）。**無 open-source engine**——YAML-shape 檢查 kube-linter/trivy 無對應。
+
+抓「key 名像 secret（`password`/`token`/`apiKey`/`secret`/`clientSecret`…）但值是非空字面字串」。class (b)（negative pattern + false-positive escape），diff-only + PR-body bypass（`bypass-lint: helm-values-secrets`）。
+
+**與 [#445](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/445) trufflehog 互補不衝突**：trufflehog 抓**高熵值**；本 lint 抓 **YAML shape**（連低熵 `password: hunter2` 都抓，那是 entropy detector 漏的）。兩者不雙重 fire——本 lint **ship 在 0**（所有現存 match 皆白名單），只對**新**硬編字面才響。
+
+**白名單（合法、非硬編 secret）**：空值 `""` / `${VAR}` 環境插值 / `{{ .Values.* }}` template ref / placeholder（`<changeme>`/`REPLACE_WITH_*`/`PLACEHOLDER`/`YOUR_*`）/ bool / numeric / Go-duration（`4h`/`30s`，給 `tokenTTL` 類）/ `valueFrom`·`secretKeyRef`。**Key-allowlist**（名含 secret 但為 ref/flag）：`createSecret`/`secretName`/`existingSecret`/`secretRef`/`secretKeyRef`/`secretKey`/`tokenTTL`。
+
+**Scope（self + Gemini 對抗式 review 後擴大）**：`helm/*/values*.yaml` + `helm/values*.yaml`（top-level overlay）+ `helm/*/templates/*.yaml`（**所有 template,含 ConfigMap** —— secret 誤置於 ConfigMap 是最常見外洩;key-name 語意掃描適用所有 manifest）。key match 採 **endswith**（holder 結尾是 secret 字;`passwordPolicy`/`tokenTTL` 等 config 不誤報）；白名單另含 **YAML alias/anchor**（`*x`/`&x`）。**已知限制（accepted residual risk）**：line-based KEY:VALUE 掃描不解析 YAML AST,故 block scalar（`key: |`/`>`）與 list item（`- "literal"`）內的硬編值**不掃**,交 #445 trufflehog 高熵捕捉。
+
+**Baseline 截至 2026-05-24**：scope **69 檔**,**0 findings** ✅。現存全為白名單命中（mariadb `rootPassword: ""`、oauth2proxy `REPLACE_WITH_*`、`{{ .Values.* | quote }}`、`${SPLUNK_TOKEN}` 註解、`secretKey: *.pem` ref、`tokenTTL: 4h` duration 等）。
 
 ## Layer 4 — k8s raw manifest（TRK-314）
 
