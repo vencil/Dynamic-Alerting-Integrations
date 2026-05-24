@@ -35,6 +35,19 @@ exporter:
   # per-reload GC cost is negligible.
   freeOsMemAfterReload: false
 
+# Generic env injection — #607, mirroring helm/vector + helm/victorialogs +
+# helm/chargeback-aggregator so operators have one consistent shape across
+# platform charts. Escape hatch for env the chart does not model as a
+# first-class field (HTTP_PROXY, APM agent vars, custom cert paths…); wire
+# Secret refs via valueFrom / extraEnvFrom. For memory tuning prefer the
+# dedicated exporter.goMemLimit above — it is discoverable, typed, and paired
+# with freeOsMemAfterReload.
+# COLLISION: extraEnv is rendered AFTER the dedicated fields, so a duplicate
+# key here (e.g. GOMEMLIMIT) overrides the dedicated value via K8s
+# last-one-wins. The escape hatch always has final say.
+extraEnv: []
+extraEnvFrom: []
+
 # Threshold config (embedded in ConfigMap)
 # This is the actual alerting threshold configuration.
 # See config/conf.d/ directory for the reference multi-file format.

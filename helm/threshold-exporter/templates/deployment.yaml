@@ -61,12 +61,23 @@ spec:
           # #459 lever: explicit return-to-OS after each reload.
           - "-free-os-mem-after-reload"
           {{- end }}
-        {{- if .Values.exporter.goMemLimit }}
+        {{- if or .Values.exporter.goMemLimit .Values.extraEnv }}
         env:
+          {{- if .Values.exporter.goMemLimit }}
           # #459: Go runtime reads GOMEMLIMIT natively (Go 1.19+) as a soft
           # heap ceiling — the primary bound on sys_bytes / heap_idle creep.
           - name: GOMEMLIMIT
             value: {{ .Values.exporter.goMemLimit | quote }}
+          {{- end }}
+          {{- with .Values.extraEnv }}
+          # #607 escape hatch: rendered AFTER dedicated fields, so a duplicate
+          # key here (e.g. GOMEMLIMIT) wins via K8s env last-one-wins.
+          {{- toYaml . | nindent 10 }}
+          {{- end }}
+        {{- end }}
+        {{- with .Values.extraEnvFrom }}
+        envFrom:
+          {{- toYaml . | nindent 10 }}
         {{- end }}
         ports:
         - name: http
