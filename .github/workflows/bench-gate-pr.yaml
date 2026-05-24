@@ -275,7 +275,11 @@ jobs:
           # @latest acceptable: benchstat output format stable for ~2 years.
           # Pin to a specific version if a future release ever breaks either
           # the regression-detection grep/awk OR the `-filter` benchfilter
-          # unit syntax `.unit:(sec/op OR B/op OR allocs/op)` (#608).
+          # unit syntax `.unit:(sec/op OR B/op OR allocs/op)` (#608) — the
+          # #611 shape-assertion in the Compare step fails loud and points
+          # here. golang.org/x/perf has NO semver tags (only pseudo-versions),
+          # so pin to the last known-good pseudo-version, e.g.:
+          #   go install golang.org/x/perf/cmd/benchstat@v0.0.0-20260512194132-3cf34090a3db
           go install golang.org/x/perf/cmd/benchstat@latest
           benchstat -h 2>&1 | head -5 || true
 
