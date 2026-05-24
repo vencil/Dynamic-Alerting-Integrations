@@ -49,6 +49,7 @@ lang: zh
 | [018](#018-profile-as-directory-default) | Profile-as-Directory-Default | ✅ Accepted | Cluster 共通閾值放 `_defaults.yaml`，只有偏離 default 的 tenant 寫 `<id>.yaml` override（median + sparse override）；跨 Profile Builder / batch PR pipeline / Dangling Defaults Guard 共通的「default vs override 邊界」決策。Translator 演算法細節留 `translate.go` package header（避免雙寫漂移）|
 | [019](#019-planning-ssot-frontmatter-contract-discovery-based-index) | Planning SSOT — Frontmatter Contract + Discovery-based Index | ✅ Accepted | 跨檔分散的計畫追蹤（tech-debt / dx-backlog / known-regression / roadmap / sprint）以 frontmatter contract + discovery-based index generator + active CI status-sync check 統一治理；TD/HA/REG 合併為 TRK namespace，ADR 與 S# 各自保留 |
 | [020](#020-tenant-federation-label-injection-proxy-over-self-built-endpoint) | Tenant Federation — Label-Injection Proxy over Self-Built Endpoint | 🟡 Proposed | Tenant 拉自己 metrics 回 tenant 側自管 federation。採 vmauth（VM 客戶）/ prom-label-proxy（Prom 客戶）做 label-enforced read proxy，不自寫 endpoint。2-tier policy（platform whitelist + tenant subset）+ 4h TTL token（無 server-side revocation，**對價條件**：gateway rate limit 必須到位）+ **3-layer blast radius**（storage backend series/sample cap + gateway per-token rate limit + proxy label injection）+ data-layer prerequisite（whitelist metric 必須 native 帶 `tenant_id` label，admission validator 把關）|
+| [021](#021-tenant-log-query-authorization-plane-only-ingestion-decoupled) | Tenant Log Query — Authorization-Plane-Only, Ingestion-Decoupled | ✅ Accepted | Tenant 在平台上**就地查**自己的 log（query-in-place，非拉回）。平台只 own 授權平面，複用既有 federation-gateway 新增 `victorialogs` mode；隔離靠 VictoriaLogs 原生 `(AccountID, ProjectID)` + JWT claim→header 注入（**非** prom-label-proxy，LogsQL ≠ PromQL）。ingestion 蓋章解耦為顯式可驗證契約（零信任 payload + node-edge 強蓋章）。Phase 1 (b) 平台營運 log → targets v2.10.0；Phase 2 (a) 租戶應用 log → defer-with-trigger。3-layer blast radius 對 LogsQL 重校（無 sample cap，改靠 time-range）。tracking TRK-316 |
 
 ---
 
@@ -209,6 +210,14 @@ v2.8.0 客戶導入管線 — Profile Builder 寫回 conf.d/。釘死「cluster 
 **文件**: [`020-tenant-federation.md`](./020-tenant-federation.md)
 
 v2.8.0 起草，targets v2.9.0 epic。涵蓋 cross-boundary federation 場景（與 ADR-004 platform-internal 互補）：tenant 把自己 metrics 子集拉回 tenant 側 infra 自管。採 **vmauth**（VM 客戶）/ **prom-label-proxy**（Prom 客戶）做 label-enforced read proxy，**不自寫 endpoint**（label sanitization 在自寫實作是 multi-tenant breach 地雷；現成 proxy production-hardened）。MVP 2-tier policy（platform whitelist + tenant subset）— Domain layer drop 到 Future Work。Token：4h TTL + 無 server-side revocation list（明寫 trade-off：簡化實作換 4h 曝險窗，對價條件為 gateway rate limit 必須到位）。Blast radius 採 **3-layer defense**：storage backend 擋 series/sample cap、API gateway 擋 per-token rate limit + timeout、proxy 只做 label injection + audit。Data-layer prerequisite：whitelist metric 必須 native 帶 `tenant_id` label，由 admission validator 把關。實作 epic（~70h，adversarial review 後上修）在 issue [#380](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/380) IV-2。
+
+---
+
+## 021: Tenant Log Query — Authorization-Plane-Only, Ingestion-Decoupled
+
+**文件**: [`021-tenant-log-query-federation.md`](./021-tenant-log-query-federation.md)
+
+ADR-020 的姊妹件，方向相反：ADR-020 讓 tenant 把 metrics **拉回**自有 infra（pull-back），本 ADR 讓 tenant 在平台上**就地查**自己的 log（query-in-place，不拉回）。平台**只 own 授權平面**（租戶身分解析 + query path 強制隔離 + 可見度治理），複用既有 `helm/federation-gateway` 新增第三個 `victorialogs` mode（驗 JWT → 注入租戶 header）；跨租戶隔離 100% 來自 VictoriaLogs 原生 `(AccountID, ProjectID)` 租戶模型，**非** prom-label-proxy（LogsQL ≠ PromQL，直覺沿用會踩前提錯誤）、**非**自寫 LogsQL injector、**非** vmauth。ingestion 蓋章（log 如何集中送進平台並蓋上可信租戶身分）解耦為「另外的設計」，本 ADR 以**顯式可驗證契約**約束它（零信任 payload + node-edge 強蓋章 + AccountID 單調配發永不回收）。3-layer blast radius 對 LogsQL 重新校準（無 metrics 的 sample cap，改以 time-range 上限為主護欄）。**Phase 1 — (b) 平台營運 log**（tenant 查平台關於自己的營運可觀測性，資料部分已存在於 #539 audit stream）targets v2.10.0；**Phase 2 — (a) 租戶應用 log** defer-with-trigger。tracking `TRK-316`。
 
 ---
 
