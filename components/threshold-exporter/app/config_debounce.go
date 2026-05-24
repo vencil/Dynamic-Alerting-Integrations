@@ -44,6 +44,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -58,11 +59,11 @@ import (
 // always agree string-for-string. Python describe_tenant.py doesn't emit
 // these; they are Go-exporter internal observability.
 const (
-	ReloadReasonSource    = "source"    // a tenant YAML changed
-	ReloadReasonDefaults  = "defaults"  // a _defaults.yaml changed
-	ReloadReasonNewTenant = "new"       // scan discovered a tenant ID absent previously
-	ReloadReasonDelete    = "delete"    // a tenant file disappeared
-	ReloadReasonForced    = "forced"    // manual trigger (SIGHUP-style, reserved)
+	ReloadReasonSource    = "source"   // a tenant YAML changed
+	ReloadReasonDefaults  = "defaults" // a _defaults.yaml changed
+	ReloadReasonNewTenant = "new"      // scan discovered a tenant ID absent previously
+	ReloadReasonDelete    = "delete"   // a tenant file disappeared
+	ReloadReasonForced    = "forced"   // manual trigger (SIGHUP-style, reserved)
 )
 
 // triggerDebouncedReload records a reload trigger and arms (or resets) the
@@ -96,6 +97,7 @@ func (m *ConfigManager) triggerDebouncedReload(reason string) {
 		t0 := time.Now()
 		m.diffAndReload()
 		m.getMetrics().ObserveReloadDuration(time.Since(t0))
+		m.maybeFreeOSMemory()
 		return
 	}
 
@@ -164,6 +166,26 @@ func (m *ConfigManager) fireDebounced() {
 	if err != nil {
 		m.getLogger().Printf("ERROR: debounced reload failed: %v", err)
 	}
+	m.maybeFreeOSMemory()
+}
+
+// maybeFreeOSMemory returns idle heap pages to the OS after a reload when
+// the -free-os-mem-after-reload lever is on (#459). No-op by default.
+//
+// debug.FreeOSMemory() forces a GC and an immediate scavenge, so it is
+// deliberately called OUTSIDE m.mu and only once per fired reload window
+// (not per affected tenant). It runs even on reload error: a failed reload
+// still allocated scan/parse buffers whose backing pages are exactly what
+// we want returned. The cost is one extra STW GC per reload, which is
+// acceptable because production reload cadence is hours-to-days; the lever
+// exists so the #459 soak can quantify whether aggressive return-to-OS
+// bounds the sys_bytes / heap_idle high-water creep.
+func (m *ConfigManager) maybeFreeOSMemory() {
+	if !m.freeOSMemEnabled() {
+		return
+	}
+	debug.FreeOSMemory()
+	m.getMetrics().IncFreeOSMemory()
 }
 
 // DebounceFiredCount returns how many debounce windows have fired since
@@ -500,15 +522,15 @@ func (m *ConfigManager) installNewHierarchyState(scan reloadScanState, result re
 //
 //  1. snapshotPriorState        — RLock-and-copy m.* hierarchy fields
 //  2. scanAndCheckHierarchical  — scanDirHierarchical, fall back to
-//                                 IncrementalLoad if neither hierarchical
-//                                 mode is active nor `_defaults.yaml`
-//                                 was found (sticky once flipped)
+//     IncrementalLoad if neither hierarchical
+//     mode is active nor `_defaults.yaml`
+//     was found (sticky once flipped)
 //  3. classifyAndCount          — per-tenant dirty detection +
-//                                 Issue #61 effect classification
-//                                 (applied / shadowed / cosmetic) +
-//                                 blast-radius bucket emission
+//     Issue #61 effect classification
+//     (applied / shadowed / cosmetic) +
+//     blast-radius bucket emission
 //  4. installNewHierarchyState  — fullDirLoad + atomic swap +
-//                                 SetLastReloadComplete stamp
+//     SetLastReloadComplete stamp
 //
 // Single-file mode short-circuits at the very top (no hierarchical
 // concept). Trap unchanged from v2.7.0: never hold m.mu across

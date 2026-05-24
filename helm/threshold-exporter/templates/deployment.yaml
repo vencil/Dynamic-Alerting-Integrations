@@ -57,6 +57,17 @@ spec:
           - "{{ .Values.exporter.listenAddr }}"
           - "-reload-interval"
           - "{{ .Values.exporter.reloadInterval }}"
+          {{- if .Values.exporter.freeOsMemAfterReload }}
+          # #459 lever: explicit return-to-OS after each reload.
+          - "-free-os-mem-after-reload"
+          {{- end }}
+        {{- if .Values.exporter.goMemLimit }}
+        env:
+          # #459: Go runtime reads GOMEMLIMIT natively (Go 1.19+) as a soft
+          # heap ceiling — the primary bound on sys_bytes / heap_idle creep.
+          - name: GOMEMLIMIT
+            value: {{ .Values.exporter.goMemLimit | quote }}
+        {{- end }}
         ports:
         - name: http
           containerPort: {{ .Values.service.port }}

@@ -64,16 +64,17 @@ import (
 // singleton is allocated lazily on first MustRegister so tests can reset
 // state by re-instantiating via newConfigMetrics.
 type configMetrics struct {
-	scanDuration     prometheus.Histogram
-	reloadTriggers   *prometheus.CounterVec
-	defaultsNoop     prometheus.Counter
-	parseFailures    *prometheus.CounterVec // v2.8.0 A-8d: per-file YAML parse failures
-	defaultsShadowed prometheus.Counter     // v2.8.0 Issue #61: shadowed defaults change (split from defaultsNoop)
-	blastRadius      *prometheus.HistogramVec // v2.8.0 Issue #61: per-tick (reason,scope,effect) tenants-affected distribution
-	reloadDuration   prometheus.Histogram   // v2.8.0 B-3: end-to-end diffAndReload elapsed (debounce window → atomic swap done)
-	debounceBatch    prometheus.Histogram   // v2.8.0 B-3: count of triggers coalesced per fired window (debounce effectiveness)
-	lastScanComplete   prometheus.Gauge // v2.8.0 B-1.P2-a: wall-clock unix seconds at most-recent successful scanDirHierarchical completion (e2e harness anchor T1; production stuck-detection)
-	lastReloadComplete prometheus.Gauge // v2.8.0 B-1.P2-a: wall-clock unix seconds at most-recent successful diffAndReload completion (e2e harness anchor T2; production stuck-detection)
+	scanDuration       prometheus.Histogram
+	reloadTriggers     *prometheus.CounterVec
+	defaultsNoop       prometheus.Counter
+	parseFailures      *prometheus.CounterVec   // v2.8.0 A-8d: per-file YAML parse failures
+	defaultsShadowed   prometheus.Counter       // v2.8.0 Issue #61: shadowed defaults change (split from defaultsNoop)
+	blastRadius        *prometheus.HistogramVec // v2.8.0 Issue #61: per-tick (reason,scope,effect) tenants-affected distribution
+	reloadDuration     prometheus.Histogram     // v2.8.0 B-3: end-to-end diffAndReload elapsed (debounce window → atomic swap done)
+	debounceBatch      prometheus.Histogram     // v2.8.0 B-3: count of triggers coalesced per fired window (debounce effectiveness)
+	lastScanComplete   prometheus.Gauge         // v2.8.0 B-1.P2-a: wall-clock unix seconds at most-recent successful scanDirHierarchical completion (e2e harness anchor T1; production stuck-detection)
+	lastReloadComplete prometheus.Gauge         // v2.8.0 B-1.P2-a: wall-clock unix seconds at most-recent successful diffAndReload completion (e2e harness anchor T2; production stuck-detection)
+	freeOSMemory       prometheus.Counter       // #459: count of explicit runtime/debug.FreeOSMemory() calls after reload (opt-in -free-os-mem-after-reload; 0 when lever disabled)
 }
 
 // Default metric instance used by the production server. Tests that want
@@ -153,6 +154,10 @@ func newConfigMetrics() *configMetrics {
 			Name: "da_config_last_reload_complete_unixtime_seconds",
 			Help: "Wall-clock unix seconds at the most recent successful diffAndReload completion (post atomic-swap). Set by the reload pipeline; read by the e2e harness as anchor T2 (B-1 Phase 2). Production use: alert on time() - <gauge> > N for stuck-reloader detection. 0 means reloader has not yet completed a successful reload.",
 		}),
+		freeOSMemory: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "da_config_free_os_memory_total",
+			Help: "Count of explicit runtime/debug.FreeOSMemory() calls issued after a reload cycle (#459). Stays 0 unless the -free-os-mem-after-reload lever is enabled. Each increment is one forced GC + return-to-OS; correlate with go_memstats_heap_released_bytes to confirm the lever is reclaiming idle heap under sustained reload pressure.",
+		}),
 	}
 }
 
@@ -191,6 +196,7 @@ func registerConfigMetrics(reg prometheus.Registerer, m *configMetrics) {
 	reg.MustRegister(m.debounceBatch)
 	reg.MustRegister(m.lastScanComplete)
 	reg.MustRegister(m.lastReloadComplete)
+	reg.MustRegister(m.freeOSMemory)
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -406,4 +412,18 @@ func (cm *configMetrics) SetLastReloadComplete(t time.Time) {
 // Called only on success path — see SetLastScanComplete docstring.
 func SetLastReloadComplete(t time.Time) {
 	getConfigMetrics().SetLastReloadComplete(t)
+}
+
+// IncFreeOSMemory (method form).
+func (cm *configMetrics) IncFreeOSMemory() {
+	cm.freeOSMemory.Inc()
+}
+
+// IncFreeOSMemory bumps the FreeOSMemory-call counter — called once per
+// reload cycle when the -free-os-mem-after-reload lever is enabled (#459).
+// The counter stays at 0 for the default (lever-off) deployment, so a
+// non-zero value is itself the signal that the experimental return-to-OS
+// path is active.
+func IncFreeOSMemory() {
+	getConfigMetrics().IncFreeOSMemory()
 }
