@@ -287,6 +287,23 @@ jobs:
             "$RUNNER_TEMP/bench-out/bench-current.txt" \
             | tee "$RUNNER_TEMP/bench-out/benchstat.txt"
 
+          # Fail-loud shape assertion (#611): the detector below greps for
+          # `+N% (p=...)` rows AND relies on the `-filter` unit names. benchstat
+          # is `@latest`, reinstalled every run — a future release that renames
+          # a unit or changes the row format would make every grep miss →
+          # regression=false → a GREEN gate that silently masks ALL regressions.
+          # The `^cpu:` INCONCLUSIVE check can't catch this (cpu headers survive).
+          # Require the filtered comparison to have produced recognizable output:
+          # ≥1 metric-section header AND ≥1 per-bench result row, else fail loud.
+          if ! grep -Eq 'sec/op|B/op|allocs/op' "$RUNNER_TEMP/bench-out/benchstat.txt"; then
+            echo "::error::benchstat output shape changed — no metric-section header (sec/op / B/op / allocs/op) in the filtered comparison. The regression detector may be silently passing; pin benchstat to a known-good version (see the Install benchstat step)."
+            exit 1
+          fi
+          if ! grep -Eq '±[[:space:]]*[0-9]+%' "$RUNNER_TEMP/bench-out/benchstat.txt"; then
+            echo "::error::benchstat output shape changed — no per-bench result row (matching '± N%') in the filtered comparison. The regression detector may be silently passing; pin benchstat to a known-good version (see the Install benchstat step)."
+            exit 1
+          fi
+
           # Tier 2 magnitude floor: 10% (metric scope already applied above
           # via benchstat -filter — the grep only sees deterministic rows).
           MAGNITUDE_FLOOR_PCT=10.0
