@@ -147,6 +147,21 @@ repos:
         files: '(^|/)helm/.*\.(ya?ml|tpl)$|^\.kube-linter\.yaml$|^scripts/tools/lint/check_iac_helm\.py$'
         stages: [manual]
 
+      # --- Container/k8s IaC SAST Layer 3 (#448 / TRK-313) ---
+      # Helm values secret-shape: catches a key NAMED like a secret
+      # (password/token/apiKey/secret/clientSecret) set to a non-empty literal.
+      # Pure-Python class-(b) lint (no engine) — fast, so default stage +
+      # diff-only (lint-policy.md §3). Complements #445 trufflehog (entropy);
+      # this catches the YAML *shape* regardless of entropy. Ships at 0 (every
+      # current match is whitelisted: empty / ${VAR} / {{ .Values }} /
+      # placeholder / bool / duration / k8s-ref). Bypass via PR body.
+      - id: helm-values-secrets-check
+        name: "Container SAST L3: Helm values secret-shape (diff-only)"
+        entry: python3 -X utf8 scripts/tools/lint/check_helm_values_secrets.py --ci
+        language: python
+        pass_filenames: false
+        files: '^helm/.*/(values.*\.yaml|templates/.*secret.*\.yaml)$'
+
       # --- Fast drift checks (< 5s each) ---
       - id: tool-map-check
         name: Tool map coverage

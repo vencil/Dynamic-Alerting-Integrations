@@ -100,6 +100,10 @@ jobs:
           # are recorded in docs/internal/iac-lint-baseline.md. hadolint binary
           # installed in the "Set up hadolint" step above (wrapper uses PATH).
           pre-commit run iac-sast-check --all-files
+          # Container SAST Layer 3 (#448 / TRK-313): Helm values secret-shape
+          # (pure-Python class-(b), diff-only). fetch-depth: 0 above gives the
+          # diff base; PR_BODY env (set on this job) carries the bypass tag.
+          pre-commit run helm-values-secrets-check --all-files
 
   lint-rule-packs:
     # Custom Prometheus rule-pack governance linter.

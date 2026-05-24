@@ -149,6 +149,7 @@ lang: zh
 | `check_glossary_coverage.py` | 術語表覆蓋率檢查 |
 | `check_hardcode_tenant.py` | Detect hardcoded tenant literals in PromQL label selectors (Rule #2). |
 | `check_head_blob_hygiene.py` | Inspect committed HEAD blobs for corruption. |
+| `check_helm_values_secrets.py` | Container/k8s IaC SAST, Layer 3. |
 | `check_hub_badge_drift.py` | detect hardcoded tool counts in the Hub UI (PR-portal-7). |
 | `check_i18n_coverage.py` | check_i18n_coverage.py |
 | `check_iac_helm.py` | Container/k8s IaC SAST, Layer 2 (Helm templates). |
