@@ -61,7 +61,21 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, labeled]
     paths:
-      - 'components/threshold-exporter/app/**'
+      # Scope to benchmarkable changes only (issue #433 W3). Watching the
+      # whole app dir fired the gate on PRs with no benchmarkable Go delta —
+      # e.g. a `.dockerignore` change (#597) or a `*_test.go` deflake (#532),
+      # both pure noise that a maintainer had to override. Limit to non-test
+      # Go + module files, keeping rule-packs and this workflow's own edits.
+      # ORDER-SENSITIVE: GitHub Actions includes a path when a positive
+      # pattern matches AND no *later* `!` pattern excludes it, so the
+      # `*_test.go` exclusion must follow the `**/*.go` include. `**/*.go`
+      # is globstar (zero-or-more dirs), so it also matches non-test `.go`
+      # files directly in app/ root (config_parse.go, collector.go, …) —
+      # real-perf-PR coverage (e.g. #502) is preserved.
+      - 'components/threshold-exporter/app/**/*.go'
+      - '!components/threshold-exporter/app/**/*_test.go'
+      - 'components/threshold-exporter/app/go.mod'
+      - 'components/threshold-exporter/app/go.sum'
       - 'rule-packs/**'
       - '.github/workflows/bench-gate-pr.yaml'
 
