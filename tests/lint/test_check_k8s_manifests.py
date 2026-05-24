@@ -8,10 +8,12 @@ Pinned contracts (engine integration is covered by the CI "Container SAST L4
 2. **Severity routing** (reused L2 classify): CRITICAL => BLOCK no-escape;
    registered HIGH => baseline-WARN; unregistered HIGH => BLOCK; LOW => INFO.
 3. **De-dup**: two findings sharing (path, check) collapse to one entry.
-4. **EXEMPTIONS**: the 3 known baseline-High (path, check) are registered.
+4. **EXEMPTIONS**: the 1 known baseline-High (path, check) is registered
+   (the maintenance-scheduler CronJob's 2 were cleared by a hardened
+   securityContext — TRK-314 follow-up — and de-registered).
 5. **main() exit codes**: 0 clean / 1 block (--ci) / 3 engine-required-missing.
-6. **Baseline**: routing the REAL kube-linter report shape (4 findings in 2
-   workloads) yields 0 BLOCK / 3 baseline-High; a live engine run (when
+6. **Baseline**: routing the REAL kube-linter report shape (2 findings in 1
+   workload) yields 0 BLOCK / 1 baseline-High; a live engine run (when
    available) confirms the repo ships at 0 BLOCK.
 """
 from __future__ import annotations
@@ -29,15 +31,11 @@ sys.path.insert(0, _TOOLS_DIR)
 import check_k8s_manifests as k8s  # noqa: E402
 
 
-# The REAL kube-linter report shape for the repo (4 findings, 2 workloads) —
+# The REAL kube-linter report shape for the repo (2 findings, 1 workload) —
 # pinned so routing is tested against ground truth without invoking the engine.
+# The maintenance-scheduler CronJob's 2 findings were eliminated by a hardened
+# securityContext (TRK-314 follow-up), leaving only tenant-api's pair.
 _REAL_REPORTS = [
-    {"Check": "no-read-only-root-fs",
-     "Diagnostic": {"Message": 'container "scheduler" does not have a read-only root file system'},
-     "Object": {"Metadata": {"FilePath": "/repo/k8s/03-monitoring/cronjob-maintenance-scheduler.yaml"}}},
-    {"Check": "run-as-non-root",
-     "Diagnostic": {"Message": 'container "scheduler" is not set to runAsNonRoot'},
-     "Object": {"Metadata": {"FilePath": "/repo/k8s/03-monitoring/cronjob-maintenance-scheduler.yaml"}}},
     {"Check": "no-read-only-root-fs",
      "Diagnostic": {"Message": 'container "git-clone" does not have a read-only root file system'},
      "Object": {"Metadata": {"FilePath": "/repo/k8s/04-tenant-api/deployment.yaml"}}},
@@ -74,8 +72,6 @@ class TestNormalizeRelpath:
 class TestExemptions:
     @pytest.mark.parametrize("relpath,check", [
         ("k8s/04-tenant-api/deployment.yaml", "no-read-only-root-fs"),
-        ("k8s/03-monitoring/cronjob-maintenance-scheduler.yaml", "run-as-non-root"),
-        ("k8s/03-monitoring/cronjob-maintenance-scheduler.yaml", "no-read-only-root-fs"),
     ])
     def test_known_baseline_high_registered(self, relpath, check):
         assert k8s.is_exempt(relpath, check) is True
@@ -84,6 +80,13 @@ class TestExemptions:
     def test_unregistered_not_exempt(self):
         assert k8s.is_exempt("k8s/04-tenant-api/deployment.yaml", "run-as-non-root") is False
         assert k8s.is_exempt("k8s/new-thing.yaml", "no-read-only-root-fs") is False
+
+    def test_maintenance_scheduler_no_longer_exempt(self):
+        # Cleared by a hardened securityContext (TRK-314 follow-up); the keys
+        # were removed so a regression re-introducing the finding now BLOCKS.
+        sched = "k8s/03-monitoring/cronjob-maintenance-scheduler.yaml"
+        assert k8s.is_exempt(sched, "run-as-non-root") is False
+        assert k8s.is_exempt(sched, "no-read-only-root-fs") is False
 
     def test_critical_never_in_registry(self):
         for (_, check) in k8s.EXEMPTIONS:
@@ -139,11 +142,11 @@ def _stub_engine(monkeypatch, reports):
 
 class TestCollectFindings:
     def test_real_report_shape_ships_at_zero(self, monkeypatch):
-        """The repo's actual 4 findings (2 workloads) => 0 BLOCK / 3 WARN."""
+        """The repo's actual 2 findings (1 workload) => 0 BLOCK / 1 WARN."""
         _stub_engine(monkeypatch, _REAL_REPORTS)
         f = k8s.collect_findings(strict=True)
         assert f["BLOCK"] == []
-        assert len(f["WARN"]) == 3  # tenant-api's 2 containers collapse to 1
+        assert len(f["WARN"]) == 1  # tenant-api's 2 containers collapse to 1
         assert "__engine_error__" not in f
 
     def test_injected_critical_blocks(self, monkeypatch):

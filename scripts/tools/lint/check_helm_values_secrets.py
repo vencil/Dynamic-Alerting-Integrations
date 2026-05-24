@@ -220,8 +220,14 @@ def find_scope_files() -> list[Path]:
     # misses low-entropy literals, so raw Secrets would otherwise be unscanned.
     # The positive whitelist (${VAR} / {{ .Values }} / placeholder / ref /
     # YAML-alias) keeps this broad scope false-positive-free.
-    for pattern in ("helm/*/values*.yaml", "helm/values*.yaml",
-                    "helm/*/templates/*.yaml", "k8s/**/*.yaml"):
+    # Both .yaml and .yml — the pre-commit hook's files: regex is `\.ya?ml$`,
+    # so the scanner scope must match it or a `.yml` manifest would trigger the
+    # hook yet be silently skipped (self-review #A; no `.yml` exists today, but
+    # this keeps the scanner scope == the hook trigger).
+    for pattern in ("helm/*/values*.yaml", "helm/*/values*.yml",
+                    "helm/values*.yaml", "helm/values*.yml",
+                    "helm/*/templates/*.yaml", "helm/*/templates/*.yml",
+                    "k8s/**/*.yaml", "k8s/**/*.yml"):
         for p in REPO_ROOT.glob(pattern):
             if not p.is_file():
                 continue

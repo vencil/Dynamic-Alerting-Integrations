@@ -107,13 +107,13 @@ INFO（不列管）：`federation-gateway` / `federation-proxy` / `threshold-exp
 
 **例外採中央註冊表**（`check_k8s_manifests.py` 的 `EXEMPTIONS` dict，key 為 `(repo-relative path, check)` —— raw manifest 以**檔案**為稽核單位，不像 L2 以 chart 為單位）。CRITICAL 永不可豁免（同 L2）。**無 Mode A**：L2 的 `ALLOW_EMPTY`/`INSECURE_*` regex 會誤報 raw manifest 的合法 key（如 Prometheus scrape `insecure_skip_verify: true`，已實測命中），且 raw manifest 無 `{{ if }}` 分支需 pre-render 掃描，故 kube-linter pass 即 L4 全部;raw Secret 的硬編字面值由 **L3**（scope 已含 k8s/）負責。
 
-**Baseline 截至 2026-05-24**：scope **42 manifest**，**0 Critical** ✅ / 3 baseline-High（中央豁免;原始 4 findings，tenant-api 的 2 個 container 同 `(path, check)` 去重為 1）/ 0 INFO。
+**Baseline 截至 2026-05-24**：scope **42 manifest**，**0 Critical** ✅ / 1 baseline-High（中央豁免;原始 2 findings，tenant-api 的 2 個 container 同 `(path, check)` 去重為 1）/ 0 INFO。
+
+> **變更（TRK-314 follow-up，PR #600 後續）**：maintenance-scheduler CronJob 原列 2 筆 FIX CANDIDATE（`run-as-non-root` / `no-read-only-root-fs`），已加固 securityContext 解除（pod `runAsNonRoot:true`/`runAsUser:65534`/`seccompProfile:RuntimeDefault` + container `readOnlyRootFilesystem:true`/`allowPrivilegeEscalation:false`/`capabilities.drop:[ALL]` + `/tmp` emptyDir + `PYTHONDONTWRITEBYTECODE=1`）。已 runtime-test：用發行 image 在 `--read-only --tmpfs /tmp --user 65534` 下跑 maintenance-scheduler，report-only 模式 exit 0、HTTP 路徑僅見連線錯誤（無 EROFS）。EXEMPTIONS 兩筆 key 已移除。
 
 | # | Path:check | severity | Rationale（= EXEMPTIONS 登記） | 退場 / 修補 |
 |---|---|---|---|---|
 | 1 | `k8s/04-tenant-api/deployment.yaml:no-read-only-root-fs` | High | git-clone init + tenant-api container 需可寫工作區 clone/commit conf.d（同 L2 tenant-api chart 豁免;oauth2-proxy sidecar 已 `readOnlyRootFilesystem:true`） | 架構事實;同 L2 #3「修補候選」（git workdir 移到 writable volume） |
-| 2 | `k8s/03-monitoring/cronjob-maintenance-scheduler.yaml:run-as-non-root` | High | da-tools maintenance-scheduler CronJob 未設 securityContext | **修補候選**：加 `runAsNonRoot:true`/`runAsUser`，待 cronjob 下次部署 + 可 runtime 測時順手 |
-| 3 | `k8s/03-monitoring/cronjob-maintenance-scheduler.yaml:no-read-only-root-fs` | High | 同上 maintenance-scheduler | **修補候選**：加 `readOnlyRootFilesystem:true` + `/tmp` emptyDir，待 runtime 測 da-tools 後 |
 
 > **與其他層的關係**：L4 抓 raw manifest 的 **container misconfig**（kube-linter）;raw Secret 的**硬編字面**由 L3 抓（scope 含 k8s/）;**高熵值**由 #445 trufflehog 抓 —— 三者互補不雙重 fire（kube-linter 無 hardcoded-secret-value check）。
 

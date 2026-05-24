@@ -89,13 +89,6 @@ EXEMPTIONS: dict[tuple[str, str], str] = {
         "tenant-api git-clone init + api container need a writable workspace to "
         "clone/commit conf.d (same rationale as the helm chart's tenant-api "
         "exemption); the oauth2-proxy sidecar IS read-only",
-    ("k8s/03-monitoring/cronjob-maintenance-scheduler.yaml", "run-as-non-root"):
-        "da-tools maintenance-scheduler CronJob ships without a securityContext "
-        "— FIX CANDIDATE (add runAsNonRoot:true), deferred until the cronjob is "
-        "next deployed and can be runtime-tested",
-    ("k8s/03-monitoring/cronjob-maintenance-scheduler.yaml", "no-read-only-root-fs"):
-        "same maintenance-scheduler — FIX CANDIDATE (readOnlyRootFilesystem:true "
-        "+ /tmp emptyDir), deferred pending a runtime test of da-tools",
 }
 
 
@@ -103,17 +96,23 @@ EXEMPTIONS: dict[tuple[str, str], str] = {
 # Discovery
 # ---------------------------------------------------------------------------
 def find_manifest_files() -> list[Path]:
-    """Repo-relative raw k8s manifests (k8s/**/*.yaml), worktrees excluded."""
+    """Repo-relative raw k8s manifests (k8s/**/*.{yaml,yml}), worktrees excluded.
+
+    Used for the reported count + --list. kube-linter itself scans the whole
+    dir (both extensions) regardless; matching both here keeps the count honest
+    if a `.yml` manifest is ever added (self-review #A — scope == hook trigger).
+    """
     out: list[Path] = []
     root = REPO_ROOT / MANIFEST_ROOT
     if not root.is_dir():
         return out
-    for p in root.rglob("*.yaml"):
-        rel = p.relative_to(REPO_ROOT)
-        if any(part in SKIP_DIR_PARTS for part in rel.parts):
-            continue
-        out.append(p)
-    return sorted(out)
+    for ext in ("*.yaml", "*.yml"):
+        for p in root.rglob(ext):
+            rel = p.relative_to(REPO_ROOT)
+            if any(part in SKIP_DIR_PARTS for part in rel.parts):
+                continue
+            out.append(p)
+    return sorted(set(out))
 
 
 def manifest_root_exists() -> bool:
