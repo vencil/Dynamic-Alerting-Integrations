@@ -128,6 +128,7 @@ ingestion plane（無論 (a) 租戶推送或 (b) 平台元件 stdout）**必須*
 | **單調配發、永不回收** | 退租後若把同一 uint32 配給新租戶、舊 log 仍在 retention 窗內 → 新租戶讀得到前租戶殘留 log = 跨租戶洩漏。registry 必須 monotonic，或保證 retention 清空後才重用 |
 | **配發紀錄入 Git tenant registry** | GitOps 不可繞軌跡；對映 `tenant_id`(str) ↔ `account_id`(uint32) |
 | **JWT embed 數值 claim** | Envoy `claim_to_headers` 只支援 string/int/bool；AccountID 為數值 claim 才能 O(1) 注入 |
+| **禁用 hash 映射** | FNV-1a 等 hash 把 `tenant_id`(str)→uint32 有生日悖論碰撞 → 兩租戶撞同 AccountID = 跨租戶洩漏。一律 **Git tenant registry 單調發號**（發號狀態在 Git、commit-on-write，同 conf.d / tenant-api SSOT；**不引入外部 stateful DB**——違背 config-driven 架構，且 uint32 空間 ~40 億充足） |
 
 #### Admission validator（結構性探測 + 告警，不熔斷）
 
@@ -198,6 +199,8 @@ VictoriaLogs 原生 `(AccountID, ProjectID)` 即隔離核心。
 
 > **⭐ 比 prom-label-proxy 更乾淨**：ADR-020 需顯式 `--enable-label-apis` 才擋得住 `/series` `/labels` 的 Metadata API 跨租戶拓樸洩漏（非顯性風險 + smoke test 安全網）。VictoriaLogs 的 metadata 類 endpoint（`field_values` / `stream_field_values` 等）**同樣受 `AccountID` header 約束**——租戶查不到別人 AccountID 的 field/stream 值，**metadata leak 由原生租戶模型自動擋掉**，無需額外 flag。（仍須在實作 AC 對完整 VictoriaLogs query/metadata endpoint surface 逐一驗 enforcement coverage。）
 
+> **⚠️ Endpoint allowlist 須顯式逐一放行（非前綴比對）**：VictoriaLogs query surface 含 `/select/logsql/query`（streaming、**預設無 limit**）、`/hits`、`/streams`、`/stats_query[_range]`、`/tail`（**live 長連線**）、`field_values` / `field_names` / `stream_field_values`。寬鬆前綴 `/select/logsql/` 會連 `/tail` 一起放行——長連線**繞過 `maxQueryDuration`**（duration cap 管查詢執行、不管 stream 連線壽命）並長期佔 concurrency slot。故 MVP **顯式 deny `/tail`**（audit log 不需即時 tail），其餘 allowed endpoint 各自驗 AccountID enforcement，`/query` 另靠 `maxQueryTimeRange` + 強制 `limit` 收斂 streaming 量。（VictoriaLogs **無** `/export` endpoint —— 真正的無界風險是 `/query` streaming 與 `/tail` 長連線，非某個 export endpoint。）
+
 ### Audit log + anomaly metric
 
 - **Data-plane**（誰查了哪些 log）：gateway access log JSON（`account_id` / `token_id` / LogsQL / status / duration），與 ADR-020 同形物理分離（stdout collector-ready）。聚合層 `tenant_log_query_requests_total` 進 Prometheus。
@@ -218,7 +221,7 @@ VictoriaLogs 原生 `(AccountID, ProjectID)` 即隔離核心。
 | 7 | tenant-api：AccountID 配發 + 數值 claim + Git registry |
 | 8 | `tenant_log_query_requests_total` metric + Grafana dashboard |
 | 9 | 端對端整合測試（簽 token A → 查 `/select/logsql/query` 驗只見 A、metadata endpoint 不洩 B）+ user-facing guide |
-| AC | **Vector route 行為測試入 CI**：`vector validate`（語法，codify runbook §4.4 手動步驟）+ **`vector test`** 餵空值/惡意 `tenant_id` 的 mock log，斷言 fail-closed 落 `0:0`（驗極端 payload 的確定行為，非僅語法；對齊 lint-everything + 75% coverage gate）|
+| AC | **Vector route 行為測試入 CI**：`vector validate`（語法，codify runbook §4.4 手動步驟）+ **`vector test`** 餵空值/惡意 `tenant_id` 的 mock log，斷言 fail-closed 落 `0:0`（驗極端 payload 的確定行為，非僅語法；對齊 lint-everything + 75% coverage gate）；**(b) 淨化 negative assertion**：餵帶**全部**敏感欄位（node_name / pod_ip…）的 mock payload，斷言租戶副本中這些欄位**確實不存在**（測「移除了」而非只測「有產出」）|
 
 #### Ingestion：Fan-out（平台完整副本 + 租戶淨化投影），非搬移
 
