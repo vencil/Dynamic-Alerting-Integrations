@@ -93,7 +93,19 @@ KEY_ALLOWLIST = (
 _ENV_INTERP = re.compile(r"\$\{[^}]+\}")
 _HELM_TPL = re.compile(r"\{\{.*\}\}")
 _PLACEHOLDER = re.compile(
-    r"(?i)(<[^>]*>|replace|changeme|change[_-]me|placeholder|todo|your[_-]|xxxx|example\b)"
+    r"(?i)("
+    r"<[^>]*>"                            # <changeme> angle-bracket marker
+    r"|\breplace[_ -]?with"               # REPLACE_WITH_X / "replace with" (may continue, e.g. _32_BYTE)
+    r"|\breplace[_ -]?me\b|\breplaceme\b" # replace-me / replaceme (\b so "replacement" isn't matched)
+    r"|\bchange[_ -]?me\b|\bchangeme\b"   # change_me / changeme
+    r"|\bplaceholder\b"
+    r"|\byour[_-]\w"                      # your_key / your-secret
+    r"|\b(todo|fixme)\b"
+    r"|\bexample\b"
+    r"|x{4,}"                            # xxxx... filler
+    r")"
+    # NB: bare "replace" (no with/me) intentionally NOT whitelisted — a real
+    # value like `replaced_secret_value` must still be flagged (self-review).
 )
 _BOOL = re.compile(r"(?i)^(true|false|yes|no|on|off)$")
 _NUMERIC = re.compile(r"^-?\d+(\.\d+)?$")
@@ -112,7 +124,12 @@ def key_is_secret(key: str) -> bool:
     nk = _norm_key(key)
     if any(allow in nk for allow in KEY_ALLOWLIST):
         return False
-    return any(word in nk for word in SECRET_WORDS)
+    # ENDS WITH a secret word, not merely CONTAINS one: a literal-secret holder
+    # is `password` / `rootPassword` / `OAUTH_CLIENT_SECRET`, whereas
+    # `passwordPolicy` / `passwordMinLength` / `tokenTTL` / `secretRotation` are
+    # CONFIG *about* a secret — endswith avoids those false-positives.
+    # (trufflehog #445 still backstops any high-entropy value in odd keys.)
+    return any(nk.endswith(word) for word in SECRET_WORDS)
 
 
 def _strip_value(raw: str) -> str:

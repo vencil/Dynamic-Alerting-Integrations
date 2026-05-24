@@ -41,6 +41,10 @@ class TestKeyIsSecret:
         "createSecret", "secretName", "existingSecret", "existingSecretName",
         "secretRef", "secretKeyRef", "secretKey", "tokenTTL", "tokenName",
         "name", "image", "port", "replicaCount", "enabled",
+        # config *about* a secret (contains the word but isn't a holder) —
+        # endswith() must not flag these (self-review regression guard)
+        "passwordPolicy", "passwordMinLength", "secretRotationDays",
+        "tokenTimeout",
     ])
     def test_non_secret_keys(self, key):
         assert hvs.key_is_secret(key) is False
@@ -72,6 +76,9 @@ class TestScanLine:
         ('  apiKey: "sk-abc123xyz"', "apiKey"),
         ("  clientSecret: mytopsecret", "clientSecret"),
         ("  token: ghp_realtokenhere", "token"),
+        # self-review: a real value containing "replace" (past tense) must
+        # still flag — only placeholder forms (REPLACE_WITH/replaceme) are waived
+        ("  clientSecret: replaced_secret_value", "clientSecret"),
     ])
     def test_violations(self, line, key):
         hit = hvs.scan_line(line)
@@ -86,6 +93,7 @@ class TestScanLine:
         "  tokenTTL: 4h",
         "  secretKey: federation-signing-key.pem",
         "  secretName: tenant-federation-signing-key",
+        "  passwordPolicy: strict",   # config about a secret, not a holder
         "  # password: leaked-in-comment",
         "  password:",          # bare key (block/continuation)
         "  image: nginx:1.28",  # not a secret key
