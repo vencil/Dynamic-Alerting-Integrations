@@ -154,12 +154,16 @@ jobs:
             --ci
 
   iac-helm-sast:
-    # Container/k8s SAST Layer 2 (#448 / TRK-312): Helm template security.
-    # Dedicated job (not folded into Lint) because it renders 9 charts via
-    # helm + kube-linter (~1-2 min) — runs in parallel so it doesn't slow the
-    # fast Lint job. helm comes from setup-helm; kube-linter is installed as a
-    # binary (best-effort) with the wrapper's Docker fallback as backstop.
-    name: Container SAST L2 (Helm)
+    # Container/k8s SAST Layers 2 + 4 (#448 / TRK-312 + TRK-314).
+    #   L2 (Helm template): renders 9 charts via helm + kube-linter (~1-2 min).
+    #   L4 (raw k8s): kube-linter on k8s/ raw manifests (no render, ~3-5s).
+    # Both run in this one job because they share the kube-linter engine setup
+    # below; dedicated (not folded into Lint) so the slow render doesn't gate
+    # the fast Lint job. helm comes from setup-helm; kube-linter is installed
+    # as a binary (best-effort) with the wrapper's Docker fallback as backstop.
+    # AC5: this job is the Critical->BLOCK gate for L2+L4 — add it to branch
+    # protection required checks (see docs/internal/iac-lint-baseline.md).
+    name: Container SAST (Helm L2 + raw k8s L4)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -192,6 +196,13 @@ jobs:
 
       - name: Run Container SAST Layer 2 (Helm)
         run: python3 scripts/tools/lint/check_iac_helm.py --ci
+
+      - name: Run Container SAST Layer 4 (raw k8s manifests)
+        # Real layer (NOT a stub): k8s/ holds 42 raw manifests. kube-linter
+        # over the tree, reusing L2's severity + a (path, check) exemption
+        # registry. 0 Critical / baseline-High exempt -> exit 0; a new Critical
+        # or unregistered High -> exit 1 (fails this required-check job).
+        run: python3 scripts/tools/lint/check_k8s_manifests.py --ci
 
   python-tests:
     name: Python Tests (${{ matrix.python }})

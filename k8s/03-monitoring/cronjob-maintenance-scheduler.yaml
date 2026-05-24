@@ -37,9 +37,20 @@ spec:
             component: maintenance-scheduler
         spec:
           restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534
+            runAsGroup: 65534
+            seccompProfile:
+              type: RuntimeDefault
           containers:
             - name: scheduler
               image: ghcr.io/vencil/da-tools:v2.8.0
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
               args:
                 - maintenance-scheduler
                 - --config-dir
@@ -50,6 +61,11 @@ spec:
                 # Uncomment when Pushgateway is deployed:
                 # - --pushgateway
                 # - http://pushgateway.monitoring.svc.cluster.local:9091
+              env:
+                # readOnlyRootFilesystem:true blocks .pyc writes next to the
+                # bundled scripts; skip bytecode caching entirely (one-shot CLI).
+                - name: PYTHONDONTWRITEBYTECODE
+                  value: "1"
               resources:
                 requests:
                   cpu: 50m
@@ -61,7 +77,14 @@ spec:
                 - name: threshold-config
                   mountPath: /etc/config/conf.d
                   readOnly: true
+                # Writable scratch for the read-only root fs (Python /tmp, etc).
+                - name: tmp
+                  mountPath: /tmp
           volumes:
             - name: threshold-config
               configMap:
                 name: threshold-config
+            - name: tmp
+              emptyDir:
+                medium: Memory
+                sizeLimit: 16Mi

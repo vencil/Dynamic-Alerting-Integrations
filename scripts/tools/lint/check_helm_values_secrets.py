@@ -19,7 +19,11 @@ ADDED in the current PR's diff are checked. --full-scan for periodic audit.
 
 Scope: helm/*/values*.yaml + helm/values*.yaml + helm/*/templates/*.yaml
 (EVERY template, not just secret*.yaml — the most common leak is a hardcoded
-secret misplaced in a ConfigMap, which people guard far less than a Secret).
+secret misplaced in a ConfigMap, which people guard far less than a Secret)
++ k8s/**/*.yaml (raw manifests — the secret-shape check is manifest-agnostic;
+the Layer-4 kube-linter pass [TRK-314] has no hardcoded-Secret-value check, and
+trufflehog [#445] misses low-entropy literals like `admin`, so raw k8s/ Secrets
+would otherwise be unscanned for hardcoded literals entirely).
 
 A candidate line `KEY: VALUE` is a VIOLATION when:
   - KEY (case-insensitive) ENDS WITH a secret word AND is not a ref/flag key
@@ -207,14 +211,23 @@ def scan_line(line: str) -> tuple[str, str] | None:
 def find_scope_files() -> list[Path]:
     out: list[Path] = []
     # Scope = every chart values file (incl. tier variants), top-level value
-    # overlays (helm/values-*.yaml), AND every rendered-source template — NOT
-    # just secret*.yaml. A key named like a secret must not appear as a literal
-    # in ANY manifest; the most common leak is a hardcoded value misplaced in a
-    # ConfigMap (people guard `Secret` but not `ConfigMap`). The positive
-    # whitelist (${VAR} / {{ .Values }} / placeholder / ref / YAML-alias) keeps
-    # this broad scope false-positive-free (verified: 0 findings across 69 files).
-    for pattern in ("helm/*/values*.yaml", "helm/values*.yaml",
-                    "helm/*/templates/*.yaml"):
+    # overlays (helm/values-*.yaml), every rendered-source template — NOT just
+    # secret*.yaml — AND every raw k8s/ manifest. A key named like a secret must
+    # not appear as a literal in ANY manifest; the most common leak is a
+    # hardcoded value misplaced in a ConfigMap (people guard `Secret` but not
+    # `ConfigMap`). The k8s/**/*.yaml arm closes the raw-manifest gap: L4
+    # kube-linter has no hardcoded-Secret-value check and trufflehog (#445)
+    # misses low-entropy literals, so raw Secrets would otherwise be unscanned.
+    # The positive whitelist (${VAR} / {{ .Values }} / placeholder / ref /
+    # YAML-alias) keeps this broad scope false-positive-free.
+    # Both .yaml and .yml — the pre-commit hook's files: regex is `\.ya?ml$`,
+    # so the scanner scope must match it or a `.yml` manifest would trigger the
+    # hook yet be silently skipped (self-review #A; no `.yml` exists today, but
+    # this keeps the scanner scope == the hook trigger).
+    for pattern in ("helm/*/values*.yaml", "helm/*/values*.yml",
+                    "helm/values*.yaml", "helm/values*.yml",
+                    "helm/*/templates/*.yaml", "helm/*/templates/*.yml",
+                    "k8s/**/*.yaml", "k8s/**/*.yml"):
         for p in REPO_ROOT.glob(pattern):
             if not p.is_file():
                 continue
