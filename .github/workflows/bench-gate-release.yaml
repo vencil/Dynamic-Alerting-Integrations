@@ -96,6 +96,9 @@ jobs:
 
       - name: Install benchstat
         run: |
+          # @latest acceptable (output format stable ~2 years). Pin a version
+          # if a future release breaks the regression grep/awk OR the
+          # `-filter` benchfilter unit syntax `.unit:(... OR ...)` (#608).
           go install golang.org/x/perf/cmd/benchstat@latest
           benchstat -h 2>&1 | head -5 || true
 
@@ -262,14 +265,30 @@ jobs:
         # (e.g., "v2.9.0 is 15% slower than v2.8.0 on FullDirLoad_1000"),
         # not to nag about cumulative ±5% jitter that probably reflects
         # runner variance across many months.
+        #
+        # METRIC SCOPE — `-filter '.unit:(sec/op OR B/op OR allocs/op)'` [#608].
+        # IDENTICAL fix to Tier 1: the detector greps the WHOLE benchstat
+        # output for `+N% (p<α)` rows, so it must not see non-deterministic
+        # process-level custom metrics. The bench emits MB-sys / MB-heap-
+        # after-gc (runtime/GC high-water) via b.ReportMetric; these drift
+        # randomly between processes and would false-flag drift here — ESPE-
+        # CIALLY dangerous at Tier 2's looser α=0.05 / 10% on the first real
+        # v2.9.0-vs-v2.8.0 exercise, where #459/#606 documented sys_bytes
+        # GC-pacing creep under sustained reload. benchstat normalizes
+        # ns/op → sec/op; the OR-separated allowlist keeps only deterministic
+        # per-op work and auto-excludes goroutines / affected-tenants / any
+        # future custom metric. The excluded metrics stay visible in the
+        # nightly bench-record artifact (informational), just not gated.
         run: |
           set -euo pipefail
           benchstat -alpha=0.05 \
+            -filter '.unit:(sec/op OR B/op OR allocs/op)' \
             "$RUNNER_TEMP/bench-out/bench-prior.txt" \
             "$RUNNER_TEMP/bench-out/bench-current.txt" \
             | tee "$RUNNER_TEMP/bench-out/benchstat.txt"
 
-          # Tier 2 magnitude floor: 10%.
+          # Tier 2 magnitude floor: 10% (metric scope already applied above
+          # via benchstat -filter — the grep only sees deterministic rows).
           MAGNITUDE_FLOOR_PCT=10.0
           regressions=$(grep -E '[[:space:]]\+[0-9]+\.[0-9]+%[[:space:]]*\(p=' \
                           "$RUNNER_TEMP/bench-out/benchstat.txt" \
@@ -342,6 +361,7 @@ jobs:
             echo "against **prior** \`$PRIOR_REF\` (\`$PRIOR_SHA\`)."
             echo ""
             echo "Thresholds: \`benchstat -alpha=0.05\` + \`|Δ| ≥ 10%\` magnitude floor (looser than Tier 1's 0.01 / 5% — release-level catches only user-visible drift, not per-PR strictness)."
+            echo "Metric scope: **deterministic per-op metrics only** (\`sec/op\`, \`B/op\`, \`allocs/op\`) via \`benchstat -filter\`. Non-deterministic process-level metrics (\`MB-sys\`, \`MB-heap-after-gc\`, \`goroutines\`) are excluded — GC/runtime high-water noise, not per-op work (#608)."
             echo "Topology: single-runner sequential (Trap 12 defense — same CPU on both benches)."
             echo ""
             echo "**Tier 2 is INFORMATIONAL** — this report does NOT block the release."

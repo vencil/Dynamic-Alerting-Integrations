@@ -44,7 +44,8 @@ name: Bench Gate (PR-time, Tier 1)
 #   - Gemini round-7 (Ghost Green) + round-8 (Blanket Immunity) defenses
 #     remain via the preflight check_override step.
 #
-# Regression detection (UNCHANGED from v4):
+# Regression detection (alpha + magnitude UNCHANGED from v4; metric scope
+# added in #608):
 #   - benchstat `-alpha=0.01` (NOT `-confidence` — that's the geomean CI
 #     width knob, not the per-bench significance threshold).
 #   - Plus magnitude floor: only fail on `|Δ| ≥ 5%`. Free-tier within-run
@@ -52,6 +53,10 @@ name: Bench Gate (PR-time, Tier 1)
 #     when noise exceeds the effect size.
 #   - The 5% floor is tightenable to 3% when Larger Runners are adopted
 #     (Tier 1 hardware-floor escalation path per bench-gate-rollout.md).
+#   - Metric scope (#608): `-filter` restricts detection to deterministic
+#     per-op metrics (sec/op, B/op, allocs/op). Non-deterministic process-
+#     level custom metrics (MB-sys, MB-heap-after-gc) are GC high-water
+#     noise that false-RED real Go PRs — excluded. See the Compare step.
 #
 # See: issue #433, issue #67 (closed/superseded), bench-record.yaml (nightly),
 #      memory feedback `feedback_github_actions_workflow_gotchas.md`
@@ -268,8 +273,9 @@ jobs:
       - name: Install benchstat (do early; cache the compiled binary)
         run: |
           # @latest acceptable: benchstat output format stable for ~2 years.
-          # Pin to a specific version if next version's output ever breaks
-          # the regression-detection grep/awk.
+          # Pin to a specific version if a future release ever breaks either
+          # the regression-detection grep/awk OR the `-filter` benchfilter
+          # unit syntax `.unit:(sec/op OR B/op OR allocs/op)` (#608).
           go install golang.org/x/perf/cmd/benchstat@latest
           benchstat -h 2>&1 | head -5 || true
 
@@ -382,14 +388,33 @@ jobs:
         # regression flagging — IT DID NOT. Use `-alpha=0.01` to actually
         # tighten significance. Plus a 5% magnitude floor (industry-standard
         # dual-threshold) to filter sub-noise FPs. [PR #437 round-6 catch.]
+        #
+        # METRIC SCOPE — `-filter '.unit:(sec/op OR B/op OR allocs/op)'` [#608].
+        # The detector greps the WHOLE benchstat output for `+N% (p<α)` rows,
+        # so it must never see non-deterministic metrics. The bench emits
+        # process-level custom metrics via b.ReportMetric (MB-sys, MB-heap-
+        # after-gc, goroutines, affected-tenants). MB-sys / MB-heap-after-gc
+        # are runtime/GC high-water readings that drift randomly BETWEEN
+        # processes (sign-flips across runs of identical code) and pseudo-
+        # replicate within a -count run → they read as "significant" and
+        # false-RED real Go PRs (root cause of #502; corroborated by #459/
+        # #606 finding sys_bytes creep is GC pacing, not code). Restrict the
+        # gate to DETERMINISTIC per-op work only. benchstat normalizes the
+        # time unit ns/op → sec/op, so the allowlist is `sec/op B/op
+        # allocs/op`; the OR-separated value list is benchfilter syntax. This
+        # allowlist auto-excludes any present/future non-deterministic custom
+        # metric. The excluded metrics remain emitted + visible in the nightly
+        # bench-record artifact (informational), just not gated.
         run: |
           set -euo pipefail
           benchstat -alpha=0.01 \
+            -filter '.unit:(sec/op OR B/op OR allocs/op)' \
             "$RUNNER_TEMP/bench-out/bench-base.txt" \
             "$RUNNER_TEMP/bench-out/bench-pr.txt" \
             | tee "$RUNNER_TEMP/bench-out/benchstat.txt"
 
-          # Two-tier regression detection:
+          # Two-tier regression detection (metric scope already applied above
+          # via benchstat -filter, so the grep only sees deterministic rows):
           # (1) benchstat already filters by α=0.01 (only `+` rows are
           #     statistically significant slowdowns).
           # (2) We additionally require |Δ| ≥ MAGNITUDE_FLOOR_PCT to
@@ -458,6 +483,7 @@ jobs:
             echo "Compared PR HEAD (\`${{ github.event.pull_request.head.sha }}\`)"
             echo "against merge-base (\`${{ needs.preflight.outputs.merge_base_sha }}\`)."
             echo "Gate threshold: **p < 0.01 AND |Δ| ≥ 5%** (statistical significance via \`benchstat -alpha=0.01\` + magnitude floor for free-tier-runner noise resistance)."
+            echo "Metric scope: **deterministic per-op metrics only** (\`sec/op\`, \`B/op\`, \`allocs/op\`) via \`benchstat -filter\`. Non-deterministic process-level metrics (\`MB-sys\`, \`MB-heap-after-gc\`, \`goroutines\`) are excluded — they are GC/runtime high-water noise, not per-op work (#608)."
             echo "Topology: **single-runner sequential** (base bench → drop_caches → pr bench → benchstat) — eliminates CPU heterogeneity by construction."
             echo ""
             if [ "$INCONCLUSIVE" = "true" ]; then
