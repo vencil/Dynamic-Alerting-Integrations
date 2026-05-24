@@ -17,20 +17,31 @@ Lint class: (b) per docs/internal/lint-policy.md (negative pattern + false-
 positive escape allowlist). Default scan scope: **diff-only** — only lines
 ADDED in the current PR's diff are checked. --full-scan for periodic audit.
 
-Scope: helm/*/values*.yaml + helm/*/templates/secret*.yaml.
+Scope: helm/*/values*.yaml + helm/values*.yaml + helm/*/templates/*.yaml
+(EVERY template, not just secret*.yaml — the most common leak is a hardcoded
+secret misplaced in a ConfigMap, which people guard far less than a Secret).
 
 A candidate line `KEY: VALUE` is a VIOLATION when:
-  - KEY (case-insensitive) contains a secret word AND is not a ref/flag key
+  - KEY (case-insensitive) ENDS WITH a secret word AND is not a ref/flag key
     (createSecret / secretName / existingSecret / secretRef / secretKeyRef);
+    endswith (not contains) so `passwordPolicy` / `tokenTTL` aren't flagged.
   - VALUE is a non-empty literal that is NOT whitelisted.
 Whitelisted VALUEs (legitimate, not a hardcoded secret):
   - empty (`""` / `''` / nothing)            — must-be-set marker
   - `${VAR}`                                  — env interpolation
   - `{{ .Values.* }}` / any `{{ ... }}`       — Helm template reference
-  - placeholders: `<...>`, REPLACE*/CHANGEME/CHANGE_ME/CHANGE-ME/TODO/
+  - placeholders: `<...>`, REPLACE_WITH/REPLACEME/CHANGEME/CHANGE_ME/TODO/
     PLACEHOLDER/YOUR_* (deploy-time fill-in markers)
-  - boolean (true/false) / numeric            — config flags, not secrets
+  - boolean (true/false) / numeric / Go-duration (4h) — config, not secrets
   - `valueFrom` / `secretKeyRef`              — k8s indirection, not a literal
+  - `*anchor` / `&anchor`                     — YAML alias / anchor reference
+
+Known limitations (accepted residual risk — line-based KEY:VALUE scan, no
+YAML AST, to stay fast + comment-preserving):
+  - Block scalars (`key: |` / `key: >`) and list items (`- "literal"`) are NOT
+    scanned — a hardcoded secret inside those is left to #445 trufflehog
+    (high-entropy capture). A bare `key:` with a block/anchor below is treated
+    as a non-assignment and skipped.
 
 Usage:
     python3 scripts/tools/lint/check_helm_values_secrets.py [--ci]
@@ -112,6 +123,10 @@ _NUMERIC = re.compile(r"^-?\d+(\.\d+)?$")
 # Go/k8s durations (4h / 30s / 1500ms / 4h30m) — a *TTL/*timeout config, not a secret.
 _DURATION = re.compile(r"(?i)^\d+(\.\d+)?(ns|us|ms|s|m|h|d|w|y)([0-9.]+(ns|us|ms|s|m|h))*$")
 _K8S_REF = re.compile(r"(?i)^(valueFrom|secretKeyRef|configMapKeyRef|fieldRef)\b")
+# YAML alias (`*anchor`) or bare anchor (`&anchor`) — a reference to a value
+# defined elsewhere, not a literal here. `&anchor "literal"` (anchor WITH an
+# inline value) does NOT match this (trailing value) and is still scanned.
+_YAML_REF = re.compile(r"^[*&][A-Za-z0-9_.\-]+$")
 
 _LINE = re.compile(r"^\s*([A-Za-z0-9_.\-]+)\s*:\s*(.*?)\s*$")
 
@@ -161,6 +176,8 @@ def value_is_whitelisted(value: str) -> bool:
         return True
     if _K8S_REF.match(v):
         return True
+    if _YAML_REF.match(v):  # YAML alias `*anchor` / bare anchor `&anchor` — a reference, not a literal
+        return True
     return False
 
 
@@ -189,8 +206,15 @@ def scan_line(line: str) -> tuple[str, str] | None:
 # ---------------------------------------------------------------------------
 def find_scope_files() -> list[Path]:
     out: list[Path] = []
-    for pattern in ("helm/*/values*.yaml", "helm/*/templates/secret*.yaml",
-                    "helm/*/templates/*secret*.yaml"):
+    # Scope = every chart values file (incl. tier variants), top-level value
+    # overlays (helm/values-*.yaml), AND every rendered-source template — NOT
+    # just secret*.yaml. A key named like a secret must not appear as a literal
+    # in ANY manifest; the most common leak is a hardcoded value misplaced in a
+    # ConfigMap (people guard `Secret` but not `ConfigMap`). The positive
+    # whitelist (${VAR} / {{ .Values }} / placeholder / ref / YAML-alias) keeps
+    # this broad scope false-positive-free (verified: 0 findings across 69 files).
+    for pattern in ("helm/*/values*.yaml", "helm/values*.yaml",
+                    "helm/*/templates/*.yaml"):
         for p in REPO_ROOT.glob(pattern):
             if not p.is_file():
                 continue

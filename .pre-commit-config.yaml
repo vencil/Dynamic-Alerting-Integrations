@@ -160,7 +160,10 @@ repos:
         entry: python3 -X utf8 scripts/tools/lint/check_helm_values_secrets.py --ci
         language: python
         pass_filenames: false
-        files: '^helm/.*/(values.*\.yaml|templates/.*secret.*\.yaml)$'
+        # Any helm YAML (values + ALL templates incl ConfigMaps + top-level
+        # overlays) — the wrapper scopes precisely; this just decides when to
+        # run. ConfigMaps are the prime leak vector (#594 self/Gemini review).
+        files: '^helm/.*\.ya?ml$|^scripts/tools/lint/check_helm_values_secrets\.py$'
 
       # --- Fast drift checks (< 5s each) ---
       - id: tool-map-check

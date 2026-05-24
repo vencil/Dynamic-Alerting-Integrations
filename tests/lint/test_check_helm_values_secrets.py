@@ -57,6 +57,7 @@ class TestValueWhitelist:
         "REPLACE_WITH_CLIENT_SECRET", "<changeme>", "CHANGE_ME",
         "your-secret-here", "TODO", "placeholder",
         "true", "false", "12345", "4h", "30s", "1500ms", "4h30m",
+        "*db_pass", "&db_pass",  # YAML alias / anchor reference (self/Gemini review)
     ])
     def test_whitelisted(self, val):
         assert hvs.value_is_whitelisted(val) is True
@@ -94,6 +95,7 @@ class TestScanLine:
         "  secretKey: federation-signing-key.pem",
         "  secretName: tenant-federation-signing-key",
         "  passwordPolicy: strict",   # config about a secret, not a holder
+        "  password: *db_pass",       # YAML alias reference, not a literal
         "  # password: leaked-in-comment",
         "  password:",          # bare key (block/continuation)
         "  image: nginx:1.28",  # not a secret key
@@ -103,10 +105,16 @@ class TestScanLine:
 
 
 class TestScopeAndBaseline:
-    def test_scope_includes_values_and_secret_templates(self):
+    def test_scope_includes_values_templates_and_configmaps(self):
         rels = {p.relative_to(hvs.REPO_ROOT).as_posix() for p in hvs.find_scope_files()}
         assert "helm/mariadb-instance/values.yaml" in rels
         assert any("templates/secret" in r for r in rels)
+        # expanded scope (Gemini review): ALL templates incl ConfigMaps + the
+        # top-level value overlays, not just secret*.yaml
+        assert any("/templates/" in r and "secret" not in r for r in rels), \
+            "non-secret templates (ConfigMaps etc.) must be in scope"
+        assert any(r.startswith("helm/values") for r in rels), \
+            "top-level helm/values-*.yaml overlays must be in scope"
         # worktrees excluded
         assert not any(".claude" in r for r in rels)
 
