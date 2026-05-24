@@ -23,6 +23,7 @@ lang: zh
 | **PR-time bench gate 看懂 + 處理 regression** | [§Tier 1 PR-Time Bench Gate Operations](#tier-1-pr-time-bench-gate-operations) |
 | **Override label 申請 / per-event semantics** | [§Override 申請流程](#override-申請流程) |
 | **Release-time cumulative drift report (Tier 2)** | [§Tier 2 Release-Time Bench Gate Operations](#tier-2-release-time-bench-gate-operations) |
+| **Reload 下記憶體 creep / GOMEMLIMIT / FreeOSMemory lever** | [§Memory characteristics under reload pressure](#memory-characteristics-under-reload-pressure-459) |
 | 踩坑記錄 | [§踩坑記錄](#踩坑記錄-lessons-learned) |
 
 ---
@@ -510,6 +511,62 @@ func silenceLogs(b *testing.B) {
 - **SLO definitive sign-off**：B-2 hard SLO 需 3+ 輪 customer 環境驗證
 
 ---
+
+## Memory characteristics under reload pressure (#459)
+
+> **TL;DR**：sustained reload pressure 下 `go_memstats_sys_bytes` + `go_memstats_heap_idle_bytes` 會 high-water creep，但 `heap_objects` 持平 — 這是 **Go runtime GC pacing 行為，不是 code leak**。預設不需處理；abnormally high reload cadence 才動 lever。Customer sizing guidance 見 [`deployment-sizing.md`](../integration/deployment-sizing.md)。
+
+### Soak 發現（v2.8.0 closure readiness, 2026-05-12）
+
+1000-tenant production-config soak（60 min / 15s reload interval / default `GOGC=100`）：
+
+| Metric | First | Last | Drift | Verdict |
+|---|---|---|---|---|
+| `go_goroutines` | 10 | 9 | −10.0% | ✅ 無 goroutine leak |
+| `go_memstats_sys_bytes` | 35.0 MiB | 39.3 MiB | +12.4% | 🟡 creep |
+| `go_memstats_heap_inuse_bytes` | 15.7 MiB | 13.5 MiB | −13.7% | ✅ |
+| `go_memstats_heap_idle_bytes` | 11.5 MiB | 17.4 MiB | **+52.0%** | ❌ high-water creep |
+| `go_memstats_heap_objects` | 192404 | 187351 | −2.6% | ✅ 無 live-object leak |
+
+**Key insight**：`heap_objects` 持平 → 沒有 reference-held leak；`sys_bytes` + `heap_idle` 上漲 → runtime 在 reload churn 下持有 OS pages 高水位、GC 不積極 return-to-OS。對照 Run A（`GOGC=20` stress，同 60min/15s）：`sys_bytes +1.7%` / `heap_idle +0.1%` — aggressive GC 壓住 creep，**證明是 GC pacing，不是 leak**。
+
+> ⚠️ **2-tenant fixture 會 mask 這個現象** — `.build/v2.8.0-soak-2tenant-archive/` 的 2-tenant run 看不到 creep。量 memory characteristics 必用 **production-shape（1000-tenant）fixture**，否則 working-set 太小、scan/parse churn 不足以觸發 runtime 的高水位保留。
+
+### Mitigation levers（皆 opt-in，default off = 不改 runtime 行為）
+
+| Lever | 機制 | 預設 | 何時動 |
+|---|---|---|---|
+| **`GOMEMLIMIT`**（env，Go 1.19+）| soft heap ceiling；逼近時 GC 變積極 + 提早 scavenge | unset | **首選**。Helm `exporter.goMemLimit`（建議起點 ≈ `resources.limits.memory` × 0.75）|
+| **`-free-os-mem-after-reload`**（flag）| 每次 reload 後呼 `runtime/debug.FreeOSMemory()`（1 次 STW GC + 立即 scavenge）| off | GOMEMLIMIT 仍壓不住 **且** reload cadence 低到 per-reload GC 成本可忽略。Helm `exporter.freeOsMemAfterReload` |
+| **`-reload-interval` 調高** | 給 GC 更多收斂時間 | 30s（**不改**）| 由 customer 依 config-change 頻率調，不改 chart default（blast radius 大、需 Track 1 數據佐證）|
+
+> ⛔ **不重設 `GOGC` default** — `GOGC=100` 是 Go runtime convention + customer expectation；soak 用 `GOGC=20` 只是診斷 stress，不是建議值。
+
+### 量測訊號
+
+- `go_memstats_heap_released_bytes`（soak harness 已追蹤）— **直接的 return-to-OS 訊號**；GOMEMLIMIT / FreeOSMemory 生效時會上升。
+- `da_config_free_os_memory_total`（exporter metric）— FreeOSMemory lever 啟用時每次 reload +1；預設 0（非 0 即代表 lever 已開）。
+
+### 如何 reproduce / characterize（Track 1）
+
+soak harness 已支援所有 sweep；exporter 端調 env/flag，harness 端只負責量測：
+
+```bash
+# 4-hour baseline（確認 sys_bytes 是 asymptotic 還是 linear unbounded）
+python3 scripts/tools/dx/run_chaos_soak.py --target-url http://localhost:8080 \
+    --config-dir <1000-tenant-conf.d> --duration-min 240 \
+    --reload-interval-sec 15 --metrics-poll-sec 30 \
+    --output-dir .build/soak-459/run-baseline-15s
+
+# Reload-interval sweep（customer-realistic cadence 的 growth rate）
+#   重跑上式，--reload-interval-sec 換 60 / 300 / 3600，output-dir 各自分開
+
+# GOMEMLIMIT 實驗：exporter 端啟動帶 GOMEMLIMIT=50MiB 再跑同一條 harness 指令
+#   GOMEMLIMIT=50MiB ./threshold-exporter -config-dir ... -reload-interval 15s
+#   比 heap_released_bytes / sys_bytes 兩條曲線即知 lever 是否壓住 creep
+```
+
+比對用 `python3 scripts/tools/dx/render_soak_diff.py --input-dir <output-dir>`。
 
 ## v2.8.0 Phase 2 e2e Alert Fire-through (B-1 Phase 2)
 

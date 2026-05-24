@@ -28,11 +28,12 @@ import (
 )
 
 var (
-	configPath     string
-	configDir      string
-	listenAddr     string
-	reloadInterval time.Duration
-	scanDebounce   time.Duration
+	configPath           string
+	configDir            string
+	listenAddr           string
+	reloadInterval       time.Duration
+	scanDebounce         time.Duration
+	freeOSMemAfterReload bool
 )
 
 func init() {
@@ -44,6 +45,12 @@ func init() {
 	// hierarchical reload. Set to 0 to disable (synchronous reload per
 	// detected diff, matching v2.6.0 behavior).
 	flag.DurationVar(&scanDebounce, "scan-debounce", DefaultDebounceWindow, "Debounce window for hierarchical conf.d reload (0 disables)")
+	// #459 opt-in lever: call runtime/debug.FreeOSMemory() after each reload
+	// so the Go runtime returns idle heap to the OS instead of holding the
+	// high-water mark under sustained reload pressure. Default off — costs one
+	// extra STW GC per reload, only worth it under abnormally high reload
+	// cadence. Pairs with GOMEMLIMIT (set via env). See deployment-sizing.md.
+	flag.BoolVar(&freeOSMemAfterReload, "free-os-mem-after-reload", false, "Call runtime/debug.FreeOSMemory() after each reload to return idle heap to the OS (#459 mitigation lever; default off)")
 }
 
 // shutdownTimeout caps how long the graceful HTTP shutdown will wait
@@ -59,14 +66,29 @@ func main() {
 	// Auto-detect mode: -config-dir takes precedence, then -config, then default
 	resolvedPath := resolveConfigPath()
 
+	// GOMEMLIMIT (#459): the Go runtime reads this env var natively (Go
+	// 1.19+) and uses it as a soft heap ceiling, pacing GC harder as the
+	// heap approaches the limit — the primary lever for bounding the
+	// sys_bytes / heap_idle creep. We don't parse or apply it ourselves;
+	// we only surface the effective value so operators can confirm the Pod
+	// template wired it through. "unset" = runtime default (effectively
+	// unlimited). See deployment-sizing.md.
+	goMemLimit := os.Getenv("GOMEMLIMIT")
+	if goMemLimit == "" {
+		goMemLimit = "unset (runtime default)"
+	}
+
 	log.Printf("threshold-exporter starting")
-	log.Printf("  config:   %s", resolvedPath)
-	log.Printf("  listen:   %s", listenAddr)
-	log.Printf("  reload:   %s", reloadInterval)
-	log.Printf("  debounce: %s", scanDebounce)
+	log.Printf("  config:      %s", resolvedPath)
+	log.Printf("  listen:      %s", listenAddr)
+	log.Printf("  reload:      %s", reloadInterval)
+	log.Printf("  debounce:    %s", scanDebounce)
+	log.Printf("  GOMEMLIMIT:  %s", goMemLimit)
+	log.Printf("  free-os-mem: %t", freeOSMemAfterReload)
 
 	// Load initial config
 	manager := NewConfigManagerWithDebounce(resolvedPath, scanDebounce)
+	manager.SetFreeOSMemAfterReload(freeOSMemAfterReload)
 	if err := manager.Load(); err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}

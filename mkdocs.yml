@@ -243,6 +243,7 @@ nav:
     - Federation: integration/federation-integration.md
     - Tenant Federation: integration/tenant-federation.md
     - GitOps 部署: integration/gitops-deployment.md
+    - 部署容量規劃: integration/deployment-sizing.md
   - 遷移:
     - 遷移指南: migration-guide.md
     - 遷移引擎: migration-engine.md
