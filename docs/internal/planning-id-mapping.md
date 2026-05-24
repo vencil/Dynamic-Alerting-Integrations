@@ -148,6 +148,7 @@ SOT 在 [`dx-tooling-backlog.md`](dx-tooling-backlog.md)。
 | TRK-313 | [#594](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/594) | Container SAST Layer 3 — Helm values secret-shape lint | [#448](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/448) |
 | TRK-314 | [#595](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/595) | Container SAST Layer 4 stub + CI integration + branch protection | [#448](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/448) |
 | TRK-315 | [#596](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/596) | Container SAST — hybrid-policy codify + consolidated baseline + epic closure | [#448](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/448) |
+| TRK-316 | [#609](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/609) | Tenant Log Query Federation — authz-plane-only, ingestion-decoupled（[ADR-021](../adr/021-tenant-log-query-federation.md) 實作 epic, Phase 1 b → v2.10.0） | — |
 
 ## 不在 mapping 範圍
 
