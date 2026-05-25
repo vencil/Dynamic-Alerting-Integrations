@@ -137,6 +137,7 @@ lang: zh
 | `check_codename_leak.py` | Block internal codenames from leaking to user-facing files. |
 | `check_commit_scope_doc.py` | Commit-scope doc drift gate (L1 pre-commit hook + validate_all integration). |
 | `check_design_token_usage.py` | JSX 設計 token 使用完整性 lint |
+| `check_dev_bypass_manifest.py` | ADR-022 Layer 4 (deploy-time guard). |
 | `check_dev_rules_enforcement.py` | detect doc-drift in dev-rules.md. |
 | `check_devrules_size.py` | Dev-rules 尺寸上限檢查。 |
 | `check_dist_source_consistency.py` | Catch portal dist commits without matching source change (testing-playbook §LL §2, TRK-239). |

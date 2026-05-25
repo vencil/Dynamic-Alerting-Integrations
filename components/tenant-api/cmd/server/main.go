@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -96,6 +97,18 @@ func main() {
 	reloadInterval := flag.Duration("reload-interval", 30*time.Second,
 		"How often to check for RBAC config changes")
 
+	// LOCAL-DEV-ONLY auth bypass (ADR-022). Default off. When on, a dev
+	// identity is injected for requests lacking an oauth2-proxy header so the
+	// stack works without oauth2-proxy (try-local compose). RBAC still applies
+	// to the injected group. Guarded by a runtime poison pill (panics in k8s)
+	// + /metrics tripwire + #448 SAST (forbids the env var in manifests).
+	devBypassAuth := flag.Bool("dev-bypass-auth", envBool("TA_DEV_BYPASS_AUTH"),
+		"LOCAL DEV ONLY: inject a dev identity when no oauth2-proxy header is present (default off; panics if run in Kubernetes)")
+	devBypassEmail := flag.String("dev-bypass-email", envOrDefault("TA_DEV_BYPASS_EMAIL", "dev@local"),
+		"Identity email injected by --dev-bypass-auth")
+	devBypassGroups := flag.String("dev-bypass-groups", envOrDefault("TA_DEV_BYPASS_GROUPS", "demo-admins"),
+		"Comma-separated IdP groups injected by --dev-bypass-auth (must map to tenants in _rbac.yaml)")
+
 	// v2.6.0: PR-based write-back mode (ADR-011)
 	// Supports: "direct" (default), "pr" or "pr-github" (GitHub PRs), "pr-gitlab" (GitLab MRs)
 	writeMode := flag.String("write-mode", envOrDefault("TA_WRITE_MODE", "direct"),
@@ -164,6 +177,16 @@ func main() {
 	configureLogger()
 
 	slog.Info("tenant-api starting", "config_dir", *configDir, "addr", *listenAddr)
+
+	// ── dev-auth-bypass safety (ADR-022) ──────────────────────────────────────
+	// Layer 3: runtime poison pill — refuse (panic) to start with the bypass
+	// inside a Kubernetes cluster. Layer 2: loud WARN + /metrics tripwire gauge.
+	if *devBypassAuth {
+		rbac.DevBypassK8sGuard(os.Getenv, pathExists)
+		handler.SetDevBypassActive(true)
+		slog.Warn("⚠️  DEV AUTH BYPASS ACTIVE — a dev identity is injected for requests without an oauth2-proxy header. LOCAL DEV ONLY; never enable in production.",
+			"inject_email", *devBypassEmail, "inject_groups", *devBypassGroups)
+	}
 
 	// ── Dependencies ──────────────────────────────────────────────────────────
 	rbacMgr, err := rbac.NewManager(*rbacPath)
@@ -291,6 +314,13 @@ func main() {
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Timeout(30 * time.Second))
 	r.Use(handler.MetricsMiddleware)
+
+	// dev-auth-bypass (ADR-022): mounted only when --dev-bypass-auth is set
+	// (Layer 1 = default off). Placed before the rate limiter so the injected
+	// X-Forwarded-Email is the bucketing key; downstream RBAC enforces normally.
+	if *devBypassAuth {
+		r.Use(rbac.DevBypassMiddleware(*devBypassEmail, *devBypassGroups))
+	}
 
 	// v2.8.0 B-6 PR-1: per-caller rate limiter. Mounted AFTER
 	// the chi standard chain so the limiter sees the caller
@@ -515,4 +545,21 @@ func envOrDefault(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// envBool returns true when the env var is a truthy string ("true"/"1"/"yes",
+// case-insensitive). Used for the --dev-bypass-auth flag default.
+func envBool(key string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
+	case "true", "1", "yes", "on":
+		return true
+	}
+	return false
+}
+
+// pathExists reports whether a filesystem path exists (used by the
+// dev-bypass Kubernetes poison-pill guard to probe the SA token mount).
+func pathExists(p string) bool {
+	_, err := os.Stat(p)
+	return err == nil
 }

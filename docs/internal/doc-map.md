@@ -33,6 +33,7 @@ lang: zh
 | `docs/adr/019-planning-ssot.md` | Platform Engineers, contributors, ai-agents | ADR-019: Planning SSOT — Frontmatter Contract + Discovery-based Index |
 | `docs/adr/020-tenant-federation.md` | Platform Engineers, contributors | ADR-020: Tenant Federation — Label-Injection Proxy over Self-Built Endpoint |
 | `docs/adr/021-tenant-log-query-federation.md` | Platform Engineers, contributors | ADR-021: Tenant Log Query — Authorization-Plane-Only, Ingestion-Decoupled |
+| `docs/adr/022-dev-auth-bypass-four-layer-containment.md` | Platform Engineers, contributors | ADR-022: tenant-api Dev-Auth Bypass — Local-Dev Identity Substitute, Four-Layer Containment |
 | `docs/api/README.md` (.en.md) | Platform Engineers, SREs | Threshold Exporter API Reference |
 | `docs/api/tenant-api-hardening.md` (.en.md) | platform-ops, sre, security | Tenant API Hardening (v2.8.0) |
 | `docs/architecture-and-design.md` (.en.md) | Platform Engineers | 架構與設計 — 動態多租戶警報平台技術白皮書 |

@@ -26,7 +26,7 @@ lang: zh
 | `TRK-006` | dx | TRK-006: Skip budget CI gate | ci | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
 | `TRK-010` | dx | TRK-010: Flake 自動重試 CI Policy（不是盲目全域 retry） | ci | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
 
-### accepted (21)
+### accepted (22)
 
 | ID | Kind | Title | Domain | PR | Source |
 |----|------|-------|--------|------|--------|
@@ -51,6 +51,7 @@ lang: zh
 | `ADR-019` | adr | ADR-019: Planning SSOT — Frontmatter Contract + Discovery-based Index | docs | — | [docs/adr/019-planning-ssot.md](../adr/019-planning-ssot.md) |
 | `ADR-020` | adr | ADR-020: Tenant Federation — Label-Injection Proxy over Self-Built Endpoint | tenant-api | — | [docs/adr/020-tenant-federation.md](../adr/020-tenant-federation.md) |
 | `ADR-021` | adr | ADR-021: Tenant Log Query — Authorization-Plane-Only, Ingestion-Decoupled | tenant-api | — | [docs/adr/021-tenant-log-query-federation.md](../adr/021-tenant-log-query-federation.md) |
+| `ADR-022` | adr | ADR-022: tenant-api Dev-Auth Bypass — Local-Dev Identity Substitute, Four-Layer Containment | tenant-api | — | [docs/adr/022-dev-auth-bypass-four-layer-containment.md](../adr/022-dev-auth-bypass-four-layer-containment.md) |
 
 ### proposed (15)
 
