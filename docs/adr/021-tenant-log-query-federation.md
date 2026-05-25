@@ -2,7 +2,7 @@
 title: "ADR-021: Tenant Log Query — Authorization-Plane-Only, Ingestion-Decoupled"
 tags: [adr, federation, multi-tenant, logs, observability, security]
 audience: [platform-engineers, contributors]
-version: v2.9.0
+version: v2.8.1
 lang: zh
 id: ADR-021
 tracking_kind: adr
