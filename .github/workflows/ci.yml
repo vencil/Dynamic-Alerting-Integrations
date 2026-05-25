@@ -104,6 +104,11 @@ jobs:
           # (pure-Python class-(b), diff-only). fetch-depth: 0 above gives the
           # diff base; PR_BODY env (set on this job) carries the bypass tag.
           pre-commit run helm-values-secrets-check --all-files
+          # ADR-022 Layer 4: forbid tenant-api's --dev-bypass-auth /
+          # TA_DEV_BYPASS_AUTH switch from any deploy manifest (helm/k8s/
+          # operator-manifests). Deploy-time complement to the runtime k8s
+          # poison pill. HARD block.
+          pre-commit run dev-bypass-manifest-guard --all-files
 
   lint-rule-packs:
     # Custom Prometheus rule-pack governance linter.

@@ -167,6 +167,19 @@ repos:
         # admin/admin literal lived there, unscanned by any layer).
         files: '^helm/.*\.ya?ml$|^k8s/.*\.ya?ml$|^scripts/tools/lint/check_helm_values_secrets\.py$'
 
+      # --- ADR-022 Layer 4: forbid the dev-auth-bypass switch in manifests ---
+      # tenant-api's --dev-bypass-auth / TA_DEV_BYPASS_AUTH is a LOCAL-DEV-ONLY
+      # identity bypass; it must NEVER reach a deploy manifest. Deploy-time
+      # complement to the runtime k8s poison pill (the binary panics if the flag
+      # is set in-cluster) — and covers NON-k8s manifests the runtime cannot see.
+      # HARD block: no bypass tag.
+      - id: dev-bypass-manifest-guard
+        name: "ADR-022 L4: forbid TA_DEV_BYPASS_AUTH in deploy manifests"
+        entry: python3 -X utf8 scripts/tools/lint/check_dev_bypass_manifest.py --ci
+        language: python
+        pass_filenames: false
+        files: '^helm/.*\.ya?ml$|^k8s/.*\.ya?ml$|^operator-manifests/.*\.ya?ml$|^scripts/tools/lint/check_dev_bypass_manifest\.py$'
+
       # --- Container/k8s IaC SAST Layer 4 (#448 / TRK-314) ---
       # Raw k8s manifest security: `kube-linter lint k8s/` (no helm render —
       # the files are concrete objects). Reuses L2's kube-linter engine +

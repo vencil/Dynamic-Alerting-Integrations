@@ -33,6 +33,15 @@ func (m *metricsState) IncErrors() { m.errorsTotal.Add(1) }
 // IncWrites increments the total write counter.
 func (m *metricsState) IncWrites() { m.writesTotal.Add(1) }
 
+// devBypassActive records whether --dev-bypass-auth is enabled, surfaced at
+// /metrics as the Layer-2 tripwire gauge so the dangerous local-dev mode is
+// detectable by monitoring in ANY environment (ADR-022).
+var devBypassActive atomic.Bool
+
+// SetDevBypassActive records the dev-auth-bypass state for /metrics. Called
+// once at startup from main when the flag is parsed.
+func SetDevBypassActive(on bool) { devBypassActive.Store(on) }
+
 // MetricsMiddleware is a chi middleware that increments request/error counters.
 func MetricsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -96,4 +105,14 @@ func MetricsHandler(w http.ResponseWriter, r *http.Request) {
 	_, _ = fmt.Fprintf(w, "# HELP tenant_api_federation_orphaned_subset_files Stale conf.d/_federation/<tenant>.yaml subset files whose tenant is no longer in conf.d.\n")
 	_, _ = fmt.Fprintf(w, "# TYPE tenant_api_federation_orphaned_subset_files gauge\n")
 	_, _ = fmt.Fprintf(w, "tenant_api_federation_orphaned_subset_files %d\n", orphanSubsets)
+
+	// ADR-022 Layer 2 tripwire: 1 ⇒ --dev-bypass-auth is ON (LOCAL DEV ONLY).
+	// MUST be 0 in production; alert if 1 outside a dev/compose environment.
+	devBypass := 0
+	if devBypassActive.Load() {
+		devBypass = 1
+	}
+	_, _ = fmt.Fprintf(w, "# HELP tenant_api_dev_auth_bypass_active 1 if --dev-bypass-auth is enabled (LOCAL DEV ONLY; must be 0 in production).\n")
+	_, _ = fmt.Fprintf(w, "# TYPE tenant_api_dev_auth_bypass_active gauge\n")
+	_, _ = fmt.Fprintf(w, "tenant_api_dev_auth_bypass_active %d\n", devBypass)
 }
