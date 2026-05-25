@@ -1,0 +1,21 @@
+# cache-demo — the "design-concept" tenant (the secondary signal).
+# It carries silent_mode + severity_dedup so the operational rule pack's
+# sentinel alerts fire (severity=none, inhibit sources) WITHOUT a real
+# breach: this showcases v2.8.0 Sentinel Alert + Severity Dedup.
+#   user_silent_mode{tenant=cache-demo,target_severity=warning}=1
+#       → TenantSilentWarning sentinel (severity=none)
+#   user_severity_dedup{tenant=cache-demo,mode=enable}=1
+#       → TenantSeverityDedupEnabled sentinel (severity=none)
+# It is also the 2nd tenant the portal Tenant Manager lists.
+tenants:
+  cache-demo:
+    redis_connected_clients: "5000"
+    _silent_mode: "warning"     # sentinel: notifications suppressed, alert still in TSDB
+    _severity_dedup: "enable"   # default; explicit here for the demo
+    _metadata:
+      owner: "cache-team"
+      tier: "tier-2"
+      runbook_url: "https://runbooks.demo.local/redis-clients"
+      environment: "staging"
+      domain: "cache"
+      db_type: "redis"

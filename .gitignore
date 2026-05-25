@@ -122,3 +122,10 @@ docs/internal/_project-structure-audit-*
 CUsersvencs*
 /C:\*
 .vite/
+
+# --- try-local runtime artifacts (#449 / #465) ---
+# The seed git-inits the bind-mounted config repo at runtime; its .git lives
+# inside a tracked dir — ignore it so it isn't nested-committed into this repo.
+try-local/seed/conf.d/.git/
+# A visitor's local .env (ports/tags) is theirs; only .env.example is tracked.
+try-local/.env

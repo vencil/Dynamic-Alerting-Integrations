@@ -1,0 +1,22 @@
+# db-demo — the headline tenant. The seed one-shot pushes a synthetic
+# mysql_global_status_threads_connected{tenant="db-demo"}=200 to pushgateway;
+# 200 > the critical threshold (120) below → rule-pack-mariadb's
+# MariaDBHighConnectionsCritical fires (severity=critical). This is the red
+# light visible in Prometheus :9090/alerts and Alertmanager :9093.
+#
+# The fire-chain (verified against rule-pack-mariadb.yaml + resolve.go):
+#   user_threshold{tenant=db-demo,metric=connections,severity=warning}=50
+#   user_threshold{tenant=db-demo,metric=connections,severity=critical}=120
+#   tenant_metadata_info{tenant=db-demo,...}=1   (from _metadata, group_left join)
+tenants:
+  db-demo:
+    mysql_connections: "50"            # warning threshold
+    mysql_connections_critical: "120"  # critical threshold → headline alert
+    mysql_cpu: "75"
+    _metadata:
+      owner: "platform-db-team"
+      tier: "tier-1"
+      runbook_url: "https://runbooks.demo.local/mysql-high-connections"
+      environment: "production"
+      domain: "ecommerce"
+      db_type: "mariadb"

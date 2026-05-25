@@ -108,6 +108,10 @@ Full comparison with Alertmanager routing examples: [Config-Driven Design](docs/
 
 ### Local Experience (5 minutes)
 
+> **Fastest: the one-command [`try-local/`](try-local/README.md) compose stack** — no Kubernetes. `cd try-local && cp .env.example .env && docker compose up -d` and see the Tenant Manager (2 demo tenants + a saved view) plus a real firing alert in ~1 minute. Windows requires **WSL2 + Docker Desktop (WSL2 backend)**.
+
+Or run the full K8s version via the Dev Container:
+
 ```bash
 # VS Code → "Reopen in Container"
 make setup && make verify && make test-alert

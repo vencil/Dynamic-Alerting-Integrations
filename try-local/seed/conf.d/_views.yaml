@@ -1,0 +1,11 @@
+# A pre-seeded Saved View so the portal Tenant Manager ships with one
+# example filter on first launch (C6 acceptance criterion). Saving a new view
+# in the UI writes this file and lands a real git commit (the Day-0 wow).
+views:
+  prod-ecommerce:
+    label: "Production · E-commerce"
+    description: "Tier-1 production tenants in the ecommerce domain"
+    created_by: "dev@local"
+    filters:
+      environment: "production"
+      domain: "ecommerce"

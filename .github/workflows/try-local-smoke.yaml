@@ -1,0 +1,105 @@
+# Nightly verification that the try-local onboarding stack still works
+# end-to-end (#449 / #465). This is the showcase visitors run first, so a
+# silent rot here is high-impact. NOT wired into release.yaml — it must never
+# gate a release; it only guards the onboarding experience.
+name: try-local nightly smoke
+
+on:
+  schedule:
+    - cron: "0 2 * * *" # 02:00 UTC daily
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  smoke:
+    name: try-local stack smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Bring up the stack
+        working-directory: try-local
+        run: |
+          cp .env.example .env
+          docker compose up -d
+
+      - name: Wait for healthchecked services (max 5 min)
+        working-directory: try-local
+        run: |
+          deadline=$(( $(date +%s) + 300 ))
+          while :; do
+            unhealthy="$(docker compose ps --format json \
+              | jq -r 'select(.Health != "" and .Health != "healthy") | .Service' 2>/dev/null || true)"
+            if [ -z "$unhealthy" ]; then
+              echo "all healthchecked services healthy"
+              break
+            fi
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              echo "::error::services not healthy within 5min: $unhealthy"
+              docker compose ps
+              exit 1
+            fi
+            sleep 5
+          done
+
+      - name: Run smoke.sh
+        working-directory: try-local
+        run: bash smoke.sh
+
+      - name: Dump compose logs on failure
+        if: failure()
+        working-directory: try-local
+        run: docker compose logs --no-color | tail -n 300
+
+      - name: Tear down
+        if: always()
+        working-directory: try-local
+        run: docker compose down -v --remove-orphans
+
+  # File a tracking issue only when this run AND the previous 2 completed runs
+  # all failed (3+ consecutive). Schedule-only so manual dispatch never files.
+  notify-on-streak:
+    name: file issue on 3+ consecutive failures
+    needs: smoke
+    if: failure() && github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check failure streak and open issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # The 2 most recent COMPLETED runs (this run is still in progress).
+          prev="$(gh run list --repo "$REPO" --workflow try-local-smoke.yaml \
+                    --branch main --status completed --limit 2 \
+                    --json conclusion --jq '[.[].conclusion] | @tsv')"
+          echo "previous 2 conclusions: ${prev:-<none>}"
+          fails="$(printf '%s' "$prev" | tr '\t' '\n' | grep -c '^failure$' || true)"
+          if [ "${fails:-0}" -lt 2 ]; then
+            echo "not 3 consecutive failures yet — skipping."
+            exit 0
+          fi
+          # Dedup: don't pile on if a tracking issue is already open.
+          open_count="$(gh issue list --repo "$REPO" --label try-local-broken \
+                          --state open --json number --jq 'length')"
+          if [ "${open_count:-0}" -gt 0 ]; then
+            echo "an open try-local-broken issue already exists — not duplicating."
+            exit 0
+          fi
+          # Ensure the label exists (P1 / documentation already do).
+          gh label create try-local-broken --repo "$REPO" --color B60205 \
+            --description "try-local onboarding stack is broken" --force || true
+          last3="$(gh run list --repo "$REPO" --workflow try-local-smoke.yaml \
+                     --branch main --limit 3 \
+                     --json createdAt,conclusion,url \
+                     --jq '.[] | "- \(.createdAt) [\(.conclusion)] \(.url)"')"
+          body="$(printf 'The try-local stack smoke test has failed 3+ consecutive nightly runs — the #449 onboarding showcase is likely broken.\n\nLast 3 runs:\n%s\n\nTriage locally:\n```\ncd try-local && cp .env.example .env && docker compose up -d\nbash smoke.sh\n```\n' "$last3")"
+          gh issue create --repo "$REPO" \
+            --title "try-local nightly smoke failing for 3+ runs" \
+            --label try-local-broken --label P1 --label documentation \
+            --assignee vencil \
+            --body "$body"
