@@ -13,6 +13,8 @@ lang: zh
 >
 > 相關文件：[Migration Guide](../migration-guide.md) · [Architecture](../architecture-and-design.md) §2 · [Rule Packs](../rule-packs/README.md)
 
+> 💡 **想先玩玩看？** [`try-local/`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/try-local/README.md) 一鍵起一個 self-service 試玩環境（Tenant Manager UI + 2 個 demo 租戶），不必等 Platform Team 部署就能體驗閾值調整 + Saved View。
+
 ## 你需要知道的三件事
 
 **1. 你的監控已經啟用了。** 平台預載 15 個 Rule Pack，涵蓋 MariaDB、PostgreSQL、Redis、MongoDB、Elasticsearch、Kafka 等。只要你的 exporter 在跑，alert rules 就已經生效。

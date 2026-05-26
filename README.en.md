@@ -104,13 +104,38 @@ Full comparison with Alertmanager routing examples: [Config-Driven Design](docs/
 
 ---
 
+## Try it locally
+
+One command runs the whole platform on your laptop — a real alert goes red in ~1 minute. No Kubernetes, no signup.
+
+[![try-local nightly smoke](https://img.shields.io/github/actions/workflow/status/vencil/Dynamic-Alerting-Integrations/try-local-smoke.yaml?branch=main&label=try-local%20nightly&cacheSeconds=3600)](https://github.com/vencil/Dynamic-Alerting-Integrations/actions/workflows/try-local-smoke.yaml)
+
+**Fastest (core twins, ~10s to a live Tenant Manager):**
+
+```bash
+cd try-local && cp .env.example .env
+docker compose up da-portal tenant-api     # just the core twins
+# or the full stack (monitoring + a real firing alert): docker compose up -d
+```
+
+Full walkthrough, what to look at, and troubleshooting in **[`try-local/README.md`](try-local/README.md)**. Windows requires **WSL2 + Docker Desktop (WSL2 backend)**.
+
+**The stack showcases 4 tryable products at once:**
+
+| Product | What / why | Day-0 one-liner | Day-1 integration |
+|---------|-----------|-----------------|-------------------|
+| **da-portal** (Tenant Manager UI) | Browse/edit tenant config visually; Save lands a real git commit (GitOps) | open <http://localhost:8081> | [Helm chart](helm/) |
+| **tenant-api** | File-based config API (commit-on-write, no database) | [QUICKSTART](components/tenant-api/QUICKSTART.md) | [Helm](helm/) + oauth2-proxy |
+| **threshold-exporter** + Prometheus | Turns YAML thresholds into `user_threshold` metrics → one `group_left` rule covers every tenant | [QUICKSTART](components/threshold-exporter/QUICKSTART.md) | [BYO Prometheus](docs/integration/byo-prometheus-integration.md) |
+| **da-tools** (CLI) | Guardrails / migration / scaffold (`guard`, `parser`, `batch-pr`…) | [QUICKSTART](components/da-tools/app/QUICKSTART.md) | CI integration |
+
+---
+
 ## Getting Started
 
 ### Local Experience (5 minutes)
 
-> **Fastest: the one-command [`try-local/`](try-local/README.md) compose stack** — no Kubernetes. `cd try-local && cp .env.example .env && docker compose up -d` and see the Tenant Manager (2 demo tenants + a saved view) plus a real firing alert in ~1 minute. Windows requires **WSL2 + Docker Desktop (WSL2 backend)**.
-
-Or run the full K8s version via the Dev Container:
+> One-command local experience is above in [**Try it locally**](#try-it-locally) (no Kubernetes). Or run the full K8s version via the Dev Container:
 
 ```bash
 # VS Code → "Reopen in Container"

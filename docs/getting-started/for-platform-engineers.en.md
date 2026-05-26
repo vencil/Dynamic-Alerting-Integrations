@@ -13,6 +13,8 @@ lang: en
 >
 > Related docs: [Architecture](../architecture-and-design.md) · [Benchmarks](../architecture-and-design.md) · [GitOps Deployment](../integration/gitops-deployment.md) · [Rule Packs](../rule-packs/README.md) · [Prometheus Operator Integration](../integration/prometheus-operator-integration.en.md) · [Deployment Decision Matrix](decision-matrix.md)
 
+> 💡 **Recommended first step: run the whole stack locally.** [`try-local/`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/try-local/README.md) is a one-command docker compose (no K8s) — see the threshold-exporter → Prometheus → real-alert chain in ~1 minute before planning your K8s deployment.
+
 ## Three Things You Need to Know
 
 **1. threshold-exporter is the core.** It reads YAML config, emits Prometheus metrics, and supports SHA-256 hot-reload. Two replicas run HA on port 8080.

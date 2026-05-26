@@ -104,13 +104,38 @@ graph TD
 
 ---
 
+## 在本機試用
+
+一行指令把整個平台跑在筆電上，~1 分鐘看到真實告警亮紅燈 —— 不需 Kubernetes、不需註冊。
+
+[![try-local nightly smoke](https://img.shields.io/github/actions/workflow/status/vencil/Dynamic-Alerting-Integrations/try-local-smoke.yaml?branch=main&label=try-local%20nightly&cacheSeconds=3600)](https://github.com/vencil/Dynamic-Alerting-Integrations/actions/workflows/try-local-smoke.yaml)
+
+**最快（核心雙星，~10 秒起 live Tenant Manager）：**
+
+```bash
+cd try-local && cp .env.example .env
+docker compose up da-portal tenant-api     # 只起核心雙星
+# 或完整 stack（含監控 + 真實 firing 告警）：docker compose up -d
+```
+
+完整 walkthrough、看點與排錯見 **[`try-local/README.md`](try-local/README.md)**。Windows 需 **WSL2 + Docker Desktop（WSL2 backend）**。
+
+**這套 stack 一次帶出 4 個可試產品：**
+
+| 產品 | 是什麼 / 解決什麼 | Day-0 一行試 | Day-1 整合 |
+|------|------------------|--------------|------------|
+| **da-portal**（Tenant Manager UI） | 視覺化瀏覽/編輯租戶設定，按 Save 即落一個真實 git commit（GitOps） | 開 <http://localhost:8081> | [Helm chart](helm/) |
+| **tenant-api** | file-based 設定 API（commit-on-write，無資料庫） | [QUICKSTART](components/tenant-api/QUICKSTART.md) | [Helm](helm/) + oauth2-proxy |
+| **threshold-exporter** + Prometheus | 把 YAML 閾值變成 `user_threshold` 指標 → `group_left` 單規則覆蓋全租戶 | [QUICKSTART](components/threshold-exporter/QUICKSTART.md) | [BYO Prometheus](docs/integration/byo-prometheus-integration.md) |
+| **da-tools**（CLI） | 護欄 / 遷移 / scaffold（`guard`、`parser`、`batch-pr`…） | [QUICKSTART](components/da-tools/app/QUICKSTART.md) | CI 整合 |
+
+---
+
 ## 開始使用
 
 ### 本地體驗（5 分鐘）
 
-> **最快：一鍵 compose stack [`try-local/`](try-local/README.md)** —— 不需 Kubernetes。`cd try-local && cp .env.example .env && docker compose up -d`，約 1 分鐘看到 Tenant Manager（2 個 demo 租戶 + 預存 Saved View）+ 一個真實 firing 告警。Windows 需 **WSL2 + Docker Desktop（WSL2 backend）**。
-
-或用 Dev Container 跑完整 K8s 版：
+> 一鍵本機體驗見上方 [**在本機試用**](#在本機試用)（不需 Kubernetes）。或用 Dev Container 跑完整 K8s 版：
 
 ```bash
 # VS Code → "Reopen in Container"
