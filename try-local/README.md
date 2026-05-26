@@ -90,6 +90,7 @@ make clean-local && docker compose up -d
 |---|---|
 | `docker compose up` 拉不到 image | image 在 `ghcr.io/vencil/*`；確認網路可達 ghcr.io。exporter/portal 目前是 amd64-only，Apple Silicon 會以 emulation 跑（較慢；原生多架構見 #463）。tenant-api 從源碼 build，為主機原生 arch。 |
 | `:9090/alerts` 一直沒紅燈 | 給它 ~1–2 分鐘（recording rule 15s interval + 規則 `for:30s`）。仍沒有就 `docker compose logs seed-metrics prometheus`。 |
+| 紅燈本來有、後來消失了 | pushgateway 是記憶體型（無持久化）—— 若單獨重啟它，seed 推的合成值會消失。重推：`docker compose up -d seed-metrics`。 |
 | portal 開了但 API 502 | tenant-api 還在起；稍等。確認 `docker compose ps` 中 tenant-api 是 running。 |
 | `make smoke-local` 說找不到 jq | 安裝 `jq`（smoke 需要 curl + jq）。 |
 
