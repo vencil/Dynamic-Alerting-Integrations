@@ -251,9 +251,13 @@ func (c *Client) doRequest(method, path string, body interface{}) ([]byte, error
 	if resp.StatusCode >= 400 {
 		// Sanitize: log the full response for debugging but only expose status code to callers.
 		// This prevents leaking internal GitLab error details to API consumers.
+		// 403 becomes a platform.ErrForbidden-matching APIError so handlers can
+		// map a missing-api-scope token to a clean HTTP 403 (see errors.go).
 		slog.Warn("gitlab API non-2xx",
 			"method", method, "path", path, "status", resp.StatusCode, "body", string(respBody))
-		return nil, fmt.Errorf("GitLab API %s %s returned %d", method, path, resp.StatusCode)
+		return nil, &platform.APIError{
+			Provider: "GitLab", Method: method, Path: path, StatusCode: resp.StatusCode,
+		}
 	}
 	return respBody, nil
 }

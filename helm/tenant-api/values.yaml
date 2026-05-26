@@ -1,6 +1,12 @@
 # tenant-api Helm values
 # Reference: ADR-009 — Tenant Manager CRUD API Architecture
 
+# ⛔ PR/MR write-back modes (--write-mode pr-github / pr-gitlab, ADR-011)
+# require replicaCount=1. The pending-PR dedup (per-tenant "one open PR at a
+# time") is enforced by an in-memory tracker + claim that is per-process — it
+# does NOT coordinate across pods, so >1 replica can open duplicate PRs for the
+# same tenant. The default `direct` write mode is unaffected. See #615 and
+# internal/platform/tracker.go (ClaimTenant).
 replicaCount: 1
 
 image:

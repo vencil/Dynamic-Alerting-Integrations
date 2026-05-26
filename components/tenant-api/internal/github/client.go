@@ -14,11 +14,17 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
 	"github.com/vencil/tenant-api/internal/platform"
 )
+
+// maxPRPages caps ListOpenPRs pagination at 1000 PRs (10 × per_page=100).
+// Mirrors the gitlab client's safety limit so a misbehaving forge that
+// keeps returning a "next" link can't spin the loop indefinitely.
+const maxPRPages = 10
 
 // Compile-time interface assertion: *Client implements platform.Client.
 var _ platform.Client = (*Client)(nil)
@@ -160,66 +166,130 @@ func (c *Client) DeleteBranch(branchName string) error {
 }
 
 // ListOpenPRs returns all open PRs created by tenant-api (filtered by head prefix).
+//
+// Follows GitHub's Link-header pagination (rel="next") so repos with more
+// than per_page open PRs are fully enumerated. Without this the single-page
+// fetch silently truncated at 100, so a tenant whose pending PR fell past
+// the first page looked PR-less to dedup → a duplicate PR got opened for it.
 func (c *Client) ListOpenPRs() ([]platform.PRInfo, error) {
-	resp, err := c.doRequest("GET",
-		fmt.Sprintf("/repos/%s/%s/pulls?state=open&per_page=100", c.owner, c.repo), nil)
-	if err != nil {
-		return nil, fmt.Errorf("list PRs: %w", err)
-	}
-
-	var prs []struct {
-		Number  int    `json:"number"`
-		HTMLURL string `json:"html_url"`
-		State   string `json:"state"`
-		Title   string `json:"title"`
-		Head    struct {
-			Ref string `json:"ref"`
-		} `json:"head"`
-		CreatedAt string `json:"created_at"`
-	}
-	if err := json.Unmarshal(resp, &prs); err != nil {
-		return nil, fmt.Errorf("parse PRs: %w", err)
-	}
-
 	var result []platform.PRInfo
-	for _, pr := range prs {
-		// Only include PRs created by tenant-api (branch prefix: tenant-api/)
-		if !strings.HasPrefix(pr.Head.Ref, "tenant-api/") {
-			continue
+
+	path := fmt.Sprintf("/repos/%s/%s/pulls?state=open&per_page=100", c.owner, c.repo)
+	for page := 1; ; page++ {
+		body, headers, err := c.do("GET", path, nil)
+		if err != nil {
+			return nil, fmt.Errorf("list PRs: %w", err)
 		}
-		info := platform.PRInfo{
-			Number:    pr.Number,
-			WebURL:    pr.HTMLURL,
-			State:     pr.State,
-			Title:     pr.Title,
-			HeadRef:   pr.Head.Ref,
-			CreatedAt: pr.CreatedAt,
+
+		var prs []struct {
+			Number  int    `json:"number"`
+			HTMLURL string `json:"html_url"`
+			State   string `json:"state"`
+			Title   string `json:"title"`
+			Head    struct {
+				Ref string `json:"ref"`
+			} `json:"head"`
+			CreatedAt string `json:"created_at"`
 		}
-		// Extract tenant ID from branch name: tenant-api/{tenantID}/{timestamp}
-		parts := strings.SplitN(pr.Head.Ref, "/", 3)
-		if len(parts) >= 2 {
-			info.TenantID = parts[1]
+		if err := json.Unmarshal(body, &prs); err != nil {
+			return nil, fmt.Errorf("parse PRs: %w", err)
 		}
-		result = append(result, info)
+
+		for _, pr := range prs {
+			// Only include PRs created by tenant-api (branch prefix: tenant-api/)
+			if !strings.HasPrefix(pr.Head.Ref, "tenant-api/") {
+				continue
+			}
+			info := platform.PRInfo{
+				Number:    pr.Number,
+				WebURL:    pr.HTMLURL,
+				State:     pr.State,
+				Title:     pr.Title,
+				HeadRef:   pr.Head.Ref,
+				CreatedAt: pr.CreatedAt,
+			}
+			// Extract tenant ID from branch name: tenant-api/{tenantID}/{timestamp}
+			parts := strings.SplitN(pr.Head.Ref, "/", 3)
+			if len(parts) >= 2 {
+				info.TenantID = parts[1]
+			}
+			result = append(result, info)
+		}
+
+		next := nextPagePath(headers.Get("Link"))
+		if next == "" {
+			break
+		}
+		if page >= maxPRPages {
+			slog.Warn("github PR pagination hit safety limit",
+				"page", page, "collected", len(result))
+			break
+		}
+		path = next
 	}
+
 	return result, nil
 }
 
-// doRequest performs an authenticated GitHub API request.
+// nextPagePath extracts the rel="next" target from a GitHub Link header and
+// returns it as a base-URL-relative path+query (host stripped). Returning a
+// relative path lets doRequest re-attach the configured baseURL, so
+// pagination keeps hitting the same host (works for api.github.com, GHE, and
+// httptest alike). Returns "" when there is no next page.
+func nextPagePath(link string) string {
+	if link == "" {
+		return ""
+	}
+	for _, part := range strings.Split(link, ",") {
+		seg := strings.TrimSpace(part)
+		if !strings.Contains(seg, `rel="next"`) {
+			continue
+		}
+		lo := strings.Index(seg, "<")
+		hi := strings.Index(seg, ">")
+		if lo < 0 || hi <= lo {
+			continue
+		}
+		u, err := url.Parse(seg[lo+1 : hi])
+		if err != nil {
+			return ""
+		}
+		p := u.EscapedPath()
+		if u.RawQuery != "" {
+			p += "?" + u.RawQuery
+		}
+		return p
+	}
+	return ""
+}
+
+// doRequest performs an authenticated GitHub API request, discarding
+// response headers. Use do() directly when the Link header is needed.
 func (c *Client) doRequest(method, path string, body interface{}) ([]byte, error) {
+	respBody, _, err := c.do(method, path, body)
+	return respBody, err
+}
+
+// do performs an authenticated GitHub API request and returns the response
+// body and headers. Non-2xx responses become a *platform.APIError carrying
+// only the status code — the upstream body is logged for debugging but never
+// surfaced to callers, so GitHub error details don't leak through the API.
+// A 403 matches errors.Is(err, platform.ErrForbidden) so handlers can map a
+// missing-write-scope token to a clean HTTP 403 instead of a 500.
+func (c *Client) do(method, path string, body interface{}) ([]byte, http.Header, error) {
 	var bodyReader io.Reader
 	if body != nil {
 		jsonBody, err := json.Marshal(body)
 		if err != nil {
-			return nil, fmt.Errorf("marshal body: %w", err)
+			return nil, nil, fmt.Errorf("marshal body: %w", err)
 		}
 		bodyReader = bytes.NewReader(jsonBody)
 	}
 
-	url := c.baseURL + path
-	req, err := http.NewRequest(method, url, bodyReader)
+	reqURL := c.baseURL + path
+	req, err := http.NewRequest(method, reqURL, bodyReader)
 	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
+		return nil, nil, fmt.Errorf("create request: %w", err)
 	}
 
 	req.Header.Set("Authorization", "Bearer "+c.token)
@@ -231,13 +301,13 @@ func (c *Client) doRequest(method, path string, body interface{}) ([]byte, error
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("http request: %w", err)
+		return nil, nil, fmt.Errorf("http request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("read response: %w", err)
+		return nil, nil, fmt.Errorf("read response: %w", err)
 	}
 
 	if resp.StatusCode >= 400 {
@@ -245,7 +315,9 @@ func (c *Client) doRequest(method, path string, body interface{}) ([]byte, error
 		// This prevents leaking internal GitHub error details to API consumers.
 		slog.Warn("github API non-2xx",
 			"method", method, "path", path, "status", resp.StatusCode, "body", string(respBody))
-		return nil, fmt.Errorf("GitHub API %s %s returned %d", method, path, resp.StatusCode)
+		return nil, resp.Header, &platform.APIError{
+			Provider: "GitHub", Method: method, Path: path, StatusCode: resp.StatusCode,
+		}
 	}
-	return respBody, nil
+	return respBody, resp.Header, nil
 }

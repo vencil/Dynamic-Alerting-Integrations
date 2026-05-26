@@ -9,6 +9,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/vencil/tenant-api/internal/gitops"
+	"github.com/vencil/tenant-api/internal/platform"
 	"github.com/vencil/tenant-api/internal/rbac"
 	"gopkg.in/yaml.v3"
 )
@@ -74,8 +75,11 @@ func PutTenant(d *Deps) http.HandlerFunc {
 
 		// v2.6.0: PR-based write-back mode (ADR-011) — supports GitHub + GitLab
 		if d.WriteMode.IsPRMode() && d.PRClient != nil && d.PRTracker != nil {
-			// Check for existing pending PR/MR
-			if d.PRTracker.HasPendingPR(tenantID) {
+			// Atomically claim the tenant. Returns false if a PR/MR is
+			// already pending OR another request is mid-creation — both map
+			// to 409. The claim (not the async poll cache) is what makes two
+			// concurrent same-tenant writes safe; see Tracker.ClaimTenant.
+			if !d.PRTracker.ClaimTenant(tenantID) {
 				existingPR, _ := d.PRTracker.PendingPRForTenant(tenantID)
 				WriteErrorEnvelope(rw, r, http.StatusConflict, ErrorResponse{
 					Error: "pending_pr_exists",
@@ -83,16 +87,22 @@ func PutTenant(d *Deps) http.HandlerFunc {
 					Extra: map[string]any{
 						"existing_pr_url": existingPR.WebURL,
 						"pr_number":       existingPR.Number,
-						"message":         fmt.Sprintf("A pending PR/MR for %s already exists. Merge or close it first.", tenantID),
+						"message":         fmt.Sprintf("A pending PR/MR for %s already exists or is being created. Merge or close it first.", tenantID),
 					},
 				})
 				return
 			}
+			// Release the claim on ANY exit that isn't a successful registration —
+			// every failure return AND a recovered panic. On success RegisterPR
+			// clears the in-flight claim and sets byTenant (the durable dedup), so
+			// this deferred release then no-ops; on failure/panic it frees the
+			// tenant for retry instead of leaving a zombie 409-until-pod-restart.
+			defer d.PRTracker.ReleaseClaim(tenantID)
 
 			// Create feature branch + commit
 			result, err := d.Writer.WritePR(tenantID, email, string(body))
 			if err != nil {
-				WriteJSONError(rw, r,http.StatusInternalServerError, "PR write failed: "+err.Error())
+				WriteJSONError(rw, r, http.StatusInternalServerError, "PR write failed: "+err.Error())
 				return
 			}
 
@@ -100,14 +110,24 @@ func PutTenant(d *Deps) http.HandlerFunc {
 			// PR-6/11: shared with BatchTenants via createPRAndRegister.
 			prTitle := fmt.Sprintf("[tenant-api] Update %s configuration", tenantID)
 			prBody := fmt.Sprintf("**Operator:** %s\n**Source:** tenant-manager UI\n**Tenant:** %s", email, tenantID)
-			pr, err := createPRAndRegister(d, 
+			pr, err := createPRAndRegister(d,
 				prTitle, prBody, result.BranchName,
 				[]string{"tenant-api", "auto-generated"},
 				[]string{tenantID},
 			)
 			if err != nil {
+				// Claim is released by the deferred ReleaseClaim above. A 403
+				// from the forge means the token passed ValidateToken (/user)
+				// but lacks write scope; surface it as a clean 403, never a 500
+				// (so da-portal can trigger its permission-error UI rather than
+				// a generic failure).
 				provider := d.PRClient.ProviderName()
-				WriteJSONError(rw, r,http.StatusServiceUnavailable, fmt.Sprintf("%s PR/MR creation failed: %s", provider, err.Error()))
+				if errors.Is(err, platform.ErrForbidden) {
+					WriteJSONErrorWithCode(rw, r, http.StatusForbidden, CodeForbidden,
+						fmt.Sprintf("insufficient %s permissions to open PR/MR — the configured token lacks write scope", provider))
+					return
+				}
+				WriteJSONError(rw, r, http.StatusServiceUnavailable, fmt.Sprintf("%s PR/MR creation failed: %s", provider, err.Error()))
 				return
 			}
 
