@@ -94,6 +94,15 @@ services:
       # — Docker DNS registers the alias as soon as the container starts.
       tenant-api:
         condition: service_started
+    healthcheck:
+      # The published image's baked healthcheck is `wget http://localhost/healthz`,
+      # but inside the container `localhost` resolves to ::1 (IPv6) first while
+      # nginx listens on IPv4 :80 only → it NEVER goes healthy (the nightly's
+      # wait-for-healthy gate then times out). Override with explicit 127.0.0.1.
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
     restart: unless-stopped
 
   # ── Monitoring stack (official multi-arch images) ────────────────────────
