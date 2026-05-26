@@ -13,6 +13,8 @@ lang: en
 >
 > Related docs: [Migration Guide](../migration-guide.md) · [Architecture](../architecture-and-design.md) §2 · [Rule Packs](../rule-packs/README.md)
 
+> 💡 **Want to play first?** [`try-local/`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/try-local/README.md) spins up a self-service sandbox in one command (Tenant Manager UI + 2 demo tenants) — try threshold edits and Saved Views without waiting for your Platform Team to deploy.
+
 ## Three Things You Need to Know
 
 **1. Your monitoring is already active.** The platform ships with 15 Rule Packs covering MariaDB, PostgreSQL, Redis, MongoDB, Elasticsearch, Kafka, and more. As long as your exporter is running, alert rules are in effect.

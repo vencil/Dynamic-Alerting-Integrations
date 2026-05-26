@@ -102,3 +102,14 @@ make clean-local && docker compose up -d
 docker run --rm -v "$PWD/seed/conf.d:/conf.d:ro" \
   ghcr.io/vencil/da-tools:${TOOLS_TAG:-v2.8.0} guard /conf.d
 ```
+
+## Next Step：上 Production（Kubernetes）
+
+try-local 跑順了、看對胃口 —— 下一步是評估正式部署到 Kubernetes：
+
+- **Helm charts** → [`helm/`](../helm/)（`da-portal` / `tenant-api` / `threshold-exporter`；da-tools 是 CLI image，無 chart）
+- **按角色入門** → [Platform Engineer 部署指南](../docs/getting-started/for-platform-engineers.md)
+- **接上既有 Prometheus** → [BYO Prometheus](../docs/integration/byo-prometheus-integration.md) · [Prometheus Operator](../docs/integration/prometheus-operator-integration.md)
+
+> ⚠️ try-local 用的 `--dev-bypass-auth` + `127.0.0.1`-only binding 是**本機限定**捷徑；production 改由 oauth2-proxy 注入身分、Helm values 控管（見 [ADR-022](../docs/adr/022-dev-auth-bypass-four-layer-containment.md)）。
+

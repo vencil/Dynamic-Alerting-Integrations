@@ -13,6 +13,8 @@ lang: zh
 >
 > 相關文件：[Rule Packs](../rule-packs/README.md) · [Custom Rule Governance](../custom-rule-governance.md) · [Architecture](../architecture-and-design.md) §2.4
 
+> 💡 **建議第一步：[`try-local/`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/try-local/README.md) 看告警真的 fire。** Mode 0 核心雙星起 Tenant Manager → 完整 stack 看 Rule Pack 把合成指標判成 critical 紅燈，是理解「閾值 → 告警」鏈最快的方式。
+
 ## 你需要知道的三件事
 
 **1. Rule Pack 就是你的領域。** 每個資料庫類型有對應的 Rule Pack YAML，你可以自訂其中的閾值、維度、告警規則。
