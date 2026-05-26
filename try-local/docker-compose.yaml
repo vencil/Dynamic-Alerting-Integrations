@@ -65,7 +65,10 @@ services:
     volumes:
       - ./seed/conf.d:/conf.d:rw
     ports:
-      - "${EXPOSE_API_PORT:-8080}:8080"
+      # Loopback-only: dev-bypass injects an ADMIN identity for header-less
+      # requests, so exposing this on 0.0.0.0 would hand anyone on the LAN
+      # write/commit access. try-local is local-only by design.
+      - "127.0.0.1:${EXPOSE_API_PORT:-8080}:8080"
     depends_on:
       seed-git:
         condition: service_completed_successfully
@@ -81,7 +84,9 @@ services:
   da-portal:
     image: ghcr.io/vencil/da-portal:${PORTAL_TAG:-v2.8.0}
     ports:
-      - "${EXPOSE_PORTAL_PORT:-8081}:80"
+      # Loopback-only: the portal proxies to tenant-api, so LAN exposure here
+      # is the same admin-access risk as exposing tenant-api directly.
+      - "127.0.0.1:${EXPOSE_PORTAL_PORT:-8081}:80"
     depends_on:
       # nginx resolves the upstream FQDN at startup with no `resolver`, so the
       # tenant-api container (which owns the alias) MUST be started first or
@@ -95,7 +100,7 @@ services:
   pushgateway:
     image: prom/pushgateway:v1.10.0
     ports:
-      - "${EXPOSE_PUSHGATEWAY_PORT:-9091}:9091"
+      - "127.0.0.1:${EXPOSE_PUSHGATEWAY_PORT:-9091}:9091"
     restart: unless-stopped
     # No shell in the image → no CMD healthcheck. Dependents use
     # service_started; the seed's curl --retry-connrefused covers listen lag.
@@ -111,7 +116,7 @@ services:
       # Rule packs from the repo's single source of truth (mounted read-only).
       - ../rule-packs:/etc/prometheus/rules:ro
     ports:
-      - "${EXPOSE_PROM_PORT:-9090}:9090"
+      - "127.0.0.1:${EXPOSE_PROM_PORT:-9090}:9090"
     depends_on:
       threshold-exporter:
         condition: service_started
@@ -132,7 +137,7 @@ services:
     volumes:
       - ./alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
     ports:
-      - "${EXPOSE_AM_PORT:-9093}:9093"
+      - "127.0.0.1:${EXPOSE_AM_PORT:-9093}:9093"
     depends_on:
       prometheus:
         condition: service_healthy

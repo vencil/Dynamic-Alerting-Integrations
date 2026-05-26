@@ -69,6 +69,8 @@ git -C try-local/seed/conf.d log --oneline
 
 ## Port 衝突
 
+所有 port 只綁 `127.0.0.1`（本機限定）—— dev-bypass 會為無 header 的請求注入 **admin** 身分，故刻意不對 LAN 開放（避免同網段他人取得寫入/commit 權）。要從別台裝置連，請自行改 compose 的 port binding。
+
 預設用 8080 / 8081 / 9090 / 9091 / 9093。若被占用，編輯 `.env`（從 `.env.example` 複製來的）改任一 `EXPOSE_*_PORT` 後重啟：
 
 ```bash
@@ -86,8 +88,8 @@ make clean-local && docker compose up -d
 
 | 症狀 | 處理 |
 |---|---|
-| `docker compose up` 拉不到 image | image 在 `ghcr.io/vencil/*`；確認網路可達 ghcr.io。arm64（Apple Silicon）需多架構 image 發佈完成（見 #463）。 |
-| `:9090/alerts` 一直沒紅燈 | 給它 ≥30s（規則 `for:30s`）。仍沒有就 `docker compose logs seed-metrics prometheus`。 |
+| `docker compose up` 拉不到 image | image 在 `ghcr.io/vencil/*`；確認網路可達 ghcr.io。exporter/portal 目前是 amd64-only，Apple Silicon 會以 emulation 跑（較慢；原生多架構見 #463）。tenant-api 從源碼 build，為主機原生 arch。 |
+| `:9090/alerts` 一直沒紅燈 | 給它 ~1–2 分鐘（recording rule 15s interval + 規則 `for:30s`）。仍沒有就 `docker compose logs seed-metrics prometheus`。 |
 | portal 開了但 API 502 | tenant-api 還在起；稍等。確認 `docker compose ps` 中 tenant-api 是 running。 |
 | `make smoke-local` 說找不到 jq | 安裝 `jq`（smoke 需要 curl + jq）。 |
 

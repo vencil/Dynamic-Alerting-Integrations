@@ -28,14 +28,16 @@ HOST="${SMOKE_HOST:-localhost}"
 PROM_PORT="${EXPOSE_PROM_PORT:-9090}"
 API_PORT="${EXPOSE_API_PORT:-8080}"
 PORTAL_PORT="${EXPOSE_PORTAL_PORT:-8081}"
-ALERT_TIMEOUT="${SMOKE_ALERT_TIMEOUT:-90}"
+# Headroom: the mariadb pack's recording rules run at interval:15s, then the
+# alert is for:30s — plus scrape/eval slack and slow CI runners.
+ALERT_TIMEOUT="${SMOKE_ALERT_TIMEOUT:-120}"
 
 fail() { echo "SMOKE FAIL: $*" >&2; exit 1; }
 
 command -v jq >/dev/null 2>&1 || fail "jq not found (required); install jq and retry"
 
-# 1. Poll for a firing critical alert. The headline rule has for:30s, so allow
-#    >= 30s + scrape/eval slack (default 90s).
+# 1. Poll for a firing critical alert. The headline rule has for:30s on top of
+#    a 15s recording-rule interval, so allow generous slack (default 120s).
 echo "[smoke] polling for a firing critical alert (<=${ALERT_TIMEOUT}s)..."
 deadline=$(( $(date +%s) + ALERT_TIMEOUT ))
 while :; do

@@ -1,7 +1,7 @@
 # Prometheus config for the try-local stack.
 #
 # 5s scrape + eval keeps the demo snappy; the headline alert has for:30s, so
-# smoke.sh polls /api/v1/alerts for ~90s (>= 30s + scrape/eval slack).
+# smoke.sh polls /api/v1/alerts for ~120s (>= 15s rule interval + 30s for + slack).
 #
 # Rule packs are mounted read-only from the repo's single source of truth
 # (../rule-packs). Only the two the demo exercises are loaded:
