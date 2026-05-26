@@ -73,4 +73,11 @@ COPY --chown=nginx:nginx docs/.nojekyll /usr/share/nginx/html/.nojekyll
 # Static content serving does not require root after startup
 # nginx-alpine is preferred over distroless here because nginx requires config reload capability
 EXPOSE 80
-HEALTHCHECK --interval=30s --timeout=3s CMD wget -qO- http://localhost/healthz || exit 1
+# Probe via 127.0.0.1, NOT localhost: nginx listens on IPv4 :80 only, but in a
+# dual-stack container `localhost` resolves to ::1 (IPv6) first → the probe would
+# never succeed and the container stays `unhealthy`. K8s ignores this docker-native
+# HEALTHCHECK (it runs its own readinessProbe against the pod IP), but `docker run`
+# and docker-compose rely on it. We keep nginx IPv4-only and make the probe IPv4-
+# explicit rather than adding `listen [::]:80;`, which would crash nginx at startup
+# on IPv6-disabled hosts (`Address family not supported by protocol`).
+HEALTHCHECK --interval=30s --timeout=3s CMD wget -qO- http://127.0.0.1/healthz || exit 1

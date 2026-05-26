@@ -99,6 +99,10 @@ services:
       # but inside the container `localhost` resolves to ::1 (IPv6) first while
       # nginx listens on IPv4 :80 only → it NEVER goes healthy (the nightly's
       # wait-for-healthy gate then times out). Override with explicit 127.0.0.1.
+      # The image-level root fix (Dockerfile HEALTHCHECK → 127.0.0.1) ships in the
+      # same PR, but try-local pins the PUBLISHED v2.8.0 image (which still has the
+      # bug), so this override stays until a portal image built after that fix is
+      # released and PORTAL_TAG is bumped to it.
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1/healthz"]
       interval: 5s
       timeout: 3s
