@@ -1,0 +1,11 @@
+# Platform default thresholds (try-local seed).
+#
+# The threshold-exporter only emits a `user_threshold` series for metric keys
+# that appear HERE (resolve.go iterates `defaults`). A tenant override for a
+# key absent from defaults is silently ignored — so every demo threshold key
+# below must be declared. Values are numbers (float64), tenant overrides are
+# strings ("70", "70:critical", "disable").
+defaults:
+  mysql_connections: 80      # db-demo overrides → drives the headline critical alert
+  mysql_cpu: 80
+  redis_connected_clients: 8000  # cache-demo (sentinel/dedup concept demo)

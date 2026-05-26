@@ -108,6 +108,10 @@ graph TD
 
 ### 本地體驗（5 分鐘）
 
+> **最快：一鍵 compose stack [`try-local/`](try-local/README.md)** —— 不需 Kubernetes。`cd try-local && cp .env.example .env && docker compose up -d`，約 1 分鐘看到 Tenant Manager（2 個 demo 租戶 + 預存 Saved View）+ 一個真實 firing 告警。Windows 需 **WSL2 + Docker Desktop（WSL2 backend）**。
+
+或用 Dev Container 跑完整 K8s 版：
+
 ```bash
 # VS Code → "Reopen in Container"
 make setup && make verify && make test-alert

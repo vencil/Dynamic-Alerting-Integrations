@@ -1,0 +1,17 @@
+# RBAC for the try-local demo (group → tenants → permissions).
+#
+# tenant-api trusts X-Forwarded-Groups (injected by --dev-bypass-auth for the
+# browser, or sent explicitly by smoke.sh). The injected group name, this
+# group's name, and smoke.sh's X-Forwarded-Groups are ALL "demo-admins" — a
+# single SSOT (me.go does an exact-string group match; one typo → empty
+# accessible_tenants → a silently blank Tenant Manager).
+#
+# tenants:["*"] is required so GET /api/v1/me passes its route gate
+# (HasPermission(groups,"*",read) only matches a literal "*" pattern). The
+# wildcard also makes GET /api/v1/tenants list BOTH seed tenants, which is
+# what the portal Tenant Manager renders. (Note: /api/v1/me therefore reports
+# accessible_tenants:["*"] — see try-local/README.md.)
+groups:
+  - name: demo-admins
+    tenants: ["*"]
+    permissions: [read, write, admin]

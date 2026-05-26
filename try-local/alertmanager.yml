@@ -1,0 +1,34 @@
+# Alertmanager config for the try-local stack.
+#
+# receiver 'null' — alerts reach a firing state and stay there (visible at
+# :9093) but nothing is sent outbound. The demo's value is SEEING the firing
+# state, not delivering a notification.
+#
+# The inhibit_rules mirror the platform's operational design: the sentinel
+# alerts emitted by rule-pack-operational (severity=none) suppress
+# notifications for the matching real alerts — Silent Mode + Severity Dedup.
+route:
+  receiver: 'null'
+  group_by: ['tenant', 'alertname']
+  group_wait: 5s
+  group_interval: 1m
+  repeat_interval: 1h
+
+receivers:
+  - name: 'null'
+
+inhibit_rules:
+  # Silent Mode (warning): TenantSilentWarning suppresses warning notifications
+  # for the same tenant.
+  - source_matchers: ['alertname = "TenantSilentWarning"']
+    target_matchers: ['severity = "warning"']
+    equal: ['tenant']
+  # Silent Mode (critical).
+  - source_matchers: ['alertname = "TenantSilentCritical"']
+    target_matchers: ['severity = "critical"']
+    equal: ['tenant']
+  # Severity Dedup: when dedup is enabled and a critical fires, suppress the
+  # paired warning notification for the same tenant + metric_group.
+  - source_matchers: ['alertname = "TenantSeverityDedupEnabled"']
+    target_matchers: ['severity = "warning"']
+    equal: ['tenant', 'metric_group']

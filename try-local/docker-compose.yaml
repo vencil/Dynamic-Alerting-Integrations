@@ -1,0 +1,177 @@
+# try-local — a one-command showcase of the Dynamic Alerting platform.
+#
+#   cd try-local && cp .env.example .env && docker compose up -d
+#
+# What you get (full stack):
+#   - da-portal      :8081  live Tenant Manager (2 demo tenants + a saved view)
+#   - tenant-api     :8080  file-based config API (commit-on-write, dev-bypass auth)
+#   - prometheus     :9090  /alerts shows the headline critical FIRING
+#   - alertmanager   :9093  the firing alert, routed to a null receiver
+#   - threshold-exporter    config-driven user_threshold metrics (internal)
+#   - pushgateway    :9091  holds the synthetic DB metric the seed pushed
+#
+# Mode 0 (core twins) — just the live Tenant Manager, no monitoring:
+#   docker compose up da-portal tenant-api
+# (pulls in only the fast seed-git one-shot; pushgateway/prometheus/etc. stay down)
+#
+# Ports are overridable via .env (see .env.example). Component image tags are
+# per-line (EXPORTER_TAG/TENANT_API_TAG/PORTAL_TAG), default v2.8.0.
+name: da-try-local
+
+services:
+  # ── Self-built component images (ghcr.io/vencil/*) ───────────────────────
+  threshold-exporter:
+    image: ghcr.io/vencil/threshold-exporter:${EXPORTER_TAG:-v2.8.0}
+    command:
+      - "--config-dir=/etc/threshold-exporter/conf.d"
+      - "--listen=:8080"
+    volumes:
+      - ./seed/conf.d:/etc/threshold-exporter/conf.d:ro
+    expose:
+      - "8080"
+    restart: unless-stopped
+    # Distroless image (no shell/wget) → no compose healthcheck; Prometheus's
+    # scrape success is the effective health signal.
+
+  tenant-api:
+    # Built from source. The --dev-bypass-auth flag this stack relies on
+    # (#619 / ADR-022) is NOT in any published image yet — v2.8.0 predates it
+    # and v2.9.0 is unreleased. try-local users already clone the repo, so a
+    # one-time local build is fine, and it builds for the host's native arch
+    # (no arm64 wait). When a dev-bypass-capable image ships, delete `build:`
+    # and use:  image: ghcr.io/vencil/tenant-api:${TENANT_API_TAG:-v2.9.0}
+    build:
+      context: ..
+      dockerfile: components/tenant-api/Dockerfile
+    image: da-try-local/tenant-api:source
+    environment:
+      TA_CONFIG_DIR: /conf.d
+      TA_RBAC_PATH: /conf.d/_rbac.yaml
+      TA_WRITE_MODE: direct
+      TA_ADDR: ":8080"
+      # LOCAL-DEV-ONLY auth bypass (ADR-022). Injects a dev identity when no
+      # oauth2-proxy header is present, so the browser (and Mode 0) work without
+      # an auth proxy. Panics if ever run inside Kubernetes; SAST forbids this
+      # var in deploy manifests. try-local/ is intentionally NOT scanned by L4.
+      TA_DEV_BYPASS_AUTH: "true"
+      TA_DEV_BYPASS_EMAIL: dev@local
+      TA_DEV_BYPASS_GROUPS: demo-admins
+      # commit-on-write runs `git` inside the container against the bind-mounted
+      # /conf.d, which git rejects as "dubious ownership" (host uid != container
+      # uid). Mark it safe via env-config (git 2.31+; no file mount needed).
+      GIT_CONFIG_COUNT: "1"
+      GIT_CONFIG_KEY_0: safe.directory
+      GIT_CONFIG_VALUE_0: "*"
+    volumes:
+      - ./seed/conf.d:/conf.d:rw
+    ports:
+      # Loopback-only: dev-bypass injects an ADMIN identity for header-less
+      # requests, so exposing this on 0.0.0.0 would hand anyone on the LAN
+      # write/commit access. try-local is local-only by design.
+      - "127.0.0.1:${EXPOSE_API_PORT:-8080}:8080"
+    depends_on:
+      seed-git:
+        condition: service_completed_successfully
+    networks:
+      default:
+        # da-portal's nginx has a baked-in upstream of this exact FQDN
+        # (components/da-portal/nginx.conf). The alias makes it resolve inside
+        # compose so the published portal image runs UNCHANGED (no file mount).
+        aliases:
+          - tenant-api.monitoring.svc.cluster.local
+    restart: unless-stopped
+
+  da-portal:
+    image: ghcr.io/vencil/da-portal:${PORTAL_TAG:-v2.8.0}
+    ports:
+      # Loopback-only: the portal proxies to tenant-api, so LAN exposure here
+      # is the same admin-access risk as exposing tenant-api directly.
+      - "127.0.0.1:${EXPOSE_PORTAL_PORT:-8081}:80"
+    depends_on:
+      # nginx resolves the upstream FQDN at startup with no `resolver`, so the
+      # tenant-api container (which owns the alias) MUST be started first or
+      # nginx dies with `host not found in upstream`. service_started is enough
+      # — Docker DNS registers the alias as soon as the container starts.
+      tenant-api:
+        condition: service_started
+    restart: unless-stopped
+
+  # ── Monitoring stack (official multi-arch images) ────────────────────────
+  pushgateway:
+    image: prom/pushgateway:v1.10.0
+    ports:
+      - "127.0.0.1:${EXPOSE_PUSHGATEWAY_PORT:-9091}:9091"
+    restart: unless-stopped
+    # No shell in the image → no CMD healthcheck. Dependents use
+    # service_started; the seed's curl --retry-connrefused covers listen lag.
+
+  prometheus:
+    image: prom/prometheus:v3.11.2
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--web.enable-lifecycle"
+      - "--storage.tsdb.retention.time=1h"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      # Rule packs from the repo's single source of truth (mounted read-only).
+      - ../rule-packs:/etc/prometheus/rules:ro
+    ports:
+      - "127.0.0.1:${EXPOSE_PROM_PORT:-9090}:9090"
+    depends_on:
+      threshold-exporter:
+        condition: service_started
+      pushgateway:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9090/-/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  alertmanager:
+    image: prom/alertmanager:v0.32.0
+    command:
+      - "--config.file=/etc/alertmanager/alertmanager.yml"
+      - "--web.listen-address=:9093"
+    volumes:
+      - ./alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    ports:
+      - "127.0.0.1:${EXPOSE_AM_PORT:-9093}:9093"
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9093/-/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  # ── Seed one-shots (run to completion, then exit) ────────────────────────
+  seed-git:
+    # git-init the config repo so commit-on-write has a repo. No monitoring
+    # dependency → Mode 0 stays minimal. Directory mount (not single-file) to
+    # avoid the WSL2 single-file bind-mount landmine.
+    image: alpine/git:latest
+    entrypoint: ["/bin/sh"]
+    command: ["/seed/git-init.sh"]
+    environment:
+      CONF_DIR: /seed/conf.d
+    volumes:
+      - ./seed:/seed:rw
+    restart: "no"
+
+  seed-metrics:
+    # Push the synthetic high-connections metric so the headline critical fires.
+    image: curlimages/curl:latest
+    entrypoint: ["/bin/sh"]
+    command: ["/seed/push-metrics.sh"]
+    environment:
+      PUSHGATEWAY_URL: http://pushgateway:9091
+    volumes:
+      - ./seed:/seed:ro
+    depends_on:
+      pushgateway:
+        condition: service_started
+    restart: "no"

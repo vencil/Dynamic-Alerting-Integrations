@@ -1,0 +1,34 @@
+# Prometheus config for the try-local stack.
+#
+# 5s scrape + eval keeps the demo snappy; the headline alert has for:30s, so
+# smoke.sh polls /api/v1/alerts for ~120s (>= 15s rule interval + 30s for + slack).
+#
+# Rule packs are mounted read-only from the repo's single source of truth
+# (../rule-packs). Only the two the demo exercises are loaded:
+#   - rule-pack-mariadb       → MariaDBHighConnections{,Critical} (the red light)
+#   - rule-pack-operational   → TenantSilent*/TenantSeverityDedup sentinels
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+rule_files:
+  - /etc/prometheus/rules/rule-pack-mariadb.yaml
+  - /etc/prometheus/rules/rule-pack-operational.yaml
+
+scrape_configs:
+  - job_name: threshold-exporter
+    static_configs:
+      - targets: ["threshold-exporter:8080"]
+
+  - job_name: pushgateway
+    # honor_labels keeps the pushed series' own labels (tenant, job) instead of
+    # overwriting them with the scrape job — so the seed's synthetic
+    # mysql_global_status_threads_connected{tenant="db-demo"} survives intact.
+    honor_labels: true
+    static_configs:
+      - targets: ["pushgateway:9091"]
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]

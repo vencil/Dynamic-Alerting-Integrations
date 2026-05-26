@@ -916,6 +916,17 @@ vendor-download: ## 下載 CDN 資源到 vendor/（離線環境用）
 vendor-check: ## 檢查 vendor/ 資源是否完整
 	@bash scripts/tools/vendor_download.sh --check
 
+# ----------------------------------------------------------
+# try-local — onboarding showcase stack (#449 / #465)
+# ----------------------------------------------------------
+.PHONY: smoke-local
+smoke-local: ## try-local：跑 smoke（驗 critical firing + /me 200 + 2 tenants + portal 200）
+	@bash try-local/smoke.sh
+
+.PHONY: clean-local
+clean-local: ## try-local：完整清理 stack（down -v --remove-orphans，含匿名 volume）
+	@docker compose -f try-local/docker-compose.yaml down -v --remove-orphans
+
 .PHONY: help
 help: ## 顯示說明
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
