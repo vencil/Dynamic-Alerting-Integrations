@@ -338,6 +338,46 @@ git push origin "tenant-api/v<VERSION>"
 # 3. 驗證 CI（tenant-api/v* 觸發 release.yaml 的 release-tenant-api job）
 ```
 
+## try-local stack 升版 SOP
+
+每個 minor release（component image 版號跳動）後，[`try-local/`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/try-local/README.md) showcase stack 須對齊新版 image（#449 / #467）。
+
+### 1. 對齊 `.env.example` image tag
+
+`try-local/.env.example` 用 **per-component tag**（非單一 `IMAGE_TAG`）：`EXPORTER_TAG` / `PORTAL_TAG` / `TOOLS_TAG`，預設指向最新 release。發版後把這三個預設改成新版號（如 `v2.8.0`→`v2.9.0`）。
+
+> ⚠️ **tenant-api 例外**：try-local 的 tenant-api **從原始碼 build**（`docker-compose.yaml` 的 `build:`），**不吃 `TENANT_API_TAG`** —— 因為它依賴的 `--dev-bypass-auth`（#619 / [ADR-022](../adr/022-dev-auth-bypass-four-layer-containment.md)）尚未進任何 published image（v2.8.0 早於它）。**一旦某個 release 的 tenant-api image 內含 dev-bypass**，就把 `docker-compose.yaml` 的 tenant-api 從 `build:` 換回 `image: ghcr.io/vencil/tenant-api:${TENANT_API_TAG:-vX.Y.Z}`，並把 `.env.example` 的 `TENANT_API_TAG` 設為該版（移除 build-from-source 的 ~1min 首啟成本）。
+
+### 2. 驗證 multi-arch image（#463）
+
+`release.yaml` 4 個 build step 已加 `platforms: linux/amd64,linux/arm64` + `scripts/ops/verify_multiarch.sh`（缺任一 arch → release exit 1）。手動複驗：
+
+```bash
+for img in threshold-exporter da-portal da-tools tenant-api; do
+  echo "== $img =="
+  docker manifest inspect ghcr.io/vencil/$img:v<VERSION> \
+    | jq -r '.manifests[] | select(.platform.os=="linux") | .platform.architecture' | sort -u
+done
+# 期望每個都列出 amd64 與 arm64
+```
+
+Apple Silicon 上 `docker pull` + `docker run` 不應出現 `WARNING: image is for linux/amd64` 或 Rosetta 2 fallback。
+
+### 3. Nightly smoke 失敗排查清單
+
+`.github/workflows/try-local-smoke.yaml` 每日 02:00 UTC 跑；**連 3 次失敗自動開 `try-local-broken` issue**（assignee @vencil）。本機重現 + 排查：
+
+```bash
+cd try-local && cp .env.example .env && docker compose up -d
+bash smoke.sh   # 需 curl + jq
+```
+
+- **critical 沒 fire** → 給 ~1–2 分鐘（recording rule `interval:15s` + 規則 `for:30s`）；查 `docker compose logs seed-metrics prometheus`；確認 seed 推的 `mysql_global_status_threads_connected{tenant="db-demo"}=200` > db-demo 的 critical 閾值 120。
+- **browser path（portal proxy 免 header）`/me` 401** → tenant-api image 缺 `--dev-bypass-auth`（見 §1 例外）；確認 tenant-api 啟動 log 有「DEV AUTH BYPASS ACTIVE」WARN。
+- **image 拉不到 / arm64 emulation** → 新版可能尚未 publish multi-arch（見 §2）或 ghcr 權限問題。
+- **紅燈本來有後來消失** → pushgateway 記憶體型；單獨重啟它會掉指標 → `docker compose up -d seed-metrics` 重推。
+- **清乾淨重跑** → `make clean-local`（`down -v`）；bind-mount 的 `seed/conf.d/.git`（root-owned）若殘留，用 container `rm -rf`。
+
 ## 已知陷阱
 
 > **環境層陷阱**（Docker exec、PowerShell 編碼、MCP timeout 等）集中在 [Windows-MCP Playbook § 已知陷阱速查](windows-mcp-playbook.md#已知陷阱速查)。本表僅列 Release 流程專屬的陷阱。
