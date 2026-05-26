@@ -1,4 +1,7 @@
-FROM golang:1.26.3-alpine3.22 AS builder
+# #463 multi-arch: pin the builder to the native BUILDPLATFORM and
+# cross-compile to TARGETARCH below — far faster than emulating the Go
+# compile under QEMU.
+FROM --platform=$BUILDPLATFORM golang:1.26.3-alpine3.22 AS builder
 
 WORKDIR /app
 COPY go.mod go.sum ./
@@ -11,7 +14,8 @@ RUN go mod download
 # provides package github.com/vencil/threshold-exporter/pkg/config".
 COPY *.go ./
 COPY pkg ./pkg
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /threshold-exporter .
+ARG TARGETOS TARGETARCH
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -ldflags="-s -w" -o /threshold-exporter .
 
 FROM gcr.io/distroless/static-debian12:nonroot
 

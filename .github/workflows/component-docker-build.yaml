@@ -99,9 +99,12 @@ jobs:
         if: matrix.name == 'da-tools'
         run: |
           mkdir -p components/da-tools/app/tools
-          touch components/da-tools/app/da-guard \
-                components/da-tools/app/da-batchpr \
-                components/da-tools/app/da-parser
+          # #463 multi-arch: Dockerfile now COPYs da-<tool>.${TARGETARCH}.
+          for b in da-guard da-batchpr da-parser; do
+            for a in amd64 arm64; do
+              touch "components/da-tools/app/$b.$a"
+            done
+          done
 
       # Hard gate: build must succeed. Catches #472/#473-class dormant breaks.
       - name: Build image (load, no push)

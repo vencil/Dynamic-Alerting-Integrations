@@ -547,8 +547,9 @@ docker-build-all: ## 建 4 個 production component image（local --load，無 p
 	@docker buildx build --load -t local-test:tenant-api -f components/tenant-api/Dockerfile .
 	@# da-tools：stub build.sh-assembled tools/ + 預編 Go binary（COPY-path smoke，不編 Go；
 	@# Dockerfile 只 COPY+chmod 不執行 binary，故 stub 可驗 COPY 路徑 / 語法）。
+	@# #463 multi-arch：Dockerfile 改 COPY 帶 arch 後綴（da-guard.<arch>），stub 須對應。
 	@mkdir -p components/da-tools/app/tools
-	@touch components/da-tools/app/da-guard components/da-tools/app/da-batchpr components/da-tools/app/da-parser
+	@for b in da-guard da-batchpr da-parser; do for a in amd64 arm64; do touch "components/da-tools/app/$$b.$$a"; done; done
 	@docker buildx build --load -t local-test:da-tools components/da-tools/app
 
 trivy-scan-all: docker-build-all ## Trivy CVE scan 4 個 image（informational：印出但不擋，#448）
