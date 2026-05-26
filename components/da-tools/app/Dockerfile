@@ -40,27 +40,24 @@ COPY VERSION .
 # Tool scripts + metric-dictionary.yaml (assembled by build.sh from scripts/tools/)
 COPY tools/ ./
 
-# ── Bundle da-guard binary (v2.8.0 C-11) ──────────────────────────
-# `da-tools guard <subcommand>` shells out to da-guard (see
-# scripts/tools/ops/guard_dispatch.py). Bundling the binary at
-# /usr/local/bin/da-guard lets the image work in air-gapped
-# environments (no $PATH lookup outside the container, no extra
-# install step). The binary is built linux/amd64 by build.sh from
-# components/threshold-exporter/app/cmd/da-guard before docker
-# build runs.
-COPY da-guard /usr/local/bin/da-guard
+# ── Bundle da-guard / da-batchpr / da-parser binaries ─────────────
+# `da-tools guard|batch-pr|parser <subcommand>` shells out to these Go
+# binaries (see the *_dispatch.py shims). Bundling them at
+# /usr/local/bin lets the image work air-gapped (no $PATH lookup
+# outside the container, no extra install step).
+#
+# #463 multi-arch: build.sh cross-compiles a per-arch suffix
+# (da-guard.amd64 / da-guard.arm64); TARGETARCH (set by buildx per
+# platform, or the host arch on a plain `docker build`) selects the
+# matching binary so the image is native on amd64 AND arm64.
+ARG TARGETARCH
+COPY da-guard.${TARGETARCH} /usr/local/bin/da-guard
 RUN chmod +x /usr/local/bin/da-guard
 
-# ── Bundle da-batchpr binary (v2.8.0 C-10 PR-5) ───────────────────
-# `da-tools batch-pr <subcommand>` (apply / refresh / refresh-source)
-# shells out to da-batchpr. Same air-gapped friendliness as da-guard.
-COPY da-batchpr /usr/local/bin/da-batchpr
+COPY da-batchpr.${TARGETARCH} /usr/local/bin/da-batchpr
 RUN chmod +x /usr/local/bin/da-batchpr
 
-# ── Bundle da-parser binary (v2.8.0 C-8 PR-2) ─────────────────────
-# `da-tools parser <subcommand>` (import / allowlist) shells out to
-# da-parser. Same air-gapped friendliness as da-guard / da-batchpr.
-COPY da-parser /usr/local/bin/da-parser
+COPY da-parser.${TARGETARCH} /usr/local/bin/da-parser
 RUN chmod +x /usr/local/bin/da-parser
 
 # ── Entrypoint ────────────────────────────────────────────────────

@@ -192,61 +192,42 @@ for py in "$SCRIPT_DIR"/tools/*.py; do
 done
 echo "  Stripped repo-layout sys.path from Docker copies"
 
-# ── Build da-guard binary (v2.8.0 C-11) ──────────────────────────────
-# da-tools' `guard` subcommand shells out to the da-guard Go binary
-# (see scripts/tools/ops/guard_dispatch.py). Bundle the linux/amd64
-# binary into the image so customers running `da-tools guard ...` in
-# the container don't need to install or download it separately.
+# ── Build bundled Go binaries (v2.8.0 C-8/C-10/C-11) ─────────────────
+# da-tools' `guard` / `batch-pr` / `parser` subcommands shell out to the
+# da-guard / da-batchpr / da-parser Go binaries (see the *_dispatch.py
+# shims). Bundling them into the image keeps the container air-gapped
+# friendly (no $PATH lookup outside the container, no extra install).
+#
+# #463 multi-arch: build BOTH linux/amd64 and linux/arm64 (per-arch
+# suffix), so the Dockerfile can `COPY da-guard.${TARGETARCH}` and the
+# image works natively on Apple Silicon. CGO_ENABLED=0 cross-compiles
+# on the amd64 builder with no libc / QEMU dependency.
 #
 # Local devs without Go on PATH get a clear "Go not found" error
 # (rather than a cryptic Dockerfile COPY failure later). Production
 # CI has Go via actions/setup-go in release.yaml.
 EXPORTER_APP="$PROJECT_ROOT/components/threshold-exporter/app"
-echo "▸ Building da-guard binary for da-tools image bundling..."
 if [ ! -d "$EXPORTER_APP" ]; then
     echo "  ✗ threshold-exporter source not found at $EXPORTER_APP" >&2
     exit 1
 fi
 if ! command -v go >/dev/null 2>&1; then
-    echo "  ✗ go not on PATH; install Go 1.26+ to bundle da-guard, or use the prebuilt binary from a tools/v* release" >&2
+    echo "  ✗ go not on PATH; install Go 1.26+ to bundle the binaries, or use prebuilt binaries from a tools/v* release" >&2
     exit 1
 fi
 DA_TOOLS_VERSION=$(cat "$SCRIPT_DIR/VERSION" | tr -d '[:space:]')
-(cd "$EXPORTER_APP" && \
-    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
-        -buildvcs=false \
-        -ldflags "-X main.Version=v${DA_TOOLS_VERSION}" \
-        -o "$SCRIPT_DIR/da-guard" \
-        ./cmd/da-guard)
-echo "  Built da-guard linux/amd64 (DA_TOOLS_VERSION=v${DA_TOOLS_VERSION})"
-
-# ── Build da-batchpr binary (v2.8.0 C-10 PR-5) ──────────────────────
-# da-tools' `batch-pr` subcommand shells out to the da-batchpr Go
-# binary (subcommands: apply / refresh / refresh-source). Bundle the
-# linux/amd64 binary so customers running `da-tools batch-pr ...` in
-# the container don't need to install or download it separately.
-echo "▸ Building da-batchpr binary for da-tools image bundling..."
-(cd "$EXPORTER_APP" && \
-    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
-        -buildvcs=false \
-        -ldflags "-X main.Version=v${DA_TOOLS_VERSION}" \
-        -o "$SCRIPT_DIR/da-batchpr" \
-        ./cmd/da-batchpr)
-echo "  Built da-batchpr linux/amd64 (DA_TOOLS_VERSION=v${DA_TOOLS_VERSION})"
-
-# ── Build da-parser binary (v2.8.0 C-8 PR-2) ────────────────────────
-# da-tools' `parser` subcommand shells out to the da-parser Go binary
-# (subcommands: import / allowlist). Bundle the linux/amd64 binary so
-# customers running `da-tools parser import ...` in the container
-# don't need to install or download it separately.
-echo "▸ Building da-parser binary for da-tools image bundling..."
-(cd "$EXPORTER_APP" && \
-    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
-        -buildvcs=false \
-        -ldflags "-X main.Version=v${DA_TOOLS_VERSION}" \
-        -o "$SCRIPT_DIR/da-parser" \
-        ./cmd/da-parser)
-echo "  Built da-parser linux/amd64 (DA_TOOLS_VERSION=v${DA_TOOLS_VERSION})"
+echo "▸ Cross-compiling da-guard / da-batchpr / da-parser for amd64 + arm64..."
+for cmd in da-guard da-batchpr da-parser; do
+    for arch in amd64 arm64; do
+        (cd "$EXPORTER_APP" && \
+            CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build \
+                -buildvcs=false \
+                -ldflags "-X main.Version=v${DA_TOOLS_VERSION}" \
+                -o "$SCRIPT_DIR/${cmd}.${arch}" \
+                "./cmd/${cmd}")
+    done
+    echo "  Built ${cmd}.{amd64,arm64} (DA_TOOLS_VERSION=v${DA_TOOLS_VERSION})"
+done
 
 # ── Assemble-only mode (for CI — Buildx handles the docker build) ──
 if [ "$ASSEMBLE_ONLY" = true ]; then
@@ -260,7 +241,7 @@ docker build -t "$IMAGE_NAME" "$SCRIPT_DIR"
 
 # ── Cleanup temporary copies ────────────────────────────────────────
 rm -rf "$SCRIPT_DIR/tools"
-rm -f "$SCRIPT_DIR/da-guard" "$SCRIPT_DIR/da-batchpr" "$SCRIPT_DIR/da-parser"
+rm -f "$SCRIPT_DIR"/da-guard.* "$SCRIPT_DIR"/da-batchpr.* "$SCRIPT_DIR"/da-parser.*
 
 echo "✓ Built: $IMAGE_NAME"
 echo ""

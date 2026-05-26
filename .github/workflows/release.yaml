@@ -67,7 +67,9 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # --- Docker image ---
+      # --- Docker image (multi-arch: amd64 + arm64, #463) ---
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -75,10 +77,14 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: components/threshold-exporter/app
+          platforms: linux/amd64,linux/arm64
           push: true
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/threshold-exporter:v${{ steps.version.outputs.VERSION }}
             ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/threshold-exporter:latest
+
+      - name: Verify multi-arch manifest (#463)
+        run: bash scripts/ops/verify_multiarch.sh ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/threshold-exporter:v${{ steps.version.outputs.VERSION }}
 
       # --- L3 supply-chain digest verification (#445 AC iii) ---
       # Verifies the image at Chart.yaml `appVersion` tag actually exists
@@ -203,6 +209,10 @@ jobs:
           cd components/da-tools/app
           bash build.sh --assemble-only
 
+      # Multi-arch (#463): build.sh above cross-compiled the bundled binaries
+      # per-arch (da-guard.amd64/.arm64 …); the Dockerfile COPYs by TARGETARCH.
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -210,10 +220,14 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: components/da-tools/app
+          platforms: linux/amd64,linux/arm64
           push: true
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/da-tools:v${{ steps.version.outputs.VERSION }}
             ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/da-tools:latest
+
+      - name: Verify multi-arch manifest (#463)
+        run: bash scripts/ops/verify_multiarch.sh ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/da-tools:v${{ steps.version.outputs.VERSION }}
 
       # --- L3 supply-chain digest verification (#445 AC iii) ---
       # da-tools has no Helm chart — components/da-tools/app/VERSION is the
@@ -481,6 +495,8 @@ jobs:
       - name: Download vendor files for offline mode
         run: bash scripts/tools/vendor_download.sh
 
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -489,10 +505,14 @@ jobs:
         with:
           context: .
           file: components/da-portal/Dockerfile
+          platforms: linux/amd64,linux/arm64
           push: true
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/da-portal:v${{ steps.version.outputs.VERSION }}
             ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/da-portal:latest
+
+      - name: Verify multi-arch manifest (#463)
+        run: bash scripts/ops/verify_multiarch.sh ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/da-portal:v${{ steps.version.outputs.VERSION }}
 
       # --- L3 supply-chain digest verification (#445 AC iii) ---
       - name: Verify image digest (#445 AC iii)
@@ -538,7 +558,9 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # --- Docker image ---
+      # --- Docker image (multi-arch: amd64 + arm64, #463) ---
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -547,10 +569,14 @@ jobs:
         with:
           context: .
           file: components/tenant-api/Dockerfile
+          platforms: linux/amd64,linux/arm64
           push: true
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/tenant-api:v${{ steps.version.outputs.VERSION }}
             ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/tenant-api:latest
+
+      - name: Verify multi-arch manifest (#463)
+        run: bash scripts/ops/verify_multiarch.sh ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/tenant-api:v${{ steps.version.outputs.VERSION }}
 
       # --- L3 supply-chain digest verification (#445 AC iii) ---
       # ⚠️ tenant-api intentionally has Chart.yaml appVersion ≠ version

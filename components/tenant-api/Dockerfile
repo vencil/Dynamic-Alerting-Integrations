@@ -11,7 +11,10 @@
 #   docker run -p 8080:8080 -v $(pwd)/conf.d:/conf.d ghcr.io/vencil/tenant-api:2.4.0
 
 # ── Build stage ──────────────────────────────────────────────────────────────
-FROM golang:1.26.3-alpine3.22 AS builder
+# #463 multi-arch: builder pinned to the native BUILDPLATFORM, cross-compiles
+# to TARGETARCH below (CGO_ENABLED=0 → no cross-toolchain, no QEMU for the Go
+# compile). The final alpine stage's `apk add` still runs under QEMU for arm64.
+FROM --platform=$BUILDPLATFORM golang:1.26.3-alpine3.22 AS builder
 
 WORKDIR /src
 
@@ -30,7 +33,8 @@ COPY components/tenant-api/ components/tenant-api/
 COPY components/threshold-exporter/app/ components/threshold-exporter/app/
 
 WORKDIR /src/components/tenant-api
-RUN CGO_ENABLED=0 GOOS=linux go build \
+ARG TARGETOS TARGETARCH
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
     -ldflags="-s -w" \
     -o /tenant-api \
     ./cmd/server
