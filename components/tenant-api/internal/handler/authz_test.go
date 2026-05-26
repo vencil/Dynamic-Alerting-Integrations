@@ -350,6 +350,8 @@ func (f *fakeTracker) HasPendingPR(tenantID string) bool {
 	_, ok := f.PendingPRForTenant(tenantID)
 	return ok
 }
+func (f *fakeTracker) ClaimTenant(tenantID string) bool { return !f.HasPendingPR(tenantID) }
+func (f *fakeTracker) ReleaseClaim(tenantID string)     {}
 func (f *fakeTracker) RegisterPR(pr platform.PRInfo) {
 	f.pending = append(f.pending, pr)
 }

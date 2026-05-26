@@ -8,6 +8,7 @@ package platform
 import (
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -491,5 +492,94 @@ func TestWatchLoop_StopChanTerminatesPromptly(t *testing.T) {
 	case <-done:
 	case <-time.After(500 * time.Millisecond):
 		t.Fatal("WatchLoop did not honour stopCh within 500ms")
+	}
+}
+
+// --- ClaimTenant / ReleaseClaim (dedup atomicity) ---
+
+func newClaimTracker() *PollingTracker {
+	return NewPollingTracker(func() ([]PRInfo, error) { return nil, nil }, "test", time.Minute)
+}
+
+func TestClaimTenant_BasicLifecycle(t *testing.T) {
+	t.Parallel()
+	tr := newClaimTracker()
+
+	if !tr.ClaimTenant("db-a") {
+		t.Fatal("first claim should succeed")
+	}
+	if tr.ClaimTenant("db-a") {
+		t.Error("second claim for same tenant should fail while claim is held")
+	}
+	if !tr.ClaimTenant("db-b") {
+		t.Error("claim for a different tenant should succeed")
+	}
+
+	// Releasing frees the tenant for a fresh claim (e.g. after a failed create).
+	tr.ReleaseClaim("db-a")
+	if !tr.ClaimTenant("db-a") {
+		t.Error("claim should succeed again after release")
+	}
+}
+
+func TestClaimTenant_BlockedByRegisteredPR(t *testing.T) {
+	t.Parallel()
+	tr := newClaimTracker()
+	tr.RegisterPR(PRInfo{Number: 1, TenantID: "db-a", State: "open"})
+
+	if tr.ClaimTenant("db-a") {
+		t.Error("claim should fail when a PR is already registered for the tenant")
+	}
+}
+
+// TestRegisterPR_ClearsClaim guards the lifecycle hazard: if RegisterPR left
+// the synchronous claim in place, the tenant would stay blocked forever once
+// the PR later merged out of byTenant (Sync drops it, but a stale claim would
+// remain). After register+merge, a new write must be claimable again.
+func TestRegisterPR_ClearsClaim(t *testing.T) {
+	t.Parallel()
+	tr := newClaimTracker()
+
+	if !tr.ClaimTenant("db-a") {
+		t.Fatal("initial claim should succeed")
+	}
+	tr.RegisterPR(PRInfo{Number: 7, TenantID: "db-a", State: "open"})
+
+	// Simulate the PR merging: a poll Sync that no longer lists it drops it
+	// from byTenant. (Sync replaces the cache wholesale.)
+	tr.Sync() // lister returns nil → byTenant cleared
+
+	if !tr.ClaimTenant("db-a") {
+		t.Error("tenant should be claimable again after its PR merged out of cache")
+	}
+}
+
+// TestClaimTenant_ConcurrentSingleWinner is the core TOCTOU assertion: under
+// N goroutines racing to claim the same tenant, exactly one wins. This is the
+// race the issue flagged (check-then-RegisterPR window); the synchronous
+// check-and-set under the write lock closes it. Run with -race.
+func TestClaimTenant_ConcurrentSingleWinner(t *testing.T) {
+	t.Parallel()
+	tr := newClaimTracker()
+
+	const goroutines = 64
+	var wins atomic.Int32
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	wg.Add(goroutines)
+	for i := 0; i < goroutines; i++ {
+		go func() {
+			defer wg.Done()
+			<-start // line everyone up so the claims truly contend
+			if tr.ClaimTenant("db-a") {
+				wins.Add(1)
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	if got := wins.Load(); got != 1 {
+		t.Errorf("exactly one goroutine should win the claim, got %d", got)
 	}
 }

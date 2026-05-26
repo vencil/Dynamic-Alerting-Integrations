@@ -6,13 +6,49 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os/exec"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	gh "github.com/vencil/tenant-api/internal/github"
 	"github.com/vencil/tenant-api/internal/platform"
+	"github.com/vencil/tenant-api/internal/rbac"
 )
+
+// adminRBAC returns an RBAC manager whose "admins" group has write on all
+// tenants — paired with the X-Forwarded-Email/Groups headers below so the
+// middleware injects an operator identity (WritePR's git commit author).
+func adminRBAC(t *testing.T) *rbac.Manager {
+	return newRBACManager(t, `groups:
+  - name: admins
+    tenants: ["*"]
+    permissions: [read, write, admin]
+`)
+}
+
+// initGitConfigDir creates a temp dir that is a git repo with one commit, so
+// Writer.WritePR can create a feature branch + commit. WritePR's push to a
+// (nonexistent) origin fails and is swallowed by design, so no remote is
+// needed — the PR-creation step is exercised via the mock platform client.
+func initGitConfigDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	for _, args := range [][]string{
+		{"init"},
+		{"config", "user.email", "test@test.com"},
+		{"config", "user.name", "Test"},
+		{"commit", "--allow-empty", "-m", "initial"},
+	} {
+		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Skipf("git command %v failed: %v\n%s", args, err, string(out))
+		}
+	}
+	return dir
+}
 
 // --- PR List Handler tests (GET /api/v1/prs) ---
 
@@ -346,7 +382,8 @@ func (m *mockPlatformClient) ProviderName() string {
 // --- mockPlatformTracker implements platform.Tracker for testing ---
 
 type mockPlatformTracker struct {
-	prs []platform.PRInfo
+	prs     []platform.PRInfo
+	claimed map[string]bool
 }
 
 func (m *mockPlatformTracker) WatchLoop(stopCh <-chan struct{}) {}
@@ -363,7 +400,21 @@ func (m *mockPlatformTracker) HasPendingPR(tenantID string) bool {
 	_, ok := m.PendingPRForTenant(tenantID)
 	return ok
 }
+func (m *mockPlatformTracker) ClaimTenant(tenantID string) bool {
+	if m.HasPendingPR(tenantID) || m.claimed[tenantID] {
+		return false
+	}
+	if m.claimed == nil {
+		m.claimed = make(map[string]bool)
+	}
+	m.claimed[tenantID] = true
+	return true
+}
+func (m *mockPlatformTracker) ReleaseClaim(tenantID string) {
+	delete(m.claimed, tenantID)
+}
 func (m *mockPlatformTracker) RegisterPR(pr platform.PRInfo) {
+	delete(m.claimed, pr.TenantID)
 	m.prs = append(m.prs, pr)
 }
 func (m *mockPlatformTracker) LastSyncTime() time.Time { return time.Now() }
@@ -556,5 +607,122 @@ func TestIsPRMode(t *testing.T) {
 				t.Errorf("WriteMode(%q).IsPRMode() = %v, want %v", tt.mode, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestPutTenant_PRMode_ForgeForbidden asserts a forge 403 at PR-creation time
+// (read-scoped token) maps to a clean HTTP 403, not a 500 — so da-portal can
+// surface a permission error rather than a generic failure (issue #615 gap 2,
+// external-review DoD "permission → 403, never 500").
+func TestPutTenant_PRMode_ForgeForbidden(t *testing.T) {
+	t.Parallel()
+	configDir := initGitConfigDir(t)
+	writer := newTestWriter(configDir)
+
+	mockClient := &mockPlatformClient{
+		providerName: "github",
+		createPRFunc: func(title, body, headBranch string, labels []string) (*platform.PRInfo, error) {
+			return nil, platform.ErrForbidden
+		},
+	}
+	mockTracker := &mockPlatformTracker{}
+
+	rbacMgr := adminRBAC(t)
+	h := PutTenant(&Deps{Writer: writer, WriteMode: WriteModePR, PRClient: mockClient, PRTracker: mockTracker, RBAC: rbacMgr})
+	body := bytes.NewBufferString("tenants:\n  db-a:\n    _silent_mode: \"critical\"\n")
+	req := newRequestWithChiParam("PUT", "/api/v1/tenants/db-a", "id", "db-a", body)
+	req.Header.Set("X-Forwarded-Email", "alice@example.com")
+	req.Header.Set("X-Forwarded-Groups", "admins")
+	w := httptest.NewRecorder()
+	wrapWithRBACMiddleware(h, rbacMgr, rbac.PermWrite, TenantIDFromPath).ServeHTTP(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp map[string]interface{}
+	json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp["code"] != CodeForbidden {
+		t.Errorf("code = %v, want %q", resp["code"], CodeForbidden)
+	}
+	// The clean message must not leak an internal stack / upstream body.
+	msg, _ := resp["error"].(string)
+	if !strings.Contains(msg, "insufficient") || strings.Contains(msg, "APIError") {
+		t.Errorf("error message not clean: %q", msg)
+	}
+
+	// Claim must be released on failure so a fixed-token retry isn't blocked.
+	if !mockTracker.ClaimTenant("db-a") {
+		t.Error("claim should be released after a failed PR creation")
+	}
+}
+
+// TestPutTenant_PRMode_ConcurrentSameTenant is the end-to-end TOCTOU
+// assertion: two concurrent PUTs for the same tenant must create exactly one
+// PR (the second gets 409), even though both pass the optimistic fast-path.
+// Uses a real (mutex-backed) tracker; the mock tracker is not concurrency-safe
+// by design. Run with -race.
+func TestPutTenant_PRMode_ConcurrentSameTenant(t *testing.T) {
+	t.Parallel()
+	configDir := initGitConfigDir(t)
+	writer := newTestWriter(configDir)
+
+	var createCalls atomic.Int32
+	mockClient := &mockPlatformClient{
+		providerName: "github",
+		createPRFunc: func(title, body, headBranch string, labels []string) (*platform.PRInfo, error) {
+			n := createCalls.Add(1)
+			return &platform.PRInfo{
+				Number: int(100 + n), WebURL: "https://github.com/o/r/pull/1", State: "open", HeadRef: headBranch,
+			}, nil
+		},
+	}
+	// Real tracker (thread-safe). Long interval + no WatchLoop → no polling.
+	ghClient, _ := gh.NewClient("token", "owner/repo", "main")
+	tracker := gh.NewTracker(ghClient, 1<<30)
+
+	rbacMgr := adminRBAC(t)
+	h := PutTenant(&Deps{Writer: writer, WriteMode: WriteModePR, PRClient: mockClient, PRTracker: tracker, RBAC: rbacMgr})
+	wrapped := wrapWithRBACMiddleware(h, rbacMgr, rbac.PermWrite, TenantIDFromPath)
+
+	const n = 8
+	codes := make([]int, n)
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func(idx int) {
+			defer wg.Done()
+			body := bytes.NewBufferString("tenants:\n  db-a:\n    _silent_mode: \"critical\"\n")
+			req := newRequestWithChiParam("PUT", "/api/v1/tenants/db-a", "id", "db-a", body)
+			req.Header.Set("X-Forwarded-Email", "alice@example.com")
+			req.Header.Set("X-Forwarded-Groups", "admins")
+			w := httptest.NewRecorder()
+			<-start
+			wrapped.ServeHTTP(w, req)
+			codes[idx] = w.Code
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	if got := createCalls.Load(); got != 1 {
+		t.Errorf("CreatePR called %d times, want exactly 1 (dedup race)", got)
+	}
+	var ok, conflict int
+	for _, c := range codes {
+		switch c {
+		case http.StatusOK:
+			ok++
+		case http.StatusConflict:
+			conflict++
+		default:
+			t.Errorf("unexpected status %d", c)
+		}
+	}
+	if ok != 1 {
+		t.Errorf("expected exactly 1 success, got %d (codes=%v)", ok, codes)
+	}
+	if conflict != n-1 {
+		t.Errorf("expected %d conflicts, got %d (codes=%v)", n-1, conflict, codes)
 	}
 }

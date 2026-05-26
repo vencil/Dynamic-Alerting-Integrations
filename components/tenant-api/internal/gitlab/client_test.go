@@ -2,11 +2,14 @@ package gitlab
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/vencil/tenant-api/internal/platform"
 )
 
 func TestNewClient(t *testing.T) {
@@ -129,6 +132,32 @@ func TestCreatePR(t *testing.T) {
 	}
 	if mr.State != "open" {
 		t.Errorf("expected normalized state 'open', got %q", mr.State)
+	}
+}
+
+// TestCreatePR_Forbidden asserts a 403 from GitLab (token passed
+// ValidateToken's /user check but lacks api write scope) surfaces as
+// platform.ErrForbidden, with no upstream body leaked into the error.
+func TestCreatePR_Forbidden(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		fmt.Fprint(w, `{"message":"403 Forbidden - insufficient_scope read_api"}`)
+	}))
+	defer srv.Close()
+
+	c, _ := NewClient("read-only-token", "group/project", "main")
+	c.SetBaseURL(srv.URL)
+
+	_, err := c.CreatePR("title", "body", "tenant-api/db-a/ts", nil)
+	if err == nil {
+		t.Fatal("expected error for 403 response")
+	}
+	if !errors.Is(err, platform.ErrForbidden) {
+		t.Errorf("expected errors.Is(err, ErrForbidden), got %v", err)
+	}
+	if strings.Contains(err.Error(), "insufficient_scope") {
+		t.Errorf("error leaked upstream body: %v", err)
 	}
 }
 

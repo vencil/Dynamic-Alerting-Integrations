@@ -63,6 +63,20 @@ type Tracker interface {
 	// HasPendingPR checks if a tenant has an open PR/MR pending review.
 	HasPendingPR(tenantID string) bool
 
+	// ClaimTenant atomically reserves a tenant for an in-flight PR/MR
+	// creation. It returns false if the tenant already has a pending PR
+	// (cached/registered) OR an in-flight claim — i.e. another request is
+	// mid-creation. This is a *synchronous* check-and-set that does NOT
+	// depend on the async poll cadence, closing the check-then-RegisterPR
+	// race for concurrent same-tenant writes. The caller MUST ReleaseClaim
+	// on any failure (RegisterPR clears the claim on success).
+	ClaimTenant(tenantID string) bool
+
+	// ReleaseClaim drops an in-flight claim taken by ClaimTenant. Safe to
+	// call when no claim is held (no-op). Call it when PR/MR creation fails
+	// so a retry isn't blocked by a stuck claim.
+	ReleaseClaim(tenantID string)
+
 	// RegisterPR adds a newly created PR/MR to the tracker immediately.
 	RegisterPR(pr PRInfo)
 

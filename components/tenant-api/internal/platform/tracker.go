@@ -46,7 +46,8 @@ type PollingTracker struct {
 
 	mu           sync.RWMutex
 	pendingPRs   []PRInfo
-	byTenant     map[string]PRInfo // tenantID → most recent pending PR/MR
+	byTenant     map[string]PRInfo   // tenantID → most recent pending PR/MR
+	claimed      map[string]struct{} // tenantID → in-flight PR/MR creation claim
 	syncInterval time.Duration
 	lastSync     time.Time
 }
@@ -72,6 +73,7 @@ func NewPollingTracker(lister Lister, provider string, syncInterval time.Duratio
 		provider:     provider,
 		clock:        clockwork.NewRealClock(),
 		byTenant:     make(map[string]PRInfo),
+		claimed:      make(map[string]struct{}),
 		syncInterval: syncInterval,
 	}
 }
@@ -166,6 +168,48 @@ func (t *PollingTracker) HasPendingPR(tenantID string) bool {
 	return ok
 }
 
+// ClaimTenant atomically reserves a tenant for an in-flight PR/MR creation.
+// Returns false when the tenant already has a registered/cached pending PR
+// OR an outstanding claim — i.e. another request is already creating one.
+//
+// This is the dedup atomicity point: the handler's HasPendingPR fast-path
+// only narrows the common case; correctness for two concurrent same-tenant
+// writes rests here, on a synchronous check-and-set under the write lock,
+// independent of the async poll cadence (which is why the poll-window race —
+// analogous to the #527 federation-token TOCTOU — cannot occur).
+//
+// SCOPE: like the rest of this in-memory tracker, the claim is per-process.
+// PR-mode dedup therefore assumes a single tenant-api replica (the default;
+// helm replicaCount=1). Running >1 replica in PR mode is unsupported — each
+// replica has an independent cache + claim set, so neither this claim nor the
+// poll cache dedups across pods.
+func (t *PollingTracker) ClaimTenant(tenantID string) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if _, pending := t.byTenant[tenantID]; pending {
+		return false
+	}
+	if _, claiming := t.claimed[tenantID]; claiming {
+		return false
+	}
+	if t.claimed == nil {
+		// Defensive: tolerate trackers built as a struct literal (some tests)
+		// rather than via NewPollingTracker. delete() on a nil map is already
+		// safe, so ReleaseClaim/RegisterPR need no such guard.
+		t.claimed = make(map[string]struct{})
+	}
+	t.claimed[tenantID] = struct{}{}
+	return true
+}
+
+// ReleaseClaim drops an in-flight claim. No-op when none is held. Call on a
+// failed PR/MR creation so a retry isn't blocked by a stuck claim.
+func (t *PollingTracker) ReleaseClaim(tenantID string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delete(t.claimed, tenantID)
+}
+
 // RegisterPR adds a freshly-created PR/MR to the cache immediately,
 // before the next poll. If the same tenant already has an entry, the
 // existing entry is replaced (avoids transient duplicates between
@@ -173,6 +217,11 @@ func (t *PollingTracker) HasPendingPR(tenantID string) bool {
 func (t *PollingTracker) RegisterPR(pr PRInfo) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+
+	// The real PR now represents the pending state — supersede any
+	// synchronous claim so it doesn't outlive the PR (a stale claim would
+	// block the tenant forever once the PR later merges out of byTenant).
+	delete(t.claimed, pr.TenantID)
 
 	if pr.TenantID == "" {
 		t.pendingPRs = append(t.pendingPRs, pr)
