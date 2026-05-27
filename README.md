@@ -124,10 +124,10 @@ docker compose up da-portal tenant-api     # 只起核心雙星
 
 | 產品 | 是什麼 / 解決什麼 | Day-0 一行試 | Day-1 整合 |
 |------|------------------|--------------|------------|
-| **da-portal**（Tenant Manager UI） | 視覺化瀏覽/編輯租戶設定，按 Save 即落一個真實 git commit（GitOps） | 開 <http://localhost:8081> | [Helm chart](helm/) |
-| **tenant-api** | file-based 設定 API（commit-on-write，無資料庫） | [QUICKSTART](components/tenant-api/QUICKSTART.md) | [Helm](helm/) + oauth2-proxy |
-| **threshold-exporter** + Prometheus | 把 YAML 閾值變成 `user_threshold` 指標 → `group_left` 單規則覆蓋全租戶 | [QUICKSTART](components/threshold-exporter/QUICKSTART.md) | [BYO Prometheus](docs/integration/byo-prometheus-integration.md) |
-| **da-tools**（CLI） | 護欄 / 遷移 / scaffold（`guard`、`parser`、`batch-pr`…） | [QUICKSTART](components/da-tools/app/QUICKSTART.md) | CI 整合 |
+| **da-portal**（Tenant Manager UI）<br>`[給 Tenant]` | 視覺化瀏覽/編輯租戶設定，按 Save 即落一個真實 git commit（GitOps） | 開 <http://localhost:8081> | [Helm chart](helm/) |
+| **tenant-api**<br>`[給 Platform Engineer]` | file-based 設定 API（commit-on-write，無資料庫） | [QUICKSTART](components/tenant-api/QUICKSTART.md) | [Helm](helm/) + oauth2-proxy |
+| **threshold-exporter** + Prometheus<br>`[給 Platform Engineer]` | 把 YAML 閾值變成 `user_threshold` 指標 → `group_left` 單規則覆蓋全租戶 | [QUICKSTART](components/threshold-exporter/QUICKSTART.md) | [BYO Prometheus](docs/integration/byo-prometheus-integration.md) |
+| **da-tools**（CLI）<br>`[給 Domain Expert]` | 護欄 / 遷移 / scaffold（`guard`、`parser`、`batch-pr`…） | [QUICKSTART](components/da-tools/app/QUICKSTART.md) | CI 整合 |
 
 ---
 
