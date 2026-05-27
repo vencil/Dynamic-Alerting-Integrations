@@ -23,10 +23,11 @@ import (
 // PERSISTS, unlike GitLab's ephemeral per-test project). The methods under
 // test (CreateBranch / CreatePR / ListOpenPRs / DeleteBranch) run via gh.Client.
 type ghSeeder struct {
-	baseURL string // https://api.github.com (or GHE)
-	repo    string // owner/repo
-	token   string
-	httpc   *http.Client
+	baseURL    string // https://api.github.com (or GHE)
+	repo       string // owner/repo
+	token      string
+	baseBranch string // base branch for fixture refs/PRs (#636)
+	httpc      *http.Client
 }
 
 func newGHSeeder(cfg githubCfg) *ghSeeder {
@@ -34,12 +35,63 @@ func newGHSeeder(cfg githubCfg) *ghSeeder {
 	if base == "" {
 		base = "https://api.github.com"
 	}
-	return &ghSeeder{
-		baseURL: strings.TrimRight(base, "/"),
-		repo:    cfg.repo,
-		token:   cfg.token,
-		httpc:   &http.Client{Timeout: 60 * time.Second},
+	baseBranch := cfg.baseBranch
+	if baseBranch == "" {
+		baseBranch = "main"
 	}
+	return &ghSeeder{
+		baseURL:    strings.TrimRight(base, "/"),
+		repo:       cfg.repo,
+		token:      cfg.token,
+		baseBranch: baseBranch,
+		httpc:      &http.Client{Timeout: 60 * time.Second},
+	}
+}
+
+// fixtureBranchPrefix namespaces the long-lived >100-PR pagination fixture (#636).
+// Branches under it are seeded ONCE (gated) and NEVER swept by the janitor, so the
+// read-only pagination test always sees >100 open PRs without a per-run bulk seed
+// fighting GitHub's secondary rate limit.
+const fixtureBranchPrefix = branchPrefix + "fixture/" // tenant-api/fixture/
+
+// baseSHA resolves the commit SHA at the tip of the base branch (for creating refs).
+func (s *ghSeeder) baseSHA(t *testing.T) string {
+	t.Helper()
+	out, _ := s.do(t, true, "GET", fmt.Sprintf("/repos/%s/git/ref/heads/%s", s.repo, s.baseBranch), nil)
+	var ref struct {
+		Object struct {
+			SHA string `json:"sha"`
+		} `json:"object"`
+	}
+	if err := json.Unmarshal(out, &ref); err != nil {
+		t.Fatalf("seed parse base ref: %v", err)
+	}
+	if ref.Object.SHA == "" {
+		t.Fatalf("seed base ref %q has empty SHA", s.baseBranch)
+	}
+	return ref.Object.SHA
+}
+
+// createBranchRaw creates a branch via the git-refs API. Unlike gh.Client.CreateBranch
+// it RETRIES (via do), so a bulk fixture seed survives GitHub's secondary rate limit.
+func (s *ghSeeder) createBranchRaw(t *testing.T, branch, sha string) {
+	t.Helper()
+	s.do(t, true, "POST", fmt.Sprintf("/repos/%s/git/refs", s.repo),
+		map[string]any{"ref": "refs/heads/" + branch, "sha": sha})
+}
+
+// createPRRaw opens a PR via the pulls API (retrying) and returns its number.
+func (s *ghSeeder) createPRRaw(t *testing.T, title, head string) int {
+	t.Helper()
+	out, _ := s.do(t, true, "POST", fmt.Sprintf("/repos/%s/pulls", s.repo),
+		map[string]any{"title": title, "head": head, "base": s.baseBranch, "body": "pagination fixture (#636)"})
+	var pr struct {
+		Number int `json:"number"`
+	}
+	if err := json.Unmarshal(out, &pr); err != nil {
+		t.Fatalf("seed parse PR: %v", err)
+	}
+	return pr.Number
 }
 
 // do issues an authenticated GitHub request. Retries transport errors + 5xx
@@ -140,26 +192,41 @@ func (s *ghSeeder) closePRBestEffort(t *testing.T, number int) {
 // when a run died after CreateBranch but before CreatePR, so the PR-based sweep
 // (ListOpenPRs) never sees them and they'd leak forever.
 //
-// per_page=100 (the GitHub list-endpoint max) gives ample headroom — realistic
-// open-branch counts are tiny. A full page loop is unnecessary unless the
-// sandbox ever holds >100 stale branches (the janitor runs every PR/merge, so
-// it catches up across runs regardless).
+// MUST page: the >100-PR pagination fixture (#636) parks ~105 long-lived branches
+// under tenant-api/fixture/, so a single per_page=100 fetch no longer covers the
+// prefix — phantom branches that sort lexically after the fixture would fall off
+// page 1 and never be swept. We page until a short page (last page) or a page
+// that adds nothing new (defensive: if the endpoint ever ignores ?page= and
+// returns the full set each call, the dedup set makes that a clean stop, not a
+// loop). Fixture branches themselves are skipped by the janitor, not here.
 func (s *ghSeeder) listE2EBranches(t *testing.T) []string {
-	out, code := s.do(t, false, "GET",
-		fmt.Sprintf("/repos/%s/git/matching-refs/heads/%s?per_page=100", s.repo, branchPrefix), nil)
-	if code != 200 {
-		return nil // best-effort (e.g. no matching refs / transient)
-	}
-	var refs []struct {
-		Ref string `json:"ref"`
-	}
-	if err := json.Unmarshal(out, &refs); err != nil {
-		t.Logf("janitor: parse matching-refs: %v", err)
-		return nil
-	}
-	branches := make([]string, 0, len(refs))
-	for _, r := range refs {
-		branches = append(branches, strings.TrimPrefix(r.Ref, "refs/heads/"))
+	seen := make(map[string]bool)
+	var branches []string
+	for page := 1; page <= 10; page++ { // safety cap; 10*100 ≫ any realistic count
+		out, code := s.do(t, false, "GET",
+			fmt.Sprintf("/repos/%s/git/matching-refs/heads/%s?per_page=100&page=%d", s.repo, branchPrefix, page), nil)
+		if code != 200 {
+			break // best-effort (e.g. no matching refs / transient)
+		}
+		var refs []struct {
+			Ref string `json:"ref"`
+		}
+		if err := json.Unmarshal(out, &refs); err != nil {
+			t.Logf("janitor: parse matching-refs (page %d): %v", page, err)
+			break
+		}
+		added := 0
+		for _, r := range refs {
+			b := strings.TrimPrefix(r.Ref, "refs/heads/")
+			if !seen[b] {
+				seen[b] = true
+				branches = append(branches, b)
+				added++
+			}
+		}
+		if len(refs) < 100 || added == 0 {
+			break
+		}
 	}
 	return branches
 }

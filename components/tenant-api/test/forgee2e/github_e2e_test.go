@@ -4,6 +4,7 @@ package forgee2e
 
 import (
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -64,6 +65,10 @@ func TestForgeE2E_GitHub_FullLoop(t *testing.T) {
 // tenant-api/* PRs+branches, not just one run's. CI runs are serialized by the
 // workflow's `concurrency` group so they never overlap. Do NOT run it locally
 // while CI may be running, or you'll nuke the live CI run's in-flight PRs.
+//
+// EXCEPTION: the long-lived >100-PR pagination fixture under fixtureBranchPrefix
+// (tenant-api/fixture/, issue #636) is PRESERVED — both the PR-close and branch
+// sweeps skip it, so a single one-time seed survives every janitor pass.
 func TestForgeE2E_GitHub_Janitor(t *testing.T) {
 	if os.Getenv("E2E_GITHUB_JANITOR") != "1" {
 		t.Skip("set E2E_GITHUB_JANITOR=1 to run the orphan sweeper")
@@ -72,19 +77,30 @@ func TestForgeE2E_GitHub_Janitor(t *testing.T) {
 	cl := cfg.clientWithToken(t, cfg.token)
 	s := newGHSeeder(cfg)
 
-	// 1. Close open tenant-api PRs + delete their head branches.
+	// 1. Close open tenant-api PRs + delete their head branches (skip the fixture).
 	prs, err := cl.ListOpenPRs()
 	if err != nil {
 		t.Fatalf("ListOpenPRs: %v", err)
 	}
+	closed, kept := 0, 0
 	for _, pr := range prs {
+		if strings.HasPrefix(pr.HeadRef, fixtureBranchPrefix) {
+			kept++
+			continue // preserve the pagination fixture (#636)
+		}
 		s.closePRBestEffort(t, pr.Number)
 		_ = cl.DeleteBranch(pr.HeadRef)
+		closed++
 	}
-	// 2. Sweep remaining tenant-api/ branches — the phantoms with no PR.
+	// 2. Sweep remaining tenant-api/ branches — the phantoms with no PR (skip the fixture).
 	branches := s.listE2EBranches(t)
+	swept := 0
 	for _, b := range branches {
+		if strings.HasPrefix(b, fixtureBranchPrefix) {
+			continue // preserve the pagination fixture branches (#636)
+		}
 		_ = cl.DeleteBranch(b)
+		swept++
 	}
-	t.Logf("janitor swept %d PR(s) + %d branch(es)", len(prs), len(branches))
+	t.Logf("janitor closed %d PR(s) + swept %d branch(es); preserved %d fixture PR(s)", closed, swept, kept)
 }
