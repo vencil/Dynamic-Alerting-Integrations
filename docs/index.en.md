@@ -21,6 +21,28 @@ Config-driven multi-tenant alerting for Prometheus. Rule count stays fixed at O(
 
 ---
 
+## Try It Locally (No Kubernetes)
+
+One command spins up the whole platform on your laptop — watch a real alert fire in ~1 minute. `⏱️ <1 min · 🟢 Docker only`. Full walkthrough: [`try-local/`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/try-local/README.md).
+
+```mermaid
+graph LR
+    A([Tenant]) -->|UI actions| B(da-portal)
+    B -->|Payload| C(tenant-api)
+    C -->|Git commit| D[(Text / YAML Configs)]
+    E([Platform Engineer]) -->|operate / deploy| C
+    E -->|hot-reload| F(threshold-exporter)
+    D --> F
+    G([Domain Expert]) -->|CI gate| H(da-tools)
+    H -. validate .-> D
+```
+
+> **Collaboration loop:** Tenants raise changes via `da-portal` → Platform Engineers land them safely as Git / plain text → Domain Experts guard the monitoring budget (cardinality) with `da-tools` in CI.
+
+Which one to try? **Tenant → da-portal** · **Platform Engineer → tenant-api + threshold-exporter** · **Domain Expert → da-tools**
+
+---
+
 ## Quick Start by Role
 
 <div class="grid cards" markdown>

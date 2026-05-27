@@ -14,6 +14,8 @@ lang: zh
 >
 > 相關文件：[GitOps CI/CD 整合指南](gitops-ci-integration.md) · [Tenant 生命週期](tenant-lifecycle.md) · [CLI 參考](../cli-reference.md)
 
+> 💡 **想先 1 分鐘看產品跑起來、而不是動手敲 CLI？** → [try-local](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/try-local/README.md)（推薦首站：瀏覽器看 da-portal UI + 真實告警紅燈，不需 K8s；`⏱️ <1 min · 🟢 只需 Docker`）。**本實驗**聚焦**動手跑 da-tools CLI 工作流**（配置 / 路由 / blast radius；`⏱️ 30–45 min · 🟡 中度 (CLI)`）—— 兩者互補、深度不同，不是擇一。
+
 ## 實驗概覽
 
 本實驗帶你走過 Dynamic Alerting 的完整旅程，使用 5 個真實場景 tenant。完成後你將掌握：

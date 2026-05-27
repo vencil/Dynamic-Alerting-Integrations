@@ -10,6 +10,8 @@ docker compose up -d
 
 > ℹ️ 首次啟動會從原始碼 **build tenant-api**（~1 分鐘）—— 它依賴的 `--dev-bypass-auth`（讓瀏覽器免 oauth2-proxy 也能登入）尚未發佈成 published image。之後的啟動會重用已 build 的 image；改了 tenant-api 原始碼後用 `docker compose up -d --build` 重建。其餘 3 個 component 用 published image。
 
+> ⏱️ **TTV：< 1 分鐘**（核心雙星 ~10 秒起）· 🟢 **摩擦：只需 Docker**（Windows 需 WSL2 + Docker Desktop）。
+
 Give it ~1 minute, then open:
 
 | 產品 | 開這個 | 你會看到 |
@@ -32,6 +34,30 @@ make smoke-local      # 需要 curl + jq
 ```bash
 make clean-local
 ```
+
+---
+
+## 4 個產品、3 種角色（誰用什麼）
+
+這套 stack 一次帶出 4 個可獨立採用的產品，分屬不同角色：
+
+```mermaid
+graph LR
+    A([Tenant]) -->|UI 操作| B(da-portal)
+    B -->|Payload| C(tenant-api)
+    C -->|Git Commit| D[(Text / YAML Configs)]
+    E([Platform Engineer]) -->|維運 / 部署| C
+    E -->|熱重載| F(threshold-exporter)
+    D --> F
+    G([Domain Expert]) -->|CI 攔截| H(da-tools)
+    H -. 驗證 .-> D
+```
+
+> **協作閉環**：Tenant 透過 **da-portal** 發起變更 → Platform Engineer 以 Git / 純文字安全落地（**tenant-api** + **threshold-exporter**）→ Domain Expert 用 **da-tools** 在 CI 守監控預算（cardinality budget）。
+
+- **Tenant** → **da-portal**（瀏覽器調閾值 / Saved View）
+- **Platform Engineer** → **tenant-api** + **threshold-exporter**（設定 API / 部署 / 熱重載）
+- **Domain Expert** → **da-tools**（CI 護欄 / 遷移 / scaffold）
 
 ---
 
@@ -103,12 +129,17 @@ docker run --rm -v "$PWD/seed/conf.d:/conf.d:ro" \
   ghcr.io/vencil/da-tools:${TOOLS_TAG:-v2.8.0} guard /conf.d
 ```
 
+> 想完整動手跑 CLI 工作流（init → 閾值 → 路由 → blast radius）？→ [Hands-on Lab](../docs/scenarios/hands-on-lab.md)（`⏱️ 30–45 min`，da-tools 深度教學）。這是 try-local（1 分鐘看產品）的下一層深度。
+
 ## Next Step：上 Production（Kubernetes）
 
 try-local 跑順了、看對胃口 —— 下一步是評估正式部署到 Kubernetes：
 
 - **Helm charts** → [`helm/`](../helm/)（`da-portal` / `tenant-api` / `threshold-exporter`；da-tools 是 CLI image，無 chart）
-- **按角色入門** → [Platform Engineer 部署指南](../docs/getting-started/for-platform-engineers.md)
+- **按角色入門**（接你剛試的那個產品的下一步）：
+    - **Tenant**（剛在 da-portal 調閾值的你）→ [閾值配置與自助管理](../docs/getting-started/for-tenants.md)
+    - **Platform Engineer** → [架構部署與運維](../docs/getting-started/for-platform-engineers.md)
+    - **Domain Expert** → [Rule Pack 客製與品質治理](../docs/getting-started/for-domain-experts.md)
 - **接上既有 Prometheus** → [BYO Prometheus](../docs/integration/byo-prometheus-integration.md) · [Prometheus Operator](../docs/integration/prometheus-operator-integration.md)
 
 > ⚠️ try-local 用的 `--dev-bypass-auth` + `127.0.0.1`-only binding 是**本機限定**捷徑；production 改由 oauth2-proxy 注入身分、Helm values 控管（見 [ADR-022](../docs/adr/022-dev-auth-bypass-four-layer-containment.md)）。
