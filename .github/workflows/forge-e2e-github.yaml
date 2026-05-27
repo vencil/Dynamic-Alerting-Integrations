@@ -24,7 +24,12 @@ on:
     paths:
       - "components/tenant-api/**"
       - ".github/workflows/forge-e2e-github.yaml"
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      seed_pagination_fixture:
+        description: "One-time: seed/top-up the >100-PR pagination fixture (#636)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -57,6 +62,18 @@ jobs:
           E2E_GITHUB_RO_TOKEN: ${{ secrets.E2E_GITHUB_RO_TOKEN }}
           E2E_GITHUB_JANITOR: "1"
         run: go test -tags forge_e2e -count=1 -run TestForgeE2E_GitHub_Janitor ./test/forgee2e/... -v
+
+      # One-time pagination fixture seed (#636) — manual dispatch only. Creates/
+      # tops-up the >100 long-lived open PRs under tenant-api/fixture/ that the
+      # janitor preserves and TestForgeE2E_GitHub_Pagination reads. Paced + retried
+      # so it survives GitHub's secondary rate limit. No-op on push / pull_request.
+      - name: Seed pagination fixture (#636, manual)
+        if: github.event_name == 'workflow_dispatch' && inputs.seed_pagination_fixture
+        working-directory: components/tenant-api
+        env:
+          E2E_GITHUB_TOKEN: ${{ secrets.E2E_GITHUB_TOKEN }}
+          E2E_GITHUB_SEED_FIXTURE: "1"
+        run: go test -tags forge_e2e -count=1 -timeout 20m -run TestForgeE2E_GitHub_SeedPaginationFixture ./test/forgee2e/... -v
 
       - name: GitHub forge E2E scenarios
         working-directory: components/tenant-api

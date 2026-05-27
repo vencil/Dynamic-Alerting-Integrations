@@ -295,7 +295,8 @@ for keyword, db_type in JOB_DB_MAP.items():
 tenant-api 的 PR/MR write-back（`internal/github` / `internal/gitlab`）除了 httptest mock 單元測試（確定性協定，#615），另有 **real-forge E2E** 捕捉 mock 測不到的環境擬真：真分頁、真 403、CE 專屬行為。測試在 `components/tenant-api/test/forgee2e/`，以 `//go:build forge_e2e` 隔離 —— 正常 `go test ./...` **不會編到也不會跑**；env 未設時每個場景 **SKIP**（CI 永不打真 forge）。
 
 - **Track 2（GitLab CE，已實測）**：`bash scripts/ops/forge_e2e_run.sh`（本機 + nightly `forge-e2e-gitlab.yaml`）。已對 `gitlab/gitlab-ce:18.11.3-ce.0` 跑過 403 / full-loop / pagination(>100) 全綠。
-- **Track 1（GitHub，待 provision）**：same-repo / post-merge 觸發（**嚴禁 `pull_request_target`** — 經典 pwn-request 會洩 PAT），fork PR skip。需 owner 提供 dummy repo + `E2E_GITHUB_TOKEN`(寫) / `E2E_GITHUB_RO_TOKEN`(讀) secret。
+- **Track 1（GitHub，已 provision + 已實測）**：same-repo `pull_request` + `push:main` + dispatch 觸發（**嚴禁 `pull_request_target`** — 經典 pwn-request 會洩 PAT），fork PR 無 secrets → skip。sandbox `vencil/tenant-api-e2e-sandbox` + `E2E_GITHUB_TOKEN`(寫) / `E2E_GITHUB_RO_TOKEN`(讀) 已備；403 + full-loop + branch-primary janitor 已對真 `api.github.com` 跑綠（#634）。
+- **GitHub >100-PR 真分頁 fixture（#636）**：GitHub secondary rate limit（~80 content/min）+ production `gh.Client` 不重試，故**不** per-run seed；改在 sandbox 一次性建 ~105 個長存 open PR（前綴 `tenant-api/fixture/`，**janitor 跳過不掃**），`TestForgeE2E_GitHub_Pagination` **只讀**斷言 >100 且每個 PR number 只出現一次。seed：手動跑 `forge-e2e-github.yaml` 的 `workflow_dispatch` 並勾 `seed_pagination_fixture`（內部設 `E2E_GITHUB_SEED_FIXTURE=1`、冪等 top-up、走會重試 secondary-limit 的 `ghSeeder`）；未 seed 前分頁測試 **skip-until-seeded**（非阻塞）。⚠️ janitor 是 shared-sandbox 廣掃（concurrency 序列化），別在 CI 可能跑時本機跑。
 - **PR CI**：因 build-tag 隔離，加了 `go test -tags forge_e2e ./test/forgee2e/...` compile-check step（無 env → 全 skip）防止 tag-gated code 腐爛。
 
 ### 起 GitLab CE 的雷（都已 codify 進 `forge_e2e_run.sh`）
