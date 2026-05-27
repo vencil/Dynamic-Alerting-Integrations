@@ -233,6 +233,10 @@ ALL violations 全列出（不是 first-only），跟新 tenant-scoped check 的
 
 `/api/v1/events` SSE endpoint 的 hub 沒有 per-client idle timeout（slow client 會佔 goroutine）。本次硬化不處理 — 是另一條 SSE-specific hardening 路徑，與 RBAC / rate limit 解耦。
 
+### 5.4 Git CLI per-command timeout（#630）
+
+GitOps 寫入（`Write` / `WritePR` / `WritePRBatch`）全程持一把 process 級寫入鎖 `sync.Mutex`，期間呼叫的 git CLI 子程序原本無逾時 —— 卡住的 `git push`（degraded on-prem forge / 網路瞬斷）會無限期持鎖、凍結**所有**租戶寫入直到 pod 重啟。現每個 git 呼叫都有 per-command deadline（`exec.CommandContext` + `WaitDelay`，後者確保即使 `git-remote-https`/`ssh` helper grandchild 仍持 stdout pipe 也能釋鎖），逾時即 SIGKILL、回 loud `timed out — write lock released` 並釋鎖。預設 60s，由 `TENANT_API_GIT_TIMEOUT`（Go duration，如 `90s`）覆寫、`helm/tenant-api` `tenantApi.gitTimeout` value 暴露；非法 / 0 / 負值 fallback 回預設。
+
 ---
 
 ## 6. 相關文件 + 程式碼

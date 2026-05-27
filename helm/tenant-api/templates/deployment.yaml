@@ -89,6 +89,13 @@ spec:
               value: {{ .Values.tenantApi.gitCommitterName | quote }}
             - name: GIT_COMMITTER_EMAIL
               value: {{ .Values.tenantApi.gitCommitterEmail | quote }}
+            {{- if .Values.tenantApi.gitTimeout }}
+            # git CLI per-command timeout (#630) — bounds a hung git push so it
+            # can't hold the write lock and freeze all tenant writes. Emitted only
+            # when set; otherwise the binary's 60s default applies.
+            - name: TENANT_API_GIT_TIMEOUT
+              value: {{ .Values.tenantApi.gitTimeout | quote }}
+            {{- end }}
             # Server tuning (issue #144). The binary has working
             # defaults built in; emit env vars only when the chart
             # has them so a default deploy doesn't churn the env
