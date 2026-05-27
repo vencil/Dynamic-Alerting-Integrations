@@ -1,0 +1,53 @@
+name: Forge E2E — GitLab CE (nightly)
+
+# Real-forge E2E for tenant-api's MR write-back against a self-hosted GitLab CE
+# (issue #616, Track 2). Heavy (spins up GitLab CE + seeds >100 MRs), so it
+# runs on a nightly cron — NOT per-PR. The deterministic protocol checks live
+# in the httptest unit tests (#615); this catches environment realities a mock
+# can't: real pagination, true permission 403s, CE-specific API behavior.
+#
+# All orchestration (pinned image, /-/health poll, phantom-readiness retry on
+# seeding, PAT minting, failure log artifact) lives in scripts/ops/forge_e2e_run.sh
+# so local repro is a single `bash scripts/ops/forge_e2e_run.sh`.
+
+on:
+  schedule:
+    - cron: "0 2 * * *" # 02:00 UTC nightly
+  workflow_dispatch: {} # manual trigger for on-demand verification
+
+permissions:
+  contents: read
+
+concurrency:
+  group: forge-e2e-gitlab
+  cancel-in-progress: false
+
+jobs:
+  gitlab-ce-e2e:
+    name: GitLab CE real-forge E2E
+    runs-on: ubuntu-latest # 7 GB; GitLab CE ~4 GB. If OOM-flaky, move to a larger runner.
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Go toolchain
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+
+      # The script starts the pinned GitLab CE, polls /-/health (no sleep), mints
+      # api + read_api PATs via rails runner (retried for Gitaly/Sidekiq warmup),
+      # runs the forge_e2e-tagged tests, and dumps /var/log/gitlab on failure.
+      # TEARDOWN=1 removes the container so the runner is left clean.
+      - name: Run GitLab CE forge E2E
+        run: TEARDOWN=1 bash scripts/ops/forge_e2e_run.sh
+
+      - name: Upload GitLab CE logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: gitlab-ce-logs
+          path: gitlab-ce-logs.tar.gz
+          if-no-files-found: ignore
+          retention-days: 7

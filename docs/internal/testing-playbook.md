@@ -290,6 +290,23 @@ for keyword, db_type in JOB_DB_MAP.items():
 
 **回歸測試必備：** 加一個 false-positive case（如 `"prometheus"` → `"unknown"`）防止未來改動退化。
 
+## Forge E2E（tenant-api real-forge，#616）
+
+tenant-api 的 PR/MR write-back（`internal/github` / `internal/gitlab`）除了 httptest mock 單元測試（確定性協定，#615），另有 **real-forge E2E** 捕捉 mock 測不到的環境擬真：真分頁、真 403、CE 專屬行為。測試在 `components/tenant-api/test/forgee2e/`，以 `//go:build forge_e2e` 隔離 —— 正常 `go test ./...` **不會編到也不會跑**；env 未設時每個場景 **SKIP**（CI 永不打真 forge）。
+
+- **Track 2（GitLab CE，已實測）**：`bash scripts/ops/forge_e2e_run.sh`（本機 + nightly `forge-e2e-gitlab.yaml`）。已對 `gitlab/gitlab-ce:18.11.3-ce.0` 跑過 403 / full-loop / pagination(>100) 全綠。
+- **Track 1（GitHub，待 provision）**：same-repo / post-merge 觸發（**嚴禁 `pull_request_target`** — 經典 pwn-request 會洩 PAT），fork PR skip。需 owner 提供 dummy repo + `E2E_GITHUB_TOKEN`(寫) / `E2E_GITHUB_RO_TOKEN`(讀) secret。
+- **PR CI**：因 build-tag 隔離，加了 `go test -tags forge_e2e ./test/forgee2e/...` compile-check step（無 env → 全 skip）防止 tag-gated code 腐爛。
+
+### 起 GitLab CE 的雷（都已 codify 進 `forge_e2e_run.sh`）
+
+1. **`GITLAB_ROOT_PASSWORD` 被拒**：GitLab 18 拒絕含「常見字」的密碼（`…Pass…` 被擋，容器 Exited 1）。**別設它** → 用自動產生的；token 改用 `gitlab-rails runner` 鑄造。
+2. **host `/-/health` 回 404**：GitLab 的 monitoring 端點 IP-whitelist 到 127.0.0.1，從 host（NAT 來源 IP）打一律 404，即使已就緒。就緒判斷用 **`docker inspect --format '{{.State.Health.Status}}'`**（容器內建 healthcheck）；一般 `/api/v4/*` 從 host 可達（無白名單）。
+3. **Phantom readiness**：`/-/health` 200（或 healthy）後 Gitaly / Sidekiq 仍可能暖機 → 立刻打 API 會 502/503/timeout。seeding API 呼叫包 retry（rails runner 鑄 token + 5xx 退避重試）。
+4. **Gitaly seeding race**：先 `CreateBranch`（空 ref）再用 Files API commit，bulk seeding 到 ~第 36 筆會 400「You can only create or edit files when you are on a branch」（新 branch 尚未傳播到 Gitaly）。**解**：用 Files API 的 `start_branch` 參數**原子地**建 branch + commit 一次完成（`commitFileNewBranch`），無跨呼叫 race。`CreateBranch`/`DeleteBranch` 改在 full-loop 場景單獨驗。
+5. **logrotate omnibus reconfigure flake**：fresh boot 偶發 `runit_service[logrotate] … exit 1` 導致 reconfigure 失敗、容器 Exited 1。`forge_e2e_run.sh` 的 boot 帶 1 次重試吸收；`wait_health` 偵測容器中途 exit 即 fail-fast（不空等 timeout）。
+6. **CI 並發唯一性**：test tenant id + branch + PR title 須含 `${{ github.run_id }}-${{ github.run_attempt }}`（namespace 在 **tenant id**，非僅 branch suffix；勿只靠秒級 timestamp — 同秒會撞）。
+
 ## 自檢方法論
 
 新功能完成後執行兩輪自檢：

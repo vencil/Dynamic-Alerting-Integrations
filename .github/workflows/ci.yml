@@ -340,6 +340,15 @@ jobs:
           python3 "$GITHUB_WORKSPACE/scripts/ops/ci_flake_retry.py" -- \
             go test ./cmd/... ./internal/... -race -count=1 -coverprofile=coverage.out
 
+      # #616: the forge_e2e real-forge E2E package is build-tag gated, so the
+      # regular `go test ./...` above never compiles it. This step keeps it from
+      # rotting (compile under the tag) AND asserts skip-safety: with no E2E_*
+      # env in CI, every scenario must SKIP — never reaching a live forge. The
+      # real runs are the nightly GitLab CE workflow + scripts/ops/forge_e2e_run.sh.
+      - name: Compile-check forge_e2e package (build-tag gated)
+        working-directory: components/tenant-api
+        run: go test -tags forge_e2e -count=1 ./test/forgee2e/...
+
       # TRK-221 (#226): Verify generated OpenAPI spec is in sync
       # with the swag annotations in handler/*. Drift = annotation
       # changed but `make api-docs` not run + committed.
