@@ -48,6 +48,14 @@ tenantApi:
   gitCommitterName: "da-portal"
   gitCommitterEmail: "da-portal@dynamic-alerting.local"
 
+  # git CLI per-command timeout (#630). Empty → binary default (60s). Every write
+  # holds a process-wide lock while git runs; a hung `git push` (degraded on-prem
+  # forge / network microcut) would otherwise freeze ALL tenant writes until it
+  # returns. The binary bounds each git invocation and releases the lock on timeout.
+  # Raise for a slow on-prem GitLab (Go duration string, e.g. "90s"); read as
+  # TENANT_API_GIT_TIMEOUT. Emitted only when set, so a default upgrade is a no-op.
+  gitTimeout: ""
+
   # HTTP server tuning (issue #144). Defaults match the binary's
   # hardcoded values pre-#144 so a default Helm upgrade is a no-op;
   # override only when an environment needs different headroom.

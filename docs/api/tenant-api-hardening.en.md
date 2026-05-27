@@ -233,6 +233,10 @@ ALL violations are listed (not first-only) — same UX as the tenant-scoped chec
 
 The `/api/v1/events` SSE hub has no per-client idle timeout (slow clients hold a goroutine indefinitely). This hardening doesn't address it — it's a separate SSE-specific hardening path, decoupled from RBAC / rate limiting.
 
+### 5.4 Git CLI per-command timeout (#630)
+
+GitOps writes (`Write` / `WritePR` / `WritePRBatch`) hold a process-wide writer `sync.Mutex` for the whole operation, and the git CLI children they invoke previously had no timeout — a hung `git push` (degraded on-prem forge / network microcut) would hold the lock indefinitely and freeze ALL tenant writes until the pod restarts. Each git call now has a per-command deadline (`exec.CommandContext` + `WaitDelay`, the latter ensuring the lock is released even when a `git-remote-https`/`ssh` helper grandchild still holds the stdout pipe); on timeout it is SIGKILLed, returns a loud `timed out — write lock released`, and frees the lock. Default 60s, overridable via `TENANT_API_GIT_TIMEOUT` (Go duration, e.g. `90s`) and exposed through `helm/tenant-api` `tenantApi.gitTimeout`; invalid / 0 / negative falls back to the default.
+
 ---
 
 ## 6. References

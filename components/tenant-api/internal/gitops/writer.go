@@ -10,6 +10,7 @@
 package gitops
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -34,6 +35,25 @@ var ErrPendingPR = errors.New("pending PR exists for this tenant")
 // tenantID is the tenant or entity that was written (tenant ID, "groups", "views", etc.)
 type OnWriteFunc func(tenantID string)
 
+// defaultGitTimeout bounds a single git CLI invocation. Every write holds the
+// writer mutex (w.mu) for the whole operation, so a hung git child (most
+// dangerously `git push` against a degraded on-prem forge / network microcut)
+// would otherwise hold the mutex indefinitely and freeze EVERY tenant's writes,
+// not just one. A per-command deadline makes a stuck git fail loudly and release
+// the lock. Override via TENANT_API_GIT_TIMEOUT (a Go duration, e.g. "90s").
+const defaultGitTimeout = 60 * time.Second
+
+// defaultGitKillGrace is cmd.WaitDelay: the grace the runtime allows for I/O
+// cleanup AFTER the deadline kills the git child, before it force-closes the
+// pipes and lets Wait return. This is NOT cosmetic — `git push` over HTTPS/SSH
+// forks a `git-remote-https`/`ssh` helper that INHERITS git's stdout/stderr.
+// CommandContext only SIGKILLs the direct git child on deadline; the helper can
+// survive (blocked on a network read) holding the pipe's write-end open, which
+// would otherwise make CombinedOutput's reader — and thus Wait — block long past
+// the deadline and keep the writer mutex held (i.e. #630 would NOT be fixed).
+// WaitDelay guarantees Wait returns shortly after the deadline regardless.
+const defaultGitKillGrace = 5 * time.Second
+
 // Writer handles GitOps write-back operations.
 type Writer struct {
 	mu             sync.Mutex
@@ -42,6 +62,9 @@ type Writer struct {
 	committerName  string // cached from GIT_COMMITTER_NAME env var
 	committerEmail string // cached from GIT_COMMITTER_EMAIL env var
 	onWrite        OnWriteFunc // v2.6.0: callback for post-write notifications (e.g. SSE hub)
+	gitTimeout     time.Duration // per-git-command wall-clock deadline (#630); 0 → defaultGitTimeout
+	gitWaitDelay   time.Duration // cmd.WaitDelay grace after a deadline kill (#630); 0 → defaultGitKillGrace
+	gitBinary      string        // git executable; "git" in prod, overridden in tests (timeout seam)
 }
 
 // NewWriter creates a Writer for the given directories.
@@ -56,7 +79,26 @@ func NewWriter(configDir, gitDir string) *Writer {
 		gitDir:         gitDir,
 		committerName:  os.Getenv("GIT_COMMITTER_NAME"),
 		committerEmail: os.Getenv("GIT_COMMITTER_EMAIL"),
+		gitTimeout:     gitTimeoutFromEnv(),
+		gitBinary:      "git",
 	}
+}
+
+// gitTimeoutFromEnv reads TENANT_API_GIT_TIMEOUT as a Go duration, falling back
+// to defaultGitTimeout when unset, unparseable, or non-positive (a clamp keeps a
+// fat-fingered "0"/"-5s" from disabling the lock-release safety net).
+func gitTimeoutFromEnv() time.Duration {
+	v := os.Getenv("TENANT_API_GIT_TIMEOUT")
+	if v == "" {
+		return defaultGitTimeout
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil || d <= 0 {
+		slog.Warn("gitops: invalid TENANT_API_GIT_TIMEOUT — using default",
+			"value", v, "default", defaultGitTimeout, "error", err)
+		return defaultGitTimeout
+	}
+	return d
 }
 
 // SetOnWrite registers a callback to be invoked after a successful config write.
@@ -126,8 +168,12 @@ func (w *Writer) Diff(tenantID, proposedContent string) (string, error) {
 	}
 	_ = tmpFile.Close()
 
-	cmd := exec.Command("git", "diff", "--no-index", "--", filePath, tmpFile.Name())
-	out, _ := cmd.Output() // git diff exits 1 when there are differences — that's expected
+	cmd, _, cancel := w.gitCmd("diff", "--no-index", "--", filePath, tmpFile.Name())
+	defer cancel()
+	// git diff exits 1 when there are differences — that's expected, so the error
+	// is intentionally discarded. A deadline-killed diff likewise returns empty
+	// output here (this is a read-only advisory diff, not a write path).
+	out, _ := cmd.Output()
 	return string(out), nil
 }
 
@@ -261,20 +307,22 @@ func (w *Writer) commitFileChange(filePath, commitTag, authorEmail string, conte
 
 // currentHEAD returns the current HEAD commit hash of the git repository.
 func (w *Writer) currentHEAD() (string, error) {
-	cmd := exec.Command("git", "-C", w.gitDir, "rev-parse", "HEAD")
+	cmd, ctx, cancel := w.gitCmd("-C", w.gitDir, "rev-parse", "HEAD")
+	defer cancel()
 	out, err := cmd.Output()
 	if err != nil {
-		return "", err
+		return "", w.gitErr(ctx, "rev-parse HEAD", err, out)
 	}
 	return strings.TrimSpace(string(out)), nil
 }
 
 // commitParent returns the parent commit hash of HEAD (i.e. HEAD~1).
 func (w *Writer) commitParent() (string, error) {
-	cmd := exec.Command("git", "-C", w.gitDir, "rev-parse", "HEAD~1")
+	cmd, ctx, cancel := w.gitCmd("-C", w.gitDir, "rev-parse", "HEAD~1")
+	defer cancel()
 	out, err := cmd.Output()
 	if err != nil {
-		return "", err
+		return "", w.gitErr(ctx, "rev-parse HEAD~1", err, out)
 	}
 	return strings.TrimSpace(string(out)), nil
 }
@@ -287,13 +335,15 @@ func (w *Writer) commitParent() (string, error) {
 //   - committer = the service account (da-portal@dynamic-alerting.local)
 func (w *Writer) gitCommit(filePath, tenantID, authorEmail string, trailer ...string) error {
 	// Stage the file
-	addCmd := exec.Command("git", "-C", w.gitDir, "add", filePath)
+	addCmd, addCtx, addCancel := w.gitCmd("-C", w.gitDir, "add", filePath)
+	defer addCancel()
 	if out, err := addCmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("git add: %w — %s", err, string(out))
+		return w.gitErr(addCtx, "add", err, out)
 	}
 
 	// Check if there's actually something to commit
-	statusCmd := exec.Command("git", "-C", w.gitDir, "diff", "--cached", "--quiet")
+	statusCmd, _, statusCancel := w.gitCmd("-C", w.gitDir, "diff", "--cached", "--quiet")
+	defer statusCancel()
 	if err := statusCmd.Run(); err == nil {
 		// Exit 0 means no changes staged — nothing to commit
 		return nil
@@ -326,15 +376,16 @@ func (w *Writer) gitCommit(filePath, tenantID, authorEmail string, trailer ...st
 		committerEmail = authorEmail
 	}
 
-	commitCmd := exec.Command("git", "-C", w.gitDir,
+	commitCmd, commitCtx, commitCancel := w.gitCmd("-C", w.gitDir,
 		"-c", "user.name="+committerName,
 		"-c", "user.email="+committerEmail,
 		"commit",
 		"--author="+author,
 		"-m", msg,
 	)
+	defer commitCancel()
 	if out, err := commitCmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("git commit: %w — %s", err, string(out))
+		return w.gitErr(commitCtx, "commit", err, out)
 	}
 	return nil
 }
@@ -473,12 +524,53 @@ type PRBatchOp struct {
 	YAMLContent string
 }
 
-// gitExec runs a git command in the git directory.
+// gitCmd builds a git *exec.Cmd bounded by the writer's per-command timeout
+// (#630). The caller MUST defer the returned cancel — it stops the deadline
+// timer and kills the child if it's still running. The context is returned so
+// callers can tell a deadline kill apart from an ordinary non-zero git exit.
+func (w *Writer) gitCmd(args ...string) (*exec.Cmd, context.Context, context.CancelFunc) {
+	timeout := w.gitTimeout
+	if timeout <= 0 {
+		timeout = defaultGitTimeout
+	}
+	bin := w.gitBinary
+	if bin == "" {
+		bin = "git"
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	cmd := exec.CommandContext(ctx, bin, args...)
+	// Bound how long Wait blocks for pipe I/O after the deadline kill, so a
+	// surviving remote-helper grandchild holding stdout can't keep the writer
+	// mutex pinned past the deadline (see defaultGitKillGrace).
+	cmd.WaitDelay = w.gitWaitDelay
+	if cmd.WaitDelay <= 0 {
+		cmd.WaitDelay = defaultGitKillGrace
+	}
+	return cmd, ctx, cancel
+}
+
+// gitErr renders a git failure. A deadline kill is reported LOUDLY and flags that
+// the write lock is released as the caller returns (the whole point of #630), so
+// a stuck push surfaces as a clear timeout instead of a silent global write freeze.
+func (w *Writer) gitErr(ctx context.Context, op string, err error, out []byte) error {
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		timeout := w.gitTimeout
+		if timeout <= 0 {
+			timeout = defaultGitTimeout
+		}
+		return fmt.Errorf("git %s timed out after %s — write lock released: %w — %s",
+			op, timeout, context.DeadlineExceeded, string(out))
+	}
+	return fmt.Errorf("git %s: %w — %s", op, err, string(out))
+}
+
+// gitExec runs a git command in the git directory, bounded by the write timeout.
 func (w *Writer) gitExec(args ...string) error {
 	fullArgs := append([]string{"-C", w.gitDir}, args...)
-	cmd := exec.Command("git", fullArgs...)
+	cmd, ctx, cancel := w.gitCmd(fullArgs...)
+	defer cancel()
 	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("git %s: %w — %s", args[0], err, string(out))
+		return w.gitErr(ctx, args[0], err, out)
 	}
 	return nil
 }
