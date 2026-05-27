@@ -3,6 +3,8 @@
 <!-- 標題版號 = 最後 released tag（目前 v2.8.0）；下一版 in-flight feature 在內文以 inline 版號標記。
      Release wrap 切五線 tag 時，本標題 + VERSION 檔 + 下方版號表跟著批次同步 bump。 -->
 
+> 💡 **想快速把這個元件跑起來？** → **[app/QUICKSTART.md](app/QUICKSTART.md)**（`docker run` 對 fixture 跑 da-guard、≤2 分鐘看到 CI 紅字攔截）。本篇 README 是完整子命令 / 客戶旅程 **參考（Reference）**。
+
 > **核心 component** — 一顆 ~60 MB Alpine Python image，把 Dynamic Alerting 平台所需 45 個驗證 / 遷移 / 治理 CLI 工具裝在一起，**無需 clone repo、無需安裝 Python 依賴**，docker pull 即用。Platform Engineers / SREs / Tenants（DevOps）共用入口。
 >
 > **Companion 文件：** [interactive-tools.md](../../docs/interactive-tools.md) · [cli-reference.md](../../docs/cli-reference.md) · [cheat-sheet.md](../../docs/cheat-sheet.md) · [BYOP integration guide](../../docs/integration/byo-prometheus-integration.md) · [Shadow Monitoring SOP](../../docs/shadow-monitoring-sop.md) · [architecture-and-design](../../docs/architecture-and-design.md)

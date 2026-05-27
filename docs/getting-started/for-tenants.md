@@ -15,6 +15,12 @@ lang: zh
 
 > 💡 **想先玩玩看？** [`try-local/`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/try-local/README.md) 一鍵起一個 self-service 試玩環境（Tenant Manager UI + 2 個 demo 租戶），不必等 Platform Team 部署就能體驗閾值調整 + Saved View。
 
+## 你的上手路徑
+
+1. **先把整套跑起來**（看大圖像）→ [try-local](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/try-local/README.md)：`docker compose up da-portal tenant-api`，開瀏覽器看 Tenant Manager。
+2. **深入你的主要介面** → [da-portal QUICKSTART](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/da-portal/QUICKSTART.md)（瀏覽器自助調閾值 / Saved View）。
+3. **實際配置你的 tenant** → 本指南下方的「30 秒快速配置」與常見操作。
+
 ## 你需要知道的三件事
 
 **1. 你的監控已經啟用了。** 平台預載 15 個 Rule Pack，涵蓋 MariaDB、PostgreSQL、Redis、MongoDB、Elasticsearch、Kafka 等。只要你的 exporter 在跑，alert rules 就已經生效。

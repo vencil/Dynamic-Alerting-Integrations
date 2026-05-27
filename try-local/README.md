@@ -55,9 +55,9 @@ graph LR
 
 > **協作閉環**：Tenant 透過 **da-portal** 發起變更 → Platform Engineer 以 Git / 純文字安全落地（**tenant-api** + **threshold-exporter**）→ Domain Expert 用 **da-tools** 在 CI 守監控預算（cardinality budget）。
 
-- **Tenant** → **da-portal**（瀏覽器調閾值 / Saved View）
-- **Platform Engineer** → **tenant-api** + **threshold-exporter**（設定 API / 部署 / 熱重載）
-- **Domain Expert** → **da-tools**（CI 護欄 / 遷移 / scaffold）
+- **Tenant** → **da-portal**（瀏覽器調閾值 / Saved View）· [QUICKSTART](../components/da-portal/QUICKSTART.md)
+- **Platform Engineer** → **tenant-api** + **threshold-exporter**（設定 API / 部署 / 熱重載）· QUICKSTART：[tenant-api](../components/tenant-api/QUICKSTART.md) · [threshold-exporter](../components/threshold-exporter/QUICKSTART.md)
+- **Domain Expert** → **da-tools**（CI 護欄 / 遷移 / scaffold）· [QUICKSTART](../components/da-tools/app/QUICKSTART.md)
 
 ---
 

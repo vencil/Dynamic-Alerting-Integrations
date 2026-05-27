@@ -11,6 +11,8 @@
 | **Try（≤5 min）** | 見下方 / *steps below* |
 | **→ You'll see** | `curl /api/v1/me` 從一個**零 DB、RBAC-scoped** 的 API 回你的身分與權限（HTTP 200）。*Your identity + RBAC permissions from a zero-DB API.* |
 
+> 🎯 **主要服務對象**：Platform Engineer（部署 / 整合 oauth2-proxy / PR 寫回，見 [Platform Engineer 角色指南](../../docs/getting-started/for-platform-engineers.md)）；想自助的租戶也透過它改 config。
+
 **Prerequisite**：Docker 20.10+、`curl`。
 
 ## Try it
@@ -67,5 +69,6 @@ tenant-api 的旗艦能力是**寫回成 git**：portal 改一個閾值 → tena
 > Production 的 PR/MR write-back（`TA_WRITE_MODE=pr-github` / `pr-gitlab` + token + repo）把每筆變更開成**可審查 PR/MR**——其真實 forge 整合由 CI E2E 驗證（見 [#616](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/616)）。
 
 ## Next
-- ← **Try the full stack**：[`try-local/`](../../try-local/)（portal 改 config → tenant-api commit → exporter 熱重載 → 告警紅燈，完整 GitOps 閉環）
-- → **Move to production**：[`helm/tenant-api/`](../../helm/tenant-api/)（oauth2-proxy、PR/MR write-back、federation）
+- ← **先玩整套**：[`try-local/`](../../try-local/)（portal 改 config → tenant-api commit → exporter 熱重載 → 告警紅燈，完整 GitOps 閉環）
+- 📖 **深入配置 / API 參考**：[`README.md`](README.md)（Does/Doesn't、完整 endpoint、寫回模式）
+- → **上 production**：[`helm/tenant-api/`](../../helm/tenant-api/)（oauth2-proxy、PR/MR write-back、federation）
