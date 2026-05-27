@@ -1,0 +1,77 @@
+name: Forge E2E — GitHub (post-merge)
+
+# Real-forge E2E for tenant-api's PR write-back against a DEDICATED GitHub
+# sandbox repo (issue #616, Track 1). Complements the httptest unit tests
+# (#615, deterministic protocol) with real api.github.com behaviour: Link-header
+# pagination, true permission 403, full PR round-trip.
+#
+# ⛔ SECURITY: runs on same-repo events ONLY — post-merge push to main + manual
+# dispatch. NEVER `pull_request` / `pull_request_target` — a forge write-PAT in
+# a fork-influenced workflow is a classic pwn-request (token exfil). `on: push`
+# never fires for fork PRs, so fork contributors are unaffected and unblocked.
+
+on:
+  # per-PR (same-repo) + post-merge. `pull_request` (NOT `_target`) is safe:
+  # GitHub withholds secrets from FORK PRs, so loadGitHubCfg sees no token and
+  # SKIPS → fork contributors are non-blocking; same-repo PRs get secrets and
+  # run the real E2E. paths-filtered so only tenant-api changes trigger it.
+  pull_request:
+    paths:
+      - "components/tenant-api/**"
+      - ".github/workflows/forge-e2e-github.yaml"
+  push:
+    branches: [main]
+    paths:
+      - "components/tenant-api/**"
+      - ".github/workflows/forge-e2e-github.yaml"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: forge-e2e-github
+  cancel-in-progress: false
+
+env:
+  # Dedicated throwaway sandbox — NOT the real repo (the E2E opens/deletes PRs).
+  E2E_GITHUB_REPO: vencil/tenant-api-e2e-sandbox
+
+jobs:
+  github-e2e:
+    name: GitHub real-forge E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+
+      # Pre-sweep orphan PRs/branches from any prior failed/cancelled run so a
+      # stuck repo doesn't inflate this run's pagination. Skips if secrets unset.
+      - name: Janitor — pre-sweep orphans
+        working-directory: components/tenant-api
+        env:
+          E2E_GITHUB_TOKEN: ${{ secrets.E2E_GITHUB_TOKEN }}
+          E2E_GITHUB_RO_TOKEN: ${{ secrets.E2E_GITHUB_RO_TOKEN }}
+          E2E_GITHUB_JANITOR: "1"
+        run: go test -tags forge_e2e -count=1 -run TestForgeE2E_GitHub_Janitor ./test/forgee2e/... -v
+
+      - name: GitHub forge E2E scenarios
+        working-directory: components/tenant-api
+        env:
+          E2E_GITHUB_TOKEN: ${{ secrets.E2E_GITHUB_TOKEN }}
+          E2E_GITHUB_RO_TOKEN: ${{ secrets.E2E_GITHUB_RO_TOKEN }}
+        run: go test -tags forge_e2e -count=1 -timeout 20m -run TestForgeE2E_GitHub ./test/forgee2e/... -v
+
+      # always(): clean up this run's residue even if a scenario was killed
+      # mid-teardown (before its t.Cleanup ran).
+      - name: Janitor — post-sweep (always)
+        if: always()
+        working-directory: components/tenant-api
+        env:
+          E2E_GITHUB_TOKEN: ${{ secrets.E2E_GITHUB_TOKEN }}
+          E2E_GITHUB_RO_TOKEN: ${{ secrets.E2E_GITHUB_RO_TOKEN }}
+          E2E_GITHUB_JANITOR: "1"
+        run: go test -tags forge_e2e -count=1 -run TestForgeE2E_GitHub_Janitor ./test/forgee2e/... -v
