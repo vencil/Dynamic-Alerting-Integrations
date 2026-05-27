@@ -11,6 +11,8 @@
 | **Try（≤5 min）** | 見下方 3 步 / *3 steps below* |
 | **→ You'll see** | 你的 YAML 閾值**變成 live `user_threshold` metric**。*Your YAML thresholds appear as live Prometheus metrics.* |
 
+> 🎯 **主要服務對象**：Platform Engineer / SRE（部署與閾值營運，見 [Platform Engineer 角色指南](../../docs/getting-started/for-platform-engineers.md)）。
+
 **Prerequisite**：Go 1.26.3+（[安裝](https://go.dev/dl/)）。
 
 ## Try it（從本目錄 `components/threshold-exporter/` 執行）
@@ -39,5 +41,6 @@ user_threshold{component="container",metric="memory",severity="warning",tenant="
 > 想看「改閾值 → 告警紅燈」的完整連動，跑整套 stack（見下方 try-local）。
 
 ## Next
-- ← **Try the full stack**：[`try-local/`](../../try-local/)（exporter + tenant-api + portal + Prometheus + Alertmanager 一鍵）
-- → **Move to production**：[`helm/threshold-exporter/`](../../helm/threshold-exporter/)（Helm 部署、ConfigMap / Operator 雙路徑）
+- ← **先玩整套**：[`try-local/`](../../try-local/)（exporter + tenant-api + portal + Prometheus + Alertmanager 一鍵）
+- 📖 **深入配置 / 旗標參考**：[`README.md`](README.md)（四層繼承、Dual-Hash 熱重載、Cardinality Guard）
+- → **上 production**：[`helm/threshold-exporter/`](../../helm/threshold-exporter/)（Helm 部署、ConfigMap / Operator 雙路徑）

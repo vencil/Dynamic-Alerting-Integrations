@@ -15,6 +15,12 @@ lang: en
 
 > 💡 **Recommended first step: [`try-local/`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/try-local/README.md) to watch an alert actually fire.** Start the Mode 0 core twins, then the full stack to see a Rule Pack turn a synthetic metric into a critical red light — the fastest way to grasp the threshold → alert chain.
 
+## Your Onboarding Path
+
+1. **Run the whole stack first** (big picture) → [try-local](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/try-local/README.md), watch a Rule Pack turn a synthetic metric red.
+2. **Go deeper on your CLI** → [da-tools QUICKSTART](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/da-tools/app/QUICKSTART.md); for the full hands-on workflow, see the [Hands-on Lab](../scenarios/hands-on-lab.md).
+3. **Govern your Rule Packs** → the Rule Pack customization below and [Custom Rule Governance](../custom-rule-governance.md).
+
 ## Three Things You Need to Know
 
 **1. Rule Packs are your domain.** Each database type has a corresponding Rule Pack YAML that you can customize with thresholds, dimensions, and alert rules.

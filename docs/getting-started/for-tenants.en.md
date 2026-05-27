@@ -15,6 +15,12 @@ lang: en
 
 > 💡 **Want to play first?** [`try-local/`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/try-local/README.md) spins up a self-service sandbox in one command (Tenant Manager UI + 2 demo tenants) — try threshold edits and Saved Views without waiting for your Platform Team to deploy.
 
+## Your Onboarding Path
+
+1. **Run the whole stack first** (big picture) → [try-local](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/try-local/README.md): `docker compose up da-portal tenant-api`, open the Tenant Manager in your browser.
+2. **Go deeper on your main interface** → [da-portal QUICKSTART](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/da-portal/QUICKSTART.md) (browser self-service threshold edits / Saved Views).
+3. **Configure your tenant for real** → the "30-Second Quick Setup" and common operations below.
+
 ## Three Things You Need to Know
 
 **1. Your monitoring is already active.** The platform ships with 15 Rule Packs covering MariaDB, PostgreSQL, Redis, MongoDB, Elasticsearch, Kafka, and more. As long as your exporter is running, alert rules are in effect.

@@ -1,5 +1,7 @@
 # tenant-api (v2.8.0)
 
+> 💡 **想快速把這個元件跑起來？** → **[QUICKSTART.md](QUICKSTART.md)**（`docker run` + `curl /me`、≤5 分鐘看到零 DB 的 RBAC 身分）。本篇 README 是 Does/Doesn't + 完整 endpoint **參考（Reference）**。
+
 > **Tenant Management REST API** — config-driven 多租戶 alerting 平台的後端寫入 + 讀取面，提供 RBAC 過濾後的 CRUD、批次操作、async task polling、SSE 事件流，以及 `direct` / GitHub PR / GitLab MR 三種寫回模式。認證由 oauth2-proxy sidecar 處理。
 
 ## What this service does (and doesn't)

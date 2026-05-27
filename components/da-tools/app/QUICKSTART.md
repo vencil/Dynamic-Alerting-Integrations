@@ -1,15 +1,17 @@
 # da-tools — The ops CLI that blocks Prometheus-killing configs in CI
 
-> **維運瑞士刀（70+ 子命令）：在 CI 階段攔下會引爆 Prometheus cardinality 的配置，守護監控穩定。**
+> **維運瑞士刀：在 CI 階段攔下會引爆 Prometheus cardinality 的配置，守護監控穩定。**
 > *Ops Swiss-army CLI — block the config that would blow up Prometheus, before it merges.*
 
 |  |  |
 |---|---|
-| **What / 是什麼** | 70+ 子命令的維運 CLI（診斷 / 回測 / 路由生成 / config guard / federation keygen…）。*An ops CLI toolkit.* |
+| **What / 是什麼** | 維運 CLI 工具箱（診斷 / 回測 / 路由生成 / config guard / federation keygen…；完整子命令清單見 [README](../README.md)）。*An ops CLI toolkit.* |
 | **Why / 為什麼** | 在 CI **攔截高基數 / 惡意配置**，在它炸掉 Prometheus 前擋下。*Catch cardinality bombs in CI.* |
 | **Who / 給誰** | Platform Engineer / SRE / CI owner |
 | **Try（≤2 min）** | 見下方——**對一份「過量配置」fixture 跑 da-guard** |
 | **→ You'll see** | da-guard **紅字攔截**：指出哪個租戶會超出 cardinality 預算、runtime 會被靜默截斷，**exit 1**。*da-guard red-flags the over-budget tenant and exits 1.* |
+
+> 🎯 **主要服務對象**：Domain Expert（Rule Pack 治理）與 Platform Engineer / CI owner（CI 護欄，見 [Domain Expert 角色指南](../../../docs/getting-started/for-domain-experts.md)）。
 
 **Prerequisite**：Docker 20.10+。
 
@@ -55,5 +57,6 @@ echo $?      # → 1（errors > 0 即 block merge）
 - 全部子命令：`docker run --rm ghcr.io/vencil/da-tools:v2.8.0 --help`
 
 ## Next
-- ← **Try the full stack**：[`try-local/`](../../../try-local/)
-- → **Move to production**：把 `da-guard` 接進 **GitHub Actions / GitLab CI 當 Required Merge Guard**（da-tools 是 CLI 工具箱，**無 Helm chart**）——讓每個 config PR 都先過 cardinality 把關。
+- ← **先玩整套**：[`try-local/`](../../../try-local/)
+- 📖 **完整子命令 / 客戶旅程分類**：[`README.md`](../README.md)（本元件的 reference）
+- → **上 production**：把 `da-guard` 接進 **GitHub Actions / GitLab CI 當 Required Merge Guard**（da-tools 是 CLI 工具箱，**無 Helm chart**）——讓每個 config PR 都先過 cardinality 把關。

@@ -3,6 +3,8 @@
 <!-- 標題版號 = 最後 released tag（目前 v2.8.0）；下一版 in-flight feature 在內文以 inline 版號標記。
      Release wrap 切五線 tag 時，本標題 + 下方 helm --version 跟著批次同步 bump。 -->
 
+> 💡 **想快速把這個元件跑起來？** → **[QUICKSTART.md](QUICKSTART.md)**（`docker run` 一行、≤2 分鐘看到一整套互動工具）。本篇 README 是進階配置 / packaging **參考（Reference）**。
+
 > **核心 component** — 把 Dynamic Alerting 的 43 個互動工具（Hub + Wizard + Tenant Manager + Self-Service Portal）封進一顆 ~12 MB nginx-alpine image，**zero build step**（瀏覽器端 Babel standalone 轉譯 JSX），給內網 / air-gapped 環境離線使用。
 >
 > **Companion 文件：** [helm chart](../../helm/da-portal/) · [Interactive Tools Hub 文件](../../docs/interactive-tools.md) · [tool-registry.yaml SOT](../../docs/assets/tool-registry.yaml) · [architecture-and-design](../../docs/architecture-and-design.md)

@@ -15,6 +15,12 @@ lang: zh
 
 > 💡 **建議第一步：先在本機把整套跑起來。** [`try-local/`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/try-local/README.md) 一鍵 docker compose（不需 K8s），~1 分鐘看到 threshold-exporter → Prometheus → 真實告警的完整鏈路，再規劃怎麼上 K8s。
 
+## 你的上手路徑
+
+1. **先把整套跑起來**（看大圖像）→ [try-local](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/try-local/README.md)。
+2. **深入你的核心元件** → [threshold-exporter QUICKSTART](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/QUICKSTART.md) · [tenant-api QUICKSTART](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/tenant-api/QUICKSTART.md)。
+3. **上 production** → 本指南下方的部署路徑 + [helm/](https://github.com/vencil/Dynamic-Alerting-Integrations/tree/main/helm)。
+
 ## 你需要知道的三件事
 
 **1. threshold-exporter 是核心。** 它讀取 YAML 設定、產生 Prometheus Metrics、支援 SHA-256 hot-reload。兩個副本以 HA 方式運行在 port 8080。
