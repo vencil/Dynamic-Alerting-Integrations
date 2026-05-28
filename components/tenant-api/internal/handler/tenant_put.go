@@ -1,11 +1,13 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/vencil/tenant-api/internal/gitops"
@@ -79,7 +81,30 @@ func PutTenant(d *Deps) http.HandlerFunc {
 			// already pending OR another request is mid-creation — both map
 			// to 409. The claim (not the async poll cache) is what makes two
 			// concurrent same-tenant writes safe; see Tracker.ClaimTenant.
-			if !d.PRTracker.ClaimTenant(tenantID) {
+			//
+			// #644: if the claim fails BECAUSE the byTenant cache says a PR is
+			// open (HasPendingPR is true — vs the in-flight-claim case where
+			// HasPendingPR is false), the cache may be up to ~30 s stale after a
+			// merge → spurious 409. Force a single bounded refresh and retry the
+			// claim ONCE. The 2 s ctx stops a degraded forge from extending the
+			// 409 response latency (a slower refresh continues in background and
+			// populates the cache for the next request).
+			claimed := d.PRTracker.ClaimTenant(tenantID)
+			if !claimed && d.PRTracker.HasPendingPR(tenantID) {
+				// Detached from r.Context() on purpose (#644): if the client cancelled
+				// (browser close / TCP RST) r.Context() is already Done by the time we
+				// get here → WithTimeout(r.Context(), …) returns an immediately-Done
+				// ctx → RefreshNow would skip Sync → we'd return the stale 409 the fix
+				// is meant to kill. Request-cancel-protection is NOT load-bearing here
+				// (the 2 s bound + the in-background Sync continuation already cover a
+				// degraded forge). context.Background() ensures the refresh actually
+				// happens for the live-client case.
+				refreshCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				d.PRTracker.RefreshNow(refreshCtx)
+				cancel()
+				claimed = d.PRTracker.ClaimTenant(tenantID)
+			}
+			if !claimed {
 				existingPR, _ := d.PRTracker.PendingPRForTenant(tenantID)
 				WriteErrorEnvelope(rw, r, http.StatusConflict, ErrorResponse{
 					Error: "pending_pr_exists",
