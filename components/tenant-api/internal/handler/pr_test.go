@@ -2,6 +2,7 @@ package handler
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -234,10 +235,13 @@ func TestPutTenant_PRMode_PendingPRConflict(t *testing.T) {
 	configDir := setupConfigDir(t, nil)
 	writer := newTestWriter(configDir)
 
-	// Create a mock GitHub server
+	// Mock GitHub server returns PR #99 — required since #644: the 409 path
+	// now force-refreshes the tracker via the forge before returning, so the
+	// mock must confirm the PR is still open (else refresh clears the cache,
+	// 409 turns into a write that proceeds).
 	ghSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `[]`)
+		fmt.Fprint(w, `[{"number":99,"html_url":"https://github.com/owner/repo/pull/99","state":"open","head":{"ref":"tenant-api/db-a/20260406"}}]`)
 	}))
 	defer ghSrv.Close()
 
@@ -308,10 +312,11 @@ func TestPutTenant_GitLabMode_PendingMRConflict(t *testing.T) {
 	configDir := setupConfigDir(t, nil)
 	writer := newTestWriter(configDir)
 
-	// Create a mock GitLab server (for tracker init)
+	// Mock server returns the PR — required since #644 (see PendingPRConflict above).
+	// Using GitHub-shape JSON because we wrap with gh.Client per the comment below.
 	glSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `[]`)
+		fmt.Fprint(w, `[{"number":42,"html_url":"https://gitlab.com/group/project/-/merge_requests/42","state":"open","head":{"ref":"tenant-api/db-a/20260406"}}]`)
 	}))
 	defer glSrv.Close()
 
@@ -385,6 +390,10 @@ func (m *mockPlatformClient) ProviderName() string {
 type mockPlatformTracker struct {
 	prs     []platform.PRInfo
 	claimed map[string]bool
+	// refreshFn (optional) is invoked by RefreshNow — tests use it to simulate a
+	// real forge sync that clears (or doesn't clear) the cache for #644 scenarios.
+	refreshFn    func()
+	refreshCalls atomic.Int32 // atomic for forward-safety vs concurrent tests
 }
 
 func (m *mockPlatformTracker) WatchLoop(stopCh <-chan struct{}) {}
@@ -419,6 +428,12 @@ func (m *mockPlatformTracker) RegisterPR(pr platform.PRInfo) {
 	m.prs = append(m.prs, pr)
 }
 func (m *mockPlatformTracker) LastSyncTime() time.Time { return time.Now() }
+func (m *mockPlatformTracker) RefreshNow(ctx context.Context) {
+	m.refreshCalls.Add(1)
+	if m.refreshFn != nil {
+		m.refreshFn()
+	}
+}
 
 // --- Happy-path test: PutTenant in PR mode (successful PR creation) ---
 
@@ -727,3 +742,96 @@ func TestPutTenant_PRMode_ConcurrentSameTenant(t *testing.T) {
 		t.Errorf("expected %d conflicts, got %d (codes=%v)", n-1, conflict, codes)
 	}
 }
+
+// TestPutTenant_PRMode_RefreshClearsStaleCache is the #644 happy path: byTenant
+// thinks a PR is open (the polling-staleness window after a merge), but a forced
+// refresh on the 409 path drops the stale entry, ClaimTenant retry succeeds, and
+// the write proceeds. Asserts the response is NOT 409 + the refresh was called
+// exactly once.
+func TestPutTenant_PRMode_RefreshClearsStaleCache(t *testing.T) {
+	t.Parallel()
+	configDir := initGitConfigDir(t)
+	writer := newTestWriter(configDir)
+
+	mt := &mockPlatformTracker{
+		prs: []platform.PRInfo{{Number: 99, TenantID: "db-a", State: "open", WebURL: "https://x/99"}},
+	}
+	mt.refreshFn = func() { mt.prs = nil } // forge says no open PR anymore
+
+	mockClient := &mockPlatformClient{providerName: "github"}
+	rbacMgr := adminRBAC(t)
+	h := PutTenant(&Deps{Writer: writer, WriteMode: WriteModePR, PRClient: mockClient, PRTracker: mt, RBAC: rbacMgr})
+	body := bytes.NewBufferString("tenants:\n  db-a:\n    _silent_mode: \"critical\"\n")
+	req := newRequestWithChiParam("PUT", "/api/v1/tenants/db-a", "id", "db-a", body)
+	req.Header.Set("X-Forwarded-Email", "alice@example.com")
+	req.Header.Set("X-Forwarded-Groups", "admins")
+	w := httptest.NewRecorder()
+	wrapWithRBACMiddleware(h, rbacMgr, rbac.PermWrite, TenantIDFromPath).ServeHTTP(w, req)
+
+	if w.Code == http.StatusConflict {
+		t.Fatalf("expected refresh to clear stale cache → no 409; got 409: %s", w.Body.String())
+	}
+	if got := mt.refreshCalls.Load(); got != 1 {
+		t.Errorf("refreshCalls = %d, want 1 (cache-stale path must refresh once)", got)
+	}
+}
+
+// TestPutTenant_PRMode_RefreshKeepsRealPending: byTenant has an entry, refresh
+// confirms it's really still open (refreshFn no-op), retry fails, 409 returned.
+// Asserts refreshCalls=1 (we DID try) — the 409 is correct, not a missed refresh.
+func TestPutTenant_PRMode_RefreshKeepsRealPending(t *testing.T) {
+	t.Parallel()
+	configDir := setupConfigDir(t, nil)
+	writer := newTestWriter(configDir)
+
+	mt := &mockPlatformTracker{
+		prs:       []platform.PRInfo{{Number: 99, TenantID: "db-a", State: "open", WebURL: "https://x/99"}},
+		refreshFn: func() {}, // forge confirms PR is still really open
+	}
+	mockClient := &mockPlatformClient{providerName: "github"}
+	rbacMgr := adminRBAC(t)
+	h := PutTenant(&Deps{Writer: writer, WriteMode: WriteModePR, PRClient: mockClient, PRTracker: mt, RBAC: rbacMgr})
+	body := bytes.NewBufferString("tenants:\n  db-a:\n    _silent_mode: \"critical\"\n")
+	req := newRequestWithChiParam("PUT", "/api/v1/tenants/db-a", "id", "db-a", body)
+	req.Header.Set("X-Forwarded-Email", "alice@example.com")
+	req.Header.Set("X-Forwarded-Groups", "admins")
+	w := httptest.NewRecorder()
+	wrapWithRBACMiddleware(h, rbacMgr, rbac.PermWrite, TenantIDFromPath).ServeHTTP(w, req)
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("expected 409 (PR really still open), got %d: %s", w.Code, w.Body.String())
+	}
+	if got := mt.refreshCalls.Load(); got != 1 {
+		t.Errorf("refreshCalls = %d, want 1 (HasPendingPR=true → must attempt refresh once)", got)
+	}
+}
+
+// TestPutTenant_PRMode_InFlightClaimNoRefresh: ClaimTenant fails because of an
+// in-flight CLAIM (HasPendingPR is false — there's no cached PR, just another
+// request mid-creation). Refresh would not help and is NOT called → 409 directly.
+func TestPutTenant_PRMode_InFlightClaimNoRefresh(t *testing.T) {
+	t.Parallel()
+	configDir := setupConfigDir(t, nil)
+	writer := newTestWriter(configDir)
+
+	mt := &mockPlatformTracker{
+		claimed: map[string]bool{"db-a": true}, // in-flight claim, byTenant empty
+	}
+	mockClient := &mockPlatformClient{providerName: "github"}
+	rbacMgr := adminRBAC(t)
+	h := PutTenant(&Deps{Writer: writer, WriteMode: WriteModePR, PRClient: mockClient, PRTracker: mt, RBAC: rbacMgr})
+	body := bytes.NewBufferString("tenants:\n  db-a:\n    _silent_mode: \"critical\"\n")
+	req := newRequestWithChiParam("PUT", "/api/v1/tenants/db-a", "id", "db-a", body)
+	req.Header.Set("X-Forwarded-Email", "alice@example.com")
+	req.Header.Set("X-Forwarded-Groups", "admins")
+	w := httptest.NewRecorder()
+	wrapWithRBACMiddleware(h, rbacMgr, rbac.PermWrite, TenantIDFromPath).ServeHTTP(w, req)
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("expected 409 (in-flight claim), got %d", w.Code)
+	}
+	if got := mt.refreshCalls.Load(); got != 0 {
+		t.Errorf("refreshCalls = %d, want 0 (in-flight only → no cache to refresh)", got)
+	}
+}
+

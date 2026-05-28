@@ -1,6 +1,7 @@
 package platform
 
 import (
+	"context"
 	"log/slog"
 	"sync"
 	"time"
@@ -50,6 +51,14 @@ type PollingTracker struct {
 	claimed      map[string]struct{} // tenantID → in-flight PR/MR creation claim
 	syncInterval time.Duration
 	lastSync     time.Time
+
+	// refreshMu + refreshInflight dedup concurrent RefreshNow calls (#644 Gemini
+	// review). N simultaneous same-tenant 409s would otherwise fire N parallel
+	// Sync→ListOpenPRs calls and trip the forge secondary/abuse rate limit; this
+	// guard collapses them to ONE in-flight Sync, with later callers waiting on
+	// the same done channel (or on their own ctx, whichever fires first).
+	refreshMu       sync.Mutex
+	refreshInflight chan struct{}
 }
 
 // minSyncInterval is the floor for sync cadence. Constructors clamp
@@ -140,6 +149,59 @@ func (t *PollingTracker) Sync() {
 	t.mu.Unlock()
 
 	slog.Info("tracker synced", "provider", t.provider, "pending", len(prs))
+}
+
+// RefreshNow forces an out-of-cadence Sync, bounded by ctx (#644). Used by the
+// 409/pending_pr_exists handler path to close the polling-staleness window: after
+// a merge, the cache shows the PR as still open until the next periodic sync (up
+// to ~30 s) → spurious 409. We dispatch Sync in a goroutine and return as soon as
+// EITHER it completes OR ctx expires. ctx-expiry does NOT cancel the in-flight
+// Sync (the Lister has no ctx today; that's the #645 / ListOpenPRs(ctx) refactor)
+// — we just stop waiting on it, so the handler can fall through to a stale-409 in
+// bounded time. The Sync eventually completes and populates the cache for the
+// next request. Safe: never WORSE than today (today the handler just returns 409
+// without trying to refresh at all).
+func (t *PollingTracker) RefreshNow(ctx context.Context) {
+	// Defensive fast-path: if ctx is already Done (a misconfigured caller passing
+	// a cancelled ctx), skip even spawning the Sync goroutine. The handler uses a
+	// detached context.Background() parent so this normally never fires in prod.
+	if err := ctx.Err(); err != nil {
+		return
+	}
+
+	// In-flight dedup (#644 Gemini): N simultaneous same-tenant 409s would
+	// otherwise stampede N forge ListOpenPRs calls and trip the secondary rate
+	// limit. Collapse to ONE underlying Sync; later callers wait on the same
+	// done channel (or on their own ctx, whichever fires first). Note this only
+	// dedups RefreshNow-vs-RefreshNow — the periodic WatchLoop.Sync is still
+	// independent, but it's at most one extra concurrent call per 30 s and is
+	// the cadence we ALREADY accept.
+	t.refreshMu.Lock()
+	if existing := t.refreshInflight; existing != nil {
+		t.refreshMu.Unlock()
+		select {
+		case <-existing:
+		case <-ctx.Done():
+		}
+		return
+	}
+	done := make(chan struct{})
+	t.refreshInflight = done
+	t.refreshMu.Unlock()
+
+	go func() {
+		t.Sync()
+		t.refreshMu.Lock()
+		t.refreshInflight = nil
+		t.refreshMu.Unlock()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-ctx.Done():
+		// Sync continues in background; handler proceeds with the cache as-is.
+	}
 }
 
 // PendingPRs returns a defensive copy of all tracked pending PRs/MRs.

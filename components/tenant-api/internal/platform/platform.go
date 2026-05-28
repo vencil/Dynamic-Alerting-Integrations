@@ -7,19 +7,22 @@
 // Design: ADR-011 — PR-based write-back supports multiple Git hosting platforms.
 package platform
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 // PRInfo holds metadata about a created or existing pull/merge request.
 // The fields are intentionally provider-neutral; "Number" maps to GitHub PR
 // number or GitLab MR IID (project-scoped).
 type PRInfo struct {
-	Number    int    `json:"number"`              // GitHub PR number or GitLab MR IID
-	WebURL    string `json:"web_url"`             // Browser-accessible URL
-	State     string `json:"state"`               // "open"/"opened", "closed", "merged"
-	Title     string `json:"title"`               // PR/MR title
-	HeadRef   string `json:"head_ref"`            // Source branch name
+	Number    int    `json:"number"`               // GitHub PR number or GitLab MR IID
+	WebURL    string `json:"web_url"`              // Browser-accessible URL
+	State     string `json:"state"`                // "open"/"opened", "closed", "merged"
+	Title     string `json:"title"`                // PR/MR title
+	HeadRef   string `json:"head_ref"`             // Source branch name
 	CreatedAt string `json:"created_at,omitempty"` // ISO 8601 timestamp
-	TenantID  string `json:"tenant_id,omitempty"` // Extracted from branch name
+	TenantID  string `json:"tenant_id,omitempty"`  // Extracted from branch name
 }
 
 // Client abstracts Git hosting platform operations for PR/MR creation.
@@ -82,4 +85,14 @@ type Tracker interface {
 
 	// LastSyncTime returns when the tracker last synced with the platform.
 	LastSyncTime() time.Time
+
+	// RefreshNow forces a synchronous out-of-cadence refresh of the pending PR/MR
+	// cache, bounded by ctx (#644). On the 409/pending_pr_exists path the handler
+	// uses this to close the polling-staleness window: after a merge, the cache
+	// shows the PR as still open for up to ~30 s and would return a spurious 409
+	// until the next periodic sync. The ctx bound is what stops a degraded forge
+	// from extending the 409's response latency — if ctx expires, the underlying
+	// refresh may continue in the background but RefreshNow returns immediately
+	// and the handler falls through to the stale 409 (safe fallback).
+	RefreshNow(ctx context.Context)
 }

@@ -6,6 +6,7 @@
 package platform
 
 import (
+	"context"
 	"errors"
 	"sync"
 	"sync/atomic"
@@ -475,7 +476,7 @@ func TestWatchLoop_StopChanTerminatesPromptly(t *testing.T) {
 		provider:     "github",
 		clock:        clockwork.NewRealClock(), // 1h interval — clock identity doesn't matter
 		byTenant:     map[string]PRInfo{},
-		syncInterval: 1 * time.Hour,            // never tick
+		syncInterval: 1 * time.Hour, // never tick
 	}
 
 	stopCh := make(chan struct{})
@@ -581,5 +582,86 @@ func TestClaimTenant_ConcurrentSingleWinner(t *testing.T) {
 
 	if got := wins.Load(); got != 1 {
 		t.Errorf("exactly one goroutine should win the claim, got %d", got)
+	}
+}
+
+// TestRefreshNow_PopulatesCache_HappyPath: RefreshNow runs Sync and the cache is
+// observably updated by the time it returns (#644).
+func TestRefreshNow_PopulatesCache_HappyPath(t *testing.T) {
+	pt := NewPollingTracker(
+		fixedLister([]PRInfo{{Number: 1, TenantID: "db-a", State: "open"}}),
+		"test", 30*time.Second,
+	)
+	pt.RefreshNow(context.Background())
+	if !pt.HasPendingPR("db-a") {
+		t.Errorf("after RefreshNow, expected HasPendingPR(db-a) = true")
+	}
+}
+
+// TestRefreshNow_BoundedByCtx_DoesNotBlockOnSlowLister: a slow lister must NOT
+// extend RefreshNow past the ctx deadline (#644 — the whole point of the bound:
+// a degraded forge must not extend the 409 response latency). The Sync continues
+// in the background; the test waits for it before returning so the goroutine
+// does not leak past the test.
+func TestRefreshNow_BoundedByCtx_DoesNotBlockOnSlowLister(t *testing.T) {
+	unblock := make(chan struct{})
+	listerReturned := make(chan struct{})
+	lister := func() ([]PRInfo, error) {
+		<-unblock
+		close(listerReturned)
+		return nil, nil
+	}
+	pt := NewPollingTracker(lister, "test", 30*time.Second)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	pt.RefreshNow(ctx)
+	elapsed := time.Since(start)
+
+	if elapsed > 500*time.Millisecond {
+		t.Errorf("RefreshNow took %v, want ~100ms (ctx-bounded — slow lister must NOT extend it)", elapsed)
+	}
+	// Let the background Sync drain so it does not outlive the test.
+	close(unblock)
+	<-listerReturned
+}
+
+// TestRefreshNow_DedupConcurrentCalls_OneListerCall is the #644 thundering-herd
+// regression (Gemini review): N simultaneous same-tenant 409s must collapse to
+// exactly ONE underlying Sync→Lister call, not N. Without the in-flight dedup
+// in RefreshNow, this would fire N concurrent ListOpenPRs at the forge and trip
+// the secondary/abuse rate limit.
+func TestRefreshNow_DedupConcurrentCalls_OneListerCall(t *testing.T) {
+	t.Parallel()
+	// Block the lister briefly so all N goroutines pile up before any completes.
+	gate := make(chan struct{})
+	var calls atomic.Int32
+	lister := func() ([]PRInfo, error) {
+		calls.Add(1)
+		<-gate
+		return nil, nil
+	}
+	pt := NewPollingTracker(lister, "test", 30*time.Second)
+
+	const n = 20
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			pt.RefreshNow(context.Background())
+		}()
+	}
+	close(start)
+	// Give all N goroutines a moment to reach the dedup guard before unblocking.
+	time.Sleep(50 * time.Millisecond)
+	close(gate)
+	wg.Wait()
+
+	if got := calls.Load(); got != 1 {
+		t.Errorf("lister called %d times, want exactly 1 (N concurrent RefreshNow must dedup to one Sync)", got)
 	}
 }

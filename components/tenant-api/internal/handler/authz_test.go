@@ -355,8 +355,9 @@ func (f *fakeTracker) ReleaseClaim(tenantID string)     {}
 func (f *fakeTracker) RegisterPR(pr platform.PRInfo) {
 	f.pending = append(f.pending, pr)
 }
-func (f *fakeTracker) LastSyncTime() time.Time          { return time.Now() }
-func (f *fakeTracker) WatchLoop(stopCh <-chan struct{}) {}
+func (f *fakeTracker) LastSyncTime() time.Time            { return time.Now() }
+func (f *fakeTracker) WatchLoop(stopCh <-chan struct{})   {}
+func (f *fakeTracker) RefreshNow(ctx context.Context)     {}
 
 func TestListPRs_FiltersBulkListByTenantAccess(t *testing.T) {
 	t.Parallel()
