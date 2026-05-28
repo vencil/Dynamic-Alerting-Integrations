@@ -1,11 +1,22 @@
 name: Bench Record (nightly)
 
-# Phase 1 of pre-tag benchmark gate (issue #60).
+# Release-baseline source — produces the `bench-baseline.txt` artifact that
+# `release-attach-bench-baseline.yaml` attaches to each GitHub Release as
+# `bench-baseline-<tag>.txt`.
 #
-# Purpose: collect ~28 nightly data points / 4 weeks to characterize empirical
-# variance on GitHub Actions runners. This is informational only — there is NO
-# regression gate at this stage. Phase 2 will introduce a hard gate (3× of
-# median-of-5 baseline, main+release-please only) once stability is measured.
+# Origin: Phase 1 of the pre-tag benchmark gate (issue #60, CLOSED). The
+# original goal was "~28 nightly data points / 4 weeks to characterize
+# variance on GitHub Actions runners" so Phase 2 could pick a sensible
+# threshold. That goal is met: 33 schedule data points over 4.7 weeks
+# (2026-04-26 → 2026-05-28, 33/33 green). Phase 2 now lives in
+# `bench-gate-pr.yaml` (#435, Tier 1 PR-time) and
+# `bench-gate-release.yaml` (#458, Tier 2 release-time); this workflow no
+# longer drives the variance-characterization mission and is NOT a gate.
+#
+# Why keep it running: `release-attach-bench-baseline.yaml` needs a recent
+# 03:00-UTC artifact (the schedule deliberately picks a low-contention
+# window) so each release ships with a representative baseline. Retiring
+# this workflow → releases lose their `bench-baseline-<tag>.txt` asset.
 #
 # Scope:
 #   - Runs only on main (cron + workflow_dispatch from main).
