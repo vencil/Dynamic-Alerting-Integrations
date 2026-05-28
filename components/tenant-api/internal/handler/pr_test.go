@@ -41,6 +41,7 @@ func initGitConfigDir(t *testing.T) string {
 		{"config", "user.email", "test@test.com"},
 		{"config", "user.name", "Test"},
 		{"commit", "--allow-empty", "-m", "initial"},
+		{"branch", "-M", "main"}, // #638: WritePR now checks out the base ("main") branch
 	} {
 		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
 		if out, err := cmd.CombinedOutput(); err != nil {

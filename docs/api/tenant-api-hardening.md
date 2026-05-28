@@ -237,6 +237,13 @@ ALL violations 全列出（不是 first-only），跟新 tenant-scoped check 的
 
 GitOps 寫入（`Write` / `WritePR` / `WritePRBatch`）全程持一把 process 級寫入鎖 `sync.Mutex`，期間呼叫的 git CLI 子程序原本無逾時 —— 卡住的 `git push`（degraded on-prem forge / 網路瞬斷）會無限期持鎖、凍結**所有**租戶寫入直到 pod 重啟。現每個 git 呼叫都有 per-command deadline（`exec.CommandContext` + `WaitDelay`，後者確保即使 `git-remote-https`/`ssh` helper grandchild 仍持 stdout pipe 也能釋鎖），逾時即 SIGKILL、回 loud `timed out — write lock released` 並釋鎖。預設 60s，由 `TENANT_API_GIT_TIMEOUT`（Go duration，如 `90s`）覆寫、`helm/tenant-api` `tenantApi.gitTimeout` value 暴露；非法 / 0 / 負值 fallback 回預設。
 
+### 5.5 PR-mode checkout 紀律 + SIGKILL 殘鎖自癒（#638）
+
+§5.4 的逾時 SIGKILL 衍生的兩處寫入路徑硬化：
+
+- **De-relativize checkout（防跨租戶分支污染）**：`WritePR`/`WritePRBatch` 原本從「當前 HEAD」`checkout -b` 並靠相對 `checkout -` 切回。若工作區被前次寫入留在某 feature branch，下一個租戶會**從別人的 feature branch 分叉**、PR 靜默夾帶他人未推送設定。現在每次 PR 寫入**開頭以 ironclad `reset --hard HEAD` + `checkout -f <base>` 洗白**再 `-b`、所有切回改用同一 clean checkout，污染**不可能發生**（任何 stuck 狀態下次自我矯正）。**為何是 ironclad 而非 plain `checkout`**：寫檔成功但 commit 未完成即被 SIGKILL 會留 dirty tree，plain `checkout <base>` 會被擋（"local changes would be overwritten"）→ wedge 住後續每個 PR 寫入，PVC-backed conf.d 連 pod 重啟都解不開（death-loop）。base 由 `TA_GIT_BASE_BRANCH`（預設 `main`、**forge-neutral**、`--git-base-branch` flag）決定；base 不可達即 abort（不從未知 ref 分叉）。
+- **SIGKILL 殘鎖自癒**：被逾時 SIGKILL 的本地 `git add`/`commit` 會留 `.git/index.lock`（及 `HEAD.lock`、`refs/**/*.lock`、`packed-refs.lock`、`config.lock`）；因所有寫入共用 `sync.Mutex`，一個殘鎖會讓後續每個租戶寫入都 `index.lock: File exists` 直到人工介入。`gitErr` 的 deadline 分支現在 best-effort 清掉這些鎖 —— 安全性僅來自 mutex 序列化 + conf.d 由單一 replica 獨占（當下無並發 git 持鎖）。
+
 ---
 
 ## 6. 相關文件 + 程式碼

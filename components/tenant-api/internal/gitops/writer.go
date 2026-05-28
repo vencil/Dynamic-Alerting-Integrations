@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -57,15 +58,19 @@ const defaultGitKillGrace = 5 * time.Second
 // Writer handles GitOps write-back operations.
 type Writer struct {
 	mu             sync.Mutex
-	configDir      string // path to conf.d/ directory (YAML files live here)
-	gitDir         string // git repository root (may differ from configDir)
-	committerName  string // cached from GIT_COMMITTER_NAME env var
-	committerEmail string // cached from GIT_COMMITTER_EMAIL env var
-	onWrite        OnWriteFunc // v2.6.0: callback for post-write notifications (e.g. SSE hub)
+	configDir      string        // path to conf.d/ directory (YAML files live here)
+	gitDir         string        // git repository root (may differ from configDir)
+	committerName  string        // cached from GIT_COMMITTER_NAME env var
+	committerEmail string        // cached from GIT_COMMITTER_EMAIL env var
+	onWrite        OnWriteFunc   // v2.6.0: callback for post-write notifications (e.g. SSE hub)
 	gitTimeout     time.Duration // per-git-command wall-clock deadline (#630); 0 → defaultGitTimeout
 	gitWaitDelay   time.Duration // cmd.WaitDelay grace after a deadline kill (#630); 0 → defaultGitKillGrace
 	gitBinary      string        // git executable; "git" in prod, overridden in tests (timeout seam)
+	baseBranch     string        // PR-mode base to branch from / return to (#638); "" → defaultBaseBranch
 }
+
+// defaultBaseBranch is the PR-mode base branch when none is configured (#638).
+const defaultBaseBranch = "main"
 
 // NewWriter creates a Writer for the given directories.
 // configDir is where tenant YAML files live; gitDir is the git repo root.
@@ -105,6 +110,44 @@ func gitTimeoutFromEnv() time.Duration {
 // This is used by v2.6.0 WebSocket/SSE hub to broadcast config change events.
 func (w *Writer) SetOnWrite(fn OnWriteFunc) {
 	w.onWrite = fn
+}
+
+// SetBaseBranch sets the PR-mode base branch the Writer branches from and returns
+// to (#638). Wired from the TA_GIT_BASE_BRANCH flag in cmd/server. An empty value
+// is ignored so the defaultBaseBranch fallback stands. Forge-neutral: this is the
+// LOCAL git base, independent of the forge's PR target branch.
+func (w *Writer) SetBaseBranch(b string) {
+	if b != "" {
+		w.baseBranch = b
+	}
+}
+
+// base returns the configured base branch, or defaultBaseBranch when unset — so a
+// zero-value Writer (e.g. constructed in tests via NewWriter) still has a base.
+func (w *Writer) base() string {
+	if w.baseBranch == "" {
+		return defaultBaseBranch
+	}
+	return w.baseBranch
+}
+
+// checkoutBaseClean force-resets to a pristine base branch (#638). A plain
+// `git checkout <base>` REFUSES when the working tree is dirty — which a write
+// killed AFTER os.WriteFile but BEFORE its commit completes leaves behind (a
+// modified-uncommitted tracked file). That would wedge EVERY subsequent PR write
+// at the anchoring checkout — a global brick, and on a PVC-backed conf.d it
+// survives pod restarts (a death-loop). So we first `reset --hard` (drop index +
+// worktree changes) then `checkout -f` (switch even past a dirty tree). Safe to
+// discard: in PR mode no uncommitted change here is ever legitimate — each write
+// writes-then-commits on its own feature branch, returning to base when done.
+func (w *Writer) checkoutBaseClean(base string) error {
+	if err := w.gitExec("reset", "--hard", "HEAD"); err != nil {
+		return fmt.Errorf("reset to clean state: %w", err)
+	}
+	if err := w.gitExec("checkout", "-f", base); err != nil {
+		return fmt.Errorf("checkout base %q: %w", base, err)
+	}
+	return nil
 }
 
 // Write validates, persists, and commits a tenant's config YAML.
@@ -399,10 +442,10 @@ type PRWriteResult struct {
 // WritePR validates and writes a tenant config to a feature branch for PR creation.
 //
 // Unlike Write(), this method:
-//  1. Creates a new branch from the current HEAD
+//  1. Checks out the base branch, then creates a feature branch from it
 //  2. Writes the file and commits on the feature branch
 //  3. Pushes the branch to origin
-//  4. Returns the branch name (caller creates the PR via GitHub API)
+//  4. Returns to the base branch + returns the branch name (caller creates the PR)
 //
 // The caller (handler) is responsible for creating the GitHub PR using the returned branch name.
 func (w *Writer) WritePR(tenantID, authorEmail, yamlContent string) (*PRWriteResult, error) {
@@ -418,7 +461,16 @@ func (w *Writer) WritePR(tenantID, authorEmail, yamlContent string) (*PRWriteRes
 	ts := time.Now().UTC().Format("20060102-150405")
 	branchName := fmt.Sprintf("tenant-api/%s/%s", tenantID, ts)
 
-	// Step 3: create and checkout feature branch
+	// Step 3: anchor on a clean base, THEN branch from it. Always checking out the
+	// base first (rather than branching from "current HEAD" and returning via the
+	// relative `checkout -`) makes cross-tenant branch pollution impossible: even if
+	// a prior write left the tree on some feature branch, this re-establishes the
+	// base every time (#638). Abort if the base is unreachable — branching from an
+	// unknown ref is exactly the bug we're preventing.
+	base := w.base()
+	if err := w.checkoutBaseClean(base); err != nil {
+		return nil, err
+	}
 	if err := w.gitExec("checkout", "-b", branchName); err != nil {
 		return nil, fmt.Errorf("create branch: %w", err)
 	}
@@ -426,15 +478,16 @@ func (w *Writer) WritePR(tenantID, authorEmail, yamlContent string) (*PRWriteRes
 	// Step 4: write file
 	filePath := filepath.Join(w.configDir, tenantID+".yaml")
 	if err := os.WriteFile(filePath, []byte(yamlContent), 0644); err != nil {
-		// Rollback: switch back to original branch
-		_ = w.gitExec("checkout", "-")
+		// Rollback: force back to a clean base (the file we just wrote is now a
+		// dirty tracked change) + drop the branch.
+		_ = w.checkoutBaseClean(base)
 		_ = w.gitExec("branch", "-D", branchName)
 		return nil, fmt.Errorf("write file: %w", err)
 	}
 
 	// Step 5: commit on feature branch
 	if err := w.gitCommit(filePath, tenantID, authorEmail); err != nil {
-		_ = w.gitExec("checkout", "-")
+		_ = w.checkoutBaseClean(base)
 		_ = w.gitExec("branch", "-D", branchName)
 		return nil, fmt.Errorf("git commit on branch: %w", err)
 	}
@@ -446,10 +499,12 @@ func (w *Writer) WritePR(tenantID, authorEmail, yamlContent string) (*PRWriteRes
 		// Don't delete the branch — the commit is valuable even if push fails
 	}
 
-	// Step 7: switch back to the original branch (main/HEAD)
-	if err := w.gitExec("checkout", "-"); err != nil {
-		slog.Warn("gitops: failed to switch back from branch",
-			"branch", branchName, "error", err)
+	// Step 7: return to a clean base branch. On failure we only warn: the next
+	// WritePR re-anchors on the base at Step 3 regardless, so the tree can never
+	// stay stranded on a feature branch and pollute the next tenant's PR.
+	if err := w.checkoutBaseClean(base); err != nil {
+		slog.Warn("gitops: failed to switch back to base branch",
+			"base", base, "branch", branchName, "error", err)
 	}
 
 	slog.Info("gitops: PR branch created",
@@ -481,6 +536,11 @@ func (w *Writer) WritePRBatch(ops []PRBatchOp, authorEmail string) (*PRWriteResu
 	ts := time.Now().UTC().Format("20060102-150405")
 	branchName := fmt.Sprintf("tenant-api/batch/%s", ts)
 
+	// Anchor on a clean base then branch from it (#638 — see WritePR Step 3).
+	base := w.base()
+	if err := w.checkoutBaseClean(base); err != nil {
+		return nil, err
+	}
 	if err := w.gitExec("checkout", "-b", branchName); err != nil {
 		return nil, fmt.Errorf("create branch: %w", err)
 	}
@@ -489,12 +549,12 @@ func (w *Writer) WritePRBatch(ops []PRBatchOp, authorEmail string) (*PRWriteResu
 	for _, op := range ops {
 		filePath := filepath.Join(w.configDir, op.TenantID+".yaml")
 		if err := os.WriteFile(filePath, []byte(op.YAMLContent), 0644); err != nil {
-			_ = w.gitExec("checkout", "-")
+			_ = w.checkoutBaseClean(base)
 			_ = w.gitExec("branch", "-D", branchName)
 			return nil, fmt.Errorf("write file for %s: %w", op.TenantID, err)
 		}
 		if err := w.gitCommit(filePath, op.TenantID, authorEmail); err != nil {
-			_ = w.gitExec("checkout", "-")
+			_ = w.checkoutBaseClean(base)
 			_ = w.gitExec("branch", "-D", branchName)
 			return nil, fmt.Errorf("commit for %s: %w", op.TenantID, err)
 		}
@@ -505,9 +565,9 @@ func (w *Writer) WritePRBatch(ops []PRBatchOp, authorEmail string) (*PRWriteResu
 			"branch", branchName, "error", err)
 	}
 
-	if err := w.gitExec("checkout", "-"); err != nil {
-		slog.Warn("gitops: failed to switch back from batch branch",
-			"branch", branchName, "error", err)
+	if err := w.checkoutBaseClean(base); err != nil {
+		slog.Warn("gitops: failed to switch back to base branch",
+			"base", base, "branch", branchName, "error", err)
 	}
 
 	slog.Info("gitops: PR batch branch created",
@@ -554,6 +614,10 @@ func (w *Writer) gitCmd(args ...string) (*exec.Cmd, context.Context, context.Can
 // a stuck push surfaces as a clear timeout instead of a silent global write freeze.
 func (w *Writer) gitErr(ctx context.Context, op string, err error, out []byte) error {
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		// #638: a SIGKILL'd git leaves its write-locks behind (no signal cleanup).
+		// Sweep them now so the released mutex hands the next write a clean repo
+		// instead of a permanent "index.lock: File exists" brick.
+		w.clearStaleGitLocks()
 		timeout := w.gitTimeout
 		if timeout <= 0 {
 			timeout = defaultGitTimeout
@@ -562,6 +626,44 @@ func (w *Writer) gitErr(ctx context.Context, op string, err error, out []byte) e
 			op, timeout, context.DeadlineExceeded, string(out))
 	}
 	return fmt.Errorf("git %s: %w — %s", op, err, string(out))
+}
+
+// clearStaleGitLocks best-effort removes git write-locks a deadline-killed git
+// child leaves behind (#638): index.lock, packed-refs.lock, and any refs/**/*.lock
+// (a killed commit can leave the branch ref lock, which nests arbitrarily deep).
+//
+// Safe to remove unconditionally ONLY because w.mu serializes all git access AND
+// conf.d/gitDir is owned by this single tenant-api replica (no sidecar/cronjob
+// touches it) — so when this runs, the just-killed op was the lone git process
+// under the lock and no legitimate concurrent git holds these. Best-effort:
+// failures are swallowed (the loud timeout error is returned regardless). No-op on
+// bare repos / worktrees / a non-git gitDir (where .git is a file or absent).
+func (w *Writer) clearStaleGitLocks() {
+	gitMeta := filepath.Join(w.gitDir, ".git")
+	if fi, err := os.Stat(gitMeta); err != nil || !fi.IsDir() {
+		return
+	}
+	// HEAD.lock (a killed checkout/commit updating HEAD) would re-brick the very
+	// next checkout; config.lock likewise blocks the -c-flagged commit.
+	for _, name := range []string{"index.lock", "HEAD.lock", "packed-refs.lock", "config.lock"} {
+		p := filepath.Join(gitMeta, name)
+		if _, err := os.Stat(p); err == nil {
+			if rmErr := os.Remove(p); rmErr == nil {
+				slog.Warn("gitops: removed stale git lock after timeout (#638)", "path", p)
+			}
+		}
+	}
+	_ = filepath.WalkDir(filepath.Join(gitMeta, "refs"), func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil // skip unreadable entries, keep walking
+		}
+		if !d.IsDir() && strings.HasSuffix(p, ".lock") {
+			if rmErr := os.Remove(p); rmErr == nil {
+				slog.Warn("gitops: removed stale ref lock after timeout (#638)", "path", p)
+			}
+		}
+		return nil
+	})
 }
 
 // gitExec runs a git command in the git directory, bounded by the write timeout.

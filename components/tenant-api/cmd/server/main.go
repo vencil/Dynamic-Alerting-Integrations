@@ -120,6 +120,12 @@ func main() {
 	ghBaseBranch := flag.String("github-base-branch", envOrDefault("TA_GITHUB_BASE_BRANCH", "main"),
 		"Target branch for GitHub PRs (default: main)")
 
+	// LOCAL git base branch the gitops Writer branches from / returns to in PR mode
+	// (#638). Forge-neutral — distinct from the forge's PR target above. Set to your
+	// conf.d repo's default branch if it isn't "main" (e.g. "master").
+	gitBaseBranch := flag.String("git-base-branch", envOrDefault("TA_GIT_BASE_BRANCH", "main"),
+		"Local base branch the gitops Writer branches from in PR mode (default: main)")
+
 	// v2.6.0 Phase E: GitLab flags
 	glProject := flag.String("gitlab-project", envOrDefault("TA_GITLAB_PROJECT", ""),
 		"GitLab project path (group/project) or numeric ID (required for pr-gitlab mode)")
@@ -198,6 +204,7 @@ func main() {
 	eventHub := ws.NewHub()
 
 	writer := gitops.NewWriter(*configDir, *gitDir)
+	writer.SetBaseBranch(*gitBaseBranch) // #638: explicit PR-mode base (forge-neutral)
 	// v2.6.0: Register callback for real-time event broadcasting
 	writer.SetOnWrite(func(tenantID string) {
 		eventHub.Broadcast(ws.Event{
