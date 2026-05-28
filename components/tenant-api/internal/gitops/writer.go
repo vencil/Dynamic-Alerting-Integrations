@@ -493,7 +493,9 @@ func (w *Writer) WritePR(tenantID, authorEmail, yamlContent string) (*PRWriteRes
 	}
 
 	// Step 6: push branch to origin
+	pushed := true
 	if err := w.gitExec("push", "origin", branchName); err != nil {
+		pushed = false
 		slog.Warn("gitops: push branch failed",
 			"branch", branchName, "error", err, "note", "PR creation will fail")
 		// Don't delete the branch — the commit is valuable even if push fails
@@ -505,6 +507,23 @@ func (w *Writer) WritePR(tenantID, authorEmail, yamlContent string) (*PRWriteRes
 	if err := w.checkoutBaseClean(base); err != nil {
 		slog.Warn("gitops: failed to switch back to base branch",
 			"base", base, "branch", branchName, "error", err)
+	}
+
+	// Step 8: drop the local feature branch after a CONFIRMED push (#641). The
+	// commit is now safely on origin and the PR is created from origin/<branch> —
+	// the local ref is no longer needed. Without this, every WritePR leaks a local
+	// `tenant-api/<tenant>/<ts>` ref forever (the deployment runs one long-lived
+	// replica, so this is the only thing bounding the loose-ref accumulation).
+	// On push failure we KEEP the branch (the only copy of the commit) — same as
+	// before. Must run AFTER step 7 (can't -D the currently-checked-out branch).
+	// Edge: if step 7 itself only warned (still on the feature branch), this -D
+	// fails ("checked out branch") and that one branch leaks — bounded by the
+	// next WritePR's #638 ironclad re-anchor at step 3.
+	if pushed {
+		if err := w.gitExec("branch", "-D", branchName); err != nil {
+			slog.Warn("gitops: failed to delete local feature branch after push",
+				"branch", branchName, "error", err)
+		}
 	}
 
 	slog.Info("gitops: PR branch created",
@@ -560,7 +579,9 @@ func (w *Writer) WritePRBatch(ops []PRBatchOp, authorEmail string) (*PRWriteResu
 		}
 	}
 
+	pushed := true
 	if err := w.gitExec("push", "origin", branchName); err != nil {
+		pushed = false
 		slog.Warn("gitops: push batch branch failed",
 			"branch", branchName, "error", err)
 	}
@@ -568,6 +589,15 @@ func (w *Writer) WritePRBatch(ops []PRBatchOp, authorEmail string) (*PRWriteResu
 	if err := w.checkoutBaseClean(base); err != nil {
 		slog.Warn("gitops: failed to switch back to base branch",
 			"base", base, "branch", branchName, "error", err)
+	}
+
+	// Drop the local batch branch after a confirmed push (#641, same rationale as
+	// WritePR Step 8). On push failure we keep it — the commit is only local.
+	if pushed {
+		if err := w.gitExec("branch", "-D", branchName); err != nil {
+			slog.Warn("gitops: failed to delete local batch branch after push",
+				"branch", branchName, "error", err)
+		}
 	}
 
 	slog.Info("gitops: PR batch branch created",

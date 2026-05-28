@@ -201,3 +201,56 @@ func TestGitExecTimeout_SelfHealsIndexLock(t *testing.T) {
 		t.Errorf("index.lock not self-healed after timeout (err=%v)", err)
 	}
 }
+
+// addBareRemote points repoDir's "origin" at a fresh bare local repo, so
+// `git push` actually succeeds in tests (needed to exercise the post-push
+// cleanup path in #641).
+func addBareRemote(t *testing.T, repoDir string) {
+	t.Helper()
+	remoteDir := t.TempDir()
+	cmd := exec.Command("git", "init", "--bare", remoteDir)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Skipf("git init --bare: %v\n%s", err, out)
+	}
+	gitRun(t, repoDir, "remote", "add", "origin", remoteDir)
+}
+
+// TestWritePR_DeletesLocalBranchAfterConfirmedPush is the #641 regression: after
+// a successful push, the local feature branch must be DROPPED (it's safely on
+// origin and the PR is created from origin/<branch> — the local ref would just
+// leak forever on this single long-lived replica). The REMOTE branch must remain.
+func TestWritePR_DeletesLocalBranchAfterConfirmedPush(t *testing.T) {
+	dir := initRepoOnMain(t)
+	addBareRemote(t, dir)
+	w := NewWriter(dir, dir)
+
+	res, err := w.WritePR("db-a", "alice@example.com", validTenantYAML)
+	if err != nil {
+		t.Fatalf("WritePR: %v", err)
+	}
+
+	// Local branch must be GONE.
+	if out, err := exec.Command("git", "-C", dir, "rev-parse", "--verify", "--quiet", "refs/heads/"+res.BranchName).CombinedOutput(); err == nil && len(strings.TrimSpace(string(out))) > 0 {
+		t.Errorf("local feature branch %s still present after successful push (got %s) — #641 leak", res.BranchName, out)
+	}
+	// REMOTE branch must exist (the PR needs it). rev-parse --verify aborts the test on miss.
+	gitOut(t, dir, "rev-parse", "--verify", "refs/remotes/origin/"+res.BranchName)
+}
+
+// TestWritePR_KeepsLocalBranchOnPushFailure: when push FAILS (no remote here),
+// the local feature branch must PERSIST — it's the only copy of the commit. The
+// #641 cleanup must only fire on a confirmed push, never on failure.
+func TestWritePR_KeepsLocalBranchOnPushFailure(t *testing.T) {
+	dir := initRepoOnMain(t)
+	// NO remote configured → push fails.
+	w := NewWriter(dir, dir)
+
+	res, err := w.WritePR("db-a", "alice@example.com", validTenantYAML)
+	if err != nil {
+		t.Fatalf("WritePR: %v", err)
+	}
+
+	if err := exec.Command("git", "-C", dir, "rev-parse", "--verify", "--quiet", "refs/heads/"+res.BranchName).Run(); err != nil {
+		t.Errorf("local feature branch %s missing after FAILED push — must persist as the only commit copy", res.BranchName)
+	}
+}
