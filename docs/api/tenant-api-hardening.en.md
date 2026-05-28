@@ -237,6 +237,13 @@ The `/api/v1/events` SSE hub has no per-client idle timeout (slow clients hold a
 
 GitOps writes (`Write` / `WritePR` / `WritePRBatch`) hold a process-wide writer `sync.Mutex` for the whole operation, and the git CLI children they invoke previously had no timeout — a hung `git push` (degraded on-prem forge / network microcut) would hold the lock indefinitely and freeze ALL tenant writes until the pod restarts. Each git call now has a per-command deadline (`exec.CommandContext` + `WaitDelay`, the latter ensuring the lock is released even when a `git-remote-https`/`ssh` helper grandchild still holds the stdout pipe); on timeout it is SIGKILLed, returns a loud `timed out — write lock released`, and frees the lock. Default 60s, overridable via `TENANT_API_GIT_TIMEOUT` (Go duration, e.g. `90s`) and exposed through `helm/tenant-api` `tenantApi.gitTimeout`; invalid / 0 / negative falls back to the default.
 
+### 5.5 PR-mode checkout discipline + SIGKILL stale-lock self-heal (#638)
+
+Two write-path hardenings stemming from §5.4's timeout SIGKILL:
+
+- **De-relativize checkout (cross-tenant branch pollution)**: `WritePR`/`WritePRBatch` used to `checkout -b` from "current HEAD" and return via the relative `checkout -`. If a prior write left the tree on some feature branch, the next tenant would **branch off another tenant's feature branch**, silently carrying their un-pushed config into the new PR. Now every PR write **scrubs to a clean base with an ironclad `reset --hard HEAD` + `checkout -f <base>` first, then `-b`**, and all returns use the same clean checkout — making pollution **impossible** (any stuck state self-corrects next time). **Why ironclad, not a plain `checkout`**: a write killed after the file is written but before its commit finishes leaves a dirty tree, on which a plain `checkout <base>` is refused ("local changes would be overwritten") → it would wedge every subsequent PR write, unrecoverable across pod restarts on a PVC-backed conf.d (death-loop). The base comes from `TA_GIT_BASE_BRANCH` (default `main`, **forge-neutral**, `--git-base-branch` flag); if the base is unreachable the write aborts (never branches from an unknown ref).
+- **SIGKILL stale-lock self-heal**: a timeout-SIGKILL'd local `git add`/`commit` leaves `.git/index.lock` (and `HEAD.lock`, `refs/**/*.lock`, `packed-refs.lock`, `config.lock`); since all writes share one `sync.Mutex`, a single stale lock fails every subsequent tenant write with `index.lock: File exists` until manual intervention. `gitErr`'s deadline branch now best-effort removes these locks — safe purely because the mutex serializes git access and conf.d is owned by a single replica (no concurrent git holds them at that moment).
+
 ---
 
 ## 6. References
