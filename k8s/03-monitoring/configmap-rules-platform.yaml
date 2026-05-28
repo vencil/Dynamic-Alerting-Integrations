@@ -106,6 +106,59 @@ data:
                 consume them — investigate which defaults are being touched
                 without effect.
 
+          # --- Config Parse Failure (issue #643) ---
+          # An invalid tenant or _defaults YAML increments
+          # da_config_parse_failure_total and ERRORs in the exporter log
+          # (config_debounce.go), but until this alert shipped the
+          # failure was visible only in logs — the affected tenant
+          # silently lost fresh rule evaluation. Two thresholds capture
+          # the two failure modes the exporter's own help text + RCA
+          # comments distinguish:
+          #   - per-tenant file (warning, >5/h per basename — matches
+          #     the metric Help: "Alert: >5/h for any single basename
+          #     = page ops"),
+          #   - _defaults.yaml (critical, fire-once sentinel — a single
+          #     failure silently DROPS THE ENTIRE DEFAULTS CHAIN for
+          #     every dependent tenant; much wider blast radius).
+          - alert: ConfigParseFailure
+            expr: increase(da_config_parse_failure_total{file_basename!="_defaults.yaml"}[1h]) > 5
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Tenant config YAML parse failures (file {{ $labels.file_basename }})"
+              description: |
+                The threshold-exporter has logged >5 YAML parse failures
+                for `{{ $labels.file_basename }}` in the last hour. The
+                tenant backed by that file is no longer getting fresh
+                rule evaluation — fix the YAML (see the exporter ERROR
+                logs for the parse error) and the alert clears
+                automatically. Other tenants are unaffected.
+                NOTE: this evaluates a 1-hour sliding window, so the
+                alert may stay Firing for up to ~1h after the YAML is
+                fixed (the old failures only drop out of the window as
+                time passes) — that's expected, not a stuck alert.
+
+          # `> 0.5` (not `> 0`) is the standard SRE-grade defence against
+          # Prometheus `increase()` extrapolation noise: scrape misalignment
+          # or a counter reset (exporter restart on rollout / OOM-kill / HPA)
+          # can yield tiny floats like 0.0001 in an otherwise-empty window
+          # and false-page this critical sentinel. 0.5 immunises the noise
+          # while still firing on any real ≥1 increment.
+          - alert: ConfigDefaultsParseFailure
+            expr: increase(da_config_parse_failure_total{file_basename="_defaults.yaml"}[5m]) > 0.5
+            labels:
+              severity: critical
+            annotations:
+              summary: "_defaults.yaml parse failure — defaults chain dropped"
+              description: |
+                A `_defaults.yaml` parse failure occurred in the last
+                5m. Per the inheritance design (ADR-017) this silently
+                drops the ENTIRE defaults block for every tenant that
+                depends on this chain — those tenants quietly lose any
+                rule pulled from defaults. Fix the YAML immediately
+                (see the exporter ERROR logs).
+
           # --- Prometheus Rule Evaluation Health (ADR-020 IV-2c, #508) ---
           # The federation blast-radius caps (--query.max-samples /
           # --query.timeout) are GLOBAL — they also bound this
