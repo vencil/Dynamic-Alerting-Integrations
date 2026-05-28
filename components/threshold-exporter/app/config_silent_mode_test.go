@@ -538,6 +538,165 @@ func TestCardinalityGuard(t *testing.T) {
 }
 
 // ============================================================
+// ResolveAtWithStats — per-tenant over-limit magnitudes (#652)
+// ============================================================
+//
+// Covers the side-channel ResolveStats return value that drives the
+// da_tenant_metrics_over_limit gauge. The magnitude formula is
+// max(0, count - effective_limit) where effective_limit honours the
+// MaxMetricsPerTenant override and falls back to
+// DefaultMaxMetricsPerTenant when zero, mirroring ResolveAt's truncation
+// logic. Compliant tenants MUST appear in the map with value 0 so the
+// collector's Reset+Set loop in PublishTenantMetricsOverLimit can clear
+// stale gauges when a tenant drops back below the cap; an absent entry
+// (which would also work in steady state) would leak across the
+// just-dropped-below-cap transition.
+
+func TestResolveAtWithStats_PerTenantOverLimitMagnitude(t *testing.T) {
+	t.Parallel()
+
+	defsWith600 := make(map[string]float64, 600)
+	for i := 0; i < 600; i++ {
+		defsWith600[fmt.Sprintf("metric_%d", i)] = float64(i)
+	}
+	defsWith400 := make(map[string]float64, 400)
+	for i := 0; i < 400; i++ {
+		defsWith400[fmt.Sprintf("metric_%d", i)] = float64(i)
+	}
+
+	tests := []struct {
+		name    string
+		cfg     ThresholdConfig
+		wantMag map[string]int // tenant -> expected magnitude (0 == compliant)
+	}{
+		{
+			name: "Compliant_explicit_zero_for_under_limit",
+			cfg: ThresholdConfig{
+				Defaults:            map[string]float64{"a": 1, "b": 2},
+				Tenants:             map[string]map[string]ScheduledValue{"t": {}},
+				MaxMetricsPerTenant: 10,
+			},
+			// Compliant tenants must appear with value 0, not be absent —
+			// this is the contract the collector's gauge cleanup relies on
+			// for just-dropped-below-cap transitions.
+			wantMag: map[string]int{"t": 0},
+		},
+		{
+			name: "AtLimit_magnitude_zero",
+			cfg: ThresholdConfig{
+				Defaults:            map[string]float64{"a": 1, "b": 2},
+				Tenants:             map[string]map[string]ScheduledValue{"t": {}},
+				MaxMetricsPerTenant: 2,
+			},
+			wantMag: map[string]int{"t": 0},
+		},
+		{
+			name: "OverLimit_magnitude_exact",
+			cfg: ThresholdConfig{
+				Defaults:            defsWith600,
+				Tenants:             map[string]map[string]ScheduledValue{"t": {}},
+				MaxMetricsPerTenant: 500,
+			},
+			// 600 produced, capped at 500 → magnitude == 100.
+			wantMag: map[string]int{"t": 100},
+		},
+		{
+			name: "MultiTenant_only_one_over",
+			cfg: ThresholdConfig{
+				Defaults: defsWith600,
+				Tenants: map[string]map[string]ScheduledValue{
+					"over": {},
+					// 'compliant' disables all 600 metrics → 0 emitted, well under cap.
+					"compliant": disableAll(defsWith600),
+				},
+				MaxMetricsPerTenant: 500,
+			},
+			wantMag: map[string]int{"over": 100, "compliant": 0},
+		},
+		{
+			name: "DefaultLimit_used_when_zero",
+			cfg: ThresholdConfig{
+				Defaults: defsWith600,
+				Tenants:  map[string]map[string]ScheduledValue{"t": {}},
+				// MaxMetricsPerTenant left at zero → falls back to
+				// DefaultMaxMetricsPerTenant (500). 600 - 500 = 100.
+			},
+			wantMag: map[string]int{"t": 100},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, stats := tt.cfg.ResolveAtWithStats(time.Now())
+			if len(stats.PerTenantOverLimit) != len(tt.wantMag) {
+				t.Fatalf("stats has %d tenants, want %d (got %+v)",
+					len(stats.PerTenantOverLimit), len(tt.wantMag), stats.PerTenantOverLimit)
+			}
+			for tenant, want := range tt.wantMag {
+				got, ok := stats.PerTenantOverLimit[tenant]
+				if !ok {
+					t.Errorf("tenant %q missing from stats — compliant tenants must appear with magnitude 0 for collector gauge cleanup", tenant)
+					continue
+				}
+				if got != want {
+					t.Errorf("tenant %q magnitude = %d, want %d", tenant, got, want)
+				}
+			}
+		})
+	}
+}
+
+// TestResolveAtWithStats_ClearOnReturnBelowCap verifies the
+// just-dropped-below-cap transition: a tenant that was over-limit at
+// time T1 and drops back below at time T2 must have magnitude 0 in
+// T2's stats, NOT carry the T1 over-limit value forward. This is the
+// state-coded-gauge contract that motivated the Gauge-over-Counter
+// design decision (#652 issue body).
+func TestResolveAtWithStats_ClearOnReturnBelowCap(t *testing.T) {
+	t.Parallel()
+
+	defsWith600 := make(map[string]float64, 600)
+	for i := 0; i < 600; i++ {
+		defsWith600[fmt.Sprintf("metric_%d", i)] = float64(i)
+	}
+	defsWith400 := make(map[string]float64, 400)
+	for i := 0; i < 400; i++ {
+		defsWith400[fmt.Sprintf("metric_%d", i)] = float64(i)
+	}
+
+	cfg := ThresholdConfig{
+		Defaults:            defsWith600,
+		Tenants:             map[string]map[string]ScheduledValue{"t": {}},
+		MaxMetricsPerTenant: 500,
+	}
+	_, statsBefore := cfg.ResolveAtWithStats(time.Now())
+	if statsBefore.PerTenantOverLimit["t"] != 100 {
+		t.Fatalf("before-trim magnitude = %d, want 100", statsBefore.PerTenantOverLimit["t"])
+	}
+
+	// Trim defaults to 400 — tenant now fits well within the 500 cap.
+	cfg.Defaults = defsWith400
+	_, statsAfter := cfg.ResolveAtWithStats(time.Now())
+	if statsAfter.PerTenantOverLimit["t"] != 0 {
+		t.Errorf("after-trim magnitude = %d, want 0 (state-coded gauge contract: must clear on return to compliance, not stick at the previous over-limit value)",
+			statsAfter.PerTenantOverLimit["t"])
+	}
+}
+
+// disableAll constructs a tenant overrides map that explicitly disables
+// every key in the supplied defaults. Used to model a tenant that opts
+// out of all defaults — the resolved threshold count for that tenant is
+// 0, which lets cardinality tests assert per-tenant isolation without
+// having to construct disjoint defaults sets per tenant.
+func disableAll(defaults map[string]float64) map[string]ScheduledValue {
+	out := make(map[string]ScheduledValue, len(defaults))
+	for k := range defaults {
+		out[k] = SV("disable")
+	}
+	return out
+}
+
+// ============================================================
 // ValidateTenantKeys (v1.5.0)
 // ============================================================
 

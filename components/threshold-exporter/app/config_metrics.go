@@ -75,6 +75,14 @@ type configMetrics struct {
 	lastScanComplete   prometheus.Gauge         // v2.8.0 B-1.P2-a: wall-clock unix seconds at most-recent successful scanDirHierarchical completion (e2e harness anchor T1; production stuck-detection)
 	lastReloadComplete prometheus.Gauge         // v2.8.0 B-1.P2-a: wall-clock unix seconds at most-recent successful diffAndReload completion (e2e harness anchor T2; production stuck-detection)
 	freeOSMemory       prometheus.Counter       // #459: count of explicit runtime/debug.FreeOSMemory() calls after reload (opt-in -free-os-mem-after-reload; 0 when lever disabled)
+	// #652: state-coded gauge for per-tenant cardinality cap-hit
+	// observability. Magnitude = max(0, count - effective_limit), so a
+	// tenant stuck 100-over-limit reports 100 (NOT a counter that
+	// scrape-frequency-couples to ~12,000/hour at 30s scrape interval).
+	// Reset+Set per scrape inside ThresholdCollector.Collect so vanished
+	// tenants are evicted automatically. See pkg/config/resolve.go
+	// ResolveAtWithStats for the producer side.
+	tenantMetricsOverLimit *prometheus.GaugeVec
 }
 
 // Default metric instance used by the production server. Tests that want
@@ -158,6 +166,10 @@ func newConfigMetrics() *configMetrics {
 			Name: "da_config_free_os_memory_total",
 			Help: "Count of explicit runtime/debug.FreeOSMemory() calls issued after a reload cycle (#459). Stays 0 unless the -free-os-mem-after-reload lever is enabled. Each increment is one forced GC + return-to-OS; correlate with go_memstats_heap_released_bytes to confirm the lever is reclaiming idle heap under sustained reload pressure.",
 		}),
+		tenantMetricsOverLimit: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "da_tenant_metrics_over_limit",
+			Help: "State-coded magnitude of per-tenant cardinality cap-hit (#652): max(0, count - max_metrics_per_tenant). 0 means the tenant fits under the cap. Set per scrape from ResolveAtWithStats; vanished tenants are evicted by Reset() before the per-tenant Set() pass. NOT a counter — a tenant stuck 100-over-limit reports 100 for as long as the truncation persists (does not inflate with scrape frequency). Alert: > 0 per-tenant (TenantMetricsOverLimit, warning); count without (tenant)(... > 0) > 50 as a defaults-storm sentinel (DefaultsTruncationStorm, critical).",
+		}, []string{"tenant"}),
 	}
 }
 
@@ -197,6 +209,7 @@ func registerConfigMetrics(reg prometheus.Registerer, m *configMetrics) {
 	reg.MustRegister(m.lastScanComplete)
 	reg.MustRegister(m.lastReloadComplete)
 	reg.MustRegister(m.freeOSMemory)
+	reg.MustRegister(m.tenantMetricsOverLimit)
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -426,4 +439,34 @@ func (cm *configMetrics) IncFreeOSMemory() {
 // path is active.
 func IncFreeOSMemory() {
 	getConfigMetrics().IncFreeOSMemory()
+}
+
+// PublishTenantMetricsOverLimit replaces the entire da_tenant_metrics_over_limit
+// snapshot with the supplied per-tenant magnitudes (#652). Called from
+// ThresholdCollector.Collect each scrape with the ResolveStats produced
+// by ResolveAtWithStats:
+//
+//  1. Reset() evicts every previous (tenant) label combination so a tenant
+//     that has been deleted from config no longer surfaces a stale gauge.
+//  2. Set() writes the new magnitude per tenant — 0 for compliant tenants
+//     (so a tenant that just dropped back below the cap is observably
+//     clamped to zero rather than carrying its old over-limit value).
+//
+// Safe to call from inside Collect because Prometheus client_golang
+// invokes each Collector's Collect serially per Gather, and the
+// GaugeVec is mutated only here. The order vs the GaugeVec's own
+// Collect within the same Gather: ThresholdCollector is registered
+// first (see collector.go MetricsHandler), so its Reset+Set runs before
+// the GaugeVec is asked to emit its current state.
+func (cm *configMetrics) PublishTenantMetricsOverLimit(perTenant map[string]int) {
+	cm.tenantMetricsOverLimit.Reset()
+	for tenant, magnitude := range perTenant {
+		cm.tenantMetricsOverLimit.WithLabelValues(tenant).Set(float64(magnitude))
+	}
+}
+
+// PublishTenantMetricsOverLimit is the top-level singleton-form helper —
+// see method docstring for semantics. Called by ThresholdCollector.Collect.
+func PublishTenantMetricsOverLimit(perTenant map[string]int) {
+	getConfigMetrics().PublishTenantMetricsOverLimit(perTenant)
 }
