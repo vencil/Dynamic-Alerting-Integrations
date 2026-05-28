@@ -159,6 +159,69 @@ data:
                 rule pulled from defaults. Fix the YAML immediately
                 (see the exporter ERROR logs).
 
+          # --- Config Reload Stuck (issue #631 H2) ---
+          # Complements ConfigParseFailure: that pair catches BAD YAML
+          # (parse errors logged + counter incremented). This alert
+          # catches the orthogonal "phantom state" — fsnotify-driven
+          # reload triggers fire (file changes seen) but the
+          # diffAndReload pipeline never finishes, so the exporter
+          # keeps emitting STALE config: Git says X, Prometheus emits
+          # Y. The `lastReloadComplete` gauge Help text
+          # (`config_metrics.go`) literally documents this pattern:
+          # "Production use: alert on time() - <gauge> > N for
+          # stuck-reloader detection."
+          #
+          # Expression rationale:
+          #   - LHS `sum without (reason) (increase(...trigger_total[10m])) > 0`
+          #     gates on EXPECTED reload activity. The `without (reason)`
+          #     is load-bearing — `da_config_reload_trigger_total` has
+          #     a `reason` label (source / defaults / new / delete /
+          #     forced) and Prometheus auto-attaches K8s scrape labels
+          #     (instance / job / namespace / pod) to every series.
+          #     `sum without (reason)` collapses the reason fan-out
+          #     while PRESERVING the topology labels so:
+          #       (a) the `and` vector-matches against the RHS, which
+          #           inherits the gauge's topology labels (`time()` is
+          #           scalar; scalar-minus-vector keeps the vector's
+          #           labels), and
+          #       (b) the fired alert carries instance + pod, so on-call
+          #           knows which exporter pod is wedged.
+          #     Plain `sum()` (no `without`) strips ALL labels → LHS
+          #     becomes {} while RHS has topology labels → `and` is
+          #     empty → alert silently never fires in K8s. The lab-clean
+          #     promtool dogfood missed this; Gemini external review
+          #     caught it pre-merge, reproduced + fixed (commit body).
+          #     Without this guard clause altogether the alert would
+          #     false-page on an idle exporter (no edits, no git-sync
+          #     → gauge ages indefinitely by design).
+          #   - RHS `(time() - gauge) > 600` says no successful reload
+          #     in 10m, well above the worst-case reload p99 (~30s
+          #     histogram top bucket) + a generous safety margin for
+          #     debounce-coalesced bursts.
+          # `for: 2m` debounces a single missed scrape; the expression
+          # is already sticky (counter + gauge move slowly), so no
+          # longer hold-down is needed before paging.
+          - alert: ConfigReloadStuck
+            expr: |
+              (sum without (reason) (increase(da_config_reload_trigger_total[10m])) > 0)
+              and
+              ((time() - da_config_last_reload_complete_unixtime_seconds) > 600)
+            for: 2m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Threshold-exporter reload pipeline stuck — phantom config state"
+              description: |
+                Reload triggers fired in the last 10m but no successful
+                `diffAndReload` has completed for >10m. The exporter is
+                now emitting STALE config: changes that reached disk
+                (git-sync, kubectl apply, Tenant API) are NOT being
+                reflected in `user_threshold` gauges or per-tenant rule
+                evaluation — the "phantom state" #631 H2 calls out
+                (Git says X, Prometheus still emits Y). Inspect the
+                exporter logs for a `diffAndReload` ERROR / panic /
+                lock contention; restart the pod if no obvious cause.
+
           # --- Prometheus Rule Evaluation Health (ADR-020 IV-2c, #508) ---
           # The federation blast-radius caps (--query.max-samples /
           # --query.timeout) are GLOBAL — they also bound this
