@@ -52,7 +52,7 @@ go-bench-clean: ## Go micro-benchmark via bench_wrapper (stdout-clean, -json fil
 		-bench=. -benchmem -count=$${COUNT:-5} -run="^$$" -timeout=15m ./...
 
 .PHONY: benchmark-report
-benchmark-report: ## 1000-scale baseline (20 benches: 8 flat + 5 hierarchical + 4 mixed-mode + 1 churn + 2 pkg/config library) → .build/bench-baseline.txt（issue #60 Phase 1, informational; COUNT/BENCHTIME 可覆寫）
+benchmark-report: ## 1000-scale baseline (20 benches: 8 flat + 5 hierarchical + 4 mixed-mode + 1 churn + 2 pkg/config library) → .build/bench-baseline.txt（release-baseline source for release-attach-bench-baseline.yaml；起於 #60 Phase 1 informational pilot，Phase 2 gate 已轉 #435/#458；COUNT/BENCHTIME 可覆寫）
 	@mkdir -p .build
 	@echo "[benchmark-report] running 1000-scale baseline (count=$${COUNT:-6}, benchtime=$${BENCHTIME:-3s}; samples 2..N treated as steady-state by Phase 2 median-of-5)"
 	@cd components/threshold-exporter/app && \
