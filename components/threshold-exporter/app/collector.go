@@ -4,6 +4,7 @@ import (
 	"log"
 	"net/http"
 	"sort"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -42,8 +43,24 @@ func (c *ThresholdCollector) Collect(ch chan<- prometheus.Metric) {
 		return
 	}
 
-	// Scenario A + Phase 2B: numeric thresholds (with optional dimensional labels)
-	for _, t := range cfg.Resolve() {
+	// Scenario A + Phase 2B: numeric thresholds (with optional dimensional labels).
+	// ResolveAtWithStats (#652) returns the same resolved-thresholds slice as
+	// the legacy Resolve(), plus per-tenant cap-hit magnitudes used to publish
+	// the da_tenant_metrics_over_limit gauge. PublishTenantMetricsOverLimit
+	// Reset()s the GaugeVec then per-tenant Set()s in one pass so vanished
+	// tenants are evicted automatically and just-dropped-below-the-cap tenants
+	// clamp to 0 instead of carrying their stale over-limit value forward.
+	//
+	// Route through c.manager.getMetrics() — NOT the package-level
+	// PublishTenantMetricsOverLimit helper — so tests that inject a fresh
+	// configMetrics via ConfigManager.SetMetrics observe the gauge writes
+	// on their own instance. Every other metric in this file already
+	// follows the m.getMetrics() pattern (see config.go IncReloadTrigger
+	// / IncParseFailure call sites); writing to the global singleton
+	// here would break that test-isolation contract.
+	resolved, stats := cfg.ResolveAtWithStats(time.Now())
+	c.manager.getMetrics().PublishTenantMetricsOverLimit(stats.PerTenantOverLimit)
+	for _, t := range resolved {
 		labelNames := []string{"tenant", "metric", "component", "severity"}
 		labelValues := []string{t.Tenant, t.Metric, t.Component, t.Severity}
 

@@ -11,6 +11,22 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// ResolveStats carries side-channel observability data for ResolveAtWithStats
+// (issue #652). The runtime per-tenant cardinality cap at resolve.go silently
+// truncates the result slice when a tenant exceeds max_metrics_per_tenant;
+// PerTenantOverLimit surfaces the truncation magnitude (count - limit) so
+// the collector can publish `da_tenant_metrics_over_limit{tenant}` for
+// alerting on the silent-failure path.
+//
+// Every tenant present in the post-Resolve view appears as a key — value
+// is 0 for compliant tenants (state-coded gauge semantics, see #652 design).
+// A tenant that has been deleted from config simply will not appear; the
+// collector must Reset() the GaugeVec before applying these values so
+// removed tenants' previous gauge entries are evicted.
+type ResolveStats struct {
+	PerTenantOverLimit map[string]int
+}
+
 // Resolve applies three-state logic using the current time.
 // Wraps ResolveAt(time.Now()) for backward compatibility.
 func (c *ThresholdConfig) Resolve() []ResolvedThreshold {
@@ -30,7 +46,26 @@ func (c *ThresholdConfig) Resolve() []ResolvedThreshold {
 // PromQL can then use `unless` to suppress warning when critical fires.
 //
 // Returns the list of thresholds to expose as Prometheus metrics.
+//
+// Equivalent to ResolveAtWithStats(now) with the stats return value
+// discarded. Production callers that need the per-tenant cardinality view
+// (the threshold-exporter Prometheus collector) should call the stats
+// variant directly; tests / debug handlers that do not care about
+// observability stats can keep using this signature.
 func (c *ThresholdConfig) ResolveAt(now time.Time) []ResolvedThreshold {
+	result, _ := c.ResolveAtWithStats(now)
+	return result
+}
+
+// ResolveAtWithStats is identical to ResolveAt but additionally returns
+// per-tenant cardinality observations (#652). See ResolveStats for shape.
+//
+// The threshold-exporter collector uses the stats return value to drive
+// `da_tenant_metrics_over_limit{tenant}` (state-coded gauge); compliant
+// tenants appear with value 0 so the collector's per-scrape Reset+Set
+// loop correctly evicts vanished tenants and clears gauges for tenants
+// that have just dropped back below the limit.
+func (c *ThresholdConfig) ResolveAtWithStats(now time.Time) ([]ResolvedThreshold, ResolveStats) {
 	var result []ResolvedThreshold
 
 	// Cardinality limit per tenant (0 = no limit)
@@ -39,6 +74,11 @@ func (c *ThresholdConfig) ResolveAt(now time.Time) []ResolvedThreshold {
 		limit = DefaultMaxMetricsPerTenant
 	}
 	tenantCount := make(map[string]int)
+	// #652: per-tenant over-limit magnitudes for the
+	// da_tenant_metrics_over_limit gauge. Populated for every visited
+	// tenant — compliant tenants get 0 so the collector's Reset+Set loop
+	// clears stale gauges for tenants that just dropped back below the cap.
+	perTenantOverLimit := make(map[string]int, len(c.Tenants))
 
 	for tenant, overrides := range c.Tenants {
 		startIdx := len(result) // track where this tenant's metrics start
@@ -189,13 +229,22 @@ func (c *ThresholdConfig) ResolveAt(now time.Time) []ResolvedThreshold {
 		// Cardinality guard: enforce per-tenant metric limit (v1.5.0)
 		count := len(result) - startIdx
 		tenantCount[tenant] = count
+		// #652: record over-limit magnitude (compliant tenants → 0) for
+		// the gauge. Recorded BEFORE truncation so the magnitude reflects
+		// what the tenant tried to emit, not the (already-truncated)
+		// observed slice length. Effective limit (post-MaxMetricsPerTenant
+		// fallback to DefaultMaxMetricsPerTenant) is used so the gauge
+		// aligns with the actual runtime cap, never the unset-zero literal.
+		overflow := 0
 		if limit > 0 && count > limit {
+			overflow = count - limit
 			log.Printf("ERROR: tenant=%s produced %d metrics (limit=%d), truncating to limit", tenant, count, limit)
 			result = result[:startIdx+limit]
 		}
+		perTenantOverLimit[tenant] = overflow
 	}
 
-	return result
+	return result, ResolveStats{PerTenantOverLimit: perTenantOverLimit}
 }
 
 // ResolveStateFilters resolves state-based monitoring filters for all tenants.

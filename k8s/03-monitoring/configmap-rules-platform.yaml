@@ -222,6 +222,84 @@ data:
                 exporter logs for a `diffAndReload` ERROR / panic /
                 lock contention; restart the pod if no obvious cause.
 
+          # --- Tenant Cardinality Cap Truncation (issue #652) ---
+          # Companion to the v1.5.0 runtime per-tenant cardinality cap
+          # (`pkg/config/resolve.go:189-195`): the cap *enforces* a 500-
+          # metric ceiling per tenant, but the truncation itself was
+          # only logged (`ERROR: tenant=... truncating to limit`) with
+          # no Prometheus signal — operators had no way to be paged when
+          # a tenant silently lost rule evaluation. Same silent-failure
+          # class as #631 (phantom reload) and #643 (silent parse fail).
+          #
+          # Metric choice — Gauge, not Counter. ResolveAtWithStats runs
+          # under every /metrics scrape (~15-30s), so a Counter would
+          # scrape-frequency-couple (a tenant stuck 100-over-limit for
+          # 1h would inflate ~12,000/h of pure scrape noise). The
+          # state-coded gauge `da_tenant_metrics_over_limit{tenant}`
+          # carries `max(0, count - limit)` — stable at the magnitude
+          # while truncation persists, drops to 0 the moment the tenant
+          # fits under the cap again. No `increase()` ⇒ immune to the
+          # `> 0.5` extrapolation defence #647 needed for counters.
+          #
+          # Two-tier alerts mirror the #647 ConfigParseFailure +
+          # ConfigDefaultsParseFailure split:
+          #   - Per-tenant warning catches isolated tenant overgrowth.
+          #   - Critical sentinel fires once when a `_defaults.yaml`
+          #     change cascades through the ADR-017 inheritance chain
+          #     and pushes many tenants over the cap simultaneously —
+          #     attributing the storm to the defaults change directly
+          #     instead of relying on on-call to correlate 50+ warning
+          #     pages.
+          - alert: TenantMetricsOverLimit
+            expr: da_tenant_metrics_over_limit > 0
+            for: 5m
+            labels:
+              severity: warning
+              tenant: "{{ $labels.tenant }}"
+            annotations:
+              summary: "Tenant {{ $labels.tenant }} exceeded max metrics limit (truncated)"
+              description: |
+                Tenant `{{ $labels.tenant }}` is producing more
+                thresholds than `max_metrics_per_tenant` allows
+                ({{ $value }} excess). The runtime silently truncated
+                the excess (`pkg/config/resolve.go`), so the rules
+                falling outside the cap stop evaluating until the
+                tenant either trims their config or raises the
+                per-tenant limit.
+                If `DefaultsTruncationStorm` is firing simultaneously
+                treat this as a symptom — root cause is a
+                `_defaults.yaml` change adding metric keys across the
+                ADR-017 inheritance chain, not single-tenant
+                overgrowth.
+
+          # `count without (tenant)` (NOT bare `count()`) is load-bearing.
+          # Same lesson as PR #651: bare aggregations strip ALL labels
+          # including the K8s scrape-time topology (instance / job /
+          # namespace / pod), so the fired alert's payload would lose
+          # the exporter-pod attribution and on-call would not know
+          # which replica to inspect. `without (tenant)` collapses only
+          # the tenant fan-out and preserves topology labels.
+          # threshold-exporter is single-replica by design (helm
+          # replicaCount=1), so the count groups into one series per
+          # exporter pod; > 50 means a single pod is seeing >50 tenants
+          # over the cap at once — defaults-chain disaster class.
+          - alert: DefaultsTruncationStorm
+            expr: count without (tenant) (da_tenant_metrics_over_limit > 0) > 50
+            for: 2m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Massive tenant metrics truncation ({{ $value }} tenants) — _defaults.yaml suspected"
+              description: |
+                More than 50 tenants are simultaneously over the
+                per-tenant metric cap. The likely cause is a
+                `_defaults.yaml` change that added metric keys across
+                the ADR-017 inheritance chain, pushing dependent
+                tenants past the limit. Roll back or trim the defaults
+                change FIRST — remediating individual tenants without
+                addressing the defaults change will just re-fire the
+                same storm next reload.
+
           # --- Prometheus Rule Evaluation Health (ADR-020 IV-2c, #508) ---
           # The federation blast-radius caps (--query.max-samples /
           # --query.timeout) are GLOBAL — they also bound this

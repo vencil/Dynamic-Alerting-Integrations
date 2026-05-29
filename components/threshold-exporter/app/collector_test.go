@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -521,6 +522,110 @@ func TestResolveConfigPath_AutoDetectDir_RealDir(t *testing.T) {
 	if result == "" {
 		t.Error("resolveConfigPath should never return empty")
 	}
+}
+
+// ============================================================
+// Collect publishes da_tenant_metrics_over_limit through manager
+// metrics (#652)
+// ============================================================
+//
+// Routes through c.manager.getMetrics().PublishTenantMetricsOverLimit
+// rather than the package-level singleton helper. Verifies the
+// test-injection contract: a fresh configMetrics injected via
+// ConfigManager.SetMetrics must receive the per-tenant gauge writes,
+// AND the Reset()+Set() loop must clear vanished tenants and clamp
+// just-dropped-below-the-cap tenants to 0.
+//
+// Originally caught during adversarial self-review: the first cut
+// called the package-level PublishTenantMetricsOverLimit helper which
+// routes through the global getConfigMetrics(), bypassing the
+// injected instance. This test would have failed under that bug —
+// the fresh GaugeVec would have stayed empty while the global one
+// got the writes.
+
+func TestCollector_Collect_PublishesOverLimitGauge(t *testing.T) {
+	defs := make(map[string]float64, 600)
+	for i := 0; i < 600; i++ {
+		defs[fmt.Sprintf("metric_%d", i)] = float64(i)
+	}
+
+	cfg := &ThresholdConfig{
+		Defaults: defs,
+		Tenants: map[string]map[string]ScheduledValue{
+			"tenant-over":      {}, // over by 100
+			"tenant-compliant": disableAllForCollectorTest(defs),
+		},
+		MaxMetricsPerTenant: 500,
+	}
+	manager := newTestManager(cfg)
+	fresh, _ := freshMetrics(t)
+	manager.SetMetrics(fresh)
+
+	collector := NewThresholdCollector(manager)
+	// CollectAndCount triggers the full Collect path on the fresh registry.
+	_ = testutil.CollectAndCount(collector)
+
+	overVal := testutil.ToFloat64(fresh.tenantMetricsOverLimit.WithLabelValues("tenant-over"))
+	if overVal != 100 {
+		t.Errorf("over-limit tenant gauge = %v, want 100 (count=600, limit=500)", overVal)
+	}
+	compVal := testutil.ToFloat64(fresh.tenantMetricsOverLimit.WithLabelValues("tenant-compliant"))
+	if compVal != 0 {
+		t.Errorf("compliant tenant gauge = %v, want 0 (state-coded contract — compliant tenants must Set 0, not omit)", compVal)
+	}
+}
+
+func TestCollector_Collect_OverLimitGaugeEvictsVanishedTenant(t *testing.T) {
+	defs := make(map[string]float64, 600)
+	for i := 0; i < 600; i++ {
+		defs[fmt.Sprintf("metric_%d", i)] = float64(i)
+	}
+
+	cfg := &ThresholdConfig{
+		Defaults: defs,
+		Tenants: map[string]map[string]ScheduledValue{
+			"to-be-deleted": {},
+		},
+		MaxMetricsPerTenant: 500,
+	}
+	manager := newTestManager(cfg)
+	fresh, _ := freshMetrics(t)
+	manager.SetMetrics(fresh)
+
+	collector := NewThresholdCollector(manager)
+
+	// First scrape — tenant exists, gauge populated.
+	_ = testutil.CollectAndCount(collector)
+	if got := testutil.ToFloat64(fresh.tenantMetricsOverLimit.WithLabelValues("to-be-deleted")); got != 100 {
+		t.Fatalf("first scrape over-limit = %v, want 100", got)
+	}
+
+	// Tenant disappears from config — simulate a deletion between scrapes.
+	manager.config.Tenants = map[string]map[string]ScheduledValue{
+		"another-tenant": {},
+	}
+
+	// Second scrape — Reset+Set must evict the deleted tenant's series.
+	_ = testutil.CollectAndCount(collector)
+	// CollectAndCount on the gaugevec series families: after the second
+	// scrape, only "another-tenant" should remain. Use ToFloat64 with
+	// a brand-new label value to confirm the deleted tenant is gone.
+	// (ToFloat64 on a vanished series returns 0 because WithLabelValues
+	// recreates the cell — what we actually want to check is whether
+	// the deleted series is absent from the registry's exposition. We
+	// do that by counting tenantMetricsOverLimit families directly.)
+	count := testutil.CollectAndCount(fresh.tenantMetricsOverLimit)
+	if count != 1 {
+		t.Errorf("tenantMetricsOverLimit has %d series after deletion, want 1 (Reset() must evict vanished tenants on the next scrape)", count)
+	}
+}
+
+func disableAllForCollectorTest(defaults map[string]float64) map[string]ScheduledValue {
+	out := make(map[string]ScheduledValue, len(defaults))
+	for k := range defaults {
+		out[k] = SV("disable")
+	}
+	return out
 }
 
 func min(a, b int) int {
