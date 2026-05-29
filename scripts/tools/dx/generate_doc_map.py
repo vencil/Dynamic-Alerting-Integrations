@@ -250,8 +250,9 @@ def gather_docs(lang: str = "zh", include_adr: bool = False) -> list:
     # We use os.walk with manual pruning (instead of Path.rglob) for two
     # reasons:
     #   1. Prune SKIP_DIRS early so we never descend into them — critical
-    #      for avoiding broken/phantom symlinks like `docs/rule-packs`
-    #      which raise OSError: [Errno 5] on FUSE-mounted Cowork VMs.
+    #      for avoiding broken/phantom symlinks (and historically
+    #      `docs/rule-packs`, now a gitignored mkdocs build-time copy rather
+    #      than a symlink) which raise OSError: [Errno 5] on FUSE Cowork VMs.
     #   2. Enforce a deterministic, case-insensitive sort that matches on
     #      both Linux (CI) and Windows (local dev). Python's `Path.__lt__`
     #      uses `_str_normcase` which differs by OS (lowercased on Windows,
