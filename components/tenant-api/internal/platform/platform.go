@@ -12,6 +12,29 @@ import (
 	"time"
 )
 
+// MergeableState is a provider-neutral tri-state for a PR/MR's mergeability
+// (#632 / #646). Surfaced for conflict visibility — see the constant docs for
+// why the actionable surface is near-zero by construction.
+type MergeableState string
+
+const (
+	// MergeableUnknown means the provider did not report a mergeability status
+	// for this PR/MR (or it is still being computed). GitHub's list-PRs
+	// endpoint never populates mergeability, so GitHub PRs are always Unknown
+	// here — computing it would cost one extra GET per PR per poll cycle,
+	// which the #646 "narrow surface" caveat does not justify.
+	MergeableUnknown MergeableState = ""
+	// MergeableOK means the PR/MR has no merge conflict against its base.
+	MergeableOK MergeableState = "mergeable"
+	// MergeableConflict means the PR/MR cannot merge cleanly (conflict with
+	// base). For tenant-api this is near-impossible by construction (one PR
+	// per tenant via ClaimTenant dedup, each touching a unique
+	// {tenantID}.yaml; shared _groups/_views are direct-commit, never PRs) —
+	// it only arises from out-of-band edits (manual PR commits, base-branch
+	// force-push). Tracked purely as defense-in-depth observability.
+	MergeableConflict MergeableState = "conflict"
+)
+
 // PRInfo holds metadata about a created or existing pull/merge request.
 // The fields are intentionally provider-neutral; "Number" maps to GitHub PR
 // number or GitLab MR IID (project-scoped).
@@ -23,6 +46,10 @@ type PRInfo struct {
 	HeadRef   string `json:"head_ref"`             // Source branch name
 	CreatedAt string `json:"created_at,omitempty"` // ISO 8601 timestamp
 	TenantID  string `json:"tenant_id,omitempty"`  // Extracted from branch name
+	// Mergeable is the conflict-visibility tri-state (#646). GitLab populates
+	// it from the list-MR response's detailed_merge_status (free); GitHub
+	// leaves it MergeableUnknown (list-PRs API omits it). See MergeableState.
+	Mergeable MergeableState `json:"mergeable,omitempty"`
 }
 
 // Client abstracts Git hosting platform operations for PR/MR creation.

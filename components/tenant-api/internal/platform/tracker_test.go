@@ -665,3 +665,33 @@ func TestRefreshNow_DedupConcurrentCalls_OneListerCall(t *testing.T) {
 		t.Errorf("lister called %d times, want exactly 1 (N concurrent RefreshNow must dedup to one Sync)", got)
 	}
 }
+
+// TestSync_CountsMergeConflicts verifies Sync surfaces conflicting PRs/MRs to
+// the ConflictSnapshot for the /metrics gauge (#646). A clean tenant + a
+// conflicting tenant → conflict count 1; a later all-clean sync → 0.
+func TestSync_CountsMergeConflicts(t *testing.T) {
+	// Not parallel: asserts on the package-level conflict registry, keyed by
+	// a provider name unique to this test to avoid cross-test interference.
+	const provider = "conflict-test-provider"
+
+	conflicted := []PRInfo{
+		{Number: 1, TenantID: "tenant-clean", HeadRef: "tenant-api/tenant-clean/1", Mergeable: MergeableOK},
+		{Number: 2, TenantID: "tenant-bad", HeadRef: "tenant-api/tenant-bad/1", Mergeable: MergeableConflict},
+	}
+	pt := NewPollingTracker(fixedLister(conflicted), provider, time.Hour)
+	pt.Sync()
+	if got := ConflictSnapshot()[provider]; got != 1 {
+		t.Errorf("conflict count after mixed sync = %d, want 1", got)
+	}
+
+	// Conflict resolved out-of-band → next sync reports 0 (state-coded gauge).
+	clean := []PRInfo{
+		{Number: 1, TenantID: "tenant-clean", HeadRef: "tenant-api/tenant-clean/1", Mergeable: MergeableOK},
+		{Number: 2, TenantID: "tenant-bad", HeadRef: "tenant-api/tenant-bad/1", Mergeable: MergeableOK},
+	}
+	pt2 := NewPollingTracker(fixedLister(clean), provider, time.Hour)
+	pt2.Sync()
+	if got := ConflictSnapshot()[provider]; got != 0 {
+		t.Errorf("conflict count after clean sync = %d, want 0 (must clear)", got)
+	}
+}

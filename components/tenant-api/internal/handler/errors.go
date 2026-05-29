@@ -53,6 +53,11 @@ const (
 	CodeBadRequest      = "BAD_REQUEST"
 	CodeInternal        = "INTERNAL_ERROR"
 	CodeUpstream        = "UPSTREAM_ERROR"
+	// CodeForgeUnavailable marks an HTTP 503 caused by the forge circuit
+	// breaker being open (#632 / #645) — the forge (GitHub/GitLab) is
+	// degraded and the breaker is fast-failing to avoid 30s-per-request
+	// hangs. Clients should retry after a short backoff.
+	CodeForgeUnavailable = "FORGE_UNAVAILABLE"
 )
 
 // ErrorResponse is the canonical error envelope. All fields except

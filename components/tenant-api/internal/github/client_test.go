@@ -312,3 +312,74 @@ func TestCreatePR_Forbidden(t *testing.T) {
 		t.Errorf("error leaked upstream body: %v", err)
 	}
 }
+
+// TestClient_BreakerProviderLabelIsLowercase pins the circuit-breaker provider
+// label to lowercase "github" so it matches the PollingTracker's provider tag
+// (NewTracker passes "github"). If these drift, tenant_api_forge_circuit_state
+// and tenant_api_forge_pr_conflicts would carry different {provider} label
+// values and could not be joined/filtered together on a dashboard (#632 review
+// round 3 — Gemini caught the original GitHub/github casing mismatch).
+func TestClient_BreakerProviderLabelIsLowercase(t *testing.T) {
+	// Not parallel: reads the package-level breaker registry.
+	if _, err := NewClient("token", "owner/repo", "main"); err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	snap := platform.CircuitSnapshot()
+	if _, ok := snap["github"]; !ok {
+		t.Errorf("breaker registered under %v, want lowercase key \"github\" (must match NewTracker's provider tag)", keysOf(snap))
+	}
+	if _, ok := snap["GitHub"]; ok {
+		t.Error("breaker registered under TitleCase \"GitHub\" — drifts from the tracker's lowercase \"github\" provider label")
+	}
+}
+
+func keysOf(m map[string]string) []string {
+	ks := make([]string, 0, len(m))
+	for k := range m {
+		ks = append(ks, k)
+	}
+	return ks
+}
+
+// TestClient_CircuitBreakerTripsThroughDo is the integration test for #632/#645:
+// it drives the REAL client.do() path (not the platform.CircuitBreaker in
+// isolation) against an httptest server that always returns 503, and asserts
+// the breaker eventually fast-fails with platform.ErrCircuitOpen. Mirrors the
+// PR #653 lesson — unit-testing the breaker wrapper alone wouldn't catch a
+// wiring regression where do() bypassed the breaker.
+func TestClient_CircuitBreakerTripsThroughDo(t *testing.T) {
+	t.Parallel()
+	var hits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		w.WriteHeader(http.StatusServiceUnavailable)
+		fmt.Fprint(w, `{"message":"503"}`)
+	}))
+	defer srv.Close()
+
+	c, _ := NewClient("token", "owner/repo", "main")
+	c.SetBaseURL(srv.URL)
+
+	// Hammer until the breaker opens. Each ListOpenPRs is one do() → one 503.
+	var sawCircuitOpen bool
+	for i := 0; i < 20; i++ {
+		_, err := c.ListOpenPRs()
+		if errors.Is(err, platform.ErrCircuitOpen) {
+			sawCircuitOpen = true
+			break
+		}
+	}
+	if !sawCircuitOpen {
+		t.Fatal("breaker never fast-failed with ErrCircuitOpen after 20 consecutive 503s — do() may not be wired through the breaker")
+	}
+	// Once open, further calls must NOT reach the server: record the hit count
+	// at trip time, make another call, and confirm the server wasn't hit again.
+	hitsAtTrip := hits
+	_, err := c.ListOpenPRs()
+	if !errors.Is(err, platform.ErrCircuitOpen) {
+		t.Errorf("post-trip call err = %v, want ErrCircuitOpen", err)
+	}
+	if hits != hitsAtTrip {
+		t.Errorf("server hit again after breaker opened (%d → %d) — fast-fail not short-circuiting the round-trip", hitsAtTrip, hits)
+	}
+}
