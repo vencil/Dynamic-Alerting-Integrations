@@ -153,6 +153,20 @@ func main() {
 		parseDurationOrDefault(os.Getenv("TA_IDLE_TIMEOUT"), 60*time.Second),
 		"HTTP server idle timeout (default 60s; TA_IDLE_TIMEOUT)")
 
+	// #143: SSE (/api/v1/events) per-client liveness. Duration form (matches
+	// TA_*_TIMEOUT) rather than the issue's original _SEC integer naming, for
+	// consistency with the server-timeout knobs above. See ws.Config docs for
+	// the heartbeat↔write-deadline dependency and the cost of disabling each.
+	sseHeartbeat := flag.Duration("sse-heartbeat",
+		parseDurationOrDefault(os.Getenv("TA_SSE_HEARTBEAT"), 25*time.Second),
+		"SSE per-client heartbeat interval (default 25s; 0=disable, which re-opens the idle-stuck-client leak; must stay below the downstream proxy idle timeout; TA_SSE_HEARTBEAT)")
+	sseWriteTimeout := flag.Duration("sse-write-timeout",
+		parseDurationOrDefault(os.Getenv("TA_SSE_WRITE_TIMEOUT"), 10*time.Second),
+		"SSE per-write deadline; a stuck client's write unblocks the goroutine after this (default 10s; 0=disable; TA_SSE_WRITE_TIMEOUT)")
+	sseMaxLifetime := flag.Duration("sse-max-lifetime",
+		parseDurationOrDefault(os.Getenv("TA_SSE_MAX_LIFETIME"), 0),
+		"SSE hard max connection lifetime cap, defense-in-depth (default 0=disabled; TA_SSE_MAX_LIFETIME)")
+
 	// #144: request body size cap. Pre-issue this was hardcoded to
 	// 1<<20 in every write handler; now configurable via env so
 	// operators with atypical payloads (e.g. tenants with deeply-
@@ -200,8 +214,13 @@ func main() {
 		log.Fatalf("FATAL: rbac init: %v", err)
 	}
 
-	// v2.6.0: WebSocket/SSE hub for real-time config change notifications
-	eventHub := ws.NewHub()
+	// v2.6.0: WebSocket/SSE hub for real-time config change notifications.
+	// #143: per-client liveness (heartbeat + per-write deadline) from TA_SSE_* env.
+	eventHub := ws.NewHubWithConfig(ws.Config{
+		HeartbeatInterval: *sseHeartbeat,
+		WriteTimeout:      *sseWriteTimeout,
+		MaxLifetime:       *sseMaxLifetime,
+	})
 
 	writer := gitops.NewWriter(*configDir, *gitDir)
 	writer.SetBaseBranch(*gitBaseBranch) // #638: explicit PR-mode base (forge-neutral)

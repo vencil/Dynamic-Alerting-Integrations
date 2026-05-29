@@ -229,9 +229,17 @@ ALL violations are listed (not first-only) — same UX as the tenant-scoped chec
 
 `http.Server{ReadTimeout, WriteTimeout, IdleTimeout}` and the per-handler body cap are now driven by `TA_READ_TIMEOUT` / `TA_WRITE_TIMEOUT` / `TA_IDLE_TIMEOUT` / `TA_MAX_BODY_BYTES` env vars and exposed through `helm/tenant-api` `tenantApi.server.{timeouts.{read,write,idle},maxBodyBytes}` values. Defaults match the v2.8.0 hardcoded values (15s / 30s / 60s / 1 MiB), so a default upgrade is a no-op; malformed env → `slog.Warn` + fallback.
 
-### 5.3 SSE client idle timeout
+### 5.3 SSE client liveness — heartbeat + per-write deadline（#143）
 
-The `/api/v1/events` SSE hub has no per-client idle timeout (slow clients hold a goroutine indefinitely). This hardening doesn't address it — it's a separate SSE-specific hardening path, decoupled from RBAC / rate limiting.
+**Resolved (#143).** The `/api/v1/events` SSE hub previously had no per-client liveness mechanism: a stuck / half-open client held its serving goroutine indefinitely. The originally-proposed "idle timeout → close" was the wrong design for one-way SSE (server→client has no client read activity to measure, and it would churn healthy idle connections) and conflicted with the global `WriteTimeout` from §5.1. Replaced with the standard SSE liveness pattern:
+
+- **Exempt from the global `WriteTimeout`**: the handler clears the server write deadline via `http.NewResponseController(w).SetWriteDeadline(time.Time{})`. Otherwise a long-lived SSE stream is severed on the first write after ~`TA_WRITE_TIMEOUT` (default 30s) since connect.
+- **Heartbeat** (`TA_SSE_HEARTBEAT`, default 25s): a periodic `: keepalive` SSE comment. Serves two purposes — (1) stops intermediary proxies/LBs from reaping idle connections; (2) **load-bearing**: it guarantees a periodic write attempt so the per-write deadline can trip on an idle, zero-traffic stuck client (a goroutine blocked on `<-ch` between heartbeats has no in-flight write, so the deadline is dormant). **`0s` = disabled, which re-opens the idle-stuck-client leak**, and it must stay below the smallest downstream proxy idle timeout.
+- **Per-write deadline** (`TA_SSE_WRITE_TIMEOUT`, default 10s): set before each write. A stuck client's write blocks at most this long, then errors → serving goroutine returns → resources reclaimed. Worst-case stuck-client cleanup ≈ `heartbeat + write-timeout` (~35s). **Operational note (backpressure buffering)**: this ~35s is a FLOOR, not a ceiling — when an Nginx / HAProxy / Ingress sits in front (each with tens-to-hundreds of KB of response buffer), after a client TCP-half-opens the exporter's writes flow into the OS + proxy buffers and don't block until those fill and TCP backpressure propagates back. The goroutine is still reclaimed, just later than ~35s. If `tenant_api_sse_clients` declines more slowly than expected after disconnects, this buffering (not a leak) is why.
+- **Optional hard cap** (`TA_SSE_MAX_LIFETIME`, default `0s` = disabled): a maximum single-connection lifetime (defense-in-depth); on expiry the server sends `{"type":"close"}` and closes, letting well-behaved clients reconnect.
+- **Observability**: a `tenant_api_sse_clients` gauge at `/metrics` (current connections == serving goroutines); a steady climb under steady client count signals a leak.
+
+The three env vars are exposed in `helm/tenant-api` as `tenantApi.sse.{heartbeat,writeTimeout,maxLifetime}` (defaults match the binary built-in, so a default upgrade is a no-op). Malformed env → `slog.Warn` + fallback.
 
 ### 5.4 Git CLI per-command timeout (#630)
 

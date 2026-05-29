@@ -229,9 +229,17 @@ ALL violations 全列出（不是 first-only），跟新 tenant-scoped check 的
 
 `http.Server{ReadTimeout, WriteTimeout, IdleTimeout}` 與 per-handler body cap 已從 hardcoded 改為 `TA_READ_TIMEOUT` / `TA_WRITE_TIMEOUT` / `TA_IDLE_TIMEOUT` / `TA_MAX_BODY_BYTES` env-driven，並透過 `helm/tenant-api` `tenantApi.server.{timeouts.{read,write,idle},maxBodyBytes}` values 暴露。預設值對齊 v2.8.0 原 hardcoded 值（15s / 30s / 60s / 1 MiB），default upgrade 為 no-op；env malformed → `slog.Warn` + fallback。
 
-### 5.3 SSE client idle timeout
+### 5.3 SSE client liveness — heartbeat + per-write deadline（#143）
 
-`/api/v1/events` SSE endpoint 的 hub 沒有 per-client idle timeout（slow client 會佔 goroutine）。本次硬化不處理 — 是另一條 SSE-specific hardening 路徑，與 RBAC / rate limit 解耦。
+**已解決（#143）。** `/api/v1/events` SSE hub 過去沒有 per-client liveness 機制：卡住 / 半開的 client 會無限期佔住 serving goroutine。原本提議的「idle timeout 到時關線」對單向 SSE 是錯的設計（server→client 沒有 client read activity 可量、且會打健康的閒置連線），且會與 §5.1 的全域 `WriteTimeout` 互打。改採標準 SSE liveness 模式：
+
+- **豁免全域 `WriteTimeout`**：handler 以 `http.NewResponseController(w).SetWriteDeadline(time.Time{})` 清掉 server 的全域寫入 deadline。否則長連 SSE 會在連線後 ~`TA_WRITE_TIMEOUT`（預設 30s）的第一次寫入時被砍斷。
+- **Heartbeat**（`TA_SSE_HEARTBEAT`，預設 25s）：週期性寫 `: keepalive` SSE comment。兼具兩個作用 —— (1) 防中介 proxy/LB 收掉閒置連線；(2) **load-bearing**：保證週期性的寫入嘗試，讓 per-write deadline 有機會對「閒置零流量」的卡死 client 觸發（goroutine 卡在 `<-ch`、兩次 heartbeat 之間沒有 in-flight 寫入時，deadline 是 dormant 的）。**`0s` = 停用，會重新打開 idle-stuck-client leak**；且必須 < 下游 proxy 的最小 idle timeout。
+- **Per-write deadline**（`TA_SSE_WRITE_TIMEOUT`，預設 10s）：每次寫入前設 `SetWriteDeadline`。卡住 client 的寫入最多 block 這麼久就 error → serving goroutine return → 資源回收。worst-case 卡死 client 清除 ≈ `heartbeat + write-timeout`（~35s）。**維運注記（反壓緩衝）**：這 ~35s 是**下限**而非上限 —— 前面若擋著 Nginx / HAProxy / Ingress（各有數十~數百 KB response buffer），client TCP 半開後 exporter 的寫入會先灌進 OS + proxy buffer、不會立刻 block，要等那些 buffer 也滿、TCP backpressure 才傳回來。goroutine 最終仍會回收，只是比 ~35s 晚。若 `tenant_api_sse_clients` 在斷線後下降得比預期慢，是這個 buffering（非 leak）。
+- **可選硬上限**（`TA_SSE_MAX_LIFETIME`，預設 `0s`=停用）：單一連線的最長存活時間（defense-in-depth），到時送 `{"type":"close"}` 後關線、由 well-behaved client 重連。
+- **可觀測性**：`/metrics` 新增 `tenant_api_sse_clients` gauge（目前連線數 == serving goroutine 數）；穩定 client 數下持續攀升即 leak 訊號。
+
+三個 env 在 `helm/tenant-api` 以 `tenantApi.sse.{heartbeat,writeTimeout,maxLifetime}` 暴露（預設對齊 binary built-in，default upgrade 為 no-op）。malformed env → `slog.Warn` + fallback。
 
 ### 5.4 Git CLI per-command timeout（#630）
 

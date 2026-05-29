@@ -120,6 +120,20 @@ spec:
               value: {{ .maxBodyBytes | quote }}
             {{- end }}
             {{- end }}
+            {{- with .Values.tenantApi.sse }}
+            {{- if .heartbeat }}
+            - name: TA_SSE_HEARTBEAT
+              value: {{ .heartbeat | quote }}
+            {{- end }}
+            {{- if .writeTimeout }}
+            - name: TA_SSE_WRITE_TIMEOUT
+              value: {{ .writeTimeout | quote }}
+            {{- end }}
+            {{- if .maxLifetime }}
+            - name: TA_SSE_MAX_LIFETIME
+              value: {{ .maxLifetime | quote }}
+            {{- end }}
+            {{- end }}
           ports:
             - name: api
               containerPort: 8080

@@ -9,6 +9,7 @@ import (
 
 	"github.com/vencil/tenant-api/internal/federation/orphan"
 	"github.com/vencil/tenant-api/internal/platform"
+	"github.com/vencil/tenant-api/internal/ws"
 )
 
 // Metrics tracks basic request counters exposed at /metrics.
@@ -154,6 +155,16 @@ func MetricsHandler(w http.ResponseWriter, r *http.Request) {
 		for _, provider := range cprov {
 			_, _ = fmt.Fprintf(w, "tenant_api_forge_pr_conflicts{provider=%q} %d\n", provider, conflicts[provider])
 		}
+	}
+
+	// #143: number of currently-connected SSE (/api/v1/events) clients. Each is
+	// one serving goroutine; a steadily-climbing value under steady client
+	// count signals the goroutine leak this gauge exists to detect. Omitted
+	// when no hub has been constructed (ok=false).
+	if sseClients, ok := ws.ClientCountSnapshot(); ok {
+		_, _ = fmt.Fprintf(w, "# HELP tenant_api_sse_clients Currently-connected SSE (/api/v1/events) clients.\n")
+		_, _ = fmt.Fprintf(w, "# TYPE tenant_api_sse_clients gauge\n")
+		_, _ = fmt.Fprintf(w, "tenant_api_sse_clients %d\n", sseClients)
 	}
 }
 
