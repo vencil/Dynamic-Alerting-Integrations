@@ -26,13 +26,13 @@ Give it ~1 minute, then open:
 驗證整條鏈是否正常：
 
 ```bash
-make smoke-local      # 需要 curl + jq
+make smoke-local      # 需要 make + curl + jq；無 make 時：bash try-local/smoke.sh
 ```
 
 完整清理（含匿名 volume，第二次啟動乾淨無殘留）：
 
 ```bash
-make clean-local
+make clean-local      # 無 make 時：docker compose down -v --remove-orphans
 ```
 
 ---
@@ -126,8 +126,10 @@ make clean-local && docker compose up -d
 
 ```bash
 docker run --rm -v "$PWD/seed/conf.d:/conf.d:ro" \
-  ghcr.io/vencil/da-tools:${TOOLS_TAG:-v2.8.0} guard /conf.d
+  ghcr.io/vencil/da-tools:${TOOLS_TAG:-v2.8.0} guard defaults-impact --config-dir /conf.d
 ```
+
+> 🪟 **Git Bash（MSYS）使用者**：前面加 `MSYS_NO_PATHCONV=1`，否則容器內路徑 `/conf.d` 會被改寫成 Windows 路徑（在 WSL2 下不會發生）。
 
 > 想完整動手跑 CLI 工作流（init → 閾值 → 路由 → blast radius）？→ [Hands-on Lab](../docs/scenarios/hands-on-lab.md)（`⏱️ 30–45 min`，da-tools 深度教學）。這是 try-local（1 分鐘看產品）的下一層深度。
 
