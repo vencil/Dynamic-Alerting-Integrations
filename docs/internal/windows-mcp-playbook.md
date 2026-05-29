@@ -546,7 +546,7 @@ done > _bulk_candidates.txt
 | `docs/README-root.md` | file symlink | `file-hygiene` exclude regex ✅ |
 | `docs/README-root.en.md` | file symlink | `file-hygiene` exclude regex ✅ |
 | `docs/CHANGELOG.md` | file symlink | `file-hygiene` exclude regex ✅（v2.7.1 補） |
-| `docs/rule-packs` | dir symlink | 目錄不走 `file-hygiene`，天然安全 |
+| `docs/rule-packs` | ~~dir symlink~~ 已移除 | 改由 mkdocs hook（`scripts/mkdocs/rule_packs_bridge.py`）build 時複製 root `rule-packs/*.md` 進站、gitignored；移除 symlink 是為了根治 Windows `core.symlinks=false` 把它材料化成文字檔導致的 mkdocs strict false-fail |
 
 ## FUSE Phantom Lock 防治
 

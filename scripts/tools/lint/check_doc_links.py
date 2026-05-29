@@ -359,10 +359,14 @@ class DocLinkChecker:
         except ValueError:
             pass
 
-        # FUSE fallback: docs/rule-packs 是指向 ../rule-packs 的 symlink，
-        # 但 WSL/Cowork FUSE 會把它材料化成絕對 Windows 路徑導致 broken link。
-        # 在 resolve 之前用 lexical 路徑判斷：只要命中 docs/rule-packs/... 就直接
-        # 轉到 rule-packs/...，避開 broken symlink 查找。
+        # rule-packs/ lives at the repo ROOT (real artifact dir); the docs site
+        # surfaces its *.md via a mkdocs build-time hook (scripts/mkdocs/
+        # rule_packs_bridge.py) — there is no docs/rule-packs symlink anymore.
+        # In-content links use site-root form (e.g. `../rule-packs/README.md`)
+        # that resolves lexically to docs/rule-packs/..., which does not exist on
+        # disk at lint time. Rewrite that prefix to the real root rule-packs/...
+        # so filesystem link validation still passes. (Also covers the legacy
+        # symlink-as-text / FUSE-materialized cases for older checkouts.)
         if (lexical_rel.startswith("docs/rule-packs/")
                 or lexical_rel == "docs/rule-packs"):
             alt_rel = lexical_rel.replace("docs/rule-packs", "rule-packs", 1)

@@ -129,3 +129,6 @@ CUsersvencs*
 try-local/seed/conf.d/.git/
 # A visitor's local .env (ports/tags) is theirs; only .env.example is tracked.
 try-local/.env
+
+# Transient mkdocs build copy of repo-root rule-packs/*.md (scripts/mkdocs/rule_packs_bridge.py)
+docs/rule-packs/

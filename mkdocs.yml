@@ -74,6 +74,11 @@ theme:
     edit: material/pencil
     view: material/eye
 
+# Bridge repo-root rule-packs/*.md into the site without a git symlink
+# (replaces docs/rule-packs -> ../rule-packs; see the hook docstring).
+hooks:
+  - scripts/mkdocs/rule_packs_bridge.py
+
 plugins:
   - search:
       lang:

@@ -120,6 +120,10 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 
 - **tenant-api forge client 正確性修正三則**（[#615](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/615)）：① **GitHub PR 分頁**——`ListOpenPRs` 原單頁抓取（`per_page=100` 無迴圈），open PR >100 筆時漏看 → dedup 判斷失準、對同一租戶重複開 PR；改為 `Link` header（`rel="next"`）驅動翻頁，對齊既有 GitLab 行為。② **create-time 403 graceful handling**——read-scoped token 過得了 `ValidateToken`（打 `/user`），卻在開 PR/MR 時才 403；新增 `platform.APIError` + `platform.ErrForbidden`，兩 forge client 的 403 譯為 **clean HTTP 403**（`code: FORBIDDEN`，不外洩上游 response body、不再回 500），讓 da-portal 能精準觸發權限錯誤 UI。③ **同租戶並發寫 TOCTOU**——`HasPendingPR` 檢查與 `RegisterPR` 之間有空窗，兩並發請求可同時開單；改以 tracker 的**同步原子** `ClaimTenant` / `ReleaseClaim` 去重（check-and-set，不依賴 async poll cadence，避免類比 #527 的 poll 空窗 race）。**設計決策**：dedup 維持單副本約束（in-memory tracker + claim 不跨 pod）——PR 寫回模式須 `replicaCount=1`，已於 `helm/tenant-api/values.yaml` 與 `internal/platform/tracker.go`（`ClaimTenant` doc）明文記錄。測試：httptest 驗 >100 分頁不漏 + create-time 403 clean error；並發 single-winner 測試驗只開一張 PR。
 
+### Changed
+
+- **mkdocs build：移除 `docs/rule-packs` symlink，改用 build-time hook**：root `rule-packs/*.md`（Rule Packs / Alert 速查兩頁）改由 mkdocs hook（`scripts/mkdocs/rule_packs_bridge.py`，`on_pre_build` 複製進 `docs/rule-packs/`、`on_post_build` 清除，gitignored）surfacing 進站，取代原 `docs/rule-packs -> ../rule-packs` 的 git symlink。根因：Windows `core.symlinks=false` 把 symlink 材料化成 13-byte 文字檔、`mkdocs build` 走不進去 → 本機 strict build 噴 ~32 條 `rule-packs/* not found` 假警示（CI/Linux 正常），逼迫 `MKDOCS_STRICT_BYPASS=1` 推送。改 hook 後 local／docs-ci／`mkdocs gh-deploy` 三路徑一致、跨平台不再 false-fail；`rule-packs/` 仍留在 repo root（da-tools 與產生器消費）。
+
 ---
 
 ## [v2.8.1] — secret-scan 四層防線 + Planning SSOT + DX 工具鏈收斂 (2026-05-16)
