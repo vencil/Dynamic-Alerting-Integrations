@@ -74,6 +74,19 @@ tenantApi:
     # headroom. Raise only for atypical payloads — a higher cap
     # widens the OOM blast radius of a single POST.
     maxBodyBytes: 1048576
+  # #143: SSE (/api/v1/events) per-client liveness. Defaults match the binary
+  # built-in (heartbeat 25s / write 10s / max-lifetime disabled), so a default
+  # upgrade is a no-op. Read as TA_SSE_* env (malformed → default + WARN).
+  sse:
+    # heartbeat MUST stay below the smallest downstream proxy/LB idle timeout
+    # (commonly 30s) AND is load-bearing for stuck-client detection — setting
+    # it to "0s" re-opens the idle-stuck-client goroutine leak this closes.
+    heartbeat: "25s"
+    # per-write deadline: a stuck/half-open client's write unblocks the serving
+    # goroutine after this. "0s" disables it (not recommended).
+    writeTimeout: "10s"
+    # optional hard max connection lifetime cap (defense-in-depth). "0s" = off.
+    maxLifetime: "0s"
 
 # conf.d volume: holds tenant YAML files and the git repository.
 # For production, set type=pvc and provide a storageClass.
