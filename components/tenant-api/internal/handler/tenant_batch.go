@@ -11,6 +11,7 @@ import (
 
 	"github.com/vencil/tenant-api/internal/async"
 	"github.com/vencil/tenant-api/internal/gitops"
+	"github.com/vencil/tenant-api/internal/platform"
 	"github.com/vencil/tenant-api/internal/policy"
 	"github.com/vencil/tenant-api/internal/rbac"
 	"gopkg.in/yaml.v3"
@@ -170,7 +171,14 @@ func BatchTenants(d *Deps) http.HandlerFunc {
 			)
 			if err != nil {
 				provider := d.PRClient.ProviderName()
-				WriteJSONError(rw, r,http.StatusServiceUnavailable, fmt.Sprintf("%s PR/MR creation failed: %s", provider, err.Error()))
+				// Circuit breaker open (#632/#645): forge degraded, fast-failed.
+				// Sanitized, retry-hinting 503 (don't leak the internal string).
+				if errors.Is(err, platform.ErrCircuitOpen) {
+					WriteJSONErrorWithCode(rw, r, http.StatusServiceUnavailable, CodeForgeUnavailable,
+						fmt.Sprintf("%s is currently unavailable — please retry shortly", provider))
+					return
+				}
+				WriteJSONError(rw, r, http.StatusServiceUnavailable, fmt.Sprintf("%s PR/MR creation failed: %s", provider, err.Error()))
 				return
 			}
 

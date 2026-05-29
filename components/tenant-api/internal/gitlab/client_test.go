@@ -233,6 +233,84 @@ func TestListOpenPRs_APIError(t *testing.T) {
 	}
 }
 
+func TestMergeableFromGitLab(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		detailed string
+		want     platform.MergeableState
+	}{
+		{"", platform.MergeableUnknown},
+		{"mergeable", platform.MergeableOK},
+		{"checking", platform.MergeableOK},
+		{"ci_still_running", platform.MergeableOK},
+		{"not_approved", platform.MergeableOK},
+		{"discussions_not_resolved", platform.MergeableOK},
+		{"draft_status", platform.MergeableOK},
+		{"conflict", platform.MergeableConflict},
+		{"broken_status", platform.MergeableConflict},
+	}
+	for _, tt := range tests {
+		t.Run(tt.detailed, func(t *testing.T) {
+			if got := mergeableFromGitLab(tt.detailed); got != tt.want {
+				t.Errorf("mergeableFromGitLab(%q) = %q, want %q", tt.detailed, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestListOpenPRs_CapturesMergeStatus confirms detailed_merge_status from the
+// list-MR response is mapped onto PRInfo.Mergeable without an extra request
+// (#646). One conflicting MR + one clean MR.
+func TestListOpenPRs_CapturesMergeStatus(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mrs := []map[string]interface{}{
+			{
+				"iid":                   1,
+				"web_url":               "https://gitlab.com/g/p/-/merge_requests/1",
+				"state":                 "opened",
+				"title":                 "[tenant-api] clean",
+				"source_branch":         "tenant-api/tenant-clean/20260529",
+				"created_at":            "2026-05-29T10:00:00Z",
+				"detailed_merge_status": "mergeable",
+			},
+			{
+				"iid":                   2,
+				"web_url":               "https://gitlab.com/g/p/-/merge_requests/2",
+				"state":                 "opened",
+				"title":                 "[tenant-api] conflicted",
+				"source_branch":         "tenant-api/tenant-conflict/20260529",
+				"created_at":            "2026-05-29T11:00:00Z",
+				"detailed_merge_status": "conflict",
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(mrs)
+	}))
+	defer srv.Close()
+
+	c, _ := NewClient("token", "group/project", "main")
+	c.SetBaseURL(srv.URL)
+
+	mrs, err := c.ListOpenPRs()
+	if err != nil {
+		t.Fatalf("ListOpenPRs() error: %v", err)
+	}
+	if len(mrs) != 2 {
+		t.Fatalf("expected 2 MRs, got %d", len(mrs))
+	}
+	byTenant := map[string]platform.MergeableState{}
+	for _, mr := range mrs {
+		byTenant[mr.TenantID] = mr.Mergeable
+	}
+	if byTenant["tenant-clean"] != platform.MergeableOK {
+		t.Errorf("clean MR Mergeable = %q, want %q", byTenant["tenant-clean"], platform.MergeableOK)
+	}
+	if byTenant["tenant-conflict"] != platform.MergeableConflict {
+		t.Errorf("conflict MR Mergeable = %q, want %q", byTenant["tenant-conflict"], platform.MergeableConflict)
+	}
+}
+
 func TestProjectAPIEncoding(t *testing.T) {
 	t.Parallel()
 	c, _ := NewClient("token", "group/subgroup/project", "main")

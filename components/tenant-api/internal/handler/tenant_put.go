@@ -152,6 +152,14 @@ func PutTenant(d *Deps) http.HandlerFunc {
 						fmt.Sprintf("insufficient %s permissions to open PR/MR — the configured token lacks write scope", provider))
 					return
 				}
+				// Circuit breaker open (#632/#645): the forge is degraded and we
+				// fast-failed instead of hanging. Sanitized, retry-hinting 503 —
+				// don't leak the internal "circuit breaker open" string.
+				if errors.Is(err, platform.ErrCircuitOpen) {
+					WriteJSONErrorWithCode(rw, r, http.StatusServiceUnavailable, CodeForgeUnavailable,
+						fmt.Sprintf("%s is currently unavailable — please retry shortly", provider))
+					return
+				}
 				WriteJSONError(rw, r, http.StatusServiceUnavailable, fmt.Sprintf("%s PR/MR creation failed: %s", provider, err.Error()))
 				return
 			}

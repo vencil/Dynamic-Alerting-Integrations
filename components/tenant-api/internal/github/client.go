@@ -38,6 +38,7 @@ type Client struct {
 	baseBranch string
 	httpClient *http.Client
 	baseURL    string // defaults to "https://api.github.com", configurable for GHE
+	breaker    *platform.CircuitBreaker
 }
 
 // NewClient creates a GitHub API client.
@@ -59,6 +60,7 @@ func NewClient(token, repoFullName, baseBranch string) (*Client, error) {
 		baseBranch: baseBranch,
 		httpClient: &http.Client{Timeout: 30 * time.Second},
 		baseURL:    "https://api.github.com",
+		breaker:    platform.NewCircuitBreaker("github"),
 	}, nil
 }
 
@@ -277,6 +279,25 @@ func (c *Client) doRequest(method, path string, body interface{}) ([]byte, error
 // A 403 matches errors.Is(err, platform.ErrForbidden) so handlers can map a
 // missing-write-scope token to a clean HTTP 403 instead of a 500.
 func (c *Client) do(method, path string, body interface{}) ([]byte, http.Header, error) {
+	// Wrap the HTTP round-trip in the circuit breaker (#632 / #645). When the
+	// breaker is open this returns platform.ErrCircuitOpen without dialing the
+	// forge, turning a 30s-per-request hang against a degraded on-prem GitHub
+	// into an immediate 503. 4xx responses propagate normally and do NOT trip
+	// the breaker (see platform.isForgeDegradation). Backward-compatible: a
+	// Client built via struct literal (older tests) has a nil breaker and
+	// falls through to the raw round-trip.
+	if c.breaker == nil {
+		return c.roundTrip(method, path, body)
+	}
+	return c.breaker.Execute(func() ([]byte, http.Header, error) {
+		return c.roundTrip(method, path, body)
+	})
+}
+
+// roundTrip performs the actual authenticated GitHub request. Non-2xx becomes
+// a *platform.APIError carrying only the status code. Split out of do() so the
+// circuit breaker can wrap it (#632).
+func (c *Client) roundTrip(method, path string, body interface{}) ([]byte, http.Header, error) {
 	var bodyReader io.Reader
 	if body != nil {
 		jsonBody, err := json.Marshal(body)

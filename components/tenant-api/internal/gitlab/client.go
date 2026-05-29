@@ -31,6 +31,7 @@ type Client struct {
 	targetBranch string
 	httpClient   *http.Client
 	baseURL      string // defaults to "https://gitlab.com", configurable for self-hosted
+	breaker      *platform.CircuitBreaker
 }
 
 // NewClient creates a GitLab API client.
@@ -50,6 +51,7 @@ func NewClient(token, projectPath, targetBranch string) (*Client, error) {
 		targetBranch: targetBranch,
 		httpClient:   &http.Client{Timeout: 30 * time.Second},
 		baseURL:      "https://gitlab.com",
+		breaker:      platform.NewCircuitBreaker("gitlab"),
 	}, nil
 }
 
@@ -151,6 +153,10 @@ func (c *Client) ListOpenPRs() ([]platform.PRInfo, error) {
 			Title        string `json:"title"`
 			SourceBranch string `json:"source_branch"`
 			CreatedAt    string `json:"created_at"`
+			// detailed_merge_status (GitLab 15.6+) is returned in the list-MR
+			// response — no extra request needed (#646). "mergeable" / "ci_*" /
+			// "checking" mean clean; "broken_status" / "conflict" mean conflict.
+			DetailedMergeStatus string `json:"detailed_merge_status"`
 		}
 		if err := json.Unmarshal(resp, &mrs); err != nil {
 			return nil, fmt.Errorf("parse MRs: %w", err)
@@ -168,6 +174,7 @@ func (c *Client) ListOpenPRs() ([]platform.PRInfo, error) {
 				Title:     mr.Title,
 				HeadRef:   mr.SourceBranch,
 				CreatedAt: mr.CreatedAt,
+				Mergeable: mergeableFromGitLab(mr.DetailedMergeStatus),
 			}
 			// Extract tenant ID from branch name: tenant-api/{tenantID}/{timestamp}
 			parts := strings.SplitN(mr.SourceBranch, "/", 3)
@@ -215,13 +222,56 @@ func normalizeState(state string) string {
 	return state
 }
 
-// doRequest performs an authenticated GitLab API request.
+// mergeableFromGitLab maps GitLab's detailed_merge_status to the neutral
+// tri-state (#646). Only the two unambiguous conflict statuses map to
+// Conflict; everything else (mergeable, ci_*, checking, draft_status, …) is
+// either clean or transient and maps to OK. An empty status (older GitLab that
+// doesn't return the field) maps to Unknown.
+//
+// Conservative bias: we only raise Conflict on the statuses GitLab documents
+// as a real merge obstruction, so the conflict gauge/alert never false-fires
+// on a "still computing" status.
+func mergeableFromGitLab(detailed string) platform.MergeableState {
+	switch detailed {
+	case "":
+		return platform.MergeableUnknown
+	case "conflict", "broken_status":
+		return platform.MergeableConflict
+	default:
+		// mergeable, checking, ci_still_running, ci_must_pass,
+		// discussions_not_resolved, draft_status, not_approved, etc. —
+		// none of these is a base-branch merge conflict.
+		return platform.MergeableOK
+	}
+}
+
+// doRequest performs an authenticated GitLab API request, wrapped in the
+// circuit breaker (#632 / #645). When the breaker is open this fast-fails with
+// platform.ErrCircuitOpen instead of dialing a degraded on-prem GitLab. 4xx
+// responses propagate normally and do NOT trip the breaker. Backward-
+// compatible: a nil breaker (struct-literal-built test client) falls through
+// to the raw round-trip.
 func (c *Client) doRequest(method, path string, body interface{}) ([]byte, error) {
+	if c.breaker == nil {
+		b, _, err := c.roundTrip(method, path, body)
+		return b, err
+	}
+	b, _, err := c.breaker.Execute(func() ([]byte, http.Header, error) {
+		return c.roundTrip(method, path, body)
+	})
+	return b, err
+}
+
+// roundTrip performs the actual authenticated GitLab request. Split out of
+// doRequest so the circuit breaker can wrap it (#632). The http.Header return
+// is unused by GitLab callers (no Link-header pagination) but matches the
+// breaker's Execute signature.
+func (c *Client) roundTrip(method, path string, body interface{}) ([]byte, http.Header, error) {
 	var bodyReader io.Reader
 	if body != nil {
 		jsonBody, err := json.Marshal(body)
 		if err != nil {
-			return nil, fmt.Errorf("marshal body: %w", err)
+			return nil, nil, fmt.Errorf("marshal body: %w", err)
 		}
 		bodyReader = bytes.NewReader(jsonBody)
 	}
@@ -229,7 +279,7 @@ func (c *Client) doRequest(method, path string, body interface{}) ([]byte, error
 	reqURL := c.baseURL + path
 	req, err := http.NewRequest(method, reqURL, bodyReader)
 	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
+		return nil, nil, fmt.Errorf("create request: %w", err)
 	}
 
 	req.Header.Set("PRIVATE-TOKEN", c.token)
@@ -239,13 +289,13 @@ func (c *Client) doRequest(method, path string, body interface{}) ([]byte, error
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("http request: %w", err)
+		return nil, nil, fmt.Errorf("http request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("read response: %w", err)
+		return nil, nil, fmt.Errorf("read response: %w", err)
 	}
 
 	if resp.StatusCode >= 400 {
@@ -255,9 +305,9 @@ func (c *Client) doRequest(method, path string, body interface{}) ([]byte, error
 		// map a missing-api-scope token to a clean HTTP 403 (see errors.go).
 		slog.Warn("gitlab API non-2xx",
 			"method", method, "path", path, "status", resp.StatusCode, "body", string(respBody))
-		return nil, &platform.APIError{
+		return nil, resp.Header, &platform.APIError{
 			Provider: "GitLab", Method: method, Path: path, StatusCode: resp.StatusCode,
 		}
 	}
-	return respBody, nil
+	return respBody, resp.Header, nil
 }

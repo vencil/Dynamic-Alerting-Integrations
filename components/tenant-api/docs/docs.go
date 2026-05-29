@@ -1374,6 +1374,19 @@ const docTemplate = `{
                 }
             }
         },
+        "github_com_vencil_tenant-api_internal_platform.MergeableState": {
+            "type": "string",
+            "enum": [
+                "",
+                "mergeable",
+                "conflict"
+            ],
+            "x-enum-varnames": [
+                "MergeableUnknown",
+                "MergeableOK",
+                "MergeableConflict"
+            ]
+        },
         "github_com_vencil_tenant-api_internal_platform.PRInfo": {
             "type": "object",
             "properties": {
@@ -1384,6 +1397,14 @@ const docTemplate = `{
                 "head_ref": {
                     "description": "Source branch name",
                     "type": "string"
+                },
+                "mergeable": {
+                    "description": "Mergeable is the conflict-visibility tri-state (#646). GitLab populates\nit from the list-MR response's detailed_merge_status (free); GitHub\nleaves it MergeableUnknown (list-PRs API omits it). See MergeableState.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/github_com_vencil_tenant-api_internal_platform.MergeableState"
+                        }
+                    ]
                 },
                 "number": {
                     "description": "GitHub PR number or GitLab MR IID",

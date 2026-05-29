@@ -3,10 +3,12 @@ package handler
 import (
 	"fmt"
 	"net/http"
+	"sort"
 	"sync/atomic"
 	"time"
 
 	"github.com/vencil/tenant-api/internal/federation/orphan"
+	"github.com/vencil/tenant-api/internal/platform"
 )
 
 // Metrics tracks basic request counters exposed at /metrics.
@@ -115,4 +117,58 @@ func MetricsHandler(w http.ResponseWriter, r *http.Request) {
 	_, _ = fmt.Fprintf(w, "# HELP tenant_api_dev_auth_bypass_active 1 if --dev-bypass-auth is enabled (LOCAL DEV ONLY; must be 0 in production).\n")
 	_, _ = fmt.Fprintf(w, "# TYPE tenant_api_dev_auth_bypass_active gauge\n")
 	_, _ = fmt.Fprintf(w, "tenant_api_dev_auth_bypass_active %d\n", devBypass)
+
+	// #632/#645: forge circuit breaker state per provider. 0=closed (healthy),
+	// 1=half-open (probing recovery), 2=open (fast-failing — forge degraded).
+	// Empty (no line emitted) in direct write mode where no forge client exists.
+	// Alert: state == 2 for >2m ⇒ the forge (GitHub/GitLab) is down and writes
+	// are being rejected with 503 FORGE_UNAVAILABLE.
+	circuits := platform.CircuitSnapshot()
+	if len(circuits) > 0 {
+		_, _ = fmt.Fprintf(w, "# HELP tenant_api_forge_circuit_state Forge circuit breaker state (0=closed, 1=half-open, 2=open).\n")
+		_, _ = fmt.Fprintf(w, "# TYPE tenant_api_forge_circuit_state gauge\n")
+		providers := make([]string, 0, len(circuits))
+		for p := range circuits {
+			providers = append(providers, p)
+		}
+		sort.Strings(providers) // deterministic exposition order
+		for _, provider := range providers {
+			_, _ = fmt.Fprintf(w, "tenant_api_forge_circuit_state{provider=%q} %d\n",
+				provider, circuitStateValue(circuits[provider]))
+		}
+	}
+
+	// #646: count of tracked PRs/MRs in merge conflict at the last tracker
+	// sync, per provider. Near-zero by construction (see platform
+	// MergeableConflict docs); non-zero ⇒ an out-of-band edit broke a
+	// tenant-api PR. Empty in direct write mode (no tracker).
+	conflicts := platform.ConflictSnapshot()
+	if len(conflicts) > 0 {
+		_, _ = fmt.Fprintf(w, "# HELP tenant_api_forge_pr_conflicts Tracked PRs/MRs in merge conflict at the last tracker sync.\n")
+		_, _ = fmt.Fprintf(w, "# TYPE tenant_api_forge_pr_conflicts gauge\n")
+		cprov := make([]string, 0, len(conflicts))
+		for p := range conflicts {
+			cprov = append(cprov, p)
+		}
+		sort.Strings(cprov)
+		for _, provider := range cprov {
+			_, _ = fmt.Fprintf(w, "tenant_api_forge_pr_conflicts{provider=%q} %d\n", provider, conflicts[provider])
+		}
+	}
+}
+
+// circuitStateValue maps the gobreaker state string to the gauge encoding.
+// Unknown strings map to -1 so a future gobreaker rename surfaces as an
+// obviously-wrong value rather than silently looking healthy.
+func circuitStateValue(state string) int {
+	switch state {
+	case "closed":
+		return 0
+	case "half-open":
+		return 1
+	case "open":
+		return 2
+	default:
+		return -1
+	}
 }

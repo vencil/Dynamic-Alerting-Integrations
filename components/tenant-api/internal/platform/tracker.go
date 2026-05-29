@@ -131,7 +131,21 @@ func (t *PollingTracker) Sync() {
 	}
 
 	byTenant := make(map[string]PRInfo, len(prs))
+	conflicts := 0
 	for _, pr := range prs {
+		// #646: surface any tracked PR/MR that the forge reports as in
+		// conflict. This is near-impossible by construction (one PR per tenant
+		// via ClaimTenant dedup, unique {tenantID}.yaml files; shared files are
+		// direct-commit, never PRs), so a conflict here means an out-of-band
+		// edit (manual PR commit, base-branch force-push) — worth a loud log.
+		// GitHub PRs are always MergeableUnknown (list API omits it), so in
+		// practice only GitLab MRs can raise this.
+		if pr.Mergeable == MergeableConflict {
+			conflicts++
+			slog.Warn("forge PR/MR in merge conflict",
+				"provider", t.provider, "tenant", pr.TenantID,
+				"number", pr.Number, "url", pr.WebURL)
+		}
 		if pr.TenantID == "" {
 			continue
 		}
@@ -148,7 +162,8 @@ func (t *PollingTracker) Sync() {
 	t.lastSync = t.clock.Now()
 	t.mu.Unlock()
 
-	slog.Info("tracker synced", "provider", t.provider, "pending", len(prs))
+	setConflictCount(t.provider, conflicts)
+	slog.Info("tracker synced", "provider", t.provider, "pending", len(prs), "conflicts", conflicts)
 }
 
 // RefreshNow forces an out-of-cadence Sync, bounded by ctx (#644). Used by the
