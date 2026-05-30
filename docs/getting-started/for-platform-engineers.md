@@ -82,6 +82,33 @@ kubectl get configmap -n monitoring | grep prometheus-rules
 
 > 💡 **互動工具** — 不確定需要哪些 Rule Pack？用 [Rule Pack Selector](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/rule-pack-selector.jsx) 互動選取。想估算叢集資源需求？試試 [Capacity Planner](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/capacity-planner.jsx)。不確定該選哪種架構？[Architecture Quiz](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/architecture-quiz.jsx) 幫你做決定。想在瀏覽器中體驗完整的工作流？[Platform Demo](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/platform-demo.jsx) 展示 scaffold → validate → deploy。
 
+### 部署 tenant-api + da-portal（Tenant Manager）
+
+> ⚠️ **所有 component chart 的 image 預設都不是可拉取的 published image**（threshold-exporter `:dev` + `pullPolicy: Never`；tenant-api `:2.7.0`；da-portal `:2.8.0`，後兩者 ghcr 上不存在 / 缺 `v` 前綴）—— 直接 `helm install ./helm/<chart>/` 會 **ImagePull 失敗**。正式部署一律以 `--set image.tag=v2.8.0` 指向 published tag。
+
+**tenant-api**（file-based 設定 API，commit-on-write）：
+
+```bash
+helm install tenant-api ./helm/tenant-api/ -n monitoring --set image.tag=v2.8.0
+```
+
+需要：
+- **身分**：chart 預設帶 oauth2-proxy sidecar（`oauth2Proxy.enabled=true`，provider github），須先建好 `oauth2-proxy-secrets`（見 chart 的 `secret-oauth2proxy.yaml` 模板）。production 由 oauth2-proxy 注入 `X-Forwarded-Email`；本機 dev 才用 `--dev-bypass-auth`（[ADR-022](../adr/022-dev-auth-bypass-four-layer-containment.md)，**不在 published image**）。缺正確 RBAC 時 `/api/v1/me` 回 403（正常 deny）。
+- **conf.d 來源**：`gitRepoUrl` 指向放 conf.d 的 git repo（init container clone）；留空則 conf.d 為空、`_rbac.yaml` 由 configmap 掛 `/etc/rbac`。
+- **寫回**：PR/MR 模式（`--write-mode pr-github` / `pr-gitlab`，[ADR-011](../adr/011-pr-based-write-back.md)）；single-writer 約束需 `replicaCount=1`。
+
+**da-portal**（Tenant Manager UI）：
+
+```bash
+helm install da-portal ./helm/da-portal/ -n monitoring --set image.tag=v2.8.0
+```
+
+需要：
+- **oauth2-proxy 必備**：portal nginx 把 `:80 → oauth2-proxy:4180`，**關掉 oauth2-proxy 會 CrashLoopBackOff**（它是 auth 前端）。
+- **後端**：`config.tenantApiUrl` 指向 tenant-api Service（預設 `http://tenant-api.monitoring.svc.cluster.local:8080`）。
+
+> 一鍵本機體驗（不需 oauth2-proxy / git repo；dev-bypass + 從源碼 build tenant-api）見 [try-local](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/try-local/README.md)。
+
 ## 常見操作
 
 ### 管理全局預設值

@@ -80,6 +80,33 @@ for f in k8s/03-monitoring/*.yaml; do kubectl apply -f "$f"; done
 kubectl get configmap -n monitoring | grep prometheus-rules
 ```
 
+### Deploy tenant-api + da-portal (Tenant Manager)
+
+> ⚠️ **None of the component charts default to a pullable published image** (threshold-exporter `:dev` + `pullPolicy: Never`; tenant-api `:2.7.0`; da-portal `:2.8.0` — the latter two don't exist on ghcr / lack the `v` prefix) — a plain `helm install ./helm/<chart>/` **ImagePull-fails**. A real deploy must point at the published tag with `--set image.tag=v2.8.0`.
+
+**tenant-api** (file-based config API, commit-on-write):
+
+```bash
+helm install tenant-api ./helm/tenant-api/ -n monitoring --set image.tag=v2.8.0
+```
+
+Requires:
+- **Identity**: the chart ships an oauth2-proxy sidecar (`oauth2Proxy.enabled=true`, provider github); pre-create `oauth2-proxy-secrets` (see the chart's `secret-oauth2proxy.yaml` template). Production injects `X-Forwarded-Email` via oauth2-proxy; `--dev-bypass-auth` is local-dev only ([ADR-022](../adr/022-dev-auth-bypass-four-layer-containment.md), **not in the published image**). Without proper RBAC, `/api/v1/me` returns 403 (a correct deny).
+- **conf.d source**: `gitRepoUrl` points at a git repo holding conf.d (an init container clones it); leave empty for an empty conf.d. `_rbac.yaml` is mounted at `/etc/rbac` from a ConfigMap.
+- **Write-back**: PR/MR mode (`--write-mode pr-github` / `pr-gitlab`, [ADR-011](../adr/011-pr-based-write-back.en.md)); the single-writer invariant needs `replicaCount=1`.
+
+**da-portal** (Tenant Manager UI):
+
+```bash
+helm install da-portal ./helm/da-portal/ -n monitoring --set image.tag=v2.8.0
+```
+
+Requires:
+- **oauth2-proxy is mandatory**: the portal nginx routes `:80 → oauth2-proxy:4180`, so **disabling oauth2-proxy CrashLoopBackOffs** the pod (it is the auth front).
+- **Backend**: `config.tenantApiUrl` points at the tenant-api Service (default `http://tenant-api.monitoring.svc.cluster.local:8080`).
+
+> For a one-command local trial (no oauth2-proxy / git repo; dev-bypass + tenant-api built from source) see [try-local](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/try-local/README.md).
+
 ## Common Operations
 
 ### Managing Global Defaults
