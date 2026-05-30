@@ -149,6 +149,15 @@ SOT 在 [`dx-tooling-backlog.md`](dx-tooling-backlog.md)。
 | TRK-314 | [#595](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/595) | Container SAST Layer 4 stub + CI integration + branch protection | [#448](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/448) |
 | TRK-315 | [#596](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/596) | Container SAST — hybrid-policy codify + consolidated baseline + epic closure | [#448](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/448) |
 | TRK-316 | [#609](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/609) | Tenant Log Query Federation — authz-plane-only, ingestion-decoupled（[ADR-021](../adr/021-tenant-log-query-federation.md) 實作 epic, Phase 1 b → v2.10.0） | — |
+| TRK-317 | [#670](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/670) | [Epic] GitOps 寫入平面 resilience hardening（ADR-023，PR [#669](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/669)） | — |
+| TRK-318 | [#671](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/671) | WritePR 本地 base stale → 共享檔 silent data loss（鎖內 fetch 方案甲） | TRK-317 |
+| TRK-319 | [#672](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/672) | Circuit Breaker GitHub secondary-rate-limit 403 盲點（`isForgeDegradation` 只判 5xx） | TRK-317 |
+| TRK-320 | [#673](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/673) | 寫入鎖 load-shedding semaphore + context-aware 取得（消孤兒寫入） | TRK-317 |
+| TRK-321 | [#674](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/674) | SSE sync-on-reconnect 前端契約（at-most-once 廣播缺口；Portal track, deferred） | — |
+| TRK-322 | [#675](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/675) | SIGTERM 優雅關機 SSE shutdown 廣播（reconnect storm；Portal track, deferred） | — |
+| TRK-323 | [#676](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/676) | （wontfix / not planned）special-file 左移驗證 — da-guard CI gate + handler 已覆蓋 | — |
+| TRK-324 | [#677](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/677) | 幽靈副本：滾動更新交疊多寫者（Recreate now-fix / Lease deferred） | TRK-317 |
+| TRK-325 | [#678](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/678) | 讀寫拆分部署（CQRS）+ read-only enforcement 模式（deferred） | TRK-317 |
 
 ## 不在 mapping 範圍
 
