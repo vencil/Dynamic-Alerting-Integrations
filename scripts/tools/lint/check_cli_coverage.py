@@ -25,6 +25,15 @@ from pathlib import Path
 
 from _lint_helpers import parse_command_map_keys, REPO_ROOT, ENTRYPOINT_PATH
 
+# Make stdout tolerate non-ASCII (the ⊘ warning glyph) on Windows shells
+# (cp950, cp1252) so a Windows-host dev running this guard gets a report
+# instead of a UnicodeEncodeError crash. CI (utf-8) is unaffected.
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, OSError):
+        pass
+
 CHEAT_SHEET_ZH = REPO_ROOT / "docs" / "cheat-sheet.md"
 CHEAT_SHEET_EN = REPO_ROOT / "docs" / "cheat-sheet.en.md"
 CLI_REF_ZH = REPO_ROOT / "docs" / "cli-reference.md"
