@@ -2,7 +2,7 @@
 title: "ADR-024: Version-Aware Threshold — Declarative Cutover via the Existing Dimensional `version` Label"
 tags: [adr, threshold-exporter, rule-pack, alerting, dimensional-metric, gitops]
 audience: [platform-engineers, contributors, sre]
-version: v2.9.0
+version: v2.8.1
 lang: en
 ---
 
