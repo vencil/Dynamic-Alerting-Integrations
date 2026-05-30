@@ -38,7 +38,11 @@ The platform supports two deployment paths. Not sure which to choose? See the [D
 | **Path A: ConfigMap** | Any Prometheus environment, non-K8s | This guide (below) |
 | **Path B: Operator CRD** | kube-prometheus-stack installed | [Operator Integration Guide](../integration/prometheus-operator-integration.md) |
 
-## 30-Second Quick Deploy
+## Deploy to Kubernetes (Helm)
+
+> **Prerequisites**: a K8s cluster + `helm` + `kubectl` (examples use the `monitoring` namespace).
+>
+> ⚠️ **None of the 3 component charts default to a pullable published image** — threshold-exporter `:dev` (+ `pullPolicy: Never`, repo lacks the `ghcr.io/vencil/` prefix), tenant-api `:2.7.0`, da-portal `:2.8.0` (no `v`). A plain `helm install ./helm/<chart>/` **ImagePull-fails**; each install below carries a published-image override. The chart-default fix itself is tracked in [#682](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/682).
 
 Minimal viable platform config:
 
@@ -55,9 +59,7 @@ defaults:
 
 ```bash
 # threshold-exporter ships as a Helm chart at helm/threshold-exporter/
-# ⚠️ the chart defaults to a LOCAL-DEV image (threshold-exporter:dev +
-#    pullPolicy: Never, for `kind load docker-image`); a real deploy must point
-#    at the published image, otherwise the pod ErrImageNeverPulls:
+# (image-override rationale: see the ⚠️ at the top of this section)
 helm install threshold-exporter ./helm/threshold-exporter/ \
   -n monitoring --create-namespace \
   --set image.repository=ghcr.io/vencil/threshold-exporter \
@@ -79,6 +81,33 @@ for f in k8s/03-monitoring/*.yaml; do kubectl apply -f "$f"; done
 # Confirm volume section in k8s/03-monitoring/deployment-prometheus.yaml
 kubectl get configmap -n monitoring | grep prometheus-rules
 ```
+
+### Deploy tenant-api + da-portal (Tenant Manager)
+
+> What these components **are** (RBAC / PR write-back / audit) is in [§Self-Service Portal (tenant-api)](#self-service-portal-tenant-api) below; the image-default trap is in the ⚠️ at the top of this section.
+
+**tenant-api** (file-based config API, commit-on-write):
+
+```bash
+helm install tenant-api ./helm/tenant-api/ -n monitoring --set image.tag=v2.8.0
+```
+
+Requires:
+- **Identity**: the chart ships an oauth2-proxy sidecar (`oauth2Proxy.enabled=true`, provider github); pre-create `oauth2-proxy-secrets` (see the chart's `secret-oauth2proxy.yaml` template). Production injects `X-Forwarded-Email` via oauth2-proxy; `--dev-bypass-auth` is local-dev only ([ADR-022](../adr/022-dev-auth-bypass-four-layer-containment.md), **not in the published image**). Without proper RBAC, `/api/v1/me` returns 403 (a correct deny).
+- **conf.d source**: `gitRepoUrl` points at a git repo holding conf.d (an init container clones it); leave empty for an empty conf.d. `_rbac.yaml` is mounted at `/etc/rbac` from a ConfigMap.
+- **Write-back**: PR/MR mode (`--write-mode pr-github` / `pr-gitlab`, [ADR-011](../adr/011-pr-based-write-back.en.md)); the single-writer invariant needs `replicaCount=1`.
+
+**da-portal** (Tenant Manager UI):
+
+```bash
+helm install da-portal ./helm/da-portal/ -n monitoring --set image.tag=v2.8.0
+```
+
+Requires:
+- **oauth2-proxy is mandatory**: the portal nginx routes `:80 → oauth2-proxy:4180`, so **disabling oauth2-proxy CrashLoopBackOffs** the pod (it is the auth front).
+- **Backend**: `config.tenantApiUrl` points at the tenant-api Service (default `http://tenant-api.monitoring.svc.cluster.local:8080`).
+
+> For a one-command local trial (no oauth2-proxy / git repo; dev-bypass + tenant-api built from source) see [try-local](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/try-local/README.md).
 
 ## Common Operations
 
@@ -562,6 +591,8 @@ Prometheus's `/-/reload` and Alertmanager's `/-/reload` are HTTP POST endpoints 
 **Production recommendation:** Use the NetworkPolicy from the "Lifecycle Endpoint Protection" section above to restrict access. Ensure Prometheus and Alertmanager use ClusterIP Services (not NodePort/LoadBalancer), reachable only within the cluster.
 
 ## Self-Service Portal (tenant-api)
+
+> **How to deploy** it is in [§Deploy tenant-api + da-portal](#deploy-tenant-api-da-portal-tenant-manager) above.
 
 The platform provides a Web UI (tenant-manager) for Domain Experts to self-manage tenant configurations without editing YAML directly:
 
