@@ -612,6 +612,14 @@ platform-data: ## 產生 docs/assets/platform-data.json 與 Tenant Metadata
 	@GIT_COMMIT=$$(git rev-parse --short HEAD 2>/dev/null || echo "unknown") \
 	 python3 ./scripts/tools/dx/generate_tenant_metadata.py --commit $$GIT_COMMIT
 
+.PHONY: rulepack-configmaps
+rulepack-configmaps: ## 從 rule-packs/ 重生 k8s/03-monitoring/configmap-rules-*.yaml（ADR-024 PR3-pre-2）
+	@python3 ./scripts/tools/dx/generate_rulepack_configmaps.py
+
+.PHONY: rulepack-configmaps-check
+rulepack-configmaps-check: ## 驗 configmap 副本與 rule-packs/ 源語意一致（drift guard）
+	@python3 ./scripts/tools/dx/generate_rulepack_configmaps.py --check
+
 .PHONY: jsx-extract
 jsx-extract: ## 拆 JSX dep（PR-2d pattern）— 用法：make jsx-extract KIND=hook NAME=useFoo PARENT=tenant-manager [SYMBOLS=A,B] [DRY_RUN=1] [FORCE=1]
 	@if [ -z "$(KIND)" ] || [ -z "$(NAME)" ] || [ -z "$(PARENT)" ]; then \
