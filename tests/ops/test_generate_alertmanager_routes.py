@@ -591,6 +591,43 @@ class TestValidateTenantKeys:
         assert warnings == []
 
 
+class TestValidateVersionLabel:
+    """ADR-024 OQ-6 dimensional `version` label guard (Python side of the
+    雙語 da-guard; mirrors Go config.validateVersionLabel)."""
+
+    _DEFAULTS = {"container_cpu", "container_memory", "redis_memory"}
+
+    def _warn(self, key):
+        return "\n".join(validate_tenant_keys("t", {key}, self._DEFAULTS))
+
+    def test_valid_pilot_version_no_warning(self):
+        assert validate_tenant_keys("t", {'container_cpu{version="v2"}'}, self._DEFAULTS) == []
+        assert validate_tenant_keys("t", {'container_memory{version="v2-rc1"}'}, self._DEFAULTS) == []
+
+    def test_empty_version_warns(self):
+        assert "empty version" in self._warn('container_cpu{version=""}')
+
+    def test_reserved_default_warns(self):
+        assert "reserved" in self._warn('container_cpu{version="default"}')
+
+    def test_bad_charset_warns(self):
+        assert "violates" in self._warn('container_cpu{version="V2.0"}')
+
+    def test_non_pilot_metric_warns(self):
+        assert "non-pilot" in self._warn('redis_memory{version="v2"}')
+
+    def test_regex_matcher_warns(self):
+        assert "regex version matcher" in self._warn('container_cpu{version=~"v.*"}')
+
+    def test_non_version_dimensional_unaffected(self):
+        assert validate_tenant_keys("t", {'container_cpu{env="prod"}'}, self._DEFAULTS) == []
+
+    def test_version_substring_not_mismatched(self):
+        # `app_version` must NOT be treated as the `version` label; a non-pilot
+        # base would otherwise spuriously emit a "non-pilot" warning.
+        assert validate_tenant_keys("t", {'redis_memory{app_version="v2"}'}, self._DEFAULTS) == []
+
+
 # ============================================================
 # generate_routes (整合測試)
 # ============================================================

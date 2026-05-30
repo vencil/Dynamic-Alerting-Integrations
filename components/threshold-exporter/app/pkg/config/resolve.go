@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"log"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -10,6 +11,28 @@ import (
 
 	"gopkg.in/yaml.v3"
 )
+
+// --- ADR-024 Version-Aware Threshold: dimensional `version` label guard ---
+//
+// versionLabelPattern is the Phase-1 baseline charset for a `version`
+// dimensional label value. It is INTENTIONALLY pilot-calibratable (ADR-024
+// OQ-6): real app.kubernetes.io/version strings observed in the pilot may
+// carry uppercase letters or long Git SHAs, in which case this is widened
+// after observation. Kept lowercase-anchored for now to stay conservative.
+const versionLabelPattern = `^[a-z0-9][a-z0-9._-]*$`
+
+var versionLabelRe = regexp.MustCompile(versionLabelPattern)
+
+// pilotVersionMetrics is the Phase-1 allow-list of "<component>/<metric>"
+// identities on which a `version` dimensional label is in scope (ADR-024
+// OQ-6 component scoping = rule-pack-kubernetes container cpu/memory). A
+// version label on any other metric risks cross-pack double-count
+// (a non-pilot pack's `sum by(tenant)` would fan across versions) and is
+// flagged so the guard can reject it before it reaches a shared series.
+var pilotVersionMetrics = map[string]bool{
+	"container/cpu":    true,
+	"container/memory": true,
+}
 
 // ResolveStats carries side-channel observability data for ResolveAtWithStats
 // (issue #652). The runtime per-tenant cardinality cap at resolve.go silently
@@ -698,8 +721,11 @@ func (c *ThresholdConfig) ValidateTenantKeys() []string {
 
 			// Dimensional key with {labels}
 			if strings.Contains(key, "{") {
-				baseKey, _, _ := parseKeyWithLabels(key)
+				baseKey, customLabels, regexLabels := parseKeyWithLabels(key)
 				if _, exists := c.Defaults[baseKey]; exists {
+					// ADR-024 OQ-6: validate any `version` dimensional label.
+					warnings = append(warnings,
+						validateVersionLabel(tenant, key, baseKey, customLabels, regexLabels)...)
 					continue
 				}
 				// Unknown base key in dimensional key
@@ -733,6 +759,73 @@ func (c *ThresholdConfig) ValidateTenantKeys() []string {
 	}
 
 	return warnings
+}
+
+// validateVersionLabel enforces the ADR-024 OQ-6 rules on a dimensional
+// `version` label found in a tenant key: a documented charset, no reserved
+// values (empty / literal "default"), Phase-1 component scoping, and exact
+// (non-regex) selectors. It returns advisory warnings — consistent with
+// ValidateTenantKeys' contract; the CI da-guard escalates these to a hard
+// reject (e.g. via --warn-as-error / its Python schema gate) so a bad
+// version label never reaches the shared user_threshold series.
+//
+// The Go side is intentionally observability-grade: the exporter logs these
+// at config load so operators see violations even if a tenant bypasses CI.
+func validateVersionLabel(tenant, key, baseKey string, custom, regex map[string]string) []string {
+	exact, hasExact := custom["version"]
+	pattern, hasRegex := regex["version"]
+	if !hasExact && !hasRegex {
+		return nil // no version label on this key — nothing to validate
+	}
+
+	var w []string
+
+	// Component scope: a version label is only in scope for piloted metrics.
+	component, metric := parseMetricKey(baseKey)
+	if !pilotVersionMetrics[component+"/"+metric] {
+		w = append(w, fmt.Sprintf(
+			"WARN: tenant=%s: version label on non-pilot metric %q in key %q — "+
+				"ADR-024 Phase 1 only permits %s; a version label here risks "+
+				"cross-pack double-count", tenant, baseKey, key, pilotVersionMetricList()))
+	}
+
+	if hasRegex {
+		// Phase 1 expects exact version="..." selectors; a regex matcher on
+		// version is almost certainly a mistake and defeats per-version join.
+		w = append(w, fmt.Sprintf(
+			"WARN: tenant=%s: regex version matcher %q in key %q — ADR-024 "+
+				"Phase 1 expects an exact version=\"...\" selector", tenant, pattern, key))
+	}
+
+	if hasExact {
+		switch {
+		case exact == "":
+			w = append(w, fmt.Sprintf(
+				"WARN: tenant=%s: empty version label in key %q (ADR-024 OQ-6 "+
+					"forbids empty — it collides with the unversioned baseline)", tenant, key))
+		case exact == "default":
+			w = append(w, fmt.Sprintf(
+				"WARN: tenant=%s: literal version=\"default\" in key %q is reserved "+
+					"for the normalize-layer fallback (ADR-024 OQ-6)", tenant, key))
+		case !versionLabelRe.MatchString(exact):
+			w = append(w, fmt.Sprintf(
+				"WARN: tenant=%s: version %q in key %q violates %s "+
+					"(ADR-024 OQ-6; pilot-calibratable)", tenant, exact, key, versionLabelPattern))
+		}
+	}
+
+	return w
+}
+
+// pilotVersionMetricList renders the Phase-1 allow-list deterministically for
+// warning messages.
+func pilotVersionMetricList() string {
+	keys := make([]string, 0, len(pilotVersionMetrics))
+	for k := range pilotVersionMetrics {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return strings.Join(keys, ", ")
 }
 
 // ApplyProfiles expands profile values into tenant overrides (fill-in, not overwrite).

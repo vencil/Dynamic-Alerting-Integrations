@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import fnmatch
 import os
+import re
 import sys
 from pathlib import Path
 from urllib.parse import urlparse
@@ -97,6 +98,71 @@ def load_policy(policy_path: str | None) -> list[str]:
     return [d for d in domains if isinstance(d, str)]
 
 
+# --- ADR-024 Version-Aware Threshold: dimensional `version` label guard ---
+# Python mirror of Go config.validateVersionLabel (pkg/config/resolve.go).
+# Both sides MUST stay in sync (the ADR's "雙語 da-guard"): the Go side logs
+# these at exporter config-load; this Python side surfaces them as da-guard
+# schema warnings (escalatable to a reject in CI).
+#
+# VERSION_LABEL_PATTERN is the Phase-1 baseline and is pilot-calibratable
+# (OQ-6): real app.kubernetes.io/version strings may carry uppercase / long
+# Git SHAs — widen after pilot observation.
+VERSION_LABEL_PATTERN = r"^[a-z0-9][a-z0-9._-]*$"
+_VERSION_LABEL_RE = re.compile(VERSION_LABEL_PATTERN)
+# Captures the version label inside a dimensional key's {...}: op is "=~"
+# (regex) or "=" (exact); group 2 is the quoted value. The `[{,]` anchor
+# requires `version` to be a real label name (preceded by `{` or a `,`
+# separator), so a substring like `app_version="v2"` is NOT mis-matched.
+#
+# Known limitation (Gemini adversarial review, #691): this regex is not a
+# full PromQL label-set parser, so it MAY false-match if the literal
+# `,version="` appears INSIDE another label's quoted string value (e.g.
+# `foo_metric{query="...,version=\"x\""}`). The Go side (parseKeyWithLabels,
+# a real label-map parse) is immune. Probability is ~0 for threshold keys
+# (their values are bare numbers / simple strings, not embedded PromQL), so
+# we accept it rather than pull in a parser; this comment is the deliberate
+# record that the boundary is understood.
+_VERSION_IN_KEY_RE = re.compile(r'[{,]\s*version\s*(=~|=)\s*"([^"]*)"')
+# Phase-1 component scope (mirrors Go pilotVersionMetrics = container cpu/memory;
+# base metric keys map 1:1 to those component/metric pairs).
+PILOT_VERSION_BASE_KEYS = {"container_cpu", "container_memory"}
+
+
+def _validate_version_label(tenant: str, key: str, base: str) -> list[str]:
+    """ADR-024 OQ-6 checks on a dimensional `version` label (advisory)."""
+    m = _VERSION_IN_KEY_RE.search(key)
+    if not m:
+        return []  # no version label on this key
+    op, value = m.group(1), m.group(2)
+    out: list[str] = []
+
+    if base not in PILOT_VERSION_BASE_KEYS:
+        allowed = ", ".join(sorted(PILOT_VERSION_BASE_KEYS))
+        out.append(
+            f"  WARN: {tenant}: version label on non-pilot metric '{base}' in key "
+            f"'{key}' — ADR-024 Phase 1 only permits {allowed}; risks cross-pack "
+            f"double-count")
+
+    if op == "=~":
+        out.append(
+            f"  WARN: {tenant}: regex version matcher in key '{key}' — ADR-024 "
+            f"Phase 1 expects an exact version=\"...\" selector")
+    elif value == "":
+        out.append(
+            f"  WARN: {tenant}: empty version label in key '{key}' (ADR-024 OQ-6 "
+            f"forbids empty — it collides with the unversioned baseline)")
+    elif value == "default":
+        out.append(
+            f"  WARN: {tenant}: literal version=\"default\" in key '{key}' is "
+            f"reserved for the normalize-layer fallback (ADR-024 OQ-6)")
+    elif not _VERSION_LABEL_RE.match(value):
+        out.append(
+            f"  WARN: {tenant}: version '{value}' in key '{key}' violates "
+            f"{VERSION_LABEL_PATTERN} (ADR-024 OQ-6; pilot-calibratable)")
+
+    return out
+
+
 def validate_tenant_keys(tenant: str, keys: set[str], defaults_keys: set[str]) -> list[str]:
     """Check tenant config keys for typos / unknown reserved keys.
 
@@ -119,6 +185,8 @@ def validate_tenant_keys(tenant: str, keys: set[str], defaults_keys: set[str]) -
         if "{" in key:
             base = key.split("{")[0]
             if base in defaults_keys:
+                # ADR-024 OQ-6: validate any `version` dimensional label.
+                warnings.extend(_validate_version_label(tenant, key, base))
                 continue
         # Unknown key
         if key.startswith("_"):
