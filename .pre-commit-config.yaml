@@ -701,6 +701,19 @@ repos:
         # Per-line escape via `<!-- hardcode-tenant: ignore -->` for legitimate
         # exceptions / illustrative quotes.
 
+      - id: ha-max-threshold-aggregation
+        name: "HA invariant: user_threshold must aggregate with max not sum (high-availability.md §4.3)"
+        entry: python3 -X utf8 scripts/tools/lint/check_ha_threshold_aggregation.py --ci
+        language: python
+        additional_dependencies: ['pyyaml']
+        pass_filenames: false
+        files: ^(rule-packs/|operator-manifests/|k8s/03-monitoring/configmap-rules-).*\.ya?ml$
+        # FATAL: a `sum by(...)(user_threshold)` DOUBLES the threshold under the
+        # default HA topology (replicaCount=2, no leader-election) → alert never
+        # fires. Checks the OPERATOR only (must be max); does NOT constrain by()
+        # labels so dimensional thresholds (env/version/tablespace_re) keep their
+        # dimensions. Caught a ~2-month silent prod drift in 4 packs (ADR-024).
+
       - id: changelog-no-tbd-check
         name: Detect TBD/TODO placeholders in CHANGELOG (Self-review Gap A.c)
         entry: python3 -X utf8 scripts/tools/lint/check_changelog_no_tbd.py --ci
