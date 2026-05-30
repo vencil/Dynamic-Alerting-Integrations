@@ -2,7 +2,7 @@
 title: "ADR-024: Version-Aware Threshold — 透過既有 Dimensional version Label 達成 Declarative Cutover"
 tags: [adr, threshold-exporter, rule-pack, alerting, dimensional-metric, gitops]
 audience: [platform-engineers, contributors, sre]
-version: v2.9.0
+version: v2.8.1
 lang: zh
 id: ADR-024
 tracking_kind: adr
@@ -16,7 +16,7 @@ updated_at: 2026-05-30
 
 ## 狀態
 
-🟡 **Proposed**（草案，2026-05-30）。Tracker：[#423](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/423)（`rfc` + `epic`）。本 ADR 是 #423 §10「Future ADR」的草稿，把 issue 三輪設計討論收斂為 locked decision，於 v2.9.0 GA 時定稿（status → accepted）。
+🟡 **Proposed**（草案，2026-05-30）。Tracker：[#423](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/423)（`rfc` + `epic`）。本 ADR 是 #423 §10「Future ADR」的草稿，把 issue 三輪設計討論收斂為 locked decision，在 v2.9.0 GA 時定稿（status → accepted）。
 
 > **與既有機制的關係**：本 ADR 不取代、不修改 [`config-driven.md` §2.6 排程式閾值（Scheduled Thresholds）](../design/config-driven.md)。兩者是並存的不同機制，界線見 §2。
 

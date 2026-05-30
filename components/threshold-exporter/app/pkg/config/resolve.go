@@ -238,6 +238,21 @@ func (c *ThresholdConfig) ResolveAtWithStats(now time.Time) ([]ResolvedThreshold
 		overflow := 0
 		if limit > 0 && count > limit {
 			overflow = count - limit
+			// ADR-024 AC-7: deterministic truncation. The slice order above
+			// reflects Go map iteration over Defaults/overrides, which is
+			// randomized per process — so without sorting, an over-cap tenant
+			// would have a DIFFERENT subset truncated on every scrape, making
+			// the surviving alert series flap in and out (Prometheus alert
+			// flapping + PagerDuty repeat-fire). Sort this tenant's segment by
+			// a stable identity key BEFORE truncating: unversioned / default
+			// thresholds are protected (sort first, always kept); explicitly
+			// versioned ones are dropped from the lexicographic tail, so the
+			// dropped version is the same on every scrape (stable disappearance
+			// → fires the over-limit gauge predictably, never flaps).
+			seg := result[startIdx:]
+			sort.SliceStable(seg, func(i, j int) bool {
+				return truncationSortKey(seg[i]) < truncationSortKey(seg[j])
+			})
 			log.Printf("ERROR: tenant=%s produced %d metrics (limit=%d), truncating to limit", tenant, count, limit)
 			result = result[:startIdx+limit]
 		}
@@ -245,6 +260,63 @@ func (c *ThresholdConfig) ResolveAtWithStats(now time.Time) ([]ResolvedThreshold
 	}
 
 	return result, ResolveStats{PerTenantOverLimit: perTenantOverLimit}
+}
+
+// truncationSortKey produces a deterministic ordering key for one tenant's
+// resolved thresholds, used to make the per-tenant cardinality-cap truncation
+// in ResolveAtWithStats stable across scrapes (ADR-024 AC-7).
+//
+// Two-tier contract:
+//   - Tier "0" (sorts first → protected, kept under the cap): thresholds with
+//     no `version` dimensional label, or version="default" — the baseline that
+//     must survive truncation so the tenant never loses its un-versioned alert.
+//   - Tier "1" (sorts last → dropped from the lexicographic tail first):
+//     explicitly versioned thresholds (e.g. {version="v2"}). Ordering by the
+//     canonical identity below guarantees the SAME version is dropped on every
+//     scrape when a tenant is over the cap.
+//
+// The remainder of the key (component, metric, severity, sorted dimensional
+// labels) makes the order total and stable so the sort result is identical
+// across processes regardless of map iteration order.
+func truncationSortKey(r ResolvedThreshold) string {
+	version := r.CustomLabels["version"]
+	if version == "" {
+		version = r.RegexLabels["version"]
+	}
+	tier := "0"
+	if version != "" && version != "default" {
+		tier = "1"
+	}
+
+	var b strings.Builder
+	b.Grow(64) // pre-size: tier+component+metric+severity+labels rarely exceeds this
+	b.WriteString(tier)
+	b.WriteByte(0)
+	b.WriteString(r.Component)
+	b.WriteByte(0)
+	b.WriteString(r.Metric)
+	b.WriteByte(0)
+	b.WriteString(r.Severity)
+	b.WriteByte(0)
+	b.WriteString(canonicalLabelKey(r.CustomLabels, r.RegexLabels))
+	return b.String()
+}
+
+// canonicalLabelKey renders dimensional labels as a deterministic, sorted
+// string (exact labels as "k=v", regex labels as "k=~v") joined by commas.
+func canonicalLabelKey(custom, regex map[string]string) string {
+	if len(custom) == 0 && len(regex) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(custom)+len(regex))
+	for k, v := range custom {
+		parts = append(parts, k+"="+v)
+	}
+	for k, v := range regex {
+		parts = append(parts, k+"=~"+v)
+	}
+	sort.Strings(parts)
+	return strings.Join(parts, ",")
 }
 
 // ResolveStateFilters resolves state-based monitoring filters for all tenants.
