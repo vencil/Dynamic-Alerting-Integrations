@@ -436,6 +436,64 @@ def validate_pass2_trailer_placement(all_lines: list[str]) -> list[str]:
     ]
 
 
+def check_commit_scope_range(base_ref: str = "origin/main") -> "CheckResult":
+    """Validate that every commit header in <base_ref>..HEAD passes the
+    commitlint type/scope enum — locally, BEFORE the push that creates a PR.
+
+    Why this is a preflight check (not just a commit-msg hook): the
+    commit-msg hook only fires for host-side `git commit`. Committing inside
+    the dev container skips pre-commit entirely, so a bad scope (e.g.
+    `fix(threshold-exporter)` when the enum only allows `exporter`) reaches
+    the branch unvalidated. commitlint then validates the PR *title* on CI;
+    with `gh pr create --fill` the title == the commit subject, so the bad
+    scope surfaces only on the PR's FIRST CI run. Once a PR exists with a
+    red hard-required check, the preflight-marker pre-push gate can no longer
+    be satisfied without an owner bypass-push — the "first-CI-red deadlock"
+    (feedback_first_ci_red_push_deadlock).
+
+    Running it here makes a bad scope FAIL preflight → no marker is written
+    → require_preflight_pass.sh blocks the push → the bad commit never
+    reaches a PR. Fix the scope (amend), re-run preflight, push clean.
+    """
+    repo_root = find_repo_root()
+    r = run(["git", "log", f"{base_ref}..HEAD", "--format=%s"])
+    if r.returncode != 0:
+        return CheckResult(
+            "Commit scope", Status.WARN,
+            f"無法列出 {base_ref}..HEAD commits（base ref 不存在 / 未 fetch？）",
+        )
+    subjects = [s for s in r.stdout.splitlines() if s.strip()]
+    if not subjects:
+        return CheckResult(
+            "Commit scope", Status.SKIP, f"{base_ref}..HEAD 無 commit 可驗",
+        )
+
+    type_enum = _read_commitlint_enum(repo_root, "type-enum")
+    scope_enum = _read_commitlint_enum(repo_root, "scope-enum")
+
+    bad: List[tuple] = []
+    for subj in subjects:
+        errs = validate_conventional_header(subj, type_enum, scope_enum)
+        if errs:
+            bad.append((subj, errs))
+
+    if bad:
+        detail_lines: List[str] = []
+        for subj, errs in bad:
+            detail_lines.append(f"· {subj}")
+            detail_lines.extend(f"    {e}" for e in errs)
+        return CheckResult(
+            "Commit scope", Status.FAIL,
+            f"{len(bad)}/{len(subjects)} commit(s) 違反 commitlint type/scope enum"
+            f"（會在 PR 首次 CI 紅 → deadlock，先 amend 修好再 push）",
+            detail="\n".join(detail_lines),
+        )
+    return CheckResult(
+        "Commit scope", Status.PASS,
+        f"{len(subjects)} commit(s) type/scope 合規（{base_ref}..HEAD）",
+    )
+
+
 def check_commit_msg_file(path: Path, repo_root: Path) -> int:
     """Validate a commit-msg file (first non-comment line is the header).
 
@@ -1233,6 +1291,11 @@ def main() -> int:
 
     # 5. Scope drift (code-driven §P2 rule)
     report.add(check_scope_drift())
+
+    # 5b. Commit scope enum — pre-empt the first-CI-red deadlock (commitlint
+    # validates the PR title; with `gh pr create --fill` the title == the
+    # commit subject, and a container-side commit skips the commit-msg hook).
+    report.add(check_commit_scope_range(args.base_ref))
 
     # 6. CI status
     report.add(check_ci_status(args.pr))

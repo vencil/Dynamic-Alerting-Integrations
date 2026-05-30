@@ -525,3 +525,44 @@ class TestCheckPRMergeable:
         _stub_run_constant(monkeypatch, _cp(0, "{not json"))
         result = pp.check_pr_mergeable()
         assert result.status == pp.Status.WARN
+
+
+# ============================================================
+# check_commit_scope_range — pre-empt first-CI-red deadlock
+# ============================================================
+# Uses the REAL .commitlintrc.yaml enum (via _read_commitlint_enum) so the
+# allowed-scope set is whatever the repo actually enforces. `exporter` is a
+# valid scope; `threshold-exporter` is NOT (the exact mistake that caused the
+# #689 deadlock). git log output is stubbed via pp.run.
+class TestCheckCommitScopeRange:
+    def test_valid_scope_passes(self, monkeypatch):
+        _stub_run_constant(monkeypatch, _cp(0, "fix(exporter): foo bar\n"))
+        result = pp.check_commit_scope_range()
+        assert result.status == pp.Status.PASS
+
+    def test_invalid_scope_fails(self, monkeypatch):
+        # `threshold-exporter` is not in scope-enum → must FAIL so the
+        # preflight marker is withheld before the bad commit reaches a PR.
+        _stub_run_constant(monkeypatch, _cp(0, "fix(threshold-exporter): foo\n"))
+        result = pp.check_commit_scope_range()
+        assert result.status == pp.Status.FAIL
+        assert "threshold-exporter" in (result.detail or "")
+
+    def test_one_bad_among_many_fails(self, monkeypatch):
+        _stub_run_constant(
+            monkeypatch,
+            _cp(0, "fix(exporter): ok\nchore(bogusscope): bad\n"),
+        )
+        result = pp.check_commit_scope_range()
+        assert result.status == pp.Status.FAIL
+        assert "1/2" in result.message
+
+    def test_no_commits_skips(self, monkeypatch):
+        _stub_run_constant(monkeypatch, _cp(0, "\n"))
+        result = pp.check_commit_scope_range()
+        assert result.status == pp.Status.SKIP
+
+    def test_git_failure_warns(self, monkeypatch):
+        _stub_run_constant(monkeypatch, _cp(128, "", "fatal: bad revision"))
+        result = pp.check_commit_scope_range()
+        assert result.status == pp.Status.WARN
