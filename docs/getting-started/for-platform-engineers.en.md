@@ -38,7 +38,11 @@ The platform supports two deployment paths. Not sure which to choose? See the [D
 | **Path A: ConfigMap** | Any Prometheus environment, non-K8s | This guide (below) |
 | **Path B: Operator CRD** | kube-prometheus-stack installed | [Operator Integration Guide](../integration/prometheus-operator-integration.md) |
 
-## 30-Second Quick Deploy
+## Deploy to Kubernetes (Helm)
+
+> **Prerequisites**: a K8s cluster + `helm` + `kubectl` (examples use the `monitoring` namespace).
+>
+> ⚠️ **None of the 3 component charts default to a pullable published image** — threshold-exporter `:dev` (+ `pullPolicy: Never`, repo lacks the `ghcr.io/vencil/` prefix), tenant-api `:2.7.0`, da-portal `:2.8.0` (no `v`). A plain `helm install ./helm/<chart>/` **ImagePull-fails**; each install below carries a published-image override. The chart-default fix itself is tracked in [#682](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/682).
 
 Minimal viable platform config:
 
@@ -55,9 +59,7 @@ defaults:
 
 ```bash
 # threshold-exporter ships as a Helm chart at helm/threshold-exporter/
-# ⚠️ the chart defaults to a LOCAL-DEV image (threshold-exporter:dev +
-#    pullPolicy: Never, for `kind load docker-image`); a real deploy must point
-#    at the published image, otherwise the pod ErrImageNeverPulls:
+# (image-override rationale: see the ⚠️ at the top of this section)
 helm install threshold-exporter ./helm/threshold-exporter/ \
   -n monitoring --create-namespace \
   --set image.repository=ghcr.io/vencil/threshold-exporter \
@@ -82,7 +84,7 @@ kubectl get configmap -n monitoring | grep prometheus-rules
 
 ### Deploy tenant-api + da-portal (Tenant Manager)
 
-> ⚠️ **None of the component charts default to a pullable published image** (threshold-exporter `:dev` + `pullPolicy: Never`; tenant-api `:2.7.0`; da-portal `:2.8.0` — the latter two don't exist on ghcr / lack the `v` prefix) — a plain `helm install ./helm/<chart>/` **ImagePull-fails**. A real deploy must point at the published tag with `--set image.tag=v2.8.0`.
+> What these components **are** (RBAC / PR write-back / audit) is in [§Self-Service Portal (tenant-api)](#self-service-portal-tenant-api) below; the image-default trap is in the ⚠️ at the top of this section.
 
 **tenant-api** (file-based config API, commit-on-write):
 
@@ -589,6 +591,8 @@ Prometheus's `/-/reload` and Alertmanager's `/-/reload` are HTTP POST endpoints 
 **Production recommendation:** Use the NetworkPolicy from the "Lifecycle Endpoint Protection" section above to restrict access. Ensure Prometheus and Alertmanager use ClusterIP Services (not NodePort/LoadBalancer), reachable only within the cluster.
 
 ## Self-Service Portal (tenant-api)
+
+> **How to deploy** it is in [§Deploy tenant-api + da-portal](#deploy-tenant-api-da-portal-tenant-manager) above.
 
 The platform provides a Web UI (tenant-manager) for Domain Experts to self-manage tenant configurations without editing YAML directly:
 
