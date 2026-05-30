@@ -284,6 +284,13 @@ repos:
         files: \.(md|yaml|jsx|html)$
         additional_dependencies: ['pyyaml']
 
+      - id: doc-k8s-refs
+        name: Doc k8s manifest refs (path + workload kind)
+        entry: python3 -X utf8 scripts/tools/lint/check_doc_k8s_refs.py --ci
+        language: python
+        pass_filenames: false
+        files: ^(docs/.*\.md|k8s/.*\.ya?ml)$
+
       - id: doc-datools-cmds
         name: Doc da-tools wrapper subcommands valid
         entry: python3 -X utf8 scripts/tools/lint/check_doc_datools_cmds.py --ci
