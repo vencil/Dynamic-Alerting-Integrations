@@ -11,7 +11,8 @@ replicaCount: 1
 
 image:
   repository: ghcr.io/vencil/tenant-api
-  tag: "2.7.0"
+  # tag 留空 → template 自動推導為 v<Chart.appVersion>（= published image）。需覆寫才設此值。
+  tag: ""
   pullPolicy: IfNotPresent
 
 # oauth2-proxy sidecar configuration

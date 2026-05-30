@@ -5,7 +5,8 @@ replicaCount: 1
 
 image:
   repository: ghcr.io/vencil/da-portal
-  tag: "2.8.0"
+  # tag 留空 → template 自動推導為 v<Chart.appVersion>（= published image）。需覆寫才設此值。
+  tag: ""
   pullPolicy: IfNotPresent
 
 # Portal application settings

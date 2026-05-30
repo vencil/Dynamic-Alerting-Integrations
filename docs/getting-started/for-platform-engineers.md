@@ -42,7 +42,7 @@ lang: zh
 
 > **前置**：一個 K8s 叢集 + `helm` + `kubectl`（下例 namespace 用 `monitoring`）。
 >
-> ⚠️ **3 個 component chart 的 image 預設都不是可拉取的 published image**——threshold-exporter `:dev`（+ `pullPolicy: Never`、repository 無 `ghcr.io/vencil/` 前綴）、tenant-api `:2.7.0`、da-portal `:2.8.0`（缺 `v`）。直接 `helm install ./helm/<chart>/` 會 **ImagePull 失敗**；下方每個 install 都帶 published-image override。chart 預設本身的修正追蹤於 [#682](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/682)。
+> 3 個 component chart 的 image 預設都自動解析為 `ghcr.io/vencil/<chart>:v<appVersion>`（published、可拉取——與 release pipeline 的 digest 驗證 [#445](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/445) 同一不變式）。直接 `helm install ./helm/<chart>/` 即可；要釘特定版本才加 `--set image.tag=...`。
 
 最小可用平台配置：
 
@@ -58,15 +58,15 @@ defaults:
 ### 部署 threshold-exporter ×2 HA
 
 ```bash
-# threshold-exporter 透過 Helm chart 部署（Chart 在 helm/threshold-exporter/）
-# image override 原因見本節開頭 ⚠️：
+# threshold-exporter 透過 Helm chart 部署（Chart 在 helm/threshold-exporter/）。
+# image 預設自動解析為 ghcr.io/vencil/threshold-exporter:v<appVersion>（published、可拉取）：
 helm install threshold-exporter ./helm/threshold-exporter/ \
-  -n monitoring --create-namespace \
-  --set image.repository=ghcr.io/vencil/threshold-exporter \
-  --set image.tag=v2.8.0 --set image.pullPolicy=IfNotPresent
+  -n monitoring --create-namespace
 # 驗證副本運行
 kubectl get pod -n monitoring | grep threshold-exporter
 ```
+
+> 本機 kind 開發要用 `kind load` 載入的本地 image，改帶 `-f environments/local/threshold-exporter.yaml`（pin `:dev` + `pullPolicy: Never`）。
 
 > 客戶自帶 GitOps（Argo CD / Flux）時，把 chart path 寫入 Application/Kustomization 即可 — 不需要 raw manifests。Chart 同時是 OCI artifact (`ghcr.io/vencil/dynamic-alerting`)，airgapped 環境可走 [migration-toolkit-installation.md](../migration-toolkit-installation.md) 的 Path C。
 
@@ -86,12 +86,12 @@ kubectl get configmap -n monitoring | grep prometheus-rules
 
 ### 部署 tenant-api + da-portal（Tenant Manager）
 
-> 這兩個元件**是什麼**（RBAC / PR 寫回模式 / 審計）見下方 [§Self-Service Portal（tenant-api）](#self-service-portaltenant-api)；image 預設陷阱見本節開頭 ⚠️。
+> 這兩個元件**是什麼**（RBAC / PR 寫回模式 / 審計）見下方 [§Self-Service Portal（tenant-api）](#self-service-portaltenant-api)。
 
 **tenant-api**（file-based 設定 API，commit-on-write）：
 
 ```bash
-helm install tenant-api ./helm/tenant-api/ -n monitoring --set image.tag=v2.8.0
+helm install tenant-api ./helm/tenant-api/ -n monitoring
 ```
 
 需要：
@@ -102,7 +102,7 @@ helm install tenant-api ./helm/tenant-api/ -n monitoring --set image.tag=v2.8.0
 **da-portal**（Tenant Manager UI）：
 
 ```bash
-helm install da-portal ./helm/da-portal/ -n monitoring --set image.tag=v2.8.0
+helm install da-portal ./helm/da-portal/ -n monitoring
 ```
 
 需要：
