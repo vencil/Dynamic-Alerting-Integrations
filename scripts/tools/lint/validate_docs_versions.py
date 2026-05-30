@@ -42,6 +42,11 @@ from _version_patterns import (
     EXPORTER_VERSION_PATTERNS,
     PLATFORM_VERSION_FRONTMATTER_PATTERN,
     BARE_TAG_PATTERN,
+    TOOLS_RELEASE_TAG_PATTERN,
+    DA_BINARY_VERSION_OUTPUT_PATTERN,
+    SET_IMAGE_TAG_PATTERN,
+    VERSION_HISTORICAL_LINE_MARKERS,
+    VERSION_CURRENCY_IGNORE,
     RULE_PACK_COUNT_PATTERNS,
     TOOL_COUNT_PATTERNS,
     ADR_COUNT_PATTERNS,
@@ -331,6 +336,61 @@ def check_exporter_version(expected: str) -> List[Issue]:
                         issues.append(Issue(
                             "exporter-version", "error", str(rel), i,
                             f"{desc} {found_ver} should be {expected}",
+                        ))
+    return issues
+
+
+def check_release_tag_currency(tools_expected: str,
+                               exporter_expected: str = None) -> List[Issue]:
+    """Flag stale RELEASE-TAG version references in docs (TB-F1 class).
+
+    Covers the forms bump_docs' bold-only rewrite rule misses and no check
+    previously caught: ``tools/vX`` (TAG= vars / release download URLs),
+    ``da-* vX`` (--version expected output), and ``--set image.tag=vX``.
+    Image *tags* themselves stay with check_da_tools_version /
+    check_exporter_version. Lines citing a past version on purpose
+    (historical markers) or with an explicit per-line ignore are skipped.
+
+    Burned #141 Track B / TB-F1: stale ``tools/v2.7.0`` install examples
+    drifted because the release-tag form had no currency check.
+    """
+    skip_names = {
+        "CHANGELOG.md", "CHANGELOG.en.md",
+        "v2.5.0-v2.6.0-planning.md", "known-regressions.md",
+        # Release SOP: intentionally shows EXAMPLE tags for all 5 version
+        # lines (tools/vX, exporter/vX, portal/vX, …) to teach the tag form.
+        "github-release-playbook.md",
+    }
+    # (regex, expected_version, label_template)
+    specs = [
+        (TOOLS_RELEASE_TAG_PATTERN, tools_expected, "tools/v{found}"),
+        (DA_BINARY_VERSION_OUTPUT_PATTERN, tools_expected, "da-* v{found}"),
+    ]
+    # The --set image.tag=vX form targets the exporter chart; only check it
+    # when the exporter version resolved from its source of truth.
+    if exporter_expected:
+        specs.append(
+            (SET_IMAGE_TAG_PATTERN, exporter_expected, "--set image.tag=v{found}"))
+    markers = tuple(mk.lower() for mk in VERSION_HISTORICAL_LINE_MARKERS)
+    issues: List[Issue] = []
+    for f in _collect_scannable_files():
+        if f.name in skip_names:
+            continue
+        content = _read_cached(f)
+        for i, line in enumerate(content.splitlines(), 1):
+            low = line.lower()
+            if VERSION_CURRENCY_IGNORE in low:
+                continue
+            if any(mk in low for mk in markers):
+                continue
+            for pat, expected, label in specs:
+                for m in re.finditer(pat, line):
+                    found = m.group(1)
+                    if found != expected:
+                        rel = f.relative_to(REPO_ROOT)
+                        issues.append(Issue(
+                            "release-tag-version", "error", str(rel), i,
+                            label.format(found=found) + f" should be v{expected}",
                         ))
     return issues
 
@@ -1045,6 +1105,9 @@ def main():
         all_issues.extend(check_da_tools_version(versions["tools"]))
     if "exporter" in versions:
         all_issues.extend(check_exporter_version(versions["exporter"]))
+    if "tools" in versions:
+        all_issues.extend(check_release_tag_currency(
+            versions["tools"], versions.get("exporter")))
     if "platform" in versions:
         all_issues.extend(check_platform_version(versions["platform"]))
     all_issues.extend(check_rule_pack_counts(rule_counts))

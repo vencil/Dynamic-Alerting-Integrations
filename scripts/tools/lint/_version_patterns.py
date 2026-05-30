@@ -21,7 +21,7 @@ REPO_ROOT = SCRIPT_DIR.parent.parent.parent
 # ============================================================================
 # Source-of-truth files (paths to read version info and counts from)
 # ============================================================================
-CHART_YAML = REPO_ROOT / "components" / "threshold-exporter" / "Chart.yaml"
+CHART_YAML = REPO_ROOT / "helm" / "threshold-exporter" / "Chart.yaml"
 DA_TOOLS_VERSION = REPO_ROOT / "components" / "da-tools" / "app" / "VERSION"
 CLAUDE_MD = REPO_ROOT / "CLAUDE.md"
 RULE_PACKS_DIR = REPO_ROOT / "rule-packs"
@@ -260,3 +260,38 @@ AUTO_FIX_PATTERNS: Dict[str, Dict[str, Any]] = {
         ],
     },
 }
+
+# ============================================================================
+# Release-tag currency patterns (TB-F1 class — RELEASE tags, not image tags)
+# ============================================================================
+# bump_docs' auto-rewrite rule only matches the bold ``**`tools/vX`**`` form,
+# so the code-block release-tag forms below drifted unsynced and shipped stale
+# (burned #141 Track B / TB-F1: `tools/v2.7.0` install examples while latest was
+# `tools/v2.8.0`). Image tags (`da-tools:vX`, `threshold-exporter:vX`) are
+# covered by DA_TOOLS_TAG_PATTERN / EXPORTER_VERSION_PATTERNS; these are the
+# release-tag-reference forms that had NO check.
+
+# `tools/v<X.Y.Z>` in TAG= vars, `releases/download/.../tools/vX/` URLs, etc.
+# Compare to the current da-tools (tools-line) version.
+TOOLS_RELEASE_TAG_PATTERN = r"tools/v([0-9]+\.[0-9]+\.[0-9]+)"
+
+# `da-guard|da-tools|da-batchpr|da-parser <whitespace> v<X.Y.Z>` — the expected
+# output of a `--version` invocation. Compare to the tools-line version.
+DA_BINARY_VERSION_OUTPUT_PATTERN = r"da-(?:guard|tools|batchpr|parser)\s+v([0-9]+\.[0-9]+\.[0-9]+)"
+
+# helm `--set image.tag=v<X.Y.Z>` (threshold-exporter charts in docs). Compare
+# to the exporter-line version.
+SET_IMAGE_TAG_PATTERN = r"--set\s+image\.tag=v([0-9]+\.[0-9]+\.[0-9]+)"
+
+# Per-line historical markers: a line that legitimately cites a PAST version
+# (e.g. "older releases (≤ tools/v2.7.0)…"). These must NOT be flagged. Narrow
+# and auditable; matched case-insensitively.
+VERSION_HISTORICAL_LINE_MARKERS: Tuple[str, ...] = (
+    "≤",
+    "older release",
+    "早期版本",
+)
+
+# Explicit per-line opt-out (repo noqa convention). Put it in a comment on the
+# offending line to suppress a release-tag-currency finding with a rationale.
+VERSION_CURRENCY_IGNORE = "version-currency-ignore"

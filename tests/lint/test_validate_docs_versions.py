@@ -568,3 +568,63 @@ class TestRepoSmoke:
         assert "summary" in payload
         assert "errors" in payload["summary"]
         assert "warnings" in payload["summary"]
+
+
+# ============================================================
+# check_release_tag_currency (TB-F1 class — release-tag forms)
+# ============================================================
+
+
+class TestCheckReleaseTagCurrency:
+    """Pins the release-tag currency check added after #141 Track B / TB-F1:
+    stale `tools/v2.7.0` install examples drifted because bump_docs' bold-only
+    rewrite + the image-tag-only checks left the release-tag form unguarded."""
+
+    def _scan(self, tmp_path, monkeypatch, body, tools="2.8.0", exporter="2.8.0"):
+        docs = tmp_path / "docs"
+        docs.mkdir()
+        _write(docs / "install.md", body)
+        monkeypatch.setattr(mod, "REPO_ROOT", tmp_path)
+        monkeypatch.setattr(mod, "DOCS_DIR", docs)
+        monkeypatch.setattr(mod, "ROOT_FILES", ())
+        mod._FILE_CACHE.clear()
+        mod._RGLOB_CACHE.clear()
+        mod._CONTENT_CACHE.clear()
+        return mod.check_release_tag_currency(tools, exporter)
+
+    def test_flags_stale_tools_release_tag(self, tmp_path, monkeypatch):
+        issues = self._scan(tmp_path, monkeypatch, "TAG=tools/v2.7.0    # pin\n")
+        assert len(issues) == 1
+        assert issues[0].check == "release-tag-version"
+        assert "tools/v2.7.0" in issues[0].message
+
+    def test_flags_stale_da_binary_version_output(self, tmp_path, monkeypatch):
+        issues = self._scan(tmp_path, monkeypatch,
+                            "da-guard --version    # should print da-guard v2.7.0\n")
+        assert len(issues) == 1
+        assert "v2.7.0" in issues[0].message
+
+    def test_flags_stale_set_image_tag(self, tmp_path, monkeypatch):
+        issues = self._scan(tmp_path, monkeypatch, "  --set image.tag=v2.7.0 \\\n")
+        assert len(issues) == 1
+        assert "image.tag" in issues[0].message
+
+    def test_passes_current_versions(self, tmp_path, monkeypatch):
+        body = ("TAG=tools/v2.8.0\nda-guard v2.8.0\n  --set image.tag=v2.8.0 \\\n")
+        assert self._scan(tmp_path, monkeypatch, body) == []
+
+    def test_skips_historical_marker_line(self, tmp_path, monkeypatch):
+        # "older releases (≤ tools/v2.7.0)" is a deliberate past-version cite.
+        body = "> Older releases (≤ `tools/v2.7.0`) only ship the Docker path.\n"
+        assert self._scan(tmp_path, monkeypatch, body) == []
+
+    def test_respects_inline_ignore(self, tmp_path, monkeypatch):
+        body = "TAG=tools/v2.7.0  # version-currency-ignore: pinned on purpose\n"
+        assert self._scan(tmp_path, monkeypatch, body) == []
+
+    def test_set_image_tag_unchecked_without_exporter(self, tmp_path, monkeypatch):
+        # When exporter version can't be resolved, the --set image.tag spec is
+        # skipped (tools-line checks still run).
+        issues = self._scan(tmp_path, monkeypatch,
+                            "  --set image.tag=v2.7.0 \\\n", exporter=None)
+        assert issues == []
