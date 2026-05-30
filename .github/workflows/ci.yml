@@ -158,6 +158,21 @@ jobs:
             --policy .github/custom-rule-policy.yaml \
             --ci
 
+      # ADR-024 PR3-pre-2 Commit 2: rule-pack 3-copy drift — AUDIT-ONLY.
+      # continue-on-error makes the ~2-month stale-configmap drift VISIBLE in
+      # CI logs without blocking, until the left-outer-join source hardening
+      # (PR3-pre-3) + configmap regeneration (Commit 3) land. Commit 4 removes
+      # continue-on-error to flip this to a hard gate.
+      - name: "Rule-pack copy drift (audit-only — ADR-024 PR3-pre-2)"
+        continue-on-error: true
+        run: |
+          echo "::group::configmap-rules-*.yaml ↔ rule-packs/ source (semantic)"
+          python scripts/tools/dx/generate_rulepack_configmaps.py --check
+          echo "::endgroup::"
+          echo "::group::3-copy sync (rule-packs ↔ configmap ↔ operator)"
+          python scripts/tools/lint/check_rulepack_sync.py --ci
+          echo "::endgroup::"
+
   iac-helm-sast:
     # Container/k8s SAST Layers 2 + 4 (#448 / TRK-312 + TRK-314).
     #   L2 (Helm template): renders 9 charts via helm + kube-linter (~1-2 min).
