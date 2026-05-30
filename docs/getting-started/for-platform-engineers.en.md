@@ -66,8 +66,8 @@ kubectl get pod -n monitoring | grep threshold-exporter
 ### Mount Rule Packs
 
 ```bash
-# Prometheus StatefulSet uses Projected Volume
-# Confirm volume section in k8s/03-monitoring/prometheus-statefulset.yaml
+# Prometheus Deployment uses Projected Volume
+# Confirm volume section in k8s/03-monitoring/deployment-prometheus.yaml
 kubectl get configmap -n monitoring | grep rule-pack
 ```
 
@@ -105,10 +105,10 @@ kubectl get configmap -n monitoring | grep rule-pack
 # Possible output: rule-pack-mariadb, rule-pack-postgresql, rule-pack-redis...
 ```
 
-Remove unwanted Rule Pack (edit Prometheus StatefulSet):
+Remove unwanted Rule Pack (edit Prometheus Deployment):
 
 ```bash
-kubectl edit statefulset prometheus -n monitoring
+kubectl edit deployment prometheus -n monitoring
 # Remove corresponding configMapRef from volumes.projected.sources
 # Or set Projected Volume optional: true for safe uninstallation
 ```

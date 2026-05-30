@@ -26,7 +26,7 @@ lang: zh
 docker pull ghcr.io/vencil/da-tools:v2.8.0
 
 # 路徑 B：下載靜態 binary 到 PATH
-curl -fsSLo da-guard.tar.gz https://github.com/vencil/Dynamic-Alerting-Integrations/releases/download/tools/v2.7.0/da-guard-linux-amd64.tar.gz
+curl -fsSLo da-guard.tar.gz https://github.com/vencil/Dynamic-Alerting-Integrations/releases/download/tools/v2.8.0/da-guard-linux-amd64.tar.gz
 tar xzf da-guard.tar.gz && sudo install -m 0755 da-guard-linux-amd64 /usr/local/bin/da-guard
 ```
 

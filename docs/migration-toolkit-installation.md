@@ -65,7 +65,7 @@ docker run --rm \
 
 **內含**：Python `da-tools` CLI + bundled `da-guard` / `da-batchpr` / `da-parser` Linux/amd64 binaries（`/usr/local/bin/`）。`da-tools guard` / `da-tools batch-pr` / `da-tools parser` 子命令會自動在 image 內找到對應 binary，不需另外設 `$DA_GUARD_BINARY` / `$DA_BATCHPR_BINARY` / `$DA_PARSER_BINARY`。
 
-**Trivy CVE scan** 在 release 時自動跑（`CRITICAL` / `HIGH` 級別 fail-fast）。Image SBOM + 簽章在 `tools/v2.8.0` Release notes 列出（cosign 簽章為後續迭代項目）。
+**Trivy CVE scan** 在 release 時自動跑（`CRITICAL` / `HIGH` 級別 fail-fast）。Image SBOM + **cosign keyless 簽章**自 `tools/v2.8.0` 起隨每個 artefact 發佈（驗證方式見下方 [§Signature Verification](#signature-verification)）。
 
 ---
 
@@ -112,7 +112,7 @@ docker run --rm \
 
 ```bash
 # 下載 + 驗 hash + 解壓 + 放 PATH
-TAG=tools/v2.7.0    # 版號由 bump_docs.py 在 release 時同步；可換成你要安裝的實際 release tag
+TAG=tools/v2.8.0    # 版號由 bump_docs.py 在 release 時同步；可換成你要安裝的實際 release tag
 OS=linux            # or darwin, windows
 ARCH=amd64          # or arm64
 URL=https://github.com/vencil/Dynamic-Alerting-Integrations/releases/download/${TAG}
@@ -125,13 +125,13 @@ sha256sum --check --ignore-missing SHA256SUMS
 
 tar xzf da-guard.tar.gz
 sudo install -m 0755 da-guard-${OS}-${ARCH} /usr/local/bin/da-guard
-da-guard --version    # 應印出 da-guard v2.7.0
+da-guard --version    # 應印出 da-guard v2.8.0
 ```
 
 ### 安裝範例（Windows）
 
 ```powershell
-$TAG = "tools/v2.7.0"    # Synced by bump_docs.py at release time; replace with the tag you want
+$TAG = "tools/v2.8.0"    # Synced by bump_docs.py at release time; replace with the tag you want
 $Url = "https://github.com/vencil/Dynamic-Alerting-Integrations/releases/download/$TAG"
 
 Invoke-WebRequest -Uri "$Url/da-guard-windows-amd64.zip" -OutFile da-guard.zip
@@ -165,7 +165,7 @@ Exit code：`0` 通過 / `1` 偵測到 error 級 finding（block CI）/ `2` call
 ### 一次性 import 流程
 
 ```bash
-TAG=tools/v2.7.0    # 版號由 bump_docs.py 在 release 時同步；可換成你要安裝的實際 release tag
+TAG=tools/v2.8.0    # 版號由 bump_docs.py 在 release 時同步；可換成你要安裝的實際 release tag
 VER=2.7.0
 URL=https://github.com/vencil/Dynamic-Alerting-Integrations/releases/download/${TAG}
 

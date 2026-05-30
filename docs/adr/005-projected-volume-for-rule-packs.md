@@ -44,7 +44,7 @@ updated_at: 2026-05-13
 **採用 Projected Volume + optional: true 架構：每個 Rule Pack 對應一個獨立的 ConfigMap，透過 Kubernetes Projected Volume 掛載至 Prometheus 的 rules 目錄，並設置 optional: true。**
 
 ```yaml
-# Prometheus StatefulSet 部份配置示例
+# Prometheus Deployment 部份配置示例
 volumes:
   - name: rule-packs
     projected:

@@ -66,8 +66,8 @@ kubectl get pod -n monitoring | grep threshold-exporter
 ### 掛載 Rule Pack
 
 ```bash
-# Prometheus StatefulSet 使用 Projected Volume
-# 確認 k8s/03-monitoring/prometheus-statefulset.yaml 的 volume 部分
+# Prometheus Deployment 使用 Projected Volume
+# 確認 k8s/03-monitoring/deployment-prometheus.yaml 的 volume 部分
 kubectl get configmap -n monitoring | grep rule-pack
 ```
 
@@ -107,10 +107,10 @@ kubectl get configmap -n monitoring | grep rule-pack
 # 可能輸出：rule-pack-mariadb, rule-pack-postgresql, rule-pack-redis...
 ```
 
-移除不需要的 Rule Pack（編輯 Prometheus StatefulSet）：
+移除不需要的 Rule Pack（編輯 Prometheus Deployment）：
 
 ```bash
-kubectl edit statefulset prometheus -n monitoring
+kubectl edit deployment prometheus -n monitoring
 # 在 volumes.projected.sources 中移除對應的 configMapRef
 # 或設定 Projected Volume 的 optional: true 實現安全卸載
 ```
