@@ -336,6 +336,7 @@ spec:
 | ADR-020 | [Tenant Federation — Label-Injection Proxy over Self-Built Endpoint](adr/020-tenant-federation.md) | ✅ Accepted | v2.8.0 |
 | ADR-021 | [Tenant Log Query — Authorization-Plane-Only, Ingestion-Decoupled](adr/021-tenant-log-query-federation.md) | ✅ Accepted | v2.9.0 |
 | ADR-022 | [tenant-api Dev-Auth Bypass — Local-Dev Identity Substitute, Four-Layer Containment](adr/022-dev-auth-bypass-four-layer-containment.md) | ✅ Accepted | v2.9.0 |
+| ADR-023 | [tenant-api 寫入平面 — Single-Writer Invariant 與韌性圍堵](adr/023-write-plane-single-writer-invariant.md) | 🟡 Proposed | — |
 
 <!-- ADR_INDEX_END -->
 

@@ -50,6 +50,8 @@ lang: zh
 | [019](#019-planning-ssot-frontmatter-contract-discovery-based-index) | Planning SSOT — Frontmatter Contract + Discovery-based Index | ✅ Accepted | 跨檔分散的計畫追蹤（tech-debt / dx-backlog / known-regression / roadmap / sprint）以 frontmatter contract + discovery-based index generator + active CI status-sync check 統一治理；TD/HA/REG 合併為 TRK namespace，ADR 與 S# 各自保留 |
 | [020](#020-tenant-federation-label-injection-proxy-over-self-built-endpoint) | Tenant Federation — Label-Injection Proxy over Self-Built Endpoint | 🟡 Proposed | Tenant 拉自己 metrics 回 tenant 側自管 federation。採 vmauth（VM 客戶）/ prom-label-proxy（Prom 客戶）做 label-enforced read proxy，不自寫 endpoint。2-tier policy（platform whitelist + tenant subset）+ 4h TTL token（無 server-side revocation，**對價條件**：gateway rate limit 必須到位）+ **3-layer blast radius**（storage backend series/sample cap + gateway per-token rate limit + proxy label injection）+ data-layer prerequisite（whitelist metric 必須 native 帶 `tenant_id` label，admission validator 把關）|
 | [021](#021-tenant-log-query-authorization-plane-only-ingestion-decoupled) | Tenant Log Query — Authorization-Plane-Only, Ingestion-Decoupled | ✅ Accepted | Tenant 在平台上**就地查**自己的 log（query-in-place，非拉回）。平台只 own 授權平面，複用既有 federation-gateway 新增 `victorialogs` mode；隔離靠 VictoriaLogs 原生 `(AccountID, ProjectID)` + JWT claim→header 注入（**非** prom-label-proxy，LogsQL ≠ PromQL）。ingestion 蓋章解耦為顯式可驗證契約（零信任 payload + node-edge 強蓋章）。Phase 1 (b) 平台營運 log → targets v2.10.0；Phase 2 (a) 租戶應用 log → defer-with-trigger。3-layer blast radius 對 LogsQL 重校（無 sample cap，改靠 time-range）。tracking TRK-316 |
+| [022](#022-tenant-api-dev-auth-bypass-四層圍堵) | tenant-api Dev-Auth Bypass — Local-Dev 身分替身，四層圍堵 | ✅ Accepted | try-local Mode 0（無 oauth2-proxy）下，預設關閉的 `--dev-bypass-auth` flag 在缺 `X-Forwarded-Email` 時注入 dev 身分（identity-only，**不繞 RBAC**）。風險用四層圍住：L1 預設 off、L2 可觀測 tripwire（response header + `/metrics` gauge + loud WARN）、L3 runtime poison pill（偵測 k8s 即 panic）、L4 deploy-time SAST（`check_dev_bypass_manifest.py` HARD-block manifest 出現該 flag）|
+| [023](#023-tenant-api-寫入平面-single-writer-invariant-與韌性圍堵) | tenant-api 寫入平面 — Single-Writer Invariant 與韌性圍堵 | 🟡 Proposed | 把 tenant-api 寫入路徑的隱性「單寫者」假設升為顯式不變式（讀平面可水平擴展、寫平面 MUST single writer）。三層機制強制：Helm 靜態 guard → 滾動更新交疊（幽靈副本）以 `strategy: Recreate` interim → 讀寫拆分部署 target → K8s Lease 水密艙 deferred。單寫者前提下的韌性模式：鎖內 fetch+獨立 `TA_GIT_FETCH_TIMEOUT`（方案甲，否決方案乙的 TOCTOU）、context 只綁排隊階段的 load-shedding、secondary-rate-limit 403 熔斷辨識。Epic TRK-317（子項 318/319/320/324/325）；源自混沌工程視角外部 review + 對抗式子代理覆驗 |
 
 ---
 
@@ -218,6 +220,22 @@ v2.8.0 起草，targets v2.9.0 epic。涵蓋 cross-boundary federation 場景（
 **文件**: [`021-tenant-log-query-federation.md`](./021-tenant-log-query-federation.md)
 
 ADR-020 的姊妹件，方向相反：ADR-020 讓 tenant 把 metrics **拉回**自有 infra（pull-back），本 ADR 讓 tenant 在平台上**就地查**自己的 log（query-in-place，不拉回）。平台**只 own 授權平面**（租戶身分解析 + query path 強制隔離 + 可見度治理），複用既有 `helm/federation-gateway` 新增第三個 `victorialogs` mode（驗 JWT → 注入租戶 header）；跨租戶隔離 100% 來自 VictoriaLogs 原生 `(AccountID, ProjectID)` 租戶模型，**非** prom-label-proxy（LogsQL ≠ PromQL，直覺沿用會踩前提錯誤）、**非**自寫 LogsQL injector、**非** vmauth。ingestion 蓋章（log 如何集中送進平台並蓋上可信租戶身分）解耦為「另外的設計」，本 ADR 以**顯式可驗證契約**約束它（零信任 payload + node-edge 強蓋章 + AccountID 單調配發永不回收）。3-layer blast radius 對 LogsQL 重新校準（無 metrics 的 sample cap，改以 time-range 上限為主護欄）。**Phase 1 — (b) 平台營運 log**（tenant 查平台關於自己的營運可觀測性，資料部分已存在於 #539 audit stream）targets v2.10.0；**Phase 2 — (a) 租戶應用 log** defer-with-trigger。tracking `TRK-316`。
+
+---
+
+## 022: tenant-api Dev-Auth Bypass — 四層圍堵
+
+**文件**: [`022-dev-auth-bypass-four-layer-containment.md`](./022-dev-auth-bypass-four-layer-containment.md)
+
+v2.8.1（✅ Accepted）。tenant-api 自己不做登入，信任前方 oauth2-proxy 注入的 `X-Forwarded-Email` / `X-Forwarded-Groups`。但 try-local 的 **Mode 0**（`docker compose up da-portal tenant-api`，無 oauth2-proxy）缺 header → `/me` 回 401、RBAC 全拒、旗艦 Tenant Manager 開不出來。解法是預設關閉的 `--dev-bypass-auth`（`TA_DEV_BYPASS_AUTH`）：flag on 且請求缺 `X-Forwarded-Email` 時注入 dev 身分（`dev@local` / `demo-admins`），**已帶真實身分則絕不覆蓋**；且為 **identity-only — RBAC 照常 enforce**，不給 god-mode。風險以四層圍住（對齊專案四層防線文化）：**L1** 預設 off（middleware 只在 on 時掛上）；**L2** 可觀測 tripwire（每個 response 帶 `X-Dev-Auth-Bypass: active`、`/metrics` 出 `tenant_api_dev_auth_bypass_active`、啟動 loud WARN）；**L3** runtime poison pill（偵測 `KUBERNETES_SERVICE_HOST` / SA token → panic，fail-closed）；**L4** deploy-time SAST（`check_dev_bypass_manifest.py` 於 pre-commit + CI HARD-block flag 出現在 `helm/`、`k8s/`、operator manifest）。L1–L2 擋誠實的意外、L3–L4 擋誤佈署。Tracker [#464](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/464)。
+
+---
+
+## 023: tenant-api 寫入平面 — Single-Writer Invariant 與韌性圍堵
+
+**文件**: [`023-write-plane-single-writer-invariant.md`](./023-write-plane-single-writer-invariant.md)
+
+v2.9.0 起草（🟡 Proposed）。把 `gitops.Writer` 隱性的「一個 process 一個寫者」假設升為**顯式不變式**：讀平面 stateless 可水平擴展、寫平面 MUST single writer。釐清它與 ADR-020 federation「stateless multi-replica」目標的邊界衝突。機制強制三層：Helm 靜態 guard（`replicaCount>1` fail）→ 滾動更新交疊（幽靈副本，靜態抓不到）以 `strategy: Recreate` 當零程式碼 interim → 讀寫拆分部署（CQRS 落地 target，需 read-only mode + method 路由）→ K8s Lease leader-election（水密艙 deferred）。單寫者前提下的韌性模式：(1) 新鮮錨點——branch 前**鎖內** `git fetch --prune origin <base>` + 獨立 `TA_GIT_FETCH_TIMEOUT`（方案甲；否決鎖外預載方案乙的 TOCTOU 時空錯置）；(2) load-shedding semaphore，context **只綁排隊階段**、進臨界區讓寫入跑完；(3) `isForgeDegradation` 認得 GitHub secondary-rate-limit 403 + 尊重 `Retry-After`。Epic **TRK-317**（子項 TRK-318 stale anchor / TRK-319 403 熔斷 / TRK-320 load-shedding / TRK-324 幽靈副本 / TRK-325 讀寫拆分）。源自一輪混沌工程視角外部 review，事實經逐行核對 + 對抗式子代理覆驗。
 
 ---
 
