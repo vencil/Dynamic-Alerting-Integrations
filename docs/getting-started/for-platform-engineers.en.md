@@ -55,8 +55,13 @@ defaults:
 
 ```bash
 # threshold-exporter ships as a Helm chart at helm/threshold-exporter/
+# ⚠️ the chart defaults to a LOCAL-DEV image (threshold-exporter:dev +
+#    pullPolicy: Never, for `kind load docker-image`); a real deploy must point
+#    at the published image, otherwise the pod ErrImageNeverPulls:
 helm install threshold-exporter ./helm/threshold-exporter/ \
-  -n monitoring --create-namespace
+  -n monitoring --create-namespace \
+  --set image.repository=ghcr.io/vencil/threshold-exporter \
+  --set image.tag=v2.8.0 --set image.pullPolicy=IfNotPresent
 # Verify replicas are running
 kubectl get pod -n monitoring | grep threshold-exporter
 ```
@@ -66,9 +71,13 @@ kubectl get pod -n monitoring | grep threshold-exporter
 ### Mount Rule Packs
 
 ```bash
-# Prometheus Deployment uses Projected Volume
+# Deploy the monitoring stack (Prometheus + rule-pack ConfigMaps). The *.json
+# files in k8s/03-monitoring/ are Grafana dashboards, NOT k8s manifests, so apply
+# only *.yaml (a plain `kubectl apply -f k8s/03-monitoring/` errors on the 3 .json):
+for f in k8s/03-monitoring/*.yaml; do kubectl apply -f "$f"; done
+# Prometheus Deployment mounts the rule-pack ConfigMaps via a Projected Volume
 # Confirm volume section in k8s/03-monitoring/deployment-prometheus.yaml
-kubectl get configmap -n monitoring | grep rule-pack
+kubectl get configmap -n monitoring | grep prometheus-rules
 ```
 
 ## Common Operations
@@ -101,8 +110,8 @@ python3 scripts/tools/ops/validate_config.py --config-dir conf.d/
 List mounted Rule Packs:
 
 ```bash
-kubectl get configmap -n monitoring | grep rule-pack
-# Possible output: rule-pack-mariadb, rule-pack-postgresql, rule-pack-redis...
+kubectl get configmap -n monitoring | grep prometheus-rules
+# Possible output: prometheus-rules-mariadb, prometheus-rules-postgresql, prometheus-rules-redis...
 ```
 
 Remove unwanted Rule Pack (edit Prometheus Deployment):

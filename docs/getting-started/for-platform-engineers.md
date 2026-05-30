@@ -55,8 +55,13 @@ defaults:
 
 ```bash
 # threshold-exporter 透過 Helm chart 部署（Chart 在 helm/threshold-exporter/）
+# ⚠️ chart 預設 image 為本地開發用（threshold-exporter:dev + pullPolicy: Never，
+#    搭配 `kind load docker-image`）；正式部署須改指向 published image，否則
+#    pod 會 ErrImageNeverPull：
 helm install threshold-exporter ./helm/threshold-exporter/ \
-  -n monitoring --create-namespace
+  -n monitoring --create-namespace \
+  --set image.repository=ghcr.io/vencil/threshold-exporter \
+  --set image.tag=v2.8.0 --set image.pullPolicy=IfNotPresent
 # 驗證副本運行
 kubectl get pod -n monitoring | grep threshold-exporter
 ```
@@ -66,9 +71,13 @@ kubectl get pod -n monitoring | grep threshold-exporter
 ### 掛載 Rule Pack
 
 ```bash
-# Prometheus Deployment 使用 Projected Volume
+# 部署監控堆疊（Prometheus + rule-pack ConfigMap）。k8s/03-monitoring/ 內的
+# *.json 是 Grafana dashboard、非 k8s manifest，故只 apply *.yaml（直接
+# `kubectl apply -f k8s/03-monitoring/` 會在那 3 個 .json 上 validation error）：
+for f in k8s/03-monitoring/*.yaml; do kubectl apply -f "$f"; done
+# Prometheus Deployment 透過 Projected Volume 掛載 rule-pack ConfigMap
 # 確認 k8s/03-monitoring/deployment-prometheus.yaml 的 volume 部分
-kubectl get configmap -n monitoring | grep rule-pack
+kubectl get configmap -n monitoring | grep prometheus-rules
 ```
 
 > 💡 **互動工具** — 不確定需要哪些 Rule Pack？用 [Rule Pack Selector](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/rule-pack-selector.jsx) 互動選取。想估算叢集資源需求？試試 [Capacity Planner](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/capacity-planner.jsx)。不確定該選哪種架構？[Architecture Quiz](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/architecture-quiz.jsx) 幫你做決定。想在瀏覽器中體驗完整的工作流？[Platform Demo](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/platform-demo.jsx) 展示 scaffold → validate → deploy。
@@ -103,8 +112,8 @@ python3 scripts/tools/ops/validate_config.py --config-dir conf.d/
 檢視已掛載的 Rule Pack：
 
 ```bash
-kubectl get configmap -n monitoring | grep rule-pack
-# 可能輸出：rule-pack-mariadb, rule-pack-postgresql, rule-pack-redis...
+kubectl get configmap -n monitoring | grep prometheus-rules
+# 可能輸出：prometheus-rules-mariadb, prometheus-rules-postgresql, prometheus-rules-redis...
 ```
 
 移除不需要的 Rule Pack（編輯 Prometheus Deployment）：
