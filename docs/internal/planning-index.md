@@ -53,11 +53,12 @@ lang: zh
 | `ADR-021` | adr | ADR-021: Tenant Log Query — Authorization-Plane-Only, Ingestion-Decoupled | tenant-api | — | [docs/adr/021-tenant-log-query-federation.md](../adr/021-tenant-log-query-federation.md) |
 | `ADR-022` | adr | ADR-022: tenant-api Dev-Auth Bypass — Local-Dev Identity Substitute, Four-Layer Containment | tenant-api | — | [docs/adr/022-dev-auth-bypass-four-layer-containment.md](../adr/022-dev-auth-bypass-four-layer-containment.md) |
 
-### proposed (16)
+### proposed (17)
 
 | ID | Kind | Title | Domain | PR | Source |
 |----|------|-------|--------|------|--------|
 | `ADR-023` | adr | ADR-023: tenant-api 寫入平面 — Single-Writer Invariant 與韌性圍堵 | tenant-api | — | [docs/adr/023-write-plane-single-writer-invariant.md](../adr/023-write-plane-single-writer-invariant.md) |
+| `ADR-024` | adr | ADR-024: Version-Aware Threshold — 透過既有 Dimensional version Label 達成 Declarative Cutover | threshold-exporter | — | [docs/adr/024-version-aware-threshold-via-dimensional-label.md](../adr/024-version-aware-threshold-via-dimensional-label.md) |
 | `TRK-001` | dx | TRK-001: `check_noqa_hygiene.py` — noqa/nosec 必要性驗證 | ci | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
 | `TRK-002` | dx | TRK-002: `make test-impact` — 變更影響測試自動縮減 | ci | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
 | `TRK-003` | dx | TRK-003: Pre-commit hook CI gate | ci | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
