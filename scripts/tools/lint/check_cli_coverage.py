@@ -28,7 +28,8 @@ from _lint_helpers import parse_command_map_keys, REPO_ROOT, ENTRYPOINT_PATH
 # Make stdout tolerate non-ASCII (the ⊘ warning glyph) on Windows shells
 # (cp950, cp1252) so a Windows-host dev running this guard gets a report
 # instead of a UnicodeEncodeError crash. CI (utf-8) is unaffected.
-if hasattr(sys.stdout, "reconfigure"):
+# Import-time, environment-dependent defensive shim → not unit-testable.
+if hasattr(sys.stdout, "reconfigure"):  # pragma: no cover
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     except (AttributeError, OSError):
