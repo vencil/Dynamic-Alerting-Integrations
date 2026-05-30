@@ -65,7 +65,7 @@ docker run --rm \
 
 **Contents**: Python `da-tools` CLI + bundled `da-guard` / `da-batchpr` / `da-parser` Linux/amd64 binaries at `/usr/local/bin/`. The `da-tools guard` / `da-tools batch-pr` / `da-tools parser` subcommands auto-locate their respective binaries inside the image — no need to set `$DA_GUARD_BINARY` / `$DA_BATCHPR_BINARY` / `$DA_PARSER_BINARY`.
 
-**Trivy CVE scan** runs automatically at release time (`CRITICAL` / `HIGH` severities fail-fast). The image SBOM + signatures are listed in the `tools/v2.8.0` Release notes (cosign signing is a planned follow-up).
+**Trivy CVE scan** runs automatically at release time (`CRITICAL` / `HIGH` severities fail-fast). The image SBOM + **cosign keyless signatures** ship with every artefact from `tools/v2.8.0` onward (see [§Signature Verification](#signature-verification) below to verify).
 
 ---
 
@@ -112,7 +112,7 @@ Each archive contains **one** binary (or `<name>.exe`), plus a single `SHA256SUM
 
 ```bash
 # Download + verify hash + extract + place on PATH
-TAG=tools/v2.7.0    # Synced by bump_docs.py at release time; replace with the tag you want
+TAG=tools/v2.8.0    # Synced by bump_docs.py at release time; replace with the tag you want
 OS=linux            # or darwin, windows
 ARCH=amd64          # or arm64
 URL=https://github.com/vencil/Dynamic-Alerting-Integrations/releases/download/${TAG}
@@ -125,13 +125,13 @@ sha256sum --check --ignore-missing SHA256SUMS
 
 tar xzf da-guard.tar.gz
 sudo install -m 0755 da-guard-${OS}-${ARCH} /usr/local/bin/da-guard
-da-guard --version    # should print da-guard v2.7.0
+da-guard --version    # should print da-guard v2.8.0
 ```
 
 ### Install (Windows)
 
 ```powershell
-$TAG = "tools/v2.7.0"    # Synced by bump_docs.py at release time; replace with the tag you want
+$TAG = "tools/v2.8.0"    # Synced by bump_docs.py at release time; replace with the tag you want
 $Url = "https://github.com/vencil/Dynamic-Alerting-Integrations/releases/download/$TAG"
 
 Invoke-WebRequest -Uri "$Url/da-guard-windows-amd64.zip" -OutFile da-guard.zip
@@ -165,7 +165,7 @@ For environments that cannot pull from `ghcr.io` at all (isolated internal regis
 ### One-time import flow
 
 ```bash
-TAG=tools/v2.7.0    # Synced by bump_docs.py at release time; replace with the tag you want
+TAG=tools/v2.8.0    # Synced by bump_docs.py at release time; replace with the tag you want
 VER=2.7.0
 URL=https://github.com/vencil/Dynamic-Alerting-Integrations/releases/download/${TAG}
 

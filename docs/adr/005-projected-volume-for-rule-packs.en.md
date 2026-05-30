@@ -39,7 +39,7 @@ Tenants should be able to selectively enable Rule Packs rather than be forced to
 **Adopt Projected Volume + optional: true architecture: each Rule Pack corresponds to an independent ConfigMap, mounted to Prometheus's rules directory via Kubernetes Projected Volume, with optional: true configured.**
 
 ```yaml
-# Prometheus StatefulSet partial configuration example
+# Prometheus Deployment partial configuration example
 volumes:
   - name: rule-packs
     projected:
