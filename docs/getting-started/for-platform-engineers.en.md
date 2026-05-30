@@ -42,7 +42,7 @@ The platform supports two deployment paths. Not sure which to choose? See the [D
 
 > **Prerequisites**: a K8s cluster + `helm` + `kubectl` (examples use the `monitoring` namespace).
 >
-> ⚠️ **None of the 3 component charts default to a pullable published image** — threshold-exporter `:dev` (+ `pullPolicy: Never`, repo lacks the `ghcr.io/vencil/` prefix), tenant-api `:2.7.0`, da-portal `:2.8.0` (no `v`). A plain `helm install ./helm/<chart>/` **ImagePull-fails**; each install below carries a published-image override. The chart-default fix itself is tracked in [#682](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/682).
+> All 3 component charts default their image to `ghcr.io/vencil/<chart>:v<appVersion>` (published & pullable — the same invariant the release pipeline's digest verification [#445](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/445) enforces). A plain `helm install ./helm/<chart>/` just works; add `--set image.tag=...` only to pin a specific version.
 
 Minimal viable platform config:
 
@@ -58,15 +58,15 @@ defaults:
 ### Deploy threshold-exporter ×2 HA
 
 ```bash
-# threshold-exporter ships as a Helm chart at helm/threshold-exporter/
-# (image-override rationale: see the ⚠️ at the top of this section)
+# threshold-exporter ships as a Helm chart at helm/threshold-exporter/.
+# The image default resolves to ghcr.io/vencil/threshold-exporter:v<appVersion> (published & pullable):
 helm install threshold-exporter ./helm/threshold-exporter/ \
-  -n monitoring --create-namespace \
-  --set image.repository=ghcr.io/vencil/threshold-exporter \
-  --set image.tag=v2.8.0 --set image.pullPolicy=IfNotPresent
+  -n monitoring --create-namespace
 # Verify replicas are running
 kubectl get pod -n monitoring | grep threshold-exporter
 ```
+
+> For local kind development with a `kind load`-ed local image, add `-f environments/local/threshold-exporter.yaml` (pins `:dev` + `pullPolicy: Never`).
 
 > If you bring your own GitOps (Argo CD / Flux), point the Application/Kustomization at the chart path — no raw manifests required. The chart is also published as an OCI artifact (`ghcr.io/vencil/dynamic-alerting`); air-gapped environments follow [migration-toolkit-installation.md](../migration-toolkit-installation.en.md) Path C.
 
@@ -84,12 +84,12 @@ kubectl get configmap -n monitoring | grep prometheus-rules
 
 ### Deploy tenant-api + da-portal (Tenant Manager)
 
-> What these components **are** (RBAC / PR write-back / audit) is in [§Self-Service Portal (tenant-api)](#self-service-portal-tenant-api) below; the image-default trap is in the ⚠️ at the top of this section.
+> What these components **are** (RBAC / PR write-back / audit) is in [§Self-Service Portal (tenant-api)](#self-service-portal-tenant-api) below.
 
 **tenant-api** (file-based config API, commit-on-write):
 
 ```bash
-helm install tenant-api ./helm/tenant-api/ -n monitoring --set image.tag=v2.8.0
+helm install tenant-api ./helm/tenant-api/ -n monitoring
 ```
 
 Requires:
@@ -100,7 +100,7 @@ Requires:
 **da-portal** (Tenant Manager UI):
 
 ```bash
-helm install da-portal ./helm/da-portal/ -n monitoring --set image.tag=v2.8.0
+helm install da-portal ./helm/da-portal/ -n monitoring
 ```
 
 Requires:

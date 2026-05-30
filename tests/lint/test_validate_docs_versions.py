@@ -628,3 +628,47 @@ class TestCheckReleaseTagCurrency:
         issues = self._scan(tmp_path, monkeypatch,
                             "  --set image.tag=v2.7.0 \\\n", exporter=None)
         assert issues == []
+
+
+class TestCheckImageTagVPrefix:
+    """Pins the v-prefix check across all 4 component images. tenant-api /
+    da-portal were added after #682 (Option X): a no-v `tenant-api:2.7.0` had
+    drifted uncaught in a shipped k8s manifest because the pattern previously
+    only recognised da-tools / threshold-exporter."""
+
+    def _scan(self, tmp_path, monkeypatch, body):
+        docs = tmp_path / "docs"
+        docs.mkdir()
+        _write(docs / "deploy.md", body)
+        monkeypatch.setattr(mod, "REPO_ROOT", tmp_path)
+        monkeypatch.setattr(mod, "DOCS_DIR", docs)
+        monkeypatch.setattr(mod, "ROOT_FILES", ())
+        mod._FILE_CACHE.clear()
+        mod._RGLOB_CACHE.clear()
+        mod._CONTENT_CACHE.clear()
+        return mod.check_image_tag_v_prefix()
+
+    def test_flags_tenant_api_missing_v(self, tmp_path, monkeypatch):
+        issues = self._scan(tmp_path, monkeypatch,
+                            "    image: ghcr.io/vencil/tenant-api:2.7.0\n")
+        assert len(issues) == 1
+        assert issues[0].check == "image-tag-v-prefix"
+        assert "tenant-api:2.7.0" in issues[0].message
+        assert "tenant-api:v2.7.0" in issues[0].message
+
+    def test_flags_da_portal_missing_v(self, tmp_path, monkeypatch):
+        issues = self._scan(tmp_path, monkeypatch,
+                            "  ghcr.io/vencil/da-portal:2.8.0\n")
+        assert len(issues) == 1
+        assert "da-portal:2.8.0" in issues[0].message
+        assert "da-portal:v2.8.0" in issues[0].message
+
+    def test_v_prefixed_passes(self, tmp_path, monkeypatch):
+        body = ("image: ghcr.io/vencil/tenant-api:v2.7.0\n"
+                "image: ghcr.io/vencil/da-portal:v2.8.0\n")
+        assert self._scan(tmp_path, monkeypatch, body) == []
+
+    def test_oci_chart_ref_not_flagged(self, tmp_path, monkeypatch):
+        # OCI *chart* refs legitimately use bare SemVer (no v-prefix).
+        body = "helm pull oci://ghcr.io/vencil/charts/da-portal:2.8.0\n"
+        assert self._scan(tmp_path, monkeypatch, body) == []

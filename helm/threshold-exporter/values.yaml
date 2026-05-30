@@ -2,9 +2,11 @@
 replicaCount: 2
 
 image:
-  repository: threshold-exporter
-  tag: dev
-  pullPolicy: Never    # Local dev: use 'kind load docker-image'
+  repository: ghcr.io/vencil/threshold-exporter
+  # tag 留空 → template 自動推導為 v<Chart.appVersion>（= published image），單一 SoT、不漂移。
+  # 需覆寫才設此值。本機 kind-load 開發改用 `-f environments/local/threshold-exporter.yaml`（pin :dev + pullPolicy Never）。
+  tag: ""
+  pullPolicy: IfNotPresent
 
 service:
   type: ClusterIP

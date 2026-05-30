@@ -247,11 +247,11 @@ Chart 自動建立：Deployment + oauth2-proxy sidecar、Service（80 → oauth2
 
 ```bash
 # 從 repo root build（go.mod replace directive 需要 threshold-exporter 模組）
-docker build -t ghcr.io/vencil/tenant-api:2.8.0 \
+docker build -t ghcr.io/vencil/tenant-api:v2.8.0 \
   -f components/tenant-api/Dockerfile .
 
 docker run -p 8080:8080 -v $(pwd)/conf.d:/conf.d \
-  ghcr.io/vencil/tenant-api:2.8.0
+  ghcr.io/vencil/tenant-api:v2.8.0
 ```
 
 ### Smoke test
