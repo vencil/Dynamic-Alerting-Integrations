@@ -142,6 +142,7 @@ lang: zh
 | `check_devrules_size.py` | Dev-rules 尺寸上限檢查。 |
 | `check_dist_source_consistency.py` | Catch portal dist commits without matching source change (testing-playbook §LL §2, TRK-239). |
 | `check_doc_freshness.py` | 文件新鮮度檢查工具。 |
+| `check_doc_k8s_refs.py` | docs must reference k8s manifests accurately. |
 | `check_doc_links.py` | 文件間交叉引用一致性檢查 |
 | `check_doc_reading_time.py` | 文件閱讀時間檢查工具。 |
 | `check_doc_template.py` | 文件模板合規性檢查工具。 |
