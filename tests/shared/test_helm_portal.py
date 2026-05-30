@@ -373,13 +373,18 @@ class TestChartVersionMatchesPortal:
             f"Chart version ({chart_ver_str}) 應與 appVersion ({app_ver_str}) 對齐"
         )
 
-    def test_image_tag_matches_app_version(
-        self, chart_yaml_content: dict, values_yaml_content: dict
+    def test_image_tag_empty_for_appversion_derivation(
+        self, values_yaml_content: dict
     ) -> None:
-        """驗證 image tag 與 appVersion 對齐。"""
-        app_version = str(chart_yaml_content["appVersion"]).lstrip("v")
+        """image.tag 須留空 → deployment template 由 appVersion 推導 v<appVersion>（#682）。
+
+        Option X：tag 不再硬寫（避免 chart↔image-tag 漂移、缺 v 前綴等問題），改由
+        `{{ .Values.image.tag | default (printf "v%s" .Chart.AppVersion) }}` 推導。
+        rendered-image == v<appVersion> 的端到端不變式由
+        tests/helm/test_image_tag_derivation.py 守。
+        """
         image_tag = str(values_yaml_content["image"]["tag"])
 
-        assert image_tag == app_version, (
-            f"Image tag ({image_tag}) 應與 appVersion ({app_version}) 對齐"
+        assert image_tag == "", (
+            f"Image tag 應留空以由 appVersion 推導，得到 {image_tag!r}（#682）"
         )

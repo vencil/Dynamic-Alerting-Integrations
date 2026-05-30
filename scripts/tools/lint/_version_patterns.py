@@ -73,8 +73,14 @@ EXPORTER_VERSION_PATTERNS: List[Tuple[str, str]] = [
 # Platform version in frontmatter
 PLATFORM_VERSION_FRONTMATTER_PATTERN = r"^version:\s*v?([0-9]+\.[0-9]+[^\s]*)"
 
-# Docker image bare tag pattern (missing v-prefix)
-BARE_TAG_PATTERN = r"(?<!charts/)(?:da-tools|threshold-exporter):(\d+\.\d+\.\d+)"
+# Docker image bare tag pattern (missing v-prefix).
+# Covers all 4 published component images (da-tools / threshold-exporter /
+# tenant-api / da-portal). The `(?<!charts/)` lookbehind excludes OCI *chart*
+# refs (`charts/<name>:<ver>`), which correctly use bare SemVer.
+BARE_TAG_PATTERN = (
+    r"(?<!charts/)(?:da-tools|threshold-exporter|tenant-api|da-portal)"
+    r":(\d+\.\d+\.\d+)"
+)
 
 # Rule Pack count patterns: (regex, group_index, expected_value, description)
 # Note: group_index=None means special handling (multi-group)

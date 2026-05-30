@@ -965,13 +965,9 @@ def check_image_tag_v_prefix() -> List[Issue]:
             for m in re.finditer(BARE_TAG_PATTERN, line):
                 rel = f.relative_to(REPO_ROOT)
                 ver = m.group(1)
-                # Find which image it is
-                start = max(0, m.start() - 30)
-                context = line[start:m.end()]
-                if "da-tools" in context:
-                    img = "da-tools"
-                else:
-                    img = "threshold-exporter"
+                # Image name is the matched text left of the ':' (works for all
+                # 4 component images without brittle context sniffing).
+                img = m.group(0).rsplit(":", 1)[0]
                 issues.append(Issue(
                     "image-tag-v-prefix", "error", str(rel), i,
                     f"{img}:{ver} missing v prefix, should be {img}:v{ver}",
