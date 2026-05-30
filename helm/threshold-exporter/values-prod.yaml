@@ -1,0 +1,16 @@
+# Production overrides for threshold-exporter (#682).
+#
+# values.yaml defaults to a LOCAL-DEV image (threshold-exporter:dev +
+# pullPolicy: Never, for `kind load docker-image`) — intentional for the
+# kind dev loop, but a real cluster deploy ImagePull-fails on it. Deploy with:
+#
+#   helm install threshold-exporter ./helm/threshold-exporter/ \
+#     -n monitoring --create-namespace -f helm/threshold-exporter/values-prod.yaml
+#
+# image.tag pins the v-prefixed published tag (= "v" + Chart.appVersion).
+# tests/helm/test_values_prod_image_pin.py keeps tag == v<appVersion> so this
+# can't silently drift at release.
+image:
+  repository: ghcr.io/vencil/threshold-exporter
+  tag: v2.8.0
+  pullPolicy: IfNotPresent

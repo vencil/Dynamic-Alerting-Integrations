@@ -42,7 +42,7 @@ lang: zh
 
 > **前置**：一個 K8s 叢集 + `helm` + `kubectl`（下例 namespace 用 `monitoring`）。
 >
-> ⚠️ **3 個 component chart 的 image 預設都不是可拉取的 published image**——threshold-exporter `:dev`（+ `pullPolicy: Never`、repository 無 `ghcr.io/vencil/` 前綴）、tenant-api `:2.7.0`、da-portal `:2.8.0`（缺 `v`）。直接 `helm install ./helm/<chart>/` 會 **ImagePull 失敗**；下方每個 install 都帶 published-image override。chart 預設本身的修正追蹤於 [#682](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/682)。
+> ⚠️ **3 個 component chart 的 image 預設都不是可拉取的 published image**——threshold-exporter `:dev`（+ `pullPolicy: Never`、repository 無 `ghcr.io/vencil/` 前綴）、tenant-api `:2.7.0`、da-portal `:2.8.0`（缺 `v`）。直接 `helm install ./helm/<chart>/` 會 **ImagePull 失敗**；正式部署用各 chart 的 `values-prod.yaml`（已 pin published image，且測試鎖定 `tag == v<appVersion>`，[#682](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/682)）。
 
 最小可用平台配置：
 
@@ -59,11 +59,10 @@ defaults:
 
 ```bash
 # threshold-exporter 透過 Helm chart 部署（Chart 在 helm/threshold-exporter/）
-# image override 原因見本節開頭 ⚠️：
+# 正式部署用 values-prod.yaml（pin published image；見本節開頭 ⚠️）：
 helm install threshold-exporter ./helm/threshold-exporter/ \
   -n monitoring --create-namespace \
-  --set image.repository=ghcr.io/vencil/threshold-exporter \
-  --set image.tag=v2.8.0 --set image.pullPolicy=IfNotPresent
+  -f helm/threshold-exporter/values-prod.yaml
 # 驗證副本運行
 kubectl get pod -n monitoring | grep threshold-exporter
 ```
@@ -91,7 +90,7 @@ kubectl get configmap -n monitoring | grep prometheus-rules
 **tenant-api**（file-based 設定 API，commit-on-write）：
 
 ```bash
-helm install tenant-api ./helm/tenant-api/ -n monitoring --set image.tag=v2.8.0
+helm install tenant-api ./helm/tenant-api/ -n monitoring -f helm/tenant-api/values-prod.yaml
 ```
 
 需要：
@@ -102,7 +101,7 @@ helm install tenant-api ./helm/tenant-api/ -n monitoring --set image.tag=v2.8.0
 **da-portal**（Tenant Manager UI）：
 
 ```bash
-helm install da-portal ./helm/da-portal/ -n monitoring --set image.tag=v2.8.0
+helm install da-portal ./helm/da-portal/ -n monitoring -f helm/da-portal/values-prod.yaml
 ```
 
 需要：

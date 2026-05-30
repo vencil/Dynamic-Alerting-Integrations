@@ -1,0 +1,15 @@
+# Production overrides for da-portal (#682).
+#
+# values.yaml ships image.tag "2.8.0" (no "v"); the published tag is
+# v-prefixed, so the default ImagePull-fails. Deploy with:
+#
+#   helm install da-portal ./helm/da-portal/ \
+#     -n monitoring -f helm/da-portal/values-prod.yaml
+#
+# image.tag pins the v-prefixed published tag (= "v" + Chart.appVersion).
+# tests/helm/test_values_prod_image_pin.py keeps tag == v<appVersion>.
+#
+# NOTE: da-portal's nginx hard-requires the oauth2-proxy sidecar (:80 -> 4180);
+# do NOT set oauth2Proxy.enabled=false. See for-platform-engineers.md.
+image:
+  tag: v2.8.0

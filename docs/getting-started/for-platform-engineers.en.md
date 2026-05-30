@@ -42,7 +42,7 @@ The platform supports two deployment paths. Not sure which to choose? See the [D
 
 > **Prerequisites**: a K8s cluster + `helm` + `kubectl` (examples use the `monitoring` namespace).
 >
-> ⚠️ **None of the 3 component charts default to a pullable published image** — threshold-exporter `:dev` (+ `pullPolicy: Never`, repo lacks the `ghcr.io/vencil/` prefix), tenant-api `:2.7.0`, da-portal `:2.8.0` (no `v`). A plain `helm install ./helm/<chart>/` **ImagePull-fails**; each install below carries a published-image override. The chart-default fix itself is tracked in [#682](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/682).
+> ⚠️ **None of the 3 component charts default to a pullable published image** — threshold-exporter `:dev` (+ `pullPolicy: Never`, repo lacks the `ghcr.io/vencil/` prefix), tenant-api `:2.7.0`, da-portal `:2.8.0` (no `v`). A plain `helm install ./helm/<chart>/` **ImagePull-fails**; a real deploy uses each chart's `values-prod.yaml` (pins the published image, with a test locking `tag == v<appVersion>`, [#682](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/682)).
 
 Minimal viable platform config:
 
@@ -59,11 +59,10 @@ defaults:
 
 ```bash
 # threshold-exporter ships as a Helm chart at helm/threshold-exporter/
-# (image-override rationale: see the ⚠️ at the top of this section)
+# A real deploy uses values-prod.yaml (pins the published image; see the ⚠️ above)
 helm install threshold-exporter ./helm/threshold-exporter/ \
   -n monitoring --create-namespace \
-  --set image.repository=ghcr.io/vencil/threshold-exporter \
-  --set image.tag=v2.8.0 --set image.pullPolicy=IfNotPresent
+  -f helm/threshold-exporter/values-prod.yaml
 # Verify replicas are running
 kubectl get pod -n monitoring | grep threshold-exporter
 ```
@@ -89,7 +88,7 @@ kubectl get configmap -n monitoring | grep prometheus-rules
 **tenant-api** (file-based config API, commit-on-write):
 
 ```bash
-helm install tenant-api ./helm/tenant-api/ -n monitoring --set image.tag=v2.8.0
+helm install tenant-api ./helm/tenant-api/ -n monitoring -f helm/tenant-api/values-prod.yaml
 ```
 
 Requires:
@@ -100,7 +99,7 @@ Requires:
 **da-portal** (Tenant Manager UI):
 
 ```bash
-helm install da-portal ./helm/da-portal/ -n monitoring --set image.tag=v2.8.0
+helm install da-portal ./helm/da-portal/ -n monitoring -f helm/da-portal/values-prod.yaml
 ```
 
 Requires:

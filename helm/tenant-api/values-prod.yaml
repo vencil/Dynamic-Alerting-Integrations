@@ -1,0 +1,17 @@
+# Production overrides for tenant-api (#682).
+#
+# values.yaml ships a stale/placeholder image.tag ("2.7.0", no "v") that
+# doesn't resolve to a published image. Deploy with:
+#
+#   helm install tenant-api ./helm/tenant-api/ \
+#     -n monitoring -f helm/tenant-api/values-prod.yaml
+#
+# image.tag pins the v-prefixed published tag (= "v" + Chart.appVersion).
+# (repository in values.yaml is already correct; only the tag needs pinning.)
+# tests/helm/test_values_prod_image_pin.py keeps tag == v<appVersion>.
+#
+# NOTE: oauth2-proxy (real OAuth secrets), gitRepoUrl (conf.d source), and the
+# _rbac.yaml ConfigMap are still required — see
+# docs/getting-started/for-platform-engineers.md §Deploy to Kubernetes.
+image:
+  tag: v2.7.0
