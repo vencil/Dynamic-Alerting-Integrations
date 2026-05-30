@@ -150,6 +150,7 @@ lang: zh
 | `check_flaky_registry.py` | Validate `flaky-tests.yaml` schema + expire_at. |
 | `check_frontmatter_versions.py` | Frontmatter version global scan |
 | `check_glossary_coverage.py` | 術語表覆蓋率檢查 |
+| `check_ha_threshold_aggregation.py` | HA-max invariant lint: `user_threshold` must be aggregated with `max`. |
 | `check_hardcode_tenant.py` | Detect hardcoded tenant literals in PromQL label selectors (Rule #2). |
 | `check_head_blob_hygiene.py` | Inspect committed HEAD blobs for corruption. |
 | `check_helm_values_secrets.py` | Container/k8s IaC SAST, Layer 3. |
