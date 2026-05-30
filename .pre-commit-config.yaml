@@ -291,6 +291,13 @@ repos:
         pass_filenames: false
         files: ^(docs/.*\.md|k8s/.*\.ya?ml)$
 
+      - id: doc-datools-cmds
+        name: Doc da-tools wrapper subcommands valid
+        entry: python3 -X utf8 scripts/tools/lint/check_doc_datools_cmds.py --ci
+        language: python
+        pass_filenames: false
+        files: ^(docs/.*\.md|scripts/tools/ops/.*_dispatch\.py)$
+
       - id: design-token-usage
         name: Design token compliance (JSX)
         entry: python3 -X utf8 scripts/tools/lint/check_design_token_usage.py --ci

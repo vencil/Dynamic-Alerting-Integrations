@@ -141,6 +141,7 @@ lang: zh
 | `check_dev_rules_enforcement.py` | detect doc-drift in dev-rules.md. |
 | `check_devrules_size.py` | Dev-rules 尺寸上限檢查。 |
 | `check_dist_source_consistency.py` | Catch portal dist commits without matching source change (testing-playbook §LL §2, TRK-239). |
+| `check_doc_datools_cmds.py` | documented `da-tools` binary-wrapper subcommands |
 | `check_doc_freshness.py` | 文件新鮮度檢查工具。 |
 | `check_doc_k8s_refs.py` | docs must reference k8s manifests accurately. |
 | `check_doc_links.py` | 文件間交叉引用一致性檢查 |

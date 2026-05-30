@@ -56,6 +56,38 @@ report 寫到 `docs/internal/audit-reports/rules-drift-YYYY-MM.md`（atomic writ
 
 每季 audit 逐一檢查每個本地 `vibe-*` skill **過去一季是否在其領域內被實際觸發**（subagent-review: multi-file PR review；release: 發版；brainstorm: 設計討論；workflow/dev-rules/playbook-nav: 日常）。**連續 2 季 0 觸發 = dead weight，audit 時強制刪除**（對齊 `feedback_speculative_drift_prefer_remove`）。觸發案例寫進 CHANGELOG / PR body 當佐證。**理由**：epic #570 交付 3 個新 skill 但收尾時 subagent-review/release **0 觸發**、brainstorm 僅 1（Gap A）；無問責機制會養出沒人用的 skill。
 
+## 文件 staleness 防線：lint 層 vs dogfood 層（#141）
+
+客戶導入/安裝文件會悄悄 stale（命令語法、版號、路徑、workload 類型隨 code 漂移）。防線**分兩層**，邊界原則同 [`hook-vs-skill-coverage.md`](hook-vs-skill-coverage.md)：**deterministic 的交給 lint、判斷題留給人工 dogfood**。
+
+### 機械層（lint，CI/pre-commit 自動擋）
+
+| Lint | 抓的 staleness 類 | 燒過 |
+|---|---|---|
+| `validate_docs_versions.py`（`check_release_tag_currency`）| 版號字面：`tools/vX` / `--set image.tag=vX` / `da-* --version` 輸出 vs 當前 release | TB-F1 |
+| `check_doc_k8s_refs.py` | `k8s/**` manifest 路徑存在 + doc 宣稱的 workload kind vs 實際 `k8s/`（`kubectl ... statefulset/deployment <元件>`）| TB-F4 |
+| `check_doc_datools_cmds.py` | 文件裡 `da-tools guard/parser/batch-pr` 子命令 vs dispatcher 實際集 | F3（`guard /conf.d`）|
+
+> **刻意沒做的廣義版**（記取教訓，別重造）：「掃所有 repo 路徑是否存在」「驗所有 `da-tools <任意命令>`」實跑都是 **~88% false-positive**（文件充斥 example/aspirational：`my-db.yaml` / `describe-tenant` / 「PR-3 預定加」的工具）—— 廣義 lint = 你燒過的 reactive-whack-a-mole 反模式。三支都**收斂到真 artifact 才有的窄域**（k8s/、binary-wrapper 子命令）。
+
+### 人工層（dogfood，lint 抓不到的判斷題）
+
+機械抓不到、**只能靠定期 cold-walk dogfood** 的類別：
+
+- **「宣稱 future 但已出貨」**（TB-F2：文件說 cosign「後續迭代」但已隨 release 發佈）— 語義，無法 lint。
+- **UX 過度警告 / 措辭**（Track A F1：WSL2 警告比實際保守）— 判斷題。
+- **flag-level 漂移**（`--config-dir` 改名）— Go binary flag 無法從 python 內省。
+
+### Dogfood 方法（per-run log 不 commit，方法論住這裡）
+
+每次（onboarding surface 變動 / 發版前）以**新使用者冷視角只照文件**走一遍，三步：
+
+1. **Cold-walk**：清環境、只照文件跑（da-tools 安裝 + config 驗證 + try-local / 安裝路徑），卡住即記 friction。
+2. **對抗式全 repo 同類掃描**：撞到一個 bug（如某檔 stale 版號）後，**grep 整個 `docs/` 找同類**——初版只修撞到的、漏網的靠這步補（#141 Track B 這步多揪出 3 檔）。逐筆分 real-bug / example / aspirational（別誤殺 example）。
+3. **Independence baseline**：算「≥80% 步驟只照文件可自助完成」；fail 的步驟 = 真 doc bug，同 cycle 修。
+
+產出歸屬：**doc 修正 → PR**、**residue/TODO → 對應 issue**、**方法 → 本節**。per-run runbook **不 commit**（archive/ 是凍結歷史、per-run log 長期價值低；#141 移除了兩份）。
+
 ## 裁決原則（重要）
 
 - **只產 report，不自動修改**。所有合併 / 刪除 / 下放都人工決定 — speculative 自動清理會誤刪仍有效的規則。
@@ -73,3 +105,4 @@ report 寫到 `docs/internal/audit-reports/rules-drift-YYYY-MM.md`（atomic writ
 - 互補工具：`anthropic-skills:consolidate-memory`（只掃 `~/.claude` memory；本稽核補 repo 內規則語料）
 - 規範：[`dev-rules.md`](dev-rules.md)
 - epic [#570](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/570) / TRK-307
+- 文件 staleness 防線（lint L1–L4 + dogfood）：[#141](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/141)；lints 在 `scripts/tools/lint/`（`validate_docs_versions.py` / `check_doc_k8s_refs.py` / `check_doc_datools_cmds.py`）
