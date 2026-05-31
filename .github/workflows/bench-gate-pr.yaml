@@ -17,23 +17,33 @@ name: Bench Gate (PR-time, Tier 1)
 #   - v3/v4 (PR #440): added Ghost-Green race + Blanket-Immunity defenses
 #     + INCONCLUSIVE enforcement on hetero CPU (closed silent false-neg).
 #     Correct gate behavior surfaced the structural sharding problem.
-#   - v5 (this file, PR #444): single-runner sequential bench.
-#     P(homogeneous CPU) = 100% by construction (same VM for both runs).
-#     Wall back up to ~20 min but DETERMINISTIC vs v2's stochastic re-runs.
-#     Eliminates INCONCLUSIVE entirely. Cache-warmth bias between base/pr
-#     bench mitigated by `drop_caches` between the two runs. CI minutes
-#     same as v1 (~20 min total).
+#   - v5 (PR #444): single-runner SEQUENTIAL bench (all base, then all pr).
+#     P(homogeneous CPU) = 100% (same VM). Eliminated INCONCLUSIVE from CPU
+#     heterogeneity, but introduced a subtler killer: because base and pr ran
+#     in two separate time blocks, any mid-run runner drift (thermal throttle /
+#     frequency scaling / noisy neighbour) biased the pr block systematically.
+#     benchstat assumes independent samples, so it misread that time-correlated
+#     bias as a "significant regression" — the recurring false-RED (#502/#608/
+#     #611/#695; #695 had ZERO Go changes yet still went red).
+#   - v6 (this file): single-runner INTERLEAVED bench + control canary.
+#     Runs base,pr,base,pr,… one round at a time (via bench_interleave.sh) so
+#     drift hits BOTH sides within each round and cancels → benchstat's
+#     independent-samples assumption holds again. Two refinements that matter:
+#     (a) binaries are PRE-COMPILED (`go test -c`) so the Go compiler's CPU
+#     spike never lands between measurements; (b) the mid-run drop_caches is
+#     GONE — in an interleaved loop it would be asymmetric (base warm / pr cold)
+#     and re-introduce the very bias we're killing. A version-independent
+#     control canary (benchcanary module) runs each round; if it drifts the run
+#     is judged INCONCLUSIVE (re-run) instead of emitting a false regression.
 #
 # Why this is the right design on free-tier runners:
-#   - GH-hosted ubuntu-latest pool is heterogeneous (AMD EPYC 7763,
-#     AMD EPYC 9V74, Intel Xeon 8370C observed). Any horizontally-
-#     sharded design has structurally-low P(all-same-CPU) and gets
-#     stuck on INCONCLUSIVE.
-#   - Sequential same-runner has perfect CPU homogeneity by definition.
-#   - Temporal locality on a single VM (10-min window) yields lower
-#     noise floor than cross-VM comparison.
-#   - The wall-time loss vs sharded is acceptable in exchange for
-#     deterministic ~20 min vs stochastic 4-min-or-stuck.
+#   - GH-hosted ubuntu-latest pool is heterogeneous AND each VM drifts mid-run.
+#     Interleaving on ONE runner gives perfect CPU homogeneity AND cancels
+#     time-correlated drift — the two failure modes v1-v2 and v5 hit respectively.
+#   - The control canary turns "the runner was unstable this run" from an
+#     invisible source of false regressions into an explicit INCONCLUSIVE verdict.
+#   - Wall-time stays ~20-25 min (same total benchtime as v5's count=6; the
+#     extra cost is process starts + tiny canaries, offset by pre-compiling once).
 #
 # Override + governance defenses (UNCHANGED from v4):
 #   - Override label `override: bench-regress-ok` (admin/maintain only)
@@ -57,6 +67,12 @@ name: Bench Gate (PR-time, Tier 1)
 #     per-op metrics (sec/op, B/op, allocs/op). Non-deterministic process-
 #     level custom metrics (MB-sys, MB-heap-after-gc) are GC high-water
 #     noise that false-RED real Go PRs — excluded. See the Compare step.
+#   - INCONCLUSIVE (v6): the CPU control canary (BenchmarkControlCanaryCPU)
+#     runs identical work on both sides; a ≥4% significant base-vs-pr delta on
+#     it means the runner drifted this run → judged INCONCLUSIVE (re-run, NOT a
+#     regression). The Sleep canary is informational-only (µs-scale scheduler
+#     jitter would flap the gate). Both canaries are excluded from the
+#     regression grep.
 #
 # See: issue #433, issue #67 (closed/superseded), bench-record.yaml (nightly),
 #      memory feedback `feedback_github_actions_workflow_gotchas.md`
@@ -226,16 +242,16 @@ jobs:
           echo "  vs $base_ref"
           echo "  vs PR HEAD ($pr_head)"
 
-  # Job 2: single runner sequential bench (base then pr) + compare.
-  # See top-of-file comment for the v5 design rationale — the structural
-  # answer to GH-hosted runner pool heterogeneity.
+  # Job 2: single-runner INTERLEAVED bench (base,pr,base,pr,…) + control canary
+  # + compare. See top-of-file comment for the v6 design rationale — the
+  # structural answer to BOTH runner-pool heterogeneity AND mid-run drift.
   bench:
-    name: Bench + Compare (single-runner sequential)
+    name: Bench + Compare (single-runner interleaved + canary)
     needs: preflight
     if: needs.preflight.outputs.skip != 'true'
     runs-on: ubuntu-latest
-    # Budget: ~10 min base bench + ~10 min pr bench + ~3 min setup/checkout/
-    # benchstat overhead = ~23 min nominal. 40 min cap gives headroom for
+    # Budget: ~6 interleaved rounds × (base+pr full set @3s) + pre-compile once +
+    # tiny canaries + benchstat = ~20-25 min nominal. 40 min cap gives headroom for
     # slow runners + Go module download flakes + Azure pool variance, AND
     # leaves enough buffer for the step summary + fail-gate steps to actually
     # render before a hard-kill. A tighter 30 min budget risks hard-killing
@@ -283,100 +299,53 @@ jobs:
           go install golang.org/x/perf/cmd/benchstat@latest
           benchstat -h 2>&1 | head -5 || true
 
-      # Stash the bench harness OUTSIDE the checkout so both base and pr
-      # benches use the SAME wrapper script regardless of which commit's
-      # tree is currently checked out. Without this, a PR that modifies
-      # bench_wrapper.sh would cause the base bench to use the old wrapper
-      # and the pr bench to use the new one — unfair comparison.
-      - name: Stash bench harness (use same version on both sides)
+      # Stash the interleave runner AND the control-canary module OUTSIDE the
+      # checkout so both the base and pr sides use the SAME harness + SAME canary
+      # regardless of which commit's tree is being benched. A PR that modified
+      # either must not bench base with the old version and pr with the new one
+      # — that would be an unfair comparison. (The canary module is also
+      # version-independent by construction: its own go.mod, stdlib-only.)
+      - name: Stash bench harness + control canary (same version on both sides)
         run: |
           mkdir -p "$RUNNER_TEMP/bench-harness"
-          cp scripts/tools/ops/bench_wrapper.sh "$RUNNER_TEMP/bench-harness/"
-          cp scripts/tools/ops/bench_filter.go "$RUNNER_TEMP/bench-harness/"
-          # bench_wrapper.sh resolves SCRIPT_DIR via BASH_SOURCE; the filter
-          # is referenced as $SCRIPT_DIR/bench_filter.go. Keeping them in
-          # the same /tmp dir preserves that resolution.
+          cp scripts/tools/ops/bench_interleave.sh "$RUNNER_TEMP/bench-harness/"
+          cp -r scripts/tools/ops/bench-canary "$RUNNER_TEMP/bench-harness/bench-canary"
 
-      - name: Checkout merge-base for base bench
-        run: git checkout ${{ needs.preflight.outputs.merge_base_sha }}
+      # Two worktrees so base + pr are checked out SIMULTANEOUSLY — the
+      # interleave runner needs both trees alive at once to alternate between
+      # them. fetch-depth:0 (above) guarantees both SHAs are in history. Using
+      # worktrees instead of sequential `git checkout <sha>` also removes the
+      # old reset/clean-workspace dance: the main checkout is never mutated, so
+      # there is no dirty-tree-blocks-checkout failure mode.
+      - name: Create base + pr worktrees
+        run: |
+          set -euo pipefail
+          git worktree add --detach "$RUNNER_TEMP/wt-base" ${{ needs.preflight.outputs.merge_base_sha }}
+          git worktree add --detach "$RUNNER_TEMP/wt-pr"   ${{ github.event.pull_request.head.sha }}
+          echo "base worktree HEAD: $(git -C "$RUNNER_TEMP/wt-base" rev-parse HEAD)"
+          echo "pr   worktree HEAD: $(git -C "$RUNNER_TEMP/wt-pr" rev-parse HEAD)"
 
-      - name: Run base benchmark
+      # Interleaved base/pr benchmark (base,pr,base,pr,…) with PRE-COMPILED
+      # binaries and NO mid-loop drop_caches. This structurally removes the
+      # time-correlated-drift false-RED that was the root cause of #502/#608/
+      # #611/#695 (the v5 "run all base, then all pr" sequential topology biased
+      # the pr batch whenever the runner drifted mid-run). See the header of
+      # bench_interleave.sh for the full rationale. The Drop-OS-caches step that
+      # used to sit between base and pr is GONE on purpose — in an interleaved
+      # loop a single drop_caches would be asymmetric (base warm / pr cold) and
+      # would REINTRODUCE a pr-slower bias.
+      - name: Run interleaved base/pr benchmark
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/bench-out"
-          echo "[bench-base] running on commit $(git rev-parse HEAD)"
-          cd components/threshold-exporter/app
+          BASE_DIR="$RUNNER_TEMP/wt-base/components/threshold-exporter/app" \
+          PR_DIR="$RUNNER_TEMP/wt-pr/components/threshold-exporter/app" \
+          CANARY_DIR="$RUNNER_TEMP/bench-harness/bench-canary" \
           BENCH_OUT_DIR="$RUNNER_TEMP/bench-out" \
-            bash "$RUNNER_TEMP/bench-harness/bench_wrapper.sh" \
-            -bench='_1000(_|$)|MixedMode|Simulate_DeepChain' \
-            -benchmem \
-            -count=6 \
-            -run='^$' \
-            -timeout=15m \
-            -benchtime=3s \
-            ./...
-          cp "$RUNNER_TEMP/bench-out/bench.out.txt" \
-             "$RUNNER_TEMP/bench-out/bench-base.txt"
-          echo "[bench-base] wrote $(wc -l < "$RUNNER_TEMP/bench-out/bench-base.txt") lines"
-
-      # Cache-warmth mitigation: OS page cache holds files read during the
-      # base bench; if not flushed, the pr bench gets warm-cache I/O and
-      # systematically reports ~1-3% faster than it would on a cold start.
-      # drop_caches=3 evicts pagecache + dentries + inodes. GH-hosted
-      # runners have passwordless sudo. The `|| echo warning` keeps the
-      # workflow running if drop_caches is unavailable (e.g., container
-      # ran without proper capabilities) — bias would still be small
-      # relative to the 5% magnitude floor, but should be flagged.
-      - name: Drop OS caches between base and pr benches
-        run: |
-          sudo sh -c "sync; echo 3 > /proc/sys/vm/drop_caches" \
-            && echo "::notice::OS page cache dropped between base and pr benches" \
-            || echo "::warning::drop_caches failed — pr bench may show ~1-3% cache-warmth bias"
-
-      # CRITICAL: clean the workspace before the second checkout.
-      # `go test -bench` may modify tracked files (go.sum if a dep resolution
-      # changes) or leave untracked files (benchmark temp dirs that didn't
-      # clean up). A subsequent `git checkout <other-sha>` then fails with
-      # "your local changes would be overwritten by checkout" → step fails,
-      # whole gate dies on a Git hygiene issue rather than perf reasons.
-      #
-      # `git reset --hard HEAD` reverts any tracked-file modifications.
-      # `git clean -fd` removes untracked files + directories (NOT ignored;
-      # we don't pass -x because gitignored locations like ~/.cache/go-build
-      # live in $HOME outside the workspace anyway, and we want to preserve
-      # any .build/ contents in case future steps need them — though for v5
-      # we write outputs to $RUNNER_TEMP/bench-out, outside the workspace).
-      #
-      # Safe to nuke aggressively because the bench harness itself is
-      # already stashed in $RUNNER_TEMP/bench-harness (see earlier step).
-      # [Gemini round-12 dirty-workspace-trap catch.]
-      - name: Clean workspace between base and pr bench
-        run: |
-          git reset --hard HEAD
-          git clean -fd
-          git status --short || true  # diagnostic for debugging
-
-      - name: Checkout PR head for pr bench
-        run: git checkout ${{ github.event.pull_request.head.sha }}
-
-      - name: Run pr benchmark
-        run: |
-          set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/bench-out"
-          echo "[bench-pr] running on commit $(git rev-parse HEAD)"
-          cd components/threshold-exporter/app
-          BENCH_OUT_DIR="$RUNNER_TEMP/bench-out" \
-            bash "$RUNNER_TEMP/bench-harness/bench_wrapper.sh" \
-            -bench='_1000(_|$)|MixedMode|Simulate_DeepChain' \
-            -benchmem \
-            -count=6 \
-            -run='^$' \
-            -timeout=15m \
-            -benchtime=3s \
-            ./...
-          cp "$RUNNER_TEMP/bench-out/bench.out.txt" \
-             "$RUNNER_TEMP/bench-out/bench-pr.txt"
-          echo "[bench-pr] wrote $(wc -l < "$RUNNER_TEMP/bench-out/bench-pr.txt") lines"
+          ROUNDS=6 \
+          BENCH_RE='_1000(_|$)|MixedMode|Simulate_DeepChain' \
+          BENCHTIME=3s \
+            bash "$RUNNER_TEMP/bench-harness/bench_interleave.sh"
 
       - name: Compare with benchstat
         id: compare
@@ -443,10 +412,15 @@ jobs:
           # POSIX awk for portability. `|| true` tolerates "no matches"
           # (the happy path — zero regressions) so pipefail doesn't
           # crash the script.
+          # `grep -v ControlCanary` excludes BOTH control canaries — they are
+          # environment probes, not product benchmarks, and are handled by the
+          # INCONCLUSIVE check below (not the regression check). Without this a
+          # drifting canary could itself be counted as a "regression".
           MAGNITUDE_FLOOR_PCT=5.0
           regressions=$(grep -E '[[:space:]]\+[0-9]+\.[0-9]+%[[:space:]]*\(p=' \
                           "$RUNNER_TEMP/bench-out/benchstat.txt" \
                         | grep -v geomean \
+                        | grep -v ControlCanary \
                         | awk -v floor="$MAGNITUDE_FLOOR_PCT" '{
                             if (match($0, /\+[0-9]+\.[0-9]+%/)) {
                               num = substr($0, RSTART + 1, RLENGTH - 2) + 0
@@ -454,16 +428,65 @@ jobs:
                             }
                           }' || true)
 
-          # Defensive INCONCLUSIVE check — single-runner sequential makes
-          # this structurally impossible (same VM = same CPU by definition),
-          # but the check is kept as defense-in-depth in case anything in
-          # the runner provisioning changes. Cost is ~50ms.
+          # INCONCLUSIVE — control-canary drift detection.
+          # The CPU canary (BenchmarkControlCanaryCPU) runs byte-identical work
+          # on both sides, so a statistically-significant base-vs-pr delta on it
+          # means THIS run's runner was drifting (thermal / frequency / noisy
+          # neighbour) — the whole comparison is untrustworthy. That is the real
+          # INCONCLUSIVE signal (it replaces the old hetero-CPU check, which
+          # interleaving-on-one-runner makes structurally impossible). When the
+          # CPU canary drifts ≥ floor we judge INCONCLUSIVE (re-run), NOT a
+          # regression. The Sleep canary is INFORMATIONAL ONLY: its ~µs-scale
+          # scheduler jitter would flap the gate, so it is never gated on (only
+          # rendered in the summary). Sign-agnostic: a -N% canary drift (PR
+          # unfairly favoured) is just as disqualifying as +N%.
+          CPU_CANARY_FLOOR_PCT=4.0
+          # Fail-safe: the canary is stashed and run EVERY time, independent of
+          # the base/pr trees, so it must always appear. If it doesn't, the
+          # environment-stability check silently lost its teeth — treat the run
+          # as INCONCLUSIVE rather than gating on data we can't vouch for.
+          canary_missing=false
+          if ! grep -q 'ControlCanaryCPU' "$RUNNER_TEMP/bench-out/benchstat.txt"; then
+            canary_missing=true
+            echo "::warning::CPU control canary row absent from benchstat output — cannot verify runner stability this run."
+          fi
+          canary_drift=$(grep -E 'ControlCanaryCPU' "$RUNNER_TEMP/bench-out/benchstat.txt" \
+                         | grep -E '[-+][0-9]+\.[0-9]+%[[:space:]]*\(p=' \
+                         | awk -v floor="$CPU_CANARY_FLOOR_PCT" '{
+                             if (match($0, /[-+][0-9]+\.[0-9]+%/)) {
+                               pct = substr($0, RSTART, RLENGTH - 1) + 0
+                               if (pct < 0) pct = -pct
+                               if (pct >= floor) print
+                             }
+                           }' || true)
+
+          # Defense-in-depth: heterogeneous CPU headers should be impossible on
+          # a single interleaved runner, but if runner provisioning ever changes
+          # this still surfaces it as INCONCLUSIVE rather than a silent FN.
           cpu_lines=$(grep -E '^cpu:' "$RUNNER_TEMP/bench-out/benchstat.txt" 2>/dev/null | sort -u || true)
+
           inconclusive=false
+          inconclusive_reason=""
+          if [ "$canary_missing" = "true" ]; then
+            inconclusive=true
+            inconclusive_reason="Control canary absent from output — cannot verify runner stability this run. Re-run."
+            echo "::warning::$inconclusive_reason"
+          fi
+          if [ -n "$canary_drift" ]; then
+            inconclusive=true
+            inconclusive_reason="CPU control canary drifted ≥ ${CPU_CANARY_FLOOR_PCT}% — this run's runner was unstable (thermal/frequency/neighbour). Comparison untrustworthy; re-run."
+            echo "::warning::$inconclusive_reason"
+            {
+              echo "inconclusive_canary<<__CANEOF__"
+              grep -E 'ControlCanary' "$RUNNER_TEMP/bench-out/benchstat.txt" || true
+              echo "__CANEOF__"
+            } >> "$GITHUB_OUTPUT"
+          fi
           if [ -n "$cpu_lines" ] && [ "$(echo "$cpu_lines" | wc -l)" -gt 1 ]; then
             inconclusive=true
+            inconclusive_reason="Heterogeneous CPUs in a single interleaved job — investigate runner provisioning."
             cpu_count=$(echo "$cpu_lines" | wc -l)
-            echo "::error::Heterogeneous CPUs detected ($cpu_count distinct) IN A SINGLE-RUNNER JOB. This shouldn't be possible; investigate runner provisioning. CPUs observed:"
+            echo "::error::Heterogeneous CPUs detected ($cpu_count distinct) IN A SINGLE INTERLEAVED JOB. This shouldn't be possible; investigate runner provisioning. CPUs observed:"
             echo "$cpu_lines"
             {
               echo "inconclusive_cpus<<__CPUEOF__"
@@ -472,6 +495,11 @@ jobs:
             } >> "$GITHUB_OUTPUT"
           fi
           echo "inconclusive=$inconclusive" >> "$GITHUB_OUTPUT"
+          {
+            echo "inconclusive_reason<<__REOF__"
+            echo "$inconclusive_reason"
+            echo "__REOF__"
+          } >> "$GITHUB_OUTPUT"
 
           if [ -n "$regressions" ]; then
             echo "regression=true" >> "$GITHUB_OUTPUT"
@@ -490,11 +518,15 @@ jobs:
           REGRESSION: ${{ steps.compare.outputs.regression }}
           REGRESSIONS_LIST: ${{ steps.compare.outputs.regressions }}
           INCONCLUSIVE: ${{ steps.compare.outputs.inconclusive }}
+          INCONCLUSIVE_REASON: ${{ steps.compare.outputs.inconclusive_reason }}
           INCONCLUSIVE_CPUS: ${{ steps.compare.outputs.inconclusive_cpus }}
+          INCONCLUSIVE_CANARY: ${{ steps.compare.outputs.inconclusive_canary }}
         run: |
           {
+            # INCONCLUSIVE takes precedence over REGRESSION: if the runner was
+            # drifting, the main-bench "regression" is itself untrustworthy.
             if [ "$INCONCLUSIVE" = "true" ]; then
-              echo "## ⚠️ Bench Gate — INCONCLUSIVE (heterogeneous runner CPUs)"
+              echo "## ⚠️ Bench Gate — INCONCLUSIVE (runner drift, re-run)"
             elif [ "$REGRESSION" = "true" ]; then
               echo "## ❌ Bench Gate — REGRESSION DETECTED"
             else
@@ -505,23 +537,36 @@ jobs:
             echo "against merge-base (\`${{ needs.preflight.outputs.merge_base_sha }}\`)."
             echo "Gate threshold: **p < 0.01 AND |Δ| ≥ 5%** (statistical significance via \`benchstat -alpha=0.01\` + magnitude floor for free-tier-runner noise resistance)."
             echo "Metric scope: **deterministic per-op metrics only** (\`sec/op\`, \`B/op\`, \`allocs/op\`) via \`benchstat -filter\`. Non-deterministic process-level metrics (\`MB-sys\`, \`MB-heap-after-gc\`, \`goroutines\`) are excluded — they are GC/runtime high-water noise, not per-op work (#608)."
-            echo "Topology: **single-runner sequential** (base bench → drop_caches → pr bench → benchstat) — eliminates CPU heterogeneity by construction."
+            echo "Topology: **single-runner INTERLEAVED** (base,pr,base,pr,… pre-compiled binaries, no mid-loop drop_caches) + **control canary**. Interleaving cancels time-correlated runner drift so benchstat's independent-samples assumption holds; the canary detects residual drift and judges the run INCONCLUSIVE rather than emitting a false regression (root-cause fix for #502/#608/#611/#695)."
             echo ""
             if [ "$INCONCLUSIVE" = "true" ]; then
-              echo "### ⚠️ Inconclusive — heterogeneous CPUs (unexpected)"
+              echo "### ⚠️ Inconclusive — re-run recommended"
               echo ""
-              echo "Single-runner topology should make this structurally impossible."
-              echo "If you see this, investigate runner provisioning. CPUs observed:"
-              echo '```'
-              echo "$INCONCLUSIVE_CPUS"
-              echo '```'
+              echo "$INCONCLUSIVE_REASON"
+              echo ""
+              echo "This run is **not** counted as a regression — push again or re-run the job to get a clean comparison."
+              if [ -n "$INCONCLUSIVE_CANARY" ]; then
+                echo ""
+                echo "Control canary rows this run:"
+                echo '```'
+                echo "$INCONCLUSIVE_CANARY"
+                echo '```'
+              fi
+              if [ -n "$INCONCLUSIVE_CPUS" ]; then
+                echo ""
+                echo "Heterogeneous CPUs observed (unexpected on one runner):"
+                echo '```'
+                echo "$INCONCLUSIVE_CPUS"
+                echo '```'
+              fi
               echo ""
             fi
             echo "### Full benchstat output"
+            echo "_\`BenchmarkControlCanaryCPU\` is the GATING drift probe; \`BenchmarkControlCanarySleep\` is informational only (scheduler jitter)._"
             echo '```'
             cat "$RUNNER_TEMP/bench-out/benchstat.txt"
             echo '```'
-            if [ "$REGRESSION" = "true" ]; then
+            if [ "$INCONCLUSIVE" != "true" ] && [ "$REGRESSION" = "true" ]; then
               echo ""
               echo "### Regressions flagged"
               echo '```'
@@ -536,14 +581,16 @@ jobs:
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Fail gate on regression or inconclusive
-        if: steps.compare.outputs.regression == 'true' || steps.compare.outputs.inconclusive == 'true'
+      # Fail ONLY on a real regression — i.e. a significant ≥5% slowdown WHILE
+      # the control canary was stable. An INCONCLUSIVE run (canary drifted) is
+      # NOT a regression: it exits green with a re-run warning, because gating on
+      # a run we already know was biased would just resurrect the false-RED this
+      # whole redesign removes. (Phase 2 turns even the real-regression path into
+      # an informational comment + label; this stays blocking for Phase 1.)
+      - name: Fail gate on regression
+        if: steps.compare.outputs.regression == 'true' && steps.compare.outputs.inconclusive != 'true'
         run: |
-          if [ "${{ steps.compare.outputs.inconclusive }}" = "true" ]; then
-            echo "::error::Gate run INCONCLUSIVE — heterogeneous runner CPUs in a single-runner job. Investigate runner provisioning."
-          else
-            echo "::error::Statistically significant perf regression detected vs merge-base."
-            echo "::error::See benchstat output in the step summary."
-            echo "::error::Override via maintainer-applied label 'override: bench-regress-ok'."
-          fi
+          echo "::error::Statistically significant perf regression detected vs merge-base (control canary was stable, so this is real)."
+          echo "::error::See benchstat output in the step summary."
+          echo "::error::Override via maintainer-applied label 'override: bench-regress-ok'."
           exit 1

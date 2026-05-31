@@ -151,15 +151,16 @@ grep "ns/op" /tmp/bench.txt   # 僅看結果行
 | 工作流檔案 | `.github/workflows/bench-gate-pr.yaml` |
 | 觸發條件 | `pull_request: [opened, synchronize, reopened, labeled]` + path filter |
 | Path filter | `components/threshold-exporter/app/**` / `rule-packs/**` / 此 workflow 自己 |
-| 拓樸 | **單 runner sequential**：checkout merge-base → bench base → drop_caches → checkout pr → bench pr → benchstat（v5, 2026-05-12）|
-| Wall time | **~20 min**（base ~10 min + pr ~10 min + ~3 min plumbing），deterministic |
+| 拓樸 | **單 runner INTERLEAVED + control canary**（v6）：兩個 worktree（base + pr 同時 checkout）→ `go test -c` 預編譯 → 迴圈交替跑 base,pr,base,pr,…（含 canary）→ benchstat。harness = `scripts/tools/ops/bench_interleave.sh` |
+| Wall time | **~20–25 min**（與 v5 count=6 同總 benchtime；多 process 啟動由「只編譯一次」抵銷）|
 | 統計判定 | `benchstat -alpha=0.01` AND `|Δ| ≥ 5%` 雙閾值 |
 | Metric scope | **確定性 per-op metric only**（`sec/op` / `B/op` / `allocs/op`）via `benchstat -filter`；排除非確定性 process-level metric（`MB-sys` / `MB-heap-after-gc` / `goroutines`）—— GC/runtime high-water 雜訊，非 per-op work（[#608](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/608)）|
-| INCONCLUSIVE 率 | **~0%**（單 runner = CPU 100% 同構 by construction）|
-| Override label | `override: bench-regress-ok`（admin/maintain only） |
+| Control canary | `benchcanary` module（`scripts/tools/ops/bench-canary/`，自帶 go.mod、stdlib-only、stash 到 checkout 外、base/pr 共用同一份）。`BenchmarkControlCanaryCPU` = **gating**（base↔pr 顯著漂移 ≥4% → 判 INCONCLUSIVE）；`BenchmarkControlCanarySleep` = **informational-only**（µs 級排程 jitter，gating 會狂閃）|
+| INCONCLUSIVE 語意 | **runner 漂移 → re-run，非 regression**（綠燈 + warning）。canary 漂移 / 缺席 / 異質 CPU 三者任一觸發 |
+| Override label | `override: bench-regress-ok`（admin/maintain only；Phase 1 仍 blocking 故保留，Phase 2 informational 化後移除）|
 | Override 語意 | **Per-event, per-commit-state** — 不是 per-PR |
 
-> **設計演進**：v1 (parallel 2 runners) → v2 (sharded 6 runners, ~4 min wall) → v5 (single runner sequential, ~20 min deterministic)。v2 sharded design 因 GH-hosted runner pool 有 3+ CPU 類型、6-runner 全同構機率僅 ~1.7%，造成 ~98% INCONCLUSIVE 率被迫退役。v5 用「同 VM 跑兩次」徹底繞開 CPU 異質性。詳：memory `feedback_github_actions_workflow_gotchas.md` Trap 11/12。
+> **設計演進**：v1 (parallel 2 runners) → v2 (sharded 6 runners) → v5 (single-runner **sequential**) → v6 (single-runner **interleaved + canary**)。v2 因 GH-hosted runner pool 有 3+ CPU 類型、6-runner 全同構機率僅 ~1.7% → ~98% INCONCLUSIVE 退役。v5「同 VM 先跑完 base 再跑完 pr」解決 CPU 異質性，但引入更隱蔽的殺手：base/pr 分兩個時間塊跑，runner 中途漂移（thermal/頻率/鄰居）系統性偏置 pr 那塊，benchstat 的 independent-samples 假設被破壞 → 時間相關 bias 被誤讀成 regression（[#502](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/502)/[#608](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/608)/[#611](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/611)/[#695](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/695)，#695 零 Go 改動照樣紅）。v6 交錯跑使漂移兩邊抵銷 + canary 偵測殘餘漂移判 INCONCLUSIVE，根治 false-RED。詳：memory `feedback_github_actions_workflow_gotchas.md`。
 
 ### 觸發條件深掘
 
@@ -171,15 +172,11 @@ grep "ns/op" /tmp/bench.txt   # 僅看結果行
 
 `[labeled]` event 只在 label 名稱**就是** `override: bench-regress-ok` 時觸發 preflight（其他無關 label 如 `bug` / `needs-review` 會被 job-level `if:` 過濾掉，整個 workflow skip 不浪費 ~20 min runner）。
 
-### Cache-warmth 偏差緩解（v5 single-runner 特有）
+### 為什麼 v6 沒有 drop_caches（v5 有，且其實有害）
 
-兩次 bench 在同 VM 跑時，OS page cache 在第二輪（pr）已熱，可能讓 pr bench 系統性報快 ~1-3%。Workflow 在兩次 bench 之間做：
+v5 在 base / pr 兩塊之間做 `drop_caches=3` 緩解 cache-warmth 偏差。**v6 刻意拿掉**：在交錯迴圈裡，單一 drop_caches 會變**不對稱**——base 永遠帶著上一輪 pr 留下的暖快取、pr 永遠冷快取——反而系統性偏置 pr 變慢，正是要消滅的那類 bias。交錯本身已讓兩側對稱暖快取，不需要、也不能放 drop_caches。
 
-```bash
-sudo sh -c "sync; echo 3 > /proc/sys/vm/drop_caches"
-```
-
-`drop_caches=3` flush page cache + dentries + inodes。GH-hosted runner 有 passwordless sudo 可執行。若 drop 失敗 → 印 `::warning::` 不阻擋（剩餘 ~1-3% bias 仍遠低於 5% magnitude floor，影響有限）。
+> **為什麼預編譯（`go test -c`）**：`go test -bench` 每次即時編譯，Go 編譯器吃 CPU 會在每輪開頭製造 thermal spike，量到的是「降頻殘局」。v6 在迴圈前用 `go test -c` 把每側兩個 package（`app` = package main、`app/pkg/config`）+ canary 各編一次成 `.test` binary，迴圈內只純執行 → 量測點之間無編譯熱負載。
 
 ### 看懂 step summary
 
@@ -190,10 +187,10 @@ sudo sh -c "sync; echo 3 > /proc/sys/vm/drop_caches"
 Compared PR HEAD (<sha>) against merge-base (<sha>).
 Gate threshold: p < 0.01 AND |Δ| ≥ 5% (... + magnitude floor).
 Metric scope: deterministic per-op metrics only (sec/op, B/op, allocs/op) via benchstat -filter (#608).
-Topology: single-runner sequential (base bench → drop_caches → pr bench → benchstat) — eliminates CPU heterogeneity by construction.
+Topology: single-runner INTERLEAVED (base,pr,base,pr,… pre-compiled, no drop_caches) + control canary.
 
 ### Full benchstat output
-< benchstat 2-column comparison >
+< benchstat 2-column comparison，含 BenchmarkControlCanaryCPU/Sleep 兩列 >
 ```
 
 失敗時：
@@ -202,10 +199,18 @@ Topology: single-runner sequential (base bench → drop_caches → pr bench → 
 ## ❌ Bench Gate — REGRESSION DETECTED
 ... 同上 ...
 ### Regressions flagged
-< 通過雙閾值的 benchmark 行 >
+< 通過雙閾值的 benchmark 行（canary 已被 grep -v ControlCanary 排除）>
 ```
 
-理論上 v5 不該再出現 `INCONCLUSIVE` — 同 runner 同 VM 不可能有 hetero CPU。若真的出現代表 runner provisioning 有問題（GH 改了 image？），值得 issue 進來查。
+INCONCLUSIVE 時（綠燈、非 regression）：
+
+```
+## ⚠️ Bench Gate — INCONCLUSIVE (runner drift, re-run)
+<reason: CPU canary 漂移 ≥4% / canary 缺席 / 異質 CPU>
+This run is not counted as a regression — push again or re-run the job.
+```
+
+> **regression 與 INCONCLUSIVE 的關係**：真 regression = 主 bench ≥5% 顯著退化 **且** CPU canary 穩定。若 canary 同時漂移 → INCONCLUSIVE 優先（這次 run 的數據本來就不可信，不該 gate）。
 
 ### Regression 偵測到怎麼辦
 
@@ -243,8 +248,9 @@ Topology: single-runner sequential (base bench → drop_caches → pr bench → 
 
 | 症狀 | 原因 | 處理 |
 |---|---|---|
-| `::error::Heterogeneous CPUs detected ... INCONCLUSIVE` | v5 single-runner 拓樸下不該發生；若真的見到代表 GH runner provisioning 有變 | 開 issue 查 runner image；同時點 "Re-run failed jobs" 看是不是 flake |
-| `::warning::drop_caches failed` | GH runner sudo / capabilities 限制 | 不阻擋；接受 ~1-3% pr-favorable cache-warmth bias（仍遠低於 5% floor）|
+| `⚠️ INCONCLUSIVE (runner drift)` — CPU canary 漂移 ≥4% | 這次 run 的 runner 真的在漂移（thermal/頻率/鄰居）；交錯已盡力抵銷但殘餘超標 | **正常防線**，綠燈非紅燈：push 再一次或 "Re-run failed jobs" 拿乾淨比較。連續多次才需查 runner |
+| `::warning::Control canary absent` | canary 沒 emit（harness / 編譯 / benchstat 格式變動）| 判 INCONCLUSIVE re-run；若持續，查 `bench_interleave.sh` 編譯 log 與 benchstat 版本 |
+| `::error::Heterogeneous CPUs detected ... INCONCLUSIVE` | 單一交錯 runner 下不該發生；若見到代表 GH runner provisioning 有變 | 開 issue 查 runner image；同時 "Re-run failed jobs" 看是不是 flake |
 | Override label 一直被 revert | applier 不是 admin/maintain（或 audit 工作流故障） | 確認 applier role；查 `bench-override-audit` 工作流 log |
 | Label 自動消失（push 後） | **WAI** — per-event semantics | Maintainer 重新審核新 commit 後 re-apply |
 | 整個 workflow skip 不跑 | path filter 沒匹配（doc-only PR） | 正常行為，不需處理 |

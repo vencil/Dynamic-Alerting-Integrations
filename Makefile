@@ -51,6 +51,21 @@ go-bench-clean: ## Go micro-benchmark via bench_wrapper (stdout-clean, -json fil
 		bash $(CURDIR)/scripts/tools/ops/bench_wrapper.sh \
 		-bench=. -benchmem -count=$${COUNT:-5} -run="^$$" -timeout=15m ./...
 
+.PHONY: bench-interleave
+bench-interleave: ## bench_interleave.sh 本機 smoke（base==pr、ROUNDS=2、短 benchtime）— 驗 interleave+canary+benchstat 機制，不需 GH Actions
+	@mkdir -p .build/bench-interleave
+	@command -v benchstat >/dev/null 2>&1 || { echo "[bench-interleave] benchstat 未安裝 → go install golang.org/x/perf/cmd/benchstat@latest"; exit 2; }
+	@BASE_DIR="$(CURDIR)/components/threshold-exporter/app" \
+		PR_DIR="$(CURDIR)/components/threshold-exporter/app" \
+		CANARY_DIR="$(CURDIR)/scripts/tools/ops/bench-canary" \
+		BENCH_OUT_DIR="$(CURDIR)/.build/bench-interleave" \
+		ROUNDS="$${ROUNDS:-2}" BENCHTIME="$${BENCHTIME:-1s}" CANARY_BENCHTIME="$${CANARY_BENCHTIME:-1s}" \
+		BENCH_RE="$${BENCH_RE:-_1000(_|$$)|Simulate_DeepChain}" \
+		bash $(CURDIR)/scripts/tools/ops/bench_interleave.sh
+	@echo "[bench-interleave] benchstat base vs pr（base==pr → 應 ~無差；canary 兩條應出現）:"
+	@benchstat -filter '.unit:(sec/op OR B/op OR allocs/op)' \
+		.build/bench-interleave/bench-base.txt .build/bench-interleave/bench-pr.txt || true
+
 .PHONY: benchmark-report
 benchmark-report: ## 1000-scale baseline (20 benches: 8 flat + 5 hierarchical + 4 mixed-mode + 1 churn + 2 pkg/config library) → .build/bench-baseline.txt（release-baseline source for release-attach-bench-baseline.yaml；起於 #60 Phase 1 informational pilot，Phase 2 gate 已轉 #435/#458；COUNT/BENCHTIME 可覆寫）
 	@mkdir -p .build
