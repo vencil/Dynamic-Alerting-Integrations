@@ -1,0 +1,188 @@
+# promtool unit test — ADR-024 version-aware threshold, MEMORY (kubernetes pilot).
+# Run: promtool test rules tests/rulepacks/rule-pack-kubernetes-memory-version-aware_test.yaml
+#
+# Mirrors the CPU version-aware test for the memory metric (the memory-mirror
+# increment): per-version exact-match, rolling coexistence (distinct pod names),
+# and dynamic fallback to version="default" with the REAL version preserved.
+# Memory uses container_memory_working_set_bytes (a gauge, no rate) over the
+# memory resource limit.
+rule_files:
+  - ../../rule-packs/rule-pack-kubernetes.yaml
+
+evaluation_interval: 15s
+
+tests:
+  - interval: 15s
+    input_series:
+      # ── db-a: v1 + v2 pods coexisting (rolling), distinct pod names ──
+      # v1 pod @ 90% mem, v1 threshold = 85 → fires.
+      - series: 'kube_pod_labels{namespace="db-a", pod="app-v1-x", label_app_kubernetes_io_version="v1"}'
+        values: '1x48'
+      - series: 'container_memory_working_set_bytes{namespace="db-a", pod="app-v1-x", container="app"}'
+        values: '90x48'
+      - series: 'kube_pod_container_resource_limits{resource="memory", namespace="db-a", pod="app-v1-x", container="app"}'
+        values: '100x48'
+      # v2 pod @ 70% mem, v2 threshold = 60 (tightened) → fires.
+      - series: 'kube_pod_labels{namespace="db-a", pod="app-v2-y", label_app_kubernetes_io_version="v2"}'
+        values: '1x48'
+      - series: 'container_memory_working_set_bytes{namespace="db-a", pod="app-v2-y", container="app"}'
+        values: '70x48'
+      - series: 'kube_pod_container_resource_limits{resource="memory", namespace="db-a", pod="app-v2-y", container="app"}'
+        values: '100x48'
+      - series: 'user_threshold{tenant="db-a", component="container", metric="memory", severity="warning", version="v1"}'
+        values: '85x48'
+      - series: 'user_threshold{tenant="db-a", component="container", metric="memory", severity="warning", version="v2"}'
+        values: '60x48'
+      - series: 'tenant_metadata_info{tenant="db-a", runbook_url="http://rb/a", owner="team-a", tier="gold"}'
+        values: '1x48'
+      # ── db-b: v3 pod @ 88% mem, NO v3 threshold → fallback to default (85) ──
+      - series: 'kube_pod_labels{namespace="db-b", pod="app-v3-z", label_app_kubernetes_io_version="v3"}'
+        values: '1x48'
+      - series: 'container_memory_working_set_bytes{namespace="db-b", pod="app-v3-z", container="app"}'
+        values: '88x48'
+      - series: 'kube_pod_container_resource_limits{resource="memory", namespace="db-b", pod="app-v3-z", container="app"}'
+        values: '100x48'
+      - series: 'user_threshold{tenant="db-b", component="container", metric="memory", severity="warning"}'
+        values: '85x48'
+      - series: 'tenant_metadata_info{tenant="db-b", runbook_url="http://rb/b", owner="team-b", tier="silver"}'
+        values: '1x48'
+
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: PodContainerHighMemory
+        exp_alerts:
+          # db-a v1 → exact match vs v1 threshold (85), value 90.
+          - exp_labels:
+              severity: warning
+              tenant: db-a
+              version: v1
+              runbook_url: "http://rb/a"
+              owner: team-a
+              tier: gold
+            exp_annotations:
+              summary: "High container memory in db-a"
+              summary_zh: "db-a 的容器記憶體使用率過高"
+              platform_summary: "[gold] db-a: container memory pressure — evaluate resource limits"
+              platform_summary_zh: "[gold] db-a: 容器記憶體壓力過高 — 請評估資源限制"
+              description: "Max container memory usage: 90.0% (threshold exceeded)"
+              description_zh: "最大容器記憶體使用率: 90.0% (超過閾值)"
+              runbook_url: "http://rb/a"
+              owner: team-a
+              tier: gold
+          # db-a v2 → exact match vs tightened v2 threshold (60), value 70.
+          - exp_labels:
+              severity: warning
+              tenant: db-a
+              version: v2
+              runbook_url: "http://rb/a"
+              owner: team-a
+              tier: gold
+            exp_annotations:
+              summary: "High container memory in db-a"
+              summary_zh: "db-a 的容器記憶體使用率過高"
+              platform_summary: "[gold] db-a: container memory pressure — evaluate resource limits"
+              platform_summary_zh: "[gold] db-a: 容器記憶體壓力過高 — 請評估資源限制"
+              description: "Max container memory usage: 70.0% (threshold exceeded)"
+              description_zh: "最大容器記憶體使用率: 70.0% (超過閾值)"
+              runbook_url: "http://rb/a"
+              owner: team-a
+              tier: gold
+          # db-b v3 → FALLBACK to default threshold (85), real version=v3 preserved.
+          - exp_labels:
+              severity: warning
+              tenant: db-b
+              version: v3
+              runbook_url: "http://rb/b"
+              owner: team-b
+              tier: silver
+            exp_annotations:
+              summary: "High container memory in db-b"
+              summary_zh: "db-b 的容器記憶體使用率過高"
+              platform_summary: "[silver] db-b: container memory pressure — evaluate resource limits"
+              platform_summary_zh: "[silver] db-b: 容器記憶體壓力過高 — 請評估資源限制"
+              description: "Max container memory usage: 88.0% (threshold exceeded)"
+              description_zh: "最大容器記憶體使用率: 88.0% (超過閾值)"
+              runbook_url: "http://rb/b"
+              owner: team-b
+              tier: silver
+      # No critical thresholds declared → the per-severity critical rule is silent.
+      - eval_time: 11m
+        alertname: PodContainerHighMemoryCritical
+        exp_alerts: []
+
+  # ── Default/void/maintenance memory paths (parity with the CPU base test) ──
+  - interval: 15s
+    input_series:
+      # db-c: UNVERSIONED pod @ 90% (kube_pod_labels has no version → default),
+      # metadata present, default threshold 85 → fires with version="default".
+      - series: 'kube_pod_labels{namespace="db-c", pod="app-1"}'
+        values: '1x48'
+      - series: 'container_memory_working_set_bytes{namespace="db-c", pod="app-1", container="app"}'
+        values: '90x48'
+      - series: 'kube_pod_container_resource_limits{resource="memory", namespace="db-c", pod="app-1", container="app"}'
+        values: '100x48'
+      - series: 'user_threshold{tenant="db-c", component="container", metric="memory", severity="warning"}'
+        values: '85x48'
+      - series: 'tenant_metadata_info{tenant="db-c", runbook_url="http://rb/c", owner="team-c", tier="gold"}'
+        values: '1x48'
+      # db-d: 90% mem, default threshold 85, NO tenant_metadata_info → VACUUM-FIRE.
+      - series: 'kube_pod_labels{namespace="db-d", pod="app-1"}'
+        values: '1x48'
+      - series: 'container_memory_working_set_bytes{namespace="db-d", pod="app-1", container="app"}'
+        values: '90x48'
+      - series: 'kube_pod_container_resource_limits{resource="memory", namespace="db-d", pod="app-1", container="app"}'
+        values: '100x48'
+      - series: 'user_threshold{tenant="db-d", component="container", metric="memory", severity="warning"}'
+        values: '85x48'
+      # db-e: 90% mem, metadata present, BUT maintenance active → suppressed.
+      - series: 'kube_pod_labels{namespace="db-e", pod="app-1"}'
+        values: '1x48'
+      - series: 'container_memory_working_set_bytes{namespace="db-e", pod="app-1", container="app"}'
+        values: '90x48'
+      - series: 'kube_pod_container_resource_limits{resource="memory", namespace="db-e", pod="app-1", container="app"}'
+        values: '100x48'
+      - series: 'user_threshold{tenant="db-e", component="container", metric="memory", severity="warning"}'
+        values: '85x48'
+      - series: 'tenant_metadata_info{tenant="db-e", runbook_url="http://rb/e", owner="team-e", tier="bronze"}'
+        values: '1x48'
+      - series: 'user_state_filter{tenant="db-e", filter="maintenance"}'
+        values: '1x48'
+
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: PodContainerHighMemory
+        exp_alerts:
+          # db-c: enriched, version normalized to "default".
+          - exp_labels:
+              severity: warning
+              tenant: db-c
+              version: default
+              runbook_url: "http://rb/c"
+              owner: team-c
+              tier: gold
+            exp_annotations:
+              summary: "High container memory in db-c"
+              summary_zh: "db-c 的容器記憶體使用率過高"
+              platform_summary: "[gold] db-c: container memory pressure — evaluate resource limits"
+              platform_summary_zh: "[gold] db-c: 容器記憶體壓力過高 — 請評估資源限制"
+              description: "Max container memory usage: 90.0% (threshold exceeded)"
+              description_zh: "最大容器記憶體使用率: 90.0% (超過閾值)"
+              runbook_url: "http://rb/c"
+              owner: team-c
+              tier: gold
+          # db-d: VACUUM-FIRE (branch B) — fires WITHOUT enrichment labels.
+          - exp_labels:
+              severity: warning
+              tenant: db-d
+              version: default
+            exp_annotations:
+              summary: "High container memory in db-d"
+              summary_zh: "db-d 的容器記憶體使用率過高"
+              platform_summary: "[] db-d: container memory pressure — evaluate resource limits"
+              platform_summary_zh: "[] db-d: 容器記憶體壓力過高 — 請評估資源限制"
+              description: "Max container memory usage: 90.0% (threshold exceeded)"
+              description_zh: "最大容器記憶體使用率: 90.0% (超過閾值)"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+        # db-e (maintenance) produces NO alert.
