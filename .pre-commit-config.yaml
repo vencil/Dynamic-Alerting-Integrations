@@ -260,6 +260,14 @@ repos:
         files: ^(rule-packs/|k8s/03-monitoring/).*\.yaml$
         additional_dependencies: ['pyyaml']
 
+      - id: alert-reference-check
+        name: Alert reference drift (ALERT-REFERENCE.md/.en.md)
+        entry: python3 -X utf8 scripts/tools/dx/generate_alert_reference.py --check
+        language: python
+        pass_filenames: false
+        files: ^rule-packs/.*\.ya?ml$
+        additional_dependencies: ['pyyaml']
+
       - id: glossary-check
         name: Glossary abbreviation sync
         entry: python3 -X utf8 scripts/tools/dx/sync_glossary_abbr.py --check
