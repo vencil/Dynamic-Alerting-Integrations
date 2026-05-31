@@ -263,6 +263,7 @@ nav:
     - 測試覆蓋矩陣: internal/test-coverage-matrix.md
     - Shadow Monitoring 切換: scenarios/shadow-monitoring-cutover.md
     - Staged Adoption Lifecycle: scenarios/staged-adoption-guide.md
+    - Version-Aware Thresholds: scenarios/version-aware-thresholds.md
     - 多叢集 Federation: scenarios/multi-cluster-federation.md
     - Tenant 生命週期: scenarios/tenant-lifecycle.md
     - Multi-System Migration Playbook: scenarios/multi-system-migration-playbook.md

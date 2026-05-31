@@ -12,9 +12,28 @@ lang: en
 
 ## Status
 
-🟡 **Proposed** (draft, 2026-05-30). Tracker: [#423](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/423) (`rfc` + `epic`). This ADR is the draft for the "Future ADR" promised in #423 §10; it converges the three rounds of design discussion into locked decisions and will be finalized (status → accepted) at v2.9.0 GA.
+✅ **Accepted** (2026-05-31). Tracker: [#423](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/423) (`rfc` + `epic`). Three rounds of design discussion + two external-review passes converged into locked decisions; **Phase 1 (the Kubernetes pilot) has shipped** — phase-by-phase progress in As-built below.
 
 > **Relationship to existing mechanisms**: This ADR does **not** replace or modify [`config-driven.md` §2.6 Scheduled Thresholds](../design/config-driven.md). They are two coexisting, orthogonal mechanisms — boundary in §"Boundary vs §2.6".
+
+## As-built (Implementation Status)
+
+> The `status` field stays a machine-readable bare value (`accepted`); phase progress lives here. For **how to use it** (tenant declaration + platform KSM remediation) see the [Version-Aware Thresholds guide](../scenarios/version-aware-thresholds.md).
+
+**Phase 1 — Kubernetes Pilot (shipped)**: both `container_cpu` and `container_memory` are version-aware (dimensional `version` label → (0a) injection → exact-or-fallback → split per-severity → deterministic truncation).
+
+- Threshold resolution + non-pilot defense: [#689](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/689) (deterministic truncation, AC-7), [#691](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/691) (da-guard bilingual `version` validation — a non-pilot metric is rejected outright).
+- Rule-pack normalize + (0a) `kube_pod_labels` version injection + per-severity core: [#695](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/695)/[#696](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/696) (CPU), [#700](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/700) (memory mirror).
+- Three-layer defense: [#697](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/697) — deployment prerequisite (KSM allowlist) + `VersionAwareThresholdInert` runtime sentinel + static allowlist lint.
+- Tenant write boundary: [#704](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/704) — tenant-api `validate()` rejects an invalid `version` label at write time (mutation-proven).
+
+⛔ **Deployment prerequisite (HARD)**: kube-state-metrics MUST run with `--metric-labels-allowlist=pods=[app.kubernetes.io/version]`, otherwise `kube_pod_labels` carries no version, the (0a) join matches nothing, and **version thresholds are silently inert** (proven on a real cluster). `VersionAwareThresholdInert` is the platform-side runtime safety net; the static lint `check_ksm_version_allowlist.py` catches the misconfiguration in CI.
+
+**Deferred (defer-with-trigger)**:
+
+- Version-awareness for the other (non-kubernetes) packs (trigger: a customer asks for a version-specific threshold on a non-k8s metric).
+- Tenant self-service verification of "is my version threshold actually live" — a tenant-api resolved-view showing whether matching `kube_pod_labels` version data exists (trigger: the first "I set it but nothing happened" support case).
+- A `versioned:` config sugar / portal UI inline editing help (trigger: the portal / operator epic [#692](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/692)).
 
 ## TL;DR
 

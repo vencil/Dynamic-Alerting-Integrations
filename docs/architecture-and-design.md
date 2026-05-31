@@ -337,7 +337,7 @@ spec:
 | ADR-021 | [Tenant Log Query — Authorization-Plane-Only, Ingestion-Decoupled](adr/021-tenant-log-query-federation.md) | ✅ Accepted | v2.9.0 |
 | ADR-022 | [tenant-api Dev-Auth Bypass — Local-Dev Identity Substitute, Four-Layer Containment](adr/022-dev-auth-bypass-four-layer-containment.md) | ✅ Accepted | v2.9.0 |
 | ADR-023 | [tenant-api 寫入平面 — Single-Writer Invariant 與韌性圍堵](adr/023-write-plane-single-writer-invariant.md) | 🟡 Proposed | — |
-| ADR-024 | [Version-Aware Threshold — 透過既有 Dimensional version Label 達成 Declarative Cutover](adr/024-version-aware-threshold-via-dimensional-label.md) | 🟡 Proposed | v2.9.0 |
+| ADR-024 | [Version-Aware Threshold — 透過既有 Dimensional version Label 達成 Declarative Cutover](adr/024-version-aware-threshold-via-dimensional-label.md) | ✅ Accepted | — |
 
 <!-- ADR_INDEX_END -->
 

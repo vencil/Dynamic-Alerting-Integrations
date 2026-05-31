@@ -6,19 +6,38 @@ version: v2.8.1
 lang: zh
 id: ADR-024
 tracking_kind: adr
-status: proposed
+status: accepted
 domain: threshold-exporter
 created_at: 2026-05-30
-updated_at: 2026-05-30
+updated_at: 2026-05-31
 ---
 
 # ADR-024: Version-Aware Threshold — 透過既有 Dimensional `version` Label 達成 Declarative Cutover
 
 ## 狀態
 
-🟡 **Proposed**（草案，2026-05-30）。Tracker：[#423](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/423)（`rfc` + `epic`）。本 ADR 是 #423 §10「Future ADR」的草稿，把 issue 三輪設計討論收斂為 locked decision，在 v2.9.0 GA 時定稿（status → accepted）。
+✅ **Accepted**（2026-05-31）。Tracker：[#423](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/423)（`rfc` + `epic`）。三輪設計討論 + 兩輪外審收斂為 locked decision，**Phase 1（Kubernetes pilot）已落地上線**——逐階段進度見下方 As-built。
 
 > **與既有機制的關係**：本 ADR 不取代、不修改 [`config-driven.md` §2.6 排程式閾值（Scheduled Thresholds）](../design/config-driven.md)。兩者是並存的不同機制，界線見 §2。
+
+## As-built（落地現況）
+
+> Status 欄保持機讀純值 `accepted`；逐階段進度列於此。**使用方式**（租戶宣告 + 平台 KSM 搶修）見 [Version-Aware Thresholds 使用攻略](../scenarios/version-aware-thresholds.md)。
+
+**Phase 1 — Kubernetes Pilot（已上線）**：`container_cpu` + `container_memory` 兩 metric 已 version-aware（dimensional `version` label → (0a) 注入 → exact-or-fallback → 拆 per-severity → 確定性截斷）。
+
+- 閾值解析 + 非-pilot 防禦：[#689](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/689)（確定性截斷，AC-7）、[#691](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/691)（da-guard 雙語 `version` 驗證 — 非-pilot metric 直接拒絕）。
+- Rule pack normalize + (0a) `kube_pod_labels` version 注入 + per-severity core：[#695](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/695)/[#696](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/696)（CPU）、[#700](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/700)（memory mirror）。
+- 三層防禦：[#697](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/697) — 部署前提（KSM allowlist）+ `VersionAwareThresholdInert` runtime sentinel + static allowlist lint。
+- Tenant 寫入邊界：[#704](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/704) — tenant-api `validate()` 在寫入時擋無效 `version` label（mutation-proven）。
+
+⛔ **部署前提（HARD）**：kube-state-metrics 必須設 `--metric-labels-allowlist=pods=[app.kubernetes.io/version]`，否則 `kube_pod_labels` 不帶 version、(0a) join 匹配空集、**版本閾值靜默 inert**（真叢集實證）。`VersionAwareThresholdInert` sentinel 是平台側 runtime 安全網；static lint `check_ksm_version_allowlist.py` 在 CI 攔誤配。
+
+**Deferred（defer-with-trigger）**：
+
+- 其餘（kubernetes 以外的）pack 之 version-awareness（trigger：客戶對非-k8s metric 提出版本專屬閾值需求）。
+- 租戶 self-service 驗證「版本閾值是否生效」——tenant-api resolved-view 顯示是否有對應 `kube_pod_labels` version 資料（trigger：首個「我設了卻沒作用」support 案例）。
+- `versioned:` config sugar / portal UI inline 編輯輔助（trigger：portal / operator epic [#692](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/692)）。
 
 ## TL;DR
 
