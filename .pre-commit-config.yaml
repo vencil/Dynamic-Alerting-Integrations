@@ -750,6 +750,18 @@ repos:
         # branch. Source-only: configmaps are sync-checked against source
         # separately. Semantic proof: tests/rulepacks/*-void_test.yaml.
 
+      - id: rulepack-configmap-drift
+        name: "ADR-024: configmap-rules-*.yaml must match rule-packs/ source (Commit 4 hard gate)"
+        entry: python3 -X utf8 scripts/tools/dx/generate_rulepack_configmaps.py --check
+        language: python
+        additional_dependencies: ['pyyaml']
+        pass_filenames: false
+        files: ^(rule-packs/rule-pack-.*\.yaml|k8s/03-monitoring/configmap-rules-.*\.yaml)$
+        # The deployed configmaps must never silently drift from source (the
+        # ~2-month drift caused the onboarding-vacuum bug, #709). Edit a rule pack
+        # but forget to regenerate its configmap → this fails locally before the
+        # CI hard gate does. Fix: `make rulepack-configmaps`, then commit both.
+
       - id: ksm-version-allowlist
         name: "ADR-024: kube-state-metrics must allowlist app.kubernetes.io/version (test/rulepack-e2e)"
         entry: python3 -X utf8 scripts/tools/lint/check_ksm_version_allowlist.py --ci
