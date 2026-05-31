@@ -743,6 +743,81 @@ func TestPutTenant_InvalidYAML(t *testing.T) {
 	}
 }
 
+// TestValidateAndWrite_AgreeOnTenantOnlyMetricBody locks the ADR-024 PR4 / #704
+// invariant where the bug actually lived: the dry-run validate handler and the
+// real write path must reach the SAME verdict for the same tenant-only metric
+// body (the real conf.d/{id}.yaml shape). They previously DIVERGED — POST
+// /{id}/validate merged _defaults.yaml and said "valid", but Writer.Write's
+// validate() did not and rejected the commit ("validate says OK, save says NO").
+// Both now route through cfg.MergeTenantWithRootDefaults, so a body the dry-run
+// blesses must also commit cleanly. (Driving Writer.Write directly, rather than
+// PUT-over-HTTP, keeps the assertion on the validation parity instead of the
+// RBAC-identity / git-author harness.)
+func TestValidateAndWrite_AgreeOnTenantOnlyMetricBody(t *testing.T) {
+	// A real git repo (Writer.Write commits); seed platform defaults on disk.
+	configDir := initGitConfigDir(t)
+	testutil.WriteYAML(t, configDir, "_defaults.yaml",
+		"defaults:\n  container_cpu: 80\n  mysql_connections: 80\n")
+
+	// Tenant-only body, plain metric keys (no defaults block).
+	const body = "tenants:\n  db-a:\n    container_cpu: \"70\"\n    mysql_connections: \"60\"\n"
+
+	// Path 1 — dry-run POST /validate → must say valid.
+	vw := httptest.NewRecorder()
+	ValidateTenant(&Deps{ConfigDir: configDir})(
+		vw, newRequestWithChiParam("POST", "/api/v1/tenants/db-a/validate", "id", "db-a", bytes.NewBufferString(body)))
+	if vw.Code != http.StatusOK {
+		t.Fatalf("validate status = %d, body: %s", vw.Code, vw.Body.String())
+	}
+	var vresp ValidateResponse
+	if err := json.Unmarshal(vw.Body.Bytes(), &vresp); err != nil {
+		t.Fatalf("unmarshal validate resp: %v", err)
+	}
+	if !vresp.Valid {
+		t.Fatalf("/validate rejected a tenant-only metric body: %v", vresp.Warnings)
+	}
+
+	// Path 2 — the real write path → must commit (agree with the dry-run), not
+	// fail validation on the body /validate just blessed.
+	if err := newTestWriter(configDir).Write("db-a", "op@example.com", body); err != nil {
+		t.Fatalf("write rejected a body that /validate blessed (validate/write disagree): %v", err)
+	}
+}
+
+// TestValidateAndWrite_AgreeRejectingFullConfigBody is the rejection-direction
+// twin of the test above (#705 fold-in): a body smuggling a top-level defaults
+// block must be rejected by BOTH the dry-run /validate (Valid=false) and the
+// real write path. Without enforcing the root-key contract in /validate too, we
+// would re-introduce the "validate says OK, save says NO" split this PR exists
+// to kill — just in the opposite direction.
+func TestValidateAndWrite_AgreeRejectingFullConfigBody(t *testing.T) {
+	configDir := initGitConfigDir(t)
+	testutil.WriteYAML(t, configDir, "_defaults.yaml", "defaults:\n  container_cpu: 80\n")
+
+	// Full config: a stray top-level defaults block on top of the tenants block.
+	const body = "defaults:\n  container_cpu: 80\ntenants:\n  db-a:\n    container_cpu: \"70\"\n"
+
+	// Path 1 — dry-run /validate → must say NOT valid.
+	vw := httptest.NewRecorder()
+	ValidateTenant(&Deps{ConfigDir: configDir})(
+		vw, newRequestWithChiParam("POST", "/api/v1/tenants/db-a/validate", "id", "db-a", bytes.NewBufferString(body)))
+	if vw.Code != http.StatusOK {
+		t.Fatalf("validate status = %d, body: %s", vw.Code, vw.Body.String())
+	}
+	var vresp ValidateResponse
+	if err := json.Unmarshal(vw.Body.Bytes(), &vresp); err != nil {
+		t.Fatalf("unmarshal validate resp: %v", err)
+	}
+	if vresp.Valid {
+		t.Fatal("/validate blessed a full-config body (root-key contract not enforced in dry-run)")
+	}
+
+	// Path 2 — the real write path → must also reject (agree with the dry-run).
+	if err := newTestWriter(configDir).Write("db-a", "op@example.com", body); err == nil {
+		t.Fatal("write accepted a full-config body the dry-run rejected (validate/write disagree)")
+	}
+}
+
 // --- BatchTenants tests ---
 
 func TestBatchTenants_EmptyOperations(t *testing.T) {

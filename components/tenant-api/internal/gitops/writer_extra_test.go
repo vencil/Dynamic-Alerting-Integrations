@@ -15,7 +15,7 @@ import (
 func TestValidate_ValidConfig(t *testing.T) {
 	t.Parallel()
 	yaml := "tenants:\n  db-a:\n    _silent_mode: \"warning\"\n"
-	errs := validate("db-a", yaml)
+	errs := validate("", "db-a", yaml)
 	if len(errs) != 0 {
 		t.Errorf("expected no errors, got: %v", errs)
 	}
@@ -24,18 +24,18 @@ func TestValidate_ValidConfig(t *testing.T) {
 func TestValidate_MultipleTenants(t *testing.T) {
 	t.Parallel()
 	yaml := "tenants:\n  db-a:\n    _silent_mode: \"warning\"\n  db-b:\n    _silent_mode: \"critical\"\n"
-	errs := validate("db-a", yaml)
+	errs := validate("", "db-a", yaml)
 	if len(errs) != 0 {
 		t.Errorf("expected no errors for db-a, got: %v", errs)
 	}
-	errs = validate("db-b", yaml)
+	errs = validate("", "db-b", yaml)
 	if len(errs) != 0 {
 		t.Errorf("expected no errors for db-b, got: %v", errs)
 	}
 }
 
 func TestValidate_InvalidYAML(t *testing.T) {
-	errs := validate("db-a", "{{not yaml")
+	errs := validate("", "db-a", "{{not yaml")
 	if len(errs) == 0 {
 		t.Error("expected errors for invalid YAML")
 	}
@@ -47,7 +47,7 @@ func TestValidate_InvalidYAML(t *testing.T) {
 func TestValidate_MissingTenantSection(t *testing.T) {
 	t.Parallel()
 	yaml := "tenants:\n  db-b:\n    cpu: \"80\"\n"
-	errs := validate("db-a", yaml)
+	errs := validate("", "db-a", yaml)
 	if len(errs) == 0 {
 		t.Error("expected error for missing tenant section")
 	}
@@ -58,7 +58,7 @@ func TestValidate_MissingTenantSection(t *testing.T) {
 
 func TestValidate_EmptyContent(t *testing.T) {
 	t.Parallel()
-	errs := validate("db-a", "")
+	errs := validate("", "db-a", "")
 	if len(errs) == 0 {
 		t.Error("expected error for empty content")
 	}
@@ -67,7 +67,7 @@ func TestValidate_EmptyContent(t *testing.T) {
 func TestValidate_NoTenantsKey(t *testing.T) {
 	t.Parallel()
 	yaml := "defaults:\n  cpu: 80\n"
-	errs := validate("db-a", yaml)
+	errs := validate("", "db-a", yaml)
 	if len(errs) == 0 {
 		t.Error("expected error when tenants key is missing")
 	}

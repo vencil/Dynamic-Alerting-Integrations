@@ -162,7 +162,7 @@ func (w *Writer) checkoutBaseClean(base string) error {
 //  7. onWrite callback (e.g. SSE broadcast)
 func (w *Writer) Write(tenantID, authorEmail, yamlContent string) error {
 	// Step 1: validate schema before touching disk.
-	if errs := validate(tenantID, yamlContent); len(errs) > 0 {
+	if errs := validate(w.configDir, tenantID, yamlContent); len(errs) > 0 {
 		return fmt.Errorf("validation failed: %s", strings.Join(errs, "; "))
 	}
 
@@ -450,7 +450,7 @@ type PRWriteResult struct {
 // The caller (handler) is responsible for creating the GitHub PR using the returned branch name.
 func (w *Writer) WritePR(tenantID, authorEmail, yamlContent string) (*PRWriteResult, error) {
 	// Step 1: validate schema before anything
-	if errs := validate(tenantID, yamlContent); len(errs) > 0 {
+	if errs := validate(w.configDir, tenantID, yamlContent); len(errs) > 0 {
 		return nil, fmt.Errorf("validation failed: %s", strings.Join(errs, "; "))
 	}
 
@@ -544,7 +544,7 @@ func (w *Writer) WritePRBatch(ops []PRBatchOp, authorEmail string) (*PRWriteResu
 
 	// Validate all operations first
 	for _, op := range ops {
-		if errs := validate(op.TenantID, op.YAMLContent); len(errs) > 0 {
+		if errs := validate(w.configDir, op.TenantID, op.YAMLContent); len(errs) > 0 {
 			return nil, fmt.Errorf("validation failed for %s: %s", op.TenantID, strings.Join(errs, "; "))
 		}
 	}
@@ -707,20 +707,53 @@ func (w *Writer) gitExec(args ...string) error {
 	return nil
 }
 
-// validate parses the YAML as a ThresholdConfig and runs ValidateTenantKeys.
+// validate checks an incoming tenant YAML body before it is written.
 //
-// yamlContent must be a complete ThresholdConfig document:
+// yamlContent is the tenant-only document the portal sends (the real
+// conf.d/{id}.yaml shape — "Only 'tenants' block"):
 //
 //	tenants:
 //	  <tenantID>:
 //	    key: value
-func validate(tenantID, yamlContent string) []string {
+//
+// Three stages:
+//  1. Root-key contract — the body may carry ONLY a top-level `tenants` block
+//     (cfg.CheckTenantRootKeys, mirroring tenant-config.schema.json's
+//     additionalProperties:false). A stray `defaults:` / `state_filters:` /
+//     `profiles:` (or a typo) is rejected, so the write never persists a file
+//     that violates conf.d's "Only 'tenants' block" invariant (#705). The same
+//     check runs in POST /{id}/validate so the dry-run and the write agree.
+//  2. Structural — run on the RAW body: it must be valid YAML and declare the
+//     target tenant. Kept separate from the merge so a body missing
+//     tenants.{id} is rejected outright rather than silently synthesised by
+//     MergeTenantWithRootDefaults' flat-KV fallback.
+//  3. Key validation — the _defaults.yaml at configDir is merged in BEFORE
+//     ValidateTenantKeys, so a tenant-only body's metric keys resolve against
+//     the inherited platform defaults. Without this merge, ValidateTenantKeys
+//     sees an empty Defaults map and flags EVERY metric key as "unknown key
+//     not in defaults", blocking the write — even though GET /{id}, GET
+//     /{id}/effective and POST /{id}/validate all merge defaults and accept
+//     the same body (ADR-024 PR4 / #704 write-vs-read asymmetry). It also
+//     makes ADR-024 version declarations (e.g. container_cpu{version="v2"})
+//     pass without the tenant having to inline `defaults:` into the body.
+//
+// configDir == "" falls back to structural-only key validation (unit tests
+// that exercise YAML shape without a defaults fixture).
+func validate(configDir, tenantID, yamlContent string) []string {
 	var tcfg cfg.ThresholdConfig
 	if err := yaml.Unmarshal([]byte(yamlContent), &tcfg); err != nil {
 		return []string{"invalid YAML: " + err.Error()}
 	}
+	// Reject any non-`tenants` top-level key before anything else (#705).
+	if rootErrs := cfg.CheckTenantRootKeys([]byte(yamlContent)); len(rootErrs) > 0 {
+		return rootErrs
+	}
 	if _, ok := tcfg.Tenants[tenantID]; !ok {
 		return []string{fmt.Sprintf("YAML must contain tenants.%s section", tenantID)}
 	}
-	return tcfg.ValidateTenantKeys()
+	if configDir == "" {
+		return tcfg.ValidateTenantKeys()
+	}
+	merged := cfg.MergeTenantWithRootDefaults(configDir, tenantID, []byte(yamlContent))
+	return merged.ValidateTenantKeys()
 }

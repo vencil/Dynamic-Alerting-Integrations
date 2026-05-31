@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
+	cfg "github.com/vencil/threshold-exporter/pkg/config"
 )
 
 // ValidateResponse is returned by POST /api/v1/tenants/{id}/validate.
@@ -42,10 +43,14 @@ func ValidateTenant(d *Deps) http.HandlerFunc {
 			return
 		}
 
-		// Merge with defaults to get full validation context
-		merged := loadMergedConfig(d.ConfigDir, tenantID, body)
+		// Root-key contract first (#705): a tenant body may carry only a
+		// top-level `tenants` block. Surfaced here so the dry-run verdict
+		// matches the PUT write boundary (gitops.validate rejects the same).
+		warnings := cfg.CheckTenantRootKeys(body)
 
-		warnings := merged.ValidateTenantKeys()
+		// Merge with defaults to get full validation context.
+		merged := loadMergedConfig(d.ConfigDir, tenantID, body)
+		warnings = append(warnings, merged.ValidateTenantKeys()...)
 
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(ValidateResponse{
