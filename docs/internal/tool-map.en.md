@@ -101,6 +101,7 @@ lang: en
 | `generate_platform_data.py` | 共用平台資料產生器 |
 | `generate_rule_pack_readme.py` | Generate rule-packs/README.md from actual YAML rule pack files. |
 | `generate_rule_pack_stats.py` | Rule Pack 統計單一來源產生器 |
+| `generate_rulepack_configmaps.py` | Generate k8s/03-monitoring/configmap-rules-<pack>.yaml from rule-packs/. |
 | `generate_tenant_fixture.py` | Synthetic tenant fixture generator — produce N-tenant conf.d/ for benchmark & integration testing. |
 | `generate_tenant_metadata.py` | 租戶元資料產生器 — 從 conf.d/ 解析 YAML，推斷 rule_packs、owner、tier、routing_channel。 |
 | `generate_tool_map.py` | 工具導覽自動生成 |
@@ -137,23 +138,33 @@ lang: en
 | `check_codename_leak.py` | Block internal codenames from leaking to user-facing files. |
 | `check_commit_scope_doc.py` | Commit-scope doc drift gate (L1 pre-commit hook + validate_all integration). |
 | `check_design_token_usage.py` | JSX 設計 token 使用完整性 lint |
+| `check_dev_bypass_manifest.py` | ADR-022 Layer 4 (deploy-time guard). |
 | `check_dev_rules_enforcement.py` | detect doc-drift in dev-rules.md. |
 | `check_devrules_size.py` | Dev-rules 尺寸上限檢查。 |
 | `check_dist_source_consistency.py` | Catch portal dist commits without matching source change (testing-playbook §LL §2, TRK-239). |
+| `check_doc_datools_cmds.py` | documented `da-tools` binary-wrapper subcommands |
 | `check_doc_freshness.py` | 文件新鮮度檢查工具。 |
+| `check_doc_k8s_refs.py` | docs must reference k8s manifests accurately. |
 | `check_doc_links.py` | 文件間交叉引用一致性檢查 |
 | `check_doc_reading_time.py` | 文件閱讀時間檢查工具。 |
 | `check_doc_template.py` | 文件模板合規性檢查工具。 |
 | `check_flaky_registry.py` | Validate `flaky-tests.yaml` schema + expire_at. |
 | `check_frontmatter_versions.py` | Frontmatter version global scan |
 | `check_glossary_coverage.py` | 術語表覆蓋率檢查 |
+| `check_ha_threshold_aggregation.py` | HA-max invariant lint: `user_threshold` must be aggregated with `max`. |
 | `check_hardcode_tenant.py` | Detect hardcoded tenant literals in PromQL label selectors (Rule #2). |
 | `check_head_blob_hygiene.py` | Inspect committed HEAD blobs for corruption. |
+| `check_helm_values_secrets.py` | Container/k8s IaC SAST, Layer 3. |
 | `check_hub_badge_drift.py` | detect hardcoded tool counts in the Hub UI (PR-portal-7). |
 | `check_i18n_coverage.py` | check_i18n_coverage.py |
+| `check_iac_helm.py` | Container/k8s IaC SAST, Layer 2 (Helm templates). |
+| `check_iac_vibe_rules.py` | Container/k8s IaC SAST, Layer 1 (Dockerfile). |
 | `check_includes_sync.py` | Check that Chinese and English include snippets stay in sync. |
 | `check_jsx_i18n.py` | JSX 工具 i18n 完整性 lint |
 | `check_jsx_loader_compat.py` | Detect JSX-loader-incompatible module syntax (named exports / non-allowlist imports / require() calls). |
+| `check_k8s_manifests.py` | Container/k8s IaC SAST, Layer 4 (raw k8s manifests). |
+| `check_ksm_version_allowlist.py` | KSM version-allowlist invariant lint (ADR-024 partial-misconfig defense). |
+| `check_log_egress_policy.py` | #566 batch D (T4-1/T4-2) egress allowlist gate. |
 | `check_makefile_targets.py` | Makefile target 與 DX 工具聯動檢查 |
 | `check_md_yaml_drift.py` | Markdown 內 YAML 範例與 Schema 漂移偵測 |
 | `check_metric_dictionary.py` | Metric Dictionary 自動驗證 |
@@ -169,6 +180,7 @@ lang: en
 | `check_property_coverage.py` | Property-pilot coverage drift detector. |
 | `check_repo_name.py` | Prevent wrong repository name in source files. |
 | `check_routing_profiles.py` | Lint routing profiles and domain policies (ADR-007). |
+| `check_rulepack_sync.py` | Rule-pack copy drift guard (ADR-024 PR3-pre). |
 | `check_skip_a11y_justification.py` | Require ticket-justification for `skipA11y: true` in E2E specs (testing-playbook §LL §5, TD-039). |
 | `check_structure.py` | Project structure enforcement. |
 | `check_subprocess_timeout.py` | flag subprocess calls without explicit timeout. |
