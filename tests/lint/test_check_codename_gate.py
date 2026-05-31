@@ -231,6 +231,31 @@ def test_scan_line_http_header_fragment_safe():
     assert unreg == []  # HTTP header fragments are built-in safe
 
 
+def test_scan_line_http_header_fragment_with_digits_safe():
+    # Header fragments may contain digits/caps (X-B3-TraceId -> token "X-B3";
+    # X-Amzn-... -> "X-Amzn"). The safe pattern must not be limited to
+    # [A-Z][a-z]+ (external review on #712).
+    internal = _internal(["TD-{N}"])
+    for line in ["X-B3-TraceId propagation", "set X-Amzn-Trace-Id header"]:
+        _h, unreg = mod.scan_line(line, internal, set())
+        assert "X-B3" not in unreg and "X-Amzn" not in unreg, f"escaped on {line!r}: {unreg}"
+
+
+@pytest.mark.parametrize("line", [
+    "見 Option B，或是後續",   # fullwidth comma adhesion
+    "(Option B) 方案",        # parenthesis adhesion
+    "use Tier A. Next",       # period adhesion
+    "Path A; then",           # semicolon adhesion
+])
+def test_scan_line_enumeration_skip_robust_to_adjacent_punctuation(line):
+    # The shape regex's trailing \b excludes adhering punctuation, so the
+    # enumeration token stays "<Word> <single-letter>" and is skipped — it must
+    # NOT leak as e.g. "Option B，" (external review on #712).
+    internal = _internal(["TD-{N}"])
+    _h, unreg = mod.scan_line(line, internal, set())
+    assert unreg == []
+
+
 def test_scan_line_adjacent_family_extension_surfaces():
     # Regression for the substring-suppression FN: a registered internal
     # codename (DEC-B) must NOT hide a distinct adjacent shape token that

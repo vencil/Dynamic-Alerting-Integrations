@@ -148,7 +148,7 @@ SAFE_TOKEN_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"^UTF-(8|16|32)$", re.I),
     re.compile(r"^TLS-", re.I),
     re.compile(r"^HTTP", re.I),
-    re.compile(r"^X-[A-Z][a-z]+$"),    # HTTP header fragments (X-Forwarded, X-Request, X-Real)
+    re.compile(r"^X-[A-Za-z0-9-]+$"),  # HTTP header fragments (X-Forwarded, X-Request, X-B3, X-Amzn…)
     re.compile(r"^v\d+\.\d+\.\d+$"),   # plain semver (no codename suffix)
 ]
 
