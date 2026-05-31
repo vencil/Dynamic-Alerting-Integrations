@@ -8,7 +8,6 @@ import (
 	"time"
 
 	cfg "github.com/vencil/threshold-exporter/pkg/config"
-	"gopkg.in/yaml.v3"
 
 	"github.com/go-chi/chi/v5"
 )
@@ -77,54 +76,12 @@ func GetTenant(d *Deps) http.HandlerFunc {
 	}
 }
 
-// loadMergedConfig loads _defaults.yaml (if present) and merges the tenant file on top.
+// loadMergedConfig loads _defaults.yaml (if present) and merges the tenant file
+// on top. Thin wrapper over the shared cfg.MergeTenantWithRootDefaults so the
+// GET / validate / write-boundary paths all merge defaults identically (the
+// consolidation that closed the ADR-024 PR4 / #704 write-vs-read asymmetry).
 func loadMergedConfig(configDir, tenantID string, tenantData []byte) cfg.ThresholdConfig {
-	merged := cfg.ThresholdConfig{
-		Defaults:     make(map[string]float64),
-		StateFilters: make(map[string]cfg.StateFilter),
-		Tenants:      make(map[string]map[string]cfg.ScheduledValue),
-		Profiles:     make(map[string]map[string]cfg.ScheduledValue),
-	}
-
-	// Load defaults
-	defaultsPath := filepath.Join(configDir, "_defaults.yaml")
-	if data, err := os.ReadFile(defaultsPath); err == nil {
-		var defaults cfg.ThresholdConfig
-		if err := yaml.Unmarshal(data, &defaults); err == nil {
-			for k, v := range defaults.Defaults {
-				merged.Defaults[k] = v
-			}
-			for k, v := range defaults.StateFilters {
-				merged.StateFilters[k] = v
-			}
-		}
-	}
-
-	// Merge tenant file
-	var tenantCfg cfg.ThresholdConfig
-	if err := yaml.Unmarshal(tenantData, &tenantCfg); err == nil {
-		for tenant, overrides := range tenantCfg.Tenants {
-			if merged.Tenants[tenant] == nil {
-				merged.Tenants[tenant] = make(map[string]cfg.ScheduledValue)
-			}
-			for k, v := range overrides {
-				merged.Tenants[tenant][k] = v
-			}
-		}
-	}
-
-	// Also check if the tenant file uses top-level keys (not nested under "tenants:")
-	// by looking for the tenant ID directly
-	if _, exists := merged.Tenants[tenantID]; !exists {
-		// Try parsing as flat key-value and wrapping
-		var flatKV map[string]cfg.ScheduledValue
-		if err := yaml.Unmarshal(tenantData, &flatKV); err == nil && len(flatKV) > 0 {
-			merged.Tenants[tenantID] = flatKV
-		}
-	}
-
-	merged.ApplyProfiles()
-	return merged
+	return cfg.MergeTenantWithRootDefaults(configDir, tenantID, tenantData)
 }
 
 // tenantIDFromPath is a helper for chi URL param extraction used by middleware.

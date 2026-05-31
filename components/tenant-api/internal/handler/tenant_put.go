@@ -28,8 +28,15 @@ type PutTenantResponse struct {
 
 // PutTenant handles PUT /api/v1/tenants/{id}
 //
-// Accepts a full ThresholdConfig YAML document (must contain tenants.{id} section).
-// Validates, writes to configDir/{id}.yaml, and commits to git.
+// Accepts a tenant-only YAML document — the conf.d/{id}.yaml shape, a
+// `tenants:` block containing the {id} section (NOT the platform defaults).
+// The body is committed verbatim, so any top-level key other than `tenants`
+// (e.g. a stray `defaults:` / `state_filters:` / `profiles:`, or a typo) is
+// rejected with 400 — mirroring tenant-config.schema.json's
+// additionalProperties:false (#705). Validation merges the on-disk
+// _defaults.yaml so a tenant-only body's metric keys resolve against the
+// inherited defaults — identical to GET /{id} and POST /{id}/validate
+// (ADR-024 PR4 / #704). Writes to configDir/{id}.yaml and commits to git.
 //
 // v2.5.0 Phase C: Domain policy enforcement — writes that violate the
 // tenant's domain policy return 403 with details.
