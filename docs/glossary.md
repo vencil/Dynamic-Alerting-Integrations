@@ -29,6 +29,9 @@ lang: zh
 **Blackbox Exporter**
 :   Prometheus 生態系的外部探針工具，用於 HTTP/TCP/ICMP 端點監控。本平台用於監控 threshold-exporter 的 `/health`、`/ready`、`/metrics` 端點可用性。
 
+**Blast Radius（爆炸半徑）**
+:   一個變更可能波及的範圍。`vibe-subagent-review` 對 IaC 變更（Helm values / template / Prometheus rules）採 blast-radius lens，評估 selector / RBAC / ConfigMap 等跨檔連動。
+
 **BYO (Bring Your Own)**
 :   「自帶」模式——讓已有 Prometheus / Alertmanager 的環境整合本平台，無需替換現有基礎設施。見 `docs/byo-prometheus-integration.md`、`docs/byo-alertmanager-integration.md`。
 
@@ -46,6 +49,9 @@ lang: zh
 **Conventional Commits**
 :   提交訊息規範（`feat:`, `fix:`, `docs:` 等前綴），搭配 `commitlint` + `release-please` 實現自動化版本管理與 Changelog 生成。
 
+**Custom Rule**
+:   租戶自訂的告警規則（Custom Rule Pack）。經 custom-rule governance 流程治理，見 `docs/custom-rule-governance.md`。
+
 ## D
 
 **da-tools**
@@ -56,6 +62,12 @@ lang: zh
 
 **Dynamic Alerting**
 :   本平台的產品名稱——Multi-Tenant Dynamic Alerting 平台。Config-driven、SHA-256 hot-reload、Directory Scanner 的多租戶動態告警方案。
+
+**Domain Expert（領域專家）**
+:   負責定義特定資料庫／中介軟體告警閾值與規則的角色 persona。與 Platform Engineer、Tenant 並列為三大使用者角色之一，見角色指南。
+
+**Domain Policies（領域政策）**
+:   `generate_alertmanager_routes.py` 消費的路由政策集合，定義 webhook 域名 allowlist 等護欄。見 Routing Profile。
 
 **Dual-Perspective Annotation**
 :   `platform_summary`（NOC 視角）+ `summary`（Tenant 視角）雙重 annotation。搭配 `_routing_enforced` 實現平台與租戶各看各的告警描述。
@@ -69,6 +81,9 @@ lang: zh
 
 **`group_left`**
 :   PromQL 向量匹配運算子。本平台的核心機制——用一條 rule 透過 `group_left` 匹配所有租戶的閾值向量，取代 per-tenant 獨立 rule。
+
+**Grafana Dashboard**
+:   本平台提供的 Grafana 儀表板，視覺化 `user_threshold` 系列與告警狀態。見 `docs/grafana-dashboards.md`。
 
 ## H
 
@@ -88,6 +103,9 @@ lang: zh
 **Migration Toolkit（遷移工具組）**
 :   協助既有 Prometheus 環境遷入本平台的工具集合（`migrate_rule.py` / `validate_migration.py` / `cutover_tenant.py` 等）。見 `docs/migration-toolkit-installation.md`。
 
+**Multi-Tenant（多租戶）**
+:   本平台的核心特性——單一 threshold-exporter 透過 `group_left` 同時服務多個邏輯隔離的租戶，每租戶獨立配置、路由與維護窗口。
+
 ## N
 
 **N:1 Tenant Mapping**
@@ -98,10 +116,22 @@ lang: zh
 **OCI Registry**
 :   Open Container Initiative 標準的容器/Helm chart 儲存庫。本平台的 Helm chart 和 Docker images 均發佈至 `ghcr.io/vencil/`。
 
+**Operator CRD**
+:   Prometheus Operator 的 Custom Resource Definition（`ServiceMonitor` / `PrometheusRule` / `AlertmanagerConfig`）。本平台支援以 operator-manifests 形式整合既有 Operator 環境。
+
 ## P
+
+**Platform Engineer（平台工程師）**
+:   負責部署、維運平台基礎設施與路由的角色 persona。與 Domain Expert、Tenant 並列三大使用者角色，見角色指南。
+
+**Profile Builder**
+:   da-portal 的互動式路由 profile 產生工具（JSX），協助以視覺化方式組裝 Routing Profile 與 Domain Policies。
 
 **Projected Volume**
 :   Kubernetes Volume 類型，可將多個 ConfigMap 掛載至同一目錄。本平台用於將 15 個 Rule Pack ConfigMap 掛載至 Prometheus 的 rules 目錄，每個設定 `optional: true`。
+
+**Prometheus Operator**
+:   CNCF 的 Kubernetes operator，以 CRD 管理 Prometheus / Alertmanager。本平台可與既有 Operator 環境整合（見 Operator CRD、operator-manifests）。
 
 ## R
 
@@ -110,6 +140,9 @@ lang: zh
 
 **Rule Pack**
 :   預定義的 Prometheus recording rule + alert rule 套件。目前共 15 個（MariaDB, Redis, PostgreSQL, MongoDB, ElasticSearch, Kafka, RabbitMQ, HAProxy, Kubernetes, Node, JVM, Nginx, Blackbox, Custom, Platform Health）。
+
+**Routing Profile（路由設定檔）**
+:   定義告警如何路由至各接收端的設定檔，由 `generate_alertmanager_routes.py` 消費，搭配 Domain Policies 的 webhook 域名護欄。
 
 **Runbook**
 :   告警處置手冊。透過 `_metadata` 注入 `runbook_url`，在告警觸發時自動附帶處置指引連結。
@@ -130,6 +163,9 @@ lang: zh
 
 **Silent Mode（靜默模式）**
 :   三態之一。`_silent_mode` 設定後，告警持續評估但通知被抑制。用於已知問題期間避免告警疲勞。支援 `expires` 自動失效。
+
+**Staged Adoption（分階段導入）**
+:   建議的漸進式導入路徑——從單一租戶 shadow monitoring 起步，逐步擴大涵蓋面與切換規則。見 `docs/scenarios/staged-adoption-guide.md`。
 
 ## T
 

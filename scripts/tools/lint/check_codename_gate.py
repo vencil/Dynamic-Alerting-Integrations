@@ -148,6 +148,7 @@ SAFE_TOKEN_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"^UTF-(8|16|32)$", re.I),
     re.compile(r"^TLS-", re.I),
     re.compile(r"^HTTP", re.I),
+    re.compile(r"^X-[A-Z][a-z]+$"),    # HTTP header fragments (X-Forwarded, X-Request, X-Real)
     re.compile(r"^v\d+\.\d+\.\d+$"),   # plain semver (no codename suffix)
 ]
 
@@ -290,10 +291,18 @@ def scan_line(
             # which is exactly the family-extension case discovery must surface.
             if token in internal_span_set:
                 continue
-            # Drop two-word tokens led by a determiner ("The Migration") — that
-            # is sentence prose, not a codename. Deterministic, not NLP.
-            if label == "two-word-cap" and token.split(" ", 1)[0].lower() in _LEADING_DETERMINERS:
-                continue
+            if label == "two-word-cap":
+                words = token.split(" ", 1)
+                # Drop tokens led by a determiner ("The Migration") — sentence
+                # prose, not a codename. Deterministic, not NLP.
+                if words[0].lower() in _LEADING_DETERMINERS:
+                    continue
+                # Drop "<Word> <single-letter>" enumeration labels (Tier A,
+                # Option B, Path A) — doc structure, not codenames. Real
+                # single-letter codenames (Track A) are caught upstream by the
+                # internal-pattern scan and never reach here.
+                if len(words) == 2 and len(words[1]) == 1 and words[1].isalpha():
+                    continue
             if _approved_match(token, approved):
                 continue
             if _is_safe_token(token):

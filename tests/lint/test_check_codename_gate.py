@@ -204,6 +204,33 @@ def test_scan_line_unregistered_discovery():
     assert "Quantum Sync" in unreg
 
 
+def test_scan_line_enumeration_label_skipped():
+    # "<Word> <single-letter>" is a doc enumeration label (Tier A, Option B,
+    # Path A), not a codename (#710 soak noise reduction). Deterministic.
+    internal = _internal(["TD-{N}"])
+    _h, unreg = mod.scan_line("see Tier A, Option B and Path A here", internal, set())
+    assert unreg == []
+    # A real two-word term (both words >1 char) is still discovered.
+    _h2, unreg2 = mod.scan_line("the Quantum Sync rollout", internal, set())
+    assert "Quantum Sync" in unreg2
+
+
+def test_scan_line_enumeration_skip_does_not_swallow_internal_codename():
+    # "Track A" is a registered internal codename — it must still be reported
+    # as a leak (caught by the internal-pattern scan), NOT silently dropped by
+    # the single-letter enumeration filter.
+    internal = _internal(["Track {X}"])
+    hits, unreg = mod.scan_line("uses Track A internally", internal, set())
+    assert {m for _t, m in hits} == {"Track A"}
+    assert "Track A" not in unreg
+
+
+def test_scan_line_http_header_fragment_safe():
+    internal = _internal(["TD-{N}"])
+    _h, unreg = mod.scan_line("forwards X-Forwarded and X-Request headers", internal, set())
+    assert unreg == []  # HTTP header fragments are built-in safe
+
+
 def test_scan_line_adjacent_family_extension_surfaces():
     # Regression for the substring-suppression FN: a registered internal
     # codename (DEC-B) must NOT hide a distinct adjacent shape token that
@@ -236,9 +263,9 @@ def test_scan_line_leading_determiner_skipped():
     internal = _internal(["TD-{N}"])
     _h, unreg = mod.scan_line("The Migration Toolkit helps a lot", internal, set())
     assert "The Migration" not in unreg
-    # But a non-determiner first word is still discovered.
-    _h2, unreg2 = mod.scan_line("the Tier A rollout", internal, set())
-    assert "Tier A" in unreg2
+    # But a non-determiner two-word term is still discovered.
+    _h2, unreg2 = mod.scan_line("the Quantum Sync rollout", internal, set())
+    assert "Quantum Sync" in unreg2
 
 
 def test_scan_line_possessive_not_flagged():

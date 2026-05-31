@@ -29,6 +29,9 @@ This page lists common terms and abbreviations found throughout the Dynamic Aler
 **Blackbox Exporter**
 :   An external probing tool in the Prometheus ecosystem for HTTP/TCP/ICMP endpoint monitoring. This platform uses it to monitor threshold-exporter's `/health`, `/ready`, and `/metrics` endpoint availability.
 
+**Blast Radius**
+:   The scope a change can affect. `vibe-subagent-review` applies a blast-radius lens to IaC changes (Helm values / templates / Prometheus rules), assessing cross-file coupling such as selectors / RBAC / ConfigMaps.
+
 **BYO (Bring Your Own)**
 :   Integration mode for environments with existing Prometheus/Alertmanager — integrate this platform without replacing existing infrastructure. See `docs/byo-prometheus-integration.en.md` and `docs/byo-alertmanager-integration.en.md`.
 
@@ -46,6 +49,9 @@ This page lists common terms and abbreviations found throughout the Dynamic Aler
 **Conventional Commits**
 :   A commit message convention (`feat:`, `fix:`, `docs:` prefixes) used with `commitlint` + `release-please` for automated version management and changelog generation.
 
+**Custom Rule**
+:   A tenant-authored alert rule (the Custom Rule Pack). Governed by the custom-rule governance flow; see `docs/custom-rule-governance.en.md`.
+
 ## D
 
 **da-tools**
@@ -56,6 +62,12 @@ This page lists common terms and abbreviations found throughout the Dynamic Aler
 
 **Dynamic Alerting**
 :   The product name — the Multi-Tenant Dynamic Alerting platform. A config-driven, SHA-256 hot-reload, Directory-Scanner multi-tenant dynamic alerting solution.
+
+**Domain Expert**
+:   The persona responsible for defining alert thresholds and rules for a specific database/middleware. One of the three primary user roles alongside Platform Engineer and Tenant; see the role guides.
+
+**Domain Policies**
+:   The routing-policy set consumed by `generate_alertmanager_routes.py`, defining guardrails such as the webhook domain allowlist. See Routing Profile.
 
 **Dual-Perspective Annotation**
 :   `platform_summary` (NOC perspective) + `summary` (Tenant perspective) dual annotations. Combined with `_routing_enforced` so platform and tenant teams see their own alert descriptions.
@@ -69,6 +81,9 @@ This page lists common terms and abbreviations found throughout the Dynamic Aler
 
 **`group_left`**
 :   A PromQL vector matching operator. The platform's core mechanism — uses a single rule with `group_left` to match all tenants' threshold vectors, replacing per-tenant individual rules.
+
+**Grafana Dashboard**
+:   The platform's bundled Grafana dashboards, visualizing the `user_threshold` series and alert states. See `docs/grafana-dashboards.en.md`.
 
 ## H
 
@@ -88,6 +103,9 @@ This page lists common terms and abbreviations found throughout the Dynamic Aler
 **Migration Toolkit**
 :   The toolset that helps existing Prometheus environments migrate onto this platform (`migrate_rule.py` / `validate_migration.py` / `cutover_tenant.py`, etc.). See `docs/migration-toolkit-installation.md`.
 
+**Multi-Tenant**
+:   The platform's core trait — a single threshold-exporter serves many logically isolated tenants via `group_left`, each with independent configuration, routing, and maintenance windows.
+
 ## N
 
 **N:1 Tenant Mapping**
@@ -98,10 +116,22 @@ This page lists common terms and abbreviations found throughout the Dynamic Aler
 **OCI Registry**
 :   Open Container Initiative standard container/Helm chart repository. This platform's Helm charts and Docker images are published to `ghcr.io/vencil/`.
 
+**Operator CRD**
+:   Prometheus Operator Custom Resource Definitions (`ServiceMonitor` / `PrometheusRule` / `AlertmanagerConfig`). The platform supports integrating existing Operator environments via operator-manifests.
+
 ## P
+
+**Platform Engineer**
+:   The persona responsible for deploying and operating the platform infrastructure and routing. One of the three primary user roles alongside Domain Expert and Tenant; see the role guides.
+
+**Profile Builder**
+:   da-portal's interactive routing-profile generator (JSX), helping assemble Routing Profiles and Domain Policies visually.
 
 **Projected Volume**
 :   A Kubernetes Volume type that mounts multiple ConfigMaps into a single directory. This platform uses it to mount 15 Rule Pack ConfigMaps into Prometheus's rules directory, each set to `optional: true`.
+
+**Prometheus Operator**
+:   The CNCF Kubernetes operator that manages Prometheus / Alertmanager via CRDs. The platform can integrate with an existing Operator environment (see Operator CRD, operator-manifests).
 
 ## R
 
@@ -110,6 +140,9 @@ This page lists common terms and abbreviations found throughout the Dynamic Aler
 
 **Rule Pack**
 :   Predefined bundles of Prometheus recording rules + alert rules. Currently 15 packs: MariaDB, Redis, PostgreSQL, MongoDB, ElasticSearch, Kafka, RabbitMQ, HAProxy, Kubernetes, Node, JVM, Nginx, Blackbox, Custom, Platform Health.
+
+**Routing Profile**
+:   A profile defining how alerts route to receivers, consumed by `generate_alertmanager_routes.py`, paired with the Domain Policies webhook-domain guardrails.
 
 **Runbook**
 :   Alert remediation handbook. Injected via `_metadata` as `runbook_url`, automatically attached to alerts when triggered.
@@ -130,6 +163,9 @@ This page lists common terms and abbreviations found throughout the Dynamic Aler
 
 **Silent Mode**
 :   One of three operational states. When `_silent_mode` is set, alerts continue to be evaluated but notifications are suppressed. Used during known issues to avoid alert fatigue. Supports `expires` auto-expiry.
+
+**Staged Adoption**
+:   The recommended incremental adoption path — start with single-tenant shadow monitoring, then progressively widen coverage and cut over rules. See `docs/scenarios/staged-adoption-guide.en.md`.
 
 ## T
 
