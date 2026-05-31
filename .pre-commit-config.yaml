@@ -668,21 +668,22 @@ repos:
         files: ^docs/.*\.md$
         stages: [manual]
 
-      # Layer 2 glossary-driven codename gate (#469). Ships in WARN-MODE: no
-      # --ci / --strict, so it never blocks — it prints internal-leak findings
-      # (hard, but 0 on a clean tree since Layer 1 keeps the surface clean) and
-      # a frequency-ranked backlog of unregistered shape tokens to triage into
-      # docs/glossary.md during the 1–2 week soak. PROMOTION PATH (per #469
-      # step 3): once the unregistered rate is seeded down, add `--ci` (internal
-      # leaks block — the maintainable successor to Layer 1's hard-coded
-      # PATTERNS) and later `--strict` + move off the manual stage.
+      # Layer 2 glossary-driven codename gate (#469). PROMOTED to blocking in
+      # Phase B (#710): `--ci` hard-fails on confirmed INTERNAL codename leaks
+      # (templates registered in docs/glossary.md's "內部代號" table) — the
+      # maintainable successor to Layer 1's hard-coded PATTERNS. 0 on a clean
+      # tree. Auto-stage + wired into CI (ci.yml) for parity with Layer 1.
+      # NOT --strict yet: unregistered shape tokens stay discovery-only (that
+      # backlog is the ongoing #710 soak — run `python3 scripts/tools/lint/
+      # check_codename_gate.py` with no flags for the full frequency-ranked
+      # report). --strict promotion (unregistered also blocks) is deferred to
+      # Phase C per #710 once the soak rate is low.
       - id: codename-gate-check
-        name: Codename gate Layer 2 (glossary-driven, warn-mode soak)
-        entry: python3 -X utf8 scripts/tools/lint/check_codename_gate.py
+        name: Codename gate Layer 2 (glossary-driven, internal-leak blocking)
+        entry: python3 -X utf8 scripts/tools/lint/check_codename_gate.py --ci
         language: python
         pass_filenames: false
         files: ^docs/.*\.md$
-        stages: [manual]
 
       - id: md-yaml-drift-check
         name: Markdown YAML example ↔ schema drift

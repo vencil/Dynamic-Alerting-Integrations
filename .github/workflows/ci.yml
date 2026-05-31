@@ -75,6 +75,13 @@ jobs:
           # §3 (b) class). resolve_diff_base() auto-picks origin/$GITHUB_BASE_REF
           # so the fetch-depth: 0 above is sufficient — no extra env wiring.
           pre-commit run codename-leak-check --all-files
+          # Codename gate Layer 2 (#469/#710 Phase B) — glossary-driven blocking. Runs
+          # with --ci (entry in .pre-commit-config.yaml): hard-fails on confirmed
+          # internal codename leaks (templates from docs/glossary.md). Full-scan,
+          # deterministic, 0 FP. PR_BODY (set on the step) enables the
+          # `bypass-lint: codename-gate` escape per lint-policy §4. NOT --strict:
+          # unregistered shape tokens remain the #710 soak, not gated here.
+          pre-commit run codename-gate-check --all-files
           # changelog-no-tbd-check refactored to diff-only in PR #383 (V-4 batch).
           # Was registered in .pre-commit-config.yaml since v2.7.x but never
           # wired to CI Lint job — only ran on contributor's local pre-commit.

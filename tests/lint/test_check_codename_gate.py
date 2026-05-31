@@ -256,6 +256,19 @@ def test_scan_line_enumeration_skip_robust_to_adjacent_punctuation(line):
     assert unreg == []
 
 
+def test_scan_line_discover_false_skips_shape_but_keeps_internal():
+    # --ci fast path: discover=False must skip the shape scan (no unregistered)
+    # while the internal-pattern teeth still fire. A line with both a registered
+    # leak and an unregistered shape token: only the leak is returned.
+    internal = _internal(["TD-{N}"])
+    hits, unreg = mod.scan_line("TD-9 and the Quantum Sync feature", internal, set(), discover=False)
+    assert {m for _t, m in hits} == {"TD-9"}
+    assert unreg == []
+    # Contrast: with discover=True the shape token surfaces.
+    _h2, unreg2 = mod.scan_line("the Quantum Sync feature", internal, set(), discover=True)
+    assert "Quantum Sync" in unreg2
+
+
 def test_scan_line_adjacent_family_extension_surfaces():
     # Regression for the substring-suppression FN: a registered internal
     # codename (DEC-B) must NOT hide a distinct adjacent shape token that
