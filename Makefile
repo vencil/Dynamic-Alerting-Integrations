@@ -684,7 +684,7 @@ lint-extract: ## 拆新 lint script（PR #154/#162/#166/#169/#170 共通 boilerp
 
 lint-docs: ## 一站式文件 lint（versions + drift + tool consistency，支援 ARGS="--parallel"）
 	@python3 ./scripts/tools/validate_all.py \
-		--only versions,tool_map,doc_map,rule_pack_stats,changelog,glossary,includes,platform_data,tool_consistency \
+		--only versions,tool_map,doc_map,rule_pack_stats,changelog,glossary,includes,platform_data,tool_consistency,alerts \
 		$(ARGS)
 
 .PHONY: lint-egress
