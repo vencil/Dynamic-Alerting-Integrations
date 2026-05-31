@@ -32,6 +32,10 @@ lang: en
 | `docs/adr/018-profile-as-directory-default.md` (.en.md) | Platform Engineers, SREs, contributors | ADR-018: Profile-as-Directory-Default |
 | `docs/adr/019-planning-ssot.md` | Platform Engineers, contributors, ai-agents | ADR-019: Planning SSOT — Frontmatter Contract + Discovery-based Index |
 | `docs/adr/020-tenant-federation.md` | Platform Engineers, contributors | ADR-020: Tenant Federation — Label-Injection Proxy over Self-Built Endpoint |
+| `docs/adr/021-tenant-log-query-federation.md` | Platform Engineers, contributors | ADR-021: Tenant Log Query — Authorization-Plane-Only, Ingestion-Decoupled |
+| `docs/adr/022-dev-auth-bypass-four-layer-containment.md` | Platform Engineers, contributors | ADR-022: tenant-api Dev-Auth Bypass — Local-Dev Identity Substitute, Four-Layer Containment |
+| `docs/adr/023-write-plane-single-writer-invariant.md` | Platform Engineers, contributors | ADR-023: tenant-api 寫入平面 — Single-Writer Invariant 與韌性圍堵 |
+| `docs/adr/024-version-aware-threshold-via-dimensional-label.md` (.en.md) | Platform Engineers, contributors, SREs | ADR-024: Version-Aware Threshold — Declarative Cutover via the Existing Dimensional `version` Label |
 | `docs/api/README.md` (.en.md) | Platform Engineers, SREs | Threshold Exporter API Reference |
 | `docs/api/tenant-api-hardening.md` (.en.md) | platform-ops, sre, security | Tenant API Hardening (v2.8.0) |
 | `docs/architecture-and-design.md` (.en.md) | Platform Engineers | Architecture and Design — Multi-Tenant Dynamic Alerting Platform Technical Whitepaper |
@@ -54,6 +58,7 @@ lang: en
 | `docs/index.md` (.en.md) | All | Dynamic Alerting Platform — Home |
 | `docs/integration/byo-alertmanager-integration.md` (.en.md) | Platform Engineers, SREs | BYO Alertmanager Integration Guide |
 | `docs/integration/byo-prometheus-integration.md` (.en.md) | Platform Engineers, SREs | Bring Your Own Prometheus (BYOP) — Existing Monitoring Infrastructure Integration Guide |
+| `docs/integration/deployment-sizing.md` (.en.md) | Platform Engineers, SREs, DevOps | Deployment Sizing Guide |
 | `docs/integration/federation-integration.md` (.en.md) | Platform Engineers | Federation Integration Guide |
 | `docs/integration/gitops-deployment.md` (.en.md) | Platform Engineers, DevOps | GitOps Deployment Guide |
 | `docs/integration/operator-alertmanager-integration.md` (.en.md) | Platform Engineers | Operator Alertmanager Integration Guide |
@@ -83,6 +88,7 @@ lang: en
 | `docs/scenarios/shadow-monitoring-cutover.md` (.en.md) | Platform Engineers, SREs, DevOps, Tenants | Scenario: Shadow Monitoring — From Alert Health Assessment to Automated Cutover |
 | `docs/scenarios/staged-adoption-guide.md` (.en.md) | Platform Engineers, SREs, tenant-admins | Staged Rule Adoption Lifecycle |
 | `docs/scenarios/tenant-lifecycle.md` (.en.md) | All | Scenario: Complete Tenant Lifecycle Management |
+| `docs/scenarios/version-aware-thresholds.md` (.en.md) | tenant-admins, Platform Engineers, SREs | Version-Aware Thresholds — A Usage Guide |
 | `docs/schemas/migration-state.md` | Platform Engineers, SREs, automation | Migration State Schema (.da/migration-state.json) |
 | `docs/schemas/README.md` | Platform Engineers, Tenants | JSON Schema Reference |
 | `docs/shadow-monitoring-sop.md` (.en.md) | SREs, Platform Engineers | Shadow Monitoring SRE SOP |

@@ -528,3 +528,9 @@ groups:
           summary_zh: "已宣告版本專屬閾值，但 kube-state-metrics 未暴露 pod 標籤 — 功能靜默失效"
           description: "{{ $value | printf \"%.0f\" }} version-specific container CPU threshold(s) declared and tenant pods are running, but kube-state-metrics emits no pod labels at all. Set KSM --metric-labels-allowlist=pods=[app.kubernetes.io/version]."
           description_zh: "已宣告 {{ $value | printf \"%.0f\" }} 個版本專屬容器 CPU 閾值且租戶 Pod 正在運行，但 kube-state-metrics 完全未暴露 pod 標籤。請為 KSM 設定 --metric-labels-allowlist=pods=[app.kubernetes.io/version]。"
+          # JIT lifecycle hook (ADR-024 docs): this platform-scoped alert deep-links
+          # the on-call SRE straight to the KSM-remediation section. ⚠ The anchor
+          # `#for-platform-operators-ksm-allowlist-remediation` is a CONTRACT with that
+          # English H2 heading in the guide — do NOT rename the heading (the link would
+          # rot silently; mkdocs-strict does not validate URLs inside rule-pack YAML).
+          runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/scenarios/version-aware-thresholds.md#for-platform-operators-ksm-allowlist-remediation"

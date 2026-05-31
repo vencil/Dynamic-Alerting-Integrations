@@ -39,6 +39,7 @@ tests:
               summary_zh: "已宣告版本專屬閾值，但 kube-state-metrics 未暴露 pod 標籤 — 功能靜默失效"
               description: "1 version-specific container CPU threshold(s) declared and tenant pods are running, but kube-state-metrics emits no pod labels at all. Set KSM --metric-labels-allowlist=pods=[app.kubernetes.io/version]."
               description_zh: "已宣告 1 個版本專屬容器 CPU 閾值且租戶 Pod 正在運行，但 kube-state-metrics 完全未暴露 pod 標籤。請為 KSM 設定 --metric-labels-allowlist=pods=[app.kubernetes.io/version]。"
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/scenarios/version-aware-thresholds.md#for-platform-operators-ksm-allowlist-remediation"
 
   # ── B) HEALTHY: version threshold + KSM emits version-labelled pod labels → SILENT ──
   - interval: 15s
