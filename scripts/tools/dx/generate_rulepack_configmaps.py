@@ -102,6 +102,10 @@ def main() -> int:
     parser.add_argument("--check", action="store_true",
                         help="verify committed configmaps match source (semantic); exit 1 on drift")
     parser.add_argument("--namespace", default="monitoring")
+    parser.add_argument("--pack", action="append", default=None,
+                        help="restrict to specific pack name(s), e.g. --pack kubernetes "
+                             "(repeatable). Default: all packs. Used to scope a pilot "
+                             "regeneration without disturbing deferred packs.")
     args = parser.parse_args()
 
     repo = _repo_root()
@@ -110,6 +114,13 @@ def main() -> int:
     if not packs:
         print("ERROR: no rule packs found", file=sys.stderr)
         return 2
+    if args.pack:
+        wanted = set(args.pack)
+        packs = [p for p in packs if _pack_name(p) in wanted]
+        missing = wanted - {_pack_name(p) for p in packs}
+        if missing:
+            print(f"ERROR: --pack name(s) not found: {sorted(missing)}", file=sys.stderr)
+            return 2
 
     drift = []
     wrote = 0

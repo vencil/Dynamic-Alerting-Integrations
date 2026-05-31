@@ -33,6 +33,14 @@ groups:
       # rolling-update instant where numerator/denominator carry mismatched
       # versions and produce NaN. Pods without the label get no `version` (→ "")
       # which the normalize layer maps to "default".
+      # ⛔ DEPLOYMENT PREREQUISITE (proven on real kind cluster, test/rulepack-e2e/):
+      # kube-state-metrics emits NO `kube_pod_labels` samples by default — the
+      # `app.kubernetes.io/version` label only appears as `label_app_kubernetes_io_version`
+      # when KSM runs with `--metric-labels-allowlist=pods=[app.kubernetes.io/version]`
+      # (see k8s/03-monitoring/deployment-kube-state-metrics.yaml). WITHOUT it this
+      # join matches nothing → every pod silently resolves to version="default" and
+      # version-specific thresholds never apply. The VersionAwareThresholdInert
+      # sentinel (below) detects this misconfiguration at runtime.
       - record: tenant:container_cpu_percent:by_container
         expr: |
           label_replace(
@@ -349,3 +357,30 @@ groups:
           runbook_url: "{{ $labels.runbook_url }}"
           owner: "{{ $labels.owner }}"
           tier: "{{ $labels.tier }}"
+
+  # ADR-024 silent-failure sentinel — platform-scoped (no tenant label): a KSM
+  # misconfiguration is a platform-team concern, not a tenant's. Detects at runtime
+  # the exact inert state proven reachable on a real kind cluster (test/rulepack-e2e/):
+  # an operator declared version-specific thresholds (user_threshold carries a
+  # non-empty `version`) BUT kube-state-metrics exposes ZERO version labels, so the
+  # (0a) join matches nothing and every version threshold silently degrades to
+  # default. `or vector(0)` makes both legs scalar-safe so the `and` matches on {}.
+  - name: kubernetes-version-aware-sentinel
+    rules:
+      - alert: VersionAwareThresholdInert
+        expr: |
+          (count(max by(tenant, version, severity) (user_threshold{component="container", metric="cpu", version=~".+"})) or vector(0)) > 0
+          and
+          (count(kube_pod_labels{label_app_kubernetes_io_version=~".+"}) or vector(0)) == 0
+        for: 10m
+        labels:
+          severity: warning
+          # Platform-scoped: the count() expr yields no tenant, so this renders
+          # empty (dropped) — same established pattern as *ExporterAbsent sentinels.
+          # Present to satisfy custom-rule-policy required_labels (tenant).
+          tenant: "{{ $labels.tenant }}"
+        annotations:
+          summary: "Version-aware thresholds declared but kube-state-metrics exposes no version labels — feature inert"
+          summary_zh: "已宣告版本專屬閾值，但 kube-state-metrics 未暴露版本標籤 — 功能靜默失效"
+          description: "{{ $value | printf \"%.0f\" }} version-specific container CPU threshold(s) declared, but kube_pod_labels carries no app.kubernetes.io/version. Set KSM --metric-labels-allowlist=pods=[app.kubernetes.io/version]."
+          description_zh: "已宣告 {{ $value | printf \"%.0f\" }} 個版本專屬容器 CPU 閾值，但 kube_pod_labels 不含 app.kubernetes.io/version。請為 KSM 設定 --metric-labels-allowlist=pods=[app.kubernetes.io/version]。"
