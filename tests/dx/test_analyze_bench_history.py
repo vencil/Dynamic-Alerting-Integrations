@@ -15,7 +15,9 @@ OUT OF SCOPE here (require gh CLI auth / live network):
 """
 from __future__ import annotations
 
+import json
 import math
+import types
 from pathlib import Path
 
 import pytest
@@ -323,3 +325,204 @@ class TestRenderMarkdownTable:
             {1: [100], 2: [100]}, bench="BenchmarkScanDirHierarchical")}
         out = ab.render_markdown_table(stats, n_runs_total=2, n_runs_succeeded=2)
         assert "BenchmarkScanDirHierarchical" in out
+
+
+# ===========================================================================
+# Trend watchdog (--trend-watch) — sustained-regression detection + lifecycle.
+# Codifies the scenarios validated ad-hoc during the v6 bench-gate redesign so
+# the R1/R2 math, the canary noise floor (+ its cap), the sparse-series guard,
+# and the issue open/update/close closed loop stay regression-protected.
+# ===========================================================================
+
+_BENCH = "BenchmarkScanDirHierarchical_1000"
+_C = ab.CANARY_BENCH  # BenchmarkControlCanaryCPU
+
+
+def _night(idx: int, benches: dict[str, float]) -> ab.NightRecord:
+    """One nightly record; lower idx = newer (created_at descends with idx)."""
+    return ab.NightRecord(
+        run_id=1000 + idx,
+        created_at=f"2026-05-{28 - idx:02d}T03:00:00Z",
+        medians=dict(benches),
+    )
+
+
+def _flat(idx: int, bench_ns: float, canary_ns: float = 360_000.0) -> ab.NightRecord:
+    return _night(idx, {_BENCH: bench_ns, _C: canary_ns})
+
+
+def _trend_args(fixture: Path, **over) -> types.SimpleNamespace:
+    d = dict(fixture_json=fixture, fixture_open_issue=None, cache_dir=None,
+             workflow="bench-record.yaml", trend_limit=14, recent_nights=3,
+             min_floor_pct=5.0, canary_floor_mult=3.0, creep_floor_pct=10.0,
+             assignee="vencil", dry_run=True)
+    d.update(over)
+    return types.SimpleNamespace(**d)
+
+
+def _write_fixture(tmp_path: Path, nights: list[ab.NightRecord]) -> Path:
+    data = [{"run_id": n.run_id, "createdAt": n.created_at, "benches": n.medians}
+            for n in nights]
+    p = tmp_path / "nights.json"
+    p.write_text(json.dumps(data), encoding="utf-8")
+    return p
+
+
+class TestCV:
+    def test_fewer_than_two_points_is_zero(self):
+        assert ab._cv([5.0]) == 0.0
+        assert ab._cv([]) == 0.0
+
+    def test_identical_points_zero(self):
+        assert ab._cv([100.0, 100.0, 100.0]) == 0.0
+
+    def test_zero_mean_is_zero(self):
+        assert ab._cv([0.0, 0.0]) == 0.0
+
+    def test_known_value(self):
+        # [80, 100, 120] → mean 100, stdev 20 → CV 0.2
+        assert pytest.approx(ab._cv([80.0, 100.0, 120.0]), rel=1e-6) == 0.2
+
+
+class TestNightRecordsFromFixture:
+    def test_loads_and_sorts_newest_first(self, tmp_path):
+        # Deliberately write oldest-first; loader must sort newest-first.
+        nights = [_flat(3, 35e6), _flat(0, 39e6), _flat(1, 38e6)]
+        p = _write_fixture(tmp_path, nights)
+        loaded = ab.night_records_from_fixture(p)
+        created = [n.created_at for n in loaded]
+        assert created == sorted(created, reverse=True)
+        assert loaded[0].medians[_BENCH] == 39e6  # newest
+
+
+class TestAnalyzeTrend:
+    def _run(self, nights, **over):
+        kw = dict(recent_k=3, min_floor_pct=5.0, canary_floor_mult=3.0,
+                  creep_floor_pct=10.0)
+        kw.update(over)
+        return ab.analyze_trend(nights, **kw)
+
+    def test_sustained_regression_detected(self):
+        nights = [_flat(0, 39e6), _flat(1, 39e6), _flat(2, 39e6)] + \
+                 [_flat(i, 35e6) for i in range(3, 8)]
+        findings, _ = self._run(nights)
+        assert any(f.bench == _BENCH and f.kind == "sustained" for f in findings)
+
+    def test_single_night_blip_silent(self):
+        nights = [_flat(0, 42e6)] + [_flat(i, 35e6) for i in range(1, 8)]
+        findings, _ = self._run(nights)
+        assert findings == []
+
+    def test_within_floor_silent(self):
+        # +2.8% recent — below the 5% min floor.
+        nights = [_flat(0, 36e6), _flat(1, 36e6), _flat(2, 36e6)] + \
+                 [_flat(i, 35e6) for i in range(3, 8)]
+        findings, _ = self._run(nights)
+        assert findings == []
+
+    def test_creep_detected(self):
+        # +2%/night ramp across the window (newest highest).
+        nights = [_flat(9 - k, round(35e6 * (1.02 ** k))) for k in range(10)]
+        nights.sort(key=lambda n: n.created_at, reverse=True)
+        findings, _ = self._run(nights)
+        assert any(f.bench == _BENCH for f in findings)
+
+    def test_noisy_canary_does_not_silence_real_regression(self):
+        # Real +15% sustained WITH a noisy canary (CV ~8%). The floor cap keeps
+        # the canary from inflating the floor above the real effect.
+        noisy = [330_000, 390_000, 335_000, 388_000, 360_000, 345_000, 378_000, 352_000]
+        nights = [_flat(0, 40.25e6, noisy[0]), _flat(1, 40.3e6, noisy[1]),
+                  _flat(2, 40.1e6, noisy[2])] + \
+                 [_flat(i, 35e6, noisy[i]) for i in range(3, 8)]
+        _, meta = self._run(nights)
+        assert meta["floor_pct"] <= 10.0 + 1e-9   # cap enforced
+        findings, _ = self._run(nights)
+        assert any(f.bench == _BENCH for f in findings)
+
+    def test_vanished_bench_is_skipped_not_misjudged(self):
+        # Bench present only in OLDER nights (absent from newest 3 = perf-timeout
+        # symptom), with a spike in the 2 oldest. Must be SKIPPED — not collapsed
+        # so an old night masquerades as "today".
+        nights = []
+        for i in range(8):
+            b = {_C: 360_000.0}
+            if i >= 3:
+                b[_BENCH] = 52.5e6 if i >= 6 else 35e6
+            nights.append(_night(i, b))
+        findings, _ = self._run(nights)
+        assert all(f.bench != _BENCH for f in findings)
+
+    def test_insufficient_nights_no_findings(self):
+        nights = [_flat(i, 39e6) for i in range(3)]  # < recent_k + 2
+        findings, _ = self._run(nights)
+        assert findings == []
+
+    def test_all_zero_no_crash_no_finding(self):
+        nights = [_flat(i, 0.0, 0.0) for i in range(8)]
+        findings, _ = self._run(nights)
+        assert findings == []
+
+
+class TestRenderTrendIssueBody:
+    def test_renders_table_with_finding(self):
+        f = ab.TrendFinding(bench=_BENCH, kind="sustained", today_ns=39e6,
+                            anchor_ns=35e6, best_ns=35e6,
+                            pct_vs_anchor=11.4, pct_vs_best=11.4)
+        body = ab.render_trend_issue_body([f], {
+            "canary_cv": 0.01, "floor_pct": 5.0, "creep_floor_pct": 10.0,
+            "n_nights": 8, "recent_k": 3})
+        assert _BENCH in body
+        assert "sustained" in body
+        assert "trend regression" in body.lower()
+
+
+class TestRunTrendWatchDryRun:
+    def test_sustained_would_open_issue(self, tmp_path, capsys):
+        nights = [_flat(0, 39e6), _flat(1, 39e6), _flat(2, 39e6)] + \
+                 [_flat(i, 35e6) for i in range(3, 8)]
+        rc = ab.run_trend_watch(_trend_args(_write_fixture(tmp_path, nights)))
+        assert rc == 0
+        assert "would open" in capsys.readouterr().err
+
+    def test_clean_silent(self, tmp_path, capsys):
+        nights = [_flat(i, 35e6) for i in range(8)]
+        rc = ab.run_trend_watch(_trend_args(_write_fixture(tmp_path, nights)))
+        assert rc == 0
+        assert "No sustained" in capsys.readouterr().out
+
+    def test_recovered_with_open_issue_would_close(self, tmp_path, capsys):
+        nights = [_flat(i, 35e6) for i in range(8)]
+        args = _trend_args(_write_fixture(tmp_path, nights), fixture_open_issue=99)
+        rc = ab.run_trend_watch(args)
+        assert rc == 0
+        assert "would close" in capsys.readouterr().err
+
+    def test_sustained_with_open_issue_would_update(self, tmp_path, capsys):
+        nights = [_flat(0, 39e6), _flat(1, 39e6), _flat(2, 39e6)] + \
+                 [_flat(i, 35e6) for i in range(3, 8)]
+        args = _trend_args(_write_fixture(tmp_path, nights), fixture_open_issue=88)
+        rc = ab.run_trend_watch(args)
+        assert rc == 0
+        assert "would update" in capsys.readouterr().err
+
+    def test_insufficient_history_returns_zero(self, tmp_path, capsys):
+        nights = [_flat(i, 39e6) for i in range(3)]
+        rc = ab.run_trend_watch(_trend_args(_write_fixture(tmp_path, nights)))
+        assert rc == 0
+        assert "not enough history" in capsys.readouterr().err
+
+
+class TestMainTrendDispatch:
+    """main() argparse + --trend-watch dispatch, fully offline via --fixture-json."""
+
+    def test_main_trend_watch_fixture(self, tmp_path, monkeypatch, capsys):
+        nights = [_flat(0, 39e6), _flat(1, 39e6), _flat(2, 39e6)] + \
+                 [_flat(i, 35e6) for i in range(3, 8)]
+        fixture = _write_fixture(tmp_path, nights)
+        monkeypatch.setattr(
+            "sys.argv",
+            ["analyze_bench_history.py", "--trend-watch", "--dry-run",
+             "--fixture-json", str(fixture)],
+        )
+        assert ab.main() == 0
+        assert "would open" in capsys.readouterr().err

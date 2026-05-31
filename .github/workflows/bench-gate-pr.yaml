@@ -45,14 +45,16 @@ name: Bench Gate (PR-time, Tier 1)
 #   - Wall-time stays ~20-25 min (same total benchtime as v5's count=6; the
 #     extra cost is process starts + tiny canaries, offset by pre-compiling once).
 #
-# Override + governance defenses (UNCHANGED from v4):
-#   - Override label `override: bench-regress-ok` (admin/maintain only)
-#   - Event-scoped honor: skip honored ONLY on `labeled` event with our
-#     specific label name AND admin/maintain sender role. Per-event,
-#     per-commit-state semantics. Companion bench-override-audit.yaml
-#     enforces role + auto-strips stale label on synchronize.
-#   - Gemini round-7 (Ghost Green) + round-8 (Blanket Immunity) defenses
-#     remain via the preflight check_override step.
+# Governance (Phase 2 — INFORMATIONAL):
+#   - The gate no longer blocks merge. A real regression posts a PR comment and
+#     applies the `perf-regression` label; an INCONCLUSIVE run posts a re-run
+#     note. The job exits 0 in all cases (infra errors aside).
+#   - Because nothing is blocked, the old `override: bench-regress-ok` label and
+#     its companion `bench-override-audit.yaml` (role check + stale-label strip)
+#     are REMOVED — there is no gate to override.
+#   - Fork PRs get a read-only token (`pull_request`), so comment/label calls
+#     would fail; they degrade gracefully to a `::warning::` + step summary. We
+#     deliberately do NOT use `pull_request_target` (pwn-request risk).
 #
 # Regression detection (alpha + magnitude UNCHANGED from v4; metric scope
 # added in #608):
@@ -80,7 +82,10 @@ name: Bench Gate (PR-time, Tier 1)
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, labeled]
+    # No `labeled` trigger: Phase 2 made the gate INFORMATIONAL (a regression
+    # posts a comment + `perf-regression` label, never blocks merge), so the
+    # `override: bench-regress-ok` label + its `labeled`-event honoring are gone.
+    types: [opened, synchronize, reopened]
     paths:
       # Scope to benchmarkable changes only (issue #433 W3). Watching the
       # whole app dir fired the gate on PRs with no benchmarkable Go delta —
@@ -108,102 +113,22 @@ concurrency:
 
 permissions:
   contents: read
-  pull-requests: write  # for posting the result comment
+  pull-requests: write  # post the informational result comment
+  issues: write         # add/remove the `perf-regression` label (PRs are issues underneath)
 
 jobs:
-  # Job 1: cheap preflight. Computes merge-base, checks override label.
-  # Outputs feed the bench job.
+  # Job 1: cheap preflight — compute the true merge-base (PR divergence point).
+  # Phase 2 removed the override-label check, so this job is now just merge-base.
   preflight:
-    name: Preflight (override check + merge-base)
-    # Filter out unrelated `labeled` events before spinning up the runner.
-    # The workflow trigger includes `[labeled]` so we can honor a freshly-
-    # applied override label, but a `labeled` event for some OTHER label
-    # (e.g. `bug`, `needs-review`) shouldn't burn ~20 min of bench time —
-    # no code changed, the result would be identical to the prior commit's
-    # bench-gate run. Skip the whole workflow for those events.
-    # [Gemini round-9 redundant-wait catch.]
-    if: |
-      github.event.action != 'labeled'
-      || github.event.label.name == 'override: bench-regress-ok'
+    name: Preflight (merge-base)
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
-      skip: ${{ steps.check_override.outputs.skip }}
       merge_base_sha: ${{ steps.merge_base.outputs.sha }}
     steps:
-      # Override label honor logic — closes Ghost Green race (round-7) and
-      # Blanket Immunity Trap (round-8) by event-scoped honor: skip only
-      # when (a) THIS event is `labeled`, (b) the label is OUR override,
-      # AND (c) the applier (sender on labeled event) has admin or maintain
-      # role. Any other event treats the label as absent regardless of
-      # whether it's still on the PR.
-      - name: Check override label (event-scoped + applier-role verified)
-        id: check_override
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          REPO: ${{ github.repository }}
-          EVENT_ACTION: ${{ github.event.action }}
-          EVENT_LABEL_NAME: ${{ github.event.label.name }}
-          SENDER: ${{ github.event.sender.login }}
-        run: |
-          set -euo pipefail
-
-          if [ "$EVENT_ACTION" != "labeled" ]; then
-            echo "Event action is '$EVENT_ACTION' (not 'labeled'). Override (if any) ignored."
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          if [ "$EVENT_LABEL_NAME" != "override: bench-regress-ok" ]; then
-            echo "Labeled event was for '$EVENT_LABEL_NAME' (different label). Override (if any) ignored."
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          # The override label was JUST applied in THIS event. Verify role
-          # of the applier. On `labeled` events, github.event.sender is the
-          # actor who applied the label.
-          if permission=$(gh api "repos/$REPO/collaborators/$SENDER/permission" \
-                            --jq '.permission' 2>/dev/null); then
-            echo "Sender $SENDER role: $permission"
-          else
-            echo "::warning::Could not fetch role for $SENDER (404 / API error). Treating as unauthorized."
-            permission="none"
-          fi
-
-          if [ "$permission" = "admin" ] || [ "$permission" = "maintain" ]; then
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "::notice::Override accepted — $SENDER ($permission). Valid for THIS run only."
-            {
-              echo "## Bench Gate — SKIPPED via override label"
-              echo ""
-              echo "Label applied by \`$SENDER\` (role: \`$permission\`)."
-              echo ""
-              echo "**Per-event semantics**: This override is valid only for the bench-gate run"
-              echo "triggered by this exact \`labeled\` event. Any subsequent push (\`synchronize\`)"
-              echo "will force re-evaluation without this skip; the maintainer must re-apply the"
-              echo "label after reviewing the new commits if the override should remain in effect."
-              echo ""
-              echo "Audit trail: this skip is permanently logged on the merge commit."
-            } >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::Override label applied by $SENDER ($permission) — not authorized. Ignoring."
-            {
-              echo "## Bench Gate — UNAUTHORIZED override ignored"
-              echo ""
-              echo "Label \`override: bench-regress-ok\` was applied by \`$SENDER\` (role: \`$permission\`),"
-              echo "but only \`admin\` or \`maintain\` roles can authorize override. **Label is being ignored**"
-              echo "and benches will run normally. The companion \`bench-override-audit.yaml\` workflow"
-              echo "should auto-revert this label and post a comment with the proper request flow."
-            } >> "$GITHUB_STEP_SUMMARY"
-          fi
-
       # CRITICAL: fetch-depth: 0 required for `git merge-base`. See
       # comments on the bench-job checkout for the same gotcha.
       - name: Checkout with full history
-        if: steps.check_override.outputs.skip != 'true'
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
@@ -227,7 +152,6 @@ jobs:
       # so `git merge-base` walks back through the PR's commit ancestry
       # to find the true branching point.
       - name: Compute merge-base
-        if: steps.check_override.outputs.skip != 'true'
         id: merge_base
         run: |
           base_ref="origin/${{ github.base_ref }}"
@@ -248,7 +172,6 @@ jobs:
   bench:
     name: Bench + Compare (single-runner interleaved + canary)
     needs: preflight
-    if: needs.preflight.outputs.skip != 'true'
     runs-on: ubuntu-latest
     # Budget: ~6 interleaved rounds × (base+pr full set @3s) + pre-compile once +
     # tiny canaries + benchstat = ~20-25 min nominal. 40 min cap gives headroom for
@@ -573,24 +496,67 @@ jobs:
               echo "$REGRESSIONS_LIST"
               echo '```'
               echo ""
-              echo "If this regression is a deliberate correctness/safety trade-off,"
-              echo "request a maintainer to apply the label \`override: bench-regress-ok\`."
-              echo "The PR will re-run CI on label application (handled via this"
-              echo "workflow's \`types: [labeled]\` trigger) and be skipped with an"
-              echo "audit-trail annotation."
+              echo "**Informational only — this does NOT block merge.** A \`perf-regression\` label"
+              echo "and a PR comment were applied. If the slowdown is a deliberate correctness/safety"
+              echo "trade-off, just note it in the PR; otherwise fix the perf and push again (the"
+              echo "label is removed automatically once the regression clears). The nightly"
+              echo "\`bench-record\` trend watchdog independently watches main for sustained drift."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
-      # Fail ONLY on a real regression — i.e. a significant ≥5% slowdown WHILE
-      # the control canary was stable. An INCONCLUSIVE run (canary drifted) is
-      # NOT a regression: it exits green with a re-run warning, because gating on
-      # a run we already know was biased would just resurrect the false-RED this
-      # whole redesign removes. (Phase 2 turns even the real-regression path into
-      # an informational comment + label; this stays blocking for Phase 1.)
-      - name: Fail gate on regression
-        if: steps.compare.outputs.regression == 'true' && steps.compare.outputs.inconclusive != 'true'
+      # INFORMATIONAL report (Phase 2) — a real regression (significant ≥5%
+      # slowdown WHILE the control canary was stable) posts a PR comment + adds
+      # the `perf-regression` label, but NEVER blocks merge (exit 0). When the
+      # regression clears on a later push the label is removed. INCONCLUSIVE runs
+      # (canary drifted) are not regressions — they only annotate. Fork PRs get a
+      # read-only token so comment/label calls fail; we degrade to a warning +
+      # step summary rather than reach for `pull_request_target` (pwn-request).
+      - name: Report regression (informational — comment + label, never blocks)
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REGRESSION: ${{ steps.compare.outputs.regression }}
+          INCONCLUSIVE: ${{ steps.compare.outputs.inconclusive }}
+          REGRESSIONS_LIST: ${{ steps.compare.outputs.regressions }}
         run: |
-          echo "::error::Statistically significant perf regression detected vs merge-base (control canary was stable, so this is real)."
-          echo "::error::See benchstat output in the step summary."
-          echo "::error::Override via maintainer-applied label 'override: bench-regress-ok'."
-          exit 1
+          set -uo pipefail
+          LABEL="perf-regression"
+          is_regression=false
+          if [ "$REGRESSION" = "true" ] && [ "$INCONCLUSIVE" != "true" ]; then
+            is_regression=true
+          fi
+
+          # gh write helper: on a fork PR the token is read-only and these fail;
+          # don't let that fail the job — warn and fall back to the step summary.
+          gh_try() {
+            if ! gh "$@" 2>/tmp/gh_err; then
+              echo "::warning::gh ${1:-} failed (likely fork-PR read-only token): $(cat /tmp/gh_err)"
+              return 1
+            fi
+          }
+
+          if [ "$is_regression" = "true" ]; then
+            # Ensure the label exists (idempotent), then apply it.
+            gh label create "$LABEL" --repo "$REPO" --color "D93F0B" \
+              --description "Bench gate flagged a perf regression (informational)" --force >/dev/null 2>&1 || true
+            gh_try pr edit "$PR_NUMBER" --repo "$REPO" --add-label "$LABEL" || true
+            {
+              echo "### ⚠️ Bench gate flagged a perf regression (informational — does not block merge)"
+              echo ""
+              echo "Significant ≥5% slowdown vs merge-base with a stable control canary:"
+              echo '```'
+              echo "$REGRESSIONS_LIST"
+              echo '```'
+              echo "Fix the perf and push again, or note the deliberate trade-off in the PR. The"
+              echo "\`$LABEL\` label clears automatically once the regression is gone."
+            } > /tmp/perf_comment.md
+            gh_try pr comment "$PR_NUMBER" --repo "$REPO" --body-file /tmp/perf_comment.md || true
+            echo "::notice::Perf regression reported (informational). Merge is NOT blocked."
+          else
+            # No regression (clean or inconclusive) → remove a stale label if present.
+            gh pr edit "$PR_NUMBER" --repo "$REPO" --remove-label "$LABEL" >/dev/null 2>&1 || true
+          fi
+          # Always succeed — the gate is informational.
+          exit 0
