@@ -174,20 +174,22 @@ jobs:
             echo "::endgroup::"
           done
 
-      # ADR-024 PR3-pre-2 Commit 2: rule-pack 3-copy drift — AUDIT-ONLY.
-      # continue-on-error makes the ~2-month stale-configmap drift VISIBLE in
-      # CI logs without blocking, until the left-outer-join source hardening
-      # (PR3-pre-3) + configmap regeneration (Commit 3) land. Commit 4 removes
-      # continue-on-error to flip this to a hard gate.
-      - name: "Rule-pack copy drift (audit-only — ADR-024 PR3-pre-2)"
+      # ADR-024 PR3-pre Commit 4: the configmap↔source copy is now a HARD gate.
+      # The DEPLOYED configmaps (k8s/03-monitoring/configmap-rules-*.yaml, the
+      # production source of truth via ADR-005 projected volume) must never drift
+      # from rule-packs/ source again — that ~2-month silent drift is exactly what
+      # caused the onboarding-vacuum bug (#709). Edit a rule pack → run
+      # `make rulepack-configmaps` (or generate_rulepack_configmaps.py) → commit
+      # both. The pre-commit `rulepack-configmap-drift` hook catches this locally.
+      - name: "Rule-pack configmap drift (HARD gate — ADR-024 Commit 4)"
+        run: python scripts/tools/dx/generate_rulepack_configmaps.py --check
+
+      # The 3rd copy (operator-manifests/) stays AUDIT-ONLY: those CRD reference
+      # samples are owned by the operator epic (#692) and not yet regenerated to
+      # the left-outer-join source. Flip to hard when the operator epic syncs them.
+      - name: "Rule-pack 3-copy sync incl. operator (audit-only — operator epic #692)"
         continue-on-error: true
-        run: |
-          echo "::group::configmap-rules-*.yaml ↔ rule-packs/ source (semantic)"
-          python scripts/tools/dx/generate_rulepack_configmaps.py --check
-          echo "::endgroup::"
-          echo "::group::3-copy sync (rule-packs ↔ configmap ↔ operator)"
-          python scripts/tools/lint/check_rulepack_sync.py --ci
-          echo "::endgroup::"
+        run: python scripts/tools/lint/check_rulepack_sync.py --ci
 
   iac-helm-sast:
     # Container/k8s SAST Layers 2 + 4 (#448 / TRK-312 + TRK-314).
