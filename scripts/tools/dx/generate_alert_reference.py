@@ -216,9 +216,24 @@ _PROMQL_KEYWORDS = frozenset(
 # like `tenant:db2_connections_active:max` are captured as a single token.
 _PROMQL_IDENT = re.compile(r"[a-zA-Z_:][a-zA-Z0-9_:]*")
 
+# String literals — double / single / backtick quoted, honouring `\"` escapes.
+# Stripped FIRST: a label value or annotation may legitimately contain `}`,
+# `[`, or `:` (e.g. `handler="abc}def"`), which would otherwise leak into the
+# brace/range strips below and corrupt the scan.
+_PROMQL_STRINGS = re.compile(
+    r"\"[^\"\\]*(?:\\.[^\"\\]*)*\""
+    r"|'[^'\\]*(?:\\.[^'\\]*)*'"
+    r"|`[^`]*`"
+)
+
+# Range / subquery brackets: `[5m]`, `[30m:1m]`. The ':' in a subquery step
+# would otherwise let `_PROMQL_IDENT` match a junk token like `m:1m` for a
+# metric-less expr such as `vector(0)[5m:1m]`. Strip whole `[...]` spans.
+_PROMQL_RANGE_SUBQUERY = re.compile(r"\[[^\]]*\]")
+
 # Grouping clauses whose parenthesised body is a LABEL list, not a series:
 # `by(tenant, version)`, `on(tenant)`, `group_left(runbook_url, owner)`, etc.
-# Stripped first so their label names aren't mistaken for the metric.
+# Stripped so their label names aren't mistaken for the metric.
 _GROUPING_CLAUSE = re.compile(
     r"\b(?:by|without|on|ignoring|group_left|group_right)\s*\([^)]*\)"
 )
@@ -238,9 +253,16 @@ def get_metric_from_expr(expr: str) -> str:
     """
     if not expr:
         return ""
-    # Drop label selectors ({...}); their contents are label names/values.
-    cleaned = re.sub(r"\{[^}]*\}", " ", expr)
-    # Drop grouping clauses (by(...)/on(...)/group_left(...)); label lists.
+    # Order matters — strip the spans that can hide stray `}` / `]` / `:`
+    # before the brace/range/grouping strips that rely on those delimiters:
+    #   1. string literals (may contain `}`, `[`, `:` inside quotes)
+    cleaned = _PROMQL_STRINGS.sub(" ", expr)
+    #   2. range / subquery brackets ([5m] / [30m:1m] — the ':' is a step,
+    #      not a recording-rule separator)
+    cleaned = _PROMQL_RANGE_SUBQUERY.sub(" ", cleaned)
+    #   3. label selectors ({...}) — their contents are label names/values
+    cleaned = re.sub(r"\{[^}]*\}", " ", cleaned)
+    #   4. grouping clauses (by(...)/on(...)/group_left(...)) — label lists
     cleaned = _GROUPING_CLAUSE.sub(" ", cleaned)
     for token in _PROMQL_IDENT.finditer(cleaned):
         ident = token.group(0)
@@ -256,9 +278,19 @@ def _escape_table_cell(text: str) -> str:
     ``|`` delimits columns, so a literal pipe — e.g. from a Go template like
     ``{{ $value | printf "%.0f" }}`` in an alert's trigger text — would split
     the row into phantom columns and break rendering. Escape pipes and flatten
-    any stray newline so each alert stays on one table row.
+    any stray newline (incl. Windows ``\\r\\n`` / lone ``\\r``) so each alert
+    stays on one table row.
+
+    The pipe-escape is idempotent: an already-escaped ``\\|`` is collapsed
+    before re-escaping so re-running the generator never produces ``\\\\|``
+    (a literal backslash + column break, which re-breaks the table).
     """
-    return text.replace("\n", " ").replace("|", "\\|")
+    if not text:
+        return ""
+    flattened = (
+        text.replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
+    )
+    return flattened.replace("\\|", "|").replace("|", "\\|")
 
 
 def generate_markdown_zh(alerts_by_pack: Dict[str, List[Dict]]) -> str:

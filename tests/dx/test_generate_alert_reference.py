@@ -234,6 +234,32 @@ class TestGetMetricFromExpr:
         # Pure punctuation / numbers → no series identifier.
         assert gar.get_metric_from_expr("42 > 0") == ""
 
+    # --- adversarial parser-bypass cases (Gemini review) ---
+
+    def test_subquery_colon_protection(self):
+        # A subquery step `[30m:1m]` must not leak a junk `m:1m` token; the
+        # range brackets are stripped before the identifier scan.
+        expr = 'rate(http_requests_total{job="api"}[5m])[30m:1m] > 0'
+        assert gar.get_metric_from_expr(expr) == "http_requests_total"
+
+    def test_string_containing_closing_brace(self):
+        # A label value containing `}` must not break the brace strip and
+        # leak a later label name as the metric.
+        expr = 'env_metric{info="broken}bracket", cluster="main"} > 5'
+        assert gar.get_metric_from_expr(expr) == "env_metric"
+
+    def test_range_vector_strip(self):
+        # A bare range vector `[5m]` after a function still resolves to the
+        # wrapped series, with no `m`/`5m`-derived junk.
+        expr = "sum(rate(http_errors_total[5m]))"
+        assert gar.get_metric_from_expr(expr) == "http_errors_total"
+
+    def test_subquery_step_no_junk_token(self):
+        # Load-bearing for the range/subquery strip: a metric-less subquery
+        # expr would otherwise leak the step `m:1m` as a "metric" (the ':'
+        # makes `_PROMQL_IDENT` greedy). With the strip it resolves to "".
+        assert gar.get_metric_from_expr("vector(0)[5m:1m]") == ""
+
 
 # ---------------------------------------------------------------------------
 # extract_alerts wires expr → metric
@@ -339,6 +365,19 @@ class TestEscapeTableCell:
 
     def test_plain_text_unchanged(self):
         assert gar._escape_table_cell("plain text") == "plain text"
+
+    def test_flattens_crlf(self):
+        # Windows CRLF and a lone CR both flatten to a space.
+        assert gar._escape_table_cell("a\r\nb") == "a b"
+        assert gar._escape_table_cell("a\rb") == "a b"
+
+    def test_escape_is_idempotent(self):
+        # An already-escaped `\|` must not become `\\|` on a second pass.
+        assert gar._escape_table_cell("value \\| printf") == "value \\| printf"
+        assert gar._escape_table_cell("value |\nprintf") == "value \\| printf"
+
+    def test_empty_returns_empty(self):
+        assert gar._escape_table_cell("") == ""
 
 
 # ---------------------------------------------------------------------------
