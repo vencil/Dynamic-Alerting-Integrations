@@ -10,6 +10,13 @@ lang: zh
 把 JSX 工具裡 hardcoded 的 hex 色碼 / px 數值對應到 `var(--da-*)` design token。
 **強制前置**：遷移前先查本表決定 token，不要瞎猜（猜錯會破壞 Design System 語意）。
 
+> **⏳ 生命週期 / Deprecation criteria**：本文件分兩層——
+> **易腐層**（下方 HEX→token、PX→token 對照表，綁定 #444 當下盤點的 14 檔/70
+> violations）在 **#444 Phase 1 遷移收尾後刪除**（屆時這些檔已清乾淨，留著會誤導新人）。
+> **耐久層**（「決策準則」§語意優先、px layout 豁免原則、FIXME fallback 流程）屆時
+> **上抬合併進 [`lint-policy.md`](lint-policy.md)**，本檔整份移除或移至 `archive/`。
+> 觸發點：`check_design_token_usage.py --full-scan` 回報 0 violations 時。
+
 - Token 定義端 SSOT：[`docs/assets/design-tokens.css`](../assets/design-tokens.css)（light + dark 兩套，名稱相同、值不同 → **用 token 名才能自動跟著 dark mode 切換**，這正是不可硬寫 hex 的核心理由）。
 - Gate：`scripts/tools/lint/check_design_token_usage.py`（pre-commit + `ci.yml`，diff-only）。
 - 豁免：行末 `/* token-exempt */`、`#fff`/`#000`/`#ffffff`/`#000000`、`0/1/2px`（border/hairline）、純註解行。
