@@ -22,6 +22,7 @@ SAST Rules:
 
 import argparse
 import os
+import re
 import sys
 import yaml
 import difflib
@@ -150,6 +151,11 @@ def extract_alerts(yaml_content: Dict[str, Any]) -> List[Dict[str, Any]]:
             # Use platform_summary if available (for dual-perspective alerts)
             platform_summary = annotations.get("platform_summary", "")
 
+            # The related metric comes from the rule's PromQL `expr` (the real
+            # series the alert evaluates), NOT the prose description.
+            expr = rule.get("expr", "")
+            metric = get_metric_from_expr(expr)
+
             alerts.append(
                 {
                     "name": alert_name,
@@ -157,6 +163,8 @@ def extract_alerts(yaml_content: Dict[str, Any]) -> List[Dict[str, Any]]:
                     "summary": summary,
                     "description": description,
                     "platform_summary": platform_summary,
+                    "expr": expr,
+                    "metric": metric,
                 }
             )
 
@@ -172,13 +180,138 @@ def get_recommended_action(alert_name: str) -> Dict[str, str]:
     return RECOMMENDED_ACTIONS["default"]
 
 
-def get_metric_from_description(description: str) -> str:
-    """Extract primary metric name from description if available."""
-    # Simple extraction: look for metric patterns like "mysql_up", "pg_up", etc.
-    import re
+# PromQL aggregation operators, binary-op modifiers, and built-in functions.
+# When scanning an `expr` for the primary series, these are NOT metrics and
+# must be skipped (e.g. the leading `count`/`max`/`absent`/`time` of a query).
+_PROMQL_KEYWORDS = frozenset(
+    {
+        # aggregation operators
+        "sum", "min", "max", "avg", "group", "stddev", "stdvar", "count",
+        "count_values", "bottomk", "topk", "quantile", "limitk", "limit_ratio",
+        # aggregation / binary-op modifiers
+        "by", "without", "on", "ignoring", "group_left", "group_right",
+        # set / logical binary operators + keywords
+        "and", "or", "unless", "atan2", "offset", "bool",
+        "inf", "nan", "start", "end",
+        # instant-vector functions
+        "abs", "absent", "ceil", "changes", "clamp", "clamp_max", "clamp_min",
+        "day_of_month", "day_of_week", "day_of_year", "days_in_month", "delta",
+        "deriv", "exp", "floor", "histogram_avg", "histogram_count",
+        "histogram_fraction", "histogram_quantile", "histogram_stddev",
+        "histogram_stdvar", "histogram_sum", "holt_winters",
+        "double_exponential_smoothing", "hour", "idelta", "increase", "irate",
+        "label_join", "label_replace", "ln", "log10", "log2", "minute",
+        "month", "predict_linear", "rate", "resets", "round", "scalar", "sgn",
+        "sort", "sort_desc", "sort_by_label", "sort_by_label_desc", "sqrt",
+        "time", "timestamp", "vector", "year",
+        # range-vector (*_over_time) functions
+        "absent_over_time", "avg_over_time", "min_over_time", "max_over_time",
+        "sum_over_time", "count_over_time", "quantile_over_time",
+        "stddev_over_time", "stdvar_over_time", "last_over_time",
+        "present_over_time", "mad_over_time",
+    }
+)
 
-    match = re.search(r"\b([a-z_]+(?:_[a-z]+)*)\b", description)
-    return match.group(1) if match else ""
+# A PromQL metric / series identifier. Includes ':' so recording-rule names
+# like `tenant:db2_connections_active:max` are captured as a single token.
+_PROMQL_IDENT = re.compile(r"[a-zA-Z_:][a-zA-Z0-9_:]*")
+
+# String literals — double / single / backtick quoted, honouring `\"` escapes.
+# Stripped FIRST: a label value or annotation may legitimately contain `}`,
+# `[`, or `:` (e.g. `handler="abc}def"`), which would otherwise leak into the
+# brace/range strips below and corrupt the scan.
+_PROMQL_STRINGS = re.compile(
+    r"\"[^\"\\]*(?:\\.[^\"\\]*)*\""
+    r"|'[^'\\]*(?:\\.[^'\\]*)*'"
+    r"|`[^`]*`"
+)
+
+# Range / subquery brackets: `[5m]`, `[30m:1m]`. The ':' in a subquery step
+# would otherwise let `_PROMQL_IDENT` match a junk token like `m:1m` for a
+# metric-less expr such as `vector(0)[5m:1m]`. Strip whole `[...]` spans.
+_PROMQL_RANGE_SUBQUERY = re.compile(r"\[[^\]]*\]")
+
+# Grouping clauses whose parenthesised body is a LABEL list, not a series:
+# `by(tenant, version)`, `on(tenant)`, `group_left(runbook_url, owner)`, etc.
+# Stripped so their label names aren't mistaken for the metric.
+_GROUPING_CLAUSE = re.compile(
+    r"\b(?:by|without|on|ignoring|group_left|group_right)\s*\([^)]*\)"
+)
+
+
+# Delimiter characters that must NEVER survive _strip_non_metric_syntax: if
+# any leak through, the identifier scan can mistake a fragment bounded by them
+# (a subquery step, a quoted `}`) for a metric. Asserted as an invariant in
+# tests (TestStripInvariant) — the durable guard against a future missed span.
+_NON_METRIC_DELIMITERS = "[]{}\"'`"
+
+
+def _strip_non_metric_syntax(expr: str) -> str:
+    """Remove every PromQL span that is NOT a series identifier.
+
+    Strips, in order, the spans that can hide a stray ``}`` / ``]`` / ``:``
+    before the later strips that rely on those delimiters:
+
+      1. string literals — may contain ``}`` / ``[`` / ``:`` inside quotes
+      2. range / subquery brackets — ``[5m]`` / ``[30m:1m]`` (the ``:`` is a
+         step, not a recording-rule separator)
+      3. label selectors ``{...}`` — contents are label names/values
+      4. grouping clauses ``by(...)`` / ``on(...)`` / ``group_left(...)`` —
+         their parenthesised body is a label list, not a series
+
+    The result holds only bare operators, numbers, parentheses, and series
+    identifiers. Crucially **none of ``_NON_METRIC_DELIMITERS`` survive**, so
+    ``get_metric_from_expr`` can scan for the first identifier safely.
+    """
+    cleaned = _PROMQL_STRINGS.sub(" ", expr)
+    cleaned = _PROMQL_RANGE_SUBQUERY.sub(" ", cleaned)
+    cleaned = re.sub(r"\{[^}]*\}", " ", cleaned)
+    cleaned = _GROUPING_CLAUSE.sub(" ", cleaned)
+    return cleaned
+
+
+def get_metric_from_expr(expr: str) -> str:
+    """Extract the primary metric / series name from a rule's PromQL ``expr``.
+
+    Returns the first real series identifier the alert evaluates — including
+    recording-rule names like ``tenant:db2_connections_active:max`` — after
+    skipping function names, aggregation operators, label selectors, and
+    grouping clauses. This is the series an operator can actually query,
+    unlike the previous "first lowercase word in the prose description"
+    heuristic which produced noise ("for", "value", "query").
+
+    Returns "" when no identifier can be found.
+    """
+    if not expr:
+        return ""
+    cleaned = _strip_non_metric_syntax(expr)
+    for token in _PROMQL_IDENT.finditer(cleaned):
+        ident = token.group(0)
+        if ident in _PROMQL_KEYWORDS:
+            continue
+        return ident
+    return ""
+
+
+def _escape_table_cell(text: str) -> str:
+    """Escape a value for safe inclusion in a Markdown table cell.
+
+    ``|`` delimits columns, so a literal pipe — e.g. from a Go template like
+    ``{{ $value | printf "%.0f" }}`` in an alert's trigger text — would split
+    the row into phantom columns and break rendering. Escape pipes and flatten
+    any stray newline (incl. Windows ``\\r\\n`` / lone ``\\r``) so each alert
+    stays on one table row.
+
+    The pipe-escape is idempotent: an already-escaped ``\\|`` is collapsed
+    before re-escaping so re-running the generator never produces ``\\\\|``
+    (a literal backslash + column break, which re-breaks the table).
+    """
+    if not text:
+        return ""
+    flattened = (
+        text.replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
+    )
+    return flattened.replace("\\|", "|").replace("|", "\\|")
 
 
 def generate_markdown_zh(alerts_by_pack: Dict[str, List[Dict]]) -> str:
@@ -192,6 +325,8 @@ def generate_markdown_zh(alerts_by_pack: Dict[str, List[Dict]]) -> str:
         "lang: zh",
         "---",
         "# Rule Pack 告警參考指南 (Alert Reference Guide)",
+        "",
+        "> **Language / 語言：** **中文 (Current)** | [English](./ALERT-REFERENCE.en.md)",
         "",
         "本文件為租戶提供各 Rule Pack 中所有告警的統一參考，包括告警含義、觸發條件和建議動作。",
         "",
@@ -222,13 +357,15 @@ def generate_markdown_zh(alerts_by_pack: Dict[str, List[Dict]]) -> str:
             if trigger_condition:
                 sentences = trigger_condition.split("—")
                 trigger_condition = sentences[0][:100]
+            # Escape pipes/newlines so Go-template trigger text (e.g.
+            # `{{ $value | printf ... }}`) doesn't break the table row.
+            trigger_condition = _escape_table_cell(trigger_condition)
 
             recommended_action = get_recommended_action(name)["zh"]
 
-            # Extract metric from description
-            metric = get_metric_from_description(alert["description"])
-            if not metric:
-                metric = ""
+            # Related metric: the primary series from the rule's PromQL expr
+            # (computed in extract_alerts).
+            metric = alert.get("metric", "")
 
             lines.append(
                 f"| {name} | {severity} | {trigger_condition} | {recommended_action} | {metric} |"
@@ -252,6 +389,8 @@ def generate_markdown_en(alerts_by_pack: Dict[str, List[Dict]]) -> str:
         "lang: en",
         "---",
         "# Rule Pack Alert Reference Guide",
+        "",
+        "> **Language / 語言：** **English (Current)** | [中文](./ALERT-REFERENCE.md)",
         "",
         "This document provides tenants with a unified reference for all alerts across Rule Packs, including alert meanings, trigger conditions, and recommended actions.",
         "",
@@ -280,13 +419,15 @@ def generate_markdown_en(alerts_by_pack: Dict[str, List[Dict]]) -> str:
             if trigger_condition:
                 sentences = trigger_condition.split("—")
                 trigger_condition = sentences[0][:100]
+            # Escape pipes/newlines so Go-template trigger text (e.g.
+            # `{{ $value | printf ... }}`) doesn't break the table row.
+            trigger_condition = _escape_table_cell(trigger_condition)
 
             recommended_action = get_recommended_action(name)["en"]
 
-            # Extract metric from description
-            metric = get_metric_from_description(alert["description"])
-            if not metric:
-                metric = ""
+            # Related metric: the primary series from the rule's PromQL expr
+            # (computed in extract_alerts).
+            metric = alert.get("metric", "")
 
             lines.append(
                 f"| {name} | {severity} | {trigger_condition} | {recommended_action} | {metric} |"
