@@ -265,12 +265,19 @@ def scan_line(
     line: str,
     internal: list[tuple[str, re.Pattern[str]]],
     approved: set[str],
+    discover: bool = True,
 ) -> tuple[list[tuple[str, str]], list[str]]:
     """Return (internal_hits, unregistered_tokens) for one line.
 
     internal_hits: list of (template, matched_text) — confirmed leaks.
     unregistered_tokens: shape tokens that are neither internal, approved, nor
     a built-in safe identifier — candidates that should be registered.
+
+    ``discover=False`` skips the broad shape scan entirely and returns
+    unregistered=[]. The shape scan is the expensive part; in ``--ci`` without
+    ``--strict`` the hard-fail decision depends ONLY on internal_hits, so the
+    discovery work is pure waste on the commit path (DX: keeps the auto-stage
+    blocking hook fast). The internal-pattern scan — the teeth — always runs.
     """
     internal_hits: list[tuple[str, str]] = []
     internal_spans: list[str] = []
@@ -278,6 +285,9 @@ def scan_line(
         for m in rx.finditer(line):
             internal_hits.append((tmpl, m.group(0)))
             internal_spans.append(m.group(0))
+
+    if not discover:
+        return internal_hits, []
 
     internal_span_set = set(internal_spans)
     unregistered: list[str] = []
@@ -347,6 +357,12 @@ def main() -> int:
     scan_paths = FULL_SCAN_PATHS if args.scope == "full" else DEFAULT_SCAN_PATHS
     files = iter_files(scan_paths)
 
+    # Fast path: in --ci without --strict, only internal-pattern leaks gate, so
+    # skip the expensive shape-discovery scan (DX — keeps the auto-stage hook
+    # fast on the commit path). Discovery still runs in warn/report mode and
+    # under --strict (where unregistered tokens DO gate).
+    discover = args.strict or not args.ci
+
     internal_findings: list[tuple[str, int, str, str, str]] = []
     unregistered_counts: dict[str, int] = {}
     unregistered_findings: list[tuple[str, int, str, str]] = []
@@ -366,7 +382,7 @@ def main() -> int:
         for i, line in enumerate(text.splitlines(), 1):
             if _is_code_comment(line, suffix):
                 continue
-            hits, unreg = scan_line(line, internal, approved)
+            hits, unreg = scan_line(line, internal, approved, discover=discover)
             for tmpl, match in hits:
                 internal_findings.append((rel, i, tmpl, match, line.rstrip()[:120]))
             for token in unreg:
@@ -391,11 +407,14 @@ def main() -> int:
     print(f"Glossary approved terms: {len(approved)}")
     print(f"Glossary internal tmpls: {len(internal)}")
     print(f"Internal leaks:          {len(internal_findings)}  (hard)")
-    print(
-        f"Unregistered tokens:     {len(unregistered_findings)} hits / "
-        f"{len(unregistered_counts)} distinct  "
-        f"({'hard' if args.strict else 'warn'})"
-    )
+    if discover:
+        print(
+            f"Unregistered tokens:     {len(unregistered_findings)} hits / "
+            f"{len(unregistered_counts)} distinct  "
+            f"({'hard' if args.strict else 'warn'})"
+        )
+    else:
+        print("Unregistered tokens:     (discovery skipped — --ci fast path; run without --ci for the soak report)")
     print()
 
     if internal_findings:

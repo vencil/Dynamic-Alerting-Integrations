@@ -27,7 +27,7 @@ PR #375 cleanup 過程中暴露：
 | Class | 性質 | 何時用列舉 | 例子 |
 |---|---|---|---|
 | **(a) Bounded enumeration** | 列舉是政策 SOT 的鏡像；新增條目就是政策變動 | commit scope（`.commitlintrc.yaml` 定義 17 個）/ Rule Pack 數 / valid frontmatter 欄位 / Go test build tag enum | `check_commit_scope_doc.py` / `check_changelog_no_tbd.py` / `check_hardcode_tenant.py` |
-| **(b) Negative pattern + false-positive escape** | 規則本身是 negative（找壞東西的 regex / AST），allowlist 列舉「這個 pattern 命中但其實合法」的少數例外 | 偵測代號 / 路徑 / 命名違反 + 已知合法例外 | `check_codename_leak.py` / `check_repo_name.py` / `check_ad_hoc_git_scripts.py`（~12 個） |
+| **(b) Negative pattern + false-positive escape** | 規則本身是 negative（找壞東西的 regex / AST），allowlist 列舉「這個 pattern 命中但其實合法」的少數例外 | 偵測代號 / 路徑 / 命名違反 + 已知合法例外 | `check_codename_leak.py` / `check_codename_gate.py` / `check_repo_name.py` / `check_ad_hoc_git_scripts.py`（~12 個） |
 | **(c) Fuzzy semantic enumeration** | 試圖列舉一個本質模糊的概念（語義空間不可窮舉） | 「使用者可見字串」/「推銷語言」/「過時敘述」 | `check_portal_i18n.py` / `check_i18n_coverage.py`（~2 個） |
 
 ### 判定邊界（Decision Tree）
@@ -113,6 +113,8 @@ reason: <≥30 words 解釋為何此例外合法>
 issue: #<NN>  (optional — 若需後續追蹤)
 ```
 
+**已註冊的 bypass lint-name**：`codename-leak`（Layer 1）、`codename-gate`（Layer 2 glossary-driven，`--ci` blocking 後尤其需要此逃生門，#710 Phase B）。lint-name 即各 lint 傳給 `parse_bypass_tag()` 的字串。
+
 **CI 邏輯**（`check_*_lint` GitHub Action）：
 
 1. 透過 GitHub API 讀 `${{ github.event.pull_request.body }}`
@@ -180,6 +182,7 @@ PR 加入新 allowlist entry 時須在 PR description 答：
 | Lint | Allowlist 內容 | diff-only 狀態 |
 |---|---|---|
 | `check_codename_leak.py` | 技術縮寫（SHA-256, RFC-, ISO-, UTF-8 等 12 條） | ✅ PR #382 |
+| `check_codename_gate.py` | Layer 2 glossary-driven（內建 safe：ADR-/TRK-/CVE-/SHA-/UTF-/X- header 等 + glossary Approved 詞）。`--ci` blocking（#710 Phase B），bypass tag `codename-gate` | full-scan（deterministic、0 FP；非 diff-only） |
 | `check_repo_name.py` | `/workspaces/vibe-k8s-lab` 等 dev container 路徑 | ✅ PR #383 |
 | `check_changelog_no_tbd.py` | HTML comment 內 / brackets 內的 TBD | ✅ PR #383 |
 | `check_ad_hoc_git_scripts.py` | `scripts/ops/` 已 sanctioned scripts | ✅ PR #387 |
