@@ -722,6 +722,18 @@ repos:
         # labels so dimensional thresholds (env/version/tablespace_re) keep their
         # dimensions. Caught a ~2-month silent prod drift in 4 packs (ADR-024).
 
+      - id: leftouterjoin-enrichment
+        name: "ADR-024: alert metadata enrichment must be left-outer-join (no onboarding-vacuum drop)"
+        entry: python3 -X utf8 scripts/tools/lint/check_leftouterjoin_enrichment.py --ci
+        language: python
+        pass_filenames: false
+        files: ^rule-packs/rule-pack-.*\.yaml$
+        # Every `* on(tenant) group_left(runbook_url, owner, tier) tenant_metadata_info`
+        # (inner join — drops a tenant with metrics but no metadata row) must be
+        # paired with an `or (… unless on(tenant) tenant_metadata_info)` void
+        # branch. Source-only: configmaps are sync-checked against source
+        # separately. Semantic proof: tests/rulepacks/*-void_test.yaml.
+
       - id: ksm-version-allowlist
         name: "ADR-024: kube-state-metrics must allowlist app.kubernetes.io/version (test/rulepack-e2e)"
         entry: python3 -X utf8 scripts/tools/lint/check_ksm_version_allowlist.py --ci

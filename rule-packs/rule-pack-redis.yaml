@@ -102,15 +102,30 @@ groups:
         expr: |
           (
             (
-              tenant:redis_memory_used_bytes:max
-              > on(tenant) group_left
-              tenant:alert_threshold:redis_memory_used_bytes
+              (
+                tenant:redis_memory_used_bytes:max
+                > on(tenant) group_left
+                tenant:alert_threshold:redis_memory_used_bytes
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
             )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
           )
-          * on(tenant) group_left(runbook_url, owner, tier)
-            tenant_metadata_info
+          or
+          (
+            (
+              (
+                tenant:redis_memory_used_bytes:max
+                > on(tenant) group_left
+                tenant:alert_threshold:redis_memory_used_bytes
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            unless on(tenant) tenant_metadata_info
+          )
         for: 5m
         labels:
           severity: warning
@@ -130,15 +145,30 @@ groups:
         expr: |
           (
             (
-              tenant:redis_connected_clients:max
-              > on(tenant) group_left
-              tenant:alert_threshold:redis_connected_clients
+              (
+                tenant:redis_connected_clients:max
+                > on(tenant) group_left
+                tenant:alert_threshold:redis_connected_clients
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
             )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
           )
-          * on(tenant) group_left(runbook_url, owner, tier)
-            tenant_metadata_info
+          or
+          (
+            (
+              (
+                tenant:redis_connected_clients:max
+                > on(tenant) group_left
+                tenant:alert_threshold:redis_connected_clients
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            unless on(tenant) tenant_metadata_info
+          )
         for: 5m
         labels:
           severity: warning
@@ -158,15 +188,30 @@ groups:
         expr: |
           (
             (
-              tenant:redis_evicted_keys:rate5m
-              > on(tenant) group_left
-              tenant:alert_threshold:redis_evicted_keys_rate
+              (
+                tenant:redis_evicted_keys:rate5m
+                > on(tenant) group_left
+                tenant:alert_threshold:redis_evicted_keys_rate
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
             )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
           )
-          * on(tenant) group_left(runbook_url, owner, tier)
-            tenant_metadata_info
+          or
+          (
+            (
+              (
+                tenant:redis_evicted_keys:rate5m
+                > on(tenant) group_left
+                tenant:alert_threshold:redis_evicted_keys_rate
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            unless on(tenant) tenant_metadata_info
+          )
         for: 5m
         labels:
           severity: warning
@@ -186,15 +231,30 @@ groups:
         expr: |
           (
             (
-              tenant:redis_replication_lag:max
-              > on(tenant) group_left
-              tenant:alert_threshold:redis_replication_lag
+              (
+                tenant:redis_replication_lag:max
+                > on(tenant) group_left
+                tenant:alert_threshold:redis_replication_lag
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
             )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
           )
-          * on(tenant) group_left(runbook_url, owner, tier)
-            tenant_metadata_info
+          or
+          (
+            (
+              (
+                tenant:redis_replication_lag:max
+                > on(tenant) group_left
+                tenant:alert_threshold:redis_replication_lag
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            unless on(tenant) tenant_metadata_info
+          )
         for: 2m
         labels:
           severity: warning
@@ -213,12 +273,23 @@ groups:
       - alert: RedisLowHitRatio
         expr: |
           (
-            tenant:redis_keyspace_hit_ratio:avg < 0.9
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            (
+              tenant:redis_keyspace_hit_ratio:avg < 0.9
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
           )
-          * on(tenant) group_left(runbook_url, owner, tier)
-            tenant_metadata_info
+          or
+          (
+            (
+              tenant:redis_keyspace_hit_ratio:avg < 0.9
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            unless on(tenant) tenant_metadata_info
+          )
         for: 10m
         labels:
           severity: warning

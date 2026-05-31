@@ -102,15 +102,30 @@ groups:
         expr: |
           (
             (
-              tenant:mysql_threads_connected:max
-              > on(tenant) group_left
-              tenant:alert_threshold:connections
+              (
+                tenant:mysql_threads_connected:max
+                > on(tenant) group_left
+                tenant:alert_threshold:connections
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
             )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
           )
-          * on(tenant) group_left(runbook_url, owner, tier)
-            tenant_metadata_info
+          or
+          (
+            (
+              (
+                tenant:mysql_threads_connected:max
+                > on(tenant) group_left
+                tenant:alert_threshold:connections
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            unless on(tenant) tenant_metadata_info
+          )
         for: 30s
         labels:
           severity: warning
@@ -132,15 +147,30 @@ groups:
         expr: |
           (
             (
-              tenant:mysql_threads_connected:max
-              > on(tenant) group_left
-              tenant:alert_threshold:connections_critical
+              (
+                tenant:mysql_threads_connected:max
+                > on(tenant) group_left
+                tenant:alert_threshold:connections_critical
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
             )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
           )
-          * on(tenant) group_left(runbook_url, owner, tier)
-            tenant_metadata_info
+          or
+          (
+            (
+              (
+                tenant:mysql_threads_connected:max
+                > on(tenant) group_left
+                tenant:alert_threshold:connections_critical
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            unless on(tenant) tenant_metadata_info
+          )
         for: 30s
         labels:
           severity: critical
@@ -163,22 +193,45 @@ groups:
           (
             (
               (
-                tenant:mysql_threads_connected:max
-                > on(tenant) group_left
-                tenant:alert_threshold:connections
+                (
+                  tenant:mysql_threads_connected:max
+                  > on(tenant) group_left
+                  tenant:alert_threshold:connections
+                )
+                and on(tenant)
+                (
+                  tenant:mysql_cpu_usage:rate5m
+                  > on(tenant) group_left
+                  tenant:alert_threshold:cpu
+                )
               )
-              and on(tenant)
-              (
-                tenant:mysql_cpu_usage:rate5m
-                > on(tenant) group_left
-                tenant:alert_threshold:cpu
-              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
             )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
           )
-          * on(tenant) group_left(runbook_url, owner, tier)
-            tenant_metadata_info
+          or
+          (
+            (
+              (
+                (
+                  tenant:mysql_threads_connected:max
+                  > on(tenant) group_left
+                  tenant:alert_threshold:connections
+                )
+                and on(tenant)
+                (
+                  tenant:mysql_cpu_usage:rate5m
+                  > on(tenant) group_left
+                  tenant:alert_threshold:cpu
+                )
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            unless on(tenant) tenant_metadata_info
+          )
         for: 60s
         labels:
           severity: critical
@@ -210,12 +263,23 @@ groups:
       - alert: MariaDBHighSlowQueries
         expr: |
           (
-            tenant:mysql_slow_queries:rate5m > 1
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            (
+              tenant:mysql_slow_queries:rate5m > 1
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
           )
-          * on(tenant) group_left(runbook_url, owner, tier)
-            tenant_metadata_info
+          or
+          (
+            (
+              tenant:mysql_slow_queries:rate5m > 1
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            unless on(tenant) tenant_metadata_info
+          )
         for: 5m
         labels:
           severity: warning
@@ -235,12 +299,23 @@ groups:
       - alert: MariaDBHighAbortedConnections
         expr: |
           (
-            tenant:mysql_aborted_connections:rate5m > 5
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            (
+              tenant:mysql_aborted_connections:rate5m > 5
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
           )
-          * on(tenant) group_left(runbook_url, owner, tier)
-            tenant_metadata_info
+          or
+          (
+            (
+              tenant:mysql_aborted_connections:rate5m > 5
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            unless on(tenant) tenant_metadata_info
+          )
         for: 5m
         labels:
           severity: warning

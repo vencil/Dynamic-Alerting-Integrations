@@ -100,15 +100,30 @@ groups:
         expr: |
           (
             (
-              tenant:oracle_sessions_active:max
-              > on(tenant) group_left
-              tenant:alert_threshold:oracle_sessions_active
+              (
+                tenant:oracle_sessions_active:max
+                > on(tenant) group_left
+                tenant:alert_threshold:oracle_sessions_active
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
             )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
           )
-          * on(tenant) group_left(runbook_url, owner, tier)
-            tenant_metadata_info
+          or
+          (
+            (
+              (
+                tenant:oracle_sessions_active:max
+                > on(tenant) group_left
+                tenant:alert_threshold:oracle_sessions_active
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            unless on(tenant) tenant_metadata_info
+          )
         for: 5m
         labels:
           severity: warning
@@ -128,15 +143,30 @@ groups:
         expr: |
           (
             (
-              tenant:oracle_tablespace_used_percent:max
-              > on(tenant) group_left
-              tenant:alert_threshold:oracle_tablespace_used_percent
+              (
+                tenant:oracle_tablespace_used_percent:max
+                > on(tenant) group_left
+                tenant:alert_threshold:oracle_tablespace_used_percent
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
             )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
           )
-          * on(tenant) group_left(runbook_url, owner, tier)
-            tenant_metadata_info
+          or
+          (
+            (
+              (
+                tenant:oracle_tablespace_used_percent:max
+                > on(tenant) group_left
+                tenant:alert_threshold:oracle_tablespace_used_percent
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            unless on(tenant) tenant_metadata_info
+          )
         for: 5m
         labels:
           severity: warning
@@ -156,15 +186,30 @@ groups:
         expr: |
           (
             (
-              tenant:oracle_wait_time:rate5m
-              > on(tenant) group_left
-              tenant:alert_threshold:oracle_wait_time_rate
+              (
+                tenant:oracle_wait_time:rate5m
+                > on(tenant) group_left
+                tenant:alert_threshold:oracle_wait_time_rate
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
             )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
           )
-          * on(tenant) group_left(runbook_url, owner, tier)
-            tenant_metadata_info
+          or
+          (
+            (
+              (
+                tenant:oracle_wait_time:rate5m
+                > on(tenant) group_left
+                tenant:alert_threshold:oracle_wait_time_rate
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            unless on(tenant) tenant_metadata_info
+          )
         for: 5m
         labels:
           severity: warning
@@ -184,15 +229,30 @@ groups:
         expr: |
           (
             (
-              tenant:oracle_process_count:max
-              > on(tenant) group_left
-              tenant:alert_threshold:oracle_process_count
+              (
+                tenant:oracle_process_count:max
+                > on(tenant) group_left
+                tenant:alert_threshold:oracle_process_count
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
             )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
           )
-          * on(tenant) group_left(runbook_url, owner, tier)
-            tenant_metadata_info
+          or
+          (
+            (
+              (
+                tenant:oracle_process_count:max
+                > on(tenant) group_left
+                tenant:alert_threshold:oracle_process_count
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            unless on(tenant) tenant_metadata_info
+          )
         for: 5m
         labels:
           severity: warning
@@ -212,15 +272,30 @@ groups:
         expr: |
           (
             (
-              tenant:oracle_pga_allocated_bytes:max
-              > on(tenant) group_left
-              tenant:alert_threshold:oracle_pga_allocated_bytes
+              (
+                tenant:oracle_pga_allocated_bytes:max
+                > on(tenant) group_left
+                tenant:alert_threshold:oracle_pga_allocated_bytes
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
             )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
           )
-          * on(tenant) group_left(runbook_url, owner, tier)
-            tenant_metadata_info
+          or
+          (
+            (
+              (
+                tenant:oracle_pga_allocated_bytes:max
+                > on(tenant) group_left
+                tenant:alert_threshold:oracle_pga_allocated_bytes
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            unless on(tenant) tenant_metadata_info
+          )
         for: 10m
         labels:
           severity: warning
@@ -239,12 +314,23 @@ groups:
       - alert: OracleHighSessionUtilization
         expr: |
           (
-            tenant:oracle_session_utilization:ratio > 0.85
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            (
+              tenant:oracle_session_utilization:ratio > 0.85
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
           )
-          * on(tenant) group_left(runbook_url, owner, tier)
-            tenant_metadata_info
+          or
+          (
+            (
+              tenant:oracle_session_utilization:ratio > 0.85
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            unless on(tenant) tenant_metadata_info
+          )
         for: 5m
         labels:
           severity: warning

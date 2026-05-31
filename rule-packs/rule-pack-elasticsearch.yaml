@@ -109,12 +109,23 @@ groups:
       - alert: ElasticsearchClusterYellow
         expr: |
           (
-            tenant:es_cluster_health:status == 1
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            (
+              tenant:es_cluster_health:status == 1
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
           )
-          * on(tenant) group_left(runbook_url, owner, tier)
-            tenant_metadata_info
+          or
+          (
+            (
+              tenant:es_cluster_health:status == 1
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            unless on(tenant) tenant_metadata_info
+          )
         for: 5m
         labels:
           severity: warning
@@ -134,15 +145,30 @@ groups:
         expr: |
           (
             (
-              tenant:es_heap_usage_percent:max
-              > on(tenant) group_left
-              tenant:alert_threshold:es_heap_usage_percent
+              (
+                tenant:es_heap_usage_percent:max
+                > on(tenant) group_left
+                tenant:alert_threshold:es_heap_usage_percent
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
             )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
           )
-          * on(tenant) group_left(runbook_url, owner, tier)
-            tenant_metadata_info
+          or
+          (
+            (
+              (
+                tenant:es_heap_usage_percent:max
+                > on(tenant) group_left
+                tenant:alert_threshold:es_heap_usage_percent
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            unless on(tenant) tenant_metadata_info
+          )
         for: 5m
         labels:
           severity: warning
@@ -162,15 +188,30 @@ groups:
         expr: |
           (
             (
-              tenant:es_disk_usage_percent:max
-              > on(tenant) group_left
-              tenant:alert_threshold:es_disk_usage_percent
+              (
+                tenant:es_disk_usage_percent:max
+                > on(tenant) group_left
+                tenant:alert_threshold:es_disk_usage_percent
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
             )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
           )
-          * on(tenant) group_left(runbook_url, owner, tier)
-            tenant_metadata_info
+          or
+          (
+            (
+              (
+                tenant:es_disk_usage_percent:max
+                > on(tenant) group_left
+                tenant:alert_threshold:es_disk_usage_percent
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            unless on(tenant) tenant_metadata_info
+          )
         for: 5m
         labels:
           severity: warning
@@ -190,15 +231,30 @@ groups:
         expr: |
           (
             (
-              tenant:es_search_latency_ms:avg
-              > on(tenant) group_left
-              tenant:alert_threshold:es_search_latency_ms
+              (
+                tenant:es_search_latency_ms:avg
+                > on(tenant) group_left
+                tenant:alert_threshold:es_search_latency_ms
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
             )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
           )
-          * on(tenant) group_left(runbook_url, owner, tier)
-            tenant_metadata_info
+          or
+          (
+            (
+              (
+                tenant:es_search_latency_ms:avg
+                > on(tenant) group_left
+                tenant:alert_threshold:es_search_latency_ms
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            unless on(tenant) tenant_metadata_info
+          )
         for: 5m
         labels:
           severity: warning
@@ -217,12 +273,23 @@ groups:
       - alert: ElasticsearchUnassignedShards
         expr: |
           (
-            tenant:es_unassigned_shards:count > 0
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            (
+              tenant:es_unassigned_shards:count > 0
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
           )
-          * on(tenant) group_left(runbook_url, owner, tier)
-            tenant_metadata_info
+          or
+          (
+            (
+              tenant:es_unassigned_shards:count > 0
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            unless on(tenant) tenant_metadata_info
+          )
         for: 10m
         labels:
           severity: warning
@@ -242,15 +309,30 @@ groups:
         expr: |
           (
             (
-              tenant:es_pending_tasks:max
-              > on(tenant) group_left
-              tenant:alert_threshold:es_pending_tasks
+              (
+                tenant:es_pending_tasks:max
+                > on(tenant) group_left
+                tenant:alert_threshold:es_pending_tasks
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
             )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
           )
-          * on(tenant) group_left(runbook_url, owner, tier)
-            tenant_metadata_info
+          or
+          (
+            (
+              (
+                tenant:es_pending_tasks:max
+                > on(tenant) group_left
+                tenant:alert_threshold:es_pending_tasks
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            unless on(tenant) tenant_metadata_info
+          )
         for: 5m
         labels:
           severity: warning

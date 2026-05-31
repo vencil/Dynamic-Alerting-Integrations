@@ -133,14 +133,28 @@ groups:
         expr: |
           (
             (
-              tenant:clickhouse_queries:rate5m
-              > on(tenant) group_left
-              tenant:alert_threshold:clickhouse_queries_rate
+              (
+                tenant:clickhouse_queries:rate5m
+                > on(tenant) group_left
+                tenant:alert_threshold:clickhouse_queries_rate
+              )
+              unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
             )
-            unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
           )
-          * on(tenant) group_left(runbook_url, owner, tier)
-            tenant_metadata_info
+          or
+          (
+            (
+              (
+                tenant:clickhouse_queries:rate5m
+                > on(tenant) group_left
+                tenant:alert_threshold:clickhouse_queries_rate
+              )
+              unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
+            )
+            unless on(tenant) tenant_metadata_info
+          )
         for: 5m
         labels:
           severity: warning
@@ -161,14 +175,28 @@ groups:
         expr: |
           (
             (
-              tenant:clickhouse_active_connections:max
-              > on(tenant) group_left
-              tenant:alert_threshold:clickhouse_active_connections
+              (
+                tenant:clickhouse_active_connections:max
+                > on(tenant) group_left
+                tenant:alert_threshold:clickhouse_active_connections
+              )
+              unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
             )
-            unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
           )
-          * on(tenant) group_left(runbook_url, owner, tier)
-            tenant_metadata_info
+          or
+          (
+            (
+              (
+                tenant:clickhouse_active_connections:max
+                > on(tenant) group_left
+                tenant:alert_threshold:clickhouse_active_connections
+              )
+              unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
+            )
+            unless on(tenant) tenant_metadata_info
+          )
         for: 5m
         labels:
           severity: warning
@@ -189,14 +217,28 @@ groups:
         expr: |
           (
             (
-              tenant:clickhouse_max_part_count:max
-              > on(tenant) group_left
-              tenant:alert_threshold:clickhouse_max_part_count
+              (
+                tenant:clickhouse_max_part_count:max
+                > on(tenant) group_left
+                tenant:alert_threshold:clickhouse_max_part_count
+              )
+              unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
             )
-            unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
           )
-          * on(tenant) group_left(runbook_url, owner, tier)
-            tenant_metadata_info
+          or
+          (
+            (
+              (
+                tenant:clickhouse_max_part_count:max
+                > on(tenant) group_left
+                tenant:alert_threshold:clickhouse_max_part_count
+              )
+              unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
+            )
+            unless on(tenant) tenant_metadata_info
+          )
         for: 10m
         labels:
           severity: warning
@@ -217,14 +259,28 @@ groups:
         expr: |
           (
             (
-              tenant:clickhouse_replication_queue:max
-              > on(tenant) group_left
-              tenant:alert_threshold:clickhouse_replication_queue
+              (
+                tenant:clickhouse_replication_queue:max
+                > on(tenant) group_left
+                tenant:alert_threshold:clickhouse_replication_queue
+              )
+              unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
             )
-            unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
           )
-          * on(tenant) group_left(runbook_url, owner, tier)
-            tenant_metadata_info
+          or
+          (
+            (
+              (
+                tenant:clickhouse_replication_queue:max
+                > on(tenant) group_left
+                tenant:alert_threshold:clickhouse_replication_queue
+              )
+              unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
+            )
+            unless on(tenant) tenant_metadata_info
+          )
         for: 5m
         labels:
           severity: warning
@@ -245,14 +301,28 @@ groups:
         expr: |
           (
             (
-              tenant:clickhouse_memory_tracking:max
-              > on(tenant) group_left
-              tenant:alert_threshold:clickhouse_memory_tracking_bytes
+              (
+                tenant:clickhouse_memory_tracking:max
+                > on(tenant) group_left
+                tenant:alert_threshold:clickhouse_memory_tracking_bytes
+              )
+              unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
             )
-            unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
           )
-          * on(tenant) group_left(runbook_url, owner, tier)
-            tenant_metadata_info
+          or
+          (
+            (
+              (
+                tenant:clickhouse_memory_tracking:max
+                > on(tenant) group_left
+                tenant:alert_threshold:clickhouse_memory_tracking_bytes
+              )
+              unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
+            )
+            unless on(tenant) tenant_metadata_info
+          )
         for: 5m
         labels:
           severity: warning

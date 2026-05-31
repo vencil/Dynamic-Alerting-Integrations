@@ -1,0 +1,86 @@
+# promtool unit test — ADR-024 PR3-pre Commit 3 left-outer-join sweep (redis).
+# Run: promtool test rules tests/rulepacks/rule-pack-redis-void_test.yaml
+#
+# Semantic oracle for the ADR-024 PR3-pre Commit 3 left-outer-join sweep: proves
+# the inner-join → left-outer-join conversion is SEMANTICALLY correct on redis
+# (representative of all swept packs — the enrichment suffix is byte-identical
+# everywhere; the conversion is a single uniform structural transform):
+#   - redis-a: metadata present  → fires ENRICHED (branch A, runbook/owner/tier).
+#   - redis-b: NO metadata (onboarding vacuum) → STILL fires BARE (branch B) —
+#     the inner-join would have silently dropped it. This is the fix.
+#   - redis-c: threshold exceeded but maintenance active → suppressed.
+#   - redis-d: below threshold → no alert.
+# Leaf series feed the full recording chain (max → threshold → alert).
+rule_files:
+  - ../../rule-packs/rule-pack-redis.yaml
+
+evaluation_interval: 15s
+
+tests:
+  - interval: 15s
+    input_series:
+      # redis-a: 600 clients > 500 threshold, metadata present → enriched fire.
+      - series: 'redis_connected_clients{tenant="redis-a"}'
+        values: '600x30'
+      - series: 'user_threshold{tenant="redis-a", metric="redis_connected_clients", severity="warning"}'
+        values: '500x30'
+      - series: 'tenant_metadata_info{tenant="redis-a", runbook_url="http://rb/a", owner="team-a", tier="gold"}'
+        values: '1x30'
+      # redis-b: 600 > 500, NO tenant_metadata_info → VACUUM-FIRE (branch B).
+      - series: 'redis_connected_clients{tenant="redis-b"}'
+        values: '600x30'
+      - series: 'user_threshold{tenant="redis-b", metric="redis_connected_clients", severity="warning"}'
+        values: '500x30'
+      # redis-c: 600 > 500, metadata present, BUT maintenance active → suppressed.
+      - series: 'redis_connected_clients{tenant="redis-c"}'
+        values: '600x30'
+      - series: 'user_threshold{tenant="redis-c", metric="redis_connected_clients", severity="warning"}'
+        values: '500x30'
+      - series: 'tenant_metadata_info{tenant="redis-c", runbook_url="http://rb/c", owner="team-c", tier="silver"}'
+        values: '1x30'
+      - series: 'user_state_filter{tenant="redis-c", filter="maintenance"}'
+        values: '1x30'
+      # redis-d: 400 < 500 threshold → no fire.
+      - series: 'redis_connected_clients{tenant="redis-d"}'
+        values: '400x30'
+      - series: 'user_threshold{tenant="redis-d", metric="redis_connected_clients", severity="warning"}'
+        values: '500x30'
+      - series: 'tenant_metadata_info{tenant="redis-d", runbook_url="http://rb/d", owner="team-d", tier="bronze"}'
+        values: '1x30'
+
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: RedisHighConnections
+        exp_alerts:
+          # redis-a: enriched (branch A) — carries runbook_url/owner/tier.
+          - exp_labels:
+              severity: warning
+              tenant: redis-a
+              runbook_url: "http://rb/a"
+              owner: team-a
+              tier: gold
+            exp_annotations:
+              summary: "Redis high connection count on redis-a"
+              summary_zh: "redis-a 的 Redis 連線數過高"
+              platform_summary: "[gold] redis-a: Redis connection count high — client pool review"
+              platform_summary_zh: "[gold] redis-a: Redis 連線數過高 — 請檢查客戶端連線池"
+              description: "600 connected clients"
+              description_zh: "600 個已連線的客戶端"
+              runbook_url: "http://rb/a"
+              owner: team-a
+              tier: gold
+          # redis-b: VACUUM-FIRE (branch B) — fires WITHOUT enrichment labels.
+          - exp_labels:
+              severity: warning
+              tenant: redis-b
+            exp_annotations:
+              summary: "Redis high connection count on redis-b"
+              summary_zh: "redis-b 的 Redis 連線數過高"
+              platform_summary: "[] redis-b: Redis connection count high — client pool review"
+              platform_summary_zh: "[] redis-b: Redis 連線數過高 — 請檢查客戶端連線池"
+              description: "600 connected clients"
+              description_zh: "600 個已連線的客戶端"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+        # redis-c (maintenance) and redis-d (below threshold) produce NO alert.

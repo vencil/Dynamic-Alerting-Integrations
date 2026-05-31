@@ -1,7 +1,8 @@
 # ============================================================
-# MariaDB Rule Pack — Recording Rules & Alert Rules
-# Canonical source: rule-packs/rule-pack-mariadb.yaml
-# Maintained by: DBA Team
+# mariadb Rule Pack — Recording & Alert Rules (ConfigMap)
+# GENERATED from rule-packs/rule-pack-mariadb.yaml by
+# scripts/tools/dx/generate_rulepack_configmaps.py — DO NOT EDIT.
+# Run `make rulepack-configmaps` after editing the rule pack.
 # ============================================================
 apiVersion: v1
 kind: ConfigMap
@@ -12,176 +13,122 @@ metadata:
     app: prometheus
     rule-pack: mariadb
 data:
-  mariadb-recording.yml: |
-    groups:
-      - name: mariadb-normalization
-        interval: 15s
-        rules:
-          - record: tenant:mysql_cpu_usage:rate5m
-            expr: sum by(tenant) (rate(mysql_global_status_threads_running[5m]))
-
-          - record: tenant:mysql_threads_connected:max
-            expr: max by(tenant) (mysql_global_status_threads_connected)
-
-          - record: tenant:mysql_connection_usage:ratio
-            expr: |
-              sum by(tenant) (mysql_global_status_threads_connected)
-              / sum by(tenant) (mysql_global_variables_max_connections)
-
-          - record: tenant:mysql_uptime:hours
-            expr: min by(tenant) (mysql_global_status_uptime) / 3600
-
-          - record: tenant:mysql_slow_queries:rate5m
-            expr: sum by(tenant) (rate(mysql_global_status_slow_queries[5m]))
-
-          - record: tenant:mysql_aborted_connections:rate5m
-            expr: sum by(tenant) (rate(mysql_global_status_aborted_connects[5m]))
-
-          - record: tenant:mysql_buffer_pool_usage:ratio
-            expr: |
-              sum by(tenant) (mysql_global_status_innodb_buffer_pool_pages_data)
-              / sum by(tenant) (mysql_global_status_innodb_buffer_pool_pages_total)
-
-      - name: mariadb-threshold-normalization
-        interval: 15s
-        rules:
-          - record: tenant:alert_threshold:connections
-            expr: max by(tenant) (user_threshold{metric="connections", severity="warning"})
-
-          - record: tenant:alert_threshold:cpu
-            expr: max by(tenant) (user_threshold{metric="cpu", severity="warning"})
-
-          - record: tenant:alert_threshold:connections_critical
-            expr: max by(tenant) (user_threshold{metric="connections", severity="critical"})
-
-          - record: tenant:alert_threshold:cpu_critical
-            expr: max by(tenant) (user_threshold{metric="cpu", severity="critical"})
-
-  mariadb-alert.yml: |
-    groups:
-      - name: mariadb-alerts
-        rules:
-          - alert: MariaDBDown
-            expr: mysql_up == 0
-            for: 15s
-            labels:
-              severity: critical
-            annotations:
-              summary: "MariaDB instance {{ $labels.instance }} is DOWN"
-              summary_zh: "MariaDB 實例 {{ $labels.instance }} 已關閉"
-              description: "mysql_up=0 for 15s on {{ $labels.instance }}"
-              description_zh: "mysql_up=0，持續 15 秒，實例：{{ $labels.instance }}"
-
-          - alert: MariaDBExporterAbsent
-            expr: absent(mysql_up{job="tenant-exporters"})
-            for: 30s
-            labels:
-              severity: critical
-            annotations:
-              summary: "mysqld-exporter target missing"
-              summary_zh: "mysqld-exporter 目標缺失"
-              description: "No mysql_up metric found for 30s"
-              description_zh: "找不到 mysql_up 指標，持續 30 秒"
-
-          - alert: MariaDBHighConnections
-            expr: |
-              (
-                tenant:mysql_threads_connected:max
-                > on(tenant) group_left
-                tenant:alert_threshold:connections
-              )
-              unless on(tenant)
-              (user_state_filter{filter="maintenance"} == 1)
-            for: 30s
-            labels:
-              severity: warning
-              metric_group: "connections"
-            annotations:
-              summary: "High connections on {{ $labels.tenant }}"
-              summary_zh: "{{ $labels.tenant }} 連線數過高"
-              description: "{{ $value }} threads connected (warning threshold exceeded)"
-              description_zh: "{{ $value }} 個執行緒已連接（超過警告閾值）"
-
-          - alert: MariaDBHighConnectionsCritical
-            expr: |
-              (
-                tenant:mysql_threads_connected:max
-                > on(tenant) group_left
-                tenant:alert_threshold:connections_critical
-              )
-              unless on(tenant)
-              (user_state_filter{filter="maintenance"} == 1)
-            for: 30s
-            labels:
-              severity: critical
-              metric_group: "connections"
-            annotations:
-              summary: "Critical connections on {{ $labels.tenant }}"
-              summary_zh: "{{ $labels.tenant }} 連線數嚴重過高"
-              description: "{{ $value }} threads connected (critical threshold exceeded)"
-              description_zh: "{{ $value }} 個執行緒已連接（超過嚴重閾值）"
-
-          - alert: MariaDBSystemBottleneck
-            expr: |
-              (
-                (
-                  tenant:mysql_threads_connected:max
-                  > on(tenant) group_left
-                  tenant:alert_threshold:connections
-                )
-                and on(tenant)
-                (
-                  tenant:mysql_cpu_usage:rate5m
-                  > on(tenant) group_left
-                  tenant:alert_threshold:cpu
-                )
-              )
-              unless on(tenant)
-              (user_state_filter{filter="maintenance"} == 1)
-            for: 60s
-            labels:
-              severity: critical
-            annotations:
-              summary: "System bottleneck on {{ $labels.tenant }}"
-              summary_zh: "{{ $labels.tenant }} 系統瓶頸"
-              description: "Both connections AND CPU thresholds exceeded simultaneously"
-              description_zh: "CPU 與連線數閾值同時超出"
-
-          - alert: MariaDBRecentRestart
-            expr: mysql_global_status_uptime < 300
-            for: 0s
-            labels:
-              severity: info
-            annotations:
-              summary: "{{ $labels.instance }} restarted recently"
-              summary_zh: "{{ $labels.instance }} 最近已重新啟動"
-              description: "Uptime is only {{ $value }}s (< 5 min)"
-              description_zh: "運行時間僅 {{ $value }}s（少於 5 分鐘）"
-
-          - alert: MariaDBHighSlowQueries
-            expr: |
-              tenant:mysql_slow_queries:rate5m > 1
-              unless on(tenant)
-              (user_state_filter{filter="maintenance"} == 1)
-            for: 5m
-            labels:
-              severity: warning
-            annotations:
-              summary: "High slow query rate on {{ $labels.tenant }}"
-              summary_zh: "{{ $labels.tenant }} 慢查詢率過高"
-              description: "{{ $value | printf \"%.2f\" }} slow queries/sec"
-              description_zh: "{{ $value | printf \"%.2f\" }} 次慢查詢／秒"
-
-          - alert: MariaDBHighAbortedConnections
-            expr: |
-              tenant:mysql_aborted_connections:rate5m > 5
-              unless on(tenant)
-              (user_state_filter{filter="maintenance"} == 1)
-            for: 5m
-            labels:
-              severity: warning
-            annotations:
-              summary: "High aborted connections on {{ $labels.tenant }}"
-              summary_zh: "{{ $labels.tenant }} 中止的連線數過高"
-              description: "{{ $value | printf \"%.2f\" }} aborted connections/sec"
-              description_zh: "{{ $value | printf \"%.2f\" }} 次中止連線／秒"
+  mariadb-recording.yml: "groups:\n- name: mariadb-normalization\n  interval: 15s\n\
+    \  rules:\n  - record: tenant:mysql_cpu_usage:rate5m\n    expr: sum by(tenant)\
+    \ (rate(mysql_global_status_threads_running[5m]))\n  - record: tenant:mysql_threads_connected:max\n\
+    \    expr: max by(tenant) (mysql_global_status_threads_connected)\n  - record:\
+    \ tenant:mysql_connection_usage:ratio\n    expr: 'sum by(tenant) (mysql_global_status_threads_connected)\n\
+    \n      / sum by(tenant) (mysql_global_variables_max_connections)\n\n      '\n\
+    \  - record: tenant:mysql_uptime:hours\n    expr: min by(tenant) (mysql_global_status_uptime)\
+    \ / 3600\n  - record: tenant:mysql_slow_queries:rate5m\n    expr: sum by(tenant)\
+    \ (rate(mysql_global_status_slow_queries[5m]))\n  - record: tenant:mysql_aborted_connections:rate5m\n\
+    \    expr: sum by(tenant) (rate(mysql_global_status_aborted_connects[5m]))\n \
+    \ - record: tenant:mysql_buffer_pool_usage:ratio\n    expr: 'sum by(tenant) (mysql_global_status_innodb_buffer_pool_pages_data)\n\
+    \n      / sum by(tenant) (mysql_global_status_innodb_buffer_pool_pages_total)\n\
+    \n      '\n- name: mariadb-threshold-normalization\n  interval: 15s\n  rules:\n\
+    \  - record: tenant:alert_threshold:connections\n    expr: max by(tenant) (user_threshold{metric=\"\
+    connections\", severity=\"warning\"})\n  - record: tenant:alert_threshold:cpu\n\
+    \    expr: max by(tenant) (user_threshold{metric=\"cpu\", severity=\"warning\"\
+    })\n  - record: tenant:alert_threshold:connections_critical\n    expr: max by(tenant)\
+    \ (user_threshold{metric=\"connections\", severity=\"critical\"})\n  - record:\
+    \ tenant:alert_threshold:cpu_critical\n    expr: max by(tenant) (user_threshold{metric=\"\
+    cpu\", severity=\"critical\"})\n"
+  mariadb-alert.yml: "groups:\n- name: mariadb-alerts\n  rules:\n  - alert: MariaDBDown\n\
+    \    expr: mysql_up == 0\n    for: 15s\n    labels:\n      severity: critical\n\
+    \      tenant: '{{ $labels.tenant }}'\n    annotations:\n      summary: MariaDB\
+    \ instance {{ $labels.instance }} is DOWN\n      summary_zh: MariaDB 實例 {{ $labels.instance\
+    \ }} 已關閉\n      description: mysql_up=0 for 15s on {{ $labels.instance }}\n  \
+    \    description_zh: mysql_up=0，持續 15 秒，實例：{{ $labels.instance }}\n  - alert:\
+    \ MariaDBExporterAbsent\n    expr: absent(mysql_up{job=\"tenant-exporters\"})\n\
+    \    for: 30s\n    labels:\n      severity: critical\n      tenant: '{{ $labels.tenant\
+    \ }}'\n    annotations:\n      summary: mysqld-exporter target missing\n     \
+    \ summary_zh: mysqld-exporter 目標缺失\n      description: No mysql_up metric found\
+    \ for 30s\n      description_zh: 找不到 mysql_up 指標，持續 30 秒\n  - alert: MariaDBHighConnections\n\
+    \    expr: \"(\\n  (\\n    (\\n      tenant:mysql_threads_connected:max\\n   \
+    \   > on(tenant) group_left\\n      tenant:alert_threshold:connections\\n    )\\\
+    n    unless on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\"} ==\
+    \ 1)\\n  )\\n  * on(tenant) group_left(runbook_url, owner, tier)\\n    tenant_metadata_info\\\
+    n)\\nor\\n(\\n  (\\n    (\\n      tenant:mysql_threads_connected:max\\n      >\
+    \ on(tenant) group_left\\n      tenant:alert_threshold:connections\\n    )\\n\
+    \    unless on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\"} ==\
+    \ 1)\\n  )\\n  unless on(tenant) tenant_metadata_info\\n)\\n\"\n    for: 30s\n\
+    \    labels:\n      severity: warning\n      metric_group: connections\n     \
+    \ tenant: '{{ $labels.tenant }}'\n    annotations:\n      summary: High connections\
+    \ on {{ $labels.tenant }}\n      summary_zh: '{{ $labels.tenant }} 連線數過高'\n  \
+    \    platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant }}: connection\
+    \ threshold breached — review connection pool sizing'\n      platform_summary_zh:\
+    \ '[{{ $labels.tier }}] {{ $labels.tenant }}：連線數閾值超出 — 檢查連線集區大小設定'\n      description:\
+    \ '{{ $value }} threads connected (warning threshold exceeded)'\n      description_zh:\
+    \ '{{ $value }} 個執行緒已連接（超過警告閾值）'\n      runbook_url: '{{ $labels.runbook_url }}'\n\
+    \      owner: '{{ $labels.owner }}'\n      tier: '{{ $labels.tier }}'\n  - alert:\
+    \ MariaDBHighConnectionsCritical\n    expr: \"(\\n  (\\n    (\\n      tenant:mysql_threads_connected:max\\\
+    n      > on(tenant) group_left\\n      tenant:alert_threshold:connections_critical\\\
+    n    )\\n    unless on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\
+    \"} == 1)\\n  )\\n  * on(tenant) group_left(runbook_url, owner, tier)\\n    tenant_metadata_info\\\
+    n)\\nor\\n(\\n  (\\n    (\\n      tenant:mysql_threads_connected:max\\n      >\
+    \ on(tenant) group_left\\n      tenant:alert_threshold:connections_critical\\\
+    n    )\\n    unless on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\
+    \"} == 1)\\n  )\\n  unless on(tenant) tenant_metadata_info\\n)\\n\"\n    for:\
+    \ 30s\n    labels:\n      severity: critical\n      metric_group: connections\n\
+    \      tenant: '{{ $labels.tenant }}'\n    annotations:\n      summary: Critical\
+    \ connections on {{ $labels.tenant }}\n      summary_zh: '{{ $labels.tenant }}\
+    \ 連線數嚴重過高'\n      platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant }}:\
+    \ critical connection saturation — immediate capacity action needed'\n      platform_summary_zh:\
+    \ '[{{ $labels.tier }}] {{ $labels.tenant }}：連線數飽和 — 需立即採取容量擴增行動'\n      description:\
+    \ '{{ $value }} threads connected (critical threshold exceeded)'\n      description_zh:\
+    \ '{{ $value }} 個執行緒已連接（超過嚴重閾值）'\n      runbook_url: '{{ $labels.runbook_url }}'\n\
+    \      owner: '{{ $labels.owner }}'\n      tier: '{{ $labels.tier }}'\n  - alert:\
+    \ MariaDBSystemBottleneck\n    expr: \"(\\n  (\\n    (\\n      (\\n        tenant:mysql_threads_connected:max\\\
+    n        > on(tenant) group_left\\n        tenant:alert_threshold:connections\\\
+    n      )\\n      and on(tenant)\\n      (\\n        tenant:mysql_cpu_usage:rate5m\\\
+    n        > on(tenant) group_left\\n        tenant:alert_threshold:cpu\\n     \
+    \ )\\n    )\\n    unless on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\
+    \"} == 1)\\n  )\\n  * on(tenant) group_left(runbook_url, owner, tier)\\n    tenant_metadata_info\\\
+    n)\\nor\\n(\\n  (\\n    (\\n      (\\n        tenant:mysql_threads_connected:max\\\
+    n        > on(tenant) group_left\\n        tenant:alert_threshold:connections\\\
+    n      )\\n      and on(tenant)\\n      (\\n        tenant:mysql_cpu_usage:rate5m\\\
+    n        > on(tenant) group_left\\n        tenant:alert_threshold:cpu\\n     \
+    \ )\\n    )\\n    unless on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\
+    \"} == 1)\\n  )\\n  unless on(tenant) tenant_metadata_info\\n)\\n\"\n    for:\
+    \ 60s\n    labels:\n      severity: critical\n      tenant: '{{ $labels.tenant\
+    \ }}'\n    annotations:\n      summary: System bottleneck on {{ $labels.tenant\
+    \ }}\n      summary_zh: '{{ $labels.tenant }} 系統瓶頸'\n      platform_summary: '[{{\
+    \ $labels.tier }}] {{ $labels.tenant }}: CPU + connections both exceeded — multi-resource\
+    \ bottleneck, escalate'\n      platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant\
+    \ }}：CPU 與連線皆超出 — 多資源瓶頸，需升級處理'\n      description: Both connections AND CPU thresholds\
+    \ exceeded simultaneously\n      description_zh: CPU 與連線數閾值同時超出\n      runbook_url:\
+    \ '{{ $labels.runbook_url }}'\n      owner: '{{ $labels.owner }}'\n      tier:\
+    \ '{{ $labels.tier }}'\n  - alert: MariaDBRecentRestart\n    expr: mysql_global_status_uptime\
+    \ < 300\n    for: 0s\n    labels:\n      severity: info\n      tenant: '{{ $labels.tenant\
+    \ }}'\n    annotations:\n      summary: '{{ $labels.instance }} restarted recently'\n\
+    \      summary_zh: '{{ $labels.instance }} 最近已重新啟動'\n      description: Uptime\
+    \ is only {{ $value }}s (< 5 min)\n      description_zh: 運行時間僅 {{ $value }}s（少於\
+    \ 5 分鐘）\n  - alert: MariaDBHighSlowQueries\n    expr: \"(\\n  (\\n    tenant:mysql_slow_queries:rate5m\
+    \ > 1\\n    unless on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\
+    \"} == 1)\\n  )\\n  * on(tenant) group_left(runbook_url, owner, tier)\\n    tenant_metadata_info\\\
+    n)\\nor\\n(\\n  (\\n    tenant:mysql_slow_queries:rate5m > 1\\n    unless on(tenant)\\\
+    n    (user_state_filter{filter=\\\"maintenance\\\"} == 1)\\n  )\\n  unless on(tenant)\
+    \ tenant_metadata_info\\n)\\n\"\n    for: 5m\n    labels:\n      severity: warning\n\
+    \      tenant: '{{ $labels.tenant }}'\n    annotations:\n      summary: High slow\
+    \ query rate on {{ $labels.tenant }}\n      summary_zh: '{{ $labels.tenant }}\
+    \ 慢查詢率過高'\n      platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant }}:\
+    \ slow query rate elevated — query optimization review'\n      platform_summary_zh:\
+    \ '[{{ $labels.tier }}] {{ $labels.tenant }}：慢查詢率升高 — 需進行查詢最佳化檢查'\n      description:\
+    \ '{{ $value | printf \"%.2f\" }} slow queries/sec'\n      description_zh: '{{\
+    \ $value | printf \"%.2f\" }} 次慢查詢／秒'\n      runbook_url: '{{ $labels.runbook_url\
+    \ }}'\n      owner: '{{ $labels.owner }}'\n      tier: '{{ $labels.tier }}'\n\
+    \  - alert: MariaDBHighAbortedConnections\n    expr: \"(\\n  (\\n    tenant:mysql_aborted_connections:rate5m\
+    \ > 5\\n    unless on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\
+    \"} == 1)\\n  )\\n  * on(tenant) group_left(runbook_url, owner, tier)\\n    tenant_metadata_info\\\
+    n)\\nor\\n(\\n  (\\n    tenant:mysql_aborted_connections:rate5m > 5\\n    unless\
+    \ on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\"} == 1)\\n  )\\\
+    n  unless on(tenant) tenant_metadata_info\\n)\\n\"\n    for: 5m\n    labels:\n\
+    \      severity: warning\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
+    \      summary: High aborted connections on {{ $labels.tenant }}\n      summary_zh:\
+    \ '{{ $labels.tenant }} 中止的連線數過高'\n      platform_summary: '[{{ $labels.tier }}]\
+    \ {{ $labels.tenant }}: aborted connection rate elevated — check client connectivity'\n\
+    \      platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant }}：中止連線率升高\
+    \ — 檢查客戶端連線狀態'\n      description: '{{ $value | printf \"%.2f\" }} aborted connections/sec'\n\
+    \      description_zh: '{{ $value | printf \"%.2f\" }} 次中止連線／秒'\n      runbook_url:\
+    \ '{{ $labels.runbook_url }}'\n      owner: '{{ $labels.owner }}'\n      tier:\
+    \ '{{ $labels.tier }}'\n"

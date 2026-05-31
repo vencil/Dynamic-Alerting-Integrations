@@ -114,15 +114,30 @@ groups:
         expr: |
           (
             (
-              tenant:pg_connection_usage:ratio
-              > on(tenant) group_left
-              tenant:alert_threshold:pg_connections
+              (
+                tenant:pg_connection_usage:ratio
+                > on(tenant) group_left
+                tenant:alert_threshold:pg_connections
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
             )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
           )
-          * on(tenant) group_left(runbook_url, owner, tier)
-            tenant_metadata_info
+          or
+          (
+            (
+              (
+                tenant:pg_connection_usage:ratio
+                > on(tenant) group_left
+                tenant:alert_threshold:pg_connections
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            unless on(tenant) tenant_metadata_info
+          )
         for: 30s
         labels:
           severity: warning
@@ -144,15 +159,30 @@ groups:
         expr: |
           (
             (
-              tenant:pg_connection_usage:ratio
-              > on(tenant) group_left
-              tenant:alert_threshold:pg_connections_critical
+              (
+                tenant:pg_connection_usage:ratio
+                > on(tenant) group_left
+                tenant:alert_threshold:pg_connections_critical
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
             )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
           )
-          * on(tenant) group_left(runbook_url, owner, tier)
-            tenant_metadata_info
+          or
+          (
+            (
+              (
+                tenant:pg_connection_usage:ratio
+                > on(tenant) group_left
+                tenant:alert_threshold:pg_connections_critical
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            unless on(tenant) tenant_metadata_info
+          )
         for: 30s
         labels:
           severity: critical
@@ -173,15 +203,30 @@ groups:
         expr: |
           (
             (
-              tenant:pg_replication_lag:max
-              > on(tenant) group_left
-              tenant:alert_threshold:pg_replication_lag
+              (
+                tenant:pg_replication_lag:max
+                > on(tenant) group_left
+                tenant:alert_threshold:pg_replication_lag
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
             )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
           )
-          * on(tenant) group_left(runbook_url, owner, tier)
-            tenant_metadata_info
+          or
+          (
+            (
+              (
+                tenant:pg_replication_lag:max
+                > on(tenant) group_left
+                tenant:alert_threshold:pg_replication_lag
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            unless on(tenant) tenant_metadata_info
+          )
         for: 30s
         labels:
           severity: warning
@@ -203,15 +248,30 @@ groups:
         expr: |
           (
             (
-              tenant:pg_replication_lag:max
-              > on(tenant) group_left
-              tenant:alert_threshold:pg_replication_lag_critical
+              (
+                tenant:pg_replication_lag:max
+                > on(tenant) group_left
+                tenant:alert_threshold:pg_replication_lag_critical
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
             )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
           )
-          * on(tenant) group_left(runbook_url, owner, tier)
-            tenant_metadata_info
+          or
+          (
+            (
+              (
+                tenant:pg_replication_lag:max
+                > on(tenant) group_left
+                tenant:alert_threshold:pg_replication_lag_critical
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            unless on(tenant) tenant_metadata_info
+          )
         for: 30s
         labels:
           severity: critical
@@ -232,12 +292,23 @@ groups:
       - alert: PostgreSQLHighDeadlocks
         expr: |
           (
-            tenant:pg_deadlocks:rate5m > 0.1
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            (
+              tenant:pg_deadlocks:rate5m > 0.1
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
           )
-          * on(tenant) group_left(runbook_url, owner, tier)
-            tenant_metadata_info
+          or
+          (
+            (
+              tenant:pg_deadlocks:rate5m > 0.1
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            unless on(tenant) tenant_metadata_info
+          )
         for: 5m
         labels:
           severity: warning
@@ -257,12 +328,23 @@ groups:
       - alert: PostgreSQLHighRollbackRatio
         expr: |
           (
-            tenant:pg_rollback_ratio:rate5m > 0.05
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            (
+              tenant:pg_rollback_ratio:rate5m > 0.05
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
           )
-          * on(tenant) group_left(runbook_url, owner, tier)
-            tenant_metadata_info
+          or
+          (
+            (
+              tenant:pg_rollback_ratio:rate5m > 0.05
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            unless on(tenant) tenant_metadata_info
+          )
         for: 5m
         labels:
           severity: warning
