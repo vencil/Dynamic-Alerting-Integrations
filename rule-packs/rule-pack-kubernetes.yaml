@@ -89,24 +89,52 @@ groups:
       - record: tenant:alert_threshold:container_memory
         expr: max by(tenant) (user_threshold{component="container", metric="memory"})
 
+      # ADR-024 PR3-pre-3: core firing vectors (threshold-cross + maintenance
+      # suppression) WITHOUT metadata enrichment. The alert rules below join
+      # tenant_metadata_info via a left-outer-join (`or`/`unless`) so a tenant
+      # with metrics but no metadata config (onboarding vacuum) still fires —
+      # the inner-join `* tenant_metadata_info` alone would silently drop it.
+      - record: rule_pack_kubernetes:pod_container_high_cpu:core
+        expr: |
+          (
+            max by(tenant) (tenant:pod_weakest_cpu_percent:max)
+            > on(tenant) group_left
+            tenant:alert_threshold:container_cpu
+          )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
+
+      - record: rule_pack_kubernetes:pod_container_high_memory:core
+        expr: |
+          (
+            max by(tenant) (tenant:pod_weakest_memory_percent:max)
+            > on(tenant) group_left
+            tenant:alert_threshold:container_memory
+          )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
+
   # -------------------------------------------------------
   # Alert Rules: Container resources (Weakest Link)
   # -------------------------------------------------------
   - name: kubernetes-container-alerts
     rules:
       - alert: PodContainerHighCPU
+        # Left-outer-join enrichment (ADR-024 PR3-pre-3): branch A enriches with
+        # runbook_url/owner/tier when tenant_metadata_info exists; branch B fires
+        # WITHOUT enrichment when it doesn't (onboarding vacuum). The two branches
+        # are mutually exclusive (metadata present XOR absent) → exactly one series.
         expr: |
           (
-            (
-              max by(tenant) (tenant:pod_weakest_cpu_percent:max)
-              > on(tenant) group_left
-              tenant:alert_threshold:container_cpu
-            )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            rule_pack_kubernetes:pod_container_high_cpu:core
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
           )
-          * on(tenant) group_left(runbook_url, owner, tier)
-            tenant_metadata_info
+          or
+          (
+            rule_pack_kubernetes:pod_container_high_cpu:core
+            unless on(tenant) tenant_metadata_info
+          )
         for: 60s
         labels:
           severity: warning
@@ -123,18 +151,18 @@ groups:
           owner: "{{ $labels.owner }}"
           tier: "{{ $labels.tier }}"
       - alert: PodContainerHighMemory
+        # Left-outer-join enrichment (ADR-024 PR3-pre-3) — see PodContainerHighCPU.
         expr: |
           (
-            (
-              max by(tenant) (tenant:pod_weakest_memory_percent:max)
-              > on(tenant) group_left
-              tenant:alert_threshold:container_memory
-            )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            rule_pack_kubernetes:pod_container_high_memory:core
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
           )
-          * on(tenant) group_left(runbook_url, owner, tier)
-            tenant_metadata_info
+          or
+          (
+            rule_pack_kubernetes:pod_container_high_memory:core
+            unless on(tenant) tenant_metadata_info
+          )
         for: 60s
         labels:
           severity: warning

@@ -8,7 +8,7 @@
 | elasticsearch | elasticsearch_exporter | 11 | 7 |
 | jvm | jmx_exporter | 9 | 7 |
 | kafka | kafka_exporter | 13 | 9 |
-| kubernetes | cAdvisor + kube-state-metrics | 7 | 4 |
+| kubernetes | cAdvisor + kube-state-metrics | 9 | 4 |
 | mariadb | mysqld_exporter (Percona) | 11 | 8 |
 | mongodb | mongodb_exporter | 10 | 6 |
 | nginx | nginx-prometheus-exporter | 9 | 6 |
@@ -18,4 +18,4 @@
 | rabbitmq | rabbitmq_exporter | 12 | 8 |
 | redis | redis_exporter | 11 | 6 |
 | platform | threshold-exporter self-monitoring | 0 | 16 |
-| **Total** | | **139** | **111** |
+| **Total** | | **141** | **111** |

@@ -620,6 +620,10 @@ rulepack-configmaps: ## 從 rule-packs/ 重生 k8s/03-monitoring/configmap-rules
 rulepack-configmaps-check: ## 驗 configmap 副本與 rule-packs/ 源語意一致（drift guard）
 	@python3 ./scripts/tools/dx/generate_rulepack_configmaps.py --check
 
+.PHONY: rulepack-promtool-test
+rulepack-promtool-test: ## promtool 行為單元測試（rule pack 告警 fire/no-fire 契約）
+	@for t in tests/rulepacks/*_test.yaml; do echo "== $$t =="; promtool test rules "$$t"; done
+
 .PHONY: jsx-extract
 jsx-extract: ## 拆 JSX dep（PR-2d pattern）— 用法：make jsx-extract KIND=hook NAME=useFoo PARENT=tenant-manager [SYMBOLS=A,B] [DRY_RUN=1] [FORCE=1]
 	@if [ -z "$(KIND)" ] || [ -z "$(NAME)" ] || [ -z "$(PARENT)" ]; then \
