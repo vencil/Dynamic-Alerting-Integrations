@@ -335,3 +335,76 @@ def test_zh_en_internal_table_parity():
         f"ZH/EN internal codename tables diverged: "
         f"ZH-only={zh_templates - en_templates}, EN-only={en_templates - zh_templates}"
     )
+
+
+# ============================================================
+# main() exit-code contract — the BLOCKING behavior (negative controls)
+# ============================================================
+#
+# Phase B (#710/#713) makes the gate a blocking --ci hook. The tests above
+# exercise scan_line() directly; these drive main() end-to-end so the wiring
+# hit -> hard-count -> `return 1 if args.ci` and the bypass branch are guarded.
+# A blocking gate with no negative-control test for its block could regress to
+# always-exit-0 and ship green. main() hard-codes repo paths, so we monkeypatch
+# REPO_ROOT + load_glossary + iter_files to inject a controlled fixture.
+
+def _drive_main(monkeypatch, tmp_path, doc_text, *, argv, internal, approved=frozenset(), pr_body=None):
+    doc = tmp_path / "doc.md"
+    doc.write_text(doc_text, encoding="utf-8")
+    monkeypatch.setattr(mod, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(
+        mod, "load_glossary",
+        lambda *a, **k: (set(approved), [(t, mod.compile_template(t)) for t in internal]),
+    )
+    monkeypatch.setattr(mod, "iter_files", lambda _paths: [doc])
+    monkeypatch.setattr(sys, "argv", ["check_codename_gate.py", *argv])
+    if pr_body is None:
+        monkeypatch.delenv("PR_BODY", raising=False)
+    else:
+        monkeypatch.setenv("PR_BODY", pr_body)
+    return mod.main()
+
+
+def test_main_ci_blocks_on_internal_leak(tmp_path, monkeypatch):
+    rc = _drive_main(monkeypatch, tmp_path, "regression caused by TD-42 here",
+                     argv=["--ci"], internal=["TD-{N}"])
+    assert rc == 1  # confirmed internal leak under --ci must hard-fail
+
+
+def test_main_ci_passes_on_clean_tree(tmp_path, monkeypatch):
+    rc = _drive_main(monkeypatch, tmp_path, "a perfectly clean customer doc line",
+                     argv=["--ci"], internal=["TD-{N}"])
+    assert rc == 0
+
+
+def test_main_ci_bypass_flips_leak_to_pass(tmp_path, monkeypatch):
+    body = (
+        "bypass-lint: codename-gate\n"
+        "reason: this file is the internal planning archive deliberately quoting "
+        "the TD-42 ticket id as documented subject matter and is reviewed as such.\n"
+    )
+    rc = _drive_main(monkeypatch, tmp_path, "mentions TD-42 intentionally",
+                     argv=["--ci"], internal=["TD-{N}"], pr_body=body)
+    assert rc == 0  # author-acknowledged bypass turns hard-fail into exit 0
+
+
+def test_main_strict_blocks_on_unregistered(tmp_path, monkeypatch):
+    # Phase C readiness: --strict promotes unregistered shape tokens to hard.
+    # internal set is non-empty (else main() early-returns 2).
+    rc = _drive_main(monkeypatch, tmp_path, "the Quantum Sync subsystem",
+                     argv=["--ci", "--strict"], internal=["TD-{N}"])
+    assert rc == 1
+
+
+def test_main_ci_non_strict_ignores_unregistered(tmp_path, monkeypatch):
+    # Without --strict, an unregistered token must NOT block (it's discovery).
+    rc = _drive_main(monkeypatch, tmp_path, "the Quantum Sync subsystem",
+                     argv=["--ci"], internal=["TD-{N}"])
+    assert rc == 0
+
+
+def test_main_returns_2_on_empty_internal(tmp_path, monkeypatch):
+    # Disarm guard: empty internal template set => exit 2 (glossary section
+    # renamed / removed), never a silent pass.
+    rc = _drive_main(monkeypatch, tmp_path, "anything", argv=["--ci"], internal=[])
+    assert rc == 2

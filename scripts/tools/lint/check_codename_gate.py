@@ -298,9 +298,12 @@ def scan_line(
                 if words[0].lower() in _LEADING_DETERMINERS:
                     continue
                 # Drop "<Word> <single-letter>" enumeration labels (Tier A,
-                # Option B, Path A) — doc structure, not codenames. Real
-                # single-letter codenames (Track A) are caught upstream by the
-                # internal-pattern scan and never reach here.
+                # Option B, Path A) — doc structure, not codenames. Registered
+                # single-letter codenames (Track A) are unaffected: the
+                # internal-pattern scan catches them before this point. Tradeoff:
+                # a brand-new, not-yet-registered single-letter codename family
+                # is invisible to *discovery* until registered — acceptable for
+                # this warn-mode layer (the hard teeth are the internal scan).
                 if len(words) == 2 and len(words[1]) == 1 and words[1].isalpha():
                     continue
             if _approved_match(token, approved):
