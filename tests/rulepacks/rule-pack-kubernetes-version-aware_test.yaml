@@ -1,0 +1,118 @@
+# promtool unit test — ADR-024 version-aware threshold (kubernetes pilot).
+# Run: promtool test rules tests/rulepacks/rule-pack-kubernetes-version-aware_test.yaml
+#
+# Proves the core ADR-024 assertions on the kubernetes pilot pack:
+#   - AC-2: a tenant declaring v1 AND v2 thresholds — each version's pod joins
+#     ITS OWN threshold (v1 pod vs 80, v2 pod vs the tightened 60).
+#   - AC-3: v1 and v2 pods COEXIST (rolling update) with DIFFERENT pod names
+#     (app-v1-x / app-v2-y) — both exact-match, no version×severity many-to-many
+#     cardinality crash (Route 2 per-severity split).
+#   - Dynamic fallback: a v3 pod with NO v3-specific threshold falls back to the
+#     `version="default"` threshold, and the alert PRESERVES the real version=v3
+#     (group_left), so on-call sees which version is actually running.
+#
+# kube_pod_labels carries app.kubernetes.io/version → the (0a) join injects it.
+rule_files:
+  - ../../rule-packs/rule-pack-kubernetes.yaml
+
+evaluation_interval: 15s
+
+tests:
+  - interval: 15s
+    input_series:
+      # ── db-a: v1 + v2 pods coexisting (rolling), distinct pod names ──
+      # v1 pod @ 90% CPU, v1 threshold = 80 → fires.
+      - series: 'kube_pod_labels{namespace="db-a", pod="app-v1-x", label_app_kubernetes_io_version="v1"}'
+        values: '1x48'
+      - series: 'container_cpu_usage_seconds_total{namespace="db-a", pod="app-v1-x", container="app"}'
+        values: '0+13.5x48'
+      - series: 'kube_pod_container_resource_limits{resource="cpu", namespace="db-a", pod="app-v1-x", container="app"}'
+        values: '1x48'
+      # v2 pod @ 65% CPU, v2 threshold = 60 (tightened) → fires.
+      - series: 'kube_pod_labels{namespace="db-a", pod="app-v2-y", label_app_kubernetes_io_version="v2"}'
+        values: '1x48'
+      - series: 'container_cpu_usage_seconds_total{namespace="db-a", pod="app-v2-y", container="app"}'
+        values: '0+9.75x48'
+      - series: 'kube_pod_container_resource_limits{resource="cpu", namespace="db-a", pod="app-v2-y", container="app"}'
+        values: '1x48'
+      - series: 'user_threshold{tenant="db-a", component="container", metric="cpu", severity="warning", version="v1"}'
+        values: '80x48'
+      - series: 'user_threshold{tenant="db-a", component="container", metric="cpu", severity="warning", version="v2"}'
+        values: '60x48'
+      - series: 'tenant_metadata_info{tenant="db-a", runbook_url="http://rb/a", owner="team-a", tier="gold"}'
+        values: '1x48'
+      # ── db-b: v3 pod @ 85% CPU, NO v3 threshold → fallback to default (80) ──
+      - series: 'kube_pod_labels{namespace="db-b", pod="app-v3-z", label_app_kubernetes_io_version="v3"}'
+        values: '1x48'
+      - series: 'container_cpu_usage_seconds_total{namespace="db-b", pod="app-v3-z", container="app"}'
+        values: '0+12.75x48'
+      - series: 'kube_pod_container_resource_limits{resource="cpu", namespace="db-b", pod="app-v3-z", container="app"}'
+        values: '1x48'
+      - series: 'user_threshold{tenant="db-b", component="container", metric="cpu", severity="warning"}'
+        values: '80x48'
+      - series: 'tenant_metadata_info{tenant="db-b", runbook_url="http://rb/b", owner="team-b", tier="silver"}'
+        values: '1x48'
+
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: PodContainerHighCPU
+        exp_alerts:
+          # db-a v1 → exact match vs v1 threshold (80), value 90.
+          - exp_labels:
+              severity: warning
+              tenant: db-a
+              version: v1
+              runbook_url: "http://rb/a"
+              owner: team-a
+              tier: gold
+            exp_annotations:
+              summary: "High container CPU in db-a"
+              summary_zh: "db-a 的容器 CPU 使用率過高"
+              platform_summary: "[gold] db-a: container CPU pressure — evaluate resource limits"
+              platform_summary_zh: "[gold] db-a: 容器 CPU 壓力過高 — 請評估資源限制"
+              description: "Max container CPU usage: 90.0% (threshold exceeded)"
+              description_zh: "最大容器 CPU 使用率: 90.0% (超過閾值)"
+              runbook_url: "http://rb/a"
+              owner: team-a
+              tier: gold
+          # db-a v2 → exact match vs tightened v2 threshold (60), value 65.
+          - exp_labels:
+              severity: warning
+              tenant: db-a
+              version: v2
+              runbook_url: "http://rb/a"
+              owner: team-a
+              tier: gold
+            exp_annotations:
+              summary: "High container CPU in db-a"
+              summary_zh: "db-a 的容器 CPU 使用率過高"
+              platform_summary: "[gold] db-a: container CPU pressure — evaluate resource limits"
+              platform_summary_zh: "[gold] db-a: 容器 CPU 壓力過高 — 請評估資源限制"
+              description: "Max container CPU usage: 65.0% (threshold exceeded)"
+              description_zh: "最大容器 CPU 使用率: 65.0% (超過閾值)"
+              runbook_url: "http://rb/a"
+              owner: team-a
+              tier: gold
+          # db-b v3 → FALLBACK to default threshold (80), real version=v3 preserved.
+          - exp_labels:
+              severity: warning
+              tenant: db-b
+              version: v3
+              runbook_url: "http://rb/b"
+              owner: team-b
+              tier: silver
+            exp_annotations:
+              summary: "High container CPU in db-b"
+              summary_zh: "db-b 的容器 CPU 使用率過高"
+              platform_summary: "[silver] db-b: container CPU pressure — evaluate resource limits"
+              platform_summary_zh: "[silver] db-b: 容器 CPU 壓力過高 — 請評估資源限制"
+              description: "Max container CPU usage: 85.0% (threshold exceeded)"
+              description_zh: "最大容器 CPU 使用率: 85.0% (超過閾值)"
+              runbook_url: "http://rb/b"
+              owner: team-b
+              tier: silver
+      # No critical thresholds declared → the per-severity critical rule is silent
+      # (proves the version×severity split does not spuriously cross-fire).
+      - eval_time: 11m
+        alertname: PodContainerHighCPUCritical
+        exp_alerts: []
