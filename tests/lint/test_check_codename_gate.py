@@ -62,6 +62,19 @@ def test_compile_template_left_boundary_blocks_embedded():
     assert not rx.search("FOOB-1")  # B preceded by word char → no match
 
 
+@pytest.mark.parametrize("template,literal_text,negative", [
+    # Regex metachars in the literal segments MUST be escaped, not interpreted.
+    # Guards against re-injection / compilation panic (Gemini 💣3).
+    ("Legacy-(OLD)-{N}", "Legacy-(OLD)-12", "Legacy-XOLDX-12"),
+    ("Legacy-[OLD-{N}", "Legacy-[OLD-7", "Legacy-O-7"),
+    ("A.B-{N}", "A.B-3", "AXB-3"),
+])
+def test_compile_template_escapes_regex_metachars(template, literal_text, negative):
+    rx = mod.compile_template(template)  # must not raise
+    assert rx.search(literal_text), f"{template!r} should match its literal form"
+    assert not rx.search(negative), f"{template!r} metachars must be literal, not regex ops"
+
+
 # ============================================================
 # load_glossary
 # ============================================================
@@ -214,6 +227,26 @@ def test_scan_line_internal_not_double_reported():
     hits, unreg = mod.scan_line("regression in TD-30", internal, set())
     assert {m for _t, m in hits} == {"TD-30"}
     assert "TD-30" not in unreg  # exact-match de-dup, not surfaced as unregistered
+
+
+def test_scan_line_leading_determiner_skipped():
+    # "The Migration" is sentence prose, not a codename (Gemini 💣2). The real
+    # term ("Migration Toolkit") would be approved anyway; the determiner-led
+    # bigram must not pollute the soak's distinct-token count.
+    internal = _internal(["TD-{N}"])
+    _h, unreg = mod.scan_line("The Migration Toolkit helps a lot", internal, set())
+    assert "The Migration" not in unreg
+    # But a non-determiner first word is still discovered.
+    _h2, unreg2 = mod.scan_line("the Tier A rollout", internal, set())
+    assert "Tier A" in unreg2
+
+
+def test_scan_line_possessive_not_flagged():
+    # Word boundary stops before the apostrophe, so "Manager's" yields the
+    # approved token "Tenant Manager", not a spurious unregistered token.
+    internal = _internal(["TD-{N}"])
+    _h, unreg = mod.scan_line("the Tenant Manager's new UI", internal, {"tenant manager"})
+    assert unreg == []
 
 
 # ============================================================

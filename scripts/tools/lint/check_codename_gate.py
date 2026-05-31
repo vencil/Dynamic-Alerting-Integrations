@@ -105,6 +105,16 @@ GLOSSARY_SELF = {
 # parsed — glossary.md is the SSOT (S#101 ZH-primary policy).
 INTERNAL_SECTION_RE = re.compile(r"^##\s+內部代號")
 
+# Leading determiners/articles that, as the FIRST word of a two-word-cap shape
+# token, mark it as sentence prose ("The Migration", "An Operator"), not a
+# codename. Deterministic stopword skip — NOT statistical NLP (#469 explicitly
+# rejects non-deterministic corpus/TF-IDF approaches). Single-char "A" never
+# matches the shape (needs a lowercase tail), so it is not listed.
+_LEADING_DETERMINERS = frozenset({
+    "the", "an", "this", "that", "these", "those",
+    "its", "our", "your", "their", "his", "her",
+})
+
 # ── Shape detectors (broad on purpose; see #469) ──────────────────────────
 # These find tokens that merely *look like* a codename. Classification happens
 # afterwards against the glossary registries.
@@ -270,7 +280,7 @@ def scan_line(
 
     internal_span_set = set(internal_spans)
     unregistered: list[str] = []
-    for _label, rx in SHAPE_PATTERNS:
+    for label, rx in SHAPE_PATTERNS:
         for m in rx.finditer(line):
             token = m.group(0).strip()
             # Exact-match de-dup only: a shape token equal to an internal hit
@@ -279,6 +289,10 @@ def scan_line(
             # adjacent token (e.g. internal `DEC-B` hiding shape `DEC-Beta`),
             # which is exactly the family-extension case discovery must surface.
             if token in internal_span_set:
+                continue
+            # Drop two-word tokens led by a determiner ("The Migration") — that
+            # is sentence prose, not a codename. Deterministic, not NLP.
+            if label == "two-word-cap" and token.split(" ", 1)[0].lower() in _LEADING_DETERMINERS:
                 continue
             if _approved_match(token, approved):
                 continue
