@@ -188,4 +188,8 @@ receiving infra **全部已存在**（da-batchpr / tenant-api writer / da-guard 
 - ✅ `roadmap-future.md`「維運自動化」條目：「資料流閉環評估」→ 已改為 STAGE-1 採納 + DEFER trigger + REJECT
 - ✅ 本文 `status: draft → accepted` + 頂部決議框
 - ℹ️ planning archive（v2.8.0 planning §10 DEC-F）為 **maintainer-local**，不在本 repo；**in-repo 決議 SSOT = 本評估書**（`planning-id-mapping.md` 僅 legacy→TRK 翻譯表，DEC 非其 namespace，不登錄）
-- ⬜ GitHub follow-up tickets（待開）：(1) 前置票 — `threshold_recommend` query series 驗證（§6，最優先）；(2) STAGE-1 實作票 — `--export-patch` T1.5；(3) Future Work — drift lint / global default drift 報表 / portal inline（各 defer-with-trigger）；(4) #457 留言記 R0 結論後 close
+- ✅ GitHub follow-up tickets（已開）：
+  - [#719](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/719) — 前置票：`threshold_recommend` query series 驗證（§6，P1，最優先）
+  - [#720](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/720) — STAGE-1 實作：`--export-patch` T1.5（blocked-by #719）
+  - [#721](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/721) — deferred-with-trigger 傘狀（重 adapter / drift lint / global default drift 報表 / portal inline）
+- ⬜ #457 留言記 R0 結論後 close（待 PR [#718](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/718) merge）
