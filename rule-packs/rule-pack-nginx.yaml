@@ -78,15 +78,30 @@ groups:
         expr: |
           (
             (
-              tenant:nginx_connections_active:max
-              > on(tenant) group_left
-              tenant:alert_threshold:nginx_connections
+              (
+                tenant:nginx_connections_active:max
+                > on(tenant) group_left
+                tenant:alert_threshold:nginx_connections
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
             )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
           )
-          * on(tenant) group_left(runbook_url, owner, tier)
-            tenant_metadata_info
+          or
+          (
+            (
+              (
+                tenant:nginx_connections_active:max
+                > on(tenant) group_left
+                tenant:alert_threshold:nginx_connections
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            unless on(tenant) tenant_metadata_info
+          )
         for: 5m
         labels:
           severity: warning
@@ -107,15 +122,30 @@ groups:
         expr: |
           (
             (
-              tenant:nginx_connections_active:max
-              > on(tenant) group_left
-              tenant:alert_threshold:nginx_connections_critical
+              (
+                tenant:nginx_connections_active:max
+                > on(tenant) group_left
+                tenant:alert_threshold:nginx_connections_critical
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
             )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
           )
-          * on(tenant) group_left(runbook_url, owner, tier)
-            tenant_metadata_info
+          or
+          (
+            (
+              (
+                tenant:nginx_connections_active:max
+                > on(tenant) group_left
+                tenant:alert_threshold:nginx_connections_critical
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            unless on(tenant) tenant_metadata_info
+          )
         for: 3m
         labels:
           severity: critical
@@ -137,15 +167,30 @@ groups:
         expr: |
           (
             (
-              tenant:nginx_requests:rate5m
-              > on(tenant) group_left
-              tenant:alert_threshold:nginx_request_rate
+              (
+                tenant:nginx_requests:rate5m
+                > on(tenant) group_left
+                tenant:alert_threshold:nginx_request_rate
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
             )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
           )
-          * on(tenant) group_left(runbook_url, owner, tier)
-            tenant_metadata_info
+          or
+          (
+            (
+              (
+                tenant:nginx_requests:rate5m
+                > on(tenant) group_left
+                tenant:alert_threshold:nginx_request_rate
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            unless on(tenant) tenant_metadata_info
+          )
         for: 5m
         labels:
           severity: warning
@@ -166,15 +211,30 @@ groups:
         expr: |
           (
             (
-              tenant:nginx_requests:rate5m
-              > on(tenant) group_left
-              tenant:alert_threshold:nginx_request_rate_critical
+              (
+                tenant:nginx_requests:rate5m
+                > on(tenant) group_left
+                tenant:alert_threshold:nginx_request_rate_critical
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
             )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
           )
-          * on(tenant) group_left(runbook_url, owner, tier)
-            tenant_metadata_info
+          or
+          (
+            (
+              (
+                tenant:nginx_requests:rate5m
+                > on(tenant) group_left
+                tenant:alert_threshold:nginx_request_rate_critical
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            unless on(tenant) tenant_metadata_info
+          )
         for: 3m
         labels:
           severity: critical
@@ -196,15 +256,30 @@ groups:
         expr: |
           (
             (
-              tenant:nginx_connections_waiting:max
-              > on(tenant) group_left
-              tenant:alert_threshold:nginx_waiting
+              (
+                tenant:nginx_connections_waiting:max
+                > on(tenant) group_left
+                tenant:alert_threshold:nginx_waiting
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
             )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
           )
-          * on(tenant) group_left(runbook_url, owner, tier)
-            tenant_metadata_info
+          or
+          (
+            (
+              (
+                tenant:nginx_connections_waiting:max
+                > on(tenant) group_left
+                tenant:alert_threshold:nginx_waiting
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            unless on(tenant) tenant_metadata_info
+          )
         for: 5m
         labels:
           severity: warning
@@ -225,15 +300,30 @@ groups:
         expr: |
           (
             (
-              tenant:nginx_connections_waiting:max
-              > on(tenant) group_left
-              tenant:alert_threshold:nginx_waiting_critical
+              (
+                tenant:nginx_connections_waiting:max
+                > on(tenant) group_left
+                tenant:alert_threshold:nginx_waiting_critical
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
             )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
           )
-          * on(tenant) group_left(runbook_url, owner, tier)
-            tenant_metadata_info
+          or
+          (
+            (
+              (
+                tenant:nginx_connections_waiting:max
+                > on(tenant) group_left
+                tenant:alert_threshold:nginx_waiting_critical
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            unless on(tenant) tenant_metadata_info
+          )
         for: 3m
         labels:
           severity: critical

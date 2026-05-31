@@ -1,7 +1,8 @@
 # ============================================================
-# MongoDB Rule Pack — Recording Rules & Alert Rules
-# Canonical source: rule-packs/rule-pack-mongodb.yaml
-# Maintained by: DBA Team
+# mongodb Rule Pack — Recording & Alert Rules (ConfigMap)
+# GENERATED from rule-packs/rule-pack-mongodb.yaml by
+# scripts/tools/dx/generate_rulepack_configmaps.py — DO NOT EDIT.
+# Run `make rulepack-configmaps` after editing the rule pack.
 # ============================================================
 apiVersion: v1
 kind: ConfigMap
@@ -12,129 +13,108 @@ metadata:
     app: prometheus
     rule-pack: mongodb
 data:
-  mongodb-recording.yml: |
-    groups:
-      - name: mongodb-normalization
-        interval: 15s
-        rules:
-          - record: tenant:mongodb_connections_current:max
-            expr: max by(tenant) (mongodb_connections{state="current"})
-
-          - record: tenant:mongodb_connections_available:min
-            expr: min by(tenant) (mongodb_connections{state="available"})
-
-          - record: tenant:mongodb_connection_usage:ratio
-            expr: |
-              max by(tenant) (mongodb_connections{state="current"})
-              / (
-                max by(tenant) (mongodb_connections{state="current"})
-                + min by(tenant) (mongodb_connections{state="available"})
-              )
-
-          - record: tenant:mongodb_replication_lag:max
-            expr: max by(tenant) (mongodb_mongod_replset_member_replication_lag)
-
-          - record: tenant:mongodb_opcounters:rate5m
-            expr: sum by(tenant) (rate(mongodb_opcounters_total[5m]))
-
-          - record: tenant:mongodb_document_ops:rate5m
-            expr: sum by(tenant) (rate(mongodb_mongod_metrics_document_total[5m]))
-
-          - record: tenant:mongodb_page_faults:rate5m
-            expr: sum by(tenant) (rate(mongodb_extra_info_page_faults_total[5m]))
-
-      - name: mongodb-threshold-normalization
-        interval: 15s
-        rules:
-          - record: tenant:alert_threshold:mongodb_connections_current
-            expr: max by(tenant) (user_threshold{metric="mongodb_connections_current", severity="warning"})
-
-          - record: tenant:alert_threshold:mongodb_replication_lag
-            expr: max by(tenant) (user_threshold{metric="mongodb_replication_lag", severity="warning"})
-
-          - record: tenant:alert_threshold:mongodb_opcounters_rate
-            expr: max by(tenant) (user_threshold{metric="mongodb_opcounters_rate", severity="warning"})
-
-  mongodb-alert.yml: |
-    groups:
-      - name: mongodb-alerts
-        rules:
-          - alert: MongoDBDown
-            expr: mongodb_up == 0
-            for: 15s
-            labels:
-              severity: critical
-            annotations:
-              summary: "MongoDB instance {{ $labels.instance }} is DOWN"
-
-          - alert: MongoDBHighConnections
-            expr: |
-              (
-                tenant:mongodb_connections_current:max
-                > on(tenant) group_left
-                tenant:alert_threshold:mongodb_connections_current
-              )
-              unless on(tenant)
-              (user_state_filter{filter="maintenance"} == 1)
-            for: 5m
-            labels:
-              severity: warning
-            annotations:
-              summary: "MongoDB high connection count on {{ $labels.tenant }}"
-              description: "{{ $value }} current connections"
-
-          - alert: MongoDBReplicationLag
-            expr: |
-              (
-                tenant:mongodb_replication_lag:max
-                > on(tenant) group_left
-                tenant:alert_threshold:mongodb_replication_lag
-              )
-              unless on(tenant)
-              (user_state_filter{filter="maintenance"} == 1)
-            for: 2m
-            labels:
-              severity: warning
-            annotations:
-              summary: "MongoDB replication lag on {{ $labels.tenant }}"
-              description: "Replication lag: {{ $value | printf \"%.1f\" }}s behind primary"
-
-          - alert: MongoDBHighOperations
-            expr: |
-              (
-                tenant:mongodb_opcounters:rate5m
-                > on(tenant) group_left
-                tenant:alert_threshold:mongodb_opcounters_rate
-              )
-              unless on(tenant)
-              (user_state_filter{filter="maintenance"} == 1)
-            for: 5m
-            labels:
-              severity: warning
-            annotations:
-              summary: "MongoDB high operation rate on {{ $labels.tenant }}"
-              description: "{{ $value | printf \"%.0f\" }} ops/sec"
-
-          - alert: MongoDBHighPageFaults
-            expr: |
-              tenant:mongodb_page_faults:rate5m > 100
-              unless on(tenant)
-              (user_state_filter{filter="maintenance"} == 1)
-            for: 5m
-            labels:
-              severity: warning
-            annotations:
-              summary: "MongoDB high page faults on {{ $labels.tenant }}"
-              description: "{{ $value | printf \"%.1f\" }} page faults/sec — check memory"
-
-          - alert: MongoDBConnectionSaturation
-            expr: |
-              tenant:mongodb_connection_usage:ratio > 0.8
-              unless on(tenant)
-              (user_state_filter{filter="maintenance"} == 1)
-            for: 5m
-            labels:
-              severity: warning
-            annotations:
-              summary: "MongoDB connection pool near saturation on {{ $labels.tenant }}"
-              description: "{{ $value | printf \"%.0f\" }}% of connections used"
+  mongodb-recording.yml: "groups:\n- name: mongodb-normalization\n  interval: 15s\n\
+    \  rules:\n  - record: tenant:mongodb_connections_current:max\n    expr: max by(tenant)\
+    \ (mongodb_connections{state=\"current\"})\n  - record: tenant:mongodb_connections_available:min\n\
+    \    expr: min by(tenant) (mongodb_connections{state=\"available\"})\n  - record:\
+    \ tenant:mongodb_connection_usage:ratio\n    expr: \"max by(tenant) (mongodb_connections{state=\\\
+    \"current\\\"})\\n/ (\\n  max by(tenant) (mongodb_connections{state=\\\"current\\\
+    \"})\\n  + min by(tenant) (mongodb_connections{state=\\\"available\\\"})\\n)\\\
+    n\"\n  - record: tenant:mongodb_replication_lag:max\n    expr: max by(tenant)\
+    \ (mongodb_mongod_replset_member_replication_lag)\n  - record: tenant:mongodb_opcounters:rate5m\n\
+    \    expr: sum by(tenant) (rate(mongodb_opcounters_total[5m]))\n  - record: tenant:mongodb_document_ops:rate5m\n\
+    \    expr: sum by(tenant) (rate(mongodb_mongod_metrics_document_total[5m]))\n\
+    \  - record: tenant:mongodb_page_faults:rate5m\n    expr: sum by(tenant) (rate(mongodb_extra_info_page_faults_total[5m]))\n\
+    - name: mongodb-threshold-normalization\n  interval: 15s\n  rules:\n  - record:\
+    \ tenant:alert_threshold:mongodb_connections_current\n    expr: max by(tenant)\
+    \ (user_threshold{metric=\"mongodb_connections_current\", severity=\"warning\"\
+    })\n  - record: tenant:alert_threshold:mongodb_replication_lag\n    expr: max\
+    \ by(tenant) (user_threshold{metric=\"mongodb_replication_lag\", severity=\"warning\"\
+    })\n  - record: tenant:alert_threshold:mongodb_opcounters_rate\n    expr: max\
+    \ by(tenant) (user_threshold{metric=\"mongodb_opcounters_rate\", severity=\"warning\"\
+    })\n"
+  mongodb-alert.yml: "groups:\n- name: mongodb-alerts\n  rules:\n  - alert: MongoDBDown\n\
+    \    expr: mongodb_up == 0\n    for: 15s\n    labels:\n      severity: critical\n\
+    \      tenant: '{{ $labels.tenant }}'\n    annotations:\n      summary: MongoDB\
+    \ instance {{ $labels.instance }} is DOWN\n      summary_zh: MongoDB 實例 {{ $labels.instance\
+    \ }} 已停機\n  - alert: MongoDBHighConnections\n    expr: \"(\\n  (\\n    (\\n  \
+    \    tenant:mongodb_connections_current:max\\n      > on(tenant) group_left\\\
+    n      tenant:alert_threshold:mongodb_connections_current\\n    )\\n    unless\
+    \ on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\"} == 1)\\n  )\\\
+    n  * on(tenant) group_left(runbook_url, owner, tier)\\n    tenant_metadata_info\\\
+    n)\\nor\\n(\\n  (\\n    (\\n      tenant:mongodb_connections_current:max\\n  \
+    \    > on(tenant) group_left\\n      tenant:alert_threshold:mongodb_connections_current\\\
+    n    )\\n    unless on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\
+    \"} == 1)\\n  )\\n  unless on(tenant) tenant_metadata_info\\n)\\n\"\n    for:\
+    \ 5m\n    labels:\n      severity: warning\n      tenant: '{{ $labels.tenant }}'\n\
+    \    annotations:\n      summary: MongoDB high connection count on {{ $labels.tenant\
+    \ }}\n      summary_zh: '{{ $labels.tenant }} 的 MongoDB 連線數過高'\n      platform_summary:\
+    \ '[{{ $labels.tier }}] {{ $labels.tenant }}: MongoDB connection threshold breached\
+    \ — pool sizing review'\n      platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant\
+    \ }}: MongoDB 連線閾值超過 — 請檢查連線池大小'\n      description: '{{ $value }} current connections'\n\
+    \      description_zh: '{{ $value }} 個目前連線'\n      runbook_url: '{{ $labels.runbook_url\
+    \ }}'\n      owner: '{{ $labels.owner }}'\n      tier: '{{ $labels.tier }}'\n\
+    \  - alert: MongoDBReplicationLag\n    expr: \"(\\n  (\\n    (\\n      tenant:mongodb_replication_lag:max\\\
+    n      > on(tenant) group_left\\n      tenant:alert_threshold:mongodb_replication_lag\\\
+    n    )\\n    unless on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\
+    \"} == 1)\\n  )\\n  * on(tenant) group_left(runbook_url, owner, tier)\\n    tenant_metadata_info\\\
+    n)\\nor\\n(\\n  (\\n    (\\n      tenant:mongodb_replication_lag:max\\n      >\
+    \ on(tenant) group_left\\n      tenant:alert_threshold:mongodb_replication_lag\\\
+    n    )\\n    unless on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\
+    \"} == 1)\\n  )\\n  unless on(tenant) tenant_metadata_info\\n)\\n\"\n    for:\
+    \ 2m\n    labels:\n      severity: warning\n      tenant: '{{ $labels.tenant }}'\n\
+    \    annotations:\n      summary: MongoDB replication lag on {{ $labels.tenant\
+    \ }}\n      summary_zh: '{{ $labels.tenant }} 的 MongoDB 複製延遲'\n      platform_summary:\
+    \ '[{{ $labels.tier }}] {{ $labels.tenant }}: MongoDB replication lag — check\
+    \ replica health'\n      platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant\
+    \ }}: MongoDB 複製延遲 — 請檢查副本狀態'\n      description: 'Replication lag: {{ $value\
+    \ | printf \"%.1f\" }}s behind primary'\n      description_zh: '複製延遲: 落後 Primary\
+    \ {{ $value | printf \"%.1f\" }}s'\n      runbook_url: '{{ $labels.runbook_url\
+    \ }}'\n      owner: '{{ $labels.owner }}'\n      tier: '{{ $labels.tier }}'\n\
+    \  - alert: MongoDBHighOperations\n    expr: \"(\\n  (\\n    (\\n      tenant:mongodb_opcounters:rate5m\\\
+    n      > on(tenant) group_left\\n      tenant:alert_threshold:mongodb_opcounters_rate\\\
+    n    )\\n    unless on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\
+    \"} == 1)\\n  )\\n  * on(tenant) group_left(runbook_url, owner, tier)\\n    tenant_metadata_info\\\
+    n)\\nor\\n(\\n  (\\n    (\\n      tenant:mongodb_opcounters:rate5m\\n      > on(tenant)\
+    \ group_left\\n      tenant:alert_threshold:mongodb_opcounters_rate\\n    )\\\
+    n    unless on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\"} ==\
+    \ 1)\\n  )\\n  unless on(tenant) tenant_metadata_info\\n)\\n\"\n    for: 5m\n\
+    \    labels:\n      severity: warning\n      tenant: '{{ $labels.tenant }}'\n\
+    \    annotations:\n      summary: MongoDB high operation rate on {{ $labels.tenant\
+    \ }}\n      summary_zh: '{{ $labels.tenant }} 的 MongoDB 作業率過高'\n      platform_summary:\
+    \ '[{{ $labels.tier }}] {{ $labels.tenant }}: MongoDB operation rate elevated\
+    \ — workload review'\n      platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant\
+    \ }}: MongoDB 作業率提升 — 請檢查工作負載'\n      description: '{{ $value | printf \"%.0f\"\
+    \ }} ops/sec'\n      description_zh: '{{ $value | printf \"%.0f\" }} 作業/秒'\n \
+    \     runbook_url: '{{ $labels.runbook_url }}'\n      owner: '{{ $labels.owner\
+    \ }}'\n      tier: '{{ $labels.tier }}'\n  - alert: MongoDBHighPageFaults\n  \
+    \  expr: \"(\\n  (\\n    tenant:mongodb_page_faults:rate5m > 100\\n    unless\
+    \ on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\"} == 1)\\n  )\\\
+    n  * on(tenant) group_left(runbook_url, owner, tier)\\n    tenant_metadata_info\\\
+    n)\\nor\\n(\\n  (\\n    tenant:mongodb_page_faults:rate5m > 100\\n    unless on(tenant)\\\
+    n    (user_state_filter{filter=\\\"maintenance\\\"} == 1)\\n  )\\n  unless on(tenant)\
+    \ tenant_metadata_info\\n)\\n\"\n    for: 5m\n    labels:\n      severity: warning\n\
+    \      tenant: '{{ $labels.tenant }}'\n    annotations:\n      summary: MongoDB\
+    \ high page faults on {{ $labels.tenant }}\n      summary_zh: '{{ $labels.tenant\
+    \ }} 的 MongoDB Page Fault 過多'\n      platform_summary: '[{{ $labels.tier }}] {{\
+    \ $labels.tenant }}: MongoDB page fault rate high — memory sizing review'\n  \
+    \    platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant }}: MongoDB\
+    \ Page Fault 率過高 — 請檢查記憶體大小'\n      description: '{{ $value | printf \"%.1f\"\
+    \ }} page faults/sec — check memory'\n      description_zh: '{{ $value | printf\
+    \ \"%.1f\" }} Page Fault/秒 — 請檢查記憶體'\n      runbook_url: '{{ $labels.runbook_url\
+    \ }}'\n      owner: '{{ $labels.owner }}'\n      tier: '{{ $labels.tier }}'\n\
+    \  - alert: MongoDBConnectionSaturation\n    expr: \"(\\n  (\\n    tenant:mongodb_connection_usage:ratio\
+    \ > 0.8\\n    unless on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\
+    \"} == 1)\\n  )\\n  * on(tenant) group_left(runbook_url, owner, tier)\\n    tenant_metadata_info\\\
+    n)\\nor\\n(\\n  (\\n    tenant:mongodb_connection_usage:ratio > 0.8\\n    unless\
+    \ on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\"} == 1)\\n  )\\\
+    n  unless on(tenant) tenant_metadata_info\\n)\\n\"\n    for: 5m\n    labels:\n\
+    \      severity: warning\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
+    \      summary: MongoDB connection pool near saturation on {{ $labels.tenant }}\n\
+    \      summary_zh: '{{ $labels.tenant }} 的 MongoDB 連線池接近飽和'\n      platform_summary:\
+    \ '[{{ $labels.tier }}] {{ $labels.tenant }}: MongoDB connection pool near saturation\
+    \ — capacity action needed'\n      platform_summary_zh: '[{{ $labels.tier }}]\
+    \ {{ $labels.tenant }}: MongoDB 連線池接近飽和 — 需要容量擴展'\n      description: '{{ $value\
+    \ | printf \"%.0f\" }}% of connections used'\n      description_zh: 已使用 {{ $value\
+    \ | printf \"%.0f\" }}% 的連線\n      runbook_url: '{{ $labels.runbook_url }}'\n\
+    \      owner: '{{ $labels.owner }}'\n      tier: '{{ $labels.tier }}'\n"

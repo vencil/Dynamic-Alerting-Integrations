@@ -81,15 +81,30 @@ groups:
         expr: |
           (
             (
-              tenant:jvm_gc_pause:rate5m
-              > on(tenant) group_left
-              tenant:alert_threshold:jvm_gc_pause
+              (
+                tenant:jvm_gc_pause:rate5m
+                > on(tenant) group_left
+                tenant:alert_threshold:jvm_gc_pause
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
             )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
           )
-          * on(tenant) group_left(runbook_url, owner, tier)
-            tenant_metadata_info
+          or
+          (
+            (
+              (
+                tenant:jvm_gc_pause:rate5m
+                > on(tenant) group_left
+                tenant:alert_threshold:jvm_gc_pause
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            unless on(tenant) tenant_metadata_info
+          )
         for: 5m
         labels:
           severity: warning
@@ -110,15 +125,30 @@ groups:
         expr: |
           (
             (
-              tenant:jvm_gc_pause:rate5m
-              > on(tenant) group_left
-              tenant:alert_threshold:jvm_gc_pause_critical
+              (
+                tenant:jvm_gc_pause:rate5m
+                > on(tenant) group_left
+                tenant:alert_threshold:jvm_gc_pause_critical
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
             )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
           )
-          * on(tenant) group_left(runbook_url, owner, tier)
-            tenant_metadata_info
+          or
+          (
+            (
+              (
+                tenant:jvm_gc_pause:rate5m
+                > on(tenant) group_left
+                tenant:alert_threshold:jvm_gc_pause_critical
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            unless on(tenant) tenant_metadata_info
+          )
         for: 3m
         labels:
           severity: critical
@@ -140,15 +170,30 @@ groups:
         expr: |
           (
             (
-              tenant:jvm_memory_used:percent
-              > on(tenant) group_left
-              tenant:alert_threshold:jvm_memory
+              (
+                tenant:jvm_memory_used:percent
+                > on(tenant) group_left
+                tenant:alert_threshold:jvm_memory
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
             )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
           )
-          * on(tenant) group_left(runbook_url, owner, tier)
-            tenant_metadata_info
+          or
+          (
+            (
+              (
+                tenant:jvm_memory_used:percent
+                > on(tenant) group_left
+                tenant:alert_threshold:jvm_memory
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            unless on(tenant) tenant_metadata_info
+          )
         for: 5m
         labels:
           severity: warning
@@ -169,15 +214,30 @@ groups:
         expr: |
           (
             (
-              tenant:jvm_memory_used:percent
-              > on(tenant) group_left
-              tenant:alert_threshold:jvm_memory_critical
+              (
+                tenant:jvm_memory_used:percent
+                > on(tenant) group_left
+                tenant:alert_threshold:jvm_memory_critical
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
             )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
           )
-          * on(tenant) group_left(runbook_url, owner, tier)
-            tenant_metadata_info
+          or
+          (
+            (
+              (
+                tenant:jvm_memory_used:percent
+                > on(tenant) group_left
+                tenant:alert_threshold:jvm_memory_critical
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            unless on(tenant) tenant_metadata_info
+          )
         for: 3m
         labels:
           severity: critical
@@ -199,15 +259,30 @@ groups:
         expr: |
           (
             (
-              tenant:jvm_threads:current
-              > on(tenant) group_left
-              tenant:alert_threshold:jvm_threads
+              (
+                tenant:jvm_threads:current
+                > on(tenant) group_left
+                tenant:alert_threshold:jvm_threads
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
             )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
           )
-          * on(tenant) group_left(runbook_url, owner, tier)
-            tenant_metadata_info
+          or
+          (
+            (
+              (
+                tenant:jvm_threads:current
+                > on(tenant) group_left
+                tenant:alert_threshold:jvm_threads
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            unless on(tenant) tenant_metadata_info
+          )
         for: 5m
         labels:
           severity: warning
@@ -228,15 +303,30 @@ groups:
         expr: |
           (
             (
-              tenant:jvm_threads:current
-              > on(tenant) group_left
-              tenant:alert_threshold:jvm_threads_critical
+              (
+                tenant:jvm_threads:current
+                > on(tenant) group_left
+                tenant:alert_threshold:jvm_threads_critical
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
             )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
           )
-          * on(tenant) group_left(runbook_url, owner, tier)
-            tenant_metadata_info
+          or
+          (
+            (
+              (
+                tenant:jvm_threads:current
+                > on(tenant) group_left
+                tenant:alert_threshold:jvm_threads_critical
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            unless on(tenant) tenant_metadata_info
+          )
         for: 3m
         labels:
           severity: critical
@@ -258,15 +348,30 @@ groups:
         expr: |
           (
             (
-              tenant:jvm_gc_pause:rate5m > on(tenant) group_left tenant:alert_threshold:jvm_gc_pause
-              and on(tenant)
-              tenant:jvm_memory_used:percent > on(tenant) group_left tenant:alert_threshold:jvm_memory
+              (
+                tenant:jvm_gc_pause:rate5m > on(tenant) group_left tenant:alert_threshold:jvm_gc_pause
+                and on(tenant)
+                tenant:jvm_memory_used:percent > on(tenant) group_left tenant:alert_threshold:jvm_memory
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
             )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
           )
-          * on(tenant) group_left(runbook_url, owner, tier)
-            tenant_metadata_info
+          or
+          (
+            (
+              (
+                tenant:jvm_gc_pause:rate5m > on(tenant) group_left tenant:alert_threshold:jvm_gc_pause
+                and on(tenant)
+                tenant:jvm_memory_used:percent > on(tenant) group_left tenant:alert_threshold:jvm_memory
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            unless on(tenant) tenant_metadata_info
+          )
         for: 5m
         labels:
           severity: critical

@@ -98,15 +98,30 @@ groups:
         expr: |
           (
             (
-              tenant:rabbitmq_queue_messages:max
-              > on(tenant) group_left
-              tenant:alert_threshold:rabbitmq_queue_messages
+              (
+                tenant:rabbitmq_queue_messages:max
+                > on(tenant) group_left
+                tenant:alert_threshold:rabbitmq_queue_messages
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
             )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
           )
-          * on(tenant) group_left(runbook_url, owner, tier)
-            tenant_metadata_info
+          or
+          (
+            (
+              (
+                tenant:rabbitmq_queue_messages:max
+                > on(tenant) group_left
+                tenant:alert_threshold:rabbitmq_queue_messages
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            unless on(tenant) tenant_metadata_info
+          )
         for: 30s
         labels:
           severity: warning
@@ -128,15 +143,30 @@ groups:
         expr: |
           (
             (
-              tenant:rabbitmq_queue_messages:max
-              > on(tenant) group_left
-              tenant:alert_threshold:rabbitmq_queue_messages_critical
+              (
+                tenant:rabbitmq_queue_messages:max
+                > on(tenant) group_left
+                tenant:alert_threshold:rabbitmq_queue_messages_critical
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
             )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
           )
-          * on(tenant) group_left(runbook_url, owner, tier)
-            tenant_metadata_info
+          or
+          (
+            (
+              (
+                tenant:rabbitmq_queue_messages:max
+                > on(tenant) group_left
+                tenant:alert_threshold:rabbitmq_queue_messages_critical
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            unless on(tenant) tenant_metadata_info
+          )
         for: 30s
         labels:
           severity: critical
@@ -157,15 +187,30 @@ groups:
         expr: |
           (
             (
-              tenant:rabbitmq_node_mem_percent:ratio
-              > on(tenant) group_left
-              tenant:alert_threshold:rabbitmq_node_mem_percent
+              (
+                tenant:rabbitmq_node_mem_percent:ratio
+                > on(tenant) group_left
+                tenant:alert_threshold:rabbitmq_node_mem_percent
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
             )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
           )
-          * on(tenant) group_left(runbook_url, owner, tier)
-            tenant_metadata_info
+          or
+          (
+            (
+              (
+                tenant:rabbitmq_node_mem_percent:ratio
+                > on(tenant) group_left
+                tenant:alert_threshold:rabbitmq_node_mem_percent
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            unless on(tenant) tenant_metadata_info
+          )
         for: 30s
         labels:
           severity: warning
@@ -187,15 +232,30 @@ groups:
         expr: |
           (
             (
-              tenant:rabbitmq_node_mem_percent:ratio
-              > on(tenant) group_left
-              tenant:alert_threshold:rabbitmq_node_mem_percent_critical
+              (
+                tenant:rabbitmq_node_mem_percent:ratio
+                > on(tenant) group_left
+                tenant:alert_threshold:rabbitmq_node_mem_percent_critical
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
             )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
           )
-          * on(tenant) group_left(runbook_url, owner, tier)
-            tenant_metadata_info
+          or
+          (
+            (
+              (
+                tenant:rabbitmq_node_mem_percent:ratio
+                > on(tenant) group_left
+                tenant:alert_threshold:rabbitmq_node_mem_percent_critical
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            unless on(tenant) tenant_metadata_info
+          )
         for: 30s
         labels:
           severity: critical
@@ -216,15 +276,30 @@ groups:
         expr: |
           (
             (
-              tenant:rabbitmq_connections:max
-              > on(tenant) group_left
-              tenant:alert_threshold:rabbitmq_connections
+              (
+                tenant:rabbitmq_connections:max
+                > on(tenant) group_left
+                tenant:alert_threshold:rabbitmq_connections
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
             )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
           )
-          * on(tenant) group_left(runbook_url, owner, tier)
-            tenant_metadata_info
+          or
+          (
+            (
+              (
+                tenant:rabbitmq_connections:max
+                > on(tenant) group_left
+                tenant:alert_threshold:rabbitmq_connections
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            unless on(tenant) tenant_metadata_info
+          )
         for: 30s
         labels:
           severity: warning
@@ -245,15 +320,30 @@ groups:
         expr: |
           (
             (
-              tenant:rabbitmq_consumers:max
-              < on(tenant) group_left
-              tenant:alert_threshold:rabbitmq_consumers
+              (
+                tenant:rabbitmq_consumers:max
+                < on(tenant) group_left
+                tenant:alert_threshold:rabbitmq_consumers
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
             )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
           )
-          * on(tenant) group_left(runbook_url, owner, tier)
-            tenant_metadata_info
+          or
+          (
+            (
+              (
+                tenant:rabbitmq_consumers:max
+                < on(tenant) group_left
+                tenant:alert_threshold:rabbitmq_consumers
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            unless on(tenant) tenant_metadata_info
+          )
         for: 30s
         labels:
           severity: warning
@@ -274,15 +364,30 @@ groups:
         expr: |
           (
             (
-              tenant:rabbitmq_unacked_messages:max
-              > on(tenant) group_left
-              tenant:alert_threshold:rabbitmq_unacked_messages
+              (
+                tenant:rabbitmq_unacked_messages:max
+                > on(tenant) group_left
+                tenant:alert_threshold:rabbitmq_unacked_messages
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
             )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
           )
-          * on(tenant) group_left(runbook_url, owner, tier)
-            tenant_metadata_info
+          or
+          (
+            (
+              (
+                tenant:rabbitmq_unacked_messages:max
+                > on(tenant) group_left
+                tenant:alert_threshold:rabbitmq_unacked_messages
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            unless on(tenant) tenant_metadata_info
+          )
         for: 5m
         labels:
           severity: warning

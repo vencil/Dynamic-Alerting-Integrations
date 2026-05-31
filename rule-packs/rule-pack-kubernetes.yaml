@@ -395,16 +395,33 @@ groups:
           (
             (
               (
-                tenant:container_waiting_reason:count{reason="CrashLoopBackOff"}
-                * on(tenant) group_left
-                user_state_filter{filter="container_crashloop"}
-              ) > 0
+                (
+                  tenant:container_waiting_reason:count{reason="CrashLoopBackOff"}
+                  * on(tenant) group_left
+                  user_state_filter{filter="container_crashloop"}
+                ) > 0
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
             )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
           )
-          * on(tenant) group_left(runbook_url, owner, tier)
-            tenant_metadata_info
+          or
+          (
+            (
+              (
+                (
+                  tenant:container_waiting_reason:count{reason="CrashLoopBackOff"}
+                  * on(tenant) group_left
+                  user_state_filter{filter="container_crashloop"}
+                ) > 0
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            unless on(tenant) tenant_metadata_info
+          )
         for: 30s
         labels:
           severity: critical
@@ -425,16 +442,33 @@ groups:
           (
             (
               (
-                tenant:container_waiting_reason:count{reason=~"ImagePullBackOff|InvalidImageName"}
-                * on(tenant) group_left
-                user_state_filter{filter="container_imagepull"}
-              ) > 0
+                (
+                  tenant:container_waiting_reason:count{reason=~"ImagePullBackOff|InvalidImageName"}
+                  * on(tenant) group_left
+                  user_state_filter{filter="container_imagepull"}
+                ) > 0
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
             )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
           )
-          * on(tenant) group_left(runbook_url, owner, tier)
-            tenant_metadata_info
+          or
+          (
+            (
+              (
+                (
+                  tenant:container_waiting_reason:count{reason=~"ImagePullBackOff|InvalidImageName"}
+                  * on(tenant) group_left
+                  user_state_filter{filter="container_imagepull"}
+                ) > 0
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            unless on(tenant) tenant_metadata_info
+          )
         for: 30s
         labels:
           severity: warning

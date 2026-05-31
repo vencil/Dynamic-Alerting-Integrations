@@ -93,15 +93,30 @@ groups:
         expr: |
           (
             (
-              tenant:mongodb_connections_current:max
-              > on(tenant) group_left
-              tenant:alert_threshold:mongodb_connections_current
+              (
+                tenant:mongodb_connections_current:max
+                > on(tenant) group_left
+                tenant:alert_threshold:mongodb_connections_current
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
             )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
           )
-          * on(tenant) group_left(runbook_url, owner, tier)
-            tenant_metadata_info
+          or
+          (
+            (
+              (
+                tenant:mongodb_connections_current:max
+                > on(tenant) group_left
+                tenant:alert_threshold:mongodb_connections_current
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            unless on(tenant) tenant_metadata_info
+          )
         for: 5m
         labels:
           severity: warning
@@ -121,15 +136,30 @@ groups:
         expr: |
           (
             (
-              tenant:mongodb_replication_lag:max
-              > on(tenant) group_left
-              tenant:alert_threshold:mongodb_replication_lag
+              (
+                tenant:mongodb_replication_lag:max
+                > on(tenant) group_left
+                tenant:alert_threshold:mongodb_replication_lag
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
             )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
           )
-          * on(tenant) group_left(runbook_url, owner, tier)
-            tenant_metadata_info
+          or
+          (
+            (
+              (
+                tenant:mongodb_replication_lag:max
+                > on(tenant) group_left
+                tenant:alert_threshold:mongodb_replication_lag
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            unless on(tenant) tenant_metadata_info
+          )
         for: 2m
         labels:
           severity: warning
@@ -149,15 +179,30 @@ groups:
         expr: |
           (
             (
-              tenant:mongodb_opcounters:rate5m
-              > on(tenant) group_left
-              tenant:alert_threshold:mongodb_opcounters_rate
+              (
+                tenant:mongodb_opcounters:rate5m
+                > on(tenant) group_left
+                tenant:alert_threshold:mongodb_opcounters_rate
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
             )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
           )
-          * on(tenant) group_left(runbook_url, owner, tier)
-            tenant_metadata_info
+          or
+          (
+            (
+              (
+                tenant:mongodb_opcounters:rate5m
+                > on(tenant) group_left
+                tenant:alert_threshold:mongodb_opcounters_rate
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            unless on(tenant) tenant_metadata_info
+          )
         for: 5m
         labels:
           severity: warning
@@ -176,12 +221,23 @@ groups:
       - alert: MongoDBHighPageFaults
         expr: |
           (
-            tenant:mongodb_page_faults:rate5m > 100
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            (
+              tenant:mongodb_page_faults:rate5m > 100
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
           )
-          * on(tenant) group_left(runbook_url, owner, tier)
-            tenant_metadata_info
+          or
+          (
+            (
+              tenant:mongodb_page_faults:rate5m > 100
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            unless on(tenant) tenant_metadata_info
+          )
         for: 5m
         labels:
           severity: warning
@@ -200,12 +256,23 @@ groups:
       - alert: MongoDBConnectionSaturation
         expr: |
           (
-            tenant:mongodb_connection_usage:ratio > 0.8
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            (
+              tenant:mongodb_connection_usage:ratio > 0.8
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
           )
-          * on(tenant) group_left(runbook_url, owner, tier)
-            tenant_metadata_info
+          or
+          (
+            (
+              tenant:mongodb_connection_usage:ratio > 0.8
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            unless on(tenant) tenant_metadata_info
+          )
         for: 5m
         labels:
           severity: warning

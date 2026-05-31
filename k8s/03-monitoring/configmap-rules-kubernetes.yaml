@@ -135,11 +135,16 @@ data:
     \ {{ $value | printf \"%.1f\" }}% (超過臨界閾值)'\n      runbook_url: '{{ $labels.runbook_url\
     \ }}'\n      owner: '{{ $labels.owner }}'\n      tier: '{{ $labels.tier }}'\n\
     - name: kubernetes-pod-state-alerts\n  rules:\n  - alert: ContainerCrashLoop\n\
-    \    expr: \"(\\n  (\\n    (\\n      tenant:container_waiting_reason:count{reason=\\\
-    \"CrashLoopBackOff\\\"}\\n      * on(tenant) group_left\\n      user_state_filter{filter=\\\
-    \"container_crashloop\\\"}\\n    ) > 0\\n  )\\n  unless on(tenant)\\n  (user_state_filter{filter=\\\
-    \"maintenance\\\"} == 1)\\n)\\n* on(tenant) group_left(runbook_url, owner, tier)\\\
-    n  tenant_metadata_info\\n\"\n    for: 30s\n    labels:\n      severity: critical\n\
+    \    expr: \"(\\n  (\\n    (\\n      (\\n        tenant:container_waiting_reason:count{reason=\\\
+    \"CrashLoopBackOff\\\"}\\n        * on(tenant) group_left\\n        user_state_filter{filter=\\\
+    \"container_crashloop\\\"}\\n      ) > 0\\n    )\\n    unless on(tenant)\\n  \
+    \  (user_state_filter{filter=\\\"maintenance\\\"} == 1)\\n  )\\n  * on(tenant)\
+    \ group_left(runbook_url, owner, tier)\\n    tenant_metadata_info\\n)\\nor\\n(\\\
+    n  (\\n    (\\n      (\\n        tenant:container_waiting_reason:count{reason=\\\
+    \"CrashLoopBackOff\\\"}\\n        * on(tenant) group_left\\n        user_state_filter{filter=\\\
+    \"container_crashloop\\\"}\\n      ) > 0\\n    )\\n    unless on(tenant)\\n  \
+    \  (user_state_filter{filter=\\\"maintenance\\\"} == 1)\\n  )\\n  unless on(tenant)\
+    \ tenant_metadata_info\\n)\\n\"\n    for: 30s\n    labels:\n      severity: critical\n\
     \      tenant: '{{ $labels.tenant }}'\n    annotations:\n      summary: Container\
     \ crash loop detected in {{ $labels.tenant }}\n      summary_zh: '{{ $labels.tenant\
     \ }} 偵測到容器崩潰迴圈'\n      platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant\
@@ -148,11 +153,16 @@ data:
     \ '{{ $value }} container(s) in CrashLoopBackOff state'\n      description_zh:\
     \ '{{ $value }} 個容器處於 CrashLoopBackOff 狀態'\n      runbook_url: '{{ $labels.runbook_url\
     \ }}'\n      owner: '{{ $labels.owner }}'\n      tier: '{{ $labels.tier }}'\n\
-    \  - alert: ContainerImagePullFailure\n    expr: \"(\\n  (\\n    (\\n      tenant:container_waiting_reason:count{reason=~\\\
-    \"ImagePullBackOff|InvalidImageName\\\"}\\n      * on(tenant) group_left\\n  \
-    \    user_state_filter{filter=\\\"container_imagepull\\\"}\\n    ) > 0\\n  )\\\
-    n  unless on(tenant)\\n  (user_state_filter{filter=\\\"maintenance\\\"} == 1)\\\
-    n)\\n* on(tenant) group_left(runbook_url, owner, tier)\\n  tenant_metadata_info\\\
+    \  - alert: ContainerImagePullFailure\n    expr: \"(\\n  (\\n    (\\n      (\\\
+    n        tenant:container_waiting_reason:count{reason=~\\\"ImagePullBackOff|InvalidImageName\\\
+    \"}\\n        * on(tenant) group_left\\n        user_state_filter{filter=\\\"\
+    container_imagepull\\\"}\\n      ) > 0\\n    )\\n    unless on(tenant)\\n    (user_state_filter{filter=\\\
+    \"maintenance\\\"} == 1)\\n  )\\n  * on(tenant) group_left(runbook_url, owner,\
+    \ tier)\\n    tenant_metadata_info\\n)\\nor\\n(\\n  (\\n    (\\n      (\\n   \
+    \     tenant:container_waiting_reason:count{reason=~\\\"ImagePullBackOff|InvalidImageName\\\
+    \"}\\n        * on(tenant) group_left\\n        user_state_filter{filter=\\\"\
+    container_imagepull\\\"}\\n      ) > 0\\n    )\\n    unless on(tenant)\\n    (user_state_filter{filter=\\\
+    \"maintenance\\\"} == 1)\\n  )\\n  unless on(tenant) tenant_metadata_info\\n)\\\
     n\"\n    for: 30s\n    labels:\n      severity: warning\n      tenant: '{{ $labels.tenant\
     \ }}'\n    annotations:\n      summary: Image pull failure detected in {{ $labels.tenant\
     \ }}\n      summary_zh: '{{ $labels.tenant }} 偵測到映像檔案拉取失敗'\n      platform_summary:\

@@ -99,15 +99,30 @@ groups:
         expr: |
           (
             (
-              tenant:kafka_consumer_lag:max
-              > on(tenant) group_left
-              tenant:alert_threshold:kafka_consumer_lag
+              (
+                tenant:kafka_consumer_lag:max
+                > on(tenant) group_left
+                tenant:alert_threshold:kafka_consumer_lag
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
             )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
           )
-          * on(tenant) group_left(runbook_url, owner, tier)
-            tenant_metadata_info
+          or
+          (
+            (
+              (
+                tenant:kafka_consumer_lag:max
+                > on(tenant) group_left
+                tenant:alert_threshold:kafka_consumer_lag
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            unless on(tenant) tenant_metadata_info
+          )
         for: 30s
         labels:
           severity: warning
@@ -129,15 +144,30 @@ groups:
         expr: |
           (
             (
-              tenant:kafka_consumer_lag:max
-              > on(tenant) group_left
-              tenant:alert_threshold:kafka_consumer_lag_critical
+              (
+                tenant:kafka_consumer_lag:max
+                > on(tenant) group_left
+                tenant:alert_threshold:kafka_consumer_lag_critical
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
             )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
           )
-          * on(tenant) group_left(runbook_url, owner, tier)
-            tenant_metadata_info
+          or
+          (
+            (
+              (
+                tenant:kafka_consumer_lag:max
+                > on(tenant) group_left
+                tenant:alert_threshold:kafka_consumer_lag_critical
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            unless on(tenant) tenant_metadata_info
+          )
         for: 30s
         labels:
           severity: critical
@@ -158,15 +188,30 @@ groups:
         expr: |
           (
             (
-              tenant:kafka_under_replicated_partitions:max
-              > on(tenant) group_left
-              tenant:alert_threshold:kafka_under_replicated_partitions
+              (
+                tenant:kafka_under_replicated_partitions:max
+                > on(tenant) group_left
+                tenant:alert_threshold:kafka_under_replicated_partitions
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
             )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
           )
-          * on(tenant) group_left(runbook_url, owner, tier)
-            tenant_metadata_info
+          or
+          (
+            (
+              (
+                tenant:kafka_under_replicated_partitions:max
+                > on(tenant) group_left
+                tenant:alert_threshold:kafka_under_replicated_partitions
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            unless on(tenant) tenant_metadata_info
+          )
         for: 30s
         labels:
           severity: warning
@@ -188,15 +233,30 @@ groups:
         expr: |
           (
             (
-              tenant:kafka_under_replicated_partitions:max
-              > on(tenant) group_left
-              tenant:alert_threshold:kafka_under_replicated_partitions_critical
+              (
+                tenant:kafka_under_replicated_partitions:max
+                > on(tenant) group_left
+                tenant:alert_threshold:kafka_under_replicated_partitions_critical
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
             )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
           )
-          * on(tenant) group_left(runbook_url, owner, tier)
-            tenant_metadata_info
+          or
+          (
+            (
+              (
+                tenant:kafka_under_replicated_partitions:max
+                > on(tenant) group_left
+                tenant:alert_threshold:kafka_under_replicated_partitions_critical
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            unless on(tenant) tenant_metadata_info
+          )
         for: 30s
         labels:
           severity: critical
@@ -217,15 +277,30 @@ groups:
         expr: |
           (
             (
-              tenant:kafka_active_controllers:max
-              < on(tenant) group_left
-              tenant:alert_threshold:kafka_active_controllers
+              (
+                tenant:kafka_active_controllers:max
+                < on(tenant) group_left
+                tenant:alert_threshold:kafka_active_controllers
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
             )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
           )
-          * on(tenant) group_left(runbook_url, owner, tier)
-            tenant_metadata_info
+          or
+          (
+            (
+              (
+                tenant:kafka_active_controllers:max
+                < on(tenant) group_left
+                tenant:alert_threshold:kafka_active_controllers
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            unless on(tenant) tenant_metadata_info
+          )
         for: 30s
         labels:
           severity: critical
@@ -246,15 +321,30 @@ groups:
         expr: |
           (
             (
-              tenant:kafka_broker_count:max
-              < on(tenant) group_left
-              tenant:alert_threshold:kafka_broker_count
+              (
+                tenant:kafka_broker_count:max
+                < on(tenant) group_left
+                tenant:alert_threshold:kafka_broker_count
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
             )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
           )
-          * on(tenant) group_left(runbook_url, owner, tier)
-            tenant_metadata_info
+          or
+          (
+            (
+              (
+                tenant:kafka_broker_count:max
+                < on(tenant) group_left
+                tenant:alert_threshold:kafka_broker_count
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            unless on(tenant) tenant_metadata_info
+          )
         for: 30s
         labels:
           severity: warning
@@ -275,15 +365,30 @@ groups:
         expr: |
           (
             (
-              tenant:kafka_request_rate:sum
-              > on(tenant) group_left
-              tenant:alert_threshold:kafka_request_rate
+              (
+                tenant:kafka_request_rate:sum
+                > on(tenant) group_left
+                tenant:alert_threshold:kafka_request_rate
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
             )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
           )
-          * on(tenant) group_left(runbook_url, owner, tier)
-            tenant_metadata_info
+          or
+          (
+            (
+              (
+                tenant:kafka_request_rate:sum
+                > on(tenant) group_left
+                tenant:alert_threshold:kafka_request_rate
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            unless on(tenant) tenant_metadata_info
+          )
         for: 30s
         labels:
           severity: warning
@@ -305,15 +410,30 @@ groups:
         expr: |
           (
             (
-              tenant:kafka_request_rate:sum
-              > on(tenant) group_left
-              tenant:alert_threshold:kafka_request_rate_critical
+              (
+                tenant:kafka_request_rate:sum
+                > on(tenant) group_left
+                tenant:alert_threshold:kafka_request_rate_critical
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
             )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
           )
-          * on(tenant) group_left(runbook_url, owner, tier)
-            tenant_metadata_info
+          or
+          (
+            (
+              (
+                tenant:kafka_request_rate:sum
+                > on(tenant) group_left
+                tenant:alert_threshold:kafka_request_rate_critical
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            unless on(tenant) tenant_metadata_info
+          )
         for: 30s
         labels:
           severity: critical
