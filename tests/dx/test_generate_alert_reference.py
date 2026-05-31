@@ -262,6 +262,66 @@ class TestGetMetricFromExpr:
 
 
 # ---------------------------------------------------------------------------
+# _strip_non_metric_syntax — the cleaner invariant
+# ---------------------------------------------------------------------------
+class TestStripInvariant:
+    """The durable guard the example tests above can't be: rather than enumerate
+    *known* bypasses, assert the INVARIANT — after cleaning, no delimiter that
+    could fence off a fake identifier (`[ ] { } " ' \\``) may survive. This is
+    what the original review missed: it validated outputs for the 14 current
+    packs (a corpus) instead of the property over the PromQL grammar. A future
+    construct that introduces a new delimiter-bounded span fails HERE even if
+    no one wrote a bespoke example for it.
+    """
+
+    # One representative of every delimiter-bearing PromQL construct, plus
+    # adversarial mixes (quoted delimiters, nested ranges, subqueries).
+    _EXPRS = [
+        "db2_up == 0",
+        'up{job="clickhouse"} == 0',
+        'absent(kafka_brokers{job="tenant-exporters"})',
+        "(time() - pg_postmaster_start_time_seconds) < 300",
+        'rate(http_requests_total{job="api"}[5m])[30m:1m] > 0',
+        'env_metric{info="broken}bracket", cluster="main"} > 5',
+        "vector(0)[5m:1m]",
+        'label_replace(foo, "dst", "}", "src", ".*[")',
+        "sum(rate(x[5m])) and `raw{string}`",
+        "(count(max by(tenant, version, severity) "
+        '(user_threshold{component="container"})) or vector(0)) > 0',
+    ]
+
+    @pytest.mark.parametrize("expr", _EXPRS)
+    def test_no_delimiter_residue(self, expr):
+        cleaned = gar._strip_non_metric_syntax(expr)
+        leaked = [c for c in gar._NON_METRIC_DELIMITERS if c in cleaned]
+        assert not leaked, f"delimiters {leaked} leaked from {expr!r} -> {cleaned!r}"
+
+    @pytest.mark.parametrize("expr", _EXPRS)
+    def test_result_is_valid_identifier_or_empty(self, expr):
+        # The output must always be a real PromQL identifier (metric or
+        # recording-rule name) or empty — never a fragment.
+        import re as _re
+        result = gar.get_metric_from_expr(expr)
+        assert result == "" or _re.fullmatch(r"[a-zA-Z_:][a-zA-Z0-9_:]*", result), (
+            f"{expr!r} -> {result!r} is not a valid identifier"
+        )
+
+    def test_invariant_holds_on_every_real_alert(self):
+        # Tie the invariant to production data: every alert expr across all
+        # shipped rule packs must clean to zero delimiter residue.
+        from pathlib import Path
+        repo_root = Path(gar.__file__).resolve().parents[3]
+        packs_dir = repo_root / "rule-packs"
+        alerts_by_pack = gar.load_rule_packs(str(packs_dir))
+        assert alerts_by_pack, "no rule packs loaded — path wrong?"
+        for pack, alerts in alerts_by_pack.items():
+            for a in alerts:
+                cleaned = gar._strip_non_metric_syntax(a["expr"])
+                leaked = [c for c in gar._NON_METRIC_DELIMITERS if c in cleaned]
+                assert not leaked, f"{pack}/{a['name']}: {leaked} leaked"
+
+
+# ---------------------------------------------------------------------------
 # extract_alerts wires expr → metric
 # ---------------------------------------------------------------------------
 class TestExtractAlertsMetric:

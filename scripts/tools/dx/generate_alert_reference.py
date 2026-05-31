@@ -239,6 +239,37 @@ _GROUPING_CLAUSE = re.compile(
 )
 
 
+# Delimiter characters that must NEVER survive _strip_non_metric_syntax: if
+# any leak through, the identifier scan can mistake a fragment bounded by them
+# (a subquery step, a quoted `}`) for a metric. Asserted as an invariant in
+# tests (TestStripInvariant) — the durable guard against a future missed span.
+_NON_METRIC_DELIMITERS = "[]{}\"'`"
+
+
+def _strip_non_metric_syntax(expr: str) -> str:
+    """Remove every PromQL span that is NOT a series identifier.
+
+    Strips, in order, the spans that can hide a stray ``}`` / ``]`` / ``:``
+    before the later strips that rely on those delimiters:
+
+      1. string literals — may contain ``}`` / ``[`` / ``:`` inside quotes
+      2. range / subquery brackets — ``[5m]`` / ``[30m:1m]`` (the ``:`` is a
+         step, not a recording-rule separator)
+      3. label selectors ``{...}`` — contents are label names/values
+      4. grouping clauses ``by(...)`` / ``on(...)`` / ``group_left(...)`` —
+         their parenthesised body is a label list, not a series
+
+    The result holds only bare operators, numbers, parentheses, and series
+    identifiers. Crucially **none of ``_NON_METRIC_DELIMITERS`` survive**, so
+    ``get_metric_from_expr`` can scan for the first identifier safely.
+    """
+    cleaned = _PROMQL_STRINGS.sub(" ", expr)
+    cleaned = _PROMQL_RANGE_SUBQUERY.sub(" ", cleaned)
+    cleaned = re.sub(r"\{[^}]*\}", " ", cleaned)
+    cleaned = _GROUPING_CLAUSE.sub(" ", cleaned)
+    return cleaned
+
+
 def get_metric_from_expr(expr: str) -> str:
     """Extract the primary metric / series name from a rule's PromQL ``expr``.
 
@@ -253,17 +284,7 @@ def get_metric_from_expr(expr: str) -> str:
     """
     if not expr:
         return ""
-    # Order matters — strip the spans that can hide stray `}` / `]` / `:`
-    # before the brace/range/grouping strips that rely on those delimiters:
-    #   1. string literals (may contain `}`, `[`, `:` inside quotes)
-    cleaned = _PROMQL_STRINGS.sub(" ", expr)
-    #   2. range / subquery brackets ([5m] / [30m:1m] — the ':' is a step,
-    #      not a recording-rule separator)
-    cleaned = _PROMQL_RANGE_SUBQUERY.sub(" ", cleaned)
-    #   3. label selectors ({...}) — their contents are label names/values
-    cleaned = re.sub(r"\{[^}]*\}", " ", cleaned)
-    #   4. grouping clauses (by(...)/on(...)/group_left(...)) — label lists
-    cleaned = _GROUPING_CLAUSE.sub(" ", cleaned)
+    cleaned = _strip_non_metric_syntax(expr)
     for token in _PROMQL_IDENT.finditer(cleaned):
         ident = token.group(0)
         if ident in _PROMQL_KEYWORDS:
