@@ -64,30 +64,41 @@ groups:
             "tenant", "$1", "namespace", "(.*)"
           )
 
-      # Container memory usage as % of limit
+      # Container memory usage as % of limit.
+      # ADR-024 (0a) version injection: join kube_pod_labels at the outermost
+      # level to attach `version` (from app.kubernetes.io/version) — mirrors the
+      # CPU rule above (same KSM deployment prerequisite applies).
       - record: tenant:container_memory_percent:by_container
         expr: |
           label_replace(
-            sum by(namespace, pod, container) (
-              container_memory_working_set_bytes{namespace=~"db-.+", container!="", container!="POD"}
-            )
-            /
-            sum by(namespace, pod, container) (
-              kube_pod_container_resource_limits{resource="memory", namespace=~"db-.+"}
-            )
-            * 100,
+            (
+              (
+                sum by(namespace, pod, container) (
+                  container_memory_working_set_bytes{namespace=~"db-.+", container!="", container!="POD"}
+                )
+                /
+                sum by(namespace, pod, container) (
+                  kube_pod_container_resource_limits{resource="memory", namespace=~"db-.+"}
+                )
+                * 100
+              )
+              * on(namespace, pod) group_left(version)
+                label_replace(
+                  kube_pod_labels{namespace=~"db-.+"},
+                  "version", "$1", "label_app_kubernetes_io_version", "(.+)"
+                )
+            ),
             "tenant", "$1", "namespace", "(.*)"
           )
 
       # Weakest link: MAX across containers per pod.
       # ADR-024 (0b): `version` is carried through every aggregation layer so
-      # the per-version dimension survives to the alert join. (Memory stays
-      # version-agnostic for now — CPU is the version-aware pilot metric.)
+      # the per-version dimension survives to the alert join (CPU and memory).
       - record: tenant:pod_weakest_cpu_percent:max
         expr: max by(tenant, pod, version) (tenant:container_cpu_percent:by_container)
 
       - record: tenant:pod_weakest_memory_percent:max
-        expr: max by(tenant, pod) (tenant:container_memory_percent:by_container)
+        expr: max by(tenant, pod, version) (tenant:container_memory_percent:by_container)
 
   # -------------------------------------------------------
   # Normalization: Pod state matching (kube-state-metrics)
@@ -131,8 +142,23 @@ groups:
             "version", "default", "version", "^$"
           )
 
-      - record: tenant:alert_threshold:container_memory
-        expr: max by(tenant) (user_threshold{component="container", metric="memory"})
+      # ADR-024 version-aware threshold (memory): mirrors the CPU pilot — keep
+      # BOTH version and severity dimensions, normalize empty version → default.
+      - record: tenant_version:alert_threshold:container_memory
+        expr: |
+          label_replace(
+            max by(tenant, version, severity) (
+              user_threshold{component="container", metric="memory"}
+            ),
+            "version", "default", "version", "^$"
+          )
+
+      - record: tenant_version:pod_weakest_memory_percent:vlabeled
+        expr: |
+          label_replace(
+            max by(tenant, version) (tenant:pod_weakest_memory_percent:max),
+            "version", "default", "version", "^$"
+          )
 
       # ADR-024 PR3-pre-3: core firing vectors (threshold-cross + maintenance
       # suppression) WITHOUT metadata enrichment. The alert rules below join
@@ -190,12 +216,49 @@ groups:
           unless on(tenant)
           (user_state_filter{filter="maintenance"} == 1)
 
-      - record: rule_pack_kubernetes:pod_container_high_memory:core
+      # ADR-024 Route 2: version-aware exact-or-fallback memory core, split per
+      # severity — mirrors the CPU cores above (same many-to-many cardinality
+      # avoidance + group_left() preserving the metric's REAL version on fallback).
+      - record: rule_pack_kubernetes:pod_container_high_memory_warning:core
         expr: |
           (
-            max by(tenant) (tenant:pod_weakest_memory_percent:max)
-            > on(tenant) group_left
-            tenant:alert_threshold:container_memory
+            (
+              tenant_version:pod_weakest_memory_percent:vlabeled
+              > on(tenant, version) group_left()
+                tenant_version:alert_threshold:container_memory{severity="warning"}
+            )
+            or
+            (
+              (
+                tenant_version:pod_weakest_memory_percent:vlabeled
+                unless on(tenant, version)
+                  tenant_version:alert_threshold:container_memory{severity="warning"}
+              )
+              > on(tenant) group_left()
+                tenant_version:alert_threshold:container_memory{version="default", severity="warning"}
+            )
+          )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
+
+      - record: rule_pack_kubernetes:pod_container_high_memory_critical:core
+        expr: |
+          (
+            (
+              tenant_version:pod_weakest_memory_percent:vlabeled
+              > on(tenant, version) group_left()
+                tenant_version:alert_threshold:container_memory{severity="critical"}
+            )
+            or
+            (
+              (
+                tenant_version:pod_weakest_memory_percent:vlabeled
+                unless on(tenant, version)
+                  tenant_version:alert_threshold:container_memory{severity="critical"}
+              )
+              > on(tenant) group_left()
+                tenant_version:alert_threshold:container_memory{version="default", severity="critical"}
+            )
           )
           unless on(tenant)
           (user_state_filter{filter="maintenance"} == 1)
@@ -264,17 +327,19 @@ groups:
           runbook_url: "{{ $labels.runbook_url }}"
           owner: "{{ $labels.owner }}"
           tier: "{{ $labels.tier }}"
+      # ADR-024 Route 2 (warning) — version-aware memory core carries the metric's
+      # REAL version so on-call sees which app version is in trouble.
       - alert: PodContainerHighMemory
         # Left-outer-join enrichment (ADR-024 PR3-pre-3) — see PodContainerHighCPU.
         expr: |
           (
-            rule_pack_kubernetes:pod_container_high_memory:core
+            rule_pack_kubernetes:pod_container_high_memory_warning:core
             * on(tenant) group_left(runbook_url, owner, tier)
               tenant_metadata_info
           )
           or
           (
-            rule_pack_kubernetes:pod_container_high_memory:core
+            rule_pack_kubernetes:pod_container_high_memory_warning:core
             unless on(tenant) tenant_metadata_info
           )
         for: 60s
@@ -288,6 +353,34 @@ groups:
           platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}: 容器記憶體壓力過高 — 請評估資源限制"
           description: "Max container memory usage: {{ $value | printf \"%.1f\" }}% (threshold exceeded)"
           description_zh: "最大容器記憶體使用率: {{ $value | printf \"%.1f\" }}% (超過閾值)"
+
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"
+      # Critical mirror (ADR-024 Route 2: distinct alertname per severity).
+      - alert: PodContainerHighMemoryCritical
+        expr: |
+          (
+            rule_pack_kubernetes:pod_container_high_memory_critical:core
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
+          )
+          or
+          (
+            rule_pack_kubernetes:pod_container_high_memory_critical:core
+            unless on(tenant) tenant_metadata_info
+          )
+        for: 60s
+        labels:
+          severity: critical
+          tenant: "{{ $labels.tenant }}"
+        annotations:
+          summary: "CRITICAL container memory in {{ $labels.tenant }}"
+          summary_zh: "{{ $labels.tenant }} 的容器記憶體使用率達臨界"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: container memory CRITICAL — evaluate resource limits"
+          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}: 容器記憶體達臨界 — 請評估資源限制"
+          description: "Max container memory usage: {{ $value | printf \"%.1f\" }}% (critical threshold exceeded)"
+          description_zh: "最大容器記憶體使用率: {{ $value | printf \"%.1f\" }}% (超過臨界閾值)"
 
           runbook_url: "{{ $labels.runbook_url }}"
           owner: "{{ $labels.owner }}"
