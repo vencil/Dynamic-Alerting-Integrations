@@ -54,17 +54,23 @@ spec:
       for: 2m
       labels:
         severity: critical
+        tenant: '{{ $labels.tenant }}'
       annotations:
         summary: ClickHouse instance is DOWN
         summary_zh: ClickHouse 實例已關閉
     - alert: ClickHouseHighQueryRate
-      expr: "(\n  (\n    tenant:clickhouse_queries:rate5m\n    > on(tenant) group_left\n\
-        \    tenant:alert_threshold:clickhouse_queries_rate\n  )\n  unless on(tenant)\
-        \ (user_state_filter{filter=\"maintenance\"} == 1)\n)\n* on(tenant) group_left(runbook_url,\
-        \ owner, tier)\n  tenant_metadata_info\n"
+      expr: "(\n  (\n    (\n      tenant:clickhouse_queries:rate5m\n      > on(tenant)\
+        \ group_left\n      tenant:alert_threshold:clickhouse_queries_rate\n    )\n\
+        \    unless on(tenant) (user_state_filter{filter=\"maintenance\"} == 1)\n\
+        \  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
+        )\nor\n(\n  (\n    (\n      tenant:clickhouse_queries:rate5m\n      > on(tenant)\
+        \ group_left\n      tenant:alert_threshold:clickhouse_queries_rate\n    )\n\
+        \    unless on(tenant) (user_state_filter{filter=\"maintenance\"} == 1)\n\
+        \  )\n  unless on(tenant) tenant_metadata_info\n)\n"
       for: 5m
       labels:
         severity: warning
+        tenant: '{{ $labels.tenant }}'
       annotations:
         summary: ClickHouse query rate exceeds threshold
         summary_zh: ClickHouse 查詢率超出閾值
@@ -78,13 +84,18 @@ spec:
         owner: '{{ $labels.owner }}'
         tier: '{{ $labels.tier }}'
     - alert: ClickHouseHighConnections
-      expr: "(\n  (\n    tenant:clickhouse_active_connections:max\n    > on(tenant)\
-        \ group_left\n    tenant:alert_threshold:clickhouse_active_connections\n \
-        \ )\n  unless on(tenant) (user_state_filter{filter=\"maintenance\"} == 1)\n\
-        )\n* on(tenant) group_left(runbook_url, owner, tier)\n  tenant_metadata_info\n"
+      expr: "(\n  (\n    (\n      tenant:clickhouse_active_connections:max\n     \
+        \ > on(tenant) group_left\n      tenant:alert_threshold:clickhouse_active_connections\n\
+        \    )\n    unless on(tenant) (user_state_filter{filter=\"maintenance\"} ==\
+        \ 1)\n  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
+        )\nor\n(\n  (\n    (\n      tenant:clickhouse_active_connections:max\n   \
+        \   > on(tenant) group_left\n      tenant:alert_threshold:clickhouse_active_connections\n\
+        \    )\n    unless on(tenant) (user_state_filter{filter=\"maintenance\"} ==\
+        \ 1)\n  )\n  unless on(tenant) tenant_metadata_info\n)\n"
       for: 5m
       labels:
         severity: warning
+        tenant: '{{ $labels.tenant }}'
       annotations:
         summary: ClickHouse active connections exceed threshold
         summary_zh: ClickHouse 活動連線超出閾值
@@ -98,13 +109,18 @@ spec:
         owner: '{{ $labels.owner }}'
         tier: '{{ $labels.tier }}'
     - alert: ClickHouseHighPartCount
-      expr: "(\n  (\n    tenant:clickhouse_max_part_count:max\n    > on(tenant) group_left\n\
-        \    tenant:alert_threshold:clickhouse_max_part_count\n  )\n  unless on(tenant)\
-        \ (user_state_filter{filter=\"maintenance\"} == 1)\n)\n* on(tenant) group_left(runbook_url,\
-        \ owner, tier)\n  tenant_metadata_info\n"
+      expr: "(\n  (\n    (\n      tenant:clickhouse_max_part_count:max\n      > on(tenant)\
+        \ group_left\n      tenant:alert_threshold:clickhouse_max_part_count\n   \
+        \ )\n    unless on(tenant) (user_state_filter{filter=\"maintenance\"} == 1)\n\
+        \  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
+        )\nor\n(\n  (\n    (\n      tenant:clickhouse_max_part_count:max\n      >\
+        \ on(tenant) group_left\n      tenant:alert_threshold:clickhouse_max_part_count\n\
+        \    )\n    unless on(tenant) (user_state_filter{filter=\"maintenance\"} ==\
+        \ 1)\n  )\n  unless on(tenant) tenant_metadata_info\n)\n"
       for: 10m
       labels:
         severity: warning
+        tenant: '{{ $labels.tenant }}'
       annotations:
         summary: ClickHouse max part count per partition exceeds threshold (merge
           pressure)
@@ -119,13 +135,18 @@ spec:
         owner: '{{ $labels.owner }}'
         tier: '{{ $labels.tier }}'
     - alert: ClickHouseReplicationLag
-      expr: "(\n  (\n    tenant:clickhouse_replication_queue:max\n    > on(tenant)\
-        \ group_left\n    tenant:alert_threshold:clickhouse_replication_queue\n  )\n\
-        \  unless on(tenant) (user_state_filter{filter=\"maintenance\"} == 1)\n)\n\
-        * on(tenant) group_left(runbook_url, owner, tier)\n  tenant_metadata_info\n"
+      expr: "(\n  (\n    (\n      tenant:clickhouse_replication_queue:max\n      >\
+        \ on(tenant) group_left\n      tenant:alert_threshold:clickhouse_replication_queue\n\
+        \    )\n    unless on(tenant) (user_state_filter{filter=\"maintenance\"} ==\
+        \ 1)\n  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
+        )\nor\n(\n  (\n    (\n      tenant:clickhouse_replication_queue:max\n    \
+        \  > on(tenant) group_left\n      tenant:alert_threshold:clickhouse_replication_queue\n\
+        \    )\n    unless on(tenant) (user_state_filter{filter=\"maintenance\"} ==\
+        \ 1)\n  )\n  unless on(tenant) tenant_metadata_info\n)\n"
       for: 5m
       labels:
         severity: warning
+        tenant: '{{ $labels.tenant }}'
       annotations:
         summary: ClickHouse replication queue size exceeds threshold
         summary_zh: ClickHouse 複寫隊列大小超出閾值
@@ -139,13 +160,18 @@ spec:
         owner: '{{ $labels.owner }}'
         tier: '{{ $labels.tier }}'
     - alert: ClickHouseHighMemoryUsage
-      expr: "(\n  (\n    tenant:clickhouse_memory_tracking:max\n    > on(tenant) group_left\n\
-        \    tenant:alert_threshold:clickhouse_memory_tracking_bytes\n  )\n  unless\
-        \ on(tenant) (user_state_filter{filter=\"maintenance\"} == 1)\n)\n* on(tenant)\
-        \ group_left(runbook_url, owner, tier)\n  tenant_metadata_info\n"
+      expr: "(\n  (\n    (\n      tenant:clickhouse_memory_tracking:max\n      > on(tenant)\
+        \ group_left\n      tenant:alert_threshold:clickhouse_memory_tracking_bytes\n\
+        \    )\n    unless on(tenant) (user_state_filter{filter=\"maintenance\"} ==\
+        \ 1)\n  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
+        )\nor\n(\n  (\n    (\n      tenant:clickhouse_memory_tracking:max\n      >\
+        \ on(tenant) group_left\n      tenant:alert_threshold:clickhouse_memory_tracking_bytes\n\
+        \    )\n    unless on(tenant) (user_state_filter{filter=\"maintenance\"} ==\
+        \ 1)\n  )\n  unless on(tenant) tenant_metadata_info\n)\n"
       for: 5m
       labels:
         severity: warning
+        tenant: '{{ $labels.tenant }}'
       annotations:
         summary: ClickHouse memory tracking exceeds threshold
         summary_zh: ClickHouse 記憶體追蹤超出閾值
@@ -165,6 +191,7 @@ spec:
       for: 5m
       labels:
         severity: warning
+        tenant: '{{ $labels.tenant }}'
       annotations:
         summary: ClickHouse failed query rate > 10/s
         summary_zh: ClickHouse 查詢失敗率 > 10/秒

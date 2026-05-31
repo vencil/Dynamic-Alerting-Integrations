@@ -762,6 +762,22 @@ repos:
         # but forget to regenerate its configmap → this fails locally before the
         # CI hard gate does. Fix: `make rulepack-configmaps`, then commit both.
 
+      - id: rulepack-3copy-drift
+        name: "ADR-024: operator-manifests/ PrometheusRule CRDs must match rule-packs/ source (PR3-pre hard gate)"
+        entry: python3 -X utf8 scripts/tools/lint/check_rulepack_sync.py --ci
+        language: python
+        additional_dependencies: ['pyyaml']
+        pass_filenames: false
+        files: ^(rule-packs/rule-pack-.*\.yaml|k8s/03-monitoring/configmap-rules-.*\.yaml|operator-manifests/da-rule-pack-.*\.yaml)$
+        # Semantic 3-copy guard: the operator CRD copy (the 3rd copy, sibling to
+        # the configmap copy above) must never silently drift from source either.
+        # The operator manifests were audit-only while they lagged source; once
+        # regenerated to the left-outer-join source (#709, #711) they became a
+        # hard gate. Edit a rule pack but forget the operator CRD → this fails
+        # locally before the "Lint Rule Packs" CI hard gate does. Fix:
+        # `python scripts/tools/ops/operator_generate.py --components rules
+        # --output-dir operator-manifests/`, then commit all three copies.
+
       - id: ksm-version-allowlist
         name: "ADR-024: kube-state-metrics must allowlist app.kubernetes.io/version (test/rulepack-e2e)"
         entry: python3 -X utf8 scripts/tools/lint/check_ksm_version_allowlist.py --ci
