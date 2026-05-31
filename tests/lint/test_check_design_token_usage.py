@@ -285,3 +285,51 @@ class TestCLISubprocess:
         )
         # Output should contain helpful message or "TOTAL" summary
         assert "✓" in result.stdout or "TOTAL:" in result.stdout or "violation" in result.stdout.lower()
+
+
+# ---------------------------------------------------------------------------
+# Default-path drift guard (#444 Phase 0 keystone)
+# ---------------------------------------------------------------------------
+# The fixture-based tests above feed inline JSX content, so they never exercise
+# the *production default* roots. That blind spot let JSX_TOOLS_DIR / WIZARD_DIR
+# sit stale at the pre-TRK-242 docs/ layout after portal source moved to
+# tools/portal/src/ — the gate scanned ZERO files and passed vacuously (PR #722
+# fixed the paths). These assert the module defaults resolve to a real directory
+# that actually contains .jsx, closing that drift class.
+class TestDefaultRootsResolve:
+    def test_jsx_tools_dir_default_exists_and_is_dir(self):
+        assert dtu.JSX_TOOLS_DIR.is_dir(), (
+            f"JSX_TOOLS_DIR default does not resolve to a directory: "
+            f"{dtu.JSX_TOOLS_DIR}. If portal source moved, update the module "
+            f"default (this is exactly the #444 drift the gate went blind on)."
+        )
+
+    def test_jsx_tools_dir_default_contains_jsx(self):
+        jsx = list(dtu.JSX_TOOLS_DIR.rglob("*.jsx"))
+        assert jsx, (
+            f"JSX_TOOLS_DIR default resolves but holds no .jsx files: "
+            f"{dtu.JSX_TOOLS_DIR}. A gate that scans an empty tree passes "
+            f"vacuously — the #444 failure mode. Point it at the real source."
+        )
+
+    def test_wizard_dir_default_exists(self):
+        assert dtu.WIZARD_DIR.is_dir(), (
+            f"WIZARD_DIR default does not resolve: {dtu.WIZARD_DIR}"
+        )
+
+    def test_design_tokens_css_default_exists(self):
+        assert dtu.DESIGN_TOKENS.is_file(), (
+            f"DESIGN_TOKENS default does not resolve: {dtu.DESIGN_TOKENS}"
+        )
+
+    def test_default_root_holds_jsx_so_gate_is_not_vacuous(self):
+        """Behavioural backstop without touching git: if the production default
+        root is empty, the gate passes vacuously (the #444 failure). Assert the
+        tree the scanner WOULD walk is non-empty. (The scan_jsx_files() return
+        contract is already covered by TestScanResults; we deliberately do NOT
+        call it here — it resolves a diff base and fails in shallow CI checkouts
+        that lack origin/main.)"""
+        assert list(dtu.JSX_TOOLS_DIR.rglob("*.jsx")), (
+            f"scanner root {dtu.JSX_TOOLS_DIR} is empty — gate would pass "
+            f"vacuously (the #444 drift)."
+        )
