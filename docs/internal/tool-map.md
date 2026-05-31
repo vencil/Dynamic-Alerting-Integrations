@@ -101,6 +101,7 @@ lang: zh
 | `generate_platform_data.py` | 共用平台資料產生器 |
 | `generate_rule_pack_readme.py` | Generate rule-packs/README.md from actual YAML rule pack files. |
 | `generate_rule_pack_stats.py` | Rule Pack 統計單一來源產生器 |
+| `generate_rulepack_configmaps.py` | Generate k8s/03-monitoring/configmap-rules-<pack>.yaml from rule-packs/. |
 | `generate_tenant_fixture.py` | Synthetic tenant fixture generator — produce N-tenant conf.d/ for benchmark & integration testing. |
 | `generate_tenant_metadata.py` | 租戶元資料產生器 — 從 conf.d/ 解析 YAML，推斷 rule_packs、owner、tier、routing_channel。 |
 | `generate_tool_map.py` | 工具導覽自動生成 |
@@ -178,6 +179,7 @@ lang: zh
 | `check_property_coverage.py` | Property-pilot coverage drift detector. |
 | `check_repo_name.py` | Prevent wrong repository name in source files. |
 | `check_routing_profiles.py` | Lint routing profiles and domain policies (ADR-007). |
+| `check_rulepack_sync.py` | Rule-pack copy drift guard (ADR-024 PR3-pre). |
 | `check_skip_a11y_justification.py` | Require ticket-justification for `skipA11y: true` in E2E specs (testing-playbook §LL §5, TD-039). |
 | `check_structure.py` | Project structure enforcement. |
 | `check_subprocess_timeout.py` | flag subprocess calls without explicit timeout. |
