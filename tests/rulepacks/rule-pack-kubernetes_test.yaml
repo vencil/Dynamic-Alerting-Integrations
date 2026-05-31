@@ -51,6 +51,17 @@ tests:
         values: '1x48'
       - series: 'user_state_filter{tenant="db-d", filter="maintenance"}'
         values: '1x48'
+      # kube_pod_labels WITHOUT app.kubernetes.io/version (unversioned apps) —
+      # ADR-024 (0a) join attaches version="" → normalize layer maps to
+      # "default" (inert-by-design: unversioned behaves exactly as before).
+      - series: 'kube_pod_labels{namespace="db-a", pod="app-1"}'
+        values: '1x48'
+      - series: 'kube_pod_labels{namespace="db-b", pod="app-1"}'
+        values: '1x48'
+      - series: 'kube_pod_labels{namespace="db-c", pod="app-1"}'
+        values: '1x48'
+      - series: 'kube_pod_labels{namespace="db-d", pod="app-1"}'
+        values: '1x48'
 
     alert_rule_test:
       - eval_time: 11m
@@ -60,6 +71,7 @@ tests:
           - exp_labels:
               severity: warning
               tenant: db-a
+              version: default
               runbook_url: "http://rb/a"
               owner: team-a
               tier: gold
@@ -77,6 +89,7 @@ tests:
           - exp_labels:
               severity: warning
               tenant: db-b
+              version: default
             exp_annotations:
               summary: "High container CPU in db-b"
               summary_zh: "db-b 的容器 CPU 使用率過高"

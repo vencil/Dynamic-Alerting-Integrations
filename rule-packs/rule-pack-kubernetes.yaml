@@ -25,18 +25,34 @@ groups:
   - name: kubernetes-container-normalization
     interval: 15s
     rules:
-      # Container CPU usage as % of limit
+      # Container CPU usage as % of limit.
+      # ADR-024 (0a) version injection: compute the pure percentage first, then
+      # join kube_pod_labels ONCE at the outermost level to attach `version`
+      # (from app.kubernetes.io/version). Joining after the division (vs on the
+      # numerator/denominator separately) halves the join work and avoids a
+      # rolling-update instant where numerator/denominator carry mismatched
+      # versions and produce NaN. Pods without the label get no `version` (→ "")
+      # which the normalize layer maps to "default".
       - record: tenant:container_cpu_percent:by_container
         expr: |
           label_replace(
-            sum by(namespace, pod, container) (
-              rate(container_cpu_usage_seconds_total{namespace=~"db-.+", container!="", container!="POD"}[5m])
-            )
-            /
-            sum by(namespace, pod, container) (
-              kube_pod_container_resource_limits{resource="cpu", namespace=~"db-.+"}
-            )
-            * 100,
+            (
+              (
+                sum by(namespace, pod, container) (
+                  rate(container_cpu_usage_seconds_total{namespace=~"db-.+", container!="", container!="POD"}[5m])
+                )
+                /
+                sum by(namespace, pod, container) (
+                  kube_pod_container_resource_limits{resource="cpu", namespace=~"db-.+"}
+                )
+                * 100
+              )
+              * on(namespace, pod) group_left(version)
+                label_replace(
+                  kube_pod_labels{namespace=~"db-.+"},
+                  "version", "$1", "label_app_kubernetes_io_version", "(.+)"
+                )
+            ),
             "tenant", "$1", "namespace", "(.*)"
           )
 
@@ -55,9 +71,12 @@ groups:
             "tenant", "$1", "namespace", "(.*)"
           )
 
-      # Weakest link: MAX across containers per pod
+      # Weakest link: MAX across containers per pod.
+      # ADR-024 (0b): `version` is carried through every aggregation layer so
+      # the per-version dimension survives to the alert join. (Memory stays
+      # version-agnostic for now — CPU is the version-aware pilot metric.)
       - record: tenant:pod_weakest_cpu_percent:max
-        expr: max by(tenant, pod) (tenant:container_cpu_percent:by_container)
+        expr: max by(tenant, pod, version) (tenant:container_cpu_percent:by_container)
 
       - record: tenant:pod_weakest_memory_percent:max
         expr: max by(tenant, pod) (tenant:container_memory_percent:by_container)
@@ -83,8 +102,26 @@ groups:
   - name: kubernetes-threshold-normalization
     interval: 15s
     rules:
-      - record: tenant:alert_threshold:container_cpu
-        expr: max by(tenant) (user_threshold{component="container", metric="cpu"})
+      # ADR-024 version-aware threshold (CPU pilot): keep BOTH `version` and
+      # `severity` dimensions (a tenant may declare `container_cpu{version="v2"}:
+      # "60:critical"`), normalize empty version → "default". `max` (not `sum`)
+      # is the HA-dedup-safe aggregator (high-availability.md §4.3).
+      - record: tenant_version:alert_threshold:container_cpu
+        expr: |
+          label_replace(
+            max by(tenant, version, severity) (
+              user_threshold{component="container", metric="cpu"}
+            ),
+            "version", "default", "version", "^$"
+          )
+
+      # App-metric side normalize: collapse to (tenant, version), empty → default.
+      - record: tenant_version:pod_weakest_cpu_percent:vlabeled
+        expr: |
+          label_replace(
+            max by(tenant, version) (tenant:pod_weakest_cpu_percent:max),
+            "version", "default", "version", "^$"
+          )
 
       - record: tenant:alert_threshold:container_memory
         expr: max by(tenant) (user_threshold{component="container", metric="memory"})
@@ -94,12 +131,53 @@ groups:
       # tenant_metadata_info via a left-outer-join (`or`/`unless`) so a tenant
       # with metrics but no metadata config (onboarding vacuum) still fires —
       # the inner-join `* tenant_metadata_info` alone would silently drop it.
-      - record: rule_pack_kubernetes:pod_container_high_cpu:core
+      # ADR-024 Route 2: version-aware exact-or-fallback core, split PER SEVERITY.
+      # Fixing severity makes the threshold RHS a per-(tenant,version) singleton →
+      # the exact branch is one-to-one and the fallback is many(versions)-to-one;
+      # this avoids the version×severity many-to-many cardinality crash that a
+      # single `group_left(severity)` rule would hit (ADR-024 Pass-3). The
+      # fallback's `group_left()` keeps the metric's REAL version (v2/v3…) for
+      # on-call visibility even when it falls back to the default threshold.
+      - record: rule_pack_kubernetes:pod_container_high_cpu_warning:core
         expr: |
           (
-            max by(tenant) (tenant:pod_weakest_cpu_percent:max)
-            > on(tenant) group_left
-            tenant:alert_threshold:container_cpu
+            (
+              tenant_version:pod_weakest_cpu_percent:vlabeled
+              > on(tenant, version) group_left()
+                tenant_version:alert_threshold:container_cpu{severity="warning"}
+            )
+            or
+            (
+              (
+                tenant_version:pod_weakest_cpu_percent:vlabeled
+                unless on(tenant, version)
+                  tenant_version:alert_threshold:container_cpu{severity="warning"}
+              )
+              > on(tenant) group_left()
+                tenant_version:alert_threshold:container_cpu{version="default", severity="warning"}
+            )
+          )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
+
+      - record: rule_pack_kubernetes:pod_container_high_cpu_critical:core
+        expr: |
+          (
+            (
+              tenant_version:pod_weakest_cpu_percent:vlabeled
+              > on(tenant, version) group_left()
+                tenant_version:alert_threshold:container_cpu{severity="critical"}
+            )
+            or
+            (
+              (
+                tenant_version:pod_weakest_cpu_percent:vlabeled
+                unless on(tenant, version)
+                  tenant_version:alert_threshold:container_cpu{severity="critical"}
+              )
+              > on(tenant) group_left()
+                tenant_version:alert_threshold:container_cpu{version="default", severity="critical"}
+            )
           )
           unless on(tenant)
           (user_state_filter{filter="maintenance"} == 1)
@@ -119,20 +197,19 @@ groups:
   # -------------------------------------------------------
   - name: kubernetes-container-alerts
     rules:
+      # ADR-024 Route 2 (warning) + PR3-pre-3 left-outer-join enrichment.
+      # The version-aware core carries the metric's REAL `version` label, so the
+      # firing alert tells on-call exactly which app version is in trouble.
       - alert: PodContainerHighCPU
-        # Left-outer-join enrichment (ADR-024 PR3-pre-3): branch A enriches with
-        # runbook_url/owner/tier when tenant_metadata_info exists; branch B fires
-        # WITHOUT enrichment when it doesn't (onboarding vacuum). The two branches
-        # are mutually exclusive (metadata present XOR absent) → exactly one series.
         expr: |
           (
-            rule_pack_kubernetes:pod_container_high_cpu:core
+            rule_pack_kubernetes:pod_container_high_cpu_warning:core
             * on(tenant) group_left(runbook_url, owner, tier)
               tenant_metadata_info
           )
           or
           (
-            rule_pack_kubernetes:pod_container_high_cpu:core
+            rule_pack_kubernetes:pod_container_high_cpu_warning:core
             unless on(tenant) tenant_metadata_info
           )
         for: 60s
@@ -146,6 +223,35 @@ groups:
           platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}: 容器 CPU 壓力過高 — 請評估資源限制"
           description: "Max container CPU usage: {{ $value | printf \"%.1f\" }}% (threshold exceeded)"
           description_zh: "最大容器 CPU 使用率: {{ $value | printf \"%.1f\" }}% (超過閾值)"
+
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"
+      # Critical mirror (ADR-024 Route 2: distinct alertname per severity to
+      # match the platform convention; warning's alertname is preserved above).
+      - alert: PodContainerHighCPUCritical
+        expr: |
+          (
+            rule_pack_kubernetes:pod_container_high_cpu_critical:core
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
+          )
+          or
+          (
+            rule_pack_kubernetes:pod_container_high_cpu_critical:core
+            unless on(tenant) tenant_metadata_info
+          )
+        for: 60s
+        labels:
+          severity: critical
+          tenant: "{{ $labels.tenant }}"
+        annotations:
+          summary: "CRITICAL container CPU in {{ $labels.tenant }}"
+          summary_zh: "{{ $labels.tenant }} 的容器 CPU 使用率達臨界"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: container CPU CRITICAL — evaluate resource limits"
+          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}: 容器 CPU 達臨界 — 請評估資源限制"
+          description: "Max container CPU usage: {{ $value | printf \"%.1f\" }}% (critical threshold exceeded)"
+          description_zh: "最大容器 CPU 使用率: {{ $value | printf \"%.1f\" }}% (超過臨界閾值)"
 
           runbook_url: "{{ $labels.runbook_url }}"
           owner: "{{ $labels.owner }}"
