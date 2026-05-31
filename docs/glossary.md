@@ -54,6 +54,9 @@ lang: zh
 **Directory Scanner**
 :   threshold-exporter 的 `-config-dir` 模式，掃描 `conf.d/` 目錄下所有 YAML 檔案，支援 per-tenant 獨立檔案管理。
 
+**Dynamic Alerting**
+:   本平台的產品名稱——Multi-Tenant Dynamic Alerting 平台。Config-driven、SHA-256 hot-reload、Directory Scanner 的多租戶動態告警方案。
+
 **Dual-Perspective Annotation**
 :   `platform_summary`（NOC 視角）+ `summary`（Tenant 視角）雙重 annotation。搭配 `_routing_enforced` 實現平台與租戶各看各的告警描述。
 
@@ -81,6 +84,9 @@ lang: zh
 
 **Maintenance Mode（維護模式）**
 :   三態之一。`_state_maintenance` 設定後，產生 sentinel alert 觸發 Alertmanager inhibit 抑制該租戶所有告警。支援 `expires` 自動失效與 `recurring[]` 排程式維護窗口。
+
+**Migration Toolkit（遷移工具組）**
+:   協助既有 Prometheus 環境遷入本平台的工具集合（`migrate_rule.py` / `validate_migration.py` / `cutover_tenant.py` 等）。見 `docs/migration-toolkit-installation.md`。
 
 ## N
 
@@ -130,6 +136,12 @@ lang: zh
 **Tenant（租戶）**
 :   本平台的核心概念——一個邏輯上獨立的監控對象（通常對應一個 Kubernetes namespace 或應用團隊）。每個 tenant 有獨立的閾值配置、路由規則、維護窗口。
 
+**Tenant Manager（租戶管理介面）**
+:   da-portal 的 Live Tenant Manager 視圖（try-local Mode 0 雙星之一）——在瀏覽器編輯租戶配置並 Save，觸發 tenant-api 真實 git commit。
+
+**Tenant API**
+:   本平台的租戶配置寫入 API 元件（`tenant-api`）。提供租戶 CRUD、GitOps write-back、forge PR 整合。
+
 **threshold-exporter**
 :   本平台的核心元件。讀取 tenant YAML 配置，轉換為 Prometheus metrics（`user_threshold` 系列）。支援 HA 部署（×2），端口 8080。
 
@@ -143,6 +155,31 @@ lang: zh
 
 **Webhook Domain Allowlist**
 :   `generate_alertmanager_routes.py` 的安全護欄。`--policy` 參數使用 fnmatch 檢查 webhook URL 的域名，空清單 = 不限制。
+
+---
+
+## 內部代號 — 禁止用於對外文件
+
+> ⚠️ **這一段是 Layer 2 codename gate 的 SSOT（[#469](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/469)）。** 下表列出的是**規劃／追蹤用內部代號**——對 AI agent 與 maintainer 有意義，但對沒有規劃上下文的外部讀者只會造成困惑。`check_codename_gate.py` 會掃描對外文件，命中下列模式即 **fail loud**；對外文件請改用「對外應改用」欄的說法。
+>
+> **模板語法**（給 lint 用，讀者可忽略）：`{N}`=一段數字、`{X}`=單一字母、`{x}`=單一小寫字母、`{AE}`=單一大寫字母 A–E。其餘字元視為字面值。新代號家族在這裡登錄一列即生效，毋須改 lint 程式碼。
+
+| 代號模式 | 說明 | 對外應改用 |
+|---|---|---|
+| `TD-{N}` | 舊技術債 ticket（已併入 TRK 命名空間） | 功能名稱或 issue 連結 |
+| `HA-{N}` | 舊 HA 規劃 id（已併入 TRK） | 功能名稱 |
+| `S#{N}` | Sprint／closure 議題編號 | 版本標籤或功能名稱 |
+| `DEC-{X}` | 跨切面 maintainer 決策標籤 | 決策結果本身的描述 |
+| `{AE}-{N}` | 單字母字首規劃 id（B-1 / C-12 等，A–E） | 功能名稱 |
+| `PR-{N}` | 內部 PR 序號代號（PR-2d 等） | GitHub PR 連結 |
+| `Phase .{x}` | 內部 sprint 階段代號（Phase .a/.b/.c） | 「第一階段」等敘述，或具體里程碑 |
+| `Track {X}` | 內部工作分軌（Track A/B/C，A–E） | 工作項目名稱 |
+| `Wave {N}` | 內部分批代號（Wave 3 等） | 批次說明或時程 |
+| `v{N}.{N}.{N}-final` | release 暫存後綴代表式（`-rc` / `-alpha` / `-beta` / `-preview` 等含數字尾綴由 Layer 1 `check_codename_leak.py` 精準 hard-gate；本 gate 收 `-final` 代表式、其餘走 shape 發現） | 純 semver（如 `v2.8.0`） |
+
+<!-- 註：TRK-{N}（ADR-019 統一 tracking namespace，ADR 中公開引用）/ ADR-{N} / CVE-* / SHA-* /
+     UTF-* / 兩字大寫產品詞（Rule Pack / Tenant API 等）屬「對外核可」，由上方字母表 **Term** 條目與
+     lint 內建 allowlist 涵蓋，不列為內部代號（與 Layer 1 check_codename_leak.py 的 PATTERNS 對齊）。 -->
 
 ---
 
