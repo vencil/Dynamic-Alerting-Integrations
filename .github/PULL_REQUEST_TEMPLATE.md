@@ -20,7 +20,7 @@
 - [ ] No orphan documents introduced (new .md files linked from at least one other doc)
 - [ ] CHANGELOG.md updated (if user-facing change)
 - [ ] Numbers accurate (tool count, scenario count, Rule Pack count match source of truth)
-- [ ] **No internal codenames in customer-facing text** — no `B-1` / `C-12` / `Phase .c` / `Phase B Track A` / `S#101` / `PR-N` / `DEC-X` / `TD-NNN` / `HA-NN` / `v2.X.0-final` / `v2.X.0-rc1` / `v2.X.0-preview.N` in `docs/**` (excluding `docs/internal/**`), `README*.md`, or `components/*/README.md`. Use feature names + version labels instead. Run `python scripts/tools/lint/check_codename_leak.py --full-scan` to verify ([#462](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/462))
+- [ ] **No internal codenames in customer-facing text** — any new proper noun in `docs/**` (excluding `docs/internal/**`), `README*.md`, or `components/*/README.md` must be registered in [`docs/glossary.md`](../docs/glossary.md): customer-facing terms in the A–Z dictionary, planning/tracking codenames in the "內部代號 — 禁止用於對外文件" section (which the gate then rejects in customer docs). Use feature names + version labels instead of codenames. Verify with `python scripts/tools/lint/check_codename_leak.py --full-scan` (Layer 1, fast-path) and `python scripts/tools/lint/check_codename_gate.py` (Layer 2, glossary-driven) ([#462](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/462) / [#469](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/469))
 
 ## Quality Gates
 

@@ -214,6 +214,13 @@ PER_FILE_ALLOWLIST = (
     # Migration tables (TD-022 → TRK-222, HA-11 → TRK-011) and regex spec
     # examples ("Resolves TD-30 → TD-30") are core content, not leakage.
     "docs/adr/019-planning-ssot.md",
+    # The glossary's "內部代號 — 禁止用於對外文件" section is the SSOT for the
+    # Layer 2 codename gate (#469): it deliberately enumerates the forbidden
+    # codenames (B-1 / Phase .a / Track A / Wave 3 / …) as the catalog. Same
+    # rationale as ADR-019 — the codenames ARE the documented subject matter.
+    # The Layer 2 gate (check_codename_gate.py) likewise never scans these.
+    "docs/glossary.md",
+    "docs/glossary.en.md",
 )
 
 # Pure code-comment lines (not user-visible). These are skipped because

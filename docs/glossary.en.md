@@ -54,6 +54,9 @@ This page lists common terms and abbreviations found throughout the Dynamic Aler
 **Directory Scanner**
 :   threshold-exporter's `-config-dir` mode that scans all YAML files in the `conf.d/` directory, supporting per-tenant independent file management.
 
+**Dynamic Alerting**
+:   The product name — the Multi-Tenant Dynamic Alerting platform. A config-driven, SHA-256 hot-reload, Directory-Scanner multi-tenant dynamic alerting solution.
+
 **Dual-Perspective Annotation**
 :   `platform_summary` (NOC perspective) + `summary` (Tenant perspective) dual annotations. Combined with `_routing_enforced` so platform and tenant teams see their own alert descriptions.
 
@@ -81,6 +84,9 @@ This page lists common terms and abbreviations found throughout the Dynamic Aler
 
 **Maintenance Mode**
 :   One of three operational states. When `_state_maintenance` is set, a sentinel alert triggers Alertmanager inhibit rules to suppress all alerts for that tenant. Supports `expires` auto-expiry and `recurring[]` scheduled maintenance windows.
+
+**Migration Toolkit**
+:   The toolset that helps existing Prometheus environments migrate onto this platform (`migrate_rule.py` / `validate_migration.py` / `cutover_tenant.py`, etc.). See `docs/migration-toolkit-installation.md`.
 
 ## N
 
@@ -130,6 +136,12 @@ This page lists common terms and abbreviations found throughout the Dynamic Aler
 **Tenant**
 :   The platform's core concept — a logically independent monitoring subject (typically corresponding to a Kubernetes namespace or application team). Each tenant has independent threshold configurations, routing rules, and maintenance windows.
 
+**Tenant Manager**
+:   da-portal's Live Tenant Manager view (one of the two try-local Mode 0 stars) — edit tenant configuration in the browser and Save, triggering a real git commit through tenant-api.
+
+**Tenant API**
+:   The platform's tenant configuration write API component (`tenant-api`). Provides tenant CRUD, GitOps write-back, and forge PR integration.
+
 **threshold-exporter**
 :   The platform's core component. Reads tenant YAML configurations and converts them to Prometheus metrics (`user_threshold` series). Supports HA deployment (×2), port 8080.
 
@@ -143,6 +155,33 @@ This page lists common terms and abbreviations found throughout the Dynamic Aler
 
 **Webhook Domain Allowlist**
 :   Security guardrail in `generate_alertmanager_routes.py`. The `--policy` parameter uses fnmatch to validate webhook URL domains; empty list = no restrictions.
+
+---
+
+## Explicitly Internal — Do Not Use in Customer Docs
+
+> ⚠️ **This section is the SSOT for the Layer 2 codename gate ([#469](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/469)).** The table below lists **planning/tracking internal codenames** — meaningful to AI agents and maintainers, but only confusing to external readers who lack the planning context. `check_codename_gate.py` scans customer-facing files and **fails loud** on any match; in customer docs, use the "Use instead" column.
+>
+> **Template syntax** (for the lint; readers may ignore): `{N}`=a run of digits, `{X}`=a single letter, `{x}`=a single lowercase letter, `{AE}`=a single uppercase letter A–E. All other characters are literal. Registering a new codename family is a single row here — no lint code change required.
+
+| Codename pattern | Meaning | Use instead |
+|---|---|---|
+| `TD-{N}` | Legacy tech-debt ticket (merged into the TRK namespace) | Feature name or issue link |
+| `HA-{N}` | Legacy HA planning id (merged into TRK) | Feature name |
+| `S#{N}` | Sprint/closure issue number | Version label or feature name |
+| `DEC-{X}` | Cross-cutting maintainer decision tag | The decision outcome itself |
+| `{AE}-{N}` | Single-letter-prefix planning id (B-1 / C-12, A–E) | Feature name |
+| `PR-{N}` | Internal PR sequence codename (PR-2d, etc.) | GitHub PR link |
+| `Phase .{x}` | Internal sprint phase codename (Phase .a/.b/.c) | "First phase" prose, or a concrete milestone |
+| `Track {X}` | Internal work track (Track A/B/C, A–E) | Work-item name |
+| `Wave {N}` | Internal batch codename (Wave 3, etc.) | Batch description or schedule |
+| `v{N}.{N}.{N}-final` | Representative release-staging suffix (`-rc` / `-alpha` / `-beta` / `-preview` with digit tails are precisely hard-gated by Layer 1 `check_codename_leak.py`; this gate registers `-final` and lets the rest fall to shape discovery) | Plain semver (e.g. `v2.8.0`) |
+
+<!-- Note: TRK-{N} (the ADR-019 unified tracking namespace, cited openly in ADRs) / ADR-{N} /
+     CVE-* / SHA-* / UTF-* / two-word capitalised product terms (Rule Pack / Tenant API, etc.)
+     are "approved customer-facing" — covered by the **Term** entries in the alphabetical
+     sections above plus the lint's built-in allowlist; not listed as internal (aligned with
+     Layer 1 check_codename_leak.py PATTERNS). -->
 
 ---
 
