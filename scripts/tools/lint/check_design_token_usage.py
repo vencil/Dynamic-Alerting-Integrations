@@ -58,8 +58,13 @@ from _lint_helpers import (  # noqa: E402
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
-JSX_TOOLS_DIR = REPO_ROOT / "docs" / "interactive" / "tools"
-WIZARD_DIR = REPO_ROOT / "docs" / "getting-started"
+# TRK-242 monorepo restructure: portal source moved from docs/ to
+# tools/portal/src/. These dirs were left stale at docs/interactive/tools +
+# docs/getting-started — neither holds .jsx anymore, so the lint silently
+# scanned ZERO files and always passed (#444 Phase 0 keystone fix). Aligns with
+# check_tool_registry_jsx_parity.py's JSX_ROOT = tools/portal/src.
+JSX_TOOLS_DIR = REPO_ROOT / "tools" / "portal" / "src" / "interactive" / "tools"
+WIZARD_DIR = REPO_ROOT / "tools" / "portal" / "src" / "getting-started"
 DESIGN_TOKENS = REPO_ROOT / "docs" / "assets" / "design-tokens.css"
 
 
