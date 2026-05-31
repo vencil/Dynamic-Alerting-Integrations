@@ -49,20 +49,26 @@ spec:
       for: 30s
       labels:
         severity: critical
+        tenant: '{{ $labels.tenant }}'
       annotations:
         summary: Kafka exporter target missing
         summary_zh: Kafka exporter 目標缺失
         description: No kafka_brokers metric found for 30s
         description_zh: 30 秒內未找到 kafka_brokers metric
     - alert: KafkaHighConsumerLag
-      expr: "(\n  (\n    tenant:kafka_consumer_lag:max\n    > on(tenant) group_left\n\
-        \    tenant:alert_threshold:kafka_consumer_lag\n  )\n  unless on(tenant)\n\
-        \  (user_state_filter{filter=\"maintenance\"} == 1)\n)\n* on(tenant) group_left(runbook_url,\
-        \ owner, tier)\n  tenant_metadata_info\n"
+      expr: "(\n  (\n    (\n      tenant:kafka_consumer_lag:max\n      > on(tenant)\
+        \ group_left\n      tenant:alert_threshold:kafka_consumer_lag\n    )\n   \
+        \ unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"} == 1)\n\
+        \  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
+        )\nor\n(\n  (\n    (\n      tenant:kafka_consumer_lag:max\n      > on(tenant)\
+        \ group_left\n      tenant:alert_threshold:kafka_consumer_lag\n    )\n   \
+        \ unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"} == 1)\n\
+        \  )\n  unless on(tenant) tenant_metadata_info\n)\n"
       for: 30s
       labels:
         severity: warning
         metric_group: kafka_consumer_lag
+        tenant: '{{ $labels.tenant }}'
       annotations:
         summary: High Kafka consumer lag on {{ $labels.tenant }}
         summary_zh: '{{ $labels.tenant }} 的 Kafka 消費者延遲過高'
@@ -77,14 +83,19 @@ spec:
         owner: '{{ $labels.owner }}'
         tier: '{{ $labels.tier }}'
     - alert: KafkaHighConsumerLagCritical
-      expr: "(\n  (\n    tenant:kafka_consumer_lag:max\n    > on(tenant) group_left\n\
-        \    tenant:alert_threshold:kafka_consumer_lag_critical\n  )\n  unless on(tenant)\n\
-        \  (user_state_filter{filter=\"maintenance\"} == 1)\n)\n* on(tenant) group_left(runbook_url,\
-        \ owner, tier)\n  tenant_metadata_info\n"
+      expr: "(\n  (\n    (\n      tenant:kafka_consumer_lag:max\n      > on(tenant)\
+        \ group_left\n      tenant:alert_threshold:kafka_consumer_lag_critical\n \
+        \   )\n    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"\
+        } == 1)\n  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
+        )\nor\n(\n  (\n    (\n      tenant:kafka_consumer_lag:max\n      > on(tenant)\
+        \ group_left\n      tenant:alert_threshold:kafka_consumer_lag_critical\n \
+        \   )\n    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"\
+        } == 1)\n  )\n  unless on(tenant) tenant_metadata_info\n)\n"
       for: 30s
       labels:
         severity: critical
         metric_group: kafka_consumer_lag
+        tenant: '{{ $labels.tenant }}'
       annotations:
         summary: Critical Kafka consumer lag on {{ $labels.tenant }}
         summary_zh: '{{ $labels.tenant }} 的 Kafka 消費者延遲嚴重'
@@ -99,14 +110,19 @@ spec:
         owner: '{{ $labels.owner }}'
         tier: '{{ $labels.tier }}'
     - alert: KafkaUnderReplicatedPartitions
-      expr: "(\n  (\n    tenant:kafka_under_replicated_partitions:max\n    > on(tenant)\
-        \ group_left\n    tenant:alert_threshold:kafka_under_replicated_partitions\n\
-        \  )\n  unless on(tenant)\n  (user_state_filter{filter=\"maintenance\"} ==\
-        \ 1)\n)\n* on(tenant) group_left(runbook_url, owner, tier)\n  tenant_metadata_info\n"
+      expr: "(\n  (\n    (\n      tenant:kafka_under_replicated_partitions:max\n \
+        \     > on(tenant) group_left\n      tenant:alert_threshold:kafka_under_replicated_partitions\n\
+        \    )\n    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"\
+        } == 1)\n  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
+        )\nor\n(\n  (\n    (\n      tenant:kafka_under_replicated_partitions:max\n\
+        \      > on(tenant) group_left\n      tenant:alert_threshold:kafka_under_replicated_partitions\n\
+        \    )\n    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"\
+        } == 1)\n  )\n  unless on(tenant) tenant_metadata_info\n)\n"
       for: 30s
       labels:
         severity: warning
         metric_group: kafka_under_replicated_partitions
+        tenant: '{{ $labels.tenant }}'
       annotations:
         summary: Under-replicated partitions detected on {{ $labels.tenant }}
         summary_zh: '{{ $labels.tenant }} 偵測到複製不足的分割區'
@@ -121,14 +137,19 @@ spec:
         owner: '{{ $labels.owner }}'
         tier: '{{ $labels.tier }}'
     - alert: KafkaUnderReplicatedPartitionsCritical
-      expr: "(\n  (\n    tenant:kafka_under_replicated_partitions:max\n    > on(tenant)\
-        \ group_left\n    tenant:alert_threshold:kafka_under_replicated_partitions_critical\n\
-        \  )\n  unless on(tenant)\n  (user_state_filter{filter=\"maintenance\"} ==\
-        \ 1)\n)\n* on(tenant) group_left(runbook_url, owner, tier)\n  tenant_metadata_info\n"
+      expr: "(\n  (\n    (\n      tenant:kafka_under_replicated_partitions:max\n \
+        \     > on(tenant) group_left\n      tenant:alert_threshold:kafka_under_replicated_partitions_critical\n\
+        \    )\n    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"\
+        } == 1)\n  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
+        )\nor\n(\n  (\n    (\n      tenant:kafka_under_replicated_partitions:max\n\
+        \      > on(tenant) group_left\n      tenant:alert_threshold:kafka_under_replicated_partitions_critical\n\
+        \    )\n    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"\
+        } == 1)\n  )\n  unless on(tenant) tenant_metadata_info\n)\n"
       for: 30s
       labels:
         severity: critical
         metric_group: kafka_under_replicated_partitions
+        tenant: '{{ $labels.tenant }}'
       annotations:
         summary: Critical under-replicated partitions on {{ $labels.tenant }}
         summary_zh: '{{ $labels.tenant }} 的複製不足分割區情況嚴重'
@@ -143,14 +164,19 @@ spec:
         owner: '{{ $labels.owner }}'
         tier: '{{ $labels.tier }}'
     - alert: KafkaNoActiveController
-      expr: "(\n  (\n    tenant:kafka_active_controllers:max\n    < on(tenant) group_left\n\
-        \    tenant:alert_threshold:kafka_active_controllers\n  )\n  unless on(tenant)\n\
-        \  (user_state_filter{filter=\"maintenance\"} == 1)\n)\n* on(tenant) group_left(runbook_url,\
-        \ owner, tier)\n  tenant_metadata_info\n"
+      expr: "(\n  (\n    (\n      tenant:kafka_active_controllers:max\n      < on(tenant)\
+        \ group_left\n      tenant:alert_threshold:kafka_active_controllers\n    )\n\
+        \    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"} ==\
+        \ 1)\n  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
+        )\nor\n(\n  (\n    (\n      tenant:kafka_active_controllers:max\n      < on(tenant)\
+        \ group_left\n      tenant:alert_threshold:kafka_active_controllers\n    )\n\
+        \    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"} ==\
+        \ 1)\n  )\n  unless on(tenant) tenant_metadata_info\n)\n"
       for: 30s
       labels:
         severity: critical
         metric_group: kafka_active_controllers
+        tenant: '{{ $labels.tenant }}'
       annotations:
         summary: No active Kafka controller on {{ $labels.tenant }}
         summary_zh: '{{ $labels.tenant }} 上沒有活躍的 Kafka controller'
@@ -165,14 +191,19 @@ spec:
         owner: '{{ $labels.owner }}'
         tier: '{{ $labels.tier }}'
     - alert: KafkaLowBrokerCount
-      expr: "(\n  (\n    tenant:kafka_broker_count:max\n    < on(tenant) group_left\n\
-        \    tenant:alert_threshold:kafka_broker_count\n  )\n  unless on(tenant)\n\
-        \  (user_state_filter{filter=\"maintenance\"} == 1)\n)\n* on(tenant) group_left(runbook_url,\
-        \ owner, tier)\n  tenant_metadata_info\n"
+      expr: "(\n  (\n    (\n      tenant:kafka_broker_count:max\n      < on(tenant)\
+        \ group_left\n      tenant:alert_threshold:kafka_broker_count\n    )\n   \
+        \ unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"} == 1)\n\
+        \  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
+        )\nor\n(\n  (\n    (\n      tenant:kafka_broker_count:max\n      < on(tenant)\
+        \ group_left\n      tenant:alert_threshold:kafka_broker_count\n    )\n   \
+        \ unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"} == 1)\n\
+        \  )\n  unless on(tenant) tenant_metadata_info\n)\n"
       for: 30s
       labels:
         severity: warning
         metric_group: kafka_broker_count
+        tenant: '{{ $labels.tenant }}'
       annotations:
         summary: Low Kafka broker count on {{ $labels.tenant }}
         summary_zh: '{{ $labels.tenant }} 的 Kafka broker 數量過少'
@@ -187,14 +218,19 @@ spec:
         owner: '{{ $labels.owner }}'
         tier: '{{ $labels.tier }}'
     - alert: KafkaHighRequestRate
-      expr: "(\n  (\n    tenant:kafka_request_rate:sum\n    > on(tenant) group_left\n\
-        \    tenant:alert_threshold:kafka_request_rate\n  )\n  unless on(tenant)\n\
-        \  (user_state_filter{filter=\"maintenance\"} == 1)\n)\n* on(tenant) group_left(runbook_url,\
-        \ owner, tier)\n  tenant_metadata_info\n"
+      expr: "(\n  (\n    (\n      tenant:kafka_request_rate:sum\n      > on(tenant)\
+        \ group_left\n      tenant:alert_threshold:kafka_request_rate\n    )\n   \
+        \ unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"} == 1)\n\
+        \  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
+        )\nor\n(\n  (\n    (\n      tenant:kafka_request_rate:sum\n      > on(tenant)\
+        \ group_left\n      tenant:alert_threshold:kafka_request_rate\n    )\n   \
+        \ unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"} == 1)\n\
+        \  )\n  unless on(tenant) tenant_metadata_info\n)\n"
       for: 30s
       labels:
         severity: warning
         metric_group: kafka_request_rate
+        tenant: '{{ $labels.tenant }}'
       annotations:
         summary: High Kafka request rate on {{ $labels.tenant }}
         summary_zh: '{{ $labels.tenant }} 的 Kafka 請求率過高'
@@ -209,14 +245,19 @@ spec:
         owner: '{{ $labels.owner }}'
         tier: '{{ $labels.tier }}'
     - alert: KafkaHighRequestRateCritical
-      expr: "(\n  (\n    tenant:kafka_request_rate:sum\n    > on(tenant) group_left\n\
-        \    tenant:alert_threshold:kafka_request_rate_critical\n  )\n  unless on(tenant)\n\
-        \  (user_state_filter{filter=\"maintenance\"} == 1)\n)\n* on(tenant) group_left(runbook_url,\
-        \ owner, tier)\n  tenant_metadata_info\n"
+      expr: "(\n  (\n    (\n      tenant:kafka_request_rate:sum\n      > on(tenant)\
+        \ group_left\n      tenant:alert_threshold:kafka_request_rate_critical\n \
+        \   )\n    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"\
+        } == 1)\n  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
+        )\nor\n(\n  (\n    (\n      tenant:kafka_request_rate:sum\n      > on(tenant)\
+        \ group_left\n      tenant:alert_threshold:kafka_request_rate_critical\n \
+        \   )\n    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"\
+        } == 1)\n  )\n  unless on(tenant) tenant_metadata_info\n)\n"
       for: 30s
       labels:
         severity: critical
         metric_group: kafka_request_rate
+        tenant: '{{ $labels.tenant }}'
       annotations:
         summary: Critical Kafka request rate on {{ $labels.tenant }}
         summary_zh: '{{ $labels.tenant }} 的 Kafka 請求率嚴重過高'

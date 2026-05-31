@@ -35,14 +35,19 @@ spec:
   - name: nginx-alerts
     rules:
     - alert: NginxHighConnections
-      expr: "(\n  (\n    tenant:nginx_connections_active:max\n    > on(tenant) group_left\n\
-        \    tenant:alert_threshold:nginx_connections\n  )\n  unless on(tenant)\n\
-        \  (user_state_filter{filter=\"maintenance\"} == 1)\n)\n* on(tenant) group_left(runbook_url,\
-        \ owner, tier)\n  tenant_metadata_info\n"
+      expr: "(\n  (\n    (\n      tenant:nginx_connections_active:max\n      > on(tenant)\
+        \ group_left\n      tenant:alert_threshold:nginx_connections\n    )\n    unless\
+        \ on(tenant)\n    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n\
+        \  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
+        )\nor\n(\n  (\n    (\n      tenant:nginx_connections_active:max\n      > on(tenant)\
+        \ group_left\n      tenant:alert_threshold:nginx_connections\n    )\n    unless\
+        \ on(tenant)\n    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n\
+        \  unless on(tenant) tenant_metadata_info\n)\n"
       for: 5m
       labels:
         severity: warning
         metric_group: nginx_connections
+        tenant: '{{ $labels.tenant }}'
       annotations:
         summary: NginxHighConnections on {{ $labels.tenant }}
         summary_zh: '{{ $labels.tenant }} 上 Nginx 連線數過高'
@@ -56,14 +61,19 @@ spec:
         owner: '{{ $labels.owner }}'
         tier: '{{ $labels.tier }}'
     - alert: NginxHighConnectionsCritical
-      expr: "(\n  (\n    tenant:nginx_connections_active:max\n    > on(tenant) group_left\n\
-        \    tenant:alert_threshold:nginx_connections_critical\n  )\n  unless on(tenant)\n\
-        \  (user_state_filter{filter=\"maintenance\"} == 1)\n)\n* on(tenant) group_left(runbook_url,\
-        \ owner, tier)\n  tenant_metadata_info\n"
+      expr: "(\n  (\n    (\n      tenant:nginx_connections_active:max\n      > on(tenant)\
+        \ group_left\n      tenant:alert_threshold:nginx_connections_critical\n  \
+        \  )\n    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"\
+        } == 1)\n  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
+        )\nor\n(\n  (\n    (\n      tenant:nginx_connections_active:max\n      > on(tenant)\
+        \ group_left\n      tenant:alert_threshold:nginx_connections_critical\n  \
+        \  )\n    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"\
+        } == 1)\n  )\n  unless on(tenant) tenant_metadata_info\n)\n"
       for: 3m
       labels:
         severity: critical
         metric_group: nginx_connections
+        tenant: '{{ $labels.tenant }}'
       annotations:
         summary: NginxHighConnectionsCritical on {{ $labels.tenant }}
         summary_zh: '{{ $labels.tenant }} 上 Nginx 連線飽和嚴重'
@@ -77,14 +87,19 @@ spec:
         owner: '{{ $labels.owner }}'
         tier: '{{ $labels.tier }}'
     - alert: NginxRequestRateSpike
-      expr: "(\n  (\n    tenant:nginx_requests:rate5m\n    > on(tenant) group_left\n\
-        \    tenant:alert_threshold:nginx_request_rate\n  )\n  unless on(tenant)\n\
-        \  (user_state_filter{filter=\"maintenance\"} == 1)\n)\n* on(tenant) group_left(runbook_url,\
-        \ owner, tier)\n  tenant_metadata_info\n"
+      expr: "(\n  (\n    (\n      tenant:nginx_requests:rate5m\n      > on(tenant)\
+        \ group_left\n      tenant:alert_threshold:nginx_request_rate\n    )\n   \
+        \ unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"} == 1)\n\
+        \  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
+        )\nor\n(\n  (\n    (\n      tenant:nginx_requests:rate5m\n      > on(tenant)\
+        \ group_left\n      tenant:alert_threshold:nginx_request_rate\n    )\n   \
+        \ unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"} == 1)\n\
+        \  )\n  unless on(tenant) tenant_metadata_info\n)\n"
       for: 5m
       labels:
         severity: warning
         metric_group: nginx_request_rate
+        tenant: '{{ $labels.tenant }}'
       annotations:
         summary: NginxRequestRateSpike on {{ $labels.tenant }}
         summary_zh: '{{ $labels.tenant }} 上 Nginx request 速率尖峰'
@@ -98,14 +113,19 @@ spec:
         owner: '{{ $labels.owner }}'
         tier: '{{ $labels.tier }}'
     - alert: NginxRequestRateSpikeCritical
-      expr: "(\n  (\n    tenant:nginx_requests:rate5m\n    > on(tenant) group_left\n\
-        \    tenant:alert_threshold:nginx_request_rate_critical\n  )\n  unless on(tenant)\n\
-        \  (user_state_filter{filter=\"maintenance\"} == 1)\n)\n* on(tenant) group_left(runbook_url,\
-        \ owner, tier)\n  tenant_metadata_info\n"
+      expr: "(\n  (\n    (\n      tenant:nginx_requests:rate5m\n      > on(tenant)\
+        \ group_left\n      tenant:alert_threshold:nginx_request_rate_critical\n \
+        \   )\n    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"\
+        } == 1)\n  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
+        )\nor\n(\n  (\n    (\n      tenant:nginx_requests:rate5m\n      > on(tenant)\
+        \ group_left\n      tenant:alert_threshold:nginx_request_rate_critical\n \
+        \   )\n    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"\
+        } == 1)\n  )\n  unless on(tenant) tenant_metadata_info\n)\n"
       for: 3m
       labels:
         severity: critical
         metric_group: nginx_request_rate
+        tenant: '{{ $labels.tenant }}'
       annotations:
         summary: NginxRequestRateSpikeCritical on {{ $labels.tenant }}
         summary_zh: '{{ $labels.tenant }} 上 Nginx request 速率尖峰嚴重'
@@ -119,14 +139,19 @@ spec:
         owner: '{{ $labels.owner }}'
         tier: '{{ $labels.tier }}'
     - alert: NginxConnectionBacklog
-      expr: "(\n  (\n    tenant:nginx_connections_waiting:max\n    > on(tenant) group_left\n\
-        \    tenant:alert_threshold:nginx_waiting\n  )\n  unless on(tenant)\n  (user_state_filter{filter=\"\
-        maintenance\"} == 1)\n)\n* on(tenant) group_left(runbook_url, owner, tier)\n\
-        \  tenant_metadata_info\n"
+      expr: "(\n  (\n    (\n      tenant:nginx_connections_waiting:max\n      > on(tenant)\
+        \ group_left\n      tenant:alert_threshold:nginx_waiting\n    )\n    unless\
+        \ on(tenant)\n    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n\
+        \  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
+        )\nor\n(\n  (\n    (\n      tenant:nginx_connections_waiting:max\n      >\
+        \ on(tenant) group_left\n      tenant:alert_threshold:nginx_waiting\n    )\n\
+        \    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"} ==\
+        \ 1)\n  )\n  unless on(tenant) tenant_metadata_info\n)\n"
       for: 5m
       labels:
         severity: warning
         metric_group: nginx_waiting
+        tenant: '{{ $labels.tenant }}'
       annotations:
         summary: NginxConnectionBacklog on {{ $labels.tenant }}
         summary_zh: '{{ $labels.tenant }} 上 Nginx 連線積壓'
@@ -140,14 +165,19 @@ spec:
         owner: '{{ $labels.owner }}'
         tier: '{{ $labels.tier }}'
     - alert: NginxConnectionBacklogCritical
-      expr: "(\n  (\n    tenant:nginx_connections_waiting:max\n    > on(tenant) group_left\n\
-        \    tenant:alert_threshold:nginx_waiting_critical\n  )\n  unless on(tenant)\n\
-        \  (user_state_filter{filter=\"maintenance\"} == 1)\n)\n* on(tenant) group_left(runbook_url,\
-        \ owner, tier)\n  tenant_metadata_info\n"
+      expr: "(\n  (\n    (\n      tenant:nginx_connections_waiting:max\n      > on(tenant)\
+        \ group_left\n      tenant:alert_threshold:nginx_waiting_critical\n    )\n\
+        \    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"} ==\
+        \ 1)\n  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
+        )\nor\n(\n  (\n    (\n      tenant:nginx_connections_waiting:max\n      >\
+        \ on(tenant) group_left\n      tenant:alert_threshold:nginx_waiting_critical\n\
+        \    )\n    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"\
+        } == 1)\n  )\n  unless on(tenant) tenant_metadata_info\n)\n"
       for: 3m
       labels:
         severity: critical
         metric_group: nginx_waiting
+        tenant: '{{ $labels.tenant }}'
       annotations:
         summary: NginxConnectionBacklogCritical on {{ $labels.tenant }}
         summary_zh: '{{ $labels.tenant }} 上 Nginx 連線積壓嚴重'

@@ -43,17 +43,23 @@ spec:
       for: 15s
       labels:
         severity: critical
+        tenant: '{{ $labels.tenant }}'
       annotations:
         summary: MongoDB instance {{ $labels.instance }} is DOWN
         summary_zh: MongoDB 實例 {{ $labels.instance }} 已停機
     - alert: MongoDBHighConnections
-      expr: "(\n  (\n    tenant:mongodb_connections_current:max\n    > on(tenant)\
-        \ group_left\n    tenant:alert_threshold:mongodb_connections_current\n  )\n\
-        \  unless on(tenant)\n  (user_state_filter{filter=\"maintenance\"} == 1)\n\
-        )\n* on(tenant) group_left(runbook_url, owner, tier)\n  tenant_metadata_info\n"
+      expr: "(\n  (\n    (\n      tenant:mongodb_connections_current:max\n      >\
+        \ on(tenant) group_left\n      tenant:alert_threshold:mongodb_connections_current\n\
+        \    )\n    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"\
+        } == 1)\n  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
+        )\nor\n(\n  (\n    (\n      tenant:mongodb_connections_current:max\n     \
+        \ > on(tenant) group_left\n      tenant:alert_threshold:mongodb_connections_current\n\
+        \    )\n    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"\
+        } == 1)\n  )\n  unless on(tenant) tenant_metadata_info\n)\n"
       for: 5m
       labels:
         severity: warning
+        tenant: '{{ $labels.tenant }}'
       annotations:
         summary: MongoDB high connection count on {{ $labels.tenant }}
         summary_zh: '{{ $labels.tenant }} 的 MongoDB 連線數過高'
@@ -67,13 +73,18 @@ spec:
         owner: '{{ $labels.owner }}'
         tier: '{{ $labels.tier }}'
     - alert: MongoDBReplicationLag
-      expr: "(\n  (\n    tenant:mongodb_replication_lag:max\n    > on(tenant) group_left\n\
-        \    tenant:alert_threshold:mongodb_replication_lag\n  )\n  unless on(tenant)\n\
-        \  (user_state_filter{filter=\"maintenance\"} == 1)\n)\n* on(tenant) group_left(runbook_url,\
-        \ owner, tier)\n  tenant_metadata_info\n"
+      expr: "(\n  (\n    (\n      tenant:mongodb_replication_lag:max\n      > on(tenant)\
+        \ group_left\n      tenant:alert_threshold:mongodb_replication_lag\n    )\n\
+        \    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"} ==\
+        \ 1)\n  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
+        )\nor\n(\n  (\n    (\n      tenant:mongodb_replication_lag:max\n      > on(tenant)\
+        \ group_left\n      tenant:alert_threshold:mongodb_replication_lag\n    )\n\
+        \    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"} ==\
+        \ 1)\n  )\n  unless on(tenant) tenant_metadata_info\n)\n"
       for: 2m
       labels:
         severity: warning
+        tenant: '{{ $labels.tenant }}'
       annotations:
         summary: MongoDB replication lag on {{ $labels.tenant }}
         summary_zh: '{{ $labels.tenant }} 的 MongoDB 複製延遲'
@@ -87,13 +98,18 @@ spec:
         owner: '{{ $labels.owner }}'
         tier: '{{ $labels.tier }}'
     - alert: MongoDBHighOperations
-      expr: "(\n  (\n    tenant:mongodb_opcounters:rate5m\n    > on(tenant) group_left\n\
-        \    tenant:alert_threshold:mongodb_opcounters_rate\n  )\n  unless on(tenant)\n\
-        \  (user_state_filter{filter=\"maintenance\"} == 1)\n)\n* on(tenant) group_left(runbook_url,\
-        \ owner, tier)\n  tenant_metadata_info\n"
+      expr: "(\n  (\n    (\n      tenant:mongodb_opcounters:rate5m\n      > on(tenant)\
+        \ group_left\n      tenant:alert_threshold:mongodb_opcounters_rate\n    )\n\
+        \    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"} ==\
+        \ 1)\n  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
+        )\nor\n(\n  (\n    (\n      tenant:mongodb_opcounters:rate5m\n      > on(tenant)\
+        \ group_left\n      tenant:alert_threshold:mongodb_opcounters_rate\n    )\n\
+        \    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"} ==\
+        \ 1)\n  )\n  unless on(tenant) tenant_metadata_info\n)\n"
       for: 5m
       labels:
         severity: warning
+        tenant: '{{ $labels.tenant }}'
       annotations:
         summary: MongoDB high operation rate on {{ $labels.tenant }}
         summary_zh: '{{ $labels.tenant }} 的 MongoDB 作業率過高'
@@ -107,12 +123,16 @@ spec:
         owner: '{{ $labels.owner }}'
         tier: '{{ $labels.tier }}'
     - alert: MongoDBHighPageFaults
-      expr: "(\n  tenant:mongodb_page_faults:rate5m > 100\n  unless on(tenant)\n \
-        \ (user_state_filter{filter=\"maintenance\"} == 1)\n)\n* on(tenant) group_left(runbook_url,\
-        \ owner, tier)\n  tenant_metadata_info\n"
+      expr: "(\n  (\n    tenant:mongodb_page_faults:rate5m > 100\n    unless on(tenant)\n\
+        \    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n  * on(tenant)\
+        \ group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n)\nor\n\
+        (\n  (\n    tenant:mongodb_page_faults:rate5m > 100\n    unless on(tenant)\n\
+        \    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n  unless on(tenant)\
+        \ tenant_metadata_info\n)\n"
       for: 5m
       labels:
         severity: warning
+        tenant: '{{ $labels.tenant }}'
       annotations:
         summary: MongoDB high page faults on {{ $labels.tenant }}
         summary_zh: '{{ $labels.tenant }} 的 MongoDB Page Fault 過多'
@@ -126,12 +146,16 @@ spec:
         owner: '{{ $labels.owner }}'
         tier: '{{ $labels.tier }}'
     - alert: MongoDBConnectionSaturation
-      expr: "(\n  tenant:mongodb_connection_usage:ratio > 0.8\n  unless on(tenant)\n\
-        \  (user_state_filter{filter=\"maintenance\"} == 1)\n)\n* on(tenant) group_left(runbook_url,\
-        \ owner, tier)\n  tenant_metadata_info\n"
+      expr: "(\n  (\n    tenant:mongodb_connection_usage:ratio > 0.8\n    unless on(tenant)\n\
+        \    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n  * on(tenant)\
+        \ group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n)\nor\n\
+        (\n  (\n    tenant:mongodb_connection_usage:ratio > 0.8\n    unless on(tenant)\n\
+        \    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n  unless on(tenant)\
+        \ tenant_metadata_info\n)\n"
       for: 5m
       labels:
         severity: warning
+        tenant: '{{ $labels.tenant }}'
       annotations:
         summary: MongoDB connection pool near saturation on {{ $labels.tenant }}
         summary_zh: '{{ $labels.tenant }} 的 MongoDB 連線池接近飽和'

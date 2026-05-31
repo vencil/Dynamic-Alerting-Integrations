@@ -54,18 +54,23 @@ spec:
       for: 30s
       labels:
         severity: critical
+        tenant: '{{ $labels.tenant }}'
       annotations:
         summary: Elasticsearch cluster RED on {{ $labels.tenant }}
         summary_zh: '{{ $labels.tenant }} 的 Elasticsearch 叢集狀態為 RED'
         description: Cluster health is RED — data loss or unavailability possible
         description_zh: 叢集健康狀態為 RED — 可能造成資料遺失或無法使用
     - alert: ElasticsearchClusterYellow
-      expr: "(\n  tenant:es_cluster_health:status == 1\n  unless on(tenant)\n  (user_state_filter{filter=\"\
-        maintenance\"} == 1)\n)\n* on(tenant) group_left(runbook_url, owner, tier)\n\
-        \  tenant_metadata_info\n"
+      expr: "(\n  (\n    tenant:es_cluster_health:status == 1\n    unless on(tenant)\n\
+        \    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n  * on(tenant)\
+        \ group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n)\nor\n\
+        (\n  (\n    tenant:es_cluster_health:status == 1\n    unless on(tenant)\n\
+        \    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n  unless on(tenant)\
+        \ tenant_metadata_info\n)\n"
       for: 5m
       labels:
         severity: warning
+        tenant: '{{ $labels.tenant }}'
       annotations:
         summary: Elasticsearch cluster YELLOW on {{ $labels.tenant }}
         summary_zh: '{{ $labels.tenant }} 的 Elasticsearch 叢集狀態為 YELLOW'
@@ -79,13 +84,18 @@ spec:
         owner: '{{ $labels.owner }}'
         tier: '{{ $labels.tier }}'
     - alert: ElasticsearchHighHeapUsage
-      expr: "(\n  (\n    tenant:es_heap_usage_percent:max\n    > on(tenant) group_left\n\
-        \    tenant:alert_threshold:es_heap_usage_percent\n  )\n  unless on(tenant)\n\
-        \  (user_state_filter{filter=\"maintenance\"} == 1)\n)\n* on(tenant) group_left(runbook_url,\
-        \ owner, tier)\n  tenant_metadata_info\n"
+      expr: "(\n  (\n    (\n      tenant:es_heap_usage_percent:max\n      > on(tenant)\
+        \ group_left\n      tenant:alert_threshold:es_heap_usage_percent\n    )\n\
+        \    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"} ==\
+        \ 1)\n  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
+        )\nor\n(\n  (\n    (\n      tenant:es_heap_usage_percent:max\n      > on(tenant)\
+        \ group_left\n      tenant:alert_threshold:es_heap_usage_percent\n    )\n\
+        \    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"} ==\
+        \ 1)\n  )\n  unless on(tenant) tenant_metadata_info\n)\n"
       for: 5m
       labels:
         severity: warning
+        tenant: '{{ $labels.tenant }}'
       annotations:
         summary: Elasticsearch high heap usage on {{ $labels.tenant }}
         summary_zh: '{{ $labels.tenant }} 的 Elasticsearch JVM heap 使用率過高'
@@ -99,13 +109,18 @@ spec:
         owner: '{{ $labels.owner }}'
         tier: '{{ $labels.tier }}'
     - alert: ElasticsearchHighDiskUsage
-      expr: "(\n  (\n    tenant:es_disk_usage_percent:max\n    > on(tenant) group_left\n\
-        \    tenant:alert_threshold:es_disk_usage_percent\n  )\n  unless on(tenant)\n\
-        \  (user_state_filter{filter=\"maintenance\"} == 1)\n)\n* on(tenant) group_left(runbook_url,\
-        \ owner, tier)\n  tenant_metadata_info\n"
+      expr: "(\n  (\n    (\n      tenant:es_disk_usage_percent:max\n      > on(tenant)\
+        \ group_left\n      tenant:alert_threshold:es_disk_usage_percent\n    )\n\
+        \    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"} ==\
+        \ 1)\n  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
+        )\nor\n(\n  (\n    (\n      tenant:es_disk_usage_percent:max\n      > on(tenant)\
+        \ group_left\n      tenant:alert_threshold:es_disk_usage_percent\n    )\n\
+        \    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"} ==\
+        \ 1)\n  )\n  unless on(tenant) tenant_metadata_info\n)\n"
       for: 5m
       labels:
         severity: warning
+        tenant: '{{ $labels.tenant }}'
       annotations:
         summary: Elasticsearch high disk usage on {{ $labels.tenant }}
         summary_zh: '{{ $labels.tenant }} 的 Elasticsearch 磁碟使用率過高'
@@ -119,13 +134,18 @@ spec:
         owner: '{{ $labels.owner }}'
         tier: '{{ $labels.tier }}'
     - alert: ElasticsearchHighSearchLatency
-      expr: "(\n  (\n    tenant:es_search_latency_ms:avg\n    > on(tenant) group_left\n\
-        \    tenant:alert_threshold:es_search_latency_ms\n  )\n  unless on(tenant)\n\
-        \  (user_state_filter{filter=\"maintenance\"} == 1)\n)\n* on(tenant) group_left(runbook_url,\
-        \ owner, tier)\n  tenant_metadata_info\n"
+      expr: "(\n  (\n    (\n      tenant:es_search_latency_ms:avg\n      > on(tenant)\
+        \ group_left\n      tenant:alert_threshold:es_search_latency_ms\n    )\n \
+        \   unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"} == 1)\n\
+        \  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
+        )\nor\n(\n  (\n    (\n      tenant:es_search_latency_ms:avg\n      > on(tenant)\
+        \ group_left\n      tenant:alert_threshold:es_search_latency_ms\n    )\n \
+        \   unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"} == 1)\n\
+        \  )\n  unless on(tenant) tenant_metadata_info\n)\n"
       for: 5m
       labels:
         severity: warning
+        tenant: '{{ $labels.tenant }}'
       annotations:
         summary: Elasticsearch high search latency on {{ $labels.tenant }}
         summary_zh: '{{ $labels.tenant }} 的 Elasticsearch 搜尋延遲過高'
@@ -139,12 +159,16 @@ spec:
         owner: '{{ $labels.owner }}'
         tier: '{{ $labels.tier }}'
     - alert: ElasticsearchUnassignedShards
-      expr: "(\n  tenant:es_unassigned_shards:count > 0\n  unless on(tenant)\n  (user_state_filter{filter=\"\
-        maintenance\"} == 1)\n)\n* on(tenant) group_left(runbook_url, owner, tier)\n\
-        \  tenant_metadata_info\n"
+      expr: "(\n  (\n    tenant:es_unassigned_shards:count > 0\n    unless on(tenant)\n\
+        \    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n  * on(tenant)\
+        \ group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n)\nor\n\
+        (\n  (\n    tenant:es_unassigned_shards:count > 0\n    unless on(tenant)\n\
+        \    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n  unless on(tenant)\
+        \ tenant_metadata_info\n)\n"
       for: 10m
       labels:
         severity: warning
+        tenant: '{{ $labels.tenant }}'
       annotations:
         summary: Elasticsearch has unassigned shards on {{ $labels.tenant }}
         summary_zh: '{{ $labels.tenant }} 的 Elasticsearch 有未分配的分片'
@@ -158,13 +182,18 @@ spec:
         owner: '{{ $labels.owner }}'
         tier: '{{ $labels.tier }}'
     - alert: ElasticsearchPendingTasks
-      expr: "(\n  (\n    tenant:es_pending_tasks:max\n    > on(tenant) group_left\n\
-        \    tenant:alert_threshold:es_pending_tasks\n  )\n  unless on(tenant)\n \
-        \ (user_state_filter{filter=\"maintenance\"} == 1)\n)\n* on(tenant) group_left(runbook_url,\
-        \ owner, tier)\n  tenant_metadata_info\n"
+      expr: "(\n  (\n    (\n      tenant:es_pending_tasks:max\n      > on(tenant)\
+        \ group_left\n      tenant:alert_threshold:es_pending_tasks\n    )\n    unless\
+        \ on(tenant)\n    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n\
+        \  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
+        )\nor\n(\n  (\n    (\n      tenant:es_pending_tasks:max\n      > on(tenant)\
+        \ group_left\n      tenant:alert_threshold:es_pending_tasks\n    )\n    unless\
+        \ on(tenant)\n    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n\
+        \  unless on(tenant) tenant_metadata_info\n)\n"
       for: 5m
       labels:
         severity: warning
+        tenant: '{{ $labels.tenant }}'
       annotations:
         summary: Elasticsearch pending cluster tasks on {{ $labels.tenant }}
         summary_zh: '{{ $labels.tenant }} 的 Elasticsearch 有待處理的叢集工作'

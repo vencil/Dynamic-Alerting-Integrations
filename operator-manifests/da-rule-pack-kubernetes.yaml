@@ -12,21 +12,28 @@ spec:
     interval: 15s
     rules:
     - record: tenant:container_cpu_percent:by_container
-      expr: "label_replace(\n  sum by(namespace, pod, container) (\n    rate(container_cpu_usage_seconds_total{namespace=~\"\
-        db-.+\", container!=\"\", container!=\"POD\"}[5m])\n  )\n  /\n  sum by(namespace,\
-        \ pod, container) (\n    kube_pod_container_resource_limits{resource=\"cpu\"\
-        , namespace=~\"db-.+\"}\n  )\n  * 100,\n  \"tenant\", \"$1\", \"namespace\"\
-        , \"(.*)\"\n)\n"
+      expr: "label_replace(\n  (\n    (\n      sum by(namespace, pod, container) (\n\
+        \        rate(container_cpu_usage_seconds_total{namespace=~\"db-.+\", container!=\"\
+        \", container!=\"POD\"}[5m])\n      )\n      /\n      sum by(namespace, pod,\
+        \ container) (\n        kube_pod_container_resource_limits{resource=\"cpu\"\
+        , namespace=~\"db-.+\"}\n      )\n      * 100\n    )\n    * on(namespace,\
+        \ pod) group_left(version)\n      label_replace(\n        kube_pod_labels{namespace=~\"\
+        db-.+\"},\n        \"version\", \"$1\", \"label_app_kubernetes_io_version\"\
+        , \"(.+)\"\n      )\n  ),\n  \"tenant\", \"$1\", \"namespace\", \"(.*)\"\n\
+        )\n"
     - record: tenant:container_memory_percent:by_container
-      expr: "label_replace(\n  sum by(namespace, pod, container) (\n    container_memory_working_set_bytes{namespace=~\"\
-        db-.+\", container!=\"\", container!=\"POD\"}\n  )\n  /\n  sum by(namespace,\
-        \ pod, container) (\n    kube_pod_container_resource_limits{resource=\"memory\"\
-        , namespace=~\"db-.+\"}\n  )\n  * 100,\n  \"tenant\", \"$1\", \"namespace\"\
-        , \"(.*)\"\n)\n"
+      expr: "label_replace(\n  (\n    (\n      sum by(namespace, pod, container) (\n\
+        \        container_memory_working_set_bytes{namespace=~\"db-.+\", container!=\"\
+        \", container!=\"POD\"}\n      )\n      /\n      sum by(namespace, pod, container)\
+        \ (\n        kube_pod_container_resource_limits{resource=\"memory\", namespace=~\"\
+        db-.+\"}\n      )\n      * 100\n    )\n    * on(namespace, pod) group_left(version)\n\
+        \      label_replace(\n        kube_pod_labels{namespace=~\"db-.+\"},\n  \
+        \      \"version\", \"$1\", \"label_app_kubernetes_io_version\", \"(.+)\"\n\
+        \      )\n  ),\n  \"tenant\", \"$1\", \"namespace\", \"(.*)\"\n)\n"
     - record: tenant:pod_weakest_cpu_percent:max
-      expr: max by(tenant, pod) (tenant:container_cpu_percent:by_container)
+      expr: max by(tenant, pod, version) (tenant:container_cpu_percent:by_container)
     - record: tenant:pod_weakest_memory_percent:max
-      expr: max by(tenant, pod) (tenant:container_memory_percent:by_container)
+      expr: max by(tenant, pod, version) (tenant:container_memory_percent:by_container)
   - name: kubernetes-state-matching
     interval: 15s
     rules:
@@ -36,20 +43,63 @@ spec:
   - name: kubernetes-threshold-normalization
     interval: 15s
     rules:
-    - record: tenant:alert_threshold:container_cpu
-      expr: max by(tenant) (user_threshold{component="container", metric="cpu"})
-    - record: tenant:alert_threshold:container_memory
-      expr: max by(tenant) (user_threshold{component="container", metric="memory"})
+    - record: tenant_version:alert_threshold:container_cpu
+      expr: "label_replace(\n  max by(tenant, version, severity) (\n    user_threshold{component=\"\
+        container\", metric=\"cpu\"}\n  ),\n  \"version\", \"default\", \"version\"\
+        , \"^$\"\n)\n"
+    - record: tenant_version:pod_weakest_cpu_percent:vlabeled
+      expr: "label_replace(\n  max by(tenant, version) (tenant:pod_weakest_cpu_percent:max),\n\
+        \  \"version\", \"default\", \"version\", \"^$\"\n)\n"
+    - record: tenant_version:alert_threshold:container_memory
+      expr: "label_replace(\n  max by(tenant, version, severity) (\n    user_threshold{component=\"\
+        container\", metric=\"memory\"}\n  ),\n  \"version\", \"default\", \"version\"\
+        , \"^$\"\n)\n"
+    - record: tenant_version:pod_weakest_memory_percent:vlabeled
+      expr: "label_replace(\n  max by(tenant, version) (tenant:pod_weakest_memory_percent:max),\n\
+        \  \"version\", \"default\", \"version\", \"^$\"\n)\n"
+    - record: rule_pack_kubernetes:pod_container_high_cpu_warning:core
+      expr: "(\n  (\n    tenant_version:pod_weakest_cpu_percent:vlabeled\n    > on(tenant,\
+        \ version) group_left()\n      tenant_version:alert_threshold:container_cpu{severity=\"\
+        warning\"}\n  )\n  or\n  (\n    (\n      tenant_version:pod_weakest_cpu_percent:vlabeled\n\
+        \      unless on(tenant, version)\n        tenant_version:alert_threshold:container_cpu{severity=\"\
+        warning\"}\n    )\n    > on(tenant) group_left()\n      tenant_version:alert_threshold:container_cpu{version=\"\
+        default\", severity=\"warning\"}\n  )\n)\nunless on(tenant)\n(user_state_filter{filter=\"\
+        maintenance\"} == 1)\n"
+    - record: rule_pack_kubernetes:pod_container_high_cpu_critical:core
+      expr: "(\n  (\n    tenant_version:pod_weakest_cpu_percent:vlabeled\n    > on(tenant,\
+        \ version) group_left()\n      tenant_version:alert_threshold:container_cpu{severity=\"\
+        critical\"}\n  )\n  or\n  (\n    (\n      tenant_version:pod_weakest_cpu_percent:vlabeled\n\
+        \      unless on(tenant, version)\n        tenant_version:alert_threshold:container_cpu{severity=\"\
+        critical\"}\n    )\n    > on(tenant) group_left()\n      tenant_version:alert_threshold:container_cpu{version=\"\
+        default\", severity=\"critical\"}\n  )\n)\nunless on(tenant)\n(user_state_filter{filter=\"\
+        maintenance\"} == 1)\n"
+    - record: rule_pack_kubernetes:pod_container_high_memory_warning:core
+      expr: "(\n  (\n    tenant_version:pod_weakest_memory_percent:vlabeled\n    >\
+        \ on(tenant, version) group_left()\n      tenant_version:alert_threshold:container_memory{severity=\"\
+        warning\"}\n  )\n  or\n  (\n    (\n      tenant_version:pod_weakest_memory_percent:vlabeled\n\
+        \      unless on(tenant, version)\n        tenant_version:alert_threshold:container_memory{severity=\"\
+        warning\"}\n    )\n    > on(tenant) group_left()\n      tenant_version:alert_threshold:container_memory{version=\"\
+        default\", severity=\"warning\"}\n  )\n)\nunless on(tenant)\n(user_state_filter{filter=\"\
+        maintenance\"} == 1)\n"
+    - record: rule_pack_kubernetes:pod_container_high_memory_critical:core
+      expr: "(\n  (\n    tenant_version:pod_weakest_memory_percent:vlabeled\n    >\
+        \ on(tenant, version) group_left()\n      tenant_version:alert_threshold:container_memory{severity=\"\
+        critical\"}\n  )\n  or\n  (\n    (\n      tenant_version:pod_weakest_memory_percent:vlabeled\n\
+        \      unless on(tenant, version)\n        tenant_version:alert_threshold:container_memory{severity=\"\
+        critical\"}\n    )\n    > on(tenant) group_left()\n      tenant_version:alert_threshold:container_memory{version=\"\
+        default\", severity=\"critical\"}\n  )\n)\nunless on(tenant)\n(user_state_filter{filter=\"\
+        maintenance\"} == 1)\n"
   - name: kubernetes-container-alerts
     rules:
     - alert: PodContainerHighCPU
-      expr: "(\n  (\n    max by(tenant) (tenant:pod_weakest_cpu_percent:max)\n   \
-        \ > on(tenant) group_left\n    tenant:alert_threshold:container_cpu\n  )\n\
-        \  unless on(tenant)\n  (user_state_filter{filter=\"maintenance\"} == 1)\n\
-        )\n* on(tenant) group_left(runbook_url, owner, tier)\n  tenant_metadata_info\n"
+      expr: "(\n  rule_pack_kubernetes:pod_container_high_cpu_warning:core\n  * on(tenant)\
+        \ group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n)\nor\n\
+        (\n  rule_pack_kubernetes:pod_container_high_cpu_warning:core\n  unless on(tenant)\
+        \ tenant_metadata_info\n)\n"
       for: 60s
       labels:
         severity: warning
+        tenant: '{{ $labels.tenant }}'
       annotations:
         summary: High container CPU in {{ $labels.tenant }}
         summary_zh: '{{ $labels.tenant }} 的容器 CPU 使用率過高'
@@ -63,14 +113,37 @@ spec:
         runbook_url: '{{ $labels.runbook_url }}'
         owner: '{{ $labels.owner }}'
         tier: '{{ $labels.tier }}'
+    - alert: PodContainerHighCPUCritical
+      expr: "(\n  rule_pack_kubernetes:pod_container_high_cpu_critical:core\n  * on(tenant)\
+        \ group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n)\nor\n\
+        (\n  rule_pack_kubernetes:pod_container_high_cpu_critical:core\n  unless on(tenant)\
+        \ tenant_metadata_info\n)\n"
+      for: 60s
+      labels:
+        severity: critical
+        tenant: '{{ $labels.tenant }}'
+      annotations:
+        summary: CRITICAL container CPU in {{ $labels.tenant }}
+        summary_zh: '{{ $labels.tenant }} 的容器 CPU 使用率達臨界'
+        platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant }}: container CPU
+          CRITICAL — evaluate resource limits'
+        platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant }}: 容器 CPU 達臨界
+          — 請評估資源限制'
+        description: 'Max container CPU usage: {{ $value | printf "%.1f" }}% (critical
+          threshold exceeded)'
+        description_zh: '最大容器 CPU 使用率: {{ $value | printf "%.1f" }}% (超過臨界閾值)'
+        runbook_url: '{{ $labels.runbook_url }}'
+        owner: '{{ $labels.owner }}'
+        tier: '{{ $labels.tier }}'
     - alert: PodContainerHighMemory
-      expr: "(\n  (\n    max by(tenant) (tenant:pod_weakest_memory_percent:max)\n\
-        \    > on(tenant) group_left\n    tenant:alert_threshold:container_memory\n\
-        \  )\n  unless on(tenant)\n  (user_state_filter{filter=\"maintenance\"} ==\
-        \ 1)\n)\n* on(tenant) group_left(runbook_url, owner, tier)\n  tenant_metadata_info\n"
+      expr: "(\n  rule_pack_kubernetes:pod_container_high_memory_warning:core\n  *\
+        \ on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
+        )\nor\n(\n  rule_pack_kubernetes:pod_container_high_memory_warning:core\n\
+        \  unless on(tenant) tenant_metadata_info\n)\n"
       for: 60s
       labels:
         severity: warning
+        tenant: '{{ $labels.tenant }}'
       annotations:
         summary: High container memory in {{ $labels.tenant }}
         summary_zh: '{{ $labels.tenant }} 的容器記憶體使用率過高'
@@ -84,17 +157,43 @@ spec:
         runbook_url: '{{ $labels.runbook_url }}'
         owner: '{{ $labels.owner }}'
         tier: '{{ $labels.tier }}'
+    - alert: PodContainerHighMemoryCritical
+      expr: "(\n  rule_pack_kubernetes:pod_container_high_memory_critical:core\n \
+        \ * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
+        )\nor\n(\n  rule_pack_kubernetes:pod_container_high_memory_critical:core\n\
+        \  unless on(tenant) tenant_metadata_info\n)\n"
+      for: 60s
+      labels:
+        severity: critical
+        tenant: '{{ $labels.tenant }}'
+      annotations:
+        summary: CRITICAL container memory in {{ $labels.tenant }}
+        summary_zh: '{{ $labels.tenant }} 的容器記憶體使用率達臨界'
+        platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant }}: container memory
+          CRITICAL — evaluate resource limits'
+        platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant }}: 容器記憶體達臨界
+          — 請評估資源限制'
+        description: 'Max container memory usage: {{ $value | printf "%.1f" }}% (critical
+          threshold exceeded)'
+        description_zh: '最大容器記憶體使用率: {{ $value | printf "%.1f" }}% (超過臨界閾值)'
+        runbook_url: '{{ $labels.runbook_url }}'
+        owner: '{{ $labels.owner }}'
+        tier: '{{ $labels.tier }}'
   - name: kubernetes-pod-state-alerts
     rules:
     - alert: ContainerCrashLoop
-      expr: "(\n  (\n    (\n      tenant:container_waiting_reason:count{reason=\"\
-        CrashLoopBackOff\"}\n      * on(tenant) group_left\n      user_state_filter{filter=\"\
-        container_crashloop\"}\n    ) > 0\n  )\n  unless on(tenant)\n  (user_state_filter{filter=\"\
-        maintenance\"} == 1)\n)\n* on(tenant) group_left(runbook_url, owner, tier)\n\
-        \  tenant_metadata_info\n"
+      expr: "(\n  (\n    (\n      (\n        tenant:container_waiting_reason:count{reason=\"\
+        CrashLoopBackOff\"}\n        * on(tenant) group_left\n        user_state_filter{filter=\"\
+        container_crashloop\"}\n      ) > 0\n    )\n    unless on(tenant)\n    (user_state_filter{filter=\"\
+        maintenance\"} == 1)\n  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n\
+        \    tenant_metadata_info\n)\nor\n(\n  (\n    (\n      (\n        tenant:container_waiting_reason:count{reason=\"\
+        CrashLoopBackOff\"}\n        * on(tenant) group_left\n        user_state_filter{filter=\"\
+        container_crashloop\"}\n      ) > 0\n    )\n    unless on(tenant)\n    (user_state_filter{filter=\"\
+        maintenance\"} == 1)\n  )\n  unless on(tenant) tenant_metadata_info\n)\n"
       for: 30s
       labels:
         severity: critical
+        tenant: '{{ $labels.tenant }}'
       annotations:
         summary: Container crash loop detected in {{ $labels.tenant }}
         summary_zh: '{{ $labels.tenant }} 偵測到容器崩潰迴圈'
@@ -108,14 +207,20 @@ spec:
         owner: '{{ $labels.owner }}'
         tier: '{{ $labels.tier }}'
     - alert: ContainerImagePullFailure
-      expr: "(\n  (\n    (\n      tenant:container_waiting_reason:count{reason=~\"\
-        ImagePullBackOff|InvalidImageName\"}\n      * on(tenant) group_left\n    \
-        \  user_state_filter{filter=\"container_imagepull\"}\n    ) > 0\n  )\n  unless\
-        \ on(tenant)\n  (user_state_filter{filter=\"maintenance\"} == 1)\n)\n* on(tenant)\
-        \ group_left(runbook_url, owner, tier)\n  tenant_metadata_info\n"
+      expr: "(\n  (\n    (\n      (\n        tenant:container_waiting_reason:count{reason=~\"\
+        ImagePullBackOff|InvalidImageName\"}\n        * on(tenant) group_left\n  \
+        \      user_state_filter{filter=\"container_imagepull\"}\n      ) > 0\n  \
+        \  )\n    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"\
+        } == 1)\n  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
+        )\nor\n(\n  (\n    (\n      (\n        tenant:container_waiting_reason:count{reason=~\"\
+        ImagePullBackOff|InvalidImageName\"}\n        * on(tenant) group_left\n  \
+        \      user_state_filter{filter=\"container_imagepull\"}\n      ) > 0\n  \
+        \  )\n    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"\
+        } == 1)\n  )\n  unless on(tenant) tenant_metadata_info\n)\n"
       for: 30s
       labels:
         severity: warning
+        tenant: '{{ $labels.tenant }}'
       annotations:
         summary: Image pull failure detected in {{ $labels.tenant }}
         summary_zh: '{{ $labels.tenant }} 偵測到映像檔案拉取失敗'
@@ -129,3 +234,31 @@ spec:
         runbook_url: '{{ $labels.runbook_url }}'
         owner: '{{ $labels.owner }}'
         tier: '{{ $labels.tier }}'
+  - name: kubernetes-version-aware-sentinel
+    rules:
+    - alert: VersionAwareThresholdInert
+      expr: '(count(max by(tenant, version, severity) (user_threshold{component="container",
+        metric="cpu", version=~".+"})) or vector(0)) > 0
+
+        and
+
+        (count(kube_pod_info{namespace=~"db-.+"}) or vector(0)) > 0
+
+        and
+
+        (count(kube_pod_labels{namespace=~"db-.+"}) or vector(0)) == 0
+
+        '
+      for: 10m
+      labels:
+        severity: warning
+        tenant: '{{ $labels.tenant }}'
+      annotations:
+        summary: Version-aware thresholds declared but kube-state-metrics exposes
+          no pod labels — feature inert
+        summary_zh: 已宣告版本專屬閾值，但 kube-state-metrics 未暴露 pod 標籤 — 功能靜默失效
+        description: '{{ $value | printf "%.0f" }} version-specific container CPU
+          threshold(s) declared and tenant pods are running, but kube-state-metrics
+          emits no pod labels at all. Set KSM --metric-labels-allowlist=pods=[app.kubernetes.io/version].'
+        description_zh: 已宣告 {{ $value | printf "%.0f" }} 個版本專屬容器 CPU 閾值且租戶 Pod 正在運行，但
+          kube-state-metrics 完全未暴露 pod 標籤。請為 KSM 設定 --metric-labels-allowlist=pods=[app.kubernetes.io/version]。

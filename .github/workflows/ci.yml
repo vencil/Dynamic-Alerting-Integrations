@@ -184,11 +184,17 @@ jobs:
       - name: "Rule-pack configmap drift (HARD gate — ADR-024 Commit 4)"
         run: python scripts/tools/dx/generate_rulepack_configmaps.py --check
 
-      # The 3rd copy (operator-manifests/) stays AUDIT-ONLY: those CRD reference
-      # samples are owned by the operator epic (#692) and not yet regenerated to
-      # the left-outer-join source. Flip to hard when the operator epic syncs them.
-      - name: "Rule-pack 3-copy sync incl. operator (audit-only — operator epic #692)"
-        continue-on-error: true
+      # ADR-024 PR3-pre: the 3rd copy (operator-manifests/ PrometheusRule CRDs)
+      # is now a HARD gate too — PR3-pre is fully hard-gated. The operator
+      # manifests were regenerated from the left-outer-join source (#709) and
+      # the ~2-month drift synced, so all three copies (rule-packs/ ↔ configmap
+      # ↔ operator) match semantically. They were previously audit-only because
+      # they lagged the source; that excuse is gone. Edit a rule pack → run
+      # `python scripts/tools/ops/operator_generate.py --components rules
+      # --output-dir operator-manifests/` (CRDs) + `make rulepack-configmaps`
+      # (configmaps) → commit all three. The pre-commit `rulepack-3copy-drift`
+      # hook catches this locally before push.
+      - name: "Rule-pack 3-copy sync incl. operator (HARD gate — ADR-024 PR3-pre)"
         run: python scripts/tools/lint/check_rulepack_sync.py --ci
 
   iac-helm-sast:
