@@ -7,9 +7,6 @@ docs/tags.md
 docs/includes/
 docs/assets/
 
-# SSOT evaluation (referenced from roadmap inline, not via markdown link)
-docs/internal/ssot-language-evaluation.md
-
 # MkDocs copies of root README (mkdocs.yml nav references)
 docs/README-root.md
 docs/README-root.en.md
