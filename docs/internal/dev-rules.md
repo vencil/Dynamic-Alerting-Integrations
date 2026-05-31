@@ -139,7 +139,7 @@ lang: zh
 - `migrate_ssot_language.py` — 單向 ZH→EN 遷移腳本，保留作 future-option（trigger 觸發後可用）
 - `check_bilingual_structure.py` / `check_bilingual_content.py` — 雙模式 lint，自動偵測檔案命名；保留以支援未來若選擇遷移
 
-**Trigger conditions for re-evaluation**（觸發後 re-open `ssot-language-evaluation.md`）：
+**Trigger conditions for re-evaluation**（觸發後 reopen closed issue [#145](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/145#issuecomment-4587136920)，內有完整評估報告全文）：
 
 1. 收到 ≥3 個非中文母語 contributor PR/issue
 2. 客戶 RFP 顯式要求英文 SSOT
@@ -147,7 +147,7 @@ lang: zh
 
 未觸發前：新文件沿用「中主英副」；不討論未出現的英文主體客戶。
 
-**評估文件**（status: superseded by S#101）：[`ssot-language-evaluation.md`](ssot-language-evaluation.md) + [`ssot-migration-pilot-report.md`](ssot-migration-pilot-report.md)
+**評估文件**（status: superseded by S#101）：`ssot-language-evaluation.md` + `ssot-migration-pilot-report.md` 全文已歸檔於 closed issue [#145](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/145#issuecomment-4587136920)（依「決策報告住 issue」原則移出 repo）
 
 ### 10. 雙語政策：internal docs 不需英文版
 
