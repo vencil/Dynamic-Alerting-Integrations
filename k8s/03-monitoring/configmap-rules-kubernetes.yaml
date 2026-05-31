@@ -132,13 +132,14 @@ data:
     \ '{{ $labels.tier }}'\n- name: kubernetes-version-aware-sentinel\n  rules:\n\
     \  - alert: VersionAwareThresholdInert\n    expr: '(count(max by(tenant, version,\
     \ severity) (user_threshold{component=\"container\", metric=\"cpu\", version=~\"\
-    .+\"})) or vector(0)) > 0\n\n      and\n\n      (count(kube_pod_labels{label_app_kubernetes_io_version=~\"\
-    .+\"}) or vector(0)) == 0\n\n      '\n    for: 10m\n    labels:\n      severity:\
+    .+\"})) or vector(0)) > 0\n\n      and\n\n      (count(kube_pod_info{namespace=~\"\
+    db-.+\"}) or vector(0)) > 0\n\n      and\n\n      (count(kube_pod_labels{namespace=~\"\
+    db-.+\"}) or vector(0)) == 0\n\n      '\n    for: 10m\n    labels:\n      severity:\
     \ warning\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n      summary:\
-    \ Version-aware thresholds declared but kube-state-metrics exposes no version\
-    \ labels — feature inert\n      summary_zh: 已宣告版本專屬閾值，但 kube-state-metrics 未暴露版本標籤\
+    \ Version-aware thresholds declared but kube-state-metrics exposes no pod labels\
+    \ — feature inert\n      summary_zh: 已宣告版本專屬閾值，但 kube-state-metrics 未暴露 pod 標籤\
     \ — 功能靜默失效\n      description: '{{ $value | printf \"%.0f\" }} version-specific\
-    \ container CPU threshold(s) declared, but kube_pod_labels carries no app.kubernetes.io/version.\
-    \ Set KSM --metric-labels-allowlist=pods=[app.kubernetes.io/version].'\n     \
-    \ description_zh: 已宣告 {{ $value | printf \"%.0f\" }} 個版本專屬容器 CPU 閾值，但 kube_pod_labels\
-    \ 不含 app.kubernetes.io/version。請為 KSM 設定 --metric-labels-allowlist=pods=[app.kubernetes.io/version]。\n"
+    \ container CPU threshold(s) declared and tenant pods are running, but kube-state-metrics\
+    \ emits no pod labels at all. Set KSM --metric-labels-allowlist=pods=[app.kubernetes.io/version].'\n\
+    \      description_zh: 已宣告 {{ $value | printf \"%.0f\" }} 個版本專屬容器 CPU 閾值且租戶 Pod\
+    \ 正在運行，但 kube-state-metrics 完全未暴露 pod 標籤。請為 KSM 設定 --metric-labels-allowlist=pods=[app.kubernetes.io/version]。\n"

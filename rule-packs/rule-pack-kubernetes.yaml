@@ -360,18 +360,35 @@ groups:
 
   # ADR-024 silent-failure sentinel — platform-scoped (no tenant label): a KSM
   # misconfiguration is a platform-team concern, not a tenant's. Detects at runtime
-  # the exact inert state proven reachable on a real kind cluster (test/rulepack-e2e/):
-  # an operator declared version-specific thresholds (user_threshold carries a
-  # non-empty `version`) BUT kube-state-metrics exposes ZERO version labels, so the
-  # (0a) join matches nothing and every version threshold silently degrades to
-  # default. `or vector(0)` makes both legs scalar-safe so the `and` matches on {}.
+  # the inert state proven reachable on a real kind cluster (test/rulepack-e2e/):
+  # version-specific thresholds declared BUT kube-state-metrics is not configured to
+  # expose pod labels, so the (0a) join matches nothing and every version threshold
+  # silently degrades to default.
+  #
+  # Three legs (all `or vector(0)` → scalar-safe so `and` matches on {}):
+  #   1. version-specific thresholds ARE declared (someone wants version-aware), AND
+  #   2. tenant pods ARE running (kube_pod_info > 0) — guards the scale-to-zero false
+  #      positive: if everything is scaled to 0 there is legitimately nothing to label,
+  #      AND
+  #   3. KSM emits ZERO `kube_pod_labels` series cluster-wide for tenant namespaces.
+  #
+  # Why leg 3 counts ALL pod labels (not just version labels): empirically verified on
+  # kind — with the allowlist ON, KSM emits a BASE `kube_pod_labels{ns,pod,uid}` series
+  # even for pods WITHOUT a version label; with the allowlist OFF it emits NO series at
+  # all. So "zero pod-label series while pods run" cleanly isolates "allowlist off" from
+  # "allowlist on but no version-labelled pods currently running" (the Gemini scale-to-
+  # zero edge — which leg 3 now does NOT false-fire on). KNOWN LIMITATION: an allowlist
+  # set WITHOUT app.kubernetes.io/version (a different label only) won't fire this — that
+  # rarer partial-misconfig is accepted; the dominant "no allowlist at all" is covered.
   - name: kubernetes-version-aware-sentinel
     rules:
       - alert: VersionAwareThresholdInert
         expr: |
           (count(max by(tenant, version, severity) (user_threshold{component="container", metric="cpu", version=~".+"})) or vector(0)) > 0
           and
-          (count(kube_pod_labels{label_app_kubernetes_io_version=~".+"}) or vector(0)) == 0
+          (count(kube_pod_info{namespace=~"db-.+"}) or vector(0)) > 0
+          and
+          (count(kube_pod_labels{namespace=~"db-.+"}) or vector(0)) == 0
         for: 10m
         labels:
           severity: warning
@@ -380,7 +397,7 @@ groups:
           # Present to satisfy custom-rule-policy required_labels (tenant).
           tenant: "{{ $labels.tenant }}"
         annotations:
-          summary: "Version-aware thresholds declared but kube-state-metrics exposes no version labels — feature inert"
-          summary_zh: "已宣告版本專屬閾值，但 kube-state-metrics 未暴露版本標籤 — 功能靜默失效"
-          description: "{{ $value | printf \"%.0f\" }} version-specific container CPU threshold(s) declared, but kube_pod_labels carries no app.kubernetes.io/version. Set KSM --metric-labels-allowlist=pods=[app.kubernetes.io/version]."
-          description_zh: "已宣告 {{ $value | printf \"%.0f\" }} 個版本專屬容器 CPU 閾值，但 kube_pod_labels 不含 app.kubernetes.io/version。請為 KSM 設定 --metric-labels-allowlist=pods=[app.kubernetes.io/version]。"
+          summary: "Version-aware thresholds declared but kube-state-metrics exposes no pod labels — feature inert"
+          summary_zh: "已宣告版本專屬閾值，但 kube-state-metrics 未暴露 pod 標籤 — 功能靜默失效"
+          description: "{{ $value | printf \"%.0f\" }} version-specific container CPU threshold(s) declared and tenant pods are running, but kube-state-metrics emits no pod labels at all. Set KSM --metric-labels-allowlist=pods=[app.kubernetes.io/version]."
+          description_zh: "已宣告 {{ $value | printf \"%.0f\" }} 個版本專屬容器 CPU 閾值且租戶 Pod 正在運行，但 kube-state-metrics 完全未暴露 pod 標籤。請為 KSM 設定 --metric-labels-allowlist=pods=[app.kubernetes.io/version]。"

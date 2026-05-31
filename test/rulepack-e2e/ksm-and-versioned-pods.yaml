@@ -99,3 +99,20 @@ spec:
   containers:
     - name: app
       image: registry.k8s.io/pause:3.9
+---
+# A version-LESS pod: proves that an allowlist-ON KSM still emits a BASE
+# kube_pod_labels series (no version key) for it — the empirical basis for the
+# VersionAwareThresholdInert sentinel's scale-to-zero discriminator (leg 3 counts
+# ALL pod labels, so "zero pod-label series" cleanly means "allowlist off", not
+# "no version-labelled pods running").
+apiVersion: v1
+kind: Pod
+metadata:
+  name: app-noversion
+  namespace: db-a
+  labels:
+    app.kubernetes.io/name: app
+spec:
+  containers:
+    - name: app
+      image: registry.k8s.io/pause:3.9

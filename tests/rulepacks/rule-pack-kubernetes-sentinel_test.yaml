@@ -2,25 +2,32 @@
 # Run: promtool test rules tests/rulepacks/rule-pack-kubernetes-sentinel_test.yaml
 #
 # Proves the silent-failure detector the kind e2e (test/rulepack-e2e/) showed is
-# reachable: version-specific thresholds declared but KSM exposes no version labels.
-#   A) INERT  → fires: version threshold present, kube_pod_labels has no version.
-#   B) HEALTHY→ silent: version threshold present AND KSM exposes version labels.
-#   C) DEFAULT→ silent: no version-specific thresholds at all (must not false-alarm
-#               on the common all-default deployment, even with no version labels).
+# reachable, AND that the hardened 3-leg logic does NOT false-fire on scale-to-zero
+# (the Gemini edge). Legs: (1) version threshold declared, (2) tenant pods running,
+# (3) KSM emits ZERO pod labels cluster-wide.
+#   A) INERT       → fires: version threshold + pods running + KSM emits no pod labels.
+#   B) HEALTHY     → silent: version threshold + KSM emits version-labelled pod labels.
+#   C) DEFAULT     → silent: no version-specific thresholds at all (leg 1 false).
+#   D) SCALE-TO-0  → silent: version threshold + pods running + KSM emits BASE pod labels
+#                    (a version-LESS pod) — empirically, allowlist-ON KSM still emits a
+#                    base kube_pod_labels series, so leg 3 is >0 → NO false page. This is
+#                    the Gemini scale-to-zero edge, proven eliminated.
+#   E) NO-PODS     → silent: version threshold but nothing running (leg 2 false) — KSM is
+#                    fine, there is just nothing to label.
 rule_files:
   - ../../rule-packs/rule-pack-kubernetes.yaml
 
 evaluation_interval: 15s
 
 tests:
-  # ── A) INERT: version threshold declared, KSM exposes NO version labels → FIRE ──
+  # ── A) INERT: version threshold + pods running + KSM emits NO pod labels → FIRE ──
   - interval: 15s
     input_series:
       - series: 'user_threshold{tenant="db-a", component="container", metric="cpu", severity="warning", version="v1"}'
         values: '80x48'
-      # kube_pod_labels present but WITHOUT app.kubernetes.io/version (default KSM).
-      - series: 'kube_pod_labels{namespace="db-a", pod="app-1"}'
+      - series: 'kube_pod_info{namespace="db-a", pod="app-1"}'
         values: '1x48'
+      # NO kube_pod_labels series at all (default KSM, allowlist off).
     alert_rule_test:
       - eval_time: 11m
         alertname: VersionAwareThresholdInert
@@ -28,16 +35,18 @@ tests:
           - exp_labels:
               severity: warning
             exp_annotations:
-              summary: "Version-aware thresholds declared but kube-state-metrics exposes no version labels — feature inert"
-              summary_zh: "已宣告版本專屬閾值，但 kube-state-metrics 未暴露版本標籤 — 功能靜默失效"
-              description: "1 version-specific container CPU threshold(s) declared, but kube_pod_labels carries no app.kubernetes.io/version. Set KSM --metric-labels-allowlist=pods=[app.kubernetes.io/version]."
-              description_zh: "已宣告 1 個版本專屬容器 CPU 閾值，但 kube_pod_labels 不含 app.kubernetes.io/version。請為 KSM 設定 --metric-labels-allowlist=pods=[app.kubernetes.io/version]。"
+              summary: "Version-aware thresholds declared but kube-state-metrics exposes no pod labels — feature inert"
+              summary_zh: "已宣告版本專屬閾值，但 kube-state-metrics 未暴露 pod 標籤 — 功能靜默失效"
+              description: "1 version-specific container CPU threshold(s) declared and tenant pods are running, but kube-state-metrics emits no pod labels at all. Set KSM --metric-labels-allowlist=pods=[app.kubernetes.io/version]."
+              description_zh: "已宣告 1 個版本專屬容器 CPU 閾值且租戶 Pod 正在運行，但 kube-state-metrics 完全未暴露 pod 標籤。請為 KSM 設定 --metric-labels-allowlist=pods=[app.kubernetes.io/version]。"
 
-  # ── B) HEALTHY: version threshold + KSM exposes version labels → SILENT ──
+  # ── B) HEALTHY: version threshold + KSM emits version-labelled pod labels → SILENT ──
   - interval: 15s
     input_series:
       - series: 'user_threshold{tenant="db-a", component="container", metric="cpu", severity="warning", version="v1"}'
         values: '80x48'
+      - series: 'kube_pod_info{namespace="db-a", pod="app-v1-x"}'
+        values: '1x48'
       - series: 'kube_pod_labels{namespace="db-a", pod="app-v1-x", label_app_kubernetes_io_version="v1"}'
         values: '1x48'
     alert_rule_test:
@@ -50,8 +59,36 @@ tests:
     input_series:
       - series: 'user_threshold{tenant="db-a", component="container", metric="cpu", severity="warning"}'
         values: '80x48'
-      - series: 'kube_pod_labels{namespace="db-a", pod="app-1"}'
+      - series: 'kube_pod_info{namespace="db-a", pod="app-1"}'
         values: '1x48'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: VersionAwareThresholdInert
+        exp_alerts: []
+
+  # ── D) SCALE-TO-ZERO: version pods gone, allowlist-ON KSM still emits BASE pod labels
+  #      for a version-less pod → leg 3 >0 → SILENT (Gemini false positive eliminated) ──
+  - interval: 15s
+    input_series:
+      - series: 'user_threshold{tenant="db-a", component="container", metric="cpu", severity="warning", version="v1"}'
+        values: '80x48'
+      - series: 'kube_pod_info{namespace="db-a", pod="app-noversion"}'
+        values: '1x48'
+      # Base kube_pod_labels series WITHOUT a version label (allowlist on, this pod has
+      # no app.kubernetes.io/version) — exactly what real KSM emits (verified on kind).
+      - series: 'kube_pod_labels{namespace="db-a", pod="app-noversion"}'
+        values: '1x48'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: VersionAwareThresholdInert
+        exp_alerts: []
+
+  # ── E) NO-PODS: version threshold but no pods running → SILENT (leg 2 guard) ──
+  - interval: 15s
+    input_series:
+      - series: 'user_threshold{tenant="db-a", component="container", metric="cpu", severity="warning", version="v1"}'
+        values: '80x48'
+      # No kube_pod_info and no kube_pod_labels — nothing is running.
     alert_rule_test:
       - eval_time: 11m
         alertname: VersionAwareThresholdInert

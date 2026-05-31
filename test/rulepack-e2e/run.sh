@@ -26,7 +26,7 @@ kind create cluster --name "$CLUSTER" --wait 90s >/dev/null
 echo "== deploy KSM (default, NO allowlist) + versioned pods =="
 kubectl apply -f "$HERE/ksm-and-versioned-pods.yaml" >/dev/null
 kubectl -n kube-system rollout status deploy/kube-state-metrics --timeout=120s >/dev/null
-kubectl -n db-a wait --for=condition=Ready pod/app-v1-x pod/app-v2-y --timeout=90s >/dev/null
+kubectl -n db-a wait --for=condition=Ready pod/app-v1-x pod/app-v2-y pod/app-noversion --timeout=90s >/dev/null
 
 scrape() {
   kubectl -n kube-system port-forward svc/kube-state-metrics "${PF_PORT}:8080" >/tmp/ksm-pf.log 2>&1 &
@@ -53,4 +53,13 @@ echo "$got" | grep -q 'v1' && echo "$got" | grep -q 'v2' \
   || { echo "FAIL: expected v1 AND v2 version labels"; exit 1; }
 echo "  ✓ allowlisted KSM: (0a) relabel source present with exact key name"
 
-echo "== PASS: (0a) version-injection prerequisite validated end-to-end =="
+echo "== ASSERT 3: allowlist-ON KSM emits a BASE kube_pod_labels series for the =="
+echo "==           version-LESS pod (sentinel scale-to-zero discriminator basis)  =="
+if scrape | grep -qE '^kube_pod_labels\{namespace="db-a",pod="app-noversion"'; then
+  echo "  ✓ version-less pod has a base kube_pod_labels series → 'zero pod-label"
+  echo "    series' uniquely means 'allowlist off', not 'no version pods running'"
+else
+  echo "FAIL: expected a base kube_pod_labels series for app-noversion"; exit 1
+fi
+
+echo "== PASS: (0a) prerequisite + sentinel discriminator validated end-to-end =="
