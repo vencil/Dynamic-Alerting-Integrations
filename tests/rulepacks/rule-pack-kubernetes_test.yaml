@@ -1,0 +1,90 @@
+# promtool unit test — ADR-024 PR3-pre-3 metadata left-outer-join.
+# Run: promtool test rules tests/rulepacks/rule-pack-kubernetes_test.yaml
+#
+# Proves the onboarding-vacuum fix: a tenant with metrics but NO
+# tenant_metadata_info still fires (branch B / bare), while a configured
+# tenant fires enriched (branch A). Inputs are LEAF series (cAdvisor counter +
+# limits + user_threshold + metadata + state_filter) so the full recording-rule
+# chain (percent → weakest → core → alert) is exercised end-to-end. Realistic
+# K8s topology: namespace = tenant via label_replace (#651 lesson).
+rule_files:
+  - ../../rule-packs/rule-pack-kubernetes.yaml
+
+evaluation_interval: 15s
+
+tests:
+  - interval: 15s
+    input_series:
+      # db-a: 90% CPU (rate 0.9 / limit 1), metadata present, no maintenance.
+      - series: 'container_cpu_usage_seconds_total{namespace="db-a", pod="app-1", container="app"}'
+        values: '0+13.5x48'
+      - series: 'kube_pod_container_resource_limits{resource="cpu", namespace="db-a", pod="app-1", container="app"}'
+        values: '1x48'
+      - series: 'user_threshold{tenant="db-a", component="container", metric="cpu", severity="warning"}'
+        values: '80x48'
+      - series: 'tenant_metadata_info{tenant="db-a", runbook_url="http://rb/a", owner="team-a", tier="gold"}'
+        values: '1x48'
+      # db-b: 90% CPU, NO tenant_metadata_info (onboarding vacuum).
+      - series: 'container_cpu_usage_seconds_total{namespace="db-b", pod="app-1", container="app"}'
+        values: '0+13.5x48'
+      - series: 'kube_pod_container_resource_limits{resource="cpu", namespace="db-b", pod="app-1", container="app"}'
+        values: '1x48'
+      - series: 'user_threshold{tenant="db-b", component="container", metric="cpu", severity="warning"}'
+        values: '80x48'
+      # db-c: 50% CPU (below threshold), metadata present → no fire.
+      - series: 'container_cpu_usage_seconds_total{namespace="db-c", pod="app-1", container="app"}'
+        values: '0+7.5x48'
+      - series: 'kube_pod_container_resource_limits{resource="cpu", namespace="db-c", pod="app-1", container="app"}'
+        values: '1x48'
+      - series: 'user_threshold{tenant="db-c", component="container", metric="cpu", severity="warning"}'
+        values: '80x48'
+      - series: 'tenant_metadata_info{tenant="db-c", runbook_url="http://rb/c", owner="team-c", tier="silver"}'
+        values: '1x48'
+      # db-d: 90% CPU, metadata present, BUT maintenance active → no fire.
+      - series: 'container_cpu_usage_seconds_total{namespace="db-d", pod="app-1", container="app"}'
+        values: '0+13.5x48'
+      - series: 'kube_pod_container_resource_limits{resource="cpu", namespace="db-d", pod="app-1", container="app"}'
+        values: '1x48'
+      - series: 'user_threshold{tenant="db-d", component="container", metric="cpu", severity="warning"}'
+        values: '80x48'
+      - series: 'tenant_metadata_info{tenant="db-d", runbook_url="http://rb/d", owner="team-d", tier="bronze"}'
+        values: '1x48'
+      - series: 'user_state_filter{tenant="db-d", filter="maintenance"}'
+        values: '1x48'
+
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: PodContainerHighCPU
+        exp_alerts:
+          # db-a: enriched (branch A) — carries runbook_url/owner/tier.
+          - exp_labels:
+              severity: warning
+              tenant: db-a
+              runbook_url: "http://rb/a"
+              owner: team-a
+              tier: gold
+            exp_annotations:
+              summary: "High container CPU in db-a"
+              summary_zh: "db-a 的容器 CPU 使用率過高"
+              platform_summary: "[gold] db-a: container CPU pressure — evaluate resource limits"
+              platform_summary_zh: "[gold] db-a: 容器 CPU 壓力過高 — 請評估資源限制"
+              description: "Max container CPU usage: 90.0% (threshold exceeded)"
+              description_zh: "最大容器 CPU 使用率: 90.0% (超過閾值)"
+              runbook_url: "http://rb/a"
+              owner: team-a
+              tier: gold
+          # db-b: VACUUM-FIRE (branch B) — fires WITHOUT enrichment labels.
+          - exp_labels:
+              severity: warning
+              tenant: db-b
+            exp_annotations:
+              summary: "High container CPU in db-b"
+              summary_zh: "db-b 的容器 CPU 使用率過高"
+              platform_summary: "[] db-b: container CPU pressure — evaluate resource limits"
+              platform_summary_zh: "[] db-b: 容器 CPU 壓力過高 — 請評估資源限制"
+              description: "Max container CPU usage: 90.0% (threshold exceeded)"
+              description_zh: "最大容器 CPU 使用率: 90.0% (超過閾值)"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+        # db-c (below threshold) and db-d (maintenance) produce NO alert.

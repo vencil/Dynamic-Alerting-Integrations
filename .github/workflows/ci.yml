@@ -158,6 +158,22 @@ jobs:
             --policy .github/custom-rule-policy.yaml \
             --ci
 
+      - name: Install promtool
+        run: |
+          curl -sL https://github.com/prometheus/prometheus/releases/download/v2.53.2/prometheus-2.53.2.linux-amd64.tar.gz -o /tmp/p.tgz
+          tar xzf /tmp/p.tgz -C /tmp
+          sudo cp /tmp/prometheus-2.53.2.linux-amd64/promtool /usr/local/bin/
+          promtool --version
+
+      - name: Rule-pack promtool unit tests (alert fire/no-fire contracts)
+        run: |
+          shopt -s nullglob
+          for t in tests/rulepacks/*_test.yaml; do
+            echo "::group::$t"
+            promtool test rules "$t"
+            echo "::endgroup::"
+          done
+
       # ADR-024 PR3-pre-2 Commit 2: rule-pack 3-copy drift — AUDIT-ONLY.
       # continue-on-error makes the ~2-month stale-configmap drift VISIBLE in
       # CI logs without blocking, until the left-outer-join source hardening
