@@ -5,7 +5,7 @@ Closes the audit gap (P1-5 / 456 LOC tool was 0% covered). Targets the spine:
   - get_display_name (lookup with fallback)
   - extract_alerts (YAML traversal, recording-rule skip, default severity)
   - get_recommended_action (substring pattern → action dict)
-  - get_metric_from_description (regex extraction)
+  - get_metric_from_expr (PromQL series extraction from expr)
   - generate_markdown_zh / _en (smoke + frontmatter sanity)
   - load_rule_packs (file IO, glob, skip non-rule-pack files)
   - main() CLI (dry-run, --check synced + drift, --output-dir, write mode)
@@ -164,20 +164,97 @@ class TestGetRecommendedAction:
 
 
 # ---------------------------------------------------------------------------
-# get_metric_from_description
+# get_metric_from_expr
 # ---------------------------------------------------------------------------
-class TestGetMetricFromDescription:
-    def test_extracts_first_snake_token(self):
-        # The regex matches the first lowercase + underscore identifier.
-        result = gar.get_metric_from_description("mysql_up == 0 for 5 minutes")
-        assert result == "mysql_up"
+class TestGetMetricFromExpr:
+    """The Related Metric column is sourced from the rule's PromQL ``expr``
+    (the real series the alert evaluates), NOT the prose description. The old
+    description heuristic produced noise like "for"/"value"/"query"; these
+    tests lock in that the expr parser returns genuine series names.
+    """
 
     def test_empty_string_returns_empty(self):
-        assert gar.get_metric_from_description("") == ""
+        assert gar.get_metric_from_expr("") == ""
 
-    def test_uppercase_only_returns_empty(self):
-        # No lowercase identifier found.
-        assert gar.get_metric_from_description("ALERT FIRED") == ""
+    def test_simple_up_comparison(self):
+        # `db2_up == 0` → the bare metric.
+        assert gar.get_metric_from_expr("db2_up == 0") == "db2_up"
+
+    def test_label_selector_stripped(self):
+        # `up{job="clickhouse"} == 0` → `up`, not the label name/value.
+        assert gar.get_metric_from_expr('up{job="clickhouse"} == 0') == "up"
+
+    def test_recording_rule_name_with_colons(self):
+        # Recording-rule series names contain ':' and are returned whole.
+        expr = (
+            "( ( tenant:db2_connections_active:max > on(tenant) group_left "
+            "tenant:alert_threshold:db2_connections_active ) )"
+        )
+        assert (
+            gar.get_metric_from_expr(expr)
+            == "tenant:db2_connections_active:max"
+        )
+
+    def test_skips_leading_function_absent(self):
+        # `absent(...)` is a function, not the metric.
+        expr = 'absent(kafka_brokers{job="tenant-exporters"})'
+        assert gar.get_metric_from_expr(expr) == "kafka_brokers"
+
+    def test_skips_leading_function_time(self):
+        # `(time() - pg_postmaster_start_time_seconds) < 300`
+        expr = "(time() - pg_postmaster_start_time_seconds) < 300"
+        assert (
+            gar.get_metric_from_expr(expr)
+            == "pg_postmaster_start_time_seconds"
+        )
+
+    def test_skips_grouping_label_list(self):
+        # `by(tenant, version, severity)` is a LABEL list — those names must
+        # not be mistaken for the metric. The version-aware inert sentinel.
+        expr = (
+            "(count(max by(tenant, version, severity) "
+            '(user_threshold{component="container", metric="cpu"})) '
+            "or vector(0)) > 0"
+        )
+        assert gar.get_metric_from_expr(expr) == "user_threshold"
+
+    def test_kubernetes_recording_rule_first(self):
+        # The version-aware k8s alerts reference a recording rule first.
+        expr = (
+            "( rule_pack_kubernetes:pod_container_high_cpu_warning:core "
+            "* on(tenant) group_left(runbook_url, owner, tier) "
+            "tenant_metadata_info )"
+        )
+        assert (
+            gar.get_metric_from_expr(expr)
+            == "rule_pack_kubernetes:pod_container_high_cpu_warning:core"
+        )
+
+    def test_no_identifier_returns_empty(self):
+        # Pure punctuation / numbers → no series identifier.
+        assert gar.get_metric_from_expr("42 > 0") == ""
+
+
+# ---------------------------------------------------------------------------
+# extract_alerts wires expr → metric
+# ---------------------------------------------------------------------------
+class TestExtractAlertsMetric:
+    def test_metric_computed_from_expr(self):
+        content = {"groups": [{"name": "g", "rules": [
+            {"alert": "Down", "expr": "redis_up == 0",
+             "labels": {"severity": "critical"}, "annotations": {}},
+        ]}]}
+        out = gar.extract_alerts(content)
+        assert out[0]["metric"] == "redis_up"
+        assert out[0]["expr"] == "redis_up == 0"
+
+    def test_missing_expr_yields_empty_metric(self):
+        content = {"groups": [{"name": "g", "rules": [
+            {"alert": "Bare", "labels": {"severity": "warning"},
+             "annotations": {}},
+        ]}]}
+        out = gar.extract_alerts(content)
+        assert out[0]["metric"] == ""
 
 
 # ---------------------------------------------------------------------------
@@ -212,6 +289,56 @@ class TestGenerateMarkdown:
         out = gar.generate_markdown_zh(alerts)
         # Severity appears somewhere in the rendering.
         assert "critical" in out
+
+    def test_metric_column_rendered_from_metric_key(self):
+        # The Related Metric column surfaces the precomputed `metric` value.
+        alerts = {"mariadb": [
+            {"name": "MariaDBDown", "severity": "critical",
+             "summary": "s", "description": "d", "platform_summary": "",
+             "expr": "mysql_up == 0", "metric": "mysql_up"},
+        ]}
+        out_zh = gar.generate_markdown_zh(alerts)
+        out_en = gar.generate_markdown_en(alerts)
+        assert "mysql_up" in out_zh
+        assert "mysql_up" in out_en
+
+    def test_missing_metric_key_renders_blank(self):
+        # Manually-built dicts without a `metric` key must not crash.
+        alerts = {"mariadb": [
+            {"name": "NoMetric", "severity": "warning",
+             "summary": "s", "description": "d", "platform_summary": ""},
+        ]}
+        out = gar.generate_markdown_zh(alerts)
+        assert "NoMetric" in out
+
+    def test_pipe_in_trigger_condition_escaped(self):
+        # A Go-template trigger like `{{ $value | printf ... }}` carries a
+        # literal `|` that would split the Markdown row — it must be escaped.
+        alerts = {"kubernetes": [
+            {"name": "PipeAlert", "severity": "warning", "summary": "s",
+             "description": '{{ $value | printf "%.0f" }} thresholds declared',
+             "platform_summary": "", "expr": "user_threshold",
+             "metric": "user_threshold"},
+        ]}
+        for out in (gar.generate_markdown_zh(alerts),
+                    gar.generate_markdown_en(alerts)):
+            row = [ln for ln in out.splitlines() if "PipeAlert" in ln][0]
+            assert "\\|" in row, "literal pipe was not escaped"
+            assert "{{ $value | printf" not in row, "unescaped pipe leaked"
+
+
+# ---------------------------------------------------------------------------
+# _escape_table_cell
+# ---------------------------------------------------------------------------
+class TestEscapeTableCell:
+    def test_escapes_pipe(self):
+        assert gar._escape_table_cell("a | b") == "a \\| b"
+
+    def test_flattens_newline(self):
+        assert gar._escape_table_cell("a\nb") == "a b"
+
+    def test_plain_text_unchanged(self):
+        assert gar._escape_table_cell("plain text") == "plain text"
 
 
 # ---------------------------------------------------------------------------
