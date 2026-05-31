@@ -163,6 +163,7 @@ lang: zh
 | `check_jsx_i18n.py` | JSX 工具 i18n 完整性 lint |
 | `check_jsx_loader_compat.py` | Detect JSX-loader-incompatible module syntax (named exports / non-allowlist imports / require() calls). |
 | `check_k8s_manifests.py` | Container/k8s IaC SAST, Layer 4 (raw k8s manifests). |
+| `check_ksm_version_allowlist.py` | KSM version-allowlist invariant lint (ADR-024 partial-misconfig defense). |
 | `check_log_egress_policy.py` | #566 batch D (T4-1/T4-2) egress allowlist gate. |
 | `check_makefile_targets.py` | Makefile target 與 DX 工具聯動檢查 |
 | `check_md_yaml_drift.py` | Markdown 內 YAML 範例與 Schema 漂移偵測 |

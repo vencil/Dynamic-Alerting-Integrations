@@ -84,3 +84,26 @@ def test_check_detects_stale(tmp_path, monkeypatch):
     assert gen.main() == 0
     monkeypatch.setattr(sys, "argv", ["g", "--check"])
     assert gen.main() == 0
+
+
+def test_pack_filter_scopes_to_one(tmp_path, monkeypatch):
+    """--pack restricts (re)generation to named pack(s) — ADR-024 pilot scoping.
+
+    A pilot must regenerate ONLY its pack without disturbing deferred packs.
+    """
+    (tmp_path / "rule-packs").mkdir()
+    (tmp_path / "k8s" / "03-monitoring").mkdir(parents=True)
+    (tmp_path / "rule-packs" / "rule-pack-alpha.yaml").write_text(yaml.dump(_SRC), encoding="utf-8")
+    (tmp_path / "rule-packs" / "rule-pack-beta.yaml").write_text(yaml.dump(_SRC), encoding="utf-8")
+    monkeypatch.setattr(gen, "_repo_root", lambda: tmp_path)
+    out = tmp_path / "k8s" / "03-monitoring"
+
+    # --pack alpha writes ONLY alpha's configmap, leaving beta absent.
+    monkeypatch.setattr(sys, "argv", ["g", "--pack", "alpha"])
+    assert gen.main() == 0
+    assert (out / "configmap-rules-alpha.yaml").exists()
+    assert not (out / "configmap-rules-beta.yaml").exists()
+
+    # Unknown pack name is a hard error (exit 2), not a silent no-op.
+    monkeypatch.setattr(sys, "argv", ["g", "--pack", "ghost"])
+    assert gen.main() == 2

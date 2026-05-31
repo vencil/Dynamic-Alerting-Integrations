@@ -714,6 +714,19 @@ repos:
         # labels so dimensional thresholds (env/version/tablespace_re) keep their
         # dimensions. Caught a ~2-month silent prod drift in 4 packs (ADR-024).
 
+      - id: ksm-version-allowlist
+        name: "ADR-024: kube-state-metrics must allowlist app.kubernetes.io/version (test/rulepack-e2e)"
+        entry: python3 -X utf8 scripts/tools/lint/check_ksm_version_allowlist.py --ci
+        language: python
+        additional_dependencies: ['pyyaml']
+        pass_filenames: false
+        files: ^k8s/.*kube-state-metrics.*\.ya?ml$
+        # The kubernetes rule pack's (0a) version join needs
+        # kube_pod_labels{label_app_kubernetes_io_version}, which KSM emits only
+        # with --metric-labels-allowlist=pods=[app.kubernetes.io/version]. Static
+        # guard for the partial-misconfig (allowlist set to a DIFFERENT label) that
+        # the runtime VersionAwareThresholdInert sentinel cannot see (Gemini Pass-4).
+
       - id: changelog-no-tbd-check
         name: Detect TBD/TODO placeholders in CHANGELOG (Self-review Gap A.c)
         entry: python3 -X utf8 scripts/tools/lint/check_changelog_no_tbd.py --ci

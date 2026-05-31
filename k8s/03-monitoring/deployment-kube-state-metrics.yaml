@@ -96,6 +96,16 @@ spec:
       containers:
         - name: kube-state-metrics
           image: registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.18.0
+          # ADR-024 version-aware threshold HARD PREREQUISITE: by default KSM emits
+          # ZERO pod-label series for `kube_pod_labels` (only HELP, no samples), so
+          # the rule pack's (0a) version-injection join matches nothing and EVERY
+          # pod silently falls back to version="default" — the feature is inert.
+          # The allowlist below makes KSM expose `app.kubernetes.io/version` as
+          # `label_app_kubernetes_io_version`, which (0a) relabels into `version`.
+          # Proven on a real kind cluster (test/rulepack-e2e/); promtool's synthetic
+          # kube_pod_labels CANNOT catch this — only a real KSM does.
+          args:
+            - --metric-labels-allowlist=pods=[app.kubernetes.io/version]
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
