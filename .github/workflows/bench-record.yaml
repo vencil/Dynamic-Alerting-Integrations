@@ -60,6 +60,19 @@ jobs:
       - name: Run benchmark-report
         run: make benchmark-report
 
+      # Append the control canary to the nightly baseline so the trend watchdog
+      # can derive a per-night NOISE FLOOR from BenchmarkControlCanaryCPU's
+      # own night-to-night variance — it never alerts on movement smaller than
+      # the runner's intrinsic noise. Same canary module the PR gate uses
+      # (scripts/tools/ops/bench-canary), so the floor is apples-to-apples.
+      - name: Append control canary to baseline
+        run: |
+          set -euo pipefail
+          ( cd scripts/tools/ops/bench-canary && \
+            go test -bench='ControlCanary' -benchmem -run='^$' -count=6 -benchtime=1s . ) \
+            >> .build/bench-baseline.txt 2>>.build/bench.err.log || \
+            echo "::warning::canary append failed — trend watchdog will fall back to the fixed floor"
+
       - name: Summarize results
         if: always()
         run: |
@@ -83,3 +96,37 @@ jobs:
             .build/bench.err.log
           retention-days: 90
           if-no-files-found: warn
+
+  # Sustained-trend watchdog (Phase 2 of the bench-gate redesign). Runs AFTER
+  # the nightly baseline is recorded + uploaded, pulls the last N nights'
+  # artifacts, and opens / updates / auto-closes a `perf-trend` issue when main
+  # shows a SUSTAINED regression (not a single-night blip). Detection +
+  # closed-loop logic live in analyze_bench_history.py --trend-watch (R1
+  # sustained-vs-anchored-baseline + R2 creep-vs-best-night, floored by the
+  # control canary's own night-to-night CV). This run's own artifact isn't
+  # "success" yet so it isn't in the window — a one-night lag, which is fine for
+  # a multi-night trend detector.
+  trend-watch:
+    name: Nightly sustained-trend watchdog
+    needs: bench-record
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read   # gh run list / gh run download (prior nights' artifacts)
+      issues: write   # open / comment / close the perf-trend issue
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Run trend watchdog (open/update/close perf-trend issue)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 scripts/tools/dx/analyze_bench_history.py --trend-watch --trend-limit 14

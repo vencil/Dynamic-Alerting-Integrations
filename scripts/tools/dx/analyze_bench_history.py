@@ -372,6 +372,328 @@ def render_markdown_table(
     return "\n".join(lines)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Trend watchdog (--trend-watch) — nightly sustained-regression detection.
+#
+# Distinct from the GO/NO-GO variance gate above (which asks "is this bench
+# stable enough to gate on?"). The watchdog asks "has main's nightly perf
+# actually DRIFTED?" and, if so, opens/updates a `perf-trend` GitHub issue —
+# and auto-closes it when perf recovers (closed loop). Two detection rules so a
+# single-night blip never fires and a slow multi-night creep never hides:
+#
+#   R1 sustained — ALL of the most recent K nights sit ≥ floor above an
+#       ANCHORED baseline (median of the older, settled nights). Anchoring to
+#       the settled window (not "vs yesterday") is what makes creep visible.
+#   R2 creep — the recent window's typical night sits ≥ creep_floor above the
+#       BEST night in the whole window. Catches "+2%/night for a week" where no
+#       single night-vs-prior step ever crosses a floor, yet the cumulative
+#       drift from the best observed night is large.
+#
+# Both rules use the recent *window* (not just tonight), so neither fires on a
+# lone bad night. The floor is the max of a fixed minimum and a multiple of the
+# control canary's own night-to-night CV — movement smaller than the runner's
+# intrinsic noise (as measured by BenchmarkControlCanaryCPU) is never alerted.
+# ─────────────────────────────────────────────────────────────────────────────
+
+CANARY_BENCH = "BenchmarkControlCanaryCPU"
+PERF_TREND_LABEL = "perf-trend"
+
+
+@dataclass
+class NightRecord:
+    """One nightly run reduced to a per-bench median ns/op."""
+
+    run_id: int
+    created_at: str
+    medians: dict[str, float] = field(default_factory=dict)
+
+
+def _cv(values: list[float]) -> float:
+    """Coefficient of variation; 0.0 if < 2 points or mean 0 (treated as no signal)."""
+    vals = [v for v in values if not math.isnan(v)]
+    if len(vals) < 2:
+        return 0.0
+    mean = statistics.mean(vals)
+    if mean == 0:
+        return 0.0
+    return statistics.stdev(vals) / mean
+
+
+def night_records_from_gh(workflow: str, limit: int, cache_dir: Path) -> list[NightRecord]:
+    """Fetch the last `limit` nightly runs and reduce each to per-bench medians."""
+    runs = list_recent_runs(workflow, limit)
+    # gh returns newest-first, but sort explicitly so the series is deterministic.
+    runs.sort(key=lambda r: r["createdAt"], reverse=True)
+    nights: list[NightRecord] = []
+    for run in runs:
+        run_id = run["databaseId"]
+        txt = download_artifact(run_id, cache_dir)
+        if txt is None:
+            continue
+        by_bench: dict[str, list[float]] = {}
+        for s in parse_bench_file(txt, run_id):
+            by_bench.setdefault(s.bench, []).append(s.ns_per_op)
+        if not by_bench:
+            continue
+        nights.append(NightRecord(
+            run_id=run_id,
+            created_at=run["createdAt"],
+            medians={b: statistics.median(v) for b, v in by_bench.items()},
+        ))
+    return nights
+
+
+def night_records_from_fixture(path: Path) -> list[NightRecord]:
+    """Load pre-reduced nightly medians from a JSON fixture (offline testing).
+
+    Format: a JSON list of {"run_id", "createdAt", "benches": {name: median_ns}}.
+    """
+    data = json.loads(path.read_text(encoding="utf-8"))
+    nights = [
+        NightRecord(run_id=int(d["run_id"]), created_at=d["createdAt"],
+                    medians={k: float(v) for k, v in d["benches"].items()})
+        for d in data
+    ]
+    nights.sort(key=lambda n: n.created_at, reverse=True)
+    return nights
+
+
+@dataclass
+class TrendFinding:
+    bench: str
+    kind: str          # "sustained" | "creep"
+    today_ns: float
+    anchor_ns: float
+    best_ns: float
+    pct_vs_anchor: float
+    pct_vs_best: float
+
+
+def analyze_trend(
+    nights: list[NightRecord],
+    recent_k: int,
+    min_floor_pct: float,
+    canary_floor_mult: float,
+    creep_floor_pct: float,
+) -> tuple[list[TrendFinding], dict]:
+    """Apply R1 (sustained) + R2 (creep) to newest-first nightly medians.
+
+    Returns (findings, meta). `meta` carries the computed floors + canary CV for
+    transparency in the rendered issue body.
+    """
+    canary_series = [n.medians[CANARY_BENCH] for n in nights if CANARY_BENCH in n.medians]
+    canary_cv = _cv(canary_series)
+    # Floors as fractions. The canary raises the floor above the fixed minimum so
+    # we never alert below the runner's own measured noise — but its contribution
+    # is CAPPED: a genuinely noisy runner must not be able to inflate the floor so
+    # high that real sustained regressions are silenced (the watchdog's worst
+    # failure mode — failing toward silence exactly when the runner is noisy).
+    CANARY_FLOOR_CAP = 0.10  # ≤ 10 percentage points of canary-driven floor
+    canary_contrib = min(canary_floor_mult * canary_cv, CANARY_FLOOR_CAP)
+    floor = max(min_floor_pct / 100.0, canary_contrib)
+    creep_floor = max(creep_floor_pct / 100.0, canary_contrib)
+
+    findings: list[TrendFinding] = []
+    benches = {b for n in nights for b in n.medians} - {CANARY_BENCH}
+    for bench in sorted(benches):
+        # Align to CALENDAR nights (newest-first), NOT "nights that happen to
+        # contain this bench". Positional slicing of a gap-filtered series would
+        # let a bench that STOPPED reporting — the classic symptom of a perf
+        # timeout/crash — collapse so an old night masquerades as "today" and a
+        # real spike hides in the baseline window. Require the bench present in
+        # ALL recent_k newest nights (so `today` is genuinely tonight) and in ≥2
+        # older nights (for a settled anchor).
+        recent = [n.medians.get(bench) for n in nights[:recent_k]]
+        if any(v is None for v in recent):
+            continue
+        baseline_vals = [n.medians[bench] for n in nights[recent_k:] if bench in n.medians]
+        if len(baseline_vals) < 2:
+            continue
+        present_vals = [n.medians[bench] for n in nights if bench in n.medians]
+        anchor = statistics.median(baseline_vals)
+        best = min(present_vals)
+        today = recent[0]
+        recent_typical = statistics.median(recent)
+
+        sustained = anchor > 0 and all(x >= anchor * (1 + floor) for x in recent)
+        creep = best > 0 and recent_typical >= best * (1 + creep_floor)
+        if sustained or creep:
+            findings.append(TrendFinding(
+                bench=bench,
+                kind="sustained" if sustained else "creep",
+                today_ns=today,
+                anchor_ns=anchor,
+                best_ns=best,
+                pct_vs_anchor=(today / anchor - 1) * 100 if anchor else float("nan"),
+                pct_vs_best=(today / best - 1) * 100 if best else float("nan"),
+            ))
+    meta = {
+        "canary_cv": canary_cv,
+        "floor_pct": floor * 100,
+        "creep_floor_pct": creep_floor * 100,
+        "n_nights": len(nights),
+        "recent_k": recent_k,
+    }
+    return findings, meta
+
+
+def render_trend_issue_body(findings: list[TrendFinding], meta: dict) -> str:
+    lines = [
+        "## Nightly bench trend regression",
+        "",
+        f"Detected across the last **{meta['n_nights']}** nightly `bench-record` runs.",
+        "",
+        f"- Effective floor: **{meta['floor_pct']:.1f}%** "
+        f"(max of fixed minimum and canary-noise-scaled); "
+        f"creep floor: **{meta['creep_floor_pct']:.1f}%**.",
+        f"- Control-canary night-to-night CV: **{meta['canary_cv']:.2%}** "
+        f"(`{CANARY_BENCH}`; movement below the floor is indistinguishable from runner noise).",
+        f"- Sustained rule = all {meta['recent_k']} most-recent nights above an anchored "
+        "(settled-window-median) baseline; creep rule = recent typical night above the best "
+        "night in the window.",
+        "",
+        "| Bench | Rule | Today | vs anchor | vs best-night |",
+        "|---|---|---:|---:|---:|",
+    ]
+    for f in findings:
+        lines.append(
+            f"| `{f.bench}` | {f.kind} | {format_ns(f.today_ns)} "
+            f"| +{f.pct_vs_anchor:.1f}% | +{f.pct_vs_best:.1f}% |"
+        )
+    lines += [
+        "",
+        "_Auto-filed by `analyze_bench_history.py --trend-watch`. This issue auto-closes "
+        "when nightly perf returns below the floor (closed loop). Single-night blips are "
+        "filtered by the multi-night window; movement below the canary noise floor is ignored._",
+    ]
+    return "\n".join(lines)
+
+
+def _list_open_trend_issues() -> list[dict]:
+    out = _gh([
+        "issue", "list", "--repo", REPO, "--label", PERF_TREND_LABEL,
+        "--state", "open", "--json", "number,title",
+    ])
+    return json.loads(out) if out.strip() else []
+
+
+def _gh_write(cmd: list[str]) -> bool:
+    """Best-effort gh write — NEVER raises. A transient API blip on an issue
+    comment/create/close must not red the whole nightly run or, worse, abort a
+    close path before the issue is actually closed. Returns True on success."""
+    try:
+        _gh(cmd)
+        return True
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        print(f"  ⚠️  gh {' '.join(cmd[:2])} failed (non-fatal): {exc}", file=sys.stderr)
+        return False
+
+
+def run_trend_watch(args) -> int:
+    """Nightly trend watchdog: open/update/close a perf-trend issue. Returns exit code."""
+    # Source the nightly series — fixture (offline test) or live gh artifacts.
+    if args.fixture_json:
+        nights = night_records_from_fixture(args.fixture_json)
+        cache_dir = None
+        cleanup = False
+    else:
+        if not shutil.which("gh"):
+            print("error: gh CLI not found in PATH", file=sys.stderr)
+            return 2
+        if args.cache_dir:
+            cache_dir, cleanup = args.cache_dir, False
+            cache_dir.mkdir(parents=True, exist_ok=True)
+        else:
+            cache_dir, cleanup = Path(tempfile.mkdtemp(prefix="bench-trend-")), True
+        try:
+            nights = night_records_from_gh(args.workflow, args.trend_limit, cache_dir)
+        except RuntimeError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+
+    try:
+        if len(nights) < args.recent_nights + 2:
+            print(f"→ only {len(nights)} usable nights — need ≥ {args.recent_nights + 2}; "
+                  "skipping trend verdict (not enough history yet).", file=sys.stderr)
+            return 0
+
+        findings, meta = analyze_trend(
+            nights, args.recent_nights, args.min_floor_pct,
+            args.canary_floor_mult, args.creep_floor_pct,
+        )
+
+        # Reads are safe in dry-run; only writes are gated. With a fixture and no
+        # gh, skip issue I/O entirely and just print the verdict. In fixture mode
+        # --fixture-open-issue simulates a pre-existing open issue so the
+        # update/close (closed-loop) branches are testable offline.
+        gh_available = bool(args.fixture_json is None and shutil.which("gh"))
+        if args.fixture_json is not None:
+            open_issues = ([{"number": args.fixture_open_issue, "title": "(simulated)"}]
+                           if args.fixture_open_issue else [])
+        else:
+            open_issues = _list_open_trend_issues() if gh_available else []
+
+        if findings:
+            body = render_trend_issue_body(findings, meta)
+            print(body)
+            if open_issues:
+                num = open_issues[0]["number"]
+                print(f"→ {'[dry-run] would update' if args.dry_run else 'updating'} "
+                      f"existing perf-trend issue #{num}", file=sys.stderr)
+                if not args.dry_run and gh_available:
+                    _gh_write(["issue", "comment", str(num), "--repo", REPO, "--body", body])
+            else:
+                assignee_note = f" (assignee: {args.assignee})" if args.assignee else ""
+                print(f"→ {'[dry-run] would open' if args.dry_run else 'opening'} "
+                      f"new perf-trend issue{assignee_note}", file=sys.stderr)
+                if not args.dry_run and gh_available:
+                    # Ensure the label exists (idempotent).
+                    subprocess.run(
+                        ["gh", "label", "create", PERF_TREND_LABEL, "--repo", REPO,
+                         "--color", "FBCA04", "--description",
+                         "Nightly bench trend regression (auto-filed)", "--force"],
+                        capture_output=True, text=True, check=False, timeout=60,
+                    )
+                    create = ["issue", "create", "--repo", REPO,
+                              "--title", "Nightly bench trend regression detected",
+                              "--label", PERF_TREND_LABEL, "--body", body]
+                    # Assign when requested, but NEVER let an unresolvable login
+                    # block the alert: the default assignee is the repo OWNER,
+                    # which `gh issue create --assignee` rejects ("Could not
+                    # resolve to a User") if the owner is a GitHub Org rather than
+                    # a User. Try with the assignee; on failure, file unassigned
+                    # (the `perf-trend` label still drives notification).
+                    filed = False
+                    if args.assignee:
+                        filed = _gh_write(create + ["--assignee", args.assignee])
+                        if not filed:
+                            print(f"::warning::could not assign '{args.assignee}' "
+                                  "(org name? invalid login?) — filing perf-trend issue "
+                                  "unassigned; rely on the label for notification.",
+                                  file=sys.stderr)
+                    if not filed:
+                        _gh_write(create)
+            return 0
+
+        # No regression → recovered/closed-loop. Close EVERY open perf-trend issue
+        # (not just [0]) so stragglers never linger, and CLOSE BEFORE commenting so
+        # a transient comment failure can't leave a recovered issue open.
+        print("✅ No sustained nightly bench regression.")
+        for issue in open_issues:
+            num = issue["number"]
+            print(f"→ {'[dry-run] would close' if args.dry_run else 'closing'} "
+                  f"recovered perf-trend issue #{num}", file=sys.stderr)
+            if not args.dry_run and gh_available:
+                _gh_write(["issue", "close", str(num), "--repo", REPO])
+                _gh_write(["issue", "comment", str(num), "--repo", REPO, "--body",
+                           "✅ Nightly perf has returned below the floor across the recent window "
+                           "— auto-closing (closed loop). A new issue is filed if it regresses again."])
+        return 0
+    finally:
+        if cache_dir is not None and cleanup:
+            shutil.rmtree(cache_dir, ignore_errors=True)
+
+
 def main() -> int:
     try_utf8_stdout()
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
@@ -385,7 +707,35 @@ def main() -> int:
                         help="CI mode: exit 1 on any NO-GO, exit 2 on insufficient data.")
     parser.add_argument("--no-gate", action="store_true",
                         help="Show stats without verdict (single-run sanity check).")
+    # ── Trend watchdog mode ──────────────────────────────────────────────────
+    parser.add_argument("--trend-watch", action="store_true",
+                        help="Nightly trend mode: open/update/close a perf-trend issue on "
+                             "sustained regression (instead of the variance GO/NO-GO table).")
+    parser.add_argument("--trend-limit", type=int, default=14,
+                        help="Nights of history to pull for --trend-watch (default: 14).")
+    parser.add_argument("--recent-nights", type=int, default=3,
+                        help="K most-recent nights that must all regress for the sustained "
+                             "rule (default: 3).")
+    parser.add_argument("--min-floor-pct", type=float, default=5.0,
+                        help="Minimum regression floor %% for --trend-watch (default: 5.0).")
+    parser.add_argument("--canary-floor-mult", type=float, default=3.0,
+                        help="Floor is max(min-floor, mult × canary night-to-night CV) (default: 3).")
+    parser.add_argument("--creep-floor-pct", type=float, default=10.0,
+                        help="Creep-rule floor %% vs the best night in the window (default: 10.0).")
+    parser.add_argument("--assignee", default=REPO.split("/")[0],
+                        help=f"Issue assignee for --trend-watch (default: {REPO.split('/')[0]}).")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="Print intended issue actions without calling gh writes.")
+    parser.add_argument("--fixture-json", type=Path, default=None,
+                        help="Offline test: read nightly medians from a JSON fixture "
+                             "instead of gh (implies no gh writes).")
+    parser.add_argument("--fixture-open-issue", type=int, default=None,
+                        help="With --fixture-json, simulate a pre-existing open perf-trend "
+                             "issue number (tests the update/close closed-loop offline).")
     args = parser.parse_args()
+
+    if args.trend_watch:
+        return run_trend_watch(args)
 
     # Verify gh CLI is available
     if not shutil.which("gh"):
