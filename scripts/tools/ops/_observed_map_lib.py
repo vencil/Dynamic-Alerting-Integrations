@@ -242,6 +242,7 @@ def all_threshold_keys(pack_paths: list[str]) -> set[str]:
 # Shared paths / loading / known-deferred (used by recommend + drift-guard)
 # ---------------------------------------------------------------------------
 import os  # noqa: E402
+import sys  # noqa: E402
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 # scripts/tools/ops/ -> repo root is three levels up.
@@ -287,6 +288,12 @@ def write_observed_map(
     """
     if yaml is None:
         raise RuntimeError("pyyaml required")
+    # write_text_secure performs the os.chmod(0o600) that the repo SAST
+    # convention (tests/shared/test_sast.py) requires for write-mode files.
+    sys.path.insert(0, _THIS_DIR)
+    sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
+    from _lib_python import write_text_secure  # noqa: E402
+
     packs = pack_paths or default_pack_paths()
     out = out_path or DEFAULT_MAP_PATH
     keys = build_map(packs)
@@ -295,9 +302,8 @@ def write_observed_map(
         "_generated_by": "threshold-recommend --generate-observed-map (#719)",
         "keys": keys,
     }
-    with open(out, "w", encoding="utf-8", newline="\n") as fh:
-        fh.write(_MAP_HEADER)
-        yaml.safe_dump(doc, fh, sort_keys=False, allow_unicode=True, default_flow_style=False)
+    body = yaml.safe_dump(doc, sort_keys=False, allow_unicode=True, default_flow_style=False)
+    write_text_secure(out, _MAP_HEADER + body)
     nr = sum(1 for v in keys.values() if v.get("needs_review"))
     return {"path": out, "total": len(keys), "clean": len(keys) - nr, "needs_review": nr}
 
