@@ -236,6 +236,34 @@ lint-adoption hybrid policy）。偵測刻意**窄**（只認目錄 content-scan
 `.ts`/`.js` 與裸字串提及）以避開「用 regex 重造 AST 來抓重造輪子」的自我打臉；
 `--list` 印出命中集，false-negative 可接受、危險的 false-positive 為零。
 
+### Design-token migration 準則（#444 收尾上抬）
+
+`check_design_token_usage.py`（(b) class，diff-only fatal gate）擋 portal JSX 裡
+新增的硬編碼 hex/px。**遇到既有違規要遷移成 `var(--da-*)` token 時，依下列耐久準則**
+（原 `token-migration-cheatsheet.md` 的決策核心，Phase 1 遷移完成後上抬至此；該
+cheatsheet 的逐值對照表屬一次性易腐內容，已隨 Phase 1 收尾移除）：
+
+1. **語意優先於數值**。先問「這個值**代表什麼**」再選 token —— 錯誤紅選
+   `--da-color-error`，不是看到 `#ef4444` 就硬配同值 token。同一個 hex 在不同語境
+   可能對到不同 token（例：`#1e293b` 當主文字 → `--da-color-fg`，當深底 → `toast-bg`）。
+2. **fontSize px → `--da-font-size-*`**；**spacing px → `--da-space-*`**（若 scale 有對應）。
+3. **layout 尺寸 px**（`maxWidth`/`minWidth`/一次性版面值）通常無語意 token →
+   行末加帶理由的 `/* token-exempt: <why> */`（gate 認可的豁免，非技術債）。
+4. **`var(--token, #fallback)` 的 CSS fallback**：design-tokens.css 是 SSOT 且有
+   `check_undefined_tokens` 護著，fallback 是冗餘 → 移除只留 `var(--token)`。**注意**
+   fallback 常暴露語意 bug（同 token 配不同 fallback ⇒ 原作者其實要不同色），趁機修正。
+5. **完全無語意對應的一次性色**：保留原值 + 行末 `/* FIXME: no token match */`，
+   **不要**為單一用途硬塞語意不明的新 token；若是成套的領域分類色（如 dependency-graph
+   的節點類型），才在 design-tokens.css 新設一組 token（見 §3.6 of design-system-guide，#726）。
+6. **豁免精確語法**：`/* token-exempt */` 或帶理由的 `/* token-exempt: <reason> */`
+   （後者鼓勵；gate 兩種都認）。`#fff`/`#000`、`0/1/2px`(border)、`%`/`vh`/`em` 等非 px 單位
+   不報。
+
+> **gate scan mode 決定（#444 收尾）**：維持 **diff-only**（不翻 full-scan）。理由依 §3——
+> (b) class 用 diff-only 避免 collateral damage（PR #375 已對抗點出）；既有違規已於 Phase 1
+> 清零，新增行 diff-only 即擋下，full-scan 對「防技術債」零增益卻重新引入「改鄰近行被舊
+> exempt 牽連」的摩擦。
+
 ## 8. 季度治理 cadence
 
 每季度（與 release 對齊）：

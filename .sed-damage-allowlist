@@ -45,3 +45,9 @@ docs/benchmarks.en.md
 # (gitignored) per the editorial guideline at the top of the file. This
 # is the documented release-cut pattern, not damage.
 CHANGELOG.md
+
+# #444 Phase 1 closeout: token-migration-cheatsheet.md perishable layer
+# removed (per-value HEX/PX→token tables, 5671→1313 bytes ~23%). The durable
+# decision rules were lifted to lint-policy.md §7; the file becomes an archived
+# stub pointing there. Intentional doc-lifecycle shrink, not damage.
+docs/internal/token-migration-cheatsheet.md

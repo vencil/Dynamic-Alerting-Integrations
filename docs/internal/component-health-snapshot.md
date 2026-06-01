@@ -47,8 +47,8 @@ lang: zh
 
 | 指標 | 數值 | 備註 |
 |:-----|-----:|:-----|
-| Hardcoded hex colors | 4 tools | 待 Phase .b 清理 |
-| Hardcoded px values | 12 tools | 低優先 |
+| Hardcoded hex colors | 0 tools | ✅ #444 Phase 1 清零（diff-only gate enforced）|
+| Hardcoded px values | 0 tools | ✅ #444 Phase 1 清零；layout px 以 `/* token-exempt */` 標註 |
 | i18n coverage avg | >90% | Tier 1 平均 97%+ |
 
 ## 相關資源
