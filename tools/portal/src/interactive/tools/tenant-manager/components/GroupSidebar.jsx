@@ -106,7 +106,7 @@ function GroupSidebar({ groups, activeGroupId, onSelectGroup, onCreateGroup, onD
         <div style={styles.emptyState}>
           <div style={{ fontSize: 'var(--da-font-size-xl)', marginBottom: 'var(--da-space-2)' }} aria-hidden="true">📁</div>
           <div>{t('尚無群組', 'No groups yet')}</div>
-          <div style={{ fontSize: '11px', marginTop: 'var(--da-space-1)' }}>
+          <div style={{ fontSize: 'var(--da-font-size-xs)', marginTop: 'var(--da-space-1)' }}>
             {t('建立群組以批量管理租戶', 'Create a group to batch-manage tenants')}
           </div>
         </div>
@@ -135,7 +135,7 @@ function GroupSidebar({ groups, activeGroupId, onSelectGroup, onCreateGroup, onD
           </span>
           {canWrite && (
             <button
-              style={{ ...styles.chipClose, fontSize: '14px', color: 'var(--da-color-muted)', background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px' }}
+              style={{ ...styles.chipClose, fontSize: 'var(--da-font-size-sm-md)', color: 'var(--da-color-muted)', background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px' }}
               title={t('刪除此群組', 'Delete this group')}
               aria-label={`${t('刪除群組', 'Delete group')}: ${group.label || id}`}
               onClick={(e) => { e.stopPropagation(); onDeleteGroup(id); }}

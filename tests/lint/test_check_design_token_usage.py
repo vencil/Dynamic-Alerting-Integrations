@@ -168,6 +168,58 @@ class TestHexColors:
         )
         assert issues == []
 
+    def test_hex_in_block_comment_continuation_not_flagged(self):
+        """#444 B4: a hex-shaped token inside a /* */ block comment — including
+        a continuation line that does NOT start with '*' — must not be flagged.
+        Real example: an issue ref like (extracted in PR #153)."""
+        content = (
+            "/* ErrorBoundary notes\n"
+            "   extracted from foo.jsx in PR #153 (see also #160)\n"
+            "*/\n"
+            "const s = { color: '#abcdef' };\n"
+        )
+        issues = dtu.check_hardcoded_hex_colors(content, "x.jsx")
+        # Only the real #abcdef survives; #153 / #160 in the comment are gone.
+        assert [i["hex"] for i in issues] == ["#abcdef"]
+
+    def test_hex_in_yaml_frontmatter_not_flagged(self):
+        """#444 B4: jsx-loader frontmatter prose carries issue refs (PR #158)
+        that are hex-shaped but not colors. The leading --- ... --- block is
+        stripped before scanning."""
+        content = (
+            "---\n"
+            "title: TenantCard\n"
+            "purpose: |\n"
+            "  Deferred in PR #158; scaffolded by tool (PR #160).\n"
+            "---\n"
+            "const s = { color: '#abcdef' };\n"
+        )
+        issues = dtu.check_hardcoded_hex_colors(content, "x.jsx")
+        assert [i["hex"] for i in issues] == ["#abcdef"]
+
+    def test_hex_trailing_block_comment_keeps_real_violation(self):
+        """A real hex on the same line as a trailing /* */ comment is still
+        caught (blanking, not whole-line skipping)."""
+        issues = dtu.check_hardcoded_hex_colors(
+            "const s = { color: '#abcdef' }; /* see #153 */", "x.jsx"
+        )
+        assert [i["hex"] for i in issues] == ["#abcdef"]
+
+    def test_url_scheme_not_treated_as_line_comment(self):
+        """#444 B4 self-review catch: the // in https:// must NOT be read as a
+        line comment — doing so blanks the rest of the line and would hide a
+        real violation after the URL. Found by adversarial self-review."""
+        # URL followed by a real hex on the same line: hex must still report.
+        issues = dtu.check_hardcoded_hex_colors(
+            "const u = 'https://x.com'; const c = '#abcdef';", "x.jsx"
+        )
+        assert [i["hex"] for i in issues] == ["#abcdef"]
+        # A genuine // comment AFTER a URL string still suppresses.
+        issues2 = dtu.check_hardcoded_hex_colors(
+            "const u = 'https://x.com'; // note #ff0000", "x.jsx"
+        )
+        assert issues2 == []
+
     def test_hex_white_and_black_exempt(self, tmp_path):
         """#fff and #000 should be exempt (too common)."""
         content = textwrap.dedent("""\
@@ -251,6 +303,16 @@ class TestPxValues:
             "x.jsx",
         )
         assert issues == []
+
+    def test_px_in_block_comment_not_flagged(self):
+        """#444 B4: a px value mentioned inside a block comment is not a real
+        style and must not be flagged."""
+        content = (
+            "/* layout note: was 48px before redesign */\n"
+            "<div style={{ fontSize: '14px' }} />\n"
+        )
+        issues = dtu.check_hardcoded_px_values(content, "x.jsx")
+        assert [i["px"] for i in issues] == ["14px"]
 
 
 # ---------------------------------------------------------------------------

@@ -139,7 +139,7 @@ function TenantCard({
 
       <div style={styles.row}>
         <span style={styles.rowLabel}>{t('路由', 'Routing')}</span>
-        <span style={{ ...styles.rowValue, fontSize: '12px', maxWidth: '150px', overflow: 'hidden', textOverflow: 'ellipsis' }} title={data.routing_channel}>
+        <span style={{ ...styles.rowValue, fontSize: 'var(--da-font-size-xs-sm)', maxWidth: '150px' /* token-exempt: routing value truncation width */, overflow: 'hidden', textOverflow: 'ellipsis' }} title={data.routing_channel}>
           {data.routing_channel}
         </span>
       </div>
@@ -152,7 +152,7 @@ function TenantCard({
       {data.last_config_commit && (
         <div style={{ ...styles.row, borderTop: 'none' }}>
           <span style={styles.rowLabel}>{t('提交哈希', 'Config')}</span>
-          <span style={{ ...styles.rowValue, fontSize: '11px', fontFamily: 'monospace' }}>
+          <span style={{ ...styles.rowValue, fontSize: 'var(--da-font-size-xs)', fontFamily: 'monospace' }}>
             {data.last_config_commit.substring(0, 7)}
           </span>
         </div>

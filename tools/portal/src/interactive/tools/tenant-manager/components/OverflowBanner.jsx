@@ -18,8 +18,8 @@ purpose: |
 ---
 
 const overflowBannerStyle = {
-  backgroundColor: 'var(--da-color-info-soft, #fef3c7)',
-  border: '1px solid var(--da-color-info, #f59e0b)',
+  backgroundColor: 'var(--da-color-info-soft)',
+  border: '1px solid var(--da-color-info)',
   borderRadius: 'var(--da-radius-md)',
   padding: 'var(--da-space-3) var(--da-space-4)',
   marginBottom: 'var(--da-space-4)',

@@ -84,6 +84,97 @@ def _is_exempt(line: str) -> bool:
     return bool(_EXEMPT_RE.search(line))
 
 
+def _strip_comments(content: str) -> List[str]:
+    """Return per-line code with // line comments and /* */ block comments
+    blanked out (replaced by spaces, preserving column positions and line
+    count). This stops false positives where a hex-shaped token sits inside a
+    comment — most commonly issue/PR references like `(extracted in PR #153)`
+    inside a multi-line /* ... */ doc block, which the old per-line
+    startswith("*") check could not see (continuation lines don't start with
+    '*'). A /* token-exempt */ marker is preserved verbatim so the exempt
+    check still sees it.
+
+    Blanking (not deleting) keeps each line's other code intact, so a real
+    violation on the same line as a trailing comment is still caught, e.g.
+    ``color: '#abcdef' /* note */`` still reports #abcdef.
+
+    Leading YAML frontmatter (a ``---`` fence at the very top of the file
+    through the closing ``---``) is also blanked: jsx-loader tools carry a
+    metadata block whose prose routinely contains issue refs like ``PR #158``
+    that are hex-shaped but obviously not colors.
+    """
+    raw_lines = content.splitlines()
+
+    # Blank a leading YAML frontmatter block (--- ... ---).
+    fm_end = -1
+    if raw_lines and raw_lines[0].strip() == "---":
+        for idx in range(1, len(raw_lines)):
+            if raw_lines[idx].strip() == "---":
+                fm_end = idx
+                break
+
+    out: List[str] = []
+    in_block = False
+    for li, line in enumerate(raw_lines):
+        if fm_end != -1 and li <= fm_end:
+            out.append(" " * len(line))
+            continue
+        buf = []
+        i = 0
+        n = len(line)
+        while i < n:
+            if in_block:
+                end = line.find("*/", i)
+                if end == -1:
+                    buf.append(" " * (n - i))
+                    i = n
+                else:
+                    buf.append(" " * (end + 2 - i))
+                    i = end + 2
+                    in_block = False
+                continue
+            # not in a block comment
+            # token-exempt marker: keep the rest of the line verbatim so
+            # _is_exempt() still matches it.
+            if line.startswith("/* token-exempt", i) or line.startswith(
+                "/*token-exempt", i
+            ):
+                buf.append(line[i:])
+                i = n
+                continue
+            star = line.find("/*", i)
+            # Find a // that starts a line comment, skipping :// (URL schemes
+            # like https://) so we don't mistake a URL for a comment and blank
+            # out the rest of the line (which would hide real violations after
+            # it). A bare // not preceded by ':' is treated as a comment.
+            slash = -1
+            probe = i
+            while True:
+                cand = line.find("//", probe)
+                if cand == -1:
+                    break
+                if cand > 0 and line[cand - 1] == ":":
+                    probe = cand + 2
+                    continue
+                slash = cand
+                break
+            # whichever comment opener comes first
+            if slash != -1 and (star == -1 or slash < star):
+                buf.append(line[i:slash])
+                buf.append(" " * (n - slash))
+                i = n
+            elif star != -1:
+                buf.append(line[i:star])
+                buf.append("  ")
+                i = star + 2
+                in_block = True
+            else:
+                buf.append(line[i:])
+                i = n
+        out.append("".join(buf))
+    return out
+
+
 def check_hardcoded_hex_colors(content: str, filename: str) -> List[Dict]:
     """Scan for hardcoded hex colors that should use --da-color-* tokens.
 
@@ -97,17 +188,15 @@ def check_hardcoded_hex_colors(content: str, filename: str) -> List[Dict]:
     hex_pattern = re.compile(r'(?<!&)#([0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})(?![0-9a-fA-F\w-])')
 
     lines = content.splitlines()
+    code_lines = _strip_comments(content)
     for i, line in enumerate(lines, 1):
         # Skip lines with exempt marker (bare or reasoned)
         if _is_exempt(line):
             continue
 
-        # Skip pure comment lines
-        if line.strip().startswith("//") or line.strip().startswith("*"):
-            continue
-
-        # Extract code part (before //)
-        code_part = line.split("//")[0]
+        # Scan the comment-stripped code (// and /* */ blanked) so hex-shaped
+        # tokens inside comments — e.g. issue refs like (PR #153) — are ignored.
+        code_part = code_lines[i - 1]
 
         # Find hex patterns
         for m in hex_pattern.finditer(code_part):
@@ -137,22 +226,19 @@ def check_hardcoded_px_values(content: str, filename: str) -> List[Dict]:
     issues = []
 
     lines = content.splitlines()
+    code_lines = _strip_comments(content)
     for i, line in enumerate(lines, 1):
         # Skip lines with exempt marker (bare or reasoned)
         if _is_exempt(line):
             continue
 
-        # Skip pure comment lines
-        if line.strip().startswith("//"):
-            continue
+        # Comment-stripped code (// and /* */ blanked) for this line.
+        code_part = code_lines[i - 1]
 
         # Only check inside style object context (rough heuristic)
         # Look for style={ or style=` patterns
-        if "style=" not in line and "style =" not in line:
+        if "style=" not in code_part and "style =" not in code_part:
             continue
-
-        # Extract code part (before //)
-        code_part = line.split("//")[0]
 
         # Find style property patterns
         # Match patterns like: fontSize: '14px', padding: 12, margin: "8px"
