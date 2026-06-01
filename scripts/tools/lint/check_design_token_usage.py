@@ -136,10 +136,6 @@ def check_hardcoded_px_values(content: str, filename: str) -> List[Dict]:
     """
     issues = []
 
-    # Pattern for style properties with px values
-    # Matches: property: 'XXpx' or property: XXpx or property: 'XX' (numeric)
-    style_pattern = re.compile(r''':\s*(?:['"])?(\d+)(?:px)?['"]?\s*[,}]''')
-
     lines = content.splitlines()
     for i, line in enumerate(lines, 1):
         # Skip lines with exempt marker (bare or reasoned)
@@ -182,16 +178,9 @@ def check_hardcoded_px_values(content: str, filename: str) -> List[Dict]:
             if int(px_value) in (0, 1, 2):
                 continue
 
-            # Reconstruct the matched text with px suffix
-            matched_text = line[m.start():m.end()]
-            if "px" not in matched_text:
-                px_text = f"{px_value}px"
-            else:
-                px_text = f"{px_value}px"
-
             issues.append({
                 "line": i,
-                "px": px_text,
+                "px": f"{px_value}px",
                 "property": prop_name,
                 "context": line.strip()[:80],
             })
