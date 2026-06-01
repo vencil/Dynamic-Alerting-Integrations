@@ -1,7 +1,0 @@
-{
-  "version": 3,
-  "sources": ["../../../tools/portal/src/interactive/tools/_common/hooks/useDebouncedValue.js"],
-  "sourcesContent": ["\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\nimport { useState, useEffect } from \"react\";  // TD-033 ESM import\n\nfunction useDebouncedValue(value, delayMs) {\n  const [debounced, setDebounced] = useState(value);\n\n  useEffect(() => {\n    // Schedule the update; if `value` changes before fire, useEffect\n    // cleanup runs first and clears the timer. Standard useEffect +\n    // cleanup debounce pattern.\n    const handle = setTimeout(() => {\n      setDebounced(value);\n    }, delayMs);\n    return () => clearTimeout(handle);\n  }, [value, delayMs]);\n\n  return debounced;\n}\n\n// Register on window for orchestrator pickup.\nwindow.__useDebouncedValue = useDebouncedValue;\n\n// TD-030c: ESM export for esbuild bundle + Vitest. Browser jsx-loader\n// strips this line before script-mode eval (see jsx-loader.html). Both\n// `window.__X` and `export { X }` removed in TD-030z when jsx-loader\n// retires entirely.\n// <!-- jsx-loader-compat: ignore -->\nexport { useDebouncedValue };\n"],
-  "mappings": "+CA6BA,IAAAA,EAAoC,SAEpC,SAASC,EAAkBC,EAAOC,EAAS,CACzC,GAAM,CAACC,EAAWC,CAAY,KAAI,YAASH,CAAK,EAEhD,sBAAU,IAAM,CAId,IAAMI,EAAS,WAAW,IAAM,CAC9BD,EAAaH,CAAK,CACpB,EAAGC,CAAO,EACV,MAAO,IAAM,aAAaG,CAAM,CAClC,EAAG,CAACJ,EAAOC,CAAO,CAAC,EAEZC,CACT,CAGA,OAAO,oBAAsBH",
-  "names": ["import_react", "useDebouncedValue", "value", "delayMs", "debounced", "setDebounced", "handle"]
-}
