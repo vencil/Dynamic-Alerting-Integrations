@@ -31,19 +31,26 @@ spec:
     interval: 15s
     rules:
     - record: tenant:alert_threshold:rabbitmq_queue_messages
-      expr: max by(tenant) (user_threshold{metric="rabbitmq_queue_messages", severity="warning"})
+      expr: max by(tenant) (user_threshold{component="rabbitmq", metric="queue_messages",
+        severity="warning"})
     - record: tenant:alert_threshold:rabbitmq_queue_messages_critical
-      expr: max by(tenant) (user_threshold{metric="rabbitmq_queue_messages", severity="critical"})
+      expr: max by(tenant) (user_threshold{component="rabbitmq", metric="queue_messages",
+        severity="critical"})
     - record: tenant:alert_threshold:rabbitmq_node_mem_percent
-      expr: max by(tenant) (user_threshold{metric="rabbitmq_node_mem_percent", severity="warning"})
+      expr: max by(tenant) (user_threshold{component="rabbitmq", metric="node_mem_percent",
+        severity="warning"})
     - record: tenant:alert_threshold:rabbitmq_node_mem_percent_critical
-      expr: max by(tenant) (user_threshold{metric="rabbitmq_node_mem_percent", severity="critical"})
+      expr: max by(tenant) (user_threshold{component="rabbitmq", metric="node_mem_percent",
+        severity="critical"})
     - record: tenant:alert_threshold:rabbitmq_connections
-      expr: max by(tenant) (user_threshold{metric="rabbitmq_connections", severity="warning"})
+      expr: max by(tenant) (user_threshold{component="rabbitmq", metric="connections",
+        severity="warning"})
     - record: tenant:alert_threshold:rabbitmq_consumers
-      expr: max by(tenant) (user_threshold{metric="rabbitmq_consumers", severity="warning"})
+      expr: max by(tenant) (user_threshold{component="rabbitmq", metric="consumers",
+        severity="warning"})
     - record: tenant:alert_threshold:rabbitmq_unacked_messages
-      expr: max by(tenant) (user_threshold{metric="rabbitmq_unacked_messages", severity="warning"})
+      expr: max by(tenant) (user_threshold{component="rabbitmq", metric="unacked_messages",
+        severity="warning"})
   - name: rabbitmq-alerts
     rules:
     - alert: RabbitMQExporterAbsent

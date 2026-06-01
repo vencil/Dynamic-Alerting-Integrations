@@ -22,17 +22,17 @@ spec:
     interval: 15s
     rules:
     - record: tenant:alert_threshold:jvm_gc_pause
-      expr: max by(tenant) (user_threshold{metric="jvm_gc_pause", severity="warning"})
+      expr: max by(tenant) (user_threshold{component="jvm", metric="gc_pause", severity="warning"})
     - record: tenant:alert_threshold:jvm_gc_pause_critical
-      expr: max by(tenant) (user_threshold{metric="jvm_gc_pause", severity="critical"})
+      expr: max by(tenant) (user_threshold{component="jvm", metric="gc_pause", severity="critical"})
     - record: tenant:alert_threshold:jvm_memory
-      expr: max by(tenant) (user_threshold{metric="jvm_memory", severity="warning"})
+      expr: max by(tenant) (user_threshold{component="jvm", metric="memory", severity="warning"})
     - record: tenant:alert_threshold:jvm_memory_critical
-      expr: max by(tenant) (user_threshold{metric="jvm_memory", severity="critical"})
+      expr: max by(tenant) (user_threshold{component="jvm", metric="memory", severity="critical"})
     - record: tenant:alert_threshold:jvm_threads
-      expr: max by(tenant) (user_threshold{metric="jvm_threads", severity="warning"})
+      expr: max by(tenant) (user_threshold{component="jvm", metric="threads", severity="warning"})
     - record: tenant:alert_threshold:jvm_threads_critical
-      expr: max by(tenant) (user_threshold{metric="jvm_threads", severity="critical"})
+      expr: max by(tenant) (user_threshold{component="jvm", metric="threads", severity="critical"})
   - name: jvm-alerts
     rules:
     - alert: JVMHighGCPause

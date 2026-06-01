@@ -32,26 +32,6 @@ keys:
     scope: tenant
     direction: '>'
     observed_series: tenant:clickhouse_replication_queue:max
-  connections:
-    pack: rule-pack-mariadb.yaml
-    scope: tenant
-    direction: '>'
-    resolved_via: connections_critical sibling
-    observed_series: tenant:mysql_threads_connected:max
-  connections_critical:
-    pack: rule-pack-mariadb.yaml
-    scope: tenant
-    direction: '>'
-    observed_series: tenant:mysql_threads_connected:max
-  cpu:
-    pack: rule-pack-mariadb.yaml
-    scope: tenant
-    direction: '>'
-    candidates:
-    - tenant:mysql_cpu_usage:rate5m
-    - tenant:mysql_threads_connected:max
-    needs_review: true
-    reason: 2 observed candidates in composite alert — pick one
   db2_bufferpool_hit_ratio:
     pack: rule-pack-db2.yaml
     scope: tenant
@@ -196,6 +176,28 @@ keys:
     scope: tenant
     direction: '>'
     observed_series: tenant:mongodb_replication_lag:max
+  mysql_connections:
+    pack: rule-pack-mariadb.yaml
+    scope: tenant
+    direction: '>'
+    resolved_via: mysql_connections_critical sibling
+    observed_series: tenant:mysql_threads_connected:max
+  mysql_connections_critical:
+    pack: rule-pack-mariadb.yaml
+    scope: tenant
+    direction: '>'
+    observed_series: tenant:mysql_threads_connected:max
+  mysql_cpu:
+    pack: rule-pack-mariadb.yaml
+    scope: tenant
+    direction: '>'
+    resolved_via: mysql_cpu_critical sibling
+    observed_series: tenant:mysql_cpu_usage:rate5m
+  mysql_cpu_critical:
+    pack: rule-pack-mariadb.yaml
+    scope: tenant
+    direction: '>'
+    observed_series: tenant:mysql_cpu_usage:rate5m
   nginx_connections:
     pack: rule-pack-nginx.yaml
     scope: tenant

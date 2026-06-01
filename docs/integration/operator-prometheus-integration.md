@@ -178,7 +178,7 @@ spec:
           expr: |
             tenant:mysql_threads_connected:max
               > on(tenant) group_left()
-            tenant:alert_threshold:connections
+            tenant:alert_threshold:mysql_connections
           for: 5m
           labels:
             severity: warning

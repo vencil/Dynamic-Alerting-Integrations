@@ -199,7 +199,7 @@ def check_prometheus(args):
     # E2E: Vector matching verification
     results, err = query_prometheus(
         prom_url,
-        "count(tenant:alert_threshold:connections > 0)"
+        "count(tenant:alert_threshold:mysql_connections > 0)"
     )
     if not err and results:
         count = int(float(results[0]["value"][1]))

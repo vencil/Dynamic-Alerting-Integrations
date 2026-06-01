@@ -184,7 +184,7 @@ Using Percona MariaDB Alert Rules as the template, 5 common migration patterns a
     (
       tenant:mysql_threads_connected:max
       > on(tenant) group_left
-      tenant:alert_threshold:connections
+      tenant:alert_threshold:mysql_connections
     )
     unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
   for: 5m

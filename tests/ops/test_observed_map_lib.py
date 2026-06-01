@@ -115,11 +115,11 @@ class TestDirectionParsing:
         # str.find would match ':cpu' inside ':cpu_critical' first and read the
         # wrong operator. Word-boundary matching must read each token's own dir.
         expr = (
-            "tenant:x:max < on(tenant) tenant:alert_threshold:cpu_critical "
-            "or tenant:y:max > on(tenant) tenant:alert_threshold:cpu"
+            "tenant:x:max < on(tenant) tenant:alert_threshold:mysql_cpu_critical "
+            "or tenant:y:max > on(tenant) tenant:alert_threshold:mysql_cpu"
         )
-        assert L._direction_before(expr, "cpu") == ">"
-        assert L._direction_before(expr, "cpu_critical") == "<"
+        assert L._direction_before(expr, "mysql_cpu") == ">"
+        assert L._direction_before(expr, "mysql_cpu_critical") == "<"
 
     def test_ge_le_resolve_to_gt_lt(self):
         assert L._direction_before("a >= tenant:alert_threshold:k", "k") == ">"

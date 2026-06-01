@@ -25,23 +25,29 @@ spec:
     interval: 15s
     rules:
     - record: tenant:alert_threshold:kafka_consumer_lag
-      expr: max by(tenant) (user_threshold{metric="kafka_consumer_lag", severity="warning"})
+      expr: max by(tenant) (user_threshold{component="kafka", metric="consumer_lag",
+        severity="warning"})
     - record: tenant:alert_threshold:kafka_consumer_lag_critical
-      expr: max by(tenant) (user_threshold{metric="kafka_consumer_lag", severity="critical"})
+      expr: max by(tenant) (user_threshold{component="kafka", metric="consumer_lag",
+        severity="critical"})
     - record: tenant:alert_threshold:kafka_under_replicated_partitions
-      expr: max by(tenant) (user_threshold{metric="kafka_under_replicated_partitions",
+      expr: max by(tenant) (user_threshold{component="kafka", metric="under_replicated_partitions",
         severity="warning"})
     - record: tenant:alert_threshold:kafka_under_replicated_partitions_critical
-      expr: max by(tenant) (user_threshold{metric="kafka_under_replicated_partitions",
+      expr: max by(tenant) (user_threshold{component="kafka", metric="under_replicated_partitions",
         severity="critical"})
     - record: tenant:alert_threshold:kafka_broker_count
-      expr: max by(tenant) (user_threshold{metric="kafka_broker_count", severity="warning"})
+      expr: max by(tenant) (user_threshold{component="kafka", metric="broker_count",
+        severity="warning"})
     - record: tenant:alert_threshold:kafka_active_controllers
-      expr: max by(tenant) (user_threshold{metric="kafka_active_controllers", severity="warning"})
+      expr: max by(tenant) (user_threshold{component="kafka", metric="active_controllers",
+        severity="warning"})
     - record: tenant:alert_threshold:kafka_request_rate
-      expr: max by(tenant) (user_threshold{metric="kafka_request_rate", severity="warning"})
+      expr: max by(tenant) (user_threshold{component="kafka", metric="request_rate",
+        severity="warning"})
     - record: tenant:alert_threshold:kafka_request_rate_critical
-      expr: max by(tenant) (user_threshold{metric="kafka_request_rate", severity="critical"})
+      expr: max by(tenant) (user_threshold{component="kafka", metric="request_rate",
+        severity="critical"})
   - name: kafka-alerts
     rules:
     - alert: KafkaExporterAbsent

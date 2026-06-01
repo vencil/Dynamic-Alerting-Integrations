@@ -57,7 +57,7 @@ spec:
 
 #### ❌ Wrong: Using `sum`
 ```yaml
-- record: tenant:alert_threshold:connections
+- record: tenant:alert_threshold:mysql_connections
   expr: |
     sum by(tenant)
       user_threshold{tenant=~".*", metric="connections"}
@@ -70,7 +70,7 @@ spec:
 
 #### ✓ Correct: Using `max`
 ```yaml
-- record: tenant:alert_threshold:connections
+- record: tenant:alert_threshold:mysql_connections
   expr: |
     max by(tenant)
       user_threshold{tenant=~".*", metric="connections"}

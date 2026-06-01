@@ -1,0 +1,35 @@
+# promtool unit test — #731 exporter↔rule-pack metric-label contract (nginx).
+# Proves the threshold recording rules resolve under the REAL exporter shape
+# `user_threshold{component="nginx", metric="connections"}` (was querying the full
+# `metric="nginx_connections"` → empty → silent before #731). Note `connections`
+# also strips from pg/rabbitmq/mysql — the `component="nginx"` matcher is what makes
+# this collision-free (the latent cross-component bug #731 surfaced). Covers the
+# warning tier and the `_critical` severity-split tier.
+# Run: promtool test rules tests/rulepacks/rule-pack-nginx-threshold_test.yaml
+rule_files:
+  - ../../rule-packs/rule-pack-nginx.yaml
+
+evaluation_interval: 15s
+
+tests:
+  - interval: 15s
+    input_series:
+      - series: 'user_threshold{tenant="t1", component="nginx", metric="connections", severity="warning"}'
+        values: '1000x5'
+      - series: 'user_threshold{tenant="t1", component="nginx", metric="connections", severity="critical"}'
+        values: '2000x5'
+      # Collision guard: a DIFFERENT component also stripping to metric="connections".
+      # The nginx recording rule must NOT pick this up (component="nginx" isolates it).
+      - series: 'user_threshold{tenant="t1", component="pg", metric="connections", severity="warning"}'
+        values: '9999x5'
+    promql_expr_test:
+      - expr: tenant:alert_threshold:nginx_connections
+        eval_time: 1m
+        exp_samples:
+          - labels: 'tenant:alert_threshold:nginx_connections{tenant="t1"}'
+            value: 1000
+      - expr: tenant:alert_threshold:nginx_connections_critical
+        eval_time: 1m
+        exp_samples:
+          - labels: 'tenant:alert_threshold:nginx_connections_critical{tenant="t1"}'
+            value: 2000

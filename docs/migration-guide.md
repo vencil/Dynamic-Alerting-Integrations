@@ -184,7 +184,7 @@ curl -s http://localhost:8080/api/v1/config | python3 -m json.tool
     (
       tenant:mysql_threads_connected:max
       > on(tenant) group_left
-      tenant:alert_threshold:connections
+      tenant:alert_threshold:mysql_connections
     )
     unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
   for: 5m

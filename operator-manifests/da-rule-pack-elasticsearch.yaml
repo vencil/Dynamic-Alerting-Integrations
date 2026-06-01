@@ -38,13 +38,17 @@ spec:
     interval: 15s
     rules:
     - record: tenant:alert_threshold:es_heap_usage_percent
-      expr: max by(tenant) (user_threshold{metric="es_heap_usage_percent", severity="warning"})
+      expr: max by(tenant) (user_threshold{component="es", metric="heap_usage_percent",
+        severity="warning"})
     - record: tenant:alert_threshold:es_disk_usage_percent
-      expr: max by(tenant) (user_threshold{metric="es_disk_usage_percent", severity="warning"})
+      expr: max by(tenant) (user_threshold{component="es", metric="disk_usage_percent",
+        severity="warning"})
     - record: tenant:alert_threshold:es_search_latency_ms
-      expr: max by(tenant) (user_threshold{metric="es_search_latency_ms", severity="warning"})
+      expr: max by(tenant) (user_threshold{component="es", metric="search_latency_ms",
+        severity="warning"})
     - record: tenant:alert_threshold:es_pending_tasks
-      expr: max by(tenant) (user_threshold{metric="es_pending_tasks", severity="warning"})
+      expr: max by(tenant) (user_threshold{component="es", metric="pending_tasks",
+        severity="warning"})
   - name: elasticsearch-alerts
     rules:
     - alert: ElasticsearchClusterRed

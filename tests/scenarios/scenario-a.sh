@@ -180,9 +180,9 @@ else
   log ""
   log "Phase 5: Verify recording rule propagation"
 
-  THRESHOLD_VALUE=$(prom_query_value "tenant:alert_threshold:connections{tenant=\"${TENANT}\"}" "0")
+  THRESHOLD_VALUE=$(prom_query_value "tenant:alert_threshold:mysql_connections{tenant=\"${TENANT}\"}" "0")
   THRESHOLD_VALUE=$(printf '%.0f' "$THRESHOLD_VALUE" 2>/dev/null || echo "0")
-  log "Recording rule tenant:alert_threshold:connections = ${THRESHOLD_VALUE}"
+  log "Recording rule tenant:alert_threshold:mysql_connections = ${THRESHOLD_VALUE}"
 
   if [ "$THRESHOLD_VALUE" = "5" ]; then
     log "✓ Recording rule correctly propagated threshold"

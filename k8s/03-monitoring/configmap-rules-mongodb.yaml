@@ -27,12 +27,12 @@ data:
     \  - record: tenant:mongodb_page_faults:rate5m\n    expr: sum by(tenant) (rate(mongodb_extra_info_page_faults_total[5m]))\n\
     - name: mongodb-threshold-normalization\n  interval: 15s\n  rules:\n  - record:\
     \ tenant:alert_threshold:mongodb_connections_current\n    expr: max by(tenant)\
-    \ (user_threshold{metric=\"mongodb_connections_current\", severity=\"warning\"\
-    })\n  - record: tenant:alert_threshold:mongodb_replication_lag\n    expr: max\
-    \ by(tenant) (user_threshold{metric=\"mongodb_replication_lag\", severity=\"warning\"\
-    })\n  - record: tenant:alert_threshold:mongodb_opcounters_rate\n    expr: max\
-    \ by(tenant) (user_threshold{metric=\"mongodb_opcounters_rate\", severity=\"warning\"\
-    })\n"
+    \ (user_threshold{component=\"mongodb\", metric=\"connections_current\", severity=\"\
+    warning\"})\n  - record: tenant:alert_threshold:mongodb_replication_lag\n    expr:\
+    \ max by(tenant) (user_threshold{component=\"mongodb\", metric=\"replication_lag\"\
+    , severity=\"warning\"})\n  - record: tenant:alert_threshold:mongodb_opcounters_rate\n\
+    \    expr: max by(tenant) (user_threshold{component=\"mongodb\", metric=\"opcounters_rate\"\
+    , severity=\"warning\"})\n"
   mongodb-alert.yml: "groups:\n- name: mongodb-alerts\n  rules:\n  - alert: MongoDBDown\n\
     \    expr: mongodb_up == 0\n    for: 15s\n    labels:\n      severity: critical\n\
     \      tenant: '{{ $labels.tenant }}'\n    annotations:\n      summary: MongoDB\

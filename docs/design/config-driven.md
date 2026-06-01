@@ -30,10 +30,10 @@ parent: architecture-and-design.md
 
 ```
 # Custom value (db-a 租戶)
-user_threshold{tenant="db-a", metric="mariadb_replication_lag", severity="warning"} 10
+user_threshold{tenant="db-a", component="mariadb", metric="replication_lag", severity="warning"} 10
 
 # Default value (db-b 租戶，未覆蓋)
-user_threshold{tenant="db-b", metric="mariadb_replication_lag", severity="warning"} 30
+user_threshold{tenant="db-b", component="mariadb", metric="replication_lag", severity="warning"} 30
 
 # Disabled (無輸出)
 # (metric not present)
@@ -354,14 +354,14 @@ v1.2.0 起，Severity Dedup 從 PromQL 層移至 **Alertmanager inhibit 層**（
 # Warning 和 Critical 獨立觸發，TSDB 完整保留
 - alert: MariaDBHighConnections          # warning
   expr: |
-    ( tenant:mysql_threads_connected:max > on(tenant) group_left tenant:alert_threshold:connections )
+    ( tenant:mysql_threads_connected:max > on(tenant) group_left tenant:alert_threshold:mysql_connections )
     unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
   labels:
     severity: warning
     metric_group: connections
 - alert: MariaDBHighConnectionsCritical  # critical
   expr: |
-    ( tenant:mysql_threads_connected:max > on(tenant) group_left tenant:alert_threshold:connections_critical )
+    ( tenant:mysql_threads_connected:max > on(tenant) group_left tenant:alert_threshold:mysql_connections_critical )
     unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
   labels:
     severity: critical
@@ -388,7 +388,7 @@ tenants:
 
 1. **Exporter 層**：Config parser 偵測 `=~` 運算子，將 regex pattern 作為 `_re` 後綴 label 輸出
    ```
-   user_threshold{tenant="db-a", metric="oracle_tablespace_used_percent",
+   user_threshold{tenant="db-a", component="oracle", metric="tablespace_used_percent",
                   tablespace_re="SYS.*", severity="warning"} 95
    ```
 2. **Recording Rule 層**：PromQL 使用 `label_replace` + `=~` 在查詢時完成實際匹配
@@ -782,7 +782,7 @@ _routing_defaults → routing_profiles[ref] → tenant _routing → _routing_enf
   expr: |
     tenant:cpu_usage:rate5m
     > on(tenant) group_left()
-    tenant:alert_threshold:cpu_usage
+    tenant:alert_threshold:mysql_cpu_usage
 ```
 
 Recording Rule 在背景將 10,000 條 raw series 聚合成 N 個 tenant 級數字。Alert 評估時，Prometheus 只做 N 個數字 vs N 個數字的 Vector Join。運算量 O(tenants)，與 Pod 數量無關。

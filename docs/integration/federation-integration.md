@@ -270,7 +270,7 @@ tenants:
 邊緣 mysql_global_status_threads_connected{tenant="db-a"}
     → federation/remote-write →
 中央 recording rule: tenant:mysql_threads_connected:max = max by(tenant) (...)
-中央 alert rule: MariaDBHighConnections (比對 tenant:alert_threshold:connections)
+中央 alert rule: MariaDBHighConnections (比對 tenant:alert_threshold:mysql_connections)
     → Alertmanager → 依據 db-a 的 _routing 通知
 ```
 

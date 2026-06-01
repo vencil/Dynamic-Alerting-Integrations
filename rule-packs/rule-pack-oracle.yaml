@@ -65,19 +65,19 @@ groups:
     interval: 15s
     rules:
       - record: tenant:alert_threshold:oracle_sessions_active
-        expr: max by(tenant) (user_threshold{metric="oracle_sessions_active", severity="warning"})
+        expr: max by(tenant) (user_threshold{component="oracle", metric="sessions_active", severity="warning"})
 
       - record: tenant:alert_threshold:oracle_tablespace_used_percent
-        expr: max by(tenant) (user_threshold{metric="oracle_tablespace_used_percent", severity="warning"})
+        expr: max by(tenant) (user_threshold{component="oracle", metric="tablespace_used_percent", severity="warning"})
 
       - record: tenant:alert_threshold:oracle_wait_time_rate
-        expr: max by(tenant) (user_threshold{metric="oracle_wait_time_rate", severity="warning"})
+        expr: max by(tenant) (user_threshold{component="oracle", metric="wait_time_rate", severity="warning"})
 
       - record: tenant:alert_threshold:oracle_process_count
-        expr: max by(tenant) (user_threshold{metric="oracle_process_count", severity="warning"})
+        expr: max by(tenant) (user_threshold{component="oracle", metric="process_count", severity="warning"})
 
       - record: tenant:alert_threshold:oracle_pga_allocated_bytes
-        expr: max by(tenant) (user_threshold{metric="oracle_pga_allocated_bytes", severity="warning"})
+        expr: max by(tenant) (user_threshold{component="oracle", metric="pga_allocated_bytes", severity="warning"})
 
   # -------------------------------------------------------
   # Alert Rules: Oracle

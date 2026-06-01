@@ -56,18 +56,18 @@ groups:
   - name: mariadb-threshold-normalization
     interval: 15s
     rules:
-      - record: tenant:alert_threshold:connections
-        expr: max by(tenant) (user_threshold{metric="connections", severity="warning"})
+      - record: tenant:alert_threshold:mysql_connections
+        expr: max by(tenant) (user_threshold{component="mysql", metric="connections", severity="warning"})
 
-      - record: tenant:alert_threshold:cpu
-        expr: max by(tenant) (user_threshold{metric="cpu", severity="warning"})
+      - record: tenant:alert_threshold:mysql_cpu
+        expr: max by(tenant) (user_threshold{component="mysql", metric="cpu", severity="warning"})
 
       # Multi-tier severity (Scenario D)
-      - record: tenant:alert_threshold:connections_critical
-        expr: max by(tenant) (user_threshold{metric="connections", severity="critical"})
+      - record: tenant:alert_threshold:mysql_connections_critical
+        expr: max by(tenant) (user_threshold{component="mysql", metric="connections", severity="critical"})
 
-      - record: tenant:alert_threshold:cpu_critical
-        expr: max by(tenant) (user_threshold{metric="cpu", severity="critical"})
+      - record: tenant:alert_threshold:mysql_cpu_critical
+        expr: max by(tenant) (user_threshold{component="mysql", metric="cpu", severity="critical"})
 
   # -------------------------------------------------------
   # Alert Rules: MariaDB
@@ -105,7 +105,7 @@ groups:
               (
                 tenant:mysql_threads_connected:max
                 > on(tenant) group_left
-                tenant:alert_threshold:connections
+                tenant:alert_threshold:mysql_connections
               )
               unless on(tenant)
               (user_state_filter{filter="maintenance"} == 1)
@@ -119,7 +119,7 @@ groups:
               (
                 tenant:mysql_threads_connected:max
                 > on(tenant) group_left
-                tenant:alert_threshold:connections
+                tenant:alert_threshold:mysql_connections
               )
               unless on(tenant)
               (user_state_filter{filter="maintenance"} == 1)
@@ -150,7 +150,7 @@ groups:
               (
                 tenant:mysql_threads_connected:max
                 > on(tenant) group_left
-                tenant:alert_threshold:connections_critical
+                tenant:alert_threshold:mysql_connections_critical
               )
               unless on(tenant)
               (user_state_filter{filter="maintenance"} == 1)
@@ -164,7 +164,7 @@ groups:
               (
                 tenant:mysql_threads_connected:max
                 > on(tenant) group_left
-                tenant:alert_threshold:connections_critical
+                tenant:alert_threshold:mysql_connections_critical
               )
               unless on(tenant)
               (user_state_filter{filter="maintenance"} == 1)
@@ -200,7 +200,7 @@ groups:
               (
                 tenant:mysql_cpu_usage:rate5m
                 > on(tenant) group_left
-                tenant:alert_threshold:cpu
+                tenant:alert_threshold:mysql_cpu
               )
               unless on(tenant)
               (user_state_filter{filter="maintenance"} == 1)
@@ -214,7 +214,7 @@ groups:
               (
                 tenant:mysql_cpu_usage:rate5m
                 > on(tenant) group_left
-                tenant:alert_threshold:cpu
+                tenant:alert_threshold:mysql_cpu
               )
               unless on(tenant)
               (user_state_filter{filter="maintenance"} == 1)
@@ -245,7 +245,7 @@ groups:
               (
                 tenant:mysql_cpu_usage:rate5m
                 > on(tenant) group_left
-                tenant:alert_threshold:cpu_critical
+                tenant:alert_threshold:mysql_cpu_critical
               )
               unless on(tenant)
               (user_state_filter{filter="maintenance"} == 1)
@@ -259,7 +259,7 @@ groups:
               (
                 tenant:mysql_cpu_usage:rate5m
                 > on(tenant) group_left
-                tenant:alert_threshold:cpu_critical
+                tenant:alert_threshold:mysql_cpu_critical
               )
               unless on(tenant)
               (user_state_filter{filter="maintenance"} == 1)
@@ -291,13 +291,13 @@ groups:
                 (
                   tenant:mysql_threads_connected:max
                   > on(tenant) group_left
-                  tenant:alert_threshold:connections
+                  tenant:alert_threshold:mysql_connections
                 )
                 and on(tenant)
                 (
                   tenant:mysql_cpu_usage:rate5m
                   > on(tenant) group_left
-                  tenant:alert_threshold:cpu
+                  tenant:alert_threshold:mysql_cpu
                 )
               )
               unless on(tenant)
@@ -313,13 +313,13 @@ groups:
                 (
                   tenant:mysql_threads_connected:max
                   > on(tenant) group_left
-                  tenant:alert_threshold:connections
+                  tenant:alert_threshold:mysql_connections
                 )
                 and on(tenant)
                 (
                   tenant:mysql_cpu_usage:rate5m
                   > on(tenant) group_left
-                  tenant:alert_threshold:cpu
+                  tenant:alert_threshold:mysql_cpu
                 )
               )
               unless on(tenant)

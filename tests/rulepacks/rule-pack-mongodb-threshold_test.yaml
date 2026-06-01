@@ -1,0 +1,21 @@
+# promtool unit test — #731 exporter↔rule-pack metric-label contract (mongodb).
+# Proves the threshold recording rule resolves under the REAL exporter shape
+# `user_threshold{component="mongodb", metric="connections_current"}` (was querying
+# the full `metric="mongodb_connections_current"` → empty → silent before #731).
+# Run: promtool test rules tests/rulepacks/rule-pack-mongodb-threshold_test.yaml
+rule_files:
+  - ../../rule-packs/rule-pack-mongodb.yaml
+
+evaluation_interval: 15s
+
+tests:
+  - interval: 15s
+    input_series:
+      - series: 'user_threshold{tenant="t1", component="mongodb", metric="connections_current", severity="warning"}'
+        values: '500x5'
+    promql_expr_test:
+      - expr: tenant:alert_threshold:mongodb_connections_current
+        eval_time: 1m
+        exp_samples:
+          - labels: 'tenant:alert_threshold:mongodb_connections_current{tenant="t1"}'
+            value: 500

@@ -70,16 +70,16 @@ groups:
     interval: 15s
     rules:
       - record: tenant:alert_threshold:pg_connections
-        expr: max by(tenant) (user_threshold{metric="pg_connections", severity="warning"})
+        expr: max by(tenant) (user_threshold{component="pg", metric="connections", severity="warning"})
 
       - record: tenant:alert_threshold:pg_connections_critical
-        expr: max by(tenant) (user_threshold{metric="pg_connections", severity="critical"})
+        expr: max by(tenant) (user_threshold{component="pg", metric="connections", severity="critical"})
 
       - record: tenant:alert_threshold:pg_replication_lag
-        expr: max by(tenant) (user_threshold{metric="pg_replication_lag", severity="warning"})
+        expr: max by(tenant) (user_threshold{component="pg", metric="replication_lag", severity="warning"})
 
       - record: tenant:alert_threshold:pg_replication_lag_critical
-        expr: max by(tenant) (user_threshold{metric="pg_replication_lag", severity="critical"})
+        expr: max by(tenant) (user_threshold{component="pg", metric="replication_lag", severity="critical"})
 
   # -------------------------------------------------------
   # Alert Rules: PostgreSQL

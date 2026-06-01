@@ -21,22 +21,22 @@ data:
     \ tenant:kafka_broker_count:max\n    expr: max by(tenant) (kafka_brokers)\n  -\
     \ record: tenant:kafka_request_rate:sum\n    expr: sum by(tenant) (rate(kafka_server_brokertopicmetrics_messagesin_total[5m]))\n\
     - name: kafka-threshold-normalization\n  interval: 15s\n  rules:\n  - record:\
-    \ tenant:alert_threshold:kafka_consumer_lag\n    expr: max by(tenant) (user_threshold{metric=\"\
-    kafka_consumer_lag\", severity=\"warning\"})\n  - record: tenant:alert_threshold:kafka_consumer_lag_critical\n\
-    \    expr: max by(tenant) (user_threshold{metric=\"kafka_consumer_lag\", severity=\"\
-    critical\"})\n  - record: tenant:alert_threshold:kafka_under_replicated_partitions\n\
-    \    expr: max by(tenant) (user_threshold{metric=\"kafka_under_replicated_partitions\"\
+    \ tenant:alert_threshold:kafka_consumer_lag\n    expr: max by(tenant) (user_threshold{component=\"\
+    kafka\", metric=\"consumer_lag\", severity=\"warning\"})\n  - record: tenant:alert_threshold:kafka_consumer_lag_critical\n\
+    \    expr: max by(tenant) (user_threshold{component=\"kafka\", metric=\"consumer_lag\"\
+    , severity=\"critical\"})\n  - record: tenant:alert_threshold:kafka_under_replicated_partitions\n\
+    \    expr: max by(tenant) (user_threshold{component=\"kafka\", metric=\"under_replicated_partitions\"\
     , severity=\"warning\"})\n  - record: tenant:alert_threshold:kafka_under_replicated_partitions_critical\n\
-    \    expr: max by(tenant) (user_threshold{metric=\"kafka_under_replicated_partitions\"\
+    \    expr: max by(tenant) (user_threshold{component=\"kafka\", metric=\"under_replicated_partitions\"\
     , severity=\"critical\"})\n  - record: tenant:alert_threshold:kafka_broker_count\n\
-    \    expr: max by(tenant) (user_threshold{metric=\"kafka_broker_count\", severity=\"\
-    warning\"})\n  - record: tenant:alert_threshold:kafka_active_controllers\n   \
-    \ expr: max by(tenant) (user_threshold{metric=\"kafka_active_controllers\", severity=\"\
-    warning\"})\n  - record: tenant:alert_threshold:kafka_request_rate\n    expr:\
-    \ max by(tenant) (user_threshold{metric=\"kafka_request_rate\", severity=\"warning\"\
-    })\n  - record: tenant:alert_threshold:kafka_request_rate_critical\n    expr:\
-    \ max by(tenant) (user_threshold{metric=\"kafka_request_rate\", severity=\"critical\"\
-    })\n"
+    \    expr: max by(tenant) (user_threshold{component=\"kafka\", metric=\"broker_count\"\
+    , severity=\"warning\"})\n  - record: tenant:alert_threshold:kafka_active_controllers\n\
+    \    expr: max by(tenant) (user_threshold{component=\"kafka\", metric=\"active_controllers\"\
+    , severity=\"warning\"})\n  - record: tenant:alert_threshold:kafka_request_rate\n\
+    \    expr: max by(tenant) (user_threshold{component=\"kafka\", metric=\"request_rate\"\
+    , severity=\"warning\"})\n  - record: tenant:alert_threshold:kafka_request_rate_critical\n\
+    \    expr: max by(tenant) (user_threshold{component=\"kafka\", metric=\"request_rate\"\
+    , severity=\"critical\"})\n"
   kafka-alert.yml: "groups:\n- name: kafka-alerts\n  rules:\n  - alert: KafkaExporterAbsent\n\
     \    expr: absent(kafka_brokers{job=\"tenant-exporters\"})\n    for: 30s\n   \
     \ labels:\n      severity: critical\n      tenant: '{{ $labels.tenant }}'\n  \

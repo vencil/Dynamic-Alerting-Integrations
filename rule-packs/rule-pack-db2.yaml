@@ -69,19 +69,19 @@ groups:
     interval: 15s
     rules:
       - record: tenant:alert_threshold:db2_connections_active
-        expr: max by(tenant) (user_threshold{metric="db2_connections_active", severity="warning"})
+        expr: max by(tenant) (user_threshold{component="db2", metric="connections_active", severity="warning"})
 
       - record: tenant:alert_threshold:db2_bufferpool_hit_ratio
-        expr: max by(tenant) (user_threshold{metric="db2_bufferpool_hit_ratio", severity="warning"})
+        expr: max by(tenant) (user_threshold{component="db2", metric="bufferpool_hit_ratio", severity="warning"})
 
       - record: tenant:alert_threshold:db2_log_usage_percent
-        expr: max by(tenant) (user_threshold{metric="db2_log_usage_percent", severity="warning"})
+        expr: max by(tenant) (user_threshold{component="db2", metric="log_usage_percent", severity="warning"})
 
       - record: tenant:alert_threshold:db2_deadlock_rate
-        expr: max by(tenant) (user_threshold{metric="db2_deadlock_rate", severity="warning"})
+        expr: max by(tenant) (user_threshold{component="db2", metric="deadlock_rate", severity="warning"})
 
       - record: tenant:alert_threshold:db2_tablespace_used_percent
-        expr: max by(tenant) (user_threshold{metric="db2_tablespace_used_percent", severity="warning"})
+        expr: max by(tenant) (user_threshold{component="db2", metric="tablespace_used_percent", severity="warning"})
 
   # -------------------------------------------------------
   # Alert Rules: DB2

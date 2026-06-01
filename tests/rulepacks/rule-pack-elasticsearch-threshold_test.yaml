@@ -1,0 +1,21 @@
+# promtool unit test — #731 exporter↔rule-pack metric-label contract (elasticsearch).
+# Proves the threshold recording rule resolves under the REAL exporter shape
+# `user_threshold{component="es", metric="heap_usage_percent"}` (was querying the
+# full `metric="es_heap_usage_percent"` → empty → silent before #731).
+# Run: promtool test rules tests/rulepacks/rule-pack-elasticsearch-threshold_test.yaml
+rule_files:
+  - ../../rule-packs/rule-pack-elasticsearch.yaml
+
+evaluation_interval: 15s
+
+tests:
+  - interval: 15s
+    input_series:
+      - series: 'user_threshold{tenant="t1", component="es", metric="heap_usage_percent", severity="warning"}'
+        values: '85x5'
+    promql_expr_test:
+      - expr: tenant:alert_threshold:es_heap_usage_percent
+        eval_time: 1m
+        exp_samples:
+          - labels: 'tenant:alert_threshold:es_heap_usage_percent{tenant="t1"}'
+            value: 85

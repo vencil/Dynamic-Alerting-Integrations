@@ -28,10 +28,10 @@ The platform supports a "three-state" configuration pattern, providing flexible 
 
 ```
 # Custom value (db-a tenant)
-user_threshold{tenant="db-a", metric="mariadb_replication_lag", severity="warning"} 10
+user_threshold{tenant="db-a", component="mariadb", metric="replication_lag", severity="warning"} 10
 
 # Default value (db-b tenant, not overridden)
-user_threshold{tenant="db-b", metric="mariadb_replication_lag", severity="warning"} 30
+user_threshold{tenant="db-b", component="mariadb", metric="replication_lag", severity="warning"} 30
 
 # Disabled (no output)
 # (metric not present)
@@ -354,7 +354,7 @@ Severity dedup is handled at the **Alertmanager inhibit layer**, not in PromQL. 
 ```yaml
 - alert: MariaDBHighConnections          # warning
   expr: |
-    ( tenant:mysql_threads_connected:max > on(tenant) group_left tenant:alert_threshold:connections )
+    ( tenant:mysql_threads_connected:max > on(tenant) group_left tenant:alert_threshold:mysql_connections )
     unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
   for: 5m
   labels:
@@ -363,7 +363,7 @@ Severity dedup is handled at the **Alertmanager inhibit layer**, not in PromQL. 
 
 - alert: MariaDBHighConnectionsCritical  # critical
   expr: |
-    ( tenant:mysql_threads_connected:max > on(tenant) group_left tenant:alert_threshold:connections_critical )
+    ( tenant:mysql_threads_connected:max > on(tenant) group_left tenant:alert_threshold:mysql_connections_critical )
     unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
   for: 5m
   labels:
@@ -409,7 +409,7 @@ tenants:
 
 1. **Exporter layer**: Config parser detects the `=~` operator and outputs the regex pattern as a `_re` suffixed label
    ```
-   user_threshold{tenant="db-a", metric="oracle_tablespace_used_percent",
+   user_threshold{tenant="db-a", component="oracle", metric="tablespace_used_percent",
                   tablespace_re="SYS.*", severity="warning"} 95
    ```
 2. **Recording rule layer**: PromQL uses `label_replace` + `=~` for actual matching at query time
@@ -789,7 +789,7 @@ With N tenants and 10,000 Pods, every 15-second evaluation cycle requires Promet
   expr: |
     tenant:cpu_usage:rate5m
     > on(tenant) group_left()
-    tenant:alert_threshold:cpu_usage
+    tenant:alert_threshold:mysql_cpu_usage
 ```
 
 Recording Rules aggregate 10,000 raw series into N tenant-level numbers in the background. Alert evaluation only performs an N-vs-N Vector Join in memory. Computation is O(tenants), independent of Pod count.
