@@ -337,8 +337,15 @@ def resolve_observed(entry: dict[str, Any]) -> tuple[Optional[str], Optional[str
             f"unsupported scope '{scope}' — engine supports 'tenant' only "
             "(deferred #721 item 7)"
         )
-    if entry.get("direction") and entry["direction"] != ">":
-        return None, "lower-bound (<) metric — not supported (#721 item 6)"
+    direction = entry.get("direction")
+    if direction != ">":
+        # Require an explicit upper-bound direction. A missing/ambiguous
+        # direction (e.g. a hand-edited or half-resolved entry) must NOT slip
+        # through to a recommendation — the percentile strategy is only valid
+        # for ``observed > threshold`` alerts.
+        if direction == "<":
+            return None, "lower-bound (<) metric — not supported (#721 item 6)"
+        return None, "missing or ambiguous comparison direction — manual review required"
     series = entry.get("observed_series")
     if not series:
         return None, "no resolved observed_series (candidates need manual pick)"
@@ -389,6 +396,19 @@ def check_consistency(
     fresh = build_map(pack_paths)
 
     for key, entry in observed_map.items():
+        fresh_entry = fresh.get(key)
+        # A key carried in the map but no longer extractable from any rule-pack
+        # alert is stale — catch it regardless of whether it is a resolved entry
+        # or a needs_review/candidates one (KNOWN_DEFERRED keys legitimately are
+        # not alert-extracted, so they are exempt).
+        if fresh_entry is None and key not in KNOWN_DEFERRED and (
+            entry.get("observed_series") or entry.get("candidates") or entry.get("needs_review")
+        ):
+            errors.append(
+                f"{key}: present in map but no longer found in any rule-pack "
+                f"alert (stale map entry — removed from rule packs?)"
+            )
+            continue
         # scope must equal the observed_series / candidates prefix.
         series_list = []
         if entry.get("observed_series"):
@@ -404,7 +424,6 @@ def check_consistency(
         # resolved observed_series must be a real candidate in the fresh extract.
         series = entry.get("observed_series")
         if series:
-            fresh_entry = fresh.get(key)
             fresh_cands = set()
             if fresh_entry:
                 if fresh_entry.get("observed_series"):

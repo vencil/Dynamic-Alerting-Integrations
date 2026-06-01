@@ -362,7 +362,11 @@ def build_metric_query(observed_series: str, tenant: str, lookback: str) -> str:
     Returns:
         PromQL range-query string.
     """
-    return f'{observed_series}{{tenant="{tenant}"}}[{lookback}]'
+    # Escape the tenant for a PromQL string label value (backslash first, then
+    # double-quote) so a tenant id containing " or \ can't break out of the
+    # selector or produce invalid PromQL.
+    safe_tenant = tenant.replace("\\", "\\\\").replace('"', '\\"')
+    return f'{observed_series}{{tenant="{safe_tenant}"}}[{lookback}]'
 
 
 def query_prometheus_range(

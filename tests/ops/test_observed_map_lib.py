@@ -136,6 +136,15 @@ class TestResolveObserved:
         assert series is None
         assert "lower-bound" in reason
 
+    def test_missing_direction_skips(self):
+        # CodeRabbit #3334234447: a hand-edited entry with a resolved series but
+        # no direction must NOT slip through to a recommendation.
+        series, reason = L.resolve_observed(
+            {"scope": "tenant", "observed_series": "tenant:x:max"}
+        )
+        assert series is None
+        assert "direction" in reason
+
 
 class TestConsistency:
     def test_clean_map_no_errors(self, tmp_path):
@@ -157,6 +166,20 @@ class TestConsistency:
         m["foo"]["scope"] = "tenant_version"  # but series is tenant:-prefixed
         res = L.check_consistency(m, [p])
         assert any("scope" in e for e in res["errors"])
+
+    def test_stale_removed_key_is_error(self, tmp_path):
+        # CodeRabbit #3334234459: a key no longer in the rule packs but still in
+        # the map (incl. needs_review form) must be flagged as drift.
+        p = _write_pack(tmp_path, "rule-pack-clean.yaml", PACK_CLEAN)
+        m = L.build_map([p])
+        m["ghost_metric"] = {  # not present in any pack
+            "scope": "tenant",
+            "candidates": ["tenant:ghost:max"],
+            "needs_review": True,
+            "reason": "composite",
+        }
+        res = L.check_consistency(m, [p])
+        assert any("ghost_metric" in e and "stale" in e.lower() for e in res["errors"])
 
     def test_orphan_threshold_classified(self, tmp_path):
         p = _write_pack(tmp_path, "rule-pack-orphan.yaml", PACK_ORPHAN)

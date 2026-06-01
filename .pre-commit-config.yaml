@@ -816,7 +816,7 @@ repos:
         # (errors); known-deferred infos + orphan/coverage warns never red-gate
         # (Gemini final-check). Fix: `da-tools threshold-recommend
         # --generate-observed-map` + re-resolve needs_review, then commit the map.
-        files: ^(scripts/tools/ops/metric_observed_map\.yaml|rule-packs/rule-pack-.*\.yaml)$
+        files: ^(scripts/tools/ops/metric_observed_map\.yaml|rule-packs/rule-pack-.*\.yaml|scripts/tools/(ops/_observed_map_lib|lint/check_threshold_observed_map)\.py)$
 
       - id: undefined-tokens-check
         name: Detect JSX/CSS/HTML references to --da-* tokens not defined in design-tokens.css

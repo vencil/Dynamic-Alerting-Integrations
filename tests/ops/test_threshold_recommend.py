@@ -208,6 +208,12 @@ class TestBuildQuery:
         assert "user_threshold" not in q
         assert 'key=' not in q
 
+    def test_tenant_promql_escaped(self):
+        """CodeRabbit #3334234464: tenant 含引號/反斜線須轉義，產生合法 PromQL。"""
+        q = tr.build_metric_query("tenant:x:max", 'ev"il\\t', "7d")
+        # the embedded quote/backslash must be escaped, not raw
+        assert 'tenant="ev\\"il\\\\t"' in q
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # query_prometheus_range (mocked)
