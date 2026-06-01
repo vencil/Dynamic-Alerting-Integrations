@@ -146,9 +146,9 @@ sequenceDiagram
     Op->>LG: run_load.sh --type composite
     LG->>DB: 95 idle connections + OLTP (sysbench)
     DB-->>PM: mysql_threads_connected ≈ 95<br/>node_cpu busy ≈ 80%+
-    TE-->>PM: user_threshold{metric="connections"} = 70
+    TE-->>PM: user_threshold{component="mysql", metric="connections"} = 70
 
-    Note over PM: 評估 Recording Rule：<br/>tenant:mysql_threads_connected:max = 95<br/>> tenant:alert_threshold:connections (70)
+    Note over PM: 評估 Recording Rule：<br/>tenant:mysql_threads_connected:max = 95<br/>> tenant:alert_threshold:mysql_connections (70)
 
     PM->>PM: Alert: MariaDBHighConnections → FIRING
 
@@ -156,7 +156,7 @@ sequenceDiagram
     LG->>DB: Kill connections + stop stress-ng
     DB-->>PM: mysql_threads_connected ≈ 5
 
-    Note over PM: tenant:mysql_threads_connected:max = 5<br/>< tenant:alert_threshold:connections (70)
+    Note over PM: tenant:mysql_threads_connected:max = 5<br/>< tenant:alert_threshold:mysql_connections (70)
 
     PM->>PM: Alert → RESOLVED (after for duration)
     Note over Op: ✅ 完整 firing → resolved 週期驗證通過

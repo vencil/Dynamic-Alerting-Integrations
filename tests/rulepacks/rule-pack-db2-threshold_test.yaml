@@ -1,0 +1,21 @@
+# promtool unit test — #731 exporter↔rule-pack metric-label contract (db2).
+# Proves the threshold recording rule resolves a value under the REAL exporter
+# shape `user_threshold{component="db2", metric="connections_active"}` (was
+# querying the full `metric="db2_connections_active"` → empty → silent before #731).
+# Run: promtool test rules tests/rulepacks/rule-pack-db2-threshold_test.yaml
+rule_files:
+  - ../../rule-packs/rule-pack-db2.yaml
+
+evaluation_interval: 15s
+
+tests:
+  - interval: 15s
+    input_series:
+      - series: 'user_threshold{tenant="t1", component="db2", metric="connections_active", severity="warning"}'
+        values: '200x5'
+    promql_expr_test:
+      - expr: tenant:alert_threshold:db2_connections_active
+        eval_time: 1m
+        exp_samples:
+          - labels: 'tenant:alert_threshold:db2_connections_active{tenant="t1"}'
+            value: 200

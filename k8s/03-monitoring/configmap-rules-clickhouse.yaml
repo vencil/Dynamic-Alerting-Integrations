@@ -29,15 +29,17 @@ data:
     \   expr: \"sum by(tenant) (\\n  rate(ClickHouseProfileEvents_FailedQuery{tenant!=\\\
     \"\\\"}[5m])\\n)\\n\"\n- name: clickhouse-threshold-normalization\n  rules:\n\
     \  - record: tenant:alert_threshold:clickhouse_queries_rate\n    expr: \"max by(tenant)\
-    \ (\\n  user_threshold{metric=\\\"clickhouse_queries_rate\\\", severity=\\\"warning\\\
-    \"}\\n)\\n\"\n  - record: tenant:alert_threshold:clickhouse_active_connections\n\
-    \    expr: \"max by(tenant) (\\n  user_threshold{metric=\\\"clickhouse_active_connections\\\
-    \", severity=\\\"warning\\\"}\\n)\\n\"\n  - record: tenant:alert_threshold:clickhouse_max_part_count\n\
-    \    expr: \"max by(tenant) (\\n  user_threshold{metric=\\\"clickhouse_max_part_count\\\
+    \ (\\n  user_threshold{component=\\\"clickhouse\\\", metric=\\\"queries_rate\\\
+    \", severity=\\\"warning\\\"}\\n)\\n\"\n  - record: tenant:alert_threshold:clickhouse_active_connections\n\
+    \    expr: \"max by(tenant) (\\n  user_threshold{component=\\\"clickhouse\\\"\
+    , metric=\\\"active_connections\\\", severity=\\\"warning\\\"}\\n)\\n\"\n  - record:\
+    \ tenant:alert_threshold:clickhouse_max_part_count\n    expr: \"max by(tenant)\
+    \ (\\n  user_threshold{component=\\\"clickhouse\\\", metric=\\\"max_part_count\\\
     \", severity=\\\"warning\\\"}\\n)\\n\"\n  - record: tenant:alert_threshold:clickhouse_replication_queue\n\
-    \    expr: \"max by(tenant) (\\n  user_threshold{metric=\\\"clickhouse_replication_queue\\\
-    \", severity=\\\"warning\\\"}\\n)\\n\"\n  - record: tenant:alert_threshold:clickhouse_memory_tracking_bytes\n\
-    \    expr: \"max by(tenant) (\\n  user_threshold{metric=\\\"clickhouse_memory_tracking_bytes\\\
+    \    expr: \"max by(tenant) (\\n  user_threshold{component=\\\"clickhouse\\\"\
+    , metric=\\\"replication_queue\\\", severity=\\\"warning\\\"}\\n)\\n\"\n  - record:\
+    \ tenant:alert_threshold:clickhouse_memory_tracking_bytes\n    expr: \"max by(tenant)\
+    \ (\\n  user_threshold{component=\\\"clickhouse\\\", metric=\\\"memory_tracking_bytes\\\
     \", severity=\\\"warning\\\"}\\n)\\n\"\n"
   clickhouse-alert.yml: "groups:\n- name: clickhouse-alerts\n  rules:\n  - alert:\
     \ ClickHouseDown\n    expr: up{job=\"clickhouse\"} == 0\n    for: 2m\n    labels:\n\

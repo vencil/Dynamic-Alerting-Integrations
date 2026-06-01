@@ -36,14 +36,16 @@ spec:
   - name: mariadb-threshold-normalization
     interval: 15s
     rules:
-    - record: tenant:alert_threshold:connections
-      expr: max by(tenant) (user_threshold{metric="connections", severity="warning"})
-    - record: tenant:alert_threshold:cpu
-      expr: max by(tenant) (user_threshold{metric="cpu", severity="warning"})
-    - record: tenant:alert_threshold:connections_critical
-      expr: max by(tenant) (user_threshold{metric="connections", severity="critical"})
-    - record: tenant:alert_threshold:cpu_critical
-      expr: max by(tenant) (user_threshold{metric="cpu", severity="critical"})
+    - record: tenant:alert_threshold:mysql_connections
+      expr: max by(tenant) (user_threshold{component="mysql", metric="connections",
+        severity="warning"})
+    - record: tenant:alert_threshold:mysql_cpu
+      expr: max by(tenant) (user_threshold{component="mysql", metric="cpu", severity="warning"})
+    - record: tenant:alert_threshold:mysql_connections_critical
+      expr: max by(tenant) (user_threshold{component="mysql", metric="connections",
+        severity="critical"})
+    - record: tenant:alert_threshold:mysql_cpu_critical
+      expr: max by(tenant) (user_threshold{component="mysql", metric="cpu", severity="critical"})
   - name: mariadb-alerts
     rules:
     - alert: MariaDBDown
@@ -70,11 +72,11 @@ spec:
         description_zh: 找不到 mysql_up 指標，持續 30 秒
     - alert: MariaDBHighConnections
       expr: "(\n  (\n    (\n      tenant:mysql_threads_connected:max\n      > on(tenant)\
-        \ group_left\n      tenant:alert_threshold:connections\n    )\n    unless\
+        \ group_left\n      tenant:alert_threshold:mysql_connections\n    )\n    unless\
         \ on(tenant)\n    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n\
         \  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
         )\nor\n(\n  (\n    (\n      tenant:mysql_threads_connected:max\n      > on(tenant)\
-        \ group_left\n      tenant:alert_threshold:connections\n    )\n    unless\
+        \ group_left\n      tenant:alert_threshold:mysql_connections\n    )\n    unless\
         \ on(tenant)\n    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n\
         \  unless on(tenant) tenant_metadata_info\n)\n"
       for: 30s
@@ -96,13 +98,13 @@ spec:
         tier: '{{ $labels.tier }}'
     - alert: MariaDBHighConnectionsCritical
       expr: "(\n  (\n    (\n      tenant:mysql_threads_connected:max\n      > on(tenant)\
-        \ group_left\n      tenant:alert_threshold:connections_critical\n    )\n \
-        \   unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"} == 1)\n\
-        \  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
+        \ group_left\n      tenant:alert_threshold:mysql_connections_critical\n  \
+        \  )\n    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"\
+        } == 1)\n  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
         )\nor\n(\n  (\n    (\n      tenant:mysql_threads_connected:max\n      > on(tenant)\
-        \ group_left\n      tenant:alert_threshold:connections_critical\n    )\n \
-        \   unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"} == 1)\n\
-        \  )\n  unless on(tenant) tenant_metadata_info\n)\n"
+        \ group_left\n      tenant:alert_threshold:mysql_connections_critical\n  \
+        \  )\n    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"\
+        } == 1)\n  )\n  unless on(tenant) tenant_metadata_info\n)\n"
       for: 30s
       labels:
         severity: critical
@@ -121,12 +123,13 @@ spec:
         tier: '{{ $labels.tier }}'
     - alert: MariaDBHighCPU
       expr: "(\n  (\n    (\n      tenant:mysql_cpu_usage:rate5m\n      > on(tenant)\
-        \ group_left\n      tenant:alert_threshold:cpu\n    )\n    unless on(tenant)\n\
+        \ group_left\n      tenant:alert_threshold:mysql_cpu\n    )\n    unless on(tenant)\n\
         \    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n  * on(tenant)\
         \ group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n)\nor\n\
         (\n  (\n    (\n      tenant:mysql_cpu_usage:rate5m\n      > on(tenant) group_left\n\
-        \      tenant:alert_threshold:cpu\n    )\n    unless on(tenant)\n    (user_state_filter{filter=\"\
-        maintenance\"} == 1)\n  )\n  unless on(tenant) tenant_metadata_info\n)\n"
+        \      tenant:alert_threshold:mysql_cpu\n    )\n    unless on(tenant)\n  \
+        \  (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n  unless on(tenant)\
+        \ tenant_metadata_info\n)\n"
       for: 30s
       labels:
         severity: warning
@@ -146,13 +149,13 @@ spec:
         tier: '{{ $labels.tier }}'
     - alert: MariaDBHighCPUCritical
       expr: "(\n  (\n    (\n      tenant:mysql_cpu_usage:rate5m\n      > on(tenant)\
-        \ group_left\n      tenant:alert_threshold:cpu_critical\n    )\n    unless\
-        \ on(tenant)\n    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n\
-        \  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
+        \ group_left\n      tenant:alert_threshold:mysql_cpu_critical\n    )\n   \
+        \ unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"} == 1)\n\
+        \  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
         )\nor\n(\n  (\n    (\n      tenant:mysql_cpu_usage:rate5m\n      > on(tenant)\
-        \ group_left\n      tenant:alert_threshold:cpu_critical\n    )\n    unless\
-        \ on(tenant)\n    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n\
-        \  unless on(tenant) tenant_metadata_info\n)\n"
+        \ group_left\n      tenant:alert_threshold:mysql_cpu_critical\n    )\n   \
+        \ unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"} == 1)\n\
+        \  )\n  unless on(tenant) tenant_metadata_info\n)\n"
       for: 30s
       labels:
         severity: critical
@@ -171,16 +174,16 @@ spec:
         tier: '{{ $labels.tier }}'
     - alert: MariaDBSystemBottleneck
       expr: "(\n  (\n    (\n      (\n        tenant:mysql_threads_connected:max\n\
-        \        > on(tenant) group_left\n        tenant:alert_threshold:connections\n\
+        \        > on(tenant) group_left\n        tenant:alert_threshold:mysql_connections\n\
         \      )\n      and on(tenant)\n      (\n        tenant:mysql_cpu_usage:rate5m\n\
-        \        > on(tenant) group_left\n        tenant:alert_threshold:cpu\n   \
-        \   )\n    )\n    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"\
+        \        > on(tenant) group_left\n        tenant:alert_threshold:mysql_cpu\n\
+        \      )\n    )\n    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"\
         } == 1)\n  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
         )\nor\n(\n  (\n    (\n      (\n        tenant:mysql_threads_connected:max\n\
-        \        > on(tenant) group_left\n        tenant:alert_threshold:connections\n\
+        \        > on(tenant) group_left\n        tenant:alert_threshold:mysql_connections\n\
         \      )\n      and on(tenant)\n      (\n        tenant:mysql_cpu_usage:rate5m\n\
-        \        > on(tenant) group_left\n        tenant:alert_threshold:cpu\n   \
-        \   )\n    )\n    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"\
+        \        > on(tenant) group_left\n        tenant:alert_threshold:mysql_cpu\n\
+        \      )\n    )\n    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"\
         } == 1)\n  )\n  unless on(tenant) tenant_metadata_info\n)\n"
       for: 60s
       labels:

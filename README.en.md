@@ -74,7 +74,7 @@ graph TD
 
 # Dynamic Alerting: single rule covers all tenants
 - alert: MariaDBHighConnections
-  expr: tenant:mysql_threads_connected:max > on(tenant) group_left tenant:alert_threshold:connections
+  expr: tenant:mysql_threads_connected:max > on(tenant) group_left tenant:alert_threshold:mysql_connections
 # Tenants just declare thresholds: db-a: { mysql_connections: "100" }
 ```
 

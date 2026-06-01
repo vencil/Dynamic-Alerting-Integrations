@@ -22,20 +22,20 @@ data:
     \n      clamp_min(max by(tenant) (rabbitmq_node_mem_limit), 1)\n\n      '\n  -\
     \ record: tenant:rabbitmq_unacked_messages:max\n    expr: max by(tenant) (rabbitmq_queue_messages_unacked)\n\
     - name: rabbitmq-threshold-normalization\n  interval: 15s\n  rules:\n  - record:\
-    \ tenant:alert_threshold:rabbitmq_queue_messages\n    expr: max by(tenant) (user_threshold{metric=\"\
-    rabbitmq_queue_messages\", severity=\"warning\"})\n  - record: tenant:alert_threshold:rabbitmq_queue_messages_critical\n\
-    \    expr: max by(tenant) (user_threshold{metric=\"rabbitmq_queue_messages\",\
-    \ severity=\"critical\"})\n  - record: tenant:alert_threshold:rabbitmq_node_mem_percent\n\
-    \    expr: max by(tenant) (user_threshold{metric=\"rabbitmq_node_mem_percent\"\
+    \ tenant:alert_threshold:rabbitmq_queue_messages\n    expr: max by(tenant) (user_threshold{component=\"\
+    rabbitmq\", metric=\"queue_messages\", severity=\"warning\"})\n  - record: tenant:alert_threshold:rabbitmq_queue_messages_critical\n\
+    \    expr: max by(tenant) (user_threshold{component=\"rabbitmq\", metric=\"queue_messages\"\
+    , severity=\"critical\"})\n  - record: tenant:alert_threshold:rabbitmq_node_mem_percent\n\
+    \    expr: max by(tenant) (user_threshold{component=\"rabbitmq\", metric=\"node_mem_percent\"\
     , severity=\"warning\"})\n  - record: tenant:alert_threshold:rabbitmq_node_mem_percent_critical\n\
-    \    expr: max by(tenant) (user_threshold{metric=\"rabbitmq_node_mem_percent\"\
+    \    expr: max by(tenant) (user_threshold{component=\"rabbitmq\", metric=\"node_mem_percent\"\
     , severity=\"critical\"})\n  - record: tenant:alert_threshold:rabbitmq_connections\n\
-    \    expr: max by(tenant) (user_threshold{metric=\"rabbitmq_connections\", severity=\"\
-    warning\"})\n  - record: tenant:alert_threshold:rabbitmq_consumers\n    expr:\
-    \ max by(tenant) (user_threshold{metric=\"rabbitmq_consumers\", severity=\"warning\"\
-    })\n  - record: tenant:alert_threshold:rabbitmq_unacked_messages\n    expr: max\
-    \ by(tenant) (user_threshold{metric=\"rabbitmq_unacked_messages\", severity=\"\
-    warning\"})\n"
+    \    expr: max by(tenant) (user_threshold{component=\"rabbitmq\", metric=\"connections\"\
+    , severity=\"warning\"})\n  - record: tenant:alert_threshold:rabbitmq_consumers\n\
+    \    expr: max by(tenant) (user_threshold{component=\"rabbitmq\", metric=\"consumers\"\
+    , severity=\"warning\"})\n  - record: tenant:alert_threshold:rabbitmq_unacked_messages\n\
+    \    expr: max by(tenant) (user_threshold{component=\"rabbitmq\", metric=\"unacked_messages\"\
+    , severity=\"warning\"})\n"
   rabbitmq-alert.yml: "groups:\n- name: rabbitmq-alerts\n  rules:\n  - alert: RabbitMQExporterAbsent\n\
     \    expr: absent(rabbitmq_identity_info{job=\"tenant-exporters\"})\n    for:\
     \ 30s\n    labels:\n      severity: critical\n      tenant: '{{ $labels.tenant\

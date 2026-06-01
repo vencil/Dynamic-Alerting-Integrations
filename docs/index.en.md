@@ -92,7 +92,7 @@ Not sure which role? Try the [Getting Started Wizard](https://vencil.github.io/D
       expr: |
         tenant:mysql_threads_connected:max
         > on(tenant) group_left
-        tenant:alert_threshold:connections
+        tenant:alert_threshold:mysql_connections
 
     # Tenants declare thresholds only (YAML, no PromQL):
     tenants:

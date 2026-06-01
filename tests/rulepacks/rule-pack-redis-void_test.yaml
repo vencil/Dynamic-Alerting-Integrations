@@ -22,19 +22,19 @@ tests:
       # redis-a: 600 clients > 500 threshold, metadata present → enriched fire.
       - series: 'redis_connected_clients{tenant="redis-a"}'
         values: '600x30'
-      - series: 'user_threshold{tenant="redis-a", metric="redis_connected_clients", severity="warning"}'
+      - series: 'user_threshold{tenant="redis-a", component="redis", metric="connected_clients", severity="warning"}'
         values: '500x30'
       - series: 'tenant_metadata_info{tenant="redis-a", runbook_url="http://rb/a", owner="team-a", tier="gold"}'
         values: '1x30'
       # redis-b: 600 > 500, NO tenant_metadata_info → VACUUM-FIRE (branch B).
       - series: 'redis_connected_clients{tenant="redis-b"}'
         values: '600x30'
-      - series: 'user_threshold{tenant="redis-b", metric="redis_connected_clients", severity="warning"}'
+      - series: 'user_threshold{tenant="redis-b", component="redis", metric="connected_clients", severity="warning"}'
         values: '500x30'
       # redis-c: 600 > 500, metadata present, BUT maintenance active → suppressed.
       - series: 'redis_connected_clients{tenant="redis-c"}'
         values: '600x30'
-      - series: 'user_threshold{tenant="redis-c", metric="redis_connected_clients", severity="warning"}'
+      - series: 'user_threshold{tenant="redis-c", component="redis", metric="connected_clients", severity="warning"}'
         values: '500x30'
       - series: 'tenant_metadata_info{tenant="redis-c", runbook_url="http://rb/c", owner="team-c", tier="silver"}'
         values: '1x30'
@@ -43,7 +43,7 @@ tests:
       # redis-d: 400 < 500 threshold → no fire.
       - series: 'redis_connected_clients{tenant="redis-d"}'
         values: '400x30'
-      - series: 'user_threshold{tenant="redis-d", metric="redis_connected_clients", severity="warning"}'
+      - series: 'user_threshold{tenant="redis-d", component="redis", metric="connected_clients", severity="warning"}'
         values: '500x30'
       - series: 'tenant_metadata_info{tenant="redis-d", runbook_url="http://rb/d", owner="team-d", tier="bronze"}'
         values: '1x30'

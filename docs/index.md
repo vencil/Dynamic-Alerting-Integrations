@@ -92,7 +92,7 @@ graph LR
       expr: |
         tenant:mysql_threads_connected:max
         > on(tenant) group_left
-        tenant:alert_threshold:connections
+        tenant:alert_threshold:mysql_connections
 
     # 租戶只需宣告閾值（YAML，零 PromQL）：
     tenants:

@@ -1,0 +1,31 @@
+# promtool unit test — #731 exporter↔rule-pack metric-label contract (kafka).
+# Proves the threshold-normalization recording rules resolve a value when fed the
+# REAL exporter label shape `user_threshold{component=<prefix>, metric=<stripped>}`.
+# Before #731 these queried the full prefixed name `metric="kafka_consumer_lag"`
+# → no match against the exporter's `metric="consumer_lag"` → empty recording rule
+# → KafkaConsumerLagHigh never fired (silent). This fixture would be RED if the
+# selector regressed to the full-name shape.
+# Run: promtool test rules tests/rulepacks/rule-pack-kafka-threshold_test.yaml
+rule_files:
+  - ../../rule-packs/rule-pack-kafka.yaml
+
+evaluation_interval: 15s
+
+tests:
+  - interval: 15s
+    input_series:
+      - series: 'user_threshold{tenant="t1", component="kafka", metric="consumer_lag", severity="warning"}'
+        values: '1000x5'
+      - series: 'user_threshold{tenant="t1", component="kafka", metric="consumer_lag", severity="critical"}'
+        values: '5000x5'
+    promql_expr_test:
+      - expr: tenant:alert_threshold:kafka_consumer_lag
+        eval_time: 1m
+        exp_samples:
+          - labels: 'tenant:alert_threshold:kafka_consumer_lag{tenant="t1"}'
+            value: 1000
+      - expr: tenant:alert_threshold:kafka_consumer_lag_critical
+        eval_time: 1m
+        exp_samples:
+          - labels: 'tenant:alert_threshold:kafka_consumer_lag_critical{tenant="t1"}'
+            value: 5000

@@ -25,14 +25,14 @@ data:
     \    expr: max by(tenant) (redis_connected_slave_lag_seconds)\n  - record: tenant:redis_commands:rate5m\n\
     \    expr: sum by(tenant) (rate(redis_commands_processed_total[5m]))\n- name:\
     \ redis-threshold-normalization\n  interval: 15s\n  rules:\n  - record: tenant:alert_threshold:redis_memory_used_bytes\n\
-    \    expr: max by(tenant) (user_threshold{metric=\"redis_memory_used_bytes\",\
-    \ severity=\"warning\"})\n  - record: tenant:alert_threshold:redis_connected_clients\n\
-    \    expr: max by(tenant) (user_threshold{metric=\"redis_connected_clients\",\
-    \ severity=\"warning\"})\n  - record: tenant:alert_threshold:redis_evicted_keys_rate\n\
-    \    expr: max by(tenant) (user_threshold{metric=\"redis_evicted_keys_rate\",\
-    \ severity=\"warning\"})\n  - record: tenant:alert_threshold:redis_replication_lag\n\
-    \    expr: max by(tenant) (user_threshold{metric=\"redis_replication_lag\", severity=\"\
-    warning\"})\n"
+    \    expr: max by(tenant) (user_threshold{component=\"redis\", metric=\"memory_used_bytes\"\
+    , severity=\"warning\"})\n  - record: tenant:alert_threshold:redis_connected_clients\n\
+    \    expr: max by(tenant) (user_threshold{component=\"redis\", metric=\"connected_clients\"\
+    , severity=\"warning\"})\n  - record: tenant:alert_threshold:redis_evicted_keys_rate\n\
+    \    expr: max by(tenant) (user_threshold{component=\"redis\", metric=\"evicted_keys_rate\"\
+    , severity=\"warning\"})\n  - record: tenant:alert_threshold:redis_replication_lag\n\
+    \    expr: max by(tenant) (user_threshold{component=\"redis\", metric=\"replication_lag\"\
+    , severity=\"warning\"})\n"
   redis-alert.yml: "groups:\n- name: redis-alerts\n  rules:\n  - alert: RedisDown\n\
     \    expr: redis_up == 0\n    for: 15s\n    labels:\n      severity: critical\n\
     \      tenant: '{{ $labels.tenant }}'\n    annotations:\n      summary: Redis\

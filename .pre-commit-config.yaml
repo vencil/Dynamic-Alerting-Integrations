@@ -779,6 +779,20 @@ repos:
         # `python scripts/tools/ops/operator_generate.py --components rules
         # --output-dir operator-manifests/`, then commit all three copies.
 
+      - id: forbid-legacy-mariadb-threshold-name
+        name: "#731: forbid legacy bare mariadb threshold recording-rule names (use mysql_ prefix)"
+        entry: 'tenant:alert_threshold:(connections|cpu)(_critical)?\b'
+        language: pygrep
+        exclude: ^CHANGELOG\.md$
+        # #731 normalized mariadb's bare `tenant:alert_threshold:{connections,cpu}`
+        # recording rules to `mysql_*` (the conf.d-key prefix the exporter emits).
+        # Those bare names are now a permanently-forbidden legacy string anywhere
+        # in the repo (docs / scripts / scenarios / rule packs). Hard gate, no
+        # transition period — pure internal closed-loop refactor. The Go AST
+        # contract test (rulepack_contract_test.go) guards the rule-pack side;
+        # this pygrep guards docs/scripts. CHANGELOG.md is exempt (it carries the
+        # BREAKING-change migration note that necessarily quotes the old name).
+
       - id: ksm-version-allowlist
         name: "ADR-024: kube-state-metrics must allowlist app.kubernetes.io/version (test/rulepack-e2e)"
         entry: python3 -X utf8 scripts/tools/lint/check_ksm_version_allowlist.py --ci

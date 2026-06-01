@@ -20,16 +20,18 @@ data:
     \"heap\\\"}\\n  * 100\\n)\\n\"\n  - record: tenant:jvm_threads:current\n    expr:\
     \ \"max by(tenant) (\\n  jvm_threads_current\\n)\\n\"\n- name: jvm-threshold-normalization\n\
     \  interval: 15s\n  rules:\n  - record: tenant:alert_threshold:jvm_gc_pause\n\
-    \    expr: max by(tenant) (user_threshold{metric=\"jvm_gc_pause\", severity=\"\
-    warning\"})\n  - record: tenant:alert_threshold:jvm_gc_pause_critical\n    expr:\
-    \ max by(tenant) (user_threshold{metric=\"jvm_gc_pause\", severity=\"critical\"\
-    })\n  - record: tenant:alert_threshold:jvm_memory\n    expr: max by(tenant) (user_threshold{metric=\"\
-    jvm_memory\", severity=\"warning\"})\n  - record: tenant:alert_threshold:jvm_memory_critical\n\
-    \    expr: max by(tenant) (user_threshold{metric=\"jvm_memory\", severity=\"critical\"\
-    })\n  - record: tenant:alert_threshold:jvm_threads\n    expr: max by(tenant) (user_threshold{metric=\"\
-    jvm_threads\", severity=\"warning\"})\n  - record: tenant:alert_threshold:jvm_threads_critical\n\
-    \    expr: max by(tenant) (user_threshold{metric=\"jvm_threads\", severity=\"\
-    critical\"})\n"
+    \    expr: max by(tenant) (user_threshold{component=\"jvm\", metric=\"gc_pause\"\
+    , severity=\"warning\"})\n  - record: tenant:alert_threshold:jvm_gc_pause_critical\n\
+    \    expr: max by(tenant) (user_threshold{component=\"jvm\", metric=\"gc_pause\"\
+    , severity=\"critical\"})\n  - record: tenant:alert_threshold:jvm_memory\n   \
+    \ expr: max by(tenant) (user_threshold{component=\"jvm\", metric=\"memory\", severity=\"\
+    warning\"})\n  - record: tenant:alert_threshold:jvm_memory_critical\n    expr:\
+    \ max by(tenant) (user_threshold{component=\"jvm\", metric=\"memory\", severity=\"\
+    critical\"})\n  - record: tenant:alert_threshold:jvm_threads\n    expr: max by(tenant)\
+    \ (user_threshold{component=\"jvm\", metric=\"threads\", severity=\"warning\"\
+    })\n  - record: tenant:alert_threshold:jvm_threads_critical\n    expr: max by(tenant)\
+    \ (user_threshold{component=\"jvm\", metric=\"threads\", severity=\"critical\"\
+    })\n"
   jvm-alert.yml: "groups:\n- name: jvm-alerts\n  rules:\n  - alert: JVMHighGCPause\n\
     \    expr: \"(\\n  (\\n    (\\n      tenant:jvm_gc_pause:rate5m\\n      > on(tenant)\
     \ group_left\\n      tenant:alert_threshold:jvm_gc_pause\\n    )\\n    unless\

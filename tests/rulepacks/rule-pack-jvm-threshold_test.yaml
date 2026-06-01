@@ -1,0 +1,29 @@
+# promtool unit test — #731 exporter↔rule-pack metric-label contract (jvm).
+# Proves the threshold recording rules resolve under the REAL exporter shape
+# `user_threshold{component="jvm", metric="gc_pause"}` (was querying the full
+# `metric="jvm_gc_pause"` → empty → silent before #731). Covers warning + the
+# `_critical` severity-split tier.
+# Run: promtool test rules tests/rulepacks/rule-pack-jvm-threshold_test.yaml
+rule_files:
+  - ../../rule-packs/rule-pack-jvm.yaml
+
+evaluation_interval: 15s
+
+tests:
+  - interval: 15s
+    input_series:
+      - series: 'user_threshold{tenant="t1", component="jvm", metric="gc_pause", severity="warning"}'
+        values: '0.5x5'
+      - series: 'user_threshold{tenant="t1", component="jvm", metric="gc_pause", severity="critical"}'
+        values: '1x5'
+    promql_expr_test:
+      - expr: tenant:alert_threshold:jvm_gc_pause
+        eval_time: 1m
+        exp_samples:
+          - labels: 'tenant:alert_threshold:jvm_gc_pause{tenant="t1"}'
+            value: 0.5
+      - expr: tenant:alert_threshold:jvm_gc_pause_critical
+        eval_time: 1m
+        exp_samples:
+          - labels: 'tenant:alert_threshold:jvm_gc_pause_critical{tenant="t1"}'
+            value: 1

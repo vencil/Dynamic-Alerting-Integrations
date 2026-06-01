@@ -1,0 +1,21 @@
+# promtool unit test — #731 exporter↔rule-pack metric-label contract (oracle).
+# Proves the threshold recording rule resolves under the REAL exporter shape
+# `user_threshold{component="oracle", metric="sessions_active"}` (was querying the
+# full `metric="oracle_sessions_active"` → empty → silent before #731).
+# Run: promtool test rules tests/rulepacks/rule-pack-oracle-threshold_test.yaml
+rule_files:
+  - ../../rule-packs/rule-pack-oracle.yaml
+
+evaluation_interval: 15s
+
+tests:
+  - interval: 15s
+    input_series:
+      - series: 'user_threshold{tenant="t1", component="oracle", metric="sessions_active", severity="warning"}'
+        values: '300x5'
+    promql_expr_test:
+      - expr: tenant:alert_threshold:oracle_sessions_active
+        eval_time: 1m
+        exp_samples:
+          - labels: 'tenant:alert_threshold:oracle_sessions_active{tenant="t1"}'
+            value: 300

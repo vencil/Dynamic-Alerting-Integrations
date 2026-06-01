@@ -1,0 +1,29 @@
+# promtool unit test — #731 exporter↔rule-pack metric-label contract (rabbitmq).
+# Proves the threshold recording rules resolve under the REAL exporter shape
+# `user_threshold{component="rabbitmq", metric="queue_messages"}` (was querying the
+# full `metric="rabbitmq_queue_messages"` → empty → silent before #731). Covers
+# both the warning tier and the `_critical` severity-split tier.
+# Run: promtool test rules tests/rulepacks/rule-pack-rabbitmq-threshold_test.yaml
+rule_files:
+  - ../../rule-packs/rule-pack-rabbitmq.yaml
+
+evaluation_interval: 15s
+
+tests:
+  - interval: 15s
+    input_series:
+      - series: 'user_threshold{tenant="t1", component="rabbitmq", metric="queue_messages", severity="warning"}'
+        values: '10000x5'
+      - series: 'user_threshold{tenant="t1", component="rabbitmq", metric="queue_messages", severity="critical"}'
+        values: '50000x5'
+    promql_expr_test:
+      - expr: tenant:alert_threshold:rabbitmq_queue_messages
+        eval_time: 1m
+        exp_samples:
+          - labels: 'tenant:alert_threshold:rabbitmq_queue_messages{tenant="t1"}'
+            value: 10000
+      - expr: tenant:alert_threshold:rabbitmq_queue_messages_critical
+        eval_time: 1m
+        exp_samples:
+          - labels: 'tenant:alert_threshold:rabbitmq_queue_messages_critical{tenant="t1"}'
+            value: 50000

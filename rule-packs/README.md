@@ -82,7 +82,7 @@ groups:
   - name: <db>-threshold-normalization
     rules:
       - record: tenant:alert_threshold:<metric>
-        expr: max by(tenant) (user_threshold{metric="<metric>", severity="warning"})
+        expr: max by(tenant) (user_threshold{component="<component>", metric="<metric>", severity="warning"})
 
   # 3. Alert Rules (使用 group_left + unless maintenance + runbook injection)
   - name: <db>-alerts

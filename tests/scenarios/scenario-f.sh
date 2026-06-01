@@ -190,7 +190,7 @@ log ""
 log "F4.2: Verify threshold not doubled (max by vs sum by)"
 sleep 15  # Wait for Prometheus scrape
 
-THRESHOLD_NOW=$(prom_query_value "tenant:alert_threshold:connections{tenant=\"${TENANT}\"}" "-1")
+THRESHOLD_NOW=$(prom_query_value "tenant:alert_threshold:mysql_connections{tenant=\"${TENANT}\"}" "-1")
 THRESHOLD_NOW=$(printf '%.0f' "$THRESHOLD_NOW" 2>/dev/null || echo "-1")
 
 log "  Recording rule value: ${THRESHOLD_NOW}"

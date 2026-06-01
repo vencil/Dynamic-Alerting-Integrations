@@ -28,13 +28,14 @@ data:
     \n  - record: tenant:pg_uptime:hours\n    expr: '(time() - min by(tenant) (pg_postmaster_start_time_seconds))\
     \ / 3600\n\n      '\n- name: postgresql-threshold-normalization\n  interval: 15s\n\
     \  rules:\n  - record: tenant:alert_threshold:pg_connections\n    expr: max by(tenant)\
-    \ (user_threshold{metric=\"pg_connections\", severity=\"warning\"})\n  - record:\
-    \ tenant:alert_threshold:pg_connections_critical\n    expr: max by(tenant) (user_threshold{metric=\"\
-    pg_connections\", severity=\"critical\"})\n  - record: tenant:alert_threshold:pg_replication_lag\n\
-    \    expr: max by(tenant) (user_threshold{metric=\"pg_replication_lag\", severity=\"\
-    warning\"})\n  - record: tenant:alert_threshold:pg_replication_lag_critical\n\
-    \    expr: max by(tenant) (user_threshold{metric=\"pg_replication_lag\", severity=\"\
-    critical\"})\n"
+    \ (user_threshold{component=\"pg\", metric=\"connections\", severity=\"warning\"\
+    })\n  - record: tenant:alert_threshold:pg_connections_critical\n    expr: max\
+    \ by(tenant) (user_threshold{component=\"pg\", metric=\"connections\", severity=\"\
+    critical\"})\n  - record: tenant:alert_threshold:pg_replication_lag\n    expr:\
+    \ max by(tenant) (user_threshold{component=\"pg\", metric=\"replication_lag\"\
+    , severity=\"warning\"})\n  - record: tenant:alert_threshold:pg_replication_lag_critical\n\
+    \    expr: max by(tenant) (user_threshold{component=\"pg\", metric=\"replication_lag\"\
+    , severity=\"critical\"})\n"
   postgresql-alert.yml: "groups:\n- name: postgresql-alerts\n  rules:\n  - alert:\
     \ PostgreSQLDown\n    expr: pg_up == 0\n    for: 15s\n    labels:\n      severity:\
     \ critical\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n      summary:\

@@ -85,31 +85,31 @@ groups:
       - record: tenant:alert_threshold:clickhouse_queries_rate
         expr: |
           max by(tenant) (
-            user_threshold{metric="clickhouse_queries_rate", severity="warning"}
+            user_threshold{component="clickhouse", metric="queries_rate", severity="warning"}
           )
 
       - record: tenant:alert_threshold:clickhouse_active_connections
         expr: |
           max by(tenant) (
-            user_threshold{metric="clickhouse_active_connections", severity="warning"}
+            user_threshold{component="clickhouse", metric="active_connections", severity="warning"}
           )
 
       - record: tenant:alert_threshold:clickhouse_max_part_count
         expr: |
           max by(tenant) (
-            user_threshold{metric="clickhouse_max_part_count", severity="warning"}
+            user_threshold{component="clickhouse", metric="max_part_count", severity="warning"}
           )
 
       - record: tenant:alert_threshold:clickhouse_replication_queue
         expr: |
           max by(tenant) (
-            user_threshold{metric="clickhouse_replication_queue", severity="warning"}
+            user_threshold{component="clickhouse", metric="replication_queue", severity="warning"}
           )
 
       - record: tenant:alert_threshold:clickhouse_memory_tracking_bytes
         expr: |
           max by(tenant) (
-            user_threshold{metric="clickhouse_memory_tracking_bytes", severity="warning"}
+            user_threshold{component="clickhouse", metric="memory_tracking_bytes", severity="warning"}
           )
 
   # ─────────────────────────────────────────────

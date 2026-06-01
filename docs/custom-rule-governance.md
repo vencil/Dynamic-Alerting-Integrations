@@ -112,13 +112,13 @@ tenants:
     (
       tenant:mysql_threads_connected:max
       > on(tenant) group_left
-      tenant:alert_threshold:connections
+      tenant:alert_threshold:mysql_connections
     )
     and on(tenant)
     (
       tenant:mysql_cpu_usage:rate5m
       > on(tenant) group_left
-      tenant:alert_threshold:cpu
+      tenant:alert_threshold:mysql_cpu
     )
     unless on(tenant)
     (user_state_filter{filter="maintenance"} == 1)

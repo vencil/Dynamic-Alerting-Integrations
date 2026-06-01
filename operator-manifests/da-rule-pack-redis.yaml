@@ -35,13 +35,17 @@ spec:
     interval: 15s
     rules:
     - record: tenant:alert_threshold:redis_memory_used_bytes
-      expr: max by(tenant) (user_threshold{metric="redis_memory_used_bytes", severity="warning"})
+      expr: max by(tenant) (user_threshold{component="redis", metric="memory_used_bytes",
+        severity="warning"})
     - record: tenant:alert_threshold:redis_connected_clients
-      expr: max by(tenant) (user_threshold{metric="redis_connected_clients", severity="warning"})
+      expr: max by(tenant) (user_threshold{component="redis", metric="connected_clients",
+        severity="warning"})
     - record: tenant:alert_threshold:redis_evicted_keys_rate
-      expr: max by(tenant) (user_threshold{metric="redis_evicted_keys_rate", severity="warning"})
+      expr: max by(tenant) (user_threshold{component="redis", metric="evicted_keys_rate",
+        severity="warning"})
     - record: tenant:alert_threshold:redis_replication_lag
-      expr: max by(tenant) (user_threshold{metric="redis_replication_lag", severity="warning"})
+      expr: max by(tenant) (user_threshold{component="redis", metric="replication_lag",
+        severity="warning"})
   - name: redis-alerts
     rules:
     - alert: RedisDown

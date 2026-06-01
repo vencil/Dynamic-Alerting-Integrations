@@ -280,7 +280,7 @@ def check_e2e(prom_url, edge_urls):
     # Cross-cluster vector matching test
     results, err = query_prometheus(
         prom_url,
-        "count(tenant:alert_threshold:connections > 0)"
+        "count(tenant:alert_threshold:mysql_connections > 0)"
     )
     if not err and results:
         count = int(float(results[0]["value"][1]))

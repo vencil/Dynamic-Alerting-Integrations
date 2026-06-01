@@ -51,24 +51,24 @@ groups:
     rules:
       # Connections — warning
       - record: tenant:alert_threshold:nginx_connections
-        expr: max by(tenant) (user_threshold{metric="nginx_connections", severity="warning"})
+        expr: max by(tenant) (user_threshold{component="nginx", metric="connections", severity="warning"})
       # Connections — critical
       - record: tenant:alert_threshold:nginx_connections_critical
-        expr: max by(tenant) (user_threshold{metric="nginx_connections", severity="critical"})
+        expr: max by(tenant) (user_threshold{component="nginx", metric="connections", severity="critical"})
 
       # Request rate — warning
       - record: tenant:alert_threshold:nginx_request_rate
-        expr: max by(tenant) (user_threshold{metric="nginx_request_rate", severity="warning"})
+        expr: max by(tenant) (user_threshold{component="nginx", metric="request_rate", severity="warning"})
       # Request rate — critical
       - record: tenant:alert_threshold:nginx_request_rate_critical
-        expr: max by(tenant) (user_threshold{metric="nginx_request_rate", severity="critical"})
+        expr: max by(tenant) (user_threshold{component="nginx", metric="request_rate", severity="critical"})
 
       # Waiting — warning
       - record: tenant:alert_threshold:nginx_waiting
-        expr: max by(tenant) (user_threshold{metric="nginx_waiting", severity="warning"})
+        expr: max by(tenant) (user_threshold{component="nginx", metric="waiting", severity="warning"})
       # Waiting — critical
       - record: tenant:alert_threshold:nginx_waiting_critical
-        expr: max by(tenant) (user_threshold{metric="nginx_waiting", severity="critical"})
+        expr: max by(tenant) (user_threshold{component="nginx", metric="waiting", severity="critical"})
 
   # --- Part 3: Alert Rules ---
   - name: nginx-alerts

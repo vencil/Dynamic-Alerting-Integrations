@@ -266,7 +266,7 @@ The central Prometheus mounts all Rule Packs (same as single-cluster deployment)
 Edge mysql_global_status_threads_connected{tenant="db-a"}
     → federation/remote-write →
 Central recording rule: tenant:mysql_threads_connected:max = max by(tenant) (...)
-Central alert rule: MariaDBHighConnections (matches against tenant:alert_threshold:connections)
+Central alert rule: MariaDBHighConnections (matches against tenant:alert_threshold:mysql_connections)
     → Alertmanager → notifies according to db-a's _routing
 ```
 

@@ -63,7 +63,7 @@ graph LR
 # 簡化範例：當實際連線數超過該租戶的自訂閾值時觸發
 tenant:mysql_threads_connected:max
   > on(tenant) group_left()
-tenant:alert_threshold:connections
+tenant:alert_threshold:mysql_connections
 ```
 
 這要求兩邊的指標**都必須帶有相同的 `tenant` 標籤**。`threshold-exporter` 吐出的 `user_threshold` 指標天生自帶 `tenant`，Recording Rule 也會將其歸一化為 `tenant:alert_threshold:*` 系列。但你的資料庫 exporter（如 mysqld_exporter、redis_exporter）吐出的指標**預設沒有 `tenant`**。如果 `tenant` 標籤不匹配，`group_left` 會靜默返回空向量——沒有錯誤訊息、沒有警告，所有警報都不會觸發。這是最難診斷的故障模式：一切看似正常，直到真正需要告警時才發現。
@@ -193,7 +193,7 @@ scrape_configs:
 curl -s 'http://<your-prometheus>:9090/api/v1/query?query=up{job="dynamic-thresholds"}' \
   | jq '.data.result[] | {instance: .metric.instance, up: .value[1]}'
 
-curl -s 'http://<your-prometheus>:9090/api/v1/query?query=user_threshold{metric="connections"}' \
+curl -s 'http://<your-prometheus>:9090/api/v1/query?query=user_threshold{component="mysql", metric="connections"}' \
   | jq '.data.result[] | {tenant: .metric.tenant, value: .value[1]}'
 ```
 

@@ -59,11 +59,11 @@ groups:
 groups:
   - name: mariadb-threshold-normalization
     rules:
-      - record: tenant:alert_threshold:connections
-        expr: max by(tenant) (user_threshold{metric="connections", severity="warning"})
+      - record: tenant:alert_threshold:mysql_connections
+        expr: max by(tenant) (user_threshold{component="mysql", metric="connections", severity="warning"})
 
-      - record: tenant:alert_threshold:connections_critical
-        expr: max by(tenant) (user_threshold{metric="connections", severity="critical"})
+      - record: tenant:alert_threshold:mysql_connections_critical
+        expr: max by(tenant) (user_threshold{component="mysql", metric="connections", severity="critical"})
 ```
 
 **Key:** Use `max by(tenant)` rather than `sum` to prevent HA double-counting (see section 4.3)
@@ -78,7 +78,7 @@ groups:
           (
             tenant:mysql_threads_connected:max
             > on(tenant) group_left
-            tenant:alert_threshold:connections
+            tenant:alert_threshold:mysql_connections
           )
           unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
         for: 5m

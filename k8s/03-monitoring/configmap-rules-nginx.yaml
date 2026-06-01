@@ -20,17 +20,18 @@ data:
     \n  - record: tenant:nginx_connections_waiting:max\n    expr: \"max by(tenant)\
     \ (\\n  nginx_connections_waiting\\n)\\n\"\n- name: nginx-threshold-normalization\n\
     \  interval: 15s\n  rules:\n  - record: tenant:alert_threshold:nginx_connections\n\
-    \    expr: max by(tenant) (user_threshold{metric=\"nginx_connections\", severity=\"\
-    warning\"})\n  - record: tenant:alert_threshold:nginx_connections_critical\n \
-    \   expr: max by(tenant) (user_threshold{metric=\"nginx_connections\", severity=\"\
-    critical\"})\n  - record: tenant:alert_threshold:nginx_request_rate\n    expr:\
-    \ max by(tenant) (user_threshold{metric=\"nginx_request_rate\", severity=\"warning\"\
-    })\n  - record: tenant:alert_threshold:nginx_request_rate_critical\n    expr:\
-    \ max by(tenant) (user_threshold{metric=\"nginx_request_rate\", severity=\"critical\"\
-    })\n  - record: tenant:alert_threshold:nginx_waiting\n    expr: max by(tenant)\
-    \ (user_threshold{metric=\"nginx_waiting\", severity=\"warning\"})\n  - record:\
-    \ tenant:alert_threshold:nginx_waiting_critical\n    expr: max by(tenant) (user_threshold{metric=\"\
-    nginx_waiting\", severity=\"critical\"})\n"
+    \    expr: max by(tenant) (user_threshold{component=\"nginx\", metric=\"connections\"\
+    , severity=\"warning\"})\n  - record: tenant:alert_threshold:nginx_connections_critical\n\
+    \    expr: max by(tenant) (user_threshold{component=\"nginx\", metric=\"connections\"\
+    , severity=\"critical\"})\n  - record: tenant:alert_threshold:nginx_request_rate\n\
+    \    expr: max by(tenant) (user_threshold{component=\"nginx\", metric=\"request_rate\"\
+    , severity=\"warning\"})\n  - record: tenant:alert_threshold:nginx_request_rate_critical\n\
+    \    expr: max by(tenant) (user_threshold{component=\"nginx\", metric=\"request_rate\"\
+    , severity=\"critical\"})\n  - record: tenant:alert_threshold:nginx_waiting\n\
+    \    expr: max by(tenant) (user_threshold{component=\"nginx\", metric=\"waiting\"\
+    , severity=\"warning\"})\n  - record: tenant:alert_threshold:nginx_waiting_critical\n\
+    \    expr: max by(tenant) (user_threshold{component=\"nginx\", metric=\"waiting\"\
+    , severity=\"critical\"})\n"
   nginx-alert.yml: "groups:\n- name: nginx-alerts\n  rules:\n  - alert: NginxHighConnections\n\
     \    expr: \"(\\n  (\\n    (\\n      tenant:nginx_connections_active:max\\n  \
     \    > on(tenant) group_left\\n      tenant:alert_threshold:nginx_connections\\\

@@ -63,7 +63,7 @@ The platform's core mechanism relies on `group_left` vector matching to compare 
 # Simplified example: trigger alert when actual connections exceed the tenant's custom threshold
 tenant:mysql_threads_connected:max
   > on(tenant) group_left()
-tenant:alert_threshold:connections
+tenant:alert_threshold:mysql_connections
 ```
 
 This requires both sides of the metrics to carry the **same `tenant` label**. The `user_threshold` metrics emitted by `threshold-exporter` inherently carry the `tenant` label, and Recording Rules normalize it into the `tenant:alert_threshold:*` series. However, metrics from your database exporters (such as mysqld_exporter, redis_exporter) **do not carry the `tenant` label by default**. If the `tenant` labels don't match, `group_left` silently returns an empty vector—no error message, no warning, and all alerts fail to fire. This is the hardest-to-diagnose failure mode: everything appears normal until alerting is actually needed.
@@ -193,7 +193,7 @@ scrape_configs:
 curl -s 'http://<your-prometheus>:9090/api/v1/query?query=up{job="dynamic-thresholds"}' \
   | jq '.data.result[] | {instance: .metric.instance, up: .value[1]}'
 
-curl -s 'http://<your-prometheus>:9090/api/v1/query?query=user_threshold{metric="connections"}' \
+curl -s 'http://<your-prometheus>:9090/api/v1/query?query=user_threshold{component="mysql", metric="connections"}' \
   | jq '.data.result[] | {tenant: .metric.tenant, value: .value[1]}'
 ```
 
