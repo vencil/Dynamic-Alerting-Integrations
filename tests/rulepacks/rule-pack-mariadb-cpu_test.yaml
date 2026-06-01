@@ -98,6 +98,20 @@ tests:
         values: '0.5x40'
       - series: 'tenant_metadata_info{tenant="db-a", runbook_url="http://rb/a", owner="team-a", tier="gold"}'
         values: '1x40'
+      # db-b: rate≈1.0 > 0.5, NO tenant_metadata_info → VACUUM-FIRE (branch B).
+      - series: 'mysql_global_status_threads_running{tenant="db-b"}'
+        values: '0+15x40'
+      - series: 'user_threshold{tenant="db-b", metric="cpu", severity="critical"}'
+        values: '0.5x40'
+      # db-c: rate≈1.0 > 0.5, metadata present, BUT maintenance active → suppressed.
+      - series: 'mysql_global_status_threads_running{tenant="db-c"}'
+        values: '0+15x40'
+      - series: 'user_threshold{tenant="db-c", metric="cpu", severity="critical"}'
+        values: '0.5x40'
+      - series: 'tenant_metadata_info{tenant="db-c", runbook_url="http://rb/c", owner="team-c", tier="silver"}'
+        values: '1x40'
+      - series: 'user_state_filter{tenant="db-c", filter="maintenance"}'
+        values: '1x40'
       # db-d: rate≈1.0 < 2.0 critical threshold → no critical fire.
       - series: 'mysql_global_status_threads_running{tenant="db-d"}'
         values: '0+15x40'
@@ -108,6 +122,7 @@ tests:
       - eval_time: 6m
         alertname: MariaDBHighCPUCritical
         exp_alerts:
+          # db-a: enriched (branch A) — carries runbook_url/owner/tier.
           - exp_labels:
               severity: critical
               metric_group: cpu
@@ -125,4 +140,19 @@ tests:
               runbook_url: "http://rb/a"
               owner: team-a
               tier: gold
-        # db-d (below threshold) produces NO MariaDBHighCPUCritical alert.
+          # db-b: VACUUM-FIRE (branch B) — fires WITHOUT enrichment labels.
+          - exp_labels:
+              severity: critical
+              metric_group: cpu
+              tenant: db-b
+            exp_annotations:
+              summary: "Critical CPU on db-b"
+              summary_zh: "db-b CPU 嚴重過高"
+              platform_summary: "[] db-b: critical CPU saturation — immediate investigation needed"
+              platform_summary_zh: "[] db-b：CPU 飽和 — 需立即調查"
+              description: "1 running threads (critical threshold exceeded)"
+              description_zh: "1 個執行中執行緒（超過嚴重閾值）"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+        # db-c (maintenance) and db-d (below threshold) produce NO MariaDBHighCPUCritical alert.
