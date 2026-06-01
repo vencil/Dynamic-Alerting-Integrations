@@ -55,7 +55,12 @@ def _find_repo_root(start: Path) -> Path:
 REPO = _find_repo_root(Path(__file__).resolve())
 REGISTRY = REPO / "docs/assets/tool-registry.yaml"
 E2E_DIR = REPO / "tests/e2e"
-JSX_ROOT = REPO / "docs"
+# TRK-242 monorepo restructure: portal source moved from docs/ to
+# tools/portal/src/. Registry `file:` paths (interactive/tools/... and
+# getting-started/...) are resolved relative to this root — matching the
+# convention already used by check_tool_registry_jsx_parity.py. (#444 Phase 0:
+# this default was left stale at REPO/"docs", silently reporting 0 active tools.)
+JSX_ROOT = REPO / "tools" / "portal" / "src"
 DEFAULT_OUTPUT = REPO / "docs/internal/component-health-snapshot.json"
 
 # --- Regex / 常數 ---

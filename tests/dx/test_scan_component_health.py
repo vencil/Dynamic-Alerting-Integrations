@@ -267,3 +267,38 @@ class TestScanArchivedHandling:
             "last_modified", "first_commit",
         ):
             assert key in active, f"missing field on active entry: {key}"
+
+
+# ---------------------------------------------------------------------------
+# Default-path drift guard (#444 Phase 0)
+# ---------------------------------------------------------------------------
+# The integration tests above monkeypatch JSX_ROOT onto a tmp fixture, so they
+# never exercise the *production default*. That blind spot let JSX_ROOT sit
+# stale at REPO/"docs" after portal source moved to tools/portal/src/ (the gate
+# silently reported 0 active tools). These tests assert the module default
+# resolves to a real directory that actually contains .jsx, closing that class.
+class TestDefaultJsxRoot:
+    def test_jsx_root_default_exists_and_is_dir(self):
+        assert sch.JSX_ROOT.is_dir(), (
+            f"JSX_ROOT default does not resolve to a directory: {sch.JSX_ROOT}. "
+            f"If portal source moved, update the module default (#444 drift)."
+        )
+
+    def test_jsx_root_default_contains_jsx(self):
+        jsx = list(sch.JSX_ROOT.rglob("*.jsx"))
+        assert jsx, (
+            f"JSX_ROOT default resolves but holds no .jsx: {sch.JSX_ROOT}. "
+            f"scan() would report 0 active tools — the #444 failure mode."
+        )
+
+    def test_registry_entries_resolve_under_default_root(self):
+        import yaml as _yaml
+        reg = _yaml.safe_load(sch.REGISTRY.read_text(encoding="utf-8"))
+        missing = [
+            t["file"] for t in reg["tools"]
+            if not (sch.JSX_ROOT / t["file"]).exists()
+        ]
+        assert not missing, (
+            f"{len(missing)} registry file: entries do not resolve under "
+            f"JSX_ROOT default {sch.JSX_ROOT}: {missing[:5]}"
+        )
