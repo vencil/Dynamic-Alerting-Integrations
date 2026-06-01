@@ -537,6 +537,28 @@ class TestExportPatch:
             "decrease": "80",              # negative delta still actionable
         }}}
 
+    def test_mixed_tenants_preserve_skip_transparency(self):
+        """一 tenant 有建議、另一 tenant 全 skip → YAML 只含前者，但後者 skip-context 仍以註解保留。"""
+        yaml = pytest.importorskip("yaml")
+        reports = [
+            tr.TenantRecommendation(tenant="db-a", total_keys=1, keys=[
+                tr.KeyRecommendation("mysql_cpu", "80", recommended=90, delta_pct=12.5,
+                                     confidence="HIGH", reason="recommended at P95"),
+            ]),
+            tr.TenantRecommendation(tenant="db-b", total_keys=1, keys=[
+                tr.KeyRecommendation("redis_connected_clients", "500", recommended=None,
+                                     reason="skipped: unmapped"),
+            ]),
+        ]
+        out = tr.format_export_patch(reports)
+        doc = yaml.safe_load(out)
+        # applyable YAML carries ONLY the actionable tenant
+        assert doc == {"tenants": {"db-a": {"mysql_cpu": "90"}}}
+        # but db-b's skip context is NOT silently dropped — present as a comment
+        assert "db-b" in out
+        assert "(skipped)" in out
+        assert "redis_connected_clients" in out
+
     def test_export_patch_cli(self, tmp_path):
         """CLI --export-patch dry-run 路徑跑得通（無 Prometheus → 全 skip）。"""
         write_yaml(str(tmp_path), "db-a.yaml", make_tenant_yaml("db-a", keys={"mysql_cpu": 80}))

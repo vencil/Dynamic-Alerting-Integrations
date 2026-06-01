@@ -9,7 +9,7 @@ lang: en
 # da-tools CLI Reference
 
 > **Language / 語言：** **English (Current)** | [中文](./cli-reference.md)
-
+>
 > **Audience**: Platform Engineers, SREs, DevOps, Tenants
 > **Container Image**: `ghcr.io/vencil/da-tools:v2.8.0`
 > **Version**: (synced with platform version)
@@ -2930,7 +2930,7 @@ da-tools threshold-recommend --generate-observed-map
 | `--generate-observed-map` | Regenerate the observed-map from rule-packs (#719); does not need `--config-dir` | - |
 
 > **#720 STAGE-1 (`--export-patch`)**: emits a `tenants:`-rooted conf.d override (only keys with an actionable recommendation; within-margin / skipped keys are listed as comments). The operator reviews it, merges it into the matching `conf.d/<tenant>.yaml`, and opens a PR → the existing `backtest.yaml` CI posts the old-vs-new firing-count risk report (the STAGE-1 value basis). The tool does **not** edit conf.d in place (the heavier in-place ruamel round-trip is deferred — #721).
-
+>
 > **#719 data source**: recommendations come from the observed recording rule each threshold key is actually compared against in its rule-pack alert (via `scripts/tools/ops/metric_observed_map.yaml`), NOT the configured `user_threshold`. Keys that are unmapped / lower-bound (<) / version-aware / pending manual resolution are fail-loud skipped with a reason. The observed-map is produced by `--generate-observed-map` and guarded by a CI drift-check.
 
 **Confidence Levels**

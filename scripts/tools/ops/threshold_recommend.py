@@ -721,23 +721,45 @@ def format_export_patch(reports: list[TenantRecommendation]) -> str:
     ]
     if total == 0:
         lines.append("# (no actionable recommendations)")
+        # Still surface why every key was skipped — the transparency this mode
+        # documents must not vanish just because nothing is actionable. These
+        # are top-level comments (no `tenants:` block, so the output stays an
+        # empty/None YAML doc that applies to nothing).
+        for rep in reports:
+            for r in sorted(rep.keys, key=lambda x: x.key):
+                why = r.reason or "no recommendation"
+                lines.append(f"# [{rep.tenant}] (skipped) {r.key}: {why}")
         return "\n".join(lines) + "\n"
 
     lines.append("tenants:")
     for rep, ks in exportable:
+        skipped = sorted(
+            (r for r in rep.keys if not _exportable(r)), key=lambda x: x.key
+        )
         if not ks:
+            # tenant has only non-actionable keys → no YAML block, but keep the
+            # per-key skip context as top-level comments (don't drop it).
+            for r in skipped:
+                why = r.reason or "no recommendation"
+                lines.append(f"# [{rep.tenant}] (skipped) {r.key}: {why}")
             continue
         lines.append(f"  {rep.tenant}:")
         for r in sorted(ks, key=lambda x: x.key):
             val = _format_threshold_value(r.recommended)
+            # `cur` goes only into the trailing `#` comment. Safe to interpolate
+            # raw: an exportable key has recommended != None, i.e.
+            # recommend_threshold() float-parsed current_value, so it cannot
+            # contain a newline that would break this single-line comment.
+            # (Do NOT copy current_value into the skipped-key comments below —
+            # skipped keys may carry an un-float-parseable / multiline value;
+            # those comments use only the tool-generated reason string.)
             cur = r.current_value if r.current_value is not None else "?"
             delta = f"{r.delta_pct:+.1f}%" if r.delta_pct is not None else "?"
             lines.append(
                 f'    {r.key}: "{val}"   # was {cur}, {delta}, {r.confidence} — {r.reason}'
             )
-        # surface skipped keys as comments for transparency
-        skipped = [r for r in rep.keys if not _exportable(r)]
-        for r in sorted(skipped, key=lambda x: x.key):
+        # surface this tenant's skipped keys as in-block comments
+        for r in skipped:
             why = r.reason or "no recommendation"
             lines.append(f"    # (skipped) {r.key}: {why}")
     return "\n".join(lines) + "\n"
