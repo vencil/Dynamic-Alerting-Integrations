@@ -72,13 +72,18 @@ const EDGES = [
   { from: 'nginx', to: 'blackbox', type: 'suggests', reason: t('HTTP 端點探測補充內部 metrics', 'HTTP endpoint probing complements internal metrics') },
 ];
 
+// Node category colors → design tokens (#444). Each category resolves to a
+// --da-color-dep-<cat>-{bg,light,text} triple defined in design-tokens.css
+// (light + dark), so the graph follows theme switching automatically.
+// bg = saturated fill (selected) + stroke; light = soft fill (unselected);
+// text = label. var() resolves in SVG fill/stroke attrs — same mechanism the
+// edge <line>/<marker> already use above.
 const CATEGORY_COLORS = {
-  /* token-exempt: category visualization colors (domain-specific palette) */
-  infra: { bg: '#3b82f6', light: '#dbeafe', text: '#1e40af' },
-  database: { bg: '#10b981', light: '#d1fae5', text: '#065f46' },
-  middleware: { bg: '#f59e0b', light: '#fef3c7', text: '#92400e' },
-  runtime: { bg: '#8b5cf6', light: '#ede9fe', text: '#5b21b6' },
-  custom: { bg: '#6b7280', light: '#f3f4f6', text: '#374151' },
+  infra: { bg: 'var(--da-color-dep-infra-bg)', light: 'var(--da-color-dep-infra-light)', text: 'var(--da-color-dep-infra-text)' },
+  database: { bg: 'var(--da-color-dep-database-bg)', light: 'var(--da-color-dep-database-light)', text: 'var(--da-color-dep-database-text)' },
+  middleware: { bg: 'var(--da-color-dep-middleware-bg)', light: 'var(--da-color-dep-middleware-light)', text: 'var(--da-color-dep-middleware-text)' },
+  runtime: { bg: 'var(--da-color-dep-runtime-bg)', light: 'var(--da-color-dep-runtime-light)', text: 'var(--da-color-dep-runtime-text)' },
+  custom: { bg: 'var(--da-color-dep-custom-bg)', light: 'var(--da-color-dep-custom-light)', text: 'var(--da-color-dep-custom-text)' },
 };
 
 /* ── Layout: circular ── */

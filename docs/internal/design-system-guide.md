@@ -181,6 +181,25 @@ v2.5.0 存在三套平行的 CSS 系統，導致色彩、間距、字型等 desi
 | `--da-color-mode-silent` | #f59e0b | #fbbf24 | Silent（靜默模式） |
 | `--da-color-mode-maintenance` | #ef4444 | #f87171 | Maintenance（維護模式） |
 
+### 3.6 Dependency-graph 節點分類色（#444）
+
+`dependency-graph` 工具以節點類型（infra / database / middleware / runtime /
+custom）區分 Rule Pack。此為**獨立語意軸**，與上方 icon / journey / mode 不重疊。
+每類 **3 個 role**：`bg`＝飽和主色（選中節點填色 + 節點外框）、`light`＝軟底（未選中
+節點填色）、`text`＝節點 label 文字色。
+
+| Token 前綴 | bg（L／D） | light（L／D） | text（L／D） | 類別 |
+|-----------|-----------|--------------|-------------|------|
+| `--da-color-dep-infra-*` | #3b82f6／#60a5fa | #dbeafe／#1e3a5f | #1e40af／#bfdbfe | 基礎設施（K8s/node/etcd…） |
+| `--da-color-dep-database-*` | #10b981／#34d399 | #d1fae5／#064e3b | #065f46／#a7f3d0 | 資料庫 |
+| `--da-color-dep-middleware-*` | #f59e0b／#fbbf24 | #fef3c7／#451a03 | #92400e／#fde68a | 中介層（Kafka/Nginx…） |
+| `--da-color-dep-runtime-*` | #8b5cf6／#a78bfa | #ede9fe／#2e1065 | #5b21b6／#ddd6fe | 執行期（JVM…） |
+| `--da-color-dep-custom-*` | #6b7280／#9ca3af | #f3f4f6／#374151 | #374151／#e5e7eb | 自訂 |
+
+> Dark 值依本檔 light→dark 慣例推導：`bg`→brand-400、`light`→該色相既有 soft-dark
+> 值、`text`→bright-200（在深 `light` 底上 WCAG-AA ≥7:1）。`text` 套在 `light` 底為
+> 設計契約配對，勿自行湊色。SSOT 以 `docs/assets/design-tokens.css` 為準。
+
 ---
 
 ## 4. [data-theme] 切換機制
