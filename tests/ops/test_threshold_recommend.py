@@ -458,6 +458,94 @@ class TestOutputFormatting:
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# --export-patch (#720 STAGE-1)
+# ═══════════════════════════════════════════════════════════════════════
+class TestExportPatch:
+    """conf.d override fragment 輸出測試（#720 STAGE-1）。"""
+
+    def _reports(self):
+        # cpu: +6.3% actionable; mem: -2.2% within-margin; lag: skipped (no rec)
+        return [tr.TenantRecommendation(
+            tenant="db-a",
+            keys=[
+                tr.KeyRecommendation("mysql_cpu", "80", p95=85.0, recommended=85,
+                                     delta_pct=6.3, confidence="MEDIUM",
+                                     reason="recommended at P95 (increase 6.3%)"),
+                tr.KeyRecommendation("mysql_connections", "90", p95=88.0, recommended=88,
+                                     delta_pct=-2.2, confidence="HIGH",
+                                     reason="within 5% margin, no change needed"),
+                tr.KeyRecommendation("kafka_broker_count", "3", recommended=None,
+                                     reason="skipped: lower-bound (<) metric — #721 item 6"),
+            ],
+            total_keys=3,
+            recommended_changes=1,
+        )]
+
+    def test_emits_only_actionable_key_as_valid_yaml(self):
+        """只含 |delta|>=5% 且有建議的 key；輸出是合法 conf.d YAML。"""
+        yaml = pytest.importorskip("yaml")
+        out = tr.format_export_patch(self._reports())
+        doc = yaml.safe_load(out)
+        # only the actionable key, quoted-string value, under tenants:<name>
+        assert doc == {"tenants": {"db-a": {"mysql_cpu": "85"}}}
+
+    def test_within_margin_and_skipped_not_patched(self):
+        """within-margin / skipped key 不進 patch（只當註解列出）。"""
+        out = tr.format_export_patch(self._reports())
+        # the YAML data must NOT carry these keys
+        yaml = pytest.importorskip("yaml")
+        doc = yaml.safe_load(out) or {}
+        emitted = doc.get("tenants", {}).get("db-a", {})
+        assert "mysql_connections" not in emitted   # within-margin
+        assert "kafka_broker_count" not in emitted   # skipped (no rec)
+        # but they ARE surfaced as transparency comments
+        assert "(skipped)" in out
+        assert "mysql_connections" in out  # appears in a comment line
+
+    def test_value_is_quoted_string_integer(self):
+        """整數建議值渲染為不帶小數點的 quoted string（對齊 conf.d 慣例）。"""
+        out = tr.format_export_patch(self._reports())
+        assert '"85"' in out
+        assert '"85.0"' not in out
+
+    def test_no_actionable_recommendations(self):
+        """全 skipped / 空 reports → 合法 YAML + 明確 no-actionable 標記，不崩。"""
+        yaml = pytest.importorskip("yaml")
+        skipped = [tr.TenantRecommendation(tenant="db-a", total_keys=1, keys=[
+            tr.KeyRecommendation("x", "1", recommended=None, reason="skipped: unmapped"),
+        ])]
+        for reports in (skipped, []):
+            out = tr.format_export_patch(reports)
+            assert "no actionable" in out
+            assert yaml.safe_load(out) is None   # comments only → parses to None
+
+    def test_float_value_and_boundary_and_negative(self):
+        """float 帶小數 / 邊界 5.0% 含入 / 負 delta（decrease）皆正確 emit。"""
+        yaml = pytest.importorskip("yaml")
+        reports = [tr.TenantRecommendation(tenant="t", total_keys=3, keys=[
+            tr.KeyRecommendation("pg_replication_lag", "30", recommended=45.5,
+                                 delta_pct=51.7, confidence="HIGH", reason="P95"),
+            tr.KeyRecommendation("boundary", "100", recommended=105,
+                                 delta_pct=5.0, confidence="HIGH", reason="P95"),  # inclusive
+            tr.KeyRecommendation("decrease", "100", recommended=80,
+                                 delta_pct=-20.0, confidence="HIGH", reason="decrease"),
+        ])]
+        doc = yaml.safe_load(tr.format_export_patch(reports))
+        assert doc == {"tenants": {"t": {
+            "pg_replication_lag": "45.5",  # float keeps decimals
+            "boundary": "105",             # 5.0% boundary is included (>=)
+            "decrease": "80",              # negative delta still actionable
+        }}}
+
+    def test_export_patch_cli(self, tmp_path):
+        """CLI --export-patch dry-run 路徑跑得通（無 Prometheus → 全 skip）。"""
+        write_yaml(str(tmp_path), "db-a.yaml", make_tenant_yaml("db-a", keys={"mysql_cpu": 80}))
+        with patch("sys.argv", ["threshold_recommend.py", "--config-dir", str(tmp_path),
+                                 "--export-patch", "--dry-run"]):
+            tr.main()  # must not raise
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # CLI main()
 # ═══════════════════════════════════════════════════════════════════════
 class TestCLI:

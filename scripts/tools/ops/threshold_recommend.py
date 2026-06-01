@@ -665,6 +665,84 @@ def format_markdown_report(reports: list[TenantRecommendation]) -> str:
     return "\n".join(lines)
 
 
+def _format_threshold_value(value: float) -> str:
+    """Render a recommended threshold as a conf.d string value.
+
+    conf.d values are quoted strings (e.g. ``"70"``). Whole numbers render
+    without a decimal point so the patch matches the prevailing integer style;
+    fractional values keep up to 2 dp (recommend_threshold already rounded).
+    """
+    if value == int(value):
+        return str(int(value))
+    return f"{value:g}"
+
+
+def _exportable(r: KeyRecommendation) -> bool:
+    """True iff this key carries an actionable, applyable recommendation.
+
+    #720 STAGE-1 fail-loud: only emit a patch line for keys with a real
+    recommendation — i.e. a numeric ``recommended`` AND a delta past the 5%
+    noise margin. Keys that were skipped (unmapped / lower-bound / unsupported
+    scope / no data — ``recommended is None``) or are within-margin (no change
+    needed) are intentionally NOT patched, mirroring the analyze_tenant skip.
+    """
+    return (
+        r.recommended is not None
+        and r.delta_pct is not None
+        and abs(r.delta_pct) >= 5.0
+    )
+
+
+def format_export_patch(reports: list[TenantRecommendation]) -> str:
+    """Format reports as an applyable conf.d override fragment (#720 STAGE-1).
+
+    Emits a ``tenants:``-rooted YAML block carrying ONLY the keys with an
+    actionable recommendation (see ``_exportable``). The operator reviews it,
+    merges/applies it into the matching ``conf.d/<tenant>.yaml``, and opens a
+    PR — at which point the existing ``backtest.yaml`` CI posts the
+    old-vs-new firing-count risk report (the STAGE-1 value basis). Skipped /
+    within-margin keys are listed as comments so the output is self-explaining
+    without re-running in another mode.
+
+    T1 (advisory fragment, 0 new deps): the operator applies it; the tool does
+    NOT edit conf.d in place (that heavier ruamel round-trip is deferred —
+    #457 R0 §5 / #721).
+    """
+    exportable = [
+        (rep, [r for r in rep.keys if _exportable(r)]) for rep in reports
+    ]
+    total = sum(len(ks) for _, ks in exportable)
+
+    lines: list[str] = [
+        "# threshold-recommend --export-patch (#720 STAGE-1)",
+        "# Review, then merge each tenant block into the matching conf.d/<tenant>.yaml",
+        "# and open a PR — backtest.yaml CI will post the old-vs-new firing-count risk report.",
+        "# Only keys with an actionable recommendation (|delta| >= 5%, mapped, upper-bound) appear.",
+    ]
+    if total == 0:
+        lines.append("# (no actionable recommendations)")
+        return "\n".join(lines) + "\n"
+
+    lines.append("tenants:")
+    for rep, ks in exportable:
+        if not ks:
+            continue
+        lines.append(f"  {rep.tenant}:")
+        for r in sorted(ks, key=lambda x: x.key):
+            val = _format_threshold_value(r.recommended)
+            cur = r.current_value if r.current_value is not None else "?"
+            delta = f"{r.delta_pct:+.1f}%" if r.delta_pct is not None else "?"
+            lines.append(
+                f'    {r.key}: "{val}"   # was {cur}, {delta}, {r.confidence} — {r.reason}'
+            )
+        # surface skipped keys as comments for transparency
+        skipped = [r for r in rep.keys if not _exportable(r)]
+        for r in sorted(skipped, key=lambda x: x.key):
+            why = r.reason or "no recommendation"
+            lines.append(f"    # (skipped) {r.key}: {why}")
+    return "\n".join(lines) + "\n"
+
+
 # ---------------------------------------------------------------------------
 # CLI entry point
 # ---------------------------------------------------------------------------
@@ -726,6 +804,17 @@ def main() -> None:
         action="store_true",
         help=_HELP['markdown'][_LANG],
     )
+    parser.add_argument(
+        "--export-patch",
+        action="store_true",
+        dest="export_patch",
+        help=(
+            "輸出可套用的 conf.d override 片段（#720 STAGE-1）；"
+            "只含有實際建議的 key，operator 套用後自開 PR" if _LANG == 'zh' else
+            "Output an applyable conf.d override fragment (#720 STAGE-1); "
+            "only keys with an actionable recommendation, operator applies + opens a PR"
+        ),
+    )
     args = parser.parse_args()
 
     # #719: regenerate the observed-map and exit (does not need --config-dir).
@@ -771,7 +860,9 @@ def main() -> None:
         dry_run=args.dry_run,
     )
 
-    if args.json_output:
+    if args.export_patch:
+        print(format_export_patch(reports))
+    elif args.json_output:
         print(format_json_report(reports))
     elif args.markdown:
         print(format_markdown_report(reports))
