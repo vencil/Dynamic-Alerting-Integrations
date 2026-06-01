@@ -82,6 +82,28 @@
   --da-color-icon-chart:      #db2777;
   --da-color-icon-chart-bg:   #fce7f3;
 
+  /* ── Dependency-graph node category colors (#444 dep-graph migration) ──
+     Distinct semantic axis from icon-* / journey-* / mode-* families: classify
+     dependency-graph NODE TYPES, not icons/phases/modes. 3-role set per
+     category — bg = saturated fill (selected node) + node stroke;
+     light = soft fill (unselected node); text = node label color.
+     Light values lifted verbatim from dependency-graph.jsx CATEGORY_COLORS. */
+  --da-color-dep-infra-bg:         #3b82f6;
+  --da-color-dep-infra-light:      #dbeafe;
+  --da-color-dep-infra-text:       #1e40af;
+  --da-color-dep-database-bg:      #10b981;
+  --da-color-dep-database-light:   #d1fae5;
+  --da-color-dep-database-text:    #065f46;
+  --da-color-dep-middleware-bg:    #f59e0b;
+  --da-color-dep-middleware-light: #fef3c7;
+  --da-color-dep-middleware-text:  #92400e;
+  --da-color-dep-runtime-bg:       #8b5cf6;
+  --da-color-dep-runtime-light:    #ede9fe;
+  --da-color-dep-runtime-text:     #5b21b6;
+  --da-color-dep-custom-bg:        #6b7280;
+  --da-color-dep-custom-light:     #f3f4f6;
+  --da-color-dep-custom-text:      #374151;
+
   /* ── Journey Phase Badge ── */
   --da-color-journey-deploy:          #9d174d;
   --da-color-journey-deploy-bg:       rgba(236, 72, 153, 0.25);
@@ -191,6 +213,31 @@
   --da-color-icon-dashboard-bg: #312e81;
   --da-color-icon-chart:      #f472b6;
   --da-color-icon-chart-bg:   #500724;
+
+  /* ── Dependency-graph node category colors (dark) ──
+     Derivation mirrors the file's light→dark conventions:
+       bg    → brand-400 (one step lighter; same value the accent / icon
+               tokens flip to in dark, e.g. accent #2563eb→#60a5fa)
+       light → the hue's existing soft-dark value (reuses accent-soft
+               #1e3a5f / success-soft #064e3b / warning-soft #451a03 /
+               icon-rules-bg #2e1065; custom uses gray-700 #374151 so the
+               unselected node stays distinct from surface #1e293b)
+       text  → bright-200 — WCAG-AA (>7:1) on the deep `light` soft fill. */
+  --da-color-dep-infra-bg:         #60a5fa;
+  --da-color-dep-infra-light:      #1e3a5f;
+  --da-color-dep-infra-text:       #bfdbfe;
+  --da-color-dep-database-bg:      #34d399;
+  --da-color-dep-database-light:   #064e3b;
+  --da-color-dep-database-text:    #a7f3d0;
+  --da-color-dep-middleware-bg:    #fbbf24;
+  --da-color-dep-middleware-light: #451a03;
+  --da-color-dep-middleware-text:  #fde68a;
+  --da-color-dep-runtime-bg:       #a78bfa;
+  --da-color-dep-runtime-light:    #2e1065;
+  --da-color-dep-runtime-text:     #ddd6fe;
+  --da-color-dep-custom-bg:        #9ca3af;
+  --da-color-dep-custom-light:     #374151;
+  --da-color-dep-custom-text:      #e5e7eb;
 
   --da-color-journey-deploy:          #f472b6;
   --da-color-journey-deploy-bg:       rgba(236, 72, 153, 0.2);
