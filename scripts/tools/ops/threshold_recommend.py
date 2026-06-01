@@ -4,6 +4,16 @@
 根據 Prometheus 歷史 metrics 的 P50/P95/P99 百分位數，結合 alert_quality Noise Score，
 為每個 tenant 的每個 metric key 產生閾值推薦。
 
+#719 資料源（重要）：本工具查每個閾值 key 在 rule-pack alert 中**實際比對**的
+觀測 recording rule（透過 observed-map，`scripts/tools/ops/metric_observed_map.yaml`），
+而非 `user_threshold`（那是已設定的閾值值 → 回音室；且 prod label 不符回傳空集合）。
+無對映 / 下界(<) / 不支援 scope / needs_review 的 key 一律 fail-loud skip。
+
+領域邊界（Day 0 vs Day N，#719）：
+  本工具是 **Day N / 上線後精確微調** —— 查 normalized recording rule（同閾值單位）。
+  **Day 0 / 冷啟動粗估**請用 `baseline_discovery.py`（查 raw exporter metric）。
+  ⛔ 兩者勿合併（資料源 + 時空背景皆不同）。
+
 Usage:
   # Recommend thresholds for all tenants
   da-tools threshold-recommend --config-dir ./conf.d/ --prometheus http://localhost:9090
@@ -56,6 +66,7 @@ from _lib_python import (  # noqa: E402
     load_tenant_configs,
     parse_duration_seconds,
 )
+import _observed_map_lib as observed_map_lib  # noqa: E402
 
 _LANG = detect_cli_lang()
 
@@ -325,21 +336,33 @@ def recommend_threshold(
 # ---------------------------------------------------------------------------
 # Prometheus query helpers
 # ---------------------------------------------------------------------------
-def build_metric_query(key: str, tenant: str, lookback: str) -> str:
-    """Build a PromQL range query for a tenant metric key.
+def build_metric_query(observed_series: str, tenant: str, lookback: str) -> str:
+    """Build a PromQL range query for an OBSERVED-workload recording rule.
 
-    Uses user_threshold metric with key and tenant labels
-    to fetch historical values.
+    #719: recommendations must come from the observed workload series that the
+    threshold is actually compared against in the rule-pack alert (e.g.
+    ``tenant:mysql_threads_connected:max``), NOT from ``user_threshold`` — that
+    metric is the operator-CONFIGURED threshold value (collector.go: a gauge of
+    ``ResolvedThreshold.Value``), so querying it gave an echo chamber
+    (recommending future settings from past settings). It was also broken in
+    prod: ``user_threshold`` has no ``key`` label (its labels are
+    ``{tenant, metric, component, severity}``), so ``{key="..."}`` matched
+    nothing and every key returned "no data points".
+
+    The observed recording rule is, by construction, in the same unit/topology as
+    the threshold (the alert compares them directly), so P95(observed) is a
+    directly-usable threshold value — no unit conversion needed.
 
     Args:
-        key: Metric key name (e.g., 'mysql_connections').
+        observed_series: Observed recording-rule series name (from the
+            #719 observed-map), e.g. ``tenant:mysql_threads_connected:max``.
         tenant: Tenant identifier.
         lookback: Lookback duration (e.g., '7d').
 
     Returns:
-        PromQL query string.
+        PromQL range-query string.
     """
-    return f'user_threshold{{key="{key}",tenant="{tenant}"}}[{lookback}]'
+    return f'{observed_series}{{tenant="{tenant}"}}[{lookback}]'
 
 
 def query_prometheus_range(
@@ -404,8 +427,15 @@ def analyze_tenant(
     lookback: str = "7d",
     min_samples: int = 100,
     dry_run: bool = False,
+    observed_map: Optional[dict[str, Any]] = None,
 ) -> TenantRecommendation:
     """Analyze one tenant and generate threshold recommendations.
+
+    #719: each threshold key is mapped (via the observed-map) to the OBSERVED
+    workload recording rule the alert compares it against. Keys that are
+    unmapped / lower-bound / unsupported-scope / needs-review are SKIPPED with an
+    explicit reason (fail-loud) rather than producing a bogus or echo-chamber
+    recommendation.
 
     Args:
         tenant_name: Tenant identifier.
@@ -414,10 +444,14 @@ def analyze_tenant(
         lookback: Lookback period for historical data.
         min_samples: Minimum sample count for confidence.
         dry_run: Only generate PromQL queries, don't execute.
+        observed_map: conf.d-key -> observed-series map (loads default if None).
 
     Returns:
         TenantRecommendation with per-key results.
     """
+    if observed_map is None:
+        observed_map = observed_map_lib.load_observed_map()
+
     report = TenantRecommendation(tenant=tenant_name)
 
     # Extract metric keys (skip reserved keys)
@@ -429,7 +463,26 @@ def analyze_tenant(
     report.total_keys = len(metric_keys)
 
     for key, current_value in sorted(metric_keys.items()):
-        promql = build_metric_query(key, tenant_name, lookback)
+        # #719: resolve the observed-workload series this threshold is compared
+        # against. fail-loud skip when there is no usable mapping.
+        entry = observed_map.get(key)
+        if entry is None:
+            report.keys.append(KeyRecommendation(
+                key=key,
+                current_value=current_value,
+                reason="no observed-load mapping for this key — not in observed-map (skipped)",
+            ))
+            continue
+        observed_series, skip_reason = observed_map_lib.resolve_observed(entry)
+        if skip_reason:
+            report.keys.append(KeyRecommendation(
+                key=key,
+                current_value=current_value,
+                reason=f"skipped: {skip_reason}",
+            ))
+            continue
+
+        promql = build_metric_query(observed_series, tenant_name, lookback)
 
         if dry_run:
             rec = KeyRecommendation(
@@ -516,6 +569,9 @@ def run_analysis(
             return []
         all_configs = {tenant_filter: all_configs[tenant_filter]}
 
+    # Load the observed-map once and share across tenants (#719).
+    observed_map = observed_map_lib.load_observed_map()
+
     reports: list[TenantRecommendation] = []
     for tenant_name in sorted(all_configs):
         report = analyze_tenant(
@@ -525,6 +581,7 @@ def run_analysis(
             lookback=lookback,
             min_samples=min_samples,
             dry_run=dry_run,
+            observed_map=observed_map,
         )
         if report.keys:
             reports.append(report)
@@ -614,8 +671,19 @@ def main() -> None:
     )
     parser.add_argument(
         "--config-dir",
-        required=True,
+        required=False,
+        default=None,
         help=_HELP['config_dir'][_LANG],
+    )
+    parser.add_argument(
+        "--generate-observed-map",
+        action="store_true",
+        help=(
+            "重新從 rule-packs/*.yaml 產生 observed-map 草稿（#719）；"
+            "needs_review 項目須人工 resolve" if _LANG == 'zh' else
+            "Regenerate the observed-map draft from rule-packs/*.yaml (#719); "
+            "needs_review entries require manual resolution"
+        ),
     )
     parser.add_argument(
         "--prometheus",
@@ -655,6 +723,28 @@ def main() -> None:
         help=_HELP['markdown'][_LANG],
     )
     args = parser.parse_args()
+
+    # #719: regenerate the observed-map and exit (does not need --config-dir).
+    if args.generate_observed_map:
+        summary = observed_map_lib.write_observed_map()
+        if _LANG == 'zh':
+            print(f"已產生 observed-map: {summary['path']}")
+            print(f"  共 {summary['total']} 個 key："
+                  f"{summary['clean']} clean / {summary['needs_review']} needs_review")
+            print("  needs_review 項目須人工 resolve（挑 observed_series / 確認方向）後才會被推薦使用。")
+        else:
+            print(f"Wrote observed-map: {summary['path']}")
+            print(f"  {summary['total']} keys: "
+                  f"{summary['clean']} clean / {summary['needs_review']} needs_review")
+            print("  needs_review entries require manual resolution before use.")
+        return
+
+    if not args.config_dir:
+        msg = ("缺少 --config-dir（或用 --generate-observed-map）"
+               if _LANG == 'zh' else
+               "--config-dir is required (or use --generate-observed-map)")
+        print(msg, file=sys.stderr)
+        sys.exit(1)
 
     if not Path(args.config_dir).is_dir():
         msg = f"配置目錄不存在: {args.config_dir}" if _LANG == 'zh' else f"Config directory not found: {args.config_dir}"

@@ -805,6 +805,19 @@ repos:
         # Per-line escape via `<!-- changelog-no-tbd: ignore -->` for legitimate
         # exceptions / illustrative quotes.
 
+      - id: threshold-observed-map-drift-check
+        name: threshold observed-map ↔ rule-packs drift guard (#719)
+        entry: python3 -X utf8 scripts/tools/lint/check_threshold_observed_map.py --ci
+        language: python
+        additional_dependencies: ['pyyaml']
+        pass_filenames: false
+        # Fires when the map OR any rule pack changes — a renamed recording rule
+        # / new alert can stale the committed map. FAIL only on hard drift
+        # (errors); known-deferred infos + orphan/coverage warns never red-gate
+        # (Gemini final-check). Fix: `da-tools threshold-recommend
+        # --generate-observed-map` + re-resolve needs_review, then commit the map.
+        files: ^(scripts/tools/ops/metric_observed_map\.yaml|rule-packs/rule-pack-.*\.yaml)$
+
       - id: undefined-tokens-check
         name: Detect JSX/CSS/HTML references to --da-* tokens not defined in design-tokens.css
         entry: python3 -X utf8 scripts/tools/lint/check_undefined_tokens.py --ci

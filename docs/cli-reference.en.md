@@ -2911,13 +2911,14 @@ Threshold recommendation engine — recommends optimal thresholds based on histo
 
 ```bash
 da-tools threshold-recommend --config-dir <PATH> [--prometheus <URL>] [--tenant <NAME>] [--lookback <DURATION>] [--min-samples <N>] [--dry-run] [--json] [--markdown]
+da-tools threshold-recommend --generate-observed-map
 ```
 
 **Parameters**
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| `--config-dir` | Path to conf.d/ directory (required) | - |
+| `--config-dir` | Path to conf.d/ directory (required except with `--generate-observed-map`) | - |
 | `--prometheus` | Prometheus Query API URL | `$PROMETHEUS_URL` or `http://localhost:9090` |
 | `--tenant` | Analyze only this tenant (omit for all) | all |
 | `--lookback` | Historical data lookback period | `7d` |
@@ -2925,6 +2926,9 @@ da-tools threshold-recommend --config-dir <PATH> [--prometheus <URL>] [--tenant 
 | `--dry-run` | Show PromQL queries without executing | - |
 | `--json` | JSON output | - |
 | `--markdown` | Markdown table output | - |
+| `--generate-observed-map` | Regenerate the observed-map from rule-packs (#719); does not need `--config-dir` | - |
+
+> **#719 data source**: recommendations come from the observed recording rule each threshold key is actually compared against in its rule-pack alert (via `scripts/tools/ops/metric_observed_map.yaml`), NOT the configured `user_threshold`. Keys that are unmapped / lower-bound (<) / version-aware / pending manual resolution are fail-loud skipped with a reason. The observed-map is produced by `--generate-observed-map` and guarded by a CI drift-check.
 
 **Confidence Levels**
 

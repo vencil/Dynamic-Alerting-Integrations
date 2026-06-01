@@ -5,6 +5,15 @@
 透過 Prometheus API 採集指標時間序列，計算統計摘要（p50/p90/p95/p99/max），
 產出 CSV + 建議閾值報告。
 
+領域邊界（Day 0 vs Day N，#719）：
+  本工具是 **Day 0 / 冷啟動粗估** —— 直接查底層 raw exporter metric
+  （DEFAULT_METRICS，如 mysql_global_status_threads_connected），用於新租戶
+  onboarding 階段、rule-pack recording rule 尚未累積足夠歷史時，給一個粗略基準。
+  **Day N / 上線後精確微調**請用 `threshold_recommend.py` —— 它查租戶閾值在
+  rule-pack alert 中**實際比對**的 recording rule（同單位/拓撲），精度較高。
+  ⛔ 兩者**勿合併**：資料源不同（raw exporter vs normalized recording rule）、
+  時空背景不同（冷啟動 vs 穩態微調）。
+
 用法:
   # 觀測 30 分鐘，每 30 秒採樣一次
   python3 baseline_discovery.py \

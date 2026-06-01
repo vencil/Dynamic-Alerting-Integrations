@@ -2656,13 +2656,14 @@ da-tools tenant-verify db-fin-a --conf-d conf.d/ \
 
 ```bash
 da-tools threshold-recommend --config-dir <PATH> [--prometheus <URL>] [--tenant <NAME>] [--lookback <DURATION>] [--min-samples <N>] [--dry-run] [--json] [--markdown]
+da-tools threshold-recommend --generate-observed-map
 ```
 
 **參數**
 
 | 參數 | 說明 | 預設值 |
 |------|------|--------|
-| `--config-dir` | conf.d/ 目錄路徑（必填） | - |
+| `--config-dir` | conf.d/ 目錄路徑（除 `--generate-observed-map` 外必填） | - |
 | `--prometheus` | Prometheus Query API URL | `$PROMETHEUS_URL` 或 `http://localhost:9090` |
 | `--tenant` | 只分析指定租戶（省略則分析全部） | 全部 |
 | `--lookback` | 歷史資料回溯期間 | `7d` |
@@ -2670,6 +2671,9 @@ da-tools threshold-recommend --config-dir <PATH> [--prometheus <URL>] [--tenant 
 | `--dry-run` | 僅顯示 PromQL 查詢，不實際執行 | - |
 | `--json` | JSON 輸出 | - |
 | `--markdown` | Markdown 表格輸出 | - |
+| `--generate-observed-map` | 從 rule-packs 重新產生 observed-map（#719）；不需 `--config-dir` | - |
+
+> **#719 資料源**：推薦值取自每個閾值 key 在 rule-pack alert 中**實際比對**的觀測 recording rule（透過 `scripts/tools/ops/metric_observed_map.yaml`），而非已設定的 `user_threshold`。無對映 / 下界(<) / version-aware / 待人工解析的 key 會 fail-loud 略過並附原因。observed-map 由 `--generate-observed-map` 產生、CI drift-guard 把關。
 
 **信心等級**
 
