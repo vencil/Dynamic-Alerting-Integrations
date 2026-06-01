@@ -11,11 +11,11 @@ import React, { useState, useMemo } from 'react';
 
 const t = window.__t || ((zh, en) => en);
 
-// Style tokens (v2.7.0 Phase .a0 migration):
-// - Colors mapped to var(--da-color-*) tokens where exact hex match exists (9 unique colors replaced, 23 occurrences).
-// - Remaining hex literals (#1e293b primary text ×5; #dc2626/#fecaca/#f0fdf4/#cbd5e1/#8b5cf6/#3b82f6/#16a34a one-offs) kept —
-//   no exact semantic token; pending design:design-system audit to decide: add tokens, normalize, or remove.
-// - px values embedded in CSS shorthand strings (e.g., padding: '6px 12px') intentionally left for v2.7.0 Phase .a0 batch 2.
+// Style tokens: all colors mapped to var(--da-color-*) tokens (#444 Phase 1 B2).
+// Semantic-first mapping: primary text -> --da-color-fg, outlier/error -> --da-color-error,
+// common-settings -> --da-color-success(-soft), silent-mode icon -> --da-color-mode-silent
+// (matches the sibling maintenance icon's --da-color-warning; the old hardcoded #8b5cf6
+// purple was off-system). px values in CSS shorthand strings remain (layout, token-exempt).
 
 // ── Sample Data ───────────────────────────────────────────────────
 // Simulates multiple tenant YAML configs with threshold overrides.
@@ -129,7 +129,7 @@ function findDivergent(tenants) {
 function MetricCard({ label, value, sub }) {
   const containerStyle = { background: 'var(--da-color-surface-hover)', border: '1px solid var(--da-color-section-border)', borderRadius: 8, padding: '12px 16px', textAlign: 'center', minWidth: 100 };
   const labelStyle = { fontSize: 12, color: 'var(--da-color-muted)', marginBottom: 4 };
-  const valueStyle = { fontSize: 24, fontWeight: 700, color: '#1e293b' };
+  const valueStyle = { fontSize: 24, fontWeight: 700, color: 'var(--da-color-fg)' };
   const subStyle = { fontSize: 11, color: 'var(--da-color-hero-muted)', marginTop: 2 };
   return (
     <div style={containerStyle}>
@@ -154,7 +154,7 @@ function BarChart({ data, maxVal, label }) {
         const barContainerStyle = { flex: 1, background: 'var(--da-color-tag-bg)', borderRadius: 4, height: 20, position: 'relative' };
         const barStyle = {
           width: `${Math.min(pct, 100)}%`, height: '100%', borderRadius: 4,
-          background: isOutlier ? 'var(--da-color-error)' : '#3b82f6',
+          background: isOutlier ? 'var(--da-color-error)' : 'var(--da-color-accent)',
           transition: 'width 0.3s',
         };
         const valueSpanStyle = { width: 45, fontSize: 11, color: isOutlier ? 'var(--da-color-error)' : 'var(--da-color-tag-fg)', textAlign: 'right', marginLeft: 8, fontWeight: isOutlier ? 700 : 400 };
@@ -189,7 +189,7 @@ function HeatmapRow({ metric, tenants, stats }) {
           padding: '6px 12px', textAlign: 'center', fontSize: 13,
           background: bg, borderBottom: '1px solid var(--da-color-section-border)',
           fontWeight: isDefault ? 400 : 700,
-          color: isDefault ? 'var(--da-color-muted)' : '#1e293b',
+          color: isDefault ? 'var(--da-color-muted)' : 'var(--da-color-fg)',
         };
         const defaultBadgeStyle = { fontSize: 10, color: 'var(--da-color-tile-muted)' };
         return (
@@ -246,7 +246,7 @@ function MultiTenantComparison() {
   const silentCount = tenants.filter(t => t.silentMode !== 'none').length;
 
   const mainContainerStyle = { fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif', maxWidth: 960, margin: '0 auto', padding: 24 };
-  const titleStyle = { fontSize: 22, fontWeight: 700, color: '#1e293b', marginBottom: 4 };
+  const titleStyle = { fontSize: 22, fontWeight: 700, color: 'var(--da-color-fg)', marginBottom: 4 };
   const descriptionStyle = { fontSize: 14, color: 'var(--da-color-muted)', marginBottom: 24 };
   const summaryCardsStyle = { display: 'flex', gap: 16, marginBottom: 24, flexWrap: 'wrap' };
   const heatmapContainerStyle = { border: '1px solid var(--da-color-section-border)', borderRadius: 8, overflow: 'auto', marginBottom: 24 };
@@ -258,20 +258,20 @@ function MultiTenantComparison() {
   const drilldownContainerStyle = { display: 'flex', gap: 24, marginBottom: 24, flexWrap: 'wrap' };
   const drilldownLeftStyle = { flex: 1, minWidth: 300 };
   const drilldownRightStyle = { flex: 1, minWidth: 300 };
-  const drilldownTitleStyle = { fontSize: 16, fontWeight: 600, color: '#1e293b', marginBottom: 12 };
+  const drilldownTitleStyle = { fontSize: 16, fontWeight: 600, color: 'var(--da-color-fg)', marginBottom: 12 };
   const controlsStyle = { display: 'flex', gap: 12, marginBottom: 12, alignItems: 'center' };
-  const selectStyle = { padding: '6px 10px', borderRadius: 6, border: '1px solid #cbd5e1', fontSize: 13 };
+  const selectStyle = { padding: '6px 10px', borderRadius: 6, border: '1px solid var(--da-color-surface-border)', fontSize: 13 };
   const labelStyle = { fontSize: 12, color: 'var(--da-color-muted)' };
   const inputRangeStyle = { width: 80, marginLeft: 6 };
   const sigmaTextStyle = { marginLeft: 4 };
-  const outlierBoxStyle = { marginTop: 8, padding: '8px 12px', background: 'var(--da-color-error-soft)', borderRadius: 6, border: '1px solid #fecaca' };
-  const outlierLabelStyle = { fontSize: 12, fontWeight: 600, color: '#dc2626' };
-  const outlierValueStyle = { fontSize: 12, color: '#dc2626', marginLeft: 8 };
+  const outlierBoxStyle = { marginTop: 8, padding: '8px 12px', background: 'var(--da-color-error-soft)', borderRadius: 6, border: '1px solid var(--da-color-error)' };
+  const outlierLabelStyle = { fontSize: 12, fontWeight: 600, color: 'var(--da-color-error)' };
+  const outlierValueStyle = { fontSize: 12, color: 'var(--da-color-error)', marginLeft: 8 };
   const divergenceBoxStyle = { border: '1px solid var(--da-color-section-border)', borderRadius: 8, overflow: 'hidden' };
-  const commonSettingsBoxStyle = { padding: '8px 12px', background: '#f0fdf4', borderTop: '1px solid var(--da-color-section-border)' };
-  const commonSettingsTextStyle = { fontSize: 12, color: '#16a34a' };
+  const commonSettingsBoxStyle = { padding: '8px 12px', background: 'var(--da-color-success-soft)', borderTop: '1px solid var(--da-color-section-border)' };
+  const commonSettingsTextStyle = { fontSize: 12, color: 'var(--da-color-success)' };
   const recommendationsStyle = { border: '1px solid var(--da-color-section-border)', borderRadius: 8, padding: 16, background: 'var(--da-color-surface-hover)' };
-  const recommendationsHeadingStyle = { fontSize: 16, fontWeight: 600, color: '#1e293b', marginBottom: 8 };
+  const recommendationsHeadingStyle = { fontSize: 16, fontWeight: 600, color: 'var(--da-color-fg)', marginBottom: 8 };
   const recommendationsListStyle = { margin: 0, paddingLeft: 20, fontSize: 13, color: 'var(--da-color-tag-fg)', lineHeight: 1.8 };
 
   return (
@@ -306,7 +306,7 @@ function MultiTenantComparison() {
               </th>
               {tenants.map((tenant, i) => {
                 const maintenanceIconStyle = { color: 'var(--da-color-warning)' };
-                const silentIconStyle = { color: '#8b5cf6' };
+                const silentIconStyle = { color: 'var(--da-color-mode-silent)' };
                 return (
                 <th key={i} style={tenantHeaderStyle}>
                   {tenant.name}
