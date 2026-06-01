@@ -43,19 +43,19 @@ const WRAPPER_STYLE = {
   gap: 'var(--da-space-3, 12px)',
   padding: 'var(--da-space-6, 32px) var(--da-space-4, 16px)',
   textAlign: 'center',
-  color: 'var(--da-color-fg, #6b7280)',
+  color: 'var(--da-color-muted)',
 };
 const ICON_STYLE = { fontSize: '32px', lineHeight: 1 };
 const TITLE_STYLE = {
   fontSize: '16px',
   fontWeight: 600,
-  color: 'var(--da-color-fg, #111827)',
+  color: 'var(--da-color-fg)',
 };
 const DESC_STYLE = { fontSize: '14px', maxWidth: '480px' };
 const BUTTON_STYLE = {
   marginTop: 'var(--da-space-2, 8px)',
   padding: '6px 14px',
-  background: 'var(--da-color-accent, #2563eb)',
+  background: 'var(--da-color-accent)',
   color: 'var(--da-color-accent-fg, #fff)',
   border: 'none',
   borderRadius: 'var(--da-radius-sm, 4px)',
