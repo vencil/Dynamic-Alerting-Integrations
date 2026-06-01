@@ -1,0 +1,128 @@
+# promtool unit test — mariadb CPU severity tiers (cpu_critical orphan fix).
+# Run: promtool test rules tests/rulepacks/rule-pack-mariadb-cpu_test.yaml
+#
+# Semantic oracle for the standalone MariaDBHighCPU (warning) + MariaDBHighCPUCritical
+# (critical) alerts added to consume the previously-orphan
+# `tenant:alert_threshold:cpu_critical` recording rule (and give `cpu` warning a
+# standalone firing path, symmetric with connections). Covers, per severity:
+#   - db-a: metadata present              → fires ENRICHED (branch A).
+#   - db-b: NO metadata (onboarding vacuum) → STILL fires BARE (branch B).
+#   - db-c: over threshold but maintenance  → suppressed.
+#   - db-d: below threshold                → no alert.
+# The CPU observed series is tenant:mysql_cpu_usage:rate5m =
+#   sum by(tenant)(rate(mysql_global_status_threads_running[5m])), so the leaf
+# input series is mysql_global_status_threads_running (a counter → use a ramp so
+# rate() is well-defined). ~1 running-thread/sec sustained ⇒ rate ≈ 1.0.
+rule_files:
+  - ../../rule-packs/rule-pack-mariadb.yaml
+
+evaluation_interval: 15s
+
+tests:
+  # ── Warning tier: MariaDBHighCPU (threshold cpu=0.5, rate≈1.0 > 0.5) ──
+  - interval: 15s
+    input_series:
+      # db-a: rate≈1.0 > 0.5 warning, metadata present → enriched fire.
+      - series: 'mysql_global_status_threads_running{tenant="db-a"}'
+        values: '0+15x40'
+      - series: 'user_threshold{tenant="db-a", metric="cpu", severity="warning"}'
+        values: '0.5x40'
+      - series: 'tenant_metadata_info{tenant="db-a", runbook_url="http://rb/a", owner="team-a", tier="gold"}'
+        values: '1x40'
+      # db-b: rate≈1.0 > 0.5, NO tenant_metadata_info → VACUUM-FIRE (branch B).
+      - series: 'mysql_global_status_threads_running{tenant="db-b"}'
+        values: '0+15x40'
+      - series: 'user_threshold{tenant="db-b", metric="cpu", severity="warning"}'
+        values: '0.5x40'
+      # db-c: rate≈1.0 > 0.5, metadata present, BUT maintenance active → suppressed.
+      - series: 'mysql_global_status_threads_running{tenant="db-c"}'
+        values: '0+15x40'
+      - series: 'user_threshold{tenant="db-c", metric="cpu", severity="warning"}'
+        values: '0.5x40'
+      - series: 'tenant_metadata_info{tenant="db-c", runbook_url="http://rb/c", owner="team-c", tier="silver"}'
+        values: '1x40'
+      - series: 'user_state_filter{tenant="db-c", filter="maintenance"}'
+        values: '1x40'
+      # db-d: rate≈1.0 < 2.0 warning threshold → no fire.
+      - series: 'mysql_global_status_threads_running{tenant="db-d"}'
+        values: '0+15x40'
+      - series: 'user_threshold{tenant="db-d", metric="cpu", severity="warning"}'
+        values: '2.0x40'
+
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: MariaDBHighCPU
+        exp_alerts:
+          # db-a: enriched (branch A) — carries runbook_url/owner/tier.
+          - exp_labels:
+              severity: warning
+              metric_group: cpu
+              tenant: db-a
+              runbook_url: "http://rb/a"
+              owner: team-a
+              tier: gold
+            exp_annotations:
+              summary: "High CPU on db-a"
+              summary_zh: "db-a CPU 過高"
+              platform_summary: "[gold] db-a: CPU threshold breached — review running-thread load"
+              platform_summary_zh: "[gold] db-a：CPU 閾值超出 — 檢查執行緒負載"
+              description: "1 running threads (warning threshold exceeded)"
+              description_zh: "1 個執行中執行緒（超過警告閾值）"
+              runbook_url: "http://rb/a"
+              owner: team-a
+              tier: gold
+          # db-b: VACUUM-FIRE (branch B) — fires WITHOUT enrichment labels.
+          - exp_labels:
+              severity: warning
+              metric_group: cpu
+              tenant: db-b
+            exp_annotations:
+              summary: "High CPU on db-b"
+              summary_zh: "db-b CPU 過高"
+              platform_summary: "[] db-b: CPU threshold breached — review running-thread load"
+              platform_summary_zh: "[] db-b：CPU 閾值超出 — 檢查執行緒負載"
+              description: "1 running threads (warning threshold exceeded)"
+              description_zh: "1 個執行中執行緒（超過警告閾值）"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+        # db-c (maintenance) and db-d (below threshold) produce NO MariaDBHighCPU alert.
+
+  # ── Critical tier: MariaDBHighCPUCritical (consumes the orphan cpu_critical) ──
+  - interval: 15s
+    input_series:
+      # db-a: rate≈1.0 > 0.5 critical, metadata present → enriched critical fire.
+      - series: 'mysql_global_status_threads_running{tenant="db-a"}'
+        values: '0+15x40'
+      - series: 'user_threshold{tenant="db-a", metric="cpu", severity="critical"}'
+        values: '0.5x40'
+      - series: 'tenant_metadata_info{tenant="db-a", runbook_url="http://rb/a", owner="team-a", tier="gold"}'
+        values: '1x40'
+      # db-d: rate≈1.0 < 2.0 critical threshold → no critical fire.
+      - series: 'mysql_global_status_threads_running{tenant="db-d"}'
+        values: '0+15x40'
+      - series: 'user_threshold{tenant="db-d", metric="cpu", severity="critical"}'
+        values: '2.0x40'
+
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: MariaDBHighCPUCritical
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              metric_group: cpu
+              tenant: db-a
+              runbook_url: "http://rb/a"
+              owner: team-a
+              tier: gold
+            exp_annotations:
+              summary: "Critical CPU on db-a"
+              summary_zh: "db-a CPU 嚴重過高"
+              platform_summary: "[gold] db-a: critical CPU saturation — immediate investigation needed"
+              platform_summary_zh: "[gold] db-a：CPU 飽和 — 需立即調查"
+              description: "1 running threads (critical threshold exceeded)"
+              description_zh: "1 個執行中執行緒（超過嚴重閾值）"
+              runbook_url: "http://rb/a"
+              owner: team-a
+              tier: gold
+        # db-d (below threshold) produces NO MariaDBHighCPUCritical alert.

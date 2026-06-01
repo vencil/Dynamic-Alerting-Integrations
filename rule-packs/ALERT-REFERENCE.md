@@ -109,6 +109,8 @@ lang: zh
 | MariaDBExporterAbsent | critical | No mysql_up metric found for 30s | 確認相關元件已啟動、配置正確；檢查元件日誌 | mysql_up |
 | MariaDBHighConnections | warning | [{{ $labels.tier }}] {{ $labels.tenant }}: connection threshold breached  | 檢查連線池配置、應用連線是否有洩漏；考慮增加最大連線數 | tenant:mysql_threads_connected:max |
 | MariaDBHighConnectionsCritical | critical | [{{ $labels.tier }}] {{ $labels.tenant }}: critical connection saturation  | 檢查連線池配置、應用連線是否有洩漏；考慮增加最大連線數 | tenant:mysql_threads_connected:max |
+| MariaDBHighCPU | warning | [{{ $labels.tier }}] {{ $labels.tenant }}: CPU threshold breached  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:mysql_cpu_usage:rate5m |
+| MariaDBHighCPUCritical | critical | [{{ $labels.tier }}] {{ $labels.tenant }}: critical CPU saturation  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:mysql_cpu_usage:rate5m |
 | MariaDBSystemBottleneck | critical | [{{ $labels.tier }}] {{ $labels.tenant }}: CPU + connections both exceeded  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:mysql_threads_connected:max |
 | MariaDBRecentRestart | info | Uptime is only {{ $value }}s (< 5 min) | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | mysql_global_status_uptime |
 | MariaDBHighSlowQueries | warning | [{{ $labels.tier }}] {{ $labels.tenant }}: slow query rate elevated  | 檢查慢查詢日誌，找出優化候選；考慮調整相關參數 | tenant:mysql_slow_queries:rate5m |
