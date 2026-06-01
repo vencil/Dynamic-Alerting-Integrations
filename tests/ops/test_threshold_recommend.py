@@ -497,3 +497,26 @@ class TestCLI:
             tr.main()
             captured = capsys.readouterr()
             assert "| Key |" in captured.out
+
+    def test_missing_config_dir_without_generate_exits_1(self):
+        """#719: 無 --config-dir 且非 generate → exit 1。"""
+        with patch("sys.argv", ["threshold_recommend.py"]):
+            with pytest.raises(SystemExit) as exc_info:
+                tr.main()
+            assert exc_info.value.code == 1
+
+    def test_generate_observed_map_cli(self, tmp_path, capsys, monkeypatch):
+        """#719: --generate-observed-map 寫出 map 並印摘要，不需 --config-dir。"""
+        called = {}
+
+        def fake_write(out_path=None, pack_paths=None):
+            called["yes"] = True
+            return {"path": str(tmp_path / "m.yaml"), "total": 3, "clean": 2, "needs_review": 1}
+
+        monkeypatch.setattr(tr.observed_map_lib, "write_observed_map", fake_write)
+        with patch("sys.argv", ["threshold_recommend.py", "--generate-observed-map"]):
+            tr.main()  # must NOT raise (no --config-dir required)
+        captured = capsys.readouterr()
+        assert called.get("yes") is True
+        assert "observed-map" in captured.out
+        assert "3" in captured.out  # total keys echoed
