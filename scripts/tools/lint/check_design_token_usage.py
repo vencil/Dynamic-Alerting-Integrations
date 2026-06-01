@@ -143,7 +143,21 @@ def _strip_comments(content: str) -> List[str]:
                 i = n
                 continue
             star = line.find("/*", i)
-            slash = line.find("//", i)
+            # Find a // that starts a line comment, skipping :// (URL schemes
+            # like https://) so we don't mistake a URL for a comment and blank
+            # out the rest of the line (which would hide real violations after
+            # it). A bare // not preceded by ':' is treated as a comment.
+            slash = -1
+            probe = i
+            while True:
+                cand = line.find("//", probe)
+                if cand == -1:
+                    break
+                if cand > 0 and line[cand - 1] == ":":
+                    probe = cand + 2
+                    continue
+                slash = cand
+                break
             # whichever comment opener comes first
             if slash != -1 and (star == -1 or slash < star):
                 buf.append(line[i:slash])

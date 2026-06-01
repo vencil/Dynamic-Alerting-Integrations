@@ -205,6 +205,21 @@ class TestHexColors:
         )
         assert [i["hex"] for i in issues] == ["#abcdef"]
 
+    def test_url_scheme_not_treated_as_line_comment(self):
+        """#444 B4 self-review catch: the // in https:// must NOT be read as a
+        line comment — doing so blanks the rest of the line and would hide a
+        real violation after the URL. Found by adversarial self-review."""
+        # URL followed by a real hex on the same line: hex must still report.
+        issues = dtu.check_hardcoded_hex_colors(
+            "const u = 'https://x.com'; const c = '#abcdef';", "x.jsx"
+        )
+        assert [i["hex"] for i in issues] == ["#abcdef"]
+        # A genuine // comment AFTER a URL string still suppresses.
+        issues2 = dtu.check_hardcoded_hex_colors(
+            "const u = 'https://x.com'; // note #ff0000", "x.jsx"
+        )
+        assert issues2 == []
+
     def test_hex_white_and_black_exempt(self, tmp_path):
         """#fff and #000 should be exempt (too common)."""
         content = textwrap.dedent("""\
