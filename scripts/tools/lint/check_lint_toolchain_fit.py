@@ -25,6 +25,17 @@ Lint class (lint-policy.md §2): (b) convention — fail = policy violation.
 Scan scope: full-scan of scripts/tools/lint/ (the population is tiny + the
 signal is "a new file appeared", so diff-only adds no value here).
 
+Known limitation (acceptable trade-off, flagged by external review): the
+detector keys on glob/rglob("*.jsx") — the overwhelmingly common idiom. A lint
+written with os.walk()/os.scandir() + `if name.endswith(".jsx")` would slip
+through. We deliberately do NOT widen the regex to cover that: matching bare
+`.endswith(".jsx")` reintroduces the false-positive trap (any path-suffix check
+trips it), and chasing every traversal idiom would mean reinventing a Python AST
+analyzer to catch reinvented JS linters — the same self-own this gate exists to
+prevent. This is a tripwire for the common path, not an airtight proof; the
+escape hatch is known and accepted. If os.walk-based DIY lints ever show up in
+practice, revisit then (improve-when-needed), not pre-emptively.
+
 Usage:
     python3 scripts/tools/lint/check_lint_toolchain_fit.py [--ci]
 """
