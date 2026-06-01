@@ -45,10 +45,11 @@ THRESHOLD_RE = re.compile(r"tenant(?:_version)?:alert_threshold:([A-Za-z0-9_]+)"
 # The colon convention naturally excludes tenant_metadata_info / user_state_filter
 # (underscore, no colon) — part of the R3 denylist.
 OBSERVED_RE = re.compile(r"tenant(?:_version)?:[A-Za-z0-9_:]+")
-# Numeric scaling adjacent to an operand (e.g. "* 100", "/ 1024"). The metadata
-# join "* on(tenant) group_left(...) tenant_metadata_info" is NOT numeric, so it
-# is not matched here.
-SCALING_RE = re.compile(r"[*/]\s*[0-9]")
+# Numeric scaling adjacent to an operand (e.g. "* 100", "/ 1024", "* (100)").
+# The metadata join "* on(tenant) group_left(...) tenant_metadata_info" is NOT
+# numeric, so it is not matched here. The optional "(" covers parenthesised
+# scalars like "* (100)".
+SCALING_RE = re.compile(r"[*/]\s*\(?\s*[0-9]")
 
 
 def _alert_rules(doc: dict) -> list[dict]:
@@ -66,12 +67,19 @@ def _direction_before(expr: str, key: str) -> Optional[str]:
     Scans backwards from the ``tenant:alert_threshold:<key>`` occurrence; skips
     ``=`` so ``>=`` / ``<=`` resolve to ``>`` / ``<``. The ``unless ... == 1``
     maintenance filter appears AFTER the comparison, so it is not picked up.
+
+    The token is matched with a trailing word-boundary so ``key="cpu"`` does NOT
+    match the ``cpu_critical`` token (a bare ``str.find`` would land on the
+    prefix-sharing sibling when both appear in one composite expr and read the
+    wrong operator — latent across the 14 ``<key>``/``<key>_critical`` pairs).
     """
-    tok = f"tenant:alert_threshold:{key}"
-    idx = expr.find(tok)
-    if idx < 0:
+    pat = re.compile(
+        r"tenant(?:_version)?:alert_threshold:" + re.escape(key) + r"(?![A-Za-z0-9_])"
+    )
+    m = pat.search(expr)
+    if m is None:
         return None
-    window = expr[max(0, idx - 100):idx]
+    window = expr[max(0, m.start() - 100):m.start()]
     for ch in reversed(window):
         if ch in "<>":
             return ch

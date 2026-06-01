@@ -107,6 +107,32 @@ class TestExtraction:
         assert m["foo"]["observed_series"] != "tenant:alert_threshold:foo"
 
 
+class TestDirectionParsing:
+    """Grammar-space guards for _direction_before (self-review hardening)."""
+
+    def test_prefix_sibling_does_not_steal_direction(self):
+        # A composite expr referencing BOTH <key> and <key>_critical: the bare
+        # str.find would match ':cpu' inside ':cpu_critical' first and read the
+        # wrong operator. Word-boundary matching must read each token's own dir.
+        expr = (
+            "tenant:x:max < on(tenant) tenant:alert_threshold:cpu_critical "
+            "or tenant:y:max > on(tenant) tenant:alert_threshold:cpu"
+        )
+        assert L._direction_before(expr, "cpu") == ">"
+        assert L._direction_before(expr, "cpu_critical") == "<"
+
+    def test_ge_le_resolve_to_gt_lt(self):
+        assert L._direction_before("a >= tenant:alert_threshold:k", "k") == ">"
+        assert L._direction_before("a <= tenant:alert_threshold:k", "k") == "<"
+
+    def test_scaling_regex_catches_paren_scalar(self):
+        assert L.SCALING_RE.search("foo * 100")
+        assert L.SCALING_RE.search("foo * (100)")
+        assert L.SCALING_RE.search("foo / 1024")
+        # the metadata join must NOT look like scaling
+        assert not L.SCALING_RE.search("x * on(tenant) group_left(owner) tenant_metadata_info")
+
+
 class TestResolveObserved:
     def test_resolved_clean(self):
         series, reason = L.resolve_observed(
