@@ -72,6 +72,18 @@ DESIGN_TOKENS = REPO_ROOT / "docs" / "assets" / "design-tokens.css"
 # Scanners
 # ---------------------------------------------------------------------------
 
+# A line is exempt if it carries /* token-exempt */ OR the reasoned form
+# /* token-exempt: <reason> */. Requiring the bare string only (the old
+# behaviour) silently dropped reasoned markers — every "/* token-exempt:
+# category colors */" was ignored and the finding still fired. Accepting the
+# reasoned form *encourages* authors to document WHY a value is exempt.
+_EXEMPT_RE = re.compile(r"/\*\s*token-exempt\b")
+
+
+def _is_exempt(line: str) -> bool:
+    return bool(_EXEMPT_RE.search(line))
+
+
 def check_hardcoded_hex_colors(content: str, filename: str) -> List[Dict]:
     """Scan for hardcoded hex colors that should use --da-color-* tokens.
 
@@ -86,8 +98,8 @@ def check_hardcoded_hex_colors(content: str, filename: str) -> List[Dict]:
 
     lines = content.splitlines()
     for i, line in enumerate(lines, 1):
-        # Skip lines with exempt marker
-        if "/* token-exempt */" in line:
+        # Skip lines with exempt marker (bare or reasoned)
+        if _is_exempt(line):
             continue
 
         # Skip pure comment lines
@@ -130,8 +142,8 @@ def check_hardcoded_px_values(content: str, filename: str) -> List[Dict]:
 
     lines = content.splitlines()
     for i, line in enumerate(lines, 1):
-        # Skip lines with exempt marker
-        if "/* token-exempt */" in line:
+        # Skip lines with exempt marker (bare or reasoned)
+        if _is_exempt(line):
             continue
 
         # Skip pure comment lines
@@ -148,13 +160,23 @@ def check_hardcoded_px_values(content: str, filename: str) -> List[Dict]:
 
         # Find style property patterns
         # Match patterns like: fontSize: '14px', padding: 12, margin: "8px"
+        # Group 3 captures the trailing unit (if any) so percentage/viewport/
+        # em values are NOT misread as px. A bare number (no unit) is treated
+        # as px because React maps unitless numeric style values to px.
         prop_pattern = re.compile(
-            r'(\w+)\s*:\s*[\'"]?(\d+)(?:px)?[\'"]?'
+            r'(\w+)\s*:\s*[\'"]?(\d+)(px|%|vh|vw|em|rem|fr|s|ms)?[\'"]?'
         )
 
         for m in prop_pattern.finditer(code_part):
             prop_name = m.group(1)
             px_value = m.group(2)
+            unit = m.group(3)
+
+            # Only px (or unitless → React defaults to px) is a violation.
+            # %, vh/vw, em/rem, fr, s/ms are legitimately not px (e.g.
+            # width: '100%' must not be flagged as 100px).
+            if unit not in (None, "px"):
+                continue
 
             # Exceptions: 0, 1, 2 (borders/hairlines)
             if int(px_value) in (0, 1, 2):
