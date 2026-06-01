@@ -25,7 +25,7 @@
  */
 
 import * as esbuild from 'esbuild';
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, readdir, unlink } from 'node:fs/promises';
 import { dirname, resolve, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -98,6 +98,31 @@ function stripFrontmatterPlugin() {
   };
 }
 
+/**
+ * Remove previously emitted bundle artifacts before a build so the output
+ * dir is an EXACT mirror of the current manifest + source graph. esbuild
+ * does not prune on its own, so a content-hashed shared chunk that gets
+ * renamed (source change) would otherwise leave its predecessor behind as
+ * an orphan — accumulating dead files that a `git diff` sync gate can't
+ * see (they're committed and unchanged). We only delete the two artifact
+ * shapes this script emits (`*.js` / `*.js.map`); any non-build file in the
+ * dir is left untouched.
+ */
+async function cleanDist() {
+  let files;
+  try {
+    files = await readdir(DIST_DIR);
+  } catch (err) {
+    if (err.code === 'ENOENT') return; // first build — nothing to clean
+    throw err;
+  }
+  await Promise.all(
+    files
+      .filter((f) => f.endsWith('.js') || f.endsWith('.js.map'))
+      .map((f) => unlink(resolve(DIST_DIR, f))),
+  );
+}
+
 async function loadManifest() {
   const path = resolve(__dirname, 'manifest.json');
   const raw = await readFile(path, 'utf8');
@@ -118,6 +143,7 @@ async function main() {
     return;
   }
 
+  await cleanDist();
   await mkdir(DIST_DIR, { recursive: true });
 
   const config = {

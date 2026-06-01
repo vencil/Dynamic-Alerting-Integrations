@@ -472,6 +472,23 @@ jobs:
         working-directory: tools/portal
         run: npm run build
 
+      - name: Verify committed dist matches fresh build (no stale dist)
+        # Root-cause guard for repo-wide dist staleness (TRK-239 / #444):
+        # production loads committed docs/assets/dist/ and mkdocs-deploy does
+        # NOT rebuild, so a source change that never re-runs `make portal-build`
+        # silently never reaches prod. build.mjs cleans + re-emits the dir, so
+        # any drift (modified bundle, renamed chunk, orphan) shows as a staged
+        # diff here. Build is byte-reproducible across the dev container and CI
+        # (esbuild 0.24.2 linux-x64, pinned via package-lock) — verified Node
+        # 20 == Node 24 output — so this gate does not false-red.
+        run: |
+          git add -A docs/assets/dist
+          if ! git diff --cached --quiet -- docs/assets/dist; then
+            echo "::error::docs/assets/dist/ is out of sync with source. Run 'make portal-build' in the dev container and commit the rebuilt bundles."
+            git diff --cached --stat -- docs/assets/dist
+            exit 1
+          fi
+
       - name: Enforce portal bundle size budget (TRK-232a)
         # Per-tool 100 KB / shared chunk 200 KB / total 4 MB.
         # Calibrated headroom over current sizes — catches accidents
