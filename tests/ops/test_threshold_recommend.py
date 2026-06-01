@@ -198,14 +198,21 @@ class TestRecommendThreshold:
 # build_metric_query
 # ═══════════════════════════════════════════════════════════════════════
 class TestBuildQuery:
-    """PromQL 查詢建構測試。"""
+    """PromQL 查詢建構測試（#719：查觀測 recording rule，非 user_threshold）。"""
 
-    def test_basic_query(self):
-        """基本查詢格式。"""
-        q = tr.build_metric_query("mysql_connections", "db-a", "7d")
-        assert 'key="mysql_connections"' in q
-        assert 'tenant="db-a"' in q
-        assert "[7d]" in q
+    def test_queries_observed_series_not_user_threshold(self):
+        """#719：查 observed recording rule，帶 tenant label + lookback。"""
+        q = tr.build_metric_query("tenant:mysql_threads_connected:max", "db-a", "7d")
+        assert q == 'tenant:mysql_threads_connected:max{tenant="db-a"}[7d]'
+        # regression guard: the old echo-chamber/broken query is gone.
+        assert "user_threshold" not in q
+        assert 'key=' not in q
+
+    def test_tenant_promql_escaped(self):
+        """CodeRabbit #3334234464: tenant 含引號/反斜線須轉義，產生合法 PromQL。"""
+        q = tr.build_metric_query("tenant:x:max", 'ev"il\\t', "7d")
+        # the embedded quote/backslash must be escaped, not raw
+        assert 'tenant="ev\\"il\\\\t"' in q
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -266,47 +273,102 @@ class TestPrometheusQuery:
 # analyze_tenant
 # ═══════════════════════════════════════════════════════════════════════
 class TestAnalyzeTenant:
-    """租戶分析測試。"""
+    """租戶分析測試（#719：以注入的 observed_map 隔離 rule-pack 真實內容）。"""
 
-    def test_dry_run_generates_queries(self):
-        """Dry-run 應為每個 metric key 產生 PromQL。"""
-        config = {"mysql_connections": 100, "cpu_threshold": 80, "_routing": {"receiver": {}}}
-        report = tr.analyze_tenant("db-a", config, dry_run=True)
-        assert report.total_keys == 2  # _routing is reserved
-        assert len(report.keys) == 2
-        assert all("dry-run" in r.reason for r in report.keys)
-        assert all(r.promql != "" for r in report.keys)
+    # Hermetic observed-map: one upper-bound mapped key, one lower-bound key,
+    # one unsupported-scope key. Unmapped keys are anything not listed here.
+    HERMETIC_MAP = {
+        "connections": {
+            "scope": "tenant",
+            "direction": ">",
+            "observed_series": "tenant:mysql_threads_connected:max",
+        },
+        "broker_count": {
+            "scope": "tenant",
+            "direction": "<",
+            "candidates": ["tenant:broker_count:max"],
+            "needs_review": True,
+            "reason": "lower-bound (<) metric — #721 item 6",
+        },
+        "container_cpu": {
+            "scope": "tenant_version",
+            "candidates": ["tenant_version:pod_weakest_cpu_percent:vlabeled"],
+            "needs_review": True,
+            "reason": "unsupported scope — #721 item 7",
+        },
+    }
+
+    def test_dry_run_maps_to_observed_series(self):
+        """Dry-run 對 mapped key 產生觀測 series 查詢。"""
+        config = {"connections": 100, "_routing": {"receiver": {}}}
+        report = tr.analyze_tenant("db-a", config, dry_run=True, observed_map=self.HERMETIC_MAP)
+        assert report.total_keys == 1  # _routing is reserved
+        rec = report.keys[0]
+        assert rec.key == "connections"
+        assert "tenant:mysql_threads_connected:max" in rec.promql
+        assert "dry-run" in rec.reason
+
+    def test_unmapped_key_skipped(self):
+        """未對映的 key fail-loud skip。"""
+        config = {"totally_unknown": 5}
+        report = tr.analyze_tenant("db-a", config, dry_run=True, observed_map=self.HERMETIC_MAP)
+        rec = report.keys[0]
+        assert rec.promql == ""
+        assert "not in observed-map" in rec.reason
+
+    def test_lower_bound_key_skipped(self):
+        """下界 (<) key skip（#721 item 6）。"""
+        config = {"broker_count": 3}
+        report = tr.analyze_tenant("db-a", config, dry_run=True, observed_map=self.HERMETIC_MAP)
+        rec = report.keys[0]
+        assert rec.promql == ""
+        assert "skipped" in rec.reason
+        assert "#721 item 6" in rec.reason
+
+    def test_unsupported_scope_key_skipped(self):
+        """version-aware (tenant_version scope) key skip（#721 item 7）。"""
+        config = {"container_cpu": 80}
+        report = tr.analyze_tenant("db-a", config, dry_run=True, observed_map=self.HERMETIC_MAP)
+        rec = report.keys[0]
+        assert rec.promql == ""
+        assert "skipped" in rec.reason
 
     def test_reserved_keys_filtered(self):
         """Reserved keys 不應被分析。"""
         config = {
-            "mysql_connections": 100,
+            "connections": 100,
             "_silent_mode": True,
             "_routing": {"receiver": {}},
             "_severity_dedup": "enable",
         }
-        report = tr.analyze_tenant("db-a", config, dry_run=True)
+        report = tr.analyze_tenant("db-a", config, dry_run=True, observed_map=self.HERMETIC_MAP)
         assert report.total_keys == 1
         keys = [r.key for r in report.keys]
-        assert "mysql_connections" in keys
+        assert "connections" in keys
         assert "_silent_mode" not in keys
 
     @patch("threshold_recommend.query_prometheus_range")
     def test_with_prometheus_data(self, mock_query):
-        """有 Prometheus 資料時應產生推薦。"""
+        """mapped key 有 Prometheus 資料時應產生推薦。"""
         mock_query.return_value = ([80, 82, 78, 85, 90, 88, 79, 83, 81, 86] * 50, None)
-        config = {"mysql_connections": 70}
-        report = tr.analyze_tenant("db-a", config, prometheus_url="http://prom:9090")
+        config = {"connections": 70}
+        report = tr.analyze_tenant(
+            "db-a", config, prometheus_url="http://prom:9090", observed_map=self.HERMETIC_MAP
+        )
         assert report.total_keys == 1
         assert report.keys[0].p95 is not None
         assert report.keys[0].recommended is not None
+        # confirm it queried the observed series, not user_threshold
+        assert "tenant:mysql_threads_connected:max" in report.keys[0].promql
 
     @patch("threshold_recommend.query_prometheus_range")
     def test_no_data_points(self, mock_query):
-        """無資料點應返回 LOW confidence。"""
+        """mapped key 無資料點應返回 LOW confidence。"""
         mock_query.return_value = ([], None)
-        config = {"cpu_threshold": 80}
-        report = tr.analyze_tenant("db-a", config, prometheus_url="http://prom:9090")
+        config = {"connections": 80}
+        report = tr.analyze_tenant(
+            "db-a", config, prometheus_url="http://prom:9090", observed_map=self.HERMETIC_MAP
+        )
         assert report.keys[0].confidence == tr.CONFIDENCE_LOW
         assert "no data" in report.keys[0].reason
 
@@ -441,3 +503,26 @@ class TestCLI:
             tr.main()
             captured = capsys.readouterr()
             assert "| Key |" in captured.out
+
+    def test_missing_config_dir_without_generate_exits_1(self):
+        """#719: 無 --config-dir 且非 generate → exit 1。"""
+        with patch("sys.argv", ["threshold_recommend.py"]):
+            with pytest.raises(SystemExit) as exc_info:
+                tr.main()
+            assert exc_info.value.code == 1
+
+    def test_generate_observed_map_cli(self, tmp_path, capsys, monkeypatch):
+        """#719: --generate-observed-map 寫出 map 並印摘要，不需 --config-dir。"""
+        called = {}
+
+        def fake_write(out_path=None, pack_paths=None):
+            called["yes"] = True
+            return {"path": str(tmp_path / "m.yaml"), "total": 3, "clean": 2, "needs_review": 1}
+
+        monkeypatch.setattr(tr.observed_map_lib, "write_observed_map", fake_write)
+        with patch("sys.argv", ["threshold_recommend.py", "--generate-observed-map"]):
+            tr.main()  # must NOT raise (no --config-dir required)
+        captured = capsys.readouterr()
+        assert called.get("yes") is True
+        assert "observed-map" in captured.out
+        assert "3" in captured.out  # total keys echoed

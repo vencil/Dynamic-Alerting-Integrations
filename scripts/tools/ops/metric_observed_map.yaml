@@ -1,0 +1,332 @@
+# SoT map: conf.d threshold key -> observed recording-rule series (#719).
+# GENERATED from rule-packs/*.yaml alert rules via
+#   da-tools threshold-recommend --generate-observed-map
+# The drift-guard (check_threshold_observed_map.py) cross-checks this map vs
+# the rule packs. needs_review entries are SKIPPED by threshold-recommend
+# until a human resolves them (pick one observed_series / confirm direction).
+version: 1
+_generated_by: threshold-recommend --generate-observed-map (#719)
+keys:
+  clickhouse_active_connections:
+    pack: rule-pack-clickhouse.yaml
+    scope: tenant
+    direction: '>'
+    observed_series: tenant:clickhouse_active_connections:max
+  clickhouse_max_part_count:
+    pack: rule-pack-clickhouse.yaml
+    scope: tenant
+    direction: '>'
+    observed_series: tenant:clickhouse_max_part_count:max
+  clickhouse_memory_tracking_bytes:
+    pack: rule-pack-clickhouse.yaml
+    scope: tenant
+    direction: '>'
+    observed_series: tenant:clickhouse_memory_tracking:max
+  clickhouse_queries_rate:
+    pack: rule-pack-clickhouse.yaml
+    scope: tenant
+    direction: '>'
+    observed_series: tenant:clickhouse_queries:rate5m
+  clickhouse_replication_queue:
+    pack: rule-pack-clickhouse.yaml
+    scope: tenant
+    direction: '>'
+    observed_series: tenant:clickhouse_replication_queue:max
+  connections:
+    pack: rule-pack-mariadb.yaml
+    scope: tenant
+    direction: '>'
+    resolved_via: connections_critical sibling
+    observed_series: tenant:mysql_threads_connected:max
+  connections_critical:
+    pack: rule-pack-mariadb.yaml
+    scope: tenant
+    direction: '>'
+    observed_series: tenant:mysql_threads_connected:max
+  cpu:
+    pack: rule-pack-mariadb.yaml
+    scope: tenant
+    direction: '>'
+    candidates:
+    - tenant:mysql_cpu_usage:rate5m
+    - tenant:mysql_threads_connected:max
+    needs_review: true
+    reason: 2 observed candidates in composite alert — pick one
+  db2_bufferpool_hit_ratio:
+    pack: rule-pack-db2.yaml
+    scope: tenant
+    direction: <
+    candidates:
+    - tenant:db2_bufferpool_hit_ratio:min
+    needs_review: true
+    reason: lower-bound (<) metric — P95-upper recommendation not applicable (#721
+      item 6)
+  db2_connections_active:
+    pack: rule-pack-db2.yaml
+    scope: tenant
+    direction: '>'
+    observed_series: tenant:db2_connections_active:max
+  db2_deadlock_rate:
+    pack: rule-pack-db2.yaml
+    scope: tenant
+    direction: '>'
+    observed_series: tenant:db2_deadlocks:rate5m
+  db2_log_usage_percent:
+    pack: rule-pack-db2.yaml
+    scope: tenant
+    direction: '>'
+    observed_series: tenant:db2_log_usage_percent:max
+  db2_tablespace_used_percent:
+    pack: rule-pack-db2.yaml
+    scope: tenant
+    direction: '>'
+    observed_series: tenant:db2_tablespace_used_percent:max
+  es_disk_usage_percent:
+    pack: rule-pack-elasticsearch.yaml
+    scope: tenant
+    direction: '>'
+    observed_series: tenant:es_disk_usage_percent:max
+  es_heap_usage_percent:
+    pack: rule-pack-elasticsearch.yaml
+    scope: tenant
+    direction: '>'
+    observed_series: tenant:es_heap_usage_percent:max
+  es_pending_tasks:
+    pack: rule-pack-elasticsearch.yaml
+    scope: tenant
+    direction: '>'
+    observed_series: tenant:es_pending_tasks:max
+  es_search_latency_ms:
+    pack: rule-pack-elasticsearch.yaml
+    scope: tenant
+    direction: '>'
+    observed_series: tenant:es_search_latency_ms:avg
+  jvm_gc_pause:
+    pack: rule-pack-jvm.yaml
+    scope: tenant
+    direction: '>'
+    resolved_via: jvm_gc_pause_critical sibling
+    observed_series: tenant:jvm_gc_pause:rate5m
+  jvm_gc_pause_critical:
+    pack: rule-pack-jvm.yaml
+    scope: tenant
+    direction: '>'
+    observed_series: tenant:jvm_gc_pause:rate5m
+  jvm_memory:
+    pack: rule-pack-jvm.yaml
+    scope: tenant
+    direction: '>'
+    resolved_via: jvm_memory_critical sibling
+    observed_series: tenant:jvm_memory_used:percent
+  jvm_memory_critical:
+    pack: rule-pack-jvm.yaml
+    scope: tenant
+    direction: '>'
+    observed_series: tenant:jvm_memory_used:percent
+  jvm_threads:
+    pack: rule-pack-jvm.yaml
+    scope: tenant
+    direction: '>'
+    observed_series: tenant:jvm_threads:current
+  jvm_threads_critical:
+    pack: rule-pack-jvm.yaml
+    scope: tenant
+    direction: '>'
+    observed_series: tenant:jvm_threads:current
+  kafka_active_controllers:
+    pack: rule-pack-kafka.yaml
+    scope: tenant
+    direction: <
+    candidates:
+    - tenant:kafka_active_controllers:max
+    needs_review: true
+    reason: lower-bound (<) metric — P95-upper recommendation not applicable (#721
+      item 6)
+  kafka_broker_count:
+    pack: rule-pack-kafka.yaml
+    scope: tenant
+    direction: <
+    candidates:
+    - tenant:kafka_broker_count:max
+    needs_review: true
+    reason: lower-bound (<) metric — P95-upper recommendation not applicable (#721
+      item 6)
+  kafka_consumer_lag:
+    pack: rule-pack-kafka.yaml
+    scope: tenant
+    direction: '>'
+    observed_series: tenant:kafka_consumer_lag:max
+  kafka_consumer_lag_critical:
+    pack: rule-pack-kafka.yaml
+    scope: tenant
+    direction: '>'
+    observed_series: tenant:kafka_consumer_lag:max
+  kafka_request_rate:
+    pack: rule-pack-kafka.yaml
+    scope: tenant
+    direction: '>'
+    observed_series: tenant:kafka_request_rate:sum
+  kafka_request_rate_critical:
+    pack: rule-pack-kafka.yaml
+    scope: tenant
+    direction: '>'
+    observed_series: tenant:kafka_request_rate:sum
+  kafka_under_replicated_partitions:
+    pack: rule-pack-kafka.yaml
+    scope: tenant
+    direction: '>'
+    observed_series: tenant:kafka_under_replicated_partitions:max
+  kafka_under_replicated_partitions_critical:
+    pack: rule-pack-kafka.yaml
+    scope: tenant
+    direction: '>'
+    observed_series: tenant:kafka_under_replicated_partitions:max
+  mongodb_connections_current:
+    pack: rule-pack-mongodb.yaml
+    scope: tenant
+    direction: '>'
+    observed_series: tenant:mongodb_connections_current:max
+  mongodb_opcounters_rate:
+    pack: rule-pack-mongodb.yaml
+    scope: tenant
+    direction: '>'
+    observed_series: tenant:mongodb_opcounters:rate5m
+  mongodb_replication_lag:
+    pack: rule-pack-mongodb.yaml
+    scope: tenant
+    direction: '>'
+    observed_series: tenant:mongodb_replication_lag:max
+  nginx_connections:
+    pack: rule-pack-nginx.yaml
+    scope: tenant
+    direction: '>'
+    observed_series: tenant:nginx_connections_active:max
+  nginx_connections_critical:
+    pack: rule-pack-nginx.yaml
+    scope: tenant
+    direction: '>'
+    observed_series: tenant:nginx_connections_active:max
+  nginx_request_rate:
+    pack: rule-pack-nginx.yaml
+    scope: tenant
+    direction: '>'
+    observed_series: tenant:nginx_requests:rate5m
+  nginx_request_rate_critical:
+    pack: rule-pack-nginx.yaml
+    scope: tenant
+    direction: '>'
+    observed_series: tenant:nginx_requests:rate5m
+  nginx_waiting:
+    pack: rule-pack-nginx.yaml
+    scope: tenant
+    direction: '>'
+    observed_series: tenant:nginx_connections_waiting:max
+  nginx_waiting_critical:
+    pack: rule-pack-nginx.yaml
+    scope: tenant
+    direction: '>'
+    observed_series: tenant:nginx_connections_waiting:max
+  oracle_pga_allocated_bytes:
+    pack: rule-pack-oracle.yaml
+    scope: tenant
+    direction: '>'
+    observed_series: tenant:oracle_pga_allocated_bytes:max
+  oracle_process_count:
+    pack: rule-pack-oracle.yaml
+    scope: tenant
+    direction: '>'
+    observed_series: tenant:oracle_process_count:max
+  oracle_sessions_active:
+    pack: rule-pack-oracle.yaml
+    scope: tenant
+    direction: '>'
+    observed_series: tenant:oracle_sessions_active:max
+  oracle_tablespace_used_percent:
+    pack: rule-pack-oracle.yaml
+    scope: tenant
+    direction: '>'
+    observed_series: tenant:oracle_tablespace_used_percent:max
+  oracle_wait_time_rate:
+    pack: rule-pack-oracle.yaml
+    scope: tenant
+    direction: '>'
+    observed_series: tenant:oracle_wait_time:rate5m
+  pg_connections:
+    pack: rule-pack-postgresql.yaml
+    scope: tenant
+    direction: '>'
+    observed_series: tenant:pg_connection_usage:ratio
+  pg_connections_critical:
+    pack: rule-pack-postgresql.yaml
+    scope: tenant
+    direction: '>'
+    observed_series: tenant:pg_connection_usage:ratio
+  pg_replication_lag:
+    pack: rule-pack-postgresql.yaml
+    scope: tenant
+    direction: '>'
+    observed_series: tenant:pg_replication_lag:max
+  pg_replication_lag_critical:
+    pack: rule-pack-postgresql.yaml
+    scope: tenant
+    direction: '>'
+    observed_series: tenant:pg_replication_lag:max
+  rabbitmq_connections:
+    pack: rule-pack-rabbitmq.yaml
+    scope: tenant
+    direction: '>'
+    observed_series: tenant:rabbitmq_connections:max
+  rabbitmq_consumers:
+    pack: rule-pack-rabbitmq.yaml
+    scope: tenant
+    direction: <
+    candidates:
+    - tenant:rabbitmq_consumers:max
+    needs_review: true
+    reason: lower-bound (<) metric — P95-upper recommendation not applicable (#721
+      item 6)
+  rabbitmq_node_mem_percent:
+    pack: rule-pack-rabbitmq.yaml
+    scope: tenant
+    direction: '>'
+    observed_series: tenant:rabbitmq_node_mem_percent:ratio
+  rabbitmq_node_mem_percent_critical:
+    pack: rule-pack-rabbitmq.yaml
+    scope: tenant
+    direction: '>'
+    observed_series: tenant:rabbitmq_node_mem_percent:ratio
+  rabbitmq_queue_messages:
+    pack: rule-pack-rabbitmq.yaml
+    scope: tenant
+    direction: '>'
+    observed_series: tenant:rabbitmq_queue_messages:max
+  rabbitmq_queue_messages_critical:
+    pack: rule-pack-rabbitmq.yaml
+    scope: tenant
+    direction: '>'
+    observed_series: tenant:rabbitmq_queue_messages:max
+  rabbitmq_unacked_messages:
+    pack: rule-pack-rabbitmq.yaml
+    scope: tenant
+    direction: '>'
+    observed_series: tenant:rabbitmq_unacked_messages:max
+  redis_connected_clients:
+    pack: rule-pack-redis.yaml
+    scope: tenant
+    direction: '>'
+    observed_series: tenant:redis_connected_clients:max
+  redis_evicted_keys_rate:
+    pack: rule-pack-redis.yaml
+    scope: tenant
+    direction: '>'
+    observed_series: tenant:redis_evicted_keys:rate5m
+  redis_memory_used_bytes:
+    pack: rule-pack-redis.yaml
+    scope: tenant
+    direction: '>'
+    observed_series: tenant:redis_memory_used_bytes:max
+  redis_replication_lag:
+    pack: rule-pack-redis.yaml
+    scope: tenant
+    direction: '>'
+    observed_series: tenant:redis_replication_lag:max
