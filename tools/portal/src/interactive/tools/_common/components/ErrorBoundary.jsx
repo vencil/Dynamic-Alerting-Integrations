@@ -47,7 +47,7 @@ import { Component } from "react";  // TRK-233 ESM import
 const FALLBACK_BOX_STYLE = {
   padding: '24px',
   margin: '16px',
-  border: '1px solid var(--da-color-error, #dc2626)',
+  border: '1px solid var(--da-color-error)',
   borderRadius: 'var(--da-radius-sm, 6px)',
   background: 'var(--da-color-surface, #fff)',
   fontFamily: 'system-ui, -apple-system, sans-serif',
@@ -57,12 +57,12 @@ const FALLBACK_TITLE_STYLE = {
 };
 const FALLBACK_HINT_STYLE = {
   fontSize: '14px',
-  color: 'var(--da-color-fg, #6b7280)',
+  color: 'var(--da-color-muted)',
   marginBottom: '12px',
 };
 const FALLBACK_PRE_STYLE = {
   fontSize: '12px',
-  background: 'var(--da-color-surface-hover, #f3f4f6)',
+  background: 'var(--da-color-surface-hover)',
   padding: '8px',
   borderRadius: 'var(--da-radius-sm, 4px)',
   overflowX: 'auto',
@@ -70,7 +70,7 @@ const FALLBACK_PRE_STYLE = {
 };
 const FALLBACK_BUTTON_STYLE = {
   padding: '6px 12px',
-  background: 'var(--da-color-accent, #2563eb)',
+  background: 'var(--da-color-accent)',
   color: 'var(--da-color-accent-fg, #fff)',
   border: 'none',
   borderRadius: 'var(--da-radius-sm, 4px)',

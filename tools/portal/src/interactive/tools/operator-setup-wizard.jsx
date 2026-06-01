@@ -736,7 +736,7 @@ export default function OperatorSetupWizard() {
       background: 'var(--da-color-bg)',
       padding: 'var(--da-space-8)',
     }}>
-      <div style={{ maxWidth: '900px', margin: '0 auto' }}>
+      <div style={{ maxWidth: '900px' /* token-exempt: page content max width */, margin: '0 auto' }}>
         {/* Header */}
         <div style={{ marginBottom: 'var(--da-space-8)' }}>
           <h1 style={{

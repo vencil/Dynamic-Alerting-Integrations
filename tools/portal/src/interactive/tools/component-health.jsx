@@ -255,7 +255,7 @@ function ProgressCell({ ratio }) {
       <div style={styles.progressBar} role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100} aria-label={`i18n coverage ${pct}%`}>
         <div style={{ ...styles.progressFill, width: `${pct}%`, background: color }} />
       </div>
-      <span style={{ fontSize: 'var(--da-font-size-xs)', minWidth: '36px', color }}>{pct}%</span>
+      <span style={{ fontSize: 'var(--da-font-size-xs)', minWidth: '36px' /* token-exempt: fixed label width */, color }}>{pct}%</span>
     </div>
   );
 }
@@ -268,7 +268,7 @@ function SimpleBar({ items, maxVal, colorFn }) {
         return (
           <div key={label} style={styles.barGroup}>
             <div style={styles.barValue}>{value}</div>
-            <div style={{ width: '100%', maxWidth: '60px', height: `${h}px`, borderRadius: 'var(--da-radius-sm)', background: colorFn(label), transition: 'height 0.3s ease' }} />
+            <div style={{ width: '100%', maxWidth: '60px' /* token-exempt: bar width cap */, height: `${h}px`, borderRadius: 'var(--da-radius-sm)', background: colorFn(label), transition: 'height 0.3s ease' }} />
             <div style={styles.barLabel}>{label}</div>
           </div>
         );
@@ -441,7 +441,7 @@ export default function ComponentHealth() {
                       {tool.palette}
                     </span>
                   </td>
-                  <td style={{ ...styles.td, minWidth: '120px' }}>
+                  <td style={{ ...styles.td, minWidth: '120px' /* token-exempt: table column min width */ }}>
                     <ProgressCell ratio={tool.i18n} />
                   </td>
                   <td style={styles.td}>

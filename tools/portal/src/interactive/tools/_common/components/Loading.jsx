@@ -45,7 +45,7 @@ const WRAPPER_STYLE = {
   justifyContent: 'center',
   gap: 'var(--da-space-3, 12px)',
   padding: 'var(--da-space-4, 16px)',
-  color: 'var(--da-color-fg, #6b7280)',
+  color: 'var(--da-color-muted)',
 };
 const TEXT_STYLE = { fontSize: '14px' };
 
@@ -61,8 +61,8 @@ function buildSpinnerStyle(dim) {
   return {
     width: dim + 'px',
     height: dim + 'px',
-    border: '3px solid var(--da-color-surface-hover, #e5e7eb)',
-    borderTopColor: 'var(--da-color-accent, #2563eb)',
+    border: '3px solid var(--da-color-surface-border)',
+    borderTopColor: 'var(--da-color-accent)',
     borderRadius: '50%',
     animation: 'daSpin 0.8s linear infinite',
   };

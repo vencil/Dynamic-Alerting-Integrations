@@ -159,6 +159,15 @@ class TestHexColors:
         issues = dtu.check_hardcoded_hex_colors(content, jsx_file_hex_in_comment.name)
         assert issues == []
 
+    def test_hex_reasoned_token_exempt_honored(self):
+        """/* token-exempt: <reason> */ suppresses hex findings too (#444 B3).
+        The old exact-string check only honored the bare /* token-exempt */."""
+        issues = dtu.check_hardcoded_hex_colors(
+            "<div style={{ color: '#ff0000' /* token-exempt: brand red */ }} />",
+            "x.jsx",
+        )
+        assert issues == []
+
     def test_hex_white_and_black_exempt(self, tmp_path):
         """#fff and #000 should be exempt (too common)."""
         content = textwrap.dedent("""\
@@ -207,6 +216,40 @@ class TestPxValues:
         p.write_text(content, encoding="utf-8")
         issues = dtu.check_hardcoded_px_values(content, "test.jsx")
         # Should not flag since no style= present
+        assert issues == []
+
+    # --- #444 Phase 1 B3: non-px units must not be misread as px ---
+    def test_percent_not_flagged_as_px(self):
+        """width: '100%' must NOT be reported as 100px (the regex used to drop
+        the unit and treat the bare number as px)."""
+        issues = dtu.check_hardcoded_px_values(
+            "<div style={{ width: '100%', maxWidth: '60px' }} />", "x.jsx"
+        )
+        pxes = [i["px"] for i in issues]
+        assert "100px" not in pxes
+        assert pxes == ["60px"]
+
+    def test_other_css_units_not_flagged(self):
+        """vh/vw/em/rem/fr/ms are legitimate non-px units, never flagged."""
+        for val in ("100vh", "50vw", "2em", "300ms", "1fr"):
+            issues = dtu.check_hardcoded_px_values(
+                f"<div style={{{{ x: '{val}' }}}} />", "x.jsx"
+            )
+            assert issues == [], f"{val} should not be flagged as px"
+
+    def test_unitless_number_still_px(self):
+        """React maps a unitless numeric style value to px, so it IS a finding."""
+        issues = dtu.check_hardcoded_px_values(
+            "<div style={{ fontSize: 24 }} />", "x.jsx"
+        )
+        assert any(i["px"] == "24px" for i in issues)
+
+    def test_px_reasoned_token_exempt_honored(self):
+        """/* token-exempt: <reason> */ suppresses px findings (#444 B3)."""
+        issues = dtu.check_hardcoded_px_values(
+            "<div style={{ maxWidth: '900px' /* token-exempt: page width */ }} />",
+            "x.jsx",
+        )
         assert issues == []
 
 
