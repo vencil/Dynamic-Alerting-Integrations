@@ -187,6 +187,101 @@ groups:
           runbook_url: "{{ $labels.runbook_url }}"
           owner: "{{ $labels.owner }}"
           tier: "{{ $labels.tier }}"
+      # CPU: standalone warning + critical (mirrors the connections pair above).
+      # Before this, `cpu` warning was only consumed by the composite
+      # MariaDBSystemBottleneck and `cpu_critical` had NO consumer at all (an
+      # orphan threshold-normalization recording rule). These two alerts give
+      # both CPU severity tiers a standalone firing path, symmetric with
+      # connections (Scenario D multi-tier).
+      - alert: MariaDBHighCPU
+        expr: |
+          (
+            (
+              (
+                tenant:mysql_cpu_usage:rate5m
+                > on(tenant) group_left
+                tenant:alert_threshold:cpu
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
+          )
+          or
+          (
+            (
+              (
+                tenant:mysql_cpu_usage:rate5m
+                > on(tenant) group_left
+                tenant:alert_threshold:cpu
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            unless on(tenant) tenant_metadata_info
+          )
+        for: 30s
+        labels:
+          severity: warning
+          metric_group: "cpu"
+          tenant: "{{ $labels.tenant }}"
+        annotations:
+          summary: "High CPU on {{ $labels.tenant }}"
+          summary_zh: "{{ $labels.tenant }} CPU 過高"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: CPU threshold breached — review running-thread load"
+          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}：CPU 閾值超出 — 檢查執行緒負載"
+          description: "{{ $value }} running threads (warning threshold exceeded)"
+          description_zh: "{{ $value }} 個執行中執行緒（超過警告閾值）"
+
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"
+      # Critical tier
+      - alert: MariaDBHighCPUCritical
+        expr: |
+          (
+            (
+              (
+                tenant:mysql_cpu_usage:rate5m
+                > on(tenant) group_left
+                tenant:alert_threshold:cpu_critical
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
+          )
+          or
+          (
+            (
+              (
+                tenant:mysql_cpu_usage:rate5m
+                > on(tenant) group_left
+                tenant:alert_threshold:cpu_critical
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            unless on(tenant) tenant_metadata_info
+          )
+        for: 30s
+        labels:
+          severity: critical
+          metric_group: "cpu"
+          tenant: "{{ $labels.tenant }}"
+        annotations:
+          summary: "Critical CPU on {{ $labels.tenant }}"
+          summary_zh: "{{ $labels.tenant }} CPU 嚴重過高"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: critical CPU saturation — immediate investigation needed"
+          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}：CPU 飽和 — 需立即調查"
+          description: "{{ $value }} running threads (critical threshold exceeded)"
+          description_zh: "{{ $value }} 個執行中執行緒（超過嚴重閾值）"
+
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"
       # Composite alert: connections AND CPU both exceeded
       - alert: MariaDBSystemBottleneck
         expr: |
