@@ -209,12 +209,32 @@ PR 加入新 allowlist entry 時須在 PR description 答：
 PR 新增 lint 須在 PR description 答：
 
 - [ ] 屬於哪一 class？（依 §2 decision tree）
+- [ ] ⛔ 目標是 JS / JSX / TSX / CSS 內容嗎？→ 預設用 ESLint / stylelint rule，不要手寫 Python regex scanner（見下方「JS-toolchain-first gate」，已 codified 自動強制）
 - [ ] (a)：列舉的 SOT 是什麼？SOT 變動如何同步到 lint？
 - [ ] (b)：grammar 邊界明確嗎？allowlist 預期成長速度？
 - [ ] (c)：為什麼不用 (a)/(b)？是否真需要 lint，還是 PR review checklist 即可？
 - [ ] scan scope 對應 §3？
 - [ ] 是否需要 bypass 機制？
 - [ ] 對 reviewer / contributor 的 friction 評估
+
+### JS-toolchain-first gate（codified，#444 follow-up）
+
+**規則**：lint 的**目標檔案**若為 JS / JSX / TSX / CSS / SCSS，**預設應實作為
+ESLint / stylelint rule**，而非手寫 Python regex scanner。理由：這些 engine
+已內建 AST parser（非脆弱 regex）、autofix、editor 整合、rule 生態系；手寫
+Python 掃描是重造輪子。repo 已有 ESLint toolchain（`tests/e2e/eslint.config.mjs`
++ `tools/portal/package.json`），新 JS lint 的 marginal cost 低。
+
+**自動強制**（不靠人腦記 checklist）：`scripts/tools/lint/check_lint_toolchain_fit.py`
+（pre-commit `lint-toolchain-fit`，於任何 `scripts/tools/lint/*.py` 變更觸發）偵測
+「以 `glob`/`rglob` 掃 `*.jsx`/`*.tsx`/`*.css`/`*.scss` 內容」的 lint；新增且未列入
+`ALLOWLIST` 者 → **BLOCK**。逃生門（同 (b) class bypass 精神）：ESLint/stylelint
+確實無法覆蓋者（cross-file registry parity、雙語語意、diff-only + PR-body bypass
+plumbing），在該 script 的 `ALLOWLIST` 加一行 justification 即放行。既有 11 個
+JS-targeting DIY lint 已 grandfather（**不做 retroactive migration**，符合 §2 +
+lint-adoption hybrid policy）。偵測刻意**窄**（只認目錄 content-scanning、排除
+`.ts`/`.js` 與裸字串提及）以避開「用 regex 重造 AST 來抓重造輪子」的自我打臉；
+`--list` 印出命中集，false-negative 可接受、危險的 false-positive 為零。
 
 ## 8. 季度治理 cadence
 
@@ -223,6 +243,24 @@ PR 新增 lint 須在 PR description 答：
 1. **Allowlist 過期 sweep**：`check_allowlist_expiry.py --ci` 執行，過期條目處理
 2. **(c) class 重評**：是否仍有價值？是否該升級成 (b) 或 (a)？是否該 retire？
 3. **新 lint 提案 review**：累積的「該機器化但還沒做」候選統一拍板
+4. **JS-toolchain-migratable sweep**（§7 gate 的 grandfather 集）：檢查下表
+   `Migratable=YES` 的 DIY lint 是否有可隨手改寫為 ESLint/stylelint rule 者
+   （不強制遷移，僅作為該檔需大改 / 前端 toolchain 演進時的路標）。SoT 為
+   `check_lint_toolchain_fit.py` 的 `ALLOWLIST`（`--list` 印出實際命中集）。
+
+| Lint | Migratable | 備註 |
+|---|---|---|
+| `check_design_token_usage.py` | YES | style={{}} hex/px；今 ESLint 覆蓋 <60%（diff-only+bypass+雙語），FE 若採 Tailwind/Styled-Components 則應重評為 ESLint rule |
+| `check_jsx_i18n.py` | YES | JSX 內 CJK hardcoded-string 偵測 |
+| `check_window_x_no_fallback.py` | YES | module-scope `const X = window.__X` pattern（ESLint no-restricted-syntax 適配） |
+| `check_undefined_tokens.py` | YES | `--da-*` token refs 未定義於 design-tokens.css |
+| `check_i18n_coverage.py` | YES | JSX i18n key 覆蓋率 |
+| `check_tool_registry_jsx_parity.py` | NO | registry↔filesystem parity，本質非單檔 JS lint |
+| `check_portal_i18n.py` | NO | 交叉引用 tool-registry.yaml |
+| `check_jsx_loader_compat.py` | NO | 綁定自訂 JSX loader allowlist + babel |
+| `lint_jsx_babel.py` | NO | 已呼叫 @babel/node，本身即 toolchain |
+| `lint_tool_consistency.py` | NO | registry↔JSX↔markdown graph lint |
+| `validate_docs_versions.py` | NO | 跨多檔型版號一致性，非 JS rule |
 
 ## Future Work
 
