@@ -47,9 +47,14 @@ lang: zh
 
 | 指標 | 數值 | 備註 |
 |:-----|-----:|:-----|
-| Hardcoded hex colors | 4 tools | 待 Phase .b 清理 |
-| Hardcoded px values | 12 tools | 低優先 |
+| Hardcoded hex colors | 0 tools | ✅ #444 Phase 1 清零（diff-only gate enforced）|
+| Hardcoded px values | 0 tools | ✅ #444 Phase 1 清零；layout px 以 `/* token-exempt */` 標註 |
 | i18n coverage avg | >90% | Tier 1 平均 97%+ |
+
+> **#444 Phase 2 順序紀錄（historical）**：token 遷移與 Option C ESM refactor 的撞車區
+> （`tenant-manager/components/` 6 檔 + `useSavedViews`）依「結構先於樣式」決議——Option C
+> 先 merge、token 遷移後做（在穩定 ESM 結構上批次處理，避免 epic merge conflict）。實際執行時
+> Option C 已完成，token 遷移（#727/#730）在其上順利進行，無 conflict。
 
 ## 相關資源
 
