@@ -104,7 +104,10 @@ def scan_en_docs(
     for f in sorted(docs_dir.rglob("*.md")):
         if not _is_english_doc(f):
             continue
-        text = f.read_text(encoding="utf-8")
+        try:
+            text = f.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
         ratio = count_cjk_ratio(text)
         if ratio > threshold:
             rel = f.relative_to(PROJECT_ROOT)
@@ -134,7 +137,10 @@ def scan_zh_docs(
         # Skip internal/generated files
         if "includes" in f.parts:
             continue
-        text = f.read_text(encoding="utf-8")
+        try:
+            text = f.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
         # Only check files with substantial content
         if len(text.strip()) < 200:
             continue

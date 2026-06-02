@@ -22,9 +22,9 @@ Usage
 
 Exit codes
 ----------
-    0   No FAIL verdicts (release-ready signal)
-    1   At least one FAIL verdict OR caller error (missing input)
-    2   At least one WARN but no FAIL
+    0   no FAIL/WARN (release-ready)
+    1   at least one FAIL or WARN verdict
+    2   caller error (missing/empty input)
 """
 from __future__ import annotations
 

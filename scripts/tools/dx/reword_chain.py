@@ -65,7 +65,12 @@ from pathlib import Path
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
-from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, die_caller_error  # noqa: E402
+from _lib_exitcodes import (  # noqa: E402
+    EXIT_CALLER_ERROR,
+    EXIT_OK,
+    EXIT_VIOLATION,
+    die_caller_error,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -437,7 +442,7 @@ def main(argv: list[str] | None = None) -> int:
                 f"run `git reset --hard {backup_tag}` to recover.",
                 file=sys.stderr,
             )
-            return EXIT_VIOLATION
+            return EXIT_CALLER_ERROR
         new_shas.append(new_sha)
         print(
             f"  [{i}] {format_sha_short(meta.old_sha)} -> "

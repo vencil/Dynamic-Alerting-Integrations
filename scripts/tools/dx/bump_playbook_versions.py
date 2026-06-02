@@ -74,21 +74,22 @@ def apply_bump(filepath: Path, target: str, write: bool) -> tuple[str, str]:
     """Apply bump to one file.
 
     Returns (status, detail) where status is one of:
-      - "UPDATED"   : value changed, written (or would-write in check/dry mode)
-      - "OK"        : already at target value
-      - "MISSING"   : no front-matter or no verified-at-version field
+      - "UPDATED"      : value changed, written (or would-write in check/dry mode)
+      - "OK"           : already at target value
+      - "MISSING"      : no front-matter or no verified-at-version field
+      - "CALLER_ERROR" : file unreadable / undecodable (environment problem)
     """
     try:
         # Read bytes to preserve CRLF — read_text defaults to universal
         # newline translation which loses the original terminator.
         raw = filepath.read_bytes()
     except OSError as exc:
-        return ("MISSING", f"read error: {exc}")
+        return ("CALLER_ERROR", f"read error: {exc}")
 
     try:
         original = raw.decode("utf-8")
     except UnicodeDecodeError as exc:
-        return ("MISSING", f"decode error: {exc}")
+        return ("CALLER_ERROR", f"decode error: {exc}")
 
     block = _read_frontmatter_block(original)
     if block is None:
@@ -171,10 +172,27 @@ def main() -> int:
 
     updated = [r for r in results if r[0] == "UPDATED"]
     missing = [r for r in results if r[0] == "MISSING"]
+    caller_errors = [r for r in results if r[0] == "CALLER_ERROR"]
 
     for status, rel, detail in results:
-        marker = {"UPDATED": "~", "OK": "=", "MISSING": "!"}.get(status, "?")
-        print(f"  {marker} {status:<8} {rel}  {detail}")
+        marker = {
+            "UPDATED": "~",
+            "OK": "=",
+            "MISSING": "!",
+            "CALLER_ERROR": "x",
+        }.get(status, "?")
+        print(f"  {marker} {status:<12} {rel}  {detail}")
+
+    # Caller-error wins: an unreadable/undecodable file means the tool could
+    # not do its job (environment problem), regardless of mode. Report before
+    # the user-actionable updated/missing → EXIT_VIOLATION checks.
+    if caller_errors:
+        print(
+            f"\nerror: {len(caller_errors)} playbook(s) could not be read; "
+            "fix the file/environment and retry",
+            file=sys.stderr,
+        )
+        return EXIT_CALLER_ERROR
 
     if args.check:
         if updated:

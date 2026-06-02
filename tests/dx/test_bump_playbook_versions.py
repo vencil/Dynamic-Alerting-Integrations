@@ -294,20 +294,21 @@ class TestApplyBumpEdgeCases:
     """Cover defensive branches in apply_bump()."""
 
     def test_handles_read_oserror(self, tmp_path, monkeypatch):
-        """read_bytes() raising OSError should produce MISSING status,
-        not propagate the exception."""
+        """read_bytes() raising OSError is a caller-error (unreadable file),
+        not a propagated exception. #452/#737: CALLER_ERROR, not MISSING."""
         target = tmp_path / "missing.md"
         # File does not exist → read_bytes raises FileNotFoundError.
         status, detail = bpv.apply_bump(target, "v2.8.0", write=True)
-        assert status == "MISSING"
+        assert status == "CALLER_ERROR"
         assert "read error" in detail
 
     def test_handles_undecodable_bytes(self, tmp_path):
-        """Non-UTF-8 bytes should produce MISSING, not UnicodeDecodeError."""
+        """Non-UTF-8 bytes are a caller-error (malformed input), not a
+        UnicodeDecodeError crash. #452/#737: CALLER_ERROR, not MISSING."""
         f = tmp_path / "binary.md"
         f.write_bytes(b"\xff\xfe\x00binary garbage")
         status, detail = bpv.apply_bump(f, "v2.8.0", write=True)
-        assert status == "MISSING"
+        assert status == "CALLER_ERROR"
         assert "decode error" in detail
 
     def test_unterminated_frontmatter_reported(self, tmp_path):
