@@ -1041,8 +1041,10 @@ def run_from_onboard(args: argparse.Namespace) -> None:
 
     tenants = hints.get("tenants", [])
     if not tenants:
+        # #452: readable-but-empty hints = unusable input = caller error,
+        # consistent with the "cannot read hints" sibling above.
         print("No tenants found in onboard hints.", file=sys.stderr)
-        sys.exit(EXIT_VIOLATION)
+        sys.exit(EXIT_CALLER_ERROR)
 
     output_dir = args.output_dir
     print(f"Auto-scaffolding {len(tenants)} tenant(s) from onboard hints...")

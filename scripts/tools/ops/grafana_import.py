@@ -301,8 +301,10 @@ def main():
         parser.error("Provide --dashboard, --dashboard-dir, or --verify")
 
     if not dashboards:
+        # #452: empty/unusable input (dir has no *.json) = caller error,
+        # consistent with the "directory not found" sibling above.
         print("No dashboard files found.", file=sys.stderr)
-        sys.exit(EXIT_VIOLATION)
+        sys.exit(EXIT_CALLER_ERROR)
 
     all_results = []
     has_failure = False

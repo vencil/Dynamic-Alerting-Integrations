@@ -258,14 +258,15 @@ class TestMain:
         err = capsys.readouterr().err
         assert "not found" in err.lower()
 
-    def test_dashboard_dir_no_jsons_exits_one(self, monkeypatch, tmp_path, capsys, cli_argv):
+    def test_dashboard_dir_no_jsons_exits_caller_error(self, monkeypatch, tmp_path, capsys, cli_argv):
         d = tmp_path / "empty-dir"
         d.mkdir()
         (d / "readme.txt").write_text("x", encoding="utf-8")  # not .json
         cli_argv("grafana_import.py", "--dashboard-dir", str(d))
         with pytest.raises(SystemExit) as exc:
             gi.main()
-        assert exc.value.code == 1
+        # #452: empty dir = caller error (2), consistent with dir-not-found
+        assert exc.value.code == 2
         err = capsys.readouterr().err
         assert "No dashboard files" in err
 

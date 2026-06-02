@@ -217,7 +217,7 @@ docker run -p 8080:80 \
 - [Design Tokens](../../docs/assets/design-tokens.css) — 主題系統 100+ CSS 變數
 - [Helm Chart README](../../helm/da-portal/README.md) — 三個 profile 細節
 - [架構深度](../../docs/architecture-and-design.md) — 9 個核心設計概念
-- [Dev Rules](../../docs/internal/dev-rules.md) — JSX 寫作守則 + 12 條開發規範
+- [Dev Rules](../../docs/internal/dev-rules.md) — JSX 寫作守則 + 13 條開發規範
 
 ---
 
