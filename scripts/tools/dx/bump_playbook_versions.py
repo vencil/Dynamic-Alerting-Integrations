@@ -16,9 +16,15 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import sys
 from pathlib import Path
+
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _THIS_DIR)  # Docker flat layout
+sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 # Canonical list, mirrored from check_playbook_freshness.py. Kept as a literal
 # (not imported) so this tool works when the lint module is not on sys.path
@@ -148,7 +154,7 @@ def main() -> int:
             f"error: --to must match vX.Y.Z (got {args.to!r})",
             file=sys.stderr,
         )
-        return 2
+        return EXIT_CALLER_ERROR
     target = _normalize_version(args.to)
 
     repo_root = find_repo_root()
@@ -176,22 +182,22 @@ def main() -> int:
                 f"\n{len(updated)} playbook(s) need bump to {target}",
                 file=sys.stderr,
             )
-            return 1
+            return EXIT_VIOLATION
         if missing:
             print(
                 f"\n{len(missing)} playbook(s) missing field; investigate",
                 file=sys.stderr,
             )
-            return 1
+            return EXIT_VIOLATION
         print(f"\nAll {len(results)} playbooks at {target}")
-        return 0
+        return EXIT_OK
 
     if args.dry_run:
         print(
             f"\n[dry-run] would update {len(updated)} "
             f"playbook(s) to {target}"
         )
-        return 0
+        return EXIT_OK
 
     if missing:
         print(
@@ -200,7 +206,7 @@ def main() -> int:
             file=sys.stderr,
         )
     print(f"\nBumped {len(updated)} playbook(s) to {target}")
-    return 0
+    return EXIT_OK
 
 
 if __name__ == "__main__":

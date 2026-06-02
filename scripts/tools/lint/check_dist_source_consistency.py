@@ -68,6 +68,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION  # noqa: E402
 
 # Source-of-rebuild signals — if a commit stages dist AND any of these,
 # the rebuild was intentional.
@@ -127,7 +128,7 @@ def main() -> int:
 
     if os.environ.get("BYPASS_DIST_CHECK") == "1":
         print("dist-source-consistency: ⏭ skipped (BYPASS_DIST_CHECK=1)")
-        return 0
+        return EXIT_OK
 
     if args.files:
         files = [str(PurePosixPath(f)) for f in args.files]
@@ -136,12 +137,12 @@ def main() -> int:
             files = staged_files()
         except subprocess.CalledProcessError as e:
             print(f"dist-source-consistency: ⚠ git diff failed: {e}")
-            return 0  # don't block the commit on infra error
+            return EXIT_OK  # don't block the commit on infra error
 
     dist_changes = [f for f in files if is_dist(f)]
     if not dist_changes:
         # No dist staged — nothing to check.
-        return 0
+        return EXIT_OK
 
     source_changes = [f for f in files if is_source(f)]
     if source_changes:
@@ -149,7 +150,7 @@ def main() -> int:
             f"dist-source-consistency: ✓ {len(dist_changes)} dist file(s) staged with "
             f"{len(source_changes)} source-of-rebuild signal(s)"
         )
-        return 0
+        return EXIT_OK
 
     # Dist changed without any source signal — block.
     print(
@@ -179,7 +180,7 @@ def main() -> int:
     print("  If this is a legitimate dist-only commit (rare — e.g. CI bot")
     print("  regenerating artifacts), escape with: BYPASS_DIST_CHECK=1 git commit")
 
-    return 1
+    return EXIT_VIOLATION
 
 
 if __name__ == "__main__":

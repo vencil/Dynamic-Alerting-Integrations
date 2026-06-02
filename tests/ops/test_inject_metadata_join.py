@@ -19,6 +19,7 @@ _TOOLS_DIR = os.path.join(os.path.dirname(__file__), '..', '..', 'scripts', 'too
 sys.path.insert(0, _TOOLS_DIR)
 
 import inject_metadata_join as imj  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -135,13 +136,13 @@ class TestProcessFile:
 # main — directory walk + filtering
 # ---------------------------------------------------------------------------
 class TestMain:
-    def test_missing_rule_packs_dir_exits_one(self, tmp_path, monkeypatch, capsys, cli_argv):
+    def test_missing_rule_packs_dir_exits_caller_error(self, tmp_path, monkeypatch, capsys, cli_argv):
         ghost = tmp_path / "no-such-dir"
         monkeypatch.setattr(imj, "RULE_PACKS_DIR", str(ghost))
         cli_argv("inject_metadata_join.py")
         with pytest.raises(SystemExit) as exc:
             imj.main()
-        assert exc.value.code == 1
+        assert exc.value.code == EXIT_CALLER_ERROR
         err = capsys.readouterr().err
         assert "Rule packs directory not found" in err
 

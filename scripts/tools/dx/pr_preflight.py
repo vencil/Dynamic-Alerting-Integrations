@@ -45,6 +45,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 
 class Status(Enum):
@@ -511,7 +512,7 @@ def check_commit_msg_file(path: Path, repo_root: Path) -> int:
     """
     if not path.exists():
         print(f"error: commit-msg file not found: {path}", file=sys.stderr)
-        return 1
+        return EXIT_CALLER_ERROR
 
     # BOM detection runs BEFORE text-decoding: a BOM slipping through as U+FEFF
     # at the top of the header is exactly what makes commitlint's error
@@ -532,7 +533,7 @@ def check_commit_msg_file(path: Path, repo_root: Path) -> int:
             "\"sed '1s/^\\xEF\\xBB\\xBF//'\" <range>",
             file=sys.stderr,
         )
-        return 1
+        return EXIT_VIOLATION
 
     # First non-comment non-empty line is the header (standard git convention).
     # Explicit utf-8: commit messages can contain CJK / em-dash; Windows
@@ -549,7 +550,7 @@ def check_commit_msg_file(path: Path, repo_root: Path) -> int:
     if header is None:
         # Empty commit messages are allowed by git with --allow-empty-message;
         # we don't enforce beyond that.
-        return 0
+        return EXIT_OK
 
     type_enum = _read_commitlint_enum(repo_root, "type-enum")
     scope_enum = _read_commitlint_enum(repo_root, "scope-enum")
@@ -563,7 +564,7 @@ def check_commit_msg_file(path: Path, repo_root: Path) -> int:
     body_warnings = [e for e in body_findings if e.startswith("[W]")]
 
     if not header_errors and not body_errors and not body_warnings:
-        return 0
+        return EXIT_OK
 
     # Print warnings first, then errors. Both go to stderr so
     # git's commit-msg hook pipeline surfaces them.
@@ -580,8 +581,8 @@ def check_commit_msg_file(path: Path, repo_root: Path) -> int:
             # Strip the [E] tag for display consistency with header_errors.
             print(f"   - {e[4:] if e.startswith('[E] ') else e}", file=sys.stderr)
         print(f"\nHeader was:\n   {header}", file=sys.stderr)
-        return 1
-    return 0
+        return EXIT_VIOLATION
+    return EXIT_OK
 
 
 def check_pr_title(title: str, repo_root: Path, max_length: int = 70) -> int:
@@ -603,8 +604,8 @@ def check_pr_title(title: str, repo_root: Path, max_length: int = 70) -> int:
         for e in errors:
             print(f"   - {e}", file=sys.stderr)
         print(f"\nTitle was:\n   {title}", file=sys.stderr)
-        return 1
-    return 0
+        return EXIT_VIOLATION
+    return EXIT_OK
 
 
 def check_pass2_trailer_strict(base_ref: str = "origin/main") -> int:
@@ -655,13 +656,13 @@ def check_pass2_trailer_strict(base_ref: str = "origin/main") -> int:
             "   base branch is explicitly fetched (see workflows/planning-status-sync.yaml).",
             file=sys.stderr,
         )
-        return 1
+        return EXIT_VIOLATION
 
     if count_proc.stdout.strip() == "0":
         print(
             f"⏭️  No commits in {base_ref}..HEAD; skipping Self-Review-Pass-2 trailer check."
         )
-        return 0
+        return EXIT_OK
 
     log_proc = run(
         [
@@ -673,10 +674,10 @@ def check_pass2_trailer_strict(base_ref: str = "origin/main") -> int:
     if log_proc.returncode != 0:
         stderr = (log_proc.stderr or "").strip()
         print(f"❌ git log {base_ref}..HEAD failed: {stderr}", file=sys.stderr)
-        return 1
+        return EXIT_VIOLATION
 
     if log_proc.stdout.strip():
-        return 0
+        return EXIT_OK
 
     print(
         "❌ PR is missing the `Self-Review-Pass-2:` trailer in every commit "
@@ -696,7 +697,7 @@ def check_pass2_trailer_strict(base_ref: str = "origin/main") -> int:
         "   actually attests to (intentional-break dogfood, not just \"I read it\").",
         file=sys.stderr,
     )
-    return 1
+    return EXIT_VIOLATION
 
 
 def find_repo_root() -> Path:
@@ -1320,8 +1321,8 @@ def main() -> int:
             print(f"   ↳ wrote preflight marker: {marker.name}")
 
     if args.ci and report.has_failure:
-        return 1
-    return 0
+        return EXIT_VIOLATION
+    return EXIT_OK
 
 
 if __name__ == "__main__":

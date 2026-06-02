@@ -8,16 +8,16 @@ lang: zh
 ---
 # 開發規範 (Development Rules)
 
-> 本專案的 12 條開發規範 + 互動工具變更 SOP。從 `CLAUDE.md` 搬出，避免 tier 1 context 太肥。
+> 本專案的 13 條開發規範 + 互動工具變更 SOP。從 `CLAUDE.md` 搬出，避免 tier 1 context 太肥。
 > 違反任何一條都會觸發 pre-commit hook / SAST 攔截，或在 review 階段被退回。
 >
 > **相關文件：** [governance-security.md](../governance-security.md)（SAST 規則細節、Schema 驗證）· [doc-map.md](doc-map.md)（Change Impact Matrix）· [testing-playbook.md](testing-playbook.md)（SAST 合規）
 
 ## 為什麼要有這份文件
 
-`CLAUDE.md` 是 tier 1 context，每次 session 都會載入。12 條規範中大部分 Agent 不需要每次都讀完整規則——只需要知道「有這條規則存在，詳細見這裡」。本文件是規範的 Single Source of Truth，CLAUDE.md 只保留 Top 3 最常被違反的條目 + 一個 pointer。
+`CLAUDE.md` 是 tier 1 context，每次 session 都會載入。13 條規範中大部分 Agent 不需要每次都讀完整規則——只需要知道「有這條規則存在，詳細見這裡」。本文件是規範的 Single Source of Truth，CLAUDE.md 只保留 Top 3 最常被違反的條目 + 一個 pointer。
 
-## 12 條開發規範
+## 13 條開發規範
 
 ### 1. ConfigMap 禁止 heredoc 寫入
 
@@ -176,6 +176,15 @@ lang: zh
 
 **執行入口**（三條等價）：`make pr-preflight` ｜ `win_git_escape.bat pr-preflight [PR#]` ｜ `win_git_escape.ps1 pr-preflight [PR#]`。
 Status 處理 / hotfix 例外 / A vs B CI 分類細節見 [`github-release-playbook.md`](github-release-playbook.md)。
+
+### 13. da-tools 子命令 exit-code / `--json` / `--ci` 約定（#452）
+
+**規則**：新增或修改 da-tools 子命令時，exit code 一律遵守 SSOT [`scripts/tools/_lib_exitcodes.py`](../../scripts/tools/_lib_exitcodes.py) 的 `0/1/2`——`EXIT_OK`（乾淨）/ `EXIT_VIOLATION`（user-actionable 發現：違規、drift、`--ci` fail-on-finding）/ `EXIT_CALLER_ERROR`（bad args、檔案/路徑不存在、連線失敗、malformed 輸入、缺前置、crash）。**import 具名常數，不寫 magic number**。對齊 Go binary（da-guard / da-parser / da-batchpr）同款 0/1/2 註解。
+
+- **`--json`**：machine-readable 子命令須提供 `--json`，且 `da-tools <cmd> --json | jq` idiom 須在 cli-reference 文件化。
+- **`--ci`**：Python 工具用 `--ci` 控 fail-on-finding；**Go binary 不引入 `--ci`**（無跨 Python/Go 統一 wrapper 消費者，CI 對 Go 工具用其原生 flag）。
+- **認可例外**：`diag_pr_ci.py`（0/1/2/3，exit 3 = network-blocked，runbook 載明）、`tenant-verify`（倒置契約 2=驗證失敗，[cli-reference](../cli-reference.md) + rollback runbook 載明）——改動須連帶遷移文件 + CHANGELOG breaking note。
+- ✅ **Codified**：`tests/shared/test_tool_exit_codes.py` 驗 `--help`=0 + bad-flag=2 + SSOT 常數；exit-code 章節見 [`testing-playbook.md`](testing-playbook.md)。
 
 ## 互動工具變更 SOP
 

@@ -58,6 +58,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION  # noqa: E402
 
 # Current schema version — keep aligned with docs/schemas/migration-state.md.
 # Bump when introducing a breaking schema change AND adding a corresponding
@@ -391,15 +392,15 @@ def render_text(report: dict, *, dry_run: bool) -> None:
 def compute_exit_code(report: dict, *, ci: bool, dry_run: bool) -> int:
     """Determine exit code from the reconciliation report."""
     if report["schema_drift_unresolvable"]:
-        return 1
+        return EXIT_VIOLATION
     if ci:
         has_pending = (
             dry_run
             and (report["schema_migrations"] or report["manifest_change"])
         )
         if has_pending:
-            return 1
-    return 0
+            return EXIT_VIOLATION
+    return EXIT_OK
 
 
 def main(argv: list[str] | None = None) -> int:

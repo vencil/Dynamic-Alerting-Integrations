@@ -29,6 +29,7 @@ for _p in [_TOOLS_DIR, os.path.join(_TOOLS_DIR, "ops")]:
         sys.path.insert(0, _p)
 
 import notification_tester as nt  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 from factories import make_receiver, make_routing_config, make_tenant_yaml, write_yaml  # noqa: E402
 
 
@@ -527,11 +528,11 @@ class TestCLI:
     """CLI 入口點測試。"""
 
     def test_missing_config_dir(self, tmp_path):
-        """不存在的 config-dir 應 exit 1。"""
+        """不存在的 config-dir 應 exit caller error。"""
         with patch("sys.argv", ["notification_tester.py", "--config-dir", "/nonexistent/path"]):
             with pytest.raises(SystemExit) as exc_info:
                 nt.main()
-            assert exc_info.value.code == 1
+            assert exc_info.value.code == EXIT_CALLER_ERROR
 
     def test_ci_mode_exit_code_on_failure(self, tmp_path):
         """CI 模式下有失敗 receiver 應 exit 1。"""

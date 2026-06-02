@@ -49,6 +49,7 @@ try:
 except Exception:  # pragma: no cover
     def try_utf8_stdout() -> None:  # type: ignore
         pass
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 REQUIRED_LABEL = "app.kubernetes.io/version"
 _PODS_LIST = re.compile(r"pods=\[([^\]]*)\]")
@@ -129,7 +130,7 @@ def main() -> int:
     if not targets:
         print("ERROR: no kube-state-metrics Deployment manifest found under k8s/",
               file=sys.stderr)
-        return 2
+        return EXIT_CALLER_ERROR
 
     violations = 0
     try:
@@ -139,7 +140,7 @@ def main() -> int:
                 print(f"  ❌ {path.relative_to(repo)} [{name}]: {reason}")
     except yaml.YAMLError as exc:
         print(f"ERROR: YAML parse failure: {exc}", file=sys.stderr)
-        return 2
+        return EXIT_CALLER_ERROR
 
     if violations:
         print(f"\n❌ {violations} kube-state-metrics Deployment(s) do not allowlist "
@@ -147,10 +148,10 @@ def main() -> int:
               f"it; without it version-aware thresholds are silently inert. Add "
               f"`--metric-labels-allowlist=pods=[{REQUIRED_LABEL}]`. "
               f"See test/rulepack-e2e/ + ADR-024.", file=sys.stderr)
-        return 1 if args.ci else 0
+        return EXIT_VIOLATION if args.ci else EXIT_OK
     print(f"✅ All {len(targets)} kube-state-metrics Deployment(s) allowlist "
           f"{REQUIRED_LABEL}.")
-    return 0
+    return EXIT_OK
 
 
 if __name__ == "__main__":

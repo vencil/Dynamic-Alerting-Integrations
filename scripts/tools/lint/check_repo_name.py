@@ -44,6 +44,8 @@ if hasattr(sys.stdout, "reconfigure"):
 
 # Helpers from this lint family
 sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, os.path.join(str(Path(__file__).parent), ".."))  # Repo subdir layout
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lint_helpers import (  # noqa: E402
     DiffBaseMissingError,
     get_diff_added_lines,
@@ -227,7 +229,7 @@ def main():
             'ERROR: --fix requires --full-scan (partial-line rewrites in '
             'a diff context are unsafe).', file=sys.stderr,
         )
-        return 2
+        return EXIT_CALLER_ERROR
 
     # Resolve scan mode
     if args.full_scan:
@@ -238,7 +240,7 @@ def main():
             base = args.diff_base or resolve_diff_base()
         except DiffBaseMissingError as e:
             print(f'ERROR: {e}', file=sys.stderr)
-            return 2
+            return EXIT_CALLER_ERROR
         scan_mode = f'diff vs {base}'
 
     total_violations = 0
@@ -262,7 +264,7 @@ def main():
 
     if total_violations == 0:
         print(f'OK no wrong repo name found (mode={scan_mode}). All URLs use {CORRECT_REPO}.')
-        return 0
+        return EXIT_OK
 
     if args.fix:
         print(
@@ -270,7 +272,7 @@ def main():
             f'{files_with_violations} file(s).'
         )
         print(f'  Replaced: {WRONG_REPO_URL} → {CORRECT_REPO_URL}')
-        return 0
+        return EXIT_OK
 
     if bypass_reason:
         print(
@@ -278,7 +280,7 @@ def main():
             f'   {total_violations} finding(s) above are author-acknowledged.\n'
             f'   Reviewer must confirm bypass is justified.'
         )
-        return 0
+        return EXIT_OK
 
     print(
         f'\n✗ Found {total_violations} occurrence(s) of wrong repo '
@@ -293,8 +295,8 @@ def main():
         f'\n    reason: <≥30 words explaining why this is legitimate>'
     )
     if args.ci:
-        return 1
-    return 0
+        return EXIT_VIOLATION
+    return EXIT_OK
 
 
 # Backward-compat alias (see comment above scan_file_full).

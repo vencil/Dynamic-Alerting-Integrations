@@ -29,9 +29,15 @@ Exit 0 = clean; 1 = violations found.
 """
 from __future__ import annotations
 
+import os
 import re
 import sys
 from pathlib import Path
+
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _THIS_DIR)  # Docker flat layout
+sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 
 UNICODE_STATUS = "✓✔⚠❌✗ⓘ"
@@ -385,12 +391,12 @@ def main(argv: list[str]) -> int:
         print("usage: axe_lite_static.py <file.jsx> [...]")
         print("\nStatic WCAG heuristic scanner for JSX portal tools.")
         print("Exit 0 = clean; 1 = violations found; 2 = usage error.")
-        return 0 if len(argv) >= 2 else 2
+        return EXIT_OK if len(argv) >= 2 else EXIT_CALLER_ERROR
     bad = 0
     for p in argv[1:]:
         bad += check_file(Path(p))
     print(f"\nTOTAL findings across {len(argv) - 1} file(s): {bad}")
-    return 0 if bad == 0 else 1
+    return EXIT_OK if bad == 0 else EXIT_VIOLATION
 
 
 if __name__ == "__main__":

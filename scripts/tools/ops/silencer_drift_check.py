@@ -90,6 +90,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 try:
     import yaml
@@ -98,7 +99,7 @@ except ImportError:
         "ERROR: PyYAML not installed. Install with: pip install pyyaml",
         file=sys.stderr,
     )
-    sys.exit(2)
+    sys.exit(EXIT_CALLER_ERROR)
 
 
 # ─── Loading ──────────────────────────────────────────────────────────
@@ -473,8 +474,8 @@ def compute_exit_code(report: dict, *, ci: bool) -> int:
         report["counts"]["orphans"] > 0
         or report["counts"].get("malformed", 0) > 0
     ):
-        return 1
-    return 0
+        return EXIT_VIOLATION
+    return EXIT_OK
 
 
 # ─── Main ─────────────────────────────────────────────────────────────
@@ -544,11 +545,11 @@ def main(argv: list[str] | None = None) -> int:
 
     silences = load_silences(silences_path)
     if silences is None:
-        return 2
+        return EXIT_CALLER_ERROR
 
     if not rule_source.exists():
         print(f"ERROR: --rule-source path does not exist: {rule_source}", file=sys.stderr)
-        return 2
+        return EXIT_CALLER_ERROR
 
     alerts, errors = load_alerts(rule_source)
     if not alerts and errors:
@@ -556,7 +557,7 @@ def main(argv: list[str] | None = None) -> int:
         # Empty alerts with no errors is legitimate (rule source is empty).
         for e in errors:
             print(f"ERROR: {e}", file=sys.stderr)
-        return 2
+        return EXIT_CALLER_ERROR
 
     report = check_drift(silences, alerts, include_inactive=args.include_inactive)
     report["silences_file"] = str(silences_path)

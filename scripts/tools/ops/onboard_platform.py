@@ -63,6 +63,7 @@ from _lib_python import (  # noqa: E402
     RECEIVER_TYPES,
     METRIC_PREFIX_DB_MAP,
 )
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 # Conditionally import migrate_rule AST functions
 try:
@@ -1043,7 +1044,7 @@ def main():
     if not any([args.alertmanager_config, args.rule_files, args.scrape_config]):
         parser.print_help()
         print("\nERROR: At least one phase input is required.", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
 
     phase1_results = None
     phase2_results = None
@@ -1056,7 +1057,7 @@ def main():
         if am_config is None:
             print(f"ERROR: Failed to parse Alertmanager config: {args.alertmanager_config}",
                   file=sys.stderr)
-            sys.exit(1)
+            sys.exit(EXIT_CALLER_ERROR)
 
         tenant_routings, summary = analyze_alertmanager(am_config, args.tenant_label)
         phase1_results = (tenant_routings, summary)
@@ -1135,7 +1136,7 @@ def main():
 
     # Exit code: 0 if at least one phase produced results
     has_results = any(report["phases"].values())
-    sys.exit(0 if has_results else 1)
+    sys.exit(EXIT_OK if has_results else EXIT_VIOLATION)
 
 
 if __name__ == "__main__":

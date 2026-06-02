@@ -34,11 +34,17 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 from typing import Iterable, NamedTuple
 
 import yaml
+
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _THIS_DIR)  # Docker flat layout
+sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
+from _lib_exitcodes import EXIT_OK  # noqa: E402
 
 # Conservative allowlist of strings that carry environment semantics when
 # they appear as a directory segment. Keep narrow to avoid false positives
@@ -240,7 +246,7 @@ def main() -> int:
             f"config dir not found: {config_dir} (skipping)",
             file=sys.stderr,
         )
-        return 0
+        return EXIT_OK
 
     mismatches = scan(config_dir)
     files_scanned = sum(1 for _ in iter_tenant_files(config_dir))
@@ -269,7 +275,7 @@ def main() -> int:
         print(f"\n{tail}", file=sys.stderr)
     else:
         print(tail)
-    return 0
+    return EXIT_OK
 
 
 if __name__ == "__main__":

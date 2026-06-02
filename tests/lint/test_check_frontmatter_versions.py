@@ -7,6 +7,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "scripts", "tools", "lint"))
 import check_frontmatter_versions as cfv
+from _lib_exitcodes import EXIT_CALLER_ERROR
 
 
 # ============================================================
@@ -412,11 +413,11 @@ class TestCLI:
         cfv.main(["--ci"])  # Should not raise
 
     def test_cli_missing_claude_md(self, tmp_path, monkeypatch):
-        """CLAUDE.md 不存在時 exit 1"""
+        """CLAUDE.md 不存在 → caller-error (exit 2, #452)"""
         monkeypatch.setattr(cfv, "CLAUDE_MD", tmp_path / "nonexistent.md")
         with pytest.raises(SystemExit) as exc_info:
             cfv.main([])
-        assert exc_info.value.code == 1
+        assert exc_info.value.code == EXIT_CALLER_ERROR
 
     def test_cli_fix(self, tmp_path, monkeypatch):
         """--fix 修復漂移"""

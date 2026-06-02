@@ -5,7 +5,7 @@ Covers:
   - `find_repo_root` falls back to script-relative path when cwd has no .git
   - `main` passes when dev-rules.md is at/under MAX_LINES
   - `main` fails with exit 1 when dev-rules.md exceeds MAX_LINES
-  - `main` fails with exit 1 when dev-rules.md is missing
+  - `main` returns caller-error (exit 2) when dev-rules.md is missing
 """
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ _TOOLS_DIR = os.path.join(os.path.dirname(__file__), '..', '..', 'scripts', 'too
 sys.path.insert(0, _TOOLS_DIR)
 
 import check_devrules_size as cds  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -83,10 +84,11 @@ class TestMain:
         assert "FAIL" in err
         assert "Prune" in err or "Promote" in err or "Archive" in err
 
-    def test_missing_file_fails(self, tmp_path, monkeypatch, capsys):
+    def test_missing_file_is_caller_error(self, tmp_path, monkeypatch, capsys):
         repo = self._setup_fake_repo(tmp_path, dev_rules_content=None)
         monkeypatch.chdir(repo)
         monkeypatch.setattr("sys.argv", ["check_devrules_size.py"])
-        assert cds.main() == 1
+        # Missing target file is a caller/environment error (#452).
+        assert cds.main() == EXIT_CALLER_ERROR
         err = capsys.readouterr().err
         assert "target not found" in err

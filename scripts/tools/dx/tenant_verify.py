@@ -44,6 +44,20 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 
+# Exit-code contract — SANCTIONED EXCEPTION to the #452 0/1/2 SSOT
+# (scripts/tools/_lib_exitcodes.py). tenant-verify predates the SSOT and
+# its codes are load-bearing in a shipped customer contract: the
+# docs/cli-reference.md §tenant-verify "Exit codes" table AND the Emergency
+# Rollback runbook (docs/scenarios/incremental-migration-playbook.md
+# checklist item 6 keys on "exit 2 = mismatch"). Here exit 2 is a FINDING
+# (verification failed) and exit 1 is a caller error — the inverse of the
+# SSOT. Realigning would be a BREAKING change to that contract; do not
+# change without a coordinated doc + runbook migration + CHANGELOG note.
+# Mirrors diag_pr_ci.py's documented extension.
+EXIT_PASS = 0           # verification passed (tenant exists; hash matched if given)
+EXIT_USAGE_ERROR = 1    # usage / IO error (bad args, conf.d missing, mutually-excl flags)
+EXIT_VERIFY_FAILED = 2  # mismatch or tenant not found (rollback-checklist signal)
+
 # Lazy-import describe_tenant — same dir, can't relative-import in script mode
 _TOOL_DIR = Path(__file__).resolve().parent
 _DESCRIBE_PATH = _TOOL_DIR / "describe_tenant.py"
@@ -71,7 +85,7 @@ def verify_one(scanner, tenant_id: str, expect_merged_hash: str | None) -> tuple
     try:
         info = scanner.source_info(tenant_id)
     except KeyError:
-        return ({"tenant_id": tenant_id, "error": "not_found"}, 2)
+        return ({"tenant_id": tenant_id, "error": "not_found"}, EXIT_VERIFY_FAILED)
 
     out = {
         "tenant_id": info["tenant_id"],
@@ -84,8 +98,8 @@ def verify_one(scanner, tenant_id: str, expect_merged_hash: str | None) -> tuple
     }
     if expect_merged_hash is not None:
         out["match"] = info["merged_hash"] == expect_merged_hash
-        return (out, 0 if out["match"] else 2)
-    return (out, 0)
+        return (out, EXIT_PASS if out["match"] else EXIT_VERIFY_FAILED)
+    return (out, EXIT_PASS)
 
 
 def verify_all(scanner) -> list[dict]:
@@ -150,7 +164,7 @@ def main() -> int:
 
     if not args.all and not args.tenant_id:
         print("error: tenant_id is required (or pass --all)", file=sys.stderr)
-        return 1
+        return EXIT_USAGE_ERROR
 
     if args.all and args.expect_merged_hash:
         print(
@@ -158,12 +172,12 @@ def main() -> int:
             "(use one tenant at a time, or compare two snapshot JSON files)",
             file=sys.stderr,
         )
-        return 1
+        return EXIT_USAGE_ERROR
 
     conf_d = Path(args.conf_d).resolve()
     if not conf_d.is_dir():
         print(f"error: conf.d not found: {conf_d}", file=sys.stderr)
-        return 1
+        return EXIT_USAGE_ERROR
 
     describe_mod = _load_describe_module()
     scanner = describe_mod.ConfDScanner(conf_d)
@@ -177,7 +191,7 @@ def main() -> int:
                 _print_human(r)
                 print()
             print(f"# total: {len(results)} tenants in {conf_d}")
-        return 0
+        return EXIT_PASS
 
     info, exit_code = verify_one(scanner, args.tenant_id, args.expect_merged_hash)
     if args.json:

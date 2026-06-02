@@ -51,16 +51,28 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
 
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _THIS_DIR)  # Docker flat layout
+sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
+from _lib_exitcodes import (  # noqa: E402
+    EXIT_CALLER_ERROR,
+    EXIT_OK,
+    EXIT_VIOLATION,
+)
+
 SARIF_SCHEMA = "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json"
 SARIF_VERSION = "2.1.0"
 
-EXIT_OK = 0
-EXIT_VERIFIED_FINDING = 1
-EXIT_USAGE = 2
+# Descriptive aliases over the shared 0/1/2 contract (#452 _lib_exitcodes).
+# EXIT_OK is re-exported as-is; the other two name this tool's specific
+# semantics for the same codes.
+EXIT_VERIFIED_FINDING = EXIT_VIOLATION  # >=1 verified secret → block the PR
+EXIT_USAGE = EXIT_CALLER_ERROR          # input missing / output unwritable
 
 
 def _extract_location(finding: dict[str, Any]) -> tuple[str, int]:

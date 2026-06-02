@@ -172,7 +172,24 @@ python3 -m pytest tests/test_snapshot.py::test_tool_help_mariadb --snapshot-upda
 # 驗證 .snapshot/ 變更後再 commit
 ```
 
-Exit code 合約測試（`test_tool_exit_codes.py`）覆蓋全部 84+ 個 CLI entrypoint 的 `--help` / invalid args，預期 exit code 0 (成功) 或 2 (CLI 誤用)。（全 repo 含 96 個 Python 工具模組，此處僅測有 CLI 進入點的工具。）
+### Exit-code 合約（0/1/2，#452 Track A）
+
+da-tools Python 工具與 Go binary（da-guard / da-parser / da-batchpr）共用同一 exit-code SSOT [`scripts/tools/_lib_exitcodes.py`](../../scripts/tools/_lib_exitcodes.py)：
+
+| Code | 常數 | 語意 |
+|---|---|---|
+| `0` | `EXIT_OK` | 乾淨；沒事可修 |
+| `1` | `EXIT_VIOLATION` | 工具正常跑完、發現 **user-actionable** 問題（違規 / drift / 發現 / 驗證失敗 / `--ci` fail-on-finding）。CI gate fail 在此 |
+| `2` | `EXIT_CALLER_ERROR` | 工具**無法執行**：bad/missing args、檔案/路徑不存在、連線失敗、malformed 輸入、缺前置 binary、IO 失敗、未捕捉 crash。argparse 對未知 flag 本就 exit 2，與此一致 |
+
+**寫工具鐵則**：import 具名常數、不寫 magic number；caller-error 走 `2` 不要混進 `1`（否則 automation 無法區分「規則違反」vs「工具壞掉」）。詳見 [`dev-rules.md` §13](dev-rules.md)。
+
+**Gate（`tests/shared/test_tool_exit_codes.py`）** 對 `scripts/tools/{ops,dx,lint}/` 全部 CLI-entrypoint 工具驗三件事：(1) `--help` → `0`；(2) 未知 flag → **恰好 `2`**（不只是「非零」——這是約定的可觀測邊界）；(3) SSOT 常數確為 `0/1/2`。新增工具自動納入 parametrize。
+
+**認可例外**（非 0/1/2 純式）——改動須連帶遷移文件 + CHANGELOG：
+- `diag_pr_ci.py`：`0/1/2/3`，exit 3 = `EXIT_NETWORK_BLOCKED`（api.github.com 不可達 → 換 host），[windows-mcp-playbook](windows-mcp-playbook.md) trap #64 載明。
+- `tenant-verify`：**倒置契約** `2` = 驗證失敗（finding）、`1` = usage/IO error，[cli-reference](../cli-reference.md) §tenant-verify + [rollback runbook](../scenarios/incremental-migration-playbook.md) checklist 第 6 項載明（事故中以 exit 2 判 mismatch）。
+- bad-flag-exit-2 gate 的 2 個豁免（`check_aria_references.py` / `axe_lite_static.py`）：positional-path CLI，未知 flag 被當路徑 → uncaught FileNotFoundError → exit 1；於 `INVALID_ARG_EXIT2_EXEMPT` 明文列管。
 
 ## Performance Benchmark
 

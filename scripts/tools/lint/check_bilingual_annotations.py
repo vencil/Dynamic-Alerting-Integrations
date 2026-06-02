@@ -13,15 +13,21 @@ Usage:
 """
 
 import argparse
+import os
 import sys
 from pathlib import Path
 from typing import Dict, List, Tuple
+
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _THIS_DIR)  # Docker flat layout
+sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 try:
     import yaml
 except ImportError:
     print("Error: PyYAML is required. Install with: pip install pyyaml", file=sys.stderr)
-    sys.exit(1)
+    sys.exit(EXIT_CALLER_ERROR)
 
 
 class BilingualAnnotationChecker:
@@ -121,16 +127,16 @@ class BilingualAnnotationChecker:
 
         if not packs:
             print("Error: No rule packs found", file=sys.stderr)
-            return 1
+            return EXIT_CALLER_ERROR
 
-        exit_code = 0
+        exit_code = EXIT_OK
         for pack_path in packs:
             result = self.check_rule_pack(pack_path)
             self.results[pack_path.name] = result
 
             if "error" in result:
                 print(f"ERROR in {pack_path.name}: {result['error']}", file=sys.stderr)
-                exit_code = 1
+                exit_code = EXIT_CALLER_ERROR
                 continue
 
             # Check for missing bilingual annotations
@@ -142,7 +148,7 @@ class BilingualAnnotationChecker:
                             print(f"\n{pack_path.name}:")
                             has_missing = True
                         print(f"  {alert_name}: missing {missing}")
-                        exit_code = 1
+                        exit_code = EXIT_VIOLATION
 
         return exit_code
 
@@ -233,7 +239,7 @@ def main():
 
     if not rule_pack_dir.exists():
         print(f"Error: rule-packs directory not found at {rule_pack_dir}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
 
     only_packs = None
     if args.only:
@@ -245,13 +251,13 @@ def main():
         return checker.run_check(only_packs)
     elif args.coverage:
         checker.print_coverage(only_packs)
-        return 0
+        return EXIT_OK
     elif args.ci:
         return checker.run_ci_mode(only_packs)
     else:
         # Default to coverage if no mode specified
         checker.print_coverage(only_packs)
-        return 0
+        return EXIT_OK
 
 
 if __name__ == "__main__":

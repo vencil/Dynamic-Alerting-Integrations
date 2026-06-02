@@ -18,6 +18,7 @@ REPO_ROOT = os.path.dirname(TESTS_DIR)
 sys.path.insert(0, os.path.join(REPO_ROOT, "scripts", "tools", "dx"))
 
 import describe_tenant as dt  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -466,10 +467,10 @@ class TestWhatIf:
         assert output["would_trigger_reload"] is False
 
     def test_what_if_file_not_found(self, tmp_path):
-        """Non-existent --what-if path → exit 1 with clear error."""
+        """Non-existent --what-if path → exit 2 (EXIT_CALLER_ERROR, #452) with clear error."""
         conf_d = self._setup_conf_d(tmp_path)
         result = self._run_cli(conf_d, "whatif-tenant", tmp_path / "does-not-exist.yaml")
-        assert result.returncode == 1
+        assert result.returncode == EXIT_CALLER_ERROR
         assert b"--what-if file not found" in result.stderr
 
     def test_what_if_help_text_no_longer_stub(self):

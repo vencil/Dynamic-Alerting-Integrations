@@ -29,6 +29,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lib_exitcodes import EXIT_VIOLATION  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -386,14 +387,14 @@ def main():
         if not OUTPUT_PATH.exists():
             print(f"❌ {OUTPUT_PATH.relative_to(REPO_ROOT)} does not exist. "
                   f"Run without --check first.")
-            sys.exit(1)
+            sys.exit(EXIT_VIOLATION)
         existing = json.loads(OUTPUT_PATH.read_text(encoding="utf-8"))
         new_stable = json.dumps(strip_volatile(data), indent=2, ensure_ascii=False) + "\n"
         existing_stable = json.dumps(strip_volatile(existing), indent=2, ensure_ascii=False) + "\n"
         if existing_stable != new_stable:
             print(f"❌ {OUTPUT_PATH.relative_to(REPO_ROOT)} is outdated. "
                   f"Run `make platform-data` to update.")
-            sys.exit(1)
+            sys.exit(EXIT_VIOLATION)
         else:
             print(f"✅ {OUTPUT_PATH.relative_to(REPO_ROOT)} is up to date.")
         return

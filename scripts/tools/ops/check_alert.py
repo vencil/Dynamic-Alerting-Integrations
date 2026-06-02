@@ -31,13 +31,14 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))
 from _lib_python import http_get_json  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 
 
 def check_alert(alert_name, tenant, prom_url):
     data, err = http_get_json(f'{prom_url}/api/v1/alerts')
     if err:
         print(json.dumps({"error": f"Cannot connect to Prometheus API ({prom_url}): {err}"}))
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)  # #452: cannot reach Prometheus = caller/env error
 
     alerts = data.get('data', {}).get('alerts', [])
 
@@ -83,5 +84,12 @@ if __name__ == "__main__":
                         help="Prometheus Query API URL "
                              "(預設: http://localhost:9090; "
                              "叢集內建議用 http://prometheus.monitoring.svc.cluster.local:9090)")
+    # #452 Track C: this tool emits JSON by design (consumers like
+    # tests/scenarios/scenario-d.sh parse stdout as JSON). --json is the
+    # default and is accepted explicitly so the documented
+    # `da-tools check-alert ... --json | jq` idiom works and matches the
+    # convention required of new subcommands (see dev-rules.md).
+    parser.add_argument("--json", action="store_true", default=True,
+                        help="Emit machine-readable JSON to stdout (default).")
     args = parser.parse_args()
     check_alert(args.alert_name, args.tenant, args.prometheus)

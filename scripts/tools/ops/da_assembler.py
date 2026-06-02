@@ -31,11 +31,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict
 
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _THIS_DIR)  # Docker flat layout
+sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
+from _lib_exitcodes import EXIT_OK, EXIT_CALLER_ERROR  # noqa: E402
+
 try:
     import yaml
 except ImportError:
     print("ERROR: PyYAML is required.  pip install pyyaml", file=sys.stderr)
-    sys.exit(1)
+    sys.exit(EXIT_CALLER_ERROR)
 
 try:
     from kubernetes import client, config, watch
@@ -245,7 +250,7 @@ def run_once(
                 CRD_GROUP, CRD_VERSION, CRD_PLURAL)
     except Exception as e:
         log.error("Failed to list ThresholdConfig resources: %s", e)
-        return 1
+        return EXIT_CALLER_ERROR
 
     items = result.get("items", [])
     log.info("Found %d ThresholdConfig resource(s)", len(items))
@@ -254,7 +259,7 @@ def run_once(
         reconcile_one(cr, config_dir, dry_run=dry_run,
                       api=None if dry_run else api)
 
-    return 0
+    return EXIT_OK
 
 
 def run_watch(
@@ -333,14 +338,14 @@ def render_cr_file(
             cr = yaml.safe_load(fh)
     except (OSError, yaml.YAMLError) as e:
         log.error("Failed to parse %s: %s", cr_path, e)
-        return 1
+        return EXIT_CALLER_ERROR
 
     if not cr or cr.get("kind") != "ThresholdConfig":
         log.error("%s is not a ThresholdConfig resource", cr_path)
-        return 1
+        return EXIT_CALLER_ERROR
 
     reconcile_one(cr, config_dir, dry_run=dry_run)
-    return 0
+    return EXIT_OK
 
 
 # ── Main ─────────────────────────────────────────────────────────────
@@ -396,7 +401,7 @@ def main() -> int:
     if not HAS_K8S:
         log.error("kubernetes Python client is required.  "
                    "pip install kubernetes")
-        return 1
+        return EXIT_CALLER_ERROR
 
     # Load kubeconfig
     try:
@@ -411,7 +416,7 @@ def main() -> int:
                 log.info("Using kubeconfig")
     except Exception as e:
         log.error("Failed to load Kubernetes config: %s", e)
-        return 1
+        return EXIT_CALLER_ERROR
 
     api = client.CustomObjectsApi()
 
@@ -428,7 +433,7 @@ def main() -> int:
 
     run_watch(api, config_dir, dry_run=args.dry_run,
               namespace=args.namespace)
-    return 0
+    return EXIT_OK
 
 
 if __name__ == "__main__":

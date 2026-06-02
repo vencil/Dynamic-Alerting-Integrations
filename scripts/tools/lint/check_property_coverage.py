@@ -63,10 +63,16 @@ from __future__ import annotations
 import argparse
 import ast
 import json
+import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
+
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _THIS_DIR)  # Docker flat layout
+sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_MANIFEST = REPO_ROOT / "tests" / "shared" / "property-coverage.yaml"
@@ -303,20 +309,20 @@ def main(argv: Optional[list] = None) -> int:
     manifest_path = Path(args.manifest)
     if not manifest_path.is_file():
         print(f"ERROR: manifest not found: {manifest_path}", file=sys.stderr)
-        return 2
+        return EXIT_CALLER_ERROR
 
     try:
         import yaml
     except ImportError:
         print("ERROR: pyyaml not installed", file=sys.stderr)
-        return 2
+        return EXIT_CALLER_ERROR
 
     try:
         with open(manifest_path, encoding="utf-8") as f:
             manifest = yaml.safe_load(f) or {}
     except yaml.YAMLError as e:
         print(f"ERROR: cannot parse {manifest_path}: {e}", file=sys.stderr)
-        return 2
+        return EXIT_CALLER_ERROR
 
     test_path = Path(args.test_file)
     issues = validate_manifest(manifest, REPO_ROOT, test_path)
@@ -338,7 +344,7 @@ def main(argv: Optional[list] = None) -> int:
                     f"property-coverage.yaml: {count} modules in scope, "
                     "all functions triaged, all covered claims backed by tests."
                 )
-            return 0
+            return EXIT_OK
 
         print(
             f"property-coverage drift detected: {len(issues)} finding(s)",
@@ -352,7 +358,7 @@ def main(argv: Optional[list] = None) -> int:
             file=sys.stderr,
         )
 
-    return 1 if issues else 0
+    return EXIT_VIOLATION if issues else EXIT_OK
 
 
 if __name__ == "__main__":

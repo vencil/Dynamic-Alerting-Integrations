@@ -31,8 +31,14 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
 import sys
 from pathlib import Path
+
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _THIS_DIR)  # Docker flat layout
+sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 # How much rise across the run counts as drift?
 WARN_THRESHOLD_PCT = 5.0
@@ -130,14 +136,14 @@ def render(input_dir: Path, warmup_sec_override: int | None = None) -> tuple[str
     csv_path = input_dir / "metrics-timeseries.csv"
 
     if not run_config_path.exists() or not csv_path.exists():
-        return f"Error: missing run-config.json or metrics-timeseries.csv in {input_dir}\n", 1
+        return f"Error: missing run-config.json or metrics-timeseries.csv in {input_dir}\n", EXIT_CALLER_ERROR
 
     with open(run_config_path, encoding="utf-8") as f:
         cfg = json.load(f)
 
     header, rows = load_csv(csv_path)
     if not rows:
-        return f"Error: empty timeseries in {csv_path}\n", 1
+        return f"Error: empty timeseries in {csv_path}\n", EXIT_CALLER_ERROR
 
     warmup_sec = compute_warmup_sec(cfg.get("duration_min", 0), warmup_sec_override)
 
@@ -210,15 +216,19 @@ def render(input_dir: Path, warmup_sec_override: int | None = None) -> tuple[str
     if fail_count > 0:
         lines.append(f"**❌ FAIL** — {fail_count} metric(s) show strong upward drift "
                      f"(≥ {FAIL_THRESHOLD_PCT}%). Investigate before tagging release.")
-        exit_code = 1
+        exit_code = EXIT_VIOLATION
     elif warn_count > 0:
         lines.append(f"**⚠️ WARN** — {warn_count} metric(s) show mild upward drift "
                      f"(≥ {WARN_THRESHOLD_PCT}%). Re-run longer to confirm; not a blocker.")
-        exit_code = 2
+        # #452: WARN is a (milder) drift finding → EXIT_VIOLATION, same as
+        # FAIL. It was exit 2, which now means caller-error (missing input
+        # above) — keeping WARN at 2 would collide. The markdown still
+        # distinguishes WARN from FAIL severity for the human reader.
+        exit_code = EXIT_VIOLATION
     else:
         lines.append(f"**✅ PASS** — no drift signal under "
                      f"{cfg.get('reload_count', 0)} reloads over {cfg['duration_min']} min.")
-        exit_code = 0
+        exit_code = EXIT_OK
 
     return "\n".join(lines) + "\n", exit_code
 

@@ -33,6 +33,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -659,7 +660,7 @@ def main() -> None:
     if output_dir.exists() and any(output_dir.iterdir()):
         print(f"⚠️  Output directory {output_dir} already exists and is not empty.")
         print(f"   Use a different --output or remove it first.")
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
 
     if args.layout == "flat":
         generate_flat(

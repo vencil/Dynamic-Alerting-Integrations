@@ -64,11 +64,14 @@ from typing import Iterable, List, Optional, Tuple
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent.parent.parent
 sys.path.insert(0, str(REPO_ROOT / "scripts" / "dx"))
+sys.path.insert(0, str(SCRIPT_DIR))  # Docker flat layout
+sys.path.insert(0, str(SCRIPT_DIR.parent))  # Repo subdir layout
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 try:
     from generate_planning_index import discover_all, PlanningEntry  # noqa: E402
 except ImportError as e:
     print(f"FATAL: cannot import generate_planning_index ({e})", file=sys.stderr)
-    sys.exit(2)
+    sys.exit(EXIT_CALLER_ERROR)
 
 # Make stdout tolerate non-ASCII on Windows shells.
 if hasattr(sys.stdout, "reconfigure"):
@@ -342,7 +345,7 @@ def main() -> int:
         hits = extract_trailers(args.base)
     except CheckError as e:
         print(f"ERROR: {e}", file=sys.stderr)
-        return 2
+        return EXIT_CALLER_ERROR
 
     entries = discover_all()
     issues = validate_sync(hits, entries, pr_number=args.pr_number)
@@ -359,8 +362,8 @@ def main() -> int:
         _emit_gha_warnings(issues)
 
     if issues and (args.strict or args.ci):
-        return 1
-    return 0
+        return EXIT_VIOLATION
+    return EXIT_OK
 
 
 if __name__ == "__main__":

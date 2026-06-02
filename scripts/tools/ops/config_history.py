@@ -29,6 +29,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 
 def _detect_lang():
     """Detect CLI language."""
@@ -59,7 +60,7 @@ def _scan_config_dir(config_dir):
     if not config_path.is_dir():
         print(_t(f"錯誤：目錄不存在 {config_dir}", f"Error: directory not found {config_dir}"),
               file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
 
     for f in sorted(config_path.glob("*.yaml")):
         if f.name.startswith('.'):
@@ -206,7 +207,7 @@ def cmd_show(config_dir, snapshot_id):
     if not entry:
         print(_t(f"錯誤：快照 #{snapshot_id} 不存在", f"Error: snapshot #{snapshot_id} not found"),
               file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
 
     ts = entry['timestamp'][:19].replace('T', ' ')
     print(f"{_t('快照', 'Snapshot')} #{entry['id']}")
@@ -239,7 +240,7 @@ def cmd_diff(config_dir, id_a, id_b):
         missing = id_a if not entry_a else id_b
         print(_t(f"錯誤：快照 #{missing} 不存在", f"Error: snapshot #{missing} not found"),
               file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
 
     hdir = _history_dir(config_dir)
     snap_a = hdir / f"snap-{id_a}"
@@ -327,7 +328,7 @@ def main():
 
     if not args.action:
         parser.print_help()
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
 
     if args.action == 'snapshot':
         cmd_snapshot(args.config_dir, args.message)

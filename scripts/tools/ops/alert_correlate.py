@@ -30,6 +30,7 @@ from _lib_python import (  # noqa: E402
     http_get_json,
     parse_duration_seconds,
 )
+from _lib_exitcodes import EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -486,7 +487,7 @@ def main():
     window_secs = parse_duration_seconds(args.window)
     if window_secs is None or window_secs <= 0:
         print("ERROR: Invalid --window value", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
 
     # Load alerts
     if args.input:
@@ -519,7 +520,7 @@ def main():
             for c in report["clusters"]
         )
         if critical:
-            sys.exit(1)
+            sys.exit(EXIT_VIOLATION)
 
 
 if __name__ == "__main__":

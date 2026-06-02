@@ -61,6 +61,7 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))
 from _lib_python import http_get_json, write_text_secure, query_prometheus_instant  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 
 # Alias for backward-compat within this module
 query_prometheus = query_prometheus_instant
@@ -211,7 +212,7 @@ def main():
 
     if not metrics:
         print("錯誤: 無有效指標可觀測", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
 
     # Dry-run
     if args.dry_run:

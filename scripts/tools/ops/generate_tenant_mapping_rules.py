@@ -46,6 +46,7 @@ from _lib_python import (  # noqa: E402
     write_text_secure,
     iter_yaml_files,
 )
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 _LANG = detect_cli_lang()
 
@@ -388,20 +389,20 @@ def main() -> None:
     config_dir = args.config_dir
     if not Path(config_dir).is_dir():
         print(f"ERROR: config-dir not found: {config_dir}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
 
     # Find mapping file
     mapping_path = find_mapping_file(config_dir)
     if not mapping_path:
         print(f"INFO: no _instance_mapping.yaml found in {config_dir} — "
               "no 1:N mappings to generate", file=sys.stderr)
-        sys.exit(0)
+        sys.exit(EXIT_OK)
 
     # Parse mappings
     mappings = parse_mapping_file(mapping_path)
     if not mappings:
         print("INFO: no valid mappings found in _instance_mapping.yaml", file=sys.stderr)
-        sys.exit(0)
+        sys.exit(EXIT_OK)
 
     # Resolve metrics list
     if args.metrics:
@@ -420,11 +421,11 @@ def main() -> None:
         else:
             print("ERROR: no --metrics specified and metric-dictionary.yaml not found",
                   file=sys.stderr)
-            sys.exit(1)
+            sys.exit(EXIT_CALLER_ERROR)
 
     if not metrics:
         print("ERROR: no metrics to map", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
 
     # Validation
     errors_found = False
@@ -453,13 +454,13 @@ def main() -> None:
             for entry in mapping.entries:
                 print(f"    → {entry.tenant} ({entry.filter_expr})")
         if errors_found:
-            sys.exit(1)
-        sys.exit(0)
+            sys.exit(EXIT_VIOLATION)
+        sys.exit(EXIT_OK)
 
     if errors_found:
         print("ERROR: validation failed — fix errors above before generating rules",
               file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_VIOLATION)
 
     # Generate rules
     groups = generate_recording_rules(mappings, metrics)

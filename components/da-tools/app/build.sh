@@ -157,6 +157,10 @@ TOOL_FILES=(
     dx/tenant_verify.py
     # Shared library sub-modules
     _lib_constants.py
+    # #452 Track A — canonical 0/1/2 exit-code contract (EXIT_OK /
+    # EXIT_VIOLATION / EXIT_CALLER_ERROR). Imported by ops/dx/lint tools
+    # + _lib_godispatch. Stdlib-only; safe to bundle.
+    _lib_exitcodes.py
     _lib_validation.py
     # v2.8.0 — cross-platform compat helpers (try_utf8_stdout etc.)
     # Imported by state_reconcile / rule_pack_diff / silencer_drift_check.

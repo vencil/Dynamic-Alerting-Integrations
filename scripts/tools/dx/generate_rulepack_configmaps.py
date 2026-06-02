@@ -37,6 +37,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(_THIS_DIR, "..", "lint"))
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 import check_rulepack_sync as sync  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 try:
     from _lib_compat import try_utf8_stdout  # noqa: E402
@@ -113,14 +114,14 @@ def main() -> int:
     packs = sorted((repo / "rule-packs").glob("rule-pack-*.yaml"))
     if not packs:
         print("ERROR: no rule packs found", file=sys.stderr)
-        return 2
+        return EXIT_CALLER_ERROR
     if args.pack:
         wanted = set(args.pack)
         packs = [p for p in packs if _pack_name(p) in wanted]
         missing = wanted - {_pack_name(p) for p in packs}
         if missing:
             print(f"ERROR: --pack name(s) not found: {sorted(missing)}", file=sys.stderr)
-            return 2
+            return EXIT_CALLER_ERROR
 
     drift = []
     wrote = 0
@@ -161,12 +162,12 @@ def main() -> int:
                     print(f"       {f}")
             print(f"\n❌ {len(drift)} configmap(s) out of sync with rule-packs/. "
                   f"Run `make rulepack-configmaps` to regenerate.", file=sys.stderr)
-            return 1
+            return EXIT_VIOLATION
         print(f"✅ All {len(packs)} rule-pack configmaps match source.")
-        return 0
+        return EXIT_OK
 
     print(f"✅ Generated {wrote} configmaps into {out_dir.relative_to(repo)}/.")
-    return 0
+    return EXIT_OK
 
 
 if __name__ == "__main__":

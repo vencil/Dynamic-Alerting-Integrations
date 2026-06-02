@@ -21,6 +21,11 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _THIS_DIR)  # Docker flat layout
+sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
+from _lib_exitcodes import EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+
 
 def extract_frontmatter(content: str) -> Tuple[Dict[str, any], str]:
     """Extract YAML front matter from markdown file.
@@ -281,7 +286,7 @@ def main():
     docs_root = Path(docs_dir)
     if not docs_root.is_dir():
         print(f"Error: docs directory not found: {docs_dir}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
 
     # Scan all markdown files
     all_docs = {}
@@ -313,7 +318,7 @@ def main():
 
     if mode == "check" and changed_count > 0:
         print(f"Found {changed_count} files with drift", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_VIOLATION)
 
     if mode in ("dry-run", "check"):
         print(f"\nTotal: {changed_count} files would change, {error_count} errors")

@@ -39,6 +39,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lib_exitcodes import EXIT_OK, die_caller_error  # noqa: E402
 
 
 def _b64u(raw: bytes) -> str:
@@ -84,11 +85,11 @@ def _generate_keypair(bits: int):
             timeout=60,
         ).stdout.decode("ascii").strip()
     except FileNotFoundError:
-        sys.exit("error: `openssl` not found on PATH — required to generate the keypair")
+        die_caller_error("error: `openssl` not found on PATH — required to generate the keypair")
     except subprocess.TimeoutExpired:
-        sys.exit(f"error: openssl timed out generating a {bits}-bit key")
+        die_caller_error(f"error: openssl timed out generating a {bits}-bit key")
     except subprocess.CalledProcessError as exc:
-        sys.exit(f"error: openssl failed: {exc.stderr.decode('utf-8', 'replace').strip()}")
+        die_caller_error(f"error: openssl failed: {exc.stderr.decode('utf-8', 'replace').strip()}")
 
     # `openssl rsa -modulus` prints `Modulus=<HEX>` (it reads the PKCS#8
     # key on stdin fine; only `genrsa` is deprecated, not `rsa`).
@@ -139,13 +140,13 @@ def _merge_jwks(existing_path: str, new_jwk: dict) -> dict:
         with open(existing_path, encoding="utf-8") as fh:
             doc = json.load(fh)
     except (OSError, json.JSONDecodeError) as exc:
-        sys.exit(f"error: cannot read --existing-jwks {existing_path}: {exc}")
+        die_caller_error(f"error: cannot read --existing-jwks {existing_path}: {exc}")
     keys = doc.get("keys")
     if not isinstance(keys, list):
-        sys.exit(f"error: {existing_path} is not a JWKS document (missing `keys` array)")
+        die_caller_error(f"error: {existing_path} is not a JWKS document (missing `keys` array)")
     if any(k.get("kid") == new_jwk["kid"] for k in keys):
-        sys.exit(f"error: a key with kid {new_jwk['kid']} is already in the JWKS "
-                 "(the same keypair was generated twice?)")
+        die_caller_error(f"error: a key with kid {new_jwk['kid']} is already in the JWKS "
+                         "(the same keypair was generated twice?)")
     return {"keys": keys + [new_jwk]}
 
 
@@ -183,7 +184,7 @@ def main() -> int:
     # meant to avoid). A pipe or `> file` redirect is not a tty, so the
     # documented invocations are unaffected.
     if sys.stdout.isatty():
-        sys.exit(
+        die_caller_error(
             "error: refusing to write the private-key Secret manifest to a terminal.\n"
             "Pipe it straight to kubectl:  da-tools fed-key | kubectl apply -f -\n"
             "(to stage it for a rotation, see the key-rotation runbook — it saves\n"
@@ -221,7 +222,7 @@ def main() -> int:
         print("[fed-key] ROTATION: apply the JWKS to the gateway and wait for reload "
               "BEFORE applying this Secret to tenant-api — see the key-rotation runbook.",
               file=sys.stderr)
-    return 0
+    return EXIT_OK
 
 
 if __name__ == "__main__":

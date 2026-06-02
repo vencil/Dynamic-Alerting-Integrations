@@ -26,6 +26,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent.parent.parent
@@ -155,7 +156,7 @@ def main() -> int:
 
     if not INCLUDES_DIR.exists():
         print(f"Includes directory not found: {INCLUDES_DIR}", file=sys.stderr)
-        return 1
+        return EXIT_CALLER_ERROR
 
     # Find Chinese includes (*.md but not *.en.md and not abbreviations.md)
     zh_files = sorted(
@@ -165,7 +166,7 @@ def main() -> int:
 
     if not zh_files:
         print("No include snippets found.", file=sys.stderr)
-        return 0
+        return EXIT_OK
 
     total_pairs = 0
     total_issues = 0
@@ -205,14 +206,14 @@ def main() -> int:
 
     if args.fix and fixed:
         print(f"\n🔧 Created {fixed} English stub(s). Review and refine.")
-        return 0
+        return EXIT_OK
 
     if total_issues > 0 or missing_en > 0:
         print(f"\n❌ {total_issues} issue(s) found across {total_pairs} pairs")
-        return 1 if args.check else 0
+        return EXIT_VIOLATION if args.check else EXIT_OK
     else:
         print(f"\n✅ All {total_pairs} include pairs are in sync")
-        return 0
+        return EXIT_OK
 
 
 if __name__ == "__main__":

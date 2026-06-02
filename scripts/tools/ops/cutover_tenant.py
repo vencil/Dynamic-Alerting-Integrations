@@ -48,6 +48,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lib_exitcodes import EXIT_VIOLATION  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -342,7 +343,7 @@ def main():
         print(f"\n❌ Cutover failed at step: {step}")
         print(f"   Reason: {msg}")
         print("   See shadow-monitoring-sop.md §7.2 for rollback steps.")
-        sys.exit(1)
+        sys.exit(EXIT_VIOLATION)
 
 
 if __name__ == "__main__":

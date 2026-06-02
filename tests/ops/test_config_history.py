@@ -35,6 +35,7 @@ from unittest.mock import patch, MagicMock
 import pytest
 
 import config_history as ch  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 
 
 # ── 1. _sha256 ──────────────────────────────────────────────────────
@@ -243,10 +244,10 @@ class TestScanConfigDirMissing:
     """_scan_config_dir() 缺失目錄測試。"""
 
     def test_missing_directory_exits(self):
-        """目錄不存在應呼叫 sys.exit(1)。"""
+        """目錄不存在應呼叫 sys.exit(EXIT_CALLER_ERROR)。"""
         with pytest.raises(SystemExit) as exc_info:
             ch._scan_config_dir('/nonexistent/path')
-        assert exc_info.value.code == 1
+        assert exc_info.value.code == EXIT_CALLER_ERROR
 
     def test_missing_directory_stderr_message(self):
         """應輸出錯誤訊息到 stderr。"""
@@ -857,7 +858,7 @@ class TestCmdShowInvalid:
     """cmd_show() 無效 ID 測試。"""
 
     def test_invalid_id_exits(self):
-        """無效 ID 應呼叫 sys.exit(1)。"""
+        """無效 ID 應呼叫 sys.exit(EXIT_CALLER_ERROR)。"""
         with tempfile.TemporaryDirectory() as tmpdir:
             config_dir = Path(tmpdir) / 'conf.d'
             config_dir.mkdir()
@@ -868,7 +869,7 @@ class TestCmdShowInvalid:
 
             with pytest.raises(SystemExit) as exc_info:
                 ch.cmd_show(str(config_dir), snapshot_id=999)
-            assert exc_info.value.code == 1
+            assert exc_info.value.code == EXIT_CALLER_ERROR
 
     def test_invalid_id_stderr_message(self):
         """應輸出錯誤訊息到 stderr。"""
@@ -1018,7 +1019,7 @@ class TestCmdDiffMissing:
     """cmd_diff() 缺失快照測試。"""
 
     def test_missing_first_snapshot_exits(self):
-        """快照 A 不存在應 sys.exit(1)。"""
+        """快照 A 不存在應 sys.exit(EXIT_CALLER_ERROR)。"""
         with tempfile.TemporaryDirectory() as tmpdir:
             config_dir = Path(tmpdir) / 'conf.d'
             config_dir.mkdir()
@@ -1029,10 +1030,10 @@ class TestCmdDiffMissing:
 
             with pytest.raises(SystemExit) as exc_info:
                 ch.cmd_diff(str(config_dir), id_a=999, id_b=1)
-            assert exc_info.value.code == 1
+            assert exc_info.value.code == EXIT_CALLER_ERROR
 
     def test_missing_second_snapshot_exits(self):
-        """快照 B 不存在應 sys.exit(1)。"""
+        """快照 B 不存在應 sys.exit(EXIT_CALLER_ERROR)。"""
         with tempfile.TemporaryDirectory() as tmpdir:
             config_dir = Path(tmpdir) / 'conf.d'
             config_dir.mkdir()
@@ -1043,7 +1044,7 @@ class TestCmdDiffMissing:
 
             with pytest.raises(SystemExit) as exc_info:
                 ch.cmd_diff(str(config_dir), id_a=1, id_b=999)
-            assert exc_info.value.code == 1
+            assert exc_info.value.code == EXIT_CALLER_ERROR
 
     def test_missing_snapshot_stderr_message(self):
         """應輸出錯誤訊息。"""

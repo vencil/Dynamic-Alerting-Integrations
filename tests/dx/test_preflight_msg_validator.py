@@ -17,6 +17,8 @@ from pathlib import Path
 
 import pytest
 
+from _lib_exitcodes import EXIT_CALLER_ERROR
+
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _SCRIPT = _REPO_ROOT / "scripts" / "tools" / "dx" / "pr_preflight.py"
 
@@ -228,7 +230,7 @@ def test_cli_check_pr_title_custom_max() -> None:
 
 def test_cli_check_commit_msg_missing_file(tmp_path: Path) -> None:
     proc = _run_cli("--check-commit-msg", str(tmp_path / "nope"))
-    assert proc.returncode == 1
+    assert proc.returncode == EXIT_CALLER_ERROR
     assert "not found" in proc.stderr
 
 

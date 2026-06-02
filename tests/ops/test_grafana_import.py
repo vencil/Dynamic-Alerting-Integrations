@@ -19,6 +19,7 @@ _TOOLS_DIR = os.path.join(os.path.dirname(__file__), '..', '..', 'scripts', 'too
 sys.path.insert(0, _TOOLS_DIR)
 
 import grafana_import as gi  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -248,12 +249,12 @@ class TestMain:
         assert payload["mode"] == "verify"
         assert payload["status"] == "pass"
 
-    def test_dashboard_dir_not_found_exits_one(self, monkeypatch, tmp_path, capsys, cli_argv):
+    def test_dashboard_dir_not_found_exits_caller_error(self, monkeypatch, tmp_path, capsys, cli_argv):
         ghost = tmp_path / "no-such-dir"
         cli_argv("grafana_import.py", "--dashboard-dir", str(ghost))
         with pytest.raises(SystemExit) as exc:
             gi.main()
-        assert exc.value.code == 1
+        assert exc.value.code == EXIT_CALLER_ERROR
         err = capsys.readouterr().err
         assert "not found" in err.lower()
 

@@ -52,6 +52,7 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, str(_THIS_DIR))  # Docker flat layout
 sys.path.insert(0, str(_THIS_DIR.parent))  # Repo subdir layout
 from _lib_python import detect_cli_lang  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 # Language detection for bilingual help
 _LANG = detect_cli_lang()
@@ -587,7 +588,7 @@ def main() -> None:
     if not os.path.isdir(args.config_dir):
         print(f"ERROR: config-dir not found: {args.config_dir}",
               file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
 
     # Ensure tools dir is in sys.path for imports
     tools_dir = os.path.dirname(os.path.abspath(__file__))
@@ -629,7 +630,7 @@ def main() -> None:
 
     # Exit code
     has_fail = any(r["status"] == FAIL for r in results)
-    sys.exit(1 if has_fail else 0)
+    sys.exit(EXIT_VIOLATION if has_fail else EXIT_OK)
 
 
 if __name__ == "__main__":

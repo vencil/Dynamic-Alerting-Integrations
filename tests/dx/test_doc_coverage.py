@@ -21,6 +21,7 @@ from pathlib import Path
 import pytest
 
 import doc_coverage as dc
+from _lib_exitcodes import EXIT_CALLER_ERROR
 
 
 # ---------------------------------------------------------------------------
@@ -488,10 +489,10 @@ class TestMainCLI:
         assert parsed["schemaVersion"] == 1
         assert parsed["label"] == "docs coverage"
 
-    def test_nonexistent_repo_returns_one(self, tmp_path, capsys, cli_argv):
+    def test_nonexistent_repo_returns_caller_error(self, tmp_path, capsys, cli_argv):
         cli_argv("doc_coverage.py", "--repo-root", str(tmp_path / "ghost"))
         rc = dc.main()
-        assert rc == 1
+        assert rc == EXIT_CALLER_ERROR
         err = capsys.readouterr().err
         assert "not found" in err.lower()
 

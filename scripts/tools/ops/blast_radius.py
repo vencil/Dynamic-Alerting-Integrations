@@ -22,6 +22,11 @@ import sys
 from pathlib import Path
 from typing import Any
 
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _THIS_DIR)  # Docker flat layout
+sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
+from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
+
 # ---------------------------------------------------------------------------
 # Tier classification constants
 # ---------------------------------------------------------------------------
@@ -496,10 +501,10 @@ def load_effective_json(path: str) -> dict:
             data = json.load(f)
     except (json.JSONDecodeError, OSError) as exc:
         print(f"Error reading {path}: {exc}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
     if not isinstance(data, dict):
         print(f"Error: {path} must contain a JSON object, got {type(data).__name__}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
     return data
 
 

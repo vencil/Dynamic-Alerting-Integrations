@@ -38,6 +38,7 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, str(_THIS_DIR))  # Docker flat layout
 sys.path.insert(0, str(_THIS_DIR.parent))  # Repo subdir layout
 from _lib_python import detect_cli_lang, write_text_secure  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 _LANG = detect_cli_lang()
 
@@ -1316,7 +1317,7 @@ def _check_existing_init(output_dir: str, force: bool, parser: argparse.Argument
         else:
             print(f"⚠️  This directory is already initialized ({marker_path}).", file=sys.stderr)
             print("   Use --force to overwrite or remove .da-init.yaml manually.", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_VIOLATION)
 
 
 def _build_config_from_args(args, parser: argparse.ArgumentParser) -> dict:
@@ -1367,7 +1368,7 @@ def _validate_config(config: dict) -> None:
                   f"{', '.join(invalid_tenants)}", file=sys.stderr)
             print("   Rules: lowercase alphanumeric + hyphens, max 63 chars",
                   file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
 
     # Reject empty tenant list
     if not config['tenants']:
@@ -1375,7 +1376,7 @@ def _validate_config(config: dict) -> None:
             print("⚠️  至少需要一個租戶名稱", file=sys.stderr)
         else:
             print("⚠️  At least one tenant name is required", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
 
     # Filter out auto-enabled packs and validate remaining ones
     selectable = set(_selectable_rule_packs())
@@ -1390,7 +1391,7 @@ def _validate_config(config: dict) -> None:
         else:
             print(f"⚠️  Unknown Rule Packs: {', '.join(invalid)}", file=sys.stderr)
             print(f"   Available: {', '.join(sorted(selectable))}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
 
 
 def _handle_dry_run(config: dict, output_dir: str) -> None:
@@ -1402,7 +1403,7 @@ def _handle_dry_run(config: dict, output_dir: str) -> None:
     for f in files:
         print(f"  {Path(f).relative_to(output_dir)}")
     print(f"\n  {'總計' if is_zh else 'Total'}: {len(files)}")
-    sys.exit(0)
+    sys.exit(EXIT_OK)
 
 
 def main():

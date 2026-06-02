@@ -39,6 +39,18 @@
 
 ## 3. Quick Start
 
+### 3.0 選擇安裝路徑（Docker / static binary / 本機 checkout）
+
+三種交付形態，**重點：不是每條路徑都含全部工具**。完整步驟（hash 驗證 / cosign 驗章 / air-gapped tar import）見 [Migration Toolkit 安裝指南](../../docs/migration-toolkit-installation.md)。
+
+| 路徑 | 內容 | 適用 |
+|---|---|---|
+| **Docker image**（`ghcr.io/vencil/da-tools:v*`） | **全部 45 個 Python 子命令 + 3 顆 bundled Go binary**（da-guard / da-batchpr / da-parser） | self-hosted production、air-gapped（一顆 image 就夠）— **首選** |
+| **Static binary 下載**（`tools/v*` release assets） | **僅** 3 顆 Go CLI（da-guard / da-batchpr / da-parser）；**不含** Python 子命令 | 只需 guard / parser / batch-pr，且不想跑 container 的 CI |
+| **本機 repo checkout**（`python3 components/da-tools/app/entrypoint.py <cmd>`） | 全部 Python 子命令（依當前 source） | 開發 / 貢獻者 dev path |
+
+> 一句話決策：要完整工具集 → **Docker image**；只要那 3 顆 Go gate 工具 → **static binary**；改 code 跑測試 → **本機 checkout**。Python 子命令**沒有** standalone binary，只能走 Docker 或本機 checkout。
+
 ```bash
 # 抓 image（quick-start 用 :latest 即可；production 請釘特定版號如 :v2.8.0）
 docker pull ghcr.io/vencil/da-tools:latest

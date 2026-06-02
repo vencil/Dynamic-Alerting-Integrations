@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 import generate_changelog as gc
+from _lib_exitcodes import EXIT_CALLER_ERROR
 
 
 def _cp(returncode: int = 0, stdout: str = "", stderr: str = ""):
@@ -180,12 +181,12 @@ class TestGitCmd:
                             lambda *a, **kw: _cp(0, "  hello\n", ""))
         assert gc.git_cmd(["log"]) == "hello"
 
-    def test_failure_exits_one(self, monkeypatch, capsys):
+    def test_failure_exits_caller_error(self, monkeypatch, capsys):
         monkeypatch.setattr(gc.subprocess, "run",
                             lambda *a, **kw: _cp(128, "", "fatal: not a repo"))
         with pytest.raises(SystemExit) as exc:
             gc.git_cmd(["log"])
-        assert exc.value.code == 1
+        assert exc.value.code == EXIT_CALLER_ERROR
         err = capsys.readouterr().err
         assert "git log failed" in err
         assert "not a repo" in err

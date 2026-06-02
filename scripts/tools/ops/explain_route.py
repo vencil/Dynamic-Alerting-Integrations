@@ -37,6 +37,7 @@ from generate_alertmanager_routes import (  # noqa: E402
     merge_routing_with_defaults,
 )
 from _lib_python import detect_cli_lang  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_CALLER_ERROR  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -501,7 +502,7 @@ def main(argv: list[str] | None = None) -> int:
     if not Path(args.config_dir).is_dir():
         print(f"ERROR: config directory not found: {args.config_dir}",
               file=sys.stderr)
-        return 1
+        return EXIT_CALLER_ERROR
 
     parsed = _parse_config_files(args.config_dir)
 
@@ -509,7 +510,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.trace:
         if not args.tenants:
             print("ERROR: --trace requires --tenant", file=sys.stderr)
-            return 1
+            return EXIT_CALLER_ERROR
         all_tenants = sorted(set(parsed["all_tenants"]))
         traces = []
         for t in args.tenants:
@@ -524,7 +525,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             for trace in traces:
                 print(format_trace(trace, lang=lang))
-        return 0
+        return EXIT_OK
 
     # --show-profile-expansion mode
     if args.show_profile_expansion:
@@ -533,7 +534,7 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(expansion, indent=2, ensure_ascii=False))
         else:
             print(format_profile_expansion(expansion, lang=lang))
-        return 0
+        return EXIT_OK
 
     # Default: explain tenant routing
     all_tenants = sorted(set(parsed["all_tenants"]))
@@ -559,7 +560,7 @@ def main(argv: list[str] | None = None) -> int:
         for explanation in results:
             print(format_explanation(explanation, lang=lang))
 
-    return 0
+    return EXIT_OK
 
 
 if __name__ == "__main__":

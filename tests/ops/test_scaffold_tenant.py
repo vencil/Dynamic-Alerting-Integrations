@@ -45,6 +45,7 @@ from scaffold_tenant import (
     write_outputs,
     RULE_PACKS,
 )
+from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 
 
 # ============================================================
@@ -845,7 +846,7 @@ class TestMainCLI:
         ]):
             with pytest.raises(SystemExit) as exc_info:
                 scaffold_tenant.main()
-            assert exc_info.value.code == 1
+            assert exc_info.value.code == EXIT_CALLER_ERROR
 
     def test_generate_profile_invalid_db_exits(self):
         import scaffold_tenant
@@ -856,7 +857,7 @@ class TestMainCLI:
         ]):
             with pytest.raises(SystemExit) as exc_info:
                 scaffold_tenant.main()
-            assert exc_info.value.code == 1
+            assert exc_info.value.code == EXIT_CALLER_ERROR
 
     def test_non_interactive_mode(self):
         import scaffold_tenant

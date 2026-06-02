@@ -49,6 +49,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Repo-layout import compatibility
@@ -482,7 +483,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             print(f"未找到 tenant 配置於 {args.config_dir}")
         else:
             print(f"No tenant configs found in {args.config_dir}")
-        return 0
+        return EXIT_OK
 
     # Build OPA input
     opa_input = build_opa_input(
@@ -496,7 +497,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     # Dry-run mode
     if args.dry_run:
         print(json.dumps(opa_input, indent=2, ensure_ascii=False))
-        return 0
+        return EXIT_OK
 
     # Evaluate via OPA
     opa_violations: list[dict] = []
@@ -519,7 +520,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             print("錯誤：必須指定 --opa-url 或 --policy-path", file=sys.stderr)
         else:
             print("ERROR: Must specify --opa-url or --policy-path", file=sys.stderr)
-        return 1
+        return EXIT_CALLER_ERROR
 
     # Convert to PolicyResult
     result = convert_opa_violations(opa_violations, len(tenant_configs))
@@ -532,8 +533,8 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     # Exit code
     if args.ci and not result.passed:
-        return 1
-    return 0
+        return EXIT_VIOLATION
+    return EXIT_OK
 
 
 if __name__ == "__main__":

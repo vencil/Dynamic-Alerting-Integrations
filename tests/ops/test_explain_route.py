@@ -21,6 +21,7 @@ from explain_route import (  # noqa: E402
     main,
 )
 from generate_alertmanager_routes import _parse_config_files  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 
 
 # ===========================================================================
@@ -303,7 +304,7 @@ class TestCLI:
 
     def test_missing_config_dir(self):
         rc = main(["--config-dir", "/nonexistent/path"])
-        assert rc == 1
+        assert rc == EXIT_CALLER_ERROR
 
     def test_unknown_tenant_warns(self, full_config, capsys):
         rc = main(["--config-dir", full_config, "--tenant", "ghost"])

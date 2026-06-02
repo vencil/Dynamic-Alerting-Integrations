@@ -17,9 +17,15 @@ Options:
 
 import argparse
 import json
+import os
 import re
 import sys
 from pathlib import Path
+
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _THIS_DIR)  # Docker flat layout
+sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 
 def extract_go_keys(go_source_path):
@@ -30,7 +36,7 @@ def extract_go_keys(go_source_path):
     config_file = go_dir / "config.go"
     if not config_file.exists():
         print(f"ERROR: {config_file} not found", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
 
     with open(config_file, "r", encoding="utf-8") as f:
         content = f.read()
@@ -159,11 +165,11 @@ def main():
 
     if not go_source.exists():
         print(f"ERROR: Go source directory not found: {go_source}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
 
     if not schema_path.exists():
         print(f"ERROR: Schema file not found: {schema_path}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
 
     # Extract keys
     print(f"Reading Go source from {go_source}...")
@@ -184,15 +190,15 @@ def main():
     if has_drift:
         if args.check:
             print("\nCI MODE: Exiting with code 1 due to schema drift")
-            sys.exit(1)
+            sys.exit(EXIT_VIOLATION)
         elif args.update:
             print("\nUPDATE MODE: Would update schema (not yet implemented)")
-            sys.exit(0)
+            sys.exit(EXIT_OK)
         else:
             print("\nRun with --check for CI mode or --update to fix")
-            sys.exit(0)
+            sys.exit(EXIT_OK)
     else:
-        sys.exit(0)
+        sys.exit(EXIT_OK)
 
 
 if __name__ == "__main__":

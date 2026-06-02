@@ -21,6 +21,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 sys.path.insert(0, str(SCRIPT_DIR.parent))
 from _atomic_write import atomic_write_text  # noqa: E402
+from _lib_exitcodes import EXIT_VIOLATION  # noqa: E402
 from _lib_versions import read_platform_version  # noqa: E402
 
 REPO_ROOT = SCRIPT_DIR.parent.parent.parent
@@ -280,7 +281,7 @@ def main():
             if not target.exists():
                 print(f"❌ {target.relative_to(REPO_ROOT)} does not exist. "
                       f"Run with --generate first.")
-                sys.exit(1)
+                sys.exit(EXIT_VIOLATION)
 
             existing = target.read_text(encoding="utf-8")
             if existing.strip() != content.strip():
@@ -299,7 +300,7 @@ def main():
                               if details else "")
                 print(f"❌ {target.relative_to(REPO_ROOT)} is outdated"
                       f"{detail_str}. Run with --generate to update.")
-                sys.exit(1)
+                sys.exit(EXIT_VIOLATION)
 
             print(f"✅ Tool map ({lang}) is up to date.")
 

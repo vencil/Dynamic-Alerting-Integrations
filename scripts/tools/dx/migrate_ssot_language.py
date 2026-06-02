@@ -65,6 +65,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 
@@ -508,8 +509,8 @@ def main():
             Path(args.directory) if args.directory else None,
         )
         if issues and args.ci:
-            sys.exit(1)
-        sys.exit(0)
+            sys.exit(EXIT_VIOLATION)
+        sys.exit(EXIT_OK)
 
     directory = Path(args.directory) if args.directory else None
     plan = build_migration_plan(directory)
@@ -523,29 +524,29 @@ def main():
 
         if plan.errors:
             print("⛔ Plan has errors — fix before executing.")
-            sys.exit(1)
+            sys.exit(EXIT_VIOLATION)
 
         print("To execute: add --execute flag")
         if not args.git:
             print("Tip: add --git to use git mv (preserves history)")
-        sys.exit(0)
+        sys.exit(EXIT_OK)
 
     if args.execute:
         if plan.errors:
             print("⛔ Plan has errors — cannot execute.")
             for err in plan.errors:
                 print(f"  ✗ {err}")
-            sys.exit(1)
+            sys.exit(EXIT_VIOLATION)
 
         print(f"Executing migration: {plan.rename_count // 2} file pairs...")
         success = execute_plan(plan, use_git=args.git)
         if not success:
             print("\n⛔ Some actions failed. Check output above.")
-            sys.exit(1)
+            sys.exit(EXIT_VIOLATION)
         print(f"\n✓ Migration complete. Run lint to verify:")
         print(f"  pre-commit run bilingual-structure-check --all-files")
         print(f"  pre-commit run bilingual-content-check --all-files")
-        sys.exit(0)
+        sys.exit(EXIT_OK)
 
     # Default: show plan
     print_plan(plan)

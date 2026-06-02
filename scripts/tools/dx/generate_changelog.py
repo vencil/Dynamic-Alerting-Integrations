@@ -38,6 +38,7 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo tools root
 from _lib_python import write_text_secure  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 # ── Constants ────────────────────────────────────────────────────────
 
@@ -91,7 +92,7 @@ def git_cmd(args: List[str]) -> str:
     )
     if result.returncode != 0:
         print(f"ERROR: git {' '.join(args)} failed: {result.stderr.strip()}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
     return result.stdout.strip()
 
 
@@ -351,9 +352,9 @@ def main() -> int:
             print(f"❌ {len(issues)} CHANGELOG format issue(s):")
             for issue in issues:
                 print(f"  {issue}")
-            return 1
+            return EXIT_VIOLATION
         print("✅ CHANGELOG.md format is clean")
-        return 0
+        return EXIT_OK
 
     # Determine starting point
     since_ref = args.since
@@ -368,7 +369,7 @@ def main() -> int:
     commits = get_commits_since(since_ref)
     if not commits:
         print("No commits found since reference point.", file=sys.stderr)
-        return 0
+        return EXIT_OK
 
     print(f"Found {len(commits)} commits", file=sys.stderr)
 
@@ -418,9 +419,9 @@ def main() -> int:
             )
             for sha, subject in real_failures:
                 print(f"  {sha} {subject}", file=sys.stderr)
-            return 1
+            return EXIT_VIOLATION
         print(f"✅ All {len(commits)} commits follow conventional format", file=sys.stderr)
-        return 0
+        return EXIT_OK
 
     # Generate
     output = format_changelog(grouped, args.version, breaking)
@@ -446,7 +447,7 @@ def main() -> int:
     else:
         print(output)
 
-    return 0
+    return EXIT_OK
 
 
 if __name__ == "__main__":

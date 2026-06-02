@@ -77,6 +77,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 
@@ -209,7 +210,7 @@ def main() -> int:
     if total_violations == 0:
         if not args.ci:
             print("OK: no open() calls missing encoding= found.")
-        return 0
+        return EXIT_OK
 
     # Sort for deterministic output
     for f in sorted(by_file):
@@ -228,11 +229,11 @@ def main() -> int:
     )
 
     if args.strict_open_encoding:
-        return 1
+        return EXIT_VIOLATION
     if args.ci:
         # Warn-only mode — surface count without blocking the commit.
-        return 0
-    return 0
+        return EXIT_OK
+    return EXIT_OK
 
 
 if __name__ == "__main__":

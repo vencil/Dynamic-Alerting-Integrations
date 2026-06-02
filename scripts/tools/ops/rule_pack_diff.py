@@ -89,6 +89,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 try:
     import yaml
@@ -97,7 +98,7 @@ except ImportError:
         "ERROR: PyYAML not installed. Install with: pip install pyyaml",
         file=sys.stderr,
     )
-    sys.exit(2)
+    sys.exit(EXIT_CALLER_ERROR)
 
 
 # ─── Parsing ──────────────────────────────────────────────────────────
@@ -459,8 +460,8 @@ def compute_exit_code(report: dict, *, ci: bool) -> int:
     if ci and (report["counts"]["breaking"] > 0 or report["counts"]["removed"] > 0):
         # In --ci mode, removed alerts are also treated as breaking (silencer
         # matchers on the removed alertname will silently miss the v2 world).
-        return 1
-    return 0
+        return EXIT_VIOLATION
+    return EXIT_OK
 
 
 # ─── Main ─────────────────────────────────────────────────────────────
@@ -516,10 +517,10 @@ def main(argv: list[str] | None = None) -> int:
 
     v1 = load_rule_pack(from_path)
     if v1 is None:
-        return 2
+        return EXIT_CALLER_ERROR
     v2 = load_rule_pack(to_path)
     if v2 is None:
-        return 2
+        return EXIT_CALLER_ERROR
 
     report = diff_packs(v1, v2)
     # P1: include input paths in the report so JSON consumers can correlate

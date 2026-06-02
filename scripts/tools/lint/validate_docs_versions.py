@@ -81,6 +81,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lib_exitcodes import EXIT_VIOLATION  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -1170,7 +1171,7 @@ def main():
             print("✅ All version references and counts are consistent.")
 
     if args.ci and errors:
-        sys.exit(1)
+        sys.exit(EXIT_VIOLATION)
 
 
 if __name__ == "__main__":

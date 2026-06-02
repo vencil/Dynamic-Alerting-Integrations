@@ -35,6 +35,7 @@ except ImportError:
     yaml = None
 
 from _lib_python import detect_cli_lang, i18n_text  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 from _lib_io import load_yaml_file, write_text_secure  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -802,7 +803,7 @@ def main():
         )
     except Exception as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
 
     # Write or print CRDs
     if args.dry_run:

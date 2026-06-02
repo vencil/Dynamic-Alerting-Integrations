@@ -32,6 +32,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION  # noqa: E402
 
 # 嘗試導入共用函式庫
 try:
@@ -356,9 +357,9 @@ def main():
 
     # 設定退出碼
     if args.check:
-        sys.exit(0 if success else 1)
+        sys.exit(EXIT_OK if success else EXIT_VIOLATION)
     else:
-        sys.exit(0)
+        sys.exit(EXIT_OK)
 
 
 if __name__ == "__main__":

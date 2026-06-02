@@ -35,6 +35,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Repo-layout import compatibility (stripped in Docker build)
@@ -572,7 +573,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         else:
             print("No cardinality data retrieved. Check Prometheus endpoint "
                   "and tenant_threshold_* metrics.", file=sys.stderr)
-        return 1
+        return EXIT_CALLER_ERROR
 
     # Generate forecast
     report = generate_forecast(
@@ -594,8 +595,8 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     # CI exit code
     if args.ci and report.critical_count > 0:
-        return 1
-    return 0
+        return EXIT_VIOLATION
+    return EXIT_OK
 
 
 if __name__ == "__main__":

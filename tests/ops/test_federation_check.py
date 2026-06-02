@@ -13,6 +13,7 @@ _TOOLS_DIR = os.path.join(os.path.dirname(__file__), '..', '..', 'scripts', 'too
 sys.path.insert(0, _TOOLS_DIR)
 
 import federation_check as fc  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -309,7 +310,7 @@ class TestMain:
         with patch("sys.argv", ["federation_check.py", "e2e"]):
             with pytest.raises(SystemExit) as exc_info:
                 fc.main()
-        assert exc_info.value.code == 1
+        assert exc_info.value.code == EXIT_CALLER_ERROR
         assert "edge-urls" in capsys.readouterr().err.lower()
 
     def test_e2e_with_urls(self, capsys):

@@ -12,6 +12,7 @@ sys.path.insert(0, _TOOLS_DIR)
 sys.path.insert(0, os.path.join(_TOOLS_DIR, '..'))
 
 import discover_instance_mappings as dim  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -155,6 +156,6 @@ class TestCliMain:
 
     def test_prometheus_without_instance_or_job(self, capsys):
         rc = dim.main(["--prometheus", "http://localhost:9090"])
-        assert rc == 1
+        assert rc == EXIT_CALLER_ERROR
         captured = capsys.readouterr()
         assert "requires" in captured.err.lower() or "requires" in captured.out.lower()

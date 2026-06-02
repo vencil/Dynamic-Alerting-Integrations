@@ -57,6 +57,8 @@ from pathlib import Path
 
 # Helpers from this lint family
 sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))  # Repo subdir layout
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lint_helpers import (  # noqa: E402
     DiffBaseMissingError,
     parse_bypass_tag,
@@ -189,7 +191,7 @@ def main() -> int:
             base = args.diff_base or resolve_diff_base()
         except DiffBaseMissingError as e:
             print(f"ERROR: {e}", file=sys.stderr)
-            return 2
+            return EXIT_CALLER_ERROR
         scan_mode = f"diff vs {base}"
         offenders = scan_diff(repo, base)
 
@@ -198,7 +200,7 @@ def main() -> int:
             f"[check_ad_hoc_git_scripts] OK no ad-hoc Windows shell scripts "
             f"(mode={scan_mode}).",
         )
-        return 0
+        return EXIT_OK
 
     # Bypass check (lint-policy.md §4)
     pr_body = _read_pr_body(args.pr_body_file)
@@ -219,7 +221,7 @@ def main() -> int:
             f"   Reviewer must confirm bypass is justified.",
             file=sys.stderr,
         )
-        return 0
+        return EXIT_OK
 
     allowlist = "\n".join(f"    {p}" for p in ALLOWLIST_DIRS)
     print(
@@ -236,7 +238,7 @@ def main() -> int:
         "    reason: <≥30 words explaining why this case is legitimate>",
         file=sys.stderr,
     )
-    return 1
+    return EXIT_VIOLATION
 
 
 if __name__ == "__main__":

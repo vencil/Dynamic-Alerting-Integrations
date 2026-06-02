@@ -38,6 +38,7 @@ try:
 except Exception:  # pragma: no cover
     def try_utf8_stdout() -> None:  # type: ignore
         pass
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 ENRICH_MARKER = "* on(tenant) group_left(runbook_url, owner, tier)"
 VOID_BRANCH = "unless on(tenant) tenant_metadata_info"
@@ -72,7 +73,7 @@ def main() -> int:
     targets = [t for t in targets if t.exists()]
     if not targets:
         print("ERROR: no rule-pack files found", file=sys.stderr)
-        return 2
+        return EXIT_CALLER_ERROR
 
     violations = 0
     for path in targets:
@@ -88,10 +89,10 @@ def main() -> int:
               f"`{ENRICH_MARKER}` must be paired with an `or (… {VOID_BRANCH})` "
               f"branch (ADR-024 PR3-pre Commit 3). See tests/rulepacks/*-void_test.yaml.",
               file=sys.stderr)
-        return 1 if args.ci else 0
+        return EXIT_VIOLATION if args.ci else EXIT_OK
     print(f"✅ All {len(targets)} rule pack(s): metadata enrichment is "
           f"left-outer-join (no onboarding-vacuum drop).")
-    return 0
+    return EXIT_OK
 
 
 if __name__ == "__main__":

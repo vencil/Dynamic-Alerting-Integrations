@@ -65,6 +65,10 @@ if hasattr(sys.stdout, "reconfigure"):
     except (AttributeError, OSError):
         pass
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # Docker flat layout
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))  # Repo subdir layout
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION  # noqa: E402
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 KUBE_LINTER_VERSION = "v0.7.4"
 KUBE_LINTER_IMAGE = f"docker.io/stackrox/kube-linter:{KUBE_LINTER_VERSION}"
@@ -405,7 +409,7 @@ def main() -> int:
                         for v in values_variants(c)]
             print(f"  {c}  ->  {', '.join(variants)}")
         print(f"\nhelm: {locate_helm()[0]} | kube-linter: {locate_kube_linter()[0]}")
-        return 0
+        return EXIT_OK
 
     findings = collect_findings(charts, strict=args.ci)
     engine_error = findings.pop("__engine_error__", None)
@@ -428,7 +432,7 @@ def main() -> int:
             f"   容器 SAST 第 2 層通過：0 阻擋；High 走中央豁免登記"
             f"（記於 docs/internal/iac-lint-baseline.md），不擋 merge。"
         )
-        return 0
+        return EXIT_OK
 
     print(
         f"\nFAIL Container SAST Layer 2 (Helm) — {n_block} BLOCK / {n_warn} "
@@ -439,7 +443,7 @@ def main() -> int:
         f"   ModeA 危險值（ALLOW_EMPTY/INSECURE）必修；render 失敗請修 chart。\n"
         f"   詳見 epic #448 / TRK-312 與 docs/internal/iac-lint-baseline.md。"
     )
-    return 1 if args.ci else 0
+    return EXIT_VIOLATION if args.ci else EXIT_OK
 
 
 if __name__ == "__main__":

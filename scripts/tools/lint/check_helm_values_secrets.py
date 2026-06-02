@@ -76,6 +76,8 @@ if hasattr(sys.stdout, "reconfigure"):
         pass
 
 sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))  # Repo subdir layout
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lint_helpers import (  # noqa: E402
     DiffBaseMissingError,
     get_diff_added_lines,
@@ -297,7 +299,7 @@ def main() -> int:
             base = args.diff_base or resolve_diff_base()
         except DiffBaseMissingError as e:
             print(f"ERROR: {e}", file=sys.stderr)
-            return 2
+            return EXIT_CALLER_ERROR
         scan_mode = f"diff vs {base}"
         scanner = lambda fp: scan_file_diff(fp, base)  # noqa: E731
 
@@ -319,12 +321,12 @@ def main() -> int:
             f"   Helm values/secret 無硬編字面 secret（key 名像 secret 但值為空/"
             f"`${{VAR}}`/`{{{{ .Values }}}}`/placeholder/ref 皆放行）。"
         )
-        return 0
+        return EXIT_OK
 
     pr_body = _read_pr_body(args.pr_body_file)
     if parse_bypass_tag(pr_body, BYPASS_NAME):
         print(f"\n⚠️  BYPASSED via PR body — {total} finding(s) author-acknowledged.")
-        return 0
+        return EXIT_OK
 
     print(
         f"\nFAIL {total} hardcoded secret-shape finding(s) (mode={scan_mode}).\n"
@@ -336,7 +338,7 @@ def main() -> int:
         f"     reason: <>=30 words>\n"
         f"   詳見 docs/internal/lint-policy.md §4 與 epic #448 / TRK-313。"
     )
-    return 1 if args.ci else 0
+    return EXIT_VIOLATION if args.ci else EXIT_OK
 
 
 if __name__ == "__main__":

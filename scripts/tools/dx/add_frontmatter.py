@@ -21,6 +21,11 @@ import logging
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _THIS_DIR)  # Docker flat layout
+sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+
 # Files/paths excluded from front matter scanning.
 # Must stay aligned with doc_coverage.py EXCLUDE_* constants so drift
 # between the two tools does not leave coverage gaps or cause
@@ -389,7 +394,7 @@ def main():
     base_dir = str(Path(args.base_dir).resolve())
     if not Path(base_dir).is_dir():
         logger.error(f"Base directory not found: {base_dir}")
-        return 1
+        return EXIT_CALLER_ERROR
 
     # Find all markdown files
     md_files = find_markdown_files(base_dir)
@@ -397,7 +402,7 @@ def main():
 
     if not md_files:
         logger.warning("No markdown files found")
-        return 0
+        return EXIT_OK
 
     # Process files.
     # NOTE: --check is a *reporting* mode: it must never write.
@@ -432,18 +437,18 @@ def main():
 
         if missing_count > 0:
             logger.error(f"Found {missing_count} files missing front matter")
-            return 1
+            return EXIT_VIOLATION
         else:
             logger.info("All files have front matter")
-            return 0
+            return EXIT_OK
 
     # Regular mode: report what was done
     if args.dry_run:
         logger.info(f"Dry run: would modify {modified_count} files")
-        return 0
+        return EXIT_OK
     else:
         logger.info(f"Successfully processed {modified_count} files")
-        return 0
+        return EXIT_OK
 
 
 if __name__ == '__main__':

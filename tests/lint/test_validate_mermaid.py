@@ -363,7 +363,7 @@ class TestMainCLI:
         cli_argv("validate_mermaid", "/nonexistent/path")
         with pytest.raises(SystemExit) as exc:
             vm.main()
-        assert exc.value.code == 1
+        assert exc.value.code == 2  # EXIT_CALLER_ERROR (#452: path not found)
 
     def test_main_no_md_files(self, tmp_path, monkeypatch, capsys, cli_argv):
         """Directory with no .md files."""

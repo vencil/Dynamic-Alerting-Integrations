@@ -23,6 +23,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_python import write_text_secure  # noqa: E402
+from _lib_exitcodes import EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Repo root detection
@@ -294,7 +295,7 @@ def main(argv: Optional[List[str]] = None) -> None:
     if not expected:
         print("ERROR: Cannot read platform version from CLAUDE.md",
               file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
 
     scanned = scan_docs(docs_dir=DOCS_DIR)
     total_scanned = len(scanned)
@@ -316,7 +317,7 @@ def main(argv: Optional[List[str]] = None) -> None:
 
     errors = [i for i in items if i.severity == "error"]
     if args.ci and errors:
-        sys.exit(1)
+        sys.exit(EXIT_VIOLATION)
 
 
 if __name__ == "__main__":

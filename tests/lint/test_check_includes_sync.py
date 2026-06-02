@@ -11,6 +11,7 @@ import textwrap
 import pytest
 
 import check_includes_sync as cis
+from _lib_exitcodes import EXIT_CALLER_ERROR
 
 
 # ---------------------------------------------------------------------------
@@ -253,12 +254,12 @@ class TestMainCLI:
         assert "code blocks" in out
 
     def test_no_includes_dir(self, tmp_path, monkeypatch, capsys, cli_argv):
-        """Nonexistent includes dir returns 1."""
+        """Nonexistent includes dir is a caller-error (exit 2, #452)."""
         monkeypatch.setattr(cis, "INCLUDES_DIR",
                             tmp_path / "nonexistent")
         cli_argv('check_includes_sync')
         result = cis.main()
-        assert result == 1
+        assert result == EXIT_CALLER_ERROR
 
     def test_no_zh_files(self, tmp_path, monkeypatch, capsys, cli_argv):
         """No Chinese files returns 0."""

@@ -26,6 +26,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 # Puppeteer config required for mmdc to launch headless Chrome inside
 # sandboxed CI runners (GitHub Actions, containers, WSL, etc.). Without
@@ -477,7 +478,7 @@ def main():
     scan_path = Path(args.path)
     if not scan_path.exists():
         print(f"Error: Path does not exist: {args.path}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
 
     if scan_path.is_file():
         md_files = [scan_path] if scan_path.suffix == '.md' else []
@@ -486,7 +487,7 @@ def main():
 
     if not md_files:
         print(f"No Markdown files found in {args.path}")
-        sys.exit(0)
+        sys.exit(EXIT_OK)
 
     # Validate
     validator = MermaidValidator(verbose=args.verbose)
@@ -504,9 +505,9 @@ def main():
 
     # Exit with appropriate code
     if args.ci and validator.errors:
-        sys.exit(1)
+        sys.exit(EXIT_VIOLATION)
 
-    sys.exit(0)
+    sys.exit(EXIT_OK)
 
 
 if __name__ == '__main__':

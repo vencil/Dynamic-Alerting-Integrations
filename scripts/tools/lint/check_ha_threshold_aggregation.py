@@ -51,7 +51,9 @@ from typing import List, Tuple
 import yaml
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 try:
     from _lib_compat import try_utf8_stdout  # noqa: E402
 except Exception:  # pragma: no cover
@@ -141,7 +143,7 @@ def main() -> int:
     targets = [t for t in targets if t.exists()]
     if not targets:
         print("ERROR: no rule-pack files found", file=sys.stderr)
-        return 2
+        return EXIT_CALLER_ERROR
 
     total_violations = 0
     try:
@@ -156,16 +158,16 @@ def main() -> int:
                           f"`{op}` (must be `max`) — …{excerpt}…")
     except yaml.YAMLError as exc:
         print(f"ERROR: YAML parse failure: {exc}", file=sys.stderr)
-        return 2
+        return EXIT_CALLER_ERROR
 
     if total_violations:
         print(f"\n❌ {total_violations} non-`max` aggregation(s) of "
               f"user_threshold. Under HA (replicaCount=2, no leader-election) "
               f"`sum` DOUBLES the threshold — use `max by(...)`. "
               f"See docs/design/high-availability.md §4.3.", file=sys.stderr)
-        return 1 if args.ci else 0
+        return EXIT_VIOLATION if args.ci else EXIT_OK
     print(f"✅ All user_threshold aggregations across {len(targets)} files use `max`.")
-    return 0
+    return EXIT_OK
 
 
 if __name__ == "__main__":

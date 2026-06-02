@@ -27,6 +27,7 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))
 from _lib_python import detect_cli_lang, http_get_json  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION  # noqa: E402
 
 
 # i18n strings
@@ -271,9 +272,9 @@ class OperatorChecker:
     def exit_code(self) -> int:
         """Return exit code based on checks."""
         if not self.args.ci:
-            return 0
+            return EXIT_OK
         fail_count = sum(1 for c in self.checks if c.status == "fail")
-        return 1 if fail_count > 0 else 0
+        return EXIT_VIOLATION if fail_count > 0 else EXIT_OK
 
 
 def main():

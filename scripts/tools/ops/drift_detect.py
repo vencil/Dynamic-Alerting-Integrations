@@ -38,6 +38,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 from _lib_python import detect_cli_lang, i18n_text  # noqa: E402
+from _lib_exitcodes import EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Bilingual help text
@@ -313,20 +314,20 @@ def compute_crd_manifest(
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         if result.returncode != 0:
             print(f"ERROR: kubectl failed: {result.stderr}", file=sys.stderr)
-            sys.exit(1)
+            sys.exit(EXIT_CALLER_ERROR)
     except subprocess.TimeoutExpired:
         print("ERROR: kubectl command timeout", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
     except FileNotFoundError:
         print("ERROR: kubectl not found", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
 
     manifest = FileManifest(label="cluster-crd", path=f"kubernetes:{namespace}")
     try:
         data = json.loads(result.stdout)
     except json.JSONDecodeError as e:
         print(f"ERROR: invalid JSON from kubectl: {e}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
 
     items = data.get("items", [])
     for item in items:
@@ -562,13 +563,13 @@ def main():
         if len(dirs) != 1:
             print("ERROR: operator mode requires exactly 1 directory",
                   file=sys.stderr)
-            sys.exit(1)
+            sys.exit(EXIT_CALLER_ERROR)
 
         local_dir = dirs[0]
         if not Path(local_dir).is_dir():
             print(f"ERROR: directory not found: {local_dir}",
                   file=sys.stderr)
-            sys.exit(1)
+            sys.exit(EXIT_CALLER_ERROR)
 
         crd_manifest = compute_crd_manifest(
             namespace=args.namespace,
@@ -586,7 +587,7 @@ def main():
         if len(dirs) < 2:
             print("ERROR: configmap mode requires at least 2 directories",
                   file=sys.stderr)
-            sys.exit(1)
+            sys.exit(EXIT_CALLER_ERROR)
 
         labels = None
         if args.labels:
@@ -594,7 +595,7 @@ def main():
             if len(labels) != len(dirs):
                 print("ERROR: --labels count must match --dirs count",
                       file=sys.stderr)
-                sys.exit(1)
+                sys.exit(EXIT_CALLER_ERROR)
 
         # Check directories exist
         missing = [d for d in dirs if not Path(d).is_dir()]
@@ -602,7 +603,7 @@ def main():
             for m in missing:
                 print(f"ERROR: directory not found: {m}",
                       file=sys.stderr)
-            sys.exit(1)
+            sys.exit(EXIT_CALLER_ERROR)
 
         reports = analyze_drift(dirs, labels=labels,
                                 ignore_prefixes=ignore_prefixes)
@@ -617,7 +618,7 @@ def main():
         print(format_text_report(summary))
 
     if args.ci and not summary["drift_free"]:
-        sys.exit(1)
+        sys.exit(EXIT_VIOLATION)
 
 
 if __name__ == "__main__":

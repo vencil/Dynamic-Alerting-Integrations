@@ -34,6 +34,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lib_exitcodes import EXIT_VIOLATION  # noqa: E402
 
 
 def find_config_file(tenant, config_dir):
@@ -189,7 +190,7 @@ def main():
             execute_offboard(args.tenant, args.config_dir)
         else:
             print(f"\n❌ Pre-check 未通過，無法執行下架。")
-            sys.exit(1)
+            sys.exit(EXIT_VIOLATION)
     else:
         print(f"\n💡 這是 Pre-check 模式。要實際下架，請加 --execute 參數。")
 

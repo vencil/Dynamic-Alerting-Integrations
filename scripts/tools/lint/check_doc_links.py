@@ -24,6 +24,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 
 class DocLinkChecker:
@@ -654,10 +655,10 @@ class DocLinkChecker:
 
         # 返回 exit code
         if self.broken_links or self.broken_anchors or self.broken_section_refs:
-            return 1
+            return EXIT_VIOLATION
         else:
             print("✓ All links and section references are valid!")
-            return 0
+            return EXIT_OK
 
 
 def _fix_broken_anchors(broken_anchors: list, repo_root: Path) -> int:
@@ -733,7 +734,7 @@ def main():
     if not (repo_root / "docs").exists() and not (repo_root / "README.md").exists():
         print(f"ERROR: Cannot find documentation directory in {repo_root}", file=sys.stderr)
         print(f"       Expected to find 'docs/' or 'README.md' in repo root", file=sys.stderr)
-        return 2
+        return EXIT_CALLER_ERROR
     
     checker = DocLinkChecker(str(repo_root), verbose=args.verbose)
     exit_code = checker.run()
@@ -748,7 +749,7 @@ def main():
         return exit_code
     else:
         # 非 CI 模式下始終返回 0
-        return 0
+        return EXIT_OK
 
 
 if __name__ == "__main__":

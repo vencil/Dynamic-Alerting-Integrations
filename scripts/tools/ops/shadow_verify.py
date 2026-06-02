@@ -47,6 +47,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_python import http_get_json, query_prometheus_instant  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION  # noqa: E402
 
 # Alias for backward-compat within this module
 query_prometheus = query_prometheus_instant
@@ -396,7 +397,7 @@ def main():
         print(f"  Overall: {'FAIL' if has_failure else 'PASS'}")
         print(f"{'='*60}\n")
 
-    sys.exit(1 if has_failure else 0)
+    sys.exit(EXIT_VIOLATION if has_failure else EXIT_OK)
 
 
 if __name__ == "__main__":

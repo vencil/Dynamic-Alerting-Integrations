@@ -89,11 +89,11 @@ class TestCheckAlert:
         ca.check_alert("HighCPU", "db-a", "http://localhost:9090")
         assert json.loads(capsys.readouterr().out)["state"] == "unknown"
 
-    def test_http_error_exits_one(self, monkeypatch, capsys):
+    def test_http_error_exits_caller_error(self, monkeypatch, capsys):
         _stub_http(monkeypatch, None, err="connection refused")
         with pytest.raises(SystemExit) as exc:
             ca.check_alert("HighCPU", "db-a", "http://localhost:9090")
-        assert exc.value.code == 1
+        assert exc.value.code == 2  # EXIT_CALLER_ERROR (#452: cannot reach Prometheus)
         out = capsys.readouterr().out
         payload = json.loads(out)
         assert "error" in payload

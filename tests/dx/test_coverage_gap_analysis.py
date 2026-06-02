@@ -7,6 +7,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "scripts", "tools", "dx"))
 import coverage_gap_analysis as cga
+from _lib_exitcodes import EXIT_CALLER_ERROR
 
 
 # ============================================================
@@ -237,9 +238,9 @@ class TestCLI:
         assert data["files_below_target"] == 1  # check_doc_links at 30%
 
     def test_cli_empty_coverage(self, tmp_path):
-        """空覆蓋率數據 exit 1"""
+        """空覆蓋率數據（無法產生報告的環境/輸入問題）exit 2 (EXIT_CALLER_ERROR, #452)"""
         cov_file = tmp_path / "coverage.txt"
         cov_file.write_text("No data\n", encoding="utf-8")
         with pytest.raises(SystemExit) as exc_info:
             cga.main(["--coverage-text", str(cov_file)])
-        assert exc_info.value.code == 1
+        assert exc_info.value.code == EXIT_CALLER_ERROR

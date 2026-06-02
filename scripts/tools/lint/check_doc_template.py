@@ -12,11 +12,17 @@ v2.3.0 新增。
 """
 
 import argparse
+import os
 import sys
 import re
 import yaml
 from pathlib import Path
 from typing import List, Tuple, Optional
+
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _THIS_DIR)  # Docker flat layout
+sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION  # noqa: E402
 
 # 嘗試導入共用函式庫
 try:
@@ -461,7 +467,7 @@ def main():
         checker.print_results()
 
     # 設定退出碼：有錯誤則返回 1
-    sys.exit(0 if success else 1)
+    sys.exit(EXIT_OK if success else EXIT_VIOLATION)
 
 
 if __name__ == "__main__":

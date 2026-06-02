@@ -33,6 +33,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 try:
     import yaml
@@ -240,7 +241,7 @@ def main() -> int:
         conflicts, file_map = detect_conflicts(sources)
     except FileNotFoundError as e:
         print(f"ERROR: {e}", file=sys.stderr)
-        return 2
+        return EXIT_CALLER_ERROR
 
     # Report conflicts
     real_conflicts = {
@@ -275,7 +276,7 @@ def main() -> int:
                     for n, entries in real_conflicts.items()
                 },
             }, indent=2, ensure_ascii=False))
-        return 1
+        return EXIT_VIOLATION
 
     # --check: just report, don't write
     if args.check:
@@ -290,7 +291,7 @@ def main() -> int:
                 "file_count": len(file_map),
                 "files": sorted(file_map.keys()),
             }, indent=2, ensure_ascii=False))
-        return 0
+        return EXIT_OK
 
     # Assemble
     if not args.output:
@@ -333,7 +334,7 @@ def main() -> int:
             for issue in validation_issues:
                 print(f"   {issue}")
 
-    return 0
+    return EXIT_OK
 
 
 if __name__ == "__main__":

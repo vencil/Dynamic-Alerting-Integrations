@@ -68,6 +68,8 @@ if hasattr(sys.stdout, "reconfigure"):
 # Reuse L2's engine plumbing + severity classification (single source of truth
 # for kube-linter version/image and CRITICAL/HIGH check sets).
 sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # Repo subdir layout
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION  # noqa: E402
 from check_iac_helm import (  # noqa: E402
     KUBE_LINTER_IMAGE,
     SKIP_DIR_PARTS,
@@ -268,7 +270,7 @@ def main() -> int:
             print(f"  {f.relative_to(REPO_ROOT).as_posix()}")
         print(f"\nkube-linter: {locate_kube_linter()[0]}")
         print(f"EXEMPTIONS registered: {len(EXEMPTIONS)}")
-        return 0
+        return EXIT_OK
 
     findings = collect_findings(strict=args.ci)
     engine_error = findings.pop("__engine_error__", None)
@@ -292,7 +294,7 @@ def main() -> int:
             f"   容器 SAST 第 4 層通過：0 阻擋；High 走中央豁免登記"
             f"（記於 docs/internal/iac-lint-baseline.md），不擋 merge。"
         )
-        return 0
+        return EXIT_OK
 
     print(
         f"\nFAIL Container SAST Layer 4 (raw k8s) — {n_block} BLOCK / {n_warn} "
@@ -302,7 +304,7 @@ def main() -> int:
         f"(path, check): rationale。\n"
         f"   詳見 epic #448 / TRK-314 與 docs/internal/iac-lint-baseline.md。"
     )
-    return 1 if args.ci else 0
+    return EXIT_VIOLATION if args.ci else EXIT_OK
 
 
 if __name__ == "__main__":

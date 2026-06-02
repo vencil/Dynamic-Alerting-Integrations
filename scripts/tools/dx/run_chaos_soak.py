@@ -86,6 +86,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_CALLER_ERROR  # noqa: E402
 
 # Metrics we extract from /metrics (Prometheus text format).
 # Adding new ones here automatically extends the timeseries CSV.
@@ -230,7 +231,7 @@ def main() -> int:
     config_dir = Path(args.config_dir)
     if not config_dir.exists():
         print(f"[error] config-dir not found: {config_dir}", file=sys.stderr)
-        return 1
+        return EXIT_CALLER_ERROR
 
     out = Path(args.output_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -243,7 +244,7 @@ def main() -> int:
     if initial is None:
         print(f"[error] cannot reach {args.target_url}/metrics — aborting before soak start",
               file=sys.stderr)
-        return 1
+        return EXIT_CALLER_ERROR
     if not initial:
         print(f"[warn] /metrics returned no tracked metrics — soak will record empty rows",
               file=sys.stderr)
@@ -333,7 +334,7 @@ def main() -> int:
               f"{cfg.reload_count} reloads / {cfg.poll_count} polls", file=sys.stderr)
         print(f"[info] output: {out}", file=sys.stderr)
 
-    return 2 if interrupted else 0
+    return EXIT_CALLER_ERROR if interrupted else EXIT_OK
 
 
 if __name__ == "__main__":

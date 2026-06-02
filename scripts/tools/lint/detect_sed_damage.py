@@ -40,6 +40,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION  # noqa: E402
 
 # Repo root: this file is at <repo>/scripts/tools/lint/detect_sed_damage.py
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -137,7 +138,7 @@ def main() -> int:
 
     files = args.files
     if not files:
-        return 0
+        return EXIT_OK
 
     allowlist = load_allowlist()
 
@@ -148,7 +149,7 @@ def main() -> int:
             all_issues[f] = issues
 
     if not all_issues:
-        return 0
+        return EXIT_OK
 
     print("")
     print("⛔ sed-damage-guard: 偵測到可能的 sed -i 損壞：")
@@ -162,7 +163,7 @@ def main() -> int:
     print("  或: fix_file_hygiene.py <file>  # 移除 NUL bytes + 補 EOF newline")
     print("  或（重構縮減合法）: 把路徑加入 .sed-damage-allowlist")
     print("")
-    return 1
+    return EXIT_VIOLATION
 
 
 if __name__ == "__main__":

@@ -45,6 +45,7 @@ from _lib_python import (  # noqa: E402, F401
     write_text_secure,
     PLATFORM_DEFAULTS,
 )
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION  # noqa: E402
 
 # ── Re-exports from _grar_validate ─────────────────────────────────
 from _grar_validate import (  # noqa: E402, F401
@@ -119,9 +120,9 @@ def _validate_mode(routes: list[dict], receivers: list[dict], inhibit_rules: lis
         print(f"FAIL: {len(errors)} error(s) found:", file=sys.stderr)
         for e in errors:
             print(e, file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_VIOLATION)
     print("OK: all configs valid")
-    sys.exit(0)
+    sys.exit(EXIT_OK)
 
 
 def _apply_mode(routes: list[dict], receivers: list[dict], inhibit_rules: list[dict],
@@ -136,9 +137,9 @@ def _apply_mode(routes: list[dict], receivers: list[dict], inhibit_rules: list[d
         confirm = input("Proceed? [y/N] ").strip().lower()
         if confirm not in ("y", "yes"):
             print("Aborted.")
-            sys.exit(0)
+            sys.exit(EXIT_OK)
     success = apply_to_configmap(routes, receivers, inhibit_rules, namespace, configmap_name)
-    sys.exit(0 if success else 1)
+    sys.exit(EXIT_OK if success else EXIT_VIOLATION)
 
 
 def _output_configmap_mode(routes: list[dict], receivers: list[dict], inhibit_rules: list[dict],
@@ -265,7 +266,7 @@ def main() -> None:
 
     if not has_routing and not has_dedup and not enforced_routing:
         print("No tenants found in config directory.")
-        sys.exit(0)
+        sys.exit(EXIT_OK)
 
     _print_config_summary(routing_configs, dedup_configs, enforced_routing)
 
@@ -284,7 +285,7 @@ def main() -> None:
 
     if not routes and not inhibit_rules:
         print("No valid routes or inhibit rules generated.")
-        sys.exit(1)
+        sys.exit(EXIT_VIOLATION)
 
     # Validate mode
     if args.validate:

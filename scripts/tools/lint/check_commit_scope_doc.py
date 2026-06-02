@@ -44,9 +44,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from pathlib import Path
+
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _THIS_DIR)  # Docker flat layout
+sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_SOT = REPO_ROOT / ".commitlintrc.yaml"
@@ -220,7 +226,7 @@ def main(argv: list[str] | None = None) -> int:
         sot_scopes = extract_sot_scopes(args.sot)
     except (FileNotFoundError, ValueError, RuntimeError) as exc:
         print(f"[error] {exc}", file=sys.stderr)
-        return 2
+        return EXIT_CALLER_ERROR
 
     illegal, unmentioned = compute_drift(doc_scopes, sot_scopes)
 
@@ -238,8 +244,8 @@ def main(argv: list[str] | None = None) -> int:
         print(render_report(doc_scopes, sot_scopes, illegal, unmentioned, ci_mode=args.ci))
 
     if illegal:
-        return 1
-    return 0
+        return EXIT_VIOLATION
+    return EXIT_OK
 
 
 if __name__ == "__main__":

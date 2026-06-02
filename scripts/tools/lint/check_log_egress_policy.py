@@ -40,12 +40,18 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
+import os
 import shutil
 import subprocess
 import sys
 import urllib.parse
 from dataclasses import dataclass
 from pathlib import Path
+
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _THIS_DIR)  # Docker flat layout
+sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
+from _lib_exitcodes import EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from typing import Iterable, Optional
 
 import yaml
@@ -116,7 +122,7 @@ def render_chart(chart_dir: Path, values_files: list[Path], sets: list[str]) -> 
     helm = shutil.which("helm")
     if helm is None:
         print("ERROR: helm not on PATH — cannot render charts", file=sys.stderr)
-        sys.exit(2)
+        sys.exit(EXIT_CALLER_ERROR)
     cmd = [helm, "template", "egress-lint", str(chart_dir), "-n", "monitoring"]
     for vf in values_files:
         cmd += ["-f", str(vf)]
@@ -126,7 +132,7 @@ def render_chart(chart_dir: Path, values_files: list[Path], sets: list[str]) -> 
         out = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=60)
     except subprocess.CalledProcessError as e:
         print(f"ERROR: helm template {chart_dir} failed:\n{e.stderr}", file=sys.stderr)
-        sys.exit(2)
+        sys.exit(EXIT_CALLER_ERROR)
     return [d for d in yaml.safe_load_all(out.stdout) if d]
 
 
@@ -254,7 +260,7 @@ def main(argv: Optional[list[str]] = None) -> None:
             print(f"\nResult: {errors} error(s), {warnings} warning(s)")
 
     if any(v.level == "ERROR" for v in all_vios):
-        sys.exit(1)
+        sys.exit(EXIT_VIOLATION)
 
 
 if __name__ == "__main__":

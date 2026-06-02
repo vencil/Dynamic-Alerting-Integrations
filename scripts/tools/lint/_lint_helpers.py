@@ -36,6 +36,8 @@ BUILD_EXEMPT = frozenset({
     # v2.8.0 PR #432 — cross-platform compat helpers (try_utf8_stdout
     # consolidated from 4 callsites). Library, not CLI.
     "_lib_compat.py",
+    # #452 Track A — canonical 0/1/2 exit-code constants. Library, not CLI.
+    "_lib_exitcodes.py",
     # v2.8.0 PR-3a — generate_alertmanager_routes.py split into 5 helpers.
     # These are library modules consumed by the main file via re-export,
     # not CLI commands themselves.

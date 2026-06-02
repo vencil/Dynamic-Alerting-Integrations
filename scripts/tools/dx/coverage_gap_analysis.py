@@ -22,6 +22,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _THIS_DIR)  # Docker flat layout
+sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
+from _lib_exitcodes import EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent.parent.parent
 
@@ -247,13 +252,13 @@ def main(argv: Optional[List[str]] = None) -> None:
 
     if text.startswith("ERROR:"):
         print(text, file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
 
     files = parse_coverage_output(text)
     if not files:
         print("No coverage data found. Ensure pytest-cov is installed "
               "and tests are discoverable.", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
 
     report = build_report(files, args.target)
 
@@ -263,7 +268,7 @@ def main(argv: Optional[List[str]] = None) -> None:
         print(format_text_report(report))
 
     if args.ci and report.below_target_count > 0:
-        sys.exit(1)
+        sys.exit(EXIT_VIOLATION)
 
 
 if __name__ == "__main__":

@@ -44,6 +44,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lib_exitcodes import EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -693,13 +694,13 @@ def main() -> None:
     period_secs = parse_duration_seconds(args.period)
     if not period_secs:
         print(f"Error: invalid period '{args.period}'", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
 
     if args.tenant and not _TENANT_NAME_RE.match(args.tenant):
         print(f"Error: invalid tenant name '{args.tenant}' "
               "(only alphanumeric, underscore, hyphen allowed)",
               file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
 
     # 分析
     metrics = analyze_from_prometheus(
@@ -725,7 +726,7 @@ def main() -> None:
         score = report.summary.get("overall_score", 100)
         bad_count = report.summary.get("bad", 0)
         if bad_count > 0 or score < args.min_score:
-            sys.exit(1)
+            sys.exit(EXIT_VIOLATION)
 
 
 if __name__ == "__main__":

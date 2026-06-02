@@ -35,6 +35,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_python import load_yaml_file, write_json_secure  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Default paths (relative to script location for da-tools container)
@@ -307,7 +308,7 @@ def main():
 
     if not args.config_dir and not args.tenant_config:
         print("ERROR: Specify --config-dir or --tenant-config", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
 
     # Load data
     configs = load_tenant_configs(

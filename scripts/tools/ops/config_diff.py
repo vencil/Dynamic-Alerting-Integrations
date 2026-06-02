@@ -33,6 +33,7 @@ from _lib_python import (  # noqa: E402
     load_yaml_file,
     VALID_RESERVED_KEYS,
 )
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 
 def load_configs_from_dir(dir_path):
@@ -375,10 +376,10 @@ def main():
 
     if not Path(args.old_dir).is_dir():
         print(f"ERROR: old-dir not found: {args.old_dir}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
     if not Path(args.new_dir).is_dir():
         print(f"ERROR: new-dir not found: {args.new_dir}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
 
     old_configs = load_configs_from_dir(args.old_dir)
     new_configs = load_configs_from_dir(args.new_dir)
@@ -395,7 +396,7 @@ def main():
 
     # Exit 1 if changes detected (CI signal), 0 if clean
     has_changes = bool(diffs) or bool(profile_diffs)
-    sys.exit(1 if has_changes else 0)
+    sys.exit(EXIT_VIOLATION if has_changes else EXIT_OK)
 
 
 if __name__ == "__main__":

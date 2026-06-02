@@ -42,6 +42,7 @@ sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_python import load_yaml_file as _lib_load_yaml  # noqa: E402
 from _lib_python import write_text_secure  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 
 
 def load_yaml_file(path):
@@ -231,7 +232,7 @@ def main():
 
     if not Path(args.config_dir).is_dir():
         print(f"ERROR: config-dir not found: {args.config_dir}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
 
     mode = "執行" if args.execute else "預覽"
 
