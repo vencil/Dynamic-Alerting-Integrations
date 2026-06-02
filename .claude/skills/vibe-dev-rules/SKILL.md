@@ -1,9 +1,9 @@
 ---
 name: vibe-dev-rules
-description: Vibe 專案 12 條開發規範（dev-rules.md）的快速參考 + 最常違反 Top 4 深入說明。Use before git commit / push, when refactoring multi-tenant logic, when editing mount-path files, when touching API / schema / CLI / counts that require doc sync, or when unsure whether an action follows Vibe conventions. Also use when user asks "can I do X" about project conventions, or when about to hardcode a tenant id, use sed -i, or push directly to main.
+description: Vibe 專案 13 條開發規範（dev-rules.md）的快速參考 + 最常違反 Top 4 深入說明。Use before git commit / push, when refactoring multi-tenant logic, when editing mount-path files, when touching API / schema / CLI / counts that require doc sync, or when unsure whether an action follows Vibe conventions. Also use when user asks "can I do X" about project conventions, or when about to hardcode a tenant id, use sed -i, or push directly to main.
 ---
 
-# vibe-dev-rules — Vibe 12 條開發規範速查
+# vibe-dev-rules — Vibe 13 條開發規範速查
 
 完整規範（含範例、歷史背景）見 [`docs/internal/dev-rules.md`](../../../docs/internal/dev-rules.md)。本 skill 只抽出**最常被違反 Top 4** + 互動工具變更 SOP 的觸發時機。
 
@@ -70,6 +70,7 @@ mkdocs strict build 用 site-root path 語意（`docs/` 是 root），與 pre-co
 | 8 | Cardinality guard | 高基 label 需 explicit opt-in |
 | 9 | Three-state semantics | active / resolved / unknown 明確分開 |
 | 10 | Dual-perspective observability | 同時從 platform + tenant 看 |
+| 13 | da-tools 子命令 exit-code 約定（#452） | exit 0/1/2（OK/violation/caller-error）+ 提供 `--json`；Go binary 不引入 `--ci` |
 
 完整說明見 [`docs/internal/dev-rules.md`](../../../docs/internal/dev-rules.md)。
 
