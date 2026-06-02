@@ -7,6 +7,21 @@ metadata:
     {{- include "tenant-api.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.replicaCount }}
+  # Recreate (not the default RollingUpdate) because tenant-api is a
+  # single-writer by design: replicaCount=1 + an in-process write lock
+  # and pending-PR tracker that do NOT coordinate across pods (see #615,
+  # internal/platform/tracker.go). The default RollingUpdate surges a new
+  # pod and waits for it to be Ready before terminating the old one, so a
+  # rollout-restart / env-change deploy leaves two Ready pods both holding
+  # their own write lock for tens of seconds — a phantom-replica window
+  # where both push to the same git plane (emptyDir: dual-writer race;
+  # RWO PVC: tree corruption / Multi-Attach stall). Recreate kills the old
+  # pod before starting the new one, eliminating the overlap. Cost: a brief
+  # deploy-time gap — not a regression, since replicaCount=1 already has no
+  # read HA. Zero-downtime would need a K8s Lease (leaderelection) gating
+  # /ready; deferred until a write deployment needs it (#677 / TRK-324).
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       {{- include "tenant-api.selectorLabels" . | nindent 6 }}
