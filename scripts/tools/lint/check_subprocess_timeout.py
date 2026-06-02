@@ -103,6 +103,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
@@ -337,10 +338,10 @@ def _compute_exit_code(*, ci: bool, strict_subprocess_timeout: bool, n_violation
     | True  | True                        | >0         | 1    |
     """
     if not ci:
-        return 0
+        return EXIT_OK
     if not strict_subprocess_timeout:
-        return 0
-    return 1 if n_violations > 0 else 0
+        return EXIT_OK
+    return EXIT_VIOLATION if n_violations > 0 else EXIT_OK
 
 
 def main() -> int:
@@ -375,7 +376,7 @@ def main() -> int:
     scan_paths = _resolve_scan_paths(args)
     if not scan_paths:
         print("No paths to scan.", file=sys.stderr)
-        return 2
+        return EXIT_CALLER_ERROR
 
     all_violations: list[TimeoutViolation] = []
     for py_file in _iter_python_files(scan_paths):
@@ -389,7 +390,7 @@ def main() -> int:
     if not all_violations:
         if args.ci:
             print("✓ no subprocess calls without timeout= found")
-        return 0
+        return EXIT_OK
 
     by_file: dict[Path, list[TimeoutViolation]] = {}
     for v in all_violations:

@@ -84,6 +84,15 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
+import os
+
+# Pull the canonical exit-code constants from the shared lib at
+# scripts/tools/ (#452). Dual sys.path bootstrap: Docker flat layout +
+# repo subdir layout (dx/ → ..).
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, str(_THIS_DIR))
+sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
+from _lib_exitcodes import EXIT_OK, EXIT_CALLER_ERROR  # noqa: E402
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 
@@ -465,7 +474,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         paths = derive_paths(args.kind, args.name, args.parent)
     except ValueError as e:
         print(f"error: {e}", file=sys.stderr)
-        return 2
+        return EXIT_CALLER_ERROR
 
     # Validate orchestrator exists.
     if not paths.parent_orchestrator.exists():
@@ -475,7 +484,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             f"existing tool with a `dependencies: [...]` front-matter block.",
             file=sys.stderr,
         )
-        return 2
+        return EXIT_CALLER_ERROR
 
     # Validate dep file doesn't already exist.
     if paths.dep_file.exists() and not args.force:
@@ -484,7 +493,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             f"hint: pass --force to overwrite.",
             file=sys.stderr,
         )
-        return 2
+        return EXIT_CALLER_ERROR
 
     # Resolve symbols list.
     symbols: Optional[List[str]] = None
@@ -494,7 +503,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                 f"error: --symbols only meaningful for fixture/util (got {args.kind!r})",
                 file=sys.stderr,
             )
-            return 2
+            return EXIT_CALLER_ERROR
         symbols = [s.strip() for s in args.symbols.split(",") if s.strip()]
         # Validate each user-provided symbol is a real JS identifier.
         for sym in symbols:
@@ -503,7 +512,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                     f"error: --symbols entry {sym!r} is not a valid JS identifier",
                     file=sys.stderr,
                 )
-                return 2
+                return EXIT_CALLER_ERROR
 
     # Derive defaults (and surface auto-conversions) when --symbols not given.
     if symbols is None:
@@ -511,7 +520,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             derived = derive_default_symbols(args.kind, args.name)
         except ValueError as e:
             print(f"error: {e}", file=sys.stderr)
-            return 2
+            return EXIT_CALLER_ERROR
         # Surface a notice when the default differs from the raw name —
         # most commonly: kebab fixture name auto-converted to SCREAMING.
         if derived != [args.name]:
@@ -544,7 +553,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         )
     except RuntimeError as e:
         print(f"error: {e}", file=sys.stderr)
-        return 2
+        return EXIT_CALLER_ERROR
 
     # Report + write.
     rel_orch = paths.parent_orchestrator.relative_to(PROJECT_ROOT)
@@ -560,7 +569,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                 f"({symbols[0]}) was added to the orchestrator's import block. "
                 f"Add the others manually if needed."
             )
-        return 0
+        return EXIT_OK
 
     paths.dep_file.parent.mkdir(parents=True, exist_ok=True)
     paths.dep_file.write_text(new_file_content, encoding="utf-8")
@@ -575,7 +584,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             f"({symbols[0]}) was added to the orchestrator's import block. "
             f"Add the others manually if the orchestrator references them by name."
         )
-    return 0
+    return EXIT_OK
 
 
 if __name__ == "__main__":

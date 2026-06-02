@@ -30,6 +30,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 # Resolve project root (three levels up: scripts/tools/lint/ -> repo root)
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -458,7 +459,7 @@ def main():
 
     if not REGISTRY_PATH.exists():
         print(f"ERROR: Registry not found: {REGISTRY_PATH}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
 
     tools = parse_registry(str(REGISTRY_PATH))
     hub_html = load_text(HUB_PATH) if HUB_PATH.exists() else ""
@@ -520,11 +521,15 @@ def main():
                 print(f"  → Fix component= path or create the referenced JSX file")
 
     if errors:
-        sys.exit(1)
+        sys.exit(EXIT_VIOLATION)
     elif warnings:
-        sys.exit(2)
+        # #452: warnings are (softer) findings → EXIT_VIOLATION. Previously
+        # exit 2, which now means caller-error; both already fail the
+        # pre-commit hook (non-zero), so this is no behaviour change, just
+        # removes the warn/caller-error code collision.
+        sys.exit(EXIT_VIOLATION)
     else:
-        sys.exit(0)
+        sys.exit(EXIT_OK)
 
 
 if __name__ == "__main__":

@@ -64,6 +64,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 
@@ -174,7 +175,7 @@ def main() -> int:
 
     if not findings:
         print(f"skip-a11y-justification: ✓ {len(paths)} specs clean (testing-playbook §LL §5)")
-        return 0
+        return EXIT_OK
 
     print(f"skip-a11y-justification: ✗ {len(findings)} unjustified `skipA11y: true` use(s)")
     print()
@@ -196,8 +197,8 @@ def main() -> int:
     print("Background: testing-playbook.md §LL v2.8.0 §5 (TD-035 audit retrospective).")
 
     if args.ci:
-        return 1
-    return 0
+        return EXIT_VIOLATION
+    return EXIT_OK
 
 
 if __name__ == "__main__":

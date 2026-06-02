@@ -143,6 +143,7 @@ if str(_LIB_DIR) not in sys.path:
     sys.path.insert(0, str(_LIB_DIR))
 
 from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_CALLER_ERROR  # noqa: E402
 
 REPO = "vencil/Dynamic-Alerting-Integrations"
 WORKFLOW = "bench-gate-pr.yaml"
@@ -249,7 +250,7 @@ def list_tier1_runs(limit: int) -> list[dict]:
         print(f"ERROR: gh run list failed — {e.stderr.strip()}", file=sys.stderr)
         if "authentication" in e.stderr.lower() or "auth" in e.stderr.lower():
             print("       Run `gh auth login` first.", file=sys.stderr)
-        sys.exit(2)
+        sys.exit(EXIT_CALLER_ERROR)
 
 
 def find_pr_for_run(head_sha: str) -> Optional[dict]:
@@ -521,7 +522,7 @@ def main() -> int:
     else:
         print(render_markdown(stats, records, args.verbose))
 
-    return 0  # observation tool; never gates
+    return EXIT_OK  # observation tool; never gates
 
 
 if __name__ == "__main__":

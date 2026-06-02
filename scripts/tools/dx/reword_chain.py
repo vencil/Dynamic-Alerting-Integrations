@@ -62,6 +62,16 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _THIS_DIR)  # Docker flat layout
+sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
+from _lib_exitcodes import (  # noqa: E402
+    EXIT_CALLER_ERROR,
+    EXIT_OK,
+    EXIT_VIOLATION,
+    die_caller_error,
+)
+
 
 # ---------------------------------------------------------------------------
 # Git helper
@@ -361,7 +371,7 @@ def main(argv: list[str] | None = None) -> int:
         try:
             meta = capture_meta(entry.old_ref)
         except GitError as exc:
-            raise SystemExit(f"cannot resolve {entry.old_ref}: {exc}")
+            die_caller_error(f"cannot resolve {entry.old_ref}: {exc}")
         metas.append(meta)
 
     # 3. Resolve base
@@ -377,7 +387,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.branch is None:
         current = _git("rev-parse", "--abbrev-ref", "HEAD")
         if current == "HEAD":
-            raise SystemExit(
+            die_caller_error(
                 "detached HEAD: pass --branch <name> or --branch '' to skip ref update"
             )
         target_branch = current
@@ -386,7 +396,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # 6. Dirty check
     if not args.allow_dirty and working_tree_is_dirty():
-        raise SystemExit(
+        die_caller_error(
             "working tree has modifications. Stash them first or pass --allow-dirty.\n"
             "(untracked files are always ignored)"
         )
@@ -411,7 +421,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.dry_run:
         print("(dry-run: no refs written)")
-        return 0
+        return EXIT_OK
 
     # 8. Backup tag
     backup_tag = args.backup_tag or default_backup_tag()
@@ -432,7 +442,7 @@ def main(argv: list[str] | None = None) -> int:
                 f"run `git reset --hard {backup_tag}` to recover.",
                 file=sys.stderr,
             )
-            return 1
+            return EXIT_CALLER_ERROR
         new_shas.append(new_sha)
         print(
             f"  [{i}] {format_sha_short(meta.old_sha)} -> "
@@ -460,7 +470,7 @@ def main(argv: list[str] | None = None) -> int:
         print("(--branch '' passed: ref not updated)")
 
     print(f"\nrecover with: git reset --hard {backup_tag}")
-    return 0
+    return EXIT_OK
 
 
 if __name__ == "__main__":

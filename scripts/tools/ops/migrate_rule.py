@@ -46,6 +46,7 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, str(_THIS_DIR))  # Docker flat layout
 sys.path.insert(0, str(_THIS_DIR.parent))  # Repo subdir layout
 from _lib_python import write_text_secure  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # AST Engine: promql-parser (optional — graceful degradation)
@@ -1178,7 +1179,7 @@ def main():
             data = yaml.safe_load(f)
     except (OSError, yaml.YAMLError) as e:
         print(f"Error reading YAML file: {e}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
 
     groups = data.get('groups', [])
     if not groups:

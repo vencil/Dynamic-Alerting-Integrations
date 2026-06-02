@@ -46,9 +46,15 @@ Exit codes:
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import sys
 from pathlib import Path
+
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _THIS_DIR)  # Docker flat layout
+sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 HUB_HTML = REPO_ROOT / "docs" / "interactive" / "index.html"
@@ -130,7 +136,7 @@ def main() -> int:
     violations = scan_hub()
     if not violations:
         print(f"OK: {_display_path(HUB_HTML)} has no hardcoded badge counts.")
-        return 0
+        return EXIT_OK
 
     print(f"FAIL: {len(violations)} hardcoded badge count(s):", file=sys.stderr)
     for v in violations:
@@ -141,7 +147,7 @@ def main() -> int:
         "window.__hubPhaseCounts cache populated by renderTools().",
         file=sys.stderr,
     )
-    return 1
+    return EXIT_VIOLATION
 
 
 if __name__ == "__main__":

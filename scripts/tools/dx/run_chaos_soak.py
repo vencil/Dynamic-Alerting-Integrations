@@ -60,8 +60,11 @@ Output
 Exit codes
 ----------
     0  Soak completed cleanly
-    1  Caller error (bad args, target not reachable on first probe)
-    2  Soak interrupted but partial output preserved
+    2  Caller error — bad args / config-dir missing / target not reachable on
+       first probe, OR soak interrupted (SIGINT/SIGTERM) with partial output
+       preserved. Both are "the tool could not finish a clean soak", per the
+       0/1/2 contract in scripts/tools/_lib_exitcodes.py. There is no exit-1
+       (finding) state: this harness records signals, it does not gate.
 """
 from __future__ import annotations
 
@@ -86,6 +89,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_CALLER_ERROR  # noqa: E402
 
 # Metrics we extract from /metrics (Prometheus text format).
 # Adding new ones here automatically extends the timeseries CSV.
@@ -230,7 +234,7 @@ def main() -> int:
     config_dir = Path(args.config_dir)
     if not config_dir.exists():
         print(f"[error] config-dir not found: {config_dir}", file=sys.stderr)
-        return 1
+        return EXIT_CALLER_ERROR
 
     out = Path(args.output_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -243,7 +247,7 @@ def main() -> int:
     if initial is None:
         print(f"[error] cannot reach {args.target_url}/metrics — aborting before soak start",
               file=sys.stderr)
-        return 1
+        return EXIT_CALLER_ERROR
     if not initial:
         print(f"[warn] /metrics returned no tracked metrics — soak will record empty rows",
               file=sys.stderr)
@@ -333,7 +337,7 @@ def main() -> int:
               f"{cfg.reload_count} reloads / {cfg.poll_count} polls", file=sys.stderr)
         print(f"[info] output: {out}", file=sys.stderr)
 
-    return 2 if interrupted else 0
+    return EXIT_CALLER_ERROR if interrupted else EXIT_OK
 
 
 if __name__ == "__main__":

@@ -28,6 +28,7 @@ from _lib_python import (  # noqa: E402
     JOB_DB_MAP,
     METRIC_PREFIX_DB_MAP,
 )
+from _lib_exitcodes import EXIT_VIOLATION  # noqa: E402
 
 
 def query_prometheus_targets(prom_url):
@@ -264,7 +265,7 @@ def main():
     # 3. Load monitored DB types from tenant configs
     monitored = load_monitored_db_types(args.config_dir)
     if monitored is None:
-        sys.exit(1)
+        sys.exit(EXIT_VIOLATION)
 
     # 4. Find blind spots
     results = find_blind_spots(live_instances, monitored)

@@ -27,6 +27,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lib_exitcodes import EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -429,7 +430,7 @@ def main():
             f"ERROR: Config directory not found: {args.config_dir}",
             file=sys.stderr,
         )
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
 
     # Build metadata
     data = build_tenant_metadata(args.config_dir)
@@ -452,7 +453,7 @@ def main():
                 f"Run without --check first.",
                 file=sys.stderr,
             )
-            sys.exit(1)
+            sys.exit(EXIT_VIOLATION)
 
         existing = json.loads(args.output.read_text(encoding="utf-8"))
         existing.pop("generated", None)
@@ -463,7 +464,7 @@ def main():
                 f"ERROR: {args.output} is outdated.",
                 file=sys.stderr,
             )
-            sys.exit(1)
+            sys.exit(EXIT_VIOLATION)
 
         print(f"OK: {args.output} is up to date.")
         return

@@ -39,6 +39,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 DIST_DIR = REPO_ROOT / "docs" / "assets" / "dist"
@@ -178,8 +179,8 @@ def main() -> int:
             print(f"\nTotal violations: {len(violations)}")
 
     if args.ci and violations:
-        return 1
-    return 0
+        return EXIT_VIOLATION
+    return EXIT_OK
 
 
 if __name__ == "__main__":

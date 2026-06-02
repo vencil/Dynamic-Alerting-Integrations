@@ -17,6 +17,7 @@ import pytest
 import yaml
 
 import validate_config as vc
+from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 
 
 class TestYAMLSyntax:
@@ -543,7 +544,7 @@ class TestMainCLI:
         cli_argv("validate_config", "--config-dir", "/nonexistent/path")
         with pytest.raises(SystemExit) as exc:
             vc.main()
-        assert exc.value.code == 1
+        assert exc.value.code == EXIT_CALLER_ERROR
 
     def test_main_with_policy(self, tmp_path, monkeypatch, capsys, cli_argv):
         config_dir = self._make_config_dir(tmp_path)

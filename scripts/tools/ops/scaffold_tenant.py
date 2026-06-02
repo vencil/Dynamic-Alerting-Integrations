@@ -33,6 +33,7 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, str(_THIS_DIR))  # Docker flat layout
 sys.path.insert(0, str(_THIS_DIR.parent))  # Repo subdir layout
 from _lib_python import read_onboard_hints, detect_cli_lang, write_text_secure  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 # Language detection for bilingual help
 _LANG = detect_cli_lang()
@@ -872,7 +873,7 @@ def run_interactive(output_dir: str) -> None:
     tenant_name = input("\n📛 Tenant namespace (例如 db-c): ").strip()
     if not tenant_name:
         print("錯誤: Tenant name 不可為空")
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
 
     # Step 2: Select DB types
     db_options = [(k, v["display"]) for k, v in RULE_PACKS.items() if k != "kubernetes"]
@@ -941,7 +942,7 @@ def run_non_interactive(args: argparse.Namespace) -> None:
         if db not in RULE_PACKS:
             print(f"錯誤: 不支援的 DB 類型 '{db}'")
             print(f"支援的類型: {', '.join(RULE_PACKS.keys())}")
-            sys.exit(1)
+            sys.exit(EXIT_CALLER_ERROR)
 
     print(f"⚙️  生成 {tenant_name} config (DBs: {', '.join(selected_dbs)})...")
     defaults_data = generate_defaults(selected_dbs)
@@ -1036,12 +1037,14 @@ def run_from_onboard(args: argparse.Namespace) -> None:
     hints = read_onboard_hints(args.from_onboard)
     if not hints:
         print(f"ERROR: Cannot read onboard hints: {args.from_onboard}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
 
     tenants = hints.get("tenants", [])
     if not tenants:
+        # #452: readable-but-empty hints = unusable input = caller error,
+        # consistent with the "cannot read hints" sibling above.
         print("No tenants found in onboard hints.", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
 
     output_dir = args.output_dir
     print(f"Auto-scaffolding {len(tenants)} tenant(s) from onboard hints...")
@@ -1118,17 +1121,17 @@ def main() -> None:
 
     if args.catalog:
         print_catalog()
-        sys.exit(0)
+        sys.exit(EXIT_OK)
 
     if args.generate_profile:
         if not args.db:
             print("錯誤: --generate-profile 需要 --db 參數", file=sys.stderr)
-            sys.exit(1)
+            sys.exit(EXIT_CALLER_ERROR)
         selected_dbs = ["kubernetes"] + [db.strip() for db in args.db.split(",")]
         for db in selected_dbs:
             if db not in RULE_PACKS:
                 print(f"錯誤: 不支援的 DB 類型 '{db}'", file=sys.stderr)
-                sys.exit(1)
+                sys.exit(EXIT_CALLER_ERROR)
         profile_data = generate_profile(args.generate_profile, selected_dbs,
                                         tier=args.tier)
         output_dir = args.output_dir
@@ -1146,14 +1149,14 @@ def main() -> None:
         print(f"   Profile: {args.generate_profile} (tier={args.tier})")
         print(f"   DBs: {', '.join(selected_dbs)}")
         print(f"   Metrics: {len(profile_data['profiles'][args.generate_profile])} keys")
-        sys.exit(0)
+        sys.exit(EXIT_OK)
 
     if args.from_onboard:
         run_from_onboard(args)
     elif args.non_interactive or (args.tenant and args.db):
         if not args.tenant or not args.db:
             print("錯誤: --non-interactive 模式需要 --tenant 和 --db 參數")
-            sys.exit(1)
+            sys.exit(EXIT_CALLER_ERROR)
         run_non_interactive(args)
     else:
         run_interactive(args.output_dir)

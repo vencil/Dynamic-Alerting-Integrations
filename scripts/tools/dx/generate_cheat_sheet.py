@@ -31,6 +31,7 @@ REPO_ROOT = SCRIPT_DIR.parent.parent.parent  # scripts/tools/dx/ -> repo root
 
 sys.path.insert(0, str(SCRIPT_DIR.parent))
 from _lib_versions import read_platform_version, read_da_tools_version  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Bilingual templates
@@ -298,7 +299,7 @@ def main():
     cli_ref_path = REPO_ROOT / 'docs' / 'cli-reference.md'
     if not cli_ref_path.exists():
         print(f'Error: {cli_ref_path} not found', file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
 
     content = read_cli_reference(str(cli_ref_path))
     commands = extract_commands(content)
@@ -306,7 +307,7 @@ def main():
     if not commands:
         print('Error: No commands extracted from cli-reference.md',
               file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
 
     version, tools_version = _read_versions()
     langs = ['zh', 'en'] if args.lang == 'all' else [args.lang]
@@ -346,9 +347,9 @@ def main():
             print(f'Commands extracted: {len(commands)}')
 
     if args.check and has_drift:
-        sys.exit(1)
+        sys.exit(EXIT_VIOLATION)
 
-    return 0
+    return EXIT_OK
 
 
 if __name__ == '__main__':

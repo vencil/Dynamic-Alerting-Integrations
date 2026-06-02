@@ -60,6 +60,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 
@@ -416,12 +417,22 @@ def main() -> int:
     babel_failures = []
     if result.returncode != 0:
         print(f"⚠ Node.js error: {result.stderr[:200]}")
+        # The Babel pass could not run (subprocess crash, not a JSX defect).
+        # Under --ci that's a caller/environment error — failing green here
+        # would let real parse errors slip through silently.
+        if args.ci:
+            return EXIT_CALLER_ERROR
+        return 0
     else:
         try:
             results = json.loads(result.stdout)
             babel_failures = [r for r in results if not r["ok"]]
         except json.JSONDecodeError:
             print("⚠ Could not parse Node.js output")
+            # Unparseable output → the check did not produce a verdict.
+            if args.ci:
+                return EXIT_CALLER_ERROR
+            return 0
 
     # Combine results
     all_failures = (

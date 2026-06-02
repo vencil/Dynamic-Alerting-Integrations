@@ -26,6 +26,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent.parent.parent
@@ -167,7 +168,7 @@ def main():
 
     if not REGISTRY_PATH.exists():
         print(f"ERROR: Registry not found: {REGISTRY_PATH}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
 
     tools = parse_registry(str(REGISTRY_PATH))
     print(f"Loaded {len(tools)} tools\n")

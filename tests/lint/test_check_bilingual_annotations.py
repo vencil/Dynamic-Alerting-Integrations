@@ -13,6 +13,7 @@ import pytest
 import yaml
 
 import check_bilingual_annotations as cba
+from _lib_exitcodes import EXIT_CALLER_ERROR
 
 
 # ---------------------------------------------------------------------------
@@ -250,8 +251,9 @@ class TestRunCheck:
         """))
         assert checker.run_check() == 1
 
-    def test_no_packs_returns_one(self, checker):
-        assert checker.run_check() == 1
+    def test_no_packs_is_caller_error(self, checker):
+        # "No rule packs found" is a caller/environment error (#452).
+        assert checker.run_check() == EXIT_CALLER_ERROR
 
     # ── unique edge cases (merged from _extended) ───────────────────────
 
@@ -259,7 +261,8 @@ class TestRunCheck:
         (checker.rule_pack_dir / "rule-pack-bad.yaml").write_text(
             "invalid: [yaml", encoding="utf-8")
         exit_code = checker.run_check()
-        assert exit_code == 1
+        # Malformed input YAML is a caller/environment error (#452).
+        assert exit_code == EXIT_CALLER_ERROR
 
     def test_only_packs_filter(self, checker):
         _write_pack(checker.rule_pack_dir, "rule-pack-a.yaml", [

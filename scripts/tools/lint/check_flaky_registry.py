@@ -60,11 +60,17 @@ Exit codes
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
+
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _THIS_DIR)  # Docker flat layout
+sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_REGISTRY = REPO_ROOT / "flaky-tests.yaml"
@@ -313,7 +319,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             current = parse_version(args.current_version)
         except ValueError as e:
             print(f"ERROR: --current-version: {e}", file=sys.stderr)
-            return 2
+            return EXIT_CALLER_ERROR
     else:
         current = latest_version_from_changelog(Path(args.changelog))
         if current is None:
@@ -327,18 +333,18 @@ def main(argv: Optional[list[str]] = None) -> int:
     registry_path = Path(args.registry)
     if not registry_path.is_file():
         # Missing registry is healthy: same semantics as empty.
-        return 0
+        return EXIT_OK
     try:
         import yaml
     except ImportError:
         print("ERROR: pyyaml not installed", file=sys.stderr)
-        return 2
+        return EXIT_CALLER_ERROR
     try:
         with open(registry_path, encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
     except yaml.YAMLError as e:
         print(f"ERROR: cannot parse {registry_path}: {e}", file=sys.stderr)
-        return 2
+        return EXIT_CALLER_ERROR
 
     issues = validate_registry(data, current)
     if not issues:
@@ -350,7 +356,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                 f"flaky-tests.yaml: {count} entries, all valid "
                 f"(current version: {current_str})"
             )
-        return 0
+        return EXIT_OK
 
     # Surface findings
     print(
@@ -365,7 +371,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         "as bugs get fixed — that's the design).",
         file=sys.stderr,
     )
-    return 1
+    return EXIT_VIOLATION
 
 
 if __name__ == "__main__":

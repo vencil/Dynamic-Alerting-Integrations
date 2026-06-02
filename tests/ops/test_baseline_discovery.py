@@ -312,11 +312,11 @@ class TestMainCLI:
         assert "nonexistent" in err
 
     def test_all_unknown_metrics_exits(self, capsys, monkeypatch, cli_argv):
-        """全部指標未知時 exit(1)。"""
+        """全部指標未知時 exit 2 (caller error: no usable input, #452)。"""
         cli_argv('baseline_discovery', '--tenant', 'db-a', '--metrics', 'bogus1,bogus2', '--dry-run')
         with pytest.raises(SystemExit) as exc_info:
             baseline_discovery.main()
-        assert exc_info.value.code == 1
+        assert exc_info.value.code == 2  # EXIT_CALLER_ERROR (#452: no valid metrics)
 
 
 # ── main() Observation Loop (v2.1.0 coverage boost) ──────────────

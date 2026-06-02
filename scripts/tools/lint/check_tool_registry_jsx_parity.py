@@ -43,10 +43,16 @@ Exit codes:
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
 import yaml
+
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _THIS_DIR)  # Docker flat layout
+sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 REGISTRY = REPO_ROOT / "docs" / "assets" / "tool-registry.yaml"
@@ -108,7 +114,7 @@ def main() -> int:
 
     if not REGISTRY.exists():
         print(f"ERROR: {REGISTRY} not found", file=sys.stderr)
-        return 1
+        return EXIT_CALLER_ERROR
 
     tools = load_registry()
     issues: list[str] = []
@@ -147,7 +153,7 @@ def main() -> int:
             f"OK: tool-registry.yaml has {len(tools)} entries; "
             f"all resolve and no JSX orphans."
         )
-        return 0
+        return EXIT_OK
 
     print(f"FAIL: {len(issues)} parity violation(s):")
     for issue in issues:
@@ -158,7 +164,7 @@ def main() -> int:
         "paths (_common/, tenant-manager/, operator-setup-wizard/, *Tab.jsx, "
         "portal-shared.jsx)."
     )
-    return 1
+    return EXIT_VIOLATION
 
 
 if __name__ == "__main__":

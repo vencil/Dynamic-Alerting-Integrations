@@ -28,6 +28,7 @@ for _p in [_TOOLS_DIR, os.path.join(_TOOLS_DIR, "ops")]:
         sys.path.insert(0, _p)
 
 import threshold_recommend as tr  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 from factories import write_yaml, make_tenant_yaml  # noqa: E402
 
 
@@ -574,20 +575,20 @@ class TestCLI:
     """CLI 入口點測試。"""
 
     def test_missing_config_dir(self):
-        """不存在的 config-dir 應 exit 1。"""
+        """不存在的 config-dir 應 exit caller error。"""
         with patch("sys.argv", ["threshold_recommend.py", "--config-dir", "/nonexistent"]):
             with pytest.raises(SystemExit) as exc_info:
                 tr.main()
-            assert exc_info.value.code == 1
+            assert exc_info.value.code == EXIT_CALLER_ERROR
 
     def test_invalid_lookback(self, tmp_path):
-        """無效的 lookback 應 exit 1。"""
+        """無效的 lookback 應 exit caller error。"""
         write_yaml(str(tmp_path), "db-a.yaml", make_tenant_yaml("db-a", keys={"cpu": 80}))
         with patch("sys.argv", ["threshold_recommend.py", "--config-dir", str(tmp_path),
                                  "--lookback", "invalid"]):
             with pytest.raises(SystemExit) as exc_info:
                 tr.main()
-            assert exc_info.value.code == 1
+            assert exc_info.value.code == EXIT_CALLER_ERROR
 
     def test_dry_run_cli(self, tmp_path):
         """CLI --dry-run 正常完成。"""
@@ -614,12 +615,12 @@ class TestCLI:
             captured = capsys.readouterr()
             assert "| Key |" in captured.out
 
-    def test_missing_config_dir_without_generate_exits_1(self):
-        """#719: 無 --config-dir 且非 generate → exit 1。"""
+    def test_missing_config_dir_without_generate_exits_caller_error(self):
+        """#719: 無 --config-dir 且非 generate → exit caller error。"""
         with patch("sys.argv", ["threshold_recommend.py"]):
             with pytest.raises(SystemExit) as exc_info:
                 tr.main()
-            assert exc_info.value.code == 1
+            assert exc_info.value.code == EXIT_CALLER_ERROR
 
     def test_generate_observed_map_cli(self, tmp_path, capsys, monkeypatch):
         """#719: --generate-observed-map 寫出 map 並印摘要，不需 --config-dir。"""

@@ -25,8 +25,14 @@ Exit:
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
+
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _THIS_DIR)  # Docker flat layout
+sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 # 上限。v2.8.0 Phase .a：500 行硬上限。
 # v2.8.1 (#445 AC iv)：500 → 520。新增 §安全紀律（Secret Hygiene）—
@@ -34,8 +40,12 @@ from pathlib import Path
 #   code-enforce 的純文字規則（`--no-verify` 本質上就是跳過 hook），屬
 #   正當的 L4 規範成長；prune/promote 不適用（該節描述的掃描本身已是
 #   L1/L2 hook，無可再 promote）。
+# v2.9.0 (#452)：520 → 535。新增 §13 da-tools 子命令 exit-code / --json /
+#   --ci 約定——這是 Track A 0/1/2 SSOT (_lib_exitcodes.py) 的工具作者面
+#   規範，無法純 code-enforce（新工具是否守約定要 review + test gate），
+#   屬正當的規範成長；對應 codified gate 為 test_tool_exit_codes.py。
 # 調整門檻時需同時修改 CHANGELOG 並在 PR body 寫理由（不可偷偷放寬）。
-MAX_LINES = 520
+MAX_LINES = 535
 
 # 相對於 repo root
 DEV_RULES_PATH = "docs/internal/dev-rules.md"
@@ -59,7 +69,7 @@ def main() -> int:
     target = repo / DEV_RULES_PATH
     if not target.exists():
         print(f"[check_devrules_size] target not found: {target}", file=sys.stderr)
-        return 1
+        return EXIT_CALLER_ERROR
 
     # 用 bytes + splitlines 計算，跟 `wc -l` 一致（最後一行未換行也算一行）
     text = target.read_text(encoding="utf-8")
@@ -67,7 +77,7 @@ def main() -> int:
     line_count = len(text.splitlines())
 
     if line_count <= MAX_LINES:
-        return 0
+        return EXIT_OK
 
     over = line_count - MAX_LINES
     print(
@@ -86,7 +96,7 @@ def main() -> int:
         "  Raising MAX_LINES is a last resort and must be justified in the PR body.\n",
         file=sys.stderr,
     )
-    return 1
+    return EXIT_VIOLATION
 
 
 if __name__ == "__main__":

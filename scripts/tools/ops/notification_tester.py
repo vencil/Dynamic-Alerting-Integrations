@@ -60,6 +60,7 @@ from _lib_python import (  # noqa: E402
     detect_cli_lang,
     load_tenant_configs,
 )
+from _lib_exitcodes import EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 _LANG = detect_cli_lang()
 
@@ -744,7 +745,7 @@ def main() -> None:
     if not Path(args.config_dir).is_dir():
         msg = f"配置目錄不存在: {args.config_dir}" if _LANG == 'zh' else f"Config directory not found: {args.config_dir}"
         print(msg, file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
 
     reports = run_all_tests(
         args.config_dir,
@@ -761,7 +762,7 @@ def main() -> None:
 
     has_failure = any(r.failed > 0 for r in reports)
     if args.ci and has_failure:
-        sys.exit(1)
+        sys.exit(EXIT_VIOLATION)
 
 
 if __name__ == "__main__":

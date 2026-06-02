@@ -64,6 +64,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Repo root detection
@@ -1295,7 +1296,7 @@ def _init_changelog_entry(version: str, lang: str = "zh"):
                 continue
             else:
                 print(f"ERROR: {changelog} not found", file=sys.stderr)
-                sys.exit(1)
+                sys.exit(EXIT_CALLER_ERROR)
 
         content = changelog.read_text(encoding="utf-8")
 
@@ -1391,7 +1392,7 @@ def main():
         if args.check:
             if update_count > 0:
                 print(f"\n❌ {update_count} count(s) are outdated. Run without --check to apply.")
-                sys.exit(1)
+                sys.exit(EXIT_VIOLATION)
             else:
                 print("\n✅ All counts are already up to date.")
         elif args.dry_run:
@@ -1421,7 +1422,7 @@ def main():
         versions = read_current_versions()
         if not versions:
             print("ERROR: Cannot read current versions from source files", file=sys.stderr)
-            sys.exit(1)
+            sys.exit(EXIT_CALLER_ERROR)
 
         all_rules = _build_rules()
         total_rules = 0
@@ -1495,7 +1496,7 @@ def main():
         print(f"  Summary: {total_rules} rules, "
               f"{matched} ✅, {unmatched} ❌, {missing} ⚠️")
         print(f"{'='*60}")
-        sys.exit(1 if unmatched > 0 else 0)
+        sys.exit(EXIT_VIOLATION if unmatched > 0 else EXIT_OK)
 
     # --check mode: read current versions and verify all references match
     if args.check and not (args.platform or args.exporter or args.tools
@@ -1503,7 +1504,7 @@ def main():
         versions = read_current_versions()
         if not versions:
             print("ERROR: Cannot read current versions from source files", file=sys.stderr)
-            sys.exit(1)
+            sys.exit(EXIT_CALLER_ERROR)
 
         all_rules = _build_rules()
         has_drift = False
@@ -1520,16 +1521,16 @@ def main():
 
         if has_drift:
             print("\n❌ Version drift detected. Run bump_docs.py with version flags to fix.")
-            sys.exit(1)
+            sys.exit(EXIT_VIOLATION)
         else:
             print("✅ All version references are consistent.")
-            sys.exit(0)
+            sys.exit(EXIT_OK)
 
     # Explicit bump mode
     if not (args.platform or args.exporter or args.tools or args.portal
             or args.tenant_api):
         parser.print_help()
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
 
     all_rules = _build_rules()
     total_updates = 0
@@ -1562,7 +1563,7 @@ def main():
     if args.check:
         if total_updates > 0:
             print(f"\n❌ {total_updates} file(s) would be updated. Run without --check to apply.")
-            sys.exit(1)
+            sys.exit(EXIT_VIOLATION)
         else:
             print("\n✅ All version references are already up to date.")
     elif args.dry_run:

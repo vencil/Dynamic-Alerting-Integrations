@@ -22,6 +22,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_python import is_disabled as _is_disabled  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 
 from _grar_merge import (  # noqa: E402
     _substitute_tenant,
@@ -170,7 +171,7 @@ def _parse_config_files(config_dir: str) -> dict:
 
     if not os.path.isdir(config_dir):
         print(f"ERROR: config directory not found: {config_dir}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
 
     files = sorted(f for f in os.listdir(config_dir)
                    if (f.endswith(".yaml") or f.endswith(".yml"))

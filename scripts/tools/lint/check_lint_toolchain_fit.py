@@ -42,9 +42,15 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import sys
 from pathlib import Path
+
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _THIS_DIR)  # Docker flat layout
+sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 if hasattr(sys.stdout, "reconfigure"):
     try:
@@ -127,7 +133,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if not LINT_DIR.is_dir():
         print(f"ERROR: lint dir not found: {LINT_DIR}", file=sys.stderr)
-        return 1
+        return EXIT_CALLER_ERROR
 
     if args.list:
         for py in sorted(LINT_DIR.glob("*.py")):
@@ -136,7 +142,7 @@ def main(argv: list[str] | None = None) -> int:
             if targets_js_toolchain(py):
                 tag = "allowlisted" if py.name in ALLOWLIST else "UNJUSTIFIED"
                 print(f"  [{tag}] {py.name}")
-        return 0
+        return EXIT_OK
 
     offenders: list[str] = []
     for py in sorted(LINT_DIR.glob("*.py")):
@@ -156,7 +162,7 @@ def main(argv: list[str] | None = None) -> int:
             f"OK: {len(ALLOWLIST)} grandfathered JS-targeting lints; "
             f"no new un-justified reinvented-wheel lints."
         )
-        return 0
+        return EXIT_OK
 
     if offenders:
         print("FAIL: new lint(s) parse JS/JSX/CSS content but are not justified:")
@@ -173,7 +179,7 @@ def main(argv: list[str] | None = None) -> int:
         print("\nFAIL: ALLOWLIST entries point at missing files (remove them):")
         for s in stale:
             print(f"  - {s}")
-    return 1
+    return EXIT_VIOLATION
 
 
 if __name__ == "__main__":

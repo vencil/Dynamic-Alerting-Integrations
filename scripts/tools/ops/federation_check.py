@@ -34,6 +34,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_python import http_get_json, query_prometheus_instant  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 # Alias for backward-compat within this module
 query_prometheus = query_prometheus_instant
@@ -59,6 +60,7 @@ def check_edge(prom_url):
         checks.append({
             "check": "edge_prometheus_reachable",
             "status": "fail",
+            "caller_error": True,  # #452/#737: transport failure = caller-error (exit 2)
             "detail": f"Cannot reach: {str(e)[:60]}",
         })
         return checks
@@ -69,6 +71,7 @@ def check_edge(prom_url):
         checks.append({
             "check": "edge_external_labels",
             "status": "fail",
+            "caller_error": True,  # config API transport failure = caller-error
             "detail": f"Config API failed: {err[:60]}",
         })
     else:
@@ -100,6 +103,7 @@ def check_edge(prom_url):
         checks.append({
             "check": "edge_tenant_label",
             "status": "fail",
+            "caller_error": True,  # query transport failure = caller-error
             "detail": f"Query failed: {err[:60]}",
         })
     elif results:
@@ -158,6 +162,7 @@ def check_central(prom_url):
         checks.append({
             "check": "central_prometheus_reachable",
             "status": "fail",
+            "caller_error": True,  # #452/#737: transport failure = caller-error (exit 2)
             "detail": f"Cannot reach: {str(e)[:60]}",
         })
         return checks
@@ -168,6 +173,7 @@ def check_central(prom_url):
         checks.append({
             "check": "central_edge_metrics",
             "status": "fail",
+            "caller_error": True,  # query transport failure = caller-error
             "detail": f"Query failed: {err[:60]}",
         })
     elif results:
@@ -200,6 +206,7 @@ def check_central(prom_url):
         checks.append({
             "check": "central_threshold_exporter",
             "status": "fail",
+            "caller_error": True,  # query transport failure = caller-error
             "detail": f"Query failed: {err[:60]}",
         })
     elif results:
@@ -240,6 +247,7 @@ def check_central(prom_url):
         checks.append({
             "check": "central_alert_rules",
             "status": "fail",
+            "caller_error": True,  # rules API transport failure = caller-error
             "detail": f"Rules API failed: {err[:60]}",
         })
     else:
@@ -340,13 +348,18 @@ def main():
         edge_urls = args.edge_urls.split(",") if args.edge_urls else []
         if not edge_urls:
             print("ERROR: --edge-urls required for e2e mode", file=sys.stderr)
-            sys.exit(1)
+            sys.exit(EXIT_CALLER_ERROR)
         checks = check_e2e(args.prometheus, edge_urls)
         section = "e2e"
     else:
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
 
     has_failure = any(c["status"] == "fail" for c in checks)
+    # #452/#737: transport/connectivity failures (cannot reach Prometheus,
+    # query/API failed) are caller-errors (exit 2), not findings (exit 1).
+    caller_error = any(
+        c["status"] == "fail" and c.get("caller_error") for c in checks
+    )
 
     if args.json:
         print(json.dumps({
@@ -361,7 +374,9 @@ def main():
         print(f"  Overall: {'FAIL' if has_failure else 'PASS'}")
         print(f"{'='*60}\n")
 
-    sys.exit(1 if has_failure else 0)
+    if caller_error:
+        sys.exit(EXIT_CALLER_ERROR)
+    sys.exit(EXIT_VIOLATION if has_failure else EXIT_OK)
 
 
 if __name__ == "__main__":

@@ -18,6 +18,7 @@ REPO_ROOT = os.path.dirname(TESTS_DIR)
 sys.path.insert(0, os.path.join(REPO_ROOT, "scripts", "tools", "ops"))
 
 import init_project as ip  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 
 
 # ============================================================
@@ -1306,7 +1307,7 @@ class TestMainTenantValidation:
                      '--non-interactive', '-o', '/tmp/test-ignore']
         with pytest.raises(SystemExit) as exc:
             ip.main()
-        assert exc.value.code == 1
+        assert exc.value.code == EXIT_CALLER_ERROR
         captured = capsys.readouterr()
         assert 'UPPER_CASE' in captured.err
 
@@ -1316,7 +1317,7 @@ class TestMainTenantValidation:
                      '--non-interactive', '-o', '/tmp/test-ignore']
         with pytest.raises(SystemExit) as exc:
             ip.main()
-        assert exc.value.code == 1
+        assert exc.value.code == EXIT_CALLER_ERROR
 
     def test_mixed_valid_invalid_exits(self, capsys):
         """Rejects if any tenant name is invalid."""
@@ -1324,7 +1325,7 @@ class TestMainTenantValidation:
                      '--non-interactive', '-o', '/tmp/test-ignore']
         with pytest.raises(SystemExit) as exc:
             ip.main()
-        assert exc.value.code == 1
+        assert exc.value.code == EXIT_CALLER_ERROR
         captured = capsys.readouterr()
         assert 'Bad!Name' in captured.err
 

@@ -64,6 +64,7 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_python import http_get_json, write_text_secure, write_json_secure, query_prometheus_instant  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 
 # Alias for backward-compat within this module
 query_prometheus = query_prometheus_instant
@@ -385,7 +386,7 @@ def main():
         }]
     else:
         print("錯誤: 使用 --old 時必須同時指定 --new", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
 
     if not pairs:
         print("No comparison pairs found.")

@@ -48,6 +48,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lib_exitcodes import EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -56,6 +57,12 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 
 REQUIRED_READINESS_FIELDS = {"ready", "timestamp", "convergence_percentage",
                              "converged_count", "total_pairs"}
+
+# #452/#737: machine-readable marker prefix for caller-error-class step
+# failures (transport to Prometheus, env precondition) so the orchestrator
+# can map them to EXIT_CALLER_ERROR (2) instead of EXIT_VIOLATION (1)
+# without fragile free-text matching.
+CALLER_ERROR_PREFIX = "[caller-error] "
 
 
 def load_cutover_readiness(json_path):
@@ -97,9 +104,11 @@ def _run_kubectl(args, dry_run=False):
             return False, stderr or f"exit code {result.returncode}"
         return True, output
     except subprocess.TimeoutExpired:
-        return False, "kubectl command timed out (30s)"
+        # #452/#737: env/transport failure = caller-error (exit 2)
+        return False, f"{CALLER_ERROR_PREFIX}kubectl command timed out (30s)"
     except FileNotFoundError:
-        return False, "kubectl not found in PATH"
+        # #452/#737: missing prerequisite binary = caller-error (exit 2)
+        return False, f"{CALLER_ERROR_PREFIX}kubectl not found in PATH"
 
 
 # ---------------------------------------------------------------------------
@@ -194,7 +203,9 @@ def verify_health(tenant, prometheus_url, dry_run=False):
 
     data, err = http_get_json(url, headers={"Accept": "application/json"})
     if err:
-        return False, f"Prometheus query failed: {err}"
+        # #452/#737: cannot reach Prometheus = caller-error (transport), not a
+        # cutover finding. Tag with the machine-readable prefix.
+        return False, f"{CALLER_ERROR_PREFIX}Prometheus query failed: {err}"
     results = data.get("data", {}).get("result", [])
     if not results:
         return False, f"No threshold metrics found for tenant={tenant}"
@@ -217,6 +228,9 @@ def apply_cutover(readiness_json, tenant, prometheus_url,
         "steps_completed": [],
         "failed_step": None,
         "message": "",
+        # #452/#737: True when the failure was caller-error class
+        # (load/transport/env precondition) → maps to EXIT_CALLER_ERROR (2).
+        "caller_error": False,
         "timestamp": datetime.datetime.now(
             datetime.timezone.utc
         ).isoformat(),
@@ -226,8 +240,11 @@ def apply_cutover(readiness_json, tenant, prometheus_url,
     try:
         readiness = load_cutover_readiness(readiness_json)
     except (FileNotFoundError, ValueError, json.JSONDecodeError) as exc:
+        # #452/#737: missing/malformed readiness JSON = input/load precondition
+        # failure = caller-error (exit 2), not a cutover finding (exit 1).
         report["failed_step"] = "load_readiness"
         report["message"] = str(exc)
+        report["caller_error"] = True
         return report
 
     if not readiness.get("ready") and not force:
@@ -264,6 +281,11 @@ def apply_cutover(readiness_json, tenant, prometheus_url,
             print(f"  ✓ {msg}")
             report["steps_completed"].append(name)
         else:
+            # #452/#737: a step may flag a caller-error-class failure
+            # (transport/env) via CALLER_ERROR_PREFIX; strip it for display.
+            if msg.startswith(CALLER_ERROR_PREFIX):
+                report["caller_error"] = True
+                msg = msg[len(CALLER_ERROR_PREFIX):]
             print(f"  ✗ {msg}")
             report["failed_step"] = name
             report["message"] = msg
@@ -342,7 +364,12 @@ def main():
         print(f"\n❌ Cutover failed at step: {step}")
         print(f"   Reason: {msg}")
         print("   See shadow-monitoring-sop.md §7.2 for rollback steps.")
-        sys.exit(1)
+        # #452/#737: caller-error (bad/missing readiness JSON, unreachable
+        # Prometheus, missing kubectl) → exit 2; genuine cutover-step failure
+        # (rollback-worthy finding) → exit 1.
+        if report.get("caller_error"):
+            sys.exit(EXIT_CALLER_ERROR)
+        sys.exit(EXIT_VIOLATION)
 
 
 if __name__ == "__main__":

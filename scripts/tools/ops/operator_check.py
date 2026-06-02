@@ -27,6 +27,13 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))
 from _lib_python import detect_cli_lang, http_get_json  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+
+# #452/#737: kubectl return codes that signal a caller-error-class failure
+# (the tool could not reach/run kubectl), distinct from rc==1 which means
+# the resource is genuinely absent (a finding). 127=binary missing (mapped
+# from FileNotFoundError), 124=timeout (mapped from TimeoutExpired).
+_KUBECTL_CALLER_ERROR_RCS = frozenset({124, 127})
 
 
 # i18n strings
@@ -75,16 +82,21 @@ def i18n(key: str, lang: str = "en") -> str:
 
 class CheckResult:
     """Single check result."""
-    def __init__(self, name: str, status: str, detail: str = ""):
+    def __init__(self, name: str, status: str, detail: str = "",
+                 caller_error: bool = False):
         self.name = name
         self.status = status  # "pass", "warn", "fail", "skip"
         self.detail = detail
+        # #452/#737: True when a "fail" was caused by a caller-error-class
+        # condition (kubectl unreachable/missing/timeout), not a finding.
+        self.caller_error = caller_error
 
     def to_dict(self) -> dict:
         return {
             "check": self.name,
             "status": self.status,
             "detail": self.detail,
+            "caller_error": self.caller_error,
         }
 
 
@@ -122,7 +134,10 @@ class OperatorChecker:
         )
         status = "pass" if rc == 0 else "fail"
         detail = i18n("operator_found", self.lang) if rc == 0 else "not found"
-        return CheckResult(i18n("check_operator", self.lang), status, detail)
+        # #452/#737: kubectl missing/timeout = caller-error, not "not deployed".
+        ce = rc in _KUBECTL_CALLER_ERROR_RCS
+        return CheckResult(i18n("check_operator", self.lang), status, detail,
+                           caller_error=ce)
 
     def check_prometheus_rule_status(self) -> CheckResult:
         """Check 2: PrometheusRule resources loaded."""
@@ -141,7 +156,11 @@ class OperatorChecker:
 
         status = "pass" if loaded == expected > 0 else ("warn" if loaded > 0 else "fail")
         detail = f"{loaded}/{expected}" if expected > 0 else f"{loaded}"
-        return CheckResult(i18n("check_rules", self.lang), status, detail)
+        # #452/#737: a kubectl env failure (missing/timeout) yields rc 127/124
+        # → loaded==0 → mislabeled "fail"; flag it as caller-error instead.
+        ce = rc in _KUBECTL_CALLER_ERROR_RCS
+        return CheckResult(i18n("check_rules", self.lang), status, detail,
+                           caller_error=ce)
 
     def check_servicemonitor_status(self) -> CheckResult:
         """Check 3: ServiceMonitor for threshold-exporter."""
@@ -155,7 +174,10 @@ class OperatorChecker:
             found = False
         status = "pass" if found else "fail"
         detail = i18n("monitor_found", self.lang) if found else i18n("monitor_missing", self.lang)
-        return CheckResult(i18n("check_monitor", self.lang), status, detail)
+        # #452/#737: kubectl env failure → not "found" → mislabeled "fail".
+        ce = rc in _KUBECTL_CALLER_ERROR_RCS
+        return CheckResult(i18n("check_monitor", self.lang), status, detail,
+                           caller_error=ce)
 
     def check_alertmanager_config(self) -> CheckResult:
         """Check 4: AlertmanagerConfig resources."""
@@ -269,11 +291,22 @@ class OperatorChecker:
         print(json.dumps(report, indent=2))
 
     def exit_code(self) -> int:
-        """Return exit code based on checks."""
+        """Return exit code based on checks.
+
+        #452/#737: a caller-error-class failure (kubectl unreachable/missing/
+        timeout) maps to EXIT_CALLER_ERROR (2) even outside --ci, since the
+        tool genuinely could not do its job. Genuine "fail" findings only gate
+        the run in --ci mode (EXIT_VIOLATION).
+        """
+        caller_error = any(
+            c.status == "fail" and c.caller_error for c in self.checks
+        )
+        if caller_error:
+            return EXIT_CALLER_ERROR
         if not self.args.ci:
-            return 0
+            return EXIT_OK
         fail_count = sum(1 for c in self.checks if c.status == "fail")
-        return 1 if fail_count > 0 else 0
+        return EXIT_VIOLATION if fail_count > 0 else EXIT_OK
 
 
 def main():

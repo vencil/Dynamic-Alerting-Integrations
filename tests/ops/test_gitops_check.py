@@ -61,6 +61,7 @@ import pytest
 import yaml
 
 import gitops_check as gc
+from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────
@@ -857,12 +858,12 @@ class TestMainEdgeCases:
     """Test main() edge cases and error handling."""
 
     def test_no_subcommand(self, capsys):
-        """No subcommand → print help and exit 1."""
+        """No subcommand → print help and exit caller error."""
         with patch("sys.argv", ["gitops-check"]):
             with pytest.raises(SystemExit) as exc_info:
                 gc.main()
 
-        assert exc_info.value.code == 1
+        assert exc_info.value.code == EXIT_CALLER_ERROR
 
     def test_invalid_subcommand(self, capsys):
         """Invalid subcommand → argparse error."""

@@ -34,9 +34,15 @@ Exit code 0 = no dangling references, 1 = found unresolved references.
 """
 from __future__ import annotations
 
+import os
 import re
 import sys
 from pathlib import Path
+
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _THIS_DIR)  # Docker flat layout
+sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 REF_ATTRS = (
     "aria-labelledby",
@@ -190,7 +196,7 @@ def main(argv: list[str]) -> int:
         print("usage: check_aria_references.py <file.jsx> [...]")
         print("\nStatic ARIA id/reference cross-checker for JSX portal tools.")
         print("Exit 0 = clean; 1 = dangling refs found; 2 = usage error.")
-        return 0 if len(argv) >= 2 else 2
+        return EXIT_OK if len(argv) >= 2 else EXIT_CALLER_ERROR
     overall_ok = True
     for p in argv[1:]:
         path = Path(p)
@@ -212,7 +218,7 @@ def main(argv: list[str]) -> int:
             print(f"    !! L{line} {attr} ({kind}) -> {val!r}")
         if dangling:
             overall_ok = False
-    return 0 if overall_ok else 1
+    return EXIT_OK if overall_ok else EXIT_VIOLATION
 
 
 if __name__ == "__main__":

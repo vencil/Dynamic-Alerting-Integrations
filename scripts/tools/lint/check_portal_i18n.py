@@ -17,9 +17,15 @@ Exit codes:
 
 import argparse
 import json
+import os
 import re
 import sys
 from pathlib import Path
+
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _THIS_DIR)  # Docker flat layout
+sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
+from _lib_exitcodes import EXIT_VIOLATION  # noqa: E402
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent.parent.parent
@@ -210,7 +216,7 @@ def main():
         print(format_text_report(findings, fix_hint=args.fix_hint))
 
     if args.ci and findings:
-        sys.exit(1)
+        sys.exit(EXIT_VIOLATION)
 
 
 if __name__ == "__main__":

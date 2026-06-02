@@ -422,7 +422,7 @@ class TestCLI:
         cli_argv("alert_correlate", "--window", "invalid")
         with pytest.raises(SystemExit) as exc_info:
             ac.main()
-        assert exc_info.value.code == 1
+        assert exc_info.value.code == 2  # EXIT_CALLER_ERROR (#452: bad --window arg)
 
     def test_main_ci_mode_critical(self, monkeypatch, tmp_path, cli_argv):
         """CI mode exits 1 when critical root cause found."""

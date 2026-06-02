@@ -17,6 +17,7 @@ sys.path.insert(0, os.path.join(_REPO, 'scripts', 'tools', 'lint'))
 sys.path.insert(0, os.path.join(_REPO, 'scripts', 'tools'))
 
 from check_routing_profiles import _collect_data, validate  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 
 
 # ===========================================================================
@@ -392,7 +393,7 @@ class TestCLI:
         assert 'bad-ref' in result.stderr
 
     def test_missing_config_dir(self):
-        """Non-existent config-dir → exit 1."""
+        """Non-existent config-dir → exit 2 (caller/environment error, #452)."""
         import subprocess
         script = os.path.join(
             _REPO, 'scripts', 'tools', 'lint', 'check_routing_profiles.py')
@@ -400,7 +401,7 @@ class TestCLI:
             [sys.executable, script, '--config-dir', '/nonexistent/path'],
             capture_output=True, text=True, encoding='utf-8'
         )
-        assert result.returncode == 1
+        assert result.returncode == EXIT_CALLER_ERROR
 
     def test_warn_only_no_strict(self, config_dir):
         """Warnings without --strict → exit 0."""

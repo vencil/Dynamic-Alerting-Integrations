@@ -59,6 +59,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
@@ -408,12 +409,12 @@ def main() -> int:
     probe = _run_git(["rev-parse", "--git-dir"])
     if probe.returncode != 0:
         print("⚠ not a git repo — skipping HEAD blob scan")
-        return 2
+        return EXIT_CALLER_ERROR
 
     paths = _list_tracked_files()
     if not paths:
         print("⚠ git index has no tracked files")
-        return 0
+        return EXIT_OK
 
     violations: list[BlobViolation] = []
     scanned = 0
@@ -477,7 +478,7 @@ def main() -> int:
 
     if not violations:
         print(f"✓ {scanned} HEAD blob(s) clean ({skipped} skipped)")
-        return 0
+        return EXIT_OK
 
     by_file: dict[str, list[BlobViolation]] = {}
     for v in violations:
@@ -502,7 +503,7 @@ def main() -> int:
         "dev-rules #11 forbids that pattern."
     )
 
-    return 1 if args.ci else 0
+    return EXIT_VIOLATION if args.ci else EXIT_OK
 
 
 if __name__ == "__main__":

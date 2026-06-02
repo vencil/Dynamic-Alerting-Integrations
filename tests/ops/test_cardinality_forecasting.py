@@ -513,10 +513,10 @@ class TestCLI:
 
     @patch("cardinality_forecasting.http_get_json")
     def test_main_no_data(self, mock_get, capsys):
-        """無資料 → exit 1。"""
+        """無資料（連線失敗）→ exit 2 (caller error, #452)。"""
         mock_get.return_value = (None, "connection error")
         exit_code = cf.main(["--prometheus", "http://prom:9090"])
-        assert exit_code == 1
+        assert exit_code == 2  # EXIT_CALLER_ERROR (#452: cannot reach Prometheus)
 
     @patch("cardinality_forecasting.http_get_json")
     def test_main_tenant_filter(self, mock_get, capsys):

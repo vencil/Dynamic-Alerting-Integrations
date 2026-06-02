@@ -8,6 +8,7 @@ from unittest import mock
 import pytest
 import yaml
 
+from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 from da_assembler import (  # noqa: E402
     _content_sha256,
     _output_filename,
@@ -189,7 +190,7 @@ class TestRenderCrFile:
             cr_path.write_text("kind: NotAThresholdConfig\nspec: {}",
                                encoding="utf-8")
             rc = render_cr_file(cr_path, Path(d))
-            assert rc == 1
+            assert rc == EXIT_CALLER_ERROR
 
     def test_dry_run(self):
         """測試乾執行模式。"""
@@ -210,13 +211,13 @@ class TestRenderCrFile:
             cr_path = Path(d) / "bad.yaml"
             cr_path.write_text(": : invalid yaml {{{", encoding="utf-8")
             rc = render_cr_file(cr_path, Path(d))
-            assert rc == 1
+            assert rc == EXIT_CALLER_ERROR
 
     def test_nonexistent_file(self):
         """測試不存在的檔案。"""
         with tempfile.TemporaryDirectory() as d:
             rc = render_cr_file(Path(d) / "nonexistent.yaml", Path(d))
-            assert rc == 1
+            assert rc == EXIT_CALLER_ERROR
 
     def test_empty_file(self):
         """測試空檔案。"""
@@ -224,7 +225,7 @@ class TestRenderCrFile:
             cr_path = Path(d) / "empty.yaml"
             cr_path.write_text("", encoding="utf-8")
             rc = render_cr_file(cr_path, Path(d))
-            assert rc == 1
+            assert rc == EXIT_CALLER_ERROR
 
 
 class TestSignalHandler:
@@ -332,13 +333,13 @@ class TestRunOnce:
             assert rc == 0
             mock_api.list_namespaced_custom_object.assert_called_once()
 
-    def test_api_error_returns_1(self):
+    def test_api_error_returns_caller_error(self):
         mock_api = mock.MagicMock()
         mock_api.list_cluster_custom_object.side_effect = Exception("timeout")
 
         with tempfile.TemporaryDirectory() as d:
             rc = run_once(mock_api, Path(d))
-            assert rc == 1
+            assert rc == EXIT_CALLER_ERROR
 
     def test_empty_items(self):
         mock_api = mock.MagicMock()
@@ -408,4 +409,4 @@ class TestMain:
                 "--once",
             ]):
                 rc = da_assembler.main()
-            assert rc == 1
+            assert rc == EXIT_CALLER_ERROR

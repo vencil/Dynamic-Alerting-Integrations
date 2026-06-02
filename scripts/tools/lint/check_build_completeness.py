@@ -32,6 +32,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 
 def check_bidirectional(command_map: dict, build_tools: set) -> list:
@@ -118,11 +119,11 @@ def main():
     if not ENTRYPOINT_PATH.is_file():
         print(f"ERROR: entrypoint.py 不存在: {ENTRYPOINT_PATH}",
               file=sys.stderr)
-        sys.exit(2)
+        sys.exit(EXIT_CALLER_ERROR)
     if not BUILD_SH_PATH.is_file():
         print(f"ERROR: build.sh 不存在: {BUILD_SH_PATH}",
               file=sys.stderr)
-        sys.exit(2)
+        sys.exit(EXIT_CALLER_ERROR)
 
     command_map = parse_command_map(ENTRYPOINT_PATH)
     build_tools = parse_build_sh_tools(BUILD_SH_PATH)
@@ -135,8 +136,8 @@ def main():
 
     has_errors = any(s == "error" for s, _ in errors)
     if args.ci and has_errors:
-        sys.exit(1)
-    sys.exit(0)
+        sys.exit(EXIT_VIOLATION)
+    sys.exit(EXIT_OK)
 
 
 if __name__ == "__main__":

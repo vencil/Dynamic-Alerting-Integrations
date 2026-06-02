@@ -13,10 +13,16 @@ Usage:
 """
 
 import argparse
+import os
 import sys
 from pathlib import Path
 from typing import Dict, List, Tuple
 import yaml
+
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _THIS_DIR)  # Docker flat layout
+sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 
 def extract_rule_counts(yaml_file: Path) -> Tuple[int, int]:
@@ -246,7 +252,7 @@ def main():
         rows, total_records, total_alerts = generate_table_rows(args.rule_packs_dir)
     except FileNotFoundError as e:
         print(f"Error: {e}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
 
     generated_content = generate_readme_content(rows, total_records, total_alerts)
     readme_path = args.rule_packs_dir / "README.md"
@@ -258,7 +264,7 @@ def main():
                 current_content = f.read()
         except IOError as e:
             print(f"Error: Failed to read {readme_path}: {e}", file=sys.stderr)
-            sys.exit(1)
+            sys.exit(EXIT_CALLER_ERROR)
 
         if current_content != generated_content:
             print(
@@ -269,10 +275,10 @@ def main():
                 "Run: python3 scripts/tools/generate_rule_pack_readme.py --update",
                 file=sys.stderr,
             )
-            sys.exit(1)
+            sys.exit(EXIT_VIOLATION)
         else:
             print(f"OK: {readme_path} is in sync.", file=sys.stderr)
-            sys.exit(0)
+            sys.exit(EXIT_OK)
 
     elif args.update:
         # Write to file
@@ -283,7 +289,7 @@ def main():
             print(f"Updated {readme_path}", file=sys.stderr)
         except IOError as e:
             print(f"Error: Failed to write {readme_path}: {e}", file=sys.stderr)
-            sys.exit(1)
+            sys.exit(EXIT_CALLER_ERROR)
 
     else:
         # Default: dry-run (print to stdout)

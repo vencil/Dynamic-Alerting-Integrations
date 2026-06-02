@@ -41,6 +41,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 
@@ -428,8 +429,8 @@ def main():
                   f"{len(nav_issues)} 導航問題")
 
     if args.ci and errors:
-        sys.exit(1)
-    sys.exit(0)
+        sys.exit(EXIT_VIOLATION)
+    sys.exit(EXIT_OK)
 
 
 if __name__ == "__main__":

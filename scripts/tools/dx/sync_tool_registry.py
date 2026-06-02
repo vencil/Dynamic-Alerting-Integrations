@@ -32,6 +32,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent.parent.parent
@@ -447,7 +448,7 @@ def main():
 
     if not REGISTRY_PATH.exists():
         print(f"ERROR: Registry not found: {REGISTRY_PATH}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
 
     tools = parse_registry(str(REGISTRY_PATH))
     print(f"Loaded {len(tools)} tools from registry")
@@ -491,11 +492,11 @@ def main():
             print("Dry run: no files modified. Run without --dry-run to apply.")
         else:
             print("✅ Sync complete. Run `make lint-docs` to verify.")
-        sys.exit(1 if args.dry_run else 0)
+        sys.exit(EXIT_VIOLATION if args.dry_run else EXIT_OK)
     else:
         print()
         print("✅ Everything in sync — no changes needed.")
-        sys.exit(0)
+        sys.exit(EXIT_OK)
 
 
 if __name__ == "__main__":

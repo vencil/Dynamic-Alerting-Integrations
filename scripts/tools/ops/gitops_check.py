@@ -40,6 +40,7 @@ import yaml
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from _lib_python import detect_cli_lang, format_json_report  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Initialization
@@ -487,7 +488,7 @@ def main() -> None:
 
     if not args.action:
         parser.print_help()
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
 
     # Run appropriate check
     timestamp = datetime.now(timezone.utc).isoformat()
@@ -533,10 +534,10 @@ def main() -> None:
     # Exit code
     if args.ci:
         # CI mode: only fail on "fail" status
-        sys.exit(0 if overall_status != "fail" else 1)
+        sys.exit(EXIT_OK if overall_status != "fail" else EXIT_VIOLATION)
     else:
         # Normal mode: fail on anything other than pass
-        sys.exit(0 if overall_status == "pass" else 1)
+        sys.exit(EXIT_OK if overall_status == "pass" else EXIT_VIOLATION)
 
 
 if __name__ == "__main__":

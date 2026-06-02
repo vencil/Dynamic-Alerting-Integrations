@@ -80,6 +80,8 @@ if hasattr(sys.stdout, "reconfigure"):
         pass
 
 sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))  # Repo subdir layout
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lint_helpers import parse_bypass_tag  # noqa: E402
 
 # Reuse Layer 1's scope + hygiene infrastructure verbatim so the two gates can
@@ -352,7 +354,7 @@ def main() -> int:
             "  Expected a '## 內部代號 — 禁止用於對外文件' section with a template table.",
             file=sys.stderr,
         )
-        return 2
+        return EXIT_CALLER_ERROR
 
     scan_paths = FULL_SCAN_PATHS if args.scope == "full" else DEFAULT_SCAN_PATHS
     files = iter_files(scan_paths)
@@ -442,14 +444,14 @@ def main() -> int:
 
     if hard == 0:
         print("OK no codename-gate violations.")
-        return 0
+        return EXIT_OK
 
     if bypass_reason:
         print(
             f"⚠️  BYPASSED via PR body: {bypass_reason}\n"
             f"   {hard} hard finding(s) above are author-acknowledged intentional."
         )
-        return 0
+        return EXIT_OK
 
     print(
         f"FAIL {hard} hard violation(s).\n"
@@ -460,7 +462,7 @@ def main() -> int:
         "    reason: <≥30 words>\n"
         "  See docs/internal/lint-policy.md §4."
     )
-    return 1 if args.ci else 0
+    return EXIT_VIOLATION if args.ci else EXIT_OK
 
 
 if __name__ == "__main__":

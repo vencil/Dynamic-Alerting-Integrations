@@ -24,6 +24,11 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Set, Tuple, Optional
 
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _THIS_DIR)  # Docker flat layout
+sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+
 
 # =============================================================================
 # Front Matter Parsing
@@ -397,12 +402,12 @@ def main():
 
     if not changed_file_paths:
         print('Error: No files specified', file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
 
     docs_dir = Path(args.docs_dir)
     if not docs_dir.exists():
         print(f'Error: docs directory not found: {docs_dir}', file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
 
     # Load all doc metadata
     all_metadata = {}
@@ -437,7 +442,7 @@ def main():
         print(f'Warning: No valid doc files found in {changed_file_paths}', file=sys.stderr)
         if args.json:
             print(json.dumps({'error': 'No valid doc files found'}, indent=2))
-        sys.exit(0)
+        sys.exit(EXIT_OK)
 
     # Analyze impact
     impact_analysis = {}
@@ -462,9 +467,9 @@ def main():
 
     # CI mode
     if args.ci and bilingual_sync_needed:
-        sys.exit(1)
+        sys.exit(EXIT_VIOLATION)
 
-    sys.exit(0)
+    sys.exit(EXIT_OK)
 
 
 if __name__ == '__main__':

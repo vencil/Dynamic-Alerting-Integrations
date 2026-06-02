@@ -56,6 +56,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION  # noqa: E402
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -276,7 +277,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     if not targets:
         print(f"no planning docs matched (glob={args.glob}); nothing to check",
               file=sys.stderr)
-        return 0
+        return EXIT_OK
 
     offenders_by_path: dict[Path, list[tuple[int, int, str, str]]] = {}
     any_bad = False
@@ -291,7 +292,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     if not any_bad:
         scanned = sum(1 for p in targets if p.exists())
         print(f"OK: scanned {scanned} planning doc(s); no §12.1 row exceeds {args.limit} chars.")
-        return 0
+        return EXIT_OK
 
     report(offenders_by_path, args.limit)
     if args.auto_archive_suggest:
@@ -306,7 +307,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         " for rows that already have an archive §S#NN section.",
         file=sys.stderr,
     )
-    return 1
+    return EXIT_VIOLATION
 
 
 if __name__ == "__main__":

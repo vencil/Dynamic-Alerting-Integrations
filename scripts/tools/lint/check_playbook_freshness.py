@@ -28,6 +28,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION  # noqa: E402
 
 # Playbook 檔案清單（相對於 repo root）
 PLAYBOOK_PATHS = [
@@ -175,12 +176,12 @@ def main() -> None:
     version_str = get_project_version(repo_root)
     if not version_str:
         print("⚠️  無法取得目前專案版號，跳過檢查")
-        sys.exit(0)
+        sys.exit(EXIT_OK)
 
     current = parse_version(version_str)
     if not current:
         print(f"⚠️  無法解析版號: {version_str}")
-        sys.exit(0)
+        sys.exit(EXIT_OK)
 
     print(f"專案版號: v{version_str}")
     print(f"退火閾值: minor 差距 >= {MAX_MINOR_DRIFT}")
@@ -253,11 +254,11 @@ def main() -> None:
               f"（{stale_count} Playbook + {ll_stale_count} LL 條目）")
         print("   退火三選一：固化為正式規範 / 標記 🛡️ 已自動化 / 歸檔至 archive/")
         if args.check:
-            sys.exit(1)
+            sys.exit(EXIT_VIOLATION)
     elif missing_count > 0:
         print(f"⚠️  {missing_count} 個 Playbook 缺少 verified-at-version 欄位")
         if args.check:
-            sys.exit(1)
+            sys.exit(EXIT_VIOLATION)
     else:
         print("✅ 所有 Playbook 知識退火狀態正常")
 

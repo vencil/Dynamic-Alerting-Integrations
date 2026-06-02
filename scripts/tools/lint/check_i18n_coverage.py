@@ -27,16 +27,22 @@ Flags:
 
 import argparse
 import json
+import os
 import re
 import sys
 from pathlib import Path
 from typing import Dict, List, Tuple
 
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _THIS_DIR)  # Docker flat layout
+sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+
 try:
     import yaml
 except ImportError:
     print("Error: PyYAML is required. Install with: pip install pyyaml", file=sys.stderr)
-    sys.exit(1)
+    sys.exit(EXIT_CALLER_ERROR)
 
 
 class JSXCoverageChecker:
@@ -402,7 +408,7 @@ def print_text_report(
     ) // 3
     print(f"Overall: {total_coverage}% average bilingual coverage\n")
 
-    return 0
+    return EXIT_OK
 
 
 def print_json_report(
@@ -441,7 +447,7 @@ def print_json_report(
     ) // 3
 
     print(json.dumps(report, indent=2))
-    return 0
+    return EXIT_OK
 
 
 def main():
@@ -480,15 +486,15 @@ def main():
     # Check for required directories
     if not portal_src_dir.exists():
         print(f"Error: portal src directory not found at {portal_src_dir}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
 
     if not rule_pack_dir.exists():
         print(f"Error: rule-packs directory not found at {rule_pack_dir}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
 
     if not scripts_dir.exists():
         print(f"Error: scripts/tools directory not found at {scripts_dir}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
 
     # Run checks (JSXCoverageChecker name kept for compatibility; it now
     # walks portal_src_dir not docs_dir).
@@ -526,7 +532,7 @@ def main():
                 f"threshold {thresholds['jsx']}%",
                 file=sys.stderr,
             )
-            exit_code = 1
+            exit_code = EXIT_VIOLATION
 
         if rule_pack_result["coverage_pct"] < thresholds["rule_packs"]:
             print(
@@ -534,7 +540,7 @@ def main():
                 f"threshold {thresholds['rule_packs']}%",
                 file=sys.stderr,
             )
-            exit_code = 1
+            exit_code = EXIT_VIOLATION
 
         if python_result["coverage_pct"] < thresholds["python_cli"]:
             print(
@@ -542,7 +548,7 @@ def main():
                 f"threshold {thresholds['python_cli']}%",
                 file=sys.stderr,
             )
-            exit_code = 1
+            exit_code = EXIT_VIOLATION
 
     return exit_code
 

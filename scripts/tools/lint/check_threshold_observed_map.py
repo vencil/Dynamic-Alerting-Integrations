@@ -59,6 +59,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION  # noqa: E402
 
 
 def run_check() -> dict[str, list[str]]:
@@ -112,13 +113,13 @@ def main(argv: list[str] | None = None) -> int:
             "scripts/tools/ops/metric_observed_map.yaml.",
             file=sys.stderr,
         )
-        return 1 if args.ci else 0
+        return EXIT_VIOLATION if args.ci else EXIT_OK
 
     print(
         f"\n[OK] observed-map consistent "
         f"({len(infos)} known-deferred, {len(orphans)} orphan, {len(gaps)} gap)."
     )
-    return 0
+    return EXIT_OK
 
 
 if __name__ == "__main__":

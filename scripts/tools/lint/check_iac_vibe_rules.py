@@ -81,6 +81,8 @@ if hasattr(sys.stdout, "reconfigure"):
         pass
 
 sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))  # Repo subdir layout
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION  # noqa: E402
 from _lint_helpers import parse_bypass_tag  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -413,7 +415,7 @@ def main() -> int:
         for df in dockerfiles:
             ctx = DOCKERFILE_CONTEXTS.get(df, "??? UNREGISTERED")
             print(f"  {df}  ->  {ctx}")
-        return 0
+        return EXIT_OK
 
     findings = collect_findings(dockerfiles)
     engine_error = findings.pop("__engine_error__", None)
@@ -436,7 +438,7 @@ def main() -> int:
             f"   容器 SAST 第 1 層通過：0 個阻擋項；WARN 為 baseline High "
             f"（記於 docs/internal/iac-lint-baseline.md），不擋 merge。"
         )
-        return 0
+        return EXIT_OK
 
     # Bypass check (lint-policy.md §4) — only downgrades BLOCK.
     pr_body = _read_pr_body(args.pr_body_file)
@@ -447,7 +449,7 @@ def main() -> int:
             f"   {n_block} BLOCK finding(s) above are author-acknowledged; "
             f"reviewer must confirm the bypass is justified."
         )
-        return 0
+        return EXIT_OK
 
     print(
         f"\nFAIL Container SAST Layer 1 — {n_block} BLOCK / {n_warn} WARN / "
@@ -460,7 +462,7 @@ def main() -> int:
         f"     reason: <>=30 words>\n"
         f"   詳見 docs/internal/lint-policy.md §4 與 epic #448 / TRK-311。"
     )
-    return 1 if args.ci else 0
+    return EXIT_VIOLATION if args.ci else EXIT_OK
 
 
 if __name__ == "__main__":

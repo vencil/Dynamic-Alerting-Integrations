@@ -66,6 +66,7 @@ from _lib_python import (  # noqa: E402
     load_tenant_configs,
     parse_duration_seconds,
 )
+from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 import _observed_map_lib as observed_map_lib  # noqa: E402
 
 _LANG = detect_cli_lang()
@@ -859,19 +860,19 @@ def main() -> None:
                if _LANG == 'zh' else
                "--config-dir is required (or use --generate-observed-map)")
         print(msg, file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
 
     if not Path(args.config_dir).is_dir():
         msg = f"配置目錄不存在: {args.config_dir}" if _LANG == 'zh' else f"Config directory not found: {args.config_dir}"
         print(msg, file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
 
     # Validate lookback
     lookback_secs = parse_duration_seconds(args.lookback)
     if lookback_secs is None:
         msg = f"無效的 lookback 值: {args.lookback}" if _LANG == 'zh' else f"Invalid lookback value: {args.lookback}"
         print(msg, file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
 
     reports = run_analysis(
         args.config_dir,

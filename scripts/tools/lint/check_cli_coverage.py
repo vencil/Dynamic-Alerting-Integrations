@@ -19,11 +19,17 @@ Exit codes:
 
 import argparse
 import json
+import os
 import re
 import sys
 from pathlib import Path
 
-from _lint_helpers import parse_command_map_keys, REPO_ROOT, ENTRYPOINT_PATH
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _THIS_DIR)  # Docker flat layout
+sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION  # noqa: E402
+
+from _lint_helpers import parse_command_map_keys, REPO_ROOT, ENTRYPOINT_PATH  # noqa: E402
 
 # Make stdout tolerate non-ASCII (the ⊘ warning glyph) on Windows shells
 # (cp950, cp1252) so a Windows-host dev running this guard gets a report
@@ -297,8 +303,8 @@ def main():
 
     has_errors = any(s == "error" for s, _ in errors)
     if args.ci and has_errors:
-        sys.exit(1)
-    sys.exit(0)
+        sys.exit(EXIT_VIOLATION)
+    sys.exit(EXIT_OK)
 
 
 if __name__ == "__main__":

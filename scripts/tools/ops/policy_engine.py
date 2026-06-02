@@ -41,6 +41,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Repo-layout import compatibility (stripped in Docker build)
@@ -682,7 +683,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             print("未找到策略規則。在 _defaults.yaml 新增 _policies 或指定 --policy。")
         else:
             print("No policy rules found. Add _policies to _defaults.yaml or specify --policy.")
-        return 0
+        return EXIT_OK
 
     # Load tenant configs
     tenant_configs = load_tenant_configs(args.config_dir)
@@ -691,7 +692,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             print(f"未找到 tenant 配置於 {args.config_dir}")
         else:
             print(f"No tenant configs found in {args.config_dir}")
-        return 0
+        return EXIT_OK
 
     # Evaluate
     result = evaluate_policies(rules, tenant_configs)
@@ -704,8 +705,8 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     # Exit code
     if args.ci and not result.passed:
-        return 1
-    return 0
+        return EXIT_VIOLATION
+    return EXIT_OK
 
 
 if __name__ == "__main__":

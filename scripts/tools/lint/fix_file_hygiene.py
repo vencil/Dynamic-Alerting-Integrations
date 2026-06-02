@@ -11,6 +11,11 @@ Usage:
 import os
 import sys
 
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _THIS_DIR)  # Docker flat layout
+sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+
 
 def fix_file(path: str, check_only: bool) -> bool:
     """Return True if file had issues."""
@@ -63,18 +68,18 @@ def main() -> int:
         if a.startswith("-") and a not in valid_flags:
             print(f"Unknown option: {a}", file=sys.stderr)
             print("Usage: fix_file_hygiene.py [--check] [files...]", file=sys.stderr)
-            return 2
+            return EXIT_CALLER_ERROR
     if "--help" in args or "-h" in args:
         print("Usage: fix_file_hygiene.py [--check] [files...]")
         print("Fix file hygiene: strip null bytes, ensure EOF newline.")
         print("Options:")
         print("  --check    Report issues without fixing")
-        return 0
+        return EXIT_OK
     check_only = "--check" in args
     files = [f for f in args if not f.startswith("--")]
 
     if not files:
-        return 0
+        return EXIT_OK
 
     modified = []
     for f in files:
@@ -84,8 +89,8 @@ def main() -> int:
     if modified:
         action = "would fix" if check_only else "fixed"
         print(f"file-hygiene: {action} {len(modified)} file(s)")
-        return 1
-    return 0
+        return EXIT_VIOLATION
+    return EXIT_OK
 
 
 if __name__ == "__main__":

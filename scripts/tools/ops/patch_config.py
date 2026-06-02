@@ -29,6 +29,11 @@ import json
 import tempfile
 import os
 
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _THIS_DIR)  # Docker flat layout
+sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
+from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
+
 
 def run_cmd(cmd):
     """Execute a command safely using list arguments (no shell=True)."""
@@ -38,7 +43,7 @@ def run_cmd(cmd):
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
     if result.returncode != 0:
         print(f"Error executing: {' '.join(cmd)}\n{result.stderr}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
     return result.stdout.strip()
 
 
@@ -55,7 +60,7 @@ def patch_legacy(cm_data, tenant, metric_key, value):
     config_yaml_str = cm_data.get("data", {}).get("config.yaml", "")
     if not config_yaml_str:
         print("Error: config.yaml not found in ConfigMap.", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
 
     config = yaml.safe_load(config_yaml_str)
 

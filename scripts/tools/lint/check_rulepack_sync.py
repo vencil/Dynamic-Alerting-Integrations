@@ -55,6 +55,7 @@ try:
 except Exception:  # pragma: no cover - compat shim optional
     def try_utf8_stdout() -> None:  # type: ignore
         pass
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 
 def _repo_root() -> Path:
@@ -193,7 +194,7 @@ def main() -> int:
     pack_files = sorted((repo / "rule-packs").glob("rule-pack-*.yaml"))
     if not pack_files:
         print("ERROR: no rule packs found under rule-packs/", file=sys.stderr)
-        return 2
+        return EXIT_CALLER_ERROR
 
     results = {}
     any_drift = False
@@ -206,7 +207,7 @@ def main() -> int:
                 any_drift = True
     except yaml.YAMLError as exc:
         print(f"ERROR: YAML parse failure: {exc}", file=sys.stderr)
-        return 2
+        return EXIT_CALLER_ERROR
 
     if args.json:
         print(json.dumps(results, ensure_ascii=False, indent=2))
@@ -225,8 +226,8 @@ def main() -> int:
         print("\n❌ Rule-pack copy drift detected. The 3 copies "
               "(rule-packs/ ↔ configmap ↔ operator) must match semantically.",
               file=sys.stderr)
-        return 1
-    return 0
+        return EXIT_VIOLATION
+    return EXIT_OK
 
 
 if __name__ == "__main__":

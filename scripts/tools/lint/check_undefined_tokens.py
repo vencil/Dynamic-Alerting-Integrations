@@ -67,6 +67,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
@@ -229,8 +230,8 @@ def _compute_exit_code(*, ci: bool, n_findings: int) -> int:
     | True  | >0         | 1    |
     """
     if not ci:
-        return 0
-    return 1 if n_findings > 0 else 0
+        return EXIT_OK
+    return EXIT_VIOLATION if n_findings > 0 else EXIT_OK
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -273,7 +274,7 @@ def main(argv: list[str] | None = None) -> int:
             f"reference will appear undefined. Aborting (probable misconfig).",
             file=sys.stderr,
         )
-        return 2
+        return EXIT_CALLER_ERROR
 
     paths = _resolve_target_paths(args)
     # Filter out the tokens-css itself from scanned paths (definitions
@@ -296,7 +297,7 @@ def main(argv: list[str] | None = None) -> int:
                 f"✓ no orphan tokens across {len(known)} definition(s)",
                 file=sys.stderr,
             )
-            return 0
+            return EXIT_OK
         print(
             f"⚠ {len(orphans)} orphan token(s) defined in "
             f"design-tokens.css but never referenced (warn-only):",
@@ -311,12 +312,12 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         # Always exit 0 in orphan mode — discovery, not enforcement.
-        return 0
+        return EXIT_OK
 
     if not paths:
         if args.ci:
             print("✓ no files matched scan target")
-        return 0
+        return EXIT_OK
 
     all_findings: list[UndefinedTokensFinding] = []
     for path in paths:
@@ -330,7 +331,7 @@ def main(argv: list[str] | None = None) -> int:
     if not all_findings:
         if args.ci:
             print(f"✓ no findings across {len(paths)} file(s)")
-        return 0
+        return EXIT_OK
 
     print(
         f"✗ {len(all_findings)} undefined-token reference(s) in "

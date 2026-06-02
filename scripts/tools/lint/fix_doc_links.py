@@ -23,6 +23,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 
 DOCS_DIR = os.path.join(os.path.dirname(__file__), '..', '..', 'docs')
 DOCS_DIR = os.path.normpath(DOCS_DIR)
@@ -162,7 +163,7 @@ def main():
 
     if not os.path.isdir(DOCS_DIR):
         print(f'ERROR: docs directory not found: {DOCS_DIR}', file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
 
     total_fixes = 0
     total_files = 0

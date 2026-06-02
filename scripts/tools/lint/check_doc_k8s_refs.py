@@ -31,10 +31,16 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from pathlib import Path
 from typing import Dict, List, NamedTuple
+
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _THIS_DIR)  # Docker flat layout
+sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 K8S_DIR = REPO_ROOT / "k8s"
@@ -192,7 +198,7 @@ def main() -> int:
         print(f"\n❌ {len(issues)} k8s-reference issue(s)", file=sys.stderr)
     else:
         print("✅ k8s manifest references are accurate")
-    return 1 if (issues and args.ci) else 0
+    return EXIT_VIOLATION if (issues and args.ci) else EXIT_OK
 
 
 if __name__ == "__main__":

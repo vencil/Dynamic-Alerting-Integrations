@@ -29,6 +29,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 
 try:
     import yaml
@@ -285,7 +286,7 @@ def main() -> None:
     if not conf_d.exists():
         print(f"❌ conf.d/ not found at {conf_d}", file=sys.stderr)
         print(f"   Use --conf-d to specify the path.", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
 
     scanner = ConfDScanner(conf_d)
     print(f"📂 Scanned {conf_d}: {len(scanner.tenants)} tenants, {len(scanner.defaults_data)} defaults files", file=sys.stderr)
@@ -317,13 +318,13 @@ def main() -> None:
     tid = args.tenant_id
     if tid not in scanner.tenants:
         print(f"❌ Tenant '{tid}' not found. Available: {', '.join(sorted(scanner.tenants.keys())[:10])}...", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
 
     # --diff mode
     if args.diff:
         if args.diff not in scanner.tenants:
             print(f"❌ Tenant '{args.diff}' not found.", file=sys.stderr)
-            sys.exit(1)
+            sys.exit(EXIT_CALLER_ERROR)
         result = scanner.diff_tenants(tid, args.diff)
         print(_output(result))
         return
@@ -333,7 +334,7 @@ def main() -> None:
         what_if_path = Path(args.what_if).resolve()
         if not what_if_path.exists():
             print(f"❌ --what-if file not found: {what_if_path}", file=sys.stderr)
-            sys.exit(1)
+            sys.exit(EXIT_CALLER_ERROR)
 
         # Baseline: current effective config
         baseline_effective = scanner.effective_config(tid)
@@ -344,7 +345,7 @@ def main() -> None:
             what_if_data = _load_yaml(what_if_path)
         except Exception as e:  # pragma: no cover — defensive
             print(f"❌ Failed to parse --what-if file: {e}", file=sys.stderr)
-            sys.exit(1)
+            sys.exit(EXIT_CALLER_ERROR)
 
         # Simulate: substitute if path matches existing chain entry; else append as lowest-priority override
         chain = scanner.defaults_chain[tid]

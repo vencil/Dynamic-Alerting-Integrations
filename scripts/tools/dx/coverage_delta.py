@@ -77,11 +77,17 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import xml.etree.ElementTree as ET
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Optional
+
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _THIS_DIR)  # Docker flat layout
+sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 
 @dataclass(frozen=True)
@@ -451,14 +457,14 @@ def main(argv: Optional[list] = None) -> int:
         after = parse_cobertura(Path(args.after))
     except (FileNotFoundError, ValueError) as e:
         print(f"ERROR: {e}", file=sys.stderr)
-        return 2
+        return EXIT_CALLER_ERROR
 
     report = compute_delta(before, after)
 
     if args.json and args.markdown:
         print("ERROR: --json and --markdown are mutually exclusive",
               file=sys.stderr)
-        return 2
+        return EXIT_CALLER_ERROR
 
     if args.json:
         print(json.dumps(report.to_dict(), indent=2))
@@ -476,8 +482,8 @@ def main(argv: Optional[list] = None) -> int:
         print("Threshold violations:", file=sys.stderr)
         for v in violations:
             print(f"  - {v}", file=sys.stderr)
-        return 1
-    return 0
+        return EXIT_VIOLATION
+    return EXIT_OK
 
 
 if __name__ == "__main__":

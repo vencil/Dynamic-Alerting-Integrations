@@ -43,6 +43,7 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_python import parse_duration_seconds  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Defaults (used when no policy file is provided)
@@ -334,7 +335,7 @@ def main():
 
     if not files:
         print("No YAML files found.")
-        sys.exit(0)
+        sys.exit(EXIT_OK)
 
     all_results = []
     files_checked = 0
@@ -361,7 +362,7 @@ def main():
         print("  ✅ All checks passed.")
 
     if args.ci and errors:
-        sys.exit(1)
+        sys.exit(EXIT_VIOLATION)
 
 
 if __name__ == "__main__":

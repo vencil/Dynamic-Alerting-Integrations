@@ -50,6 +50,7 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_python import load_yaml_file, is_disabled, http_get_json, write_json_secure, write_text_secure  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Default settings
@@ -493,11 +494,11 @@ def main():
     if not prometheus_available(args.prometheus):
         if args.skip_if_unavailable:
             print("Prometheus unavailable — skipping backtest (--skip-if-unavailable)")
-            sys.exit(0)
+            sys.exit(EXIT_OK)
         else:
             print(f"ERROR: Prometheus not reachable at {args.prometheus}", file=sys.stderr)
             print("Use --skip-if-unavailable to exit gracefully", file=sys.stderr)
-            sys.exit(1)
+            sys.exit(EXIT_CALLER_ERROR)
 
     # Extract changes
     if args.git_diff:
@@ -505,13 +506,13 @@ def main():
     elif args.config_dir:
         if not args.baseline:
             print("ERROR: --config-dir requires --baseline", file=sys.stderr)
-            sys.exit(1)
+            sys.exit(EXIT_CALLER_ERROR)
         changes = extract_changes_from_dirs(args.config_dir, args.baseline)
     elif args.tenant:
         if not args.metric or (args.old_value is None and args.new_value is None):
             print("ERROR: --tenant requires --metric and at least one of --old-value/--new-value",
                   file=sys.stderr)
-            sys.exit(1)
+            sys.exit(EXIT_CALLER_ERROR)
         changes = [{
             "tenant": args.tenant,
             "metric": args.metric,
@@ -520,11 +521,11 @@ def main():
         }]
     else:
         print("ERROR: Specify --git-diff, --config-dir, or --tenant", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
 
     if not changes:
         print("No threshold changes found.")
-        sys.exit(0)
+        sys.exit(EXIT_OK)
 
     # Run backtests
     lookback_seconds = parse_lookback(args.lookback)
@@ -557,7 +558,7 @@ def main():
     high_count = report["risk_summary"]["HIGH"]
     if high_count > 0 and not args.json:
         print(f"\n  WARNING: {high_count} HIGH risk change(s) — review before merging.")
-    sys.exit(1 if high_count > 0 else 0)
+    sys.exit(EXIT_VIOLATION if high_count > 0 else EXIT_OK)
 
 
 if __name__ == "__main__":

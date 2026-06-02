@@ -42,6 +42,7 @@ sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from diagnose import check as diagnose_check  # noqa: E402
 from diagnose import query_prometheus  # noqa: E402
 from _lib_python import write_json_secure  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 
 
 def discover_tenants(namespace="monitoring", configmap="threshold-config"):
@@ -243,7 +244,7 @@ def main():
 
     if not tenants:
         print("ERROR: No tenants found", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
 
     # Dry-run: just list tenants
     if args.dry_run:

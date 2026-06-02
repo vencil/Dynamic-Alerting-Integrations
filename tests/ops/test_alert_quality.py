@@ -522,13 +522,13 @@ class TestMain:
         assert exc_info.value.code == 1
 
     def test_invalid_period_exits(self, monkeypatch):
-        """無效 period 字串應 exit 1。"""
+        """無效 period 字串應 exit 2 (caller error, #452)。"""
         monkeypatch.setattr("sys.argv", [
             "alert_quality", "--prometheus", "http://prom", "--period", "xyz",
         ])
         with pytest.raises(SystemExit) as exc_info:
             aq.main()
-        assert exc_info.value.code == 1
+        assert exc_info.value.code == 2  # EXIT_CALLER_ERROR (#452: bad --period arg)
 
     def test_tenant_filter(self, monkeypatch, capsys):
         """--tenant 篩選傳遞到查詢。"""

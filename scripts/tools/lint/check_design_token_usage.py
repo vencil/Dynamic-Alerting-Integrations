@@ -50,6 +50,8 @@ if hasattr(sys.stdout, "reconfigure"):
 
 # Helpers from this lint family
 sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))  # Repo subdir layout
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lint_helpers import (  # noqa: E402
     DiffBaseMissingError,
     get_diff_added_lines,
@@ -374,7 +376,7 @@ def main():
             diff_base = args.diff_base or resolve_diff_base()
         except DiffBaseMissingError as e:
             print(f"ERROR: {e}", file=sys.stderr)
-            sys.exit(2)
+            sys.exit(EXIT_CALLER_ERROR)
         scan_mode = f"diff vs {diff_base}"
 
     hex_issues, px_issues = scan_jsx_files(diff_base=diff_base)
@@ -384,7 +386,7 @@ def main():
 
     if not all_files:
         print(f"✓ 設計 token 使用檢查通過 (mode={scan_mode})。")
-        sys.exit(0)
+        sys.exit(EXIT_OK)
 
     # Print results grouped by file
     for filename in sorted(all_files):
@@ -418,7 +420,7 @@ def main():
             f"   {total_violations} finding(s) above are author-acknowledged.\n"
             f"   Reviewer must confirm bypass is justified."
         )
-        sys.exit(0)
+        sys.exit(EXIT_OK)
 
     # Exit with appropriate code
     if args.ci and total_violations > 0:
@@ -429,8 +431,8 @@ def main():
             "  bypass-lint: design-token-usage\n"
             "  reason: <≥30 words explaining why this is legitimate>",
         )
-        sys.exit(1)
-    sys.exit(0)
+        sys.exit(EXIT_VIOLATION)
+    sys.exit(EXIT_OK)
 
 
 if __name__ == "__main__":

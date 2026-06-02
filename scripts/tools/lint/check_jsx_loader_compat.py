@@ -77,6 +77,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION  # noqa: E402
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
@@ -235,8 +236,8 @@ def _compute_exit_code(*, ci: bool, n_findings: int) -> int:
     | True  | >0         | 1    |
     """
     if not ci:
-        return 0
-    return 1 if n_findings > 0 else 0
+        return EXIT_OK
+    return EXIT_VIOLATION if n_findings > 0 else EXIT_OK
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -260,7 +261,7 @@ def main(argv: list[str] | None = None) -> int:
     if not paths:
         if args.ci:
             print("✓ no files matched scan target")
-        return 0
+        return EXIT_OK
 
     all_findings: list[JsxLoaderCompatFinding] = []
     for path in paths:
@@ -274,7 +275,7 @@ def main(argv: list[str] | None = None) -> int:
     if not all_findings:
         if args.ci:
             print(f"✓ no findings across {len(paths)} file(s)")
-        return 0
+        return EXIT_OK
 
     print(
         f"✗ {len(all_findings)} jsx-loader-compat violation(s) in "

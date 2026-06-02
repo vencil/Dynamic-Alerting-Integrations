@@ -33,6 +33,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 
 try:
     import yaml
@@ -207,7 +208,7 @@ def main() -> None:
     conf_d = Path(args.conf_d).resolve()
     if not conf_d.exists():
         print(f"❌ conf.d/ not found at {conf_d}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
 
     actions = plan_migration(conf_d)
 
@@ -243,7 +244,7 @@ def main() -> None:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
             if result.returncode != 0:
                 print(f"  ❌ Failed: {result.stderr.strip()}", file=sys.stderr)
-                sys.exit(1)
+                sys.exit(EXIT_CALLER_ERROR)
         print(f"\n✅ Migrated {len(ok)} files.")
         print(f"   Run `git status` to review, then `git commit`.")
     else:

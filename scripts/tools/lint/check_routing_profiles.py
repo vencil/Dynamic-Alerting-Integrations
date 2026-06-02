@@ -24,6 +24,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))
 from _lib_python import detect_cli_lang, load_yaml_file  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 _LANG = detect_cli_lang()
 
@@ -150,7 +151,7 @@ def main() -> None:
 
     if not os.path.isdir(args.config_dir):
         print(f"ERROR: config-dir not found: {args.config_dir}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
 
     data = _collect_data(args.config_dir)
     messages = validate(data, strict=args.strict)
@@ -161,7 +162,7 @@ def main() -> None:
         refs_count = len(data["profile_refs"])
         print(f"OK: {profiles_count} profile(s), {policies_count} policy(ies), "
               f"{refs_count} profile ref(s) — all valid")
-        sys.exit(0)
+        sys.exit(EXIT_OK)
 
     for msg in messages:
         print(msg, file=sys.stderr)
@@ -170,8 +171,8 @@ def main() -> None:
     has_warns = any(m.startswith("WARN") for m in messages)
 
     if has_errors or (args.strict and has_warns):
-        sys.exit(1)
-    sys.exit(0)
+        sys.exit(EXIT_VIOLATION)
+    sys.exit(EXIT_OK)
 
 
 if __name__ == "__main__":

@@ -317,13 +317,13 @@ class TestMainCLI:
         assert "dry-run" in out.lower() or "without --dry-run" in out
 
     def test_no_tenants_exits(self, monkeypatch, cli_argv):
-        """沒有 tenant 時 exit 1。"""
+        """沒有 tenant 時 exit 2 (caller error: nothing to act on, #452)。"""
         cli_argv("batch_diagnose", "--tenants", "")
         # Empty tenants string → discover from ConfigMap → mock empty
         with patch.object(bd, "discover_tenants", return_value=[]):
             with pytest.raises(SystemExit) as exc_info:
                 bd.main()
-            assert exc_info.value.code == 1
+            assert exc_info.value.code == 2  # EXIT_CALLER_ERROR (#452: no tenants found)
 
     def test_json_output(self, monkeypatch, capsys, cli_argv):
         """--json 輸出 JSON 格式。"""

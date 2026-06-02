@@ -20,6 +20,7 @@ lang: en
 | `_grar_render.py` | Output rendering + Alertmanager ConfigMap operations. |
 | `_grar_routes.py` | Route generation: tenant routes, override expansion, enforced routes, inhibit rules. |
 | `_grar_validate.py` | URL / domain / schema validation for generate_alertmanager_routes. |
+| `_observed_map_lib.py` | Shared SoT extractor for the threshold observed-map (#719). |
 | `alert_correlate.py` | 告警關聯分析引擎（離線 CLI 模式）。 |
 | `alert_quality.py` | 警報品質評估工具。 |
 | `analyze_rule_pack_gaps.py` | Rule Pack gap analysis for custom rules. |
@@ -187,6 +188,7 @@ lang: en
 | `check_skip_a11y_justification.py` | Require ticket-justification for `skipA11y: true` in E2E specs (testing-playbook §LL §5, TD-039). |
 | `check_structure.py` | Project structure enforcement. |
 | `check_subprocess_timeout.py` | flag subprocess calls without explicit timeout. |
+| `check_threshold_observed_map.py` | Drift-guard for the threshold observed-map (#719). |
 | `check_tool_registry_jsx_parity.py` | every tool-registry.yaml entry must have a backing .jsx file (and vice versa). |
 | `check_translation.py` | 自動化翻譯品質檢查 |
 | `check_undefined_tokens.py` | Detect JSX/CSS/HTML references to --da-* tokens not defined in design-tokens.css (with --report-orphans discovery mode). |
@@ -206,6 +208,7 @@ lang: en
 
 - `scripts/tools/_lib_compat.py`: Cross-platform compatibility helpers for Dynamic Alerting CLI tools.
 - `scripts/tools/_lib_constants.py`: Domain constants for Dynamic Alerting platform.
+- `scripts/tools/_lib_exitcodes.py`: Canonical exit-code contract for da-tools CLI tools (#452 Track A).
 - `scripts/tools/_lib_godispatch.py`: Shared dispatcher for da-tools subcommands that wrap a Go binary.
 - `scripts/tools/_lib_io.py`: File I/O and YAML helpers for Dynamic Alerting platform.
 - `scripts/tools/_lib_prometheus.py`: HTTP and Prometheus query helpers for Dynamic Alerting platform.

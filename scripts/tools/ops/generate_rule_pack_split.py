@@ -55,6 +55,8 @@ except ImportError:
     i18n_text = None
     write_text_secure = None
 
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+
 
 # ─ I18n Fallback ────────────────────────────────────────────────────────
 
@@ -475,10 +477,10 @@ def main():
 
     # Exit codes
     if report["validation"]["metric_mismatches"]:
-        sys.exit(1)
+        sys.exit(EXIT_VIOLATION)
     if report["status"] == "error":
-        sys.exit(2)
-    sys.exit(0)
+        sys.exit(EXIT_CALLER_ERROR)
+    sys.exit(EXIT_OK)
 
 
 if __name__ == "__main__":

@@ -20,6 +20,7 @@ from unittest.mock import patch
 import pytest
 
 import drift_detect as dd  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -528,27 +529,27 @@ class TestCLI:
         dd.main()
 
     def test_main_insufficient_dirs(self, tmp_path, monkeypatch, cli_argv):
-        """只給 1 個目錄 → exit 1。"""
+        """只給 1 個目錄 → caller error (bad args)。"""
         d = tmp_path / "only"
         d.mkdir()
         cli_argv("drift_detect", "--dirs", str(d))
         with pytest.raises(SystemExit) as exc_info:
             dd.main()
-        assert exc_info.value.code == 1
+        assert exc_info.value.code == EXIT_CALLER_ERROR
 
     def test_main_missing_dir(self, tmp_path, monkeypatch, cli_argv):
-        """不存在的目錄 → exit 1。"""
+        """不存在的目錄 → caller error (missing path)。"""
         d = tmp_path / "exists"
         d.mkdir()
         cli_argv("drift_detect", "--dirs", f"{d},{tmp_path / 'nope'}")
         with pytest.raises(SystemExit) as exc_info:
             dd.main()
-        assert exc_info.value.code == 1
+        assert exc_info.value.code == EXIT_CALLER_ERROR
 
     def test_main_label_mismatch(self, two_dirs, monkeypatch, cli_argv):
-        """--labels 數量不符 → exit 1。"""
+        """--labels 數量不符 → caller error (bad args)。"""
         dir_a, dir_b = two_dirs
         cli_argv("drift_detect", "--dirs", f"{dir_a},{dir_b}", "--labels", "A,B,C")
         with pytest.raises(SystemExit) as exc_info:
             dd.main()
-        assert exc_info.value.code == 1
+        assert exc_info.value.code == EXIT_CALLER_ERROR

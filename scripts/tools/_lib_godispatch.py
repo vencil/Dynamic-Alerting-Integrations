@@ -50,11 +50,14 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_python import detect_cli_lang  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 
 # Caller error exit code — bad flag, missing binary, unknown subcommand,
 # subprocess OSError. Distinct from the Go binary's exit code (which
-# is passed through as-is for 0 / 1 semantics).
-_EXIT_CALLER_ERROR = 2
+# is passed through as-is for 0 / 1 semantics). Aliased to the shared
+# 0/1/2 contract (#452 _lib_exitcodes); kept as a module-private name
+# for the existing call sites below.
+_EXIT_CALLER_ERROR = EXIT_CALLER_ERROR
 
 
 @dataclass

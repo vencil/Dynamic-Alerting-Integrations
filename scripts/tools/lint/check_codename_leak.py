@@ -54,6 +54,8 @@ if hasattr(sys.stdout, "reconfigure"):
 
 # Helpers from this lint family
 sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))  # Repo subdir layout
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lint_helpers import (  # noqa: E402
     DiffBaseMissingError,
     get_diff_added_lines,
@@ -376,7 +378,7 @@ def main() -> int:
             base = args.diff_base or resolve_diff_base()
         except DiffBaseMissingError as e:
             print(f"ERROR: {e}", file=sys.stderr)
-            return 2
+            return EXIT_CALLER_ERROR
         scan_mode = f"diff vs {base}"
         scanner = lambda fp: scan_file_diff(fp, base)  # noqa: E731
 
@@ -401,7 +403,7 @@ def main() -> int:
             f"OK no codename leaks in {len(files)} file(s) "
             f"(mode={scan_mode}, scope={args.scope})."
         )
-        return 0
+        return EXIT_OK
 
     if bypass_reason:
         print(
@@ -409,7 +411,7 @@ def main() -> int:
             f"   {total} finding(s) above are author-acknowledged intentional.\n"
             f"   This PR retains audit trail; reviewer must confirm bypass is justified."
         )
-        return 0
+        return EXIT_OK
 
     print(
         f"\nFAIL {total} codename leak(s) (mode={scan_mode}, scope={args.scope}).\n"
@@ -423,7 +425,7 @@ def main() -> int:
         f"    reason: <≥30 words explaining why this is legitimate>\n"
         f"  See docs/internal/lint-policy.md §4 for bypass spec."
     )
-    return 1 if args.ci else 0
+    return EXIT_VIOLATION if args.ci else EXIT_OK
 
 
 if __name__ == "__main__":

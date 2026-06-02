@@ -34,6 +34,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION  # noqa: E402
 
 # Constant for ignore file name
 IGNORE_FILE_NAME = ".docfreshness-ignore"
@@ -615,9 +616,9 @@ def main():
         print(checker.report())
 
     if args.check and not all_fresh:
-        sys.exit(1)
+        sys.exit(EXIT_VIOLATION)
 
-    sys.exit(0)
+    sys.exit(EXIT_OK)
 
 
 if __name__ == '__main__':

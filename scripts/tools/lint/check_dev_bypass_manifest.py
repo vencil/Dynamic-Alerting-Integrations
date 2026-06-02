@@ -27,9 +27,15 @@ forbidden env var name.
 """
 
 import argparse
+import os
 import re
 import sys
 from pathlib import Path
+
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _THIS_DIR)  # Docker flat layout
+sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SCAN_DIRS = ("helm", "k8s", "operator-manifests")
@@ -73,7 +79,7 @@ def main() -> int:
     violations = find_violations()
     if not violations:
         print("OK no dev-auth-bypass switch in deploy manifests.")
-        return 0
+        return EXIT_OK
 
     print(
         "❌ ADR-022 Layer 4: tenant-api dev-auth-bypass switch found in deploy "
@@ -85,7 +91,7 @@ def main() -> int:
     )
     for rel, ln, content in violations:
         print(f"  {rel}:{ln}: {content}")
-    return 1 if args.ci else 0
+    return EXIT_VIOLATION if args.ci else EXIT_OK
 
 
 if __name__ == "__main__":

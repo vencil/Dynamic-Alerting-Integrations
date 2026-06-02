@@ -26,9 +26,15 @@ Exit:
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 from pathlib import Path
+
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _THIS_DIR)  # Docker flat layout
+sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION  # noqa: E402
 
 
 def find_repo_root() -> Path:
@@ -150,9 +156,9 @@ def main() -> int:
               "  out of scope (use your judgement, then justify in PR body).",
             file=sys.stderr,
         )
-        return 1
+        return EXIT_VIOLATION
     print("[check_pr_scope_drift] PASS")
-    return 0
+    return EXIT_OK
 
 
 if __name__ == "__main__":

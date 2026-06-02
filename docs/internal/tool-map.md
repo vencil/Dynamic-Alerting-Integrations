@@ -208,6 +208,7 @@ lang: zh
 
 - `scripts/tools/_lib_compat.py`：Cross-platform compatibility helpers for Dynamic Alerting CLI tools.
 - `scripts/tools/_lib_constants.py`：Domain constants for Dynamic Alerting platform.
+- `scripts/tools/_lib_exitcodes.py`：Canonical exit-code contract for da-tools CLI tools (#452 Track A).
 - `scripts/tools/_lib_godispatch.py`：Shared dispatcher for da-tools subcommands that wrap a Go binary.
 - `scripts/tools/_lib_io.py`：File I/O and YAML helpers for Dynamic Alerting platform.
 - `scripts/tools/_lib_prometheus.py`：HTTP and Prometheus query helpers for Dynamic Alerting platform.

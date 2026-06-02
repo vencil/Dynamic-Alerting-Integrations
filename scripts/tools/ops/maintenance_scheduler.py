@@ -39,6 +39,7 @@ from _lib_python import (  # noqa: E402
     load_tenant_configs,
     http_request_with_retry,
 )
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 # Creator label for idempotency checks
 SILENCE_CREATOR = "da-tools/maintenance-scheduler"
@@ -127,7 +128,7 @@ def is_in_window(cron_expr, duration_str, now=None):
     except ImportError:
         print("ERROR: 'croniter' library required. Install with: pip install croniter",
               file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
 
     if now is None:
         now = datetime.now(timezone.utc)
@@ -425,7 +426,7 @@ def main():
 
     if not Path(args.config_dir).is_dir():
         print(f"ERROR: config directory not found: {args.config_dir}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
 
     t0 = time.monotonic()
 
@@ -450,7 +451,7 @@ def main():
     if args.pushgateway and not args.dry_run:
         push_metrics(args.pushgateway, created, skipped, errors, duration_s)
 
-    sys.exit(1 if errors else 0)
+    sys.exit(EXIT_VIOLATION if errors else EXIT_OK)
 
 
 if __name__ == "__main__":

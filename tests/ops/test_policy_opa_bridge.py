@@ -20,6 +20,7 @@ _TOOLS_DIR = os.path.join(os.path.dirname(__file__), '..', '..', 'scripts', 'too
 sys.path.insert(0, _TOOLS_DIR)
 
 import policy_opa_bridge as pob  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -450,13 +451,13 @@ class TestMain:
         assert "tenants" in payload
         assert payload["tenants"]["db-a"] == {"x": 1}
 
-    def test_no_url_no_path_returns_one(self, monkeypatch, tmp_path, capsys):
+    def test_no_url_no_path_returns_caller_error(self, monkeypatch, tmp_path, capsys):
         monkeypatch.setattr(pob, "detect_cli_lang", lambda: "en")
         monkeypatch.setattr(pob, "load_tenant_configs",
                             lambda d: {"db-a": {"x": 1}})
         monkeypatch.setattr(pob, "load_defaults", lambda d: {})
         rc = pob.main(["--config-dir", str(tmp_path)])
-        assert rc == 1
+        assert rc == EXIT_CALLER_ERROR
         err = capsys.readouterr().err
         assert "Must specify" in err
 
@@ -571,6 +572,6 @@ class TestMain:
                             lambda d: {"db-a": {"x": 1}})
         monkeypatch.setattr(pob, "load_defaults", lambda d: {})
         rc = pob.main(["--config-dir", str(tmp_path)])
-        assert rc == 1
+        assert rc == EXIT_CALLER_ERROR
         err = capsys.readouterr().err
         assert "必須指定" in err

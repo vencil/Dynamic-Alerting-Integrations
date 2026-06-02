@@ -11,6 +11,7 @@ import os
 import pytest
 
 import add_frontmatter as af
+from _lib_exitcodes import EXIT_CALLER_ERROR
 
 
 # ---------------------------------------------------------------------------
@@ -322,10 +323,10 @@ class TestFindMarkdownFiles:
 
 
 class TestMain:
-    def test_missing_base_dir_returns_one(self, monkeypatch, tmp_path, caplog, cli_argv):
+    def test_missing_base_dir_returns_caller_error(self, monkeypatch, tmp_path, caplog, cli_argv):
         ghost = tmp_path / "ghost"
         cli_argv("add_frontmatter.py", "--base-dir", str(ghost))
-        assert af.main() == 1
+        assert af.main() == EXIT_CALLER_ERROR
 
     def test_no_md_files_returns_zero(self, monkeypatch, tmp_path, cli_argv):
         # Empty base dir → 0 md files → return 0 (warning logged).

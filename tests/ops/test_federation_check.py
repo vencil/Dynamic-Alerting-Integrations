@@ -13,6 +13,7 @@ _TOOLS_DIR = os.path.join(os.path.dirname(__file__), '..', '..', 'scripts', 'too
 sys.path.insert(0, _TOOLS_DIR)
 
 import federation_check as fc  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -293,7 +294,8 @@ class TestMain:
             with patch("sys.argv", ["federation_check.py", "edge", "--json"]):
                 with pytest.raises(SystemExit) as exc_info:
                     fc.main()
-        assert exc_info.value.code == 1
+        # #452/#737: unreachable edge Prometheus = transport caller-error
+        assert exc_info.value.code == EXIT_CALLER_ERROR
         output = json.loads(capsys.readouterr().out)
         assert output["tool"] == "federation-check"
         assert output["section"] == "edge"
@@ -303,13 +305,14 @@ class TestMain:
             with patch("sys.argv", ["federation_check.py", "central", "--json"]):
                 with pytest.raises(SystemExit) as exc_info:
                     fc.main()
-        assert exc_info.value.code == 1
+        # #452/#737: unreachable central Prometheus = transport caller-error
+        assert exc_info.value.code == EXIT_CALLER_ERROR
 
     def test_e2e_requires_edge_urls(self, capsys):
         with patch("sys.argv", ["federation_check.py", "e2e"]):
             with pytest.raises(SystemExit) as exc_info:
                 fc.main()
-        assert exc_info.value.code == 1
+        assert exc_info.value.code == EXIT_CALLER_ERROR
         assert "edge-urls" in capsys.readouterr().err.lower()
 
     def test_e2e_with_urls(self, capsys):
@@ -322,6 +325,7 @@ class TestMain:
                 ]):
                     with pytest.raises(SystemExit) as exc_info:
                         fc.main()
-        assert exc_info.value.code == 1
+        # #452/#737: unreachable edges / transport failures = caller-error
+        assert exc_info.value.code == EXIT_CALLER_ERROR
         output = json.loads(capsys.readouterr().out)
         assert output["section"] == "e2e"

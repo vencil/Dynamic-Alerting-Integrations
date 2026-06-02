@@ -19,6 +19,7 @@ _TOOLS_DIR = os.path.join(os.path.dirname(__file__), '..', '..', 'scripts', 'too
 sys.path.insert(0, _TOOLS_DIR)
 
 import run_chaos_soak as rcs  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -235,7 +236,7 @@ class TestRunConfig:
 # main — caller-error surfaces (avoids the long soak loop)
 # ---------------------------------------------------------------------------
 class TestMainCallerErrors:
-    def test_missing_config_dir_returns_one(self, monkeypatch, tmp_path, capsys, cli_argv):
+    def test_missing_config_dir_returns_caller_error(self, monkeypatch, tmp_path, capsys, cli_argv):
         out_dir = tmp_path / "out"
         ghost = tmp_path / "ghost-config"
         cli_argv("run_chaos_soak.py",
@@ -243,23 +244,23 @@ class TestMainCallerErrors:
             "--config-dir", str(ghost),
             "--output-dir", str(out_dir),
             "--duration-min", "1")
-        # main() returns 1 on missing config dir before the soak loop.
-        assert rcs.main() == 1
+        # main() returns 2 (EXIT_CALLER_ERROR, #452) on missing config dir before the soak loop.
+        assert rcs.main() == EXIT_CALLER_ERROR
         err = capsys.readouterr().err
         assert "config-dir not found" in err
 
-    def test_unreachable_target_returns_one(self, monkeypatch, tmp_path, capsys, cli_argv):
+    def test_unreachable_target_returns_caller_error(self, monkeypatch, tmp_path, capsys, cli_argv):
         config_dir = tmp_path / "conf"
         config_dir.mkdir()
         out_dir = tmp_path / "out"
-        # fetch_metrics returns None → "cannot reach" → exit 1.
+        # fetch_metrics returns None → "cannot reach" → exit 2 (EXIT_CALLER_ERROR, #452).
         monkeypatch.setattr(rcs, "fetch_metrics", lambda *a, **kw: None)
         cli_argv("run_chaos_soak.py",
             "--target-url", "http://localhost:8080",
             "--config-dir", str(config_dir),
             "--output-dir", str(out_dir),
             "--duration-min", "1")
-        assert rcs.main() == 1
+        assert rcs.main() == EXIT_CALLER_ERROR
         err = capsys.readouterr().err
         assert "cannot reach" in err
 

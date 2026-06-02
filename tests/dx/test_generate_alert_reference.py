@@ -18,6 +18,7 @@ import pytest
 import yaml
 
 import generate_alert_reference as gar
+from _lib_exitcodes import EXIT_CALLER_ERROR
 
 
 # ---------------------------------------------------------------------------
@@ -482,12 +483,12 @@ class TestLoadRulePacks:
         out = gar.load_rule_packs(str(tmp_path))
         assert "only-records" not in out
 
-    def test_invalid_yaml_exits_one(self, tmp_path, capsys):
+    def test_invalid_yaml_exits_caller_error(self, tmp_path, capsys):
         (tmp_path / "rule-pack-bad.yaml").write_text(
             "key: [unclosed", encoding="utf-8")
         with pytest.raises(SystemExit) as exc:
             gar.load_rule_packs(str(tmp_path))
-        assert exc.value.code == 1
+        assert exc.value.code == EXIT_CALLER_ERROR
 
 
 # ---------------------------------------------------------------------------
@@ -549,21 +550,22 @@ class TestMainCLI:
             gar.main()
         assert exc.value.code == 1
 
-    def test_nonexistent_dir_exits_one(self, tmp_path, capsys, cli_argv):
+    def test_nonexistent_dir_exits_caller_error(self, tmp_path, capsys, cli_argv):
         cli_argv("generate_alert_reference.py",
                  "--output-dir", str(tmp_path / "ghost"))
         with pytest.raises(SystemExit) as exc:
             gar.main()
-        assert exc.value.code == 1
+        assert exc.value.code == EXIT_CALLER_ERROR
         err = capsys.readouterr().err
         assert "not a directory" in err
 
-    def test_no_alerts_exits_one(self, tmp_path, capsys, cli_argv):
-        # Empty dir → no rule-pack-*.yaml files → no alerts → exit 1.
+    def test_no_alerts_exits_caller_error(self, tmp_path, capsys, cli_argv):
+        # Empty dir → no rule-pack-*.yaml files → no alerts → unusable input,
+        # cannot generate → exit 2 (EXIT_CALLER_ERROR, #452).
         cli_argv("generate_alert_reference.py",
                  "--output-dir", str(tmp_path))
         with pytest.raises(SystemExit) as exc:
             gar.main()
-        assert exc.value.code == 1
+        assert exc.value.code == EXIT_CALLER_ERROR
         err = capsys.readouterr().err
         assert "No alerts" in err

@@ -47,6 +47,7 @@ from _lib_python import (  # noqa: E402
     http_get_json,
     write_text_secure,
 )
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 _LANG = detect_cli_lang()
 
@@ -328,7 +329,7 @@ def main(argv: list[str] | None = None) -> int:
         raw, err = scrape_metrics_endpoint(args.endpoint)
         if err:
             print(f"ERROR: {err}", file=sys.stderr)
-            return 1
+            return EXIT_CALLER_ERROR
         label_values = parse_prometheus_text(raw)
         db_type = detect_db_type(raw)
         # Use endpoint as instance identifier
@@ -341,7 +342,7 @@ def main(argv: list[str] | None = None) -> int:
         if not args.instance and not args.job:
             print("ERROR: --prometheus requires --instance or --job",
                   file=sys.stderr)
-            return 1
+            return EXIT_CALLER_ERROR
         print(f"Querying Prometheus at {args.prometheus} ...")
         label_values = query_prometheus_label_values(
             args.prometheus,
@@ -356,7 +357,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"\n⚠ {msg}")
         print("  " + ("檢查 exporter 是否暴露 schema/tablespace 等標籤" if lang == "zh"
                        else "Check if the exporter exposes schema/tablespace labels"))
-        return 1
+        return EXIT_VIOLATION
 
     # ── Rank and display ──────────────────────────────────────────
     ranked = rank_partition_labels(label_values)
@@ -372,7 +373,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if not ranked:
         print("  (none suitable for partitioning)")
-        return 1
+        return EXIT_VIOLATION
 
     # Use top-ranked label
     best_label, best_values, _ = ranked[0]
@@ -403,7 +404,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"\n{'─' * 50}")
         print(output)
 
-    return 0
+    return EXIT_OK
 
 
 if __name__ == "__main__":

@@ -62,14 +62,20 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK  # noqa: E402
 
 
 # Exit codes — documented in module docstring, kept as module constants so
-# call sites and tests don't drift from the spec.
-EXIT_OK = 0
-EXIT_INTERNAL_ERROR = 1
-EXIT_PREREQ_MISSING = 2
-EXIT_NETWORK_BLOCKED = 3
+# call sites and tests don't drift from the spec. This tool is a SANCTIONED
+# extension of the shared 0/1/2 contract (#452 _lib_exitcodes): being a
+# read-only diagnostic it has no "violation" outcome, so it repurposes
+# exit 1 for "the diagnosis itself failed" (tool internal error) and adds
+# exit 3 (EXIT_NETWORK_BLOCKED) as a caller-error subtype. 0 and 2 keep
+# their shared meanings (anchored to the SSOT below).
+EXIT_OK = EXIT_OK
+EXIT_INTERNAL_ERROR = 1            # diagnostic failed (subprocess / parse / bug)
+EXIT_PREREQ_MISSING = EXIT_CALLER_ERROR  # gh missing / unauthenticated (== 2)
+EXIT_NETWORK_BLOCKED = 3           # api.github.com unreachable — switch host
 
 # Rate-limit safety floor: bail out of the prereq probe if `gh api /rate_limit`
 # reports `remaining < this`. 10 leaves room for the tool's own 4 endpoints

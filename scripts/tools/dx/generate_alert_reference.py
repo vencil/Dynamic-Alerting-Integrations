@@ -29,6 +29,11 @@ import difflib
 from pathlib import Path
 from typing import Dict, List, Tuple, Any
 
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _THIS_DIR)  # Docker flat layout
+sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+
 # Built-in mapping for recommended actions by alert pattern
 RECOMMENDED_ACTIONS = {
     # Down/Absent patterns
@@ -461,10 +466,10 @@ def load_rule_packs(rule_packs_dir: str) -> Dict[str, List[Dict]]:
 
         except yaml.YAMLError as e:
             print(f"Error parsing {yaml_file}: {e}", file=sys.stderr)
-            sys.exit(1)
+            sys.exit(EXIT_CALLER_ERROR)
         except (OSError, yaml.YAMLError) as e:
             print(f"Error reading {yaml_file}: {e}", file=sys.stderr)
-            sys.exit(1)
+            sys.exit(EXIT_CALLER_ERROR)
 
     return alerts_by_pack
 
@@ -497,14 +502,14 @@ def main():
 
     if not Path(rule_packs_dir).is_dir():
         print(f"Error: {rule_packs_dir} is not a directory", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
 
     # Load rule packs
     alerts_by_pack = load_rule_packs(rule_packs_dir)
 
     if not alerts_by_pack:
         print("Error: No alerts found in rule packs", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
 
     # Generate markdown
     content_zh = generate_markdown_zh(alerts_by_pack)
@@ -568,13 +573,13 @@ def main():
         if differences:
             print("ALERT-REFERENCE files are out of sync with rule packs:", file=sys.stderr)
             print("".join(differences), file=sys.stderr)
-            sys.exit(1)
+            sys.exit(EXIT_VIOLATION)
         else:
             print(
                 "OK: ALERT-REFERENCE files are synchronized with rule packs",
                 file=sys.stdout,
             )
-            sys.exit(0)
+            sys.exit(EXIT_OK)
 
     # Write mode: generate and write
     try:
@@ -590,7 +595,7 @@ def main():
 
     except IOError as e:
         print(f"Error writing output files: {e}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
 
 
 if __name__ == "__main__":

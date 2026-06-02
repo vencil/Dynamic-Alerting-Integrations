@@ -38,6 +38,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_python import detect_cli_lang, http_get_json, query_prometheus_instant  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_CALLER_ERROR  # noqa: E402
 
 # Language detection for bilingual help
 _LANG = detect_cli_lang()
@@ -350,13 +351,20 @@ if __name__ == "__main__":
                         help=_h('config_dir'))
     parser.add_argument("--show-inheritance", action="store_true",
                         help=_h('show_inheritance'))
+    # #452 Track C: diagnose emits JSON by design (consumers like
+    # scripts/tools/ops/batch_diagnose.py json.loads its stdout). --json is
+    # the default, accepted explicitly so the documented
+    # `da-tools diagnose ... --json | jq` idiom works and matches the
+    # convention required of new subcommands (see dev-rules.md).
+    parser.add_argument("--json", action="store_true", default=True,
+                        help="Emit machine-readable JSON to stdout (default).")
     args = parser.parse_args()
 
     if args.show_inheritance:
         if not args.config_dir:
             print("ERROR: --show-inheritance requires --config-dir",
                   file=sys.stderr)
-            sys.exit(1)
+            sys.exit(EXIT_CALLER_ERROR)  # #452: missing required arg
         inheritance = resolve_inheritance_chain(args.tenant, args.config_dir)
         if inheritance:
             print(json.dumps(inheritance, indent=2, ensure_ascii=False,
@@ -364,6 +372,6 @@ if __name__ == "__main__":
         else:
             print(json.dumps({"error": "Could not resolve inheritance chain"},
                              indent=2))
-        sys.exit(0)
+        sys.exit(EXIT_OK)
 
     check(args.tenant, args.prometheus, config_dir=args.config_dir)

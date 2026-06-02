@@ -44,6 +44,7 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo tools root
 from _lib_python import write_text_secure  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 
 # Known abbreviations that don't require parentheses to be recognized
@@ -84,7 +85,7 @@ def extract_abbreviations_from_glossary(glossary_path: Path) -> dict:
 
     if not glossary_path.exists():
         print(f"ERROR: Glossary file not found: {glossary_path}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
 
     with open(glossary_path, encoding="utf-8") as f:
         content = f.read()
@@ -236,17 +237,17 @@ def main():
                 print(
                     f"✓ In sync: {len(abbreviations)} abbreviations match glossary.md"
                 )
-                sys.exit(0)
+                sys.exit(EXIT_OK)
             else:
                 print(
                     f"✗ Out of sync: abbreviations.md does not match glossary.md",
                     file=sys.stderr,
                 )
                 print(f"  Glossary has {len(abbreviations)} abbreviations", file=sys.stderr)
-                sys.exit(1)
+                sys.exit(EXIT_VIOLATION)
         else:
             print(f"✗ Output file not found: {output_path}", file=sys.stderr)
-            sys.exit(1)
+            sys.exit(EXIT_VIOLATION)
 
     # Write mode
     output_path.parent.mkdir(parents=True, exist_ok=True)

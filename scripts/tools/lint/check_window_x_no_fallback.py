@@ -67,6 +67,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 
@@ -189,7 +190,7 @@ def main() -> int:
 
     if not findings:
         print(f"window-x-no-fallback: ✓ {len(paths)} files clean (dev-rules.md §S6)")
-        return 0
+        return EXIT_OK
 
     # Group by kind for a tidy report.
     by_kind = {"global-read": [], "react-destructure": []}
@@ -219,8 +220,8 @@ def main() -> int:
     print("Background: see dev-rules.md §S6 + testing-playbook.md (TRK-233/034 LL).")
 
     if args.ci:
-        return 1
-    return 0
+        return EXIT_VIOLATION
+    return EXIT_OK
 
 
 if __name__ == "__main__":

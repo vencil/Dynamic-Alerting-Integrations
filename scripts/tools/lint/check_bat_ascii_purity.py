@@ -73,6 +73,8 @@ from pathlib import Path
 
 # Helpers from this lint family
 sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))  # Repo subdir layout
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lint_helpers import (  # noqa: E402
     DiffBaseMissingError,
     parse_bypass_tag,
@@ -220,7 +222,7 @@ def main() -> int:
             base = args.diff_base or resolve_diff_base()
         except DiffBaseMissingError as e:
             print(f"ERROR: {e}", file=sys.stderr)
-            return 2
+            return EXIT_CALLER_ERROR
         bat_paths = _diff_changed_bats(repo, base)
         scan_mode = f"diff vs {base}"
 
@@ -240,14 +242,14 @@ def main() -> int:
     if not filtered:
         # Nothing in scope -- silent pass (pre-commit may invoke us with
         # non-.bat files in edge cases; don't spam).
-        return 0
+        return EXIT_OK
 
     all_violations: list[str] = []
     for p in filtered:
         all_violations.extend(scan_bat(p))
 
     if not all_violations:
-        return 0
+        return EXIT_OK
 
     # Bypass check (lint-policy.md §4)
     pr_body = _read_pr_body(args.pr_body_file)
@@ -268,7 +270,7 @@ def main() -> int:
             f"   Reviewer must confirm bypass is justified.",
             file=sys.stderr,
         )
-        return 0
+        return EXIT_OK
 
     print(
         "\n  Fix:\n"
@@ -290,7 +292,7 @@ def main() -> int:
         "    reason: <≥30 words explaining why this case is legitimate>\n",
         file=sys.stderr,
     )
-    return 1
+    return EXIT_VIOLATION
 
 
 if __name__ == "__main__":

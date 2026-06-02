@@ -87,6 +87,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 _IGNORE_MARKER = "<!-- changelog-no-tbd: ignore -->"
 _IGNORE_LOOKBACK_LINES = 3
@@ -251,8 +252,8 @@ def _compute_exit_code(*, ci: bool, n_findings: int) -> int:
     | True  | >0         | 1    |
     """
     if not ci:
-        return 0
-    return 1 if n_findings > 0 else 0
+        return EXIT_OK
+    return EXIT_VIOLATION if n_findings > 0 else EXIT_OK
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -291,7 +292,7 @@ def main(argv: list[str] | None = None) -> int:
     if not paths:
         if args.ci:
             print("✓ no files matched scan target")
-        return 0
+        return EXIT_OK
 
     # Resolve scan mode
     scan_mode = "full-scan"
@@ -301,7 +302,7 @@ def main(argv: list[str] | None = None) -> int:
             base = args.diff_base or resolve_diff_base()
         except DiffBaseMissingError as e:
             print(f"ERROR: {e}", file=sys.stderr)
-            return 2
+            return EXIT_CALLER_ERROR
         scan_mode = f"diff vs {base}"
 
     all_findings: list[ChangelogNoTbdFinding] = []
@@ -320,7 +321,7 @@ def main(argv: list[str] | None = None) -> int:
     if not all_findings:
         if args.ci:
             print(f"✓ no findings across {len(paths)} file(s) (mode={scan_mode})")
-        return 0
+        return EXIT_OK
 
     # Bypass check (lint-policy.md §4)
     pr_body = _read_pr_body(args.pr_body_file)
@@ -341,7 +342,7 @@ def main(argv: list[str] | None = None) -> int:
             f"   Reviewer must confirm bypass is justified.",
             file=sys.stderr,
         )
-        return 0
+        return EXIT_OK
 
     print(
         "\nFix: replace placeholder with the real value (PR # / commit "

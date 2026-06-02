@@ -49,6 +49,8 @@ Usage:
 Exit codes:
     0  no BLOCK findings (WARN/INFO/baseline may be present)
     1  BLOCK findings present (only when --ci)
+    2  caller-error: could not RUN the check (kube-linter failed/unparseable on
+       k8s/) — fix the engine/manifests, then retry
     3  engine required (--ci) but unavailable
 """
 from __future__ import annotations
@@ -68,6 +70,8 @@ if hasattr(sys.stdout, "reconfigure"):
 # Reuse L2's engine plumbing + severity classification (single source of truth
 # for kube-linter version/image and CRITICAL/HIGH check sets).
 sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # Repo subdir layout
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from check_iac_helm import (  # noqa: E402
     KUBE_LINTER_IMAGE,
     SKIP_DIR_PARTS,
@@ -193,7 +197,8 @@ def kube_linter_lint_dir(target_rel: str = MANIFEST_ROOT) -> list[dict] | None:
 # Orchestration
 # ---------------------------------------------------------------------------
 def collect_findings(strict: bool) -> dict[str, list[str]]:
-    findings: dict[str, list[str]] = {"BLOCK": [], "WARN": [], "INFO": []}
+    findings: dict[str, list[str]] = {
+        "BLOCK": [], "WARN": [], "INFO": [], "CALLER_ERROR": []}
 
     if not manifest_root_exists():
         # AC4 trigger condition: enable automatically once k8s/ appears. It
@@ -214,7 +219,12 @@ def collect_findings(strict: bool) -> dict[str, list[str]]:
 
     reports = kube_linter_lint_dir()
     if reports is None:
-        findings["BLOCK"].append("[engine] kube-linter failed/unparseable on k8s/")
+        # kube-linter failed to execute / its output was unparseable — a
+        # "couldn't run the check" condition (caller-error, exit 2), NOT a
+        # finding of a non-compliant manifest (which is BLOCK / exit 1).
+        findings["CALLER_ERROR"].append(
+            "[engine] kube-linter failed/unparseable on k8s/")
+        findings["__caller_error__"] = ["1"]
         return findings
 
     seen: set[tuple[str, str]] = set()
@@ -268,17 +278,30 @@ def main() -> int:
             print(f"  {f.relative_to(REPO_ROOT).as_posix()}")
         print(f"\nkube-linter: {locate_kube_linter()[0]}")
         print(f"EXEMPTIONS registered: {len(EXEMPTIONS)}")
-        return 0
+        return EXIT_OK
 
     findings = collect_findings(strict=args.ci)
     engine_error = findings.pop("__engine_error__", None)
+    caller_error = findings.pop("__caller_error__", None)
 
-    for action in ("BLOCK", "WARN", "INFO"):
+    for action in ("BLOCK", "WARN", "INFO", "CALLER_ERROR"):
         for line in findings[action]:
             print(f"  [{action}] {line}")
 
     if engine_error:
         return 3
+
+    # "Couldn't run the check" (kube-linter failed/unparseable) is a
+    # caller-error (exit 2: fix the engine/manifests, then retry), distinct from
+    # a non-compliant-manifest finding (exit 1). Caller-error wins.
+    if caller_error:
+        print(
+            "\nERROR Container SAST Layer 4 (raw k8s) — could not run kube-linter "
+            "on k8s/ (engine failed or output unparseable). Fix the engine / "
+            "manifests and retry.",
+            file=sys.stderr,
+        )
+        return EXIT_CALLER_ERROR
 
     n_block = len(findings["BLOCK"])
     n_warn = len(findings["WARN"])
@@ -292,7 +315,7 @@ def main() -> int:
             f"   容器 SAST 第 4 層通過：0 阻擋；High 走中央豁免登記"
             f"（記於 docs/internal/iac-lint-baseline.md），不擋 merge。"
         )
-        return 0
+        return EXIT_OK
 
     print(
         f"\nFAIL Container SAST Layer 4 (raw k8s) — {n_block} BLOCK / {n_warn} "
@@ -302,7 +325,7 @@ def main() -> int:
         f"(path, check): rationale。\n"
         f"   詳見 epic #448 / TRK-314 與 docs/internal/iac-lint-baseline.md。"
     )
-    return 1 if args.ci else 0
+    return EXIT_VIOLATION if args.ci else EXIT_OK
 
 
 if __name__ == "__main__":

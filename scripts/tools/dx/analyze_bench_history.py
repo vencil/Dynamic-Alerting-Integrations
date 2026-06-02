@@ -88,6 +88,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 REPO = "vencil/Dynamic-Alerting-Integrations"
 WORKFLOW_FILE = "bench-record.yaml"
@@ -599,7 +600,7 @@ def run_trend_watch(args) -> int:
     else:
         if not shutil.which("gh"):
             print("error: gh CLI not found in PATH", file=sys.stderr)
-            return 2
+            return EXIT_CALLER_ERROR
         if args.cache_dir:
             cache_dir, cleanup = args.cache_dir, False
             cache_dir.mkdir(parents=True, exist_ok=True)
@@ -609,13 +610,13 @@ def run_trend_watch(args) -> int:
             nights = night_records_from_gh(args.workflow, args.trend_limit, cache_dir)
         except RuntimeError as exc:
             print(f"error: {exc}", file=sys.stderr)
-            return 2
+            return EXIT_CALLER_ERROR
 
     try:
         if len(nights) < args.recent_nights + 2:
             print(f"→ only {len(nights)} usable nights — need ≥ {args.recent_nights + 2}; "
                   "skipping trend verdict (not enough history yet).", file=sys.stderr)
-            return 0
+            return EXIT_OK
 
         findings, meta = analyze_trend(
             nights, args.recent_nights, args.min_floor_pct,
@@ -673,7 +674,7 @@ def run_trend_watch(args) -> int:
                                   file=sys.stderr)
                     if not filed:
                         _gh_write(create)
-            return 0
+            return EXIT_OK
 
         # No regression → recovered/closed-loop. Close EVERY open perf-trend issue
         # (not just [0]) so stragglers never linger, and CLOSE BEFORE commenting so
@@ -688,7 +689,7 @@ def run_trend_watch(args) -> int:
                 _gh_write(["issue", "comment", str(num), "--repo", REPO, "--body",
                            "✅ Nightly perf has returned below the floor across the recent window "
                            "— auto-closing (closed loop). A new issue is filed if it regresses again."])
-        return 0
+        return EXIT_OK
     finally:
         if cache_dir is not None and cleanup:
             shutil.rmtree(cache_dir, ignore_errors=True)
@@ -740,7 +741,7 @@ def main() -> int:
     # Verify gh CLI is available
     if not shutil.which("gh"):
         print("error: gh CLI not found in PATH", file=sys.stderr)
-        return 2
+        return EXIT_CALLER_ERROR
 
     # Cache dir setup
     if args.cache_dir:
@@ -758,10 +759,10 @@ def main() -> int:
             runs = list_recent_runs(args.workflow, args.limit)
         except RuntimeError as exc:
             print(f"error: {exc}", file=sys.stderr)
-            return 2
+            return EXIT_CALLER_ERROR
         if not runs:
             print("error: no successful runs found", file=sys.stderr)
-            return 2
+            return EXIT_CALLER_ERROR
 
         print(f"→ downloading {len(runs)} artifacts (cache: {cache_dir})…",
               file=sys.stderr)
@@ -783,21 +784,21 @@ def main() -> int:
 
         if not all_samples:
             print("error: no usable samples across the run window", file=sys.stderr)
-            return 2
+            return EXIT_CALLER_ERROR
 
         stats = aggregate(all_samples)
         print(render_markdown_table(stats, n_runs_total=len(runs), n_runs_succeeded=succeeded))
 
         if args.no_gate:
-            return 0
+            return EXIT_OK
 
         # CI mode: exit non-zero on NO-GO
         verdicts = [s.verdict()[0] for s in stats.values()]
         if any(v == "NO-GO" for v in verdicts):
-            return 1 if args.ci else 0
+            return EXIT_VIOLATION if args.ci else EXIT_OK
         if all(v == "INSUFFICIENT" for v in verdicts):
-            return 2 if args.ci else 0
-        return 0
+            return EXIT_CALLER_ERROR if args.ci else EXIT_OK
+        return EXIT_OK
 
     finally:
         if cleanup:

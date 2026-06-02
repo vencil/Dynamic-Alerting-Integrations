@@ -29,6 +29,7 @@ _TOOLS_DIR = os.path.join(os.path.dirname(__file__), '..', '..', 'scripts', 'too
 sys.path.insert(0, _TOOLS_DIR)
 
 import migrate_rule as mr  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -370,22 +371,22 @@ class TestMain:
         "          summary: 'High CPU'\n"
     )
 
-    def test_missing_input_file_exits_one(self, monkeypatch, tmp_path, capsys, cli_argv):
+    def test_missing_input_file_exits_caller_error(self, monkeypatch, tmp_path, capsys, cli_argv):
         ghost = tmp_path / "ghost.yaml"
         cli_argv("migrate_rule.py", str(ghost))
         with pytest.raises(SystemExit) as exc:
             mr.main()
-        assert exc.value.code == 1
+        assert exc.value.code == EXIT_CALLER_ERROR
         err = capsys.readouterr().err
         assert "Error reading YAML" in err
 
-    def test_invalid_yaml_exits_one(self, monkeypatch, tmp_path, capsys, cli_argv):
+    def test_invalid_yaml_exits_caller_error(self, monkeypatch, tmp_path, capsys, cli_argv):
         f = tmp_path / "bad.yaml"
         f.write_text("groups: [unterminated", encoding="utf-8")
         cli_argv("migrate_rule.py", str(f))
         with pytest.raises(SystemExit) as exc:
             mr.main()
-        assert exc.value.code == 1
+        assert exc.value.code == EXIT_CALLER_ERROR
         err = capsys.readouterr().err
         assert "Error reading YAML" in err
 

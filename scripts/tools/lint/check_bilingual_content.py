@@ -23,9 +23,15 @@ Exit codes:
 
 import argparse
 import json
+import os
 import re
 import sys
 from pathlib import Path
+
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _THIS_DIR)  # Docker flat layout
+sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
+from _lib_exitcodes import EXIT_VIOLATION  # noqa: E402
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent.parent.parent
@@ -98,7 +104,10 @@ def scan_en_docs(
     for f in sorted(docs_dir.rglob("*.md")):
         if not _is_english_doc(f):
             continue
-        text = f.read_text(encoding="utf-8")
+        try:
+            text = f.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
         ratio = count_cjk_ratio(text)
         if ratio > threshold:
             rel = f.relative_to(PROJECT_ROOT)
@@ -128,7 +137,10 @@ def scan_zh_docs(
         # Skip internal/generated files
         if "includes" in f.parts:
             continue
-        text = f.read_text(encoding="utf-8")
+        try:
+            text = f.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
         # Only check files with substantial content
         if len(text.strip()) < 200:
             continue
@@ -222,7 +234,7 @@ def main():
 
     has_warnings = any(s == "warning" for s, *_ in findings)
     if args.ci and has_warnings:
-        sys.exit(1)
+        sys.exit(EXIT_VIOLATION)
 
 
 if __name__ == "__main__":

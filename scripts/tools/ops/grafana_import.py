@@ -38,6 +38,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _THIS_DIR)  # Docker flat layout
+sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+
 
 def run_cmd(cmd, dry_run=False):
     """Execute a command safely using list arguments only (no shell=True).
@@ -64,6 +69,7 @@ def import_dashboard(dashboard_path, cm_name, namespace, dry_run=False):
         results.append({
             "action": "import",
             "status": "fail",
+            "caller_error": True,  # #452/#737: input/load precondition = caller-error (exit 2)
             "detail": f"File not found: {dashboard_path}",
         })
         return results
@@ -77,6 +83,7 @@ def import_dashboard(dashboard_path, cm_name, namespace, dry_run=False):
         results.append({
             "action": "import",
             "status": "fail",
+            "caller_error": True,  # malformed input file = caller-error (exit 2)
             "detail": f"Invalid JSON: {str(e)[:60]}",
         })
         return results
@@ -105,6 +112,7 @@ def import_dashboard(dashboard_path, cm_name, namespace, dry_run=False):
             results.append({
                 "action": "create_configmap",
                 "status": "fail",
+                "caller_error": True,  # kubectl transport/env failure = caller-error
                 "detail": f"kubectl create configmap failed for {cm_name}",
             })
             return results
@@ -128,6 +136,7 @@ def import_dashboard(dashboard_path, cm_name, namespace, dry_run=False):
                 results.append({
                     "action": "create_configmap",
                     "status": "fail",
+                    "caller_error": True,  # kubectl apply transport/env failure = caller-error
                     "detail": f"kubectl apply failed: {proc.stderr[:60]}",
                 })
                 return results
@@ -135,6 +144,7 @@ def import_dashboard(dashboard_path, cm_name, namespace, dry_run=False):
             results.append({
                 "action": "create_configmap",
                 "status": "fail",
+                "caller_error": True,  # subprocess/IO failure = caller-error
                 "detail": str(e)[:60],
             })
             return results
@@ -157,6 +167,7 @@ def import_dashboard(dashboard_path, cm_name, namespace, dry_run=False):
         results.append({
             "action": "label_configmap",
             "status": "fail",
+            "caller_error": True,  # kubectl label transport/env failure = caller-error
             "detail": f"Failed to label ConfigMap {cm_name}",
         })
 
@@ -179,6 +190,7 @@ def verify_dashboards(namespace):
         checks.append({
             "check": "list_dashboard_configmaps",
             "status": "fail",
+            "caller_error": True,  # kubectl transport/env failure = caller-error (exit 2)
             "detail": "kubectl get configmap failed",
         })
         return checks
@@ -190,6 +202,7 @@ def verify_dashboards(namespace):
         checks.append({
             "check": "list_dashboard_configmaps",
             "status": "fail",
+            "caller_error": True,  # unparseable kubectl output = caller-error
             "detail": "Failed to parse kubectl output",
         })
         return checks
@@ -260,6 +273,11 @@ def main():
     if args.verify:
         checks = verify_dashboards(args.namespace)
         has_failure = any(c["status"] == "fail" for c in checks)
+        # #452/#737: kubectl transport / unparseable-output failures are
+        # caller-errors (exit 2), not dashboard findings (exit 1).
+        caller_error = any(
+            c["status"] == "fail" and c.get("caller_error") for c in checks
+        )
 
         if args.json:
             print(json.dumps({
@@ -277,7 +295,9 @@ def main():
                 print(f"  {symbol} {c['check']:40s} {c['detail']}")
             print(f"\n  Overall: {'FAIL' if has_failure else 'PASS'}\n")
 
-        sys.exit(1 if has_failure else 0)
+        if caller_error:
+            sys.exit(EXIT_CALLER_ERROR)
+        sys.exit(EXIT_VIOLATION if has_failure else EXIT_OK)
 
     # Collect dashboard files to import
     dashboards = []
@@ -288,7 +308,7 @@ def main():
         dash_dir = Path(args.dashboard_dir)
         if not dash_dir.is_dir():
             print(f"ERROR: Directory not found: {args.dashboard_dir}", file=sys.stderr)
-            sys.exit(1)
+            sys.exit(EXIT_CALLER_ERROR)
         for entry in sorted(dash_dir.glob("*.json")):
             fpath = str(entry)
             dashboards.append((fpath, auto_name(fpath)))
@@ -296,17 +316,22 @@ def main():
         parser.error("Provide --dashboard, --dashboard-dir, or --verify")
 
     if not dashboards:
+        # #452: empty/unusable input (dir has no *.json) = caller error,
+        # consistent with the "directory not found" sibling above.
         print("No dashboard files found.", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
 
     all_results = []
     has_failure = False
+    caller_error = False  # #452/#737: file-not-found / invalid-JSON / kubectl env
 
     for dashboard_path, cm_name in dashboards:
         results = import_dashboard(dashboard_path, cm_name, args.namespace, args.dry_run)
         all_results.extend(results)
         if any(r["status"] == "fail" for r in results):
             has_failure = True
+        if any(r["status"] == "fail" and r.get("caller_error") for r in results):
+            caller_error = True
 
     if args.json:
         print(json.dumps({
@@ -324,7 +349,11 @@ def main():
             print(f"  {symbol} {r['action']:30s} {r['detail']}")
         print(f"\n  Overall: {'FAIL' if has_failure else 'PASS'}\n")
 
-    sys.exit(1 if has_failure else 0)
+    # #452/#737: file-not-found / invalid-JSON / kubectl env failures are
+    # caller-errors (exit 2); a clean run that merely couldn't apply is still 1.
+    if caller_error:
+        sys.exit(EXIT_CALLER_ERROR)
+    sys.exit(EXIT_VIOLATION if has_failure else EXIT_OK)
 
 
 if __name__ == "__main__":

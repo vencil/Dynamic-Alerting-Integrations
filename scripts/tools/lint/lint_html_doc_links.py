@@ -74,6 +74,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION  # noqa: E402
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 DOCS_ROOT = PROJECT_ROOT / "docs"
@@ -226,7 +227,7 @@ def main() -> int:
     files = collect_html_files()
     if not files:
         print("✓ No HTML files found under docs/")
-        return 0
+        return EXIT_OK
 
     all_violations: list[Violation] = []
     for f in files:
@@ -236,7 +237,7 @@ def main() -> int:
 
     if not all_violations:
         print(f"✓ {len(files)} HTML file(s) — no link-pattern violations")
-        return 0
+        return EXIT_OK
 
     # Group violations by file for cleaner reporting
     by_file: dict[str, list[Violation]] = {}
@@ -257,7 +258,7 @@ def main() -> int:
         "site, not the repo file tree."
     )
 
-    return 1 if args.ci else 0
+    return EXIT_VIOLATION if args.ci else EXIT_OK
 
 
 if __name__ == "__main__":

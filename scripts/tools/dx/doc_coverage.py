@@ -27,6 +27,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 
 @dataclass
@@ -555,7 +556,7 @@ def main():
     repo_root = Path(args.repo_root).resolve()
     if not repo_root.exists():
         print(f"ERROR: Repository root not found: {repo_root}", file=sys.stderr)
-        return 1
+        return EXIT_CALLER_ERROR
 
     # 執行分析
     analyzer = DocCoverageAnalyzer(str(repo_root))
@@ -596,9 +597,9 @@ def main():
                   f"below threshold {threshold_pct}%", file=sys.stderr)
 
         if not (fm_ok and bilingual_ok and link_ok):
-            return 1
+            return EXIT_VIOLATION
 
-    return 0
+    return EXIT_OK
 
 
 if __name__ == "__main__":

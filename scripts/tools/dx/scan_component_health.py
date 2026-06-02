@@ -37,6 +37,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import os
 import subprocess
 import sys
 from collections import Counter
@@ -44,6 +45,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
+
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _THIS_DIR)  # Docker flat layout
+sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
+from _lib_exitcodes import EXIT_OK  # noqa: E402
 
 # --- 自動偵測 repo 根目錄（從 script 位置往上找 .git） ---
 def _find_repo_root(start: Path) -> Path:
@@ -524,7 +530,7 @@ def main() -> int:
     if args.stdout:
         json.dump(data, sys.stdout, indent=2, ensure_ascii=False)
         print()
-        return 0
+        return EXIT_OK
 
     print(json.dumps(data["summary"], indent=2, ensure_ascii=False))
 
@@ -535,7 +541,7 @@ def main() -> int:
         )
         print(f"\nWrote: {args.output.relative_to(REPO)}")
 
-    return 0
+    return EXIT_OK
 
 
 if __name__ == "__main__":
