@@ -118,6 +118,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_CALLER_ERROR  # noqa: E402
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 LINT_DIR = PROJECT_ROOT / "scripts" / "tools" / "lint"
@@ -903,7 +904,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         paths = derive_paths(args.name, args.kind)
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
-        return 2
+        return EXIT_CALLER_ERROR
 
     files_pattern = args.files or '"TODO_FILES_PATTERN"  # author must fill in'
 
@@ -975,7 +976,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             ".pre-commit-config.yaml if you didn't pass --files"
         )
 
-    return 0
+    return EXIT_OK
 
 
 if __name__ == "__main__":
