@@ -7,6 +7,10 @@
 # does NOT coordinate across pods, so >1 replica can open duplicate PRs for the
 # same tenant. The default `direct` write mode is unaffected. See #615 and
 # internal/platform/tracker.go (ClaimTenant).
+# ⛔ replicaCount=1 alone is NOT enough: the Deployment pins `strategy: Recreate`
+# so a rollout doesn't surge a second Ready pod that overlaps the old one as a
+# phantom writer (see deployment.yaml + #677 / TRK-324). Raising replicaCount
+# without cross-pod write coordination (K8s Lease) reintroduces the breach.
 replicaCount: 1
 
 image:
