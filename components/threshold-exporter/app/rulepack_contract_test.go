@@ -46,6 +46,13 @@ var promParser = promqlparser.NewParser(promqlparser.Options{})
 // ADR-024 version-aware (`tenant_version:`) forms are in scope.
 var thresholdRecordRe = regexp.MustCompile(`^tenant(?:_version)?:alert_threshold:(.+)$`)
 
+// alertThresholdRefRe matches a reference to a threshold-normalization record
+// ANYWHERE inside an expr (unanchored, no severity/label suffix) — used by the
+// #734 orphan check to find which records are consumed by an alert or a
+// downstream recording rule. The base name only (label selectors like
+// `{severity="warning"}` are stripped by stopping at a non-identifier char).
+var alertThresholdRefRe = regexp.MustCompile(`tenant(?:_version)?:alert_threshold:[A-Za-z0-9_]+`)
+
 // versionAwareAllowlist is the ADR-024 Phase-1 set of (component/metric)
 // identities permitted to carry a dimensional version (mirrors
 // pkg/config/resolve.go pilotVersionMetrics). Only these may legitimately have a
@@ -361,4 +368,89 @@ func TestRulePackFixturesCarryComponent(t *testing.T) {
 			"fixture discovery undershot", seriesChecked, minFixtureUserThreshold)
 	}
 	t.Logf("fixture guard OK: %d user_threshold series carry component+metric", seriesChecked)
+}
+
+// minThresholdRecords is an anti-undershoot floor: if discovery finds fewer
+// threshold-normalization records than this, the orphan check below is scanning
+// an empty/under-discovered set (a green-over-nothing — the same #731 failure
+// shape). 63 across 13 packs today; floor a bit lower to allow churn.
+const minThresholdRecords = 50
+
+// TestThresholdRecordsAreConsumed closes the #734 (M3) gap.
+//
+// TestRulePackExporterContract proves a threshold record's selector is
+// SELF-CONSISTENT with its own name — but a record whose name is a typo (e.g.
+// `tenant:alert_threshold:rediss_memory_used_bytes`, "rediss") is self-consistent
+// and passes, while no tenant ever writes `rediss_*`, so the recording rule is a
+// silent empty set (the #731 symptom from a different cause).
+//
+// The load-bearing invariant that catches a typo'd record name: every
+// `tenant[_version]:alert_threshold:<K>` recording rule must be CONSUMED by at
+// least one other expression in the same pack — an alert that compares it, or a
+// downstream recording rule (ADR-024 version-aware `:core` rules consume the
+// `tenant_version:alert_threshold:*` records this way). A typo'd record is an
+// orphan: hand-written alerts/cores reference real keys, never the typo, so it
+// appears ONLY on its own `record:` line. This is cheaper and zero-false-positive
+// vs a fixture-coverage gate (fixtures exercise records indirectly via alert
+// tests and rarely name them, so "must have a fixture line" would false-fail
+// dozens of legit records).
+func TestThresholdRecordsAreConsumed(t *testing.T) {
+	root := findRepoRoot(t)
+	packs, err := filepath.Glob(filepath.Join(root, "rule-packs", "rule-pack-*.yaml"))
+	if err != nil {
+		t.Fatalf("glob rule packs: %v", err)
+	}
+
+	recordCount := 0
+	for _, packPath := range packs {
+		raw, err := os.ReadFile(packPath)
+		if err != nil {
+			t.Errorf("read %s: %v", packPath, err)
+			continue
+		}
+		var doc rulePackDoc
+		if err := yaml.Unmarshal(raw, &doc); err != nil {
+			t.Errorf("unmarshal %s: %v", packPath, err)
+			continue
+		}
+		base := filepath.Base(packPath)
+
+		// Collect this pack's threshold record names and, separately, all
+		// references to alert_threshold series inside any expr (a record is
+		// "consumed" iff some expr OTHER than its own definition references it).
+		type recPos struct{ group string }
+		defined := map[string]recPos{}
+		consumed := map[string]bool{}
+		for _, g := range doc.Groups {
+			for _, r := range g.Rules {
+				if m := thresholdRecordRe.FindStringSubmatch(r.Record); m != nil {
+					defined[r.Record] = recPos{group: g.Name}
+				}
+				if r.Expr == "" {
+					continue
+				}
+				for _, ref := range alertThresholdRefRe.FindAllString(r.Expr, -1) {
+					consumed[ref] = true
+				}
+			}
+		}
+
+		for rec, pos := range defined {
+			recordCount++
+			if !consumed[rec] {
+				t.Errorf("%s [%s]: threshold record %q is defined but consumed by NO "+
+					"alert or downstream recording rule — a typo'd / dead record name "+
+					"produces a silent empty-set (the #734 / #731 failure shape). Either "+
+					"fix the record name to a real conf.d key, or add the alert that uses it.",
+					base, pos.group, rec)
+			}
+		}
+	}
+
+	if recordCount < minThresholdRecords {
+		t.Fatalf("discovered only %d threshold records (< %d expected) — discovery "+
+			"undershot; a green run over an empty set would be meaningless (#731)",
+			recordCount, minThresholdRecords)
+	}
+	t.Logf("orphan guard OK: %d threshold records all consumed by an alert/downstream rule", recordCount)
 }
