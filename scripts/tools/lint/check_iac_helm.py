@@ -45,6 +45,8 @@ Usage:
 Exit codes:
     0  no BLOCK findings (WARN/INFO/baseline may be present)
     1  BLOCK findings present (only when --ci)
+    2  caller-error: could not RUN the check (helm render or kube-linter
+       failed/unparseable on a chart) — fix the chart/engine, then retry
     3  engines required (--ci) but unavailable
 """
 from __future__ import annotations
@@ -67,7 +69,7 @@ if hasattr(sys.stdout, "reconfigure"):
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # Docker flat layout
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))  # Repo subdir layout
-from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 KUBE_LINTER_VERSION = "v0.7.4"
@@ -309,7 +311,8 @@ def kube_linter_lint(rendered_yaml: str) -> list[dict] | None:
 # Orchestration
 # ---------------------------------------------------------------------------
 def collect_findings(charts: list[str], strict: bool) -> dict[str, list[str]]:
-    findings: dict[str, list[str]] = {"BLOCK": [], "WARN": [], "INFO": []}
+    findings: dict[str, list[str]] = {
+        "BLOCK": [], "WARN": [], "INFO": [], "CALLER_ERROR": []}
 
     # --- Mode A: source text scan (always runs; no engines needed) ---
     for fp in helm_source_files():
@@ -342,17 +345,25 @@ def collect_findings(charts: list[str], strict: bool) -> dict[str, list[str]]:
             variant = values_rel.rsplit("/", 1)[-1] if values_rel else "values.yaml"
             rendered, err = helm_render(chart_dir, values_rel)
             if rendered is None:
-                findings["BLOCK"].append(
+                # The engine (helm) failed to RUN the check — that's a
+                # caller-error ("couldn't run"), NOT a security finding. Route
+                # it to the caller-error sentinel (exit 2) instead of folding it
+                # into BLOCK (exit 1, which means "found a non-compliant chart").
+                findings["CALLER_ERROR"].append(
                     f"{chart_dir} [{variant}] [render] helm template failed "
                     f"(Mode B gap): {err}"
                 )
+                findings["__caller_error__"] = ["1"]
                 continue
             # kube-linter findings
             reports = kube_linter_lint(rendered)
             if reports is None:
-                findings["BLOCK"].append(
+                # kube-linter failed to execute / its output was unparseable —
+                # again "couldn't run", not a finding → caller-error (exit 2).
+                findings["CALLER_ERROR"].append(
                     f"{chart_dir} [{variant}] [engine] kube-linter failed/unparseable"
                 )
+                findings["__caller_error__"] = ["1"]
                 continue
             seen: set[tuple[str, str]] = set()
             for r in reports:
@@ -413,13 +424,27 @@ def main() -> int:
 
     findings = collect_findings(charts, strict=args.ci)
     engine_error = findings.pop("__engine_error__", None)
+    caller_error = findings.pop("__caller_error__", None)
 
-    for action in ("BLOCK", "WARN", "INFO"):
+    for action in ("BLOCK", "WARN", "INFO", "CALLER_ERROR"):
         for line in findings[action]:
             print(f"  [{action}] {line}")
 
     if engine_error:
         return 3
+
+    # A "couldn't run the check" condition (helm render / kube-linter failure)
+    # is a caller-error (exit 2: fix the chart/environment, then retry), NOT a
+    # lint violation (exit 1: a non-compliant chart). Caller-error wins over the
+    # violation count so a broken render isn't misreported as "found a problem".
+    if caller_error:
+        print(
+            f"\nERROR Container SAST Layer 2 (Helm) — could not run the check on "
+            f"{len(findings['CALLER_ERROR'])} chart/variant(s) (helm render or "
+            f"kube-linter failed). Fix the chart / engine and retry.",
+            file=sys.stderr,
+        )
+        return EXIT_CALLER_ERROR
 
     n_block = len(findings["BLOCK"])
     n_warn = len(findings["WARN"])

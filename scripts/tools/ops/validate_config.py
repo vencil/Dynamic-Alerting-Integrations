@@ -108,10 +108,17 @@ FAIL = "fail"
 
 
 def _make_result(
-    name: str, status: str, details: list[str] | None = None
+    name: str, status: str, details: list[str] | None = None,
+    caller_error: bool = False,
 ) -> dict[str, object]:
-    """Create a check result dict."""
-    return {"check": name, "status": status, "details": details or []}
+    """Create a check result dict.
+
+    #452/#737: ``caller_error`` marks a FAIL that stems from a caller-error
+    class condition (a prerequisite tool missing/timed out, IO failure) rather
+    than a genuine validation finding, so the CLI can exit 2 instead of 1.
+    """
+    return {"check": name, "status": status, "details": details or [],
+            "caller_error": caller_error}
 
 
 # ============================================================
@@ -278,10 +285,12 @@ def check_custom_rules(
         return _make_result("custom_rules", PASS,
                             lines or ["No violations found"])
     except subprocess.TimeoutExpired:
-        return _make_result("custom_rules", FAIL, ["Lint timed out (30s)"])
+        return _make_result("custom_rules", FAIL, ["Lint timed out (30s)"],
+                            caller_error=True)
     except FileNotFoundError:
         return _make_result("custom_rules", FAIL,
-                            ["lint_custom_rules.py not found"])
+                            ["lint_custom_rules.py not found"],
+                            caller_error=True)
 
 
 # ============================================================
@@ -455,9 +464,11 @@ def check_versions() -> dict[str, object]:
         return _make_result("versions", PASS,
                             lines or ["Version numbers consistent"])
     except subprocess.TimeoutExpired:
-        return _make_result("versions", FAIL, ["Version check timed out"])
+        return _make_result("versions", FAIL, ["Version check timed out"],
+                            caller_error=True)
     except FileNotFoundError:
-        return _make_result("versions", FAIL, ["bump_docs.py not found"])
+        return _make_result("versions", FAIL, ["bump_docs.py not found"],
+                            caller_error=True)
 
 
 # ============================================================
@@ -630,6 +641,14 @@ def main() -> None:
 
     # Exit code
     has_fail = any(r["status"] == FAIL for r in results)
+    # #452/#737: a FAIL caused by a missing/timed-out prerequisite tool
+    # (lint_custom_rules.py / bump_docs.py) is a caller-error (exit 2), not a
+    # config validation finding (exit 1).
+    caller_error = any(
+        r["status"] == FAIL and r.get("caller_error") for r in results
+    )
+    if caller_error:
+        sys.exit(EXIT_CALLER_ERROR)
     sys.exit(EXIT_VIOLATION if has_fail else EXIT_OK)
 
 

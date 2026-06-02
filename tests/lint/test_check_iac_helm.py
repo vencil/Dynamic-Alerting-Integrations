@@ -235,3 +235,39 @@ class TestMainExitCodes:
         monkeypatch.setattr(helm, "find_charts", lambda: ["helm/x"])
         monkeypatch.setattr(sys, "argv", ["prog", "--ci"])
         assert helm.main() == 3
+
+    def test_render_failure_is_caller_error(self, monkeypatch):
+        # helm render failing is "couldn't run the check" => caller-error (2),
+        # NOT a non-compliant-chart finding (1). (#452 / CodeRabbit #737)
+        monkeypatch.setattr(helm, "helm_source_files", lambda: [])
+        monkeypatch.setattr(helm, "engines_available", lambda: True)
+        monkeypatch.setattr(helm, "helm_render", lambda c, v: (None, "boom"))
+        monkeypatch.setattr(helm, "find_charts", lambda: ["helm/x"])
+        monkeypatch.setattr(sys, "argv", ["prog", "--ci"])
+        assert helm.main() == 2
+
+    def test_kube_linter_unparseable_is_caller_error(self, monkeypatch):
+        # kube-linter failing/unparseable is "couldn't run" => caller-error (2).
+        monkeypatch.setattr(helm, "helm_source_files", lambda: [])
+        monkeypatch.setattr(helm, "engines_available", lambda: True)
+        monkeypatch.setattr(helm, "helm_render", lambda c, v: ("kind: x\n", ""))
+        monkeypatch.setattr(helm, "kube_linter_lint", lambda r: None)
+        monkeypatch.setattr(helm, "find_charts", lambda: ["helm/x"])
+        monkeypatch.setattr(sys, "argv", ["prog", "--ci"])
+        assert helm.main() == 2
+
+    def test_render_failure_caller_error_wins_over_block(self, monkeypatch):
+        # If BOTH a real CRITICAL finding AND a render failure are present,
+        # the caller-error (couldn't fully run) wins over the violation exit.
+        def _render(chart_dir, values_rel):
+            return (None, "boom") if "broken" in chart_dir else ("kind: x\n", "")
+
+        monkeypatch.setattr(helm, "helm_source_files", lambda: [])
+        monkeypatch.setattr(helm, "engines_available", lambda: True)
+        monkeypatch.setattr(helm, "helm_render", _render)
+        monkeypatch.setattr(helm, "kube_linter_lint", lambda r: [
+            {"Check": "privileged-container", "Diagnostic": {"Message": "p"}}])
+        monkeypatch.setattr(helm, "find_charts",
+                            lambda: ["helm/ok", "helm/broken"])
+        monkeypatch.setattr(sys, "argv", ["prog", "--ci"])
+        assert helm.main() == 2

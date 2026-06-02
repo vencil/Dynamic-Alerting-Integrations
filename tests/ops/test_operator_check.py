@@ -81,6 +81,7 @@ class TestCheckResult:
             "check": "Test",
             "status": "pass",
             "detail": "ok",
+            "caller_error": False,  # #452/#737: additive caller-error marker
         }
 
     def test_default_detail_empty(self):

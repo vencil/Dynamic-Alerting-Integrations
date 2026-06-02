@@ -294,7 +294,8 @@ class TestMain:
             with patch("sys.argv", ["federation_check.py", "edge", "--json"]):
                 with pytest.raises(SystemExit) as exc_info:
                     fc.main()
-        assert exc_info.value.code == 1
+        # #452/#737: unreachable edge Prometheus = transport caller-error
+        assert exc_info.value.code == EXIT_CALLER_ERROR
         output = json.loads(capsys.readouterr().out)
         assert output["tool"] == "federation-check"
         assert output["section"] == "edge"
@@ -304,7 +305,8 @@ class TestMain:
             with patch("sys.argv", ["federation_check.py", "central", "--json"]):
                 with pytest.raises(SystemExit) as exc_info:
                     fc.main()
-        assert exc_info.value.code == 1
+        # #452/#737: unreachable central Prometheus = transport caller-error
+        assert exc_info.value.code == EXIT_CALLER_ERROR
 
     def test_e2e_requires_edge_urls(self, capsys):
         with patch("sys.argv", ["federation_check.py", "e2e"]):
@@ -323,6 +325,7 @@ class TestMain:
                 ]):
                     with pytest.raises(SystemExit) as exc_info:
                         fc.main()
-        assert exc_info.value.code == 1
+        # #452/#737: unreachable edges / transport failures = caller-error
+        assert exc_info.value.code == EXIT_CALLER_ERROR
         output = json.loads(capsys.readouterr().out)
         assert output["section"] == "e2e"

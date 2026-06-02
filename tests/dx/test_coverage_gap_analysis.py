@@ -244,3 +244,10 @@ class TestCLI:
         with pytest.raises(SystemExit) as exc_info:
             cga.main(["--coverage-text", str(cov_file)])
         assert exc_info.value.code == EXIT_CALLER_ERROR
+
+    def test_cli_missing_coverage_text(self, tmp_path):
+        """缺檔的 --coverage-text（load-class caller error）exit 2，不得 traceback 成 exit 1 (#452/#737)"""
+        missing = tmp_path / "does-not-exist.txt"
+        with pytest.raises(SystemExit) as exc_info:
+            cga.main(["--coverage-text", str(missing)])
+        assert exc_info.value.code == EXIT_CALLER_ERROR

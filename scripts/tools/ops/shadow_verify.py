@@ -47,7 +47,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_python import http_get_json, query_prometheus_instant  # noqa: E402
-from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 # Alias for backward-compat within this module
 query_prometheus = query_prometheus_instant
@@ -109,6 +109,7 @@ def check_preflight(args):
         checks.append({
             "check": "prometheus_healthy",
             "status": "fail",
+            "caller_error": True,  # #452/#737: transport failure = caller-error (exit 2)
             "detail": str(e)[:80],
         })
 
@@ -118,6 +119,7 @@ def check_preflight(args):
         checks.append({
             "check": "recording_rules_loaded",
             "status": "fail",
+            "caller_error": True,  # query transport failure = caller-error
             "detail": f"Query failed: {err[:60]}",
         })
     else:
@@ -134,6 +136,7 @@ def check_preflight(args):
         checks.append({
             "check": "shadow_rules_present",
             "status": "fail",
+            "caller_error": True,  # query transport failure = caller-error
             "detail": f"Query failed: {err[:60]}",
         })
     else:
@@ -189,6 +192,7 @@ def check_runtime(args):
             checks.append({
                 "check": "csv_report",
                 "status": "fail",
+                "caller_error": True,  # CSV load/IO failure = caller-error (exit 2)
                 "detail": f"CSV parse error: {str(e)[:60]}",
             })
             return checks
@@ -359,6 +363,7 @@ def main():
     all_checks = []
     all_results = []
     has_failure = False
+    caller_error = False  # #452/#737: transport/load failure → exit 2, not 1
 
     phases = (
         ["preflight", "runtime", "convergence"]
@@ -378,6 +383,8 @@ def main():
 
         if any(c["status"] == "fail" for c in checks):
             has_failure = True
+        if any(c["status"] == "fail" and c.get("caller_error") for c in checks):
+            caller_error = True
 
         if args.json:
             all_results.append({"phase": phase, "checks": checks})
@@ -397,6 +404,10 @@ def main():
         print(f"  Overall: {'FAIL' if has_failure else 'PASS'}")
         print(f"{'='*60}\n")
 
+    # #452/#737: unreachable Prometheus / query failure / CSV load failure are
+    # caller-errors (exit 2); convergence/mismatch findings stay violation (1).
+    if caller_error:
+        sys.exit(EXIT_CALLER_ERROR)
     sys.exit(EXIT_VIOLATION if has_failure else EXIT_OK)
 
 

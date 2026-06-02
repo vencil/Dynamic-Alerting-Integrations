@@ -271,7 +271,8 @@ class TestMain:
             with patch("sys.argv", ["byo_check.py", "prometheus", "--json"]):
                 with pytest.raises(SystemExit) as exc_info:
                     bc.main()
-        assert exc_info.value.code == 1
+        # #452/#737: unreachable Prometheus = transport caller-error → exit 2
+        assert exc_info.value.code == 2
         output = json.loads(capsys.readouterr().out)
         assert output["tool"] == "byo-check"
         assert output["status"] == "fail"
@@ -281,4 +282,5 @@ class TestMain:
             with patch("sys.argv", ["byo_check.py", "all", "--json"]):
                 with pytest.raises(SystemExit) as exc_info:
                     bc.main()
-        assert exc_info.value.code == 1
+        # #452/#737: unreachable endpoints = transport caller-error → exit 2
+        assert exc_info.value.code == 2

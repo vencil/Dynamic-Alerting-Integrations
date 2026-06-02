@@ -60,8 +60,11 @@ Output
 Exit codes
 ----------
     0  Soak completed cleanly
-    1  Caller error (bad args, target not reachable on first probe)
-    2  Soak interrupted but partial output preserved
+    2  Caller error — bad args / config-dir missing / target not reachable on
+       first probe, OR soak interrupted (SIGINT/SIGTERM) with partial output
+       preserved. Both are "the tool could not finish a clean soak", per the
+       0/1/2 contract in scripts/tools/_lib_exitcodes.py. There is no exit-1
+       (finding) state: this harness records signals, it does not gate.
 """
 from __future__ import annotations
 

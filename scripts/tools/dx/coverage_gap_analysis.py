@@ -242,9 +242,17 @@ def main(argv: Optional[List[str]] = None) -> None:
         else DEFAULT_SOURCE_DIRS
     )
 
-    # Get coverage data
+    # Get coverage data. A missing/unreadable --coverage-text input is a
+    # load-class caller error (the tool can't do its job because of how it
+    # was invoked), so it must exit EXIT_CALLER_ERROR(2) rather than crash
+    # with an uncaught traceback (exit 1, indistinguishable from a finding).
     if args.coverage_text:
-        text = Path(args.coverage_text).read_text(encoding="utf-8")
+        try:
+            text = Path(args.coverage_text).read_text(encoding="utf-8")
+        except OSError as exc:
+            print(f"ERROR: cannot read --coverage-text {args.coverage_text}: {exc}",
+                  file=sys.stderr)
+            sys.exit(EXIT_CALLER_ERROR)
     elif args.coverage_file:
         text = parse_coverage_file(Path(args.coverage_file), REPO_ROOT)
     else:

@@ -69,6 +69,7 @@ def import_dashboard(dashboard_path, cm_name, namespace, dry_run=False):
         results.append({
             "action": "import",
             "status": "fail",
+            "caller_error": True,  # #452/#737: input/load precondition = caller-error (exit 2)
             "detail": f"File not found: {dashboard_path}",
         })
         return results
@@ -82,6 +83,7 @@ def import_dashboard(dashboard_path, cm_name, namespace, dry_run=False):
         results.append({
             "action": "import",
             "status": "fail",
+            "caller_error": True,  # malformed input file = caller-error (exit 2)
             "detail": f"Invalid JSON: {str(e)[:60]}",
         })
         return results
@@ -110,6 +112,7 @@ def import_dashboard(dashboard_path, cm_name, namespace, dry_run=False):
             results.append({
                 "action": "create_configmap",
                 "status": "fail",
+                "caller_error": True,  # kubectl transport/env failure = caller-error
                 "detail": f"kubectl create configmap failed for {cm_name}",
             })
             return results
@@ -133,6 +136,7 @@ def import_dashboard(dashboard_path, cm_name, namespace, dry_run=False):
                 results.append({
                     "action": "create_configmap",
                     "status": "fail",
+                    "caller_error": True,  # kubectl apply transport/env failure = caller-error
                     "detail": f"kubectl apply failed: {proc.stderr[:60]}",
                 })
                 return results
@@ -140,6 +144,7 @@ def import_dashboard(dashboard_path, cm_name, namespace, dry_run=False):
             results.append({
                 "action": "create_configmap",
                 "status": "fail",
+                "caller_error": True,  # subprocess/IO failure = caller-error
                 "detail": str(e)[:60],
             })
             return results
@@ -162,6 +167,7 @@ def import_dashboard(dashboard_path, cm_name, namespace, dry_run=False):
         results.append({
             "action": "label_configmap",
             "status": "fail",
+            "caller_error": True,  # kubectl label transport/env failure = caller-error
             "detail": f"Failed to label ConfigMap {cm_name}",
         })
 
@@ -184,6 +190,7 @@ def verify_dashboards(namespace):
         checks.append({
             "check": "list_dashboard_configmaps",
             "status": "fail",
+            "caller_error": True,  # kubectl transport/env failure = caller-error (exit 2)
             "detail": "kubectl get configmap failed",
         })
         return checks
@@ -195,6 +202,7 @@ def verify_dashboards(namespace):
         checks.append({
             "check": "list_dashboard_configmaps",
             "status": "fail",
+            "caller_error": True,  # unparseable kubectl output = caller-error
             "detail": "Failed to parse kubectl output",
         })
         return checks
@@ -265,6 +273,11 @@ def main():
     if args.verify:
         checks = verify_dashboards(args.namespace)
         has_failure = any(c["status"] == "fail" for c in checks)
+        # #452/#737: kubectl transport / unparseable-output failures are
+        # caller-errors (exit 2), not dashboard findings (exit 1).
+        caller_error = any(
+            c["status"] == "fail" and c.get("caller_error") for c in checks
+        )
 
         if args.json:
             print(json.dumps({
@@ -282,6 +295,8 @@ def main():
                 print(f"  {symbol} {c['check']:40s} {c['detail']}")
             print(f"\n  Overall: {'FAIL' if has_failure else 'PASS'}\n")
 
+        if caller_error:
+            sys.exit(EXIT_CALLER_ERROR)
         sys.exit(EXIT_VIOLATION if has_failure else EXIT_OK)
 
     # Collect dashboard files to import
@@ -308,12 +323,15 @@ def main():
 
     all_results = []
     has_failure = False
+    caller_error = False  # #452/#737: file-not-found / invalid-JSON / kubectl env
 
     for dashboard_path, cm_name in dashboards:
         results = import_dashboard(dashboard_path, cm_name, args.namespace, args.dry_run)
         all_results.extend(results)
         if any(r["status"] == "fail" for r in results):
             has_failure = True
+        if any(r["status"] == "fail" and r.get("caller_error") for r in results):
+            caller_error = True
 
     if args.json:
         print(json.dumps({
@@ -331,6 +349,10 @@ def main():
             print(f"  {symbol} {r['action']:30s} {r['detail']}")
         print(f"\n  Overall: {'FAIL' if has_failure else 'PASS'}\n")
 
+    # #452/#737: file-not-found / invalid-JSON / kubectl env failures are
+    # caller-errors (exit 2); a clean run that merely couldn't apply is still 1.
+    if caller_error:
+        sys.exit(EXIT_CALLER_ERROR)
     sys.exit(EXIT_VIOLATION if has_failure else EXIT_OK)
 
 

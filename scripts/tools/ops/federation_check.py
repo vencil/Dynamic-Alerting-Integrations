@@ -60,6 +60,7 @@ def check_edge(prom_url):
         checks.append({
             "check": "edge_prometheus_reachable",
             "status": "fail",
+            "caller_error": True,  # #452/#737: transport failure = caller-error (exit 2)
             "detail": f"Cannot reach: {str(e)[:60]}",
         })
         return checks
@@ -70,6 +71,7 @@ def check_edge(prom_url):
         checks.append({
             "check": "edge_external_labels",
             "status": "fail",
+            "caller_error": True,  # config API transport failure = caller-error
             "detail": f"Config API failed: {err[:60]}",
         })
     else:
@@ -101,6 +103,7 @@ def check_edge(prom_url):
         checks.append({
             "check": "edge_tenant_label",
             "status": "fail",
+            "caller_error": True,  # query transport failure = caller-error
             "detail": f"Query failed: {err[:60]}",
         })
     elif results:
@@ -159,6 +162,7 @@ def check_central(prom_url):
         checks.append({
             "check": "central_prometheus_reachable",
             "status": "fail",
+            "caller_error": True,  # #452/#737: transport failure = caller-error (exit 2)
             "detail": f"Cannot reach: {str(e)[:60]}",
         })
         return checks
@@ -169,6 +173,7 @@ def check_central(prom_url):
         checks.append({
             "check": "central_edge_metrics",
             "status": "fail",
+            "caller_error": True,  # query transport failure = caller-error
             "detail": f"Query failed: {err[:60]}",
         })
     elif results:
@@ -201,6 +206,7 @@ def check_central(prom_url):
         checks.append({
             "check": "central_threshold_exporter",
             "status": "fail",
+            "caller_error": True,  # query transport failure = caller-error
             "detail": f"Query failed: {err[:60]}",
         })
     elif results:
@@ -241,6 +247,7 @@ def check_central(prom_url):
         checks.append({
             "check": "central_alert_rules",
             "status": "fail",
+            "caller_error": True,  # rules API transport failure = caller-error
             "detail": f"Rules API failed: {err[:60]}",
         })
     else:
@@ -348,6 +355,11 @@ def main():
         sys.exit(EXIT_CALLER_ERROR)
 
     has_failure = any(c["status"] == "fail" for c in checks)
+    # #452/#737: transport/connectivity failures (cannot reach Prometheus,
+    # query/API failed) are caller-errors (exit 2), not findings (exit 1).
+    caller_error = any(
+        c["status"] == "fail" and c.get("caller_error") for c in checks
+    )
 
     if args.json:
         print(json.dumps({
@@ -362,6 +374,8 @@ def main():
         print(f"  Overall: {'FAIL' if has_failure else 'PASS'}")
         print(f"{'='*60}\n")
 
+    if caller_error:
+        sys.exit(EXIT_CALLER_ERROR)
     sys.exit(EXIT_VIOLATION if has_failure else EXIT_OK)
 
 

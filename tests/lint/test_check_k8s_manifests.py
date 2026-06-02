@@ -227,6 +227,14 @@ class TestMainExitCodes:
         monkeypatch.setattr(sys, "argv", ["prog", "--ci"])
         assert k8s.main() == 3
 
+    def test_kube_linter_unparseable_is_caller_error(self, monkeypatch):
+        # kube-linter failing/unparseable is "couldn't run the check" =>
+        # caller-error (2), NOT a non-compliant-manifest finding (1).
+        # (#452 / CodeRabbit #737)
+        _stub_engine(monkeypatch, None)  # kube_linter_lint_dir -> None
+        monkeypatch.setattr(sys, "argv", ["prog", "--ci"])
+        assert k8s.main() == 2
+
 
 # ---------------------------------------------------------------------------
 # Live baseline (engine-gated) — confirms the real repo ships at 0 BLOCK
