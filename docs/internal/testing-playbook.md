@@ -174,7 +174,7 @@ python3 -m pytest tests/test_snapshot.py::test_tool_help_mariadb --snapshot-upda
 
 ### Exit-code 合約（0/1/2，#452 Track A）
 
-da-tools Python 工具與 Go binary（da-guard / da-parser / da-batchpr）共用同一 exit-code SSOT [`scripts/tools/_lib_exitcodes.py`](../../scripts/tools/_lib_exitcodes.py)：
+da-tools Python 工具與 Go binary（da-guard / da-parser / da-batchpr）共用同一 exit-code SSOT [`scripts/tools/_lib_exitcodes.py`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/scripts/tools/_lib_exitcodes.py)：
 
 | Code | 常數 | 語意 |
 |---|---|---|

@@ -179,7 +179,7 @@ Status 處理 / hotfix 例外 / A vs B CI 分類細節見 [`github-release-playb
 
 ### 13. da-tools 子命令 exit-code / `--json` / `--ci` 約定（#452）
 
-**規則**：新增或修改 da-tools 子命令時，exit code 一律遵守 SSOT [`scripts/tools/_lib_exitcodes.py`](../../scripts/tools/_lib_exitcodes.py) 的 `0/1/2`——`EXIT_OK`（乾淨）/ `EXIT_VIOLATION`（user-actionable 發現：違規、drift、`--ci` fail-on-finding）/ `EXIT_CALLER_ERROR`（bad args、檔案/路徑不存在、連線失敗、malformed 輸入、缺前置、crash）。**import 具名常數，不寫 magic number**。對齊 Go binary（da-guard / da-parser / da-batchpr）同款 0/1/2 註解。
+**規則**：新增或修改 da-tools 子命令時，exit code 一律遵守 SSOT [`scripts/tools/_lib_exitcodes.py`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/scripts/tools/_lib_exitcodes.py) 的 `0/1/2`——`EXIT_OK`（乾淨）/ `EXIT_VIOLATION`（user-actionable 發現：違規、drift、`--ci` fail-on-finding）/ `EXIT_CALLER_ERROR`（bad args、檔案/路徑不存在、連線失敗、malformed 輸入、缺前置、crash）。**import 具名常數，不寫 magic number**。對齊 Go binary（da-guard / da-parser / da-batchpr）同款 0/1/2 註解。
 
 - **`--json`**：machine-readable 子命令須提供 `--json`，且 `da-tools <cmd> --json | jq` idiom 須在 cli-reference 文件化。
 - **`--ci`**：Python 工具用 `--ci` 控 fail-on-finding；**Go binary 不引入 `--ci`**（無跨 Python/Go 統一 wrapper 消費者，CI 對 Go 工具用其原生 flag）。
