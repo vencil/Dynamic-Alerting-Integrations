@@ -111,6 +111,15 @@ spec:
             - name: TENANT_API_GIT_TIMEOUT
               value: {{ .Values.tenantApi.gitTimeout | quote }}
             {{- end }}
+            {{- if .Values.tenantApi.gitFetchTimeout }}
+            # In-lock base fetch timeout (TRK-318) — bounds the `git fetch` that
+            # anchors each PR write on the freshest origin/<base>. Separate from
+            # (and more aggressive than) the regular git timeout so a degraded forge
+            # fast-fails to 503 instead of pinning the write lock. Emitted only when
+            # set; otherwise the binary's 5s default applies.
+            - name: TA_GIT_FETCH_TIMEOUT
+              value: {{ .Values.tenantApi.gitFetchTimeout | quote }}
+            {{- end }}
             # Server tuning (issue #144). The binary has working
             # defaults built in; emit env vars only when the chart
             # has them so a default deploy doesn't churn the env

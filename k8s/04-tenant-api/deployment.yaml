@@ -107,6 +107,15 @@ spec:
               value: "da-portal"
             - name: GIT_COMMITTER_EMAIL
               value: "da-portal@dynamic-alerting.local"
+            # In-lock base fetch timeout (TRK-318 / ADR-023 §B). Before each PR write
+            # the binary runs `git fetch --prune origin <base>` to anchor the branch
+            # on the freshest origin/<base> — the git-clone initContainer above only
+            # pulls once at pod start, so a long-lived pod's base would otherwise go
+            # stale after a remote merge and silently roll back shared-file edits.
+            # Separate, aggressive deadline (default 5s) so a degraded forge fast-fails
+            # to 503 instead of pinning the write lock. Raise for a slow on-prem forge.
+            - name: TA_GIT_FETCH_TIMEOUT
+              value: "5s"
           ports:
             - name: api
               containerPort: 8080

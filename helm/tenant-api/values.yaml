@@ -61,6 +61,17 @@ tenantApi:
   # TENANT_API_GIT_TIMEOUT. Emitted only when set, so a default upgrade is a no-op.
   gitTimeout: ""
 
+  # In-lock base fetch timeout (TRK-318 / ADR-023 §B). Empty → binary default (5s).
+  # Before each PR write, tenant-api runs `git fetch --prune origin <base>` INSIDE
+  # the write lock to anchor the branch on the freshest origin/<base> — otherwise a
+  # long-lived pod branches from a base that went stale after a remote merge and
+  # silently rolls back a shared file (_groups.yaml / _views.yaml) another tenant
+  # already merged. Kept DELIBERATELY separate from (and far more aggressive than)
+  # gitTimeout: the fetch holds the global lock, so a degraded forge must fast-fail
+  # to 503 in seconds, not the full git timeout. Read as TA_GIT_FETCH_TIMEOUT
+  # (Go duration, e.g. "5s"). Emitted only when set, so a default upgrade is a no-op.
+  gitFetchTimeout: ""
+
   # HTTP server tuning (issue #144). Defaults match the binary's
   # hardcoded values pre-#144 so a default Helm upgrade is a no-op;
   # override only when an environment needs different headroom.
