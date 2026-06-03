@@ -1,0 +1,76 @@
+# promtool unit test — Custom Alerts (#741), MODE propagation across a SHARED rule.
+# Driven by tests/dx/test_custom_alerts_promtool.py (compiles example → temp pack).
+#
+# Refutes the "mode-loss" deadlock: `mode` is NOT in the shape signature, so two
+# tenants declaring the SAME shape (here the shop rate recipe) with DIFFERENT
+# modes (page vs silent) compile to ONE vectorized rule. Because `mode` rides the
+# data plane (user_threshold label → group_left(name, mode) → alert label), the
+# single shared rule still emits a per-tenant `mode` label — so S8 routing can
+# send shop-a (page) to the pager and web-b (silent) to a null receiver. Without
+# the mode label on the join, web-b's silent alert would page. Also proves the
+# vectorized rule fires for a tenant (web-b) not present in the example conf.d.
+rule_files:
+  - rule-pack-custom-alerts.yaml
+
+evaluation_interval: 15s
+
+tests:
+  - interval: 15s
+    input_series:
+      # shop-a: 5xx POST rate ≈ 66.7 > 50, mode=page
+      - series: 'http_requests_total{tenant="shop-a", method="POST", status="500", namespace="shop", pod="api-1"}'
+        values: '0+1000x48'
+      - series: 'user_threshold{recipe_id="rate__http_requests_total__s_method_POST__sre_status_5____gt__w5m", tenant="shop-a", severity="warning", name="http_5xx_spike", mode="page"}'
+        values: '50x48'
+      - series: 'tenant_metadata_info{tenant="shop-a", runbook_url="http://rb/shop", owner="team-shop", tier="gold"}'
+        values: '1x48'
+      # web-b: SAME shape, but mode=silent (and NOT declared in example conf.d —
+      # the vectorized rule still covers it because it has the user_threshold series)
+      - series: 'http_requests_total{tenant="web-b", method="POST", status="500", namespace="web", pod="srv-9"}'
+        values: '0+1000x48'
+      - series: 'user_threshold{recipe_id="rate__http_requests_total__s_method_POST__sre_status_5____gt__w5m", tenant="web-b", severity="warning", name="web_5xx", mode="silent"}'
+        values: '50x48'
+      - series: 'tenant_metadata_info{tenant="web-b", runbook_url="http://rb/web", owner="team-web", tier="silver"}'
+        values: '1x48'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: Custom_rate__http_requests_total__s_method_POST__sre_status_5____gt__w5m
+        exp_alerts:
+          # shop-a → mode=page (would route to the pager)
+          - exp_labels:
+              severity: warning
+              tenant: shop-a
+              recipe: rate
+              name: http_5xx_spike
+              mode: page
+              version: default
+              runbook_url: "http://rb/shop"
+              owner: team-shop
+              tier: gold
+            exp_annotations:
+              summary: "Custom alert [http_5xx_spike] for shop-a"
+              summary_zh: "shop-a 的自訂告警 [http_5xx_spike] 觸發"
+              description: "rate on http_requests_total{method=\"POST\", status=~\"5..\"}: value 66.67 crossed the configured threshold"
+              description_zh: "http_requests_total{method=\"POST\", status=~\"5..\"} 的 rate: 值 66.67 已越過設定閾值"
+              runbook_url: "http://rb/shop"
+              owner: team-shop
+              tier: gold
+          # web-b → mode=silent (S8 would route to null/log-only, NOT the pager)
+          - exp_labels:
+              severity: warning
+              tenant: web-b
+              recipe: rate
+              name: web_5xx
+              mode: silent
+              version: default
+              runbook_url: "http://rb/web"
+              owner: team-web
+              tier: silver
+            exp_annotations:
+              summary: "Custom alert [web_5xx] for web-b"
+              summary_zh: "web-b 的自訂告警 [web_5xx] 觸發"
+              description: "rate on http_requests_total{method=\"POST\", status=~\"5..\"}: value 66.67 crossed the configured threshold"
+              description_zh: "http_requests_total{method=\"POST\", status=~\"5..\"} 的 rate: 值 66.67 已越過設定閾值"
+              runbook_url: "http://rb/web"
+              owner: team-web
+              tier: silver

@@ -1,0 +1,12 @@
+# Custom Alerts example — DOMAIN-level (L1) declaration for the `finance/` subtree.
+# A recipe here applies to every tenant defined under finance/ (here: pay-a),
+# as ONE vectorized rule covering the subtree — not N per-tenant rules. Tenants
+# in the subtree cannot override it (platform/domain policy = generated rule).
+_custom_alerts:
+  - recipe: ratio
+    name: payment_failure_ratio
+    metric: payment_failed_total
+    denominator_metric: payment_attempts_total
+    op: ">"
+    window: 5m
+    threshold: "0.01:critical"

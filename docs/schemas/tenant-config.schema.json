@@ -89,6 +89,11 @@
           "$ref": "#/definitions/operatorConfig",
           "title": "Operator CRD Settings (v2.6.0)",
           "description": "Per-tenant Operator mode overrides. Used by operator-generate and migrate-to-operator tools."
+        },
+        "_custom_alerts": {
+          "$ref": "#/definitions/customAlertList",
+          "title": "Custom Alerts (v2.9.0 ADR-024 Capability B)",
+          "description": "Tenant-authored declarative custom alerts via platform recipes. Declared here (tenant leaf) they apply only to this tenant. Compiled to ONE vectorized rule per shape (rule count = shape count, not per-tenant fan-out). Tenants never write PromQL."
         }
       },
       "additionalProperties": {
@@ -905,9 +910,107 @@
           "type": "string",
           "enum": ["auto", "manual", "disable"],
           "description": "Default severity dedup mode for tenants under this directory."
+        },
+        "_custom_alerts": {
+          "$ref": "#/definitions/customAlertList",
+          "title": "Custom Alerts — platform/domain scope (v2.9.0 ADR-024)",
+          "description": "Custom alert recipes declared at this directory level apply to EVERY tenant in the subtree (platform L0 / domain L1 / subdomain L2), as ONE vectorized rule covering the subtree. Tenants in the subtree cannot override these (platform/domain policy)."
         }
       },
       "additionalProperties": true
+    },
+    "customAlertList": {
+      "type": "array",
+      "title": "Custom Alert Recipe Declarations (v2.9.0 ADR-024 Capability B)",
+      "description": "List of custom alert recipe instances. Each fills a platform-authored recipe's parameters — the tenant never writes PromQL. Scope is the declaration level (tenant leaf vs _defaults.yaml). See rule-packs/recipes/ and docs/design/config-driven.md.",
+      "items": { "$ref": "#/definitions/customAlertInstance" }
+    },
+    "customAlertInstance": {
+      "type": "object",
+      "title": "Custom Alert Recipe Instance",
+      "description": "One parameterized custom alert. The compiler groups instances by shape signature (recipe, metric, op, window, quantile, denominator, selectors) and emits ONE vectorized rule per shape.",
+      "required": ["recipe", "name", "metric", "window", "threshold"],
+      "properties": {
+        "recipe": {
+          "type": "string",
+          "title": "Recipe Type",
+          "description": "Which platform recipe to instantiate.",
+          "enum": ["threshold", "rate", "ratio", "absence", "p99_latency"]
+        },
+        "name": {
+          "type": "string",
+          "title": "Alert Name (per-tenant, human-facing)",
+          "description": "Tenant-chosen name surfaced via the `name` label (the on-call display title). Must be unique within the declaring tenant. NOT the rule identity (that is the shape slug).",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "examples": ["queue_depth_high", "http_5xx_spike"]
+        },
+        "metric": {
+          "type": "string",
+          "title": "Metric Name",
+          "description": "Bare Prometheus metric name. Label filtering MUST use selectors/selectors_re (never inline PromQL) — the strict pattern (no colon/braces/operators) is the first line of injection defence.",
+          "pattern": "^[a-zA-Z_][a-zA-Z0-9_]*$"
+        },
+        "denominator_metric": {
+          "type": "string",
+          "title": "Denominator Metric (ratio recipe)",
+          "description": "Denominator counter for the ratio recipe.",
+          "pattern": "^[a-zA-Z_][a-zA-Z0-9_]*$"
+        },
+        "op": {
+          "type": "string",
+          "title": "Comparison Operator",
+          "description": "How the computed value is compared to the threshold (ignored by absence).",
+          "enum": [">", ">=", "<", "<="],
+          "default": ">"
+        },
+        "window": {
+          "type": "string",
+          "title": "Window (Go duration)",
+          "description": "Evaluation/rate window, e.g. '5m', '10m'.",
+          "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$",
+          "examples": ["5m", "10m", "1h"]
+        },
+        "quantile": {
+          "type": ["string", "number"],
+          "title": "Quantile (p99_latency recipe)",
+          "description": "Quantile in (0,1); default 0.99.",
+          "examples": ["0.99", 0.95]
+        },
+        "threshold": {
+          "$ref": "#/definitions/thresholdScalar",
+          "title": "Threshold (value[:severity])",
+          "description": "Threshold value with optional severity (warning|critical, default warning). Reuses the value:severity convention. For absence this is a presence flag."
+        },
+        "selectors": {
+          "type": "object",
+          "title": "Exact Label Filters (=)",
+          "description": "label → value, compiled to exact matchers `{label=\"value\"}`. Reserved labels (tenant/version/__name__/severity/recipe/recipe_id/name) are rejected.",
+          "propertyNames": { "pattern": "^[a-zA-Z_][a-zA-Z0-9_]*$" },
+          "additionalProperties": { "type": "string" }
+        },
+        "selectors_re": {
+          "type": "object",
+          "title": "Regex Label Filters (=~)",
+          "description": "label → regex, compiled to regex matchers `{label=~\"pattern\"}` (anchored by Prometheus).",
+          "propertyNames": { "pattern": "^[a-zA-Z_][a-zA-Z0-9_]*$" },
+          "additionalProperties": { "type": "string" }
+        },
+        "mode": {
+          "type": "string",
+          "title": "Alert Mode",
+          "description": "page = normal routing; silent = dry-run (null/log-only receiver, wired in a later slice).",
+          "enum": ["page", "silent"],
+          "default": "page"
+        },
+        "for": {
+          "type": "string",
+          "title": "For Duration",
+          "description": "Pending duration before firing (Go duration). Default 1m.",
+          "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$",
+          "default": "1m"
+        }
+      },
+      "additionalProperties": false
     }
   }
 }

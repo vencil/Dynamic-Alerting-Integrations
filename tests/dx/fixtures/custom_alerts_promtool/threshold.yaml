@@ -1,0 +1,75 @@
+# promtool unit test — Custom Alerts (ADR-024 Capability B, #741), THRESHOLD recipe.
+# Run: promtool test rules tests/rulepacks/rule-pack-custom-alerts-threshold_test.yaml
+#
+# Proves the dominant custom-alert path: a tenant app metric with NO `version`
+# label at scrape time is collapsed by `by(tenant,version)` + normalized to
+# version="default" and joins the (also version-less) user_threshold. Also
+# asserts the alertname/name DECOUPLING: alertname is the static shape slug,
+# while the human title comes from the `{{ $labels.name }}` label carried by
+# group_left(name). Plus a no-fire below-threshold case + maintenance suppress.
+rule_files:
+  - rule-pack-custom-alerts.yaml
+
+evaluation_interval: 15s
+
+tests:
+  # ── shop-a: queue depth 1500 > threshold 1000, NO version label anywhere ──
+  - interval: 15s
+    input_series:
+      - series: 'order_queue_depth{tenant="shop-a", namespace="shop", pod="api-7c9-x"}'
+        values: '1500x48'
+      - series: 'user_threshold{recipe_id="threshold__order_queue_depth__gt__w5m", tenant="shop-a", severity="warning", name="queue_depth_high"}'
+        values: '1000x48'
+      - series: 'tenant_metadata_info{tenant="shop-a", runbook_url="http://rb/shop", owner="team-shop", tier="gold"}'
+        values: '1x48'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: Custom_threshold__order_queue_depth__gt__w5m
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              tenant: shop-a
+              recipe: threshold
+              name: queue_depth_high
+              version: default
+              runbook_url: "http://rb/shop"
+              owner: team-shop
+              tier: gold
+            exp_annotations:
+              summary: "Custom alert [queue_depth_high] for shop-a"
+              summary_zh: "shop-a 的自訂告警 [queue_depth_high] 觸發"
+              description: "threshold on order_queue_depth: value 1500.00 crossed the configured threshold"
+              description_zh: "order_queue_depth 的 threshold: 值 1500.00 已越過設定閾值"
+              runbook_url: "http://rb/shop"
+              owner: team-shop
+              tier: gold
+
+  # ── below threshold → no alert ──
+  - interval: 15s
+    input_series:
+      - series: 'order_queue_depth{tenant="shop-a", namespace="shop", pod="api-7c9-x"}'
+        values: '500x48'
+      - series: 'user_threshold{recipe_id="threshold__order_queue_depth__gt__w5m", tenant="shop-a", severity="warning", name="queue_depth_high"}'
+        values: '1000x48'
+      - series: 'tenant_metadata_info{tenant="shop-a", runbook_url="http://rb/shop", owner="team-shop", tier="gold"}'
+        values: '1x48'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: Custom_threshold__order_queue_depth__gt__w5m
+        exp_alerts: []
+
+  # ── over threshold BUT tenant in maintenance → suppressed ──
+  - interval: 15s
+    input_series:
+      - series: 'order_queue_depth{tenant="shop-a", namespace="shop", pod="api-7c9-x"}'
+        values: '1500x48'
+      - series: 'user_threshold{recipe_id="threshold__order_queue_depth__gt__w5m", tenant="shop-a", severity="warning", name="queue_depth_high"}'
+        values: '1000x48'
+      - series: 'user_state_filter{tenant="shop-a", filter="maintenance"}'
+        values: '1x48'
+      - series: 'tenant_metadata_info{tenant="shop-a", runbook_url="http://rb/shop", owner="team-shop", tier="gold"}'
+        values: '1x48'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: Custom_threshold__order_queue_depth__gt__w5m
+        exp_alerts: []

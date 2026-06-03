@@ -88,6 +88,7 @@ lang: zh
 | `bump_docs.py` | 版號一致性管理工具 |
 | `bump_playbook_versions.py` | Bump `verified-at-version:` front-matter across the 4 operational playbooks. |
 | `check_aria_references.py` | Static JSX ARIA reference closure validator (Phase .a0 Day 5 verification). |
+| `compile_custom_alerts.py` | Compile Custom Alert recipes → rule-packs/rule-pack-custom-alerts.yaml. |
 | `coverage_delta.py` | Per-file + total coverage delta between two runs. |
 | `coverage_gap_analysis.py` | Per-file coverage ranking report |
 | `describe_tenant.py` | Describe effective tenant config — resolve _defaults.yaml inheritance chain. |

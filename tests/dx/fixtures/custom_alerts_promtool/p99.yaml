@@ -1,0 +1,48 @@
+# promtool unit test — Custom Alerts (#741), P99 LATENCY recipe.
+# Run: promtool test rules tests/rulepacks/rule-pack-custom-alerts-p99_test.yaml
+#
+# histogram_quantile(0.99, sum by(le,tenant,version)(rate(<m>_bucket[5m]))).
+# Proves the by(le,tenant,version) keep-list preserves both the bucket (le)
+# dimension and the tenant join key, and the quantile crosses the threshold.
+rule_files:
+  - rule-pack-custom-alerts.yaml
+
+evaluation_interval: 15s
+
+tests:
+  # ── 99th pct of latency lands in the (2,5] bucket → > 2s threshold → fires ──
+  - interval: 15s
+    input_series:
+      - series: 'http_request_duration_seconds_bucket{tenant="shop-a", le="1", namespace="shop", pod="api-1"}'
+        values: '0+10x48'
+      - series: 'http_request_duration_seconds_bucket{tenant="shop-a", le="2", namespace="shop", pod="api-1"}'
+        values: '0+10x48'
+      - series: 'http_request_duration_seconds_bucket{tenant="shop-a", le="5", namespace="shop", pod="api-1"}'
+        values: '0+100x48'
+      - series: 'http_request_duration_seconds_bucket{tenant="shop-a", le="+Inf", namespace="shop", pod="api-1"}'
+        values: '0+100x48'
+      - series: 'user_threshold{recipe_id="p99_latency__http_request_duration_seconds__gt__w5m__q0_99", tenant="shop-a", severity="warning", name="api_latency_p99"}'
+        values: '2x48'
+      - series: 'tenant_metadata_info{tenant="shop-a", runbook_url="http://rb/shop", owner="team-shop", tier="gold"}'
+        values: '1x48'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: Custom_p99_latency__http_request_duration_seconds__gt__w5m__q0_99
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              tenant: shop-a
+              recipe: p99_latency
+              name: api_latency_p99
+              version: default
+              runbook_url: "http://rb/shop"
+              owner: team-shop
+              tier: gold
+            exp_annotations:
+              summary: "Custom alert [api_latency_p99] for shop-a"
+              summary_zh: "shop-a 的自訂告警 [api_latency_p99] 觸發"
+              description: "p99_latency on http_request_duration_seconds: value 4.97 crossed the configured threshold"
+              description_zh: "http_request_duration_seconds 的 p99_latency: 值 4.97 已越過設定閾值"
+              runbook_url: "http://rb/shop"
+              owner: team-shop
+              tier: gold

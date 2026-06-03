@@ -807,3 +807,35 @@ da-tools diagnose <tenant> --config-dir conf.d/
 > threshold-exporter 的 config reload 延遲基線 (1000-tenant cold 112 ms / steady reload 1.30 ms) 見 [benchmarks.md §3 v2.8.0 Scale Gate](../benchmarks.md#3-v280-scale-gate-1000-tenant-實測)；engineering-reference 完整 `Resolve_*` 系列見 [Benchmark Playbook §Engineering Reference Benchmarks](../internal/benchmark-playbook.md#engineering-reference-benchmarks)。漸進式遷移指南見 [incremental-migration-playbook](../scenarios/incremental-migration-playbook.md)。
 
 ### 2.14 Tenant Management API Architecture (ADR-009)
+
+v2.4.0 引入 tenant-api，作為 da-portal 的管理平面後端。設計遵循四大核心原則：Git 為單一事實來源、認證委派、共用驗證邏輯、優雅降級。
+
+**Commit-on-Write 機制：**
+
+tenant-api 不使用任何資料庫。所有寫入操作（PUT / PATCH / DELETE）直接修改 `conf.d/` 下的 YAML 檔案，並以操作者的 email 作為 git commit author 提交。這確保：(1) Git repo 維持單一事實來源，沒有 Git↔DB 同步問題；(2) 任一時間點的配置狀態都可透過 `git log` 完整重建；(3) 變更稽核自然整合進 GitOps 工作流。
+
+寫入前，API 會比對當前 HEAD 與自身快照：若 `conf.d/` 在 API 讀取後被其他來源（手動 push、另一位操作者）修改，則回傳 HTTP 409 要求 refresh——避免靜默覆寫。
+
+**RBAC 熱重載：**
+
+`_rbac.yaml` 將 IdP group 對應到 tenant 子集。API server 將解析後的 RBAC 結構存於 `sync/atomic.Value`，搭配週期性 SHA-256 比對做無鎖熱重載——與 threshold-exporter 的 config reload 相同模式。Handler goroutine 透過 `atomic.Load()` 讀取，零鎖競爭。
+
+**共用驗證邏輯：**
+
+tenant-api 直接 import `"github.com/vencil/threshold-exporter/pkg/config"`，重用 `ValidateTenantKeys()`、`ResolveAt()`、`ParseConfig()` 等核心驗證函式。被 API 拒絕的配置與被 `da-tools validate-config` 拒絕的完全一致，消除了歷史上 Go↔Python 雙重維護 schema 的問題。
+
+**Portal 優雅降級：**
+
+da-portal 的 tenant-manager.jsx 在載入時探測 tenant-api 可用性。當 API 健康時，啟用完整 CRUD 操作；當不可用時（oauth2-proxy 故障、API server 重啟），自動 fallback 到靜態 JSON 唯讀模式。降級對使用者透明，無需手動切換。
+
+> 完整決策脈絡與替代方案分析見 [ADR-009: Tenant Manager CRUD API](../adr/009-tenant-manager-crud-api.md)。
+
+### 2.15 Custom Alerts（租戶自訂告警，ADR-024 能力 B）
+
+各階層（platform / domain / tenant）可用平台 authored 的**參數化 recipe**自訂告警，**永不寫 PromQL**（守住宣告式地基）。在 tenant 的 `_custom_alerts` 區塊或某層 `_defaults.yaml` 填表即可——宣告在哪一層就決定 scope（tenant leaf 只作用該租戶；domain/platform `_defaults.yaml` 蓋整子樹且租戶不可覆寫）。
+
+五個核心 recipe：`threshold`（gauge 越界）/ `rate`（counter 增率）/ `ratio`（兩 counter 比值，除零安全）/ `absence`（指標缺席，自我圈定）/ `p99_latency`（histogram 分位數）。label 過濾用安全的 `selectors`（`=`）/ `selectors_re`（`=~`）map，由編譯器組裝（key 過濾 + value 跳脫），杜絕 PromQL 注入。
+
+**向量化編譯（守 O(M)）**：編譯器把所有宣告依 shape signature `(recipe, metric, op, window, quantile, denominator, selectors)` 分組，**每個 shape 產出一條** `app_metric > on(tenant) group_left(...) user_threshold{...}` 規則——規則數 = shape 數，**非**租戶數（同 [benchmarks.md §2](../benchmarks.md) 的 rule-pack O(M) 保證）。alertname 是靜態 shape slug、跨租戶共用一條規則。severity 由租戶決定，每個 shape 只生宣告過的 severity 分支。`mode`（page/silent）是 per-tenant 路由類別、**不入 shape signature**（不分叉規則、守 O(M)），改搭資料平面經 `group_left(name, mode)` 帶成 alert label——同 shape 不同 mode 的兩租戶共用一條規則仍能各自路由（silent→null / page→pager）。version graceful-join 全程沿用既有 version-aware 機制（label 缺時落 `default`）。
+
+**實作分期**：S1+S2 交付**編譯器 + recipe 庫 + schema + 測試**（`make custom-alerts-compile`）。**產生並部署 pack（configmap + operator CRD）+ exporter emit 對應 `user_threshold` series + 最終 label 形態留 S3**——因為 repo 的 #731 closed-label 契約把「committed pack」與「exporter emission」結構性耦合，兩者一起落地才不會部署一條 prod 跑不動的規則。recipe 庫見 [`rule-packs/recipes/`](https://github.com/vencil/Dynamic-Alerting-Integrations/tree/main/rule-packs/recipes)；完整設計見 [ADR-024 §Custom Alerts](../adr/024-version-aware-threshold-via-dimensional-label.md)。

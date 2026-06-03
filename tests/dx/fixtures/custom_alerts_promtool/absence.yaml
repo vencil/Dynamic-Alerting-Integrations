@@ -1,0 +1,62 @@
+# promtool unit test — Custom Alerts (#741), ABSENCE recipe + SCOPE ISOLATION.
+# Run: promtool test rules tests/rulepacks/rule-pack-custom-alerts-absence_test.yaml
+#
+# absence is self-scoped: only tenants that DECLARED the recipe (i.e. have the
+# user_threshold{recipe_id} series) are candidates. Proves: (1) a declaring
+# tenant whose metric is absent over the window fires; (2) when the metric is
+# present, no fire; (3) a tenant that NEVER declared the recipe does NOT fire
+# even though its metric is also absent (scope does not leak — the bug the
+# tenant_metadata_info anchor would have caused).
+rule_files:
+  - rule-pack-custom-alerts.yaml
+
+evaluation_interval: 15s
+
+tests:
+  # ── shop-a declared (threshold series present) + heartbeat ABSENT → fires.
+  #    other-z did NOT declare (no threshold series) + heartbeat also absent →
+  #    must NOT fire (scope isolation).
+  - interval: 15s
+    input_series:
+      - series: 'user_threshold{recipe_id="absence__app_heartbeat_total__absent__w10m", tenant="shop-a", severity="critical", name="heartbeat_gone"}'
+        values: '0x60'
+      - series: 'tenant_metadata_info{tenant="shop-a", runbook_url="http://rb/shop", owner="team-shop", tier="gold"}'
+        values: '1x60'
+      # other-z exists in the fleet (has metadata) but never declared the recipe
+      - series: 'tenant_metadata_info{tenant="other-z", runbook_url="http://rb/z", owner="team-z", tier="silver"}'
+        values: '1x60'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: Custom_absence__app_heartbeat_total__absent__w10m
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              tenant: shop-a
+              recipe: absence
+              name: heartbeat_gone
+              version: default
+              runbook_url: "http://rb/shop"
+              owner: team-shop
+              tier: gold
+            exp_annotations:
+              summary: "CRITICAL Custom alert [heartbeat_gone] for shop-a"
+              summary_zh: "shop-a 的自訂告警 [heartbeat_gone] 達臨界 觸發"
+              description: "absence on app_heartbeat_total: value 0.00 crossed the configured threshold"
+              description_zh: "app_heartbeat_total 的 absence: 值 0.00 已越過設定閾值"
+              runbook_url: "http://rb/shop"
+              owner: team-shop
+              tier: gold
+
+  # ── heartbeat PRESENT (counter ticking) → no fire ──
+  - interval: 15s
+    input_series:
+      - series: 'user_threshold{recipe_id="absence__app_heartbeat_total__absent__w10m", tenant="shop-a", severity="critical", name="heartbeat_gone"}'
+        values: '0x60'
+      - series: 'app_heartbeat_total{tenant="shop-a", namespace="shop", pod="api-7c9-x"}'
+        values: '0+1x60'
+      - series: 'tenant_metadata_info{tenant="shop-a", runbook_url="http://rb/shop", owner="team-shop", tier="gold"}'
+        values: '1x60'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: Custom_absence__app_heartbeat_total__absent__w10m
+        exp_alerts: []
