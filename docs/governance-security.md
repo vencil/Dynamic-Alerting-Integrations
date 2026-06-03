@@ -228,5 +228,6 @@ Default deny-all（Ingress + Egress）+ 逐元件白名單：
 | 資源 | 相關性 |
 |------|--------|
 | [Custom Rule Governance](./custom-rule-governance.md) | 規則治理模型 |
+| [規則生命週期治理（§7 全 tier 視圖）](./custom-rule-governance.md) | 規則生→老→病→死的橫切治理 + 成熟度限制（遷入評估必讀） |
 | [GitOps Deployment](integration/gitops-deployment.md) | 部署安全、RBAC |
 | [Testing Playbook](./internal/testing-playbook.md) | SAST 測試執行 |

@@ -71,6 +71,7 @@ Real-world common scenarios and corresponding solutions.
 | Shadow Monitoring one-click cutover | [scenarios/shadow-monitoring-cutover.en.md](scenarios/shadow-monitoring-cutover.en.md) | Platform Engineer, DevOps |
 | Multi-cluster Federation | [scenarios/multi-cluster-federation.en.md](scenarios/multi-cluster-federation.en.md) | Platform Engineer |
 | Tenant lifecycle (onboarding, modification, offboarding) | [scenarios/tenant-lifecycle.en.md](scenarios/tenant-lifecycle.en.md) | Platform Engineer, DevOps |
+| Rule lifecycle governance (define → version-cut → fix → retire) + maturity limits | [custom-rule-governance.en.md §7](custom-rule-governance.en.md) | Platform Engineer, Domain Expert |
 | Advanced scenarios & test coverage | [internal/test-coverage-matrix.md](internal/test-coverage-matrix.md) | Platform Engineer, SRE |
 
 ---
