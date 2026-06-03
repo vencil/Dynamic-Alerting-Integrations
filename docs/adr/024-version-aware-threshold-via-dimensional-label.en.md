@@ -1,45 +1,57 @@
 ---
-title: "ADR-024: Version-Aware Threshold — Declarative Cutover via the Existing Dimensional `version` Label"
+title: "ADR-024: Declarative Dimensional Alerting Engine — Version-Aware Thresholds + Custom Alerts"
 tags: [adr, threshold-exporter, rule-pack, alerting, dimensional-metric, gitops]
 audience: [platform-engineers, contributors, sre]
 version: v2.8.1
 lang: en
 ---
 
-# ADR-024: Version-Aware Threshold — Declarative Cutover via the Existing Dimensional `version` Label
+# ADR-024: Declarative Dimensional Alerting Engine — Version-Aware Thresholds + Custom Alerts
 
 > Secondary (EN) copy. Primary source of truth is the Chinese version: [`024-version-aware-threshold-via-dimensional-label.md`](024-version-aware-threshold-via-dimensional-label.md).
 
 ## Status
 
-✅ **Accepted** (2026-05-31). Tracker: [#423](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/423) (`rfc` + `epic`). Three rounds of design discussion + two external-review passes converged into locked decisions; **Phase 1 (the Kubernetes pilot) has shipped** — phase-by-phase progress in As-built below.
+✅ **Accepted** (architecture decision, targeting v2.9.0). This ADR records a **declarative dimensional alerting engine** with two capabilities: **version-aware thresholds** (platform-authored, k8s pilot merged) and **custom alerts** (tenant-authored, recipe design converged, implementation in progress) — **both belong to v2.9.0, not a phased release**; they differ only in implementation status (see §As-built). The `status:` frontmatter stays a machine-readable bare `accepted` (the architecture decision is made; an ADR records the decision, not implementation completeness). Tracker: [#423](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/423) (version-aware, `rfc` + `epic`) + [#741](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/741) (custom alerts, `epic`).
 
 > **Relationship to existing mechanisms**: This ADR does **not** replace or modify [`config-driven.md` §2.6 Scheduled Thresholds](../design/config-driven.md). They are two coexisting, orthogonal mechanisms — boundary in §"Boundary vs §2.6".
 
+## Strategic Arc: Version-Aware is the Foundation, Custom Alerts the North Star
+
+> This ADR is "one engine + two capabilities", not a phased project plan. Read this framing first, then the heavy machinery below — otherwise it reads as over-engineering.
+
+The product north star is not "platform-authored standard alerts" but **letting tenants author their own alerts (Custom Alerts)** — without it there is no GA. But custom alerts collide head-on with the project's bedrock constraint: **tenant declarative-only, never write PromQL** (§Hard constraints, [ADR-008](008-operator-native-integration-path.en.md)).
+
+One **declarative dimensional alerting machine** — the dimensional-label model, scrape-time relabel, rule-pack normalize / compile layer, graceful-degradation join, the promtool safety net, per-tenant isolation — powers two capabilities:
+
+- **Capability A — Version-Aware Thresholds (§Context–§Action Items)**: on platform-authored rule packs, let tenants declare **multi-version numeric thresholds**. This is the **foundation and capability proof** — first prove the machine runs safely in prod.
+- **Capability B — Custom Alerts (§Custom Alerts)**: open the same machine to tenants, letting them define their own alerts via **parameterized recipes** (not PromQL). A's normalize / join / promtool gate / isolation are reused verbatim (see §Custom Alerts "Reuse of existing machinery"). This is the product north star.
+
+**Both capabilities belong to v2.9.0, not a phased release** — deliberately NOT using "Phase 1 / Phase 2" to split the reader's mental model (avoids misreading them as two releases or a maturity gap; and this ADR's existing "Phase 2 = the other-packs rollout" usage means something else, so reusing the label would collide). The only difference is **implementation status** (A merged, B in progress), listed in §As-built.
+
+**Documentation-structure decision (converged from internal + external discussion)**: Custom Alerts is folded into this ADR rather than a separate ADR-025, because both capabilities share one underlying engine, one tenant-api write boundary, one CI pipeline — splitting would sever the "why is the foundation this heavy" causal link and create a virtual boundary ("which ADR governs `validate()`?"). **Residual open question**: if this ADR later becomes hard to read, reconsider moving the "living engine spec" into [`docs/design/`](../design/) (the repo's proper home for a living spec; ADRs remain snapshot-style records of discrete decisions). Revisit on trigger.
+
 ## As-built (Implementation Status)
 
-> The `status` field stays a machine-readable bare value (`accepted`); phase progress lives here. For **how to use it** (tenant declaration + platform KSM remediation) see the [Version-Aware Thresholds guide](../scenarios/version-aware-thresholds.md).
+> The `status:` frontmatter stays a machine-readable bare value (`accepted`); implementation status lives here. For **how to use it** (tenant declaration + platform KSM remediation) see the [Version-Aware Thresholds guide](../scenarios/version-aware-thresholds.md).
 
-**Phase 1 — Kubernetes Pilot (shipped)**: both `container_cpu` and `container_memory` are version-aware (dimensional `version` label → (0a) injection → exact-or-fallback → split per-severity → deterministic truncation).
+**Capability A — Version-Aware Thresholds (Kubernetes pilot merged, targeting v2.9.0)**: both `container_cpu` and `container_memory` are version-aware. Four pieces shipped: the rule-pack normalize layer (version injection → dynamic fallback → split per-severity rules), bilingual da-guard validation of the `version` label value, the three-layer KSM-allowlist defense, and the tenant-api rejection of an invalid `version` at write time. PR breakdown in [#423](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/423).
 
-- Threshold resolution + non-pilot defense: [#689](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/689) (deterministic truncation, AC-7), [#691](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/691) (da-guard bilingual `version` validation — a non-pilot metric is rejected outright).
-- Rule-pack normalize + (0a) `kube_pod_labels` version injection + per-severity core: [#695](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/695)/[#696](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/696) (CPU), [#700](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/700) (memory mirror).
-- Three-layer defense: [#697](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/697) — deployment prerequisite (KSM allowlist) + `VersionAwareThresholdInert` runtime sentinel + static allowlist lint.
-- Tenant write boundary: [#704](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/704) — tenant-api `validate()` rejects an invalid `version` label at write time (mutation-proven).
+⛔ **Deployment prerequisite (HARD)**: kube-state-metrics MUST run with `--metric-labels-allowlist=pods=[app.kubernetes.io/version]`, otherwise `kube_pod_labels` carries no version, the version-injection join matches nothing, and **version thresholds are silently inert** (proven on a real cluster). The three-layer defense guards this prerequisite: the `VersionAwareThresholdInert` runtime sentinel is the safety net, and the CI static lint `check_ksm_version_allowlist.py` catches the misconfiguration.
 
-⛔ **Deployment prerequisite (HARD)**: kube-state-metrics MUST run with `--metric-labels-allowlist=pods=[app.kubernetes.io/version]`, otherwise `kube_pod_labels` carries no version, the (0a) join matches nothing, and **version thresholds are silently inert** (proven on a real cluster). `VersionAwareThresholdInert` is the platform-side runtime safety net; the static lint `check_ksm_version_allowlist.py` catches the misconfiguration in CI.
+**Capability B — Custom Alerts (implementation in progress, targeting v2.9.0)**: design converged; the recipe library / compiler / discovery catalog / two UXs are net-new and implementation has not started (see §Custom Alerts).
 
 **Deferred (defer-with-trigger)**:
 
-- Version-awareness for the other (non-kubernetes) packs (trigger: a customer asks for a version-specific threshold on a non-k8s metric).
-- Tenant self-service verification of "is my version threshold actually live" — a tenant-api resolved-view showing whether matching `kube_pod_labels` version data exists (trigger: the first "I set it but nothing happened" support case).
-- A `versioned:` config sugar / portal UI inline editing help (trigger: the portal / operator epic [#692](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/692)).
+- Version-awareness for the other (non-kubernetes) packs — **this is "capability proof" in nature, not the north star** (trigger: a customer asks for a version-specific threshold on a non-k8s metric; the real fix is the external-backend relabel in §Custom Alerts and [#716](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/716)).
+- Tenant self-service verification of "is my version threshold actually live" — a tenant-api resolved-view — **subsumed by the read-only discovery catalog in §Custom Alerts** (same mechanism: show tenants what is actually live in Prometheus).
+- A `versioned:` config sugar / portal UI inline editing help (trigger: the portal / operator epic [#692](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/692); note: custom alerts use a portal recipe form + inline help, **not** a new `versioned:` schema).
 
 ## TL;DR
 
 - **Problem**: tenants want rules "pre-staged but only active on the app version bump", and at troubleshooting time need to know "which version is running now".
 - **Decision**: express multi-version thresholds via a dimensional `version` label on the metric; cutover is **emergent** (whichever `version` the metric carries after a deploy joins the matching threshold). **The existing dimensional-label mechanism already achieves this with zero threshold-exporter parse/emit change** — Phase 1's core is a rule-pack **normalize layer**, not a new config schema (Option A, reuse-over-build; the `versioned:` sugar is demoted to defer-with-trigger).
-- **Three reliability hardenings** (external review Pass 2–3): (1) **dynamic fallback** — a missing versioned threshold falls back to `version="default"`, eliminating the "silent alerting gap" and decoupling deploy frequency from config; (2) **split per-severity rules** — avoids the `version × severity` PromQL cardinality deadlock (otherwise the pilot would crash the alerting engine on rollout); (3) **deterministic truncation + non-piloted-pack defensive hardening** — eliminates flapping and isolates cross-pack contamination.
+- **Three reliability hardenings**: (1) **dynamic fallback** — a missing versioned threshold falls back to `version="default"`, eliminating the "silent alerting gap" and decoupling deploy frequency from config; (2) **split per-severity rules** — avoids the `version × severity` PromQL cardinality deadlock (otherwise the pilot would crash the alerting engine on rollout); (3) **deterministic truncation + non-piloted-pack defensive hardening** — eliminates flapping and isolates cross-pack contamination.
 - **Critical pre-GA to-dos**: the metric-side `kube_pod_labels` version injection (§Decision (0a)) + OQ-1 pipeline-contract sign-off; the rest are in §Action Items.
 
 ## Context
@@ -84,7 +96,7 @@ user_threshold{tenant="db-a", component="container", metric="cpu", severity="war
 
 `version` rides the same dimensional path as `env` / `tablespace_re` — **a single mental model**.
 
-> **Precise boundary of "zero change"** (reviewer correction): "zero change" applies to the **parse + emit** half — emitting threshold series with a version label genuinely needs no exporter change. But the **safety rail this design depends on, the OQ-6 guard, is net-new** (Go `ValidateTenantKeys` + Python da-guard, dual-language), and the metric-side version injection ((0a) above) is the real engineering work. So "Phase 1 is not a new config schema" holds, but "Phase 1 is zero effort" does **not**.
+> **Precise boundary of "zero change"**: "zero change" applies to the **parse + emit** half — emitting threshold series with a version label genuinely needs no exporter change. But the **safety rail this design depends on, the OQ-6 guard, is net-new** (Go `ValidateTenantKeys` + Python da-guard, dual-language), and the metric-side version injection ((0a) above) is the real engineering work. So "Phase 1 is not a new config schema" holds, but "Phase 1 is zero effort" does **not**.
 
 ### Two independently-deployable halves (the most important architectural property)
 
@@ -134,7 +146,7 @@ Using `rule-pack-kubernetes`'s `PodContainerHighCPU` (current join key is `on(te
       "version", "default", "version", "^$"
     )
 #     - threshold side: unversioned thresholds emit series with no version label (version="")
-#       keep severity in by() (Pass-2 #5): a versioned threshold can carry severity via
+#       keep severity in by(): a versioned threshold can carry severity via
 #       the "value:severity" suffix (e.g. `container_cpu{version="v2"}: "60:critical"`,
 #       supported at resolve.go:206-210); severity must NOT be collapsed by max here.
 - record: tenant_version:alert_threshold:container_cpu
@@ -144,7 +156,7 @@ Using `rule-pack-kubernetes`'s `PodContainerHighCPU` (current join key is `on(te
       "version", "default", "version", "^$"
     )
 
-# (2) Alert: dynamic fallback + split-per-severity (Pass-2 #1 + Pass-3 cardinality hardening).
+# (2) Alert: dynamic fallback + split-per-severity (split per severity to avoid the version × severity cardinality deadlock).
 #     WARNING: do NOT use `group_left(severity)`: the default bucket may hold both warning and
 #       critical (legacy `_critical` plain key), so the exact branch goes one-to-many (multiple
 #       matches) and the fallback branch goes many(versions)×many(severities) (many-to-many) →
@@ -185,15 +197,15 @@ Using `rule-pack-kubernetes`'s `PodContainerHighCPU` (current join key is `on(te
 
 **Key: version propagation (what the "passive version-aware" rows in the OQ-3 table mean — and the real engineering hard part)** — the existing percent / weakest-link recording rules aggregate with `sum/max by(namespace,pod,container)` / `by(tenant,pod)`, which **drops the version label at every layer**. So (0a) must join `kube_pod_labels` at the `:by_container` layer to inject `app.kubernetes.io/version` as `version` (via a single outermost join, see above); from (0b) onward every `by(...)` aggregation must include `version` to preserve it. **This (0a) edit is the metric-side hard part — not the "thresholds can emit version" half (that half is zero-change), but the "how does the app metric carry version" half.**
 
-> **inert-by-design is intentional, not a bug**: before the (0a) metric-side join ships, version is always `""` across the chain → normalize rewrites to `"default"` → aligns to unversioned thresholds, identical to pre-change (AC-1). I.e. the §"two independently-deployable halves" threshold-side can ship first; the metric-side ((0a) + OQ-1/OQ-4) follows, 100% backward-compatible in between. But the reviewer's point stands: **without (0a), version-aware is merely inert — so the pilot PR must include (0a) plus kind-cluster relabel validation (AC-3/AC-4), not just flip the join key and claim done.**
+> **inert-by-design is intentional, not a bug**: before the (0a) metric-side join ships, version is always `""` across the chain → normalize rewrites to `"default"` → aligns to unversioned thresholds, identical to pre-change (AC-1). I.e. the §"two independently-deployable halves" threshold-side can ship first; the metric-side ((0a) + OQ-1/OQ-4) follows, 100% backward-compatible in between. But note: **without (0a), version-aware is merely inert — so the pilot PR must include (0a) plus kind-cluster relabel validation (AC-3/AC-4), not just flip the join key and claim done.**
 
 **Note (R5 trap, avoided)**: always use `label_replace(..., "version", "default", "version", "^$")`, **never `or on() vector(0)`** — the latter fabricates a 0 when data is missing, breaking downstream aggregation and producing false positives for "alert when value == 0" rules (e.g. `mysql_up == 0`). `label_replace` treats a missing src label as empty string, which `regex="^$"` matches — the correct and only safe form.
 
-> **Deliberate `sum`→`max by(tenant, version, severity)` change**: the existing threshold-normalization uses `sum by(tenant)`; this ADR uses `max by(tenant, version, severity)`. Equivalent for a single threshold, but `max` is safer against "an unexpected second row in the same bucket" (with OQ-6 forbidding explicit `default`), and `severity` MUST stay in `by()` or multi-severity is collapsed (Pass-2 #5).
+> **Deliberate `sum`→`max by(tenant, version, severity)` change**: the existing threshold-normalization uses `sum by(tenant)`; this ADR uses `max by(tenant, version, severity)`. Equivalent for a single threshold, but `max` is safer against "an unexpected second row in the same bucket" (with OQ-6 forbidding explicit `default`), and `severity` MUST stay in `by()` or multi-severity is collapsed.
 
-> **Dynamic-fallback semantics (Pass-2 #1)**: the alert's `exact or fallback` structure makes cutover mean "**only takes effect when the tenant explicitly declares that version's threshold**, otherwise it inherits `version="default"`". Benefit: routine small deploys (many deploys/day, image-SHA / SemVer-patch churn) need **no** alert-YAML change — a tenant writes `{version="v2"}` only when a specific major version needs a special threshold. This promotes the former top risk "observed-but-not-declared = silent gap" from "sentinel after-the-fact" to "**architecturally built-in, no dropped series**". Cost: a typo'd version (e.g. `v2x`) silently falls to default (not the intended value), caught by orphan detection (declared-but-not-observed). This fallback PromQL must be validated in a kind cluster (AC-3/AC-4).
+> **Dynamic-fallback semantics**: the alert's `exact or fallback` structure makes cutover mean "**only takes effect when the tenant explicitly declares that version's threshold**, otherwise it inherits `version="default"`". Benefit: routine small deploys (many deploys/day, image-SHA / SemVer-patch churn) need **no** alert-YAML change — a tenant writes `{version="v2"}` only when a specific major version needs a special threshold. This promotes the former top risk "observed-but-not-declared = silent gap" from "sentinel after-the-fact" to "**architecturally built-in, no dropped series**". Cost: a typo'd version (e.g. `v2x`) silently falls to default (not the intended value), caught by orphan detection (declared-but-not-observed). This fallback PromQL must be validated in a kind cluster (AC-3/AC-4).
 
-> **Cardinality-match hardening (Pass-3)**: the block above uses a **per-severity split** rather than a single rule with `group_left(severity)`. Reason: the `version × severity` interleaving creates a join cardinality deadlock — if any `(tenant, version)` (especially `default`, which may hold both warning and critical from a legacy `_critical` key) has multiple severities, the exact branch `> on(tenant,version) group_left(severity)` goes **one-to-many (multiple matches)** and the fallback `> on(tenant) group_left(severity)` goes **many(versions)×many(severities) (many-to-many)** → a Prometheus runtime error that takes down the whole k8s alerting engine. Splitting per severity degenerates the RHS to a singleton, reducing everything to legal one-to-one / many-to-one. **Alternative (Route 1, more compact)**: keep one rule but in the fallback branch first `max by(tenant)` to flatten the versions and `label_replace` to force `version="default"`, lowering many-to-many to one-to-many (with `group_right()`); the cost is that **fallback alerts show `version="default"`, losing real-version visibility**. Route 2 (split per severity, above) preserves the version and matches the existing per-severity alert idiom, so it is the **recommended default**; the pilot / maintainer makes the final call and validates cardinality in kind.
+> **Cardinality-match hardening**: the block above uses a **per-severity split** rather than a single rule with `group_left(severity)`. Reason: the `version × severity` interleaving creates a join cardinality deadlock — if any `(tenant, version)` (especially `default`, which may hold both warning and critical from a legacy `_critical` key) has multiple severities, the exact branch `> on(tenant,version) group_left(severity)` goes **one-to-many (multiple matches)** and the fallback `> on(tenant) group_left(severity)` goes **many(versions)×many(severities) (many-to-many)** → a Prometheus runtime error that takes down the whole k8s alerting engine. Splitting per severity degenerates the RHS to a singleton, reducing everything to legal one-to-one / many-to-one. **Alternative (Route 1, more compact)**: keep one rule but in the fallback branch first `max by(tenant)` to flatten the versions and `label_replace` to force `version="default"`, lowering many-to-many to one-to-many (with `group_right()`); the cost is that **fallback alerts show `version="default"`, losing real-version visibility**. Route 2 (split per severity, above) preserves the version and matches the existing per-severity alert idiom, so it is the **recommended default**; the pilot / maintainer makes the final call and validates cardinality in kind.
 
 The diagram below shows the evaluation flow for a single-severity (Warning) rule (the Critical rule mirrors it):
 
@@ -264,7 +276,7 @@ Introduces a "second state" that breaks the single SOT; calling it mid-rolling c
 
 ## Trade-off Analysis
 
-The core call is **reuse-over-build** (vibe-brainstorm Q1): the target capability already exists 90% in the dimensional mechanism. Option B's only real gain is "authoring grouping + a home for the naming guard", at the cost of touching the hot-reload critical path, introducing a duplicate default-injection path, and turning AC-1 (zero behavior change on the highest-cardinality, hot-reload-critical component) from "automatically true" into "must be verified".
+The core call is **reuse-over-build**: the target capability already exists 90% in the dimensional mechanism. Option B's only real gain is "authoring grouping + a home for the naming guard", at the cost of touching the hot-reload critical path, introducing a duplicate default-injection path, and turning AC-1 (zero behavior change on the highest-cardinality, hot-reload-critical component) from "automatically true" into "must be verified".
 
 Hence **Option A**, with the `versioned:` sugar listed as **defer-with-trigger** (see Consequences). The default fallback is owned solely by the normalize layer to avoid double-write drift.
 
@@ -276,8 +288,8 @@ Hence **Option A**, with the `versioned:` sugar listed as **defer-with-trigger**
 | **OQ-2** Cardinality budget | `version` is a dimensional multiplier; concurrent versions: steady-state N=1, rolling window N=2, rollback/staged overlap cap N=3. **Design guideline: support ≤3 concurrent versions within the existing per-tenant cap**; each version = +1 series per (metric,severity), already counted+truncated by the existing guard. | **Self-decided guideline**; empirical N=1/2/3 deferred to pilot (action item); budget bump only if over-cap (trigger) |
 | **OQ-3** which rules to sweep | **Principle**: a rule is version-aware ⟺ it joins a tenant-app perf metric to `user_threshold` on `(tenant)`. Cluster/infra-wide or state-based rules are version-agnostic. `rule-pack-kubernetes` classification below. | **Self-decided** |
 | **OQ-4** relabel template kind validation | Template (`kube_pod_labels` → `version` join) goes into the migration doc; in-kind-cluster validation is bound to AC-3/AC-4 (rolling/rollback scenarios), done at impl time. | **Deferred to impl** (not a design blocker) |
-| **OQ-5** sentinel period | Two-tier `version_orphaned`: **warn @ 7d, critical @ 30d** (aligned to weekly release cadence). `version_unknown` (observed-but-not-declared) uses **`for: 5–10m`, NOT `for: 0s`** (Pass-2 #2) — during a normal rolling update there is a 1–3 min GitOps propagation lag between a new Pod emitting the version label and the exporter hot-reloading the threshold; `for: 0s` would fire on every deploy → alert fatigue → SRE mutes it → the sentinel becomes a formality. With a buffer, only "a new version persisting >5–10m with still no matching threshold and no fallback" is judged a real omission. (With dynamic fallback, `version_unknown` is already demoted to a visibility signal, so the buffer is even more appropriate.) | **Self-decided**; buffer value tuning deferred (trigger: tenant cadence / noise feedback) |
-| **OQ-6** version naming convention + scope | da-guard regex `^[a-z0-9][a-z0-9._-]*$`; **forbid empty string and the literal `default`** (reserved for fallback); **do not** enforce SemVer (allow image-tag / SHA). **Plus scope: `version` keys are only allowed on already-piloted components** (Phase 1 = kubernetes container_cpu/memory); version keys on non-piloted components are rejected (prevents cross-pack double-count, see Consequences). Note this guard is **net-new dual-language work**: Go `ValidateTenantKeys` + Python da-guard must stay in sync (label values are currently **completely unvalidated** — `parseLabelsStringWithOp` accepts anything). **Pilot must align with real version strings** (Pass-3 final review): what tenant CI/CD emits to `app.kubernetes.io/version` may include uppercase (`V1.0.0`), long Git SHAs, or branch combos — too strict a regex falsely rejects normal deploys, too loose pollutes the label. Finalize the regex after observing real samples in the pilot (may need to relax case / length). | **Self-decided + pilot calibration** |
+| **OQ-5** sentinel period | Two-tier `version_orphaned`: **warn @ 7d, critical @ 30d** (aligned to weekly release cadence). `version_unknown` (observed-but-not-declared) uses **`for: 5–10m`, NOT `for: 0s`** — during a normal rolling update there is a 1–3 min GitOps propagation lag between a new Pod emitting the version label and the exporter hot-reloading the threshold; `for: 0s` would fire on every deploy → alert fatigue → SRE mutes it → the sentinel becomes a formality. With a buffer, only "a new version persisting >5–10m with still no matching threshold and no fallback" is judged a real omission. (With dynamic fallback, `version_unknown` is already demoted to a visibility signal, so the buffer is even more appropriate.) | **Self-decided**; buffer value tuning deferred (trigger: tenant cadence / noise feedback) |
+| **OQ-6** version naming convention + scope | da-guard regex `^[a-z0-9][a-z0-9._-]*$`; **forbid empty string and the literal `default`** (reserved for fallback); **do not** enforce SemVer (allow image-tag / SHA). **Plus scope: `version` keys are only allowed on already-piloted components** (Phase 1 = kubernetes container_cpu/memory); version keys on non-piloted components are rejected (prevents cross-pack double-count, see Consequences). Note this guard is **net-new dual-language work**: Go `ValidateTenantKeys` + Python da-guard must stay in sync (label values are currently **completely unvalidated** — `parseLabelsStringWithOp` accepts anything). **Pilot must align with real version strings**: what tenant CI/CD emits to `app.kubernetes.io/version` may include uppercase (`V1.0.0`), long Git SHAs, or branch combos — too strict a regex falsely rejects normal deploys, too loose pollutes the label. Finalize the regex after observing real samples in the pilot (may need to relax case / length). | **Self-decided + pilot calibration** |
 
 ### `rule-pack-kubernetes` rule classification (OQ-3 concrete result)
 
@@ -295,15 +307,14 @@ Hence **Option A**, with the `versioned:` sugar listed as **defer-with-trigger**
 - "What version is running" answerable via `count by(version)(<app metric>)` (feeds §5.6 `check-running-rule` three-layer truth).
 - YAML no longer accumulates historical activation dates.
 
-### Harder / new failure mode (blast-radius, vibe-brainstorm Q5)
-- **observed-but-not-declared (architecturally resolved by dynamic fallback, Pass-2 #1)**: the original pure-exact `on(tenant, version)` join produced nothing for a v2 metric with no v2 threshold → v2 pods unalerted (false negative). **The corrected design uses dynamic fallback**: an exact-match miss falls back to the `version="default"` threshold (see alert PromQL above) instead of dropping the series. So this risk is **no longer a sentinel after-the-fact patch but built into the architecture**. The `version_unknown` sentinel is demoted to a **visibility signal** (a version is running undeclared, or a typo), not a false-negative gatekeeper, and its firing needs a buffer (see OQ-5 fix). Residual risk: a typo'd version silently falls to default, caught by orphan detection.
+### Harder / new failure mode (blast-radius)
+- **observed-but-not-declared** (a v2 metric is running but no v2 threshold was declared): **architecturally resolved by dynamic fallback** — an exact-match miss falls back to the `version="default"` threshold instead of dropping the series, leaving no false negative (not a sentinel after-the-fact patch). The `version_unknown` sentinel is demoted to a **visibility signal** (a version is undeclared, or a typo), and its firing needs a buffer (see "version naming and sentinel cadence" below). Residual risk: a typo'd version silently falls to default, caught by orphan detection.
 - **declared-but-not-observed = orphan threshold** (harmless): a threshold series with no matching metric does not fire. It is a GC target (portal yellow, `version_orphaned` 7d/30d), not red.
-- **`default` naming collision** (guarded by OQ-6): if a tenant writes both an unversioned threshold (→ `version=""`) and an explicit `{version="default"}`, after `label_replace` both become `version="default"`; `max by(...,version)` takes the max within one bucket (a `sum` variant would double-count). Hence OQ-6 **forbids explicit `default`**.
-- **🟠 version × multi-severity (Pass-2 #5 — corrects the previous version's wrong conclusion)**: the previous version wrongly claimed "version-aware is structurally warning-tier only". **Correction**: the dimensional key path indeed **does not support the `_critical` suffix** (`resolve.go:180`), but it **does support the `value:severity` suffix** (`resolve.go:206-210`) — `container_cpu{version="v2"}: "60:critical"` correctly emits severity="critical". So **a single severity per version IS supported**; the normalize uses `max by(tenant, version, severity)` to keep the severity dimension, but the alert **must split per severity** (Pass-3) — a single-rule `group_left(severity)` hits a `version × severity` cardinality deadlock (see the Pass-3 hardening note in §Decision). **The real limitation** is "the same version carrying **both** tiers (warning+critical)": two dimensional keys both have label set `{version="v2"}` (collision), and `_critical` doesn't work on dimensional keys — this "per-version dual tier" is defer-with-trigger (trigger: a tenant needs warn+crit on the same version). **No longer forced warning-only.**
-- **🟠 Cardinality truncation must become deterministic (Pass-2 #3 — promoted from "known limitation" to defensive code)**: the per-tenant guard (`resolve.go:229–244`) truncates via `result[:startIdx+limit]`, while dimensional keys are appended by `for key := range overrides` (**Go's randomized map iteration**). When a tenant crosses the cap, the dropped version varies scrape-to-scrape → alert series flicker → **Prometheus alert flapping + repeated PagerDuty pages** — the worst kind of non-determinism in an observability system. **Not acceptable as a "known limitation". Phase 1 must fix**: sort keys deterministically before truncation (protect unversioned / `default` first, then `sort.Strings()`), so the dropped version is always fixed (lexicographically last) and state stays stable (persistently absent + triggers the over-limit alert, not flicker). AC-7 upgraded accordingly.
-- **🟠 Shared `user_threshold` cross-pack leak → needs PromQL defense-in-depth (Pass-2 #4)**: `user_threshold` is shared by all packs. If a tenant bypasses CI (manual apply / direct test-env edit) and writes `{version=...}` on a **non-piloted component** (redis / mysql), that pack's `sum by(tenant)(user_threshold{component="redis"})` will **sum across versions → double-count → wrong existing core alerts**. **Relying on CI `da-guard` alone is insufficient (defense-in-depth)**. Phase 1 applies a **light hardening to every non-piloted pack's normalize**: add `version=~"|default"` to the matcher (matches only no-version / default — an absent label is treated as empty string so `^$` equivalently matches), auto-filtering stray versions so existing alerts stay safe even if the CI guard fails. **Trade-off (explicit)**: this lightly touches the 13 non-piloted packs in Phase 1 (**just one label matcher**, not a full `by(tenant, version)` rewrite), modestly increasing blast radius / test load; the alternative is relying solely on OQ-6 guard scoping. Maintainer decides Phase 1 inclusion vs Phase 2 defer.
-- Rule-pack join keys move from `on(tenant)` to `on(tenant, version)` across packs — needs per-pack staged rollout (Phase 2 scope).
-- **Dashboards / portal queries assume no version label**: once tenants write version keys, unaggregated `user_threshold{...}` panels suddenly see 2–3× series with a new `version` label; panels using exact-match label joins may break. Action item added: audit Grafana / portal queries.
+- **`default` naming collision**: if a tenant writes both an unversioned threshold (→ `version=""`) and an explicit `{version="default"}`, after `label_replace` both become `version="default"` and take the max within one bucket (a `sum` variant would double-count). Hence da-guard **forbids explicit `default`** (reserved for fallback).
+- **version × multi-severity**: dimensional keys do not support the `_critical` suffix but do support the `value:severity` suffix (`container_cpu{version="v2"}: "60:critical"`, `resolve.go:206-210`), so **a single severity per version is supported**. The normalize uses `max by(tenant, version, severity)` to keep severity, and the alert **must split per severity** (a single-rule `group_left(severity)` hits a `version × severity` cardinality deadlock, see §Decision). The only remaining limitation is "the same version carrying **both** warning+critical tiers" (two keys both have label set `{version="v2"}`, a collision) → defer-with-trigger.
+- **Cardinality truncation must be deterministic**: the per-tenant guard (`resolve.go:229–244`) truncates via `result[:startIdx+limit]`, while dimensional keys are appended by **Go's randomized map iteration**. When a tenant crosses the cap, the dropped version varies scrape-to-scrape → alert series flicker → **alert flapping + repeated PagerDuty pages**. **Must fix**: sort keys deterministically before truncation (protect unversioned / `default` first, then `sort.Strings()`), so the dropped version is always fixed (lexicographically last) and state stays stable. Mapped to AC-7.
+- **Shared `user_threshold` cross-pack leak → PromQL defense-in-depth**: `user_threshold` is shared by all packs. If a tenant bypasses CI and writes `{version=...}` on a **non-piloted component** (redis / mysql), that pack's `sum by(tenant)(user_threshold{component="redis"})` sums across versions → double-count → wrong core alerts. CI guard alone is insufficient (defense-in-depth): every non-piloted pack's normalize matcher adds `version=~"|default"` (matches only no-version / default) so existing alerts stay safe even if the CI guard fails. Trade-off: lightly touches the 13 non-piloted packs (just one matcher, not a full `by(tenant, version)` rewrite).
+- **Dashboards / portal queries assume no version label**: once tenants write version keys, unaggregated `user_threshold{...}` panels see series with a new `version` label, so exact-match-join panels may break → audit Grafana / portal queries.
 
 ### To revisit (defer-with-trigger)
 - **`versioned:` dedicated block (Option B)**: trigger = a postmortem where "scattered keys" caused a review miss, or ≥N tenants reporting an ergonomics pain. Re-evaluate touching the hot-reload path then.
@@ -311,38 +322,11 @@ Hence **Option A**, with the `versioned:` sugar listed as **defer-with-trigger**
 - **DB-engine ServiceMonitor relabel**: trigger = non-business apps (mysqld_exporter etc. that do not know their own version) need version alignment (#423 §6 Phase 2.5).
 - **sentinel period / cardinality budget**: triggers per OQ-2 / OQ-5.
 
-## External Adversarial Review (Pass 2–3 — Gemini)
-
-### Pass 2
-
-A second post-convergence external review (Gemini, SRE / senior-architect lens). Classified take / reframe / reject — **all 5 taken** (2 with a syntax/scope reframe), none rejected:
-
-1. **Dynamic-fallback join** — TAKE (syntax reframe). The original pure-exact `on(tenant, version)` join's silent-gap is promoted from "sentinel after-the-fact" to "architecturally built-in fallback to `version="default"`", decoupling deploy frequency from config changes. Gemini's `unless … group_left()` example is invalid syntax; corrected to a legal "exact `or` (`unless` set-difference `>` default)". → §Decision alert PromQL + Action Item 2.
-2. **`version_unknown` buffer** — TAKE. Fixes an internal contradiction (the ADR cites a 1–3 min propagation lag yet set `for: 0s` → every rolling update would false-fire). Changed to `for: 5–10m`. → OQ-5 + Action Item 4.
-3. **Deterministic truncation** — TAKE. Go map-iteration truncation → alert flapping; not acceptable as a "known limitation"; sort keys before truncating (unversioned/`default` first). → AC-7 + Action Item 12.
-4. **Non-piloted pack PromQL hardening** — TAKE (scope reframe). Defense-in-depth: add `version=~"|default"` to non-piloted packs' matchers so existing alerts stay safe even if the CI guard fails. Trade-off stated: Phase 1 lightly touches 13 packs (one matcher, not a rewrite). → §Consequences + Action Item 13.
-5. **Multi-severity preservation** — TAKE, **and corrects a factual error in the previous version**. The previous version wrongly claimed "structurally warning-tier only"; in fact dimensional keys support the `value:severity` suffix (`resolve.go:206-210`), and the normalize preserving it via `by(…, severity)` + alert `group_left(severity)`. The real limit is only "the same version with **both** tiers" (deferred). → §Decision + §Consequences.
-
-Pass 2 **does not disturb** the §Decision reuse-over-build thesis (threshold-side parse/emit zero-change + rule-pack normalize layer still hold), but raises reliability to GA grade: eliminates the silent gap, eliminates truncation flapping, preserves multi-severity, and adds defense-in-depth.
-
-### Pass 3 (PromQL cardinality-match hardening)
-
-A third review focused on the Pass-2-corrected alert PromQL and caught a cardinality-match deadlock that **would crash Prometheus at runtime** (self-verified as real):
-
-- **Exact branch wrong direction**: in `> on(tenant, version) group_left(severity)`, the RHS (threshold) is the side carrying `severity` (the "many"), so `group_left` is backwards; when the `default` bucket holds both warning and critical (legacy `_critical` plain key) → one-to-many → `multiple matches` crash.
-- **Fallback branch many-to-many**: after `unless`, the LHS may carry multiple undeclared versions (v2/v3 mid-rolling) and the RHS default threshold multiple severities, joined only `on(tenant)` → **many-to-many → 100% runtime error**.
-
-**Disposition (TAKE, self-verified)**: adopt **Route 2 (split per severity)** — fixing severity degenerates the RHS to a singleton, lowering the exact branch to one-to-one and the fallback to many-to-one (`group_left` preserves the real version). It matches the existing per-severity alert idiom and maximizes SRE version visibility. **Route 1** (single rule + fallback `max by(tenant)` flatten + `group_right()`) is the more compact alternative, at the cost of fallback alerts showing `version="default"`. The pilot / maintainer makes the final call and validates cardinality in kind (updated §Decision PromQL + Action Item 2). Pass 3 likewise leaves the thesis intact — a pure implementation-layer PromQL structural hardening — but **without it the pilot would take down the entire k8s alerting engine on rollout**, making it the most critical convergence before GA.
-
-**Final verdict**: after verifying the Route 2 PromQL vector matching branch by branch, Gemini gave it a **green light (Approved & Locked, Ready to Ship)**, leaving only two **pilot-phase operational boundaries** (not design defects): (1) the `da-guard` regex boundary against real `app.kubernetes.io/version` string shapes (uppercase / long SHA) — folded into **OQ-6** (pilot calibration); (2) verifying the alert **Fire→Resolve loop** when the old version's metric disappears after a rolling update — folded into **AC-9**. The design-level runtime-crash risk (many-to-many deadlock) is fully sealed at the design stage by PromQL logic.
-
-**(0a) performance optimization (final-review follow-up)**: per Gemini's suggestion, version injection was changed to "compute the plain percentage first, then a single outermost join of `kube_pod_labels`" (see §Decision (0a)) — halving the join cost vs joining version in both numerator and denominator, and eliminating the `NaN` edge case where a rolling-moment version drift misaligns numerator/denominator.
-
-## Rejected Alternatives (#423 §4 convergence — the soul of the ADR)
+## Rejected Alternatives
 
 - **R1. `ScheduledValue.from/until` absolute-date schema extension** — Rejected. YAML accumulates meaningless activation dates (an expired `from` is forever true, dead code left in-file) + double-write atomicity (missing `until` → two active conflicting; missing `from` → gap). Swallowing the time axis into declarative config is a structural error. **This is precisely the answer to "why not extend §2.6".**
 - **R2. Scheduled PR Merge orchestration** — Rejected. K8s rolling/rollback drift (Git's instantaneous binary merge cannot align with K8s's 5–10 min gradual rollout) + GitOps propagation lag (merge→ConfigMap→reload 1–3 min) + helm rollback does not reverse-revert a Git PR.
-- **R3. Gemini original "tenant writes two coexisting PromQL rules directly"** — Rejected. Violates the declarative-only core contract. The concept was correct, though, and was adapted into this ADR.
+- **R3. "tenant writes two coexisting PromQL rules directly"** — Rejected. Violates the declarative-only core contract. The concept was correct, though, and was adapted into this ADR's dimensional-label approach.
 - **R4. `POST /active-version` write-state API** — Rejected. Introduces a second state breaking the single SOT; a mid-rolling call causes transient misalignment. The metric carrying the version label *is* the SOT.
 - **R5. PromQL normalize via `or on() vector(0)`** — Rejected (a trap). Breaks downstream `min/avg/sum`; fabricates false positives for "alert when value == 0" rules. Correct form = `label_replace(..., "version", "default", "version", "^$")`.
 - **R6. Per-tenant version injection at the ServiceMonitor (Path A)** — Rejected for Phase 1. Pushes complexity to tenants, violating "centralize in the platform-controlled rule pack". Partially adopted only for the Phase 2.5 DB scenario.
@@ -356,16 +340,16 @@ A third review focused on the Pass-2-corrected alert PromQL and caught a cardina
 4. **AC-4** Rollback (kind): v1 metric reappears and aligns to v1 threshold; v2 threshold becomes an orphan but does not mis-fire.
 5. **AC-5** `da-tools detect-orphan-versions` + `check-running-rule` cover the SRE 3-a.m. troubleshooting reflex.
 6. **AC-6** `GET /versions` passes the existing schemathesis contract test.
-7. **AC-7** Cardinality Guard does not warn at N=3 concurrent versions; **and "just over the cap" truncation is deterministic** (Pass-2 #3): `resolve.go` sorts dimensional keys lexicographically before truncation (protecting unversioned/`default` first); the test must assert **the same over-cap config drops the same fixed version across repeated scrapes** (no flapping), not "documented as a known limitation".
+7. **AC-7** Cardinality Guard does not warn at N=3 concurrent versions; **and "just over the cap" truncation is deterministic**: `resolve.go` sorts dimensional keys lexicographically before truncation (protecting unversioned/`default` first); the test must assert **the same over-cap config drops the same fixed version across repeated scrapes** (no flapping), not "documented as a known limitation".
 8. **AC-8** Docs synced (dev-rules #4 Doc-as-Code): CHANGELOG / CLAUDE.md / README / migration guide / config-driven.md §2.x / troubleshooting.md.
-9. **AC-9** Alert lifecycle closes (Pass-3 final review): in kind, verify that after a rolling update finishes and old Pods are destroyed so the `{version="v1"}` metric goes absent, **a firing v1 alert is properly resolved** by Prometheus/Alertmanager (join RHS breaks → implicit clear → the notification channel receives `resolved`), ensuring a complete Fire→Resolve loop with no zombie alerts.
+9. **AC-9** Alert lifecycle closes: in kind, verify that after a rolling update finishes and old Pods are destroyed so the `{version="v1"}` metric goes absent, **a firing v1 alert is properly resolved** by Prometheus/Alertmanager (join RHS breaks → implicit clear → the notification channel receives `resolved`), ensuring a complete Fire→Resolve loop with no zombie alerts.
 
 ## Action Items
 
 1. [ ] **OQ-1 sign-off**: tenant team confirms "pipeline only lets the metric carry version, calls no write API" + provides the business-app version-source template.
-2. [ ] **Rule-pack pilot (dynamic fallback + cardinality-safe severity)**: add the normalize layer (`:vlabeled` + `max by(tenant, version, severity)`) to `rule-pack-kubernetes`; change the 4 version-aware rules to the **exact-or-fallback** PromQL (Pass-2 #1). **⛔ Do NOT use the crashing `group_left(severity)` (Pass-3)** — explicitly choose **Route 2 (split per severity, recommended)** or Route 1 (single rule + fallback `max by(tenant)` version flatten + `group_right()`), landing a legal cardinality structure. Validate fallback **and cardinality matching** in a kind cluster (AC-3/AC-4).
+2. [ ] **Rule-pack pilot (dynamic fallback + cardinality-safe severity)**: add the normalize layer (`:vlabeled` + `max by(tenant, version, severity)`) to `rule-pack-kubernetes`; change the 4 version-aware rules to the **exact-or-fallback** PromQL. **⛔ Do NOT use the crashing `group_left(severity)`** — explicitly choose **Route 2 (split per severity, recommended)** or Route 1 (single rule + fallback `max by(tenant)` version flatten + `group_right()`), landing a legal cardinality structure. Validate fallback **and cardinality matching** in a kind cluster (AC-3/AC-4).
 3. [ ] **da-guard (dual-language)**: Go `ValidateTenantKeys` + Python da-guard enforce OQ-6 regex + forbid-list (empty / `default`) + **component scope allowlist** (version key on a non-piloted component → reject) on the `version` label value of dimensional keys.
-4. [ ] **Sentinel**: `da_config_event{event="version_orphaned"}` (7d/30d two-tier) + `version_unknown` (**`for: 5–10m` buffer, not `for: 0s`**, Pass-2 #2, avoids rolling-update false positives) → `rule-pack-operational`.
+4. [ ] **Sentinel**: `da_config_event{event="version_orphaned"}` (7d/30d two-tier) + `version_unknown` (**`for: 5–10m` buffer, not `for: 0s`**, avoids rolling-update false positives) → `rule-pack-operational`.
 5. [ ] **tenant-api**: `GET /api/v1/tenants/{id}/versions` (read-only reconciliation: declared/observed/orphaned/missing) + swag + `make api-docs`. **No** write API.
 6. [ ] **CLI**: `da-tools detect-orphan-versions` (read-only) + `check-running-rule` (three-layer truth).
 7. [ ] **Portal**: tenant-manager timeline panel (Active/Declared/Orphaned green/grey/yellow), `make portal-build` + `make test-portal`.
@@ -373,17 +357,97 @@ A third review focused on the Pass-2-corrected alert PromQL and caught a cardina
 9. [ ] **kind validation**: OQ-4 relabel template + AC-3/AC-4 rolling/rollback scenarios.
 10. [ ] **Docs**: new config-driven.md section (mark the §2.6 boundary); `docs/migration/v2.9.0-version-aware.md`; troubleshooting.md "Rule version mismatch".
 11. [ ] **Dashboard / portal query audit**: review unaggregated Grafana / portal queries against `user_threshold` to confirm the new `version` label does not break existing panels.
-12. [ ] **Go exporter deterministic truncation (Pass-2 #3, new)**: in `config/resolve.go::ResolveAtWithStats`, sort dimensional keys deterministically before the cap truncation (unversioned/`default` first, then `sort.Strings()`), eliminating map-iteration flapping; unit test asserts stable over-cap truncation.
-13. [ ] **Non-piloted pack defensive hardening (Pass-2 #4, new)**: add `version=~"|default"` to the `user_threshold` normalize matcher in the 13 non-piloted packs, preventing cross-version double-count if the CI guard fails (maintainer decides Phase 1 inclusion vs Phase 2).
-14. [ ] **GA finalize**: at v2.9.0 GA, set this ADR status → accepted and sync the EN copy; **also do an editorial readability pass** — move the three-pass review provenance (the "Pass 2/3" tags) out of the body into the "External Adversarial Review" appendix, and sub-section §Decision (threshold-side / metric-side / alert+cardinality / normalize safety rules) to lower cognitive load (pure editorial, no technical change).
+12. [ ] **Go exporter deterministic truncation**: in `config/resolve.go::ResolveAtWithStats`, sort dimensional keys deterministically before the cap truncation (unversioned/`default` first, then `sort.Strings()`), eliminating map-iteration flapping; unit test asserts stable over-cap truncation.
+13. [ ] **Non-piloted pack defensive hardening**: add `version=~"|default"` to the `user_threshold` normalize matcher in the 13 non-piloted packs, preventing cross-version double-count if the CI guard fails (maintainer decides inclusion in the pilot vs a later rollout).
+
+## Custom Alerts (Capability B — tenant-authored alerts, v2.9.0 north star)
+
+> **Implementation status: design converged, implementation in progress** (the architecture decision is accepted, see §Status; not another release, not a maturity gap). Tracker: [#741](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/741) (with [#716](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/716)'s defer items folded in as appropriate). This section continues §Strategic Arc: open the existing version-aware declarative machine to tenants. Unrelated to this ADR's existing "Phase 2 = the other-packs rollout".
+
+### North star vs the bedrock constraint
+
+The product lifeline is letting tenants author alerts, but the bedrock constraint is declarative-only (§Hard constraints). Key convergence: **of the three risks the "never write PromQL" rule guards against, the hardest — cross-tenant isolation — is already solved structurally by the existing architecture** — so the real design question is not "can we do it" but "how much expressiveness do we give tenants".
+
+| Risk | Current state | Custom Alerts reinforcement |
+|---|---|---|
+| Cross-tenant isolation | ✅ Solved — the `tenant-exporters` scrape job stamps the `tenant` label from the namespace (`configmap-prometheus.yaml`), tenants cannot forge it; federation already isolates the read path via prom-label-proxy | Compiler force-injects the `tenant="<id>"` matcher |
+| Invalid expression takes down Prometheus | ⚠️ rules are a `/etc/prometheus/rules/*.yml` glob → can be isolated into per-tenant files | promtool hard gate (CI authoritative + tenant-api shift-left preflight) + per-tenant file isolation |
+| Cost / cardinality bomb | ❌ no protection | rule-group `limit` (native in Prometheus 3.x) + per-tenant rule / series cap; dynamic AST cost is Future |
+
+### Three-Plane Architecture
+
+- **Plane A — Metric Onboarding**: tenant app metrics enter Prometheus + version is stamped at scrape time. Reuses the existing `tenant-exporters` job; adds a **platform-default** `podTargetLabels` / relabel mapping `app.kubernetes.io/version` → `version` (centralized, resolving R6's "pushes complexity to the tenant" rejection, see §Rejected R6).
+- **Plane B — Recipe Definition**: a platform-authored **parameterized recipe library** (threshold / rate / ratio / absence / increase / **latency p99**). Tenants fill a form (metric / window / op / threshold / severity / `mode`), stored as declarative YAML in `conf.d/` — **never write PromQL, the bedrock holds**.
+- **Plane C — Compiler + safety net**: recipe + params → generate PromQL → force-inject `tenant=` → version graceful-join (reuse existing version-aware) → promtool gate → write a per-tenant rule file → GitOps deploy.
+
+### Core decisions (each with trade-off)
+
+- **MVP = Level 1 parameterized recipes**, serving both personas at once (business devs via the form, SREs via the same recipes); a Level 2 bounded-DSL / Level 3 raw-PromQL escape hatch is Future. *Trade-off*: buys the declarative-only bedrock + structural promtool safety, sacrifices SRE arbitrary-expression immediacy (caught by defer-with-trigger).
+- **Recipes are platform-authored**, same governance model as rule packs. *Trade-off*: expressiveness bounded by the recipe library, buys a limited PromQL-generation surface → safety is structural, not luck.
+- **Metric catalog = read-only discovery view** (reverse-discovered from Prometheus `/api/v1/metadata` + `/api/v1/series` for type / existence), abolishing manual registration. Eliminates "tenant lies about type → compile crash"; but discovery solves the lie-risk, not the cost-risk (still needs the cost cap below). **Version-awareness is not stored as a flag** — the compiler always emits the existing graceful-degradation join, safe whether or not the label is present. This view subsumes [#716](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/716)'s `/effective`.
+- **Compilation authority stays in CI** (aligned with [#692](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/692) generator-of-record), tenant-api adds a **shift-left promtool preflight**: on PUT, compile in-memory + `promtool check rules`, reject with HTTP 400 immediately on error. *Trade-off*: tenant-api needs the promtool binary, buys instant-validation UX + CI only ever sees "promtool-blessed perfect YAML" (clean separation of concerns).
+- **Cross-tenant isolation is structural**: the compiler force-injects `tenant=`; the `tenant` label is already scrape-stamped from the namespace and cannot be forged. Near-zero cost, structurally solving the bedrock's hardest risk.
+- **Blast-radius trio**: (a) per-tenant rules in their own file → a bad rule only breaks its own group, platform packs are absolutely safe; (b) rule-group `limit` (native in Prometheus 3.x) + per-tenant rule / series cap; (c) promtool hard gate. Dynamic AST cost prediction is Future (MVP relies on recipe-bounding + `limit` + caps; named tools like `mimirtool` are verify-before-adopting, not locked in). *Trade-off*: cost analysis is net-new, buys "a tenant cannot take down the platform, nor other tenants".
+- **Version injection uses a platform-default relabel** (centralized `podTargetLabels`), resolving the R6 "pushes complexity to the tenant" rejection. *Trade-off*: only holds for "pod-deployed app metrics carrying `app.kubernetes.io/version`"; external / managed backends are Future.
+- **Dry-run uses `mode: [active | silent]`** (not `shadow`, to avoid colliding with the existing Shadow Monitoring migration semantics); `silent` compiles to an alert routed to a null / log-only receiver, reusing the existing empty-receiver route. *Trade-off*: needs an explicit null route for the silent class (do not rely on default fall-through), buys zero new schema + alert-storm protection.
+
+**Two design boundaries** (implementation must define): (a) **metric name collision** — discovery must filter per-tenant (`{tenant="X"}`), the picker shows only that tenant's metrics; (b) **metric-disappearance behavior** — a tenant deletes their deployment → the recipe evaluates against absent series; the absent / staleness behavior is the tenant's responsibility by default, but must be stated.
+
+### Reuse of existing machinery (the foundation paying off — why both capabilities share one ADR)
+
+| Custom Alerts needs | Reused existing asset (version-aware / platform) |
+|---|---|
+| scrape ingestion + version stamping | `tenant-exporters` job + version-aware's `app.kubernetes.io/version` source (platform-default relabel) |
+| version graceful join | version-aware normalize layer's `version=~"\|default"` left-outer-join |
+| tenant isolation | namespace→`tenant` scrape-stamp + prom-label-proxy (ADR-020) |
+| compilation authority + GitOps | `operator_generate` (#714) + Directory Scanner + conf.d projected volume |
+| write validation / defaults merge | tenant-api `validate()` + `MergeTenantWithRootDefaults` (#706) |
+| onboarding-vacuum isolation | left-outer-join enrichment (#709) |
+| promtool gate | the rule-pack CI promtool pattern |
+| dry-run inhibition | the existing Shadow Monitoring inhibition route |
+
+The only **net-new core**: recipe library + parameter schema + recipe compiler + discovery catalog + cost cap + two UXs (onboarding / recipe editing).
+
+### MVP vs Future Work (defer-with-trigger)
+
+**MVP / GA bar**: discovery catalog + onboarding (the common k8s pod app-metric case), 4–5 core recipes (threshold / rate / ratio / absence / **p99 latency**), the compiler + full safety pipeline, recipe editing + `mode: silent` preview, version graceful-join.
+
+**Future Work**:
+
+- Level 2 bounded DSL — *trigger*: the first real SRE alert that no recipe + composition can express.
+- Level 3 raw PromQL + cost limit — *trigger*: a customer contractually requires arbitrary PromQL and accepts the cost regime.
+- Version-awareness for external / managed backends (ServiceMonitor relabel) — *trigger*: a managed-DB customer needs version alerts (subsumes [#716](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/716) item 1).
+- [#692](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/692) in-memory dynamic compiler — *trigger*: CI round-trip latency becomes a real adoption blocker (until then keep generator-of-record, preserving the promtool safety net).
+- Dynamic AST cost prediction / recipe composition — *trigger*: demand appears.
+
+### Custom Alerts Acceptance Criteria (proposed)
+
+1. A tenant can create one alert via the portal recipe form (threshold / rate / ratio / absence / p99) without touching PromQL; saving goes through GitOps.
+2. tenant-api returns HTTP 400 with the error location for a recipe whose compiled output fails promtool (shift-left preflight, mutation-proven).
+3. Cross-tenant isolation: whatever tenant A fills in, the generated PromQL carries `tenant="A"` and cannot select B's series (injection + test assertion).
+4. A bad recipe (if it bypasses the gate) only fails its own per-tenant rule file's group load; platform packs and other tenants' rules are unaffected (kind-verified).
+5. A `mode: silent` recipe, when firing, routes to a null / log-only receiver and leaves a trace in Grafana, confirmed **not** to reach PagerDuty / Slack (routing test).
+6. The discovery catalog shows a tenant only their `{tenant=}` metrics + correct type; a newly-onboarded metric appearing in the view = onboarding succeeded (merges [#716](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/716)'s `/effective`).
+7. A recipe on a version-aware metric auto graceful-joins, falling to `default` when the label is absent, producing no NaN / empty set (reuses the version-aware invariant).
+8. Cost guardrails: rule-group `limit` + per-tenant cap are in effect, with deterministic over-cap behavior (aligned with the existing version-aware truncation invariant).
+9. Doc-as-Code: a recipe author guide (bilingual) + a config-driven.md recipe section + troubleshooting.
+
+### Custom Alerts new dependencies / blast-radius
+
+- **network policy**: if the discovery catalog is driven from tenant-api, add a `tenant-api → prometheus:9090` egress / ingress allowance (currently `network-policies.yaml` only allows grafana / threshold-exporter).
+- **alertmanager**: add an explicit null / log-only route for `mode: silent` (do not rely on the test-env default fall-through).
+- **tenant-api image**: bundle the `promtool` binary (for the shift-left preflight).
+- **Prometheus version**: rule-group `limit` needs ≥ 2.31 (current v3.11.2 ✅); `/api/v1/metadata` + `/series` (v3.x ✅).
 
 ## Links / Cross-Reference
 
 - [#423](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/423) — epic SOT (full three-round design context)
+- [#716](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/716) — version-aware defer-with-trigger tracker (the fate of its item 1 / item 2 is in §Custom Alerts)
+- [#741](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/741) — Custom Alerts implementation epic (Capability B)
 - [`config-driven.md` §2.5 / §2.6](../design/config-driven.md) — existing dimensional + scheduled mechanisms (this ADR's foundation and boundary)
 - `config/resolve.go` (dimensional key path 182–227) / `collector.go` (CustomLabels emit 68–78) — verification basis
 - [ADR-005 Projected Volume for Rule Packs](005-projected-volume-for-rule-packs.en.md) — rule-pack propagation chain
 - [`architecture-and-design.md` Cardinality Guard](../architecture-and-design.md) — must align in Phase 1
 - [`test-map.md` Test Injection Seam](../internal/test-map.md) — follow v2.8.0 test standards when sweeping (`freshMetrics`/`SetMetrics`, no global swap)
 
-> **Convergence note**: this ADR distills the locked decisions from #423's three design rounds (user × Claude × Gemini cross-review). The key current-state correction is "the dimensional label already achieves the target metric shape" — which shifts the Phase 1 core from a schema extension to the rule-pack normalize layer and demotes the `versioned:` sugar to defer-with-trigger.
+> **Convergence note**: the key current-state correction is "the dimensional label already achieves the target metric shape" — which shifts the core from a schema extension to the rule-pack normalize layer and demotes the `versioned:` sugar to defer-with-trigger. Full design context in [#423](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/423).
