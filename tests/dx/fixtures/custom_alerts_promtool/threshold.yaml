@@ -18,7 +18,7 @@ tests:
     input_series:
       - series: 'order_queue_depth{tenant="shop-a", namespace="shop", pod="api-7c9-x"}'
         values: '1500x48'
-      - series: 'user_threshold{recipe_id="threshold__order_queue_depth__gt__w5m", tenant="shop-a", severity="warning", name="queue_depth_high"}'
+      - series: 'user_threshold{component="custom", metric="order_queue_depth", recipe_id="threshold__order_queue_depth__gt__w5m", tenant="shop-a", severity="warning", name="queue_depth_high"}'
         values: '1000x48'
       - series: 'tenant_metadata_info{tenant="shop-a", runbook_url="http://rb/shop", owner="team-shop", tier="gold"}'
         values: '1x48'
@@ -49,7 +49,7 @@ tests:
     input_series:
       - series: 'order_queue_depth{tenant="shop-a", namespace="shop", pod="api-7c9-x"}'
         values: '500x48'
-      - series: 'user_threshold{recipe_id="threshold__order_queue_depth__gt__w5m", tenant="shop-a", severity="warning", name="queue_depth_high"}'
+      - series: 'user_threshold{component="custom", metric="order_queue_depth", recipe_id="threshold__order_queue_depth__gt__w5m", tenant="shop-a", severity="warning", name="queue_depth_high"}'
         values: '1000x48'
       - series: 'tenant_metadata_info{tenant="shop-a", runbook_url="http://rb/shop", owner="team-shop", tier="gold"}'
         values: '1x48'
@@ -63,7 +63,7 @@ tests:
     input_series:
       - series: 'order_queue_depth{tenant="shop-a", namespace="shop", pod="api-7c9-x"}'
         values: '1500x48'
-      - series: 'user_threshold{recipe_id="threshold__order_queue_depth__gt__w5m", tenant="shop-a", severity="warning", name="queue_depth_high"}'
+      - series: 'user_threshold{component="custom", metric="order_queue_depth", recipe_id="threshold__order_queue_depth__gt__w5m", tenant="shop-a", severity="warning", name="queue_depth_high"}'
         values: '1000x48'
       - series: 'user_state_filter{tenant="shop-a", filter="maintenance"}'
         values: '1x48'

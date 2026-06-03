@@ -106,6 +106,27 @@ func (c *ThresholdCollector) Collect(ch chan<- prometheus.Metric) {
 		ch <- m
 	}
 
+	// #741 S3a: per-tenant malformed _custom_alerts count (fail-loud). Emitted as
+	// a ConstMetric here (same idiom as user_threshold / user_state_filter) rather
+	// than a Reset()+Set() GaugeVec mutated during Collect — Registry.Gather runs
+	// collectors concurrently, so a separately-registered GaugeVec could observe a
+	// partial Reset+Set snapshot. ConstMetric is computed per scrape, so a tenant
+	// that fixed/removed its declarations simply stops emitting (no stale series).
+	caErrDesc := prometheus.NewDesc(
+		"da_custom_alert_parse_errors",
+		"Per-tenant count of malformed _custom_alerts entries dropped at resolve time (ADR-024 能力 B, #741). 0 = all parsed+validated. Fail-loud: a silently-skipped custom alert surfaces here. Alert: > 0 (warning). Upstream hard-gates (CI compiler, tenant-api preflight) catch these first; this is the defense-in-depth last line for a direct-push bypass.",
+		[]string{"tenant"},
+		nil,
+	)
+	for tenant, n := range stats.PerTenantCustomAlertErrors {
+		m, err := prometheus.NewConstMetric(caErrDesc, prometheus.GaugeValue, float64(n), tenant)
+		if err != nil {
+			log.Printf("WARN: failed to create da_custom_alert_parse_errors metric for tenant=%s: %v", tenant, err)
+			continue
+		}
+		ch <- m
+	}
+
 	// Scenario C: state filter flags
 	stateDesc := prometheus.NewDesc(
 		"user_state_filter",

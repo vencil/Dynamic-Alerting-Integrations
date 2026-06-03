@@ -29,16 +29,21 @@ def _norm_version(expr: str) -> str:
     return f'label_replace({expr}, "version", "default", "version", "^$")'
 
 
-def _threshold_record(rid: str) -> dict:
-    # keep `name` + `mode` in by() so these PER-TENANT attributes survive to
-    # group_left(name, mode); keep `severity` so the per-severity core selects
-    # its half. `mode` MUST ride the data plane: tenants sharing a shape may set
-    # different modes (page vs silent), and a single vectorized rule cannot bake
-    # a per-tenant mode — without this label S8 routing cannot tell a silent
-    # tenant's alert from a paging one (they share the rule). (tenant,recipe_id,
-    # severity) is unique, so (name, mode) stays a per-(tenant,version,severity)
-    # singleton and the join remains one-to-one.
-    inner = f'max by(tenant, version, severity, name, mode) (user_threshold{{recipe_id="{rid}"}})'
+def _threshold_record(rid: str, metric: str) -> dict:
+    # Selector = {component="custom", metric=<metric>, recipe_id=<slug>} (label
+    # form A, #741 S3a): the exporter emits user_threshold with these labels, so
+    # the rule joins the real data. component+metric satisfy the #731 contract;
+    # recipe_id disambiguates shapes sharing a metric (permitted only when
+    # component="custom"). keep `name`+`mode` in by() so these PER-TENANT
+    # attributes survive to group_left(name, mode) — `mode` MUST ride the data
+    # plane (tenants sharing a shape may set page vs silent; a single vectorized
+    # rule cannot bake a per-tenant mode, else S8 cannot route). keep `severity`
+    # so the per-severity core selects its half. (tenant,recipe_id,severity) is
+    # unique, so (name, mode) stays a singleton and the join is one-to-one.
+    inner = (
+        f'max by(tenant, version, severity, name, mode) '
+        f'(user_threshold{{component="custom", metric="{metric}", recipe_id="{rid}"}})'
+    )
     return {"record": f"custom:threshold:{rid}", "expr": _norm_version(inner)}
 
 
@@ -176,7 +181,7 @@ def emit_shape(shape: dict) -> Tuple[List[dict], List[dict]]:
     for_ = str(shape.get("for", "1m"))
     severities = shape["severities"]
 
-    recording: List[dict] = [_threshold_record(rid)]
+    recording: List[dict] = [_threshold_record(rid, metric)]
     if recipe != "absence":
         recording.append(_metric_record(rid, recipe, metric, sel, window, quantile, denom))
     for sev in severities:

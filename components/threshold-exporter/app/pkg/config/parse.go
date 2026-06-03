@@ -55,6 +55,24 @@ func (sv *ScheduledValue) UnmarshalYAML(value *yaml.Node) error {
 		sv.Default = string(out)
 		return nil
 	}
+	if value.Kind == yaml.SequenceNode {
+		// List value (e.g. _custom_alerts: [ {recipe: ...}, ... ], ADR-024 #741).
+		// ScheduledValue.Default is a string, so we cannot hold the []interface{}
+		// directly — serialize the sequence back to a YAML string (mirrors the
+		// arbitrary-mapping passthrough above). ResolveCustomAlerts re-parses it
+		// into []CustomAlertSpec. Without this branch the whole tenant file would
+		// fail to parse (the directory scanner skips an unparseable file).
+		var raw interface{}
+		if err := value.Decode(&raw); err != nil {
+			return err
+		}
+		out, err := yaml.Marshal(raw)
+		if err != nil {
+			return fmt.Errorf("ScheduledValue: failed to re-serialize sequence: %w", err)
+		}
+		sv.Default = string(out)
+		return nil
+	}
 	return fmt.Errorf("ScheduledValue: unsupported YAML node kind %d", value.Kind)
 }
 
