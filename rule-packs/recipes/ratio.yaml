@@ -1,0 +1,27 @@
+# Recipe: ratio — platform-authored (ADR-024 Capability B, #741).
+recipe: ratio
+summary: The ratio of two counter rates crosses a threshold (division-by-zero safe).
+summary_zh: 兩個 counter 增率的比值越過閾值（除零安全）。
+params:
+  metric:             {required: true,  desc: "numerator counter metric name"}
+  denominator_metric: {required: true,  desc: "denominator counter metric name"}
+  op:        {required: false, default: ">", enum: [">", ">=", "<", "<="]}
+  window:    {required: true,  desc: "rate window (Go duration, e.g. 5m)"}
+  threshold: {required: true,  desc: "value[:severity] — e.g. 0.05:critical"}
+  selectors:    {required: false, desc: "exact label filters (=), applied to BOTH metrics"}
+  selectors_re: {required: false, desc: "regex label filters (=~)"}
+  mode:      {required: false, default: page, enum: [page, silent]}
+  for:       {required: false, default: "1m", desc: "pending duration before firing (Go duration)"}
+emitted_shape: |
+  sum by(tenant)(rate(<numerator><sel>[<window>]))
+    / (sum by(tenant)(rate(<denominator><sel>[<window>])) > 0)
+  The `> 0` guard drops zero/negative denominators → EMPTY vector (no +Inf false
+  positive on no-traffic windows). Ratio is per-tenant (version-agnostic) in MVP.
+example:
+  recipe: ratio
+  name: error_ratio_high
+  metric: http_errors_total
+  denominator_metric: http_requests_total
+  op: ">"
+  window: 5m
+  threshold: "0.05:critical"

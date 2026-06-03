@@ -837,3 +837,14 @@ da-portal's tenant-manager.jsx probes tenant-api availability on load. When the 
 
 > Full decision context and alternative analysis at [ADR-009: Tenant Manager CRUD API](../adr/009-tenant-manager-crud-api.en.md).
 
+
+
+### 2.15 Custom Alerts (Tenant-Authored, ADR-024 Capability B)
+
+Every tier (platform / domain / tenant) can author custom alerts from platform-authored **parameterized recipes** — **never writing PromQL** (the declarative bedrock holds). Fill in a `_custom_alerts` block on a tenant, or on a `_defaults.yaml` at any level; the declaration level determines scope (a tenant-leaf recipe applies only to that tenant; a domain/platform `_defaults.yaml` recipe covers the whole subtree and tenants cannot override it).
+
+Five core recipes: `threshold` (gauge crossing) / `rate` (counter rate) / `ratio` (ratio of two counters, division-by-zero safe) / `absence` (missing metric, self-scoped) / `p99_latency` (histogram quantile). Label filtering uses the safe `selectors` (`=`) / `selectors_re` (`=~`) maps, assembled by the compiler (key validation + value escaping) — PromQL injection is structurally impossible.
+
+**Vectorized compilation (preserves O(M))**: the compiler groups all declarations by shape signature `(recipe, metric, op, window, quantile, denominator, selectors)` and emits **one** `app_metric > on(tenant) group_left(...) user_threshold{...}` rule **per shape** — rule count = shape count, **not** tenant count (the same O(M) guarantee rule packs hold, [benchmarks.en.md §2](../benchmarks.en.md)). The alertname is the static shape slug; one rule is shared across tenants. Severity is tenant-decided; each shape emits only the declared severity branches. `mode` (page/silent) is a per-tenant routing class that is **not** part of the shape signature (so it never forks the rule — O(M) holds); instead it rides the data plane via `group_left(name, mode)` into an alert label, so two tenants on the same shape with different modes still route independently (silent→null / page→pager). The version graceful-join reuses the existing version-aware mechanism (absent label falls back to `default`).
+
+**Phasing**: S1+S2 ships the **compiler + recipe library + schema + tests** (`make custom-alerts-compile`). **Producing & deploying the pack (configmap + operator CRD), the exporter emitting the matching `user_threshold` series, and the final label form are deferred to S3** — the repo's #731 closed-label contract structurally couples "committed pack" with "exporter emission", so landing them together avoids deploying a rule that cannot fire in prod. See the recipe library at [`rule-packs/recipes/`](https://github.com/vencil/Dynamic-Alerting-Integrations/tree/main/rule-packs/recipes); full design in [ADR-024 §Custom Alerts](../adr/024-version-aware-threshold-via-dimensional-label.en.md).

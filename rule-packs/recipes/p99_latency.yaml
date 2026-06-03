@@ -1,0 +1,27 @@
+# Recipe: p99_latency — platform-authored (ADR-024 Capability B, #741).
+recipe: p99_latency
+summary: A histogram quantile (default p99) latency crosses a threshold.
+summary_zh: histogram 分位數（預設 p99）延遲越過閾值。
+params:
+  metric:    {required: true,  desc: "histogram base name; the recipe queries <metric>_bucket"}
+  quantile:  {required: false, default: "0.99", desc: "quantile in (0,1), e.g. 0.99"}
+  op:        {required: false, default: ">", enum: [">", ">=", "<", "<="]}
+  window:    {required: true,  desc: "rate window over buckets (Go duration, e.g. 5m)"}
+  threshold: {required: true,  desc: "value[:severity] — seconds, e.g. 2:warning"}
+  selectors:    {required: false, desc: "exact label filters (=) applied to the _bucket series"}
+  selectors_re: {required: false, desc: "regex label filters (=~)"}
+  mode:      {required: false, default: page, enum: [page, silent]}
+  for:       {required: false, default: "1m", desc: "pending duration before firing (Go duration)"}
+emitted_shape: |
+  histogram_quantile(<quantile>,
+    sum by(le,tenant,version)(rate(<metric>_bucket<sel>[<window>]))) {op} on(tenant[,version])
+      group_left(name, mode) custom:threshold:<recipe_id>{severity=<sev>}
+  `by(le,tenant,version)` keeps the bucket dimension (le) AND the tenant join key.
+example:
+  recipe: p99_latency
+  name: api_latency_p99
+  metric: http_request_duration_seconds
+  quantile: "0.99"
+  op: ">"
+  window: 5m
+  threshold: "2:warning"

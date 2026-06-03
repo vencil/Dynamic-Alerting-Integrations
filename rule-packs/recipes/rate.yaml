@@ -1,0 +1,27 @@
+# Recipe: rate — platform-authored (ADR-024 Capability B, #741).
+recipe: rate
+summary: The per-second rate of a counter crosses a threshold.
+summary_zh: 一個 counter 的每秒增率越過閾值。
+params:
+  metric:    {required: true,  desc: "bare counter metric name (^[a-zA-Z_][a-zA-Z0-9_]*$)"}
+  op:        {required: false, default: ">", enum: [">", ">=", "<", "<="]}
+  window:    {required: true,  desc: "rate window (Go duration, e.g. 5m)"}
+  threshold: {required: true,  desc: "value[:severity]"}
+  selectors:    {required: false, desc: "exact label filters (=)"}
+  selectors_re: {required: false, desc: "regex label filters (=~) — e.g. status: \"5..\""}
+  mode:      {required: false, default: page, enum: [page, silent]}
+  for:       {required: false, default: "1m", desc: "pending duration before firing (Go duration)"}
+emitted_shape: |
+  sum by(tenant,version)(rate(<metric><selectors>[<window>])) {op} on(tenant[,version])
+    group_left(name, mode) custom:threshold:<recipe_id>{severity=<sev>}
+  NB: `sum by(tenant,version)` (keep-list) — never bare sum() (would strip the
+  tenant join key → silent-forever alert).
+example:
+  recipe: rate
+  name: http_5xx_spike
+  metric: http_requests_total
+  selectors_re: {status: "5.."}
+  selectors: {method: "POST"}
+  op: ">"
+  window: 5m
+  threshold: "50:warning"

@@ -1,0 +1,28 @@
+# Recipe: absence — platform-authored (ADR-024 Capability B, #741).
+recipe: absence
+summary: A metric is absent over a window (per-tenant, self-scoped).
+summary_zh: 一個指標在時間窗內缺席（per-tenant、自我圈定）。
+params:
+  metric:    {required: true,  desc: "bare metric name expected to be present"}
+  window:    {required: true,  desc: "absence window (Go duration, e.g. 10m)"}
+  threshold: {required: true,  desc: "value[:severity] — value is a presence flag (e.g. 0:critical)"}
+  selectors:    {required: false, desc: "exact label filters (=)"}
+  selectors_re: {required: false, desc: "regex label filters (=~)"}
+  mode:      {required: false, default: page, enum: [page, silent]}
+  for:       {required: false, default: "1m", desc: "pending duration before firing (Go duration)"}
+emitted_shape: |
+  custom:threshold:<recipe_id>{severity=<sev>}
+    unless on(tenant) count by(tenant)(count_over_time(<metric><sel>[<window>]) > 0)
+  Self-scoped: only tenants that DECLARED the recipe (i.e. have the
+  user_threshold{recipe_id} series) are candidates → scope cannot leak to
+  undeclared tenants. `op`/`threshold` numeric comparison does not apply.
+caveat: |
+  A metric that NEVER appeared (e.g. a typo) fires immediately — this is by
+  design; the phantom-metric fail-fast guard (discovery-catalog preflight) lands
+  in a later slice (S5). Post-onboarding staleness is the tenant's responsibility.
+example:
+  recipe: absence
+  name: heartbeat_gone
+  metric: app_heartbeat_total
+  window: 10m
+  threshold: "0:critical"

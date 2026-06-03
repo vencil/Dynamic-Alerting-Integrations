@@ -1,0 +1,16 @@
+# Custom Alerts example — PLATFORM-level (L0) scope note.
+#
+# A recipe declared in the root _defaults.yaml applies to EVERY tenant in the
+# tree (ADR-024 §scope = declaration level). That makes L0 the RIGHT place for a
+# policy that every tenant should obey — but the WRONG place for an `absence`
+# recipe: at L0 every tenant is a declarant, so any tenant that does not export
+# the metric trivially satisfies absence and fires — a platform-wide alert storm.
+# Safe platform-level absence needs a presence-guard (constrain candidates to
+# tenants actually exporting the metric); that guard is deferred (see #741 / S5
+# phantom-metric catalog). So the absence demo lives at a tenant leaf (shop.yaml)
+# where self-scoping is unambiguous. Domain-level (L1) scope is demoed in
+# finance/_defaults.yaml.
+#
+# (No platform-level _custom_alerts in this example — L0 inheritance mechanics
+# are unit-tested in tests/dx/test_compile_custom_alerts.py::
+# test_domain_and_platform_inheritance.)

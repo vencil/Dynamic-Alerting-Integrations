@@ -1,0 +1,77 @@
+# promtool unit test — Custom Alerts (#741), RATIO recipe + DIVISION-BY-ZERO guard.
+# Run: promtool test rules tests/rulepacks/rule-pack-custom-alerts-ratio_test.yaml
+#
+# ratio = sum(rate(num)) / (sum(rate(den)) > 0). The `> 0` guard means a zero
+# denominator drops the series → empty vector, NEVER +Inf. Proves: (1) a real
+# ratio above threshold fires (critical); (2) numerator>0 / denominator==0 does
+# NOT fire (no +Inf false positive); (3) 0/0 does NOT fire.
+rule_files:
+  - rule-pack-custom-alerts.yaml
+
+evaluation_interval: 15s
+
+tests:
+  # ── errors/requests = (1000/15)/(10000/15) = 0.10 > 0.05 → critical fires ──
+  - interval: 15s
+    input_series:
+      - series: 'http_errors_total{tenant="shop-a", namespace="shop", pod="api-1"}'
+        values: '0+1000x48'
+      - series: 'http_requests_total{tenant="shop-a", namespace="shop", pod="api-1"}'
+        values: '0+10000x48'
+      - series: 'user_threshold{recipe_id="ratio__http_errors_total__gt__w5m__den_http_requests_total", tenant="shop-a", severity="critical", name="error_ratio_high"}'
+        values: '0.05x48'
+      - series: 'tenant_metadata_info{tenant="shop-a", runbook_url="http://rb/shop", owner="team-shop", tier="gold"}'
+        values: '1x48'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: Custom_ratio__http_errors_total__gt__w5m__den_http_requests_total
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              tenant: shop-a
+              recipe: ratio
+              name: error_ratio_high
+              version: default
+              runbook_url: "http://rb/shop"
+              owner: team-shop
+              tier: gold
+            exp_annotations:
+              summary: "CRITICAL Custom alert [error_ratio_high] for shop-a"
+              summary_zh: "shop-a 的自訂告警 [error_ratio_high] 達臨界 觸發"
+              description: "ratio on http_errors_total: value 0.10 crossed the configured threshold"
+              description_zh: "http_errors_total 的 ratio: 值 0.10 已越過設定閾值"
+              runbook_url: "http://rb/shop"
+              owner: team-shop
+              tier: gold
+
+  # ── numerator rising, denominator FLAT (rate 0) → (den>0) drops → no fire ──
+  - interval: 15s
+    input_series:
+      - series: 'http_errors_total{tenant="shop-a", namespace="shop", pod="api-1"}'
+        values: '0+1000x48'
+      - series: 'http_requests_total{tenant="shop-a", namespace="shop", pod="api-1"}'
+        values: '5000x48'
+      - series: 'user_threshold{recipe_id="ratio__http_errors_total__gt__w5m__den_http_requests_total", tenant="shop-a", severity="critical", name="error_ratio_high"}'
+        values: '0.05x48'
+      - series: 'tenant_metadata_info{tenant="shop-a", runbook_url="http://rb/shop", owner="team-shop", tier="gold"}'
+        values: '1x48'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: Custom_ratio__http_errors_total__gt__w5m__den_http_requests_total
+        exp_alerts: []
+
+  # ── both FLAT (0/0) → no fire ──
+  - interval: 15s
+    input_series:
+      - series: 'http_errors_total{tenant="shop-a", namespace="shop", pod="api-1"}'
+        values: '7x48'
+      - series: 'http_requests_total{tenant="shop-a", namespace="shop", pod="api-1"}'
+        values: '5000x48'
+      - series: 'user_threshold{recipe_id="ratio__http_errors_total__gt__w5m__den_http_requests_total", tenant="shop-a", severity="critical", name="error_ratio_high"}'
+        values: '0.05x48'
+      - series: 'tenant_metadata_info{tenant="shop-a", runbook_url="http://rb/shop", owner="team-shop", tier="gold"}'
+        values: '1x48'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: Custom_ratio__http_errors_total__gt__w5m__den_http_requests_total
+        exp_alerts: []

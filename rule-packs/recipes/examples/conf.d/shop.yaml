@@ -1,0 +1,56 @@
+# Custom Alerts example — TENANT-level (leaf) declarations for tenant `shop-a`.
+# Demonstrates threshold / rate (with label selectors) / ratio / p99 recipes.
+# A tenant-leaf recipe applies only to that tenant (vectorized on(tenant) join).
+tenants:
+  shop-a:
+    _custom_alerts:
+      # threshold: a gauge crosses a value.
+      - recipe: threshold
+        name: queue_depth_high
+        metric: order_queue_depth
+        op: ">"
+        window: 5m
+        threshold: "1000:warning"
+
+      # rate: per-second rate of 5xx POSTs. Label filtering uses the safe
+      # selectors map (compiler assembles `{status=~"5..", method="POST"}`) —
+      # never inline PromQL, so injection is structurally impossible.
+      - recipe: rate
+        name: http_5xx_spike
+        metric: http_requests_total
+        selectors_re:
+          status: "5.."
+        selectors:
+          method: "POST"
+        op: ">"
+        window: 5m
+        threshold: "50:warning"
+
+      # ratio: error ratio. Division-by-zero is guarded (`denominator > 0`) →
+      # no-traffic windows yield an empty vector, never a +Inf false positive.
+      - recipe: ratio
+        name: error_ratio_high
+        metric: http_errors_total
+        denominator_metric: http_requests_total
+        op: ">"
+        window: 5m
+        threshold: "0.05:critical"
+
+      # p99 latency: histogram quantile over a _bucket metric.
+      - recipe: p99_latency
+        name: api_latency_p99
+        metric: http_request_duration_seconds
+        quantile: "0.99"
+        op: ">"
+        window: 5m
+        threshold: "2:warning"
+
+      # absence: fire (critical) when shop-a's heartbeat counter stops over 10m.
+      # Self-scoped: only tenants with this recipe's user_threshold series are
+      # candidates, so it cannot storm other tenants (unlike a platform-L0
+      # absence — see _defaults.yaml note).
+      - recipe: absence
+        name: heartbeat_gone
+        metric: app_heartbeat_total
+        window: 10m
+        threshold: "0:critical"

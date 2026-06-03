@@ -1,0 +1,30 @@
+{
+  "_comment": "Cross-language contract for the recipe_id slug (ADR-024 #741 S2). Both the Python compiler (scripts/tools/dx/custom_alerts/shape.py) and the Go exporter (S3) MUST compute these exact slugs from these inputs — a drift silently breaks every on(tenant) group_left join. Pure string assembly: no hash, no locale, no map-order dependence. Add a case when adding a recipe/param.",
+  "vectors": [
+    {
+      "input": {"recipe": "threshold", "metric": "order_queue_depth", "op": ">", "window": "5m"},
+      "recipe_id": "threshold__order_queue_depth__gt__w5m"
+    },
+    {
+      "input": {"recipe": "rate", "metric": "http_requests_total", "selectors_re": {"status": "5.."}, "selectors": {"method": "POST"}, "op": ">", "window": "5m"},
+      "recipe_id": "rate__http_requests_total__s_method_POST__sre_status_5____gt__w5m"
+    },
+    {
+      "input": {"recipe": "ratio", "metric": "http_errors_total", "denominator_metric": "http_requests_total", "op": ">", "window": "5m"},
+      "recipe_id": "ratio__http_errors_total__gt__w5m__den_http_requests_total"
+    },
+    {
+      "input": {"recipe": "absence", "metric": "app_heartbeat_total", "window": "10m"},
+      "recipe_id": "absence__app_heartbeat_total__absent__w10m"
+    },
+    {
+      "input": {"recipe": "p99_latency", "metric": "http_request_duration_seconds", "quantile": "0.99", "op": ">", "window": "5m"},
+      "recipe_id": "p99_latency__http_request_duration_seconds__gt__w5m__q0_99"
+    },
+    {
+      "_note": "selector ordering must be deterministic: sorted by (key, op), regardless of YAML/map iteration order",
+      "input": {"recipe": "threshold", "metric": "m", "op": ">=", "window": "1m", "selectors": {"zeta": "1", "alpha": "2"}},
+      "recipe_id": "threshold__m__s_alpha_2__s_zeta_1__ge__w1m"
+    }
+  ]
+}

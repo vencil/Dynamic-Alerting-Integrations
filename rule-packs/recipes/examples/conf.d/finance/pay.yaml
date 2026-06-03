@@ -1,0 +1,12 @@
+# Custom Alerts example — TENANT leaf under the finance/ domain (tenant `pay-a`).
+# pay-a's EFFECTIVE recipes = its own (below) + the finance/ domain ratio +
+# the platform absence heartbeat — demonstrating union inheritance + scope.
+tenants:
+  pay-a:
+    _custom_alerts:
+      - recipe: threshold
+        name: pending_settlements_high
+        metric: pending_settlements
+        op: ">"
+        window: 5m
+        threshold: "500:critical"
