@@ -299,6 +299,28 @@ flowchart TD
 | **生命週期** | 永久 | 永久 | 帶 expiry date |
 | **工具** | `scaffold` / `patch_config` | Rule Pack YAML | `lint` / `validate-config` |
 
+## 7. 規則生命週期治理（全 tier 生命週期視圖）
+
+> **給誰**：從既有系統遷入、要評估「一條規則能不能被管一輩子」的 platform / domain 負責人。§1–§6 按**治理層級**組織；本節按**規則的一生**橫切。每階段給：平台保證、⚠️ 已知限制、how-to 連結。
+
+規則在本平台不是單一實體——依 tier（平台 Rule Pack / 租戶閾值 Tier 1 / Tier 3 Custom）不同，生命週期機制不同。下表按「生 → 老 → 病 → 死」橫切：
+
+| 階段 | 平台 Rule Pack | 租戶閾值（Tier 1） | Tier 3 Custom | how-to |
+|---|---|---|---|---|
+| **生** 訂定 | 平台寫 PromQL pack | `tenant.yaml` 填純數字 | Domain Expert 代寫 + deny-list lint | [Domain Expert 入門](getting-started/for-domain-experts.md) · 本文 §2 |
+| **老** 切版（V2） | 改 pack（CI gate） | **version-aware 閾值**：同租戶多版本並存、升版 emergent cutover、動態降級 | 隨 pack 演進 | [Version-Aware 使用攻略](scenarios/version-aware-thresholds.md) · [ADR-024](adr/024-version-aware-threshold-via-dimensional-label.md) |
+| **病** 修錯 | 改 pack + promtool | 改數字 + shadow 數值 diff 驗證 | 改 PromQL + lint | [故障排查](troubleshooting.md) · [Shadow Monitoring 切換](scenarios/shadow-monitoring-cutover.md) |
+| **死** 退役 | 移除 pack rule（Projected Volume `optional`，零 PR 衝突） | 移除 key → series 消失；未宣告版本的閾值 = 孤兒，由 `version_orphaned` sentinel（7d/30d）偵測 | deprecate + expiry + 14d 未回應自動停用 + 30d 強制下架（見本文 §5） | 本文 §5 · [ADR-024](adr/024-version-aware-threshold-via-dimensional-label.md) |
+
+**⚠️ 誠實的成熟度與限制（遷入評估前必讀）**：
+
+- **切版**：version-aware 閾值目前僅 **kubernetes pilot（container_cpu / memory）**；其餘 pack 寫 `version` key 會被 da-guard 拒（非-k8s 版本對齊列 future）。
+- **退役**：租戶閾值 / 版本的退役今天是 **detect-only**（`version_orphaned` sentinel + portal 黃燈 + CLI），**auto-GC PR bot 尚未實作**（需人工清）；只有 Tier 3 custom 有 expiry-based 自動下架（§5）。
+- **租戶自訂告警**：讓租戶 / domain 自訂非-pack 告警的 custom alert recipe（含 recipe `status: active / deprecated / eol` 生命週期）為**設計收斂、實作未起**（[ADR-024 §Custom Alerts](adr/024-version-aware-threshold-via-dimensional-label.md)，epic #741）。
+- **爆炸半徑**：平台規則靠 O(M) 向量化（一條規則蓋全租戶，改一處影響全部）→ CI promtool gate + shadow 數值 diff 為安全網；per-tenant / version 維度受 Cardinality Guard（per-tenant 500）封頂。
+
+**存取治理**（誰能在各階段改什麼、稽核、break-glass）見 [governance-security.md](governance-security.md)；**Tier 模型與晉升機制**見本文 §2 / §5。
+
 ## 相關資源
 
 | 資源 | 相關性 |

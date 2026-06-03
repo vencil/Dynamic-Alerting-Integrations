@@ -261,6 +261,28 @@ flowchart TD
 | **CI checks** | Automatic (three-state validation) | Rule Pack CI | Deny-list linting |
 | **Lifecycle** | Permanent | Permanent | Expiry date required |
 
+## 7. Rule Lifecycle Governance (cross-tier lifecycle view)
+
+> **For whom**: platform / domain owners migrating from an existing system, evaluating whether "a rule can be governed across its whole life". §1–§6 are organized by **governance tier**; this section cuts across by **the rule's life**. Each stage gives: platform guarantees, ⚠️ known limits, and a how-to link.
+
+A rule here is not a single entity — its lifecycle mechanism differs by tier (platform Rule Pack / tenant threshold Tier 1 / Tier 3 Custom). The table cuts across "born → aging → sick → retired":
+
+| Stage | Platform Rule Pack | Tenant threshold (Tier 1) | Tier 3 Custom | how-to |
+|---|---|---|---|---|
+| **Born** (define) | platform writes the PromQL pack | `tenant.yaml` sets a plain number | Domain Expert ghost-writes + deny-list lint | [Domain Expert guide](getting-started/for-domain-experts.en.md) · §2 |
+| **Aging** (cut to V2) | edit the pack (CI gate) | **version-aware thresholds**: multiple versions coexist per tenant, emergent cutover on upgrade, dynamic fallback | evolves with the pack | [Version-Aware guide](scenarios/version-aware-thresholds.en.md) · [ADR-024](adr/024-version-aware-threshold-via-dimensional-label.en.md) |
+| **Sick** (fix) | edit pack + promtool | edit the number + shadow value-diff validation | edit PromQL + lint | [Troubleshooting](troubleshooting.en.md) · [Shadow Monitoring cutover](scenarios/shadow-monitoring-cutover.en.md) |
+| **Retired** (offboard) | remove the pack rule (Projected Volume `optional`, zero PR conflict) | remove the key → series disappears; an undeclared-version threshold = orphan, detected by the `version_orphaned` sentinel (7d/30d) | deprecate + expiry + auto-disable after 14d no-reply + force-decommission after 30d (see §5) | §5 · [ADR-024](adr/024-version-aware-threshold-via-dimensional-label.en.md) |
+
+**⚠️ Honest maturity & limits (read before a migration evaluation)**:
+
+- **Aging**: version-aware thresholds are currently the **kubernetes pilot only (container_cpu / memory)**; a `version` key on other packs is rejected by da-guard (non-k8s version alignment is Future).
+- **Retirement**: retiring a tenant threshold / version is **detect-only today** (`version_orphaned` sentinel + portal yellow + CLI); an **auto-GC PR bot is not yet implemented** (manual cleanup); only Tier 3 custom has expiry-based auto-decommission (§5).
+- **Tenant custom alerts**: a custom-alert recipe (letting tenants / domains author non-pack alerts, with a recipe `status: active / deprecated / eol` lifecycle) is **design-converged, not yet implemented** ([ADR-024 §Custom Alerts](adr/024-version-aware-threshold-via-dimensional-label.en.md), epic #741).
+- **Blast radius**: platform rules rely on O(M) vectorization (one rule covers all tenants, editing one place affects all) → CI promtool gate + shadow value-diff are the safety net; per-tenant / version dimensions are capped by the Cardinality Guard (500 per tenant).
+
+**Access governance** (who can change what at each stage, audit, break-glass) is in [governance-security.md](governance-security.en.md); the **tier model & assimilation** are in §2 / §5.
+
 ## Related Resources
 
 | Resource | Relevance |

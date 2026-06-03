@@ -228,5 +228,6 @@ Default deny-all (Ingress + Egress) + per-component whitelist:
 | Resource | Relevance |
 |----------|-----------|
 | [Governance, Audit & Security Compliance](./governance-security.md) | Full Chinese version |
+| [Rule Lifecycle Governance (§7 cross-tier view)](./custom-rule-governance.en.md) | Born→aging→sick→retired governance + maturity limits (read before a migration evaluation) |
 | [GitOps Deployment](integration/gitops-deployment.en.md) | Deployment security, RBAC |
 | [Testing Playbook](./internal/testing-playbook.md) | SAST test execution |
