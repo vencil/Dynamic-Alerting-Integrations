@@ -24,12 +24,12 @@ updated_at: 2026-06-02
 
 > 本 ADR 是「一個引擎 + 兩個能力」，不是分期的專案計畫。讀者應先建立這個框架，再讀下方重型機械——否則會誤判為 over-engineering。
 
-本專案的產品北極星不是「平台預設的標準告警」，而是**讓租戶自訂自己的告警（Custom Alerts）**——做不到就無法 GA。但租戶自訂告警直接撞上本專案的地基鐵則：**tenant declarative-only、永不寫 PromQL**（§硬約束、[ADR-008](008-operator-native-integration-path.md)）。
+本專案的產品北極星不是「平台預設的標準告警」，而是**賦能各階層（platform / domain / tenant）以宣告式語法自訂告警（Custom Alerts）**，填補標準 rule pack 涵蓋不到的 domain-level 與 app-level 邊界——做不到就無法 GA。但這直接撞上本專案的地基鐵則：**declarative-only、永不寫 PromQL**（§硬約束、[ADR-008](008-operator-native-integration-path.md)）。
 
 同一套**宣告式 dimensional 告警機械**——dimensional-label 模型、scrape-time relabel、rule-pack normalize / compile 層、graceful-degradation join、promtool 安全網、per-tenant 隔離——撐起兩個能力：
 
 - **能力 A — Version-Aware Thresholds（§背景–§Action Items）**：在平台 authored 的 rule pack 上，讓租戶宣告**多版本數字閾值**。它是**地基與能力證明**——先證明這套機械能在 prod 安全運轉。
-- **能力 B — Custom Alerts（§Custom Alerts）**：把同一套機械開放給租戶，讓他們用**參數化 recipe**（非 PromQL）定義自己的告警。A 的 normalize / join / promtool gate / 隔離原封復用（見 §Custom Alerts「復用既有機制」）。這是產品北極星。
+- **能力 B — Custom Alerts（§Custom Alerts）**：把同一套機械開放給**各階層（platform / domain / tenant）**，用**參數化 recipe**（非 PromQL）定義標準 rule pack 涵蓋不到的告警。A 的 normalize / join / promtool gate / 隔離原封復用（見 §Custom Alerts「復用既有機制」）。這是產品北極星。
 
 **兩個能力同屬 v2.9.0、非分期釋出**——刻意不用「Phase 1 / Phase 2」把讀者心智切兩半（避免誤讀為兩次釋出或成熟度落差；且本 ADR 既有的 "Phase 2 = 其餘 pack 的 rollout" 用法另有所指，再借會撞名）。唯一差異是**實作現況**（A 已 merge、B 進行中），列於 §As-built。
 
@@ -362,38 +362,39 @@ flowchart TD
 12. [ ] **Go Exporter 確定性截斷**：`config/resolve.go::ResolveAtWithStats` 在容量截斷前對 dimensional keys 確定性排序（無版號/`default` 優先，其餘 `sort.Strings()`），消除 map 隨機序 flapping；單元測試斷言 over-cap 截斷穩定。
 13. [ ] **非 pilot pack 防禦硬化**：13 個非 pilot pack 的 `user_threshold` normalize matcher 加 `version=~"|default"`，防 CI guard 失效時跨 version double-count（maintainer 決納入 pilot or 後續 rollout）。
 
-## Custom Alerts（能力 B — 租戶自訂告警，v2.9.0 北極星）
+## Custom Alerts（能力 B — 階層式自訂告警，v2.9.0 北極星）
 
-> **實作現況：設計收斂，實作進行中**（架構決策已 accepted，見 §狀態；非另一次釋出、非成熟度落差）。Tracker：[#741](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/741)（[#716](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/716) 之 defer 項適度併入）。本節延續 §戰略弧：把既有 version-aware 的宣告式機械開放給租戶。與本 ADR 既有的 "Phase 2 = 其餘 pack rollout" 無關。
+> **實作現況：設計收斂，實作進行中**（架構決策已 accepted，見 §狀態；非另一次釋出、非成熟度落差）。Tracker：[#741](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/741)（[#716](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/716) 之 defer 項適度併入）。本節延續 §戰略弧：把既有 version-aware 的宣告式機械開放給**各階層（platform / domain / tenant）**。與本 ADR 既有的 "Phase 2 = 其餘 pack rollout" 無關。
 
 ### 北極星與地基張力
 
-產品命脈是讓租戶自訂告警，但地基鐵則是 declarative-only（§硬約束）。關鍵收斂：**「永不寫 PromQL」這條鐵則擋的三個風險，其中最難的「跨租戶隔離」已被既有架構結構性解掉**——故真正的設計問題不是「能不能做」，而是「給租戶多大表達力」。
+產品命脈是賦能各階層自訂告警，但地基鐵則是 declarative-only（§硬約束）。階層由既有 `conf.d/` 的 `_defaults.yaml` 目錄樹承載（L0 平台 / L1 domain / L2 subdomain / tenant leaf，見 [ADR-017](017-defaults-yaml-inheritance-dual-hash.md) / [ADR-018](018-profile-as-directory-default.md)）。關鍵收斂：**「永不寫 PromQL」這條鐵則擋的三個風險，其中最難的「跨租戶隔離」已被既有架構結構性解掉**——故真正的設計問題不是「能不能做」，而是「表達力 + 規則數成本」。
 
 | 風險 | 現況 | Custom Alerts 補強 |
 |---|---|---|
-| 跨租戶隔離 | ✅ 已解 — `tenant-exporters` scrape job 從 namespace 烙 `tenant` label（`configmap-prometheus.yaml`），租戶偽造不了；federation 已用 prom-label-proxy 隔離讀路徑 | 編譯器強制注入 `tenant="<id>"` matcher |
-| 運算式無效拖垮 Prometheus | ⚠️ rule 為 `/etc/prometheus/rules/*.yml` glob → 可隔離成 per-tenant 檔 | promtool hard gate（CI 權威 + tenant-api shift-left preflight）+ per-tenant 檔隔離 |
-| 成本 / 基數炸彈 | ❌ 無防護 | rule group `limit`（Prometheus 3.x 原生）+ per-tenant rule / series cap；動態 AST cost 列 Future |
+| 跨租戶隔離 | ✅ 已解 — `tenant-exporters` scrape job 從 namespace 烙 `tenant` label（`configmap-prometheus.yaml`），租戶偽造不了；federation 已用 prom-label-proxy 隔離讀路徑 | 向量化規則以 `on(tenant)` join 既有 namespace-stamped label 圈定（同 rule pack），非 per-rule 注入、非 regex |
+| 運算式無效拖垮 Prometheus | ⚠️ rule 為 `/etc/prometheus/rules/*.yml` glob → 可隔離成 per-tenant 檔 | promtool hard gate（CI 權威 + tenant-api shift-left preflight）+ 規則檔隔離 |
+| 成本 / 規則數炸彈 | ❌ 無防護 | **向量化（消扇出）+ `max_custom_recipes` per-tenant cap + 全域 rule-count budget + rule-eval-duration benchmark**；動態 AST cost 列 Future |
 
 ### 三-Plane 架構
 
 - **Plane A — Metric Onboarding**：租戶 app metric 進 Prometheus + scrape-time 烙 `version`。復用既有 `tenant-exporters` job；新增**平台預設** `podTargetLabels` / relabel 把 `app.kubernetes.io/version` → `version`（集中式，化解 R6 的「per-tenant 推複雜度」否決，見 §Rejected R6）。
-- **Plane B — Recipe Definition**：平台 authored 的**參數化 recipe 庫**（門檻 / rate / ratio / absence / increase / **latency p99**）。租戶填表（metric / window / op / 閾值 / severity / `mode`），存成 declarative YAML 進 `conf.d/`——**永不寫 PromQL，守住地基**。
-- **Plane C — Compiler + 安全網**：recipe + params → 生成 PromQL → 強制注入 `tenant=` → version graceful-join（復用既有 version-aware）→ promtool gate → 寫 per-tenant rule 檔 → GitOps 部署。
+- **Plane B — Recipe Definition**：平台 authored 的**參數化 recipe 庫**（門檻 / rate / ratio / absence / increase / **latency p99**）。各階層填表（metric / window / op / 閾值 / severity / `mode`），存成 declarative YAML——**宣告在哪層 `_defaults.yaml`（平台 / domain / subdomain / tenant leaf）就決定 scope**；**永不寫 PromQL，守住地基**。
+- **Plane C — Compiler + 安全網**：recipe + params → 生成**向量化 `group_left` 規則**（一條 `app_metric > on(tenant[,version]) group_left(...) <該 recipe 的 user_threshold>` 涵蓋所有宣告該 recipe 的租戶——**規則數 = recipe 數,非租戶數**,守住 [benchmarks.md §2](../benchmarks.md) 的 O(M) 保證）→ version graceful-join（復用既有 version-aware）→ promtool gate → 規則檔隔離 → GitOps 部署。
 
 ### 核心決策（每條附 trade-off）
 
-- **MVP = Level 1 參數化 recipe**，同時服務雙 persona（業務開發者用表單、SRE 用同批 recipe）；Level 2 bounded-DSL / Level 3 raw-PromQL 逃生門列 Future。*Trade-off*：換 declarative-only 地基 + promtool 結構性安全，犧牲 SRE 任意運算式的即時性（defer-with-trigger 接）。
+- **MVP = Level 1 參數化 recipe**，服務各階層 persona（業務開發者 tenant-scoped、Domain SRE domain-scoped、Platform SRE platform-scoped，同一 compiler 安全網，差別只在宣告層級）；Level 2 bounded-DSL / Level 3 raw-PromQL 逃生門列 Future。*Trade-off*：換 declarative-only 地基 + promtool 結構性安全，犧牲 SRE 任意運算式的即時性（defer-with-trigger 接）。
+- **階層式 authoring（scope = 宣告層級）**：recipe 宣告在 `_defaults.yaml` 哪一層（L0 平台 / L1 domain / L2 subdomain / tenant leaf）決定其 blast radius；compiler 為該子樹生成**一條向量化規則**（非扇出 N 條）。Domain SRE 寫一次、套整棵子樹,不逐一改 N 個 tenant 檔。**platform/domain 政策 = 生成規則、租戶不可 override**（與 rule pack 同機制:規則住在租戶 RBAC 寫不到的 `_defaults.yaml`+CI 生成檔;非靠 lock 標記,而是結構)；tenant-leaf recipe 則租戶自管。**Routing**：向量規則經既有 `group_left(owner, runbook_url, tier)` 預設打給該租戶團隊（語意正確）。*Trade-off*：domain recipe 一錯炸整棵子樹的規則 → 它的 shift-left promtool gate 更吃重。「advisory/租戶可 opt-out 的 domain recipe」與「強制不可覆寫」的細緻治理列 Future。
 - **Recipe 由平台 authored**，同 rule-pack 治理模型。*Trade-off*：表達力被 recipe 庫框住，換 PromQL 生成面有限 → 安全為結構性而非靠運氣。
 - **Metric catalog = 唯讀 discovery view**（從 Prometheus `/api/v1/metadata` + `/api/v1/series` 反向發現 type / 存在性），廢手動註冊。消滅「租戶謊報 type → 編譯崩潰」；但 discovery 只解謊報、不解成本（仍需下方 cost cap）。**version-awareness 不存 flag**——編譯器一律 emit 既有的 graceful-degradation join，label 在不在都安全。此 view 併吞 [#716](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/716) 的 `/effective`。
 - **編譯權威留 CI**（對齊 [#692](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/692) generator-of-record），tenant-api 加 **shift-left promtool preflight**：PUT 時記憶體編譯 + `promtool check rules`，錯則 HTTP 400 即時擋。*Trade-off*：tenant-api 需 promtool binary，換即時驗證 UX + CI 永遠只見「promtool 點過頭的完美 YAML」（乾淨 separation of concerns）。
-- **跨租戶隔離靠結構**：編譯器強制注入 `tenant=`；`tenant` label 本就 scrape-stamp 自 namespace，偽造不了。近零成本解掉地基鐵則最難的風險。
-- **爆炸半徑三件組**：(a) per-tenant rule 寫獨立檔 → 壞 rule 只炸自己 group，平台 pack 絕對安全；(b) rule group `limit`（Prometheus 3.x 原生）+ per-tenant rule / series cap；(c) promtool hard gate。動態 AST cost 預測列 Future（MVP 先靠 recipe-bound + `limit` + cap；具名工具如 `mimirtool` 採用前先驗，不鎖定）。*Trade-off*：cost 分析為 net-new，換「租戶炸不掉平台、也炸不掉別的租戶」。
+- **跨租戶隔離靠結構**：向量規則的 `on(tenant)` join 對既有 namespace-stamped `tenant` label 圈定（同 rule pack），`tenant` 偽造不了。近零成本解掉地基鐵則最難的風險;**非** per-rule 注入、**非**巨型 regex。
+- **效能誠實:O(M)-與-N-無關只對「共享指標」成立**。向量化消掉「無意義扇出複製」(同指標不再複製 N 條),但**消不掉「不同 metric 必然不同規則」**——單一 PromQL 的 metric name 寫死,租戶 A 的 `order_created_total` 與 B 的 `payment_failed_total` 必生成兩條。故 custom-alert 規則數隨**自訂告警總數（≈ N × 每租戶 recipe 數）線性增長**,不享 [benchmarks.md §2](../benchmarks.md) 對 rule pack 的 O(M) 保證。**護欄三件組**:(a) 硬性 `max_custom_recipes` per-tenant cap → 封頂 N×cap;(b) 全域 rule-count budget(cap 值由實測 rule-eval-duration 反推,非拍腦袋);(c) 壞 rule 只炸自己規則檔 group + rule group `limit`（Prometheus 3.x 原生）+ promtool hard gate。動態 AST cost 預測列 Future（具名工具如 `mimirtool` 採用前先驗,不鎖定）。*Trade-off*:接受獨有指標的線性規則增長(用 cap 封頂),換租戶可自訂業務告警。
 - **version 注入用平台預設 relabel**（集中式 `podTargetLabels`），化解 R6「per-tenant 推複雜度」否決。*Trade-off*：只對「以 pod 跑、帶 `app.kubernetes.io/version` 的 app metric」成立；外部 / 託管後端列 Future。
 - **Dry-run 用 `mode: [active | silent]`**（非 `shadow`，避與既有 Shadow Monitoring 遷移語意衝突）；`silent` 編譯成走 null / log-only receiver 的告警，復用既有空 receiver 路由。*Trade-off*：需為 silent class 加明確 null route（勿賴 default fallthrough），換零新 schema + 防告警風暴。
 
-**兩個設計邊界**（實作須明定）：(a) **metric 命名碰撞**——discovery 必須 per-tenant 過濾（`{tenant="X"}`），picker 只顯該租戶的 metric；(b) **metric 消失行為**——租戶刪 deployment → recipe 對 absent series 評估，absent / staleness 行為預設租戶自負，但要明寫。
+**三個設計邊界**（實作須明定）：(a) **metric 命名碰撞**——discovery 必須 per-tenant 過濾（`{tenant="X"}`），picker 只顯該租戶的 metric；(b) **metric 消失 / 幽靈指標**——recipe 引用的 metric 必須在 discovery catalog 內（tenant-api preflight fail-fast 拒絕為不存在 metric 建告警，防累積上千條幽靈規則拖垮評估器）;建立後 absent 的 staleness 行為預設租戶自負,要明寫;(c) **provenance**——向量規則無法在編譯期把來源寫死（一條規則同時服務多租戶/多政策）→ 來源下放資料平面:exporter 吐獨立 meta 系列 `tenant_threshold_meta{tenant, recipe, policy_source}`,規則 `group_left(policy_source)` 標出「這是 domain 政策」讓 on-call 不誤刪（比照既有 `tenant_metadata_info` pattern,不污染 `user_threshold` cardinality）。provenance 可列 MVP 後 follow-up。
 
 ### 復用既有機制（地基的兌現——這就是兩個能力同住的理由）
 
@@ -402,6 +403,8 @@ flowchart TD
 | scrape ingestion + version 烙印 | `tenant-exporters` job + version-aware 的 `app.kubernetes.io/version` 來源（平台預設 relabel） |
 | version graceful join | version-aware normalize layer 的 `version=~"\|default"` 左外連接 |
 | 租戶隔離 | namespace→`tenant` scrape-stamp + prom-label-proxy（ADR-020） |
+| 階層 scope（platform/domain/tenant authoring） | `_defaults.yaml` 目錄樹繼承（ADR-017/018）— 宣告層級 = scope |
+| 向量化 1-rule-蓋全租戶 | rule pack 既有 `on(tenant) group_left` O(M) pattern（benchmarks.md §2） |
 | 編譯權威 + GitOps | `operator_generate`（#714）+ Directory Scanner + conf.d projected volume |
 | 寫入驗證 / 預設融合 | tenant-api `validate()` + `MergeTenantWithRootDefaults`（#706） |
 | onboarding 真空隔離 | left-outer-join enrichment（#709） |
@@ -412,12 +415,14 @@ flowchart TD
 
 ### MVP vs Future Work（defer-with-trigger）
 
-**MVP / GA bar**：discovery catalog + onboarding（k8s pod app metric 常見情境）、4–5 核心 recipe（門檻 / rate / ratio / absence / **p99 latency**）、編譯器 + 全安全管線、recipe 編輯 + `mode: silent` 預覽、version graceful-join。
+**MVP / GA bar**：discovery catalog + onboarding（k8s pod app metric 常見情境）、4–5 核心 recipe（門檻 / rate / ratio / absence / **p99 latency**）、**向量化編譯器（消扇出）+ scope-aware authoring（宣告層級 → 向量規則）+ `max_custom_recipes` cap**、全安全管線、recipe 編輯 + `mode: silent` 預覽、version graceful-join。
 
 **Future Work**：
 
 - Level 2 bounded DSL — *trigger*：第一個 recipe + 組合都表達不出的真實 SRE 告警。
 - Level 3 raw PromQL + cost limit — *trigger*：客戶合約要求任意 PromQL 且接受 cost 制度。
+- **domain-aggregate 告警**（單規則跨 domain 子樹聚合，如全域 error budget）— *trigger*：第一個要跨租戶聚合的 domain 客戶。membership 從 conf.d 樹解析:**小 N 可烤 `tenant=~members`;大 N（數百租戶）會撞 Prometheus regex 上限 / query CPU → 改 scrape-time `domain` label 注入,不靠巨型 regex**。隔離模型從結構性 per-tenant 變「compile-time 限定子樹」。
+- **provenance label**（`tenant_threshold_meta` + `group_left(policy_source)`）+ **強制不可覆寫 / advisory 可 opt-out 的細緻治理** — *trigger*：domain 政策認領混淆的實際 support 案例 / 合規要求。
 - 外部 / 託管後端 version 感知（ServiceMonitor relabel）— *trigger*：託管 DB 客戶要版本告警（併吞 [#716](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/716) item 1）。
 - [#692](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/692) in-memory 動態編譯器 — *trigger*：CI round-trip 延遲成真實導入阻塞（在此之前留 generator-of-record，守住 promtool 安全網）。
 - 動態 AST cost 預測 / recipe 組合 — *trigger*：需求出現。
@@ -426,13 +431,14 @@ flowchart TD
 
 1. 租戶可在 portal 用 recipe 表單建立一條告警（門檻 / rate / ratio / absence / p99），不接觸 PromQL；存檔走 GitOps。
 2. tenant-api PUT 對「編譯後 promtool 不過」的 recipe 回 HTTP 400 並指出錯處（shift-left preflight，mutation-proven）。
-3. 跨租戶隔離：租戶 A 的 recipe 無論如何填，生成 PromQL 都帶 `tenant="A"`，無法選到 B 的 series（注入 + 測試斷言）。
-4. 壞 recipe（若繞過 gate）只使其 per-tenant rule 檔 group 載入失敗，平台 pack 與其他租戶 rule 不受影響（kind 驗證）。
-5. `mode: silent` recipe 觸發時走 null / log-only receiver、在 Grafana 留痕，確認**不**進 PagerDuty / Slack（路由測試）。
-6. discovery catalog 對某 tenant 僅顯示其 `{tenant=}` 的 metric + 正確 type；onboarding 後新 metric 出現於 view = 接入成功（併 [#716](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/716) `/effective`）。
-7. version-aware metric 上的 recipe 自動 graceful-join，label 缺時落 `default`、不產 NaN / 空集（復用 version-aware 不變式）。
-8. cost 護欄：rule group `limit` + per-tenant cap 生效，over-cap 行為確定性（對齊既有 version-aware 截斷不變式）。
-9. Doc-as-Code：recipe 作者指南（雙語）+ config-driven.md recipe 節 + troubleshooting。
+3. 跨 scope 隔離：向量規則以 `on(tenant)` 圈定;tenant-leaf recipe 只作用該租戶,domain recipe 只 join 到該子樹下租戶(各帶自己 `tenant=`),不外溢子樹;越權(租戶引用他人 / 跨子樹)在編譯期阻斷（測試斷言）。
+4. 壞 recipe（若繞過 gate）只使其規則檔 group 載入失敗，平台 pack 與其他租戶 rule 不受影響（kind 驗證）。
+5. **rule-eval scale**：shared-metric recipe 的 rule-eval-duration 與租戶數無關（向量化,實測對齊 benchmarks.md §2）;unique-metric 規則數受 `max_custom_recipes` cap 封頂,全域 rule-count 在 budget 內、eval-duration 不超抓取週期（**pre-GA benchmark 實測,非推理**）。
+6. `mode: silent` recipe 觸發時走 null / log-only receiver、在 Grafana 留痕，確認**不**進 PagerDuty / Slack（路由測試）。
+7. discovery catalog 對某 tenant 僅顯示其 `{tenant=}` 的 metric + 正確 type；onboarding 後新 metric 出現於 view = 接入成功（併 [#716](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/716) `/effective`）。
+8. version-aware metric 上的 recipe 自動 graceful-join，label 缺時落 `default`、不產 NaN / 空集（復用 version-aware 不變式）。
+9. cost 護欄：rule group `limit` + per-tenant cap 生效，over-cap 行為確定性（對齊既有 version-aware 截斷不變式）。
+10. Doc-as-Code：recipe 作者指南（雙語）+ config-driven.md recipe 節 + troubleshooting。
 
 ### Custom Alerts 新增 dependency / blast-radius
 
