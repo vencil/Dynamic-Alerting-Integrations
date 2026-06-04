@@ -413,7 +413,7 @@ The only **net-new core**: recipe library + parameter schema + recipe compiler +
 
 ### MVP vs Future Work (defer-with-trigger)
 
-**MVP / GA bar**: discovery catalog + onboarding (the common k8s pod app-metric case), 5 core recipes (threshold / rate / ratio / absence / **p99 latency**) + **`forecast` (trend / exhaustion prediction, dual-mode; see §Forecast Recipe)**, **vectorized compiler (no fan-out) + scope-aware authoring (declaration level → vectorized rule) + `max_custom_recipes` cap**, the full safety pipeline, recipe editing + `mode: silent` preview, version graceful-join.
+**MVP / GA bar**: discovery catalog + onboarding (the common k8s pod app-metric case), 6 core recipes (threshold / rate / ratio / absence / **p99 latency** / **`forecast`**, where forecast = trend / exhaustion prediction dual-mode, see §Forecast Recipe), **vectorized compiler (no fan-out) + scope-aware authoring (declaration level → vectorized rule) + `max_custom_recipes` cap**, the full safety pipeline, recipe editing + `mode: silent` preview, version graceful-join.
 
 **Future Work**:
 

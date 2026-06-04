@@ -415,7 +415,7 @@ flowchart TD
 
 ### MVP vs Future Work（defer-with-trigger）
 
-**MVP / GA bar**：discovery catalog + onboarding（k8s pod app metric 常見情境）、5 核心 recipe（門檻 / rate / ratio / absence / **p99 latency**）+ **`forecast`（趨勢 / 耗盡預測，雙模式；見 §Forecast Recipe）**、**向量化編譯器（消扇出）+ scope-aware authoring（宣告層級 → 向量規則）+ `max_custom_recipes` cap**、全安全管線、recipe 編輯 + `mode: silent` 預覽、version graceful-join。
+**MVP / GA bar**：discovery catalog + onboarding（k8s pod app metric 常見情境）、6 核心 recipe（門檻 / rate / ratio / absence / **p99 latency** / **`forecast`**，其中 forecast = 趨勢 / 耗盡預測雙模式，見 §Forecast Recipe）、**向量化編譯器（消扇出）+ scope-aware authoring（宣告層級 → 向量規則）+ `max_custom_recipes` cap**、全安全管線、recipe 編輯 + `mode: silent` 預覽、version graceful-join。
 
 **Future Work**：
 
