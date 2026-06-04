@@ -139,7 +139,7 @@ flowchart TD
 ## Action Items
 
 - [ ] **ADR + `strategy: Recreate`（TRK-324 now-fix）** — 一起落地，地基（單寫者 invariant 顯性化 + 消除滾動更新交疊）。
-- [x] **TRK-318** 鎖內 fetch（B1）+ `TA_GIT_FETCH_TIMEOUT`（[#671](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/671)）— `WritePR` / `WritePRBatch` 開分支前在臨界區內 `git fetch --prune origin <base>` 後 `reset --hard origin/<base>`；逾時（`TA_GIT_FETCH_TIMEOUT`，預設 5s，獨立於 `TENANT_API_GIT_TIMEOUT`）→ `ErrForgeDegraded` → 釋放鎖 → 回 503 `FORGE_UNAVAILABLE`，不 silently 用過期 base。前置：TRK-324 Recreate（已落地）。
+- [x] **TRK-318** 鎖內 fetch（B1）+ `TA_GIT_FETCH_TIMEOUT`（[#671](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/671)）— `WritePR` / `WritePRBatch` 開分支前在臨界區內 `git fetch --prune origin <base>` 取得新鮮 ref，再從該 ref（`origin/<base>`，或無 origin / non-timeout error 時 fallback 至本地 `<base>`）以 `checkout -b --no-track` 建分支，**刻意不 `reset --hard`** 以保留本地 base 上未 push 的 commit（特殊檔直接 commit 路徑，見 §B）；逾時（`TA_GIT_FETCH_TIMEOUT`，預設 5s，獨立於 `TENANT_API_GIT_TIMEOUT`）→ `ErrForgeDegraded` → 釋放鎖 → 回 503 `FORGE_UNAVAILABLE`（帶 `Retry-After`），不 silently 用過期 base。前置：TRK-324 Recreate（已落地）。
 - [ ] **TRK-319** `APIError` 認得 secondary-rate-limit 403 → 熔斷 + 尊重 `Retry-After`。
 - [ ] **TRK-320** load-shedding semaphore + context 綁排隊階段。與 TRK-318 配對。
 - [ ] **TRK-325 / A3 Lease** — deferred，見各自 trigger。
