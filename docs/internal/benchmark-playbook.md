@@ -247,9 +247,11 @@ main 的**持續退化**由 nightly trend watchdog 守望（下節），不靠 P
 - **R1 sustained**：最近 K 晚（預設 3）全部高於**錨定 baseline**（settled 舊窗中位數，非「跟昨天比」）≥ floor。
 - **R2 creep**：最近窗的**典型晚（recent median）**高於**同一個錨定 baseline** ≥ creep floor。容忍「最近 3 晚有一晚因雜訊回落」的 step-change——這種會被 R1 的 `all()` 漏掉。⚠️ creep 比的是**中位數對中位數**（非舊版的「對窗內最佳晚」）：舊版用 `min` 當基準,單一異常快的夜（lighter run / 量測 glitch）就把基準釘死,讓平坦無退化的序列也永遠 creep、closed-loop issue 永遠關不掉（#702）。註:14 晚窗本就抓不到「每晚退 0.5%×數週」的慢性 creep（累積 < floor）,故唯一誠實的訊號是「近期典型 vs 過往典型」。
 - **noise floor**：sustained floor = max(固定 5%, min(3× control canary 夜間 CV, **10% 上限**))；**creep floor = max(10%, min(3× canary CV, 20% 上限**))。creep 是噪音敏感規則（median 對 anchor 的差隨 runner 噪音放大）,故 cap 較高、噪音夜會把 creep floor 拉到 15–20%；舊版誤與 sustained 共用 10% cap → `max(0.10, ≤0.10) ≡ 0.10` 死胡同,canary 對 creep 形同無效（#702）。nightly 也跑 `BenchmarkControlCanaryCPU`（同 PR gate 那支）→ 小於 runner 自身噪音的移動永不告警；sustained 的 canary 貢獻**封頂 10%**,避免噪音 runner 反而把真退化消音(fail-toward-silence 防線)。
-- 單晚 blip 被「最近窗多晚」條件過濾;**bench 從最近窗消失(perf timeout 徵兆)直接 skip**——不讓舊夜冒充「今天」或藏掉 spike;已開 issue 則 comment 更新不重開。
+- 單晚 blip 被「最近窗多晚」條件過濾;**bench 從最近窗消失(perf timeout 徵兆)直接 skip**——不讓舊夜冒充「今天」或藏掉 spike。
+- **狀態化 issue lifecycle（#754 follow-up,治洗版）**:已開 issue 時**每晚原地改寫 body**(`gh issue edit`,永遠反映當前表格),**只在「被旗標的 bench 集合改變」時才留 comment**(新增 / 復原 / creep↔sustained 升降級);狀態以 body 內隱藏 HTML-comment marker（`<!-- perf-trend-state v1 [...] -->`）持久化、下次 run 解析回來比對。舊版每晚 append 一整張表 → #702 累積數十筆雜訊。**recovering label**:當 sustained 已清、只剩 creep,自動上 `perf-trend:recovering`(任一 sustained 回來或 issue 關閉即移除),讓訂閱者一眼分辨「仍惡化 vs 復原中」。無 marker 的 legacy body 視為「無變化」→ 遷移那一晚靜默(只補 marker、不誤發 comment)。
+  - **未做(下一個 follow-up)**:`/ack <bench>` 手動靜音單一 bench——需解析 issue comment 指令,屬獨立輸入面,刻意不混進本刀。
 
-本機 dry-run：`py scripts/tools/dx/analyze_bench_history.py --trend-watch --fixture-json <nights.json> --dry-run`（`--fixture-open-issue N` 可離線測 update/close 閉環）。
+本機 dry-run：`py scripts/tools/dx/analyze_bench_history.py --trend-watch --fixture-json <nights.json> --dry-run`（`--fixture-open-issue N` + `--fixture-open-body '<marker>'` 可離線測 update-in-place / transition-only comment / recovering label / close 閉環）。
 
 ### Troubleshooting
 
