@@ -51,7 +51,13 @@ OP_SLUG = {">": "gt", ">=": "ge", "<": "lt", "<=": "le"}
 # and custom_alert.go::customAlertForValid.
 ALLOWED_FOR = frozenset({"0s", "1m", "5m", "15m", "30m", "1h"})
 
-RECIPES = ("threshold", "rate", "ratio", "absence", "p99_latency")
+# Permitted forecast horizons (the predict-ahead distance, ADR-024 §Forecast
+# Recipe). Enum-bounded for the same cardinality reason as `for`: `horizon` enters
+# the recipe_id slug. The platform derives lookback = max(2·horizon, 1h) from this
+# (compile-time only — see recipes.py). MUST match the schema + Go customAlertHorizonValid.
+ALLOWED_HORIZON = frozenset({"1h", "2h", "4h", "12h", "24h", "48h"})
+
+RECIPES = ("threshold", "rate", "ratio", "absence", "p99_latency", "forecast")
 
 
 class RecipeError(ValueError):
@@ -78,6 +84,24 @@ def _normalize_for(inst: dict) -> str:
     if value not in ALLOWED_FOR:
         raise RecipeError(
             f"for {value!r} must be one of {sorted(ALLOWED_FOR)} (TRK-326 enum-bounded)"
+        )
+    return value
+
+
+def _normalize_horizon(inst: dict) -> str:
+    """Validate the forecast `horizon` (predict-ahead distance). REQUIRED for the
+    forecast recipe (no default — the tenant must state how far ahead to predict);
+    enum-bounded so it can safely enter the recipe_id slug. MUST match the schema
+    enum + custom_alert.go::customAlertHorizonValid."""
+    value = inst.get("horizon")
+    if value in (None, ""):
+        raise RecipeError(
+            f"forecast recipe requires `horizon` (one of {sorted(ALLOWED_HORIZON)})"
+        )
+    value = str(value)
+    if value not in ALLOWED_HORIZON:
+        raise RecipeError(
+            f"horizon {value!r} must be one of {sorted(ALLOWED_HORIZON)}"
         )
     return value
 
@@ -162,14 +186,26 @@ def recipe_id(inst: dict) -> str:
             raise RecipeError(f"unknown op {op!r} (known: {list(OP_SLUG)})")
         parts.append(OP_SLUG[op])
 
-    parts.append("w" + str(inst.get("window", "")))
-
-    if recipe == "p99_latency":
-        parts.append("q" + str(inst.get("quantile", "0.99")))
-    if recipe == "ratio":
-        den = inst["denominator_metric"]
-        validate_metric_name(den, "denominator_metric")
-        parts.append("den_" + den)
+    if recipe == "forecast":
+        # forecast derives its lookback from `horizon` (recipes.py:
+        # max(2·horizon, 1h)), so the tenant supplies `horizon`, NOT `window` —
+        # horizon is the shaping param that enters the slug (`h{horizon}` takes
+        # the `w{window}` slot). capacity_metric present → ratio mode (predict a
+        # ratio crossing a floor) and reuses the `den_` slug slot; absent → raw
+        # mode (predict a gauge crossing an absolute threshold).
+        parts.append("h" + _normalize_horizon(inst))
+        cap = inst.get("capacity_metric")
+        if cap:
+            validate_metric_name(cap, "capacity_metric")
+            parts.append("den_" + cap)
+    else:
+        parts.append("w" + str(inst.get("window", "")))
+        if recipe == "p99_latency":
+            parts.append("q" + str(inst.get("quantile", "0.99")))
+        if recipe == "ratio":
+            den = inst["denominator_metric"]
+            validate_metric_name(den, "denominator_metric")
+            parts.append("den_" + den)
 
     # `for` is part of the rule identity, NOT just a per-instance attribute:
     # Prometheus `for:` is a control-plane STATIC rule attribute (unlike `mode`,
@@ -193,13 +229,18 @@ def shape_signature(inst: dict) -> Tuple:
     param yields a distinct rule. NOT keyed by tenant or `name` (those ride
     the data plane) — see ADR-024 §2b.
     """
+    is_forecast = inst["recipe"] == "forecast"
     return (
         inst["recipe"],
         inst["metric"],
-        inst.get("denominator_metric"),
+        # den slot: ratio's denominator_metric OR forecast's capacity_metric.
+        inst.get("capacity_metric") if is_forecast else inst.get("denominator_metric"),
         None if inst["recipe"] == "absence" else inst.get("op", ">"),
-        str(inst.get("window", "")),
+        # forecast has no window (lookback derives from horizon); others do.
+        None if is_forecast else str(inst.get("window", "")),
         str(inst.get("quantile", "0.99")) if inst["recipe"] == "p99_latency" else None,
+        # forecast's horizon is a shaping param (predict-ahead distance).
+        _normalize_horizon(inst) if is_forecast else None,
         tuple(_selector_items(inst)),
         # `for` distinguishes shapes (control-plane static attr; see recipe_id).
         _normalize_for(inst),
@@ -237,4 +278,5 @@ def known_recipes() -> Dict[str, str]:
         "ratio": "ratio of two counter rates crosses a threshold (div-by-zero safe)",
         "absence": "a metric is absent over a window (per-tenant, self-scoped)",
         "p99_latency": "histogram p-quantile latency crosses a threshold",
+        "forecast": "predict (linear) a gauge/ratio crossing a threshold within a horizon",
     }

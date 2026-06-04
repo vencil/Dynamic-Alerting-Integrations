@@ -929,13 +929,20 @@
       "type": "object",
       "title": "Custom Alert Recipe Instance",
       "description": "One parameterized custom alert. The compiler groups instances by shape signature (recipe, metric, op, window, quantile, denominator, selectors) and emits ONE vectorized rule per shape.",
-      "required": ["recipe", "name", "metric", "window", "threshold"],
+      "required": ["recipe", "name", "metric", "threshold"],
+      "allOf": [
+        {
+          "if": { "properties": { "recipe": { "const": "forecast" } }, "required": ["recipe"] },
+          "then": { "required": ["horizon"] },
+          "else": { "required": ["window"] }
+        }
+      ],
       "properties": {
         "recipe": {
           "type": "string",
           "title": "Recipe Type",
-          "description": "Which platform recipe to instantiate.",
-          "enum": ["threshold", "rate", "ratio", "absence", "p99_latency"]
+          "description": "Which platform recipe to instantiate. forecast supplies `horizon` (not `window`); all others supply `window`.",
+          "enum": ["threshold", "rate", "ratio", "absence", "p99_latency", "forecast"]
         },
         "name": {
           "type": "string",
@@ -954,6 +961,18 @@
           "type": "string",
           "title": "Denominator Metric (ratio recipe)",
           "description": "Denominator counter for the ratio recipe.",
+          "pattern": "^[a-zA-Z_][a-zA-Z0-9_]*$"
+        },
+        "horizon": {
+          "type": "string",
+          "title": "Forecast Horizon (forecast recipe)",
+          "description": "How far ahead to predict (predict_linear). REQUIRED for the forecast recipe; enum-bounded (enters the recipe_id slug). The platform derives lookback = max(2·horizon, 1h) from this — the tenant never sets the lookback (an expert foot-gun).",
+          "enum": ["1h", "2h", "4h", "12h", "24h", "48h"]
+        },
+        "capacity_metric": {
+          "type": "string",
+          "title": "Capacity Metric (forecast ratio mode)",
+          "description": "Forecast ratio mode: the denominator (e.g. total capacity). Present → predict the headroom ratio metric/capacity crossing a fractional floor in (0,1); absent → raw mode (predict the gauge crossing an absolute threshold).",
           "pattern": "^[a-zA-Z_][a-zA-Z0-9_]*$"
         },
         "op": {

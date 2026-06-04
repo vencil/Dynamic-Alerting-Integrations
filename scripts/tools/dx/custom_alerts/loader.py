@@ -113,13 +113,16 @@ def build_shapes(config_dir: Path) -> Tuple[List[dict], Dict[str, int]]:
     shape_sev: Dict[str, set] = defaultdict(set)            # recipe_id → severities
     sig_seen: Dict[str, tuple] = {}                         # recipe_id → shape_signature
 
-    # required fields — match tenant-config.schema.json's customAlertInstance
-    # required[]. `window`/`threshold` are NOT optional: an empty window emits
-    # invalid PromQL (`rate(m[])`), and the threshold carries the severity.
-    required = ("recipe", "name", "metric", "window", "threshold")
+    # required fields — match tenant-config.schema.json's customAlertInstance.
+    # threshold carries the severity. The SHAPING duration is recipe-aware:
+    # `forecast` supplies `horizon` (lookback is platform-derived from it, so it
+    # never takes a `window`), every other recipe supplies `window` (an empty
+    # window emits invalid PromQL like `rate(m[])`).
+    base_required = ("recipe", "name", "metric", "threshold")
 
     for tenant, inst, origin in triples:
-        missing = [f for f in required if f not in inst]
+        shape_required = ("horizon",) if inst.get("recipe") == "forecast" else ("window",)
+        missing = [f for f in base_required + shape_required if f not in inst]
         if missing:
             raise CustomAlertConfigError(
                 f"{origin}: tenant={tenant}: _custom_alerts entry missing "
@@ -175,6 +178,8 @@ def build_shapes(config_dir: Path) -> Tuple[List[dict], Dict[str, int]]:
                 "window": inst.get("window", ""),
                 "quantile": inst.get("quantile", "0.99"),
                 "denominator_metric": inst.get("denominator_metric", ""),
+                "horizon": inst.get("horizon", ""),          # forecast predict-ahead
+                "capacity_metric": inst.get("capacity_metric", ""),  # forecast ratio mode
                 "selectors": inst.get("selectors") or {},
                 "selectors_re": inst.get("selectors_re") or {},
                 "for": inst.get("for", "1m"),

@@ -50,6 +50,16 @@
       "_note": "TRK-326: for=0s (fire-immediately) is a valid enum value and yields its own slug",
       "input": {"recipe": "threshold", "metric": "m", "op": ">", "window": "1m", "for": "0s"},
       "recipe_id": "threshold__m__gt__w1m__for0s"
+    },
+    {
+      "_note": "forecast ratio mode (#741): capacity_metric set → headroom ratio; `h{horizon}` takes the window slot, capacity reuses the den_ slot; no window",
+      "input": {"recipe": "forecast", "metric": "kubelet_volume_stats_available_bytes", "capacity_metric": "kubelet_volume_stats_capacity_bytes", "op": "<", "horizon": "4h"},
+      "recipe_id": "forecast__kubelet_volume_stats_available_bytes__lt__h4h__den_kubelet_volume_stats_capacity_bytes__for1m"
+    },
+    {
+      "_note": "forecast raw mode (#741): no capacity_metric → predict the gauge crossing an absolute threshold; no den_ part, no window",
+      "input": {"recipe": "forecast", "metric": "queue_depth", "op": ">", "horizon": "12h"},
+      "recipe_id": "forecast__queue_depth__gt__h12h__for1m"
     }
   ]
 }

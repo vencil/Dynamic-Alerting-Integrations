@@ -2,7 +2,7 @@
 
 平台 authored 的**參數化告警 recipe 庫**。各階層（platform / domain / tenant）填表即可自訂告警，**永不寫 PromQL**（守住宣告式地基）。
 
-## 五個核心 recipe
+## 六個核心 recipe
 
 | recipe | 用途 | 關鍵參數 |
 |---|---|---|
@@ -11,6 +11,7 @@
 | [`ratio`](ratio.yaml) | 兩 counter 增率比值越界（除零安全） | `metric` `denominator_metric` `op` `window` `threshold` |
 | [`absence`](absence.yaml) | 指標在時間窗內缺席（自我圈定） | `metric` `window` `threshold` |
 | [`p99_latency`](p99_latency.yaml) | histogram 分位數延遲越界 | `metric` `quantile` `op` `window` `threshold` |
+| [`forecast`](forecast.yaml) | 線性預測 gauge/餘量比例在提前量內越界（趨勢/耗盡） | `metric` `capacity_metric` `op` `horizon` `threshold` |
 
 每個 `.yaml` 是該 recipe 的**治理契約**（參數、emitted PromQL shape、範例）；可執行形式在
 [`scripts/tools/dx/custom_alerts/recipes.py`](../../scripts/tools/dx/custom_alerts/recipes.py)（兩者由
@@ -42,7 +43,7 @@ _custom_alerts:
 ## 安全與向量化
 
 - **防注入**：`metric` 嚴格 `^[a-zA-Z_][a-zA-Z0-9_]*$`（禁冒號/括號/運算子）；label 過濾只能走 `selectors`/`selectors_re`，由編譯器組裝 + value 跳脫。保留 label（`tenant`/`version`/`severity`/…）禁設。
-- **向量化（O(M)）**：相同 shape signature `(recipe, metric, op, window, quantile, denominator, selectors)` 的多租戶**共用一條規則**（`on(tenant) group_left`）；規則數 = shape 數，非租戶數。
+- **向量化（O(M)）**：相同 shape signature `(recipe, metric, op, window/horizon, quantile, denominator/capacity, selectors, for)` 的多租戶**共用一條規則**（`on(tenant) group_left`）；規則數 = shape 數，非租戶數。`for` 入 signature（控制平面靜態屬性，TRK-326）；`forecast` 用 `horizon`（推導 lookback）取代 `window`。
 - **shape slug = `recipe_id`**：去重鍵 + recording-rule 名 + alertname + `user_threshold` 上的選擇 label，是 Go↔Python 跨語言契約（見 [`tests/dx/fixtures/recipe_id_vectors.json`](../../tests/dx/fixtures/recipe_id_vectors.json)）。
 
 ## 編譯

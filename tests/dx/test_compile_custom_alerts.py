@@ -236,12 +236,12 @@ def test_domain_and_platform_inheritance(tmp_path):
 
 
 # --- 7. example fixture + --check ------------------------------------------
-def test_example_fixture_compiles_to_seven_shapes():
+def test_example_fixture_compiles_to_eight_shapes():
     pack = cc.build_pack(_EXAMPLES)
-    assert pack["_meta"]["shapes"] == 7
-    # shop-a: 5 own (threshold/rate/ratio/p99/absence); pay-a: finance ratio + own threshold.
+    assert pack["_meta"]["shapes"] == 8
+    # shop-a: 6 own (threshold/rate/ratio/p99/absence/forecast); pay-a: finance ratio + own threshold.
     # (absence moved off platform-L0 → no longer inherited by pay-a; see _defaults.yaml note.)
-    assert pack["_meta"]["per_tenant_counts"] == {"pay-a": 2, "shop-a": 5}
+    assert pack["_meta"]["per_tenant_counts"] == {"pay-a": 2, "shop-a": 6}
 
 
 def test_check_flags_stale(tmp_path, monkeypatch):
@@ -251,3 +251,49 @@ def test_check_flags_stale(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "argv", [
         "compile", "--check", "--config-dir", str(_EXAMPLES), "--out", str(out)])
     assert cc.main() == cc.EXIT_VIOLATION
+
+
+# --- 8. forecast recipe (ADR-024 §Forecast Recipe, #741) -------------------
+def test_forecast_ratio_mode_slug_and_records(tmp_path):
+    # ratio mode: capacity_metric set → headroom ratio avail/capacity; horizon
+    # (not window) enters the slug; lookback is platform-derived = max(2·4h,1h)
+    # = 8h = 28800s; cold-start gate `> 3`; horizon 4h = 14400s.
+    _write_tree(tmp_path, {
+        "a.yaml": 'tenants:\n  ta:\n    _custom_alerts:\n'
+            '      - {recipe: forecast, name: disk, metric: avail, capacity_metric: cap, op: "<", horizon: 4h, threshold: "0.15:warning"}\n',
+    })
+    txt = cc._render(cc.build_pack(tmp_path)["groups"])
+    rid = "forecast__avail__lt__h4h__den_cap__for1m"
+    assert rid in txt
+    assert "sum by(tenant) (avail)" in txt and "sum by(tenant) (cap) > 0" in txt
+    assert f"predict_linear(custom:fcbase:{rid}[28800s], 14400)" in txt
+    assert f"count_over_time(custom:fcbase:{rid}[28800s]) > 3" in txt
+
+
+def test_forecast_raw_mode_no_capacity(tmp_path):
+    # raw mode: no capacity_metric → predict the gauge itself (max by tenant,version);
+    # no den_ part; lookback 2·12h = 24h = 86400s, horizon 12h = 43200s.
+    _write_tree(tmp_path, {
+        "a.yaml": 'tenants:\n  ta:\n    _custom_alerts:\n'
+            '      - {recipe: forecast, name: q, metric: queue_depth, op: ">", horizon: 12h, threshold: "10000:warning"}\n',
+    })
+    txt = cc._render(cc.build_pack(tmp_path)["groups"])
+    assert "forecast__queue_depth__gt__h12h__for1m" in txt
+    assert "den_" not in txt
+    assert "max by(tenant, version) (queue_depth)" in txt
+    assert "[86400s], 43200)" in txt
+
+
+def test_forecast_requires_horizon(tmp_path):
+    _write_tree(tmp_path, {
+        "a.yaml": 'tenants:\n  ta:\n    _custom_alerts:\n'
+            '      - {recipe: forecast, name: q, metric: m, op: ">", threshold: "1:warning"}\n',
+    })
+    with pytest.raises(ld.CustomAlertConfigError, match="horizon"):
+        ld.build_shapes(tmp_path)
+
+
+@pytest.mark.parametrize("bad", ["3h", "90m", "5h", "8h"])
+def test_forecast_horizon_enum_rejected(bad):
+    with pytest.raises(shp.RecipeError, match="horizon"):
+        shp.recipe_id({"recipe": "forecast", "metric": "m", "op": "<", "horizon": bad})

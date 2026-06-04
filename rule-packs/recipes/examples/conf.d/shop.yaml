@@ -54,3 +54,18 @@ tenants:
         metric: app_heartbeat_total
         window: 10m
         threshold: "0:critical"
+
+      # forecast (ratio mode): predict disk EXHAUSTION. capacity_metric set →
+      # headroom ratio (avail/capacity); op "<" + threshold 0.15 = "predict the
+      # available fraction will drop below 15% within the horizon". The tenant
+      # supplies `horizon` (NOT a window/lookback) — the platform derives
+      # lookback = max(2·horizon, 1h). `for: 30m` requires the prediction to
+      # persist, smoothing transient slope flips.
+      - recipe: forecast
+        name: disk_will_fill
+        metric: kubelet_volume_stats_available_bytes
+        capacity_metric: kubelet_volume_stats_capacity_bytes
+        op: "<"
+        horizon: 4h
+        threshold: "0.15:warning"
+        for: 30m

@@ -60,6 +60,8 @@ type CustomAlertSpec struct {
 	Threshold         string            `yaml:"threshold"`
 	Quantile          flexStr           `yaml:"quantile"`
 	DenominatorMetric string            `yaml:"denominator_metric"`
+	Horizon           string            `yaml:"horizon"`         // forecast: predict-ahead distance
+	CapacityMetric    string            `yaml:"capacity_metric"` // forecast ratio mode: denominator
 	Selectors         map[string]string `yaml:"selectors"`
 	SelectorsRe       map[string]string `yaml:"selectors_re"`
 	Mode              string            `yaml:"mode"`
@@ -69,9 +71,15 @@ type CustomAlertSpec struct {
 var (
 	customAlertRecipes = map[string]bool{
 		"threshold": true, "rate": true, "ratio": true, "absence": true, "p99_latency": true,
+		"forecast": true,
 	}
 	// op → slug. Keep in sync with shape.py OP_SLUG.
 	customAlertOpSlug = map[string]string{">": "gt", ">=": "ge", "<": "lt", "<=": "le"}
+	// permitted forecast horizons (predict-ahead distance) — enum-bounded, enters
+	// the recipe_id slug. MUST match shape.py ALLOWED_HORIZON + the schema enum.
+	customAlertHorizonValid = map[string]bool{
+		"1h": true, "2h": true, "4h": true, "12h": true, "24h": true, "48h": true,
+	}
 	// metric/label name charset (no colon → cannot reference recording rules;
 	// no braces/operators → PromQL injection structurally impossible). Mirrors
 	// shape.py _METRIC_RE / _LABEL_RE.
@@ -172,19 +180,41 @@ func RecipeID(spec CustomAlertSpec) (string, error) {
 		}
 		parts = append(parts, slug)
 	}
-	parts = append(parts, "w"+spec.Window)
-	if spec.Recipe == "p99_latency" {
-		q := string(spec.Quantile)
-		if q == "" {
-			q = "0.99"
+	if spec.Recipe == "forecast" {
+		// forecast: lookback derives from `horizon` (the compiler computes
+		// max(2·horizon,1h)), so the tenant supplies `horizon` (enum), NOT a
+		// window — `h{horizon}` takes the `w{window}` slot. capacity_metric
+		// present → ratio mode → `den_` slot (raw mode omits it). MUST match
+		// shape.py recipe_id's forecast branch.
+		h := spec.Horizon
+		if h == "" {
+			return "", fmt.Errorf("forecast recipe requires horizon (one of 1h/2h/4h/12h/24h/48h)")
 		}
-		parts = append(parts, "q"+q)
-	}
-	if spec.Recipe == "ratio" {
-		if err := validateCustomAlertMetric(spec.DenominatorMetric, "denominator_metric"); err != nil {
-			return "", err
+		if !customAlertHorizonValid[h] {
+			return "", fmt.Errorf("horizon %q must be one of 1h/2h/4h/12h/24h/48h", h)
 		}
-		parts = append(parts, "den_"+spec.DenominatorMetric)
+		parts = append(parts, "h"+h)
+		if spec.CapacityMetric != "" {
+			if err := validateCustomAlertMetric(spec.CapacityMetric, "capacity_metric"); err != nil {
+				return "", err
+			}
+			parts = append(parts, "den_"+spec.CapacityMetric)
+		}
+	} else {
+		parts = append(parts, "w"+spec.Window)
+		if spec.Recipe == "p99_latency" {
+			q := string(spec.Quantile)
+			if q == "" {
+				q = "0.99"
+			}
+			parts = append(parts, "q"+q)
+		}
+		if spec.Recipe == "ratio" {
+			if err := validateCustomAlertMetric(spec.DenominatorMetric, "denominator_metric"); err != nil {
+				return "", err
+			}
+			parts = append(parts, "den_"+spec.DenominatorMetric)
+		}
 	}
 	// `for` enters the slug — it is part of the rule identity (Prometheus `for:`
 	// is a control-plane STATIC rule attribute, unlike data-plane `mode` which
@@ -220,8 +250,14 @@ func parseCustomAlertThreshold(threshold string) (value, severity string, err er
 // ResolvedThreshold (component="custom"). No version label is set: the rule's
 // normalize layer fills empty version → "default" (no-version main path).
 func resolveOneCustomAlert(tenant string, spec CustomAlertSpec) (ResolvedThreshold, error) {
-	if spec.Recipe == "" || spec.Name == "" || spec.Metric == "" || spec.Window == "" || spec.Threshold == "" {
-		return ResolvedThreshold{}, fmt.Errorf("missing required field (recipe/name/metric/window/threshold)")
+	if spec.Recipe == "" || spec.Name == "" || spec.Metric == "" || spec.Threshold == "" {
+		return ResolvedThreshold{}, fmt.Errorf("missing required field (recipe/name/metric/threshold)")
+	}
+	// recipe-aware shaping duration: forecast supplies `horizon` (required + enum
+	// validated in RecipeID), every other recipe supplies `window` (empty window
+	// → invalid PromQL like rate(m[])).
+	if spec.Recipe != "forecast" && spec.Window == "" {
+		return ResolvedThreshold{}, fmt.Errorf("missing required field window")
 	}
 	if !customAlertNameRe.MatchString(spec.Name) {
 		return ResolvedThreshold{}, fmt.Errorf("name %q is not a valid identifier", spec.Name)
@@ -251,6 +287,12 @@ func resolveOneCustomAlert(tenant string, spec CustomAlertSpec) (ResolvedThresho
 	// emit a nonsensical comparison series (e.g. `metric > NaN` never fires).
 	if math.IsNaN(value) || math.IsInf(value, 0) {
 		return ResolvedThreshold{}, fmt.Errorf("threshold value %q must be finite", valueStr)
+	}
+	// forecast ratio mode: the threshold is a headroom-fraction floor
+	// (avail/capacity), so it must be in (0,1) — a floor >= 1 with op "<" would
+	// fire permanently (the ratio is always <= 1).
+	if spec.Recipe == "forecast" && spec.CapacityMetric != "" && (value <= 0 || value >= 1) {
+		return ResolvedThreshold{}, fmt.Errorf("forecast ratio-mode threshold %v must be in (0,1)", value)
 	}
 	mode := spec.Mode
 	if mode == "" {
