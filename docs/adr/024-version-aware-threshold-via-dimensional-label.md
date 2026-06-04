@@ -449,17 +449,19 @@ flowchart TD
 
 ### Forecast Recipe（趨勢 / 耗盡預測，#741 衍生）
 
+> **決策**：新增第 6 個 recipe `forecast`（趨勢 / 耗盡預測，雙模式 ratio / raw）+ 平台推導式 lookback + cold-start gate，全程不讓租戶寫 PromQL；連帶修一條既有 `for` divergence P0（[#751](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/751)，TRK-326）。下文逐條附 trade-off。
+
 target 客戶既有「磁碟 / 記憶體照趨勢未來 N 小時內會耗盡」這類**趨勢預測**告警——defer-trigger 已觸發的**真實既有需求**，故列近期 committed slice、非 backlog。但 **raw `predict_linear` 不可直接開放租戶**：它是 SRE 圈公認的 false-positive 製造機（瞬時尖峰被線性外推、log-rotation sawtooth 被當線性、lookback 太短全是雜訊）。產品姿態——platform-SRE 把 FP 來源堵死、封裝成參數化 recipe（這正是 recipe 模式相對「租戶自寫 PromQL」的核心價值兌現：anti-foot-gun 智慧一次調校、全租戶受益）。
 
 **決策（每條附 trade-off）**：
 
 - **單一 `forecast` recipe，雙模式**（`capacity_metric` 在不在當 mode 開關，復用 `ratio` 的 denominator slug 槽）：**比例 mode**（有 `capacity_metric`）預測「比例會掉破 floor」，`threshold` = 比例下限 ∈ (0,1)、`op` 常 `<`；**原始值 mode**（無 `capacity_metric`）預測「原始 gauge 穿越絕對門檻」，`threshold` = 絕對值、`op` 常 `>`。*Trade-off*：一 recipe 兩種 `threshold` 語意，換 recipe 數不膨脹 + 編譯器共用骨架；以文件 + 分模式驗證（比例強制 ∈ (0,1)）化解歧義。
 - **真預測（預測穿越 floor），非「低且 falling」偽預測**。否決過「`predict ≤ 0` + 當前水位 gate」草案——當前水位 gate 會把 forecast 的提前量（lead time）閹割（只在已跌破才響、退化成 threshold 告警）。正解：對**錄製好的比例 / 聚合序列**下 `predict_linear` 直接比對租戶設的 floor，使「還有 40% 但正快速下滑」即提前響。*Trade-off*：多一條 base recording rule（繞過 `predict_linear` 不能對除法 / 聚合表達式 inline 下 range selector 的語法限制），換真正的提前量。
-- **lookback 不給租戶填，平台推導 `lookback = max(k·horizon, 1h)`（k≈2，整數秒）**；租戶只填 `horizon`（enum，進 slug）。理由：(a) lookback 是專家旋鈕、暴露＝最大 foot-gun（naive predict 最常死於 lookback 太短）；(b) `horizon ≤ lookback` **結構恆成立**、免額外驗證；(c) lookback 是 horizon 的純編譯期函數、**Go exporter 完全不碰**，跨語言 slug 只新增 `horizon`；(d) 不重演 `for` divergence（lookback 非獨立 tenant 值）。*Trade-off*：失「長平滑窗 + 短 horizon」組合（極少數超吵 metric）；緩解 k 偏大 + 1h 地板，真需求再把 k 開成 enum（defer-with-trigger）。
+- **lookback 不給租戶填，平台推導 `lookback = max(k·horizon, 1h)`（k≈2，整數秒）**；租戶只填 `horizon`（enum，如 `["4h","12h","24h"]`，進 slug）。理由：(a) lookback 是專家旋鈕、暴露＝最大 foot-gun（naive predict 最常死於 lookback 太短）；(b) `horizon ≤ lookback` **結構恆成立**、免額外驗證；(c) lookback 是 horizon 的純編譯期函數、**Go exporter 完全不碰**，跨語言 slug 只新增 `horizon`；(d) 不重演 `for` divergence（lookback 非獨立 tenant 值）。*Trade-off*：失「長平滑窗 + 短 horizon」組合（極少數超吵 metric）；緩解 k 偏大 + 1h 地板，真需求再把 k 開成 enum（defer-with-trigger）。
 - **cold-start 資料量 gate**：`predict_linear(<base>[lookback], horizon) and count_over_time(<base>[lookback]) > N`（N 待 benchmark 反推，先 N>3）。新 onboard / 剛部署時點太少 → 預測亂跳。⚠️ 此為「**資料夠不夠**」gate（不碰 lead time），**非**被否決的「當前水位」gate。
 - **`forecast` 只吃 gauge（或 gauge-like 比例）**：`predict_linear` 對 counter reset 序列算出垃圾斜率（reset 那刻負跳）→ counter 須先 `rate()`（MVP 不做，defer）。
 
-**編譯展開（向量化，promtool 已驗）**：兩模式都收斂成標準形 `custom:metric {op} custom:threshold` → **`_core_record`（version graceful-join + `unless … user_state_filter{maintenance}`）原封重用**，僅 `_metric_record` 加 forecast 分支。每模式 = base record（mode-specific）+ forecast record（統一）+ core（重用）。比例 mode 概念形（已用 promtool `test rules`、以**真實 K8s scrape label** 驗證觸發行為與 label 拓樸）：
+**編譯展開（向量化）**：兩模式都收斂成標準形 `custom:metric {op} custom:threshold` → **`_core_record`（version graceful-join + `unless … user_state_filter{maintenance}`）原封重用**，僅 `_metric_record` 加 forecast 分支。每模式 = base record（mode-specific）+ forecast record（統一）+ core（重用）。比例 mode 概念形（設計形狀已以**手寫代表規則** + promtool `test rules`、用真實 K8s scrape label 驗證觸發與 label 拓樸；**compiler 實際產出待實作 PR 驗**）：
 
 ```promql
 record  custom:ratio:{id}   = sum by(tenant)(avail{sel}) / sum by(tenant)(cap{sel})
@@ -473,19 +475,42 @@ record  custom:{id}:{sev}:core = custom:metric:{id} {op}
 
 原始值 mode：base 改為 `custom:agg:{id} = max by(tenant,version)(metric{sel})`，forecast record 對其下 `predict_linear`，其餘相同。cold-start gate 的兩運算元**同源於 base 序列、label 集合相同**，故平 `and` 即 match、**無需 `on()`**（promtool 實證；對比之下對表達式下 range selector `(...)[range]` 是 parse error「ranges only allowed for vector selectors」）。時間運算一律**整數秒**，`[lookback]` 吐整數單位 duration（如 `[28800s]`，杜絕 `1.5h` 之類 parse error），並以 property test 鎖 duration 文法。
 
+**具體例（disk-fill，比例 mode）** —— 租戶宣告（`_custom_alerts`，不碰 PromQL）：
+
+```yaml
+- recipe: forecast
+  name: disk_will_fill
+  metric: kubelet_volume_stats_available_bytes
+  capacity_metric: kubelet_volume_stats_capacity_bytes
+  op: "<"
+  horizon: 4h
+  threshold: "0.15:warning"   # 預測 4h 內可用比例掉破 15%
+```
+
+編譯（`horizon=4h` → 14400s、`lookback=max(2·4h, 1h)=8h` → 28800s、cold-start N=3）：
+
+```promql
+custom:metric:<rid> = label_replace(
+  predict_linear(custom:ratio:<rid>[28800s], 14400)
+  and count_over_time(custom:ratio:<rid>[28800s]) > 3,
+  "version","default","version","^$")
+# fires：照過去 8h 斜率，4h 內可用比例將 < 0.15（仍有餘量時即提前響）
+```
+
 **跨語言 slug 契約變更**：`forecast` 加入 `RECIPES`（`shape.py` + Go `customAlertRecipes`）；新增 **`horizon`** 為 slug 參數（`shape.py::recipe_id` + `custom_alert.go::RecipeID` + `recipe_id_vectors.json` 三邊與 grammar 向量同步）；`capacity_metric` 復用 `den_…` slug 槽；`lookback` **不進 slug**。連帶 `for` 進 slug + enum-bound（見下）。
 
 **Caveats（對外文件須載明）**：(1) **負值預測**——對物理非負 metric，下行趨勢的 `predict_linear` 可能外推出負值：向上 `>`（耗盡 / 上界，主流）負值預測不 fire、無害；向下 `<` 時 fire 決策仍正確（確實在掉破），僅 annotation 的 `$value` 可能顯示負數（**顯示 / 認知問題、非 false-positive**），建議非負 metric 用 `>` 預測上界；`clamp_min(…, 0)` 做成 **opt-in 參數、defer**（溫度 / 淨流量 / 餘額差等合法為負，不可預設；`clamp_min` 對 `threshold ≥ 0` 從不改變觸發決策，純修顯示值）。(2) **gauge-only**（counter 須先 rate）。(3) **build-up 期**——規則部署後需累積 lookback 時長的 base 序列，cold-start gate 期間不 fire。
 
 **Acceptance Criteria（forecast 增補，延續上方 §Custom Alerts AC）**：① 建一條 forecast 告警（兩 mode）不接觸 PromQL、promtool 過（**真實 K8s scrape label fixture，非 lab-clean**）；② 比例「會掉破 floor」在仍有充裕餘量時即**提前** fire（提前量斷言）；③ 推導 lookback 為整數單位 duration（property test 鎖文法）、`horizon ≤ lookback` 結構恆成立；④ cold-start：base 樣本 < N 時不 fire；⑤ Go `RecipeID` == Python `recipe_id`（golden vector 含 forecast + horizon 向量）；⑥ 向上 `>` 的負值預測不 fire（回歸測試斷言）。
 
-**連帶 P0：`for` divergence（向量化靜默覆蓋 bug，獨立 TRK）**：設計 forecast 時挖出一條**既有 recipe 就帶的正確性 bug**（非新功能）——`for` 既不在 `recipe_id` 也不在 `shape_signature`（`shape.py` `shape_signature`），`build_shapes` 取**首見實例**的 `for` 凍結整個 shape（`loader.py`），而 `for` 是租戶可填 schema 欄位（`tenant-config.schema.json`）。兩租戶共用 shape 但 `for` 不同 → 後者的 `for` **被靜默丟棄**、吃首見者的值，無錯無警。`mode` 能用 `group_left` 搭資料平面是因它 per-tenant；但 Prometheus `for:` 是控制平面**靜態規則屬性**，連 `group_left` 都救不了。**修法（a+ Strict Enum Bounding）**：`for` 納入 `recipe_id` slug（不同 `for` ＝ 不同 shape ＝ 不同 rule，語意正確）+ schema 強制 enum（如 `["0s","1m","5m","15m","30m","1h"]`，**須含並保留既有 `default:"1m"`**，免強制租戶顯式填寫、UX 與既有機制一致），把 cardinality 鎖成常數（免 free-form `for` 把 O(M) 退化為 O(N)）。**P0、GA 前修、併 S3 相關流程、不綁 forecast**；追蹤見獨立 TRK。
+**連帶 P0：`for` divergence（[#751](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/751)，TRK-326）**：設計 forecast 時挖出一條**既有 recipe 就帶的正確性 bug** —— `for` 不在 shape 身分（`recipe_id` / `shape_signature`）內，兩租戶共用 shape 但 `for` 不同時，後者的 `for` 被靜默丟棄、吃首見者的值（無錯無警）。`mode` 能用 `group_left` 搭資料平面（per-tenant），但 Prometheus `for:` 是控制平面**靜態規則屬性**、`group_left` 救不了。**修法（a+ Strict Enum Bounding）**：`for` 納 `recipe_id` slug + schema enum（須含並保留既有 `default:"1m"`），把 cardinality 鎖成常數、免 free-form 把 O(M) 退化成 O(N)。**P0、GA 前修、併 S3 流程、不綁 forecast**；file:line 鑑識與完整驗收見 #751（SoT）。
 
 ## 連結 / Cross-Reference
 
 - [#423](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/423) — epic SOT（三輪設計討論完整脈絡）
 - [#716](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/716) — version-aware defer-with-trigger 追蹤（其 item 1 / item 2 之去向見 §Custom Alerts）
 - [#741](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/741) — Custom Alerts 實作 epic（能力 B）
+- [#751](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/751) — `for` divergence P0（TRK-326，§Forecast Recipe 連帶）
 - [`config-driven.md` §2.5 Regex 維度閾值 / §2.6 排程式閾值](../design/config-driven.md) — 既有 dimensional + scheduled 機制（本 ADR 的基礎與界線）
 - `config/resolve.go`（dimensional key path 182–227）/ `collector.go`（CustomLabels emit 68–78）— 驗證依據
 - [ADR-005 投影卷掛載 Rule Pack](005-projected-volume-for-rule-packs.md) — rule pack 傳遞鏈
