@@ -504,6 +504,49 @@ custom:metric:<rid> = label_replace(
 
 **Related P0: `for` divergence ([#751](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/751), TRK-326)**: while designing forecast we surfaced a **correctness bug that the existing recipes already carry** — `for` is not part of the shape identity (`recipe_id` / `shape_signature`), so when two tenants share a shape but set different `for`, the latter's `for` is silently dropped (taking the first-seen value, no error or warning). `mode` can ride the data plane via `group_left` (per-tenant), but Prometheus `for:` is a control-plane **static rule attribute** that `group_left` cannot save. **Fix (a+ Strict Enum Bounding)**: bring `for` into the `recipe_id` slug + a schema-enforced enum (which must include and preserve the existing `default:"1m"`), locking cardinality to a constant and preventing free-form `for` from degrading O(M) into O(N). **P0, fixed before GA, folded into the S3-related flow, NOT coupled to forecast**; file:line forensics and full acceptance criteria live in #751 (SoT).
 
+### S5 — shift-left preflight (tenant-api recipe validation, #741)
+
+> Converged over three rounds (brainstorm 5-questions + self-adversarial + Gemini external review): C → C+. **Deviates from the ADR's literal text** (does NOT bundle promtool, see "ADR deviation" below); §Custom Alerts AC #2 + the dependency list must be updated to match.
+
+**Context / intent**: AC #2 requires tenant-api to validate a tenant's recipe BEFORE the GitOps write and return HTTP 400 on invalid input — shift-left (the tenant learns at `PUT` time, not days later at CI). The original ADR envisioned bundling `promtool` in the image + a post-compile promtool check; this addendum re-examines that mechanism before implementing.
+
+**Two-layer verification architecture** (the core mental model):
+
+- **Layer 1 — Go preflight (tenant-api, in-process, fast, stateless per-tenant input gate)**: fail-fast on tenant **input-surface** errors, return 400 — **bad input never enters the repo**.
+- **Layer 2 — CI Python compiler (global authority, stateful + promtool)**: cross-tree / hierarchical inheritance / vectorization / template promtool — the only gate with global SOT authority.
+
+**Decisions (each with trade-off)**:
+
+- **Reuse Go validation; do NOT bundle promtool / Python in the prod image**. tenant-api can already import `pkg/config/custom_alert.go`, a prod-grade Go validator (shared with the exporter: metric regex / reserved label / recipe·op·severity·mode·for·horizon enums / ratio-floor ∈(0,1) / NaN·Inf); export `ValidateCustomAlertSpec` to reuse it. *Trade-off*: not running the real compiler + promtool (full fidelity) on the request path → in exchange for avoiding a Python runtime + dev-tooling script copies + a promtool binary + a hot-path subprocess in a Go service (image bloat / dev-prod boundary blur / subprocess failure modes). **promtool is redundant for tenant input**: tenants never write PromQL, recipe templates are platform-authored, valid spec → valid PromQL → promtool only adds "template regression" detection (a platform problem), kept as the **CI golden** gate (not something a tenant request should block on).
+- **Selector value: both Go and Python accept any key-valid value** (both validate only the key). The injection boundary is **Python `_escape_value`** (`shape.py`; backslash-first → `"` → newline; the value always sits inside a quoted literal and cannot escape out → injection is structurally impossible; covered by `test_selector_value_is_escaped`). The Go preflight does **not** replicate escaping (it emits no PromQL — nothing to escape). *Adversarial check*: the external-review claim of "malformed PromQL / CI deadlock" was verified false (the escaping is correct, round-trips, promtool-accepted).
+- **Hook into the shared `gitops.validate()`** (`internal/gitops/writer.go`) → `PUT` + batch + dry-run `/validate` covered uniformly (not a PutTenant-only inline check).
+- **Error shape**: HTTP 400 + `ErrorResponse{Violations[]}` (`handler/errors.go`'s existing `WriteValidationErrors`, `code: INVALID_BODY`).
+
+**Test strategy** (precise boundary):
+
+- **Cross-language stateless contract fixture**: per-recipe validation decisions (syntax / regex / reserved label / enum bounds / **adversarial selector value** acceptance) — Go and Python **both assert** accept/reject agreement (extends `recipe_id_vectors.json` from slug to validation behavior). Plus one **Python promtool test** proving an adversarial value compiles to valid escaped PromQL.
+- **Stateful validation** (name collision / cap overflow / cross-tree): NOT in the shared fixture (expression boundary) → Go `custom_alert_test.go` + Python `test_compile_custom_alerts.py` each with mock-tree integration tests.
+
+**Scope (honest boundary)**: Go preflight = per-recipe spec + within-`PUT` tenant name/severity/slug uniqueness + own-recipe cap (**counted on the resolved final state**: PUT is full-overlay [`writer.go` `os.WriteFile` replaces the whole file] → body = the complete own set; batch counts the post-merge result, not the raw delta). **Not covered** (→ CI authority): (1) an own recipe duplicating an **inherited** policy shape; (2) compiler template PromQL bugs.
+
+**Blast-radius / guardrails**: pure **in-process Go** (no subprocess → no timeout / degradation mode to design), fail-closed (invalid spec → 400, correct).
+
+**Options evaluated and rejected**: **A1 (ADR literal)** bundle promtool + post-compile check → heaviest, promtool redundant for tenant input → rejected. **A2** shell out to the real compiler `--check` (full fidelity, zero drift) but no promtool → **prod depends on dev-tooling scripts** + hot-path subprocess + the fail-open/closed dilemma → rejected.
+
+**ADR deviation (must update)**: AC #2 "post-compile **promtool** fails → 400" + the dependency "tenant-api image bundles promtool" → change to "**Go spec validation** → 400; promtool stays the **CI golden** gate". Intent met and lighter; promtool remains the authoritative gate for template regressions (at CI, not on the request path).
+
+**Open question — OQ-S5-1**: own-vs-inherited-policy collision → **deferred to CI**. *Rationale (SOT authority, not tree-walk cost)*: tenant-api's local disk is **not** the authoritative global tree — within the GitOps propagation vacuum a Domain SRE may have just changed a policy that tenant-api's local disk hasn't synced yet → a hot-path tree-walk would false-pass on a **stale** tree anyway. **With no absolute SOT, a hot-path tree-walk is an imperfect defense**; leave it to the CI compiler gate, which has global authority.
+
+**S5 Acceptance Criteria**: ① `PUT`/batch/`/validate` return 400 + `Violations[]` for an invalid recipe spec and do **not** touch the GitOps write (mutation-proven: removing the preflight lets a bad spec through); ② cross-language stateless fixture: Go and Python agree on every `(spec → accept/reject)` (incl. adversarial selector values); ③ valid recipes still write / dry-run returns ok (no regression); ④ the preflight is pure in-process Go — **no new tenant-api image dependency** (no Python / promtool).
+
+### Future robustness radar (surfaced by the S5 external review, defer-with-trigger)
+
+The S5 external review (Gemini) surfaced three **future** robustness items; **none block S5**, recorded here pending their triggers:
+
+- **regex-value length cap (LOW, hygiene)**: ~~ReDoS catastrophic backtracking~~ **does not apply to Prometheus** (label matchers use Go `regexp` = RE2, linear, no backtracking). Residual: an over-long / over-complex regex × a huge series count can still slow rule eval → cap the selector regex value length as cheap hygiene. *Trigger*: measured rule-eval-duration sensitivity to regex complexity.
+- **`keep_firing_for` resolve-delay (HIGH UX, future recipe param)**: `for` suppresses spikes, but an alert resolves immediately when the value dips → flapping near the threshold → alert fatigue. Prometheus 2.42+ (this repo is v3.x) natively supports `keep_firing_for` → expose it to tenants (enum-bounded, a control-plane static attribute, into the slug like `for`) to kill flapping noise. *Trigger*: the first flapping alert-fatigue complaint.
+- **Alertmanager grouping isolation (S8 routing hard requirement)**: `component="custom"` alerts must be absolutely isolated in the AM route tree (a dedicated branch, `group_by` including `tenant`+`recipe_id`, never cross-grouped with platform P0), else tenant noise masks core alerts. *Action*: mandatory when S8 routing is implemented (not a trigger — it is an S8 AC).
+
 ## Links / Cross-Reference
 
 - [#423](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/423) — epic SOT (full three-round design context)

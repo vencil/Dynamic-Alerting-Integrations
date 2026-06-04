@@ -506,6 +506,50 @@ custom:metric:<rid> = label_replace(
 
 **連帶 P0：`for` divergence（[#751](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/751)，TRK-326）**：設計 forecast 時挖出一條**既有 recipe 就帶的正確性 bug** —— `for` 不在 shape 身分（`recipe_id` / `shape_signature`）內，兩租戶共用 shape 但 `for` 不同時，後者的 `for` 被靜默丟棄、吃首見者的值（無錯無警）。`mode` 能用 `group_left` 搭資料平面（per-tenant），但 Prometheus `for:` 是控制平面**靜態規則屬性**、`group_left` 救不了。**修法（a+ Strict Enum Bounding）**：`for` 納 `recipe_id` slug + schema enum（須含並保留既有 `default:"1m"`），把 cardinality 鎖成常數、免 free-form 把 O(M) 退化成 O(N)。**P0、GA 前修、併 S3 流程、不綁 forecast**；file:line 鑑識與完整驗收見 #751（SoT）。
 
+### S5 — shift-left preflight（tenant-api recipe 驗證，#741）
+
+> 設計經 brainstorm 五問 + 自我對抗 + Gemini 外審三輪收斂（C → C+）。**deviates 自 ADR
+> 字面**（不打包 promtool，見下「ADR 偏離」），需同步更新 §Custom Alerts AC #2 + dependency。
+
+**緣起 / 意圖**：AC #2 要 tenant-api 在 GitOps 寫入**前**驗租戶 recipe、無效回 HTTP 400 —— shift-left（租戶 `PUT` 當下就知道寫錯，而非數天後 CI 才報）。原 ADR 設想 = image 打包 `promtool` + 編譯後 promtool 檢查；本 addendum 在實作前重審該手段。
+
+**兩層驗證架構**（核心心智模型）：
+
+- **Layer 1 — Go preflight（tenant-api，in-process，快、stateless per-tenant 輸入閘）**：fail-fast 攔租戶**輸入面**錯誤、回 400，**壞輸入不進 repo**。
+- **Layer 2 — CI Python compiler（全域權威，stateful + promtool）**：跨樹 / 階層繼承 / 向量化 / 模板 promtool —— 唯一有全域 SOT 的權威 gate。
+
+**決策（每條附 trade-off）**：
+
+- **Go 驗證複用，不打包 promtool / Python 進 prod image**。tenant-api 既可 import 的 `pkg/config/custom_alert.go` 已是 prod-grade Go 驗證器（與 exporter **共用同一份**：metric regex / reserved label / recipe·op·severity·mode·for·horizon enum / ratio-floor ∈(0,1) / NaN·Inf）；export `ValidateCustomAlertSpec` 複用。*Trade-off*：不在請求路徑跑「真 compiler + promtool」（全保真）→ 換掉「Go 服務背 Python runtime + dev-tooling 腳本副本 + promtool binary + 熱路徑 subprocess」的 image 膨脹 / dev-prod 邊界模糊 / subprocess 失敗模式。**promtool 對租戶輸入冗餘**：租戶從不寫 PromQL、recipe 模板平台 authored、valid spec → valid PromQL → promtool 只多抓「模板 regression」= 平台問題，留 **CI golden** 守（非租戶請求該擋）。
+- **selector value：Go 與 Python 都接受任何 key-valid value**（兩邊都只驗 key）。注入邊界是 **Python `_escape_value`**（`shape.py`，backslash-first → `"` → newline；值永遠在 quoted literal 內、無法逃逸 → 注入結構性不可能；`test_selector_value_is_escaped` 已測）。Go preflight **不複刻 escaping**（它**不吐 PromQL**，無物可跳脫）。*對抗驗證*：外審指「畸形 PromQL / CI 卡死」經驗證為假（escaping 正確、round-trips、promtool 接受）。
+- **掛進共用 `gitops.validate()`**（`internal/gitops/writer.go`）→ `PUT` + batch + dry-run `/validate` 一致覆蓋（非 PutTenant-only inline）。
+- **錯誤形狀**：HTTP 400 + `ErrorResponse{Violations[]}`（`handler/errors.go` 既有 `WriteValidationErrors`，`code: INVALID_BODY`）。
+
+**測試策略**（精確劃界）：
+
+- **跨語言 stateless 契約 fixture**：per-recipe 驗證決策（syntax / regex / reserved label / enum 邊界 / **對抗性 selector value** 接受）—— Go 與 Python **雙邊斷言** accept/reject 一致（延伸既有 `recipe_id_vectors.json` 從 slug 到驗證行為）。+ 一條 **Python promtool 測**證對抗 value 編譯出合法 escaped PromQL。
+- **stateful 驗證**（撞名 / cap 溢出 / 跨樹）：**不**塞共用 fixture（表達力邊界）→ Go `custom_alert_test.go` + Python `test_compile_custom_alerts.py` 各自 mock-tree 整合測試。
+
+**Scope（誠實標界）**：Go preflight = per-recipe spec + within-`PUT` 租戶 name/severity/slug 唯一性 + own-recipe cap（**數解析後最終態**：PUT 為 full-overlay〔`writer.go` `os.WriteFile` 整檔覆蓋〕→ body = 完整 own 集合；batch 為 post-merge 結果，非原始 delta）。**不涵蓋**（→ CI 權威）：(1) own recipe 重複**繼承**政策 shape；(2) compiler 模板 PromQL bug。
+
+**Blast-radius / 護欄**：純 **in-process Go**（無 subprocess → 無 timeout / 降級模式要設計）、fail-closed（invalid spec → 400 正確）。
+
+**評估並否決的選項**：**A1（ADR 字面）** 打包 promtool + 編譯後檢查 → 最重、promtool 對租戶輸入冗餘 → 否決。**A2** shell 真 compiler `--check`（全保真零 drift）但不打包 promtool → **prod 依賴 dev-tooling 腳本** + 熱路徑 subprocess + fail-open/closed 兩難 → 否決。
+
+**ADR 偏離（需同步更新）**：AC #2「編譯後 **promtool** 不過 → 400」+ dependency「tenant-api image 打包 promtool」→ 改「**Go spec 驗證** → 400；promtool 留 **CI golden**」。意圖達成且更輕；promtool 仍是模板 regression 權威 gate（在 CI、非請求路徑）。
+
+**Open question — OQ-S5-1**：own-vs-inherited-policy 碰撞 → **defer 到 CI**。*理由（SOT 權威，非 tree-walk 成本）*：tenant-api 本地磁碟**不是**全域樹的權威 SOT —— GitOps 傳遞真空期內 Domain SRE 剛改政策、tenant-api 本地未同步 → 熱路徑 tree-walk 會用**過期**樹照樣 false-pass。**既無絕對 SOT，熱路徑 tree-walk 就是不完美防禦**，留給有全域權威的 CI compiler gate。
+
+**S5 Acceptance Criteria**：① `PUT`/batch/`/validate` 對無效 recipe spec 回 400 + `Violations[]`、**不**觸及 GitOps 寫入（mutation-proven：拔 preflight 即放行壞 spec）；② 跨語言 stateless fixture：Go 與 Python 對每個 `(spec → accept/reject)` 一致（含對抗性 selector value）；③ valid recipe 照常寫入 / dry-run 回 ok（無 regression）；④ preflight 純 in-process Go —— **無新 tenant-api image 依賴**（無 Python / promtool）。
+
+### Future robustness radar（S5 外審衍生，defer-with-trigger）
+
+S5 外審（Gemini）掃出三個**未來**強健性議題，**none 阻礙 S5**，記此待 trigger：
+
+- **regex value 長度上限（LOW，hygiene）**：~~ReDoS catastrophic backtracking~~ **對 Prometheus 不成立**（label matcher 用 Go `regexp` = RE2、線性、無 backtracking）。殘留:超長/超複雜 regex × 海量 series 仍可能拖慢 eval → selector regex value 加長度上限為廉價衛生防護。*Trigger*：實測 rule-eval-duration 受 regex 複雜度影響。
+- **`keep_firing_for` 解除延遲（HIGH UX，future recipe param）**：`for` 防突波,但跌破即 resolved → 閾值附近震盪 → 告警疲勞。Prometheus 2.42+（本 repo v3.x）原生 `keep_firing_for` → 開放給租戶（enum-bounded、控制平面靜態屬性、進 slug,如 `for`）消震盪噪音。*Trigger*：第一個 flapping 告警疲勞客訴。
+- **Alertmanager grouping 隔離（S8 routing 硬需求）**：`component="custom"` 告警須在 AM route tree 絕對隔離（獨立 branch、`group_by` 含 `tenant`+`recipe_id`、不與平台 P0 cross-group），否則租戶噪音掩蓋核心告警。*Action*：S8 routing 實作時必做（非 trigger，是 S8 的 AC）。
+
 ## 連結 / Cross-Reference
 
 - [#423](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/423) — epic SOT（三輪設計討論完整脈絡）
