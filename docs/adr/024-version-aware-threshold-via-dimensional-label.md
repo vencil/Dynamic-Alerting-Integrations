@@ -43,7 +43,7 @@ updated_at: 2026-06-04
 
 ⛔ **部署前提（HARD）**：kube-state-metrics 必須設 `--metric-labels-allowlist=pods=[app.kubernetes.io/version]`，否則 `kube_pod_labels` 不帶 version、version 注入 join 匹配空集、**版本閾值靜默 inert**（真叢集實證）。三層防禦守住此前提：runtime sentinel `VersionAwareThresholdInert` 是安全網、CI static lint `check_ksm_version_allowlist.py` 攔誤配。
 
-**能力 B — Custom Alerts（實作進行中，目標 v2.9.0）**：設計收斂；recipe 庫 / 編譯器 / discovery catalog / 兩個 UX 為 net-new，實作尚未開始（見 §Custom Alerts）。
+**能力 B — Custom Alerts（實作進行中，目標 v2.9.0）**：recipe 庫 + 向量化編譯器 + 6 個 recipe（threshold / rate / ratio / absence / p99_latency / **forecast**）+ exporter `user_threshold` emission **已實作**（[#741](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/741) S1–S3a / [#752](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/752) / [#753](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/753)）；**仍 net-new**：discovery catalog、`max_custom_recipes` cap、tenant-api promtool preflight、onboarding / recipe-編輯 兩個 UX（見 §Custom Alerts）。
 
 **Deferred（defer-with-trigger）**：
 

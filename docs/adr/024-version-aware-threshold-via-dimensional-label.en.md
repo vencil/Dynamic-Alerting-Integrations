@@ -39,7 +39,7 @@ One **declarative dimensional alerting machine** — the dimensional-label model
 
 ⛔ **Deployment prerequisite (HARD)**: kube-state-metrics MUST run with `--metric-labels-allowlist=pods=[app.kubernetes.io/version]`, otherwise `kube_pod_labels` carries no version, the version-injection join matches nothing, and **version thresholds are silently inert** (proven on a real cluster). The three-layer defense guards this prerequisite: the `VersionAwareThresholdInert` runtime sentinel is the safety net, and the CI static lint `check_ksm_version_allowlist.py` catches the misconfiguration.
 
-**Capability B — Custom Alerts (implementation in progress, targeting v2.9.0)**: design converged; the recipe library / compiler / discovery catalog / two UXs are net-new and implementation has not started (see §Custom Alerts).
+**Capability B — Custom Alerts (implementation in progress, targeting v2.9.0)**: the recipe library + vectorized compiler + 6 recipes (threshold / rate / ratio / absence / p99_latency / **forecast**) + exporter `user_threshold` emission are **implemented** ([#741](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/741) S1–S3a / [#752](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/752) / [#753](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/753)); **still net-new**: the discovery catalog, the `max_custom_recipes` cap, the tenant-api promtool preflight, and the two UXs (onboarding / recipe editing) (see §Custom Alerts).
 
 **Deferred (defer-with-trigger)**:
 
