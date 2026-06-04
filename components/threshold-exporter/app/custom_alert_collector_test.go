@@ -43,8 +43,8 @@ func TestCollector_CustomAlerts_EmitAndParseErrorGauge(t *testing.T) {
 			}
 			if lbl["tenant"] == "good-t" && lbl["component"] == "custom" {
 				found = true
-				if lbl["recipe_id"] != "threshold__qd__gt__w5m" || lbl["name"] != "q_high" || lbl["mode"] != "page" {
-					t.Errorf("custom-alert user_threshold labels = %v (want recipe_id=threshold__qd__gt__w5m, name=q_high, mode=page)", lbl)
+				if lbl["recipe_id"] != "threshold__qd__gt__w5m__for1m" || lbl["name"] != "q_high" || lbl["mode"] != "page" {
+					t.Errorf("custom-alert user_threshold labels = %v (want recipe_id=threshold__qd__gt__w5m__for1m, name=q_high, mode=page)", lbl)
 				}
 				if v := m.GetGauge().GetValue(); v != 100 {
 					t.Errorf("custom-alert user_threshold value = %v, want 100", v)

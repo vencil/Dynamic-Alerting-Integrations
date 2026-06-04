@@ -84,6 +84,13 @@ var (
 		"tenant": true, "version": true, "__name__": true, "severity": true,
 		"recipe": true, "recipe_id": true, "name": true, "mode": true,
 	}
+	// permitted `for` values — enum-bounded (TRK-326 / #751) so `for` entering
+	// the recipe_id slug keeps cardinality a small constant per base-shape (no
+	// O(M)→O(N) blow-up). MUST match the schema enum in
+	// docs/schemas/tenant-config.schema.json.
+	customAlertForValid = map[string]bool{
+		"0s": true, "1m": true, "5m": true, "15m": true, "30m": true, "1h": true,
+	}
 )
 
 func customAlertSanitise(s string) string {
@@ -179,6 +186,17 @@ func RecipeID(spec CustomAlertSpec) (string, error) {
 		}
 		parts = append(parts, "den_"+spec.DenominatorMetric)
 	}
+	// `for` enters the slug — it is part of the rule identity (Prometheus `for:`
+	// is a control-plane STATIC rule attribute, unlike data-plane `mode` which
+	// rides group_left). Two tenants sharing every other param but a different
+	// `for` are genuinely different rules; without `for` in the slug the
+	// vectorized rule silently froze to one tenant's `for` (TRK-326 / #751).
+	// Always emitted; default 1m. MUST stay byte-identical to shape.py::recipe_id.
+	forVal := spec.For
+	if forVal == "" {
+		forVal = "1m"
+	}
+	parts = append(parts, "for"+forVal)
 	return customAlertSanitise(strings.Join(parts, "__")), nil
 }
 
@@ -242,6 +260,16 @@ func resolveOneCustomAlert(tenant string, spec CustomAlertSpec) (ResolvedThresho
 	// unknown value would surface a bogus mode label that S8 routing can't handle.
 	if mode != "page" && mode != "silent" {
 		return ResolvedThreshold{}, fmt.Errorf("mode %q must be page or silent", mode)
+	}
+	// `for` must be one of the enum-bounded values (TRK-326): it enters the
+	// recipe_id slug, so an out-of-enum value would silently spawn a distinct
+	// shape/rule and bloat cardinality. Default 1m (matches schema default).
+	forVal := spec.For
+	if forVal == "" {
+		forVal = "1m"
+	}
+	if !customAlertForValid[forVal] {
+		return ResolvedThreshold{}, fmt.Errorf("for %q is not allowed (one of 0s/1m/5m/15m/30m/1h)", forVal)
 	}
 	return ResolvedThreshold{
 		Tenant:    tenant,

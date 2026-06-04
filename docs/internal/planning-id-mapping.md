@@ -158,6 +158,7 @@ SOT 在 [`dx-tooling-backlog.md`](dx-tooling-backlog.md)。
 | TRK-323 | [#676](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/676) | （wontfix / not planned）special-file 左移驗證 — da-guard CI gate + handler 已覆蓋 | — |
 | TRK-324 | [#677](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/677) | 幽靈副本：滾動更新交疊多寫者（Recreate now-fix / Lease deferred） | TRK-317 |
 | TRK-325 | [#678](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/678) | 讀寫拆分部署（CQRS）+ read-only enforcement 模式（deferred） | TRK-317 |
+| TRK-326 | [#751](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/751) | Custom-alert `for` divergence：`for` 納 recipe_id slug + schema enum（向量化靜默覆蓋 P0） | [#741](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/741) |
 
 ## 不在 mapping 範圍
 

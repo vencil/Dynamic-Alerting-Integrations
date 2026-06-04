@@ -5,11 +5,43 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
 	"gopkg.in/yaml.v3"
 )
+
+// TestRecipeID_ForDivergence pins the TRK-326 fix: `for` is part of the slug, so
+// the same shape with a different `for` yields a DIFFERENT recipe_id (two tenants
+// → two distinct rules, no silent overwrite). Same/omitted `for` → same id (1m
+// default), so O(M) vectorization still collapses shape-mates.
+func TestRecipeID_ForDivergence(t *testing.T) {
+	base := func(f string) CustomAlertSpec {
+		return CustomAlertSpec{Recipe: "threshold", Metric: "m", Op: ">", Window: "5m", For: f}
+	}
+	idDefault := mustRecipeID(t, base(""))
+	id1m := mustRecipeID(t, base("1m"))
+	id15m := mustRecipeID(t, base("15m"))
+	if idDefault != id1m {
+		t.Errorf("omitted for must equal explicit 1m: %q vs %q", idDefault, id1m)
+	}
+	if id1m == id15m {
+		t.Errorf("different for must yield different recipe_id, both = %q", id1m)
+	}
+	if !strings.HasSuffix(id1m, "__for1m") || !strings.HasSuffix(id15m, "__for15m") {
+		t.Errorf("for must be the trailing slug part: %q / %q", id1m, id15m)
+	}
+}
+
+func mustRecipeID(t *testing.T, spec CustomAlertSpec) string {
+	t.Helper()
+	id, err := RecipeID(spec)
+	if err != nil {
+		t.Fatalf("RecipeID(%+v): %v", spec, err)
+	}
+	return id
+}
 
 // findRecipeIDVectors walks up from cwd to locate the shared cross-language
 // golden vector (lives at repo-root tests/dx/fixtures/, outside this module).
@@ -115,7 +147,7 @@ func TestCustomAlert_ListParseSurvivesAndResolves(t *testing.T) {
 		t.Errorf("unexpected resolved threshold: %+v", rt)
 	}
 	want := map[string]string{
-		"recipe_id": "rate__http_requests_total__sre_status_5____gt__w5m",
+		"recipe_id": "rate__http_requests_total__sre_status_5____gt__w5m__for1m",
 		"name":      "http_5xx",
 		"mode":      "silent",
 	}
@@ -157,6 +189,7 @@ func TestCustomAlert_ValidationNegatives(t *testing.T) {
 		"NaN threshold":      "      - {recipe: threshold, name: x, metric: m, op: \">\", window: 5m, threshold: \"NaN:warning\"}\n",
 		"Inf threshold":      "      - {recipe: threshold, name: x, metric: m, op: \">\", window: 5m, threshold: \"Inf:warning\"}\n",
 		"bad mode":           "      - {recipe: threshold, name: x, metric: m, op: \">\", window: 5m, threshold: \"1:warning\", mode: pager}\n",
+		"bad for":            "      - {recipe: threshold, name: x, metric: m, op: \">\", window: 5m, threshold: \"1:warning\", for: 2m}\n",
 	}
 	for name, listYAML := range cases {
 		t.Run(name, func(t *testing.T) {

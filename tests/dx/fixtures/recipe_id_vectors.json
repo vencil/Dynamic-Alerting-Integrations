@@ -1,45 +1,55 @@
 {
-  "_comment": "Cross-language contract for the recipe_id slug (ADR-024 #741 S2). Both the Python compiler (scripts/tools/dx/custom_alerts/shape.py) and the Go exporter (S3) MUST compute these exact slugs from these inputs — a drift silently breaks every on(tenant) group_left join. Pure string assembly: no hash, no locale, no map-order dependence. Add a case when adding a recipe/param.",
+  "_comment": "Cross-language contract for the recipe_id slug (ADR-024 #741). Both the Python compiler (scripts/tools/dx/custom_alerts/shape.py) and the Go exporter (components/threshold-exporter/app/pkg/config/custom_alert.go) MUST compute these exact slugs from these inputs — a drift silently breaks every on(tenant) group_left join. Pure string assembly: no hash, no locale, no map-order dependence. NOTE (TRK-326): `for` is part of the slug (control-plane static rule attribute) and is ALWAYS emitted as the trailing `__for{for}` part (default 1m). Add a case when adding a recipe/param.",
   "vectors": [
     {
       "input": {"recipe": "threshold", "metric": "order_queue_depth", "op": ">", "window": "5m"},
-      "recipe_id": "threshold__order_queue_depth__gt__w5m"
+      "recipe_id": "threshold__order_queue_depth__gt__w5m__for1m"
     },
     {
       "input": {"recipe": "rate", "metric": "http_requests_total", "selectors_re": {"status": "5.."}, "selectors": {"method": "POST"}, "op": ">", "window": "5m"},
-      "recipe_id": "rate__http_requests_total__s_method_POST__sre_status_5____gt__w5m"
+      "recipe_id": "rate__http_requests_total__s_method_POST__sre_status_5____gt__w5m__for1m"
     },
     {
       "input": {"recipe": "ratio", "metric": "http_errors_total", "denominator_metric": "http_requests_total", "op": ">", "window": "5m"},
-      "recipe_id": "ratio__http_errors_total__gt__w5m__den_http_requests_total"
+      "recipe_id": "ratio__http_errors_total__gt__w5m__den_http_requests_total__for1m"
     },
     {
       "input": {"recipe": "absence", "metric": "app_heartbeat_total", "window": "10m"},
-      "recipe_id": "absence__app_heartbeat_total__absent__w10m"
+      "recipe_id": "absence__app_heartbeat_total__absent__w10m__for1m"
     },
     {
       "input": {"recipe": "p99_latency", "metric": "http_request_duration_seconds", "quantile": "0.99", "op": ">", "window": "5m"},
-      "recipe_id": "p99_latency__http_request_duration_seconds__gt__w5m__q0_99"
+      "recipe_id": "p99_latency__http_request_duration_seconds__gt__w5m__q0_99__for1m"
     },
     {
       "_note": "selector ordering must be deterministic: sorted by (key, op), regardless of YAML/map iteration order",
       "input": {"recipe": "threshold", "metric": "m", "op": ">=", "window": "1m", "selectors": {"zeta": "1", "alpha": "2"}},
-      "recipe_id": "threshold__m__s_alpha_2__s_zeta_1__ge__w1m"
+      "recipe_id": "threshold__m__s_alpha_2__s_zeta_1__ge__w1m__for1m"
     },
     {
       "_note": "grammar coverage: op omitted → default \">\" → gt (must be identical Go/Python)",
       "input": {"recipe": "threshold", "metric": "m", "window": "1m"},
-      "recipe_id": "threshold__m__gt__w1m"
+      "recipe_id": "threshold__m__gt__w1m__for1m"
     },
     {
       "_note": "grammar coverage: op \"<\" → lt",
       "input": {"recipe": "threshold", "metric": "m", "op": "<", "window": "1m"},
-      "recipe_id": "threshold__m__lt__w1m"
+      "recipe_id": "threshold__m__lt__w1m__for1m"
     },
     {
       "_note": "grammar coverage: op \"<=\" → le",
       "input": {"recipe": "threshold", "metric": "m", "op": "<=", "window": "1m"},
-      "recipe_id": "threshold__m__le__w1m"
+      "recipe_id": "threshold__m__le__w1m__for1m"
+    },
+    {
+      "_note": "TRK-326: explicit for=5m enters the slug → distinct shape from the default-for (1m) twin above, so two tenants with different `for` compile to two distinct rules (no silent overwrite)",
+      "input": {"recipe": "threshold", "metric": "m", "op": ">", "window": "1m", "for": "5m"},
+      "recipe_id": "threshold__m__gt__w1m__for5m"
+    },
+    {
+      "_note": "TRK-326: for=0s (fire-immediately) is a valid enum value and yields its own slug",
+      "input": {"recipe": "threshold", "metric": "m", "op": ">", "window": "1m", "for": "0s"},
+      "recipe_id": "threshold__m__gt__w1m__for0s"
     }
   ]
 }

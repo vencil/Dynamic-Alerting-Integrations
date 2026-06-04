@@ -13,10 +13,12 @@ golden vector both implementations assert against).
 
 recipe_id grammar (parts joined by `__`, each part sanitised to [a-z0-9_]):
     {recipe}__{metric}[__{sorted selector parts}]__{op_slug}__w{window}
-             [__q{quantile}][__den_{denominator_metric}]
+             [__q{quantile}][__den_{denominator_metric}]__for{for}
   selector part (exact):  s_{key}_{value}
   selector part (regex):  sre_{key}_{value}
   op_slug: >→gt  >=→ge  <→lt  <=→le  (absence → "absent")
+  for: pending-duration; part of rule identity (control-plane static attr,
+       TRK-326) — always emitted, enum-bounded in schema. Default "1m".
 Sanitisation maps every char outside [a-zA-Z0-9_] to '_' (deterministic, and keeps
 the slug valid as a Prometheus recording-rule name component).
 """
@@ -43,6 +45,12 @@ RESERVED_LABELS = frozenset(
 
 OP_SLUG = {">": "gt", ">=": "ge", "<": "lt", "<=": "le"}
 
+# Permitted `for` pending-durations (enum-bounded, TRK-326). `for` is part of the
+# recipe_id slug + shape_signature, so bounding it keeps per-base-shape cardinality
+# a small constant (no O(M)→O(N)). MUST match docs/schemas/tenant-config.schema.json
+# and custom_alert.go::customAlertForValid.
+ALLOWED_FOR = frozenset({"0s", "1m", "5m", "15m", "30m", "1h"})
+
 RECIPES = ("threshold", "rate", "ratio", "absence", "p99_latency")
 
 
@@ -53,6 +61,25 @@ class RecipeError(ValueError):
 def _sanitise(s: str) -> str:
     """Map every char outside [a-zA-Z0-9_] to '_'. Deterministic, locale-free."""
     return re.sub(r"[^a-zA-Z0-9_]", "_", s)
+
+
+def _normalize_for(inst: dict) -> str:
+    """Validate + normalize `for` into its canonical slug form (TRK-326).
+
+    `for` enters BOTH recipe_id and shape_signature (the rule identity), so a
+    bad value must fail loud here, not silently mint a bogus shape (e.g. `None`
+    → "forNone", or a non-enum duration that splits the vectorized rule). Falsy
+    (missing / null / empty) → default "1m" — matching custom_alert.go's
+    `if forVal == "" { forVal = "1m" }` so the two implementations never diverge
+    on the falsy case. Any other value MUST be one of ALLOWED_FOR.
+    """
+    value = inst.get("for", "1m")
+    value = "1m" if value in (None, "") else str(value)
+    if value not in ALLOWED_FOR:
+        raise RecipeError(
+            f"for {value!r} must be one of {sorted(ALLOWED_FOR)} (TRK-326 enum-bounded)"
+        )
+    return value
 
 
 def validate_metric_name(metric: str, field: str = "metric") -> None:
@@ -144,6 +171,17 @@ def recipe_id(inst: dict) -> str:
         validate_metric_name(den, "denominator_metric")
         parts.append("den_" + den)
 
+    # `for` is part of the rule identity, NOT just a per-instance attribute:
+    # Prometheus `for:` is a control-plane STATIC rule attribute (unlike `mode`,
+    # which rides the data plane via group_left). Two tenants sharing every other
+    # param but a different `for` are genuinely DIFFERENT alert rules — so `for`
+    # must enter the slug, else the vectorized rule freezes to one tenant's `for`
+    # and silently drops the others (TRK-326 / #751). Always emitted (grammar-
+    # consistent with op/window/quantile); enum-bounded in the schema so the
+    # cardinality stays a small constant per base-shape (no O(M)→O(N) blow-up).
+    # MUST stay byte-identical to custom_alert.go::RecipeID.
+    parts.append("for" + _normalize_for(inst))
+
     return _sanitise("__".join(parts))
 
 
@@ -163,6 +201,8 @@ def shape_signature(inst: dict) -> Tuple:
         str(inst.get("window", "")),
         str(inst.get("quantile", "0.99")) if inst["recipe"] == "p99_latency" else None,
         tuple(_selector_items(inst)),
+        # `for` distinguishes shapes (control-plane static attr; see recipe_id).
+        _normalize_for(inst),
     )
 
 
