@@ -64,8 +64,8 @@ type silentModeStructured struct {
 
 // maintenanceModeStructured is the intermediate struct for parsing structured _state_maintenance YAML.
 type maintenanceModeStructured struct {
-	Target    string              `yaml:"target"`    // "enable" (default if omitted)
-	Expires   string              `yaml:"expires"`   // ISO 8601
+	Target    string              `yaml:"target"`  // "enable" (default if omitted)
+	Expires   string              `yaml:"expires"` // ISO 8601
 	Reason    string              `yaml:"reason"`
 	Recurring []RecurringSchedule `yaml:"recurring"` // v1.11.0: periodic maintenance windows
 }
@@ -216,6 +216,7 @@ var validReservedKeys = map[string]bool{
 	"_metadata":        true, // v1.11.0: tenant metadata (runbook_url, owner, tier) → tenant_metadata_info metric
 	"_profile":         true, // v1.12.0: tenant profile reference for four-layer inheritance
 	"_routing_profile": true, // v2.1.0 ADR-007: cross-domain routing profile reference
+	"_custom_alerts":   true, // v2.9.0 ADR-024 能力 B (#741): tenant-authored custom alerts → user_threshold{component="custom",...}
 }
 
 // validReservedPrefixes lists prefixes for tenant config keys with special meaning.

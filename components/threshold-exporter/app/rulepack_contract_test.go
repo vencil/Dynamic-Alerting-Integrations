@@ -80,6 +80,18 @@ var permittedThresholdLabels = map[string]bool{
 	"tenant":    true, // a selector may legitimately pin tenant (none do today)
 }
 
+// customAlertPermittedLabels are the extra labels the exporter emits ONLY for
+// custom-alert user_threshold series (ADR-024 能力 B, #741 S3a). They are
+// permitted as selector matchers ONLY when the selector also pins
+// component="custom" (see assertComponentMetric) — the global closed set above
+// stays intact for platform packs. recipe_id disambiguates shapes sharing a
+// metric; name/mode ride for display/routing (S3b fixtures pin them as labels).
+var customAlertPermittedLabels = map[string]bool{
+	"recipe_id": true,
+	"name":      true,
+	"mode":      true,
+}
+
 // minimum coverage floors — a green run over an EMPTY set is itself a new echo
 // chamber, so the test fails loudly if it discovers far fewer rules than exist
 // today (14 packs; ~63 threshold recording rules). These are conservative
@@ -195,13 +207,23 @@ func assertComponentMetric(t *testing.T, where string, vs *promqlparser.VectorSe
 	// empty set in prod — the same silent-alert failure class as #731 — but would
 	// otherwise sail past the component/metric check. Reject any matcher outside
 	// the permitted set.
+	//
+	// Custom Alerts (#741 S3a) surgically widen this ONLY for component="custom":
+	// the exporter DOES emit recipe_id/name/mode on those user_threshold series
+	// (pkg/config/custom_alert.go), so they are not the #731 empty-set class. The
+	// global permittedThresholdLabels set is unchanged, so platform packs still
+	// cannot introduce these labels.
 	for _, m := range vs.LabelMatchers {
-		if !permittedThresholdLabels[m.Name] {
-			t.Errorf("%s: user_threshold selector carries unexpected matcher %q — the exporter never "+
-				"emits it, so this would match an empty set in prod (the #731 failure class); selector %s",
-				where, m.Name, vs.String())
-			ok = false
+		if permittedThresholdLabels[m.Name] {
+			continue
 		}
+		if component == "custom" && customAlertPermittedLabels[m.Name] {
+			continue
+		}
+		t.Errorf("%s: user_threshold selector carries unexpected matcher %q — the exporter never "+
+			"emits it, so this would match an empty set in prod (the #731 failure class); selector %s",
+			where, m.Name, vs.String())
+		ok = false
 	}
 	// Forward-looking naming guard (ADR-024): a version belongs in a `version=`
 	// label, never baked into the metric key. A digit-leading stripped metric

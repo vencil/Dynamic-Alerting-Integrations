@@ -25,6 +25,21 @@
       "_note": "selector ordering must be deterministic: sorted by (key, op), regardless of YAML/map iteration order",
       "input": {"recipe": "threshold", "metric": "m", "op": ">=", "window": "1m", "selectors": {"zeta": "1", "alpha": "2"}},
       "recipe_id": "threshold__m__s_alpha_2__s_zeta_1__ge__w1m"
+    },
+    {
+      "_note": "grammar coverage: op omitted → default \">\" → gt (must be identical Go/Python)",
+      "input": {"recipe": "threshold", "metric": "m", "window": "1m"},
+      "recipe_id": "threshold__m__gt__w1m"
+    },
+    {
+      "_note": "grammar coverage: op \"<\" → lt",
+      "input": {"recipe": "threshold", "metric": "m", "op": "<", "window": "1m"},
+      "recipe_id": "threshold__m__lt__w1m"
+    },
+    {
+      "_note": "grammar coverage: op \"<=\" → le",
+      "input": {"recipe": "threshold", "metric": "m", "op": "<=", "window": "1m"},
+      "recipe_id": "threshold__m__le__w1m"
     }
   ]
 }

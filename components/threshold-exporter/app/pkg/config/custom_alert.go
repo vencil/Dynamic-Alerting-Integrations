@@ -1,0 +1,290 @@
+package config
+
+// Custom Alerts data-plane emission (ADR-024 能力 B, #741 S3a).
+//
+// A tenant declares `_custom_alerts` (a list) in conf.d; the directory scanner
+// stores the list as a YAML string in ScheduledValue.Default (parse.go). Here we
+// re-parse it and emit one user_threshold series per declaration:
+//
+//	user_threshold{component="custom", metric=<metric>, severity=<sev>,
+//	               recipe_id=<slug>, name=<name>, mode=<page|silent>} = <value>
+//
+// The compiled rule pack (S1+S2) joins exactly this shape. recipe_id is the
+// SHAPE slug — it must be byte-identical to the Python compiler's
+// scripts/tools/dx/custom_alerts/shape.py::recipe_id (cross-language contract,
+// pinned by tests/dx/fixtures/recipe_id_vectors.json). Any change to the slug
+// algorithm MUST update Go + Python + the golden vector in the same PR, or every
+// on(tenant) group_left join silently matches the empty set (the #731 class).
+
+import (
+	"errors"
+	"fmt"
+	"log"
+	"math"
+	"regexp"
+	"sort"
+	"strconv"
+	"strings"
+
+	"gopkg.in/yaml.v3"
+)
+
+// errCustomAlertDisabled signals a `threshold: "disable"` three-state opt-out:
+// the entry is valid but emits no series (not a parse error → no error gauge).
+var errCustomAlertDisabled = errors.New("custom alert disabled")
+
+// logCustomAlertError surfaces a malformed custom-alert at ERROR (paired with
+// the da_custom_alert_parse_errors gauge so a silent skip is observable).
+func logCustomAlertError(tenant, name string, err error) {
+	log.Printf("ERROR: tenant=%s: custom alert %q rejected: %v", tenant, name, err)
+}
+
+// flexStr accepts a YAML scalar that may be quoted-string OR bare number and
+// stores its raw textual form — so `quantile: 0.99` and `quantile: "0.99"` both
+// yield "0.99", matching Python's str(quantile) in the slug contract.
+type flexStr string
+
+func (f *flexStr) UnmarshalYAML(n *yaml.Node) error {
+	*f = flexStr(n.Value)
+	return nil
+}
+
+// CustomAlertSpec is one tenant-authored custom alert declaration. Field set +
+// yaml tags mirror docs/schemas/tenant-config.schema.json customAlertInstance.
+type CustomAlertSpec struct {
+	Recipe            string            `yaml:"recipe"`
+	Name              string            `yaml:"name"`
+	Metric            string            `yaml:"metric"`
+	Op                string            `yaml:"op"`
+	Window            string            `yaml:"window"`
+	Threshold         string            `yaml:"threshold"`
+	Quantile          flexStr           `yaml:"quantile"`
+	DenominatorMetric string            `yaml:"denominator_metric"`
+	Selectors         map[string]string `yaml:"selectors"`
+	SelectorsRe       map[string]string `yaml:"selectors_re"`
+	Mode              string            `yaml:"mode"`
+	For               string            `yaml:"for"`
+}
+
+var (
+	customAlertRecipes = map[string]bool{
+		"threshold": true, "rate": true, "ratio": true, "absence": true, "p99_latency": true,
+	}
+	// op → slug. Keep in sync with shape.py OP_SLUG.
+	customAlertOpSlug = map[string]string{">": "gt", ">=": "ge", "<": "lt", "<=": "le"}
+	// metric/label name charset (no colon → cannot reference recording rules;
+	// no braces/operators → PromQL injection structurally impossible). Mirrors
+	// shape.py _METRIC_RE / _LABEL_RE.
+	customAlertNameRe = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
+	// non-identifier chars → '_' (deterministic, locale-free). Mirrors _sanitise.
+	customAlertSanitiseRe = regexp.MustCompile(`[^a-zA-Z0-9_]`)
+	// reserved labels a tenant may not pin as a selector (would hijack the
+	// vectorisation join keys / platform dimensions). Mirrors RESERVED_LABELS.
+	customAlertReservedLabels = map[string]bool{
+		"tenant": true, "version": true, "__name__": true, "severity": true,
+		"recipe": true, "recipe_id": true, "name": true, "mode": true,
+	}
+)
+
+func customAlertSanitise(s string) string {
+	return customAlertSanitiseRe.ReplaceAllString(s, "_")
+}
+
+func validateCustomAlertMetric(metric, field string) error {
+	if !customAlertNameRe.MatchString(metric) {
+		return fmt.Errorf("%s %q is not a bare metric name (^[a-zA-Z_][a-zA-Z0-9_]*$); "+
+			"label filtering must use selectors/selectors_re, never inline PromQL", field, metric)
+	}
+	return nil
+}
+
+type selectorItem struct {
+	op, key, value string // op is "=" (selectors) or "=~" (selectors_re)
+}
+
+// selectorItems returns the validated (op,key,value) triples sorted by (key, op)
+// — deterministic, independent of map iteration order (cross-language slug
+// contract). Mirrors shape.py _selector_items.
+func selectorItems(spec CustomAlertSpec) ([]selectorItem, error) {
+	var items []selectorItem
+	for k, v := range spec.Selectors {
+		items = append(items, selectorItem{"=", k, v})
+	}
+	for k, v := range spec.SelectorsRe {
+		items = append(items, selectorItem{"=~", k, v})
+	}
+	for _, it := range items {
+		if !customAlertNameRe.MatchString(it.key) {
+			return nil, fmt.Errorf("selector label %q is not a valid label name", it.key)
+		}
+		if customAlertReservedLabels[it.key] {
+			return nil, fmt.Errorf("selector label %q is reserved and may not be pinned", it.key)
+		}
+	}
+	sort.SliceStable(items, func(i, j int) bool {
+		if items[i].key != items[j].key {
+			return items[i].key < items[j].key
+		}
+		return items[i].op < items[j].op
+	})
+	return items, nil
+}
+
+// RecipeID computes the deterministic shape slug. MUST stay byte-identical to
+// scripts/tools/dx/custom_alerts/shape.py::recipe_id (golden vector test).
+func RecipeID(spec CustomAlertSpec) (string, error) {
+	if !customAlertRecipes[spec.Recipe] {
+		return "", fmt.Errorf("unknown recipe %q", spec.Recipe)
+	}
+	if err := validateCustomAlertMetric(spec.Metric, "metric"); err != nil {
+		return "", err
+	}
+	items, err := selectorItems(spec)
+	if err != nil {
+		return "", err
+	}
+
+	parts := []string{spec.Recipe, spec.Metric}
+	for _, it := range items {
+		prefix := "s"
+		if it.op == "=~" {
+			prefix = "sre"
+		}
+		parts = append(parts, prefix+"_"+it.key+"_"+it.value)
+	}
+	if spec.Recipe == "absence" {
+		parts = append(parts, "absent")
+	} else {
+		op := spec.Op
+		if op == "" {
+			op = ">"
+		}
+		slug, ok := customAlertOpSlug[op]
+		if !ok {
+			return "", fmt.Errorf("unknown op %q", op)
+		}
+		parts = append(parts, slug)
+	}
+	parts = append(parts, "w"+spec.Window)
+	if spec.Recipe == "p99_latency" {
+		q := string(spec.Quantile)
+		if q == "" {
+			q = "0.99"
+		}
+		parts = append(parts, "q"+q)
+	}
+	if spec.Recipe == "ratio" {
+		if err := validateCustomAlertMetric(spec.DenominatorMetric, "denominator_metric"); err != nil {
+			return "", err
+		}
+		parts = append(parts, "den_"+spec.DenominatorMetric)
+	}
+	return customAlertSanitise(strings.Join(parts, "__")), nil
+}
+
+// parseCustomAlertThreshold splits "value[:severity]" → (value, severity).
+// severity defaults to "warning"; mirrors shape.py parse_threshold.
+func parseCustomAlertThreshold(threshold string) (value, severity string, err error) {
+	raw := strings.TrimSpace(threshold)
+	if i := strings.LastIndex(raw, ":"); i >= 0 {
+		value = strings.TrimSpace(raw[:i])
+		severity = strings.ToLower(strings.TrimSpace(raw[i+1:]))
+	} else {
+		value, severity = raw, "warning"
+	}
+	if severity != "warning" && severity != "critical" {
+		return "", "", fmt.Errorf("threshold severity %q must be warning or critical", severity)
+	}
+	return value, severity, nil
+}
+
+// resolveOneCustomAlert validates one spec and builds its user_threshold-bearing
+// ResolvedThreshold (component="custom"). No version label is set: the rule's
+// normalize layer fills empty version → "default" (no-version main path).
+func resolveOneCustomAlert(tenant string, spec CustomAlertSpec) (ResolvedThreshold, error) {
+	if spec.Recipe == "" || spec.Name == "" || spec.Metric == "" || spec.Window == "" || spec.Threshold == "" {
+		return ResolvedThreshold{}, fmt.Errorf("missing required field (recipe/name/metric/window/threshold)")
+	}
+	if !customAlertNameRe.MatchString(spec.Name) {
+		return ResolvedThreshold{}, fmt.Errorf("name %q is not a valid identifier", spec.Name)
+	}
+	rid, err := RecipeID(spec)
+	if err != nil {
+		return ResolvedThreshold{}, err
+	}
+	valueStr, severity, err := parseCustomAlertThreshold(spec.Threshold)
+	if err != nil {
+		return ResolvedThreshold{}, err
+	}
+	// Three-state: `threshold: "disable"` (schema-valid thresholdScalar) turns the
+	// custom alert OFF by emitting NO user_threshold series — the vectorized rule
+	// then simply doesn't fire for this tenant (others sharing the shape are
+	// unaffected). This is a clean opt-out, NOT a parse error, so it must not
+	// raise da_custom_alert_parse_errors. (Same "absent = disabled" semantics as
+	// regular numeric thresholds.)
+	if isDisabled(strings.ToLower(strings.TrimSpace(valueStr))) {
+		return ResolvedThreshold{}, errCustomAlertDisabled
+	}
+	value, err := strconv.ParseFloat(valueStr, 64)
+	if err != nil {
+		return ResolvedThreshold{}, fmt.Errorf("threshold value %q is not numeric: %w", valueStr, err)
+	}
+	// ParseFloat accepts "NaN"/"Inf" — reject them: a non-finite threshold would
+	// emit a nonsensical comparison series (e.g. `metric > NaN` never fires).
+	if math.IsNaN(value) || math.IsInf(value, 0) {
+		return ResolvedThreshold{}, fmt.Errorf("threshold value %q must be finite", valueStr)
+	}
+	mode := spec.Mode
+	if mode == "" {
+		mode = "page"
+	}
+	// reject unsupported mode (typo): only page|silent ride the data plane; an
+	// unknown value would surface a bogus mode label that S8 routing can't handle.
+	if mode != "page" && mode != "silent" {
+		return ResolvedThreshold{}, fmt.Errorf("mode %q must be page or silent", mode)
+	}
+	return ResolvedThreshold{
+		Tenant:    tenant,
+		Metric:    spec.Metric,
+		Component: "custom",
+		Value:     value,
+		Severity:  severity,
+		CustomLabels: map[string]string{
+			"recipe_id": rid,
+			"name":      spec.Name,
+			"mode":      mode,
+		},
+	}, nil
+}
+
+// resolveTenantCustomAlerts re-parses a tenant's _custom_alerts YAML string and
+// returns the resolved user_threshold rows plus the count of malformed entries
+// (for the da_custom_alert_parse_errors gauge — fail-loud, never silent-skip).
+func resolveTenantCustomAlerts(tenant string, overrides map[string]ScheduledValue) ([]ResolvedThreshold, int) {
+	sv, ok := overrides["_custom_alerts"]
+	if !ok || strings.TrimSpace(sv.Default) == "" {
+		return nil, 0
+	}
+	var specs []CustomAlertSpec
+	if err := yaml.Unmarshal([]byte(sv.Default), &specs); err != nil {
+		// whole block unparseable → count as 1 error; the tenant gets NO custom
+		// alerts but the rest of its config is unaffected.
+		logCustomAlertError(tenant, "<block>", fmt.Errorf("cannot parse _custom_alerts: %w", err))
+		return nil, 1
+	}
+	var out []ResolvedThreshold
+	errCount := 0
+	for _, spec := range specs {
+		rt, err := resolveOneCustomAlert(tenant, spec)
+		if errors.Is(err, errCustomAlertDisabled) {
+			continue // three-state opt-out: no series, NOT an error
+		}
+		if err != nil {
+			logCustomAlertError(tenant, spec.Name, err)
+			errCount++
+			continue
+		}
+		out = append(out, rt)
+	}
+	return out, errCount
+}

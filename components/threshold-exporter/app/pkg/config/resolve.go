@@ -48,6 +48,9 @@ var pilotVersionMetrics = map[string]bool{
 // removed tenants' previous gauge entries are evicted.
 type ResolveStats struct {
 	PerTenantOverLimit map[string]int
+	// #741 S3a: per-tenant count of malformed _custom_alerts entries
+	// (dropped). Drives the da_custom_alert_parse_errors gauge.
+	PerTenantCustomAlertErrors map[string]int
 }
 
 // Resolve applies three-state logic using the current time.
@@ -102,6 +105,10 @@ func (c *ThresholdConfig) ResolveAtWithStats(now time.Time) ([]ResolvedThreshold
 	// tenant — compliant tenants get 0 so the collector's Reset+Set loop
 	// clears stale gauges for tenants that just dropped back below the cap.
 	perTenantOverLimit := make(map[string]int, len(c.Tenants))
+	// #741 S3a: per-tenant malformed _custom_alerts count for the
+	// da_custom_alert_parse_errors gauge (fail-loud — a bad declaration is
+	// dropped but never silent: the gauge surfaces it for an operational alert).
+	perTenantCustomAlertErrors := make(map[string]int, len(c.Tenants))
 
 	for tenant, overrides := range c.Tenants {
 		startIdx := len(result) // track where this tenant's metrics start
@@ -249,6 +256,17 @@ func (c *ThresholdConfig) ResolveAtWithStats(now time.Time) ([]ResolvedThreshold
 			})
 		}
 
+		// #741 S3a: tenant-authored custom alerts → user_threshold{component="custom",
+		// recipe_id,name,mode}. Appended into this tenant's segment BEFORE the
+		// cardinality guard so they count toward the cap and truncate
+		// deterministically alongside regular thresholds (truncationSortKey folds
+		// CustomLabels via canonicalLabelKey, so recipe_id/name/mode keep the
+		// ordering total + stable). Malformed entries are dropped + counted.
+		if caRows, caErrs := resolveTenantCustomAlerts(tenant, overrides); len(caRows) > 0 || caErrs > 0 {
+			result = append(result, caRows...)
+			perTenantCustomAlertErrors[tenant] = caErrs
+		}
+
 		// Cardinality guard: enforce per-tenant metric limit (v1.5.0)
 		count := len(result) - startIdx
 		tenantCount[tenant] = count
@@ -282,7 +300,10 @@ func (c *ThresholdConfig) ResolveAtWithStats(now time.Time) ([]ResolvedThreshold
 		perTenantOverLimit[tenant] = overflow
 	}
 
-	return result, ResolveStats{PerTenantOverLimit: perTenantOverLimit}
+	return result, ResolveStats{
+		PerTenantOverLimit:         perTenantOverLimit,
+		PerTenantCustomAlertErrors: perTenantCustomAlertErrors,
+	}
 }
 
 // truncationSortKey produces a deterministic ordering key for one tenant's
