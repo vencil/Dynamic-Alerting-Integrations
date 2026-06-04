@@ -20,7 +20,7 @@ tests:
       # shop-a: 5xx POST rate ≈ 66.7 > 50, mode=page
       - series: 'http_requests_total{tenant="shop-a", method="POST", status="500", namespace="shop", pod="api-1"}'
         values: '0+1000x48'
-      - series: 'user_threshold{component="custom", metric="http_requests_total", recipe_id="rate__http_requests_total__s_method_POST__sre_status_5____gt__w5m", tenant="shop-a", severity="warning", name="http_5xx_spike", mode="page"}'
+      - series: 'user_threshold{component="custom", metric="http_requests_total", recipe_id="rate__http_requests_total__s_method_POST__sre_status_5____gt__w5m__for1m", tenant="shop-a", severity="warning", name="http_5xx_spike", mode="page"}'
         values: '50x48'
       - series: 'tenant_metadata_info{tenant="shop-a", runbook_url="http://rb/shop", owner="team-shop", tier="gold"}'
         values: '1x48'
@@ -28,13 +28,13 @@ tests:
       # the vectorized rule still covers it because it has the user_threshold series)
       - series: 'http_requests_total{tenant="web-b", method="POST", status="500", namespace="web", pod="srv-9"}'
         values: '0+1000x48'
-      - series: 'user_threshold{component="custom", metric="http_requests_total", recipe_id="rate__http_requests_total__s_method_POST__sre_status_5____gt__w5m", tenant="web-b", severity="warning", name="web_5xx", mode="silent"}'
+      - series: 'user_threshold{component="custom", metric="http_requests_total", recipe_id="rate__http_requests_total__s_method_POST__sre_status_5____gt__w5m__for1m", tenant="web-b", severity="warning", name="web_5xx", mode="silent"}'
         values: '50x48'
       - series: 'tenant_metadata_info{tenant="web-b", runbook_url="http://rb/web", owner="team-web", tier="silver"}'
         values: '1x48'
     alert_rule_test:
       - eval_time: 11m
-        alertname: Custom_rate__http_requests_total__s_method_POST__sre_status_5____gt__w5m
+        alertname: Custom_rate__http_requests_total__s_method_POST__sre_status_5____gt__w5m__for1m
         exp_alerts:
           # shop-a → mode=page (would route to the pager)
           - exp_labels:

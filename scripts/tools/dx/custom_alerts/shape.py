@@ -13,10 +13,12 @@ golden vector both implementations assert against).
 
 recipe_id grammar (parts joined by `__`, each part sanitised to [a-z0-9_]):
     {recipe}__{metric}[__{sorted selector parts}]__{op_slug}__w{window}
-             [__q{quantile}][__den_{denominator_metric}]
+             [__q{quantile}][__den_{denominator_metric}]__for{for}
   selector part (exact):  s_{key}_{value}
   selector part (regex):  sre_{key}_{value}
   op_slug: >→gt  >=→ge  <→lt  <=→le  (absence → "absent")
+  for: pending-duration; part of rule identity (control-plane static attr,
+       TRK-326) — always emitted, enum-bounded in schema. Default "1m".
 Sanitisation maps every char outside [a-zA-Z0-9_] to '_' (deterministic, and keeps
 the slug valid as a Prometheus recording-rule name component).
 """
@@ -144,6 +146,17 @@ def recipe_id(inst: dict) -> str:
         validate_metric_name(den, "denominator_metric")
         parts.append("den_" + den)
 
+    # `for` is part of the rule identity, NOT just a per-instance attribute:
+    # Prometheus `for:` is a control-plane STATIC rule attribute (unlike `mode`,
+    # which rides the data plane via group_left). Two tenants sharing every other
+    # param but a different `for` are genuinely DIFFERENT alert rules — so `for`
+    # must enter the slug, else the vectorized rule freezes to one tenant's `for`
+    # and silently drops the others (TRK-326 / #751). Always emitted (grammar-
+    # consistent with op/window/quantile); enum-bounded in the schema so the
+    # cardinality stays a small constant per base-shape (no O(M)→O(N) blow-up).
+    # MUST stay byte-identical to custom_alert.go::RecipeID.
+    parts.append("for" + str(inst.get("for", "1m")))
+
     return _sanitise("__".join(parts))
 
 
@@ -163,6 +176,8 @@ def shape_signature(inst: dict) -> Tuple:
         str(inst.get("window", "")),
         str(inst.get("quantile", "0.99")) if inst["recipe"] == "p99_latency" else None,
         tuple(_selector_items(inst)),
+        # `for` distinguishes shapes (control-plane static attr; see recipe_id).
+        str(inst.get("for", "1m")),
     )
 
 

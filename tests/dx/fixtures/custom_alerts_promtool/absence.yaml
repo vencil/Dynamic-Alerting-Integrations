@@ -18,7 +18,7 @@ tests:
   #    must NOT fire (scope isolation).
   - interval: 15s
     input_series:
-      - series: 'user_threshold{component="custom", metric="app_heartbeat_total", recipe_id="absence__app_heartbeat_total__absent__w10m", tenant="shop-a", severity="critical", name="heartbeat_gone"}'
+      - series: 'user_threshold{component="custom", metric="app_heartbeat_total", recipe_id="absence__app_heartbeat_total__absent__w10m__for1m", tenant="shop-a", severity="critical", name="heartbeat_gone"}'
         values: '0x60'
       - series: 'tenant_metadata_info{tenant="shop-a", runbook_url="http://rb/shop", owner="team-shop", tier="gold"}'
         values: '1x60'
@@ -27,7 +27,7 @@ tests:
         values: '1x60'
     alert_rule_test:
       - eval_time: 14m
-        alertname: Custom_absence__app_heartbeat_total__absent__w10m
+        alertname: Custom_absence__app_heartbeat_total__absent__w10m__for1m
         exp_alerts:
           - exp_labels:
               severity: critical
@@ -50,7 +50,7 @@ tests:
   # ── heartbeat PRESENT (counter ticking) → no fire ──
   - interval: 15s
     input_series:
-      - series: 'user_threshold{component="custom", metric="app_heartbeat_total", recipe_id="absence__app_heartbeat_total__absent__w10m", tenant="shop-a", severity="critical", name="heartbeat_gone"}'
+      - series: 'user_threshold{component="custom", metric="app_heartbeat_total", recipe_id="absence__app_heartbeat_total__absent__w10m__for1m", tenant="shop-a", severity="critical", name="heartbeat_gone"}'
         values: '0x60'
       - series: 'app_heartbeat_total{tenant="shop-a", namespace="shop", pod="api-7c9-x"}'
         values: '0+1x60'
@@ -58,5 +58,5 @@ tests:
         values: '1x60'
     alert_rule_test:
       - eval_time: 14m
-        alertname: Custom_absence__app_heartbeat_total__absent__w10m
+        alertname: Custom_absence__app_heartbeat_total__absent__w10m__for1m
         exp_alerts: []

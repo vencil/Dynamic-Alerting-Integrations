@@ -167,6 +167,39 @@ def test_two_same_severity_same_shape_rejected(tmp_path):
         ld.build_shapes(tmp_path)
 
 
+def test_for_divergence_produces_distinct_shapes(tmp_path):
+    # TRK-326 regression: two tenants share recipe/metric/op/window but set a
+    # DIFFERENT `for`. Pre-fix, `for` was absent from recipe_id/shape_signature
+    # and build_shapes froze the FIRST-seen `for`, silently dropping the other's.
+    # Now `for` is in the slug → two distinct shapes, each tenant keeps its `for`.
+    _write_tree(tmp_path, {
+        "a.yaml": 'tenants:\n  ta:\n    _custom_alerts:\n'
+                  '      - {recipe: threshold, name: fast, metric: m, op: ">", window: 5m, threshold: "1:warning", for: 1m}\n',
+        "b.yaml": 'tenants:\n  tb:\n    _custom_alerts:\n'
+                  '      - {recipe: threshold, name: slow, metric: m, op: ">", window: 5m, threshold: "1:warning", for: 15m}\n',
+    })
+    shapes, _ = ld.build_shapes(tmp_path)
+    rids = sorted(s["recipe_id"] for s in shapes)
+    assert len(rids) == 2, f"expected 2 distinct shapes (different for), got {rids}"
+    assert any(r.endswith("__for1m") for r in rids)
+    assert any(r.endswith("__for15m") for r in rids)
+    assert {s["for"] for s in shapes} == {"1m", "15m"}  # each rule keeps its own for
+
+
+def test_same_for_still_vectorizes_one_shape(tmp_path):
+    # O(M) preserved: two tenants with the SAME for + shape → still ONE rule
+    # (enum-bounding `for` caps the per-base-shape fan-out at a small constant).
+    _write_tree(tmp_path, {
+        "a.yaml": 'tenants:\n  ta:\n    _custom_alerts:\n'
+                  '      - {recipe: threshold, name: x, metric: m, op: ">", window: 5m, threshold: "1:warning", for: 5m}\n',
+        "b.yaml": 'tenants:\n  tb:\n    _custom_alerts:\n'
+                  '      - {recipe: threshold, name: y, metric: m, op: ">", window: 5m, threshold: "1:warning", for: 5m}\n',
+    })
+    shapes, _ = ld.build_shapes(tmp_path)
+    assert len(shapes) == 1, "same for + shape must vectorize to ONE rule (O(M))"
+    assert shapes[0]["recipe_id"].endswith("__for5m")
+
+
 # --- 6. scope inheritance + cap count --------------------------------------
 def test_domain_and_platform_inheritance(tmp_path):
     _write_tree(tmp_path, {

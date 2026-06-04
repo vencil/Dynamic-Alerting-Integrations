@@ -21,13 +21,13 @@ tests:
         values: '0+100x48'
       - series: 'http_request_duration_seconds_bucket{tenant="shop-a", le="+Inf", namespace="shop", pod="api-1"}'
         values: '0+100x48'
-      - series: 'user_threshold{component="custom", metric="http_request_duration_seconds", recipe_id="p99_latency__http_request_duration_seconds__gt__w5m__q0_99", tenant="shop-a", severity="warning", name="api_latency_p99"}'
+      - series: 'user_threshold{component="custom", metric="http_request_duration_seconds", recipe_id="p99_latency__http_request_duration_seconds__gt__w5m__q0_99__for1m", tenant="shop-a", severity="warning", name="api_latency_p99"}'
         values: '2x48'
       - series: 'tenant_metadata_info{tenant="shop-a", runbook_url="http://rb/shop", owner="team-shop", tier="gold"}'
         values: '1x48'
     alert_rule_test:
       - eval_time: 11m
-        alertname: Custom_p99_latency__http_request_duration_seconds__gt__w5m__q0_99
+        alertname: Custom_p99_latency__http_request_duration_seconds__gt__w5m__q0_99__for1m
         exp_alerts:
           - exp_labels:
               severity: warning

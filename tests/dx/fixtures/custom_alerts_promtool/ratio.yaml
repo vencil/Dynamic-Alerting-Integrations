@@ -18,13 +18,13 @@ tests:
         values: '0+1000x48'
       - series: 'http_requests_total{tenant="shop-a", namespace="shop", pod="api-1"}'
         values: '0+10000x48'
-      - series: 'user_threshold{component="custom", metric="http_errors_total", recipe_id="ratio__http_errors_total__gt__w5m__den_http_requests_total", tenant="shop-a", severity="critical", name="error_ratio_high"}'
+      - series: 'user_threshold{component="custom", metric="http_errors_total", recipe_id="ratio__http_errors_total__gt__w5m__den_http_requests_total__for1m", tenant="shop-a", severity="critical", name="error_ratio_high"}'
         values: '0.05x48'
       - series: 'tenant_metadata_info{tenant="shop-a", runbook_url="http://rb/shop", owner="team-shop", tier="gold"}'
         values: '1x48'
     alert_rule_test:
       - eval_time: 11m
-        alertname: Custom_ratio__http_errors_total__gt__w5m__den_http_requests_total
+        alertname: Custom_ratio__http_errors_total__gt__w5m__den_http_requests_total__for1m
         exp_alerts:
           - exp_labels:
               severity: critical
@@ -51,13 +51,13 @@ tests:
         values: '0+1000x48'
       - series: 'http_requests_total{tenant="shop-a", namespace="shop", pod="api-1"}'
         values: '5000x48'
-      - series: 'user_threshold{component="custom", metric="http_errors_total", recipe_id="ratio__http_errors_total__gt__w5m__den_http_requests_total", tenant="shop-a", severity="critical", name="error_ratio_high"}'
+      - series: 'user_threshold{component="custom", metric="http_errors_total", recipe_id="ratio__http_errors_total__gt__w5m__den_http_requests_total__for1m", tenant="shop-a", severity="critical", name="error_ratio_high"}'
         values: '0.05x48'
       - series: 'tenant_metadata_info{tenant="shop-a", runbook_url="http://rb/shop", owner="team-shop", tier="gold"}'
         values: '1x48'
     alert_rule_test:
       - eval_time: 11m
-        alertname: Custom_ratio__http_errors_total__gt__w5m__den_http_requests_total
+        alertname: Custom_ratio__http_errors_total__gt__w5m__den_http_requests_total__for1m
         exp_alerts: []
 
   # ── both FLAT (0/0) → no fire ──
@@ -67,11 +67,11 @@ tests:
         values: '7x48'
       - series: 'http_requests_total{tenant="shop-a", namespace="shop", pod="api-1"}'
         values: '5000x48'
-      - series: 'user_threshold{component="custom", metric="http_errors_total", recipe_id="ratio__http_errors_total__gt__w5m__den_http_requests_total", tenant="shop-a", severity="critical", name="error_ratio_high"}'
+      - series: 'user_threshold{component="custom", metric="http_errors_total", recipe_id="ratio__http_errors_total__gt__w5m__den_http_requests_total__for1m", tenant="shop-a", severity="critical", name="error_ratio_high"}'
         values: '0.05x48'
       - series: 'tenant_metadata_info{tenant="shop-a", runbook_url="http://rb/shop", owner="team-shop", tier="gold"}'
         values: '1x48'
     alert_rule_test:
       - eval_time: 11m
-        alertname: Custom_ratio__http_errors_total__gt__w5m__den_http_requests_total
+        alertname: Custom_ratio__http_errors_total__gt__w5m__den_http_requests_total__for1m
         exp_alerts: []
