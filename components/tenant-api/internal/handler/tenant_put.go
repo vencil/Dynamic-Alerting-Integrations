@@ -134,6 +134,14 @@ func PutTenant(d *Deps) http.HandlerFunc {
 			// Create feature branch + commit
 			result, err := d.Writer.WritePR(tenantID, email, string(body))
 			if err != nil {
+				// TRK-318: the in-lock base fetch timed out → forge degraded, write
+				// lock already released. Return a retry-hinting 503 (not a 500) with a
+				// machine-actionable Retry-After; don't leak the internal git error —
+				// the write never touched a stale base, so a retry is safe and correct.
+				if errors.Is(err, gitops.ErrForgeDegraded) {
+					writeForgeDegraded(rw, r)
+					return
+				}
 				WriteJSONError(rw, r, http.StatusInternalServerError, "PR write failed: "+err.Error())
 				return
 			}

@@ -32,6 +32,14 @@ var ErrConflict = errors.New("conflict: repository was updated concurrently, ple
 // ErrPendingPR is returned when a tenant already has a pending PR (PR mode only).
 var ErrPendingPR = errors.New("pending PR exists for this tenant")
 
+// ErrForgeDegraded is returned when the in-lock base fetch (TRK-318) exceeds
+// TA_GIT_FETCH_TIMEOUT — the forge is unreachable or too slow to refresh the
+// local base. The writer mutex is released as the caller returns and the
+// handler maps this to a 503 so the client retries, rather than the write
+// silently proceeding from a STALE base (which would risk rolling back a shared
+// file another tenant already merged remotely — the whole TRK-318 hazard).
+var ErrForgeDegraded = errors.New("forge degradation: base fetch timed out — write lock released")
+
 // OnWriteFunc is called after a successful config write.
 // tenantID is the tenant or entity that was written (tenant ID, "groups", "views", etc.)
 type OnWriteFunc func(tenantID string)
@@ -55,6 +63,14 @@ const defaultGitTimeout = 60 * time.Second
 // WaitDelay guarantees Wait returns shortly after the deadline regardless.
 const defaultGitKillGrace = 5 * time.Second
 
+// defaultGitFetchTimeout bounds the in-lock base fetch (TRK-318) that anchors
+// each PR write on the freshest origin/<base> before branching. It is SEPARATE
+// from (and far more aggressive than) defaultGitTimeout: the fetch runs inside
+// the global writer mutex, so a degraded forge must surface as a fast 503 and
+// release the lock in seconds — not hold every tenant's writes for the full 60s
+// regular git timeout. Override via TA_GIT_FETCH_TIMEOUT (a Go duration).
+const defaultGitFetchTimeout = 5 * time.Second
+
 // Writer handles GitOps write-back operations.
 type Writer struct {
 	mu             sync.Mutex
@@ -67,6 +83,7 @@ type Writer struct {
 	gitWaitDelay   time.Duration // cmd.WaitDelay grace after a deadline kill (#630); 0 → defaultGitKillGrace
 	gitBinary      string        // git executable; "git" in prod, overridden in tests (timeout seam)
 	baseBranch     string        // PR-mode base to branch from / return to (#638); "" → defaultBaseBranch
+	fetchTimeout   time.Duration // in-lock base fetch deadline (TRK-318); 0 → defaultGitFetchTimeout
 }
 
 // defaultBaseBranch is the PR-mode base branch when none is configured (#638).
@@ -85,6 +102,7 @@ func NewWriter(configDir, gitDir string) *Writer {
 		committerName:  os.Getenv("GIT_COMMITTER_NAME"),
 		committerEmail: os.Getenv("GIT_COMMITTER_EMAIL"),
 		gitTimeout:     gitTimeoutFromEnv(),
+		fetchTimeout:   fetchTimeoutFromEnv(),
 		gitBinary:      "git",
 	}
 }
@@ -102,6 +120,27 @@ func gitTimeoutFromEnv() time.Duration {
 		slog.Warn("gitops: invalid TENANT_API_GIT_TIMEOUT — using default",
 			"value", v, "default", defaultGitTimeout, "error", err)
 		return defaultGitTimeout
+	}
+	return d
+}
+
+// fetchTimeoutFromEnv reads TA_GIT_FETCH_TIMEOUT as a Go duration, falling back
+// to defaultGitFetchTimeout when unset, unparseable, or non-positive. Kept
+// DELIBERATELY independent of TENANT_API_GIT_TIMEOUT (TRK-318 / ADR-023 §B): the
+// in-lock fetch needs an aggressive, separately-tuned deadline so a degraded
+// forge fast-fails to 503 instead of pinning the global write lock for the much
+// longer regular git timeout. The clamp keeps a fat-fingered "0"/"-5s" from
+// disabling the fail-loud safety net (which would re-admit the stale-base hazard).
+func fetchTimeoutFromEnv() time.Duration {
+	v := os.Getenv("TA_GIT_FETCH_TIMEOUT")
+	if v == "" {
+		return defaultGitFetchTimeout
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil || d <= 0 {
+		slog.Warn("gitops: invalid TA_GIT_FETCH_TIMEOUT — using default",
+			"value", v, "default", defaultGitFetchTimeout, "error", err)
+		return defaultGitFetchTimeout
 	}
 	return d
 }
@@ -148,6 +187,96 @@ func (w *Writer) checkoutBaseClean(base string) error {
 		return fmt.Errorf("checkout base %q: %w", base, err)
 	}
 	return nil
+}
+
+// resolveFreshBaseRef fetches origin/<base> (in-lock, TRK-318) and returns the
+// ref the new PR branch should be CUT FROM: "origin/<base>" once the fetch has
+// populated it, else the local <base> as a best-effort fallback. The caller MUST
+// already be on a clean base (via checkoutBaseClean) and MUST hold w.mu.
+//
+// WHY this exists: the local base ref is only synced at pod startup by the
+// git-clone initContainer. A long-lived pod's base therefore STALLS after a
+// remote merge — so a later PR branched from it silently rolls back a shared
+// file (_groups.yaml / _views.yaml / _federation_policy.yaml) that another
+// tenant already merged. Fetching here, inside the lock and immediately before
+// branching, closes that window atomically (B1, not the TOCTOU-prone lock-outside
+// B2 — ADR-023 §B).
+//
+// WHY return a ref instead of `reset --hard origin/<base>`: a hard reset would
+// move the LOCAL base ref and revert the working tree — silently discarding any
+// commit made directly on the local base. The special-file writes
+// (WriteGroupsFile / WriteViewsFile / WriteFederationPolicyFile) commit straight
+// to the current branch via commitFileChange even in PR mode, so they CAN leave
+// such local-base commits. Branching the new feature branch from origin/<base>
+// gets the same fresh anchor without touching the local base or its working tree.
+//
+// Failure semantics:
+//   - No origin remote (dev/local, unit tests): nothing to be stale against, the
+//     local base IS the source of truth → return the local base, no fetch.
+//   - Fetch TIMEOUT: forge degradation → return ErrForgeDegraded so the caller
+//     releases the lock and the handler returns 503. NEVER proceed on a stale base.
+//   - Fetch non-timeout error (origin/<base> not pushed yet, transient remote
+//     blip): the hazard TRK-318 guards is the never-fetches case; a one-off error
+//     self-corrects on the next write, so warn and fall back to the local base
+//     rather than bricking every write on a flaky remote.
+func (w *Writer) resolveFreshBaseRef(base string) (string, error) {
+	if !w.hasOriginRemote() {
+		return base, nil
+	}
+	if err := w.fetchOriginBase(base); err != nil {
+		return "", err // ErrForgeDegraded on timeout (only hard-fail path)
+	}
+	// Branch from the freshest remote-tracking ref when it exists; otherwise
+	// (freshly-init'd bare remote with nothing pushed) fall back to local base.
+	if w.originRefExists(base) {
+		return "origin/" + base, nil
+	}
+	return base, nil
+}
+
+// fetchOriginBase runs `git fetch --prune origin <base>` bounded by the SEPARATE
+// fetchTimeout (TRK-318). A deadline kill is the forge-degradation signal: sweep
+// any locks the SIGKILL'd fetch left and return ErrForgeDegraded (fail loud). A
+// non-deadline error is logged and swallowed (proceed on local base).
+func (w *Writer) fetchOriginBase(base string) error {
+	timeout := w.fetchTimeout
+	if timeout <= 0 {
+		timeout = defaultGitFetchTimeout
+	}
+	cmd, ctx, cancel := w.gitCmdWithTimeout(timeout, "-C", w.gitDir, "fetch", "--prune", "origin", base)
+	defer cancel()
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		return nil
+	}
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		// SIGKILL'd fetch leaves no signal cleanup; clear stale locks so the
+		// released mutex hands the next write a clean repo (mirrors gitErr's #638
+		// self-heal). Then fail loud — the caller turns this into a 503.
+		w.clearStaleGitLocks()
+		slog.Warn("gitops: base fetch timed out — write lock released (TRK-318)",
+			"base", base, "timeout", timeout)
+		return fmt.Errorf("git fetch origin %s timed out after %s: %w", base, timeout, ErrForgeDegraded)
+	}
+	slog.Warn("gitops: base fetch failed — proceeding on local base (TRK-318)",
+		"base", base, "error", err, "output", strings.TrimSpace(string(out)))
+	return nil
+}
+
+// hasOriginRemote reports whether an "origin" remote is configured. Used to skip
+// the base fetch in dev/local/unit-test setups that have no forge.
+func (w *Writer) hasOriginRemote() bool {
+	cmd, _, cancel := w.gitCmd("-C", w.gitDir, "remote", "get-url", "origin")
+	defer cancel()
+	return cmd.Run() == nil
+}
+
+// originRefExists reports whether the remote-tracking ref refs/remotes/origin/<base>
+// exists locally (i.e. a successful fetch/clone has populated it at least once).
+func (w *Writer) originRefExists(base string) bool {
+	cmd, _, cancel := w.gitCmd("-C", w.gitDir, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/"+base)
+	defer cancel()
+	return cmd.Run() == nil
 }
 
 // Write validates, persists, and commits a tenant's config YAML.
@@ -471,7 +600,16 @@ func (w *Writer) WritePR(tenantID, authorEmail, yamlContent string) (*PRWriteRes
 	if err := w.checkoutBaseClean(base); err != nil {
 		return nil, err
 	}
-	if err := w.gitExec("checkout", "-b", branchName); err != nil {
+	// TRK-318: cut the feature branch from the freshest origin/<base>, NOT the
+	// (possibly stale) local base — a long-lived pod's local base stalls after a
+	// remote merge and would silently roll back a shared file another tenant
+	// already merged. A fetch timeout returns ErrForgeDegraded → lock released →
+	// 503 (never proceed on a stale base). See ADR-023 §B.
+	branchPoint, err := w.resolveFreshBaseRef(base)
+	if err != nil {
+		return nil, err
+	}
+	if err := w.gitExec("checkout", "-b", branchName, "--no-track", branchPoint); err != nil {
 		return nil, fmt.Errorf("create branch: %w", err)
 	}
 
@@ -560,7 +698,13 @@ func (w *Writer) WritePRBatch(ops []PRBatchOp, authorEmail string) (*PRWriteResu
 	if err := w.checkoutBaseClean(base); err != nil {
 		return nil, err
 	}
-	if err := w.gitExec("checkout", "-b", branchName); err != nil {
+	// TRK-318: cut from the freshest origin/<base>, not the stale local base
+	// (see WritePR Step 3). Fetch timeout → ErrForgeDegraded → lock released → 503.
+	branchPoint, err := w.resolveFreshBaseRef(base)
+	if err != nil {
+		return nil, err
+	}
+	if err := w.gitExec("checkout", "-b", branchName, "--no-track", branchPoint); err != nil {
 		return nil, fmt.Errorf("create branch: %w", err)
 	}
 
@@ -619,7 +763,14 @@ type PRBatchOp struct {
 // timer and kills the child if it's still running. The context is returned so
 // callers can tell a deadline kill apart from an ordinary non-zero git exit.
 func (w *Writer) gitCmd(args ...string) (*exec.Cmd, context.Context, context.CancelFunc) {
-	timeout := w.gitTimeout
+	return w.gitCmdWithTimeout(w.gitTimeout, args...)
+}
+
+// gitCmdWithTimeout is gitCmd with an explicit per-command deadline, so the
+// TRK-318 in-lock fetch can use its own aggressive TA_GIT_FETCH_TIMEOUT instead
+// of the regular git timeout. A non-positive timeout falls back to the regular
+// default (the same clamp gitCmd relied on).
+func (w *Writer) gitCmdWithTimeout(timeout time.Duration, args ...string) (*exec.Cmd, context.Context, context.CancelFunc) {
 	if timeout <= 0 {
 		timeout = defaultGitTimeout
 	}

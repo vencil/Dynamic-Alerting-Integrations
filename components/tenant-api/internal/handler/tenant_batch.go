@@ -149,6 +149,13 @@ func BatchTenants(d *Deps) http.HandlerFunc {
 
 			result, err := d.Writer.WritePRBatch(batchOps, email)
 			if err != nil {
+				// TRK-318: in-lock base fetch timed out → forge degraded, lock
+				// released. Retry-hinting 503 with Retry-After, not a 500 (the batch
+				// never wrote from a stale base, so a retry is safe).
+				if errors.Is(err, gitops.ErrForgeDegraded) {
+					writeForgeDegraded(rw, r)
+					return
+				}
 				WriteJSONError(rw, r,http.StatusInternalServerError, "PR/MR batch write failed: "+err.Error())
 				return
 			}

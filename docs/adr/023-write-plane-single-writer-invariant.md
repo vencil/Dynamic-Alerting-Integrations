@@ -100,6 +100,8 @@ flowchart TD
 
 > **依據**：外部 review 上一輪推 B2 為「最優解」，但其自身的 TOCTOU 推演恰恰**否決 B2**——正解是 B1。單寫者 + 低頻 config 寫入 + 已有 load-shedding 快速卸載，讓「持鎖期間一次有界 fetch」完全可接受；B2 的非對稱複雜度只在高併發寫入才划算，而那違反本 ADR 的單寫者前提。B1 用獨立的 `TA_GIT_FETCH_TIMEOUT`（預設 5s），**不複用** `TENANT_API_GIT_TIMEOUT`（60s 常規 git 超時），逾時強殺 → 釋放鎖 → 回 `503 Forge Degradation`。指令用 `git fetch --prune origin <base>`（base-only refspec，prune scope 僅及該分支）。
 
+> **已實作（[#671](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/671)）**：`writer.go` `resolveFreshBaseRef` 在 `checkoutBaseClean` 後、開分支前執行 `git fetch --prune origin <base>`（限時 `fetchTimeout`），回傳開分支基準 ref —— `origin/<base>`（fetch 成功且 ref 已存在）或退回本地 `<base>`；`WritePR` / `WritePRBatch` 以 `git checkout -b <branch> --no-track <ref>` 從該 ref 開分支。**刻意不用 `reset --hard origin/<base>`**：硬 reset 會移動本地 base ref 並還原工作樹，悄悄丟棄本地 base 上的 commit —— 而特殊檔寫入（`WriteGroupsFile` / `WriteViewsFile` / `WriteFederationPolicyFile` 經 `commitFileChange`）即使在 PR 模式也直接 commit 到當前分支，可能留下這種本地-base commit；只把**新分支**錨到 origin、不動本地 base 即兩全。逾時回 `ErrForgeDegraded`（handler → 503 `FORGE_UNAVAILABLE`，帶標準 `Retry-After` header + `retry_after_s` 欄位供自動化端退避，訊息 sanitized）；無 origin remote（dev/local）或 non-timeout fetch error 則 best-effort 退回本地 base（不阻擋每次寫入）。regression：(1) 遠端先 merge 一個 `_groups.yaml` 變更，驗 PR 分支挾帶之、不回滾共享檔；(2) 本地 base 上一個未 push 的 commit 經 `WritePR` 後仍存活（守住 above 的不變式）。
+
 ### §C 並發卸載與孤兒寫入（TRK-320）
 
 所有寫入序列化在單一 `w.mu`，無 in-flight 上限。突發 `PUT` 時請求全 block 在 `Lock()`；更糟的是 `sync.Mutex.Lock()` **不吃 context**——`middleware.Timeout(30s)` 讓 client 收到逾時，但卡在鎖上的 goroutine 不會被釋放，`gitCmd` 用自己的 `context.Background()`，於是 **client 早逾時了、git 寫入仍照跑**（孤兒寫入）。
@@ -137,7 +139,7 @@ flowchart TD
 ## Action Items
 
 - [ ] **ADR + `strategy: Recreate`（TRK-324 now-fix）** — 一起落地，地基（單寫者 invariant 顯性化 + 消除滾動更新交疊）。
-- [ ] **TRK-318** 鎖內 fetch（B1）+ `TA_GIT_FETCH_TIMEOUT`。前置：TRK-324 Recreate。
+- [x] **TRK-318** 鎖內 fetch（B1）+ `TA_GIT_FETCH_TIMEOUT`（[#671](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/671)）— `WritePR` / `WritePRBatch` 開分支前在臨界區內 `git fetch --prune origin <base>` 取得新鮮 ref，再從該 ref（`origin/<base>`，或無 origin / non-timeout error 時 fallback 至本地 `<base>`）以 `checkout -b --no-track` 建分支，**刻意不 `reset --hard`** 以保留本地 base 上未 push 的 commit（特殊檔直接 commit 路徑，見 §B）；逾時（`TA_GIT_FETCH_TIMEOUT`，預設 5s，獨立於 `TENANT_API_GIT_TIMEOUT`）→ `ErrForgeDegraded` → 釋放鎖 → 回 503 `FORGE_UNAVAILABLE`（帶 `Retry-After`），不 silently 用過期 base。前置：TRK-324 Recreate（已落地）。
 - [ ] **TRK-319** `APIError` 認得 secondary-rate-limit 403 → 熔斷 + 尊重 `Retry-After`。
 - [ ] **TRK-320** load-shedding semaphore + context 綁排隊階段。與 TRK-318 配對。
 - [ ] **TRK-325 / A3 Lease** — deferred，見各自 trigger。

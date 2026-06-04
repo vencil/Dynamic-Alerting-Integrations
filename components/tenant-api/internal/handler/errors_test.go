@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -226,6 +227,44 @@ func TestRateLimit_EnvelopeShape(t *testing.T) {
 		}
 		if v, _ := resp["retry_after_s"].(float64); v <= 0 {
 			t.Errorf("retry_after_s = %v, want > 0", resp["retry_after_s"])
+		}
+	}
+}
+
+// TestWriteForgeDegraded_MachineActionable locks the TRK-318 503 shape: it must
+// carry a standard Retry-After header AND the retry_after_s envelope field (so an
+// automated GitOps controller / CI pipeline can back off), the FORGE_UNAVAILABLE
+// code, and a sanitized message that never leaks the internal git / stale-base
+// detail.
+func TestWriteForgeDegraded_MachineActionable(t *testing.T) {
+	t.Parallel()
+	w := httptest.NewRecorder()
+	writeForgeDegraded(w, httptest.NewRequest("PUT", "/api/v1/tenants/db-a", nil))
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", w.Code)
+	}
+	if got := w.Header().Get("Retry-After"); got != strconv.Itoa(forgeDegradedRetryAfterS) {
+		t.Errorf("Retry-After header = %q, want %q", got, strconv.Itoa(forgeDegradedRetryAfterS))
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if resp["code"] != CodeForgeUnavailable {
+		t.Errorf("code = %q, want %s", resp["code"], CodeForgeUnavailable)
+	}
+	if v, _ := resp["retry_after_s"].(float64); int(v) != forgeDegradedRetryAfterS {
+		t.Errorf("retry_after_s = %v, want %d", resp["retry_after_s"], forgeDegradedRetryAfterS)
+	}
+	msg, _ := resp["error"].(string)
+	if !strings.Contains(msg, "unavailable") {
+		t.Errorf("error = %q, want a sanitized 'unavailable' message", msg)
+	}
+	// Must not leak internal detail.
+	for _, leak := range []string{"git", "fetch", "stale", "origin"} {
+		if strings.Contains(strings.ToLower(msg), leak) {
+			t.Errorf("error message leaks internal detail %q: %q", leak, msg)
 		}
 	}
 }
