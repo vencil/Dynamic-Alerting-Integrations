@@ -156,6 +156,24 @@ func TestCustomAlert_ListParseSurvivesAndResolves(t *testing.T) {
 	}
 }
 
+func TestCustomAlert_ForecastResolves(t *testing.T) {
+	// ratio mode: horizon (not window) + capacity_metric → recipe_id carries
+	// h4h + den_cap; the floor (0.15) is the emitted user_threshold value.
+	cfg := customAlertsConfig(t, "shop-a",
+		"      - {recipe: forecast, name: disk_low, metric: avail, capacity_metric: cap, "+
+			"op: \"<\", horizon: 4h, threshold: \"0.15:warning\"}\n")
+	got, errs := resolveTenantCustomAlerts("shop-a", cfg.Tenants["shop-a"])
+	if errs != 0 || len(got) != 1 {
+		t.Fatalf("forecast ratio resolve: errs=%d resolved=%d", errs, len(got))
+	}
+	if got[0].CustomLabels["recipe_id"] != "forecast__avail__lt__h4h__den_cap__for1m" {
+		t.Errorf("recipe_id = %q", got[0].CustomLabels["recipe_id"])
+	}
+	if got[0].Value != 0.15 || got[0].Metric != "avail" || got[0].Component != "custom" {
+		t.Errorf("unexpected resolved threshold: %+v", got[0])
+	}
+}
+
 func TestCustomAlert_ModeDefaultsToPage(t *testing.T) {
 	cfg := customAlertsConfig(t, "t1",
 		"      - {recipe: threshold, name: q, metric: qd, op: \">\", window: 5m, threshold: \"1:warning\"}\n")
@@ -181,15 +199,18 @@ func TestCustomAlert_DisableSkipsCleanly(t *testing.T) {
 
 func TestCustomAlert_ValidationNegatives(t *testing.T) {
 	cases := map[string]string{
-		"metric injection":   "      - {recipe: threshold, name: x, metric: \"m} or vector(1)\", op: \">\", window: 5m, threshold: \"1:warning\"}\n",
-		"reserved selector":  "      - {recipe: rate, name: x, metric: m, selectors: {tenant: foo}, op: \">\", window: 5m, threshold: \"1:warning\"}\n",
-		"bad severity":       "      - {recipe: threshold, name: x, metric: m, op: \">\", window: 5m, threshold: \"1:bogus\"}\n",
-		"missing window":     "      - {recipe: threshold, name: x, metric: m, op: \">\", threshold: \"1:warning\"}\n",
-		"non-numeric thresh": "      - {recipe: threshold, name: x, metric: m, op: \">\", window: 5m, threshold: \"abc:warning\"}\n",
-		"NaN threshold":      "      - {recipe: threshold, name: x, metric: m, op: \">\", window: 5m, threshold: \"NaN:warning\"}\n",
-		"Inf threshold":      "      - {recipe: threshold, name: x, metric: m, op: \">\", window: 5m, threshold: \"Inf:warning\"}\n",
-		"bad mode":           "      - {recipe: threshold, name: x, metric: m, op: \">\", window: 5m, threshold: \"1:warning\", mode: pager}\n",
-		"bad for":            "      - {recipe: threshold, name: x, metric: m, op: \">\", window: 5m, threshold: \"1:warning\", for: 2m}\n",
+		"metric injection":         "      - {recipe: threshold, name: x, metric: \"m} or vector(1)\", op: \">\", window: 5m, threshold: \"1:warning\"}\n",
+		"reserved selector":        "      - {recipe: rate, name: x, metric: m, selectors: {tenant: foo}, op: \">\", window: 5m, threshold: \"1:warning\"}\n",
+		"bad severity":             "      - {recipe: threshold, name: x, metric: m, op: \">\", window: 5m, threshold: \"1:bogus\"}\n",
+		"missing window":           "      - {recipe: threshold, name: x, metric: m, op: \">\", threshold: \"1:warning\"}\n",
+		"non-numeric thresh":       "      - {recipe: threshold, name: x, metric: m, op: \">\", window: 5m, threshold: \"abc:warning\"}\n",
+		"NaN threshold":            "      - {recipe: threshold, name: x, metric: m, op: \">\", window: 5m, threshold: \"NaN:warning\"}\n",
+		"Inf threshold":            "      - {recipe: threshold, name: x, metric: m, op: \">\", window: 5m, threshold: \"Inf:warning\"}\n",
+		"bad mode":                 "      - {recipe: threshold, name: x, metric: m, op: \">\", window: 5m, threshold: \"1:warning\", mode: pager}\n",
+		"bad for":                  "      - {recipe: threshold, name: x, metric: m, op: \">\", window: 5m, threshold: \"1:warning\", for: 2m}\n",
+		"forecast no horizon":      "      - {recipe: forecast, name: x, metric: m, op: \"<\", threshold: \"0.5:warning\"}\n",
+		"forecast bad horizon":     "      - {recipe: forecast, name: x, metric: m, op: \"<\", horizon: 3h, threshold: \"0.5:warning\"}\n",
+		"forecast ratio floor >=1": "      - {recipe: forecast, name: x, metric: avail, capacity_metric: cap, op: \"<\", horizon: 4h, threshold: \"1.5:warning\"}\n",
 	}
 	for name, listYAML := range cases {
 		t.Run(name, func(t *testing.T) {

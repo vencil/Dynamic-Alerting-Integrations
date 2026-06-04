@@ -1,0 +1,67 @@
+# promtool unit test — Custom Alerts (ADR-024 Capability B, #741), FORECAST recipe.
+# Proves the forecast lead-time semantics: a tenant whose disk headroom ratio
+# (avail/capacity) is FALLING fires while it still has headroom (current ratio
+# > floor), because predict_linear over the platform-derived 8h lookback says it
+# will cross the 0.15 floor within the 4h horizon. A stable tenant (flat ratio)
+# stays silent — the forecast is the signal, not the current value.
+#
+# Input series carry realistic K8s scrape labels (namespace / persistentvolumeclaim
+# / instance / job) which the base record's `sum by(tenant)` collapses (#651:
+# lab-clean fixtures hide label-topology bugs). 1m evaluation interval keeps the
+# 8h-lookback series tractable.
+rule_files:
+  - rule-pack-custom-alerts.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # ── shop-a: avail falling 800→ -1.2/min, capacity flat 1000 → ratio 0.8 → ~0.18.
+  #    At eval 520m current ratio ≈ 0.176 (STILL above the 0.15 floor), but the
+  #    8h slope predicts < 0.15 within 4h → fires (lead time). for:30m satisfied. ──
+  - interval: 1m
+    input_series:
+      - series: 'kubelet_volume_stats_available_bytes{tenant="shop-a", namespace="shop", persistentvolumeclaim="data-shop-0", instance="10.0.0.1:10250", job="kubelet"}'
+        values: '800-1.2x540'
+      - series: 'kubelet_volume_stats_capacity_bytes{tenant="shop-a", namespace="shop", persistentvolumeclaim="data-shop-0", instance="10.0.0.1:10250", job="kubelet"}'
+        values: '1000+0x540'
+      - series: 'user_threshold{component="custom", metric="kubelet_volume_stats_available_bytes", recipe_id="forecast__kubelet_volume_stats_available_bytes__lt__h4h__den_kubelet_volume_stats_capacity_bytes__for30m", tenant="shop-a", severity="warning", name="disk_will_fill", mode="page"}'
+        values: '0.15+0x540'
+      - series: 'tenant_metadata_info{tenant="shop-a", runbook_url="http://rb/shop", owner="team-shop", tier="gold"}'
+        values: '1x540'
+    alert_rule_test:
+      - eval_time: 520m
+        alertname: Custom_forecast__kubelet_volume_stats_available_bytes__lt__h4h__den_kubelet_volume_stats_capacity_bytes__for30m
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              tenant: shop-a
+              recipe: forecast
+              name: disk_will_fill
+              mode: page
+              version: default
+              runbook_url: "http://rb/shop"
+              owner: team-shop
+              tier: gold
+            exp_annotations:
+              summary: "Custom alert [disk_will_fill] for shop-a"
+              summary_zh: "shop-a 的自訂告警 [disk_will_fill] 觸發"
+              description: 'forecast on kubelet_volume_stats_available_bytes: value -0.11 crossed the configured threshold'
+              description_zh: 'kubelet_volume_stats_available_bytes 的 forecast: 值 -0.11 已越過設定閾值'
+              runbook_url: "http://rb/shop"
+              owner: team-shop
+              tier: gold
+
+  # ── stable-c: ratio flat at 0.5 with plenty of data → predicted ratio ≈ 0.5,
+  #    never < 0.15 → MUST NOT fire (forecast is the signal, not a static level). ──
+  - interval: 1m
+    input_series:
+      - series: 'kubelet_volume_stats_available_bytes{tenant="stable-c", namespace="stab", persistentvolumeclaim="data-stab-0", instance="10.0.0.2:10250", job="kubelet"}'
+        values: '500+0x540'
+      - series: 'kubelet_volume_stats_capacity_bytes{tenant="stable-c", namespace="stab", persistentvolumeclaim="data-stab-0", instance="10.0.0.2:10250", job="kubelet"}'
+        values: '1000+0x540'
+      - series: 'user_threshold{component="custom", metric="kubelet_volume_stats_available_bytes", recipe_id="forecast__kubelet_volume_stats_available_bytes__lt__h4h__den_kubelet_volume_stats_capacity_bytes__for30m", tenant="stable-c", severity="warning", name="disk_will_fill", mode="page"}'
+        values: '0.15+0x540'
+    alert_rule_test:
+      - eval_time: 520m
+        alertname: Custom_forecast__kubelet_volume_stats_available_bytes__lt__h4h__den_kubelet_volume_stats_capacity_bytes__for30m
+        exp_alerts: []

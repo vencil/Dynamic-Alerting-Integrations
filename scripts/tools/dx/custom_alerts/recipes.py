@@ -1,4 +1,4 @@
-"""The 5 core recipe PromQL emitters (ADR-024 Capability B, #741 S2).
+"""The 6 core recipe PromQL emitters (ADR-024 Capability B, #741).
 
 Each recipe compiles to ONE vectorised rule per shape (recipe_id), structured
 exactly like the version-aware pilot (rule-pack-kubernetes.yaml:121-329):
@@ -19,14 +19,75 @@ Invariants honoured (see plan / ADR-024):
 """
 from __future__ import annotations
 
+import re
 from typing import Dict, List, Tuple
 
 from . import shape as _shape
+
+# forecast cold-start data-sufficiency gate: a freshly-deployed / freshly-onboarded
+# base series with too few samples in the lookback window yields wild slopes, so
+# predict_linear is gated until at least this many samples exist (ADR-024
+# §Forecast Recipe — a "enough data?" gate, NOT a current-value gate that would
+# castrate the lead time).
+_FORECAST_MIN_SAMPLES = 3
+
+# forecast horizons are single-unit Go durations (enum-validated upstream);
+# parse to integer seconds for predict_linear's scalar arg + the [lookback] range.
+_DUR_RE = re.compile(r"^(\d+)(h|m|s)$")
 
 
 # normalise empty/absent version → "default" (reuses the version-aware idiom).
 def _norm_version(expr: str) -> str:
     return f'label_replace({expr}, "version", "default", "version", "^$")'
+
+
+def _duration_to_seconds(d: str) -> int:
+    m = _DUR_RE.match(str(d))
+    if not m:
+        raise _shape.RecipeError(f"cannot convert duration {d!r} to integer seconds")
+    return int(m.group(1)) * {"h": 3600, "m": 60, "s": 1}[m.group(2)]
+
+
+def _forecast_records(rid: str, metric: str, sel: str, horizon: str,
+                      capacity: str) -> List[dict]:
+    """forecast emission (ADR-024 §Forecast Recipe): predict (linear) a gauge/ratio
+    crossing a threshold within `horizon`. Two records:
+
+      custom:fcbase:{rid}   the base aggregate — ratio mode (capacity set):
+                            avail/capacity headroom; raw mode: the gauge itself.
+      custom:metric:{rid}   predict_linear over the base + a cold-start gate.
+
+    Lookback is platform-derived = max(2·horizon, 1h) (NOT tenant-settable — an
+    expert knob whose exposure is the biggest foot-gun; deriving it also makes
+    horizon ≤ lookback hold by construction). All durations are emitted as integer
+    seconds so the `[lookback]` range selector can never be a bad duration (e.g.
+    `1.5h`). The standard _core_record then compares custom:metric {op} threshold.
+    """
+    h_s = _duration_to_seconds(horizon)
+    lb_s = max(2 * h_s, 3600)            # max(2·horizon, 1h), integer seconds
+    base = f"custom:fcbase:{rid}"
+    if capacity:  # ratio mode: headroom ratio (avail/capacity) falling to a floor
+        _shape.validate_metric_name(capacity, "capacity_metric")
+        base_inner = (
+            f"sum by(tenant) ({metric}{sel})\n"
+            f"  /\n"
+            f"(sum by(tenant) ({capacity}{sel}) > 0)"   # >0 guard → no +Inf / div-by-zero
+        )
+    else:         # raw mode: a gauge crossing an absolute threshold
+        base_inner = f"max by(tenant, version) ({metric}{sel})"
+    # predict_linear over the RECORDED base (predict_linear cannot range-select a
+    # division/aggregation inline — hence the base recording rule). Bare `and`:
+    # both operands derive from the same `base` series → identical label set, so
+    # no on() needed; the gate drops tenants with < N samples (promtool-verified).
+    predict_inner = (
+        f"predict_linear({base}[{lb_s}s], {h_s})\n"
+        f"  and\n"
+        f"count_over_time({base}[{lb_s}s]) > {_FORECAST_MIN_SAMPLES}"
+    )
+    return [
+        {"record": base, "expr": base_inner},
+        {"record": f"custom:metric:{rid}", "expr": _norm_version(predict_inner)},
+    ]
 
 
 def _threshold_record(rid: str, metric: str) -> dict:
@@ -167,8 +228,8 @@ def emit_shape(shape: dict) -> Tuple[List[dict], List[dict]]:
     """Emit (recording_rules, alert_rules) for one shape.
 
     `shape` keys: recipe, metric, op, window, quantile, denominator_metric,
-    recipe_id, severities (sorted list), for, and the raw selector maps
-    (`selectors`/`selectors_re`) for safe assembly.
+    horizon, capacity_metric, recipe_id, severities (sorted list), for, and the
+    raw selector maps (`selectors`/`selectors_re`) for safe assembly.
     """
     rid = shape["recipe_id"]
     recipe = shape["recipe"]
@@ -182,7 +243,13 @@ def emit_shape(shape: dict) -> Tuple[List[dict], List[dict]]:
     severities = shape["severities"]
 
     recording: List[dict] = [_threshold_record(rid, metric)]
-    if recipe != "absence":
+    if recipe == "forecast":
+        # forecast emits TWO metric-side records (base aggregate + predict_linear);
+        # the standard _core_record then compares custom:metric {op} threshold.
+        recording.extend(_forecast_records(
+            rid, metric, sel, str(shape.get("horizon", "")),
+            shape.get("capacity_metric", "")))
+    elif recipe != "absence":
         recording.append(_metric_record(rid, recipe, metric, sel, window, quantile, denom))
     for sev in severities:
         recording.append(_core_record(rid, recipe, op, sev, metric, sel, window))

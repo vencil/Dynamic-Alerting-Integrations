@@ -1,0 +1,46 @@
+# Recipe: forecast — platform-authored (ADR-024 Capability B, #741).
+# Human governance contract for the `forecast` recipe. The executable form is
+# scripts/tools/dx/custom_alerts/recipes.py::_forecast_records.
+recipe: forecast
+summary: Predict (linear) that a gauge or headroom ratio will cross a threshold within a horizon.
+summary_zh: 用線性預測判斷某 gauge 或餘量比例會在指定提前量內越過閾值（趨勢/耗盡預測）。
+params:
+  metric:          {required: true,  desc: "the gauge to forecast (raw mode) or numerator (ratio mode). gauge-like only — counters must be rate()-d first (not supported in MVP)"}
+  capacity_metric: {required: false, desc: "ratio mode: the denominator (e.g. total capacity). present → predict metric/capacity headroom ratio crossing a fractional floor in (0,1); absent → raw mode (predict the gauge crossing an absolute threshold)"}
+  op:        {required: false, default: ">", enum: [">", ">=", "<", "<="], desc: "ratio mode usually '<' (falling toward a floor); raw mode usually '>' (rising toward a ceiling)"}
+  horizon:   {required: true,  enum: ["1h", "2h", "4h", "12h", "24h", "48h"], desc: "how far ahead to predict. The platform derives lookback = max(2*horizon, 1h) — the tenant never sets the lookback (an expert foot-gun)"}
+  threshold: {required: true,  desc: "value[:severity]. ratio mode: a fractional floor in (0,1), e.g. 0.15:warning; raw mode: an absolute value"}
+  selectors:    {required: false, desc: "exact label filters (=)"}
+  selectors_re: {required: false, desc: "regex label filters (=~)"}
+  mode:      {required: false, default: page, enum: [page, silent]}
+  for:       {required: false, default: "1m", desc: "pending duration before firing; one of 0s/1m/5m/15m/30m/1h (enum-bounded, TRK-326). Use a sustain (e.g. 30m) to smooth transient slope flips"}
+emitted_shape: |
+  # ratio mode (capacity_metric set):
+  custom:fcbase:<id> = sum by(tenant)(<metric><sel>) / (sum by(tenant)(<capacity><sel>) > 0)
+  # raw mode (no capacity_metric):
+  custom:fcbase:<id> = max by(tenant, version)(<metric><sel>)
+  # then, both modes:
+  custom:metric:<id> = label_replace(
+      predict_linear(custom:fcbase:<id>[<lookback>s], <horizon_s>)
+      and count_over_time(custom:fcbase:<id>[<lookback>s]) > 3,   # cold-start gate
+      "version","default","version","^$")
+  # the standard per-severity core then compares custom:metric <op> custom:threshold.
+  #
+  # lookback = max(2*horizon, 1h), emitted as INTEGER seconds (never a bad duration
+  # like 1.5h). The cold-start gate suppresses wild slopes from sparse/just-deployed
+  # series. predict_linear cannot range-select a division/aggregation inline — hence
+  # the recorded base. Raw `and`: both operands share custom:fcbase's label set.
+  #
+  # WHY not raw predict_linear exposed to tenants: it is the classic false-positive
+  # factory (a transient spike extrapolated linearly → "disk full in 30m" at 3am).
+  # This recipe packages the SRE-tuned guardrails (long platform lookback + sustain
+  # + cold-start gate) so tenants get lead time WITHOUT crying wolf.
+example:
+  recipe: forecast
+  name: disk_will_fill
+  metric: kubelet_volume_stats_available_bytes
+  capacity_metric: kubelet_volume_stats_capacity_bytes
+  op: "<"
+  horizon: 4h
+  threshold: "0.15:warning"
+  for: 30m
