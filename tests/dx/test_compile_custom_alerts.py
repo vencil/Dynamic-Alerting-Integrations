@@ -140,6 +140,22 @@ def test_reserved_selector_label_rejected(label):
         shp.assemble_selector({"recipe": "rate", "metric": "m", "selectors": {label: "x"}})
 
 
+@pytest.mark.parametrize("bad_for", ["2m", "90s", "1.5h", "5min"])
+def test_recipe_id_rejects_non_enum_for(bad_for):
+    # TRK-326: `for` enters the recipe_id slug + shape_signature → a non-enum
+    # value must fail loud at compile time (not silently mint a bogus shape).
+    with pytest.raises(shp.RecipeError, match="for"):
+        shp.recipe_id({"recipe": "threshold", "metric": "m", "op": ">", "window": "5m", "for": bad_for})
+
+
+@pytest.mark.parametrize("falsy", [None, ""])
+def test_recipe_id_for_falsy_defaults_to_1m(falsy):
+    # falsy `for` (missing / null / empty) → "1m", matching custom_alert.go's
+    # `if forVal == "" { forVal = "1m" }` so Go/Python never diverge on this case.
+    rid = shp.recipe_id({"recipe": "threshold", "metric": "m", "op": ">", "window": "5m", "for": falsy})
+    assert rid.endswith("__for1m")
+
+
 def test_selector_value_is_escaped():
     sel = shp.assemble_selector({"recipe": "rate", "metric": "m",
                                  "selectors": {"path": 'a"b\\c'}})
