@@ -334,3 +334,10 @@ def test_own_recipe_cap_at_limit_ok(tmp_path):
     })
     _shapes, per_tenant = ld.build_shapes(tmp_path, max_custom_recipes=2)  # exactly at cap
     assert per_tenant["ta"] == 2
+
+
+def test_build_pack_threads_cap(tmp_path):
+    # CLI wiring guard: build_pack(max_custom_recipes=) must reach build_shapes.
+    # the example fixture's shop-a has 6 OWN recipes → cap 5 must reject here.
+    with pytest.raises(ld.CustomAlertConfigError, match="max_custom_recipes"):
+        cc.build_pack(_EXAMPLES, max_custom_recipes=5)
