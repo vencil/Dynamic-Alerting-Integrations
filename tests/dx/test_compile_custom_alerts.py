@@ -374,3 +374,32 @@ def test_multi_severity_same_shape_counts_as_two(tmp_path):
     })
     _shapes, per_tenant = ld.build_shapes(tmp_path, max_custom_recipes=100)
     assert per_tenant["ta"] == 2
+
+
+# --- 10. cross-language validation contract (S5, ADR-024 §S5) ---------------
+_VALIDATION_VECTORS = _REPO / "tests" / "dx" / "fixtures" / "custom_alert_validation_vectors.json"
+
+
+def _py_validate_spec(spec: dict) -> bool:
+    """Python's per-recipe accept/reject decision (the shared-contract subset:
+    recipe/metric/op/horizon/selector-reserved/for via recipe_id + severity via
+    parse_threshold). Mirrors the Go side's resolveOneCustomAlert for these rules."""
+    try:
+        shp.recipe_id(spec)
+        shp.parse_threshold(spec["threshold"])
+        return True
+    except shp.RecipeError:
+        return False
+
+
+def test_validation_contract_matches_go():
+    # Same fixture the Go test (TestValidationContract_GoldenVectors) asserts on:
+    # Python and Go MUST agree on accept/reject, closing the validation-decision
+    # drift the slug golden vectors didn't cover.
+    cases = json.loads(_VALIDATION_VECTORS.read_text(encoding="utf-8"))["cases"]
+    assert len(cases) >= 8, "validation contract fixture undershot"
+    for c in cases:
+        accepted = _py_validate_spec(c["spec"])
+        assert accepted == c["valid"], (
+            f"validation drift [{c['_note']}]: Python accepted={accepted}, contract valid={c['valid']}"
+        )

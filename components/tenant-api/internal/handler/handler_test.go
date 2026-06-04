@@ -952,8 +952,8 @@ func TestBuildPatchYAML(t *testing.T) {
 func TestBuildPatchYAML_MultipleKeys(t *testing.T) {
 	t.Parallel()
 	yaml := buildPatchYAML("db-b", map[string]string{
-		"_silent_mode":        "critical",
-		"_state_maintenance":  "enable",
+		"_silent_mode":       "critical",
+		"_state_maintenance": "enable",
 	})
 	if !strings.Contains(yaml, "db-b:") {
 		t.Errorf("expected 'db-b:' in output, got: %s", yaml)
@@ -1343,5 +1343,31 @@ func TestMeEmptyEmailDirect(t *testing.T) {
 	}
 	if body["error"] == "" {
 		t.Error("expected non-empty error message in response body")
+	}
+}
+
+// TestValidateTenant_CustomAlertPreflight: the dry-run /validate endpoint runs
+// the S5 in-process custom-alert preflight (ADR §S5), so an invalid recipe is
+// reported (Valid=false) without writing — matching the PUT boundary.
+func TestValidateTenant_CustomAlertPreflight(t *testing.T) {
+	t.Parallel()
+	configDir := setupConfigDir(t, map[string]string{
+		"_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+	})
+	h := ValidateTenant(&Deps{ConfigDir: configDir})
+	body := bytes.NewBufferString("tenants:\n  db-a:\n    _custom_alerts:\n" +
+		"      - {recipe: bogus, name: x, metric: m, op: \">\", window: 5m, threshold: \"1:warning\"}\n")
+	req := newRequestWithChiParam("POST", "/api/v1/tenants/db-a/validate", "id", "db-a", body)
+	w := httptest.NewRecorder()
+	h(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body: %s", w.Code, w.Body.String())
+	}
+	var resp ValidateResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if resp.Valid || len(resp.Warnings) == 0 {
+		t.Errorf("bad custom alert should make dry-run invalid w/ warning, got valid=%v warnings=%v", resp.Valid, resp.Warnings)
 	}
 }

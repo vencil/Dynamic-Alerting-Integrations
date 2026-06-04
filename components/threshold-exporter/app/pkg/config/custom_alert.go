@@ -358,3 +358,73 @@ func resolveTenantCustomAlerts(tenant string, overrides map[string]ScheduledValu
 	}
 	return out, errCount
 }
+
+// MaxCustomRecipesDefault mirrors the Python loader's MAX_CUSTOM_RECIPES_DEFAULT
+// (S4) — the per-tenant OWN-recipe cap. The CI compiler is the authority; this is
+// the tenant-api shift-left preflight's matching value (ADR §S5). KEEP IN SYNC
+// with scripts/tools/dx/custom_alerts/loader.py::MAX_CUSTOM_RECIPES_DEFAULT.
+const MaxCustomRecipesDefault = 20
+
+// ValidateTenantCustomAlerts is the tenant-api shift-left preflight (ADR §S5):
+// the Go-native, in-process equivalent of the Python compiler's per-tenant
+// validation. It validates a tenant's `_custom_alerts` block (as stored in
+// `overrides` by the parse.go SequenceNode passthrough) and returns human-readable
+// violation strings (nil if all valid).
+//
+// Reuses resolveOneCustomAlert for per-recipe spec validity (so the preflight is,
+// by construction, at least as strict as the exporter), plus within-tenant
+// name / (recipe_id, severity) uniqueness and the OWN-recipe cap. STATELESS w.r.t.
+// the rest of the conf.d tree: cross-inheritance collisions and compiler template
+// bugs are the CI compiler's authority (ADR §S5 OQ-S5-1 — the local disk is not
+// the authoritative global SOT). `threshold: "disable"` (three-state opt-out) is
+// VALID and does not count toward the cap.
+func ValidateTenantCustomAlerts(tenant string, overrides map[string]ScheduledValue, maxOwnRecipes int) []string {
+	sv, ok := overrides["_custom_alerts"]
+	if !ok || strings.TrimSpace(sv.Default) == "" {
+		return nil
+	}
+	var specs []CustomAlertSpec
+	if err := yaml.Unmarshal([]byte(sv.Default), &specs); err != nil {
+		return []string{fmt.Sprintf("_custom_alerts is not a valid recipe list: %v", err)}
+	}
+	var violations []string
+	nameSeen := map[string]int{} // name → 0-based index of first occurrence
+	sevSeen := map[string]int{}  // "recipe_id|severity" → index
+	ownCount := 0
+	for i, spec := range specs {
+		rt, err := resolveOneCustomAlert(tenant, spec)
+		if errors.Is(err, errCustomAlertDisabled) {
+			continue // three-state opt-out: valid, not counted toward the cap
+		}
+		if err != nil {
+			label := spec.Name
+			if label == "" {
+				label = "<unnamed>"
+			}
+			violations = append(violations, fmt.Sprintf("_custom_alerts[%d] (%s): %v", i, label, err))
+			continue
+		}
+		ownCount++
+		// within-tenant uniqueness — the CI compiler enforces these globally; the
+		// preflight catches the within-PUT subset for fast feedback (PUT is a
+		// full-overlay, so the body is the tenant's complete own set).
+		if prev, dup := nameSeen[spec.Name]; dup {
+			violations = append(violations,
+				fmt.Sprintf("_custom_alerts[%d]: duplicate name %q (also at [%d]); names must be unique per tenant", i, spec.Name, prev))
+		} else {
+			nameSeen[spec.Name] = i
+		}
+		sevKey := rt.CustomLabels["recipe_id"] + "|" + rt.Severity
+		if prev, dup := sevSeen[sevKey]; dup {
+			violations = append(violations,
+				fmt.Sprintf("_custom_alerts[%d]: a %s alert with the same shape already exists at [%d] (one per shape+severity)", i, rt.Severity, prev))
+		} else {
+			sevSeen[sevKey] = i
+		}
+	}
+	if ownCount > maxOwnRecipes {
+		violations = append(violations,
+			fmt.Sprintf("%d custom-alert recipes exceeds the per-tenant cap (%d); reduce the tenant's own _custom_alerts", ownCount, maxOwnRecipes))
+	}
+	return violations
+}

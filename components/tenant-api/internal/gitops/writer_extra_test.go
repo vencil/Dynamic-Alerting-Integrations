@@ -420,3 +420,35 @@ func TestErrConflict_IsError(t *testing.T) {
 		t.Errorf("ErrConflict message should contain 'conflict', got: %s", ErrConflict.Error())
 	}
 }
+
+// --- S5 shift-left preflight (ADR-024 §S5): custom-alert recipe validation ---
+
+func TestValidate_CustomAlerts_ValidRecipe(t *testing.T) {
+	t.Parallel()
+	yaml := "tenants:\n  db-a:\n    _custom_alerts:\n" +
+		"      - {recipe: threshold, name: q, metric: qd, op: \">\", window: 5m, threshold: \"1:warning\"}\n"
+	if errs := validate("", "db-a", yaml); len(errs) != 0 {
+		t.Errorf("valid custom alert should pass preflight, got: %v", errs)
+	}
+}
+
+func TestValidate_CustomAlerts_BadRecipeRejected(t *testing.T) {
+	t.Parallel()
+	// unknown recipe → preflight violation (→ Write returns "validation failed" → HTTP 400)
+	yaml := "tenants:\n  db-a:\n    _custom_alerts:\n" +
+		"      - {recipe: bogus, name: x, metric: m, op: \">\", window: 5m, threshold: \"1:warning\"}\n"
+	errs := validate("", "db-a", yaml)
+	if len(errs) == 0 || !strings.Contains(strings.Join(errs, ";"), "_custom_alerts[0]") {
+		t.Errorf("bad recipe should be rejected at preflight with an indexed violation, got: %v", errs)
+	}
+}
+
+func TestValidate_CustomAlerts_BadForRejected(t *testing.T) {
+	t.Parallel()
+	// non-enum `for` (TRK-326) → preflight violation
+	yaml := "tenants:\n  db-a:\n    _custom_alerts:\n" +
+		"      - {recipe: threshold, name: x, metric: m, op: \">\", window: 5m, threshold: \"1:warning\", for: 2m}\n"
+	if errs := validate("", "db-a", yaml); len(errs) == 0 {
+		t.Errorf("non-enum for should be rejected at preflight, got no errors")
+	}
+}

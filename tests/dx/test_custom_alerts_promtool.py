@@ -64,3 +64,25 @@ def test_promtool_golden(golden, compiled_pack):
 def test_goldens_present():
     """Guard against an empty glob silently passing (echo-chamber)."""
     assert len(_GOLDENS) == 7, f"expected 7 goldens (6 recipes + mode_routing), found {[p.name for p in _GOLDENS]}"
+
+
+def test_adversarial_selector_value_compiles_to_valid_promql(tmp_path, compiled_pack):
+    """ADR §S5: a spec-valid selector VALUE containing a double-quote is escaped
+    by the compiler (_escape_value) into a well-formed quoted literal — promtool
+    accepts it. Proves the Go preflight accepting any key-valid value is safe:
+    the value can never break out of the quoted matcher / inject (CI backstop)."""
+    confd = tmp_path / "conf.d"
+    confd.mkdir()
+    (confd / "shop.yaml").write_text(
+        'tenants:\n  shop-a:\n    _custom_alerts:\n'
+        '      - {recipe: rate, name: adv, metric: http_requests_total, '
+        'selectors: {path: \'a"b\'}, op: ">", window: 5m, threshold: "1:warning"}\n',
+        encoding="utf-8")
+    pack = cc.build_pack(confd)
+    rendered = cc._render(pack["groups"])
+    assert 'path="a\\"b"' in rendered          # the " is escaped, stays inside the literal
+    out = tmp_path / "rule-pack-custom-alerts.yaml"
+    out.write_text(rendered, encoding="utf-8")
+    r = subprocess.run([_PROMTOOL, "check", "rules", str(out)],
+                       capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, f"promtool rejected escaped selector:\n{r.stdout}\n{r.stderr}"

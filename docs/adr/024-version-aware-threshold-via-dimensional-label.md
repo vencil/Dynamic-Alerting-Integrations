@@ -43,7 +43,7 @@ updated_at: 2026-06-04
 
 ⛔ **部署前提（HARD）**：kube-state-metrics 必須設 `--metric-labels-allowlist=pods=[app.kubernetes.io/version]`，否則 `kube_pod_labels` 不帶 version、version 注入 join 匹配空集、**版本閾值靜默 inert**（真叢集實證）。三層防禦守住此前提：runtime sentinel `VersionAwareThresholdInert` 是安全網、CI static lint `check_ksm_version_allowlist.py` 攔誤配。
 
-**能力 B — Custom Alerts（實作進行中，目標 v2.9.0）**：recipe 庫 + 向量化編譯器 + 6 個 recipe（threshold / rate / ratio / absence / p99_latency / **forecast**）+ exporter `user_threshold` emission + 編譯期 `max_custom_recipes` per-tenant cap **已實作**（[#741](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/741) S1–S4 / [#752](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/752) / [#753](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/753)）；**仍 net-new**：discovery catalog、tenant-api promtool preflight、onboarding / recipe-編輯 兩個 UX（見 §Custom Alerts）。
+**能力 B — Custom Alerts（實作進行中，目標 v2.9.0）**：recipe 庫 + 向量化編譯器 + 6 個 recipe（threshold / rate / ratio / absence / p99_latency / **forecast**）+ exporter `user_threshold` emission + 編譯期 `max_custom_recipes` per-tenant cap + **tenant-api shift-left preflight（in-process Go）** **已實作**（[#741](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/741) S1–S5 / [#752](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/752) / [#753](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/753)）；**仍 net-new**：discovery catalog、onboarding / recipe-編輯 兩個 UX（見 §Custom Alerts）。
 
 **Deferred（defer-with-trigger）**：
 
@@ -430,7 +430,7 @@ flowchart TD
 ### Custom Alerts Acceptance Criteria（proposed）
 
 1. 租戶可在 portal 用 recipe 表單建立一條告警（門檻 / rate / ratio / absence / p99），不接觸 PromQL；存檔走 GitOps。
-2. tenant-api PUT 對「編譯後 promtool 不過」的 recipe 回 HTTP 400 並指出錯處（shift-left preflight，mutation-proven）。
+2. tenant-api（PUT/batch/validate）對「**in-process Go spec 驗證**不過」的 recipe 回 HTTP 400 並指出錯處（shift-left preflight，mutation-proven；**已實作**見 §S5。promtool 留 CI golden 守模板 regression，非請求路徑）。
 3. 跨 scope 隔離：向量規則以 `on(tenant)` 圈定;tenant-leaf recipe 只作用該租戶,domain recipe 只 join 到該子樹下租戶(各帶自己 `tenant=`),不外溢子樹;越權(租戶引用他人 / 跨子樹)在編譯期阻斷（測試斷言）。
 4. 壞 recipe（若繞過 gate）只使其規則檔 group 載入失敗，平台 pack 與其他租戶 rule 不受影響（kind 驗證）。
 5. **rule-eval scale**：shared-metric recipe 的 rule-eval-duration 與租戶數無關（向量化,實測對齊 benchmarks.md §2）;unique-metric 規則數受 `max_custom_recipes` cap 封頂,全域 rule-count 在 budget 內、eval-duration 不超抓取週期（**pre-GA benchmark 實測,非推理**）。
@@ -444,7 +444,7 @@ flowchart TD
 
 - **network policy**：discovery catalog 若由 tenant-api 發動，需新增 `tenant-api → prometheus:9090` 之 egress / ingress 放行（現況 `network-policies.yaml` 僅放行 grafana / threshold-exporter）。
 - **alertmanager**：為 `mode: silent` 加明確 null / log-only route（勿賴測試環境 default fallthrough）。
-- **tenant-api 鏡像**：打包 `promtool` binary（shift-left preflight 用）。
+- ~~**tenant-api 鏡像**：打包 `promtool` binary（shift-left preflight 用）~~ → **無新依賴**（S5 preflight 改 in-process Go，§S5；promtool 留 CI）。
 - **Prometheus 版本**：rule group `limit` 需 ≥ 2.31（現況 v3.11.2 ✅）；`/api/v1/metadata` + `/series`（v3.x ✅）。
 
 ### Forecast Recipe（趨勢 / 耗盡預測，#741 衍生）

@@ -902,9 +902,18 @@ func validate(configDir, tenantID, yamlContent string) []string {
 	if _, ok := tcfg.Tenants[tenantID]; !ok {
 		return []string{fmt.Sprintf("YAML must contain tenants.%s section", tenantID)}
 	}
+	var keyErrs []string
 	if configDir == "" {
-		return tcfg.ValidateTenantKeys()
+		keyErrs = tcfg.ValidateTenantKeys()
+	} else {
+		merged := cfg.MergeTenantWithRootDefaults(configDir, tenantID, []byte(yamlContent))
+		keyErrs = merged.ValidateTenantKeys()
 	}
-	merged := cfg.MergeTenantWithRootDefaults(configDir, tenantID, []byte(yamlContent))
-	return merged.ValidateTenantKeys()
+	// S5 shift-left preflight (ADR-024 §S5): validate the tenant's OWN `_custom_alerts`
+	// recipes in-process (Go-native, no promtool/Python). Stateless per-tenant —
+	// cross-inheritance collisions + compiler template bugs stay the CI compiler's
+	// authority. Runs on the raw body (tcfg), not the merged config: the PUT body is
+	// a full overlay, so it carries the tenant's complete own recipe set.
+	caViol := cfg.ValidateTenantCustomAlerts(tenantID, tcfg.Tenants[tenantID], cfg.MaxCustomRecipesDefault)
+	return append(keyErrs, caViol...)
 }

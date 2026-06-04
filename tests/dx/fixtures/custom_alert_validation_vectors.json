@@ -1,0 +1,25 @@
+{
+  "_comment": "Cross-language STATELESS per-recipe validation contract (ADR-024 §S5). The Python compiler (shape.py recipe_id + parse_threshold) and the Go exporter/preflight (resolveOneCustomAlert) MUST AGREE on accept/reject for each spec — this closes the validation-decision drift that the slug golden vectors (recipe_id_vectors.json) did NOT cover. Scope = validations BOTH perform: recipe/metric/op/horizon/selector-reserved/severity/for enums + adversarial selector-VALUE acceptance (key-valid value accepted both sides; Python _escape_value is the injection boundary at emit, not the validator). NOT here: Go-stricter preflight extras (NaN/Inf threshold, mode enum, ratio-floor) — tested per-language; and STATEFUL checks (name/severity uniqueness, cap, cross-tree) — also per-language mock-tree tests.",
+  "cases": [
+    {"_note": "valid threshold", "valid": true,
+     "spec": {"recipe": "threshold", "name": "ok", "metric": "queue_depth", "op": ">", "window": "5m", "threshold": "100:warning"}},
+    {"_note": "valid forecast (ratio mode, in-range floor)", "valid": true,
+     "spec": {"recipe": "forecast", "name": "disk", "metric": "avail", "capacity_metric": "cap", "op": "<", "horizon": "4h", "threshold": "0.15:warning"}},
+    {"_note": "adversarial selector VALUE accepted (key valid; value escaped at emit by Python _escape_value, never breaks the quoted literal)", "valid": true,
+     "spec": {"recipe": "rate", "name": "r", "metric": "http_requests_total", "selectors_re": {"status": "5.."}, "selectors": {"path": "a\"b\\c"}, "op": ">", "window": "5m", "threshold": "10:warning"}},
+    {"_note": "bad metric (colon → recording-rule reference)", "valid": false,
+     "spec": {"recipe": "threshold", "name": "x", "metric": "tenant:alert:x", "op": ">", "window": "5m", "threshold": "1:warning"}},
+    {"_note": "unknown recipe", "valid": false,
+     "spec": {"recipe": "bogus", "name": "x", "metric": "m", "op": ">", "window": "5m", "threshold": "1:warning"}},
+    {"_note": "bad op", "valid": false,
+     "spec": {"recipe": "threshold", "name": "x", "metric": "m", "op": "==", "window": "5m", "threshold": "1:warning"}},
+    {"_note": "forecast bad horizon (not enum)", "valid": false,
+     "spec": {"recipe": "forecast", "name": "x", "metric": "m", "op": "<", "horizon": "3h", "threshold": "0.5:warning"}},
+    {"_note": "reserved selector label", "valid": false,
+     "spec": {"recipe": "rate", "name": "x", "metric": "m", "selectors": {"tenant": "foo"}, "op": ">", "window": "5m", "threshold": "1:warning"}},
+    {"_note": "bad severity", "valid": false,
+     "spec": {"recipe": "threshold", "name": "x", "metric": "m", "op": ">", "window": "5m", "threshold": "1:bogus"}},
+    {"_note": "bad for (not enum)", "valid": false,
+     "spec": {"recipe": "threshold", "name": "x", "metric": "m", "op": ">", "window": "5m", "threshold": "1:warning", "for": "2m"}}
+  ]
+}

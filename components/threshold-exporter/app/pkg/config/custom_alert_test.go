@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -269,6 +270,106 @@ func TestCustomAlert_OverflowDeterministic(t *testing.T) {
 		again, _ := run()
 		if !reflect.DeepEqual(first, again) {
 			t.Fatalf("non-deterministic truncation: run0=%v runN=%v", first, again)
+		}
+	}
+}
+
+// TestValidateTenantCustomAlerts covers the S5 shift-left preflight: per-recipe
+// spec validity (reused from resolveOneCustomAlert) + within-tenant uniqueness +
+// own-recipe cap. (ADR-024 §S5.)
+func TestValidateTenantCustomAlerts(t *testing.T) {
+	v := func(listYAML string, cap int) []string {
+		cfg := customAlertsConfig(t, "shop-a", listYAML)
+		return ValidateTenantCustomAlerts("shop-a", cfg.Tenants["shop-a"], cap)
+	}
+	good := "      - {recipe: threshold, name: ok, metric: m, op: \">\", window: 5m, threshold: \"1:warning\"}\n"
+
+	if got := v(good, 20); got != nil {
+		t.Errorf("valid recipe should pass, got %v", got)
+	}
+	// bad spec → 1 violation mentioning the index + reason
+	bad := "      - {recipe: bogus, name: x, metric: m, op: \">\", window: 5m, threshold: \"1:warning\"}\n"
+	if got := v(bad, 20); len(got) != 1 || !strings.Contains(got[0], "_custom_alerts[0]") {
+		t.Errorf("bad recipe should yield 1 indexed violation, got %v", got)
+	}
+	// duplicate name within the tenant's block
+	dupName := good + "      - {recipe: rate, name: ok, metric: m2, op: \">\", window: 5m, threshold: \"1:warning\"}\n"
+	if got := v(dupName, 20); len(got) == 0 || !strings.Contains(strings.Join(got, ";"), "duplicate name") {
+		t.Errorf("duplicate name should be flagged, got %v", got)
+	}
+	// same shape + same severity (different names) → shape/severity collision
+	dupShape := "      - {recipe: threshold, name: a, metric: m, op: \">\", window: 5m, threshold: \"1:warning\"}\n" +
+		"      - {recipe: threshold, name: b, metric: m, op: \">\", window: 5m, threshold: \"2:warning\"}\n"
+	if got := v(dupShape, 20); len(got) == 0 || !strings.Contains(strings.Join(got, ";"), "same shape") {
+		t.Errorf("same shape+severity should be flagged, got %v", got)
+	}
+	// over the own-recipe cap (3 distinct shapes, cap 2)
+	over := "      - {recipe: threshold, name: a, metric: m1, op: \">\", window: 5m, threshold: \"1:warning\"}\n" +
+		"      - {recipe: threshold, name: b, metric: m2, op: \">\", window: 5m, threshold: \"1:warning\"}\n" +
+		"      - {recipe: threshold, name: c, metric: m3, op: \">\", window: 5m, threshold: \"1:warning\"}\n"
+	if got := v(over, 2); len(got) == 0 || !strings.Contains(strings.Join(got, ";"), "exceeds the per-tenant cap") {
+		t.Errorf("over-cap should be flagged, got %v", got)
+	}
+	// `threshold: "disable"` is a valid opt-out + does NOT count toward the cap
+	disabled := "      - {recipe: threshold, name: a, metric: m1, op: \">\", window: 5m, threshold: \"1:warning\"}\n" +
+		"      - {recipe: threshold, name: off, metric: m2, op: \">\", window: 5m, threshold: \"disable\"}\n"
+	if got := v(disabled, 1); got != nil { // 1 active + 1 disabled, cap 1 → OK
+		t.Errorf("disable must be valid and not counted toward cap, got %v", got)
+	}
+	// absent _custom_alerts → no violations
+	var empty ThresholdConfig
+	if got := ValidateTenantCustomAlerts("shop-a", empty.Tenants["shop-a"], 20); got != nil {
+		t.Errorf("absent _custom_alerts should yield nil, got %v", got)
+	}
+}
+
+// findFixture walks up from cwd to locate a shared fixture under tests/dx/fixtures/.
+func findFixture(t *testing.T, name string) string {
+	t.Helper()
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	for i := 0; i < 8; i++ {
+		p := filepath.Join(dir, "tests", "dx", "fixtures", name)
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+		dir = filepath.Dir(dir)
+	}
+	t.Fatalf("could not locate tests/dx/fixtures/%s walking up from cwd", name)
+	return ""
+}
+
+// TestValidationContract_GoldenVectors pins the Go preflight/exporter validation
+// decision to the SAME shared contract the Python compiler asserts against
+// (custom_alert_validation_vectors.json). A drift here = a recipe the tenant-api
+// preflight accepts but the CI compiler rejects (or vice versa) → shift-left
+// false feedback. (ADR-024 §S5 — closes the validation-decision drift gap.)
+func TestValidationContract_GoldenVectors(t *testing.T) {
+	raw, err := os.ReadFile(findFixture(t, "custom_alert_validation_vectors.json"))
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	var doc struct {
+		Cases []struct {
+			Note  string          `yaml:"_note"`
+			Valid bool            `yaml:"valid"`
+			Spec  CustomAlertSpec `yaml:"spec"`
+		} `yaml:"cases"`
+	}
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("unmarshal fixture: %v", err)
+	}
+	if len(doc.Cases) < 8 {
+		t.Fatalf("expected >=8 contract cases, got %d (scan undershot)", len(doc.Cases))
+	}
+	for _, c := range doc.Cases {
+		_, rerr := resolveOneCustomAlert("t", c.Spec)
+		accepted := rerr == nil || errors.Is(rerr, errCustomAlertDisabled)
+		if accepted != c.Valid {
+			t.Errorf("validation drift [%s]: Go accepted=%v, contract valid=%v (err=%v)",
+				c.Note, accepted, c.Valid, rerr)
 		}
 	}
 }
