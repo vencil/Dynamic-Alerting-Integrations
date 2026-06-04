@@ -34,6 +34,7 @@ package handler
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/vencil/tenant-api/internal/policy"
@@ -212,5 +213,27 @@ func writePolicyViolation(w http.ResponseWriter, r *http.Request, violations []p
 		PolicyV: violations,
 		Help:    "https://github.com/vencil/vibe-k8s-lab/blob/main/docs/internal/test-coverage-matrix.md",
 		Action:  "Review the _domain_policy.yaml constraints for this tenant's domain. Contact a platform admin to update the policy if this change is necessary.",
+	})
+}
+
+// forgeDegradedRetryAfterS is the coarse Retry-After hint (seconds) on the 503
+// returned when the in-lock base fetch times out (TRK-318 / gitops.ErrForgeDegraded).
+// It aligns with the default TA_GIT_FETCH_TIMEOUT (5s). DELIBERATELY a coarse
+// fixed hint, not a derived value: the forge's actual recovery time is unknowable,
+// so this only paces an automated retry (it doesn't promise readiness at T+5s).
+const forgeDegradedRetryAfterS = 5
+
+// writeForgeDegraded renders the canonical 503 for a forge base-fetch timeout
+// (TRK-318). It mirrors the rate-limiter's machine-actionable shape — a standard
+// `Retry-After` header (RFC 7231) PLUS the `retry_after_s` envelope field — so an
+// automated GitOps controller / CI pipeline backs off instead of hammering a
+// degraded forge, while humans still get the sanitized message. The cause string
+// is kept generic (never leaks the internal git error / stale-base detail).
+func writeForgeDegraded(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Retry-After", strconv.Itoa(forgeDegradedRetryAfterS))
+	WriteErrorEnvelope(w, r, http.StatusServiceUnavailable, ErrorResponse{
+		Error:       "forge is currently unavailable (base sync timed out) — please retry shortly",
+		Code:        CodeForgeUnavailable,
+		RetryAfterS: forgeDegradedRetryAfterS,
 	})
 }
