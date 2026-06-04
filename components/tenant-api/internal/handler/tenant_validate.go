@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	cfg "github.com/vencil/threshold-exporter/pkg/config"
+	"gopkg.in/yaml.v3"
 )
 
 // ValidateResponse is returned by POST /api/v1/tenants/{id}/validate.
@@ -33,13 +34,13 @@ func ValidateTenant(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		tenantID := chi.URLParam(r, "id")
 		if err := ValidateTenantID(tenantID); err != nil {
-			WriteJSONError(w, r,http.StatusBadRequest, err.Error())
+			WriteJSONError(w, r, http.StatusBadRequest, err.Error())
 			return
 		}
 
 		body, err := io.ReadAll(io.LimitReader(r.Body, d.MaxBody()))
 		if err != nil {
-			WriteJSONError(w, r,http.StatusBadRequest, "failed to read request body: "+err.Error())
+			WriteJSONError(w, r, http.StatusBadRequest, "failed to read request body: "+err.Error())
 			return
 		}
 
@@ -51,6 +52,16 @@ func ValidateTenant(d *Deps) http.HandlerFunc {
 		// Merge with defaults to get full validation context.
 		merged := loadMergedConfig(d.ConfigDir, tenantID, body)
 		warnings = append(warnings, merged.ValidateTenantKeys()...)
+
+		// S5 shift-left preflight (ADR-024 §S5): validate the tenant's OWN
+		// _custom_alerts recipes with the same in-process Go validator as the
+		// write path (gitops.validate), so the dry-run verdict matches the PUT
+		// boundary. Parse the raw body (own recipes; PUT is a full overlay).
+		var bodyCfg cfg.ThresholdConfig
+		if yaml.Unmarshal(body, &bodyCfg) == nil {
+			warnings = append(warnings,
+				cfg.ValidateTenantCustomAlerts(tenantID, bodyCfg.Tenants[tenantID], cfg.MaxCustomRecipesDefault)...)
+		}
 
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(ValidateResponse{

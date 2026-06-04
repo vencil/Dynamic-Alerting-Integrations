@@ -39,7 +39,7 @@ One **declarative dimensional alerting machine** — the dimensional-label model
 
 ⛔ **Deployment prerequisite (HARD)**: kube-state-metrics MUST run with `--metric-labels-allowlist=pods=[app.kubernetes.io/version]`, otherwise `kube_pod_labels` carries no version, the version-injection join matches nothing, and **version thresholds are silently inert** (proven on a real cluster). The three-layer defense guards this prerequisite: the `VersionAwareThresholdInert` runtime sentinel is the safety net, and the CI static lint `check_ksm_version_allowlist.py` catches the misconfiguration.
 
-**Capability B — Custom Alerts (implementation in progress, targeting v2.9.0)**: the recipe library + vectorized compiler + 6 recipes (threshold / rate / ratio / absence / p99_latency / **forecast**) + exporter `user_threshold` emission + a compile-time `max_custom_recipes` per-tenant cap are **implemented** ([#741](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/741) S1–S4 / [#752](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/752) / [#753](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/753)); **still net-new**: the discovery catalog, the tenant-api promtool preflight, and the two UXs (onboarding / recipe editing) (see §Custom Alerts).
+**Capability B — Custom Alerts (implementation in progress, targeting v2.9.0)**: the recipe library + vectorized compiler + 6 recipes (threshold / rate / ratio / absence / p99_latency / **forecast**) + exporter `user_threshold` emission + a compile-time `max_custom_recipes` per-tenant cap + a **tenant-api shift-left preflight (in-process Go)** are **implemented** ([#741](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/741) S1–S5 / [#752](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/752) / [#753](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/753)); **still net-new**: the discovery catalog and the two UXs (onboarding / recipe editing) (see §Custom Alerts).
 
 **Deferred (defer-with-trigger)**:
 
@@ -428,7 +428,7 @@ The only **net-new core**: recipe library + parameter schema + recipe compiler +
 ### Custom Alerts Acceptance Criteria (proposed)
 
 1. A tenant can create one alert via the portal recipe form (threshold / rate / ratio / absence / p99) without touching PromQL; saving goes through GitOps.
-2. tenant-api returns HTTP 400 with the error location for a recipe whose compiled output fails promtool (shift-left preflight, mutation-proven).
+2. tenant-api (PUT/batch/validate) returns HTTP 400 with the error location for a recipe that fails **in-process Go spec validation** (shift-left preflight, mutation-proven; **implemented**, see §S5. promtool stays the CI golden gate for template regressions, off the request path).
 3. Cross-scope isolation: the vectorized rule scopes via `on(tenant)`; a tenant-leaf recipe affects only that tenant, a domain recipe joins only the tenants under that subtree (each carrying its own `tenant=`) and does not spill outside the subtree; over-reach (a tenant referencing another's, or crossing subtrees) is blocked at compile time (test assertion).
 4. A bad recipe (if it bypasses the gate) only fails its own rule-file group load; platform packs and other tenants' rules are unaffected (kind-verified).
 5. **rule-eval scale**: a shared-metric recipe's rule-eval-duration is independent of tenant count (vectorized, measured against benchmarks.md §2); unique-metric rule count is bounded by the `max_custom_recipes` cap, the global rule-count stays within budget, and eval-duration does not exceed the scrape interval (**measured pre-GA benchmark, not reasoning**).
@@ -442,7 +442,7 @@ The only **net-new core**: recipe library + parameter schema + recipe compiler +
 
 - **network policy**: if the discovery catalog is driven from tenant-api, add a `tenant-api → prometheus:9090` egress / ingress allowance (currently `network-policies.yaml` only allows grafana / threshold-exporter).
 - **alertmanager**: add an explicit null / log-only route for `mode: silent` (do not rely on the test-env default fall-through).
-- **tenant-api image**: bundle the `promtool` binary (for the shift-left preflight).
+- ~~**tenant-api image**: bundle the `promtool` binary (for the shift-left preflight)~~ → **no new dependency** (the S5 preflight is in-process Go, §S5; promtool stays in CI).
 - **Prometheus version**: rule-group `limit` needs ≥ 2.31 (current v3.11.2 ✅); `/api/v1/metadata` + `/series` (v3.x ✅).
 
 ### Forecast Recipe (trend / exhaustion prediction, #741 follow-up)
