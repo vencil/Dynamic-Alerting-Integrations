@@ -349,3 +349,28 @@ def test_negative_cap_rejected(tmp_path):
     _write_tree(tmp_path, {"a.yaml": "tenants:\n  ta: {}\n"})
     with pytest.raises(ld.CustomAlertConfigError, match=">= 0"):
         ld.build_shapes(tmp_path, max_custom_recipes=-1)
+
+
+def test_own_duplicate_of_inherited_rejected_not_quota_charged(tmp_path):
+    # phantom-quota guard: a tenant re-declaring a DOMAIN policy shape is REJECTED
+    # (severity-uniqueness) BEFORE the quota counter — it never silently eats cap.
+    _write_tree(tmp_path, {
+        "dom/_defaults.yaml": "_custom_alerts:\n"
+            '  - {recipe: threshold, name: pol, metric: m, op: ">", window: 5m, threshold: "1:warning"}\n',
+        "dom/t.yaml": 'tenants:\n  ta:\n    _custom_alerts:\n'
+            '      - {recipe: threshold, name: dup, metric: m, op: ">", window: 5m, threshold: "1:warning"}\n',
+    })
+    with pytest.raises(ld.CustomAlertConfigError, match="same shape"):
+        ld.build_shapes(tmp_path, max_custom_recipes=100)
+
+
+def test_multi_severity_same_shape_counts_as_two(tmp_path):
+    # warning + critical of the SAME shape = 2 distinct alert rules → counts as 2
+    # toward the cap (correct, not phantom — they ARE two rules).
+    _write_tree(tmp_path, {
+        "a.yaml": 'tenants:\n  ta:\n    _custom_alerts:\n'
+            '      - {recipe: threshold, name: w, metric: m, op: ">", window: 5m, threshold: "1:warning"}\n'
+            '      - {recipe: threshold, name: c, metric: m, op: ">", window: 5m, threshold: "2:critical"}\n',
+    })
+    _shapes, per_tenant = ld.build_shapes(tmp_path, max_custom_recipes=100)
+    assert per_tenant["ta"] == 2

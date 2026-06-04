@@ -194,6 +194,13 @@ def build_shapes(config_dir: Path,
                 f"at most one {sev} alert per shape"
             )
         sev_seen[skey] = origin
+        # Quota is charged AFTER all uniqueness/validation checks above, so it
+        # counts only a VALIDATED, distinct (tenant, recipe_id, severity) instance
+        # — NOT a copy-paste duplicate nor a re-declaration of an inherited policy
+        # shape (both fail loud at the name/severity checks above, before reaching
+        # here). So a tenant never "loses" quota to a dedup'd duplicate. A
+        # multi-severity same-shape recipe (warning + critical) legitimately counts
+        # as 2: it compiles to two distinct alert rules.
         per_tenant[tenant] += 1
         if is_own:
             own_per_tenant[tenant] += 1
