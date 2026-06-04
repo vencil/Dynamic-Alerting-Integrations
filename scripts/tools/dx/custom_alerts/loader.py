@@ -119,6 +119,14 @@ def build_shapes(config_dir: Path,
     OWN recipe count exceeds `max_custom_recipes` (the cost guardrail — inherited
     policy is vectorized and not counted; see MAX_CUSTOM_RECIPES_DEFAULT).
     """
+    # Reject a nonsensical cap up front (CLI --max-custom-recipes is type=int, so
+    # a negative slips through argparse) — else the cap check below rejects EVERY
+    # tenant with a confusing "exceeds cap (-1)" message. 0 IS valid (= forbid
+    # tenant-own recipes). CustomAlertConfigError → compile main exits 2 cleanly.
+    if max_custom_recipes < 0:
+        raise CustomAlertConfigError(
+            f"max_custom_recipes must be >= 0 (got {max_custom_recipes})"
+        )
     triples = collect_instances(config_dir)
 
     # validation accumulators

@@ -341,3 +341,11 @@ def test_build_pack_threads_cap(tmp_path):
     # the example fixture's shop-a has 6 OWN recipes → cap 5 must reject here.
     with pytest.raises(ld.CustomAlertConfigError, match="max_custom_recipes"):
         cc.build_pack(_EXAMPLES, max_custom_recipes=5)
+
+
+def test_negative_cap_rejected(tmp_path):
+    # a negative cap is nonsensical (CLI type=int lets it through) — fail loud
+    # up front rather than reject every tenant with a confusing message. 0 is OK.
+    _write_tree(tmp_path, {"a.yaml": "tenants:\n  ta: {}\n"})
+    with pytest.raises(ld.CustomAlertConfigError, match=">= 0"):
+        ld.build_shapes(tmp_path, max_custom_recipes=-1)
