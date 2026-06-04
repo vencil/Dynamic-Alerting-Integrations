@@ -413,7 +413,7 @@ The only **net-new core**: recipe library + parameter schema + recipe compiler +
 
 ### MVP vs Future Work (defer-with-trigger)
 
-**MVP / GA bar**: discovery catalog + onboarding (the common k8s pod app-metric case), 4–5 core recipes (threshold / rate / ratio / absence / **p99 latency**), **vectorized compiler (no fan-out) + scope-aware authoring (declaration level → vectorized rule) + `max_custom_recipes` cap**, the full safety pipeline, recipe editing + `mode: silent` preview, version graceful-join.
+**MVP / GA bar**: discovery catalog + onboarding (the common k8s pod app-metric case), 6 core recipes (threshold / rate / ratio / absence / **p99 latency** / **`forecast`**, where forecast = trend / exhaustion prediction dual-mode, see §Forecast Recipe), **vectorized compiler (no fan-out) + scope-aware authoring (declaration level → vectorized rule) + `max_custom_recipes` cap**, the full safety pipeline, recipe editing + `mode: silent` preview, version graceful-join.
 
 **Future Work**:
 
@@ -445,11 +445,71 @@ The only **net-new core**: recipe library + parameter schema + recipe compiler +
 - **tenant-api image**: bundle the `promtool` binary (for the shift-left preflight).
 - **Prometheus version**: rule-group `limit` needs ≥ 2.31 (current v3.11.2 ✅); `/api/v1/metadata` + `/series` (v3.x ✅).
 
+### Forecast Recipe (trend / exhaustion prediction, #741 follow-up)
+
+> **Decision**: add a 6th recipe `forecast` (trend / exhaustion prediction, dual-mode ratio / raw) + a platform-derived lookback + a cold-start gate, never letting tenants write PromQL; plus a related fix for an existing `for` divergence P0 ([#751](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/751), TRK-326). Each decision below carries its trade-off.
+
+Target customers already run **trend-prediction** alerts like "disk / memory will be exhausted within N hours at the current trend" — a defer-trigger that is **already tripped by a real existing need**, so it is a near-term committed slice, not backlog. But **raw `predict_linear` must not be exposed to tenants directly**: it is a well-known false-positive factory in the SRE world (transient spikes linearly extrapolated, log-rotation sawtooth treated as linear, too-short lookback = pure noise). Product stance — platform-SRE seals off the FP sources and packages them into a parameterized recipe (this is precisely the recipe model's core value over "tenants writing PromQL": anti-foot-gun wisdom tuned once, every tenant benefits).
+
+**Decisions (each with trade-off)**:
+
+- **A single `forecast` recipe, dual-mode** (presence of `capacity_metric` is the mode switch, reusing `ratio`'s denominator slug slot): **ratio mode** (with `capacity_metric`) predicts "the ratio will drop below the floor", `threshold` = the ratio floor ∈ (0,1), `op` usually `<`; **raw mode** (no `capacity_metric`) predicts "a raw gauge will cross an absolute threshold", `threshold` = absolute value, `op` usually `>`. *Trade-off*: one recipe with two `threshold` semantics, in exchange for no recipe-count bloat + a shared compiler skeleton; resolved via docs + per-mode validation (ratio mode enforces ∈ (0,1)).
+- **True prediction (predict crossing the floor), not a "low AND falling" pseudo-prediction**. A "`predict ≤ 0` + current-value gate" draft was rejected — the current-value gate castrates the forecast's lead time (fires only once already below the floor, degenerating into a threshold alert). The fix: run `predict_linear` on a **recorded ratio / aggregate series** and compare directly against the tenant's floor, so "still at 40% but falling fast" fires early. *Trade-off*: one extra base recording rule (working around `predict_linear` not being allowed to range-select a division / aggregation expression inline), in exchange for genuine lead time.
+- **Lookback is NOT tenant-settable; the platform derives `lookback = max(k·horizon, 1h)` (k≈2, integer seconds)**; the tenant only picks `horizon` (enum, e.g. `["1h","2h","4h","12h","24h","48h"]`, covering short bursts to slow exhaustion, cardinality locked to 6, into the slug). Rationale: (a) lookback is an expert knob whose exposure is the biggest foot-gun (naive predict alerts most often die from too-short lookback); (b) `horizon ≤ lookback` **holds by construction**, no extra validation; (c) lookback is a pure compile-time function of horizon, **the Go exporter never touches it**, so the cross-language slug only gains `horizon`; (d) it does not reproduce `for` divergence (lookback is not an independent tenant value). *Trade-off*: loses the "long smoothing window + short horizon" combo (a few extra-noisy metrics); mitigated by a larger k + a 1h floor, and if a real need appears, k can become an enum (defer-with-trigger).
+- **Cold-start data-sufficiency gate**: `predict_linear(<base>[lookback], horizon) and count_over_time(<base>[lookback]) > N` (N to be back-derived from benchmark, start with N>3). A freshly-onboarded / freshly-deployed series has too few points → wild predictions. ⚠️ This is a "**enough data?**" gate (does not touch lead time), **not** the rejected "current-value" gate.
+- **`forecast` only takes gauges (or gauge-like ratios)**: `predict_linear` computes garbage slopes on counter-reset series (the reset is a negative jump) → counters must be `rate()`-d first (not in MVP, deferred).
+
+**Compiled expansion (vectorized)**: both modes converge to the standard form `custom:metric {op} custom:threshold` → **`_core_record` (version graceful-join + `unless … user_state_filter{maintenance}`) is reused verbatim**, only `_metric_record` gains a forecast branch. Each mode = base record (mode-specific) + forecast record (uniform) + core (reused). Ratio-mode conceptual form (the design *shape* was verified with a **hand-written representative rule** + promtool `test rules` using realistic K8s scrape labels; **the actual compiler output awaits the implementation PR**):
+
+```promql
+record  custom:ratio:{id}   = sum by(tenant)(avail{sel}) / sum by(tenant)(cap{sel})
+record  custom:metric:{id}  = label_replace(
+            predict_linear(custom:ratio:{id}[{lookback}s], {horizon_s})
+            and count_over_time(custom:ratio:{id}[{lookback}s]) > {N},
+            "version","default","version","^$")
+record  custom:{id}:{sev}:core = custom:metric:{id} {op}
+            on(tenant,version) group_left(name,mode) custom:threshold:{id}{severity}  +  maintenance suppress
+```
+
+Raw mode: the base becomes `custom:agg:{id} = max by(tenant,version)(metric{sel})`, the forecast record runs `predict_linear` on it, the rest identical. The cold-start gate's two operands **derive from the same base series and share an identical label set**, so a bare `and` matches **without `on()`** (promtool-proven; by contrast range-selecting an expression `(...)[range]` is a parse error "ranges only allowed for vector selectors"). All time arithmetic uses **integer seconds**, the `[lookback]` emits an integer-unit duration (e.g. `[28800s]`, eliminating `1.5h`-style parse errors), with a property test locking the duration grammar.
+
+**Worked example (disk-fill, ratio mode)** — the tenant declaration (`_custom_alerts`, no PromQL):
+
+```yaml
+- recipe: forecast
+  name: disk_will_fill
+  metric: kubelet_volume_stats_available_bytes
+  capacity_metric: kubelet_volume_stats_capacity_bytes
+  op: "<"
+  horizon: 4h
+  threshold: "0.15:warning"   # predict the available ratio dropping below 15% within 4h
+```
+
+Compiled (conceptual):
+
+```promql
+# horizon=4h → 14400s;  lookback = max(2·4h, 1h) = 8h → 28800s;  cold-start N=3
+custom:metric:<rid> = label_replace(
+  predict_linear(custom:ratio:<rid>[28800s], 14400)
+  and count_over_time(custom:ratio:<rid>[28800s]) > 3,
+  "version","default","version","^$")
+# fires: per the last 8h slope, the available ratio will be < 0.15 within 4h (fires early, while headroom remains)
+```
+
+**Cross-language slug contract change**: `forecast` joins `RECIPES` (`shape.py` + Go `customAlertRecipes`); **`horizon`** is added as a slug parameter (synced across `shape.py::recipe_id` + `custom_alert.go::RecipeID` + `recipe_id_vectors.json` and grammar vectors); `capacity_metric` reuses the `den_…` slug slot; `lookback` is **NOT in the slug**. Plus `for` enters the slug + enum-bound (see below).
+
+**Caveats (must be documented externally)**: (1) **Negative forecasts** — for physically non-negative metrics, a downward trend can extrapolate `predict_linear` to a negative value: upward `>` (exhaustion / ceiling, the mainstream case) negative predictions don't fire, harmless; downward `<` the firing decision is still correct (it is indeed crossing below) but the annotation `$value` may show a negative number (**a display / cognitive issue, not a false-positive**), so recommend `>` toward an upper bound for non-negative metrics; `clamp_min(…, 0)` is an **opt-in parameter, deferred** (temperature / net flow / balance deltas are legitimately negative, cannot be a default; `clamp_min` never changes the firing decision for `threshold ≥ 0`, only the displayed value). (2) **gauge-only** (counters must be rate-d first). (3) **build-up period** — after a rule deploys it must accumulate a lookback's worth of base series; the cold-start gate keeps it silent meanwhile.
+
+**Acceptance Criteria (forecast addition, continuing the §Custom Alerts AC above)**: ① create one forecast alert (either mode) without touching PromQL, promtool passes (**realistic K8s scrape-label fixture, not lab-clean**); ② "the ratio will drop below the floor" fires **early** while there is still ample headroom (lead-time assertion); ③ the derived lookback is an integer-unit duration (property test locks the grammar) and `horizon ≤ lookback` holds by construction; ④ cold-start: base samples < N do not fire; ⑤ Go `RecipeID` == Python `recipe_id` (golden vector includes forecast + horizon vectors); ⑥ upward `>` negative predictions do not fire (regression assertion).
+
+**Related P0: `for` divergence ([#751](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/751), TRK-326)**: while designing forecast we surfaced a **correctness bug that the existing recipes already carry** — `for` is not part of the shape identity (`recipe_id` / `shape_signature`), so when two tenants share a shape but set different `for`, the latter's `for` is silently dropped (taking the first-seen value, no error or warning). `mode` can ride the data plane via `group_left` (per-tenant), but Prometheus `for:` is a control-plane **static rule attribute** that `group_left` cannot save. **Fix (a+ Strict Enum Bounding)**: bring `for` into the `recipe_id` slug + a schema-enforced enum (which must include and preserve the existing `default:"1m"`), locking cardinality to a constant and preventing free-form `for` from degrading O(M) into O(N). **P0, fixed before GA, folded into the S3-related flow, NOT coupled to forecast**; file:line forensics and full acceptance criteria live in #751 (SoT).
+
 ## Links / Cross-Reference
 
 - [#423](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/423) — epic SOT (full three-round design context)
 - [#716](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/716) — version-aware defer-with-trigger tracker (the fate of its item 1 / item 2 is in §Custom Alerts)
 - [#741](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/741) — Custom Alerts implementation epic (Capability B)
+- [#751](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/751) — `for` divergence P0 (TRK-326, §Forecast Recipe related)
 - [`config-driven.md` §2.5 / §2.6](../design/config-driven.md) — existing dimensional + scheduled mechanisms (this ADR's foundation and boundary)
 - `config/resolve.go` (dimensional key path 182–227) / `collector.go` (CustomLabels emit 68–78) — verification basis
 - [ADR-005 Projected Volume for Rule Packs](005-projected-volume-for-rule-packs.en.md) — rule-pack propagation chain
