@@ -316,10 +316,10 @@ func TestValidateTenantCustomAlerts(t *testing.T) {
 	if got := v(disabled, 1); got != nil { // 1 active + 1 disabled, cap 1 → OK
 		t.Errorf("disable must be valid and not counted toward cap, got %v", got)
 	}
-	// absent _custom_alerts → no violations
-	var empty ThresholdConfig
-	if got := ValidateTenantCustomAlerts("shop-a", empty.Tenants["shop-a"], 20); got != nil {
-		t.Errorf("absent _custom_alerts should yield nil, got %v", got)
+	// a tenant with NO overrides (nil map) → no violations. Reading a nil map is
+	// safe in Go (returns the zero value), so nil is the cleanest "no _custom_alerts".
+	if got := ValidateTenantCustomAlerts("shop-a", nil, 20); got != nil {
+		t.Errorf("nil overrides should yield nil violations, got %v", got)
 	}
 }
 
