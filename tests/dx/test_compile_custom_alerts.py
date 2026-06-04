@@ -297,3 +297,80 @@ def test_forecast_requires_horizon(tmp_path):
 def test_forecast_horizon_enum_rejected(bad):
     with pytest.raises(shp.RecipeError, match="horizon"):
         shp.recipe_id({"recipe": "forecast", "metric": "m", "op": "<", "horizon": bad})
+
+
+# --- 9. cost guardrail: max_custom_recipes per-tenant cap (S4) --------------
+def test_own_recipe_cap_rejects_over_limit(tmp_path):
+    # 3 OWN recipes, cap 2 → fail loud at compile (deterministic, actionable).
+    _write_tree(tmp_path, {
+        "a.yaml": 'tenants:\n  ta:\n    _custom_alerts:\n'
+            '      - {recipe: threshold, name: a, metric: m1, op: ">", window: 5m, threshold: "1:warning"}\n'
+            '      - {recipe: threshold, name: b, metric: m2, op: ">", window: 5m, threshold: "1:warning"}\n'
+            '      - {recipe: threshold, name: c, metric: m3, op: ">", window: 5m, threshold: "1:warning"}\n',
+    })
+    with pytest.raises(ld.CustomAlertConfigError, match="max_custom_recipes"):
+        ld.build_shapes(tmp_path, max_custom_recipes=2)
+
+
+def test_inherited_recipes_do_not_count_toward_cap(tmp_path):
+    # domain _defaults has 2 policy recipes (inherited, vectorized); tenant has 1
+    # OWN. effective = 3 but OWN = 1 ≤ cap 1 → OK (inherited is uncapped).
+    _write_tree(tmp_path, {
+        "dom/_defaults.yaml": "_custom_alerts:\n"
+            '  - {recipe: threshold, name: p1, metric: pm1, op: ">", window: 5m, threshold: "1:warning"}\n'
+            '  - {recipe: threshold, name: p2, metric: pm2, op: ">", window: 5m, threshold: "1:warning"}\n',
+        "dom/t.yaml": 'tenants:\n  ta:\n    _custom_alerts:\n'
+            '      - {recipe: threshold, name: own1, metric: om1, op: ">", window: 5m, threshold: "1:warning"}\n',
+    })
+    _shapes, per_tenant = ld.build_shapes(tmp_path, max_custom_recipes=1)  # no raise
+    assert per_tenant["ta"] == 3   # effective = 2 inherited + 1 own (own ≤ cap)
+
+
+def test_own_recipe_cap_at_limit_ok(tmp_path):
+    _write_tree(tmp_path, {
+        "a.yaml": 'tenants:\n  ta:\n    _custom_alerts:\n'
+            '      - {recipe: threshold, name: a, metric: m1, op: ">", window: 5m, threshold: "1:warning"}\n'
+            '      - {recipe: threshold, name: b, metric: m2, op: ">", window: 5m, threshold: "1:warning"}\n',
+    })
+    _shapes, per_tenant = ld.build_shapes(tmp_path, max_custom_recipes=2)  # exactly at cap
+    assert per_tenant["ta"] == 2
+
+
+def test_build_pack_threads_cap(tmp_path):
+    # CLI wiring guard: build_pack(max_custom_recipes=) must reach build_shapes.
+    # the example fixture's shop-a has 6 OWN recipes → cap 5 must reject here.
+    with pytest.raises(ld.CustomAlertConfigError, match="max_custom_recipes"):
+        cc.build_pack(_EXAMPLES, max_custom_recipes=5)
+
+
+def test_negative_cap_rejected(tmp_path):
+    # a negative cap is nonsensical (CLI type=int lets it through) — fail loud
+    # up front rather than reject every tenant with a confusing message. 0 is OK.
+    _write_tree(tmp_path, {"a.yaml": "tenants:\n  ta: {}\n"})
+    with pytest.raises(ld.CustomAlertConfigError, match=">= 0"):
+        ld.build_shapes(tmp_path, max_custom_recipes=-1)
+
+
+def test_own_duplicate_of_inherited_rejected_not_quota_charged(tmp_path):
+    # phantom-quota guard: a tenant re-declaring a DOMAIN policy shape is REJECTED
+    # (severity-uniqueness) BEFORE the quota counter — it never silently eats cap.
+    _write_tree(tmp_path, {
+        "dom/_defaults.yaml": "_custom_alerts:\n"
+            '  - {recipe: threshold, name: pol, metric: m, op: ">", window: 5m, threshold: "1:warning"}\n',
+        "dom/t.yaml": 'tenants:\n  ta:\n    _custom_alerts:\n'
+            '      - {recipe: threshold, name: dup, metric: m, op: ">", window: 5m, threshold: "1:warning"}\n',
+    })
+    with pytest.raises(ld.CustomAlertConfigError, match="same shape"):
+        ld.build_shapes(tmp_path, max_custom_recipes=100)
+
+
+def test_multi_severity_same_shape_counts_as_two(tmp_path):
+    # warning + critical of the SAME shape = 2 distinct alert rules → counts as 2
+    # toward the cap (correct, not phantom — they ARE two rules).
+    _write_tree(tmp_path, {
+        "a.yaml": 'tenants:\n  ta:\n    _custom_alerts:\n'
+            '      - {recipe: threshold, name: w, metric: m, op: ">", window: 5m, threshold: "1:warning"}\n'
+            '      - {recipe: threshold, name: c, metric: m, op: ">", window: 5m, threshold: "2:critical"}\n',
+    })
+    _shapes, per_tenant = ld.build_shapes(tmp_path, max_custom_recipes=100)
+    assert per_tenant["ta"] == 2

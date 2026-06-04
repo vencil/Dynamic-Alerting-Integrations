@@ -29,6 +29,17 @@ class CustomAlertConfigError(ValueError):
     """A declaration tree is invalid (rejected at compile time)."""
 
 
+# Per-tenant cap on TENANT-OWN custom-alert recipes (ADR-024 §Custom Alerts cost
+# guardrail, S4). Bounds the rule-count explosion: custom-alert rules grow
+# ~ N_tenants × (own recipes) because each tenant's unique-metric recipe is its
+# OWN shape (NOT vectorized across tenants). INHERITED platform/domain recipes
+# are vectorized (one shared rule for the whole subtree, O(1) in tenant count),
+# so they do NOT count toward this cap. Provisional default; the final value is
+# to be back-derived from a rule-eval-duration benchmark (ADR-024 AC #5).
+# Override via build_shapes(..., max_custom_recipes=) / `--max-custom-recipes`.
+MAX_CUSTOM_RECIPES_DEFAULT = 20
+
+
 def _load_yaml(path: Path) -> dict:
     return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
 
@@ -64,16 +75,18 @@ def _inherited_for(leaf_dir: Path, config_dir: Path,
     return inherited
 
 
-def collect_instances(config_dir: Path) -> List[Tuple[str, dict, str]]:
-    """Return (tenant, instance, origin) triples for every effective declaration.
+def collect_instances(config_dir: Path) -> List[Tuple[str, dict, str, bool]]:
+    """Return (tenant, instance, origin, is_own) tuples for every effective decl.
 
     origin is a human string (the file the instance was declared in) for error
-    messages. Inherited platform/domain instances are attributed to each tenant
-    they land on (that is what cap-counting / scope mean).
+    messages. is_own distinguishes a tenant's OWN declaration from an INHERITED
+    platform/domain policy (the latter is vectorized + does NOT count toward the
+    per-tenant cap). Inherited instances are attributed to each tenant they land
+    on (that is what scope / effective-count mean).
     """
     config_dir = Path(config_dir)
     dir_alerts = _dir_defaults_alerts(config_dir)
-    triples: List[Tuple[str, dict, str]] = []
+    triples: List[Tuple[str, dict, str, bool]] = []
 
     for path in sorted(config_dir.rglob("*.yaml")):
         if path.name == "_defaults.yaml":
@@ -89,24 +102,38 @@ def collect_instances(config_dir: Path) -> List[Tuple[str, dict, str]]:
             own = cfg.get("_custom_alerts") or []
             rel = path.relative_to(config_dir)
             for inst in inherited:
-                triples.append((tenant, inst, f"{rel} (inherited _defaults.yaml)"))
+                triples.append((tenant, inst, f"{rel} (inherited _defaults.yaml)", False))
             for inst in own:
-                triples.append((tenant, inst, str(rel)))
+                triples.append((tenant, inst, str(rel), True))
     return triples
 
 
-def build_shapes(config_dir: Path) -> Tuple[List[dict], Dict[str, int]]:
+def build_shapes(config_dir: Path,
+                 max_custom_recipes: int = MAX_CUSTOM_RECIPES_DEFAULT
+                 ) -> Tuple[List[dict], Dict[str, int]]:
     """Group all effective instances into shapes; return (shapes, per_tenant_count).
 
     Each shape dict carries the representative params + recipe_id + sorted
-    severities union. Raises CustomAlertConfigError on a uniqueness violation.
+    severities union. per_tenant_count is the EFFECTIVE count (own + inherited).
+    Raises CustomAlertConfigError on a uniqueness violation OR when a tenant's
+    OWN recipe count exceeds `max_custom_recipes` (the cost guardrail — inherited
+    policy is vectorized and not counted; see MAX_CUSTOM_RECIPES_DEFAULT).
     """
+    # Reject a nonsensical cap up front (CLI --max-custom-recipes is type=int, so
+    # a negative slips through argparse) — else the cap check below rejects EVERY
+    # tenant with a confusing "exceeds cap (-1)" message. 0 IS valid (= forbid
+    # tenant-own recipes). CustomAlertConfigError → compile main exits 2 cleanly.
+    if max_custom_recipes < 0:
+        raise CustomAlertConfigError(
+            f"max_custom_recipes must be >= 0 (got {max_custom_recipes})"
+        )
     triples = collect_instances(config_dir)
 
     # validation accumulators
     name_seen: Dict[Tuple[str, str], str] = {}              # (tenant, name) → origin
     sev_seen: Dict[Tuple[str, str, str], str] = {}          # (tenant, rid, sev) → origin
-    per_tenant: Dict[str, int] = defaultdict(int)
+    per_tenant: Dict[str, int] = defaultdict(int)           # EFFECTIVE (own + inherited)
+    own_per_tenant: Dict[str, int] = defaultdict(int)       # OWN only → the capped count
 
     # shape accumulators
     shapes: Dict[str, dict] = {}                            # recipe_id → shape
@@ -120,7 +147,7 @@ def build_shapes(config_dir: Path) -> Tuple[List[dict], Dict[str, int]]:
     # window emits invalid PromQL like `rate(m[])`).
     base_required = ("recipe", "name", "metric", "threshold")
 
-    for tenant, inst, origin in triples:
+    for tenant, inst, origin, is_own in triples:
         shape_required = ("horizon",) if inst.get("recipe") == "forecast" else ("window",)
         missing = [f for f in base_required + shape_required if f not in inst]
         if missing:
@@ -167,7 +194,16 @@ def build_shapes(config_dir: Path) -> Tuple[List[dict], Dict[str, int]]:
                 f"at most one {sev} alert per shape"
             )
         sev_seen[skey] = origin
+        # Quota is charged AFTER all uniqueness/validation checks above, so it
+        # counts only a VALIDATED, distinct (tenant, recipe_id, severity) instance
+        # — NOT a copy-paste duplicate nor a re-declaration of an inherited policy
+        # shape (both fail loud at the name/severity checks above, before reaching
+        # here). So a tenant never "loses" quota to a dedup'd duplicate. A
+        # multi-severity same-shape recipe (warning + critical) legitimately counts
+        # as 2: it compiles to two distinct alert rules.
         per_tenant[tenant] += 1
+        if is_own:
+            own_per_tenant[tenant] += 1
 
         if rid not in shapes:
             shapes[rid] = {
@@ -186,6 +222,19 @@ def build_shapes(config_dir: Path) -> Tuple[List[dict], Dict[str, int]]:
             }
         shape_sev[rid].add(sev)
 
+    # Cost guardrail (S4): cap TENANT-OWN recipes (inherited policy is vectorized,
+    # O(1) in tenant count → uncapped). Fail loud at compile time (deterministic,
+    # actionable) rather than silently truncate, so a tenant's GitOps PR surfaces
+    # the over-cap clearly. ADR-024 §Custom Alerts cost guardrail / AC #5.
+    for tenant in sorted(own_per_tenant):
+        if own_per_tenant[tenant] > max_custom_recipes:
+            raise CustomAlertConfigError(
+                f"tenant={tenant}: {own_per_tenant[tenant]} own custom-alert recipes "
+                f"exceeds the max_custom_recipes cap ({max_custom_recipes}); reduce the "
+                f"tenant's own _custom_alerts (inherited platform/domain policy is "
+                f"vectorized and does NOT count toward this cap)"
+            )
+
     result: List[dict] = []
     for rid in sorted(shapes):
         sh = shapes[rid]
@@ -195,6 +244,8 @@ def build_shapes(config_dir: Path) -> Tuple[List[dict], Dict[str, int]]:
 
 
 def count_recipes_per_tenant(config_dir: Path) -> Dict[str, int]:
-    """Cap-enforcement SEAM (S4): effective recipe count per tenant. Log-only now."""
+    """Effective recipe count per tenant (own + inherited). The OWN-recipe cap is
+    enforced inside build_shapes (S4) — this raises CustomAlertConfigError if any
+    tenant is over cap."""
     _shapes, per_tenant = build_shapes(config_dir)
     return per_tenant

@@ -77,9 +77,10 @@ def _str_representer(dumper: yaml.Dumper, data: str):
 _BlockDumper.add_representer(str, _str_representer)
 
 
-def build_pack(config_dir: Path) -> dict:
+def build_pack(config_dir: Path,
+               max_custom_recipes: int = _loader.MAX_CUSTOM_RECIPES_DEFAULT) -> dict:
     """Build the rule-pack dict (groups) from a conf.d tree."""
-    shapes, per_tenant = _loader.build_shapes(config_dir)
+    shapes, per_tenant = _loader.build_shapes(config_dir, max_custom_recipes=max_custom_recipes)
 
     recording: List[dict] = []
     alerts: List[dict] = []
@@ -131,6 +132,10 @@ def main() -> int:
                         help=f"conf.d tree with _custom_alerts (default: {DEFAULT_CONFIG_REL})")
     parser.add_argument("--out", default=None,
                         help=f"output rule pack path (default: {OUT_REL})")
+    parser.add_argument("--max-custom-recipes", type=int,
+                        default=_loader.MAX_CUSTOM_RECIPES_DEFAULT,
+                        help=f"per-tenant cap on OWN recipes (default: "
+                             f"{_loader.MAX_CUSTOM_RECIPES_DEFAULT}; inherited policy uncapped)")
     args = parser.parse_args()
 
     repo = _repo_root()
@@ -142,7 +147,7 @@ def main() -> int:
         return EXIT_CALLER_ERROR
 
     try:
-        pack = build_pack(config_dir)
+        pack = build_pack(config_dir, max_custom_recipes=args.max_custom_recipes)
     except CustomAlertConfigError as e:
         # surface compile-time validation errors as caller errors (exit 2)
         print(f"ERROR: invalid custom-alert declarations: {e}", file=sys.stderr)
@@ -169,10 +174,11 @@ def main() -> int:
     out_path.write_text(_render(groups), encoding="utf-8")
     print(f"✅ Compiled {meta['shapes']} shape(s) → {out_path.relative_to(repo)}")
     if meta["per_tenant_counts"]:
-        # cap-count SEAM (S4 flips this log into a hard gate + budget gauge)
         worst = max(meta["per_tenant_counts"].values())
-        print(f"   per-tenant recipe counts: {meta['per_tenant_counts']} "
-              f"(max={worst}; max_custom_recipes cap enforced in S4)")
+        print(f"   per-tenant EFFECTIVE recipe counts (own + inherited): "
+              f"{meta['per_tenant_counts']} (max={worst}). OWN-recipe cap "
+              f"{args.max_custom_recipes} enforced at compile (inherited policy "
+              f"is vectorized + uncapped).")
     return EXIT_OK
 
 
