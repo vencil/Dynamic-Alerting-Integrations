@@ -352,10 +352,10 @@ def _flat(idx: int, bench_ns: float, canary_ns: float = 360_000.0) -> ab.NightRe
 
 
 def _trend_args(fixture: Path, **over) -> types.SimpleNamespace:
-    d = dict(fixture_json=fixture, fixture_open_issue=None, cache_dir=None,
-             workflow="bench-record.yaml", trend_limit=14, recent_nights=3,
-             min_floor_pct=5.0, canary_floor_mult=3.0, creep_floor_pct=10.0,
-             assignee="vencil", dry_run=True)
+    d = dict(fixture_json=fixture, fixture_open_issue=None, fixture_open_body=None,
+             fixture_open_labels=None, cache_dir=None, workflow="bench-record.yaml",
+             trend_limit=14, recent_nights=3, min_floor_pct=5.0, canary_floor_mult=3.0,
+             creep_floor_pct=10.0, assignee="vencil", dry_run=True)
     d.update(over)
     return types.SimpleNamespace(**d)
 
@@ -573,3 +573,146 @@ class TestMainTrendDispatch:
         )
         assert ab.main() == 0
         assert "would open" in capsys.readouterr().err
+
+
+# ===========================================================================
+# Stateful issue lifecycle (#754 follow-up): update body in place + comment
+# only on a flagged-set transition + recovering label. Kills the daily comment
+# spam that made #702 unreadable.
+# ===========================================================================
+
+def _finding(bench, kind):
+    return ab.TrendFinding(bench=bench, kind=kind, today_ns=39e6, anchor_ns=35e6,
+                           recent_typical_ns=39e6, pct_vs_anchor=11.4,
+                           pct_typical_vs_anchor=11.4)
+
+
+class TestStatefulHelpers:
+    def test_finding_state_is_canonical_sorted(self):
+        state = ab._finding_state([_finding("Bz", "creep"), _finding("Ba", "sustained")])
+        assert state == [["Ba", "sustained"], ["Bz", "creep"]]
+
+    def test_state_marker_roundtrip_with_nested_array(self):
+        state = [["Ba", "sustained"], ["Bz", "creep"]]
+        body = "table…\n" + ab._render_state_marker(state)
+        assert ab._parse_state_marker(body) == state
+
+    def test_render_body_embeds_parseable_hidden_marker(self):
+        body = ab.render_trend_issue_body([_finding(_BENCH, "creep")], {
+            "canary_cv": 0.07, "floor_pct": 10.0, "creep_floor_pct": 20.0,
+            "n_nights": 14, "recent_k": 3})
+        assert "<!-- perf-trend-state" in body          # hidden HTML comment
+        assert ab._parse_state_marker(body) == [[_BENCH, "creep"]]
+
+    def test_parse_marker_absent_or_garbage_returns_none(self):
+        assert ab._parse_state_marker("legacy body, no marker") is None
+        assert ab._parse_state_marker("") is None
+        assert ab._parse_state_marker(None) is None
+        assert ab._parse_state_marker("<!-- perf-trend-state v1 not-json -->") is None
+
+    def test_is_recovering(self):
+        assert ab._is_recovering([_finding(_BENCH, "creep")]) is True
+        assert ab._is_recovering([_finding("A", "creep"), _finding("B", "sustained")]) is False
+        assert ab._is_recovering([]) is False
+
+    def test_recovering_label_change(self):
+        L = ab.RECOVERING_LABEL
+        creep = [_finding(_BENCH, "creep")]
+        sust = [_finding(_BENCH, "sustained")]
+        prior_sust = [[_BENCH, "sustained"]]
+        prior_creep = [[_BENCH, "creep"]]
+        # sustained→creep, not yet labelled → add
+        assert ab._recovering_label_change(creep, prior_sust, []) == "add"
+        # creep-from-start (never sustained), not labelled → no-op (matches docs)
+        assert ab._recovering_label_change(creep, prior_creep, []) is None
+        # creep continues while already labelled → persist (no redundant add)
+        assert ab._recovering_label_change(creep, prior_creep, [L]) is None
+        # sustained returns while labelled → remove
+        assert ab._recovering_label_change(sust, prior_creep, [L]) == "remove"
+        # sustained→creep but already labelled → no redundant add
+        assert ab._recovering_label_change(creep, prior_sust, [L]) is None
+
+    def test_transition_unchanged_is_none(self):
+        s = [[_BENCH, "sustained"]]
+        assert ab._state_transition_comment(s, s) is None
+
+    def test_transition_newly_and_cleared(self):
+        c = ab._state_transition_comment([["Old", "sustained"]], [["New", "creep"]])
+        assert c and "Newly flagged" in c and "`New`" in c
+        assert "Recovered" in c and "`Old`" in c
+
+    def test_transition_escalation_and_easing(self):
+        up = ab._state_transition_comment([[_BENCH, "creep"]], [[_BENCH, "sustained"]])
+        assert "Escalated to sustained" in up and f"`{_BENCH}`" in up
+        down = ab._state_transition_comment([[_BENCH, "sustained"]], [[_BENCH, "creep"]])
+        assert "Eased to creep" in down
+
+
+class TestStatefulLifecycleDryRun:
+    def _sustained_nights(self):
+        return [_flat(0, 39e6), _flat(1, 39e6), _flat(2, 39e6)] + \
+               [_flat(i, 35e6) for i in range(3, 8)]
+
+    def _creep_only_nights(self):
+        # recent MEDIAN up but one recent night dipped → creep, not sustained
+        return [_flat(0, 39.2e6), _flat(1, 39.2e6), _flat(2, 35.7e6)] + \
+               [_flat(i, 35e6) for i in range(3, 8)]
+
+    def test_same_state_refreshes_body_without_comment(self, tmp_path, capsys):
+        prior = ab._render_state_marker([[_BENCH, "sustained"]])
+        args = _trend_args(_write_fixture(tmp_path, self._sustained_nights()),
+                           fixture_open_issue=42, fixture_open_body=prior)
+        assert ab.run_trend_watch(args) == 0
+        err = capsys.readouterr().err
+        assert "would update body" in err
+        assert "no state change → body only" in err
+
+    def test_changed_state_will_comment(self, tmp_path, capsys):
+        prior = ab._render_state_marker([[_BENCH, "creep"]])  # was creep, now sustained
+        args = _trend_args(_write_fixture(tmp_path, self._sustained_nights()),
+                           fixture_open_issue=42, fixture_open_body=prior)
+        assert ab.run_trend_watch(args) == 0
+        assert "state changed → will comment" in capsys.readouterr().err
+
+    def test_legacy_body_migration_is_silent(self, tmp_path, capsys):
+        args = _trend_args(_write_fixture(tmp_path, self._sustained_nights()),
+                           fixture_open_issue=42,
+                           fixture_open_body="## old body, no state marker")
+        assert ab.run_trend_watch(args) == 0
+        err = capsys.readouterr().err
+        assert "would update body" in err and "no state change → body only" in err
+
+    def test_sustained_to_creep_would_add_recovering_label(self, tmp_path, capsys):
+        # Prior night was sustained; tonight only creep remains → add the label.
+        prior = ab._render_state_marker([[_BENCH, "sustained"]])
+        args = _trend_args(_write_fixture(tmp_path, self._creep_only_nights()),
+                           fixture_open_issue=42, fixture_open_body=prior)
+        assert ab.run_trend_watch(args) == 0
+        assert f"would add `{ab.RECOVERING_LABEL}`" in capsys.readouterr().err
+
+    def test_creep_from_start_does_not_add_recovering_label(self, tmp_path, capsys):
+        # Never sustained (prior was already creep) → label must NOT be added.
+        prior = ab._render_state_marker([[_BENCH, "creep"]])
+        args = _trend_args(_write_fixture(tmp_path, self._creep_only_nights()),
+                           fixture_open_issue=42, fixture_open_body=prior)
+        assert ab.run_trend_watch(args) == 0
+        assert ab.RECOVERING_LABEL not in capsys.readouterr().err
+
+    def test_sustained_return_would_remove_recovering_label(self, tmp_path, capsys):
+        # Issue currently carries the recovering label but sustained is back → remove.
+        prior = ab._render_state_marker([[_BENCH, "creep"]])
+        args = _trend_args(_write_fixture(tmp_path, self._sustained_nights()),
+                           fixture_open_issue=42, fixture_open_body=prior,
+                           fixture_open_labels=[ab.RECOVERING_LABEL])
+        assert ab.run_trend_watch(args) == 0
+        assert f"would remove `{ab.RECOVERING_LABEL}`" in capsys.readouterr().err
+
+    def test_close_removes_stale_recovering_label(self, tmp_path, capsys):
+        # Perf recovered (no findings) → close AND strip a lingering recovering label.
+        nights = [_flat(i, 35e6) for i in range(8)]
+        args = _trend_args(_write_fixture(tmp_path, nights), fixture_open_issue=42,
+                           fixture_open_labels=[ab.RECOVERING_LABEL])
+        assert ab.run_trend_watch(args) == 0
+        err = capsys.readouterr().err
+        assert "would close" in err
+        assert f"would remove stale `{ab.RECOVERING_LABEL}`" in err

@@ -402,6 +402,11 @@ def render_markdown_table(
 
 CANARY_BENCH = "BenchmarkControlCanaryCPU"
 PERF_TREND_LABEL = "perf-trend"
+# Applied when every current finding is `creep` (the sustained regression has
+# cleared but a softer creep remains) so subscribers can tell "still degraded"
+# from "on the mend" at a glance. Removed again the moment any `sustained`
+# finding reappears or the issue closes.
+RECOVERING_LABEL = "perf-trend:recovering"
 
 
 @dataclass
@@ -591,17 +596,115 @@ def render_trend_issue_body(findings: list[TrendFinding], meta: dict) -> str:
         )
     lines += [
         "",
-        "_Auto-filed by `analyze_bench_history.py --trend-watch`. This issue auto-closes "
-        "when nightly perf returns below the floor (closed loop). Single-night blips are "
-        "filtered by the multi-night window; movement below the canary noise floor is ignored._",
+        "_Auto-filed by `analyze_bench_history.py --trend-watch`. The watchdog updates this "
+        "issue **in place** each night (no comment spam) and only comments when the set of "
+        "flagged benchmarks changes; it auto-closes when nightly perf returns below the floor "
+        "(closed loop). Single-night blips are filtered by the multi-night window; movement "
+        "below the canary noise floor is ignored._",
+        "",
+        _render_state_marker(_finding_state(findings)),
     ]
     return "\n".join(lines)
+
+
+# ── Stateful issue lifecycle (update-in-place + transition-only comments) ──────
+# The watchdog is stateless across nightly runs, so the PRIOR state is persisted
+# in the issue body as a hidden HTML-comment marker and parsed back next night.
+# This lets us refresh the body every night (always current) yet comment ONLY on
+# a real transition — killing the daily comment spam that made #702 unreadable.
+# Greedy within the marker's own line (no DOTALL) so a nested JSON array
+# `[["x","y"]]` is captured whole, up to the last `]` before `-->`. Greedy is
+# safe here because the payload is json.dumps of [[bench, kind]] where bench is
+# constrained by _BENCH_RE to [A-Za-z0-9_] and kind ∈ {creep, sustained} — so it
+# can never contain `-->`, an extra quote, or an unbalanced bracket that would let
+# the match overrun (a free-form payload would need base64; this one doesn't).
+_STATE_MARKER_RE = re.compile(r"<!--\s*perf-trend-state v1\s*(\[.*\])\s*-->")
+
+
+def _finding_state(findings: list[TrendFinding]) -> list[list[str]]:
+    """Canonical, order-independent state: sorted [bench, kind] pairs."""
+    return sorted([f.bench, f.kind] for f in findings)
+
+
+def _render_state_marker(state: list[list[str]]) -> str:
+    return f"<!-- perf-trend-state v1 {json.dumps(state, separators=(',', ':'))} -->"
+
+
+def _parse_state_marker(body: str | None) -> list[list[str]] | None:
+    """Recover the prior state from an issue body, or None if absent/unparseable
+    (a legacy issue filed before this marker existed → caller treats as no-change
+    so the migration run is silent)."""
+    if not body:
+        return None
+    m = _STATE_MARKER_RE.search(body)
+    if not m:
+        return None
+    try:
+        data = json.loads(m.group(1))
+        return sorted([str(b), str(k)] for b, k in data)
+    except (ValueError, TypeError):
+        return None
+
+
+def _is_recovering(findings: list[TrendFinding]) -> bool:
+    """True when there are findings but every one is `creep` — the sustained
+    regression has cleared and only the softer creep signal remains."""
+    return bool(findings) and all(f.kind == "creep" for f in findings)
+
+
+def _recovering_label_change(findings: list[TrendFinding], prior_state: list[list[str]],
+                             current_labels: list[str]) -> str | None:
+    """'add' / 'remove' / None for the recovering label.
+
+    The label means "the sustained regression has cleared, only creep remains",
+    so it is added only on a sustained→creep transition (the PRIOR state carried a
+    sustained finding) and PERSISTS through subsequent creep-only nights (already
+    labelled), and is removed the moment any sustained returns. A creep-from-start
+    issue that was never sustained therefore never acquires it. `current_labels`
+    gates the gh call so we never fire a redundant add/remove."""
+    labelled = RECOVERING_LABEL in current_labels
+    prior_had_sustained = any(k == "sustained" for _, k in prior_state)
+    recovering = _is_recovering(findings) and (prior_had_sustained or labelled)
+    if recovering and not labelled:
+        return "add"
+    if not recovering and labelled:
+        return "remove"
+    return None
+
+
+def _state_transition_comment(prior: list[list[str]], current: list[list[str]]) -> str | None:
+    """Markdown summary of how the flagged-benchmark set changed since the prior
+    run, or None when nothing changed (→ body refreshed silently, no comment)."""
+    if prior == current:
+        return None
+    prior_kind = {b: k for b, k in prior}
+    cur_kind = {b: k for b, k in current}
+    newly = sorted(b for b in cur_kind if b not in prior_kind)
+    cleared = sorted(b for b in prior_kind if b not in cur_kind)
+    escalated = sorted(b for b in cur_kind
+                       if b in prior_kind and prior_kind[b] != cur_kind[b] == "sustained")
+    eased = sorted(b for b in cur_kind
+                   if b in prior_kind and prior_kind[b] != cur_kind[b] == "creep")
+    if not (newly or cleared or escalated or eased):
+        return None  # defensive: states differ only in an unexpected way
+    parts = ["## Perf-trend update", ""]
+    if newly:
+        parts.append("**Newly flagged:** " + ", ".join(f"`{b}`" for b in newly))
+    if escalated:
+        parts.append("**Escalated to sustained:** " + ", ".join(f"`{b}`" for b in escalated))
+    if eased:
+        parts.append("**Eased to creep:** " + ", ".join(f"`{b}`" for b in eased))
+    if cleared:
+        parts.append("**Recovered (no longer flagged):** " + ", ".join(f"`{b}`" for b in cleared))
+    parts += ["", "_See the issue body for the full current table. Posted only on a "
+              "change in the flagged set — the body is refreshed silently every night._"]
+    return "\n".join(parts)
 
 
 def _list_open_trend_issues() -> list[dict]:
     out = _gh([
         "issue", "list", "--repo", REPO, "--label", PERF_TREND_LABEL,
-        "--state", "open", "--json", "number,title",
+        "--state", "open", "--json", "number,title,body,labels",
     ])
     return json.loads(out) if out.strip() else []
 
@@ -657,7 +760,10 @@ def run_trend_watch(args) -> int:
         # update/close (closed-loop) branches are testable offline.
         gh_available = bool(args.fixture_json is None and shutil.which("gh"))
         if args.fixture_json is not None:
-            open_issues = ([{"number": args.fixture_open_issue, "title": "(simulated)"}]
+            open_issues = ([{"number": args.fixture_open_issue, "title": "(simulated)",
+                             "body": getattr(args, "fixture_open_body", None) or "",
+                             "labels": [{"name": n} for n in
+                                        (getattr(args, "fixture_open_labels", None) or [])]}]
                            if args.fixture_open_issue else [])
         else:
             open_issues = _list_open_trend_issues() if gh_available else []
@@ -665,12 +771,56 @@ def run_trend_watch(args) -> int:
         if findings:
             body = render_trend_issue_body(findings, meta)
             print(body)
+            current_state = _finding_state(findings)
             if open_issues:
                 num = open_issues[0]["number"]
-                print(f"→ {'[dry-run] would update' if args.dry_run else 'updating'} "
-                      f"existing perf-trend issue #{num}", file=sys.stderr)
+                # Persisted prior state lives in the issue body; a legacy body
+                # (no marker) is treated as no-change so the migration run is
+                # silent — it just refreshes the body and plants the marker.
+                prior_state = _parse_state_marker(open_issues[0].get("body"))
+                if prior_state is None:
+                    prior_state = current_state
+                transition = _state_transition_comment(prior_state, current_state)
+                cur_labels = [l.get("name") for l in (open_issues[0].get("labels") or [])]
+                label_change = _recovering_label_change(findings, prior_state, cur_labels)
+                verb = "[dry-run] would update" if args.dry_run else "updating"
+                note = "state changed → will comment" if transition else "no state change → body only"
+                print(f"→ {verb} body of existing perf-trend issue #{num} ({note})",
+                      file=sys.stderr)
+                if label_change:
+                    print(f"→ {'[dry-run] would ' if args.dry_run else ''}{label_change} "
+                          f"`{RECOVERING_LABEL}` label", file=sys.stderr)
                 if not args.dry_run and gh_available:
-                    _gh_write(["issue", "comment", str(num), "--repo", REPO, "--body", body])
+                    # Update-in-place: the body always reflects the current table
+                    # + state marker; we never append the table as a comment.
+                    #
+                    # ORDER MATTERS — body (with the advanced state marker) is
+                    # written BEFORE the transition comment ON PURPOSE. These are
+                    # two best-effort calls with no transaction, so on a partial
+                    # failure we want to fail toward SILENCE, not spam: if the
+                    # comment call fails the marker is already advanced, so next
+                    # night sees no transition and simply skips the (lost) comment
+                    # — the body still shows the correct current state. Reversing
+                    # the order would re-fire the same comment whenever the body
+                    # edit failed, resurrecting the exact comment-spam this change
+                    # exists to kill. Do not reorder.
+                    _gh_write(["issue", "edit", str(num), "--repo", REPO, "--body", body])
+                    if label_change == "add":
+                        subprocess.run(
+                            ["gh", "label", "create", RECOVERING_LABEL, "--repo", REPO,
+                             "--color", "C2E0C6", "--description",
+                             "perf-trend: sustained cleared, creep remains", "--force"],
+                            capture_output=True, text=True, check=False, timeout=60,
+                        )
+                        _gh_write(["issue", "edit", str(num), "--repo", REPO,
+                                   "--add-label", RECOVERING_LABEL])
+                    elif label_change == "remove":
+                        _gh_write(["issue", "edit", str(num), "--repo", REPO,
+                                   "--remove-label", RECOVERING_LABEL])
+                    # Comment ONLY on a real transition of the flagged set.
+                    if transition:
+                        _gh_write(["issue", "comment", str(num), "--repo", REPO,
+                                   "--body", transition])
             else:
                 assignee_note = f" (assignee: {args.assignee})" if args.assignee else ""
                 print(f"→ {'[dry-run] would open' if args.dry_run else 'opening'} "
@@ -712,7 +862,16 @@ def run_trend_watch(args) -> int:
             num = issue["number"]
             print(f"→ {'[dry-run] would close' if args.dry_run else 'closing'} "
                   f"recovered perf-trend issue #{num}", file=sys.stderr)
+            cur_labels = [l.get("name") for l in (issue.get("labels") or [])]
+            drop_recovering = RECOVERING_LABEL in cur_labels
+            if drop_recovering:
+                print(f"→ {'[dry-run] would ' if args.dry_run else ''}remove stale "
+                      f"`{RECOVERING_LABEL}` before closing #{num}", file=sys.stderr)
             if not args.dry_run and gh_available:
+                # Strip the recovering label first so a closed issue never retains it.
+                if drop_recovering:
+                    _gh_write(["issue", "edit", str(num), "--repo", REPO,
+                               "--remove-label", RECOVERING_LABEL])
                 _gh_write(["issue", "close", str(num), "--repo", REPO])
                 _gh_write(["issue", "comment", str(num), "--repo", REPO, "--body",
                            "✅ Nightly perf has returned below the floor across the recent window "
@@ -761,6 +920,12 @@ def main() -> int:
     parser.add_argument("--fixture-open-issue", type=int, default=None,
                         help="With --fixture-json, simulate a pre-existing open perf-trend "
                              "issue number (tests the update/close closed-loop offline).")
+    parser.add_argument("--fixture-open-body", default=None,
+                        help="With --fixture-open-issue, the simulated issue's existing body "
+                             "(carries the prior-state marker; tests transition-only comments).")
+    parser.add_argument("--fixture-open-labels", nargs="*", default=None,
+                        help="With --fixture-open-issue, the simulated issue's existing labels "
+                             "(tests recovering-label add/remove lifecycle offline).")
     args = parser.parse_args()
 
     if args.trend_watch:
