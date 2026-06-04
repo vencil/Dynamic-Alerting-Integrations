@@ -462,18 +462,65 @@ class TestAnalyzeTrend:
         findings, _ = self._run(nights)
         assert findings == []
 
+    def test_creep_does_not_fire_on_lone_fast_outlier_night(self):
+        # #702 regression. ONE anomalously-fast settled night (a lighter run or a
+        # measurement glitch) must NOT pin the creep baseline. The recent nights
+        # are flat at the true level — no regression — yet the old raw-`min`
+        # baseline read them as "+75% vs best" and fired creep every night, so the
+        # closed-loop issue could never close. Anchoring creep to the settled
+        # MEDIAN shrugs the outlier off → no finding → the issue closes.
+        nights = [_flat(0, 35e6), _flat(1, 35e6), _flat(2, 35e6)] + \
+                 [_flat(3, 20e6)] + [_flat(i, 35e6) for i in range(4, 9)]
+        findings, _ = self._run(nights)
+        assert all(f.bench != _BENCH for f in findings)
+
+    def test_creep_fires_when_recent_median_up_despite_one_noisy_night(self):
+        # creep's distinct value over sustained: a real step-change where ONE
+        # recent night dipped back to baseline (noise). sustained's all() misses
+        # it; creep (recent MEDIAN vs anchor) still catches it.
+        nights = [_flat(0, 39.2e6), _flat(1, 39.2e6), _flat(2, 35.7e6)] + \
+                 [_flat(i, 35e6) for i in range(3, 8)]
+        findings, _ = self._run(nights)
+        assert any(f.bench == _BENCH and f.kind == "creep" for f in findings)
+
+    def test_creep_floor_rises_with_noisy_canary(self):
+        # #702: the creep floor used to be pinned at its 10% default because it
+        # shared the sustained cap (cap == default → max(0.10, ≤0.10) ≡ 0.10, a
+        # no-op). A noisy canary must now lift the creep floor above 10% (its own
+        # higher cap) so the noise-prone rule actually gets noise headroom, while
+        # the sustained floor stays capped at 10%.
+        noisy = [330_000, 390_000, 335_000, 388_000, 360_000, 345_000, 378_000, 352_000]
+        nights = [_flat(i, 35e6, noisy[i]) for i in range(8)]
+        _, meta = self._run(nights)
+        assert meta["creep_floor_pct"] > 10.0 + 1e-9
+        assert meta["creep_floor_pct"] <= 20.0 + 1e-9   # creep cap enforced
+        assert meta["floor_pct"] <= 10.0 + 1e-9         # sustained cap unchanged
+
 
 class TestRenderTrendIssueBody:
     def test_renders_table_with_finding(self):
         f = ab.TrendFinding(bench=_BENCH, kind="sustained", today_ns=39e6,
-                            anchor_ns=35e6, best_ns=35e6,
-                            pct_vs_anchor=11.4, pct_vs_best=11.4)
+                            anchor_ns=35e6, recent_typical_ns=39e6,
+                            pct_vs_anchor=11.4, pct_typical_vs_anchor=11.4)
         body = ab.render_trend_issue_body([f], {
             "canary_cv": 0.01, "floor_pct": 5.0, "creep_floor_pct": 10.0,
             "n_nights": 8, "recent_k": 3})
         assert _BENCH in body
         assert "sustained" in body
         assert "trend regression" in body.lower()
+
+    def test_negative_pct_renders_signed_not_double_plus(self):
+        # #702: a below-anchor creep finding used to print '+-1.2%' (hard-coded
+        # '+' prefix on a negative value). Signed formatting fixes it.
+        f = ab.TrendFinding(bench=_BENCH, kind="creep", today_ns=34e6,
+                            anchor_ns=35e6, recent_typical_ns=39e6,
+                            pct_vs_anchor=-1.2, pct_typical_vs_anchor=11.4)
+        body = ab.render_trend_issue_body([f], {
+            "canary_cv": 0.07, "floor_pct": 10.0, "creep_floor_pct": 20.0,
+            "n_nights": 14, "recent_k": 3})
+        assert "-1.2%" in body
+        assert "+-" not in body
+        assert "+11.4%" in body
 
 
 class TestRunTrendWatchDryRun:

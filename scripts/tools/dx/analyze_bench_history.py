@@ -385,10 +385,14 @@ def render_markdown_table(
 #   R1 sustained — ALL of the most recent K nights sit ≥ floor above an
 #       ANCHORED baseline (median of the older, settled nights). Anchoring to
 #       the settled window (not "vs yesterday") is what makes creep visible.
-#   R2 creep — the recent window's typical night sits ≥ creep_floor above the
-#       BEST night in the whole window. Catches "+2%/night for a week" where no
-#       single night-vs-prior step ever crosses a floor, yet the cumulative
-#       drift from the best observed night is large.
+#   R2 creep — the recent window's MEDIAN sits ≥ creep_floor above the SAME
+#       settled-window-median anchor used by sustained. This tolerates one noisy
+#       recent night (which sustained's all() would let hide a real step-change)
+#       while staying robust to a lone anomalously-fast night — a raw-`min`
+#       baseline let one fast night pin the floor so a flat series crept forever
+#       and the closed-loop issue never closed (#702). (A 14-night window can't
+#       accumulate a multi-week +X%/night creep past the floor anyway, so the
+#       only honest signal here is recent-typical vs settled-typical.)
 #
 # Both rules use the recent *window* (not just tonight), so neither fires on a
 # lone bad night. The floor is the max of a fixed minimum and a multiple of the
@@ -465,9 +469,9 @@ class TrendFinding:
     kind: str          # "sustained" | "creep"
     today_ns: float
     anchor_ns: float
-    best_ns: float
+    recent_typical_ns: float
     pct_vs_anchor: float
-    pct_vs_best: float
+    pct_typical_vs_anchor: float
 
 
 def analyze_trend(
@@ -489,10 +493,18 @@ def analyze_trend(
     # is CAPPED: a genuinely noisy runner must not be able to inflate the floor so
     # high that real sustained regressions are silenced (the watchdog's worst
     # failure mode — failing toward silence exactly when the runner is noisy).
-    CANARY_FLOOR_CAP = 0.10  # ≤ 10 percentage points of canary-driven floor
+    CANARY_FLOOR_CAP = 0.10  # ≤ 10 pp of canary-driven floor for the sustained rule
+    # The creep rule is the NOISE-PRONE one (recent-median vs the settled anchor):
+    # a noisy runner widens that gap, so on a noisy runner the creep floor must
+    # RISE. Its cap is therefore higher than the sustained cap. Sharing the
+    # sustained cap made the canary term a NO-OP for creep — the cap equalled the
+    # 10% creep default, so max(0.10, ≤0.10) ≡ 0.10 — letting runner noise leak
+    # straight into spurious creep findings (issue #702).
+    CREEP_CANARY_FLOOR_CAP = 0.20
     canary_contrib = min(canary_floor_mult * canary_cv, CANARY_FLOOR_CAP)
+    creep_canary_contrib = min(canary_floor_mult * canary_cv, CREEP_CANARY_FLOOR_CAP)
     floor = max(min_floor_pct / 100.0, canary_contrib)
-    creep_floor = max(creep_floor_pct / 100.0, canary_contrib)
+    creep_floor = max(creep_floor_pct / 100.0, creep_canary_contrib)
 
     findings: list[TrendFinding] = []
     benches = {b for n in nights for b in n.medians} - {CANARY_BENCH}
@@ -510,23 +522,31 @@ def analyze_trend(
         baseline_vals = [n.medians[bench] for n in nights[recent_k:] if bench in n.medians]
         if len(baseline_vals) < 2:
             continue
-        present_vals = [n.medians[bench] for n in nights if bench in n.medians]
         anchor = statistics.median(baseline_vals)
-        best = min(present_vals)
         today = recent[0]
         recent_typical = statistics.median(recent)
 
+        # Both rules anchor to the SETTLED-window median — a robust central
+        # tendency, immune to the lone anomalously-fast night that a raw-`min`
+        # low-watermark let pin the creep baseline forever (the #702 trap: a
+        # single fast night → every later night reads as "+X% vs best" → creep
+        # fires perpetually → the closed-loop issue never closes). In a 14-night
+        # window a multi-week thermal creep can't accumulate past the floor
+        # anyway, so the only honest signal here is "recent typical vs settled
+        # typical". sustained = ALL recent nights up (consistent); creep = the
+        # recent MEDIAN up (tolerates one noisy night that would hide a real
+        # step-change from sustained's all()).
         sustained = anchor > 0 and all(x >= anchor * (1 + floor) for x in recent)
-        creep = best > 0 and recent_typical >= best * (1 + creep_floor)
+        creep = anchor > 0 and recent_typical >= anchor * (1 + creep_floor)
         if sustained or creep:
             findings.append(TrendFinding(
                 bench=bench,
                 kind="sustained" if sustained else "creep",
                 today_ns=today,
                 anchor_ns=anchor,
-                best_ns=best,
+                recent_typical_ns=recent_typical,
                 pct_vs_anchor=(today / anchor - 1) * 100 if anchor else float("nan"),
-                pct_vs_best=(today / best - 1) * 100 if best else float("nan"),
+                pct_typical_vs_anchor=(recent_typical / anchor - 1) * 100 if anchor else float("nan"),
             ))
     meta = {
         "canary_cv": canary_cv,
@@ -536,6 +556,14 @@ def analyze_trend(
         "recent_k": recent_k,
     }
     return findings, meta
+
+
+def _signed_pct(pct: float) -> str:
+    """Signed percent, e.g. '+5.4%' / '-1.2%'. Avoids the '+-1.2%' double-sign a
+    hard-coded '+' prefix produced for below-anchor findings (issue #702)."""
+    if math.isnan(pct):
+        return "—"
+    return f"{pct:+.1f}%"
 
 
 def render_trend_issue_body(findings: list[TrendFinding], meta: dict) -> str:
@@ -549,17 +577,17 @@ def render_trend_issue_body(findings: list[TrendFinding], meta: dict) -> str:
         f"creep floor: **{meta['creep_floor_pct']:.1f}%**.",
         f"- Control-canary night-to-night CV: **{meta['canary_cv']:.2%}** "
         f"(`{CANARY_BENCH}`; movement below the floor is indistinguishable from runner noise).",
-        f"- Sustained rule = all {meta['recent_k']} most-recent nights above an anchored "
-        "(settled-window-median) baseline; creep rule = recent typical night above the best "
-        "night in the window.",
+        f"- Sustained rule = all {meta['recent_k']} most-recent nights above the anchored "
+        "(settled-window-median) baseline; creep rule = the recent-window MEDIAN above that "
+        "same anchor (catches a step-change that a single noisy night hides from `sustained`).",
         "",
-        "| Bench | Rule | Today | vs anchor | vs best-night |",
+        "| Bench | Rule | Today | today vs anchor | recent-median vs anchor |",
         "|---|---|---:|---:|---:|",
     ]
     for f in findings:
         lines.append(
             f"| `{f.bench}` | {f.kind} | {format_ns(f.today_ns)} "
-            f"| +{f.pct_vs_anchor:.1f}% | +{f.pct_vs_best:.1f}% |"
+            f"| {_signed_pct(f.pct_vs_anchor)} | {_signed_pct(f.pct_typical_vs_anchor)} |"
         )
     lines += [
         "",
@@ -722,7 +750,7 @@ def main() -> int:
     parser.add_argument("--canary-floor-mult", type=float, default=3.0,
                         help="Floor is max(min-floor, mult × canary night-to-night CV) (default: 3).")
     parser.add_argument("--creep-floor-pct", type=float, default=10.0,
-                        help="Creep-rule floor %% vs the best night in the window (default: 10.0).")
+                        help="Creep-rule floor %% for recent-median vs settled anchor (default: 10.0).")
     parser.add_argument("--assignee", default=REPO.split("/")[0],
                         help=f"Issue assignee for --trend-watch (default: {REPO.split('/')[0]}).")
     parser.add_argument("--dry-run", action="store_true",

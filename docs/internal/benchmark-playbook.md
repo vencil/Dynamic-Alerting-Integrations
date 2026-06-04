@@ -245,8 +245,8 @@ main 的**持續退化**由 nightly trend watchdog 守望（下節），不靠 P
 `bench-record.yaml` 的第二個 job `trend-watch`（nightly baseline 上傳後跑）用 `analyze_bench_history.py --trend-watch` 比對最近 N 晚，**只在「持續多晚」退化時自動開 `perf-trend` issue**（`--assignee` 預設 repo owner = email 通知;若 owner 是 GitHub **Org** 無法 assign,自動 fallback 成**不指派**、仍照常開 issue,靠 `perf-trend` label 訂閱通知),perf 回到 baseline 時**自動關閉**（closed loop）：
 
 - **R1 sustained**：最近 K 晚（預設 3）全部高於**錨定 baseline**（settled 舊窗中位數，非「跟昨天比」）≥ floor。
-- **R2 creep**：最近窗的典型晚高於窗內**最佳晚** ≥ creep floor——抓「每晚只退 2%、累積卻很大」的慢性 creep（只跟昨天比會被吃掉）。
-- **noise floor**：floor = max(固定 5%, min(3× control canary 夜間 CV, **10% 上限**))。nightly 也跑 `BenchmarkControlCanaryCPU`（同 PR gate 那支）→ 小於 runner 自身噪音的移動永不告警；canary 貢獻**封頂 10%**,避免噪音 runner 反而把真退化消音(fail-toward-silence 防線)。
+- **R2 creep**：最近窗的**典型晚（recent median）**高於**同一個錨定 baseline** ≥ creep floor。容忍「最近 3 晚有一晚因雜訊回落」的 step-change——這種會被 R1 的 `all()` 漏掉。⚠️ creep 比的是**中位數對中位數**（非舊版的「對窗內最佳晚」）：舊版用 `min` 當基準,單一異常快的夜（lighter run / 量測 glitch）就把基準釘死,讓平坦無退化的序列也永遠 creep、closed-loop issue 永遠關不掉（#702）。註:14 晚窗本就抓不到「每晚退 0.5%×數週」的慢性 creep（累積 < floor）,故唯一誠實的訊號是「近期典型 vs 過往典型」。
+- **noise floor**：sustained floor = max(固定 5%, min(3× control canary 夜間 CV, **10% 上限**))；**creep floor = max(10%, min(3× canary CV, 20% 上限**))。creep 是噪音敏感規則（median 對 anchor 的差隨 runner 噪音放大）,故 cap 較高、噪音夜會把 creep floor 拉到 15–20%；舊版誤與 sustained 共用 10% cap → `max(0.10, ≤0.10) ≡ 0.10` 死胡同,canary 對 creep 形同無效（#702）。nightly 也跑 `BenchmarkControlCanaryCPU`（同 PR gate 那支）→ 小於 runner 自身噪音的移動永不告警；sustained 的 canary 貢獻**封頂 10%**,避免噪音 runner 反而把真退化消音(fail-toward-silence 防線)。
 - 單晚 blip 被「最近窗多晚」條件過濾;**bench 從最近窗消失(perf timeout 徵兆)直接 skip**——不讓舊夜冒充「今天」或藏掉 spike;已開 issue 則 comment 更新不重開。
 
 本機 dry-run：`py scripts/tools/dx/analyze_bench_history.py --trend-watch --fixture-json <nights.json> --dry-run`（`--fixture-open-issue N` 可離線測 update/close 閉環）。
