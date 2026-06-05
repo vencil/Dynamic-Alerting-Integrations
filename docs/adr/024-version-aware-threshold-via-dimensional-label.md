@@ -659,6 +659,29 @@ sequenceDiagram
 
 **S6b Acceptance Criteria**：① `<RecipeBuilder>` 為純元件 `(Context)=>RecipeObject`、Vitest 可孤立測（6 recipe 條件式欄位 / 動態白話狀態機 / ghost soft-warn）；② enum 全部 derive 自 `tenant-config.schema.json`、**無 hardcoded enum**（schema 改 → dist-gate 紅）；③ 每個 metric 欄獨立 debounce+AbortController fetcher、autocomplete 與 ghost-validation 脫鉤（race 不誤報）；④ S6b-1 standalone 吐帶完整 wrapper 的 copy-paste snippet；⑤ S6b-2 折進 tenant-manager、**name-based** add/edit（非 index）、寫入走既有 PUT+S5、零 clobber。
 
+### S6b-2 — tenant-manager 寫入路徑（recipe 折進 live 編輯器，#741）
+
+> Grounding 推翻 §S6b-2 原前提:tenant-manager **對 per-tenant config 無 PUT**(maintenance/silent modal 是產 YAML 供 copy;唯一 live write 是 groups)。寫入路徑經 brainstorm + Gemini 三波對抗(6 reef)+ Path A/B fork + **spike gate** 收斂。
+
+**緣起**:S6b-1 的 `<RecipeBuilder>` 不擁有寫入;S6b-2 補 live 寫入,讓租戶在 tenant-manager 內 add/edit/delete recipe 並 commit 回 GitOps。
+
+**核心心智模型:後端擁有 YAML round-trip,前端只送 JSON**。兩個 blocker(portal 無 YAML serializer + PUT 是 full-overlay)否決了「前端序列化整檔」與「前端 text-splice」(後者重造我在 §S6b 反對的 splice footgun)。解法 = **後端 sub-resource 端點**。
+
+**端點** `PUT /api/v1/tenants/{id}/custom-alerts`:
+- body `{ custom_alerts: [...], base_hash }`;client 送**完整 recipe JSON 陣列**(collection-replace,client 持有陣列、永不序列化 YAML)。
+- server:載現檔 → **base_hash OCC**(不符 → 409,Reef 3)→ **yaml.Node AST 手術**替換/刪除 `_custom_alerts` node(保註解,Reef 1;空陣列刪 key 不留 `[]`,Reef 2)→ **S5 `ValidateTenantCustomAlerts`** 整陣列(違規 → 400 + `Violations[]` 帶 name,Reef 4)→ 經既有 `gitops.Writer` commit。
+- **MVP scope**:direct write-back mode;**PR mode → 501**(該 persona 用 S6b-1 standalone + 正常 PR flow)。
+
+**Path A vs B 裁決**:**A(AST 手術改共享 tenant.yaml)** —— 非「便宜版」(struct Marshal 會抹除註解,Reef 1);**B(機器專屬 sidecar 儲存)** 雖架構更乾淨但須重開 merged 的 S1–S5 `_custom_alerts` 位置 + 遷移,代價遠超邊際收益。選 A + **spike gate**:動工前先驗 yaml.v3 Node round-trip 保留註解。
+
+**Spike 結論(通過)**:`internal/customalerts/merge.go` 實證 —— head/inline/neighbor 註解 + sibling key + 2-space 縮排全保留;空陣列乾淨刪 key;canonical key 序(recipe→name→metric→…,非 map 字母序)+ `value:severity` 含 `:` 強制引號(emission 品質,非便宜直丟 map)。
+
+**OCC trade-off(explicit)**:base_hash 算**整檔**(GET 回 `source_hash`)→ 無關欄位被他人改也 409。MVP 接受(Safety>Granularity,config 編輯低頻);409 文案清楚。
+
+**S6b-2 Acceptance Criteria**:① 端點 AST-merge 保註解 + 空陣列刪 key + canonical 序/引號(Go 測 + spike);② base_hash 不符 → 409、相符 → 寫入;③ 無效 recipe(含既存毒藥)→ 400 + `Violations[]`(可定位是哪條);④ 走既有 `gitops.Writer`(統一 commit/驗證,不另闢寫入);⑤ PR mode → 501(誠實標界);⑥ GET 回 `source_hash`。
+
+**Future-radar(defer-with-trigger)**:Path B sidecar(*trigger*:機器-寫-人類檔成跨工具痛點 / AST 邊角案例咬人);granular per-section OCC(*trigger*:整檔 hash 假 409 摩擦);PR-mode recipe-write;recipe stable-id 取代 name-as-identity;granular REST verbs(POST/PUT{name}/DELETE{name})。
+
 ### Future robustness radar（S5 + S6 外審衍生，defer-with-trigger）
 
 S5 / S6 外審（Gemini）掃出的**未來**強健性議題，**none 阻礙當切片**，記此待 trigger：

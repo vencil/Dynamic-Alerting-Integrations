@@ -656,6 +656,29 @@ sequenceDiagram
 
 **S6b Acceptance Criteria**: ① `<RecipeBuilder>` is a pure component `(Context)=>RecipeObject`, Vitest-testable in isolation (6 recipes' conditional fields / dynamic plain-English state machine / ghost soft-warn); ② all enums derive from `tenant-config.schema.json`, **no hardcoded enums** (a schema change reddens the dist-gate); ③ each metric field has its own debounce+AbortController fetcher, autocomplete decoupled from ghost-validation (the race does not mis-fire); ④ the S6b-1 standalone emits a copy-paste snippet with the full wrapper; ⑤ S6b-2 folds into tenant-manager with **name-based** add/edit (not index), the write going through the existing PUT+S5, zero clobber.
 
+### S6b-2 — the tenant-manager write path (recipes folded into the live editor, #741)
+
+> Grounding overturned the original §S6b-2 premise: tenant-manager has **no PUT for per-tenant config** (the maintenance/silent modals generate YAML to copy; its only live write is groups). The write path converged over brainstorm + Gemini three-wave adversarial review (6 reefs) + a Path A/B fork + a **spike gate**.
+
+**Context**: S6b-1's `<RecipeBuilder>` does not own the write; S6b-2 adds the live write so a tenant can add/edit/delete recipes inside tenant-manager and commit back to GitOps.
+
+**Core mental model: the backend owns the YAML round-trip; the frontend sends only JSON.** Two blockers (the portal has no YAML serializer + PUT is full-overlay) rule out "frontend serialises the whole file" and "frontend text-splice" (the latter recreates the splice footgun §S6b argued against). The answer = a **backend sub-resource endpoint**.
+
+**Endpoint** `PUT /api/v1/tenants/{id}/custom-alerts`:
+- body `{ custom_alerts: [...], base_hash }`; the client sends the **full recipe JSON array** (collection-replace; the client owns the array and never serialises YAML).
+- server: load the current file → **base_hash OCC** (mismatch → 409, Reef 3) → **yaml.Node AST surgery** replacing/deleting the `_custom_alerts` node (preserving comments, Reef 1; an empty array deletes the key with no `[]` debris, Reef 2) → **S5 `ValidateTenantCustomAlerts`** over the whole array (violations → 400 + `Violations[]` carrying the recipe name, Reef 4) → commit via the existing `gitops.Writer`.
+- **MVP scope**: direct write-back mode; **PR mode → 501** (that persona uses the S6b-1 standalone + their normal PR flow).
+
+**Path A vs B verdict**: **A (AST surgery on the shared tenant.yaml)** — NOT the "cheap" version (a struct Marshal would wipe comments, Reef 1); **B (separate machine-owned sidecar storage)** is architecturally cleaner but would re-open the merged S1–S5 `_custom_alerts` location + a migration, a cost far above the marginal benefit. Chose A + a **spike gate**: verify yaml.v3 Node round-trip preserves comments before building.
+
+**Spike outcome (passed)**: `internal/customalerts/merge.go` proves it — head/inline/neighbour comments + sibling keys + 2-space indent all preserved; an empty array deletes the key cleanly; canonical key order (recipe→name→metric→…, not the map's alphabetical order) + force-quoting of `value:severity` values containing `:` (emission quality, not a cheap raw-map dump).
+
+**OCC trade-off (explicit)**: base_hash is the **whole-file** hash (GET returns `source_hash`) → an unrelated field edited by someone else also 409s. Accepted for the MVP (Safety > Granularity, config edits are low-frequency); the 409 message is clear.
+
+**S6b-2 Acceptance Criteria**: ① the endpoint's AST-merge preserves comments + deletes the key on empty + canonical order/quoting (Go tests + spike); ② base_hash mismatch → 409, match → write; ③ an invalid recipe (incl. a pre-existing bad one) → 400 + `Violations[]` (locatable by name); ④ writes via the existing `gitops.Writer` (unified commit/validation, no parallel write path); ⑤ PR mode → 501 (honest boundary); ⑥ GET returns `source_hash`.
+
+**Future radar (defer-with-trigger)**: Path B sidecar (*trigger*: machine-writes-human-file becomes a cross-tool pain / an AST edge case bites); granular per-section OCC (*trigger*: whole-file-hash false-409 friction); PR-mode recipe-write; a recipe stable-id replacing name-as-identity; granular REST verbs (POST/PUT{name}/DELETE{name}).
+
 ### Future robustness radar (surfaced by the S5 + S6 external reviews, defer-with-trigger)
 
 The S5 / S6 external reviews (Gemini) surfaced **future** robustness items; **none block the current slice**, recorded here pending their triggers:

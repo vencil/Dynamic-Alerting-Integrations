@@ -14,10 +14,15 @@ import (
 
 // TenantDetail is the full tenant representation returned by GET /api/v1/tenants/{id}.
 type TenantDetail struct {
-	ID       string                        `json:"id"`
-	RawYAML  string                        `json:"raw_yaml"`
-	Resolved []cfg.ResolvedThreshold       `json:"resolved_thresholds"`
-	Warnings []string                      `json:"validation_warnings,omitempty"`
+	ID       string                  `json:"id"`
+	RawYAML  string                  `json:"raw_yaml"`
+	Resolved []cfg.ResolvedThreshold `json:"resolved_thresholds"`
+	Warnings []string                `json:"validation_warnings,omitempty"`
+	// SourceHash is SHA-256[:16] of the raw tenant file. Clients echo it
+	// back as `base_hash` on PUT .../custom-alerts for optimistic-
+	// concurrency (ADR-024 §S6b-2): the write 409s if the file changed
+	// underneath them.
+	SourceHash string `json:"source_hash"`
 }
 
 // GetTenant handles GET /api/v1/tenants/{id}
@@ -35,18 +40,18 @@ func GetTenant(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		tenantID := chi.URLParam(r, "id")
 		if err := ValidateTenantID(tenantID); err != nil {
-			WriteJSONError(w, r,http.StatusBadRequest, err.Error())
+			WriteJSONError(w, r, http.StatusBadRequest, err.Error())
 			return
 		}
 
 		filePath := filepath.Join(d.ConfigDir, tenantID+".yaml")
 		data, err := os.ReadFile(filePath)
 		if os.IsNotExist(err) {
-			WriteJSONError(w, r,http.StatusNotFound, "tenant not found: "+tenantID)
+			WriteJSONError(w, r, http.StatusNotFound, "tenant not found: "+tenantID)
 			return
 		}
 		if err != nil {
-			WriteJSONError(w, r,http.StatusInternalServerError, err.Error())
+			WriteJSONError(w, r, http.StatusInternalServerError, err.Error())
 			return
 		}
 
@@ -65,10 +70,11 @@ func GetTenant(d *Deps) http.HandlerFunc {
 		}
 
 		detail := TenantDetail{
-			ID:       tenantID,
-			RawYAML:  string(data),
-			Resolved: tenantResolved,
-			Warnings: warnings,
+			ID:         tenantID,
+			RawYAML:    string(data),
+			Resolved:   tenantResolved,
+			Warnings:   warnings,
+			SourceHash: cfg.ComputeSourceHash(data),
 		}
 
 		w.Header().Set("Content-Type", "application/json")
@@ -91,4 +97,3 @@ func tenantIDFromPath(r *http.Request) string {
 
 // TenantIDFromPath is the exported version for use in router setup.
 var TenantIDFromPath = tenantIDFromPath
-
