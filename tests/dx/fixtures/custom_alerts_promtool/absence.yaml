@@ -30,6 +30,7 @@ tests:
         alertname: Custom_absence__app_heartbeat_total__absent__w10m__for1m
         exp_alerts:
           - exp_labels:
+              component: custom
               severity: critical
               tenant: shop-a
               recipe: absence

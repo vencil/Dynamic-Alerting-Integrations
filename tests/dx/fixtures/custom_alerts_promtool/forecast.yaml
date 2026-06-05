@@ -33,6 +33,7 @@ tests:
         alertname: Custom_forecast__kubelet_volume_stats_available_bytes__lt__h4h__den_kubelet_volume_stats_capacity_bytes__for30m
         exp_alerts:
           - exp_labels:
+              component: custom
               severity: warning
               tenant: shop-a
               recipe: forecast

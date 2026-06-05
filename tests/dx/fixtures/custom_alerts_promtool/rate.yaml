@@ -31,6 +31,7 @@ tests:
         alertname: Custom_rate__http_requests_total__s_method_POST__sre_status_5____gt__w5m__for1m
         exp_alerts:
           - exp_labels:
+              component: custom
               severity: warning
               tenant: shop-a
               recipe: rate

@@ -684,13 +684,43 @@ sequenceDiagram
 
 **Future-radar(defer-with-trigger)**:Path B sidecar(*trigger*:機器-寫-人類檔成跨工具痛點 / AST 邊角案例咬人);granular per-section OCC(*trigger*:整檔 hash 假 409 摩擦);PR-mode recipe-write;recipe stable-id 取代 name-as-identity;granular REST verbs(POST/PUT{name}/DELETE{name})。
 
+### S7/S8 — Custom Alert routing（通知路由 + 靜音 + 隔離，#741 收尾）
+
+> 設計經 brainstorm + Gemini 六波對抗收斂。**核心 reframe（專案引導者直覺觸發）**:silent **不**走 Alertmanager route-to-null,而是**完全複用 ADR-003 既有的 Sentinel+Inhibit 三態典範** —— 消除 YAML `null`/discard receiver footgun、與平台一致、AM UI 可見度更高。
+
+**緣起 / 意圖**:資料平面（S3a）早已讓 `mode`（page/silent）label 經 `group_left(name, mode)` 一路帶到 alert（promtool `mode_routing.yaml` 證實混 mode 租戶共用單一向量規則）。S7/S8 是 **Alertmanager 端消費這個 label**:silent 靜音（仍評估、仍進 TSDB）、page 通知,且**與平台告警絕對隔離**,租戶噪音永不灌爆平台 NOC。
+
+**復用優先 — 三條軸全走 inhibit/rule,不發明新機制**:
+
+- **Maintenance 三態**:custom 告警**已**在 recording rule 層 `unless on(tenant) user_state_filter{filter="maintenance"}` ride 之（零新工）。
+- **租戶級 Silent**:`_silent_mode` → `user_silent_mode` flag → `TenantSilentWarning/Critical` sentinel → 既有 inhibit（`equal:[tenant]`）**已連帶涵蓋 custom**（租戶全靜音 ⊇ custom,合理協同）。
+- **per-recipe Silent（本切片唯一 net-new 軸）**:單一全域 sentinel `CustomRecipeSilent`（`max by(tenant,name)(user_threshold{component="custom",mode="silent"})`,`severity:none`,編譯器在 `custom-alerts` group **注入一次**、非 per-recipe）→ AM inhibit `source=CustomRecipeSilent / target=component="custom" / equal:[tenant,name]` → **只**抑制該 (租戶,recipe) 的通知,**同 shape 的 page 租戶照常通知**（驗於 mode_routing fixture:web-b silent 被 sentinel 命中、shop-a page 不受影響）。靜音的 alert 仍是 `ALERTS{...,mode="silent"}` 時序 → **silent ≡ dashboard-only 告警**（隱藏版價值,文件須白話定調為「靜音,但監控面板可見觸發狀態」）。
+
+**判別子（A1）**:每條 `Custom_*` alert 加靜態 label `component="custom"`。平台告警**零** `component` label → AM 用 `component="custom"` 精確 match 無歧義（vs 耦合 `Custom_` alertname 前綴）。
+
+**路由結構（靜態,平台級）**:`component="custom"` route **置於最前 + `continue:false`** → page 落 `custom-alerts-firehose`、`group_by:[tenant, alertname]`、專屬 debounce `group_wait:30s`/`group_interval:5m`（與平台 `_defaults` 慣例對齊）。**「最前 + continue:false」是 gate 正確性必需,非美觀**:enforced NOC route 是 `continue:true` 且 matchers optional（無 matcher = match-all）→ 若 custom route 不在其前攔截,custom 告警會**漏進平台 NOC**。
+
+**Firehose receiver（MVP = 空 receiver）**:與平台 `default` 隔離,MVP 不接 outbound（custom 告警經 AM UI + `ALERTS` series 仍可見,silent 者在 inhibit 前已攔）。⚠ 接 outbound 時須用 **webhook adapter → log/event backend**（如 VictoriaLogs,經 AM-payload→bulk 橋接;AM webhook payload ≠ ES bulk 格式,且部署的 vector 是 kubernetes_logs source,無現成端點）**而非 rate-limited IM（Slack/PagerDuty）**:跨租戶 storm 撞 IM 429 → AM retry/queue 堆積 → OOM → 平台 P0 發不出。**接死的 placeholder URL 會自釀此 retry-OOM**,故 MVP 留空最安全。屆時 webhook_config 設 `send_resolved:false` + `max_alerts`（**truncate 非分頁**,lossy cap;`ALERTS` series 才是 SoT）。
+
+**Durability（強健化,經對抗確立為必需）**:`generate_alertmanager_routes.py` 的組裝對 `route.routes` 是 **REPLACE 非 append**(`assemble_configmap` / `_merge_routes_receivers_inhibits`)→ 純放 base ConfigMap 的 custom route 會在任何 `--apply` 被靜默清掉。故在**組裝層**注入（`_inject_custom_alert_isolation`,prepend custom route + firehose receiver,idempotent）→ 兩條輸出路徑（--output-configmap / --apply）都恆在且居首。注入選組裝層而非 `generate_routes` 核心 —— 後者被大量「只回 tenant/enforced route」契約的測試呼叫,churn 不成比例。
+
+**group_by reconciliation（駁回 radar 舊註的 `recipe_id`）**:`[tenant, alertname]` 已達 radar 原意的 per-recipe 隔離 —— `alertname = Custom_<recipe_id>`,而 recipe_id slug **已含 metric**,故不同 metric 的 recipe 必為不同 alertname,cpu 與 queue 不會揉成一團。**`recipe_id` 並非 alert label**（label 僅 severity/tenant/recipe/mode/component）→ 若放進 group_by 會 group-by 一個不存在的 label（反致全揉一團）。故維持 `[tenant, alertname]`,與平台 `[alertname, tenant]` 慣例一致。
+
+**S7/S8 Acceptance Criteria**:① 每條 `Custom_*` alert 帶 `component="custom"`;② `CustomRecipeSilent` sentinel 全域注入一次、`severity:none`、`by(tenant,name)`;③ inhibit `equal:[tenant,name]` 只抑制 silent 的 (租戶,recipe),page 同 shape 不受影響;④ custom route 居首 + `continue:false`,在 enforced NOC route 之前;⑤ firehose receiver 與平台 `default` 隔離;⑥ 注入跨 `--apply`（route REPLACE）durable + idempotent。
+
+**與 ADR-003 的調和**:tenant-state 三態（Normal/Silent/Maintenance）→ inhibit（不動）;recipe-class `mode` → **亦走 inhibit**（`CustomRecipeSilent`）→ 全平台單一 silent 典範,不引入 routing-layer 靜音這條 ADR-003 已相對否決的路。
+
+**defer-with-trigger**:firehose webhook-adapter outbound delivery（*trigger*:需 SRE 即時看 page-mode firing,且 adapter 就緒）;per-tenant page-mode channel 路由（*trigger*:客戶要 custom 告警進自己 channel）;custom severity-dedup（custom 無 `metric_group` → 平台 dedup inhibit 不涵蓋;*trigger*:同 shape warning+critical 雙通知客訴）。
+
+**⛔ Rollout-order hard gate**:S3b（把會 fire 的 custom pack 部署到 live Prometheus）**必須相依本 S7/S8 先 merge**。route + sentinel + inhibit 落地前,禁止部署任何 fire-able custom 規則,否則 storm 灌入平台 default receiver。
+
 ### Future robustness radar（S5 + S6 外審衍生，defer-with-trigger）
 
 S5 / S6 外審（Gemini）掃出的**未來**強健性議題，**none 阻礙當切片**，記此待 trigger：
 
 - **regex value 長度上限（LOW，hygiene）**：~~ReDoS catastrophic backtracking~~ **對 Prometheus 不成立**（label matcher 用 Go `regexp` = RE2、線性、無 backtracking）。殘留:超長/超複雜 regex × 海量 series 仍可能拖慢 eval → selector regex value 加長度上限為廉價衛生防護。*Trigger*：實測 rule-eval-duration 受 regex 複雜度影響。
 - **`keep_firing_for` 解除延遲（HIGH UX，future recipe param）**：`for` 防突波,但跌破即 resolved → 閾值附近震盪 → 告警疲勞。Prometheus 2.42+（本 repo v3.x）原生 `keep_firing_for` → 開放給租戶（enum-bounded、控制平面靜態屬性、進 slug,如 `for`）消震盪噪音。*Trigger*：第一個 flapping 告警疲勞客訴。
-- **Alertmanager grouping 隔離（S8 routing 硬需求）**：`component="custom"` 告警須在 AM route tree 絕對隔離（獨立 branch、`group_by` 含 `tenant`+`recipe_id`、不與平台 P0 cross-group），否則租戶噪音掩蓋核心告警。*Action*：S8 routing 實作時必做（非 trigger，是 S8 的 AC）。
+- ~~**Alertmanager grouping 隔離（S8 routing 硬需求）**~~ **✅ 已實作於 §S7/S8**:`component="custom"` route 居首 + `continue:false` 隔離,`group_by:[tenant, alertname]`（`alertname=Custom_<recipe_id>` 已 per-shape;**`recipe_id` 非 label,不放 group_by** —— 見 §S7/S8 group_by reconciliation）。
 - **向量化 shared-fate / app-metric 基數爆炸（HIGH，向量化隔離缺口）**：O(M) 向量化的代價是**共享命運** —— 單一租戶把高基數維度（如 UserID）放進 app-metric label → 其 series 暴增 → **共用**該 shape 的向量規則 eval 變慢 → **同 shape 的其他租戶**（B/C/D）告警一起被拖延 / 丟失（隊頭阻塞）。S4 `max_custom_recipes` 只擋 recipe **數量**、**不**擋 app-metric **基數**。*緩解*：在 tenant-exporters 的 scrape job（Plane A）加抓取時 `sample_limit` / `series_limit`，在 series 進 TSDB 前就截斷爆炸源（非 S6 程式碼，是平台 scrape config）。*Trigger*：規模化後出現單租戶基數拖累共享規則 eval（或主動於 onboarding 設保守上限）。
 - **幽靈規則狀態腐敗 + auto-GC（MEDIUM，Day-2 治理）**：租戶「只增不刪」→ 長期累積大量死 recipe → 記憶體膨脹 +`/effective` 變垃圾場。*緩解*：一支 **DA-Janitor** bot 定期掃描，recipe 引用的 metric 連續 30 天無 series → **自動開 PR** 加 `threshold: disable`（複用 S5 三態 opt-out + 帶註解）→ 經 GitOps 可追溯地 GC，不破壞 GitOps 信任（非強制刪除；disabled 不計 cap / 不編譯）。與上方 §S6 的「SRE runtime 哨兵」同源、可合併實作。*Trigger*：死 recipe 累積成真實維運負擔。
 

@@ -77,6 +77,39 @@ def _str_representer(dumper: yaml.Dumper, data: str):
 _BlockDumper.add_representer(str, _str_representer)
 
 
+def _silent_sentinel() -> dict:
+    """The SINGLE global (tenant-agnostic) silent-mode sentinel (#741 S7/S8).
+
+    Fires once per (tenant, name) whose recipe declares mode=silent, derived
+    straight from the exporter's user_threshold series — so it is injected ONCE
+    regardless of shape count (the query already spans every silent recipe in
+    the cluster). Alertmanager uses it as an inhibit SOURCE (equal:[tenant,name])
+    to suppress that recipe's notification while Prometheus keeps evaluating it
+    as an ALERTS series for dashboards. This rides the platform's established
+    ADR-003 Sentinel+Inhibit silent paradigm (mirrors TenantSilentWarning/
+    Critical) instead of an Alertmanager route-to-null receiver — more
+    observable in the AM UI and consistent with the tenant-level tri-state.
+    """
+    return {
+        "alert": "CustomRecipeSilent",
+        "expr": 'max by(tenant, name) (user_threshold{component="custom", mode="silent"})',
+        "labels": {
+            "severity": "none",
+            "tenant": "{{ $labels.tenant }}",
+            "name": "{{ $labels.name }}",
+        },
+        "annotations": {
+            "summary": "Custom recipe [{{ $labels.name }}] is silent for {{ $labels.tenant }}",
+            "summary_zh": "{{ $labels.tenant }} 的自訂告警 [{{ $labels.name }}] 處於靜默模式",
+            "description": ("The recipe is still evaluated and visible as an ALERTS "
+                           "series (dashboard-only); its notifications are suppressed "
+                           "via inhibit, not deleted."),
+            "description_zh": ("此自訂告警仍會評估並可於監控面板（ALERTS series）查看，"
+                              "通知經 inhibit 抑制而非刪除。"),
+        },
+    }
+
+
 def build_pack(config_dir: Path,
                max_custom_recipes: int = _loader.MAX_CUSTOM_RECIPES_DEFAULT) -> dict:
     """Build the rule-pack dict (groups) from a conf.d tree."""
@@ -97,7 +130,9 @@ def build_pack(config_dir: Path,
             "rules": recording,
         })
     if alerts:
-        groups.append({"name": "custom-alerts", "rules": alerts})
+        # Inject the single global silent sentinel ONCE, ahead of the shape
+        # alerts (S7/S8). It is tenant-agnostic — never per-recipe.
+        groups.append({"name": "custom-alerts", "rules": [_silent_sentinel()] + alerts})
 
     return {
         "groups": groups,

@@ -22,11 +22,39 @@ data:
       group_interval: 10s
       repeat_interval: 12h
       receiver: "default"
+      routes:
+        # ── #741 S7/S8: Custom Alerts isolation ──────────────────────────
+        # Tenant-authored custom alerts carry a static component="custom" label
+        # (set on every Custom_* rule). Intercept them HERE, before the platform
+        # default, so a tenant alert storm can never flood the platform NOC.
+        # continue:false keeps them fully contained in this subtree (per-tenant
+        # channel routing is a deferred follow-up). A dedicated debounce window
+        # decouples their batching pace from core alerts. mode="silent" is NOT
+        # blackholed here — it is suppressed by the CustomRecipeSilent sentinel +
+        # inhibit below (ADR-003 pattern), staying a dashboard-only ALERTS series.
+        - matchers:
+            - component="custom"
+          group_by: ["tenant", "alertname"]
+          group_wait: 30s
+          group_interval: 5m
+          receiver: "custom-alerts-firehose"
+          continue: false
 
     receivers:
       - name: "default"
         # 測試環境 — 空 receiver，只記 log 不發通知
         # (移除 localhost:5001 webhook 避免 Connection refused 噪音)
+      - name: "custom-alerts-firehose"
+        # #741 S7/S8: page-mode custom alerts land here, ISOLATED from the
+        # platform "default" receiver. MVP = no outbound notifier (custom alerts
+        # stay visible via the AM UI + the Prometheus ALERTS series); silent-mode
+        # recipes are inhibited before reaching any notifier.
+        # ⚠ When wiring outbound delivery, use a WEBHOOK ADAPTER → log/event
+        # backend (e.g. VictoriaLogs via a small AM-payload→bulk bridge), NOT a
+        # rate-limited IM (Slack/PagerDuty): a cross-tenant storm hits the IM 429
+        # limit → AM retry/queue backlog → OOM → platform P0 alerts blocked. On
+        # that webhook_config set send_resolved:false + max_alerts:100 (a lossy
+        # truncation cap; the ALERTS series stays the source of truth).
 
     inhibit_rules:
       # v1.2.0 Severity Dedup: per-tenant inhibit rules
@@ -69,6 +97,20 @@ data:
         target_matchers:
           - severity="critical"
         equal: ["tenant"]
+
+      # v2.9.0 #741 S7/S8: per-recipe Custom Alert silent mode.
+      # The CustomRecipeSilent sentinel (severity=none, emitted once per silent
+      # (tenant,name) by rule-pack-custom-alerts.yaml) suppresses THAT recipe's
+      # notification while Prometheus keeps evaluating it — a dashboard-only
+      # ALERTS series. equal:[tenant,name] scopes suppression to the exact recipe,
+      # so a page-mode recipe of the same vectorized shape still notifies.
+      # Rides the same ADR-003 Sentinel+Inhibit paradigm as the tenant-level
+      # Silent rules above (NOT an Alertmanager route-to-null receiver).
+      - source_matchers:
+          - alertname="CustomRecipeSilent"
+        target_matchers:
+          - component="custom"
+        equal: ["tenant", "name"]
 
   # v2.0.0 Bilingual Notification Templates (i18n)
   # Templates with fallback logic: prefer Chinese (*_zh) → fall back to English

@@ -35,9 +35,11 @@ from generate_alertmanager_routes import (
     generate_inhibit_rules,
     _build_enforced_routes,
     _build_tenant_routes,
+    _build_custom_alert_routes,
     _parse_config_files,
     write_text_secure,
 )
+from _grar_render import _merge_routes_receivers_inhibits
 
 import generate_alertmanager_routes as gar
 
@@ -155,11 +157,19 @@ class TestAssembleConfigmap:
         assert "alertmanager.yml" in parsed["data"]
 
         am_config = yaml.safe_load(parsed["data"]["alertmanager.yml"])
-        assert len(am_config["route"]["routes"]) == 1
-        # Base receiver + tenant receiver
+        routes_out = am_config["route"]["routes"]
+        # S7/S8 (#741): the Custom Alerts isolation route is always injected FIRST
+        # (ahead of tenant/enforced routes), continue:false; the tenant route follows.
+        assert len(routes_out) == 2
+        assert routes_out[0]["matchers"] == ['component="custom"']
+        assert routes_out[0]["receiver"] == "custom-alerts-firehose"
+        assert routes_out[0]["continue"] is False
+        assert routes_out[1]["receiver"] == "tenant-db-a"
+        # Base receiver + tenant receiver + injected firehose receiver
         names = {r["name"] for r in am_config["receivers"]}
         assert "default" in names
         assert "tenant-db-a" in names
+        assert "custom-alerts-firehose" in names
 
     def test_custom_namespace_and_name(self):
         base = load_base_config(None)
@@ -180,6 +190,81 @@ class TestAssembleConfigmap:
         am_config = yaml.safe_load(parsed["data"]["alertmanager.yml"])
         default_count = sum(1 for r in am_config["receivers"] if r["name"] == "default")
         assert default_count == 1
+
+
+# ============================================================
+# S7/S8 (#741): Custom Alerts isolation route injection
+# ============================================================
+class TestCustomAlertIsolationInjection:
+    """The platform-static custom-alerts route + firehose receiver must be
+    present and FIRST in the assembled ConfigMap, across BOTH the
+    --output-configmap (assemble_configmap) and --apply
+    (_merge_routes_receivers_inhibits) paths, and survive the route-REPLACE."""
+
+    def _routes_of(self, cm_yaml):
+        parsed = yaml.safe_load(cm_yaml)
+        return yaml.safe_load(parsed["data"]["alertmanager.yml"])["route"]["routes"]
+
+    def test_injected_even_with_no_tenant_routes(self):
+        # empty generated routes (no tenants) → custom route still present + first
+        cm_yaml = assemble_configmap(load_base_config(None), [], [], [])
+        routes = self._routes_of(cm_yaml)
+        assert routes[0]["matchers"] == ['component="custom"']
+        assert routes[0]["receiver"] == "custom-alerts-firehose"
+        assert routes[0]["continue"] is False
+
+    def test_idempotent_no_duplicate(self):
+        # if a component="custom" route is already present, do not add a second
+        existing_custom = _build_custom_alert_routes()[0]
+        cm_yaml = assemble_configmap(load_base_config(None), list(existing_custom), [], [])
+        routes = self._routes_of(cm_yaml)
+        assert sum(1 for r in routes if 'component="custom"' in r.get("matchers", [])) == 1
+
+    def test_custom_route_forced_to_index_0_even_when_not_first(self):
+        # CodeRabbit gap: an existing custom route sitting AFTER a continue:true
+        # match-all enforced route must be normalized to index 0 (else the
+        # enforced route intercepts custom alerts first → NOC leak).
+        enforced = {"receiver": "platform-enforced", "continue": True}  # no matchers = match-all
+        existing_custom = _build_custom_alert_routes()[0][0]
+        cm_yaml = assemble_configmap(
+            load_base_config(None), [enforced, existing_custom], [], [])
+        routes = self._routes_of(cm_yaml)
+        # exactly one custom route, and it is FIRST (ahead of the enforced route)
+        custom_idx = [i for i, r in enumerate(routes)
+                      if 'component="custom"' in r.get("matchers", [])]
+        assert custom_idx == [0], routes
+        assert routes[1]["receiver"] == "platform-enforced"
+
+    def test_apply_path_prepends_and_preserves_silent_inhibit(self):
+        # --apply replaces route.routes; the custom route must lead, and the
+        # base CustomRecipeSilent inhibit (source has no metric_group) must survive.
+        existing = {
+            "route": {"receiver": "default", "routes": []},
+            "receivers": [{"name": "default"}],
+            "inhibit_rules": [
+                {"source_matchers": ['alertname="CustomRecipeSilent"'],
+                 "target_matchers": ['component="custom"'],
+                 "equal": ["tenant", "name"]},
+            ],
+        }
+        tenant_routes = [{"receiver": "tenant-db-a", "matchers": ['tenant="db-a"']}]
+        gen_inhibits = [_build_inhibit_for_test()]
+        merged = _merge_routes_receivers_inhibits(
+            existing, tenant_routes, [{"name": "tenant-db-a"}], gen_inhibits)
+        routes = merged["route"]["routes"]
+        assert routes[0]["matchers"] == ['component="custom"']  # custom leads
+        assert any(r["receiver"] == "tenant-db-a" for r in routes)  # tenant route kept
+        assert {r["name"] for r in merged["receivers"]} >= {"default", "custom-alerts-firehose", "tenant-db-a"}
+        # the silent sentinel inhibit (no metric_group) is preserved
+        assert any('alertname="CustomRecipeSilent"' in i.get("source_matchers", [])
+                   for i in merged["inhibit_rules"])
+
+
+def _build_inhibit_for_test():
+    # a generated severity-dedup inhibit (source HAS metric_group → replaced on merge)
+    return {"source_matchers": ['severity="critical"', 'metric_group=~".+"', 'tenant="db-a"'],
+            "target_matchers": ['severity="warning"', 'metric_group=~".+"', 'tenant="db-a"'],
+            "equal": ["metric_group"]}
 
 
 # ============================================================

@@ -85,7 +85,46 @@ def test_same_shape_multi_tenant_one_rule(tmp_path):
     })
     pack = cc.build_pack(tmp_path)
     assert pack["_meta"]["shapes"] == 1                 # ONE rule covers both tenants
-    assert len(_alert_names(pack)) == 1
+    names = _alert_names(pack)
+    shape_alerts = [n for n in names if n.startswith("Custom_")]
+    assert len(shape_alerts) == 1                       # ONE shape rule covers both tenants (O(M))
+    assert names.count("CustomRecipeSilent") == 1       # global silent sentinel injected exactly ONCE (S7/S8)
+
+
+# --- 2b. S7/S8 routing: component label + silent sentinel ------------------
+def _alert_rules(pack: dict) -> list:
+    return [r for g in pack["groups"] for r in g.get("rules", []) if "alert" in r]
+
+
+def test_s7s8_component_label_and_silent_sentinel(tmp_path):
+    # one page recipe + one silent recipe (different metrics → 2 shapes)
+    _write_tree(tmp_path, {
+        "a.yaml": (
+            "tenants:\n  ta:\n    _custom_alerts:\n"
+            '      - {recipe: threshold, name: cpu_hot, metric: node_cpu, op: ">", window: 5m, threshold: "80:warning", mode: page}\n'
+            '      - {recipe: threshold, name: q_deep, metric: queue_depth, op: ">", window: 5m, threshold: "100:warning", mode: silent}\n'
+        ),
+    })
+    pack = cc.build_pack(tmp_path)
+    rules = _alert_rules(pack)
+
+    # A1: every SHAPE alert carries the static component="custom" routing discriminator.
+    shape_rules = [r for r in rules if r["alert"].startswith("Custom_")]
+    assert shape_rules, "expected shape alerts"
+    for r in shape_rules:
+        assert r["labels"].get("component") == "custom", r["alert"]
+
+    # silent sentinel: present exactly once, severity=none, scoped to mode="silent",
+    # and aggregated by(tenant, name) so the inhibit can match equal:[tenant, name].
+    sentinels = [r for r in rules if r["alert"] == "CustomRecipeSilent"]
+    assert len(sentinels) == 1
+    s = sentinels[0]
+    assert s["labels"]["severity"] == "none"
+    assert '{component="custom", mode="silent"}' in s["expr"]
+    assert "by(tenant, name)" in s["expr"]
+    # the sentinel does NOT carry component="custom" → it routes like other platform
+    # sentinels (to the default/log receiver), not into the custom firehose subtree.
+    assert "component" not in s["labels"]
 
 
 def test_same_name_different_metric_two_rules(tmp_path):

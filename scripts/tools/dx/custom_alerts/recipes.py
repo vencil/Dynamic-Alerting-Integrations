@@ -202,8 +202,15 @@ def _alert_rule(rid: str, recipe: str, sev: str, metric: str, sel: str,
             "severity": sev,
             "tenant": "{{ $labels.tenant }}",
             "recipe": recipe,
-            # per-tenant routing class (page|silent) carried from the data plane
-            # so S8 can route silent→null / page→pager WITHOUT forking the rule.
+            # static routing discriminator (#741 S7/S8): no platform alert carries
+            # `component`, so Alertmanager routes/groups the whole custom subtree on
+            # an exact component="custom" match (vs coupling to the Custom_ alertname).
+            "component": "custom",
+            # per-tenant routing class (page|silent) carried from the data plane.
+            # page → custom firehose receiver; silent → suppressed by the
+            # CustomRecipeSilent sentinel + inhibit (ADR-003 pattern, NOT route-to-
+            # null), so it stays a dashboard-only ALERTS series. `mode` drives the
+            # sentinel; a single vectorized rule still serves mixed-mode tenants.
             "mode": "{{ $labels.mode }}",
         },
         "annotations": {
