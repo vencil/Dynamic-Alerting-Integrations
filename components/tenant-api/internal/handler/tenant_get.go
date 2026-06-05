@@ -10,6 +10,8 @@ import (
 	cfg "github.com/vencil/threshold-exporter/pkg/config"
 
 	"github.com/go-chi/chi/v5"
+
+	"github.com/vencil/tenant-api/internal/customalerts"
 )
 
 // TenantDetail is the full tenant representation returned by GET /api/v1/tenants/{id}.
@@ -23,6 +25,11 @@ type TenantDetail struct {
 	// concurrency (ADR-024 §S6b-2): the write 409s if the file changed
 	// underneath them.
 	SourceHash string `json:"source_hash"`
+	// CustomAlerts is the tenant's `_custom_alerts` recipes as structured
+	// JSON (ADR-024 §S6b-2). The portal recipe modal reads this directly so
+	// the client never parses YAML — the backend owns the round-trip on both
+	// read and write. Empty slice when the tenant has none.
+	CustomAlerts []map[string]any `json:"custom_alerts"`
 }
 
 // GetTenant handles GET /api/v1/tenants/{id}
@@ -69,12 +76,15 @@ func GetTenant(d *Deps) http.HandlerFunc {
 			}
 		}
 
+		customAlerts, _ := customalerts.Extract(string(data), tenantID)
+
 		detail := TenantDetail{
-			ID:         tenantID,
-			RawYAML:    string(data),
-			Resolved:   tenantResolved,
-			Warnings:   warnings,
-			SourceHash: cfg.ComputeSourceHash(data),
+			ID:           tenantID,
+			RawYAML:      string(data),
+			Resolved:     tenantResolved,
+			Warnings:     warnings,
+			SourceHash:   cfg.ComputeSourceHash(data),
+			CustomAlerts: customAlerts,
 		}
 
 		w.Header().Set("Content-Type", "application/json")

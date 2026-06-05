@@ -680,6 +680,8 @@ sequenceDiagram
 
 **S6b-2 Acceptance Criteria**:① 端點 AST-merge 保註解 + 空陣列刪 key + canonical 序/引號(Go 測 + spike);② base_hash 不符 → 409、相符 → 寫入;③ 無效 recipe(含既存毒藥)→ 400 + `Violations[]`(可定位是哪條);④ 走既有 `gitops.Writer`(統一 commit/驗證,不另闢寫入);⑤ PR mode → 501(誠實標界);⑥ GET 回 `source_hash`。
 
+**S6b-2b 前端(tenant-manager `CustomAlertsModal`,#741)**:單選租戶 → 開 modal,list/add/edit/delete recipe → PUT 整陣列。**client 只處理 JSON**(GET 回結構化 `custom_alerts`,後端 `customalerts.Extract`,前端零 YAML)。九道前端防禦(Gemini 三+四波外審,全 Vitest 測):**Reef 9 JIT fresh fetch**(modal-open 重抓 source_hash,絕不用 grid page-load 快取 —— 否則 OCC 注定假衝突、形同虛設,最高價值);**Reef 7 嚴格 `isSubmitting`**(click 第一毫秒鎖按鈕,防 double-submit 的「成功卻報 409」假警報);**Reef 8 dirty-guard**(攔 backdrop/ESC/X 誤關 → confirm,防心血抹除);**Reef 6 409 非破壞性**(保使用者輸入 + 複製備份,不 reload);**Reef 4 400 Violations[]** 標出問題 recipe(含既存毒藥,可就地修);**Reef 5 rename-safe** `onSubmit(recipe, originalName)`(name-based 以原名替換,防改名→重複)。**S6b-2b AC**:① JIT fresh GET on open;② save 鎖 `isSubmitting`;③ 409 保輸入不關;④ 400 標 violation;⑤ rename 不產重複;⑥ dirty close 須 confirm。
+
 **Future-radar(defer-with-trigger)**:Path B sidecar(*trigger*:機器-寫-人類檔成跨工具痛點 / AST 邊角案例咬人);granular per-section OCC(*trigger*:整檔 hash 假 409 摩擦);PR-mode recipe-write;recipe stable-id 取代 name-as-identity;granular REST verbs(POST/PUT{name}/DELETE{name})。
 
 ### Future robustness radar（S5 + S6 外審衍生，defer-with-trigger）

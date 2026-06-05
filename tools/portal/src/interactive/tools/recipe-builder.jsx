@@ -394,8 +394,8 @@ export default function RecipeBuilder(props) {
       {onSubmit ? (
         <button type="button" className="px-4 py-2 rounded-md text-sm font-medium disabled:opacity-50"
           data-testid="submit" disabled={!ready}
-          onClick={() => recipeObj && onSubmit(recipeObj)}>
-          {t('加入此 recipe', 'Add this recipe')}
+          onClick={() => recipeObj && onSubmit(recipeObj, initialValue ? initialValue.name : undefined)}>
+          {initialValue ? t('更新此 recipe', 'Update this recipe') : t('加入此 recipe', 'Add this recipe')}
         </button>
       ) : (
         <div data-testid="yaml-output">

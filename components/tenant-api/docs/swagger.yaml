@@ -382,6 +382,16 @@ definitions:
     type: object
   internal_handler.TenantDetail:
     properties:
+      custom_alerts:
+        description: |-
+          CustomAlerts is the tenant's `_custom_alerts` recipes as structured
+          JSON (ADR-024 §S6b-2). The portal recipe modal reads this directly so
+          the client never parses YAML — the backend owns the round-trip on both
+          read and write. Empty slice when the tenant has none.
+        items:
+          additionalProperties: {}
+          type: object
+        type: array
       id:
         type: string
       raw_yaml:

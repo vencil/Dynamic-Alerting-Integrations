@@ -1958,6 +1958,14 @@ const docTemplate = `{
         "internal_handler.TenantDetail": {
             "type": "object",
             "properties": {
+                "custom_alerts": {
+                    "description": "CustomAlerts is the tenant's ` + "`" + `_custom_alerts` + "`" + ` recipes as structured\nJSON (ADR-024 §S6b-2). The portal recipe modal reads this directly so\nthe client never parses YAML — the backend owns the round-trip on both\nread and write. Empty slice when the tenant has none.",
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": {}
+                    }
+                },
                 "id": {
                     "type": "string"
                 },
