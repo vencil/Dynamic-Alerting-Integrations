@@ -43,9 +43,14 @@ def _inject_custom_alert_isolation(routes: list[dict], receivers: list[dict]) ->
     already present, so re-merging an already-injected config does not duplicate.
     """
     cust_routes, cust_receivers = _build_custom_alert_routes()
-    has_custom_route = any(
-        'component="custom"' in r.get("matchers", []) for r in (routes or []))
-    out_routes = list(routes or []) if has_custom_route else cust_routes + list(routes or [])
+    # Drop ANY pre-existing component="custom" route(s) and prepend exactly ONE
+    # canonical isolation route at index 0. The gate guarantee (custom alerts
+    # intercepted before the continue:true match-all enforced NOC route) must
+    # hold regardless of input order — leaving an existing custom route in a
+    # non-first position would let an earlier enforced route leak it to the NOC.
+    non_custom = [r for r in (routes or [])
+                  if 'component="custom"' not in r.get("matchers", [])]
+    out_routes = cust_routes + non_custom
 
     have = {r["name"] for r in (receivers or [])}
     add_recv = [r for r in cust_receivers if r["name"] not in have]

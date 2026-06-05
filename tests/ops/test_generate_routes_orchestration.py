@@ -220,6 +220,21 @@ class TestCustomAlertIsolationInjection:
         routes = self._routes_of(cm_yaml)
         assert sum(1 for r in routes if 'component="custom"' in r.get("matchers", [])) == 1
 
+    def test_custom_route_forced_to_index_0_even_when_not_first(self):
+        # CodeRabbit gap: an existing custom route sitting AFTER a continue:true
+        # match-all enforced route must be normalized to index 0 (else the
+        # enforced route intercepts custom alerts first → NOC leak).
+        enforced = {"receiver": "platform-enforced", "continue": True}  # no matchers = match-all
+        existing_custom = _build_custom_alert_routes()[0][0]
+        cm_yaml = assemble_configmap(
+            load_base_config(None), [enforced, existing_custom], [], [])
+        routes = self._routes_of(cm_yaml)
+        # exactly one custom route, and it is FIRST (ahead of the enforced route)
+        custom_idx = [i for i, r in enumerate(routes)
+                      if 'component="custom"' in r.get("matchers", [])]
+        assert custom_idx == [0], routes
+        assert routes[1]["receiver"] == "platform-enforced"
+
     def test_apply_path_prepends_and_preserves_silent_inhibit(self):
         # --apply replaces route.routes; the custom route must lead, and the
         # base CustomRecipeSilent inhibit (source has no metric_group) must survive.
