@@ -113,6 +113,18 @@ describe('RecipeBuilder', () => {
     });
   });
 
+  it('severity dropdown is honored in the emitted threshold (not a no-op)', () => {
+    const onSubmit = vi.fn();
+    render(<RecipeBuilder tenantId="db-a" fetchMetrics={mockFetch(['queue_depth'])} onSubmit={onSubmit} />);
+    fill('field-name', 'queue_high');
+    fill('field-metric', 'queue_depth');
+    fill('field-window', '5m');
+    fill('field-threshold', '100');
+    fireEvent.change(screen.getByTestId('field-severity'), { target: { value: 'critical' } });
+    fireEvent.click(screen.getByTestId('submit'));
+    expect(onSubmit.mock.calls[0][0].threshold).toBe('100:critical');
+  });
+
   it('forecast ratio mode: floor outside (0,1) blocks readiness', () => {
     const onSubmit = vi.fn();
     render(<RecipeBuilder tenantId="db-a" fetchMetrics={mockFetch(['avail', 'cap'])} onSubmit={onSubmit} />);

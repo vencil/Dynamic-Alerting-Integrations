@@ -64,6 +64,17 @@ function parseThresholdValue(s) {
   return Number(s.split(':')[0].trim());
 }
 
+/* The threshold field holds the VALUE only; the severity dropdown is the
+ * single source of severity (no dual-entry). composeThreshold folds them
+ * back into the schema's `value:severity` string for the emitted recipe +
+ * summary, so the dropdown is never a no-op. A stray ':sev' typed into the
+ * value field is stripped (the dropdown wins). */
+function composeThreshold(f) {
+  const value = (f.threshold || '').split(':')[0].trim();
+  const sev = f.severity || ENUMS.severityDefault;
+  return `${value}:${sev}`;
+}
+
 function requiredFields(recipe) {
   const base = ['name', 'metric', 'threshold'];
   if (recipe === 'forecast') base.push('horizon');
@@ -105,8 +116,7 @@ function allRequiredValid(recipe, f) {
 function recipeSummary(recipe, f) {
   if (!allRequiredValid(recipe, f)) return null;
   const value = (f.threshold || '').split(':')[0].trim();
-  const sev = (f.threshold || '').includes(':')
-    ? f.threshold.split(':')[1].trim() : ENUMS.severityDefault;
+  const sev = f.severity || ENUMS.severityDefault; // dropdown is the SoT
   const op = f.op || ENUMS.opDefault;
   switch (recipe) {
     case 'threshold':
@@ -139,7 +149,7 @@ function recipeSummary(recipe, f) {
 
 /* ── recipe object + YAML snippet (the Dumb Handoff payload) ────────── */
 function buildRecipeObject(recipe, f) {
-  const obj = { recipe, name: f.name, metric: f.metric, threshold: f.threshold };
+  const obj = { recipe, name: f.name, metric: f.metric, threshold: composeThreshold(f) };
   const fields = FIELDS_BY_RECIPE[recipe] || [];
   for (const k of ['op', 'window', 'horizon', 'quantile', 'denominator_metric', 'capacity_metric', 'mode', 'for']) {
     if (fields.includes(k) && f[k]) obj[k] = f[k];
@@ -298,7 +308,7 @@ export default function RecipeBuilder(props) {
     mode: t('模式', 'Mode'), for: t('持續 (for)', 'For'),
     horizon: t('預測範圍 (horizon)', 'Horizon'), window: t('視窗 (window)', 'Window'),
     quantile: t('分位數 (quantile)', 'Quantile'),
-    threshold: t('閾值 value[:severity]', 'Threshold value[:severity]'),
+    threshold: t('閾值（數值，嚴重程度由下拉選）', 'Threshold value (severity from the dropdown)'),
     metric: t('指標', 'Metric'), denominator_metric: t('分母指標', 'Denominator metric'),
     capacity_metric: t('容量指標（選填，比例模式）', 'Capacity metric (optional, ratio mode)'),
   };
