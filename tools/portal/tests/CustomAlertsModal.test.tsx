@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { CustomAlertsModal } from '../src/interactive/tools/tenant-manager/components/CustomAlertsModal.jsx';
 
 const mockMetrics = (catalog: string[]) =>
@@ -79,12 +79,35 @@ describe('CustomAlertsModal', () => {
 
   it('Reef 4: a 400 surfaces violations and flags the offending recipe', async () => {
     const ft = fetchTenant([{ recipe: 'threshold', name: 'legacy_bad', metric: 'a:b', threshold: '1', window: '5m' }]);
-    const save = vi.fn(() => Promise.resolve({ ok: false, status: 400, data: { violations: [{ field: '_custom_alerts', reason: "custom alert 'legacy_bad': bad metric" }] } }));
+    // real backend format from ValidateTenantCustomAlerts: `_custom_alerts[N] (name): ...`
+    const save = vi.fn(() => Promise.resolve({ ok: false, status: 400, data: { violations: [{ field: '_custom_alerts', reason: '_custom_alerts[0] (legacy_bad): metric "a:b" is not a valid identifier' }] } }));
     render(<CustomAlertsModal tenantId="db-a" onClose={() => {}} fetchTenant={ft} fetchMetrics={mockMetrics([])} saveCustomAlerts={save} />);
     await waitFor(() => expect(screen.getByTestId('save')).toBeInTheDocument());
     fireEvent.click(screen.getByTestId('save'));
     await waitFor(() => expect(screen.getByTestId('violations')).toBeInTheDocument());
     expect(screen.getByTestId('violations').textContent).toMatch(/legacy_bad/);
+  });
+
+  it('Reef 4: badge anchors by array index, not by name-in-reason text', async () => {
+    // index [0] is the offender; recipe at [1] is innocently named "metric"
+    // and the reason text legitimately contains the word "metric" — index
+    // mapping must badge [0] only, never the "metric" recipe at [1].
+    const ft = fetchTenant([
+      { recipe: 'threshold', name: 'CamelOffender', metric: 'a:b', threshold: '1', window: '5m' },
+      { recipe: 'threshold', name: 'metric', metric: 'ok_metric', threshold: '1', window: '5m' },
+    ]);
+    const save = vi.fn(() => Promise.resolve({
+      ok: false, status: 400,
+      data: { violations: [{ field: '_custom_alerts', reason: '_custom_alerts[0] (CamelOffender): metric "a:b" is not a valid identifier' }] },
+    }));
+    render(<CustomAlertsModal tenantId="db-a" onClose={() => {}} fetchTenant={ft} fetchMetrics={mockMetrics([])} saveCustomAlerts={save} />);
+    await waitFor(() => expect(screen.getByTestId('save')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('save'));
+    await waitFor(() => expect(screen.getByTestId('violations')).toBeInTheDocument());
+    // offender at index 0 IS badged
+    expect(within(screen.getByTestId('recipe-CamelOffender')).getByText('invalid')).toBeInTheDocument();
+    // recipe at index 1 named "metric" is NOT badged despite "metric" in the reason text
+    expect(within(screen.getByTestId('recipe-metric')).queryByText('invalid')).toBeNull();
   });
 
   it('Reef 8: closing with unsaved changes prompts a confirm', async () => {

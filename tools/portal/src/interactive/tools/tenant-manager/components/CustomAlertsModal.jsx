@@ -152,9 +152,19 @@ function CustomAlertsModal(props) {
       .catch((e) => { if (liveRef.current) { setIsSubmitting(false); setNotice(t('網路錯誤', 'network error') + ': ' + e); } });
   }
 
-  const violatedNames = new Set(
-    violations.map((v) => (v.reason || '')).join(' ').match(/[a-z][a-z0-9_]*/g) || [],
-  );
+  // Reef 4: anchor each violation to a recipe by its ARRAY INDEX, not by
+  // text-matching the name. The backend's ValidateTenantCustomAlerts emits
+  // every violation prefixed `_custom_alerts[N] ...`, and N is the position in
+  // the exact array we PUT (range-index aligned, disabled entries keep their
+  // slot) — a bulletproof contract. Name-scraping the reason is fundamentally
+  // ambiguous: a reason legitimately contains words like "metric"/"bad", so a
+  // recipe innocently named "metric" would false-flag, and there is no text
+  // rule that disambiguates. Index mapping sidesteps all of that.
+  const violatedIdx = new Set();
+  for (const v of violations) {
+    const m = /_custom_alerts\[(\d+)\]/.exec((v && v.reason) || '');
+    if (m) violatedIdx.add(Number(m[1]));
+  }
 
   const card = 'p-4 rounded-lg bg-[color:var(--da-color-surface)] border border-[color:var(--da-color-surface-border)]';
   const btn = 'px-3 py-1.5 text-sm rounded-md border border-[color:var(--da-color-surface-border)]';
@@ -213,13 +223,13 @@ function CustomAlertsModal(props) {
               {recipes.length === 0 && (
                 <p className="text-sm text-[color:var(--da-color-muted)] mb-3">{t('尚無自訂告警。', 'No custom alerts yet.')}</p>
               )}
-              {recipes.map((r) => (
+              {recipes.map((r, idx) => (
                 <div key={r.name} className={'mb-2 flex items-center justify-between ' + card
-                  + (violatedNames.has(r.name) ? ' border-[color:var(--da-color-error)]' : '')}
+                  + (violatedIdx.has(idx) ? ' border-[color:var(--da-color-error)]' : '')}
                   data-testid={`recipe-${r.name}`}>
                   <div>
                     <div className="text-sm font-medium">{r.name}
-                      {violatedNames.has(r.name) && <span className="ml-2 text-xs px-1 rounded border border-[color:var(--da-color-error)] text-[color:var(--da-color-error)]">{t('無效', 'invalid')}</span>}
+                      {violatedIdx.has(idx) && <span className="ml-2 text-xs px-1 rounded border border-[color:var(--da-color-error)] text-[color:var(--da-color-error)]">{t('無效', 'invalid')}</span>}
                     </div>
                     <div className="text-xs text-[color:var(--da-color-muted)]">{summarizeRecipe(r)}</div>
                   </div>
