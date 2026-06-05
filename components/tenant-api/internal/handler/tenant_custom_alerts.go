@@ -70,9 +70,10 @@ type PutCustomAlertsResponse struct {
 // @Param       body  body     PutCustomAlertsRequest true "Desired recipe list + base_hash"
 // @Success     200   {object} PutCustomAlertsResponse
 // @Failure     400   {object} ErrorResponse
-// @Failure     404   {object} map[string]string
+// @Failure     404   {object} ErrorResponse
 // @Failure     409   {object} ErrorResponse
-// @Failure     501   {object} map[string]string
+// @Failure     501   {object} ErrorResponse
+// @Failure     503   {object} ErrorResponse
 // @Router      /api/v1/tenants/{id}/custom-alerts [put]
 func PutTenantCustomAlerts(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -175,6 +176,13 @@ func PutTenantCustomAlerts(d *Deps) http.HandlerFunc {
 		if err := d.Writer.Write(tenantID, email, merged); err != nil {
 			if errors.Is(err, gitops.ErrConflict) {
 				WriteJSONError(w, r, http.StatusConflict, err.Error())
+				return
+			}
+			// Forge degradation (TRK-318): the in-lock base fetch timed out;
+			// the write never touched a stale base, so a retry is safe →
+			// surface a retry-hinting 503, not a 400 (matches PutTenant).
+			if errors.Is(err, gitops.ErrForgeDegraded) {
+				writeForgeDegraded(w, r)
 				return
 			}
 			WriteJSONError(w, r, http.StatusBadRequest, err.Error())

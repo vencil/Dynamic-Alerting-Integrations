@@ -1060,9 +1060,7 @@ paths:
         "404":
           description: Not Found
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/internal_handler.ErrorResponse'
         "409":
           description: Conflict
           schema:
@@ -1070,9 +1068,11 @@ paths:
         "501":
           description: Not Implemented
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/internal_handler.ErrorResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/internal_handler.ErrorResponse'
       summary: Replace a tenant's custom-alert recipes
       tags:
       - tenants
