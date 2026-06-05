@@ -39,7 +39,7 @@ One **declarative dimensional alerting machine** — the dimensional-label model
 
 ⛔ **Deployment prerequisite (HARD)**: kube-state-metrics MUST run with `--metric-labels-allowlist=pods=[app.kubernetes.io/version]`, otherwise `kube_pod_labels` carries no version, the version-injection join matches nothing, and **version thresholds are silently inert** (proven on a real cluster). The three-layer defense guards this prerequisite: the `VersionAwareThresholdInert` runtime sentinel is the safety net, and the CI static lint `check_ksm_version_allowlist.py` catches the misconfiguration.
 
-**Capability B — Custom Alerts (implementation in progress, targeting v2.9.0)**: the recipe library + vectorized compiler + 6 recipes (threshold / rate / ratio / absence / p99_latency / **forecast**) + exporter `user_threshold` emission + a compile-time `max_custom_recipes` per-tenant cap + a **tenant-api shift-left preflight (in-process Go)** are **implemented** ([#741](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/741) S1–S5 / [#752](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/752) / [#753](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/753)); **design-locked, implementation net-new (S6)**: the discovery catalog (a stateless Prometheus proxy) + the recipe-authoring UX (portal) — design is locked and externally reviewed (see §S6), code pending S6a/S6b.
+**Capability B — Custom Alerts (implementation in progress, targeting v2.9.0)**: the recipe library + vectorized compiler + 6 recipes (threshold / rate / ratio / absence / p99_latency / **forecast**) + exporter `user_threshold` emission + a compile-time `max_custom_recipes` per-tenant cap + a **tenant-api shift-left preflight (in-process Go)** are **implemented** ([#741](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/741) S1–S5 / [#752](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/752) / [#753](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/753)) + the **S6a metric discovery endpoint (a stateless Prometheus proxy)** is **implemented** ([#741](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/741) S6a / [#761](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/761)); **design-locked, implementation net-new (S6b)**: the recipe-authoring UX (the `<RecipeBuilder>` portal smart form) — design is locked and externally reviewed (see §S6b), code pending S6b-1/S6b-2.
 
 **Deferred (defer-with-trigger)**:
 
@@ -572,6 +572,51 @@ custom:metric:<rid> = label_replace(
 **Options evaluated and rejected**: **a pre-built metric catalog / cached index** (fast queries but must maintain drifting state, breaks stateless) → rejected as the day-1 default (the micro-cache is demoted to a defer-trigger). **backend hard-block on ghost** (false-kills during the GitOps vacuum + legitimate pre-creation) → rejected, demoted to portal soft-warn + the SRE sentinel.
 
 **S6 Acceptance Criteria**: ① the discovery endpoint returns only **this tenant's own** metrics (`match[]` forced to `tenant=authID`, `url.QueryEscape`, a cross-tenant query returns empty [isolation test]); ② the endpoint is purely read-only, writes no config (stateless); ③ the per-tenant rate-limit returns 429 on excess, independent of the PUT quota; ④ the portal recipe form completes authoring without touching PromQL + ghost soft-warn + a gauge-only recipe lists only gauges (type filter); ⑤ the network-policy egress `tenant-api → prometheus:9090` is explicitly added.
+
+### S6b — recipe-authoring UX (the `<RecipeBuilder>` smart form, #741)
+
+> Converged over brainstorm 5-questions + **two self-adversarial rounds that reframed the problem** + Gemini external review (4 OQ verdicts + 4 frontend deep-water reefs) + two self-added refinements. **The core reframe**: the first round framed it as "write path A/B/C", which was the wrong cut; adversarial analysis re-anchored it on "**who owns the write authority**".
+
+**Context / intent**: S1–S6a let a tenant **write** correct recipes and **discover** their metrics (S6a). S6b adds the last piece — a **no-PromQL** authoring form that turns "pick metric → pick recipe → fill params" into UI, producing a valid `_custom_alerts` recipe. The GA close-out of epic #741.
+
+**Core mental model: Smart Form, Dumb Handoff** (mirroring the backend's "Dumb Pipes, Smart Endpoints"). Three adversarial lenses point to the same conclusion — the builder must **not** own the write:
+
+- **full-overlay clobber**: a tenant's `_custom_alerts` is a list under `tenants.<id>`, and PUT is full-overlay (proven in S5). A narrow tool doing its own fetch→inject→PUT would clobber concurrent edits with stale local state.
+- **YAML-splice footgun**: "generate YAML to paste" forces the tenant to hand-splice into a nested list — exactly the hand-YAML error the no-PromQL builder exists to kill.
+- **name-collision / context**: a recipe needs a unique name within the tenant (+ the S4 own-cap); a standalone tool can't see existing recipes, so it can't warn live.
+
+→ **The write authority is tenant-manager** (the full-config editor that sees the whole state + has the proven PUT+S5-preflight path). `<RecipeBuilder>` is a pure UI component `(Context) => RecipeObject` that hands the valid object to the write authority.
+
+**Two first-class personas (neither a demo)**: the platform already supports both **GitOps-direct** (edit YAML in your own conf.d repo via PR) and **tenant-manager UI** workflows (try-local ships both). The builder serves both exits.
+
+**`<RecipeBuilder>` component design rules (all mechanically verifiable / testable)**:
+
+1. **Enums come from the schema; zero frontend hardcoding** (review Reef 1): build-time import `docs/schemas/tenant-config.schema.json` for the `for`/`horizon`/`op`/`severity` enums (verified the schema is the SSOT, with `customAlertInstance` + conditional requireds). A schema change → bundle change → the **dist-sync gate mechanically enforces freshness** → the cross-language contract extends from Python/Go **to TS**. **REJECT `react-jsonschema-form`** (a bare npm import violates the `check_jsx_loader_compat` allowlist / TRK-237) → derive enums from the schema, hand-code the per-recipe field-layout map (UI layout, not the validation authority; the recipe set is stable).
+2. **Each metric field is an independent autocomplete sub-component** (metric / `capacity_metric` / `denominator_metric`, review Reef 4): each with its own debounce ≥300ms + AbortController + a short in-session cache, so a single authoring session **does not self-trip S6a's 100/min limiter** (the client-side complement to §S6 Reef 1).
+3. **Decouple ghost-validation from the autocomplete list** (review Reef 3): the fast-type + paste + blur async race would mis-fire a ghost warning; on blur, fire a precise `?q=<full string>` check, show `Validating…` (not a ghost-warn) until it resolves, and AbortController-cancel superseded requests. Not in the list → a yellow soft-warn (does not block; GitOps vacuum / legit pre-creation).
+4. **The plain-English summary is a state machine** (review OQ3 + Reef 4): render the dynamic sentence only when all required fields are present **and structurally valid** (bound to the actual filled params, via `window.__t` ZH-primary, e.g. "fires warning when [avail]/[capacity] is predicted to drop below [15%] within [4h]"), else "waiting for required fields…"; **never expose PromQL / the `user_threshold` series / labels** (exposing the internals = cognitive dissonance; S1/S2 deliberately hid the complexity).
+5. **discovery unavailable** (502/503 / no backend) → graceful degrade: allow manual metric entry + a "discovery unavailable" note, do not block authoring.
+6. **client validation is pure UX fast-feedback** (mirrors S5, not authoritative): the S5 preflight + CI are the validation authority; do not re-implement the cross-language validation contract.
+
+**Decision trade-offs**:
+
+- **builder does not own the write** ↔ in exchange for shutting the clobber/splice/collision trio; the cost is the GitOps persona still pastes the snippet into their repo (but that's their existing PR flow, not a footgun).
+- **componentize + thin integration** (not a big edit to tenant-manager) ↔ one more abstraction layer, in exchange for isolated testability + minimal regression (tenant-manager is a load-bearing live tool).
+- **schema → enums + hand-coded layout map** (not rjsf) ↔ the layout map is a potential drift point, but it's UI layout not the validation authority and the recipe set is stable; in exchange for shutting out a heavy npm dependency + the loader-violation risk.
+
+**Two-cut delivery**:
+
+- **S6b-1 (MVP) = the `<RecipeBuilder>` component + a standalone host page** (manifest entry): serves the **GitOps-direct persona** — emits a **snippet with the full `tenants: <id>: _custom_alerts: -` wrapper + one-click copy** (review OQ2 fix, eliminating the "where do I paste it" cognitive friction); doubles as the component's Vitest test host.
+- **S6b-2 (fast-follow, separate PR) = fold into tenant-manager**: mount `<RecipeBuilder>` as an "Add / Edit custom alert" panel; pass in the tenant's existing recipes (live name-collision / cap warnings); `onSubmit(recipe)` → **name-based mutation** (review Reef 2: add or replace-by-`targetName`, **never index-based**, S5 guarantees name uniqueness; targetName-not-found → background changed → block + prompt a refresh) → tenant-manager's existing PUT. **cheap-edit is in the MVP** (review OQ4: feed an existing recipe as InitialValues into the component, name-based replace on submit, zero new backend API). Serves the **UI persona**, closes the adoption loop, zero clobber.
+
+**Evaluated and rejected**: **writing the form straight into tenant-manager's core** → rejected (load-bearing live tool, big-edit regression risk; componentization is the incremental A→B path). **`react-jsonschema-form`** → rejected (loader-allowlist violation + heavy dependency). **series/label display** → rejected (cognitive dissonance).
+
+**Defer-with-trigger**:
+
+- **gauge-only type-filter** → defer: S6a returns only metric names, not type; needs a new `/api/v1/.../metadata` endpoint. *Trigger*: a type confusion causes a real authoring error, or forecast adoption rises.
+- **live `mode: silent` simulate preview** → defer: needs recipe→simulate-preview wiring. The MVP uses the dynamic plain-English summary + an active/silent semantics note. *Trigger*: users want to see real silent behaviour pre-release.
+
+**S6b Acceptance Criteria**: ① `<RecipeBuilder>` is a pure component `(Context)=>RecipeObject`, Vitest-testable in isolation (6 recipes' conditional fields / dynamic plain-English state machine / ghost soft-warn); ② all enums derive from `tenant-config.schema.json`, **no hardcoded enums** (a schema change reddens the dist-gate); ③ each metric field has its own debounce+AbortController fetcher, autocomplete decoupled from ghost-validation (the race does not mis-fire); ④ the S6b-1 standalone emits a copy-paste snippet with the full wrapper; ⑤ S6b-2 folds into tenant-manager with **name-based** add/edit (not index), the write going through the existing PUT+S5, zero clobber.
 
 ### Future robustness radar (surfaced by the S5 + S6 external reviews, defer-with-trigger)
 
