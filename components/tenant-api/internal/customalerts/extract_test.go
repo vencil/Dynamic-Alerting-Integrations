@@ -36,6 +36,15 @@ func TestExtract_EmptyWhenTenantMissing(t *testing.T) {
 	}
 }
 
+func TestExtract_ErrorsOnMalformedYAML(t *testing.T) {
+	// the GET handler surfaces this as a 500 rather than a silent empty list.
+	const broken = "tenants:\n  shop-a:\n    _custom_alerts: [unclosed\n"
+	_, err := Extract(broken, "shop-a")
+	if err == nil {
+		t.Fatal("malformed YAML should return an error, got nil")
+	}
+}
+
 func TestExtract_RoundTripsSelectors(t *testing.T) {
 	const withSel = `tenants:
   shop-a:

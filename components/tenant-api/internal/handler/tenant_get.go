@@ -76,7 +76,13 @@ func GetTenant(d *Deps) http.HandlerFunc {
 			}
 		}
 
-		customAlerts, _ := customalerts.Extract(string(data), tenantID)
+		customAlerts, err := customalerts.Extract(string(data), tenantID)
+		if err != nil {
+			// A parse error here means the tenant file is not valid YAML; surface
+			// it rather than returning a 200 with silently-empty custom_alerts.
+			WriteJSONError(w, r, http.StatusInternalServerError, "failed to parse tenant custom alerts: "+err.Error())
+			return
+		}
 
 		detail := TenantDetail{
 			ID:           tenantID,
