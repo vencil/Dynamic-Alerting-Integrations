@@ -125,6 +125,35 @@ describe('RecipeBuilder', () => {
     expect(onSubmit.mock.calls[0][0].threshold).toBe('100:critical');
   });
 
+  it('optional capacity_metric: a malformed value blocks readiness (not just required fields)', () => {
+    const onSubmit = vi.fn();
+    render(<RecipeBuilder tenantId="db-a" fetchMetrics={mockFetch(['avail'])} onSubmit={onSubmit} />);
+    fireEvent.change(screen.getByTestId('field-recipe'), { target: { value: 'forecast' } });
+    fill('field-name', 'disk');
+    fill('field-metric', 'avail');
+    fill('field-threshold', '50'); // raw mode (no capacity) → any number ok
+    expect((screen.getByTestId('submit') as HTMLButtonElement).disabled).toBe(false);
+    // now a garbage OPTIONAL capacity_metric must block (it would emit bad YAML)
+    fill('field-capacity_metric', 'bad!@#');
+    expect((screen.getByTestId('submit') as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByTestId('field-capacity_metric-badformat')).toBeInTheDocument();
+  });
+
+  it('p99_latency quantile: out-of-range / non-numeric blocks readiness', () => {
+    const onSubmit = vi.fn();
+    render(<RecipeBuilder tenantId="db-a" fetchMetrics={mockFetch(['lat'])} onSubmit={onSubmit} />);
+    fireEvent.change(screen.getByTestId('field-recipe'), { target: { value: 'p99_latency' } });
+    fill('field-name', 'lat_p99');
+    fill('field-metric', 'lat');
+    fill('field-window', '5m');
+    fill('field-threshold', '2');
+    expect((screen.getByTestId('submit') as HTMLButtonElement).disabled).toBe(false); // default quantile 0.99
+    fill('field-quantile', '9'); // not in (0,1)
+    expect((screen.getByTestId('submit') as HTMLButtonElement).disabled).toBe(true);
+    fill('field-quantile', 'abc'); // non-numeric
+    expect((screen.getByTestId('submit') as HTMLButtonElement).disabled).toBe(true);
+  });
+
   it('forecast ratio mode: floor outside (0,1) blocks readiness', () => {
     const onSubmit = vi.fn();
     render(<RecipeBuilder tenantId="db-a" fetchMetrics={mockFetch(['avail', 'cap'])} onSubmit={onSubmit} />);

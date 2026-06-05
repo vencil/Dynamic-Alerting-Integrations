@@ -91,6 +91,7 @@ function isFieldValid(field, value) {
     case 'capacity_metric': return isValidMetric(value);
     case 'window': return isValidWindow(value);
     case 'horizon': return ENUMS.horizon.includes(value);
+    case 'quantile': { const n = Number(value); return Number.isFinite(n) && n > 0 && n < 1; }
     case 'threshold': return !Number.isNaN(parseThresholdValue(value));
     default: return true;
   }
@@ -100,8 +101,18 @@ function isFieldValid(field, value) {
  * False until every required field is present and structurally valid, so
  * the plain-English summary never renders [undefined] (review Reef 4). */
 function allRequiredValid(recipe, f) {
-  for (const field of requiredFields(recipe)) {
+  const required = requiredFields(recipe);
+  // Required fields: must be present AND valid.
+  for (const field of required) {
     if (!f[field] || !isFieldValid(field, f[field])) return false;
+  }
+  // Optional fields shown on THIS recipe's form: if filled, must also be
+  // valid — else a garbage capacity_metric / quantile would slip through to
+  // a YAML the S5 Go preflight then rejects, breaking the "validate up
+  // front" promise. (name is checked via `required` above; it is rendered
+  // outside FIELDS_BY_RECIPE, so iterating only the map would skip it.)
+  for (const field of (FIELDS_BY_RECIPE[recipe] || [])) {
+    if (!required.includes(field) && f[field] && !isFieldValid(field, f[field])) return false;
   }
   // forecast ratio mode: capacity_metric set → floor ∈ (0,1).
   if (recipe === 'forecast' && f.capacity_metric) {
@@ -193,7 +204,9 @@ function MetricField({ label, value, onChange, tenantId, fetchMetrics, inputClas
   const [ghost, setGhost] = useState('idle'); // idle|validating|ok|ghost|unavailable
   const debounced = useDebouncedValue(value || '', 300);
   const abortRef = useRef(null);
+  const exactAbortRef = useRef(null);
   const listId = `dl-${testid || label}`;
+  const badFormat = !!value && !isValidMetric(value);
 
   useEffect(() => {
     if (!tenantId || !debounced) { setSuggestions([]); return undefined; }
@@ -207,15 +220,20 @@ function MetricField({ label, value, onChange, tenantId, fetchMetrics, inputClas
     return () => { live = false; ctrl.abort(); };
   }, [debounced, tenantId, fetchMetrics]);
 
+  // Abort any in-flight blur validation on unmount. React 18 makes a
+  // setState-after-unmount a silent no-op (the old "memory leak" warning was
+  // removed), so this is about cancelling the network request — and the
+  // exactAbortRef closes a real race: a slow stale blur-validation must not
+  // clobber a fresher one (we abort the previous before each new check).
+  useEffect(() => () => { if (exactAbortRef.current) exactAbortRef.current.abort(); }, []);
+
   function validateExact(name) {
-    // Blur-time precise check (decoupled from the autocomplete list). A check
-    // in flight when the component unmounts resolves into a no-op setState
-    // (React warns, harmless); blur is infrequent so a tracked abort isn't
-    // worth the complexity here.
     onChange(name);
+    if (exactAbortRef.current) exactAbortRef.current.abort(); // supersede a pending check
     if (!name || !tenantId) { setGhost('idle'); return; }
     setGhost('validating');
     const ctrl = new AbortController();
+    exactAbortRef.current = ctrl;
     fetchMetrics(tenantId, name, ctrl.signal)
       .then((names) => setGhost(names.includes(name) ? 'ok' : 'ghost'))
       .catch((err) => { if (err && err.name !== 'AbortError') setGhost('unavailable'); });
@@ -236,6 +254,11 @@ function MetricField({ label, value, onChange, tenantId, fetchMetrics, inputClas
       <datalist id={listId}>
         {suggestions.map((s) => <option key={s} value={s} />)}
       </datalist>
+      {badFormat && (
+        <p className="text-xs mt-1 pl-2 border-l-2 border-[color:var(--da-color-error)] text-[color:var(--da-color-error)]" data-testid={`${testid}-badformat`}>
+          {t('指標名稱不合法（只允許 [a-zA-Z_][a-zA-Z0-9_]*）', 'invalid metric name (only [a-zA-Z_][a-zA-Z0-9_]*)')}
+        </p>
+      )}
       {ghost === 'validating' && (
         <p className="text-xs mt-1 text-[color:var(--da-color-muted)]">{t('驗證中…', 'Validating...')}</p>
       )}
