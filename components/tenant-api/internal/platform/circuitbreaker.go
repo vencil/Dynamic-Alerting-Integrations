@@ -134,10 +134,16 @@ func (c *CircuitBreaker) Execute(fn func() ([]byte, http.Header, error)) ([]byte
 		// open state preserves the "trips only after cbConsecutiveFailures"
 		// semantics — calls 1..N still execute and accumulate failures; the gate
 		// only extends the open window beyond gobreaker's fixed 60s.
+		//
+		// Anchor the window on a FRESH clock reading (post-response), NOT the `now`
+		// captured before the call: a degraded forge — exactly when rate limits
+		// fire — can make the round-trip take seconds, and reusing the pre-call
+		// timestamp would shorten suppression by that latency and let a probe fire
+		// before Retry-After truly expires.
 		var apiErr *APIError
 		if errors.As(err, &apiErr) && apiErr.RateLimited && apiErr.RetryAfter > 0 &&
 			c.cb.State() == gobreaker.StateOpen {
-			c.armRateLimitGate(now.Add(apiErr.RetryAfter))
+			c.armRateLimitGate(c.clock().Add(apiErr.RetryAfter))
 		}
 		// A real fn error (4xx/5xx/network) — propagate body+header+err as-is.
 		return res.body, res.header, err

@@ -259,6 +259,49 @@ func TestCircuitBreaker_RetryAfterGateSuppressesProbe(t *testing.T) {
 	}
 }
 
+// TestCircuitBreaker_GateAnchorsOnResponseTime is the CodeRabbit-caught timing
+// guard: the Retry-After window must be measured from when the RESPONSE arrived
+// (a fresh clock read at arm time), NOT from the pre-call timestamp — otherwise a
+// slow degraded forge's round-trip latency shortens the suppression and lets a
+// probe fire early. The failing fn advances the injected clock to simulate that
+// latency, so a stale-`now` regression would anchor the window `latency` too soon.
+func TestCircuitBreaker_GateAnchorsOnResponseTime(t *testing.T) {
+	t.Parallel()
+	cb := NewCircuitBreaker("test-gate-responsetime")
+
+	base := time.Unix(1_700_000_000, 0)
+	var nowVal atomicTime
+	nowVal.set(base)
+	cb.now = nowVal.get
+
+	const latency = 20 * time.Second
+	const retryAfter = 100 * time.Second
+	rl := func() ([]byte, http.Header, error) {
+		// Simulate the forge round-trip consuming wall-clock between the pre-call
+		// `now` and the post-response arm.
+		nowVal.set(nowVal.get().Add(latency))
+		return nil, nil, &APIError{StatusCode: http.StatusForbidden, RateLimited: true, RetryAfter: retryAfter}
+	}
+	for i := 0; i < cbConsecutiveFailures; i++ {
+		_, _, _ = cb.Execute(rl)
+	}
+
+	// The opening (5th) call started at base+4·latency and its response landed at
+	// base+5·latency. The window must end at responseTime+retryAfter.
+	responseTime := base.Add(cbConsecutiveFailures * latency)
+	// This probe instant is PAST the buggy window (preCall+retryAfter =
+	// responseTime-latency+retryAfter) but BEFORE the correct one — so it
+	// distinguishes the fix (gate open) from the stale-`now` bug (gate closed).
+	probe := responseTime.Add(retryAfter - latency + time.Second)
+	if !cb.rateLimitGateOpen(probe) {
+		t.Error("gate cleared early — Retry-After window was anchored on the pre-call time, not the response time (stale-now regression)")
+	}
+	// And it must clear once the response-anchored window genuinely elapses.
+	if cb.rateLimitGateOpen(responseTime.Add(retryAfter + time.Second)) {
+		t.Error("gate should clear after responseTime+retryAfter")
+	}
+}
+
 // atomicTime is a tiny mutex-guarded clock holder so the injected now func is
 // race-safe (the breaker reads it; the test writes it between phases).
 type atomicTime struct {

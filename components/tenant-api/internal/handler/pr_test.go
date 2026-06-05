@@ -707,7 +707,9 @@ func TestPutTenant_PRMode_RateLimited403MapsTo503(t *testing.T) {
 		t.Fatalf("rate-limited 403 should map to 503, got %d: %s", w.Code, w.Body.String())
 	}
 	var resp map[string]interface{}
-	json.Unmarshal(w.Body.Bytes(), &resp)
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("expected JSON response, unmarshal failed: %v; body=%s", err, w.Body.String())
+	}
 	if resp["code"] == CodeForbidden {
 		t.Errorf("code = %v, want a non-FORBIDDEN code (rate-limit is degradation, not a permission error)", resp["code"])
 	}
