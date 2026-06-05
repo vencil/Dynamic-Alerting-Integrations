@@ -257,6 +257,35 @@ tools:
   hub_section: interactive
   appears_in: []
   journey_phase: configure
+- key: recipe-builder
+  title:
+    en: Custom Alert Recipe Builder
+    zh: 自訂告警 Recipe 建構器
+  file: interactive/tools/recipe-builder.jsx
+  audience:
+  - tenant
+  - sre
+  - platform
+  icon: wizard
+  tags:
+  - custom-alert
+  - recipe
+  - builder
+  - adr-024
+  - s6b
+  desc:
+    en: No-PromQL form to author a tenant custom-alert recipe (6 recipe types,
+      live metric discovery, plain-English summary); emits the _custom_alerts YAML
+    zh: 免 PromQL 表單授權租戶自訂告警 recipe（6 種 recipe、live 指標發現、白話摘要）；
+      產出 _custom_alerts YAML 片段
+  related:
+  - alert-builder
+  - tenant-manager
+  - threshold-calculator
+  - simulate-preview
+  hub_section: interactive
+  appears_in: []
+  journey_phase: configure
 - key: master-onboarding
   title:
     en: Master Onboarding — Dual Entry
