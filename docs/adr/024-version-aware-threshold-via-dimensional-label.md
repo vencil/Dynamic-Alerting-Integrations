@@ -43,7 +43,7 @@ updated_at: 2026-06-04
 
 ⛔ **部署前提（HARD）**：kube-state-metrics 必須設 `--metric-labels-allowlist=pods=[app.kubernetes.io/version]`，否則 `kube_pod_labels` 不帶 version、version 注入 join 匹配空集、**版本閾值靜默 inert**（真叢集實證）。三層防禦守住此前提：runtime sentinel `VersionAwareThresholdInert` 是安全網、CI static lint `check_ksm_version_allowlist.py` 攔誤配。
 
-**能力 B — Custom Alerts（實作進行中，目標 v2.9.0）**：recipe 庫 + 向量化編譯器 + 6 個 recipe（threshold / rate / ratio / absence / p99_latency / **forecast**）+ exporter `user_threshold` emission + 編譯期 `max_custom_recipes` per-tenant cap + **tenant-api shift-left preflight（in-process Go）** **已實作**（[#741](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/741) S1–S5 / [#752](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/752) / [#753](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/753)）；**設計收斂、實作 net-new（S6）**：discovery catalog（無狀態 Prometheus proxy）+ recipe-authoring UX（portal）—— 設計已 locked、外審過（見 §S6），程式碼待 S6a/S6b。
+**能力 B — Custom Alerts（實作進行中，目標 v2.9.0）**：recipe 庫 + 向量化編譯器 + 6 個 recipe（threshold / rate / ratio / absence / p99_latency / **forecast**）+ exporter `user_threshold` emission + 編譯期 `max_custom_recipes` per-tenant cap + **tenant-api shift-left preflight（in-process Go）** **已實作**（[#741](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/741) S1–S5 / [#752](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/752) / [#753](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/753)）+ **S6a metric discovery 端點（無狀態 Prometheus proxy）** **已實作**（[#741](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/741) S6a / [#761](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/761)）；**設計收斂、實作 net-new（S6b）**：recipe-authoring UX（`<RecipeBuilder>` portal 智慧表單）—— 設計已 locked、外審過（見 §S6b），程式碼待 S6b-1/S6b-2。
 
 **Deferred（defer-with-trigger）**：
 
@@ -575,6 +575,89 @@ custom:metric:<rid> = label_replace(
 **評估並否決的選項**：**預建 metric 目錄 / 快取索引**（查詢快但須維護會漂移的狀態、破 stateless）→ 否決為 day-1 預設（micro-cache 降級為 defer-trigger）。**後端硬擋 ghost**（GitOps 真空期誤殺 + 預建合法）→ 否決，降為 portal soft-warn + SRE 哨兵。
 
 **S6 Acceptance Criteria**：① discovery 端點只回**該租戶**自身 metric（`match[]` 強制 `tenant=authID`、`url.QueryEscape`、跨租戶查詢回空〔隔離測〕）；② 端點純唯讀、不寫 config（stateless）；③ per-tenant rate-limit 超量回 429、與 PUT 配額獨立；④ portal recipe 表單可不接觸 PromQL 完成 authoring + ghost soft-warn + gauge-only recipe 只列 gauge（type filter）；⑤ network policy egress 明確加 `tenant-api → prometheus:9090`。
+
+### S6b — recipe-authoring UX（`<RecipeBuilder>` 智慧表單，#741）
+
+> 設計經 brainstorm 五問 + **兩輪自我對抗框架翻轉** + Gemini 外審（4 個 OQ 裁決 + 4 個前端深水暗礁）+ 兩個自補充收斂。**核心翻轉**：第一輪把問題框成「寫入路徑 A/B/C」是錯的切法；對抗後定錨為「**誰擁有寫入權威**」。
+
+**緣起 / 意圖**：S1–S6a 讓租戶能**寫**正確 recipe、能**發現**自己的 metric（S6a）。S6b 補最後一塊 —— 一個**免 PromQL** 的授權表單，把「選 metric → 選 recipe → 填參數」變成 UI，產出合法 `_custom_alerts` recipe。epic #741 的 GA 收尾。
+
+**核心心智模型：Smart Form, Dumb Handoff**（鏡像後端「Dumb Pipes, Smart Endpoints」）。三個對抗 lens 指向同一結論 —— builder **不該擁有寫入**：
+
+- **full-overlay clobber**：tenant `_custom_alerts` 是 `tenants.<id>` 底下的 list，PUT 是 full-overlay（S5 確證）。窄工具自行 fetch→inject→PUT，過期本地狀態會 clobber 並行編輯。
+- **YAML-splice footgun**：「產生 YAML 給貼」要租戶手動 splice 進巢狀 list —— 正是 no-PromQL 想消滅的手 YAML 錯誤。
+- **name-collision / context**：recipe 需租戶內名稱唯一（+ S4 own-cap）；獨立工具看不到現有 recipe，無法即時警告。
+
+→ **寫入權威 = tenant-manager**（整 config 編輯器、看得到全狀態 + 既有 PUT+S5 preflight 安全路徑）。`<RecipeBuilder>` 是純 UI 元件 `(Context) => RecipeObject`，把合法物件交給寫入權威。
+
+**兩個 persona，皆 first-class（非 demo）**：平台本就支援 **GitOps-direct**（在自己 conf.d repo 編 YAML 走 PR）與 **tenant-manager UI** 兩種工作流（try-local 兼具）。builder 兩種出口都服務。
+
+**`<RecipeBuilder>` 元件設計規則（全部可機械驗證 / 測試）**：
+
+1. **Enum 來自 schema，前端零 hardcode**（外審 Reef 1）：build-time import `docs/schemas/tenant-config.schema.json` 取 `for`/`horizon`/`op`/`severity` enum（已驗證該 schema 為 SSOT，含 `customAlertInstance` + 條件 required）。schema 變 → bundle 變 → **dist-sync gate 機械強制 freshness** → 跨語言契約從 Python/Go **延伸到 TS**。**REJECT `react-jsonschema-form`**（bare npm import 違 `check_jsx_loader_compat` allowlist／TRK-237）→ enum 自 schema、per-recipe 欄位佈局手寫 map（UI layout 非驗證權威，recipe 集穩定）。
+2. **每個 metric 欄獨立 autocomplete 子元件**（metric / `capacity_metric` / `denominator_metric`，外審 Reef 4）：各自 debounce ≥300ms + AbortController + session 內短期 cache，使單一授權 session **不自撞 S6a 的 100/min limiter**（連回 §S6 Reef 1 的 client-side 配套）。
+3. **Ghost validation 與 autocomplete-list 脫鉤**（外審 Reef 3）：快打 + 貼上 + blur 的 async race 會誤報 ghost；blur 時對**完整字串**發精確 `?q=`、結果回來前顯示 `Validating…`（非 ghost-warn）、AbortController 取消被取代的舊請求。不在清單 → 黃 soft-warn（不 block；GitOps 真空 / 預建合法）。
+4. **白話摘要 = 狀態機**（外審 OQ3 + Reef 4）：全必填齊**且結構合法**才渲染動態句（綁實填參數、經 `window.__t` ZH-primary，例「當 [avail] 與 [capacity] 的比例預測在 [4h] 內跌破 [15%] 時觸發 [warning]」），否則「等待填寫必填參數…」；**永不露 PromQL / `user_threshold` series / label**（露底層 = 認知破裂，S1/S2 刻意藏複雜度）。
+5. **discovery 不可用**（502/503/無後端）→ 優雅降級：允許手打 metric + 「發現暫不可用」，不 block 授權。
+6. **client 驗證純 UX 快回饋**（鏡 S5，非權威）：S5 preflight + CI 才是驗證權威；不重造跨語言驗證契約。
+
+**決策 trade-off**：
+
+- **builder 不擁有寫入** ↔ 換掉 clobber/splice/collision 三風險；代價是 GitOps persona 仍需把 snippet 放進自己 repo（但那是其既有 PR flow、非 footgun）。
+- **元件化 + 薄整合**（非直接大改 tenant-manager） ↔ 多一層抽象，換孤立可測 + 最小 regression（tenant-manager 是載重 live 工具）。
+- **schema → enum + 手寫佈局 map**（非 rjsf） ↔ 佈局 map 是潛在漂移點，但屬 UI layout 非驗證權威、recipe 集穩定；換掉重 npm 依賴 + loader 違規風險。
+
+**交付兩刀**：
+
+- **S6b-1（MVP）= `<RecipeBuilder>` 元件 + standalone host 頁**（manifest entry）：服務 **GitOps-direct persona** —— 吐**帶完整 `tenants: <id>: _custom_alerts: -` wrapper 的 snippet + 一鍵複製**（外審 OQ2 fix，消除「貼哪裡」認知摩擦）；兼當元件 Vitest 測試宿主。
+- **S6b-2（fast-follow，獨立 PR）= 折進 tenant-manager**：mount `<RecipeBuilder>` 當「新增 / 編輯自訂告警」面板；傳入租戶現有 recipe（撞名 / cap 即時警告）；`onSubmit(recipe)` → **name-based mutation**（外審 Reef 2：add 或 replace-by-`targetName`，**嚴禁依賴 array index**，S5 保證 name 唯一；targetName 找不到 → 背景已變 → 擋寫 + 提示刷新）→ tenant-manager 既有 PUT。**cheap-edit 納入 MVP**（外審 OQ4：既有 recipe 作 InitialValues 塞進元件、改完 name-based replace、零新後端 API）。服務 **UI persona**、閉合 adoption、零 clobber。
+
+**資料流向 + 前端防線閉環**（async 三防禦 / ghost 脫鉤 / name-based mutation / 雙 persona 出口）：
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User as 租戶開發者 / SRE
+    participant RB as RecipeBuilder（純 UI 元件）
+    participant TM as tenant-manager（live 編輯器）
+    participant API as tenant-api（S5/S6a Go 後端）
+    participant Git as GitOps Repo（SOT）
+
+    User->>RB: 輸入 metric 前綴（如 http_）
+    Note over RB: 每欄獨立 async 防禦（Reef 4 + Reef 3）<br/>debounce 300ms+ / AbortController / session cache
+    RB->>API: GET /tenants/{id}/metrics?q=http_
+    API-->>RB: 200（去重名單，24h lookback）
+
+    User->>RB: blur / 確定完整 metric 名
+    RB->>API: 精確查核 q=完整字串
+    Note over RB: 中間態 Validating…<br/>與 autocomplete 清單脫鉤（防 race，Reef 3）
+    alt 不在清單內
+        Note over RB: 黃字 soft-warn（不 block；GitOps 真空合法）
+    end
+
+    Note over RB: 摘要狀態機（OQ3 + Reef 4）<br/>必填齊且合法才渲染動態白話，永不露 PromQL
+
+    alt S6b-1：GitOps-direct（standalone host）
+        RB-->>User: 吐帶完整 tenants/ID/_custom_alerts wrapper 的 snippet + 一鍵複製
+        User->>Git: 手動貼 + 發 PR（標準 GitOps 摩擦）
+    else S6b-2：live UI（折進 tenant-manager）
+        Note over TM: 傳入現有 recipe（撞名 + S4 own-cap 即時警告）
+        User->>RB: 點擊提交（onSubmit）
+        RB->>TM: 遞交 RecipeObject（Dumb Handoff）
+        Note over TM: name-based mutation（Reef 2）<br/>add 或 replace-by-targetName，嚴禁 array index
+        TM->>API: PUT /tenants/{id}（full-overlay，寫入權威）
+        Note over API: S5 in-process Go preflight 拒壞輸入
+    end
+```
+
+**評估並否決**：**直接把表單寫進 tenant-manager 核心** → 否決（載重 live 工具，大改 regression 高；元件化是 A→B 可增量路徑）。**`react-jsonschema-form`** → 否決（loader allowlist 違規 + 重依賴）。**series/label 展示** → 否決（認知破裂）。
+
+**Defer-with-trigger**：
+
+- **gauge-only type-filter** → defer：S6a 只回 metric 名、不回 type；需新 `/api/v1/.../metadata` 端點。*Trigger*：type 混淆致實際授權錯誤，或 forecast 採用率起。
+- **live `mode: silent` simulate 預覽** → defer：需 recipe→simulate-preview wiring。MVP 用動態白話摘要 + active/silent 語意說明。*Trigger*：使用者要發版前實看 silent 行為。
+
+**S6b Acceptance Criteria**：① `<RecipeBuilder>` 為純元件 `(Context)=>RecipeObject`、Vitest 可孤立測（6 recipe 條件式欄位 / 動態白話狀態機 / ghost soft-warn）；② enum 全部 derive 自 `tenant-config.schema.json`、**無 hardcoded enum**（schema 改 → dist-gate 紅）；③ 每個 metric 欄獨立 debounce+AbortController fetcher、autocomplete 與 ghost-validation 脫鉤（race 不誤報）；④ S6b-1 standalone 吐帶完整 wrapper 的 copy-paste snippet；⑤ S6b-2 折進 tenant-manager、**name-based** add/edit（非 index）、寫入走既有 PUT+S5、零 clobber。
 
 ### Future robustness radar（S5 + S6 外審衍生，defer-with-trigger）
 
