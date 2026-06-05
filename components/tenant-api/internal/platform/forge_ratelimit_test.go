@@ -3,6 +3,7 @@ package platform
 import (
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 )
@@ -48,6 +49,10 @@ func TestDetectRateLimit(t *testing.T) {
 			hdr("Retry-After", "99999999999"), "", true, maxRetryAfterSecs * time.Second},
 		{"403 + over-long Retry-After (1 day) → clamped to 1h", http.StatusForbidden,
 			hdr("Retry-After", "86400"), "", true, maxRetryAfterSecs * time.Second},
+		{"403 + huge body, signal at start → still detected (capped sniff)", http.StatusForbidden,
+			hdr(), `{"message":"You have exceeded a secondary rate limit"}` + strings.Repeat("x", 20000), true, 0},
+		{"403 + huge body, signal ONLY past the sniff cap → not detected (bounded scan)", http.StatusForbidden,
+			hdr(), strings.Repeat("x", maxSniffBytes+10) + " rate limit", false, 0},
 		{"permission 403: no rate-limit signal → NOT limited", http.StatusForbidden,
 			hdr(), `{"message":"Resource not accessible by integration"}`, false, 0},
 		{"404 with remaining 0 → NOT limited (gated to 403/429)", http.StatusNotFound,

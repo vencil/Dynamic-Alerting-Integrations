@@ -1,11 +1,19 @@
 package platform
 
 import (
+	"bytes"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 )
+
+// maxSniffBytes bounds the body rate-limit sniff. A rate-limit message sits at
+// the very start of the (small JSON) forge error body, so scanning only the
+// first 4 KiB never misses a real signal while keeping a pathological huge error
+// page (e.g. a 2 MB HTML 403 from some upstream gateway) from churning the heap
+// on the already-degraded forge-error path.
+const maxSniffBytes = 4096
 
 // maxRetryAfterSecs caps a parsed Retry-After (1h). Bounds two failure modes: a
 // huge value overflowing the time.Duration ns multiply into garbage, and a
@@ -37,8 +45,11 @@ const maxRetryAfterSecs = 3600
 // NOT retained on the APIError — no upstream body leaks past this point.
 //
 // retryAfter is parsed from the Retry-After header as integer seconds (the form
-// GitHub/GitLab send). An absent/unparseable header yields 0 — still flagged as
-// rate-limited if another signal fired, just without a precise back-off window.
+// GitHub/GitLab send) and clamped to maxRetryAfterSecs. An absent or unparseable
+// value — including the RFC-allowed HTTP-date form (`Wed, 21 Oct 2025 ...`),
+// which we deliberately don't parse — yields 0: still flagged as rate-limited if
+// another signal fired (a 429 always is), just without a precise back-off window,
+// so the breaker gate gracefully degrades to gobreaker's default open timeout.
 func DetectRateLimit(statusCode int, header http.Header, body []byte) (limited bool, retryAfter time.Duration) {
 	if statusCode != http.StatusForbidden && statusCode != http.StatusTooManyRequests {
 		return false, 0
@@ -71,10 +82,17 @@ func DetectRateLimit(statusCode int, header http.Header, body []byte) (limited b
 		limited = true
 	}
 	if !limited && len(body) > 0 {
-		b := strings.ToLower(string(body))
+		// Bound the allocation + scan to the first maxSniffBytes (see const). Use
+		// bytes.ToLower on the capped slice rather than strings.ToLower(string(body))
+		// to avoid the extra byte→string conversion copy.
+		b := body
+		if len(b) > maxSniffBytes {
+			b = b[:maxSniffBytes]
+		}
+		lower := bytes.ToLower(b)
 		// "rate limit" covers GitHub's modern + GitLab messages; "abuse" covers
 		// GitHub's older "abuse detection mechanism" phrasing.
-		if strings.Contains(b, "rate limit") || strings.Contains(b, "abuse") {
+		if bytes.Contains(lower, []byte("rate limit")) || bytes.Contains(lower, []byte("abuse")) {
 			limited = true
 		}
 	}
