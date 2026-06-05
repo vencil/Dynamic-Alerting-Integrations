@@ -20,8 +20,11 @@ func TestWriteQueueDepthFromEnv(t *testing.T) {
 		{"unset → default", "", defaultWriteQueueDepth},
 		{"valid", "12", 12},
 		{"zero is honoured", "0", 0},
+		{"at cap is honoured", "10000", maxWriteQueueDepth},
 		{"negative → default", "-3", defaultWriteQueueDepth},
 		{"garbage → default", "abc", defaultWriteQueueDepth},
+		{"over cap → default (no int32 overflow)", "100000", defaultWriteQueueDepth},
+		{"huge value past int32 → default (no overflow)", "3000000000", defaultWriteQueueDepth},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

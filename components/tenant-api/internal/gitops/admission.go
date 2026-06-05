@@ -23,17 +23,25 @@ var ErrWriteOverloaded = errors.New("write plane overloaded: admission queue ful
 // TA_WRITE_QUEUE_DEPTH; total admitted = 1 in-flight + this.
 const defaultWriteQueueDepth = 5
 
+// maxWriteQueueDepth caps TA_WRITE_QUEUE_DEPTH. A queue deeper than this is
+// pathological — it defeats the whole point of bounding goroutines — and a value
+// near/over int32's range would overflow the conversion below (CodeQL). Either
+// way it's a fat-finger, so we reject it back to the default.
+const maxWriteQueueDepth = 10_000
+
 // writeQueueDepthFromEnv reads TA_WRITE_QUEUE_DEPTH as a non-negative int,
-// falling back to defaultWriteQueueDepth when unset, unparseable, or negative. A
-// value of 0 is honoured (no queue — only the single in-flight write is admitted,
-// everything else sheds immediately), which is a legitimate aggressive setting.
+// falling back to defaultWriteQueueDepth when unset, unparseable, negative, or
+// absurdly large (> maxWriteQueueDepth). A value of 0 is honoured (no queue —
+// only the single in-flight write is admitted, everything else sheds
+// immediately), which is a legitimate aggressive setting. The upper bound also
+// makes the int32 conversion provably overflow-free.
 func writeQueueDepthFromEnv() int32 {
 	v := os.Getenv("TA_WRITE_QUEUE_DEPTH")
 	if v == "" {
 		return defaultWriteQueueDepth
 	}
 	n, err := strconv.Atoi(v)
-	if err != nil || n < 0 {
+	if err != nil || n < 0 || n > maxWriteQueueDepth {
 		slog.Warn("gitops: invalid TA_WRITE_QUEUE_DEPTH — using default",
 			"value", v, "default", defaultWriteQueueDepth, "error", err)
 		return defaultWriteQueueDepth
