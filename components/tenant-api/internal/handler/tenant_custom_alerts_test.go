@@ -125,15 +125,20 @@ func TestPutCustomAlerts_MatchingBaseHashSucceeds(t *testing.T) {
 		b, _ := readBody(resp)
 		t.Fatalf("status = %d, want 200 with matching base_hash; body: %s", resp.StatusCode, b)
 	}
-	// G3: the response returns a fresh source_hash (the client's next base_hash),
-	// which must differ from the one just consumed (the file changed).
+	// G3: the response returns a fresh source_hash (the client's next base_hash).
+	// Lock the exact contract: it must equal the hash of the post-write file
+	// (and therefore differ from the consumed input hash).
 	b, _ := readBody(resp)
 	var pr PutCustomAlertsResponse
 	if err := json.Unmarshal([]byte(b), &pr); err != nil {
 		t.Fatalf("response not JSON: %v; body: %s", err, b)
 	}
-	if len(pr.SourceHash) != 16 || pr.SourceHash == hash {
-		t.Errorf("response source_hash = %q, want a fresh 16-char hash != the input %q", pr.SourceHash, hash)
+	out, _ := os.ReadFile(filepath.Join(dir, "db-a.yaml"))
+	if want := cfg.ComputeSourceHash(out); pr.SourceHash != want {
+		t.Errorf("response source_hash = %q, want %q (hash of post-write file)", pr.SourceHash, want)
+	}
+	if pr.SourceHash == hash {
+		t.Errorf("response source_hash must differ from the consumed base_hash %q", hash)
 	}
 }
 

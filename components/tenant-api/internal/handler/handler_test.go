@@ -16,6 +16,7 @@ import (
 	"github.com/vencil/tenant-api/internal/policy"
 	"github.com/vencil/tenant-api/internal/rbac"
 	"github.com/vencil/tenant-api/internal/testutil"
+	cfg "github.com/vencil/threshold-exporter/pkg/config"
 )
 
 // newRequestWithChiParam creates an *http.Request with a chi URL parameter set.
@@ -184,10 +185,10 @@ func TestGetTenant_Success(t *testing.T) {
 		t.Error("TenantDetail.RawYAML should not be empty")
 	}
 	// ADR-024 §S6b-2: GET returns source_hash (the client's base_hash for
-	// PUT .../custom-alerts optimistic concurrency). Must be the SHA-256[:16]
-	// of the raw file.
-	if len(detail.SourceHash) != 16 {
-		t.Errorf("TenantDetail.SourceHash = %q (len %d), want a 16-char hash", detail.SourceHash, len(detail.SourceHash))
+	// PUT .../custom-alerts optimistic concurrency). Lock the exact contract:
+	// the SHA-256[:16] of the raw file content.
+	if want := cfg.ComputeSourceHash([]byte(detail.RawYAML)); detail.SourceHash != want {
+		t.Errorf("TenantDetail.SourceHash = %q, want %q (SHA-256[:16] of raw_yaml)", detail.SourceHash, want)
 	}
 }
 
