@@ -7,6 +7,13 @@ import (
 	"time"
 )
 
+// maxRetryAfterSecs caps a parsed Retry-After (1h). Bounds two failure modes: a
+// huge value overflowing the time.Duration ns multiply into garbage, and a
+// bogus/over-long back-off suppressing the write plane (via the breaker gate)
+// for an absurd span. Generous headroom over real forge secondary-rate-limit
+// windows (seconds to a few minutes) while keeping the worst case bounded.
+const maxRetryAfterSecs = 3600
+
 // DetectRateLimit inspects a non-2xx forge response and reports whether it is a
 // rate-limit / abuse rejection, plus the server-advised Retry-After (TRK-319).
 //
@@ -19,7 +26,9 @@ import (
 //
 // Gated to 403 / 429 so a coincidental `X-RateLimit-Remaining: 0` on an
 // unrelated 404/422 (you spent your last call hitting a missing resource) can't
-// be misread as a rate-limit. Signals (ANY ⇒ rate-limited):
+// be misread as a rate-limit. A 429 is treated as rate-limited UNCONDITIONALLY
+// (it means that by definition); a 403 is ambiguous (permission vs GitHub
+// secondary rate limit) and needs one of these signals:
 //   - Retry-After header present (the authoritative back-off signal)
 //   - X-RateLimit-Remaining (GitHub) / RateLimit-Remaining (GitLab) == "0"
 //   - body mentions "rate limit" / "secondary rate limit" / "abuse"
@@ -35,8 +44,23 @@ func DetectRateLimit(statusCode int, header http.Header, body []byte) (limited b
 		return false, 0
 	}
 
+	// 429 (Too Many Requests) IS a rate limit by definition, so it counts even
+	// with no corroborating header/body (a bare 429, or one whose Retry-After is
+	// an HTTP-date we don't parse). 403 stays AMBIGUOUS — GitHub uses it for both
+	// a secondary rate limit AND a permission denial — so a 403 still needs a
+	// positive signal below before it's treated as rate-limited.
+	if statusCode == http.StatusTooManyRequests {
+		limited = true
+	}
+
 	if v := strings.TrimSpace(header.Get("Retry-After")); v != "" {
 		if secs, err := strconv.Atoi(v); err == nil && secs > 0 {
+			// Clamp BEFORE the ns multiply: a bogus/huge value (Retry-After:
+			// 99999999999) would otherwise overflow time.Duration to garbage and,
+			// via the breaker gate, suppress the write plane for an absurd span.
+			if secs > maxRetryAfterSecs {
+				secs = maxRetryAfterSecs
+			}
 			retryAfter = time.Duration(secs) * time.Second
 			limited = true
 		}

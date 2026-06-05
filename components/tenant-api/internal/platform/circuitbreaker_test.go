@@ -25,7 +25,13 @@ func TestIsForgeDegradation(t *testing.T) {
 		{"404 is client outcome", &APIError{StatusCode: http.StatusNotFound}, false},
 		{"409 is client outcome (pending PR)", &APIError{StatusCode: http.StatusConflict}, false},
 		{"422 is client outcome (validation)", &APIError{StatusCode: http.StatusUnprocessableEntity}, false},
-		{"429 rate-limit is NOT a 5xx → not degradation", &APIError{StatusCode: http.StatusTooManyRequests}, false},
+		// A bare APIError{429} (constructed here without the RateLimited flag) is
+		// NOT degradation — it's the DETECTED flag, not the status code, that
+		// drives the breaker. In production a real 429 flows through
+		// DetectRateLimit, which sets RateLimited=true (see the next case).
+		{"429 without the RateLimited flag is not degradation", &APIError{StatusCode: http.StatusTooManyRequests}, false},
+		{"429 with RateLimited flag IS degradation", &APIError{StatusCode: http.StatusTooManyRequests, RateLimited: true}, true},
+		{"rate-limited 403 IS degradation", &APIError{StatusCode: http.StatusForbidden, RateLimited: true}, true},
 		{"500 is forge degradation", &APIError{StatusCode: http.StatusInternalServerError}, true},
 		{"502 is forge degradation", &APIError{StatusCode: http.StatusBadGateway}, true},
 		{"503 is forge degradation", &APIError{StatusCode: http.StatusServiceUnavailable}, true},
