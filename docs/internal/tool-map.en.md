@@ -88,6 +88,7 @@ lang: en
 | `bump_docs.py` | 版號一致性管理工具 |
 | `bump_playbook_versions.py` | Bump `verified-at-version:` front-matter across the 4 operational playbooks. |
 | `check_aria_references.py` | Static JSX ARIA reference closure validator (Phase .a0 Day 5 verification). |
+| `compile_custom_alerts.py` | Compile Custom Alert recipes → rule-packs/rule-pack-custom-alerts.yaml. |
 | `coverage_delta.py` | Per-file + total coverage delta between two runs. |
 | `coverage_gap_analysis.py` | Per-file coverage ranking report |
 | `describe_tenant.py` | Describe effective tenant config — resolve _defaults.yaml inheritance chain. |
@@ -119,7 +120,7 @@ lang: en
 | `suggest_related.py` | 基於 audience 重疊 + tags 相似度推薦 related tools |
 | `sync_glossary_abbr.py` | Sync abbreviations from glossary.md to MkDocs snippet. |
 | `sync_schema.py` | Sync JSON Schema with Go source definitions. |
-| `sync_tool_registry.py` | 從 tool-registry.yaml 同步 Hub 卡片 + TOOL_META + JSX frontmatter |
+| `sync_tool_registry.py` | 從 tool-registry.yaml 同步 Hub 卡片 + CUSTOM_FLOW_MAP + JSX frontmatter |
 | `tenant_verify.py` | Verify a tenant's effective config — print merged_hash and source_hash. |
 
 ## Documentation Lint / CI Tools
