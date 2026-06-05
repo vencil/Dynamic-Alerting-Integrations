@@ -162,6 +162,10 @@ func PutView(d *Deps) http.HandlerFunc {
 		}
 
 		if err := d.Writer.WriteViewsFile(r.Context(), email, string(yamlBytes)); err != nil {
+			if errors.Is(err, gitops.ErrWriteOverloaded) {
+				WriteOverloaded(w, r)
+				return
+			}
 			if errors.Is(err, gitops.ErrConflict) {
 				WriteJSONError(w, r,http.StatusConflict, err.Error())
 				return
@@ -223,6 +227,10 @@ func DeleteView(d *Deps) http.HandlerFunc {
 		}
 
 		if err := d.Writer.WriteViewsFile(r.Context(), email, string(yamlBytes)); err != nil {
+			if errors.Is(err, gitops.ErrWriteOverloaded) {
+				WriteOverloaded(w, r)
+				return
+			}
 			if errors.Is(err, gitops.ErrConflict) {
 				WriteJSONError(w, r,http.StatusConflict, err.Error())
 				return
