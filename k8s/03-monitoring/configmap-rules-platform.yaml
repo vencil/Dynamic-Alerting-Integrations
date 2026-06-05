@@ -325,6 +325,63 @@ data:
                 optimise it or raise the cap + the Prometheus memory
                 limit together.
 
+          # --- tenant-api SSE reconnect-after-deploy guard (#740 / TRK-326) ---
+          # #677 (TRK-324) set the tenant-api Deployment to `strategy: Recreate`
+          # to kill the phantom-writer overlap. Side effect: every deploy hard-
+          # drops all open `GET /api/v1/events` SSE streams. A single reconnect
+          # is expected + self-healing (SSE clients auto-reconnect; the hub is
+          # heartbeat-hardened, #143) — but nothing told operators whether
+          # clients actually RECOVERED, or got stuck disconnected (broken
+          # ingress / auth / DNS after the restart).
+          #
+          # This is the low-cost interim guard while #678 (TRK-325 read/write
+          # CQRS split, the real zero-downtime fix) stays deferred. The SAME
+          # `tenant_api_sse_clients` gauge is also #678's measurable defer-
+          # trigger: sustained concurrent clients > N over 7d ⇒ "read HA is a
+          # real requirement" ⇒ time to do TRK-325.
+          #
+          # Expr design (no false positives — behavioural contract in
+          # tests/rulepacks/platform-sse-reconnect_test.yaml; KEEP IN SYNC):
+          #   - `== 0`                         : no clients connected RIGHT NOW.
+          #   - `uptime_seconds < 1800`        : the pod RESTARTED in the last 30m.
+          #     This is the load-bearing clause — it scopes the alert to the
+          #     post-deploy window. Without it the alert can't tell a reconnect
+          #     FAILURE from a user simply CLOSING their Tenant-Manager tab during
+          #     normal operation (both look like "had clients, now 0"), which on a
+          #     low-frequency admin UI would be a constant false alarm.
+          #   - `max_over_time([30m]) > 0`     : there WERE clients in the last 30m
+          #     (so there's something to reconnect — not an idle deploy at 3am).
+          #     max_over_time spans the restart gap, seeing the OLD pod's samples.
+          #   - `for: 10m`                     : the 0-state has persisted 10m
+          #     straight — a normal rolling reconnect recovers in seconds, so the
+          #     `== 0` breaks and `for` resets well before this fires.
+          # Auto-resolves when clients reconnect (gauge > 0), when uptime passes
+          # 30m (no longer "post-deploy"), or after 30m of no clients. Pod-down /
+          # scrape-absent is a separate concern (the series is ABSENT, not 0) — not
+          # this alert's job; tenant-api has no general availability alert yet.
+          - alert: TenantApiSSEReconnectFailure
+            expr: |
+              tenant_api_sse_clients{job="tenant-api"} == 0
+              and
+              tenant_api_uptime_seconds{job="tenant-api"} < 1800
+              and
+              max_over_time(tenant_api_sse_clients{job="tenant-api"}[30m]) > 0
+            for: 10m
+            labels:
+              severity: warning
+            annotations:
+              summary: "tenant-api SSE clients have not reconnected after a restart (10m)"
+              description: |
+                tenant-api had live `/api/v1/events` SSE clients within the last
+                30m, but the connected count has been 0 for 10m straight. A
+                deploy/restart (strategy: Recreate, #677) drops all streams; a
+                healthy fleet reconnects within seconds. Sustained 0 means
+                clients are NOT recovering — check the tenant-api pod readiness,
+                the ingress/oauth2-proxy path to `/api/v1/events`, and recent
+                deploys. Expected reconnect behaviour + the #678 (read/write
+                split) trigger are documented in
+                docs/api/tenant-api-hardening.md. Dashboard: tenant_api_sse_clients.
+
       # ============================================================
       # Federation Audit (ADR-020 IV-2f, issue #511)
       # Monitors the federation data plane via the metric
