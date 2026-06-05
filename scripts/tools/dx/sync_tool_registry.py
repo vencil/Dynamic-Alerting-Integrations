@@ -91,7 +91,11 @@ def parse_registry(path: str) -> list:
             if pending_key is not None:
                 current.setdefault(pending_key, [])
                 if isinstance(current[pending_key], list):
-                    current[pending_key].append(m_sub.group(1).strip())
+                    # Strip surrounding quotes for parity with the inline-list /
+                    # dict / scalar paths (so `- "platform"` → platform).
+                    current[pending_key].append(
+                        m_sub.group(1).strip().strip("'\"")
+                    )
             continue
 
         m_field = re.match(r"^([a-z_]+):\s*(.*)$", stripped)
@@ -164,8 +168,13 @@ def generate_flow_map(tools: list) -> str:
     return "\n".join(lines)
 
 
-def sync_tool_meta(tools: list, dry_run: bool, verbose: bool) -> bool:
-    """Update CUSTOM_FLOW_MAP in jsx-loader.html. Returns True if changed."""
+def sync_tool_meta(tools: list, dry_run: bool, verbose: bool):
+    """Update CUSTOM_FLOW_MAP in jsx-loader.html.
+
+    Returns True if changed, False if already in sync, and **None** on a fatal
+    condition (the CUSTOM_FLOW_MAP block is missing) — the caller must treat
+    None distinctly from the False no-op and fail loud, not silently succeed.
+    """
     content = LOADER_PATH.read_text(encoding="utf-8")
 
     # Find existing CUSTOM_FLOW_MAP block (2-space indent, see jsx-loader.html)
@@ -179,7 +188,7 @@ def sync_tool_meta(tools: list, dry_run: bool, verbose: bool) -> bool:
             "ERROR: Could not find CUSTOM_FLOW_MAP in jsx-loader.html",
             file=sys.stderr,
         )
-        return False
+        return None
 
     old_block = match.group(1)
     new_block = generate_flow_map(tools)
@@ -456,6 +465,10 @@ def main():
     print()
 
     changed_meta = sync_tool_meta(tools, args.dry_run, args.verbose)
+    if changed_meta is None:
+        # Fatal: jsx-loader.html lacks the CUSTOM_FLOW_MAP block. Fail loud
+        # (dev-rule #5) rather than letting the swallowed error exit 0.
+        sys.exit(EXIT_CALLER_ERROR)
     changed_hub = sync_hub_cards(tools, args.dry_run, args.verbose)
 
     changed_fm = False

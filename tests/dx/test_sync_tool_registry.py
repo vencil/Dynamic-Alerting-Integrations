@@ -147,6 +147,21 @@ class TestParseRegistry:
         assert t["audience"] == ["platform", "tenant"]
         assert t["tags"] == ["a", "b"]
 
+    def test_block_list_strips_quotes(self, tmp_path):
+        """Quoted block-list items get surrounding quotes stripped — parity with
+        the inline-list / dict / scalar paths (CodeRabbit #764)."""
+        reg = tmp_path / "registry.yaml"
+        reg.write_text(textwrap.dedent('''\
+            tools:
+            - key: q
+              file: interactive/tools/q.jsx
+              audience:
+              - "platform"
+              - 'tenant'
+        '''), encoding="utf-8")
+        t = srt.parse_registry(str(reg))[0]
+        assert t["audience"] == ["platform", "tenant"]
+
     def test_sibling_field_after_block_resets(self, tmp_path):
         """A field at the same indent as a block field must NOT be swallowed
         into that block (pending-block must reset). Guards the indentation
@@ -248,13 +263,24 @@ class TestSyncFlowMap:
         assert srt.sync_tool_meta(tools, dry_run=False, verbose=False) is False
 
     def test_errors_when_block_absent(self, tmp_path, monkeypatch, capsys):
-        """No CUSTOM_FLOW_MAP block → explicit error, returns False (no crash)."""
+        """No CUSTOM_FLOW_MAP block → explicit error + returns None (fatal
+        sentinel, distinct from the False no-op so callers fail loud)."""
         loader = tmp_path / "loader.html"
         loader.write_text("<html><body>no map here</body></html>", encoding="utf-8")
         monkeypatch.setattr(srt, "LOADER_PATH", loader)
         ok = srt.sync_tool_meta([{"key": "x", "file": "x.jsx"}], dry_run=False, verbose=False)
-        assert ok is False
+        assert ok is None
         assert "Could not find CUSTOM_FLOW_MAP" in capsys.readouterr().err
+
+    def test_main_exits_caller_error_when_flow_map_absent(self, wired, monkeypatch):
+        """main() must propagate the fatal None as a non-zero caller-error exit,
+        not swallow it and exit 0 (CodeRabbit #764)."""
+        _reg, _hub, loader = wired
+        loader.write_text("<html>no CUSTOM_FLOW_MAP</html>", encoding="utf-8")
+        monkeypatch.setattr(sys, "argv", ["sync_tool_registry.py"])
+        with pytest.raises(SystemExit) as exc:
+            srt.main()
+        assert exc.value.code == srt.EXIT_CALLER_ERROR
 
 
 # ---------------------------------------------------------------------------
