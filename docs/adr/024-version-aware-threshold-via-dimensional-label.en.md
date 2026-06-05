@@ -627,17 +627,17 @@ sequenceDiagram
 
     User->>RB: blur / commit the full metric name
     RB->>API: precise check q=full-string
-    Note over RB: Validating… interim state<br/>decoupled from the autocomplete list (race guard, Reef 3)
+    Note over RB: Validating... interim state<br/>decoupled from the autocomplete list (race guard, Reef 3)
     alt not in the list
-        Note over RB: yellow soft-warn (does not block; GitOps vacuum is legit)
+        Note over RB: yellow soft-warn (does not block, GitOps vacuum is legit)
     end
 
-    Note over RB: summary state machine (OQ3 + Reef 4)<br/>render dynamic plain-English only when all required+valid; never expose PromQL
+    Note over RB: summary state machine (OQ3 + Reef 4)<br/>render dynamic plain-English only when all required+valid, never expose PromQL
 
-    alt S6b-1: GitOps-direct (standalone host)
+    alt S6b-1 GitOps-direct (standalone host)
         RB-->>User: emit snippet with full tenants/ID/_custom_alerts wrapper + one-click copy
         User->>Git: paste + open PR (standard GitOps friction)
-    else S6b-2: live UI (folded into tenant-manager)
+    else S6b-2 live UI (folded into tenant-manager)
         Note over TM: pass in existing recipes (live name-collision + S4 own-cap warnings)
         User->>RB: click submit (onSubmit)
         RB->>TM: hand over the RecipeObject (Dumb Handoff)
