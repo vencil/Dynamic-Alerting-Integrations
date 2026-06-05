@@ -194,6 +194,25 @@ definitions:
           caller should narrow with a longer prefix.
         type: boolean
     type: object
+  internal_handler.ErrorResponse:
+    properties:
+      action:
+        type: string
+      code:
+        type: string
+      error:
+        type: string
+      help:
+        type: string
+      request_id:
+        type: string
+      retry_after_s:
+        type: integer
+      violations:
+        items:
+          $ref: '#/definitions/internal_handler.Violation'
+        type: array
+    type: object
   internal_handler.GroupBatchRequest:
     properties:
       patch:
@@ -275,6 +294,33 @@ definitions:
           $ref: '#/definitions/github_com_vencil_tenant-api_internal_platform.PRInfo'
         type: array
     type: object
+  internal_handler.PutCustomAlertsRequest:
+    properties:
+      base_hash:
+        description: |-
+          BaseHash is the source_hash the client got from GET; the write 409s
+          if the file changed underneath (optimistic concurrency, Reef 3).
+        type: string
+      custom_alerts:
+        description: |-
+          CustomAlerts is the desired FULL recipe list (collection-replace —
+          the client owns the array, having loaded it via GET). Empty/null
+          deletes the `_custom_alerts` key entirely (Reef 2).
+        items:
+          additionalProperties: {}
+          type: object
+        type: array
+    type: object
+  internal_handler.PutCustomAlertsResponse:
+    properties:
+      source_hash:
+        description: new hash post-write (for the next edit)
+        type: string
+      status:
+        type: string
+      tenant_id:
+        type: string
+    type: object
   internal_handler.PutGroupRequest:
     properties:
       description:
@@ -340,6 +386,13 @@ definitions:
         items:
           $ref: '#/definitions/config.ResolvedThreshold'
         type: array
+      source_hash:
+        description: |-
+          SourceHash is SHA-256[:16] of the raw tenant file. Clients echo it
+          back as `base_hash` on PUT .../custom-alerts for optimistic-
+          concurrency (ADR-024 §S6b-2): the write 409s if the file changed
+          underneath them.
+        type: string
       validation_warnings:
         items:
           type: string
@@ -398,6 +451,13 @@ definitions:
       id:
         type: string
       label:
+        type: string
+    type: object
+  internal_handler.Violation:
+    properties:
+      field:
+        type: string
+      reason:
         type: string
     type: object
   internal_handler_federation.CreateFederationTokenRequest:
@@ -959,6 +1019,57 @@ paths:
               type: string
             type: object
       summary: Update tenant config
+      tags:
+      - tenants
+  /api/v1/tenants/{id}/custom-alerts:
+    put:
+      consumes:
+      - application/json
+      description: |-
+        Merges the supplied recipe array into the tenant's
+        `_custom_alerts` (comment-preserving AST edit), validates
+        (S5 Go validator), and commits. Optimistic concurrency via
+        base_hash (409 on drift). Empty array deletes the key.
+      parameters:
+      - description: Tenant ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Desired recipe list + base_hash
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_handler.PutCustomAlertsRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_handler.PutCustomAlertsResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_handler.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/internal_handler.ErrorResponse'
+        "501":
+          description: Not Implemented
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Replace a tenant's custom-alert recipes
       tags:
       - tenants
   /api/v1/tenants/{id}/diff:

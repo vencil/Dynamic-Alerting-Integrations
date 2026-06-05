@@ -822,6 +822,77 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/v1/tenants/{id}/custom-alerts": {
+            "put": {
+                "description": "Merges the supplied recipe array into the tenant's\n` + "`" + `_custom_alerts` + "`" + ` (comment-preserving AST edit), validates\n(S5 Go validator), and commits. Optimistic concurrency via\nbase_hash (409 on drift). Empty array deletes the key.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "tenants"
+                ],
+                "summary": "Replace a tenant's custom-alert recipes",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Tenant ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Desired recipe list + base_hash",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_handler.PutCustomAlertsRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_handler.PutCustomAlertsResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_handler.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/internal_handler.ErrorResponse"
+                        }
+                    },
+                    "501": {
+                        "description": "Not Implemented",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/v1/tenants/{id}/diff": {
             "post": {
                 "description": "Returns unified diff between current file and proposed content.",
@@ -1615,6 +1686,35 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_handler.ErrorResponse": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string"
+                },
+                "code": {
+                    "type": "string"
+                },
+                "error": {
+                    "type": "string"
+                },
+                "help": {
+                    "type": "string"
+                },
+                "request_id": {
+                    "type": "string"
+                },
+                "retry_after_s": {
+                    "type": "integer"
+                },
+                "violations": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_handler.Violation"
+                    }
+                }
+            }
+        },
         "internal_handler.GroupBatchRequest": {
             "type": "object",
             "properties": {
@@ -1737,6 +1837,38 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_handler.PutCustomAlertsRequest": {
+            "type": "object",
+            "properties": {
+                "base_hash": {
+                    "description": "BaseHash is the source_hash the client got from GET; the write 409s\nif the file changed underneath (optimistic concurrency, Reef 3).",
+                    "type": "string"
+                },
+                "custom_alerts": {
+                    "description": "CustomAlerts is the desired FULL recipe list (collection-replace —\nthe client owns the array, having loaded it via GET). Empty/null\ndeletes the ` + "`" + `_custom_alerts` + "`" + ` key entirely (Reef 2).",
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": {}
+                    }
+                }
+            }
+        },
+        "internal_handler.PutCustomAlertsResponse": {
+            "type": "object",
+            "properties": {
+                "source_hash": {
+                    "description": "new hash post-write (for the next edit)",
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "tenant_id": {
+                    "type": "string"
+                }
+            }
+        },
         "internal_handler.PutGroupRequest": {
             "type": "object",
             "required": [
@@ -1832,6 +1964,10 @@ const docTemplate = `{
                         "$ref": "#/definitions/config.ResolvedThreshold"
                     }
                 },
+                "source_hash": {
+                    "description": "SourceHash is SHA-256[:16] of the raw tenant file. Clients echo it\nback as ` + "`" + `base_hash` + "`" + ` on PUT .../custom-alerts for optimistic-\nconcurrency (ADR-024 §S6b-2): the write 409s if the file changed\nunderneath them.",
+                    "type": "string"
+                },
                 "validation_warnings": {
                     "type": "array",
                     "items": {
@@ -1920,6 +2056,17 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "label": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_handler.Violation": {
+            "type": "object",
+            "properties": {
+                "field": {
+                    "type": "string"
+                },
+                "reason": {
                     "type": "string"
                 }
             }

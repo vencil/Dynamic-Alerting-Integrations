@@ -436,6 +436,12 @@ func main() {
 			r.With(rbacMgr.Middleware(rbac.PermRead, handler.TenantIDFromPath)).
 				Get("/metrics", handler.DiscoverMetrics(deps))
 
+			// v2.9.0 ADR-024 §S6b-2 (#741): comment-preserving write of a
+			// tenant's _custom_alerts (RecipeBuilder modal). PermWrite —
+			// this commits to GitOps.
+			r.With(rbacMgr.Middleware(rbac.PermWrite, handler.TenantIDFromPath)).
+				Put("/custom-alerts", handler.PutTenantCustomAlerts(deps))
+
 			// Federation metric subset (v2.9.0 — ADR-020 IV-2e). PUT's
 			// tenant-admin check is inside the handler (route middleware
 			// only confirms authentication + read on the tenant).
