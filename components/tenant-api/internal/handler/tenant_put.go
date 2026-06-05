@@ -132,8 +132,15 @@ func PutTenant(d *Deps) http.HandlerFunc {
 			defer d.PRTracker.ReleaseClaim(tenantID)
 
 			// Create feature branch + commit
-			result, err := d.Writer.WritePR(tenantID, email, string(body))
+			result, err := d.Writer.WritePR(r.Context(), tenantID, email, string(body))
 			if err != nil {
+				// TRK-320: write-plane admission queue full → shed load with a 503 +
+				// Retry-After instead of piling up. Checked first: it's a fast-fail
+				// before any git work, distinct from a forge problem.
+				if errors.Is(err, gitops.ErrWriteOverloaded) {
+					WriteOverloaded(rw, r)
+					return
+				}
 				// TRK-318: the in-lock base fetch timed out → forge degraded, write
 				// lock already released. Return a retry-hinting 503 (not a 500) with a
 				// machine-actionable Retry-After; don't leak the internal git error —
@@ -191,7 +198,11 @@ func PutTenant(d *Deps) http.HandlerFunc {
 		}
 
 		// Default: direct commit-on-write (ADR-009)
-		if err := d.Writer.Write(tenantID, email, string(body)); err != nil {
+		if err := d.Writer.Write(r.Context(), tenantID, email, string(body)); err != nil {
+			if errors.Is(err, gitops.ErrWriteOverloaded) {
+				WriteOverloaded(rw, r)
+				return
+			}
 			if errors.Is(err, gitops.ErrConflict) {
 				WriteJSONError(rw, r,http.StatusConflict, err.Error())
 				return

@@ -1,6 +1,7 @@
 package gitops
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -221,7 +222,7 @@ func TestWrite_RejectsFullConfigBody(t *testing.T) {
 
 	w := NewWriter(dir, dir)
 	full := "defaults:\n  container_cpu: 80\ntenants:\n  db-a:\n    container_cpu: \"70\"\n"
-	if err := w.Write("db-a", "op@example.com", full); err == nil {
+	if err := w.Write(context.Background(), "db-a", "op@example.com", full); err == nil {
 		t.Fatal("Write must reject a body with a non-tenants root key, but returned nil")
 	}
 	if _, statErr := os.Stat(filepath.Join(dir, "db-a.yaml")); statErr == nil {
@@ -243,7 +244,7 @@ func TestWrite_RejectsBadVersionThreshold(t *testing.T) {
 	// version="V2" violates the ^[a-z0-9]... charset → validate() warns →
 	// Write must block before touching disk. Body is tenant-only.
 	bad := "tenants:\n  db-a:\n    container_cpu{version=\"V2\"}: \"60\"\n"
-	err := w.Write("db-a", "op@example.com", bad)
+	err := w.Write(context.Background(), "db-a", "op@example.com", bad)
 	if err == nil {
 		t.Fatal("Write must reject an invalid version label, but returned nil")
 	}
@@ -270,7 +271,7 @@ func TestWrite_TenantOnlyMetricBody_Commits(t *testing.T) {
 
 	w := NewWriter(dir, dir)
 	body := "tenants:\n  db-a:\n    container_cpu: \"70\"\n"
-	if err := w.Write("db-a", "op@example.com", body); err != nil {
+	if err := w.Write(context.Background(), "db-a", "op@example.com", body); err != nil {
 		t.Fatalf("tenant-only metric body must commit, got: %v", err)
 	}
 	got, err := os.ReadFile(filepath.Join(dir, "db-a.yaml"))

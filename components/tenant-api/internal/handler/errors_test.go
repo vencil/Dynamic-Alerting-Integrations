@@ -268,3 +268,35 @@ func TestWriteForgeDegraded_MachineActionable(t *testing.T) {
 		}
 	}
 }
+
+// TestWriteOverloaded_MachineActionable locks the TRK-320 503 shape: Retry-After
+// header + retry_after_s field + WRITE_OVERLOADED code + a sanitized message that
+// doesn't leak the internal "admission queue full" wording.
+func TestWriteOverloaded_MachineActionable(t *testing.T) {
+	t.Parallel()
+	w := httptest.NewRecorder()
+	WriteOverloaded(w, httptest.NewRequest("PUT", "/api/v1/tenants/db-a", nil))
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", w.Code)
+	}
+	if got := w.Header().Get("Retry-After"); got != strconv.Itoa(writeOverloadedRetryAfterS) {
+		t.Errorf("Retry-After header = %q, want %q", got, strconv.Itoa(writeOverloadedRetryAfterS))
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if resp["code"] != CodeWriteOverloaded {
+		t.Errorf("code = %q, want %s", resp["code"], CodeWriteOverloaded)
+	}
+	if v, _ := resp["retry_after_s"].(float64); int(v) != writeOverloadedRetryAfterS {
+		t.Errorf("retry_after_s = %v, want %d", resp["retry_after_s"], writeOverloadedRetryAfterS)
+	}
+	msg, _ := resp["error"].(string)
+	for _, leak := range []string{"admission", "queue", "goroutine", "mutex"} {
+		if strings.Contains(strings.ToLower(msg), leak) {
+			t.Errorf("error message leaks internal detail %q: %q", leak, msg)
+		}
+	}
+}

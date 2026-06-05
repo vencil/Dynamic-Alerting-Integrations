@@ -90,7 +90,7 @@ func GroupBatch(d *Deps) http.HandlerFunc {
 		// v2.6.0: Async mode — submit to goroutine pool and return immediately
 		if r.URL.Query().Get("async") == "true" && d.Tasks != nil {
 			task := d.Tasks.Submit(taskID, func(ctx context.Context) ([]async.TaskResult, error) {
-				results := executeGroupBatchOps(d.Writer, d.ConfigDir, g.Members, req.Patch, email, idpGroups, d.RBAC)
+				results := executeGroupBatchOps(ctx, d.Writer, d.ConfigDir, g.Members, req.Patch, email, idpGroups, d.RBAC)
 				asyncResults := make([]async.TaskResult, len(results))
 				for i, br := range results {
 					asyncResults[i] = async.TaskResult{
@@ -113,7 +113,7 @@ func GroupBatch(d *Deps) http.HandlerFunc {
 		}
 
 		// Synchronous mode (default, backward compatible)
-		results := executeGroupBatchOps(d.Writer, d.ConfigDir, g.Members, req.Patch, email, idpGroups, d.RBAC)
+		results := executeGroupBatchOps(r.Context(), d.Writer, d.ConfigDir, g.Members, req.Patch, email, idpGroups, d.RBAC)
 
 		// Compute summary statistics
 		successes := 0
@@ -147,7 +147,7 @@ func GroupBatch(d *Deps) http.HandlerFunc {
 
 // executeGroupBatchOps runs group batch operations synchronously and returns results.
 // This function is shared between sync and async paths to ensure consistency.
-func executeGroupBatchOps(writer *gitops.Writer, configDir string, members []string, patch map[string]string, email string, idpGroups []string, rbacMgr *rbac.Manager) []BatchResult {
+func executeGroupBatchOps(ctx context.Context, writer *gitops.Writer, configDir string, members []string, patch map[string]string, email string, idpGroups []string, rbacMgr *rbac.Manager) []BatchResult {
 	results := make([]BatchResult, 0, len(members))
 	for _, tenantID := range members {
 		if err := ValidateTenantID(tenantID); err != nil {
@@ -166,7 +166,7 @@ func executeGroupBatchOps(writer *gitops.Writer, configDir string, members []str
 		}
 
 		op := BatchOperation{TenantID: tenantID, Patch: patch}
-		result := applyPatch(writer, configDir, op, email)
+		result := applyPatch(ctx, writer, configDir, op, email)
 		results = append(results, result)
 	}
 	return results

@@ -59,6 +59,11 @@ const (
 	// degraded and the breaker is fast-failing to avoid 30s-per-request
 	// hangs. Clients should retry after a short backoff.
 	CodeForgeUnavailable = "FORGE_UNAVAILABLE"
+	// CodeWriteOverloaded marks an HTTP 503 from the write-plane load-shedding
+	// admission queue being full (TRK-320). The single-writer queue is saturated;
+	// the client should back off and retry rather than the server piling up
+	// unbounded goroutines.
+	CodeWriteOverloaded = "WRITE_OVERLOADED"
 )
 
 // ErrorResponse is the canonical error envelope. All fields except
@@ -235,5 +240,26 @@ func writeForgeDegraded(w http.ResponseWriter, r *http.Request) {
 		Error:       "forge is currently unavailable (base sync timed out) — please retry shortly",
 		Code:        CodeForgeUnavailable,
 		RetryAfterS: forgeDegradedRetryAfterS,
+	})
+}
+
+// writeOverloadedRetryAfterS is the coarse Retry-After hint (seconds) on the 503
+// returned when the write-plane admission queue is full (TRK-320). 1s: the queue
+// drains as fast as the single in-flight write completes (sub-second for a local
+// commit, a few seconds for a PR push), so a short back-off is appropriate.
+const writeOverloadedRetryAfterS = 1
+
+// WriteOverloaded renders the canonical 503 for write-plane load shedding
+// (TRK-320 / gitops.ErrWriteOverloaded): a machine-actionable Retry-After header
+// + retry_after_s field so a client/automation backs off instead of retrying in
+// a tight loop against a saturated single-writer queue. Exported so the
+// federation sub-package handlers (a different package) can share the exact same
+// shape rather than re-deriving the header/code.
+func WriteOverloaded(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Retry-After", strconv.Itoa(writeOverloadedRetryAfterS))
+	WriteErrorEnvelope(w, r, http.StatusServiceUnavailable, ErrorResponse{
+		Error:       "write plane is busy — please retry shortly",
+		Code:        CodeWriteOverloaded,
+		RetryAfterS: writeOverloadedRetryAfterS,
 	})
 }

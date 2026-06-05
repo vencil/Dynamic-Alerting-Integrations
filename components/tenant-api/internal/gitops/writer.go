@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	cfg "github.com/vencil/threshold-exporter/pkg/config"
@@ -84,6 +85,18 @@ type Writer struct {
 	gitBinary      string        // git executable; "git" in prod, overridden in tests (timeout seam)
 	baseBranch     string        // PR-mode base to branch from / return to (#638); "" → defaultBaseBranch
 	fetchTimeout   time.Duration // in-lock base fetch deadline (TRK-318); 0 → defaultGitFetchTimeout
+
+	// Load-shedding admission control (TRK-320). Before taking w.mu, every write
+	// passes through acquireWrite(ctx): a single execution token (writeExec, cap 1)
+	// serialises the one in-flight write, while writeInFlight bounds the total
+	// admitted (running + queued) at maxWriteAdmit. Past that → ErrWriteOverloaded
+	// (handler → 503). Queueing for the token is ctx-aware, so a client that times
+	// out / disconnects WHILE QUEUED is released immediately instead of piling up
+	// a goroutine and then running an orphan write once its turn finally comes.
+	// nil writeExec (a struct-literal Writer in older tests) disables admission.
+	writeExec     chan struct{}
+	writeInFlight atomic.Int32
+	maxWriteAdmit int32
 }
 
 // defaultBaseBranch is the PR-mode base branch when none is configured (#638).
@@ -96,7 +109,7 @@ func NewWriter(configDir, gitDir string) *Writer {
 	if gitDir == "" {
 		gitDir = configDir
 	}
-	return &Writer{
+	w := &Writer{
 		configDir:      configDir,
 		gitDir:         gitDir,
 		committerName:  os.Getenv("GIT_COMMITTER_NAME"),
@@ -104,7 +117,13 @@ func NewWriter(configDir, gitDir string) *Writer {
 		gitTimeout:     gitTimeoutFromEnv(),
 		fetchTimeout:   fetchTimeoutFromEnv(),
 		gitBinary:      "git",
+		maxWriteAdmit:  1 + writeQueueDepthFromEnv(), // 1 in-flight + N queued
 	}
+	// Single execution token = single-writer serialisation in front of w.mu, but
+	// ctx-aware (TRK-320). Pre-loaded with one token.
+	w.writeExec = make(chan struct{}, 1)
+	w.writeExec <- struct{}{}
+	return w
 }
 
 // gitTimeoutFromEnv reads TENANT_API_GIT_TIMEOUT as a Go duration, falling back
@@ -289,11 +308,19 @@ func (w *Writer) originRefExists(base string) bool {
 //  5. git add + git commit --author="<authorEmail>"
 //  6. Check HEAD again (conflict detection)
 //  7. onWrite callback (e.g. SSE broadcast)
-func (w *Writer) Write(tenantID, authorEmail, yamlContent string) error {
-	// Step 1: validate schema before touching disk.
+func (w *Writer) Write(ctx context.Context, tenantID, authorEmail, yamlContent string) error {
+	// Step 1: validate schema before touching disk (and before taking an
+	// admission slot — validation is cheap, CPU-only, and must not consume the
+	// single-writer token).
 	if errs := validate(w.configDir, tenantID, yamlContent); len(errs) > 0 {
 		return fmt.Errorf("validation failed: %s", strings.Join(errs, "; "))
 	}
+
+	// Step 2: load-shedding admission (TRK-320) before w.mu.
+	if err := w.acquireWrite(ctx); err != nil {
+		return err
+	}
+	defer w.releaseWrite()
 
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -351,14 +378,14 @@ func (w *Writer) Diff(tenantID, proposedContent string) (string, error) {
 
 // WriteGroupsFile validates, persists, and commits the _groups.yaml file.
 // Reuses the same sync.Mutex and HEAD conflict detection as tenant writes.
-func (w *Writer) WriteGroupsFile(authorEmail, yamlContent string) error {
-	return w.writeSpecialFile("_groups.yaml", "groups", authorEmail, yamlContent)
+func (w *Writer) WriteGroupsFile(ctx context.Context, authorEmail, yamlContent string) error {
+	return w.writeSpecialFile(ctx, "_groups.yaml", "groups", authorEmail, yamlContent)
 }
 
 // WriteViewsFile validates, persists, and commits the _views.yaml file.
 // v2.5.0 Phase C: Saved Views support.
-func (w *Writer) WriteViewsFile(authorEmail, yamlContent string) error {
-	return w.writeSpecialFile("_views.yaml", "views", authorEmail, yamlContent)
+func (w *Writer) WriteViewsFile(ctx context.Context, authorEmail, yamlContent string) error {
+	return w.writeSpecialFile(ctx, "_views.yaml", "views", authorEmail, yamlContent)
 }
 
 // WriteFederationPolicyFile validates, persists, and commits the
@@ -368,8 +395,8 @@ func (w *Writer) WriteViewsFile(authorEmail, yamlContent string) error {
 // record an admission-validator `--force` bypass (operator + reason)
 // directly in git history, the only durable audit trail in a GitOps
 // system (ADR-020 IV-2e; stdout logs rotate away).
-func (w *Writer) WriteFederationPolicyFile(authorEmail, yamlContent string, trailer ...string) error {
-	return w.writeSpecialFile("_federation_policy.yaml", "federation-policy", authorEmail, yamlContent, trailer...)
+func (w *Writer) WriteFederationPolicyFile(ctx context.Context, authorEmail, yamlContent string, trailer ...string) error {
+	return w.writeSpecialFile(ctx, "_federation_policy.yaml", "federation-policy", authorEmail, yamlContent, trailer...)
 }
 
 // WriteFederationSubsetFile validates, persists, and commits one
@@ -378,7 +405,7 @@ func (w *Writer) WriteFederationPolicyFile(authorEmail, yamlContent string, trai
 // self-service subset edits never contend on a shared git object, so
 // concurrent edits across tenants cannot conflict. The _federation/
 // directory is created on first write.
-func (w *Writer) WriteFederationSubsetFile(tenantID, authorEmail, yamlContent string) error {
+func (w *Writer) WriteFederationSubsetFile(ctx context.Context, tenantID, authorEmail, yamlContent string) error {
 	// Basic YAML validity check (the schema check is the caller's job).
 	var raw map[string]interface{}
 	if err := yaml.Unmarshal([]byte(yamlContent), &raw); err != nil {
@@ -392,6 +419,12 @@ func (w *Writer) WriteFederationSubsetFile(tenantID, authorEmail, yamlContent st
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("create _federation dir: %w", err)
 	}
+
+	// Load-shedding admission (TRK-320) before w.mu.
+	if err := w.acquireWrite(ctx); err != nil {
+		return err
+	}
+	defer w.releaseWrite()
 
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -407,12 +440,18 @@ func (w *Writer) WriteFederationSubsetFile(tenantID, authorEmail, yamlContent st
 // writeSpecialFile is a shared implementation for writing _groups.yaml, _views.yaml, etc.
 // These files use the same mutex and conflict detection as tenant writes — only
 // the validation step differs (basic YAML well-formedness, not full schema).
-func (w *Writer) writeSpecialFile(filename, entityType, authorEmail, yamlContent string, trailer ...string) error {
+func (w *Writer) writeSpecialFile(ctx context.Context, filename, entityType, authorEmail, yamlContent string, trailer ...string) error {
 	// Basic YAML validity check (special files don't have a schema).
 	var raw map[string]interface{}
 	if err := yaml.Unmarshal([]byte(yamlContent), &raw); err != nil {
 		return fmt.Errorf("invalid YAML: %w", err)
 	}
+
+	// Load-shedding admission (TRK-320) before w.mu.
+	if err := w.acquireWrite(ctx); err != nil {
+		return err
+	}
+	defer w.releaseWrite()
 
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -577,11 +616,17 @@ type PRWriteResult struct {
 //  4. Returns to the base branch + returns the branch name (caller creates the PR)
 //
 // The caller (handler) is responsible for creating the GitHub PR using the returned branch name.
-func (w *Writer) WritePR(tenantID, authorEmail, yamlContent string) (*PRWriteResult, error) {
+func (w *Writer) WritePR(ctx context.Context, tenantID, authorEmail, yamlContent string) (*PRWriteResult, error) {
 	// Step 1: validate schema before anything
 	if errs := validate(w.configDir, tenantID, yamlContent); len(errs) > 0 {
 		return nil, fmt.Errorf("validation failed: %s", strings.Join(errs, "; "))
 	}
+
+	// Step 1b: load-shedding admission (TRK-320) before w.mu.
+	if err := w.acquireWrite(ctx); err != nil {
+		return nil, err
+	}
+	defer w.releaseWrite()
 
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -675,7 +720,7 @@ func (w *Writer) WritePR(tenantID, authorEmail, yamlContent string) (*PRWriteRes
 
 // WritePRBatch validates and writes multiple tenant configs to a single feature branch.
 // This supports batch PR mode where all changes are consolidated into one PR.
-func (w *Writer) WritePRBatch(ops []PRBatchOp, authorEmail string) (*PRWriteResult, error) {
+func (w *Writer) WritePRBatch(ctx context.Context, ops []PRBatchOp, authorEmail string) (*PRWriteResult, error) {
 	if len(ops) == 0 {
 		return nil, fmt.Errorf("empty batch operations")
 	}
@@ -686,6 +731,12 @@ func (w *Writer) WritePRBatch(ops []PRBatchOp, authorEmail string) (*PRWriteResu
 			return nil, fmt.Errorf("validation failed for %s: %s", op.TenantID, strings.Join(errs, "; "))
 		}
 	}
+
+	// Load-shedding admission (TRK-320) before w.mu.
+	if err := w.acquireWrite(ctx); err != nil {
+		return nil, err
+	}
+	defer w.releaseWrite()
 
 	w.mu.Lock()
 	defer w.mu.Unlock()

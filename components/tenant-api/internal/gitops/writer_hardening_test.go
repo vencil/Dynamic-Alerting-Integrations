@@ -1,6 +1,7 @@
 package gitops
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -66,7 +67,7 @@ func TestWritePR_BranchesFromBaseNotStuckBranch(t *testing.T) {
 	gitRun(t, dir, "commit", "--allow-empty", "-m", "other tenant's unpushed work")
 
 	// WritePR for db-a (push to a nonexistent origin fails and is swallowed).
-	res, err := w.WritePR("db-a", "alice@example.com", validTenantYAML)
+	res, err := w.WritePR(context.Background(), "db-a", "alice@example.com", validTenantYAML)
 	if err != nil {
 		t.Fatalf("WritePR: %v", err)
 	}
@@ -88,7 +89,7 @@ func TestWritePR_AbortsWhenBaseMissing(t *testing.T) {
 	w := NewWriter(dir, dir)
 	w.SetBaseBranch("nonexistent-base")
 
-	if _, err := w.WritePR("db-a", "alice@example.com", validTenantYAML); err == nil {
+	if _, err := w.WritePR(context.Background(), "db-a", "alice@example.com", validTenantYAML); err == nil {
 		t.Fatal("expected WritePR to abort when the base branch is missing, got nil error")
 	} else if !strings.Contains(err.Error(), "checkout base") {
 		t.Errorf("error = %q, want it to mention 'checkout base'", err.Error())
@@ -124,7 +125,7 @@ func TestWritePR_RecoversFromDirtyTree(t *testing.T) {
 	write("info") // v3, uncommitted → dirty tree that blocks a plain checkout
 
 	// WritePR must recover (reset --hard + checkout -f) and branch db-b from main.
-	res, err := w.WritePR("db-b", "alice@example.com", "tenants:\n  db-b:\n    _silent_mode: \"warning\"\n")
+	res, err := w.WritePR(context.Background(), "db-b", "alice@example.com", "tenants:\n  db-b:\n    _silent_mode: \"warning\"\n")
 	if err != nil {
 		t.Fatalf("WritePR did not recover from a dirty tree: %v", err)
 	}
@@ -224,7 +225,7 @@ func TestWritePR_DeletesLocalBranchAfterConfirmedPush(t *testing.T) {
 	addBareRemote(t, dir)
 	w := NewWriter(dir, dir)
 
-	res, err := w.WritePR("db-a", "alice@example.com", validTenantYAML)
+	res, err := w.WritePR(context.Background(), "db-a", "alice@example.com", validTenantYAML)
 	if err != nil {
 		t.Fatalf("WritePR: %v", err)
 	}
@@ -245,7 +246,7 @@ func TestWritePR_KeepsLocalBranchOnPushFailure(t *testing.T) {
 	// NO remote configured → push fails.
 	w := NewWriter(dir, dir)
 
-	res, err := w.WritePR("db-a", "alice@example.com", validTenantYAML)
+	res, err := w.WritePR(context.Background(), "db-a", "alice@example.com", validTenantYAML)
 	if err != nil {
 		t.Fatalf("WritePR: %v", err)
 	}

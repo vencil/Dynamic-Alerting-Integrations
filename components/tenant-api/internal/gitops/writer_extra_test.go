@@ -1,6 +1,7 @@
 package gitops
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -114,7 +115,7 @@ func TestWrite_ValidationFailure(t *testing.T) {
 	w := NewWriter(dir, dir)
 
 	// Invalid YAML should fail validation before touching disk
-	err := w.Write("db-a", "test@example.com", "{{invalid yaml")
+	err := w.Write(context.Background(), "db-a", "test@example.com", "{{invalid yaml")
 	if err == nil {
 		t.Error("expected error for invalid YAML")
 	}
@@ -134,7 +135,7 @@ func TestWrite_MissingTenantSection(t *testing.T) {
 	dir := t.TempDir()
 	w := NewWriter(dir, dir)
 
-	err := w.Write("db-a", "test@example.com", "tenants:\n  db-b:\n    cpu: \"80\"\n")
+	err := w.Write(context.Background(), "db-a", "test@example.com", "tenants:\n  db-b:\n    cpu: \"80\"\n")
 	if err == nil {
 		t.Error("expected error for missing tenant section")
 	}
@@ -237,7 +238,7 @@ func TestWrite_InGitRepo(t *testing.T) {
 	w := NewWriter(dir, dir)
 
 	yamlContent := "tenants:\n  db-a:\n    _silent_mode: \"warning\"\n"
-	err := w.Write("db-a", "test@example.com", yamlContent)
+	err := w.Write(context.Background(), "db-a", "test@example.com", yamlContent)
 	if err != nil {
 		t.Fatalf("Write returned error: %v", err)
 	}
@@ -261,13 +262,13 @@ func TestWrite_UpdateExistingInGitRepo(t *testing.T) {
 
 	// First write
 	yaml1 := "tenants:\n  db-a:\n    _silent_mode: \"warning\"\n"
-	if err := w.Write("db-a", "test@example.com", yaml1); err != nil {
+	if err := w.Write(context.Background(), "db-a", "test@example.com", yaml1); err != nil {
 		t.Fatalf("first Write: %v", err)
 	}
 
 	// Second write (update)
 	yaml2 := "tenants:\n  db-a:\n    _silent_mode: \"critical\"\n"
-	if err := w.Write("db-a", "test@example.com", yaml2); err != nil {
+	if err := w.Write(context.Background(), "db-a", "test@example.com", yaml2); err != nil {
 		t.Fatalf("second Write: %v", err)
 	}
 
@@ -288,12 +289,12 @@ func TestWrite_DifferentTenants(t *testing.T) {
 	w := NewWriter(dir, dir)
 
 	yaml1 := "tenants:\n  db-a:\n    _silent_mode: \"warning\"\n"
-	if err := w.Write("db-a", "alice@example.com", yaml1); err != nil {
+	if err := w.Write(context.Background(), "db-a", "alice@example.com", yaml1); err != nil {
 		t.Fatalf("Write db-a: %v", err)
 	}
 
 	yaml2 := "tenants:\n  db-b:\n    _silent_mode: \"critical\"\n"
-	if err := w.Write("db-b", "bob@example.com", yaml2); err != nil {
+	if err := w.Write(context.Background(), "db-b", "bob@example.com", yaml2); err != nil {
 		t.Fatalf("Write db-b: %v", err)
 	}
 
@@ -313,7 +314,7 @@ func TestWrite_AuthorEmailParsing(t *testing.T) {
 
 	// Email with @ should extract name from prefix
 	yaml := "tenants:\n  db-a:\n    _silent_mode: \"warning\"\n"
-	err := w.Write("db-a", "alice.smith@example.com", yaml)
+	err := w.Write(context.Background(), "db-a", "alice.smith@example.com", yaml)
 	if err != nil {
 		t.Fatalf("Write: %v", err)
 	}
@@ -341,7 +342,7 @@ func TestWrite_CommitterFromEnv(t *testing.T) {
 	w := NewWriter(dir, dir)
 
 	yaml := "tenants:\n  db-a:\n    _silent_mode: \"warning\"\n"
-	if err := w.Write("db-a", "operator@example.com", yaml); err != nil {
+	if err := w.Write(context.Background(), "db-a", "operator@example.com", yaml); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
 
@@ -396,7 +397,7 @@ func TestCommitParent_InGitRepo(t *testing.T) {
 
 	// Write to create a second commit
 	yaml := "tenants:\n  db-a:\n    _silent_mode: \"warning\"\n"
-	if err := w.Write("db-a", "test@example.com", yaml); err != nil {
+	if err := w.Write(context.Background(), "db-a", "test@example.com", yaml); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
 
