@@ -72,10 +72,17 @@ type DiscoverMetricsResponse struct {
 // @Param       q   query    string false "Metric-name prefix filter ([a-zA-Z0-9_:]*)"
 // @Success     200 {object} DiscoverMetricsResponse
 // @Failure     400 {object} map[string]string
-// @Failure     429 {object} map[string]string
 // @Failure     502 {object} map[string]string
 // @Failure     503 {object} map[string]string
 // @Router      /api/v1/tenants/{id}/metrics [get]
+//
+// NB: a 429 (rate-limited) is possible via the global per-caller limiter
+// middleware, but is deliberately NOT declared here. It is a cross-
+// cutting middleware response whose body is the rich ErrorResponse
+// envelope (integer retry_after_s) — no fuzzed GET endpoint declares it,
+// and declaring it as map[string]string makes the schemathesis contract
+// test reject the real integer-bearing 429 body (#761 CI). The behaviour
+// is documented in the handler doc comment + CHANGELOG instead.
 func DiscoverMetrics(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// Discovery disabled when --federation-prometheus-url is unset.

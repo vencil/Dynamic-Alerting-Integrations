@@ -1081,15 +1081,6 @@ const docTemplate = `{
                             }
                         }
                     },
-                    "429": {
-                        "description": "Too Many Requests",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
                     "502": {
                         "description": "Bad Gateway",
                         "schema": {
