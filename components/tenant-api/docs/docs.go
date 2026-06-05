@@ -1040,6 +1040,68 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/v1/tenants/{id}/metrics": {
+            "get": {
+                "description": "Lists the metric names that have at least one series\ncarrying {tenant=\"\u003cid\u003e\"} in the last 24h, optionally\nfiltered by a name prefix. Backs the portal recipe-\nauthoring UX (ADR-024 Capability B). Stateless proxy over\nPrometheus; the result can only contain the tenant's own\nmetrics.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "tenants"
+                ],
+                "summary": "Discover a tenant's metric names",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Tenant ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Metric-name prefix filter ([a-zA-Z0-9_:]*)",
+                        "name": "q",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_handler.DiscoverMetricsResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "502": {
+                        "description": "Bad Gateway",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/v1/tenants/{id}/validate": {
             "post": {
                 "description": "Dry-run validation of a tenant YAML without writing to disk.",
@@ -1534,6 +1596,22 @@ const docTemplate = `{
                 },
                 "tenant_id": {
                     "type": "string"
+                }
+            }
+        },
+        "internal_handler.DiscoverMetricsResponse": {
+            "type": "object",
+            "properties": {
+                "metrics": {
+                    "description": "Metrics is the sorted list of metric names visible to this tenant.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "truncated": {
+                    "description": "Truncated is true when the result hit the server-side cap; the\ncaller should narrow with a longer prefix.",
+                    "type": "boolean"
                 }
             }
         },

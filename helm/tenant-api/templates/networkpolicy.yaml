@@ -12,6 +12,9 @@ spec:
       {{- include "tenant-api.selectorLabels" . | nindent 6 }}
   policyTypes:
     - Ingress
+    {{- if .Values.networkPolicy.egress.enabled }}
+    - Egress
+    {{- end }}
   ingress:
     # Allow oauth2-proxy port from anywhere in the cluster (Portal, Ingress)
     - ports:
@@ -26,4 +29,27 @@ spec:
       ports:
         - port: 8080
           protocol: TCP
+  {{- if .Values.networkPolicy.egress.enabled }}
+  egress:
+    # DNS resolution (kube-dns / CoreDNS) — without this every outbound
+    # name lookup fails the moment Egress is restricted.
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    # Prometheus metric discovery (ADR-024 §S6) — the only egress this
+    # feature strictly adds. Scoped to the Prometheus namespace.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.prometheusNamespace }}
+      ports:
+        - port: {{ .Values.networkPolicy.egress.prometheusPort }}
+          protocol: TCP
+    {{- with .Values.networkPolicy.egress.extraEgress }}
+    # Deployment-specific allows (K8s API server, git forge, …).
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- end }}
 {{- end }}

@@ -95,6 +95,13 @@ type Deps struct {
 	// whitelist edit is schema-checked only.
 	AdmissionValidator *fedpolicy.AdmissionValidator
 
+	// MetricDiscoverer backs GET /tenants/{id}/metrics — the stateless
+	// metric-discovery catalog for the portal recipe-authoring UX
+	// (ADR-024 §S6, #741). Optional — nil when --federation-prometheus-url
+	// is unset (shares the same Prometheus backend as AdmissionValidator),
+	// in which case DiscoverMetrics returns HTTP 503.
+	MetricDiscoverer *fedpolicy.MetricDiscoverer
+
 	// Tasks runs async batch operations behind a goroutine pool.
 	Tasks *async.Manager
 

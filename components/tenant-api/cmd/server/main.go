@@ -255,6 +255,14 @@ func main() {
 		slog.Info("federation admission validator disabled — set --federation-prometheus-url to enable")
 	}
 
+	// v2.9.0 ADR-024 §S6 (#741): metric discovery catalog backing the
+	// portal recipe-authoring UX. Shares the same Prometheus backend as
+	// the admission validator; nil (→ HTTP 503) when the URL is unset.
+	metricDiscoverer := fedpolicy.NewMetricDiscoverer(*federationPrometheusURL)
+	if metricDiscoverer == nil {
+		slog.Info("metric discovery disabled — set --federation-prometheus-url to enable")
+	}
+
 	// v2.6.0: Async task manager for batch operations
 	taskMgr := async.NewManager(4) // 4 worker goroutines
 
@@ -297,20 +305,21 @@ func main() {
 	// Every handler is now a method on *deps; pass-through positional
 	// args are gone.
 	deps := &handler.Deps{
-		ConfigDir:   *configDir,
-		Writer:      writer,
-		RBAC:        rbacMgr,
-		Policy:      policyMgr,
-		Groups:      groupMgr,
-		Views:       viewMgr,
+		ConfigDir:          *configDir,
+		Writer:             writer,
+		RBAC:               rbacMgr,
+		Policy:             policyMgr,
+		Groups:             groupMgr,
+		Views:              viewMgr,
 		Federation:         federationMgr,
 		FederationPolicy:   federationPolicyMgr,
 		AdmissionValidator: federationValidator,
+		MetricDiscoverer:   metricDiscoverer,
 		Tasks:              taskMgr,
-		PRClient:    prClient,
-		PRTracker:   prTracker,
-		WriteMode:   wm,
-		SearchCache: handler.NewTenantSnapshotCache(),
+		PRClient:           prClient,
+		PRTracker:          prTracker,
+		WriteMode:          wm,
+		SearchCache:        handler.NewTenantSnapshotCache(),
 	}
 
 	// ── RBAC + policy hot-reload goroutines ───────────────────────────────────
@@ -420,6 +429,12 @@ func main() {
 			// v2.7.0 B-3 (ADR-016/017): merged effective config + dual hashes.
 			r.With(rbacMgr.Middleware(rbac.PermRead, handler.TenantIDFromPath)).
 				Get("/effective", handler.GetTenantEffective(deps))
+
+			// v2.9.0 ADR-024 §S6 (#741): metric discovery catalog for the
+			// portal recipe-authoring UX. Read-only Prometheus proxy;
+			// route middleware enforces RBAC read on {id}.
+			r.With(rbacMgr.Middleware(rbac.PermRead, handler.TenantIDFromPath)).
+				Get("/metrics", handler.DiscoverMetrics(deps))
 
 			// Federation metric subset (v2.9.0 — ADR-020 IV-2e). PUT's
 			// tenant-admin check is inside the handler (route middleware
