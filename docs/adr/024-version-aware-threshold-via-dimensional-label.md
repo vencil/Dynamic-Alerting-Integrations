@@ -612,6 +612,44 @@ custom:metric:<rid> = label_replace(
 - **S6b-1（MVP）= `<RecipeBuilder>` 元件 + standalone host 頁**（manifest entry）：服務 **GitOps-direct persona** —— 吐**帶完整 `tenants: <id>: _custom_alerts: -` wrapper 的 snippet + 一鍵複製**（外審 OQ2 fix，消除「貼哪裡」認知摩擦）；兼當元件 Vitest 測試宿主。
 - **S6b-2（fast-follow，獨立 PR）= 折進 tenant-manager**：mount `<RecipeBuilder>` 當「新增 / 編輯自訂告警」面板；傳入租戶現有 recipe（撞名 / cap 即時警告）；`onSubmit(recipe)` → **name-based mutation**（外審 Reef 2：add 或 replace-by-`targetName`，**嚴禁依賴 array index**，S5 保證 name 唯一；targetName 找不到 → 背景已變 → 擋寫 + 提示刷新）→ tenant-manager 既有 PUT。**cheap-edit 納入 MVP**（外審 OQ4：既有 recipe 作 InitialValues 塞進元件、改完 name-based replace、零新後端 API）。服務 **UI persona**、閉合 adoption、零 clobber。
 
+**資料流向 + 前端防線閉環**（async 三防禦 / ghost 脫鉤 / name-based mutation / 雙 persona 出口）：
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User as 租戶開發者 / SRE
+    participant RB as RecipeBuilder（純 UI 元件）
+    participant TM as tenant-manager（live 編輯器）
+    participant API as tenant-api（S5/S6a Go 後端）
+    participant Git as GitOps Repo（SOT）
+
+    User->>RB: 輸入 metric 前綴（如 http_）
+    Note over RB: 每欄獨立 async 防禦（Reef 4 + Reef 3）<br/>debounce 300ms+ / AbortController / session cache
+    RB->>API: GET /tenants/{id}/metrics?q=http_
+    API-->>RB: 200（去重名單，24h lookback）
+
+    User->>RB: blur / 確定完整 metric 名
+    RB->>API: 精確查核 q=完整字串
+    Note over RB: 中間態 Validating…<br/>與 autocomplete 清單脫鉤（防 race，Reef 3）
+    alt 不在清單內
+        Note over RB: 黃字 soft-warn（不 block；GitOps 真空合法）
+    end
+
+    Note over RB: 摘要狀態機（OQ3 + Reef 4）<br/>必填齊且合法才渲染動態白話，永不露 PromQL
+
+    alt S6b-1：GitOps-direct（standalone host）
+        RB-->>User: 吐帶完整 tenants/ID/_custom_alerts wrapper 的 snippet + 一鍵複製
+        User->>Git: 手動貼 + 發 PR（標準 GitOps 摩擦）
+    else S6b-2：live UI（折進 tenant-manager）
+        Note over TM: 傳入現有 recipe（撞名 + S4 own-cap 即時警告）
+        User->>RB: 點擊提交（onSubmit）
+        RB->>TM: 遞交 RecipeObject（Dumb Handoff）
+        Note over TM: name-based mutation（Reef 2）<br/>add 或 replace-by-targetName，嚴禁 array index
+        TM->>API: PUT /tenants/{id}（full-overlay，寫入權威）
+        Note over API: S5 in-process Go preflight 拒壞輸入
+    end
+```
+
 **評估並否決**：**直接把表單寫進 tenant-manager 核心** → 否決（載重 live 工具，大改 regression 高；元件化是 A→B 可增量路徑）。**`react-jsonschema-form`** → 否決（loader allowlist 違規 + 重依賴）。**series/label 展示** → 否決（認知破裂）。
 
 **Defer-with-trigger**：

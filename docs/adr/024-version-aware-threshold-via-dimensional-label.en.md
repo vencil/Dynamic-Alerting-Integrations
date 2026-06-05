@@ -609,6 +609,44 @@ custom:metric:<rid> = label_replace(
 - **S6b-1 (MVP) = the `<RecipeBuilder>` component + a standalone host page** (manifest entry): serves the **GitOps-direct persona** — emits a **snippet with the full `tenants: <id>: _custom_alerts: -` wrapper + one-click copy** (review OQ2 fix, eliminating the "where do I paste it" cognitive friction); doubles as the component's Vitest test host.
 - **S6b-2 (fast-follow, separate PR) = fold into tenant-manager**: mount `<RecipeBuilder>` as an "Add / Edit custom alert" panel; pass in the tenant's existing recipes (live name-collision / cap warnings); `onSubmit(recipe)` → **name-based mutation** (review Reef 2: add or replace-by-`targetName`, **never index-based**, S5 guarantees name uniqueness; targetName-not-found → background changed → block + prompt a refresh) → tenant-manager's existing PUT. **cheap-edit is in the MVP** (review OQ4: feed an existing recipe as InitialValues into the component, name-based replace on submit, zero new backend API). Serves the **UI persona**, closes the adoption loop, zero clobber.
 
+**Data flow + frontend defense loop** (the async trio / ghost decoupling / name-based mutation / dual-persona exits):
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User as Tenant dev / SRE
+    participant RB as RecipeBuilder (pure UI component)
+    participant TM as tenant-manager (live editor)
+    participant API as tenant-api (S5/S6a Go backend)
+    participant Git as GitOps Repo (SOT)
+
+    User->>RB: type a metric prefix (e.g. http_)
+    Note over RB: per-field async defense (Reef 4 + Reef 3)<br/>debounce 300ms+ / AbortController / session cache
+    RB->>API: GET /tenants/{id}/metrics?q=http_
+    API-->>RB: 200 (deduped list, 24h lookback)
+
+    User->>RB: blur / commit the full metric name
+    RB->>API: precise check q=full-string
+    Note over RB: Validating… interim state<br/>decoupled from the autocomplete list (race guard, Reef 3)
+    alt not in the list
+        Note over RB: yellow soft-warn (does not block; GitOps vacuum is legit)
+    end
+
+    Note over RB: summary state machine (OQ3 + Reef 4)<br/>render dynamic plain-English only when all required+valid; never expose PromQL
+
+    alt S6b-1: GitOps-direct (standalone host)
+        RB-->>User: emit snippet with full tenants/ID/_custom_alerts wrapper + one-click copy
+        User->>Git: paste + open PR (standard GitOps friction)
+    else S6b-2: live UI (folded into tenant-manager)
+        Note over TM: pass in existing recipes (live name-collision + S4 own-cap warnings)
+        User->>RB: click submit (onSubmit)
+        RB->>TM: hand over the RecipeObject (Dumb Handoff)
+        Note over TM: name-based mutation (Reef 2)<br/>add or replace-by-targetName, never array index
+        TM->>API: PUT /tenants/{id} (full-overlay, the write authority)
+        Note over API: S5 in-process Go preflight rejects bad input
+    end
+```
+
 **Evaluated and rejected**: **writing the form straight into tenant-manager's core** → rejected (load-bearing live tool, big-edit regression risk; componentization is the incremental A→B path). **`react-jsonschema-form`** → rejected (loader-allowlist violation + heavy dependency). **series/label display** → rejected (cognitive dissonance).
 
 **Defer-with-trigger**:
