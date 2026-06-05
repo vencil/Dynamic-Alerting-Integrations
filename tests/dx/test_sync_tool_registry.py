@@ -121,6 +121,51 @@ class TestParseRegistry:
         # The pre-fix bug produced "" (empty string) for every block-list field.
         assert by_key["alpha"]["audience"] != ""
 
+    def test_nested_block_dict_title(self, tmp_path):
+        """Block-form `title:` with en:/zh: children parses to a dict (not "")."""
+        reg = tmp_path / "registry.yaml"
+        reg.write_text(_REGISTRY_YAML, encoding="utf-8")
+        by_key = {t["key"]: t for t in srt.parse_registry(str(reg))}
+        assert by_key["alpha"]["title"] == {"en": "Alpha Tool", "zh": "甲工具"}
+
+    def test_inline_list_and_dict_grammar(self, tmp_path):
+        """Grammar-space (not in the real corpus): inline `[a, b]` / `{ en: x }`
+        must parse the same as their block forms. The real registry only uses
+        block syntax, but the parser admits inline — lock it so a future inline
+        edit doesn't silently mis-parse."""
+        reg = tmp_path / "registry.yaml"
+        reg.write_text(textwrap.dedent("""\
+            tools:
+            - key: inline-tool
+              title: { en: "Inline Tool", zh: "內聯" }
+              file: interactive/tools/inline.jsx
+              audience: [platform, tenant]
+              tags: [a, b]
+        """), encoding="utf-8")
+        t = srt.parse_registry(str(reg))[0]
+        assert t["title"] == {"en": "Inline Tool", "zh": "內聯"}
+        assert t["audience"] == ["platform", "tenant"]
+        assert t["tags"] == ["a", "b"]
+
+    def test_sibling_field_after_block_resets(self, tmp_path):
+        """A field at the same indent as a block field must NOT be swallowed
+        into that block (pending-block must reset). Guards the indentation
+        bookkeeping that distinguishes nested dict entries from siblings."""
+        reg = tmp_path / "registry.yaml"
+        reg.write_text(textwrap.dedent("""\
+            tools:
+            - key: t
+              audience:
+              - platform
+              icon: rules
+              file: interactive/tools/t.jsx
+        """), encoding="utf-8")
+        t = srt.parse_registry(str(reg))[0]
+        assert t["audience"] == ["platform"]
+        assert t["icon"] == "rules"            # sibling, not an audience item
+        assert t["file"] == "interactive/tools/t.jsx"
+        assert "rules" not in t["audience"]
+
 
 # ---------------------------------------------------------------------------
 # sync_hub_cards — (a) populates/normalizes audience, (b) inserts missing card
