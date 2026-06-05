@@ -305,9 +305,16 @@ func (c *Client) roundTrip(method, path string, body interface{}) ([]byte, http.
 		// map a missing-api-scope token to a clean HTTP 403 (see errors.go).
 		slog.Warn("gitlab API non-2xx",
 			"method", method, "path", path, "status", resp.StatusCode, "body", string(respBody))
-		return nil, resp.Header, &platform.APIError{
+		apiErr := &platform.APIError{
 			Provider: "GitLab", Method: method, Path: path, StatusCode: resp.StatusCode,
 		}
+		// TRK-319: flag a GitLab rate limit (429) so the circuit breaker treats it
+		// as forge degradation. Body is sniffed here but not retained (no leak).
+		if limited, retryAfter := platform.DetectRateLimit(resp.StatusCode, resp.Header, respBody); limited {
+			apiErr.RateLimited = true
+			apiErr.RetryAfter = retryAfter
+		}
+		return nil, resp.Header, apiErr
 	}
 	return respBody, resp.Header, nil
 }

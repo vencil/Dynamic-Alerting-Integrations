@@ -54,6 +54,17 @@ type httpResult struct {
 type CircuitBreaker struct {
 	cb       *gobreaker.CircuitBreaker[httpResult]
 	provider string
+
+	// TRK-319 rate-limit gate. gobreaker's open window is a fixed cbOpenTimeout
+	// (60s); a forge secondary rate limit can advise a LONGER Retry-After. Once
+	// the breaker has opened on rate-limit failures, notBefore extends the
+	// suppression to that Retry-After so the 60s half-open probe doesn't keep
+	// punching a still-active limit ("醒來被揍一次"). Guarded by mu; the writer
+	// and the PollingTracker share one breaker, so this is read/written
+	// concurrently. now is a clock seam (nil → time.Now) for deterministic tests.
+	mu        sync.Mutex
+	notBefore time.Time
+	now       func() time.Time
 }
 
 // NewCircuitBreaker builds a breaker for the named provider and registers it
@@ -65,7 +76,7 @@ type CircuitBreaker struct {
 // cbConsecutiveFailures degradation failures; recovers via a single half-open
 // probe after cbOpenTimeout.
 func NewCircuitBreaker(provider string) *CircuitBreaker {
-	bcb := &CircuitBreaker{provider: provider}
+	bcb := &CircuitBreaker{provider: provider, now: time.Now}
 	bcb.cb = gobreaker.NewCircuitBreaker[httpResult](gobreaker.Settings{
 		Name:        provider,
 		MaxRequests: 1, // half-open: a single probe decides recover-or-reopen
@@ -99,6 +110,16 @@ func NewCircuitBreaker(provider string) *CircuitBreaker {
 // fn's result and error unchanged — so 4xx errors propagate normally while not
 // tripping the breaker.
 func (c *CircuitBreaker) Execute(fn func() ([]byte, http.Header, error)) ([]byte, http.Header, error) {
+	now := c.clock()
+
+	// TRK-319 rate-limit gate: while a forge-advised Retry-After window is still
+	// open (set when the breaker opened on rate-limit failures), suppress the call
+	// WITHOUT dialing — including the breaker's half-open probe, which would
+	// otherwise re-hit a still-active secondary rate limit every cbOpenTimeout.
+	if c.rateLimitGateOpen(now) {
+		return nil, nil, ErrCircuitOpen
+	}
+
 	res, err := c.cb.Execute(func() (httpResult, error) {
 		body, header, e := fn()
 		return httpResult{body: body, header: header}, e
@@ -108,10 +129,54 @@ func (c *CircuitBreaker) Execute(fn func() ([]byte, http.Header, error)) ([]byte
 		if errors.Is(err, gobreaker.ErrOpenState) || errors.Is(err, gobreaker.ErrTooManyRequests) {
 			return nil, nil, ErrCircuitOpen
 		}
+		// If THIS rate-limit failure is the one that (just) opened the breaker,
+		// arm/extend the gate to the forge-advised Retry-After. Tying it to the
+		// open state preserves the "trips only after cbConsecutiveFailures"
+		// semantics — calls 1..N still execute and accumulate failures; the gate
+		// only extends the open window beyond gobreaker's fixed 60s.
+		//
+		// Anchor the window on a FRESH clock reading (post-response), NOT the `now`
+		// captured before the call: a degraded forge — exactly when rate limits
+		// fire — can make the round-trip take seconds, and reusing the pre-call
+		// timestamp would shorten suppression by that latency and let a probe fire
+		// before Retry-After truly expires.
+		var apiErr *APIError
+		if errors.As(err, &apiErr) && apiErr.RateLimited && apiErr.RetryAfter > 0 &&
+			c.cb.State() == gobreaker.StateOpen {
+			c.armRateLimitGate(c.clock().Add(apiErr.RetryAfter))
+		}
 		// A real fn error (4xx/5xx/network) — propagate body+header+err as-is.
 		return res.body, res.header, err
 	}
 	return res.body, res.header, nil
+}
+
+// clock returns the breaker's time source (time.Now in prod; injectable in tests).
+func (c *CircuitBreaker) clock() time.Time {
+	if c.now != nil {
+		return c.now()
+	}
+	return time.Now()
+}
+
+// rateLimitGateOpen reports whether the forge-advised Retry-After window is still
+// in effect (TRK-319).
+func (c *CircuitBreaker) rateLimitGateOpen(now time.Time) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return !c.notBefore.IsZero() && now.Before(c.notBefore)
+}
+
+// armRateLimitGate extends the rate-limit suppression window to `until` (never
+// shortens it), logging the back-off so an SRE sees the active Retry-After.
+func (c *CircuitBreaker) armRateLimitGate(until time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if until.After(c.notBefore) {
+		c.notBefore = until
+		slog.Warn("forge rate limit — suppressing calls until Retry-After elapses (TRK-319)",
+			"provider", c.provider, "retry_after_until", until.UTC().Format(time.RFC3339))
+	}
 }
 
 // State returns the breaker's current state string ("closed" / "half-open" /
@@ -130,8 +195,14 @@ func isForgeDegradation(err error) bool {
 	}
 	var apiErr *APIError
 	if errors.As(err, &apiErr) {
-		// 5xx = forge degradation; 4xx = deterministic client outcome.
-		return apiErr.StatusCode >= 500
+		// 5xx = forge degradation. A rate-limit / abuse rejection (TRK-319) is
+		// ALSO degradation even though it arrives as a 4xx (GitHub secondary
+		// rate limit = 403, GitLab = 429): during the rate-limit window the
+		// write plane is genuinely unavailable, so the breaker must protect it
+		// instead of sailing through as a "successful" 4xx. Driven by the
+		// DETECTED RateLimited flag, not the bare status code, so a permission
+		// 403 / validation 422 still counts as a deterministic client outcome.
+		return apiErr.StatusCode >= 500 || apiErr.RateLimited
 	}
 	// Not an APIError → transport-layer failure (connection refused, DNS,
 	// TLS, context deadline / http.Client timeout). All forge degradation.

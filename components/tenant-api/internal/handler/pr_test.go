@@ -672,6 +672,53 @@ func TestPutTenant_PRMode_ForgeForbidden(t *testing.T) {
 	}
 }
 
+// TestPutTenant_PRMode_RateLimited403MapsTo503 is the TRK-319 end-to-end guard:
+// a forge 403 that is a SECONDARY RATE LIMIT (not a permission error) must NOT
+// map to a clean HTTP 403 (which would tell the operator "fix your token" for a
+// transient back-off) — it must fall through to a retryable 503. Mirrors
+// TestPutTenant_PRMode_ForgeForbidden but with the RateLimited flag set, proving
+// APIError.Is excludes it from ErrForbidden all the way out to the HTTP status.
+func TestPutTenant_PRMode_RateLimited403MapsTo503(t *testing.T) {
+	t.Parallel()
+	configDir := initGitConfigDir(t)
+	writer := newTestWriter(configDir)
+
+	mockClient := &mockPlatformClient{
+		providerName: "github",
+		createPRFunc: func(title, body, headBranch string, labels []string) (*platform.PRInfo, error) {
+			return nil, &platform.APIError{
+				Provider: "GitHub", Method: "POST", Path: "/repos/o/r/pulls",
+				StatusCode: http.StatusForbidden, RateLimited: true, RetryAfter: 60 * time.Second,
+			}
+		},
+	}
+	mockTracker := &mockPlatformTracker{}
+
+	rbacMgr := adminRBAC(t)
+	h := PutTenant(&Deps{Writer: writer, WriteMode: WriteModePR, PRClient: mockClient, PRTracker: mockTracker, RBAC: rbacMgr})
+	body := bytes.NewBufferString("tenants:\n  db-a:\n    _silent_mode: \"critical\"\n")
+	req := newRequestWithChiParam("PUT", "/api/v1/tenants/db-a", "id", "db-a", body)
+	req.Header.Set("X-Forwarded-Email", "alice@example.com")
+	req.Header.Set("X-Forwarded-Groups", "admins")
+	w := httptest.NewRecorder()
+	wrapWithRBACMiddleware(h, rbacMgr, rbac.PermWrite, TenantIDFromPath).ServeHTTP(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("rate-limited 403 should map to 503, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("expected JSON response, unmarshal failed: %v; body=%s", err, w.Body.String())
+	}
+	if resp["code"] == CodeForbidden {
+		t.Errorf("code = %v, want a non-FORBIDDEN code (rate-limit is degradation, not a permission error)", resp["code"])
+	}
+	// Claim released so a post-back-off retry isn't blocked.
+	if !mockTracker.ClaimTenant("db-a") {
+		t.Error("claim should be released after a rate-limited PR creation")
+	}
+}
+
 // TestPutTenant_PRMode_ConcurrentSameTenant is the end-to-end TOCTOU
 // assertion: two concurrent PUTs for the same tenant must create exactly one
 // PR (the second gets 409), even though both pass the optimistic fast-path.
