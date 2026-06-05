@@ -43,7 +43,7 @@ updated_at: 2026-06-04
 
 ⛔ **部署前提（HARD）**：kube-state-metrics 必須設 `--metric-labels-allowlist=pods=[app.kubernetes.io/version]`，否則 `kube_pod_labels` 不帶 version、version 注入 join 匹配空集、**版本閾值靜默 inert**（真叢集實證）。三層防禦守住此前提：runtime sentinel `VersionAwareThresholdInert` 是安全網、CI static lint `check_ksm_version_allowlist.py` 攔誤配。
 
-**能力 B — Custom Alerts（實作進行中，目標 v2.9.0）**：recipe 庫 + 向量化編譯器 + 6 個 recipe（threshold / rate / ratio / absence / p99_latency / **forecast**）+ exporter `user_threshold` emission + 編譯期 `max_custom_recipes` per-tenant cap + **tenant-api shift-left preflight（in-process Go）** **已實作**（[#741](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/741) S1–S5 / [#752](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/752) / [#753](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/753)）；**仍 net-new**：discovery catalog、onboarding / recipe-編輯 兩個 UX（見 §Custom Alerts）。
+**能力 B — Custom Alerts（實作進行中，目標 v2.9.0）**：recipe 庫 + 向量化編譯器 + 6 個 recipe（threshold / rate / ratio / absence / p99_latency / **forecast**）+ exporter `user_threshold` emission + 編譯期 `max_custom_recipes` per-tenant cap + **tenant-api shift-left preflight（in-process Go）** **已實作**（[#741](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/741) S1–S5 / [#752](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/752) / [#753](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/753)）；**設計收斂、實作 net-new（S6）**：discovery catalog（無狀態 Prometheus proxy）+ recipe-authoring UX（portal）—— 設計已 locked、外審過（見 §S6），程式碼待 S6a/S6b。
 
 **Deferred（defer-with-trigger）**：
 
@@ -542,13 +542,49 @@ custom:metric:<rid> = label_replace(
 
 **S5 Acceptance Criteria**：① `PUT`/batch/`/validate` 對無效 recipe spec 回 400 + `Violations[]`、**不**觸及 GitOps 寫入（mutation-proven：拔 preflight 即放行壞 spec）；② 跨語言 stateless fixture：Go 與 Python 對每個 `(spec → accept/reject)` 一致（含對抗性 selector value）；③ valid recipe 照常寫入 / dry-run 回 ok（無 regression）；④ preflight 純 in-process Go —— **無新 tenant-api image 依賴**（無 Python / promtool）。
 
-### Future robustness radar（S5 外審衍生，defer-with-trigger）
+### S6 — metric discovery catalog + recipe-authoring UX（#741，GA 最後一切片）
 
-S5 外審（Gemini）掃出三個**未來**強健性議題，**none 阻礙 S5**，記此待 trigger：
+> 設計經 brainstorm 五問 + 三輪自我對抗 + Gemini 外審收斂（Mid → Mid++）。**結論結構於外審後未變**（stateless discovery + portal soft-warn + S6a/S6b 切分），僅吸收參數 / 護欄精修。哲學定錨：**Dumb Pipes, Smart Endpoints** —— 後端薄、狀態最小，智慧（去抖 / type filter / 鬼魂軟警告）落在 portal。
+
+**緣起 / 意圖**：S1–S5 讓租戶能**寫**正確 recipe，但租戶「不知道自己有哪些 metric 可寫」。S6 補 **discovery（給可選 metric 清單）+ authoring UX（portal recipe 表單）**，補完 §Custom Alerts MVP 的最後一塊；之後 epic #741 ≈ GA-complete（僅 S7/S8 routing + radar 項另追）。
+
+**MVP 切分**：
+
+- **S6a — discovery backend（stateless）**：tenant-api 新唯讀端點，向 Prometheus 查**該租戶**自身的 app-metric 名稱清單（`{tenant="<authID>"}` 篩），給 portal 當 recipe 的 metric 自動完成來源。**不**落任何 config 狀態（純 proxy + 過濾）。
+- **S6b — portal recipe-authoring UX（JSX）**：recipe 表單（選 metric → 選 recipe → 填參數）+ `mode: silent` 預覽；消費 S6a 端點。
+
+**核心決策（每條附 trade-off）**：
+
+- **discovery = 無狀態 Prometheus proxy，不自建 metric 目錄**（reuse-over-build）。複用 `federation/fedpolicy/admission.go::seriesQuerier` 既有 pattern（`/api/v1/label/__name__/values?match[]={tenant=…}`、`io.LimitReader` 1MB、5s timeout、結果上限）。*Trade-off*：每次查即時打 Prometheus（非預建索引快取）→ 換掉「維護一份會與 Prometheus 真實 series 漂移的目錄狀態」+ 守住 stateless 性質。**端點版本註**：`match[]` 作用於 `label/__name__/values` 在 Prometheus <2.24 有 perf regression、本 repo v3.x 安全（外審確認）。
+- **lookback 預設 = 24h（非短窗）+ 砍「顯示非活躍」toggle**（外審 reframe）。租戶 authoring 的痛點是「**找不到我剛寫的 metric**」遠重於「看到已死的舊 metric」；短窗（如 1h）會讓 **daily batch / CronJob 等間歇性 metric 整段消失** → 無法 author。故預設拉長到 24h 涵蓋日級間歇來源；搜尋列本身即過濾，毋須額外 toggle。真正的 UX 增益是 **metadata type filtering**（用 `/api/v1/metadata` 的 gauge/counter type 過濾，讓只吃 gauge 的 recipe〔如 forecast〕只列 gauge）—— 收進 S6b（OQ-S6-1 / OQ-S6-2 均收斂）。
+- **查詢字串強制鎖定 + `url.QueryEscape`**（外審 harden，安全護欄）。Go query builder **不**讓租戶輸入觸及 matcher 結構，`tenant` label 由 tenant-exporters 的 scrape job 在抓取時 branded（非租戶可偽造）：
+  `match[]={tenant="` + `url.QueryEscape(authID)` + `",__name__=~"` + `url.QueryEscape("^"+q+".*")` + `"}"`。
+  *Trade-off*：租戶只能前綴搜尋自己的 metric（不能任意 PromQL 選擇器）→ 換掉跨租戶窺探 / 注入面，守 tenant-agnostic 隔離。
+- **per-tenant rate-limit（S6a 必備護欄，與 PUT 分離）**。discovery 端點是 **Prometheus 代理** → 必須限流防 TSDB 飢餓：portal 去抖只保護 **UI 路徑**，擋不住租戶**腳本 / CronJob 直打** API（外審 Reef 1「代理驚群」）。S6a 加每租戶 token bucket（如 30/min）於 `/metrics` 端點、與 PUT 配額獨立。*Trade-off*：限流器是小型有界計數器（請求速率狀態，非 config 狀態）→ 不破「stateless config」性質。**micro-cache（5–10s TTL，keyed `tenant+q`）列 defer-trigger**：若實測限流仍造成 UI 友善度不足再加（限流已足以保護 Prometheus；快取僅進一步降載 + 改善 hammering client 體驗，非 day-1 必需）。
+
+**鬼魂 metric（ghost）防護分層**：租戶為「將來會出現」的 metric 預先建 recipe（或 metric 已消失）→ 規則永遠不 fire、靜默無防護。
+
+- **S6a 後端守 stateless**：**不**在寫入路徑硬擋「metric 當下不存在」（GitOps 真空期 / 預建合法 → 硬擋會誤殺）。
+- **portal 軟警告（S6b）**：表單選的 metric 不在 discovery 清單內 → 黃字「此 metric 目前無數據,確認名稱?」(soft-warn,不 block)。
+- **SRE 路徑 = 非同步 runtime 哨兵（deferred artifact，非 S6a）**：一條平台級 operational 告警 `da_custom_alert_ghost_metric`（recipe 引用的 metric 連續 N 天無 series）→ 把鬼魂偵測留給**有 runtime 視野**的 SRE 治理層，而非塞進無狀態的寫入端點。*Trigger*：鬼魂 recipe 累積成真實維運負擔（與下方 Reef 3 DA-Janitor 同源、可合併實作）。
+
+**測試策略**：S6a = handler 整合測（mock Prometheus，斷言 `match[]` 強制帶 `tenant=authID`〔跨租戶隔離〕+ `url.QueryEscape` + rate-limit 觸發 429 + LimitReader 截斷不 OOM）；S6b = portal Vitest（表單→參數組裝 / ghost soft-warn / type filter）。
+
+**Blast-radius / 護欄**：唯讀（無 mutation）；限流 + timeout + LimitReader 三護欄防代理被打爆；查詢鎖定防跨租戶窺探。新依賴 = network policy egress **`tenant-api → prometheus:9090`**（須加 `helm/tenant-api/templates/networkpolicy.yaml`，目前僅 ingress）。
+
+**評估並否決的選項**：**預建 metric 目錄 / 快取索引**（查詢快但須維護會漂移的狀態、破 stateless）→ 否決為 day-1 預設（micro-cache 降級為 defer-trigger）。**後端硬擋 ghost**（GitOps 真空期誤殺 + 預建合法）→ 否決，降為 portal soft-warn + SRE 哨兵。
+
+**S6 Acceptance Criteria**：① discovery 端點只回**該租戶**自身 metric（`match[]` 強制 `tenant=authID`、`url.QueryEscape`、跨租戶查詢回空〔隔離測〕）；② 端點純唯讀、不寫 config（stateless）；③ per-tenant rate-limit 超量回 429、與 PUT 配額獨立；④ portal recipe 表單可不接觸 PromQL 完成 authoring + ghost soft-warn + gauge-only recipe 只列 gauge（type filter）；⑤ network policy egress 明確加 `tenant-api → prometheus:9090`。
+
+### Future robustness radar（S5 + S6 外審衍生，defer-with-trigger）
+
+S5 / S6 外審（Gemini）掃出的**未來**強健性議題，**none 阻礙當切片**，記此待 trigger：
 
 - **regex value 長度上限（LOW，hygiene）**：~~ReDoS catastrophic backtracking~~ **對 Prometheus 不成立**（label matcher 用 Go `regexp` = RE2、線性、無 backtracking）。殘留:超長/超複雜 regex × 海量 series 仍可能拖慢 eval → selector regex value 加長度上限為廉價衛生防護。*Trigger*：實測 rule-eval-duration 受 regex 複雜度影響。
 - **`keep_firing_for` 解除延遲（HIGH UX，future recipe param）**：`for` 防突波,但跌破即 resolved → 閾值附近震盪 → 告警疲勞。Prometheus 2.42+（本 repo v3.x）原生 `keep_firing_for` → 開放給租戶（enum-bounded、控制平面靜態屬性、進 slug,如 `for`）消震盪噪音。*Trigger*：第一個 flapping 告警疲勞客訴。
 - **Alertmanager grouping 隔離（S8 routing 硬需求）**：`component="custom"` 告警須在 AM route tree 絕對隔離（獨立 branch、`group_by` 含 `tenant`+`recipe_id`、不與平台 P0 cross-group），否則租戶噪音掩蓋核心告警。*Action*：S8 routing 實作時必做（非 trigger，是 S8 的 AC）。
+- **向量化 shared-fate / app-metric 基數爆炸（HIGH，向量化隔離缺口）**：O(M) 向量化的代價是**共享命運** —— 單一租戶把高基數維度（如 UserID）放進 app-metric label → 其 series 暴增 → **共用**該 shape 的向量規則 eval 變慢 → **同 shape 的其他租戶**（B/C/D）告警一起被拖延 / 丟失（隊頭阻塞）。S4 `max_custom_recipes` 只擋 recipe **數量**、**不**擋 app-metric **基數**。*緩解*：在 tenant-exporters 的 scrape job（Plane A）加抓取時 `sample_limit` / `series_limit`，在 series 進 TSDB 前就截斷爆炸源（非 S6 程式碼，是平台 scrape config）。*Trigger*：規模化後出現單租戶基數拖累共享規則 eval（或主動於 onboarding 設保守上限）。
+- **幽靈規則狀態腐敗 + auto-GC（MEDIUM，Day-2 治理）**：租戶「只增不刪」→ 長期累積大量死 recipe → 記憶體膨脹 +`/effective` 變垃圾場。*緩解*：一支 **DA-Janitor** bot 定期掃描，recipe 引用的 metric 連續 30 天無 series → **自動開 PR** 加 `threshold: disable`（複用 S5 三態 opt-out + 帶註解）→ 經 GitOps 可追溯地 GC，不破壞 GitOps 信任（非強制刪除；disabled 不計 cap / 不編譯）。與上方 §S6 的「SRE runtime 哨兵」同源、可合併實作。*Trigger*：死 recipe 累積成真實維運負擔。
 
 ## 連結 / Cross-Reference
 
