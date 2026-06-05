@@ -359,6 +359,16 @@ data:
           # 30m (no longer "post-deploy"), or after 30m of no clients. Pod-down /
           # scrape-absent is a separate concern (the series is ABSENT, not 0) — not
           # this alert's job; tenant-api has no general availability alert yet.
+          #
+          # ⚠️ Correctness DEPENDS on the tenant-api scrape using `role: service`
+          # (configmap-prometheus.yaml `monitoring-components`): `instance` is the
+          # Service ClusterIP, which is STABLE across pod restarts, so
+          # tenant_api_sse_clients is ONE series that spans the deploy — letting
+          # `max_over_time([30m])` see the OLD pod's clients after the restart. If
+          # the scrape ever moves to `role: endpoints`/`pod`, `instance` becomes the
+          # (per-restart) pod IP → the new pod is a DIFFERENT series whose 30m
+          # history is all-0 → this alert would SILENTLY NEVER FIRE. The promtool
+          # test can't catch that (it defines its own series), hence this note.
           - alert: TenantApiSSEReconnectFailure
             expr: |
               tenant_api_sse_clients{job="tenant-api"} == 0

@@ -7,6 +7,13 @@
 #   4) does NOT fire when a user just CLOSED their tab during normal operation
 #      (same "had clients, now 0" shape as #1 but the pod was NOT recently
 #      restarted) — the uptime anchor is what distinguishes these.
+#
+# Every series carries a STABLE `instance` that does NOT change across the
+# modelled restart (value drops 3→0, uptime 5000→120, but instance is constant).
+# This mirrors the production scrape `role: service` (instance = the Service
+# ClusterIP, stable across pod restarts) on which the alert's cross-restart
+# `max_over_time([30m])` correctness depends — see the note in
+# configmap-rules-platform.yaml.
 # Run: promtool test rules tests/rulepacks/platform-sse-reconnect_test.yaml
 rule_files:
   - platform-sse-reconnect.rules.yaml
@@ -15,14 +22,14 @@ evaluation_interval: 1m
 
 tests:
   # 1) Reconnect FAILURE after a deploy: old pod had 3 clients; a Recreate deploy
-  #    resets uptime (5000s old pod → 120s new pod) and drops clients to 0; they
-  #    never come back. All three clauses hold for 10m → fires.
+  #    resets uptime (5000s → 120s) and drops clients to 0; they never come back.
+  #    instance stays constant (ClusterIP) so it's one series across the restart.
   - interval: 1m
     name: post-restart-stuck-at-zero-fires
     input_series:
-      - series: 'tenant_api_sse_clients{job="tenant-api"}'
+      - series: 'tenant_api_sse_clients{job="tenant-api", instance="10.0.0.1:8080"}'
         values: '3+0x5 0+0x30'        # t0–5m = 3 (old pod), t6–36m = 0 (new pod, stuck)
-      - series: 'tenant_api_uptime_seconds{job="tenant-api"}'
+      - series: 'tenant_api_uptime_seconds{job="tenant-api", instance="10.0.0.1:8080"}'
         values: '5000+0x5 120+0x30'   # restart at t6m: uptime resets to 120 (< 1800)
     alert_rule_test:
       - eval_time: 17m                 # 0 held 11m (≥10m for); uptime 120 < 1800; old 3 still in [30m]
@@ -31,6 +38,7 @@ tests:
           - exp_labels:
               severity: warning
               job: tenant-api
+              instance: "10.0.0.1:8080"
             exp_annotations:
               summary: "tenant-api SSE clients have not reconnected after a restart (10m)"
       - eval_time: 36m                 # 30m past the last client → max_over_time decays to 0 → resolves
@@ -42,9 +50,9 @@ tests:
   - interval: 1m
     name: quick-reconnect-no-fire
     input_series:
-      - series: 'tenant_api_sse_clients{job="tenant-api"}'
+      - series: 'tenant_api_sse_clients{job="tenant-api", instance="10.0.0.1:8080"}'
         values: '3+0x5 0 0 3+0x20'    # t6–7m = 0 (2m), then back
-      - series: 'tenant_api_uptime_seconds{job="tenant-api"}'
+      - series: 'tenant_api_uptime_seconds{job="tenant-api", instance="10.0.0.1:8080"}'
         values: '5000+0x5 120+0x30'
     alert_rule_test:
       - eval_time: 20m
@@ -55,9 +63,9 @@ tests:
   - interval: 1m
     name: idle-no-clients-no-fire
     input_series:
-      - series: 'tenant_api_sse_clients{job="tenant-api"}'
+      - series: 'tenant_api_sse_clients{job="tenant-api", instance="10.0.0.1:8080"}'
         values: '0+0x40'
-      - series: 'tenant_api_uptime_seconds{job="tenant-api"}'
+      - series: 'tenant_api_uptime_seconds{job="tenant-api", instance="10.0.0.1:8080"}'
         values: '120+0x40'
     alert_rule_test:
       - eval_time: 20m
@@ -71,9 +79,9 @@ tests:
   - interval: 1m
     name: tab-closed-no-recent-deploy-no-fire
     input_series:
-      - series: 'tenant_api_sse_clients{job="tenant-api"}'
+      - series: 'tenant_api_sse_clients{job="tenant-api", instance="10.0.0.1:8080"}'
         values: '3+0x5 0+0x30'        # same shape as scenario 1
-      - series: 'tenant_api_uptime_seconds{job="tenant-api"}'
+      - series: 'tenant_api_uptime_seconds{job="tenant-api", instance="10.0.0.1:8080"}'
         values: '8000+60x35'          # always ≥ 1800 (long-running pod, no restart)
     alert_rule_test:
       - eval_time: 17m
