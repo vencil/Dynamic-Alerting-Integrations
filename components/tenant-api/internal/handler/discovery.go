@@ -42,6 +42,12 @@ import (
 // alter the match semantics (ADR-024 §S6 security decision).
 var metricNameQueryPattern = regexp.MustCompile(`^[a-zA-Z0-9_:]*$`)
 
+// maxQueryPrefixLen caps the ?q= prefix. Real metric names are well
+// under this; the bound just stops a pathological multi-KB prefix from
+// building an oversized selector string (cheap hygiene — RE2 is linear,
+// so this is not a ReDoS guard).
+const maxQueryPrefixLen = 256
+
 // DiscoverMetricsResponse is the body of GET /api/v1/tenants/{id}/metrics.
 type DiscoverMetricsResponse struct {
 	// Metrics is the sorted list of metric names visible to this tenant.
@@ -83,6 +89,11 @@ func DiscoverMetrics(d *Deps) http.HandlerFunc {
 		// so the caller is authorised for exactly this tenant.
 
 		q := r.URL.Query().Get("q")
+		if len(q) > maxQueryPrefixLen {
+			WriteJSONError(w, r, http.StatusBadRequest,
+				"invalid q: prefix too long")
+			return
+		}
 		if !metricNameQueryPattern.MatchString(q) {
 			WriteJSONError(w, r, http.StatusBadRequest,
 				"invalid q: only metric-name characters [a-zA-Z0-9_:] are allowed")

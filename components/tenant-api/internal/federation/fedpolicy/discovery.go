@@ -73,6 +73,19 @@ type MetricDiscoverer struct {
 	window  time.Duration
 }
 
+// escapeSelectorValue escapes a value for embedding inside a
+// double-quoted PromQL label-matcher literal. Backslash MUST be escaped
+// first (else the quote-escape's own backslash gets doubled), then the
+// double quote, then newline — mirroring the Python compiler's
+// _escape_value (shape.py), the cross-language injection boundary. A
+// value run through this can never terminate the literal early.
+func escapeSelectorValue(v string) string {
+	v = strings.ReplaceAll(v, `\`, `\\`)
+	v = strings.ReplaceAll(v, `"`, `\"`)
+	v = strings.ReplaceAll(v, "\n", `\n`)
+	return v
+}
+
 // NewMetricDiscoverer builds a discoverer querying prometheusURL. An
 // empty prometheusURL returns nil — the caller treats a nil discoverer
 // as "discovery disabled" (HTTP 503).
@@ -101,10 +114,19 @@ func (d *MetricDiscoverer) Discover(ctx context.Context, tenant, prefix string, 
 		limit = DefaultDiscoveryLimit
 	}
 
-	// Force-build the selector server-side. tenant is RBAC-validated +
-	// filename-safe; prefix is charset-validated by the handler. Neither
-	// can break out of the quoted literal.
-	selector := `{` + tenantLabel + `="` + tenant + `"`
+	// Force-build the selector server-side.
+	//
+	// The tenant value is ESCAPED, not trusted: in RBAC open mode
+	// (no _rbac.yaml) HasPermission grants read on ANY tenant ID, so a
+	// crafted path segment like `db-a"} or {x` would otherwise break out
+	// of the quoted literal and inject arbitrary matchers (cross-tenant
+	// metric-name enumeration / a malformed 502). escapeSelectorValue
+	// makes breakout structurally impossible regardless of the caller.
+	//
+	// prefix is charset-validated by the handler ([a-zA-Z0-9_:] → 400),
+	// which neutralises BOTH a quote break and a regex metacharacter —
+	// escaping alone would not stop the latter — so it is embedded as-is.
+	selector := `{` + tenantLabel + `="` + escapeSelectorValue(tenant) + `"`
 	if prefix != "" {
 		selector += `,__name__=~"^` + prefix + `.*"`
 	}

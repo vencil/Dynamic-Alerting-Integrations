@@ -60,6 +60,21 @@ func TestDiscoverMetrics_BadQCharsetReturns400(t *testing.T) {
 	}
 }
 
+func TestDiscoverMetrics_OverlongQReturns400(t *testing.T) {
+	t.Parallel()
+	srv := fakeMetricsProm(t, nil, []string{"m"})
+	deps := &Deps{MetricDiscoverer: fedpolicy.NewMetricDiscoverer(srv.URL)}
+	h := DiscoverMetrics(deps)
+
+	req := newRequestWithChiParam("GET", "/api/v1/tenants/db-a/metrics", "id", "db-a", nil)
+	req.URL.RawQuery = url.Values{"q": {strings.Repeat("a", 257)}}.Encode()
+	w := httptest.NewRecorder()
+	h(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 for an over-long prefix", w.Code)
+	}
+}
+
 func TestDiscoverMetrics_SuccessAndTenantIsolation(t *testing.T) {
 	t.Parallel()
 	var gotMatch string

@@ -103,6 +103,26 @@ func TestDiscover_PrefixBuildsAnchoredNameMatcher(t *testing.T) {
 	}
 }
 
+func TestDiscover_MaliciousTenantIDIsEscapedNotInjected(t *testing.T) {
+	t.Parallel()
+	f := &fakeLabelValues{data: []string{}}
+	srv := f.server(t)
+
+	d := NewMetricDiscoverer(srv.URL)
+	// In RBAC open mode this crafted id reaches the discoverer. It must
+	// be escaped inside the literal, NOT break out into new matchers.
+	evil := `db-a"} or {job=~".+`
+	if _, _, err := d.Discover(context.Background(), evil, "", 0); err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	// The quote is backslash-escaped, so the whole evil string stays a
+	// single tenant value — no `or`, no second matcher escapes the {}.
+	want := `{tenant="db-a\"} or {job=~\".+"}`
+	if f.gotMatch != want {
+		t.Errorf("match[] = %q\n        want %q (injection neutralised)", f.gotMatch, want)
+	}
+}
+
 func TestDiscover_TruncatedWhenResultHitsLimit(t *testing.T) {
 	t.Parallel()
 	f := &fakeLabelValues{data: []string{"a", "b", "c"}}
