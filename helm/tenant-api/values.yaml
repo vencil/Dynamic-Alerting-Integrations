@@ -230,6 +230,25 @@ networkPolicy:
   enabled: true
   # Namespace that Prometheus is in (allowed to scrape internal port)
   prometheusNamespace: monitoring
+  # Egress restriction (ADR-024 §S6). DEFAULT false = egress stays
+  # UNrestricted (the policy is Ingress-only), which is the historical
+  # posture and lets tenant-api reach Prometheus (metric discovery),
+  # the K8s API (federation ConfigMap store), the git forge (PR mode),
+  # and DNS without enumeration.
+  #
+  # ⛔ Blast radius: setting egress.enabled=true flips the policy to
+  # DENY-by-default for ALL outbound traffic — you MUST then allow every
+  # destination tenant-api needs. The block below ships DNS + the
+  # Prometheus discovery port (9090); your cluster's K8s API server and
+  # git-forge egress are deployment-specific, so add them via extraEgress
+  # before enabling, or tenant-api writes/federation will break.
+  egress:
+    enabled: false
+    # Port tenant-api uses to query Prometheus for metric discovery.
+    prometheusPort: 9090
+    # Extra egress rules merged verbatim (K8s API 443, git forge, etc.).
+    # Required when egress.enabled=true in a real cluster.
+    extraEgress: []
 
 # Prometheus scrape annotations
 podAnnotations:

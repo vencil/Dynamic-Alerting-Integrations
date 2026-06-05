@@ -181,6 +181,19 @@ definitions:
       tenant_id:
         type: string
     type: object
+  internal_handler.DiscoverMetricsResponse:
+    properties:
+      metrics:
+        description: Metrics is the sorted list of metric names visible to this tenant.
+        items:
+          type: string
+        type: array
+      truncated:
+        description: |-
+          Truncated is true when the result hit the server-side cap; the
+          caller should narrow with a longer prefix.
+        type: boolean
+    type: object
   internal_handler.GroupBatchRequest:
     properties:
       patch:
@@ -1098,6 +1111,53 @@ paths:
       summary: Replace a tenant's federation metric subset
       tags:
       - federation
+  /api/v1/tenants/{id}/metrics:
+    get:
+      description: |-
+        Lists the metric names that have at least one series
+        carrying {tenant="<id>"} in the last 24h, optionally
+        filtered by a name prefix. Backs the portal recipe-
+        authoring UX (ADR-024 Capability B). Stateless proxy over
+        Prometheus; the result can only contain the tenant's own
+        metrics.
+      parameters:
+      - description: Tenant ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Metric-name prefix filter ([a-zA-Z0-9_:]*)
+        in: query
+        name: q
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_handler.DiscoverMetricsResponse'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "502":
+          description: Bad Gateway
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Discover a tenant's metric names
+      tags:
+      - tenants
   /api/v1/tenants/{id}/validate:
     post:
       consumes:
