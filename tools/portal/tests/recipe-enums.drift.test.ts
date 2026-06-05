@@ -42,4 +42,11 @@ describe('recipe-enums.json ↔ tenant-config.schema.json drift guard', () => {
     expect(ENUMS.patterns.metric).toBe(props.metric.pattern);
     expect(ENUMS.patterns.window).toBe(props.window.pattern);
   });
+  it('severity is the value:severity UI convention (not a schema enum)', () => {
+    // severity has no standalone schema enum (it rides the threshold
+    // value:severity string, enforced by the Go validator). Pin the UI
+    // pair by value so this stays honest.
+    expect(ENUMS.severity).toEqual(['warning', 'critical']);
+    expect(ENUMS.severityDefault).toBe('warning');
+  });
 });

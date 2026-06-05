@@ -67,6 +67,20 @@ describe('RecipeBuilder', () => {
     expect(screen.queryByTestId('field-metric-ghost')).toBeNull();
   });
 
+  it('discovery unavailable: a rejected fetch degrades to a non-blocking note (no ghost)', async () => {
+    const failing = vi.fn(() => Promise.reject(new Error('discovery HTTP 503')));
+    render(<RecipeBuilder tenantId="db-a" fetchMetrics={failing} />);
+    const input = screen.getByTestId('field-metric');
+    fireEvent.change(input, { target: { value: 'anything' } });
+    fireEvent.blur(input, { target: { value: 'anything' } });
+    // it must NOT raise a hard ghost-warn when discovery itself is down
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.queryByTestId('field-metric-ghost')).toBeNull();
+    // and authoring is not blocked: filling the rest still yields YAML
+    fill('field-name', 'q'); fill('field-window', '5m'); fill('field-threshold', '1:warning');
+    expect(screen.getByTestId('yaml-output').textContent).toContain('metric: anything');
+  });
+
   it('GitOps persona (no onSubmit): emits a YAML snippet with the full wrapper', () => {
     render(<RecipeBuilder tenantId="db-a" fetchMetrics={mockFetch(['queue_depth'])} />);
     fill('field-name', 'queue_high');

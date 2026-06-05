@@ -31,7 +31,13 @@ const t = window.__t || ((zh, en) => en);
 
 /* Per-recipe field LAYOUT map (UI concern, not the validation authority;
  * the schema's if/then only covers horizon-vs-window). Order = render
- * order. The metric-typed fields each get their own autocomplete. */
+ * order. The metric-typed fields each get their own autocomplete.
+ *
+ * DEFERRED (S6b-1 scope): `selectors` / `selectors_re` (label filters) are
+ * NOT yet surfaced — the MVP authors whole-metric recipes. Recipes that
+ * commonly want a label filter (rate/ratio status=~"5..", etc.) still work
+ * on the bare metric; a dynamic key→value selectors editor is a fast-follow
+ * (the schema + compiler already accept them). */
 const FIELDS_BY_RECIPE = {
   threshold: ['metric', 'op', 'window', 'threshold', 'severity', 'mode', 'for'],
   rate: ['metric', 'op', 'window', 'threshold', 'severity', 'mode', 'for'],
@@ -169,10 +175,13 @@ function defaultFetchMetrics(tenantId, q, signal) {
  * own debounce + AbortController; ghost validation DECOUPLED from the
  * suggestion list (review Reef 3). Module-scope (jsx-loader-compat). ── */
 function MetricField({ label, value, onChange, tenantId, fetchMetrics, inputClass, required, testid }) {
-  const [query, setQuery] = useState(value || '');
+  // Fully controlled: the input value IS the parent's field value (no local
+  // mirror state). onChange commits every keystroke, so a derived-state copy
+  // would only risk going stale on an external value change (S6b-2 cheap-edit
+  // / programmatic reset). Ghost status is the only local state.
   const [suggestions, setSuggestions] = useState([]);
   const [ghost, setGhost] = useState('idle'); // idle|validating|ok|ghost|unavailable
-  const debounced = useDebouncedValue(query, 300);
+  const debounced = useDebouncedValue(value || '', 300);
   const abortRef = useRef(null);
   const listId = `dl-${testid || label}`;
 
@@ -189,6 +198,10 @@ function MetricField({ label, value, onChange, tenantId, fetchMetrics, inputClas
   }, [debounced, tenantId, fetchMetrics]);
 
   function validateExact(name) {
+    // Blur-time precise check (decoupled from the autocomplete list). A check
+    // in flight when the component unmounts resolves into a no-op setState
+    // (React warns, harmless); blur is infrequent so a tracked abort isn't
+    // worth the complexity here.
     onChange(name);
     if (!name || !tenantId) { setGhost('idle'); return; }
     setGhost('validating');
@@ -203,11 +216,11 @@ function MetricField({ label, value, onChange, tenantId, fetchMetrics, inputClas
       <label className="block text-sm font-medium mb-1">{label}{required ? ' *' : ''}</label>
       <input
         className={inputClass}
-        value={query}
+        value={value || ''}
         list={listId}
         aria-label={label}
         data-testid={testid}
-        onChange={(e) => { setQuery(e.target.value); setGhost('idle'); onChange(e.target.value); }}
+        onChange={(e) => { setGhost('idle'); onChange(e.target.value); }}
         onBlur={(e) => validateExact(e.target.value.trim())}
       />
       <datalist id={listId}>
