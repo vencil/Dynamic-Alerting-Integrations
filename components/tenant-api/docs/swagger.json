@@ -1834,11 +1834,11 @@
             "type": "object",
             "properties": {
                 "base_hash": {
-                    "description": "BaseHash is the source_hash the client got from GET; the write 409s\nif the file changed underneath (optimistic concurrency, Reef 3).",
+                    "description": "BaseHash is the source_hash the client got from GET. REQUIRED —\noptimistic concurrency is the safe default, not opt-in: an empty\nbase_hash would silently disable clobber protection (self-review F2).",
                     "type": "string"
                 },
                 "custom_alerts": {
-                    "description": "CustomAlerts is the desired FULL recipe list (collection-replace —\nthe client owns the array, having loaded it via GET). Empty/null\ndeletes the `_custom_alerts` key entirely (Reef 2).",
+                    "description": "CustomAlerts is the desired FULL recipe list (collection-replace —\nthe client owns the array, having loaded it via GET). A POINTER so an\nABSENT field (nil) is rejected — a truncated/buggy request must NOT\nbe read as \"delete every recipe\" (self-review F1, a data-loss\nfootgun). An explicit empty array `[]` IS the intentional delete-all\n(Reef 2).",
                     "type": "array",
                     "items": {
                         "type": "object",

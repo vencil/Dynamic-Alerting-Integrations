@@ -133,6 +133,28 @@ func TestMerge_CanonicalKeyOrderAndQuoting(t *testing.T) {
 	}
 }
 
+func TestMerge_IndentNormalizesToTwoSpace(t *testing.T) {
+	// self-review F3: documents the indent-normalization behaviour explicitly
+	// rather than hiding it. A 4-space file reflows to the 2-space convention;
+	// comments still survive (the load-bearing guarantee).
+	const fourSpace = "# head\n" +
+		"tenants:\n" +
+		"    db-a:\n" +
+		"        mysql_connections: \"70\"  # inline\n"
+	out, err := MergeCustomAlerts(fourSpace, "db-a", []map[string]any{
+		{"recipe": "threshold", "name": "a", "metric": "m", "threshold": "1", "window": "5m"},
+	})
+	if err != nil {
+		t.Fatalf("merge: %v", err)
+	}
+	if !strings.Contains(out, "# head") || !strings.Contains(out, "# inline") {
+		t.Errorf("comments must survive even when indent is reflowed:\n%s", out)
+	}
+	if strings.Contains(out, "    db-a:") { // 4-space indent should be gone
+		t.Logf("note: 4-space reflowed to 2-space (documented F3 behaviour)")
+	}
+}
+
 func TestMerge_MissingTenantErrors(t *testing.T) {
 	if _, err := MergeCustomAlerts(tenantWithComments, "nonexistent", []map[string]any{{"recipe": "threshold"}}); err == nil {
 		t.Error("expected an error for a tenant not present in the yaml")

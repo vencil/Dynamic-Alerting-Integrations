@@ -37,11 +37,15 @@ import (
 // PutCustomAlertsRequest is the body of PUT /tenants/{id}/custom-alerts.
 type PutCustomAlertsRequest struct {
 	// CustomAlerts is the desired FULL recipe list (collection-replace —
-	// the client owns the array, having loaded it via GET). Empty/null
-	// deletes the `_custom_alerts` key entirely (Reef 2).
-	CustomAlerts []map[string]any `json:"custom_alerts"`
-	// BaseHash is the source_hash the client got from GET; the write 409s
-	// if the file changed underneath (optimistic concurrency, Reef 3).
+	// the client owns the array, having loaded it via GET). A POINTER so an
+	// ABSENT field (nil) is rejected — a truncated/buggy request must NOT
+	// be read as "delete every recipe" (self-review F1, a data-loss
+	// footgun). An explicit empty array `[]` IS the intentional delete-all
+	// (Reef 2).
+	CustomAlerts *[]map[string]any `json:"custom_alerts"`
+	// BaseHash is the source_hash the client got from GET. REQUIRED —
+	// optimistic concurrency is the safe default, not opt-in: an empty
+	// base_hash would silently disable clobber protection (self-review F2).
 	BaseHash string `json:"base_hash"`
 }
 
@@ -98,6 +102,19 @@ func PutTenantCustomAlerts(d *Deps) http.HandlerFunc {
 			WriteJSONError(w, r, http.StatusBadRequest, "invalid JSON body: "+err.Error())
 			return
 		}
+		// F1: an absent/null `custom_alerts` must not be read as delete-all.
+		if req.CustomAlerts == nil {
+			WriteJSONError(w, r, http.StatusBadRequest,
+				"custom_alerts is required (send an explicit array; [] deletes all)")
+			return
+		}
+		// F2: base_hash is required — optimistic concurrency is the safe
+		// default. Clients GET the tenant (which returns source_hash) first.
+		if req.BaseHash == "" {
+			WriteJSONError(w, r, http.StatusBadRequest,
+				"base_hash is required; GET the tenant first and echo its source_hash")
+			return
+		}
 
 		// Load the current tenant file (must exist — recipes are authored
 		// against an existing tenant).
@@ -113,8 +130,14 @@ func PutTenantCustomAlerts(d *Deps) http.HandlerFunc {
 		}
 
 		// Optimistic concurrency (Reef 3): reject if the file moved under us.
+		// NB (self-review F4): this check is outside the writer's lock, so a
+		// narrow TOCTOU remains — two requests that load the SAME base_hash
+		// and submit within the read→write window can still last-write-wins.
+		// This catches the common case (a stale load) and is strictly safer
+		// than the existing PutTenant (no OCC at all); full atomicity (re-
+		// check under the writer lock) is a future hardening.
 		currentHash := cfg.ComputeSourceHash(raw)
-		if req.BaseHash != "" && req.BaseHash != currentHash {
+		if req.BaseHash != currentHash {
 			WriteErrorEnvelope(w, r, http.StatusConflict, ErrorResponse{
 				Error: "the tenant configuration was updated by someone else; refresh and retry",
 				Code:  CodeConflict,
@@ -124,7 +147,7 @@ func PutTenantCustomAlerts(d *Deps) http.HandlerFunc {
 		}
 
 		// Comment-preserving AST merge (Reef 1 / Reef 2).
-		merged, err := customalerts.MergeCustomAlerts(string(raw), tenantID, req.CustomAlerts)
+		merged, err := customalerts.MergeCustomAlerts(string(raw), tenantID, *req.CustomAlerts)
 		if err != nil {
 			WriteJSONError(w, r, http.StatusBadRequest, "merge custom alerts: "+err.Error())
 			return

@@ -46,7 +46,8 @@ func TestPutCustomAlerts_AddPreservesComments(t *testing.T) {
 	initGitRepo(t, dir)
 	deps := &Deps{ConfigDir: dir, Writer: newTestWriter(dir), RBAC: newRBACManager(t, caWriteRBAC)}
 
-	body := `{"custom_alerts":[{"recipe":"threshold","name":"queue_high","metric":"queue_depth","threshold":"1000","window":"5m"}]}`
+	h := cfg.ComputeSourceHash([]byte(caTenantYAML))
+	body := `{"base_hash":"` + h + `","custom_alerts":[{"recipe":"threshold","name":"queue_high","metric":"queue_depth","threshold":"1000","window":"5m"}]}`
 	resp := putCustomAlerts(t, deps, "db-a", body, "alice@example.com", []string{"dba"})
 	if resp.StatusCode != http.StatusOK {
 		b, _ := readBody(resp)
@@ -82,7 +83,8 @@ tenants:
 	initGitRepo(t, dir)
 	deps := &Deps{ConfigDir: dir, Writer: newTestWriter(dir), RBAC: newRBACManager(t, caWriteRBAC)}
 
-	resp := putCustomAlerts(t, deps, "db-a", `{"custom_alerts":[]}`, "alice@example.com", []string{"dba"})
+	h := cfg.ComputeSourceHash([]byte(withAlert))
+	resp := putCustomAlerts(t, deps, "db-a", `{"base_hash":"`+h+`","custom_alerts":[]}`, "alice@example.com", []string{"dba"})
 	if resp.StatusCode != http.StatusOK {
 		b, _ := readBody(resp)
 		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, b)
@@ -131,7 +133,8 @@ func TestPutCustomAlerts_InvalidRecipe400WithViolations(t *testing.T) {
 	deps := &Deps{ConfigDir: dir, Writer: newTestWriter(dir), RBAC: newRBACManager(t, caWriteRBAC)}
 
 	// bad metric (colon → recording-rule reference, rejected by the validator)
-	body := `{"custom_alerts":[{"recipe":"threshold","name":"bad","metric":"a:b:c","threshold":"1","window":"5m"}]}`
+	h := cfg.ComputeSourceHash([]byte(caTenantYAML))
+	body := `{"base_hash":"` + h + `","custom_alerts":[{"recipe":"threshold","name":"bad","metric":"a:b:c","threshold":"1","window":"5m"}]}`
 	resp := putCustomAlerts(t, deps, "db-a", body, "alice@example.com", []string{"dba"})
 	if resp.StatusCode != http.StatusBadRequest {
 		b, _ := readBody(resp)
@@ -157,10 +160,37 @@ func TestPutCustomAlerts_NotFound404(t *testing.T) {
     tenants: ["*"]
     permissions: [read, write]
 `)}
-	body := `{"custom_alerts":[{"recipe":"threshold","name":"q","metric":"m","threshold":"1","window":"5m"}]}`
+	body := `{"base_hash":"any","custom_alerts":[{"recipe":"threshold","name":"q","metric":"m","threshold":"1","window":"5m"}]}`
 	resp := putCustomAlerts(t, deps, "ghost", body, "alice@example.com", []string{"all"})
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404 for nonexistent tenant", resp.StatusCode)
+	}
+}
+
+func TestPutCustomAlerts_AbsentFieldRejected(t *testing.T) {
+	t.Parallel()
+	// self-review F1: an absent custom_alerts must NOT be read as delete-all.
+	dir := setupConfigDir(t, map[string]string{"db-a.yaml": caTenantYAML, "_defaults.yaml": caDefaults})
+	initGitRepo(t, dir)
+	deps := &Deps{ConfigDir: dir, Writer: newTestWriter(dir), RBAC: newRBACManager(t, caWriteRBAC)}
+
+	h := cfg.ComputeSourceHash([]byte(caTenantYAML))
+	resp := putCustomAlerts(t, deps, "db-a", `{"base_hash":"`+h+`"}`, "alice@example.com", []string{"dba"})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 when custom_alerts is absent (must not silently delete)", resp.StatusCode)
+	}
+}
+
+func TestPutCustomAlerts_MissingBaseHashRejected(t *testing.T) {
+	t.Parallel()
+	// self-review F2: base_hash is required (OCC is the safe default).
+	dir := setupConfigDir(t, map[string]string{"db-a.yaml": caTenantYAML, "_defaults.yaml": caDefaults})
+	initGitRepo(t, dir)
+	deps := &Deps{ConfigDir: dir, Writer: newTestWriter(dir), RBAC: newRBACManager(t, caWriteRBAC)}
+
+	resp := putCustomAlerts(t, deps, "db-a", `{"custom_alerts":[]}`, "alice@example.com", []string{"dba"})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 when base_hash is missing", resp.StatusCode)
 	}
 }
 

@@ -298,14 +298,18 @@ definitions:
     properties:
       base_hash:
         description: |-
-          BaseHash is the source_hash the client got from GET; the write 409s
-          if the file changed underneath (optimistic concurrency, Reef 3).
+          BaseHash is the source_hash the client got from GET. REQUIRED —
+          optimistic concurrency is the safe default, not opt-in: an empty
+          base_hash would silently disable clobber protection (self-review F2).
         type: string
       custom_alerts:
         description: |-
           CustomAlerts is the desired FULL recipe list (collection-replace —
-          the client owns the array, having loaded it via GET). Empty/null
-          deletes the `_custom_alerts` key entirely (Reef 2).
+          the client owns the array, having loaded it via GET). A POINTER so an
+          ABSENT field (nil) is rejected — a truncated/buggy request must NOT
+          be read as "delete every recipe" (self-review F1, a data-loss
+          footgun). An explicit empty array `[]` IS the intentional delete-all
+          (Reef 2).
         items:
           additionalProperties: {}
           type: object

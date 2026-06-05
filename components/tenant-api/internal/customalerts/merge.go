@@ -68,7 +68,13 @@ func MergeCustomAlerts(rawYAML, tenantID string, recipes []map[string]any) (stri
 
 	var buf bytes.Buffer
 	enc := yaml.NewEncoder(&buf)
-	enc.SetIndent(2) // match the platform's 2-space conf.d convention
+	// SetIndent(2) matches the platform's 2-space conf.d convention, under
+	// which a file round-trips unchanged. CAVEAT (self-review F3): a tenant
+	// file authored with a DIFFERENT indent (e.g. 4-space) is re-emitted at
+	// 2 spaces — comments survive, but the whole file reflows to convention.
+	// Acceptable while conf.d is uniformly 2-space; source-indent detection
+	// is a future hardening if non-conventional files appear.
+	enc.SetIndent(2)
 	if err := enc.Encode(&doc); err != nil {
 		return "", fmt.Errorf("re-encode tenant yaml: %w", err)
 	}
