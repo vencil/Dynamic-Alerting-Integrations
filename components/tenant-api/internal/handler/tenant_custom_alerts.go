@@ -159,15 +159,22 @@ func PutTenantCustomAlerts(d *Deps) http.HandlerFunc {
 		// surfaces here — return all of them by name/index so the UI can
 		// point at the offending rule, not just reject opaquely.
 		var mcfg cfg.ThresholdConfig
-		if yaml.Unmarshal([]byte(merged), &mcfg) == nil {
-			if viol := cfg.ValidateTenantCustomAlerts(tenantID, mcfg.Tenants[tenantID], cfg.MaxCustomRecipesDefault); len(viol) > 0 {
-				violations := make([]Violation, 0, len(viol))
-				for _, v := range viol {
-					violations = append(violations, Violation{Field: "_custom_alerts", Reason: v})
-				}
-				WriteValidationErrors(w, r, violations)
-				return
+		if err := yaml.Unmarshal([]byte(merged), &mcfg); err != nil {
+			// The merge produces YAML via the encoder, so this should be
+			// unreachable — if it fires, our merge logic is at fault (a
+			// server bug), not the client's input. Fail-fast as 500, not a
+			// misleading 400.
+			WriteJSONError(w, r, http.StatusInternalServerError,
+				"internal error: merged config is not parseable: "+err.Error())
+			return
+		}
+		if viol := cfg.ValidateTenantCustomAlerts(tenantID, mcfg.Tenants[tenantID], cfg.MaxCustomRecipesDefault); len(viol) > 0 {
+			violations := make([]Violation, 0, len(viol))
+			for _, v := range viol {
+				violations = append(violations, Violation{Field: "_custom_alerts", Reason: v})
 			}
+			WriteValidationErrors(w, r, violations)
+			return
 		}
 
 		// Commit via the shared writer (re-validates schema + custom alerts,
