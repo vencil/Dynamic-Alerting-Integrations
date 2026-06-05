@@ -30,6 +30,7 @@ tests:
         alertname: Custom_p99_latency__http_request_duration_seconds__gt__w5m__q0_99__for1m
         exp_alerts:
           - exp_labels:
+              component: custom
               severity: warning
               tenant: shop-a
               recipe: p99_latency

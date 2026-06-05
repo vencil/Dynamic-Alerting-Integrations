@@ -441,6 +441,36 @@ def _build_tenant_routes(routing_configs: dict[str, dict], allowed_domains: list
     return routes, receivers, warnings
 
 
+def _build_custom_alert_routes() -> tuple[list[dict], list[dict]]:
+    """Build the platform-static Custom Alerts isolation route + firehose receiver.
+
+    #741 S7/S8. ALWAYS emitted (tenant-agnostic), and prepended AHEAD of all
+    generated routes at ConfigMap assembly (assemble_configmap /
+    _merge_routes_receivers_inhibits) for two reasons:
+
+      1. Durability: generate_alertmanager_routes.py --apply REPLACES route.routes
+         (it does not append), so a route that lived only in the base ConfigMap
+         would be silently dropped on the next --apply. Emitting it here keeps it
+         present across regeneration.
+      2. Correctness: the enforced NOC route uses `continue: true` and its
+         matchers are OPTIONAL — a matcher-less enforced route matches ALL alerts,
+         so without an earlier `continue: false` custom route, tenant custom alerts
+         would leak into the platform NOC receiver (defeating the isolation gate).
+
+    Silent mode is NOT handled here — it rides the CustomRecipeSilent sentinel +
+    inhibit (ADR-003), so this route only governs page-mode delivery + grouping.
+    """
+    route = {
+        "matchers": ['component="custom"'],
+        "group_by": ["tenant", "alertname"],
+        "group_wait": "30s",
+        "group_interval": "5m",
+        "receiver": "custom-alerts-firehose",
+        "continue": False,
+    }
+    return [route], [{"name": "custom-alerts-firehose"}]
+
+
 def generate_routes(routing_configs: dict[str, dict], allowed_domains: list[str] | None = None, enforced_routing: dict | None = None) -> tuple[list[dict], list[dict], list[str]]:
     """Generate Alertmanager route tree + receivers from routing configs.
 

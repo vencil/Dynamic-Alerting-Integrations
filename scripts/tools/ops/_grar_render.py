@@ -31,6 +31,27 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 
+from _grar_routes import _build_custom_alert_routes  # noqa: E402
+
+
+def _inject_custom_alert_isolation(routes: list[dict], receivers: list[dict]) -> tuple[list[dict], list[dict]]:
+    """Prepend the platform-static Custom Alerts isolation route + firehose
+    receiver (#741 S7/S8) so the final ConfigMap always isolates component=custom
+    ahead of the enforced NOC route, surviving the route-REPLACE on --apply.
+
+    Idempotent: skips if a component="custom" route / the firehose receiver is
+    already present, so re-merging an already-injected config does not duplicate.
+    """
+    cust_routes, cust_receivers = _build_custom_alert_routes()
+    has_custom_route = any(
+        'component="custom"' in r.get("matchers", []) for r in (routes or []))
+    out_routes = list(routes or []) if has_custom_route else cust_routes + list(routes or [])
+
+    have = {r["name"] for r in (receivers or [])}
+    add_recv = [r for r in cust_receivers if r["name"] not in have]
+    out_receivers = list(receivers or []) + add_recv
+    return out_routes, out_receivers
+
 
 def render_output(routes: list[dict], receivers: list[dict], inhibit_rules: list[dict] | None = None) -> str:
     """Render Alertmanager route + receiver + inhibit config as YAML fragment.
@@ -126,6 +147,10 @@ def assemble_configmap(base: dict, routes: list[dict], receivers: list[dict], in
     """
     merged = dict(base)
 
+    # S7/S8 (#741): ensure the Custom Alerts isolation route + firehose receiver
+    # are present and FIRST, regardless of what generate_routes produced.
+    routes, receivers = _inject_custom_alert_isolation(routes, receivers)
+
     # Merge routes into base route
     merged_route = dict(merged.get("route", {}))
     merged_route["routes"] = routes
@@ -193,6 +218,10 @@ def _merge_routes_receivers_inhibits(existing: dict, routes: list[dict],
 
     Returns merged config dict.
     """
+    # S7/S8 (#741): keep the Custom Alerts isolation route + firehose receiver
+    # present and FIRST across --apply (which REPLACES route.routes).
+    routes, receivers = _inject_custom_alert_isolation(routes, receivers)
+
     if routes:
         if "route" not in existing:
             existing["route"] = {}

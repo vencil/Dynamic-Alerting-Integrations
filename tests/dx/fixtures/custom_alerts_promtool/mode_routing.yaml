@@ -38,6 +38,7 @@ tests:
         exp_alerts:
           # shop-a → mode=page (would route to the pager)
           - exp_labels:
+              component: custom
               severity: warning
               tenant: shop-a
               recipe: rate
@@ -55,8 +56,10 @@ tests:
               runbook_url: "http://rb/shop"
               owner: team-shop
               tier: gold
-          # web-b → mode=silent (S8 would route to null/log-only, NOT the pager)
+          # web-b → mode=silent (S7/S8: suppressed by the CustomRecipeSilent
+          # sentinel + inhibit, NOT route-to-null; stays a dashboard-only ALERTS series)
           - exp_labels:
+              component: custom
               severity: warning
               tenant: web-b
               recipe: rate
@@ -74,3 +77,19 @@ tests:
               runbook_url: "http://rb/web"
               owner: team-web
               tier: silver
+      # S7/S8: the single global silent sentinel fires ONLY for the silent tenant
+      # (web-b), never the page tenant (shop-a). Alertmanager uses it as an inhibit
+      # SOURCE (equal:[tenant,name]) to suppress web-b's notification while leaving
+      # shop-a's page alert untouched — per-recipe silence on one vectorized rule.
+      - eval_time: 11m
+        alertname: CustomRecipeSilent
+        exp_alerts:
+          - exp_labels:
+              severity: none
+              tenant: web-b
+              name: web_5xx
+            exp_annotations:
+              summary: "Custom recipe [web_5xx] is silent for web-b"
+              summary_zh: "web-b 的自訂告警 [web_5xx] 處於靜默模式"
+              description: "The recipe is still evaluated and visible as an ALERTS series (dashboard-only); its notifications are suppressed via inhibit, not deleted."
+              description_zh: "此自訂告警仍會評估並可於監控面板（ALERTS series）查看，通知經 inhibit 抑制而非刪除。"
