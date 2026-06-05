@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""sync_tool_registry.py — 從 tool-registry.yaml 同步 Hub 卡片 + TOOL_META + JSX frontmatter
+"""sync_tool_registry.py — 從 tool-registry.yaml 同步 Hub 卡片 + CUSTOM_FLOW_MAP + JSX frontmatter
 
 從 tool-registry.yaml (單一真相源) 自動更新：
-  1. docs/assets/jsx-loader.html 的 TOOL_META 物件
+  1. docs/assets/jsx-loader.html 的 CUSTOM_FLOW_MAP 物件（tool key → component path）
   2. docs/interactive/index.html 的卡片 data-audience + 新卡片插入
   3. JSX frontmatter 的 audience/tags（--sync-frontmatter）
 
@@ -41,47 +41,31 @@ REGISTRY_PATH = PROJECT_ROOT / "docs" / "assets" / "tool-registry.yaml"
 HUB_PATH = PROJECT_ROOT / "docs" / "interactive" / "index.html"
 LOADER_PATH = PROJECT_ROOT / "docs" / "assets" / "jsx-loader.html"
 
-# Default SVG icons per icon class (used for new cards)
-ICON_SVGS = {
-    "validation": (
-        '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" '
-        'stroke="currentColor" stroke-width="2" stroke-linecap="round" '
-        'stroke-linejoin="round"><path d="M9 12l2 2 4-4"/>'
-        '<circle cx="12" cy="12" r="10"/></svg>'
-    ),
-    "cli": (
-        '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" '
-        'stroke="currentColor" stroke-width="2" stroke-linecap="round" '
-        'stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/>'
-        '<line x1="12" y1="19" x2="20" y2="19"/></svg>'
-    ),
-    "rules": (
-        '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" '
-        'stroke="currentColor" stroke-width="2" stroke-linecap="round" '
-        'stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 '
-        '0 0 2 2h12a2 2 0 0 0 2-2V8z"/>'
-        '<polyline points="14 2 14 8 20 8"/></svg>'
-    ),
-    "wizard": (
-        '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" '
-        'stroke="currentColor" stroke-width="2" stroke-linecap="round" '
-        'stroke-linejoin="round"><circle cx="12" cy="12" r="10"/>'
-        '<path d="M12 16v-4"/><path d="M12 8h.01"/></svg>'
-    ),
-}
-
 
 # ---------------------------------------------------------------------------
 # Registry parser (reused from lint script)
 # ---------------------------------------------------------------------------
 def parse_registry(path: str) -> list:
-    """Parse tool-registry.yaml without PyYAML."""
+    """Parse tool-registry.yaml without PyYAML.
+
+    Indentation-aware enough for the registry's subset of YAML:
+      - inline list  `audience: [a, b]` and inline dict `title: { en: x }`
+      - block list   `audience:\\n  - a\\n  - b`
+      - block dict    `title:\\n    en: X\\n    zh: Y`
+
+    A field with an EMPTY value opens a *pending block*; whether that block is
+    a list or a dict is decided by the following lines (`- item` → list,
+    deeper-indented `key: val` → dict). This is why we must NOT eagerly write
+    `current[key] = ""` for the empty scalar — doing so shadowed the block and
+    made every list/dict field parse as "" (the data-audience blanking bug).
+    """
     with open(path, encoding="utf-8") as f:
         lines = f.readlines()
 
     tools = []
     current: dict = {}
-    current_key = ""
+    pending_key = None   # field that opened a block (awaiting its - / nested lines)
+    pending_indent = -1  # column of that field; nested dict entries indent past it
 
     for raw_line in lines:
         line = raw_line.rstrip("\n")
@@ -91,23 +75,49 @@ def parse_registry(path: str) -> list:
             continue
         if stripped == "tools:":
             continue
+        indent = len(line) - len(line.lstrip(" "))
 
         m_tool = re.match(r"^- key:\s*(.+)$", stripped)
         if m_tool:
             if current:
                 tools.append(current)
             current = {"key": m_tool.group(1).strip()}
+            pending_key, pending_indent = None, -1
+            continue
+
+        # Block-list item `- value` → append to the pending block field.
+        m_sub = re.match(r"^- (.+)$", stripped)
+        if m_sub and not stripped.startswith("- key:"):
+            if pending_key is not None:
+                current.setdefault(pending_key, [])
+                if isinstance(current[pending_key], list):
+                    # Strip surrounding quotes for parity with the inline-list /
+                    # dict / scalar paths (so `- "platform"` → platform).
+                    current[pending_key].append(
+                        m_sub.group(1).strip().strip("'\"")
+                    )
             continue
 
         m_field = re.match(r"^([a-z_]+):\s*(.*)$", stripped)
-        if m_field and not stripped.startswith("- "):
+        if m_field:
             key = m_field.group(1)
             val = m_field.group(2).strip()
-            current_key = key
 
+            # Deeper-indented `key: val` under an open block → nested dict entry
+            # (e.g. en:/zh: under title:/desc:).
+            if pending_key is not None and indent > pending_indent:
+                block = current.get(pending_key)
+                if not isinstance(block, dict):
+                    block = {}
+                    current[pending_key] = block
+                block[key] = val.strip("'\"")
+                continue
+
+            # Otherwise this is a new field on the current tool.
             if val.startswith("["):
                 items = re.findall(r"[^\[\],\s]+(?:\s[^\[\],]+)?", val)
                 current[key] = [i.strip().strip("'\"") for i in items if i.strip()]
+                pending_key, pending_indent = None, -1
                 continue
 
             if val.startswith("{"):
@@ -117,17 +127,16 @@ def parse_registry(path: str) -> list:
                 ):
                     d[pair.group(1)] = pair.group(2).strip()
                 current[key] = d
+                pending_key, pending_indent = None, -1
                 continue
 
-            current[key] = val.strip("'\"")
-            continue
-
-        m_sub = re.match(r"^- (.+)$", stripped)
-        if m_sub and not stripped.startswith("- key:"):
-            if current_key not in current:
-                current[current_key] = []
-            if isinstance(current[current_key], list):
-                current[current_key].append(m_sub.group(1).strip())
+            if val:
+                current[key] = val.strip("'\"")
+                pending_key, pending_indent = None, -1
+            else:
+                # Empty value → a block (list or dict) follows. Defer; the next
+                # lines decide its shape.
+                pending_key, pending_indent = key, indent
             continue
 
     if current:
@@ -136,57 +145,61 @@ def parse_registry(path: str) -> list:
 
 
 # ---------------------------------------------------------------------------
-# TOOL_META sync
+# CUSTOM_FLOW_MAP sync (jsx-loader.html tool key → component path)
 # ---------------------------------------------------------------------------
-def generate_tool_meta(tools: list) -> str:
-    """Generate the TOOL_META JS object from registry."""
-    lines = ["      var TOOL_META = {"]
+# Historical note: this path used to sync a `var TOOL_META = {...}` object that
+# carried title/desc/path per tool. TOOL_META lived inside the legacy
+# `renderJSX()` in-browser-transform path, which was removed when every tool
+# migrated to ESM dist-bundles (TRK-230z). The surviving key→path map is
+# `CUSTOM_FLOW_MAP` — a flat `'key': '../path.jsx'` object that both the
+# single-component loader and the custom-flow builder resolve against. The
+# old regex (`var TOOL_META = {...}`) silently no longer matched, so the sync
+# was a dead no-op that always errored. We now sync CUSTOM_FLOW_MAP instead.
+def generate_flow_map(tools: list) -> str:
+    """Generate the CUSTOM_FLOW_MAP JS object from the registry."""
+    lines = ["  var CUSTOM_FLOW_MAP = {"]
     for i, tool in enumerate(tools):
         key = tool["key"]
-        title_obj = tool.get("title", {})
-        title = title_obj.get("en", key) if isinstance(title_obj, dict) else str(title_obj)
-        desc_obj = tool.get("desc", {})
-        desc = desc_obj.get("en", "") if isinstance(desc_obj, dict) else str(desc_obj)
         file_path = tool.get("file", f"{key}.jsx")
         path = f"../{file_path}"
         comma = "," if i < len(tools) - 1 else ""
-        lines.append(
-            f"        '{key}': {{ title: '{_js_escape(title)}', "
-            f"desc: '{_js_escape(desc)}', path: '{path}' }}{comma}"
-        )
-    lines.append("      };")
+        lines.append(f"    '{key}': '{path}'{comma}")
+    lines.append("  };")
     return "\n".join(lines)
 
 
-def _js_escape(s: str) -> str:
-    """Escape single quotes for JS string."""
-    return s.replace("'", "\\'").replace("→", "→")
+def sync_tool_meta(tools: list, dry_run: bool, verbose: bool):
+    """Update CUSTOM_FLOW_MAP in jsx-loader.html.
 
-
-def sync_tool_meta(tools: list, dry_run: bool, verbose: bool) -> bool:
-    """Update TOOL_META in jsx-loader.html. Returns True if changed."""
+    Returns True if changed, False if already in sync, and **None** on a fatal
+    condition (the CUSTOM_FLOW_MAP block is missing) — the caller must treat
+    None distinctly from the False no-op and fail loud, not silently succeed.
+    """
     content = LOADER_PATH.read_text(encoding="utf-8")
 
-    # Find existing TOOL_META block
+    # Find existing CUSTOM_FLOW_MAP block (2-space indent, see jsx-loader.html)
     pattern = re.compile(
-        r"(      var TOOL_META = \{.*?\};)",
+        r"(  var CUSTOM_FLOW_MAP = \{.*?\};)",
         re.DOTALL,
     )
     match = pattern.search(content)
     if not match:
-        print("ERROR: Could not find TOOL_META in jsx-loader.html", file=sys.stderr)
-        return False
+        print(
+            "ERROR: Could not find CUSTOM_FLOW_MAP in jsx-loader.html",
+            file=sys.stderr,
+        )
+        return None
 
     old_block = match.group(1)
-    new_block = generate_tool_meta(tools)
+    new_block = generate_flow_map(tools)
 
     if old_block.strip() == new_block.strip():
         if verbose:
-            print("[tool_meta] No changes needed")
+            print("[flow_map] No changes needed")
         return False
 
     if dry_run:
-        print("[tool_meta] Would update TOOL_META ({} entries)".format(len(tools)))
+        print("[flow_map] Would update CUSTOM_FLOW_MAP ({} entries)".format(len(tools)))
         if verbose:
             print("  OLD lines:", old_block.count("\n") + 1)
             print("  NEW lines:", new_block.count("\n") + 1)
@@ -194,55 +207,49 @@ def sync_tool_meta(tools: list, dry_run: bool, verbose: bool) -> bool:
 
     new_content = content.replace(old_block, new_block)
     LOADER_PATH.write_text(new_content, encoding="utf-8")
-    print("[tool_meta] Updated TOOL_META ({} entries)".format(len(tools)))
+    print("[flow_map] Updated CUSTOM_FLOW_MAP ({} entries)".format(len(tools)))
     return True
 
 
 # ---------------------------------------------------------------------------
 # Hub card sync
 # ---------------------------------------------------------------------------
-def extract_existing_cards(hub_html: str) -> dict:
-    """Extract existing card HTML blocks keyed by JSX file path."""
-    cards = {}
-    # Match each <a class="card ... href="...component=../xxx.jsx">...</a>
-    pattern = re.compile(
-        r'(<a\s+class="card[^"]*"[^>]*href="[^"]*component=\.\./([^"]+\.jsx)"'
-        r"[^>]*>.*?</a>)",
-        re.DOTALL,
-    )
-    for match in pattern.finditer(hub_html):
-        jsx_file = match.group(2)
-        cards[jsx_file] = match.group(1)
-    return cards
+def extract_existing_cards(section_body: str) -> set:
+    """Return the set of JSX file paths that already have a linter-card.
+
+    Operates on the `#linter-cards` block body. Each card is a one-line
+    `<a class="card" data-audience="..." href="<file>.jsx">Title</a>`, so the
+    href值 (a direct `<file>.jsx` path, NOT a `component=../` query) is the
+    stable identity. The old regex required `component=../`, which no card in
+    the block actually uses — so it matched nothing and every tool looked
+    "missing", while a separately-broken insert marker meant nothing was ever
+    inserted. We key on the bare href instead.
+    """
+    return set(re.findall(r'href="([^"]+\.jsx)"', section_body))
 
 
-def generate_card_html(tool: dict, extra_class: str = "") -> str:
-    """Generate a single card HTML from registry entry."""
+def generate_card_html(tool: dict) -> str:
+    """Generate a single static linter-card entry from a registry entry.
+
+    Matches the `#linter-cards` block format in docs/interactive/index.html:
+
+        <!-- key (file) -->
+        <a class="card" data-audience="..." href="file">Title</a>
+
+    The *visible* cards are rendered client-side from the registry fetch; these
+    hidden entries exist purely so lint_tool_consistency.py can statically
+    verify每個 tool 有對應卡片且 data-audience 一致。Audience is sorted +
+    comma-joined to match what the linter compares (it sorts both sides).
+    """
     key = tool["key"]
     file_path = tool.get("file", f"{key}.jsx")
-    audience = ",".join(tool.get("audience", []))
-    icon_class = tool.get("icon", "wizard")
+    audience = ",".join(sorted(tool.get("audience", [])))
     title_obj = tool.get("title", {})
     title = title_obj.get("en", key) if isinstance(title_obj, dict) else str(title_obj)
-    desc_obj = tool.get("desc", {})
-    desc = desc_obj.get("en", "") if isinstance(desc_obj, dict) else str(desc_obj)
-    tags = tool.get("tags", [])
-    icon_svg = ICON_SVGS.get(icon_class, ICON_SVGS["wizard"])
-
-    cls = f'card{" " + extra_class if extra_class else ""}'
-    href = f"../assets/jsx-loader.html?component=../{file_path}"
-
-    tag_html = "".join(f'<span class="tag">{t}</span>' for t in tags)
 
     return (
-        f'    <a class="{cls}" data-audience="{audience}" href="{href}">\n'
-        f'      <div class="card-icon {icon_class}">\n'
-        f"        {icon_svg}\n"
-        f"      </div>\n"
-        f'      <div class="card-title">{title}</div>\n'
-        f'      <div class="card-desc">{desc}</div>\n'
-        f'      <div class="tags">{tag_html}</div>\n'
-        f"    </a>"
+        f"  <!-- {key} ({file_path}) -->\n"
+        f'  <a class="card" data-audience="{audience}" href="{file_path}">{title}</a>'
     )
 
 
@@ -252,10 +259,12 @@ def sync_hub_cards(tools: list, dry_run: bool, verbose: bool) -> bool:
     original = content
     changes = []
 
-    # 1. Update data-audience for existing cards
+    # 1. Populate data-audience for existing cards (sorted, comma-joined).
+    #    Previously this blanked the attribute because parse_registry returned
+    #    "" for the block-list `audience:` field (see the parser fix above).
     for tool in tools:
         file_path = tool.get("file", f"{tool['key']}.jsx")
-        audience = ",".join(tool.get("audience", []))
+        audience = ",".join(sorted(tool.get("audience", [])))
 
         # Find card with this file path
         pattern = re.compile(
@@ -271,29 +280,30 @@ def sync_hub_cards(tools: list, dry_run: bool, verbose: bool) -> bool:
                 content = content.replace(old_frag, new_frag)
                 changes.append(f"  audience: {tool['key']} → {audience}")
 
-    # 2. Find missing cards and insert them at end of Advanced Tools section
-    existing = extract_existing_cards(content)
-    missing = []
-    for tool in tools:
-        file_path = tool.get("file", f"{tool['key']}.jsx")
-        if file_path not in existing:
-            # Also check getting-started/ prefix
-            if not any(file_path in k for k in existing):
-                missing.append(tool)
-
-    if missing:
-        # Insert before the closing </div> of Advanced Tools cards section
-        # Find the last </a> in Advanced Tools, then add after it
-        # Look for the pattern: cards in advanced section ending before Documentation
-        insert_marker = '  <div class="section-title">Documentation</div>'
-        if insert_marker in content:
-            new_cards = "\n\n".join(generate_card_html(t) for t in missing)
-            content = content.replace(
-                insert_marker,
-                f"{new_cards}\n  </div>\n\n  {insert_marker}",
+    # 2. Find missing cards and insert them into the #linter-cards block.
+    section_re = re.compile(
+        r'(<div[^>]*id="linter-cards"[^>]*>)(.*?)(\n</div>)',
+        re.DOTALL,
+    )
+    sec = section_re.search(content)
+    if sec:
+        section_body = sec.group(2)
+        existing = extract_existing_cards(section_body)
+        missing = [
+            t for t in tools
+            if t.get("file", f"{t['key']}.jsx") not in existing
+        ]
+        if missing:
+            new_cards = "\n".join(generate_card_html(t) for t in missing)
+            new_section = (
+                sec.group(1) + section_body.rstrip("\n")
+                + "\n" + new_cards + sec.group(3)
             )
+            content = content[: sec.start()] + new_section + content[sec.end():]
             for t in missing:
                 changes.append(f"  new card: {t['key']}")
+    elif verbose:
+        print("[hub] WARNING: #linter-cards block not found; skipped insertion")
 
     if content == original:
         if verbose:
@@ -455,6 +465,10 @@ def main():
     print()
 
     changed_meta = sync_tool_meta(tools, args.dry_run, args.verbose)
+    if changed_meta is None:
+        # Fatal: jsx-loader.html lacks the CUSTOM_FLOW_MAP block. Fail loud
+        # (dev-rule #5) rather than letting the swallowed error exit 0.
+        sys.exit(EXIT_CALLER_ERROR)
     changed_hub = sync_hub_cards(tools, args.dry_run, args.verbose)
 
     changed_fm = False

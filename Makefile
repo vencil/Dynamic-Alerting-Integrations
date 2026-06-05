@@ -590,7 +590,7 @@ verify-release: ## 驗證 tools/v* release artefact (sha256 + cosign keyless). �
 		$(if $(DOWNLOAD_DIR),--download-dir $(DOWNLOAD_DIR)) \
 		$(if $(QUIET),--quiet)
 
-sync-tools: ## 從 tool-registry.yaml 同步 Hub 卡片 + TOOL_META
+sync-tools: ## 從 tool-registry.yaml 同步 Hub 卡片 + CUSTOM_FLOW_MAP
 	@python3 ./scripts/tools/dx/sync_tool_registry.py --verbose
 
 .PHONY: generate-fixtures
