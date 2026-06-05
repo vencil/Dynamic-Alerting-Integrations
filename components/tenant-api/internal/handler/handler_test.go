@@ -183,6 +183,12 @@ func TestGetTenant_Success(t *testing.T) {
 	if detail.RawYAML == "" {
 		t.Error("TenantDetail.RawYAML should not be empty")
 	}
+	// ADR-024 §S6b-2: GET returns source_hash (the client's base_hash for
+	// PUT .../custom-alerts optimistic concurrency). Must be the SHA-256[:16]
+	// of the raw file.
+	if len(detail.SourceHash) != 16 {
+		t.Errorf("TenantDetail.SourceHash = %q (len %d), want a 16-char hash", detail.SourceHash, len(detail.SourceHash))
+	}
 }
 
 func TestGetTenant_NotFound(t *testing.T) {

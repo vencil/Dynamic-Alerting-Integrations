@@ -2,6 +2,7 @@ package handler
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
 	"net/http"
 	"os"
@@ -123,6 +124,50 @@ func TestPutCustomAlerts_MatchingBaseHashSucceeds(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		b, _ := readBody(resp)
 		t.Fatalf("status = %d, want 200 with matching base_hash; body: %s", resp.StatusCode, b)
+	}
+	// G3: the response returns a fresh source_hash (the client's next base_hash),
+	// which must differ from the one just consumed (the file changed).
+	b, _ := readBody(resp)
+	var pr PutCustomAlertsResponse
+	if err := json.Unmarshal([]byte(b), &pr); err != nil {
+		t.Fatalf("response not JSON: %v; body: %s", err, b)
+	}
+	if len(pr.SourceHash) != 16 || pr.SourceHash == hash {
+		t.Errorf("response source_hash = %q, want a fresh 16-char hash != the input %q", pr.SourceHash, hash)
+	}
+}
+
+// Reef 4 "pre-existing poison" — a hand-written bad recipe already in the file
+// must surface (by name) when the tenant adds a perfectly valid new one, so the
+// UI can point at the offending rule rather than reject opaquely.
+func TestPutCustomAlerts_PreExistingPoisonLocatable(t *testing.T) {
+	t.Parallel()
+	poisoned := `tenants:
+  db-a:
+    mysql_connections: "70"
+    _custom_alerts:
+      - recipe: threshold
+        name: legacy_bad
+        metric: "a:b:c"
+        threshold: "1"
+        window: 5m
+`
+	dir := setupConfigDir(t, map[string]string{"db-a.yaml": poisoned, "_defaults.yaml": caDefaults})
+	initGitRepo(t, dir)
+	deps := &Deps{ConfigDir: dir, Writer: newTestWriter(dir), RBAC: newRBACManager(t, caWriteRBAC)}
+	h := cfg.ComputeSourceHash([]byte(poisoned))
+
+	// client adds a VALID recipe but resends the array incl the bad legacy one
+	body := `{"base_hash":"` + h + `","custom_alerts":[` +
+		`{"recipe":"threshold","name":"legacy_bad","metric":"a:b:c","threshold":"1","window":"5m"},` +
+		`{"recipe":"threshold","name":"good_new","metric":"queue_depth","threshold":"100:warning","window":"5m"}]}`
+	resp := putCustomAlerts(t, deps, "db-a", body, "alice@example.com", []string{"dba"})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (the pre-existing bad recipe blocks the write)", resp.StatusCode)
+	}
+	b, _ := readBody(resp)
+	if !strings.Contains(b, "legacy_bad") && !strings.Contains(b, "a:b:c") {
+		t.Errorf("400 violations must locate the offending pre-existing recipe; body: %s", b)
 	}
 }
 

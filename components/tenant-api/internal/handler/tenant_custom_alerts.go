@@ -147,10 +147,15 @@ func PutTenantCustomAlerts(d *Deps) http.HandlerFunc {
 			return
 		}
 
-		// Comment-preserving AST merge (Reef 1 / Reef 2).
+		// Comment-preserving AST merge (Reef 1 / Reef 2). A merge error means
+		// the EXISTING tenant file is malformed (not a document / no
+		// `tenants.<id>` mapping) — a server-state issue, not the client's
+		// (valid JSON) input. Surface 500, not a misleading 400 (self-review
+		// G4, consistent with the unparseable-merged 500 below).
 		merged, err := customalerts.MergeCustomAlerts(string(raw), tenantID, *req.CustomAlerts)
 		if err != nil {
-			WriteJSONError(w, r, http.StatusBadRequest, "merge custom alerts: "+err.Error())
+			WriteJSONError(w, r, http.StatusInternalServerError,
+				"internal error: cannot merge into the tenant file: "+err.Error())
 			return
 		}
 
