@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"sync"
 	"testing"
+	"time"
 )
 
 // errProbe is a transport-style error (not an *APIError) used to simulate a
@@ -150,6 +151,117 @@ func TestCircuitBreaker_InterruptedFailureStreakStaysClosed(t *testing.T) {
 		t.Errorf("state = %q, want closed (success resets the consecutive streak)", got)
 	}
 }
+
+// TestCircuitBreaker_RateLimitTripsBreaker is TRK-319 acceptance criterion 1: a
+// run of rate-limited 403s (now flagged as degradation) must open the breaker
+// after cbConsecutiveFailures — previously they sailed through as "successful"
+// 4xx and the write plane had zero protection during a rate-limit window.
+func TestCircuitBreaker_RateLimitTripsBreaker(t *testing.T) {
+	t.Parallel()
+	cb := NewCircuitBreaker("test-ratelimit-trip")
+
+	// 403 with the RateLimited flag set (as the client roundTrip would set it),
+	// but NO RetryAfter — so the gate doesn't arm and we can observe the pure
+	// failure-counting path open the breaker at exactly cbConsecutiveFailures.
+	rateLimited := func() ([]byte, http.Header, error) {
+		return nil, nil, &APIError{StatusCode: http.StatusForbidden, RateLimited: true}
+	}
+	for i := 0; i < cbConsecutiveFailures; i++ {
+		if got := cb.State(); i < cbConsecutiveFailures && got == "open" {
+			t.Fatalf("breaker opened early at call %d", i)
+		}
+		_, _, err := cb.Execute(rateLimited)
+		var apiErr *APIError
+		if !errors.As(err, &apiErr) || !apiErr.RateLimited {
+			t.Fatalf("call %d: err = %v, want rate-limited APIError propagated", i, err)
+		}
+	}
+	if got := cb.State(); got != "open" {
+		t.Fatalf("state after %d rate-limited 403s = %q, want open (TRK-319 criterion 1)", cbConsecutiveFailures, got)
+	}
+}
+
+// TestCircuitBreaker_PermissionForbiddenDoesNotTrip is TRK-319 acceptance
+// criterion 2: a permission 403 (NO rate-limit flag) must keep the breaker
+// closed — the rate-limit change must not regress the deterministic-4xx
+// exclusion that stops one bad-token tenant from opening the breaker for all.
+func TestCircuitBreaker_PermissionForbiddenDoesNotTrip(t *testing.T) {
+	t.Parallel()
+	cb := NewCircuitBreaker("test-perm-403")
+	perm := func() ([]byte, http.Header, error) {
+		return nil, nil, &APIError{StatusCode: http.StatusForbidden} // RateLimited=false
+	}
+	for i := 0; i < cbConsecutiveFailures*3; i++ {
+		_, _, _ = cb.Execute(perm)
+	}
+	if got := cb.State(); got != "closed" {
+		t.Errorf("state after %d permission 403s = %q, want closed", cbConsecutiveFailures*3, got)
+	}
+}
+
+// TestCircuitBreaker_RetryAfterGateSuppressesProbe covers the TRK-319 Retry-After
+// alignment: once the breaker opens on rate-limited 403s carrying a Retry-After
+// LONGER than cbOpenTimeout, the gate must suppress even the half-open probe
+// until the advised back-off elapses — so we don't keep punching a still-active
+// secondary rate limit every 60s. Uses an injected clock for determinism.
+func TestCircuitBreaker_RetryAfterGateSuppressesProbe(t *testing.T) {
+	t.Parallel()
+	cb := NewCircuitBreaker("test-retryafter-gate")
+
+	base := time.Unix(1_700_000_000, 0)
+	var nowVal atomicTime
+	nowVal.set(base)
+	cb.now = nowVal.get
+
+	const retryAfter = 300 * time.Second // ≫ cbOpenTimeout (60s)
+	rl := func() ([]byte, http.Header, error) {
+		return nil, nil, &APIError{StatusCode: http.StatusForbidden, RateLimited: true, RetryAfter: retryAfter}
+	}
+
+	// Trip the breaker open; the failure that opens it arms the gate to base+300s.
+	for i := 0; i < cbConsecutiveFailures; i++ {
+		_, _, _ = cb.Execute(rl)
+	}
+	if got := cb.State(); got != "open" {
+		t.Fatalf("state = %q, want open", got)
+	}
+
+	// Advance past gobreaker's 60s open window but BEFORE the 300s Retry-After.
+	// The half-open probe must be suppressed by the gate — fn must NOT be called.
+	nowVal.set(base.Add(cbOpenTimeout + 5*time.Second))
+	called := false
+	_, _, err := cb.Execute(func() ([]byte, http.Header, error) {
+		called = true
+		return []byte("probe"), nil, nil
+	})
+	if !errors.Is(err, ErrCircuitOpen) {
+		t.Errorf("within Retry-After window: err = %v, want ErrCircuitOpen", err)
+	}
+	if called {
+		t.Error("half-open probe fired inside the Retry-After window — gate failed to suppress it (TRK-319)")
+	}
+
+	// After the Retry-After elapses, the gate itself must clear — it no longer
+	// suppresses calls (gobreaker's own real-clock recovery is a separate concern,
+	// exercised by TestCircuitBreaker_TripsOnConsecutiveDegradation; here we assert
+	// the GATE's window logic in isolation via the injected clock).
+	if cb.rateLimitGateOpen(base.Add(retryAfter + time.Second)) {
+		t.Error("gate still open after the Retry-After window elapsed — should have cleared")
+	}
+	if !cb.rateLimitGateOpen(base.Add(retryAfter - time.Second)) {
+		t.Error("gate should still be open one second BEFORE the Retry-After window ends")
+	}
+}
+
+// atomicTime is a tiny mutex-guarded clock holder so the injected now func is
+// race-safe (the breaker reads it; the test writes it between phases).
+type atomicTime struct {
+	mu sync.Mutex
+	t  time.Time
+}
+
+func (a *atomicTime) set(t time.Time) { a.mu.Lock(); a.t = t; a.mu.Unlock() }
+func (a *atomicTime) get() time.Time  { a.mu.Lock(); defer a.mu.Unlock(); return a.t }
 
 // TestCircuitSnapshot confirms breakers register for the /metrics snapshot.
 func TestCircuitSnapshot(t *testing.T) {
