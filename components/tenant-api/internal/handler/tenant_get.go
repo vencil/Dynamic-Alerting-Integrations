@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -80,7 +81,10 @@ func GetTenant(d *Deps) http.HandlerFunc {
 		if err != nil {
 			// A parse error here means the tenant file is not valid YAML; surface
 			// it rather than returning a 200 with silently-empty custom_alerts.
-			WriteJSONError(w, r, http.StatusInternalServerError, "failed to parse tenant custom alerts: "+err.Error())
+			// Keep the raw parser error (which can echo file contents) in the
+			// server log only; return a stable, non-sensitive message to clients.
+			slog.Error("failed to parse tenant custom alerts", "tenant", tenantID, "err", err)
+			WriteJSONError(w, r, http.StatusInternalServerError, "failed to parse tenant custom alerts")
 			return
 		}
 
