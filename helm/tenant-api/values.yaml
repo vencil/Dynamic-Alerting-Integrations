@@ -77,8 +77,10 @@ tenantApi:
   # may QUEUE behind the one in-flight write before further writes are shed with a
   # 503 + Retry-After (instead of piling up unbounded goroutines blocked on the
   # lock and running orphan writes after the client already timed out). Total
-  # admitted = 1 in-flight + this. 0 is valid (shed everything past the single
-  # in-flight write). Read as TA_WRITE_QUEUE_DEPTH (integer). Emitted only when set.
+  # admitted = 1 in-flight + this. An explicit 0 IS valid and IS emitted (shed
+  # everything past the single in-flight write) — the template gates on
+  # `ne (toString .) ""`, not a plain `if`, so a numeric 0 isn't dropped as falsy.
+  # Read as TA_WRITE_QUEUE_DEPTH (integer). Only the empty-string default skips it.
   writeQueueDepth: ""
 
   # HTTP server tuning (issue #144). Defaults match the binary's

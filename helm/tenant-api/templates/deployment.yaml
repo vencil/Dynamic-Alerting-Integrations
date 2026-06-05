@@ -120,11 +120,15 @@ spec:
             - name: TA_GIT_FETCH_TIMEOUT
               value: {{ .Values.tenantApi.gitFetchTimeout | quote }}
             {{- end }}
-            {{- if .Values.tenantApi.writeQueueDepth }}
+            {{- if ne (toString .Values.tenantApi.writeQueueDepth) "" }}
             # Write-plane load-shedding queue depth (TRK-320) — bounds writes
             # queued behind the single in-flight write; past it → 503 + Retry-After
-            # instead of unbounded goroutine pileup. Emitted only when set;
-            # otherwise the binary's default (5) applies.
+            # instead of unbounded goroutine pileup. Emitted whenever SET (incl. an
+            # explicit 0 = shed everything past the single in-flight write, which
+            # the binary honours); only the empty-string default skips it. NB the
+            # `ne (toString …) ""` gate — a plain `if` would treat numeric 0 as
+            # falsy and silently drop a deliberate 0. Otherwise the binary's
+            # default (5) applies.
             - name: TA_WRITE_QUEUE_DEPTH
               value: {{ .Values.tenantApi.writeQueueDepth | quote }}
             {{- end }}
