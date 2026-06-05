@@ -221,7 +221,7 @@ func PutGroup(d *Deps) http.HandlerFunc {
 			return
 		}
 
-		if err := d.Writer.WriteGroupsFile(email, string(yamlBytes)); err != nil {
+		if err := d.Writer.WriteGroupsFile(r.Context(), email, string(yamlBytes)); err != nil {
 			if errors.Is(err, gitops.ErrConflict) {
 				WriteJSONError(w, r,http.StatusConflict, err.Error())
 				return
@@ -300,7 +300,7 @@ func DeleteGroup(d *Deps) http.HandlerFunc {
 			return
 		}
 
-		if err := d.Writer.WriteGroupsFile(email, string(yamlBytes)); err != nil {
+		if err := d.Writer.WriteGroupsFile(r.Context(), email, string(yamlBytes)); err != nil {
 			if errors.Is(err, gitops.ErrConflict) {
 				WriteJSONError(w, r,http.StatusConflict, err.Error())
 				return

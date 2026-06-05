@@ -186,7 +186,11 @@ func PutTenantCustomAlerts(d *Deps) http.HandlerFunc {
 		// Commit via the shared writer (re-validates schema + custom alerts,
 		// attributes the commit to the operator).
 		email := rbac.RequestEmail(r)
-		if err := d.Writer.Write(tenantID, email, merged); err != nil {
+		if err := d.Writer.Write(r.Context(), tenantID, email, merged); err != nil {
+			if errors.Is(err, gitops.ErrWriteOverloaded) {
+				WriteOverloaded(w, r)
+				return
+			}
 			if errors.Is(err, gitops.ErrConflict) {
 				WriteJSONError(w, r, http.StatusConflict, err.Error())
 				return

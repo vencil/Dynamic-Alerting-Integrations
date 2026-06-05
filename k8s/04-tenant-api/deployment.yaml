@@ -116,6 +116,13 @@ spec:
             # to 503 instead of pinning the write lock. Raise for a slow on-prem forge.
             - name: TA_GIT_FETCH_TIMEOUT
               value: "5s"
+            # Write-plane load-shedding queue depth (TRK-320 / ADR-023 §C). The
+            # write plane is a single writer; bounds writes queued behind the one
+            # in-flight write. Past it → 503 + Retry-After instead of unbounded
+            # goroutine pileup + orphan writes after the client timed out. Total
+            # admitted = 1 in-flight + this. Default 5; tune for burst tolerance.
+            - name: TA_WRITE_QUEUE_DEPTH
+              value: "5"
           ports:
             - name: api
               containerPort: 8080

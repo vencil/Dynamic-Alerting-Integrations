@@ -172,7 +172,11 @@ func PutFederationPolicy(d *handler.Deps) http.HandlerFunc {
 			handler.WriteJSONError(w, r, http.StatusInternalServerError, "marshal whitelist: "+err.Error())
 			return
 		}
-		if err := d.Writer.WriteFederationPolicyFile(email, string(yamlBytes), trailer); err != nil {
+		if err := d.Writer.WriteFederationPolicyFile(r.Context(), email, string(yamlBytes), trailer); err != nil {
+			if errors.Is(err, gitops.ErrWriteOverloaded) {
+				handler.WriteOverloaded(w, r)
+				return
+			}
 			if errors.Is(err, gitops.ErrConflict) {
 				handler.WriteJSONError(w, r, http.StatusConflict, err.Error())
 				return
@@ -395,7 +399,11 @@ func PutTenantFederation(d *handler.Deps) http.HandlerFunc {
 			handler.WriteJSONError(w, r, http.StatusInternalServerError, "marshal subset: "+err.Error())
 			return
 		}
-		if err := d.Writer.WriteFederationSubsetFile(tenantID, email, string(yamlBytes)); err != nil {
+		if err := d.Writer.WriteFederationSubsetFile(r.Context(), tenantID, email, string(yamlBytes)); err != nil {
+			if errors.Is(err, gitops.ErrWriteOverloaded) {
+				handler.WriteOverloaded(w, r)
+				return
+			}
 			if errors.Is(err, gitops.ErrConflict) {
 				handler.WriteJSONError(w, r, http.StatusConflict, err.Error())
 				return

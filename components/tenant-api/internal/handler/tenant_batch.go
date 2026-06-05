@@ -147,8 +147,13 @@ func BatchTenants(d *Deps) http.HandlerFunc {
 				return
 			}
 
-			result, err := d.Writer.WritePRBatch(batchOps, email)
+			result, err := d.Writer.WritePRBatch(r.Context(), batchOps, email)
 			if err != nil {
+				// TRK-320: admission queue full → shed with 503 + Retry-After.
+				if errors.Is(err, gitops.ErrWriteOverloaded) {
+					WriteOverloaded(rw, r)
+					return
+				}
 				// TRK-318: in-lock base fetch timed out → forge degraded, lock
 				// released. Retry-hinting 503 with Retry-After, not a 500 (the batch
 				// never wrote from a stale base, so a retry is safe).
@@ -204,7 +209,7 @@ func BatchTenants(d *Deps) http.HandlerFunc {
 		// v2.6.0: Async mode — submit to goroutine pool and return immediately
 		if r.URL.Query().Get("async") == "true" && d.Tasks != nil {
 			task := d.Tasks.Submit(taskID, func(ctx context.Context) ([]async.TaskResult, error) {
-				results := executeBatchOps(d.Writer, d.ConfigDir, req.Operations, email, groups, d.RBAC, d.Policy)
+				results := executeBatchOps(ctx, d.Writer, d.ConfigDir, req.Operations, email, groups, d.RBAC, d.Policy)
 				asyncResults := make([]async.TaskResult, len(results))
 				for i, br := range results {
 					asyncResults[i] = async.TaskResult{
@@ -227,7 +232,7 @@ func BatchTenants(d *Deps) http.HandlerFunc {
 		}
 
 		// Synchronous mode (default, backward compatible)
-		results := executeBatchOps(d.Writer, d.ConfigDir, req.Operations, email, groups, d.RBAC, d.Policy)
+		results := executeBatchOps(r.Context(), d.Writer, d.ConfigDir, req.Operations, email, groups, d.RBAC, d.Policy)
 
 		// Compute summary
 		successes := 0
@@ -260,7 +265,7 @@ func BatchTenants(d *Deps) http.HandlerFunc {
 
 // executeBatchOps runs batch operations synchronously and returns results.
 // This function is shared between sync and async paths to ensure consistency.
-func executeBatchOps(w *gitops.Writer, configDir string, ops []BatchOperation, email string, idpGroups []string, rbacMgr *rbac.Manager, policyMgr *policy.Manager) []BatchResult {
+func executeBatchOps(ctx context.Context, w *gitops.Writer, configDir string, ops []BatchOperation, email string, idpGroups []string, rbacMgr *rbac.Manager, policyMgr *policy.Manager) []BatchResult {
 	results := make([]BatchResult, 0, len(ops))
 	for _, op := range ops {
 		if err := ValidateTenantID(op.TenantID); err != nil {
@@ -281,21 +286,23 @@ func executeBatchOps(w *gitops.Writer, configDir string, ops []BatchOperation, e
 				continue
 			}
 		}
-		result := applyPatch(w, configDir, op, email)
+		result := applyPatch(ctx, w, configDir, op, email)
 		results = append(results, result)
 	}
 	return results
 }
 
 // applyPatch applies a single patch operation to a tenant config file.
-func applyPatch(w *gitops.Writer, configDir string, op BatchOperation, authorEmail string) BatchResult {
+func applyPatch(ctx context.Context, w *gitops.Writer, configDir string, op BatchOperation, authorEmail string) BatchResult {
 	// Build minimal YAML content from the patch map
 	yamlContent := buildPatchYAML(op.TenantID, op.Patch)
 
-	if err := w.Write(op.TenantID, authorEmail, yamlContent); err != nil {
+	if err := w.Write(ctx, op.TenantID, authorEmail, yamlContent); err != nil {
 		msg := err.Error()
 		if errors.Is(err, gitops.ErrConflict) {
 			msg = "conflict: retry after refresh"
+		} else if errors.Is(err, gitops.ErrWriteOverloaded) {
+			msg = "write plane busy: retry shortly"
 		}
 		return BatchResult{TenantID: op.TenantID, Status: "error", Message: msg}
 	}

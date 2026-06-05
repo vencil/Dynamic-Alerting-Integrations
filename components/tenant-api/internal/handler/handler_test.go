@@ -786,7 +786,7 @@ func TestValidateAndWrite_AgreeOnTenantOnlyMetricBody(t *testing.T) {
 
 	// Path 2 — the real write path → must commit (agree with the dry-run), not
 	// fail validation on the body /validate just blessed.
-	if err := newTestWriter(configDir).Write("db-a", "op@example.com", body); err != nil {
+	if err := newTestWriter(configDir).Write(context.Background(), "db-a", "op@example.com", body); err != nil {
 		t.Fatalf("write rejected a body that /validate blessed (validate/write disagree): %v", err)
 	}
 }
@@ -820,7 +820,7 @@ func TestValidateAndWrite_AgreeRejectingFullConfigBody(t *testing.T) {
 	}
 
 	// Path 2 — the real write path → must also reject (agree with the dry-run).
-	if err := newTestWriter(configDir).Write("db-a", "op@example.com", body); err == nil {
+	if err := newTestWriter(configDir).Write(context.Background(), "db-a", "op@example.com", body); err == nil {
 		t.Fatal("write accepted a full-config body the dry-run rejected (validate/write disagree)")
 	}
 }

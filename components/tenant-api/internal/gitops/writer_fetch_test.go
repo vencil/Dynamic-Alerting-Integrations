@@ -1,6 +1,7 @@
 package gitops
 
 import (
+	"context"
 	"errors"
 	"os"
 	"os/exec"
@@ -120,7 +121,7 @@ func TestWritePR_AnchorsOnFreshOriginBase(t *testing.T) {
 
 	// Tenant B opens a PR from the (stale) local base.
 	w := NewWriter(dir, dir)
-	res, err := w.WritePR("db-b", "bob@example.com", "tenants:\n  db-b:\n    _silent_mode: \"critical\"\n")
+	res, err := w.WritePR(context.Background(), "db-b", "bob@example.com", "tenants:\n  db-b:\n    _silent_mode: \"critical\"\n")
 	if err != nil {
 		t.Fatalf("WritePR: %v", err)
 	}
@@ -178,7 +179,7 @@ func TestWritePR_FetchTimeout_ReturnsForgeDegraded(t *testing.T) {
 	w.gitWaitDelay = 500 * time.Millisecond
 
 	start := time.Now()
-	_, err := w.WritePR("db-a", "alice@example.com", validTenantYAML)
+	_, err := w.WritePR(context.Background(), "db-a", "alice@example.com", validTenantYAML)
 	elapsed := time.Since(start)
 
 	if !errors.Is(err, ErrForgeDegraded) {
@@ -194,7 +195,7 @@ func TestWritePR_FetchTimeout_ReturnsForgeDegraded(t *testing.T) {
 	// fetch, but it RUNS — proving the mutex wasn't pinned by the first call).
 	done := make(chan struct{})
 	go func() {
-		_, _ = w.WritePR("db-a", "alice@example.com", validTenantYAML)
+		_, _ = w.WritePR(context.Background(), "db-a", "alice@example.com", validTenantYAML)
 		close(done)
 	}()
 	select {
@@ -242,7 +243,7 @@ func TestWritePR_PreservesLocalBaseCommit(t *testing.T) {
 	gitRun(t, authorDir, "push", "origin", "main")
 
 	w := NewWriter(dir, dir)
-	if _, err := w.WritePR("db-b", "bob@example.com", "tenants:\n  db-b:\n    _silent_mode: \"warning\"\n"); err != nil {
+	if _, err := w.WritePR(context.Background(), "db-b", "bob@example.com", "tenants:\n  db-b:\n    _silent_mode: \"warning\"\n"); err != nil {
 		t.Fatalf("WritePR: %v", err)
 	}
 
@@ -266,7 +267,7 @@ func TestWritePR_NoOriginSkipsFetch(t *testing.T) {
 	dir := initRepoOnMain(t)
 	w := NewWriter(dir, dir) // no remote added
 
-	if _, err := w.WritePR("db-a", "alice@example.com", validTenantYAML); err != nil {
+	if _, err := w.WritePR(context.Background(), "db-a", "alice@example.com", validTenantYAML); err != nil {
 		t.Fatalf("WritePR without an origin remote should skip the fetch and succeed, got: %v", err)
 	}
 }

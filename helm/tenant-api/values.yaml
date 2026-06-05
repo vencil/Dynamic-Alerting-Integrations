@@ -72,6 +72,15 @@ tenantApi:
   # (Go duration, e.g. "5s"). Emitted only when set, so a default upgrade is a no-op.
   gitFetchTimeout: ""
 
+  # Write-plane load-shedding queue depth (TRK-320 / ADR-023 §C). Empty → binary
+  # default (5). The write plane is a single writer; this bounds how many writes
+  # may QUEUE behind the one in-flight write before further writes are shed with a
+  # 503 + Retry-After (instead of piling up unbounded goroutines blocked on the
+  # lock and running orphan writes after the client already timed out). Total
+  # admitted = 1 in-flight + this. 0 is valid (shed everything past the single
+  # in-flight write). Read as TA_WRITE_QUEUE_DEPTH (integer). Emitted only when set.
+  writeQueueDepth: ""
+
   # HTTP server tuning (issue #144). Defaults match the binary's
   # hardcoded values pre-#144 so a default Helm upgrade is a no-op;
   # override only when an environment needs different headroom.
