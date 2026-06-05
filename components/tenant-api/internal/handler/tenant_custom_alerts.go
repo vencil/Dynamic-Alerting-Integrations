@@ -72,6 +72,7 @@ type PutCustomAlertsResponse struct {
 // @Failure     400   {object} ErrorResponse
 // @Failure     404   {object} ErrorResponse
 // @Failure     409   {object} ErrorResponse
+// @Failure     500   {object} ErrorResponse
 // @Failure     501   {object} ErrorResponse
 // @Failure     503   {object} ErrorResponse
 // @Router      /api/v1/tenants/{id}/custom-alerts [put]
