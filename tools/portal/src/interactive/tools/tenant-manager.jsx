@@ -15,6 +15,7 @@ dependencies: [
   "tenant-manager/components/ApiNotificationToast.jsx",
   "tenant-manager/components/OverflowBanner.jsx",
   "tenant-manager/components/TenantCard.jsx",
+  "tenant-manager/components/CustomAlertsModal.jsx",
   "_common/hooks/useDebouncedValue.js",
   "_common/hooks/useURLState.js",
   "_common/hooks/useVirtualGrid.js",
@@ -40,6 +41,7 @@ import { GroupSidebar } from './tenant-manager/components/GroupSidebar.jsx';
 import { ApiNotificationToast } from './tenant-manager/components/ApiNotificationToast.jsx';
 import { OverflowBanner } from './tenant-manager/components/OverflowBanner.jsx';
 import { TenantCard } from './tenant-manager/components/TenantCard.jsx';
+import { CustomAlertsModal } from './tenant-manager/components/CustomAlertsModal.jsx';
 import { SavedViewsPanel } from './tenant-manager/components/SavedViewsPanel.jsx';
 import { useDebouncedValue } from './_common/hooks/useDebouncedValue.js';
 import { useModalFocusTrap } from './_common/hooks/useModalFocusTrap.js';
@@ -159,6 +161,8 @@ export default function TenantManager() {
   const [selected, setSelected] = useState(new Set());
   const [modalType, setModalType] = useState(null);
   const [modalData, setModalData] = useState('');
+  // ADR-024 §S6b-2b: the live custom-alert editor opens for one tenant.
+  const [customAlertsTenant, setCustomAlertsTenant] = useState(null);
   const [hoveredCard, setHoveredCard] = useState(null);
   const [activeGroupId, setActiveGroupId] = useState(null);
   // BUG FIX: `compareMode` was referenced at L1441/1444 (Compare Mode
@@ -732,6 +736,11 @@ export default function TenantManager() {
               <button onClick={openSilentModal} style={styles.button}>
                 {t('生成靜默模式 YAML', 'Silent Mode YAML')}
               </button>
+              {selected.size === 1 && (
+                <button onClick={() => setCustomAlertsTenant(Array.from(selected)[0])} style={styles.button}>
+                  {t('自訂告警', 'Custom Alerts')}
+                </button>
+              )}
             </div>
           </div>
         )}
@@ -870,6 +879,13 @@ export default function TenantManager() {
           </div>
         )}
       </div>
+
+      {customAlertsTenant && (
+        <CustomAlertsModal
+          tenantId={customAlertsTenant}
+          onClose={() => setCustomAlertsTenant(null)}
+        />
+      )}
 
       {modalType && (
         <div
