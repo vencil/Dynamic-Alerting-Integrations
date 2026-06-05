@@ -1143,6 +1143,12 @@ paths:
             additionalProperties:
               type: string
             type: object
+        "429":
+          description: Too Many Requests
+          schema:
+            additionalProperties:
+              type: string
+            type: object
         "502":
           description: Bad Gateway
           schema:

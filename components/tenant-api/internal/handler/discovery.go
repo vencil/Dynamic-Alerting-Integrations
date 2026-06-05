@@ -72,8 +72,9 @@ type DiscoverMetricsResponse struct {
 // @Param       q   query    string false "Metric-name prefix filter ([a-zA-Z0-9_:]*)"
 // @Success     200 {object} DiscoverMetricsResponse
 // @Failure     400 {object} map[string]string
-// @Failure     503 {object} map[string]string
+// @Failure     429 {object} map[string]string
 // @Failure     502 {object} map[string]string
+// @Failure     503 {object} map[string]string
 // @Router      /api/v1/tenants/{id}/metrics [get]
 func DiscoverMetrics(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
