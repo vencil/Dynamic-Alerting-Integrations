@@ -3,6 +3,8 @@ package customalerts
 import (
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 // The SPIKE GATE (ADR-024 §S6b-2): prove yaml.v3 yaml.Node surgery can replace
@@ -152,6 +154,33 @@ func TestMerge_IndentNormalizesToTwoSpace(t *testing.T) {
 	}
 	if strings.Contains(out, "    db-a:") { // 4-space indent should be gone
 		t.Logf("note: 4-space reflowed to 2-space (documented F3 behaviour)")
+	}
+}
+
+func TestMerge_NestedSelectorsRoundTrip(t *testing.T) {
+	// Covers valueNode's nested-map branch (selectors / selectors_re). The UI
+	// defers a selectors editor, but the endpoint + merge accept them, so the
+	// round-trip must emit a valid nested mapping.
+	out, err := MergeCustomAlerts(tenantWithComments, "shop-a", []map[string]any{
+		{
+			"recipe": "rate", "name": "http_5xx", "metric": "http_requests_total",
+			"threshold": "50:warning", "window": "5m",
+			"selectors_re": map[string]any{"status": "5.."},
+			"selectors":    map[string]any{"method": "POST"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("merge: %v", err)
+	}
+	for _, frag := range []string{"selectors_re:", "status:", "selectors:", "method:", "POST"} {
+		if !strings.Contains(out, frag) {
+			t.Errorf("nested selector not emitted: %q\n%s", frag, out)
+		}
+	}
+	// re-parse to prove the emitted YAML is valid + the nesting survives
+	var doc map[string]any
+	if err := yaml.Unmarshal([]byte(out), &doc); err != nil {
+		t.Errorf("emitted YAML with selectors does not re-parse: %v\n%s", err, out)
 	}
 }
 
