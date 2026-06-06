@@ -62,7 +62,10 @@ def generate_table_rows(rule_packs_dir: Path) -> Tuple[List[Dict], int, int]:
     Returns:
         (list_of_rows, total_records, total_alerts)
     """
-    yaml_files = sorted(rule_packs_dir.glob("rule-pack-*.yaml"))
+    # #741 S3b: exclude the tenant-authored custom-alerts deployed pack from the
+    # platform rule-pack README table / counts (not platform coverage).
+    yaml_files = sorted(f for f in rule_packs_dir.glob("rule-pack-*.yaml")
+                        if f.stem != "rule-pack-custom-alerts")
 
     if not yaml_files:
         raise FileNotFoundError(f"No rule pack YAML files found in {rule_packs_dir}")

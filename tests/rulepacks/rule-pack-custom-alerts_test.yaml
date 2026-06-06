@@ -1,0 +1,91 @@
+# promtool unit test — Custom Alerts DEPLOYED pack (ADR-024 Capability B, #741 S3b).
+# Exercises the COMMITTED rule-packs/rule-pack-custom-alerts.yaml (compiled from
+# the LIVE conf.d db-b _custom_alerts), unlike the tests/dx compiler goldens which
+# compile the example tree to test the compiler. Run by `make rulepack-promtool-test`
+# and scanned by the Go guard TestRulePackFixturesCarryComponent.
+rule_files:
+  - ../../rule-packs/rule-pack-custom-alerts.yaml
+
+evaluation_interval: 15s
+
+tests:
+  # ── db-b: threshold (page) — connections 200 > 150, NO version label ──
+  - interval: 15s
+    input_series:
+      - series: 'mysql_global_status_threads_connected{tenant="db-b", namespace="db-b", pod="mariadb-0"}'
+        values: '200x48'
+      - series: 'user_threshold{component="custom", metric="mysql_global_status_threads_connected", recipe_id="threshold__mysql_global_status_threads_connected__gt__w5m__for1m", tenant="db-b", severity="warning", name="mariadb_conns_high", mode="page"}'
+        values: '150x48'
+      - series: 'tenant_metadata_info{tenant="db-b", runbook_url="http://rb/db-b", owner="team-db", tier="silver"}'
+        values: '1x48'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: Custom_threshold__mysql_global_status_threads_connected__gt__w5m__for1m
+        exp_alerts:
+          - exp_labels:
+              component: custom
+              severity: warning
+              tenant: db-b
+              recipe: threshold
+              name: mariadb_conns_high
+              mode: page
+              version: default
+              runbook_url: "http://rb/db-b"
+              owner: team-db
+              tier: silver
+            exp_annotations:
+              summary: "Custom alert [mariadb_conns_high] for db-b"
+              summary_zh: "db-b 的自訂告警 [mariadb_conns_high] 觸發"
+              description: "threshold on mysql_global_status_threads_connected: value 200.00 crossed the configured threshold"
+              description_zh: "mysql_global_status_threads_connected 的 threshold: 值 200.00 已越過設定閾值"
+              runbook_url: "http://rb/db-b"
+              owner: team-db
+              tier: silver
+
+  # ── db-b: rate (silent) — slow-query rate 2/s > 1 → fires (mode=silent), and
+  #    the global CustomRecipeSilent sentinel fires for it (drives the inhibit) ──
+  - interval: 15s
+    input_series:
+      - series: 'mysql_global_status_slow_queries{tenant="db-b", namespace="db-b", pod="mariadb-0"}'
+        values: '0+30x48'
+      - series: 'user_threshold{component="custom", metric="mysql_global_status_slow_queries", recipe_id="rate__mysql_global_status_slow_queries__gt__w5m__for1m", tenant="db-b", severity="warning", name="mariadb_slow_query_rate", mode="silent"}'
+        values: '1x48'
+      - series: 'tenant_metadata_info{tenant="db-b", runbook_url="http://rb/db-b", owner="team-db", tier="silver"}'
+        values: '1x48'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: Custom_rate__mysql_global_status_slow_queries__gt__w5m__for1m
+        exp_alerts:
+          - exp_labels:
+              component: custom
+              severity: warning
+              tenant: db-b
+              recipe: rate
+              name: mariadb_slow_query_rate
+              mode: silent
+              version: default
+              runbook_url: "http://rb/db-b"
+              owner: team-db
+              tier: silver
+            exp_annotations:
+              summary: "Custom alert [mariadb_slow_query_rate] for db-b"
+              summary_zh: "db-b 的自訂告警 [mariadb_slow_query_rate] 觸發"
+              description: "rate on mysql_global_status_slow_queries: value 2.00 crossed the configured threshold"
+              description_zh: "mysql_global_status_slow_queries 的 rate: 值 2.00 已越過設定閾值"
+              runbook_url: "http://rb/db-b"
+              owner: team-db
+              tier: silver
+      # The single global sentinel fires ONLY for the silent recipe (db-b /
+      # mariadb_slow_query_rate); Alertmanager uses it as an inhibit source.
+      - eval_time: 11m
+        alertname: CustomRecipeSilent
+        exp_alerts:
+          - exp_labels:
+              severity: none
+              tenant: db-b
+              name: mariadb_slow_query_rate
+            exp_annotations:
+              summary: "Custom recipe [mariadb_slow_query_rate] is silent for db-b"
+              summary_zh: "db-b 的自訂告警 [mariadb_slow_query_rate] 處於靜默模式"
+              description: "The recipe is still evaluated and visible as an ALERTS series (dashboard-only); its notifications are suppressed via inhibit, not deleted."
+              description_zh: "此自訂告警仍會評估並可於監控面板（ALERTS series）查看，通知經 inhibit 抑制而非刪除。"

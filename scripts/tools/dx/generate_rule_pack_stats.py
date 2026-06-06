@@ -127,15 +127,24 @@ def gather_stats() -> dict:
     """
     packs = {}
 
+    # #741 S3b: custom-alerts is a TENANT-authored deployed pack, not platform
+    # coverage — exclude it from the platform "Rule Packs / Alerts" stats badge
+    # (mirrors its omission from generate_platform_data.py's PACK_ORDER).
+    _EXCLUDE = {"custom-alerts"}
+
     # rule-packs/ directory
     for f in sorted(RULE_PACKS_DIR.glob("rule-pack-*.yaml")):
         name = f.stem.replace("rule-pack-", "")
+        if name in _EXCLUDE:
+            continue
         rec, alert = count_rules_in_yaml(f)
         packs[name] = {"recording": rec, "alert": alert}
 
     # k8s ConfigMaps (may have additional alert rules)
     for f in sorted(K8S_RULES_DIR.glob("configmap-rules-*.yaml")):
         name = f.stem.replace("configmap-rules-", "")
+        if name in _EXCLUDE:
+            continue
         rec, alert = count_rules_in_configmap(f)
         if name not in packs:
             packs[name] = {"recording": rec, "alert": alert}

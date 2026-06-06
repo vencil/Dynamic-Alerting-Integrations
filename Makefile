@@ -640,8 +640,12 @@ rulepack-promtool-test: ## promtool 行為單元測試（rule pack 告警 fire/n
 	@for t in tests/rulepacks/*_test.yaml; do echo "== $$t =="; promtool test rules "$$t"; done
 
 .PHONY: custom-alerts-compile
-custom-alerts-compile: ## 從 _custom_alerts 宣告編譯向量化規則（ADR-024 能力 B，#741；S1+S2 為編譯器，部署 pack 留 S3）
-	@python3 ./scripts/tools/dx/compile_custom_alerts.py --config-dir rule-packs/recipes/examples/conf.d
+custom-alerts-compile: ## 從 LIVE conf.d 的 _custom_alerts 編譯部署 pack（ADR-024 能力 B，#741 S3b；source 必須是 exporter 服務的同一 conf.d，否則 recipe_id 對不上 emit）
+	@python3 ./scripts/tools/dx/compile_custom_alerts.py --config-dir components/threshold-exporter/config/conf.d
+
+.PHONY: custom-alerts-compile-check
+custom-alerts-compile-check: ## 驗證 committed rule-pack-custom-alerts.yaml 與 LIVE conf.d 源同步（#741 S3b drift gate）
+	@python3 ./scripts/tools/dx/compile_custom_alerts.py --config-dir components/threshold-exporter/config/conf.d --check
 
 .PHONY: jsx-extract
 jsx-extract: ## 拆 JSX dep（PR-2d pattern）— 用法：make jsx-extract KIND=hook NAME=useFoo PARENT=tenant-manager [SYMBOLS=A,B] [DRY_RUN=1] [FORCE=1]
