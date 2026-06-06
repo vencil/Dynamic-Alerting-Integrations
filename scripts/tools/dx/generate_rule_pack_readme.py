@@ -63,9 +63,11 @@ def generate_table_rows(rule_packs_dir: Path) -> Tuple[List[Dict], int, int]:
         (list_of_rows, total_records, total_alerts)
     """
     # #741 S3b: exclude the tenant-authored custom-alerts deployed pack from the
-    # platform rule-pack README table / counts (not platform coverage).
+    # platform rule-pack README table / counts (not platform coverage). Shared
+    # exclusion set, consistent with generate_rule_pack_stats.py / validate_docs_versions.py.
+    _EXCLUDE = {"custom-alerts"}
     yaml_files = sorted(f for f in rule_packs_dir.glob("rule-pack-*.yaml")
-                        if f.stem != "rule-pack-custom-alerts")
+                        if f.stem.replace("rule-pack-", "") not in _EXCLUDE)
 
     if not yaml_files:
         raise FileNotFoundError(f"No rule pack YAML files found in {rule_packs_dir}")

@@ -449,10 +449,14 @@ def load_rule_packs(rule_packs_dir: str) -> Dict[str, List[Dict]]:
     """Load and parse all rule pack YAML files, return alerts grouped by pack."""
     alerts_by_pack = {}
 
-    # Find all rule-pack-*.yaml files. #741 S3b: skip the tenant-authored
-    # custom-alerts deployed pack — it is not platform alert coverage.
+    # #741 S3b: skip the tenant-authored custom-alerts deployed pack — it is not
+    # platform alert coverage (shared exclusion set, consistent with
+    # generate_rule_pack_stats.py / validate_docs_versions.py).
+    _EXCLUDE = {"custom-alerts"}
+
+    # Find all rule-pack-*.yaml files.
     for yaml_file in sorted(Path(rule_packs_dir).glob("rule-pack-*.yaml")):
-        if yaml_file.stem == "rule-pack-custom-alerts":
+        if yaml_file.stem.replace("rule-pack-", "") in _EXCLUDE:
             continue
         try:
             with open(yaml_file, "r", encoding="utf-8") as f:
