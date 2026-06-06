@@ -108,6 +108,25 @@ def collect_instances(config_dir: Path) -> List[Tuple[str, dict, str, bool]]:
     return triples
 
 
+_NOTICE_TENANT_SAMPLE = 10   # max tenant names per lifecycle notice (CI-log readability)
+
+
+def _summarize_tenants(tenants) -> str:
+    """`<count> tenant(s) (<=N names[, and M more])` for a lifecycle notice line.
+
+    A deprecated/eol SHARED recipe can be declared by hundreds of tenants (sharing
+    is the whole point of vectorization); joining them all makes a multi-kilobyte
+    single-line CI warning that some log collectors truncate mid-line. Lead with
+    the actionable COUNT, then a bounded sample of names. Full per-tenant
+    enumeration belongs in a metric/dashboard, not a log line.
+    """
+    names = sorted(tenants)
+    shown = ", ".join(names[:_NOTICE_TENANT_SAMPLE])
+    if len(names) > _NOTICE_TENANT_SAMPLE:
+        shown += f", and {len(names) - _NOTICE_TENANT_SAMPLE} more"
+    return f"{len(names)} tenant(s) ({shown})"
+
+
 def collect_lifecycle_notices(config_dir: Path) -> List[str]:
     """Human-readable notices for non-active recipes in use (ADR-024 #6).
 
@@ -130,11 +149,13 @@ def collect_lifecycle_notices(config_dir: Path) -> List[str]:
 
     notices: List[str] = []
     for status, recipe in sorted(by_status):
-        tenants = ", ".join(sorted(by_status[(status, recipe)]))
         tail = ("migrate away — it still compiles." if status == "deprecated"
                 else "existing declarations still compile, but new tenant-api "
                      "writes using it are rejected until SRE clears the status.")
-        notices.append(f"recipe {recipe!r} is {status}: declared by tenant(s) {tenants}; {tail}")
+        notices.append(
+            f"recipe {recipe!r} is {status}: "
+            f"{_summarize_tenants(by_status[(status, recipe)])}; {tail}"
+        )
     return notices
 
 

@@ -101,6 +101,7 @@ def test_notices_flag_deprecated_recipe_in_use(monkeypatch):
 def test_deprecated_recipe_still_compiles(monkeypatch, capsys):
     used = {inst["recipe"] for _t, inst, _o, _own in ld.collect_instances(_EXAMPLES)}
     used &= set(shp.RECIPES)
+    assert used, "example conf.d declares no known recipes — fixture changed?"
     target = sorted(used)[0]
     monkeypatch.setitem(shp.RECIPE_STATUS, target, "deprecated")
     # build_pack must NOT raise — deprecated keeps compiling (no silent loss)
@@ -111,8 +112,28 @@ def test_deprecated_recipe_still_compiles(monkeypatch, capsys):
 def test_eol_notice_uses_rejection_wording(monkeypatch):
     used = {inst["recipe"] for _t, inst, _o, _own in ld.collect_instances(_EXAMPLES)}
     used &= set(shp.RECIPES)
+    assert used, "example conf.d declares no known recipes — fixture changed?"
     target = sorted(used)[0]
     monkeypatch.setitem(shp.RECIPE_STATUS, target, "eol")
     joined = "\n".join(ld.collect_lifecycle_notices(_EXAMPLES))
     assert target in joined and "eol" in joined
     assert "rejected until SRE clears" in joined
+
+
+# --- 5. Notice truncation (a deprecated SHARED recipe may have many tenants) --
+
+def test_notice_truncates_large_tenant_list():
+    # A deprecated/eol recipe shared by many tenants must not emit an unbounded
+    # multi-kilobyte single-line warning (some log collectors truncate mid-line).
+    # Lead with the count + a bounded sample of names.
+    summary = ld._summarize_tenants({f"t{i:02d}" for i in range(25)})
+    assert summary.startswith("25 tenant(s) (")
+    assert "t00" in summary                          # first names shown
+    assert f"and {25 - ld._NOTICE_TENANT_SAMPLE} more" in summary
+    assert "t24" not in summary                       # beyond the sample → counted only
+    assert summary.count(",") <= ld._NOTICE_TENANT_SAMPLE   # never the full 25-name join
+
+
+def test_notice_small_list_not_truncated():
+    assert ld._summarize_tenants({"beta", "alpha"}) == "2 tenant(s) (alpha, beta)"
+    assert "more" not in ld._summarize_tenants({"alpha", "beta"})
