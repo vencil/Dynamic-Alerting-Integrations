@@ -16,6 +16,29 @@ func TestRecipeStatus_EmbeddedAllActive(t *testing.T) {
 	}
 }
 
+// parseRecipeStatus must FAIL CLOSED: a degraded/empty/invalid status map would
+// silently disable the eol-expansion guard, so it errors instead of defaulting.
+func TestParseRecipeStatus_FailsClosed(t *testing.T) {
+	bad := map[string]string{
+		"empty statuses":   `{"statuses":{}}`,
+		"missing statuses": `{}`,
+		"invalid value":    `{"statuses":{"x":"bogus"}}`,
+		"not json":         `not json`,
+	}
+	for name, in := range bad {
+		if _, err := parseRecipeStatus([]byte(in)); err == nil {
+			t.Errorf("%s: expected an error (fail closed), got nil", name)
+		}
+	}
+	m, err := parseRecipeStatus([]byte(`{"statuses":{"threshold":"active","x":"eol"}}`))
+	if err != nil {
+		t.Fatalf("valid input errored: %v", err)
+	}
+	if m["x"] != "eol" || m["threshold"] != "active" {
+		t.Errorf("parsed map wrong: %v", m)
+	}
+}
+
 // The inclusive eol guard (ADR-024 §8): freeze GROWTH of eol usage, never
 // collateral-block edits to existing/unrelated recipes.
 func TestEolExpansionViolations(t *testing.T) {

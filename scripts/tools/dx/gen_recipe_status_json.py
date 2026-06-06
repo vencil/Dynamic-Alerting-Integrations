@@ -40,7 +40,7 @@ def _repo_root() -> Path:
     for parent in [p, *p.parents]:
         if (parent / ".git").exists():
             return parent
-    return Path(_THIS_DIR).resolve().parents[3]
+    return Path(_THIS_DIR).resolve().parents[2]
 
 
 def render() -> str:

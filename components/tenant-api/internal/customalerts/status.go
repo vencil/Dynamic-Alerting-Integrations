@@ -18,15 +18,38 @@ var recipeStatusJSON []byte
 var recipeStatus = mustParseRecipeStatus()
 
 func mustParseRecipeStatus() map[string]string {
+	m, err := parseRecipeStatus(recipeStatusJSON)
+	if err != nil {
+		// recipe-status.json is a build-time embedded artifact (generated from the
+		// SSOT + drift-gated), not runtime input — any invalidity is a build bug,
+		// so fail LOUD at startup rather than silently degrade EOL enforcement to
+		// an all-"active" default (which would disable the guard).
+		panic("customalerts: " + err.Error())
+	}
+	return m
+}
+
+// parseRecipeStatus decodes + validates the embedded status map. It FAILS CLOSED:
+// an empty/missing map or an unknown lifecycle value is an error (not a silent
+// default), because a degraded map would silently disable the eol-expansion guard.
+func parseRecipeStatus(data []byte) (map[string]string, error) {
 	var doc struct {
 		Statuses map[string]string `json:"statuses"`
 	}
-	if err := json.Unmarshal(recipeStatusJSON, &doc); err != nil {
-		// The json is a build-time embedded artifact, not runtime input — a parse
-		// failure is a generator/build bug, so fail loud at startup.
-		panic("customalerts: invalid embedded recipe-status.json: " + err.Error())
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return nil, fmt.Errorf("invalid embedded recipe-status.json: %w", err)
 	}
-	return doc.Statuses
+	if len(doc.Statuses) == 0 {
+		return nil, fmt.Errorf("embedded recipe-status.json has empty/missing statuses")
+	}
+	for recipe, status := range doc.Statuses {
+		switch status {
+		case "active", "deprecated", "eol":
+		default:
+			return nil, fmt.Errorf("invalid recipe status %q for recipe %q", status, recipe)
+		}
+	}
+	return doc.Statuses, nil
 }
 
 // RecipeStatus returns a recipe's lifecycle status (active/deprecated/eol),
