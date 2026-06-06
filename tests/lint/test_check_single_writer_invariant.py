@@ -153,6 +153,33 @@ def test_main_exit_codes(tmp_path, monkeypatch):
     assert lint.main() == 0
 
 
+# ── no-HPA assertion ────────────────────────────────────────────────────────
+def test_has_hpa_text():
+    assert lint.has_hpa("kind: HorizontalPodAutoscaler\n") is True
+    assert lint.has_hpa("kind: Deployment\n") is False
+
+
+def test_no_hpa_clean(tmp_path):
+    _write_repo(tmp_path)
+    assert lint.find_hpa(tmp_path) == []
+
+
+def test_hpa_under_chart_flagged(tmp_path):
+    _write_repo(tmp_path)
+    (tmp_path / "helm" / "tenant-api" / "templates" / "hpa.yaml").write_text(
+        "apiVersion: autoscaling/v2\nkind: HorizontalPodAutoscaler\n"
+        "metadata:\n  name: tenant-api\n", encoding="utf-8")
+    findings = lint.check_targets(tmp_path)
+    assert any("HorizontalPodAutoscaler" in f and "hpa.yaml" in f for f in findings)
+
+
+def test_hpa_under_raw_dir_flagged(tmp_path):
+    _write_repo(tmp_path)
+    (tmp_path / "k8s" / "04-tenant-api" / "hpa.yaml").write_text(
+        "kind: HorizontalPodAutoscaler\n", encoding="utf-8")
+    assert lint.find_hpa(tmp_path) != []
+
+
 # ── live dogfood ────────────────────────────────────────────────────────────
 def test_live_repo_honors_invariant():
     repo = Path(__file__).resolve().parents[2]

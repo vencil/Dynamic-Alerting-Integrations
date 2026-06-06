@@ -70,9 +70,9 @@ flowchart TD
 
 靜態檢查只是第一層，**不足以**保證執行期單寫者：
 
-1. **靜態（兩道）** — (a) **Helm render guard**：`replicaCount > 1` 時 chart 直接 `fail`（`helm/tenant-api/templates/deployment.yaml` 頂部），擋掉 install/upgrade 時無意間調大；(b) **commit/CI 靜態 lint**：`check_single_writer_invariant.py` 在 commit 期跨 **chart values + raw `k8s/04-tenant-api/deployment.yaml`** 驗 `replicaCount==1` 且 `strategy: Recreate`，比 render guard 更早、且涵蓋 raw manifest（codify 時即抓到 raw manifest 漏了 `Recreate` 的漂移）。<br>**條件無條件於 `replicaCount`**——原草案寫的「且 `writeMode != read-only`」是錯前提：binary 無 read-only 模式（`--write-mode` ∈ {direct, pr, pr-github, pr-gitlab}）、values.yaml 也無此欄位，寫入恆為開，故 guard 不該有 writeMode 旁路（見「考量的選項 §A」校正）。
+1. **靜態（兩道，僅及 config 撰寫 / deploy-time）** — (a) **Helm render guard**：`replicaCount > 1` 時 chart 直接 `fail`（`helm/tenant-api/templates/deployment.yaml` 頂部），擋掉 install/upgrade 時無意間調大；(b) **commit/CI 靜態 lint** `check_single_writer_invariant.py`：commit 期跨 **chart values + raw `k8s/04-tenant-api/deployment.yaml`** 驗 `replicaCount==1`、`strategy: Recreate`、**template 仍帶 guard**（meta-guard，防有人只拔 guard 不改值）、**且無 HPA 打 tenant-api**（HPA 會 runtime scale >1 繞過 render guard）。<br>**條件無條件於 `replicaCount`**——原草案寫的「且 `writeMode != read-only`」是錯前提：binary 無 read-only 模式（`--write-mode` ∈ {direct, pr, pr-github, pr-gitlab}）、values.yaml 也無此欄位，寫入恆為開，故 guard 不該有 writeMode 旁路（見「考量的選項 §A」校正）。<br>**範圍誠實界定**：這兩道只關閉 **config 撰寫** 向量；`kubectl scale` / 手 patch live Deployment / GitOps controller reconcile 等 **runtime mutation 不在內**，唯一解是 layer-3。（註：`k8s/04-tenant-api/` 為 reference/sample、非 deploy path；lint 守它是 sample 與 chart 的一致性。）
 2. **滾動更新交疊（幽靈副本）** — 靜態檢查抓不到的破口：Deployment 預設 `RollingUpdate`（`maxSurge` 進位為 1），發版時新舊 pod 會短暫同時 Ready、各持 in-process `w.mu`。詳見「考量的選項 §A」。本 ADR 採 `strategy: Recreate` 當零程式碼 interim、K8s Lease 為 deferred 水密艙。
-3. **執行期不變式守衛（deferred）** — K8s Lease / leader-election，是「要 zero-downtime 部署**又**要單寫者」的唯一正解。Trigger 見「Deferred options」。
+3. **執行期不變式守衛（deferred）** — K8s Lease / leader-election。**雙重角色**：既是「要 zero-downtime 部署**又**要單寫者」的唯一正解，也是 layer-1/2 靜態守衛擋不到的 **runtime mutation 向量（`kubectl scale` / 手加 HPA / controller reconcile）的唯一防線**。Trigger 見「Deferred options」。
 
 ## 考量的選項
 
