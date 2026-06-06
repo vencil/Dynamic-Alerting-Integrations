@@ -179,6 +179,7 @@ docker run --rm \
 | `migrate-to-operator` | ConfigMap 格式 → Operator 原生 CRD（含遷移清單與預檢） | `--source-dir <d> --config-dir <d>` |
 | `operator-generate` | 產出 PrometheusRule / AlertmanagerConfig / ServiceMonitor CRD YAML | `--config-dir <dir>` |
 | `operator-check` | 驗證 Operator CRD 部署狀態（5 項檢查 + 診斷） | `--namespace <ns>` |
+| `runtime-audit` ✨#747 | Git rule-packs ↔ Prometheus runtime 唯讀對帳（MISSING / UNHEALTHY / ORPHAN；偵測-only，不自癒） | `--prometheus <url>` 或 `--runtime-json <file>` |
 | `rule-pack-split` | Rule Pack 分層拆分（edge Part 1 + central Parts 2+3） | `--rule-pack <file>` |
 | `rule-pack-diff` ✨v2.8.0 | Rule Pack 兩版本機械比對（added / removed / breaking label schema），upgrade audit 用（#405 Cat D） | `--from <v1.yaml> --to <v2.yaml>` |
 | `silencer-drift-check` ✨v2.8.0 | AM silence 對 v2 rule pack 漂移偵測（offline，吃 amtool silence query -o json dump），cutover 必跑（#405 Cat B） | `--silences-file <json> --rule-source <path>` |

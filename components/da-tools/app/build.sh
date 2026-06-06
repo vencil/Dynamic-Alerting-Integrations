@@ -124,6 +124,8 @@ TOOL_FILES=(
     # v2.3.0 Operator-native tools
     ops/operator_generate.py
     ops/operator_check.py
+    # #747 runtime reconciliation (read-only Git rule-packs ↔ Prometheus runtime)
+    ops/runtime_audit.py
     # v2.6.0 Migration tools
     ops/migrate_to_operator.py
     # v2.3.0 Federation tools

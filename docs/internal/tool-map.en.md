@@ -67,6 +67,7 @@ lang: en
 | `policy_engine.py` | Policy-as-Code 引擎（Path A — 內建 DSL）。 |
 | `policy_opa_bridge.py` | OPA (Open Policy Agent) bridge for tenant config policy evaluation. |
 | `rule_pack_diff.py` | Rule Pack version diff for upgrade audits. |
+| `runtime_audit.py` | Git rule-packs ↔ Prometheus runtime reconciliation (#747). |
 | `scaffold_tenant.py` | Interactive tenant config generator for Dynamic Alerting. |
 | `shadow_verify.py` | Shadow Monitoring readiness and convergence verification. |
 | `silencer_drift_check.py` | Alertmanager silence drift auditor. |

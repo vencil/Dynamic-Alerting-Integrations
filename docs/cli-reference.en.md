@@ -117,6 +117,7 @@ These tools only need HTTP access to Prometheus API and can run from anywhere.
 |---------|---------|-------------------|
 | `operator-generate` | Rule Packs + Tenant config → PrometheusRule / AlertmanagerConfig / ServiceMonitor CRD YAML | `--rule-packs-dir <dir>` |
 | `operator-check` | Operator CRD deployment status verification (5 checks + diagnostic report) | (auto-discover or `--namespace <ns>`) |
+| `runtime-audit` | Read-only Git rule-packs ↔ Prometheus runtime reconciliation (#747; MISSING / UNHEALTHY / ORPHAN) | `--prometheus <url>` or `--runtime-json <file>` |
 | `rule-pack-split` | Rule Pack hierarchical split (edge Part 1 + central Parts 2+3), Federation Scenario B | `--rule-packs-dir <dir>` |
 | `fed-key` | Generate / rotate the federation JWT signing keypair (ADR-020 IV-2l): private-key Secret manifest → stdout, public JWKS → file | (none, bootstrap default) / `--rotate --existing-jwks <file>` |
 
@@ -1768,6 +1769,63 @@ da-tools operator-check --namespace monitoring
 
 # JSON output (for CI gate)
 da-tools operator-check --json
+```
+
+---
+
+#### runtime-audit
+
+A **read-only** hard comparison between the rules DECLARED in Git
+(`rule-packs/rule-pack-*.yaml`) and the rules Prometheus has actually LOADED
+(`GET /api/v1/rules`). Covers the **runtime leg** that the #711/#714 PR-time
+drift gates do not.
+
+**Use cases**: incident-time reconciliation button (run after `kubectl
+port-forward` — zero new infra); scheduled / CI gate (`--ci`); reload-fail /
+hand-edited-configmap / orphan-rule detection.
+
+> **Boundary**: read-only, **no self-healing** — detect → report (exit code) →
+> a human decides. Self-healing / a standing reconciliation Operator is
+> explicitly rejected (avoids machine-writes-human-plane + the observer-paradox
+> recursed one level up). Aligns with the #631/#643/#652 idiom. See
+> [custom-rule-governance.md §7.1](custom-rule-governance.en.md).
+
+**Syntax**
+
+```bash
+da-tools runtime-audit (--prometheus <url> | --runtime-json <file>) [options]
+```
+
+**Options**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--prometheus <URL>` | Prometheus API URL, e.g. `http://localhost:9090` | (none) |
+| `--runtime-json <FILE>` | Saved `/api/v1/rules` JSON (offline / fixture) | (none) |
+| `--rule-packs-dir <DIR>` | Rule pack YAML directory | `rule-packs/` |
+| `--strict-orphan` | Promote ORPHAN (stale loaded rule) to a `--ci` gate failure too | false |
+| `--json` | JSON output | false |
+| `--ci` | Exit 1 on drift (MISSING/UNHEALTHY; ORPHAN with `--strict-orphan`) | false |
+
+**Finding categories**
+
+1. **MISSING** — declared in Git but not loaded (reload fail / projected-volume lag / hand-deleted configmap)
+2. **UNHEALTHY** — loaded but `health != ok` (carries `lastError`; series-observation cannot tell this apart from "metric legitimately absent")
+3. **ORPHAN** — still loaded but no longer declared in Git (stale; scoped to DECLARED groups so unrelated infra rules are not flagged)
+
+> **⚠️ Limitation (avoiding false positives)**: `declared` = **every** `rule-pack-*.yaml` in `--rule-packs-dir`. Platform packs can be selectively enabled (projected-volume `optional`); if a deployment loads only a subset, **the disabled packs are reported as MISSING**. Lever: point `--rule-packs-dir` at a directory holding only the enabled packs (the ORPHAN direction is unaffected — it is scoped to declared groups). Also: `unknown` health (the transient post-reload, not-yet-evaluated state) is **not** flagged UNHEALTHY — only a confirmed `err` is.
+
+**Examples**
+
+```bash
+# Incident diagnosis (port-forward to 9090 first)
+da-tools runtime-audit --prometheus http://localhost:9090
+
+# CI / scheduled gate
+da-tools runtime-audit --prometheus http://localhost:9090 --ci
+
+# Offline fixture (no live cluster)
+da-tools runtime-audit --runtime-json rules.json --json
 ```
 
 ---
