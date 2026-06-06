@@ -8,77 +8,38 @@ lang: en
 
 # ADR-024: Declarative Dimensional Alerting Engine — Version-Aware Thresholds + Custom Alerts
 
-> Secondary (EN) copy. Primary source of truth is the Chinese version: [`024-version-aware-threshold-via-dimensional-label.md`](024-version-aware-threshold-via-dimensional-label.md).
+> **Language / 語言：** [中文](./024-version-aware-threshold-via-dimensional-label.md) | **English (Current)**
 
 ## Status
 
-✅ **Accepted** (architecture decision, targeting v2.9.0). This ADR records a **declarative dimensional alerting engine** with two capabilities: **version-aware thresholds** (platform-authored, k8s pilot merged) and **custom alerts** (tenant-authored, recipe design converged, implementation in progress) — **both belong to v2.9.0, not a phased release**; they differ only in implementation status (see §As-built). The `status:` frontmatter stays a machine-readable bare `accepted` (the architecture decision is made; an ADR records the decision, not implementation completeness). Tracker: [#423](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/423) (version-aware, `rfc` + `epic`) + [#741](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/741) (custom alerts, `epic`).
+✅ **Accepted** (v2.9.0). This ADR records one **declarative dimensional alerting engine** made of two capabilities that share the same machinery:
 
-> **Relationship to existing mechanisms**: This ADR does **not** replace or modify [`config-driven.md` §2.6 Scheduled Thresholds](../design/config-driven.md). They are two coexisting, orthogonal mechanisms — boundary in §"Boundary vs §2.6".
+- **Version-Aware Thresholds** — on platform-authored rule packs, lets tenants declare multi-version numeric thresholds.
+- **Custom Alerts** — opens the same machinery to every level (platform / domain / tenant) so they author the alerts standard rule packs do not cover, using parameterized recipes (not PromQL).
 
-## Strategic Arc: Version-Aware is the Foundation, Custom Alerts the North Star
+Both shipped in v2.9.0. Trackers: [#423](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/423) (version-aware), [#741](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/741) (custom alerts); per-PR history is in the CHANGELOG.
 
-> This ADR is "one engine + two capabilities", not a phased project plan. Read this framing first, then the heavy machinery below — otherwise it reads as over-engineering.
-
-The product north star is not "platform-authored standard alerts" but **empowering every tier (platform / domain / tenant) to author custom alerts declaratively**, filling the domain-level and app-level gaps standard rule packs don't cover — without it there is no GA. But this collides head-on with the project's bedrock constraint: **declarative-only, never write PromQL** (§Hard constraints, [ADR-008](008-operator-native-integration-path.en.md)).
-
-One **declarative dimensional alerting machine** — the dimensional-label model, scrape-time relabel, rule-pack normalize / compile layer, graceful-degradation join, the promtool safety net, per-tenant isolation — powers two capabilities:
-
-- **Capability A — Version-Aware Thresholds (§Context–§Action Items)**: on platform-authored rule packs, let tenants declare **multi-version numeric thresholds**. This is the **foundation and capability proof** — first prove the machine runs safely in prod.
-- **Capability B — Custom Alerts (§Custom Alerts)**: open the same machine to **every tier (platform / domain / tenant)**, defining via **parameterized recipes** (not PromQL) the alerts standard rule packs don't cover. A's normalize / join / promtool gate / isolation are reused verbatim (see §Custom Alerts "Reuse of existing machinery"). This is the product north star.
-
-**Both capabilities belong to v2.9.0, not a phased release** — deliberately NOT using "Phase 1 / Phase 2" to split the reader's mental model (avoids misreading them as two releases or a maturity gap; and this ADR's existing "Phase 2 = the other-packs rollout" usage means something else, so reusing the label would collide). The only difference is **implementation status** (A merged, B in progress), listed in §As-built.
-
-**Documentation-structure decision (converged from internal + external discussion)**: Custom Alerts is folded into this ADR rather than a separate ADR-025, because both capabilities share one underlying engine, one tenant-api write boundary, one CI pipeline — splitting would sever the "why is the foundation this heavy" causal link and create a virtual boundary ("which ADR governs `validate()`?"). **Residual open question**: if this ADR later becomes hard to read, reconsider moving the "living engine spec" into [`docs/design/`](../design/) (the repo's proper home for a living spec; ADRs remain snapshot-style records of discrete decisions). Revisit on trigger.
-
-## As-built (Implementation Status)
-
-> The `status:` frontmatter stays a machine-readable bare value (`accepted`); implementation status lives here. For **how to use it** (tenant declaration + platform KSM remediation) see the [Version-Aware Thresholds guide](../scenarios/version-aware-thresholds.md).
-
-**Capability A — Version-Aware Thresholds (Kubernetes pilot merged, targeting v2.9.0)**: both `container_cpu` and `container_memory` are version-aware. Four pieces shipped: the rule-pack normalize layer (version injection → dynamic fallback → split per-severity rules), bilingual da-guard validation of the `version` label value, the three-layer KSM-allowlist defense, and the tenant-api rejection of an invalid `version` at write time. PR breakdown in [#423](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/423).
-
-⛔ **Deployment prerequisite (HARD)**: kube-state-metrics MUST run with `--metric-labels-allowlist=pods=[app.kubernetes.io/version]`, otherwise `kube_pod_labels` carries no version, the version-injection join matches nothing, and **version thresholds are silently inert** (proven on a real cluster). The three-layer defense guards this prerequisite: the `VersionAwareThresholdInert` runtime sentinel is the safety net, and the CI static lint `check_ksm_version_allowlist.py` catches the misconfiguration.
-
-**Capability B — Custom Alerts (implementation in progress, targeting v2.9.0)**: the recipe library + vectorized compiler + 6 recipes (threshold / rate / ratio / absence / p99_latency / **forecast**) + exporter `user_threshold` emission + a compile-time `max_custom_recipes` per-tenant cap + a **tenant-api shift-left preflight (in-process Go)** are **implemented** ([#741](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/741) S1–S5 / [#752](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/752) / [#753](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/753)) + the **S6a metric discovery endpoint (a stateless Prometheus proxy)** is **implemented** ([#741](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/741) S6a / [#761](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/761)); **design-locked, implementation net-new (S6b)**: the recipe-authoring UX (the `<RecipeBuilder>` portal smart form) — design is locked and externally reviewed (see §S6b), code pending S6b-1/S6b-2.
-
-**Deferred (defer-with-trigger)**:
-
-- Version-awareness for the other (non-kubernetes) packs — **this is "capability proof" in nature, not the north star** (trigger: a customer asks for a version-specific threshold on a non-k8s metric; the real fix is the external-backend relabel in §Custom Alerts and [#716](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/716)).
-- Tenant self-service verification of "is my version threshold actually live" — a tenant-api resolved-view — **subsumed by the read-only discovery catalog in §Custom Alerts** (same mechanism: show tenants what is actually live in Prometheus).
-- A `versioned:` config sugar / portal UI inline editing help (trigger: the portal / operator epic [#692](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/692); note: custom alerts use a portal recipe form + inline help, **not** a new `versioned:` schema).
-
-## TL;DR
-
-- **Problem**: tenants want rules "pre-staged but only active on the app version bump", and at troubleshooting time need to know "which version is running now".
-- **Decision**: express multi-version thresholds via a dimensional `version` label on the metric; cutover is **emergent** (whichever `version` the metric carries after a deploy joins the matching threshold). **The existing dimensional-label mechanism already achieves this with zero threshold-exporter parse/emit change** — Phase 1's core is a rule-pack **normalize layer**, not a new config schema (Option A, reuse-over-build; the `versioned:` sugar is demoted to defer-with-trigger).
-- **Three reliability hardenings**: (1) **dynamic fallback** — a missing versioned threshold falls back to `version="default"`, eliminating the "silent alerting gap" and decoupling deploy frequency from config; (2) **split per-severity rules** — avoids the `version × severity` PromQL cardinality deadlock (otherwise the pilot would crash the alerting engine on rollout); (3) **deterministic truncation + non-piloted-pack defensive hardening** — eliminates flapping and isolates cross-pack contamination.
-- **Critical pre-GA to-dos**: the metric-side `kube_pod_labels` version injection (§Decision (0a)) + OQ-1 pipeline-contract sign-off; the rest are in §Action Items.
+> This ADR does **not** replace or modify [config-driven.md §2.6 Scheduled Thresholds](../design/config-driven.md) — they coexist as distinct mechanisms; the boundary is in the last section.
 
 ## Context
 
-### Original tenant ask
+Tenants need: (1) rules they can commit to `conf.d/` ahead of time without taking effect immediately; (2) effect aligned to app version cutover; (3) an answer, while debugging, to "which version is Prometheus running right now?"; (4) no accumulation of meaningless historical effective-dates in YAML. Separately, standard rule packs can't cover every domain- and app-level alert, so tenants need to self-author — without being forced to write PromQL.
 
-Tenants may want a new alert rule / threshold to become active "starting on a future date", but they want to commit the rule ahead of time. When troubleshooting, they must be able to answer "which version of the rule is Prometheus running right now", not stumble onto a version that is in git but not yet deployed. When a rule is bumped, the "deactivate old + activate new" double-write — if atomicity is not enforced — gets half-written during review/ops.
+The whole design is bound by three existing contracts:
 
-Decomposed: (1) commit rules/thresholds into `conf.d/` ahead of time without immediate effect; (2) activation aligned to app version bump; (3) troubleshooting can answer "what version is live right now"; (4) YAML must not accumulate meaningless historical activation dates.
+- **Declarative-only** — the platform team writes the rule-pack PromQL; tenants only set plain numeric thresholds in YAML / fill in form parameters. **Any approach that makes a tenant write PromQL violates this rule** ([ADR-008](008-operator-native-integration-path.md)).
+- **`user_threshold` is already a dimensional metric** — `user_threshold{tenant, component, metric, severity, <any dimensional labels>}` already supports dimensions like `env` and `tablespace_re`.
+- **Complexity stays in the platform-team-managed rule packs**, not pushed to tenants; a per-tenant cardinality guard already exists (`max_metrics_per_tenant`, truncate on overflow).
 
-### Hard constraints (existing project contracts)
+## Decision: One Engine, Two Capabilities
 
-- **Tenant declarative-only** — Platform team owns rule-pack PromQL; tenants only set plain numeric thresholds in YAML. **Any approach requiring tenants to write PromQL violates this.**
-- **`user_threshold` is already a dimensional metric** — `user_threshold{tenant, component, metric, severity, <arbitrary dimensional labels>}`, already supporting `env`, `tablespace_re`, etc. ([`config-driven.md` §2.5](../design/config-driven.md)).
-- **Rule pack is the platform-team-controlled normalize layer** — complexity centralized there, not pushed to tenants.
-- **Cardinality Guard exists** (per-tenant `max_metrics_per_tenant` ceiling, enforced in `config/resolve.go::ResolveAtWithStats`; over-limit truncates + emits `da_tenant_metrics_over_limit`, see #652).
-- **No ArgoCD/Flux** — config via Directory Scanner + SHA-256 hot-reload; rule packs via ConfigMap projected volume + Prometheus reload.
+One **declarative dimensional machine** — the dimensional-label model, scrape-time relabel, the rule-pack normalize / compile layer, graceful-degradation joins, the promtool safety net, per-tenant isolation — carries both capabilities. Version-Aware first proves the machine runs safely in prod on platform rule packs; Custom Alerts then opens it to every level. They share one underlying engine, one tenant-api write boundary, and one CI pipeline — which is exactly why they live in one ADR (splitting them would cut the causal link explaining why the foundation is laid this heavily).
 
-## Decision
+The seven decisions below make up this engine; each carries its trade-off.
 
-Adopt **Version-Aware Threshold**: express "multiple coexisting versions of the same threshold" via a dimensional `version` label on the metric. Cutover is **emergent behavior** — whichever `version` the app metric carries after a deploy is the version of threshold the PromQL join aligns to.
+### 1. Express multi-version thresholds via the metric's dimensional `version` label (not a new schema)
 
-Key convergence (a **correction of the current state** relative to #423's original proposal):
-
-> **The project's existing dimensional-label mechanism already produces the metric shape #423 §3.2 wants, with zero exporter changes.** Therefore the Phase 1 core is the **rule pack normalize layer**, not a new config schema.
-
-Verification: `config/resolve.go` (dimensional key path, lines 182–227) already parses `metric{label="value"}` into `CustomLabels`; `collector.go` (lines 68–78) emits `CustomLabels` as Prometheus labels in sorted order. So today a tenant can write:
+Cutover is **emergent behavior**: whichever `version` the app metric carries after an upgrade is the version whose threshold the PromQL join aligns to. **The existing dimensional-label mechanism produces this shape with zero exporter parse / emit changes** — a tenant can write today:
 
 ```yaml
 tenants:
@@ -87,393 +48,93 @@ tenants:
     container_cpu{version="v2"}: "60"
 ```
 
-and the exporter emits (no new code):
+and the exporter emits directly (no new code):
 
 ```
 user_threshold{tenant="db-a", component="container", metric="cpu", severity="warning", version="v1"} 80
 user_threshold{tenant="db-a", component="container", metric="cpu", severity="warning", version="v2"} 60
 ```
 
-`version` rides the same dimensional path as `env` / `tablespace_re` — **a single mental model**.
+`version` is the same dimensional path as `env` / `tablespace_re` — **one mental model**. *Trade-off*: choosing this over a new `versioned:` YAML block is **reuse-over-build** — it avoids touching the thousand-tenant hot-reload config parser (the highest blast radius), at the cost of multiple versions living in adjacent keys (weaker atomic review, but a single diff hunk). "Zero changes" applies only to the **threshold-declaration half**; the real engineering is the normalize layer below plus the metric-side version injection.
 
-> **Precise boundary of "zero change"**: "zero change" applies to the **parse + emit** half — emitting threshold series with a version label genuinely needs no exporter change. But the **safety rail this design depends on, the OQ-6 guard, is net-new** (Go `ValidateTenantKeys` + Python da-guard, dual-language), and the metric-side version injection ((0a) above) is the real engineering work. So "Phase 1 is not a new config schema" holds, but "Phase 1 is zero effort" does **not**.
+### 2. Rule-pack normalize layer: inject version → fallback degrade → split per-severity
 
-### Two independently-deployable halves (the most important architectural property)
+This is the real engineering core of version-aware. The app metric (e.g. cAdvisor's `container_cpu_usage_seconds_total`) **carries no version**, so a recording rule must inject `app.kubernetes.io/version` (relabeled from `kube_pod_labels` by kube-state-metrics) as the `version` label, and every `by(...)` aggregation must preserve it. After normalize, both sides use `label_replace(..., "version", "default", "version", "^$")` to fill missing versions to `default` before joining.
 
-1. **Threshold side** — tenant declares multi-version thresholds via `{version="..."}` in YAML. Exporter unchanged.
-2. **Metric side** — app metric carries a `version` label (for business apps: via `app.kubernetes.io/version` + kube-state-metrics `kube_pod_labels` relabel).
+The alert rule uses an **exact-or-degrade** structure:
 
-**Until the metric side injects version, the whole mechanism is inert and 100% backward-compatible**: an unversioned threshold (`container_cpu: "80"`) emits a series with no `version` label (i.e. `version=""`); an app metric without injection is also `version=""`; the normalize layer rewrites both to `version="default"` and they join naturally — behavior identical to pre-change (satisfies AC-1).
-
-### Rule Pack Normalize Layer (the real Phase 1 engineering core)
-
-Using `rule-pack-kubernetes`'s `PodContainerHighCPU` (current join key is `on(tenant)`):
-
-```yaml
-# (0a) version injection point (bottom layer, the real engineering hard part):
-#      cAdvisor's container_cpu_usage_seconds_total carries no version.
-#      Approach: compute the plain percentage first (reusing the existing
-#      by(namespace,pod,container) logic, zero mental change), then join
-#      kube_pod_labels ONCE at the outermost level to inject version.
-#      ✅ Halves the join cost vs joining version in both numerator and
-#         denominator, and avoids the NaN edge case where a rolling-moment
-#         version drift misaligns numerator/denominator (perf + correctness).
-- record: tenant:container_cpu_percent:by_container
-  expr: |
-    label_replace(
-      (
-        (
-          sum by(namespace, pod, container) (rate(container_cpu_usage_seconds_total{namespace=~"db-.+", container!="", container!="POD"}[5m]))
-          /
-          sum by(namespace, pod, container) (kube_pod_container_resource_limits{resource="cpu", namespace=~"db-.+"})
-        ) * 100
-        * on(namespace, pod) group_left(version)
-          label_replace(kube_pod_labels, "version", "$1", "label_app_kubernetes_io_version", "(.+)")
-      ),
-      "tenant", "$1", "namespace", "(.*)"
-    )
-
-# (0b) version propagation: keep version in every by(...) layer
-- record: tenant:pod_weakest_cpu_percent:max
-  expr: max by(tenant, pod, version) (tenant:container_cpu_percent:by_container)  # <- version added to by()
-
-# (1) Normalize: rewrite missing version to "default" on both sides
-#     - app metric side: collapse to per (tenant, version), then default
-- record: tenant_version:pod_weakest_cpu_percent:vlabeled
-  expr: |
-    label_replace(
-      max by(tenant, version) (tenant:pod_weakest_cpu_percent:max),
-      "version", "default", "version", "^$"
-    )
-#     - threshold side: unversioned thresholds emit series with no version label (version="")
-#       keep severity in by(): a versioned threshold can carry severity via
-#       the "value:severity" suffix (e.g. `container_cpu{version="v2"}: "60:critical"`,
-#       supported at resolve.go:206-210); severity must NOT be collapsed by max here.
-- record: tenant_version:alert_threshold:container_cpu
-  expr: |
-    label_replace(
-      max by(tenant, version, severity) (user_threshold{component="container", metric="cpu"}),
-      "version", "default", "version", "^$"
-    )
-
-# (2) Alert: dynamic fallback + split-per-severity (split per severity to avoid the version × severity cardinality deadlock).
-#     WARNING: do NOT use `group_left(severity)`: the default bucket may hold both warning and
-#       critical (legacy `_critical` plain key), so the exact branch goes one-to-many (multiple
-#       matches) and the fallback branch goes many(versions)×many(severities) (many-to-many) →
-#       Prometheus runtime error that takes down the whole alerting engine.
-#     FIX: split one rule per severity. With severity fixed, the RHS degenerates to a
-#       per-(tenant[,version]) singleton, making every join a clean one-to-one / many-to-one;
-#       the fallback uses group_left to PRESERVE the metric's real version (SRE visibility).
-#       The Critical rule is a mirror (severity="critical").
+```promql
 - alert: PodContainerHighCPUWarning
   expr: |
     (
-      (
-        # exact hit on this (tenant, version)'s warning threshold (one-to-one; severity fixed -> RHS singleton)
-        tenant_version:pod_weakest_cpu_percent:vlabeled
-        > on(tenant, version) group_left()
-          tenant_version:alert_threshold:container_cpu{severity="warning"}
-      )
-      or
-      (
-        # fallback: no matching versioned warning threshold -> use default. severity fixed makes
-        # RHS a per-tenant singleton; LHS multiple versions -> legal many-to-one, group_left keeps real version
-        (
-          tenant_version:pod_weakest_cpu_percent:vlabeled
-          unless on(tenant, version)
-            tenant_version:alert_threshold:container_cpu{severity="warning"}
-        )
-        > on(tenant) group_left()
-          tenant_version:alert_threshold:container_cpu{version="default", severity="warning"}
-      )
+      # exact hit on this (tenant, version)'s threshold (one-to-one)
+      app_metric_vlabeled
+      > on(tenant, version) group_left()
+        threshold_vlabeled{severity="warning"}
+    )
+    or
+    (
+      # degrade: no matching versioned threshold → apply version="default". group_left keeps the real version
+      (app_metric_vlabeled unless on(tenant, version) threshold_vlabeled{severity="warning"})
+      > on(tenant) group_left()
+        threshold_vlabeled{version="default", severity="warning"}
     )
     unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
     * on(tenant) group_left(runbook_url, owner, tier) tenant_metadata_info
   labels:
-    severity: warning   # fixed on the alert label; Critical rule mirrors with severity="critical"
+    severity: warning   # fixed on the alert label; the Critical rule is a mirror copy
 ```
 
-**The asymmetric join keys are intentional and safe**: the threshold comparison uses `on(tenant, version)`, but `user_state_filter` (maintenance) and `tenant_metadata_info` are both **per-tenant singletons with no version label** (verified: `collector.go` emits `user_state_filter{tenant,filter,severity}` and `tenant_metadata_info{tenant,runbook_url,owner,tier}`). So `unless on(tenant)` suppresses **all versions** of a tenant under maintenance (correct semantics), and `* on(tenant) group_left(...)` is a many(version-carrying LHS):one(RHS) join — a legal direction. **Conclusion: adding version does not break these two shared-metric joins.**
+Three deliberate designs:
 
-**Key: version propagation (what the "passive version-aware" rows in the OQ-3 table mean — and the real engineering hard part)** — the existing percent / weakest-link recording rules aggregate with `sum/max by(namespace,pod,container)` / `by(tenant,pod)`, which **drops the version label at every layer**. So (0a) must join `kube_pod_labels` at the `:by_container` layer to inject `app.kubernetes.io/version` as `version` (via a single outermost join, see above); from (0b) onward every `by(...)` aggregation must include `version` to preserve it. **This (0a) edit is the metric-side hard part — not the "thresholds can emit version" half (that half is zero-change), but the "how does the app metric carry version" half.**
+- **Dynamic degradation** — a tenant declares `{version="v2"}` only when "a specific major version needs a special threshold"; routine small bumps (multiple deploys a day) don't require touching the alert YAML, and a missing version automatically falls back to `default` without dropping the series. This upgrades the highest risk — "observed-but-not-declared = silent gap" — from "fix it after the fact" to "built into the architecture".
+- **Split per-severity rules** — you **cannot** use `group_left(severity)`: the `version × severity` cross-product forms a cardinality deadlock in the join (the exact branch crashes one-to-many, the fallback branch crashes many-to-many) → the whole alerting engine seizes. Fixing severity collapses the RHS to a singleton, so all joins become clean one-to-one / many-to-one.
+- **The asymmetric join key is safe** — threshold comparison uses `on(tenant, version)`, but `user_state_filter` (maintenance) and `tenant_metadata_info` are version-less per-tenant singletons, so `unless on(tenant)` / `group_left` directions are legal and undisturbed by version.
 
-> **inert-by-design is intentional, not a bug**: before the (0a) metric-side join ships, version is always `""` across the chain → normalize rewrites to `"default"` → aligns to unversioned thresholds, identical to pre-change (AC-1). I.e. the §"two independently-deployable halves" threshold-side can ship first; the metric-side ((0a) + OQ-1/OQ-4) follows, 100% backward-compatible in between. But note: **without (0a), version-aware is merely inert — so the pilot PR must include (0a) plus kind-cluster relabel validation (AC-3/AC-4), not just flip the join key and claim done.**
+⛔ **Deployment prerequisite (HARD)**: kube-state-metrics MUST set `--metric-labels-allowlist=pods=[app.kubernetes.io/version]`, or `kube_pod_labels` carries no version, the injection join matches an empty set, and versioned thresholds go **silently inert**. Three defense layers guard this: a runtime sentinel (`VersionAwareThresholdInert`) + a CI static lint (`check_ksm_version_allowlist.py`) + the operator-manifest allowlist. Before metric-side injection ships, the whole mechanism is inert and 100% backward-compatible (missing version → fill default → align to the un-versioned threshold).
 
-**Note (R5 trap, avoided)**: always use `label_replace(..., "version", "default", "version", "^$")`, **never `or on() vector(0)`** — the latter fabricates a 0 when data is missing, breaking downstream aggregation and producing false positives for "alert when value == 0" rules (e.g. `mysql_up == 0`). `label_replace` treats a missing src label as empty string, which `regex="^$"` matches — the correct and only safe form.
+*Example metrics*: the v2.9.0 pilot landed `container_cpu` + `container_memory` as a "capability proof"; version-awareness for other packs is defer-with-trigger (when a customer asks for versioned thresholds on a non-k8s metric).
 
-> **Deliberate `sum`→`max by(tenant, version, severity)` change**: the existing threshold-normalization uses `sum by(tenant)`; this ADR uses `max by(tenant, version, severity)`. Equivalent for a single threshold, but `max` is safer against "an unexpected second row in the same bucket" (with OQ-6 forbidding explicit `default`), and `severity` MUST stay in `by()` or multi-severity is collapsed.
+### 3. Custom Alerts: platform-authored parameterized recipes, never write PromQL
 
-> **Dynamic-fallback semantics**: the alert's `exact or fallback` structure makes cutover mean "**only takes effect when the tenant explicitly declares that version's threshold**, otherwise it inherits `version="default"`". Benefit: routine small deploys (many deploys/day, image-SHA / SemVer-patch churn) need **no** alert-YAML change — a tenant writes `{version="v2"}` only when a specific major version needs a special threshold. This promotes the former top risk "observed-but-not-declared = silent gap" from "sentinel after-the-fact" to "**architecturally built-in, no dropped series**". Cost: a typo'd version (e.g. `v2x`) silently falls to default (not the intended value), caught by orphan detection (declared-but-not-observed). This fallback PromQL must be validated in a kind cluster (AC-3/AC-4).
+Of the three risks the "never write PromQL" rule guards against, the hardest — **cross-tenant isolation** — is already solved structurally by the existing architecture (the scrape job brands a `tenant` label from the namespace; tenants can't forge it). So the real design question isn't "can we do it" but "**expressiveness + rule-count cost**".
 
-> **Cardinality-match hardening**: the block above uses a **per-severity split** rather than a single rule with `group_left(severity)`. Reason: the `version × severity` interleaving creates a join cardinality deadlock — if any `(tenant, version)` (especially `default`, which may hold both warning and critical from a legacy `_critical` key) has multiple severities, the exact branch `> on(tenant,version) group_left(severity)` goes **one-to-many (multiple matches)** and the fallback `> on(tenant) group_left(severity)` goes **many(versions)×many(severities) (many-to-many)** → a Prometheus runtime error that takes down the whole k8s alerting engine. Splitting per severity degenerates the RHS to a singleton, reducing everything to legal one-to-one / many-to-one. **Alternative (Route 1, more compact)**: keep one rule but in the fallback branch first `max by(tenant)` to flatten the versions and `label_replace` to force `version="default"`, lowering many-to-many to one-to-many (with `group_right()`); the cost is that **fallback alerts show `version="default"`, losing real-version visibility**. Route 2 (split per severity, above) preserves the version and matches the existing per-severity alert idiom, so it is the **recommended default**; the pilot / maintainer makes the final call and validates cardinality in kind.
+- **MVP = parameterized recipes**: a platform-authored recipe library (**6 recipes**: threshold / rate / ratio / absence / p99_latency / forecast); each level fills a form (metric / window / op / threshold / severity / `mode`) → stored as declarative YAML. A Level-2 bounded DSL / Level-3 raw-PromQL escape hatch is Future. *Trade-off*: expressiveness is bounded by the recipe library, in exchange for **structural** safety (valid spec → valid PromQL, not luck).
+- **Hierarchical scope = the declaration level**: which `_defaults.yaml` level the recipe is declared at (platform / domain / subdomain / tenant leaf, see [ADR-017](017-defaults-yaml-inheritance-dual-hash.md)) decides its blast radius. A domain SRE writes once and covers a whole subtree. **Platform / domain policies are generated rules tenants can't override** — the rules live in `_defaults.yaml` + CI-generated files that a tenant's RBAC can't write, so non-overridability is **structural**, not a lock flag.
+- **Metric discovery = a read-only stateless Prometheus proxy**: tenant-api queries Prometheus for **this tenant's own** app-metric names (filtered `{tenant="<authID>"}`) to feed the portal's recipe metric autocomplete — it does not build a catalog state that would drift from Prometheus. The query string is locked down (tenant input can't reach the matcher structure, the `tenant` label is scrape-branded, prefix search is escaped) and the existing per-caller rate limiter prevents a proxy thundering herd. Pre-creating a recipe for a metric "that will appear later" is legitimate (the GitOps vacuum), so the backend does **not** hard-block "metric doesn't exist yet"; the portal soft-warns instead.
+- **Recipe authoring UX = smart form, backend owns the write**: the portal's recipe builder is a pure `(Context) => RecipeObject` component that **does not own the write**; the write goes through tenant-api's `PUT .../custom-alerts`, with the **backend owning the YAML round-trip** (the client only sends / receives JSON). The write uses yaml.Node AST surgery to preserve comments / indentation, with whole-file-hash optimistic concurrency (mismatched base_hash → 409).
 
-The diagram below shows the evaluation flow for a single-severity (Warning) rule (the Critical rule mirrors it):
+### 4. Vectorized compilation: honest cost + three guardrails
 
-```mermaid
-flowchart TD
-    M["app metric: tenant + version"] --> N["normalize empty version to default"]
-    N --> EX{"versioned warning threshold declared for this tenant+version?"}
-    EX -->|yes| EXACT["exact one-to-one match vs versioned threshold"]
-    EX -->|no| FB["fallback many-to-one on tenant vs default; group_left keeps real version"]
-    EXACT --> MNT{"maintenance active for tenant?"}
-    FB --> MNT
-    MNT -->|yes| SUPP["suppressed via unless on tenant"]
-    MNT -->|no| FIRE["enrich runbook/owner/tier then fire PodContainerHighCPUWarning"]
-```
+The compiler turns a recipe + parameters into a **vectorized `group_left` rule**: one `app_metric > on(tenant[,version]) group_left(...) <that recipe's user_threshold>` covers every tenant that declared the recipe — **the rule count equals the number of shapes, not the number of tenants**.
 
-### K8s failure modes auto-immunized
+**Cost honesty**: "O(M), independent of N" holds **only for shared metrics**. Vectorization removes "fan-out copies of the same metric across N rules", but it **cannot** remove "different metrics necessarily mean different rules" — tenant A's `order_created_total` and tenant B's `payment_failed_total` must generate two rules. So custom-alert rule count grows **linearly with the total number of custom alerts** and does NOT enjoy the rule-pack O(M) guarantee of [benchmarks.md §2](../benchmarks.md). **Three guardrails**: (a) a hard `max_custom_recipes` per-tenant cap; (b) a global rule-count budget (the cap value derived from measured rule-eval-duration); (c) a bad rule only breaks its own rule-file group + Prometheus's native rule-group `limit` + the promtool hard gate.
 
-| Failure mode | Why it is handled automatically |
-|---|---|
-| Rolling-update coexistence | metrics `{version="v1"}` / `{version="v2"}` coexist for 5–10 min, each joining its threshold |
-| Rollback drift | after `helm rollback`, metric reverts to v1; v2 threshold becomes an orphan (no matching metric) → does not fire |
-| GitOps propagation lag | v2 threshold was already "latent" before the bump; no reliance on precise propagation timing |
-| YAML history accumulation | `{version=...}` has no time axis; stale versions are just orphan sections awaiting GC |
-| Atomic cutover | multiple version keys for one metric are adjacent — a single review diff hunk |
+**Deployment source = the live conf.d**: the compile source must be the same conf.d the exporter actually serves, or the generated rule's shape won't match the `user_threshold` series the exporter emits → the rule never fires (silent failure). The custom-alert pack is **tenant-authored, not platform coverage**, so it is excluded from the platform rule-pack / alert counts (the badge stays unchanged).
 
-## Boundary vs §2.6 Scheduled Thresholds (two coexisting mechanisms, NOT a replacement)
+### 5. Two-layer validation: in-process Go preflight + CI authority (no promtool in the prod image)
 
-`config-driven.md` §2.6's `ScheduledValue.overrides: [{window, value}]` is a **recurring time-window** mechanism (v0.12.0), deliberately separate from this ADR:
+- **Layer 1 — tenant-api's Go preflight** (in-process, fast, a stateless per-tenant input gate): validates the tenant's recipe spec at `PUT` time and returns HTTP 400 + `Violations[]` on failure, so **bad input never reaches the repo**. It reuses the **same Go validator** the exporter uses (metric regex / reserved labels / recipe·op·severity·mode·for·horizon enums / ratio-floor ∈(0,1) / NaN·Inf).
+- **Layer 2 — the CI Python compiler** (the global authority, stateful + promtool): cross-tree / hierarchical inheritance / vectorization / template promtool — the only gate with a global source of truth.
 
-| Dimension | §2.6 Scheduled Threshold | ADR-024 Version-Aware |
-|---|---|---|
-| Switching axis | **time** (recurring window, `ResolveAt(now)` reads wall-clock) | **state / version label** (no time evaluation) |
-| Trigger | UTC clock, repeats daily | **new version on the app metric after a deploy**, one-time cutover |
-| Aligns to | fixed daily windows (e.g. relax thresholds at night) | K8s rolling update (immune to deploy timing drift) |
-| Typical use | "relax to 200 during 22:00–06:00 UTC" | "tighten CPU threshold from 80 to 60 once v2 ships" |
+*Trade-off*: **the prod image does not bundle promtool / Python**. Tenants never write PromQL and the recipe templates are platform-authored, so a valid spec → valid PromQL; promtool only catches "template regression" = a platform problem, kept in a **CI golden** rather than the request path (avoiding the image bloat and dev/prod blur of a Go service carrying a Python runtime + a hot-path subprocess). Checks that need the global tree (like "an own recipe duplicates an inherited policy") defer to CI — tenant-api's local disk is not the global SOT during the GitOps vacuum, so a hot-path tree-walk would false-pass against a stale tree.
 
-#423 §2 round 1 (Option B) once proposed **extending `ScheduledValue` with absolute `from`/`until` dates**; this was rejected in §4 R1 (below). Hence this ADR is not an extension of §2.6 — §2.6 handles periodic windows, this ADR handles one-time version alignment. They are orthogonal and can both apply to the same tenant.
+### 6. Silent + routing isolation: reuse the existing sentinel + inhibit
 
-## Options Considered
+The custom-alert `mode` (page / silent) label rides to the alert via `group_left`. The Alertmanager-side consumption:
 
-### Option A: Reuse existing dimensional `{version="..."}` label (✅ chosen)
+- **Silent goes through a sentinel + inhibit, not route-to-null** — this deliberately reuses the existing tri-state silent paradigm of [ADR-003](003-sentinel-alert-pattern.md). The compiler injects a single global sentinel `CustomRecipeSilent` (severity=none, derived from `user_threshold{mode="silent"}`), and an Alertmanager inhibit with `equal:[tenant, name]` suppresses only that (tenant, recipe)'s notification; a silenced alert is still a Prometheus `ALERTS{...}` series → **silent ≡ dashboard-only**. Inhibit over route-to-null: consistent with the platform, the suppressed state is visible in the AM UI, and a dict-keyed route-to-null would break inheritance semantics (see Rejected).
+- **Routing isolation**: custom alerts carry a static `component="custom"` label (no platform alert carries it, so the match is exact and unambiguous); the Alertmanager route sits **first + `continue:false`** ahead of the platform NOC route, so a tenant alert storm can't flood the platform NOC. `group_by` is `[tenant, alertname]` (alertname already encodes the shape, so unrelated alerts don't group together). The page-mode firehose receiver is, for MVP, an isolated empty receiver (outbound goes to a log backend, not a rate-limited IM — to avoid 429 → queue → OOM).
 
-| Dimension | Assessment |
-|---|---|
-| Complexity | **Low** — zero exporter changes; only the rule pack |
-| Blast radius | **Low** — does not touch the thousand-tenant hot-reload critical path (config parser) |
-| Cardinality accounting | **Free** — each `{version=}` key is already a distinct resolved threshold counted by the existing per-tenant guard |
-| Backward compat (AC-1) | **Trivially true** — exporter unchanged; unversioned tenants see zero series-count delta |
-| Consistency | **High** — same dimensional model as `env`/`tablespace_re` |
-
-**Pros**: minimal net-new surface; AC-1 satisfied for free; default fallback centralized in one place (the rule pack).
-**Cons**: versions scatter across multiple keys (weaker atomic review, though adjacent and a single diff hunk); no exporter-level auto `version="default"` (handled by the normalize-layer `label_replace`); da-guard naming rule must special-case the `version` label value.
-
-### Option B: New dedicated `versioned:` YAML block (#423 §3.1 original, ✗ deferred)
-
-| Dimension | Assessment |
-|---|---|
-| Complexity | **Med-High** — net-new parser type + `UnmarshalYAML` path + resolve path + da-guard schema + da-parser + tests |
-| Blast radius | **High** — touches the most safety-critical hot-reload config parser |
-| Ambiguity | introduces a **second** path to attach a `version` label (dimensional `{version=}` still exists); guard must forbid mixing |
+### 7. Forecast recipe: trend / exhaustion prediction (dual-mode)
 
-**Pros**: ergonomic grouping; natural atomic review; natural home for auto `version="default"` and the naming guard; can inherit defaults (dimensional keys are tenant-only, no inheritance).
-**Cons**: high blast radius; **functional duplication** with the normalize-layer default injection (two places can drift); an extra code path.
+`forecast` is the 6th recipe, answering real needs like "disk / memory will, on the current trend, exhaust within the next N hours". Raw `predict_linear` is a notorious false-positive factory (a momentary spike extrapolated linearly), so the platform seals off the FP sources and packages it as a parameterized recipe — exactly the core value of the recipe model over "tenants write their own PromQL".
 
-### Option C: `POST /active-version` write API (✗, see R4)
+- **One recipe, two modes**: with `capacity_metric` → ratio mode (predict the ratio crossing a floor ∈(0,1)); without → raw mode (predict a gauge crossing an absolute threshold).
+- **lookback is not tenant-set**; the platform derives `lookback = max(2·horizon, 1h)` (integer seconds); the tenant only fills `horizon` (an enum, cardinality bounded). Reasoning: lookback is an expert knob whose exposure is the biggest foot-gun, and `horizon ≤ lookback` holds by construction, removing extra validation.
+- A **cold-start data-sufficiency gate** (`count_over_time(base[lookback]) > N`) blocks the wild swings of too-few samples right after deploy; **gauge-only** (a counter must be rate()'d first).
 
-Introduces a "second state" that breaks the single SOT; calling it mid-rolling causes transient misalignment.
-
-## Trade-off Analysis
-
-The core call is **reuse-over-build**: the target capability already exists 90% in the dimensional mechanism. Option B's only real gain is "authoring grouping + a home for the naming guard", at the cost of touching the hot-reload critical path, introducing a duplicate default-injection path, and turning AC-1 (zero behavior change on the highest-cardinality, hot-reload-critical component) from "automatically true" into "must be verified".
-
-Hence **Option A**, with the `versioned:` sugar listed as **defer-with-trigger** (see Consequences). The default fallback is owned solely by the normalize layer to avoid double-write drift.
-
-## Open Questions resolution
-
-| OQ | Resolution | Nature |
-|---|---|---|
-| **OQ-1** pipeline contract / version source | Pipeline **calls no write API** (reaffirms R4). Default version source = `app.kubernetes.io/version` (K8s standard label) via kube-state-metrics `kube_pod_labels` relabel to `version`. | **Self-decided default**; tenant-team sign-off is an action item (not a design blocker) |
-| **OQ-2** Cardinality budget | `version` is a dimensional multiplier; concurrent versions: steady-state N=1, rolling window N=2, rollback/staged overlap cap N=3. **Design guideline: support ≤3 concurrent versions within the existing per-tenant cap**; each version = +1 series per (metric,severity), already counted+truncated by the existing guard. | **Self-decided guideline**; empirical N=1/2/3 deferred to pilot (action item); budget bump only if over-cap (trigger) |
-| **OQ-3** which rules to sweep | **Principle**: a rule is version-aware ⟺ it joins a tenant-app perf metric to `user_threshold` on `(tenant)`. Cluster/infra-wide or state-based rules are version-agnostic. `rule-pack-kubernetes` classification below. | **Self-decided** |
-| **OQ-4** relabel template kind validation | Template (`kube_pod_labels` → `version` join) goes into the migration doc; in-kind-cluster validation is bound to AC-3/AC-4 (rolling/rollback scenarios), done at impl time. | **Deferred to impl** (not a design blocker) |
-| **OQ-5** sentinel period | Two-tier `version_orphaned`: **warn @ 7d, critical @ 30d** (aligned to weekly release cadence). `version_unknown` (observed-but-not-declared) uses **`for: 5–10m`, NOT `for: 0s`** — during a normal rolling update there is a 1–3 min GitOps propagation lag between a new Pod emitting the version label and the exporter hot-reloading the threshold; `for: 0s` would fire on every deploy → alert fatigue → SRE mutes it → the sentinel becomes a formality. With a buffer, only "a new version persisting >5–10m with still no matching threshold and no fallback" is judged a real omission. (With dynamic fallback, `version_unknown` is already demoted to a visibility signal, so the buffer is even more appropriate.) | **Self-decided**; buffer value tuning deferred (trigger: tenant cadence / noise feedback) |
-| **OQ-6** version naming convention + scope | da-guard regex `^[a-z0-9][a-z0-9._-]*$`; **forbid empty string and the literal `default`** (reserved for fallback); **do not** enforce SemVer (allow image-tag / SHA). **Plus scope: `version` keys are only allowed on already-piloted components** (Phase 1 = kubernetes container_cpu/memory); version keys on non-piloted components are rejected (prevents cross-pack double-count, see Consequences). Note this guard is **net-new dual-language work**: Go `ValidateTenantKeys` + Python da-guard must stay in sync (label values are currently **completely unvalidated** — `parseLabelsStringWithOp` accepts anything). **Pilot must align with real version strings**: what tenant CI/CD emits to `app.kubernetes.io/version` may include uppercase (`V1.0.0`), long Git SHAs, or branch combos — too strict a regex falsely rejects normal deploys, too loose pollutes the label. Finalize the regex after observing real samples in the pilot (may need to relax case / length). | **Self-decided + pilot calibration** |
-
-### `rule-pack-kubernetes` rule classification (OQ-3 concrete result)
-
-| Rule | Class | Reason |
-|---|---|---|
-| `PodContainerHighCPU` / `PodContainerHighMemory` | **version-aware** | join `tenant:alert_threshold:container_*` on `(tenant)` → add `version` |
-| `tenant:alert_threshold:container_*` (threshold-normalization) | **version-aware** | switch to `max by(tenant, version)` + `label_replace` default |
-| `tenant:container_*_percent:by_container` / `:pod_weakest_*:max` | **version-aware** (passive) | must ensure version label propagates into the percent recording rule |
-| `ContainerCrashLoop` / `ContainerImagePullFailure` | **version-agnostic** | based on `user_state_filter` (pod-state string match), no numeric-threshold join |
-
-## Consequences
-
-### Easier
-- Threshold cutover auto-aligns with K8s rolling update — no timing drift, no 3 a.m. auto-merge risk.
-- "What version is running" answerable via `count by(version)(<app metric>)` (feeds §5.6 `check-running-rule` three-layer truth).
-- YAML no longer accumulates historical activation dates.
-
-### Harder / new failure mode (blast-radius)
-- **observed-but-not-declared** (a v2 metric is running but no v2 threshold was declared): **architecturally resolved by dynamic fallback** — an exact-match miss falls back to the `version="default"` threshold instead of dropping the series, leaving no false negative (not a sentinel after-the-fact patch). The `version_unknown` sentinel is demoted to a **visibility signal** (a version is undeclared, or a typo), and its firing needs a buffer (see "version naming and sentinel cadence" below). Residual risk: a typo'd version silently falls to default, caught by orphan detection.
-- **declared-but-not-observed = orphan threshold** (harmless): a threshold series with no matching metric does not fire. It is a GC target (portal yellow, `version_orphaned` 7d/30d), not red.
-- **`default` naming collision**: if a tenant writes both an unversioned threshold (→ `version=""`) and an explicit `{version="default"}`, after `label_replace` both become `version="default"` and take the max within one bucket (a `sum` variant would double-count). Hence da-guard **forbids explicit `default`** (reserved for fallback).
-- **version × multi-severity**: dimensional keys do not support the `_critical` suffix but do support the `value:severity` suffix (`container_cpu{version="v2"}: "60:critical"`, `resolve.go:206-210`), so **a single severity per version is supported**. The normalize uses `max by(tenant, version, severity)` to keep severity, and the alert **must split per severity** (a single-rule `group_left(severity)` hits a `version × severity` cardinality deadlock, see §Decision). The only remaining limitation is "the same version carrying **both** warning+critical tiers" (two keys both have label set `{version="v2"}`, a collision) → defer-with-trigger.
-- **Cardinality truncation must be deterministic**: the per-tenant guard (`resolve.go:229–244`) truncates via `result[:startIdx+limit]`, while dimensional keys are appended by **Go's randomized map iteration**. When a tenant crosses the cap, the dropped version varies scrape-to-scrape → alert series flicker → **alert flapping + repeated PagerDuty pages**. **Must fix**: sort keys deterministically before truncation (protect unversioned / `default` first, then `sort.Strings()`), so the dropped version is always fixed (lexicographically last) and state stays stable. Mapped to AC-7.
-- **Shared `user_threshold` cross-pack leak → PromQL defense-in-depth**: `user_threshold` is shared by all packs. If a tenant bypasses CI and writes `{version=...}` on a **non-piloted component** (redis / mysql), that pack's `sum by(tenant)(user_threshold{component="redis"})` sums across versions → double-count → wrong core alerts. CI guard alone is insufficient (defense-in-depth): every non-piloted pack's normalize matcher adds `version=~"|default"` (matches only no-version / default) so existing alerts stay safe even if the CI guard fails. Trade-off: lightly touches the 13 non-piloted packs (just one matcher, not a full `by(tenant, version)` rewrite).
-- **Dashboards / portal queries assume no version label**: once tenants write version keys, unaggregated `user_threshold{...}` panels see series with a new `version` label, so exact-match-join panels may break → audit Grafana / portal queries.
-
-### To revisit (defer-with-trigger)
-- **`versioned:` dedicated block (Option B)**: trigger = a postmortem where "scattered keys" caused a review miss, or ≥N tenants reporting an ergonomics pain. Re-evaluate touching the hot-reload path then.
-- **GC auto-PR bot**: trigger = after Phase 1 sentinel + portal warning run 1–2 quarters and manual-GC burden complaints persist (#423 §6 Phase 3).
-- **DB-engine ServiceMonitor relabel**: trigger = non-business apps (mysqld_exporter etc. that do not know their own version) need version alignment (#423 §6 Phase 2.5).
-- **sentinel period / cardinality budget**: triggers per OQ-2 / OQ-5.
-
-## Rejected Alternatives
-
-- **R1. `ScheduledValue.from/until` absolute-date schema extension** — Rejected. YAML accumulates meaningless activation dates (an expired `from` is forever true, dead code left in-file) + double-write atomicity (missing `until` → two active conflicting; missing `from` → gap). Swallowing the time axis into declarative config is a structural error. **This is precisely the answer to "why not extend §2.6".**
-- **R2. Scheduled PR Merge orchestration** — Rejected. K8s rolling/rollback drift (Git's instantaneous binary merge cannot align with K8s's 5–10 min gradual rollout) + GitOps propagation lag (merge→ConfigMap→reload 1–3 min) + helm rollback does not reverse-revert a Git PR.
-- **R3. "tenant writes two coexisting PromQL rules directly"** — Rejected. Violates the declarative-only core contract. The concept was correct, though, and was adapted into this ADR's dimensional-label approach.
-- **R4. `POST /active-version` write-state API** — Rejected. Introduces a second state breaking the single SOT; a mid-rolling call causes transient misalignment. The metric carrying the version label *is* the SOT.
-- **R5. PromQL normalize via `or on() vector(0)`** — Rejected (a trap). Breaks downstream `min/avg/sum`; fabricates false positives for "alert when value == 0" rules. Correct form = `label_replace(..., "version", "default", "version", "^$")`.
-- **R6. Per-tenant version injection at the ServiceMonitor (Path A)** — Rejected for Phase 1. Pushes complexity to tenants, violating "centralize in the platform-controlled rule pack". Partially adopted only for the Phase 2.5 DB scenario.
-- **R7. GC auto-PR bot in Phase 1** — Rejected for Phase 1. No bot infrastructure; "stable for 24h" needs a new cron/reconciler (new SLO/failure point); risk of mis-deleting while rolling is incomplete. Phase 1 is detect-only (CLI + sentinel + portal warning).
-
-## Acceptance Criteria (Phase 1 GA, per #423 §8)
-
-1. **AC-1** Existing (unversioned) tenants behave identically after upgrade — no alert / metric series-count change.
-2. **AC-2** A pilot tenant can declare `v1`+`v2` thresholds in `rule-pack-kubernetes`; each metric stream joins its number.
-3. **AC-3** Rolling update (kind) v1→v2 coexistence period: no false positive.
-4. **AC-4** Rollback (kind): v1 metric reappears and aligns to v1 threshold; v2 threshold becomes an orphan but does not mis-fire.
-5. **AC-5** `da-tools detect-orphan-versions` + `check-running-rule` cover the SRE 3-a.m. troubleshooting reflex.
-6. **AC-6** `GET /versions` passes the existing schemathesis contract test.
-7. **AC-7** Cardinality Guard does not warn at N=3 concurrent versions; **and "just over the cap" truncation is deterministic**: `resolve.go` sorts dimensional keys lexicographically before truncation (protecting unversioned/`default` first); the test must assert **the same over-cap config drops the same fixed version across repeated scrapes** (no flapping), not "documented as a known limitation".
-8. **AC-8** Docs synced (dev-rules #4 Doc-as-Code): CHANGELOG / CLAUDE.md / README / migration guide / config-driven.md §2.x / troubleshooting.md.
-9. **AC-9** Alert lifecycle closes: in kind, verify that after a rolling update finishes and old Pods are destroyed so the `{version="v1"}` metric goes absent, **a firing v1 alert is properly resolved** by Prometheus/Alertmanager (join RHS breaks → implicit clear → the notification channel receives `resolved`), ensuring a complete Fire→Resolve loop with no zombie alerts.
-
-## Action Items
-
-1. [ ] **OQ-1 sign-off**: tenant team confirms "pipeline only lets the metric carry version, calls no write API" + provides the business-app version-source template.
-2. [ ] **Rule-pack pilot (dynamic fallback + cardinality-safe severity)**: add the normalize layer (`:vlabeled` + `max by(tenant, version, severity)`) to `rule-pack-kubernetes`; change the 4 version-aware rules to the **exact-or-fallback** PromQL. **⛔ Do NOT use the crashing `group_left(severity)`** — explicitly choose **Route 2 (split per severity, recommended)** or Route 1 (single rule + fallback `max by(tenant)` version flatten + `group_right()`), landing a legal cardinality structure. Validate fallback **and cardinality matching** in a kind cluster (AC-3/AC-4).
-3. [ ] **da-guard (dual-language)**: Go `ValidateTenantKeys` + Python da-guard enforce OQ-6 regex + forbid-list (empty / `default`) + **component scope allowlist** (version key on a non-piloted component → reject) on the `version` label value of dimensional keys.
-4. [ ] **Sentinel**: `da_config_event{event="version_orphaned"}` (7d/30d two-tier) + `version_unknown` (**`for: 5–10m` buffer, not `for: 0s`**, avoids rolling-update false positives) → `rule-pack-operational`.
-5. [ ] **tenant-api**: `GET /api/v1/tenants/{id}/versions` (read-only reconciliation: declared/observed/orphaned/missing) + swag + `make api-docs`. **No** write API.
-6. [ ] **CLI**: `da-tools detect-orphan-versions` (read-only) + `check-running-rule` (three-layer truth).
-7. [ ] **Portal**: tenant-manager timeline panel (Active/Declared/Orphaned green/grey/yellow), `make portal-build` + `make test-portal`.
-8. [ ] **Cardinality measurement**: pilot N=1/2/3 series counts, feed OQ-2.
-9. [ ] **kind validation**: OQ-4 relabel template + AC-3/AC-4 rolling/rollback scenarios.
-10. [ ] **Docs**: new config-driven.md section (mark the §2.6 boundary); `docs/migration/v2.9.0-version-aware.md`; troubleshooting.md "Rule version mismatch".
-11. [ ] **Dashboard / portal query audit**: review unaggregated Grafana / portal queries against `user_threshold` to confirm the new `version` label does not break existing panels.
-12. [ ] **Go exporter deterministic truncation**: in `config/resolve.go::ResolveAtWithStats`, sort dimensional keys deterministically before the cap truncation (unversioned/`default` first, then `sort.Strings()`), eliminating map-iteration flapping; unit test asserts stable over-cap truncation.
-13. [ ] **Non-piloted pack defensive hardening**: add `version=~"|default"` to the `user_threshold` normalize matcher in the 13 non-piloted packs, preventing cross-version double-count if the CI guard fails (maintainer decides inclusion in the pilot vs a later rollout).
-
-## Custom Alerts (Capability B — hierarchical custom alerts, v2.9.0 north star)
-
-> **Implementation status: design converged, implementation in progress** (the architecture decision is accepted, see §Status; not another release, not a maturity gap). Tracker: [#741](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/741) (with [#716](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/716)'s defer items folded in as appropriate). This section continues §Strategic Arc: open the existing version-aware declarative machine to **every tier (platform / domain / tenant)**. Unrelated to this ADR's existing "Phase 2 = the other-packs rollout".
-
-### North star vs the bedrock constraint
-
-The product lifeline is empowering every tier to author alerts, but the bedrock constraint is declarative-only (§Hard constraints). The tiers are carried by the existing `conf.d/` `_defaults.yaml` directory tree (L0 platform / L1 domain / L2 subdomain / tenant leaf, see [ADR-017](017-defaults-yaml-inheritance-dual-hash.en.md) / [ADR-018](018-profile-as-directory-default.en.md)). Key convergence: **of the three risks the "never write PromQL" rule guards against, the hardest — cross-tenant isolation — is already solved structurally by the existing architecture** — so the real design question is not "can we do it" but "expressiveness + rule-count cost".
-
-| Risk | Current state | Custom Alerts reinforcement |
-|---|---|---|
-| Cross-tenant isolation | ✅ Solved — the `tenant-exporters` scrape job stamps the `tenant` label from the namespace (`configmap-prometheus.yaml`), tenants cannot forge it; federation already isolates the read path via prom-label-proxy | A vectorized rule scopes via `on(tenant)` join against the existing namespace-stamped label (same as rule packs); no per-rule injection, no regex |
-| Invalid expression takes down Prometheus | ⚠️ rules are a `/etc/prometheus/rules/*.yml` glob → can be isolated into per-tenant files | promtool hard gate (CI authoritative + tenant-api shift-left preflight) + rule-file isolation |
-| Cost / rule-count bomb | ❌ no protection | **vectorization (no fan-out) + `max_custom_recipes` per-tenant cap + global rule-count budget + rule-eval-duration benchmark**; dynamic AST cost is Future |
-
-### Three-Plane Architecture
-
-- **Plane A — Metric Onboarding**: tenant app metrics enter Prometheus + version is stamped at scrape time. Reuses the existing `tenant-exporters` job; adds a **platform-default** `podTargetLabels` / relabel mapping `app.kubernetes.io/version` → `version` (centralized, resolving R6's "pushes complexity to the tenant" rejection, see §Rejected R6).
-- **Plane B — Recipe Definition**: a platform-authored **parameterized recipe library** (threshold / rate / ratio / absence / increase / **latency p99**). Each tier fills a form (metric / window / op / threshold / severity / `mode`), stored as declarative YAML — **the `_defaults.yaml` level it is declared at (platform / domain / subdomain / tenant leaf) determines its scope**; **never write PromQL, the bedrock holds**.
-- **Plane C — Compiler + safety net**: recipe + params → generate a **vectorized `group_left` rule** (one `app_metric > on(tenant[,version]) group_left(...) <the recipe's user_threshold>` covering every tenant that declared the recipe — **rule count = recipe count, not tenant count**, preserving the O(M) guarantee of [benchmarks.md §2](../benchmarks.md)) → version graceful-join (reuse existing version-aware) → promtool gate → rule-file isolation → GitOps deploy.
-
-### Core decisions (each with trade-off)
-
-- **MVP = Level 1 parameterized recipes**, serving every tier's persona (business devs tenant-scoped, Domain SRE domain-scoped, Platform SRE platform-scoped — one compiler safety net, differing only in declaration level); a Level 2 bounded-DSL / Level 3 raw-PromQL escape hatch is Future. *Trade-off*: buys the declarative-only bedrock + structural promtool safety, sacrifices SRE arbitrary-expression immediacy (caught by defer-with-trigger).
-- **Hierarchical authoring (scope = declaration level)**: the `_defaults.yaml` level a recipe is declared at (L0 platform / L1 domain / L2 subdomain / tenant leaf) determines its blast radius; the compiler emits **one vectorized rule** for that subtree (not N fanned-out rules). A Domain SRE writes once, applies to the whole subtree, without editing N tenant files. **Platform/domain policy = a generated rule the tenant cannot override** (same mechanism as rule packs: the rule lives in a `_defaults.yaml` + CI-generated file the tenant's RBAC cannot write; non-overridability is structural, not a lock flag); a tenant-leaf recipe is tenant-owned. **Routing**: the vectorized rule's existing `group_left(owner, runbook_url, tier)` defaults to paging the tenant's team (semantically correct). *Trade-off*: a single bad domain recipe breaks the whole subtree's rules → its shift-left promtool gate carries more weight. Finer governance ("advisory / tenant-opt-out domain recipe" and "strictly non-overridable") is Future.
-- **Recipes are platform-authored**, same governance model as rule packs. *Trade-off*: expressiveness bounded by the recipe library, buys a limited PromQL-generation surface → safety is structural, not luck.
-- **Metric catalog = read-only discovery view** (reverse-discovered from Prometheus `/api/v1/metadata` + `/api/v1/series` for type / existence), abolishing manual registration. Eliminates "tenant lies about type → compile crash"; but discovery solves the lie-risk, not the cost-risk (still needs the cost cap below). **Version-awareness is not stored as a flag** — the compiler always emits the existing graceful-degradation join, safe whether or not the label is present. This view subsumes [#716](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/716)'s `/effective`.
-- **Compilation authority stays in CI** (aligned with [#692](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/692) generator-of-record), tenant-api adds a **shift-left promtool preflight**: on PUT, compile in-memory + `promtool check rules`, reject with HTTP 400 immediately on error. *Trade-off*: tenant-api needs the promtool binary, buys instant-validation UX + CI only ever sees "promtool-blessed perfect YAML" (clean separation of concerns).
-- **Cross-tenant isolation is structural**: the vectorized rule's `on(tenant)` join scopes against the existing namespace-stamped `tenant` label (same as rule packs), which cannot be forged. Near-zero cost; **no** per-rule injection, **no** giant regex.
-- **Performance honesty: O(M)-independent-of-N holds only for shared metrics**. Vectorization removes the "pointless fan-out duplication" (a shared metric is no longer copied into N rules), but it cannot remove "different metrics necessarily mean different rules" — a single PromQL has a hardcoded metric name, so tenant A's `order_created_total` and tenant B's `payment_failed_total` must generate two rules. So custom-alert rule count grows **linearly with the total number of custom alerts (≈ N × recipes-per-tenant)**, NOT enjoying the [benchmarks.md §2](../benchmarks.md) O(M) guarantee that rule packs do. **Guardrail trio**: (a) a hard `max_custom_recipes` per-tenant cap → bounds the total at N×cap; (b) a global rule-count budget (the cap value is back-derived from measured rule-eval-duration, not guessed); (c) a bad rule only breaks its own rule-file group + rule-group `limit` (native in Prometheus 3.x) + promtool hard gate. Dynamic AST cost prediction is Future (named tools like `mimirtool` are verify-before-adopting, not locked in). *Trade-off*: accept linear rule growth for unique metrics (bounded by the cap) in exchange for tenant-authored business alerts.
-- **Version injection uses a platform-default relabel** (centralized `podTargetLabels`), resolving the R6 "pushes complexity to the tenant" rejection. *Trade-off*: only holds for "pod-deployed app metrics carrying `app.kubernetes.io/version`"; external / managed backends are Future.
-- **Dry-run uses `mode: [active | silent]`** (not `shadow`, to avoid colliding with the existing Shadow Monitoring migration semantics); `silent` compiles to an alert routed to a null / log-only receiver, reusing the existing empty-receiver route. *Trade-off*: needs an explicit null route for the silent class (do not rely on default fall-through), buys zero new schema + alert-storm protection.
-
-**Three design boundaries** (implementation must define): (a) **metric name collision** — discovery must filter per-tenant (`{tenant="X"}`), the picker shows only that tenant's metrics; (b) **metric disappearance / phantom metrics** — a recipe's metric must exist in the discovery catalog (tenant-api preflight fail-fast rejects building an alert on a non-existent metric, preventing thousands of phantom rules from degrading the evaluator); post-creation absent/staleness behavior is the tenant's responsibility by default, but must be stated; (c) **provenance** — a vectorized rule cannot hardcode the source at compile time (one rule serves many tenants/policies), so provenance moves to the data plane: the exporter emits a separate meta series `tenant_threshold_meta{tenant, recipe, policy_source}` and the rule `group_left(policy_source)` to mark "this is a domain policy" so on-call doesn't mis-delete it (mirrors the existing `tenant_metadata_info` pattern, without polluting `user_threshold` cardinality). Provenance can be a post-MVP follow-up.
-
-### Reuse of existing machinery (the foundation paying off — why both capabilities share one ADR)
-
-| Custom Alerts needs | Reused existing asset (version-aware / platform) |
-|---|---|
-| scrape ingestion + version stamping | `tenant-exporters` job + version-aware's `app.kubernetes.io/version` source (platform-default relabel) |
-| version graceful join | version-aware normalize layer's `version=~"\|default"` left-outer-join |
-| tenant isolation | namespace→`tenant` scrape-stamp + prom-label-proxy (ADR-020) |
-| hierarchical scope (platform/domain/tenant authoring) | `_defaults.yaml` directory-tree inheritance (ADR-017/018) — declaration level = scope |
-| one-rule-covers-all-tenants vectorization | the rule packs' existing `on(tenant) group_left` O(M) pattern (benchmarks.md §2) |
-| compilation authority + GitOps | `operator_generate` (#714) + Directory Scanner + conf.d projected volume |
-| write validation / defaults merge | tenant-api `validate()` + `MergeTenantWithRootDefaults` (#706) |
-| onboarding-vacuum isolation | left-outer-join enrichment (#709) |
-| promtool gate | the rule-pack CI promtool pattern |
-| dry-run inhibition | the existing Shadow Monitoring inhibition route |
-
-The only **net-new core**: recipe library + parameter schema + recipe compiler + discovery catalog + cost cap + two UXs (onboarding / recipe editing).
-
-### MVP vs Future Work (defer-with-trigger)
-
-**MVP / GA bar**: discovery catalog + onboarding (the common k8s pod app-metric case), 6 core recipes (threshold / rate / ratio / absence / **p99 latency** / **`forecast`**, where forecast = trend / exhaustion prediction dual-mode, see §Forecast Recipe), **vectorized compiler (no fan-out) + scope-aware authoring (declaration level → vectorized rule) + `max_custom_recipes` cap**, the full safety pipeline, recipe editing + `mode: silent` preview, version graceful-join.
-
-**Future Work**:
-
-- Level 2 bounded DSL — *trigger*: the first real SRE alert that no recipe + composition can express.
-- Level 3 raw PromQL + cost limit — *trigger*: a customer contractually requires arbitrary PromQL and accepts the cost regime.
-- **domain-aggregate alerts** (a single rule aggregating across a domain subtree, e.g. a domain-wide error budget) — *trigger*: the first customer needing cross-tenant aggregation. Membership resolves from the conf.d tree: **small N can bake `tenant=~members`; large N (hundreds of tenants) hits Prometheus regex limits / query CPU → switch to scrape-time `domain` label injection, not a giant regex**. The isolation model shifts from structural per-tenant to "compile-time bounded to the subtree".
-- **provenance label** (`tenant_threshold_meta` + `group_left(policy_source)`) + **finer governance for strictly-non-overridable / advisory-opt-out domain recipes** — *trigger*: a real support case of domain-policy ownership confusion / a compliance requirement.
-- Version-awareness for external / managed backends (ServiceMonitor relabel) — *trigger*: a managed-DB customer needs version alerts (subsumes [#716](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/716) item 1).
-- [#692](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/692) in-memory dynamic compiler — *trigger*: CI round-trip latency becomes a real adoption blocker (until then keep generator-of-record, preserving the promtool safety net).
-- Dynamic AST cost prediction / recipe composition — *trigger*: demand appears.
-
-### Custom Alerts Acceptance Criteria (proposed)
-
-1. A tenant can create one alert via the portal recipe form (threshold / rate / ratio / absence / p99) without touching PromQL; saving goes through GitOps.
-2. tenant-api (PUT/batch/validate) returns HTTP 400 with the error location for a recipe that fails **in-process Go spec validation** (shift-left preflight, mutation-proven; **implemented**, see §S5. promtool stays the CI golden gate for template regressions, off the request path).
-3. Cross-scope isolation: the vectorized rule scopes via `on(tenant)`; a tenant-leaf recipe affects only that tenant, a domain recipe joins only the tenants under that subtree (each carrying its own `tenant=`) and does not spill outside the subtree; over-reach (a tenant referencing another's, or crossing subtrees) is blocked at compile time (test assertion).
-4. A bad recipe (if it bypasses the gate) only fails its own rule-file group load; platform packs and other tenants' rules are unaffected (kind-verified).
-5. **rule-eval scale**: a shared-metric recipe's rule-eval-duration is independent of tenant count (vectorized, measured against benchmarks.md §2); unique-metric rule count is bounded by the `max_custom_recipes` cap, the global rule-count stays within budget, and eval-duration does not exceed the scrape interval (**measured pre-GA benchmark, not reasoning**).
-6. A `mode: silent` recipe, when firing, routes to a null / log-only receiver and leaves a trace in Grafana, confirmed **not** to reach PagerDuty / Slack (routing test).
-7. The discovery catalog shows a tenant only their `{tenant=}` metrics + correct type; a newly-onboarded metric appearing in the view = onboarding succeeded (merges [#716](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/716)'s `/effective`).
-8. A recipe on a version-aware metric auto graceful-joins, falling to `default` when the label is absent, producing no NaN / empty set (reuses the version-aware invariant).
-9. Cost guardrails: rule-group `limit` + per-tenant cap are in effect, with deterministic over-cap behavior (aligned with the existing version-aware truncation invariant).
-10. Doc-as-Code: a recipe author guide (bilingual) + a config-driven.md recipe section + troubleshooting.
-
-### Custom Alerts new dependencies / blast-radius
-
-- **network policy**: if the discovery catalog is driven from tenant-api, add a `tenant-api → prometheus:9090` egress / ingress allowance (currently `network-policies.yaml` only allows grafana / threshold-exporter).
-- **alertmanager**: add an explicit null / log-only route for `mode: silent` (do not rely on the test-env default fall-through).
-- ~~**tenant-api image**: bundle the `promtool` binary (for the shift-left preflight)~~ → **no new dependency** (the S5 preflight is in-process Go, §S5; promtool stays in CI).
-- **Prometheus version**: rule-group `limit` needs ≥ 2.31 (current v3.11.2 ✅); `/api/v1/metadata` + `/series` (v3.x ✅).
-
-### Forecast Recipe (trend / exhaustion prediction, #741 follow-up)
-
-> **Decision**: add a 6th recipe `forecast` (trend / exhaustion prediction, dual-mode ratio / raw) + a platform-derived lookback + a cold-start gate, never letting tenants write PromQL; plus a related fix for an existing `for` divergence P0 ([#751](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/751), TRK-326). Each decision below carries its trade-off.
-
-Target customers already run **trend-prediction** alerts like "disk / memory will be exhausted within N hours at the current trend" — a defer-trigger that is **already tripped by a real existing need**, so it is a near-term committed slice, not backlog. But **raw `predict_linear` must not be exposed to tenants directly**: it is a well-known false-positive factory in the SRE world (transient spikes linearly extrapolated, log-rotation sawtooth treated as linear, too-short lookback = pure noise). Product stance — platform-SRE seals off the FP sources and packages them into a parameterized recipe (this is precisely the recipe model's core value over "tenants writing PromQL": anti-foot-gun wisdom tuned once, every tenant benefits).
-
-**Decisions (each with trade-off)**:
-
-- **A single `forecast` recipe, dual-mode** (presence of `capacity_metric` is the mode switch, reusing `ratio`'s denominator slug slot): **ratio mode** (with `capacity_metric`) predicts "the ratio will drop below the floor", `threshold` = the ratio floor ∈ (0,1), `op` usually `<`; **raw mode** (no `capacity_metric`) predicts "a raw gauge will cross an absolute threshold", `threshold` = absolute value, `op` usually `>`. *Trade-off*: one recipe with two `threshold` semantics, in exchange for no recipe-count bloat + a shared compiler skeleton; resolved via docs + per-mode validation (ratio mode enforces ∈ (0,1)).
-- **True prediction (predict crossing the floor), not a "low AND falling" pseudo-prediction**. A "`predict ≤ 0` + current-value gate" draft was rejected — the current-value gate castrates the forecast's lead time (fires only once already below the floor, degenerating into a threshold alert). The fix: run `predict_linear` on a **recorded ratio / aggregate series** and compare directly against the tenant's floor, so "still at 40% but falling fast" fires early. *Trade-off*: one extra base recording rule (working around `predict_linear` not being allowed to range-select a division / aggregation expression inline), in exchange for genuine lead time.
-- **Lookback is NOT tenant-settable; the platform derives `lookback = max(k·horizon, 1h)` (k≈2, integer seconds)**; the tenant only picks `horizon` (enum, e.g. `["1h","2h","4h","12h","24h","48h"]`, covering short bursts to slow exhaustion, cardinality locked to 6, into the slug). Rationale: (a) lookback is an expert knob whose exposure is the biggest foot-gun (naive predict alerts most often die from too-short lookback); (b) `horizon ≤ lookback` **holds by construction**, no extra validation; (c) lookback is a pure compile-time function of horizon, **the Go exporter never touches it**, so the cross-language slug only gains `horizon`; (d) it does not reproduce `for` divergence (lookback is not an independent tenant value). *Trade-off*: loses the "long smoothing window + short horizon" combo (a few extra-noisy metrics); mitigated by a larger k + a 1h floor, and if a real need appears, k can become an enum (defer-with-trigger).
-- **Cold-start data-sufficiency gate**: `predict_linear(<base>[lookback], horizon) and count_over_time(<base>[lookback]) > N` (N to be back-derived from benchmark, start with N>3). A freshly-onboarded / freshly-deployed series has too few points → wild predictions. ⚠️ This is a "**enough data?**" gate (does not touch lead time), **not** the rejected "current-value" gate.
-- **`forecast` only takes gauges (or gauge-like ratios)**: `predict_linear` computes garbage slopes on counter-reset series (the reset is a negative jump) → counters must be `rate()`-d first (not in MVP, deferred).
-
-**Compiled expansion (vectorized)**: both modes converge to the standard form `custom:metric {op} custom:threshold` → **`_core_record` (version graceful-join + `unless … user_state_filter{maintenance}`) is reused verbatim**, only `_metric_record` gains a forecast branch. Each mode = base record (mode-specific) + forecast record (uniform) + core (reused). Ratio-mode conceptual form (**implemented** in #741: emitted by `recipes.py::_forecast_records`, the `forecast.yaml` promtool golden verifies lead-time firing + label topology with realistic K8s scrape labels):
-
-```promql
-record  custom:ratio:{id}   = sum by(tenant)(avail{sel}) / sum by(tenant)(cap{sel})
-record  custom:metric:{id}  = label_replace(
-            predict_linear(custom:ratio:{id}[{lookback}s], {horizon_s})
-            and count_over_time(custom:ratio:{id}[{lookback}s]) > {N},
-            "version","default","version","^$")
-record  custom:{id}:{sev}:core = custom:metric:{id} {op}
-            on(tenant,version) group_left(name,mode) custom:threshold:{id}{severity}  +  maintenance suppress
-```
-
-Raw mode: the base becomes `custom:agg:{id} = max by(tenant,version)(metric{sel})`, the forecast record runs `predict_linear` on it, the rest identical. The cold-start gate's two operands **derive from the same base series and share an identical label set**, so a bare `and` matches **without `on()`** (promtool-proven; by contrast range-selecting an expression `(...)[range]` is a parse error "ranges only allowed for vector selectors"). All time arithmetic uses **integer seconds**, the `[lookback]` emits an integer-unit duration (e.g. `[28800s]`, eliminating `1.5h`-style parse errors), with a property test locking the duration grammar.
-
-**Worked example (disk-fill, ratio mode)** — the tenant declaration (`_custom_alerts`, no PromQL):
+A concrete example (tenant declaration, no PromQL):
 
 ```yaml
 - recipe: forecast
@@ -485,252 +146,74 @@ Raw mode: the base becomes `custom:agg:{id} = max by(tenant,version)(metric{sel}
   threshold: "0.15:warning"   # predict the available ratio dropping below 15% within 4h
 ```
 
-Compiled (conceptual):
+Designing forecast surfaced a correctness bug the existing recipes already carried: `for` (the sustain duration) was not part of a recipe's shape identity, so when two tenants shared a shape but set different `for`, the latter's `for` was silently dropped. `mode` can ride the data plane via `group_left`, but `for` is a control-plane static rule attribute that `group_left` can't save — so `for` was brought into the shape slug + a schema enum (including and preserving the existing `default: "1m"`), locking cardinality to a constant.
 
-```promql
-# horizon=4h → 14400s;  lookback = max(2·4h, 1h) = 8h → 28800s;  cold-start N=3
-custom:metric:<rid> = label_replace(
-  predict_linear(custom:ratio:<rid>[28800s], 14400)
-  and count_over_time(custom:ratio:<rid>[28800s]) > 3,
-  "version","default","version","^$")
-# fires: per the last 8h slope, the available ratio will be < 0.15 within 4h (fires early, while headroom remains)
-```
+## Data Flow: Ingest → Define → Compile
 
-**Cross-language slug contract change**: `forecast` joins `RECIPES` (`shape.py` + Go `customAlertRecipes`); **`horizon`** is added as a slug parameter (synced across `shape.py::recipe_id` + `custom_alert.go::RecipeID` + `recipe_id_vectors.json` and grammar vectors); `capacity_metric` reuses the `den_…` slug slot; `lookback` is **NOT in the slug**. Plus `for` enters the slug + enum-bound (see below).
+- **Ingest** — tenant app metrics enter Prometheus + are scrape-time branded with `tenant` / `version`. Reuses the existing `tenant-exporters` job + a platform-default relabel mapping `app.kubernetes.io/version` → `version` (centralized, not pushed per-tenant).
+- **Define** — each level fills a recipe form in `_defaults.yaml`, stored as declarative YAML; the declaration level decides scope.
+- **Compile** — recipe → vectorized `group_left` rule → version graceful-join → promtool gate → rule-file isolation → GitOps deploy (operator manifest + ConfigMap projected volume + Prometheus reload; no ArgoCD/Flux).
 
-**Caveats (must be documented externally)**: (1) **Negative forecasts** — for physically non-negative metrics, a downward trend can extrapolate `predict_linear` to a negative value: upward `>` (exhaustion / ceiling, the mainstream case) negative predictions don't fire, harmless; downward `<` the firing decision is still correct (it is indeed crossing below) but the annotation `$value` may show a negative number (**a display / cognitive issue, not a false-positive**), so recommend `>` toward an upper bound for non-negative metrics; `clamp_min(…, 0)` is an **opt-in parameter, deferred** (temperature / net flow / balance deltas are legitimately negative, cannot be a default; `clamp_min` never changes the firing decision for `threshold ≥ 0`, only the displayed value). (2) **gauge-only** (counters must be rate-d first). (3) **build-up period** — `custom:fcbase` is a recording rule that only accumulates after deploy, and `predict_linear` ranges over it `[lookback]`. The cold-start gate (`count > 3`) only suppresses the **first few samples** (~minutes); it does **not** cover the whole build-up until the lookback window fills (~hours), during which the slope is fit on **partial-window data** and may be unstable. The real mitigation is the **`for` sustain** (a transient partial-data spike cannot persist the sustain duration), so forecast recommends a longer `for` (the example uses 30m).
+## Reuse of existing machinery (why both capabilities share one ADR)
 
-**Acceptance Criteria (forecast addition, continuing the §Custom Alerts AC above)**: ① create one forecast alert (either mode) without touching PromQL, promtool passes (**realistic K8s scrape-label fixture, not lab-clean**); ② "the ratio will drop below the floor" fires **early** while there is still ample headroom (lead-time assertion); ③ the derived lookback is an integer-unit duration (property test locks the grammar) and `horizon ≤ lookback` holds by construction; ④ cold-start: base samples < N do not fire; ⑤ Go `RecipeID` == Python `recipe_id` (golden vector includes forecast + horizon vectors); ⑥ upward `>` negative predictions do not fire (regression assertion).
+| Custom Alerts needs | Reused existing asset |
+|---|---|
+| scrape ingestion + version branding | the `tenant-exporters` job + the platform-default `app.kubernetes.io/version` relabel |
+| version graceful join | the version-aware normalize layer's `version=~"\|default"` left-outer join |
+| cross-tenant isolation | namespace→`tenant` scrape-stamp + prom-label-proxy ([ADR-020](020-tenant-federation.md)) |
+| hierarchical scope | `_defaults.yaml` directory-tree inheritance ([ADR-017](017-defaults-yaml-inheritance-dual-hash.md)) |
+| one vectorized rule covering all tenants | the rule-pack `on(tenant) group_left` O(M) pattern |
+| silent | [ADR-003](003-sentinel-alert-pattern.md) sentinel + inhibit |
+| write validation / default merge / maintenance suppression | tenant-api `validate()` + `MergeTenantWithRootDefaults` + `user_state_filter{filter="maintenance"}` |
 
-**Related P0: `for` divergence ([#751](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/751), TRK-326)**: while designing forecast we surfaced a **correctness bug that the existing recipes already carry** — `for` is not part of the shape identity (`recipe_id` / `shape_signature`), so when two tenants share a shape but set different `for`, the latter's `for` is silently dropped (taking the first-seen value, no error or warning). `mode` can ride the data plane via `group_left` (per-tenant), but Prometheus `for:` is a control-plane **static rule attribute** that `group_left` cannot save. **Fix (a+ Strict Enum Bounding)**: bring `for` into the `recipe_id` slug + a schema-enforced enum (which must include and preserve the existing `default:"1m"`), locking cardinality to a constant and preventing free-form `for` from degrading O(M) into O(N). **P0, fixed before GA, folded into the S3-related flow, NOT coupled to forecast**; file:line forensics and full acceptance criteria live in #751 (SoT).
+The only **net-new core**: the recipe library + parameter schema + recipe compiler + discovery proxy + cost cap + the recipe-editing UX.
 
-### S5 — shift-left preflight (tenant-api recipe validation, #741)
+## Key Trade-offs
 
-> Converged over three rounds (brainstorm 5-questions + self-adversarial + Gemini external review): C → C+. **Deviates from the ADR's literal text** (does NOT bundle promtool, see "ADR deviation" below); §Custom Alerts AC #2 + the dependency list must be updated to match.
+The core judgment is **reuse-over-build**: 90% of the target capability already exists in the dimensional mechanism. The only real gain from building a new schema is authoring grouping, at the cost of touching the hot-reload critical path + introducing a second, duplicative default-injection path + turning backward compatibility from "automatic" into "must verify". So everything reuses existing machinery with the minimum net-new surface, with the cost stated honestly (custom-alert rule count is linear in unique metrics, capped) in exchange for letting every level author business alerts without writing PromQL.
 
-**Context / intent**: AC #2 requires tenant-api to validate a tenant's recipe BEFORE the GitOps write and return HTTP 400 on invalid input — shift-left (the tenant learns at `PUT` time, not days later at CI). The original ADR envisioned bundling `promtool` in the image + a post-compile promtool check; this addendum re-examines that mechanism before implementing.
+## Consequences
 
-**Two-layer verification architecture** (the core mental model):
+**Gets easier**: version-threshold cutover auto-aligns with the K8s rolling update with no timing drift; "which version is running" answers directly via `count by(version)(<app metric>)`; YAML stops accumulating historical effective-dates; each level self-authors alerts without the platform adding a rule one at a time.
 
-- **Layer 1 — Go preflight (tenant-api, in-process, fast, stateless per-tenant input gate)**: fail-fast on tenant **input-surface** errors, return 400 — **bad input never enters the repo**.
-- **Layer 2 — CI Python compiler (global authority, stateful + promtool)**: cross-tree / hierarchical inheritance / vectorization / template promtool — the only gate with global SOT authority.
+**Gets harder / new failure modes** (and their resolution):
 
-**Decisions (each with trade-off)**:
+- **observed-but-not-declared** (a metric is running, no threshold declared for that version) → dynamic degradation **resolves it architecturally** (auto-fallback to default, no dropped series). Residual: a typo'd version silently lands on default, caught by orphan detection.
+- **`default` name collision** — da-guard **forbids an explicit `default`** (reserved for the fallback), avoiding the ambiguity of taking a max in the same bucket as an un-versioned threshold.
+- **cardinality truncation must be deterministic** — the per-tenant guard must sort dimensional keys deterministically before truncating (protect un-versioned / `default` first), or Go's random map order makes the truncated version flicker per scrape → **alert flapping + repeated pages**.
+- **shared `user_threshold` leaks across packs** — non-pilot packs add `version=~"|default"` to their normalize matcher (accept only un-versioned / default), keeping existing alerting safe even if the CI guard fails (preventing double-count).
+- **Dashboards / portal queries assume no version label** — once tenants write version keys, un-aggregated queries grow series carrying `version` → Grafana / portal panels must be reviewed.
+- **ops-review tools' inheritance consistency** — `_custom_alerts` inheritance is UNION (own + inherited), unlike the REPLACE of generic arrays; diagnostic tools (describe_tenant / blast_radius) must delegate to the compiler's inheritance resolution (the SSOT), or they under-report a platform-policy change for override tenants.
 
-- **Reuse Go validation; do NOT bundle promtool / Python in the prod image**. tenant-api can already import `pkg/config/custom_alert.go`, a prod-grade Go validator (shared with the exporter: metric regex / reserved label / recipe·op·severity·mode·for·horizon enums / ratio-floor ∈(0,1) / NaN·Inf); export `ValidateCustomAlertSpec` to reuse it. *Trade-off*: not running the real compiler + promtool (full fidelity) on the request path → in exchange for avoiding a Python runtime + dev-tooling script copies + a promtool binary + a hot-path subprocess in a Go service (image bloat / dev-prod boundary blur / subprocess failure modes). **promtool is redundant for tenant input**: tenants never write PromQL, recipe templates are platform-authored, valid spec → valid PromQL → promtool only adds "template regression" detection (a platform problem), kept as the **CI golden** gate (not something a tenant request should block on).
-- **Selector value: both Go and Python accept any key-valid value** (both validate only the key). The injection boundary is **Python `_escape_value`** (`shape.py`; backslash-first → `"` → newline; the value always sits inside a quoted literal and cannot escape out → injection is structurally impossible; covered by `test_selector_value_is_escaped`). The Go preflight does **not** replicate escaping (it emits no PromQL — nothing to escape). *Adversarial check*: the external-review claim of "malformed PromQL / CI deadlock" was verified false (the escaping is correct, round-trips, promtool-accepted).
-- **Hook into the shared `gitops.validate()`** (`internal/gitops/writer.go`) → `PUT` + batch + dry-run `/validate` covered uniformly (not a PutTenant-only inline check).
-- **Error shape**: HTTP 400 + `ErrorResponse{Violations[]}` (`handler/errors.go`'s existing `WriteValidationErrors`, `code: INVALID_BODY`).
+**Key invariants** (acceptance contract, not a tracking checklist): (1) an existing tenant that never wrote a version is 100% behavior-equivalent after the upgrade (no series-count change); (2) over-cap truncation drops the same version across scrapes (no flapping); (3) a `mode: silent` recipe firing does not reach PagerDuty / Slack, leaving only a Grafana trace; (4) after a rolling update ends and the old-version metric disappears, a firing alert receives a proper Resolve (no zombie alert); (5) a recipe on a version-aware metric graceful-joins automatically, falling to default when the label is absent, producing no NaN / empty set.
 
-**Test strategy** (precise boundary):
+## Rejected Alternatives
 
-- **Cross-language stateless contract fixture**: per-recipe validation decisions (syntax / regex / reserved label / enum bounds / **adversarial selector value** acceptance) — Go and Python **both assert** accept/reject agreement (extends `recipe_id_vectors.json` from slug to validation behavior). Plus one **Python promtool test** proving an adversarial value compiles to valid escaped PromQL.
-- **Stateful validation** (name collision / cap overflow / cross-tree): NOT in the shared fixture (expression boundary) → Go `custom_alert_test.go` + Python `test_compile_custom_alerts.py` each with mock-tree integration tests.
+- **`ScheduledValue.from/until` absolute-date schema extension** — YAML accumulates meaningless effective-dates (an expired `from` is always true) + dual-write atomicity risk. Swallowing the time axis into declarative config is a structural error.
+- **A `POST /active-version` write-state API** — introduces a second state that breaks the single SOT; calling it mid-rolling creates transient misalignment. The metric carrying its version IS the SOT.
+- **Scheduled PR-merge orchestration** — Git's instantaneous binary merge can't align with K8s's 5–10 minute progressive rollout + GitOps propagation lag + helm rollback doesn't reverse-revert the Git PR.
+- **PromQL normalize via `or on() vector(0)`** — breaks downstream aggregation and false-positives rules that alert on value 0. The fix is `label_replace(..., "version", "default", "version", "^$")`.
+- **Tenants write PromQL directly** — violates the declarative-only rule; conceptually correct but adapted into the dimensional-label / recipe approach.
+- **Silent via a route-to-null receiver** — inconsistent with [ADR-003](003-sentinel-alert-pattern.md)'s existing inhibit paradigm and the suppressed state is invisible in the AM UI; reuses sentinel + inhibit instead.
+- **Change `_custom_alerts` from a list to a dict (keyed by name)** — dict-merge is override-on-key-collision, which is **not** the UNION inheritance ADR-024 requires (a tenant reusing a platform recipe's name would silently wipe the policy); and the list shape is wired through the whole engine (Go exporter / tenant-api / portal / compiler) → a disproportionate blast radius. ops-review tools delegate to the compiler's inheritance resolution instead, with no schema change.
 
-**Scope (honest boundary)**: Go preflight = per-recipe spec + within-`PUT` tenant name/severity/slug uniqueness + own-recipe cap (**counted on the resolved final state**: PUT is full-overlay [`writer.go` `os.WriteFile` replaces the whole file] → body = the complete own set; batch counts the post-merge result, not the raw delta). **Not covered** (→ CI authority): (1) an own recipe duplicating an **inherited** policy shape; (2) compiler template PromQL bugs.
+## Boundary with Scheduled Thresholds (§2.6)
 
-**Blast-radius / guardrails**: pure **in-process Go** (no subprocess → no timeout / degradation mode to design), fail-closed (invalid spec → 400, correct).
+[config-driven.md §2.6](../design/config-driven.md)'s `ScheduledValue.overrides: [{window, value}]` is a **recurring time-window** mechanism, deliberately separate from this ADR and able to act on the same tenant at the same time:
 
-**Options evaluated and rejected**: **A1 (ADR literal)** bundle promtool + post-compile check → heaviest, promtool redundant for tenant input → rejected. **A2** shell out to the real compiler `--check` (full fidelity, zero drift) but no promtool → **prod depends on dev-tooling scripts** + hot-path subprocess + the fail-open/closed dilemma → rejected.
+| Dimension | §2.6 Scheduled Thresholds | ADR-024 Version-Aware |
+|---|---|---|
+| Switch axis | **time** (recurring window, reads wall-clock) | **state / version label** (does not evaluate time) |
+| Trigger | UTC clock tick, daily recurring | app upgrade brings a new version on the metric, a one-time cutover |
+| Typical case | "relax to 200 nightly 22:00–06:00" | "tighten the CPU threshold from 80 to 60 after v2 ships" |
 
-**ADR deviation (must update)**: AC #2 "post-compile **promtool** fails → 400" + the dependency "tenant-api image bundles promtool" → change to "**Go spec validation** → 400; promtool stays the **CI golden** gate". Intent met and lighter; promtool remains the authoritative gate for template regressions (at CI, not on the request path).
+The two are orthogonal: §2.6 handles periodic windows, this ADR handles one-time version alignment.
 
-**Open question — OQ-S5-1**: own-vs-inherited-policy collision → **deferred to CI**. *Rationale (SOT authority, not tree-walk cost)*: tenant-api's local disk is **not** the authoritative global tree — within the GitOps propagation vacuum a Domain SRE may have just changed a policy that tenant-api's local disk hasn't synced yet → a hot-path tree-walk would false-pass on a **stale** tree anyway. **With no absolute SOT, a hot-path tree-walk is an imperfect defense**; leave it to the CI compiler gate, which has global authority.
+## Cross-Reference
 
-**S5 Acceptance Criteria**: ① `PUT`/batch/`/validate` return 400 + `Violations[]` for an invalid recipe spec and do **not** touch the GitOps write (mutation-proven: removing the preflight lets a bad spec through); ② cross-language stateless fixture: Go and Python agree on every `(spec → accept/reject)` (incl. adversarial selector values); ③ valid recipes still write / dry-run returns ok (no regression); ④ the preflight is pure in-process Go — **no new tenant-api image dependency** (no Python / promtool).
-
-### S6 — metric discovery catalog + recipe-authoring UX (#741, the final GA slice)
-
-> Converged over brainstorm 5-questions + three self-adversarial rounds + Gemini external review (Mid → Mid++). **The structural conclusion held after external review** (stateless discovery + portal soft-warn + S6a/S6b split); only parameter / guardrail refinements were absorbed. Philosophy anchor: **Dumb Pipes, Smart Endpoints** — a thin backend with minimal state, the intelligence (debounce / type filter / ghost soft-warn) lives in the portal.
-
-**Context / intent**: S1–S5 let a tenant **write** a correct recipe, but the tenant "doesn't know which metrics they have to write against". S6 adds **discovery (the list of selectable metrics) + authoring UX (a portal recipe form)**, completing the last piece of the §Custom Alerts MVP; afterward epic #741 ≈ GA-complete (only S7/S8 routing + radar items remain tracked separately).
-
-**MVP split**:
-
-- **S6a — discovery backend (stateless)**: a new read-only tenant-api endpoint that queries Prometheus for **this tenant's own** app-metric names (filtered by `{tenant="<authID>"}`), feeding the portal's metric autocomplete. **No** config state is persisted (pure proxy + filter).
-- **S6b — portal recipe-authoring UX (JSX)**: a recipe form (pick metric → pick recipe → fill params) + `mode: silent` preview; consumes the S6a endpoint.
-
-**Core decisions (each with trade-off)**:
-
-- **Discovery = a stateless Prometheus proxy, not a self-built metric catalog** (reuse-over-build). Reuse the existing `federation/fedpolicy/admission.go::seriesQuerier` pattern (`/api/v1/label/__name__/values?match[]={tenant=…}`, `io.LimitReader` 1MB, 5s timeout, result cap). *Trade-off*: each query hits Prometheus live (not a pre-built cached index) → in exchange for not maintaining catalog state that would drift from Prometheus's real series + keeping the stateless property. **Endpoint version note**: `match[]` on `label/__name__/values` had a perf regression in Prometheus <2.24; this repo's v3.x is safe (external review confirmed).
-- **lookback default = 24h (not a short window) + drop the "show inactive" toggle** (external-review reframe). The tenant's authoring pain is "**I can't find the metric I just wrote**", far worse than "I see an old dead metric"; a short window (e.g. 1h) would make **daily batch / CronJob and other intermittent metrics vanish entirely** → un-authorable. So default to 24h to cover daily-cadence intermittent sources; the search bar itself filters, no extra toggle needed. The real UX win is **metadata type filtering** (filter by gauge/counter via `/api/v1/metadata`, so a gauge-only recipe [e.g. forecast] lists only gauges) — folded into S6b (OQ-S6-1 / OQ-S6-2 both resolved).
-- **Force-locked query string + `url.QueryEscape`** (external-review harden, security guardrail). The Go query builder does **not** let tenant input touch the matcher structure; the `tenant` label is branded by the tenant-exporters scrape job at scrape time (not tenant-forgeable):
-  `match[]={tenant="` + `url.QueryEscape(authID)` + `",__name__=~"` + `url.QueryEscape("^"+q+".*")` + `"}"`.
-  *Trade-off*: a tenant can only prefix-search their own metrics (no arbitrary PromQL selectors) → in exchange for shutting the cross-tenant snooping / injection surface, preserving tenant-agnostic isolation.
-- **Per-tenant rate-limit (a required S6a guardrail, separate from PUT)**. The discovery endpoint is a **Prometheus proxy** → it must be rate-limited to prevent TSDB starvation: portal debounce only protects the **UI path**, it cannot stop a tenant **script / CronJob hitting** the API directly (external-review Reef 1, "proxy thundering herd"). S6a adds a per-tenant token bucket (e.g. 30/min) on the `/metrics` endpoint, independent of the PUT quota. *Trade-off*: a rate limiter is a small bounded counter (request-rate state, not config state) → it does not break the "stateless config" property. **A micro-cache (5–10s TTL, keyed `tenant+q`) is listed as a defer-trigger**: add it only if measured rate-limiting still leaves UI friction (rate-limiting alone already protects Prometheus; the cache only further sheds load + improves the hammering client's experience, not day-1 essential).
-
-**Ghost-metric protection, layered**: a tenant pre-creates a recipe for a metric that "will appear later" (or the metric has since vanished) → the rule never fires, silently unprotected.
-
-- **S6a backend stays stateless**: do **not** hard-block "metric doesn't currently exist" on the write path (GitOps vacuum / legitimate pre-creation → hard-blocking would false-kill).
-- **portal soft-warn (S6b)**: if the form's chosen metric is not in the discovery list → a yellow "this metric has no data right now, confirm the name?" (soft-warn, does not block).
-- **SRE path = an async runtime sentinel (deferred artifact, not S6a)**: a platform-level operational alert `da_custom_alert_ghost_metric` (a recipe references a metric that has had no series for N days) → leave ghost detection to the SRE governance layer that **has runtime visibility**, rather than cramming it into the stateless write endpoint. *Trigger*: ghost recipes accumulate into a real operational burden (same root as Reef 3 DA-Janitor below — can be implemented together).
-
-**Test strategy**: S6a = handler integration tests (mock Prometheus, assert `match[]` forcibly carries `tenant=authID` [cross-tenant isolation] + `url.QueryEscape` + rate-limit triggers 429 + LimitReader truncation does not OOM); S6b = portal Vitest (form → param assembly / ghost soft-warn / type filter).
-
-**Blast-radius / guardrails**: read-only (no mutation); rate-limit + timeout + LimitReader as three guards against proxy abuse; the locked query prevents cross-tenant snooping. New dependency = a network-policy egress **`tenant-api → prometheus:9090`** (must be added to `helm/tenant-api/templates/networkpolicy.yaml`, currently ingress-only).
-
-**Options evaluated and rejected**: **a pre-built metric catalog / cached index** (fast queries but must maintain drifting state, breaks stateless) → rejected as the day-1 default (the micro-cache is demoted to a defer-trigger). **backend hard-block on ghost** (false-kills during the GitOps vacuum + legitimate pre-creation) → rejected, demoted to portal soft-warn + the SRE sentinel.
-
-**S6 Acceptance Criteria**: ① the discovery endpoint returns only **this tenant's own** metrics (`match[]` forced to `tenant=authID`, `url.QueryEscape`, a cross-tenant query returns empty [isolation test]); ② the endpoint is purely read-only, writes no config (stateless); ③ the per-tenant rate-limit returns 429 on excess, independent of the PUT quota; ④ the portal recipe form completes authoring without touching PromQL + ghost soft-warn + a gauge-only recipe lists only gauges (type filter); ⑤ the network-policy egress `tenant-api → prometheus:9090` is explicitly added.
-
-### S6b — recipe-authoring UX (the `<RecipeBuilder>` smart form, #741)
-
-> Converged over brainstorm 5-questions + **two self-adversarial rounds that reframed the problem** + Gemini external review (4 OQ verdicts + 4 frontend deep-water reefs) + two self-added refinements. **The core reframe**: the first round framed it as "write path A/B/C", which was the wrong cut; adversarial analysis re-anchored it on "**who owns the write authority**".
-
-**Context / intent**: S1–S6a let a tenant **write** correct recipes and **discover** their metrics (S6a). S6b adds the last piece — a **no-PromQL** authoring form that turns "pick metric → pick recipe → fill params" into UI, producing a valid `_custom_alerts` recipe. The GA close-out of epic #741.
-
-**Core mental model: Smart Form, Dumb Handoff** (mirroring the backend's "Dumb Pipes, Smart Endpoints"). Three adversarial lenses point to the same conclusion — the builder must **not** own the write:
-
-- **full-overlay clobber**: a tenant's `_custom_alerts` is a list under `tenants.<id>`, and PUT is full-overlay (proven in S5). A narrow tool doing its own fetch→inject→PUT would clobber concurrent edits with stale local state.
-- **YAML-splice footgun**: "generate YAML to paste" forces the tenant to hand-splice into a nested list — exactly the hand-YAML error the no-PromQL builder exists to kill.
-- **name-collision / context**: a recipe needs a unique name within the tenant (+ the S4 own-cap); a standalone tool can't see existing recipes, so it can't warn live.
-
-→ **The write authority is tenant-manager** (the full-config editor that sees the whole state + has the proven PUT+S5-preflight path). `<RecipeBuilder>` is a pure UI component `(Context) => RecipeObject` that hands the valid object to the write authority.
-
-**Two first-class personas (neither a demo)**: the platform already supports both **GitOps-direct** (edit YAML in your own conf.d repo via PR) and **tenant-manager UI** workflows (try-local ships both). The builder serves both exits.
-
-**`<RecipeBuilder>` component design rules (all mechanically verifiable / testable)**:
-
-1. **Enums come from the schema; zero frontend hardcoding** (review Reef 1): build-time import `docs/schemas/tenant-config.schema.json` for the `for`/`horizon`/`op`/`severity` enums (verified the schema is the SSOT, with `customAlertInstance` + conditional requireds). A schema change → bundle change → the **dist-sync gate mechanically enforces freshness** → the cross-language contract extends from Python/Go **to TS**. **REJECT `react-jsonschema-form`** (a bare npm import violates the `check_jsx_loader_compat` allowlist / TRK-237) → derive enums from the schema, hand-code the per-recipe field-layout map (UI layout, not the validation authority; the recipe set is stable).
-2. **Each metric field is an independent autocomplete sub-component** (metric / `capacity_metric` / `denominator_metric`, review Reef 4): each with its own debounce ≥300ms + AbortController + a short in-session cache, so a single authoring session **does not self-trip S6a's 100/min limiter** (the client-side complement to §S6 Reef 1).
-3. **Decouple ghost-validation from the autocomplete list** (review Reef 3): the fast-type + paste + blur async race would mis-fire a ghost warning; on blur, fire a precise `?q=<full string>` check, show `Validating…` (not a ghost-warn) until it resolves, and AbortController-cancel superseded requests. Not in the list → a yellow soft-warn (does not block; GitOps vacuum / legit pre-creation).
-4. **The plain-English summary is a state machine** (review OQ3 + Reef 4): render the dynamic sentence only when all required fields are present **and structurally valid** (bound to the actual filled params, via `window.__t` ZH-primary, e.g. "fires warning when [avail]/[capacity] is predicted to drop below [15%] within [4h]"), else "waiting for required fields…"; **never expose PromQL / the `user_threshold` series / labels** (exposing the internals = cognitive dissonance; S1/S2 deliberately hid the complexity).
-5. **discovery unavailable** (502/503 / no backend) → graceful degrade: allow manual metric entry + a "discovery unavailable" note, do not block authoring.
-6. **client validation is pure UX fast-feedback** (mirrors S5, not authoritative): the S5 preflight + CI are the validation authority; do not re-implement the cross-language validation contract.
-
-**Decision trade-offs**:
-
-- **builder does not own the write** ↔ in exchange for shutting the clobber/splice/collision trio; the cost is the GitOps persona still pastes the snippet into their repo (but that's their existing PR flow, not a footgun).
-- **componentize + thin integration** (not a big edit to tenant-manager) ↔ one more abstraction layer, in exchange for isolated testability + minimal regression (tenant-manager is a load-bearing live tool).
-- **schema → enums + hand-coded layout map** (not rjsf) ↔ the layout map is a potential drift point, but it's UI layout not the validation authority and the recipe set is stable; in exchange for shutting out a heavy npm dependency + the loader-violation risk.
-
-**Two-cut delivery**:
-
-- **S6b-1 (MVP) = the `<RecipeBuilder>` component + a standalone host page** (manifest entry): serves the **GitOps-direct persona** — emits a **snippet with the full `tenants: <id>: _custom_alerts: -` wrapper + one-click copy** (review OQ2 fix, eliminating the "where do I paste it" cognitive friction); doubles as the component's Vitest test host.
-- **S6b-2 (fast-follow, separate PR) = fold into tenant-manager**: mount `<RecipeBuilder>` as an "Add / Edit custom alert" panel; pass in the tenant's existing recipes (live name-collision / cap warnings); `onSubmit(recipe)` → **name-based mutation** (review Reef 2: add or replace-by-`targetName`, **never index-based**, S5 guarantees name uniqueness; targetName-not-found → background changed → block + prompt a refresh) → tenant-manager's existing PUT. **cheap-edit is in the MVP** (review OQ4: feed an existing recipe as InitialValues into the component, name-based replace on submit, zero new backend API). Serves the **UI persona**, closes the adoption loop, zero clobber.
-
-**Data flow + frontend defense loop** (the async trio / ghost decoupling / name-based mutation / dual-persona exits):
-
-```mermaid
-sequenceDiagram
-    autonumber
-    actor User as Tenant dev / SRE
-    participant RB as RecipeBuilder (pure UI component)
-    participant TM as tenant-manager (live editor)
-    participant API as tenant-api (S5/S6a Go backend)
-    participant Git as GitOps Repo (SOT)
-
-    User->>RB: type a metric prefix (e.g. http_)
-    Note over RB: per-field async defense (Reef 4 + Reef 3)<br/>debounce 300ms+ / AbortController / session cache
-    RB->>API: GET /tenants/{id}/metrics?q=http_
-    API-->>RB: 200 (deduped list, 24h lookback)
-
-    User->>RB: blur / commit the full metric name
-    RB->>API: precise check q=full-string
-    Note over RB: Validating... interim state<br/>decoupled from the autocomplete list (race guard, Reef 3)
-    alt not in the list
-        Note over RB: yellow soft-warn (does not block, GitOps vacuum is legit)
-    end
-
-    Note over RB: summary state machine (OQ3 + Reef 4)<br/>render dynamic plain-English only when all required+valid, never expose PromQL
-
-    alt S6b-1 GitOps-direct (standalone host)
-        RB-->>User: emit snippet with full tenants/ID/_custom_alerts wrapper + one-click copy
-        User->>Git: paste + open PR (standard GitOps friction)
-    else S6b-2 live UI (folded into tenant-manager)
-        Note over TM: pass in existing recipes (live name-collision + S4 own-cap warnings)
-        User->>RB: click submit (onSubmit)
-        RB->>TM: hand over the RecipeObject (Dumb Handoff)
-        Note over TM: name-based mutation (Reef 2)<br/>add or replace-by-targetName, never array index
-        TM->>API: PUT /tenants/{id} (full-overlay, the write authority)
-        Note over API: S5 in-process Go preflight rejects bad input
-    end
-```
-
-**Evaluated and rejected**: **writing the form straight into tenant-manager's core** → rejected (load-bearing live tool, big-edit regression risk; componentization is the incremental A→B path). **`react-jsonschema-form`** → rejected (loader-allowlist violation + heavy dependency). **series/label display** → rejected (cognitive dissonance).
-
-**Defer-with-trigger**:
-
-- **gauge-only type-filter** → defer: S6a returns only metric names, not type; needs a new `/api/v1/.../metadata` endpoint. *Trigger*: a type confusion causes a real authoring error, or forecast adoption rises.
-- **live `mode: silent` simulate preview** → defer: needs recipe→simulate-preview wiring. The MVP uses the dynamic plain-English summary + an active/silent semantics note. *Trigger*: users want to see real silent behaviour pre-release.
-
-**S6b Acceptance Criteria**: ① `<RecipeBuilder>` is a pure component `(Context)=>RecipeObject`, Vitest-testable in isolation (6 recipes' conditional fields / dynamic plain-English state machine / ghost soft-warn); ② all enums derive from `tenant-config.schema.json`, **no hardcoded enums** (a schema change reddens the dist-gate); ③ each metric field has its own debounce+AbortController fetcher, autocomplete decoupled from ghost-validation (the race does not mis-fire); ④ the S6b-1 standalone emits a copy-paste snippet with the full wrapper; ⑤ S6b-2 folds into tenant-manager with **name-based** add/edit (not index), the write going through the existing PUT+S5, zero clobber.
-
-### S6b-2 — the tenant-manager write path (recipes folded into the live editor, #741)
-
-> Grounding overturned the original §S6b-2 premise: tenant-manager has **no PUT for per-tenant config** (the maintenance/silent modals generate YAML to copy; its only live write is groups). The write path converged over brainstorm + Gemini three-wave adversarial review (6 reefs) + a Path A/B fork + a **spike gate**.
-
-**Context**: S6b-1's `<RecipeBuilder>` does not own the write; S6b-2 adds the live write so a tenant can add/edit/delete recipes inside tenant-manager and commit back to GitOps.
-
-**Core mental model: the backend owns the YAML round-trip; the frontend sends only JSON.** Two blockers (the portal has no YAML serializer + PUT is full-overlay) rule out "frontend serialises the whole file" and "frontend text-splice" (the latter recreates the splice footgun §S6b argued against). The answer = a **backend sub-resource endpoint**.
-
-**Endpoint** `PUT /api/v1/tenants/{id}/custom-alerts`:
-- body `{ custom_alerts: [...], base_hash }`; the client sends the **full recipe JSON array** (collection-replace; the client owns the array and never serialises YAML).
-- server: load the current file → **base_hash OCC** (mismatch → 409, Reef 3) → **yaml.Node AST surgery** replacing/deleting the `_custom_alerts` node (preserving comments, Reef 1; an empty array deletes the key with no `[]` debris, Reef 2) → **S5 `ValidateTenantCustomAlerts`** over the whole array (violations → 400 + `Violations[]` carrying the recipe name, Reef 4) → commit via the existing `gitops.Writer`.
-- **MVP scope**: direct write-back mode; **PR mode → 501** (that persona uses the S6b-1 standalone + their normal PR flow).
-
-**Path A vs B verdict**: **A (AST surgery on the shared tenant.yaml)** — NOT the "cheap" version (a struct Marshal would wipe comments, Reef 1); **B (separate machine-owned sidecar storage)** is architecturally cleaner but would re-open the merged S1–S5 `_custom_alerts` location + a migration, a cost far above the marginal benefit. Chose A + a **spike gate**: verify yaml.v3 Node round-trip preserves comments before building.
-
-**Spike outcome (passed)**: `internal/customalerts/merge.go` proves it — head/inline/neighbour comments + sibling keys + 2-space indent all preserved; an empty array deletes the key cleanly; canonical key order (recipe→name→metric→…, not the map's alphabetical order) + force-quoting of `value:severity` values containing `:` (emission quality, not a cheap raw-map dump).
-
-**OCC trade-off (explicit)**: base_hash is the **whole-file** hash (GET returns `source_hash`) → an unrelated field edited by someone else also 409s. Accepted for the MVP (Safety > Granularity, config edits are low-frequency); the 409 message is clear.
-
-**S6b-2 Acceptance Criteria**: ① the endpoint's AST-merge preserves comments + deletes the key on empty + canonical order/quoting (Go tests + spike); ② base_hash mismatch → 409, match → write; ③ an invalid recipe (incl. a pre-existing bad one) → 400 + `Violations[]` (locatable by name); ④ writes via the existing `gitops.Writer` (unified commit/validation, no parallel write path); ⑤ PR mode → 501 (honest boundary); ⑥ GET returns `source_hash`.
-
-**S6b-2b frontend (tenant-manager `CustomAlertsModal`, #741)**: select one tenant → open the modal, list/add/edit/delete recipes → PUT the whole array. **The client handles JSON only** (GET returns structured `custom_alerts` via the backend `customalerts.Extract`; zero client-side YAML). Nine frontend defenses (Gemini waves 3+4, all Vitest-tested): **Reef 9 JIT fresh fetch** (re-GET source_hash on modal OPEN, never the grid's page-load cache — else the OCC is near-guaranteed to false-409 and is useless; highest value); **Reef 7 strict `isSubmitting`** (lock the button from the first ms of click, killing the double-submit "succeeded-but-reported-409" false alarm); **Reef 8 dirty-guard** (intercept backdrop/ESC/X close → confirm, no wipeout); **Reef 6 409 non-destructive** (preserve the user's input + offer a copy-backup, no reload); **Reef 4 400 Violations[]** flags the offending recipe (incl. a pre-existing bad one, fixable inline); **Reef 5 rename-safe** `onSubmit(recipe, originalName)` (name-based replace by the ORIGINAL name, so a rename ≠ duplicate). **S6b-2b AC**: ① JIT fresh GET on open; ② save locked by `isSubmitting`; ③ 409 preserves input without closing; ④ 400 flags the violation; ⑤ a rename produces no duplicate; ⑥ a dirty close requires a confirm.
-
-**Future radar (defer-with-trigger)**: Path B sidecar (*trigger*: machine-writes-human-file becomes a cross-tool pain / an AST edge case bites); granular per-section OCC (*trigger*: whole-file-hash false-409 friction); PR-mode recipe-write; a recipe stable-id replacing name-as-identity; granular REST verbs (POST/PUT{name}/DELETE{name}).
-
-### S7/S8 — Custom Alert routing (notification routing + silent + isolation, #741 closer)
-
-> Converged through brainstorm + six waves of Gemini adversarial review. **The core reframe (sparked by the project guide's instinct)**: silent does NOT use an Alertmanager route-to-null — it **fully reuses ADR-003's existing Sentinel+Inhibit tri-state paradigm**, eliminating the YAML `null`/discard-receiver footgun, staying consistent with the platform, and giving better AM-UI observability.
-
-**Context / intent**: the data plane (S3a) already carries `mode` (page/silent) to the alert via `group_left(name, mode)` (the promtool `mode_routing.yaml` proves mixed-mode tenants share one vectorized rule). S7/S8 is the **Alertmanager-side consumption** of that label: silent suppresses notification (still evaluated, still in TSDB), page notifies, and custom alerts are **absolutely isolated** from the platform NOC so tenant noise never floods it.
-
-**Reuse-first — all three axes ride inhibit/rule, no new mechanism invented**:
-
-- **Maintenance tri-state**: custom alerts **already** ride it at the recording-rule layer via `unless on(tenant) user_state_filter{filter="maintenance"}` (zero new work).
-- **Tenant-level Silent**: `_silent_mode` → `user_silent_mode` flag → `TenantSilentWarning/Critical` sentinel → the existing inhibit (`equal:[tenant]`) **already covers custom too** (tenant-wide silence ⊇ custom — a sound synergy).
-- **per-recipe Silent (the one net-new axis here)**: a single GLOBAL sentinel `CustomRecipeSilent` (`max by(tenant,name)(user_threshold{component="custom",mode="silent"})`, `severity:none`, injected ONCE by the compiler into the `custom-alerts` group — never per-recipe) → AM inhibit `source=CustomRecipeSilent / target=component="custom" / equal:[tenant,name]` → suppresses ONLY that (tenant,recipe)'s notification, **a page-mode tenant on the same shape still notifies** (verified in mode_routing fixture: web-b silent is matched by the sentinel, shop-a page is untouched). A silenced alert is still an `ALERTS{...,mode="silent"}` series → **silent ≡ a dashboard-only alert** (a hidden-gem capability; docs must phrase it plainly as "silent, but the firing state is visible on dashboards").
-
-**Discriminator (A1)**: every `Custom_*` alert carries a static `component="custom"` label. No platform alert carries `component`, so AM matches `component="custom"` unambiguously (vs coupling to the `Custom_` alertname prefix).
-
-**Route structure (static, platform-level)**: the `component="custom"` route sits **first + `continue:false`** → page lands on `custom-alerts-firehose`, `group_by:[tenant, alertname]`, a dedicated debounce `group_wait:30s`/`group_interval:5m` (aligned with the platform `_defaults` convention). **"First + continue:false" is gate correctness, not aesthetics**: the enforced NOC route is `continue:true` with OPTIONAL matchers (no matchers = match-all) → without an earlier intercept, custom alerts would leak into the platform NOC.
-
-**Firehose receiver (MVP = empty receiver)**: isolated from the platform `default`; MVP wires no outbound notifier (custom alerts stay visible via the AM UI + the `ALERTS` series, and silent ones are inhibited beforehand). ⚠ When wiring outbound, use a **webhook adapter → log/event backend** (e.g. VictoriaLogs via an AM-payload→bulk bridge; the AM webhook payload ≠ ES bulk format, and the deployed vector is a kubernetes_logs source with no ready endpoint) and **NOT a rate-limited IM (Slack/PagerDuty)**: a cross-tenant storm hits the IM 429 limit → AM retry/queue backlog → OOM → platform P0 alerts blocked. **A dead placeholder URL would self-inflict that retry-OOM**, so an empty receiver is the safest MVP. On that webhook_config set `send_resolved:false` + `max_alerts` (**truncate, not pagination** — a lossy cap; the `ALERTS` series is the source of truth).
-
-**Durability (the robustness hardening, established as necessary via adversarial review)**: the generator assembly REPLACES `route.routes` (it does not append) in `assemble_configmap` / `_merge_routes_receivers_inhibits` → a custom route living only in the base ConfigMap would be silently wiped on any `--apply`. So it is injected at the **assembly layer** (`_inject_custom_alert_isolation`, prepends the custom route + firehose receiver, idempotent) → present and first across both output paths (--output-configmap / --apply). The assembly layer was chosen over the `generate_routes` core because the latter is exercised by many tests asserting a "tenant/enforced routes only" contract — disproportionate churn.
-
-**group_by reconciliation (rejecting the radar's old `recipe_id`)**: `[tenant, alertname]` already achieves the radar's intended per-recipe isolation — `alertname = Custom_<recipe_id>`, and the recipe_id slug **already includes the metric**, so recipes on different metrics are necessarily different alertnames; cpu and queue never group together. **`recipe_id` is NOT an alert label** (labels are only severity/tenant/recipe/mode/component) → putting it in group_by would group by an absent label (which would itself lump everything together). So keep `[tenant, alertname]`, consistent with the platform `[alertname, tenant]` convention.
-
-**S7/S8 Acceptance Criteria**: ① every `Custom_*` alert carries `component="custom"`; ② the `CustomRecipeSilent` sentinel is injected globally once, `severity:none`, `by(tenant,name)`; ③ the inhibit `equal:[tenant,name]` suppresses only the silent (tenant,recipe), leaving a same-shape page tenant unaffected; ④ the custom route is first + `continue:false`, ahead of the enforced NOC route; ⑤ the firehose receiver is isolated from the platform `default`; ⑥ the injection is durable across `--apply` (route REPLACE) and idempotent.
-
-**Reconciliation with ADR-003**: tenant-state tri-state (Normal/Silent/Maintenance) → inhibit (unchanged); recipe-class `mode` → **also inhibit** (`CustomRecipeSilent`) → a single platform-wide silent paradigm, not the routing-layer silence that ADR-003 already relegated.
-
-**defer-with-trigger**: firehose webhook-adapter outbound delivery (*trigger*: SREs need live page-mode firing visibility and the adapter is ready); per-tenant page-mode channel routing (*trigger*: a customer wants custom alerts in their own channel); custom severity-dedup (custom lacks `metric_group` → the platform dedup inhibit doesn't cover it; *trigger*: a same-shape warning+critical double-notify complaint).
-
-**⛔ Rollout-order hard gate**: S3b (deploying a fire-able custom pack to a live Prometheus) **must depend on this S7/S8 merging first**. Before the route + sentinel + inhibit land, deploying any fire-able custom rule is forbidden — else a storm floods the platform default receiver.
-
-### Future robustness radar (surfaced by the S5 + S6 external reviews, defer-with-trigger)
-
-The S5 / S6 external reviews (Gemini) surfaced **future** robustness items; **none block the current slice**, recorded here pending their triggers:
-
-- **regex-value length cap (LOW, hygiene)**: ~~ReDoS catastrophic backtracking~~ **does not apply to Prometheus** (label matchers use Go `regexp` = RE2, linear, no backtracking). Residual: an over-long / over-complex regex × a huge series count can still slow rule eval → cap the selector regex value length as cheap hygiene. *Trigger*: measured rule-eval-duration sensitivity to regex complexity.
-- **`keep_firing_for` resolve-delay (HIGH UX, future recipe param)**: `for` suppresses spikes, but an alert resolves immediately when the value dips → flapping near the threshold → alert fatigue. Prometheus 2.42+ (this repo is v3.x) natively supports `keep_firing_for` → expose it to tenants (enum-bounded, a control-plane static attribute, into the slug like `for`) to kill flapping noise. *Trigger*: the first flapping alert-fatigue complaint.
-- ~~**Alertmanager grouping isolation (S8 routing hard requirement)**~~ **✅ implemented in §S7/S8**: the `component="custom"` route is first + `continue:false` (isolated), `group_by:[tenant, alertname]` (`alertname=Custom_<recipe_id>` is already per-shape; **`recipe_id` is not a label, so it is NOT in group_by** — see the §S7/S8 group_by reconciliation).
-- **Vectorization shared-fate / app-metric cardinality explosion (HIGH, vectorization isolation gap)**: the price of O(M) vectorization is **shared fate** — one tenant putting a high-cardinality dimension (e.g. UserID) into an app-metric label → their series explode → the **shared** vectorized rule for that shape evals slower → **other tenants on the same shape** (B/C/D) have their alerts delayed / dropped together (head-of-line blocking). S4 `max_custom_recipes` caps recipe **count**, **not** app-metric **cardinality**. *Mitigation*: add scrape-time `sample_limit` / `series_limit` on the tenant-exporters scrape job (Plane A), truncating the explosion source before series enter the TSDB (not S6 code — it is platform scrape config). *Trigger*: at scale, a single tenant's cardinality drags the shared rule eval (or proactively set a conservative cap at onboarding).
-- **Ghost-rule state rot + auto-GC (MEDIUM, Day-2 governance)**: tenants "only add, never delete" → a large accumulation of dead recipes over time → memory bloat + `/effective` becomes a junkyard. *Mitigation*: a **DA-Janitor** bot periodically scans; a recipe whose metric has had no series for 30 days → **auto-opens a PR** adding `threshold: disable` (reusing the S5 three-state opt-out + a comment) → GC'd traceably via GitOps without breaking GitOps trust (not a force-delete; disabled doesn't count toward the cap / isn't compiled). Same root as §S6's "SRE runtime sentinel" — can be implemented together. *Trigger*: dead recipes accumulate into a real operational burden.
-
-## Links / Cross-Reference
-
-- [#423](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/423) — epic SOT (full three-round design context)
-- [#716](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/716) — version-aware defer-with-trigger tracker (the fate of its item 1 / item 2 is in §Custom Alerts)
-- [#741](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/741) — Custom Alerts implementation epic (Capability B)
-- [#751](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/751) — `for` divergence P0 (TRK-326, §Forecast Recipe related)
-- [`config-driven.md` §2.5 / §2.6](../design/config-driven.md) — existing dimensional + scheduled mechanisms (this ADR's foundation and boundary)
-- `config/resolve.go` (dimensional key path 182–227) / `collector.go` (CustomLabels emit 68–78) — verification basis
-- [ADR-005 Projected Volume for Rule Packs](005-projected-volume-for-rule-packs.en.md) — rule-pack propagation chain
-- [`architecture-and-design.md` Cardinality Guard](../architecture-and-design.md) — must align in Phase 1
-- [`test-map.md` Test Injection Seam](../internal/test-map.md) — follow v2.8.0 test standards when sweeping (`freshMetrics`/`SetMetrics`, no global swap)
-
-> **Convergence note**: the key current-state correction is "the dimensional label already achieves the target metric shape" — which shifts the core from a schema extension to the rule-pack normalize layer and demotes the `versioned:` sugar to defer-with-trigger. Full design context in [#423](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/423).
+- [ADR-003: Sentinel Alert Pattern](003-sentinel-alert-pattern.md) — the sentinel + inhibit basis for silent / tri-state.
+- [ADR-008: Operator-Native Integration Path](008-operator-native-integration-path.md) — the declarative-only rule.
+- [ADR-017: `_defaults.yaml` inheritance](017-defaults-yaml-inheritance-dual-hash.md) — directory-tree inheritance for hierarchical scope.
+- [ADR-020: Tenant Federation](020-tenant-federation.md) — cross-tenant read-path isolation (prom-label-proxy).
+- [Version-Aware Thresholds usage guide](../scenarios/version-aware-thresholds.md) — the operational side of tenant declaration + platform KSM setup.
+- [config-driven.md §2.x](../design/config-driven.md) — the living spec for dimensional thresholds and recipes.

@@ -52,3 +52,12 @@ CHANGELOG.md
 # lint-policy.md §7; the file becomes an archived stub pointing there.
 # Intentional doc-lifecycle shrink, not damage.
 docs/internal/token-migration-cheatsheet.md
+
+# #741 epic closeout: ADR-024 distilled from a 739-line slice-by-slice build
+# journal (S1-S8 + external-review rounds + OQ/R/AC checklists + codenames) to
+# a ~225-line clean ADR that leads with the decisions. ZH 97643 -> 22825 bytes
+# (~23%), EN 107513 -> 25482 bytes (~24%). Every durable architecture decision
+# folded in by topic; only the build-process wrapper was cut. Intentional doc
+# distillation, not damage.
+docs/adr/024-version-aware-threshold-via-dimensional-label.md
+docs/adr/024-version-aware-threshold-via-dimensional-label.en.md
