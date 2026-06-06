@@ -974,13 +974,25 @@ func validate(configDir, tenantID, yamlContent string) []string {
 	// endpoint. Unlike the checks above this is STATEFUL: it reads the current
 	// on-disk tenant file — still the OLD state, since validate runs before the
 	// write commits — to compute the per-eol-recipe delta. Skipped when configDir
-	// is unset (unit-test shape mode) or the current file can't be read (a brand
-	// new tenant has no existing eol usage to expand).
+	// is unset (unit-test shape mode). FAIL CLOSED: only a MISSING tenant file
+	// (ENOENT, a brand-new tenant with no existing eol usage) means "no current
+	// alerts"; any other read error or a parse failure errors out rather than
+	// silently skipping the guard (matches the handler's extraction fail-closed).
 	if configDir != "" {
-		if oldRaw, rerr := os.ReadFile(filepath.Join(configDir, tenantID+".yaml")); rerr == nil {
-			oldAlerts, _ := customalerts.Extract(string(oldRaw), tenantID)
-			newAlerts, _ := customalerts.Extract(yamlContent, tenantID)
+		oldRaw, rerr := os.ReadFile(filepath.Join(configDir, tenantID+".yaml"))
+		switch {
+		case rerr == nil:
+			oldAlerts, err := customalerts.Extract(string(oldRaw), tenantID)
+			if err != nil {
+				return append(errs, "internal error: cannot read current custom alerts: "+err.Error())
+			}
+			newAlerts, err := customalerts.Extract(yamlContent, tenantID)
+			if err != nil {
+				return append(errs, "internal error: cannot read requested custom alerts: "+err.Error())
+			}
 			errs = append(errs, customalerts.EolExpansionViolations(oldAlerts, newAlerts)...)
+		case !os.IsNotExist(rerr):
+			return append(errs, "internal error: cannot read current custom alerts: "+rerr.Error())
 		}
 	}
 	return errs
