@@ -60,6 +60,23 @@ func (c *ThresholdCollector) Collect(ch chan<- prometheus.Metric) {
 	// here would break that test-isolation contract.
 	resolved, stats := cfg.ResolveAtWithStats(time.Now())
 	c.manager.getMetrics().PublishTenantMetricsOverLimit(stats.PerTenantOverLimit)
+
+	// Each metric family is emitted by a focused collector method; order is
+	// irrelevant (Prometheus sorts on Gather) but kept stable for diff clarity.
+	c.collectThresholds(ch, resolved)
+	c.collectCustomAlertErrors(ch, stats.PerTenantCustomAlertErrors)
+	c.collectStateFilters(ch, cfg)
+	c.collectSilentModes(ch, cfg)
+	c.collectMaintenanceExpiries(ch, cfg)
+	c.collectSeverityDedup(ch, cfg)
+	c.collectConfigInfo(ch)
+	c.collectMetadata(ch, cfg)
+}
+
+// collectThresholds emits the user_threshold gauge for every resolved
+// threshold (Scenario A numeric + Phase 2B dimensional). Custom labels are
+// appended sorted; regex labels get the _re suffix for PromQL matching.
+func (c *ThresholdCollector) collectThresholds(ch chan<- prometheus.Metric, resolved []ResolvedThreshold) {
 	for _, t := range resolved {
 		labelNames := []string{"tenant", "metric", "component", "severity"}
 		labelValues := []string{t.Tenant, t.Metric, t.Component, t.Severity}
@@ -105,20 +122,19 @@ func (c *ThresholdCollector) Collect(ch chan<- prometheus.Metric) {
 		}
 		ch <- m
 	}
+}
 
-	// #741 S3a: per-tenant malformed _custom_alerts count (fail-loud). Emitted as
-	// a ConstMetric here (same idiom as user_threshold / user_state_filter) rather
-	// than a Reset()+Set() GaugeVec mutated during Collect — Registry.Gather runs
-	// collectors concurrently, so a separately-registered GaugeVec could observe a
-	// partial Reset+Set snapshot. ConstMetric is computed per scrape, so a tenant
-	// that fixed/removed its declarations simply stops emitting (no stale series).
+// collectCustomAlertErrors emits da_custom_alert_parse_errors (#741 S3a,
+// fail-loud) per tenant. ConstMetric per scrape so a fixed tenant stops
+// emitting rather than leaving a stale GaugeVec series.
+func (c *ThresholdCollector) collectCustomAlertErrors(ch chan<- prometheus.Metric, caErrors map[string]int) {
 	caErrDesc := prometheus.NewDesc(
 		"da_custom_alert_parse_errors",
 		"Per-tenant count of malformed _custom_alerts entries dropped at resolve time (ADR-024 能力 B, #741). 0 = all parsed+validated. Fail-loud: a silently-skipped custom alert surfaces here. Alert: > 0 (warning). Upstream hard-gates (CI compiler, tenant-api preflight) catch these first; this is the defense-in-depth last line for a direct-push bypass.",
 		[]string{"tenant"},
 		nil,
 	)
-	for tenant, n := range stats.PerTenantCustomAlertErrors {
+	for tenant, n := range caErrors {
 		m, err := prometheus.NewConstMetric(caErrDesc, prometheus.GaugeValue, float64(n), tenant)
 		if err != nil {
 			log.Printf("WARN: failed to create da_custom_alert_parse_errors metric for tenant=%s: %v", tenant, err)
@@ -126,8 +142,10 @@ func (c *ThresholdCollector) Collect(ch chan<- prometheus.Metric) {
 		}
 		ch <- m
 	}
+}
 
-	// Scenario C: state filter flags
+// collectStateFilters emits user_state_filter flags (Scenario C).
+func (c *ThresholdCollector) collectStateFilters(ch chan<- prometheus.Metric, cfg *ThresholdConfig) {
 	stateDesc := prometheus.NewDesc(
 		"user_state_filter",
 		"State-based monitoring filter flag (1=enabled, absent=disabled). Scenario C: state/string matching.",
@@ -142,15 +160,12 @@ func (c *ThresholdCollector) Collect(ch chan<- prometheus.Metric) {
 		}
 		ch <- m
 	}
+}
 
-	// Silent mode: per-tenant notification suppression flags.
-	// Alerts still fire in Prometheus (TSDB records exist), but Alertmanager
-	// uses sentinel alerts + inhibit_rules to suppress notifications.
-	// Distinct from maintenance mode which suppresses at PromQL level (no TSDB records).
-	//
-	// v1.7.0: expired entries (Expired=true) do NOT emit user_silent_mode —
-	// sentinel metric disappears → Alertmanager inhibit stops → notifications resume.
-	// Instead, expired entries emit da_config_event for notification purposes.
+// collectSilentModes emits user_silent_mode for active silences; expired
+// silences emit da_config_event instead (v1.7.0) so Alertmanager inhibit
+// stops and notifications resume.
+func (c *ThresholdCollector) collectSilentModes(ch chan<- prometheus.Metric, cfg *ThresholdConfig) {
 	silentDesc := prometheus.NewDesc(
 		"user_silent_mode",
 		"Silent mode flag (1=active). Alerts fire (TSDB records) but notifications suppressed via Alertmanager inhibit.",
@@ -190,11 +205,18 @@ func (c *ThresholdCollector) Collect(ch chan<- prometheus.Metric) {
 		}
 		ch <- m
 	}
+}
 
-	// Maintenance mode expiry events (v1.7.0).
-	// When structured _state_maintenance with expires is past, the state filter
-	// metric already stops emitting (handled in ResolveStateFiltersAt).
-	// Here we emit da_config_event to notify that maintenance auto-deactivated.
+// collectMaintenanceExpiries emits da_config_event when a maintenance window
+// has auto-deactivated (v1.7.0). Active windows need no event (their state
+// filter simply keeps emitting).
+func (c *ThresholdCollector) collectMaintenanceExpiries(ch chan<- prometheus.Metric, cfg *ThresholdConfig) {
+	configEventDesc := prometheus.NewDesc(
+		"da_config_event",
+		"Config lifecycle event (1=event active). Emitted when timed config expires. Labels identify event type and tenant.",
+		[]string{"tenant", "event", "reason"},
+		nil,
+	)
 	for _, me := range cfg.ResolveMaintenanceExpiries() {
 		if !me.Expired {
 			continue // Still active, no event needed
@@ -211,11 +233,10 @@ func (c *ThresholdCollector) Collect(ch chan<- prometheus.Metric) {
 		}
 		ch <- m
 	}
+}
 
-	// Severity dedup: per-tenant warning↔critical notification deduplication.
-	// When enabled (default), Alertmanager inhibit rules suppress warning notifications
-	// when critical fires for the same tenant+metric_group.
-	// Both alerts ALWAYS fire in TSDB regardless of this setting — dedup only controls notifications.
+// collectSeverityDedup emits user_severity_dedup flags (v1.2.0+).
+func (c *ThresholdCollector) collectSeverityDedup(ch chan<- prometheus.Metric, cfg *ThresholdConfig) {
 	dedupDesc := prometheus.NewDesc(
 		"user_severity_dedup",
 		"Severity dedup flag (1=enabled). Warning notifications suppressed when critical fires for same metric_group. v1.2.0+",
@@ -230,10 +251,11 @@ func (c *ThresholdCollector) Collect(ch chan<- prometheus.Metric) {
 		}
 		ch <- m
 	}
+}
 
-	// Config info metric (v2.3.0): exposes config source metadata for GitOps observability.
-	// Labels: config_source ("configmap"|"operator"|"git-sync"), git_commit (hash or "").
-	// Portal's Config Drift detection compares this against platform-data.json last_config_commit.
+// collectConfigInfo emits threshold_exporter_config_info (v2.3.0): config
+// source + git revision for GitOps drift observability.
+func (c *ThresholdCollector) collectConfigInfo(ch chan<- prometheus.Metric) {
 	configInfoDesc := prometheus.NewDesc(
 		"threshold_exporter_config_info",
 		"Config source metadata (info metric, always 1). Labels identify deployment mode and git revision. v2.3.0+",
@@ -245,11 +267,11 @@ func (c *ThresholdCollector) Collect(ch chan<- prometheus.Metric) {
 		info.ConfigSource, info.GitCommit); err == nil {
 		ch <- m
 	}
+}
 
-	// Tenant metadata info metric (v1.11.0): unconditionally emitted for ALL tenants.
-	// Carries runbook_url, owner, tier as labels. Unset fields default to empty string.
-	// Rule Pack Part 3 alert rules use group_left(runbook_url, owner, tier) to inherit
-	// these labels, enabling dynamic runbook injection in Alertmanager notifications.
+// collectMetadata emits tenant_metadata_info (v1.11.0): unconditional per-tenant
+// runbook_url/owner/tier labels for Alertmanager group_left joins.
+func (c *ThresholdCollector) collectMetadata(ch chan<- prometheus.Metric, cfg *ThresholdConfig) {
 	metadataDesc := prometheus.NewDesc(
 		"tenant_metadata_info",
 		"Tenant metadata labels (info metric, always 1). Unconditional output for group_left joins. v1.11.0+",
