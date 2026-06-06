@@ -484,3 +484,67 @@ class TestWhatIf:
         help_text = result.stdout.decode()
         assert "not yet implemented" not in help_text.lower()
         assert "--what-if" in help_text
+
+
+# ---------------------------------------------------------------------------
+# Test: _custom_alerts UNION inheritance (#772)
+# ---------------------------------------------------------------------------
+
+class TestCustomAlertsUnionInheritance:
+    """#772: `_custom_alerts` follows ADR-024 UNION (own + inherited), NOT the
+    generic array-REPLACE of every other field — so an override tenant's effective
+    view KEEPS the inherited platform/domain policy recipe (deep_merge alone would
+    drop it, blinding blast_radius to the highest-blast-radius change class). The
+    resolution is delegated to the compiler's own walker (the SSOT)."""
+
+    def _repro_tree(self, tmp_path):
+        conf_d = tmp_path / "conf.d"
+        conf_d.mkdir()
+        # platform/domain policy: `_custom_alerts` at the _defaults.yaml TOP level
+        # (where the compiler's collect_instances reads inherited recipes).
+        (conf_d / "_defaults.yaml").write_text(yaml.dump({
+            "_custom_alerts": [
+                {"recipe": "threshold", "name": "platform_policy",
+                 "metric": "policy_metric", "op": ">", "window": "5m",
+                 "threshold": "200:critical"},
+            ],
+        }), encoding="utf-8")
+        # an OVERRIDE tenant (has own _custom_alerts) + an INHERIT tenant (none).
+        (conf_d / "tenants.yaml").write_text(yaml.dump({
+            "tenants": {
+                "t-override": {"_custom_alerts": [
+                    {"recipe": "threshold", "name": "own_alert",
+                     "metric": "own_metric", "op": ">", "window": "5m",
+                     "threshold": "100:warning"}]},
+                "t-inherit": {"cpu": "80"},
+            },
+        }), encoding="utf-8")
+        return conf_d
+
+    def test_override_tenant_keeps_inherited_policy(self, tmp_path):
+        # The #772 root cause: under array-REPLACE the override tenant would show
+        # ONLY own_alert; under ADR-024 UNION it must show BOTH.
+        scanner = dt.ConfDScanner(self._repro_tree(tmp_path))
+        eff = scanner.effective_config("t-override")
+        names = {a["name"] for a in eff["_custom_alerts"]}
+        assert names == {"own_alert", "platform_policy"}
+        res = {r["name"]: r for r in eff["_custom_alerts_resolution"]}
+        assert res["own_alert"]["is_own"] is True
+        assert res["platform_policy"]["is_own"] is False  # inherited, NOT wiped
+
+    def test_inherit_tenant_gets_policy(self, tmp_path):
+        scanner = dt.ConfDScanner(self._repro_tree(tmp_path))
+        eff = scanner.effective_config("t-inherit")
+        names = {a["name"] for a in eff["_custom_alerts"]}
+        assert names == {"platform_policy"}
+
+    def test_no_custom_alerts_field_when_none(self, tmp_path):
+        # A tenant with neither own nor inherited custom alerts must not carry a
+        # `_custom_alerts` key (matches the compiler — no phantom field).
+        conf_d = tmp_path / "conf.d"
+        conf_d.mkdir()
+        (conf_d / "tenants.yaml").write_text(
+            yaml.dump({"tenants": {"plain": {"cpu": "80"}}}), encoding="utf-8")
+        eff = dt.ConfDScanner(conf_d).effective_config("plain")
+        assert "_custom_alerts" not in eff
+        assert "_custom_alerts_resolution" not in eff

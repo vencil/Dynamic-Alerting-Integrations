@@ -36,6 +36,18 @@ try:
 except ImportError:
     yaml = None  # fallback to simple parser
 
+# #772: `_custom_alerts` does NOT follow generic array-REPLACE (ADR-017) — ADR-024
+# defines it as UNION across the inheritance chain (a tenant's own list ADDS to
+# inherited platform/domain policy recipes; a tenant must NOT silently wipe a
+# platform policy). deep_merge alone (REPLACE) would drop the inherited policy
+# from an override tenant's effective view, blinding blast_radius. So we delegate
+# THIS one field to the compiler's own inheritance resolver (`collect_instances`)
+# — the single source of truth — instead of forking the union logic here.
+try:
+    from custom_alerts import loader as _ca_loader  # noqa: E402
+except Exception:  # pragma: no cover - compiler package unavailable → graceful fallback
+    _ca_loader = None
+
 # ---------------------------------------------------------------------------
 # Deep merge logic (ADR-017 semantics)
 # ---------------------------------------------------------------------------
@@ -101,7 +113,26 @@ class ConfDScanner:
         self.tenant_files: dict[str, Path] = {}       # tenant_id → file path
         self.defaults_chain: dict[str, list[Path]] = {}  # tenant_id → [L0, L1, ...] defaults paths
         self.defaults_data: dict[str, dict] = {}      # defaults path str → parsed defaults dict
+        # #772: tenant_id → [(recipe, origin, is_own), ...] — the ADR-024 UNION
+        # resolution of `_custom_alerts` from the compiler's own walker. Computed
+        # ONCE (collect_instances scans the whole tree) so effective_config() is a
+        # cheap dict lookup, not an O(N²) re-walk under --all.
+        self._custom_alerts_resolved: dict[str, list] = {}
         self._scan()
+        self._resolve_custom_alerts()
+
+    def _resolve_custom_alerts(self) -> None:
+        """Build the per-tenant `_custom_alerts` UNION resolution via the compiler's
+        SSOT walker (#772). No-op if the compiler package is unavailable — then
+        effective_config() falls back to the (REPLACE) deep_merge result."""
+        if _ca_loader is None:
+            return
+        try:
+            for tenant, recipe, origin, is_own in _ca_loader.collect_instances(self.conf_d):
+                self._custom_alerts_resolved.setdefault(tenant, []).append(
+                    (recipe, origin, is_own))
+        except Exception:  # pragma: no cover - never let a custom-alert parse error
+            self._custom_alerts_resolved = {}  # break the generic describe_tenant path
 
     def _scan(self) -> None:
         """Recursively scan conf.d/ and build tenant + defaults maps."""
@@ -176,6 +207,26 @@ class ConfDScanner:
         # Apply tenant config (highest priority)
         tenant_raw = self.tenants[tenant_id]
         merged = deep_merge(merged, tenant_raw)
+
+        # #772: overwrite `_custom_alerts` with the ADR-024 UNION resolution (own +
+        # inherited) from the compiler — deep_merge's array-REPLACE above would have
+        # dropped inherited platform/domain policy recipes from an override tenant,
+        # making blast_radius blind to the highest-blast-radius change class. This
+        # field FOLLOWS UNION INHERITANCE, unlike every other array (which stays
+        # REPLACE); `_custom_alerts_resolution` makes that explicit per-entry so the
+        # effective config is honest, not silently inconsistent.
+        resolved = self._custom_alerts_resolved.get(tenant_id)
+        if resolved:
+            merged["_custom_alerts"] = [recipe for recipe, _o, _own in resolved]
+            merged["_custom_alerts_resolution"] = [
+                {"name": (recipe.get("name") if isinstance(recipe, dict) else None),
+                 "origin": origin, "is_own": is_own}
+                for recipe, origin, is_own in resolved
+            ]
+        elif _ca_loader is not None:
+            # The tenant has NO effective custom alerts (own or inherited): drop any
+            # REPLACE-derived remnant so the view matches the compiler exactly.
+            merged.pop("_custom_alerts", None)
 
         return merged
 
