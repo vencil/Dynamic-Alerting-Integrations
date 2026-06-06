@@ -187,7 +187,11 @@ func PutTenantCustomAlerts(d *Deps) http.HandlerFunc {
 		// of an end-of-life recipe, without collateral-blocking edits to existing
 		// or unrelated recipes (the outage-hostage failure mode). The delta needs
 		// the CURRENT array (from raw) + the desired array — only this write path
-		// has both; the stateless ValidateTenantCustomAlerts cannot see it.
+		// loads both. The stateless ValidateTenantCustomAlerts (shared by PutTenant
+		// + batch full-config writes via gitops.Writer.validate) cannot see the
+		// delta, so those paths enforce SHAPE only; stateful eol-expansion there is
+		// a follow-up. The portal recipe-authoring flow uses THIS endpoint, so the
+		// primary tenant-facing path is covered.
 		currentAlerts, err := customalerts.Extract(string(raw), tenantID)
 		if err != nil {
 			WriteJSONError(w, r, http.StatusInternalServerError,
