@@ -191,6 +191,12 @@ def main() -> int:
     groups = pack["groups"]
     meta = pack["_meta"]
 
+    # Non-fatal recipe-lifecycle notices (ADR-024 #6): deprecated/eol recipes in
+    # use still compile (no silent alert loss); surface them to stderr so a GitOps
+    # PR / CI log flags the migration debt without breaking the build.
+    for notice in _loader.collect_lifecycle_notices(config_dir):
+        print(f"  ⚠ recipe-lifecycle: {notice}", file=sys.stderr)
+
     if args.check:
         gen_map = sync._extract(groups)
         committed = sync._extract(sync._groups_from_rulepack(out_path)) if out_path.exists() else {}

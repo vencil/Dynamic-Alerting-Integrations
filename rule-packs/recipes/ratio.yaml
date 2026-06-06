@@ -1,5 +1,6 @@
 # Recipe: ratio — platform-authored (ADR-024 Capability B, #741).
 recipe: ratio
+status: active   # lifecycle: active|deprecated|eol (ADR-024 #6; SSOT = shape.py RECIPE_STATUS)
 summary: The ratio of two counter rates crosses a threshold (division-by-zero safe).
 summary_zh: 兩個 counter 增率的比值越過閾值（除零安全）。
 params:

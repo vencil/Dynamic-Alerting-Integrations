@@ -1,5 +1,6 @@
 # Recipe: p99_latency — platform-authored (ADR-024 Capability B, #741).
 recipe: p99_latency
+status: active   # lifecycle: active|deprecated|eol (ADR-024 #6; SSOT = shape.py RECIPE_STATUS)
 summary: A histogram quantile (default p99) latency crosses a threshold.
 summary_zh: histogram 分位數（預設 p99）延遲越過閾值。
 params:

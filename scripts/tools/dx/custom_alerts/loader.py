@@ -108,6 +108,36 @@ def collect_instances(config_dir: Path) -> List[Tuple[str, dict, str, bool]]:
     return triples
 
 
+def collect_lifecycle_notices(config_dir: Path) -> List[str]:
+    """Human-readable notices for non-active recipes in use (ADR-024 #6).
+
+    One notice per (status, recipe) that a deprecated/eol recipe is declared by
+    >=1 tenant, naming the affected tenants. Empty when every declared recipe is
+    active. The compiler surfaces these to stderr as NON-FATAL warnings:
+    deprecated/eol existing declarations KEEP compiling (no silent alert loss).
+    The write-side eol *rejection* lives in tenant-api preflight, not here — the
+    batch compiler must never drop a deployed tenant's rule just because the
+    platform retired the recipe.
+    """
+    by_status: Dict[Tuple[str, str], set] = defaultdict(set)   # (status, recipe) → tenants
+    for tenant, inst, _origin, _is_own in collect_instances(config_dir):
+        recipe = inst.get("recipe")
+        if recipe not in _shape.RECIPES:
+            continue   # unknown recipe → recipe_id() is the authority that rejects it
+        status = _shape.recipe_status(recipe)
+        if status != "active":
+            by_status[(status, recipe)].add(tenant)
+
+    notices: List[str] = []
+    for status, recipe in sorted(by_status):
+        tenants = ", ".join(sorted(by_status[(status, recipe)]))
+        tail = ("migrate away — it still compiles." if status == "deprecated"
+                else "existing declarations still compile, but new tenant-api "
+                     "writes using it are rejected until SRE clears the status.")
+        notices.append(f"recipe {recipe!r} is {status}: declared by tenant(s) {tenants}; {tail}")
+    return notices
+
+
 def build_shapes(config_dir: Path,
                  max_custom_recipes: int = MAX_CUSTOM_RECIPES_DEFAULT
                  ) -> Tuple[List[dict], Dict[str, int]]:

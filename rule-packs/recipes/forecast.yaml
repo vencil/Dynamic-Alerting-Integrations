@@ -2,6 +2,7 @@
 # Human governance contract for the `forecast` recipe. The executable form is
 # scripts/tools/dx/custom_alerts/recipes.py::_forecast_records.
 recipe: forecast
+status: active   # lifecycle: active|deprecated|eol (ADR-024 #6; SSOT = shape.py RECIPE_STATUS)
 summary: Predict (linear) that a gauge or headroom ratio will cross a threshold within a horizon.
 summary_zh: 用線性預測判斷某 gauge 或餘量比例會在指定提前量內越過閾值（趨勢/耗盡預測）。
 params:

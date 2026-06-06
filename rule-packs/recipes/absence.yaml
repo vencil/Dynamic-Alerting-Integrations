@@ -1,5 +1,6 @@
 # Recipe: absence — platform-authored (ADR-024 Capability B, #741).
 recipe: absence
+status: active   # lifecycle: active|deprecated|eol (ADR-024 #6; SSOT = shape.py RECIPE_STATUS)
 summary: A metric is absent over a window (per-tenant, self-scoped).
 summary_zh: 一個指標在時間窗內缺席（per-tenant、自我圈定）。
 params:
