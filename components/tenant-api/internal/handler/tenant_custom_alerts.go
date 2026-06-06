@@ -183,6 +183,26 @@ func PutTenantCustomAlerts(d *Deps) http.HandlerFunc {
 			return
 		}
 
+		// B2-wide eol-expansion guard (ADR-024 §8): block writes that GROW usage
+		// of an end-of-life recipe, without collateral-blocking edits to existing
+		// or unrelated recipes (the outage-hostage failure mode). The delta needs
+		// the CURRENT array (from raw) + the desired array — only this write path
+		// has both; the stateless ValidateTenantCustomAlerts cannot see it.
+		currentAlerts, err := customalerts.Extract(string(raw), tenantID)
+		if err != nil {
+			WriteJSONError(w, r, http.StatusInternalServerError,
+				"internal error: cannot read current custom alerts: "+err.Error())
+			return
+		}
+		if viol := customalerts.EolExpansionViolations(currentAlerts, *req.CustomAlerts); len(viol) > 0 {
+			violations := make([]Violation, 0, len(viol))
+			for _, v := range viol {
+				violations = append(violations, Violation{Field: "_custom_alerts", Reason: v})
+			}
+			WriteValidationErrors(w, r, violations)
+			return
+		}
+
 		// Commit via the shared writer (re-validates schema + custom alerts,
 		// attributes the commit to the operator).
 		email := rbac.RequestEmail(r)

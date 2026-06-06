@@ -791,6 +791,16 @@ repos:
         # forget to recompile → this fails locally before CI. Fix:
         # `make custom-alerts-compile`, then commit pack + configmap + operator.
 
+      - id: recipe-status-json-check
+        name: "#741 #6: recipe-status.json must match shape.py RECIPE_STATUS (ADR-024 §8 A1)"
+        entry: python3 -X utf8 scripts/tools/dx/gen_recipe_status_json.py --check
+        language: python
+        pass_filenames: false
+        files: ^(scripts/tools/dx/custom_alerts/shape\.py|components/tenant-api/internal/customalerts/recipe-status\.json|scripts/tools/dx/gen_recipe_status_json\.py)$
+        # recipe-status.json is DERIVED from shape.py RECIPE_STATUS (the SSOT) and
+        # consumed by the Go tenant-api via go:embed. Edit a recipe's status but
+        # forget to regenerate → this fails before CI. Fix: `make recipe-status-json`.
+
       - id: forbid-legacy-mariadb-threshold-name
         name: "#731: forbid legacy bare mariadb threshold recording-rule names (use mysql_ prefix)"
         entry: 'tenant:alert_threshold:(connections|cpu)(_critical)?\b'

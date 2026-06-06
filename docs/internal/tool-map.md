@@ -95,6 +95,7 @@ lang: zh
 | `diag_pr_ci.py` | PR CI auto-diagnostic CLI (issue #446). |
 | `doc_coverage.py` | 文件覆蓋率 Dashboard |
 | `doc_impact.py` | 文件變更影響分析 |
+| `gen_recipe_status_json.py` | Generate recipe-status.json from the compiler SSOT (ADR-024 §8, #741 #6 / A1). |
 | `generate_alert_reference.py` | Auto-generate ALERT-REFERENCE.md from Rule Pack YAML files. |
 | `generate_changelog.py` | Generate CHANGELOG draft entries from conventional commits. |
 | `generate_cheat_sheet.py` | Auto-generate da-tools cheat sheet from CLI reference. |
