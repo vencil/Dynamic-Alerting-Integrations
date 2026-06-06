@@ -34,8 +34,21 @@ def test_render_is_deterministic_and_key_sorted():
     assert keys == sorted(keys)
 
 
-def test_committed_json_matches_ssot():
-    # The committed artifact (Go go:embed source of truth) must equal render() —
+def test_committed_copies_match_ssot():
+    # Both committed copies (Go go:embed + portal import) must equal render() —
     # i.e. `make recipe-status-json` was run after any RECIPE_STATUS change.
-    committed = (_REPO / gen.OUT_REL).read_text(encoding="utf-8")
-    assert committed == gen.render(), "run `make recipe-status-json` to resync"
+    assert len(gen.OUT_RELS) >= 2, "expected a Go + a portal copy"
+    for rel in gen.OUT_RELS:
+        committed = (_REPO / rel).read_text(encoding="utf-8")
+        assert committed == gen.render(), f"{rel}: run `make recipe-status-json` to resync"
+
+
+def test_committed_copies_are_lf_on_disk():
+    # Raw-bytes guard: the portal copy is bundled by esbuild, which reads the
+    # working-tree bytes verbatim — a CRLF copy (Path.write_text default on
+    # Windows) taints the sourcemap and re-hashes the shared chunk, redding the
+    # Portal Tests dist gate. The match-SSOT check above is blind to this because
+    # read_text() universal-newlines normalizes CRLF→LF. Pin LF on disk.
+    for rel in gen.OUT_RELS:
+        raw = (_REPO / rel).read_bytes()
+        assert b"\r\n" not in raw, f"{rel}: has CRLF; generator must write newline='\\n'"

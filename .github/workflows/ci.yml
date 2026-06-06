@@ -470,10 +470,16 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
 
-      - name: Set up Node.js 20
+      - name: Set up Node.js 24
+        # Pinned to Node 24 to match the dev container (where `make
+        # portal-build` produces the committed dist). Keeping CI and the
+        # canonical build env on the SAME major removes node/npm version as
+        # a variable in the dist-reproducibility gate below — a fresh
+        # `npm ci` under a different npm major can resolve a transitive dep
+        # differently and re-hash a shared chunk, false-redding the gate.
         uses: actions/setup-node@v5
         with:
-          node-version: '20'
+          node-version: '24'
           cache: 'npm'
           cache-dependency-path: tools/portal/package-lock.json
 
@@ -492,8 +498,8 @@ jobs:
         # silently never reaches prod. build.mjs cleans + re-emits the dir, so
         # any drift (modified bundle, renamed chunk, orphan) shows as a staged
         # diff here. Build is byte-reproducible across the dev container and CI
-        # (esbuild 0.24.2 linux-x64, pinned via package-lock) — verified Node
-        # 20 == Node 24 output — so this gate does not false-red.
+        # (esbuild 0.24.2 linux-x64, pinned via package-lock) because both run
+        # the SAME Node major (24) — so this gate does not false-red.
         run: |
           git add -A docs/assets/dist
           if ! git diff --cached --quiet -- docs/assets/dist; then
