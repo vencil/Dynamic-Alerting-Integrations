@@ -318,6 +318,130 @@ func (m *ConfigManager) scanAndCheckHierarchical(prior reloadPriorState) (reload
 	}, false, nil
 }
 
+// reloadEmissionKey is the group-by key for the per-tick blast-radius
+// histogram: each tenant contributes one increment to exactly one
+// (reason, scope, effect) bucket, and classifyAndCount emits a single
+// Observe(N=count) per non-empty bucket afterwards. Preserves dimensional
+// detail (a tick can fire applied/shadowed/cosmetic concurrently) without
+// conflating distinct events into one sample.
+type reloadEmissionKey struct{ reason, scope, effect string }
+
+// rebuildParsedDefaults rebuilds the parsedDefaults cache for a reload tick
+// (Issue #61): it reuses the prior parse for any defaults file whose hash did
+// not move and re-parses the rest. Read/parse failures are log-and-skip (same
+// policy as populateHierarchyState cold start). Extracted from classifyAndCount.
+func (m *ConfigManager) rebuildParsedDefaults(prior reloadPriorState, scan reloadScanState) map[string]map[string]any {
+	out := make(map[string]map[string]any, len(scan.defaults))
+	for dp := range scan.defaults {
+		if scan.hashes[dp] == prior.hashes[dp] {
+			if cached, ok := prior.parsedDefaults[dp]; ok && cached != nil {
+				out[dp] = cached
+				continue
+			}
+		}
+		b, rerr := os.ReadFile(dp)
+		if rerr != nil {
+			m.getLogger().Printf("WARN: parsedDefaults: read %s: %v", dp, rerr)
+			continue
+		}
+		parsed, perr := parseDefaultsBytes(b)
+		if perr != nil {
+			m.getLogger().Printf("WARN: parsedDefaults: parse %s: %v", dp, perr)
+			continue
+		}
+		out[dp] = parsed
+	}
+	return out
+}
+
+// classifyTenant classifies one tenant during a reload tick into its
+// reload/no-op category, updating res (merged_hash, reloaded/noOp counters) and
+// the per-tick emission buckets, and emitting the trigger/shadowed/noop
+// counters. Extracted verbatim from the classifyAndCount per-tenant loop body;
+// res is mutated through the pointer, buckets through the shared map.
+func (m *ConfigManager) classifyTenant(tid, srcPath string, prior reloadPriorState, scan reloadScanState, res *reloadResult, buckets map[reloadEmissionKey]int) {
+	prevSrc, wasKnown := prior.tenantSources[tid]
+	sourceChanged := !wasKnown || prevSrc != srcPath || scan.hashes[srcPath] != prior.hashes[srcPath]
+
+	defaultsChain := scan.graph.TenantDefaults[tid]
+	defaultsChanged := false
+	for _, dp := range defaultsChain {
+		if scan.hashes[dp] != prior.hashes[dp] {
+			defaultsChanged = true
+			break
+		}
+	}
+
+	if !sourceChanged && !defaultsChanged {
+		// Reuse cached merged_hash — nothing that feeds this tenant moved.
+		if prev, ok := prior.mergedHashes[tid]; ok {
+			res.newMergedHashes[tid] = prev
+			return
+		}
+		// No cached value (first scan after enabling hierarchical mode).
+		// Fall through to compute.
+	}
+
+	mh, mergeErr := m.recomputeMergedHash(tid, srcPath, defaultsChain)
+	if mergeErr != nil {
+		logMergeSkip(m.getLogger(), tid, "debounced-reload", mergeErr)
+		// Preserve any prior merged_hash we had so the /effective
+		// endpoint still serves the last-known-good value. Absent prior
+		// → mark empty (tenant will read as merge-failing).
+		if prev, ok := prior.mergedHashes[tid]; ok {
+			res.newMergedHashes[tid] = prev
+		}
+		return
+	}
+	res.newMergedHashes[tid] = mh
+
+	if sourceChanged {
+		res.reloaded++
+		if wasKnown {
+			m.getMetrics().IncReloadTrigger(ReloadReasonSource)
+			buckets[reloadEmissionKey{ReloadReasonSource, "tenant", "applied"}]++
+		} else {
+			m.getMetrics().IncReloadTrigger(ReloadReasonNewTenant)
+			buckets[reloadEmissionKey{ReloadReasonNewTenant, "tenant", "applied"}]++
+		}
+	} else if defaultsChanged {
+		scope := widestChangedScope(defaultsChain, scan.hashes, prior.hashes, m.path)
+		if scope == "" {
+			// Defensive: defaultsChanged was true but no chain entry
+			// differs by hash. Shouldn't happen (defaultsChanged is
+			// derived from the same comparison) — fall back to unknown.
+			scope = "unknown"
+		}
+		if prev, ok := prior.mergedHashes[tid]; ok && prev == mh {
+			// Defaults file changed but the resulting merged_hash
+			// didn't — "quiet defaults edit". v2.8.0 Issue #61 splits
+			// this into shadowed (tenant override blocked the change)
+			// vs cosmetic (comment/reorder/whitespace).
+			res.noOp++
+			tenantBytes, terr := os.ReadFile(srcPath)
+			effect := "cosmetic"
+			if terr == nil {
+				effect = classifyDefaultsNoOpEffect(
+					tenantBytes, tid, defaultsChain,
+					prior.parsedDefaults, res.newParsedDefaults,
+					scan.hashes, prior.hashes,
+				)
+			}
+			switch effect {
+			case "shadowed":
+				m.getMetrics().IncDefaultsShadowed()
+			default:
+				m.getMetrics().IncDefaultsNoop()
+			}
+			buckets[reloadEmissionKey{ReloadReasonDefaults, scope, effect}]++
+		} else {
+			res.reloaded++
+			m.getMetrics().IncReloadTrigger(ReloadReasonDefaults)
+			buckets[reloadEmissionKey{ReloadReasonDefaults, scope, "applied"}]++
+		}
+	}
+}
+
 // classifyAndCount is the heart of the reload pipeline:
 //
 //  1. Maintain parsedDefaults cache incrementally — reuse prior parse for
@@ -338,126 +462,21 @@ func (m *ConfigManager) scanAndCheckHierarchical(prior reloadPriorState) (reload
 // — installNewHierarchyState only does the atomic swap.
 func (m *ConfigManager) classifyAndCount(prior reloadPriorState, scan reloadScanState) reloadResult {
 	res := reloadResult{
-		newMergedHashes:   make(map[string]string, len(scan.tenants)),
-		newParsedDefaults: make(map[string]map[string]any, len(scan.defaults)),
+		newMergedHashes: make(map[string]string, len(scan.tenants)),
 	}
 	for tid := range scan.tenants {
 		res.newMergedHashes[tid] = "" // filled below
 	}
 
-	// Issue #61: parsedDefaults cache rebuild. Reuse prior parse where
-	// the hash didn't move; re-parse the rest. Parse failures are
-	// log-and-skip (same policy as populateHierarchyState cold start).
-	for dp := range scan.defaults {
-		if scan.hashes[dp] == prior.hashes[dp] {
-			if cached, ok := prior.parsedDefaults[dp]; ok && cached != nil {
-				res.newParsedDefaults[dp] = cached
-				continue
-			}
-		}
-		b, rerr := os.ReadFile(dp)
-		if rerr != nil {
-			m.getLogger().Printf("WARN: parsedDefaults: read %s: %v", dp, rerr)
-			continue
-		}
-		parsed, perr := parseDefaultsBytes(b)
-		if perr != nil {
-			m.getLogger().Printf("WARN: parsedDefaults: parse %s: %v", dp, perr)
-			continue
-		}
-		res.newParsedDefaults[dp] = parsed
-	}
+	// Issue #61: rebuild the parsedDefaults cache, reusing unchanged parses.
+	res.newParsedDefaults = m.rebuildParsedDefaults(prior, scan)
 
-	// Per-tick group-by emission for the blast-radius histogram. Each
-	// tenant contributes one increment to exactly one (reason, scope,
-	// effect) bucket; after the loop each non-empty bucket emits a single
-	// Observe(N=count). Preserves dimensional detail (a tick can fire
-	// applied/shadowed/cosmetic concurrently) without conflating distinct
-	// events into a single sample.
-	type emissionKey struct{ reason, scope, effect string }
-	buckets := make(map[emissionKey]int)
+	// Per-tick group-by buckets for the blast-radius histogram (see
+	// reloadEmissionKey); each tenant increments exactly one bucket.
+	buckets := make(map[reloadEmissionKey]int)
 
 	for tid, srcPath := range scan.tenants {
-		prevSrc, wasKnown := prior.tenantSources[tid]
-		sourceChanged := !wasKnown || prevSrc != srcPath || scan.hashes[srcPath] != prior.hashes[srcPath]
-
-		defaultsChain := scan.graph.TenantDefaults[tid]
-		defaultsChanged := false
-		for _, dp := range defaultsChain {
-			if scan.hashes[dp] != prior.hashes[dp] {
-				defaultsChanged = true
-				break
-			}
-		}
-
-		if !sourceChanged && !defaultsChanged {
-			// Reuse cached merged_hash — nothing that feeds this tenant moved.
-			if prev, ok := prior.mergedHashes[tid]; ok {
-				res.newMergedHashes[tid] = prev
-				continue
-			}
-			// No cached value (first scan after enabling hierarchical mode).
-			// Fall through to compute.
-		}
-
-		mh, mergeErr := m.recomputeMergedHash(tid, srcPath, defaultsChain)
-		if mergeErr != nil {
-			logMergeSkip(m.getLogger(), tid, "debounced-reload", mergeErr)
-			// Preserve any prior merged_hash we had so the /effective
-			// endpoint still serves the last-known-good value. Absent prior
-			// → mark empty (tenant will read as merge-failing).
-			if prev, ok := prior.mergedHashes[tid]; ok {
-				res.newMergedHashes[tid] = prev
-			}
-			continue
-		}
-		res.newMergedHashes[tid] = mh
-
-		if sourceChanged {
-			res.reloaded++
-			if wasKnown {
-				m.getMetrics().IncReloadTrigger(ReloadReasonSource)
-				buckets[emissionKey{ReloadReasonSource, "tenant", "applied"}]++
-			} else {
-				m.getMetrics().IncReloadTrigger(ReloadReasonNewTenant)
-				buckets[emissionKey{ReloadReasonNewTenant, "tenant", "applied"}]++
-			}
-		} else if defaultsChanged {
-			scope := widestChangedScope(defaultsChain, scan.hashes, prior.hashes, m.path)
-			if scope == "" {
-				// Defensive: defaultsChanged was true but no chain entry
-				// differs by hash. Shouldn't happen (defaultsChanged is
-				// derived from the same comparison) — fall back to unknown.
-				scope = "unknown"
-			}
-			if prev, ok := prior.mergedHashes[tid]; ok && prev == mh {
-				// Defaults file changed but the resulting merged_hash
-				// didn't — "quiet defaults edit". v2.8.0 Issue #61 splits
-				// this into shadowed (tenant override blocked the change)
-				// vs cosmetic (comment/reorder/whitespace).
-				res.noOp++
-				tenantBytes, terr := os.ReadFile(srcPath)
-				effect := "cosmetic"
-				if terr == nil {
-					effect = classifyDefaultsNoOpEffect(
-						tenantBytes, tid, defaultsChain,
-						prior.parsedDefaults, res.newParsedDefaults,
-						scan.hashes, prior.hashes,
-					)
-				}
-				switch effect {
-				case "shadowed":
-					m.getMetrics().IncDefaultsShadowed()
-				default:
-					m.getMetrics().IncDefaultsNoop()
-				}
-				buckets[emissionKey{ReloadReasonDefaults, scope, effect}]++
-			} else {
-				res.reloaded++
-				m.getMetrics().IncReloadTrigger(ReloadReasonDefaults)
-				buckets[emissionKey{ReloadReasonDefaults, scope, "applied"}]++
-			}
-		}
+		m.classifyTenant(tid, srcPath, prior, scan, &res, buckets)
 	}
 
 	// Detect deleted tenants — previously known, absent now. Deletions
@@ -467,7 +486,7 @@ func (m *ConfigManager) classifyAndCount(prior reloadPriorState, scan reloadScan
 		if _, stillKnown := scan.tenants[tid]; !stillKnown {
 			res.reloaded++
 			m.getMetrics().IncReloadTrigger(ReloadReasonDelete)
-			buckets[emissionKey{ReloadReasonDelete, "tenant", "applied"}]++
+			buckets[reloadEmissionKey{ReloadReasonDelete, "tenant", "applied"}]++
 		}
 	}
 
