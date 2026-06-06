@@ -118,6 +118,7 @@ da-tools <command> --help
 |------|------|----------|
 | `operator-generate` | Rule Packs + Tenant 配置 → PrometheusRule / AlertmanagerConfig / ServiceMonitor CRD YAML | `--rule-packs-dir <dir>` |
 | `operator-check` | Operator CRD 部署狀態驗證（5 項檢查 + 診斷報告） | （自動探索或 `--namespace <ns>`） |
+| `runtime-audit` | Git rule-packs ↔ Prometheus runtime 唯讀對帳（#747；MISSING / UNHEALTHY / ORPHAN） | `--prometheus <url>` 或 `--runtime-json <file>` |
 | `rule-pack-split` | Rule Pack 分層拆分（edge Part 1 + central Parts 2+3），Federation Scenario B | `--rule-packs-dir <dir>` |
 | `fed-key` | 產生 / 輪替 federation JWT 簽章金鑰（ADR-020 IV-2l）：私鑰 Secret manifest → stdout、公鑰 JWKS → 檔案 | （無，bootstrap 預設）/ `--rotate --existing-jwks <file>` |
 
@@ -1680,6 +1681,54 @@ da-tools operator-check --namespace monitoring
 
 # JSON 格式輸出（CI gate 用）
 da-tools operator-check --json
+```
+
+---
+
+#### runtime-audit
+
+Git 宣告的規則（`rule-packs/rule-pack-*.yaml`）↔ Prometheus 實際載入的規則（`GET /api/v1/rules`）之間的**唯讀**硬比對。補上 #711/#714 PR-期 drift gate 蓋不到的 **runtime 那條腿**。
+
+**用途**：incident 當下的對帳診斷鈕（`kubectl port-forward` 後跑，零新基礎設施）；排程 / CI gate（`--ci`）；reload 失敗 / 手改 configmap / 孤兒殘留偵測。
+
+> **邊界**：本工具**唯讀、不自癒**——偵測 → 報告（exit code）→ 由人決定。明確 reject 自癒 / 常駐 reconciliation Operator（避免機器回寫人類平面 + 觀測者悖論遞迴）。範式對齊 #631/#643/#652。詳見 [custom-rule-governance.md §7.1](custom-rule-governance.md)。
+
+**語法**
+
+```bash
+da-tools runtime-audit (--prometheus <url> | --runtime-json <file>) [options]
+```
+
+**選項**
+
+| 選項 | 說明 | 預設值 |
+|------|------|--------|
+| `--prometheus <URL>` | Prometheus API URL，例如 `http://localhost:9090` | （無） |
+| `--runtime-json <FILE>` | 已存的 `/api/v1/rules` JSON（離線 / fixture） | （無） |
+| `--rule-packs-dir <DIR>` | Rule pack YAML 目錄 | `rule-packs/` |
+| `--strict-orphan` | 將 ORPHAN（孤兒殘留規則）也升為 `--ci` 閘門失敗 | false |
+| `--json` | JSON 格式輸出 | false |
+| `--ci` | 偵測到 drift 即 exit 1（MISSING/UNHEALTHY；ORPHAN 需 `--strict-orphan`） | false |
+
+**偵測分類**
+
+1. **MISSING** — Git 已宣告但 runtime 未載入（reload 失敗 / projected-volume lag / 手刪 configmap）
+2. **UNHEALTHY** — 已載入但 `health != ok`（帶 `lastError`；series 觀測無法與「metric 本就不存在」區分）
+3. **ORPHAN** — runtime 仍載入但 Git 不再宣告（孤兒殘留；限**已宣告群組**內，不誤報無關 infra 規則）
+
+> **⚠️ 限制（避免假陽性）**：`declared` = `--rule-packs-dir` 內**所有** `rule-pack-*.yaml`。平台 pack 可選擇性啟用（Projected Volume `optional`）；若部署只載入子集，**停用的 pack 會被報成 MISSING**。對策：把 `--rule-packs-dir` 指向只含已啟用 pack 的目錄（ORPHAN 方向不受影響——它限已宣告群組）。另：`unknown` health（reload 後尚未首次評估的暫態）**不**列 UNHEALTHY，只有確認的 `err` 才列。
+
+**範例**
+
+```bash
+# incident 診斷（先 port-forward 到 9090）
+da-tools runtime-audit --prometheus http://localhost:9090
+
+# CI / 排程 gate
+da-tools runtime-audit --prometheus http://localhost:9090 --ci
+
+# 離線 fixture（無活叢集）
+da-tools runtime-audit --runtime-json rules.json --json
 ```
 
 ---

@@ -321,6 +321,20 @@ flowchart TD
 
 **存取治理**（誰能在各階段改什麼、稽核、break-glass）見 [governance-security.md](governance-security.md)；**Tier 模型與晉升機制**見本文 §2 / §5。
 
+### 7.1 Runtime 對帳邊界（#747）— 偵測-only，不自癒
+
+規則狀態橫跨**三層 source-of-truth**，兩兩會漂移：(1) Git（宣告意圖）→ (2) K8s ConfigMap / projected volume（部署物）→ (3) Prometheus runtime（實際載入的規則）。
+
+- **(1)↔(2) 已有 HARD gate**：configmap↔source 與 operator-manifest drift 於 **PR 期**強制比對（[#711](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/711) / [#714](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/714)）。
+- **(1)/(2)↔(3) 是唯一沒蓋到的 runtime 腿**：reload 失敗、projected-volume lag、手改 configmap、孤兒規則殘留——PR 期 gate 全看不到。由 `da-tools runtime-audit`（**唯讀**，查 `/api/v1/rules` 的 rule identity + health）補上，分類 MISSING / UNHEALTHY / ORPHAN（用法見 [CLI Reference](cli-reference.md#runtime-audit)）。
+
+**邊界決策（locked）**：runtime 對帳一律 **偵測 → 報告（exit code / 指標）→ 由人決定**，對齊平台既有 silent-failure 範式（#631 phantom reload / #643 silent parse / #652 cardinality truncation）。
+
+- ⛔ **Reject 自癒 / 常駐 reconciliation Operator**：機器回寫人類平面（GitOps 下 Git 須為唯一且有強制力的真理）+ 常駐器自身成為第 4 個會漂移 / OOM 的 SoT（觀測者悖論遞迴一層）。
+- `version_orphaned` sentinel **保留為 visibility 訊號**（非 config SoT、非被 runtime-audit 取代）；runtime-audit 是它的硬比對補強。
+
+**Defer-with-trigger（heavier 持續形態）**：把 runtime-audit 包成 in-cluster 排程 CronJob、或新增 per-layer-pair drift 指標 → 待下列 trigger 才做：(1) 首次「Git 乾淨但叢集殘留 stale / orphan 規則」的 runtime drift incident；(2) 車隊規模使「`--check`-at-PR」不足以保證 runtime 一致。詳見 [#747](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/747)。
+
 ## 相關資源
 
 | 資源 | 相關性 |
