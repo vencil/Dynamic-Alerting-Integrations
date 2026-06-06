@@ -247,12 +247,12 @@ class TestClassifyDiff:
         """Reef 6: missing key → `_custom_alerts: []` is a no-op; must not flag."""
         diff = {"added": {"_custom_alerts": []}, "removed": {}, "changed": {}}
         tiers = br.classify_diff(diff)
-        assert len(tiers["A"]) == 0 and len(tiers["C"]) == 0
+        assert all(len(v) == 0 for v in tiers.values())  # no tier flagged at all
 
     def test_custom_alerts_removed_empty_list_is_noise(self):
         diff = {"added": {}, "removed": {"_custom_alerts": []}, "changed": {}}
         tiers = br.classify_diff(diff)
-        assert len(tiers["A"]) == 0 and len(tiers["C"]) == 0
+        assert all(len(v) == 0 for v in tiers.values())
 
     def test_custom_alerts_added_nonempty_still_tier_a(self):
         """Guard: a real (non-empty) addition must still flag Tier A."""
