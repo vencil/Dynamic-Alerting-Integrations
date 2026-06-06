@@ -85,7 +85,13 @@ def main() -> int:
 
     for rel, path in targets:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(generated, encoding="utf-8")
+        # newline="\n": force LF on every platform. Without it, Path.write_text
+        # uses os.linesep (CRLF on Windows), which the eol=lf gitattribute hides
+        # from `git status` (renormalize-on-compare) AND from `--check` above
+        # (read_text universal-newlines normalizes CRLF→LF) — but esbuild reads
+        # the raw working-tree bytes, so a CRLF copy taints the portal bundle's
+        # sourcemap and re-hashes the shared chunk → Portal Tests dist gate reds.
+        path.write_text(generated, encoding="utf-8", newline="\n")
         print(f"WROTE: {rel} ({len(_shape.RECIPES)} recipes).")
     return 0
 
