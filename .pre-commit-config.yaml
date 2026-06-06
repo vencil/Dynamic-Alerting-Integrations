@@ -739,6 +739,20 @@ repos:
         # labels so dimensional thresholds (env/version/tablespace_re) keep their
         # dimensions. Caught a ~2-month silent prod drift in 4 packs (ADR-024).
 
+      - id: single-writer-invariant
+        name: "ADR-023: tenant-api write plane must stay single-writer (replicaCount=1 + strategy Recreate)"
+        entry: python3 -X utf8 scripts/tools/lint/check_single_writer_invariant.py --ci
+        language: python
+        additional_dependencies: ['pyyaml']
+        pass_filenames: false
+        files: ^(helm/tenant-api/(values\.yaml|templates/deployment\.yaml)|k8s/04-tenant-api/deployment\.yaml)$
+        # FATAL: the write plane (internal/gitops/Writer) is a single writer —
+        # a per-process lock + in-memory PR tracker that do NOT coordinate across
+        # pods. replicaCount>1 OR a missing `strategy: Recreate` reintroduces the
+        # phantom-writer / dual-writer breach (git tree corruption, duplicate PRs).
+        # Layer 2 of ADR-023 enforcement; layer 1 is the chart's render-time
+        # `fail` guard. Horizontal write scaling needs a K8s Lease (Deferred A3).
+
       - id: leftouterjoin-enrichment
         name: "ADR-024: alert metadata enrichment must be left-outer-join (no onboarding-vacuum drop)"
         entry: python3 -X utf8 scripts/tools/lint/check_leftouterjoin_enrichment.py --ci
