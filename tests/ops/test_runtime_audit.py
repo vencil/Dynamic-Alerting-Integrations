@@ -109,6 +109,27 @@ def test_parse_declared_non_dict_doc_skipped(tmp_path):
     assert ra.parse_declared_rules([p]) == {}
 
 
+def test_parse_declared_non_list_groups_raises_valueerror(tmp_path):
+    # `groups: "string"` would otherwise iterate chars → cryptic AttributeError.
+    # Fail loud with a clear message instead (CodeRabbit PR #780).
+    p = _write(tmp_path / "rule-pack-strgroups.yaml", 'groups: "not-a-list"\n')
+    with pytest.raises(ValueError, match="must be a list"):
+        ra.parse_declared_rules([p])
+
+
+def test_parse_declared_non_dict_group_and_rule_skipped(tmp_path):
+    p = _write(tmp_path / "rule-pack-mixed.yaml", """
+        groups:
+          - "not-a-dict-group"
+          - name: g
+            rules:
+              - "not-a-dict-rule"
+              - alert: Real
+                expr: up == 0
+    """)
+    assert list(ra.parse_declared_rules([p])) == [("g", "Real")]
+
+
 # ─── parse_runtime_rules ──────────────────────────────────────────────
 
 

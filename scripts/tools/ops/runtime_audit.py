@@ -195,9 +195,23 @@ def parse_declared_rules(
             raise ValueError(f"{path}: {exc}") from exc
         if not isinstance(doc, dict):
             continue
-        for group in doc.get("groups") or []:
+        # Fail loud on a structurally-wrong top-level `groups:` (e.g.
+        # `groups: "foo"` or `groups: 123`) rather than iterating a string
+        # into a cryptic AttributeError. Mirrors rule_pack_diff.py's validation
+        # and dev-rule #5 (fail-loud). --rule-packs-dir accepts any directory,
+        # so this input is not fully trusted. (CodeRabbit PR #780.)
+        groups = doc.get("groups")
+        if groups is not None and not isinstance(groups, list):
+            raise ValueError(
+                f"{path}: top-level 'groups:' must be a list, "
+                f"got {type(groups).__name__}")
+        for group in groups or []:
+            if not isinstance(group, dict):
+                continue
             gname = group.get("name", "")
             for rule in group.get("rules") or []:
+                if not isinstance(rule, dict):
+                    continue
                 if "alert" in rule:
                     name, rtype = rule["alert"], "alerting"
                 elif "record" in rule:
