@@ -15,6 +15,7 @@ import pytest
 TESTS_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REPO_ROOT = os.path.dirname(TESTS_DIR)
 sys.path.insert(0, os.path.join(REPO_ROOT, "scripts", "tools", "ops"))
+sys.path.insert(0, os.path.join(REPO_ROOT, "scripts", "tools", "dx"))
 
 import blast_radius as br  # noqa: E402
 
@@ -91,6 +92,18 @@ class TestClassifyField:
     def test_tier_a_nested_threshold(self):
         """Nested path still matches Tier A."""
         assert br.classify_field("alerts.threshold") == "A"
+
+    def test_tier_a_custom_alerts(self):
+        """_custom_alerts (ADR-024 #741) is a real alerting change → Tier A,
+        never format-only. flatten_dict keeps the list opaque so the field path
+        is exactly '_custom_alerts'."""
+        assert br.classify_field("_custom_alerts") == "A"
+
+    def test_tier_a_custom_alerts_not_misread_as_tier_c(self):
+        """Regression: the 'alerts'/'_alerting' Tier-B patterns must NOT
+        substring-match '_custom_alerts', and it must NOT fall through to C."""
+        assert br.classify_field("_custom_alerts") != "C"
+        assert br.classify_field("_custom_alerts") != "B"
 
 
 # ---------------------------------------------------------------------------
@@ -192,6 +205,166 @@ class TestClassifyDiff:
         assert len(tiers["B"]) == 1  # severity
         assert len(tiers["C"]) == 2  # timezone + metadata
 
+    def test_custom_alerts_added_is_tier_a(self):
+        """Adding a _custom_alerts recipe → Tier A (ADR-024 #741)."""
+        diff = {
+            "added": {"_custom_alerts": [{"recipe": "threshold", "name": "x"}]},
+            "removed": {},
+            "changed": {},
+        }
+        tiers = br.classify_diff(diff)
+        assert len(tiers["A"]) == 1
+        assert tiers["A"][0]["field"] == "_custom_alerts"
+        assert tiers["A"][0]["action"] == "added"
+        assert len(tiers["C"]) == 0
+
+    def test_custom_alerts_changed_is_tier_a(self):
+        diff = {
+            "added": {},
+            "removed": {},
+            "changed": {"_custom_alerts": {
+                "base": [{"name": "a"}], "pr": [{"name": "a"}, {"name": "b"}],
+            }},
+        }
+        tiers = br.classify_diff(diff)
+        assert len(tiers["A"]) == 1
+        assert len(tiers["C"]) == 0
+
+    def test_custom_alerts_pure_reorder_downgraded_to_tier_c(self):
+        """N3: a reorder (same recipes, swapped order) has zero alerting impact
+        → must be Tier C, not flag as substantive Tier A."""
+        a = {"recipe": "threshold", "name": "a", "metric": "m", "threshold": "1"}
+        b = {"recipe": "rate", "name": "b", "metric": "m2", "threshold": "2"}
+        diff = {
+            "added": {}, "removed": {},
+            "changed": {"_custom_alerts": {"base": [a, b], "pr": [b, a]}},
+        }
+        tiers = br.classify_diff(diff)
+        assert len(tiers["A"]) == 0
+        assert len(tiers["C"]) == 1
+
+    def test_custom_alerts_none_to_empty_list_is_noise_not_tier_a(self):
+        """Reef 6: missing key → `_custom_alerts: []` is a no-op; must not flag."""
+        diff = {"added": {"_custom_alerts": []}, "removed": {}, "changed": {}}
+        tiers = br.classify_diff(diff)
+        assert len(tiers["A"]) == 0 and len(tiers["C"]) == 0
+
+    def test_custom_alerts_removed_empty_list_is_noise(self):
+        diff = {"added": {}, "removed": {"_custom_alerts": []}, "changed": {}}
+        tiers = br.classify_diff(diff)
+        assert len(tiers["A"]) == 0 and len(tiers["C"]) == 0
+
+    def test_custom_alerts_added_nonempty_still_tier_a(self):
+        """Guard: a real (non-empty) addition must still flag Tier A."""
+        diff = {"added": {"_custom_alerts": [{"name": "a"}]}, "removed": {}, "changed": {}}
+        tiers = br.classify_diff(diff)
+        assert len(tiers["A"]) == 1
+
+    def test_custom_alerts_real_change_stays_tier_a_not_downgraded(self):
+        """Guard against the reorder-downgrade hiding a real change."""
+        a = {"recipe": "threshold", "name": "a", "metric": "m", "threshold": "1"}
+        a2 = {"recipe": "threshold", "name": "a", "metric": "m", "threshold": "999"}
+        diff = {
+            "added": {}, "removed": {},
+            "changed": {"_custom_alerts": {"base": [a], "pr": [a2]}},
+        }
+        tiers = br.classify_diff(diff)
+        assert len(tiers["A"]) == 1
+        assert len(tiers["C"]) == 0
+
+
+# ---------------------------------------------------------------------------
+# Test: _summarize_custom_alerts() — F2 recipe-level detail rendering
+# ---------------------------------------------------------------------------
+
+class TestSummarizeCustomAlerts:
+    """The opaque-list diff must render WHICH recipes changed, not a raw dump."""
+
+    def _r(self, name, **kw):
+        return {"recipe": "threshold", "name": name, "metric": "m",
+                "op": ">", "window": "5m", "threshold": "1:warning", **kw}
+
+    def test_added_lists_recipe_names(self):
+        entry = {"field": "_custom_alerts", "action": "added",
+                 "detail": {"pr": [self._r("a"), self._r("b")]}}
+        out = br._summarize_custom_alerts(entry)
+        assert "2 recipe(s)" in out and "'a'" in out and "'b'" in out
+
+    def test_removed_lists_recipe_names(self):
+        entry = {"field": "_custom_alerts", "action": "removed",
+                 "detail": {"base": [self._r("a")]}}
+        out = br._summarize_custom_alerts(entry)
+        assert "removed" in out and "'a'" in out
+
+    def test_changed_shows_name_level_delta_not_raw_dump(self):
+        base = [self._r("keep"), self._r("drop"), self._r("tune", threshold="1:warning")]
+        pr = [self._r("keep"), self._r("add"), self._r("tune", threshold="999:critical")]
+        entry = {"field": "_custom_alerts", "action": "changed",
+                 "detail": {"base": base, "pr": pr}}
+        out = br._summarize_custom_alerts(entry)
+        assert "+['add']" in out
+        assert "-['drop']" in out
+        assert "~['tune']" in out
+        # NOT a raw JSON dump of the whole list
+        assert "'metric'" not in out
+
+    def test_changed_flags_threshold_disable_as_silenced(self):
+        """N1: blast_radius is the LIVE tool — it must flag the camouflaged
+        threshold→disable, not just '~[name]'."""
+        base = [self._r("x", threshold="100:critical")]
+        pr = [self._r("x", threshold="disable")]
+        out = br._summarize_custom_alerts(
+            {"field": "_custom_alerts", "action": "changed",
+             "detail": {"base": base, "pr": pr}})
+        assert "SILENCED" in out and "'x'" in out
+
+    def test_changed_flags_mode_silent_as_silenced(self):
+        base = [self._r("x", mode="page")]
+        pr = [self._r("x", mode="silent")]
+        out = br._summarize_custom_alerts(
+            {"field": "_custom_alerts", "action": "changed",
+             "detail": {"base": base, "pr": pr}})
+        assert "SILENCED" in out
+
+    def test_silencing_detects_full_disabled_set_and_severity_suffix(self):
+        """R2: mirror exporter custom_alert.go — `off`/`disabled`/`false` and
+        `:severity`-suffixed disables are silencings too, not just 'disable'."""
+        for disabled_val in ("off", "disabled", "false", "disable:warning", "off:critical"):
+            base = [self._r("x", threshold="100:critical")]
+            pr = [self._r("x", threshold=disabled_val)]
+            out = br._summarize_custom_alerts(
+                {"field": "_custom_alerts", "action": "changed",
+                 "detail": {"base": base, "pr": pr}})
+            assert "SILENCED" in out, f"missed disabled form: {disabled_val!r}"
+
+    def test_threshold_disabled_helper(self):
+        assert br._threshold_disabled({"threshold": "disable"})
+        assert br._threshold_disabled({"threshold": "off:warning"})
+        assert not br._threshold_disabled({"threshold": "150:critical"})
+        assert not br._threshold_disabled({"threshold": "150"})
+
+    def test_benign_modify_not_flagged_silenced(self):
+        base = [self._r("x", threshold="100:critical")]
+        pr = [self._r("x", threshold="120:critical")]  # just a retune, still active
+        out = br._summarize_custom_alerts(
+            {"field": "_custom_alerts", "action": "changed",
+             "detail": {"base": base, "pr": pr}})
+        assert "SILENCED" not in out
+        assert "~['x']" in out
+
+    def test_summary_used_in_tenant_change_summary(self):
+        """Wired through _tenant_change_summary (full-detail render path)."""
+        big = [self._r(f"r{i}") for i in range(8)]
+        changed = big[:7] + [self._r("r7", threshold="999:critical")]
+        tenant = {"tenant_id": "t", "status": "changed", "highest_tier": "A",
+                  "tiers": {"A": [{"field": "_custom_alerts", "action": "changed",
+                                   "detail": {"base": big, "pr": changed}}],
+                            "B": [], "C": []}}
+        out = br._tenant_change_summary(tenant)
+        assert "~['r7']" in out
+        # The old behaviour dumped ~1.7KB; the summary must be compact
+        assert len(out) < 200
+
 
 # ---------------------------------------------------------------------------
 # Test: compute_blast_radius()
@@ -281,6 +454,32 @@ class TestComputeBlastRadius:
         # Same hash, different config (shouldn't happen, but tests hash-first logic)
         report = br.compute_blast_radius(base_data, pr_data)
         assert report["summary"]["affected_tenants"] == 0
+
+    def test_custom_alerts_change_is_not_format_only(self, base_data):
+        """Regression for the #741 ADR-024 ops-review blind spot: a tenant that
+        adds a _custom_alerts recipe (PR #771) must land in Tier A, NOT be
+        misclassified as Tier C format-only."""
+        import copy
+        pr_data = copy.deepcopy(base_data)
+        pr_data["tenant-b"]["merged_hash"] = "bbbb-ca"
+        pr_data["tenant-b"]["effective_config"]["_custom_alerts"] = [
+            {
+                "recipe": "threshold",
+                "name": "mariadb_conns_high",
+                "metric": "mysql_global_status_threads_connected",
+                "op": ">",
+                "window": "5m",
+                "threshold": "150:warning",
+                "mode": "page",
+            }
+        ]
+
+        report = br.compute_blast_radius(base_data, pr_data)
+        assert report["summary"]["affected_tenants"] == 1
+        assert report["summary"]["tier_a_tenants"] == 1
+        assert report["summary"]["tier_c_only_tenants"] == 0
+        t = next(t for t in report["tenants"] if t["tenant_id"] == "tenant-b")
+        assert t["highest_tier"] == "A"
 
     def test_multiple_tiers(self, base_data):
         import copy
@@ -620,3 +819,55 @@ class TestCLI:
         assert os.path.exists(out_path)
         report = json.loads(Path(out_path).read_text(encoding="utf-8"))
         assert "summary" in report
+
+
+# ---------------------------------------------------------------------------
+# Test: describe_tenant → blast_radius integration contract (F3)
+# ---------------------------------------------------------------------------
+
+class TestDescribeTenantIntegration:
+    """Lock the contract between describe_tenant and blast_radius for
+    `_custom_alerts`. The unit tests above use hand-built effective_config
+    dicts; this proves the REAL pipeline — describe_tenant must emit
+    `_custom_alerts` into effective_config so blast_radius can tier it. If
+    describe_tenant ever strips `_`-prefixed keys (like config_diff's flatten
+    does), this fails loudly instead of the fix silently going dead (cf. #731
+    synthetic-fixture false-green)."""
+
+    def _effective(self, conf_d):
+        import describe_tenant as dt
+        scanner = dt.ConfDScanner(Path(conf_d))
+        return {tid: scanner.source_info(tid) for tid in scanner.tenants}
+
+    def _write_tenant(self, d, tenant, custom_alerts):
+        import yaml
+        body = {"mysql_connections": "100"}
+        if custom_alerts is not None:
+            body["_custom_alerts"] = custom_alerts
+        (Path(d) / f"{tenant}.yaml").write_text(
+            yaml.dump({"tenants": {tenant: body}}), encoding="utf-8"
+        )
+
+    def test_custom_alert_addition_flows_to_tier_a(self, tmp_path):
+        base_dir = tmp_path / "base"
+        pr_dir = tmp_path / "pr"
+        base_dir.mkdir()
+        pr_dir.mkdir()
+        self._write_tenant(base_dir, "db-b", None)
+        self._write_tenant(pr_dir, "db-b", [{
+            "recipe": "threshold", "name": "mariadb_conns_high",
+            "metric": "mysql_global_status_threads_connected",
+            "op": ">", "window": "5m", "threshold": "150:warning", "mode": "page",
+        }])
+
+        base_data = self._effective(str(base_dir))
+        pr_data = self._effective(str(pr_dir))
+
+        # Contract: _custom_alerts survives into effective_config
+        assert "_custom_alerts" in pr_data["db-b"]["effective_config"]
+
+        report = br.compute_blast_radius(base_data, pr_data)
+        assert report["summary"]["tier_a_tenants"] == 1
+        assert report["summary"]["tier_c_only_tenants"] == 0
+        t = next(t for t in report["tenants"] if t["tenant_id"] == "db-b")
+        assert t["highest_tier"] == "A"

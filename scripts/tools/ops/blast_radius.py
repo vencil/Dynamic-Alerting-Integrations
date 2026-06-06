@@ -38,6 +38,13 @@ TIER_A_PATTERNS = (
     "_routing.receiver",
     "_routing.receivers",
     "receivers",
+    # Custom alert recipes (ADR-024 Capability B, #741). A tenant-authored
+    # declarative custom alert is a real, high-impact alerting change: it
+    # adds / removes / retunes a paging rule carrying its own threshold. It
+    # must be highlighted, never treated as format-only. flatten_dict keeps the
+    # list as one opaque value, so the field path is exactly "_custom_alerts"
+    # (the "alerts" / "_alerting" Tier-B patterns do NOT substring-match it).
+    "_custom_alerts",
 )
 
 # Tier B: other alerting fields (non-threshold, non-receiver)
@@ -144,6 +151,11 @@ def classify_diff(diff: dict) -> dict[str, list[dict]]:
     tiers: dict[str, list[dict]] = {"A": [], "B": [], "C": []}
 
     for key, val in diff["added"].items():
+        # Reef 6: a missing key → empty `_custom_alerts: []` is semantically a
+        # no-op (no recipes either way). Treat None ≡ [] so it produces no diff
+        # noise (would otherwise flag Tier A "added").
+        if key == "_custom_alerts" and not val:
+            continue
         tier = classify_field(key)
         tiers[tier].append({
             "field": key,
@@ -152,6 +164,8 @@ def classify_diff(diff: dict) -> dict[str, list[dict]]:
         })
 
     for key, val in diff["removed"].items():
+        if key == "_custom_alerts" and not val:
+            continue
         tier = classify_field(key)
         tiers[tier].append({
             "field": key,
@@ -161,6 +175,15 @@ def classify_diff(diff: dict) -> dict[str, list[dict]]:
 
     for key, val in diff["changed"].items():
         tier = classify_field(key)
+        # N3: a pure reorder of _custom_alerts has zero alerting impact (rules
+        # are vectorized by shape, order-independent). Downgrade A → C so a
+        # cosmetic reorder doesn't flag substantive / flip the report to
+        # summary-mode and bury real changes. Only downgrades when the recipe
+        # multiset is byte-identical, so a real change is never hidden.
+        if key == "_custom_alerts" and _custom_alerts_reorder_only(
+            val.get("base"), val.get("pr")
+        ):
+            tier = "C"
         tiers[tier].append({
             "field": key,
             "action": "changed",
@@ -285,10 +308,107 @@ SUMMARY_MODE_TENANT_THRESHOLD = 50
 SUMMARY_MODE_LIST_CAP = 200
 
 
+def _recipe_names(lst: Any) -> list[str]:
+    """Pull the `name` of each recipe dict in a (possibly None) list."""
+    out: list[str] = []
+    for r in (lst or []):
+        if isinstance(r, dict):
+            out.append(str(r.get("name", "?")))
+    return out
+
+
+# Mirror _lib_validation._DISABLED_VALUES / Go IsDisabledValue WITHOUT importing
+# (blast_radius is the intentionally zero-dep "ultralight scanner", P2 — keep in
+# sync). The exporter's custom-alert opt-out (app/pkg/config/custom_alert.go)
+# parses value:severity then checks isDisabled(value-part) against this set, so a
+# bare `== "disable"` would miss `off` / `disabled` / `false` and any
+# `:severity`-suffixed form — under-flagging a real silencing (R2 self-review).
+_DISABLED_VALUES = frozenset({"disable", "disabled", "off", "false"})
+
+
+def _threshold_disabled(recipe: dict) -> bool:
+    """A custom-alert recipe whose threshold is a three-state opt-out.
+
+    Mirrors custom_alert.go: split the optional `:severity` first, then test the
+    value part against the full disabled set (NOT just the literal "disable").
+    """
+    raw = str(recipe.get("threshold", "")).strip()
+    value = raw.rsplit(":", 1)[0] if ":" in raw else raw
+    return value.strip().lower() in _DISABLED_VALUES
+
+
+def _is_silencing(base_recipe: dict, pr_recipe: dict) -> bool:
+    """True if the recipe transitioned into a SILENCED state — threshold→disable
+    or mode page→silent. This is the 'semantic camouflage' (Reef 1): a delete /
+    paging-suppression wearing a plain 'modified' disguise. blast_radius is the
+    LIVE ops-review tool (config_diff runs a pinned image — its Reef-1 highlight
+    is dormant until the image ships, see D2), so the highlight MUST live here."""
+    became_disabled = _threshold_disabled(pr_recipe) and not _threshold_disabled(base_recipe)
+    became_silent = (str(pr_recipe.get("mode")) == "silent"
+                     and str(base_recipe.get("mode")) != "silent")
+    return became_disabled or became_silent
+
+
+def _custom_alerts_reorder_only(base: Any, pr: Any) -> bool:
+    """True if base/pr hold the SAME recipes ignoring order (a pure reorder).
+
+    Recipe rules are vectorized by shape signature (order-independent), so a
+    reorder has zero alerting impact — but flatten_dict sees the reordered list
+    as 'changed'. Without this, a YAML-sorter reorder flags Tier A and (at
+    scale) flips the report to summary-mode, burying real changes (N3)."""
+    def _canon(lst: Any) -> list[str]:
+        return sorted(
+            json.dumps(r, sort_keys=True, default=str) for r in (lst or [])
+        )
+    return _canon(base) == _canon(pr)
+
+
+def _summarize_custom_alerts(entry: dict) -> str:
+    """Recipe-level summary for a `_custom_alerts` diff entry (F2).
+
+    flatten_dict keeps the whole list as one opaque value, so the raw diff would
+    dump both full lists (a ~1.7KB blob for one changed recipe → review fatigue,
+    reviewers skip it). Instead surface WHICH recipes changed, by name.
+    """
+    action = entry["action"]
+    detail = entry.get("detail", {})
+    if action == "added":
+        names = _recipe_names(detail.get("pr"))
+        return f"`_custom_alerts`: _(new)_ {len(names)} recipe(s): {names}"
+    if action == "removed":
+        names = _recipe_names(detail.get("base"))
+        return f"`_custom_alerts`: _(removed)_ {len(names)} recipe(s): {names}"
+    # changed: name-level delta between base and pr lists
+    base, pr = detail.get("base") or [], detail.get("pr") or []
+    bmap = {str(r.get("name")): r for r in base if isinstance(r, dict)}
+    pmap = {str(r.get("name")): r for r in pr if isinstance(r, dict)}
+    added = sorted(set(pmap) - set(bmap))
+    removed = sorted(set(bmap) - set(pmap))
+    modified = sorted(n for n in (set(bmap) & set(pmap)) if bmap[n] != pmap[n])
+    # Reef 1 / N1: flag recipes that flipped into a silenced state — the
+    # camouflaged delete that a plain '~[name]' would hide.
+    silenced = sorted(n for n in modified if _is_silencing(bmap[n], pmap[n]))
+    parts = []
+    if added:
+        parts.append(f"+{added}")
+    if removed:
+        parts.append(f"-{removed}")
+    if modified:
+        parts.append(f"~{modified}")
+    delta = "; ".join(parts) if parts else "reordered/other (no name-level change)"
+    line = f"`_custom_alerts` changed (count {len(base)}→{len(pr)}): {delta}"
+    if silenced:
+        line += f"  :warning: **SILENCED (disabled / mode→silent): {silenced}**"
+    return line
+
+
 def _tenant_change_summary(tenant: dict) -> str:
     """One-line summary for a tenant's changes (used in full-detail mode)."""
     lines = []
     for entry in tenant["tiers"]["A"]:
+        if entry.get("field") == "_custom_alerts":
+            lines.append(_summarize_custom_alerts(entry))
+            continue
         detail = entry.get("detail", {})
         if entry["action"] == "changed":
             lines.append(f"`{entry['field']}`: {detail.get('base')} → {detail.get('pr')}")
