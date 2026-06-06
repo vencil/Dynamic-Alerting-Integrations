@@ -49,6 +49,7 @@ except Exception:  # pragma: no cover
 sys.path.insert(0, _THIS_DIR)
 from custom_alerts import loader as _loader  # noqa: E402
 from custom_alerts import recipes as _recipes  # noqa: E402
+from custom_alerts import shape as _shape  # noqa: E402
 from custom_alerts.loader import CustomAlertConfigError  # noqa: E402
 
 
@@ -117,10 +118,27 @@ def build_pack(config_dir: Path,
 
     recording: List[dict] = []
     alerts: List[dict] = []
+    info: List[dict] = []
     for shape in shapes:
         rec, alr = _recipes.emit_shape(shape)
         recording.extend(rec)
         alerts.extend(alr)
+        # D1 (ADR-024 §8): a static lifecycle-info series per shape, so SRE can join
+        # recipe USAGE to recipe STATUS for a tech-debt burn-down:
+        #   count by(recipe_id)(user_threshold{component="custom"})
+        #     * on(recipe_id) group_left(recipe, status) custom_recipe_info
+        # user_threshold carries recipe_id but not recipe/status, and deriving the
+        # recipe type from recipe_id needs a fragile label_replace — this info series
+        # supplies recipe + status keyed by the same recipe_id instead.
+        info.append({
+            "record": "custom_recipe_info",
+            "expr": "vector(1)",
+            "labels": {
+                "recipe_id": shape["recipe_id"],
+                "recipe": shape["recipe"],
+                "status": _shape.recipe_status(shape["recipe"]),
+            },
+        })
 
     groups: List[dict] = []
     if recording:
@@ -129,6 +147,14 @@ def build_pack(config_dir: Path,
             "interval": "15s",
             "rules": recording,
         })
+    if info:
+        # Static metadata (never changes between compiles) → its own group on a
+        # slow 1m interval, kept out of the 15s normalize cadence.
+        groups.append({
+            "name": "custom-alerts-info",
+            "interval": "1m",
+            "rules": info,
+        })
     if alerts:
         # Inject the single global silent sentinel ONCE, ahead of the shape
         # alerts (S7/S8). It is tenant-agnostic — never per-recipe.
@@ -136,7 +162,7 @@ def build_pack(config_dir: Path,
 
     return {
         "groups": groups,
-        "_meta": {"shapes": len(shapes), "per_tenant_counts": per_tenant},
+        "_meta": {"shapes": len(shapes), "info": len(info), "per_tenant_counts": per_tenant},
     }
 
 

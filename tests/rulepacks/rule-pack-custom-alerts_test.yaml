@@ -89,3 +89,24 @@ tests:
               summary_zh: "db-b 的自訂告警 [mariadb_slow_query_rate] 處於靜默模式"
               description: "The recipe is still evaluated and visible as an ALERTS series (dashboard-only); its notifications are suppressed via inhibit, not deleted."
               description_zh: "此自訂告警仍會評估並可於監控面板（ALERTS series）查看，通知經 inhibit 抑制而非刪除。"
+
+  # ── D1 (ADR-024 §8): recipe lifecycle info metric — a static vector(1) per shape,
+  # supplying recipe + status keyed by recipe_id for the usage-vs-status burn-down. ──
+  - interval: 1m
+    input_series:
+      - series: 'up{job="dummy"}'
+        values: '1x5'
+    promql_expr_test:
+      # one info series per shape (db-b declares 2 recipes)
+      - expr: count(custom_recipe_info)
+        eval_time: 2m
+        exp_samples:
+          - labels: '{}'
+            value: 2
+      # the info series carries recipe + status keyed by the same recipe_id the
+      # exporter stamps on user_threshold, so a group_left join resolves both.
+      - expr: 'custom_recipe_info{recipe="threshold"}'
+        eval_time: 2m
+        exp_samples:
+          - labels: 'custom_recipe_info{recipe="threshold", recipe_id="threshold__mysql_global_status_threads_connected__gt__w5m__for1m", status="active"}'
+            value: 1
