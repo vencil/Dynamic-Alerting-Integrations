@@ -114,7 +114,7 @@ user_threshold{tenant="db-a", component="container", metric="cpu", severity="war
 
 編譯器把 recipe + 參數生成**向量化 `group_left` 規則**：一條 `app_metric > on(tenant[,version]) group_left(...) <該 recipe 的 user_threshold>` 涵蓋所有宣告該 recipe 的租戶——**規則數 = recipe 形狀數（shape），非租戶數**。
 
-**效能誠實**：O(M)-與-N-無關**只對「共享指標」成立**。向量化消掉「同指標扇出複製 N 條」，但**消不掉「不同 metric 必然不同規則」**——租戶 A 的 `order_created_total` 與 B 的 `payment_failed_total` 必生成兩條。故 custom-alert 規則數隨**自訂告警總數線性增長**，不享 rule pack 對 [benchmarks.md §2](../benchmarks.md) 的 O(M) 保證。**護欄三件組**：(a) 硬性 `max_custom_recipes` per-tenant cap 封頂；(b) 全域 rule-count budget（cap 值由實測 rule-eval-duration 反推）；(c) 壞 rule 只炸自己的規則檔 group + Prometheus 原生 rule group `limit` + promtool hard gate。
+**效能誠實**：O(M)-與-N-無關**只對「共享指標」成立**。向量化消掉「同指標扇出複製 N 條」，但**消不掉「不同 metric 必然不同規則」**——租戶 A 的 `order_created_total` 與 B 的 `payment_failed_total` 必生成兩條。故 custom-alert 規則數隨**自訂告警總數線性增長**，不享 rule pack 對 [benchmarks.md §2](../benchmarks.md) 的 O(M) 保證。**護欄三件組**：(a) 硬性 `max_custom_recipes` per-tenant cap 封頂（已實作）；(b) 全域 rule-count budget（**規劃中、未實作**——其值待以實測 rule-eval-duration 反推，故與該 benchmark 一同 defer）；(c) 壞 rule 只炸自己的規則檔 group + Prometheus 原生 rule group `limit` + promtool hard gate（已實作）。
 
 **部署源 = live conf.d**：編譯源必須是 exporter 實際服務的同一份 conf.d，否則生成規則的 shape 對不上 exporter emit 的 `user_threshold` series → 規則永不 fire（靜默失效）。custom-alert pack 是**租戶自訂、非平台覆蓋**，故從平台的 rule-pack / alert count 統計排除（badge 不變）。
 
@@ -162,11 +162,20 @@ Recipe 是平台 authored 的；其 `status` 治理租戶能否續用，是 **RE
 - **deprecated**：照常編譯 + 編譯器非致命警告 + portal 黃標；仍可新增。「可遷移、仍可用」。
 - **eol**：**既有宣告照常編譯**（batch compiler 絕不因平台退役而砍掉已部署租戶的 rule、不靜默丟告警）；但**寫入端拒絕「擴張」**。
 
-**eol 拒絕語意（inclusive）= 「per-eol-recipe 實例數不得增加」**，而非「擋掉任何含 eol recipe 的 PUT」。後者是 full-overlay 連坐：凌晨救火時，一個兩年前的無關 eol recipe 會擋住租戶新增救命告警（outage hostage）。inclusive 只凍結債務**增長**（新增 / 換用 eol 才拒），既有 eol 實例的參數編輯 / 續存照放。precise predicate：對每個 eol recipe R，PUT 中用 R 的實例數 ≤ 現況（同時擋「新增 R」與「移除 eol-A 換上 eol-B」，放行「改參數 / rename」）。
+**eol 拒絕語意 = 「只擋擴張、不連坐」**：對每個 eol recipe，PUT 中使用它的實例數**不得超過現況**——擋「新增」「加量」「換用另一個 eol」，放行「改參數 / rename / 移除 / 既有續存」。刻意**不是**「擋掉任何含 eol recipe 的整次 PUT」：那是 full-overlay 連坐——凌晨救火時，一個兩年前、與災情無關的 eol recipe 會把租戶新增救命告警的整次寫入一起擋掉。eol 只凍結債務**增長**，從不動既有。
 
-**寫入路徑覆蓋（誠實標明）**：eol-expansion 是 stateful 檢查（要 old+new delta）。在 **`gitops.Writer.validate`（所有 tenant-api 寫入的 choke point）** 強制——它讀現況 on-disk tenant 檔（validate 在寫入前 → 磁碟仍是舊）算 delta，故 **PutTenant / PutCustomAlerts / batch 全覆蓋**；`/custom-alerts` handler 另先做一次（回 structured Violations 給 portal）。**configDir-less 測試模式**（無 on-disk base）跳過；**CI / GitOps-direct compiler** 看整棵 conf.d、無法分新舊 → 只能 warn。
+**為何在寫入閘強制**：擋擴張要比對「現況 vs 將寫入」，是個 stateful 檢查，故落在 tenant-api 的**共用寫入閘**——所有寫入端點（整租戶 PUT / custom-alerts PUT / 批次）一致覆蓋、無繞道。對照之下，CI / GitOps-direct compiler 看得到整棵宣告樹、卻分不出哪些是新宣告 → 只能 warn，不能 hard-reject。
 
-**界線**：inclusive 規則凍結增長 + 由 info-metric `custom_recipe_info{recipe_id, recipe, status}` 讓全平台債務**可見**，但**最終退場是 SRE 手動**（metric 給視圖、非自動退役）。若一個 recipe **有害須立即下線**，工具不是 eol（它讓 rule 續活），而是**從 recipe library 移除定義**（既有實例編譯直接 fail = 硬性強制移除）。
+**債務可見化**：編譯器為每個使用中的 shape 發一條靜態 info-metric `custom_recipe_info{recipe_id, recipe, status}`，讓 SRE 把「用量」接上「狀態」畫技術債燃盡圖：
+
+```promql
+count by(recipe_id)(count by(recipe_id, tenant)(user_threshold{component="custom"}))
+  * on(recipe_id) group_left(recipe, status) custom_recipe_info
+```
+
+（內層 `count by(recipe_id, tenant)` 先去重租戶——`recipe_id` 不含 severity，直接 `count` 會把同一租戶的 warning + critical 算成兩個。）退役本身仍是 **SRE 手動**：metric 給視圖、不自動下架。
+
+**eol ≠ 緊急下線**：若一個 recipe **有害、須立即移除**，工具不是 eol（它讓既有 rule 續活），而是**從 recipe library 刪掉定義**——既有實例編譯直接 fail，硬性強制移除。
 
 ## 資料流：Ingest → Define → Compile
 
