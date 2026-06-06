@@ -17,5 +17,5 @@
 | postgresql | postgres_exporter | 11 | 9 |
 | rabbitmq | rabbitmq_exporter | 12 | 8 |
 | redis | redis_exporter | 11 | 6 |
-| platform | threshold-exporter self-monitoring | 0 | 16 |
-| **Total** | | **145** | **116** |
+| platform | threshold-exporter self-monitoring | 0 | 17 |
+| **Total** | | **145** | **117** |

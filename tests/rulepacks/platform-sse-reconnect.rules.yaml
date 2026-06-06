@@ -1,0 +1,25 @@
+# Bare-rules promtool target for the TenantApiSSEReconnectFailure alert (#740 /
+# TRK-326). promtool can't consume the deployed ConfigMap directly (it needs a
+# top-level `groups:` document, not `data: platform-alert.yml: |`), so this is an
+# EXTRACTED COPY of the alert from k8s/03-monitoring/configmap-rules-platform.yaml.
+#
+# ⚠️ KEEP IN SYNC with that ConfigMap. The behavioural contract (fire on stuck
+# reconnect, no false-positive on normal rolling reconnect or genuinely-idle API)
+# is exercised by platform-sse-reconnect_test.yaml against this file.
+groups:
+  - name: platform-self-monitoring
+    rules:
+      - alert: TenantApiSSEReconnectFailure
+        expr: |
+          sum without (pod, instance, endpoint) (tenant_api_sse_clients{job="tenant-api"}) == 0
+          and
+          min without (pod, instance, endpoint) (tenant_api_uptime_seconds{job="tenant-api"}) < 1800
+          and
+          max_over_time(
+            sum without (pod, instance, endpoint) (tenant_api_sse_clients{job="tenant-api"})[30m:1m]
+          ) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "tenant-api SSE clients have not reconnected after a restart (10m)"
