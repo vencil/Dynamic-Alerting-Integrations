@@ -548,3 +548,23 @@ class TestCustomAlertsUnionInheritance:
         eff = dt.ConfDScanner(conf_d).effective_config("plain")
         assert "_custom_alerts" not in eff
         assert "_custom_alerts_resolution" not in eff
+
+    def test_resolver_unavailable_falls_back_to_deep_merge_not_wipe(self, tmp_path, monkeypatch):
+        # Self-review (Attack 4): if the compiler resolver is unavailable / raised,
+        # a tenant's OWN `_custom_alerts` must FALL BACK to the deep_merge value, not
+        # be wiped. (An earlier draft popped the field whenever resolution was empty
+        # → a single parse error would have dropped it from EVERY tenant.)
+        monkeypatch.setattr(dt, "_ca_loader", None)
+        eff = dt.ConfDScanner(self._repro_tree(tmp_path)).effective_config("t-override")
+        names = {a["name"] for a in eff["_custom_alerts"]}
+        assert names == {"own_alert"}                    # deep_merge REPLACE kept, not wiped
+        assert "_custom_alerts_resolution" not in eff    # no compiler resolution available
+
+    def test_returned_recipes_are_isolated_copies(self, tmp_path):
+        # Self-review (Attack 1): mutating a returned recipe must not corrupt the
+        # shared resolver map (deep_merge returns deepcopies; we must match).
+        scanner = dt.ConfDScanner(self._repro_tree(tmp_path))
+        eff = scanner.effective_config("t-override")
+        eff["_custom_alerts"][0]["threshold"] = "MUTATED"
+        again = scanner.effective_config("t-override")
+        assert all(a["threshold"] != "MUTATED" for a in again["_custom_alerts"])

@@ -208,25 +208,30 @@ class ConfDScanner:
         tenant_raw = self.tenants[tenant_id]
         merged = deep_merge(merged, tenant_raw)
 
-        # #772: overwrite `_custom_alerts` with the ADR-024 UNION resolution (own +
-        # inherited) from the compiler — deep_merge's array-REPLACE above would have
-        # dropped inherited platform/domain policy recipes from an override tenant,
-        # making blast_radius blind to the highest-blast-radius change class. This
-        # field FOLLOWS UNION INHERITANCE, unlike every other array (which stays
-        # REPLACE); `_custom_alerts_resolution` makes that explicit per-entry so the
-        # effective config is honest, not silently inconsistent.
+        # #772: when the compiler resolved any `_custom_alerts` for this tenant,
+        # OVERWRITE deep_merge's array-REPLACE result with the ADR-024 UNION (own +
+        # inherited) — REPLACE would have dropped inherited platform/domain policy
+        # recipes from an override tenant, blinding blast_radius to the highest-
+        # blast-radius change class. This field FOLLOWS UNION INHERITANCE, unlike
+        # every other array (which stays REPLACE); `_custom_alerts_resolution` makes
+        # that explicit per-entry so the effective config is honest, not silently
+        # inconsistent.
+        #
+        # We deliberately do NOT remove a deep_merge-derived `_custom_alerts` when
+        # the resolver returned nothing: the resolver covers only `*.yaml` and could
+        # be unavailable / have raised (→ empty map), so "no resolution" must fall
+        # back to the deep_merge value rather than silently wiping a real declaration
+        # (a missing/`.yml` tenant or a single parse error would otherwise drop the
+        # field from EVERY tenant). deepcopy isolates the returned snapshot from the
+        # shared resolver map (matching deep_merge's copy semantics).
         resolved = self._custom_alerts_resolved.get(tenant_id)
         if resolved:
-            merged["_custom_alerts"] = [recipe for recipe, _o, _own in resolved]
+            merged["_custom_alerts"] = [copy.deepcopy(recipe) for recipe, _o, _own in resolved]
             merged["_custom_alerts_resolution"] = [
                 {"name": (recipe.get("name") if isinstance(recipe, dict) else None),
                  "origin": origin, "is_own": is_own}
                 for recipe, origin, is_own in resolved
             ]
-        elif _ca_loader is not None:
-            # The tenant has NO effective custom alerts (own or inherited): drop any
-            # REPLACE-derived remnant so the view matches the compiler exactly.
-            merged.pop("_custom_alerts", None)
 
         return merged
 
