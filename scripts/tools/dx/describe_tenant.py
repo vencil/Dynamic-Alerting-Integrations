@@ -118,6 +118,9 @@ class ConfDScanner:
         # ONCE (collect_instances scans the whole tree) so effective_config() is a
         # cheap dict lookup, not an O(N²) re-walk under --all.
         self._custom_alerts_resolved: dict[str, list] = {}
+        # Set when the compiler resolver raised — output is degraded to the
+        # deep_merge (REPLACE) fallback for `_custom_alerts`; callers can detect it.
+        self.custom_alerts_resolution_error: str | None = None
         self._scan()
         self._resolve_custom_alerts()
 
@@ -131,8 +134,16 @@ class ConfDScanner:
             for tenant, recipe, origin, is_own in _ca_loader.collect_instances(self.conf_d):
                 self._custom_alerts_resolved.setdefault(tenant, []).append(
                     (recipe, origin, is_own))
-        except Exception:  # pragma: no cover - never let a custom-alert parse error
-            self._custom_alerts_resolved = {}  # break the generic describe_tenant path
+        except Exception as e:  # pragma: no cover
+            # Do NOT silently swallow: the `_custom_alerts` view degrades to the
+            # deep_merge REPLACE fallback (own-only for override tenants), which is
+            # the exact #772 blind spot — so warn loudly + record a marker.
+            self._custom_alerts_resolved = {}
+            self.custom_alerts_resolution_error = str(e)
+            print(f"WARN: _custom_alerts inheritance resolution failed "
+                  f"({_ca_loader.__name__}.collect_instances: {e}); "
+                  f"falling back to deep_merge REPLACE — override tenants may show "
+                  f"only own recipes (#772).", file=sys.stderr)
 
     def _scan(self) -> None:
         """Recursively scan conf.d/ and build tenant + defaults maps."""
@@ -192,8 +203,15 @@ class ConfDScanner:
         chain.reverse()  # L0 (root) first, L3 (nearest) last
         return chain
 
-    def effective_config(self, tenant_id: str) -> dict:
-        """Compute effective config by merging defaults chain + tenant config."""
+    def effective_config(self, tenant_id: str, resolve_custom_alerts: bool = True) -> dict:
+        """Compute effective config by merging defaults chain + tenant config.
+
+        `resolve_custom_alerts` (#772): when True (default, the normal/blast_radius
+        view) `_custom_alerts` is the ADR-024 compiler UNION. Set False for the
+        `--what-if` simulation, whose simulated side is built from an in-memory
+        modified chain that the disk-based compiler walker cannot resolve — both
+        sides then use the same raw deep_merge so the diff is apples-to-apples
+        (the union view stays the job of normal mode / blast_radius)."""
         if tenant_id not in self.tenants:
             raise KeyError(f"Tenant '{tenant_id}' not found in {self.conf_d}")
 
@@ -224,7 +242,7 @@ class ConfDScanner:
         # (a missing/`.yml` tenant or a single parse error would otherwise drop the
         # field from EVERY tenant). deepcopy isolates the returned snapshot from the
         # shared resolver map (matching deep_merge's copy semantics).
-        resolved = self._custom_alerts_resolved.get(tenant_id)
+        resolved = self._custom_alerts_resolved.get(tenant_id) if resolve_custom_alerts else None
         if resolved:
             merged["_custom_alerts"] = [copy.deepcopy(recipe) for recipe, _o, _own in resolved]
             merged["_custom_alerts_resolution"] = [
@@ -392,8 +410,13 @@ def main() -> None:
             print(f"❌ --what-if file not found: {what_if_path}", file=sys.stderr)
             sys.exit(EXIT_CALLER_ERROR)
 
-        # Baseline: current effective config
-        baseline_effective = scanner.effective_config(tid)
+        # Baseline: current effective config. #772: use the RAW (deep_merge)
+        # `_custom_alerts` here so it matches the simulated side below (which is
+        # built from an in-memory modified chain the compiler walker cannot
+        # resolve) — otherwise an unrelated what-if edit would falsely diff the
+        # UNION baseline against the REPLACE simulation. The union view is the
+        # normal-mode / blast_radius contract, not what-if's.
+        baseline_effective = scanner.effective_config(tid, resolve_custom_alerts=False)
         baseline_merged_hash = _canonical_hash(baseline_effective)
 
         # Load the simulated defaults content

@@ -568,3 +568,14 @@ class TestCustomAlertsUnionInheritance:
         eff["_custom_alerts"][0]["threshold"] = "MUTATED"
         again = scanner.effective_config("t-override")
         assert all(a["threshold"] != "MUTATED" for a in again["_custom_alerts"])
+
+    def test_resolve_flag_false_uses_raw_replace_for_what_if(self, tmp_path):
+        # CodeRabbit: with resolve_custom_alerts=False (the --what-if baseline) the
+        # override tenant gets the RAW deep_merge (own-only) _custom_alerts, so the
+        # baseline matches its REPLACE-built simulated side — no spurious diff when
+        # the what-if edit is unrelated to custom alerts. (union view = normal mode.)
+        scanner = dt.ConfDScanner(self._repro_tree(tmp_path))
+        eff = scanner.effective_config("t-override", resolve_custom_alerts=False)
+        names = {a["name"] for a in eff["_custom_alerts"]}
+        assert names == {"own_alert"}                    # REPLACE, not union
+        assert "_custom_alerts_resolution" not in eff
