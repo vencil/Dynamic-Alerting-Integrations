@@ -22,11 +22,18 @@ import (
 
 // Event represents a config change notification.
 type Event struct {
-	Type      string    `json:"type"`              // "config_change" | "task_update" | "reload" | "connected" | "close"
+	Type      string    `json:"type"`              // "config_change" | "task_update" | "reload" | "connected" | "close" | "server_shutdown"
 	TenantID  string    `json:"tenant_id,omitempty"`
 	TaskID    string    `json:"task_id,omitempty"`
 	Timestamp time.Time `json:"timestamp"`
 	Detail    string    `json:"detail,omitempty"`
+	// ReconnectDelayMs is a client hint, emitted only on "server_shutdown" (#675):
+	// the server is going down (SIGTERM / rolling update), so a well-behaved client
+	// should wait at least this long — plus its own random jitter — before
+	// reconnecting, to spread the reconnect load away from the not-yet-ready new
+	// pod instead of stampeding it. omitempty so every other event type stays byte-
+	// identical on the wire.
+	ReconnectDelayMs int `json:"reconnect_delay_ms,omitempty"`
 }
 
 // Config tunes SSE per-client liveness (#143). All three are independently
@@ -173,6 +180,45 @@ func (h *Hub) ClientCount() int {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	return len(h.clients)
+}
+
+// Shutdown performs a graceful SSE teardown for process shutdown (SIGTERM /
+// rolling update, #675). It (1) broadcasts a single "server_shutdown" control
+// event carrying a reconnect-delay hint so well-behaved clients back off with
+// jitter instead of stampeding the not-yet-ready replacement pod, then (2)
+// closes every client channel so each ServeHTTP goroutine returns promptly.
+//
+// Why this exists: SSE streams are never idle, so http.Server.Shutdown would
+// otherwise block for its full grace period waiting for them to drain, then
+// sever them abruptly. Closing the channels here lets Shutdown complete in
+// milliseconds and gives clients a clean, actionable signal instead of an
+// abrupt connection reset.
+//
+// Ordering guarantee: the buffered event is delivered before the channel-close
+// is observed (Go drains buffered values before a closed receive yields
+// ok=false), so a client with buffer room sees server_shutdown then EOF. A
+// client whose buffer is already full skips the hint (best-effort) but is still
+// closed. Callers MUST invoke this BEFORE http.Server.Shutdown.
+func (h *Hub) Shutdown(reconnectDelay time.Duration) {
+	evt := Event{
+		Type:             "server_shutdown",
+		Timestamp:        time.Now(),
+		Detail:           "server shutting down — reconnect after the hinted delay plus client-side jitter",
+		ReconnectDelayMs: int(reconnectDelay.Milliseconds()),
+	}
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for ch := range h.clients {
+		// Non-blocking send: deliver the hint if there's buffer room, else skip
+		// it — the close below unblocks the serving goroutine either way.
+		select {
+		case ch <- evt:
+		default:
+		}
+		delete(h.clients, ch)
+		close(ch)
+	}
 }
 
 // ServeHTTP implements http.Handler for the SSE endpoint.
