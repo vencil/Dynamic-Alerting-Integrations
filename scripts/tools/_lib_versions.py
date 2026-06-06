@@ -1,6 +1,6 @@
 """Version SSOT readers for the dx doc-generation tools.
 
-`generate_doc_map.py`, `generate_tool_map.py` and `generate_cheat_sheet.py`
+`generate_doc_map.py` and `generate_tool_map.py`
 all stamp a `version:` field into the frontmatter of the docs they emit.
 Hardcoding that string in the generator source means a release bump has to
 patch the Python source by hand — `bump_docs.py --check` cannot see it

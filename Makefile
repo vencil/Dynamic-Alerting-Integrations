@@ -609,10 +609,6 @@ migrate-conf-d: ## 遷移 flat conf.d/ 至分層結構 (使用: make migrate-con
 generate-alert-reference: ## 從 Rule Pack YAML 產生 ALERT-REFERENCE.md (使用: make generate-alert-reference 或 --update)
 	@python3 ./scripts/tools/dx/generate_alert_reference.py
 
-.PHONY: generate-cheat-sheet
-generate-cheat-sheet: ## 從 CLI Reference 產生 da-tools 快速參考 (使用: make generate-cheat-sheet ARGS="--lang all")
-	@python3 ./scripts/tools/dx/generate_cheat_sheet.py $(ARGS)
-
 .PHONY: generate-nav
 generate-nav: ## 從文件 front matter 產生 MkDocs nav 結構 (使用: make generate-nav 或 --update)
 	@python3 ./scripts/tools/dx/generate_nav.py
