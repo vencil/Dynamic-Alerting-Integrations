@@ -330,6 +330,299 @@ class TestProfileKeyDiff:
         assert diffs == []
 
 
+class TestCustomAlertDiff:
+    """Custom alert recipe diffing (ADR-024 Capability B, #741).
+
+    Regression for the ops-review blind spot: `_custom_alerts` is a reserved
+    ('_'-prefixed) key, so flatten_tenant_config drops it from the metric diff.
+    These tests pin the dedicated recipe-diff path that surfaces add/remove/
+    modify of recipes so config_diff never reports 'No changes detected' for a
+    real alerting change.
+    """
+
+    def _recipe(self, name, threshold="150:warning", mode="page", **extra):
+        r = {
+            "recipe": "threshold",
+            "name": name,
+            "metric": "mysql_global_status_threads_connected",
+            "op": ">",
+            "window": "5m",
+            "threshold": threshold,
+            "mode": mode,
+        }
+        r.update(extra)
+        return r
+
+    def _write(self, d, tenant, recipes):
+        with open(os.path.join(d, f"{tenant}.yaml"), "w", encoding="utf-8") as f:
+            yaml.dump({"tenants": {tenant: {
+                "mysql_connections": "100",
+                "_custom_alerts": recipes,
+            }}}, f)
+
+    def test_added_recipe(self):
+        with tempfile.TemporaryDirectory() as old_dir, \
+             tempfile.TemporaryDirectory() as new_dir:
+            self._write(old_dir, "db-b", [])
+            self._write(new_dir, "db-b", [self._recipe("mariadb_conns_high")])
+
+            old_ca = cd.load_custom_alerts_from_dir(old_dir)
+            new_ca = cd.load_custom_alerts_from_dir(new_dir)
+            diff = cd.compute_custom_alert_diff(old_ca, new_ca)
+
+            assert "db-b" in diff
+            assert len(diff["db-b"]) == 1
+            assert diff["db-b"][0]["name"] == "mariadb_conns_high"
+            assert diff["db-b"][0]["change"] == "added"
+
+    def test_removed_recipe(self):
+        with tempfile.TemporaryDirectory() as old_dir, \
+             tempfile.TemporaryDirectory() as new_dir:
+            self._write(old_dir, "db-b", [self._recipe("mariadb_conns_high")])
+            self._write(new_dir, "db-b", [])
+
+            diff = cd.compute_custom_alert_diff(
+                cd.load_custom_alerts_from_dir(old_dir),
+                cd.load_custom_alerts_from_dir(new_dir),
+            )
+            assert diff["db-b"][0]["change"] == "removed"
+
+    def test_modified_recipe_surfaces_field_changes(self):
+        with tempfile.TemporaryDirectory() as old_dir, \
+             tempfile.TemporaryDirectory() as new_dir:
+            self._write(old_dir, "db-b", [self._recipe("x", threshold="150:warning")])
+            self._write(new_dir, "db-b", [self._recipe("x", threshold="200:critical")])
+
+            diff = cd.compute_custom_alert_diff(
+                cd.load_custom_alerts_from_dir(old_dir),
+                cd.load_custom_alerts_from_dir(new_dir),
+            )
+            entry = diff["db-b"][0]
+            assert entry["change"] == "modified"
+            fields = {fc["field"]: fc for fc in entry["field_changes"]}
+            assert "threshold" in fields
+            assert fields["threshold"]["old"] == "150:warning"
+            assert fields["threshold"]["new"] == "200:critical"
+
+    def test_mode_toggle_is_surfaced(self):
+        """page → silent (or vice versa) is a routing-impacting change."""
+        with tempfile.TemporaryDirectory() as old_dir, \
+             tempfile.TemporaryDirectory() as new_dir:
+            self._write(old_dir, "db-b", [self._recipe("x", mode="page")])
+            self._write(new_dir, "db-b", [self._recipe("x", mode="silent")])
+
+            diff = cd.compute_custom_alert_diff(
+                cd.load_custom_alerts_from_dir(old_dir),
+                cd.load_custom_alerts_from_dir(new_dir),
+            )
+            fields = {fc["field"]: fc for fc in diff["db-b"][0]["field_changes"]}
+            assert fields["mode"]["old"] == "page"
+            assert fields["mode"]["new"] == "silent"
+
+    def test_no_change_when_identical(self):
+        with tempfile.TemporaryDirectory() as old_dir, \
+             tempfile.TemporaryDirectory() as new_dir:
+            for d in (old_dir, new_dir):
+                self._write(d, "db-b", [self._recipe("x")])
+            diff = cd.compute_custom_alert_diff(
+                cd.load_custom_alerts_from_dir(old_dir),
+                cd.load_custom_alerts_from_dir(new_dir),
+            )
+            assert diff == {}
+
+    def test_summary_counts_custom_alert_only_tenant(self):
+        """CodeRabbit #773: a custom-alert-only change must count toward
+        'N tenant(s) changed', not print '0 tenant(s) changed'."""
+        diff = {"db-b": [{
+            "name": "x", "change": "added", "old": None,
+            "new": self._recipe("x"), "field_changes": [],
+        }]}
+        md = cd.render_markdown({}, "o", "n", custom_alert_diffs=diff)
+        assert "0 tenant(s) changed" not in md
+        assert "1 tenant(s) changed" in md
+
+    def test_summary_unions_metric_and_custom_alert_tenants(self):
+        """Same tenant changed via both metric + custom alert counts once."""
+        metric = {"db-b": [{"key": "mysql_connections", "old": 80, "new": 50,
+                            "change": "tighter"}]}
+        ca = {"db-b": [{"name": "x", "change": "added", "old": None,
+                        "new": self._recipe("x"), "field_changes": []}],
+              "db-c": [{"name": "y", "change": "added", "old": None,
+                        "new": self._recipe("y"), "field_changes": []}]}
+        md = cd.render_markdown(metric, "o", "n", custom_alert_diffs=ca)
+        assert "2 tenant(s) changed" in md  # db-b (union, once) + db-c
+
+    def test_render_markdown_surfaces_custom_alerts(self):
+        """The PR #771 scenario must NOT render as 'No changes detected'."""
+        diff = {"db-b": [{
+            "name": "mariadb_conns_high", "change": "added",
+            "old": None,
+            "new": self._recipe("mariadb_conns_high"),
+            "field_changes": [],
+        }]}
+        md = cd.render_markdown({}, "old", "new", custom_alert_diffs=diff)
+        assert "No changes detected" not in md
+        assert "Custom Alert Changes" in md
+        assert "mariadb_conns_high" in md
+        assert "db-b" in md
+
+    def test_load_skips_recipes_without_name(self):
+        with tempfile.TemporaryDirectory() as d:
+            self._write(d, "db-b", [{"recipe": "threshold", "metric": "m"}])
+            assert cd.load_custom_alerts_from_dir(d) == {}
+
+    def test_disable_threshold_is_semantically_highlighted(self):
+        """Reef 1: threshold → 'disable' is a silencing, not a param tweak.
+        Must be flagged so a reviewer can't skim past it."""
+        diff = {"db-b": [{
+            "name": "x", "change": "modified",
+            "old": self._recipe("x", threshold="100:critical"),
+            "new": self._recipe("x", threshold="disable"),
+            "field_changes": [
+                {"field": "threshold", "old": "100:critical", "new": "disable"},
+            ],
+        }]}
+        md = cd.render_markdown({}, "o", "n", custom_alert_diffs=diff)
+        assert "DISABLED" in md
+        assert ":warning:" in md
+
+    def test_disable_highlight_covers_full_disabled_set(self):
+        """R2: parity with exporter — off/disabled/false + :severity suffix."""
+        for disabled_val in ("off", "disabled", "false", "disable:warning"):
+            diff = {"db-b": [{
+                "name": "x", "change": "modified",
+                "old": self._recipe("x", threshold="100:critical"),
+                "new": self._recipe("x", threshold=disabled_val),
+                "field_changes": [
+                    {"field": "threshold", "old": "100:critical", "new": disabled_val},
+                ],
+            }]}
+            md = cd.render_markdown({}, "o", "n", custom_alert_diffs=diff)
+            assert "DISABLED" in md, f"missed disabled form: {disabled_val!r}"
+
+    def test_threshold_disabled_helper_parity(self):
+        assert cd._threshold_disabled("disable")
+        assert cd._threshold_disabled("off:warning")
+        assert not cd._threshold_disabled("150:critical")
+        assert not cd._threshold_disabled("150")
+
+    def test_mode_page_to_silent_is_highlighted(self):
+        diff = {"db-b": [{
+            "name": "x", "change": "modified",
+            "old": self._recipe("x", mode="page"), "new": self._recipe("x", mode="silent"),
+            "field_changes": [{"field": "mode", "old": "page", "new": "silent"}],
+        }]}
+        md = cd.render_markdown({}, "o", "n", custom_alert_diffs=diff)
+        assert "paging suppressed" in md
+
+    def test_disable_to_enable_not_flagged_as_silencing(self):
+        """Re-enabling (disable → value) must NOT carry the silencing warning."""
+        diff = {"db-b": [{
+            "name": "x", "change": "modified",
+            "old": self._recipe("x", threshold="disable"),
+            "new": self._recipe("x", threshold="100:critical"),
+            "field_changes": [{"field": "threshold", "old": "disable", "new": "100:critical"}],
+        }]}
+        md = cd.render_markdown({}, "o", "n", custom_alert_diffs=diff)
+        assert "DISABLED (alert silenced)" not in md
+
+    def test_format_recipe_value_neutralizes_backticks(self):
+        """F5: a backtick is the only code-span break-out; it must be stripped."""
+        assert "`" not in cd._format_recipe_value("evil`backtick")
+        # _code_span wraps in exactly two backticks (open/close), none from value
+        span = cd._code_span("a`b`c")
+        assert span.count("`") == 2
+
+    def test_render_neutralizes_injection_in_recipe_value(self):
+        """F5: a crafted selectors value cannot break out of its code span.
+        Every code span is a backtick PAIR, so a leaked value-backtick would
+        make the total count odd. Balanced count == no break-out."""
+        evil = {"label": "v\"</details><script>alert(1)</script>`backtick`"}
+        diff = {"t": [{
+            "name": "evil_recipe", "change": "modified",
+            "old": self._recipe("evil_recipe"),
+            "new": self._recipe("evil_recipe", selectors=evil),
+            "field_changes": [{"field": "selectors", "old": None, "new": evil}],
+        }]}
+        md = cd.render_markdown({}, "o", "n", custom_alert_diffs=diff)
+        assert md.count("`") % 2 == 0, "unbalanced backticks → code-span break-out"
+        # The value's own backticks are neutralized to single-quotes
+        assert "`backtick`" not in md
+
+    def test_render_markdown_truncates_oversized_output(self):
+        """Reef 2: never exceed GitHub's comment limit — truncate instead of
+        letting the bot 422 and post nothing on a high-risk PR."""
+        # ~2000 tenants each with a recipe → far over the limit
+        big = {
+            f"tenant-{i:05d}": [{
+                "name": f"recipe_{i}", "change": "added",
+                "old": None, "new": self._recipe(f"recipe_{i}"), "field_changes": [],
+            }]
+            for i in range(2000)
+        }
+        md = cd.render_markdown({}, "o", "n", custom_alert_diffs=big)
+        assert len(md) <= cd.COMMENT_SAFETY_LIMIT
+        assert len(md) < cd.GITHUB_COMMENT_HARD_LIMIT
+        assert "truncated" in md
+
+    def test_newline_in_value_does_not_shatter_markdown(self):
+        """Reef 4: a raw newline in a value breaks the code span / list item."""
+        assert "\n" not in cd._format_recipe_value("line1\nline2")
+        assert "\n" not in cd._format_recipe_value("a\r\nb")
+        diff = {"t": [{
+            "name": "x", "change": "modified",
+            "old": self._recipe("x"),
+            "new": self._recipe("x", selectors={"k": "a\nb\nc"}),
+            "field_changes": [{"field": "selectors", "old": None, "new": {"k": "a\nb\nc"}}],
+        }]}
+        md = cd.render_markdown({}, "o", "n", custom_alert_diffs=diff)
+        # No bullet line should be split by an injected newline from the value
+        for line in md.splitlines():
+            assert line.count("`") % 2 == 0, f"unbalanced code span: {line!r}"
+
+    def test_string_typed_custom_alerts_does_not_crash(self):
+        """Reef 5: mistyped `_custom_alerts: 'oops'` must not iterate chars and
+        AttributeError → CI bot crash. Strict isinstance(list) guard skips it."""
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "t.yaml"), "w", encoding="utf-8") as f:
+                yaml.dump({"tenants": {"t": {"_custom_alerts": "to be added"}}}, f)
+            assert cd.load_custom_alerts_from_dir(d) == {}  # no crash, no recipes
+
+    def test_dict_typed_custom_alerts_does_not_crash(self):
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "t.yaml"), "w", encoding="utf-8") as f:
+                yaml.dump({"tenants": {"t": {"_custom_alerts": {"recipe": "x"}}}}, f)
+            assert cd.load_custom_alerts_from_dir(d) == {}
+
+    def test_none_to_empty_list_is_equivalent_no_diff(self):
+        """Reef 6: missing key ≡ empty list → no phantom change."""
+        with tempfile.TemporaryDirectory() as od, tempfile.TemporaryDirectory() as nd:
+            with open(os.path.join(od, "t.yaml"), "w", encoding="utf-8") as f:
+                yaml.dump({"tenants": {"t": {"mysql_connections": "1"}}}, f)  # no key
+            with open(os.path.join(nd, "t.yaml"), "w", encoding="utf-8") as f:
+                yaml.dump({"tenants": {"t": {"mysql_connections": "1",
+                                             "_custom_alerts": []}}}, f)  # empty
+            diff = cd.compute_custom_alert_diff(
+                cd.load_custom_alerts_from_dir(od),
+                cd.load_custom_alerts_from_dir(nd),
+            )
+            assert diff == {}
+
+    def test_json_output_includes_custom_alert_diffs(self):
+        with tempfile.TemporaryDirectory() as old_dir, \
+             tempfile.TemporaryDirectory() as new_dir:
+            self._write(old_dir, "db-b", [])
+            self._write(new_dir, "db-b", [self._recipe("x")])
+            ca = cd.compute_custom_alert_diff(
+                cd.load_custom_alerts_from_dir(old_dir),
+                cd.load_custom_alerts_from_dir(new_dir),
+            )
+            output = {"metric_diffs": {}, "profile_diffs": [], "custom_alert_diffs": ca}
+            parsed = json.loads(json.dumps(output, default=str))
+            assert "custom_alert_diffs" in parsed
+            assert parsed["custom_alert_diffs"]["db-b"][0]["change"] == "added"
+
+
 class TestProfileDiffEndToEnd:
     """End-to-end profile diff with directories."""
 

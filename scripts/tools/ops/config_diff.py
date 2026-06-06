@@ -35,6 +35,14 @@ from _lib_python import (  # noqa: E402
 )
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
+# GitHub silently rejects (422 Unprocessable Entity) issue/PR comments over
+# 65,536 chars. The config-diff bot posts render_markdown() output verbatim, so
+# an oversized diff (e.g. a 150-recipe bulk refactor) would make the comment
+# vanish — the highest-risk PR then reaches the reviewer with NO diff hint at
+# all. Cap with ~5KB headroom for the workflow's wrapper marker/footer (Reef 2).
+GITHUB_COMMENT_HARD_LIMIT = 65_536
+COMMENT_SAFETY_LIMIT = 60_000
+
 
 def load_configs_from_dir(dir_path):
     """Load all tenant configs from a conf.d/ directory.
@@ -237,6 +245,169 @@ def compute_diff(old_configs, new_configs):
     return diffs
 
 
+def load_custom_alerts_from_dir(dir_path):
+    """Load tenant-OWN `_custom_alerts` recipes from a conf.d/ directory.
+
+    Returns {tenant_name: {recipe_name: recipe_dict}}. Only tenants declaring
+    at least one named recipe are included.
+
+    Scope note: like the metric diff above, this reads each tenant file's own
+    declarations and does NOT resolve `_defaults.yaml` inheritance — `_defaults`
+    files are skipped by the loader. Inherited platform/domain policy recipes
+    are out of scope here (consistent with how metric diffs ignore `_defaults`).
+    The ADR-024 (#741) compiler in scripts/tools/dx/custom_alerts/ owns the full
+    inheritance-resolved view.
+    """
+    if not Path(dir_path).is_dir():
+        return {}
+
+    raw_configs = _load_tenant_configs_raw(dir_path)
+    out = {}
+    for tenant, cfg in raw_configs.items():
+        recipes = (cfg or {}).get("_custom_alerts")
+        # Strict type guard (Reef 5): a mistyped `_custom_alerts: "to be added"`
+        # is iterable, so a naive `for r in recipes` would iterate CHARS and
+        # `r.get(...)` would AttributeError → CI bot crash → PR blocked. Skip
+        # anything that isn't a list (None / dict / str). The compiler/schema
+        # rejects the malformed shape separately with a clear message.
+        if not isinstance(recipes, list):
+            continue
+        named = {}
+        for r in recipes:
+            if isinstance(r, dict) and r.get("name"):
+                named[str(r["name"])] = r
+        if named:
+            out[tenant] = named
+    return out
+
+
+def _format_recipe_value(val):
+    """Recipe field value as code-span-safe text (dicts/lists → compact JSON).
+
+    Neutralizes backticks so the value cannot break out of the markdown code
+    span the caller wraps it in (F5: PR bot-comment injection defence — these
+    values are rendered PRE-compile, so they are untrusted). Inside a code span
+    every other metachar (`<`, `>`, `|`, `</details>`) renders literally, so a
+    backtick is the only break-out we must close.
+    """
+    if val is None:
+        return "—"
+    if isinstance(val, (dict, list)):
+        text = json.dumps(val, ensure_ascii=False, sort_keys=True, default=str)
+    else:
+        text = str(val)
+    # Neutralize backticks (code-span break-out, F5) AND newlines: a raw \n
+    # breaks a markdown code span / list item and shatters the rendered comment
+    # (Reef 4). Collapse CR/LF to a space — this section uses code spans, where
+    # an <br> would render as literal text rather than a break.
+    return (
+        text.replace("`", "'")
+        .replace("\r\n", " ")
+        .replace("\n", " ")
+        .replace("\r", " ")
+    )
+
+
+def _code_span(val):
+    """Wrap a (possibly attacker-controlled) value in a backtick code span,
+    after neutralizing internal backticks (F5 injection defence)."""
+    return f"`{_format_recipe_value(val)}`"
+
+
+def _threshold_disabled(val):
+    """Is a custom-alert threshold a three-state opt-out? Mirrors the exporter
+    (custom_alert.go): split the optional `:severity`, then test the value part
+    against the disabled set — so `off`/`disabled`/`false` and `:severity`-
+    suffixed forms (e.g. ``disable:warning``) are caught, not just ``disable``
+    (R2 self-review: keep parity with blast_radius._threshold_disabled)."""
+    raw = str(val).strip()
+    value = raw.rsplit(":", 1)[0] if ":" in raw else raw
+    return _is_disabled(value)
+
+
+def _field_change_annotation(field, old, new):
+    """Flag field changes that SILENCE an alert — high-regret and easy to miss
+    behind a plain ``[modified]`` line (Reef 1: ``disable``/``silent`` semantic
+    camouflage). A `threshold` flipped to a disabled value or `mode` flipped to
+    ``silent`` is effectively a delete/silence wearing a 'modified' disguise.
+    """
+    if field == "threshold" and _threshold_disabled(new) and not _threshold_disabled(old):
+        return " — :warning: **DISABLED (alert silenced)**"
+    if field == "mode" and str(new) == "silent" and str(old) != "silent":
+        return " — :warning: **mode→silent (paging suppressed)**"
+    return ""
+
+
+def compute_recipe_field_changes(old_r, new_r):
+    """Per-field diff between two recipe dicts.
+
+    Returns list of {"field", "old", "new"} for every differing key.
+    """
+    all_keys = set(old_r or {}) | set(new_r or {})
+    changes = []
+    for key in sorted(all_keys):
+        old_val = (old_r or {}).get(key)
+        new_val = (new_r or {}).get(key)
+        if old_val != new_val:
+            changes.append({"field": key, "old": old_val, "new": new_val})
+    return changes
+
+
+def compute_custom_alert_diff(old_alerts, new_alerts):
+    """Diff tenant-own `_custom_alerts` recipes between two snapshots.
+
+    Args:
+        old_alerts / new_alerts: {tenant: {recipe_name: recipe_dict}} as
+            returned by :func:`load_custom_alerts_from_dir`.
+
+    Returns {tenant: [{"name", "change", "old", "new", "field_changes"}]}.
+    ``change`` is one of: 'added', 'removed', 'modified'. Recipes are matched by
+    their per-tenant-unique ``name``. Only tenants with at least one change are
+    included.
+
+    Note (Reef 3): identity is name-based, so a pure RENAME (same params, new
+    `name`) surfaces as a Remove + Add pair, not a 'renamed' change. Stateless
+    rename heuristics aren't worth the false-match risk here; the reviewer reads
+    two entries. Documented so a future maintainer doesn't 'fix' it as a bug.
+    """
+    all_tenants = set(old_alerts.keys()) | set(new_alerts.keys())
+    result = {}
+
+    for tenant in sorted(all_tenants):
+        old_recipes = old_alerts.get(tenant, {})
+        new_recipes = new_alerts.get(tenant, {})
+        all_names = set(old_recipes.keys()) | set(new_recipes.keys())
+
+        changes = []
+        for name in sorted(all_names):
+            old_r = old_recipes.get(name)
+            new_r = new_recipes.get(name)
+            if old_r == new_r:
+                continue
+
+            if old_r is None:
+                changes.append({
+                    "name": name, "change": "added",
+                    "old": None, "new": new_r, "field_changes": [],
+                })
+            elif new_r is None:
+                changes.append({
+                    "name": name, "change": "removed",
+                    "old": old_r, "new": None, "field_changes": [],
+                })
+            else:
+                changes.append({
+                    "name": name, "change": "modified",
+                    "old": old_r, "new": new_r,
+                    "field_changes": compute_recipe_field_changes(old_r, new_r),
+                })
+
+        if changes:
+            result[tenant] = changes
+
+    return result
+
+
 def estimate_affected_alerts(metric_key):
     """Estimate which alert names might be affected by a metric key change.
 
@@ -259,13 +430,64 @@ def _format_value(val):
     return str(val)
 
 
-def render_markdown(diffs, old_dir, new_dir, profile_diffs=None):
+def render_markdown(diffs, old_dir, new_dir, profile_diffs=None,
+                    custom_alert_diffs=None):
     """Render a Markdown blast radius report."""
     lines = []
     lines.append("# Config Diff Report")
     lines.append("")
     lines.append(f"Comparing: `{old_dir}` → `{new_dir}`")
     lines.append("")
+
+    # Custom alert changes section (v2.9.0 ADR-024 Capability B, #741).
+    # These are real alerting changes (add/remove/retune a paging rule), NOT
+    # format-only — surfaced prominently so ops review never misses them.
+    if custom_alert_diffs:
+        lines.append("## Custom Alert Changes")
+        lines.append("")
+        lines.append(
+            "> :warning: Custom alert recipes are real alerting changes "
+            "(new / removed / retuned alert rules), not format-only."
+        )
+        lines.append("")
+        for tenant, changes in custom_alert_diffs.items():
+            summary = _summarize_changes(changes)
+            lines.append(
+                f"### {tenant} — {len(changes)} custom alert change(s) ({summary})"
+            )
+            lines.append("")
+            for c in changes:
+                # All dynamic values go inside code spans via _code_span (F5).
+                name_cs = _code_span(c["name"])
+                if c["change"] == "modified":
+                    lines.append(f"- {name_cs} (modified)")
+                    for fc in c["field_changes"]:
+                        annotation = _field_change_annotation(
+                            fc["field"], fc["old"], fc["new"]
+                        )
+                        lines.append(
+                            f"  - {_code_span(fc['field'])}: "
+                            f"{_code_span(fc['old'])} → {_code_span(fc['new'])}"
+                            f"{annotation}"
+                        )
+                elif c["change"] == "added":
+                    r = c["new"] or {}
+                    lines.append(
+                        f"- {name_cs} (added) — "
+                        f"recipe={_code_span(r.get('recipe', '?'))} "
+                        f"metric={_code_span(r.get('metric', '?'))} "
+                        f"threshold={_code_span(r.get('threshold', '?'))} "
+                        f"mode={_code_span(r.get('mode', 'page'))}"
+                    )
+                else:  # removed
+                    r = c["old"] or {}
+                    lines.append(
+                        f"- {name_cs} (removed) — "
+                        f"was recipe={_code_span(r.get('recipe', '?'))} "
+                        f"metric={_code_span(r.get('metric', '?'))} "
+                        f"threshold={_code_span(r.get('threshold', '?'))}"
+                    )
+            lines.append("")
 
     # Profile changes section (v1.12.0)
     if profile_diffs:
@@ -299,7 +521,7 @@ def render_markdown(diffs, old_dir, new_dir, profile_diffs=None):
             else:
                 lines.append("")
 
-    if not diffs and not profile_diffs:
+    if not diffs and not profile_diffs and not custom_alert_diffs:
         lines.append("No changes detected.")
         return "\n".join(lines)
 
@@ -321,14 +543,36 @@ def render_markdown(diffs, old_dir, new_dir, profile_diffs=None):
         total_changes += len(changes)
 
     lines.append("---")
-    changed = len(diffs)
+    # "tenant(s) changed" must count tenants changed via metric OR custom-alert
+    # diffs (CodeRabbit #773): a custom-alert-only run otherwise prints
+    # "0 tenant(s) changed" while the custom-alert clause below says otherwise.
+    changed_tenants = set(diffs)
+    changed_tenants.update(custom_alert_diffs or {})
+    changed = len(changed_tenants)
     profile_affected = sum(pd["affected_count"] for pd in (profile_diffs or []))
     summary = f"Summary: {changed} tenant(s) changed, {total_changes} metric change(s)"
     if profile_affected:
         summary += f", {profile_affected} tenant(s) affected by profile changes"
+    if custom_alert_diffs:
+        ca_tenants = len(custom_alert_diffs)
+        ca_changes = sum(len(v) for v in custom_alert_diffs.values())
+        summary += (
+            f", {ca_tenants} tenant(s) with {ca_changes} custom alert change(s)"
+        )
     lines.append(summary)
 
-    return "\n".join(lines)
+    # Truncation safeguard (Reef 2): never let the bot comment exceed GitHub's
+    # ceiling — a silently-dropped comment on a huge, high-risk PR is worse than
+    # a truncated one. The exit code + changed files remain authoritative.
+    result = "\n".join(lines)
+    if len(result) > COMMENT_SAFETY_LIMIT:
+        notice = (
+            "\n\n---\n"
+            "... (Diff too large, truncated to fit GitHub's comment limit. "
+            "Please review the changed files directly.)"
+        )
+        result = result[: COMMENT_SAFETY_LIMIT - len(notice)] + notice
+    return result
 
 
 def _summarize_changes(changes):
@@ -386,16 +630,28 @@ def main():
 
     diffs = compute_diff(old_configs, new_configs)
     profile_diffs = compute_profile_diff(args.old_dir, args.new_dir)
+    custom_alert_diffs = compute_custom_alert_diff(
+        load_custom_alerts_from_dir(args.old_dir),
+        load_custom_alerts_from_dir(args.new_dir),
+    )
 
     use_json = args.json_output or args.format == "json"
     if use_json:
-        output = {"metric_diffs": diffs, "profile_diffs": profile_diffs}
+        output = {
+            "metric_diffs": diffs,
+            "profile_diffs": profile_diffs,
+            "custom_alert_diffs": custom_alert_diffs,
+        }
         print(json.dumps(output, indent=2, ensure_ascii=False, default=str))
     else:
-        print(render_markdown(diffs, args.old_dir, args.new_dir, profile_diffs=profile_diffs))
+        print(render_markdown(
+            diffs, args.old_dir, args.new_dir,
+            profile_diffs=profile_diffs,
+            custom_alert_diffs=custom_alert_diffs,
+        ))
 
     # Exit 1 if changes detected (CI signal), 0 if clean
-    has_changes = bool(diffs) or bool(profile_diffs)
+    has_changes = bool(diffs) or bool(profile_diffs) or bool(custom_alert_diffs)
     sys.exit(EXIT_VIOLATION if has_changes else EXIT_OK)
 
 
