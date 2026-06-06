@@ -430,6 +430,28 @@ class TestCustomAlertDiff:
             )
             assert diff == {}
 
+    def test_summary_counts_custom_alert_only_tenant(self):
+        """CodeRabbit #773: a custom-alert-only change must count toward
+        'N tenant(s) changed', not print '0 tenant(s) changed'."""
+        diff = {"db-b": [{
+            "name": "x", "change": "added", "old": None,
+            "new": self._recipe("x"), "field_changes": [],
+        }]}
+        md = cd.render_markdown({}, "o", "n", custom_alert_diffs=diff)
+        assert "0 tenant(s) changed" not in md
+        assert "1 tenant(s) changed" in md
+
+    def test_summary_unions_metric_and_custom_alert_tenants(self):
+        """Same tenant changed via both metric + custom alert counts once."""
+        metric = {"db-b": [{"key": "mysql_connections", "old": 80, "new": 50,
+                            "change": "tighter"}]}
+        ca = {"db-b": [{"name": "x", "change": "added", "old": None,
+                        "new": self._recipe("x"), "field_changes": []}],
+              "db-c": [{"name": "y", "change": "added", "old": None,
+                        "new": self._recipe("y"), "field_changes": []}]}
+        md = cd.render_markdown(metric, "o", "n", custom_alert_diffs=ca)
+        assert "2 tenant(s) changed" in md  # db-b (union, once) + db-c
+
     def test_render_markdown_surfaces_custom_alerts(self):
         """The PR #771 scenario must NOT render as 'No changes detected'."""
         diff = {"db-b": [{

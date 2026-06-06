@@ -543,7 +543,12 @@ def render_markdown(diffs, old_dir, new_dir, profile_diffs=None,
         total_changes += len(changes)
 
     lines.append("---")
-    changed = len(diffs)
+    # "tenant(s) changed" must count tenants changed via metric OR custom-alert
+    # diffs (CodeRabbit #773): a custom-alert-only run otherwise prints
+    # "0 tenant(s) changed" while the custom-alert clause below says otherwise.
+    changed_tenants = set(diffs)
+    changed_tenants.update(custom_alert_diffs or {})
+    changed = len(changed_tenants)
     profile_affected = sum(pd["affected_count"] for pd in (profile_diffs or []))
     summary = f"Summary: {changed} tenant(s) changed, {total_changes} metric change(s)"
     if profile_affected:
