@@ -1813,6 +1813,8 @@ da-tools runtime-audit (--prometheus <url> | --runtime-json <file>) [options]
 2. **UNHEALTHY** — loaded but `health != ok` (carries `lastError`; series-observation cannot tell this apart from "metric legitimately absent")
 3. **ORPHAN** — still loaded but no longer declared in Git (stale; scoped to DECLARED groups so unrelated infra rules are not flagged)
 
+> **⚠️ Limitation (avoiding false positives)**: `declared` = **every** `rule-pack-*.yaml` in `--rule-packs-dir`. Platform packs can be selectively enabled (projected-volume `optional`); if a deployment loads only a subset, **the disabled packs are reported as MISSING**. Lever: point `--rule-packs-dir` at a directory holding only the enabled packs (the ORPHAN direction is unaffected — it is scoped to declared groups). Also: `unknown` health (the transient post-reload, not-yet-evaluated state) is **not** flagged UNHEALTHY — only a confirmed `err` is.
+
 **Examples**
 
 ```bash

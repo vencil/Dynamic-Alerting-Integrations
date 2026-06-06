@@ -132,6 +132,20 @@ def test_parse_runtime_non_dict_raises():
         ra.parse_runtime_rules(["not", "a", "dict"])
 
 
+def test_parse_runtime_null_data_does_not_crash():
+    # A proxy returning {"status":"success","data":null} must coerce to empty,
+    # not raise an uncaught AttributeError (caller only maps ValueError → exit 2).
+    assert ra.parse_runtime_rules({"status": "success", "data": None}) == {}
+
+
+def test_parse_runtime_non_dict_group_and_rule_skipped():
+    rt = ra.parse_runtime_rules({
+        "status": "success",
+        "data": {"groups": ["not-a-dict", {"name": "g", "rules": ["x", {"name": "A"}]}]},
+    })
+    assert list(rt) == [("g", "A")]
+
+
 def test_parse_runtime_skips_unnamed_rule():
     rt = ra.parse_runtime_rules({
         "status": "success",
@@ -165,6 +179,22 @@ def test_diff_unhealthy_when_loaded_with_error():
     assert len(findings) == 1
     assert findings[0].category == ra.UNHEALTHY
     assert findings[0].detail == "parse fail"
+
+
+def test_diff_unknown_health_not_flagged():
+    # health=="unknown" is transient (loaded, not yet evaluated, e.g. just
+    # after a reload). It must NOT be reported as UNHEALTHY — only "err" gates.
+    declared = {("g", "A"): {"type": "alerting"}}
+    runtime = ra.parse_runtime_rules(_runtime(
+        {"group": "g", "name": "A", "health": "unknown"}))
+    assert ra.diff_rules(declared, runtime) == []
+
+
+def test_diff_ok_health_not_flagged():
+    declared = {("g", "A"): {"type": "alerting"}}
+    runtime = ra.parse_runtime_rules(_runtime(
+        {"group": "g", "name": "A", "health": "ok"}))
+    assert ra.diff_rules(declared, runtime) == []
 
 
 def test_diff_orphan_only_within_declared_groups():

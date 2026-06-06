@@ -34,9 +34,12 @@ a hard load-state comparison, not a soft "does a series exist" inference:
 
   MISSING    declared in Git, absent in runtime  → reload fail / projected-
              volume lag / hand-deleted configmap. (gates in --ci)
-  UNHEALTHY  loaded but health != "ok"            → rule evaluates with an
+  UNHEALTHY  loaded but health == "err"           → rule evaluates with an
              error (lastError); series-observation cannot tell this apart
-             from "metric legitimately absent". (gates in --ci)
+             from "metric legitimately absent". (gates in --ci) NOTE: a
+             transient "unknown" health — a rule that loaded but has not
+             evaluated yet (e.g. just after a reload) — is deliberately NOT
+             flagged, to avoid false-positives on a freshly-reloaded server.
   ORPHAN     loaded but no longer declared in Git → stale rule survives in
              the cluster (the #747 core case). Scoped to DECLARED groups so
              unrelated infra rules are not flagged. (warn; --strict-orphan
@@ -50,6 +53,22 @@ Scope (MVP — kept deliberately narrow)
 - Presence + health only. ``expr`` drift is phase-2: Prometheus reformats
   expressions on load, so a naive string compare false-positives; doing it
   right needs PromQL-aware normalization.
+
+Known limitations (honest boundaries — not claimed away)
+--------------------------------------------------------
+- ``declared`` = every ``rule-pack-*.yaml`` in ``--rule-packs-dir``. Platform
+  packs can be SELECTIVELY enabled (projected-volume ``optional``); a
+  deployment that loads only a subset will see the disabled packs reported as
+  MISSING. Lever: point ``--rule-packs-dir`` at only the enabled packs. (The
+  ORPHAN direction is unaffected — it is scoped to declared groups.)
+- Rule identity is ``(group, name)``. A pathological same-group collision
+  (a ``record:`` and an ``alert:`` sharing one name in one group) is not
+  distinguished; conventional naming (``level:metric:op`` vs ``CamelCase``)
+  makes this effectively impossible in practice, so it is documented, not
+  guarded.
+- Single Prometheus endpoint per run. A sharded / federated topology
+  (rule-pack-split edge vs central) requires pointing ``--prometheus`` at the
+  instance that actually loads the packs in ``--rule-packs-dir``.
 
 Usage:
     da-tools runtime-audit --prometheus http://localhost:9090
@@ -204,9 +223,16 @@ def parse_runtime_rules(
             if isinstance(api_json, dict) else "non-dict /api/v1/rules response"
         )
     runtime: dict[tuple[str, str], dict[str, str]] = {}
-    for group in api_json.get("data", {}).get("groups", []):
+    # Defensive: a proxy may return {"status":"success","data":null} or a
+    # group/rules of an unexpected type — coerce rather than crash with an
+    # uncaught AttributeError (the caller only maps ValueError to exit 2).
+    for group in (api_json.get("data") or {}).get("groups") or []:
+        if not isinstance(group, dict):
+            continue
         gname = group.get("name", "")
-        for rule in group.get("rules", []):
+        for rule in group.get("rules") or []:
+            if not isinstance(rule, dict):
+                continue
             name = rule.get("name", "")
             if not name:
                 continue
@@ -237,10 +263,16 @@ def diff_rules(
         rt = runtime.get((g, n))
         if rt is None:
             findings.append(Finding(MISSING, g, n, meta["type"]))
-        elif rt.get("health", "unknown") != "ok":
+        elif rt.get("health") == "err":
+            # Only a CONFIRMED evaluation error gates. `health == "unknown"`
+            # is transient — a rule that loaded but has not completed its
+            # first evaluation yet (e.g. moments after a reload) reports
+            # "unknown"; flagging it would false-positive a freshly-reloaded
+            # Prometheus. Distinguishing "stuck unknown" from "transient
+            # unknown" needs lastEvaluation timestamps (phase-2).
             findings.append(Finding(
                 UNHEALTHY, g, n, rt.get("type", meta["type"]),
-                detail=(rt.get("lastError") or rt.get("health", "unknown")),
+                detail=(rt.get("lastError") or "health=err"),
             ))
 
     for (g, n), rt in sorted(runtime.items()):
