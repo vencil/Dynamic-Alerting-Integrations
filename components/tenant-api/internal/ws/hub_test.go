@@ -3,6 +3,7 @@ package ws
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
@@ -442,6 +443,45 @@ func TestShutdownNoClientsIsNoop(t *testing.T) {
 	h.Shutdown(2 * time.Second) // must not panic with zero clients
 	if n := h.ClientCount(); n != 0 {
 		t.Errorf("expected 0 clients, got %d", n)
+	}
+}
+
+// TestSubscribeRefusedAfterShutdown guards the late-subscriber race: once
+// Shutdown latches, a request reaching ServeHTTP (it runs before srv.Shutdown)
+// must NOT open a fresh stream — otherwise it misses the server_shutdown hint
+// and keeps srv.Shutdown waiting, recreating the stall this path removes.
+func TestSubscribeRefusedAfterShutdown(t *testing.T) {
+	t.Parallel()
+	h := NewHub()
+
+	h.Shutdown(2 * time.Second)
+
+	// Subscribe is refused (nil) and does not re-populate the client set.
+	if ch := h.Subscribe(); ch != nil {
+		t.Error("Subscribe returned a channel after Shutdown; expected nil")
+	}
+	if n := h.ClientCount(); n != 0 {
+		t.Errorf("expected 0 clients after a refused Subscribe, got %d", n)
+	}
+
+	// ServeHTTP refuses with 503 and returns promptly (no stream opened).
+	req := httptest.NewRequest("GET", "/api/v1/events", nil)
+	w := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		h.ServeHTTP(w, req)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("ServeHTTP did not return after shutdown — it should 503 immediately")
+	}
+	if w.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected 503 after shutdown, got %d", w.Code)
+	}
+	if n := h.ClientCount(); n != 0 {
+		t.Errorf("ServeHTTP opened a stream after shutdown; clients=%d", n)
 	}
 }
 

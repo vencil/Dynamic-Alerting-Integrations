@@ -92,6 +92,12 @@ type Hub struct {
 	mu      sync.RWMutex
 	clients map[chan Event]struct{}
 	cfg     Config
+	// shuttingDown latches true the moment Shutdown begins. Subscribe refuses
+	// new streams once set, so a request that reaches ServeHTTP after Shutdown
+	// has drained the existing clients (it runs before srv.Shutdown) can't open
+	// a fresh stream that would miss the server_shutdown hint AND keep
+	// srv.Shutdown waiting — re-creating the very stall this path removes.
+	shuttingDown bool
 }
 
 // activeHub holds the most-recently constructed Hub so the free-function
@@ -154,15 +160,17 @@ func (h *Hub) Broadcast(evt Event) {
 	}
 }
 
-// Subscribe adds a new client channel and returns it.
-// The channel is buffered with a capacity of 16 events.
+// Subscribe adds a new client channel and returns it. The channel is buffered
+// with a capacity of 16 events. Returns nil once Shutdown has begun, so callers
+// must not open a new SSE stream after shutdown (ServeHTTP returns 503).
 func (h *Hub) Subscribe() chan Event {
-	ch := make(chan Event, 16)
-
 	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.shuttingDown {
+		return nil
+	}
+	ch := make(chan Event, 16)
 	h.clients[ch] = struct{}{}
-	h.mu.Unlock()
-
 	return ch
 }
 
@@ -209,6 +217,9 @@ func (h *Hub) Shutdown(reconnectDelay time.Duration) {
 
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	// Latch first (under the lock) so any Subscribe racing this teardown is
+	// refused rather than re-populating clients after we drain it.
+	h.shuttingDown = true
 	for ch := range h.clients {
 		// Non-blocking send: deliver the hint if there's buffer room, else skip
 		// it — the close below unblocks the serving goroutine either way.
@@ -267,6 +278,14 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ch := h.Subscribe()
+	if ch == nil {
+		// Shutdown already began — refuse the new stream so it can't miss the
+		// server_shutdown hint or keep srv.Shutdown waiting. http.Error overrides
+		// the staged text/event-stream Content-Type (nothing is flushed yet); the
+		// client should retry against the replacement pod.
+		http.Error(w, "server shutting down", http.StatusServiceUnavailable)
+		return
+	}
 	defer h.Unsubscribe(ch)
 
 	// Send initial connection event. A failure here means the client is already
