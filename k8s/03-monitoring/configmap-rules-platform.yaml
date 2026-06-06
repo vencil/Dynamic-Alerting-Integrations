@@ -360,22 +360,26 @@ data:
           # scrape-absent is a separate concern (the series is ABSENT, not 0) — not
           # this alert's job; tenant-api has no general availability alert yet.
           #
-          # ⚠️ Correctness DEPENDS on the tenant-api scrape using `role: service`
-          # (configmap-prometheus.yaml `monitoring-components`): `instance` is the
-          # Service ClusterIP, which is STABLE across pod restarts, so
-          # tenant_api_sse_clients is ONE series that spans the deploy — letting
-          # `max_over_time([30m])` see the OLD pod's clients after the restart. If
-          # the scrape ever moves to `role: endpoints`/`pod`, `instance` becomes the
-          # (per-restart) pod IP → the new pod is a DIFFERENT series whose 30m
-          # history is all-0 → this alert would SILENTLY NEVER FIRE. The promtool
-          # test can't catch that (it defines its own series), hence this note.
+          # WHY `sum/min without (pod, instance, endpoint)` + a subquery, not the
+          # raw series: a Recreate deploy gives the NEW pod a different identity if
+          # the scrape attaches per-pod labels (e.g. a ServiceMonitor / endpoints
+          # role — already used elsewhere in this repo for threshold-exporter). The
+          # new pod's `max_over_time([30m])` would then be all-0 (it never had
+          # clients — those live on the OLD pod's now-stale series), and PromQL's
+          # `and` needs EXACT label matches, so the alert would SILENTLY NEVER FIRE.
+          # Aggregating the volatile labels away (safe — single-writer = one pod)
+          # collapses old+new pods into ONE logical series whose history spans the
+          # restart, making the alert correct under ANY scrape role. The `[30m:1m]`
+          # subquery is required to run max_over_time over the aggregation result.
           - alert: TenantApiSSEReconnectFailure
             expr: |
-              tenant_api_sse_clients{job="tenant-api"} == 0
+              sum without (pod, instance, endpoint) (tenant_api_sse_clients{job="tenant-api"}) == 0
               and
-              tenant_api_uptime_seconds{job="tenant-api"} < 1800
+              min without (pod, instance, endpoint) (tenant_api_uptime_seconds{job="tenant-api"}) < 1800
               and
-              max_over_time(tenant_api_sse_clients{job="tenant-api"}[30m]) > 0
+              max_over_time(
+                sum without (pod, instance, endpoint) (tenant_api_sse_clients{job="tenant-api"})[30m:1m]
+              ) > 0
             for: 10m
             labels:
               severity: warning

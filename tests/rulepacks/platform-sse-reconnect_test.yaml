@@ -1,19 +1,18 @@
 # promtool behavioural test for TenantApiSSEReconnectFailure (#740 / TRK-326).
 # Validates the #740 acceptance contract:
-#   1) FIRES when, AFTER A RESTART, SSE clients had connections but are stuck at 0.
+#   1) FIRES when, AFTER A RESTART, SSE clients had connections but are stuck at 0
+#      — modelled with TWO DISTINCT pod series (old pod-A dies, new pod-B starts)
+#      so the test proves the `sum without (pod,...)` aggregation bridges the pod
+#      identity change. (A single-series model would silently pass even with the
+#      old non-aggregated expr that breaks in prod — this is the regression guard.)
 #   2) does NOT false-positive on a normal rolling reconnect (0 for a few minutes
 #      then back) — the self-healing deploy case must stay green.
 #   3) does NOT fire on a genuinely-idle API (nobody ever connected).
 #   4) does NOT fire when a user just CLOSED their tab during normal operation
 #      (same "had clients, now 0" shape as #1 but the pod was NOT recently
 #      restarted) — the uptime anchor is what distinguishes these.
-#
-# Every series carries a STABLE `instance` that does NOT change across the
-# modelled restart (value drops 3→0, uptime 5000→120, but instance is constant).
-# This mirrors the production scrape `role: service` (instance = the Service
-# ClusterIP, stable across pod restarts) on which the alert's cross-restart
-# `max_over_time([30m])` correctness depends — see the note in
-# configmap-rules-platform.yaml.
+# The aggregated expr strips pod/instance/endpoint, so the firing alert carries
+# only {job, severity} (no pod/instance).
 # Run: promtool test rules tests/rulepacks/platform-sse-reconnect_test.yaml
 rule_files:
   - platform-sse-reconnect.rules.yaml
@@ -21,68 +20,71 @@ rule_files:
 evaluation_interval: 1m
 
 tests:
-  # 1) Reconnect FAILURE after a deploy: old pod had 3 clients; a Recreate deploy
-  #    resets uptime (5000s → 120s) and drops clients to 0; they never come back.
-  #    instance stays constant (ClusterIP) so it's one series across the restart.
+  # 1) Reconnect FAILURE across a Recreate: pod-A (3 clients, uptime 5000) is
+  #    killed at t6m; pod-B starts (uptime 120, 0 clients) and clients never come
+  #    back. Two SEPARATE series — only the `sum without (pod...)` aggregate sees
+  #    pod-A's clients in the 30m window after pod-B is the only one running.
   - interval: 1m
-    name: post-restart-stuck-at-zero-fires
+    name: post-restart-stuck-at-zero-fires-across-pods
     input_series:
-      - series: 'tenant_api_sse_clients{job="tenant-api", instance="10.0.0.1:8080"}'
-        values: '3+0x5 0+0x30'        # t0–5m = 3 (old pod), t6–36m = 0 (new pod, stuck)
-      - series: 'tenant_api_uptime_seconds{job="tenant-api", instance="10.0.0.1:8080"}'
-        values: '5000+0x5 120+0x30'   # restart at t6m: uptime resets to 120 (< 1800)
+      - series: 'tenant_api_sse_clients{job="tenant-api", pod="tenant-api-a", instance="10.0.0.1:8080"}'
+        values: '3+0x5 stale'        # pod-A: t0–5m = 3, then explicit STALE at t6m (killed by Recreate)
+      - series: 'tenant_api_uptime_seconds{job="tenant-api", pod="tenant-api-a", instance="10.0.0.1:8080"}'
+        values: '5000+0x5 stale'
+      - series: 'tenant_api_sse_clients{job="tenant-api", pod="tenant-api-b", instance="10.0.0.2:8080"}'
+        values: '_x6 0+0x30'         # pod-B: absent t0–5m, then 0 (stuck) t6–36m
+      - series: 'tenant_api_uptime_seconds{job="tenant-api", pod="tenant-api-b", instance="10.0.0.2:8080"}'
+        values: '_x6 120+0x30'       # pod-B uptime 120 (< 1800)
     alert_rule_test:
-      - eval_time: 17m                 # 0 held 11m (≥10m for); uptime 120 < 1800; old 3 still in [30m]
+      - eval_time: 17m               # aggregate 0 held 11m (≥10m); min uptime 120 < 1800; aggregate max[30m]=3 (pod-A still in window)
         alertname: TenantApiSSEReconnectFailure
         exp_alerts:
           - exp_labels:
               severity: warning
               job: tenant-api
-              instance: "10.0.0.1:8080"
             exp_annotations:
               summary: "tenant-api SSE clients have not reconnected after a restart (10m)"
-      - eval_time: 36m                 # 30m past the last client → max_over_time decays to 0 → resolves
+      - eval_time: 36m               # subquery window [t6,t36] excludes pod-A's clients → aggregate max decays to 0 → resolves
         alertname: TenantApiSSEReconnectFailure
         exp_alerts: []
 
-  # 2) Normal rolling reconnect: recently restarted, clients drop to 0 for only 2m
-  #    then reconnect. `== 0` never holds for 10m → must NOT fire (self-healing).
+  # 2) Normal rolling reconnect: recently restarted pod, clients drop to 0 for only
+  #    2m then reconnect. aggregate `== 0` never holds 10m → must NOT fire.
   - interval: 1m
     name: quick-reconnect-no-fire
     input_series:
-      - series: 'tenant_api_sse_clients{job="tenant-api", instance="10.0.0.1:8080"}'
-        values: '3+0x5 0 0 3+0x20'    # t6–7m = 0 (2m), then back
-      - series: 'tenant_api_uptime_seconds{job="tenant-api", instance="10.0.0.1:8080"}'
-        values: '5000+0x5 120+0x30'
+      - series: 'tenant_api_sse_clients{job="tenant-api", pod="tenant-api-b", instance="10.0.0.2:8080"}'
+        values: '3+0x5 0 0 3+0x20'   # t6–7m = 0 (2m), then back
+      - series: 'tenant_api_uptime_seconds{job="tenant-api", pod="tenant-api-b", instance="10.0.0.2:8080"}'
+        values: '120+0x30'
     alert_rule_test:
       - eval_time: 20m
         alertname: TenantApiSSEReconnectFailure
         exp_alerts: []
 
-  # 3) Genuinely idle: nobody ever connected. max_over_time[30m] == 0 → must NOT fire.
+  # 3) Genuinely idle: nobody ever connected. aggregate max_over_time == 0 → no fire.
   - interval: 1m
     name: idle-no-clients-no-fire
     input_series:
-      - series: 'tenant_api_sse_clients{job="tenant-api", instance="10.0.0.1:8080"}'
+      - series: 'tenant_api_sse_clients{job="tenant-api", pod="tenant-api-b", instance="10.0.0.2:8080"}'
         values: '0+0x40'
-      - series: 'tenant_api_uptime_seconds{job="tenant-api", instance="10.0.0.1:8080"}'
+      - series: 'tenant_api_uptime_seconds{job="tenant-api", pod="tenant-api-b", instance="10.0.0.2:8080"}'
         values: '120+0x40'
     alert_rule_test:
       - eval_time: 20m
         alertname: TenantApiSSEReconnectFailure
         exp_alerts: []
 
-  # 4) User closed their tab during NORMAL operation — IDENTICAL sse shape to (1)
-  #    (had a client, now stuck 0) but the pod has been up for a long time
-  #    (uptime ≥ 1800, no recent deploy). The uptime anchor must keep this GREEN,
-  #    otherwise the alert would fire every time the admin UI goes idle after use.
+  # 4) User closed their tab during NORMAL operation — same "had clients, now 0"
+  #    shape as (1) but the pod has been up a long time (uptime ≥ 1800, no recent
+  #    deploy). The uptime anchor must keep this GREEN.
   - interval: 1m
     name: tab-closed-no-recent-deploy-no-fire
     input_series:
-      - series: 'tenant_api_sse_clients{job="tenant-api", instance="10.0.0.1:8080"}'
-        values: '3+0x5 0+0x30'        # same shape as scenario 1
-      - series: 'tenant_api_uptime_seconds{job="tenant-api", instance="10.0.0.1:8080"}'
-        values: '8000+60x35'          # always ≥ 1800 (long-running pod, no restart)
+      - series: 'tenant_api_sse_clients{job="tenant-api", pod="tenant-api-b", instance="10.0.0.2:8080"}'
+        values: '3+0x5 0+0x30'       # had a client, now stuck 0
+      - series: 'tenant_api_uptime_seconds{job="tenant-api", pod="tenant-api-b", instance="10.0.0.2:8080"}'
+        values: '8000+60x35'         # always ≥ 1800 (long-running pod, no restart)
     alert_rule_test:
       - eval_time: 17m
         alertname: TenantApiSSEReconnectFailure

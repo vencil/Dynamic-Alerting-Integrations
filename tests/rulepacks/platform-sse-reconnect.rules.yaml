@@ -11,11 +11,13 @@ groups:
     rules:
       - alert: TenantApiSSEReconnectFailure
         expr: |
-          tenant_api_sse_clients{job="tenant-api"} == 0
+          sum without (pod, instance, endpoint) (tenant_api_sse_clients{job="tenant-api"}) == 0
           and
-          tenant_api_uptime_seconds{job="tenant-api"} < 1800
+          min without (pod, instance, endpoint) (tenant_api_uptime_seconds{job="tenant-api"}) < 1800
           and
-          max_over_time(tenant_api_sse_clients{job="tenant-api"}[30m]) > 0
+          max_over_time(
+            sum without (pod, instance, endpoint) (tenant_api_sse_clients{job="tenant-api"})[30m:1m]
+          ) > 0
         for: 10m
         labels:
           severity: warning
