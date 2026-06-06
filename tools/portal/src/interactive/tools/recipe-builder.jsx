@@ -10,9 +10,17 @@ related: [alert-builder, tenant-manager, threshold-calculator, simulate-preview]
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useDebouncedValue } from './_common/hooks/useDebouncedValue.js';
 import ENUMS from './_common/data/recipe-enums.json';
+import RECIPE_STATUS from './_common/data/recipe-status.json';
 
 /* ── i18n helper ───────────────────────────────────────────────────── */
 const t = window.__t || ((zh, en) => en);
+
+/* Recipe lifecycle status (ADR-024 §8), derived from shape.py RECIPE_STATUS via
+ * recipe-status.json. Unknown → active. This is ADVISORY UX only: the tenant-api
+ * writer is the eol-expansion authority (B2-wide). */
+function recipeStatus(r) {
+  return (RECIPE_STATUS.statuses && RECIPE_STATUS.statuses[r]) || 'active';
+}
 
 /* ── Custom Alert Recipe Builder (ADR-024 §S6b, #741) ─────────────────
  *
@@ -302,6 +310,12 @@ export default function RecipeBuilder(props) {
   const ready = allRequiredValid(recipe, f);
   const recipeObj = useMemo(() => (ready ? buildRecipeObject(recipe, f) : null), [ready, recipe, f]);
 
+  // Recipe lifecycle (ADR-024 §8): the existing instance's recipe (edit-flow) may
+  // stay selectable even if eol, so its params remain editable (B2-wide); a NEW
+  // alert can never pick an eol recipe.
+  const status = recipeStatus(recipe);
+  const existingRecipe = initialValue ? initialValue.recipe : null;
+
   const inputClass =
     'w-full px-3 py-2 text-sm border border-[color:var(--da-color-surface-border)] rounded-md '
     + 'bg-[color:var(--da-color-surface)] text-[color:var(--da-color-fg)] '
@@ -364,8 +378,27 @@ export default function RecipeBuilder(props) {
         <label className={labelClass}>{t('Recipe 類型', 'Recipe type')}</label>
         <select className={inputClass} value={recipe} aria-label="recipe" data-testid="field-recipe"
           onChange={(e) => setRecipe(e.target.value)}>
-          {ENUMS.recipe.map((r) => <option key={r} value={r}>{r}</option>)}
+          {ENUMS.recipe.map((r) => {
+            const st = recipeStatus(r);
+            // An eol recipe can't be picked for a NEW alert; an existing instance
+            // already on it keeps it selectable so its params stay editable (B2-wide).
+            const disabled = st === 'eol' && r !== existingRecipe;
+            const tag = st === 'deprecated' ? ' (deprecated)' : st === 'eol' ? ' (EOL — retired)' : '';
+            return <option key={r} value={r} disabled={disabled}>{r}{tag}</option>;
+          })}
         </select>
+        {status === 'deprecated' && (
+          <p className="text-xs mt-1 pl-2 border-l-2 border-[color:var(--da-color-warning)] text-[color:var(--da-color-warning)]" data-testid="recipe-deprecated">
+            {t('此 recipe 已標記 deprecated（已棄用），仍可使用，建議盡早改用支援中的 recipe。',
+               'This recipe is deprecated — it still works, but migrate to a supported recipe soon.')}
+          </p>
+        )}
+        {status === 'eol' && (
+          <p className="text-xs mt-1 pl-2 border-l-2 border-[color:var(--da-color-error)] text-[color:var(--da-color-error)]" data-testid="recipe-eol">
+            {t('此 recipe 已退役（EOL）：可儲存此既有告警的變更，但無法新增使用它的告警。請改用支援中的 recipe。',
+               'This recipe is end-of-life (EOL): you can save changes to this existing alert, but new alerts using it are rejected. Migrate to a supported recipe.')}
+          </p>
+        )}
       </div>
 
       <div className="mb-3">

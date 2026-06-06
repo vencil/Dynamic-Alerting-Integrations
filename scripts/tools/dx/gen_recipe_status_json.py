@@ -25,9 +25,14 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)
 from custom_alerts import shape as _shape  # noqa: E402
 
-# go:embed can only reference files in/below its own package dir, so the json
-# lives inside the customalerts Go package (not a shared top-level location).
-OUT_REL = "components/tenant-api/internal/customalerts/recipe-status.json"
+# Two committed derivations of the same SSOT (shape.py RECIPE_STATUS), one per
+# consumer tree (go:embed can't reference "..", and the portal build imports from
+# its own _common/data — so each consumer needs its copy in its own tree). Both
+# are byte-identical and drift-gated against the SSOT.
+OUT_RELS = (
+    "components/tenant-api/internal/customalerts/recipe-status.json",          # Go go:embed
+    "tools/portal/src/interactive/tools/_common/data/recipe-status.json",      # portal import
+)
 
 _HEADER = (
     "GENERATED from scripts/tools/dx/custom_alerts/shape.py RECIPE_STATUS by "
@@ -55,28 +60,33 @@ def render() -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Generate recipe-status.json from RECIPE_STATUS")
     parser.add_argument("--check", action="store_true",
-                        help="verify committed json matches the SSOT; exit 1 on drift")
-    parser.add_argument("--out", default=None, help=f"output path (default: {OUT_REL})")
+                        help="verify committed json copies match the SSOT; exit 1 on drift")
     args = parser.parse_args()
 
-    out_path = Path(args.out) if args.out else _repo_root() / OUT_REL
+    repo = _repo_root()
     generated = render()
+    targets = [(rel, repo / rel) for rel in OUT_RELS]
 
     if args.check:
-        if not out_path.exists():
-            print(f"DRIFT: {OUT_REL} is missing; run `make recipe-status-json`", file=sys.stderr)
+        drift = False
+        for rel, path in targets:
+            if not path.exists():
+                print(f"DRIFT: {rel} is missing; run `make recipe-status-json`", file=sys.stderr)
+                drift = True
+            elif path.read_text(encoding="utf-8") != generated:
+                print(f"DRIFT: {rel} is stale vs shape.py RECIPE_STATUS; "
+                      f"run `make recipe-status-json`", file=sys.stderr)
+                drift = True
+        if drift:
             return 1
-        committed = out_path.read_text(encoding="utf-8")
-        if committed != generated:
-            print(f"DRIFT: {OUT_REL} is stale vs shape.py RECIPE_STATUS; "
-                  f"run `make recipe-status-json`", file=sys.stderr)
-            return 1
-        print(f"OK: {OUT_REL} matches RECIPE_STATUS ({len(_shape.RECIPES)} recipes).")
+        print(f"OK: recipe-status.json ({len(OUT_RELS)} copies) match RECIPE_STATUS "
+              f"({len(_shape.RECIPES)} recipes).")
         return 0
 
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(generated, encoding="utf-8")
-    print(f"WROTE: {OUT_REL} ({len(_shape.RECIPES)} recipes).")
+    for rel, path in targets:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(generated, encoding="utf-8")
+        print(f"WROTE: {rel} ({len(_shape.RECIPES)} recipes).")
     return 0
 
 
