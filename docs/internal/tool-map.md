@@ -187,6 +187,7 @@ lang: zh
 | `check_repo_name.py` | Prevent wrong repository name in source files. |
 | `check_routing_profiles.py` | Lint routing profiles and domain policies (ADR-007). |
 | `check_rulepack_sync.py` | Rule-pack copy drift guard (ADR-024 PR3-pre). |
+| `check_single_writer_invariant.py` | Single-writer invariant lint for the tenant-api write plane (ADR-023). |
 | `check_skip_a11y_justification.py` | Require ticket-justification for `skipA11y: true` in E2E specs (testing-playbook §LL §5, TD-039). |
 | `check_structure.py` | Project structure enforcement. |
 | `check_subprocess_timeout.py` | flag subprocess calls without explicit timeout. |

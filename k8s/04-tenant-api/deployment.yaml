@@ -18,7 +18,15 @@ metadata:
     app.kubernetes.io/part-of: dynamic-alerting
     app.kubernetes.io/version: "2.4.0"
 spec:
+  # ADR-023 single-writer invariant: replicaCount MUST stay 1 (per-process write
+  # lock + in-memory PR tracker do not coordinate across pods).
   replicas: 1
+  # Recreate (not the default RollingUpdate): a rollout must NOT surge a second
+  # Ready pod that overlaps the old one as a phantom writer pushing to the same
+  # git plane (#677 / TRK-324). Mirrors helm/tenant-api/templates/deployment.yaml;
+  # kept in sync by check_single_writer_invariant.py (ADR-023 layer-2 lint).
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: tenant-api
