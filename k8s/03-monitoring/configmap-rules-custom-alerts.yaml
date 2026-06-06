@@ -38,7 +38,12 @@ data:
     n      unless on(tenant, version)\\n        custom:threshold:threshold__mysql_global_status_threads_connected__gt__w5m__for1m{severity=\\\
     \"warning\\\"}\\n    )\\n    > on(tenant) group_left(name, mode)\\n      custom:threshold:threshold__mysql_global_status_threads_connected__gt__w5m__for1m{version=\\\
     \"default\\\", severity=\\\"warning\\\"}\\n  )\\n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\
-    \"maintenance\\\"} == 1)\"\n"
+    \"maintenance\\\"} == 1)\"\n- name: custom-alerts-info\n  interval: 1m\n  rules:\n\
+    \  - record: custom_recipe_info\n    expr: vector(1)\n    labels:\n      recipe_id:\
+    \ rate__mysql_global_status_slow_queries__gt__w5m__for1m\n      recipe: rate\n\
+    \      status: active\n  - record: custom_recipe_info\n    expr: vector(1)\n \
+    \   labels:\n      recipe_id: threshold__mysql_global_status_threads_connected__gt__w5m__for1m\n\
+    \      recipe: threshold\n      status: active\n"
   custom-alerts-alert.yml: "groups:\n- name: custom-alerts\n  rules:\n  - alert: CustomRecipeSilent\n\
     \    expr: max by(tenant, name) (user_threshold{component=\"custom\", mode=\"\
     silent\"})\n    labels:\n      severity: none\n      tenant: '{{ $labels.tenant\
