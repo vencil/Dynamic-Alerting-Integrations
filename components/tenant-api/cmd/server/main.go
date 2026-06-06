@@ -561,6 +561,15 @@ func main() {
 	taskMgr.Close()
 	close(stopCh)
 
+	// #675: gracefully tear down SSE before srv.Shutdown. SSE streams are never
+	// idle, so without this srv.Shutdown blocks the full 15s grace period waiting
+	// for them to drain, then severs them abruptly. Hub.Shutdown broadcasts a
+	// "server_shutdown" hint (so clients back off with jitter instead of
+	// stampeding the new pod) and closes the streams, letting Shutdown finish in
+	// milliseconds. 2s reconnect hint: long enough to cover a typical new-pod
+	// readiness gap, short enough not to feel like an outage to a watching client.
+	eventHub.Shutdown(2 * time.Second)
+
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	if err := srv.Shutdown(ctx); err != nil {

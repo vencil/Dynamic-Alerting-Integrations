@@ -3,6 +3,7 @@ package ws
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
@@ -353,6 +354,134 @@ func TestSSEStreamingFormat(t *testing.T) {
 	// Should have at least 2 events: connected + broadcast
 	if eventCount < 2 {
 		t.Errorf("expected at least 2 events, parsed %d", eventCount)
+	}
+}
+
+func TestShutdownBroadcastsThenCloses(t *testing.T) {
+	t.Parallel()
+	h := NewHub()
+	ch := h.Subscribe()
+
+	h.Shutdown(2 * time.Second)
+
+	// The buffered server_shutdown event must be delivered BEFORE the close is
+	// observed (Go drains buffered values before a closed receive yields ok=false).
+	evt, ok := <-ch
+	if !ok {
+		t.Fatal("channel closed without delivering the server_shutdown event first")
+	}
+	if evt.Type != "server_shutdown" {
+		t.Errorf("expected type server_shutdown, got %q", evt.Type)
+	}
+	if evt.ReconnectDelayMs != 2000 {
+		t.Errorf("expected reconnect_delay_ms 2000, got %d", evt.ReconnectDelayMs)
+	}
+
+	// The next receive must observe the close.
+	if _, ok := <-ch; ok {
+		t.Error("expected channel to be closed after the shutdown event")
+	}
+
+	if n := h.ClientCount(); n != 0 {
+		t.Errorf("expected 0 clients after Shutdown, got %d", n)
+	}
+}
+
+// TestShutdownUnblocksServeHTTP is the load-bearing #675 test: a live SSE
+// streaming goroutine must RETURN promptly after Hub.Shutdown. Without it,
+// http.Server.Shutdown would block on the never-idle stream for the full grace
+// period and then sever it abruptly.
+func TestShutdownUnblocksServeHTTP(t *testing.T) {
+	t.Parallel()
+	h := NewHub()
+
+	req := httptest.NewRequest("GET", "/api/v1/events", nil)
+	w := httptest.NewRecorder()
+
+	done := make(chan struct{})
+	go func() {
+		h.ServeHTTP(w, req)
+		close(done)
+	}()
+
+	// Wait until the handler subscribed (no time.Sleep — see TRK-219).
+	waitForClientCount(t, h, 1, time.Second)
+
+	h.Shutdown(2 * time.Second)
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("ServeHTTP did not return after Hub.Shutdown — SSE stream would hang srv.Shutdown")
+	}
+
+	// The client must have been told to reconnect before the disconnect.
+	foundShutdown := false
+	for _, line := range strings.Split(w.Body.String(), "\n") {
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		var evt Event
+		if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &evt); err != nil {
+			continue
+		}
+		if evt.Type == "server_shutdown" {
+			foundShutdown = true
+			if evt.ReconnectDelayMs != 2000 {
+				t.Errorf("expected reconnect_delay_ms 2000, got %d", evt.ReconnectDelayMs)
+			}
+		}
+	}
+	if !foundShutdown {
+		t.Error("client did not receive server_shutdown event before disconnect")
+	}
+}
+
+func TestShutdownNoClientsIsNoop(t *testing.T) {
+	t.Parallel()
+	h := NewHub()
+	h.Shutdown(2 * time.Second) // must not panic with zero clients
+	if n := h.ClientCount(); n != 0 {
+		t.Errorf("expected 0 clients, got %d", n)
+	}
+}
+
+// TestSubscribeRefusedAfterShutdown guards the late-subscriber race: once
+// Shutdown latches, a request reaching ServeHTTP (it runs before srv.Shutdown)
+// must NOT open a fresh stream — otherwise it misses the server_shutdown hint
+// and keeps srv.Shutdown waiting, recreating the stall this path removes.
+func TestSubscribeRefusedAfterShutdown(t *testing.T) {
+	t.Parallel()
+	h := NewHub()
+
+	h.Shutdown(2 * time.Second)
+
+	// Subscribe is refused (nil) and does not re-populate the client set.
+	if ch := h.Subscribe(); ch != nil {
+		t.Error("Subscribe returned a channel after Shutdown; expected nil")
+	}
+	if n := h.ClientCount(); n != 0 {
+		t.Errorf("expected 0 clients after a refused Subscribe, got %d", n)
+	}
+
+	// ServeHTTP refuses with 503 and returns promptly (no stream opened).
+	req := httptest.NewRequest("GET", "/api/v1/events", nil)
+	w := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		h.ServeHTTP(w, req)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("ServeHTTP did not return after shutdown — it should 503 immediately")
+	}
+	if w.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected 503 after shutdown, got %d", w.Code)
+	}
+	if n := h.ClientCount(); n != 0 {
+		t.Errorf("ServeHTTP opened a stream after shutdown; clients=%d", n)
 	}
 }
 
