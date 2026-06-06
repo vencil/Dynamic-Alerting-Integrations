@@ -3,6 +3,7 @@
 # scripts/tools/dx/custom_alerts/recipes.py (kept in sync; drift-guarded by
 # tests/dx/test_compile_custom_alerts.py).
 recipe: threshold
+status: active   # lifecycle: active|deprecated|eol (ADR-024 #6; SSOT = shape.py RECIPE_STATUS)
 summary: A gauge metric crosses a threshold value.
 summary_zh: 一個 gauge 指標越過閾值。
 params:

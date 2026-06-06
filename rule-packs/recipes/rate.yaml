@@ -1,5 +1,6 @@
 # Recipe: rate — platform-authored (ADR-024 Capability B, #741).
 recipe: rate
+status: active   # lifecycle: active|deprecated|eol (ADR-024 #6; SSOT = shape.py RECIPE_STATUS)
 summary: The per-second rate of a counter crosses a threshold.
 summary_zh: 一個 counter 的每秒增率越過閾值。
 params:

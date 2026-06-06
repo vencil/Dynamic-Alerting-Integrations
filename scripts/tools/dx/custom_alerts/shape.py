@@ -59,6 +59,32 @@ ALLOWED_HORIZON = frozenset({"1h", "2h", "4h", "12h", "24h", "48h"})
 
 RECIPES = ("threshold", "rate", "ratio", "absence", "p99_latency", "forecast")
 
+# Recipe lifecycle status (ADR-024 §Custom Alerts cost/governance, #741 item #6).
+# A recipe is platform-authored; its status governs whether tenants may keep
+# declaring it. This is RECIPE versioning — distinct from capability-A APP
+# versioning (the `version` label).
+#   active     — normal, no restriction.
+#   deprecated — still compiles; the compiler emits a non-fatal notice and the
+#                portal shows a warning. Signals "migrate away, still works".
+#   eol        — existing declarations KEEP compiling (no silent alert loss), but
+#                tenant-api preflight rejects any PUT that uses the recipe (forces
+#                migration on next edit). SRE clears by flipping status back.
+# RECIPE_STATUS is the executable SSOT; the human governance contracts
+# rule-packs/recipes/*.yaml mirror a `status:` field (drift-guarded by
+# tests/dx/test_recipe_lifecycle.py). Default every shipped recipe to active.
+RECIPE_LIFECYCLE = frozenset({"active", "deprecated", "eol"})
+RECIPE_STATUS = {r: "active" for r in RECIPES}
+
+
+def recipe_status(recipe: str) -> str:
+    """Lifecycle status of a recipe (one of RECIPE_LIFECYCLE).
+
+    Never raises: an unknown recipe reports "active" (recipe_id() is the
+    authority that rejects unknown recipes, so callers can query freely
+    without double-validating).
+    """
+    return RECIPE_STATUS.get(recipe, "active")
+
 
 class RecipeError(ValueError):
     """A recipe instance is structurally invalid (rejected at compile time)."""
