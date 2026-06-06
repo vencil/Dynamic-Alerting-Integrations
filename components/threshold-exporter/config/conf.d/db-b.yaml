@@ -19,3 +19,26 @@ tenants:
       group_by: ["alertname", "severity"]
       group_wait: "30s"
       repeat_interval: "4h"
+    # v2.9.0 Custom Alerts (ADR-024 能力 B, #741): tenant-authored declarative
+    # alerts via platform recipes — never write PromQL. The compiler vectorizes
+    # these into rule-pack-custom-alerts.yaml; the exporter emits the matching
+    # user_threshold{component="custom",...} series so the rules join real data.
+    _custom_alerts:
+      # threshold (page): MariaDB connection count climbing toward the cap.
+      - recipe: threshold
+        name: mariadb_conns_high
+        metric: mysql_global_status_threads_connected
+        op: ">"
+        window: 5m
+        threshold: "150:warning"
+        mode: page
+      # rate (silent → dashboard-only): slow-query rate watch. Visible via the
+      # ALERTS series for Grafana, but the CustomRecipeSilent sentinel + inhibit
+      # (S7/S8) suppress its notification — no page. Demonstrates silent mode.
+      - recipe: rate
+        name: mariadb_slow_query_rate
+        metric: mysql_global_status_slow_queries
+        op: ">"
+        window: 5m
+        threshold: "1:warning"
+        mode: silent

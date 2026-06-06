@@ -123,9 +123,16 @@ def count_rule_packs() -> Dict[str, object]:
     """
     packs = {}
 
+    # #741 S3b: custom-alerts is a TENANT-authored deployed pack, not platform
+    # coverage — exclude it from the platform "Rule Packs / Alerts" counts that
+    # gate the docs (mirrors generate_rule_pack_stats.py + PACK_ORDER).
+    _EXCLUDE = {"custom-alerts"}
+
     # rule-packs/ directory (recording rules + operational alerts)
     for f in sorted(RULE_PACKS_DIR.glob("rule-pack-*.yaml")):
         name = f.stem.replace("rule-pack-", "")
+        if name in _EXCLUDE:
+            continue
         data = yaml.safe_load(f.read_text(encoding="utf-8"))
         rec = alert = 0
         if data and "groups" in data:
@@ -140,6 +147,8 @@ def count_rule_packs() -> Dict[str, object]:
     # k8s ConfigMaps (may have alert rules not in rule-packs/ source)
     for f in sorted(K8S_RULES_DIR.glob("configmap-rules-*.yaml")):
         name = f.stem.replace("configmap-rules-", "")
+        if name in _EXCLUDE:
+            continue
         data = yaml.safe_load(f.read_text(encoding="utf-8"))
         rec = alert = 0
         if data and data.get("kind") == "ConfigMap":

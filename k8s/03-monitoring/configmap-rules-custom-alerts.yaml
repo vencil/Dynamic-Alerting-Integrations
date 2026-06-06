@@ -1,0 +1,76 @@
+# ============================================================
+# custom-alerts Rule Pack — Recording & Alert Rules (ConfigMap)
+# GENERATED from rule-packs/rule-pack-custom-alerts.yaml by
+# scripts/tools/dx/generate_rulepack_configmaps.py — DO NOT EDIT.
+# Run `make rulepack-configmaps` after editing the rule pack.
+# ============================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-rules-custom-alerts
+  namespace: monitoring
+  labels:
+    app: prometheus
+    rule-pack: custom-alerts
+data:
+  custom-alerts-recording.yml: "groups:\n- name: custom-alerts-normalization\n  interval:\
+    \ 15s\n  rules:\n  - record: custom:threshold:rate__mysql_global_status_slow_queries__gt__w5m__for1m\n\
+    \    expr: label_replace(max by(tenant, version, severity, name, mode) (user_threshold{component=\"\
+    custom\", metric=\"mysql_global_status_slow_queries\", recipe_id=\"rate__mysql_global_status_slow_queries__gt__w5m__for1m\"\
+    }), \"version\", \"default\", \"version\", \"^$\")\n  - record: custom:metric:rate__mysql_global_status_slow_queries__gt__w5m__for1m\n\
+    \    expr: label_replace(sum by(tenant, version) (rate(mysql_global_status_slow_queries[5m])),\
+    \ \"version\", \"default\", \"version\", \"^$\")\n  - record: custom:rate__mysql_global_status_slow_queries__gt__w5m__for1m:warning:core\n\
+    \    expr: \"(\\n  (\\n    custom:metric:rate__mysql_global_status_slow_queries__gt__w5m__for1m\\\
+    n    > on(tenant, version) group_left(name, mode)\\n      custom:threshold:rate__mysql_global_status_slow_queries__gt__w5m__for1m{severity=\\\
+    \"warning\\\"}\\n  )\\n  or\\n  (\\n    (\\n      custom:metric:rate__mysql_global_status_slow_queries__gt__w5m__for1m\\\
+    n      unless on(tenant, version)\\n        custom:threshold:rate__mysql_global_status_slow_queries__gt__w5m__for1m{severity=\\\
+    \"warning\\\"}\\n    )\\n    > on(tenant) group_left(name, mode)\\n      custom:threshold:rate__mysql_global_status_slow_queries__gt__w5m__for1m{version=\\\
+    \"default\\\", severity=\\\"warning\\\"}\\n  )\\n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\
+    \"maintenance\\\"} == 1)\"\n  - record: custom:threshold:threshold__mysql_global_status_threads_connected__gt__w5m__for1m\n\
+    \    expr: label_replace(max by(tenant, version, severity, name, mode) (user_threshold{component=\"\
+    custom\", metric=\"mysql_global_status_threads_connected\", recipe_id=\"threshold__mysql_global_status_threads_connected__gt__w5m__for1m\"\
+    }), \"version\", \"default\", \"version\", \"^$\")\n  - record: custom:metric:threshold__mysql_global_status_threads_connected__gt__w5m__for1m\n\
+    \    expr: label_replace(max by(tenant, version) (mysql_global_status_threads_connected),\
+    \ \"version\", \"default\", \"version\", \"^$\")\n  - record: custom:threshold__mysql_global_status_threads_connected__gt__w5m__for1m:warning:core\n\
+    \    expr: \"(\\n  (\\n    custom:metric:threshold__mysql_global_status_threads_connected__gt__w5m__for1m\\\
+    n    > on(tenant, version) group_left(name, mode)\\n      custom:threshold:threshold__mysql_global_status_threads_connected__gt__w5m__for1m{severity=\\\
+    \"warning\\\"}\\n  )\\n  or\\n  (\\n    (\\n      custom:metric:threshold__mysql_global_status_threads_connected__gt__w5m__for1m\\\
+    n      unless on(tenant, version)\\n        custom:threshold:threshold__mysql_global_status_threads_connected__gt__w5m__for1m{severity=\\\
+    \"warning\\\"}\\n    )\\n    > on(tenant) group_left(name, mode)\\n      custom:threshold:threshold__mysql_global_status_threads_connected__gt__w5m__for1m{version=\\\
+    \"default\\\", severity=\\\"warning\\\"}\\n  )\\n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\
+    \"maintenance\\\"} == 1)\"\n"
+  custom-alerts-alert.yml: "groups:\n- name: custom-alerts\n  rules:\n  - alert: CustomRecipeSilent\n\
+    \    expr: max by(tenant, name) (user_threshold{component=\"custom\", mode=\"\
+    silent\"})\n    labels:\n      severity: none\n      tenant: '{{ $labels.tenant\
+    \ }}'\n      name: '{{ $labels.name }}'\n    annotations:\n      summary: Custom\
+    \ recipe [{{ $labels.name }}] is silent for {{ $labels.tenant }}\n      summary_zh:\
+    \ '{{ $labels.tenant }} 的自訂告警 [{{ $labels.name }}] 處於靜默模式'\n      description:\
+    \ The recipe is still evaluated and visible as an ALERTS series (dashboard-only);\
+    \ its notifications are suppressed via inhibit, not deleted.\n      description_zh:\
+    \ 此自訂告警仍會評估並可於監控面板（ALERTS series）查看，通知經 inhibit 抑制而非刪除。\n  - alert: Custom_rate__mysql_global_status_slow_queries__gt__w5m__for1m\n\
+    \    expr: \"(\\n  custom:rate__mysql_global_status_slow_queries__gt__w5m__for1m:warning:core\\\
+    n  * on(tenant) group_left(runbook_url, owner, tier)\\n    tenant_metadata_info\\\
+    n)\\nor\\n(\\n  custom:rate__mysql_global_status_slow_queries__gt__w5m__for1m:warning:core\\\
+    n  unless on(tenant) tenant_metadata_info\\n)\"\n    for: 1m\n    labels:\n  \
+    \    severity: warning\n      tenant: '{{ $labels.tenant }}'\n      recipe: rate\n\
+    \      component: custom\n      mode: '{{ $labels.mode }}'\n    annotations:\n\
+    \      summary: Custom alert [{{ $labels.name }}] for {{ $labels.tenant }}\n \
+    \     summary_zh: '{{ $labels.tenant }} 的自訂告警 [{{ $labels.name }}] 觸發'\n     \
+    \ description: 'rate on mysql_global_status_slow_queries: value {{ $value | printf\
+    \ \"%.2f\" }} crossed the configured threshold'\n      description_zh: 'mysql_global_status_slow_queries\
+    \ 的 rate: 值 {{ $value | printf \"%.2f\" }} 已越過設定閾值'\n      runbook_url: '{{ $labels.runbook_url\
+    \ }}'\n      owner: '{{ $labels.owner }}'\n      tier: '{{ $labels.tier }}'\n\
+    \  - alert: Custom_threshold__mysql_global_status_threads_connected__gt__w5m__for1m\n\
+    \    expr: \"(\\n  custom:threshold__mysql_global_status_threads_connected__gt__w5m__for1m:warning:core\\\
+    n  * on(tenant) group_left(runbook_url, owner, tier)\\n    tenant_metadata_info\\\
+    n)\\nor\\n(\\n  custom:threshold__mysql_global_status_threads_connected__gt__w5m__for1m:warning:core\\\
+    n  unless on(tenant) tenant_metadata_info\\n)\"\n    for: 1m\n    labels:\n  \
+    \    severity: warning\n      tenant: '{{ $labels.tenant }}'\n      recipe: threshold\n\
+    \      component: custom\n      mode: '{{ $labels.mode }}'\n    annotations:\n\
+    \      summary: Custom alert [{{ $labels.name }}] for {{ $labels.tenant }}\n \
+    \     summary_zh: '{{ $labels.tenant }} 的自訂告警 [{{ $labels.name }}] 觸發'\n     \
+    \ description: 'threshold on mysql_global_status_threads_connected: value {{ $value\
+    \ | printf \"%.2f\" }} crossed the configured threshold'\n      description_zh:\
+    \ 'mysql_global_status_threads_connected 的 threshold: 值 {{ $value | printf \"\
+    %.2f\" }} 已越過設定閾值'\n      runbook_url: '{{ $labels.runbook_url }}'\n      owner:\
+    \ '{{ $labels.owner }}'\n      tier: '{{ $labels.tier }}'\n"

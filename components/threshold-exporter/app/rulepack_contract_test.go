@@ -175,7 +175,7 @@ func userThresholdSelectors(t *testing.T, where, expr string) []*promqlparser.Ve
 // round-trip check. ok=false means a structural violation was already reported.
 func assertComponentMetric(t *testing.T, where string, vs *promqlparser.VectorSelector) (component, metric string, ok bool) {
 	t.Helper()
-	var hasComp, hasMetric bool
+	var hasComp, hasMetric, hasSilentMode bool
 	ok = true
 	for _, m := range vs.LabelMatchers {
 		switch m.Name {
@@ -193,13 +193,28 @@ func assertComponentMetric(t *testing.T, where string, vs *promqlparser.VectorSe
 				t.Errorf("%s: metric matcher must be exact (=), got %q in %s", where, m.Type, vs.String())
 				ok = false
 			}
+		case "mode":
+			// only the EXACT mode="silent" matcher identifies the sentinel; a
+			// mode="page" or regex-mode selector must NOT be exempted from metric.
+			if m.Type == labels.MatchEqual && m.Value == "silent" {
+				hasSilentMode = true
+			}
 		}
 	}
 	if !hasComp {
 		t.Errorf("%s: user_threshold selector is missing a `component` matcher (the #731 bug shape): %s", where, vs.String())
 		ok = false
 	}
-	if !hasMetric {
+	// Custom Alerts (#741 S7/S8): the SINGLE global `CustomRecipeSilent` sentinel
+	// selects `user_threshold{component="custom", mode="silent"}` to drive an
+	// inhibit — it INTENTIONALLY spans every silent recipe's metric, so a `metric`
+	// matcher would be wrong. Exempt ONLY that exact shape (custom + EXACT
+	// mode="silent", no metric) from the metric requirement. Every other selector —
+	// all custom threshold-records (which carry metric), and any non-silent or
+	// regex-mode custom selector — still requires it, so platform packs and the
+	// #731 empty-set guard are unaffected.
+	sentinelShape := component == "custom" && hasSilentMode && !hasMetric
+	if !hasMetric && !sentinelShape {
 		t.Errorf("%s: user_threshold selector is missing a `metric` matcher: %s", where, vs.String())
 		ok = false
 	}

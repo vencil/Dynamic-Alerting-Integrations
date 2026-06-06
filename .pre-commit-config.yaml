@@ -779,6 +779,18 @@ repos:
         # `python scripts/tools/ops/operator_generate.py --components rules
         # --output-dir operator-manifests/`, then commit all three copies.
 
+      - id: custom-alerts-compile-check
+        name: "#741 S3b: rule-pack-custom-alerts.yaml must match the live conf.d _custom_alerts source"
+        entry: python3 -X utf8 scripts/tools/dx/compile_custom_alerts.py --check --config-dir components/threshold-exporter/config/conf.d
+        language: python
+        additional_dependencies: ['pyyaml']
+        pass_filenames: false
+        files: ^(rule-packs/rule-pack-custom-alerts\.yaml|components/threshold-exporter/config/conf\.d/.*\.yaml)$
+        # The deployed custom-alert pack is COMPILED from the live conf.d
+        # _custom_alerts (NOT hand-edited). Edit a tenant's _custom_alerts but
+        # forget to recompile → this fails locally before CI. Fix:
+        # `make custom-alerts-compile`, then commit pack + configmap + operator.
+
       - id: forbid-legacy-mariadb-threshold-name
         name: "#731: forbid legacy bare mariadb threshold recording-rule names (use mysql_ prefix)"
         entry: 'tenant:alert_threshold:(connections|cpu)(_critical)?\b'

@@ -204,6 +204,13 @@ jobs:
       - name: "Rule-pack 3-copy sync incl. operator (HARD gate — ADR-024 PR3-pre)"
         run: python scripts/tools/lint/check_rulepack_sync.py --ci
 
+      # #741 S3b: the deployed custom-alert pack is COMPILED from the live conf.d
+      # _custom_alerts (not hand-edited). This is the source→pack drift gate that
+      # sits upstream of the configmap/operator copies above — edit a tenant's
+      # _custom_alerts → `make custom-alerts-compile` → commit pack+configmap+operator.
+      - name: "Custom-alert pack matches live conf.d source (HARD gate — #741 S3b)"
+        run: python scripts/tools/dx/compile_custom_alerts.py --check --config-dir components/threshold-exporter/config/conf.d
+
   iac-helm-sast:
     # Container/k8s SAST Layers 2 + 4 (#448 / TRK-312 + TRK-314).
     #   L2 (Helm template): renders 9 charts via helm + kube-linter (~1-2 min).
