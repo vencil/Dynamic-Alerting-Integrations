@@ -152,26 +152,10 @@ func loadDirWithMetrics(dir string, metrics *configMetrics, logger *log.Logger) 
 			continue
 		}
 
-		isDefaultsFile := strings.HasPrefix(name, "_")
-		isProfilesFile := name == "_profiles.yaml" || name == "_profiles.yml"
-
-		// Boundary enforcement: warn if tenant file contains state_filters, defaults, or profiles
-		if !isDefaultsFile {
-			if len(partial.StateFilters) > 0 {
-				logger.Printf("WARN: state_filters found in %s — should only be in _defaults.yaml, ignoring", name)
-				partial.StateFilters = nil
-			}
-			if len(partial.Defaults) > 0 {
-				logger.Printf("WARN: defaults found in %s — should only be in _defaults.yaml, ignoring", name)
-				partial.Defaults = nil
-			}
-		}
-		if !isProfilesFile && !isDefaultsFile {
-			if len(partial.Profiles) > 0 {
-				logger.Printf("WARN: profiles found in %s — should only be in _profiles.yaml, ignoring", name)
-				partial.Profiles = nil
-			}
-		}
+		// Boundary enforcement: warn if tenant file contains state_filters,
+		// defaults, or profiles (shared with the incremental path via
+		// applyBoundaryRules — keep the two call sites byte-identical).
+		applyBoundaryRules(name, &partial, logger)
 
 		// Merge defaults
 		for k, v := range partial.Defaults {
