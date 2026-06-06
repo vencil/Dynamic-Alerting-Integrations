@@ -745,7 +745,7 @@ repos:
         language: python
         additional_dependencies: ['pyyaml']
         pass_filenames: false
-        files: ^(helm/tenant-api/(values\.yaml|templates/deployment\.yaml)|k8s/04-tenant-api/deployment\.yaml|scripts/tools/lint/check_single_writer_invariant\.py)$
+        files: ^(helm/tenant-api/(values\.yaml|templates/.*\.(ya?ml|tpl))|k8s/04-tenant-api/.*\.ya?ml|scripts/tools/lint/check_single_writer_invariant\.py)$
         # FATAL: the write plane (internal/gitops/Writer) is a single writer —
         # a per-process lock + in-memory PR tracker that do NOT coordinate across
         # pods. replicaCount>1 OR a missing `strategy: Recreate` reintroduces the
