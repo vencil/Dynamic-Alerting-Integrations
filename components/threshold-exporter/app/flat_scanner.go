@@ -157,35 +157,9 @@ func loadDirWithMetrics(dir string, metrics *configMetrics, logger *log.Logger) 
 		// applyBoundaryRules — keep the two call sites byte-identical).
 		applyBoundaryRules(name, &partial, logger)
 
-		// Merge defaults
-		for k, v := range partial.Defaults {
-			merged.Defaults[k] = v
-		}
-
-		// Merge state_filters
-		for k, v := range partial.StateFilters {
-			merged.StateFilters[k] = v
-		}
-
-		// Merge profiles (v1.12.0)
-		for profileName, profileValues := range partial.Profiles {
-			if merged.Profiles[profileName] == nil {
-				merged.Profiles[profileName] = make(map[string]ScheduledValue)
-			}
-			for k, v := range profileValues {
-				merged.Profiles[profileName][k] = v
-			}
-		}
-
-		// Merge tenants (deep merge per tenant)
-		for tenant, overrides := range partial.Tenants {
-			if merged.Tenants[tenant] == nil {
-				merged.Tenants[tenant] = make(map[string]ScheduledValue)
-			}
-			for k, v := range overrides {
-				merged.Tenants[tenant][k] = v
-			}
-		}
+		// Deep-merge this file's partial into the running result (shared
+		// flat-mode merge semantics — see mergePartialInto).
+		mergePartialInto(&merged, partial)
 	}
 
 	hash := fmt.Sprintf("%x", hasher.Sum(nil))
@@ -344,33 +318,41 @@ func mergePartialConfigs(configs map[string]ThresholdConfig) ThresholdConfig {
 	sort.Strings(names)
 
 	for _, name := range names {
-		partial := configs[name]
-
-		for k, v := range partial.Defaults {
-			merged.Defaults[k] = v
-		}
-		for k, v := range partial.StateFilters {
-			merged.StateFilters[k] = v
-		}
-		for profileName, profileValues := range partial.Profiles {
-			if merged.Profiles[profileName] == nil {
-				merged.Profiles[profileName] = make(map[string]ScheduledValue)
-			}
-			for k, v := range profileValues {
-				merged.Profiles[profileName][k] = v
-			}
-		}
-		for tenant, overrides := range partial.Tenants {
-			if merged.Tenants[tenant] == nil {
-				merged.Tenants[tenant] = make(map[string]ScheduledValue, len(overrides))
-			}
-			for k, v := range overrides {
-				merged.Tenants[tenant][k] = v
-			}
-		}
+		mergePartialInto(&merged, configs[name])
 	}
 
 	return merged
+}
+
+// mergePartialInto deep-merges one partial config into merged using the
+// flat-mode merge semantics shared by loadDirWithMetrics and
+// mergePartialConfigs: defaults and state_filters overwrite by key; profiles
+// and tenants deep-merge per name (later values win). Keeping this in one place
+// guarantees the eager (loadDir) and incremental (mergePartialConfigs) paths
+// can never drift in merge precedence.
+func mergePartialInto(merged *ThresholdConfig, partial ThresholdConfig) {
+	for k, v := range partial.Defaults {
+		merged.Defaults[k] = v
+	}
+	for k, v := range partial.StateFilters {
+		merged.StateFilters[k] = v
+	}
+	for profileName, profileValues := range partial.Profiles {
+		if merged.Profiles[profileName] == nil {
+			merged.Profiles[profileName] = make(map[string]ScheduledValue)
+		}
+		for k, v := range profileValues {
+			merged.Profiles[profileName][k] = v
+		}
+	}
+	for tenant, overrides := range partial.Tenants {
+		if merged.Tenants[tenant] == nil {
+			merged.Tenants[tenant] = make(map[string]ScheduledValue, len(overrides))
+		}
+		for k, v := range overrides {
+			merged.Tenants[tenant][k] = v
+		}
+	}
 }
 
 // WatchLoop periodically checks for config changes and reloads.
