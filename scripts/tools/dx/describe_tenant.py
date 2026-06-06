@@ -36,6 +36,18 @@ try:
 except ImportError:
     yaml = None  # fallback to simple parser
 
+# #772: `_custom_alerts` does NOT follow generic array-REPLACE (ADR-017) — ADR-024
+# defines it as UNION across the inheritance chain (a tenant's own list ADDS to
+# inherited platform/domain policy recipes; a tenant must NOT silently wipe a
+# platform policy). deep_merge alone (REPLACE) would drop the inherited policy
+# from an override tenant's effective view, blinding blast_radius. So we delegate
+# THIS one field to the compiler's own inheritance resolver (`collect_instances`)
+# — the single source of truth — instead of forking the union logic here.
+try:
+    from custom_alerts import loader as _ca_loader  # noqa: E402
+except Exception:  # pragma: no cover - compiler package unavailable → graceful fallback
+    _ca_loader = None
+
 # ---------------------------------------------------------------------------
 # Deep merge logic (ADR-017 semantics)
 # ---------------------------------------------------------------------------
@@ -101,7 +113,37 @@ class ConfDScanner:
         self.tenant_files: dict[str, Path] = {}       # tenant_id → file path
         self.defaults_chain: dict[str, list[Path]] = {}  # tenant_id → [L0, L1, ...] defaults paths
         self.defaults_data: dict[str, dict] = {}      # defaults path str → parsed defaults dict
+        # #772: tenant_id → [(recipe, origin, is_own), ...] — the ADR-024 UNION
+        # resolution of `_custom_alerts` from the compiler's own walker. Computed
+        # ONCE (collect_instances scans the whole tree) so effective_config() is a
+        # cheap dict lookup, not an O(N²) re-walk under --all.
+        self._custom_alerts_resolved: dict[str, list] = {}
+        # Set when the compiler resolver raised — output is degraded to the
+        # deep_merge (REPLACE) fallback for `_custom_alerts`; callers can detect it.
+        self.custom_alerts_resolution_error: str | None = None
         self._scan()
+        self._resolve_custom_alerts()
+
+    def _resolve_custom_alerts(self) -> None:
+        """Build the per-tenant `_custom_alerts` UNION resolution via the compiler's
+        SSOT walker (#772). No-op if the compiler package is unavailable — then
+        effective_config() falls back to the (REPLACE) deep_merge result."""
+        if _ca_loader is None:
+            return
+        try:
+            for tenant, recipe, origin, is_own in _ca_loader.collect_instances(self.conf_d):
+                self._custom_alerts_resolved.setdefault(tenant, []).append(
+                    (recipe, origin, is_own))
+        except Exception as e:  # pragma: no cover
+            # Do NOT silently swallow: the `_custom_alerts` view degrades to the
+            # deep_merge REPLACE fallback (own-only for override tenants), which is
+            # the exact #772 blind spot — so warn loudly + record a marker.
+            self._custom_alerts_resolved = {}
+            self.custom_alerts_resolution_error = str(e)
+            print(f"WARN: _custom_alerts inheritance resolution failed "
+                  f"({_ca_loader.__name__}.collect_instances: {e}); "
+                  f"falling back to deep_merge REPLACE — override tenants may show "
+                  f"only own recipes (#772).", file=sys.stderr)
 
     def _scan(self) -> None:
         """Recursively scan conf.d/ and build tenant + defaults maps."""
@@ -161,8 +203,15 @@ class ConfDScanner:
         chain.reverse()  # L0 (root) first, L3 (nearest) last
         return chain
 
-    def effective_config(self, tenant_id: str) -> dict:
-        """Compute effective config by merging defaults chain + tenant config."""
+    def effective_config(self, tenant_id: str, resolve_custom_alerts: bool = True) -> dict:
+        """Compute effective config by merging defaults chain + tenant config.
+
+        `resolve_custom_alerts` (#772): when True (default, the normal/blast_radius
+        view) `_custom_alerts` is the ADR-024 compiler UNION. Set False for the
+        `--what-if` simulation, whose simulated side is built from an in-memory
+        modified chain that the disk-based compiler walker cannot resolve — both
+        sides then use the same raw deep_merge so the diff is apples-to-apples
+        (the union view stays the job of normal mode / blast_radius)."""
         if tenant_id not in self.tenants:
             raise KeyError(f"Tenant '{tenant_id}' not found in {self.conf_d}")
 
@@ -176,6 +225,31 @@ class ConfDScanner:
         # Apply tenant config (highest priority)
         tenant_raw = self.tenants[tenant_id]
         merged = deep_merge(merged, tenant_raw)
+
+        # #772: when the compiler resolved any `_custom_alerts` for this tenant,
+        # OVERWRITE deep_merge's array-REPLACE result with the ADR-024 UNION (own +
+        # inherited) — REPLACE would have dropped inherited platform/domain policy
+        # recipes from an override tenant, blinding blast_radius to the highest-
+        # blast-radius change class. This field FOLLOWS UNION INHERITANCE, unlike
+        # every other array (which stays REPLACE); `_custom_alerts_resolution` makes
+        # that explicit per-entry so the effective config is honest, not silently
+        # inconsistent.
+        #
+        # We deliberately do NOT remove a deep_merge-derived `_custom_alerts` when
+        # the resolver returned nothing: the resolver covers only `*.yaml` and could
+        # be unavailable / have raised (→ empty map), so "no resolution" must fall
+        # back to the deep_merge value rather than silently wiping a real declaration
+        # (a missing/`.yml` tenant or a single parse error would otherwise drop the
+        # field from EVERY tenant). deepcopy isolates the returned snapshot from the
+        # shared resolver map (matching deep_merge's copy semantics).
+        resolved = self._custom_alerts_resolved.get(tenant_id) if resolve_custom_alerts else None
+        if resolved:
+            merged["_custom_alerts"] = [copy.deepcopy(recipe) for recipe, _o, _own in resolved]
+            merged["_custom_alerts_resolution"] = [
+                {"name": (recipe.get("name") if isinstance(recipe, dict) else None),
+                 "origin": origin, "is_own": is_own}
+                for recipe, origin, is_own in resolved
+            ]
 
         return merged
 
@@ -336,8 +410,13 @@ def main() -> None:
             print(f"❌ --what-if file not found: {what_if_path}", file=sys.stderr)
             sys.exit(EXIT_CALLER_ERROR)
 
-        # Baseline: current effective config
-        baseline_effective = scanner.effective_config(tid)
+        # Baseline: current effective config. #772: use the RAW (deep_merge)
+        # `_custom_alerts` here so it matches the simulated side below (which is
+        # built from an in-memory modified chain the compiler walker cannot
+        # resolve) — otherwise an unrelated what-if edit would falsely diff the
+        # UNION baseline against the REPLACE simulation. The union view is the
+        # normal-mode / blast_radius contract, not what-if's.
+        baseline_effective = scanner.effective_config(tid, resolve_custom_alerts=False)
         baseline_merged_hash = _canonical_hash(baseline_effective)
 
         # Load the simulated defaults content
