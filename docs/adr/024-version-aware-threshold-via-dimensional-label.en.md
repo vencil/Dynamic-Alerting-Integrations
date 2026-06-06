@@ -148,6 +148,20 @@ A concrete example (tenant declaration, no PromQL):
 
 Designing forecast surfaced a correctness bug the existing recipes already carried: `for` (the sustain duration) was not part of a recipe's shape identity, so when two tenants shared a shape but set different `for`, the latter's `for` was silently dropped. `mode` can ride the data plane via `group_left`, but `for` is a control-plane static rule attribute that `group_left` can't save — so `for` was brought into the shape slug + a schema enum (including and preserving the existing `default: "1m"`), locking cardinality to a constant.
 
+### 8. Recipe lifecycle governance: active / deprecated / eol
+
+A recipe is platform-authored; its `status` governs whether tenants may keep using it — this is RECIPE versioning (distinct from capability-A APP `version`). The status SSOT lives in the compiler (`shape.py::RECIPE_STATUS`) and is derived downstream (the human governance contracts `recipes/*.yaml` mirror it, the Go side generates a `recipe-status.json` consumed via `go:embed`, plus the portal and an info-metric) — **never hand-authored in multiple places** (a drift guard locks parity).
+
+- **active**: normal.
+- **deprecated**: still compiles + a non-fatal compiler notice + a portal warning badge; still addable. "Migrate away, still works."
+- **eol**: **existing declarations keep compiling** (the batch compiler must never drop a deployed tenant's rule just because the platform retired the recipe — no silent alert loss); but writes that **EXPAND** usage are rejected.
+
+**The eol rejection semantics (inclusive) = "the per-eol-recipe instance count must not increase"**, NOT "reject any PUT that contains an eol recipe". The latter is a full-overlay collateral block: at 2 a.m. during an outage, a two-year-old unrelated eol recipe would block the tenant from adding the alert they need to fight the fire (an outage hostage). The inclusive rule freezes only debt *growth* (adding / swapping in an eol recipe is rejected); editing / re-saving an existing eol instance is allowed. Precise predicate: for each eol recipe R, the count of instances using R in the PUT must be ≤ the current count (blocking "add R" and "drop eol-A, add eol-B", allowing "edit params / rename").
+
+**Persona asymmetry (stated honestly)**: the hard reject only has teeth at the **tenant-api preflight** (which sees both the PUT and the current config, so it can tell net-new). The **CI / GitOps-direct compiler** sees the whole conf.d tree and cannot tell new from existing → it can only warn.
+
+**Boundary**: the inclusive rule freezes growth + makes platform-wide debt **visible** via the info-metric `custom_recipe_info{recipe_id, recipe, status}`, but **final retirement is SRE-manual** (the metric gives the view, not automatic retirement). If a recipe is **harmful and must go offline immediately**, the tool is NOT eol (which keeps the rule alive) but **removing the recipe definition from the library** (existing instances then fail to compile = hard forced removal).
+
 ## Data Flow: Ingest → Define → Compile
 
 - **Ingest** — tenant app metrics enter Prometheus + are scrape-time branded with `tenant` / `version`. Reuses the existing `tenant-exporters` job + a platform-default relabel mapping `app.kubernetes.io/version` → `version` (centralized, not pushed per-tenant).

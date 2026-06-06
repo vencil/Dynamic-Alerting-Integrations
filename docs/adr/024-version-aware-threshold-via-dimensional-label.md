@@ -154,6 +154,20 @@ custom-alert 的 `mode`（page / silent）label 經 `group_left` 一路帶到 al
 
 設計 forecast 時順帶修一條既有 recipe 就帶的正確性 bug：`for`（sustain 時長）原本不在 recipe 的 shape 身分內，兩租戶共用 shape 但 `for` 不同時，後者的 `for` 被靜默丟棄。`mode` 能用 `group_left` 搭資料平面，但 `for` 是控制平面的靜態規則屬性救不了——故把 `for` 納入 shape slug + schema enum（含並保留既有 `default: "1m"`），把 cardinality 鎖成常數。
 
+### 8. Recipe 生命週期治理：active / deprecated / eol
+
+Recipe 是平台 authored 的；其 `status` 治理租戶能否續用，是 **RECIPE 版本控管**（有別於能力 A 的 APP `version` label）。狀態 SSOT 在編譯器 `shape.py::RECIPE_STATUS`，向下衍生（人類治理契約 `recipes/*.yaml` 鏡射、Go 端生成 `recipe-status.json` 經 `go:embed` 消費、portal、info-metric），**不手寫多份**（drift guard 鎖同步）。
+
+- **active**：正常。
+- **deprecated**：照常編譯 + 編譯器非致命警告 + portal 黃標；仍可新增。「可遷移、仍可用」。
+- **eol**：**既有宣告照常編譯**（batch compiler 絕不因平台退役而砍掉已部署租戶的 rule、不靜默丟告警）；但**寫入端拒絕「擴張」**。
+
+**eol 拒絕語意（inclusive）= 「per-eol-recipe 實例數不得增加」**，而非「擋掉任何含 eol recipe 的 PUT」。後者是 full-overlay 連坐：凌晨救火時，一個兩年前的無關 eol recipe 會擋住租戶新增救命告警（outage hostage）。inclusive 只凍結債務**增長**（新增 / 換用 eol 才拒），既有 eol 實例的參數編輯 / 續存照放。precise predicate：對每個 eol recipe R，PUT 中用 R 的實例數 ≤ 現況（同時擋「新增 R」與「移除 eol-A 換上 eol-B」，放行「改參數 / rename」）。
+
+**Persona 不對稱（誠實標明）**：hard-reject 只在 **tenant-api preflight** 有牙（它同時看得到 PUT + 現況才能判 net-new）；**CI / GitOps-direct compiler** 看整棵 conf.d、無法分新舊 → 只能 warn。
+
+**界線**：inclusive 規則凍結增長 + 由 info-metric `custom_recipe_info{recipe_id, recipe, status}` 讓全平台債務**可見**，但**最終退場是 SRE 手動**（metric 給視圖、非自動退役）。若一個 recipe **有害須立即下線**，工具不是 eol（它讓 rule 續活），而是**從 recipe library 移除定義**（既有實例編譯直接 fail = 硬性強制移除）。
+
 ## 資料流：Ingest → Define → Compile
 
 - **Ingest**——租戶 app metric 進 Prometheus + scrape-time 烙 `tenant` / `version`。複用既有 `tenant-exporters` job + 平台預設 relabel 把 `app.kubernetes.io/version` → `version`（集中式，不下放 per-tenant）。
