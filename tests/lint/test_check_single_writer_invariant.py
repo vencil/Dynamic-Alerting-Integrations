@@ -153,15 +153,17 @@ def test_main_exit_codes(tmp_path, monkeypatch):
     assert lint.main() == 0
 
 
-# ── no-HPA assertion ────────────────────────────────────────────────────────
-def test_has_hpa_text():
-    assert lint.has_hpa("kind: HorizontalPodAutoscaler\n") is True
-    assert lint.has_hpa("kind: Deployment\n") is False
+# ── no-autoscaler assertion (native HPA + KEDA) ─────────────────────────────
+def test_has_autoscaler_text():
+    assert lint.has_autoscaler("kind: HorizontalPodAutoscaler\n") is True
+    assert lint.has_autoscaler("kind: ScaledObject\n") is True       # KEDA
+    assert lint.has_autoscaler("kind: ScaledJob\n") is True          # KEDA
+    assert lint.has_autoscaler("kind: Deployment\n") is False
 
 
-def test_no_hpa_clean(tmp_path):
+def test_no_autoscaler_clean(tmp_path):
     _write_repo(tmp_path)
-    assert lint.find_hpa(tmp_path) == []
+    assert lint.find_autoscaler(tmp_path) == []
 
 
 def test_hpa_under_chart_flagged(tmp_path):
@@ -170,14 +172,14 @@ def test_hpa_under_chart_flagged(tmp_path):
         "apiVersion: autoscaling/v2\nkind: HorizontalPodAutoscaler\n"
         "metadata:\n  name: tenant-api\n", encoding="utf-8")
     findings = lint.check_targets(tmp_path)
-    assert any("HorizontalPodAutoscaler" in f and "hpa.yaml" in f for f in findings)
+    assert any("autoscaler" in f and "hpa.yaml" in f for f in findings)
 
 
-def test_hpa_under_raw_dir_flagged(tmp_path):
+def test_keda_scaledobject_under_raw_dir_flagged(tmp_path):
     _write_repo(tmp_path)
-    (tmp_path / "k8s" / "04-tenant-api" / "hpa.yaml").write_text(
-        "kind: HorizontalPodAutoscaler\n", encoding="utf-8")
-    assert lint.find_hpa(tmp_path) != []
+    (tmp_path / "k8s" / "04-tenant-api" / "scaledobject.yaml").write_text(
+        "apiVersion: keda.sh/v1alpha1\nkind: ScaledObject\n", encoding="utf-8")
+    assert lint.find_autoscaler(tmp_path) != []
 
 
 # ── live dogfood ────────────────────────────────────────────────────────────

@@ -27,15 +27,18 @@ WHAT THIS CHECKS (the two halves of the runtime invariant):
      (ADR-023 §A). Both the raw manifest and the Helm template must pin it.
   3. The Helm template still carries the layer-1 `fail` guard (so removing the
      guard, not just bumping the value, is also caught).
-  4. No HorizontalPodAutoscaler is shipped under the tenant-api deploy sources —
-     an HPA would scale replicas>1 at runtime and bypass the replicaCount guard.
+  4. No autoscaler manifest (native HPA or KEDA ScaledObject/ScaledJob) is
+     shipped under the tenant-api deploy sources — it would drive replicas>1 and
+     bypass the replicaCount guard.
 
 WHAT THIS DOES **NOT** CHECK (deliberately):
   - Runtime scaling vectors. `kubectl scale --replicas=2`, a hand-patched live
-    Deployment, or a GitOps controller reconciling such a patch all mutate
-    replicas at RUNTIME, outside any static/render-time guard. Their only
-    defense is the deferred A3 K8s Lease (ADR-023 layer-3). This lint + the
-    Helm `fail` guard close the *config-authoring* vector, not the runtime one.
+    Deployment, an HPA that a KEDA controller generates at runtime from a
+    ScaledObject, a GitOps controller reconciling such a patch, or a Kustomize
+    overlay applied by Argo/Flux — all mutate replicas at RUNTIME, outside any
+    static/render-time guard. Their only defense is the deferred A3 K8s Lease
+    (ADR-023 layer-3). This lint + the Helm `fail` guard close the
+    *config-authoring* vector, not the runtime one.
   - Generic Deployments. This is a NAMED invariant about ONE component
     (tenant-api, the sole stateful write plane). Other services scale freely;
     flagging their replica counts would be noise. The target set is an explicit
@@ -86,6 +89,12 @@ _RAW_MANIFEST = "k8s/04-tenant-api/deployment.yaml"
 _TARGETS = [_HELM_VALUES, _HELM_TEMPLATE, _RAW_MANIFEST]
 
 # `strategy:` block (optionally with a comment line) whose `type:` is Recreate.
+# DESIGN INTENT — Recreate MUST be hardcoded as a literal. A parameterized
+# `type: {{ .Values.strategyType | default "Recreate" }}` passes Helm and even
+# defaults to Recreate, yet deliberately FAILS this literal-match check: we
+# forbid making the single-writer-critical strategy overridable via values
+# (an operator could then flip it to RollingUpdate and reopen the phantom-writer
+# window). The "rigid" regex is the enforcement, not a limitation.
 _RECREATE_RE = re.compile(
     r"strategy:\s*\n(?:\s*#[^\n]*\n)*\s*type:\s*Recreate\b"
 )
@@ -96,13 +105,19 @@ _GUARD_RE = re.compile(
     r"\.Values\.replicaCount.*?\bfail\b|\bfail\b.*?\.Values\.replicaCount",
     re.DOTALL,
 )
-# An HPA on tenant-api would autoscale replicas > 1 and BYPASS the replicaCount
-# guard entirely (the guard fires on helm render; an HPA mutates replicas at
-# runtime). It is a commit-time artifact, so it IS lintable here — unlike
-# `kubectl scale`, which is a runtime mutation outside any static guard's reach
-# (that vector's only defense is the deferred A3 Lease, ADR-023 layer-3).
-_HPA_SCAN_DIRS = ["helm/tenant-api/templates", "k8s/04-tenant-api"]
-_HPA_RE = re.compile(r"kind:\s*HorizontalPodAutoscaler\b")
+# An autoscaler targeting tenant-api would drive replicas > 1 and BYPASS the
+# replicaCount guard (the guard fires on helm render; an autoscaler mutates
+# replicas at runtime). The autoscaler MANIFEST is a commit-time artifact, so it
+# IS lintable here — both native HPA and KEDA (ScaledObject/ScaledJob, which a
+# KEDA controller expands into an HPA). Covered = the committed autoscaler spec.
+# OUT OF SCOPE (→ Layer 3 K8s Lease only): runtime mutations no static check can
+# see — `kubectl scale`, an HPA a controller generates at runtime, a GitOps
+# controller reconciling a hand-patched `replicas`, or a Kustomize overlay
+# applied by Argo/Flux.
+_AUTOSCALER_SCAN_DIRS = ["helm/tenant-api/templates", "k8s/04-tenant-api"]
+_AUTOSCALER_RE = re.compile(
+    r"kind:\s*(HorizontalPodAutoscaler|ScaledObject|ScaledJob)\b"
+)
 
 
 def check_raw_deployment(data: dict) -> List[str]:
@@ -152,27 +167,29 @@ def template_has_guard(text: str) -> bool:
     return bool(_GUARD_RE.search(text))
 
 
-def has_hpa(text: str) -> bool:
-    """A manifest/template declares a HorizontalPodAutoscaler."""
-    return bool(_HPA_RE.search(text))
+def has_autoscaler(text: str) -> bool:
+    """A manifest/template declares an autoscaler (HPA or KEDA ScaledObject/Job)."""
+    return bool(_AUTOSCALER_RE.search(text))
 
 
-def find_hpa(repo: Path) -> List[str]:
-    """Violations for any HPA shipped under the tenant-api deploy sources.
-    An HPA would scale replicas>1 at runtime, bypassing the replicaCount guard."""
+def find_autoscaler(repo: Path) -> List[str]:
+    """Violations for any autoscaler manifest shipped under the tenant-api deploy
+    sources. An autoscaler would drive replicas>1, bypassing the replicaCount
+    guard. Covers committed HPA + KEDA specs; runtime-generated scaling is out of
+    scope (→ Layer 3 Lease)."""
     out: List[str] = []
-    for d in _HPA_SCAN_DIRS:
+    for d in _AUTOSCALER_SCAN_DIRS:
         base = repo / d
         if not base.exists():
             continue
         for f in sorted(base.rglob("*")):
             if f.suffix not in (".yaml", ".yml", ".tpl") or not f.is_file():
                 continue
-            if has_hpa(f.read_text(encoding="utf-8")):
+            if has_autoscaler(f.read_text(encoding="utf-8")):
                 out.append(
-                    f"{f.relative_to(repo).as_posix()}: HorizontalPodAutoscaler "
-                    f"present — tenant-api is single-writer; an HPA scales "
-                    f"replicas>1 and bypasses the replicaCount guard (ADR-023)"
+                    f"{f.relative_to(repo).as_posix()}: autoscaler "
+                    f"(HPA/ScaledObject) present — tenant-api is single-writer; "
+                    f"it would drive replicas>1 and bypass the guard (ADR-023)"
                 )
     return out
 
@@ -214,8 +231,8 @@ def check_targets(repo: Path) -> List[str]:
         for v in check_raw_deployment(d):
             findings.append(f"{_RAW_MANIFEST}: {v}")
 
-    # 4. No HorizontalPodAutoscaler may target tenant-api (would scale >1)
-    findings.extend(find_hpa(repo))
+    # 4. No autoscaler (HPA / KEDA ScaledObject) may target tenant-api
+    findings.extend(find_autoscaler(repo))
 
     return findings
 
