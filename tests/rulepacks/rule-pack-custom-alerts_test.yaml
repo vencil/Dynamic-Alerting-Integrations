@@ -110,3 +110,23 @@ tests:
         exp_samples:
           - labels: 'custom_recipe_info{recipe="threshold", recipe_id="threshold__mysql_global_status_threads_connected__gt__w5m__for1m", status="active"}'
             value: 1
+
+  # ── D1: prove the burn-down JOIN counts DISTINCT TENANTS, not series. recipe_id
+  # excludes severity, so a warning+critical recipe emits 2 user_threshold series
+  # under ONE recipe_id — a naive count by(recipe_id) would double-count tenants.
+  # t1 declares the threshold recipe at 2 severities (2 series), t2 once (1 series);
+  # the join must report 2 tenants (not 3 series) + graft recipe + status. ──
+  - interval: 1m
+    input_series:
+      - series: 'user_threshold{component="custom", tenant="t1", metric="mysql_global_status_threads_connected", severity="warning", recipe_id="threshold__mysql_global_status_threads_connected__gt__w5m__for1m", name="a", mode="page"}'
+        values: '150x5'
+      - series: 'user_threshold{component="custom", tenant="t1", metric="mysql_global_status_threads_connected", severity="critical", recipe_id="threshold__mysql_global_status_threads_connected__gt__w5m__for1m", name="a", mode="page"}'
+        values: '200x5'
+      - series: 'user_threshold{component="custom", tenant="t2", metric="mysql_global_status_threads_connected", severity="warning", recipe_id="threshold__mysql_global_status_threads_connected__gt__w5m__for1m", name="b", mode="page"}'
+        values: '150x5'
+    promql_expr_test:
+      - expr: 'count by(recipe_id)(count by(recipe_id, tenant)(user_threshold{component="custom"})) * on(recipe_id) group_left(recipe, status) custom_recipe_info'
+        eval_time: 2m
+        exp_samples:
+          - labels: '{recipe="threshold", recipe_id="threshold__mysql_global_status_threads_connected__gt__w5m__for1m", status="active"}'
+            value: 2
