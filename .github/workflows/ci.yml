@@ -211,6 +211,12 @@ jobs:
       - name: "Custom-alert pack matches live conf.d source (HARD gate — #741 S3b)"
         run: python scripts/tools/dx/compile_custom_alerts.py --check --config-dir components/threshold-exporter/config/conf.d
 
+      # #741 #6 / ADR-024 §8 A1: recipe-status.json is DERIVED from shape.py
+      # RECIPE_STATUS (SSOT) and consumed by the Go tenant-api via go:embed.
+      # Edit a recipe status but forget `make recipe-status-json` → fail here.
+      - name: "recipe-status.json matches RECIPE_STATUS SSOT (HARD gate — #741 #6)"
+        run: python scripts/tools/dx/gen_recipe_status_json.py --check
+
   iac-helm-sast:
     # Container/k8s SAST Layers 2 + 4 (#448 / TRK-312 + TRK-314).
     #   L2 (Helm template): renders 9 charts via helm + kube-linter (~1-2 min).

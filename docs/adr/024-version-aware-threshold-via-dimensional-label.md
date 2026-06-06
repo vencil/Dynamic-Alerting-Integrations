@@ -164,7 +164,7 @@ Recipe 是平台 authored 的；其 `status` 治理租戶能否續用，是 **RE
 
 **eol 拒絕語意（inclusive）= 「per-eol-recipe 實例數不得增加」**，而非「擋掉任何含 eol recipe 的 PUT」。後者是 full-overlay 連坐：凌晨救火時，一個兩年前的無關 eol recipe 會擋住租戶新增救命告警（outage hostage）。inclusive 只凍結債務**增長**（新增 / 換用 eol 才拒），既有 eol 實例的參數編輯 / 續存照放。precise predicate：對每個 eol recipe R，PUT 中用 R 的實例數 ≤ 現況（同時擋「新增 R」與「移除 eol-A 換上 eol-B」，放行「改參數 / rename」）。
 
-**Persona 不對稱（誠實標明）**：hard-reject 只在 **tenant-api preflight** 有牙（它同時看得到 PUT + 現況才能判 net-new）；**CI / GitOps-direct compiler** 看整棵 conf.d、無法分新舊 → 只能 warn。
+**寫入路徑覆蓋（誠實標明）**：eol-expansion 是 stateful 檢查（要 old+new delta）。在 **`gitops.Writer.validate`（所有 tenant-api 寫入的 choke point）** 強制——它讀現況 on-disk tenant 檔（validate 在寫入前 → 磁碟仍是舊）算 delta，故 **PutTenant / PutCustomAlerts / batch 全覆蓋**；`/custom-alerts` handler 另先做一次（回 structured Violations 給 portal）。**configDir-less 測試模式**（無 on-disk base）跳過；**CI / GitOps-direct compiler** 看整棵 conf.d、無法分新舊 → 只能 warn。
 
 **界線**：inclusive 規則凍結增長 + 由 info-metric `custom_recipe_info{recipe_id, recipe, status}` 讓全平台債務**可見**，但**最終退場是 SRE 手動**（metric 給視圖、非自動退役）。若一個 recipe **有害須立即下線**，工具不是 eol（它讓 rule 續活），而是**從 recipe library 移除定義**（既有實例編譯直接 fail = 硬性強制移除）。
 

@@ -23,6 +23,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/vencil/tenant-api/internal/customalerts"
 	cfg "github.com/vencil/threshold-exporter/pkg/config"
 	"gopkg.in/yaml.v3"
 )
@@ -966,5 +967,33 @@ func validate(configDir, tenantID, yamlContent string) []string {
 	// authority. Runs on the raw body (tcfg), not the merged config: the PUT body is
 	// a full overlay, so it carries the tenant's complete own recipe set.
 	caViol := cfg.ValidateTenantCustomAlerts(tenantID, tcfg.Tenants[tenantID], cfg.MaxCustomRecipesDefault)
-	return append(keyErrs, caViol...)
+	errs := append(keyErrs, caViol...)
+
+	// B2-wide eol-expansion guard (ADR-024 §8) at the SHARED write choke point, so
+	// PutTenant + batch full-config writes are covered, not just the /custom-alerts
+	// endpoint. Unlike the checks above this is STATEFUL: it reads the current
+	// on-disk tenant file — still the OLD state, since validate runs before the
+	// write commits — to compute the per-eol-recipe delta. Skipped when configDir
+	// is unset (unit-test shape mode). FAIL CLOSED: only a MISSING tenant file
+	// (ENOENT, a brand-new tenant with no existing eol usage) means "no current
+	// alerts"; any other read error or a parse failure errors out rather than
+	// silently skipping the guard (matches the handler's extraction fail-closed).
+	if configDir != "" {
+		oldRaw, rerr := os.ReadFile(filepath.Join(configDir, tenantID+".yaml"))
+		switch {
+		case rerr == nil:
+			oldAlerts, err := customalerts.Extract(string(oldRaw), tenantID)
+			if err != nil {
+				return append(errs, "internal error: cannot read current custom alerts: "+err.Error())
+			}
+			newAlerts, err := customalerts.Extract(yamlContent, tenantID)
+			if err != nil {
+				return append(errs, "internal error: cannot read requested custom alerts: "+err.Error())
+			}
+			errs = append(errs, customalerts.EolExpansionViolations(oldAlerts, newAlerts)...)
+		case !os.IsNotExist(rerr):
+			return append(errs, "internal error: cannot read current custom alerts: "+rerr.Error())
+		}
+	}
+	return errs
 }

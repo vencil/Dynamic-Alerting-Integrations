@@ -183,6 +183,28 @@ func PutTenantCustomAlerts(d *Deps) http.HandlerFunc {
 			return
 		}
 
+		// B2-wide eol-expansion guard (ADR-024 §8): block writes that GROW usage
+		// of an end-of-life recipe, without collateral-blocking edits to existing
+		// or unrelated recipes (the outage-hostage failure mode). This handler-level
+		// check returns STRUCTURED Violations (portal-friendly) and runs first; the
+		// shared gitops.Writer.validate enforces the same guard for PutTenant +
+		// batch full-config writes (which never pass through here), so every
+		// tenant-api write path is covered.
+		currentAlerts, err := customalerts.Extract(string(raw), tenantID)
+		if err != nil {
+			WriteJSONError(w, r, http.StatusInternalServerError,
+				"internal error: cannot read current custom alerts: "+err.Error())
+			return
+		}
+		if viol := customalerts.EolExpansionViolations(currentAlerts, *req.CustomAlerts); len(viol) > 0 {
+			violations := make([]Violation, 0, len(viol))
+			for _, v := range viol {
+				violations = append(violations, Violation{Field: "_custom_alerts", Reason: v})
+			}
+			WriteValidationErrors(w, r, violations)
+			return
+		}
+
 		// Commit via the shared writer (re-validates schema + custom alerts,
 		// attributes the commit to the operator).
 		email := rbac.RequestEmail(r)
