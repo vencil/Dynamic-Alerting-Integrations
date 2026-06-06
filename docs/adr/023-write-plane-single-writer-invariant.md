@@ -132,8 +132,8 @@ flowchart TD
 
 ## Deferred options（附 re-evaluation trigger）
 
-- **讀寫拆分部署（A4 / TRK-325）** — 觸發：讀取 HA 成為需求（Portal 上線、讀 QPS 上升，使「發版時讀取短暫中斷」不再可接受）。前提：read-only enforcement 模式 + method 路由。
-- **K8s Lease 分散式寫入鎖（A3）** — 觸發：「寫入部署需 zero-downtime 滾動更新」成為硬需求（Recreate 的部署期短暫不可用不再可接受）。
+- **讀寫拆分部署（A4 / TRK-325，追蹤 [#788](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/788)）** — 觸發：讀取 HA 成為需求（Portal 上線、讀 QPS 上升，使「發版時讀取短暫中斷」不再可接受）。前提：read-only enforcement 模式 + method 路由。
+- **K8s Lease 分散式寫入鎖（A3，追蹤 [#787](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/787)）** — **雙重動機**：(1)「寫入部署需 zero-downtime 滾動更新」成硬需求（Recreate 部署期短暫不可用不再可接受）；(2) layer-1/2 靜態守衛擋不到的 **runtime mutation 向量（`kubectl scale` / 手加 HPA / controller reconcile）唯一防線**。
 - **寫入水平擴展** — 觸發：單寫者吞吐量成為實測瓶頸（寫入排隊 p99 超標），或出現「必須多副本寫」的硬需求。走 A3，而非放寬單鎖。
 
 ## Action Items
