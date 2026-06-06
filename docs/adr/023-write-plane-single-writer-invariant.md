@@ -72,7 +72,7 @@ flowchart TD
 
 **例**：`helm upgrade ... --set replicaCount=2` 會直接中止並印：
 
-```
+```text
 ADR-023 single-writer invariant violated: tenant-api replicaCount=2 but MUST be 1.
 ... implement a K8s Lease (Deferred option A3) — do not raise replicaCount.
 ```
