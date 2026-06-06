@@ -99,7 +99,6 @@ lang: zh
 | `gen_recipe_status_json.py` | Generate recipe-status.json from the compiler SSOT (ADR-024 §8, #741 #6 / A1). |
 | `generate_alert_reference.py` | Auto-generate ALERT-REFERENCE.md from Rule Pack YAML files. |
 | `generate_changelog.py` | Generate CHANGELOG draft entries from conventional commits. |
-| `generate_cheat_sheet.py` | Auto-generate da-tools cheat sheet from CLI reference. |
 | `generate_doc_map.py` | 文件導覽自動生成 |
 | `generate_nav.py` | 從 docs/ 目錄自動生成 MkDocs nav 結構 |
 | `generate_platform_data.py` | 共用平台資料產生器 |

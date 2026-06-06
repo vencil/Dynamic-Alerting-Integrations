@@ -647,14 +647,6 @@ def _build_platform_rules():
         "replacement": lambda v: f"version: v{v}",
     })
 
-    # Python tools fallback version string: generate_cheat_sheet.py
-    rules.append({
-        "file": "scripts/tools/dx/generate_cheat_sheet.py",
-        "desc": "generate_cheat_sheet.py platform version fallback",
-        "pattern": r"version\s*=\s*'v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?'(?=\s*#\s*fallback)",
-        "replacement": lambda v: f"version = 'v{v}'",
-    })
-
     return rules
 
 
