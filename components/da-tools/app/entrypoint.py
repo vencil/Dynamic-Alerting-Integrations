@@ -68,6 +68,7 @@ def _build_help_text(lang):
 命令 (Operator-Native — CRD 產生與驗證):
     operator-generate 產出 PrometheusRule / AlertmanagerConfig / ServiceMonitor CRD YAML
     operator-check    驗證 Operator CRD 部署狀態 (5 項檢查 + 診斷報告)
+    runtime-audit     Git rule-packs ↔ Prometheus runtime 唯讀對帳 (#747；MISSING/UNHEALTHY/ORPHAN)
     migrate-to-operator ConfigMap 格式遷移至 Operator 原生 CRD (含遷移清單與預檢)
 
 命令 (Federation — 多叢集):
@@ -154,6 +155,7 @@ Commands (File System — offline):
 Commands (Operator-Native — CRD generation & validation):
     operator-generate Generate PrometheusRule / AlertmanagerConfig / ServiceMonitor CRD YAML
     operator-check    Validate Operator CRD deployment status (5 checks + diagnostic report)
+    runtime-audit     Read-only Git rule-packs ↔ Prometheus runtime reconciliation (#747; MISSING/UNHEALTHY/ORPHAN)
     migrate-to-operator Migrate ConfigMap format to Operator native CRD (migration checklist + pre-check)
 
 Commands (Federation — multi-cluster):
@@ -324,6 +326,10 @@ COMMAND_MAP = {
     # Group D: Operator-native (CRD generation + validation)
     "operator-generate": "operator_generate.py",
     "operator-check": "operator_check.py",
+    # #747 — read-only Git rule-packs ↔ Prometheus runtime reconciliation.
+    # Detect-only (the runtime leg #711/#714 PR-gates don't cover); rejects
+    # self-healing / a standing controller. See docs/custom-rule-governance.md §7.1.
+    "runtime-audit": "runtime_audit.py",
     "migrate-to-operator": "migrate_to_operator.py",
     # Group E: Federation (multi-cluster)
     "rule-pack-split": "generate_rule_pack_split.py",

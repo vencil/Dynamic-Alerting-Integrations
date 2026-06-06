@@ -283,6 +283,20 @@ A rule here is not a single entity — its lifecycle mechanism differs by tier (
 
 **Access governance** (who can change what at each stage, audit, break-glass) is in [governance-security.md](governance-security.en.md); the **tier model & assimilation** are in §2 / §5.
 
+### 7.1 Runtime reconciliation boundary (#747) — detect-only, no self-healing
+
+Rule state spans **three source-of-truth layers** that drift pairwise: (1) Git (declared intent) → (2) K8s ConfigMap / projected volume (the deployed artifact) → (3) Prometheus runtime (the rules actually loaded).
+
+- **(1)↔(2) is already a HARD gate**: configmap↔source and operator-manifest drift are force-compared at **PR time** ([#711](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/711) / [#714](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/714)).
+- **(1)/(2)↔(3) is the only uncovered runtime leg**: reload failure, projected-volume lag, hand-edited configmap, orphan rules surviving — none visible to PR-time gates. Covered by `da-tools runtime-audit` (**read-only**, queries `/api/v1/rules` rule identity + health), classifying MISSING / UNHEALTHY / ORPHAN (usage: [CLI Reference](cli-reference.en.md#runtime-audit)).
+
+**Boundary decision (locked)**: runtime reconciliation is always **detect → report (exit code / metric) → a human decides**, matching the platform's established silent-failure idiom (#631 phantom reload / #643 silent parse / #652 cardinality truncation).
+
+- ⛔ **Reject self-healing / a standing reconciliation Operator**: machine writing back to the human plane (under GitOps, Git must be the single enforceable truth) + a standing controller itself becomes a 4th drifting / OOM-prone SoT (the observer-paradox recursed one level up).
+- The `version_orphaned` sentinel **remains a visibility signal** (not a config SoT, not replaced by runtime-audit); runtime-audit is its hard-comparison reinforcement.
+
+**Defer-with-trigger (heavier continuous form)**: packaging runtime-audit as an in-cluster scheduled CronJob, or adding per-layer-pair drift metrics, is deferred until: (1) the first "Git is clean but the cluster retains stale / orphan rules" runtime drift incident; or (2) fleet scale makes "`--check`-at-PR" insufficient to guarantee runtime consistency. See [#747](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/747).
+
 ## Related Resources
 
 | Resource | Relevance |
