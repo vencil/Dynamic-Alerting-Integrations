@@ -57,6 +57,29 @@ func loadFile(path string) (ThresholdConfig, string, error) {
 	return cfg, hash, nil
 }
 
+// parsePartialConfig unmarshals one config file's bytes into a ThresholdConfig.
+// On parse failure it records the parse_failure metric and logs — ERROR for
+// underscore-prefixed files (a broken _defaults/_profiles silently nullifies an
+// entire block → every dependent tenant override breaks; cycle-6 RCA, planning
+// archive §S#37d, cost 5+ hours at WARN) or WARN for tenant files — then
+// returns ok=false so the caller can skip the file. `name` is the base filename
+// (drives the underscore severity choice); `path` is the display path used for
+// logs and the metric basename. Shared by loadDirWithMetrics, IncrementalLoad,
+// and fullDirLoad so the three flat-mode parse paths report failures identically.
+func parsePartialConfig(name, path string, data []byte, metrics *configMetrics, logger *log.Logger) (ThresholdConfig, bool) {
+	var partial ThresholdConfig
+	if err := yaml.Unmarshal(data, &partial); err != nil {
+		metrics.IncParseFailure(filepath.Base(path))
+		if strings.HasPrefix(name, "_") {
+			logger.Printf("ERROR: skip unparseable defaults/profiles file %s: %v (entire block dropped — fix file or remove)", path, err)
+		} else {
+			logger.Printf("WARN: skip unparseable file %s: %v", path, err)
+		}
+		return partial, false
+	}
+	return partial, true
+}
+
 // loadDir scans a directory for *.yaml files, parses and deep-merges them.
 //
 // File naming convention:
@@ -135,20 +158,8 @@ func loadDirWithMetrics(dir string, metrics *configMetrics, logger *log.Logger) 
 		}
 		hasher.Write(data)
 
-		var partial ThresholdConfig
-		if err := yaml.Unmarshal(data, &partial); err != nil {
-			// _defaults.yaml parse failure silently nullifies the entire
-			// defaults block → every dependent tenant override breaks
-			// (`unknown key not in defaults`). Cycle-6 RCA (planning archive
-			// §S#37d) cost 5+ hours wall-clock because this signal lived at
-			// WARN. Promote to ERROR for `_*` files; emit parse_failure_total
-			// (v2.8.0 A-8d metric) so ops can alert.
-			metrics.IncParseFailure(filepath.Base(path))
-			if strings.HasPrefix(name, "_") {
-				logger.Printf("ERROR: skip unparseable defaults/profiles file %s: %v (entire block dropped — fix file or remove)", path, err)
-			} else {
-				logger.Printf("WARN: skip unparseable file %s: %v", path, err)
-			}
+		partial, ok := parsePartialConfig(name, path, data, metrics, logger)
+		if !ok {
 			continue
 		}
 

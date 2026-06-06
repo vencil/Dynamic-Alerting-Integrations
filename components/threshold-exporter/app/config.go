@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/jonboulle/clockwork"
-	"gopkg.in/yaml.v3"
 )
 
 // ============================================================
@@ -442,16 +441,8 @@ func (m *ConfigManager) IncrementalLoad() error {
 				continue
 			}
 		}
-		var partial ThresholdConfig
-		if err := yaml.Unmarshal(data, &partial); err != nil {
-			// See loadDir — defaults parse failure silently nullifies the
-			// block; promote to ERROR + emit metric (cycle-6 RCA, archive §S#37d).
-			m.getMetrics().IncParseFailure(filepath.Base(fullPath))
-			if strings.HasPrefix(name, "_") {
-				m.getLogger().Printf("ERROR: skip unparseable defaults/profiles file %s: %v (entire block dropped — fix file or remove)", fullPath, err)
-			} else {
-				m.getLogger().Printf("WARN: skip unparseable file %s: %v", fullPath, err)
-			}
+		partial, ok := parsePartialConfig(name, fullPath, data, m.getMetrics(), m.getLogger())
+		if !ok {
 			delete(newConfigs, name)
 			continue
 		}
@@ -598,16 +589,8 @@ func (m *ConfigManager) fullDirLoad() error {
 				continue
 			}
 		}
-		var partial ThresholdConfig
-		if err := yaml.Unmarshal(data, &partial); err != nil {
-			// See loadDir — defaults parse failure silently nullifies the
-			// block; promote to ERROR + emit metric (cycle-6 RCA, archive §S#37d).
-			m.getMetrics().IncParseFailure(filepath.Base(fullPath))
-			if strings.HasPrefix(name, "_") {
-				m.getLogger().Printf("ERROR: skip unparseable defaults/profiles file %s: %v (entire block dropped — fix file or remove)", fullPath, err)
-			} else {
-				m.getLogger().Printf("WARN: skip unparseable file %s: %v", fullPath, err)
-			}
+		partial, ok := parsePartialConfig(name, fullPath, data, m.getMetrics(), m.getLogger())
+		if !ok {
 			continue
 		}
 		applyBoundaryRules(name, &partial, m.getLogger())
