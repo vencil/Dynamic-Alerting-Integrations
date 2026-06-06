@@ -415,24 +415,7 @@ func (m *ConfigManager) IncrementalLoad() error {
 	oldConfigs := m.flat.configs
 	m.mu.RUnlock()
 
-	var changed, added, removed []string
-
-	// Detect changed and added files
-	for name, newHash := range newHashes {
-		oldHash, exists := oldHashes[name]
-		if !exists {
-			added = append(added, name)
-		} else if newHash != oldHash {
-			changed = append(changed, name)
-		}
-	}
-
-	// Detect removed files
-	for name := range oldHashes {
-		if _, exists := newHashes[name]; !exists {
-			removed = append(removed, name)
-		}
-	}
+	changed, added, removed := diffFileHashes(oldHashes, newHashes)
 
 	// Copy cache for mutation — deferred until after diff to avoid
 	// unnecessary allocation when the per-file diff shows no changes
@@ -482,56 +465,17 @@ func (m *ConfigManager) IncrementalLoad() error {
 		delete(newConfigs, name)
 	}
 
-	// Phase 4: merge — use incremental patch when only tenant files changed,
-	// full rebuild when _defaults.yaml, _profiles.yaml, or _state_filters changed.
-	tenantOnly := true
-	for _, name := range append(changed, added...) {
-		if name == "_defaults.yaml" || name == "_profiles.yaml" || strings.HasPrefix(name, "_") {
-			tenantOnly = false
-			break
-		}
-	}
-	for _, name := range removed {
-		if strings.HasPrefix(name, "_") {
-			tenantOnly = false
-			break
-		}
-	}
+	// Phase 4: merge — incremental tenant patch when only tenant files changed,
+	// full rebuild when a _defaults/_profiles/_state_filters file changed.
 	var merged ThresholdConfig
-	if tenantOnly && m.config != nil {
-		// Incremental patch: copy existing merged config, patch only affected tenants.
-		// This avoids O(N) merge for the common "1 tenant file changed" case.
+	if isTenantOnlyChange(changed, added, removed) && m.config != nil {
+		// Incremental patch: copy existing merged config, patch only affected
+		// tenants. Avoids the O(N) merge for the common "1 tenant file changed"
+		// case. prev is read under the lock; patchTenants is otherwise pure.
 		m.mu.RLock()
 		prev := m.config
 		m.mu.RUnlock()
-
-		merged = ThresholdConfig{
-			Defaults:     prev.Defaults,     // shared (immutable between patches)
-			StateFilters: prev.StateFilters, // shared
-			Profiles:     prev.Profiles,     // shared
-			Tenants:      make(map[string]map[string]ScheduledValue, len(prev.Tenants)),
-		}
-		// Shallow-copy tenants map (keys only, values are immutable per-tenant maps)
-		for k, v := range prev.Tenants {
-			merged.Tenants[k] = v
-		}
-		// Apply changes: overwrite tenants from re-parsed files
-		for _, name := range append(changed, added...) {
-			if partial, ok := newConfigs[name]; ok {
-				for tenant, overrides := range partial.Tenants {
-					merged.Tenants[tenant] = overrides
-				}
-			}
-		}
-		// Remove tenants from deleted files
-		for _, name := range removed {
-			if partial, ok := oldConfigs[name]; ok {
-				for tenant := range partial.Tenants {
-					delete(merged.Tenants, tenant)
-				}
-			}
-		}
-		// Profiles unchanged → no need to re-apply
+		merged = patchTenants(prev, newConfigs, oldConfigs, changed, added, removed)
 	} else {
 		// Full rebuild: _defaults or _profiles changed, must re-merge everything
 		merged = mergePartialConfigs(newConfigs)
@@ -544,6 +488,81 @@ func (m *ConfigManager) IncrementalLoad() error {
 		mtimes:  newMtimes,
 	}, fmt.Sprintf("Config reloaded (incremental, %d changed, %d added, %d removed)", len(changed), len(added), len(removed)))
 	return nil
+}
+
+// diffFileHashes compares the previous and current per-file hash maps and
+// classifies each file as changed (hash differs), added (new), or removed
+// (gone from the new scan). Pure helper extracted from IncrementalLoad Phase 2.
+func diffFileHashes(oldHashes, newHashes map[string]string) (changed, added, removed []string) {
+	for name, newHash := range newHashes {
+		oldHash, exists := oldHashes[name]
+		if !exists {
+			added = append(added, name)
+		} else if newHash != oldHash {
+			changed = append(changed, name)
+		}
+	}
+	for name := range oldHashes {
+		if _, exists := newHashes[name]; !exists {
+			removed = append(removed, name)
+		}
+	}
+	return changed, added, removed
+}
+
+// isTenantOnlyChange reports whether an incremental reload touched only tenant
+// files — i.e. no underscore-prefixed file (_defaults.yaml / _profiles.yaml /
+// _state_filters). When true, IncrementalLoad can patch just the affected
+// tenants instead of re-merging the whole tree. Extracted from Phase 4.
+//
+// An underscore prefix already subsumes the specific _defaults.yaml /
+// _profiles.yaml names, so the prefix test alone is sufficient.
+func isTenantOnlyChange(changed, added, removed []string) bool {
+	for _, group := range [][]string{changed, added, removed} {
+		for _, name := range group {
+			if strings.HasPrefix(name, "_") {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// patchTenants builds a merged config from the tenant-only incremental fast
+// path: it shallow-copies prev (Defaults/StateFilters/Profiles shared, Tenants
+// map cloned) then overwrites tenants from changed/added files and drops
+// tenants from removed files. Extracted from IncrementalLoad Phase 4; the
+// caller reads prev under the lock, this function is otherwise pure.
+func patchTenants(prev *ThresholdConfig, newConfigs, oldConfigs map[string]ThresholdConfig, changed, added, removed []string) ThresholdConfig {
+	merged := ThresholdConfig{
+		Defaults:     prev.Defaults,     // shared (immutable between patches)
+		StateFilters: prev.StateFilters, // shared
+		Profiles:     prev.Profiles,     // shared
+		Tenants:      make(map[string]map[string]ScheduledValue, len(prev.Tenants)),
+	}
+	// Shallow-copy tenants map (keys only, values are immutable per-tenant maps)
+	for k, v := range prev.Tenants {
+		merged.Tenants[k] = v
+	}
+	// Overwrite tenants from re-parsed (changed + added) files
+	for _, group := range [][]string{changed, added} {
+		for _, name := range group {
+			if partial, ok := newConfigs[name]; ok {
+				for tenant, overrides := range partial.Tenants {
+					merged.Tenants[tenant] = overrides
+				}
+			}
+		}
+	}
+	// Remove tenants from deleted files
+	for _, name := range removed {
+		if partial, ok := oldConfigs[name]; ok {
+			for tenant := range partial.Tenants {
+				delete(merged.Tenants, tenant)
+			}
+		}
+	}
+	return merged
 }
 
 // fullDirLoad performs a full directory load and initializes the per-file cache.
