@@ -5,7 +5,7 @@
 
 > 💡 **想快速把這個元件跑起來？** → **[app/QUICKSTART.md](app/QUICKSTART.md)**（`docker run` 對 fixture 跑 da-guard、≤2 分鐘看到 CI 紅字攔截）。本篇 README 是完整子命令 / 客戶旅程 **參考（Reference）**。
 
-> **核心 component** — 一顆 ~60 MB Alpine Python image，把 Dynamic Alerting 平台所需 45 個驗證 / 遷移 / 治理 CLI 工具裝在一起，**無需 clone repo、無需安裝 Python 依賴**，docker pull 即用。Platform Engineers / SREs / Tenants（DevOps）共用入口。
+> **核心 component** — 一顆 ~60 MB Alpine Python image，把 Dynamic Alerting 平台所需 50 個驗證 / 遷移 / 治理 CLI 工具裝在一起，**無需 clone repo、無需安裝 Python 依賴**，docker pull 即用。Platform Engineer / SRE、Domain Expert、Tenant 三種角色共用入口（各角色上手指南見 §2）。
 >
 > **Companion 文件：** [interactive-tools.md](../../docs/interactive-tools.md) · [cli-reference.md](../../docs/cli-reference.md) · [cheat-sheet.md](../../docs/cheat-sheet.md) · [BYOP integration guide](../../docs/integration/byo-prometheus-integration.md) · [Shadow Monitoring SOP](../../docs/shadow-monitoring-sop.md) · [architecture-and-design](../../docs/architecture-and-design.md)
 
@@ -16,24 +16,22 @@
 - **Input** — Prometheus HTTP API（可攜式工具）、`conf.d/` YAML（檔案系統工具）、CSV/JSON spec（規則 / mapping 等）；透過 `docker run -v` 掛載
 - **Output** — stdout 表格 / Markdown 報告 / JSON（`--json` 結構化）；部分工具寫檔（route fragment、ConfigMap、scaffold 結果）
 - **Why container-bundled** — 1) 客戶現場常無 Python ≥3.12，**避開 dependency hell**；2) 整合 Go binary（`da-guard` / `da-batchpr` / `da-parser`），air-gapped 環境一顆 image 就夠；3) `tools/v*` tag 與平台版號脫鉤，工具迭代不影響 helm chart
-- **Why one CLI, 45 subcommands** — 客戶旅程是連續的（discover → onboard → validate → cutover → operate → tune → migrate），分散成 45 個獨立 binary 反而難記；統一 `da-tools <cmd>` 入口配 `--help` 自我描述
+- **Why one CLI, 50 subcommands** — 客戶旅程是連續的（discover → onboard → validate → cutover → operate → tune → migrate），分散成 50 個獨立 binary 反而難記；統一 `da-tools <cmd>` 入口配 `--help` 自我描述
 - **不做的事** — 不執行 PromQL 查詢以外的 alerting reconcile（交給 `threshold-exporter`）；不 hot-reload（短命 CLI，每次 fresh state）；不持久化（除非 `-o` 明確指定輸出檔）；不 silent fail（CI 模式預設 exit 1 on any issue）
 
 ---
 
-## 2. What's New in v2.8.0
+## 2. 角色導引（從哪開始）
 
-| # | 能力 | 影響 |
-|---|------|------|
-| 1 | **`parser` 新命令** — 解析 PrometheusRule YAML → JSON `ParseResult`，可選 strict-PromQL 相容性檢查（anti-vendor-lock-in）。子命令：`import` / `allowlist`。Wrap [`da-parser`](../../components/threshold-exporter/app/cmd/da-parser/) Go binary | 客戶從 kube-prometheus 帶現有 PrometheusRule 來時，先 `da-tools parser import` 抽出規則 SOT，再走後續 `batch-pr` 自動產 PR |
-| 2 | **`batch-pr` 新命令** — Hierarchy-aware Batch PR pipeline，三 mode：`apply`（從 Plan + emit 開 tenant chunk PRs）/ `refresh`（Base PR merge 後 rebase tenant 分支）/ `refresh-source`（hot-fix 重 apply 進已開 PR）。Wrap [`da-batchpr`](../../components/threshold-exporter/app/cmd/da-batchpr/) Go binary | 取代 v2.7.0 的「手動切 chunk + 手動開 PR」，1000 租戶導入從 1 週縮到 1 天 |
-| 3 | **`guard` 新命令** — Pre-merge gate for `_defaults.yaml`：schema + routing + cardinality 三層檢查，子命令 `defaults-impact`。Wrap [`da-guard`](../../components/threshold-exporter/app/cmd/da-guard/) Go binary | 阻止「改一行 `_defaults.yaml` 影響 500 租戶」這類 dangling defaults 事故 |
-| 4 | **`tenant-verify` 新命令** — 印 tenant effective config + `merged_hash`，`--expect-merged-hash` 與快照比對；`--all --json` 拍 pre-base snapshot 給 rollback 後 diff | [Emergency Rollback Procedures](../../docs/scenarios/incremental-migration-playbook.md#emergency-rollback-procedures) 從 manual SQL 變一行命令 |
-| 5 | **README 對齊實際命令表** — 補齊 v2.0–v2.7 累積的 22 個漏寫命令（`alert-correlate` / `drift-detect` / `opa-evaluate` / `test-notification` / `threshold-recommend` / `explain-route` / `byo-check` / `federation-check` / `grafana-import` / `shadow-verify` / `discover-mappings` / `init` / `config-history` / `gitops-check` / `operator-generate` / `operator-check` / `migrate-to-operator` / `rule-pack-split` / `parser` / `batch-pr` / `guard` / `tenant-verify`）；移除 v2.7.0 README 誤列為 public 但實為 dev-internal 的 `describe-tenant` / `migrate-conf-d`（前者為 [`tenant-verify` 的 transitive lib](app/build.sh)，後者僅為 [dx/ 工具](../../scripts/tools/dx/migrate_conf_d.py)） | 客戶以 README 為信任源；過去半年 drift 累積到 22 條，`check_cli_coverage.py` 加進 da-tools README 為第三個 SOT 比對對象，未來在 [pr-preflight](../../Makefile) 失敗 |
+本 README 是**角色中立的元件 reference**（完整 50 子命令 + 客戶旅程）。第一次接觸，先依角色挑任務導向的上手指南：
 
-> **Bundle 變更** — image 內現含三顆 Go binary：`/usr/local/bin/da-guard`、`/usr/local/bin/da-batchpr`、`/usr/local/bin/da-parser`（air-gapped 友善，不需另外下載）。詳見 §6 Bundle Artifacts。
->
-> **升級路徑** — v2.7.0 → v2.8.0 對 da-tools 為 **additive**：所有 v2.7.0 命令保留原 flag 介面；客戶 CI 內既有 `docker run ... da-tools <cmd>` 不需改動。
+| 你是誰？ | 上手指南 |
+|---------|---------|
+| **Platform Engineer / SRE** — 部署、Rule Pack、路由、CI 護欄、遷移 | [Platform Engineer 入門](../../docs/getting-started/for-platform-engineers.md) |
+| **Domain Expert** — 定義閾值、設計告警規則、Rule Pack 治理 | [Domain Expert 入門](../../docs/getting-started/for-domain-experts.md) |
+| **Tenant** — 調自己租戶閾值、看告警、自助驗證 | [Tenant 入門](../../docs/getting-started/for-tenants.md) |
+
+> 想直接查「我這個角色該用哪些命令」？看下方 §4.0 Journey Map 的 **典型負責角色** 欄。
 
 ---
 
@@ -45,7 +43,7 @@
 
 | 路徑 | 內容 | 適用 |
 |---|---|---|
-| **Docker image**（`ghcr.io/vencil/da-tools:v*`） | **全部 45 個 Python 子命令 + 3 顆 bundled Go binary**（da-guard / da-batchpr / da-parser） | self-hosted production、air-gapped（一顆 image 就夠）— **首選** |
+| **Docker image**（`ghcr.io/vencil/da-tools:v*`） | **全部 50 個 Python 子命令 + 3 顆 bundled Go binary**（da-guard / da-batchpr / da-parser） | self-hosted production、air-gapped（一顆 image 就夠）— **首選** |
 | **Static binary 下載**（`tools/v*` release assets） | **僅** 3 顆 Go CLI（da-guard / da-batchpr / da-parser）；**不含** Python 子命令 | 只需 guard / parser / batch-pr，且不想跑 container 的 CI |
 | **本機 repo checkout**（`python3 components/da-tools/app/entrypoint.py <cmd>`） | 全部 Python 子命令（依當前 source） | 開發 / 貢獻者 dev path |
 
@@ -83,22 +81,24 @@ docker run --rm \
 
 ## 4. Command Reference
 
-`da-tools` 共 45 個子命令。按 **客戶旅程** 分類；每個命令一行用途，完整 flag 用 `da-tools <cmd> --help`。
+`da-tools` 共 50 個子命令。按 **客戶旅程** 分類；每個命令一行用途，完整 flag 用 `da-tools <cmd> --help`。
+
+> **讀表須知**：`✨vX.Y.Z` = 該版新增；範例中的 `db-a` 等是**佔位 tenant id**（換成你的）；`validate`（Shadow Monitoring 雙軌比對，§4.4）與 `validate-config`（離線一站式配置驗證，§4.3）是**兩個不同命令**。
 
 ### 4.0 Journey Map（一目了然）
 
-| 階段 | 你想做什麼 | 用哪些命令 |
-|------|------------|------------|
-| **Discover** | 認識客戶現有環境，盤點待遷移範圍 | `onboard`、`discover-mappings`、`blind-spot`、`parser` |
-| **Onboard** | 建立新 tenant、bootstrap CI/CD | `init`、`scaffold`、`migrate`、`grafana-import` |
-| **Validate** | Commit / PR 前驗 schema、routing、cardinality、policy | `validate-config`、`guard`、`evaluate-policy`、`opa-evaluate`、`lint`、`analyze-gaps`、`config-diff`、`drift-detect` |
-| **Cutover** | Shadow Monitoring → 正式切換 | `validate`、`shadow-verify`、`backtest`、`cutover` |
-| **Operate** | 日常健康檢查、噪音治理、容量預測 | `diagnose`、`batch-diagnose`、`check-alert`、`alert-quality`、`alert-correlate`、`cardinality-forecast`、`maintenance-scheduler` |
-| **Tune** | 觀測 baseline、推薦閾值、改 ConfigMap | `baseline`、`threshold-recommend`、`patch-config`、`explain-route` |
-| **GitOps** | 產 Alertmanager fragment、批次 PR、快照比對 | `generate-routes`、`batch-pr`、`config-history`、`gitops-check`、`tenant-verify` |
-| **Migrate** | ConfigMap → Operator CRD、edge/central 拆分 | `migrate-to-operator`、`operator-generate`、`operator-check`、`rule-pack-split` |
-| **Decommission** | 下架 tenant、棄用 metric | `offboard`、`deprecate` |
-| **Bridge** | 整合外掛 AM / Federation / 通知 | `byo-check`、`test-notification`、`federation-check`、`fed-key` |
+| 階段 | 典型負責角色 | 你想做什麼 | 用哪些命令 |
+|------|------------|------------|------------|
+| **Discover** | Platform | 認識客戶現有環境，盤點待遷移範圍 | `onboard`、`discover-mappings`、`blind-spot`、`parser` |
+| **Onboard** | Platform | 建立新 tenant、bootstrap CI/CD | `init`、`scaffold`、`migrate`、`grafana-import` |
+| **Validate** | Platform（custom rules 含 Domain） | Commit / PR 前驗 schema、routing、cardinality、policy | `validate-config`、`guard`、`evaluate-policy`、`opa-evaluate`、`lint`、`analyze-gaps`、`config-diff`、`drift-detect` |
+| **Cutover** | Platform | Shadow Monitoring → 正式切換 | `validate`、`shadow-verify`、`backtest`、`cutover` |
+| **Operate** | Platform（自己租戶含 Tenant） | 日常健康檢查、噪音治理、容量預測 | `diagnose`、`batch-diagnose`、`check-alert`、`alert-quality`、`alert-correlate`、`cardinality-forecast`、`maintenance-scheduler` |
+| **Tune** | Domain（含 Tenant） | 觀測 baseline、推薦閾值、改 ConfigMap | `baseline`、`threshold-recommend`、`patch-config`、`explain-route` |
+| **GitOps** | Platform | 產 Alertmanager fragment、批次 PR、快照比對 | `generate-routes`、`batch-pr`、`config-history`、`gitops-check`、`tenant-verify`、`state-reconcile` |
+| **Migrate** | Platform | ConfigMap → Operator CRD、edge/central 拆分 | `migrate-to-operator`、`operator-generate`、`operator-check`、`runtime-audit`、`rule-pack-split`、`rule-pack-diff`、`silencer-drift-check` |
+| **Decommission** | Platform | 下架 tenant、棄用 metric | `offboard`、`deprecate` |
+| **Bridge** | Platform | 整合外掛 AM / Federation / 通知 | `byo-check`、`test-notification`、`federation-check`、`fed-key` |
 
 ### 4.1 Discover
 
@@ -170,7 +170,7 @@ docker run --rm \
 | `config-history` | 配置快照與歷史追蹤（子命令：`snapshot` / `log` / `diff` / `show`） | `snapshot --config-dir <dir>` |
 | `gitops-check` | GitOps Native Mode 就緒度驗證（repo / local / sidecar 三模式） | `--mode <m> --config-dir <dir>` |
 | `tenant-verify` ✨v2.8.0 | 印 tenant effective config + merged_hash；`--expect-merged-hash` 比對快照（rollback 驗證） | `<tenant> --conf-d <dir>` |
-| `state-reconcile` ✨v2.8.0 | 遷移狀態目錄聲明式一致化（`.da/state/*.json` schema 驗證 + `.da/manifest.json` 重建），取代 troubleshooting checklist §schema/manifest drift 手動 jq 流程（#405 Cat A） | `--state-dir <dir>`（預設 `.da/state`） |
+| `state-reconcile` ✨v2.8.0 | 遷移狀態目錄聲明式一致化（`.da/state/*.json` schema 驗證 + `.da/manifest.json` 重建），取代手動 jq 校正流程 | `--state-dir <dir>`（預設 `.da/state`） |
 
 ### 4.8 Migrate（Operator-Native / Federation）
 
@@ -179,10 +179,10 @@ docker run --rm \
 | `migrate-to-operator` | ConfigMap 格式 → Operator 原生 CRD（含遷移清單與預檢） | `--source-dir <d> --config-dir <d>` |
 | `operator-generate` | 產出 PrometheusRule / AlertmanagerConfig / ServiceMonitor CRD YAML | `--config-dir <dir>` |
 | `operator-check` | 驗證 Operator CRD 部署狀態（5 項檢查 + 診斷） | `--namespace <ns>` |
-| `runtime-audit` ✨#747 | Git rule-packs ↔ Prometheus runtime 唯讀對帳（MISSING / UNHEALTHY / ORPHAN；偵測-only，不自癒） | `--prometheus <url>` 或 `--runtime-json <file>` |
+| `runtime-audit` | Git rule-packs ↔ Prometheus runtime 唯讀對帳（MISSING / UNHEALTHY / ORPHAN；偵測-only，不自癒） | `--prometheus <url>` 或 `--runtime-json <file>` |
 | `rule-pack-split` | Rule Pack 分層拆分（edge Part 1 + central Parts 2+3） | `--rule-pack <file>` |
-| `rule-pack-diff` ✨v2.8.0 | Rule Pack 兩版本機械比對（added / removed / breaking label schema），upgrade audit 用（#405 Cat D） | `--from <v1.yaml> --to <v2.yaml>` |
-| `silencer-drift-check` ✨v2.8.0 | AM silence 對 v2 rule pack 漂移偵測（offline，吃 amtool silence query -o json dump），cutover 必跑（#405 Cat B） | `--silences-file <json> --rule-source <path>` |
+| `rule-pack-diff` ✨v2.8.0 | Rule Pack 兩版本機械比對（added / removed / breaking label schema），供 upgrade audit | `--from <v1.yaml> --to <v2.yaml>` |
+| `silencer-drift-check` ✨v2.8.0 | AM silence 對 v2 rule pack 漂移偵測（offline，吃 amtool silence query -o json dump），cutover 必跑 | `--silences-file <json> --rule-source <path>` |
 
 ### 4.9 Decommission
 
@@ -198,7 +198,7 @@ docker run --rm \
 | `byo-check` | BYO Alertmanager 整合前檢（endpoint + 配置驗證） | `--alertmanager <url>` |
 | `test-notification` | 多通道通知連通性測試（驗 receiver 可達性） | `--config-dir <dir>` |
 | `federation-check` | Prometheus Federation 健康檢查 | `--prometheus <url>` |
-| `fed-key` | 產生 / 輪替 federation JWT 簽章金鑰（ADR-020 IV-2l：私鑰 Secret + 公鑰 JWKS） | （無，bootstrap）/ `--rotate` |
+| `fed-key` | 產生 / 輪替 federation JWT 簽章金鑰（federation 簽章金鑰：私鑰 Secret + 公鑰 JWKS） | （無，bootstrap）/ `--rotate` |
 
 ---
 
@@ -373,11 +373,13 @@ DA_LANG=en docker run --rm ghcr.io/vencil/da-tools migrate --help
 |------|------|---------|------|
 | 平台文件 | v2.8.1 | `v2.8.1` | 整體釋出版本 |
 | threshold-exporter | v2.8.0 | `exporter/v2.8.0` | Go binary（含 da-guard / da-batchpr / da-parser） |
-| **da-tools** | **v2.8.0** | **`tools/v2.8.0`** | 本 image（45 個 Python CLI + 3 個 bundled Go binary） |
+| **da-tools** | **v2.8.0** | **`tools/v2.8.0`** | 本 image（50 個 Python CLI + 3 個 bundled Go binary） |
 | da-portal | v2.8.0 | `portal/v2.8.0` | Interactive Tools Hub image |
 | tenant-api | v2.8.0 | `tenant-api/v2.8.0` | Go HTTP API |
 
-> §2 What's New 與命令表的 ✨v2.8.0 標記表示該命令於 v2.8.0 引入；下一版 in-flight 命令沿用同款 inline 標記。Release 收尾切五線 tag 時，本 README 標題與 [VERSION](app/VERSION) 跟著批次同步 bump。
+> 命令表的 ✨vX.Y.Z 標記表示該命令於該版引入；下一版 in-flight 命令沿用同款 inline 標記。Release 收尾切五線 tag 時，本 README 標題與 [VERSION](app/VERSION) 跟著批次同步 bump。
+>
+> **升級相容性** — da-tools 跨版本維持 **additive**：既有命令保留原 flag 介面，客戶 CI 內既有 `docker run ... da-tools <cmd>` 不需改動。
 
 CI/CD 由 `tools/v*` tag 觸發，不受平台文件 / exporter 變更影響。
 

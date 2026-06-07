@@ -11,7 +11,7 @@
 | **Try（≤2 min）** | 見下方——**對一份「過量配置」fixture 跑 da-guard** |
 | **→ You'll see** | da-guard **紅字攔截**：指出哪個租戶會超出 cardinality 預算、runtime 會被靜默截斷，**exit 1**。*da-guard red-flags the over-budget tenant and exits 1.* |
 
-> 🎯 **主要服務對象**：Domain Expert（Rule Pack 治理）與 Platform Engineer / CI owner（CI 護欄，見 [Domain Expert 角色指南](../../../docs/getting-started/for-domain-experts.md)）。
+> 🎯 **這個 demo 給誰**：Platform Engineer / SRE / CI owner（把 da-guard 接成 CI 護欄）。其他角色（Domain Expert / Tenant）的上手路徑見 [角色導引](../../../docs/getting-started/README.md)。
 
 **Prerequisite**：Docker 20.10+。
 
