@@ -10,11 +10,12 @@ if [[ "${1:-}" == "--check" ]]; then
   CHECK_ONLY=true
 fi
 
-# CDN resources used by jsx-loader.html and interactive/index.html
+# Runtime globals loaded by jsx-loader.html (vendor probe → local, else CDN).
+# Babel-standalone was dropped: tools are pre-built ESM bundles (esbuild), so
+# there is no in-browser transpile and babel.min.js is no longer loaded.
 declare -A RESOURCES=(
   ["react.production.min.js"]="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"
   ["react-dom.production.min.js"]="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"
-  ["babel.min.js"]="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.26.4/babel.min.js"
   ["lucide-react.min.js"]="https://unpkg.com/lucide-react@0.436.0/dist/umd/lucide-react.min.js"
   ["tailwindcss.js"]="https://cdn.tailwindcss.com"
 )
