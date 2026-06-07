@@ -34,9 +34,7 @@ package main
 // + `populateHierarchyState`) so production hot paths are covered.
 
 import (
-	"bytes"
 	"errors"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -188,8 +186,7 @@ tenants:
 	// appear) is observed against THIS test's log output, not the
 	// global stdlib logger that sibling parallel tests would race on
 	// (#4b).
-	var logBuf bytes.Buffer
-	testLogger := log.New(&logBuf, "", 0)
+	testLogger, logBuf := newTestLogger()
 
 	mgr := NewConfigManager(root)
 	mgr.SetLogger(testLogger)

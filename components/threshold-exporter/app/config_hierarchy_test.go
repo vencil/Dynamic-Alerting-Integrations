@@ -6,8 +6,6 @@ package main
 // parity test — see config_golden_parity_test.go).
 
 import (
-	"bytes"
-	"log"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -521,8 +519,7 @@ func TestRecomputeMergedHash_DefaultsParseFailureEmitsErrorAndMetric(t *testing.
 	// + mgr.SetLogger so observations land on `fresh`/`logBuf` instead
 	// of the package singletons (#4a + #4b; parallel-safe).
 	fresh, _ := freshMetrics(t)
-	var logBuf bytes.Buffer
-	testLogger := log.New(&logBuf, "", 0)
+	testLogger, logBuf := newTestLogger()
 
 	// Poison-pill root _defaults.yaml.
 	writeFile(t, filepath.Join(root, "_defaults.yaml"),

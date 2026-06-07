@@ -6,8 +6,6 @@ package main
 // config_test.go.
 
 import (
-	"bytes"
-	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -242,8 +240,7 @@ func TestConfigManager_LoadDir_UnparseableDefaultsErrorAndMetric(t *testing.T) {
 	// + mgr.SetLogger so scanner observations land on `fresh`/`logBuf`
 	// instead of the package singletons (#4a + #4b; parallel-safe).
 	fresh, _ := freshMetrics(t)
-	var logBuf bytes.Buffer
-	testLogger := log.New(&logBuf, "", 0)
+	testLogger, logBuf := newTestLogger()
 
 	// Poison-pill `_defaults.yaml`. Use a structurally broken YAML
 	// (unclosed brace) so yaml.Unmarshal definitively errors regardless

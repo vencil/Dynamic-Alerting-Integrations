@@ -44,6 +44,15 @@ func SVScheduled(def string, overrides ...TimeWindowOverride) ScheduledValue {
 	return ScheduledValue{Default: def, Overrides: overrides}
 }
 
+// newTestLogger returns a logger that writes into the returned buffer with no
+// prefix or flags. Per-test capture keeps parallel tests from racing on the
+// global stdlib logger (#4b); pair it with mgr.SetLogger to route the code
+// under test's log output onto the buffer for assertion.
+func newTestLogger() (*log.Logger, *bytes.Buffer) {
+	buf := &bytes.Buffer{}
+	return log.New(buf, "", 0), buf
+}
+
 // region ConfigManagerBasics — single-file and directory loading
 
 func TestConfigManager_LoadFile(t *testing.T) {
@@ -111,8 +120,7 @@ func TestLogConfigStats_Format(t *testing.T) {
 	// Per-test logger writing to a captured buffer — no global stdlib
 	// state mutation, so other parallel tests never observe our log
 	// stream and we never observe theirs (#4b).
-	var buf bytes.Buffer
-	testLogger := log.New(&buf, "", 0)
+	testLogger, buf := newTestLogger()
 
 	logConfigStats(testLogger, cfg, "Test prefix")
 
@@ -385,8 +393,7 @@ tenants:
 	// Per-test logger so any log lines emitted during the failing
 	// reload land on our buffer (not the global stdlib logger),
 	// keeping this test parallel-safe (#4b).
-	var buf bytes.Buffer
-	testLogger := log.New(&buf, "", 0)
+	testLogger, buf := newTestLogger()
 
 	// Load initial valid config
 	mgr := NewConfigManager(configPath)
