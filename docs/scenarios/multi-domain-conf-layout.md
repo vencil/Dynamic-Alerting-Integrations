@@ -166,10 +166,8 @@ tenants:
 #### 步驟 A：乾跑 (Dry Run)
 
 ```bash
-da-tools migrate-conf-d --dry-run \
-  --input-layout flat \
-  --output-layout hierarchical \
-  --domain-map finance:db,ops:ops,infra:infra
+python scripts/tools/dx/migrate_conf_d.py --conf-d conf.d/ --dry-run \
+  --infer-from metadata
 ```
 
 輸出範例：
@@ -192,16 +190,14 @@ No changes made. Rerun with --apply to proceed.
 #### 步驟 B：應用 (Apply)
 
 ```bash
-da-tools migrate-conf-d --apply \
-  --input-layout flat \
-  --output-layout hierarchical \
-  --domain-map finance:db,ops:ops,infra:infra
+python scripts/tools/dx/migrate_conf_d.py --conf-d conf.d/ --apply \
+  --infer-from metadata
 ```
 
 工具會自動：
 
-1. 掃描所有 tenant，按前綴提取域名
-2. 按 tenant 內的 `region` / `environment` 標籤分組
+1. 掃描所有 tenant，依 tenant YAML 內的 `_metadata.domain` 推斷域名
+2. 依 `_metadata.region` / `_metadata.environment` 分組
 3. 萃取共同鍵值到各層 `_defaults.yaml`
 4. 移動 tenant 檔案到新目錄結構
 5. 執行 `validate-conf-d` 確保遷移成功
@@ -210,7 +206,7 @@ da-tools migrate-conf-d --apply \
 
 ```bash
 # 逐 tenant 檢查繼承鏈
-da-tools describe-tenant --name tenant-a --show-sources
+python scripts/tools/dx/describe_tenant.py tenant-a --show-sources
 
 # 輸出
 tenant-a (finance/us-east/prod/tenant-a.yaml)
@@ -248,7 +244,7 @@ tenants:
 EOF
 
 # 3. 驗證（自動應用繼承）
-da-tools describe-tenant --name tenant-new --show-sources
+python scripts/tools/dx/describe_tenant.py tenant-new --show-sources
 ```
 
 系統自動尋找：
@@ -306,16 +302,16 @@ conf.d/
 
 | 工具 | 用途 | 版本 |
 |------|------|------|
-| `migrate-conf-d` | 平面→階層遷移，乾跑/應用 | v2.7.0+ |
-| `describe-tenant` | 顯示 tenant 有效配置 + 繼承鏈 | v2.7.0+ |
+| `migrate_conf_d.py` | 平面→階層遷移，乾跑/應用 | v2.7.0+ |
+| `describe_tenant.py` | 顯示 tenant 有效配置 + 繼承鏈 | v2.7.0+ |
 | `validate-conf-d` | 檢查配置正確性、重複、衝突 | v2.7.0+ |
 | `list-tenants` | 列舉所有 tenant + 所屬域/區/環 | v2.7.0+ |
 
 ### 使用範例
 
 ```bash
-# 1. 快速檢查某 tenant 的有效值
-da-tools describe-tenant --name tenant-a --key alerts.threshold
+# 1. 快速檢查某 tenant 的有效值（JSON 輸出 + jq 取單一鍵）
+python scripts/tools/dx/describe_tenant.py tenant-a --format json | jq '.alerts.threshold'
 
 # 2. 找到所有 Finance tenant
 da-tools list-tenants --filter domain=finance
@@ -323,8 +319,8 @@ da-tools list-tenants --filter domain=finance
 # 3. 驗證配置無誤
 da-tools validate-conf-d --check-merge-conflicts
 
-# 4. 生成 configuration report（用於審計）
-da-tools describe-tenant --generate-report --format json --output audit.json
+# 4. 生成 configuration report（用於審計；--all 匯出所有租戶有效配置）
+python scripts/tools/dx/describe_tenant.py --all --format json --output audit.json
 ```
 
 ## 注意事項
@@ -347,7 +343,7 @@ da-tools describe-tenant --generate-report --format json --output audit.json
 
 - Pre-commit hook：禁止 `_defaults.yaml` 含有 hardcoded tenant id
 - 配置驗證：檢測重複 receiver、未定義的 rule group 參考
-- Git hook：對 `conf.d/` 的修改自動執行 `validate-conf-d` + `describe-tenant` 檢查
+- Git hook：對 `conf.d/` 的修改自動執行 `validate-conf-d` + `describe_tenant.py` 檢查
 
 ## 相關資源
 

@@ -23,7 +23,7 @@ As the platform grows from dozens to hundreds or even thousands of tenants, oper
 ## Prerequisites
 
 - Completed `conf.d/` hierarchical structure migration (see [multi-domain-conf-layout](multi-domain-conf-layout.en.md)) or at least partial domain hierarchy (mixed mode)
-- Tools installed: `describe-tenant`, `blast_radius.py`, `migrate-conf-d`
+- Tools installed: `scripts/tools/dx/describe_tenant.py`, `scripts/tools/ops/blast_radius.py`, `scripts/tools/dx/migrate_conf_d.py`
 - GitHub Actions `blast-radius.yml` workflow enabled
 
 ## Scenario 1: Assess Blast Radius Before Changing Domain Defaults
@@ -41,7 +41,7 @@ You need to raise the `MariaDBHighConnections` threshold from 90 to 95 for all F
 #### A. Generate Current Effective Config Snapshot
 
 ```bash
-da-tools describe-tenant --all \
+python scripts/tools/dx/describe_tenant.py --all \
   --conf-d conf.d/ \
   --output /tmp/before.json
 ```
@@ -60,7 +60,7 @@ tenants:
 #### C. Generate Post-Change Effective Config Snapshot
 
 ```bash
-da-tools describe-tenant --all \
+python scripts/tools/dx/describe_tenant.py --all \
   --conf-d conf.d/ \
   --output /tmp/after.json
 ```
@@ -112,7 +112,7 @@ Tenant `tenant-fin-042`'s `DiskUsageHigh` alert keeps firing. You want to find w
 ### Steps
 
 ```bash
-da-tools describe-tenant tenant-fin-042 --show-sources --conf-d conf.d/
+python scripts/tools/dx/describe_tenant.py tenant-fin-042 --show-sources --conf-d conf.d/
 ```
 
 Example output:
@@ -153,7 +153,7 @@ tenants:
 ### Steps
 
 ```bash
-da-tools describe-tenant tenant-fin-001 --diff tenant-fin-080 --conf-d conf.d/
+python scripts/tools/dx/describe_tenant.py tenant-fin-001 --diff tenant-fin-080 --conf-d conf.d/
 ```
 
 Example output:
@@ -188,7 +188,7 @@ The GitHub Actions workflow `blast-radius.yml` triggers automatically when a PR 
 ```
 PR submitted → CI triggers blast-radius.yml
   ├── 1. Checkout base + PR
-  ├── 2. Run describe-tenant --all on each
+  ├── 2. Run describe_tenant.py --all on each
   ├── 3. blast_radius.py diff + classify
   ├── 4. Post PR comment (Tier A/B/C summary)
   └── 5. Upload JSON report artifact (for audit)
@@ -235,15 +235,15 @@ You just migrated 200 Finance tenants from flat to hierarchical structure and ne
 
 ```bash
 # 1. Pre-migration snapshot
-da-tools describe-tenant --all --conf-d conf.d/ --output /tmp/pre-migration.json
+python scripts/tools/dx/describe_tenant.py --all --conf-d conf.d/ --output /tmp/pre-migration.json
 
 # 2. Execute migration
-da-tools migrate-conf-d --apply \
+python scripts/tools/dx/migrate_conf_d.py --apply \
   --conf-d conf.d/ \
   --infer-from metadata
 
 # 3. Post-migration snapshot
-da-tools describe-tenant --all --conf-d conf.d/ --output /tmp/post-migration.json
+python scripts/tools/dx/describe_tenant.py --all --conf-d conf.d/ --output /tmp/post-migration.json
 
 # 4. Compare: expect 0 affected tenants
 python3 scripts/tools/ops/blast_radius.py \
@@ -258,11 +258,11 @@ Expected result: `"affected_tenants": 0`. Any non-zero result indicates configur
 
 | Tool | Purpose | Typical Usage |
 |------|---------|--------------|
-| `describe-tenant <id>` | View single tenant effective config | `da-tools describe-tenant tenant-a --show-sources` |
-| `describe-tenant --all` | Export all tenants' effective config JSON | `da-tools describe-tenant --all --output snap.json` |
-| `describe-tenant --diff` | Compare two tenants' config differences | `da-tools describe-tenant tid-1 --diff tid-2` |
-| `blast_radius.py` | Diff two snapshots and classify impact | `blast_radius.py --base a.json --pr b.json` |
-| `migrate-conf-d` | Flat→hierarchical migration | `da-tools migrate-conf-d --dry-run` |
+| `describe_tenant.py <id>` | View single tenant effective config | `python scripts/tools/dx/describe_tenant.py tenant-a --show-sources` |
+| `describe_tenant.py --all` | Export all tenants' effective config JSON | `python scripts/tools/dx/describe_tenant.py --all --output snap.json` |
+| `describe_tenant.py --diff` | Compare two tenants' config differences | `python scripts/tools/dx/describe_tenant.py tid-1 --diff tid-2` |
+| `blast_radius.py` | Diff two snapshots and classify impact | `python scripts/tools/ops/blast_radius.py --base a.json --pr b.json` |
+| `migrate_conf_d.py` | Flat→hierarchical migration | `python scripts/tools/dx/migrate_conf_d.py --conf-d conf.d/ --dry-run` |
 | `validate-conf-d` | Config correctness validation | `da-tools validate-conf-d --check-merge-conflicts` |
 
 ## Related Resources

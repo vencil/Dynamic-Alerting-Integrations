@@ -166,10 +166,8 @@ tenants:
 #### Step A: Dry Run
 
 ```bash
-da-tools migrate-conf-d --dry-run \
-  --input-layout flat \
-  --output-layout hierarchical \
-  --domain-map finance:db,ops:ops,infra:infra
+python scripts/tools/dx/migrate_conf_d.py --conf-d conf.d/ --dry-run \
+  --infer-from metadata
 ```
 
 Example output:
@@ -192,16 +190,14 @@ No changes made. Rerun with --apply to proceed.
 #### Step B: Apply
 
 ```bash
-da-tools migrate-conf-d --apply \
-  --input-layout flat \
-  --output-layout hierarchical \
-  --domain-map finance:db,ops:ops,infra:infra
+python scripts/tools/dx/migrate_conf_d.py --conf-d conf.d/ --apply \
+  --infer-from metadata
 ```
 
 The tool automatically:
 
-1. Scans all tenants, extracts domain names by prefix
-2. Groups by `region` / `environment` tags in tenant config
+1. Scans all tenants, infers domain from each tenant YAML's `_metadata.domain`
+2. Groups by `_metadata.region` / `_metadata.environment`
 3. Extracts common keys into each level's `_defaults.yaml`
 4. Moves tenant files to new directory structure
 5. Runs `validate-conf-d` to ensure migration success
@@ -210,7 +206,7 @@ The tool automatically:
 
 ```bash
 # Check inheritance chain for each tenant
-da-tools describe-tenant --name tenant-a --show-sources
+python scripts/tools/dx/describe_tenant.py tenant-a --show-sources
 
 # Output
 tenant-a (finance/us-east/prod/tenant-a.yaml)
@@ -248,7 +244,7 @@ tenants:
 EOF
 
 # 3. Verify (inheritance applied automatically)
-da-tools describe-tenant --name tenant-new --show-sources
+python scripts/tools/dx/describe_tenant.py tenant-new --show-sources
 ```
 
 The system automatically searches for:
@@ -306,16 +302,16 @@ The system supports both:
 
 | Tool | Purpose | Version |
 |------|---------|---------|
-| `migrate-conf-d` | Flat→hierarchical migration, dry-run/apply | v2.7.0+ |
-| `describe-tenant` | Show tenant effective config + inheritance chain | v2.7.0+ |
+| `migrate_conf_d.py` | Flat→hierarchical migration, dry-run/apply | v2.7.0+ |
+| `describe_tenant.py` | Show tenant effective config + inheritance chain | v2.7.0+ |
 | `validate-conf-d` | Check config correctness, duplicates, conflicts | v2.7.0+ |
 | `list-tenants` | Enumerate all tenants + domain/region/env metadata | v2.7.0+ |
 
 ### Usage Examples
 
 ```bash
-# 1. Quick check effective value for a tenant
-da-tools describe-tenant --name tenant-a --key alerts.threshold
+# 1. Quick check effective value for a tenant (JSON output + jq for a single key)
+python scripts/tools/dx/describe_tenant.py tenant-a --format json | jq '.alerts.threshold'
 
 # 2. Find all Finance tenants
 da-tools list-tenants --filter domain=finance
@@ -323,8 +319,8 @@ da-tools list-tenants --filter domain=finance
 # 3. Validate config for merge conflicts
 da-tools validate-conf-d --check-merge-conflicts
 
-# 4. Generate configuration report (for audit)
-da-tools describe-tenant --generate-report --format json --output audit.json
+# 4. Generate configuration report (for audit; --all exports every tenant's effective config)
+python scripts/tools/dx/describe_tenant.py --all --format json --output audit.json
 ```
 
 ## Important Notes
@@ -347,7 +343,7 @@ da-tools describe-tenant --generate-report --format json --output audit.json
 
 - Pre-commit hook: Prevents `_defaults.yaml` from containing hardcoded tenant IDs
 - Config validation: Detects duplicate receivers, undefined rule group references
-- Git hook: Any `conf.d/` modification triggers `validate-conf-d` + `describe-tenant` checks
+- Git hook: Any `conf.d/` modification triggers `validate-conf-d` + `describe_tenant.py` checks
 
 ## Related Resources
 
