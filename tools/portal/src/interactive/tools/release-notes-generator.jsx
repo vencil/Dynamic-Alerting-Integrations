@@ -5,9 +5,21 @@ audience: [maintainer]
 version: v2.7.0
 lang: en
 related: [deployment-wizard, health-dashboard, platform-health]
+dependencies: [
+  "release-notes-generator/changelog.js"
+]
 ---
 
 import React, { useState, useMemo } from 'react';
+
+// PR-portal-21: changelog parse/filter/summarize pipeline extracted to a
+// unit-testable module (was inline + 0%-covered). A dead roleLabels local was
+// dropped in the move, removing the engine's only ROLES dependency.
+import {
+  parseChangelogMarkdown,
+  filterChangesByRole,
+  generateAutoSummary,
+} from './release-notes-generator/changelog.js';
 
 const t = window.__t || ((zh, en) => en);
 
@@ -66,119 +78,6 @@ const SAMPLE_CHANGELOG = `
 - [domain-expert] Rule Pack contributor guide with schema examples
 - [tenant-user] Quick-start portal walkthrough video link added
 `;
-
-function parseChangelogMarkdown(text) {
-  /** Parse CHANGELOG markdown into structured format. */
-  const sections = {};
-  let currentCategory = null;
-  let currentItems = [];
-
-  for (const line of text.split('\n')) {
-    const categoryMatch = line.match(/^### (Features|Fixes|Breaking Changes|Documentation)$/);
-    if (categoryMatch) {
-      if (currentCategory && currentItems.length > 0) {
-        sections[currentCategory] = currentItems;
-      }
-      currentCategory = categoryMatch[1];
-      currentItems = [];
-      continue;
-    }
-
-    if (currentCategory && line.match(/^- \[/)) {
-      const itemMatch = line.match(/^- \[(.*?)\]\s+(.+)$/);
-      if (itemMatch) {
-        const [, roles, description] = itemMatch;
-        const roleList = roles.split(',').map(r => r.trim());
-        currentItems.push({ roles: roleList, description });
-      }
-    }
-  }
-
-  if (currentCategory && currentItems.length > 0) {
-    sections[currentCategory] = currentItems;
-  }
-
-  return sections;
-}
-
-function filterChangesByRole(sections, selectedRoles) {
-  /** Filter changelog items by selected role. */
-  const filtered = {};
-
-  for (const [category, items] of Object.entries(sections)) {
-    const relevantItems = items.filter(item =>
-      selectedRoles.some(role => item.roles.includes(role))
-    );
-    if (relevantItems.length > 0) {
-      filtered[category] = relevantItems;
-    }
-  }
-
-  return filtered;
-}
-
-function generateAutoSummary(filtered, selectedRoles) {
-  /** Generate a 2-3 sentence auto-summary for selected roles. */
-  const breakingCount = filtered['Breaking Changes']?.length || 0;
-  const featuresCount = filtered['Features']?.length || 0;
-  const fixesCount = filtered['Fixes']?.length || 0;
-
-  const roleLabels = selectedRoles.map(r => ROLES[r]?.label?.() || r).join(' / ');
-
-  const impactItems = [];
-  if (breakingCount > 0) {
-    impactItems.push(t(
-      `${breakingCount} 個重大變更`,
-      `${breakingCount} breaking change${breakingCount !== 1 ? 's' : ''}`
-    ));
-  }
-  if (featuresCount > 0) {
-    impactItems.push(t(
-      `${featuresCount} 個新功能`,
-      `${featuresCount} new feature${featuresCount !== 1 ? 's' : ''}`
-    ));
-  }
-  if (fixesCount > 0) {
-    impactItems.push(t(
-      `${fixesCount} 個修復`,
-      `${fixesCount} fix${fixesCount !== 1 ? 's' : ''}`
-    ));
-  }
-
-  const impactStr = impactItems.join(t('、', ', '));
-
-  const sentences = [];
-  if (breakingCount > 0) {
-    sentences.push(t(
-      `本版本包含 ${impactStr} 需要您的注意。`,
-      `This release includes ${impactStr} that require your attention.`
-    ));
-  } else if (impactItems.length > 0) {
-    sentences.push(t(
-      `本版本為您帶來 ${impactStr}，持續改進平台。`,
-      `This release brings you ${impactStr}, continuously improving the platform.`
-    ));
-  } else {
-    sentences.push(t(
-      `本版本沒有與您相關的變更。`,
-      `This release contains no changes relevant to your role.`
-    ));
-    return sentences[0];
-  }
-
-  if (selectedRoles.length === 1) {
-    const mostImpactful = breakingCount > 0 ? 'Breaking Changes' : featuresCount > 0 ? 'Features' : 'Fixes';
-    if (filtered[mostImpactful]?.length > 0) {
-      const firstItem = filtered[mostImpactful][0].description.substring(0, 50);
-      sentences.push(t(
-        `亮點包括：${firstItem}...`,
-        `Highlights include: ${firstItem}...`
-      ));
-    }
-  }
-
-  return sentences.join(' ');
-}
 
 export default function ReleaseNotesGenerator() {
   const [inputMode, setInputMode] = useState('paste'); // 'paste' or 'platform-data'
