@@ -460,6 +460,23 @@ def run_tool(script_name, args):
     spec.loader.exec_module(module)
 
 
+def _print_version(tools_dir=None):
+    """Print the da-tools version (or a dev fallback) and exit.
+
+    tools_dir defaults to the module-level TOOLS_DIR but is resolved in the
+    body (not bound as a default arg) so tests can pass a temp dir to cover
+    the missing-VERSION dev fallback without monkeypatching a frozen global.
+    """
+    tools_dir = tools_dir or TOOLS_DIR
+    version_file = os.path.join(tools_dir, "VERSION")
+    if os.path.isfile(version_file):
+        with open(version_file, encoding="utf-8") as f:
+            print(f"da-tools {f.read().strip()}")
+    else:
+        print("da-tools (dev)")
+    sys.exit(0)
+
+
 def main():
     if len(sys.argv) < 2 or sys.argv[1] in ("-h", "--help", "help"):
         print_usage()
@@ -468,17 +485,10 @@ def main():
     args = sys.argv[2:]
 
     if command == "--version":
-        version_file = os.path.join(TOOLS_DIR, "VERSION")
-        if os.path.isfile(version_file):
-            with open(version_file, encoding="utf-8") as f:
-                print(f"da-tools {f.read().strip()}")
-        else:
-            print("da-tools (dev)")
-        sys.exit(0)
+        _print_version()
 
-    # Handle --help for the main entrypoint
-    if command in ("-h", "--help", "help"):
-        print_usage()
+    # Note: -h/--help/help is fully handled by the guard at the top of main()
+    # (print_usage exits there), so no second help check is needed here.
 
     if command not in COMMAND_MAP:
         commands = ', '.join(sorted(COMMAND_MAP.keys()))

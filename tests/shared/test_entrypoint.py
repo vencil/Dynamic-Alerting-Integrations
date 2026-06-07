@@ -143,6 +143,21 @@ class TestVersionDisplay:
         assert re.match(r'^[0-9]+\.[0-9]+\.[0-9]+$', ver), \
             f"VERSION '{ver}' 不是合法 semver"
 
+    def test_print_version_with_file(self, capsys, tmp_path):
+        """_print_version(tools_dir) 讀該目錄 VERSION 並印 'da-tools <ver>' + exit 0。"""
+        (tmp_path / "VERSION").write_text("9.9.9\n", encoding="utf-8")
+        with pytest.raises(SystemExit) as exc_info:
+            entrypoint._print_version(str(tmp_path))
+        assert exc_info.value.code == 0
+        assert capsys.readouterr().out.strip() == "da-tools 9.9.9"
+
+    def test_print_version_dev_fallback(self, capsys, tmp_path):
+        """VERSION 缺檔時 _print_version 印 'da-tools (dev)' + exit 0。"""
+        with pytest.raises(SystemExit) as exc_info:
+            entrypoint._print_version(str(tmp_path))
+        assert exc_info.value.code == 0
+        assert capsys.readouterr().out.strip() == "da-tools (dev)"
+
 
 # ── _t i18n helper ─────────────────────────────────────────────────
 
