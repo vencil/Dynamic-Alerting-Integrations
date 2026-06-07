@@ -36,33 +36,27 @@ class TestFlattenTenantConfig:
 
 class TestClassifyChange:
 
-    def test_added(self):
-        assert cd.classify_change(None, 50) == "added"
-
-    def test_removed(self):
-        assert cd.classify_change(50, None) == "removed"
-
-    def test_tighter(self):
-        assert cd.classify_change(80, 50) == "tighter"
-
-    def test_looser(self):
-        assert cd.classify_change(50, 80) == "looser"
-
-    def test_toggled_disable(self):
-        assert cd.classify_change(50, "disable") == "toggled"
-
-    def test_toggled_enable(self):
-        assert cd.classify_change("disable", 50) == "toggled"
-
-    def test_modified_dict(self):
-        old = {"default": 50, "schedule": []}
-        new = {"default": 70, "schedule": []}
-        # Different dicts → modified (can't do simple numeric compare)
-        result = cd.classify_change(old, new)
-        assert result == "modified"
-
-    def test_same_value_unchanged(self):
-        assert cd.classify_change(50, 50) == "unchanged"
+    @pytest.mark.parametrize(
+        "old, new, expected",
+        [
+            (None, 50, "added"),
+            (50, None, "removed"),
+            (80, 50, "tighter"),
+            (50, 80, "looser"),
+            (50, "disable", "toggled"),
+            ("disable", 50, "toggled"),
+            # dict vs dict → no numeric compare possible → modified
+            ({"default": 50, "schedule": []}, {"default": 70, "schedule": []}, "modified"),
+            (50, 50, "unchanged"),
+        ],
+        ids=[
+            "added", "removed", "tighter", "looser",
+            "toggled_disable", "toggled_enable", "modified_dict",
+            "same_value_unchanged",
+        ],
+    )
+    def test_classify_change(self, old, new, expected):
+        assert cd.classify_change(old, new) == expected
 
 
 # ── 3. Compute Diff ──────────────────────────────────────────────────
@@ -194,6 +188,51 @@ class TestRenderMarkdown:
         assert cd._format_value(None) == "—"
         assert cd._format_value(50) == "50"
         assert cd._format_value({"schedule": []}) == "(scheduled)"
+
+    def test_with_profile_changes(self):
+        """The '## Profile Changes' section renders all three pd shapes:
+        a modified profile with a key-diff table and >10 affected tenants
+        (truncation), an added profile, and a profile with no key diffs.
+        """
+        profile_diffs = [
+            {
+                "profile": "mysql-prod",
+                "change": "modified",
+                "affected_count": 12,
+                "affected_tenants": [f"t{i}" for i in range(12)],
+                "key_diffs": [
+                    {"key": "mysql_connections", "old": 80, "new": 50,
+                     "change": "tighter"},
+                ],
+            },
+            {
+                "profile": "redis-new",
+                "change": "added",
+                "affected_count": 1,
+                "affected_tenants": ["t-redis"],
+                "key_diffs": [],
+            },
+            {
+                "profile": "empty-prof",
+                "change": "modified",
+                "affected_count": 0,
+                "affected_tenants": [],
+                "key_diffs": [],
+            },
+        ]
+        md = cd.render_markdown({}, "old", "new", profile_diffs=profile_diffs)
+
+        assert "## Profile Changes" in md
+        # modified profile: header + truncated tenant list + key-diff table
+        assert "Profile: mysql-prod (modified) — 12 tenant(s) affected" in md
+        assert "(+2 more)" in md          # 12 affected, first 10 shown
+        assert "Tenants:" in md
+        assert "| mysql_connections |" in md
+        assert "tighter" in md
+        # added profile with no key diffs → "New profile with N keys" line
+        assert "New profile with 0 keys" in md
+        # third profile (modified, no key diffs, no tenants) still renders
+        assert "empty-prof" in md
 
 
 # ── 7. CLI ───────────────────────────────────────────────────────────
