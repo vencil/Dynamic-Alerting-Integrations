@@ -40,6 +40,14 @@ var ErrPendingPR = errors.New("pending PR exists for this tenant")
 // file another tenant already merged remotely — the whole TRK-318 hazard).
 var ErrForgeDegraded = errors.New("forge degradation: base fetch timed out — write lock released")
 
+// ErrValidation wraps a schema/structural validation failure of the incoming
+// YAML. It lets handlers distinguish a CLIENT error (malformed body → HTTP 400)
+// from a server-side write failure (500): the direct-write path already returned
+// 400 for these, but the PR-mode path previously mapped every non-retryable
+// write error to 500 (#795 F1). Returned by Write / WritePR / WritePRBatch via
+// fmt.Errorf("%w: …", ErrValidation, …), so errors.Is(err, ErrValidation) holds.
+var ErrValidation = errors.New("validation failed")
+
 // OnWriteFunc is called after a successful config write.
 // tenantID is the tenant or entity that was written (tenant ID, "groups", "views", etc.)
 type OnWriteFunc func(tenantID string)
@@ -257,7 +265,7 @@ func (w *Writer) Write(ctx context.Context, tenantID, authorEmail, yamlContent s
 	// admission slot — validation is cheap, CPU-only, and must not consume the
 	// single-writer token).
 	if errs := validate(w.configDir, tenantID, yamlContent); len(errs) > 0 {
-		return fmt.Errorf("validation failed: %s", strings.Join(errs, "; "))
+		return fmt.Errorf("%w: %s", ErrValidation, strings.Join(errs, "; "))
 	}
 
 	// Step 2: load-shedding admission (TRK-320) before w.mu.

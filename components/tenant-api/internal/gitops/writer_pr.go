@@ -36,7 +36,7 @@ type PRWriteResult struct {
 func (w *Writer) WritePR(ctx context.Context, tenantID, authorEmail, yamlContent string) (*PRWriteResult, error) {
 	// Step 1: validate schema before anything
 	if errs := validate(w.configDir, tenantID, yamlContent); len(errs) > 0 {
-		return nil, fmt.Errorf("validation failed: %s", strings.Join(errs, "; "))
+		return nil, fmt.Errorf("%w: %s", ErrValidation, strings.Join(errs, "; "))
 	}
 
 	// Step 1b: load-shedding admission (TRK-320) before w.mu.
@@ -145,7 +145,7 @@ func (w *Writer) WritePRBatch(ctx context.Context, ops []PRBatchOp, authorEmail 
 	// Validate all operations first
 	for _, op := range ops {
 		if errs := validate(w.configDir, op.TenantID, op.YAMLContent); len(errs) > 0 {
-			return nil, fmt.Errorf("validation failed for %s: %s", op.TenantID, strings.Join(errs, "; "))
+			return nil, fmt.Errorf("%w for %s: %s", ErrValidation, op.TenantID, strings.Join(errs, "; "))
 		}
 	}
 

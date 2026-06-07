@@ -167,11 +167,17 @@ func putTenantPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, tenantID,
 	result, err := d.Writer.WritePR(r.Context(), tenantID, email, yamlContent)
 	if err != nil {
 		// TRK-320 ErrWriteOverloaded / TRK-318 ErrForgeDegraded → canonical
-		// retry-hinting 503s (shared with the batch path). Anything else is an
-		// unexpected git failure → generic 500 with the single-write message.
+		// retry-hinting 503s (shared with the batch path).
 		if writeWriteFlowError(rw, r, err) {
 			return
 		}
+		// #795 F1: malformed body is a CLIENT error → 400 (matches the
+		// direct-write path), not a server 500.
+		if errors.Is(err, gitops.ErrValidation) {
+			WriteJSONError(rw, r, http.StatusBadRequest, err.Error())
+			return
+		}
+		// Anything else is an unexpected git failure → generic 500.
 		WriteJSONError(rw, r, http.StatusInternalServerError, "PR write failed: "+err.Error())
 		return
 	}

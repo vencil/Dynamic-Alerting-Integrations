@@ -148,11 +148,16 @@ func BatchTenants(d *Deps) http.HandlerFunc {
 			result, err := d.Writer.WritePRBatch(r.Context(), batchOps, email)
 			if err != nil {
 				// TRK-320 ErrWriteOverloaded / TRK-318 ErrForgeDegraded → canonical
-				// retry-hinting 503s (shared with the single-write path). Anything else
-				// is an unexpected git failure → generic 500 with the batch message.
+				// retry-hinting 503s (shared with the single-write path).
 				if writeWriteFlowError(rw, r, err) {
 					return
 				}
+				// #795 F1: a malformed op body is a CLIENT error → 400, not a 500.
+				if errors.Is(err, gitops.ErrValidation) {
+					WriteJSONError(rw, r, http.StatusBadRequest, err.Error())
+					return
+				}
+				// Anything else is an unexpected git failure → generic 500.
 				WriteJSONError(rw, r, http.StatusInternalServerError, "PR/MR batch write failed: "+err.Error())
 				return
 			}

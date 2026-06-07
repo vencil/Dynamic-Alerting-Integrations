@@ -18,9 +18,9 @@ package handler
 // ============================================================
 
 import (
-	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -120,8 +120,10 @@ func MaxBodyBytesFromEnv(envValue string) (n int64, malformed bool) {
 	if v == "" {
 		return DefaultMaxBodyBytes, false
 	}
-	var parsed int64
-	if _, err := fmt.Sscanf(v, "%d", &parsed); err != nil || parsed <= 0 {
+	// #795 F4: strict full-string parse (see RateLimitConfigFromEnv) — Sscanf
+	// accepted numeric prefixes like "1048576x", silently using a wrong cap.
+	parsed, err := strconv.ParseInt(v, 10, 64)
+	if err != nil || parsed <= 0 {
 		return DefaultMaxBodyBytes, true
 	}
 	return parsed, false
