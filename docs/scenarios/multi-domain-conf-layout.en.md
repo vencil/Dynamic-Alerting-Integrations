@@ -200,7 +200,8 @@ The tool automatically:
 2. Groups by `_metadata.region` / `_metadata.environment`
 3. Extracts common keys into each level's `_defaults.yaml`
 4. Moves tenant files to new directory structure
-5. Runs `da-tools validate-config` to ensure migration success
+
+After migration, run `da-tools validate-config` to verify config integrity.
 
 #### Step C: Verify
 

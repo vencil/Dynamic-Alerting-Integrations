@@ -200,7 +200,8 @@ python scripts/tools/dx/migrate_conf_d.py --conf-d conf.d/ --apply \
 2. 依 `_metadata.region` / `_metadata.environment` 分組
 3. 萃取共同鍵值到各層 `_defaults.yaml`
 4. 移動 tenant 檔案到新目錄結構
-5. 執行 `da-tools validate-config` 確保遷移成功
+
+遷移後執行 `da-tools validate-config` 驗證配置完整性。
 
 #### 步驟 C：驗證
 
