@@ -5,9 +5,16 @@ audience: [platform-engineer]
 version: v2.7.0
 lang: en
 related: [architecture-quiz, rule-pack-matrix, dependency-graph]
+dependencies: [
+  "capacity-planner/calc.js"
+]
 ---
 
 import React, { useState, useMemo } from 'react';
+
+// PR-portal-15: sizing math extracted from the inline useMemo to a pure,
+// unit-testable function. Orchestrator filters RULE_PACKS and passes packs in.
+import { computeCapacityEstimates } from './capacity-planner/calc.js';
 
 const t = window.__t || ((zh, en) => en);
 
@@ -93,50 +100,7 @@ export default function CapacityPlanner() {
 
   const estimates = useMemo(() => {
     const packs = RULE_PACKS.filter(rp => selectedPacks.has(rp.id));
-    const totalRecording = packs.reduce((s, p) => s + p.recording, 0);
-    const totalAlerts = packs.reduce((s, p) => s + p.alerts, 0);
-    const totalMetrics = packs.reduce((s, p) => s + p.metrics, 0);
-
-    // Series estimation
-    const seriesPerInstance = packs.reduce((s, p) => s + p.seriesPerInstance, 0);
-    const totalInstances = tenantCount * instancesPerTenant;
-    const totalSeries = seriesPerInstance * totalInstances;
-
-    // TSDB size: ~1.5 bytes per sample, samples = series * (retention_seconds / scrape_interval)
-    const samplesPerDay = totalSeries * (86400 / scrapeInterval);
-    const totalSamples = samplesPerDay * retentionDays;
-    const tsdbBytes = totalSamples * 1.5;
-    const tsdbGB = tsdbBytes / (1024 ** 3);
-
-    // Exporter memory: ~0.5 MB base + 0.1 KB per series
-    const exporterMB = 50 + (totalSeries * 0.1 / 1024);
-
-    // Prometheus memory: ~2 bytes per active sample in head block (2h)
-    const headSamples = totalSeries * (7200 / scrapeInterval);
-    const promMemMB = (headSamples * 2) / (1024 ** 2) + 256; // + 256 MB base
-
-    // Alertmanager routes
-    const amRoutes = tenantCount * (1 + (packs.length > 3 ? packs.length : 0)); // base + overrides
-    const amInhibits = tenantCount * 2 + totalAlerts; // per-tenant + dedup
-
-    // Reload time estimate (ms)
-    const reloadMs = 50 + tenantCount * 5 + totalSeries * 0.01;
-
-    return {
-      packs: packs.length,
-      totalRecording,
-      totalAlerts,
-      totalMetrics,
-      totalInstances,
-      totalSeries,
-      tsdbGB: Math.max(tsdbGB, 0.01),
-      exporterMB: Math.max(exporterMB, 50),
-      promMemMB: Math.max(promMemMB, 256),
-      amRoutes,
-      amInhibits,
-      reloadMs: Math.max(reloadMs, 50),
-      samplesPerDay,
-    };
+    return computeCapacityEstimates({ packs, tenantCount, instancesPerTenant, scrapeInterval, retentionDays });
   }, [tenantCount, instancesPerTenant, scrapeInterval, retentionDays, selectedPacks]);
 
   return (
