@@ -562,6 +562,67 @@ type ProposalTranslation struct {
 	Warnings           []string           `json:"warnings,omitempty"`
 }
 
+// proposalTenantValue pairs a tenant id with its translated threshold, used to
+// derive per-tenant overrides that differ from the cluster default.
+type proposalTenantValue struct {
+	tenant string
+	value  float64
+}
+
+// proposalTally accumulates the per-member translation votes and values that
+// TranslateProposal folds into the cluster-level summary. Built by
+// tallyProposalMembers.
+type proposalTally struct {
+	keyVotes        map[string]int
+	opVotes         map[string]int
+	severityVotes   map[string]int
+	thresholds      []float64
+	tenantValues    []proposalTenantValue
+	translatedCount int
+}
+
+// tallyProposalMembers translates each member rule, appends its per-member
+// status to out.MemberStatuses, and accumulates the votes/thresholds/per-tenant
+// values needed for the cluster summary. It returns an error only on a
+// translator contract violation (empty Expr); skipped members are recorded but
+// do not contribute votes. Extracted verbatim from TranslateProposal.
+func tallyProposalMembers(members []parser.ParsedRule, tenantKey string, out *ProposalTranslation) (proposalTally, error) {
+	tally := proposalTally{
+		keyVotes:      make(map[string]int),
+		opVotes:       make(map[string]int),
+		severityVotes: make(map[string]int),
+	}
+	for _, m := range members {
+		t, err := TranslateRule(m)
+		if err != nil {
+			// Translator only errors on empty Expr — propagate so
+			// the caller sees a contract violation, rather than
+			// silently treating it like a TranslationSkipped.
+			return tally, fmt.Errorf("translate member %q: %w", m.SourceRuleID, err)
+		}
+		out.MemberStatuses = append(out.MemberStatuses, t)
+		if t.Status == TranslationSkipped {
+			continue
+		}
+		tally.translatedCount++
+		tally.keyVotes[t.MetricKey]++
+		tally.opVotes[t.Operator]++
+		if t.Severity != "" {
+			tally.severityVotes[t.Severity]++
+		}
+		tally.thresholds = append(tally.thresholds, t.Threshold)
+
+		tenantID := ""
+		if tenantKey != "" {
+			tenantID = m.Labels[tenantKey]
+		}
+		if tenantID != "" {
+			tally.tenantValues = append(tally.tenantValues, proposalTenantValue{tenant: tenantID, value: t.Threshold})
+		}
+	}
+	return tally, nil
+}
+
 // TranslateProposal applies TranslateRule to every member of a
 // proposal and produces the cluster-level summary. tenantKey is
 // the label pickTenantLabelKey resolved (so tenant-id is read off
@@ -582,48 +643,13 @@ func TranslateProposal(prop ExtractionProposal, members []parser.ParsedRule, ten
 	}
 	out.MemberStatuses = make([]RuleTranslation, 0, len(members))
 
-	// Per-member translation.
-	keyVotes := make(map[string]int)
-	severityVotes := make(map[string]int)
-	opVotes := make(map[string]int)
-	var thresholds []float64
-	type tenantValue struct {
-		tenant string
-		value  float64
-	}
-	var tenantValues []tenantValue
-
-	translatedCount := 0
-	for _, m := range members {
-		t, err := TranslateRule(m)
-		if err != nil {
-			// Translator only errors on empty Expr — propagate so
-			// the caller sees a contract violation, rather than
-			// silently treating it like a TranslationSkipped.
-			return nil, fmt.Errorf("translate member %q: %w", m.SourceRuleID, err)
-		}
-		out.MemberStatuses = append(out.MemberStatuses, t)
-		if t.Status == TranslationSkipped {
-			continue
-		}
-		translatedCount++
-		keyVotes[t.MetricKey]++
-		opVotes[t.Operator]++
-		if t.Severity != "" {
-			severityVotes[t.Severity]++
-		}
-		thresholds = append(thresholds, t.Threshold)
-
-		tenantID := ""
-		if tenantKey != "" {
-			tenantID = m.Labels[tenantKey]
-		}
-		if tenantID != "" {
-			tenantValues = append(tenantValues, tenantValue{tenant: tenantID, value: t.Threshold})
-		}
+	// Per-member translation + vote/threshold accumulation.
+	tally, err := tallyProposalMembers(members, tenantKey, out)
+	if err != nil {
+		return nil, err
 	}
 
-	if translatedCount == 0 {
+	if tally.translatedCount == 0 {
 		out.Status = TranslationSkipped
 		out.Warnings = append(out.Warnings,
 			"no member rule translated successfully; proposal falls back to intermediate emission")
@@ -631,32 +657,32 @@ func TranslateProposal(prop ExtractionProposal, members []parser.ParsedRule, ten
 	}
 
 	// Pick winner (and detect dissent) for each axis.
-	out.MetricKey = pickMajority(keyVotes)
-	out.Operator = pickMajority(opVotes)
-	out.Severity = pickMajority(severityVotes)
+	out.MetricKey = pickMajority(tally.keyVotes)
+	out.Operator = pickMajority(tally.opVotes)
+	out.Severity = pickMajority(tally.severityVotes)
 
-	if len(keyVotes) > 1 {
+	if len(tally.keyVotes) > 1 {
 		out.Warnings = append(out.Warnings, fmt.Sprintf(
 			"metric_key not unanimous across %d translated members: %s; using majority %q",
-			translatedCount, formatVotes(keyVotes), out.MetricKey))
+			tally.translatedCount, formatVotes(tally.keyVotes), out.MetricKey))
 	}
-	if len(opVotes) > 1 {
+	if len(tally.opVotes) > 1 {
 		out.Warnings = append(out.Warnings, fmt.Sprintf(
 			"comparison operator not unanimous: %s; using majority %q",
-			formatVotes(opVotes), out.Operator))
+			formatVotes(tally.opVotes), out.Operator))
 	}
-	if len(severityVotes) > 1 {
+	if len(tally.severityVotes) > 1 {
 		out.Warnings = append(out.Warnings, fmt.Sprintf(
 			"severity not unanimous: %s; using majority %q",
-			formatVotes(severityVotes), out.Severity))
+			formatVotes(tally.severityVotes), out.Severity))
 	}
 
 	// Default threshold = median (stable against single-tenant
 	// extreme values).
-	out.DefaultThreshold = median(thresholds)
+	out.DefaultThreshold = median(tally.thresholds)
 
 	// Per-tenant overrides — only when value differs from default.
-	for _, tv := range tenantValues {
+	for _, tv := range tally.tenantValues {
 		if tv.value != out.DefaultThreshold {
 			out.PerTenantOverrides[tv.tenant] = tv.value
 		}
@@ -665,7 +691,7 @@ func TranslateProposal(prop ExtractionProposal, members []parser.ParsedRule, ten
 	// Final status: OK if every translated member returned OK and
 	// no axis required majority resolution; Partial otherwise.
 	out.Status = TranslationOK
-	if len(keyVotes) > 1 || len(opVotes) > 1 || len(severityVotes) > 1 {
+	if len(tally.keyVotes) > 1 || len(tally.opVotes) > 1 || len(tally.severityVotes) > 1 {
 		out.Status = TranslationPartial
 	}
 	for _, m := range out.MemberStatuses {
@@ -674,11 +700,11 @@ func TranslateProposal(prop ExtractionProposal, members []parser.ParsedRule, ten
 			break
 		}
 	}
-	if translatedCount < len(members) {
+	if tally.translatedCount < len(members) {
 		out.Status = TranslationPartial
 		out.Warnings = append(out.Warnings, fmt.Sprintf(
 			"%d of %d members were skipped (see MemberStatuses for individual SkipReason)",
-			len(members)-translatedCount, len(members)))
+			len(members)-tally.translatedCount, len(members)))
 	}
 
 	return out, nil

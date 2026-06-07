@@ -298,10 +298,28 @@ func applyDecisions(props []ExtractionProposal, decisions *ProposalDecisions) (e
 		policy = UndecidedEmit
 	}
 
-	// Index decisions by key for O(1) lookup. Duplicate keys are
-	// surfaced as a warning — silently letting the last entry win
-	// would mask a misedit (reviewer copy-pasted a row and only
-	// changed the verdict, not the key).
+	// Index decisions by key (surfacing duplicates), then warn on decisions
+	// whose key no longer matches any live proposal (cluster shape shifted
+	// between scaffold time and emission time).
+	byKey, idxWarnings := indexDecisionsByKey(decisions)
+	warnings = append(warnings, idxWarnings...)
+	warnings = append(warnings, staleDecisionWarnings(byKey, props)...)
+
+	for i, p := range props {
+		emit, w := resolveProposalVerdict(i, p, byKey, policy)
+		warnings = append(warnings, w...)
+		if emit {
+			emitIdx = append(emitIdx, i)
+		}
+	}
+	return emitIdx, warnings
+}
+
+// indexDecisionsByKey indexes a decisions file by cluster key for O(1) lookup,
+// returning the map plus warnings for duplicate keys (silently letting the last
+// entry win would mask a misedit — reviewer copy-pasted a row and only changed
+// the verdict, not the key). Extracted from applyDecisions.
+func indexDecisionsByKey(decisions *ProposalDecisions) (map[string]ProposalDecision, []string) {
 	byKey := make(map[string]ProposalDecision, len(decisions.Proposals))
 	dupes := make([]string, 0)
 	for _, d := range decisions.Proposals {
@@ -314,15 +332,18 @@ func applyDecisions(props []ExtractionProposal, decisions *ProposalDecisions) (e
 		byKey[d.Key] = d
 	}
 	sort.Strings(dupes)
+	var warnings []string
 	for _, k := range dupes {
 		warnings = append(warnings, fmt.Sprintf(
 			"decisions: duplicate key %q in decisions file (last entry wins; check for misedit)", k))
 	}
+	return byKey, warnings
+}
 
-	// Warn on decisions that reference clusters not present in the
-	// current ProposalSet (cluster shape shifted between scaffold
-	// time and emission time). Detected as decisions whose Key
-	// doesn't appear in any current proposal.
+// staleDecisionWarnings warns for each decision whose key references a cluster
+// not present in the current ProposalSet (the cluster shape shifted). Extracted
+// from applyDecisions.
+func staleDecisionWarnings(byKey map[string]ProposalDecision, props []ExtractionProposal) []string {
 	livKeys := make(map[string]struct{}, len(props))
 	for _, p := range props {
 		livKeys[p.Key()] = struct{}{}
@@ -334,71 +355,78 @@ func applyDecisions(props []ExtractionProposal, decisions *ProposalDecisions) (e
 		}
 	}
 	sort.Strings(stale)
+	var warnings []string
 	for _, k := range stale {
 		warnings = append(warnings, fmt.Sprintf(
 			"decisions: key %q references a proposal not present in the current ProposalSet (cluster shape may have shifted; verdict=%q ignored)",
 			k, byKey[k].Decision))
 	}
+	return warnings
+}
 
-	for i, p := range props {
-		key := p.Key()
-		dec, ok := byKey[key]
-		if !ok {
-			// No decision recorded for this proposal at all.
-			if policy == UndecidedSkip {
-				warnings = append(warnings, fmt.Sprintf(
-					"proposal[%d]: no decision recorded; undecided_policy=skip → emission skipped",
-					i))
-				continue
-			}
-			emitIdx = append(emitIdx, i)
+// resolveProposalVerdict decides whether proposal i should emit, given the
+// indexed decisions and the undecided-policy. Returns (emit, warnings). A
+// recorded verdict is honoured even when the member list drifted (the drift
+// surfaces as a warning but does not override the reviewer's intent). Extracted
+// verbatim from the applyDecisions per-proposal loop.
+func resolveProposalVerdict(i int, p ExtractionProposal, byKey map[string]ProposalDecision, policy UndecidedPolicy) (bool, []string) {
+	var warnings []string
+	key := p.Key()
+	dec, ok := byKey[key]
+	if !ok {
+		// No decision recorded for this proposal at all.
+		if policy == UndecidedSkip {
 			warnings = append(warnings, fmt.Sprintf(
-				"proposal[%d]: no decision recorded; undecided_policy=emit → emitted by default",
+				"proposal[%d]: no decision recorded; undecided_policy=skip → emission skipped",
 				i))
-			continue
+			return false, warnings
 		}
-
-		// Member-list cross-check: warn if recorded != live, but
-		// still honour the verdict (the reviewer's intent is to
-		// accept/reject the cluster identified by Key; member drift
-		// surfaces but doesn't override the verdict).
-		if !sameStringSlice(dec.MemberRuleIDs, p.MemberRuleIDs) {
-			warnings = append(warnings, fmt.Sprintf(
-				"proposal[%d] (key=%s): decision was recorded against %d members; cluster now has %d members — re-review recommended",
-				i, key, len(dec.MemberRuleIDs), len(p.MemberRuleIDs)))
-		}
-
-		switch dec.Decision {
-		case DecisionAccept:
-			emitIdx = append(emitIdx, i)
-		case DecisionReject:
-			// Drop silently — explicit reject doesn't need a
-			// warning; the reviewer wanted this.
-		case DecisionPending, "":
-			if policy == UndecidedSkip {
-				warnings = append(warnings, fmt.Sprintf(
-					"proposal[%d]: decision=pending; undecided_policy=skip → emission skipped",
-					i))
-				continue
-			}
-			emitIdx = append(emitIdx, i)
-			warnings = append(warnings, fmt.Sprintf(
-				"proposal[%d]: decision=pending; undecided_policy=emit → emitted by default",
-				i))
-		default:
-			// Unknown verdict — treat as pending + warn so typos
-			// surface. Keeps the door open for future verdicts
-			// without breaking deployed callers.
-			warnings = append(warnings, fmt.Sprintf(
-				"proposal[%d]: unknown decision verdict %q; treating as pending",
-				i, dec.Decision))
-			if policy == UndecidedSkip {
-				continue
-			}
-			emitIdx = append(emitIdx, i)
-		}
+		warnings = append(warnings, fmt.Sprintf(
+			"proposal[%d]: no decision recorded; undecided_policy=emit → emitted by default",
+			i))
+		return true, warnings
 	}
-	return emitIdx, warnings
+
+	// Member-list cross-check: warn if recorded != live, but
+	// still honour the verdict (the reviewer's intent is to
+	// accept/reject the cluster identified by Key; member drift
+	// surfaces but doesn't override the verdict).
+	if !sameStringSlice(dec.MemberRuleIDs, p.MemberRuleIDs) {
+		warnings = append(warnings, fmt.Sprintf(
+			"proposal[%d] (key=%s): decision was recorded against %d members; cluster now has %d members — re-review recommended",
+			i, key, len(dec.MemberRuleIDs), len(p.MemberRuleIDs)))
+	}
+
+	switch dec.Decision {
+	case DecisionAccept:
+		return true, warnings
+	case DecisionReject:
+		// Drop silently — explicit reject doesn't need a
+		// warning; the reviewer wanted this.
+		return false, warnings
+	case DecisionPending, "":
+		if policy == UndecidedSkip {
+			warnings = append(warnings, fmt.Sprintf(
+				"proposal[%d]: decision=pending; undecided_policy=skip → emission skipped",
+				i))
+			return false, warnings
+		}
+		warnings = append(warnings, fmt.Sprintf(
+			"proposal[%d]: decision=pending; undecided_policy=emit → emitted by default",
+			i))
+		return true, warnings
+	default:
+		// Unknown verdict — treat as pending + warn so typos
+		// surface. Keeps the door open for future verdicts
+		// without breaking deployed callers.
+		warnings = append(warnings, fmt.Sprintf(
+			"proposal[%d]: unknown decision verdict %q; treating as pending",
+			i, dec.Decision))
+		if policy == UndecidedSkip {
+			return false, warnings
+		}
+		return true, warnings
+	}
 }
 
 // sameStringSlice returns true iff a and b have identical elements

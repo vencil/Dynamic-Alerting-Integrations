@@ -288,6 +288,27 @@ func emitOneProposal(
 		}
 	}
 
+	// Intermediate (PR-2) shape: _defaults.yaml + per-tenant overrides +
+	// PROPOSAL.md. Used directly when translation is off, and as the fallback
+	// when a cluster can't be translated.
+	warnings = append(warnings, emitIntermediateProposal(files, pathFor, prop, ruleIndex, tenantKey, propIdx)...)
+	return warnings
+}
+
+// emitIntermediateProposal writes the PR-2 intermediate artifact shape for one
+// proposal: _defaults.yaml (shared structure), one override file per member
+// tenant, and a human-readable PROPOSAL.md. Returns per-proposal warnings.
+// Extracted from emitOneProposal (the non-translated / fallback path).
+func emitIntermediateProposal(
+	files map[string][]byte,
+	pathFor func(string) string,
+	prop ExtractionProposal,
+	ruleIndex map[string]parser.ParsedRule,
+	tenantKey string,
+	propIdx int,
+) []string {
+	var warnings []string
+
 	// 1. _defaults.yaml — shared structure across all members.
 	defaultsBytes, err := marshalDefaults(prop)
 	if err != nil {

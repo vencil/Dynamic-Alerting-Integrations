@@ -113,148 +113,15 @@ func (c *ThresholdConfig) ResolveAtWithStats(now time.Time) ([]ResolvedThreshold
 	for tenant, overrides := range c.Tenants {
 		startIdx := len(result) // track where this tenant's metrics start
 
-		for metricKey, defaultValue := range c.Defaults {
-			// Skip _state_ prefixed keys — handled by ResolveStateFilters()
-			// Skip _silent_ prefixed keys — handled by ResolveSilentModes()
-			// Skip _severity_dedup — handled by ResolveSeverityDedup()
-			// Skip _routing — handled by ResolveRouting() (Phase 4)
-			if strings.HasPrefix(metricKey, "_state_") || strings.HasPrefix(metricKey, "_silent_") ||
-				metricKey == "_severity_dedup" || strings.HasPrefix(metricKey, "_routing") {
-				continue
-			}
-
-			// Parse metric key: "mysql_connections" → component="mysql", metric="connections"
-			component, metric := parseMetricKey(metricKey)
-			severity := "warning" // default severity
-
-			// Check tenant override (skip _state_ overrides)
-			if sv, exists := overrides[metricKey]; exists {
-				override := sv.ResolveValue(now)
-				lower := strings.TrimSpace(strings.ToLower(override))
-
-				// State 3: disable
-				if isDisabled(lower) {
-					continue
-				}
-
-				// Check if it has severity suffix: "70:critical"
-				parts := strings.SplitN(override, ":", 2)
-				valueStr := strings.TrimSpace(parts[0])
-				if len(parts) == 2 {
-					severity = strings.TrimSpace(parts[1])
-				}
-
-				// State 1: custom value
-				if v, err := strconv.ParseFloat(valueStr, 64); err == nil {
-					result = append(result, ResolvedThreshold{
-						Tenant:    tenant,
-						Metric:    metric,
-						Value:     v,
-						Severity:  severity,
-						Component: component,
-					})
-					continue
-				}
-
-				// Unknown value — log warning, use default
-				log.Printf("WARN: unknown value %q for tenant=%s metric=%s, using default", override, tenant, metricKey)
-			}
-
-			// State 2: use default
-			result = append(result, ResolvedThreshold{
-				Tenant:    tenant,
-				Metric:    metric,
-				Value:     defaultValue,
-				Severity:  severity,
-				Component: component,
-			})
-		}
-
-		// Multi-tier severity: scan for <metricKey>_critical overrides.
-		// These produce an additional threshold with severity=critical.
-		for key, sv := range overrides {
-			if !strings.HasSuffix(key, "_critical") || strings.HasPrefix(key, "_state_") || strings.HasPrefix(key, "_silent_") {
-				continue
-			}
-
-			override := sv.ResolveValue(now)
-			lower := strings.TrimSpace(strings.ToLower(override))
-			if isDisabled(lower) {
-				continue
-			}
-
-			// Derive the base metric key: "mysql_connections_critical" → "mysql_connections"
-			baseKey := strings.TrimSuffix(key, "_critical")
-			// Verify that the base metric exists in defaults (otherwise ignore)
-			if _, exists := c.Defaults[baseKey]; !exists {
-				log.Printf("WARN: _critical key %q has no matching default %q, skipping", key, baseKey)
-				continue
-			}
-
-			component, metric := parseMetricKey(baseKey)
-			if v, err := strconv.ParseFloat(strings.TrimSpace(override), 64); err == nil {
-				result = append(result, ResolvedThreshold{
-					Tenant:    tenant,
-					Metric:    metric,
-					Value:     v,
-					Severity:  "critical",
-					Component: component,
-				})
-			} else {
-				log.Printf("WARN: invalid critical threshold %q for tenant=%s key=%s", override, tenant, key)
-			}
-		}
-
-		// Phase 2B: dimensional keys — tenant overrides with {label="value"} syntax.
-		// Phase 11 B1: also supports {label=~"pattern"} regex matchers.
-		// These are tenant-only (no default inheritance) and don't support _critical suffix.
-		// Severity override uses the "value:severity" syntax (e.g., "500:critical").
-		for key, sv := range overrides {
-			if !strings.Contains(key, "{") {
-				continue // not a dimensional key
-			}
-			if strings.HasPrefix(key, "_state_") || strings.HasPrefix(key, "_silent_") ||
-				key == "_severity_dedup" || strings.HasPrefix(key, "_routing") {
-				continue
-			}
-
-			baseKey, customLabels, regexLabels := parseKeyWithLabels(key)
-			if len(customLabels) == 0 && len(regexLabels) == 0 {
-				log.Printf("WARN: failed to parse dimensional key %q for tenant=%s, skipping", key, tenant)
-				continue
-			}
-
-			valStr := sv.ResolveValue(now)
-			lower := strings.TrimSpace(strings.ToLower(valStr))
-			if isDisabled(lower) {
-				continue
-			}
-
-			component, metric := parseMetricKey(baseKey)
-			severity := "warning"
-
-			parts := strings.SplitN(valStr, ":", 2)
-			valueStr := strings.TrimSpace(parts[0])
-			if len(parts) == 2 {
-				severity = strings.TrimSpace(parts[1])
-			}
-
-			v, err := strconv.ParseFloat(valueStr, 64)
-			if err != nil {
-				log.Printf("WARN: invalid dimensional threshold %q for tenant=%s key=%s, skipping", valStr, tenant, key)
-				continue
-			}
-
-			result = append(result, ResolvedThreshold{
-				Tenant:       tenant,
-				Metric:       metric,
-				Value:        v,
-				Severity:     severity,
-				Component:    component,
-				CustomLabels: customLabels,
-				RegexLabels:  regexLabels,
-			})
-		}
+		// Phase 2A: base thresholds (three-state + inline severity suffix),
+		// Phase 2A-crit: <metric>_critical variants, Phase 2B: dimensional
+		// {label="v"}/{label=~"re"} overrides. Each phase is a verbatim
+		// extraction appended in the original order; intra-segment order is
+		// otherwise governed by Go map iteration (non-deterministic, as before)
+		// and the cardinality sort below.
+		result = append(result, c.resolveBaseRows(tenant, overrides, now)...)
+		result = append(result, c.resolveCriticalRows(tenant, overrides, now)...)
+		result = append(result, c.resolveDimensionalRows(tenant, overrides, now)...)
 
 		// #741 S3a: tenant-authored custom alerts → user_threshold{component="custom",
 		// recipe_id,name,mode}. Appended into this tenant's segment BEFORE the
@@ -304,6 +171,168 @@ func (c *ThresholdConfig) ResolveAtWithStats(now time.Time) ([]ResolvedThreshold
 		PerTenantOverLimit:         perTenantOverLimit,
 		PerTenantCustomAlertErrors: perTenantCustomAlertErrors,
 	}
+}
+
+// resolveBaseRows resolves a tenant's base thresholds from c.Defaults using the
+// three-state contract (custom value / omitted→default / disable) plus the
+// inline "value:severity" suffix. Extracted verbatim from the
+// ResolveAtWithStats per-tenant loop (Phase 2A) — see that method for the
+// full contract; behavior is unchanged.
+func (c *ThresholdConfig) resolveBaseRows(tenant string, overrides map[string]ScheduledValue, now time.Time) []ResolvedThreshold {
+	var rows []ResolvedThreshold
+	for metricKey, defaultValue := range c.Defaults {
+		// Skip _state_ / _silent_ / _severity_dedup / _routing keys — handled
+		// by ResolveStateFilters() / ResolveSilentModes() / ResolveSeverityDedup()
+		// / ResolveRouting() respectively.
+		if strings.HasPrefix(metricKey, "_state_") || strings.HasPrefix(metricKey, "_silent_") ||
+			metricKey == "_severity_dedup" || strings.HasPrefix(metricKey, "_routing") {
+			continue
+		}
+
+		// Parse metric key: "mysql_connections" → component="mysql", metric="connections"
+		component, metric := parseMetricKey(metricKey)
+		severity := "warning" // default severity
+
+		// Check tenant override (skip _state_ overrides)
+		if sv, exists := overrides[metricKey]; exists {
+			override := sv.ResolveValue(now)
+			lower := strings.TrimSpace(strings.ToLower(override))
+
+			// State 3: disable
+			if isDisabled(lower) {
+				continue
+			}
+
+			// Check if it has severity suffix: "70:critical"
+			parts := strings.SplitN(override, ":", 2)
+			valueStr := strings.TrimSpace(parts[0])
+			if len(parts) == 2 {
+				severity = strings.TrimSpace(parts[1])
+			}
+
+			// State 1: custom value
+			if v, err := strconv.ParseFloat(valueStr, 64); err == nil {
+				rows = append(rows, ResolvedThreshold{
+					Tenant:    tenant,
+					Metric:    metric,
+					Value:     v,
+					Severity:  severity,
+					Component: component,
+				})
+				continue
+			}
+
+			// Unknown value — log warning, use default
+			log.Printf("WARN: unknown value %q for tenant=%s metric=%s, using default", override, tenant, metricKey)
+		}
+
+		// State 2: use default
+		rows = append(rows, ResolvedThreshold{
+			Tenant:    tenant,
+			Metric:    metric,
+			Value:     defaultValue,
+			Severity:  severity,
+			Component: component,
+		})
+	}
+	return rows
+}
+
+// resolveCriticalRows resolves a tenant's <metric>_critical override variants,
+// each producing an additional severity=critical threshold for an existing
+// default metric. Extracted verbatim from the ResolveAtWithStats per-tenant
+// loop (multi-tier severity scan); behavior is unchanged.
+func (c *ThresholdConfig) resolveCriticalRows(tenant string, overrides map[string]ScheduledValue, now time.Time) []ResolvedThreshold {
+	var rows []ResolvedThreshold
+	for key, sv := range overrides {
+		if !strings.HasSuffix(key, "_critical") || strings.HasPrefix(key, "_state_") || strings.HasPrefix(key, "_silent_") {
+			continue
+		}
+
+		override := sv.ResolveValue(now)
+		lower := strings.TrimSpace(strings.ToLower(override))
+		if isDisabled(lower) {
+			continue
+		}
+
+		// Derive the base metric key: "mysql_connections_critical" → "mysql_connections"
+		baseKey := strings.TrimSuffix(key, "_critical")
+		// Verify that the base metric exists in defaults (otherwise ignore)
+		if _, exists := c.Defaults[baseKey]; !exists {
+			log.Printf("WARN: _critical key %q has no matching default %q, skipping", key, baseKey)
+			continue
+		}
+
+		component, metric := parseMetricKey(baseKey)
+		if v, err := strconv.ParseFloat(strings.TrimSpace(override), 64); err == nil {
+			rows = append(rows, ResolvedThreshold{
+				Tenant:    tenant,
+				Metric:    metric,
+				Value:     v,
+				Severity:  "critical",
+				Component: component,
+			})
+		} else {
+			log.Printf("WARN: invalid critical threshold %q for tenant=%s key=%s", override, tenant, key)
+		}
+	}
+	return rows
+}
+
+// resolveDimensionalRows resolves a tenant's dimensional overrides using the
+// `metric{label="v"}` / `{label=~"re"}` syntax. These are tenant-only (no
+// default inheritance) and use the "value:severity" suffix for severity.
+// Extracted verbatim from the ResolveAtWithStats per-tenant loop
+// (Phase 2B / Phase 11 B1); behavior is unchanged.
+func (c *ThresholdConfig) resolveDimensionalRows(tenant string, overrides map[string]ScheduledValue, now time.Time) []ResolvedThreshold {
+	var rows []ResolvedThreshold
+	for key, sv := range overrides {
+		if !strings.Contains(key, "{") {
+			continue // not a dimensional key
+		}
+		if strings.HasPrefix(key, "_state_") || strings.HasPrefix(key, "_silent_") ||
+			key == "_severity_dedup" || strings.HasPrefix(key, "_routing") {
+			continue
+		}
+
+		baseKey, customLabels, regexLabels := parseKeyWithLabels(key)
+		if len(customLabels) == 0 && len(regexLabels) == 0 {
+			log.Printf("WARN: failed to parse dimensional key %q for tenant=%s, skipping", key, tenant)
+			continue
+		}
+
+		valStr := sv.ResolveValue(now)
+		lower := strings.TrimSpace(strings.ToLower(valStr))
+		if isDisabled(lower) {
+			continue
+		}
+
+		component, metric := parseMetricKey(baseKey)
+		severity := "warning"
+
+		parts := strings.SplitN(valStr, ":", 2)
+		valueStr := strings.TrimSpace(parts[0])
+		if len(parts) == 2 {
+			severity = strings.TrimSpace(parts[1])
+		}
+
+		v, err := strconv.ParseFloat(valueStr, 64)
+		if err != nil {
+			log.Printf("WARN: invalid dimensional threshold %q for tenant=%s key=%s, skipping", valStr, tenant, key)
+			continue
+		}
+
+		rows = append(rows, ResolvedThreshold{
+			Tenant:       tenant,
+			Metric:       metric,
+			Value:        v,
+			Severity:     severity,
+			Component:    component,
+			CustomLabels: customLabels,
+			RegexLabels:  regexLabels,
+		})
+	}
+	return rows
 }
 
 // truncationSortKey produces a deterministic ordering key for one tenant's
