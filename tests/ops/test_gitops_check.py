@@ -78,13 +78,8 @@ def run_main(argv):
 
 # ── Fixtures ──────────────────────────────────────────────────────────────
 
-@pytest.fixture
-def config_dir():
-    """Temporary directory for config testing."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        yield tmpdir
-
-
+# config_dir (a bare temp dir) is provided by the shared tests/conftest.py
+# fixture of the same name; only the seeded valid_config_dir is file-local.
 @pytest.fixture
 def valid_config_dir():
     """Temporary directory with valid _defaults.yaml and tenant files."""
