@@ -14,7 +14,7 @@ lang: zh
 
 # tests/e2e — Playwright E2E 起手式（深入版）
 
-父 README：[`tests/README.md`](../README.md)。先看父檔的決策樹（測試擺哪、CI 對應、跑法 cheat sheet）；本檔處理進到 `tests/e2e/` 之後的細節：tag 語意、fixture 契約、新 spec 模板、REG 編號制度。
+父 README：[`tests/README.md`](../README.md)。先看父檔的決策樹（測試擺哪、CI 對應、跑法 cheat sheet）；本檔處理進到 `tests/e2e/` 之後的細節：tag 語意、fixture 契約、新 spec 模板、TRK 回歸編號制度。
 
 ## 目前規模（最新 snapshot）
 
@@ -29,7 +29,7 @@ lang: zh
 
 | Tag | 語意 | 使用時機 | 跑的指令 |
 |-----|------|---------|---------|
-| `@critical` | smoke + sanity 主要互動 + REG 防線；CI 必跑 | 工具的「載入 + 主要互動鏈路 + 回歸防線」 | `npm run test:critical` 或預設 `npm test` |
+| `@critical` | smoke + sanity 主要互動 + regression 防線；CI 必跑 | 工具的「載入 + 主要互動鏈路 + 回歸防線」 | `npm run test:critical` 或預設 `npm test` |
 | `@visual` | pixel-diff baseline | `toHaveScreenshot()` 比對；只能在 Linux baseline 平台跑 | `npm run test:visual`（基線更新 `test:visual:update`） |
 
 **沒被掛 tag 的 spec**會被 `npm test`（`--grep-invert @visual`）跑到，但不被 `test:critical` 篩到。寫新 spec 時：
@@ -85,9 +85,9 @@ test.describe('<Tool Display Name> @critical', () => {
 
 加互動測試（fill / click）時繼續放在同一個 `describe` 內，新 `test()` block。**不要**為了單一互動 spec 另開 file。
 
-## REG-NNN regression-guard 命名
+## TRK-1NN regression-guard 命名
 
-明確的回歸防線 test 用 `REG-NNN` 編號標記在 test 名稱或 fixture docstring：
+明確的回歸防線 test 用 `TRK-1NN` 編號標記在 test 名稱或 fixture docstring。`TRK-100~199` 是 [`planning-id-mapping.md`](../../docs/internal/planning-id-mapping.md) 定義的「產品 / portal regression registry」分區（ADR-019 planning-SSOT 將舊 `REG-NNN` 凍結、遷移為此區段 — 例如 `REG-004` → `TRK-104`）。**`REG-NNN` 為 frozen legacy namespace，新編號一律用 `TRK-1NN`**；舊 commit / playbook 裡的 `REG-NNN` 仍可 grep，對應關係查 mapping 表。
 
 | 編號 | 防的是 |
 |------|--------|
@@ -95,10 +95,10 @@ test.describe('<Tool Display Name> @critical', () => {
 | TRK-104 | **portal-safe hrefs**：絕對根路徑 `href="/foo"` 在 portal sub-path 部署會 404；`assertNoAbsoluteRootHrefs` helper 防守此類 |
 
 **新 regression test 的 SOP**：
-1. 找下一個沒用過的 `REG-NNN`（`grep -rhoE "REG-[0-9]+" tests/ docs/interactive/` 確認）
-2. test 名稱寫 `'<behavior> (REG-NNN regression guard)'`
-3. spec / fixture 內若有專用 helper，docstring 寫 `(see REG-NNN)`
-4. 在這個表格新增一行說明
+1. 在 [`planning-id-mapping.md`](../../docs/internal/planning-id-mapping.md) §REG-NNN→TRK-101~199 表找下一個沒用過的 `TRK-1NN`（`grep -rhoE "TRK-1[0-9]{2}" tests/ docs/` 交叉確認）
+2. test 名稱寫 `'<behavior> (TRK-1NN regression guard)'`
+3. spec / fixture 內若有專用 helper，docstring 寫 `(see TRK-1NN)`
+4. 在這個表格新增一行說明，並回填 mapping 表
 
 ## Mocking 慣例
 
