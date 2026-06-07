@@ -5,9 +5,20 @@ audience: [maintainer]
 version: v2.7.0
 lang: en
 related: [capacity-planner, health-dashboard, alert-simulator]
+dependencies: [
+  "roi-calculator/calc.js"
+]
 ---
 
 import React, { useState, useMemo } from 'react';
+
+// PR-portal-13: savings/reduction math extracted to a unit-testable module.
+import {
+  calcRuleMaintenance,
+  calcAlertStormReduction,
+  calcTimeToMarket,
+  calcAnnualSavings,
+} from './roi-calculator/calc.js';
 
 const t = window.__t || ((zh, en) => en);
 
@@ -298,64 +309,6 @@ const styles = {
     },
   },
 };
-
-// ---------------------------------------------------------------------------
-// Calculation models
-// ---------------------------------------------------------------------------
-
-/**
- * O(N×M) → O(M) rule maintenance model.
- * Without platform: each tenant needs individual rule config = N tenants × M packs × T minutes.
- * With platform: configure once per pack = M packs × T minutes (tenant inherits via profiles).
- */
-function calcRuleMaintenance({ tenants, packs, changeMinutes, changesPerMonth }) {
-  const withoutHours = (tenants * packs * changeMinutes * changesPerMonth) / 60;
-  const withHours = (packs * changeMinutes * changesPerMonth) / 60;
-  const savedHours = Math.max(withoutHours - withHours, 0);
-  const reduction = withoutHours > 0 ? (savedHours / withoutHours) * 100 : 0;
-  return { withoutHours, withHours, savedHours, reduction };
-}
-
-/**
- * Alert storm reduction via auto-suppression + maintenance mode.
- * Empirical model: severity dedup removes ~40% noise, maintenance mode removes ~25%,
- * silent mode removes ~15%. Combined effect with overlap adjustment.
- */
-function calcAlertStormReduction({ stormsPerMonth, avgAlertsPerStorm }) {
-  const dedupRate = 0.40;
-  const maintenanceRate = 0.25;
-  const silentRate = 0.15;
-  // Combined reduction with diminishing returns
-  const combined = 1 - (1 - dedupRate) * (1 - maintenanceRate) * (1 - silentRate);
-  const totalAlertsMonth = stormsPerMonth * avgAlertsPerStorm;
-  const reducedAlerts = Math.round(totalAlertsMonth * combined);
-  return { totalAlertsMonth, reducedAlerts, reductionPct: combined * 100 };
-}
-
-/**
- * Time-to-market improvement: scaffold + migration automation.
- * Without: manual YAML authoring + validation + route config.
- * With: `da-tools scaffold` + `validate-config` + `generate-routes`.
- */
-function calcTimeToMarket({ tenants, manualOnboardMinutes }) {
-  const automatedMinutes = 5; // scaffold + validate + generate-routes
-  const perTenantSaved = Math.max(manualOnboardMinutes - automatedMinutes, 0);
-  const totalSavedHours = (tenants * perTenantSaved) / 60;
-  const reduction = manualOnboardMinutes > 0
-    ? (perTenantSaved / manualOnboardMinutes) * 100 : 0;
-  return { manualHours: (tenants * manualOnboardMinutes) / 60, automatedHours: (tenants * automatedMinutes) / 60, totalSavedHours, reduction };
-}
-
-/**
- * Annual TCO savings combining all three dimensions.
- */
-function calcAnnualSavings({ ruleSavedHours, ttmSavedHours, hourlyRate, alertReduction, oncallStaff }) {
-  const ruleAnnual = ruleSavedHours * 12 * hourlyRate;
-  const ttmAnnual = ttmSavedHours * hourlyRate; // one-time per new tenant, amortized
-  // Alert reduction → less on-call fatigue → estimated 20% productivity recovery
-  const alertAnnual = alertReduction * oncallStaff * hourlyRate * 0.20 * 12;
-  return { ruleAnnual, ttmAnnual, alertAnnual, total: ruleAnnual + ttmAnnual + alertAnnual };
-}
 
 // ---------------------------------------------------------------------------
 // UI Components
