@@ -6,6 +6,10 @@
 
 **先跑起來？** → **[QUICKSTART.md](QUICKSTART.md)**（build + 跑，≤5 分鐘看到 YAML 閾值變 live metric）。本篇 README 是配置與營運的**參考手冊**。
 
+> **這份文件給誰？** 給操作 exporter、撰寫平台／領域 `_defaults.yaml` 與 recipe 的 **Platform Engineer** 與 **Domain Expert**。
+> 你是 **Tenant**（只想調自己租戶的閾值或加告警）→ 直接走 **[Tenant 入門](../../docs/getting-started/for-tenants.md)** 用 portal 自助，通常不必碰這份參考。
+> 不確定角色？→ **[選擇你的角色](../../docs/getting-started/README.md)**。
+
 **相關文件：** [Helm chart](../../helm/threshold-exporter/) · [架構與設計](../../docs/architecture-and-design.md) · [遷移指南](../../docs/migration-guide.md) · [Rule Packs](../../rule-packs/README.md) · [版本歷程 CHANGELOG](../../CHANGELOG.md)
 
 ---
@@ -121,6 +125,8 @@
 ## 4. 配置參考
 
 ### 4.1 檔案邊界規則
+
+**誰寫哪個檔**：`_*.yaml`（平台 / 各層 `_defaults.yaml`、policy、recipe 定義）由 **Platform Engineer / Domain Expert** 維護；`<tenant>.yaml`（含 `_custom_alerts`）是 **Tenant 自己的**，且通常經由 portal 代寫而非手改 YAML。下表是各檔允許的區塊：
 
 | 檔名 pattern | 允許區塊 | 違規行為 |
 |-------------|---------|---------|

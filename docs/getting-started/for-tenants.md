@@ -65,6 +65,12 @@ tenants:
     container_memory: "disable"   # 停用此 alert
 ```
 
+### 加自訂告警（不寫 PromQL）
+
+平台預設的告警之外，你可以加自己的。**最簡單的方式：用 Self-Service Portal 的 Recipe Builder**——選一個 recipe（threshold / rate / ratio / forecast …）、填參數，它會幫你產生配置，全程不寫 PromQL。
+
+進階使用者也可在 `conf.d/<tenant>.yaml` 的 `_custom_alerts` 直接宣告，語法見 [threshold-exporter §自訂告警](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md#45-自訂告警-_custom_alerts)。
+
 ### 設定 Alert 通知路由
 
 ```yaml

@@ -11,7 +11,7 @@ lang: zh
 
 > **v2.8.1** | 適用對象：DBA、資料庫管理員、領域專家
 >
-> 相關文件：[Rule Packs](../rule-packs/README.md) · [Custom Rule Governance](../custom-rule-governance.md) · [Architecture](../architecture-and-design.md) §2.4
+> 相關文件：[Rule Packs](../rule-packs/README.md) · [Custom Rule Governance](../custom-rule-governance.md) · [Architecture](../architecture-and-design.md) §2.4 · [threshold-exporter 配置 / recipe 參考](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md#4-配置參考)
 
 > 💡 **建議第一步：[`try-local/`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/try-local/README.md) 看告警真的 fire。** Mode 0 核心雙星起 Tenant Manager → 完整 stack 看 Rule Pack 把合成指標判成 critical 紅燈，是理解「閾值 → 告警」鏈最快的方式。
 
