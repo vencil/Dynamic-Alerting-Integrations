@@ -5,9 +5,16 @@ audience: ["platform", "domain-expert"]
 version: v2.7.0
 lang: en
 related: [alert-simulator, alert-timeline, health-dashboard]
+dependencies: [
+  "alert-noise-analyzer/analysis.js"
+]
 ---
 
 import React, { useState, useMemo } from 'react';
+
+// PR-portal-22: alert-history analysis (counts, MTTR, flapping, dedup) + time
+// helpers extracted to a unit-testable, i18n-free module (was inline + 0%-covered).
+import { analyzeAlerts, formatDuration } from './alert-noise-analyzer/analysis.js';
 
 const t = window.__t || ((zh, en) => en);
 
@@ -22,87 +29,6 @@ const SAMPLE_ALERTS = [
   { alertname: "RedisHighMemory",        tenant: "db-a", severity: "warning",  startsAt: "2025-01-15T12:00:00Z", endsAt: "2025-01-15T14:00:00Z", status: "resolved" },
   { alertname: "MariaDBHighConnectionsCritical", tenant: "db-a", severity: "critical", startsAt: "2025-01-15T10:03:00Z", endsAt: "2025-01-15T10:08:00Z", status: "resolved" },
 ];
-
-// ── Utility ───────────────────────────────────────────────────────
-
-function parseTime(ts) {
-  return ts ? new Date(ts).getTime() : Date.now();
-}
-
-function durationMinutes(startMs, endMs) {
-  return Math.max(0, (endMs - startMs) / 60000);
-}
-
-function formatDuration(minutes) {
-  if (minutes < 1) return `${Math.round(minutes * 60)}s`;
-  if (minutes < 60) return `${Math.round(minutes)}m`;
-  return `${(minutes / 60).toFixed(1)}h`;
-}
-
-// ── Analysis Functions ─────────────────────────────────────────────
-
-function analyzeAlerts(alerts) {
-  if (!alerts.length) return null;
-
-  // Basic counts
-  const totalAlerts = alerts.length;
-  const bySeverity = {};
-  const byTenant = {};
-  const byName = {};
-
-  alerts.forEach(a => {
-    bySeverity[a.severity] = (bySeverity[a.severity] || 0) + 1;
-    byTenant[a.tenant] = (byTenant[a.tenant] || 0) + 1;
-    byName[a.alertname] = (byName[a.alertname] || 0) + 1;
-  });
-
-  // MTTR: Mean Time To Resolve
-  const resolved = alerts.filter(a => a.endsAt && a.status === 'resolved');
-  const durations = resolved.map(a => durationMinutes(parseTime(a.startsAt), parseTime(a.endsAt)));
-  const mttr = durations.length ? durations.reduce((s, d) => s + d, 0) / durations.length : 0;
-
-  // Flapping detection: alerts that fire ≥3 times in 1h
-  const flapping = [];
-  const nameGroups = {};
-  alerts.forEach(a => {
-    const key = `${a.tenant}/${a.alertname}`;
-    if (!nameGroups[key]) nameGroups[key] = [];
-    nameGroups[key].push(parseTime(a.startsAt));
-  });
-  Object.entries(nameGroups).forEach(([key, times]) => {
-    times.sort((a, b) => a - b);
-    // Sliding 1-hour window
-    for (let i = 0; i < times.length; i++) {
-      const windowEnd = times[i] + 3600000;
-      const count = times.filter(t => t >= times[i] && t <= windowEnd).length;
-      if (count >= 3) { flapping.push({ key, count }); break; }
-    }
-  });
-
-  // Top noisy alerts
-  const topNoisy = Object.entries(byName)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 5)
-    .map(([name, count]) => ({ name, count, pct: (count / totalAlerts * 100).toFixed(1) }));
-
-  // Dedup effectiveness: count alerts that overlap in time with same name+tenant
-  let dedupCandidates = 0;
-  Object.values(nameGroups).forEach(times => {
-    if (times.length > 1) dedupCandidates += times.length - 1;
-  });
-  const dedupRate = totalAlerts > 0 ? ((dedupCandidates / totalAlerts) * 100).toFixed(1) : 0;
-
-  return {
-    totalAlerts,
-    bySeverity,
-    byTenant,
-    topNoisy,
-    mttr,
-    flapping,
-    dedupRate,
-    resolvedCount: resolved.length,
-  };
-}
 
 // ── Severity Badge ─────────────────────────────────────────────────
 
