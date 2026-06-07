@@ -61,3 +61,10 @@ docs/internal/token-migration-cheatsheet.md
 # distillation, not damage.
 docs/adr/024-version-aware-threshold-via-dimensional-label.md
 docs/adr/024-version-aware-threshold-via-dimensional-label.en.md
+
+# PR-portal-20: config-lint.jsx lint-engine extraction — the YAML parser,
+# LINT_RULES check set, and lintConfig() moved to config-lint/lint.js so the
+# rule check() functions (0%-covered before) can be unit-tested. 458 → 190 LOC
+# (~59% shrink); the file becomes a thin orchestrator importing lintConfig + LINT_RULES
+# (re-exported for the rule-list render). Genuine refactor, not damage.
+tools/portal/src/interactive/tools/config-lint.jsx

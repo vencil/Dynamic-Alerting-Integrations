@@ -5,9 +5,22 @@ audience: [maintainer]
 version: v2.7.0
 lang: en
 related: [roi-calculator, operator-setup-wizard, migration-simulator]
+dependencies: [
+  "migration-roi-calculator/calc.js"
+]
 ---
 
 import React, { useState, useMemo } from 'react';
+
+// PR-portal-14: estimation models extracted to a unit-testable module.
+// estimatePlatformCoverage now takes platformRules (TOTAL_RULES) as an arg.
+import {
+  estimatePlatformCoverage,
+  estimateMigrationEffort,
+  estimateMaintenanceSavings,
+  estimateBreakEven,
+  estimateAnnualSavings,
+} from './migration-roi-calculator/calc.js';
 
 const t = window.__t || ((zh, en) => en);
 
@@ -263,74 +276,6 @@ if (typeof document !== 'undefined') {
 }
 
 // ---------------------------------------------------------------------------
-// Calculation models
-// ---------------------------------------------------------------------------
-
-/**
- * Platform coverage estimation.
- * Average rules per pack: 16 (238 total / 15 packs).
- * For common DB monitoring: 60-80% overlap with platform rules.
- */
-function estimatePlatformCoverage({ totalRules }) {
-  const platformRules = TOTAL_RULES;
-  const baseOverlap = 0.70; // 70% average overlap for standard DB monitoring
-  const maxCoverage = Math.min((platformRules / totalRules) * 100, 100);
-  const coverage = Math.min(Math.round(baseOverlap * maxCoverage), 100);
-  return coverage;
-}
-
-/**
- * Migration effort estimation.
- * Simple threshold mapping: ~5 minutes per rule.
- * Complex PromQL expressions: ~15 minutes per rule.
- * Distribution: 70% simple / 30% complex.
- */
-function estimateMigrationEffort({ totalRules, recordingRules, alertRules }) {
-  const simpleMinutes = 5;
-  const complexMinutes = 15;
-  const simpleRatio = 0.70;
-  const complexRatio = 0.30;
-
-  const avgMinutesPerRule = simpleMinutes * simpleRatio + complexMinutes * complexRatio;
-  const totalMinutes = totalRules * avgMinutesPerRule;
-  const hours = Math.round(totalMinutes / 60);
-
-  return hours;
-}
-
-/**
- * Post-migration maintenance reduction.
- * From O(N×M) to O(M): N tenants × M packs → M packs.
- * Estimate monthly reduction based on tenant count.
- */
-function estimateMaintenanceSavings({ currentMonthlyHours, tenants }) {
-  if (tenants <= 1) return 0;
-
-  // With N tenants, maintenance scales O(N×M)
-  // With platform, it scales O(M)
-  // Savings ≈ current_hours × (1 - 1/tenants)
-  const savings = Math.round(currentMonthlyHours * (1 - 1/tenants));
-  return Math.max(savings, 0);
-}
-
-/**
- * Break-even calculation.
- * Break-even months = migration_hours / monthly_savings.
- */
-function estimateBreakEven({ migrationHours, monthlySavingsHours }) {
-  if (monthlySavingsHours <= 0) return Infinity;
-  return Math.round(migrationHours / monthlySavingsHours * 10) / 10;
-}
-
-/**
- * Annual savings in USD.
- */
-function estimateAnnualSavings({ monthlySavingsHours, hourlyRate }) {
-  const annualHours = monthlySavingsHours * 12;
-  return Math.round(annualHours * hourlyRate);
-}
-
-// ---------------------------------------------------------------------------
 // UI Components
 // ---------------------------------------------------------------------------
 
@@ -439,7 +384,7 @@ export default function MigrationROICalculator() {
   // Calculations
   const results = useMemo(() => {
     const totalRules = recordingRules + alertRules;
-    const coverage = estimatePlatformCoverage({ totalRules: promqlLines });
+    const coverage = estimatePlatformCoverage({ totalRules: promqlLines, platformRules: TOTAL_RULES });
     const migrationHours = estimateMigrationEffort({ totalRules: promqlLines, recordingRules, alertRules });
     const monthlySavings = estimateMaintenanceSavings({ currentMonthlyHours: monthlyMaintenanceHours, tenants });
     const breakEven = estimateBreakEven({ migrationHours, monthlySavingsHours: monthlySavings });
