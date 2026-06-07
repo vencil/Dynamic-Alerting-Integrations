@@ -64,6 +64,18 @@ import gitops_check as gc
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 
 
+def run_main(argv):
+    """Run gc.main() under the given sys.argv and return the pytest
+    ExceptionInfo for the expected SystemExit. Callers assert on
+    exc_info.value.code and read capsys themselves, so assertion order
+    (code-first vs output-first) stays explicit at the call site.
+    """
+    with patch("sys.argv", argv):
+        with pytest.raises(SystemExit) as exc_info:
+            gc.main()
+    return exc_info
+
+
 # ── Fixtures ──────────────────────────────────────────────────────────────
 
 @pytest.fixture
@@ -624,9 +636,7 @@ class TestMainRepo:
             }
         )
 
-        with patch("sys.argv", ["gitops-check", "repo", "--url", "https://github.com/test/repo.git"]):
-            with pytest.raises(SystemExit) as exc_info:
-                gc.main()
+        exc_info = run_main(["gitops-check", "repo", "--url", "https://github.com/test/repo.git"])
 
         assert exc_info.value.code == 0
         captured = capsys.readouterr()
@@ -643,9 +653,7 @@ class TestMainRepo:
             details={"url": "https://github.com/test/repo.git"}
         )
 
-        with patch("sys.argv", ["gitops-check", "repo", "--url", "https://github.com/test/repo.git", "--json"]):
-            with pytest.raises(SystemExit) as exc_info:
-                gc.main()
+        exc_info = run_main(["gitops-check", "repo", "--url", "https://github.com/test/repo.git", "--json"])
 
         assert exc_info.value.code == 0
         captured = capsys.readouterr()
@@ -663,9 +671,7 @@ class TestMainRepo:
             details={}
         )
 
-        with patch("sys.argv", ["gitops-check", "repo", "--url", "https://github.com/test/repo.git"]):
-            with pytest.raises(SystemExit) as exc_info:
-                gc.main()
+        exc_info = run_main(["gitops-check", "repo", "--url", "https://github.com/test/repo.git"])
 
         assert exc_info.value.code == 1
 
@@ -679,9 +685,7 @@ class TestMainRepo:
             details={}
         )
 
-        with patch("sys.argv", ["gitops-check", "repo", "--url", "https://github.com/test/repo.git"]):
-            with pytest.raises(SystemExit) as exc_info:
-                gc.main()
+        exc_info = run_main(["gitops-check", "repo", "--url", "https://github.com/test/repo.git"])
 
         assert exc_info.value.code == 1
 
@@ -695,9 +699,7 @@ class TestMainRepo:
             details={}
         )
 
-        with patch("sys.argv", ["gitops-check", "repo", "--url", "https://github.com/test/repo.git", "--ci"]):
-            with pytest.raises(SystemExit) as exc_info:
-                gc.main()
+        exc_info = run_main(["gitops-check", "repo", "--url", "https://github.com/test/repo.git", "--ci"])
 
         assert exc_info.value.code == 0
 
@@ -711,9 +713,7 @@ class TestMainRepo:
             details={}
         )
 
-        with patch("sys.argv", ["gitops-check", "repo", "--url", "https://github.com/test/repo.git", "--ci"]):
-            with pytest.raises(SystemExit) as exc_info:
-                gc.main()
+        exc_info = run_main(["gitops-check", "repo", "--url", "https://github.com/test/repo.git", "--ci"])
 
         assert exc_info.value.code == 1
 
@@ -736,9 +736,7 @@ class TestMainLocal:
             }
         )
 
-        with patch("sys.argv", ["gitops-check", "local", "--dir", "/tmp/config"]):
-            with pytest.raises(SystemExit) as exc_info:
-                gc.main()
+        exc_info = run_main(["gitops-check", "local", "--dir", "/tmp/config"])
 
         assert exc_info.value.code == 0
         captured = capsys.readouterr()
@@ -754,9 +752,7 @@ class TestMainLocal:
             details={"directory": "/tmp/config"}
         )
 
-        with patch("sys.argv", ["gitops-check", "local", "--dir", "/tmp/config", "--json"]):
-            with pytest.raises(SystemExit) as exc_info:
-                gc.main()
+        exc_info = run_main(["gitops-check", "local", "--dir", "/tmp/config", "--json"])
 
         assert exc_info.value.code == 0
         captured = capsys.readouterr()
@@ -779,9 +775,7 @@ class TestMainLocal:
             }
         )
 
-        with patch("sys.argv", ["gitops-check", "local", "--dir", "/tmp/config"]):
-            with pytest.raises(SystemExit) as exc_info:
-                gc.main()
+        exc_info = run_main(["gitops-check", "local", "--dir", "/tmp/config"])
 
         assert exc_info.value.code == 1
         captured = capsys.readouterr()
@@ -805,9 +799,7 @@ class TestMainSidecar:
             }
         )
 
-        with patch("sys.argv", ["gitops-check", "sidecar"]):
-            with pytest.raises(SystemExit) as exc_info:
-                gc.main()
+        exc_info = run_main(["gitops-check", "sidecar"])
 
         assert exc_info.value.code == 0
         captured = capsys.readouterr()
@@ -827,9 +819,7 @@ class TestMainSidecar:
             }
         )
 
-        with patch("sys.argv", ["gitops-check", "sidecar", "--json"]):
-            with pytest.raises(SystemExit) as exc_info:
-                gc.main()
+        exc_info = run_main(["gitops-check", "sidecar", "--json"])
 
         assert exc_info.value.code == 1
         captured = capsys.readouterr()
@@ -846,9 +836,7 @@ class TestMainSidecar:
             details={"namespace": "custom-ns"}
         )
 
-        with patch("sys.argv", ["gitops-check", "sidecar", "--namespace", "custom-ns"]):
-            with pytest.raises(SystemExit) as exc_info:
-                gc.main()
+        exc_info = run_main(["gitops-check", "sidecar", "--namespace", "custom-ns"])
 
         # Verify check_sidecar was called with custom namespace
         mock_check_sidecar.assert_called_once_with("custom-ns")
@@ -859,29 +847,21 @@ class TestMainEdgeCases:
 
     def test_no_subcommand(self, capsys):
         """No subcommand → print help and exit caller error."""
-        with patch("sys.argv", ["gitops-check"]):
-            with pytest.raises(SystemExit) as exc_info:
-                gc.main()
+        exc_info = run_main(["gitops-check"])
 
         assert exc_info.value.code == EXIT_CALLER_ERROR
 
     def test_invalid_subcommand(self, capsys):
         """Invalid subcommand → argparse error."""
-        with patch("sys.argv", ["gitops-check", "invalid"]):
-            with pytest.raises(SystemExit):
-                gc.main()
+        run_main(["gitops-check", "invalid"])
 
     def test_repo_missing_required_url(self):
         """repo subcommand without --url → error."""
-        with patch("sys.argv", ["gitops-check", "repo"]):
-            with pytest.raises(SystemExit):
-                gc.main()
+        run_main(["gitops-check", "repo"])
 
     def test_local_missing_required_dir(self):
         """local subcommand without --dir → error."""
-        with patch("sys.argv", ["gitops-check", "local"]):
-            with pytest.raises(SystemExit):
-                gc.main()
+        run_main(["gitops-check", "local"])
 
 
 # ── 8. Output Format Tests ─────────────────────────────────────────────────
@@ -899,9 +879,7 @@ class TestOutputFormatting:
             details={}
         )
 
-        with patch("sys.argv", ["gitops-check", "repo", "--url", "test"]):
-            with pytest.raises(SystemExit):
-                gc.main()
+        run_main(["gitops-check", "repo", "--url", "test"])
 
         captured = capsys.readouterr()
         assert "✓" in captured.out
@@ -916,9 +894,7 @@ class TestOutputFormatting:
             details={}
         )
 
-        with patch("sys.argv", ["gitops-check", "repo", "--url", "test"]):
-            with pytest.raises(SystemExit):
-                gc.main()
+        run_main(["gitops-check", "repo", "--url", "test"])
 
         captured = capsys.readouterr()
         assert "⚠" in captured.out
@@ -933,9 +909,7 @@ class TestOutputFormatting:
             details={}
         )
 
-        with patch("sys.argv", ["gitops-check", "repo", "--url", "test"]):
-            with pytest.raises(SystemExit):
-                gc.main()
+        run_main(["gitops-check", "repo", "--url", "test"])
 
         captured = capsys.readouterr()
         assert "✗" in captured.out
@@ -955,9 +929,7 @@ class TestOutputFormatting:
             }
         )
 
-        with patch("sys.argv", ["gitops-check", "local", "--dir", "/path/to/config"]):
-            with pytest.raises(SystemExit):
-                gc.main()
+        run_main(["gitops-check", "local", "--dir", "/path/to/config"])
 
         captured = capsys.readouterr()
         assert "directory" in captured.out
@@ -972,9 +944,7 @@ class TestIntegration:
 
     def test_local_check_end_to_end(self, valid_config_dir, capsys):
         """Full local check without mocks."""
-        with patch("sys.argv", ["gitops-check", "local", "--dir", valid_config_dir]):
-            with pytest.raises(SystemExit) as exc_info:
-                gc.main()
+        exc_info = run_main(["gitops-check", "local", "--dir", valid_config_dir])
 
         assert exc_info.value.code == 0
         captured = capsys.readouterr()
@@ -984,9 +954,7 @@ class TestIntegration:
 
     def test_local_check_json_output_valid(self, valid_config_dir, capsys):
         """Local check with JSON output."""
-        with patch("sys.argv", ["gitops-check", "local", "--dir", valid_config_dir, "--json"]):
-            with pytest.raises(SystemExit) as exc_info:
-                gc.main()
+        exc_info = run_main(["gitops-check", "local", "--dir", valid_config_dir, "--json"])
 
         assert exc_info.value.code == 0
         captured = capsys.readouterr()
@@ -1000,14 +968,7 @@ class TestIntegration:
         """Repo check with custom branch and path."""
         mock_run_cmd.return_value = (True, "abc\trefs/heads/develop\n", "")
 
-        with patch("sys.argv", [
-            "gitops-check", "repo",
-            "--url", "git@github.com:test/repo.git",
-            "--branch", "develop",
-            "--path", "config/",
-        ]):
-            with pytest.raises(SystemExit) as exc_info:
-                gc.main()
+        exc_info = run_main(["gitops-check", "repo", "--url", "git@github.com:test/repo.git", "--branch", "develop", "--path", "config/"])
 
         assert exc_info.value.code == 0
 
@@ -1083,9 +1044,7 @@ class TestTimestamps:
             details={}
         )
 
-        with patch("sys.argv", ["gitops-check", "local", "--dir", "/tmp", "--json"]):
-            with pytest.raises(SystemExit):
-                gc.main()
+        run_main(["gitops-check", "local", "--dir", "/tmp", "--json"])
 
         captured = capsys.readouterr()
         data = json.loads(captured.out)
