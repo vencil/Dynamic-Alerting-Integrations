@@ -65,6 +65,12 @@ tenants:
     container_memory: "disable"   # Suppress this alert
 ```
 
+### Adding Custom Alerts (no PromQL)
+
+Beyond the platform's built-in alerts, you can add your own. **The easiest way: use the Self-Service Portal's Recipe Builder** — pick a recipe (threshold / rate / ratio / forecast …), fill in the parameters, and it generates the config for you, with no PromQL to write.
+
+Advanced users can also declare them directly under `_custom_alerts` in `conf.d/<tenant>.yaml`; see [threshold-exporter §Custom Alerts](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md#45-自訂告警-_custom_alerts).
+
 ### Setting Up Alert Notification Routing
 
 ```yaml
