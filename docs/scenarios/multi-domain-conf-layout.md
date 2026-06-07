@@ -270,8 +270,9 @@ tenants:
       key_rotation_days: 90
 EOF
 
-# 驗證：所有 eu-west 下的 tenant 已生效
-da-tools validate-conf-d --report-inheritance --filter "region=eu-west"
+# 驗證：抽一個 eu-west tenant，確認已繼承 region 層 GDPR 預設
+# （describe_tenant 無 region filter；逐 tenant 或 --all 檢視）
+python scripts/tools/dx/describe_tenant.py tenant-d --show-sources
 ```
 
 ### 情景 4：混合模式（平面 + 階層）
@@ -304,8 +305,7 @@ conf.d/
 |------|------|------|
 | `migrate_conf_d.py` | 平面→階層遷移，乾跑/應用 | v2.7.0+ |
 | `describe_tenant.py` | 顯示 tenant 有效配置 + 繼承鏈 | v2.7.0+ |
-| `validate-conf-d` | 檢查配置正確性、重複、衝突 | v2.7.0+ |
-| `list-tenants` | 列舉所有 tenant + 所屬域/區/環 | v2.7.0+ |
+| `da-tools validate-config` | 檢查配置正確性、重複、衝突 | v2.7.0+ |
 
 ### 使用範例
 
@@ -313,11 +313,11 @@ conf.d/
 # 1. 快速檢查某 tenant 的有效值（JSON 輸出 + jq 取單一鍵）
 python scripts/tools/dx/describe_tenant.py tenant-a --format json | jq '.alerts.threshold'
 
-# 2. 找到所有 Finance tenant
-da-tools list-tenants --filter domain=finance
+# 2. 找到所有 Finance tenant（階層式佈局下 finance tenant 在 conf.d/finance/ 下）
+find conf.d/finance -name 'tenant-*.yaml'
 
 # 3. 驗證配置無誤
-da-tools validate-conf-d --check-merge-conflicts
+da-tools validate-config --config-dir conf.d/
 
 # 4. 生成 configuration report（用於審計；--all 匯出所有租戶有效配置）
 python scripts/tools/dx/describe_tenant.py --all --format json --output audit.json

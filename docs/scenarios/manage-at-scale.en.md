@@ -263,7 +263,7 @@ Expected result: `"affected_tenants": 0`. Any non-zero result indicates configur
 | `describe_tenant.py --diff` | Compare two tenants' config differences | `python scripts/tools/dx/describe_tenant.py tid-1 --diff tid-2` |
 | `blast_radius.py` | Diff two snapshots and classify impact | `python scripts/tools/ops/blast_radius.py --base a.json --pr b.json` |
 | `migrate_conf_d.py` | Flat→hierarchical migration | `python scripts/tools/dx/migrate_conf_d.py --conf-d conf.d/ --dry-run` |
-| `validate-conf-d` | Config correctness validation | `da-tools validate-conf-d --check-merge-conflicts` |
+| `da-tools validate-config` | Config correctness validation | `da-tools validate-config --config-dir conf.d/` |
 
 ## Related Resources
 

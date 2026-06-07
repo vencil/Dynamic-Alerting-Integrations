@@ -270,8 +270,9 @@ tenants:
       key_rotation_days: 90
 EOF
 
-# Verify: all eu-west tenants inherit the changes
-da-tools validate-conf-d --report-inheritance --filter "region=eu-west"
+# Verify: inspect an eu-west tenant to confirm it inherited the region-level GDPR defaults
+# (describe_tenant has no region filter; check per-tenant or via --all)
+python scripts/tools/dx/describe_tenant.py tenant-d --show-sources
 ```
 
 ### Scenario 4: Mixed Mode (Flat + Hierarchical)
@@ -304,8 +305,7 @@ The system supports both:
 |------|---------|---------|
 | `migrate_conf_d.py` | Flat→hierarchical migration, dry-run/apply | v2.7.0+ |
 | `describe_tenant.py` | Show tenant effective config + inheritance chain | v2.7.0+ |
-| `validate-conf-d` | Check config correctness, duplicates, conflicts | v2.7.0+ |
-| `list-tenants` | Enumerate all tenants + domain/region/env metadata | v2.7.0+ |
+| `da-tools validate-config` | Check config correctness, duplicates, conflicts | v2.7.0+ |
 
 ### Usage Examples
 
@@ -313,11 +313,11 @@ The system supports both:
 # 1. Quick check effective value for a tenant (JSON output + jq for a single key)
 python scripts/tools/dx/describe_tenant.py tenant-a --format json | jq '.alerts.threshold'
 
-# 2. Find all Finance tenants
-da-tools list-tenants --filter domain=finance
+# 2. Find all Finance tenants (under hierarchical layout, finance tenants live under conf.d/finance/)
+find conf.d/finance -name 'tenant-*.yaml'
 
-# 3. Validate config for merge conflicts
-da-tools validate-conf-d --check-merge-conflicts
+# 3. Validate config correctness
+da-tools validate-config --config-dir conf.d/
 
 # 4. Generate configuration report (for audit; --all exports every tenant's effective config)
 python scripts/tools/dx/describe_tenant.py --all --format json --output audit.json

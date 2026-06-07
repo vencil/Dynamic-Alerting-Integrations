@@ -263,7 +263,7 @@ python3 scripts/tools/ops/blast_radius.py \
 | `describe_tenant.py --diff` | 比較兩個租戶配置差異 | `python scripts/tools/dx/describe_tenant.py tid-1 --diff tid-2` |
 | `blast_radius.py` | 比對兩份快照，分類影響 | `python scripts/tools/ops/blast_radius.py --base a.json --pr b.json` |
 | `migrate_conf_d.py` | 平面→階層遷移 | `python scripts/tools/dx/migrate_conf_d.py --conf-d conf.d/ --dry-run` |
-| `validate-conf-d` | 配置正確性驗證 | `da-tools validate-conf-d --check-merge-conflicts` |
+| `da-tools validate-config` | 配置正確性驗證 | `da-tools validate-config --config-dir conf.d/` |
 
 ## 相關資源
 
