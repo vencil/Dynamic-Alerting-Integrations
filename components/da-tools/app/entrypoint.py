@@ -477,7 +477,35 @@ def _print_version(tools_dir=None):
     sys.exit(0)
 
 
+def _configure_std_utf8():
+    """Best-effort: make stdout/stderr tolerate non-ASCII on legacy Windows
+    consoles so output doesn't crash or garble.
+
+    The help text carries non-ASCII even in English (em dash —, arrows ↔ →,
+    section sign §) and the error messages are bilingual Chinese. On a cp950 /
+    cp1252 console sys.stdout defaults to errors='strict', so printing any of
+    these raises UnicodeEncodeError and kills the command (e.g. `da-tools
+    --help`). stderr defaults to backslashreplace (non-fatal) but renders zh
+    errors as unreadable \\uXXXX escapes off a CJK locale — so reconfigure
+    both streams to UTF-8.
+
+    Inline + stdlib-only on purpose: entrypoint.py is contractually
+    zero-import from _lib_*, and a raw local-dev run (`py
+    components/da-tools/app/entrypoint.py`) puts only the app dir on sys.path
+    — scripts/tools/_lib_compat is NOT importable there. (Same shim shape as
+    scripts/tools/lint/check_cli_coverage.py.) Idempotent; a no-op under
+    pytest capture, whose stream wrappers lack .reconfigure.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except (AttributeError, OSError):
+                pass
+
+
 def main():
+    _configure_std_utf8()
     if len(sys.argv) < 2 or sys.argv[1] in ("-h", "--help", "help"):
         print_usage()
 

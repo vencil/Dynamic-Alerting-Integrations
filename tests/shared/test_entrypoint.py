@@ -181,6 +181,47 @@ class TestI18nHelper:
         assert entrypoint._t("中文", "english") == "中文"
 
 
+# ── _configure_std_utf8 ────────────────────────────────────────────
+
+
+class TestConfigureStdUtf8:
+    """_configure_std_utf8() best-effort：缺 reconfigure 不爆，有則呼叫 utf-8。"""
+
+    def test_no_raise_when_stream_lacks_reconfigure(self, monkeypatch):
+        """stream 無 reconfigure 屬性時靜默 no-op（pytest capture 情境）。"""
+        class _Plain:
+            pass
+        monkeypatch.setattr(sys, "stdout", _Plain())
+        monkeypatch.setattr(sys, "stderr", _Plain())
+        entrypoint._configure_std_utf8()  # 不應 raise
+
+    def test_reconfigures_both_streams_when_available(self, monkeypatch):
+        """有 reconfigure 時對 stdout+stderr 各以 utf-8/replace 呼叫一次。"""
+        calls = []
+
+        class _Fake:
+            def reconfigure(self, **kw):
+                calls.append(kw)
+
+        monkeypatch.setattr(sys, "stdout", _Fake())
+        monkeypatch.setattr(sys, "stderr", _Fake())
+        entrypoint._configure_std_utf8()
+        assert calls == [
+            {"encoding": "utf-8", "errors": "replace"},
+            {"encoding": "utf-8", "errors": "replace"},
+        ]
+
+    def test_swallows_reconfigure_errors(self, monkeypatch):
+        """reconfigure 拋 OSError 時被吞掉（best-effort，不致命）。"""
+        class _Boom:
+            def reconfigure(self, **kw):
+                raise OSError("nope")
+
+        monkeypatch.setattr(sys, "stdout", _Boom())
+        monkeypatch.setattr(sys, "stderr", _Boom())
+        entrypoint._configure_std_utf8()  # 不應 raise
+
+
 # ── run_tool error handling ────────────────────────────────────────
 
 
