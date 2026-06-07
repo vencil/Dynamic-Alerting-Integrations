@@ -485,7 +485,7 @@ kubectl create configmap prometheus-rules-cleaned \
 If any test or trial tenants exist, remove them:
 
 ```bash
-da-tools ls --config-dir conf.d/
+find conf.d -name 'tenant-*.yaml'
 da-tools offboard --tenant test-domain-1
 da-tools validate-config --config-dir conf.d/ --ci
 ```

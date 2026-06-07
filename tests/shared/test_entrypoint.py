@@ -143,6 +143,94 @@ class TestVersionDisplay:
         assert re.match(r'^[0-9]+\.[0-9]+\.[0-9]+$', ver), \
             f"VERSION '{ver}' 不是合法 semver"
 
+    def test_print_version_with_file(self, capsys, tmp_path):
+        """_print_version(tools_dir) 讀該目錄 VERSION 並印 'da-tools <ver>' + exit 0。"""
+        (tmp_path / "VERSION").write_text("9.9.9\n", encoding="utf-8")
+        with pytest.raises(SystemExit) as exc_info:
+            entrypoint._print_version(str(tmp_path))
+        assert exc_info.value.code == 0
+        assert capsys.readouterr().out.strip() == "da-tools 9.9.9"
+
+    def test_print_version_dev_fallback(self, capsys, tmp_path):
+        """VERSION 缺檔時 _print_version 印 'da-tools (dev)' + exit 0。"""
+        with pytest.raises(SystemExit) as exc_info:
+            entrypoint._print_version(str(tmp_path))
+        assert exc_info.value.code == 0
+        assert capsys.readouterr().out.strip() == "da-tools (dev)"
+
+
+# ── _t i18n helper ─────────────────────────────────────────────────
+
+
+class TestI18nHelper:
+    """_t() 依偵測語言挑選 zh/en 訊息變體。
+
+    _t 在 body 內讀 module-level _LANG（非 default-arg 綁定），所以
+    monkeypatch entrypoint._LANG 可測 zh 路徑；monkeypatch 自動還原，
+    不會洩漏到其他測試的 en-default 假設。
+    """
+
+    def test_returns_en_by_default(self, monkeypatch):
+        """_LANG='en' 時回傳英文變體。"""
+        monkeypatch.setattr(entrypoint, "_LANG", "en")
+        assert entrypoint._t("中文", "english") == "english"
+
+    def test_returns_zh_when_lang_zh(self, monkeypatch):
+        """_LANG='zh' 時回傳中文變體。"""
+        monkeypatch.setattr(entrypoint, "_LANG", "zh")
+        assert entrypoint._t("中文", "english") == "中文"
+
+
+# ── _configure_std_utf8 ────────────────────────────────────────────
+
+
+class TestConfigureStdUtf8:
+    """_configure_std_utf8() best-effort：缺 reconfigure 不爆，有則呼叫 utf-8。"""
+
+    def test_no_raise_when_stream_lacks_reconfigure(self, monkeypatch):
+        """stream 無 reconfigure 屬性時靜默 no-op（pytest capture 情境）。"""
+        class _Plain:
+            pass
+        monkeypatch.setattr(sys, "stdout", _Plain())
+        monkeypatch.setattr(sys, "stderr", _Plain())
+        entrypoint._configure_std_utf8()  # 不應 raise
+
+    def test_reconfigures_both_streams_when_available(self, monkeypatch):
+        """有 reconfigure 時對 stdout+stderr 各以 utf-8/replace 呼叫一次。"""
+        calls = []
+
+        class _Fake:
+            def reconfigure(self, **kw):
+                calls.append(kw)
+
+        monkeypatch.setattr(sys, "stdout", _Fake())
+        monkeypatch.setattr(sys, "stderr", _Fake())
+        entrypoint._configure_std_utf8()
+        assert calls == [
+            {"encoding": "utf-8", "errors": "replace"},
+            {"encoding": "utf-8", "errors": "replace"},
+        ]
+
+    def test_swallows_reconfigure_errors(self, monkeypatch):
+        """reconfigure 拋 OSError 時被吞掉（best-effort，不致命）。"""
+        class _Boom:
+            def reconfigure(self, **kw):
+                raise OSError("nope")
+
+        monkeypatch.setattr(sys, "stdout", _Boom())
+        monkeypatch.setattr(sys, "stderr", _Boom())
+        entrypoint._configure_std_utf8()  # 不應 raise
+
+    def test_swallows_reconfigure_attribute_error(self, monkeypatch):
+        """reconfigure 拋 AttributeError 時被吞掉（補滿 (AttributeError, OSError) tuple）。"""
+        class _AttrBoom:
+            def reconfigure(self, **kw):
+                raise AttributeError("unexpected")
+
+        monkeypatch.setattr(sys, "stdout", _AttrBoom())
+        monkeypatch.setattr(sys, "stderr", _AttrBoom())
+        entrypoint._configure_std_utf8()  # 不應 raise
+
 
 # ── run_tool error handling ────────────────────────────────────────
 
@@ -241,6 +329,19 @@ class TestMainRouting:
         with pytest.raises(SystemExit) as exc_info:
             entrypoint.main()
         assert exc_info.value.code == 1
+
+    def test_unknown_command_stderr(self, capsys, cli_argv):
+        """未知 command 的 stderr 含命令名 + 錯誤前綴。
+
+        守護 _t 折疊後的 unknown-command block（原本只測 exit code，
+        en stderr 文字未被 pin）。OR-form 兼容 zh/en（測試環境預設 en）。
+        """
+        cli_argv("da-tools", "nonexistent-xyz")
+        with pytest.raises(SystemExit):
+            entrypoint.main()
+        err = capsys.readouterr().err
+        assert "nonexistent-xyz" in err
+        assert "Unknown command" in err or "未知命令" in err
 
     def test_help_exits_zero(self, monkeypatch, cli_argv):
         """--help 應 sys.exit(0)。"""

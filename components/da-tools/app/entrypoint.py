@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
+"""da-tools CLI dispatcher: route a subcommand to its tool script."""
+import importlib.util
 import os
+import sys
+
 
 def _build_help_text(lang):
     """Build help text in the specified language.
@@ -186,10 +190,6 @@ Global environment variables:
     PROMETHEUS_URL    Default Prometheus endpoint (fallback for --prometheus)
     DA_LANG           Set CLI language (zh/en, takes precedence over LC_ALL/LANG)"""
 
-import os
-import sys
-import importlib.util
-
 
 def detect_cli_lang():
     """Detect CLI language from LANG/LC_ALL/DA_LANG environment variable.
@@ -207,6 +207,17 @@ def detect_cli_lang():
 
 TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
 _LANG = detect_cli_lang()
+
+
+def _t(zh, en):
+    """Pick the language variant of a message based on the detected CLI lang.
+
+    Reads the module-level _LANG at call time (not bound as a default arg),
+    so tests can monkeypatch entrypoint._LANG to exercise the zh path. Both
+    arguments are evaluated eagerly by the caller — only pass side-effect-free
+    strings (today every call site interpolates a plain command/script name).
+    """
+    return zh if _LANG == 'zh' else en
 
 # Local-dev fallback search paths (relative to repo root).
 # Docker image (build.sh) assembles all scripts flat into TOOLS_DIR,
@@ -266,7 +277,13 @@ def _resolve_script_path(script_name):
         return None, searched
 
     for subdir in _LOCAL_SOURCE_DIRS:
-        candidate = os.path.join(repo_root, subdir, script_name)
+        # _LOCAL_SOURCE_DIRS holds POSIX-separated literals ("scripts/tools/ops").
+        # os.path.join keeps the embedded "/" verbatim, so on Windows the result
+        # is a mixed-separator path (...\repo\scripts/tools/ops\script.py). It
+        # still resolves (Windows accepts "/"), but leaks an un-normalized path
+        # into the return value and the "Searched paths" diagnostic. normpath
+        # collapses to the native separator here and is a no-op on POSIX.
+        candidate = os.path.normpath(os.path.join(repo_root, subdir, script_name))
         searched.append(candidate)
         if os.path.isfile(candidate):
             return candidate, searched
@@ -362,40 +379,54 @@ PROMETHEUS_COMMANDS = {"check-alert", "baseline", "diagnose", "validate",
                        "discover-mappings"}
 
 
+# Usage examples shown after the help text. These command lines are
+# language-agnostic (no translatable prose), so they live in a single
+# source of truth rather than being duplicated per language — the old
+# zh/en branches held byte-identical copies, an unguarded drift risk.
+# NOTE: keep this a tuple of plain strings (not a triple-quoted block):
+# check_cli_coverage.py regex-parses triple-quoted blocks in this file
+# for command coverage, and a """...""" here would put these examples in
+# its scope. The 2-space indent is re-added at print time.
+_USAGE_EXAMPLES = (
+    "da-tools check-alert MariaDBHighConnections db-a --prometheus http://prometheus:9090",
+    "da-tools baseline --tenant db-a --prometheus http://prometheus:9090",
+    "da-tools validate --mapping mapping.csv --prometheus http://prometheus:9090",
+    "da-tools migrate legacy-rules.yml --dry-run --triage",
+    "da-tools scaffold --tenant db-c --db mariadb,redis --non-interactive",
+    "da-tools lint /path/to/custom-rules/ --ci",
+    "da-tools onboard --alertmanager-config alertmanager.yaml --tenant-label organization",
+    "da-tools validate-config --config-dir conf.d/",
+    "da-tools init --ci both --tenants db-a,db-b --rule-packs mariadb,redis",
+)
+
+# Per-language labels/descriptions for the usage footer. Values are
+# tuples (examples_label, env_label, prometheus_url_line, da_lang_line).
+# Keeping the values as tuples — rather than per-language translated
+# string values — keeps this dict out of check_i18n_coverage's
+# language-keyed-string regex, so the i18n badge number stays stable.
+_USAGE_LABELS = {
+    "zh": ("範例:", "環境變數:",
+           "  PROMETHEUS_URL   Prometheus 預設端點 (未指定 --prometheus 時使用)",
+           "  DA_LANG          設定 CLI 語言 (zh/en)"),
+    "en": ("Examples:", "Environment:",
+           "  PROMETHEUS_URL   Default Prometheus endpoint (used when --prometheus is omitted)",
+           "  DA_LANG          Set CLI language (zh/en)"),
+}
+
+
 def print_usage():
     """Print help message in detected language."""
     print(_build_help_text(_LANG))
     print()
-    if _LANG == 'zh':
-        print("範例:")
-        print("  da-tools check-alert MariaDBHighConnections db-a --prometheus http://prometheus:9090")
-        print("  da-tools baseline --tenant db-a --prometheus http://prometheus:9090")
-        print("  da-tools validate --mapping mapping.csv --prometheus http://prometheus:9090")
-        print("  da-tools migrate legacy-rules.yml --dry-run --triage")
-        print("  da-tools scaffold --tenant db-c --db mariadb,redis --non-interactive")
-        print("  da-tools lint /path/to/custom-rules/ --ci")
-        print("  da-tools onboard --alertmanager-config alertmanager.yaml --tenant-label organization")
-        print("  da-tools validate-config --config-dir conf.d/")
-        print("  da-tools init --ci both --tenants db-a,db-b --rule-packs mariadb,redis")
-        print()
-        print("環境變數:")
-        print("  PROMETHEUS_URL   Prometheus 預設端點 (未指定 --prometheus 時使用)")
-        print("  DA_LANG          設定 CLI 語言 (zh/en)")
-    else:
-        print("Examples:")
-        print("  da-tools check-alert MariaDBHighConnections db-a --prometheus http://prometheus:9090")
-        print("  da-tools baseline --tenant db-a --prometheus http://prometheus:9090")
-        print("  da-tools validate --mapping mapping.csv --prometheus http://prometheus:9090")
-        print("  da-tools migrate legacy-rules.yml --dry-run --triage")
-        print("  da-tools scaffold --tenant db-c --db mariadb,redis --non-interactive")
-        print("  da-tools lint /path/to/custom-rules/ --ci")
-        print("  da-tools onboard --alertmanager-config alertmanager.yaml --tenant-label organization")
-        print("  da-tools validate-config --config-dir conf.d/")
-        print("  da-tools init --ci both --tenants db-a,db-b --rule-packs mariadb,redis")
-        print()
-        print("Environment:")
-        print("  PROMETHEUS_URL   Default Prometheus endpoint (used when --prometheus is omitted)")
-        print("  DA_LANG          Set CLI language (zh/en)")
+    examples_label, env_label, env_prom, env_lang = \
+        _USAGE_LABELS["zh"] if _LANG == "zh" else _USAGE_LABELS["en"]
+    print(examples_label)
+    for example in _USAGE_EXAMPLES:
+        print(f"  {example}")
+    print()
+    print(env_label)
+    print(env_prom)
+    print(env_lang)
     sys.exit(0)
 
 
@@ -413,12 +444,9 @@ def run_tool(script_name, args):
     script_path, searched = _resolve_script_path(script_name)
 
     if script_path is None:
-        if _LANG == 'zh':
-            print(f"錯誤: 找不到工具腳本 {script_name}", file=sys.stderr)
-            print("已搜尋以下路徑：", file=sys.stderr)
-        else:
-            print(f"Error: Tool script not found: {script_name}", file=sys.stderr)
-            print("Searched paths:", file=sys.stderr)
+        print(_t(f"錯誤: 找不到工具腳本 {script_name}",
+                 f"Error: Tool script not found: {script_name}"), file=sys.stderr)
+        print(_t("已搜尋以下路徑：", "Searched paths:"), file=sys.stderr)
         for path in searched:
             print(f"  {path}", file=sys.stderr)
         sys.exit(1)
@@ -432,7 +460,52 @@ def run_tool(script_name, args):
     spec.loader.exec_module(module)
 
 
+def _print_version(tools_dir=None):
+    """Print the da-tools version (or a dev fallback) and exit.
+
+    tools_dir defaults to the module-level TOOLS_DIR but is resolved in the
+    body (not bound as a default arg) so tests can pass a temp dir to cover
+    the missing-VERSION dev fallback without monkeypatching a frozen global.
+    """
+    tools_dir = tools_dir or TOOLS_DIR
+    version_file = os.path.join(tools_dir, "VERSION")
+    if os.path.isfile(version_file):
+        with open(version_file, encoding="utf-8") as f:
+            print(f"da-tools {f.read().strip()}")
+    else:
+        print("da-tools (dev)")
+    sys.exit(0)
+
+
+def _configure_std_utf8():
+    """Best-effort: make stdout/stderr tolerate non-ASCII on legacy Windows
+    consoles so output doesn't crash or garble.
+
+    The help text carries non-ASCII even in English (em dash —, arrows ↔ →,
+    section sign §) and the error messages are bilingual Chinese. On a cp950 /
+    cp1252 console sys.stdout defaults to errors='strict', so printing any of
+    these raises UnicodeEncodeError and kills the command (e.g. `da-tools
+    --help`). stderr defaults to backslashreplace (non-fatal) but renders zh
+    errors as unreadable \\uXXXX escapes off a CJK locale — so reconfigure
+    both streams to UTF-8.
+
+    Inline + stdlib-only on purpose: entrypoint.py is contractually
+    zero-import from _lib_*, and a raw local-dev run (`py
+    components/da-tools/app/entrypoint.py`) puts only the app dir on sys.path
+    — scripts/tools/_lib_compat is NOT importable there. (Same shim shape as
+    scripts/tools/lint/check_cli_coverage.py.) Idempotent; a no-op under
+    pytest capture, whose stream wrappers lack .reconfigure.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except (AttributeError, OSError):
+                pass
+
+
 def main():
+    _configure_std_utf8()
     if len(sys.argv) < 2 or sys.argv[1] in ("-h", "--help", "help"):
         print_usage()
 
@@ -440,27 +513,19 @@ def main():
     args = sys.argv[2:]
 
     if command == "--version":
-        version_file = os.path.join(TOOLS_DIR, "VERSION")
-        if os.path.isfile(version_file):
-            with open(version_file, encoding="utf-8") as f:
-                print(f"da-tools {f.read().strip()}")
-        else:
-            print("da-tools (dev)")
-        sys.exit(0)
+        _print_version()
 
-    # Handle --help for the main entrypoint
-    if command in ("-h", "--help", "help"):
-        print_usage()
+    # Note: -h/--help/help is fully handled by the guard at the top of main()
+    # (print_usage exits there), so no second help check is needed here.
 
     if command not in COMMAND_MAP:
-        if _LANG == 'zh':
-            print(f"錯誤: 未知命令 '{command}'", file=sys.stderr)
-            print(f"可用命令: {', '.join(sorted(COMMAND_MAP.keys()))}", file=sys.stderr)
-            print("執行 'da-tools --help' 以查看用法。", file=sys.stderr)
-        else:
-            print(f"Error: Unknown command '{command}'", file=sys.stderr)
-            print(f"Available commands: {', '.join(sorted(COMMAND_MAP.keys()))}", file=sys.stderr)
-            print("Run 'da-tools --help' for usage.", file=sys.stderr)
+        commands = ', '.join(sorted(COMMAND_MAP.keys()))
+        print(_t(f"錯誤: 未知命令 '{command}'",
+                 f"Error: Unknown command '{command}'"), file=sys.stderr)
+        print(_t(f"可用命令: {commands}",
+                 f"Available commands: {commands}"), file=sys.stderr)
+        print(_t("執行 'da-tools --help' 以查看用法。",
+                 "Run 'da-tools --help' for usage."), file=sys.stderr)
         sys.exit(1)
 
     # Inject PROMETHEUS_URL for applicable commands
