@@ -687,4 +687,74 @@ tenants:
 	}
 }
 
+// TestIncrementalLoad_TenantMovedBetweenFiles reproduces the latent
+// fast-path bug where a tenant relocating from one file to another in a
+// SINGLE tenant-only incremental reload wrongly disappears: the patch
+// path overwrote the tenant from the added file, then unconditionally
+// dropped it again because its old file was removed. The incremental
+// result must equal the full-rebuild result (a fresh load of the same
+// final directory), which keeps the tenant.
+func TestIncrementalLoad_TenantMovedBetweenFiles(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	writeTestFile(t, dir, "_defaults.yaml", `
+defaults:
+  mysql_connections: 80
+`)
+	// db-a initially lives in pool-1.yaml.
+	writeTestFile(t, dir, "pool-1.yaml", `
+tenants:
+  db-a:
+    mysql_connections: "70"
+`)
+
+	mgr := NewConfigManager(dir)
+	if err := mgr.IncrementalLoad(); err != nil {
+		t.Fatalf("initial load: %v", err)
+	}
+	if mgr.GetConfig().Tenants["db-a"]["mysql_connections"].Default != "70" {
+		t.Fatalf("setup: expected db-a=70 in pool-1")
+	}
+
+	// Single reload: remove pool-1.yaml AND add pool-2.yaml carrying db-a.
+	// Both are tenant files (no underscore) → the tenant-only patch path
+	// is taken, exercising the buggy overwrite-then-delete sequence.
+	os.Remove(filepath.Join(dir, "pool-1.yaml"))
+	writeTestFile(t, dir, "pool-2.yaml", `
+tenants:
+  db-a:
+    mysql_connections: "75"
+`)
+
+	if err := mgr.IncrementalLoad(); err != nil {
+		t.Fatalf("move-reload incremental load: %v", err)
+	}
+	got := mgr.GetConfig()
+
+	// Full-rebuild reference: a fresh manager loading the SAME final dir.
+	ref := NewConfigManager(dir)
+	if err := ref.IncrementalLoad(); err != nil { // fresh → fullDirLoad
+		t.Fatalf("reference full load: %v", err)
+	}
+	want := ref.GetConfig()
+
+	// The moved tenant must survive (the core regression).
+	if _, exists := got.Tenants["db-a"]; !exists {
+		t.Errorf("db-a wrongly dropped after move (incremental); full-rebuild keeps it with value %q",
+			want.Tenants["db-a"]["mysql_connections"].Default)
+	}
+	// Incremental must match full-rebuild exactly (tenant set + value).
+	if len(got.Tenants) != len(want.Tenants) {
+		t.Errorf("tenant count: incremental=%d, full-rebuild=%d", len(got.Tenants), len(want.Tenants))
+	}
+	if got.Tenants["db-a"]["mysql_connections"].Default != want.Tenants["db-a"]["mysql_connections"].Default {
+		t.Errorf("db-a value: incremental=%q, full-rebuild=%q",
+			got.Tenants["db-a"]["mysql_connections"].Default,
+			want.Tenants["db-a"]["mysql_connections"].Default)
+	}
+	if want.Tenants["db-a"]["mysql_connections"].Default != "75" {
+		t.Errorf("sanity: expected moved db-a=75 from pool-2, got %q", want.Tenants["db-a"]["mysql_connections"].Default)
+	}
+}
+
 // endregion
