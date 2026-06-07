@@ -200,7 +200,7 @@ python scripts/tools/dx/migrate_conf_d.py --conf-d conf.d/ --apply \
 2. 依 `_metadata.region` / `_metadata.environment` 分組
 3. 萃取共同鍵值到各層 `_defaults.yaml`
 4. 移動 tenant 檔案到新目錄結構
-5. 執行 `validate-conf-d` 確保遷移成功
+5. 執行 `da-tools validate-config` 確保遷移成功
 
 #### 步驟 C：驗證
 
@@ -335,7 +335,7 @@ python scripts/tools/dx/describe_tenant.py --all --format json --output audit.js
 ### ⚠️ 限制與陷阱
 
 1. **檔案名約定**：`_defaults.yaml` 是保留字，不能當作 tenant 名稱
-2. **循環繼承**：系統檢測並防止（`validate-conf-d` 會報錯）
+2. **循環繼承**：系統檢測並防止（`da-tools validate-config` 會報錯）
 3. **陣列合併**：只支援替代，不支援追加。若需追加新 receiver，須完整列出舊的
 4. **環境變數逃逸**：`_defaults.yaml` 中的 env 變數僅在該檔案有效，tenant 檔案內不可引用
 
@@ -343,7 +343,7 @@ python scripts/tools/dx/describe_tenant.py --all --format json --output audit.js
 
 - Pre-commit hook：禁止 `_defaults.yaml` 含有 hardcoded tenant id
 - 配置驗證：檢測重複 receiver、未定義的 rule group 參考
-- Git hook：對 `conf.d/` 的修改自動執行 `validate-conf-d` + `describe_tenant.py` 檢查
+- Git hook：對 `conf.d/` 的修改自動執行 `da-tools validate-config` + `describe_tenant.py` 檢查
 
 ## 相關資源
 

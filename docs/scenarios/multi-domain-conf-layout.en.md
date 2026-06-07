@@ -200,7 +200,7 @@ The tool automatically:
 2. Groups by `_metadata.region` / `_metadata.environment`
 3. Extracts common keys into each level's `_defaults.yaml`
 4. Moves tenant files to new directory structure
-5. Runs `validate-conf-d` to ensure migration success
+5. Runs `da-tools validate-config` to ensure migration success
 
 #### Step C: Verify
 
@@ -335,7 +335,7 @@ python scripts/tools/dx/describe_tenant.py --all --format json --output audit.js
 ### ⚠️ Limitations and Pitfalls
 
 1. **Filename convention**: `_defaults.yaml` is reserved, cannot be used as tenant name
-2. **Circular inheritance**: System detects and prevents (validate-conf-d reports error)
+2. **Circular inheritance**: System detects and prevents (`da-tools validate-config` reports error)
 3. **Array merging**: Only replacement supported, no appending. If new receiver needed, list old ones too
 4. **Environment variable escape**: Env variables in `_defaults.yaml` are local to that file; tenant files cannot reference them
 
@@ -343,7 +343,7 @@ python scripts/tools/dx/describe_tenant.py --all --format json --output audit.js
 
 - Pre-commit hook: Prevents `_defaults.yaml` from containing hardcoded tenant IDs
 - Config validation: Detects duplicate receivers, undefined rule group references
-- Git hook: Any `conf.d/` modification triggers `validate-conf-d` + `describe_tenant.py` checks
+- Git hook: Any `conf.d/` modification triggers `da-tools validate-config` + `describe_tenant.py` checks
 
 ## Related Resources
 
