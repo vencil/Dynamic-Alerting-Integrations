@@ -207,13 +207,46 @@ echo ""
 #   3. 濾掉 pgrep 自己（argv 含 "git" 來自「搜尋 git」的 pattern）
 #
 # 剩下的才可能是真的活 git 程序（git commit / fetch / push 等）。
+#
+#   4. Repo-scope filter (主要正確性 + 去 flake)：原本 host-global `pgrep`
+#      會把「跟本 repo 無關」的 git 程序也算進來（例如平行 CI 下其他
+#      pytest-xdist worker 跑的 git），造成 --clean 誤判「有活躍 git」而
+#      跳過清理 → flaky test（test_clean_mode_removes_stale_locks）。
+#      改為只計入「cwd 落在本 repo 內」或「argv 顯式指向本 repo」的程序。
+#      無 /proc 的平台（如 Windows Git Bash）退回保守的 host-global 行為。
 echo "--- 活躍的 Git 程序 ---"
 SELF_PIDS="^($$|$PPID|${BASHPID:-$$})$"
+REPO_ROOT_ABS="$(cd "$REPO_ROOT" 2>/dev/null && pwd || echo "$REPO_ROOT")"
+
+# stdin: self/name-filtered pgrep lines（格式 "<pid> <argv...>"）
+# stdout: 只保留真正在操作「本 repo」的行
+filter_to_this_repo() {
+    if [ ! -d /proc ]; then
+        # 無 /proc：無法依 cwd scope，退回保守 host-global 行為
+        cat
+        return
+    fi
+    while IFS= read -r line; do
+        # argv 顯式引用本 repo（git -C <repo> / --git-dir=<repo>/.git）→ 計入
+        case "$line" in
+            *"$REPO_ROOT_ABS"*) echo "$line"; continue ;;
+        esac
+        local pid cwd
+        pid="${line%% *}"
+        # 讀不到 cwd（程序已結束 / 非本 repo）→ 排除（不誤判為活躍）
+        cwd="$(readlink "/proc/$pid/cwd" 2>/dev/null)" || continue
+        case "$cwd" in
+            "$REPO_ROOT_ABS" | "$REPO_ROOT_ABS"/*) echo "$line" ;;
+        esac
+    done
+}
+
 ACTIVE_LINES=$(
     pgrep -af "git" 2>/dev/null \
         | grep -v "git_check_lock" \
         | grep -v "pgrep" \
         | awk -v selfre="$SELF_PIDS" '$1 !~ selfre' \
+        | filter_to_this_repo \
         | head -5 \
         || true
 )
