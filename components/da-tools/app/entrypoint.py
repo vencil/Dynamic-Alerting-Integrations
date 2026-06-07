@@ -208,6 +208,17 @@ def detect_cli_lang():
 TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
 _LANG = detect_cli_lang()
 
+
+def _t(zh, en):
+    """Pick the language variant of a message based on the detected CLI lang.
+
+    Reads the module-level _LANG at call time (not bound as a default arg),
+    so tests can monkeypatch entrypoint._LANG to exercise the zh path. Both
+    arguments are evaluated eagerly by the caller — only pass side-effect-free
+    strings (today every call site interpolates a plain command/script name).
+    """
+    return zh if _LANG == 'zh' else en
+
 # Local-dev fallback search paths (relative to repo root).
 # Docker image (build.sh) assembles all scripts flat into TOOLS_DIR,
 # so the first lookup hits. Local dev (running entrypoint.py from
@@ -433,12 +444,9 @@ def run_tool(script_name, args):
     script_path, searched = _resolve_script_path(script_name)
 
     if script_path is None:
-        if _LANG == 'zh':
-            print(f"錯誤: 找不到工具腳本 {script_name}", file=sys.stderr)
-            print("已搜尋以下路徑：", file=sys.stderr)
-        else:
-            print(f"Error: Tool script not found: {script_name}", file=sys.stderr)
-            print("Searched paths:", file=sys.stderr)
+        print(_t(f"錯誤: 找不到工具腳本 {script_name}",
+                 f"Error: Tool script not found: {script_name}"), file=sys.stderr)
+        print(_t("已搜尋以下路徑：", "Searched paths:"), file=sys.stderr)
         for path in searched:
             print(f"  {path}", file=sys.stderr)
         sys.exit(1)
@@ -473,14 +481,13 @@ def main():
         print_usage()
 
     if command not in COMMAND_MAP:
-        if _LANG == 'zh':
-            print(f"錯誤: 未知命令 '{command}'", file=sys.stderr)
-            print(f"可用命令: {', '.join(sorted(COMMAND_MAP.keys()))}", file=sys.stderr)
-            print("執行 'da-tools --help' 以查看用法。", file=sys.stderr)
-        else:
-            print(f"Error: Unknown command '{command}'", file=sys.stderr)
-            print(f"Available commands: {', '.join(sorted(COMMAND_MAP.keys()))}", file=sys.stderr)
-            print("Run 'da-tools --help' for usage.", file=sys.stderr)
+        commands = ', '.join(sorted(COMMAND_MAP.keys()))
+        print(_t(f"錯誤: 未知命令 '{command}'",
+                 f"Error: Unknown command '{command}'"), file=sys.stderr)
+        print(_t(f"可用命令: {commands}",
+                 f"Available commands: {commands}"), file=sys.stderr)
+        print(_t("執行 'da-tools --help' 以查看用法。",
+                 "Run 'da-tools --help' for usage."), file=sys.stderr)
         sys.exit(1)
 
     # Inject PROMETHEUS_URL for applicable commands

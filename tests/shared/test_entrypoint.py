@@ -144,6 +144,28 @@ class TestVersionDisplay:
             f"VERSION '{ver}' 不是合法 semver"
 
 
+# ── _t i18n helper ─────────────────────────────────────────────────
+
+
+class TestI18nHelper:
+    """_t() 依偵測語言挑選 zh/en 訊息變體。
+
+    _t 在 body 內讀 module-level _LANG（非 default-arg 綁定），所以
+    monkeypatch entrypoint._LANG 可測 zh 路徑；monkeypatch 自動還原，
+    不會洩漏到其他測試的 en-default 假設。
+    """
+
+    def test_returns_en_by_default(self, monkeypatch):
+        """_LANG='en' 時回傳英文變體。"""
+        monkeypatch.setattr(entrypoint, "_LANG", "en")
+        assert entrypoint._t("中文", "english") == "english"
+
+    def test_returns_zh_when_lang_zh(self, monkeypatch):
+        """_LANG='zh' 時回傳中文變體。"""
+        monkeypatch.setattr(entrypoint, "_LANG", "zh")
+        assert entrypoint._t("中文", "english") == "中文"
+
+
 # ── run_tool error handling ────────────────────────────────────────
 
 
@@ -241,6 +263,19 @@ class TestMainRouting:
         with pytest.raises(SystemExit) as exc_info:
             entrypoint.main()
         assert exc_info.value.code == 1
+
+    def test_unknown_command_stderr(self, capsys, cli_argv):
+        """未知 command 的 stderr 含命令名 + 錯誤前綴。
+
+        守護 _t 折疊後的 unknown-command block（原本只測 exit code，
+        en stderr 文字未被 pin）。OR-form 兼容 zh/en（測試環境預設 en）。
+        """
+        cli_argv("da-tools", "nonexistent-xyz")
+        with pytest.raises(SystemExit):
+            entrypoint.main()
+        err = capsys.readouterr().err
+        assert "nonexistent-xyz" in err
+        assert "Unknown command" in err or "未知命令" in err
 
     def test_help_exits_zero(self, monkeypatch, cli_argv):
         """--help 應 sys.exit(0)。"""
