@@ -8,10 +8,8 @@
 package github
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -294,59 +292,16 @@ func (c *Client) do(method, path string, body interface{}) ([]byte, http.Header,
 	})
 }
 
-// roundTrip performs the actual authenticated GitHub request. Non-2xx becomes
-// a *platform.APIError carrying only the status code. Split out of do() so the
-// circuit breaker can wrap it (#632).
+// roundTrip performs the actual authenticated GitHub request via the shared
+// platform.JSONRoundTrip transport (no-leak error contract + TRK-319 rate-limit
+// detection live there). Split out of do() so the circuit breaker can wrap it
+// (#632). A GitHub secondary rate limit (a 403 indistinguishable from a
+// permission 403 by status alone) is flagged inside JSONRoundTrip so the breaker
+// treats it as forge degradation.
 func (c *Client) roundTrip(method, path string, body interface{}) ([]byte, http.Header, error) {
-	var bodyReader io.Reader
-	if body != nil {
-		jsonBody, err := json.Marshal(body)
-		if err != nil {
-			return nil, nil, fmt.Errorf("marshal body: %w", err)
-		}
-		bodyReader = bytes.NewReader(jsonBody)
-	}
-
-	reqURL := c.baseURL + path
-	req, err := http.NewRequest(method, reqURL, bodyReader)
-	if err != nil {
-		return nil, nil, fmt.Errorf("create request: %w", err)
-	}
-
-	req.Header.Set("Authorization", "Bearer "+c.token)
-	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, nil, fmt.Errorf("http request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, nil, fmt.Errorf("read response: %w", err)
-	}
-
-	if resp.StatusCode >= 400 {
-		// Sanitize: log the full response for debugging but only expose status code to callers.
-		// This prevents leaking internal GitHub error details to API consumers.
-		slog.Warn("github API non-2xx",
-			"method", method, "path", path, "status", resp.StatusCode, "body", string(respBody))
-		apiErr := &platform.APIError{
-			Provider: "GitHub", Method: method, Path: path, StatusCode: resp.StatusCode,
-		}
-		// TRK-319: flag a GitHub secondary rate limit (a 403, indistinguishable
-		// from a permission 403 by status alone) so the circuit breaker treats it
-		// as forge degradation. Body is sniffed here but not retained (no leak).
-		if limited, retryAfter := platform.DetectRateLimit(resp.StatusCode, resp.Header, respBody); limited {
-			apiErr.RateLimited = true
-			apiErr.RetryAfter = retryAfter
-		}
-		return nil, resp.Header, apiErr
-	}
-	return respBody, resp.Header, nil
+	return platform.JSONRoundTrip(c.httpClient, "GitHub", c.baseURL, method, path, body, func(h http.Header) {
+		h.Set("Authorization", "Bearer "+c.token)
+		h.Set("Accept", "application/vnd.github+json")
+		h.Set("X-GitHub-Api-Version", "2022-11-28")
+	})
 }

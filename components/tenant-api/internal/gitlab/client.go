@@ -8,10 +8,8 @@
 package gitlab
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -262,59 +260,15 @@ func (c *Client) doRequest(method, path string, body interface{}) ([]byte, error
 	return b, err
 }
 
-// roundTrip performs the actual authenticated GitLab request. Split out of
-// doRequest so the circuit breaker can wrap it (#632). The http.Header return
-// is unused by GitLab callers (no Link-header pagination) but matches the
-// breaker's Execute signature.
+// roundTrip performs the actual authenticated GitLab request via the shared
+// platform.JSONRoundTrip transport (no-leak error contract + TRK-319 rate-limit
+// detection live there; a 403 becomes a platform.ErrForbidden-matching APIError
+// so handlers can map a missing-api-scope token to a clean 403). Split out of
+// doRequest so the circuit breaker can wrap it (#632). The http.Header return is
+// unused by GitLab callers (no Link-header pagination) but matches the breaker's
+// Execute signature.
 func (c *Client) roundTrip(method, path string, body interface{}) ([]byte, http.Header, error) {
-	var bodyReader io.Reader
-	if body != nil {
-		jsonBody, err := json.Marshal(body)
-		if err != nil {
-			return nil, nil, fmt.Errorf("marshal body: %w", err)
-		}
-		bodyReader = bytes.NewReader(jsonBody)
-	}
-
-	reqURL := c.baseURL + path
-	req, err := http.NewRequest(method, reqURL, bodyReader)
-	if err != nil {
-		return nil, nil, fmt.Errorf("create request: %w", err)
-	}
-
-	req.Header.Set("PRIVATE-TOKEN", c.token)
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, nil, fmt.Errorf("http request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, nil, fmt.Errorf("read response: %w", err)
-	}
-
-	if resp.StatusCode >= 400 {
-		// Sanitize: log the full response for debugging but only expose status code to callers.
-		// This prevents leaking internal GitLab error details to API consumers.
-		// 403 becomes a platform.ErrForbidden-matching APIError so handlers can
-		// map a missing-api-scope token to a clean HTTP 403 (see errors.go).
-		slog.Warn("gitlab API non-2xx",
-			"method", method, "path", path, "status", resp.StatusCode, "body", string(respBody))
-		apiErr := &platform.APIError{
-			Provider: "GitLab", Method: method, Path: path, StatusCode: resp.StatusCode,
-		}
-		// TRK-319: flag a GitLab rate limit (429) so the circuit breaker treats it
-		// as forge degradation. Body is sniffed here but not retained (no leak).
-		if limited, retryAfter := platform.DetectRateLimit(resp.StatusCode, resp.Header, respBody); limited {
-			apiErr.RateLimited = true
-			apiErr.RetryAfter = retryAfter
-		}
-		return nil, resp.Header, apiErr
-	}
-	return respBody, resp.Header, nil
+	return platform.JSONRoundTrip(c.httpClient, "GitLab", c.baseURL, method, path, body, func(h http.Header) {
+		h.Set("PRIVATE-TOKEN", c.token)
+	})
 }
