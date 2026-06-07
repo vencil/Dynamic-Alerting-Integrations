@@ -9,6 +9,7 @@ package main
 // running in CI as in production, just with a faster clock.
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -599,5 +600,68 @@ func TestTriggerDebouncedReload_Concurrent(t *testing.T) {
 	})
 	if !ok {
 		t.Errorf("debounce never fired under concurrent load (count=%d)", m.DebounceFiredCount())
+	}
+}
+
+// TestEmitParseFailureSignal pins parse-failure attribution at the unit level.
+// A defaults-chain failure must bump the offending _defaults file's basename
+// counter AND emit an ERROR log; a tenant-file failure must bump the tenant
+// file's basename counter and stay silent here (the tenant path is logged
+// upstream via logMergeSkip, not in emitParseFailureSignal).
+//
+// The tenant-file branch (config_debounce.go ~659) previously had no direct
+// coverage — integration tests only drove the defaults-chain path. If it
+// regressed, ops would lose the "this tenant file is persistently broken"
+// signal the docstring promises. Parallel-safe via per-test fresh metrics +
+// captured logger (#4a + #4b).
+func TestEmitParseFailureSignal(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		tenantFile    string
+		defaultsChain []string
+		mergeErr      error
+		wantBasename  string // counter label expected to read 1
+		wantLog       string // substring expected in log output ("" = none)
+	}{
+		{
+			name:          "defaults-chain failure attributes to defaults basename",
+			tenantFile:    "team-a/tenant-x.yaml",
+			defaultsChain: []string{"/conf.d/db/_defaults.yaml"},
+			mergeErr:      errors.New("parse defaults[0]: yaml: line 3: did not find expected key"),
+			wantBasename:  "_defaults.yaml",
+			wantLog:       "ERROR: skip unparseable defaults/profiles file",
+		},
+		{
+			name:       "tenant-file failure attributes to tenant basename",
+			tenantFile: "team-a/broken-tenant.yaml",
+			// chain present but NOT the culprit — must not be mis-attributed.
+			defaultsChain: []string{"/conf.d/db/_defaults.yaml"},
+			mergeErr:      errors.New("parse tenant: yaml: line 2: mapping values are not allowed in this context"),
+			wantBasename:  "broken-tenant.yaml",
+			wantLog:       "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			fresh, _ := freshMetrics(t)
+			testLogger, logBuf := newTestLogger()
+
+			emitParseFailureSignal(fresh, testLogger, "tenant-x", tt.tenantFile, tt.defaultsChain, tt.mergeErr)
+
+			if got := testutil.ToFloat64(fresh.parseFailures.WithLabelValues(tt.wantBasename)); got != 1 {
+				t.Errorf("parseFailures{file_basename=%s} = %v, want 1", tt.wantBasename, got)
+			}
+			if tt.wantLog == "" {
+				if logBuf.Len() != 0 {
+					t.Errorf("expected no log output for tenant-file path, got: %s", logBuf.String())
+				}
+			} else if !strings.Contains(logBuf.String(), tt.wantLog) {
+				t.Errorf("log missing %q; got: %s", tt.wantLog, logBuf.String())
+			}
+		})
 	}
 }
