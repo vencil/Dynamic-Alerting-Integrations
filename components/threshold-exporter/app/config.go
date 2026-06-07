@@ -524,6 +524,18 @@ func isTenantOnlyChange(changed, added, removed []string) bool {
 // map cloned) then overwrites tenants from changed/added files and drops
 // tenants from removed files. Extracted from IncrementalLoad Phase 4; the
 // caller reads prev under the lock, this function is otherwise pure.
+//
+// Two invariants keep this fast path equivalent to the full-rebuild path
+// (mergePartialConfigs + ApplyProfiles):
+//
+//   - changed+added are applied as one sorted filename sequence, mirroring
+//     mergePartialConfigs' own sort, so the last-writer is deterministic.
+//   - a removed file's tenant is dropped only when NO surviving file still
+//     declares it. A tenant relocating from a removed file into an
+//     added/changed (or untouched) file in the same reload must stay — the
+//     full rebuild keeps it because it re-merges every surviving file.
+//     Without this guard the overwrite below adds the moved tenant and the
+//     removal loop then wrongly drops it again (issue #790).
 func patchTenants(prev *ThresholdConfig, newConfigs, oldConfigs map[string]ThresholdConfig, changed, added, removed []string) ThresholdConfig {
 	merged := ThresholdConfig{
 		Defaults:     prev.Defaults,     // shared (immutable between patches)
@@ -535,21 +547,36 @@ func patchTenants(prev *ThresholdConfig, newConfigs, oldConfigs map[string]Thres
 	for k, v := range prev.Tenants {
 		merged.Tenants[k] = v
 	}
-	// Overwrite tenants from re-parsed (changed + added) files
-	for _, group := range [][]string{changed, added} {
-		for _, name := range group {
-			if partial, ok := newConfigs[name]; ok {
-				for tenant, overrides := range partial.Tenants {
-					merged.Tenants[tenant] = overrides
-				}
+	// Overwrite tenants from re-parsed (changed + added) files, applied as a
+	// single sorted filename sequence so precedence matches mergePartialConfigs.
+	// (A genuine cross-file duplicate tenant is rejected upstream by the
+	// hierarchical scan, issue #127, so this is a determinism guarantee.)
+	patchFiles := append(append([]string{}, changed...), added...)
+	sort.Strings(patchFiles)
+	for _, name := range patchFiles {
+		if partial, ok := newConfigs[name]; ok {
+			for tenant, overrides := range partial.Tenants {
+				merged.Tenants[tenant] = overrides
 			}
 		}
 	}
-	// Remove tenants from deleted files
+	// Build the set of tenants still declared by any surviving file.
+	// newConfigs already excludes removed files, so its tenant set is exactly
+	// the survivors.
+	survivingTenants := make(map[string]struct{})
+	for _, partial := range newConfigs {
+		for tenant := range partial.Tenants {
+			survivingTenants[tenant] = struct{}{}
+		}
+	}
+	// Remove tenants from deleted files, but only if no surviving file still
+	// declares them (else a same-reload move would lose the tenant).
 	for _, name := range removed {
 		if partial, ok := oldConfigs[name]; ok {
 			for tenant := range partial.Tenants {
-				delete(merged.Tenants, tenant)
+				if _, stillPresent := survivingTenants[tenant]; !stillPresent {
+					delete(merged.Tenants, tenant)
+				}
 			}
 		}
 	}
