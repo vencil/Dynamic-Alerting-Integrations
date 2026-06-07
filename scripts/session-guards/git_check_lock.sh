@@ -227,9 +227,14 @@ filter_to_this_repo() {
         return
     fi
     while IFS= read -r line; do
-        # argv 顯式引用本 repo（git -C <repo> / --git-dir=<repo>/.git）→ 計入
+        # argv 顯式引用本 repo（git -C <repo> / --git-dir=<repo>/.git）→ 計入。
+        # 須帶 path boundary（行尾 / 空白 / `/`），否則 sibling 前綴路徑
+        # （如 <repo>-other）會被誤配 → 又把無關 git 算成活躍。
         case "$line" in
-            *"$REPO_ROOT_ABS"*) echo "$line"; continue ;;
+            *"$REPO_ROOT_ABS" | *"$REPO_ROOT_ABS "* | *"$REPO_ROOT_ABS"/*)
+                echo "$line"
+                continue
+                ;;
         esac
         local pid cwd
         pid="${line%% *}"
