@@ -14,8 +14,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/prometheus/client_golang/prometheus"
-	dto "github.com/prometheus/client_model/go"
+	promtest "github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/vencil/threshold-exporter/internal/testutil"
 )
 
@@ -283,18 +282,7 @@ tenants:
 	// Invariant #2: parse-failure metric incremented for `_defaults.yaml`
 	// basename. This may run via loadDir (initial scan) — the counter
 	// pattern matches A-8d.
-	ch := make(chan prometheus.Metric, 1)
-	fresh.parseFailures.WithLabelValues("_defaults.yaml").Collect(ch)
-	close(ch)
-	var count float64
-	for m := range ch {
-		var d dto.Metric
-		if err := m.Write(&d); err != nil {
-			t.Fatalf("metric.Write: %v", err)
-		}
-		count = d.GetCounter().GetValue()
-	}
-	if count < 1 {
+	if count := promtest.ToFloat64(fresh.parseFailures.WithLabelValues("_defaults.yaml")); count < 1 {
 		t.Errorf("da_config_parse_failure_total{file_basename=_defaults.yaml} = %v, want >= 1", count)
 	}
 }

@@ -16,8 +16,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/prometheus/client_golang/prometheus"
-	dto "github.com/prometheus/client_model/go"
+	promtest "github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/vencil/threshold-exporter/internal/testutil"
 )
 
@@ -491,20 +490,8 @@ func TestScanDirHierarchical_MixedValidInvalid(t *testing.T) {
 	}
 
 	// Invariant #4: parse-failure metric incremented exactly once for
-	// the broken file's basename. Pulls counter value via the test-only
-	// collector API.
-	ch := make(chan prometheus.Metric, 1)
-	fresh.parseFailures.WithLabelValues("broken.yaml").Collect(ch)
-	close(ch)
-	var count float64
-	for m := range ch {
-		var dto dto.Metric
-		if err := m.Write(&dto); err != nil {
-			t.Fatalf("metric.Write: %v", err)
-		}
-		count = dto.GetCounter().GetValue()
-	}
-	if count != 1 {
+	// the broken file's basename. Reads the counter via testutil.ToFloat64.
+	if count := promtest.ToFloat64(fresh.parseFailures.WithLabelValues("broken.yaml")); count != 1 {
 		t.Errorf("da_config_parse_failure_total{file_basename=broken.yaml} = %v, want 1", count)
 	}
 }
@@ -571,18 +558,7 @@ func TestRecomputeMergedHash_DefaultsParseFailureEmitsErrorAndMetric(t *testing.
 	// basename. At least once (the test fires per-tenant, so we expect
 	// >= 2 for two tenants — but the metric API quirk makes >= 1 the
 	// safe assertion across both initial-scan and debounced-reload paths).
-	ch := make(chan prometheus.Metric, 1)
-	fresh.parseFailures.WithLabelValues("_defaults.yaml").Collect(ch)
-	close(ch)
-	var count float64
-	for m := range ch {
-		var d dto.Metric
-		if err := m.Write(&d); err != nil {
-			t.Fatalf("metric.Write: %v", err)
-		}
-		count = d.GetCounter().GetValue()
-	}
-	if count < 1 {
+	if count := promtest.ToFloat64(fresh.parseFailures.WithLabelValues("_defaults.yaml")); count < 1 {
 		t.Errorf(
 			"da_config_parse_failure_total{file_basename=_defaults.yaml} = %v, want >= 1 (hierarchical recompute path)",
 			count,
