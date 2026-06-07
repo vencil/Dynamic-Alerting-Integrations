@@ -11,7 +11,6 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/vencil/tenant-api/internal/gitops"
-	"github.com/vencil/tenant-api/internal/platform"
 	"github.com/vencil/tenant-api/internal/rbac"
 	"gopkg.in/yaml.v3"
 )
@@ -134,19 +133,10 @@ func PutTenant(d *Deps) http.HandlerFunc {
 			// Create feature branch + commit
 			result, err := d.Writer.WritePR(r.Context(), tenantID, email, string(body))
 			if err != nil {
-				// TRK-320: write-plane admission queue full → shed load with a 503 +
-				// Retry-After instead of piling up. Checked first: it's a fast-fail
-				// before any git work, distinct from a forge problem.
-				if errors.Is(err, gitops.ErrWriteOverloaded) {
-					WriteOverloaded(rw, r)
-					return
-				}
-				// TRK-318: the in-lock base fetch timed out → forge degraded, write
-				// lock already released. Return a retry-hinting 503 (not a 500) with a
-				// machine-actionable Retry-After; don't leak the internal git error —
-				// the write never touched a stale base, so a retry is safe and correct.
-				if errors.Is(err, gitops.ErrForgeDegraded) {
-					writeForgeDegraded(rw, r)
+				// TRK-320 ErrWriteOverloaded / TRK-318 ErrForgeDegraded → canonical
+				// retry-hinting 503s (shared with the batch path). Anything else is an
+				// unexpected git failure → generic 500 with the single-write message.
+				if writeWriteFlowError(rw, r, err) {
 					return
 				}
 				WriteJSONError(rw, r, http.StatusInternalServerError, "PR write failed: "+err.Error())
@@ -163,26 +153,10 @@ func PutTenant(d *Deps) http.HandlerFunc {
 				[]string{tenantID},
 			)
 			if err != nil {
-				// Claim is released by the deferred ReleaseClaim above. A 403
-				// from the forge means the token passed ValidateToken (/user)
-				// but lacks write scope; surface it as a clean 403, never a 500
-				// (so da-portal can trigger its permission-error UI rather than
-				// a generic failure).
-				provider := d.PRClient.ProviderName()
-				if errors.Is(err, platform.ErrForbidden) {
-					WriteJSONErrorWithCode(rw, r, http.StatusForbidden, CodeForbidden,
-						fmt.Sprintf("insufficient %s permissions to open PR/MR — the configured token lacks write scope", provider))
-					return
-				}
-				// Circuit breaker open (#632/#645): the forge is degraded and we
-				// fast-failed instead of hanging. Sanitized, retry-hinting 503 —
-				// don't leak the internal "circuit breaker open" string.
-				if errors.Is(err, platform.ErrCircuitOpen) {
-					WriteJSONErrorWithCode(rw, r, http.StatusServiceUnavailable, CodeForgeUnavailable,
-						fmt.Sprintf("%s is currently unavailable — please retry shortly", provider))
-					return
-				}
-				WriteJSONError(rw, r, http.StatusServiceUnavailable, fmt.Sprintf("%s PR/MR creation failed: %s", provider, err.Error()))
+				// Claim is released by the deferred ReleaseClaim above. Forbidden →
+				// clean 403 (never a 500, so da-portal shows a permission error),
+				// circuit-open → sanitized 503, else generic 503. Shared with batch.
+				writeForgeCreateError(rw, r, d.PRClient.ProviderName(), err)
 				return
 			}
 

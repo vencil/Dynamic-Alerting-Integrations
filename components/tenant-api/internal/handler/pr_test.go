@@ -587,6 +587,52 @@ func TestBatchTenants_PRMode_PendingPRRegistered(t *testing.T) {
 	}
 }
 
+// TestBatchTenants_PRMode_ForgeForbidden is the batch-path mirror of
+// TestPutTenant_PRMode_ForgeForbidden: a forge 403 at PR-creation time (read-
+// scoped token) must map to a clean HTTP 403 with CodeForbidden, never a generic
+// 503. Regression guard for the unified writeForgeCreateError dispatch — before
+// it, the batch path was missing the ErrForbidden branch and leaked a 503,
+// inconsistent with the single-write path's documented "permission → 403" contract.
+func TestBatchTenants_PRMode_ForgeForbidden(t *testing.T) {
+	t.Parallel()
+	configDir := initGitConfigDir(t)
+	writer := newTestWriter(configDir)
+	rbacMgr := adminRBAC(t)
+
+	mockClient := &mockPlatformClient{
+		providerName: "github",
+		createPRFunc: func(title, body, headBranch string, labels []string) (*platform.PRInfo, error) {
+			return nil, platform.ErrForbidden
+		},
+	}
+	mockTracker := &mockPlatformTracker{}
+
+	h := BatchTenants(&Deps{Writer: writer, ConfigDir: configDir, RBAC: rbacMgr, WriteMode: WriteModePR, PRClient: mockClient, PRTracker: mockTracker})
+
+	batchReq := `{"operations":[{"tenant_id":"db-a","patch":{"_silent_mode":"warning"}}]}`
+	req := httptest.NewRequest("POST", "/api/v1/tenants/batch", strings.NewReader(batchReq))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Forwarded-Email", "alice@example.com")
+	req.Header.Set("X-Forwarded-Groups", "admins")
+	w := httptest.NewRecorder()
+	// Mirror production wiring (main.go): route-level middleware checks read +
+	// populates the identity context; per-op write is enforced inside the handler.
+	rbacMgr.Middleware(rbac.PermRead, nil)(h).ServeHTTP(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp map[string]interface{}
+	json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp["code"] != CodeForbidden {
+		t.Errorf("code = %v, want %q", resp["code"], CodeForbidden)
+	}
+	msg, _ := resp["error"].(string)
+	if !strings.Contains(msg, "insufficient") || strings.Contains(msg, "APIError") {
+		t.Errorf("error message not clean: %q", msg)
+	}
+}
+
 // --- WriteMode constants tests ---
 
 func TestWriteModeConstants(t *testing.T) {

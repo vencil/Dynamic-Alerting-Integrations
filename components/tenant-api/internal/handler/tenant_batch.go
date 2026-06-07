@@ -11,7 +11,6 @@ import (
 
 	"github.com/vencil/tenant-api/internal/async"
 	"github.com/vencil/tenant-api/internal/gitops"
-	"github.com/vencil/tenant-api/internal/platform"
 	"github.com/vencil/tenant-api/internal/policy"
 	"github.com/vencil/tenant-api/internal/rbac"
 	"gopkg.in/yaml.v3"
@@ -149,19 +148,13 @@ func BatchTenants(d *Deps) http.HandlerFunc {
 
 			result, err := d.Writer.WritePRBatch(r.Context(), batchOps, email)
 			if err != nil {
-				// TRK-320: admission queue full → shed with 503 + Retry-After.
-				if errors.Is(err, gitops.ErrWriteOverloaded) {
-					WriteOverloaded(rw, r)
+				// TRK-320 ErrWriteOverloaded / TRK-318 ErrForgeDegraded → canonical
+				// retry-hinting 503s (shared with the single-write path). Anything else
+				// is an unexpected git failure → generic 500 with the batch message.
+				if writeWriteFlowError(rw, r, err) {
 					return
 				}
-				// TRK-318: in-lock base fetch timed out → forge degraded, lock
-				// released. Retry-hinting 503 with Retry-After, not a 500 (the batch
-				// never wrote from a stale base, so a retry is safe).
-				if errors.Is(err, gitops.ErrForgeDegraded) {
-					writeForgeDegraded(rw, r)
-					return
-				}
-				WriteJSONError(rw, r,http.StatusInternalServerError, "PR/MR batch write failed: "+err.Error())
+				WriteJSONError(rw, r, http.StatusInternalServerError, "PR/MR batch write failed: "+err.Error())
 				return
 			}
 
@@ -182,15 +175,10 @@ func BatchTenants(d *Deps) http.HandlerFunc {
 				tenantList,
 			)
 			if err != nil {
-				provider := d.PRClient.ProviderName()
-				// Circuit breaker open (#632/#645): forge degraded, fast-failed.
-				// Sanitized, retry-hinting 503 (don't leak the internal string).
-				if errors.Is(err, platform.ErrCircuitOpen) {
-					WriteJSONErrorWithCode(rw, r, http.StatusServiceUnavailable, CodeForgeUnavailable,
-						fmt.Sprintf("%s is currently unavailable — please retry shortly", provider))
-					return
-				}
-				WriteJSONError(rw, r, http.StatusServiceUnavailable, fmt.Sprintf("%s PR/MR creation failed: %s", provider, err.Error()))
+				// Shared with the single-write path: forbidden → clean 403 (previously
+				// the batch path was missing this and leaked a generic 503),
+				// circuit-open → sanitized 503, else generic 503.
+				writeForgeCreateError(rw, r, d.PRClient.ProviderName(), err)
 				return
 			}
 

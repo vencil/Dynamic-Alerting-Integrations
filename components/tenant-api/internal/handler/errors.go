@@ -33,10 +33,14 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/vencil/tenant-api/internal/gitops"
+	"github.com/vencil/tenant-api/internal/platform"
 	"github.com/vencil/tenant-api/internal/policy"
 )
 
@@ -262,4 +266,49 @@ func WriteOverloaded(w http.ResponseWriter, r *http.Request) {
 		Code:        CodeWriteOverloaded,
 		RetryAfterS: writeOverloadedRetryAfterS,
 	})
+}
+
+// writeWriteFlowError maps the sentinel errors returned by Writer.WritePR /
+// WritePRBatch to their canonical retry-hinting 503s and reports whether it
+// handled the error. The single-tenant (PutTenant) and batch (BatchTenants)
+// write paths shared this dispatch verbatim; callers keep their own
+// path-specific generic 500 message for the unrecognized case (returns false).
+//
+//   - gitops.ErrWriteOverloaded → 503 + Retry-After (admission queue full, TRK-320)
+//   - gitops.ErrForgeDegraded   → 503 + Retry-After (in-lock base fetch timeout, TRK-318)
+func writeWriteFlowError(w http.ResponseWriter, r *http.Request, err error) bool {
+	switch {
+	case errors.Is(err, gitops.ErrWriteOverloaded):
+		WriteOverloaded(w, r)
+	case errors.Is(err, gitops.ErrForgeDegraded):
+		writeForgeDegraded(w, r)
+	default:
+		return false
+	}
+	return true
+}
+
+// writeForgeCreateError renders the canonical response for a failure from
+// createPRAndRegister (forge PR/MR creation), unifying the dispatch PutTenant
+// and BatchTenants previously duplicated. Always writes a response.
+//
+//   - platform.ErrForbidden   → 403 CodeForbidden: the token passed ValidateToken
+//     but lacks write scope; surfaced cleanly so da-portal shows a permission
+//     error, never a 500. A rate-limited 403 is excluded by APIError.Is and falls
+//     through to the 503 below (TRK-319).
+//   - platform.ErrCircuitOpen → 503 CodeForgeUnavailable: forge degraded and
+//     fast-failed (#632/#645); never leaks the internal "circuit breaker open".
+//   - anything else           → 503 with the sanitized provider message.
+func writeForgeCreateError(w http.ResponseWriter, r *http.Request, provider string, err error) {
+	switch {
+	case errors.Is(err, platform.ErrForbidden):
+		WriteJSONErrorWithCode(w, r, http.StatusForbidden, CodeForbidden,
+			fmt.Sprintf("insufficient %s permissions to open PR/MR — the configured token lacks write scope", provider))
+	case errors.Is(err, platform.ErrCircuitOpen):
+		WriteJSONErrorWithCode(w, r, http.StatusServiceUnavailable, CodeForgeUnavailable,
+			fmt.Sprintf("%s is currently unavailable — please retry shortly", provider))
+	default:
+		WriteJSONError(w, r, http.StatusServiceUnavailable,
+			fmt.Sprintf("%s PR/MR creation failed: %s", provider, err.Error()))
+	}
 }
