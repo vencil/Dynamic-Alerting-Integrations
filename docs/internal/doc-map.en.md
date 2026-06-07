@@ -34,8 +34,8 @@ lang: en
 | `docs/adr/020-tenant-federation.md` | Platform Engineers, contributors | ADR-020: Tenant Federation — Label-Injection Proxy over Self-Built Endpoint |
 | `docs/adr/021-tenant-log-query-federation.md` | Platform Engineers, contributors | ADR-021: Tenant Log Query — Authorization-Plane-Only, Ingestion-Decoupled |
 | `docs/adr/022-dev-auth-bypass-four-layer-containment.md` | Platform Engineers, contributors | ADR-022: tenant-api Dev-Auth Bypass — Local-Dev Identity Substitute, Four-Layer Containment |
-| `docs/adr/023-write-plane-single-writer-invariant.md` | Platform Engineers, contributors | ADR-023: tenant-api 寫入平面 — Single-Writer Invariant 與韌性圍堵 |
-| `docs/adr/024-version-aware-threshold-via-dimensional-label.md` (.en.md) | Platform Engineers, contributors, SREs | ADR-024: Version-Aware Threshold — Declarative Cutover via the Existing Dimensional `version` Label |
+| `docs/adr/023-write-plane-single-writer-invariant.md` | Platform Engineers, contributors | ADR-023: tenant-api 寫入平面 — 單一寫者不變式 |
+| `docs/adr/024-version-aware-threshold-via-dimensional-label.md` (.en.md) | Platform Engineers, contributors, SREs | ADR-024: Declarative Dimensional Alerting Engine — Version-Aware Thresholds + Custom Alerts |
 | `docs/api/README.md` (.en.md) | Platform Engineers, SREs | Threshold Exporter API Reference |
 | `docs/api/tenant-api-hardening.md` (.en.md) | platform-ops, sre, security | Tenant API Hardening (v2.8.0) |
 | `docs/architecture-and-design.md` (.en.md) | Platform Engineers | Architecture and Design — Multi-Tenant Dynamic Alerting Platform Technical Whitepaper |
@@ -45,6 +45,7 @@ lang: en
 | `docs/custom-rule-governance.md` (.en.md) | Platform Engineers | Multi-Tenant Custom Rule Governance Model |
 | `docs/design/config-driven.md` (.en.md) | Platform Engineers, DevOps | Config-Driven Architecture Design — Three-State Config, Dynamic Routing, Tenant API |
 | `docs/design/high-availability.md` (.en.md) | Platform Engineers, DevOps | High Availability (HA) Design — Replicas, PDB, Preventing Double-Counting |
+| `docs/design/README.md` (.en.md) | Platform Engineers, DevOps | Design Deep-Dives — Architecture spoke documents |
 | `docs/design/roadmap-future.md` (.en.md) | Platform Engineers, DevOps | Future Roadmap — K8s Operator, Design System, Auto-Discovery, and More |
 | `docs/design/rule-packs.md` (.en.md) | Platform Engineers, DevOps | Rule Packs & Projected Volume Architecture |
 | `docs/getting-started/decision-matrix.md` (.en.md) | Platform Engineers | Deployment Decision Matrix |
@@ -66,6 +67,7 @@ lang: en
 | `docs/integration/operator-prometheus-integration.md` (.en.md) | Platform Engineers | Operator Prometheus Integration Guide |
 | `docs/integration/operator-shadow-monitoring.md` (.en.md) | Platform Engineers | Operator Shadow Monitoring Strategy |
 | `docs/integration/prometheus-operator-integration.md` (.en.md) | Platform Engineers | Prometheus Operator Integration Guide (Hub) |
+| `docs/integration/README.md` (.en.md) | Platform Engineers, SREs, DevOps | Integration Guides — Choose by your existing monitoring stack |
 | `docs/integration/tenant-federation.md` | Platform Engineers, SREs | Tenant Federation Integration Guide |
 | `docs/integration/troubleshooting-checklist.md` (.en.md) | SREs, on-call, Platform Engineers, migration-engineers | Troubleshooting Checklist |
 | `docs/integration/victoriametrics-integration.md` (.en.md) | Platform Engineers, SREs, vm-operators | VictoriaMetrics Integration Guide |

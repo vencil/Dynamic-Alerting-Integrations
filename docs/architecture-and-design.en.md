@@ -13,6 +13,8 @@ lang: en
 
 This document provides Platform Engineers and Site Reliability Engineers (SREs) with an in-depth exploration of the technical architecture of the "Multi-Tenant Dynamic Alerting Platform" .
 
+> 📖 **Unfamiliar term?** (`group_left`, Projected Volume, tri-state, Cardinality Guard, Sentinel Alert, etc.) — check the [Glossary](glossary.en.md) anytime.
+
 **This document covers:**
 - System architecture and core design principles (including Regex dimension thresholds, scheduled thresholds)
 - High availability (HA) design

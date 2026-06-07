@@ -15,7 +15,7 @@ updated_at: 2026-06-06
 
 ## 狀態
 
-✅ **Accepted**（2026-05-30 起草，2026-06-06 接受）。Deciders：tenant-api maintainer + 平台架構 owner。Epic：TRK-317。
+✅ **Accepted**（2026-05-30 起草，2026-06-06 接受）。Deciders：tenant-api maintainer + 平台架構 owner。
 
 ## TL;DR
 

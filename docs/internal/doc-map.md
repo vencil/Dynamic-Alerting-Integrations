@@ -45,6 +45,7 @@ lang: zh
 | `docs/custom-rule-governance.md` (.en.md) | Platform Engineers | 多租戶客製化規則治理規範 (Custom Rule Governance Model) |
 | `docs/design/config-driven.md` (.en.md) | Platform Engineers, DevOps | Config-Driven 架構設計 — 三態配置、動態路由、Tenant API |
 | `docs/design/high-availability.md` (.en.md) | Platform Engineers, DevOps | 高可用性 (HA) 設計 — 副本、PDB、防雙倍計算 |
+| `docs/design/README.md` (.en.md) | Platform Engineers, DevOps | 設計深潛導覽 — 架構 spoke 文件 |
 | `docs/design/roadmap-future.md` (.en.md) | Platform Engineers, DevOps | 未來擴展路線 — K8s Operator、Design System、Auto-Discovery 等 |
 | `docs/design/rule-packs.md` (.en.md) | Platform Engineers, DevOps | Rule Packs 與 Projected Volume 架構 |
 | `docs/getting-started/decision-matrix.md` (.en.md) | Platform Engineers | Deployment Decision Matrix |
@@ -66,6 +67,7 @@ lang: zh
 | `docs/integration/operator-prometheus-integration.md` (.en.md) | Platform Engineers | Operator Prometheus 整合指南 |
 | `docs/integration/operator-shadow-monitoring.md` (.en.md) | Platform Engineers | Operator Shadow Monitoring 策略 |
 | `docs/integration/prometheus-operator-integration.md` (.en.md) | Platform Engineers | Prometheus Operator 整合手冊（Hub） |
+| `docs/integration/README.md` (.en.md) | Platform Engineers, SREs, DevOps | 整合指南導覽 — 依你現有的監控架構選讀 |
 | `docs/integration/tenant-federation.md` | Platform Engineers, SREs | Tenant Federation Integration Guide |
 | `docs/integration/troubleshooting-checklist.md` (.en.md) | SREs, on-call, Platform Engineers, migration-engineers | Troubleshooting Checklist |
 | `docs/integration/victoriametrics-integration.md` (.en.md) | Platform Engineers, SREs, vm-operators | VictoriaMetrics 整合指南 |

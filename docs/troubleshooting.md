@@ -13,7 +13,18 @@ lang: zh
 >
 > **遷移期間的 troubleshooting**（dual-write、shadow、cutover、decommission 等場景）→ 走 [Migration Troubleshooting Checklist](integration/troubleshooting-checklist.md)；本頁聚焦平台**穩態運行**的故障排查。
 
+**依症狀 / 角色快速定位：**
+
+| 症狀 | 適用角色 | 跳到 |
+|------|---------|------|
+| ConfigMap 改了但 exporter 還是舊值 | Platform / SRE | [SHA-256 熱重載延遲](#sha-256-熱重新加載延遲) |
+| 我的告警該響卻沒響 | Tenant（診斷需 Platform / SRE 協助） | [空向量警報不觸發](#空向量警報不觸發) |
+| 多副本 / 多租戶數值被重複計算 | Platform / SRE | [雙租戶抓取重複計數](#雙租戶抓取重複計數) |
+| Operator 環境規則沒載入 | Platform Engineer | [Operator 環境常見問題](#prometheus-operator-環境常見問題) |
+
 ## SHA-256 熱重新加載延遲
+
+> 👤 **適用：** Platform Engineer / SRE（需 `kubectl` 存取叢集）
 
 **情景：** ConfigMap 更新後，threshold-exporter 仍顯示舊值
 
@@ -35,6 +46,8 @@ $ kubectl logs -n monitoring deployment/threshold-exporter | grep "SHA256"
 
 ## 空向量警報不觸發
 
+> 👤 **適用：** Tenant（症狀：我的告警沒響）；下方診斷指令需 Platform / SRE 的 PromQL / 叢集存取
+
 **情景：** Redis 沒有部署匯出器，但 Redis 警報規則仍在評估
 
 ```promql
@@ -54,6 +67,8 @@ $ kubectl exec -it prometheus-0 -c prometheus -- \
 ```
 
 ## 雙租戶抓取重複計數
+
+> 👤 **適用：** Platform Engineer / SRE（scrape 設定與 recording rule）
 
 **情景：** Prometheus 從兩個 threshold-exporter 副本抓取，user_threshold 值翻倍
 
@@ -86,6 +101,8 @@ user_threshold{tenant="db-a", severity="warning"} 30  (from replica-2)
 > 本文件從 [`architecture-and-design.md`](architecture-and-design.md) 獨立拆分。
 
 ## Prometheus Operator 環境常見問題
+
+> 👤 **適用：** Platform Engineer（Prometheus Operator 部署環境）
 
 **情景：** 使用 Prometheus Operator（kube-prometheus-stack）時 PrometheusRule 不生效
 

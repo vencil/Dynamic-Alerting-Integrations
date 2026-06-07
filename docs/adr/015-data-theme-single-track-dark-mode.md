@@ -78,7 +78,7 @@ v2.6.x 之前，portal JSX 有兩套 dark mode 機制並存：
   部分 `dark:`，切換主題時會呈現半套視覺 → 列為 v2.7.0 收束驗收項
 - **後續發現**：runtime axe 掃 threshold-heatmap 時發現
   `bg-red-500 text-white` 這種 palette 硬編碼 **沒有 token 也就沒有 dark mode 換色**，
-  本 ADR 幫不上（TRK-205）。即：本 ADR 解決了**有 token 的畫面的 dark 雙軌**，
+  本 ADR 幫不上（已另案追蹤）。即：本 ADR 解決了**有 token 的畫面的 dark 雙軌**，
   沒解決「palette 殘留根本不進 dark pipeline」的問題。
 - 需要在 v2.7.0 收束時加 `grep 'dark:' docs/**/*.jsx` 驗收，否則 `dark:` 殘影
   會在後續 code review 被忽略
@@ -93,4 +93,4 @@ v2.6.x 之前，portal JSX 有兩套 dark mode 機制並存：
 
 - Commit `8634ea2`（deployment-wizard 遷移，首次落地）
 - [ADR-014: Wizard Token Arbitrary-Value 遷移策略](014-wizard-arbitrary-value-token-migration.md) — 兩者一起構成 v2.7.0 標準遷移套件
-- TRK-205（palette 殘留導致 dark mode 斷層的案例）
+- palette 殘留導致 dark mode 斷層的案例（已另案追蹤）

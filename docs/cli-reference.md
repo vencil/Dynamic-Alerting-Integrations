@@ -18,6 +18,22 @@ da-tools 是一個可攜式 CLI 容器，打包了 Dynamic Alerting 平台的驗
 
 ---
 
+## 依你的角色快速跳轉
+
+這份參考涵蓋多種角色的工具，**不需通讀全文** —— 找到你的角色，直接看你最常用的命令子集。
+
+| 你的角色 | 你最常用的命令 | 跳到 |
+|---|---|---|
+| **Platform Engineer**<br>部署與運維平台 | `init` · `gitops-check` · `operator-generate` · `operator-check` · `validate-config` · `byo-check` · `federation-check` | [命令分類](#命令分類) |
+| **SRE / On-call**<br>日常診斷與告警 | `diagnose` · `batch-diagnose` · `check-alert` · `alert-quality` · `alert-correlate` · `drift-detect` · `cardinality-forecast` | [Prometheus API Tools](#prometheus-api-tools) |
+| **DevOps / GitOps**<br>CI 整合與漂移防護 | `validate-config` · `config-diff` · `rule-pack-diff` · `backtest` · `config-history` · `drift-detect` | [檔案系統工具](#檔案系統工具) |
+| **Tenant**<br>自助閾值管理 | `scaffold` · `patch-config` · `validate-config` · `tenant-verify` · `explain-route` · `threshold-recommend` | [配置生成工具](#配置生成工具) |
+| **Domain Expert**<br>規則品質治理 | `lint` · `analyze-gaps` · `alert-quality` · `evaluate-policy` · `opa-evaluate` · `migrate` · `parser` | [檔案系統工具](#檔案系統工具) |
+
+> 多數命令支援 `--help` 與 `--json`（CI gate 用）。完整參數見下方 [命令詳解](#命令詳解)。
+
+---
+
 ## 目錄
 
 1. [快速開始](#快速開始)

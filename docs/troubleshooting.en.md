@@ -11,7 +11,18 @@ lang: en
 
 > Related docs: [Architecture](architecture-and-design.en.md) · [HA Design](architecture-and-design.en.md#4-high-availability-design)
 
+**Find your issue by symptom / role:**
+
+| Symptom | Who it's for | Jump to |
+|---------|--------------|---------|
+| ConfigMap changed but exporter still shows old value | Platform / SRE | [SHA-256 Hot-Reload Delay](#sha-256-hot-reload-delay) |
+| My alert should fire but doesn't | Tenant (diagnosis needs Platform / SRE help) | [Empty Vector Alerts Don't Fire](#empty-vector-alerts-dont-fire) |
+| Multi-replica / multi-tenant values double-counted | Platform / SRE | [Dual-Replica Scrape Double-Counting](#dual-replica-scrape-double-counting) |
+| Rules not loaded in an Operator environment | Platform Engineer | [Prometheus Operator Common Issues](#prometheus-operator-common-issues) |
+
 ## SHA-256 Hot-Reload Delay
+
+> 👤 **For:** Platform Engineer / SRE (requires `kubectl` cluster access)
 
 **Scenario:** After ConfigMap update, threshold-exporter still shows old value
 
@@ -33,6 +44,8 @@ $ kubectl logs -n monitoring deployment/threshold-exporter | grep "SHA256"
 
 ## Empty Vector Alerts Don't Fire
 
+> 👤 **For:** Tenant (symptom: my alert didn't fire); the diagnosis commands below need a Platform / SRE's PromQL / cluster access
+
 **Scenario:** Redis has no deployed exporter, but Redis alert rules still evaluate
 
 ```promql
@@ -52,6 +65,8 @@ $ kubectl exec -it prometheus-0 -c prometheus -- \
 ```
 
 ## Dual-Replica Scrape Double-Counting
+
+> 👤 **For:** Platform Engineer / SRE (scrape config and recording rules)
 
 **Scenario:** Prometheus scrapes from two threshold-exporter replicas, user_threshold values double
 
@@ -84,6 +99,8 @@ On the other hand, **data recording rules** use context-dependent aggregation. F
 > This document was extracted from [`architecture-and-design.en.md`](architecture-and-design.en.md).
 
 ## Prometheus Operator Common Issues
+
+> 👤 **For:** Platform Engineer (Prometheus Operator deployment environment)
 
 **Scenario:** PrometheusRule not taking effect when using Prometheus Operator (kube-prometheus-stack)
 

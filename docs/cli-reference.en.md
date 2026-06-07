@@ -18,6 +18,22 @@ da-tools is a portable CLI container that bundles validation, migration, configu
 
 ---
 
+## Quick jump by your role
+
+This reference covers tools for several roles — **you don't need to read it end to end.** Find your role and go straight to the command subset you use most.
+
+| Your role | Commands you use most | Jump to |
+|---|---|---|
+| **Platform Engineer**<br>Deploy & operate the platform | `init` · `gitops-check` · `operator-generate` · `operator-check` · `validate-config` · `byo-check` · `federation-check` | [Command Categories](#command-categories) |
+| **SRE / On-call**<br>Day-to-day diagnosis & alerting | `diagnose` · `batch-diagnose` · `check-alert` · `alert-quality` · `alert-correlate` · `drift-detect` · `cardinality-forecast` | [Prometheus API Tools](#prometheus-api-tools) |
+| **DevOps / GitOps**<br>CI integration & drift defense | `validate-config` · `config-diff` · `rule-pack-diff` · `backtest` · `config-history` · `drift-detect` | [Filesystem Tools](#filesystem-tools) |
+| **Tenant**<br>Self-service threshold management | `scaffold` · `patch-config` · `validate-config` · `tenant-verify` · `explain-route` · `threshold-recommend` | [Configuration Generation Tools](#configuration-generation-tools) |
+| **Domain Expert**<br>Rule quality governance | `lint` · `analyze-gaps` · `alert-quality` · `evaluate-policy` · `opa-evaluate` · `migrate` · `parser` | [Filesystem Tools](#filesystem-tools) |
+
+> Most commands support `--help` and `--json` (for CI gates). See [Command Reference](#command-reference) below for full parameters.
+
+---
+
 ## Table of Contents
 
 1. [Quick Start](#quick-start)

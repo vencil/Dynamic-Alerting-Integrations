@@ -18,6 +18,18 @@ Config-driven multi-tenant alerting platform built on Prometheus `group_left` ve
 
 ---
 
+**First time here? Pick your starting point:**
+
+| Your situation | Start here |
+|----------------|-----------|
+| Understand what this is & solves in 30 seconds | [Key Metrics](#key-metrics) → [Architecture Overview](#architecture-overview) below |
+| Evaluate whether it fits my environment | [Decision Matrix](docs/getting-started/decision-matrix.en.md) · [Benchmarks](docs/benchmarks.en.md) |
+| Try it on my laptop in 1 minute (no Kubernetes) | [Try it locally](#try-it-locally) |
+| Ready to deploy to my own cluster | [Getting Started by Role](#getting-started-by-role) · [Integration Guides](docs/integration/README.en.md) |
+| Already live, looking for day-2 ops / troubleshooting | [CLI Reference](docs/cli-reference.en.md) · [Troubleshooting](docs/troubleshooting.en.md) |
+
+---
+
 ## Key Metrics
 
 | Metric | Traditional (100 tenants) | Dynamic Alerting |

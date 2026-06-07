@@ -17,6 +17,8 @@ lang: zh
 
 本文件是架構 Hub — 系統架構圖 + 設計概念索引。詳細內容在各 spoke 文件中展開。
 
+> 📖 **遇到不熟的術語**（`group_left`、Projected Volume、三態、Cardinality Guard、Sentinel Alert 等）？隨時查 [術語表](glossary.md)。
+
 **設計文件（spoke）：**
 
 | 文件 | 涵蓋主題 |

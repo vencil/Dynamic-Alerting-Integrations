@@ -1,7 +1,7 @@
 ---
 title: "Contract tests (schemathesis)"
 purpose: |
-  TRK-222: schemathesis runs against tenant-api's swag-generated
+  schemathesis runs against tenant-api's swag-generated
   OpenAPI spec to catch:
     - Response schemas that don't match what the spec declares
     - Endpoints documented in spec but missing in code (or vice versa)
@@ -70,6 +70,6 @@ CONTRACT_MAX_EXAMPLES=50 make contract-test
 
 ## 相關文件
 
-- [TRK-222 issue](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/231)
+- [Contract-test tracking issue (#231)](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/231)
 - [tenant-api swag annotations](../../components/tenant-api/internal/handler/) — 編 spec 從這裡改
 - [Makefile `api-docs` target](../../Makefile) — 重新產 swagger.json
