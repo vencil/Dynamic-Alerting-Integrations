@@ -42,5 +42,6 @@ user_threshold{component="container",metric="memory",severity="warning",tenant="
 
 ## Next
 - ← **先玩整套**：[`try-local/`](../../try-local/)（exporter + tenant-api + portal + Prometheus + Alertmanager 一鍵）
-- 📖 **深入配置 / 旗標參考**：[`README.md`](README.md)（四層繼承、Dual-Hash 熱重載、Cardinality Guard）
+- 📖 **深入配置 / 旗標參考**：[`README.md`](README.md)（四層繼承、熱重載、維度標籤、Cardinality Guard）
+- ✍️ **不寫 PromQL 也能加告警**：租戶可用平台 recipe 宣告自訂告警 → [README §自訂告警](README.md#45-自訂告警-_custom_alerts)
 - → **上 production**：[`helm/threshold-exporter/`](../../helm/threshold-exporter/)（Helm 部署、ConfigMap / Operator 雙路徑）
