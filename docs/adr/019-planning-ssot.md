@@ -14,6 +14,10 @@ updated_at: 2026-05-13
 
 # ADR-019: Planning SSOT — Frontmatter Contract + Discovery-based Index
 
+> **👥 這份 ADR 是給誰看的：** 平台**貢獻者 / maintainer / AI agent**，主題是「專案內部計畫追蹤如何被治理」（一套 frontmatter 契約 + 索引產生器）。
+> 若你是部署平台的 **Platform Engineer**、設定閾值的 **Tenant**、或評估導入的**企業方**，這份與你的日常無關——你要找的多半是 [架構與設計](../architecture-and-design.md)、[ADR 索引](README.md) 或 [快速入門](../getting-started/README.md)。
+> 本 ADR 下文出現的 `TRK` / `TD` / `HA` / `REG` / `S#` 等代號**是這套追蹤系統本身的命名**，並非散落的內部標籤。
+
 > 跨檔分散的計畫追蹤（tech-debt / dx-backlog / known-regression / future-roadmap / sprint planning）統一治理。
 > 對 AI agent 解決 context fragmentation；對人類 contributor 提供單一索引入口。
 >

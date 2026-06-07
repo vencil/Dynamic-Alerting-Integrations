@@ -22,7 +22,7 @@ updated_at: 2026-05-24
 
 ## 狀態
 
-✅ **Accepted**（v2.9.0 起草，tracking `TRK-316`）。
+✅ **Accepted**（v2.9.0 起草）。
 
 實作分層、版本定位：
 

@@ -12,6 +12,8 @@ parent: architecture-and-design.en.md
 >
 > ← [Back to Main Document](../architecture-and-design.en.md)
 
+> 📖 **Unfamiliar term?** (tri-state, `group_left`, Dual-Hash, etc.) — check the [Glossary](../glossary.en.md).
+
 ## 2. Core Design: Config-Driven Architecture
 
 ### 2.1 Three-State Logic

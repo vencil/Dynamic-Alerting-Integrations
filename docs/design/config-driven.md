@@ -14,6 +14,8 @@ parent: architecture-and-design.md
 
 > ← [返回主文件](../architecture-and-design.md)
 
+> 📖 **遇到不熟的術語**（三態、`group_left`、Dual-Hash 等）？查 [術語表](../glossary.md)。
+
 ## 2. 核心設計：Config-Driven 架構
 
 ### 2.1 三態邏輯 (Three-State Logic)

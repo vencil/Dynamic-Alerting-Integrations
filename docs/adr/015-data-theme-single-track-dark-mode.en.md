@@ -75,7 +75,7 @@ Implementation requirements:
   some `dark:`, so theme switching presents partial UI → listed as a v2.7.0 closure acceptance criterion
 - **Subsequent discovery**: a runtime axe scan of threshold-heatmap revealed
   `bg-red-500 text-white` hard-coded palette **without tokens, hence without dark mode color swap**,
-  which this ADR cannot help with (TRK-205). That is: this ADR solved the **dual-track problem for screens with tokens**,
+  which this ADR cannot help with (tracked separately). That is: this ADR solved the **dual-track problem for screens with tokens**,
   but did not solve "palette remnants that never enter the dark pipeline in the first place"
 - Must add `grep 'dark:' docs/**/*.jsx` verification at v2.7.0 closure, otherwise `dark:` remnants
   will be overlooked in subsequent code reviews
@@ -90,4 +90,4 @@ Implementation requirements:
 
 - Commit `8634ea2` (deployment-wizard migration, first landing)
 - [ADR-014: Wizard Token Arbitrary-Value Migration Strategy](014-wizard-arbitrary-value-token-migration.en.md) — together they form the v2.7.0 standard migration toolkit
-- TRK-205 (palette remnants causing dark mode gap)
+- Palette remnants causing dark mode gap (tracked separately)
