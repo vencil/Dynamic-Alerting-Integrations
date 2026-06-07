@@ -1,10 +1,12 @@
 # da-portal — Self-hosted Interactive Tools & Tenant Self-Service Portal
 #
-# Zero build step: all JSX files are transpiled in the browser via Babel standalone.
-# Vendor JS files are bundled for air-gapped / offline deployment.
+# Tools are pre-built into ESM bundles (esbuild, `make portal-build`) and served
+# as static files — no runtime build/transpile in the browser. Vendor JS
+# (React / Tailwind / Lucide) is bundled for air-gapped / offline deployment,
+# with CDN fallback otherwise.
 #
-# Build:  docker build -t da-portal:v2.5.0 -f components/da-portal/Dockerfile .
-# Run:    docker run -p 8080:80 da-portal:v2.5.0
+# Build:  make portal-build && docker build -t da-portal:v2.8.0 -f components/da-portal/Dockerfile .
+# Run:    docker run -p 8080:80 da-portal:v2.8.0
 #
 # Customisation via volume mounts:
 #   -v ./my-platform-data.json:/usr/share/nginx/html/assets/platform-data.json
@@ -45,8 +47,14 @@ RUN rm -rf /usr/share/nginx/html/*
 # ── Nginx config ──────────────────────────────────────────────
 COPY --chown=nginx:nginx components/da-portal/nginx.conf /etc/nginx/conf.d/default.conf
 
-# ── Interactive Tools Hub + 38 JSX tools ──────────────────────
+# ── Interactive Tools Hub (index + changelog) ─────────────────
 COPY --chown=nginx:nginx docs/interactive/ /usr/share/nginx/html/interactive/
+
+# ── Pre-built tool bundles (esbuild ESM output; `make portal-build`) ──
+# jsx-loader.html loads /assets/dist/<tool>.js at runtime; the legacy
+# in-browser Babel transpile path is gone, so these bundles MUST be in the
+# image or every tool 404s.
+COPY --chown=nginx:nginx docs/assets/dist/ /usr/share/nginx/html/assets/dist/
 
 # ── Getting Started Wizard ────────────────────────────────────
 # Path follows the portal monorepo restructure (PR #279, TD-042, 2026-05-07):
