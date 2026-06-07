@@ -118,44 +118,14 @@ func PutFederationPolicy(d *handler.Deps) http.HandlerFunc {
 			return
 		}
 
-		// Admission — metrics being newly ADDED (vs the current
-		// whitelist) are checked for data-layer tenant-label enrichment.
-		// Skipped entirely when no validator is configured.
-		trailer := ""
-		if d.AdmissionValidator != nil {
-			added := addedFederationMetrics(d.FederationPolicy.Get(), &cfg)
-			if len(added) > maxNewMetricsPerRequest {
-				handler.WriteJSONError(w, r, http.StatusBadRequest, fmt.Sprintf(
-					"too many new metrics in one request (%d; max %d) — split the change into smaller PUTs so admission validation stays within the request timeout",
-					len(added), maxNewMetricsPerRequest))
-				return
-			}
-			hard, soft := partitionAdmission(runAdmissionChecks(d, r.Context(), added))
-			if len(hard) > 0 {
-				handler.WriteErrorEnvelope(w, r, http.StatusBadRequest, handler.ErrorResponse{
-					Error: "federation admission: hard block — metric(s) have data but no series carries the tenant label and cannot be whitelisted",
-					Code:  handler.CodeInvalidBody,
-					Extra: map[string]any{"admission": hard},
-				})
-				return
-			}
-			if len(soft) > 0 && !req.Force {
-				handler.WriteErrorEnvelope(w, r, http.StatusBadRequest, handler.ErrorResponse{
-					Error: "federation admission: soft warning(s) — re-submit with force=true and a reason to proceed",
-					Code:  handler.CodeInvalidBody,
-					Extra: map[string]any{"admission": soft},
-				})
-				return
-			}
-			if len(soft) > 0 { // force is true here
-				if strings.TrimSpace(req.Reason) == "" {
-					handler.WriteJSONError(w, r, http.StatusBadRequest, "force=true requires a non-empty reason")
-					return
-				}
-				trailer = bypassTrailer(email, req.Reason, soft)
-				slog.Warn("federation whitelist admission bypassed",
-					"user", email, "reason", req.Reason, "metrics", admissionMetrics(soft))
-			}
+		// Admission — metrics being newly ADDED (vs the current whitelist) are
+		// checked for data-layer tenant-label enrichment (no-op when no validator
+		// is configured). Returns the commit trailer (non-empty only on a forced
+		// soft-warning bypass); handled==true means an error response was already
+		// written, so we must return without committing.
+		trailer, handled := runFederationAdmission(d, w, r, &cfg, req.Force, req.Reason, email)
+		if handled {
+			return
 		}
 
 		// Point of no return — the next call writes to git. If the
@@ -192,6 +162,56 @@ func PutFederationPolicy(d *handler.Deps) http.HandlerFunc {
 			"whitelist_count": len(cfg.Whitelist),
 		})
 	}
+}
+
+// runFederationAdmission runs the data-layer admission checks for the metrics
+// being newly ADDED by this whitelist PUT (vs the current whitelist). It is a
+// no-op returning ("", false) when no AdmissionValidator is configured.
+//
+// It returns the commit trailer to record — non-empty ONLY when a soft warning
+// was force-bypassed (records operator + reason in git history) — and
+// handled==true when it has already written an error response, in which case the
+// caller MUST return without committing. The error responses mirror the prior
+// inline logic exactly: too-many-new-metrics → 400, hard block → 400, soft
+// warning without force → 400, force without reason → 400.
+func runFederationAdmission(d *handler.Deps, w http.ResponseWriter, r *http.Request, cfg *fedpolicy.Config, force bool, reason, email string) (trailer string, handled bool) {
+	if d.AdmissionValidator == nil {
+		return "", false
+	}
+	added := addedFederationMetrics(d.FederationPolicy.Get(), cfg)
+	if len(added) > maxNewMetricsPerRequest {
+		handler.WriteJSONError(w, r, http.StatusBadRequest, fmt.Sprintf(
+			"too many new metrics in one request (%d; max %d) — split the change into smaller PUTs so admission validation stays within the request timeout",
+			len(added), maxNewMetricsPerRequest))
+		return "", true
+	}
+	hard, soft := partitionAdmission(runAdmissionChecks(d, r.Context(), added))
+	if len(hard) > 0 {
+		handler.WriteErrorEnvelope(w, r, http.StatusBadRequest, handler.ErrorResponse{
+			Error: "federation admission: hard block — metric(s) have data but no series carries the tenant label and cannot be whitelisted",
+			Code:  handler.CodeInvalidBody,
+			Extra: map[string]any{"admission": hard},
+		})
+		return "", true
+	}
+	if len(soft) > 0 && !force {
+		handler.WriteErrorEnvelope(w, r, http.StatusBadRequest, handler.ErrorResponse{
+			Error: "federation admission: soft warning(s) — re-submit with force=true and a reason to proceed",
+			Code:  handler.CodeInvalidBody,
+			Extra: map[string]any{"admission": soft},
+		})
+		return "", true
+	}
+	if len(soft) > 0 { // force is true here
+		if strings.TrimSpace(reason) == "" {
+			handler.WriteJSONError(w, r, http.StatusBadRequest, "force=true requires a non-empty reason")
+			return "", true
+		}
+		trailer = bypassTrailer(email, reason, soft)
+		slog.Warn("federation whitelist admission bypassed",
+			"user", email, "reason", reason, "metrics", admissionMetrics(soft))
+	}
+	return trailer, false
 }
 
 // maxNewMetricsPerRequest caps how many metrics a single whitelist PUT
