@@ -266,7 +266,13 @@ def _resolve_script_path(script_name):
         return None, searched
 
     for subdir in _LOCAL_SOURCE_DIRS:
-        candidate = os.path.join(repo_root, subdir, script_name)
+        # _LOCAL_SOURCE_DIRS holds POSIX-separated literals ("scripts/tools/ops").
+        # os.path.join keeps the embedded "/" verbatim, so on Windows the result
+        # is a mixed-separator path (...\repo\scripts/tools/ops\script.py). It
+        # still resolves (Windows accepts "/"), but leaks an un-normalized path
+        # into the return value and the "Searched paths" diagnostic. normpath
+        # collapses to the native separator here and is a no-op on POSIX.
+        candidate = os.path.normpath(os.path.join(repo_root, subdir, script_name))
         searched.append(candidate)
         if os.path.isfile(candidate):
             return candidate, searched
