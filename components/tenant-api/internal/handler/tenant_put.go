@@ -82,90 +82,7 @@ func PutTenant(d *Deps) http.HandlerFunc {
 
 		// v2.6.0: PR-based write-back mode (ADR-011) — supports GitHub + GitLab
 		if d.WriteMode.IsPRMode() && d.PRClient != nil && d.PRTracker != nil {
-			// Atomically claim the tenant. Returns false if a PR/MR is
-			// already pending OR another request is mid-creation — both map
-			// to 409. The claim (not the async poll cache) is what makes two
-			// concurrent same-tenant writes safe; see Tracker.ClaimTenant.
-			//
-			// #644: if the claim fails BECAUSE the byTenant cache says a PR is
-			// open (HasPendingPR is true — vs the in-flight-claim case where
-			// HasPendingPR is false), the cache may be up to ~30 s stale after a
-			// merge → spurious 409. Force a single bounded refresh and retry the
-			// claim ONCE. The 2 s ctx stops a degraded forge from extending the
-			// 409 response latency (a slower refresh continues in background and
-			// populates the cache for the next request).
-			claimed := d.PRTracker.ClaimTenant(tenantID)
-			if !claimed && d.PRTracker.HasPendingPR(tenantID) {
-				// Detached from r.Context() on purpose (#644): if the client cancelled
-				// (browser close / TCP RST) r.Context() is already Done by the time we
-				// get here → WithTimeout(r.Context(), …) returns an immediately-Done
-				// ctx → RefreshNow would skip Sync → we'd return the stale 409 the fix
-				// is meant to kill. Request-cancel-protection is NOT load-bearing here
-				// (the 2 s bound + the in-background Sync continuation already cover a
-				// degraded forge). context.Background() ensures the refresh actually
-				// happens for the live-client case.
-				refreshCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-				d.PRTracker.RefreshNow(refreshCtx)
-				cancel()
-				claimed = d.PRTracker.ClaimTenant(tenantID)
-			}
-			if !claimed {
-				existingPR, _ := d.PRTracker.PendingPRForTenant(tenantID)
-				WriteErrorEnvelope(rw, r, http.StatusConflict, ErrorResponse{
-					Error: "pending_pr_exists",
-					Code:  CodePendingPR,
-					Extra: map[string]any{
-						"existing_pr_url": existingPR.WebURL,
-						"pr_number":       existingPR.Number,
-						"message":         fmt.Sprintf("A pending PR/MR for %s already exists or is being created. Merge or close it first.", tenantID),
-					},
-				})
-				return
-			}
-			// Release the claim on ANY exit that isn't a successful registration —
-			// every failure return AND a recovered panic. On success RegisterPR
-			// clears the in-flight claim and sets byTenant (the durable dedup), so
-			// this deferred release then no-ops; on failure/panic it frees the
-			// tenant for retry instead of leaving a zombie 409-until-pod-restart.
-			defer d.PRTracker.ReleaseClaim(tenantID)
-
-			// Create feature branch + commit
-			result, err := d.Writer.WritePR(r.Context(), tenantID, email, string(body))
-			if err != nil {
-				// TRK-320 ErrWriteOverloaded / TRK-318 ErrForgeDegraded → canonical
-				// retry-hinting 503s (shared with the batch path). Anything else is an
-				// unexpected git failure → generic 500 with the single-write message.
-				if writeWriteFlowError(rw, r, err) {
-					return
-				}
-				WriteJSONError(rw, r, http.StatusInternalServerError, "PR write failed: "+err.Error())
-				return
-			}
-
-			// Create PR/MR via platform client + register in tracker.
-			// PR-6/11: shared with BatchTenants via createPRAndRegister.
-			prTitle := fmt.Sprintf("[tenant-api] Update %s configuration", tenantID)
-			prBody := fmt.Sprintf("**Operator:** %s\n**Source:** tenant-manager UI\n**Tenant:** %s", email, tenantID)
-			pr, err := createPRAndRegister(d,
-				prTitle, prBody, result.BranchName,
-				[]string{"tenant-api", "auto-generated"},
-				[]string{tenantID},
-			)
-			if err != nil {
-				// Claim is released by the deferred ReleaseClaim above. Forbidden →
-				// clean 403 (never a 500, so da-portal shows a permission error),
-				// circuit-open → sanitized 503, else generic 503. Shared with batch.
-				writeForgeCreateError(rw, r, d.PRClient.ProviderName(), err)
-				return
-			}
-
-			writeJSON(rw, http.StatusOK, PutTenantResponse{
-				Status:   "pending_review",
-				TenantID: tenantID,
-				PRURL:    pr.WebURL,
-				PRNumber: pr.Number,
-				Message:  "PR/MR created. Configuration will take effect after merge.",
-			})
+			putTenantPRMode(d, rw, r, tenantID, email, string(body))
 			return
 		}
 
@@ -188,6 +105,101 @@ func PutTenant(d *Deps) http.HandlerFunc {
 			TenantID: tenantID,
 		})
 	}
+}
+
+// putTenantPRMode handles a single-tenant PUT in PR write-back mode (ADR-011):
+// atomically claim the tenant (409 on a pending/in-flight PR), write the config
+// to a feature branch, then open the PR/MR and register it. Split out of
+// PutTenant (Cycle 10 refactor) to keep the handler readable — behavior is
+// unchanged. The caller must have verified IsPRMode && PRClient != nil &&
+// PRTracker != nil. Always writes a response. The deferred ReleaseClaim fires on
+// this function's return, which is immediately before the caller returns — same
+// timing as when the defer lived in the handler.
+func putTenantPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, tenantID, email, yamlContent string) {
+	// Atomically claim the tenant. Returns false if a PR/MR is
+	// already pending OR another request is mid-creation — both map
+	// to 409. The claim (not the async poll cache) is what makes two
+	// concurrent same-tenant writes safe; see Tracker.ClaimTenant.
+	//
+	// #644: if the claim fails BECAUSE the byTenant cache says a PR is
+	// open (HasPendingPR is true — vs the in-flight-claim case where
+	// HasPendingPR is false), the cache may be up to ~30 s stale after a
+	// merge → spurious 409. Force a single bounded refresh and retry the
+	// claim ONCE. The 2 s ctx stops a degraded forge from extending the
+	// 409 response latency (a slower refresh continues in background and
+	// populates the cache for the next request).
+	claimed := d.PRTracker.ClaimTenant(tenantID)
+	if !claimed && d.PRTracker.HasPendingPR(tenantID) {
+		// Detached from r.Context() on purpose (#644): if the client cancelled
+		// (browser close / TCP RST) r.Context() is already Done by the time we
+		// get here → WithTimeout(r.Context(), …) returns an immediately-Done
+		// ctx → RefreshNow would skip Sync → we'd return the stale 409 the fix
+		// is meant to kill. Request-cancel-protection is NOT load-bearing here
+		// (the 2 s bound + the in-background Sync continuation already cover a
+		// degraded forge). context.Background() ensures the refresh actually
+		// happens for the live-client case.
+		refreshCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		d.PRTracker.RefreshNow(refreshCtx)
+		cancel()
+		claimed = d.PRTracker.ClaimTenant(tenantID)
+	}
+	if !claimed {
+		existingPR, _ := d.PRTracker.PendingPRForTenant(tenantID)
+		WriteErrorEnvelope(rw, r, http.StatusConflict, ErrorResponse{
+			Error: "pending_pr_exists",
+			Code:  CodePendingPR,
+			Extra: map[string]any{
+				"existing_pr_url": existingPR.WebURL,
+				"pr_number":       existingPR.Number,
+				"message":         fmt.Sprintf("A pending PR/MR for %s already exists or is being created. Merge or close it first.", tenantID),
+			},
+		})
+		return
+	}
+	// Release the claim on ANY exit that isn't a successful registration —
+	// every failure return AND a recovered panic. On success RegisterPR
+	// clears the in-flight claim and sets byTenant (the durable dedup), so
+	// this deferred release then no-ops; on failure/panic it frees the
+	// tenant for retry instead of leaving a zombie 409-until-pod-restart.
+	defer d.PRTracker.ReleaseClaim(tenantID)
+
+	// Create feature branch + commit
+	result, err := d.Writer.WritePR(r.Context(), tenantID, email, yamlContent)
+	if err != nil {
+		// TRK-320 ErrWriteOverloaded / TRK-318 ErrForgeDegraded → canonical
+		// retry-hinting 503s (shared with the batch path). Anything else is an
+		// unexpected git failure → generic 500 with the single-write message.
+		if writeWriteFlowError(rw, r, err) {
+			return
+		}
+		WriteJSONError(rw, r, http.StatusInternalServerError, "PR write failed: "+err.Error())
+		return
+	}
+
+	// Create PR/MR via platform client + register in tracker.
+	// PR-6/11: shared with BatchTenants via createPRAndRegister.
+	prTitle := fmt.Sprintf("[tenant-api] Update %s configuration", tenantID)
+	prBody := fmt.Sprintf("**Operator:** %s\n**Source:** tenant-manager UI\n**Tenant:** %s", email, tenantID)
+	pr, err := createPRAndRegister(d,
+		prTitle, prBody, result.BranchName,
+		[]string{"tenant-api", "auto-generated"},
+		[]string{tenantID},
+	)
+	if err != nil {
+		// Claim is released by the deferred ReleaseClaim above. Forbidden →
+		// clean 403 (never a 500, so da-portal shows a permission error),
+		// circuit-open → sanitized 503, else generic 503. Shared with batch.
+		writeForgeCreateError(rw, r, d.PRClient.ProviderName(), err)
+		return
+	}
+
+	writeJSON(rw, http.StatusOK, PutTenantResponse{
+		Status:   "pending_review",
+		TenantID: tenantID,
+		PRURL:    pr.WebURL,
+		PRNumber: pr.Number,
+		Message:  "PR/MR created. Configuration will take effect after merge.",
+	})
 }
 
 // extractPatchKeys extracts flat key-value pairs from a tenant YAML body.
