@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
+"""da-tools CLI dispatcher: route a subcommand to its tool script."""
+import importlib.util
 import os
+import sys
+
 
 def _build_help_text(lang):
     """Build help text in the specified language.
@@ -185,10 +189,6 @@ Commands (Parser — PromRule parser, v2.8.0):
 Global environment variables:
     PROMETHEUS_URL    Default Prometheus endpoint (fallback for --prometheus)
     DA_LANG           Set CLI language (zh/en, takes precedence over LC_ALL/LANG)"""
-
-import os
-import sys
-import importlib.util
 
 
 def detect_cli_lang():
