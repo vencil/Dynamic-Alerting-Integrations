@@ -12,6 +12,7 @@ package handler
 import (
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -306,8 +307,10 @@ func RateLimitMetrics() (rejections int64, activeCallers int) {
 // else's limiter.
 func RateLimit(cfg RateLimitConfig, stopCh <-chan struct{}) (func(http.Handler) http.Handler, *rateLimiter) {
 	if cfg.RequestsPerMinute <= 0 {
-		// Limiter disabled: hand back the identity middleware so
-		// the chain composes cleanly.
+		// Limiter disabled: clear any previously-installed limiter so
+		// RateLimitMetrics() honors its (0, 0) contract (#795 F3), then hand
+		// back the identity middleware so the chain composes cleanly.
+		activeLimiter.Store(nil)
 		return func(next http.Handler) http.Handler { return next }, nil
 	}
 	// Production limiters get the sweeper; the activeLimiter
@@ -366,8 +369,11 @@ func RateLimitConfigFromEnv(envValue string) (cfg RateLimitConfig, malformed boo
 	if v == "" {
 		return cfg, false
 	}
-	var n int
-	if _, err := fmt.Sscanf(v, "%d", &n); err != nil || n < 0 {
+	// #795 F4: strict full-string parse. fmt.Sscanf("%d") accepted numeric
+	// prefixes (e.g. "100rpm" → 100), silently shipping a typo'd cap; strconv.Atoi
+	// rejects any non-integer so malformed input takes the warn+default path.
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 0 {
 		return cfg, true
 	}
 	cfg.RequestsPerMinute = n

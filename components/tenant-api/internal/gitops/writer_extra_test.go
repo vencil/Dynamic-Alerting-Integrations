@@ -2,6 +2,7 @@ package gitops
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -141,6 +142,30 @@ func TestWrite_MissingTenantSection(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "validation failed") {
 		t.Errorf("expected 'validation failed' in error, got: %v", err)
+	}
+}
+
+// TestValidationFailuresWrapErrValidation is the #795 F1 guard at the gitops
+// layer: Write / WritePR / WritePRBatch must wrap validation failures so callers
+// can errors.Is(err, ErrValidation) and map them to HTTP 400 (not 500). All three
+// validate BEFORE any git/disk work, so a plain temp dir (no git repo) suffices.
+// Notably covers the WritePRBatch path that backs the batch handler's
+// ErrValidation→400 branch (tenant_batch.go).
+func TestValidationFailuresWrapErrValidation(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	w := NewWriter(dir, dir)
+	ctx := context.Background()
+	const bad = "{{invalid yaml"
+
+	if err := w.Write(ctx, "db-a", "e@x.com", bad); !errors.Is(err, ErrValidation) {
+		t.Errorf("Write: errors.Is(err, ErrValidation) = false; err = %v", err)
+	}
+	if _, err := w.WritePR(ctx, "db-a", "e@x.com", bad); !errors.Is(err, ErrValidation) {
+		t.Errorf("WritePR: errors.Is(err, ErrValidation) = false; err = %v", err)
+	}
+	if _, err := w.WritePRBatch(ctx, []PRBatchOp{{TenantID: "db-a", YAMLContent: bad}}, "e@x.com"); !errors.Is(err, ErrValidation) {
+		t.Errorf("WritePRBatch: errors.Is(err, ErrValidation) = false; err = %v", err)
 	}
 }
 

@@ -440,6 +440,58 @@ func TestMaxBodyBytesFromEnv_Negative(t *testing.T) {
 	}
 }
 
+// TestRateLimitConfigFromEnv_NumericPrefixRejected is the #795 F4 guard: strict
+// strconv.Atoi parsing must reject a numeric-prefixed value. The old fmt.Sscanf
+// silently accepted "100rpm" → 100, shipping a typo'd cap instead of warning.
+func TestRateLimitConfigFromEnv_NumericPrefixRejected(t *testing.T) {
+	t.Parallel()
+	cfg, malformed := RateLimitConfigFromEnv("100rpm")
+	if cfg.RequestsPerMinute != 100 {
+		t.Errorf("prefixed env: RequestsPerMinute = %d, want 100 (fallback default)", cfg.RequestsPerMinute)
+	}
+	if !malformed {
+		t.Error("'100rpm' must be flagged malformed (strict parse), not silently parsed as 100")
+	}
+}
+
+// TestMaxBodyBytesFromEnv_NumericPrefixRejected mirrors the above for the body cap.
+func TestMaxBodyBytesFromEnv_NumericPrefixRejected(t *testing.T) {
+	t.Parallel()
+	n, malformed := MaxBodyBytesFromEnv("1048576x")
+	if n != DefaultMaxBodyBytes {
+		t.Errorf("prefixed env: bytes = %d, want default %d (fallback)", n, DefaultMaxBodyBytes)
+	}
+	if !malformed {
+		t.Error("'1048576x' must be flagged malformed (strict parse), not silently parsed as 1048576")
+	}
+}
+
+// TestRateLimit_DisabledClearsActiveLimiter is the #795 F3 guard: rebuilding the
+// limiter as disabled (RequestsPerMinute<=0) must clear the package-level
+// activeLimiter so RateLimitMetrics() honors its (0,0) contract instead of
+// reporting the previously-installed limiter. NOT t.Parallel() — it mutates the
+// package-level activeLimiter that RateLimitMetrics() reads.
+func TestRateLimit_DisabledClearsActiveLimiter(t *testing.T) {
+	stop := make(chan struct{})
+	defer close(stop)
+	// Install an enabled limiter and drive a rejection so its counters are non-zero.
+	_, lim := RateLimit(RateLimitConfig{RequestsPerMinute: 1}, stop)
+	if lim == nil {
+		t.Fatal("enabled RateLimit returned a nil limiter")
+	}
+	now := time.Now()
+	lim.allow("c", now)
+	lim.allow("c", now) // second within the window → rejection (cap 1)
+	if rej, _ := RateLimitMetrics(); rej == 0 {
+		t.Fatal("precondition: expected non-zero rejections from the enabled limiter")
+	}
+	// Rebuild disabled → must clear activeLimiter.
+	RateLimit(RateLimitConfig{RequestsPerMinute: 0}, stop)
+	if rej, active := RateLimitMetrics(); rej != 0 || active != 0 {
+		t.Errorf("after disabled rebuild: RateLimitMetrics() = (%d, %d), want (0, 0) — activeLimiter not cleared (#795 F3)", rej, active)
+	}
+}
+
 // Deps.MaxBody fallback: tests that build Deps without wiring
 // MaxBodyBytes must still get a non-zero limit so existing
 // fixtures keep working.

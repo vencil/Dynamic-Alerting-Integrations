@@ -35,6 +35,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 
@@ -310,7 +311,10 @@ func writeWriteFlowError(w http.ResponseWriter, r *http.Request, err error) bool
 //     through to the 503 below (TRK-319).
 //   - platform.ErrCircuitOpen → 503 CodeForgeUnavailable: forge degraded and
 //     fast-failed (#632/#645); never leaks the internal "circuit breaker open".
-//   - anything else           → 503 with the sanitized provider message.
+//   - anything else           → 503 with a FIXED provider-scoped message; the
+//     underlying error is logged server-side, never echoed to the client
+//     (#795 F2 — keeps the no-leak contract; err here is the already-sanitized
+//     APIError but we don't surface even its method/path/status).
 func writeForgeCreateError(w http.ResponseWriter, r *http.Request, provider string, err error) {
 	switch {
 	case errors.Is(err, platform.ErrForbidden):
@@ -320,7 +324,8 @@ func writeForgeCreateError(w http.ResponseWriter, r *http.Request, provider stri
 		WriteJSONErrorWithCode(w, r, http.StatusServiceUnavailable, CodeForgeUnavailable,
 			fmt.Sprintf("%s is currently unavailable — please retry shortly", provider))
 	default:
+		slog.Warn("forge PR/MR creation failed", "provider", provider, "error", err)
 		WriteJSONError(w, r, http.StatusServiceUnavailable,
-			fmt.Sprintf("%s PR/MR creation failed: %s", provider, err.Error()))
+			fmt.Sprintf("%s PR/MR creation failed — please retry shortly", provider))
 	}
 }

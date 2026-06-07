@@ -718,6 +718,70 @@ func TestPutTenant_PRMode_ForgeForbidden(t *testing.T) {
 	}
 }
 
+// TestPutTenant_PRMode_MalformedYAMLReturns400 is the #795 F1 guard: in PR mode a
+// malformed/invalid tenant body is a CLIENT error → HTTP 400 (matching the
+// direct-write path), not a 500. Before the fix WritePR's validation failure was
+// mapped to 500 by the PR handler. The body declares the wrong tenant section so
+// validate() fails (gitops.ErrValidation) before any forge call.
+func TestPutTenant_PRMode_MalformedYAMLReturns400(t *testing.T) {
+	t.Parallel()
+	configDir := initGitConfigDir(t)
+	writer := newTestWriter(configDir)
+	rbacMgr := adminRBAC(t)
+	mockClient := &mockPlatformClient{providerName: "github"}
+	mockTracker := &mockPlatformTracker{}
+
+	h := PutTenant(&Deps{Writer: writer, WriteMode: WriteModePR, PRClient: mockClient, PRTracker: mockTracker, RBAC: rbacMgr})
+	// tenants.db-a is absent → validate() returns "must contain tenants.db-a".
+	body := bytes.NewBufferString("tenants:\n  other-tenant:\n    _silent_mode: \"warning\"\n")
+	req := newRequestWithChiParam("PUT", "/api/v1/tenants/db-a", "id", "db-a", body)
+	req.Header.Set("X-Forwarded-Email", "alice@example.com")
+	req.Header.Set("X-Forwarded-Groups", "admins")
+	w := httptest.NewRecorder()
+	wrapWithRBACMiddleware(h, rbacMgr, rbac.PermWrite, TenantIDFromPath).ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("malformed PR-mode body: status = %d, want 400; body=%s", w.Code, w.Body.String())
+	}
+	// Claim released on the client-error exit so a corrected retry isn't blocked.
+	if !mockTracker.ClaimTenant("db-a") {
+		t.Error("claim should be released after a validation-failed PR write")
+	}
+}
+
+// TestPutTenant_PRMode_GenericForgeErrorNoLeak is the #795 F2 guard: a generic
+// (non-forbidden, non-circuit) forge creation error maps to a fixed 503 message;
+// the underlying error text is NOT echoed in the response body.
+func TestPutTenant_PRMode_GenericForgeErrorNoLeak(t *testing.T) {
+	t.Parallel()
+	configDir := initGitConfigDir(t)
+	writer := newTestWriter(configDir)
+	rbacMgr := adminRBAC(t)
+	const secret = "super-secret-internal-detail-/repos/o/r"
+	mockClient := &mockPlatformClient{
+		providerName: "github",
+		createPRFunc: func(title, body, headBranch string, labels []string) (*platform.PRInfo, error) {
+			return nil, fmt.Errorf("%s", secret)
+		},
+	}
+	mockTracker := &mockPlatformTracker{}
+
+	h := PutTenant(&Deps{Writer: writer, WriteMode: WriteModePR, PRClient: mockClient, PRTracker: mockTracker, RBAC: rbacMgr})
+	body := bytes.NewBufferString("tenants:\n  db-a:\n    _silent_mode: \"critical\"\n")
+	req := newRequestWithChiParam("PUT", "/api/v1/tenants/db-a", "id", "db-a", body)
+	req.Header.Set("X-Forwarded-Email", "alice@example.com")
+	req.Header.Set("X-Forwarded-Groups", "admins")
+	w := httptest.NewRecorder()
+	wrapWithRBACMiddleware(h, rbacMgr, rbac.PermWrite, TenantIDFromPath).ServeHTTP(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("generic forge error: status = %d, want 503; body=%s", w.Code, w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), secret) {
+		t.Errorf("503 body leaked internal error detail: %s", w.Body.String())
+	}
+}
+
 // TestPutTenant_PRMode_RateLimited403MapsTo503 is the TRK-319 end-to-end guard:
 // a forge 403 that is a SECONDARY RATE LIMIT (not a permission error) must NOT
 // map to a clean HTTP 403 (which would tell the operator "fix your token" for a
