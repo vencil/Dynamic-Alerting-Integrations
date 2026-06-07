@@ -36,33 +36,27 @@ class TestFlattenTenantConfig:
 
 class TestClassifyChange:
 
-    def test_added(self):
-        assert cd.classify_change(None, 50) == "added"
-
-    def test_removed(self):
-        assert cd.classify_change(50, None) == "removed"
-
-    def test_tighter(self):
-        assert cd.classify_change(80, 50) == "tighter"
-
-    def test_looser(self):
-        assert cd.classify_change(50, 80) == "looser"
-
-    def test_toggled_disable(self):
-        assert cd.classify_change(50, "disable") == "toggled"
-
-    def test_toggled_enable(self):
-        assert cd.classify_change("disable", 50) == "toggled"
-
-    def test_modified_dict(self):
-        old = {"default": 50, "schedule": []}
-        new = {"default": 70, "schedule": []}
-        # Different dicts → modified (can't do simple numeric compare)
-        result = cd.classify_change(old, new)
-        assert result == "modified"
-
-    def test_same_value_unchanged(self):
-        assert cd.classify_change(50, 50) == "unchanged"
+    @pytest.mark.parametrize(
+        "old, new, expected",
+        [
+            (None, 50, "added"),
+            (50, None, "removed"),
+            (80, 50, "tighter"),
+            (50, 80, "looser"),
+            (50, "disable", "toggled"),
+            ("disable", 50, "toggled"),
+            # dict vs dict → no numeric compare possible → modified
+            ({"default": 50, "schedule": []}, {"default": 70, "schedule": []}, "modified"),
+            (50, 50, "unchanged"),
+        ],
+        ids=[
+            "added", "removed", "tighter", "looser",
+            "toggled_disable", "toggled_enable", "modified_dict",
+            "same_value_unchanged",
+        ],
+    )
+    def test_classify_change(self, old, new, expected):
+        assert cd.classify_change(old, new) == expected
 
 
 # ── 3. Compute Diff ──────────────────────────────────────────────────
