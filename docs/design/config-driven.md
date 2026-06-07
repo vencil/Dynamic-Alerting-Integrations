@@ -244,29 +244,14 @@ GET /api/v1/tenants/{id}/effective
 - `400` — tenant_id 驗證失敗（長度、字元集）
 - Handler 直接調用 `pkg/config.ResolveEffective(tenantID)`，與 exporter 繼承邏輯 100% 一致（shared validation logic）
 
-**除錯 / 遷移 CLI（da-tools）**
+**除錯 CLI（da-tools）**
 
 ```bash
-# 檢視某 tenant 套完繼承後的 merged config + source chain
-da-tools describe-tenant db-a --conf-d conf.d/
+# 檢視某 tenant 套完繼承後的 merged config + merged_hash（drift audit / rollback 驗證）
+da-tools tenant-verify db-a --conf-d conf.d/
 
-# 顯示 L0→L3 各層貢獻
-da-tools describe-tenant db-a --conf-d conf.d/ --show-sources
-
-# 比較兩個 tenant 的 merged diff
-da-tools describe-tenant db-a --conf-d conf.d/ --diff db-b
-
-# 預覽某檔變更後的影響（不寫檔）
-da-tools describe-tenant db-a --conf-d conf.d/ --what-if conf.d/_defaults.yaml.new
-
-# 列出所有 tenant 的 merged hash（用於 drift audit）
-da-tools describe-tenant --all --conf-d conf.d/
-
-# 從平面結構遷移至階層結構（dry-run 預設）
-da-tools migrate-conf-d --conf-d conf.d/ --dry-run
-da-tools migrate-conf-d --conf-d conf.d/ --apply
-da-tools migrate-conf-d --conf-d conf.d/ --infer-from metadata        # 以 _domain/_env metadata 推導階層
-da-tools migrate-conf-d --conf-d conf.d/ --output-plan migration.json # 輸出遷移計畫給 reviewer
+# 拍所有 tenant 的 pre-base snapshot（供 rollback 後 diff）
+da-tools tenant-verify --all --json
 ```
 
 **ADR 參考**

@@ -244,28 +244,14 @@ GET /api/v1/tenants/{id}/effective
 - Handler calls `pkg/config.ResolveEffective(tenantID)` directly, 100% identical to exporter inheritance logic (shared validation logic)
 
 **Debug / Migration CLI (da-tools)**
+**Debug CLI (da-tools)**
 
 ```bash
-# View a tenant's merged config after inheritance + source chain
-da-tools describe-tenant db-a --conf-d conf.d/
+# View a tenant's merged config + merged_hash after inheritance (drift audit / rollback verification)
+da-tools tenant-verify db-a --conf-d conf.d/
 
-# Show per-layer L0→L3 contributions
-da-tools describe-tenant db-a --conf-d conf.d/ --show-sources
-
-# Compare merged diff between two tenants
-da-tools describe-tenant db-a --conf-d conf.d/ --diff db-b
-
-# Preview impact of a pending file change (no write)
-da-tools describe-tenant db-a --conf-d conf.d/ --what-if conf.d/_defaults.yaml.new
-
-# List all tenants' merged hashes (drift audit)
-da-tools describe-tenant --all --conf-d conf.d/
-
-# Migrate from flat to hierarchical layout (dry-run by default)
-da-tools migrate-conf-d --conf-d conf.d/ --dry-run
-da-tools migrate-conf-d --conf-d conf.d/ --apply
-da-tools migrate-conf-d --conf-d conf.d/ --infer-from metadata        # derive hierarchy from _domain/_env metadata
-da-tools migrate-conf-d --conf-d conf.d/ --output-plan migration.json # output migration plan for reviewer
+# Snapshot all tenants' pre-base state for post-rollback diff
+da-tools tenant-verify --all --json
 ```
 
 **ADR References**
