@@ -33,10 +33,14 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/vencil/tenant-api/internal/gitops"
+	"github.com/vencil/tenant-api/internal/platform"
 	"github.com/vencil/tenant-api/internal/policy"
 )
 
@@ -73,14 +77,14 @@ const (
 // pr_number, hint, etc.) — those are inlined at the top level of
 // the JSON output, NOT under an "extra" key.
 type ErrorResponse struct {
-	Error       string              `json:"error"`
-	Code        string              `json:"code,omitempty"`
-	RequestID   string              `json:"request_id,omitempty"`
-	Violations  []Violation         `json:"violations,omitempty"`
-	PolicyV     []policy.Violation  `json:"-"` // marshaled into "violations" key when set
-	RetryAfterS int                 `json:"retry_after_s,omitempty"`
-	Help        string              `json:"help,omitempty"`
-	Action      string              `json:"action,omitempty"`
+	Error       string             `json:"error"`
+	Code        string             `json:"code,omitempty"`
+	RequestID   string             `json:"request_id,omitempty"`
+	Violations  []Violation        `json:"violations,omitempty"`
+	PolicyV     []policy.Violation `json:"-"` // marshaled into "violations" key when set
+	RetryAfterS int                `json:"retry_after_s,omitempty"`
+	Help        string             `json:"help,omitempty"`
+	Action      string             `json:"action,omitempty"`
 
 	// Extra carries per-error custom fields (existing_pr_url,
 	// pr_number, hint, etc.). Inlined at the top level via the
@@ -125,6 +129,20 @@ func (e ErrorResponse) MarshalJSON() ([]byte, error) {
 	return json.Marshal(out)
 }
 
+// writeJSON writes v as a JSON response with the given status code, centralizing
+// the Content-Type + WriteHeader + Encode boilerplate that every success handler
+// (and the error envelope below) repeated. The Encode error is intentionally
+// ignored: the status line and headers are already committed by the time Encode
+// can fail mid-stream, so there's nothing actionable to do — matching the prior
+// per-handler `_ =` discards. Callers that previously relied on the implicit 200
+// (Content-Type + Encode, no WriteHeader) pass http.StatusOK explicitly, which is
+// behaviorally identical (the first Encode write would have sent 200 anyway).
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(v)
+}
+
 // WriteErrorEnvelope is the canonical error response writer. All
 // other helpers in this file funnel through here.
 //
@@ -134,9 +152,7 @@ func WriteErrorEnvelope(w http.ResponseWriter, r *http.Request, status int, env 
 	if env.RequestID == "" && r != nil {
 		env.RequestID = middleware.GetReqID(r.Context())
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(env)
+	writeJSON(w, status, env)
 }
 
 // WriteJSONError emits a simple error envelope: {error, code,
@@ -262,4 +278,49 @@ func WriteOverloaded(w http.ResponseWriter, r *http.Request) {
 		Code:        CodeWriteOverloaded,
 		RetryAfterS: writeOverloadedRetryAfterS,
 	})
+}
+
+// writeWriteFlowError maps the sentinel errors returned by Writer.WritePR /
+// WritePRBatch to their canonical retry-hinting 503s and reports whether it
+// handled the error. The single-tenant (PutTenant) and batch (BatchTenants)
+// write paths shared this dispatch verbatim; callers keep their own
+// path-specific generic 500 message for the unrecognized case (returns false).
+//
+//   - gitops.ErrWriteOverloaded → 503 + Retry-After (admission queue full, TRK-320)
+//   - gitops.ErrForgeDegraded   → 503 + Retry-After (in-lock base fetch timeout, TRK-318)
+func writeWriteFlowError(w http.ResponseWriter, r *http.Request, err error) bool {
+	switch {
+	case errors.Is(err, gitops.ErrWriteOverloaded):
+		WriteOverloaded(w, r)
+	case errors.Is(err, gitops.ErrForgeDegraded):
+		writeForgeDegraded(w, r)
+	default:
+		return false
+	}
+	return true
+}
+
+// writeForgeCreateError renders the canonical response for a failure from
+// createPRAndRegister (forge PR/MR creation), unifying the dispatch PutTenant
+// and BatchTenants previously duplicated. Always writes a response.
+//
+//   - platform.ErrForbidden   → 403 CodeForbidden: the token passed ValidateToken
+//     but lacks write scope; surfaced cleanly so da-portal shows a permission
+//     error, never a 500. A rate-limited 403 is excluded by APIError.Is and falls
+//     through to the 503 below (TRK-319).
+//   - platform.ErrCircuitOpen → 503 CodeForgeUnavailable: forge degraded and
+//     fast-failed (#632/#645); never leaks the internal "circuit breaker open".
+//   - anything else           → 503 with the sanitized provider message.
+func writeForgeCreateError(w http.ResponseWriter, r *http.Request, provider string, err error) {
+	switch {
+	case errors.Is(err, platform.ErrForbidden):
+		WriteJSONErrorWithCode(w, r, http.StatusForbidden, CodeForbidden,
+			fmt.Sprintf("insufficient %s permissions to open PR/MR — the configured token lacks write scope", provider))
+	case errors.Is(err, platform.ErrCircuitOpen):
+		WriteJSONErrorWithCode(w, r, http.StatusServiceUnavailable, CodeForgeUnavailable,
+			fmt.Sprintf("%s is currently unavailable — please retry shortly", provider))
+	default:
+		WriteJSONError(w, r, http.StatusServiceUnavailable,
+			fmt.Sprintf("%s PR/MR creation failed: %s", provider, err.Error()))
+	}
 }

@@ -228,8 +228,7 @@ func PutTenantCustomAlerts(d *Deps) http.HandlerFunc {
 			return
 		}
 
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(PutCustomAlertsResponse{
+		writeJSON(w, http.StatusOK, PutCustomAlertsResponse{
 			Status:     "success",
 			TenantID:   tenantID,
 			SourceHash: cfg.ComputeSourceHash([]byte(merged)),

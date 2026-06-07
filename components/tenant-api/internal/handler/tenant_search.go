@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"sort"
@@ -138,13 +137,13 @@ func SearchTenants(d *Deps) http.HandlerFunc {
 
 		params, err := parseSearchParams(r)
 		if err != nil {
-			WriteJSONError(w, r,http.StatusBadRequest, err.Error())
+			WriteJSONError(w, r, http.StatusBadRequest, err.Error())
 			return
 		}
 
 		all, err := d.SearchCache.snapshot(d.ConfigDir)
 		if err != nil {
-			WriteJSONError(w, r,http.StatusInternalServerError, err.Error())
+			WriteJSONError(w, r, http.StatusInternalServerError, err.Error())
 			return
 		}
 
@@ -165,8 +164,7 @@ func SearchTenants(d *Deps) http.HandlerFunc {
 			NextOffset:   nextOffset,
 		}
 
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(resp)
+		writeJSON(w, http.StatusOK, resp)
 	}
 }
 
@@ -395,4 +393,3 @@ func (c *tenantSnapshotCache) invalidate() {
 	c.cached = nil
 	c.loadedAt = time.Time{}
 }
-

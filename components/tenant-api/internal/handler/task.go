@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"encoding/json"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -52,7 +51,7 @@ func GetTask(d *Deps) http.HandlerFunc {
 			// Caller has zero access to any of the touched tenants.
 			// 403 (not 404) — the task exists, just none of its
 			// tenants are within the caller's RBAC scope.
-			WriteJSONError(w, r,http.StatusForbidden,
+			WriteJSONError(w, r, http.StatusForbidden,
 				"insufficient permission to read task results: caller has no access to any of the task's tenants")
 			return
 		}
@@ -60,8 +59,7 @@ func GetTask(d *Deps) http.HandlerFunc {
 		response := task
 		response.Results = filtered
 
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(response)
+		writeJSON(w, http.StatusOK, response)
 	}
 }
 

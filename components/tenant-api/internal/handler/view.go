@@ -42,8 +42,7 @@ func ListViews(d *Deps) http.HandlerFunc {
 				Filters:     v.Filters,
 			})
 		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(resp)
+		writeJSON(w, http.StatusOK, resp)
 	}
 }
 
@@ -61,18 +60,17 @@ func GetView(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		viewID := chi.URLParam(r, "id")
 		if err := views.ValidateViewID(viewID); err != nil {
-			WriteJSONError(w, r,http.StatusBadRequest, err.Error())
+			WriteJSONError(w, r, http.StatusBadRequest, err.Error())
 			return
 		}
 
 		v, ok := d.Views.GetView(viewID)
 		if !ok {
-			WriteJSONError(w, r,http.StatusNotFound, "view not found: "+viewID)
+			WriteJSONError(w, r, http.StatusNotFound, "view not found: "+viewID)
 			return
 		}
 
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(ViewResponse{
+		writeJSON(w, http.StatusOK, ViewResponse{
 			ID:          viewID,
 			Label:       v.Label,
 			Description: v.Description,
@@ -111,7 +109,7 @@ func PutView(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		viewID := chi.URLParam(r, "id")
 		if err := views.ValidateViewID(viewID); err != nil {
-			WriteJSONError(w, r,http.StatusBadRequest, err.Error())
+			WriteJSONError(w, r, http.StatusBadRequest, err.Error())
 			return
 		}
 
@@ -119,13 +117,13 @@ func PutView(d *Deps) http.HandlerFunc {
 
 		body, err := io.ReadAll(io.LimitReader(r.Body, d.MaxBody()))
 		if err != nil {
-			WriteJSONError(w, r,http.StatusBadRequest, "failed to read request body: "+err.Error())
+			WriteJSONError(w, r, http.StatusBadRequest, "failed to read request body: "+err.Error())
 			return
 		}
 
 		var req PutViewRequest
 		if err := json.Unmarshal(body, &req); err != nil {
-			WriteJSONError(w, r,http.StatusBadRequest, "invalid JSON: "+err.Error())
+			WriteJSONError(w, r, http.StatusBadRequest, "invalid JSON: "+err.Error())
 			return
 		}
 
@@ -137,7 +135,7 @@ func PutView(d *Deps) http.HandlerFunc {
 		violations := ValidateStructTags(&req)
 		violations = append(violations, validateFilterMap(req.Filters, "filters")...)
 		if len(violations) > 0 {
-			WriteValidationErrors(w, r,violations)
+			WriteValidationErrors(w, r, violations)
 			return
 		}
 
@@ -157,7 +155,7 @@ func PutView(d *Deps) http.HandlerFunc {
 
 		yamlBytes, err := views.MarshalConfig(newCfg)
 		if err != nil {
-			WriteJSONError(w, r,http.StatusInternalServerError, "marshal views: "+err.Error())
+			WriteJSONError(w, r, http.StatusInternalServerError, "marshal views: "+err.Error())
 			return
 		}
 
@@ -167,17 +165,16 @@ func PutView(d *Deps) http.HandlerFunc {
 				return
 			}
 			if errors.Is(err, gitops.ErrConflict) {
-				WriteJSONError(w, r,http.StatusConflict, err.Error())
+				WriteJSONError(w, r, http.StatusConflict, err.Error())
 				return
 			}
-			WriteJSONError(w, r,http.StatusInternalServerError, err.Error())
+			WriteJSONError(w, r, http.StatusInternalServerError, err.Error())
 			return
 		}
 
 		_ = d.Views.Reload()
 
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]string{
+		writeJSON(w, http.StatusOK, map[string]string{
 			"status":  "ok",
 			"view_id": viewID,
 		})
@@ -199,7 +196,7 @@ func DeleteView(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		viewID := chi.URLParam(r, "id")
 		if err := views.ValidateViewID(viewID); err != nil {
-			WriteJSONError(w, r,http.StatusBadRequest, err.Error())
+			WriteJSONError(w, r, http.StatusBadRequest, err.Error())
 			return
 		}
 
@@ -207,7 +204,7 @@ func DeleteView(d *Deps) http.HandlerFunc {
 
 		cfg := d.Views.Get()
 		if _, ok := cfg.Views[viewID]; !ok {
-			WriteJSONError(w, r,http.StatusNotFound, "view not found: "+viewID)
+			WriteJSONError(w, r, http.StatusNotFound, "view not found: "+viewID)
 			return
 		}
 
@@ -222,7 +219,7 @@ func DeleteView(d *Deps) http.HandlerFunc {
 
 		yamlBytes, err := views.MarshalConfig(newCfg)
 		if err != nil {
-			WriteJSONError(w, r,http.StatusInternalServerError, "marshal views: "+err.Error())
+			WriteJSONError(w, r, http.StatusInternalServerError, "marshal views: "+err.Error())
 			return
 		}
 
@@ -232,17 +229,16 @@ func DeleteView(d *Deps) http.HandlerFunc {
 				return
 			}
 			if errors.Is(err, gitops.ErrConflict) {
-				WriteJSONError(w, r,http.StatusConflict, err.Error())
+				WriteJSONError(w, r, http.StatusConflict, err.Error())
 				return
 			}
-			WriteJSONError(w, r,http.StatusInternalServerError, err.Error())
+			WriteJSONError(w, r, http.StatusInternalServerError, err.Error())
 			return
 		}
 
 		_ = d.Views.Reload()
 
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]string{
+		writeJSON(w, http.StatusOK, map[string]string{
 			"status":  "ok",
 			"view_id": viewID,
 		})

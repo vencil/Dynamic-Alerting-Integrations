@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"encoding/json"
 	"net/http"
 	"sort"
 
@@ -36,9 +35,7 @@ func Me(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		email := rbac.RequestEmail(r)
 		if email == "" {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusUnauthorized)
-			_ = json.NewEncoder(w).Encode(map[string]string{
+			writeJSON(w, http.StatusUnauthorized, map[string]string{
 				"error": "missing identity: X-Forwarded-Email header required",
 			})
 			return
@@ -117,7 +114,6 @@ func Me(d *Deps) http.HandlerFunc {
 		// Sort groups for consistent output
 		sort.Strings(resp.Groups)
 
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(resp)
+		writeJSON(w, http.StatusOK, resp)
 	}
 }

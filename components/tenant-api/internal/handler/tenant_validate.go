@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"encoding/json"
 	"io"
 	"net/http"
 
@@ -63,8 +62,7 @@ func ValidateTenant(d *Deps) http.HandlerFunc {
 				cfg.ValidateTenantCustomAlerts(tenantID, bodyCfg.Tenants[tenantID], cfg.MaxCustomRecipesDefault)...)
 		}
 
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(ValidateResponse{
+		writeJSON(w, http.StatusOK, ValidateResponse{
 			Valid:    len(warnings) == 0,
 			Warnings: warnings,
 		})

@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"encoding/json"
 	"log/slog"
 	"net/http"
 	"os"
@@ -97,8 +96,7 @@ func GetTenant(d *Deps) http.HandlerFunc {
 			CustomAlerts: customAlerts,
 		}
 
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(detail)
+		writeJSON(w, http.StatusOK, detail)
 	}
 }
 

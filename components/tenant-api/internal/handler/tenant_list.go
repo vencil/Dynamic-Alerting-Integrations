@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"encoding/json"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -47,15 +46,14 @@ func ListTenants(d *Deps) http.HandlerFunc {
 
 		tenants, err := loadAllTenants(d.ConfigDir)
 		if err != nil {
-			WriteJSONError(w, r,http.StatusInternalServerError, err.Error())
+			WriteJSONError(w, r, http.StatusInternalServerError, err.Error())
 			return
 		}
 
 		// v2.5.0: Filter tenants by RBAC (tenant pattern + environment/domain metadata)
 		filtered := filterTenantsByRBAC(tenants, d.RBAC, idpGroups)
 
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(filtered)
+		writeJSON(w, http.StatusOK, filtered)
 	}
 }
 

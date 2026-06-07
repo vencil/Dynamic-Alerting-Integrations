@@ -11,7 +11,6 @@ import (
 
 	"github.com/vencil/tenant-api/internal/async"
 	"github.com/vencil/tenant-api/internal/gitops"
-	"github.com/vencil/tenant-api/internal/platform"
 	"github.com/vencil/tenant-api/internal/policy"
 	"github.com/vencil/tenant-api/internal/rbac"
 	"gopkg.in/yaml.v3"
@@ -80,11 +79,11 @@ func BatchTenants(d *Deps) http.HandlerFunc {
 
 		var req BatchRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			WriteJSONError(rw, r,http.StatusBadRequest, "invalid JSON: "+err.Error())
+			WriteJSONError(rw, r, http.StatusBadRequest, "invalid JSON: "+err.Error())
 			return
 		}
 		if len(req.Operations) == 0 {
-			WriteJSONError(rw, r,http.StatusBadRequest, "operations list is empty")
+			WriteJSONError(rw, r, http.StatusBadRequest, "operations list is empty")
 			return
 		}
 
@@ -98,7 +97,7 @@ func BatchTenants(d *Deps) http.HandlerFunc {
 			violations = append(violations, validatePatchMap(op.Patch, fieldPrefix)...)
 		}
 		if len(violations) > 0 {
-			WriteValidationErrors(rw, r,violations)
+			WriteValidationErrors(rw, r, violations)
 			return
 		}
 
@@ -137,8 +136,7 @@ func BatchTenants(d *Deps) http.HandlerFunc {
 			}
 
 			if len(batchOps) == 0 {
-				rw.Header().Set("Content-Type", "application/json")
-				_ = json.NewEncoder(rw).Encode(BatchResponse{
+				writeJSON(rw, http.StatusOK, BatchResponse{
 					Status:  "completed",
 					Results: batchResults,
 					Summary: fmt.Sprintf("%d failed", len(batchResults)),
@@ -149,19 +147,13 @@ func BatchTenants(d *Deps) http.HandlerFunc {
 
 			result, err := d.Writer.WritePRBatch(r.Context(), batchOps, email)
 			if err != nil {
-				// TRK-320: admission queue full → shed with 503 + Retry-After.
-				if errors.Is(err, gitops.ErrWriteOverloaded) {
-					WriteOverloaded(rw, r)
+				// TRK-320 ErrWriteOverloaded / TRK-318 ErrForgeDegraded → canonical
+				// retry-hinting 503s (shared with the single-write path). Anything else
+				// is an unexpected git failure → generic 500 with the batch message.
+				if writeWriteFlowError(rw, r, err) {
 					return
 				}
-				// TRK-318: in-lock base fetch timed out → forge degraded, lock
-				// released. Retry-hinting 503 with Retry-After, not a 500 (the batch
-				// never wrote from a stale base, so a retry is safe).
-				if errors.Is(err, gitops.ErrForgeDegraded) {
-					writeForgeDegraded(rw, r)
-					return
-				}
-				WriteJSONError(rw, r,http.StatusInternalServerError, "PR/MR batch write failed: "+err.Error())
+				WriteJSONError(rw, r, http.StatusInternalServerError, "PR/MR batch write failed: "+err.Error())
 				return
 			}
 
@@ -176,26 +168,20 @@ func BatchTenants(d *Deps) http.HandlerFunc {
 			}
 			prBody := fmt.Sprintf("**Operator:** %s\n**Source:** tenant-manager UI (batch)\n**Tenants:** %s",
 				email, strings.Join(tenantList, ", "))
-			pr, err := createPRAndRegister(d, 
+			pr, err := createPRAndRegister(d,
 				prTitle, prBody, result.BranchName,
 				[]string{"tenant-api", "auto-generated", "batch"},
 				tenantList,
 			)
 			if err != nil {
-				provider := d.PRClient.ProviderName()
-				// Circuit breaker open (#632/#645): forge degraded, fast-failed.
-				// Sanitized, retry-hinting 503 (don't leak the internal string).
-				if errors.Is(err, platform.ErrCircuitOpen) {
-					WriteJSONErrorWithCode(rw, r, http.StatusServiceUnavailable, CodeForgeUnavailable,
-						fmt.Sprintf("%s is currently unavailable — please retry shortly", provider))
-					return
-				}
-				WriteJSONError(rw, r, http.StatusServiceUnavailable, fmt.Sprintf("%s PR/MR creation failed: %s", provider, err.Error()))
+				// Shared with the single-write path: forbidden → clean 403 (previously
+				// the batch path was missing this and leaked a generic 503),
+				// circuit-open → sanitized 503, else generic 503.
+				writeForgeCreateError(rw, r, d.PRClient.ProviderName(), err)
 				return
 			}
 
-			rw.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(rw).Encode(BatchResponse{
+			writeJSON(rw, http.StatusOK, BatchResponse{
 				Status:   "pending_review",
 				PRURL:    pr.WebURL,
 				PRNumber: pr.Number,
@@ -221,9 +207,7 @@ func BatchTenants(d *Deps) http.HandlerFunc {
 				return asyncResults, nil
 			})
 
-			rw.Header().Set("Content-Type", "application/json")
-			rw.WriteHeader(http.StatusAccepted)
-			_ = json.NewEncoder(rw).Encode(map[string]interface{}{
+			writeJSON(rw, http.StatusAccepted, map[string]interface{}{
 				"status":   "pending",
 				"task_id":  task.ID,
 				"poll_url": fmt.Sprintf("/api/v1/tasks/%s", task.ID),
@@ -253,8 +237,7 @@ func BatchTenants(d *Deps) http.HandlerFunc {
 			summary = fmt.Sprintf("%d succeeded, %d failed", successes, failures)
 		}
 
-		rw.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(rw).Encode(BatchResponse{
+		writeJSON(rw, http.StatusOK, BatchResponse{
 			Status:  "completed",
 			TaskID:  taskID,
 			Results: results,

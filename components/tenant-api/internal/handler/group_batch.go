@@ -26,7 +26,7 @@ type GroupBatchResponse struct {
 	TaskID  string        `json:"task_id"`
 	GroupID string        `json:"group_id"`
 	Results []BatchResult `json:"results"`
-	Summary string        `json:"summary"`  // e.g., "5 succeeded, 1 failed"
+	Summary string        `json:"summary"` // e.g., "5 succeeded, 1 failed"
 }
 
 // GroupBatch handles POST /api/v1/groups/{id}/batch
@@ -36,8 +36,9 @@ type GroupBatchResponse struct {
 // Supports async mode via ?async=true query parameter.
 //
 // Query Parameters:
-//   ?async=true  — Enable async mode; returns 202 with task_id for polling
-//   (default)    — Sync mode; returns 200 with completed results
+//
+//	?async=true  — Enable async mode; returns 202 with task_id for polling
+//	(default)    — Sync mode; returns 200 with completed results
 //
 // @Summary     Batch operation on group members
 // @Description Apply a patch to all tenants in a group.
@@ -56,7 +57,7 @@ func GroupBatch(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		groupID := chi.URLParam(r, "id")
 		if err := groups.ValidateGroupID(groupID); err != nil {
-			WriteJSONError(w, r,http.StatusBadRequest, err.Error())
+			WriteJSONError(w, r, http.StatusBadRequest, err.Error())
 			return
 		}
 
@@ -65,22 +66,22 @@ func GroupBatch(d *Deps) http.HandlerFunc {
 
 		g, ok := d.Groups.GetGroup(groupID)
 		if !ok {
-			WriteJSONError(w, r,http.StatusNotFound, "group not found: "+groupID)
+			WriteJSONError(w, r, http.StatusNotFound, "group not found: "+groupID)
 			return
 		}
 
 		var req GroupBatchRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			WriteJSONError(w, r,http.StatusBadRequest, "invalid JSON: "+err.Error())
+			WriteJSONError(w, r, http.StatusBadRequest, "invalid JSON: "+err.Error())
 			return
 		}
 		if len(req.Patch) == 0 {
-			WriteJSONError(w, r,http.StatusBadRequest, "patch must not be empty")
+			WriteJSONError(w, r, http.StatusBadRequest, "patch must not be empty")
 			return
 		}
 
 		if len(g.Members) == 0 {
-			WriteJSONError(w, r,http.StatusBadRequest, "group has no members")
+			WriteJSONError(w, r, http.StatusBadRequest, "group has no members")
 			return
 		}
 
@@ -102,9 +103,7 @@ func GroupBatch(d *Deps) http.HandlerFunc {
 				return asyncResults, nil
 			})
 
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusAccepted)
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			writeJSON(w, http.StatusAccepted, map[string]interface{}{
 				"status":   "pending",
 				"task_id":  task.ID,
 				"poll_url": fmt.Sprintf("/api/v1/tasks/%s", task.ID),
@@ -134,8 +133,7 @@ func GroupBatch(d *Deps) http.HandlerFunc {
 			summary = fmt.Sprintf("%d succeeded, %d failed", successes, failures)
 		}
 
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(GroupBatchResponse{
+		writeJSON(w, http.StatusOK, GroupBatchResponse{
 			Status:  "completed",
 			TaskID:  taskID,
 			GroupID: groupID,
