@@ -2,7 +2,7 @@
 title: "Integration Guides — Choose by your existing monitoring stack"
 tags: [integration, navigation]
 audience: [platform-engineer, sre, devops]
-version: v2.8.1
+version: v2.9.0
 lang: en
 ---
 

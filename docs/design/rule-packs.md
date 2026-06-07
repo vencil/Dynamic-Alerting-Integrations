@@ -2,7 +2,7 @@
 title: "Rule Packs 與 Projected Volume 架構"
 tags: [architecture, rule-packs, design]
 audience: [platform-engineer, devops]
-version: v2.8.1
+version: v2.9.0
 lang: zh
 parent: architecture-and-design.md
 ---

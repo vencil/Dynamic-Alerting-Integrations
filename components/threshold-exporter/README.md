@@ -1,4 +1,4 @@
-# Threshold Exporter (v2.8.1)
+# Threshold Exporter (v2.9.0)
 
 <!-- 標題版號 = 最後 released tag。Release wrap 切五線 tag 時，本標題 + §Deploy 的 helm --version 跟著批次同步 bump。 -->
 

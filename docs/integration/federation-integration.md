@@ -2,7 +2,7 @@
 title: "Federation Integration Guide"
 tags: [federation, multi-cluster]
 audience: [platform-engineer]
-version: v2.8.1
+version: v2.9.0
 lang: zh
 ---
 # Federation Integration Guide

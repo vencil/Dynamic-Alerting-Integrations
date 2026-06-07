@@ -2,7 +2,7 @@
 title: "高可用性 (HA) 設計 — 副本、PDB、防雙倍計算"
 tags: [architecture, high-availability, design]
 audience: [platform-engineer, devops]
-version: v2.8.1
+version: v2.9.0
 lang: zh
 parent: architecture-and-design.md
 ---

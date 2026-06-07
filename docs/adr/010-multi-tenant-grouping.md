@@ -2,7 +2,7 @@
 title: "ADR-010: Multi-Tenant Grouping Architecture"
 tags: [adr, architecture, groups, tenant-management]
 audience: [platform-engineers, developers]
-version: v2.8.1
+version: v2.9.0
 lang: zh
 id: ADR-010
 tracking_kind: adr

@@ -2,7 +2,7 @@
 title: "Staged Rule Adoption Lifecycle"
 tags: [scenarios, lifecycle, custom-rules, golden-rules, rule-packs]
 audience: [platform-engineers, sre, tenant-admins]
-version: v2.8.1
+version: v2.9.0
 lang: en
 ---
 

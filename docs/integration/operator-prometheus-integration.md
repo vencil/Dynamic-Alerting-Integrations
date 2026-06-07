@@ -2,7 +2,7 @@
 title: "Operator Prometheus 整合指南"
 tags: [operator, prometheus, integration]
 audience: [platform-engineer]
-version: v2.8.1
+version: v2.9.0
 lang: zh
 ---
 # Operator Prometheus 整合指南

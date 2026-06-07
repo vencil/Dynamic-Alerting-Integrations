@@ -2,14 +2,14 @@
 title: "Domain Expert (DBA) Quick Start Guide"
 tags: [getting-started, domain-config]
 audience: [domain-expert]
-version: v2.8.1
+version: v2.9.0
 lang: en
 ---
 # Domain Expert (DBA) Quick Start Guide
 
 > **Language / 語言：** **English (Current)** | [中文](./for-domain-experts.md)
 
-> **v2.8.1** | Audience: DBAs, Database Administrators, Domain Experts
+> **v2.9.0** | Audience: DBAs, Database Administrators, Domain Experts
 >
 > Related docs: [Rule Packs](../rule-packs/README.md) · [Custom Rule Governance](../custom-rule-governance.md) · [Architecture](../architecture-and-design.md) §2.4 · [threshold-exporter config / recipe reference](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md#4-配置參考)
 

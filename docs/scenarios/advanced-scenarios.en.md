@@ -2,7 +2,7 @@
 title: "Advanced Scenarios & Test Coverage"
 tags: [scenario, testing, maintenance]
 audience: [platform-engineer, sre]
-version: v2.8.1
+version: v2.9.0
 lang: en
 ---
 # Advanced Scenarios & Test Coverage

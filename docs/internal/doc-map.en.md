@@ -2,7 +2,7 @@
 title: "Documentation Map"
 tags: [documentation, navigation, internal]
 audience: [maintainers, ai-agent]
-version: v2.8.1
+version: v2.9.0
 lang: en
 ---
 

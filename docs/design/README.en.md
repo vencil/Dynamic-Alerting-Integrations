@@ -2,7 +2,7 @@
 title: "Design Deep-Dives — Architecture spoke documents"
 tags: [design, architecture, navigation]
 audience: [platform-engineer, devops]
-version: v2.8.1
+version: v2.9.0
 lang: en
 ---
 

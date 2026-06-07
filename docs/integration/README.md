@@ -2,7 +2,7 @@
 title: "整合指南導覽 — 依你現有的監控架構選讀"
 tags: [integration, navigation]
 audience: [platform-engineer, sre, devops]
-version: v2.8.1
+version: v2.9.0
 lang: zh
 ---
 

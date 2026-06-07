@@ -2,7 +2,7 @@
 title: "Operator Alertmanager Integration Guide"
 tags: [operator, alertmanager, integration, receiver]
 audience: [platform-engineer]
-version: v2.8.1
+version: v2.9.0
 lang: en
 ---
 # Operator Alertmanager Integration Guide

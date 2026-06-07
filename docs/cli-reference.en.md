@@ -2,7 +2,7 @@
 title: "da-tools CLI Reference"
 tags: [cli, reference, da-tools, tools]
 audience: [platform-engineer, sre, devops, tenant]
-version: v2.8.1
+version: v2.9.0
 lang: en
 ---
 

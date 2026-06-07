@@ -2,7 +2,7 @@
 title: "Tenant Federation Integration Guide"
 tags: [integration, federation, multi-tenant, tenant-api]
 audience: [platform-engineers, sre]
-version: v2.8.1
+version: v2.9.0
 lang: zh
 ---
 

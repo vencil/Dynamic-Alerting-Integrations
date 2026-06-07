@@ -2,7 +2,7 @@
 title: "ADR-007: 跨域路由設定檔與域策略"
 tags: [adr, architecture]
 audience: [platform-engineers]
-version: v2.8.1
+version: v2.9.0
 lang: zh
 id: ADR-007
 tracking_kind: adr

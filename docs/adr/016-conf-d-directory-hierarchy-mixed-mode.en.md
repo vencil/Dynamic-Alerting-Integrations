@@ -2,7 +2,7 @@
 title: "ADR-016: conf.d/ Directory Hierarchy + Mixed Mode + Migration Strategy"
 tags: [adr, conf.d, directory-scanner, hierarchy, migration, v2.7.0]
 audience: [platform-engineers, sre, contributors]
-version: v2.8.1
+version: v2.9.0
 lang: en
 ---
 

@@ -2,7 +2,7 @@
 title: "ADR-024: 宣告式 Dimensional 告警引擎 — Version-Aware Thresholds + Custom Alerts"
 tags: [adr, threshold-exporter, rule-pack, alerting, dimensional-metric, gitops]
 audience: [platform-engineers, contributors, sre]
-version: v2.8.1
+version: v2.9.0
 lang: zh
 id: ADR-024
 tracking_kind: adr

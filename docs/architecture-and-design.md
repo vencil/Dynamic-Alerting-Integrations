@@ -2,7 +2,7 @@
 title: "架構與設計 — 動態多租戶警報平台技術白皮書"
 tags: [architecture, core-design]
 audience: [platform-engineer]
-version: v2.8.1
+version: v2.9.0
 lang: zh
 ---
 # 架構與設計 — 動態多租戶警報平台技術白皮書
@@ -26,7 +26,7 @@ lang: zh
 | [Config-Driven 設計](design/config-driven.md) | 三態配置、Directory Scanner、多層嚴重度、排程式閾值、路由、Tenant API |
 | [Rule Packs 與 Projected Volume](design/rule-packs.md) | 15 個規則包、三部分結構、雙語 Annotation |
 | [高可用性 (HA)](design/high-availability.md) | 2 副本策略、PDB、滾動更新、SLA 99.9%+ |
-| [未來擴展路線](design/roadmap-future.md) | v2.8.0 已交付項目 + v2.9.0+ 長期探索方向 |
+| [未來擴展路線](design/roadmap-future.md) | v2.9.0 已交付項目 + v2.10.0+ 長期探索方向 |
 
 **專題文件：** [性能基準](benchmarks.md) · [治理與安全](governance-security.md) · [故障排查](troubleshooting.md) · [進階場景](internal/test-coverage-matrix.md) · [遷移引擎](migration-engine.md) · [VCS 整合](vcs-integration-guide.md)
 
@@ -302,7 +302,8 @@ spec:
 |------|------|---------|
 | **v2.7.0 已發布** | Scale Foundation I + 元件健壯化 | `conf.d/` 目錄分層 + `_defaults.yaml` 繼承引擎（ADR-016/017）、Go 生產路徑完成（`config_debounce.go` + `config_metrics.go` + Tenant API `/effective` endpoint + dual-hash 熱重載）、Blast Radius CI bot、Tier 1 元件健康度快照、1000-tenant synthetic fixture |
 | **v2.8.0 已發布**（2026-05-12）| 客戶導入管線 + 千租戶 Scale 驗證 + 自動化收斂 | (a) **客戶導入管線 5-step chain**（da-parser → Profile Builder ([ADR-018](adr/018-profile-as-directory-default.md)) → Hierarchy-Aware Batch PR (da-batchpr) + refresh modes → Dangling Defaults Guard (da-guard) with sticky PR comment workflow）；(b) **/simulate endpoint + ephemeral graph**；(c) **Server-side Search API + virtualized Tenant Manager**；(d) **Master Onboarding Dual Entry**（5/5 wizards：cicd-setup → deployment → alert-builder → routing-trace → tenant-manager）+ **Smart Views frontend integration**；(e) **Migration Toolkit 三條交付路徑**（Docker / static binary 6-arch / air-gapped tar）+ cosign keyless 簽章 + SBOM SPDX/CycloneDX；(f) **Policy-as-Code 自動化**（56 pre-commit hooks：39 auto + 14 manual + 3 pre-push）；(g) **Scale Foundation III**（千租戶 SLO 量測：cold load 112 ms / steady-state reload 1.3 ms / 5-anchor e2e fire-through baseline）+ **Tenant API hardening**（rate limit + X-Request-ID + tenant-scoped authz + body-content range validation）+ mixed-mode duplicate tenant id 改 hard error；(h) **ZH-primary SSOT policy lock** |
-| **v2.9.0 規劃中** | 從第一個客戶的實際使用 harden | Glossary-driven codename gate Layer 2 (self-healing) · 4-hr soak + customer-anon corpus calibration · Rule Pack × threshold-calculator 資料流評估 · Local try-it-yourself onboarding（exporter / tenant-api / portal / da-tools standalone） |
+| **v2.9.0 已發布**（2026-06-06）| 租戶自助告警 + 租戶聯邦 + 寫入平面韌性（reactive hardening） | (a) **Custom Alerts**（ADR-024 能力 B）：租戶用 6 種平台 authored 參數化 recipe 自訂告警、**不寫 PromQL**；向量化編譯器（規則數=shape 數）、portal `RecipeBuilder` + tenant-manager modal 一鍵 commit、page/silent 復用 Sentinel+Inhibit 三態、recipe 生命週期治理（active/deprecated/eol）；(b) **Version-Aware Threshold**（ADR-024 能力 A）：dimensional `version` label 宣告式 cutover；(c) **Tenant Federation**（[ADR-020](adr/020-tenant-federation.md)）：token endpoint + read-path proxy / API gateway（Envoy）+ 2-tier policy + admission validator + 簽章金鑰輪替 + offboarding + kill switch；(d) **寫入平面 single-writer 韌性**（[ADR-023](adr/023-write-plane-single-writer-invariant.md)）：`strategy: Recreate` + 鎖內 fetch base + load-shedding + circuit breaker + SIGTERM SSE 優雅關機 + deploy-time 靜態強制；(e) **平台日誌彙整**（Vector + VictoriaLogs 三階段 + federation chargeback + SIEM fan-out）；(f) **IaC SAST 四層**（hadolint / kube-linter / Vibe wrapper）+ bandit；(g) **reactive silent-failure 硬化**（P0 rule-pack metric-prefix-strip + AST contract test + HA-max + cardinality 確定性）；(h) **try-local 一鍵體驗 + 多架構 image（arm64）+ Portal design-token 遷移 + 多 component 重構** |
+| **v2.10.0 規劃中** | 租戶聯邦深化 × 反應式硬化延續 | 方向見 live milestone [v2.10.0](https://github.com/vencil/Dynamic-Alerting-Integrations/milestone/3)；focus：ADR-020 federation 後續能力 · bench-gate Phase 2 hard-gate 升級（#67）· codename gate Layer 2 `--ci` 升級（#469/#710）· 深水區 defer-with-trigger（QoS write lanes / reconciliation observer-paradox / PromQL AST sandbox，達 trigger 才動） |
 | **長期探索** | 智慧化 × 去耦合 | Anomaly-Aware Threshold、Log-to-Metric Bridge、Multi-Format Export、CRD、ChatOps、Field-level RBAC、Tenant Auto-Discovery |
 
 **完整路線圖與技術規劃見** [design/roadmap-future.md](design/roadmap-future.md) · DX 工具改善見 [dx-tooling-backlog.md](internal/dx-tooling-backlog.md)
