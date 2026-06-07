@@ -240,6 +240,32 @@ func validateProfileReference(value string) string {
 	return ""
 }
 
+// lengthCapViolation enforces the generic key/value length caps shared by
+// patch and filter map validation (the key cap is maxPatchKeyLen for both;
+// the value cap differs per caller). It returns a Violation and true when
+// either cap is exceeded — the caller appends it and skips any further
+// per-key checks for that entry (key cap is checked first, so an oversize
+// key short-circuits before the value is examined). The Violation field path
+// and reason strings are produced HERE so patch and filter validation report
+// caps identically (single source — no drift between the two messages).
+func lengthCapViolation(fieldPrefix, k, v string, maxValueLen int) (Violation, bool) {
+	if len(k) > maxPatchKeyLen {
+		return Violation{
+			Field: fmt.Sprintf("%s[%q]", fieldPrefix, k),
+			Reason: fmt.Sprintf("key length must not exceed %d characters; got %d",
+				maxPatchKeyLen, len(k)),
+		}, true
+	}
+	if len(v) > maxValueLen {
+		return Violation{
+			Field: fmt.Sprintf("%s[%q]", fieldPrefix, k),
+			Reason: fmt.Sprintf("value length must not exceed %d characters; got %d",
+				maxValueLen, len(v)),
+		}, true
+	}
+	return Violation{}, false
+}
+
 // validatePatchMap walks every key/value pair in a patch map and
 // returns Violations for both generic length-cap failures and
 // known-reserved-key value-rule failures. Returns the FULL list,
@@ -251,21 +277,8 @@ func validateProfileReference(value string) string {
 func validatePatchMap(patch map[string]string, fieldPrefix string) []Violation {
 	var violations []Violation
 	for k, v := range patch {
-		if len(k) > maxPatchKeyLen {
-			violations = append(violations, Violation{
-				Field: fmt.Sprintf("%s[%q]", fieldPrefix, k),
-				Reason: fmt.Sprintf("key length must not exceed %d characters; got %d",
-					maxPatchKeyLen, len(k)),
-			})
-			// Don't bother validating the value of a key we already rejected
-			continue
-		}
-		if len(v) > maxPatchValueLen {
-			violations = append(violations, Violation{
-				Field: fmt.Sprintf("%s[%q]", fieldPrefix, k),
-				Reason: fmt.Sprintf("value length must not exceed %d characters; got %d",
-					maxPatchValueLen, len(v)),
-			})
+		if viol, capped := lengthCapViolation(fieldPrefix, k, v, maxPatchValueLen); capped {
+			violations = append(violations, viol)
 			continue
 		}
 		// Reserved-key strict validation (only for keys in the registry).
@@ -295,20 +308,8 @@ const maxFilterValueLen = 1024
 func validateFilterMap(filters map[string]string, fieldPrefix string) []Violation {
 	var violations []Violation
 	for k, v := range filters {
-		if len(k) > maxPatchKeyLen {
-			violations = append(violations, Violation{
-				Field: fmt.Sprintf("%s[%q]", fieldPrefix, k),
-				Reason: fmt.Sprintf("key length must not exceed %d characters; got %d",
-					maxPatchKeyLen, len(k)),
-			})
-			continue
-		}
-		if len(v) > maxFilterValueLen {
-			violations = append(violations, Violation{
-				Field: fmt.Sprintf("%s[%q]", fieldPrefix, k),
-				Reason: fmt.Sprintf("value length must not exceed %d characters; got %d",
-					maxFilterValueLen, len(v)),
-			})
+		if viol, capped := lengthCapViolation(fieldPrefix, k, v, maxFilterValueLen); capped {
+			violations = append(violations, viol)
 		}
 	}
 	return violations
