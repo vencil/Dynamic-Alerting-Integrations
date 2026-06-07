@@ -368,40 +368,54 @@ PROMETHEUS_COMMANDS = {"check-alert", "baseline", "diagnose", "validate",
                        "discover-mappings"}
 
 
+# Usage examples shown after the help text. These command lines are
+# language-agnostic (no translatable prose), so they live in a single
+# source of truth rather than being duplicated per language — the old
+# zh/en branches held byte-identical copies, an unguarded drift risk.
+# NOTE: keep this a tuple of plain strings (not a triple-quoted block):
+# check_cli_coverage.py regex-parses triple-quoted blocks in this file
+# for command coverage, and a """...""" here would put these examples in
+# its scope. The 2-space indent is re-added at print time.
+_USAGE_EXAMPLES = (
+    "da-tools check-alert MariaDBHighConnections db-a --prometheus http://prometheus:9090",
+    "da-tools baseline --tenant db-a --prometheus http://prometheus:9090",
+    "da-tools validate --mapping mapping.csv --prometheus http://prometheus:9090",
+    "da-tools migrate legacy-rules.yml --dry-run --triage",
+    "da-tools scaffold --tenant db-c --db mariadb,redis --non-interactive",
+    "da-tools lint /path/to/custom-rules/ --ci",
+    "da-tools onboard --alertmanager-config alertmanager.yaml --tenant-label organization",
+    "da-tools validate-config --config-dir conf.d/",
+    "da-tools init --ci both --tenants db-a,db-b --rule-packs mariadb,redis",
+)
+
+# Per-language labels/descriptions for the usage footer. Values are
+# tuples (examples_label, env_label, prometheus_url_line, da_lang_line).
+# Keeping the values as tuples — rather than per-language translated
+# string values — keeps this dict out of check_i18n_coverage's
+# language-keyed-string regex, so the i18n badge number stays stable.
+_USAGE_LABELS = {
+    "zh": ("範例:", "環境變數:",
+           "  PROMETHEUS_URL   Prometheus 預設端點 (未指定 --prometheus 時使用)",
+           "  DA_LANG          設定 CLI 語言 (zh/en)"),
+    "en": ("Examples:", "Environment:",
+           "  PROMETHEUS_URL   Default Prometheus endpoint (used when --prometheus is omitted)",
+           "  DA_LANG          Set CLI language (zh/en)"),
+}
+
+
 def print_usage():
     """Print help message in detected language."""
     print(_build_help_text(_LANG))
     print()
-    if _LANG == 'zh':
-        print("範例:")
-        print("  da-tools check-alert MariaDBHighConnections db-a --prometheus http://prometheus:9090")
-        print("  da-tools baseline --tenant db-a --prometheus http://prometheus:9090")
-        print("  da-tools validate --mapping mapping.csv --prometheus http://prometheus:9090")
-        print("  da-tools migrate legacy-rules.yml --dry-run --triage")
-        print("  da-tools scaffold --tenant db-c --db mariadb,redis --non-interactive")
-        print("  da-tools lint /path/to/custom-rules/ --ci")
-        print("  da-tools onboard --alertmanager-config alertmanager.yaml --tenant-label organization")
-        print("  da-tools validate-config --config-dir conf.d/")
-        print("  da-tools init --ci both --tenants db-a,db-b --rule-packs mariadb,redis")
-        print()
-        print("環境變數:")
-        print("  PROMETHEUS_URL   Prometheus 預設端點 (未指定 --prometheus 時使用)")
-        print("  DA_LANG          設定 CLI 語言 (zh/en)")
-    else:
-        print("Examples:")
-        print("  da-tools check-alert MariaDBHighConnections db-a --prometheus http://prometheus:9090")
-        print("  da-tools baseline --tenant db-a --prometheus http://prometheus:9090")
-        print("  da-tools validate --mapping mapping.csv --prometheus http://prometheus:9090")
-        print("  da-tools migrate legacy-rules.yml --dry-run --triage")
-        print("  da-tools scaffold --tenant db-c --db mariadb,redis --non-interactive")
-        print("  da-tools lint /path/to/custom-rules/ --ci")
-        print("  da-tools onboard --alertmanager-config alertmanager.yaml --tenant-label organization")
-        print("  da-tools validate-config --config-dir conf.d/")
-        print("  da-tools init --ci both --tenants db-a,db-b --rule-packs mariadb,redis")
-        print()
-        print("Environment:")
-        print("  PROMETHEUS_URL   Default Prometheus endpoint (used when --prometheus is omitted)")
-        print("  DA_LANG          Set CLI language (zh/en)")
+    examples_label, env_label, env_prom, env_lang = \
+        _USAGE_LABELS["zh"] if _LANG == "zh" else _USAGE_LABELS["en"]
+    print(examples_label)
+    for example in _USAGE_EXAMPLES:
+        print(f"  {example}")
+    print()
+    print(env_label)
+    print(env_prom)
+    print(env_lang)
     sys.exit(0)
 
 
