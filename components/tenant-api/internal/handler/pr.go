@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"encoding/json"
 	"net/http"
 
 	"github.com/vencil/tenant-api/internal/platform"
@@ -67,8 +66,7 @@ func ListPRs(d *Deps) http.HandlerFunc {
 			prs = filterAccessiblePRs(d.RBAC, idpGroups, all)
 		}
 
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(PRListResponse{
+		writeJSON(w, http.StatusOK, PRListResponse{
 			PendingPRs: prs,
 			Count:      len(prs),
 		})

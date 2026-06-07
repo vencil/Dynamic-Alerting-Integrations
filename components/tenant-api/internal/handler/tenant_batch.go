@@ -79,11 +79,11 @@ func BatchTenants(d *Deps) http.HandlerFunc {
 
 		var req BatchRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			WriteJSONError(rw, r,http.StatusBadRequest, "invalid JSON: "+err.Error())
+			WriteJSONError(rw, r, http.StatusBadRequest, "invalid JSON: "+err.Error())
 			return
 		}
 		if len(req.Operations) == 0 {
-			WriteJSONError(rw, r,http.StatusBadRequest, "operations list is empty")
+			WriteJSONError(rw, r, http.StatusBadRequest, "operations list is empty")
 			return
 		}
 
@@ -97,7 +97,7 @@ func BatchTenants(d *Deps) http.HandlerFunc {
 			violations = append(violations, validatePatchMap(op.Patch, fieldPrefix)...)
 		}
 		if len(violations) > 0 {
-			WriteValidationErrors(rw, r,violations)
+			WriteValidationErrors(rw, r, violations)
 			return
 		}
 
@@ -136,8 +136,7 @@ func BatchTenants(d *Deps) http.HandlerFunc {
 			}
 
 			if len(batchOps) == 0 {
-				rw.Header().Set("Content-Type", "application/json")
-				_ = json.NewEncoder(rw).Encode(BatchResponse{
+				writeJSON(rw, http.StatusOK, BatchResponse{
 					Status:  "completed",
 					Results: batchResults,
 					Summary: fmt.Sprintf("%d failed", len(batchResults)),
@@ -169,7 +168,7 @@ func BatchTenants(d *Deps) http.HandlerFunc {
 			}
 			prBody := fmt.Sprintf("**Operator:** %s\n**Source:** tenant-manager UI (batch)\n**Tenants:** %s",
 				email, strings.Join(tenantList, ", "))
-			pr, err := createPRAndRegister(d, 
+			pr, err := createPRAndRegister(d,
 				prTitle, prBody, result.BranchName,
 				[]string{"tenant-api", "auto-generated", "batch"},
 				tenantList,
@@ -182,8 +181,7 @@ func BatchTenants(d *Deps) http.HandlerFunc {
 				return
 			}
 
-			rw.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(rw).Encode(BatchResponse{
+			writeJSON(rw, http.StatusOK, BatchResponse{
 				Status:   "pending_review",
 				PRURL:    pr.WebURL,
 				PRNumber: pr.Number,
@@ -209,9 +207,7 @@ func BatchTenants(d *Deps) http.HandlerFunc {
 				return asyncResults, nil
 			})
 
-			rw.Header().Set("Content-Type", "application/json")
-			rw.WriteHeader(http.StatusAccepted)
-			_ = json.NewEncoder(rw).Encode(map[string]interface{}{
+			writeJSON(rw, http.StatusAccepted, map[string]interface{}{
 				"status":   "pending",
 				"task_id":  task.ID,
 				"poll_url": fmt.Sprintf("/api/v1/tasks/%s", task.ID),
@@ -241,8 +237,7 @@ func BatchTenants(d *Deps) http.HandlerFunc {
 			summary = fmt.Sprintf("%d succeeded, %d failed", successes, failures)
 		}
 
-		rw.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(rw).Encode(BatchResponse{
+		writeJSON(rw, http.StatusOK, BatchResponse{
 			Status:  "completed",
 			TaskID:  taskID,
 			Results: results,

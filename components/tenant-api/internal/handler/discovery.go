@@ -27,7 +27,6 @@ package handler
 // redundant against the abuse vector the global limiter already bounds.
 
 import (
-	"encoding/json"
 	"net/http"
 	"regexp"
 
@@ -120,7 +119,6 @@ func DiscoverMetrics(d *Deps) http.HandlerFunc {
 		}
 
 		resp := DiscoverMetricsResponse{Metrics: names, Truncated: truncated}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(resp)
+		writeJSON(w, http.StatusOK, resp)
 	}
 }

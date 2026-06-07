@@ -2,7 +2,6 @@ package handler
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -61,14 +60,14 @@ func PutTenant(d *Deps) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
 		tenantID := chi.URLParam(r, "id")
 		if err := ValidateTenantID(tenantID); err != nil {
-			WriteJSONError(rw, r,http.StatusBadRequest, err.Error())
+			WriteJSONError(rw, r, http.StatusBadRequest, err.Error())
 			return
 		}
 		email := rbac.RequestEmail(r)
 
 		body, err := io.ReadAll(io.LimitReader(r.Body, d.MaxBody()))
 		if err != nil {
-			WriteJSONError(rw, r,http.StatusBadRequest, "failed to read request body: "+err.Error())
+			WriteJSONError(rw, r, http.StatusBadRequest, "failed to read request body: "+err.Error())
 			return
 		}
 
@@ -76,7 +75,7 @@ func PutTenant(d *Deps) http.HandlerFunc {
 		if d.Policy != nil {
 			patch := extractPatchKeys(body, tenantID)
 			if violations := d.Policy.CheckWrite(tenantID, patch); len(violations) > 0 {
-				writePolicyViolation(rw, r,violations)
+				writePolicyViolation(rw, r, violations)
 				return
 			}
 		}
@@ -160,8 +159,7 @@ func PutTenant(d *Deps) http.HandlerFunc {
 				return
 			}
 
-			rw.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(rw).Encode(PutTenantResponse{
+			writeJSON(rw, http.StatusOK, PutTenantResponse{
 				Status:   "pending_review",
 				TenantID: tenantID,
 				PRURL:    pr.WebURL,
@@ -178,15 +176,14 @@ func PutTenant(d *Deps) http.HandlerFunc {
 				return
 			}
 			if errors.Is(err, gitops.ErrConflict) {
-				WriteJSONError(rw, r,http.StatusConflict, err.Error())
+				WriteJSONError(rw, r, http.StatusConflict, err.Error())
 				return
 			}
-			WriteJSONError(rw, r,http.StatusBadRequest, err.Error())
+			WriteJSONError(rw, r, http.StatusBadRequest, err.Error())
 			return
 		}
 
-		rw.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(rw).Encode(PutTenantResponse{
+		writeJSON(rw, http.StatusOK, PutTenantResponse{
 			Status:   "ok",
 			TenantID: tenantID,
 		})

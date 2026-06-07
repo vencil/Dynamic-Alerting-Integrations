@@ -19,7 +19,6 @@ package handler
 // parity test in tests/golden/ + tenant_effective_test.go.
 
 import (
-	"encoding/json"
 	"errors"
 	"net/http"
 
@@ -48,21 +47,20 @@ func GetTenantEffective(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		tenantID := chi.URLParam(r, "id")
 		if err := ValidateTenantID(tenantID); err != nil {
-			WriteJSONError(w, r,http.StatusBadRequest, err.Error())
+			WriteJSONError(w, r, http.StatusBadRequest, err.Error())
 			return
 		}
 
 		ec, err := cfg.ResolveEffective(d.ConfigDir, tenantID)
 		if err != nil {
 			if errors.Is(err, cfg.ErrTenantNotFound) {
-				WriteJSONError(w, r,http.StatusNotFound, "tenant not found: "+tenantID)
+				WriteJSONError(w, r, http.StatusNotFound, "tenant not found: "+tenantID)
 				return
 			}
-			WriteJSONError(w, r,http.StatusInternalServerError, err.Error())
+			WriteJSONError(w, r, http.StatusInternalServerError, err.Error())
 			return
 		}
 
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(ec)
+		writeJSON(w, http.StatusOK, ec)
 	}
 }

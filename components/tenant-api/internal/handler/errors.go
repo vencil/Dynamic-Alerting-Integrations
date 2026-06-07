@@ -77,14 +77,14 @@ const (
 // pr_number, hint, etc.) — those are inlined at the top level of
 // the JSON output, NOT under an "extra" key.
 type ErrorResponse struct {
-	Error       string              `json:"error"`
-	Code        string              `json:"code,omitempty"`
-	RequestID   string              `json:"request_id,omitempty"`
-	Violations  []Violation         `json:"violations,omitempty"`
-	PolicyV     []policy.Violation  `json:"-"` // marshaled into "violations" key when set
-	RetryAfterS int                 `json:"retry_after_s,omitempty"`
-	Help        string              `json:"help,omitempty"`
-	Action      string              `json:"action,omitempty"`
+	Error       string             `json:"error"`
+	Code        string             `json:"code,omitempty"`
+	RequestID   string             `json:"request_id,omitempty"`
+	Violations  []Violation        `json:"violations,omitempty"`
+	PolicyV     []policy.Violation `json:"-"` // marshaled into "violations" key when set
+	RetryAfterS int                `json:"retry_after_s,omitempty"`
+	Help        string             `json:"help,omitempty"`
+	Action      string             `json:"action,omitempty"`
 
 	// Extra carries per-error custom fields (existing_pr_url,
 	// pr_number, hint, etc.). Inlined at the top level via the
@@ -129,6 +129,20 @@ func (e ErrorResponse) MarshalJSON() ([]byte, error) {
 	return json.Marshal(out)
 }
 
+// writeJSON writes v as a JSON response with the given status code, centralizing
+// the Content-Type + WriteHeader + Encode boilerplate that every success handler
+// (and the error envelope below) repeated. The Encode error is intentionally
+// ignored: the status line and headers are already committed by the time Encode
+// can fail mid-stream, so there's nothing actionable to do — matching the prior
+// per-handler `_ =` discards. Callers that previously relied on the implicit 200
+// (Content-Type + Encode, no WriteHeader) pass http.StatusOK explicitly, which is
+// behaviorally identical (the first Encode write would have sent 200 anyway).
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(v)
+}
+
 // WriteErrorEnvelope is the canonical error response writer. All
 // other helpers in this file funnel through here.
 //
@@ -138,9 +152,7 @@ func WriteErrorEnvelope(w http.ResponseWriter, r *http.Request, status int, env 
 	if env.RequestID == "" && r != nil {
 		env.RequestID = middleware.GetReqID(r.Context())
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(env)
+	writeJSON(w, status, env)
 }
 
 // WriteJSONError emits a simple error envelope: {error, code,
