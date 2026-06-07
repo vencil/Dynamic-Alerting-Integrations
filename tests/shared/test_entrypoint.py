@@ -221,6 +221,16 @@ class TestConfigureStdUtf8:
         monkeypatch.setattr(sys, "stderr", _Boom())
         entrypoint._configure_std_utf8()  # 不應 raise
 
+    def test_swallows_reconfigure_attribute_error(self, monkeypatch):
+        """reconfigure 拋 AttributeError 時被吞掉（補滿 (AttributeError, OSError) tuple）。"""
+        class _AttrBoom:
+            def reconfigure(self, **kw):
+                raise AttributeError("unexpected")
+
+        monkeypatch.setattr(sys, "stdout", _AttrBoom())
+        monkeypatch.setattr(sys, "stderr", _AttrBoom())
+        entrypoint._configure_std_utf8()  # 不應 raise
+
 
 # ── run_tool error handling ────────────────────────────────────────
 
