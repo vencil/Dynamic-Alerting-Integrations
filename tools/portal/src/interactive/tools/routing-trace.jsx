@@ -5,9 +5,21 @@ audience: [platform-engineer, sre]
 version: v2.7.0
 lang: en
 related: [alert-builder, alert-simulator, master-onboarding, cicd-setup-wizard, deployment-wizard]
+dependencies: [
+  "routing-trace/routing.js"
+]
 ---
 
 import React, { useState, useMemo } from 'react';
+
+// PR-portal-18: 4-layer route-resolution algorithm + validators + step gate
+// extracted to a unit-testable module (was inline + 0%-covered, despite being
+// the correctness-critical core of the tool).
+import {
+  isValidAlertName,
+  computeTrace,
+  canAdvance,
+} from './routing-trace/routing.js';
 
 const t = window.__t || ((zh, en) => en);
 
@@ -48,128 +60,6 @@ const SEVERITY_OPTIONS = [
 ];
 
 const PRESET_RECEIVERS = ['default-pager', 'team-platform', 'team-database', 'team-frontend', 'noisy-channel'];
-
-/* ── Validation helpers ────────────────────────────────────────────── */
-const ALERT_NAME_RE = /^[A-Za-z][A-Za-z0-9_]*$/;
-const LABEL_KEY_RE = /^[a-z][a-z0-9_]*$/;
-
-function isValidAlertName(s) {
-  return typeof s === 'string' && ALERT_NAME_RE.test(s);
-}
-function isValidLabelKey(s) {
-  return typeof s === 'string' && LABEL_KEY_RE.test(s);
-}
-
-/* ── Routing trace algorithm ───────────────────────────────────────
- *
- * Walks child routes top-to-bottom; first whose match labels are ALL
- * satisfied by the alert labels wins. If none match, the default
- * route's receiver is used.
- *
- * Returns trace: { matchedRoute, receiver, reasons[] }
- *   - matchedRoute: child route index (0-based) that won, or null if
- *     fell through to default
- *   - receiver: the receiver string
- *   - reasons: ordered list of human-readable trace lines
- * ────────────────────────────────────────────────────────────────── */
-// Note: NOT exported — Babel-standalone in jsx-loader only supports
-// `export default`; named exports compile to `exports.x = ...` which
-// fails at runtime with `exports is not defined` (caught locally
-// reproducing PR #182 first-CI-run failure). Kept module-scope so
-// the component closure can reach it.
-function computeTrace({ alert, defaultRoute, childRoutes }) {
-  const alertLabels = {
-    alertname: alert.alertname || '(blank)',
-    severity: alert.severity || 'warning',
-    ...(alert.labels || {}),
-  };
-  const reasons = [];
-  reasons.push(
-    t(
-      `Alert: { alertname=${alertLabels.alertname}, severity=${alertLabels.severity}${
-        Object.entries(alert.labels || {})
-          .filter(([k, v]) => k && v)
-          .map(([k, v]) => `, ${k}=${v}`)
-          .join('')
-      } }`,
-      `Alert: { alertname=${alertLabels.alertname}, severity=${alertLabels.severity}${
-        Object.entries(alert.labels || {})
-          .filter(([k, v]) => k && v)
-          .map(([k, v]) => `, ${k}=${v}`)
-          .join('')
-      } }`
-    )
-  );
-
-  for (let i = 0; i < (childRoutes || []).length; i++) {
-    const r = childRoutes[i];
-    const match = r.match || {};
-    const matchEntries = Object.entries(match).filter(([k, v]) => k && v);
-    if (matchEntries.length === 0) {
-      reasons.push(
-        t(
-          `Child route ${i + 1}: skipped (no match labels)`,
-          `Child route ${i + 1}: skipped (no match labels)`
-        )
-      );
-      continue;
-    }
-    const failed = matchEntries.find(([k, v]) => alertLabels[k] !== v);
-    if (failed) {
-      const [k, v] = failed;
-      reasons.push(
-        t(
-          `Child route ${i + 1}: NO MATCH (${k}=${v} ≠ ${alertLabels[k] ?? '(missing)'})`,
-          `Child route ${i + 1}: NO MATCH (${k}=${v} ≠ ${alertLabels[k] ?? '(missing)'})`
-        )
-      );
-      continue;
-    }
-    reasons.push(
-      t(
-        `Child route ${i + 1}: MATCH — all of { ${matchEntries.map(([k, v]) => `${k}=${v}`).join(', ')} } satisfied → receiver: ${r.receiver || '(blank)'}`,
-        `Child route ${i + 1}: MATCH — all of { ${matchEntries.map(([k, v]) => `${k}=${v}`).join(', ')} } satisfied → receiver: ${r.receiver || '(blank)'}`
-      )
-    );
-    return {
-      matchedRoute: i,
-      receiver: r.receiver || '(blank)',
-      reasons,
-    };
-  }
-
-  reasons.push(
-    t(
-      `No child route matched → fall through to default receiver: ${defaultRoute.receiver || '(blank)'}`,
-      `No child route matched → fall through to default receiver: ${defaultRoute.receiver || '(blank)'}`
-    )
-  );
-  return {
-    matchedRoute: null,
-    receiver: defaultRoute.receiver || '(blank)',
-    reasons,
-  };
-}
-
-/* ── Step navigation gate ─────────────────────────────────────────── */
-function canAdvance(step, state) {
-  switch (step) {
-    case 0:
-      return isValidAlertName(state.alert.alertname);
-    case 1:
-      return state.defaultRoute.receiver.trim() !== '';
-    case 2:
-      // Child routes are optional — fall-through to default is valid.
-      // Just check that any added route has both match + receiver.
-      return (state.childRoutes || []).every(
-        (r) =>
-          r.receiver.trim() !== '' &&
-          Object.entries(r.match || {}).filter(([k, v]) => k && v).length > 0
-      );
-    default:
-      return true;
-  }
-}
 
 /* ── Reusable input field ─────────────────────────────────────────── */
 function Field({ label, hint, error, children }) {
