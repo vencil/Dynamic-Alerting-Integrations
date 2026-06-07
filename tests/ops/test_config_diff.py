@@ -189,6 +189,51 @@ class TestRenderMarkdown:
         assert cd._format_value(50) == "50"
         assert cd._format_value({"schedule": []}) == "(scheduled)"
 
+    def test_with_profile_changes(self):
+        """The '## Profile Changes' section renders all three pd shapes:
+        a modified profile with a key-diff table and >10 affected tenants
+        (truncation), an added profile, and a profile with no key diffs.
+        """
+        profile_diffs = [
+            {
+                "profile": "mysql-prod",
+                "change": "modified",
+                "affected_count": 12,
+                "affected_tenants": [f"t{i}" for i in range(12)],
+                "key_diffs": [
+                    {"key": "mysql_connections", "old": 80, "new": 50,
+                     "change": "tighter"},
+                ],
+            },
+            {
+                "profile": "redis-new",
+                "change": "added",
+                "affected_count": 1,
+                "affected_tenants": ["t-redis"],
+                "key_diffs": [],
+            },
+            {
+                "profile": "empty-prof",
+                "change": "modified",
+                "affected_count": 0,
+                "affected_tenants": [],
+                "key_diffs": [],
+            },
+        ]
+        md = cd.render_markdown({}, "old", "new", profile_diffs=profile_diffs)
+
+        assert "## Profile Changes" in md
+        # modified profile: header + truncated tenant list + key-diff table
+        assert "Profile: mysql-prod (modified) — 12 tenant(s) affected" in md
+        assert "(+2 more)" in md          # 12 affected, first 10 shown
+        assert "Tenants:" in md
+        assert "| mysql_connections |" in md
+        assert "tighter" in md
+        # added profile with no key diffs → "New profile with N keys" line
+        assert "New profile with 0 keys" in md
+        # third profile (modified, no key diffs, no tenants) still renders
+        assert "empty-prof" in md
+
 
 # ── 7. CLI ───────────────────────────────────────────────────────────
 
