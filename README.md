@@ -180,28 +180,10 @@ make setup && make verify && make test-alert
 
 ## 部署層級
 
-### Tier 1：Git-Native（GitOps 優先）
+兩種管理模型，可漸進升級（共用同一份 YAML 真相、Tier 2 是 Tier 1 之上的管理平面而非替代）：
 
-100% Git 可追蹤的純 YAML 工作流。租戶配置 → `da-tools validate-config` 本地驗證 → git commit → ArgoCD/Flux 自動部署 → SHA-256 hot-reload 秒級生效。
-
-適用：GitOps-native 團隊、配置變更頻率低中等、租戶熟悉 YAML。
-
-### Tier 2：Portal + API（UI 管理）
-
-Tier 1 的全部，加上 REST API 管理平面（RBAC）、da-portal UI（配置瀏覽、變更預覽、批量操作）、OAuth2 認證。API 不可用時 Portal 自動降級為唯讀，不影響 GitOps 工作流。
-
-適用：大量租戶（20+）、高頻閾值調整、需要 UI 自助或 REST API 自動化、合規審計需求。
-
-### 工作流對比
-
-| 流程 | Tier 1（Git-Native） | Tier 2（Portal + API） |
-|------|---------------------|------------------------|
-| 新租戶導入 | `scaffold` → git commit → deploy（分鐘） | UI 點選 → API → git commit → deploy（分鐘） |
-| 閾值調整 | 編輯 YAML → commit → hot-reload（秒） | UI 編輯 → Save → hot-reload（秒） |
-| 批量變更 | 指令碼 / `patch_config` | Portal 多選 → 批量編輯 → 單鍵提交 |
-| 變更審計 | git blame + log | git log + API audit trail |
-| RBAC | Git 層（branch protection） | API 層（OIDC + 細粒度權限） |
-| 降級機制 | N/A | Portal 轉唯讀，YAML 工作流不中斷 |
+- **Tier 1 — Git-Native（GitOps 優先）**：100% 純 YAML、Git 全可追蹤。validate-config → commit → ArgoCD/Flux → SHA-256 hot-reload 秒級生效。適合 GitOps-native 團隊、租戶熟 YAML。
+- **Tier 2 — Portal + API（UI 管理）**：Tier 1 全部 + REST API（RBAC）+ da-portal UI（瀏覽 / 預覽 / 批量）+ OAuth2；API 不可用時 Portal 自動降級唯讀、GitOps 工作流不中斷。適合大量租戶（20+）、高頻調整、需 UI 自助或合規審計。
 
 ---
 
@@ -224,50 +206,23 @@ O(M) 複雜度（`group_left` 向量匹配）· 15 個 Rule Pack Projected Volum
 
 ### 工具鏈（da-tools CLI）
 
-| 類別 | 工具 |
-|------|------|
-| 租戶生命週期 | `scaffold` 配置產生 · `onboard` 環境分析 · `migrate-rule` AST 遷移 · `validate-migration` 雙軌驗證 · `cutover` 切換 · `offboard` 下架 |
-| 日常運維 | `diagnose` 健康檢查 · `patch-config` 安全更新 · `check-alert` 警報狀態 · `maintenance-scheduler` 排程維護 · `explain-route` 路由偵錯 |
-| 品質治理 | `validate-config` 一站式驗證 · `alert-quality` 品質評分 · Policy-as-Code · `cardinality-forecast` 趨勢預測 · `backtest-threshold` 歷史回測 |
-| 配置繼承 (v2.7.0) | `describe-tenant` 展示 defaults chain + merged config（含 `--what-if` 模擬 `_defaults.yaml` 變動 / `--show-sources` / `--diff`）· `migrate-conf-d` 扁平 → 階層 automated migration（`--dry-run` 預設 / `--apply` 執行 `git mv` 保留 history） |
-| 客戶導入管線 (v2.8.0) | `da-parser` PromRule → JSON parser（dialect 偵測 + VM-only 函數 allowlist + strict-PromQL 相容性檢查 + provenance header）· `da-tools profile build` cluster + Profile-as-Directory-Default 萃取（[ADR-018](docs/adr/018-profile-as-directory-default.md)，median-based defaults）· `da-batchpr apply` Hierarchy-Aware Batch PR 開單（Base Infrastructure PR 先 / 個別 tenant PR 標 `Blocked by:`）· `da-batchpr refresh --base-merged` Base PR merge 後自動 rebase tenant PRs · `da-batchpr refresh --source-rule-ids` parser 修 bug 後 data-layer hot-fix 細粒度重生 · `da-guard` Dangling Defaults Guard（schema / routing / cardinality / redundant-override 四層檢查；CI workflow 在 PR comment 貼 sticky 報告） |
-| 採用加速 | `init` 專案骨架 · `config-history` 快照追蹤 · `gitops-check` GitOps 驗證 · `demo-showcase` 展演腳本 |
+涵蓋租戶**生命週期**（scaffold / onboard / migrate-rule / cutover / offboard）、**日常運維**（diagnose / patch-config / explain-route）、**品質治理**（validate-config / alert-quality / Policy-as-Code）、與**客戶導入管線**（da-parser → profile build → da-batchpr → da-guard）。全部封裝在 `ghcr.io/vencil/da-tools` 容器。
 
-所有工具封裝在 `da-tools` 容器（`docker run --rm ghcr.io/vencil/da-tools`）。完整 CLI 參考：[da-tools CLI](docs/cli-reference.md) · [速查表](docs/cheat-sheet.md) · [互動工具索引](docs/interactive-tools.md)
+完整命令、旗標與範例 → [CLI 參考](docs/cli-reference.md) · [速查表](docs/cheat-sheet.md) · [互動工具索引](docs/interactive-tools.md)
 
-### 客戶導入：Migration Toolkit (v2.8.0)
+### 客戶導入：Migration Toolkit
 
-把客戶現有的 PromRule corpus 導入到本平台的 `conf.d/` Profile-as-Directory-Default 架構，串接：
+把客戶現有 PromRule corpus 全自動導入本平台 `conf.d/`（`da-parser → profile build → da-batchpr → da-guard`），並以 **Docker / static binary / air-gapped tar 三條交付路徑**（皆 cosign keyless 簽 + SBOM）覆蓋從外網到金融/政府/軍工封閉網路的全光譜環境。
 
-```
-PromRule corpus → da-parser → da-tools profile build → da-batchpr apply → da-guard → conf.d/
-```
-
-`tools/v2.8.0` 起以 **三條交付路徑** 隨 GitHub Release 出貨（每路徑都附 cosign keyless 簽章 + SBOM SPDX/CycloneDX）：
-
-- **Docker pull** `ghcr.io/vencil/da-tools:v<tag>`（最常見；外網可達客戶）
-- **Static binary** linux/darwin/windows × amd64/arm64 共 6 組合 cross-compile（Pre-commit / GitHub Actions 用）
-- **Air-gapped tar** `docker save` export，金融/政府/軍工封閉網路用
-
-完整安裝路徑與簽章驗證流程：[Migration Toolkit Installation](docs/migration-toolkit-installation.md) · 客戶 helper 一鍵驗 release：`make verify-release VERSION=tools/v2.8.0`
+完整安裝與簽章驗證 → [Migration Toolkit Installation](docs/migration-toolkit-installation.md)
 
 ---
 
 ## 關鍵設計決策
 
-| 決策 | 說明 | ADR |
-|------|------|-----|
-| O(M) 規則複雜度 | `group_left` 向量匹配，規則數只與 metric 種類相關 | — |
-| TSDB 完整性優先 | Severity Dedup 在 Alertmanager inhibit 層，TSDB 保有完整紀錄 | [ADR-001](docs/adr/001-severity-dedup-via-inhibit.md) |
-| Projected Volume 隔離 | 15 個 Rule Pack ConfigMap 獨立部署，零 PR 衝突 | [ADR-005](docs/adr/005-projected-volume-for-rule-packs.md) |
-| Config-Driven 全鏈路 | 閾值 → 路由 → 通知 → 行為控制，全部 YAML 驅動 | — |
-| 四層路由合併 | defaults → profile → tenant → enforced + 域策略約束 | [ADR-007](docs/adr/007-cross-domain-routing-profiles.md) |
-| conf.d/ 階層目錄（v2.7.0）| `conf.d/<domain>/<region>/<tenant>.yaml` 多層路徑，扁平與階層平滑共存 | [ADR-016](docs/adr/016-conf-d-directory-hierarchy-mixed-mode.md) |
-| `_defaults.yaml` 繼承 + Dual-Hash 熱重載（v2.7.0）| L0→L1→L2→L3 深合併 + null-as-delete + `source_hash`/`merged_hash` 精確 reload + 300ms debounce | [ADR-017](docs/adr/017-defaults-yaml-inheritance-dual-hash.md) |
-| Profile-as-Directory-Default（v2.8.0）| Cluster 共通閾值寫 `_defaults.yaml`（cluster median）, 偏離者寫 `<id>.yaml` 只含 override；禁止 50 份 tenant.yaml 拷貝（GitOps 反模式）| [ADR-018](docs/adr/018-profile-as-directory-default.md) |
-| 安全護欄內建 | Webhook Domain Allowlist · Schema Validation · Cardinality Guard · Dangling Defaults Guard（v2.8.0, [`da-guard`](docs/migration-toolkit-installation.md)）| — |
+上述每項能力的取捨——為什麼這樣設計、後果、以及**否決了哪些替代方案**——都以 ADR 記錄（附狀態與引入版本）。這是評估本平台可維護性與長期方向的依據。
 
-完整 ADR 索引：[docs/adr/](docs/adr/README.md)
+完整 ADR 索引 → [architecture-and-design.md §ADR 索引](docs/architecture-and-design.md#6-adr-索引-architecture-decision-records)
 
 ---
 

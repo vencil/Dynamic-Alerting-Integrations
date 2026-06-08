@@ -180,28 +180,10 @@ All paths support [OCI Registry installation](components/threshold-exporter/READ
 
 ## Deployment Tiers
 
-### Tier 1: Git-Native (Pure GitOps)
+Two management models, incrementally upgradable (both share one YAML source of truth; Tier 2 is a management plane on top of Tier 1, not a replacement):
 
-Fully Git-tracked YAML workflow. Tenant config → `da-tools validate-config` local validation → git commit → ArgoCD/Flux auto-deploy → SHA-256 hot-reload in seconds.
-
-Best for: GitOps-native teams, low-to-moderate config change frequency, YAML-comfortable tenants.
-
-### Tier 2: Portal + API (UI Management)
-
-Everything in Tier 1, plus a REST API management plane (RBAC), da-portal UI (config browser, change preview, bulk operations), and OAuth2 authentication. Portal auto-degrades to read-only if API is unavailable — GitOps workflow unaffected.
-
-Best for: Large tenant populations (20+), high-frequency threshold adjustments, UI self-service or REST API automation needs, compliance audit requirements.
-
-### Workflow Comparison
-
-| Process | Tier 1 (Git-Native) | Tier 2 (Portal + API) |
-|---------|--------------------|-----------------------|
-| New tenant onboarding | `scaffold` → git commit → deploy (minutes) | UI click → API → git commit → deploy (minutes) |
-| Threshold adjustment | Edit YAML → commit → hot-reload (seconds) | UI edit → Save → hot-reload (seconds) |
-| Bulk changes | Script / `patch_config` | Portal multi-select → bulk edit → one-click submit |
-| Change audit | git blame + log | git log + API audit trail |
-| RBAC | Git layer (branch protection) | API layer (OIDC + fine-grained permissions) |
-| Degradation | N/A | Portal read-only, YAML workflow unaffected |
+- **Tier 1 — Git-Native (Pure GitOps)**: 100% pure YAML, fully Git-tracked. validate-config → commit → ArgoCD/Flux → SHA-256 hot-reload in seconds. Best for GitOps-native teams, YAML-comfortable tenants.
+- **Tier 2 — Portal + API (UI Management)**: everything in Tier 1 + REST API (RBAC) + da-portal UI (browse / preview / bulk) + OAuth2; Portal auto-degrades to read-only if the API is down, GitOps workflow unaffected. Best for large tenant populations (20+), high-frequency adjustments, UI self-service or compliance audit.
 
 ---
 
@@ -224,50 +206,23 @@ Tri-state mode (Normal / Silent / Maintenance with `expires` auto-expiry) · Fou
 
 ### Toolchain (da-tools CLI)
 
-| Category | Tools |
-|----------|-------|
-| Tenant lifecycle | `scaffold` config generation · `onboard` environment analysis · `migrate-rule` AST migration · `validate-migration` dual-track verification · `cutover` switch · `offboard` removal |
-| Day-to-day ops | `diagnose` health check · `patch-config` safe updates · `check-alert` alert status · `maintenance-scheduler` scheduled silence · `explain-route` routing debugger |
-| Quality governance | `validate-config` all-in-one validation · `alert-quality` quality scoring · Policy-as-Code · `cardinality-forecast` trend prediction · `backtest-threshold` historical replay |
-| Config inheritance (v2.7.0) | `describe-tenant` shows defaults chain + merged config (with `--what-if` simulation / `--show-sources` / `--diff`) · `migrate-conf-d` automated flat → hierarchy migration (`--dry-run` default / `--apply` executes `git mv` preserving history) |
-| Customer onboarding pipeline (v2.8.0) | `da-parser` PromRule → JSON parser (dialect detection + VM-only function allowlist + strict-PromQL compatibility check + provenance header) · `da-tools profile build` cluster + Profile-as-Directory-Default extraction ([ADR-018](docs/adr/018-profile-as-directory-default.en.md), median-based defaults) · `da-batchpr apply` Hierarchy-Aware Batch PR creation (Base Infrastructure PR first / per-tenant PRs marked `Blocked by:`) · `da-batchpr refresh --base-merged` auto-rebase tenant PRs after Base merge · `da-batchpr refresh --source-rule-ids` parser-bug data-layer hot-fix granular regen · `da-guard` Dangling Defaults Guard (schema / routing / cardinality / redundant-override 4-layer check; CI workflow posts sticky PR comment) |
-| Adoption acceleration | `init` project scaffold · `config-history` snapshot tracking · `gitops-check` GitOps validation · `demo-showcase` demo script |
+Covers tenant **lifecycle** (scaffold / onboard / migrate-rule / cutover / offboard), **day-to-day ops** (diagnose / patch-config / explain-route), **quality governance** (validate-config / alert-quality / Policy-as-Code), and the **customer onboarding pipeline** (da-parser → profile build → da-batchpr → da-guard). All packaged in the `ghcr.io/vencil/da-tools` container.
 
-All tools packaged in `da-tools` container (`docker run --rm ghcr.io/vencil/da-tools`). Full CLI reference: [da-tools CLI](docs/cli-reference.en.md) · [Cheat Sheet](docs/cheat-sheet.en.md) · [Interactive Tools Index](docs/interactive-tools.md)
+Full commands, flags & examples → [CLI Reference](docs/cli-reference.en.md) · [Cheat Sheet](docs/cheat-sheet.en.md) · [Interactive Tools Index](docs/interactive-tools.md)
 
-### Customer Onboarding: Migration Toolkit (v2.8.0)
+### Customer Onboarding: Migration Toolkit
 
-To migrate a customer's existing PromRule corpus into this platform's `conf.d/` Profile-as-Directory-Default architecture, the pipeline chains:
+Migrates a customer's existing PromRule corpus fully-automatically into this platform's `conf.d/` (`da-parser → profile build → da-batchpr → da-guard`), shipping via **three delivery paths — Docker / static binary / air-gapped tar** (all cosign keyless signed + SBOM) covering the full spectrum from internet-connected to isolated finance / government / defense networks.
 
-```
-PromRule corpus → da-parser → da-tools profile build → da-batchpr apply → da-guard → conf.d/
-```
-
-Starting from `tools/v2.8.0`, **three delivery paths** ship with each GitHub Release (every path includes cosign keyless signing + SBOM in SPDX/CycloneDX):
-
-- **Docker pull** `ghcr.io/vencil/da-tools:v<tag>` (most common; customers with internet)
-- **Static binary** linux/darwin/windows × amd64/arm64 — 6 cross-compile targets (Pre-commit / GitHub Actions use)
-- **Air-gapped tar** `docker save` export, for customers in isolated networks (finance / government / defense)
-
-Full installation paths and signature verification flow: [Migration Toolkit Installation](docs/migration-toolkit-installation.en.md) · One-shot customer helper: `make verify-release VERSION=tools/v2.8.0`
+Full installation & signature verification → [Migration Toolkit Installation](docs/migration-toolkit-installation.en.md)
 
 ---
 
 ## Key Design Decisions
 
-| Decision | Rationale | ADR |
-|----------|-----------|-----|
-| O(M) Rule Complexity | `group_left` vector matching — rule count depends only on metric types | — |
-| TSDB Completeness First | Severity Dedup at Alertmanager inhibit layer — TSDB retains full records | [ADR-001](docs/adr/001-severity-dedup-via-inhibit.en.md) |
-| Projected Volume Isolation | 15 independent Rule Pack ConfigMaps, zero PR conflicts | [ADR-005](docs/adr/005-projected-volume-for-rule-packs.en.md) |
-| Config-Driven Full Chain | Thresholds → routing → notifications → behavior control, all YAML-driven | — |
-| Four-Layer Routing Merge | defaults → profile → tenant → enforced + domain policy constraints | [ADR-007](docs/adr/007-cross-domain-routing-profiles.en.md) |
-| conf.d/ Hierarchical Directory (v2.7.0) | `conf.d/<domain>/<region>/<tenant>.yaml` multi-layer paths; flat and hierarchical layouts coexist | [ADR-016](docs/adr/016-conf-d-directory-hierarchy-mixed-mode.en.md) |
-| `_defaults.yaml` Inheritance + Dual-Hash Hot-Reload (v2.7.0) | L0→L1→L2→L3 deep merge + null-as-delete + `source_hash`/`merged_hash` precise reload + 300ms debounce | [ADR-017](docs/adr/017-defaults-yaml-inheritance-dual-hash.en.md) |
-| Profile-as-Directory-Default (v2.8.0) | Cluster shared thresholds go in `_defaults.yaml` (cluster median); only deviating tenants write `<id>.yaml` containing override-only keys; rejects 50-tenant.yaml-copy GitOps anti-pattern | [ADR-018](docs/adr/018-profile-as-directory-default.en.md) |
-| Security Guardrails Built-in | Webhook Domain Allowlist · Schema Validation · Cardinality Guard · Dangling Defaults Guard (v2.8.0, [`da-guard`](docs/migration-toolkit-installation.en.md)) | — |
+Every trade-off behind the capabilities above — why it's designed this way, the consequences, and **which alternatives were rejected** — is recorded as an ADR (each with status & introduced version). This is the basis for assessing the platform's maintainability and long-term direction.
 
-Full ADR index: [docs/adr/](docs/adr/README.en.md)
+Full ADR index → [architecture-and-design.en.md §ADR Index](docs/architecture-and-design.en.md#6-adr-index-architecture-decision-records)
 
 ---
 
