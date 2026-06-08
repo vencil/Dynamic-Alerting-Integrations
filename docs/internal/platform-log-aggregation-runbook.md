@@ -2,7 +2,7 @@
 title: "Platform Log Aggregation Runbook"
 tags: [internal, runbook, observability, federation, logs]
 audience: [platform-engineer, sre]
-version: v2.8.1
+version: v2.9.0
 lang: zh
 ---
 

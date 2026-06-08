@@ -2,7 +2,7 @@
 title: "ADR-022: tenant-api Dev-Auth Bypass — Local-Dev Identity Substitute, Four-Layer Containment"
 tags: [adr, tenant-api, security, developer-experience, try-local]
 audience: [platform-engineers, contributors]
-version: v2.8.1
+version: v2.9.0
 lang: zh
 id: ADR-022
 tracking_kind: adr

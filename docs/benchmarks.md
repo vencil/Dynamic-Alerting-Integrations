@@ -2,7 +2,7 @@
 title: "性能基準 (Performance Benchmarks)"
 tags: [performance, benchmarks]
 audience: [platform-engineer, sre]
-version: v2.8.1
+version: v2.9.0
 lang: zh
 ---
 # 性能基準 (Performance Benchmarks)
@@ -37,6 +37,7 @@ lang: zh
 | **v2.5.0** | Multi-tenant Grouping + Saved Views (API layer，per-tenant perf 不變) | — |
 | **v2.7.0** | **Hierarchical scan + dual-hash + populateHierarchyState** ([ADR-016](adr/016-conf-d-directory-hierarchy-mixed-mode.md) / [ADR-017](adr/017-defaults-yaml-inheritance-dual-hash.md)) | **1000-tenant cold 112 ms; steady reload 86× cheaper than cold** |
 | **v2.8.0** | **5-anchor e2e fire-through harness + bench-gate-pr Tier 1 CI + 60-min readiness soak** | 1000/5000-tenant SLO baseline; per-PR statistical regression gate |
+| **v2.9.0** | **Custom Alerts 向量化編譯 + exporter/loader 重構（behavior-preserving）** | 核心 scale 無回歸（同機控制確認）；租戶自訂告警 = O(告警種類) 非 O(租戶數) |
 
 **遷移影響**：v2.2.0 → v2.8.0 的 conf.d/ schema 向後相容。Flat layout 直接 work，hierarchical layout 為 opt-in（放 `_defaults.yaml` 在子目錄即自動啟用）。客戶不需重寫 tenant YAML。
 
@@ -66,6 +67,17 @@ lang: zh
 | Redis | ✗ no exporter | 7 | 0.41 ms (空向量) |
 | Elasticsearch | ✗ no exporter | 7 | 1.75 ms (空向量，但 PromQL 較複雜) |
 
+### 租戶自訂告警如何 scale（v2.9.0 Custom Alerts）
+
+平台 Rule Pack 的 O(M) 保證對「平台 authored 規則」成立。**租戶自訂告警**（Custom Alerts，v2.9.0）走另一條成本路徑、同樣刻意守住規模：
+
+- **新增一種自訂告警 = 1 條跨租戶共用規則**，不是每租戶一條。向量化編譯把「同一指標、同一 recipe、同一參數形狀」的所有租戶宣告，編成**單一**規則（規則數 = 不同的「告警形狀」數，不乘租戶數）。
+- **成本誠實**：這條保證**只對「同指標共用」成立** —— 不同指標必然產生不同規則，所以規則數隨**自訂告警的種類**增長、不隨租戶數。由 per-tenant 上限（`max_custom_recipes`，預設 20）封頂，防單一租戶灌爆。
+- **給租戶**：你寫 YAML recipe、不碰 PromQL，告警秒級生效，且不會因為你新增告警而拖慢整個平台。
+- **給 Platform Engineer**：規則總數 = O(告警種類)，非 O(租戶數 × 告警種類)；容量規劃對「自訂告警種類數」估算，per-tenant 上限 + 全域 rule-count budget（規劃中）為護欄。
+
+詳 [ADR-024 §向量化編譯](adr/024-version-aware-threshold-via-dimensional-label.md)。
+
 ---
 
 ## 3. v2.8.0 Scale Gate — 1000-tenant 實測
@@ -82,6 +94,8 @@ lang: zh
 | **Raw scan** (`ScanDirFileHashes` + mtime guard) | 128 µs | 1.30 ms | mtime guard 4.6× speedup vs no-guard |
 
 **Steady-state 是 cold load 的 86× 便宜** — v2.7.0 hierarchical + dual-hash + mtime guard 三層優化的 combined effect。
+
+> **v2.9.0 無回歸（同機控制）**：本版 exporter/loader 重構（#789 loader 去重 / #791 incremental fast-path）後，同一機器、同參數比對 cold load — v2.8.0 code **172 ms** vs v2.9.0 code **169 ms**，效能持平。上表絕對值（112 ms）是在 v2.8.0 的 reference 環境量測的歷史基準；不同量測機的絕對時間會浮動 ~1.5×，故以**同機相對比對**驗證無回歸，而非跨環境硬比絕對值。
 
 **Production 行為**：reload ticker 預設 15s，每次 tick 成本 ≈ interval 的 0.0087%。
 
@@ -122,6 +136,8 @@ v2.8.0 落地 **5-anchor end-to-end alert fire-through harness** (`tests/e2e-ben
 
 ## 5. v2.8.0 readiness soak — 60-min × 1000-tenant
 
+> **v2.9.0 重新驗證**（乾淨 60min / 15s soak，239 reloads / 120 polls）：RSS 完全持平（`sys_bytes` start = end = 44 MiB、**+0.0%**）、無記憶體洩漏（`heap_objects` −1.0%、goroutine 持平）—— 確認 v2.8.0 結論（記憶體安全、無 leak）在本版重構後仍成立，且乾淨量測機上未再現 v2.8.0 那次的 `heap_idle` 高水位（該現象為極端壓力下的 GC scavenger 行為，非 leak）。
+
 驗證 sustained reload pressure 下的 leak / drift 行為。**雙軌平行設計**：Run A (`GOGC=20` — Go GC aggressive mode, 加速 leak 偵測；程式碼層使用) + Run B (`GOGC=100` Go runtime default, 對應 production 部署形態)。
 
 **Setup**：1000-tenant fixture × 2 (independent dirs) × 60 min × 15s reload × 10s poll = **239 reloads + 360 polls per run**。
@@ -141,7 +157,7 @@ v2.8.0 落地 **5-anchor end-to-end alert fire-through harness** (`tests/e2e-ben
 - ✅ **無記憶體洩漏 (No Memory Leak)**：`heap_objects` 數量持平（-2.6%），證實**沒有 reference-held leak**；goroutine 數也維持（10→9）
 - ℹ️ **Go 運行時特徵 (Runtime Trait)**：`heap_idle +52%` 是 Go GC 在極端壓力（15s reload interval）下保留 OS pages 的 scavenger 預設策略，**不是 leak**。Run A 對照組（GOGC=20 aggressive GC）同 metric 僅 `+0.1%`，反證這是 GC pacing 行為
 
-**真實 customer 場景**：production reload frequency 通常 hours-to-days（config 變更），不是 15s。實際 production growth rate 預估比 soak slow **10-100×**，此現象在客戶環境**不會發生**。Long-running characterization (4-hour soak) + `GOMEMLIMIT` tuning experiment 由 [#459](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/459) 跟進，作為 v2.9.0 perf hardening 一環。
+**真實 customer 場景**：production reload frequency 通常 hours-to-days（config 變更），不是 15s。實際 production growth rate 預估比 soak slow **10-100×**，此現象在客戶環境**不會發生**。記憶體 lever（`--free-os-mem-after-reload` flag + `GOMEMLIMIT` 對應）已於 v2.9.0 由 [#459](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/459) 落地（預設關閉，供 reload cadence 極高的部署選用）。
 
 ---
 

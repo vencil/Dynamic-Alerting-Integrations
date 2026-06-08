@@ -2,7 +2,7 @@
 title: "測試覆蓋矩陣與進階場景"
 tags: [testing, maintenance, internal]
 audience: [platform-engineer, sre]
-version: v2.8.1
+version: v2.9.0
 lang: zh
 ---
 # 測試覆蓋矩陣與進階場景

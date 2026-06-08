@@ -2,7 +2,7 @@
 title: "ADR-017: _defaults.yaml 繼承語意 + dual-hash hot-reload"
 tags: [adr, defaults, inheritance, hot-reload, dual-hash, v2.7.0]
 audience: [platform-engineers, sre, contributors]
-version: v2.8.1
+version: v2.9.0
 lang: zh
 id: ADR-017
 tracking_kind: adr

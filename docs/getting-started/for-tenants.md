@@ -2,14 +2,14 @@
 title: "Tenant 快速入門指南"
 tags: [getting-started, tenant-onboard]
 audience: [tenant]
-version: v2.8.1
+version: v2.9.0
 lang: zh
 ---
 # Tenant 快速入門指南
 
 > **Language / 語言：** **中文 (Current)** | [English](./for-tenants.en.md)
 
-> **v2.8.1** | 適用對象：租戶（Tenant）管理者、DBA、SRE
+> **v2.9.0** | 適用對象：租戶（Tenant）管理者、DBA、SRE
 >
 > 相關文件：[Migration Guide](../migration-guide.md) · [Architecture](../architecture-and-design.md) §2 · [Rule Packs](../rule-packs/README.md)
 

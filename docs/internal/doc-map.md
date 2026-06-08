@@ -2,7 +2,7 @@
 title: "文件導覽 (Documentation Map)"
 tags: [documentation, navigation, internal]
 audience: [maintainers, ai-agent]
-version: v2.8.1
+version: v2.9.0
 lang: zh
 ---
 
@@ -49,6 +49,7 @@ lang: zh
 | `docs/design/roadmap-future.md` (.en.md) | Platform Engineers, DevOps | 未來擴展路線 — K8s Operator、Design System、Auto-Discovery 等 |
 | `docs/design/rule-packs.md` (.en.md) | Platform Engineers, DevOps | Rule Packs 與 Projected Volume 架構 |
 | `docs/getting-started/decision-matrix.md` (.en.md) | Platform Engineers | Deployment Decision Matrix |
+| `docs/getting-started/for-decision-makers.md` (.en.md) | decision-maker | 決策者 / 主管評估指南 |
 | `docs/getting-started/for-domain-experts.md` (.en.md) | Domain Experts (DBA) | Domain Expert (DBA) 快速入門指南 |
 | `docs/getting-started/for-platform-engineers.md` (.en.md) | Platform Engineers | Platform Engineer 快速入門指南 |
 | `docs/getting-started/for-tenants.md` (.en.md) | Tenants | Tenant 快速入門指南 |

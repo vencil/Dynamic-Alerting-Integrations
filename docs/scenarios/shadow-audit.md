@@ -2,7 +2,7 @@
 title: "場景：Shadow Audit — 告警品質評估"
 tags: [scenario, evaluation, shadow-audit, alert-quality]
 audience: [platform-engineer, tenant]
-version: v2.8.1
+version: v2.9.0
 lang: zh
 ---
 # 場景：Shadow Audit — 告警品質評估

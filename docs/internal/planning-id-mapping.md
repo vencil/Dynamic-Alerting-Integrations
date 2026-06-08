@@ -2,7 +2,7 @@
 title: "Planning ID Mapping — Legacy → TRK Redirect"
 tags: [internal, dx, planning, redirect]
 audience: [contributors, ai-agents]
-version: v2.8.1
+version: v2.9.0
 lang: zh
 ---
 

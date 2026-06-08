@@ -2,7 +2,7 @@
 title: "Documentation Map"
 tags: [documentation, navigation, internal]
 audience: [maintainers, ai-agent]
-version: v2.8.1
+version: v2.9.0
 lang: en
 ---
 
@@ -49,6 +49,7 @@ lang: en
 | `docs/design/roadmap-future.md` (.en.md) | Platform Engineers, DevOps | Future Roadmap — K8s Operator, Design System, Auto-Discovery, and More |
 | `docs/design/rule-packs.md` (.en.md) | Platform Engineers, DevOps | Rule Packs & Projected Volume Architecture |
 | `docs/getting-started/decision-matrix.md` (.en.md) | Platform Engineers | Deployment Decision Matrix |
+| `docs/getting-started/for-decision-makers.md` (.en.md) | decision-maker | Decision-Maker / Executive Evaluation Guide |
 | `docs/getting-started/for-domain-experts.md` (.en.md) | Domain Experts (DBA) | Domain Expert (DBA) Quick Start Guide |
 | `docs/getting-started/for-platform-engineers.md` (.en.md) | Platform Engineers | Platform Engineer Quick Start Guide |
 | `docs/getting-started/for-tenants.md` (.en.md) | Tenants | Tenant Quick Start Guide |

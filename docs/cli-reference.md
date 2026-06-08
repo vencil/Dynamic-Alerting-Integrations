@@ -2,7 +2,7 @@
 title: "da-tools CLI Reference"
 tags: [cli, reference, da-tools, tools]
 audience: [platform-engineer, sre, devops, tenant]
-version: v2.8.1
+version: v2.9.0
 lang: zh
 ---
 
@@ -12,7 +12,7 @@ lang: zh
 >
 > **受眾**：Platform Engineers、SREs、DevOps、Tenants
 > **容器映像**：`ghcr.io/vencil/da-tools:v2.8.0`
-> **版本**：v2.8.1（與平台版本同步）
+> **版本**：v2.9.0（與平台版本同步）
 
 da-tools 是一個可攜式 CLI 容器，打包了 Dynamic Alerting 平台的驗證、遷移、配置與運維工具。本文件是所有子命令的完整參考。
 

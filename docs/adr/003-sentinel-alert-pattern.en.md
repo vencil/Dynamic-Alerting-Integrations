@@ -2,7 +2,7 @@
 title: "ADR-003: Sentinel Alert Pattern"
 tags: [adr, architecture]
 audience: [platform-engineers]
-version: v2.8.1
+version: v2.9.0
 lang: en
 ---
 

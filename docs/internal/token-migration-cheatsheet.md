@@ -2,7 +2,7 @@
 title: "Token Migration Cheat Sheet (archived)"
 tags: [internal, design-tokens, migration, archived]
 audience: [maintainer]
-version: v2.8.1
+version: v2.9.0
 lang: zh
 ---
 # Token Migration Cheat Sheet — 已歸檔（#444 Phase 1 收尾）

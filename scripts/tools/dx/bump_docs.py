@@ -983,6 +983,25 @@ def _build_count_rules():
             "is_count": True,
         })
 
+    # README.md / README.en.md: Python tools count in the repo-map row.
+    # Same scope as _count_python_tools (scripts/tools/{ops,dx,lint}); the
+    # repo-map phrasing differs from CLAUDE.md so needs its own rule (else drifts).
+    if total_tools > 0:
+        rules.append({
+            "file": "README.md",
+            "desc": f"README.md: Python tools in repo-map ({total_tools} tools)",
+            "pattern": r"`scripts/tools/\{ops,dx,lint\}`\s*下\s*\d+\s*個\s*Python\s*工具",
+            "replacement": lambda _: f"`scripts/tools/{{ops,dx,lint}}` 下 {total_tools} 個 Python 工具",
+            "is_count": True,
+        })
+        rules.append({
+            "file": "README.en.md",
+            "desc": f"README.en.md: Python tools in repo-map ({total_tools} tools)",
+            "pattern": r"\+\s*\d+\s*Python tools under\s*`scripts/tools/\{ops,dx,lint\}`",
+            "replacement": lambda _: f"+ {total_tools} Python tools under `scripts/tools/{{ops,dx,lint}}`",
+            "is_count": True,
+        })
+
     return rules
 
 
