@@ -1,0 +1,17 @@
+# ⚠️ TEMPORARY — v2.9.0 wrap-up PR #807 scoped review only.
+# This PR is 204 files but ~196 are mechanical `bump_docs` version-bump
+# frontmatter changes (zero review value). path_filters here allowlist ONLY
+# the substantive files so CodeRabbit reviews them (PR otherwise exceeds the
+# 150-file limit and is skipped entirely).
+# ⛔ MUST be removed before merge — path_filters apply repo-wide; leaving this
+#    on main would restrict ALL future PR reviews to these 8 files.
+reviews:
+  path_filters:
+    - "CHANGELOG.md"
+    - "CLAUDE.md"
+    - "README.md"
+    - "README.en.md"
+    - "docs/architecture-and-design.md"
+    - "docs/architecture-and-design.en.md"
+    - "docs/benchmarks.md"
+    - "docs/benchmarks.en.md"
