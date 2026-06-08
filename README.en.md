@@ -12,7 +12,7 @@ lang: en
 Config-driven multi-tenant alerting platform built on Prometheus `group_left` vector matching.
 
 > **Managing 100 tenants: from 5,000 hand-written rules → 237 fixed rules.**
-> Tenants write YAML only — no PromQL. New tenant onboarding in minutes, changes take effect in seconds.
+> Tenants write YAML only — no PromQL, and even author their own alerts via parameterized recipes (v2.9.0 **Custom Alerts**). New tenant onboarding in minutes, changes take effect in seconds.
 
 ![CI](https://github.com/vencil/Dynamic-Alerting-Integrations/actions/workflows/ci.yml/badge.svg) ![Version](https://img.shields.io/badge/version-v2.9.0-brightgreen) ![Coverage](https://img.shields.io/badge/coverage-%E2%89%A585%25-green) ![Rule Packs](https://img.shields.io/badge/rule%20packs-15-orange) ![Alerts](https://img.shields.io/badge/alerts-117-red) ![Bilingual](https://img.shields.io/badge/bilingual-82%20pairs-blue)
 
@@ -23,9 +23,11 @@ Config-driven multi-tenant alerting platform built on Prometheus `group_left` ve
 | Your situation | Start here |
 |----------------|-----------|
 | Understand what this is & solves in 30 seconds | [Key Metrics](#key-metrics) → [Architecture Overview](#architecture-overview) below |
-| Evaluate whether it fits my environment | [Decision Matrix](docs/getting-started/decision-matrix.en.md) · [Benchmarks](docs/benchmarks.en.md) |
+| **I'm a leader / decision-maker — show me business value & risk** | [Key Metrics](#key-metrics) (cost / scale / onboarding time) · [Benchmarks](docs/benchmarks.en.md) (1000-tenant proof + soak) · [Supply-chain signing](#customer-onboarding-migration-toolkit-v280) (cosign + SBOM) |
+| Evaluate whether the tech fits my environment | [Decision Matrix](docs/getting-started/decision-matrix.en.md) · [Integration Guides](docs/integration/README.en.md) |
 | Try it on my laptop in 1 minute (no Kubernetes) | [Try it locally](#try-it-locally) |
 | Ready to deploy to my own cluster | [Getting Started by Role](#getting-started-by-role) · [Integration Guides](docs/integration/README.en.md) |
+| **Already familiar — find a specific scenario / lifecycle stage** | [Scenarios (14)](docs/scenarios/) · [Migration paths](#documentation-guide) · [Day-2 ops](#documentation-guide) |
 | Already live, looking for day-2 ops / troubleshooting | [CLI Reference](docs/cli-reference.en.md) · [Troubleshooting](docs/troubleshooting.en.md) |
 
 ---
@@ -168,9 +170,10 @@ All paths support [OCI Registry installation](components/threshold-exporter/READ
 
 ### Getting Started by Role
 
+- **Executive / Decision-maker** — Business value, proven scale & supply-chain trust → [Key Metrics](#key-metrics) (96% rule reduction / 4× memory savings / minute-scale onboarding) · [Benchmarks](docs/benchmarks.en.md) (1000-tenant proof + readiness soak) · [Supply-chain signing](#customer-onboarding-migration-toolkit-v280) (cosign keyless + SBOM, offline-verifiable for finance/gov/air-gapped)
 - **Platform Engineer** — Architecture, deployment & operations → [Getting Started](docs/getting-started/for-platform-engineers.en.md)
 - **Domain Expert** — Rule Pack customization & quality governance → [Getting Started](docs/getting-started/for-domain-experts.en.md)
-- **Tenant** — Threshold configuration & self-service management → [Getting Started](docs/getting-started/for-tenants.en.md)
+- **Tenant** — Threshold configuration, **self-service custom alerts (Custom Alerts, no PromQL)** & self-service management → [Getting Started](docs/getting-started/for-tenants.en.md)
 - **Not sure?** → [Getting Started Wizard](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../getting-started/wizard.jsx)
 
 ---
@@ -211,6 +214,12 @@ O(M) complexity (`group_left` vector matching) · 15 Rule Pack Projected Volumes
 ### Tenant Management
 
 Tri-state mode (Normal / Silent / Maintenance with `expires` auto-expiry) · Four-layer routing merge: `_routing_defaults` → profile → tenant → enforced ([ADR-007](docs/adr/007-cross-domain-routing-profiles.en.md)) · Scheduled thresholds & maintenance windows · Schema Validation (dual Go + Python) · Cardinality Guard (per-tenant 500 limit)
+
+### Tenant Self-Service Alerts + Tenant Federation (v2.9.0)
+
+- **Custom Alerts (tenant self-service declarative alerting)** — tenants pick from 6 platform-authored parameterized recipes (threshold / rate / ratio / absence / p99_latency / forecast), fill in parameters, and get a valid alert — **no PromQL at all**; portal `RecipeBuilder` + Tenant Manager modal commit straight back to GitOps. Vectorized compilation means "one new alert type = one rule shared across all tenants" (rule count = shape count, not tenant count), capped per tenant. page/silent reuse the existing Sentinel + Inhibit tri-state ([ADR-024](docs/adr/024-version-aware-threshold-via-dimensional-label.en.md)).
+- **Tenant Federation** — authorization plane for cross-cluster tenant queries: token endpoint + read-path proxy / API gateway (Envoy) + 2-tier policy + admission validator + signing-key rotation + offboarding + global kill switch ([ADR-020](docs/adr/020-tenant-federation.md)).
+- **Version-Aware Threshold** — declarative version cutover via the existing dimensional `version` label; auto-immune to rolling-update / rollback propagation lag ([ADR-024](docs/adr/024-version-aware-threshold-via-dimensional-label.en.md) Capability A).
 
 ### Toolchain (da-tools CLI)
 
