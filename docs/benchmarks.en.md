@@ -66,6 +66,17 @@ lang: en
 | Redis | ✗ no exporter | 7 | 0.41 ms (empty vec) |
 | Elasticsearch | ✗ no exporter | 7 | 1.75 ms (empty vec, complex PromQL) |
 
+### How tenant custom alerts scale (v2.9.0 Custom Alerts)
+
+The platform Rule Pack O(M) guarantee holds for *platform-authored* rules. **Tenant custom alerts** (Custom Alerts, v2.9.0) take a separate cost path, deliberately bounded the same way:
+
+- **Adding one custom-alert type = one rule shared across all tenants**, not one rule per tenant. The vectorized compiler folds all tenant declarations sharing "same metric + same recipe + same parameter shape" into a **single** rule (rule count = number of distinct *alert shapes*, not × tenant count).
+- **Honest cost**: this guarantee **only holds for same-metric sharing** — different metrics necessarily produce different rules, so rule count grows with the **number of custom-alert types**, not with tenant count. Capped per tenant (`max_custom_recipes`, default 20) to prevent any single tenant flooding.
+- **For tenants**: you write a YAML recipe (no PromQL), your alert takes effect in seconds, and adding it never slows down the platform.
+- **For platform engineers**: total rule count = O(alert types), not O(tenants × alert types); capacity-plan against the number of distinct custom-alert types, with the per-tenant cap + a (planned) global rule-count budget as guardrails.
+
+See [ADR-024 §Vectorized compilation](adr/024-version-aware-threshold-via-dimensional-label.en.md).
+
 ---
 
 ## 3. v2.8.0 Scale Gate — 1000-tenant measured
