@@ -170,7 +170,7 @@ All paths support [OCI Registry installation](components/threshold-exporter/READ
 
 ### Getting Started by Role
 
-- **Executive / Decision-maker** — Business value, proven scale & supply-chain trust → [Key Metrics](#key-metrics) (96% rule reduction / 4× memory savings / minute-scale onboarding) · [Benchmarks](docs/benchmarks.en.md) (1000-tenant proof + readiness soak) · [Supply-chain signing](#customer-onboarding-migration-toolkit-v280) (cosign keyless + SBOM, offline-verifiable for finance/gov/air-gapped)
+- **Executive / Decision-maker** — Business value, proven scale & supply-chain trust → [Key Metrics](#key-metrics) (95% rule reduction / 4× memory savings / minute-scale onboarding) · [Benchmarks](docs/benchmarks.en.md) (1000-tenant proof + readiness soak) · [Supply-chain signing](#customer-onboarding-migration-toolkit-v280) (cosign keyless + SBOM, offline-verifiable for finance/gov/air-gapped)
 - **Platform Engineer** — Architecture, deployment & operations → [Getting Started](docs/getting-started/for-platform-engineers.en.md)
 - **Domain Expert** — Rule Pack customization & quality governance → [Getting Started](docs/getting-started/for-domain-experts.en.md)
 - **Tenant** — Threshold configuration, **self-service custom alerts (Custom Alerts, no PromQL)** & self-service management → [Getting Started](docs/getting-started/for-tenants.en.md)
@@ -218,7 +218,7 @@ Tri-state mode (Normal / Silent / Maintenance with `expires` auto-expiry) · Fou
 ### Tenant Self-Service Alerts + Tenant Federation (v2.9.0)
 
 - **Custom Alerts (tenant self-service declarative alerting)** — tenants pick from 6 platform-authored parameterized recipes (threshold / rate / ratio / absence / p99_latency / forecast), fill in parameters, and get a valid alert — **no PromQL at all**; portal `RecipeBuilder` + Tenant Manager modal commit straight back to GitOps. Vectorized compilation means "one new alert type = one rule shared across all tenants" (rule count = shape count, not tenant count), capped per tenant. page/silent reuse the existing Sentinel + Inhibit tri-state ([ADR-024](docs/adr/024-version-aware-threshold-via-dimensional-label.en.md)).
-- **Tenant Federation** — authorization plane for cross-cluster tenant queries: token endpoint + read-path proxy / API gateway (Envoy) + 2-tier policy + admission validator + signing-key rotation + offboarding + global kill switch ([ADR-020](docs/adr/020-tenant-federation.md)).
+- **Tenant Federation (v2.9.0 deployable foundation, not yet GA)** — authorization plane for cross-cluster tenant queries: token endpoint + read-path proxy / API gateway (Envoy) + 2-tier policy + admission validator + signing-key rotation + offboarding + global kill switch ([ADR-020](docs/adr/020-tenant-federation.md)).
 - **Version-Aware Threshold** — declarative version cutover via the existing dimensional `version` label; auto-immune to rolling-update / rollback propagation lag ([ADR-024](docs/adr/024-version-aware-threshold-via-dimensional-label.en.md) Capability A).
 
 ### Toolchain (da-tools CLI)

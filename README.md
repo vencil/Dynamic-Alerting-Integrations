@@ -170,7 +170,7 @@ make setup && make verify && make test-alert
 
 ### 按角色入門
 
-- **企業主管 / 決策者** — 商業價值、規模實證與供應鏈信任 → [核心指標](#核心指標)（96% 規則縮減 / 4× 記憶體節省 / 分鐘級導入）· [性能基準](docs/benchmarks.md)（千租戶實證 + readiness soak）· [供應鏈簽章](#客戶導入migration-toolkit-v280)（cosign keyless + SBOM，金融/政府/軍工可離線驗）
+- **企業主管 / 決策者** — 商業價值、規模實證與供應鏈信任 → [核心指標](#核心指標)（95% 規則縮減 / 4× 記憶體節省 / 分鐘級導入）· [性能基準](docs/benchmarks.md)（千租戶實證 + readiness soak）· [供應鏈簽章](#客戶導入migration-toolkit-v280)（cosign keyless + SBOM，金融/政府/軍工可離線驗）
 - **Platform Engineer** — 架構部署與運維 → [Getting Started](docs/getting-started/for-platform-engineers.md)
 - **Domain Expert** — Rule Pack 客製與品質治理 → [Getting Started](docs/getting-started/for-domain-experts.md)
 - **Tenant** — 閾值配置、**自助自訂告警（Custom Alerts，免 PromQL）** 與自助管理 → [Getting Started](docs/getting-started/for-tenants.md)
@@ -218,7 +218,7 @@ O(M) 複雜度（`group_left` 向量匹配）· 15 個 Rule Pack Projected Volum
 ### 租戶自助告警 + 租戶聯邦（v2.9.0）
 
 - **Custom Alerts（租戶自助宣告式告警）** — 租戶選平台 authored 的 6 種參數化 recipe（threshold / rate / ratio / absence / p99_latency / forecast）、填參數即得合法告警，**完全免寫 PromQL**；portal `RecipeBuilder` + Tenant Manager modal 一鍵 commit 回 GitOps。向量化編譯使「新增一種告警 = 1 條跨租戶共用規則」（規則數 = shape 數、非租戶數），per-tenant cap 封頂。page/silent 複用既有 Sentinel + Inhibit 三態（[ADR-024](docs/adr/024-version-aware-threshold-via-dimensional-label.md)）
-- **Tenant Federation** — 跨叢集租戶查詢的授權平面：token endpoint + read-path proxy / API gateway（Envoy）+ 2-tier policy + admission validator + 簽章金鑰輪替 + offboarding + 全域 kill switch（[ADR-020](docs/adr/020-tenant-federation.md)）
+- **Tenant Federation（v2.9.0 可部署基礎，非 GA）** — 跨叢集租戶查詢的授權平面：token endpoint + read-path proxy / API gateway（Envoy）+ 2-tier policy + admission validator + 簽章金鑰輪替 + offboarding + 全域 kill switch（[ADR-020](docs/adr/020-tenant-federation.md)）
 - **Version-Aware Threshold** — 透過既有 dimensional `version` label 達成宣告式版本切換，rolling update / rollback 自動免疫傳遞延遲（[ADR-024](docs/adr/024-version-aware-threshold-via-dimensional-label.md) 能力 A）
 
 ### 工具鏈（da-tools CLI）
