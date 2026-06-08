@@ -95,7 +95,7 @@ lang: zh
 
 **Steady-state 是 cold load 的 86× 便宜** — v2.7.0 hierarchical + dual-hash + mtime guard 三層優化的 combined effect。
 
-> **v2.9.0 無回歸（同機控制）**：本版 exporter/loader 重構（#789 loader 去重 / #791 incremental fast-path）後，同一機器、同參數比對 cold load — v2.8.0 code **172 ms** vs v2.9.0 code **169 ms**，效能持平。上表絕對值（112 ms）量測於 v2.8.0 reference 環境；不同量測機的絕對時間會浮動 ~1.5×，故以**同機相對比對**驗證無回歸，而非跨環境硬比絕對值。
+> **v2.9.0 無回歸（同機控制）**：本版 exporter/loader 重構（#789 loader 去重 / #791 incremental fast-path）後，同一機器、同參數比對 cold load — v2.8.0 code **172 ms** vs v2.9.0 code **169 ms**，效能持平。上表絕對值（112 ms）是在 v2.8.0 的 reference 環境量測的歷史基準；不同量測機的絕對時間會浮動 ~1.5×，故以**同機相對比對**驗證無回歸，而非跨環境硬比絕對值。
 
 **Production 行為**：reload ticker 預設 15s，每次 tick 成本 ≈ interval 的 0.0087%。
 
