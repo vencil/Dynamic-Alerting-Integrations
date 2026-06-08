@@ -215,14 +215,12 @@ O(M) complexity (`group_left` vector matching) · 15 Rule Pack Projected Volumes
 
 Tri-state mode (Normal / Silent / Maintenance with `expires` auto-expiry) · Four-layer routing merge: `_routing_defaults` → profile → tenant → enforced ([ADR-007](docs/adr/007-cross-domain-routing-profiles.en.md)) · Scheduled thresholds & maintenance windows · Schema Validation (dual Go + Python) · Cardinality Guard (per-tenant 500 limit)
 
-### Tenant Self-Service at Scale (v2.9.0)
+### Tenant Self-Service & Multi-Cluster
 
-> v2.7–2.8 scaled the **platform** (O(M) rules, 1000-tenant migration pipeline); **v2.9.0 scales tenant self-service** — upgrading tenants from "tune thresholds only" to "define their own alerts", while keeping it safe, reliable, and multi-cluster.
-
-- **Custom Alerts — the platform team steps out of the everyday-alert loop.** Tenants no longer file a ticket and wait for PromQL for common alerts (new recipe *types* are still platform-authored and governed); and self-service ≠ loss of control (recipes are platform-authored, vectorized, capped — no PromQL injection, no rule explosion). How: 6 parameterized recipes (threshold / rate / ratio / absence / p99_latency / forecast, **no PromQL anywhere**) → portal `RecipeBuilder` form → one-click commit back to GitOps; vectorized compilation makes "one new alert type = one rule shared across all tenants" (rule count = shape count, not tenant count), capped per tenant, page/silent reusing the existing Sentinel + Inhibit tri-state. → Try [locally](#try-it-locally) · [for-tenants guide](docs/getting-started/for-tenants.en.md) · design [ADR-024](docs/adr/024-version-aware-threshold-via-dimensional-label.en.md)
-- **Version-Aware Threshold — eliminates false alarms during the release window.** During deploy / rollback, thresholds automatically follow the running version, so the riskiest change window no longer floods on-call with noise. Mechanism: declarative cutover via the existing dimensional `version` label, auto-immune to rolling-update / GitOps propagation lag ([ADR-024](docs/adr/024-version-aware-threshold-via-dimensional-label.en.md) Capability A).
-- **Tenant Federation (v2.9.0 deployable foundation, not yet GA) — unified cross-cluster tenant-query governance without merging data planes.** Authorization plane: token endpoint + read-path proxy / API gateway (Envoy) + 2-tier policy + admission validator + signing-key rotation + offboarding + global kill switch ([ADR-020](docs/adr/020-tenant-federation.md)).
-- **Write-plane resilience (ADR-023) — the self-service write path is production-safe.** No data loss and no hangs under high concurrency / forge outages (single-writer invariant + load-shedding + circuit breaker + SIGTERM graceful shutdown), making the Tenant Manager self-service plane reliable — because self-service has to be reliable ([ADR-023](docs/adr/023-write-plane-single-writer-invariant.md)).
+- **Custom Alerts — tenants define entire alerts themselves, no PromQL**: the platform team steps out of the everyday-alert loop, without losing control (governed recipes + single vectorized rule + per-tenant cap). → [Try locally](#try-it-locally) · [for-tenants guide](docs/getting-started/for-tenants.en.md) · [ADR-024](docs/adr/024-version-aware-threshold-via-dimensional-label.en.md)
+- **Version-Aware Threshold — no false alarms during deploy / rollback**: thresholds follow the running version automatically ([ADR-024](docs/adr/024-version-aware-threshold-via-dimensional-label.en.md) Capability A).
+- **Tenant Federation — unified cross-cluster tenant-query governance without merging data planes** (deployable foundation, not yet GA; [ADR-020](docs/adr/020-tenant-federation.md)).
+- **Write-plane resilience — the self-service write path is production-safe**: no data loss or hangs under high concurrency / forge outages ([ADR-023](docs/adr/023-write-plane-single-writer-invariant.md)).
 
 ### Toolchain (da-tools CLI)
 
