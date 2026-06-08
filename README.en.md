@@ -23,7 +23,7 @@ Config-driven multi-tenant alerting platform built on Prometheus `group_left` ve
 | Your situation | Start here |
 |----------------|-----------|
 | Understand what this is & solves in 30 seconds | [Key Metrics](#key-metrics) → [Architecture Overview](#architecture-overview) below |
-| **I'm a leader / decision-maker — show me business value & risk** | [Key Metrics](#key-metrics) (cost / scale / onboarding time) · [Benchmarks](docs/benchmarks.en.md) (1000-tenant proof + soak) · [Supply-chain signing](#customer-onboarding-migration-toolkit-v280) (cosign + SBOM) |
+| **I'm a leader / decision-maker — show me business value & risk** | [Decision-Maker guide](docs/getting-started/for-decision-makers.en.md) (one page: value + evidence / fit / maturity / next steps) |
 | Evaluate whether the tech fits my environment | [Decision Matrix](docs/getting-started/decision-matrix.en.md) · [Integration Guides](docs/integration/README.en.md) |
 | Try it on my laptop in 1 minute (no Kubernetes) | [Try it locally](#try-it-locally) |
 | Ready to deploy to my own cluster | [Getting Started by Role](#getting-started-by-role) · [Integration Guides](docs/integration/README.en.md) |
@@ -170,7 +170,7 @@ All paths support [OCI Registry installation](components/threshold-exporter/READ
 
 ### Getting Started by Role
 
-- **Executive / Decision-maker** — Business value, proven scale & supply-chain trust → [Key Metrics](#key-metrics) (95% rule reduction / 4× memory savings / minute-scale onboarding) · [Benchmarks](docs/benchmarks.en.md) (1000-tenant proof + readiness soak) · [Supply-chain signing](#customer-onboarding-migration-toolkit-v280) (cosign keyless + SBOM, offline-verifiable for finance/gov/air-gapped)
+- **Executive / Decision-maker** — business value, fit assessment, maturity & trust (one page of decision info) → [Decision-Maker guide](docs/getting-started/for-decision-makers.en.md)
 - **Platform Engineer** — Architecture, deployment & operations → [Getting Started](docs/getting-started/for-platform-engineers.en.md)
 - **Domain Expert** — Rule Pack customization & quality governance → [Getting Started](docs/getting-started/for-domain-experts.en.md)
 - **Tenant** — Threshold configuration, **self-service custom alerts (Custom Alerts, no PromQL)** & self-service management → [Getting Started](docs/getting-started/for-tenants.en.md)
