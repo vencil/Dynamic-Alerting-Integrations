@@ -215,11 +215,14 @@ O(M) 複雜度（`group_left` 向量匹配）· 15 個 Rule Pack Projected Volum
 
 三態模式（Normal / Silent / Maintenance，支援 `expires` 自動失效）· 四層路由合併：`_routing_defaults` → profile → tenant → enforced（[ADR-007](docs/adr/007-cross-domain-routing-profiles.md)）· 排程式閾值與維護窗口 · Schema Validation 雙端驗證 · Cardinality Guard（per-tenant 500 上限）
 
-### 租戶自助告警 + 租戶聯邦（v2.9.0）
+### 租戶自助規模化（v2.9.0）
 
-- **Custom Alerts（租戶自助宣告式告警）** — 租戶選平台 authored 的 6 種參數化 recipe（threshold / rate / ratio / absence / p99_latency / forecast）、填參數即得合法告警，**完全免寫 PromQL**；portal `RecipeBuilder` + Tenant Manager modal 一鍵 commit 回 GitOps。向量化編譯使「新增一種告警 = 1 條跨租戶共用規則」（規則數 = shape 數、非租戶數），per-tenant cap 封頂。page/silent 複用既有 Sentinel + Inhibit 三態（[ADR-024](docs/adr/024-version-aware-threshold-via-dimensional-label.md)）
-- **Tenant Federation（v2.9.0 可部署基礎，非 GA）** — 跨叢集租戶查詢的授權平面：token endpoint + read-path proxy / API gateway（Envoy）+ 2-tier policy + admission validator + 簽章金鑰輪替 + offboarding + 全域 kill switch（[ADR-020](docs/adr/020-tenant-federation.md)）
-- **Version-Aware Threshold** — 透過既有 dimensional `version` label 達成宣告式版本切換，rolling update / rollback 自動免疫傳遞延遲（[ADR-024](docs/adr/024-version-aware-threshold-via-dimensional-label.md) 能力 A）
+> v2.7–2.8 讓**平台**規模化（O(M) 規則、千租戶導入管線）；**v2.9.0 讓租戶自助規模化**——把租戶從「只能調閾值」升級為「定義自己的告警」，同時守住安全、可靠與跨叢集。
+
+- **Custom Alerts — 平台團隊退出日常告警的迴路。** 租戶不必為常見告警開 ticket 等人寫 PromQL（新 recipe 型別仍由平台 authored、列管擴充）；而且自助 ≠ 失控（recipe 為平台 authored、向量化、有 cap，無 PromQL 注入、無規則爆炸）。怎麼做到：6 種參數化 recipe（threshold / rate / ratio / absence / p99_latency / forecast，**全程免 PromQL**）→ portal `RecipeBuilder` 填表 → 一鍵 commit 回 GitOps；向量化編譯使「新增一種告警 = 1 條跨租戶共用規則」（規則數 = shape 數、非租戶數），per-tenant cap 封頂，page/silent 複用既有 Sentinel + Inhibit 三態。→ 試玩 [在本機試用](#在本機試用) · 租戶指南 [for-tenants](docs/getting-started/for-tenants.md) · 設計 [ADR-024](docs/adr/024-version-aware-threshold-via-dimensional-label.md)
+- **Version-Aware Threshold — 消除 release 窗口的假告警。** 部署 / 回滾期間閾值自動跟著執行版本走，最危險的變更窗口不再噪音轟炸 on-call。機制：透過既有 dimensional `version` label 宣告式切換，自動免疫 rolling-update / GitOps 傳遞延遲（[ADR-024](docs/adr/024-version-aware-threshold-via-dimensional-label.md) 能力 A）。
+- **Tenant Federation（v2.9.0 可部署基礎，非 GA）— 多叢集統一治理租戶查詢，不需合併資料平面。** 授權平面：token endpoint + read-path proxy / API gateway（Envoy）+ 2-tier policy + admission validator + 簽章金鑰輪替 + offboarding + 全域 kill switch（[ADR-020](docs/adr/020-tenant-federation.md)）。
+- **寫入平面韌性（ADR-023）— 自助寫入 production-safe。** 高並發 / forge outage 下不丟資料、不卡死（single-writer 不變式 + load-shedding + circuit breaker + SIGTERM 優雅關機），讓 Tenant Manager 自助平面可靠 —— 自助的前提是可靠（[ADR-023](docs/adr/023-write-plane-single-writer-invariant.md)）。
 
 ### 工具鏈（da-tools CLI）
 
