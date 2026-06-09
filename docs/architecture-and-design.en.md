@@ -190,7 +190,7 @@ graph LR
 
 ## Design Concepts Overview
 
-> **Why is this architecture worth investing in?** In a typical 50-tenant environment, the Config-Driven architecture reduces rule maintenance from O(N×M) to O(M), saving 40+ engineering hours per month. Severity Dedup combined with tri-state modes suppresses 60%+ alert noise, materially improving on-call quality of life.
+> **Why is this architecture worth investing in?** In a typical 50-tenant environment, the Config-Driven architecture reduces rule maintenance from O(N×M) to O(M), saving 40+ engineering hours per month; Severity Dedup combined with tri-state modes suppresses 60%+ alert noise, improving on-call quality of life. (**The 40+ hours / 60%+ are modeled estimates for a 50-tenant scenario, not a single-customer measurement**.)
 
 The table below indexes the **core design concepts** (timeless capabilities, not a per-release delivery list; version history in [§5](#5-roadmap)). Each has a standalone spoke document:
 
