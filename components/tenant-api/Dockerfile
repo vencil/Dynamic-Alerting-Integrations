@@ -14,7 +14,7 @@
 # #463 multi-arch: builder pinned to the native BUILDPLATFORM, cross-compiles
 # to TARGETARCH below (CGO_ENABLED=0 → no cross-toolchain, no QEMU for the Go
 # compile). The final alpine stage's `apk add` still runs under QEMU for arm64.
-FROM --platform=$BUILDPLATFORM golang:1.26.3-alpine3.22 AS builder
+FROM --platform=$BUILDPLATFORM golang:1.26.4-alpine3.22 AS builder
 
 WORKDIR /src
 

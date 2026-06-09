@@ -13,7 +13,7 @@
 #   -v ./my-flows.json:/usr/share/nginx/html/assets/flows.json
 #   -v ./my-nginx.conf:/etc/nginx/conf.d/default.conf
 
-FROM nginx:1.28-alpine3.23
+FROM nginx:1.30-alpine3.23
 
 LABEL org.opencontainers.image.title="da-portal" \
       org.opencontainers.image.description="Dynamic Alerting Interactive Tools Portal" \
