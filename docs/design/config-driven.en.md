@@ -149,7 +149,7 @@ Phase 4: Incremental Merge
 
 **Atomic Swap**: `RWMutex` protects atomic updates of config/hash/cache. Read side (Prometheus scrape) uses `RLock()`, reload uses `Lock()`, ensuring scrape never reads half-updated state.
 
-**Performance characteristics** (benchmark data see [§3 v2.8.0 Scale Gate](../benchmarks.en.md#3-v280-scale-gate-1000-tenant-measured)):
+**Performance characteristics** (benchmark data see [§1 Scale](../benchmarks.en.md#1-scale-how-many-tenants)):
 
 | Scenario | Latency | Code Path |
 |----------|---------|-----------|
@@ -799,7 +799,7 @@ da-tools cardinality-forecast --prometheus http://prometheus:9090 --warn-days 30
 da-tools diagnose <tenant> --config-dir conf.d/
 ```
 
-> threshold-exporter config reload baseline (1000-tenant cold 112 ms / steady reload 1.30 ms) at [benchmarks.en.md §3 v2.8.0 Scale Gate](../benchmarks.en.md#3-v280-scale-gate-1000-tenant-measured); full `Resolve_*` engineering-reference series at [Benchmark Playbook §Engineering Reference Benchmarks](../internal/benchmark-playbook.md#engineering-reference-benchmarks). Incremental migration guide at [incremental-migration-playbook](../scenarios/incremental-migration-playbook.en.md).
+> threshold-exporter config reload baseline (1000-tenant cold 112 ms / steady reload 1.30 ms) at [benchmarks.en.md §1 Scale](../benchmarks.en.md#1-scale-how-many-tenants); full `Resolve_*` engineering-reference series at [Benchmark Playbook §Engineering Reference Benchmarks](../internal/benchmark-playbook.md#engineering-reference-benchmarks). Incremental migration guide at [incremental-migration-playbook](../scenarios/incremental-migration-playbook.en.md).
 
 ### 2.14 Tenant Management API Architecture (ADR-009)
 
@@ -835,4 +835,4 @@ Five core recipes: `threshold` (gauge crossing) / `rate` (counter rate) / `ratio
 
 **Vectorized compilation (preserves O(M))**: the compiler groups all declarations by shape signature `(recipe, metric, op, window, quantile, denominator, selectors)` and emits **one** `app_metric > on(tenant) group_left(...) user_threshold{...}` rule **per shape** — rule count = shape count, **not** tenant count (the same O(M) guarantee rule packs hold, [benchmarks.en.md §2](../benchmarks.en.md)). The alertname is the static shape slug; one rule is shared across tenants. Severity is tenant-decided; each shape emits only the declared severity branches. `mode` (page/silent) is a per-tenant routing class that is **not** part of the shape signature (so it never forks the rule — O(M) holds); instead it rides the data plane via `group_left(name, mode)` into an alert label, so two tenants on the same shape with different modes still route independently (silent→null / page→pager). The version graceful-join reuses the existing version-aware mechanism (absent label falls back to `default`).
 
-**Phasing**: S1+S2 ships the **compiler + recipe library + schema + tests** (`make custom-alerts-compile`). **S3a** adds the data plane: threshold-exporter parses tenant `_custom_alerts` and emits `user_threshold{component="custom", metric, recipe_id, name, mode}` (label form A; malformed declarations fail loud → `da_custom_alert_parse_errors` gauge). **Still deferred to S3b**: deploying the committed pack (configmap + operator CRD) + platform/domain `_defaults.yaml` inheritance emission — the repo's #731 closed-label contract structurally couples "committed pack" with "exporter emission", so the pack is committed only once the exporter emits (else a rule that cannot fire ships to prod). See the recipe library at [`rule-packs/recipes/`](https://github.com/vencil/Dynamic-Alerting-Integrations/tree/main/rule-packs/recipes); full design in [ADR-024 §Custom Alerts](../adr/024-version-aware-threshold-via-dimensional-label.en.md).
+**Phasing**: S1+S2 ships the **compiler + recipe library + schema + tests** (`make custom-alerts-compile`). **S3a** adds the data plane: threshold-exporter parses tenant `_custom_alerts` and emits `user_threshold{component="custom", metric, recipe_id, name, mode}` (label form A; malformed declarations fail loud → `da_custom_alert_parse_errors` gauge). **S3b shipped (v2.9.0)**: the committed pack is deployed (`k8s/03-monitoring/configmap-rules-custom-alerts.yaml`) + platform/domain `_defaults.yaml` inheritance emission, and custom alerts can fire in prod; the repo's #731 closed-label contract structurally couples "committed pack" with "exporter emission", so the pack was committed only once the exporter emits (avoiding a rule that cannot fire shipping to prod). See the recipe library at [`rule-packs/recipes/`](https://github.com/vencil/Dynamic-Alerting-Integrations/tree/main/rule-packs/recipes); full design in [ADR-024 §Custom Alerts](../adr/024-version-aware-threshold-via-dimensional-label.en.md).

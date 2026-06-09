@@ -539,7 +539,7 @@ tools:
   hub_section: advanced
   appears_in:
   - docs/getting-started/for-domain-experts.md
-  - docs/internal/test-coverage-matrix.md
+  - docs/scenarios/verified-scenarios.md
   journey_phase: deploy
 - key: onboarding-checklist
   title:
@@ -737,7 +737,7 @@ tools:
   hub_section: advanced
   appears_in:
   - docs/getting-started/for-platform-engineers.md
-  - docs/internal/test-coverage-matrix.md
+  - docs/scenarios/verified-scenarios.md
   - docs/scenarios/alert-routing-split.md
   - docs/scenarios/tenant-lifecycle.md
   journey_phase: configure
@@ -788,7 +788,7 @@ tools:
   appears_in:
   - docs/architecture-and-design.md
   - docs/getting-started/for-domain-experts.md
-  - docs/internal/test-coverage-matrix.md
+  - docs/scenarios/verified-scenarios.md
   journey_phase: troubleshoot
 - key: platform-demo
   title:

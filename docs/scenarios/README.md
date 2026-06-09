@@ -60,7 +60,7 @@ flowchart LR
 
 | 場景 | 適用角色 | 摘要 |
 |------|---------|------|
-| [測試覆蓋矩陣](../internal/test-coverage-matrix.md) | Platform Engineer, SRE | 企業級 E2E + Unit/Integration 測試矩陣、三態模式驗證、HA 故障切換驗證 |
+| [驗證場景與平台行為](verified-scenarios.md) | Platform Engineer, SRE | 企業級 E2E + Unit/Integration 測試矩陣、三態模式驗證、HA 故障切換驗證 |
 
 ## 相關資源
 

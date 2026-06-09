@@ -38,8 +38,8 @@ lang: zh
 | `docs/adr/024-version-aware-threshold-via-dimensional-label.md` (.en.md) | Platform Engineers, contributors, SREs | ADR-024: 宣告式 Dimensional 告警引擎 — Version-Aware Thresholds + Custom Alerts |
 | `docs/api/README.md` (.en.md) | Platform Engineers, SREs | Threshold Exporter API Reference |
 | `docs/api/tenant-api-hardening.md` (.en.md) | platform-ops, sre, security | Tenant API Hardening (v2.8.0) |
-| `docs/architecture-and-design.md` (.en.md) | Platform Engineers | 架構與設計 — 動態多租戶警報平台技術白皮書 |
-| `docs/benchmarks.md` (.en.md) | Platform Engineers, SREs | 性能基準 (Performance Benchmarks) |
+| `docs/architecture-and-design.md` (.en.md) | Platform Engineers, SREs, decision-maker | 架構與設計 — 動態多租戶警報平台技術白皮書 |
+| `docs/benchmarks.md` (.en.md) | Platform Engineers, SREs, decision-maker | 性能基準 (Performance Benchmarks) |
 | `docs/cheat-sheet.md` (.en.md) | All | da-tools Quick Reference |
 | `docs/cli-reference.md` (.en.md) | Platform Engineers, SREs, DevOps, Tenants | da-tools CLI Reference |
 | `docs/custom-rule-governance.md` (.en.md) | Platform Engineers | 多租戶客製化規則治理規範 (Custom Rule Governance Model) |
@@ -74,9 +74,8 @@ lang: zh
 | `docs/integration/victoriametrics-integration.md` (.en.md) | Platform Engineers, SREs, vm-operators | VictoriaMetrics 整合指南 |
 | `docs/interactive-tools.md` (.en.md) | All | 互動式工具 |
 | `docs/migration-engine.md` (.en.md) | Platform Engineers, DevOps | AST 遷移引擎架構 |
-| `docs/migration-guide.md` (.en.md) | Tenants, DevOps | Migration Guide — 遷移指南 |
+| `docs/migration-guide.md` (.en.md) | Tenants, DevOps, Platform Engineers, SREs | Migration Guide — 遷移指南 |
 | `docs/migration-toolkit-installation.md` (.en.md) | Platform Engineers, SREs, customer-ops | Migration Toolkit 安裝指南（da-tools / da-guard） |
-| `docs/scenarios/advanced-scenarios.md` (.en.md) | Platform Engineers, SREs | 進階場景與測試覆蓋 |
 | `docs/scenarios/alert-routing-split.md` (.en.md) | Platform Engineers | 場景：同一 Alert、不同語義 — Platform/NOC vs Tenant 雙視角通知 |
 | `docs/scenarios/flat-to-conf-d-cutover-decision.md` (.en.md) | platform-ops, sre | Flat → conf.d/ Cutover Decision Guide |
 | `docs/scenarios/gitops-ci-integration.md` (.en.md) | Platform Engineers | 場景：GitOps CI/CD 整合指南 |
@@ -91,6 +90,7 @@ lang: zh
 | `docs/scenarios/shadow-monitoring-cutover.md` (.en.md) | Platform Engineers, SREs, DevOps, Tenants | 場景：Shadow Monitoring — 從告警健康評估到全自動切換 |
 | `docs/scenarios/staged-adoption-guide.md` (.en.md) | Platform Engineers, SREs, tenant-admins | Staged Rule Adoption Lifecycle |
 | `docs/scenarios/tenant-lifecycle.md` (.en.md) | All | 場景：租戶完整生命週期管理 |
+| `docs/scenarios/verified-scenarios.md` (.en.md) | Platform Engineers, SREs, decision-maker | 驗證場景與平台行為 (Verified Scenarios) |
 | `docs/scenarios/version-aware-thresholds.md` (.en.md) | tenant-admins, Platform Engineers, SREs | Version-Aware Thresholds — 版本感知閾值使用攻略 |
 | `docs/schemas/migration-state.md` | Platform Engineers, SREs, automation | Migration State Schema (.da/migration-state.json) |
 | `docs/schemas/README.md` | Platform Engineers, Tenants | JSON Schema Reference |

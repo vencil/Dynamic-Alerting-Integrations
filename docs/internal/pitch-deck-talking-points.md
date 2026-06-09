@@ -171,7 +171,7 @@ PR #59 三點實測（3-run median ms，[benchmark-playbook.md §Scaling Charact
 | 資源 | 說明 |
 |------|------|
 | [Benchmark Playbook §v2.8.0 1000-Tenant Hierarchical Baseline](./benchmark-playbook.md#v280-1000-tenant-hierarchical-baseline-phase-1-b-1) | 完整方法論、fixture spec、量測指令 — talking points 的 Phase 1 數字 SOT |
-| [docs/benchmarks.md §3 v2.8.0 Scale Gate](../benchmarks.md#3-v280-scale-gate-1000-tenant-實測) + [§4 e2e fire-through](../benchmarks.md#4-v280-端到端-alert-fire-through-baseline) | 公開 perf doc（platform-engineer / sre 受眾，雙語）。v2.8.0 rewrite 後 1000/5000-tenant baseline + 60-min soak verdict 已 promote；customer calibration disclaimer 留在 §4。 |
+| [docs/benchmarks.md §1 規模](../benchmarks.md#1-規模能撐多少租戶) + [§2 速度 e2e fire-through](../benchmarks.md#2-速度告警多久-fire) | 公開 perf doc（platform-engineer / sre 受眾，雙語）。v2.8.0 rewrite 後 1000/5000-tenant baseline + 60-min soak verdict 已 promote；customer calibration disclaimer 留在 §4。 |
 | [ADR-017: _defaults.yaml 繼承語意 + dual-hash hot-reload](../adr/017-defaults-yaml-inheritance-dual-hash.md) | dual-hash 架構決策原文（source_hash + merged_hash 定義、merge 語意） |
 | [`config_debounce.go` L260-330](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/app/config_debounce.go#L260-L330) | quiet defaults edit noOp detection 實作（L313-318 prev == mh 判定） |
 | [CHANGELOG `[Unreleased]`](../CHANGELOG.md) | Phase 1 baseline entry 與本文件交叉引用 |

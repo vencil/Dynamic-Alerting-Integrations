@@ -176,4 +176,4 @@ da-tools validate-config --config-dir ./conf.d/
 | ["Performance Analysis & Benchmarks"] | ⭐⭐ |
 | ["BYO Alertmanager Integration Guide"] | ⭐⭐ |
 | ["Bring Your Own Prometheus (BYOP) — Existing Monitoring Infrastructure Integration Guide"] | ⭐⭐ |
-| ["Advanced Scenarios & Test Coverage"](internal/test-coverage-matrix.md) | ⭐⭐ |
+| ["Verified Scenarios"](scenarios/verified-scenarios.en.md) | ⭐⭐ |

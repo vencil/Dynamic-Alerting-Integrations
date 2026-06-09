@@ -316,7 +316,7 @@ flowchart TD
 
 - **切版**：version-aware 閾值目前僅 **kubernetes pilot（container_cpu / memory）**；其餘 pack 寫 `version` key 會被 da-guard 拒（非-k8s 版本對齊列 future）。
 - **退役**：租戶閾值 / 版本的退役今天是 **detect-only**（`version_orphaned` sentinel + portal 黃燈 + CLI），**auto-GC PR bot 尚未實作**（需人工清）；只有 Tier 3 custom 有 expiry-based 自動下架（§5）。
-- **租戶自訂告警**：讓租戶 / domain 自訂非-pack 告警的 custom alert recipe（含 recipe `status: active / deprecated / eol` 生命週期）為**設計收斂、實作未起**（[ADR-024 §Custom Alerts](adr/024-version-aware-threshold-via-dimensional-label.md)，epic #741）。
+- **租戶自訂告警**：6 種參數化 recipe（threshold / rate / ratio / absence / p99_latency / forecast）+ 生命週期（`status: active / deprecated / eol`）**已隨 v2.9.0 落地**（epic #741，[ADR-024 §Custom Alerts](adr/024-version-aware-threshold-via-dimensional-label.md)）。**仍為 future**：Level 2 bounded-DSL / Level 3 raw-PromQL 逃生門、全域 rule-count budget（規劃中）。
 - **爆炸半徑**：平台規則靠 O(M) 向量化（一條規則蓋全租戶，改一處影響全部）→ CI promtool gate + shadow 數值 diff 為安全網；per-tenant / version 維度受 Cardinality Guard（per-tenant 500）封頂。
 
 **存取治理**（誰能在各階段改什麼、稽核、break-glass）見 [governance-security.md](governance-security.md)；**Tier 模型與晉升機制**見本文 §2 / §5。

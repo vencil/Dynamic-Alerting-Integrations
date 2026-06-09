@@ -179,4 +179,4 @@ da-tools validate-config --config-dir ./conf.d/
 | ["Operator Prometheus 整合"](integration/prometheus-operator-integration.md) | ⭐⭐ |
 | ["Operator Alertmanager 整合"](integration/operator-alertmanager-integration.md) | ⭐⭐ |
 | ["Operator GitOps 部署"](integration/operator-gitops-deployment.md) | ⭐⭐ |
-| ["進階場景與測試覆蓋"](internal/test-coverage-matrix.md) | ⭐⭐ |
+| ["驗證場景與平台行為"](scenarios/verified-scenarios.md) | ⭐⭐ |

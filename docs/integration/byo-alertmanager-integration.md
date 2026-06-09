@@ -445,5 +445,5 @@ da-tools maintenance-scheduler --config-dir conf.d/ --alertmanager http://alertm
 | ["性能基準 (Performance Benchmarks)"](../benchmarks.md) | ⭐⭐ |
 | ["da-tools CLI Reference"](../cli-reference.md) | ⭐⭐ |
 | ["Grafana Dashboard 導覽"](../grafana-dashboards.md) | ⭐⭐ |
-| ["進階場景與測試覆蓋"](../internal/test-coverage-matrix.md) | ⭐⭐ |
+| ["驗證場景與平台行為"](../scenarios/verified-scenarios.md) | ⭐⭐ |
 | ["Shadow Monitoring SRE SOP"](../shadow-monitoring-sop.md) | ⭐⭐ |

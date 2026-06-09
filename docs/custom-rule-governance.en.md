@@ -278,7 +278,7 @@ A rule here is not a single entity — its lifecycle mechanism differs by tier (
 
 - **Aging**: version-aware thresholds are currently the **kubernetes pilot only (container_cpu / memory)**; a `version` key on other packs is rejected by da-guard (non-k8s version alignment is Future).
 - **Retirement**: retiring a tenant threshold / version is **detect-only today** (`version_orphaned` sentinel + portal yellow + CLI); an **auto-GC PR bot is not yet implemented** (manual cleanup); only Tier 3 custom has expiry-based auto-decommission (§5).
-- **Tenant custom alerts**: a custom-alert recipe (letting tenants / domains author non-pack alerts, with a recipe `status: active / deprecated / eol` lifecycle) is **design-converged, not yet implemented** ([ADR-024 §Custom Alerts](adr/024-version-aware-threshold-via-dimensional-label.en.md), epic #741).
+- **Tenant custom alerts**: the 6 parameterized recipes (threshold / rate / ratio / absence / p99_latency / forecast) + lifecycle (`status: active / deprecated / eol`) **shipped in v2.9.0** (epic #741, [ADR-024 §Custom Alerts](adr/024-version-aware-threshold-via-dimensional-label.en.md)). **Still future**: the Level 2 bounded-DSL / Level 3 raw-PromQL escape hatch, and the global rule-count budget (planned).
 - **Blast radius**: platform rules rely on O(M) vectorization (one rule covers all tenants, editing one place affects all) → CI promtool gate + shadow value-diff are the safety net; per-tenant / version dimensions are capped by the Cardinality Guard (500 per tenant).
 
 **Access governance** (who can change what at each stage, audit, break-glass) is in [governance-security.md](governance-security.en.md); the **tier model & assimilation** are in §2 / §5.

@@ -12,7 +12,7 @@ lang: en
 Config-driven multi-tenant alerting platform built on Prometheus `group_left` vector matching.
 
 > **Managing 100 tenants: from 5,000 hand-written rules → 237 fixed rules.**
-> Tenants write YAML only — no PromQL, and even author their own alerts via parameterized recipes (v2.9.0 **Custom Alerts**). New tenant onboarding in minutes, changes take effect in seconds.
+> Tenants write YAML only — no PromQL, and even author their own alerts via parameterized recipes (v2.9.0 **Custom Alerts**). New-tenant **setup** in minutes (for rule-pack-covered metrics), changes in seconds; migrating an existing complex estate (custom exporters / topology metrics) depends on the metric shape — see the [Migration Guide](docs/migration-guide.en.md).
 
 ![CI](https://github.com/vencil/Dynamic-Alerting-Integrations/actions/workflows/ci.yml/badge.svg) ![Version](https://img.shields.io/badge/version-v2.9.0-brightgreen) ![Coverage](https://img.shields.io/badge/coverage-%E2%89%A585%25-green) ![Rule Packs](https://img.shields.io/badge/rule%20packs-15-orange) ![Alerts](https://img.shields.io/badge/alerts-117-red) ![Bilingual](https://img.shields.io/badge/bilingual-82%20pairs-blue)
 
@@ -37,9 +37,9 @@ Config-driven multi-tenant alerting platform built on Prometheus `group_left` ve
 | Metric | Traditional (100 tenants) | Dynamic Alerting |
 |--------|--------------------------|-----------------|
 | Rule count | 5,000+ (grows linearly with tenants) | 237 (fixed, O(M)) |
-| New tenant onboarding | 1–3 days (PR → Review → Deploy) | < 5 minutes (scaffold → validate → reload) |
+| New-tenant **setup** (rule-pack-covered metrics) | 1–3 days (PR → Review → Deploy) | < 5 minutes (scaffold → validate → reload) |
 | Prometheus memory | ~600MB+ | ~154MB |
-| Rule evaluation time | Grows linearly with tenants | 60ms (same for 2 or 102 tenants, [Benchmark](docs/benchmarks.en.md#2-why-it-scales-om-vector-matching)) |
+| Rule evaluation time | Grows linearly with tenants | 60ms (same for 2 or 102 tenants, [Benchmark](docs/benchmarks.en.md#11-platform-rules-why-its-independent-of-tenant-count-om)) |
 | Tenant knowledge required | PromQL + Alertmanager config | YAML threshold values |
 
 ---

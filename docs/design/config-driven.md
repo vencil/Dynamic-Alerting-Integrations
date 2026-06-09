@@ -150,7 +150,7 @@ Phase 4: Incremental Merge
 
 **Atomic Swap**：`RWMutex` 保護 config / hash / cache 的原子更新。讀端（Prometheus scrape）用 `RLock()`，reload 用 `Lock()`，確保 scrape 期間不會讀到半更新的狀態。
 
-**效能特性**（benchmark 數據見 [§3 v2.8.0 Scale Gate](../benchmarks.md#3-v280-scale-gate-1000-tenant-實測)）：
+**效能特性**（benchmark 數據見 [§1 規模](../benchmarks.md#1-規模能撐多少租戶)）：
 
 | 場景 | 延遲 | 程式路徑 |
 |------|------|---------|
@@ -791,7 +791,7 @@ da-tools cardinality-forecast --prometheus http://prometheus:9090 --warn-days 30
 da-tools diagnose <tenant> --config-dir conf.d/
 ```
 
-> threshold-exporter 的 config reload 延遲基線 (1000-tenant cold 112 ms / steady reload 1.30 ms) 見 [benchmarks.md §3 v2.8.0 Scale Gate](../benchmarks.md#3-v280-scale-gate-1000-tenant-實測)；engineering-reference 完整 `Resolve_*` 系列見 [Benchmark Playbook §Engineering Reference Benchmarks](../internal/benchmark-playbook.md#engineering-reference-benchmarks)。漸進式遷移指南見 [incremental-migration-playbook](../scenarios/incremental-migration-playbook.md)。
+> threshold-exporter 的 config reload 延遲基線 (1000-tenant cold 112 ms / steady reload 1.30 ms) 見 [benchmarks.md §1 規模](../benchmarks.md#1-規模能撐多少租戶)；engineering-reference 完整 `Resolve_*` 系列見 [Benchmark Playbook §Engineering Reference Benchmarks](../internal/benchmark-playbook.md#engineering-reference-benchmarks)。漸進式遷移指南見 [incremental-migration-playbook](../scenarios/incremental-migration-playbook.md)。
 
 ### 2.14 Tenant Management API Architecture (ADR-009)
 
@@ -825,4 +825,4 @@ da-portal 的 tenant-manager.jsx 在載入時探測 tenant-api 可用性。當 A
 
 **向量化編譯（守 O(M)）**：編譯器把所有宣告依 shape signature `(recipe, metric, op, window, quantile, denominator, selectors)` 分組，**每個 shape 產出一條** `app_metric > on(tenant) group_left(...) user_threshold{...}` 規則——規則數 = shape 數，**非**租戶數（同 [benchmarks.md §2](../benchmarks.md) 的 rule-pack O(M) 保證）。alertname 是靜態 shape slug、跨租戶共用一條規則。severity 由租戶決定，每個 shape 只生宣告過的 severity 分支。`mode`（page/silent）是 per-tenant 路由類別、**不入 shape signature**（不分叉規則、守 O(M)），改搭資料平面經 `group_left(name, mode)` 帶成 alert label——同 shape 不同 mode 的兩租戶共用一條規則仍能各自路由（silent→null / page→pager）。version graceful-join 全程沿用既有 version-aware 機制（label 缺時落 `default`）。
 
-**實作分期**：S1+S2 交付**編譯器 + recipe 庫 + schema + 測試**（`make custom-alerts-compile`）。**S3a** 補上 data-plane：threshold-exporter 解析 tenant `_custom_alerts` 並 emit `user_threshold{component="custom", metric, recipe_id, name, mode}`（label 形態 A；malformed 宣告 fail-loud → `da_custom_alert_parse_errors` gauge）。**仍待 S3b**：部署 committed pack（configmap + operator CRD）+ platform/domain `_defaults.yaml` 繼承 emission——因為 repo 的 #731 closed-label 契約把「committed pack」與「exporter emission」結構性耦合，pack 須在 exporter 會 emit 之後才 commit（否則部署一條 prod 跑不動的規則）。recipe 庫見 [`rule-packs/recipes/`](https://github.com/vencil/Dynamic-Alerting-Integrations/tree/main/rule-packs/recipes)；完整設計見 [ADR-024 §Custom Alerts](../adr/024-version-aware-threshold-via-dimensional-label.md)。
+**實作分期**：S1+S2 交付**編譯器 + recipe 庫 + schema + 測試**（`make custom-alerts-compile`）。**S3a** 補上 data-plane：threshold-exporter 解析 tenant `_custom_alerts` 並 emit `user_threshold{component="custom", metric, recipe_id, name, mode}`（label 形態 A；malformed 宣告 fail-loud → `da_custom_alert_parse_errors` gauge）。**S3b 已交付（v2.9.0）**：committed pack 已部署（`k8s/03-monitoring/configmap-rules-custom-alerts.yaml`）+ platform/domain `_defaults.yaml` 繼承 emission，custom 告警可在 prod fire；先前 #731 closed-label 契約把「committed pack」與「exporter emission」結構性耦合，故 pack 在 exporter 會 emit 之後才 commit（避免部署一條 prod 跑不動的規則）。recipe 庫見 [`rule-packs/recipes/`](https://github.com/vencil/Dynamic-Alerting-Integrations/tree/main/rule-packs/recipes)；完整設計見 [ADR-024 §Custom Alerts](../adr/024-version-aware-threshold-via-dimensional-label.md)。

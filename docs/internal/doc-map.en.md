@@ -38,8 +38,8 @@ lang: en
 | `docs/adr/024-version-aware-threshold-via-dimensional-label.md` (.en.md) | Platform Engineers, contributors, SREs | ADR-024: Declarative Dimensional Alerting Engine — Version-Aware Thresholds + Custom Alerts |
 | `docs/api/README.md` (.en.md) | Platform Engineers, SREs | Threshold Exporter API Reference |
 | `docs/api/tenant-api-hardening.md` (.en.md) | platform-ops, sre, security | Tenant API Hardening (v2.8.0) |
-| `docs/architecture-and-design.md` (.en.md) | Platform Engineers | Architecture and Design — Multi-Tenant Dynamic Alerting Platform Technical Whitepaper |
-| `docs/benchmarks.md` (.en.md) | Platform Engineers, SREs | Performance Benchmarks |
+| `docs/architecture-and-design.md` (.en.md) | Platform Engineers, SREs, decision-maker | Architecture and Design — Multi-Tenant Dynamic Alerting Platform Technical Whitepaper |
+| `docs/benchmarks.md` (.en.md) | Platform Engineers, SREs, decision-maker | Performance Benchmarks |
 | `docs/cheat-sheet.md` (.en.md) | All | da-tools Quick Reference |
 | `docs/cli-reference.md` (.en.md) | Platform Engineers, SREs, DevOps, Tenants | da-tools CLI Reference |
 | `docs/custom-rule-governance.md` (.en.md) | Platform Engineers | Multi-Tenant Custom Rule Governance Model |
@@ -74,9 +74,8 @@ lang: en
 | `docs/integration/victoriametrics-integration.md` (.en.md) | Platform Engineers, SREs, vm-operators | VictoriaMetrics Integration Guide |
 | `docs/interactive-tools.md` (.en.md) | All | Interactive Tools |
 | `docs/migration-engine.md` (.en.md) | Platform Engineers, DevOps | AST Migration Engine Architecture |
-| `docs/migration-guide.md` (.en.md) | Tenants, DevOps | Migration Guide — From Traditional Monitoring to Dynamic Alerting Platform |
+| `docs/migration-guide.md` (.en.md) | Tenants, DevOps, Platform Engineers, SREs | Migration Guide — From Traditional Monitoring to Dynamic Alerting Platform |
 | `docs/migration-toolkit-installation.md` (.en.md) | Platform Engineers, SREs, customer-ops | Migration Toolkit Installation Guide (da-tools / da-guard) |
-| `docs/scenarios/advanced-scenarios.md` (.en.md) | Platform Engineers, SREs | Advanced Scenarios & Test Coverage |
 | `docs/scenarios/alert-routing-split.md` (.en.md) | Platform Engineers | Scenario: Same Alert, Different Semantics — Platform/NOC vs Tenant Dual-Perspective Notifications |
 | `docs/scenarios/flat-to-conf-d-cutover-decision.md` (.en.md) | platform-ops, sre | Flat → conf.d/ Cutover Decision Guide |
 | `docs/scenarios/gitops-ci-integration.md` (.en.md) | Platform Engineers | Scenario: GitOps CI/CD Integration Guide |
@@ -91,6 +90,7 @@ lang: en
 | `docs/scenarios/shadow-monitoring-cutover.md` (.en.md) | Platform Engineers, SREs, DevOps, Tenants | Scenario: Shadow Monitoring — From Alert Health Assessment to Automated Cutover |
 | `docs/scenarios/staged-adoption-guide.md` (.en.md) | Platform Engineers, SREs, tenant-admins | Staged Rule Adoption Lifecycle |
 | `docs/scenarios/tenant-lifecycle.md` (.en.md) | All | Scenario: Complete Tenant Lifecycle Management |
+| `docs/scenarios/verified-scenarios.md` (.en.md) | Platform Engineers, SREs, decision-maker | Verified Scenarios & Platform Behavior |
 | `docs/scenarios/version-aware-thresholds.md` (.en.md) | tenant-admins, Platform Engineers, SREs | Version-Aware Thresholds — A Usage Guide |
 | `docs/schemas/migration-state.md` | Platform Engineers, SREs, automation | Migration State Schema (.da/migration-state.json) |
 | `docs/schemas/README.md` | Platform Engineers, Tenants | JSON Schema Reference |
