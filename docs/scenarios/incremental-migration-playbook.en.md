@@ -23,7 +23,7 @@ Each phase is **independently valuable**—you can stop at any phase without sys
 - Running Prometheus instance (`http://prometheus:9090`)
 - Running Alertmanager (`http://alertmanager:9093`)
 - Kubernetes cluster (Kind, EKS, GKE, etc.)
-- `da-tools` image pushed to private registry or publicly available (`ghcr.io/vencil/da-tools:v2.8.0`)
+- `da-tools` image pushed to private registry or publicly available (`ghcr.io/vencil/da-tools:v2.9.0`)
 - At least one namespace for monitoring (e.g., `monitoring`, `observability`)
 
 ## Migration Timeline (Typical Case)
@@ -152,7 +152,7 @@ helm repo update
 
 helm install threshold-exporter-redis vencil/threshold-exporter \
   --namespace monitoring \
-  --set image.tag=v2.8.0 \
+  --set image.tag=v2.9.0 \
   --set config.dir=/etc/threshold-exporter/conf.d \
   --set replicaCount=2 \
   --values - << 'EOF'

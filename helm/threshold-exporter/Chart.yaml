@@ -3,6 +3,6 @@ name: threshold-exporter
 description: Dynamic threshold exporter for Multi-Tenant Alerting
 type: application
 # version: Helm Chart 版本 — 與平台 release 線耦合，僅 release wrap-up 時 bump（test_chart_version_NNN 守門；feature PR 如 #606/#607 不 bump）
-version: 2.8.0
+version: 2.9.0
 # appVersion: Go binary 版本（僅在 Go 程式碼變更時升級）
-appVersion: "2.8.0"
+appVersion: "2.9.0"

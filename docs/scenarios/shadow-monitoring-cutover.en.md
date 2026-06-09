@@ -31,7 +31,7 @@ Before deciding to migrate, use `da-tools alert-quality` to quantify your existi
 ```bash
 # Scan all tenants, analyze past 30 days
 docker run --rm --network host \
-  ghcr.io/vencil/da-tools:v2.8.0 alert-quality \
+  ghcr.io/vencil/da-tools:v2.9.0 alert-quality \
   --prometheus http://localhost:9090 \
   --period 30d
 

@@ -64,15 +64,6 @@ Upgraded "text rule → reviewer convention → AI reminder" to lint hooks that 
 
 ---
 
-## Release Wrap-up Remaining (v2.8.0)
-
-- ⬜ Real 4-hr soak (`make soak-readiness`, produces `.build/v2.8.0-soak/soak-report.md` as a release asset)
-- ⬜ `make pre-tag` (version-check + lint-docs; `make bump-docs` flips v2.7.0 → v2.8.0 across 50+ docs in one shot)
-- ⬜ `make benchmark-report` for v2.8.0 baseline
-- ⬜ Draft v2.8.0 GitHub Release body ([github-release-playbook.md §Step 3.5](../internal/github-release-playbook.md) skeleton + planning archive §1/§2/§3 distill)
-- ⬜ Five-line tag push (`v2.8.0` / `exporter/v2.8.0` / `tools/v2.8.0` / `portal/v2.8.0` / `tenant-api/v2.8.0`) + Release publish
-
----
 
 ## v2.9.0 Direction: Production-Grade Hardening (Customer Hardening)
 

@@ -67,7 +67,7 @@ Federation (< 10 edges) or Remote Write (10+ edges). Config examples: [Federatio
 
 ```bash
 helm upgrade --install threshold-exporter \
-  oci://ghcr.io/vencil/charts/threshold-exporter --version 2.8.0 \
+  oci://ghcr.io/vencil/charts/threshold-exporter --version 2.9.0 \
   -n monitoring --create-namespace -f values-override.yaml
 ```
 

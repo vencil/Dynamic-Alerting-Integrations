@@ -262,7 +262,7 @@ JSON-in / JSON-out + Markdown report；上游由 Python `da-tools` 包裝呼叫�
 
 ```bash
 helm install threshold-exporter \
-  oci://ghcr.io/vencil/charts/threshold-exporter --version 2.8.0 \
+  oci://ghcr.io/vencil/charts/threshold-exporter --version 2.9.0 \
   -n monitoring --create-namespace -f values-override.yaml
 ```
 

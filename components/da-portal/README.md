@@ -1,4 +1,4 @@
-# da-portal (v2.8.0)
+# da-portal (v2.9.0)
 
 <!-- 標題版號 = 最後 released portal tag（目前 v2.8.0）。Release wrap 切五線 tag 時，
      本標題 + 下方 helm --version 跟著批次同步 bump。 -->
@@ -62,11 +62,11 @@ make vendor-download
 make portal-build
 
 # 3. Build image（從 repo root，因為 COPY 來源是 docs/ 與 tools/）
-make portal-image                                  # 預設 tag: ghcr.io/vencil/da-portal:v2.8.0
-# 或：docker build -t ghcr.io/vencil/da-portal:v2.8.0 -f components/da-portal/Dockerfile .
+make portal-image                                  # 預設 tag: ghcr.io/vencil/da-portal:v2.9.0
+# 或：docker build -t ghcr.io/vencil/da-portal:v2.9.0 -f components/da-portal/Dockerfile .
 
 # 4. Run
-docker run -p 8080:80 ghcr.io/vencil/da-portal:v2.8.0
+docker run -p 8080:80 ghcr.io/vencil/da-portal:v2.9.0
 # 開瀏覽器：http://localhost:8080  →  Hub
 ```
 
@@ -76,7 +76,7 @@ docker run -p 8080:80 ghcr.io/vencil/da-portal:v2.8.0
 
 ```bash
 helm install da-portal \
-  oci://ghcr.io/vencil/charts/da-portal --version 2.8.0 \
+  oci://ghcr.io/vencil/charts/da-portal --version 2.9.0 \
   -n monitoring --create-namespace \
   -f values-override.yaml
 ```
@@ -141,7 +141,7 @@ docker run -p 8080:80 \
   -v ./my-platform-data.json:/usr/share/nginx/html/assets/platform-data.json \
   -v ./my-flows.json:/usr/share/nginx/html/assets/flows.json \
   -v ./my-tool-registry.yaml:/usr/share/nginx/html/assets/tool-registry.yaml \
-  ghcr.io/vencil/da-portal:v2.8.0
+  ghcr.io/vencil/da-portal:v2.9.0
 ```
 
 | Mount 檔 | 用途 | 來源 |
@@ -156,7 +156,7 @@ docker run -p 8080:80 \
 ```bash
 docker run -p 8080:80 \
   -v ./custom-nginx.conf:/etc/nginx/conf.d/default.conf \
-  ghcr.io/vencil/da-portal:v2.8.0
+  ghcr.io/vencil/da-portal:v2.9.0
 ```
 
 預設 `nginx.conf` 把 `/api/v1/` proxy 給 `tenant-api.monitoring.svc.cluster.local:8080`。要改 upstream，或加 Prometheus reverse proxy 給 alert preview 直查 PromQL，editable 範本見 [`nginx.conf`](nginx.conf)。

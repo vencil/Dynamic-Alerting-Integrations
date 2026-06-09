@@ -10,7 +10,7 @@ lang: en
 
 > **Language / 語言：** **English (Current)** | [中文](./migration-toolkit-installation.md)
 
-> **Applies to**: `tools/v2.8.0` and later (every Release after Migration Toolkit packaging lands).  
+> **Applies to**: `tools/v2.9.0` and later (every Release after Migration Toolkit packaging lands).  
 > Older releases (≤ `tools/v2.7.0`) only ship the Docker image delivery path.
 
 ## Why a Migration Toolkit
@@ -50,22 +50,22 @@ Every GitHub Release (`tools/v*` tag) ships assets for all three paths; pick whi
 
 ```bash
 # Pull latest stable (version is synced by bump_docs.py at release time)
-docker pull ghcr.io/vencil/da-tools:v2.8.0
+docker pull ghcr.io/vencil/da-tools:v2.9.0
 
 # Run a one-shot command
-docker run --rm ghcr.io/vencil/da-tools:v2.8.0 --help
-docker run --rm ghcr.io/vencil/da-tools:v2.8.0 guard --help
+docker run --rm ghcr.io/vencil/da-tools:v2.9.0 --help
+docker run --rm ghcr.io/vencil/da-tools:v2.9.0 guard --help
 
 # Mount conf.d in to run guard
 docker run --rm \
     -v "$(pwd)/conf.d:/conf.d:ro" \
-    ghcr.io/vencil/da-tools:v2.8.0 \
+    ghcr.io/vencil/da-tools:v2.9.0 \
     guard defaults-impact --config-dir /conf.d --required-fields cpu,memory
 ```
 
 **Contents**: Python `da-tools` CLI + bundled `da-guard` / `da-batchpr` / `da-parser` Linux/amd64 binaries at `/usr/local/bin/`. The `da-tools guard` / `da-tools batch-pr` / `da-tools parser` subcommands auto-locate their respective binaries inside the image — no need to set `$DA_GUARD_BINARY` / `$DA_BATCHPR_BINARY` / `$DA_PARSER_BINARY`.
 
-**Trivy CVE scan** runs automatically at release time (`CRITICAL` / `HIGH` severities fail-fast). The image SBOM + **cosign keyless signatures** ship with every artefact from `tools/v2.8.0` onward (see [§Signature Verification](#signature-verification) below to verify).
+**Trivy CVE scan** runs automatically at release time (`CRITICAL` / `HIGH` severities fail-fast). The image SBOM + **cosign keyless signatures** ship with every artefact from `tools/v2.9.0` onward (see [§Signature Verification](#signature-verification) below to verify).
 
 ---
 
@@ -112,7 +112,7 @@ Each archive contains **one** binary (or `<name>.exe`), plus a single `SHA256SUM
 
 ```bash
 # Download + verify hash + extract + place on PATH
-TAG=tools/v2.8.0    # Synced by bump_docs.py at release time; replace with the tag you want
+TAG=tools/v2.9.0    # Synced by bump_docs.py at release time; replace with the tag you want
 OS=linux            # or darwin, windows
 ARCH=amd64          # or arm64
 URL=https://github.com/vencil/Dynamic-Alerting-Integrations/releases/download/${TAG}
@@ -125,13 +125,13 @@ sha256sum --check --ignore-missing SHA256SUMS
 
 tar xzf da-guard.tar.gz
 sudo install -m 0755 da-guard-${OS}-${ARCH} /usr/local/bin/da-guard
-da-guard --version    # should print da-guard v2.8.0
+da-guard --version    # should print da-guard v2.9.0
 ```
 
 ### Install (Windows)
 
 ```powershell
-$TAG = "tools/v2.8.0"    # Synced by bump_docs.py at release time; replace with the tag you want
+$TAG = "tools/v2.9.0"    # Synced by bump_docs.py at release time; replace with the tag you want
 $Url = "https://github.com/vencil/Dynamic-Alerting-Integrations/releases/download/$TAG"
 
 Invoke-WebRequest -Uri "$Url/da-guard-windows-amd64.zip" -OutFile da-guard.zip
@@ -165,7 +165,7 @@ For environments that cannot pull from `ghcr.io` at all (isolated internal regis
 ### One-time import flow
 
 ```bash
-TAG=tools/v2.8.0    # Synced by bump_docs.py at release time; replace with the tag you want
+TAG=tools/v2.9.0    # Synced by bump_docs.py at release time; replace with the tag you want
 VER=2.7.0
 URL=https://github.com/vencil/Dynamic-Alerting-Integrations/releases/download/${TAG}
 
@@ -181,14 +181,14 @@ sha256sum --check da-tools-image.tar.gz.sha256
 
 # 4. Inside the air-gapped environment, load into local Docker
 gunzip -c da-tools-image.tar.gz | docker load
-# Prints: Loaded image: ghcr.io/vencil/da-tools:v2.8.0
+# Prints: Loaded image: ghcr.io/vencil/da-tools:v2.9.0
 
 # 5. Re-tag to your internal registry (optional)
-docker tag ghcr.io/vencil/da-tools:v2.8.0 internal-registry.corp/da-tools:v2.8.0
-docker push internal-registry.corp/da-tools:v2.8.0
+docker tag ghcr.io/vencil/da-tools:v2.9.0 internal-registry.corp/da-tools:v2.9.0
+docker push internal-registry.corp/da-tools:v2.9.0
 ```
 
-After that, internal CI / pre-commit hooks use `internal-registry.corp/da-tools:v2.8.0` directly. The `da-guard` binary is bundled at `/usr/local/bin/da-guard` inside the image — no separate transfer needed.
+After that, internal CI / pre-commit hooks use `internal-registry.corp/da-tools:v2.9.0` directly. The `da-guard` binary is bundled at `/usr/local/bin/da-guard` inside the image — no separate transfer needed.
 
 ### Pure binary also works in air-gapped
 
@@ -207,7 +207,7 @@ Each Release ships:
 
 ## Signature Verification
 
-From `tools/v2.8.0` onward, every Release artefact ships with a
+From `tools/v2.9.0` onward, every Release artefact ships with a
 **cosign keyless signature** ([sigstore](https://www.sigstore.dev/)
 ecosystem, the industry standard) plus an **SBOM** (both SPDX and
 CycloneDX formats). The signature proves an artefact came from our
@@ -224,13 +224,13 @@ curl -fsSLo verify_release.sh \
 chmod +x verify_release.sh
 
 # Verify a single binary archive
-./verify_release.sh --tag tools/v2.8.0 --artefact da-parser-linux-amd64.tar.gz
+./verify_release.sh --tag tools/v2.9.0 --artefact da-parser-linux-amd64.tar.gz
 
 # Verify the air-gapped image tar
-./verify_release.sh --tag tools/v2.8.0 --artefact da-tools-image-v2.8.0.tar.gz
+./verify_release.sh --tag tools/v2.9.0 --artefact da-tools-image-v2.8.0.tar.gz
 
 # Verify the SBOM (CycloneDX format)
-./verify_release.sh --tag tools/v2.8.0 --artefact da-tools-image-v2.8.0.cyclonedx.json
+./verify_release.sh --tag tools/v2.9.0 --artefact da-tools-image-v2.8.0.cyclonedx.json
 ```
 
 The script handles: (1) downloading the artefact + .sig + .cert +
@@ -245,7 +245,7 @@ at the requested tag.
 **Binary archive**:
 
 ```bash
-TAG=tools/v2.8.0
+TAG=tools/v2.9.0
 ARTEFACT=da-parser-linux-amd64.tar.gz
 URL=https://github.com/vencil/Dynamic-Alerting-Integrations/releases/download/$TAG
 
@@ -323,7 +323,7 @@ activation paths for the most common alternatives.
 | B (binary) | Re-walk "download + verify hash + replace `/usr/local/bin/da-guard`" |
 | C (air-gapped) | Repeat the import flow (every release requires a fresh import) |
 
-For major-version upgrades (e.g. `tools/v2.x → tools/v3.x`), read the Breaking changes section in the corresponding Release notes first. From `tools/v2.8.0` onward, [Release notes templates](https://github.com/vencil/Dynamic-Alerting-Integrations/releases/tag/tools/v2.8.0) are auto-generated (with commit-log links); a maintainer reviews and publishes manually.
+For major-version upgrades (e.g. `tools/v2.x → tools/v3.x`), read the Breaking changes section in the corresponding Release notes first. From `tools/v2.9.0` onward, [Release notes templates](https://github.com/vencil/Dynamic-Alerting-Integrations/releases/tag/tools/v2.9.0) are auto-generated (with commit-log links); a maintainer reviews and publishes manually.
 
 ## Verify da-guard works in your repo
 

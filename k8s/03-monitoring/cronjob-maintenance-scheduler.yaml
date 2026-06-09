@@ -45,7 +45,7 @@ spec:
               type: RuntimeDefault
           containers:
             - name: scheduler
-              image: ghcr.io/vencil/da-tools:v2.8.0
+              image: ghcr.io/vencil/da-tools:v2.9.0
               securityContext:
                 allowPrivilegeEscalation: false
                 readOnlyRootFilesystem: true
