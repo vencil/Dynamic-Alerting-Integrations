@@ -3,7 +3,7 @@ title: "Release Signing Runbook"
 tags: [release, security, supply-chain, internal]
 audience: [maintainers]
 version: v2.9.0
-verified-at-version: v2.8.0
+verified-at-version: v2.9.0
 lang: zh
 ---
 
