@@ -71,6 +71,11 @@ tenants:
 
 進階使用者也可在 `conf.d/<tenant>.yaml` 的 `_custom_alerts` 直接宣告，語法見 [threshold-exporter §自訂告警](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md#45-自訂告警-_custom_alerts)。
 
+> **3 個要注意的地雷**：
+> 1. 你的 metric **必須帶 `tenant` label**（平台規則用 `on(tenant)` 聯接），否則規則會**靜默不觸發**——多租戶 scrape 通常靠 relabel 注入。
+> 2. `absence` recipe 對**從沒出現過**的 metric 會**立即觸發**（防呆 guard 尚未 ship）；初次導入請先讓該 metric 至少出現一次。
+> 3. `threshold` / `rate` 以 `max`/`sum by(tenant)` 聚合，會**吃掉 `device` / `instance` 等子 label**（alert 只說「最差的」、不說是哪一個）。
+
 ### 設定 Alert 通知路由
 
 ```yaml

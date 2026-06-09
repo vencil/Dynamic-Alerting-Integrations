@@ -196,7 +196,7 @@ The table below indexes the **core design concepts** (timeless capabilities, not
 
 | Design Concept | Business impact | Technical mechanism | Details |
 |--------|------|------|------|
-| **Config-Driven Architecture** | Zero extra rule cost per new tenant; onboarding from 2 hr to 5 min | Three-state config, Directory Scanner, hierarchical `conf.d/` (ADR-016), `_defaults.yaml` L0→L3 inheritance (ADR-017), dual-hash hot-reload | [config-driven.en.md](design/config-driven.en.md) |
+| **Config-Driven Architecture** | Zero extra rule cost per new tenant; for rule-pack-covered metrics, onboarding 2 hr → 5 min (migration time for complex/topology metrics: see the [Migration Guide](migration-guide.en.md)) | Three-state config, Directory Scanner, hierarchical `conf.d/` (ADR-016), `_defaults.yaml` L0→L3 inheritance (ADR-017), dual-hash hot-reload | [config-driven.en.md](design/config-driven.en.md) |
 | **Inheritance Engine** | Cleaner configs, less duplication, multi-layer default management | `_defaults.yaml` L0→L3 deep merge (ADR-017) + dual-hash (source + merged) precise hot-reload + debounce to absorb ConfigMap symlink rotation; flat and hierarchical `conf.d/` coexist (ADR-016) | [config-driven.en.md](design/config-driven.en.md) |
 | **Multi-tier Severity** | Eliminates duplicate notifications; teams see only the highest priority | `_critical` suffix, Severity Dedup, Alertmanager inhibit | [config-driven.en.md](design/config-driven.en.md) |
 | **Regex & Scheduled Thresholds** | Auto-widen thresholds off-hours, fewer false night alerts | Regex dimension matching, time-window scheduling (UTC), ResolveAt | [config-driven.en.md](design/config-driven.en.md) |

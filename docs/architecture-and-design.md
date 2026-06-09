@@ -198,7 +198,7 @@ graph LR
 
 | 設計概念 | 業務影響 | 技術機制 | 詳見 |
 |--------|---------|---------|------|
-| **Config-Driven 架構** | 新增租戶零額外規則成本，Onboard 從 2hr 降至 5min | 三態配置、Directory Scanner、階層式 `conf.d/`（ADR-016）、`_defaults.yaml` L0→L3 繼承（ADR-017）、dual-hash 熱重載 | [config-driven.md](design/config-driven.md) |
+| **Config-Driven 架構** | 新增租戶零額外規則成本；rule-pack 涵蓋的指標 Onboard 2hr→5min（複雜/拓樸指標的遷移時間見[遷移指南](migration-guide.md)） | 三態配置、Directory Scanner、階層式 `conf.d/`（ADR-016）、`_defaults.yaml` L0→L3 繼承（ADR-017）、dual-hash 熱重載 | [config-driven.md](design/config-driven.md) |
 | **繼承引擎** | 配置乾淨化、減少重複、多層次預設管理 | `_defaults.yaml` L0→L3 深合併（ADR-017）+ 雙雜湊（source + merged）精確熱重載 + debounce 防 ConfigMap symlink rotation；扁平與階層式 `conf.d/` 共存（ADR-016） | [config-driven.md](design/config-driven.md) |
 | **多層嚴重度** | 消除告警重複通知，團隊只收到最高優先級 | `_critical` 後綴、Severity Dedup、Alertmanager inhibit | [config-driven.md](design/config-driven.md) |
 | **Regex 與排程式閾值** | 非工作時段自動調寬閾值，減少夜間假告警 | Regex 維度匹配、時間窗口排程 (UTC)、ResolveAt | [config-driven.md](design/config-driven.md) |

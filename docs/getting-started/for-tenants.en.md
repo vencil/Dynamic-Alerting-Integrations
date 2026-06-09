@@ -71,6 +71,11 @@ Beyond the platform's built-in alerts, you can add your own. **The easiest way: 
 
 Advanced users can also declare them directly under `_custom_alerts` in `conf.d/<tenant>.yaml`; see [threshold-exporter §Custom Alerts](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md#45-自訂告警-_custom_alerts).
 
+> **Three footguns to know**:
+> 1. Your metric **must carry a `tenant` label** (platform rules join `on(tenant)`), or the rule **silently never fires** — multi-tenant scrapes usually inject it via relabel.
+> 2. The `absence` recipe **fires immediately** for a metric that **never appeared** (the safety guard isn't shipped yet); on first onboarding, make the metric appear at least once.
+> 3. `threshold` / `rate` aggregate with `max`/`sum by(tenant)`, which **drops sub-labels** like `device` / `instance` (the alert says "the worst one", not which one).
+
 ### Setting Up Alert Notification Routing
 
 ```yaml
