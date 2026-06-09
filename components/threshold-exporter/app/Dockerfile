@@ -1,7 +1,7 @@
 # #463 multi-arch: pin the builder to the native BUILDPLATFORM and
 # cross-compile to TARGETARCH below — far faster than emulating the Go
 # compile under QEMU.
-FROM --platform=$BUILDPLATFORM golang:1.26.3-alpine3.22 AS builder
+FROM --platform=$BUILDPLATFORM golang:1.26.4-alpine3.22 AS builder
 
 WORKDIR /app
 COPY go.mod go.sum ./
