@@ -76,7 +76,6 @@ lang: en
 | `docs/migration-engine.md` (.en.md) | Platform Engineers, DevOps | AST Migration Engine Architecture |
 | `docs/migration-guide.md` (.en.md) | Tenants, DevOps, Platform Engineers, SREs | Migration Guide — From Traditional Monitoring to Dynamic Alerting Platform |
 | `docs/migration-toolkit-installation.md` (.en.md) | Platform Engineers, SREs, customer-ops | Migration Toolkit Installation Guide (da-tools / da-guard) |
-| `docs/scenarios/advanced-scenarios.md` (.en.md) | Platform Engineers, SREs | Advanced Scenarios & Test Coverage |
 | `docs/scenarios/alert-routing-split.md` (.en.md) | Platform Engineers | Scenario: Same Alert, Different Semantics — Platform/NOC vs Tenant Dual-Perspective Notifications |
 | `docs/scenarios/flat-to-conf-d-cutover-decision.md` (.en.md) | platform-ops, sre | Flat → conf.d/ Cutover Decision Guide |
 | `docs/scenarios/gitops-ci-integration.md` (.en.md) | Platform Engineers | Scenario: GitOps CI/CD Integration Guide |
