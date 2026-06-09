@@ -1,7 +1,7 @@
 ---
 title: "Architecture and Design — Multi-Tenant Dynamic Alerting Platform Technical Whitepaper"
 tags: [architecture, core-design]
-audience: [platform-engineer]
+audience: [platform-engineer, sre, decision-maker]
 version: v2.9.0
 lang: en
 ---
@@ -11,33 +11,39 @@ lang: en
 
 ## Introduction
 
-This document provides Platform Engineers and Site Reliability Engineers (SREs) with an in-depth exploration of the technical architecture of the "Multi-Tenant Dynamic Alerting Platform" .
+This is the **architecture Hub** for the "Multi-Tenant Dynamic Alerting Platform" — a single page to understand how the system is composed and what each design concept is, then route to the deeper spoke documents. Written at depth for Platform Engineers / SREs; the business-impact column and Design Concepts Overview also let decision-makers assess value quickly.
 
 > 📖 **Unfamiliar term?** (`group_left`, Projected Volume, tri-state, Cardinality Guard, Sentinel Alert, etc.) — check the [Glossary](glossary.en.md) anytime.
 
-**This document covers:**
-- System architecture and core design principles (including Regex dimension thresholds, scheduled thresholds)
-- High availability (HA) design
-- Rule Pack governance model overview (see [design/rule-packs.en.md](design/rule-packs.en.md) for details)
+**How to read this** (readers switch at any time, and often several read it together):
 
-**Standalone design documents (spoke files):**
-- **Config-Driven Design Deep Dive** → [design/config-driven.en.md](design/config-driven.en.md) — The core mechanism that eliminates N×M config explosion; zero additional rule maintenance per new tenant
-- **Rule Packs & Projected Volume** → [design/rule-packs.en.md](design/rule-packs.en.md) — 15 independent rule packs with zero PR conflicts, enabling cross-team parallel development
-- **High Availability (HA) Deep Dive** → [design/high-availability.en.md](design/high-availability.en.md) — Achieving 99.9%+ alert reliability SLA with zero monitoring blind spots during maintenance
-- **Future Roadmap** → [design/roadmap-future.en.md](design/roadmap-future.en.md) — v2.9.0 delivered items + v2.10.0+ long-term exploration directions
+| You are… | Start with | Drill into |
+|---|---|---|
+| Decision-maker | Introduction, [Design Concepts Overview](#design-concepts-overview) (business-impact) | [Benchmarks](benchmarks.en.md) |
+| New / first-time reader | Introduction, [§1 System Architecture Diagram](#1-system-architecture-diagram) | Design Concepts Overview |
+| Platform / SRE | the whole doc + each spoke | — |
+| Domain Expert (DBA/Infra) | Design Concepts Overview, Tenant API | [Config-Driven Design](design/config-driven.en.md) |
 
-**Standalone topic documents:**
-- **Benchmarks** → [benchmarks.en.md](benchmarks.en.md)
-- **Governance & Security** → [governance-security.en.md](governance-security.en.md)
-- **Troubleshooting** → [troubleshooting.en.md](troubleshooting.en.md)
-- **Advanced Scenarios** → [internal/test-coverage-matrix.md](internal/test-coverage-matrix.md)
-- **Migration Engine** → [migration-engine.en.md](migration-engine.en.md)
+> **Reading together**: everyone shares **Introduction + §1 System Architecture Diagram** (the full picture anyone can grasp), then drills into the spoke they care about.
 
-**Related documentation:**
-- **Quick Start** → [README.en.md](index.md)
-- **Migration Guide** → [migration-guide.md](migration-guide.md)
-- **Rule Packs Documentation** → [rule-packs/README.md](rule-packs/README.md)
-- **threshold-exporter Component** → [components/threshold-exporter/README.md](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md)
+**Related documents:**
+
+| Document | Topics | Primary readers |
+|------|---------|---------|
+| *Design deep-dives (spoke)* | | |
+| [Config-Driven Design](design/config-driven.en.md) | Three-state config, Directory Scanner, multi-tier severity, scheduled thresholds, routing, Tenant API, inheritance engine | Platform / SRE / Domain Expert |
+| [Rule Packs & Projected Volume](design/rule-packs.en.md) | 15 rule packs, three-part structure, bilingual annotations | Platform / Domain Expert |
+| [High Availability (HA)](design/high-availability.en.md) | 2-replica strategy, PDB, rolling update, SLA 99.9%+ | Platform / SRE |
+| [Future Roadmap](design/roadmap-future.en.md) | v2.9.0 delivered + v2.10.0+ exploration | Platform / decision-maker |
+| *Topics* | | |
+| [Benchmarks](benchmarks.en.md) | Scale / speed / capacity / stability measurements | Platform / SRE / decision-maker |
+| [Governance & Security](governance-security.en.md) | Audit, security discipline | Platform / Security |
+| [Troubleshooting](troubleshooting.en.md) | Edge cases, diagnostics | Platform / SRE / Tenant |
+| [Advanced Scenarios & Test Coverage](internal/test-coverage-matrix.md) | Scenario matrix | Platform / SRE |
+| *Onboarding & migration* | | |
+| [Migration Engine](migration-engine.en.md) | AST migration of an existing PromRule corpus | Platform / DevOps |
+| [Migration Toolkit Install](migration-toolkit-installation.en.md) | Three delivery paths, supply-chain verification | Platform / DevOps |
+| [VCS Integration](vcs-integration-guide.md) | GitOps / forge integration | Platform / DevOps |
 
 ---
 
@@ -142,15 +148,15 @@ graph TB
 1. **Directory Scanner** scans the `conf.d/` directory, automatically discovering `_defaults.yaml` and tenant configuration files
 2. **threshold-exporter × 2 HA Replicas** read ConfigMap and output three-state Prometheus metrics
 3. **Projected Volume** mounts 15 independent rule packs, zero PR conflicts, each team independently owns their rules
-4. **Prometheus** uses `group_left` vector matching to join with user thresholds, achieving O(M) complexity
+4. **Prometheus** uses `group_left` vector matching to join with user thresholds, achieving O(M) complexity (vs traditional O(M×N): fixed M rules vs N×M linear growth)
 
 ### 1.3 Customer Migration & GitOps Governance Pipeline (Day-0 / Day-1 / Day-2)
 
-The v2.8.0 customer migration pipeline strings together three lifecycle phases — "Day-0 import existing PromRule corpus", "Day-1 GitOps PR splitting & governance", "Day-2 runtime hot-reload" — into an end-to-end flow that runs offline, in air-gapped environments, and with independently-verifiable supply-chain provenance:
+The customer migration pipeline strings together three lifecycle phases — "Day-0 import existing PromRule corpus", "Day-1 GitOps PR splitting & governance", "Day-2 runtime hot-reload" — into an end-to-end flow that runs offline, in air-gapped environments, and with independently-verifiable supply-chain provenance:
 
 ```mermaid
 graph LR
-    subgraph Day0["Day-0: Customer Migration (new in v2.8.0)"]
+    subgraph Day0["Day-0: Customer Migration"]
         PR["PromRule corpus<br/>(CRD / YAML)"] -->|da-parser| JSON["Canonical JSON<br/>+ prom_portable flag"]
         JSON -->|da-tools profile build| PB["Profile Builder<br/>(cluster + median ADR-018)"]
     end
@@ -163,7 +169,7 @@ graph LR
         PR2 -->|da-guard CI gate| LINT
     end
 
-    subgraph Day2["Day-2: Runtime (v2.7.0 Scale Foundation I)"]
+    subgraph Day2["Day-2: Runtime"]
         LINT -->|Merge| GIT["Git repo (conf.d/)"]
         GIT -->|ArgoCD / Flux| CM["ConfigMap"]
         CM -->|dual-hash hot-reload| TE["threshold-exporter"]
@@ -175,72 +181,56 @@ graph LR
 ```
 
 **Full-lifecycle governance features:**
-- **Zero vendor lock-in**: `da-parser` keeps `prom_portable: bool`, so customers retain visibility into the "still-portable-to-Prom" subset even after migrating to VictoriaMetrics
-- **GitOps PR ordering is enforced**: Base PR merges first → tenant PRs auto-rebase (`refresh --base-merged`); parser bug fixes go through `refresh --source-rule-ids` for granular patch regeneration
-- **CI gates are stickyness-aware**: `da-guard` posts a marker-based sticky PR comment (no message spam) + uploads artifacts with 14d retention
-- **Three delivery paths**: Docker / static binary 6-arch / air-gapped tar — every path cosign-keyless-signed + SBOM SPDX/CycloneDX; customer `make verify-release` verifies in one command
+- **Zero vendor lock-in**: the migration tooling keeps a "still-portable-to-Prom" marker per rule, so customers retain visibility into the subset that can return to Prometheus even after migrating to VictoriaMetrics.
+- **GitOps PR ordering is enforced**: the Base PR merges first → tenant override PRs auto-rebase; a parser fix can granularly regenerate patch PRs for specific rules without re-running the whole batch.
+- **CI gates report cleanly**: four checks (Schema / Routing / Cardinality / redundant override) post as a sticky PR comment (the same comment updates in place — no spam) + retained artifacts.
+- **Three delivery paths**: Docker image / multi-arch static binary / air-gapped tar — every path is cosign-keyless-signed + SBOM (SPDX / CycloneDX); customers verify supply-chain in one command via `make verify-release`.
 
 ---
 
 ## Design Concepts Overview
 
-The following table summarizes core design concepts, each with a standalone in-depth document:
+> **Why is this architecture worth investing in?** In a typical 50-tenant environment, the Config-Driven architecture reduces rule maintenance from O(N×M) to O(M), saving 40+ engineering hours per month. Severity Dedup combined with tri-state modes suppresses 60%+ alert noise, materially improving on-call quality of life.
 
-| Design Concept | Overview | Details |
-|--------|------|------|
-| **Config-Driven Architecture** | Three-state config (Custom/Default/Disable), Directory Scanner, hierarchical `conf.d/` (ADR-016), `_defaults.yaml` L0→L3 inheritance (ADR-017), Dual-hash hot-reload, Tenant-Namespace mapping | [design/config-driven.en.md](design/config-driven.en.md) |
-| **Multi-tier Severity** | `_critical` suffix and `"value:severity"` syntax, Severity Dedup, Alertmanager inhibit | [design/config-driven.en.md](design/config-driven.en.md) |
-| **Regex & Scheduled Thresholds** | Regex dimension matching (`=~`), time-window scheduling (UTC), ResolveAt mechanism | [design/config-driven.en.md](design/config-driven.en.md) |
-| **Three-State Operational Modes** | Normal / Silent / Maintenance, auto-expiry, Sentinel Alert pattern | [design/config-driven.en.md](design/config-driven.en.md) |
-| **Alert Routing & Receivers** | 6 receiver types, Timing Guardrails, Per-rule Overrides, Enforced Routing, Routing Profiles | [design/config-driven.en.md](design/config-driven.en.md) |
-| **Tenant API Architecture** | Commit-on-write, RBAC hot-reload, shared validation, Portal graceful degradation, `GET /tenants/{id}/effective` with merged config + dual hashes (v2.7.0) | [design/config-driven.en.md](design/config-driven.en.md) |
-| **Rule Packs & Projected Volume** | 15 independent rule packs, three-part structure, bilingual annotations | [design/rule-packs.en.md](design/rule-packs.en.md) |
-| **Performance Architecture** | Pre-computed Recording Rules vs Runtime Aggregation, O(M) vs O(M×N), Cardinality Guard | [design/config-driven.en.md](design/config-driven.en.md) |
-| **High Availability (HA)** | 2 replica deployment, RollingUpdate, PodDisruptionBudget, `max by(tenant)` prevents double-counting | [design/high-availability.en.md](design/high-availability.en.md) |
-| **Inheritance Engine** 🟢 *Shipped in v2.7.0* | Cleaner configs, less duplication, multi-layer default management | `_defaults.yaml` L0→L3 deep merge (ADR-017) + dual-hash (`source_hash` + `merged_hash`) precise hot-reload + 300ms debounce to absorb ConfigMap symlink rotation; flat and hierarchical `conf.d/` coexist (ADR-016). Detailed deliverables in [design/config-driven.en.md](design/config-driven.en.md) | [design/config-driven.en.md](design/config-driven.en.md) |
-| **Customer Migration Pipeline** 🟢 *Delivered in v2.8.0* | Fully automates a customer's PromRule corpus → conf.d/; anti-vendor-lock-in; GitOps Hierarchy-Aware PR splitting; zero orphan-tenant risk | 5-step migration chain (`da-parser` → `profile build` → `da-batchpr` → `da-guard`). Full diagram in §1.3; step-by-step details in [migration-toolkit-installation.en.md](migration-toolkit-installation.en.md) · [ADR-018](adr/018-profile-as-directory-default.en.md) | [migration-toolkit-installation.en.md](migration-toolkit-installation.en.md) |
-| **/simulate Endpoint + Ephemeral Graph** 🟢 *Delivered in v2.8.0* | tenant.yaml dry-run preview (no watch-loop pollution); Import Journey / simulator widget / Profile Builder share the same merge code path; prevents simulate-vs-commit divergence | Extracts a `ConfigSource` interface so `/simulate` (dry-run) and the underlying WatchLoop share the same `computeEffectiveConfig`+`computeMergedHash` state machine, **guaranteeing 100% convergence between preview and production results**; CI gate `TestSimulate_VsResolve_ParityHash` locks the contract | [design/config-driven.en.md](design/config-driven.en.md) |
-| **Migration Toolkit Three Delivery Paths** 🟢 *Delivered in v2.8.0* | Covers the full spectrum from internet-connected to air-gapped (finance/government/defense) customer deployment environments; customers can independently verify supply-chain provenance | (a) Docker pull `ghcr.io/vencil/da-tools` (b) Static binary 6-arch cross-compile (linux/darwin/windows × amd64/arm64) (c) Air-gapped tar (`docker save` export). Every path signed via cosign keyless + SBOM in SPDX/CycloneDX; one-shot customer helper `make verify-release` | [migration-toolkit-installation.en.md](migration-toolkit-installation.en.md) |
-| **Future Roadmap** | Field-level RBAC, Tenant Auto-Discovery, Anomaly-Aware Threshold, Dashboard as Code, etc. | [design/roadmap-future.en.md](design/roadmap-future.en.md) |
+The table below indexes the **core design concepts** (timeless capabilities, not a per-release delivery list; version history in [§5](#5-roadmap)). Each has a standalone spoke document:
+
+| Design Concept | Business impact | Technical mechanism | Details |
+|--------|------|------|------|
+| **Config-Driven Architecture** | Zero extra rule cost per new tenant; onboarding from 2 hr to 5 min | Three-state config, Directory Scanner, hierarchical `conf.d/` (ADR-016), `_defaults.yaml` L0→L3 inheritance (ADR-017), dual-hash hot-reload | [config-driven.en.md](design/config-driven.en.md) |
+| **Inheritance Engine** | Cleaner configs, less duplication, multi-layer default management | `_defaults.yaml` L0→L3 deep merge (ADR-017) + dual-hash (source + merged) precise hot-reload + debounce to absorb ConfigMap symlink rotation; flat and hierarchical `conf.d/` coexist (ADR-016) | [config-driven.en.md](design/config-driven.en.md) |
+| **Multi-tier Severity** | Eliminates duplicate notifications; teams see only the highest priority | `_critical` suffix, Severity Dedup, Alertmanager inhibit | [config-driven.en.md](design/config-driven.en.md) |
+| **Regex & Scheduled Thresholds** | Auto-widen thresholds off-hours, fewer false night alerts | Regex dimension matching, time-window scheduling (UTC), ResolveAt | [config-driven.en.md](design/config-driven.en.md) |
+| **Three-State Operational Modes** | Zero alert noise during maintenance, auto-recovery without forgetting | Normal / Silent / Maintenance + auto-expiry | [config-driven.en.md](design/config-driven.en.md) |
+| **Alert Routing** | Multi-channel delivery ensures critical alerts reach the right people | 6 receiver types, Timing Guardrails, Enforced Routing | [config-driven.en.md](design/config-driven.en.md) |
+| **Tenant API** | Domain experts self-serve without YAML knowledge | Commit-on-write + RBAC hot-reload + PR write-back + effective-config endpoint (inheritance applied) | [config-driven.en.md](design/config-driven.en.md) |
+| **Rule Packs** | Zero PR conflicts for cross-team parallel development | 15 Projected Volumes + three-part structure + bilingual annotations | [rule-packs.en.md](design/rule-packs.en.md) |
+| **Customer Migration Pipeline** | Existing PromRule corpus → `conf.d/` fully automated; anti-vendor-lock-in; zero orphan-tenant risk | 5-step migration chain (parse → Profile Builder → Hierarchy-Aware Batch PR → Dangling Defaults Guard). Diagram in [§1.3](#13-customer-migration-gitops-governance-pipeline-day-0-day-1-day-2) | [migration-toolkit-installation.en.md](migration-toolkit-installation.en.md) |
+| **Performance Architecture** | 500+ tenant millisecond processing; resource cost barely grows with tenant count | Pre-computed Recording Rules, O(M) complexity, Cardinality Guard | [benchmarks.en.md](benchmarks.en.md) |
+| **High Availability (HA)** | SLA 99.9%+ alert reliability, zero-downtime rolling updates | 2 replicas, PDB, `max by(tenant)` prevents double-counting | [high-availability.en.md](design/high-availability.en.md) |
+| **Future Roadmap** | Permissions × observability loop × intelligence | Field-level RBAC, Auto-Discovery, DaC, Anomaly-Aware Threshold | [roadmap-future.en.md](design/roadmap-future.en.md) |
 
 ---
 
 ## 2. Core Design: Config-Driven Architecture
 
-### 2.1–2.14 Complete Reference
+Config-Driven is the platform core: tenants and the platform only edit YAML, never write PromQL — built from three-state config + Directory Scanner + hierarchical inheritance + vector-matching rules. Topics group into four areas (full reference in [config-driven.en.md](design/config-driven.en.md)):
 
-Config-Driven Architecture is the platform core, covering:
-
-- **Three-State Logic** (§2.1): Custom Value / Omitted (Default) / Disable
-- **Directory Scanner Mode** (§2.2): `conf.d/` structure, `_defaults.yaml`, SHA-256 hot-reload, Incremental Reload
-- **Tenant-Namespace Mapping** (§2.3): 1:1 / N:1 / 1:N mapping modes
-- **Multi-tier Severity** (§2.4): `_critical` suffix, `"value:severity"` syntax, Severity Dedup
-- **Regex Dimension Thresholds** (§2.5): `=~` operator, regex pattern matching
-- **Scheduled Thresholds** (§2.6): Time-window scheduling, UTC timezone, cross-midnight support
-- **Three-State Operational Modes** (§2.7): Normal / Silent / Maintenance, auto-expiry, Sentinel Alert
-- **Severity Dedup** (§2.8): Alertmanager inhibit-layer dedup, per-tenant control
-- **Alert Routing** (§2.9): Webhook / Email / Slack / Teams / RocketChat / PagerDuty, Timing Guardrails
-- **Per-rule Routing Overrides** (§2.10): Alertname / Metric Group level routing
-- **Platform Enforced Routing** (§2.11): NOC mandatory channel, per-tenant enforced channels
-- **Routing Profiles & Domain Policies** (§2.12): ADR-007, four-layer merge pipeline
-- **Performance Architecture** (§2.13): Pre-computed Recording Rules, O(M) complexity, Cardinality Guard
-- **Tenant API Architecture** (§2.14): Commit-on-write, RBAC hot-reload, Portal graceful degradation
-
-**All detailed content extracted to** [design/config-driven.en.md](design/config-driven.en.md)
+- **Config & inheritance**: three-state logic (custom value / omitted = default / disable), `conf.d/` Directory Scanner + SHA-256 hot-reload + incremental reload, `_defaults.yaml` L0→L3 inheritance, tenant↔namespace mapping (1:1 / N:1 / 1:N).
+- **Alert semantics**: multi-tier severity (`_critical` suffix, `"value:severity"` syntax), regex dimension thresholds (`=~`), scheduled thresholds (UTC time windows, cross-midnight), three-state operational modes (Normal / Silent / Maintenance + Sentinel Alert).
+- **Routing**: 6 receiver types (Webhook / Email / Slack / Teams / RocketChat / PagerDuty) + Timing Guardrails, Severity Dedup (Alertmanager inhibit), per-rule routing overrides, platform-enforced routing (NOC mandatory), Routing Profiles & domain policies (ADR-007).
+- **Performance & self-service**: Pre-computed Recording Rules, O(M) complexity, Cardinality Guard, Tenant API (commit-on-write + RBAC hot-reload + Portal graceful degradation).
 
 ---
 
 ## 3. Projected Volume Architecture (Rule Packs) — Overview
 
-The platform manages **15 independent rule packs** with **139 Recording Rules + 99 Alert Rules**. Each Rule Pack contains a self-contained three-part structure:
+The platform manages **15 independent rule packs** with **139 Recording Rules + 99 Alert Rules**. Each Rule Pack is a self-contained three-part structure:
 
-1. **Part 1: Normalization Recording Rules** — Normalize raw metrics from different exporters
-2. **Part 2: Threshold Normalization** — Produces `tenant:alert_threshold:*` metrics for Alert Rule matching
-3. **Part 3: Alert Rules** — Actual alert conditions (with bilingual annotations)
+1. **Part 1: Normalization Recording Rules** — normalize raw metrics from different exporters
+2. **Part 2: Threshold Normalization** — produces `tenant:alert_threshold:*` metrics for Alert Rule matching
+3. **Part 3: Alert Rules** — actual alert conditions (with bilingual annotations)
 
-**Advantages:** Zero PR conflicts, team autonomy, reusable, independent testing
-
-**Complete reference** [design/rule-packs.en.md](design/rule-packs.en.md)
+**Advantages:** zero PR conflicts, team autonomy, reusable, independently testable. **Complete reference** in [rule-packs.en.md](design/rule-packs.en.md).
 
 ---
 
@@ -257,6 +247,8 @@ The platform manages **15 independent rule packs** with **139 Recording Rules + 
 ---
 
 ## 4. High Availability Design
+
+threshold-exporter uses a 2-replica + PodAntiAffinity + PodDisruptionBudget strategy, ensuring zero-downtime rolling updates and always keeping 1 replica serving Prometheus scrapes during maintenance. Recording rules use `max by(tenant)` to prevent HA double-counting.
 
 ### 4.1 Deployment Strategy
 
@@ -297,19 +289,26 @@ spec:
 
 **Guarantee:** Always 1 replica serving Prometheus scrapes, even during active maintenance
 
+**Complete deployment YAML & SLA analysis** in [high-availability.en.md](design/high-availability.en.md)
+
 ---
 
-## 5. Future Roadmap
+## 5. Roadmap
 
-| Timeline | Theme | Focus |
-|----------|-------|-------|
-| **v2.7.0 Shipped** | Scale Foundation I + Component Robustness | `conf.d/` directory hierarchy + `_defaults.yaml` inheritance engine (ADR-016/017), Go production path complete (`config_debounce.go` + `config_metrics.go` + Tenant API `/effective` endpoint + dual-hash hot-reload), Blast Radius CI bot, Tier 1 component health snapshot, 1000-tenant synthetic fixture |
-| **v2.8.0 Shipped** (2026-05-12) | Customer migration pipeline + 1000-tenant scale validation + automation consolidation | (a) **Customer migration pipeline 5-step chain** (da-parser → Profile Builder ([ADR-018](adr/018-profile-as-directory-default.en.md)) → Hierarchy-Aware Batch PR (da-batchpr) + refresh modes → Dangling Defaults Guard (da-guard) with sticky PR comment workflow); (b) **/simulate endpoint + ephemeral graph**; (c) **Server-side Search API + virtualized Tenant Manager**; (d) **Master Onboarding Dual Entry** (5/5 wizards: cicd-setup → deployment → alert-builder → routing-trace → tenant-manager) + **Smart Views frontend integration**; (e) **Migration Toolkit three delivery paths** (Docker / static binary 6-arch / air-gapped tar) + cosign keyless signing + SBOM SPDX/CycloneDX; (f) **Policy-as-Code automation** (56 pre-commit hooks: 39 auto + 14 manual + 3 pre-push); (g) **Scale Foundation III** (1000-tenant SLO measurements: cold load 112 ms / steady-state reload 1.3 ms / 5-anchor e2e fire-through baseline) + **Tenant API hardening** (rate limit + X-Request-ID + tenant-scoped authz + body-content range validation) + mixed-mode duplicate tenant id promoted to hard error; (h) **ZH-primary SSOT policy lock** |
-| **v2.9.0 Shipped** (2026-06-06) | Tenant self-service alerting + Tenant Federation + write-plane resilience (reactive hardening) | (a) **Custom Alerts** (ADR-024 Capability B): tenants author alerts from 6 platform-authored parameterized recipes — **no PromQL**; vectorized compiler (rules = shape count), portal `RecipeBuilder` + tenant-manager modal one-click commit, page/silent reusing Sentinel+Inhibit tri-state, recipe lifecycle governance (active/deprecated/eol); (b) **Version-Aware Threshold** (ADR-024 Capability A): declarative cutover via dimensional `version` label; (c) **Tenant Federation** ([ADR-020](adr/020-tenant-federation.md)): token endpoint + read-path proxy / API gateway (Envoy) + 2-tier policy + admission validator + signing-key rotation + offboarding + kill switch; (d) **Write-plane single-writer resilience** ([ADR-023](adr/023-write-plane-single-writer-invariant.md)): `strategy: Recreate` + in-lock base fetch + load-shedding + circuit breaker + SIGTERM graceful SSE shutdown + deploy-time static enforcement; (e) **Platform log aggregation** (Vector + VictoriaLogs three phases + federation chargeback + SIEM fan-out); (f) **IaC SAST four layers** (hadolint / kube-linter / Vibe wrapper) + bandit; (g) **Reactive silent-failure hardening** (P0 rule-pack metric-prefix-strip + AST contract test + HA-max + cardinality determinism); (h) **try-local one-click experience + multi-arch images (arm64) + Portal design-token migration + multi-component refactor** |
-| **v2.10.0 In Planning** | Tenant federation deepening × reactive hardening continuation | Directions in live milestone [v2.10.0](https://github.com/vencil/Dynamic-Alerting-Integrations/milestone/3); focus: ADR-020 federation follow-on capabilities · bench-gate Phase 2 hard-gate promotion (#67) · codename gate Layer 2 `--ci` promotion (#469/#710) · deep-water defer-with-trigger (QoS write lanes / reconciliation observer-paradox / PromQL AST sandbox — act only on trigger) |
-| **Long-term Exploration** | Intelligence × Decoupling | Anomaly-Aware Threshold, Log-to-Metric Bridge, Multi-Format Export, CRD, ChatOps, Field-level RBAC, Tenant Auto-Discovery |
+> Version history (what each of v2.7.0 → v2.9.0 delivered) is in the [CHANGELOG](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/CHANGELOG.md); this section is forward-looking only.
 
-**Complete roadmap and technical plan** [design/roadmap-future.en.md](design/roadmap-future.en.md) · DX tooling improvements see [dx-tooling-backlog.md](internal/dx-tooling-backlog.md)
+**Current (the capability backbone delivered in v2.9.0)**: tenant self-service alerting (Custom Alerts — 6 platform-authored recipes, no PromQL) + Tenant Federation (read-path proxy + 2-tier policy + key rotation + offboarding) + write-plane single-writer resilience + platform log aggregation.
+
+**v2.10.0 in planning**: tenant federation deepening × reactive hardening continuation. Directions in the live milestone [v2.10.0](https://github.com/vencil/Dynamic-Alerting-Integrations/milestone/3).
+
+**Long-term exploration**:
+
+- **Intelligence**: Anomaly-Aware Threshold, Log-to-Metric Bridge.
+- **Decoupling & integration**: Multi-Format Export, CRD, ChatOps.
+- **Fine-grained permissions**: Field-level RBAC, Tenant Auto-Discovery.
+- **Deep water (defer-with-trigger)**: write-path QoS lanes, the observer effect of reconciliation, a PromQL sandbox — acted on only when trigger conditions are met, to avoid premature investment.
+
+**Complete roadmap** in [roadmap-future.en.md](design/roadmap-future.en.md).
 
 ---
 
@@ -321,21 +320,6 @@ ADR file naming: `NNN-kebab-case.md` (ZH) + `NNN-kebab-case.en.md` (EN). Status 
 
 ---
 
-## Extracted Topic Documents
-
-The following sections have been extracted into standalone documents for focused, role-based reading:
-
-| Section | Standalone Document | Audience |
-|---------|-------------------|----------|
-| §4 Performance Analysis & Benchmarks | [benchmarks.en.md](benchmarks.en.md) | Platform Engineers, SREs |
-| §6–§7 Governance, Audit & Security | [governance-security.en.md](governance-security.en.md) | Platform Engineers, Security & Compliance |
-| §8 Troubleshooting & Edge Cases | [troubleshooting.en.md](troubleshooting.en.md) | Platform Engineers, SREs, Tenants |
-| §9 Advanced Scenarios & Test Coverage | [internal/test-coverage-matrix.md](internal/test-coverage-matrix.md) | Platform Engineers, SREs |
-| §10 AST Migration Engine | [migration-engine.en.md](migration-engine.en.md) | Platform Engineers, DevOps |
-
----
-
 ## Appendix A: Role & Tool Quick Reference
 
 > See [CLI Reference](cli-reference.md) for detailed tool usage.
-

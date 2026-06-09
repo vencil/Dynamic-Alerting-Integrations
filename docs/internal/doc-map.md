@@ -38,7 +38,7 @@ lang: zh
 | `docs/adr/024-version-aware-threshold-via-dimensional-label.md` (.en.md) | Platform Engineers, contributors, SREs | ADR-024: 宣告式 Dimensional 告警引擎 — Version-Aware Thresholds + Custom Alerts |
 | `docs/api/README.md` (.en.md) | Platform Engineers, SREs | Threshold Exporter API Reference |
 | `docs/api/tenant-api-hardening.md` (.en.md) | platform-ops, sre, security | Tenant API Hardening (v2.8.0) |
-| `docs/architecture-and-design.md` (.en.md) | Platform Engineers | 架構與設計 — 動態多租戶警報平台技術白皮書 |
+| `docs/architecture-and-design.md` (.en.md) | Platform Engineers, SREs, decision-maker | 架構與設計 — 動態多租戶警報平台技術白皮書 |
 | `docs/benchmarks.md` (.en.md) | Platform Engineers, SREs, decision-maker | 性能基準 (Performance Benchmarks) |
 | `docs/cheat-sheet.md` (.en.md) | All | da-tools Quick Reference |
 | `docs/cli-reference.md` (.en.md) | Platform Engineers, SREs, DevOps, Tenants | da-tools CLI Reference |
