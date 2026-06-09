@@ -62,6 +62,11 @@ CHART_YAML="${2:-}"
 SKOPEO_ERR=$(mktemp)
 SKOPEO_AUTH=$(mktemp)
 trap 'rm -f "${SKOPEO_ERR}" "${SKOPEO_AUTH}"' EXIT
+# mktemp leaves a 0-byte file; `skopeo login --authfile` reads it as JSON to
+# merge new creds, and an empty file fails with "unexpected end of JSON input".
+# Seed a minimal valid auth doc so the merge-read succeeds (skopeo then writes
+# the real ghcr.io credentials into it).
+printf '{"auths":{}}' > "${SKOPEO_AUTH}"
 
 # --- Env var validation ---
 for var in REGISTRY IMAGE_OWNER VERSION GITHUB_ACTOR GITHUB_TOKEN; do
