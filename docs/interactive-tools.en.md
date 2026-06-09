@@ -10,61 +10,31 @@ lang: en
 
 > **Language / 語言：** **English (Current)** | [中文](./interactive-tools.md)
 
-The platform provides four interactive React components that can run in any React-compatible environment (Claude Artifacts, CodeSandbox, or self-hosted pages).
+> **Audience**: all roles — the "For whom" column below marks each tool's primary users.
 
-## Getting Started Wizard
+The platform provides **five** interactive tools to help different roles get started fast. **Want to try them now?** → [Interactive Tools Hub](https://vencil.github.io/Dynamic-Alerting-Integrations/), or run locally with `make portal-run` (see [How to use](#how-to-use)).
 
-**File:** `tools/portal/src/getting-started/wizard.jsx`
+## Tools at a glance
 
-Guides users to the appropriate getting-started documentation based on their role (Platform Engineer / Domain Expert / Tenant), with dynamic display of key operational steps per role.
+| Tool | For whom | What it does | When to use |
+|------|----------|--------------|-------------|
+| **Getting Started Wizard** | New users, all roles | Guides you to the right getting-started doc by role (Platform Engineer / Domain Expert / Tenant) and shows the key steps per role | First contact with the platform; role-oriented onboarding |
+| **Tenant YAML Playground** | Tenant / Domain Expert | Real-time Tenant YAML validation (key names, three-state values, schedule format) + live preview of generated Prometheus metrics | Authoring or debugging Tenant YAML |
+| **Rule Pack Selector** | Platform / Tenant (onboarding) | Recommends applicable Rule Packs by tech stack (MySQL / PostgreSQL / Redis / JVM / Nginx, etc.), showing each pack's alert count and covered metrics | Choosing which Rule Packs to enable at initial onboarding |
+| **CLI Command Builder** | DevOps / Platform | Select a da-tools subcommand → fill parameters → auto-generate a complete `docker run` command to copy | When you don't want to memorize the Docker command format |
+| **ROI Calculator** | Decision-makers | Input org scale (tenants, Rule Packs, on-call staff) + current ops costs, and instantly compute three benefits: rule maintenance O(N×M)→O(M) reduction, alert-storm suppression rate, onboarding speedup (import actual `alert_quality.py --json` data to refine) | Evaluation phase — presenting quantified TCO savings to decision-makers |
 
-**Use case:** First-time users navigating the platform.
-
-## Tenant YAML Playground
-
-**File:** `tools/portal/src/interactive/tools/playground.jsx`
-
-Interactive Tenant YAML editor with real-time syntax validation (key names, three-state values, schedule format) and live preview of generated Prometheus metrics.
-
-**Use case:** Quickly validate Tenant YAML configurations during authoring or debugging.
-
-## Rule Pack Selector
-
-**File:** `tools/portal/src/interactive/tools/rule-pack-selector.jsx`
-
-Recommends applicable Rule Packs based on technology stack (MySQL / PostgreSQL / Redis / JVM / Nginx, etc.), showing alert count and covered metrics for each pack.
-
-**Use case:** Choosing which Rule Packs to enable during initial onboarding.
-
-## CLI Command Builder
-
-**File:** `tools/portal/src/interactive/tools/cli-playground.jsx`
-
-Select a da-tools subcommand, fill in parameters, and automatically generate a complete `docker run` command ready to copy.
-
-**Use case:** Quickly building correct Docker execution commands without memorizing the format.
-
-## ROI Calculator
-
-**File:** `tools/portal/src/interactive/tools/roi-calculator.jsx`
-
-Adoption benefit estimator — input organization scale (tenant count, Rule Pack count, on-call staff) and current operational costs (config change time, alert storm frequency, manual onboarding time) to instantly calculate three benefit dimensions: Rule maintenance time reduction from O(N×M) to O(M), alert storm auto-suppression rate, and onboard automation speedup. Supports importing actual `alert_quality.py --json` data for more accurate projections.
-
-**Use case:** Platform evaluation phase — presenting quantifiable TCO savings to decision-makers.
-
----
+> **Source**: the five components live under `tools/portal/src/` (the wizard in `getting-started/`, the rest in `interactive/tools/`); each is a standalone React functional component with no external state-management dependency.
 
 ## How to Use
 
-These `.jsx` files can run directly in the following environments:
+These `.jsx` components can run directly in the following environments:
 
 1. **GitHub Pages (public access, recommended)** — Go to repo Settings → Pages → Source, select `main` / `/docs`. The landing page at `docs/interactive/index.html` lets visitors try all tools in the browser. Components are transpiled client-side via `docs/assets/jsx-loader.html` using Babel standalone — no build step required
 2. **da-portal Docker Image (enterprise intranet / air-gapped, recommended)** — `docker run -p 8080:80 ghcr.io/vencil/da-portal` to host the full Interactive Tools Portal on your internal network. Supports volume-mount customisation of `platform-data.json` and `flows.json`, and nginx reverse proxy to solve Prometheus CORS issues. See [components/da-portal/](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/da-portal/README.md)
 3. **Claude Artifacts** — Paste the `.jsx` content into a conversation and Claude renders it instantly
 4. **React dev environment** — Import the component into a `create-react-app` project
 5. **CodeSandbox / StackBlitz** — Online instant preview
-
-Each component is a standalone React functional component with no external state management dependencies.
 
 ### Local preview
 
