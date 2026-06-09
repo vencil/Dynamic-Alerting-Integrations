@@ -867,7 +867,7 @@ cat /tmp/b1_out/bench.out.txt
 
 10→100→1000 租戶呈線性增長，1000 租戶完整 `ResolveAt`（含排程式閾值）在 ~10ms 以內。`ResolveSilentModes_1000` 僅 156µs，flag metric 查詢近乎零成本。
 
-**與 Rule Evaluation 的關係**：[benchmarks.md §2](../benchmarks.md#2-為什麼能-scale-架構保證-om-向量匹配) 量測 Prometheus 規則評估（O(M)，與租戶數無關），本表量測 threshold-exporter 設定解析（O(N)，線性增長）。兩者互補：最關鍵瓶頸（規則評估）恆定，次要成本（設定解析）1000 租戶仍僅 ~10ms，遠低於 15 秒抓取週期。
+**與 Rule Evaluation 的關係**：[benchmarks.md §1.1](../benchmarks.md#11-平台規則為什麼與租戶數無關om) 量測 Prometheus 規則評估（O(M)，與租戶數無關），本表量測 threshold-exporter 設定解析（O(N)，線性增長）。兩者互補：最關鍵瓶頸（規則評估）恆定，次要成本（設定解析）1000 租戶仍僅 ~10ms，遠低於 15 秒抓取週期。
 
 ### Synthetic Fixture Generation 速率對照
 

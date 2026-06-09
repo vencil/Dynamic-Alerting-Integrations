@@ -224,5 +224,5 @@ Replace 語意更直覺，且與 Helm values merge 行為一致。
 ## 相關
 
 - [ADR-016: conf.d/ 目錄分層 + 混合模式](016-conf-d-directory-hierarchy-mixed-mode.md)
-- [Benchmark Report §3 v2.8.0 Scale Gate](../benchmarks.md#3-v280-scale-gate-1000-tenant-實測) — dual-hash 1000-tenant 實測 + SLO 判讀
+- [Benchmark Report §1 規模](../benchmarks.md#1-規模能撐多少租戶) — dual-hash 1000-tenant 實測 + SLO 判讀
 - [architecture-and-design.md §設計概念](../architecture-and-design.md#設計概念總覽)

@@ -149,7 +149,7 @@ Phase 4: Incremental Merge
 
 **Atomic Swap**: `RWMutex` protects atomic updates of config/hash/cache. Read side (Prometheus scrape) uses `RLock()`, reload uses `Lock()`, ensuring scrape never reads half-updated state.
 
-**Performance characteristics** (benchmark data see [§3 v2.8.0 Scale Gate](../benchmarks.en.md#3-v280-scale-gate-1000-tenant-measured)):
+**Performance characteristics** (benchmark data see [§1 Scale](../benchmarks.en.md#1-scale-how-many-tenants)):
 
 | Scenario | Latency | Code Path |
 |----------|---------|-----------|
@@ -799,7 +799,7 @@ da-tools cardinality-forecast --prometheus http://prometheus:9090 --warn-days 30
 da-tools diagnose <tenant> --config-dir conf.d/
 ```
 
-> threshold-exporter config reload baseline (1000-tenant cold 112 ms / steady reload 1.30 ms) at [benchmarks.en.md §3 v2.8.0 Scale Gate](../benchmarks.en.md#3-v280-scale-gate-1000-tenant-measured); full `Resolve_*` engineering-reference series at [Benchmark Playbook §Engineering Reference Benchmarks](../internal/benchmark-playbook.md#engineering-reference-benchmarks). Incremental migration guide at [incremental-migration-playbook](../scenarios/incremental-migration-playbook.en.md).
+> threshold-exporter config reload baseline (1000-tenant cold 112 ms / steady reload 1.30 ms) at [benchmarks.en.md §1 Scale](../benchmarks.en.md#1-scale-how-many-tenants); full `Resolve_*` engineering-reference series at [Benchmark Playbook §Engineering Reference Benchmarks](../internal/benchmark-playbook.md#engineering-reference-benchmarks). Incremental migration guide at [incremental-migration-playbook](../scenarios/incremental-migration-playbook.en.md).
 
 ### 2.14 Tenant Management API Architecture (ADR-009)
 
