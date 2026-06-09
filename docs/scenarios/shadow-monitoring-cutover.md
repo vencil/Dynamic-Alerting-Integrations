@@ -31,7 +31,7 @@ lang: zh
 ```bash
 # 掃描全部 tenant，分析過去 30 天
 docker run --rm --network host \
-  ghcr.io/vencil/da-tools:v2.8.0 alert-quality \
+  ghcr.io/vencil/da-tools:v2.9.0 alert-quality \
   --prometheus http://localhost:9090 \
   --period 30d
 

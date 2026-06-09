@@ -1,4 +1,4 @@
-# da-tools (v2.8.0)
+# da-tools (v2.9.0)
 
 <!-- 標題版號 = 最後 released tag（目前 v2.8.0）；下一版 in-flight feature 在內文以 inline 版號標記。
      Release wrap 切五線 tag 時，本標題 + VERSION 檔 + 下方版號表跟著批次同步 bump。 -->
@@ -372,9 +372,9 @@ DA_LANG=en docker run --rm ghcr.io/vencil/da-tools migrate --help
 | 元件 | 版號 | Git Tag | 內容 |
 |------|------|---------|------|
 | 平台文件 | v2.9.0 | `v2.9.0` | 整體釋出版本 |
-| threshold-exporter | v2.8.0 | `exporter/v2.8.0` | Go binary（含 da-guard / da-batchpr / da-parser） |
-| **da-tools** | **v2.8.0** | **`tools/v2.8.0`** | 本 image（50 個 Python CLI + 3 個 bundled Go binary） |
-| da-portal | v2.8.0 | `portal/v2.8.0` | Interactive Tools Hub image |
+| threshold-exporter | v2.9.0 | `exporter/v2.9.0` | Go binary（含 da-guard / da-batchpr / da-parser） |
+| **da-tools** | **v2.9.0** | **`tools/v2.9.0`** | 本 image（50 個 Python CLI + 3 個 bundled Go binary） |
+| da-portal | v2.9.0 | `portal/v2.9.0` | Interactive Tools Hub image |
 | tenant-api | v2.8.0 | `tenant-api/v2.8.0` | Go HTTP API |
 
 > 命令表的 ✨vX.Y.Z 標記表示該命令於該版引入；下一版 in-flight 命令沿用同款 inline 標記。Release 收尾切五線 tag 時，本 README 標題與 [VERSION](app/VERSION) 跟著批次同步 bump。
@@ -394,7 +394,7 @@ cd components/da-tools/app
 ./build.sh
 
 # Build 指定版號（同步寫進 image label + VERSION 檔內容）
-./build.sh 2.8.0
+./build.sh 2.9.0
 
 # Assemble-only mode（CI 用，給 Buildx 接 multi-arch build）
 ./build.sh --assemble-only
@@ -426,7 +426,7 @@ spec:
     spec:
       containers:
         - name: da-tools
-          image: ghcr.io/vencil/da-tools:v2.8.0
+          image: ghcr.io/vencil/da-tools:v2.9.0
           env:
             - name: PROMETHEUS_URL
               value: "http://prometheus.monitoring.svc.cluster.local:9090"

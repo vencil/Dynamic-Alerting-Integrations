@@ -15,7 +15,7 @@ lang: en
 >
 > **⚠️ Migration Safety Guarantee:** The flow is **incremental and rollback-friendly**. The `custom_` prefix isolates new rules from legacy ones; Projected Volume's `optional: true` lets you unmount any rule pack at any time without affecting Prometheus.
 >
-> **Tip:** All `da-tools` commands can run directly via Docker (`docker run --rm --network=host ghcr.io/vencil/da-tools:v2.8.0 <cmd>`); examples below use the shorthand `da-tools <cmd>`.
+> **Tip:** All `da-tools` commands can run directly via Docker (`docker run --rm --network=host ghcr.io/vencil/da-tools:v2.9.0 <cmd>`); examples below use the shorthand `da-tools <cmd>`.
 
 > **Audience**: tenant tech leads, Platform Engineers / DevOps / SREs, Domain Experts (DBAs)
 
@@ -81,10 +81,10 @@ Install the toolkit before starting. Three delivery paths (Docker / static binar
 
 ```bash
 # Path A: Docker pull from ghcr.io (simplest)
-docker pull ghcr.io/vencil/da-tools:v2.8.0
+docker pull ghcr.io/vencil/da-tools:v2.9.0
 
 # Path B: Download a static binary to PATH
-curl -fsSLo da-guard.tar.gz https://github.com/vencil/Dynamic-Alerting-Integrations/releases/download/tools/v2.8.0/da-guard-linux-amd64.tar.gz
+curl -fsSLo da-guard.tar.gz https://github.com/vencil/Dynamic-Alerting-Integrations/releases/download/tools/v2.9.0/da-guard-linux-amd64.tar.gz
 tar xzf da-guard.tar.gz && sudo install -m 0755 da-guard-linux-amd64 /usr/local/bin/da-guard
 ```
 
@@ -137,7 +137,7 @@ AST engine depth (why `promql-parser` beats regex) + the full heuristic rule set
 
 Three deployment options:
 
-- **Option A (Recommended)**: OCI Registry — `helm upgrade --install threshold-exporter oci://ghcr.io/vencil/charts/threshold-exporter --version 2.8.0 -n monitoring -f values-override.yaml`
+- **Option A (Recommended)**: OCI Registry — `helm upgrade --install threshold-exporter oci://ghcr.io/vencil/charts/threshold-exporter --version 2.9.0 -n monitoring -f values-override.yaml`
 - **Option B**: Local build — `docker build` + `kind load` + `make component-deploy`
 - **Option C**: Operator CRD path — `da-tools operator-generate`, replacing ConfigMap mounting (suitable when kube-prometheus-stack is already installed)
 

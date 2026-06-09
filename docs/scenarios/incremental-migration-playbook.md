@@ -23,7 +23,7 @@ lang: zh
 - 運行中的 Prometheus 實例（`http://prometheus:9090`）
 - 運行中的 Alertmanager（`http://alertmanager:9093`）
 - Kubernetes 叢集（Kind、EKS、GKE 均可）
-- `da-tools` 映像已推送至私有 registry 或可公開存取（`ghcr.io/vencil/da-tools:v2.8.0`）
+- `da-tools` 映像已推送至私有 registry 或可公開存取（`ghcr.io/vencil/da-tools:v2.9.0`）
 - 叢集中至少有一個命名空間用於監控（如 `monitoring`、`observability`）
 
 ## 遷移時間表（典型案例）
@@ -152,7 +152,7 @@ helm repo update
 
 helm install threshold-exporter-redis vencil/threshold-exporter \
   --namespace monitoring \
-  --set image.tag=v2.8.0 \
+  --set image.tag=v2.9.0 \
   --set config.dir=/etc/threshold-exporter/conf.d \
   --set replicaCount=2 \
   --values - << 'EOF'

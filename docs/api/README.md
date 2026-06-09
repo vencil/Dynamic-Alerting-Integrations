@@ -285,7 +285,7 @@ metadata:
 spec:
   containers:
   - name: threshold-exporter
-    image: ghcr.io/vencil/threshold-exporter:v2.8.0
+    image: ghcr.io/vencil/threshold-exporter:v2.9.0
     ports:
     - containerPort: 8080
       name: metrics
