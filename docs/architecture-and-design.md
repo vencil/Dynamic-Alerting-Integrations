@@ -41,7 +41,7 @@ lang: zh
 | [性能基準](benchmarks.md) | 規模 / 速度 / 容量 / 穩定的實測數字 | Platform / SRE / 決策者 |
 | [治理與安全](governance-security.md) | 稽核、安全紀律 | Platform / Security |
 | [故障排查](troubleshooting.md) | 邊界案例、疑難排解 | Platform / SRE / 租戶 |
-| [進階場景與測試覆蓋](internal/test-coverage-matrix.md) | 場景矩陣 | Platform / SRE |
+| [驗證場景與平台行為](scenarios/verified-scenarios.md) | 場景矩陣 | Platform / SRE |
 | *導入與遷移* | | |
 | [遷移引擎](migration-engine.md) | 既有 PromRule corpus 的 AST 遷移 | Platform / DevOps |
 | [Migration Toolkit 安裝](migration-toolkit-installation.md) | 三條交付路徑、supply-chain 驗證 | Platform / DevOps |

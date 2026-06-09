@@ -1,41 +1,23 @@
 ---
-title: "測試覆蓋矩陣與進階場景"
+title: "測試覆蓋矩陣"
 tags: [testing, maintenance, internal]
 audience: [platform-engineer, sre]
 version: v2.9.0
 lang: zh
 ---
-# 測試覆蓋矩陣與進階場景
+# 測試覆蓋矩陣
 
 > **Language / 語言：** | **中文（當前）**
 
-> 相關文件：[Architecture](../architecture-and-design.md) · [Testing Playbook](testing-playbook.md) · [Test Map](test-map.md) · [Alert Routing Split](../scenarios/alert-routing-split.md)
+> **內部 QA 紀錄**：本文件為維護者用的測試清單、數量、CI 指令與 benchmark 對照。**對外的場景行為說明、設計證明與生命週期時序圖見公開 [驗證場景與平台行為](../scenarios/verified-scenarios.md)**。
+>
+> 相關文件：[Testing Playbook](testing-playbook.md) · [Test Map](test-map.md) · [Benchmark Playbook](benchmark-playbook.md)
 
 ---
 
-## 維護模式與複合警報
-
-所有 Alert Rules 內建 `unless maintenance` 邏輯，租戶可透過 state_filter 一鍵靜音：
-
-```yaml
-# _defaults.yaml
-state_filters:
-  maintenance:
-    reasons: []
-    severity: "info"
-    default_state: "disable"   # 預設關閉
-
-# 租戶啟用維護模式：
-tenants:
-  db-a:
-    _state_maintenance: "enable"  # 所有警報被 unless 抑制
-```
-
-複合警報 (AND 邏輯) 與多層嚴重度 (Critical 自動降級 Warning) 也已完整實現。
-
 ## 企業級測試覆蓋矩陣 (Enterprise Test Coverage Matrix)
 
-測試體系分為兩層：**E2E Scenario Tests**（K8s 叢集內端到端驗證）和 **Unit/Integration Tests**（pytest + go test，2,002+ 測試案例）。
+測試體系分為兩層：**E2E Scenario Tests**（K8s 叢集內端到端驗證）和 **Unit/Integration Tests**（pytest + go test，2,002+ 測試案例）。場景 A–F 的對外行為說明見公開 [驗證場景](../scenarios/verified-scenarios.md)；本表為執行用的指令與斷言參考。
 
 ### E2E Scenario Tests（`make test-scenario-*`）
 
@@ -122,47 +104,9 @@ Performance benchmarks 與 unit tests 分離記錄。Tier 2 量測 production ho
 
 **Scenario F 的 `max by(tenant)` 證明：**
 
-兩個 threshold-exporter Pod 各自吐出相同的 `user_threshold{tenant="db-a", metric="connections"} = 5`。Recording rule 使用 `max by(tenant)` 聚合：
+兩個 threshold-exporter Pod 各自吐出相同的 `user_threshold{tenant="db-a", metric="connections"} = 5`。Recording rule 使用 `max by(tenant)` 聚合：`max(5, 5) = 5`（正確）；若用 `sum` 則 `5 + 5 = 10`（翻倍，錯誤）。測試在 Kill 一個 Pod 後驗證值仍為 5，且新 Pod 啟動後 series 數回到 2 但聚合值仍為 5。對外的設計證明敘述見公開 [驗證場景 §max by](../scenarios/verified-scenarios.md#關鍵設計驗證max-bytenant-防-ha-翻倍)。
 
-- ✅ `max(5, 5) = 5`（正確）
-- ❌ 如果用 `sum by(tenant)`：`5 + 5 = 10`（翻倍，錯誤）
-
-測試在 Kill 一個 Pod 後驗證值仍為 5，且新 Pod 啟動後 series 數回到 2 但聚合值仍為 5。
-
-## demo-full：端到端生命週期流程圖
-
-`make demo-full` 展示從工具驗證到真實負載的完整流程。以下時序圖描述 Step 6 (Live Load) 的核心路徑：
-
-```mermaid
-sequenceDiagram
-    participant Op as Operator
-    participant LG as Load Generator<br/>(connections + stress-ng)
-    participant DB as MariaDB<br/>(db-a)
-    participant TE as threshold-exporter
-    participant PM as Prometheus
-
-    Note over Op: Step 1-5: scaffold / migrate / diagnose / check_alert / baseline
-
-    Op->>LG: run_load.sh --type composite
-    LG->>DB: 95 idle connections + OLTP (sysbench)
-    DB-->>PM: mysql_threads_connected ≈ 95<br/>node_cpu busy ≈ 80%+
-    TE-->>PM: user_threshold{component="mysql", metric="connections"} = 70
-
-    Note over PM: 評估 Recording Rule：<br/>tenant:mysql_threads_connected:max = 95<br/>> tenant:alert_threshold:mysql_connections (70)
-
-    PM->>PM: Alert: MariaDBHighConnections → FIRING
-
-    Op->>LG: run_load.sh --cleanup
-    LG->>DB: Kill connections + stop stress-ng
-    DB-->>PM: mysql_threads_connected ≈ 5
-
-    Note over PM: tenant:mysql_threads_connected:max = 5<br/>< tenant:alert_threshold:mysql_connections (70)
-
-    PM->>PM: Alert → RESOLVED (after for duration)
-    Note over Op: ✅ 完整 firing → resolved 週期驗證通過
-```
-
-## Scenario E：多租戶隔離驗證
+## Scenario E：多租戶隔離驗證（測試流程）
 
 驗證修改 Tenant A 的配置絕對不影響 Tenant B。流程分為兩個隔離維度：
 
@@ -198,7 +142,7 @@ flowchart TD
     end
 ```
 
-## Scenario F：HA 故障切換
+## Scenario F：HA 故障切換（測試流程）
 
 驗證 threshold-exporter HA ×2 在 Pod 被刪除後服務不中斷，且 `max by(tenant)` 聚合不會因 Pod 數量變化而翻倍：
 
@@ -245,29 +189,16 @@ flowchart TD
     end
 ```
 
-> **核心證明**：Scenario F 的 Phase F4 是整個 HA 設計的關鍵驗證——它直接證明了 `max by(tenant)` 聚合在 Pod 數量變動時的正確性，這是選擇 `max` 而非 `sum` 的技術根據。詳見 §5 高可用性設計。
-
 ---
 
-> 本文件從 [`architecture-and-design.md`](../architecture-and-design.md) 獨立拆分，後自 `docs/scenarios/` 遷移至 `docs/internal/`（v2.6.0 doc-quality-improvement Phase 2）。
-
-## 互動工具
-
-> 下列工具可直接在 [Interactive Tools Hub](https://vencil.github.io/Dynamic-Alerting-Integrations/) 中測試：
->
-> - [PromQL Tester](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/promql-tester.jsx) — 測試告警規則的 PromQL 運算式
-> - [Rule Pack Matrix](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/rule-pack-matrix.jsx) — 查看現有 Rule Pack 的覆蓋範圍
-> - [Config Lint](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/config-lint.jsx) — 驗證進階場景配置
+> 本文件從 [`architecture-and-design.md`](../architecture-and-design.md) 獨立拆分（v2.6.0 doc-quality-improvement Phase 2）。v2.9.0 起對外場景行為再拆出公開 [驗證場景](../scenarios/verified-scenarios.md)，本文件聚焦內部測試清單。
 
 ## 相關資源
 
 | 資源 | 相關性 |
 |------|--------|
-| [場景指南導覽](../scenarios/README.md) | ⭐⭐⭐ |
-| [場景：Alert Routing 雙視角通知](../scenarios/alert-routing-split.md) | ⭐⭐ |
-| [場景：多叢集聯邦架構](../scenarios/multi-cluster-federation.md) | ⭐⭐ |
-| [場景：Shadow Monitoring 全自動切換](../scenarios/shadow-monitoring-cutover.md) | ⭐⭐ |
-| [Threshold Exporter API Reference](../api/README.md) | ⭐⭐ |
+| [驗證場景與平台行為（公開）](../scenarios/verified-scenarios.md) | ⭐⭐⭐ |
+| [Testing Playbook](testing-playbook.md) | ⭐⭐⭐ |
+| [Test Map](test-map.md) | ⭐⭐⭐ |
+| [Benchmark Playbook](benchmark-playbook.md) | ⭐⭐ |
 | [性能分析與基準測試](../benchmarks.md) | ⭐⭐ |
-| [BYO Alertmanager 整合指南](../integration/byo-alertmanager-integration.md) | ⭐⭐ |
-| [BYO Prometheus 整合指南](../integration/byo-prometheus-integration.md) | ⭐⭐ |

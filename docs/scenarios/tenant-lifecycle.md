@@ -459,7 +459,7 @@ tar czf archive/db-product-01-offboarding-$(date +%Y%m%d).tar.gz conf.d.archive/
 | 資源 | 相關性 |
 |------|--------|
 | ["場景：租戶完整生命週期管理"](tenant-lifecycle.md) | ⭐⭐⭐ |
-| ["進階場景與測試覆蓋"](../internal/test-coverage-matrix.md) | ⭐⭐ |
+| ["驗證場景與平台行為"](verified-scenarios.md) | ⭐⭐ |
 | ["場景：同一 Alert、不同語義 — Platform/NOC vs Tenant 雙視角通知"](alert-routing-split.md) | ⭐⭐ |
 | ["場景：多叢集聯邦架構 — 中央閾值 + 邊緣指標"](multi-cluster-federation.md) | ⭐⭐ |
 | ["場景：Shadow Monitoring 全自動切換工作流"](shadow-monitoring-cutover.md) | ⭐⭐ |

@@ -90,6 +90,7 @@ lang: en
 | `docs/scenarios/shadow-monitoring-cutover.md` (.en.md) | Platform Engineers, SREs, DevOps, Tenants | Scenario: Shadow Monitoring — From Alert Health Assessment to Automated Cutover |
 | `docs/scenarios/staged-adoption-guide.md` (.en.md) | Platform Engineers, SREs, tenant-admins | Staged Rule Adoption Lifecycle |
 | `docs/scenarios/tenant-lifecycle.md` (.en.md) | All | Scenario: Complete Tenant Lifecycle Management |
+| `docs/scenarios/verified-scenarios.md` (.en.md) | Platform Engineers, SREs, decision-maker | Verified Scenarios & Platform Behavior |
 | `docs/scenarios/version-aware-thresholds.md` (.en.md) | tenant-admins, Platform Engineers, SREs | Version-Aware Thresholds — A Usage Guide |
 | `docs/schemas/migration-state.md` | Platform Engineers, SREs, automation | Migration State Schema (.da/migration-state.json) |
 | `docs/schemas/README.md` | Platform Engineers, Tenants | JSON Schema Reference |

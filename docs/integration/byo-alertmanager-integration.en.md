@@ -445,5 +445,5 @@ The tool has built-in idempotency checks (no duplicate silence creation) and aut
 | ["Performance Analysis & Benchmarks"] | ⭐⭐ |
 | ["da-tools CLI Reference"] | ⭐⭐ |
 | ["Grafana Dashboard Guide"] | ⭐⭐ |
-| ["Advanced Scenarios & Test Coverage"](../internal/test-coverage-matrix.md) | ⭐⭐ |
+| ["Verified Scenarios"](../scenarios/verified-scenarios.en.md) | ⭐⭐ |
 | ["Shadow Monitoring SRE SOP"] | ⭐⭐ |

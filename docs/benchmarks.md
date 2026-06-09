@@ -11,7 +11,7 @@ lang: zh
 
 > **受眾**：Platform Engineer / SRE（主）、企業決策者、Domain Expert（DBA/Infra）、租戶技術窗口
 >
-> **相關文件**：[架構與設計](architecture-and-design.md) · [測試覆蓋矩陣](internal/test-coverage-matrix.md) · 量測細節與踩坑 [Benchmark Playbook](internal/benchmark-playbook.md)
+> **相關文件**：[架構與設計](architecture-and-design.md) · [驗證場景與平台行為](scenarios/verified-scenarios.md) · 量測細節與踩坑 [Benchmark Playbook](internal/benchmark-playbook.md)
 
 **如何讀**（讀者隨時可切換，且常多人同看一份）：
 

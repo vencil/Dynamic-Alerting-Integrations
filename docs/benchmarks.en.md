@@ -11,7 +11,7 @@ lang: en
 
 > **Audience**: Platform Engineers / SREs (primary), decision-makers, Domain Experts (DBA/Infra), tenant tech leads
 >
-> **Related**: [Architecture & Design](architecture-and-design.en.md) · [Test Coverage Matrix](internal/test-coverage-matrix.md) · measurement detail & gotchas in the [Benchmark Playbook](internal/benchmark-playbook.md)
+> **Related**: [Architecture & Design](architecture-and-design.en.md) · [Verified Scenarios](scenarios/verified-scenarios.en.md) · measurement detail & gotchas in the [Benchmark Playbook](internal/benchmark-playbook.md)
 
 **How to read this** (readers switch at any time, and often several read it together):
 

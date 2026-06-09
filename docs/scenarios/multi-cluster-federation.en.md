@@ -118,5 +118,5 @@ da-tools diagnose db-a --prometheus http://central-prometheus:9090
 |----------|-----------|
 | [Federation Integration Guide](../integration/federation-integration.en.md) | ⭐⭐⭐ |
 | [ADR-004 Federation Central Exporter First](../adr/004-federation-central-exporter-first.en.md) | ⭐⭐ |
-| [Advanced Scenarios & Test Coverage](../internal/test-coverage-matrix.md) | ⭐⭐ |
+| [Verified Scenarios](verified-scenarios.en.md) | ⭐⭐ |
 | [Shadow Monitoring Cutover Workflow](shadow-monitoring-cutover.en.md) | ⭐⭐ |

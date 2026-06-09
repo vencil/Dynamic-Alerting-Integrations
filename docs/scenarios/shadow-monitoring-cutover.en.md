@@ -480,7 +480,7 @@ After cutover:
 | Resource | Relevance |
 |----------|-----------|
 | ["Scenario: Automated Shadow Monitoring Cutover Workflow"](shadow-monitoring-cutover.en.md) | ⭐⭐⭐ |
-| ["Advanced Scenarios & Test Coverage"](../internal/test-coverage-matrix.md) | ⭐⭐ |
+| ["Verified Scenarios"](verified-scenarios.en.md) | ⭐⭐ |
 | ["Shadow Monitoring SRE SOP"](../shadow-monitoring-sop.en.md) | ⭐⭐ |
 | ["da-tools CLI Reference"](../cli-reference.en.md) | ⭐⭐ |
 | ["Grafana Dashboard Guide"](../grafana-dashboards.en.md) | ⭐⭐ |

@@ -392,5 +392,5 @@ A: `threshold-exporter` is deployed in the data cluster (near tenant ConfigMaps)
 | ["Performance Analysis & Benchmarks"] | ⭐⭐ |
 | ["da-tools CLI Reference"] | ⭐⭐ |
 | ["Grafana Dashboard Guide"] | ⭐⭐ |
-| ["Advanced Scenarios & Test Coverage"](../internal/test-coverage-matrix.md) | ⭐⭐ |
+| ["Verified Scenarios"](../scenarios/verified-scenarios.en.md) | ⭐⭐ |
 | ["Shadow Monitoring SRE SOP"] | ⭐⭐ |

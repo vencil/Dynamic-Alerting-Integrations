@@ -72,7 +72,7 @@ Dynamic Alerting 平台的完整文件導覽。根據你的角色快速找到所
 | 多叢集 Federation | [scenarios/multi-cluster-federation.md](scenarios/multi-cluster-federation.md) | Platform Engineer |
 | Tenant 生命週期（新增、修改、下架） | [scenarios/tenant-lifecycle.md](scenarios/tenant-lifecycle.md) | Platform Engineer、DevOps |
 | Rule 生命週期治理（訂定 → 切版 → 修錯 → 退役）+ 成熟度限制 | [custom-rule-governance.md §7](custom-rule-governance.md) | Platform Engineer、Domain Expert |
-| 進階場景 & 測試覆蓋 | [internal/test-coverage-matrix.md](internal/test-coverage-matrix.md) | Platform Engineer、SRE |
+| 進階場景 & 測試覆蓋 | [驗證場景與平台行為](scenarios/verified-scenarios.md) | Platform Engineer、SRE |
 
 ---
 

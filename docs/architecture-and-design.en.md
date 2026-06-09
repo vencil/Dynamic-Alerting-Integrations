@@ -39,7 +39,7 @@ This is the **architecture Hub** for the "Multi-Tenant Dynamic Alerting Platform
 | [Benchmarks](benchmarks.en.md) | Scale / speed / capacity / stability measurements | Platform / SRE / decision-maker |
 | [Governance & Security](governance-security.en.md) | Audit, security discipline | Platform / Security |
 | [Troubleshooting](troubleshooting.en.md) | Edge cases, diagnostics | Platform / SRE / Tenant |
-| [Advanced Scenarios & Test Coverage](internal/test-coverage-matrix.md) | Scenario matrix | Platform / SRE |
+| [Verified Scenarios](scenarios/verified-scenarios.en.md) | Scenario matrix | Platform / SRE |
 | *Onboarding & migration* | | |
 | [Migration Engine](migration-engine.en.md) | AST migration of an existing PromRule corpus | Platform / DevOps |
 | [Migration Toolkit Install](migration-toolkit-installation.en.md) | Three delivery paths, supply-chain verification | Platform / DevOps |
