@@ -3,7 +3,7 @@ title: "GitHub Release — 操作手冊 (Playbook)"
 tags: [documentation]
 audience: [all]
 version: v2.9.0
-verified-at-version: v2.8.0
+verified-at-version: v2.9.0
 lang: zh
 ---
 # GitHub Release — 操作手冊 (Playbook)
@@ -150,20 +150,33 @@ make pre-tag                    # 一鍵整合（含以上 + docker-build-all + 
 
 **五線版號策略：** 五條獨立版號線（`v*` platform、`exporter/v*`、`tools/v*`、`portal/v*`、`tenant-api/v*`）各有各的生命週期。不是所有 component 每次都升版；僅推有 code change 的版號線。
 
+> **⛔ Component tag 版號 = 該 component 的 `Chart.yaml` `version`**（**不是** `appVersion`，**不是**平台線版號）。`release.yaml` 每個 component job 起手有 `Verify Chart.yaml version matches tag` 硬 gate：`grep '^version:' <chart>` ≠ tag → `ERROR: Chart.yaml version (X) != tag (Y)` → fail。
+> - **exporter / portal** chart 與 release 線同步升（feature PR 不 bump），故其 tag = 平台同版（如 `exporter/v2.9.0`）。
+> - **tenant-api** chart 是 **per-change**（每次 PR bump，dev-rule #7），版號會走在平台線前面，故 tenant-api **以自己的 chart 版號發版**（如 chart 2.9.7 → `tenant-api/v2.9.7`），**不跟平台 2.9.0**。硬壓 chart 回平台版 = 降級，禁止。
+
 ```bash
 # 情況 A：五線全升（所有 component 有變更）
 git tag v<PLATFORM>
-make release-tag-exporter   # 自動建 exporter/v<CHART_VER> tag
+make release-tag-exporter                     # 從 exporter Chart.yaml version 推導 exporter/v<EXP_CHART_VER>
 git tag tools/v<TOOLS>
 git tag portal/v<PORTAL>
-git tag tenant-api/v<TENANT_API>
-git push origin v<PLATFORM> exporter/v<CHART_VER> tools/v<TOOLS> portal/v<PORTAL> tenant-api/v<TENANT_API>
+git tag tenant-api/v<TENANT_API_CHART_VER>    # = helm/tenant-api/Chart.yaml 的 version（非平台版）
+
+# ⛔ 逐個 push，不要把 >3 個 tag 塞進同一次 git push：
+#    GitHub Actions 對「單次 push 含多個 tag」有觸發上限，>3 個 → release.yaml
+#    完全不觸發（靜默，0 個 run）。燒過 v2.9.0：4 tag 一次 push → 0 觸發 →
+#    刪 remote tag + 逐個重推才生效。
+for t in exporter/v<EXP_CHART_VER> tools/v<TOOLS> portal/v<PORTAL> tenant-api/v<TENANT_API_CHART_VER>; do
+  git push origin "$t"; sleep 8      # 推一個、確認 release.yaml 觸發、再推下一個
+done
+git push origin v<PLATFORM>          # 平台 anchor 不觸發 build，最後推；它是 GitHub Release umbrella
 
 # 情況 B：僅 platform + da-tools（其他 component 未變）
 git tag v<PLATFORM>
 git tag tools/v<TOOLS>
-git push origin v<PLATFORM> tools/v<TOOLS>
-# ⚠️ 不推未變更 component 的 tag — 版號不變時不推
+git push origin tools/v<TOOLS>       # ≤3 個可同推，但分推更穩
+git push origin v<PLATFORM>
+# ⚠️ 不推未變更 component 的 tag — 版號不變時不推（dev-rule #7）
 ```
 
 ### Step 3.5: 起草 release body（Readiness statement template）
@@ -414,6 +427,28 @@ bash smoke.sh   # 需 curl + jq
 | 17 | Rule Pack 計數 14 vs 15 混淆 | `rule-packs/` yaml 檔案 = 14（optional Projected Volume），`platform-data.json` = 15（含 platform ConfigMap）。**總數以 `platform-data.json` 為準（15）** |
 | 18 | Cowork VM mount 製造 phantom lock | 詳見 [Windows-MCP Playbook #27](windows-mcp-playbook.md)。Release 場景的 workaround：fresh `git clone --depth 1` 到暫存目錄做 tag 操作 |
 | 19 | 新 component 上線遺漏版號工具 | 新增 component 時，除了 `release.yaml` 加 job，還須：① `bump_docs.py` 加版號線 ② `validate_docs_versions.py` 加規則 ③ Dockerfile base image 驗證 |
+
+### Release-gate 陷阱（component `release.yaml` 實戰，v2.9.0 首次五線 GA）
+
+每個 component job 在 tag push 後依序跑：`Verify Chart.yaml version matches tag` → build+push image → multi-arch verify → `Verify image digest`（#445 L3）→ `Scan image with Trivy`（**HIGH/CRITICAL hard gate**，`exit-code 1` + `ignore-unfixed`）→ cosign 簽 →（da-tools only）建 GitHub Release。**任一步 fail abort 後續**。v2.9.0 首次真實五線 release 連續觸發下列三類：
+
+| # | 陷阱 | 解法 |
+|---|------|------|
+| R1 | **罕跑 gate 的 latent bug 首發** — #445 digest-verify 的 `skopeo login --authfile` 吃空 `mktemp` authfile → `unexpected end of JSON input`。此 step 過去只在 platform-only（v2.8.1）/ pre-#445（v2.8.0）release 沒真跑過 | login 前 seed `{"auths":{}}`（已修於 `verify_release_digest.sh`）。**教訓**：只在稀有路徑跑的 gate，加版號前用合成 input 演練一次 |
+| R2 | **tenant-api chart `version` ≠ tag** → `Verify Chart.yaml version matches tag` fail（`Chart.yaml version (2.9.7) != tag (2.9.0)`） | tenant-api 以自己的 chart 版號發版（見 Step 3 ⛔ 框）。打 tag 前 `grep '^version:' helm/<comp>/Chart.yaml` 對齊 |
+| R3 | **新揭露 CVE 卡 Trivy gate** — 上次乾淨掃描後才落地的可 fix HIGH/CRITICAL 會在 release 當下擋下。v2.9.0 連撞 3 組：Go stdlib（CVE-2026-42504）、nginx RCE+DoS（CVE-2026-9256 / 49975）、golang-jwt（CVE-2025-30204） | fixable HIGH/CRITICAL **一律 patch 不 exempt**（base image / toolchain / dep bump）。用下方本地預驗避免每修一個就燒一輪 CI |
+| R4 | **>3 個 tag 一次 push → release.yaml 0 觸發** | 逐個 push（見 Step 3） |
+
+**本地 Trivy 預驗 recipe** — 重打 tag 前在本機證明 image 乾淨（與 release gate 同設定），避免每修一個 CVE 燒一輪 CI：
+
+```bash
+# Total: 0 / grep -c 為 0 = 會過 release gate
+docker build -q -t <comp>-verify -f components/<comp>/Dockerfile .   # 或 components/<comp>/app
+docker run --rm -v //var/run/docker.sock:/var/run/docker.sock aquasec/trivy:latest image \
+  --severity HIGH,CRITICAL --ignore-unfixed --quiet <comp>-verify | grep -c "CVE-"
+# 含 base+hardening 的（如 da-portal：apk upgrade + nginx-module 移除）用其 Dockerfile 實 build 再掃，
+# 殘留 transitive CVE（如 libxml2）會被 module 移除清掉，比裸 base scan 準。
+```
 
 ### Follow-up PR / Stacked PR 陷阱
 
