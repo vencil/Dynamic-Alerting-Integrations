@@ -24,6 +24,7 @@ on:
       - "README.md"
       - "README.en.md"
       - "CLAUDE.md"
+      - "CHANGELOG.md"
       - "mkdocs.yml"
       - "scripts/tools/**/*.py"
       - "scripts/tools/lint/**/*.sh"

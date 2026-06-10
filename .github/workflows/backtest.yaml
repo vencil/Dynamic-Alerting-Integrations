@@ -2,7 +2,7 @@ name: Threshold Backtest
 on:
   pull_request:
     paths:
-      - 'conf.d/**'
+      - 'components/threshold-exporter/config/conf.d/**'
 
 permissions:
   contents: read
@@ -28,8 +28,11 @@ jobs:
         id: backtest
         env:
           PROMETHEUS_URL: ${{ secrets.PROMETHEUS_URL }}
+        # backtest_threshold.py 的 --git-diff 用客戶 repo 契約 `git diff -- conf.d/`
+        # （conf.d 在客戶 repo root）；本 repo 以 cwd 錨定到實際 conf.d 位置。
+        working-directory: components/threshold-exporter/config
         run: |
-          python3 scripts/tools/ops/backtest_threshold.py \
+          python3 "$GITHUB_WORKSPACE/scripts/tools/ops/backtest_threshold.py" \
             --git-diff \
             --prometheus "${PROMETHEUS_URL:-http://localhost:9090}" \
             --skip-if-unavailable \
@@ -37,8 +40,17 @@ jobs:
             --output /tmp/backtest-report.json
         continue-on-error: true
 
+      - name: Check for report
+        id: report
+        # hashFiles() 只能讀 GITHUB_WORKSPACE 內的檔案（/tmp 恆回空字串），
+        # 改用 step output gate（同 config-diff.yaml 的 has_changes 模式）。
+        run: |
+          if [ -s /tmp/backtest-comment.md ]; then
+            echo "has_comment=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Comment PR
-        if: hashFiles('/tmp/backtest-comment.md') != ''
+        if: steps.report.outputs.has_comment == 'true'
         uses: marocchino/sticky-pull-request-comment@v2
         with:
           path: /tmp/backtest-comment.md

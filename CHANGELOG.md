@@ -13,6 +13,11 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 
 <!-- 下一版 in-flight 工作暫存區。每筆 entry 目標 3-6 行使用者重點 + 一行指回內部 artifact；session 過程 / FUSE trap / 完整 commit list 不入此處。release 收尾時做最終 condensation 並切正式 `## [vX.Y.Z]` heading。 -->
 
+### Fixed
+
+- **Threshold Backtest workflow 從未被 PR 觸發（latent dead filter）**：`.github/workflows/backtest.yaml` 的 paths filter 寫 `conf.d/**`（repo-root-relative，但本 repo 的 conf.d 實際在 `components/threshold-exporter/config/conf.d/`）→ 修正路徑；連帶修復兩個觸發後仍會 silent no-op 的斷點 — script `--git-diff` 的客戶契約 pathspec 改以 `working-directory` 錨定（不動 `da-tools backtest` CLI 行為）、PR comment gate 由 `hashFiles('/tmp/...')`（workspace 外恆空）改為 step output（同 `config-diff.yaml` 模式）。
+- **`CHANGELOG.md` 變更不觸發任何文件驗證（同類 CI-paths 漏配）**：`CHANGELOG.md` 在 mkdocs nav（渲染進站台）卻不在 `.github/workflows/docs-ci.yaml` 的 `paths` filter 內 → 只改 CHANGELOG 的 PR 不跑 Check Documentation Links / Front Matter / MkDocs Build / Line Count 等（多個是 required check）。把 `CHANGELOG.md` 補進 docs-ci paths，與既有的 `README.md` / `CLAUDE.md` 一致。
+
 ## [v2.9.0] — 租戶自助告警 (Custom Alerts) + 租戶聯邦 + 寫入平面韌性 (2026-06-06)
 
 v2.9.0 把平台從「平台 authored 告警」推進為**租戶自助的宣告式告警引擎**，並讓 v2.8.0 outline 的多項深水區能力落地。戰略主題是**從第一個客戶的實際使用去 harden — reactive > predictive**：三條主線是 (1) **Custom Alerts**（租戶用平台 authored 的參數化 recipe 自訂告警、**不寫 PromQL**，ADR-024 能力 B）、(2) **Tenant Federation**（ADR-020 token endpoint + gateway + policy + offboarding 從 outline 走到可部署）、(3) **寫入平面 single-writer 韌性**（ADR-023 把 GitOps 寫入路徑的幽靈寫者 / 孤兒寫入 / rate-limit / 優雅關機系統性補強）。同時平台日誌彙整、IaC SAST 四層、與一輪 silent-failure 反應式硬化（含一個燒了兩個月的 P0 prod drift）一併收斂。
