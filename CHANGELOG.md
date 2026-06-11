@@ -16,6 +16,7 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 ### Fixed
 
 - **Threshold Backtest workflow 從未被 PR 觸發（latent dead filter）**：`.github/workflows/backtest.yaml` 的 paths filter 寫 `conf.d/**`（repo-root-relative，但本 repo 的 conf.d 實際在 `components/threshold-exporter/config/conf.d/`）→ 修正路徑；連帶修復兩個觸發後仍會 silent no-op 的斷點 — script `--git-diff` 的客戶契約 pathspec 改以 `working-directory` 錨定（不動 `da-tools backtest` CLI 行為）、PR comment gate 由 `hashFiles('/tmp/...')`（workspace 外恆空）改為 step output（同 `config-diff.yaml` 模式）。
+- **Deny-list lint 會誤殺 compiled pack 的 forecast recipe（latent CI 衝突）**：`lint_custom_rules.py` 在 CI 遞迴掃整個 `rule-packs/`，而 policy deny `predict_linear` + `max_range_duration: 1h` — 第一個宣告 forecast（ADR-024 能力 B）的租戶 regen 後，平台 compiler 合法產出的 `rule-pack-custom-alerts.yaml` 必然紅燈（deny 理由「大範圍回溯」已被編譯期緩解：lookback 平台導出 + cold-start gate）。新增 policy `file_overrides` 逐檔豁免機制：僅對帶 GENERATED 檔頭的 compiled pack 覆寫列出的 key（`predict_linear` 豁免 + range 上限 96h = 2×horizon enum 上限），其餘檢查照跑、缺標記則 ERROR；`DEFAULT_POLICY` 同步（`validate_config` 無 `--policy` 路徑行為一致）+ 7 個 regression 測試（含真 compiler 端對端 fixture）。見 [custom-rule-governance.md §4.1](docs/custom-rule-governance.md)。
 - **`CHANGELOG.md` 變更不觸發任何文件驗證（同類 CI-paths 漏配）**：`CHANGELOG.md` 在 mkdocs nav（渲染進站台）卻不在 `.github/workflows/docs-ci.yaml` 的 `paths` filter 內 → 只改 CHANGELOG 的 PR 不跑 Check Documentation Links / Front Matter / MkDocs Build / Line Count 等（多個是 required check）。把 `CHANGELOG.md` 補進 docs-ci paths，與既有的 `README.md` / `CLAUDE.md` 一致。
 
 ## [v2.9.0] — 租戶自助告警 (Custom Alerts) + 租戶聯邦 + 寫入平面韌性 (2026-06-06)

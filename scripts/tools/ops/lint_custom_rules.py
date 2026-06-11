@@ -8,6 +8,10 @@
   4. 限制 range vector duration
   5. 禁止破壞 tenant 隔離的語法
 
+平台 COMPILED pack（如 rule-pack-custom-alerts.yaml，帶 GENERATED 檔頭）可由
+policy 的 `file_overrides` 取得逐檔豁免（例如 forecast recipe 的 predict_linear），
+其餘檢查照跑；缺 GENERATED 標記時豁免不生效並回報 ERROR。
+
 用法:
   # 掃描 custom rule 目錄
   python3 scripts/tools/lint_custom_rules.py rule-packs/custom/
@@ -63,7 +67,39 @@ DEFAULT_POLICY = {
     ],
     "max_range_duration": "1h",
     "max_evaluation_interval": "60s",
+    # Per-file overrides for platform-COMPILED packs (kept in sync with
+    # .github/custom-rule-policy.yaml so the no-policy path — e.g.
+    # validate_config.py without --policy — behaves identically). The deny-list
+    # governs tenant-authored raw PromQL; a compiled pack's recipes are
+    # platform-vetted with cost mitigations baked in at compile time
+    # (e.g. forecast: platform-derived lookback + cold-start sample gate),
+    # so selected denials don't apply. Guard rails: the override is honored
+    # only when the file header carries the GENERATED marker (missing marker
+    # → ERROR), and only the listed keys are overridden — every other check
+    # still runs on the file. CI separately drift-checks the pack via
+    # compile_custom_alerts.py --check.
+    "file_overrides": [
+        {
+            "path": "rule-packs/rule-pack-custom-alerts.yaml",
+            "require_generated_marker": True,
+            "policy": {
+                "denied_functions": [
+                    "holt_winters",
+                    "quantile_over_time",
+                ],
+                # forecast lookback = max(2·horizon, 1h); horizon enum caps
+                # at 48h → 96h (custom_alerts/shape.py ALLOWED_HORIZON).
+                "max_range_duration": "96h",
+            },
+        },
+    ],
 }
+
+# A file_overrides entry with require_generated_marker only applies when this
+# token appears in the file's first few lines (compile_custom_alerts._render
+# writes "# GENERATED from ... — DO NOT EDIT." into the header block).
+GENERATED_MARKER = "GENERATED"
+GENERATED_MARKER_SCAN_LINES = 10
 
 
 # ---------------------------------------------------------------------------
@@ -212,6 +248,10 @@ def lint_file(filepath, policy):
         results.append(LintResult(filepath, None, None, "ERROR", f"cannot read file: {e}"))
         return results, rule_count
 
+    # Per-file overrides (platform-compiled packs; policy `file_overrides`)
+    policy, override_results = resolve_file_policy(filepath, content, policy)
+    results.extend(override_results)
+
     # Handle ConfigMap-wrapped rules (data: key: |)
     try:
         doc = yaml.safe_load(content)
@@ -277,6 +317,37 @@ def lint_file(filepath, policy):
 # ---------------------------------------------------------------------------
 # Policy loading
 # ---------------------------------------------------------------------------
+def resolve_file_policy(filepath, content, policy):
+    """Resolve the effective policy for one file (per-file overrides).
+
+    Returns (effective_policy, list of LintResult). A matching override whose
+    GENERATED-marker requirement fails yields an ERROR and the base policy —
+    fail loud: either the pack was hand-authored at a platform path or the
+    policy entry is stale.
+    """
+    norm = Path(filepath).as_posix()
+    for override in policy.get("file_overrides") or []:
+        ov_path = (override or {}).get("path")
+        if not ov_path:
+            continue
+        if norm != ov_path and not norm.endswith("/" + ov_path):
+            continue
+        if override.get("require_generated_marker", True):
+            head = content.splitlines()[:GENERATED_MARKER_SCAN_LINES]
+            if not any(GENERATED_MARKER in line for line in head):
+                return policy, [LintResult(
+                    filepath, None, None, "ERROR",
+                    f"file_overrides entry for '{ov_path}' requires a "
+                    f"{GENERATED_MARKER} header marker but none was found in "
+                    f"the first {GENERATED_MARKER_SCAN_LINES} lines — "
+                    "hand-authored files are fully linted"
+                )]
+        effective = policy.copy()
+        effective.update(override.get("policy") or {})
+        return effective, []
+    return policy, []
+
+
 def load_policy(policy_path):
     """Load policy from YAML file, falling back to defaults."""
     if not policy_path:

@@ -224,7 +224,21 @@ required_labels:
 
 max_range_duration: 1h     # 禁止 [7d] 等超長 range vector
 max_evaluation_interval: 60s  # Custom Rule group interval 上限
+
+# 平台 COMPILED pack 的逐檔豁免（v2.10.0）——deny-list 治理對象是租戶手寫
+# raw PromQL；compiler 產出的 pack（如 Custom Alerts forecast recipe 的
+# predict_linear，成本緩解在編譯期內建）由 file_overrides 取得列管豁免
+file_overrides:
+  - path: rule-packs/rule-pack-custom-alerts.yaml
+    require_generated_marker: true   # 檔頭須帶 GENERATED 標記，否則照常全檢
+    policy:
+      denied_functions: [holt_winters, quantile_over_time]  # predict_linear 豁免
+      max_range_duration: 96h        # forecast lookback = max(2·horizon, 1h)，horizon ≤ 48h
 ```
+
+> **豁免不是跳過**：`file_overrides` 只覆寫列出的 key，該檔的其餘檢查
+> （`denied_patterns`、`required_labels` 等）照跑；且 CI 另以
+> `compile_custom_alerts.py --check` drift gate 防止手寫檔冒充 compiled pack。
 
 ### 4.2 Linting 工具
 

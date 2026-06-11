@@ -373,6 +373,135 @@ def test_collect_single_file():
         os.unlink(fpath)
 
 
+# ── Per-file overrides: GENERATED compiled pack (forecast / predict_linear) ──
+#
+# Regression for the latent CI conflict found while reviewing #819: the policy
+# denies predict_linear + ranges >1h for tenant raw rules, but the forecast
+# recipe (ADR-024 能力 B) legitimately compiles to predict_linear with a
+# platform-derived lookback of up to 96h inside the GENERATED
+# rule-packs/rule-pack-custom-alerts.yaml. The `file_overrides` exemption must
+# let the compiled forecast shape through while keeping every other check live.
+
+_REPO_ROOT = os.path.join(os.path.dirname(__file__), "..", "..")
+_REAL_POLICY = os.path.join(_REPO_ROOT, ".github", "custom-rule-policy.yaml")
+
+_GENERATED_PACK_RELPATH = os.path.join("rule-packs", "rule-pack-custom-alerts.yaml")
+
+
+def _compiled_forecast_pack_text():
+    """Compile a real forecast declaration (max horizon 48h → lookback 96h =
+    [345600s]) through the actual compiler + renderer, so the fixture cannot
+    drift from what `make custom-alerts-compile` emits."""
+    import compile_custom_alerts as cc
+    conf = (
+        "tenants:\n"
+        "  ta:\n"
+        "    _custom_alerts:\n"
+        '      - {recipe: forecast, name: disk_full, metric: disk_avail,'
+        ' capacity_metric: disk_cap, op: "<", horizon: 48h,'
+        ' threshold: "0.15:warning"}\n'
+    )
+    with tempfile.TemporaryDirectory() as confdir:
+        with open(os.path.join(confdir, "a.yaml"), "w", encoding="utf-8") as f:
+            f.write(conf)
+        pack = cc.build_pack(confdir)
+    return cc._render(pack["groups"])
+
+
+@pytest.fixture
+def compiled_forecast_pack(tmp_path):
+    """A real compiled forecast pack written at the canonical relative path."""
+    text = _compiled_forecast_pack_text()
+    assert "predict_linear" in text          # fixture sanity: forecast shape present
+    assert "[345600s]" in text               # 96h lookback (horizon 48h × 2)
+    fpath = tmp_path / _GENERATED_PACK_RELPATH
+    fpath.parent.mkdir(parents=True)
+    fpath.write_text(text, encoding="utf-8")
+    return fpath
+
+
+def test_forecast_in_generated_pack_passes_real_policy(compiled_forecast_pack):
+    """forecast shape 出現在 compiled pack 時，真 policy 檔不誤殺（0 ERROR）。"""
+    policy = lint_custom_rules.load_policy(_REAL_POLICY)
+    assert os.path.isfile(_REAL_POLICY)      # guard: fallback-to-defaults would hide drift
+    results, count = lint_custom_rules.lint_file(str(compiled_forecast_pack), policy)
+    errors = [r for r in results if r.severity == "ERROR"]
+    assert count > 0
+    assert errors == [], [str(r) for r in errors]
+
+
+def test_forecast_in_generated_pack_passes_default_policy(compiled_forecast_pack):
+    """validate_config 無 --policy 時走 DEFAULT_POLICY，行為須一致。"""
+    results, _ = lint_custom_rules.lint_file(
+        str(compiled_forecast_pack), lint_custom_rules.DEFAULT_POLICY
+    )
+    errors = [r for r in results if r.severity == "ERROR"]
+    assert errors == [], [str(r) for r in errors]
+
+
+def test_generated_pack_without_marker_stays_denied(compiled_forecast_pack):
+    """缺 GENERATED 檔頭 → 豁免不生效：predict_linear 照殺 + 標記 ERROR。"""
+    text = compiled_forecast_pack.read_text(encoding="utf-8")
+    stripped = "\n".join(
+        line for line in text.splitlines() if not line.startswith("#")
+    )
+    compiled_forecast_pack.write_text(stripped, encoding="utf-8")
+    results, _ = lint_custom_rules.lint_file(
+        str(compiled_forecast_pack), lint_custom_rules.DEFAULT_POLICY
+    )
+    messages = [r.message for r in results if r.severity == "ERROR"]
+    assert any("GENERATED" in m for m in messages)
+    assert any("predict_linear" in m for m in messages)
+
+
+def test_override_scoped_to_path_only(compiled_forecast_pack, tmp_path):
+    """同內容、不同檔名 → 不豁免（override 綁定 path）。"""
+    other = tmp_path / "rule-packs" / "rule-pack-handwritten.yaml"
+    other.write_text(
+        compiled_forecast_pack.read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    results, _ = lint_custom_rules.lint_file(
+        str(other), lint_custom_rules.DEFAULT_POLICY
+    )
+    messages = [r.message for r in results if r.severity == "ERROR"]
+    assert any("predict_linear" in m for m in messages)
+
+
+def test_override_keeps_other_checks_live(tmp_path):
+    """豁免檔內其餘 deny 照跑：holt_winters / 超過 96h range 仍是 ERROR。"""
+    text = (
+        "# GENERATED test fixture — mimics compile_custom_alerts header\n"
+        "groups:\n"
+        "- name: g\n"
+        "  rules:\n"
+        "  - record: custom:metric:x\n"
+        "    expr: holt_winters(my_metric[1h], 0.3, 0.7)\n"
+        "  - record: custom:metric:y\n"
+        "    expr: avg_over_time(my_metric[7d])\n"
+    )
+    fpath = tmp_path / _GENERATED_PACK_RELPATH
+    fpath.parent.mkdir(parents=True)
+    fpath.write_text(text, encoding="utf-8")
+    results, _ = lint_custom_rules.lint_file(
+        str(fpath), lint_custom_rules.DEFAULT_POLICY
+    )
+    messages = [r.message for r in results if r.severity == "ERROR"]
+    assert any("holt_winters" in m for m in messages)
+    assert any("range vector [7d]" in m for m in messages)
+
+
+def test_committed_pack_and_policy_in_sync():
+    """釘住三方同步：committed pack 帶 GENERATED 標記、真 policy 檔與
+    DEFAULT_POLICY 的 file_overrides 等價（避免 validate_config 路徑漂移）。"""
+    committed = os.path.join(_REPO_ROOT, _GENERATED_PACK_RELPATH)
+    with open(committed, encoding="utf-8") as f:
+        head = [next(f) for _ in range(lint_custom_rules.GENERATED_MARKER_SCAN_LINES)]
+    assert any(lint_custom_rules.GENERATED_MARKER in line for line in head)
+
+    real = lint_custom_rules.load_policy(_REAL_POLICY)
+    assert real["file_overrides"] == lint_custom_rules.DEFAULT_POLICY["file_overrides"]
+
+
 def test_lint_result_error_format():
     """測試 LintResult 錯誤格式。"""
     r = lint_custom_rules.LintResult("test.yaml", "MyRule", None, "ERROR", "bad thing")
