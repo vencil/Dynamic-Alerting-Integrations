@@ -25,6 +25,16 @@ import os
 import sys
 from pathlib import Path
 
+# UTF-8 stdout/stderr guard (#824) — 本檔的 ✅ emoji print 在 cp950 console
+# 直接 UnicodeEncodeError，hook 鏈路因此七週把成功記成 partial（#489 sweep
+# 漏掃 session-guards/）。寫入先於 print 落地，所以毀的是 telemetry 不是功能。
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
+try:
+    from _lib_compat import try_utf8_stdout
+except Exception:  # pragma: no cover — standalone fallback, never block
+    def try_utf8_stdout() -> None:  # type: ignore
+        return None
+
 # Git 相關的 key 與「關閉」時的值
 GIT_KEYS_OFF = {
     "git.enabled": False,
@@ -103,6 +113,7 @@ def apply_toggle(settings_path: Path, action: str) -> None:
 
 
 def main() -> None:
+    try_utf8_stdout()
     repo_root = find_repo_root()
     settings_path = repo_root / ".vscode" / "settings.json"
 

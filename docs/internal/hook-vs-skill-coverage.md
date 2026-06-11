@@ -47,10 +47,25 @@ lang: zh
 
 | Guard | 觸發 | 涵蓋 | Reference |
 |---|---|---|---|
-| `session-init.py` | 第一次 `Bash`/`Write`/`Edit`/`MultiEdit` | 關 VS Code Git + 寫 session marker（起手式 codified） | `scripts/session-guards/session-init.py` |
-| `preflight_bash.py` | 每次 `Bash` | 攔 `sed -i` 掛載路徑（dev-rule #11）+ 攔 `_*.bat`/`_*.ps1`/`_*.cmd` 出 whitelist（Trap #54） | `scripts/session-guards/preflight_bash.py` |
+| `session-init.py` | 第一次 `Bash`/`Write`/`Edit`/`MultiEdit` | 關 VS Code Git + 寫 session marker + 刷 liveness heartbeat（起手式 codified） | `scripts/session-guards/session-init.py` |
+| `preflight_bash.py` | 每次 `Bash`/`Write` | 攔 `sed -i` 掛載路徑（dev-rule #11）+ 攔 `_*.bat`/`_*.ps1`/`_*.cmd` 出 whitelist（Trap #54） | `scripts/session-guards/preflight_bash.py` |
 
-> 這兩支讓「起手式」「檔案衛生」從 skill-advised 升級為 hook-enforced——AI 不必每次手動跑起手式，hook 代勞。
+> 這兩支讓「起手式」「檔案衛生」從 skill-advised 升級為 hook-enforced——AI 不必每次手動跑起手式，hook 代勞。兩支自 #824 起一律經 `run-hooks.sh` launcher 啟動（功能性直譯器探測；`session-guard-liveness-check` pre-commit gate 防回歸）。
+>
+> **已知不涵蓋（負空間，#824 取證後誠實列出）**：
+> - matcher 只含 `Bash|Write|Edit|MultiEdit`——**`PowerShell` 工具與 MCP 寫入類工具（Desktop Commander / Windows-MCP 等）不觸發任何 guard**。PowerShell-first session 的第一個 mutating call 不會跑起手式；MCP 寫檔完全繞過檔案衛生攔截。
+> - `preflight_bash` 的 `sed -i` 攔截需命令文字含**絕對**掛載路徑——cwd 在 repo 內的**相對路徑** `sed -i` 同樣危險但放行（原設計刻意寬網不擋誤殺；收緊與否見 #824）。
+> - hook 失敗（直譯器壞 / script crash）依協議**不會 block 也不會餵 stderr 給模型**（只有 exit 2 會）——launcher 對「找不到直譯器」以 `additionalContext` JSON fail-loud 補位，其餘失效 class 由 `session-guard-liveness-check` 在 commit 時攔。
+
+### Hook 失敗策略分級（#824 codify）
+
+| 類型 | 失敗策略 | 理由 |
+|---|---|---|
+| Lint / format hooks | fail-open（退化成沒檢查），warn 即可 | 寫壞的 lint 不應卡死日常作業 |
+| **Session guards / 衛生 guard** | **fail-loud**：`additionalContext` JSON（exit 0）把失效訊息餵給模型，**不 block** | 全面 fail-closed 會把 session 變不可恢復的磚（env 壞 → 連修復能力都被擋）；guard 失效的風險面是 git 可恢復的損害，爆炸半徑不對稱 |
+| Security-critical（secret 外洩類） | fail-closed：exit 2 block + stderr 餵模型 | 不可恢復的損害（外洩即起跑 Rotate-First）值得擋下一切 |
+
+> **新 hook / session-guard 的 AC 必須含 live-fire 證據**（真實 harness 觸發 + 可觀測輸出，如 telemetry event），不得僅 code review——#824 的教訓：session-init 上線時從未在真實 harness spawn 路徑驗收，cp950 crash + Store-stub 兩層失效靜默七週，telemetry 寫滿卻無消費者。
 
 ---
 
@@ -60,7 +75,7 @@ lang: zh
 
 | 職能群 | hook ids | 對應規範 | 涵蓋 |
 |---|---|---|---|
-| **檔案衛生 / 安全** | `file-hygiene` `sed-damage-guard` `head-blob-hygiene` `secrets-scan-staged` `bat-ascii-purity-check` `ad-hoc-git-scripts-check` `repo-name-check` `codename-leak-check` `codename-gate-check` `hardcode-tenant-check` `window-x-no-fallback-check` | #2 #11、安全紀律 L1、Trap #45/#54 | NUL/EOF、secret（trufflehog）、tenant hardcode、codename leak（L1 enumeration + L2 glossary-driven） |
+| **檔案衛生 / 安全** | `file-hygiene` `sed-damage-guard` `session-guard-liveness-check` `head-blob-hygiene` `secrets-scan-staged` `bat-ascii-purity-check` `ad-hoc-git-scripts-check` `repo-name-check` `codename-leak-check` `codename-gate-check` `hardcode-tenant-check` `window-x-no-fallback-check` | #2 #11、安全紀律 L1、Trap #45/#54、#824 | NUL/EOF、secret（trufflehog）、tenant hardcode、codename leak（L1 enumeration + L2 glossary-driven）、session-guard 可執行性 |
 | **文件 drift / 計數** | `tool-map-check` `doc-map-check` `adr-index-check` `planning-index-check` `rule-pack-stats-check` `glossary-check` `changelog-lint` `changelog-no-tbd-check` `version-consistency` `devrules-size-check` `commit-scope-doc-drift` `dev-rules-enforcement-check` | #4 Doc-as-Code | 各種「源↔生成」計數一致性 |
 | **doc 連結 / 雙語** | `doc-links-check` `html-doc-links-check` `structure-check` `bilingual-structure-check` `bilingual-content-check` `bilingual-annotations-check` `includes-sync` | #9 #10 雙語政策、#4 | 連結有效性、ZH/EN 結構同步、CJK 純度 |
 | **JSX / portal** | `design-token-usage` `axe-lite-static` `jsx-i18n-check` `jsx-babel-check` `undefined-tokens-check` `jsx-loader-compat-check` `dist-source-consistency-check` `skip-a11y-justification-check` `playwright-lint` `playwright-rtl-drift-check` `tool-consistency-check` `cli-coverage-check` `build-completeness-check` | #9 i18n、TRK-237/239 | token 合規、a11y、ESM、dist↔source |

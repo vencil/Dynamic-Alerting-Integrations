@@ -36,12 +36,14 @@ def _load_module():
 
 @pytest.fixture
 def tmp_marker_dir(monkeypatch, tmp_path):
-    """Redirect marker dir + telemetry log to tmp_path so tests don't pollute /tmp."""
+    """Redirect marker dir + telemetry log + heartbeat to tmp_path（不污染 /tmp / repo）."""
     mod = _load_module()
     monkeypatch.setattr(mod, "MARKER_DIR", tmp_path)
     # Redirect telemetry log via env override — avoids ~/.cache/vibe/ pollution
     log_path = tmp_path / "session-init.log"
     monkeypatch.setenv("VIBE_SESSION_LOG", str(log_path))
+    # Redirect heartbeat (#824) — avoids repo .vibe/ pollution from tests
+    monkeypatch.setenv("VIBE_GUARDS_HEARTBEAT", str(tmp_path / "guards-heartbeat"))
     return mod, tmp_path
 
 
@@ -63,6 +65,104 @@ class TestSessionId:
         monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
         monkeypatch.setenv("CLAUDE_SESSION", "alt-name")
         assert mod._session_id() == "alt-name"
+
+
+class TestPayloadSessionId:
+    """#824 根因 4 — hook env 無 CLAUDE_SESSION_ID，session_id 改從 stdin payload 取。"""
+
+    def test_payload_wins_over_env(self, monkeypatch):
+        mod = _load_module()
+        monkeypatch.setenv("CLAUDE_SESSION_ID", "env-sid")
+        assert mod._session_id("payload-sid") == "payload-sid"
+
+    def test_none_payload_falls_back_to_env(self, monkeypatch):
+        mod = _load_module()
+        monkeypatch.setenv("CLAUDE_SESSION_ID", "env-sid")
+        assert mod._session_id(None) == "env-sid"
+
+    def test_reads_session_id_from_stdin_json(self, monkeypatch):
+        import io
+
+        mod = _load_module()
+        payload = json.dumps({"session_id": "stdin-sid", "tool_name": "Bash"})
+        monkeypatch.setattr(sys, "stdin", io.StringIO(payload))
+        assert mod._payload_session_id() == "stdin-sid"
+
+    def test_garbage_stdin_returns_none(self, monkeypatch):
+        import io
+
+        mod = _load_module()
+        monkeypatch.setattr(sys, "stdin", io.StringIO("not-json"))
+        assert mod._payload_session_id() is None
+
+    def test_empty_stdin_returns_none(self, monkeypatch):
+        import io
+
+        mod = _load_module()
+        monkeypatch.setattr(sys, "stdin", io.StringIO(""))
+        assert mod._payload_session_id() is None
+
+    def test_tty_stdin_skipped(self, monkeypatch):
+        """手動在 terminal 跑時 stdin 是 tty — 不能 block 在 read()。"""
+
+        class FakeTTY:
+            def isatty(self):
+                return True
+
+        mod = _load_module()
+        monkeypatch.setattr(sys, "stdin", FakeTTY())
+        assert mod._payload_session_id() is None
+
+    def test_main_uses_payload_sid_for_marker(self, tmp_marker_dir, monkeypatch):
+        import io
+
+        mod, tmpdir = tmp_marker_dir
+        monkeypatch.setenv("CLAUDE_SESSION_ID", "env-should-lose")
+        monkeypatch.setattr(mod, "_run_vscode_git_toggle", lambda _r: (True, ""))
+        payload = json.dumps({"session_id": "payload-marker-sid"})
+        monkeypatch.setattr(sys, "stdin", io.StringIO(payload))
+        rc = mod.main([])
+        assert rc == 0
+        assert mod._marker_path("payload-marker-sid").exists()
+        assert not mod._marker_path("env-should-lose").exists()
+
+
+class TestHeartbeat:
+    """#824 方案 B — repo-local liveness heartbeat，init 與 noop 都要刷。"""
+
+    def test_init_touches_heartbeat(self, tmp_marker_dir, monkeypatch):
+        mod, tmpdir = tmp_marker_dir
+        monkeypatch.setenv("CLAUDE_SESSION_ID", "hb-sess-1")
+        monkeypatch.setattr(mod, "_run_vscode_git_toggle", lambda _r: (True, ""))
+        mod.main([])
+        hb = tmpdir / "guards-heartbeat"
+        assert hb.exists()
+        # 內容是 ISO timestamp
+        from datetime import datetime
+
+        datetime.fromisoformat(hb.read_text(encoding="utf-8").strip())
+
+    def test_noop_refreshes_heartbeat(self, tmp_marker_dir, monkeypatch):
+        mod, tmpdir = tmp_marker_dir
+        monkeypatch.setenv("CLAUDE_SESSION_ID", "hb-sess-2")
+        monkeypatch.setattr(mod, "_run_vscode_git_toggle", lambda _r: (True, ""))
+        mod.main([])  # init
+        hb = tmpdir / "guards-heartbeat"
+        hb.unlink()  # 模擬被清掉
+        mod.main([])  # noop 路徑也要刷回來
+        assert hb.exists()
+
+    def test_heartbeat_failure_does_not_block(self, tmp_marker_dir, monkeypatch, capsys):
+        mod, tmpdir = tmp_marker_dir
+        monkeypatch.setenv("CLAUDE_SESSION_ID", "hb-sess-3")
+        monkeypatch.setattr(mod, "_run_vscode_git_toggle", lambda _r: (True, ""))
+        # parent 是檔案不是目錄 → mkdir 失敗 → 警告但 exit 0
+        blocker = tmpdir / "hb-blocker"
+        blocker.write_text("file, not dir")
+        monkeypatch.setenv("VIBE_GUARDS_HEARTBEAT", str(blocker / "sub" / "hb"))
+        rc = mod.main([])
+        assert rc == 0
+        assert "could not touch heartbeat" in capsys.readouterr().err
 
 
 class TestMarkerPath:
