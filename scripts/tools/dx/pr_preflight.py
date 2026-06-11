@@ -1064,6 +1064,22 @@ def _classify_ci_failures(failed_checks: list) -> str:
     return f"→ main CI 也是 {main_conclusion} — 部分失敗可能是 pre-existing"
 
 
+def _unpushed_commit_count() -> int:
+    """本地超前 upstream 的 commit 數（無 upstream / 查詢失敗 → 0，保守維持原 gate）。
+
+    hard CI failure 必然是跑在 PR 的舊遠端 SHA 上；存在未推 commits 時，即將到來
+    的 push 會取代該 SHA 並重跑 CI —— 失敗 structurally stale（fix-push 悖論，
+    #819）。回 0 時（merge-readiness：已全部推上去）紅 CI 維持 FAIL 的牙齒。
+    """
+    r = run(["git", "rev-list", "--count", "@{u}..HEAD"], timeout=10)
+    if r.returncode != 0:
+        return 0
+    try:
+        return int((r.stdout or "0").strip())
+    except ValueError:
+        return 0
+
+
 def check_ci_status(pr_number: Optional[int] = None) -> CheckResult:
     """查詢 GitHub CI 狀態。"""
     # gh pr checks --json fields: name, state, bucket, description, event, link, startedAt, completedAt, workflow
@@ -1122,6 +1138,21 @@ def check_ci_status(pr_number: Optional[int] = None) -> CheckResult:
             ab_note = _classify_ci_failures(hard_failed)
             if ab_note:
                 detail += f"\n{ab_note}"
+            # Fix-push 悖論（#819 死鎖）：`gh pr checks` 回報的是 PR 遠端 HEAD
+            # （舊 SHA）的結果；當本地有未推 commits 時，這次 push 本身就會取代
+            # 那個 SHA 並觸發 CI 重跑 —— 「push 前要求新 SHA 的 CI 綠」在邏輯上
+            # 不可能。降為 WARN 放行 fix-push；merge-readiness 場景（無未推
+            # commits）不受影響，紅 CI 照樣 FAIL，merge 仍由 branch protection
+            # 把關。與 #543 soft-fail carve-out 同族。
+            unpushed = _unpushed_commit_count()
+            if unpushed > 0:
+                return CheckResult(
+                    "CI status",
+                    Status.WARN,
+                    f"{len(hard_failed)} failed — 但失敗跑在舊 SHA，本地有 "
+                    f"{unpushed} 個未推 commit（push 後 CI 將重跑）",
+                    detail=detail,
+                )
             return CheckResult(
                 "CI status",
                 Status.FAIL,

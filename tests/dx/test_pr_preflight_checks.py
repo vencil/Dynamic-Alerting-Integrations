@@ -407,10 +407,43 @@ class TestCheckCIStatus:
         _stub_run_constant(monkeypatch, _cp(0, json.dumps(checks)))
         monkeypatch.setattr(pp, "_classify_ci_failures",
                             lambda failed: "→ stubbed AB classification")
+        monkeypatch.setattr(pp, "_unpushed_commit_count", lambda: 0)
         result = pp.check_ci_status()
         assert result.status == pp.Status.FAIL
         assert "1 failed" in result.message
         assert "stubbed AB" in result.detail
+
+    def test_hard_fail_with_unpushed_commits_downgrades_to_warn(self, monkeypatch):
+        # Fix-push 悖論（#819）：紅 CI 跑在舊遠端 SHA；本地有未推 commits 時，
+        # 這次 push 就是修復本身 → 降 WARN 放行，否則 marker gate 死鎖。
+        checks = [{"name": "Portal Tests", "state": "FAILURE", "bucket": "fail"}]
+        _stub_run_constant(monkeypatch, _cp(0, json.dumps(checks)))
+        monkeypatch.setattr(pp, "_classify_ci_failures", lambda failed: "→ ab")
+        monkeypatch.setattr(pp, "_unpushed_commit_count", lambda: 2)
+        result = pp.check_ci_status()
+        assert result.status == pp.Status.WARN
+        assert "未推" in result.message
+        assert "Portal Tests" in result.detail   # 失敗清單仍保留在 detail
+
+    def test_hard_fail_without_unpushed_commits_stays_fail(self, monkeypatch):
+        # merge-readiness 場景（全部已推）：紅 CI 必須維持 FAIL 的牙齒。
+        checks = [{"name": "Go Tests", "state": "FAILURE", "bucket": "fail"}]
+        _stub_run_constant(monkeypatch, _cp(0, json.dumps(checks)))
+        monkeypatch.setattr(pp, "_classify_ci_failures", lambda failed: "")
+        monkeypatch.setattr(pp, "_unpushed_commit_count", lambda: 0)
+        result = pp.check_ci_status()
+        assert result.status == pp.Status.FAIL
+
+    def test_unpushed_commit_count_parses_and_defaults(self, monkeypatch):
+        # 正常：rev-list 回數字。
+        _stub_run_constant(monkeypatch, _cp(0, "3\n"))
+        assert pp._unpushed_commit_count() == 3
+        # 無 upstream（rev-list 失敗）→ 0（保守維持原 gate）。
+        _stub_run_constant(monkeypatch, _cp(128, "", "no upstream"))
+        assert pp._unpushed_commit_count() == 0
+        # 非數字輸出 → 0。
+        _stub_run_constant(monkeypatch, _cp(0, "not-a-number"))
+        assert pp._unpushed_commit_count() == 0
 
     def test_invalid_json_warns(self, monkeypatch):
         _stub_run_constant(monkeypatch, _cp(0, "{not json"))
