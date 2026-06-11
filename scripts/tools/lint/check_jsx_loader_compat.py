@@ -1,46 +1,61 @@
 #!/usr/bin/env python3
 """check_jsx_loader_compat.py — Detect JSX-loader-incompatible module syntax (named exports / non-allowlist imports / require() calls).
 
-Why this exists
----------------
+Why this exists (origin: legacy Babel-standalone era)
+------------------------------------------------------
 S#92 PR #182 first CI E2E run failed: `routing-trace.jsx` had
-``export function computeTrace(...)`` (named export). In the
+``export function computeTrace(...)`` (named export). In the then-current
 jsx-loader Babel-standalone (script-mode, not module-mode) context,
-Babel transforms named exports into ``exports.computeTrace = ...``,
-which fails at runtime with ``ReferenceError: exports is not defined``
+Babel transformed named exports into ``exports.computeTrace = ...``,
+which failed at runtime with ``ReferenceError: exports is not defined``
 because ``exports`` is not a global in script mode. The React tree
-never mounts → all 4 testid lookups in the spec fail → CI fails.
+never mounted → all 4 testid lookups in the spec failed → CI failed.
 
 `pre-commit run jsx-babel-check` PARSES JSX successfully (`export
 function` is a valid AST node), so the syntactic gate did not catch
 this. Local pre-commit doesn't run E2E. Only CI runtime caught it.
 
-This lint shifts catch-time from CI to commit, mechanically.
+This lint shifted catch-time from CI to commit, mechanically.
+
+Status after TD-030z + TRK-242
+------------------------------
+jsx-loader.html now only loads esbuild ESM dist bundles
+(``docs/assets/dist/<tool>.js``); the Babel-standalone path
+(``transformImports`` / ``parseDependencies`` / ``loadDependencies``)
+was removed (see git history pre-#264), and portal source moved to
+``tools/portal/src/`` (TRK-242). Named exports and relative imports
+are legal at runtime now — the lint is kept as a commit-time
+CONVENTION gate: components export via ``export default``, shared
+symbols via a tail ``export { A, B };`` clause (which rule 1's
+declarative-form regex deliberately does NOT match), and bare
+specifiers stay pinned to the two the build harness handles.
 
 What it flags
 -------------
-On any `.jsx` file under ``docs/interactive/`` (the jsx-loader-served
-directory tree):
+On any `.jsx` file under ``tools/portal/src/interactive/``:
 
-1. **Named exports** — ``^export (function|const|let|var|class) ...``
-   (NOT ``export default ...``). Anything that compiles to
-   ``exports.x = ...`` breaks.
-2. **Non-allowlist imports** — ``import ... from '<X>'`` where ``<X>``
-   is anything other than ``react`` or ``lucide-react``. jsx-loader
-   has special regex transforms for those two sources only (see
-   ``docs/assets/jsx-loader.html`` ``transformImports`` function);
-   anything else falls through and Babel emits ``require('<X>')``
-   which fails at runtime.
-3. **`require(...)` calls** — same root cause; ``require`` is
-   undefined in script mode.
+1. **Declarative named exports** — ``^export (function|const|let|var|class) ...``
+   (NOT ``export default ...``, NOT the ``export { A, B };`` clause
+   form). Convention: keep helpers at module scope, export once at
+   file tail.
+2. **Non-allowlist bare imports** — ``import ... from '<X>'`` where
+   ``<X>`` is a bare specifier other than ``react`` or
+   ``lucide-react``. The allowlist is pinned by
+   ``tools/portal/build.mjs``: ``react`` is bundled into each dist;
+   ``lucide-react`` is virtualized to a ``window.lucideReact`` read
+   (TD-030f). Anything else would silently bloat the bundle or fail
+   to resolve.
+3. **`require(...)` calls** — CommonJS; not part of the ESM build.
 
 Allowed (deliberately NOT flagged):
 - ``import React from 'react'`` / ``import { useState } from 'react'``
-  / ``import React, { useState } from 'react'`` — jsx-loader handles
-  these via regex
-- ``import { Icon } from 'lucide-react'`` — ditto
+  / ``import React, { useState } from 'react'``
+- ``import { Icon } from 'lucide-react'``
+- Relative imports (``./`` / ``../``) — the standard cross-file path;
+  esbuild resolves them natively
 - ``export default function Component()`` / ``export default
-  Component;`` — Babel + jsx-loader handle this (Component renders)
+  Component;`` — the component-export convention
+- ``export { A, B };`` clause form — the shared-symbol convention
 - Module-scope helpers (no ``export`` keyword) — fine; component
   closure can reach them
 - Per-line ``<!-- jsx-loader-compat: ignore -->`` (3-line lookback)
@@ -53,9 +68,10 @@ Auto-stage FATAL on any finding. Codebase audit at scaffold time
 Cross-refs
 ----------
 - S#92 PR #182 amend commit `6e16a65` — root cause + reproduce
-- testing-playbook §v2.8.0 LL §9 — JSX-loader Babel-standalone constraints
-- ``docs/assets/jsx-loader.html`` ``transformImports`` function
-  (lines ~617-639) — the actual regex allowlist
+- testing-playbook §v2.8.0 LL §9 — legacy constraints + post-TD-030z 現況
+- ``tools/portal/build.mjs`` — bundling + lucide-react virtualization
+  (the thing that pins the bare-import allowlist today)
+- ``docs/internal/jsx-multi-file-pattern.md`` — multi-file split pattern
 
 Generated by ``scripts/tools/dx/scaffold_lint.py`` (text kind).
 See https://github.com/vencil/Dynamic-Alerting-Integrations/pull/171
@@ -87,8 +103,9 @@ _IGNORE_LOOKBACK_LINES = 3
 _DEFAULT_SCAN_DIR = PROJECT_ROOT / "tools" / "portal" / "src" / "interactive"  # TRK-242
 _DEFAULT_SCAN_EXTS = (".jsx",)
 
-# Allowlist of import sources that jsx-loader.html transformImports()
-# handles via regex (lines ~624-638 of jsx-loader.html).
+# Allowlist of bare import specifiers the build harness handles:
+# `react` is bundled into each dist by build.mjs; `lucide-react` is
+# virtualized to a `window.lucideReact` read (build.mjs, TD-030f).
 _ALLOWED_IMPORT_SOURCES = frozenset({"react", "lucide-react"})
 
 # Rule 1: named export (not default).
@@ -174,12 +191,10 @@ def scan_source(path: Path, source: str) -> list[JsxLoaderCompatFinding]:
         m = _IMPORT_RE.match(line)
         if m:
             source_name = m.group(1)
-            # TRK-230 transitional: relative imports (`./` or `../`) are
-            # rewritten by jsx-loader.html transformImports → window.__X
-            # reads. The dist-bundle path uses them natively. Both work.
-            # Removed when jsx-loader retires (TRK-230z) — at that point
-            # relative imports are the only path and this rule reduces
-            # to "no bare specifiers other than the React allowlist".
+            # Relative imports (`./` or `../`) are the standard
+            # cross-file path since TD-030z (esbuild resolves them
+            # natively); this rule reduces to "no bare specifiers
+            # other than the React allowlist".
             is_relative = source_name.startswith("./") or source_name.startswith("../")
             if source_name not in _ALLOWED_IMPORT_SOURCES and not is_relative:
                 findings.append(
@@ -248,7 +263,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "paths",
         nargs="*",
-        help="Files or directories to scan. Defaults to docs/interactive/ recursively (jsx).",
+        help="Files or directories to scan. Defaults to tools/portal/src/interactive/ recursively (jsx).",
     )
     parser.add_argument(
         "--ci",
@@ -286,11 +301,12 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  {f.render()}", file=sys.stderr)
     print(
         "\nFix:\n"
-        "  - named-export         → drop `export` keyword (keep helper at module scope)\n"
-        "  - non-allowlist-import → use only react / lucide-react; for cross-tool\n"
-        "                           reuse, see jsx-multi-file-pattern.md (front-matter\n"
-        "                           dependencies: + window.__X self-register)\n"
-        "  - require-call         → not supported in jsx-loader Babel-standalone\n"
+        "  - named-export         → keep helper at module scope; export via a tail\n"
+        "                           `export { A, B };` clause (or `export default`)\n"
+        "  - non-allowlist-import → bare specifiers limited to react / lucide-react;\n"
+        "                           cross-file reuse = relative ESM import\n"
+        "                           (see jsx-multi-file-pattern.md)\n"
+        "  - require-call         → CommonJS; use ESM import\n"
         f"  - intentional?         → add `{_IGNORE_MARKER}` (3-line lookback)",
         file=sys.stderr,
     )

@@ -699,7 +699,7 @@ repos:
         entry: bash -c 'cd tests/e2e && npx playwright test'
         language: system
         pass_filenames: false
-        files: ^(docs/interactive/|tests/e2e/|docs/assets/(tool-registry|jsx-loader|flows))
+        files: ^(docs/interactive/|tests/e2e/|tools/portal/|docs/assets/(tool-registry|jsx-loader|flows|dist))
         stages: [manual]
 
       - id: playwright-lint
@@ -887,7 +887,7 @@ repos:
         entry: python3 -X utf8 scripts/tools/lint/check_jsx_loader_compat.py --ci
         language: python
         pass_filenames: false
-        files: ^docs/interactive/.*\.jsx$
+        files: ^tools/portal/src/.*\.jsx$
         # Auto-stage, FATAL on findings (default for new lints when
         # post-rewrite violation count is 0; mirrors PR #169 / #170).
         # If existing codebase has violations, add granular `--strict-jsx_loader_compat`
