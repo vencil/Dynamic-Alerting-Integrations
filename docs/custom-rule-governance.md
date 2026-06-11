@@ -236,8 +236,11 @@ file_overrides:
       max_range_duration: 96h        # forecast lookback = max(2·horizon, 1h)，horizon ≤ 48h
 ```
 
-> **豁免不是跳過**：`file_overrides` 只覆寫列出的 key，該檔的其餘檢查
-> （`denied_patterns`、`required_labels` 等）照跑；且 CI 另以
+> **豁免不是跳過（四層護欄）**：(1) `path` 錨在掃描樹頂層（精確路徑、非
+> suffix），巢狀 `rule-packs/*/rule-packs/<file>` 不取得豁免；(2) 須帶
+> GENERATED 檔頭，否則 ERROR + 全檢；(3) 只有 `denied_functions` /
+> `max_range_duration` 可被放寬（白名單），列其他 key（如清空
+> `required_labels`）會被忽略並回報 ERROR；(4) 未覆寫的檢查照跑。CI 另以
 > `compile_custom_alerts.py --check` drift gate 防止手寫檔冒充 compiled pack。
 
 ### 4.2 Linting 工具

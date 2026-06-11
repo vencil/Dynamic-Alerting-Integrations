@@ -208,10 +208,15 @@ file_overrides:
       max_range_duration: 96h        # forecast lookback = max(2·horizon, 1h), horizon ≤ 48h
 ```
 
-> **An exemption is not a skip**: `file_overrides` only overrides the listed
-> keys — every other check (`denied_patterns`, `required_labels`, …) still runs
-> on the file; and CI separately guards against a hand-written file posing as a
-> compiled pack via the `compile_custom_alerts.py --check` drift gate.
+> **An exemption is not a skip (four guard rails)**: (1) `path` is anchored at
+> the top of the scanned tree (exact path, not a suffix), so a nested
+> `rule-packs/*/rule-packs/<file>` gets no exemption; (2) the GENERATED header
+> is required, else ERROR + full lint; (3) only `denied_functions` /
+> `max_range_duration` may be relaxed (whitelist) — any other key (e.g.
+> emptying `required_labels`) is ignored and flagged as ERROR; (4) every
+> non-overridden check still runs. CI separately guards against a hand-written
+> file posing as a compiled pack via the `compile_custom_alerts.py --check`
+> drift gate.
 
 ### 4.2 Linting Tool
 

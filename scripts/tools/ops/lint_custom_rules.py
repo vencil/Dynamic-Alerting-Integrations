@@ -101,6 +101,14 @@ DEFAULT_POLICY = {
 GENERATED_MARKER = "GENERATED"
 GENERATED_MARKER_SCAN_LINES = 10
 
+# An override may relax ONLY these policy keys. The deny-list's structural
+# integrity checks (tenant-isolation patterns, required labels, group interval)
+# must NEVER be disable-able via a per-file override, even for a compiled pack —
+# those guard against compiler bugs, not just tenant misuse. Anything outside
+# this set in an override's `policy` block is ignored (and flagged), so a stray
+# or malicious `required_labels: []` cannot silently widen the exemption.
+OVERRIDABLE_POLICY_KEYS = frozenset({"denied_functions", "max_range_duration"})
+
 
 # ---------------------------------------------------------------------------
 # Lint checks
@@ -317,20 +325,47 @@ def lint_file(filepath, policy):
 # ---------------------------------------------------------------------------
 # Policy loading
 # ---------------------------------------------------------------------------
+def _override_path_matches(norm, ov_path):
+    """True iff `norm` is the override's canonical path, anchored at the TOP of
+    the scanned tree — NOT merely a suffix.
+
+    The override path (e.g. ``rule-packs/rule-pack-custom-alerts.yaml``) is
+    repo-root-relative, and CI runs the linter from the repo root, so a
+    legitimate hit is either an exact match (CI) or the canonical path under an
+    absolute prefix that does NOT itself re-enter the scanned tree (local /
+    tmp invocations). A bare suffix match would let a tenant smuggle a file at
+    a NESTED path like ``rule-packs/custom/rule-packs/rule-pack-custom-alerts.yaml``
+    into the exemption — the recursive scan descends into it, the drift gate
+    (compile_custom_alerts --check) only inspects the single canonical path, so
+    nothing else would catch it. Rejecting any prefix that re-introduces the
+    override's anchor directory closes that hole while still allowing an
+    absolute `/tmp/.../rule-packs/<file>` prefix.
+    """
+    if norm == ov_path:
+        return True
+    suffix = "/" + ov_path
+    if not norm.endswith(suffix):
+        return False
+    prefix = norm[: -len(suffix)]
+    anchor = ov_path.split("/", 1)[0]            # e.g. "rule-packs"
+    return anchor not in prefix.split("/")
+
+
 def resolve_file_policy(filepath, content, policy):
     """Resolve the effective policy for one file (per-file overrides).
 
     Returns (effective_policy, list of LintResult). A matching override whose
     GENERATED-marker requirement fails yields an ERROR and the base policy —
     fail loud: either the pack was hand-authored at a platform path or the
-    policy entry is stale.
+    policy entry is stale. Only OVERRIDABLE_POLICY_KEYS are relaxable; any other
+    key in an override's `policy` block is ignored and flagged.
     """
     norm = Path(filepath).as_posix()
     for override in policy.get("file_overrides") or []:
-        ov_path = (override or {}).get("path")
-        if not ov_path:
+        if not isinstance(override, dict):       # tolerate malformed policy entries
             continue
-        if norm != ov_path and not norm.endswith("/" + ov_path):
+        ov_path = override.get("path")
+        if not ov_path or not _override_path_matches(norm, ov_path):
             continue
         if override.get("require_generated_marker", True):
             head = content.splitlines()[:GENERATED_MARKER_SCAN_LINES]
@@ -342,9 +377,20 @@ def resolve_file_policy(filepath, content, policy):
                     f"the first {GENERATED_MARKER_SCAN_LINES} lines — "
                     "hand-authored files are fully linted"
                 )]
+        ov_policy = override.get("policy") or {}
+        rejected = sorted(set(ov_policy) - OVERRIDABLE_POLICY_KEYS)
+        out = []
+        if rejected:
+            out.append(LintResult(
+                filepath, None, None, "ERROR",
+                f"file_overrides for '{ov_path}' may only relax "
+                f"{sorted(OVERRIDABLE_POLICY_KEYS)}; ignoring disallowed "
+                f"key(s) {rejected} (those checks stay enforced)"
+            ))
         effective = policy.copy()
-        effective.update(override.get("policy") or {})
-        return effective, []
+        effective.update({k: v for k, v in ov_policy.items()
+                          if k in OVERRIDABLE_POLICY_KEYS})
+        return effective, out
     return policy, []
 
 

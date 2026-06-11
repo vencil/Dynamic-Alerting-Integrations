@@ -15,6 +15,7 @@
   python3 -m pytest tests/test_lint_custom_rules.py -v
 """
 
+import itertools
 import os
 import tempfile
 
@@ -495,11 +496,65 @@ def test_committed_pack_and_policy_in_sync():
     DEFAULT_POLICY 的 file_overrides 等價（避免 validate_config 路徑漂移）。"""
     committed = os.path.join(_REPO_ROOT, _GENERATED_PACK_RELPATH)
     with open(committed, encoding="utf-8") as f:
-        head = [next(f) for _ in range(lint_custom_rules.GENERATED_MARKER_SCAN_LINES)]
+        head = list(itertools.islice(f, lint_custom_rules.GENERATED_MARKER_SCAN_LINES))
     assert any(lint_custom_rules.GENERATED_MARKER in line for line in head)
 
     real = lint_custom_rules.load_policy(_REAL_POLICY)
     assert real["file_overrides"] == lint_custom_rules.DEFAULT_POLICY["file_overrides"]
+
+
+def test_nested_path_does_not_get_exemption(compiled_forecast_pack, tmp_path):
+    """對抗式 review FINDING 1：租戶把合法檔名塞到 rule-packs/ 樹的 NESTED 路徑
+    （suffix 仍命中 override.path）不得取得豁免——否則 predict_linear + 96h range
+    被遞迴掃描放行，而 drift gate 只看單一 canonical 路徑、抓不到此檔。"""
+    text = compiled_forecast_pack.read_text(encoding="utf-8")  # 帶真 GENERATED 檔頭
+    nested = tmp_path / "rule-packs" / "custom" / "rule-packs" / "rule-pack-custom-alerts.yaml"
+    nested.parent.mkdir(parents=True)
+    nested.write_text(text, encoding="utf-8")
+    results, _ = lint_custom_rules.lint_file(
+        str(nested), lint_custom_rules.DEFAULT_POLICY
+    )
+    messages = [r.message for r in results if r.severity == "ERROR"]
+    assert any("predict_linear" in m for m in messages), \
+        "nested path must be fully linted, not exempted"
+
+
+def test_override_cannot_relax_non_whitelisted_check(tmp_path):
+    """對抗式 review FINDING 3：override.policy 設 OVERRIDABLE_POLICY_KEYS 以外的 key
+    （如清空 required_labels）不得生效——該 key 被忽略且回報 ERROR，原檢查照跑。"""
+    text = (
+        "# GENERATED test fixture\n"
+        "groups:\n"
+        "- name: g\n"
+        "  rules:\n"
+        "  - alert: NoTenant\n"          # 缺 tenant label → required_labels 應照殺
+        "    expr: my_metric > 1\n"
+        "    labels: {severity: warning}\n"
+    )
+    fpath = tmp_path / _GENERATED_PACK_RELPATH
+    fpath.parent.mkdir(parents=True)
+    fpath.write_text(text, encoding="utf-8")
+    policy = lint_custom_rules.DEFAULT_POLICY.copy()
+    policy["file_overrides"] = [{
+        "path": _GENERATED_PACK_RELPATH.replace(os.sep, "/"),
+        "require_generated_marker": True,
+        "policy": {"required_labels": []},   # 攻擊：想關掉 tenant label 強制
+    }]
+    results, _ = lint_custom_rules.lint_file(str(fpath), policy)
+    messages = [r.message for r in results if r.severity == "ERROR"]
+    assert any("required label 'tenant'" in m for m in messages)   # 仍照殺
+    assert any("may only relax" in m for m in messages)            # 且回報忽略
+
+
+def test_malformed_override_entry_does_not_crash(tmp_path):
+    """對抗式 review QUAL-1：file_overrides 含非 dict（字串）項不得 traceback。"""
+    fpath = tmp_path / _GENERATED_PACK_RELPATH
+    fpath.parent.mkdir(parents=True)
+    fpath.write_text("# GENERATED\ngroups: []\n", encoding="utf-8")
+    policy = lint_custom_rules.DEFAULT_POLICY.copy()
+    policy["file_overrides"] = ["oops-a-string", None, {"path": "other.yaml"}]
+    results, count = lint_custom_rules.lint_file(str(fpath), policy)  # 不應 raise
+    assert count == 0
 
 
 def test_lint_result_error_format():

@@ -22,10 +22,15 @@ max_evaluation_interval: 60s  # Custom Rule Group interval 上限
 # Per-file policy overrides — 平台 COMPILED pack 豁免（v2.10.0）
 # deny-list 的治理對象是「租戶手寫 raw PromQL」；平台 compiler 產出的 pack
 # （recipe 經審查、成本緩解在編譯期內建）不適用部分 deny 理由。
-# 安全護欄：
-#   1. override 僅在檔案前 10 行帶 GENERATED 標記時生效（缺標記 → ERROR），
+# 安全護欄（四層）：
+#   1. path 須錨在掃描樹頂層（精確 canonical 路徑，非 suffix）——巢狀
+#      rule-packs/*/rule-packs/<file> 不取得豁免（防遞迴掃描繞過）。
+#   2. override 僅在檔案前 10 行帶 GENERATED 標記時生效（缺標記 → ERROR），
 #      且 CI 另有 compile_custom_alerts --check drift gate 防手寫冒充。
-#   2. 僅列出的 key 被覆寫，其餘檢查（denied_patterns / required_labels …）照跑。
+#   3. 只有 denied_functions / max_range_duration 可被放寬（lint 工具
+#      OVERRIDABLE_POLICY_KEYS 白名單）；列其他 key（如清空 required_labels）
+#      會被忽略並回報 ERROR，結構性檢查不可被豁免關閉。
+#   4. 被覆寫以外的檢查（denied_patterns / required_labels …）照跑。
 file_overrides:
   - path: rule-packs/rule-pack-custom-alerts.yaml
     require_generated_marker: true
