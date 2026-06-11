@@ -176,7 +176,7 @@ def _core_record(rid: str, recipe: str, op: str, sev: str, metric: str,
 
 
 def _alert_rule(rid: str, recipe: str, sev: str, metric: str, sel: str,
-                for_: str) -> dict:
+                for_: str, op: str = ">") -> dict:
     core = f"custom:{rid}:{sev}:core"
     # left-outer-join metadata enrichment (onboarding-vacuum safe, #709 pattern).
     expr = (
@@ -194,6 +194,14 @@ def _alert_rule(rid: str, recipe: str, sev: str, metric: str, sel: str,
     sev_en = "CRITICAL " if sev == "critical" else ""
     sev_zh = "達臨界 " if sev == "critical" else ""
     desc_sel = sel if sel else ""
+    # `==` is an exact status/error-code match (#810), not a threshold crossing —
+    # say so, and print the code as an integer (codes are not decimals).
+    if op == "==":
+        desc_en = f'value {{{{ $value | printf "%.0f" }}}} matched the configured code'
+        desc_zh = f'值 {{{{ $value | printf "%.0f" }}}} 等於設定代碼'
+    else:
+        desc_en = f'value {{{{ $value | printf "%.2f" }}}} crossed the configured threshold'
+        desc_zh = f'值 {{{{ $value | printf "%.2f" }}}} 已越過設定閾值'
     return {
         "alert": f"Custom_{rid}",
         "expr": expr,
@@ -216,14 +224,8 @@ def _alert_rule(rid: str, recipe: str, sev: str, metric: str, sel: str,
         "annotations": {
             "summary": f"{sev_en}Custom alert [{{{{ $labels.name }}}}] for {{{{ $labels.tenant }}}}",
             "summary_zh": f"{{{{ $labels.tenant }}}} 的自訂告警 [{{{{ $labels.name }}}}] {sev_zh}觸發",
-            "description": (
-                f"{recipe} on {metric}{desc_sel}: "
-                f'value {{{{ $value | printf "%.2f" }}}} crossed the configured threshold'
-            ),
-            "description_zh": (
-                f"{metric}{desc_sel} 的 {recipe}: "
-                f'值 {{{{ $value | printf "%.2f" }}}} 已越過設定閾值'
-            ),
+            "description": f"{recipe} on {metric}{desc_sel}: {desc_en}",
+            "description_zh": f"{metric}{desc_sel} 的 {recipe}: {desc_zh}",
             "runbook_url": "{{ $labels.runbook_url }}",
             "owner": "{{ $labels.owner }}",
             "tier": "{{ $labels.tier }}",
@@ -262,6 +264,6 @@ def emit_shape(shape: dict) -> Tuple[List[dict], List[dict]]:
         recording.append(_core_record(rid, recipe, op, sev, metric, sel, window))
 
     alerts: List[dict] = [
-        _alert_rule(rid, recipe, sev, metric, sel, for_) for sev in severities
+        _alert_rule(rid, recipe, sev, metric, sel, for_, op) for sev in severities
     ]
     return recording, alerts

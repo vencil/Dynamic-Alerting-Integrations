@@ -63,7 +63,7 @@ def test_promtool_golden(golden, compiled_pack):
 
 def test_goldens_present():
     """Guard against an empty glob silently passing (echo-chamber)."""
-    assert len(_GOLDENS) == 7, f"expected 7 goldens (6 recipes + mode_routing), found {[p.name for p in _GOLDENS]}"
+    assert len(_GOLDENS) == 8, f"expected 8 goldens (6 recipes + equals + mode_routing), found {[p.name for p in _GOLDENS]}"
 
 
 def test_adversarial_selector_value_compiles_to_valid_promql(tmp_path, compiled_pack):

@@ -13,6 +13,10 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 
 <!-- 下一版 in-flight 工作暫存區。每筆 entry 目標 3-6 行使用者重點 + 一行指回內部 artifact；session 過程 / FUSE trap / 完整 commit list 不入此處。release 收尾時做最終 condensation 並切正式 `## [vX.Y.Z]` heading。 -->
 
+### Added
+
+- **Custom Alerts `==` 等值運算子（threshold recipe 限定）**：recipe `op` 新增 `==`，精確比對「以指標**值**表達的狀態/錯誤代碼」（例：MariaDB semi-sync errno 1236）— 補上 #810 的表達力缺口。護欄：`==` 僅 `threshold` recipe 可用，計算浮點值的 recipe（rate/ratio/p99/forecast）兩側 validator 一致拒絕（浮點等值脆弱）；等值告警文案改用「等於設定代碼」（`%.0f`）。Python compiler / Go preflight / JSON schema / portal enums / 治理契約五處 lockstep，golden vector + promtool fire/no-fire 雙向驗證（#692 P0 第①片）。
+
 ### Fixed
 
 - **Self-Service Portal 載入即 crash 而 CI smoke 長綠（latent 自 TD-030f ESM 遷移）**：三個 tab 模組在 module scope destructure `window.__portalShared`，但 bundle 的 module graph 從未 import 賦值方 `portal-shared.jsx`（frontmatter `dependencies:` build 時即被 strip、不參與載入）→ committed dist 評估期丟 TypeError、prod 空白頁。修法照 TRK-234 pattern：tabs 直接 ESM import `_common/` 模組、portal-shared 改純 named-export 共享 UI 元件（dev-rules §S6）。同時封死讓它躲過偵測的三層系統性缺口 — (1) ESM 評估期 throw 不觸發 `script.onerror` 且照常 fire `onload` → jsx-loader 補 window error listener 顯示 error banner（取代靜默空白頁）；(2) e2e smoke helper（`portal-tool-smoke.ts`，41 個 spec 共用）新增 same-origin pageerror + `#root` 非空斷言（對壞 dist 紅綠驗證：舊 helper 全綠、新 helper 必紅）；(3) `check_window_x_no_fallback.py` 原 regex 只認單一識別字、對 destructure 形式全盲 → 補 pattern + 首個 self-test。另補 `playwright.yml` paths filter 漏掉的 `docs/assets/dist/**`（CI 實際受測物）與 `jsx-loader.html`。見 [testing-playbook §JSX Dependency Loading](docs/internal/testing-playbook.md)。

@@ -74,7 +74,7 @@ var (
 		"forecast": true,
 	}
 	// op → slug. Keep in sync with shape.py OP_SLUG.
-	customAlertOpSlug = map[string]string{">": "gt", ">=": "ge", "<": "lt", "<=": "le"}
+	customAlertOpSlug = map[string]string{">": "gt", ">=": "ge", "<": "lt", "<=": "le", "==": "eq"}
 	// permitted forecast horizons (predict-ahead distance) — enum-bounded, enters
 	// the recipe_id slug. MUST match shape.py ALLOWED_HORIZON + the schema enum.
 	customAlertHorizonValid = map[string]bool{
@@ -177,6 +177,13 @@ func RecipeID(spec CustomAlertSpec) (string, error) {
 		slug, ok := customAlertOpSlug[op]
 		if !ok {
 			return "", fmt.Errorf("unknown op %q", op)
+		}
+		// `==` is threshold-recipe-only (#810): exact match suits integer status/
+		// error codes on a RAW gauge; rate/ratio/quantile/forecast emit computed
+		// floats where equality is fragile. Mirrors shape.py _EQ_RECIPES.
+		if op == "==" && spec.Recipe != "threshold" {
+			return "", fmt.Errorf("op \"==\" is only allowed for the threshold recipe "+
+				"(raw-gauge status-code match); %s compares a computed float", spec.Recipe)
 		}
 		parts = append(parts, slug)
 	}

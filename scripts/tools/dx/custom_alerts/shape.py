@@ -16,7 +16,7 @@ recipe_id grammar (parts joined by `__`, each part sanitised to [a-z0-9_]):
              [__q{quantile}][__den_{denominator_metric}]__for{for}
   selector part (exact):  s_{key}_{value}
   selector part (regex):  sre_{key}_{value}
-  op_slug: >→gt  >=→ge  <→lt  <=→le  (absence → "absent")
+  op_slug: >→gt  >=→ge  <→lt  <=→le  ==→eq  (absence → "absent")
   for: pending-duration; part of rule identity (control-plane static attr,
        TRK-326) — always emitted, enum-bounded in schema. Default "1m".
 Sanitisation maps every char outside [a-zA-Z0-9_] to '_' (deterministic, and keeps
@@ -43,7 +43,14 @@ RESERVED_LABELS = frozenset(
     {"tenant", "version", "__name__", "severity", "recipe", "recipe_id", "name"}
 )
 
-OP_SLUG = {">": "gt", ">=": "ge", "<": "lt", "<=": "le"}
+OP_SLUG = {">": "gt", ">=": "ge", "<": "lt", "<=": "le", "==": "eq"}
+
+# `==` is threshold-recipe-only (#810): exact match is meaningful for integer
+# status/error codes read off a RAW gauge, but float-fragile (and semantically
+# hollow) against COMPUTED values — rate()/ratio/histogram_quantile/predict_linear
+# all emit floats where equality is an accident of arithmetic. MUST match the
+# Go gate in custom_alert.go::RecipeID.
+_EQ_RECIPES = frozenset({"threshold"})
 
 # Permitted `for` pending-durations (enum-bounded, TRK-326). `for` is part of the
 # recipe_id slug + shape_signature, so bounding it keeps per-base-shape cardinality
@@ -210,6 +217,12 @@ def recipe_id(inst: dict) -> str:
         op = inst.get("op", ">")
         if op not in OP_SLUG:
             raise RecipeError(f"unknown op {op!r} (known: {list(OP_SLUG)})")
+        if op == "==" and recipe not in _EQ_RECIPES:
+            raise RecipeError(
+                f"op '==' is only allowed for the threshold recipe (exact match on a "
+                f"raw-gauge status/error code, #810); {recipe!r} compares a computed "
+                f"float where equality is fragile"
+            )
         parts.append(OP_SLUG[op])
 
     if recipe == "forecast":

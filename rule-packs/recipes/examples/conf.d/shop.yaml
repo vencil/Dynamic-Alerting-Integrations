@@ -55,6 +55,17 @@ tenants:
         window: 10m
         threshold: "0:critical"
 
+      # equals (#810): exact status/error-code match on a RAW gauge. `==` is
+      # threshold-recipe-only — computed values (rate/ratio/quantile/forecast)
+      # reject it as float-fragile. Example: MariaDB semi-sync replication
+      # aborted with errno 1236 (binlog position lost).
+      - recipe: threshold
+        name: semisync_errno_1236
+        metric: mysql_semisync_master_last_errno
+        op: "=="
+        window: 5m
+        threshold: "1236:critical"
+
       # forecast (ratio mode): predict disk EXHAUSTION. capacity_metric set →
       # headroom ratio (avail/capacity); op "<" + threshold 0.15 = "predict the
       # available fraction will drop below 15% within the horizon". The tenant

@@ -1,0 +1,58 @@
+# promtool unit test — Custom Alerts (ADR-024 Capability B), EQUALS op (#810).
+#
+# Proves `op: "=="` (threshold-recipe-only): exact status/error-code match on a
+# RAW gauge. Fire case: MariaDB semi-sync errno gauge sits at exactly 1236 →
+# alert (with the eq-specific "%.0f matched the configured code" wording).
+# No-fire case: errno 1593 — deliberately GREATER than 1236 — stays silent,
+# proving the comparison is equality, not a `>` crossing.
+rule_files:
+  - rule-pack-custom-alerts.yaml
+
+evaluation_interval: 15s
+
+tests:
+  # ── shop-a: errno exactly 1236 → critical alert ──
+  - interval: 15s
+    input_series:
+      - series: 'mysql_semisync_master_last_errno{tenant="shop-a", namespace="shop", pod="mariadb-0"}'
+        values: '1236x48'
+      - series: 'user_threshold{component="custom", metric="mysql_semisync_master_last_errno", recipe_id="threshold__mysql_semisync_master_last_errno__eq__w5m__for1m", tenant="shop-a", severity="critical", name="semisync_errno_1236"}'
+        values: '1236x48'
+      - series: 'tenant_metadata_info{tenant="shop-a", runbook_url="http://rb/shop", owner="team-shop", tier="gold"}'
+        values: '1x48'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: Custom_threshold__mysql_semisync_master_last_errno__eq__w5m__for1m
+        exp_alerts:
+          - exp_labels:
+              component: custom
+              severity: critical
+              tenant: shop-a
+              recipe: threshold
+              name: semisync_errno_1236
+              version: default
+              runbook_url: "http://rb/shop"
+              owner: team-shop
+              tier: gold
+            exp_annotations:
+              summary: "CRITICAL Custom alert [semisync_errno_1236] for shop-a"
+              summary_zh: "shop-a 的自訂告警 [semisync_errno_1236] 達臨界 觸發"
+              description: "threshold on mysql_semisync_master_last_errno: value 1236 matched the configured code"
+              description_zh: "mysql_semisync_master_last_errno 的 threshold: 值 1236 等於設定代碼"
+              runbook_url: "http://rb/shop"
+              owner: team-shop
+              tier: gold
+
+  # ── errno 1593 (> 1236 but ≠) → NO alert: equality, not a crossing ──
+  - interval: 15s
+    input_series:
+      - series: 'mysql_semisync_master_last_errno{tenant="shop-a", namespace="shop", pod="mariadb-0"}'
+        values: '1593x48'
+      - series: 'user_threshold{component="custom", metric="mysql_semisync_master_last_errno", recipe_id="threshold__mysql_semisync_master_last_errno__eq__w5m__for1m", tenant="shop-a", severity="critical", name="semisync_errno_1236"}'
+        values: '1236x48'
+      - series: 'tenant_metadata_info{tenant="shop-a", runbook_url="http://rb/shop", owner="team-shop", tier="gold"}'
+        values: '1x48'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: Custom_threshold__mysql_semisync_master_last_errno__eq__w5m__for1m
+        exp_alerts: []
