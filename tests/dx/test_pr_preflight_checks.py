@@ -407,43 +407,70 @@ class TestCheckCIStatus:
         _stub_run_constant(monkeypatch, _cp(0, json.dumps(checks)))
         monkeypatch.setattr(pp, "_classify_ci_failures",
                             lambda failed: "→ stubbed AB classification")
-        monkeypatch.setattr(pp, "_unpushed_commit_count", lambda: 0)
+        monkeypatch.setattr(pp, "_ci_ran_on_stale_head", lambda pr=None: None)
         result = pp.check_ci_status()
         assert result.status == pp.Status.FAIL
         assert "1 failed" in result.message
         assert "stubbed AB" in result.detail
 
-    def test_hard_fail_with_unpushed_commits_downgrades_to_warn(self, monkeypatch):
-        # Fix-push 悖論（#819）：紅 CI 跑在舊遠端 SHA；本地有未推 commits 時，
-        # 這次 push 就是修復本身 → 降 WARN 放行，否則 marker gate 死鎖。
+    # 三態語意（fix-push 悖論 carve-out，#819 / 對抗式 review 攻擊面 2）：
+    #   stale（PR head ≠ 本地 HEAD）→ WARN；same-sha → FAIL；不可判定 → FAIL。
+    def test_hard_fail_on_stale_pr_head_downgrades_to_warn(self, monkeypatch):
         checks = [{"name": "Portal Tests", "state": "FAILURE", "bucket": "fail"}]
         _stub_run_constant(monkeypatch, _cp(0, json.dumps(checks)))
         monkeypatch.setattr(pp, "_classify_ci_failures", lambda failed: "→ ab")
-        monkeypatch.setattr(pp, "_unpushed_commit_count", lambda: 2)
+        monkeypatch.setattr(pp, "_ci_ran_on_stale_head", lambda pr=None: "abcd1234")
         result = pp.check_ci_status()
         assert result.status == pp.Status.WARN
-        assert "未推" in result.message
-        assert "Portal Tests" in result.detail   # 失敗清單仍保留在 detail
+        assert "abcd1234" in result.message          # 指明失敗跑在哪個 PR head
+        assert "Portal Tests" in result.detail       # 失敗清單仍保留在 detail
 
-    def test_hard_fail_without_unpushed_commits_stays_fail(self, monkeypatch):
-        # merge-readiness 場景（全部已推）：紅 CI 必須維持 FAIL 的牙齒。
+    def test_hard_fail_on_current_head_stays_fail(self, monkeypatch):
+        # merge-readiness（PR head == 本地 HEAD）：紅 CI 必須維持 FAIL 的牙齒。
         checks = [{"name": "Go Tests", "state": "FAILURE", "bucket": "fail"}]
         _stub_run_constant(monkeypatch, _cp(0, json.dumps(checks)))
         monkeypatch.setattr(pp, "_classify_ci_failures", lambda failed: "")
-        monkeypatch.setattr(pp, "_unpushed_commit_count", lambda: 0)
+        monkeypatch.setattr(pp, "_ci_ran_on_stale_head", lambda pr=None: None)
         result = pp.check_ci_status()
         assert result.status == pp.Status.FAIL
 
-    def test_unpushed_commit_count_parses_and_defaults(self, monkeypatch):
-        # 正常：rev-list 回數字。
-        _stub_run_constant(monkeypatch, _cp(0, "3\n"))
-        assert pp._unpushed_commit_count() == 3
-        # 無 upstream（rev-list 失敗）→ 0（保守維持原 gate）。
-        _stub_run_constant(monkeypatch, _cp(128, "", "no upstream"))
-        assert pp._unpushed_commit_count() == 0
-        # 非數字輸出 → 0。
-        _stub_run_constant(monkeypatch, _cp(0, "not-a-number"))
-        assert pp._unpushed_commit_count() == 0
+    def test_ci_ran_on_stale_head_three_states(self, monkeypatch):
+        # helper 直接釘訊號來源：gh pr view --json headRefOid vs 本地 HEAD。
+        local = "78f0797f37f136ad521742181931bc3dc52e3cc7"
+        monkeypatch.setattr(pp, "_head_sha", lambda root: local)
+        # (1) PR head ≠ 本地 HEAD → stale，回 PR head 短 SHA（不是本地的）。
+        _stub_run_constant(
+            monkeypatch, _cp(0, json.dumps({"headRefOid": "a" * 40})))
+        assert pp._ci_ran_on_stale_head() == "a" * 8
+        # (2) PR head == 本地 HEAD → None（真 merge-readiness 紅，維持 FAIL）。
+        _stub_run_constant(
+            monkeypatch, _cp(0, json.dumps({"headRefOid": local})))
+        assert pp._ci_ran_on_stale_head() is None
+        # (3) 不可判定一律保守 None：gh 失敗 / 非 JSON / 缺欄位 / 本地 HEAD 不可得。
+        _stub_run_constant(monkeypatch, _cp(1, "", "gh: network error"))
+        assert pp._ci_ran_on_stale_head() is None
+        _stub_run_constant(monkeypatch, _cp(0, "{not json"))
+        assert pp._ci_ran_on_stale_head() is None
+        _stub_run_constant(monkeypatch, _cp(0, json.dumps({})))
+        assert pp._ci_ran_on_stale_head() is None
+        monkeypatch.setattr(pp, "_head_sha", lambda root: None)
+        _stub_run_constant(
+            monkeypatch, _cp(0, json.dumps({"headRefOid": "a" * 40})))
+        assert pp._ci_ran_on_stale_head() is None
+
+    def test_ci_ran_on_stale_head_passes_pr_number(self, monkeypatch):
+        # pr_number 必須傳進 gh 命令（多 PR 同 repo 時不能讓 gh 自猜）。
+        local = "b" * 40
+        monkeypatch.setattr(pp, "_head_sha", lambda root: local)
+        seen = {}
+
+        def fake_run(cmd, *a, **kw):
+            seen["cmd"] = cmd
+            return _cp(0, json.dumps({"headRefOid": "c" * 40}))
+
+        monkeypatch.setattr(pp, "run", fake_run)
+        assert pp._ci_ran_on_stale_head(123) == "c" * 8
+        assert "123" in seen["cmd"]
 
     def test_invalid_json_warns(self, monkeypatch):
         _stub_run_constant(monkeypatch, _cp(0, "{not json"))

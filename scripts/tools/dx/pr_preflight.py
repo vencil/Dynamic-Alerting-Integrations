@@ -1064,20 +1064,39 @@ def _classify_ci_failures(failed_checks: list) -> str:
     return f"→ main CI 也是 {main_conclusion} — 部分失敗可能是 pre-existing"
 
 
-def _unpushed_commit_count() -> int:
-    """本地超前 upstream 的 commit 數（無 upstream / 查詢失敗 → 0，保守維持原 gate）。
+def _ci_ran_on_stale_head(pr_number: Optional[int] = None) -> Optional[str]:
+    """紅 CI 是否跑在「不是本地 HEAD」的 PR head 上？stale → 回傳 PR head 短 SHA。
 
-    hard CI failure 必然是跑在 PR 的舊遠端 SHA 上；存在未推 commits 時，即將到來
-    的 push 會取代該 SHA 並重跑 CI —— 失敗 structurally stale（fix-push 悖論，
-    #819）。回 0 時（merge-readiness：已全部推上去）紅 CI 維持 FAIL 的牙齒。
+    fix-push 悖論（#819）：`gh pr checks` 回報的是 PR 遠端 head 的結果；若本地
+    HEAD ≠ 該 head，這次 push 會取代它並重跑 CI，「push 前要求 CI 綠」邏輯上不可
+    滿足。判定訊號直接問 GitHub（`gh pr view --json headRefOid`）比對本地 HEAD —
+    不從本地 upstream 推斷：`@{u}..HEAD` 在 `checkout -b X origin/main` 未
+    `push -u` 的 branch shape 下 upstream 停在 main、count 恆 >0，會把
+    merge-readiness 的 FAIL 牙齒整條拔掉（對抗式 review 攻擊面 2）。
+
+    回 None（= 不可判定或同 SHA）時維持 FAIL：gh 失敗 / 解析失敗 / SHA 相同，
+    一律保守當「紅 CI 就是當前 HEAD 的真失敗」。
     """
-    r = run(["git", "rev-list", "--count", "@{u}..HEAD"], timeout=10)
+    import json as _json
+
+    head = _head_sha(Path.cwd())
+    if not head:
+        return None
+    cmd = ["gh", "pr", "view"] + ([str(pr_number)] if pr_number else []) + [
+        "--json", "headRefOid"]
+    r = run(cmd, timeout=15)
     if r.returncode != 0:
-        return 0
+        return None
     try:
-        return int((r.stdout or "0").strip())
-    except ValueError:
-        return 0
+        data = _json.loads(r.stdout)
+    except _json.JSONDecodeError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    pr_head = str(data.get("headRefOid") or "").strip()
+    if not pr_head or pr_head == head:
+        return None
+    return pr_head[:8]
 
 
 def check_ci_status(pr_number: Optional[int] = None) -> CheckResult:
@@ -1138,19 +1157,19 @@ def check_ci_status(pr_number: Optional[int] = None) -> CheckResult:
             ab_note = _classify_ci_failures(hard_failed)
             if ab_note:
                 detail += f"\n{ab_note}"
-            # Fix-push 悖論（#819 死鎖）：`gh pr checks` 回報的是 PR 遠端 HEAD
-            # （舊 SHA）的結果；當本地有未推 commits 時，這次 push 本身就會取代
-            # 那個 SHA 並觸發 CI 重跑 —— 「push 前要求新 SHA 的 CI 綠」在邏輯上
-            # 不可能。降為 WARN 放行 fix-push；merge-readiness 場景（無未推
-            # commits）不受影響，紅 CI 照樣 FAIL，merge 仍由 branch protection
-            # 把關。與 #543 soft-fail carve-out 同族。
-            unpushed = _unpushed_commit_count()
-            if unpushed > 0:
+            # Fix-push 悖論（#819 死鎖）：紅 CI 跑在 PR 的遠端 head 上；若本地
+            # HEAD 與之不一致，這次 push/sync 會取代它並重跑 CI ——「push 前要求
+            # 新 SHA 的 CI 綠」邏輯上不可滿足 → 降 WARN 放行。SHA 一致（真
+            # merge-readiness 紅）或不可判定（gh 失敗）→ 維持 FAIL，merge 仍由
+            # branch protection 把關。與 #543 soft-fail carve-out 同族。
+            stale_head = _ci_ran_on_stale_head(pr_number)
+            if stale_head:
                 return CheckResult(
                     "CI status",
                     Status.WARN,
-                    f"{len(hard_failed)} failed — 但失敗跑在舊 SHA，本地有 "
-                    f"{unpushed} 個未推 commit（push 後 CI 將重跑）",
+                    f"{len(hard_failed)} failed / {len(passed)} passed "
+                    f"/ {len(pending)} pending — 失敗跑在 PR head {stale_head}，"
+                    f"與本地 HEAD 不一致（push 後 CI 重跑；重跑仍紅即為真失敗）",
                     detail=detail,
                 )
             return CheckResult(
