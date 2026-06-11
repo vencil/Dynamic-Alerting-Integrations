@@ -30,8 +30,7 @@ match one of:
   - tools/portal/build.mjs                 (esbuild config)
   - tools/portal/manifest.json             (entry list)
   - tools/portal/shims/*.js                (build-time shims)
-  - docs/interactive/tools/**/*.{jsx,js}   (component sources)
-  - docs/getting-started/**/*.{jsx,js}     (wizard sources)
+  - tools/portal/src/**                    (component sources + bundled assets)
 
 Otherwise it's "dist drift without source intent" — the exact pattern
 that broke main in PR-E. Block the commit.
@@ -82,8 +81,12 @@ SOURCE_PATTERNS = [
     lambda p: p == "tools/portal/build.mjs",
     lambda p: p == "tools/portal/manifest.json",
     lambda p: p.startswith("tools/portal/shims/") and p.endswith(".js"),
-    # JSX/JS source files (post-TRK-242)
-    lambda p: p.startswith("tools/portal/src/") and (p.endswith(".jsx") or p.endswith(".js")),
+    # Portal source tree (post-TRK-242) — whole subtree, not just .jsx/.js:
+    # esbuild `bundle: true` also pulls imported non-JS assets (e.g. .json
+    # data files) into the dist bundle, so any change under src/ is a
+    # plausible rebuild trigger (PR #819: recipe-enums.json edit + rebuilt
+    # dist was falsely blocked by the old extension filter).
+    lambda p: p.startswith("tools/portal/src/"),
 ]
 
 # Dist-side patterns — staging any of these is what triggers the check.
@@ -169,8 +172,7 @@ def main() -> int:
     print("    - tools/portal/build.mjs")
     print("    - tools/portal/manifest.json")
     print("    - tools/portal/shims/*.js")
-    print("    - docs/interactive/tools/**/*.{jsx,js}")
-    print("    - docs/getting-started/**/*.{jsx,js}")
+    print("    - tools/portal/src/**")
     print()
     print("  Why: PR-E (#269) committed regenerated dist on a chunk reshuffle")
     print("  triggered by ONE source change. Reviewer attention was on the")

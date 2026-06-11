@@ -914,7 +914,7 @@ repos:
         always_run: true
         # Auto-stage, FATAL on findings. Triggers when staged files include
         # docs/assets/dist/*.js but no matching source-of-rebuild signal
-        # (entries / build.mjs / manifest / interactive / getting-started).
+        # (entries / build.mjs / manifest / shims / tools/portal/src/**).
         # Codifies the PR-E (#269) regression pattern: dist drift hidden
         # behind a single visible source change. Escape: BYPASS_DIST_CHECK=1
         # for legitimate dist-only commits (e.g. CI bot regen).

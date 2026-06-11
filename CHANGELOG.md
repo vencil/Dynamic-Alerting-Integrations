@@ -16,6 +16,7 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 ### Fixed
 
 - **Threshold Backtest workflow 從未被 PR 觸發（latent dead filter）**：`.github/workflows/backtest.yaml` 的 paths filter 寫 `conf.d/**`（repo-root-relative，但本 repo 的 conf.d 實際在 `components/threshold-exporter/config/conf.d/`）→ 修正路徑；連帶修復兩個觸發後仍會 silent no-op 的斷點 — script `--git-diff` 的客戶契約 pathspec 改以 `working-directory` 錨定（不動 `da-tools backtest` CLI 行為）、PR comment gate 由 `hashFiles('/tmp/...')`（workspace 外恆空）改為 step output（同 `config-diff.yaml` 模式）。
+- **portal dist 一致性 hook 誤擋合法的 src 資產變更（TRK-239 樣式漏配）**：`dist-source-consistency-check` 的 source-of-rebuild 樣式只認 `tools/portal/src/**` 的 `.jsx`/`.js`，但 esbuild `bundle: true` 也會把 import 的 `.json` 資料檔打進 dist bundle → 改 `recipe-enums.json` + 重建 dist 的正當 commit 被誤擋、被迫 `BYPASS_DIST_CHECK=1`。改為認整棵 `tools/portal/src/**` 子樹，並修掉 docstring / 錯誤訊息中殘留的 TRK-242 搬遷前舊路徑（`docs/interactive/` / `docs/getting-started/`）。
 - **`CHANGELOG.md` 變更不觸發任何文件驗證（同類 CI-paths 漏配）**：`CHANGELOG.md` 在 mkdocs nav（渲染進站台）卻不在 `.github/workflows/docs-ci.yaml` 的 `paths` filter 內 → 只改 CHANGELOG 的 PR 不跑 Check Documentation Links / Front Matter / MkDocs Build / Line Count 等（多個是 required check）。把 `CHANGELOG.md` 補進 docs-ci paths，與既有的 `README.md` / `CLAUDE.md` 一致。
 
 ## [v2.9.0] — 租戶自助告警 (Custom Alerts) + 租戶聯邦 + 寫入平面韌性 (2026-06-06)
