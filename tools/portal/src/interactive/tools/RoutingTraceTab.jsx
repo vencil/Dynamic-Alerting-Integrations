@@ -7,11 +7,15 @@ lang: en
 ---
 
 import React, { useState, useMemo, useCallback, useEffect } from 'react';
+// Direct ESM imports (dev-rules §S6) — the previous module-scope
+// destructure of `window.__portalShared` crashed the whole bundle at
+// load time: no module in the graph imported portal-shared.jsx, so
+// the producer never ran.
+import { DOMAIN_POLICIES } from './_common/data/routing-profiles.js';
+import { parseYaml } from './_common/validation/yaml-parser.js';
+import { generateSampleYaml, resolveRoutingLayers } from './_common/sim/alert-engine.js';
 
 const t = window.__t || ((zh, en) => en);
-const {
-  DOMAIN_POLICIES, generateSampleYaml, parseYaml, resolveRoutingLayers,
-} = window.__portalShared;
 
 function RoutingTraceTab() {
   const [yaml, setYaml] = useState('');
@@ -352,9 +356,5 @@ function RoutingTraceTab() {
   );
 }
 
-/* Register for dependency loading */
-window.__RoutingTraceTab = RoutingTraceTab;
-
-// TRK-230f: ESM export. Removed in TRK-230z.
 // <!-- jsx-loader-compat: ignore -->
 export { RoutingTraceTab };

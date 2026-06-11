@@ -7,12 +7,16 @@ lang: en
 ---
 
 import React, { useState, useMemo, useCallback, useEffect } from 'react';
+// Direct ESM imports (dev-rules §S6) — the previous module-scope
+// destructure of `window.__portalShared` crashed the whole bundle at
+// load time: no module in the graph imported portal-shared.jsx, so
+// the producer never ran.
+import { RULE_PACK_DATA } from './_common/data/rule-packs.js';
+import { parseYaml } from './_common/validation/yaml-parser.js';
+import { generateSampleYaml, simulateAlerts } from './_common/sim/alert-engine.js';
+import { RulePackSelector } from './portal-shared.jsx';
 
 const t = window.__t || ((zh, en) => en);
-const {
-  RULE_PACK_DATA, generateSampleYaml, parseYaml, simulateAlerts,
-  RulePackSelector,
-} = window.__portalShared;
 
 function AlertPreviewTab() {
   const [selectedPacks, setSelectedPacks] = useState(['mariadb', 'kubernetes']);
@@ -351,9 +355,5 @@ function AlertPreviewTab() {
   );
 }
 
-/* Register for dependency loading */
-window.__AlertPreviewTab = AlertPreviewTab;
-
-// TRK-230f: ESM export. Removed in TRK-230z.
 // <!-- jsx-loader-compat: ignore -->
 export { AlertPreviewTab };

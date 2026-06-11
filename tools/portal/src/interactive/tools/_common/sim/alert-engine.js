@@ -34,8 +34,7 @@ purpose: |
   window.__ROUTING_PROFILES, window.__DOMAIN_POLICIES. Pulled at
   call time so consumers loaded after the data files see them.
 
-  Backward compatibility: portal-shared.jsx re-exports all 4
-  functions on window.__portalShared unchanged.
+  Consumers import these functions directly via ESM (dev-rules §S6).
 ---
 
 function generateSampleYaml(selectedPacks, withProfile) {

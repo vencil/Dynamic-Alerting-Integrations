@@ -25,8 +25,7 @@ purpose: |
 
   Closure deps: none. Pure data.
 
-  Backward compatibility: portal-shared.jsx re-exports these on
-  window.__portalShared unchanged.
+  Consumers import these directly via ESM (dev-rules §S6).
 ---
 
 const ROUTING_DEFAULTS = {

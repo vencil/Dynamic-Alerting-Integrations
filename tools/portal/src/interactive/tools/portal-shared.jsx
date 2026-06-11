@@ -5,11 +5,7 @@ audience: ["platform-engineer"]
 version: v2.7.0
 lang: en
 dependencies: [
-  "_common/data/rule-packs.js",
-  "_common/data/routing-profiles.js",
-  "_common/validation/constants.js",
-  "_common/validation/yaml-parser.js",
-  "_common/sim/alert-engine.js"
+  "_common/data/rule-packs.js"
 ]
 ---
 
@@ -17,73 +13,27 @@ import React, { useState, useMemo, useEffect, useRef } from 'react';
 
 const t = window.__t || ((zh, en) => en);
 
-/* ── PR-portal-9: shim conversion (590 → ~190 LOC) ───────────────────
+/* ── Shared UI components for the Self-Service Portal tabs ──────────
  *
  * Pre-PR-portal-3 (#205) this file owned the canonical Rule Pack
  * catalog, validation constants, routing profiles, YAML parser, and
- * alert simulation engine inline (~440 LOC of data + functions).
- * PR-portal-3 promoted those into 5 modules under _common/data/,
- * _common/validation/, _common/sim/ — but kept portal-shared.jsx
- * unchanged so the 4 existing consumers (self-service-portal +
- * AlertPreviewTab + RoutingTraceTab + YamlValidatorTab) didn't have
- * to migrate at the same time. Result: the data/functions lived in
- * BOTH places, with drift risk.
+ * alert simulation engine inline; those now live as ESM modules under
+ * _common/data/, _common/validation/, _common/sim/ and are imported
+ * directly by the consumers (dev-rules §S6). The intermediate
+ * `window.__portalShared` re-bundle (PR-portal-9) was removed: it was
+ * never imported by the bundle's module graph, so the producer never
+ * ran and the tabs' module-scope destructure crashed the whole tool
+ * at load time.
  *
- * This PR (PR-portal-9) flips portal-shared.jsx into a thin BC
- * re-export wrapper:
- *
- *   1. front-matter `dependencies:` block loads the 5 _common modules
- *   2. each canonical symbol is picked up off `window.__X`
- *   3. re-bundled into `window.__portalShared` with the EXACT same
- *      shape the 4 consumers destructure today → zero consumer
- *      changes required
- *   4. the 2 React UI components (MetricAutocomplete + RulePackSelector)
- *      stay inline because they are alert-builder-tab UI only, not
- *      generic enough to live in _common/components/
- *
- * Triggers `.sed-damage-allowlist` because the file shrinks 590 →
- * ~190 LOC (~67%, above the 50% sed-damage-guard threshold). The
- * allowlist entry was added in this same commit with an explanatory
- * comment.
+ * What remains: the 2 React UI components (MetricAutocomplete +
+ * RulePackSelector), kept here because they are alert-builder-tab UI
+ * only, not generic enough to live in _common/components/.
  * ──────────────────────────────────────────────────────────────────── */
 
-// TRK-234: replace 19 module-scope `window.__X` reads with explicit
-// ESM imports. Same pattern that broke saved-views / tenant-manager
-// in TRK-233 (PR-E rebuild reshuffled chunks → consumer chunk loaded
-// before producer chunk → undefined). These were latent — the
-// data-providing modules happened to evaluate first under the
-// previous chunk graph — but a future rebuild could re-expose them.
-// Importing directly removes the latent risk and the implicit
-// ordering dependency.
 import {
   RULE_PACK_DATA,
   CATEGORY_LABELS,
-  getAllMetricKeys,
 } from './_common/data/rule-packs.js';
-import {
-  RESERVED_KEYS,
-  RESERVED_PREFIXES,
-  RECEIVER_TYPES,
-  RECEIVER_REQUIRED,
-  TIMING_GUARDRAILS,
-  UNSAFE_KEYS,
-  MAX_YAML_SIZE,
-} from './_common/validation/constants.js';
-import {
-  ROUTING_DEFAULTS,
-  ROUTING_PROFILES,
-  DOMAIN_POLICIES,
-} from './_common/data/routing-profiles.js';
-import {
-  parseDuration,
-  parseYaml,
-} from './_common/validation/yaml-parser.js';
-import {
-  generateSampleYaml,
-  validateConfig,
-  simulateAlerts,
-  resolveRoutingLayers,
-} from './_common/sim/alert-engine.js';
 
 /* ── Metric key autocomplete dropdown ── */
 /* Kept inline: alert-builder-tab UI only, not generic enough for
@@ -142,8 +92,8 @@ function MetricAutocomplete({ allMetrics, onInsert }) {
 
 /* ── Rule Pack multi-select ── */
 /* Kept inline alongside MetricAutocomplete — same alert-builder-tab
- * scope; closure over RULE_PACK_DATA + CATEGORY_LABELS picked up off
- * window above. */
+ * scope; closure over RULE_PACK_DATA + CATEGORY_LABELS imported
+ * above. */
 function RulePackSelector({ selected, onChange }) {
   const grouped = useMemo(() => {
     const groups = {};
@@ -204,35 +154,5 @@ function RulePackSelector({ selected, onChange }) {
   );
 }
 
-/* ── BC re-bundle ──────────────────────────────────────────────────
- * Identical shape to the pre-PR-portal-9 export. The 4 existing
- * consumers (self-service-portal + AlertPreviewTab + RoutingTraceTab
- * + YamlValidatorTab) destructure from `window.__portalShared` and
- * need NO changes. Each new tool should pull individual symbols
- * directly from the underlying _common/ modules instead. */
-window.__portalShared = {
-  // Data constants
-  RULE_PACK_DATA,
-  CATEGORY_LABELS,
-  RESERVED_KEYS,
-  RESERVED_PREFIXES,
-  RECEIVER_TYPES,
-  ROUTING_PROFILES,
-  DOMAIN_POLICIES,
-  RECEIVER_REQUIRED,
-  TIMING_GUARDRAILS,
-  ROUTING_DEFAULTS,
-  UNSAFE_KEYS,
-  MAX_YAML_SIZE,
-  // Utility functions
-  parseDuration,
-  parseYaml,
-  getAllMetricKeys,
-  generateSampleYaml,
-  validateConfig,
-  simulateAlerts,
-  resolveRoutingLayers,
-  // React components
-  MetricAutocomplete,
-  RulePackSelector,
-};
+// <!-- jsx-loader-compat: ignore -->
+export { MetricAutocomplete, RulePackSelector };

@@ -658,12 +658,30 @@ window.addEventListener('pageshow', function(e) {
     var script = document.createElement('script');
     script.type = 'module';
     script.src = distUrl;
+    // Module-evaluation errors do NOT fire script.onerror (that only
+    // covers fetch/parse failures): the exception is reported to the
+    // window 'error' event and the script element still fires onload.
+    // Without this listener an eval-time throw produced a silent blank
+    // page (spinner hidden, #root empty, no banner).
+    var evalError = null;
+    var onWinError = function(e) {
+      if (evalError === null) evalError = e.error || e.message || 'unknown error';
+    };
+    window.addEventListener('error', onWinError);
     script.onload = function() {
+      window.removeEventListener('error', onWinError);
+      var root = document.getElementById('root');
+      if (evalError !== null && root && !root.hasChildNodes()) {
+        var detail = (evalError && evalError.message) ? evalError.message : String(evalError);
+        showError('Failed to load ESM bundle: ' + distUrl + '<br>' + detail);
+        return;
+      }
       var loading = document.getElementById('loading');
       if (loading) loading.style.display = 'none';
       console.log('[DA] Loaded ESM bundle: ' + distUrl);
     };
     script.onerror = function() {
+      window.removeEventListener('error', onWinError);
       showError('Failed to load ESM bundle: ' + distUrl);
     };
     document.body.appendChild(script);

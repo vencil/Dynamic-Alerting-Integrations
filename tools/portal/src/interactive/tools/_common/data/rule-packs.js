@@ -26,9 +26,8 @@ purpose: |
 
   Closure deps: none. Pure data + one helper.
 
-  Backward compatibility: portal-shared.jsx re-exports these on
-  window.__portalShared verbatim, so the 4 existing consumers
-  (self-service-portal + 3 Tab files) need no changes.
+  Consumers (the 3 Tab files + portal-shared.jsx) import these
+  directly via ESM (dev-rules §S6).
 ---
 
 const t = window.__t || ((zh, en) => en);

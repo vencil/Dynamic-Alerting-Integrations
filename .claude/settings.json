@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python \"$CLAUDE_PROJECT_DIR/scripts/session-guards/session-init.py\""
+            "command": "py \"$CLAUDE_PROJECT_DIR/scripts/session-guards/session-init.py\""
           }
         ]
       },
