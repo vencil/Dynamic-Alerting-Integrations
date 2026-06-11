@@ -8,10 +8,10 @@
 
   VS Code 會即時 hot-reload settings.json，不需重啟。
 
-用法：
-  python scripts/session-guards/vscode_git_toggle.py off   # 關閉 Git（Agent 模式）
-  python scripts/session-guards/vscode_git_toggle.py on    # 打開 Git（手動模式）
-  python scripts/session-guards/vscode_git_toggle.py       # 顯示目前狀態
+用法（經 launcher 走直譯器探測；Windows 裸 `python` 是 Store stub，#824）：
+  bash scripts/session-guards/run-hooks.sh vscode_git_toggle.py off  # 關閉 Git（Agent 模式）
+  bash scripts/session-guards/run-hooks.sh vscode_git_toggle.py on   # 打開 Git（手動模式）
+  bash scripts/session-guards/run-hooks.sh vscode_git_toggle.py      # 顯示目前狀態
 
 設計原則：
   - 只動 git.enabled / git.autoRepositoryDetection / git.autofetch
@@ -108,8 +108,8 @@ def apply_toggle(settings_path: Path, action: str) -> None:
         print(f"  git.autofetch = {settings.get('git.autofetch', '(預設 True)')}")
         print()
         print("用法：")
-        print("  python scripts/session-guards/vscode_git_toggle.py off  # 關閉")
-        print("  python scripts/session-guards/vscode_git_toggle.py on   # 打開")
+        print("  bash scripts/session-guards/run-hooks.sh vscode_git_toggle.py off  # 關閉")
+        print("  bash scripts/session-guards/run-hooks.sh vscode_git_toggle.py on   # 打開")
 
 
 def main() -> None:

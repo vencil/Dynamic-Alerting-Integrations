@@ -25,13 +25,14 @@ Telemetry（v2.8.0 Phase .b — PR feat/v280-session-init-telemetry）：
     - Log 寫入失敗永不 block；僅 stderr 警告
     - Log 可透過 `VIBE_SESSION_LOG=/dev/null` 停用
 
-手動觸發（偵錯）：
-  python scripts/session-guards/session-init.py          # 正常跑
-  python scripts/session-guards/session-init.py --force  # 忽略 marker 重跑
-  python scripts/session-guards/session-init.py --status # 只查 marker 狀態
-  python scripts/session-guards/session-init.py --stats  # 印 telemetry 摘要
-  python scripts/session-guards/session-init.py --stats --json --limit 50
-  python scripts/session-guards/session-init.py --stats --session <SID>
+手動觸發（偵錯）— 經 launcher 走直譯器探測（Windows 裸 `python` 是
+Store stub，#824 的根因，別照打）：
+  bash scripts/session-guards/run-hooks.sh session-init.py            # 正常跑
+  bash scripts/session-guards/run-hooks.sh session-init.py --force    # 忽略 marker 重跑
+  bash scripts/session-guards/run-hooks.sh session-init.py --status   # 只查 marker 狀態
+  bash scripts/session-guards/run-hooks.sh session-init.py --stats    # 印 telemetry 摘要
+  bash scripts/session-guards/run-hooks.sh session-init.py --stats --json --limit 50
+  bash scripts/session-guards/run-hooks.sh session-init.py --stats --session <SID>
 """
 
 from __future__ import annotations
