@@ -1,13 +1,19 @@
 #!/usr/bin/env python3
 """check_jsx_i18n.py — JSX 工具 i18n 完整性 lint
 
-掃描 jsx-loader.html 確認:
-  (a) TOOL_META 和 CUSTOM_FLOW_MAP 的 key set 一致
-  (b) window.__t 呼叫的兩參數不相同（防止 copy-paste bug）
-  (c) 語言切換函式的兩分支回傳不同值
+掃描 jsx-loader.html + portal JSX sources（`tools/portal/src/`）確認:
+  (a) window.__t 呼叫的兩參數不相同（防止 copy-paste bug）
+  (b) 語言切換函式的兩分支回傳不同值
 
 v2.4.0 新增：解決 v2.3.0 release 過程中 jsx-loader.html 語言切換按鈕
 兩個分支回傳相同字串，且 tenant-manager 漏入 CUSTOM_FLOW_MAP 的問題。
+
+歷史：原首要檢查為 TOOL_META ↔ CUSTOM_FLOW_MAP key 一致性。TOOL_META
+已隨 legacy `renderJSX` 在 TRK-230z 移除（該檢查從此恆 self-skip），
+於 TRK-242 殘留清理時正式退役。該守備現由
+`tests/shared/test_flows_e2e.py`（CUSTOM_FLOW_MAP 涵蓋所有 registry
+tools）+ `scripts/tools/dx/sync_tool_registry.py`（registry →
+CUSTOM_FLOW_MAP 自動生成）承接。
 
 用法:
     python3 scripts/tools/lint/check_jsx_i18n.py [--ci] [--json]
@@ -32,8 +38,8 @@ from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 JSX_LOADER = REPO_ROOT / "docs" / "assets" / "jsx-loader.html"
-JSX_TOOLS_DIR = REPO_ROOT / "docs" / "interactive" / "tools"
-WIZARD_DIR = REPO_ROOT / "docs" / "getting-started"
+JSX_TOOLS_DIR = REPO_ROOT / "tools" / "portal" / "src" / "interactive" / "tools"
+WIZARD_DIR = REPO_ROOT / "tools" / "portal" / "src" / "getting-started"
 
 
 # ---------------------------------------------------------------------------
@@ -174,50 +180,19 @@ def run_checks() -> Tuple[List[Dict], Dict]:
 
     content = JSX_LOADER.read_text(encoding="utf-8")
 
-    # Check 1: TOOL_META ↔ CUSTOM_FLOW_MAP key consistency
-    #
-    # TRK-230z note: TOOL_META lived inside the legacy `renderJSX` function
-    # that drove the in-page "Related tools footer" for the fetch+Babel
-    # path. That function (and TOOL_META with it) was removed when every
-    # tool migrated to the ESM dist-bundle entrypoint. CUSTOM_FLOW_MAP
-    # remains because flow mode (`?flow=...`) still consumes it. When
-    # TOOL_META is absent we skip the cross-sync check entirely — there's
-    # no second source of truth left to drift against. Window.__t and
-    # language-toggle checks below are still meaningful and run regardless.
-    meta_keys, meta_line = parse_object_keys(content, "TOOL_META")
-    flow_keys, flow_line = parse_object_keys(content, "CUSTOM_FLOW_MAP")
+    # Check 1 (RETIRED): TOOL_META ↔ CUSTOM_FLOW_MAP key consistency.
+    # TOOL_META lived inside the legacy `renderJSX` function and was
+    # removed with it in TRK-230z, so the cross-sync check self-skipped
+    # from then on; retired outright in the TRK-242 residue cleanup.
+    # That guard now lives in tests/shared/test_flows_e2e.py
+    # (CUSTOM_FLOW_MAP covers all registry tools) and
+    # scripts/tools/dx/sync_tool_registry.py (registry → map generation).
+    # CUSTOM_FLOW_MAP is still parsed for the stats line only.
+    flow_keys, _flow_line = parse_object_keys(content, "CUSTOM_FLOW_MAP")
 
     stats = {
-        "tool_meta_count": len(meta_keys),
         "flow_map_count": len(flow_keys),
     }
-
-    if meta_keys:
-        meta_only = meta_keys - flow_keys
-        flow_only = flow_keys - meta_keys
-
-        if meta_only:
-            for key in sorted(meta_only):
-                issues.append({
-                    "severity": "error",
-                    "check": "meta-flow-sync",
-                    "message": (
-                        f"'{key}' 在 TOOL_META 中但不在 CUSTOM_FLOW_MAP 中。"
-                        f" Guided Flow 無法載入此工具。"
-                    ),
-                    "line": meta_line,
-                })
-        if flow_only:
-            for key in sorted(flow_only):
-                issues.append({
-                    "severity": "error",
-                    "check": "meta-flow-sync",
-                    "message": (
-                        f"'{key}' 在 CUSTOM_FLOW_MAP 中但不在 TOOL_META 中。"
-                        f" Related tools footer 無法顯示此工具。"
-                    ),
-                    "line": flow_line,
-                })
 
     # Check 2: window.__t duplicate params
     dup_t = find_duplicate_t_params(content)
@@ -289,7 +264,6 @@ def main():
         }, ensure_ascii=False, indent=2))
     else:
         if stats:
-            print(f"TOOL_META: {stats['tool_meta_count']} 工具")
             print(f"CUSTOM_FLOW_MAP: {stats['flow_map_count']} 工具")
             print()
 

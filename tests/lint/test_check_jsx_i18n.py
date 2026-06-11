@@ -6,13 +6,17 @@ Gap 4 (TRK-007 backlog) — third lint self-test (P1). Auto-hook lint at
 The lint exists specifically because of the v2.3.0 bug class:
   - jsx-loader.html language-toggle button returned the same string
     in both branches → user couldn't actually switch language
-  - tenant-manager was added to TOOL_META but not CUSTOM_FLOW_MAP →
-    Guided Flow (?flow=...) couldn't load the tool
 
-A regex regression in this lint silently re-enables either bug. Three
+(The original second member of that bug class — TOOL_META ↔
+CUSTOM_FLOW_MAP key sync — was retired in the TRK-242 residue
+cleanup: TOOL_META left jsx-loader.html with renderJSX in TRK-230z,
+and the guard now lives in tests/shared/test_flows_e2e.py +
+scripts/tools/dx/sync_tool_registry.py.)
+
+A regex regression in this lint silently re-enables the bug. Three
 parsers + one orchestrator (run_checks) covered:
 
-  - parse_object_keys (TOOL_META / CUSTOM_FLOW_MAP key extraction)
+  - parse_object_keys (CUSTOM_FLOW_MAP key extraction; generic parser)
   - find_duplicate_t_params (window.__t copy-paste detector)
   - check_language_toggle (ternary same-value detector)
   - run_checks (orchestrator + file-missing handling)
@@ -285,10 +289,6 @@ class TestRunChecks:
         # Positive: a balanced loader passes cleanly.
         loader = tmp_path / "jsx-loader.html"
         loader.write_text(
-            "var TOOL_META = {\n"
-            "  'a-b': { },\n"
-            "  'c-d': { },\n"
-            "};\n"
             "var CUSTOM_FLOW_MAP = {\n"
             "  'a-b': { },\n"
             "  'c-d': { },\n"
@@ -303,58 +303,20 @@ class TestRunChecks:
         monkeypatch.setattr(mod, "WIZARD_DIR", tmp_path / "no-wizard")
         issues, stats = mod.run_checks()
         assert issues == []
-        assert stats["tool_meta_count"] == 2
         assert stats["flow_map_count"] == 2
 
-    def test_meta_only_key_is_error(self, tmp_path, monkeypatch):
-        # Negative: a key in TOOL_META but not in CUSTOM_FLOW_MAP →
-        # error with the v2.3.0 tenant-manager pattern.
-        loader = tmp_path / "jsx-loader.html"
-        loader.write_text(
-            "var TOOL_META = {\n"
-            "  'tenant-manager': { },\n"
-            "  'shared': { },\n"
-            "};\n"
-            "var CUSTOM_FLOW_MAP = {\n"
-            "  'shared': { },\n"
-            "};\n",
-            encoding="utf-8",
-        )
-        monkeypatch.setattr(mod, "JSX_LOADER", loader)
-        monkeypatch.setattr(mod, "JSX_TOOLS_DIR", tmp_path / "no-tools")
-        monkeypatch.setattr(mod, "WIZARD_DIR", tmp_path / "no-wizard")
-        issues, _ = mod.run_checks()
-        meta_only_issues = [i for i in issues if i["check"] == "meta-flow-sync"]
-        assert any("tenant-manager" in i["message"] for i in meta_only_issues)
-
-    def test_flow_only_key_is_error(self, tmp_path, monkeypatch):
-        loader = tmp_path / "jsx-loader.html"
-        loader.write_text(
-            "var TOOL_META = {\n"
-            "  'shared': { },\n"
-            "};\n"
-            "var CUSTOM_FLOW_MAP = {\n"
-            "  'shared': { },\n"
-            "  'orphan-flow': { },\n"
-            "};\n",
-            encoding="utf-8",
-        )
-        monkeypatch.setattr(mod, "JSX_LOADER", loader)
-        monkeypatch.setattr(mod, "JSX_TOOLS_DIR", tmp_path / "no-tools")
-        monkeypatch.setattr(mod, "WIZARD_DIR", tmp_path / "no-wizard")
-        issues, _ = mod.run_checks()
-        assert any(
-            i["check"] == "meta-flow-sync" and "orphan-flow" in i["message"]
-            for i in issues
-        )
-
-    def test_no_tool_meta_skips_sync_check(self, tmp_path, monkeypatch):
-        # Property: TRK-230z — when TOOL_META is absent (legacy
-        # renderJSX function gone), the sync check is skipped entirely.
+    def test_meta_flow_sync_retired(self, tmp_path, monkeypatch):
+        # Property: the TOOL_META ↔ CUSTOM_FLOW_MAP sync check is RETIRED
+        # (TRK-242 residue cleanup; TOOL_META left with renderJSX in
+        # TRK-230z). Even a loader that still carries a mismatched
+        # TOOL_META object must NOT produce meta-flow-sync issues —
+        # that guard now lives in tests/shared/test_flows_e2e.py.
         # Other checks still run.
         loader = tmp_path / "jsx-loader.html"
         loader.write_text(
-            "// TOOL_META was removed in TRK-230z\n"
+            "var TOOL_META = {\n"
+            "  'orphan-meta': { },\n"
+            "};\n"
             "var CUSTOM_FLOW_MAP = {\n"
             "  'orphan-flow': { },\n"
             "};\n"
@@ -365,11 +327,10 @@ class TestRunChecks:
         monkeypatch.setattr(mod, "JSX_TOOLS_DIR", tmp_path / "no-tools")
         monkeypatch.setattr(mod, "WIZARD_DIR", tmp_path / "no-wizard")
         issues, stats = mod.run_checks()
-        # No meta-flow-sync issues (TOOL_META is absent).
         assert not any(i["check"] == "meta-flow-sync" for i in issues)
         # But the duplicate __t param check still fires.
         assert any(i["check"] == "t-duplicate-param" for i in issues)
-        assert stats["tool_meta_count"] == 0
+        assert "tool_meta_count" not in stats
 
     def test_jsx_tools_dir_dup_t_warning(self, tmp_path, monkeypatch):
         # Property: a .jsx file in JSX_TOOLS_DIR with duplicate __t params
@@ -377,7 +338,6 @@ class TestRunChecks:
         # so the impact is smaller than loader-level).
         loader = tmp_path / "jsx-loader.html"
         loader.write_text(
-            "var TOOL_META = { };\n"
             "var CUSTOM_FLOW_MAP = { };\n",
             encoding="utf-8",
         )
@@ -405,7 +365,6 @@ class TestRunChecks:
     def test_language_toggle_issue_propagates(self, tmp_path, monkeypatch):
         loader = tmp_path / "jsx-loader.html"
         loader.write_text(
-            "var TOOL_META = { };\n"
             "var CUSTOM_FLOW_MAP = { };\n"
             "function updateLbl(lang) {\n"
             "  return lang === 'zh' ? 'X' : 'X';\n"
@@ -429,7 +388,6 @@ class TestMainCLI:
     def test_clean_state_exits_zero(self, tmp_path, monkeypatch, capsys):
         loader = tmp_path / "jsx-loader.html"
         loader.write_text(
-            "var TOOL_META = { 'a-b': 1 };\n"
             "var CUSTOM_FLOW_MAP = { 'a-b': 1 };\n",
             encoding="utf-8",
         )
@@ -443,11 +401,12 @@ class TestMainCLI:
         assert "通過" in capsys.readouterr().out
 
     def test_error_state_exits_one_with_ci(self, tmp_path, monkeypatch, capsys):
-        # Negative: meta-flow-sync error → --ci exits 1.
+        # Negative: loader-level duplicate __t params (error severity)
+        # → --ci exits 1.
         loader = tmp_path / "jsx-loader.html"
         loader.write_text(
-            "var TOOL_META = { 'orphan-meta': 1 };\n"
-            "var CUSTOM_FLOW_MAP = { };\n",
+            "var CUSTOM_FLOW_MAP = { };\n"
+            "window.__t('dup-text', 'dup-text');\n",
             encoding="utf-8",
         )
         monkeypatch.setattr(mod, "JSX_LOADER", loader)
@@ -458,7 +417,7 @@ class TestMainCLI:
             mod.main()
         assert exc.value.code == 1
         out = capsys.readouterr().out
-        assert "orphan-meta" in out
+        assert "dup-text" in out
 
     def test_error_state_without_ci_exits_zero(
         self, tmp_path, monkeypatch, capsys
@@ -466,8 +425,8 @@ class TestMainCLI:
         # Property: errors without --ci just print, exit 0.
         loader = tmp_path / "jsx-loader.html"
         loader.write_text(
-            "var TOOL_META = { 'orphan-meta': 1 };\n"
-            "var CUSTOM_FLOW_MAP = { };\n",
+            "var CUSTOM_FLOW_MAP = { };\n"
+            "window.__t('dup-text', 'dup-text');\n",
             encoding="utf-8",
         )
         monkeypatch.setattr(mod, "JSX_LOADER", loader)
@@ -481,7 +440,6 @@ class TestMainCLI:
     def test_json_output_shape(self, tmp_path, monkeypatch, capsys):
         loader = tmp_path / "jsx-loader.html"
         loader.write_text(
-            "var TOOL_META = { 'a-b': 1 };\n"
             "var CUSTOM_FLOW_MAP = { 'a-b': 1 };\n",
             encoding="utf-8",
         )
