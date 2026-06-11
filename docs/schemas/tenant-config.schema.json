@@ -935,6 +935,10 @@
           "if": { "properties": { "recipe": { "const": "forecast" } }, "required": ["recipe"] },
           "then": { "required": ["horizon"] },
           "else": { "required": ["window"] }
+        },
+        {
+          "if": { "properties": { "op": { "const": "==" } }, "required": ["op"] },
+          "then": { "properties": { "recipe": { "const": "threshold" } } }
         }
       ],
       "properties": {
