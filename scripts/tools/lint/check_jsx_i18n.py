@@ -206,11 +206,13 @@ def run_checks() -> Tuple[List[Dict], Dict]:
             "line": d["line"],
         })
 
-    # Also scan JSX tool files for duplicate __t params
+    # Also scan JSX tool files for duplicate __t params. Recursive —
+    # the pre-commit hook's `files:` scope matches nested .jsx (tool
+    # subtrees like <tool>/components/*.jsx), so the scan must too.
     for jsx_dir in (JSX_TOOLS_DIR, WIZARD_DIR):
         if not jsx_dir.is_dir():
             continue
-        for jsx_file in sorted(jsx_dir.glob("*.jsx")):
+        for jsx_file in sorted(jsx_dir.rglob("*.jsx")):
             try:
                 jsx_content = jsx_file.read_text(encoding="utf-8")
             except (UnicodeDecodeError, OSError):

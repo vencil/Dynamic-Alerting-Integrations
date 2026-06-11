@@ -28,11 +28,14 @@ are legal at runtime now — the lint is kept as a commit-time
 CONVENTION gate: components export via ``export default``, shared
 symbols via a tail ``export { A, B };`` clause (which rule 1's
 declarative-form regex deliberately does NOT match), and bare
-specifiers stay pinned to the two the build harness handles.
+specifiers stay pinned to the two the build harness handles. Scan
+scope = all of ``tools/portal/src/`` (interactive + getting-started),
+aligned with the sibling window-x lint and the hook's ``files:``.
 
 What it flags
 -------------
-On any `.jsx` file under ``tools/portal/src/interactive/``:
+On any `.jsx` file under ``tools/portal/src/`` (matches the pre-commit
+hook's ``files:`` scope):
 
 1. **Declarative named exports** — ``^export (function|const|let|var|class) ...``
    (NOT ``export default ...``, NOT the ``export { A, B };`` clause
@@ -100,7 +103,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 _IGNORE_MARKER = "<!-- jsx-loader-compat: ignore -->"
 _IGNORE_LOOKBACK_LINES = 3
 
-_DEFAULT_SCAN_DIR = PROJECT_ROOT / "tools" / "portal" / "src" / "interactive"  # TRK-242
+_DEFAULT_SCAN_DIR = PROJECT_ROOT / "tools" / "portal" / "src"  # TRK-242; whole src/ = hook files scope
 _DEFAULT_SCAN_EXTS = (".jsx",)
 
 # Allowlist of bare import specifiers the build harness handles:
@@ -263,7 +266,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "paths",
         nargs="*",
-        help="Files or directories to scan. Defaults to tools/portal/src/interactive/ recursively (jsx).",
+        help="Files or directories to scan. Defaults to tools/portal/src/ recursively (jsx).",
     )
     parser.add_argument(
         "--ci",

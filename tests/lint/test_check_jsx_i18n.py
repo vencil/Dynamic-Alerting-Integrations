@@ -335,15 +335,18 @@ class TestRunChecks:
     def test_jsx_tools_dir_dup_t_warning(self, tmp_path, monkeypatch):
         # Property: a .jsx file in JSX_TOOLS_DIR with duplicate __t params
         # surfaces as a WARNING (not error — JSX files are tool-internal
-        # so the impact is smaller than loader-level).
+        # so the impact is smaller than loader-level). The file sits in a
+        # NESTED subdir to pin the recursive scan (rglob) — tool subtrees
+        # like <tool>/components/*.jsx must be covered.
         loader = tmp_path / "jsx-loader.html"
         loader.write_text(
             "var CUSTOM_FLOW_MAP = { };\n",
             encoding="utf-8",
         )
         tools_dir = tmp_path / "tools"
-        tools_dir.mkdir()
-        bad = tools_dir / "bad.jsx"
+        nested = tools_dir / "some-tool" / "components"
+        nested.mkdir(parents=True)
+        bad = nested / "bad.jsx"
         bad.write_text(
             "function X() { return window.__t('foo', 'foo'); }\n",
             encoding="utf-8",
