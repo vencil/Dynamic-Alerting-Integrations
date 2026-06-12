@@ -414,11 +414,17 @@ repos:
         additional_dependencies: ['pyyaml']
 
       - id: tool-consistency-check
-        name: Tool registry ↔ Hub ↔ TOOL_META ↔ JSX ↔ Markdown links
+        name: Tool registry ↔ Hub ↔ CUSTOM_FLOW_MAP ↔ JSX ↔ Markdown links
         entry: python3 -X utf8 scripts/tools/lint/lint_tool_consistency.py
         language: python
         pass_filenames: false
-        files: ^docs/(assets/(tool-registry\.yaml|jsx-loader\.html)|interactive/(index\.html|tools/.*\.jsx)|getting-started/wizard\.jsx|.*\.md)$
+        # TRK-242: portal source moved docs/interactive/ → tools/portal/src/;
+        # filter follows it (old docs/ jsx branches were dead → .jsx-only
+        # commits silently skipped the hook). dist + flows.json + mkdocs.yml
+        # (site_url) included because the lint reads them. Delete-only
+        # commits never trigger locally (pre-commit excludes D from staged
+        # files); CI --all-files is the backstop for removed dist bundles.
+        files: ^(docs/(assets/(tool-registry\.yaml|jsx-loader\.html|flows\.json|dist/[^/]+\.js)|interactive/index\.html|.*\.md)|tools/portal/src/.*\.jsx|README[^/]*\.md|mkdocs\.yml)$
 
       - id: structure-check
         name: Project structure enforcement
@@ -541,15 +547,6 @@ repos:
         pass_filenames: false
         files: \.(en|zh)\.md$
         stages: [manual]
-
-      - id: flow-e2e-check
-        name: Guided Flow E2E smoke test
-        entry: python3 -X utf8 tests/shared/test_flows_e2e.py
-        language: python
-        pass_filenames: false
-        files: ^docs/(assets/(flows\.json|jsx-loader\.html)|interactive/index\.html)
-        stages: [manual]
-        additional_dependencies: ['pyyaml']
 
       - id: jsx-babel-check
         name: JSX Babel standalone parse validation

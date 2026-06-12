@@ -25,7 +25,7 @@ lang: zh
 
 死亡組合：以為某事是 hook-enforced（其實是 reviewer-only）→ 不做 → reviewer 退件 / 進 repo。本表就是消除這種誤判。
 
-> **📊 Count reconciliation**：pre-commit hook 為 **69 auto + 15 manual + 3 pre-push = 87**（YAML parse 重數於 2026-06-12，#824 PR；含該 PR 新增的 `session-guard-liveness-check`），與 CLAUDE.md 宣告一致。下文 §3/§4 的職能分組表為 v2.8.1 盤點時的快照、其後新 hook 僅逐案補列——**計數以 `.pre-commit-config.yaml` YAML parse 為準**，分組表供職能導覽不做計數依據。
+> **📊 Count reconciliation**：pre-commit hook 為 **69 auto + 14 manual + 3 pre-push = 86**（YAML parse 重數於 2026-06-12；#824 新增 `session-guard-liveness-check`、TRK-242 residue 清理退役 `flow-e2e-check` — 守備與 auto-run `tool-consistency-check` 完全重複，增量已併入），與 CLAUDE.md 宣告一致。下文 §3/§4 的職能分組表為 v2.8.1 盤點時的快照、其後新 hook 僅逐案補列——**計數以 `.pre-commit-config.yaml` YAML parse 為準**，分組表供職能導覽不做計數依據。
 >
 > **更正（TRK-307，時值 v2.8.1 = 51/13/3）**：本表初版（PR #582）曾誤記「50 auto + 14 manual」並反指 CLAUDE.md 計數漂移——那是用 grep `stages:\s*\[manual\]` 數的結果，**配到了 `jsx-babel-check-strict-linecount` 的註解行**（該 hook 註解明寫 "Auto-stage (NOT manual)"，曾被提議 manual 但 PR #162 改回 auto）。TRK-307 的 `audit_rules_drift.py` 用 **YAML parse**（非 grep）重數，確認當時為 51/13/3，CLAUDE.md 一直是對的。**教訓：hook 計數要 YAML parse，grep 會配到註解 / 文字**——audit 工具上線首次執行即抓出此自埋誤差。
 
@@ -86,7 +86,7 @@ lang: zh
 
 ---
 
-## 4. Pre-commit manual hooks（15）— 🔧 機械但**需手動觸發**
+## 4. Pre-commit manual hooks（14）— 🔧 機械但**需手動觸發**
 
 > 不在 commit 時自動跑；`pre-commit run --hook-stage manual --all-files` 或 `make lint-docs` 觸發。**這類最容易被 AI 誤當「自動會擋」**——其實不會，得記得手動跑（或 CI 才擋）。
 
@@ -96,7 +96,6 @@ lang: zh
 | `k8s-manifests-sast-check` | Container SAST L4：raw k8s manifest（kube-linter） | 改 k8s/ raw manifest 後（CI 硬閘） |
 | `schema-check` | Go→JSON Schema drift | 改 Go struct / schema 後 |
 | `translation-check` | 雙語結構一致 | 改外部面向 ZH 文件後 |
-| `flow-e2e-check` | Guided Flow E2E smoke | 改 portal flow 後 |
 | `i18n-coverage-check` | i18n 覆蓋報告 | 改 i18n 後 |
 | `check-doc-reading-time` | >15 min 需拆 | 寫長文件後 |
 | `check-doc-freshness` | >90 天 stale | 定期 |
@@ -108,7 +107,7 @@ lang: zh
 | `md-yaml-drift-check` | MD YAML 範例 ↔ schema | 改 schema 範例後 |
 | `playwright-e2e` | Portal E2E smoke | 改 portal 後 |
 
-> 上表 15 個為 YAML-parse 確認的 `stages: [manual]`（2026-06-12 重數；v2.8.1 後新增 `iac-helm-sast-check` / `k8s-manifests-sast-check`，#448）。`jsx-babel-check-strict-linecount` **不在此列**（它是 auto-stage；初版誤列，TRK-307 已更正）。以 [`.pre-commit-config.yaml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/.pre-commit-config.yaml) 為 SSOT，計數用 YAML parse（見 `audit_rules_drift.py`）。
+> 上表 14 個為 YAML-parse 確認的 `stages: [manual]`（2026-06-12 重數；v2.8.1 後新增 `iac-helm-sast-check` / `k8s-manifests-sast-check`（#448）、退役 `flow-e2e-check`（TRK-242 residue 清理 — 守備與 auto-run `tool-consistency-check` 完全重複，增量檢查已併入該 lint））。`jsx-babel-check-strict-linecount` **不在此列**（它是 auto-stage；初版誤列，TRK-307 已更正）。以 [`.pre-commit-config.yaml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/.pre-commit-config.yaml) 為 SSOT，計數用 YAML parse（見 `audit_rules_drift.py`）。
 
 ---
 

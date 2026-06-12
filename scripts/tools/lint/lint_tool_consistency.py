@@ -3,9 +3,18 @@
 
 從 tool-registry.yaml (單一真相源) 反向驗證：
   1. Hub index.html — 每個 tool 有對應卡片、data-audience 一致
-  2. jsx-loader.html TOOL_META — 每個 tool 有對應條目
+  2. jsx-loader.html CUSTOM_FLOW_MAP — 每個 tool 有 bare-key 對應條目，
+     且每個條目與每個 flow step component 都有對應 dist bundle
+     （runtime 載入的是 docs/assets/dist/<name>.js，缺了 = 404）
   3. JSX frontmatter — related 引用的 key 都存在於 registry
   4. Markdown appears_in — 列出的 .md 檔案確實包含該工具連結
+  5. flows.json 結構 — flow/step 雙語欄位（en/zh）、condition/validation
+     形狀（loader 的 filterSteps/checkValidation 對畸形輸入寬容跳過，
+     缺洞 ship 出去是空白 UI 而非可見錯誤）
+  6. Hub index.html guided-flow section — flow cards / analytics /
+     builder / 進度 key 標記（5–6 自退役的 manual-stage flow-e2e-check
+     smoke script 移入；loader 端不需等價檢查 — Playwright
+     portal-error-boundary.spec.ts 會真實載入 ?flow=onboarding）
 
 Usage:
     python3 scripts/tools/lint_tool_consistency.py [--fix-hint] [--json]
@@ -174,14 +183,83 @@ def check_hub_cards(tools: list, hub_html: str, errors: list, warnings: list):
             )
 
 
+def parse_flow_map(loader_html: str):
+    """Extract CUSTOM_FLOW_MAP key→component-path pairs from jsx-loader.html.
+
+    Brace-depth scan modeled on check_jsx_i18n.parse_object_keys, but also
+    captures the values — the dist-existence check needs the component path,
+    not just the key. Returns None when the block is absent (caller must
+    fail loud, mirroring sync_tool_registry.sync_tool_meta).
+    """
+    flow_map: dict = {}
+    in_obj = False
+    brace_depth = 0
+    pair_re = re.compile(r"""['"]([^'"]+)['"]\s*:\s*['"]([^'"]+)['"]""")
+
+    for line in loader_html.splitlines():
+        stripped = line.strip()
+        if not in_obj:
+            if re.search(r"\bCUSTOM_FLOW_MAP\s*[:=]\s*\{", stripped):
+                in_obj = True
+                brace_depth = stripped.count("{") - stripped.count("}")
+                for m in pair_re.finditer(stripped):
+                    flow_map[m.group(1)] = m.group(2)
+                if brace_depth <= 0:
+                    break
+        else:
+            m = pair_re.match(stripped)
+            if m:
+                flow_map[m.group(1)] = m.group(2)
+            brace_depth += stripped.count("{") - stripped.count("}")
+            if brace_depth <= 0:
+                break
+
+    return flow_map if in_obj else None
+
+
 def check_tool_meta(tools: list, loader_html: str, errors: list, warnings: list):
-    """Verify each registry tool exists in TOOL_META."""
+    """Verify each registry tool has a CUSTOM_FLOW_MAP entry in jsx-loader.html.
+
+    Historical name: this used to target the loader's TOOL_META object,
+    removed in TRK-230z; bare-key resolution now goes through
+    CUSTOM_FLOW_MAP, so that is what we verify — by exact key match (the
+    old substring probe passed on any '{key}' occurrence anywhere in the
+    HTML).
+    """
+    flow_map = parse_flow_map(loader_html)
+    if flow_map is None:
+        errors.append(
+            "[flow_map] CUSTOM_FLOW_MAP block not found in jsx-loader.html"
+        )
+        return
     for tool in tools:
         key = tool["key"]
-        # Look for 'key': { in TOOL_META
-        if f"'{key}'" not in loader_html:
+        if key not in flow_map:
             errors.append(
-                f"[tool_meta] Tool '{key}' missing from jsx-loader.html TOOL_META"
+                f"[flow_map] Tool '{key}' missing from jsx-loader.html CUSTOM_FLOW_MAP"
+            )
+
+
+def check_flow_map_dist(loader_html: str, errors: list, warnings: list):
+    """Verify each CUSTOM_FLOW_MAP entry has a built dist bundle.
+
+    Single-component bare-key mode resolves key → component path →
+    docs/assets/dist/<basename>.js; a map entry without its bundle is a
+    guaranteed runtime 404. (Flow steps load the same way — that direction
+    gets the equivalent gate in check_flow_components.)
+    """
+    flow_map = parse_flow_map(loader_html)
+    if not flow_map:
+        return  # absence already reported by check_tool_meta
+    dist_dir = PROJECT_ROOT / "docs" / "assets" / "dist"
+    for key, component in flow_map.items():
+        base = component.rsplit("/", 1)[-1]
+        if base.endswith(".jsx"):
+            base = base[: -len(".jsx")]
+        if not (dist_dir / f"{base}.js").exists():
+            errors.append(
+                f"[flow_map] CUSTOM_FLOW_MAP key '{key}' → {component} has no "
+                f"dist bundle docs/assets/dist/{base}.js (bare-key load would 404)"
             )
 
 
@@ -297,6 +375,19 @@ def check_flow_components(tools: list, errors: list, warnings: list):
     registry_keys = {t["key"] for t in tools}
 
     for flow_name, flow in flows.items():
+        # Flow-level title/desc must exist and carry both languages — the
+        # flow picker renders these directly.
+        for field in ("title", "desc"):
+            obj = flow.get(field)
+            if obj is None:
+                errors.append(f"[flow] Flow '{flow_name}': missing '{field}'")
+            elif isinstance(obj, dict):
+                for lang in ("en", "zh"):
+                    if not obj.get(lang):
+                        errors.append(
+                            f"[flow] Flow '{flow_name}': {field}.{lang} missing"
+                        )
+
         steps = flow.get("steps", [])
         if not steps:
             warnings.append(f"[flow] Flow '{flow_name}' has no steps")
@@ -305,6 +396,15 @@ def check_flow_components(tools: list, errors: list, warnings: list):
         for i, step in enumerate(steps):
             tool_key = step.get("tool", "")
             component = step.get("component", "")
+
+            if not tool_key:
+                errors.append(
+                    f"[flow] Flow '{flow_name}' step {i}: missing 'tool'"
+                )
+            if not component:
+                errors.append(
+                    f"[flow] Flow '{flow_name}' step {i}: missing 'component'"
+                )
 
             # Check tool key exists in registry
             if tool_key and tool_key not in registry_keys:
@@ -336,6 +436,21 @@ def check_flow_components(tools: list, errors: list, warnings: list):
                         f"component '{component}' not found "
                         f"(resolved: {resolved})"
                     )
+                else:
+                    # Runtime loads the built bundle, not the source:
+                    # renderFlowUI → loadDistBundle(basename) →
+                    # docs/assets/dist/<basename>.js. Source existing
+                    # alone still 404s when the bundle was never built.
+                    base = clean.rsplit("/", 1)[-1]
+                    if base.endswith(".jsx"):
+                        base = base[: -len(".jsx")]
+                    dist_js = PROJECT_ROOT / "docs" / "assets" / "dist" / f"{base}.js"
+                    if not dist_js.exists():
+                        errors.append(
+                            f"[flow] Flow '{flow_name}' step {i}: "
+                            f"component '{component}' has no dist bundle "
+                            f"docs/assets/dist/{base}.js (runtime 404)"
+                        )
 
             # Check required fields
             if not step.get("title"):
@@ -346,6 +461,83 @@ def check_flow_components(tools: list, errors: list, warnings: list):
                 warnings.append(
                     f"[flow] Flow '{flow_name}' step {i}: missing 'hint'"
                 )
+
+            # Bilingual step fields: a half-filled title renders blank
+            # stepper text in one language (error); a hint hole only
+            # degrades the optional banner (warning).
+            for field, sink in (("title", errors), ("hint", warnings)):
+                obj = step.get(field)
+                if isinstance(obj, dict):
+                    for lang in ("en", "zh"):
+                        if not obj.get(lang):
+                            sink.append(
+                                f"[flow] Flow '{flow_name}' step {i}: "
+                                f"{field}.{lang} missing"
+                            )
+
+            # condition / validation shapes — filterSteps and
+            # checkValidation in jsx-loader.html consume these leniently,
+            # so a malformed shape silently disables the gate/filter.
+            cond = step.get("condition")
+            if cond is not None:
+                if not isinstance(cond, dict):
+                    errors.append(
+                        f"[flow] Flow '{flow_name}' step {i}: "
+                        f"'condition' must be an object"
+                    )
+                else:
+                    for k, v in cond.items():
+                        if not isinstance(v, list):
+                            errors.append(
+                                f"[flow] Flow '{flow_name}' step {i}: "
+                                f"condition['{k}'] must be an array"
+                            )
+
+            val = step.get("validation")
+            if val is not None:
+                if not isinstance(val, dict):
+                    errors.append(
+                        f"[flow] Flow '{flow_name}' step {i}: "
+                        f"'validation' must be an object"
+                    )
+                else:
+                    rs = val.get("required_state")
+                    if rs is not None and not isinstance(rs, list):
+                        errors.append(
+                            f"[flow] Flow '{flow_name}' step {i}: "
+                            f"validation.required_state must be an array"
+                        )
+                    warn = val.get("warn")
+                    if isinstance(warn, dict):
+                        for lang in ("en", "zh"):
+                            if not warn.get(lang):
+                                errors.append(
+                                    f"[flow] Flow '{flow_name}' step {i}: "
+                                    f"validation.warn.{lang} missing"
+                                )
+
+
+def check_hub_flow_section(hub_html: str, errors: list):
+    """Verify Hub index.html still wires up the guided-flow section.
+
+    Ported from the retired manual-stage flow-e2e-check script — this was
+    the Hub side's only gate (no Playwright spec covers it; the loader
+    side IS covered functionally by portal-error-boundary.spec.ts loading
+    ?flow=onboarding, so it needs no marker check here).
+    """
+    required = [
+        ("flow-cards", "flow card container"),
+        ("flow-analytics", "flow analytics section"),
+        ("custom-flow-builder", "custom flow builder"),
+        ("__da_flow_progress_", "progress localStorage key"),
+        ("__da_flow_completed_", "completion localStorage key"),
+        ("flows.json", "flows.json fetch"),
+    ]
+    for pattern, desc in required:
+        if pattern not in hub_html:
+            errors.append(
+                f"[hub_flow] Hub index.html missing '{pattern}' ({desc})"
+            )
 
 
 def check_markdown_tool_links(tools: list, errors: list, warnings: list):
@@ -472,7 +664,9 @@ def main():
     print()
 
     check_hub_cards(tools, hub_html, errors, warnings)
+    check_hub_flow_section(hub_html, errors)
     check_tool_meta(tools, loader_html, errors, warnings)
+    check_flow_map_dist(loader_html, errors, warnings)
     check_jsx_frontmatter(tools, errors, warnings)
     check_appears_in(tools, errors, warnings)
     check_related_symmetry(tools, warnings)
@@ -505,10 +699,14 @@ def main():
         print()
         print("FIX HINTS:")
         for e in errors:
-            if "[hub]" in e:
+            if "no dist bundle" in e:
+                print(f"  → Add the entry to tools/portal/manifest.json and run make portal-build")
+            elif "[hub_flow]" in e:
+                print(f"  → Restore the guided-flow section markup in docs/interactive/index.html")
+            elif "[hub]" in e:
                 print(f"  → Add a card to docs/interactive/index.html")
-            elif "[tool_meta]" in e:
-                print(f"  → Add entry to TOOL_META in docs/assets/jsx-loader.html")
+            elif "[flow_map]" in e:
+                print(f"  → Add entry to CUSTOM_FLOW_MAP in docs/assets/jsx-loader.html (make sync-tools)")
             elif "[jsx]" in e:
                 print(f"  → Check JSX file or update related keys")
             elif "[appears_in]" in e:
