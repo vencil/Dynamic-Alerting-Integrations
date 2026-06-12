@@ -4,8 +4,10 @@
  *
  * Reads `manifest.json` for the list of tool entries to bundle, then
  * for each entry:
- *   - reads `docs/interactive/tools/<entry>.jsx`
- *   - strips YAML frontmatter (jsx-loader did this; we replicate)
+ *   - reads `entries/<entry>.entry.jsx`, which imports the tool source
+ *     from `src/interactive/tools/<entry>.jsx` (TRK-242 layout)
+ *   - strips YAML frontmatter (legacy jsx-loader did this at runtime;
+ *     we replicate at build time)
  *   - bundles via esbuild with React JSX transform
  *   - writes `docs/assets/dist/<entry>.js`
  *
@@ -37,9 +39,9 @@ const DIST_DIR = resolve(REPO_ROOT, 'docs', 'assets', 'dist');
 
 /**
  * esbuild plugin that strips YAML frontmatter at the top of `.jsx`/`.js`
- * files. The original jsx-loader.html does this in browser; we replicate
- * exactly the same regex (closing `---` anchored to its own line) so a
- * file that loaded under jsx-loader still loads under esbuild.
+ * files. The legacy jsx-loader.html did this in browser (removed in
+ * TD-030z); we keep exactly the same regex (closing `---` anchored to
+ * its own line) so files that carry frontmatter still bundle cleanly.
  */
 /**
  * esbuild plugin that virtualizes `lucide-react` imports to read from
@@ -164,11 +166,11 @@ async function main() {
     // an import map or CDN dependency. Per-tool React instance is fine
     // because each tool is its own page (no cross-tool sharing).
     plugins: [lucideReactGlobalsPlugin(), stripFrontmatterPlugin()],
-    // Source files under docs/interactive/ have no sibling node_modules;
-    // their ancestor walk doesn't reach tools/portal/node_modules either.
-    // Explicit nodePaths makes esbuild resolve `react` / `react-dom/client`
-    // / etc. from the build harness's deps regardless of where the
-    // importing file lives in the repo tree.
+    // Explicit nodePaths pins `react` / `react-dom/client` / etc. to the
+    // build harness's own deps. Since TRK-242 the sources live under
+    // tools/portal/src/, so the ancestor walk would find node_modules
+    // anyway — kept so resolution stays deterministic no matter where
+    // an importing file lives in the repo tree.
     nodePaths: [resolve(__dirname, 'node_modules')],
     // Production-mode React: NODE_ENV=production strips DevTools hooks
     // and dev-only warnings, trimming the bundle by ~85% (1.1MB → ~150KB).

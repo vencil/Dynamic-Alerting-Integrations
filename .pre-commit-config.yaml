@@ -489,11 +489,16 @@ repos:
         files: \.(en|zh)\.md$
 
       - id: jsx-i18n-check
-        name: JSX TOOL_META ↔ CUSTOM_FLOW_MAP ↔ i18n sync
+        name: jsx-loader i18n sync (window.__t dup-param / language toggle)
         entry: python3 -X utf8 scripts/tools/lint/check_jsx_i18n.py --ci
         language: python
         pass_filenames: false
-        files: ^docs/(assets/jsx-loader\.html|interactive/tools/.*\.jsx|getting-started/wizard\.jsx)$
+        # Loader-only since the TRK-242 residue cleanup: portal .jsx
+        # sources contain zero `window.__t(` call sites (tools use local
+        # t() helpers), and tool-level findings were warning-severity —
+        # invisible in a passing --ci hook. Scanning them was pure
+        # dead weight; `window.__t` lives only in jsx-loader.html.
+        files: ^docs/assets/jsx-loader\.html$
 
       - id: makefile-targets-check
         name: DX tools ↔ Makefile/pre-commit reachability
@@ -713,7 +718,7 @@ repos:
         entry: bash -c 'cd tests/e2e && npx playwright test'
         language: system
         pass_filenames: false
-        files: ^(docs/interactive/|tests/e2e/|docs/assets/(tool-registry|jsx-loader|flows))
+        files: ^(docs/interactive/|tests/e2e/|tools/portal/|docs/assets/(tool-registry|jsx-loader|flows|dist/|platform-data|template-data|recommendation-data))
         stages: [manual]
 
       - id: playwright-lint
@@ -901,7 +906,7 @@ repos:
         entry: python3 -X utf8 scripts/tools/lint/check_jsx_loader_compat.py --ci
         language: python
         pass_filenames: false
-        files: ^docs/interactive/.*\.jsx$
+        files: ^tools/portal/src/.*\.jsx$
         # Auto-stage, FATAL on findings (default for new lints when
         # post-rewrite violation count is 0; mirrors PR #169 / #170).
         # If existing codebase has violations, add granular `--strict-jsx_loader_compat`
