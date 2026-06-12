@@ -9,15 +9,19 @@
   3. JSX frontmatter — related 引用的 key 都存在於 registry
   4. Markdown appears_in — 列出的 .md 檔案確實包含該工具連結
   5. flows.json 結構 — flow/step 雙語欄位（en/zh）、condition/validation
-     形狀（loader 的 filterSteps/checkValidation 對畸形輸入寬容跳過，
+     形狀（loader 的 filterSteps/__checkFlowGate 對畸形輸入寬容跳過，
      缺洞 ship 出去是空白 UI 而非可見錯誤）
-  6. Hub index.html guided-flow section — flow cards / analytics /
-     builder / 進度 key 標記（5–6 自退役的 manual-stage flow-e2e-check
-     smoke script 移入；loader 端不需等價檢查 — Playwright
-     portal-error-boundary.spec.ts 會真實載入 ?flow=onboarding）
+  6. Hub index.html guided-flow section + jsx-loader flow infrastructure —
+     flow cards / analytics / builder / 進度 key / loader 流程函式與
+     CSS class 標記（5–7 自退役的 manual-stage flow-e2e-check smoke
+     script 移入；loader 的 render/load 路徑另有 Playwright
+     portal-error-boundary.spec.ts 真實載入 ?flow=onboarding 做功能驗證，
+     persistence / custom-flow / gate 標記則只有這裡的靜態 tripwire）
+  7. Markdown jsx-loader 連結 — base URL 符合 mkdocs.yml site_url、
+     component= 指向存在的 JSX
 
 Usage:
-    python3 scripts/tools/lint_tool_consistency.py [--fix-hint] [--json]
+    python3 scripts/tools/lint/lint_tool_consistency.py [--fix-hint] [--json]
 
 Exit codes:
     0 = all checks passed
@@ -339,20 +343,6 @@ def check_appears_in(tools: list, errors: list, warnings: list):
                 )
 
 
-def check_related_symmetry(tools: list, warnings: list):
-    """Warn if A relates to B but B doesn't relate back (not an error)."""
-    registry = {t["key"]: t for t in tools}
-
-    for tool in tools:
-        key = tool["key"]
-        related = tool.get("related", [])
-        for ref in related:
-            if ref in registry:
-                peer_related = registry[ref].get("related", [])
-                if key not in peer_related:
-                    pass  # Asymmetric is fine, just informational
-
-
 def check_flow_components(tools: list, errors: list, warnings: list):
     """Verify that flows.json references valid tool keys and existing JSX files."""
     flows_path = PROJECT_ROOT / "docs" / "assets" / "flows.json"
@@ -375,6 +365,16 @@ def check_flow_components(tools: list, errors: list, warnings: list):
     registry_keys = {t["key"] for t in tools}
 
     for flow_name, flow in flows.items():
+        # Grammar guards: validate the shape, not just the current corpus —
+        # a hand-edited flows.json with the wrong container type must come
+        # back as a structured error, not a lint traceback.
+        if not isinstance(flow, dict):
+            errors.append(
+                f"[flow] Flow '{flow_name}': must be an object, "
+                f"got {type(flow).__name__}"
+            )
+            continue
+
         # Flow-level title/desc must exist and carry both languages — the
         # flow picker renders these directly.
         for field in ("title", "desc"):
@@ -389,11 +389,23 @@ def check_flow_components(tools: list, errors: list, warnings: list):
                         )
 
         steps = flow.get("steps", [])
+        if not isinstance(steps, list):
+            errors.append(
+                f"[flow] Flow '{flow_name}': 'steps' must be an array, "
+                f"got {type(steps).__name__}"
+            )
+            continue
         if not steps:
             warnings.append(f"[flow] Flow '{flow_name}' has no steps")
             continue
 
         for i, step in enumerate(steps):
+            if not isinstance(step, dict):
+                errors.append(
+                    f"[flow] Flow '{flow_name}' step {i}: must be an object, "
+                    f"got {type(step).__name__}"
+                )
+                continue
             tool_key = step.get("tool", "")
             component = step.get("component", "")
 
@@ -475,9 +487,11 @@ def check_flow_components(tools: list, errors: list, warnings: list):
                                 f"{field}.{lang} missing"
                             )
 
-            # condition / validation shapes — filterSteps and
-            # checkValidation in jsx-loader.html consume these leniently,
-            # so a malformed shape silently disables the gate/filter.
+            # condition / validation shapes — filterSteps and the
+            # __checkFlowGate Next-button gate in jsx-loader.html consume
+            # these leniently, so a malformed shape silently disables the
+            # gate/filter. (checkValidation also parses validation but is
+            # a dead inline duplicate — zero call sites.)
             cond = step.get("condition")
             if cond is not None:
                 if not isinstance(cond, dict):
@@ -515,15 +529,52 @@ def check_flow_components(tools: list, errors: list, warnings: list):
                                     f"[flow] Flow '{flow_name}' step {i}: "
                                     f"validation.warn.{lang} missing"
                                 )
+                    elif warn is not None:
+                        errors.append(
+                            f"[flow] Flow '{flow_name}' step {i}: "
+                            f"validation.warn must be an object"
+                        )
+
+
+def check_loader_flow_infrastructure(loader_html: str, errors: list):
+    """Verify jsx-loader.html still carries the guided-flow infrastructure.
+
+    Ported from the retired manual-stage flow-e2e-check script. The
+    render/load path (renderFlowUI / filterSteps / flow-stepper) is also
+    exercised functionally by Playwright loading ?flow=onboarding
+    (portal-error-boundary.spec.ts), but the persistence keys, the
+    validation gate, and the ?tools= custom-flow builder have no E2E
+    coverage — these static tripwires are their only gate. A renamed
+    localStorage key (e.g. __da_flow_progress_ → typo) ships as a silent
+    "progress resets on reload" failure.
+    """
+    required = [
+        ("__FLOW_STATE", "cross-step data state object"),
+        ("__flowSave", "flow state save function"),
+        ("__da_flow_progress_", "progress persistence key"),
+        ("__da_flow_completed_", "completion tracking key"),
+        ("filterSteps", "conditional step filtering"),
+        ("checkValidation", "checkpoint validation function"),
+        ("__checkFlowGate", "validation gate handler"),
+        ("buildCustomFlow", "custom flow builder function"),
+        ("renderFlowUI", "flow UI renderer"),
+        ("flow-stepper", "stepper CSS class"),
+        ("flow-nav", "navigation bar CSS class"),
+        ("flow-hint", "hint banner CSS class"),
+    ]
+    for pattern, desc in required:
+        if pattern not in loader_html:
+            errors.append(
+                f"[loader_flow] jsx-loader.html missing '{pattern}' ({desc})"
+            )
 
 
 def check_hub_flow_section(hub_html: str, errors: list):
     """Verify Hub index.html still wires up the guided-flow section.
 
     Ported from the retired manual-stage flow-e2e-check script — this was
-    the Hub side's only gate (no Playwright spec covers it; the loader
-    side IS covered functionally by portal-error-boundary.spec.ts loading
-    ?flow=onboarding, so it needs no marker check here).
+    the Hub side's only gate (no Playwright spec covers the Hub flow
+    cards / analytics / builder section).
     """
     required = [
         ("flow-cards", "flow card container"),
@@ -665,11 +716,11 @@ def main():
 
     check_hub_cards(tools, hub_html, errors, warnings)
     check_hub_flow_section(hub_html, errors)
+    check_loader_flow_infrastructure(loader_html, errors)
     check_tool_meta(tools, loader_html, errors, warnings)
     check_flow_map_dist(loader_html, errors, warnings)
     check_jsx_frontmatter(tools, errors, warnings)
     check_appears_in(tools, errors, warnings)
-    check_related_symmetry(tools, warnings)
     check_flow_components(tools, errors, warnings)
     check_markdown_tool_links(tools, errors, warnings)
 
@@ -703,6 +754,8 @@ def main():
                 print(f"  → Add the entry to tools/portal/manifest.json and run make portal-build")
             elif "[hub_flow]" in e:
                 print(f"  → Restore the guided-flow section markup in docs/interactive/index.html")
+            elif "[loader_flow]" in e:
+                print(f"  → Restore the flow infrastructure in docs/assets/jsx-loader.html")
             elif "[hub]" in e:
                 print(f"  → Add a card to docs/interactive/index.html")
             elif "[flow_map]" in e:
