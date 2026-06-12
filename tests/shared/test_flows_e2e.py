@@ -100,9 +100,11 @@ def check_flows_json(verbose: bool) -> list[str]:
             # runtime failure mode: flow step → bundle 404.
             component = step.get("component", "")
             if component:
-                name = component.rsplit("/", 1)[-1]
-                if name.endswith(".jsx"):
-                    name = name[: -len(".jsx")]
+                # Mirror jsx-loader.html exactly: split('/').pop()
+                # .replace('.jsx', '') — JS String.replace with a string
+                # pattern replaces the FIRST occurrence only, hence
+                # count=1 here (not replace-all, not suffix-strip).
+                name = component.rsplit("/", 1)[-1].replace(".jsx", "", 1)
                 bundle = DOCS_ASSETS / "dist" / f"{name}.js"
                 if not bundle.exists():
                     errors.append(

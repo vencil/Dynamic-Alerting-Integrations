@@ -65,7 +65,7 @@ meaning), but the mechanism itself is legacy
 | Bare import specifiers limited to `react` / `lucide-react` (react is bundled per-tool; lucide-react is virtualized to `window.lucideReact` by `build.mjs`, TD-030f); cross-file reuse = relative ESM import | same lint |
 | No module-scope `const X = window.__X;` no-fallback reads (breaks under esbuild `splitting: true` chunk ordering) | `check_window_x_no_fallback.py` (TRK-237; dev-rules §S6) |
 | Babel parse + line caps: warn 1500 / fail 2500 (issue #152) | `lint_jsx_babel.py` (`jsx-babel-check` + `jsx-babel-check-strict-linecount` hooks) — recursively scans `tools/portal/src/interactive/tools/` + `tools/portal/src/getting-started/` `**/*.jsx`; `.js` dep files are not scanned by it |
-| dist 與 source 同步（only the dist-WITHOUT-source direction is caught mechanically） | `check_dist_source_consistency.py` (TRK-239) |
+| dist and source stay in sync (only the dist-WITHOUT-source direction is caught mechanically) | `check_dist_source_consistency.py` (TRK-239) |
 
 Loading order is simply the entry's ESM import graph: each tool has
 `tools/portal/entries/<tool>.entry.jsx` (listed in
