@@ -11,8 +11,8 @@ The lint exists specifically because of the v2.3.0 bug class:
 CUSTOM_FLOW_MAP key sync — was retired in the TRK-242 residue
 cleanup: TOOL_META left jsx-loader.html with renderJSX in TRK-230z.
 Live guards today: auto hook `tool-consistency-check`
-(lint_tool_consistency.py, registry key ⊆ loader, error-level) +
-manual hook `flow-e2e-check` (tests/shared/test_flows_e2e.py) +
+(lint_tool_consistency.py: registry key ⊆ loader + flow step → dist
+bundle, error-level; absorbed the retired manual `flow-e2e-check`) +
 sync_tool_registry.py as generator. Portal .jsx dup-param scanning
 was removed in the same cleanup — zero `window.__t(` call sites in
 tools/portal/src/ and tool-level findings were invisible warnings.)
@@ -310,8 +310,8 @@ class TestRunChecks:
         # (TRK-242 residue cleanup; TOOL_META left with renderJSX in
         # TRK-230z). Even a loader that still carries a mismatched
         # TOOL_META object must NOT produce meta-flow-sync issues —
-        # that guard now lives in tests/shared/test_flows_e2e.py.
-        # Other checks still run.
+        # that guard now lives in lint_tool_consistency.py
+        # (check_tool_meta, exact key-set match). Other checks still run.
         loader = tmp_path / "jsx-loader.html"
         loader.write_text(
             "var TOOL_META = {\n"
