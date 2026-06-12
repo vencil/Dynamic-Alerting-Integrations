@@ -104,4 +104,26 @@ test.describe('jsx-loader reflected-XSS guard', () => {
       await page.evaluate(() => (window as { __DA_LANG?: string }).__DA_LANG),
     ).toBe('en');
   });
+
+  test('poisoned localStorage lang pref self-heals on next load', async ({ page }) => {
+    // A pref poisoned BEFORE the ?lang= validation landed (or via any other
+    // writer) used to survive forever: __DA_LANG was normalized on every
+    // load, but the stored value was only rewritten when ?lang= was present.
+    // The loader now writes the normalized value back whenever the stored
+    // pref differs from it.
+    const attrPayload = '"><img src=x onerror="window.__xss_executed=1">';
+    await page.goto('../assets/jsx-loader.html');
+    await page.evaluate(
+      (p) => localStorage.setItem('__da_lang_pref', p),
+      attrPayload,
+    );
+    await page.goto('../assets/jsx-loader.html?flow=onboarding&step=0');
+    await expect(page.locator('.flow-stepper')).toBeVisible({ timeout: 15000 });
+    expect(
+      await page.evaluate(() => localStorage.getItem('__da_lang_pref')),
+    ).toBe('en');
+    expect(
+      await page.evaluate(() => (window as { __xss_executed?: number }).__xss_executed),
+    ).toBeUndefined();
+  });
 });

@@ -298,8 +298,11 @@ window.addEventListener('pageshow', function(e) {
   // Expose a helper components can import: window.__t(zhText, enText)
   window.__t = function(zh, en) { return window.__DA_LANG === 'zh' ? zh : en };
   // Store preference when explicitly set via URL param (normalized value
-  // only — never persist an unvalidated param into localStorage).
-  if (langParam) {
+  // only — never persist an unvalidated param into localStorage). Also
+  // self-heal a stored pref that differs from the normalized value — a
+  // pref poisoned before ?lang= validation landed would otherwise survive
+  // in localStorage indefinitely.
+  if (langParam || (storedLang && storedLang !== window.__DA_LANG)) {
     try { localStorage.setItem('__da_lang_pref', window.__DA_LANG); } catch(e) {}
   }
 
