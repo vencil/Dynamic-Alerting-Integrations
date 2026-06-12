@@ -91,14 +91,28 @@ def check_flows_json(verbose: bool) -> list[str]:
                 elif not obj and field == "title":
                     errors.append(f"{prefix}: missing 'title'")
 
-            # Component path exists
+            # Component resolves to a committed ESM dist bundle. TD-030z:
+            # jsx-loader derives `dist/<name>.js` from the component
+            # basename — the legacy `../interactive/tools/X.jsx` value is
+            # a name-carrier only (source moved to tools/portal/src/ in
+            # TRK-242, so filesystem-resolving the .jsx path is always
+            # wrong). Checking the dist bundle also catches the real
+            # runtime failure mode: flow step → bundle 404.
             component = step.get("component", "")
             if component:
-                resolved = (DOCS_ASSETS / component).resolve()
-                if not resolved.exists():
-                    errors.append(f"{prefix}: component not found: {component}")
+                # Mirror jsx-loader.html exactly: split('/').pop()
+                # .replace('.jsx', '') — JS String.replace with a string
+                # pattern replaces the FIRST occurrence only, hence
+                # count=1 here (not replace-all, not suffix-strip).
+                name = component.rsplit("/", 1)[-1].replace(".jsx", "", 1)
+                bundle = DOCS_ASSETS / "dist" / f"{name}.js"
+                if not bundle.exists():
+                    errors.append(
+                        f"{prefix}: dist bundle not found for component "
+                        f"{component} → dist/{name}.js"
+                    )
                 elif verbose:
-                    print(f"  OK  {prefix}: {component}")
+                    print(f"  OK  {prefix}: {component} → dist/{name}.js")
 
             # Condition structure validation
             cond = step.get("condition")
