@@ -42,3 +42,66 @@ test.describe('Portal ErrorBoundary', () => {
     await expect(errorEl).toContainText(/Failed to load ESM bundle/);
   });
 });
+
+test.describe('jsx-loader reflected-XSS guard', () => {
+  // Regression guard: ?component= / ?flow= used to flow unsanitized into
+  // showError's innerHTML — `?component=<img onerror=…>` executed script
+  // on the public GitHub Pages tool page. showError now renders messages
+  // via textContent and the component param is allowlist-validated; a
+  // markup payload must surface as inert banner text, never as elements.
+  const PAYLOAD = '<img src=x onerror="window.__xss_executed=1">';
+
+  test('markup in ?component= is rejected and rendered inert', async ({ page }) => {
+    await page.goto(
+      '../assets/jsx-loader.html?component=' + encodeURIComponent(PAYLOAD),
+    );
+
+    const errorEl = page.locator('#error');
+    await expect(errorEl).toBeVisible({ timeout: 15000 });
+    await expect(errorEl).toContainText('Invalid component name');
+    await expect(errorEl.locator('img')).toHaveCount(0);
+    expect(
+      await page.evaluate(() => (window as { __xss_executed?: number }).__xss_executed),
+    ).toBeUndefined();
+  });
+
+  test('markup in ?flow= is rendered inert in the unknown-flow banner', async ({ page }) => {
+    await page.goto(
+      '../assets/jsx-loader.html?flow=' + encodeURIComponent(PAYLOAD),
+    );
+
+    const errorEl = page.locator('#error');
+    await expect(errorEl).toBeVisible({ timeout: 15000 });
+    await expect(errorEl).toContainText('Unknown flow');
+    await expect(errorEl.locator('img')).toHaveCount(0);
+    expect(
+      await page.evaluate(() => (window as { __xss_executed?: number }).__xss_executed),
+    ).toBeUndefined();
+  });
+
+  test('attribute-breakout ?lang= on a valid flow cannot inject markup', async ({ page }) => {
+    // renderFlowUI builds stepper/nav href strings with `&lang=` + the raw
+    // value and assigns via innerHTML. A valid ?flow= reaches that path, so
+    // ?lang="><img onerror=…> used to break out of the href attribute even
+    // though the flow name itself was trusted. __DA_LANG is now normalized
+    // to 'zh'/'en', so the payload can never reach the markup.
+    const attrPayload = '"><img src=x onerror="window.__xss_executed=1">';
+    await page.goto(
+      '../assets/jsx-loader.html?flow=onboarding&step=0&lang=' +
+        encodeURIComponent(attrPayload),
+    );
+
+    // The flow stepper renders (valid flow); assert no injected <img> and no
+    // script execution anywhere in the document.
+    await expect(page.locator('.flow-stepper')).toBeVisible({ timeout: 15000 });
+    await expect(page.locator('img[onerror]')).toHaveCount(0);
+    expect(await page.evaluate(() => document.body.querySelectorAll('img').length)).toBe(0);
+    expect(
+      await page.evaluate(() => (window as { __xss_executed?: number }).__xss_executed),
+    ).toBeUndefined();
+    // Normalized to a safe language value.
+    expect(
+      await page.evaluate(() => (window as { __DA_LANG?: string }).__DA_LANG),
+    ).toBe('en');
+  });
+});

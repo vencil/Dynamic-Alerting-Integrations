@@ -110,7 +110,7 @@
     border: 1px solid #fecaca; border-radius: 12px; color: #991b1b;
   }
   #error .error-icon { font-size: 2rem; margin-bottom: 12px; }
-  #error .error-msg { font-size: 0.95rem; line-height: 1.5; }
+  #error .error-msg { font-size: 0.95rem; line-height: 1.5; white-space: pre-line; }
   #error .error-hint {
     margin-top: 12px; font-size: 0.82rem; color: #b91c1c;
     padding-top: 12px; border-top: 1px solid #fecaca;
@@ -288,12 +288,19 @@ window.addEventListener('pageshow', function(e) {
   var storedLang = null;
   try { storedLang = localStorage.getItem('__da_lang_pref'); } catch(e) {}
   var detectedLang = langParam || storedLang || (navigator.language && navigator.language.startsWith('zh') ? 'zh' : 'en');
-  window.__DA_LANG = detectedLang;
+  // Reflected-XSS hardening: __DA_LANG is concatenated into href/onclick
+  // strings that renderFlowUI assigns via innerHTML, so a raw ?lang= value
+  // (or a previously-poisoned localStorage entry) would break out of the
+  // attribute. Only 'zh' / 'en' are ever meaningful (every reader compares
+  // `=== 'zh'`), so collapse any other value to 'en' — behavior-preserving
+  // and closes both the reflected and the localStorage-persisted vectors.
+  window.__DA_LANG = (detectedLang === 'zh') ? 'zh' : 'en';
   // Expose a helper components can import: window.__t(zhText, enText)
   window.__t = function(zh, en) { return window.__DA_LANG === 'zh' ? zh : en };
-  // Store preference when explicitly set via URL param
+  // Store preference when explicitly set via URL param (normalized value
+  // only — never persist an unvalidated param into localStorage).
   if (langParam) {
-    try { localStorage.setItem('__da_lang_pref', langParam); } catch(e) {}
+    try { localStorage.setItem('__da_lang_pref', window.__DA_LANG); } catch(e) {}
   }
 
   // Flow state: shared data between steps (persists via sessionStorage)
@@ -518,6 +525,14 @@ window.addEventListener('pageshow', function(e) {
   }
   // ── Single component mode (existing) ──
   else if (componentPath) {
+    // Reflected-XSS hardening: the param flows into the dist URL and into
+    // showError text; restrict to path-safe characters so no markup or
+    // attribute syntax can ride along (defense-in-depth — showError also
+    // renders via textContent).
+    if (!/^[A-Za-z0-9_./-]+$/.test(componentPath)) {
+      showError('Invalid component name. Use ?component=playground.jsx or ?flow=onboarding');
+      return;
+    }
     // Resolve bare key (e.g. "cicd-setup-wizard") to full path via CUSTOM_FLOW_MAP
     if (componentPath.indexOf('/') === -1 && !componentPath.endsWith('.jsx')) {
       var resolved = CUSTOM_FLOW_MAP[componentPath];
@@ -637,10 +652,27 @@ window.addEventListener('pageshow', function(e) {
     document.getElementById('loading').style.display = 'none';
     var el = document.getElementById('error');
     el.style.display = 'block';
-    el.innerHTML = '<div class="error-icon">⚠</div>' +
-      '<div class="error-msg">' + msg + '</div>' +
-      '<div class="error-hint">Check the browser console for details, or ' +
-      '<a href="../interactive/index.html" style="color:#2563eb">return to tools</a>.</div>';
+    // msg can carry URL-derived strings (?component= / ?flow=) — render it
+    // as inert text, never markup. The hint's fixed link is built as DOM.
+    el.textContent = '';
+    var icon = document.createElement('div');
+    icon.className = 'error-icon';
+    icon.textContent = '⚠';
+    var msgEl = document.createElement('div');
+    msgEl.className = 'error-msg';
+    msgEl.textContent = msg;
+    var hint = document.createElement('div');
+    hint.className = 'error-hint';
+    hint.appendChild(document.createTextNode('Check the browser console for details, or '));
+    var backLink = document.createElement('a');
+    backLink.href = '../interactive/index.html';
+    backLink.style.color = '#2563eb';
+    backLink.textContent = 'return to tools';
+    hint.appendChild(backLink);
+    hint.appendChild(document.createTextNode('.'));
+    el.appendChild(icon);
+    el.appendChild(msgEl);
+    el.appendChild(hint);
   }
 
   /**
@@ -673,7 +705,7 @@ window.addEventListener('pageshow', function(e) {
       var root = document.getElementById('root');
       if (evalError !== null && root && !root.hasChildNodes()) {
         var detail = (evalError && evalError.message) ? evalError.message : String(evalError);
-        showError('Failed to load ESM bundle: ' + distUrl + '<br>' + detail);
+        showError('Failed to load ESM bundle: ' + distUrl + '\n' + detail);
         return;
       }
       var loading = document.getElementById('loading');
