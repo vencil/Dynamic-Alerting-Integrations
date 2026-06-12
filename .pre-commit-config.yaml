@@ -90,6 +90,23 @@ repos:
         types: [text]
         files: \.(md|yaml|yml|py|jsx|json)$
 
+      # --- Session-guard liveness (#824) ---
+      # The two PreToolUse session-guards died silently for 7 weeks: bare
+      # `python` in settings.json resolved to the MS-Store stub on Windows
+      # hosts (exit 49), and hook failures are non-blocking by protocol.
+      # This gate makes "guard dead" loud at commit time: guard commands
+      # must route through run-hooks.sh, referenced scripts must exist, and
+      # a FUNCTIONAL interpreter probe must pass (existence probes are
+      # fooled by the Store stub). Heartbeat freshness is warn-only.
+      # language: python → pre-commit-managed venv, itself immune to the
+      # interpreter-stub failure class it is checking for.
+      - id: session-guard-liveness-check
+        name: "Session-guard liveness: launcher routing + interpreter probe (#824)"
+        entry: python3 -X utf8 scripts/tools/lint/check_session_guard_liveness.py --ci
+        language: python
+        pass_filenames: false
+        always_run: true
+
       # --- L1 secret-scan (#445 AC i) ---
       # trufflehog filesystem mode on staged text files only. Runs offline
       # (--no-verification); the L2 server-side workflow (secret-scan.yml,

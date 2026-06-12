@@ -195,7 +195,28 @@ required_labels:
 
 max_range_duration: 1h     # Prohibit excessively long range vectors (e.g., [7d])
 max_evaluation_interval: 60s  # Custom Rule Group interval cap
+
+# Per-file exemptions for platform-COMPILED packs (v2.10.0) — the deny-list
+# governs tenant hand-written raw PromQL; compiler-emitted packs (e.g. the
+# Custom Alerts forecast recipe's predict_linear, whose cost mitigations are
+# baked in at compile time) get an audited exemption via file_overrides
+file_overrides:
+  - path: rule-packs/rule-pack-custom-alerts.yaml
+    require_generated_marker: true   # header must carry the GENERATED marker, else fully linted
+    policy:
+      denied_functions: [holt_winters, quantile_over_time]  # predict_linear exempted
+      max_range_duration: 96h        # forecast lookback = max(2·horizon, 1h), horizon ≤ 48h
 ```
+
+> **An exemption is not a skip (four guard rails)**: (1) `path` is anchored at
+> the top of the scanned tree (exact path, not a suffix), so a nested
+> `rule-packs/*/rule-packs/<file>` gets no exemption; (2) the GENERATED header
+> is required, else ERROR + full lint; (3) only `denied_functions` /
+> `max_range_duration` may be relaxed (whitelist) — any other key (e.g.
+> emptying `required_labels`) is ignored and flagged as ERROR; (4) every
+> non-overridden check still runs. CI separately guards against a hand-written
+> file posing as a compiled pack via the `compile_custom_alerts.py --check`
+> drift gate.
 
 ### 4.2 Linting Tool
 
