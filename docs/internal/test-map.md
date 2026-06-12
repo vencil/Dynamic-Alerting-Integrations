@@ -196,7 +196,7 @@ if !waitFor(t, 2*time.Second, func() bool {
 | `ops/test_parse_platform_config.py` | _parse_platform_config 解析器單元測試 | 35 | v2.1.0 refactor 驗證 |
 | `lint/test_check_doc_freshness.py` | check_doc_freshness.py 文件新鮮度檢查 | 32 | v2.1.0 |
 | `lint/test_check_structure.py` | check_structure.py 目錄結構驗證 | 18 | v2.1.0 |
-| `lint/test_lint_tool_consistency.py` | lint_tool_consistency.py 工具一致性驗證 | 52 | v2.1.0 |
+| `lint/test_lint_tool_consistency.py` | lint_tool_consistency.py 工具一致性驗證 | 73 | v2.1.0 |
 | `lint/test_check_bilingual_annotations.py` | check_bilingual_annotations.py 雙語標註驗證 | 19 | v2.1.0 |
 | `lint/test_check_includes_sync.py` | check_includes_sync.py 中英 include 同步 | 23 | v2.1.0 |
 | `lint/test_check_doc_links.py` | check_doc_links.py 文件交叉引用一致性 | 32 | v2.1.0 |

@@ -1,8 +1,10 @@
 """Tests for lint_tool_consistency.py — interactive tool registry consistency.
 
 Merged from previous _extended split (PR test-refactor sweep). Each existing
-class has unique edge cases appended after its base methods; the
-TestCheckRelatedSymmetry class is new from the merge. Dropped from _extended:
+class has unique edge cases appended after its base methods.
+TestCheckRelatedSymmetry was dropped along with check_related_symmetry
+itself (loop body was `pass` — no-op dead code, both tests assertion-free).
+Dropped from _extended:
 test methods that were duplicates of base (test_card_found / test_card_missing /
 test_audience_mismatch / test_key_present / test_key_missing / test_valid_related /
 test_missing_jsx_file / test_unknown_related_key / test_link_found / test_link_missing /
@@ -602,6 +604,62 @@ class TestCheckFlowComponents:
         ltc.check_flow_components([{"key": "wizard"}], errors, warnings)
         assert any("required_state must be an array" in e for e in errors)
 
+    def test_flow_not_object_is_error_not_crash(self, patch_repo_root):
+        # Grammar guard: a flow that is a bare string must come back as a
+        # structured error, not an AttributeError traceback.
+        tmp_path = patch_repo_root(ltc, "PROJECT_ROOT")
+        assets = tmp_path / "docs" / "assets"
+        assets.mkdir(parents=True)
+        (assets / "flows.json").write_text(
+            json.dumps({"flows": {"onboard": "not-an-object"}}),
+            encoding="utf-8",
+        )
+        errors, warnings = [], []
+        ltc.check_flow_components([], errors, warnings)
+        assert any("must be an object" in e for e in errors)
+
+    def test_steps_not_list_is_error_not_crash(self, patch_repo_root):
+        # steps-as-dict used to crash with AttributeError ('str'.get) when
+        # enumerate() yielded the dict KEYS.
+        tmp_path = patch_repo_root(ltc, "PROJECT_ROOT")
+        self._write_flows(tmp_path, {**FLOW_META, "steps": {
+            "step1": {"tool": "wizard"}
+        }})
+        errors, warnings = [], []
+        ltc.check_flow_components([{"key": "wizard"}], errors, warnings)
+        assert any("'steps' must be an array" in e for e in errors)
+
+    def test_step_not_object_is_error_not_crash(self, patch_repo_root):
+        tmp_path = patch_repo_root(ltc, "PROJECT_ROOT")
+        self._write_flows(tmp_path, {**FLOW_META, "steps": ["just-a-string"]})
+        errors, warnings = [], []
+        ltc.check_flow_components([], errors, warnings)
+        assert any("step 0: must be an object" in e for e in errors)
+
+    def test_step_title_plain_string_skips_bilingual(self, patch_repo_root):
+        # Pin: a plain-string title is legal legacy shape — bilingual
+        # checks only apply to dict titles (same semantics as the retired
+        # flow-e2e-check script).
+        tmp_path = patch_repo_root(ltc, "PROJECT_ROOT")
+        self._write_flows(tmp_path, {**FLOW_META, "steps": [
+            {"tool": "wizard", "title": "Plain Step",
+             "hint": {"en": "Do", "zh": "做"}}
+        ]})
+        errors, warnings = [], []
+        ltc.check_flow_components([{"key": "wizard"}], errors, warnings)
+        assert not any("title." in e for e in errors)
+
+    def test_validation_warn_not_object_is_error(self, patch_repo_root):
+        tmp_path = patch_repo_root(ltc, "PROJECT_ROOT")
+        self._write_flows(tmp_path, {**FLOW_META, "steps": [
+            {"tool": "wizard",
+             "validation": {"required_state": ["role"],
+                            "warn": "go back"}}
+        ]})
+        errors, warnings = [], []
+        ltc.check_flow_components([{"key": "wizard"}], errors, warnings)
+        assert any("validation.warn must be an object" in e for e in errors)
+
     def test_validation_warn_lang_hole_is_error(self, patch_repo_root):
         tmp_path = patch_repo_root(ltc, "PROJECT_ROOT")
         self._write_flows(tmp_path, {**FLOW_META, "steps": [
@@ -636,35 +694,19 @@ class TestCheckFlowComponents:
 
 
 # ---------------------------------------------------------------------------
-# check_related_symmetry — new from _extended (no base class)
-# ---------------------------------------------------------------------------
-class TestCheckRelatedSymmetry:
-    """check_related_symmetry() tests."""
-
-    def test_symmetric(self):
-        tools = [
-            {"key": "a", "related": ["b"]},
-            {"key": "b", "related": ["a"]},
-        ]
-        warnings = []
-        ltc.check_related_symmetry(tools, warnings)
-        # Should pass without issues
-
-    def test_asymmetric(self):
-        tools = [
-            {"key": "a", "related": ["b"]},
-            {"key": "b", "related": []},
-        ]
-        warnings = []
-        ltc.check_related_symmetry(tools, warnings)
-        # Asymmetric is OK (informational only)
-
-
-# ---------------------------------------------------------------------------
 # check_hub_flow_section (ported from the retired flow-e2e-check script —
-# the Hub side's only gate; the loader side is covered functionally by
-# Playwright loading ?flow=onboarding)
+# the Hub side's only gate)
 # ---------------------------------------------------------------------------
+HUB_MARKERS = [
+    "flow-cards",
+    "flow-analytics",
+    "custom-flow-builder",
+    "__da_flow_progress_",
+    "__da_flow_completed_",
+    "flows.json",
+]
+
+
 class TestCheckHubFlowSection:
     HUB = (
         '<div id="flow-cards"></div>'
@@ -680,10 +722,53 @@ class TestCheckHubFlowSection:
         ltc.check_hub_flow_section(self.HUB, errors)
         assert errors == []
 
-    def test_missing_marker_is_error(self):
+    @pytest.mark.parametrize("marker", HUB_MARKERS)
+    def test_each_missing_marker_is_error(self, marker):
         errors = []
         ltc.check_hub_flow_section(
-            self.HUB.replace("flow-analytics", "renamed-away"), errors
+            self.HUB.replace(marker, "renamed-away"), errors
         )
         assert len(errors) == 1
-        assert "flow-analytics" in errors[0]
+        assert marker in errors[0]
+
+
+# ---------------------------------------------------------------------------
+# check_loader_flow_infrastructure (ported from the retired flow-e2e-check
+# script — persistence / gate / custom-flow markers have no E2E coverage;
+# the render/load path additionally has Playwright ?flow=onboarding)
+# ---------------------------------------------------------------------------
+LOADER_MARKERS = [
+    "__FLOW_STATE",
+    "__flowSave",
+    "__da_flow_progress_",
+    "__da_flow_completed_",
+    "filterSteps",
+    "checkValidation",
+    "__checkFlowGate",
+    "buildCustomFlow",
+    "renderFlowUI",
+    "flow-stepper",
+    "flow-nav",
+    "flow-hint",
+]
+
+
+class TestCheckLoaderFlowInfrastructure:
+    LOADER = " ".join(LOADER_MARKERS)
+
+    def test_all_markers_present(self):
+        errors = []
+        ltc.check_loader_flow_infrastructure(self.LOADER, errors)
+        assert errors == []
+
+    @pytest.mark.parametrize("marker", LOADER_MARKERS)
+    def test_each_missing_marker_is_error(self, marker):
+        # NB: plain str.replace of the marker alone is not enough —
+        # "checkValidation" contains no other marker, but "flow-stepper"
+        # etc. are disjoint tokens, so removing the token removes exactly
+        # one marker.
+        errors = []
+        ltc.check_loader_flow_infrastructure(
+            self.LOADER.replace(marker, "renamed-away"), errors
+        )
+        assert any(marker in e for e in errors)
