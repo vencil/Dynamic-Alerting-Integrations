@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "py \"$CLAUDE_PROJECT_DIR/scripts/session-guards/session-init.py\""
+            "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/session-guards/run-hooks.sh\" session-init.py"
           }
         ]
       },
@@ -15,7 +15,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python \"$CLAUDE_PROJECT_DIR/scripts/session-guards/preflight_bash.py\""
+            "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/session-guards/run-hooks.sh\" preflight_bash.py"
           }
         ]
       }
