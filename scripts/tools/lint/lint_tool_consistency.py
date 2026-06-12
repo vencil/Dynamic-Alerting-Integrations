@@ -9,7 +9,7 @@
   3. JSX frontmatter — related 引用的 key 都存在於 registry
   4. Markdown appears_in — 列出的 .md 檔案確實包含該工具連結
   5. flows.json 結構 — flow/step 雙語欄位（en/zh）、condition/validation
-     形狀（loader 的 filterSteps/checkValidation 對畸形輸入寬容跳過，
+     形狀（loader 的 filterSteps/__checkFlowGate 對畸形輸入寬容跳過，
      缺洞 ship 出去是空白 UI 而非可見錯誤）
   6. Hub index.html guided-flow section + jsx-loader flow infrastructure —
      flow cards / analytics / builder / 進度 key / loader 流程函式與
@@ -487,9 +487,11 @@ def check_flow_components(tools: list, errors: list, warnings: list):
                                 f"{field}.{lang} missing"
                             )
 
-            # condition / validation shapes — filterSteps and
-            # checkValidation in jsx-loader.html consume these leniently,
-            # so a malformed shape silently disables the gate/filter.
+            # condition / validation shapes — filterSteps and the
+            # __checkFlowGate Next-button gate in jsx-loader.html consume
+            # these leniently, so a malformed shape silently disables the
+            # gate/filter. (checkValidation also parses validation but is
+            # a dead inline duplicate — zero call sites.)
             cond = step.get("condition")
             if cond is not None:
                 if not isinstance(cond, dict):
