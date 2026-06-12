@@ -31,6 +31,14 @@ On any `.jsx` / `.js` file under `docs/interactive/` and
 2. **`const X = globalThis.__Y;`** — same shape, globalThis variant.
 3. **`const { useState, ... } = React;`** — destructure of bare `React`
    identifier (relies on the retired `define`).
+4. **`const { a, b } = window.__Y;`** — destructure (incl. multi-line)
+   of a `__`-prefixed window global. This form crashed the whole
+   self-service-portal bundle at load time: the three Tab modules
+   destructured `window.__portalShared` at module scope but nothing in
+   the bundle graph imported the producer module, so the read threw
+   TypeError on `undefined` during module evaluation. The original
+   single-identifier regex missed it.
+   (Flat destructures only — nested `{ a: { b } }` is not matched.)
 
 Allowed (deliberately NOT flagged):
 - `const t = window.__t || ((zh, en) => en);` — fallback form gives
@@ -88,6 +96,16 @@ RE_REACT_DESTRUCTURE = re.compile(
     re.MULTILINE,
 )
 
+# Pattern C: `const { a, b } = window.__Y;` at column 0, including the
+# multi-line form (`[^}]` matches newlines inside the braces). No
+# trailing `|| fallback` — the `;` must directly follow the global, so
+# the deterministic fallback form stays allowed. Flat destructures
+# only; nested `{ a: { b } }` is out of scope (never seen in repo).
+RE_GLOBAL_DESTRUCTURE = re.compile(
+    r"^const\s*\{[^}]*\}\s*=\s*(?:window|globalThis)\.__\w+\s*;",
+    re.MULTILINE,
+)
+
 # Per-line escape — checked across the line itself + 3 lines above
 # (same pattern as check_jsx_loader_compat.py).
 ESCAPE_MARKER = "<!-- window-x-no-fallback: ignore -->"
@@ -131,6 +149,12 @@ def find_violations(text: str, path: Path) -> List[Tuple[int, str, str]]:
         if has_escape(line_no):
             continue
         violations.append((line_no + 1, "react-destructure", lines[line_no].strip()))
+
+    for m in RE_GLOBAL_DESTRUCTURE.finditer(body):
+        line_no = body[: m.start()].count("\n")
+        if has_escape(line_no):
+            continue
+        violations.append((line_no + 1, "global-destructure", lines[line_no].strip()))
 
     return violations
 
@@ -193,7 +217,7 @@ def main() -> int:
         return EXIT_OK
 
     # Group by kind for a tidy report.
-    by_kind = {"global-read": [], "react-destructure": []}
+    by_kind = {"global-read": [], "react-destructure": [], "global-destructure": []}
     for path, line_no, kind, snippet in findings:
         by_kind[kind].append((path, line_no, snippet))
 
@@ -208,11 +232,17 @@ def main() -> int:
         print(f"  React destructure (use `import {{ useState }} from 'react'`) ({len(by_kind['react-destructure'])}):")
         for path, line_no, snippet in by_kind["react-destructure"]:
             print(f"    {path}:{line_no}: {snippet}")
+    if by_kind["global-destructure"]:
+        print()
+        print(f"  Module-scope destructure of a window global ({len(by_kind['global-destructure'])}):")
+        for path, line_no, snippet in by_kind["global-destructure"]:
+            print(f"    {path}:{line_no}: {snippet}")
 
     print()
     print("Fix: replace each line with an ESM import. Examples:")
-    print("    const X = window.__X;        → import { X } from './_common/.../X.js';")
-    print("    const { useState } = React;  → import { useState } from 'react';")
+    print("    const X = window.__X;             → import { X } from './_common/.../X.js';")
+    print("    const { a, b } = window.__X;      → import { a, b } from './_common/.../X.js';")
+    print("    const { useState } = React;       → import { useState } from 'react';")
     print()
     print("Allowed: `const t = window.__t || ((zh, en) => en);` — fallback form is fine.")
     print("Per-line escape (rare, illustrative-only): place `<!-- window-x-no-fallback: ignore -->` within 3 lines above.")

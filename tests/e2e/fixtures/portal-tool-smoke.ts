@@ -19,6 +19,15 @@
 import { Page, expect } from '@playwright/test';
 import { checkA11y, waitForPageReady, formatA11yViolations } from './axe-helper';
 
+/**
+ * Uncaught exceptions collected per page since loadPortalTool().
+ * ESM module-evaluation throws fire neither `script.onerror` nor any
+ * ErrorBoundary — the loader's onload still runs, hides the spinner,
+ * and leaves #root blank. Before this collector, such a tool passed
+ * every smoke check while being completely broken in prod.
+ */
+const pageErrors = new WeakMap<Page, Error[]>();
+
 export interface ToolSmokeOptions {
   /** Regex the page title should match after the tool loads. */
   expectedTitleMatch?: RegExp;
@@ -40,6 +49,15 @@ export interface ToolSmokeOptions {
  * @param toolKey  Tool registry key (e.g. "wizard", "deployment-wizard")
  */
 export async function loadPortalTool(page: Page, toolKey: string): Promise<void> {
+  let errors = pageErrors.get(page);
+  if (!errors) {
+    errors = [];
+    pageErrors.set(page, errors);
+    page.on('pageerror', (err) => errors!.push(err));
+  }
+  // Reset per load so a second loadPortalTool() on the same page only
+  // reports errors from its own navigation.
+  errors.length = 0;
   await page.goto(`../assets/jsx-loader.html?component=${toolKey}`);
   // jsx-loader sets document.title once the component mounts. Wait for that
   // signal with a fallback to networkidle so we don't hang on slow CI.
@@ -54,9 +72,11 @@ export async function loadPortalTool(page: Page, toolKey: string): Promise<void>
 
 /**
  * Run the standard smoke-level assertion bundle against a loaded tool:
- *   1. Title matches expected regex (if provided)
- *   2. No "Failed to load" / "404" text anywhere on page
- *   3. axe-core WCAG 2.1 AA scan — 0 Critical violations
+ *   1. No uncaught page errors since loadPortalTool() (module-eval throws)
+ *   2. #root contains rendered content (blank #root = bundle never mounted)
+ *   3. Title matches expected regex (if provided)
+ *   4. No "Failed to load" / "404" text anywhere on page
+ *   5. axe-core WCAG 2.1 AA scan — 0 Critical violations
  */
 export async function runToolSmokeChecks(
   page: Page,
@@ -70,6 +90,29 @@ export async function runToolSmokeChecks(
   } = options;
 
   await waitForPageReady(page);
+
+  // Uncaught exceptions — catches module-evaluation throws that render
+  // nothing (no error banner, no ErrorBoundary fallback, blank #root).
+  // Third-party CDN scripts (lucide-react / tailwind off unpkg+cdnjs)
+  // have a known document.write ordering race that throws before React
+  // is defined; tools tolerate it via icon fallbacks, so only errors
+  // with at least one same-origin stack frame (our dist bundles / the
+  // loader page) fail the smoke gate.
+  const uncaught = (pageErrors.get(page) ?? []).filter((e) => {
+    const urls = (e.stack ?? '').match(/https?:\/\/[^\s):]+/g) ?? [];
+    return urls.length === 0 || urls.some((u) => u.includes('localhost') || u.includes('127.0.0.1'));
+  });
+  expect(
+    uncaught.map((e) => e.message),
+    'no uncaught page errors during tool load'
+  ).toEqual([]);
+
+  // A mounted tool (or its ErrorBoundary fallback) always renders into
+  // #root; an empty #root means the bundle never mounted.
+  await expect(
+    page.locator('#root > *').first(),
+    '#root should contain rendered content (empty #root = bundle never mounted)'
+  ).toBeAttached();
 
   if (expectedTitleMatch) {
     const title = await page.title();

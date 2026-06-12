@@ -149,13 +149,12 @@ Kill Pod → 驗證：1) PDB 保護 1 Pod Running；2) Alert 持續不中斷；3
 
 ## JSX Dependency Loading & Portal Modularization
 
-Portal 中的三個核心模組（portal-shared、tabs 三層）由 `jsx-loader.html` 透過 **`dependencies` frontmatter** 控制載入順序：
+TD-030z 之後 portal 工具一律以 esbuild ESM dist-bundle 載入（`docs/assets/dist/<name>.js`）；frontmatter `dependencies:` 僅為文件性註記，build 時被 strip，**不參與載入**。模組間依賴一律走 ESM import（dev-rules §S6）：`self-service-portal.jsx` import 三個 tab，tabs import `_common/` 模組（用到共享 UI 元件 MetricAutocomplete / RulePackSelector 的 tab 另 import `portal-shared.jsx`）。
 
-- **Sequential Order**: `portal-shared.jsx` (共享元件) → `{tab1,tab2,tab3}.jsx` (三個頁籤)
-- **Frontmatter 格式**: 各檔案開頭宣告 `dependencies: [portal-shared]`；portal-shared 無依賴
-- **測試陷阱**: 修改 portal-shared 會連動影響三個 tabs，需完整迴歸測試；單獨改某 tab 風險較低
+- **測試陷阱**: 修改 `_common/` 或 portal-shared 會連動影響三個 tabs，需完整迴歸測試；單獨改某 tab 風險較低
+- **module-eval throw 偵測**: ESM bundle 評估期 throw 不觸發 `script.onerror`（只 fire window `error` 事件，`onload` 照常）→ jsx-loader 對此顯示 error banner；e2e smoke（`portal-tool-smoke.ts`）斷言無 same-origin pageerror + `#root` 非空。此防線建立前，這類失敗完全靜默：CI 綠、prod 空白頁（self-service-portal 曾因 tab 在 module scope destructure 一個從未被 import 的 `window.__portalShared` 而整包載入即 throw，smoke 三項檢查全過）
 
-修改任何 portal 檔案後，在 `docs/interactive/tools/` 驗證載入順序無誤，並確認 jsx-loader 的 CUSTOM_FLOW_MAP 已同步新增工具。
+修改任何 portal 檔案後 `make portal-build` 重建 dist（canonical env：dev container；Windows host build 與 CI Linux byte-compare 不合），並確認 jsx-loader 的 CUSTOM_FLOW_MAP 已同步新增工具。
 
 ## CI Matrix × Snapshot Testing（Phase .d）
 

@@ -42,6 +42,15 @@ from pathlib import Path
 _THIS = Path(__file__).resolve()
 _REPO_ROOT = _THIS.parents[2]  # scripts/session-guards/preflight_bash.py → repo
 
+# UTF-8 stdout/stderr guard (#824) — 本檔訊息目前全 ASCII，但與同目錄其他
+# guard 一致套用，避免未來訊息加非 ASCII 字元時重演 cp950 靜默失效。
+sys.path.insert(0, str(_THIS.parents[1] / "tools"))
+try:
+    from _lib_compat import try_utf8_stdout
+except Exception:  # pragma: no cover — standalone fallback, never block
+    def try_utf8_stdout() -> None:  # type: ignore
+        return None
+
 # ---------------------------------------------------------------------------
 # Patterns
 # ---------------------------------------------------------------------------
@@ -166,6 +175,7 @@ def _check_write(file_path: str) -> tuple[int, str]:
 # ---------------------------------------------------------------------------
 
 def main() -> int:
+    try_utf8_stdout()
     # Read JSON payload from stdin per Claude Code PreToolUse hook contract.
     raw = sys.stdin.read()
     if not raw.strip():
