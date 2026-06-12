@@ -144,23 +144,117 @@ class TestCheckHubCards:
 
 
 # ---------------------------------------------------------------------------
-# check_tool_meta
+# parse_flow_map
+# ---------------------------------------------------------------------------
+class TestParseFlowMap:
+    def test_multiline_block(self):
+        loader = textwrap.dedent("""\
+            var CUSTOM_FLOW_MAP = {
+              'wizard': '../getting-started/wizard.jsx',
+              'playground': '../interactive/tools/playground.jsx'
+            };
+        """)
+        fm = ltc.parse_flow_map(loader)
+        assert fm == {
+            "wizard": "../getting-started/wizard.jsx",
+            "playground": "../interactive/tools/playground.jsx",
+        }
+
+    def test_inline_block(self):
+        loader = "const CUSTOM_FLOW_MAP = { 'a': '../x/a.jsx' };"
+        assert ltc.parse_flow_map(loader) == {"a": "../x/a.jsx"}
+
+    def test_block_missing_returns_none(self):
+        assert ltc.parse_flow_map("<html>no map here</html>") is None
+
+    def test_pairs_outside_block_ignored(self):
+        # The 'outside' pair sits at line start inside a LATER multi-line
+        # object — only the brace-depth stop keeps it out (a line-anchored
+        # regex alone would still collect it).
+        loader = textwrap.dedent("""\
+            var CUSTOM_FLOW_MAP = {
+              'inside': '../x/inside.jsx'
+            };
+            var OTHER = {
+              'outside': '../x/outside.jsx'
+            };
+        """)
+        assert ltc.parse_flow_map(loader) == {"inside": "../x/inside.jsx"}
+
+
+# ---------------------------------------------------------------------------
+# check_tool_meta (CUSTOM_FLOW_MAP membership; TOOL_META removed in TRK-230z)
 # ---------------------------------------------------------------------------
 class TestCheckToolMeta:
     def test_key_present(self):
         tools = [{"key": "my-tool"}]
-        loader = "const TOOL_META = { 'my-tool': { title: 'My Tool' } };"
+        loader = "var CUSTOM_FLOW_MAP = { 'my-tool': '../interactive/tools/my-tool.jsx' };"
         errors, warnings = [], []
         ltc.check_tool_meta(tools, loader, errors, warnings)
         assert len(errors) == 0
 
     def test_key_missing(self):
         tools = [{"key": "missing-tool"}]
-        loader = "const TOOL_META = { 'other-tool': { title: 'Other' } };"
+        loader = "var CUSTOM_FLOW_MAP = { 'other-tool': '../interactive/tools/other-tool.jsx' };"
         errors, warnings = [], []
         ltc.check_tool_meta(tools, loader, errors, warnings)
         assert len(errors) == 1
         assert "missing-tool" in errors[0]
+
+    def test_substring_elsewhere_does_not_pass(self):
+        # Regression: the old probe was `'{key}' in loader_html` — any quoted
+        # occurrence anywhere in the HTML passed, even outside the map.
+        tools = [{"key": "my-tool"}]
+        loader = (
+            "var CUSTOM_FLOW_MAP = { 'other-tool': '../x/other-tool.jsx' };\n"
+            "console.log('my-tool');"
+        )
+        errors, warnings = [], []
+        ltc.check_tool_meta(tools, loader, errors, warnings)
+        assert len(errors) == 1
+        assert "my-tool" in errors[0]
+
+    def test_map_block_absent_fails_loud(self):
+        tools = [{"key": "my-tool"}]
+        errors, warnings = [], []
+        ltc.check_tool_meta(tools, "<html>no map</html>", errors, warnings)
+        assert len(errors) == 1
+        assert "CUSTOM_FLOW_MAP block not found" in errors[0]
+
+
+# ---------------------------------------------------------------------------
+# check_flow_map_dist
+# ---------------------------------------------------------------------------
+class TestCheckFlowMapDist:
+    LOADER = textwrap.dedent("""\
+        var CUSTOM_FLOW_MAP = {
+          'my-tool': '../interactive/tools/my-tool.jsx'
+        };
+    """)
+
+    def test_dist_present(self, patch_repo_root):
+        tmp_path = patch_repo_root(ltc, "PROJECT_ROOT")
+        dist = tmp_path / "docs" / "assets" / "dist"
+        dist.mkdir(parents=True)
+        (dist / "my-tool.js").write_text("export {};", encoding="utf-8")
+        errors, warnings = [], []
+        ltc.check_flow_map_dist(self.LOADER, errors, warnings)
+        assert len(errors) == 0
+
+    def test_dist_missing_is_error(self, patch_repo_root):
+        patch_repo_root(ltc, "PROJECT_ROOT")
+        errors, warnings = [], []
+        ltc.check_flow_map_dist(self.LOADER, errors, warnings)
+        assert len(errors) == 1
+        assert "my-tool.js" in errors[0]
+        assert "404" in errors[0]
+
+    def test_no_map_is_silent(self, patch_repo_root):
+        # Absence of the block is check_tool_meta's finding, not a dup here.
+        patch_repo_root(ltc, "PROJECT_ROOT")
+        errors, warnings = [], []
+        ltc.check_flow_map_dist("<html>no map</html>", errors, warnings)
+        assert errors == [] and warnings == []
 
 
 # ---------------------------------------------------------------------------
@@ -287,6 +381,15 @@ class TestCheckAppearsIn:
 # ---------------------------------------------------------------------------
 # check_flow_components
 # ---------------------------------------------------------------------------
+# Valid flow-level bilingual metadata, reused across fixtures — flow title /
+# desc became required (en+zh) when the flow-e2e-check smoke script retired
+# into this lint.
+FLOW_META = {
+    "title": {"en": "Onboarding", "zh": "新手上路"},
+    "desc": {"en": "Get started", "zh": "快速開始"},
+}
+
+
 class TestCheckFlowComponents:
     def test_valid_flow(self, patch_repo_root):
         tmp_path = patch_repo_root(ltc, "PROJECT_ROOT")
@@ -298,9 +401,12 @@ class TestCheckFlowComponents:
         portal_src = tmp_path / "tools" / "portal" / "src"
         portal_src.mkdir(parents=True)
         (portal_src / "step.jsx").write_text("content")
+        dist = assets / "dist"
+        dist.mkdir()
+        (dist / "step.js").write_text("export {};", encoding="utf-8")
         import json
         (assets / "flows.json").write_text(json.dumps({
-            "flows": {"onboard": {"steps": [
+            "flows": {"onboard": {**FLOW_META, "steps": [
                 {"tool": "wizard", "component": "step.jsx",
                  "title": "Step 1", "hint": "Do this"}
             ]}}
@@ -309,6 +415,28 @@ class TestCheckFlowComponents:
         errors, warnings = [], []
         ltc.check_flow_components(tools, errors, warnings)
         assert len(errors) == 0
+
+    def test_step_component_without_dist_bundle(self, patch_repo_root):
+        # Source JSX exists but was never built — runtime loadDistBundle
+        # would 404 on docs/assets/dist/step.js.
+        tmp_path = patch_repo_root(ltc, "PROJECT_ROOT")
+        assets = tmp_path / "docs" / "assets"
+        assets.mkdir(parents=True)
+        portal_src = tmp_path / "tools" / "portal" / "src"
+        portal_src.mkdir(parents=True)
+        (portal_src / "step.jsx").write_text("content")
+        (assets / "flows.json").write_text(json.dumps({
+            "flows": {"onboard": {**FLOW_META, "steps": [
+                {"tool": "wizard", "component": "step.jsx",
+                 "title": "Step 1", "hint": "Do this"}
+            ]}}
+        }), encoding="utf-8")
+        tools = [{"key": "wizard"}]
+        errors, warnings = [], []
+        ltc.check_flow_components(tools, errors, warnings)
+        assert len(errors) == 1
+        assert "no dist bundle" in errors[0]
+        assert "step.js" in errors[0]
 
     def test_unknown_tool_in_flow(self, patch_repo_root):
         tmp_path = patch_repo_root(ltc, "PROJECT_ROOT")
@@ -387,6 +515,125 @@ class TestCheckFlowComponents:
         assert len(errors) == 1
         assert "parse" in errors[0].lower()
 
+    # ── structural checks ported from the retired flow-e2e-check script ──
+
+    @staticmethod
+    def _write_flows(tmp_path, flow):
+        assets = tmp_path / "docs" / "assets"
+        assets.mkdir(parents=True, exist_ok=True)
+        (assets / "flows.json").write_text(
+            json.dumps({"flows": {"onboard": flow}}), encoding="utf-8"
+        )
+
+    def test_flow_level_title_lang_hole_is_error(self, patch_repo_root):
+        tmp_path = patch_repo_root(ltc, "PROJECT_ROOT")
+        self._write_flows(tmp_path, {
+            "title": {"en": "Onboarding"},  # zh missing
+            "desc": FLOW_META["desc"],
+            "steps": [{"tool": "wizard"}],
+        })
+        errors, warnings = [], []
+        ltc.check_flow_components([{"key": "wizard"}], errors, warnings)
+        assert any("title.zh missing" in e for e in errors)
+
+    def test_flow_level_missing_desc_is_error(self, patch_repo_root):
+        tmp_path = patch_repo_root(ltc, "PROJECT_ROOT")
+        self._write_flows(tmp_path, {
+            "title": FLOW_META["title"],
+            "steps": [{"tool": "wizard"}],
+        })
+        errors, warnings = [], []
+        ltc.check_flow_components([{"key": "wizard"}], errors, warnings)
+        assert any("missing 'desc'" in e for e in errors)
+
+    def test_step_missing_tool_and_component_are_errors(self, patch_repo_root):
+        tmp_path = patch_repo_root(ltc, "PROJECT_ROOT")
+        self._write_flows(tmp_path, {**FLOW_META, "steps": [{}]})
+        errors, warnings = [], []
+        ltc.check_flow_components([], errors, warnings)
+        assert any("missing 'tool'" in e for e in errors)
+        assert any("missing 'component'" in e for e in errors)
+
+    def test_step_title_lang_hole_is_error(self, patch_repo_root):
+        tmp_path = patch_repo_root(ltc, "PROJECT_ROOT")
+        self._write_flows(tmp_path, {**FLOW_META, "steps": [
+            {"tool": "wizard", "title": {"en": "Step 1"},
+             "hint": {"en": "Do", "zh": "做"}}
+        ]})
+        errors, warnings = [], []
+        ltc.check_flow_components([{"key": "wizard"}], errors, warnings)
+        assert any("title.zh missing" in e for e in errors)
+
+    def test_step_hint_lang_hole_is_warning(self, patch_repo_root):
+        tmp_path = patch_repo_root(ltc, "PROJECT_ROOT")
+        self._write_flows(tmp_path, {**FLOW_META, "steps": [
+            {"tool": "wizard", "title": {"en": "Step 1", "zh": "步驟一"},
+             "hint": {"en": "Do"}}
+        ]})
+        errors, warnings = [], []
+        ltc.check_flow_components([{"key": "wizard"}], errors, warnings)
+        assert any("hint.zh missing" in w for w in warnings)
+        assert not any("hint.zh" in e for e in errors)
+
+    def test_condition_not_object_is_error(self, patch_repo_root):
+        tmp_path = patch_repo_root(ltc, "PROJECT_ROOT")
+        self._write_flows(tmp_path, {**FLOW_META, "steps": [
+            {"tool": "wizard", "condition": "role=platform"}
+        ]})
+        errors, warnings = [], []
+        ltc.check_flow_components([{"key": "wizard"}], errors, warnings)
+        assert any("'condition' must be an object" in e for e in errors)
+
+    def test_condition_value_not_array_is_error(self, patch_repo_root):
+        tmp_path = patch_repo_root(ltc, "PROJECT_ROOT")
+        self._write_flows(tmp_path, {**FLOW_META, "steps": [
+            {"tool": "wizard", "condition": {"role": "platform"}}
+        ]})
+        errors, warnings = [], []
+        ltc.check_flow_components([{"key": "wizard"}], errors, warnings)
+        assert any("condition['role'] must be an array" in e for e in errors)
+
+    def test_validation_required_state_not_array_is_error(self, patch_repo_root):
+        tmp_path = patch_repo_root(ltc, "PROJECT_ROOT")
+        self._write_flows(tmp_path, {**FLOW_META, "steps": [
+            {"tool": "wizard", "validation": {"required_state": "role"}}
+        ]})
+        errors, warnings = [], []
+        ltc.check_flow_components([{"key": "wizard"}], errors, warnings)
+        assert any("required_state must be an array" in e for e in errors)
+
+    def test_validation_warn_lang_hole_is_error(self, patch_repo_root):
+        tmp_path = patch_repo_root(ltc, "PROJECT_ROOT")
+        self._write_flows(tmp_path, {**FLOW_META, "steps": [
+            {"tool": "wizard",
+             "validation": {"required_state": ["role"],
+                            "warn": {"en": "Go back"}}}
+        ]})
+        errors, warnings = [], []
+        ltc.check_flow_components([{"key": "wizard"}], errors, warnings)
+        assert any("validation.warn.zh missing" in e for e in errors)
+
+    def test_valid_condition_and_validation_pass(self, patch_repo_root):
+        tmp_path = patch_repo_root(ltc, "PROJECT_ROOT")
+        portal_src = tmp_path / "tools" / "portal" / "src"
+        portal_src.mkdir(parents=True)
+        (portal_src / "step.jsx").write_text("content")
+        dist = tmp_path / "docs" / "assets" / "dist"
+        dist.mkdir(parents=True)
+        (dist / "step.js").write_text("export {};", encoding="utf-8")
+        self._write_flows(tmp_path, {**FLOW_META, "steps": [
+            {"tool": "wizard", "component": "step.jsx",
+             "title": {"en": "Step 1", "zh": "步驟一"},
+             "hint": {"en": "Do", "zh": "做"},
+             "condition": {"role": ["platform", "domain"]},
+             "validation": {"required_state": ["role"],
+                            "warn": {"en": "Go back", "zh": "請返回"}}}
+        ]})
+        errors, warnings = [], []
+        ltc.check_flow_components([{"key": "wizard"}], errors, warnings)
+        assert errors == []
+        assert warnings == []
+
 
 # ---------------------------------------------------------------------------
 # check_related_symmetry — new from _extended (no base class)
@@ -411,3 +658,32 @@ class TestCheckRelatedSymmetry:
         warnings = []
         ltc.check_related_symmetry(tools, warnings)
         # Asymmetric is OK (informational only)
+
+
+# ---------------------------------------------------------------------------
+# check_hub_flow_section (ported from the retired flow-e2e-check script —
+# the Hub side's only gate; the loader side is covered functionally by
+# Playwright loading ?flow=onboarding)
+# ---------------------------------------------------------------------------
+class TestCheckHubFlowSection:
+    HUB = (
+        '<div id="flow-cards"></div>'
+        '<div id="flow-analytics"></div>'
+        '<div id="custom-flow-builder"></div>'
+        "<script>localStorage.getItem('__da_flow_progress_' + name);"
+        "localStorage.getItem('__da_flow_completed_' + name);"
+        "fetch('../assets/flows.json');</script>"
+    )
+
+    def test_all_markers_present(self):
+        errors = []
+        ltc.check_hub_flow_section(self.HUB, errors)
+        assert errors == []
+
+    def test_missing_marker_is_error(self):
+        errors = []
+        ltc.check_hub_flow_section(
+            self.HUB.replace("flow-analytics", "renamed-away"), errors
+        )
+        assert len(errors) == 1
+        assert "flow-analytics" in errors[0]
