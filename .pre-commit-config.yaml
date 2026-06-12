@@ -466,11 +466,16 @@ repos:
         files: \.(en|zh)\.md$
 
       - id: jsx-i18n-check
-        name: JSX i18n sync (window.__t dup-param / language toggle)
+        name: jsx-loader i18n sync (window.__t dup-param / language toggle)
         entry: python3 -X utf8 scripts/tools/lint/check_jsx_i18n.py --ci
         language: python
         pass_filenames: false
-        files: ^(docs/assets/jsx-loader\.html|tools/portal/src/(interactive/tools|getting-started)/.*\.jsx)$
+        # Loader-only since the TRK-242 residue cleanup: portal .jsx
+        # sources contain zero `window.__t(` call sites (tools use local
+        # t() helpers), and tool-level findings were warning-severity —
+        # invisible in a passing --ci hook. Scanning them was pure
+        # dead weight; `window.__t` lives only in jsx-loader.html.
+        files: ^docs/assets/jsx-loader\.html$
 
       - id: makefile-targets-check
         name: DX tools ↔ Makefile/pre-commit reachability
@@ -522,7 +527,7 @@ repos:
 
       - id: flow-e2e-check
         name: Guided Flow E2E smoke test
-        entry: python3 -X utf8 tests/test_flows_e2e.py
+        entry: python3 -X utf8 tests/shared/test_flows_e2e.py
         language: python
         pass_filenames: false
         files: ^docs/(assets/(flows\.json|jsx-loader\.html)|interactive/index\.html)
@@ -699,7 +704,7 @@ repos:
         entry: bash -c 'cd tests/e2e && npx playwright test'
         language: system
         pass_filenames: false
-        files: ^(docs/interactive/|tests/e2e/|tools/portal/|docs/assets/(tool-registry|jsx-loader|flows|dist))
+        files: ^(docs/interactive/|tests/e2e/|tools/portal/|docs/assets/(tool-registry|jsx-loader|flows|dist/|platform-data|template-data|recommendation-data))
         stages: [manual]
 
       - id: playwright-lint

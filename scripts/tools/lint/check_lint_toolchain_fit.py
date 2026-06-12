@@ -97,7 +97,8 @@ ALLOWLIST: dict[str, str] = {
         "Migratable=YES(§8): style={{}} hex/px; kept DIY for diff-only+bypass+"
         "bilingual (ESLint <60% coverage today; revisit if FE adopts Tailwind)",
     "check_jsx_i18n.py":
-        "Migratable=YES(§8): CJK hardcoded-string detection in JSX",
+        "Migratable=YES(§8): window.__t dup-param + language-toggle "
+        "same-value detection in jsx-loader.html",
     "check_window_x_no_fallback.py":
         "Migratable=YES(§8): module-scope `const X = window.__X` AST pattern",
     "check_undefined_tokens.py":

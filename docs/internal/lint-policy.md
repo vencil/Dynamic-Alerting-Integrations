@@ -279,7 +279,7 @@ cheatsheet 的逐值對照表屬一次性易腐內容，已隨 Phase 1 收尾移
 | Lint | Migratable | 備註 |
 |---|---|---|
 | `check_design_token_usage.py` | YES | style={{}} hex/px；今 ESLint 覆蓋 <60%（diff-only+bypass+雙語），FE 若採 Tailwind/Styled-Components 則應重評為 ESLint rule |
-| `check_jsx_i18n.py` | YES | JSX 內 CJK hardcoded-string 偵測 |
+| `check_jsx_i18n.py` | YES | jsx-loader.html 的 `window.__t` dup-param + language-toggle 同值偵測 |
 | `check_window_x_no_fallback.py` | YES | module-scope `const X = window.__X` pattern（ESLint no-restricted-syntax 適配） |
 | `check_undefined_tokens.py` | YES | `--da-*` token refs 未定義於 design-tokens.css |
 | `check_i18n_coverage.py` | YES | JSX i18n key 覆蓋率 |

@@ -9,9 +9,13 @@ The lint exists specifically because of the v2.3.0 bug class:
 
 (The original second member of that bug class — TOOL_META ↔
 CUSTOM_FLOW_MAP key sync — was retired in the TRK-242 residue
-cleanup: TOOL_META left jsx-loader.html with renderJSX in TRK-230z,
-and the guard now lives in tests/shared/test_flows_e2e.py +
-scripts/tools/dx/sync_tool_registry.py.)
+cleanup: TOOL_META left jsx-loader.html with renderJSX in TRK-230z.
+Live guards today: auto hook `tool-consistency-check`
+(lint_tool_consistency.py, registry key ⊆ loader, error-level) +
+manual hook `flow-e2e-check` (tests/shared/test_flows_e2e.py) +
+sync_tool_registry.py as generator. Portal .jsx dup-param scanning
+was removed in the same cleanup — zero `window.__t(` call sites in
+tools/portal/src/ and tool-level findings were invisible warnings.)
 
 A regex regression in this lint silently re-enables the bug. Three
 parsers + one orchestrator (run_checks) covered:
@@ -279,8 +283,6 @@ class TestRunChecks:
         # Property: missing jsx-loader.html → file-missing error and
         # empty stats (we abort early without scanning JSX_TOOLS_DIR).
         monkeypatch.setattr(mod, "JSX_LOADER", tmp_path / "nope.html")
-        monkeypatch.setattr(mod, "JSX_TOOLS_DIR", tmp_path / "no-tools")
-        monkeypatch.setattr(mod, "WIZARD_DIR", tmp_path / "no-wizard")
         issues, stats = mod.run_checks()
         assert any(i["check"] == "file-missing" for i in issues)
         assert stats == {}
@@ -299,8 +301,6 @@ class TestRunChecks:
             encoding="utf-8",
         )
         monkeypatch.setattr(mod, "JSX_LOADER", loader)
-        monkeypatch.setattr(mod, "JSX_TOOLS_DIR", tmp_path / "no-tools")
-        monkeypatch.setattr(mod, "WIZARD_DIR", tmp_path / "no-wizard")
         issues, stats = mod.run_checks()
         assert issues == []
         assert stats["flow_map_count"] == 2
@@ -324,46 +324,11 @@ class TestRunChecks:
             encoding="utf-8",
         )
         monkeypatch.setattr(mod, "JSX_LOADER", loader)
-        monkeypatch.setattr(mod, "JSX_TOOLS_DIR", tmp_path / "no-tools")
-        monkeypatch.setattr(mod, "WIZARD_DIR", tmp_path / "no-wizard")
         issues, stats = mod.run_checks()
         assert not any(i["check"] == "meta-flow-sync" for i in issues)
         # But the duplicate __t param check still fires.
         assert any(i["check"] == "t-duplicate-param" for i in issues)
         assert "tool_meta_count" not in stats
-
-    def test_jsx_tools_dir_dup_t_warning(self, tmp_path, monkeypatch):
-        # Property: a .jsx file in JSX_TOOLS_DIR with duplicate __t params
-        # surfaces as a WARNING (not error — JSX files are tool-internal
-        # so the impact is smaller than loader-level). The file sits in a
-        # NESTED subdir to pin the recursive scan (rglob) — tool subtrees
-        # like <tool>/components/*.jsx must be covered.
-        loader = tmp_path / "jsx-loader.html"
-        loader.write_text(
-            "var CUSTOM_FLOW_MAP = { };\n",
-            encoding="utf-8",
-        )
-        tools_dir = tmp_path / "tools"
-        nested = tools_dir / "some-tool" / "components"
-        nested.mkdir(parents=True)
-        bad = nested / "bad.jsx"
-        bad.write_text(
-            "function X() { return window.__t('foo', 'foo'); }\n",
-            encoding="utf-8",
-        )
-        monkeypatch.setattr(mod, "JSX_LOADER", loader)
-        monkeypatch.setattr(mod, "JSX_TOOLS_DIR", tools_dir)
-        monkeypatch.setattr(mod, "WIZARD_DIR", tmp_path / "no-wizard")
-        # The lint reads `jsx_file.relative_to(REPO_ROOT)` — ensure we
-        # patch REPO_ROOT to a parent of our tmp_path so the relpath
-        # operation succeeds.
-        monkeypatch.setattr(mod, "REPO_ROOT", tmp_path)
-        issues, _ = mod.run_checks()
-        warnings = [i for i in issues if i["severity"] == "warning"]
-        assert any(
-            i["check"] == "t-duplicate-param" and "foo" in i["message"]
-            for i in warnings
-        )
 
     def test_language_toggle_issue_propagates(self, tmp_path, monkeypatch):
         loader = tmp_path / "jsx-loader.html"
@@ -375,8 +340,6 @@ class TestRunChecks:
             encoding="utf-8",
         )
         monkeypatch.setattr(mod, "JSX_LOADER", loader)
-        monkeypatch.setattr(mod, "JSX_TOOLS_DIR", tmp_path / "no-tools")
-        monkeypatch.setattr(mod, "WIZARD_DIR", tmp_path / "no-wizard")
         issues, _ = mod.run_checks()
         assert any(i["check"] == "toggle-same-value" for i in issues)
 
@@ -395,8 +358,6 @@ class TestMainCLI:
             encoding="utf-8",
         )
         monkeypatch.setattr(mod, "JSX_LOADER", loader)
-        monkeypatch.setattr(mod, "JSX_TOOLS_DIR", tmp_path / "no-tools")
-        monkeypatch.setattr(mod, "WIZARD_DIR", tmp_path / "no-wizard")
         monkeypatch.setattr(sys, "argv", ["check_jsx_i18n", "--ci"])
         with pytest.raises(SystemExit) as exc:
             mod.main()
@@ -413,8 +374,6 @@ class TestMainCLI:
             encoding="utf-8",
         )
         monkeypatch.setattr(mod, "JSX_LOADER", loader)
-        monkeypatch.setattr(mod, "JSX_TOOLS_DIR", tmp_path / "no-tools")
-        monkeypatch.setattr(mod, "WIZARD_DIR", tmp_path / "no-wizard")
         monkeypatch.setattr(sys, "argv", ["check_jsx_i18n", "--ci"])
         with pytest.raises(SystemExit) as exc:
             mod.main()
@@ -433,8 +392,6 @@ class TestMainCLI:
             encoding="utf-8",
         )
         monkeypatch.setattr(mod, "JSX_LOADER", loader)
-        monkeypatch.setattr(mod, "JSX_TOOLS_DIR", tmp_path / "no-tools")
-        monkeypatch.setattr(mod, "WIZARD_DIR", tmp_path / "no-wizard")
         monkeypatch.setattr(sys, "argv", ["check_jsx_i18n"])
         with pytest.raises(SystemExit) as exc:
             mod.main()
@@ -447,8 +404,6 @@ class TestMainCLI:
             encoding="utf-8",
         )
         monkeypatch.setattr(mod, "JSX_LOADER", loader)
-        monkeypatch.setattr(mod, "JSX_TOOLS_DIR", tmp_path / "no-tools")
-        monkeypatch.setattr(mod, "WIZARD_DIR", tmp_path / "no-wizard")
         monkeypatch.setattr(sys, "argv", ["check_jsx_i18n", "--json"])
         with pytest.raises(SystemExit):
             mod.main()

@@ -1,19 +1,25 @@
 #!/usr/bin/env python3
 """check_jsx_i18n.py — JSX 工具 i18n 完整性 lint
 
-掃描 jsx-loader.html + portal JSX sources（`tools/portal/src/`）確認:
+掃描 jsx-loader.html 確認:
   (a) window.__t 呼叫的兩參數不相同（防止 copy-paste bug）
   (b) 語言切換函式的兩分支回傳不同值
 
 v2.4.0 新增：解決 v2.3.0 release 過程中 jsx-loader.html 語言切換按鈕
 兩個分支回傳相同字串，且 tenant-manager 漏入 CUSTOM_FLOW_MAP 的問題。
 
-歷史：原首要檢查為 TOOL_META ↔ CUSTOM_FLOW_MAP key 一致性。TOOL_META
-已隨 legacy `renderJSX` 在 TRK-230z 移除（該檢查從此恆 self-skip），
-於 TRK-242 殘留清理時正式退役。該守備現由
-`tests/shared/test_flows_e2e.py`（CUSTOM_FLOW_MAP 涵蓋所有 registry
-tools）+ `scripts/tools/dx/sync_tool_registry.py`（registry →
-CUSTOM_FLOW_MAP 自動生成）承接。
+歷史（TRK-242 殘留清理時的兩個收斂）：
+1. 原首要檢查 TOOL_META ↔ CUSTOM_FLOW_MAP key 一致性已退役 —
+   TOOL_META 隨 legacy `renderJSX` 在 TRK-230z 移除，該檢查從此恆
+   self-skip。registry key ⊆ loader 的守備由 auto hook
+   `tool-consistency-check`（`lint_tool_consistency.py`，error 級）
+   把關；flow step → dist bundle 存在性由 manual hook
+   `flow-e2e-check`（`tests/shared/test_flows_e2e.py`）驗證；
+   `sync_tool_registry.py` 則從 registry 直接生成 CUSTOM_FLOW_MAP。
+2. portal `.jsx` 的 dup-param 掃描一併移除 — corpus 內 `.jsx` 對
+   `window.__t(` 的呼叫為 0（工具都用 local `t()` helper），且
+   tool 級 finding 是 warning severity，在 --ci hook 通過時不可見，
+   等於從未構成 gate。`window.__t` 只活在 jsx-loader.html。
 
 用法:
     python3 scripts/tools/lint/check_jsx_i18n.py [--ci] [--json]
@@ -38,8 +44,6 @@ from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 JSX_LOADER = REPO_ROOT / "docs" / "assets" / "jsx-loader.html"
-JSX_TOOLS_DIR = REPO_ROOT / "tools" / "portal" / "src" / "interactive" / "tools"
-WIZARD_DIR = REPO_ROOT / "tools" / "portal" / "src" / "getting-started"
 
 
 # ---------------------------------------------------------------------------
@@ -180,13 +184,14 @@ def run_checks() -> Tuple[List[Dict], Dict]:
 
     content = JSX_LOADER.read_text(encoding="utf-8")
 
-    # Check 1 (RETIRED): TOOL_META ↔ CUSTOM_FLOW_MAP key consistency.
+    # RETIRED check: TOOL_META ↔ CUSTOM_FLOW_MAP key consistency.
     # TOOL_META lived inside the legacy `renderJSX` function and was
     # removed with it in TRK-230z, so the cross-sync check self-skipped
     # from then on; retired outright in the TRK-242 residue cleanup.
-    # That guard now lives in tests/shared/test_flows_e2e.py
-    # (CUSTOM_FLOW_MAP covers all registry tools) and
-    # scripts/tools/dx/sync_tool_registry.py (registry → map generation).
+    # Live guards today: auto hook `tool-consistency-check`
+    # (lint_tool_consistency.py, registry key ⊆ loader, error-level) +
+    # manual hook `flow-e2e-check` (tests/shared/test_flows_e2e.py,
+    # flow step → dist bundle) + sync_tool_registry.py (generator).
     # CUSTOM_FLOW_MAP is still parsed for the stats line only.
     flow_keys, _flow_line = parse_object_keys(content, "CUSTOM_FLOW_MAP")
 
@@ -194,7 +199,10 @@ def run_checks() -> Tuple[List[Dict], Dict]:
         "flow_map_count": len(flow_keys),
     }
 
-    # Check 2: window.__t duplicate params
+    # Check (a): window.__t duplicate params in the loader. (Portal
+    # .jsx scanning was removed in the TRK-242 residue cleanup — zero
+    # `window.__t(` call sites in tools/portal/src/ and the findings
+    # were invisible warnings; see module docstring 歷史 #2.)
     dup_t = find_duplicate_t_params(content)
     for d in dup_t:
         issues.append({
@@ -206,31 +214,7 @@ def run_checks() -> Tuple[List[Dict], Dict]:
             "line": d["line"],
         })
 
-    # Also scan JSX tool files for duplicate __t params. Recursive —
-    # the pre-commit hook's `files:` scope matches nested .jsx (tool
-    # subtrees like <tool>/components/*.jsx), so the scan must too.
-    for jsx_dir in (JSX_TOOLS_DIR, WIZARD_DIR):
-        if not jsx_dir.is_dir():
-            continue
-        for jsx_file in sorted(jsx_dir.rglob("*.jsx")):
-            try:
-                jsx_content = jsx_file.read_text(encoding="utf-8")
-            except (UnicodeDecodeError, OSError):
-                continue
-            dup_jsx = find_duplicate_t_params(jsx_content)
-            for d in dup_jsx:
-                rel = jsx_file.relative_to(REPO_ROOT)
-                issues.append({
-                    "severity": "warning",
-                    "check": "t-duplicate-param",
-                    "message": (
-                        f"{rel}:{d['line']} — window.__t() 兩參數相同 "
-                        f"'{d['zh']}'"
-                    ),
-                    "line": d["line"],
-                })
-
-    # Check 3: language toggle returns
+    # Check (b): language toggle returns
     toggle_issues = check_language_toggle(content)
     for t in toggle_issues:
         issues.append({

@@ -319,6 +319,12 @@ class TestLiveRepo:
         ns = argparse.Namespace(paths=[])
         candidates = lint._resolve_target_paths(ns)
         assert candidates, "expected tools/portal/src/ jsx files to exist"
+        # Pin the scan scope: a silent narrowing back to src/interactive/
+        # would drop getting-started/ from coverage without failing any
+        # other test (TRK-242 residue cleanup widened it deliberately).
+        assert any("getting-started" in str(p) for p in candidates), (
+            "scan scope lost tools/portal/src/getting-started/"
+        )
 
         all_findings = []
         for path in candidates:

@@ -31,6 +31,10 @@ declarative-form regex deliberately does NOT match), and bare
 specifiers stay pinned to the two the build harness handles. Scan
 scope = all of ``tools/portal/src/`` (interactive + getting-started),
 aligned with the sibling window-x lint and the hook's ``files:``.
+``tools/portal/entries/*.entry.jsx`` are deliberately OUT of scope:
+every entry must ``import { createRoot } from 'react-dom/client'``
+(not in the allowlist) — widening the scan to entries would flag all
+of them by construction.
 
 What it flags
 -------------
