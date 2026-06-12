@@ -103,11 +103,16 @@ class TestGlobalDestructure:
 # Suppression + frontmatter
 # ---------------------------------------------------------------------------
 class TestSuppression:
-    def test_escape_marker_lookback(self):
-        src = (
-            "// <!-- window-x-no-fallback: ignore -->\n"
-            "const { a } = window.__X;\n"
-        )
+    @pytest.mark.parametrize(
+        "line",
+        [
+            "const { a } = window.__X;",        # pattern C
+            "const X = window.__X;",            # pattern A
+            "const { useState } = React;",      # pattern B
+        ],
+    )
+    def test_escape_marker_lookback(self, line):
+        src = f"// <!-- window-x-no-fallback: ignore -->\n{line}\n"
         assert _kinds(src) == []
 
     def test_frontmatter_stripped_line_numbers_preserved(self):
@@ -118,6 +123,80 @@ class TestSuppression:
             "const { a } = window.__X;\n"
         )
         assert _kinds(src) == [("global-destructure", 4)]
+
+
+# ---------------------------------------------------------------------------
+# scan() — file-level plumbing
+# ---------------------------------------------------------------------------
+class TestScan:
+    def test_outside_repo_path_keeps_absolute_display(self, tmp_path):
+        f = tmp_path / "bad.jsx"
+        f.write_text("const X = window.__X;\n", encoding="utf-8")
+        findings = lint.scan([f])
+        assert [(p, n, k) for p, n, k, _ in findings] == [(f, 1, "global-read")]
+
+    def test_nonexistent_and_dir_paths_skipped(self, tmp_path):
+        assert lint.scan([tmp_path / "missing.jsx", tmp_path]) == []
+
+    def test_undecodable_file_skipped(self, tmp_path):
+        f = tmp_path / "binary.js"
+        f.write_bytes(b"\xff\xfe\x00const X = window.__X;\n")
+        assert lint.scan([f]) == []
+
+
+class TestCollectDefaultPaths:
+    def test_missing_root_skipped(self, tmp_path, monkeypatch):
+        root = tmp_path / "tools" / "portal" / "src" / "interactive"
+        root.mkdir(parents=True)
+        (root / "a.jsx").write_text("// ok\n", encoding="utf-8")
+        # getting-started root deliberately absent → continue branch.
+        monkeypatch.setattr(lint, "REPO_ROOT", tmp_path)
+        paths = lint.collect_default_paths()
+        assert [p.name for p in paths] == ["a.jsx"]
+
+
+# ---------------------------------------------------------------------------
+# main() — CLI exit codes + report rendering
+# ---------------------------------------------------------------------------
+class TestMain:
+    def _run(self, monkeypatch, argv):
+        monkeypatch.setattr(sys, "argv", ["check_window_x_no_fallback.py", *argv])
+        return lint.main()
+
+    def test_clean_paths_exit_ok(self, tmp_path, monkeypatch, capsys):
+        f = tmp_path / "clean.jsx"
+        f.write_text("const t = window.__t || ((zh, en) => en);\n", encoding="utf-8")
+        assert self._run(monkeypatch, ["--ci", str(f)]) == 0
+        assert "✓" in capsys.readouterr().out
+
+    def test_violations_ci_exit_1_with_full_report(self, tmp_path, monkeypatch, capsys):
+        f = tmp_path / "bad.jsx"
+        f.write_text(
+            "const X = window.__X;\n"
+            "const { useState } = React;\n"
+            "const { a, b } = window.__shared;\n",
+            encoding="utf-8",
+        )
+        assert self._run(monkeypatch, ["--ci", str(f)]) == 1
+        out = capsys.readouterr().out
+        assert "3 violations" in out
+        # All three report sections render.
+        assert "Module-scope no-fallback global read (1)" in out
+        assert "React destructure" in out
+        assert "Module-scope destructure of a window global (1)" in out
+        # Fix hints include the destructure form.
+        assert "const { a, b } = window.__X;" in out
+
+    def test_violations_without_ci_exit_ok(self, tmp_path, monkeypatch, capsys):
+        f = tmp_path / "bad.jsx"
+        f.write_text("const X = window.__X;\n", encoding="utf-8")
+        assert self._run(monkeypatch, [str(f)]) == 0
+        assert "1 violations" in capsys.readouterr().out
+
+    def test_no_args_uses_default_scan(self, monkeypatch, capsys):
+        # Live-repo default scan must be clean (the Tab ESM migration).
+        assert self._run(monkeypatch, ["--ci"]) == 0
+        assert "clean" in capsys.readouterr().out
 
 
 # ---------------------------------------------------------------------------
