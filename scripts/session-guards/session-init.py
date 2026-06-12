@@ -5,8 +5,11 @@
   - 由 .claude/settings.json 註冊為 PreToolUse hook（matcher=Bash|Write|Edit）
   - 第一次 tool call：跑 vscode_git_toggle off → 寫 marker → exit 0
   - 後續 tool call：marker 存在 → O(1) no-op exit 0
-  - Session 用 CLAUDE_SESSION_ID env var 區分（Claude Code 會注入）
+  - Session 識別：stdin payload 的 session_id（#824 — hook env 實測並無
+    CLAUDE_SESSION_ID）> env var > 同日 fallback
   - Marker 在 /tmp/ 而非 .git/ → 不影響 repo、避開 FUSE 寫入風險
+  - 另刷 repo-local heartbeat（.vibe/guards-heartbeat，gitignored）供
+    pre-commit liveness gate 驗「guard 還活著」（#824 方案 B）
 
 失敗策略：
   絕對不 block tool call。vscode_git_toggle 失敗也寫 marker 並 exit 0，
@@ -22,13 +25,14 @@ Telemetry（v2.8.0 Phase .b — PR feat/v280-session-init-telemetry）：
     - Log 寫入失敗永不 block；僅 stderr 警告
     - Log 可透過 `VIBE_SESSION_LOG=/dev/null` 停用
 
-手動觸發（偵錯）：
-  python scripts/session-guards/session-init.py          # 正常跑
-  python scripts/session-guards/session-init.py --force  # 忽略 marker 重跑
-  python scripts/session-guards/session-init.py --status # 只查 marker 狀態
-  python scripts/session-guards/session-init.py --stats  # 印 telemetry 摘要
-  python scripts/session-guards/session-init.py --stats --json --limit 50
-  python scripts/session-guards/session-init.py --stats --session <SID>
+手動觸發（偵錯）— 經 launcher 走直譯器探測（Windows 裸 `python` 是
+Store stub，#824 的根因，別照打）：
+  bash scripts/session-guards/run-hooks.sh session-init.py            # 正常跑
+  bash scripts/session-guards/run-hooks.sh session-init.py --force    # 忽略 marker 重跑
+  bash scripts/session-guards/run-hooks.sh session-init.py --status   # 只查 marker 狀態
+  bash scripts/session-guards/run-hooks.sh session-init.py --stats    # 印 telemetry 摘要
+  bash scripts/session-guards/run-hooks.sh session-init.py --stats --json --limit 50
+  bash scripts/session-guards/run-hooks.sh session-init.py --stats --session <SID>
 """
 
 from __future__ import annotations
@@ -42,6 +46,16 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+
+# UTF-8 stdout/stderr guard (#824) — session-guards/ was missed by the #489
+# Phase B encoding sweep; on cp950 consoles the ✅ emoji print in
+# vscode_git_toggle crashed and falsified telemetry as "partial" for 7 weeks.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
+try:
+    from _lib_compat import try_utf8_stdout
+except Exception:  # pragma: no cover — standalone fallback, never block
+    def try_utf8_stdout() -> None:  # type: ignore
+        return None
 
 MARKER_DIR = Path("/tmp")
 MARKER_PREFIX = "vibe-session-init"
@@ -61,13 +75,60 @@ def _find_repo_root() -> Path:
     return Path.cwd()
 
 
-def _session_id() -> str:
-    """取得 session 識別碼：優先用 CLAUDE_SESSION_ID，fallback 到日期。"""
+def _payload_session_id() -> str | None:
+    """從 PreToolUse stdin payload 取 session_id（#824 根因 4）。
+
+    Hook 環境並不注入 CLAUDE_SESSION_ID — 沒有這層，同一天的所有 session
+    會 fallback 到同一個 nosession-<date> marker：第二個 session 起被
+    no-op、不重新 toggle VS Code Git。payload 的 session_id 是 harness
+    每次都帶的真實 session 識別。讀取失敗一律回 None，絕不 block。
+    """
+    try:
+        stdin = sys.stdin
+        if stdin is None or stdin.isatty():
+            return None
+        raw = stdin.read()
+        if not raw or not raw.strip():
+            return None
+        sid = json.loads(raw).get("session_id")
+        return str(sid) if sid else None
+    except Exception:
+        return None
+
+
+def _session_id(payload_sid: str | None = None) -> str:
+    """取得 session 識別碼：payload > CLAUDE_SESSION_ID env > 日期 fallback。"""
+    if payload_sid:
+        return payload_sid
     sid = os.environ.get("CLAUDE_SESSION_ID") or os.environ.get("CLAUDE_SESSION")
     if sid:
         return sid
     # Fallback：同一天內的手動呼叫視為同 session
     return "nosession-" + _dt.date.today().isoformat()
+
+
+def _touch_heartbeat(repo_root: Path) -> None:
+    """Repo-local liveness heartbeat（#824 方案 B）。
+
+    寫在 repo 內（gitignored `.vibe/`）而非 /tmp：host session-init 寫入、
+    dev container 透過共享 mount 也看得到，pre-commit 的 liveness gate
+    才能跨環境驗新鮮度。trade-off：repo mount 寫入有 FUSE 風險，但這是
+    host 端 python 寫 NTFS（FUSE 風險在 container 側），且失敗永不 block。
+    """
+    target = os.environ.get("VIBE_GUARDS_HEARTBEAT") or str(
+        repo_root / ".vibe" / "guards-heartbeat"
+    )
+    try:
+        p = Path(target)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(
+            _dt.datetime.now(_dt.timezone.utc).isoformat() + "\n", encoding="utf-8"
+        )
+    except OSError as exc:
+        print(
+            f"[session-init] warning: could not touch heartbeat {target}: {exc}",
+            file=sys.stderr,
+        )
 
 
 def _marker_path(sid: str) -> Path:
@@ -157,10 +218,14 @@ def _run_vscode_git_toggle(repo_root: Path) -> tuple[bool, str]:
     if not script.exists():
         return False, f"vscode_git_toggle.py not found at {script}"
     try:
+        # encoding= 必須顯式指定：child 經 try_utf8_stdout 後輸出 UTF-8，
+        # Windows parent 預設 cp950 解碼會在 reader thread 內崩潰、
+        # stdout 變 None（#824 煙測抓到的第三層 — 修了 child 才暴露 parent）。
         result = subprocess.run(
             [sys.executable, str(script), "off"],
             capture_output=True,
-            text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=10,
             cwd=str(repo_root),
         )
@@ -256,10 +321,9 @@ def _heal_git_hooks(repo_root: Path) -> dict:
 
 
 def _do_init(
-    repo_root: Path, marker: Path, *, event: str, argv: list[str]
+    repo_root: Path, marker: Path, *, sid: str, event: str, argv: list[str]
 ) -> int:
-    """執行起手式並寫 marker + telemetry log。"""
-    sid = _session_id()
+    """執行起手式並寫 marker + heartbeat + telemetry log。"""
     t0 = time.monotonic()
     success, msg = _run_vscode_git_toggle(repo_root)
     # Heal git hooks (idempotent — no file change if already healed).
@@ -287,6 +351,7 @@ def _do_init(
             f"[session-init] vscode_git_toggle failed: {msg}",
             file=sys.stderr,
         )
+    _touch_heartbeat(repo_root)
     _write_log(
         event=event,
         sid=sid,
@@ -301,11 +366,12 @@ def _do_init(
     return 0  # 永不 block tool call
 
 
-def _do_noop(repo_root: Path, marker: Path, argv: list[str]) -> int:
-    """Marker 已存在時的 O(1) 路徑 — 僅 append log entry。"""
+def _do_noop(repo_root: Path, marker: Path, *, sid: str, argv: list[str]) -> int:
+    """Marker 已存在時的 O(1) 路徑 — 刷 heartbeat + append log entry。"""
+    _touch_heartbeat(repo_root)
     _write_log(
         event=EVENT_NOOP,
-        sid=_session_id(),
+        sid=sid,
         marker=marker,
         repo_root=repo_root,
         duration_ms=0.0,
@@ -410,6 +476,7 @@ def _print_stats(
 
 
 def main(argv: list[str] | None = None) -> int:
+    try_utf8_stdout()
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument(
         "--force",
@@ -445,7 +512,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     repo_root = _find_repo_root()
-    sid = _session_id()
+    # --status / --stats 是查詢，不消費 stdin payload（手動偵錯時 stdin
+    # 可能是 terminal）；hook 正常路徑才讀 payload 取真實 session_id。
+    payload_sid = None if (args.status or args.stats) else _payload_session_id()
+    sid = _session_id(payload_sid)
     marker = _marker_path(sid)
 
     if args.stats:
@@ -470,10 +540,10 @@ def main(argv: list[str] | None = None) -> int:
     logged_argv = list(argv) if argv is not None else list(sys.argv[1:])
 
     if marker.exists() and not args.force:
-        return _do_noop(repo_root, marker, logged_argv)  # O(1) no-op
+        return _do_noop(repo_root, marker, sid=sid, argv=logged_argv)  # O(1) no-op
 
     event = EVENT_FORCE if args.force else EVENT_INIT
-    return _do_init(repo_root, marker, event=event, argv=logged_argv)
+    return _do_init(repo_root, marker, sid=sid, event=event, argv=logged_argv)
 
 
 if __name__ == "__main__":

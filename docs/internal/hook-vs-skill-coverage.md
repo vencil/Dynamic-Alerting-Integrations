@@ -25,9 +25,9 @@ lang: zh
 
 死亡組合：以為某事是 hook-enforced（其實是 reviewer-only）→ 不做 → reviewer 退件 / 進 repo。本表就是消除這種誤判。
 
-> **📊 Count reconciliation**：pre-commit hook 為 **51 auto + 13 manual + 3 pre-push = 67**，與 CLAUDE.md 宣告一致。
+> **📊 Count reconciliation**：pre-commit hook 為 **69 auto + 15 manual + 3 pre-push = 87**（YAML parse 重數於 2026-06-12，#824 PR；含該 PR 新增的 `session-guard-liveness-check`），與 CLAUDE.md 宣告一致。下文 §3/§4 的職能分組表為 v2.8.1 盤點時的快照、其後新 hook 僅逐案補列——**計數以 `.pre-commit-config.yaml` YAML parse 為準**，分組表供職能導覽不做計數依據。
 >
-> **更正（TRK-307）**：本表初版（PR #582）曾誤記「50 auto + 14 manual」並反指 CLAUDE.md 計數漂移——那是用 grep `stages:\s*\[manual\]` 數的結果，**配到了 `jsx-babel-check-strict-linecount` 的註解行**（該 hook 註解明寫 "Auto-stage (NOT manual)"，曾被提議 manual 但 PR #162 改回 auto）。TRK-307 的 `audit_rules_drift.py` 用 **YAML parse**（非 grep）重數，確認 51/13/3，CLAUDE.md 一直是對的。**教訓：hook 計數要 YAML parse，grep 會配到註解 / 文字**——audit 工具上線首次執行即抓出此自埋誤差。
+> **更正（TRK-307，時值 v2.8.1 = 51/13/3）**：本表初版（PR #582）曾誤記「50 auto + 14 manual」並反指 CLAUDE.md 計數漂移——那是用 grep `stages:\s*\[manual\]` 數的結果，**配到了 `jsx-babel-check-strict-linecount` 的註解行**（該 hook 註解明寫 "Auto-stage (NOT manual)"，曾被提議 manual 但 PR #162 改回 auto）。TRK-307 的 `audit_rules_drift.py` 用 **YAML parse**（非 grep）重數，確認當時為 51/13/3，CLAUDE.md 一直是對的。**教訓：hook 計數要 YAML parse，grep 會配到註解 / 文字**——audit 工具上線首次執行即抓出此自埋誤差。
 
 ---
 
@@ -47,20 +47,35 @@ lang: zh
 
 | Guard | 觸發 | 涵蓋 | Reference |
 |---|---|---|---|
-| `session-init.py` | 第一次 `Bash`/`Write`/`Edit`/`MultiEdit` | 關 VS Code Git + 寫 session marker（起手式 codified） | `scripts/session-guards/session-init.py` |
-| `preflight_bash.py` | 每次 `Bash` | 攔 `sed -i` 掛載路徑（dev-rule #11）+ 攔 `_*.bat`/`_*.ps1`/`_*.cmd` 出 whitelist（Trap #54） | `scripts/session-guards/preflight_bash.py` |
+| `session-init.py` | 第一次 `Bash`/`Write`/`Edit`/`MultiEdit` | 關 VS Code Git + 寫 session marker + 刷 liveness heartbeat（起手式 codified） | `scripts/session-guards/session-init.py` |
+| `preflight_bash.py` | 每次 `Bash`/`Write` | 攔 `sed -i` 掛載路徑（dev-rule #11）+ 攔 `_*.bat`/`_*.ps1`/`_*.cmd` 出 whitelist（Trap #54） | `scripts/session-guards/preflight_bash.py` |
 
-> 這兩支讓「起手式」「檔案衛生」從 skill-advised 升級為 hook-enforced——AI 不必每次手動跑起手式，hook 代勞。
+> 這兩支讓「起手式」「檔案衛生」從 skill-advised 升級為 hook-enforced——AI 不必每次手動跑起手式，hook 代勞。兩支自 #824 起一律經 `run-hooks.sh` launcher 啟動（功能性直譯器探測；`session-guard-liveness-check` pre-commit gate 防回歸）。
+>
+> **已知不涵蓋（負空間，#824 取證後誠實列出）**：
+> - matcher 只含 `Bash|Write|Edit|MultiEdit`——**`PowerShell` 工具與 MCP 寫入類工具（Desktop Commander / Windows-MCP 等）不觸發任何 guard**。PowerShell-first session 的第一個 mutating call 不會跑起手式；MCP 寫檔完全繞過檔案衛生攔截。
+> - `preflight_bash` 的 `sed -i` 攔截需命令文字含**絕對**掛載路徑——cwd 在 repo 內的**相對路徑** `sed -i` 同樣危險但放行（原設計刻意寬網不擋誤殺；收緊與否見 #824）。
+> - hook 失敗（直譯器壞 / script crash）依協議**不會 block 也不會餵 stderr 給模型**（只有 exit 2 會）——launcher 對「找不到直譯器」以 `additionalContext` JSON fail-loud 補位，其餘失效 class 由 `session-guard-liveness-check` 在 commit 時攔。
+
+### Hook 失敗策略分級（#824 codify）
+
+| 類型 | 失敗策略 | 理由 |
+|---|---|---|
+| Lint / format hooks | fail-open（退化成沒檢查），warn 即可 | 寫壞的 lint 不應卡死日常作業 |
+| **Session guards / 衛生 guard** | **fail-loud**：`additionalContext` JSON（exit 0）把失效訊息餵給模型，**不 block** | 全面 fail-closed 會把 session 變不可恢復的磚（env 壞 → 連修復能力都被擋）；guard 失效的風險面是 git 可恢復的損害，爆炸半徑不對稱 |
+| Security-critical（secret 外洩類） | fail-closed：exit 2 block + stderr 餵模型 | 不可恢復的損害（外洩即起跑 Rotate-First）值得擋下一切 |
+
+> **新 hook / session-guard 的 AC 必須含 live-fire 證據**（真實 harness 觸發 + 可觀測輸出，如 telemetry event），不得僅 code review——#824 的教訓：session-init 上線時從未在真實 harness spawn 路徑驗收，cp950 crash + Store-stub 兩層失效靜默七週，telemetry 寫滿卻無消費者。
 
 ---
 
-## 3. Pre-commit auto hooks（51）— 🔧 機械，commit 時自動
+## 3. Pre-commit auto hooks（69）— 🔧 機械，commit 時自動
 
 > 完整定義見 [`.pre-commit-config.yaml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/.pre-commit-config.yaml)。下表按職能分組；**AI 不需在 review 階段重做這些**——commit 時自動跑，失敗會擋。
 
 | 職能群 | hook ids | 對應規範 | 涵蓋 |
 |---|---|---|---|
-| **檔案衛生 / 安全** | `file-hygiene` `sed-damage-guard` `head-blob-hygiene` `secrets-scan-staged` `bat-ascii-purity-check` `ad-hoc-git-scripts-check` `repo-name-check` `codename-leak-check` `codename-gate-check` `hardcode-tenant-check` `window-x-no-fallback-check` | #2 #11、安全紀律 L1、Trap #45/#54 | NUL/EOF、secret（trufflehog）、tenant hardcode、codename leak（L1 enumeration + L2 glossary-driven） |
+| **檔案衛生 / 安全** | `file-hygiene` `sed-damage-guard` `session-guard-liveness-check` `head-blob-hygiene` `secrets-scan-staged` `bat-ascii-purity-check` `ad-hoc-git-scripts-check` `repo-name-check` `codename-leak-check` `codename-gate-check` `hardcode-tenant-check` `window-x-no-fallback-check` | #2 #11、安全紀律 L1、Trap #45/#54、#824 | NUL/EOF、secret（trufflehog）、tenant hardcode、codename leak（L1 enumeration + L2 glossary-driven）、session-guard 可執行性 |
 | **文件 drift / 計數** | `tool-map-check` `doc-map-check` `adr-index-check` `planning-index-check` `rule-pack-stats-check` `glossary-check` `changelog-lint` `changelog-no-tbd-check` `version-consistency` `devrules-size-check` `commit-scope-doc-drift` `dev-rules-enforcement-check` | #4 Doc-as-Code | 各種「源↔生成」計數一致性 |
 | **doc 連結 / 雙語** | `doc-links-check` `html-doc-links-check` `structure-check` `bilingual-structure-check` `bilingual-content-check` `bilingual-annotations-check` `includes-sync` | #9 #10 雙語政策、#4 | 連結有效性、ZH/EN 結構同步、CJK 純度 |
 | **JSX / portal** | `design-token-usage` `axe-lite-static` `jsx-i18n-check` `jsx-babel-check` `undefined-tokens-check` `jsx-loader-compat-check` `dist-source-consistency-check` `skip-a11y-justification-check` `playwright-lint` `playwright-rtl-drift-check` `tool-consistency-check` `cli-coverage-check` `build-completeness-check` | #9 i18n、TRK-237/239 | token 合規、a11y、ESM、dist↔source |
@@ -71,12 +86,14 @@ lang: zh
 
 ---
 
-## 4. Pre-commit manual hooks（13）— 🔧 機械但**需手動觸發**
+## 4. Pre-commit manual hooks（15）— 🔧 機械但**需手動觸發**
 
 > 不在 commit 時自動跑；`pre-commit run --hook-stage manual --all-files` 或 `make lint-docs` 觸發。**這類最容易被 AI 誤當「自動會擋」**——其實不會，得記得手動跑（或 CI 才擋）。
 
 | hook id | 用途 | 何時該手動跑 |
 |---|---|---|
+| `iac-helm-sast-check` | Container SAST L2：Helm template（kube-linter + Vibe wrapper） | 改 helm/ 後（CI 有專屬 job 硬閘） |
+| `k8s-manifests-sast-check` | Container SAST L4：raw k8s manifest（kube-linter） | 改 k8s/ raw manifest 後（CI 硬閘） |
 | `schema-check` | Go→JSON Schema drift | 改 Go struct / schema 後 |
 | `translation-check` | 雙語結構一致 | 改外部面向 ZH 文件後 |
 | `flow-e2e-check` | Guided Flow E2E smoke | 改 portal flow 後 |
@@ -91,7 +108,7 @@ lang: zh
 | `md-yaml-drift-check` | MD YAML 範例 ↔ schema | 改 schema 範例後 |
 | `playwright-e2e` | Portal E2E smoke | 改 portal 後 |
 
-> 上表 13 個為 YAML-parse 確認的 `stages: [manual]`。`jsx-babel-check-strict-linecount` **不在此列**（它是 auto-stage；初版誤列，TRK-307 已更正）。以 [`.pre-commit-config.yaml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/.pre-commit-config.yaml) 為 SSOT，計數用 YAML parse（見 `audit_rules_drift.py`）。
+> 上表 15 個為 YAML-parse 確認的 `stages: [manual]`（2026-06-12 重數；v2.8.1 後新增 `iac-helm-sast-check` / `k8s-manifests-sast-check`，#448）。`jsx-babel-check-strict-linecount` **不在此列**（它是 auto-stage；初版誤列，TRK-307 已更正）。以 [`.pre-commit-config.yaml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/.pre-commit-config.yaml) 為 SSOT，計數用 YAML parse（見 `audit_rules_drift.py`）。
 
 ---
 
