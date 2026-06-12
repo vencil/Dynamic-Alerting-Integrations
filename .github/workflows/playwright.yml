@@ -9,9 +9,14 @@ on:
       # TRK-242: portal source moved to tools/portal/src/. Watch the
       # whole portal package (source + build config + manifest) so any
       # change that affects bundle output triggers smoke. Also watch
-      # docs/interactive/index.html which is the runtime entry loader.
+      # docs/interactive/index.html which is the runtime entry loader,
+      # plus what CI actually serves and executes: the committed dist
+      # bundles and the jsx-loader page itself (a dist-only rebuild
+      # used to merge without ever running smoke).
       - 'tools/portal/**'
       - 'docs/interactive/index.html'
+      - 'docs/assets/dist/**'
+      - 'docs/assets/jsx-loader.html'
       - 'tests/e2e/**'
       - 'package.json'
       - '.github/workflows/playwright.yml'
@@ -21,6 +26,8 @@ on:
     paths:
       - 'tools/portal/**'
       - 'docs/interactive/index.html'
+      - 'docs/assets/dist/**'
+      - 'docs/assets/jsx-loader.html'
       - 'tests/e2e/**'
       - 'package.json'
       - '.github/workflows/playwright.yml'

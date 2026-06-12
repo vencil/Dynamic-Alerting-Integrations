@@ -30,8 +30,8 @@ purpose: |
     window.__MAX_YAML_SIZE. Pulled at call time so test harnesses
     that swap globals between renders see updated values.
 
-  Backward compatibility: portal-shared.jsx re-exports parseDuration
-  + parseYaml on window.__portalShared unchanged.
+  Consumers import parseDuration + parseYaml directly via ESM
+  (dev-rules §S6).
 ---
 
 function parseDuration(str) {
