@@ -735,10 +735,17 @@ def _git_dir(repo_root: Path) -> Path:
 
 
 def _head_sha(repo_root: Path) -> Optional[str]:
-    r = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=repo_root, capture_output=True, text=True, check=False, timeout=10,
-    )
+    # Raw subprocess (not run()) for cwd targeting; swallow the launch/timeout
+    # failures run() normally absorbs so callers (marker write + the stale-head
+    # CI carve-out) get a clean None instead of an escaping exception
+    # (CodeRabbit #820: undecidable must fall back conservatively, not crash).
+    try:
+        r = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repo_root, capture_output=True, text=True, check=False, timeout=10,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
     if r.returncode == 0 and r.stdout.strip():
         return r.stdout.strip()
     return None
@@ -1074,8 +1081,10 @@ def _ci_ran_on_stale_head(pr_number: Optional[int] = None) -> Optional[str]:
     `push -u` 的 branch shape 下 upstream 停在 main、count 恆 >0，會把
     merge-readiness 的 FAIL 牙齒整條拔掉（對抗式 review 攻擊面 2）。
 
-    回 None（= 不可判定或同 SHA）時維持 FAIL：gh 失敗 / 解析失敗 / SHA 相同，
-    一律保守當「紅 CI 就是當前 HEAD 的真失敗」。
+    只在 PR head 是本地 HEAD 的**真祖先**時才算 stale（即這次 push fast-forward
+    過它、CI 必在新 sha 重跑）。任何無法證明的關係——SHA 相同、diverged、遠端
+    head 反而較新、gh/git 失敗——一律回 None 維持 FAIL（CodeRabbit #820 攻擊面：
+    純不等式會把「遠端較新/分岔」誤判為 stale 而軟化真 blocker）。
     """
     import json as _json
 
@@ -1095,6 +1104,12 @@ def _ci_ran_on_stale_head(pr_number: Optional[int] = None) -> Optional[str]:
         return None
     pr_head = str(data.get("headRefOid") or "").strip()
     if not pr_head or pr_head == head:
+        return None
+    # 只有 PR head 可證明為本地 HEAD 的祖先才降級（push 會推進過它）。
+    # rc=1（非祖先：diverged / 遠端較新）或 rc≠0,1（物件缺失 / git 失敗）→
+    # None 保守維持 FAIL。
+    anc = run(["git", "merge-base", "--is-ancestor", pr_head, head], timeout=10)
+    if anc.returncode != 0:
         return None
     return pr_head[:8]
 

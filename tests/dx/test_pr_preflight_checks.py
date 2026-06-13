@@ -408,18 +408,22 @@ class TestCheckCIStatus:
         monkeypatch.setattr(pp, "_classify_ci_failures",
                             lambda failed: "→ stubbed AB classification")
         monkeypatch.setattr(pp, "_ci_ran_on_stale_head", lambda pr=None: None)
+        # Hermetic: don't read the repo's real workflow soft-fail set, else a
+        # future continue-on-error on "Lint" would flip this FAIL→WARN (CR #820).
+        monkeypatch.setattr(pp, "_soft_fail_check_names", lambda: set())
         result = pp.check_ci_status()
         assert result.status == pp.Status.FAIL
         assert "1 failed" in result.message
         assert "stubbed AB" in result.detail
 
     # 三態語意（fix-push 悖論 carve-out，#819 / 對抗式 review 攻擊面 2）：
-    #   stale（PR head ≠ 本地 HEAD）→ WARN；same-sha → FAIL；不可判定 → FAIL。
+    #   stale（PR head 為本地 HEAD 祖先）→ WARN；same-sha / 非祖先 / 不可判定 → FAIL。
     def test_hard_fail_on_stale_pr_head_downgrades_to_warn(self, monkeypatch):
         checks = [{"name": "Portal Tests", "state": "FAILURE", "bucket": "fail"}]
         _stub_run_constant(monkeypatch, _cp(0, json.dumps(checks)))
         monkeypatch.setattr(pp, "_classify_ci_failures", lambda failed: "→ ab")
         monkeypatch.setattr(pp, "_ci_ran_on_stale_head", lambda pr=None: "abcd1234")
+        monkeypatch.setattr(pp, "_soft_fail_check_names", lambda: set())
         result = pp.check_ci_status()
         assert result.status == pp.Status.WARN
         assert "abcd1234" in result.message          # 指明失敗跑在哪個 PR head
@@ -431,18 +435,28 @@ class TestCheckCIStatus:
         _stub_run_constant(monkeypatch, _cp(0, json.dumps(checks)))
         monkeypatch.setattr(pp, "_classify_ci_failures", lambda failed: "")
         monkeypatch.setattr(pp, "_ci_ran_on_stale_head", lambda pr=None: None)
+        monkeypatch.setattr(pp, "_soft_fail_check_names", lambda: set())
         result = pp.check_ci_status()
         assert result.status == pp.Status.FAIL
 
-    def test_ci_ran_on_stale_head_three_states(self, monkeypatch):
-        # helper 直接釘訊號來源：gh pr view --json headRefOid vs 本地 HEAD。
+    def test_ci_ran_on_stale_head_states(self, monkeypatch):
+        # helper 釘訊號：gh pr view headRefOid vs 本地 HEAD + 祖先證明。
+        # 兩次 run 呼叫：先 gh pr view、後 git merge-base --is-ancestor。
         local = "78f0797f37f136ad521742181931bc3dc52e3cc7"
         monkeypatch.setattr(pp, "_head_sha", lambda root: local)
-        # (1) PR head ≠ 本地 HEAD → stale，回 PR head 短 SHA（不是本地的）。
-        _stub_run_constant(
-            monkeypatch, _cp(0, json.dumps({"headRefOid": "a" * 40})))
+        # (1) PR head 是本地 HEAD 祖先（merge-base rc=0）→ stale，回 PR head 短 SHA。
+        _stub_run_sequence(monkeypatch, [
+            _cp(0, json.dumps({"headRefOid": "a" * 40})),  # gh pr view
+            _cp(0),                                         # merge-base: 是祖先
+        ])
         assert pp._ci_ran_on_stale_head() == "a" * 8
-        # (2) PR head == 本地 HEAD → None（真 merge-readiness 紅，維持 FAIL）。
+        # (1b) PR head ≠ 本地 HEAD 但「非祖先」（diverged / 遠端較新，rc=1）→ None。
+        _stub_run_sequence(monkeypatch, [
+            _cp(0, json.dumps({"headRefOid": "a" * 40})),  # gh pr view
+            _cp(1),                                         # merge-base: 非祖先
+        ])
+        assert pp._ci_ran_on_stale_head() is None
+        # (2) PR head == 本地 HEAD → None（merge-base 之前就短路）。
         _stub_run_constant(
             monkeypatch, _cp(0, json.dumps({"headRefOid": local})))
         assert pp._ci_ran_on_stale_head() is None
@@ -462,15 +476,18 @@ class TestCheckCIStatus:
         # pr_number 必須傳進 gh 命令（多 PR 同 repo 時不能讓 gh 自猜）。
         local = "b" * 40
         monkeypatch.setattr(pp, "_head_sha", lambda root: local)
-        seen = {}
+        cmds = []
 
         def fake_run(cmd, *a, **kw):
-            seen["cmd"] = cmd
-            return _cp(0, json.dumps({"headRefOid": "c" * 40}))
+            cmds.append(cmd)
+            if cmd[:3] == ["gh", "pr", "view"]:
+                return _cp(0, json.dumps({"headRefOid": "c" * 40}))
+            return _cp(0)  # merge-base: 是祖先
 
         monkeypatch.setattr(pp, "run", fake_run)
         assert pp._ci_ran_on_stale_head(123) == "c" * 8
-        assert "123" in seen["cmd"]
+        gh_cmd = next(c for c in cmds if c[:3] == ["gh", "pr", "view"])
+        assert "123" in gh_cmd
 
     def test_invalid_json_warns(self, monkeypatch):
         _stub_run_constant(monkeypatch, _cp(0, "{not json"))
