@@ -84,7 +84,7 @@ Implementation requirements:
 
 - From v2.7.0 onward, new JSX must not use `dark:` variant
 - Existing tools must remove `dark:` during their respective token-migration PR
-- Before v2.7.0 closure, must pass `grep -r 'dark:' docs/getting-started docs/interactive/tools` returning empty
+- Before v2.7.0 closure, must pass `grep -r 'dark:' docs/getting-started docs/interactive/tools` returning empty (paths reflect the then-current layout; JSX source moved to `tools/portal/src/` in TRK-242 — re-verify against that path instead; comment-only mentions of removed `dark:` variants do not count as violations)
 
 ## References
 

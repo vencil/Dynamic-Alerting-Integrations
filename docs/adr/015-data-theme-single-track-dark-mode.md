@@ -87,7 +87,7 @@ v2.6.x 之前，portal JSX 有兩套 dark mode 機制並存：
 
 - v2.7.0 起，新 JSX 禁止 `dark:` 變體
 - 既有 tools 在各自 token migration PR 清除 `dark:`
-- v2.7.0 收尾前需通過 `grep -r 'dark:' docs/getting-started docs/interactive/tools` 為空
+- v2.7.0 收尾前需通過 `grep -r 'dark:' docs/getting-started docs/interactive/tools` 為空（路徑為當時 layout；TRK-242 後 JSX source 已搬至 `tools/portal/src/`，重驗請改掃該路徑——註解中的 `dark:` 移除紀錄不算違反）
 
 ## 關聯
 

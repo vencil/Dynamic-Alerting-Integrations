@@ -154,7 +154,7 @@ TD-030z 之後 portal 工具一律以 esbuild ESM dist-bundle 載入（`docs/ass
 - **測試陷阱**: 修改 `_common/` 或 portal-shared 會連動影響三個 tabs，需完整迴歸測試；單獨改某 tab 風險較低
 - **module-eval throw 偵測**: ESM bundle 評估期 throw 不觸發 `script.onerror`（只 fire window `error` 事件，`onload` 照常）→ jsx-loader 對此顯示 error banner；e2e smoke（`portal-tool-smoke.ts`）斷言無 same-origin pageerror + `#root` 非空。此防線建立前，這類失敗完全靜默：CI 綠、prod 空白頁（self-service-portal 曾因 tab 在 module scope destructure 一個從未被 import 的 `window.__portalShared` 而整包載入即 throw，smoke 三項檢查全過）
 
-修改任何 portal 檔案後 `make portal-build` 重建 dist（canonical env：dev container；Windows host build 與 CI Linux byte-compare 不合），並確認 jsx-loader 的 CUSTOM_FLOW_MAP 已同步新增工具。
+修改任何 portal 檔案後 `make portal-build` 重建 dist（canonical env：dev container；Windows host build 與 CI Linux byte-compare 不合），並確認 jsx-loader 的 CUSTOM_FLOW_MAP 已同步新增工具——SOT 是 `docs/assets/tool-registry.yaml`（`scripts/tools/dx/sync_tool_registry.py` 同步進 CUSTOM_FLOW_MAP），registry ↔ CUSTOM_FLOW_MAP 的 bare-key 對應自 #828 起由 `lint_tool_consistency.py` 機械驗證；map key 僅 `?flow=custom` 白名單必需，單一 component 模式對未知 bare-key 有 fallback 直接推 dist 名。
 
 ## CI Matrix × Snapshot Testing（Phase .d）
 
@@ -711,7 +711,7 @@ Self-Review-Pass-2:
 
 **為何 `jsx-babel-check` 沒擋住**：那個 hook 只 PARSE JSX，`export function` 是合法 AST node。Babel-standalone `runtime` 才會嘗試把它編譯成 `exports.x = ...` 並炸。**CI E2E 是唯一暴露 runtime failure 的關卡**，pre-commit 全綠不代表瀏覽器跑得起來。
 
-**JSX-loader 約束（per `docs/assets/jsx-loader.html` `transformImports` 函式 lines ~617-639）**：
+**當時的 JSX-loader 約束（legacy Babel-standalone 時代；`transformImports` 已隨 TD-030z 移除，現況見本節末段）**：
 
 只有兩條 module syntax 特別 handled（regex transform）：
 - ✅ `import React, { ... } from 'react'` — 改成 `const { ... } = React;`
@@ -725,7 +725,7 @@ Self-Review-Pass-2:
 - ❌ `import X from './local'` (除非在 front-matter `dependencies:` 列出，走另一條 `loadDependency` 路徑)
 - ❌ `require('x')` calls
 
-**規範**：
+**當時的規範（現行版見本節末段「現況」）**：
 1. ✅ `export default` 才是 component 唯一支援的 export
 2. ✅ Helper functions / constants 用 module-scope 即可（component closure 可達）
 3. ✅ Cross-tool reuse 透過 front-matter `dependencies:` + `window.__X` self-register pattern（見 `docs/internal/jsx-multi-file-pattern.md` / PR #160 scaffold tool）
@@ -734,7 +734,9 @@ Self-Review-Pass-2:
 
 **Mechanical safety net** ✅ S#93 PR：`scripts/tools/lint/check_jsx_loader_compat.py` 偵測 `^export (function|const|let|var|class)`（不含 default）/ `import .* from '<X>'`（X ∉ {react, lucide-react}）/ `require\(`，FATAL on hit；commit-time catch 而非 CI runtime 才暴露。Per-line escape 用 `<!-- jsx-loader-compat: ignore -->`（3-line lookback）。
 
-**Cross-refs**：PR #182 amend commit `6e16a65`（routing-trace.jsx fix）；`docs/assets/jsx-loader.html` `transformImports` 函式；`docs/internal/jsx-multi-file-pattern.md`（cross-tool reuse 正解 = front-matter dependencies + window self-register, NOT named export）。
+**現況（TD-030z 之後）**：jsx-loader 已改為只載 esbuild ESM dist bundle，Babel-standalone / `transformImports` / frontmatter dependency-walk 全數移除（legacy 實作見 git history pre-#264）。Runtime 層面 named export 與相對路徑 import 已合法（tabs 即用 `export { X };` + named import）；但 `check_jsx_loader_compat.py` 保留為 commit-time convention gate（#826 起 pre-commit filter 已對齊新路徑），掃 `tools/portal/src/`：宣告式命名 export（`export function/const/let/var/class` 開頭）仍 FATAL、bare specifier import 仍僅允許 `react` / `lucide-react`（react 由 build 打包、lucide-react 由 `build.mjs` 虛擬化成 `window.lucideReact` 讀取）、相對路徑 import 放行。Cross-tool reuse 正解已從「front-matter dependencies + window self-register」改為直接 ESM import（#825 將三個 tab 全面改為 ESM import 即此模式）。
+
+**Cross-refs**：PR #182 amend commit `6e16a65`（routing-trace.jsx fix）；`docs/internal/jsx-multi-file-pattern.md`（multi-file 拆分模式；其 dep-chain 敘述為 legacy 時代背景）。
 
 ### 10. Playwright API surface ≠ React Testing Library API surface (PR #184 case)
 
@@ -898,7 +900,7 @@ test('renders ready after fill', async ({ page }) => {
 
 For non-state assertions (input fields, headings, etc.) the regular `.toBeVisible()` is fine. Don't replace mechanically — the matcher's value is when component state is dynamic.
 
-**Cross-refs**：PR #185 first-CI-fail commit `3beb127`（fix: seed Tenant ID default `'example-tenant'`）；PR #187 closed unmerged (the wrong-shape lint, S#97); S#98 ships the matcher; `docs/interactive/tools/simulate-preview.jsx` (4-state machine reference); Component cold-start UX 對照 `alert-builder.jsx` (`groupName: 'my-alerts'` default) + `routing-trace.jsx` (`labels: {team: 'platform', env: 'prod'}` default) — 兩者 cold-start spec 也都不需 fill；§LL §12 below (closed-vs-open enumeration discipline).
+**Cross-refs**：PR #185 first-CI-fail commit `3beb127`（fix: seed Tenant ID default `'example-tenant'`）；PR #187 closed unmerged (the wrong-shape lint, S#97); S#98 ships the matcher; `tools/portal/src/interactive/tools/simulate-preview.jsx` (4-state machine reference); Component cold-start UX 對照 `alert-builder.jsx` (`groupName: 'my-alerts'` default) + `routing-trace.jsx` (`labels: {team: 'platform', env: 'prod'}` default) — 兩者 cold-start spec 也都不需 fill；§LL §12 below (closed-vs-open enumeration discipline).
 
 ### 12. Closed-vs-open enumeration discipline check (S#97 PR #187 self-correction)
 
@@ -908,7 +910,7 @@ For non-state assertions (input fields, headings, etc.) the regular `.toBeVisibl
 
 - **Closed set** (lint OK)：finite enumeration that doesn't grow. Examples:
   - **RTL `getBy*` family** (`getByDisplayValue` / `getByLabelText` / `getByPlaceholderText` / `getByAltText`) — RTL has these 4 + a few more, stable, no plans to add more in 2026. S#96 PR #186 `check_playwright_rtl_drift.py` lints this set ✓.
-  - **JSX-loader supported imports** (`react`, `lucide-react`, exact two strings) — pinned by jsx-loader.html `transformImports` regex; growing the set requires editing jsx-loader itself. S#93 PR #183 `check_jsx_loader_compat.py` lints this ✓.
+  - **Portal bare-import allowlist** (`react`, `lucide-react`, exact two strings) — originally pinned by jsx-loader.html `transformImports` regex（TD-030z 已移除）；現由 `check_jsx_loader_compat.py` 的 allowlist + `tools/portal/build.mjs`（react bundled / lucide-react 虛擬化）pin，growing the set requires editing lint + build. S#93 PR #183 lints this ✓.
   - **Hard-coded reserved patterns** like `_*` config keys, `--no-verify` flag, `subprocess.run(timeout=)` keyword arg — language/library spec-defined, stable.
 
 - **Open set** (lint = whack-a-mole, ❌ wrong shape)：grows over time without your control. Examples:
@@ -1397,7 +1399,7 @@ esbuild 的 dep graph 強制 import-target 在 importer 之前 evaluate；這是
 - 工具不渲染任何 testid，但 dist 檔案 200 OK（`#root` 是空或只有 ErrorBoundary fallback）
 - 同樣的 spec 在 `--workers=1` 過、`--workers=N>1` 失敗
 
-**Durable rule**：上 `--workers=N>1` 之前先確認**所有** module-scope global 讀取都已改成 ESM import（grep `^const \w+\s*=\s*window\.__\w+\s*;` 必須 0 hits in `docs/interactive/`）。本機驗證鏈：`workers=1 → workers=2 → workers=4`，每階段都跑全套 + 看 0 fail 才往上。
+**Durable rule**：上 `--workers=N>1` 之前先確認**所有** module-scope global 讀取都已改成 ESM import（grep `^const \w+\s*=\s*window\.__\w+\s*;` 必須 0 hits in `tools/portal/src/`；destructure 形式 `const {...} = window.__X;` 自 #825 起由 `check_window_x_no_fallback.py` Pattern C 攔）。本機驗證鏈：`workers=1 → workers=2 → workers=4`，每階段都跑全套 + 看 0 fail 才往上。
 
 **配套**：`tools/portal/build.mjs` 不要再用 `define: { React: ... }` 之類把 bare identifier 改寫成全域讀取的技巧——任何 esbuild splitting 都會打破假設。React 用 `import { useState } from 'react'`，業務 data 用 `import { X } from '_common/.../X.js'`，沒例外。
 
@@ -1430,7 +1432,7 @@ esbuild 的 dep graph 強制 import-target 在 importer 之前 evaluate；這是
 
 ### 適用範圍
 
-本節 6 個規則適用於所有 `docs/interactive/tools/` 下的 JSX 工具 + `tools/portal/build.mjs` esbuild config + `tests/e2e/*.spec.ts` + `.github/workflows/playwright.yml`。新工具 onboarding 流程必走 §1 的 grep 檢查 + §3 的 workers=N 漸進驗證 + §5 的 a11y critical=0 gate。
+本節 6 個規則適用於所有 `tools/portal/src/interactive/tools/` 下的 JSX 工具 + `tools/portal/build.mjs` esbuild config + `tests/e2e/*.spec.ts` + `.github/workflows/playwright.yml`。新工具 onboarding 流程必走 §1 的 grep 檢查 + §3 的 workers=N 漸進驗證 + §5 的 a11y critical=0 gate。
 
 ## 相關資源
 
