@@ -211,18 +211,22 @@ def recipe_id(inst: dict) -> str:
         prefix = "sre" if op == "=~" else "s"
         parts.append(f"{prefix}_{key}_{value}")
 
+    # `==` gate runs BEFORE the absence short-circuit so it also rejects
+    # absence + op:"==" (op is meaningless for a presence check). Keeping the
+    # gate strict here matches the JSON-schema if/then editor-guard — otherwise
+    # an API/GitOps-submitted absence+"==" the imperative gate silently accepted
+    # would later fail to render in the Portal form (front/back brain-split).
+    op = inst.get("op", ">")
+    if op == "==" and recipe not in _EQ_RECIPES:
+        raise RecipeError(
+            f"op '==' is only allowed for the threshold recipe (exact match on a "
+            f"raw-gauge status/error code, #810); {recipe!r} does not support it"
+        )
     if recipe == "absence":
         parts.append("absent")
     else:
-        op = inst.get("op", ">")
         if op not in OP_SLUG:
             raise RecipeError(f"unknown op {op!r} (known: {list(OP_SLUG)})")
-        if op == "==" and recipe not in _EQ_RECIPES:
-            raise RecipeError(
-                f"op '==' is only allowed for the threshold recipe (exact match on a "
-                f"raw-gauge status/error code, #810); {recipe!r} compares a computed "
-                f"float where equality is fragile"
-            )
         parts.append(OP_SLUG[op])
 
     if recipe == "forecast":

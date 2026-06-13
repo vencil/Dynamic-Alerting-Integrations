@@ -10,13 +10,12 @@ params:
   metric:    {required: true,  desc: "bare Prometheus gauge metric name (^[a-zA-Z_][a-zA-Z0-9_]*$)"}
   op:        {required: false, default: ">", enum: [">", ">=", "<", "<=", "=="],
               desc: "`==` is threshold-recipe-only (#810): exact match for an integer status/error code
-                on a raw gauge; computed-value recipes reject it as float-fragile. Two `==` caveats:
-                (1) the rule compares the `max by(tenant,version)` AGGREGATE — multiple replicas
-                holding DIFFERENT codes mask each other (max of 1236 and 1593 is 1593 → no match);
-                narrow to a single instance via `selectors` when replicas can diverge. (2) one
-                recipe matches ONE code — matching many codes via many `==` recipes grows shapes
-                linearly (eats the per-tenant cap); prefer the label-form workaround (emit the code
-                as a label + `selectors`, #810 option 1) when tracking several codes."}
+                on a raw gauge; computed-value recipes reject it as float-fragile. `==` uses ANY-MATCH
+                semantics — it compares each replica's raw value to the code BEFORE aggregating, so the
+                alert fires if ANY instance equals the code (divergent codes across replicas do NOT
+                mask each other; #819). Caveat: one recipe matches ONE code — tracking many codes via
+                many `==` recipes grows shapes linearly (eats the per-tenant cap); prefer the label-form
+                workaround (emit the code as a label + `selectors`, #810 option 1) for several codes."}
   window:    {required: true,  desc: "evaluation window (Go duration, e.g. 5m)"}
   threshold: {required: true,  desc: "value[:severity] — severity ∈ {warning,critical}, default warning"}
   selectors:    {required: false, desc: "exact label filters (=), assembled safely by the compiler"}

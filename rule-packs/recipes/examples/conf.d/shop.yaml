@@ -59,11 +59,11 @@ tenants:
       # threshold-recipe-only — computed values (rate/ratio/quantile/forecast)
       # reject it as float-fragile. Example: MariaDB semi-sync replication
       # aborted with errno 1236 (binlog position lost).
-      # ⚠ the rule compares the max-by(tenant) AGGREGATE: if replicas can hold
-      # DIFFERENT codes simultaneously, max masks the smaller one — add a
-      # `selectors:` pin (e.g. pod/instance) to compare a single series. For
-      # tracking MANY codes, prefer the label-form workaround (#810 option 1)
-      # over one `==` recipe per code (each costs a shape + cap slot).
+      # `==` is ANY-MATCH (#819): each replica's raw value is compared to the code
+      # before aggregating, so it fires if ANY instance equals 1236 — replicas
+      # holding different codes do NOT mask each other. For tracking MANY codes,
+      # prefer the label-form workaround (#810 option 1) over one `==` recipe per
+      # code (each costs a shape + cap slot).
       - recipe: threshold
         name: semisync_errno_1236
         metric: mysql_semisync_master_last_errno

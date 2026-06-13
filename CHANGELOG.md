@@ -15,7 +15,7 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 
 ### Added
 
-- **Custom Alerts `==` 等值運算子（threshold recipe 限定）**：recipe `op` 新增 `==`，精確比對「以指標**值**表達的狀態/錯誤代碼」（例：MariaDB semi-sync errno 1236）— 補上 #810 的表達力缺口。護欄：`==` 僅 `threshold` recipe 可用，計算浮點值的 recipe（rate/ratio/p99/forecast）兩側 validator 一致拒絕（浮點等值脆弱）；等值告警文案改用「等於設定代碼」（`%.0f`）。Python compiler / Go preflight / JSON schema / portal enums / 治理契約五處 lockstep，golden vector + promtool fire/no-fire 雙向驗證（#692 P0 第①片）。
+- **Custom Alerts `==` 等值運算子（threshold recipe 限定，any-match 語意）**：recipe `op` 新增 `==`，精確比對「以指標**值**表達的狀態/錯誤代碼」（例：MariaDB semi-sync errno 1236）— 補上 #810 的表達力缺口。`==` 採 **any-match**：逐 replica 原始值先比對再聚合，故**任一**實例等於該碼即觸發——多副本持不同碼不會互相掩蓋（對抗式 review 揪出 max-then-== 會靜默漏報，#819）。護欄：`==` 僅 `threshold` recipe 可用，其餘 recipe（rate/ratio/p99/forecast/absence）兩側 validator + JSON-schema if/then 三層一致拒絕（fail-loud，避免前後端腦裂）；等值告警文案用「等於設定代碼」（`%.0f`）。Python compiler / Go preflight / JSON schema / portal enums / 治理契約五處 lockstep，golden vector + promtool（含多-pod 掩蓋回歸）雙向驗證（#692 P0 第①片）。
 
 ### Fixed
 
