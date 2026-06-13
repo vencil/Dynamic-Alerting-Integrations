@@ -1,0 +1,200 @@
+# promtool unit test — #809 tenant-attributed node-NotReady alerting.
+# Run: promtool test rules tests/rulepacks/rule-pack-kubernetes-node-health_test.yaml
+#
+# Proves the topology fan-out: a node-scoped signal (kube_node_status_condition,
+# no tenant) is attributed to EVERY tenant with a RUNNING pod on the down node,
+# via the stable node→tenant mapping (kube_pod_info + Running filter). Inputs are
+# LEAF series so the full chain (mapping → core → enriched alert) runs end-to-end.
+#
+# Adversarial-review regressions baked in:
+#   - fan-out: 2 tenants on ONE down node → BOTH fire (the multi-tenant core)
+#   - ghost pod: a Failed/Evicted pod (no Running phase) on the down node does
+#     NOT fan out to its tenant (kube_pod_info alone would have)
+#   - healthy node: a tenant on a Ready node does NOT fire
+#   - `and on(node)` value: the alert fires at all (a `* group_left` would have
+#     collapsed the value to 0 and never fired)
+rule_files:
+  - ../../rule-packs/rule-pack-kubernetes.yaml
+
+evaluation_interval: 15s
+
+tests:
+  # ── node-1 NotReady hosts db-a (enriched) + db-b (bare) running pods;
+  #    node-2 Ready hosts db-c; db-d has only a Failed pod on node-1 (ghost). ──
+  - interval: 15s
+    input_series:
+      # node readiness: status="true" gauge — 0 = NotReady, 1 = Ready.
+      - series: 'kube_node_status_condition{node="node-1", condition="Ready", status="true"}'
+        values: '0x48'
+      - series: 'kube_node_status_condition{node="node-2", condition="Ready", status="true"}'
+        values: '1x48'
+      # db-a: running pod on the dead node-1, metadata present (enriched branch).
+      - series: 'kube_pod_info{namespace="db-a", pod="mariadb-0", node="node-1"}'
+        values: '1x48'
+      - series: 'kube_pod_status_phase{namespace="db-a", pod="mariadb-0", phase="Running"}'
+        values: '1x48'
+      - series: 'tenant_metadata_info{tenant="db-a", runbook_url="http://rb/a", owner="team-a", tier="gold"}'
+        values: '1x48'
+      # db-b: running pod on the dead node-1, NO metadata (bare branch).
+      - series: 'kube_pod_info{namespace="db-b", pod="mariadb-0", node="node-1"}'
+        values: '1x48'
+      - series: 'kube_pod_status_phase{namespace="db-b", pod="mariadb-0", phase="Running"}'
+        values: '1x48'
+      # db-c: running pod on the HEALTHY node-2 → must NOT fire.
+      - series: 'kube_pod_info{namespace="db-c", pod="mariadb-0", node="node-2"}'
+        values: '1x48'
+      - series: 'kube_pod_status_phase{namespace="db-c", pod="mariadb-0", phase="Running"}'
+        values: '1x48'
+      - series: 'tenant_metadata_info{tenant="db-c", runbook_url="http://rb/c", owner="team-c", tier="silver"}'
+        values: '1x48'
+      # db-d: GHOST — a Failed pod on the dead node-1, no Running phase → excluded.
+      - series: 'kube_pod_info{namespace="db-d", pod="mariadb-old", node="node-1"}'
+        values: '1x48'
+      - series: 'kube_pod_status_phase{namespace="db-d", pod="mariadb-old", phase="Failed"}'
+        values: '1x48'
+      - series: 'tenant_metadata_info{tenant="db-d", runbook_url="http://rb/d", owner="team-d", tier="bronze"}'
+        values: '1x48'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: NodeNotReady
+        exp_alerts:
+          # db-a: enriched (branch A) — carries runbook_url/owner/tier + node.
+          - exp_labels:
+              severity: warning
+              tenant: db-a
+              node: node-1
+              runbook_url: "http://rb/a"
+              owner: team-a
+              tier: gold
+            exp_annotations:
+              summary: "Kubernetes node node-1 NotReady — affects db-a"
+              summary_zh: "Kubernetes 節點 node-1 NotReady — 影響 db-a"
+              platform_summary: "[gold] db-a: node node-1 NotReady — check node health / pod rescheduling"
+              platform_summary_zh: "[gold] db-a: 節點 node-1 NotReady — 請檢查節點健康 / Pod 重新調度"
+              description: "A Kubernetes node hosting this tenant's running pod(s) is NotReady; the workload may be rescheduled or unavailable."
+              description_zh: "承載此租戶運行中 Pod 的 Kubernetes 節點處於 NotReady 狀態；工作負載可能被重新調度或無法使用。"
+              runbook_url: "http://rb/a"
+              owner: team-a
+              tier: gold
+          # db-b: bare (branch B) — no metadata, fan-out still fires.
+          - exp_labels:
+              severity: warning
+              tenant: db-b
+              node: node-1
+            exp_annotations:
+              summary: "Kubernetes node node-1 NotReady — affects db-b"
+              summary_zh: "Kubernetes 節點 node-1 NotReady — 影響 db-b"
+              platform_summary: "[] db-b: node node-1 NotReady — check node health / pod rescheduling"
+              platform_summary_zh: "[] db-b: 節點 node-1 NotReady — 請檢查節點健康 / Pod 重新調度"
+              description: "A Kubernetes node hosting this tenant's running pod(s) is NotReady; the workload may be rescheduled or unavailable."
+              description_zh: "承載此租戶運行中 Pod 的 Kubernetes 節點處於 NotReady 狀態；工作負載可能被重新調度或無法使用。"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+          # NOTE: db-c (healthy node-2) and db-d (ghost Failed pod) are absent.
+
+  # ── maintenance opt-out: db-a on dead node-1 but in maintenance → suppressed. ──
+  - interval: 15s
+    input_series:
+      - series: 'kube_node_status_condition{node="node-1", condition="Ready", status="true"}'
+        values: '0x48'
+      - series: 'kube_pod_info{namespace="db-a", pod="mariadb-0", node="node-1"}'
+        values: '1x48'
+      - series: 'kube_pod_status_phase{namespace="db-a", pod="mariadb-0", phase="Running"}'
+        values: '1x48'
+      - series: 'tenant_metadata_info{tenant="db-a", runbook_url="http://rb/a", owner="team-a", tier="gold"}'
+        values: '1x48'
+      - series: 'user_state_filter{tenant="db-a", filter="maintenance"}'
+        values: '1x48'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: NodeNotReady
+        exp_alerts: []
+
+  # ── uid join regression (CodeRabbit #831): a recreated pod reuses its NAME.
+  #    db-a's OLD pod (uid=old) lingers on the down node-1 with a non-Running
+  #    phase; the NEW pod (uid=new) runs on the healthy node-2. With a
+  #    name-only join the old kube_pod_info would borrow the new pod's Running
+  #    phase and ghost-map db-a onto node-1 → false NotReady. Keying on `uid`
+  #    excludes the old pod (its own phase is not Running) → no alert. ──
+  - interval: 15s
+    input_series:
+      - series: 'kube_node_status_condition{node="node-1", condition="Ready", status="true"}'
+        values: '0x48'
+      - series: 'kube_node_status_condition{node="node-2", condition="Ready", status="true"}'
+        values: '1x48'
+      # OLD pod (uid=old) still mapped to the dead node-1, phase Failed.
+      - series: 'kube_pod_info{namespace="db-a", pod="mariadb-0", node="node-1", uid="old"}'
+        values: '1x48'
+      - series: 'kube_pod_status_phase{namespace="db-a", pod="mariadb-0", phase="Failed", uid="old"}'
+        values: '1x48'
+      # NEW pod (uid=new), same name, Running on the healthy node-2.
+      - series: 'kube_pod_info{namespace="db-a", pod="mariadb-0", node="node-2", uid="new"}'
+        values: '1x48'
+      - series: 'kube_pod_status_phase{namespace="db-a", pod="mariadb-0", phase="Running", uid="new"}'
+        values: '1x48'
+      - series: 'tenant_metadata_info{tenant="db-a", runbook_url="http://rb/a", owner="team-a", tier="gold"}'
+        values: '1x48'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: NodeNotReady
+        exp_alerts: []
+
+  # ── multi-node fan-out: ONE tenant with running pods on TWO down nodes must
+  #    fire TWICE (one per node) — the (node, tenant) core must NOT collapse the
+  #    nodes into a single series. Alertmanager [alertname, tenant] grouping then
+  #    folds them into one notification, but the ALERTS series stay per-node. ──
+  - interval: 15s
+    input_series:
+      - series: 'kube_node_status_condition{node="node-1", condition="Ready", status="true"}'
+        values: '0x48'
+      - series: 'kube_node_status_condition{node="node-3", condition="Ready", status="true"}'
+        values: '0x48'
+      - series: 'kube_pod_info{namespace="db-a", pod="mariadb-0", node="node-1"}'
+        values: '1x48'
+      - series: 'kube_pod_status_phase{namespace="db-a", pod="mariadb-0", phase="Running"}'
+        values: '1x48'
+      - series: 'kube_pod_info{namespace="db-a", pod="mariadb-1", node="node-3"}'
+        values: '1x48'
+      - series: 'kube_pod_status_phase{namespace="db-a", pod="mariadb-1", phase="Running"}'
+        values: '1x48'
+      - series: 'tenant_metadata_info{tenant="db-a", runbook_url="http://rb/a", owner="team-a", tier="gold"}'
+        values: '1x48'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: NodeNotReady
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              tenant: db-a
+              node: node-1
+              runbook_url: "http://rb/a"
+              owner: team-a
+              tier: gold
+            exp_annotations:
+              summary: "Kubernetes node node-1 NotReady — affects db-a"
+              summary_zh: "Kubernetes 節點 node-1 NotReady — 影響 db-a"
+              platform_summary: "[gold] db-a: node node-1 NotReady — check node health / pod rescheduling"
+              platform_summary_zh: "[gold] db-a: 節點 node-1 NotReady — 請檢查節點健康 / Pod 重新調度"
+              description: "A Kubernetes node hosting this tenant's running pod(s) is NotReady; the workload may be rescheduled or unavailable."
+              description_zh: "承載此租戶運行中 Pod 的 Kubernetes 節點處於 NotReady 狀態；工作負載可能被重新調度或無法使用。"
+              runbook_url: "http://rb/a"
+              owner: team-a
+              tier: gold
+          - exp_labels:
+              severity: warning
+              tenant: db-a
+              node: node-3
+              runbook_url: "http://rb/a"
+              owner: team-a
+              tier: gold
+            exp_annotations:
+              summary: "Kubernetes node node-3 NotReady — affects db-a"
+              summary_zh: "Kubernetes 節點 node-3 NotReady — 影響 db-a"
+              platform_summary: "[gold] db-a: node node-3 NotReady — check node health / pod rescheduling"
+              platform_summary_zh: "[gold] db-a: 節點 node-3 NotReady — 請檢查節點健康 / Pod 重新調度"
+              description: "A Kubernetes node hosting this tenant's running pod(s) is NotReady; the workload may be rescheduled or unavailable."
+              description_zh: "承載此租戶運行中 Pod 的 Kubernetes 節點處於 NotReady 狀態；工作負載可能被重新調度或無法使用。"
+              runbook_url: "http://rb/a"
+              owner: team-a
+              tier: gold

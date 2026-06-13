@@ -186,4 +186,26 @@ data:
     \ emits no pod labels at all. Set KSM --metric-labels-allowlist=pods=[app.kubernetes.io/version].'\n\
     \      description_zh: 已宣告 {{ $value | printf \"%.0f\" }} 個版本專屬容器 CPU 閾值且租戶 Pod\
     \ 正在運行，但 kube-state-metrics 完全未暴露 pod 標籤。請為 KSM 設定 --metric-labels-allowlist=pods=[app.kubernetes.io/version]。\n\
-    \      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/scenarios/version-aware-thresholds.md#for-platform-operators-ksm-allowlist-remediation\n"
+    \      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/scenarios/version-aware-thresholds.md#for-platform-operators-ksm-allowlist-remediation\n\
+    - name: kubernetes-node-health\n  rules:\n  - record: tenant:node_owner:info\n\
+    \    expr: \"max by(node, tenant) (\\n  label_replace(\\n    kube_pod_info{namespace=~\\\
+    \"db-.+\\\"}\\n    and on(namespace, pod, uid)\\n      (kube_pod_status_phase{phase=\\\
+    \"Running\\\"} == 1),\\n    \\\"tenant\\\", \\\"$1\\\", \\\"namespace\\\", \\\"\
+    (.*)\\\"\\n  )\\n)\\n\"\n  - record: rule_pack_kubernetes:node_not_ready:core\n\
+    \    expr: \"(\\n  tenant:node_owner:info\\n  and on(node)\\n    (kube_node_status_condition{condition=\\\
+    \"Ready\\\", status=\\\"true\\\"} == 0)\\n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\
+    \"maintenance\\\"} == 1)\\n\"\n  - alert: NodeNotReady\n    expr: \"(\\n  rule_pack_kubernetes:node_not_ready:core\\\
+    n  * on(tenant) group_left(runbook_url, owner, tier)\\n    tenant_metadata_info\\\
+    n)\\nor\\n(\\n  rule_pack_kubernetes:node_not_ready:core\\n  unless on(tenant)\
+    \ tenant_metadata_info\\n)\\n\"\n    for: 3m\n    labels:\n      severity: warning\n\
+    \      tenant: '{{ $labels.tenant }}'\n      node: '{{ $labels.node }}'\n    annotations:\n\
+    \      summary: Kubernetes node {{ $labels.node }} NotReady — affects {{ $labels.tenant\
+    \ }}\n      summary_zh: Kubernetes 節點 {{ $labels.node }} NotReady — 影響 {{ $labels.tenant\
+    \ }}\n      platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant }}: node\
+    \ {{ $labels.node }} NotReady — check node health / pod rescheduling'\n      platform_summary_zh:\
+    \ '[{{ $labels.tier }}] {{ $labels.tenant }}: 節點 {{ $labels.node }} NotReady —\
+    \ 請檢查節點健康 / Pod 重新調度'\n      description: A Kubernetes node hosting this tenant's\
+    \ running pod(s) is NotReady; the workload may be rescheduled or unavailable.\n\
+    \      description_zh: 承載此租戶運行中 Pod 的 Kubernetes 節點處於 NotReady 狀態；工作負載可能被重新調度或無法使用。\n\
+    \      runbook_url: '{{ $labels.runbook_url }}'\n      owner: '{{ $labels.owner\
+    \ }}'\n      tier: '{{ $labels.tier }}'\n"

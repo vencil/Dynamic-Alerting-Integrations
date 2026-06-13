@@ -98,6 +98,7 @@ This document provides tenants with a unified reference for all alerts across Ru
 | ContainerCrashLoop | critical | [{{ $labels.tier }}] {{ $labels.tenant }}: crash loop detected  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:container_waiting_reason:count |
 | ContainerImagePullFailure | warning | [{{ $labels.tier }}] {{ $labels.tenant }}: image pull failing  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:container_waiting_reason:count |
 | VersionAwareThresholdInert | warning | {{ $value \| printf "%.0f" }} version-specific container CPU threshold(s) declared and tenant pods ar | Check alert metrics and review related logs; contact platform team for assistance if needed | user_threshold |
+| NodeNotReady | warning | [{{ $labels.tier }}] {{ $labels.tenant }}: node {{ $labels.node }} NotReady  | Check alert metrics and review related logs; contact platform team for assistance if needed | rule_pack_kubernetes:node_not_ready:core |
 
 ---
 
