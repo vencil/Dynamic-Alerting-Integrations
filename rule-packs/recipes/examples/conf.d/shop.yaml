@@ -64,12 +64,42 @@ tenants:
       # holding different codes do NOT mask each other. For tracking MANY codes,
       # prefer the label-form workaround (#810 option 1) over one `==` recipe per
       # code (each costs a shape + cap slot).
+      # ⚠️ LIVENESS / exporter SHAPE: a value-match is blind to a dead exporter —
+      # if the series VANISHES, nothing fires (reads as "healthy"). This is NOT
+      # `==`-specific; every value-based recipe (`>` too) shares it. Whether to
+      # pair an `absence` recipe depends on the exporter's shape: pair it when the
+      # gauge is emitted CONTINUOUSLY (0 when healthy; see process_status_code
+      # below); do NOT pair when it is emitted ONLY on error (then absence = the
+      # healthy state). See docs/custom-rule-governance.md §8.
       - recipe: threshold
         name: semisync_errno_1236
         metric: mysql_semisync_master_last_errno
         op: "=="
         window: 5m
         threshold: "1236:critical"
+
+      # ── Shape-X status-code + liveness pairing (safe-adoption demo, #832) ──
+      # process_status_code is emitted CONTINUOUSLY (0 = healthy, 1 = fault) =
+      # "Shape-X", so two recipes form the safe pair:
+      #   (1) `==` fires when the code equals the fault value;
+      #   (2) `absence` fires when the series VANISHES (dead exporter) — which (1)
+      #       alone would silently read as "healthy".
+      # `absence` respects maintenance mode and is tenant-aggregated: it catches
+      # TOTAL absence (all replicas gone), NOT single-replica death — pin a stable
+      # instance via `selectors` for per-replica liveness (works for StatefulSet
+      # stable names, not Deployment random pods). See docs/custom-rule-governance.md §8.
+      - recipe: threshold
+        name: proc_status_fault
+        metric: process_status_code
+        op: "=="
+        window: 5m
+        threshold: "1:critical"
+        for: 5m                  # §8 staleness: require the fault to persist (avoid a transient/stale read)
+      - recipe: absence
+        name: proc_status_exporter_gone
+        metric: process_status_code
+        window: 10m
+        threshold: "0:critical"
 
       # forecast (ratio mode): predict disk EXHAUSTION. capacity_metric set →
       # headroom ratio (avail/capacity); op "<" + threshold 0.15 = "predict the

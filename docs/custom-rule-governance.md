@@ -352,6 +352,93 @@ flowchart TD
 
 **Defer-with-trigger（heavier 持續形態）**：把 runtime-audit 包成 in-cluster 排程 CronJob、或新增 per-layer-pair drift 指標 → 待下列 trigger 才做：(1) 首次「Git 乾淨但叢集殘留 stale / orphan 規則」的 runtime drift incident；(2) 車隊規模使「`--check`-at-PR」不足以保證 runtime 一致。詳見 [#747](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/747)。
 
+## 8. 撰寫實務：以指標值表達的狀態／錯誤代碼（value-form codes）
+
+> **給誰**：要為「指標的**值**本身就是狀態碼／錯誤碼」設告警的 domain expert / tenant。典型案例：MariaDB semi-sync replication 中止的 `mysql_semisync_master_last_errno`，其**值** 1236 代表「binlog 位置遺失」。
+
+平台 recipe 的閾值比對作用在指標的**值**上。值是連續量（CPU%、queue depth）時 `>`/`<` 很自然；但當值是一個**離散代碼**時，會遇到兩種表達形式：
+
+- **label-form**：代碼在標籤裡，值是計數／存在旗標 —— `mysql_errno_total{errno="1236"}`。
+- **value-form**：代碼**就是**值 —— `mysql_semisync_master_last_errno` = 1236。
+
+**首選：把代碼變成標籤（value → label，#810 option 1）**
+
+只要做得到，**優先讓代碼以標籤呈現**，再用 `selectors` 精確過濾、`threshold > 0` 觸發：
+
+```yaml
+- recipe: threshold
+  name: semisync_err_1236
+  metric: mysql_errno_total      # 值=該 errno 的出現次數；errno 在標籤
+  selectors: {errno: "1236"}
+  op: ">"
+  window: 5m
+  threshold: "0:critical"        # 出現過即觸發
+```
+
+為何首選：(1) 基數低且穩定（一條 series，標籤值有限）；(2) **多代碼**可用一條 regex 解決（見下）；(3) 不必為每個代碼開一條 `==` recipe（每條吃一個 shape + cap 額度）。
+
+**何時用 `==`（value-form fallback）**
+
+當你**無法**把指標重塑成 label-form（用現成 exporter、無權改來源）時，用 `threshold` recipe 的 `==`：
+
+```yaml
+- recipe: threshold
+  name: semisync_errno_1236
+  metric: mysql_semisync_master_last_errno   # 值=errno 本身
+  op: "=="
+  window: 5m
+  threshold: "1236:critical"
+```
+
+`==` 為 **threshold recipe 限定**（計算型 recipe——rate／ratio／p99／forecast——兩側 validator 一致拒絕：浮點等值脆弱）。語意是 **any-match**：逐 replica 的原始值先比代碼再聚合，**任一**實例等於該碼即觸發，多副本持不同碼不會互相掩蓋。
+
+**決策樹**
+
+1. 能否讓 exporter／relabel 把代碼放進**標籤**？→ 能：用 **label-form**（首選）。
+2. 不能、且只比**單一**代碼？→ 用 **`==`**。
+3. 不能、但要比**多個**代碼？→ 仍盡量回到 label-form + `selectors_re` regex（見下）；真的回不去才開多條 `==`。
+
+**多個代碼的比對**
+
+label-form 一條 regex 即涵蓋多碼：
+
+```yaml
+  selectors_re: {errno: "1236|1032|1156"}
+```
+
+value-form 的 `==` 只能比**單一**代碼；多碼需多條 recipe（各吃一個 shape + cap 額度）——這是偏好 label-form 的又一理由。
+
+**重塑不了 exporter 時的退路（SRE-mediated）**
+
+若租戶無權改 exporter，value→label 的重塑可在**抓取階段**用 Prometheus `metric_relabel_configs` 完成。⚠️ 本平台的 scrape 設定由**平台／SRE 持有**（`k8s/03-monitoring/configmap-prometheus.yaml`），**非租戶自助**——租戶面只有 `conf.d/` 閾值。故此退路是「向平台／SRE 申請一條 relabel 規則」，不是租戶能單獨完成的動作。
+
+**Exporter 存活性（通用於所有 value-based 告警，不只 `==`）**
+
+value-form 比對有個共同盲點：**exporter 死掉 → series 消失 → 沒有任何東西觸發 → 看起來健康**。這**不是 `==` 獨有**——`>`／`<` 同樣盲。要補存活性偵測，配一條 `absence` recipe：
+
+```yaml
+- recipe: absence
+  name: errno_exporter_gone
+  metric: mysql_semisync_master_last_errno
+  window: 10m
+  threshold: "0:critical"
+```
+
+但**要不要配，取決於 exporter 的 shape**：
+
+- **連續型（健康時 emit 0）**：series 消失 = exporter 死 → **配 absence** 有意義。
+- **稀疏型（只在出錯時 emit）**：缺席 = 正常狀態 → **不要配**，否則健康時反而誤報。
+
+兩個 `absence` 的性質要先知道：(1) **respect maintenance**（維護模式會抑制）；(2) **tenant 聚合**——它偵測的是該租戶**全副本**缺席，**不抓單副本死亡**；要 per-replica 存活性，用 `selectors` 釘穩定實例名（適用 StatefulSet 穩定名，**不適用** Deployment 隨機 pod 名）。
+
+**Staleness（值過期）**
+
+exporter 活著、但值是數小時前的 stale 值時，`==` 會對舊代碼觸發。用 recipe 的 `for:` 要求條件**持續**一段時間，過濾瞬時／陳舊讀數。
+
+可執行的安全配對範例見 `rule-packs/recipes/examples/conf.d/shop.yaml`（`semisync_errno_1236` 案例 + `process_status_code` 的 Shape-X 配對）。
+
+---
+
 ## 相關資源
 
 | 資源 | 相關性 |

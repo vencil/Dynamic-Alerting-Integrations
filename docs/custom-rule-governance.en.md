@@ -318,6 +318,93 @@ Rule state spans **three source-of-truth layers** that drift pairwise: (1) Git (
 
 **Defer-with-trigger (heavier continuous form)**: packaging runtime-audit as an in-cluster scheduled CronJob, or adding per-layer-pair drift metrics, is deferred until: (1) the first "Git is clean but the cluster retains stale / orphan rules" runtime drift incident; or (2) fleet scale makes "`--check`-at-PR" insufficient to guarantee runtime consistency. See [#747](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/747).
 
+## 8. Authoring Practice: Status/Error Codes Expressed as a Metric Value (value-form codes)
+
+> **Audience**: domain experts / tenants alerting on a metric whose **value** *is* a status/error code. Canonical case: `mysql_semisync_master_last_errno`, whose **value** 1236 means "binlog position lost" when MariaDB semi-sync replication aborts.
+
+A recipe's threshold comparison acts on the metric's **value**. For continuous quantities (CPU%, queue depth) `>`/`<` is natural; but when the value is a **discrete code**, two encodings arise:
+
+- **label-form**: the code lives in a label, the value is a count/presence flag — `mysql_errno_total{errno="1236"}`.
+- **value-form**: the code *is* the value — `mysql_semisync_master_last_errno` = 1236.
+
+**Preferred: turn the code into a label (value → label, #810 option 1)**
+
+Whenever feasible, **emit the code as a label**, then filter precisely with `selectors` and fire on `threshold > 0`:
+
+```yaml
+- recipe: threshold
+  name: semisync_err_1236
+  metric: mysql_errno_total      # value = occurrences of that errno; errno is a label
+  selectors: {errno: "1236"}
+  op: ">"
+  window: 5m
+  threshold: "0:critical"        # fire once it has occurred
+```
+
+Why preferred: (1) low, stable cardinality (one series, bounded label values); (2) **multiple codes** collapse to a single regex (below); (3) no need for one `==` recipe per code (each costs a shape + cap slot).
+
+**When to use `==` (value-form fallback)**
+
+When you **cannot** reshape the metric into label-form (off-the-shelf exporter, no access to the source), use the `threshold` recipe's `==`:
+
+```yaml
+- recipe: threshold
+  name: semisync_errno_1236
+  metric: mysql_semisync_master_last_errno   # value = the errno itself
+  op: "=="
+  window: 5m
+  threshold: "1236:critical"
+```
+
+`==` is **threshold-recipe-only** (computed-value recipes — rate/ratio/p99/forecast — reject it on both validators: float equality is fragile). Its semantics are **any-match**: each replica's raw value is compared to the code *before* aggregating, so it fires if **any** instance equals the code — replicas holding different codes do not mask each other.
+
+**Decision tree**
+
+1. Can the exporter / a relabel put the code in a **label**? → Yes: use **label-form** (preferred).
+2. No, and matching a **single** code? → use **`==`**.
+3. No, but matching **multiple** codes? → still try to return to label-form + `selectors_re` regex (below); only open multiple `==` recipes when you truly cannot.
+
+**Matching multiple codes**
+
+label-form covers many codes with one regex:
+
+```yaml
+  selectors_re: {errno: "1236|1032|1156"}
+```
+
+value-form `==` matches a **single** code only; multiple codes need multiple recipes (each costs a shape + cap slot) — another reason to prefer label-form.
+
+**Escape hatch when you can't reshape the exporter (SRE-mediated)**
+
+If a tenant cannot change the exporter, the value→label reshape can be done at **scrape time** with Prometheus `metric_relabel_configs`. ⚠️ On this platform the scrape config is **platform/SRE-owned** (`k8s/03-monitoring/configmap-prometheus.yaml`), **not tenant self-serve** — the tenant surface is only `conf.d/` thresholds. So this escape hatch is "request a relabel rule from platform/SRE," not something a tenant does alone.
+
+**Exporter liveness (general to all value-based alerts, not just `==`)**
+
+Value-form matching has a shared blind spot: **the exporter dies → the series vanishes → nothing fires → it looks healthy**. This is **not `==`-specific** — `>`/`<` are equally blind. To add liveness detection, pair an `absence` recipe:
+
+```yaml
+- recipe: absence
+  name: errno_exporter_gone
+  metric: mysql_semisync_master_last_errno
+  window: 10m
+  threshold: "0:critical"
+```
+
+But **whether to pair depends on the exporter's shape**:
+
+- **Continuous (emits 0 when healthy)**: a vanished series = a dead exporter → **pairing absence is meaningful**.
+- **Sparse (emits only on error)**: absence = the healthy state → **do not pair**, or you false-alarm while healthy.
+
+Two `absence` properties to know up front: (1) it **respects maintenance** mode (suppressed during maintenance); (2) it is **tenant-aggregated** — it detects **total** absence across the tenant's replicas, **not single-replica death**; for per-replica liveness, pin a stable instance via `selectors` (works for StatefulSet stable names, **not** Deployment random pod names).
+
+**Staleness (a stale value)**
+
+When the exporter is alive but the value is hours-old stale, `==` fires on the old code. Use the recipe's `for:` to require the condition to **persist**, filtering transient/stale reads.
+
+A runnable safe-pairing example lives in `rule-packs/recipes/examples/conf.d/shop.yaml` (the `semisync_errno_1236` case + the `process_status_code` Shape-X pairing).
+
+---
+
 ## Related Resources
 
 | Resource | Relevance |
