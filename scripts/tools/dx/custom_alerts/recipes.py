@@ -132,8 +132,56 @@ def _metric_record(rid: str, recipe: str, metric: str, sel: str,
     return {"record": f"custom:metric:{rid}", "expr": _norm_version(inner)}
 
 
+def _eq_core_record(rid: str, sev: str, metric: str, sel: str) -> dict:
+    """`==` any-match core (#810 + #819 adversarial fix).
+
+    Ordered ops aggregate THEN compare (`max by(tenant)(metric) > thr` = worst
+    case). Equality has no meaningful aggregate: `max(...) == code` masks a
+    matching replica when another holds a larger code (max of 1236,1593 is 1593
+    → 1593==1236 false → SILENT miss). So `==` compares the RAW per-series metric
+    against the per-tenant threshold FIRST, then aggregates existence — any series
+    equal to the configured code makes the tenant fire.
+
+    The raw metric is INLINED (not a `custom:metric:{id}` recording rule) so we
+    don't persist a per-pod high-cardinality intermediate; `max by(...)` after the
+    compare collapses replicas back to one series per (tenant, version, name,
+    mode). group_left(name, mode) stays many(replicas)-to-one(threshold) — the
+    uniqueness guard keeps one threshold series per (tenant, version, severity).
+    Version-aware exact-or-fallback mirrors the ordered-op core.
+    """
+    raw = _norm_version(f"{metric}{sel}")
+    core = (
+        f'(\n'
+        f'  max by(tenant, version, name, mode) (\n'
+        f'    {raw}\n'
+        f'    == on(tenant, version) group_left(name, mode)\n'
+        f'      custom:threshold:{rid}{{severity="{sev}"}}\n'
+        f'  )\n'
+        f'  or\n'
+        f'  max by(tenant, version, name, mode) (\n'
+        f'    (\n'
+        f'      {raw}\n'
+        f'      unless on(tenant, version)\n'
+        f'        custom:threshold:{rid}{{severity="{sev}"}}\n'
+        f'    )\n'
+        f'    == on(tenant) group_left(name, mode)\n'
+        f'      custom:threshold:{rid}{{version="default", severity="{sev}"}}\n'
+        f'  )\n'
+        f')'
+    )
+    expr = (
+        f'{core}\n'
+        f'unless on(tenant)\n'
+        f'(user_state_filter{{filter="maintenance"}} == 1)'
+    )
+    return {"record": f"custom:{rid}:{sev}:core", "expr": expr}
+
+
 def _core_record(rid: str, recipe: str, op: str, sev: str, metric: str,
                  sel: str, window: str) -> dict:
+    if op == "==":
+        # threshold-recipe-only (gate enforced upstream); any-match semantics.
+        return _eq_core_record(rid, sev, metric, sel)
     if recipe == "absence":
         # self-scoped: only tenants with custom:threshold:{id} are candidates;
         # fire where the metric had no sample over the window.
@@ -176,7 +224,7 @@ def _core_record(rid: str, recipe: str, op: str, sev: str, metric: str,
 
 
 def _alert_rule(rid: str, recipe: str, sev: str, metric: str, sel: str,
-                for_: str) -> dict:
+                for_: str, op: str = ">") -> dict:
     core = f"custom:{rid}:{sev}:core"
     # left-outer-join metadata enrichment (onboarding-vacuum safe, #709 pattern).
     expr = (
@@ -194,6 +242,14 @@ def _alert_rule(rid: str, recipe: str, sev: str, metric: str, sel: str,
     sev_en = "CRITICAL " if sev == "critical" else ""
     sev_zh = "達臨界 " if sev == "critical" else ""
     desc_sel = sel if sel else ""
+    # `==` is an exact status/error-code match (#810), not a threshold crossing —
+    # say so, and print the code as an integer (codes are not decimals).
+    if op == "==":
+        desc_en = f'value {{{{ $value | printf "%.0f" }}}} matched the configured code'
+        desc_zh = f'值 {{{{ $value | printf "%.0f" }}}} 等於設定代碼'
+    else:
+        desc_en = f'value {{{{ $value | printf "%.2f" }}}} crossed the configured threshold'
+        desc_zh = f'值 {{{{ $value | printf "%.2f" }}}} 已越過設定閾值'
     return {
         "alert": f"Custom_{rid}",
         "expr": expr,
@@ -216,14 +272,8 @@ def _alert_rule(rid: str, recipe: str, sev: str, metric: str, sel: str,
         "annotations": {
             "summary": f"{sev_en}Custom alert [{{{{ $labels.name }}}}] for {{{{ $labels.tenant }}}}",
             "summary_zh": f"{{{{ $labels.tenant }}}} 的自訂告警 [{{{{ $labels.name }}}}] {sev_zh}觸發",
-            "description": (
-                f"{recipe} on {metric}{desc_sel}: "
-                f'value {{{{ $value | printf "%.2f" }}}} crossed the configured threshold'
-            ),
-            "description_zh": (
-                f"{metric}{desc_sel} 的 {recipe}: "
-                f'值 {{{{ $value | printf "%.2f" }}}} 已越過設定閾值'
-            ),
+            "description": f"{recipe} on {metric}{desc_sel}: {desc_en}",
+            "description_zh": f"{metric}{desc_sel} 的 {recipe}: {desc_zh}",
             "runbook_url": "{{ $labels.runbook_url }}",
             "owner": "{{ $labels.owner }}",
             "tier": "{{ $labels.tier }}",
@@ -256,12 +306,14 @@ def emit_shape(shape: dict) -> Tuple[List[dict], List[dict]]:
         recording.extend(_forecast_records(
             rid, metric, sel, str(shape.get("horizon", "")),
             shape.get("capacity_metric", "")))
-    elif recipe != "absence":
+    elif recipe != "absence" and op != "==":
+        # `==` inlines the raw metric in its any-match core (no maxed metric
+        # record) — see _eq_core_record. absence has no metric record either.
         recording.append(_metric_record(rid, recipe, metric, sel, window, quantile, denom))
     for sev in severities:
         recording.append(_core_record(rid, recipe, op, sev, metric, sel, window))
 
     alerts: List[dict] = [
-        _alert_rule(rid, recipe, sev, metric, sel, for_) for sev in severities
+        _alert_rule(rid, recipe, sev, metric, sel, for_, op) for sev in severities
     ]
     return recording, alerts

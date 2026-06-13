@@ -60,6 +60,11 @@
       "_note": "forecast raw mode (#741): no capacity_metric → predict the gauge crossing an absolute threshold; no den_ part, no window",
       "input": {"recipe": "forecast", "metric": "queue_depth", "op": ">", "horizon": "12h"},
       "recipe_id": "forecast__queue_depth__gt__h12h__for1m"
+    },
+    {
+      "_note": "grammar coverage (#810): op \"==\" → eq (threshold-recipe-only; status/error-code-as-value match, e.g. MariaDB semi-sync errno 1236)",
+      "input": {"recipe": "threshold", "metric": "mysql_semisync_master_last_errno", "op": "==", "window": "5m"},
+      "recipe_id": "threshold__mysql_semisync_master_last_errno__eq__w5m__for1m"
     }
   ]
 }

@@ -74,7 +74,7 @@ var (
 		"forecast": true,
 	}
 	// op → slug. Keep in sync with shape.py OP_SLUG.
-	customAlertOpSlug = map[string]string{">": "gt", ">=": "ge", "<": "lt", "<=": "le"}
+	customAlertOpSlug = map[string]string{">": "gt", ">=": "ge", "<": "lt", "<=": "le", "==": "eq"}
 	// permitted forecast horizons (predict-ahead distance) — enum-bounded, enters
 	// the recipe_id slug. MUST match shape.py ALLOWED_HORIZON + the schema enum.
 	customAlertHorizonValid = map[string]bool{
@@ -167,13 +167,24 @@ func RecipeID(spec CustomAlertSpec) (string, error) {
 		}
 		parts = append(parts, prefix+"_"+it.key+"_"+it.value)
 	}
+	op := spec.Op
+	if op == "" {
+		op = ">"
+	}
+	// `==` is threshold-recipe-only (#810): exact match suits integer status/
+	// error codes on a RAW gauge; other recipes emit computed floats where
+	// equality is fragile. This gate runs BEFORE the absence short-circuit so it
+	// also rejects absence+"==" (op is meaningless for a presence check) — keeping
+	// the imperative gate in lockstep with the JSON-schema if/then editor-guard,
+	// so an API/GitOps-accepted spec can't later fail to render in the Portal.
+	// Mirrors shape.py.
+	if op == "==" && spec.Recipe != "threshold" {
+		return "", fmt.Errorf("op \"==\" is only allowed for the threshold recipe "+
+			"(raw-gauge status-code match); %s does not support it", spec.Recipe)
+	}
 	if spec.Recipe == "absence" {
 		parts = append(parts, "absent")
 	} else {
-		op := spec.Op
-		if op == "" {
-			op = ">"
-		}
 		slug, ok := customAlertOpSlug[op]
 		if !ok {
 			return "", fmt.Errorf("unknown op %q", op)

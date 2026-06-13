@@ -275,12 +275,13 @@ def test_domain_and_platform_inheritance(tmp_path):
 
 
 # --- 7. example fixture + --check ------------------------------------------
-def test_example_fixture_compiles_to_eight_shapes():
+def test_example_fixture_compiles_to_nine_shapes():
     pack = cc.build_pack(_EXAMPLES)
-    assert pack["_meta"]["shapes"] == 8
-    # shop-a: 6 own (threshold/rate/ratio/p99/absence/forecast); pay-a: finance ratio + own threshold.
+    assert pack["_meta"]["shapes"] == 9
+    # shop-a: 7 own (threshold/rate/ratio/p99/absence/forecast + equals #810);
+    # pay-a: finance ratio + own threshold.
     # (absence moved off platform-L0 → no longer inherited by pay-a; see _defaults.yaml note.)
-    assert pack["_meta"]["per_tenant_counts"] == {"pay-a": 2, "shop-a": 6}
+    assert pack["_meta"]["per_tenant_counts"] == {"pay-a": 2, "shop-a": 7}
 
 
 def test_check_flags_stale(tmp_path, monkeypatch):

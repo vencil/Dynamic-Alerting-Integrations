@@ -935,6 +935,10 @@
           "if": { "properties": { "recipe": { "const": "forecast" } }, "required": ["recipe"] },
           "then": { "required": ["horizon"] },
           "else": { "required": ["window"] }
+        },
+        {
+          "if": { "properties": { "op": { "const": "==" } }, "required": ["op"] },
+          "then": { "properties": { "recipe": { "const": "threshold" } } }
         }
       ],
       "properties": {
@@ -978,8 +982,8 @@
         "op": {
           "type": "string",
           "title": "Comparison Operator",
-          "description": "How the computed value is compared to the threshold (ignored by absence).",
-          "enum": [">", ">=", "<", "<="],
+          "description": "How the computed value is compared to the threshold (ignored by absence). `==` is threshold-recipe-only (validator-enforced, #810): exact match for an integer status/error code on a raw gauge; computed-value recipes (rate/ratio/p99_latency/forecast) reject it as float-fragile.",
+          "enum": [">", ">=", "<", "<=", "=="],
           "default": ">"
         },
         "window": {
