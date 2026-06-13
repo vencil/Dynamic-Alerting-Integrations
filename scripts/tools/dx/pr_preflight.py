@@ -735,10 +735,17 @@ def _git_dir(repo_root: Path) -> Path:
 
 
 def _head_sha(repo_root: Path) -> Optional[str]:
-    r = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=repo_root, capture_output=True, text=True, check=False, timeout=10,
-    )
+    # Raw subprocess (not run()) for cwd targeting; swallow the launch/timeout
+    # failures run() normally absorbs so callers (marker write + the stale-head
+    # CI carve-out) get a clean None instead of an escaping exception
+    # (CodeRabbit #820: undecidable must fall back conservatively, not crash).
+    try:
+        r = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repo_root, capture_output=True, text=True, check=False, timeout=10,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
     if r.returncode == 0 and r.stdout.strip():
         return r.stdout.strip()
     return None
@@ -1064,6 +1071,49 @@ def _classify_ci_failures(failed_checks: list) -> str:
     return f"→ main CI 也是 {main_conclusion} — 部分失敗可能是 pre-existing"
 
 
+def _ci_ran_on_stale_head(pr_number: Optional[int] = None) -> Optional[str]:
+    """紅 CI 是否跑在「不是本地 HEAD」的 PR head 上？stale → 回傳 PR head 短 SHA。
+
+    fix-push 悖論（#819）：`gh pr checks` 回報的是 PR 遠端 head 的結果；若本地
+    HEAD ≠ 該 head，這次 push 會取代它並重跑 CI，「push 前要求 CI 綠」邏輯上不可
+    滿足。判定訊號直接問 GitHub（`gh pr view --json headRefOid`）比對本地 HEAD —
+    不從本地 upstream 推斷：`@{u}..HEAD` 在 `checkout -b X origin/main` 未
+    `push -u` 的 branch shape 下 upstream 停在 main、count 恆 >0，會把
+    merge-readiness 的 FAIL 牙齒整條拔掉（對抗式 review 攻擊面 2）。
+
+    只在 PR head 是本地 HEAD 的**真祖先**時才算 stale（即這次 push fast-forward
+    過它、CI 必在新 sha 重跑）。任何無法證明的關係——SHA 相同、diverged、遠端
+    head 反而較新、gh/git 失敗——一律回 None 維持 FAIL（CodeRabbit #820 攻擊面：
+    純不等式會把「遠端較新/分岔」誤判為 stale 而軟化真 blocker）。
+    """
+    import json as _json
+
+    head = _head_sha(Path.cwd())
+    if not head:
+        return None
+    cmd = ["gh", "pr", "view"] + ([str(pr_number)] if pr_number else []) + [
+        "--json", "headRefOid"]
+    r = run(cmd, timeout=15)
+    if r.returncode != 0:
+        return None
+    try:
+        data = _json.loads(r.stdout)
+    except _json.JSONDecodeError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    pr_head = str(data.get("headRefOid") or "").strip()
+    if not pr_head or pr_head == head:
+        return None
+    # 只有 PR head 可證明為本地 HEAD 的祖先才降級（push 會推進過它）。
+    # rc=1（非祖先：diverged / 遠端較新）或 rc≠0,1（物件缺失 / git 失敗）→
+    # None 保守維持 FAIL。
+    anc = run(["git", "merge-base", "--is-ancestor", pr_head, head], timeout=10)
+    if anc.returncode != 0:
+        return None
+    return pr_head[:8]
+
+
 def check_ci_status(pr_number: Optional[int] = None) -> CheckResult:
     """查詢 GitHub CI 狀態。"""
     # gh pr checks --json fields: name, state, bucket, description, event, link, startedAt, completedAt, workflow
@@ -1122,6 +1172,21 @@ def check_ci_status(pr_number: Optional[int] = None) -> CheckResult:
             ab_note = _classify_ci_failures(hard_failed)
             if ab_note:
                 detail += f"\n{ab_note}"
+            # Fix-push 悖論（#819 死鎖）：紅 CI 跑在 PR 的遠端 head 上；若本地
+            # HEAD 與之不一致，這次 push/sync 會取代它並重跑 CI ——「push 前要求
+            # 新 SHA 的 CI 綠」邏輯上不可滿足 → 降 WARN 放行。SHA 一致（真
+            # merge-readiness 紅）或不可判定（gh 失敗）→ 維持 FAIL，merge 仍由
+            # branch protection 把關。與 #543 soft-fail carve-out 同族。
+            stale_head = _ci_ran_on_stale_head(pr_number)
+            if stale_head:
+                return CheckResult(
+                    "CI status",
+                    Status.WARN,
+                    f"{len(hard_failed)} failed / {len(passed)} passed "
+                    f"/ {len(pending)} pending — 失敗跑在 PR head {stale_head}，"
+                    f"與本地 HEAD 不一致（push 後 CI 重跑；重跑仍紅即為真失敗）",
+                    detail=detail,
+                )
             return CheckResult(
                 "CI status",
                 Status.FAIL,
