@@ -743,7 +743,6 @@ LOADER_MARKERS = [
     "__da_flow_progress_",
     "__da_flow_completed_",
     "filterSteps",
-    "checkValidation",
     "__checkFlowGate",
     "buildCustomFlow",
     "renderFlowUI",
@@ -763,10 +762,8 @@ class TestCheckLoaderFlowInfrastructure:
 
     @pytest.mark.parametrize("marker", LOADER_MARKERS)
     def test_each_missing_marker_is_error(self, marker):
-        # NB: plain str.replace of the marker alone is not enough —
-        # "checkValidation" contains no other marker, but "flow-stepper"
-        # etc. are disjoint tokens, so removing the token removes exactly
-        # one marker.
+        # NB: markers are disjoint tokens (none is a substring of
+        # another), so replacing one token removes exactly one marker.
         errors = []
         ltc.check_loader_flow_infrastructure(
             self.LOADER.replace(marker, "renamed-away"), errors

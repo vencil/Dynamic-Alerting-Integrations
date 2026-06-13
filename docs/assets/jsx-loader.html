@@ -471,28 +471,6 @@ window.addEventListener('pageshow', function(e) {
       });
     }
 
-    // Validate step checkpoint: returns warning message or null
-    function checkValidation(step) {
-      if (!step.validation) return null;
-      var v = step.validation;
-      if (v.required_state) {
-        for (var i = 0; i < v.required_state.length; i++) {
-          var key = v.required_state[i];
-          var val = window.__FLOW_STATE[key];
-          if (val === undefined || val === null || val === '') {
-            var lang = window.__DA_LANG || 'en';
-            return (v.warn && (v.warn[lang] || v.warn.en)) || 'Please complete the previous step first.';
-          }
-          // Also check empty arrays
-          if (Array.isArray(val) && val.length === 0) {
-            var lang2 = window.__DA_LANG || 'en';
-            return (v.warn && (v.warn[lang2] || v.warn.en)) || 'Please complete the previous step first.';
-          }
-        }
-      }
-      return null;
-    }
-
     flowPromise
       .then(function(data) {
         var flow = data.flows[flowName];

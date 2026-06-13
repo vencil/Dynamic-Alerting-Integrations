@@ -490,8 +490,7 @@ def check_flow_components(tools: list, errors: list, warnings: list):
             # condition / validation shapes — filterSteps and the
             # __checkFlowGate Next-button gate in jsx-loader.html consume
             # these leniently, so a malformed shape silently disables the
-            # gate/filter. (checkValidation also parses validation but is
-            # a dead inline duplicate — zero call sites.)
+            # gate/filter.
             cond = step.get("condition")
             if cond is not None:
                 if not isinstance(cond, dict):
@@ -554,7 +553,6 @@ def check_loader_flow_infrastructure(loader_html: str, errors: list):
         ("__da_flow_progress_", "progress persistence key"),
         ("__da_flow_completed_", "completion tracking key"),
         ("filterSteps", "conditional step filtering"),
-        ("checkValidation", "checkpoint validation function"),
         ("__checkFlowGate", "validation gate handler"),
         ("buildCustomFlow", "custom flow builder function"),
         ("renderFlowUI", "flow UI renderer"),
