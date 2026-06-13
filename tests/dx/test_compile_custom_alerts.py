@@ -275,13 +275,13 @@ def test_domain_and_platform_inheritance(tmp_path):
 
 
 # --- 7. example fixture + --check ------------------------------------------
-def test_example_fixture_compiles_to_nine_shapes():
+def test_example_fixture_compiles_to_eleven_shapes():
     pack = cc.build_pack(_EXAMPLES)
-    assert pack["_meta"]["shapes"] == 9
-    # shop-a: 7 own (threshold/rate/ratio/p99/absence/forecast + equals #810);
-    # pay-a: finance ratio + own threshold.
+    assert pack["_meta"]["shapes"] == 11
+    # shop-a: 9 own (threshold/rate/ratio/p99/absence/forecast + equals #810
+    # + Shape-X ==/absence liveness pair #832); pay-a: finance ratio + own threshold.
     # (absence moved off platform-L0 → no longer inherited by pay-a; see _defaults.yaml note.)
-    assert pack["_meta"]["per_tenant_counts"] == {"pay-a": 2, "shop-a": 7}
+    assert pack["_meta"]["per_tenant_counts"] == {"pay-a": 2, "shop-a": 9}
 
 
 def test_check_flags_stale(tmp_path, monkeypatch):
@@ -378,7 +378,7 @@ def test_own_recipe_cap_at_limit_ok(tmp_path):
 
 def test_build_pack_threads_cap(tmp_path):
     # CLI wiring guard: build_pack(max_custom_recipes=) must reach build_shapes.
-    # the example fixture's shop-a has 6 OWN recipes → cap 5 must reject here.
+    # the example fixture's shop-a has 9 OWN recipes → cap 5 must reject here.
     with pytest.raises(ld.CustomAlertConfigError, match="max_custom_recipes"):
         cc.build_pack(_EXAMPLES, max_custom_recipes=5)
 
