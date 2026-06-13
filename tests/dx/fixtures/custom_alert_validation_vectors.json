@@ -23,6 +23,8 @@
      "spec": {"recipe": "p99_latency", "name": "bad_eq_p99", "metric": "http_request_duration_seconds", "quantile": "0.99", "op": "==", "window": "5m", "threshold": "2:warning"}},
     {"_note": "op == rejected on forecast raw mode (otherwise-valid spec; gate fires before horizon shaping)", "valid": false,
      "spec": {"recipe": "forecast", "name": "bad_eq_fc", "metric": "queue_depth", "op": "==", "horizon": "12h", "threshold": "100:warning"}},
+    {"_note": "op == ACCEPTED on absence — op is meaningless for a presence check, so the gate ignores it (compiles to an absence rule); pins that the threshold-only gate does NOT extend to absence. NB the JSON-schema if/then editor-guard is stricter and blocks this combo; the imperative gate is the authority here (CodeRabbit #819 suggested valid:false, which would contradict the gate)", "valid": true,
+     "spec": {"recipe": "absence", "name": "eq_ignored_on_absence", "metric": "up", "op": "==", "window": "5m", "threshold": "1:critical"}},
     {"_note": "forecast bad horizon (not enum)", "valid": false,
      "spec": {"recipe": "forecast", "name": "x", "metric": "m", "op": "<", "horizon": "3h", "threshold": "0.5:warning"}},
     {"_note": "reserved selector label", "valid": false,
