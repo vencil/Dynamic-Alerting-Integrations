@@ -534,3 +534,102 @@ groups:
           # English H2 heading in the guide — do NOT rename the heading (the link would
           # rot silently; mkdocs-strict does not validate URLs inside rule-pack YAML).
           runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/scenarios/version-aware-thresholds.md#for-platform-operators-ksm-allowlist-remediation"
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Node health (#809): tenant-attributed node-NotReady alerting.
+  # Infra signals (kube_node_status_condition) are node-scoped — they carry
+  # no `tenant`. We attribute them via a stable node→tenant mapping built
+  # from kube_pod_info (which carries node + namespace), then fan a node-down
+  # out to every tenant with a RUNNING pod on that node. Default-on, warning
+  # severity (migration-parity, #809); opt-out via maintenance mode.
+  # Records + alert share one group: rules eval sequentially within a group,
+  # so the mapping and core are fresh before the alert in the same cycle.
+  # ─────────────────────────────────────────────────────────────────────
+  - name: kubernetes-node-health
+    rules:
+      # Stable low-cardinality node→tenant mapping. RUNNING-only: kube_pod_info
+      # also emits Evicted/Failed/Completed pods → a dead node would otherwise
+      # fan out to tenants whose pods merely *used to* live there (ghost-pod
+      # false positive; adversarial review). The Running filter also gives the
+      # alert auto-resolve semantics — once the control plane evicts/reschedules
+      # the pod, the mapping drops and the alert clears for that tenant.
+      # `tenant` is derived from namespace via label_replace because KSM is NOT
+      # scraped through the namespace→tenant relabel (same idiom as the
+      # container-normalization group above). The Running join keys on `uid` too
+      # (not just namespace,pod): a recreated pod reuses its name, so during a
+      # reschedule the OLD pod's kube_pod_info (still on the old node) would
+      # otherwise borrow the NEW pod's Running phase and ghost-map the tenant to
+      # the old node → a false NotReady on the old node (CodeRabbit #831).
+      # ⚠ `uid` is a standard KSM pod-metric label on BOTH kube_pod_info and
+      # kube_pod_status_phase (verified KSM v2.18.0, the deployed version). If KSM
+      # is ever downgraded below a version that drops `uid` from one side, the
+      # join goes empty and node-health silently stops firing — the same KSM-
+      # contract failure class the VersionAwareThresholdInert sentinel guards.
+      - record: tenant:node_owner:info
+        expr: |
+          max by(node, tenant) (
+            label_replace(
+              kube_pod_info{namespace=~"db-.+"}
+              and on(namespace, pod, uid)
+                (kube_pod_status_phase{phase="Running"} == 1),
+              "tenant", "$1", "namespace", "(.*)"
+            )
+          )
+
+      # node-down ∩ owning tenants. `and on(node)` (NOT `* group_left`): the
+      # Ready=true condition gauge is 0 when NotReady, so multiplying would
+      # collapse the value to 0 and a `> 0` alert would never fire; `and` keeps
+      # the mapping's value (1) and its (node, tenant) labels. Maintenance
+      # opt-out mirrors every other pack alert.
+      # NOTE: `{condition="Ready", status="true"} == 0` is INTENTIONALLY both
+      # NotReady AND Unknown — on a network partition KSM sets the Ready/true
+      # gauge to 0 (and Ready/unknown to 1), so this one selector covers both
+      # node-failure modes. Do not "add" a status="unknown" branch (redundant).
+      - record: rule_pack_kubernetes:node_not_ready:core
+        expr: |
+          (
+            tenant:node_owner:info
+            and on(node)
+              (kube_node_status_condition{condition="Ready", status="true"} == 0)
+          )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
+
+      # left-outer-join metadata enrichment (onboarding-vacuum safe) — same
+      # two-branch pattern as the container/pod-state alerts. `node` rides
+      # through so on-call sees which node; Alertmanager groups by
+      # [alertname, tenant], so an AZ-wide outage collapses to one notification
+      # per tenant. `for: 3m` rides out kubelet↔API-server network blips
+      # (transient Ready→Unknown flaps) and still fires well inside the ~5m
+      # pod-eviction window (the mapping is still present).
+      # Boundary: once the pod is evicted/rescheduled this alert auto-resolves
+      # (the node is no longer the tenant's problem). If the pod then stays
+      # Pending (no capacity), the workload-down handoff is the tenant's
+      # absence-on-`up` recipe's job (#809), NOT this node alert's.
+      - alert: NodeNotReady
+        expr: |
+          (
+            rule_pack_kubernetes:node_not_ready:core
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
+          )
+          or
+          (
+            rule_pack_kubernetes:node_not_ready:core
+            unless on(tenant) tenant_metadata_info
+          )
+        for: 3m
+        labels:
+          severity: warning
+          tenant: "{{ $labels.tenant }}"
+          node: "{{ $labels.node }}"
+        annotations:
+          summary: "Kubernetes node {{ $labels.node }} NotReady — affects {{ $labels.tenant }}"
+          summary_zh: "Kubernetes 節點 {{ $labels.node }} NotReady — 影響 {{ $labels.tenant }}"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: node {{ $labels.node }} NotReady — check node health / pod rescheduling"
+          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}: 節點 {{ $labels.node }} NotReady — 請檢查節點健康 / Pod 重新調度"
+          description: "A Kubernetes node hosting this tenant's running pod(s) is NotReady; the workload may be rescheduled or unavailable."
+          description_zh: "承載此租戶運行中 Pod 的 Kubernetes 節點處於 NotReady 狀態；工作負載可能被重新調度或無法使用。"
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"
