@@ -94,6 +94,7 @@ tenants:
         op: "=="
         window: 5m
         threshold: "1:critical"
+        for: 5m                  # §8 staleness: require the fault to persist (avoid a transient/stale read)
       - recipe: absence
         name: proc_status_exporter_gone
         metric: process_status_code
