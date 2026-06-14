@@ -32,6 +32,7 @@ _ALLOWED_SCHEMES: Final[frozenset[str]] = frozenset(("http", "https"))
 VALID_RESERVED_KEYS: Final[set[str]] = {
     "_silent_mode", "_severity_dedup", "_namespaces", "_metadata", "_profile",
     "_routing_profile",  # v2.1.0 ADR-007: cross-domain routing profile reference
+    "_custom_alerts",  # v2.9.0 ADR-024 能力 B (#741): tenant-authored custom alerts → user_threshold{component="custom"}
 }
 VALID_RESERVED_PREFIXES: Final[tuple[str, ...]] = ("_state_", "_routing")
 
