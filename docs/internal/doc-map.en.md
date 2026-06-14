@@ -36,6 +36,7 @@ lang: en
 | `docs/adr/022-dev-auth-bypass-four-layer-containment.md` | Platform Engineers, contributors | ADR-022: tenant-api Dev-Auth Bypass — Local-Dev Identity Substitute, Four-Layer Containment |
 | `docs/adr/023-write-plane-single-writer-invariant.md` | Platform Engineers, contributors | ADR-023: tenant-api 寫入平面 — 單一寫者不變式 |
 | `docs/adr/024-version-aware-threshold-via-dimensional-label.md` (.en.md) | Platform Engineers, contributors, SREs | ADR-024: Declarative Dimensional Alerting Engine — Version-Aware Thresholds + Custom Alerts |
+| `docs/adr/025-alerting-plane-self-liveness.md` (.en.md) | Platform Engineers, SREs, contributors | ADR-025: Alerting-Plane Self-Liveness — Detecting When the Alerting System Itself Dies |
 | `docs/api/README.md` (.en.md) | Platform Engineers, SREs | Threshold Exporter API Reference |
 | `docs/api/tenant-api-hardening.md` (.en.md) | platform-ops, sre, security | Tenant API Hardening (v2.8.0) |
 | `docs/architecture-and-design.md` (.en.md) | Platform Engineers, SREs, decision-maker | Architecture and Design — Multi-Tenant Dynamic Alerting Platform Technical Whitepaper |
