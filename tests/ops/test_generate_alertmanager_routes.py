@@ -590,6 +590,18 @@ class TestValidateTenantKeys:
         warnings = validate_tenant_keys("db-a", keys, defaults_keys)
         assert warnings == []
 
+    def test_custom_alerts_reserved_no_warning(self):
+        """_custom_alerts（v2.9.0 ADR-024 能力 B, #741）為合法 reserved key，
+        不可被當成 typo（Python VALID_RESERVED_KEYS ↔ Go validReservedKeys 同步）。"""
+        warnings = validate_tenant_keys("db-b", {"_custom_alerts"}, set())
+        assert warnings == []
+
+    def test_custom_alerts_alongside_other_reserved(self):
+        """_custom_alerts 與其他 reserved key / prefix 並存時皆不報警。"""
+        keys = {"_custom_alerts", "_silent_mode", "_severity_dedup", "_routing"}
+        warnings = validate_tenant_keys("db-b", keys, set())
+        assert warnings == []
+
 
 class TestValidateVersionLabel:
     """ADR-024 OQ-6 dimensional `version` label guard (Python side of the
