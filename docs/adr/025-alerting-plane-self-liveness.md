@@ -77,7 +77,7 @@ receivers:
 
 **路由必須置頂**：Alertmanager 由上往下評估路由。Watchdog 這條**必須放在 `routes` 陣列的第一條**，否則可能被前面某條範圍較廣、且 `continue: false` 的路由（例如某個 severity 攔截或既有的租戶告警專線）先吞掉，導致心跳永遠送不出去。
 
-**靜音與抑制免疫**：訊號就算評估正常、也進了置頂路由，仍可能在 Alertmanager 送出前被**全域 Silence**（重大故障時 SRE 常下 `.*` 萬用靜音壓告警海嘯）或 **`inhibit_rules`**（例如 `ClusterDown` 觸發時抑制所有常規告警）攔下——一旦攔下，外部就收不到心跳、反而誤報「平台死亡」，引發次生混亂。硬性契約：(a) Watchdog 的標籤設計（`severity: none`）須語意上**免疫**所有現有與未來的全域抑制規則；(b) operator 手冊**嚴禁**對 `alertname="Watchdog"` 施加任何 Silence（含維護視窗）。
+**靜音與抑制免疫**：訊號就算評估正常、也進了置頂路由，仍可能在 Alertmanager 送出前被**全域 Silence**（重大故障時 SRE 常下 `.*` 萬用靜音壓告警海嘯）或 **`inhibit_rules`**（例如 `ClusterDown` 觸發時抑制所有常規告警）攔下——一旦攔下，外部就收不到心跳、反而誤報「平台死亡」，引發次生混亂。注意 Alertmanager **沒有「inhibition 免疫」原語**：`severity: none` 只是讓 Watchdog 不落入既有 severity-targeted 的抑制，**不是萬用免疫**——一條未來的廣域 inhibit（其 `target_matchers` 命中 Watchdog 帶的任何標籤）仍會壓掉它。真正的保證是**設計約束 + 機械把關**：(a) 任何 `inhibit_rules` 的 `target_matchers` **不得** match `alertname="Watchdog"`（用 config-review / lint 驗，比依賴標籤約定可靠）；(b) operator 手冊**嚴禁**對 `alertname="Watchdog"` 施加 Silence，全域萬用靜音（`.*` / `alertname=~".*"`）**必須顯式排除** Watchdog。
 
 **心跳頻率與逾時要留緩衝**：外部監測的逾時門檻（TTL）必須**比 `repeat_interval` 長**，吸收網路延遲**與極端負載下的規則評估滯後（rule evaluation lag）**——資源被擠兌時 Prometheus 雖活著（pod 沒死），其規則評估迴圈會嚴重落後、心跳因而錯後。例如 `repeat_interval: 3m` → 外部 TTL 設 **5m**；這 2 分鐘緩衝是為了防引擎內部排程飢餓，不只是吸收幾秒的網路抖動。這條容錯契約要寫進 operator 手冊。
 
