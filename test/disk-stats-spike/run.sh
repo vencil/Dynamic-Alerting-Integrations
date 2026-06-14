@@ -46,24 +46,27 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLUSTER="${KIND_CLUSTER:-disk-spike}"
+# Bind every kubectl to the spike cluster's context, so the script can never act
+# on whatever context happens to be current (kind names it `kind-<cluster>`).
+KUBECTL=(kubectl --context "kind-${CLUSTER}")
 
 # The spike does NOT auto-create/destroy the cluster (CSI install is a manual
 # Linux-container step, above). Run against an existing kind cluster that already
 # has csi-hostpath-sc.
-kubectl cluster-info >/dev/null 2>&1 || { echo "no reachable cluster — create kind + install CSI (see header)"; exit 2; }
-kubectl get sc csi-hostpath-sc >/dev/null 2>&1 \
+"${KUBECTL[@]}" cluster-info >/dev/null 2>&1 || { echo "no reachable cluster kind-${CLUSTER} — create kind + install CSI (see header)"; exit 2; }
+"${KUBECTL[@]}" get sc csi-hostpath-sc >/dev/null 2>&1 \
   || { echo "csi-hostpath-sc missing — install csi-driver-host-path first (see header ENVIRONMENT NOTES)"; exit 2; }
 
 echo "== deploy tenant pod (two CSI PVCs) + privileged kubelet probe =="
-kubectl apply -f "$HERE/manifest.yaml" >/dev/null
-kubectl -n db-a wait --for=condition=Ready pod/mariadb-sim pod/kprobe --timeout=120s >/dev/null
+"${KUBECTL[@]}" apply -f "$HERE/manifest.yaml" >/dev/null
+"${KUBECTL[@]}" -n db-a wait --for=condition=Ready pod/mariadb-sim pod/kprobe --timeout=120s >/dev/null
 
-NODE="$(kubectl get nodes -o jsonpath='{.items[0].metadata.name}')"
-HOSTIP="$(kubectl get node "$NODE" -o jsonpath='{.status.addresses[?(@.type=="InternalIP")].address}')"
+NODE="$("${KUBECTL[@]}" get nodes -o jsonpath='{.items[0].metadata.name}')"
+HOSTIP="$("${KUBECTL[@]}" get node "$NODE" -o jsonpath='{.status.addresses[?(@.type=="InternalIP")].address}')"
 echo "== scrape kubelet $HOSTIP:10250/metrics in-cluster (volume-stats cadence ~1 min) =="
 metrics=""
 for _ in $(seq 1 18); do
-  metrics="$(kubectl -n db-a exec kprobe -- sh -c \
+  metrics="$("${KUBECTL[@]}" -n db-a exec kprobe -- sh -c \
     'T=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token); curl -sk -H "Authorization: Bearer $T" https://'"$HOSTIP"':10250/metrics' 2>/dev/null || true)"
   echo "$metrics" | grep -q '^kubelet_volume_stats_available_bytes' && break
   sleep 10
@@ -80,7 +83,7 @@ echo "== ASSERT (2): kubelet emits volume-stats =="
 if [ "$volstats_lines" -eq 0 ]; then
   echo "FAIL(2): kubelet serves metrics but ZERO kubelet_volume_stats_* —"
   echo "         the PVC storage backend has no kubelet MetricsProvider."
-  kubectl get pv -o jsonpath='{range .items[*]}{"  PV "}{.metadata.name}{" csi="}{.spec.csi.driver}{" hostPath="}{.spec.hostPath.path}{"\n"}{end}'
+  "${KUBECTL[@]}" get pv -o jsonpath='{range .items[*]}{"  PV "}{.metadata.name}{" csi="}{.spec.csi.driver}{" hostPath="}{.spec.hostPath.path}{"\n"}{end}'
   exit 1
 fi
 echo "  ok ($volstats_lines volume-stats series)"
@@ -89,8 +92,9 @@ echo "== ASSERT (3): series carry namespace AND persistentvolumeclaim (both PVCs
 sample="$(echo "$metrics" | grep '^kubelet_volume_stats_available_bytes' | grep 'namespace="db-a"' || true)"
 echo "$sample" | sed 's/^/    /'
 echo "$sample" | grep -q 'namespace="db-a"' || { echo "FAIL(3a): no namespace label"; exit 1; }
-echo "$sample" | grep -q 'persistentvolumeclaim="data"' && echo "$sample" | grep -q 'persistentvolumeclaim="config"' \
-  || { echo "FAIL(3b): persistentvolumeclaim missing or does not distinguish data/config"; exit 1; }
+if ! { echo "$sample" | grep -q 'persistentvolumeclaim="data"' && echo "$sample" | grep -q 'persistentvolumeclaim="config"'; }; then
+  echo "FAIL(3b): persistentvolumeclaim missing or does not distinguish data/config"; exit 1
+fi
 
 echo
 echo "ALL SPIKE ASSERTIONS PASSED:"
