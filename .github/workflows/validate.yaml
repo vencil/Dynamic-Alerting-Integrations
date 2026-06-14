@@ -87,6 +87,27 @@ jobs:
             --validate \
             --policy .github/custom-rule-policy.yaml
 
+      # Render the GitOps ConfigMap and validate it with Alertmanager's OWN
+      # parser (amtool). The --validate step above only checks the assembled
+      # config as a Python dict — it cannot catch defects AM rejects at load
+      # (e.g. email `to` as a YAML seq → "unmarshal !!seq into string", or a
+      # missing SMTP `from` → "no global SMTP from set"). Image pinned to the
+      # deployed version (k8s/03-monitoring/deployment-alertmanager.yaml). #838.
+      - name: Validate rendered Alertmanager config (amtool)
+        run: |
+          mkdir -p /tmp/am-etc
+          python -c "import yaml,pathlib;d=yaml.safe_load(open('k8s/03-monitoring/configmap-alertmanager.yaml',encoding='utf-8'));pathlib.Path('/tmp/am-base.yml').write_text(d['data']['alertmanager.yml'],encoding='utf-8')"
+          python scripts/tools/ops/generate_alertmanager_routes.py \
+            --config-dir components/threshold-exporter/config/conf.d/ \
+            --output-configmap \
+            --base-config /tmp/am-base.yml \
+            -o /tmp/am-cm.yml
+          python -c "import yaml,pathlib;d=yaml.safe_load(open('/tmp/am-cm.yml',encoding='utf-8'));pathlib.Path('/tmp/am-etc/alertmanager.yml').write_text(d['data']['alertmanager.yml'],encoding='utf-8')"
+          docker run --rm --entrypoint amtool \
+            -v /tmp/am-etc:/etc/alertmanager \
+            prom/alertmanager:v0.32.0 \
+            check-config /etc/alertmanager/alertmanager.yml
+
       # Custom rule deny-list linting
       - name: Lint custom rules
         run: |
