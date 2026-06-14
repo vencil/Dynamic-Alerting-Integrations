@@ -36,8 +36,8 @@ emitted_shape: |
   # transient-burst / cold-start false positive a pure-slope alarm produces at high
   # headroom; clamp_min floors the surfaced value at 0 (a headroom ratio is never
   # negative). The tenant threshold (compared in the core) is UNCHANGED. ⚠️ ratio
-  # thresholds should stay well below 0.5 — a threshold ≥ 0.5 is partially neutered by
-  # the band (follow-up: reject it loudly).
+  # thresholds must be < 0.5 — a threshold ≥ 0.5 is rejected fail-loud at load
+  # (shape.validate_forecast_ratio_threshold) + the Go preflight (forecastCurrentBand).
   #
   # lookback = max(2*horizon, 1h), emitted as INTEGER seconds (never a bad duration
   # like 1.5h). The cold-start gate suppresses wild slopes from sparse/just-deployed
