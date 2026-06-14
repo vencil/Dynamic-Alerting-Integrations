@@ -306,7 +306,11 @@ def test_forecast_ratio_mode_slug_and_records(tmp_path):
     rid = "forecast__avail__lt__h4h__den_cap__for1m"
     assert rid in txt
     assert "sum by(tenant) (avail)" in txt and "sum by(tenant) (cap) > 0" in txt
-    assert f"predict_linear(custom:fcbase:{rid}[28800s], 14400)" in txt
+    # W1: ratio-mode forecast clamps the (non-negative) predicted ratio and gates on
+    # a current-state sanity floor (anti transient-write-burst FP); the tenant's own
+    # threshold is unchanged (compared in the core).
+    assert f"clamp_min(predict_linear(custom:fcbase:{rid}[28800s], 14400), 0)" in txt
+    assert f"custom:fcbase:{rid} < 0.5" in txt
     assert f"count_over_time(custom:fcbase:{rid}[28800s]) > 3" in txt
 
 
@@ -322,6 +326,10 @@ def test_forecast_raw_mode_no_capacity(tmp_path):
     assert "den_" not in txt
     assert "max by(tenant, version) (queue_depth)" in txt
     assert "[86400s], 43200)" in txt
+    # W1: raw mode (arbitrary gauge — may exceed 1 or go legitimately negative) gets
+    # NEITHER the ratio clamp NOR the [0,1] current-state band (those are ratio-mode only).
+    assert "clamp_min" not in txt
+    assert "< 0.5" not in txt
 
 
 def test_forecast_requires_horizon(tmp_path):
