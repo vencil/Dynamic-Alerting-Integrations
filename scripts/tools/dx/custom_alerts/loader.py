@@ -211,6 +211,7 @@ def build_shapes(config_dir: Path,
             rid = _shape.recipe_id(inst)
             sig = _shape.shape_signature(inst)
             _value, sev = _shape.parse_threshold(inst["threshold"])
+            _shape.validate_forecast_ratio_threshold(inst, _value)
         except _shape.RecipeError as e:
             raise CustomAlertConfigError(f"{origin}: tenant={tenant}: {e}") from e
 

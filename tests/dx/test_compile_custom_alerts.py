@@ -306,7 +306,11 @@ def test_forecast_ratio_mode_slug_and_records(tmp_path):
     rid = "forecast__avail__lt__h4h__den_cap__for1m"
     assert rid in txt
     assert "sum by(tenant) (avail)" in txt and "sum by(tenant) (cap) > 0" in txt
-    assert f"predict_linear(custom:fcbase:{rid}[28800s], 14400)" in txt
+    # W1: ratio-mode forecast clamps the (non-negative) predicted ratio and gates on
+    # a current-state sanity floor (anti transient-write-burst FP); the tenant's own
+    # threshold is unchanged (compared in the core).
+    assert f"clamp_min(predict_linear(custom:fcbase:{rid}[28800s], 14400), 0)" in txt
+    assert f"custom:fcbase:{rid} < 0.5" in txt
     assert f"count_over_time(custom:fcbase:{rid}[28800s]) > 3" in txt
 
 
@@ -322,6 +326,10 @@ def test_forecast_raw_mode_no_capacity(tmp_path):
     assert "den_" not in txt
     assert "max by(tenant, version) (queue_depth)" in txt
     assert "[86400s], 43200)" in txt
+    # W1: raw mode (arbitrary gauge — may exceed 1 or go legitimately negative) gets
+    # NEITHER the ratio clamp NOR the [0,1] current-state band (those are ratio-mode only).
+    assert "clamp_min" not in txt
+    assert "< 0.5" not in txt
 
 
 def test_forecast_requires_horizon(tmp_path):
@@ -337,6 +345,38 @@ def test_forecast_requires_horizon(tmp_path):
 def test_forecast_horizon_enum_rejected(bad):
     with pytest.raises(shp.RecipeError, match="horizon"):
         shp.recipe_id({"recipe": "forecast", "metric": "m", "op": "<", "horizon": bad})
+
+
+def test_forecast_ratio_threshold_at_or_above_band_rejected(tmp_path):
+    # W1 footgun guard: a ratio-mode forecast floor >= the current-state band (0.5)
+    # is silently neutered by `custom:fcbase < band`, so it is rejected loudly at load
+    # (shape.validate_forecast_ratio_threshold). 0.5 itself is rejected (>= band).
+    for bad in ("0.6:warning", "0.5:warning"):
+        _write_tree(tmp_path, {
+            "a.yaml": 'tenants:\n  ta:\n    _custom_alerts:\n'
+                f'      - {{recipe: forecast, name: d, metric: avail, capacity_metric: cap, op: "<", horizon: 4h, threshold: "{bad}"}}\n',
+        })
+        with pytest.raises(ld.CustomAlertConfigError, match="current-state band"):
+            ld.build_shapes(tmp_path)
+
+
+def test_forecast_ratio_threshold_below_band_ok(tmp_path):
+    # a sensible low disk-fill floor (< 0.5) loads fine.
+    _write_tree(tmp_path, {
+        "a.yaml": 'tenants:\n  ta:\n    _custom_alerts:\n'
+            '      - {recipe: forecast, name: d, metric: avail, capacity_metric: cap, op: "<", horizon: 4h, threshold: "0.15:warning"}\n',
+    })
+    ld.build_shapes(tmp_path)  # no raise
+
+
+def test_forecast_raw_mode_threshold_not_bounded_by_band(tmp_path):
+    # raw mode (no capacity_metric) has NO band → a large absolute threshold (>= 0.5)
+    # is fine; the band guard is ratio-mode only.
+    _write_tree(tmp_path, {
+        "a.yaml": 'tenants:\n  ta:\n    _custom_alerts:\n'
+            '      - {recipe: forecast, name: q, metric: queue_depth, op: ">", horizon: 12h, threshold: "10000:warning"}\n',
+    })
+    ld.build_shapes(tmp_path)  # no raise (raw mode, band does not apply)
 
 
 # --- 9. cost guardrail: max_custom_recipes per-tenant cap (S4) --------------

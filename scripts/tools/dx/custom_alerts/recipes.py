@@ -89,11 +89,34 @@ def _forecast_records(rid: str, metric: str, sel: str, horizon: str,
     # division/aggregation inline — hence the base recording rule). Bare `and`:
     # both operands derive from the same `base` series → identical label set, so
     # no on() needed; the gate drops tenants with < N samples (promtool-verified).
-    predict_inner = (
-        f"predict_linear({base}[{lb_s}s], {h_s})\n"
-        f"  and\n"
-        f"count_over_time({base}[{lb_s}s]) > {_FORECAST_MIN_SAMPLES}"
-    )
+    if capacity:
+        # ratio mode: `base` is a NON-NEGATIVE headroom ratio in [0,1].
+        #  * clamp_min(…, 0): predict_linear extrapolates the ratio linearly and can
+        #    overshoot below 0 — a "negative headroom" is meaningless gibberish to
+        #    on-call. Clamping leaves FIRING unchanged (anything < a positive
+        #    threshold still fires) but keeps the surfaced value sane.
+        #  * `{base} < band`: current-state sanity floor (shape._FORECAST_CURRENT_BAND)
+        #    — turns a pure-slope alarm into "predicted low AND currently low", killing
+        #    the transient-write-burst false positive. The tenant threshold (joined in
+        #    the core) is UNTOUCHED; a threshold >= band is rejected loudly at
+        #    load/preflight (shape.validate_forecast_ratio_threshold) so the band can
+        #    never silently neuter it.
+        predict_inner = (
+            f"clamp_min(predict_linear({base}[{lb_s}s], {h_s}), 0)\n"
+            f"  and\n"
+            f"{base} < {_shape._FORECAST_CURRENT_BAND}\n"
+            f"  and\n"
+            f"count_over_time({base}[{lb_s}s]) > {_FORECAST_MIN_SAMPLES}"
+        )
+    else:
+        # raw mode: an arbitrary gauge (may exceed 1 or be legitimately negative) — no
+        # [0,1] clamp, no ratio band. A raw-mode anti-flap gate would have to be
+        # threshold-relative; out of scope here (raw-mode forecast is rare).
+        predict_inner = (
+            f"predict_linear({base}[{lb_s}s], {h_s})\n"
+            f"  and\n"
+            f"count_over_time({base}[{lb_s}s]) > {_FORECAST_MIN_SAMPLES}"
+        )
     return [
         {"record": base, "expr": base_inner},
         {"record": f"custom:metric:{rid}", "expr": _norm_version(predict_inner)},
