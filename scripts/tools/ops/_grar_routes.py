@@ -471,6 +471,49 @@ def _build_custom_alert_routes() -> tuple[list[dict], list[dict]]:
     return [route], [{"name": "custom-alerts-firehose"}]
 
 
+def _build_watchdog_route() -> tuple[list[dict], list[dict]]:
+    """Build the platform-static Watchdog liveness route + heartbeat receiver.
+
+    ADR-025 D1 / #838. ALWAYS emitted (platform-global, tenant-independent) and
+    pinned at route index 0 — AHEAD of even the Custom Alerts isolation route —
+    by _inject_custom_alert_isolation at ConfigMap assembly, for the same two
+    reasons the custom route is injected (durability across the --apply route-
+    REPLACE; correctness ahead of the continue:true match-all enforced NOC route):
+
+      1. The always-firing Watchdog alert (expr: vector(1), severity:none) must
+         reach an operator-supplied EXTERNAL dead-man's-switch on a fixed cadence.
+         A broader earlier route with continue:false (a severity gate, the
+         enforced NOC fallback) could otherwise swallow the heartbeat — and then
+         the external monitor would false-alarm "platform dead".
+      2. group_by:[alertname] pins zero-extra-aggregation so the heartbeat is NOT
+         folded into the root group_by ([alertname, tenant], configmap-
+         alertmanager.yaml) — which would mangle the cadence — while group_wait:0s
+         + a fixed repeat_interval keep the beat steady, and continue:false keeps
+         it OFF every human channel.
+
+    The receiver is emitted NAME-ONLY here, on purpose: the real heartbeat
+    webhook_configs[].url_file (a deploy-time secret → mounted Secret) lives in
+    the base ConfigMap's watchdog-heartbeat receiver. The name-only placeholder
+    only guarantees the route resolves to a defined receiver in synthetic /
+    default-base contexts; the merge paths defer to the richer base definition so
+    the url_file is never clobbered (see _merge_routes_receivers_inhibits).
+
+    repeat_interval is 3m; the operator's EXTERNAL TTL must be LONGER (e.g. 5m)
+    to absorb network jitter AND rule-evaluation lag under load — that tolerance
+    contract lives in the operator runbook, not here.
+    """
+    route = {
+        "matchers": ['alertname="Watchdog"'],
+        "group_by": ["alertname"],
+        "group_wait": "0s",
+        "group_interval": "1m",
+        "repeat_interval": "3m",
+        "receiver": "watchdog-heartbeat",
+        "continue": False,
+    }
+    return [route], [{"name": "watchdog-heartbeat"}]
+
+
 def generate_routes(routing_configs: dict[str, dict], allowed_domains: list[str] | None = None, enforced_routing: dict | None = None) -> tuple[list[dict], list[dict], list[str]]:
     """Generate Alertmanager route tree + receivers from routing configs.
 

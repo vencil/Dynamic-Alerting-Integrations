@@ -86,6 +86,111 @@ def validate_receiver_domains(receiver_obj: dict, tenant: str, allowed_domains: 
     return warnings
 
 
+# ── ADR-025 D1 / #838: Watchdog inhibition-immunity invariant ──────
+#
+# Alertmanager has NO "exempt from inhibition" primitive — the Watchdog's
+# severity:none label only keeps it out of severity-targeted inhibits, it is NOT
+# universal immunity (the ADR's explicit warning). The mechanical guarantee is
+# instead: no inhibit_rule's target_matchers may match the always-firing Watchdog
+# heartbeat — otherwise the heartbeat is suppressed before it leaves Alertmanager
+# and the operator's EXTERNAL dead-man's-switch false-alarms "platform dead".
+# This validator codifies that guarantee (config-review/lint, not label magic).
+#
+# The Watchdog alert carries exactly these identifying labels (see
+# k8s/03-monitoring/configmap-rules-platform.yaml + _grar_routes._build_watchdog_route).
+WATCHDOG_IDENTITY_LABELS = {"alertname": "Watchdog", "severity": "none"}
+
+_INHIBIT_MATCHER_RE = re.compile(r'^\s*([a-zA-Z_]\w*)\s*(=~|!~|!=|=)\s*"?(.*?)"?\s*$')
+
+
+def _matcher_matches_labels(matcher: str, labels: dict[str, str]) -> bool:
+    """Evaluate one Alertmanager matcher string against a concrete label set.
+
+    A matcher we cannot parse conservatively returns True ("could match"), so a
+    malformed inhibit rule can never silently slip a Watchdog-suppressing matcher
+    past the guard. An invalid regex value is likewise treated as a match.
+    """
+    m = _INHIBIT_MATCHER_RE.match(matcher)
+    if not m:
+        return True
+    name, op, value = m.group(1), m.group(2), m.group(3)
+    actual = labels.get(name, "")
+    if op == "=":
+        return actual == value
+    if op == "!=":
+        return actual != value
+    if op == "=~":
+        try:
+            return re.fullmatch(value, actual) is not None
+        except re.error:
+            return True
+    # op == "!~"
+    try:
+        return re.fullmatch(value, actual) is None
+    except re.error:
+        return True
+
+
+def _inhibit_target_matchers(rule: dict) -> list[str] | None:
+    """Normalize a rule's target side to a list of matcher strings.
+
+    Handles both the current `target_matchers` list form and the legacy
+    `target_match` / `target_match_re` map form. Returns None when the rule has
+    NO target specification at all (malformed — not our concern); returns an
+    empty list only when `target_matchers: []` is explicitly a match-all.
+    """
+    if "target_matchers" in rule:
+        return list(rule.get("target_matchers") or [])
+    out: list[str] = []
+    has_legacy = False
+    for k, v in (rule.get("target_match") or {}).items():
+        out.append(f'{k}="{v}"')
+        has_legacy = True
+    for k, v in (rule.get("target_match_re") or {}).items():
+        out.append(f'{k}=~"{v}"')
+        has_legacy = True
+    return out if has_legacy else None
+
+
+def find_watchdog_suppressing_inhibits(inhibit_rules: list[dict] | None) -> list[tuple[int, dict]]:
+    """Return [(index, rule), ...] for every inhibit rule whose target side would
+    suppress the always-firing Watchdog heartbeat (Alertmanager AND-joins the
+    target matchers, so a rule suppresses Watchdog iff ALL its target matchers
+    match WATCHDOG_IDENTITY_LABELS; an explicit empty target list is match-all).
+
+    Empty result = invariant holds.
+    """
+    out: list[tuple[int, dict]] = []
+    for i, rule in enumerate(inhibit_rules or []):
+        if not isinstance(rule, dict):
+            continue
+        targets = _inhibit_target_matchers(rule)
+        if targets is None:
+            continue
+        if all(_matcher_matches_labels(m, WATCHDOG_IDENTITY_LABELS) for m in targets):
+            out.append((i, rule))
+    return out
+
+
+def assert_watchdog_inhibit_immunity(inhibit_rules: list[dict] | None) -> None:
+    """Fail-closed guard: raise ValueError if any inhibit rule would suppress the
+    Watchdog heartbeat. Run on the FINAL merged inhibit set at every render path
+    so a Watchdog-suppressing rule can never be shipped (ADR-025 D1)."""
+    offending = find_watchdog_suppressing_inhibits(inhibit_rules)
+    if not offending:
+        return
+    details = "; ".join(
+        f"inhibit_rules[{i}] target="
+        f"{r.get('target_matchers', r.get('target_match', r.get('target_match_re')))}"
+        for i, r in offending)
+    raise ValueError(
+        "ADR-025 invariant violated: inhibit rule(s) would suppress the "
+        f"always-firing Watchdog heartbeat ({details}). No inhibit_rules "
+        'target_matchers may match alertname="Watchdog" — the heartbeat must '
+        "always reach the external dead-man's-switch. Remove or narrow the rule "
+        "(see the alerting-plane self-liveness runbook).")
+
+
 def load_policy(policy_path: str | None) -> list[str]:
     """Load policy YAML and return allowed_domains list (may be empty)."""
     if not policy_path or not Path(policy_path).is_file():

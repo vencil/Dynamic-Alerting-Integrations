@@ -6,7 +6,7 @@ version: v2.9.0
 lang: zh
 id: ADR-025
 tracking_kind: adr
-status: proposed
+status: in-progress
 domain: observability
 created_at: 2026-06-14
 updated_at: 2026-06-14
@@ -18,7 +18,7 @@ updated_at: 2026-06-14
 
 ## 狀態
 
-🔵 **Proposed**（草案）。本 ADR 記錄一個決策：為平台的告警平面（Prometheus + Alertmanager）加上「自己死掉會被外部察覺」的存活心跳，並劃清「高可用與大規模儲存由 operator 負責」的責任邊界。實作尚未進行。
+🟡 **In Progress**（實作中）。本 ADR 記錄一個決策：為平台的告警平面（Prometheus + Alertmanager）加上「自己死掉會被外部察覺」的存活心跳，並劃清「高可用與大規模儲存由 operator 負責」的責任邊界。MVP（D1 Watchdog + 外部 dead-man's-switch）實作已啟動（[#838](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/838)）；canary 租戶 / 規則 linter / 端到端合成探測等仍為 defer-with-trigger（見下方「之後再說」）。operator 設定與靜音/抑制禁區見 [告警平面自我存活性 Operator 指南](../integration/alerting-plane-self-liveness.md)。
 
 ## 摘要
 
@@ -66,7 +66,9 @@ route:
 receivers:
   - name: watchdog-heartbeat
     webhook_configs:
-      - url: <operator 提供的外部心跳 URL；留空＝停用、僅留盲點紀錄>
+      # 心跳 URL 嵌 token/UUID＝機密，禁明文寫進 ConfigMap（會踩 secret-scan）。
+      # 用 url_file 指向掛載的 Secret；Secret 未填＝停用、僅留盲點紀錄。
+      - url_file: /etc/alertmanager/secrets/watchdog-heartbeat-url
       # ⚠️ 需要多通道冗餘（雙外部監測）時，在此處加多個 webhook_configs，
       #    絕不可在上方路由樹拆成多條 route——會被 continue: false 攔斷。
 ```
@@ -81,7 +83,7 @@ receivers:
 
 **心跳頻率與逾時要留緩衝**：外部監測的逾時門檻（TTL）必須**比 `repeat_interval` 長**，吸收網路延遲**與極端負載下的規則評估滯後（rule evaluation lag）**——資源被擠兌時 Prometheus 雖活著（pod 沒死），其規則評估迴圈會嚴重落後、心跳因而錯後。例如 `repeat_interval: 3m` → 外部 TTL 設 **5m**；這 2 分鐘緩衝是為了防引擎內部排程飢餓，不只是吸收幾秒的網路抖動。這條容錯契約要寫進 operator 手冊。
 
-**URL 是設定開關，不是硬性依賴**：operator 填上自己的心跳服務即生效；留空則明確記錄為已知盲點。
+**URL 是設定開關，不是硬性依賴**：operator 把自己的心跳 URL 放進掛載的 Secret（`url_file`）即生效；Secret 留空（placeholder）則明確記錄為已知盲點。
 
 ### D2：斷網環境改用「被動健康檢查」
 

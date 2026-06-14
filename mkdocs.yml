@@ -244,6 +244,7 @@ nav:
   - 整合指南:
     - BYO Prometheus: integration/byo-prometheus-integration.md
     - BYO Alertmanager: integration/byo-alertmanager-integration.md
+    - 告警平面自我存活性 (Watchdog): integration/alerting-plane-self-liveness.md
     - VictoriaMetrics 整合: integration/victoriametrics-integration.md
     - Federation: integration/federation-integration.md
     - Tenant Federation: integration/tenant-federation.md

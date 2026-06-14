@@ -165,6 +165,10 @@ modules:
       _validate_profile_refs: "Covered by test_e2e_routing_profile.py integration"
       check_domain_policies: "Multi-branch policy validator; covered by test_e2e_routing_profile.py + test_domain_policy.py"
       _validate_version_label: "ADR-024 OQ-6 version-label guard; fully branch-covered by test_generate_alertmanager_routes.py::TestValidateVersionLabel (8 example cases)"
+      find_watchdog_suppressing_inhibits: "ADR-025 D1 inhibit-immunity validator; fully covered by test_generate_routes_orchestration.py::TestWatchdogInhibitImmunity (exact/regex/match-all/empty/severity/legacy-map cases)"
+      assert_watchdog_inhibit_immunity: "Raises-wrapper over find_watchdog_suppressing_inhibits; covered by TestWatchdogInhibitImmunity + the assemble fail-closed test"
+      _matcher_matches_labels: "Pure AM-matcher evaluator; branch-covered transitively via find_watchdog_suppressing_inhibits cases (=, !=, =~, !~, invalid-regex → conservative match)"
+      _inhibit_target_matchers: "Target-side normalizer (target_matchers list vs legacy target_match/target_match_re maps); covered transitively via find_watchdog_suppressing_inhibits legacy-map + empty-list cases"
 
   # ── Lint helpers (small but load-bearing) ─────────────────────────
 

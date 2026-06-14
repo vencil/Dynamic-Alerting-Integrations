@@ -36,10 +36,15 @@ from generate_alertmanager_routes import (
     _build_enforced_routes,
     _build_tenant_routes,
     _build_custom_alert_routes,
+    _build_watchdog_route,
     _parse_config_files,
     write_text_secure,
 )
 from _grar_render import _merge_routes_receivers_inhibits
+from generate_alertmanager_routes import (
+    assert_watchdog_inhibit_immunity,
+    find_watchdog_suppressing_inhibits,
+)
 
 import generate_alertmanager_routes as gar
 
@@ -158,18 +163,23 @@ class TestAssembleConfigmap:
 
         am_config = yaml.safe_load(parsed["data"]["alertmanager.yml"])
         routes_out = am_config["route"]["routes"]
-        # S7/S8 (#741): the Custom Alerts isolation route is always injected FIRST
-        # (ahead of tenant/enforced routes), continue:false; the tenant route follows.
-        assert len(routes_out) == 2
-        assert routes_out[0]["matchers"] == ['component="custom"']
-        assert routes_out[0]["receiver"] == "custom-alerts-firehose"
+        # ADR-025 D1 (#838) + S7/S8 (#741): two platform-static routes are always
+        # injected at the FRONT — Watchdog liveness at index 0, Custom Alerts
+        # isolation at index 1 — both continue:false; the tenant route follows.
+        assert len(routes_out) == 3
+        assert routes_out[0]["matchers"] == ['alertname="Watchdog"']
+        assert routes_out[0]["receiver"] == "watchdog-heartbeat"
         assert routes_out[0]["continue"] is False
-        assert routes_out[1]["receiver"] == "tenant-db-a"
-        # Base receiver + tenant receiver + injected firehose receiver
+        assert routes_out[1]["matchers"] == ['component="custom"']
+        assert routes_out[1]["receiver"] == "custom-alerts-firehose"
+        assert routes_out[1]["continue"] is False
+        assert routes_out[2]["receiver"] == "tenant-db-a"
+        # Base receiver + tenant receiver + injected firehose + watchdog receivers
         names = {r["name"] for r in am_config["receivers"]}
         assert "default" in names
         assert "tenant-db-a" in names
         assert "custom-alerts-firehose" in names
+        assert "watchdog-heartbeat" in names
 
     def test_custom_namespace_and_name(self):
         base = load_base_config(None)
@@ -193,51 +203,63 @@ class TestAssembleConfigmap:
 
 
 # ============================================================
-# S7/S8 (#741): Custom Alerts isolation route injection
+# ADR-025 D1 (#838) + S7/S8 (#741): platform-static route injection
 # ============================================================
 class TestCustomAlertIsolationInjection:
-    """The platform-static custom-alerts route + firehose receiver must be
-    present and FIRST in the assembled ConfigMap, across BOTH the
-    --output-configmap (assemble_configmap) and --apply
-    (_merge_routes_receivers_inhibits) paths, and survive the route-REPLACE."""
+    """The two platform-static routes — Watchdog liveness (index 0) and Custom
+    Alerts isolation (index 1) — plus their receivers must be present and pinned
+    at the FRONT of the assembled ConfigMap, across BOTH the --output-configmap
+    (assemble_configmap) and --apply (_merge_routes_receivers_inhibits) paths,
+    and survive the route-REPLACE."""
 
     def _routes_of(self, cm_yaml):
         parsed = yaml.safe_load(cm_yaml)
         return yaml.safe_load(parsed["data"]["alertmanager.yml"])["route"]["routes"]
 
     def test_injected_even_with_no_tenant_routes(self):
-        # empty generated routes (no tenants) → custom route still present + first
+        # empty generated routes (no tenants) → both static routes still present
+        # and pinned: Watchdog index 0, custom index 1.
         cm_yaml = assemble_configmap(load_base_config(None), [], [], [])
         routes = self._routes_of(cm_yaml)
-        assert routes[0]["matchers"] == ['component="custom"']
-        assert routes[0]["receiver"] == "custom-alerts-firehose"
+        assert routes[0]["matchers"] == ['alertname="Watchdog"']
+        assert routes[0]["receiver"] == "watchdog-heartbeat"
         assert routes[0]["continue"] is False
+        assert routes[1]["matchers"] == ['component="custom"']
+        assert routes[1]["receiver"] == "custom-alerts-firehose"
+        assert routes[1]["continue"] is False
 
     def test_idempotent_no_duplicate(self):
-        # if a component="custom" route is already present, do not add a second
-        existing_custom = _build_custom_alert_routes()[0]
-        cm_yaml = assemble_configmap(load_base_config(None), list(existing_custom), [], [])
+        # if Watchdog / component="custom" routes are already present, do not add
+        # a second of either — re-merging an injected config is stable.
+        existing = _build_watchdog_route()[0] + _build_custom_alert_routes()[0]
+        cm_yaml = assemble_configmap(load_base_config(None), list(existing), [], [])
         routes = self._routes_of(cm_yaml)
         assert sum(1 for r in routes if 'component="custom"' in r.get("matchers", [])) == 1
+        assert sum(1 for r in routes if 'alertname="Watchdog"' in r.get("matchers", [])) == 1
 
-    def test_custom_route_forced_to_index_0_even_when_not_first(self):
-        # CodeRabbit gap: an existing custom route sitting AFTER a continue:true
-        # match-all enforced route must be normalized to index 0 (else the
-        # enforced route intercepts custom alerts first → NOC leak).
-        enforced = {"receiver": "platform-enforced", "continue": True}  # no matchers = match-all
+    def test_static_routes_forced_to_front_even_when_not_first(self):
+        # CodeRabbit gap (generalized to Watchdog): existing Watchdog/custom routes
+        # sitting AFTER a continue:true match-all enforced route must be normalized
+        # to the front (else the enforced route intercepts them first → leak). The
+        # heartbeat is the most important to pin — Watchdog must end up at index 0.
+        enforced = {"receiver": "platform-enforced", "continue": True}  # match-all
         existing_custom = _build_custom_alert_routes()[0][0]
+        existing_wd = _build_watchdog_route()[0][0]
         cm_yaml = assemble_configmap(
-            load_base_config(None), [enforced, existing_custom], [], [])
+            load_base_config(None), [enforced, existing_custom, existing_wd], [], [])
         routes = self._routes_of(cm_yaml)
-        # exactly one custom route, and it is FIRST (ahead of the enforced route)
+        wd_idx = [i for i, r in enumerate(routes)
+                  if 'alertname="Watchdog"' in r.get("matchers", [])]
         custom_idx = [i for i, r in enumerate(routes)
                       if 'component="custom"' in r.get("matchers", [])]
-        assert custom_idx == [0], routes
-        assert routes[1]["receiver"] == "platform-enforced"
+        assert wd_idx == [0], routes      # Watchdog pinned to index 0
+        assert custom_idx == [1], routes  # custom pinned to index 1
+        assert routes[2]["receiver"] == "platform-enforced"
 
     def test_apply_path_prepends_and_preserves_silent_inhibit(self):
-        # --apply replaces route.routes; the custom route must lead, and the
-        # base CustomRecipeSilent inhibit (source has no metric_group) must survive.
+        # --apply replaces route.routes; Watchdog must lead (index 0), custom
+        # follow (index 1), and the base CustomRecipeSilent inhibit (source has no
+        # metric_group) must survive.
         existing = {
             "route": {"receiver": "default", "routes": []},
             "receivers": [{"name": "default"}],
@@ -252,12 +274,57 @@ class TestCustomAlertIsolationInjection:
         merged = _merge_routes_receivers_inhibits(
             existing, tenant_routes, [{"name": "tenant-db-a"}], gen_inhibits)
         routes = merged["route"]["routes"]
-        assert routes[0]["matchers"] == ['component="custom"']  # custom leads
+        assert routes[0]["matchers"] == ['alertname="Watchdog"']  # watchdog leads
+        assert routes[1]["matchers"] == ['component="custom"']    # custom second
         assert any(r["receiver"] == "tenant-db-a" for r in routes)  # tenant route kept
-        assert {r["name"] for r in merged["receivers"]} >= {"default", "custom-alerts-firehose", "tenant-db-a"}
+        assert {r["name"] for r in merged["receivers"]} >= {
+            "default", "custom-alerts-firehose", "watchdog-heartbeat", "tenant-db-a"}
         # the silent sentinel inhibit (no metric_group) is preserved
         assert any('alertname="CustomRecipeSilent"' in i.get("source_matchers", [])
                    for i in merged["inhibit_rules"])
+
+    def test_apply_path_preserves_base_watchdog_receiver_url_file(self):
+        # The injected watchdog-heartbeat receiver is NAME-ONLY; the --apply merge
+        # must NOT clobber a richer existing definition (the base url_file secret
+        # ref lives only in the live ConfigMap and would otherwise be lost).
+        rich_wd = {"name": "watchdog-heartbeat",
+                   "webhook_configs": [{"url_file": "/etc/alertmanager/secrets/watchdog-heartbeat-url"}]}
+        existing = {
+            "route": {"receiver": "default", "routes": []},
+            "receivers": [{"name": "default"}, rich_wd],
+            "inhibit_rules": [],
+        }
+        merged = _merge_routes_receivers_inhibits(
+            existing, [{"receiver": "tenant-db-a", "matchers": ['tenant="db-a"']}],
+            [{"name": "tenant-db-a"}], [])
+        wd = [r for r in merged["receivers"] if r["name"] == "watchdog-heartbeat"]
+        assert len(wd) == 1
+        assert wd[0]["webhook_configs"][0]["url_file"] == \
+            "/etc/alertmanager/secrets/watchdog-heartbeat-url"
+
+    def test_watchdog_route_knobs(self):
+        # ADR-025 D1 cadence contract on the generated artifact.
+        cm_yaml = assemble_configmap(load_base_config(None), [], [], [])
+        wd = self._routes_of(cm_yaml)[0]
+        assert wd["receiver"] == "watchdog-heartbeat"
+        assert wd["group_by"] == ["alertname"]      # not root [alertname, tenant]
+        assert wd["group_wait"] == "0s"
+        assert wd["group_interval"] == "1m"
+        assert wd["repeat_interval"] == "3m"
+        assert wd["continue"] is False               # never leaks to a human channel
+
+    def test_assemble_path_preserves_base_watchdog_receiver_url_file(self):
+        # Assemble path (--output-configmap): the base's rich watchdog-heartbeat
+        # receiver (url_file) must win over the injected name-only placeholder.
+        base = load_base_config(None)
+        base["receivers"] = base.get("receivers", []) + [
+            {"name": "watchdog-heartbeat",
+             "webhook_configs": [{"url_file": "/etc/alertmanager/secrets/watchdog-heartbeat-url"}]}]
+        cm_yaml = assemble_configmap(base, [], [], [])
+        am = yaml.safe_load(yaml.safe_load(cm_yaml)["data"]["alertmanager.yml"])
+        wd = [r for r in am["receivers"] if r["name"] == "watchdog-heartbeat"]
+        assert len(wd) == 1
+        assert wd[0]["webhook_configs"][0]["url_file"].endswith("watchdog-heartbeat-url")
 
 
 def _build_inhibit_for_test():
@@ -265,6 +332,141 @@ def _build_inhibit_for_test():
     return {"source_matchers": ['severity="critical"', 'metric_group=~".+"', 'tenant="db-a"'],
             "target_matchers": ['severity="warning"', 'metric_group=~".+"', 'tenant="db-a"'],
             "equal": ["metric_group"]}
+
+
+# ============================================================
+# ADR-025 D1 (#838): Watchdog inhibition-immunity invariant
+# ============================================================
+class TestWatchdogInhibitImmunity:
+    """No inhibit_rule's target_matchers may match the always-firing Watchdog
+    heartbeat — else it is suppressed before egress and the external dead-man's-
+    switch false-alarms. find_watchdog_suppressing_inhibits is the codified guard."""
+
+    def test_benign_rules_pass(self):
+        # The real shapes shipped in configmap-alertmanager.yaml must NOT be flagged.
+        benign = [
+            # severity-dedup (target severity=warning, never Watchdog's severity=none)
+            {"source_matchers": ['severity="critical"', 'metric_group=~".+"', 'tenant="db-a"'],
+             "target_matchers": ['severity="warning"', 'metric_group=~".+"', 'tenant="db-a"']},
+            {"source_matchers": ['alertname="TenantSilentWarning"'],
+             "target_matchers": ['severity="warning"'], "equal": ["tenant"]},
+            {"source_matchers": ['alertname="TenantSilentCritical"'],
+             "target_matchers": ['severity="critical"'], "equal": ["tenant"]},
+            {"source_matchers": ['alertname="CustomRecipeSilent"'],
+             "target_matchers": ['component="custom"'], "equal": ["tenant", "name"]},
+        ]
+        assert find_watchdog_suppressing_inhibits(benign) == []
+        assert_watchdog_inhibit_immunity(benign)  # does not raise
+
+    def test_exact_watchdog_target_flagged(self):
+        bad = [{"source_matchers": ['alertname="ClusterDown"'],
+                "target_matchers": ['alertname="Watchdog"']}]
+        assert len(find_watchdog_suppressing_inhibits(bad)) == 1
+        with pytest.raises(ValueError, match="Watchdog"):
+            assert_watchdog_inhibit_immunity(bad)
+
+    def test_regex_matchall_target_flagged(self):
+        # A broad alertname=~".+" target (CodeRabbit's dangerous pattern class)
+        # matches Watchdog → must be flagged.
+        bad = [{"source_matchers": ['alertname="ClusterDown"'],
+                "target_matchers": ['alertname=~".+"']}]
+        assert len(find_watchdog_suppressing_inhibits(bad)) == 1
+
+    def test_empty_target_is_matchall_flagged(self):
+        # target_matchers: [] is an explicit match-all → suppresses Watchdog too.
+        bad = [{"source_matchers": ['alertname="ClusterDown"'], "target_matchers": []}]
+        assert len(find_watchdog_suppressing_inhibits(bad)) == 1
+
+    def test_severity_none_target_flagged(self):
+        # A future rule targeting severity=none would catch Watchdog (its severity).
+        bad = [{"source_matchers": ['alertname="ClusterDown"'],
+                "target_matchers": ['severity="none"']}]
+        assert len(find_watchdog_suppressing_inhibits(bad)) == 1
+
+    def test_negative_matcher_suppressing_watchdog_flagged(self):
+        # Negative-matching trap (Gemini Day-2 review): a "suppress everything
+        # that's NOT critical" rule (severity!="critical") MATCHES Watchdog's
+        # severity="none" and would silently strangle the heartbeat. The != / !~
+        # branches of the matcher evaluator must catch this fail-closed.
+        bad_ne = [{"source_matchers": ['alertname="ClusterDown"'],
+                   "target_matchers": ['severity!="critical"']}]
+        assert len(find_watchdog_suppressing_inhibits(bad_ne)) == 1
+        with pytest.raises(ValueError, match="Watchdog"):
+            assert_watchdog_inhibit_immunity(bad_ne)
+        # !~ form: "not matching the regex critical|warning" also catches none
+        bad_nre = [{"source_matchers": ['alertname="ClusterDown"'],
+                    "target_matchers": ['severity!~"critical|warning"']}]
+        assert len(find_watchdog_suppressing_inhibits(bad_nre)) == 1
+        # control: a negative matcher that EXCLUDES Watchdog must NOT be flagged
+        ok = [{"source_matchers": ['alertname="ClusterDown"'],
+               "target_matchers": ['alertname!="Watchdog"']}]
+        assert find_watchdog_suppressing_inhibits(ok) == []
+
+    def test_legacy_target_match_map_supported(self):
+        bad = [{"source_match": {"alertname": "ClusterDown"},
+                "target_match": {"alertname": "Watchdog"}}]
+        assert len(find_watchdog_suppressing_inhibits(bad)) == 1
+
+    def test_legacy_target_match_re_map_supported(self):
+        # regex map form: alertname=~".+" matches Watchdog
+        bad = [{"source_match": {"alertname": "ClusterDown"},
+                "target_match_re": {"alertname": ".+"}}]
+        assert len(find_watchdog_suppressing_inhibits(bad)) == 1
+
+    def test_validate_mode_tripwire_exits_on_watchdog_suppressing_inhibit(self):
+        # The --validate regression tripwire must exit non-zero if a GENERATED
+        # inhibit rule would suppress Watchdog (guards a future generator change).
+        bad = [{"source_matchers": ['alertname="ClusterDown"'],
+                "target_matchers": ['alertname="Watchdog"']}]
+        with pytest.raises(SystemExit) as exc:
+            gar._validate_mode([], [], bad, [])
+        assert exc.value.code != 0
+
+    def test_assemble_fails_closed_on_watchdog_suppressing_base_inhibit(self):
+        base = load_base_config(None)
+        base["inhibit_rules"] = [
+            {"source_matchers": ['alertname="ClusterDown"'],
+             "target_matchers": ['alertname=~".*"']}]  # would swallow Watchdog
+        with pytest.raises(ValueError, match="Watchdog"):
+            assemble_configmap(base, [], [], [])
+
+    def test_committed_base_configmap_holds_invariant(self):
+        # The hand-authored k8s/03-monitoring/configmap-alertmanager.yaml inhibit
+        # rules must never suppress Watchdog. This is the mechanical guard on the
+        # REAL deployed base (the generator only validates the generated subset).
+        repo_root = os.path.abspath(
+            os.path.join(os.path.dirname(__file__), "..", ".."))
+        cm_path = os.path.join(
+            repo_root, "k8s", "03-monitoring", "configmap-alertmanager.yaml")
+        cm = yaml.safe_load(open(cm_path, encoding="utf-8").read())
+        am = yaml.safe_load(cm["data"]["alertmanager.yml"])
+        offending = find_watchdog_suppressing_inhibits(am.get("inhibit_rules", []))
+        assert offending == [], (
+            f"configmap-alertmanager.yaml has inhibit rule(s) that suppress the "
+            f"Watchdog heartbeat: {offending}")
+
+    def test_committed_base_configmap_watchdog_route_is_first(self):
+        # The hand-authored base must keep Watchdog as routes[0] so the committed
+        # config is self-consistent with what the generator re-injects.
+        repo_root = os.path.abspath(
+            os.path.join(os.path.dirname(__file__), "..", ".."))
+        cm_path = os.path.join(
+            repo_root, "k8s", "03-monitoring", "configmap-alertmanager.yaml")
+        cm = yaml.safe_load(open(cm_path, encoding="utf-8").read())
+        am = yaml.safe_load(cm["data"]["alertmanager.yml"])
+        routes = am["route"]["routes"]
+        # Drift guard: the hand-authored base route[0] must equal exactly what the
+        # generator re-injects, so editing one knob in the base without the other
+        # can't silently diverge.
+        assert routes[0] == _build_watchdog_route()[0][0]
+        assert routes[0]["matchers"] == ['alertname="Watchdog"']
+        assert routes[0]["receiver"] == "watchdog-heartbeat"
+        assert routes[0]["continue"] is False
+        # and the receiver exists with a url_file (no inline plaintext URL)
+        wd_recv = [r for r in am["receivers"] if r["name"] == "watchdog-heartbeat"]
+        assert len(wd_recv) == 1
+        wh = wd_recv[0]["webhook_configs"][0]
+        assert "url" not in wh and wh["url_file"].endswith("watchdog-heartbeat-url")
 
 
 # ============================================================

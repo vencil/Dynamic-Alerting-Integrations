@@ -16,6 +16,67 @@ data:
     groups:
       - name: platform-self-monitoring
         rules:
+          # --- Alerting-Plane Self-Liveness (ADR-025 D1 / #838) ---
+          # The "who watches the watcher" gap: Prometheus + Alertmanager are
+          # single-replica, and every alert below is evaluated by THIS Prometheus
+          # — if it (or Alertmanager) dies, all of them silently stop firing and
+          # nobody is paged. Watchdog is an ALWAYS-FIRING alert (expr: vector(1)).
+          # A dedicated TOP-OF-TREE Alertmanager route (group_by:[alertname],
+          # group_wait:0s, repeat_interval:3m, continue:false → watchdog-heartbeat
+          # receiver — injected by generate_alertmanager_routes so it survives the
+          # route-REPLACE on regen) ships it on a fixed cadence to an operator-
+          # supplied EXTERNAL dead-man's-switch. The external monitor alarms when
+          # the beat STOPS, so Prometheus-dead, Alertmanager-dead, or egress-broken
+          # all surface from OUTSIDE the platform (the only place that survives the
+          # platform's own death). severity:none keeps it off severity-targeted
+          # inhibits and out of the human severity channels — but that is NOT
+          # inhibition immunity (Alertmanager has no such primitive): the guarantee
+          # is the no-inhibit-targets-Watchdog lint (generate_alertmanager_routes)
+          # + the no-Silence operator rule (see the alerting-plane self-liveness
+          # runbook). ⚠️ KEEP IN SYNC with tests/rulepacks/platform-watchdog.rules.yaml.
+          - alert: Watchdog
+            expr: vector(1)
+            labels:
+              severity: none
+            annotations:
+              summary: "Alerting pipeline heartbeat — if this stops reaching the external monitor, Prometheus/Alertmanager is down"
+              description: |
+                Always-firing alert that certifies the whole alerting pipeline
+                (Prometheus rule evaluation → Alertmanager routing → external
+                egress) is functional. An external dead-man's-switch expects it on
+                a fixed cadence and alarms when it STOPS. Do NOT Silence this
+                alert, and do NOT add an inhibit rule whose target_matchers match
+                alertname="Watchdog" (ADR-025).
+
+          # --- Watchdog egress health (ADR-025 §4 / #838) ---
+          # Internal complement to the EXTERNAL dead-man's-switch. If Alertmanager
+          # is alive and evaluating but its webhook notifications are FAILING, the
+          # Watchdog heartbeat is not actually leaving the cluster (bad/empty
+          # url_file, expired DMS token, egress firewall). This fires from INSIDE
+          # before the external TTL lapses, distinguishing "platform dead" (no
+          # internal signal either) from "heartbeat pipe broken" (this fires while
+          # the rest of the platform stays healthy). The metric has no per-receiver
+          # label so it covers ALL webhook receivers, but the Watchdog egress is the
+          # operationally critical one. NOTE: a demo/lab left on the unconfigured
+          # url_file placeholder WILL trip this — that is the intended "configure
+          # me" signal, not a false positive. ⚠️ KEEP IN SYNC with
+          # tests/rulepacks/platform-watchdog.rules.yaml.
+          - alert: AlertmanagerWebhookNotificationsFailing
+            expr: increase(alertmanager_notifications_failed_total{integration="webhook"}[10m]) > 0
+            for: 15m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Alertmanager webhook notifications are failing — Watchdog heartbeat may not be egressing"
+              description: |
+                Alertmanager logged webhook notification failures over the last
+                10m. The Watchdog heartbeat (and any other webhook receiver) may
+                not be reaching its external endpoint, so the external
+                dead-man's-switch could false-alarm "platform dead". Check the
+                watchdog-heartbeat url_file Secret (populated? valid URL? token
+                live?) and the egress/firewall path to the heartbeat endpoint. If
+                the url_file is still the deploy placeholder, populate the Secret.
+
           # --- Exporter Health ---
           - alert: ThresholdExporterDown
             expr: up{job="threshold-exporter"} == 0

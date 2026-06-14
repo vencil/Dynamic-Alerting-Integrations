@@ -12,7 +12,7 @@ lang: en
 
 ## Status
 
-🔵 **Proposed** (draft). This ADR records a decision: give the platform's alerting plane (Prometheus + Alertmanager) a liveness heartbeat so that its own death is noticed from the outside, and draw the responsibility boundary that high availability and large-scale storage stay the operator's job. Implementation has not started.
+🟡 **In Progress**. This ADR records a decision: give the platform's alerting plane (Prometheus + Alertmanager) a liveness heartbeat so that its own death is noticed from the outside, and draw the responsibility boundary that high availability and large-scale storage stay the operator's job. The MVP (D1 Watchdog + external dead-man's-switch) implementation has started ([#838](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/838)); the canary tenant / rule linter / end-to-end synthetic probe remain deferred-with-trigger (see "Deferred" below). Operator setup and the silence/inhibit no-go zones live in the [Alerting-Plane Self-Liveness Operator Guide](../integration/alerting-plane-self-liveness.en.md).
 
 ## Summary
 
@@ -60,7 +60,10 @@ route:
 receivers:
   - name: watchdog-heartbeat
     webhook_configs:
-      - url: <operator-supplied external heartbeat URL; empty = disabled, blind spot recorded>
+      # The heartbeat URL embeds a token/UUID = a secret; never inline it in the
+      # ConfigMap (it would trip secret-scan). Use url_file pointing at a mounted
+      # Secret; an unset Secret = disabled, blind spot recorded.
+      - url_file: /etc/alertmanager/secrets/watchdog-heartbeat-url
       # ⚠️ For multi-channel redundancy (dual external monitors), add more
       #    webhook_configs HERE; never split into multiple routes above —
       #    they'd be cut off by continue: false.
@@ -76,7 +79,7 @@ receivers:
 
 **Leave a margin between cadence and timeout**: the external timeout (TTL) must be **longer than `repeat_interval`** to absorb network latency **and rule-evaluation lag under extreme load** — when resources are squeezed, Prometheus is alive (the pod hasn't died) but its rule-evaluation loop falls badly behind, so the heartbeat is emitted late. For example `repeat_interval: 3m` → external TTL of **5m**; that ~2m buffer defends against engine-internal scheduling starvation, not just a few seconds of network jitter. Capture this tolerance contract in the operator runbook.
 
-**The URL is a config knob, not a hard dependency**: an operator supplies their own heartbeat service to enable it; left empty, it is explicitly recorded as a known blind spot.
+**The URL is a config knob, not a hard dependency**: an operator puts their own heartbeat URL into the mounted Secret (`url_file`) to enable it; left as the placeholder, it is explicitly recorded as a known blind spot.
 
 ### D2: Air-gapped environments use a pull-based health check instead
 
