@@ -58,6 +58,7 @@ route:
     # ⚠️ 必須是 routes 的「第一條」（最高優先級），見下方說明
     - matchers: [ alertname="Watchdog" ]
       receiver: watchdog-heartbeat
+      group_by: [alertname]     # 強制獨立聚合，不繼承頂層 group_by（本平台 root 為 [alertname,tenant]）致心跳頻率錯亂
       group_wait: 0s
       group_interval: 1m
       repeat_interval: 3m       # 外部 TTL 要比這更長，見下方緩衝說明

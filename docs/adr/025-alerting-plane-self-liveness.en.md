@@ -52,6 +52,7 @@ route:
     # ⚠️ MUST be the FIRST entry in routes (highest priority); see note below
     - matchers: [ alertname="Watchdog" ]
       receiver: watchdog-heartbeat
+      group_by: [alertname]     # force standalone grouping; do NOT inherit the root group_by (skews heartbeat cadence)
       group_wait: 0s
       group_interval: 1m
       repeat_interval: 3m       # the external TTL must be longer; see margin note
