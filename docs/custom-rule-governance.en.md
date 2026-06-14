@@ -397,6 +397,10 @@ But **whether to pair depends on the exporter's shape**:
 
 Two `absence` properties to know up front: (1) it **respects maintenance** mode (suppressed during maintenance); (2) it is **tenant-aggregated** — it detects **total** absence across the tenant's replicas, **not single-replica death**; for per-replica liveness, pin a stable instance via `selectors` (works for StatefulSet stable names, **not** Deployment random pod names).
 
+**⚠️ absence evaluation cost (beware high cardinality)**
+
+`absence` compiles to `count_over_time(<metric><selectors>[<window>])` — each evaluation scans **every series of `<metric>` matching the selectors** over the window. A **high-cardinality metric without `selectors`** scans all of them → memory/CPU spikes (pronounced on backends like VictoriaMetrics). Always scope with `selectors` (instance/pod/a specific label); never run `absence` on a bare high-cardinality metric. This is the flip side of "prefer label-form over piling up value-form": label-form's `selectors` inherently bound the scan.
+
 **Staleness (a stale value)**
 
 When the exporter is alive but the value is hours-old stale, `==` fires on the old code. Use the recipe's `for:` to require the condition to **persist**, filtering transient/stale reads.
