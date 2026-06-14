@@ -60,6 +60,9 @@ receivers:
   - name: watchdog-heartbeat
     webhook_configs:
       - url: <operator-supplied external heartbeat URL; empty = disabled, blind spot recorded>
+      # ⚠️ For multi-channel redundancy (dual external monitors), add more
+      #    webhook_configs HERE; never split into multiple routes above —
+      #    they'd be cut off by continue: false.
 ```
 
 **The trick is to invert it**: the external service does not "alarm on receipt" — it "**expects a ping every few minutes; if it stops arriving, page a human**." That way, whether Prometheus dies, Alertmanager dies, or the signal can't get out (firewall / certificate), the heartbeat stops and the outside notices.
@@ -68,7 +71,9 @@ receivers:
 
 **The route must be first**: Alertmanager evaluates routes top-down. This Watchdog route **must be the first entry in `routes`**, or a broader earlier route with `continue: false` (e.g. a severity catch-all or the existing tenant-alert lane) could swallow it, and the heartbeat would never go out.
 
-**Leave a margin between cadence and timeout**: the external timeout (TTL) must be **longer than `repeat_interval`** to absorb network and evaluation delay — otherwise a few seconds of jitter cause false alarms. For example `repeat_interval: 3m` → external TTL of **5m** (~2m of buffer). Capture this tolerance contract in the operator runbook.
+**Immune to silences and inhibition**: even when the signal evaluates fine and reaches the top route, it can still be dropped *before Alertmanager sends it* — by a **global silence** (during a major incident SREs often apply a `.*` wildcard silence to stem an alert storm) or an **`inhibit_rule`** (e.g. when `ClusterDown` fires and suppresses all routine alerts). If it is dropped, the outside receives no heartbeat and **false-alarms "platform dead,"** causing secondary chaos. Hard contract: (a) the Watchdog's label design (`severity: none`) must be semantically **immune** to all existing and future global inhibition rules; (b) the operator runbook must **forbid** applying any silence to `alertname="Watchdog"` (including during maintenance windows).
+
+**Leave a margin between cadence and timeout**: the external timeout (TTL) must be **longer than `repeat_interval`** to absorb network latency **and rule-evaluation lag under extreme load** — when resources are squeezed, Prometheus is alive (the pod hasn't died) but its rule-evaluation loop falls badly behind, so the heartbeat is emitted late. For example `repeat_interval: 3m` → external TTL of **5m**; that ~2m buffer defends against engine-internal scheduling starvation, not just a few seconds of network jitter. Capture this tolerance contract in the operator runbook.
 
 **The URL is a config knob, not a hard dependency**: an operator supplies their own heartbeat service to enable it; left empty, it is explicitly recorded as a known blind spot.
 
