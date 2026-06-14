@@ -90,7 +90,7 @@ import (
 // errors against valid configs (false positive blocking merges).
 var receiverTypeSpecs = map[string][]string{
 	"webhook":    {"url"},
-	"email":      {"to", "smarthost"},
+	"email":      {"to", "smarthost", "from"},
 	"slack":      {"api_url"},
 	"teams":      {"webhook_url"},
 	"rocketchat": {"url"},

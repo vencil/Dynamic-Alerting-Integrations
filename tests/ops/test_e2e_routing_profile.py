@@ -56,7 +56,7 @@ def full_pipeline_dir(config_dir):
         "defaults": {"mysql_connections": "80", "pg_connections": "80"},
         "_routing_defaults": {
             "receiver": {"type": "email", "to": ["oncall@example.com"],
-                         "smarthost": "smtp.example.com:587"},
+                         "smarthost": "smtp.example.com:587", "from": "alerts@example.com"},
             "group_by": ["alertname", "tenant"],
             "group_wait": "30s",
             "group_interval": "5m",
@@ -175,7 +175,7 @@ class TestProfileToRouteGeneration:
             "defaults": {"cpu": "80"},
             "_routing_defaults": {
                 "receiver": {"type": "email", "to": ["x@x.com"],
-                             "smarthost": "smtp:587"},
+                             "smarthost": "smtp:587", "from": "a@x.com"},
                 "group_wait": "30s",
                 "repeat_interval": "4h",
             },
@@ -233,7 +233,7 @@ class TestRouteToPolicyValidation:
             "defaults": {"cpu": "80"},
             "_routing_defaults": {
                 "receiver": {"type": "email", "to": ["x@x.com"],
-                             "smarthost": "smtp:587"},
+                             "smarthost": "smtp:587", "from": "a@x.com"},
                 "group_wait": "30s",
                 "repeat_interval": "4h",
             },
@@ -277,7 +277,7 @@ class TestRouteToPolicyValidation:
             "defaults": {"cpu": "80"},
             "_routing_defaults": {
                 "receiver": {"type": "email", "to": ["x@x.com"],
-                             "smarthost": "smtp:587"},
+                             "smarthost": "smtp:587", "from": "a@x.com"},
                 "group_wait": "30s",
                 "repeat_interval": "24h",  # exceeds policy max
             },
@@ -393,7 +393,7 @@ class TestEnforcedWithProfiles:
             "defaults": {"cpu": "80"},
             "_routing_defaults": {
                 "receiver": {"type": "email", "to": ["x@x.com"],
-                             "smarthost": "smtp:587"},
+                             "smarthost": "smtp:587", "from": "a@x.com"},
                 "group_wait": "30s",
             },
             "_routing_enforced": {

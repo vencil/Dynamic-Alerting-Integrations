@@ -81,15 +81,25 @@ class TestEmailToCoercion:
         """單一收件人 list `to` → 不帶逗號的字串。"""
         cfg, _ = build_receiver_config(
             {"type": "email", "to": ["solo@example.com"],
-             "smarthost": "smtp.example.com:587"}, "db-a")
+             "smarthost": "smtp.example.com:587", "from": "x@example.com"}, "db-a")
         assert cfg["email_configs"][0]["to"] == "solo@example.com"
 
     def test_string_to_passthrough(self):
         """已是字串的 `to` 原樣保留（不被誤包裝）。"""
         cfg, _ = build_receiver_config(
             {"type": "email", "to": "admin@example.com",
-             "smarthost": "smtp.example.com:587"}, "db-a")
+             "smarthost": "smtp.example.com:587", "from": "x@example.com"}, "db-a")
         assert cfg["email_configs"][0]["to"] == "admin@example.com"
+
+    def test_email_without_from_is_skipped_with_warning(self):
+        """缺陷 B 的 rule 化（防 latent 再生）：email receiver 缺 `from` 時，
+        builder 直接 WARN+skip(回傳 None) — 不再 render 出 amtool 拒收的 config。
+        部署 base 無 global smtp_*，故 `from` 為 per-receiver required（同 smarthost）。"""
+        cfg, warnings = build_receiver_config(
+            {"type": "email", "to": "ops@example.com",
+             "smarthost": "smtp.example.com:587"}, "db-a")  # no `from`
+        assert cfg is None
+        assert any("requires 'from'" in w for w in warnings)
 
     def test_live_default_email_receiver_renders_string_to_and_from(self):
         """live _defaults.yaml 的 email default 建出的 receiver：`to` 為字串

@@ -325,7 +325,7 @@ class TestEdgeCases:
 
     def test_email_skipped(self):
         """Email receiver 目前應返回 SKIPPED（SMTP 測試尚未實作）。"""
-        recv = {"type": "email", "to": "admin@example.com", "smarthost": "smtp.example.com:587", "_label": "mail"}
+        recv = {"type": "email", "to": "admin@example.com", "smarthost": "smtp.example.com:587", "from": "alerts@example.com", "_label": "mail"}
         result = nt.test_receiver(recv)
         assert result.status == nt.STATUS_SKIPPED
 
