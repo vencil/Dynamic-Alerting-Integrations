@@ -45,3 +45,7 @@ example:
   horizon: 4h
   threshold: "0.15:warning"
   for: 30m
+  # evaluate EACH PVC separately so a small nearly-full volume fires even when a
+  # large empty one would hide it in a by(tenant) sum (ADR-024 §Addendum). Requires
+  # PVCs backed by a CSI driver implementing NodeGetVolumeStats.
+  group_by: [persistentvolumeclaim]

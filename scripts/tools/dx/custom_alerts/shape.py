@@ -19,6 +19,10 @@ recipe_id grammar (parts joined by `__`, each part sanitised to [a-z0-9_]):
   op_slug: >→gt  >=→ge  <→lt  <=→le  ==→eq  (absence → "absent")
   for: pending-duration; part of rule identity (control-plane static attr,
        TRK-326) — always emitted, enum-bounded in schema. Default "1m".
+  group_by part:  gb_{label}  (sorted; ADR-024 §Addendum disk recipes) — a
+       preserved aggregation dimension so the alert fires per that dimension
+       (e.g. per PVC). Emitted ONLY when present, so a recipe without group_by
+       keeps a byte-identical slug. Bounded to ALLOWED_GROUP_BY.
 Sanitisation maps every char outside [a-zA-Z0-9_] to '_' (deterministic, and keeps
 the slug valid as a Prometheus recording-rule name component).
 """
@@ -63,6 +67,14 @@ ALLOWED_FOR = frozenset({"0s", "1m", "5m", "15m", "30m", "1h"})
 # the recipe_id slug. The platform derives lookback = max(2·horizon, 1h) from this
 # (compile-time only — see recipes.py). MUST match the schema + Go customAlertHorizonValid.
 ALLOWED_HORIZON = frozenset({"1h", "2h", "4h", "12h", "24h", "48h"})
+
+# Permitted `group_by` dimensions (ADR-024 §Addendum disk recipes). A disk-fill
+# alert must fire PER PVC — a 99%-full 10GB volume must not be hidden by a 10%-full
+# 500GB one in a `by(tenant)` sum. group_by preserves the named label in the
+# metric-side aggregation so each dimension is evaluated separately. Bounded to a
+# whitelist to keep cardinality safe (a tenant has few PVCs). Each entry enters the
+# recipe_id slug + shape_signature. MUST match the schema enum + custom_alert.go.
+ALLOWED_GROUP_BY = frozenset({"persistentvolumeclaim"})
 
 RECIPES = ("threshold", "rate", "ratio", "absence", "p99_latency", "forecast")
 
@@ -137,6 +149,35 @@ def _normalize_horizon(inst: dict) -> str:
             f"horizon {value!r} must be one of {sorted(ALLOWED_HORIZON)}"
         )
     return value
+
+
+def _normalize_group_by(inst: dict) -> Tuple[str, ...]:
+    """Validate + canonicalise `group_by` into a sorted, deduped tuple.
+
+    Each entry is a label preserved in the metric-side aggregation so the alert is
+    evaluated per that dimension (e.g. per PVC), firing if ANY one crosses. Falsy
+    (missing / null / empty) → empty tuple, so a recipe without group_by keeps a
+    byte-identical recipe_id (the existing golden vectors stay valid). Bounded to
+    ALLOWED_GROUP_BY; sorted for cross-language slug determinism. MUST match
+    custom_alert.go::customAlertGroupBy.
+    """
+    raw = inst.get("group_by")
+    if raw in (None, ""):
+        return ()
+    if not isinstance(raw, (list, tuple)):
+        raise RecipeError(
+            f"group_by must be a list of labels, got {type(raw).__name__}"
+        )
+    out = []
+    for label in raw:
+        label = str(label)
+        if label not in ALLOWED_GROUP_BY:
+            raise RecipeError(
+                f"group_by label {label!r} must be one of {sorted(ALLOWED_GROUP_BY)} "
+                f"(bounded whitelist, ADR-024 §Addendum)"
+            )
+        out.append(label)
+    return tuple(sorted(set(out)))
 
 
 def validate_metric_name(metric: str, field: str = "metric") -> None:
@@ -261,6 +302,32 @@ def recipe_id(inst: dict) -> str:
     # MUST stay byte-identical to custom_alert.go::RecipeID.
     parts.append("for" + _normalize_for(inst))
 
+    # group_by dimensions (ADR-024 §Addendum): each preserved label is a distinct
+    # rule from the per-tenant default, so it enters the slug. Appended LAST and
+    # only when present → a recipe without group_by keeps a byte-identical slug
+    # (existing recipe_id vectors unaffected).
+    #   SLUG-ORDER CONTRACT: a NEW slug field added later MUST go in the SAME
+    #   position in custom_alert.go::RecipeID (the golden vector enforces parity).
+    #   Keep new fields only-when-present like gb_ (an ALWAYS-appended field — like
+    #   `for` — re-slugs every existing rule, a deliberate breaking migration).
+    # Per-dimension eval only applies to value-crossing recipes, so reject it for
+    # absence (a per-tenant presence check) and op '==' (exact code match is not
+    # per-PVC) — keeps the eq/absence cores per-tenant.
+    #   FORESIGHT: the '==' rejection is safe ONLY because the whitelist is PVC-only
+    #   (error codes aren't per-PVC). If a topology dim (e.g. pod) is whitelisted, a
+    #   tenant may legitimately want group_by:[pod] + op:'==' ("any pod's errno == X")
+    #   — then relax this rejection AND thread group_by into _eq_core_record's
+    #   `max by(...)`. MUST match custom_alert.go.
+    group_by = _normalize_group_by(inst)
+    if group_by and (recipe == "absence" or op == "=="):
+        what = "the absence recipe" if recipe == "absence" else "op '=='"
+        raise RecipeError(
+            f"group_by (per-dimension eval) is not supported for {what} — it "
+            f"applies only to value-crossing recipes (ADR-024 §Addendum)"
+        )
+    for gb in group_by:
+        parts.append("gb_" + gb)
+
     return _sanitise("__".join(parts))
 
 
@@ -287,6 +354,8 @@ def shape_signature(inst: dict) -> Tuple:
         tuple(_selector_items(inst)),
         # `for` distinguishes shapes (control-plane static attr; see recipe_id).
         _normalize_for(inst),
+        # group_by dimensions distinguish per-dimension shapes (ADR-024 §Addendum).
+        _normalize_group_by(inst),
     )
 
 

@@ -6,7 +6,9 @@
 # stays silent — the forecast is the signal, not the current value.
 #
 # Input series carry realistic K8s scrape labels (namespace / persistentvolumeclaim
-# / instance / job) which the base record's `sum by(tenant)` collapses (#651:
+# / instance / job). With group_by:[persistentvolumeclaim] the base record is
+# `sum by(tenant, persistentvolumeclaim)` — it KEEPS the PVC dimension (so each
+# volume is forecast separately) while collapsing namespace/instance/job (#651:
 # lab-clean fixtures hide label-topology bugs). 1m evaluation interval keeps the
 # 8h-lookback series tractable.
 rule_files:
@@ -15,22 +17,31 @@ rule_files:
 evaluation_interval: 1m
 
 tests:
-  # ── shop-a: avail falling 800→ -1.2/min, capacity flat 1000 → ratio 0.8 → ~0.18.
-  #    At eval 520m current ratio ≈ 0.176 (STILL above the 0.15 floor), but the
-  #    8h slope predicts < 0.15 within 4h → fires (lead time). for:30m satisfied. ──
+  # ── shop-a (per-PVC, ADR-024 §Addendum): TWO PVCs prove group_by isolates each.
+  #    data-shop-0:   avail falling -1.2/min, cap flat 1000 → ratio 0.8 → ~0.18; the
+  #      8h slope predicts < 0.15 within 4h → FIRES (lead time, for:30m satisfied).
+  #    config-shop-0: large + flat (avail 9000 / cap 10000 = 0.9) → never fires.
+  #    MASKING PROOF: WITHOUT group_by, sum(avail)/sum(cap) ≈ 0.89 (the 9000-byte
+  #      config volume dwarfs the 800-byte data volume) → never crosses 0.15, so the
+  #      about-to-fill data PVC is SILENTLY MASKED. Per-PVC fires it, named below. ──
   - interval: 1m
     input_series:
       - series: 'kubelet_volume_stats_available_bytes{tenant="shop-a", namespace="shop", persistentvolumeclaim="data-shop-0", instance="10.0.0.1:10250", job="kubelet"}'
         values: '800-1.2x540'
       - series: 'kubelet_volume_stats_capacity_bytes{tenant="shop-a", namespace="shop", persistentvolumeclaim="data-shop-0", instance="10.0.0.1:10250", job="kubelet"}'
         values: '1000+0x540'
-      - series: 'user_threshold{component="custom", metric="kubelet_volume_stats_available_bytes", recipe_id="forecast__kubelet_volume_stats_available_bytes__lt__h4h__den_kubelet_volume_stats_capacity_bytes__for30m", tenant="shop-a", severity="warning", name="disk_will_fill", mode="page"}'
+      # healthy large volume that WOULD mask the data PVC under a by(tenant) sum.
+      - series: 'kubelet_volume_stats_available_bytes{tenant="shop-a", namespace="shop", persistentvolumeclaim="config-shop-0", instance="10.0.0.1:10250", job="kubelet"}'
+        values: '9000+0x540'
+      - series: 'kubelet_volume_stats_capacity_bytes{tenant="shop-a", namespace="shop", persistentvolumeclaim="config-shop-0", instance="10.0.0.1:10250", job="kubelet"}'
+        values: '10000+0x540'
+      - series: 'user_threshold{component="custom", metric="kubelet_volume_stats_available_bytes", recipe_id="forecast__kubelet_volume_stats_available_bytes__lt__h4h__den_kubelet_volume_stats_capacity_bytes__for30m__gb_persistentvolumeclaim", tenant="shop-a", severity="warning", name="disk_will_fill", mode="page"}'
         values: '0.15+0x540'
       - series: 'tenant_metadata_info{tenant="shop-a", runbook_url="http://rb/shop", owner="team-shop", tier="gold"}'
         values: '1x540'
     alert_rule_test:
       - eval_time: 520m
-        alertname: Custom_forecast__kubelet_volume_stats_available_bytes__lt__h4h__den_kubelet_volume_stats_capacity_bytes__for30m
+        alertname: Custom_forecast__kubelet_volume_stats_available_bytes__lt__h4h__den_kubelet_volume_stats_capacity_bytes__for30m__gb_persistentvolumeclaim
         exp_alerts:
           - exp_labels:
               component: custom
@@ -40,6 +51,7 @@ tests:
               name: disk_will_fill
               mode: page
               version: default
+              persistentvolumeclaim: data-shop-0
               runbook_url: "http://rb/shop"
               owner: team-shop
               tier: gold
@@ -60,9 +72,9 @@ tests:
         values: '500+0x540'
       - series: 'kubelet_volume_stats_capacity_bytes{tenant="stable-c", namespace="stab", persistentvolumeclaim="data-stab-0", instance="10.0.0.2:10250", job="kubelet"}'
         values: '1000+0x540'
-      - series: 'user_threshold{component="custom", metric="kubelet_volume_stats_available_bytes", recipe_id="forecast__kubelet_volume_stats_available_bytes__lt__h4h__den_kubelet_volume_stats_capacity_bytes__for30m", tenant="stable-c", severity="warning", name="disk_will_fill", mode="page"}'
+      - series: 'user_threshold{component="custom", metric="kubelet_volume_stats_available_bytes", recipe_id="forecast__kubelet_volume_stats_available_bytes__lt__h4h__den_kubelet_volume_stats_capacity_bytes__for30m__gb_persistentvolumeclaim", tenant="stable-c", severity="warning", name="disk_will_fill", mode="page"}'
         values: '0.15+0x540'
     alert_rule_test:
       - eval_time: 520m
-        alertname: Custom_forecast__kubelet_volume_stats_available_bytes__lt__h4h__den_kubelet_volume_stats_capacity_bytes__for30m
+        alertname: Custom_forecast__kubelet_volume_stats_available_bytes__lt__h4h__den_kubelet_volume_stats_capacity_bytes__for30m__gb_persistentvolumeclaim
         exp_alerts: []

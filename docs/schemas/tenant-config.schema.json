@@ -1031,6 +1031,14 @@
           "description": "Pending duration before firing. Enum-bounded (TRK-326): `for` is part of the recipe_id slug, so it is restricted to a small constant set to keep vectorized-rule cardinality bounded (no O(M)→O(N) blow-up). Default 1m.",
           "enum": ["0s", "1m", "5m", "15m", "30m", "1h"],
           "default": "1m"
+        },
+        "group_by": {
+          "type": "array",
+          "title": "Per-Dimension Evaluation (bounded whitelist)",
+          "description": "Extra label(s) to keep in the rule's aggregation so the alert is evaluated SEPARATELY per that dimension and fires if ANY one crosses. Bounded to a whitelist to keep cardinality safe; today only `persistentvolumeclaim` — a disk-fill alert must fire per PVC, so a small full volume is not masked by a large empty one. Like `for`, it enters the recipe_id slug (instances differing in group_by compile to distinct rules). The per-tenant threshold still broadcasts to each dimension. WARNING: every metric the recipe aggregates — including a ratio's `denominator_metric` and a forecast's `capacity_metric` — MUST carry this label, or the per-dimension join yields an empty vector and the alert SILENTLY NEVER FIRES (the kubelet disk-fill metrics both carry `persistentvolumeclaim`, so the shipped example is safe). The CI scrape-config lint (#692 P0 ③ guard) enforces this, since the compiler cannot see live label sets.",
+          "items": { "enum": ["persistentvolumeclaim"] },
+          "uniqueItems": true,
+          "examples": [["persistentvolumeclaim"]]
         }
       },
       "additionalProperties": false

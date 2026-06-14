@@ -41,6 +41,15 @@ def _norm_version(expr: str) -> str:
     return f'label_replace({expr}, "version", "default", "version", "^$")'
 
 
+def _gb_suffix(group_by) -> str:
+    """', l1, l2' for the bounded group_by dims (or '') — appended inside a `by()`
+    label list so the metric-side aggregation PRESERVES each dimension (per-PVC
+    disk-fill: fire if ANY PVC crosses; ADR-024 §Addendum). The per-tenant threshold
+    record and the on()/group_left join keys stay unchanged: the extra dimension
+    rides the many-side of the join and reaches the alert label automatically."""
+    return "".join(", " + g for g in (group_by or ()))
+
+
 def _duration_to_seconds(d: str) -> int:
     m = _DUR_RE.match(str(d))
     if not m:
@@ -49,7 +58,7 @@ def _duration_to_seconds(d: str) -> int:
 
 
 def _forecast_records(rid: str, metric: str, sel: str, horizon: str,
-                      capacity: str) -> List[dict]:
+                      capacity: str, gb=()) -> List[dict]:
     """forecast emission (ADR-024 §Forecast Recipe): predict (linear) a gauge/ratio
     crossing a threshold within `horizon`. Two records:
 
@@ -65,16 +74,17 @@ def _forecast_records(rid: str, metric: str, sel: str, horizon: str,
     """
     h_s = _duration_to_seconds(horizon)
     lb_s = max(2 * h_s, 3600)            # max(2·horizon, 1h), integer seconds
+    g = _gb_suffix(gb)                   # extra by() dims (e.g. per PVC), or ""
     base = f"custom:fcbase:{rid}"
     if capacity:  # ratio mode: headroom ratio (avail/capacity) falling to a floor
         _shape.validate_metric_name(capacity, "capacity_metric")
         base_inner = (
-            f"sum by(tenant) ({metric}{sel})\n"
+            f"sum by(tenant{g}) ({metric}{sel})\n"
             f"  /\n"
-            f"(sum by(tenant) ({capacity}{sel}) > 0)"   # >0 guard → no +Inf / div-by-zero
+            f"(sum by(tenant{g}) ({capacity}{sel}) > 0)"   # >0 guard → no +Inf / div-by-zero
         )
     else:         # raw mode: a gauge crossing an absolute threshold
-        base_inner = f"max by(tenant, version) ({metric}{sel})"
+        base_inner = f"max by(tenant, version{g}) ({metric}{sel})"
     # predict_linear over the RECORDED base (predict_linear cannot range-select a
     # division/aggregation inline — hence the base recording rule). Bare `and`:
     # both operands derive from the same `base` series → identical label set, so
@@ -109,23 +119,25 @@ def _threshold_record(rid: str, metric: str) -> dict:
 
 
 def _metric_record(rid: str, recipe: str, metric: str, sel: str,
-                   window: str, quantile: str, denom: str) -> dict:
+                   window: str, quantile: str, denom: str, gb=()) -> dict:
+    g = _gb_suffix(gb)  # extra by() dims (e.g. ", persistentvolumeclaim"), or ""
     if recipe == "threshold":
-        inner = f"max by(tenant, version) ({metric}{sel})"
+        inner = f"max by(tenant, version{g}) ({metric}{sel})"
     elif recipe == "rate":
-        inner = f"sum by(tenant, version) (rate({metric}{sel}[{window}]))"
+        inner = f"sum by(tenant, version{g}) (rate({metric}{sel}[{window}]))"
     elif recipe == "ratio":
         # by(tenant) only (ratio is per-tenant aggregate, version-agnostic in MVP);
         # `(den > 0)` drops zero/negative denominators → empty vector, never +Inf.
+        # group_by extends BOTH sides so the ratio is computed per-dimension.
         inner = (
-            f"sum by(tenant) (rate({metric}{sel}[{window}]))\n"
+            f"sum by(tenant{g}) (rate({metric}{sel}[{window}]))\n"
             f"  /\n"
-            f"(sum by(tenant) (rate({denom}{sel}[{window}])) > 0)"
+            f"(sum by(tenant{g}) (rate({denom}{sel}[{window}])) > 0)"
         )
     elif recipe == "p99_latency":
         inner = (
             f"histogram_quantile({quantile},\n"
-            f"  sum by(le, tenant, version) (rate({metric}_bucket{sel}[{window}])))"
+            f"  sum by(le, tenant, version{g}) (rate({metric}_bucket{sel}[{window}])))"
         )
     else:  # absence has no separate metric record
         raise _shape.RecipeError(f"_metric_record called for {recipe!r}")
@@ -298,6 +310,10 @@ def emit_shape(shape: dict) -> Tuple[List[dict], List[dict]]:
     sel = _shape.assemble_selector(shape)
     for_ = str(shape.get("for", "1m"))
     severities = shape["severities"]
+    # bounded extra aggregation dims (e.g. per PVC; ADR-024 §Addendum). Validated +
+    # sorted; rejected for absence/== by recipe_id, so only the metric/forecast
+    # records below need it (the standard core inherits it via custom:metric).
+    gb = _shape._normalize_group_by(shape)
 
     recording: List[dict] = [_threshold_record(rid, metric)]
     if recipe == "forecast":
@@ -305,11 +321,11 @@ def emit_shape(shape: dict) -> Tuple[List[dict], List[dict]]:
         # the standard _core_record then compares custom:metric {op} threshold.
         recording.extend(_forecast_records(
             rid, metric, sel, str(shape.get("horizon", "")),
-            shape.get("capacity_metric", "")))
+            shape.get("capacity_metric", ""), gb))
     elif recipe != "absence" and op != "==":
         # `==` inlines the raw metric in its any-match core (no maxed metric
         # record) — see _eq_core_record. absence has no metric record either.
-        recording.append(_metric_record(rid, recipe, metric, sel, window, quantile, denom))
+        recording.append(_metric_record(rid, recipe, metric, sel, window, quantile, denom, gb))
     for sev in severities:
         recording.append(_core_record(rid, recipe, op, sev, metric, sel, window))
 

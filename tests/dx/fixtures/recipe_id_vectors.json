@@ -65,6 +65,11 @@
       "_note": "grammar coverage (#810): op \"==\" → eq (threshold-recipe-only; status/error-code-as-value match, e.g. MariaDB semi-sync errno 1236)",
       "input": {"recipe": "threshold", "metric": "mysql_semisync_master_last_errno", "op": "==", "window": "5m"},
       "recipe_id": "threshold__mysql_semisync_master_last_errno__eq__w5m__for1m"
+    },
+    {
+      "_note": "group_by (ADR-024 §Addendum): per-PVC disk-fill — `gb_persistentvolumeclaim` is appended LAST so a no-group_by slug stays byte-identical; the metric-side aggregation keeps the PVC dimension so a small full volume is not masked by a large empty one in a by(tenant) sum",
+      "input": {"recipe": "forecast", "metric": "kubelet_volume_stats_available_bytes", "capacity_metric": "kubelet_volume_stats_capacity_bytes", "op": "<", "horizon": "4h", "for": "30m", "group_by": ["persistentvolumeclaim"]},
+      "recipe_id": "forecast__kubelet_volume_stats_available_bytes__lt__h4h__den_kubelet_volume_stats_capacity_bytes__for30m__gb_persistentvolumeclaim"
     }
   ]
 }
