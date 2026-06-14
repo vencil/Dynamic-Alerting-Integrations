@@ -10,7 +10,7 @@ params:
   capacity_metric: {required: false, desc: "ratio mode: the denominator (e.g. total capacity). present → predict metric/capacity headroom ratio crossing a fractional floor in (0,1); absent → raw mode (predict the gauge crossing an absolute threshold)"}
   op:        {required: false, default: ">", enum: [">", ">=", "<", "<="], desc: "ratio mode usually '<' (falling toward a floor); raw mode usually '>' (rising toward a ceiling)"}
   horizon:   {required: true,  enum: ["1h", "2h", "4h", "12h", "24h", "48h"], desc: "how far ahead to predict. The platform derives lookback = max(2*horizon, 1h) — the tenant never sets the lookback (an expert foot-gun)"}
-  threshold: {required: true,  desc: "value[:severity]. ratio mode: a fractional floor in (0,1), e.g. 0.15:warning; raw mode: an absolute value"}
+  threshold: {required: true,  desc: "value[:severity]. ratio mode: a fractional floor in (0, 0.5) — below the current-state band, enforced at load/preflight (e.g. 0.15:warning); raw mode: an absolute value"}
   selectors:    {required: false, desc: "exact label filters (=)"}
   selectors_re: {required: false, desc: "regex label filters (=~)"}
   mode:      {required: false, default: page, enum: [page, silent]}
@@ -20,12 +20,24 @@ emitted_shape: |
   custom:fcbase:<id> = sum by(tenant)(<metric><sel>) / (sum by(tenant)(<capacity><sel>) > 0)
   # raw mode (no capacity_metric):
   custom:fcbase:<id> = max by(tenant, version)(<metric><sel>)
-  # then, both modes:
+  # custom:metric — RATIO MODE (headroom ratio is non-negative, bounded [0,1]):
   custom:metric:<id> = label_replace(
-      predict_linear(custom:fcbase:<id>[<lookback>s], <horizon_s>)
+      clamp_min(predict_linear(custom:fcbase:<id>[<lookback>s], <horizon_s>), 0)
+      and custom:fcbase:<id> < 0.5        # current-state sanity floor (anti transient-burst FP)
       and count_over_time(custom:fcbase:<id>[<lookback>s]) > 3,   # cold-start gate
       "version","default","version","^$")
+  # custom:metric — RAW MODE (arbitrary gauge): no clamp, no band:
+  custom:metric:<id> = label_replace(
+      predict_linear(custom:fcbase:<id>[<lookback>s], <horizon_s>)
+      and count_over_time(custom:fcbase:<id>[<lookback>s]) > 3,
+      "version","default","version","^$")
   # the standard per-severity core then compares custom:metric <op> custom:threshold.
+  # The ratio-mode band (0.5) fires only if CURRENT headroom < 0.5 — kills the
+  # transient-burst / cold-start false positive a pure-slope alarm produces at high
+  # headroom; clamp_min floors the surfaced value at 0 (a headroom ratio is never
+  # negative). The tenant threshold (compared in the core) is UNCHANGED. ⚠️ ratio
+  # thresholds should stay well below 0.5 — a threshold ≥ 0.5 is partially neutered by
+  # the band (follow-up: reject it loudly).
   #
   # lookback = max(2*horizon, 1h), emitted as INTEGER seconds (never a bad duration
   # like 1.5h). The cold-start gate suppresses wild slopes from sparse/just-deployed

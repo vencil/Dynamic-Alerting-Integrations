@@ -37,7 +37,10 @@ file_overrides:
     policy:
       # forecast recipe（ADR-024 能力 B）合法產出 predict_linear——
       # 「大範圍回溯」的 deny 理由已被編譯期緩解（lookback 平台導出、
-      # cold-start 樣本 gate），不適用於 compiled pack。
+      # cold-start 樣本 gate + 現狀 band，見 recipes.py），不適用於 compiled pack。
+      # 成本註（#837 per-PVC）：predict_linear 在 group_by:[persistentvolumeclaim]
+      # 下 per-PVC fan-out，但 PVC/租戶為個位數 → bounded。whitelist 對 forecast
+      # 維持「pod 不可」（pod fan-out × predict_linear × 8h lookback 為另一數量級）。
       denied_functions:
         - holt_winters
         - quantile_over_time
