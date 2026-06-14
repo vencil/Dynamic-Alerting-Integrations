@@ -24,6 +24,11 @@ spec:
           type: RuntimeDefault
       containers:
         - name: alertmanager
+          # ADR-025 D1 / #838: the watchdog-heartbeat receiver uses
+          # webhook_configs[].url_file, which Alertmanager has supported for the
+          # generic webhook since v0.26.0 (PR prometheus/alertmanager#3223). The
+          # pin below (a current stable release) is well past that floor — keep any
+          # future bump ≥ v0.26.0 so the heartbeat secret keeps loading.
           image: prom/alertmanager:v0.32.0
           securityContext:
             allowPrivilegeEscalation: false
@@ -45,6 +50,13 @@ spec:
               mountPath: /etc/alertmanager
             - name: data
               mountPath: /alertmanager
+            # ADR-025 D1 / #838: the Watchdog dead-man's-switch URL (a secret —
+            # embeds a token/UUID) is mounted here and referenced via the
+            # watchdog-heartbeat receiver's url_file. Read-only; compatible with
+            # readOnlyRootFilesystem (a separate volume mount, not the root fs).
+            - name: watchdog-secret
+              mountPath: /etc/alertmanager/secrets
+              readOnly: true
           resources:
             requests:
               cpu: 50m
@@ -91,3 +103,12 @@ spec:
             name: alertmanager-config
         - name: data
           emptyDir: {}
+        # ADR-025 D1 / #838: external dead-man's-switch URL (secret-watchdog-
+        # heartbeat.yaml). optional:true so Alertmanager still starts if the
+        # Secret has not been applied yet — the heartbeat then fails to egress and
+        # AlertmanagerWebhookNotificationsFailing fires, rather than taking the
+        # whole alerting plane down on a missing Secret.
+        - name: watchdog-secret
+          secret:
+            secretName: watchdog-heartbeat
+            optional: true

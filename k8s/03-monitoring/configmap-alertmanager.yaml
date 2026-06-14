@@ -23,6 +23,27 @@ data:
       repeat_interval: 12h
       receiver: "default"
       routes:
+        # ── ADR-025 D1 / #838: Watchdog liveness (MUST be routes[0]) ─────
+        # The always-firing Watchdog alert (configmap-rules-platform.yaml) ships
+        # to an operator-supplied EXTERNAL dead-man's-switch on a fixed cadence.
+        # This MUST be the FIRST route (highest priority) so no broader earlier
+        # route with continue:false can swallow the heartbeat. group_by:[alertname]
+        # pins zero-extra-aggregation (NOT inheriting root [alertname,tenant],
+        # which would mangle cadence); group_wait:0s + repeat_interval:3m keep the
+        # beat steady; continue:false keeps it OFF every human channel. The
+        # external TTL must be LONGER than repeat_interval (e.g. 5m) to absorb
+        # network jitter AND rule-eval lag — see the self-liveness runbook.
+        # ⚠️ generate_alertmanager_routes.py RE-INJECTS this route at index 0 on
+        # every regen (route.routes is REPLACED on --apply); this hand-authored
+        # copy keeps the committed base self-consistent.
+        - matchers:
+            - alertname="Watchdog"
+          group_by: ["alertname"]
+          group_wait: 0s
+          group_interval: 1m
+          repeat_interval: 3m
+          receiver: "watchdog-heartbeat"
+          continue: false
         # ── #741 S7/S8: Custom Alerts isolation ──────────────────────────
         # Tenant-authored custom alerts carry a static component="custom" label
         # (set on every Custom_* rule). Intercept them HERE, before the platform
@@ -44,6 +65,20 @@ data:
       - name: "default"
         # 測試環境 — 空 receiver，只記 log 不發通知
         # (移除 localhost:5001 webhook 避免 Connection refused 噪音)
+      - name: "watchdog-heartbeat"
+        # ADR-025 D1 / #838: ships the always-firing Watchdog beat to an EXTERNAL
+        # dead-man's-switch. The DMS webhook URL embeds a token/UUID → it is a
+        # SECRET and MUST NOT be inlined here (would trip secret-scan L1/L2 and
+        # leak). url_file points at a mounted Secret (secret-watchdog-heartbeat.yaml
+        # → /etc/alertmanager/secrets), read lazily at send time so rotation needs
+        # no config reload. Capability: webhook url_file has shipped since
+        # Alertmanager v0.26.0 (PR prometheus/alertmanager#3223); the deployed
+        # image (deployment-alertmanager.yaml) is well past that.
+        # ⚠️ Until the operator populates the Secret, sends fail and
+        # AlertmanagerWebhookNotificationsFailing fires as a "configure me" signal.
+        webhook_configs:
+          - url_file: /etc/alertmanager/secrets/watchdog-heartbeat-url
+            send_resolved: false
       - name: "custom-alerts-firehose"
         # #741 S7/S8: page-mode custom alerts land here, ISOLATED from the
         # platform "default" receiver. MVP = no outbound notifier (custom alerts

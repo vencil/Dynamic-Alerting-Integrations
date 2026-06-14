@@ -1,0 +1,30 @@
+# Bare-rules promtool target for the alerting-plane self-liveness alerts
+# (ADR-025 D1 / #838). promtool can't consume the deployed ConfigMap directly
+# (it needs a top-level `groups:` document, not `data: platform-alert.yml: |`),
+# so this is an EXTRACTED COPY of the alerts from
+# k8s/03-monitoring/configmap-rules-platform.yaml.
+#
+# ⚠️ KEEP IN SYNC with that ConfigMap — expr / labels / `for` must match exactly.
+# The `description` annotation is intentionally omitted here (promtool requires an
+# EXACT annotation-set match against the test's exp_annotations, so the extracted
+# copy carries only `summary`, like platform-sse-reconnect.rules.yaml). The
+# behavioural contract (Watchdog ALWAYS firing; webhook-egress alert fires only on
+# a SUSTAINED failure, not a transient blip or a healthy pipe) is exercised by
+# platform-watchdog_test.yaml against this file.
+groups:
+  - name: platform-self-monitoring
+    rules:
+      - alert: Watchdog
+        expr: vector(1)
+        labels:
+          severity: none
+        annotations:
+          summary: "Alerting pipeline heartbeat — if this stops reaching the external monitor, Prometheus/Alertmanager is down"
+
+      - alert: AlertmanagerWebhookNotificationsFailing
+        expr: increase(alertmanager_notifications_failed_total{integration="webhook"}[10m]) > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Alertmanager webhook notifications are failing — Watchdog heartbeat may not be egressing"

@@ -1,0 +1,76 @@
+# promtool behavioural test for the alerting-plane self-liveness alerts
+# (ADR-025 D1 / #838). Validates:
+#   1) Watchdog is ALWAYS firing (expr: vector(1), no `for`, no input needed) —
+#      it fires immediately and stays firing at any later eval. This is the whole
+#      point: a stopped beat (Prometheus/Alertmanager dead) is what the EXTERNAL
+#      dead-man's-switch detects.
+#   2) AlertmanagerWebhookNotificationsFailing FIRES on a SUSTAINED webhook egress
+#      failure (counter climbing for >15m), distinguishing "heartbeat pipe broken"
+#      from "platform dead".
+#   3) It does NOT fire when webhook delivery is healthy (counter flat → increase 0).
+#   4) It does NOT fire on a single transient blip that clears before the 15m hold.
+# Run: promtool test rules tests/rulepacks/platform-watchdog_test.yaml
+rule_files:
+  - platform-watchdog.rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # 1) Watchdog is always firing — assert at t0 (immediate) and well later.
+  - interval: 1m
+    name: watchdog-always-firing
+    alert_rule_test:
+      - eval_time: 0m
+        alertname: Watchdog
+        exp_alerts:
+          - exp_labels:
+              severity: none
+            exp_annotations:
+              summary: "Alerting pipeline heartbeat — if this stops reaching the external monitor, Prometheus/Alertmanager is down"
+      - eval_time: 30m
+        alertname: Watchdog
+        exp_alerts:
+          - exp_labels:
+              severity: none
+            exp_annotations:
+              summary: "Alerting pipeline heartbeat — if this stops reaching the external monitor, Prometheus/Alertmanager is down"
+
+  # 2) Sustained webhook failure: the failed-notifications counter climbs every
+  #    minute, so increase[10m] stays > 0 continuously and the 15m hold is met.
+  - interval: 1m
+    name: webhook-egress-sustained-failure-fires
+    input_series:
+      - series: 'alertmanager_notifications_failed_total{integration="webhook"}'
+        values: '0+1x40'        # 0,1,2,...,40 — a steadily failing webhook
+    alert_rule_test:
+      - eval_time: 25m          # increase[10m] > 0 held well past the 15m `for`
+        alertname: AlertmanagerWebhookNotificationsFailing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              integration: webhook
+            exp_annotations:
+              summary: "Alertmanager webhook notifications are failing — Watchdog heartbeat may not be egressing"
+
+  # 3) Healthy egress: counter flat (no failures) → increase[10m] == 0 → no fire.
+  - interval: 1m
+    name: webhook-egress-healthy-no-fire
+    input_series:
+      - series: 'alertmanager_notifications_failed_total{integration="webhook"}'
+        values: '5+0x40'        # constant — no new failures
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: AlertmanagerWebhookNotificationsFailing
+        exp_alerts: []
+
+  # 4) Transient blip: a single failure at t0, then flat. increase[10m] > 0 holds
+  #    only ~10m (< the 15m `for`) → must NOT fire.
+  - interval: 1m
+    name: webhook-egress-transient-blip-no-fire
+    input_series:
+      - series: 'alertmanager_notifications_failed_total{integration="webhook"}'
+        values: '0 1+0x40'      # one bump, then flat — clears before 15m hold
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: AlertmanagerWebhookNotificationsFailing
+        exp_alerts: []

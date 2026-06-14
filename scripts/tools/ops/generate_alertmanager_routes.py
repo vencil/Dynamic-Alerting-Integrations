@@ -51,7 +51,9 @@ from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION  # noqa: E402
 from _grar_validate import (  # noqa: E402, F401
     _extract_host,
     _validate_profile_refs,
+    assert_watchdog_inhibit_immunity,
     check_domain_policies,
+    find_watchdog_suppressing_inhibits,
     load_policy,
     validate_receiver_domains,
     validate_tenant_keys,
@@ -82,6 +84,7 @@ from _grar_routes import (  # noqa: E402, F401
     _build_override_matchers,
     _build_override_route,
     _build_custom_alert_routes,
+    _build_watchdog_route,
     _build_per_tenant_enforced_route,
     _build_single_enforced_route,
     _build_tenant_routes,
@@ -113,6 +116,12 @@ def _validate_mode(routes: list[dict], receivers: list[dict], inhibit_rules: lis
                    all_warnings: list[str]) -> None:
     """Handle --validate mode: check for errors and exit."""
     errors = [w for w in all_warnings if "WARN" in w and "skipping" in w]
+    # ADR-025 D1 regression tripwire: a generated inhibit rule must never target
+    # the Watchdog heartbeat. (The full base+generated set is enforced fail-closed
+    # at the render paths; this catches a generator-side regression early.)
+    for idx, _rule in find_watchdog_suppressing_inhibits(inhibit_rules):
+        errors.append(f"  WARN: generated inhibit_rules[{idx}] would suppress the "
+                      "Watchdog heartbeat (ADR-025) — skipping forbidden rule")
     route_count = len(routes)
     inhibit_count = len(inhibit_rules)
     print(f"Validation: {route_count} route(s), {len(receivers)} receiver(s), "

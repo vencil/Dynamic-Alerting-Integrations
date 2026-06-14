@@ -31,29 +31,44 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 
-from _grar_routes import _build_custom_alert_routes  # noqa: E402
+from _grar_routes import _build_custom_alert_routes, _build_watchdog_route  # noqa: E402
+from _grar_validate import assert_watchdog_inhibit_immunity  # noqa: E402
 
 
 def _inject_custom_alert_isolation(routes: list[dict], receivers: list[dict]) -> tuple[list[dict], list[dict]]:
-    """Prepend the platform-static Custom Alerts isolation route + firehose
-    receiver (#741 S7/S8) so the final ConfigMap always isolates component=custom
-    ahead of the enforced NOC route, surviving the route-REPLACE on --apply.
+    """Prepend the two platform-static top-of-tree routes — the Watchdog liveness
+    route (index 0, ADR-025 D1 / #838) then the Custom Alerts isolation route
+    (index 1, #741 S7/S8) — plus their receivers, so the final ConfigMap always
+    pins them AHEAD of the enforced NOC route and they survive the route-REPLACE
+    that --apply performs on route.routes.
 
-    Idempotent: skips if a component="custom" route / the firehose receiver is
-    already present, so re-merging an already-injected config does not duplicate.
+    Order is load-bearing. Watchdog MUST be index 0 (highest priority) so its
+    heartbeat can never be intercepted by a broader earlier route; the custom
+    isolation route follows at index 1. The two matchers are mutually exclusive
+    (alertname="Watchdog" vs component="custom"), so neither shadows the other,
+    but the positions are pinned for determinism and audit.
+
+    Idempotent: any pre-existing Watchdog / component="custom" route is dropped
+    and re-prepended canonically (so re-merging an already-injected config does
+    not duplicate or mis-order), and the name-only placeholder receivers are
+    added only if absent — a richer existing/base definition (e.g. watchdog-
+    heartbeat's url_file) is preserved, never duplicated or clobbered, here.
     """
+    wd_routes, wd_receivers = _build_watchdog_route()
     cust_routes, cust_receivers = _build_custom_alert_routes()
-    # Drop ANY pre-existing component="custom" route(s) and prepend exactly ONE
-    # canonical isolation route at index 0. The gate guarantee (custom alerts
-    # intercepted before the continue:true match-all enforced NOC route) must
-    # hold regardless of input order — leaving an existing custom route in a
-    # non-first position would let an earlier enforced route leak it to the NOC.
-    non_custom = [r for r in (routes or [])
-                  if 'component="custom"' not in r.get("matchers", [])]
-    out_routes = cust_routes + non_custom
+
+    def _is_watchdog(r: dict) -> bool:
+        return 'alertname="Watchdog"' in r.get("matchers", [])
+
+    def _is_custom(r: dict) -> bool:
+        return 'component="custom"' in r.get("matchers", [])
+
+    rest = [r for r in (routes or [])
+            if not _is_watchdog(r) and not _is_custom(r)]
+    out_routes = wd_routes + cust_routes + rest
 
     have = {r["name"] for r in (receivers or [])}
-    add_recv = [r for r in cust_receivers if r["name"] not in have]
+    add_recv = [r for r in (wd_receivers + cust_receivers) if r["name"] not in have]
     out_receivers = list(receivers or []) + add_recv
     return out_routes, out_receivers
 
@@ -169,6 +184,10 @@ def assemble_configmap(base: dict, routes: list[dict], receivers: list[dict], in
     # Merge inhibit_rules: keep base rules, append tenant rules
     merged["inhibit_rules"] = list(merged.get("inhibit_rules", [])) + list(inhibit_rules or [])
 
+    # ADR-025 D1: fail-closed if any inhibit rule (base or generated) would
+    # suppress the always-firing Watchdog heartbeat — it must always egress.
+    assert_watchdog_inhibit_immunity(merged["inhibit_rules"])
+
     # Render alertmanager.yml content
     am_yml = yaml.dump(merged, default_flow_style=False,
                        allow_unicode=True, sort_keys=False)
@@ -233,17 +252,37 @@ def _merge_routes_receivers_inhibits(existing: dict, routes: list[dict],
         existing["route"]["routes"] = routes
 
     if receivers:
-        # Keep default receiver, replace tenant receivers
-        existing_names = {r["name"] for r in receivers}
+        # Generated tenant receivers REPLACE the existing same-named ones (they
+        # are regenerated from conf.d each run). BUT the injected platform-static
+        # placeholders (custom-alerts-firehose / watchdog-heartbeat are emitted
+        # NAME-ONLY) must NOT clobber a richer base definition — most critically
+        # watchdog-heartbeat's webhook_configs[].url_file, which lives only in the
+        # base ConfigMap. For a name-only placeholder, defer to the existing
+        # definition if one is present; otherwise add the placeholder so the route
+        # still resolves.
+        existing_by_name = {r["name"]: r for r in existing.get("receivers", [])}
+        gen_names = {r["name"] for r in receivers}
+
+        def _resolve(r: dict) -> dict:
+            if set(r.keys()) == {"name"} and r["name"] in existing_by_name:
+                return existing_by_name[r["name"]]
+            return r
+
+        merged_gen = [_resolve(r) for r in receivers]
         kept = [r for r in existing.get("receivers", [])
-                if r["name"] not in existing_names]
-        existing["receivers"] = kept + receivers
+                if r["name"] not in gen_names]
+        existing["receivers"] = kept + merged_gen
 
     if inhibit_rules:
         # Keep non-generated inhibit rules (e.g., Silent Mode sentinel rules)
         kept_rules = [r for r in existing.get("inhibit_rules", [])
                       if not any('metric_group' in m for m in r.get("source_matchers", []))]
         existing["inhibit_rules"] = kept_rules + inhibit_rules
+
+    # ADR-025 D1: fail-closed on the FINAL inhibit set (validated even when no
+    # inhibit rules were generated this run) — the Watchdog heartbeat must never
+    # be inhibited before it reaches the external dead-man's-switch.
+    assert_watchdog_inhibit_immunity(existing.get("inhibit_rules", []))
 
     return existing
 

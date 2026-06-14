@@ -12,7 +12,7 @@ lang: en
 
 ## Status
 
-🔵 **Proposed** (draft). This ADR records a decision: give the platform's alerting plane (Prometheus + Alertmanager) a liveness heartbeat so that its own death is noticed from the outside, and draw the responsibility boundary that high availability and large-scale storage stay the operator's job. Implementation has not started.
+🟡 **In Progress**. This ADR records a decision: give the platform's alerting plane (Prometheus + Alertmanager) a liveness heartbeat so that its own death is noticed from the outside, and draw the responsibility boundary that high availability and large-scale storage stay the operator's job. The MVP (D1 Watchdog + external dead-man's-switch) implementation has started ([#838](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/838)); the canary tenant / rule linter / end-to-end synthetic probe remain deferred-with-trigger (see "Deferred" below). Operator setup and the silence/inhibit no-go zones live in the alerting-plane self-liveness runbook (`docs/internal/`).
 
 ## Summary
 
