@@ -31,24 +31,6 @@ from . import shape as _shape
 # castrate the lead time).
 _FORECAST_MIN_SAMPLES = 3
 
-# forecast current-state sanity floor (RATIO MODE ONLY): a forecast must not page on
-# a volume that currently has high headroom and merely dipped during a transient
-# write burst — predict_linear's long lookback keeps the steep slope for hours after
-# the burst ends, so a pure-slope alarm fires on an 80%-empty disk. Requiring the
-# CURRENT headroom ratio < this band turns it into "predicted low AND currently low",
-# filtering that FP class without castrating lead time (disk-fill thresholds sit well
-# below it). Incidentally suppresses online-resize ratio distortion (a resize bumps
-# headroom UP, past the band). Mirrors kube-prometheus-stack KubePersistentVolumeFillingUp's
-# current-state gate. The tenant's OWN threshold (joined in the core) is untouched —
-# this is an additional sanity gate, not a replacement.
-# ⚠️ FOOTGUN (threshold-blind; tracked follow-up): the band is a FIXED ratio. A
-# ratio-mode forecast threshold ≥ this band is partially neutered — it would only
-# fire once CURRENT headroom drops below the band, silently losing the lead time
-# between the tenant's threshold and 0.5. Disk-fill thresholds are inherently low
-# (≤0.25) so this is a non-issue in practice; a follow-up adds a write/compile-time
-# reject of ratio-mode threshold ≥ band so the constraint is LOUD, not silent.
-_FORECAST_CURRENT_BAND = 0.5
-
 # forecast horizons are single-unit Go durations (enum-validated upstream);
 # parse to integer seconds for predict_linear's scalar arg + the [lookback] range.
 _DUR_RE = re.compile(r"^(\d+)(h|m|s)$")
@@ -110,18 +92,19 @@ def _forecast_records(rid: str, metric: str, sel: str, horizon: str,
     if capacity:
         # ratio mode: `base` is a NON-NEGATIVE headroom ratio in [0,1].
         #  * clamp_min(…, 0): predict_linear extrapolates the ratio linearly and can
-        #    overshoot below 0 — a "negative headroom" is physically meaningless and
-        #    reads as gibberish to on-call. Clamping the floor leaves FIRING
-        #    unchanged (anything < a positive threshold still fires) but keeps the
-        #    surfaced value sane.
-        #  * `{base} < _FORECAST_CURRENT_BAND`: current-state sanity floor (see the
-        #    constant) — turns a pure-slope alarm into "predicted low AND currently
-        #    low", killing the transient-write-burst false positive. The tenant's
-        #    threshold (joined in the core) is UNTOUCHED; this is an extra gate.
+        #    overshoot below 0 — a "negative headroom" is meaningless gibberish to
+        #    on-call. Clamping leaves FIRING unchanged (anything < a positive
+        #    threshold still fires) but keeps the surfaced value sane.
+        #  * `{base} < band`: current-state sanity floor (shape._FORECAST_CURRENT_BAND)
+        #    — turns a pure-slope alarm into "predicted low AND currently low", killing
+        #    the transient-write-burst false positive. The tenant threshold (joined in
+        #    the core) is UNTOUCHED; a threshold >= band is rejected loudly at
+        #    load/preflight (shape.validate_forecast_ratio_threshold) so the band can
+        #    never silently neuter it.
         predict_inner = (
             f"clamp_min(predict_linear({base}[{lb_s}s], {h_s}), 0)\n"
             f"  and\n"
-            f"{base} < {_FORECAST_CURRENT_BAND}\n"
+            f"{base} < {_shape._FORECAST_CURRENT_BAND}\n"
             f"  and\n"
             f"count_over_time({base}[{lb_s}s]) > {_FORECAST_MIN_SAMPLES}"
         )

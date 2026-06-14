@@ -212,6 +212,10 @@ func TestCustomAlert_ValidationNegatives(t *testing.T) {
 		"forecast no horizon":      "      - {recipe: forecast, name: x, metric: m, op: \"<\", threshold: \"0.5:warning\"}\n",
 		"forecast bad horizon":     "      - {recipe: forecast, name: x, metric: m, op: \"<\", horizon: 3h, threshold: \"0.5:warning\"}\n",
 		"forecast ratio floor >=1": "      - {recipe: forecast, name: x, metric: avail, capacity_metric: cap, op: \"<\", horizon: 4h, threshold: \"1.5:warning\"}\n",
+		// W1 band guard: a ratio floor in [band, 1) was allowed by the old (0,1) check
+		// but is silently neutered by the compiler's `custom:fcbase < band` gate → now rejected.
+		"forecast ratio floor >= band": "      - {recipe: forecast, name: x, metric: avail, capacity_metric: cap, op: \"<\", horizon: 4h, threshold: \"0.6:warning\"}\n",
+		"forecast ratio floor == band": "      - {recipe: forecast, name: x, metric: avail, capacity_metric: cap, op: \"<\", horizon: 4h, threshold: \"0.5:warning\"}\n",
 	}
 	for name, listYAML := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -221,6 +225,17 @@ func TestCustomAlert_ValidationNegatives(t *testing.T) {
 				t.Errorf("expected 1 error + 0 resolved, got errs=%d resolved=%d", errs, len(got))
 			}
 		})
+	}
+}
+
+func TestCustomAlert_ForecastRatioBelowBandResolves(t *testing.T) {
+	// A ratio-mode forecast floor below the current-state band resolves cleanly —
+	// guards the W1 band guard against over-rejecting valid low disk-fill thresholds.
+	listYAML := "      - {recipe: forecast, name: disk, metric: avail, capacity_metric: cap, op: \"<\", horizon: 4h, threshold: \"0.15:warning\"}\n"
+	cfg := customAlertsConfig(t, "t1", listYAML)
+	got, errs := resolveTenantCustomAlerts("t1", cfg.Tenants["t1"])
+	if errs != 0 || len(got) != 1 {
+		t.Errorf("expected 0 errors + 1 resolved for a valid ratio forecast, got errs=%d resolved=%d", errs, len(got))
 	}
 }
 

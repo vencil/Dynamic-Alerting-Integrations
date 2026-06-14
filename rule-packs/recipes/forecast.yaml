@@ -10,7 +10,7 @@ params:
   capacity_metric: {required: false, desc: "ratio mode: the denominator (e.g. total capacity). present → predict metric/capacity headroom ratio crossing a fractional floor in (0,1); absent → raw mode (predict the gauge crossing an absolute threshold)"}
   op:        {required: false, default: ">", enum: [">", ">=", "<", "<="], desc: "ratio mode usually '<' (falling toward a floor); raw mode usually '>' (rising toward a ceiling)"}
   horizon:   {required: true,  enum: ["1h", "2h", "4h", "12h", "24h", "48h"], desc: "how far ahead to predict. The platform derives lookback = max(2*horizon, 1h) — the tenant never sets the lookback (an expert foot-gun)"}
-  threshold: {required: true,  desc: "value[:severity]. ratio mode: a fractional floor in (0,1), e.g. 0.15:warning — keep well below 0.5 (the current-state band); raw mode: an absolute value"}
+  threshold: {required: true,  desc: "value[:severity]. ratio mode: a fractional floor in (0, 0.5) — below the current-state band, enforced at load/preflight (e.g. 0.15:warning); raw mode: an absolute value"}
   selectors:    {required: false, desc: "exact label filters (=)"}
   selectors_re: {required: false, desc: "regex label filters (=~)"}
   mode:      {required: false, default: page, enum: [page, silent]}

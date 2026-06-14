@@ -33,6 +33,13 @@ import (
 // the entry is valid but emits no series (not a parse error → no error gauge).
 var errCustomAlertDisabled = errors.New("custom alert disabled")
 
+// forecastCurrentBand mirrors _FORECAST_CURRENT_BAND in
+// scripts/tools/dx/custom_alerts/shape.py. The compiler gates a ratio-mode forecast
+// on `custom:fcbase < band` (a current-state sanity floor), so a threshold >= band is
+// silently neutered (the alert can only fire once current headroom drops below the
+// band). These two values MUST stay in lockstep.
+const forecastCurrentBand = 0.5
+
 // logCustomAlertError surfaces a malformed custom-alert at ERROR (paired with
 // the da_custom_alert_parse_errors gauge so a silent skip is observable).
 func logCustomAlertError(tenant, name string, err error) {
@@ -360,10 +367,10 @@ func resolveOneCustomAlert(tenant string, spec CustomAlertSpec) (ResolvedThresho
 		return ResolvedThreshold{}, fmt.Errorf("threshold value %q must be finite", valueStr)
 	}
 	// forecast ratio mode: the threshold is a headroom-fraction floor
-	// (avail/capacity), so it must be in (0,1) — a floor >= 1 with op "<" would
-	// fire permanently (the ratio is always <= 1).
-	if spec.Recipe == "forecast" && spec.CapacityMetric != "" && (value <= 0 || value >= 1) {
-		return ResolvedThreshold{}, fmt.Errorf("forecast ratio-mode threshold %v must be in (0,1)", value)
+	// (avail/capacity), so it must be in (0, forecastCurrentBand) — a floor >= 1 would
+	// fire permanently; a floor >= the current-state band is silently neutered by the band gate (lockstep w/ shape.py).
+	if spec.Recipe == "forecast" && spec.CapacityMetric != "" && (value <= 0 || value >= forecastCurrentBand) {
+		return ResolvedThreshold{}, fmt.Errorf("forecast ratio-mode threshold %v must be in (0,%v): a floor >= the current-state band is neutered by the band gate", value, forecastCurrentBand)
 	}
 	mode := spec.Mode
 	if mode == "" {

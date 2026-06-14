@@ -141,6 +141,7 @@ custom-alert 的 `mode`（page / silent）label 經 `group_left` 一路帶到 al
 - **單一 recipe、雙模式**：有 `capacity_metric` → 比例 mode（預測比例掉破 floor ∈(0,1)）；無 → 原始值 mode（預測 gauge 穿越絕對門檻）。
 - **lookback 不給租戶填**，平台推導 `lookback = max(2·horizon, 1h)`（整數秒）；租戶只填 `horizon`（enum，cardinality 鎖定）。理由：lookback 是專家旋鈕、暴露即最大 foot-gun，且 `horizon ≤ lookback` 結構恆成立、免額外驗證。
 - **cold-start 資料量 gate**（`count_over_time(base[lookback]) > N`）擋剛部署時樣本太少的亂跳；**gauge-only**（counter 須先 rate）。
+- **現狀 band（僅比例 mode）**：比例型 forecast 額外閘 `現狀餘量比例 < 0.5`（`_FORECAST_CURRENT_BAND`），把純斜率告警收成「預測會低 **且** 現在已偏低」，擋掉高 headroom 磁碟的暫態寫入突波 / cold-start 陡坡誤報；並以 `clamp_min(…, 0)` 把外推到負的比例值夾回 0（負餘量無意義、避免 on-call 看到亂值）。租戶閾值不受影響（在 core 比對）。**強制**：比例型 forecast 閾值須 `< 0.5`——≥ band 會被 band 靜默削弱，故 load（`shape.validate_forecast_ratio_threshold`）與 Go preflight（`forecastCurrentBand`，跨語言 lockstep）兩側皆 fail-loud 拒絕。
 
 具體例（租戶宣告，不碰 PromQL）：
 

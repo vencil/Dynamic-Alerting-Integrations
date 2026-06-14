@@ -135,6 +135,7 @@ The custom-alert `mode` (page / silent) label rides to the alert via `group_left
 - **One recipe, two modes**: with `capacity_metric` → ratio mode (predict the ratio crossing a floor ∈(0,1)); without → raw mode (predict a gauge crossing an absolute threshold).
 - **lookback is not tenant-set**; the platform derives `lookback = max(2·horizon, 1h)` (integer seconds); the tenant only fills `horizon` (an enum, cardinality bounded). Reasoning: lookback is an expert knob whose exposure is the biggest foot-gun, and `horizon ≤ lookback` holds by construction, removing extra validation.
 - A **cold-start data-sufficiency gate** (`count_over_time(base[lookback]) > N`) blocks the wild swings of too-few samples right after deploy; **gauge-only** (a counter must be rate()'d first).
+- A **current-state band (ratio mode only)**: a ratio forecast additionally gates on `current headroom ratio < 0.5` (`_FORECAST_CURRENT_BAND`), turning a pure-slope alarm into "predicted low AND currently low" — killing the transient write-burst / cold-start steep-slope false positive on a high-headroom disk; `clamp_min(…, 0)` also floors the surfaced value (a negative headroom ratio is meaningless gibberish to on-call). The tenant threshold (compared in the core) is untouched. **Enforced**: a ratio-mode forecast threshold must be `< 0.5` — a floor `>= band` is silently neutered, so both the loader (`shape.validate_forecast_ratio_threshold`) and the Go preflight (`forecastCurrentBand`, cross-language lockstep) reject it fail-loud.
 
 A concrete example (tenant declaration, no PromQL):
 
