@@ -164,18 +164,18 @@ groups:
 
 ## Addendum：基礎設施指標的租戶歸屬 (v2.10.0)
 
-ADR-024 的自助 recipe 首次消費**平台基礎設施指標**（kubelet `kubelet_volume_stats_*`、cAdvisor `container_fs_*`）——過去 recipe 只消費租戶自帶 exporter 指標。這類指標原生帶 `namespace` 但不帶 `tenant`，須在本 ADR 的拓撲政策下補一條明確規範。
+**決策：磁碟、PVC、節點這類基礎設施指標，只支援 1:1 的租戶歸屬（一個 namespace = 一個租戶）。**
 
-**政策：基礎設施指標的租戶歸屬僅支援 1:1。** 歸屬走 **recipe-path 慣例**——在 kubelet / cAdvisor scrape job 上以 `metric_relabel` 將 `namespace → tenant`（1:1，與 tenant-exporters job 一致，見 §決策）。這與另一條 platform-pack 慣例（recording-rule `label_replace(namespace→tenant)`，如 #809 node-health、版本感知容器規則）等價但分屬不同路徑：**recipe 消費的指標走 scrape-relabel、platform-pack 規則走 recording-rule**。
+ADR-024 的自助告警開始讓租戶對平台的基礎設施指標（例如 kubelet 的 `kubelet_volume_stats_*`）設條件。這些指標原生只帶 `namespace`、不帶 `tenant`，所以在抓取階段直接把 `namespace` 當成 `tenant`——沿用本 ADR 既有的 1:1 做法。
 
-**N:1 / 1:N 基礎設施歸屬：defer-with-trigger，且 fail-loud。**
+**為什麼 N:1 與 1:N 不在這次的支援範圍。** 本 ADR 的 N:1（多個 namespace 聚合成一個租戶）和 1:N（一個實例切成多個邏輯租戶）靠的是額外的映射規則，而基礎設施指標走的是抓取階段的直接改名、拿不到那層映射：
 
-- **N:1**（多 namespace → 一租戶）：本 ADR 的 N:1 走 scrape `relabel_configs` regex（`scaffold_tenant.py --namespaces`），**不產生可 join 的 namespace→tenant series**，故基礎設施指標無法沿用。**關鍵風險**：per-tenant 閾值 recipe 在 N:1 下會 **fail-silent**——指標帶 `tenant="db-a-read"`，但租戶 config 的 key 是 `db-a` → `on(tenant)` join 命中零、靜默漏告警；有別於 platform-pack 告警 N:1 的 fail-loud（over-alert）。
-- **1:N**（一實例多邏輯租戶）：單一 PVC 無法按 schema / tablespace 切分 → 結構性不可服務。
-- **兜底**：ADR-024 amend 的 per-tenant runtime sentinel（`CustomRecipeDiskInert{tenant}`）把上述 fail-silent 轉為 **fail-loud**——租戶宣告了基礎設施 recipe 但歸屬後的指標沒流，即告警。
-- **Trigger**：N:1 客戶（如讀寫分離 estate）明確需要基礎設施（disk / node）歸屬時，再評估把 N:1 mapping 套到 kubelet `metric_relabel`（須與 exporter relabel 共用同一 SSOT 生成，避免第二份副本漂移）。
+- **N:1 會靜默漏告警。** 指標被標成 `tenant="db-a-read"`，但租戶的設定用的是 `db-a` 這個名字——兩者對不上，告警永遠不觸發。
+- **1:N 本質上做不到。** 一顆 PVC 無法按 schema / tablespace 拆給不同租戶。
 
-相關：[ADR-024](024-version-aware-threshold-via-dimensional-label.md)（自助 recipe + disk recipe class + sentinel）、#809（node-health，同 1:1 idiom）、#692（epic）。
+**怎麼讓「不支援」不變成「悄悄壞掉」。** ADR-024 有一條對每個租戶的看門告警 `CustomRecipeDiskInert`：租戶設了磁碟告警、相關 Pod 也在跑，但歸屬後的指標一直沒出現，它就會響。於是 N:1 客戶在遷移當天就會收到「這條告警沒生效」的明確訊號，而不是無聲漏報。等真有 N:1 客戶（例如讀寫分離的資料庫）需要基礎設施告警，再把映射補上。
+
+相關：[ADR-024](024-version-aware-threshold-via-dimensional-label.md)、節點健康告警（#809，也用同一套 1:1 歸屬）、本 epic（#692）。
 
 ## 相關決策
 

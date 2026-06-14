@@ -159,18 +159,18 @@ groups:
 
 ## Addendum: Tenant Attribution for Infrastructure Metrics (v2.10.0)
 
-ADR-024's self-service recipes now consume **platform infrastructure metrics** (kubelet `kubelet_volume_stats_*`, cAdvisor `container_fs_*`) for the first time — previously recipes consumed only tenant-owned exporter metrics. These metrics natively carry `namespace` but not `tenant`, so this topology ADR needs an explicit rule for them.
+**Decision: disk, PVC, and node metrics support 1:1 tenant attribution only (one namespace = one tenant).**
 
-**Policy: infrastructure-metric tenant attribution is 1:1 only.** Attribution follows the **recipe-path idiom** — a `metric_relabel` on the kubelet / cAdvisor scrape jobs maps `namespace → tenant` (1:1, identical to the tenant-exporters job, see §Decision). This is equivalent to but distinct from the platform-pack idiom (recording-rule `label_replace(namespace→tenant)`, e.g. #809 node-health, the version-aware container rules): **recipe-consumed metrics go via scrape-relabel; platform-pack rules go via recording-rule.**
+ADR-024's self-service alerts now let tenants set conditions on platform infrastructure metrics (e.g. kubelet's `kubelet_volume_stats_*`). These metrics natively carry only `namespace`, not `tenant`, so at scrape time the `namespace` is used directly as the `tenant` — the 1:1 approach this ADR already uses.
 
-**N:1 / 1:N infrastructure attribution: deferred-with-trigger, and fail-loud.**
+**Why N:1 and 1:N are out of scope here.** This ADR's N:1 (several namespaces aggregated into one tenant) and 1:N (one instance split into several logical tenants) rely on an extra mapping layer; infrastructure metrics are attributed by a plain rename at scrape time and never reach that layer:
 
-- **N:1** (multiple namespaces → one tenant): this ADR's N:1 uses a scrape `relabel_configs` regex (`scaffold_tenant.py --namespaces`) and produces **no joinable namespace→tenant series**, so infrastructure metrics cannot reuse it. **Key risk**: a per-tenant threshold recipe under N:1 **fails silently** — the metric carries `tenant="db-a-read"` but the tenant's config key is `db-a` → the `on(tenant)` join matches nothing and the alert silently never fires; unlike platform-pack alerts whose N:1 failure is fail-loud (over-alert).
-- **1:N** (one instance, many logical tenants): a single PVC cannot be split per schema / tablespace → structurally unservable.
-- **Backstop**: ADR-024's per-tenant runtime sentinel (`CustomRecipeDiskInert{tenant}`) turns the above fail-silent into **fail-loud** — if a tenant declared an infrastructure recipe but the attributed metric is not flowing, it fires.
-- **Trigger**: when an N:1 customer (e.g. a read/write-split estate) concretely needs infrastructure (disk / node) attribution, evaluate applying the N:1 mapping to the kubelet `metric_relabel` (generated from the same SSOT as the exporter relabel, to avoid a second drifting copy).
+- **N:1 would silently miss alerts.** The metric is labeled `tenant="db-a-read"`, but the tenant's config uses the name `db-a` — they don't match, so the alert never fires.
+- **1:N is structurally impossible.** A single PVC cannot be split per schema / tablespace across tenants.
 
-Related: [ADR-024](024-version-aware-threshold-via-dimensional-label.md) (self-service recipes + disk recipe class + sentinel), #809 (node-health, same 1:1 idiom), #692 (epic).
+**Keeping "unsupported" from becoming "silently broken."** ADR-024 ships a per-tenant watchdog alert, `CustomRecipeDiskInert`: if a tenant declared a disk alert and its pods are running but the attributed metric never appears, it fires. So an N:1 customer gets a clear "this alert isn't working" signal on migration day instead of a silent miss. When an N:1 customer (e.g. a read/write-split database) actually needs infrastructure alerts, the mapping can be added then.
+
+Related: [ADR-024](024-version-aware-threshold-via-dimensional-label.md), node-health alerting (#809, which uses the same 1:1 attribution), the epic (#692).
 
 ## Related Decisions
 

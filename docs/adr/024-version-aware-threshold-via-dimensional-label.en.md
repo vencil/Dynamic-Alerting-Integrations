@@ -19,7 +19,7 @@ lang: en
 
 Both shipped in v2.9.0. Trackers: [#423](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/423) (version-aware), [#741](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/741) (custom alerts); per-PR history is in the CHANGELOG.
 
-📎 **Addendum** (v2.10.0) — Disk/PVC infrastructure recipe class (per-PVC dimension preservation + CSI precondition + fail-loud dual guard), see §Addendum below; epic [#692](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/692).
+📎 **Addendum** (v2.10.0) — Disk and PVC alerts (capacity evaluated per PVC + CSI driver required + two guards), see §Addendum below; epic [#692](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/692).
 
 > This ADR does **not** replace or modify [config-driven.md §2.6 Scheduled Thresholds](../design/config-driven.md) — they coexist as distinct mechanisms; the boundary is in the last section.
 
@@ -234,37 +234,35 @@ The core judgment is **reuse-over-build**: 90% of the target capability already 
 
 The two are orthogonal: §2.6 handles periodic windows, this ADR handles one-time version alignment.
 
-## Addendum: Disk/PVC Infrastructure Recipe Class (v2.10.0)
+## Addendum: Disk and PVC Alerts (v2.10.0)
 
-The first recipe class to consume **platform infrastructure metrics** (rather than tenant-owned exporter metrics), serving MariaDB-class migration's disk-alerting need ([#692](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/692) P0 ③). It reuses the existing recipes (forecast / ratio / threshold / rate) — no new recipe kind — but adds three infrastructure-specific constraints.
+Lets tenants alert on disk capacity and throughput — the "the disk is filling up" need that comes up most often during database-customer migrations ([#692](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/692)). It reuses the existing recipes (forecast / ratio / threshold / rate) with no new recipe kind, but a few things differ from an ordinary recipe.
 
-**1. Two signals, two granularities (semantic precision)**
+**Two signals, two granularities.**
 
-| Need | Metric | Granularity | Recipe |
-|---|---|---|---|
-| Disk-fill forecast / capacity utilization | `kubelet_volume_stats_{available,capacity,used}_bytes` | **per-PVC** (carries `persistentvolumeclaim`) | forecast(ratio) / ratio / threshold |
-| Disk throughput / IOPS | `container_fs_{writes,reads}_{total,bytes_total}` | **per-container/device** (cAdvisor, **not** per-PVC) | rate / threshold |
+| What you want to alert on | Metric | Granularity |
+|---|---|---|
+| Disk filling up / capacity utilization | `kubelet_volume_stats_*` (available / capacity / used) | **per PVC** (carries `persistentvolumeclaim`) |
+| Disk throughput / IOPS | `container_fs_*` (reads / writes) | **per container** (not per PVC) |
 
-The throughput signal comes from cAdvisor container-filesystem stats; `device` is the node block device and **cannot be attributed to a specific PVC** — a single-PVC pod is roughly equivalent, multi-PVC cannot be split. So a precise per-PVC "IOPS via PVC" is only achievable on the fill side.
+The throughput signal comes from container-filesystem stats, whose `device` is the node's block device and can't be tied to a specific PVC — a single-PVC pod is roughly equivalent, but multiple PVCs can't be told apart. So "precise to one PVC" is only possible on the capacity side.
 
-**2. CSI precondition (spike-verified, 2026-06-14)**
+**Precondition: disk-capacity metrics need a CSI driver.** The kubelet only emits `kubelet_volume_stats_*` for storage backends that implement the volume-stats interface (`NodeGetVolumeStats`). Cloud CSI drivers (EBS, GCE PD, etc.) all do; kind's default local storage (hostPath) emits none — verification measured 751 kubelet metrics but 0 volume-stats. After installing a CSI driver, `kubelet_volume_stats_*{namespace, persistentvolumeclaim}` appears. **So a disk-capacity recipe's hard precondition is PVCs provided by a CSI driver that supports volume stats** (most cloud environments qualify). This is recorded in the recipe usage docs and the BYO integration precondition.
 
-The kubelet emits `kubelet_volume_stats_*` only for volumes whose plugin implements `NodeGetVolumeStats`. kind's default `local-path` (hostPath) emits **none** (measured: 751 kubelet metrics, 0 volume-stats); after installing a CSI driver (NodeGetVolumeStats), `kubelet_volume_stats_*{namespace,persistentvolumeclaim}` appears within ~30s. So **a disk-fill recipe's hard precondition is PVCs backed by a CSI driver implementing NodeGetVolumeStats** (most cloud CSI do). Documented in the recipe catalog and the BYO integration precondition; e2e uses the CSI hostpath driver.
+Tenant attribution reuses the platform's existing 1:1 approach — at scrape time the `namespace` is used as the `tenant`, with the metric name unchanged; the N:1 / 1:N policy is in [ADR-006 §Addendum](006-tenant-mapping-topologies.md).
 
-**3. Tenant attribution = scrape-relabel (recipe-path idiom, 1:1)**
+**Correctness that matters: evaluate each PVC, don't let a sum hide it.** A tenant may mount several PVCs. Summing the metric with `by(tenant)` before comparing to the threshold goes wrong:
 
-The kubelet / cAdvisor scrape jobs add a `metric_relabel` mapping `namespace → tenant` (keeping the real metric name, good migration UX). 1:1 only; the N:1/1:N policy is in [ADR-006 §Addendum: Tenant Attribution for Infrastructure Metrics](006-tenant-mapping-topologies.md). The existing cadvisor cpu/mem rules aggregate `sum by(namespace, pod, container)` and drop any added `tenant` → side-effect safe (verified).
+> A 10GB config disk is already 99% full while a 500GB data disk is only 10% full — summed together "88% space remains," so the alert never fires, but that small disk is about to take the database down.
 
-**4. Per-PVC dimension preservation (aggregation-masking fix, caught by adversarial review)**
+So a disk-capacity recipe **evaluates each PVC and fires if any one crosses**: the aggregation keeps the `persistentvolumeclaim` dimension, the threshold is still one per tenant applied to each of that tenant's PVCs, and the alert names which disk. To keep metric cardinality in check, the only dimension allowed to survive is `persistentvolumeclaim`.
 
-A disk-fill recipe **must evaluate per-PVC**: the metric-side aggregation changes from `by(tenant)` to `by(tenant, persistentvolumeclaim)`, firing if any PVC is weak; the core join stays `on(tenant) group_left(name, mode)` (the per-tenant threshold broadcasts to each PVC; `persistentvolumeclaim` rides the many-side and reaches the alert label). Otherwise `sum by(tenant)` lets a **99%-full 10GB disk be masked by a 10%-full 500GB disk** (aggregate 88% free → never fires, DB still crashes) — same mechanism as [#819 `==` any-match](003-sentinel-alert-pattern.md) (compare before aggregating). The preserved-label whitelist is **`persistentvolumeclaim` only** (bounded; few PVCs per tenant), capping cardinality.
+**Two guards: make a misconfigured alert fail loudly instead of silently.** If a tenant sets an alert on a metric that is never scraped, or scraped without a `tenant` label, the alert compiles fine but never fires — the most dangerous failure. Two guards close it:
 
-**5. Fail-loud dual guard (against the #731-class silent alert)**
+- **At build time (CI)**: parse the Prometheus scrape config directly and confirm every metric a recipe uses (including a ratio's denominator and a forecast's capacity metric) is actually scraped and attributed to a `tenant` by its scrape job; otherwise CI errors. It reads the scrape config as the source of truth rather than maintaining a separate list that would go stale. It can only protect configs aligned with this platform's scrape config; a customer's own Prometheus config is invisible to it, which the next guard covers.
+- **At run time, the watchdog alert `CustomRecipeDiskInert`**: if a tenant set a disk alert and its pods are running but the attributed disk metric never appears, it fires. This turns "topology unsupported," "attribution not set up," and "the tenant mounts no PVC" from silent failures into an alert someone will see.
 
-- **CI lint (build-time)**: reverse-parse `configmap-prometheus.yaml` (the SSOT, mirroring `check_ksm_version_allowlist.py`'s parse-the-manifest, not a prefix heuristic). If a recipe's `metric` / `capacity_metric` / `denominator_metric` is scraped by a job that does not set `tenant` → **ERROR** (the metric would never attribute, the alert would never fire). Honest limit: it cannot see a BYO customer's `prometheus.yml`, so it protects only configs aligned with this platform's scrape SSOT.
-- **Runtime sentinel (`CustomRecipeDiskInert{tenant}`)**: modeled on `VersionAwareThresholdInert`, per-tenant + Running-pod gate — if a tenant declared a disk recipe, its pods are running, but the attributed disk metric is not flowing, it fires. This turns N:1/1:N mis-attribution, a missing relabel, or **a tenant that mounts no PVC** from fail-silent into fail-loud.
-
-**Honesty residue**: the v2.9.0-shipped `disk_will_fill` forecast example (`shop.yaml` / `forecast.yaml`) referenced `kubelet_volume_stats_*` that nothing scraped → a latent silent alert (passed promtool on synthetic fixtures, never fired in a real cluster); this amend's scrape enablement + dual guard fixes it.
+v2.9.0 once shipped a disk-forecast example that referenced `kubelet_volume_stats_*` — which nothing scraped at the time. It looked fine on the test fixtures but never fired in a real cluster. The scrape enablement plus these two guards fix it.
 
 ## Cross-Reference
 

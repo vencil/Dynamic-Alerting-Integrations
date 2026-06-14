@@ -19,7 +19,7 @@ updated_at: 2026-05-13
 
 ✅ **Accepted** (v2.3.0) — 平台同時支援 ConfigMap 路徑和 Operator CRD 路徑，由偵測邏輯自動判斷
 📎 **Addendum** (v2.6.0) — 新增架構邊界宣言，見下方 §Addendum: 架構邊界宣言
-📎 **Addendum** (v2.10.0) — da-assembler direct-render 退役 + Operator 路徑裁決（Option E），見下方 §Addendum (v2.10.0)
+📎 **Addendum** (v2.10.0) — da-assembler direct-render 退役 + Operator 路徑定案，見下方 §Addendum (v2.10.0)
 
 ## 背景
 
@@ -194,15 +194,17 @@ graph LR
 2. **是否需要 exporter 連線 K8s API？** → 如果是，違反邊界，應由外部工具處理
 3. **是否只是「讀取 → 轉換 → 輸出」？** → 如果是，屬於工具鏈範疇，可以進行
 
-## Addendum (v2.10.0)：da-assembler direct-render 退役 + Operator 路徑裁決
+## Addendum (v2.10.0)：da-assembler direct-render 退役 + Operator 路徑定案
 
-[#692](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/692) epic 把「rule-pack drift → 編譯器 operator」展開成實作計畫時，原構想的三個器官各有更好歸宿：**編譯大腦 → CI**（純 build-time、零 runtime）；**寫入心臟 → tenant-api 既有單一寫者平面**（[ADR-023](023-write-plane-single-writer-invariant.md)）；**回放驗證 → PR comment 回測**。故對上方 §演進狀態 的 da-assembler-controller「長期探索」項做三點裁決：
+把本 epic（[#692](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/692)）原本設想的「監聽 CRD、即時編譯規則的 operator」拆開後，它的三個職責各自找到了更好的歸宿：**編譯邏輯留在 CI**（純建置期、不增加任何執行期元件）；**寫入交給 tenant-api 既有的單一寫入平面**（[ADR-023](023-write-plane-single-writer-invariant.md)）；**上線前的回放驗證變成 PR 留言裡的回測**。剩下的只有「把 CRD 翻成一個寫入請求」這層皮，而它的需求還沒出現。據此對上方 §演進狀態 的 da-assembler-controller 探索項做三點定案：
 
-1. **`da_assembler` direct-render → hard-deprecate（debug-only）。** compile-in-CI 定案後，production actuation 的唯一合法路徑 = GitOps CI pipeline（recipe → 編譯 → promtool → PR → ConfigMap）。direct-render 繞過 generator-of-record：CR 宣告的 `_custom_alerts` 會發 `user_threshold` series，但 CI 編不出對應 rule = **結構性 silent alert**。保留僅供本機 debug。
-2. **`ThresholdConfig` CRD → dormant，預設不安裝。** direct-render 退役後 CRD 暫無消費者；不安裝 → `kubectl apply` 立即報錯 = **fail-loud 的天然形式**，優於 description 警語（沒人讀）或 always-deny webhook（為殭屍 CRD 蓋 runtime 元件）。schema 留供 CI 驗證；trigger fire 時隨下列預決策一併恢復安裝。
-3. **「未來 Operator 模式」→ Option E 預決策（取消獨立 operator）。** 原 da-assembler-controller / 獨立編譯器 operator 取消。若將來需要 CR-native 自助介面（**trigger = 客戶 RFP 明確要 kubectl-native 介面**），以 **tenant-api 內嵌的可選 watch mode** 實作（flag 開關、復用既有 client-go + `ClaimTenant` 單寫者樣式），**永不蓋獨立 operator、永不開第六條版號線**。理由：watch 層唯一價值是「把 `kubectl apply` 翻成寫入請求」一層皮，為它做狀態機 / 重試 / 認證 / 版號線註冊的 ROI 為負；故 defer-with-trigger + 預拍實作形狀，避免將來重新發散。
+1. **`da_assembler` 的 direct-render 模式退役，只留本機除錯用。** 規則一律由 CI 編譯產生（recipe → 編譯 → promtool → PR → ConfigMap），這是 production 唯一合法的上線路徑。direct-render 會繞過這條管線：CRD 宣告的告警會送出指標，CI 卻編不出對應規則——又是一條會悄悄不觸發的告警。
 
-出貨敘事：**"Zero-Runtime, Pure-GitOps PromQL Compiler"**——多租戶 / HA 校正 / 版本感知的告警編譯，production 叢集不裝任何新 controller。
+2. **`ThresholdConfig` CRD 預設不安裝（休眠）。** direct-render 退役後它暫時沒有消費者。不安裝的好處是 `kubectl apply` 會當場報錯——這是最自然的「大聲壞掉」，比在描述欄寫一句沒人看的警語、或為一個沒人用的 CRD 立一個 always-deny 元件都好。schema 留著供 CI 驗證，需求出現時再一併恢復。
+
+3. **未來若要 CRD 原生的自助介面，做成 tenant-api 內嵌的選用模式，不另立 operator。** 原本的獨立 operator 構想取消。觸發條件是客戶明確需要 kubectl 原生介面；屆時就在 tenant-api 內嵌一個可開關的監聽模式（沿用既有的單一寫入機制），不蓋新元件、也不為它另開一條發版線。理由很簡單：那層皮的價值有限，為它單獨維護一套狀態機、重試、認證、發版流程並不划算。
+
+對外一句話：多租戶、HA 校正、版本感知的告警編譯全在建置期完成，production 叢集不需要安裝任何新的 controller。
 
 ## 演進狀態
 

@@ -25,7 +25,7 @@ updated_at: 2026-06-06
 
 兩者均已隨 v2.9.0 落地。Tracker：[#423](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/423)（version-aware）、[#741](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/741)（custom alerts）；逐 PR 紀錄見 CHANGELOG。
 
-📎 **Addendum** (v2.10.0) — Disk/PVC 基礎設施 recipe class（per-PVC 維度保留 + CSI 前提 + fail-loud 雙 guard），見下方 §Addendum；epic [#692](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/692)。
+📎 **Addendum** (v2.10.0) — 磁碟與 PVC 告警（容量逐顆 PVC 評估 + 需 CSI driver + 兩道防線），見下方 §Addendum；epic [#692](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/692)。
 
 > 本 ADR **不取代、不修改** [config-driven.md §2.6 排程式閾值](../design/config-driven.md)——兩者是並存的不同機制，界線見末節。
 
@@ -240,37 +240,35 @@ count by(recipe_id)(count by(recipe_id, tenant)(user_threshold{component="custom
 
 兩者正交：§2.6 處理週期性時段，本 ADR 處理一次性的版本對齊。
 
-## Addendum：Disk/PVC 基礎設施 recipe class (v2.10.0)
+## Addendum：磁碟與 PVC 告警 (v2.10.0)
 
-第一個消費**平台基礎設施指標**（而非租戶自帶 exporter 指標）的 recipe class，回應 MariaDB-class 客戶遷移的磁碟告警需求（[#692](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/692) P0 ③）。沿用既有 recipe（forecast / ratio / threshold / rate），不新增 recipe 種類，但補三個基礎設施專屬約束。
+讓租戶對磁碟的容量與吞吐設告警，回應資料庫客戶遷移時最常見的「磁碟快滿了」需求（[#692](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/692)）。沿用既有的 recipe（forecast / ratio / threshold / rate），不新增種類，但有幾件事和一般 recipe 不同。
 
-**1. 兩種信號、兩種粒度（語意精確）**
+**兩種信號、兩種粒度。**
 
-| 需求 | 指標 | 粒度 | recipe |
-|---|---|---|---|
-| 磁碟寫滿預測 / 容量利用率 | `kubelet_volume_stats_{available,capacity,used}_bytes` | **per-PVC**（帶 `persistentvolumeclaim`） | forecast(ratio) / ratio / threshold |
-| 磁碟吞吐 / IOPS | `container_fs_{writes,reads}_{total,bytes_total}` | **per-container/device**（cAdvisor，**非 per-PVC**） | rate / threshold |
+| 想告警的事 | 用的指標 | 粒度 |
+|---|---|---|
+| 磁碟快寫滿 / 容量利用率 | `kubelet_volume_stats_*`（available / capacity / used） | **每顆 PVC**（帶 `persistentvolumeclaim`） |
+| 磁碟吞吐 / IOPS | `container_fs_*`（reads / writes） | **每個容器**（不是每顆 PVC） |
 
-吞吐信號來自 cAdvisor 的 container filesystem 統計，`device` 是節點區塊裝置、**無法歸到特定 PVC**；單 PVC 的 pod 近似等價、多 PVC 不可切。故「IOPS bound via PVC」的精確 per-PVC 版只有 fill 端做得到。
+吞吐指標來自容器檔案系統統計，它的 `device` 是節點的區塊裝置、對不到特定 PVC——單一 PVC 的 Pod 大致等價，多 PVC 就切不開。所以「精準到某一顆 PVC」目前只有容量這側做得到。
 
-**2. CSI 前提（spike 實證，2026-06-14）**
+**前提：磁碟容量指標需要 CSI driver。** kubelet 只對「實作了 volume stats 介面（`NodeGetVolumeStats`）」的儲存後端吐 `kubelet_volume_stats_*`。一般雲端的 CSI driver（EBS、GCE PD 等）都有；但 kind 預設的本機儲存（hostPath）完全不吐——驗證時實測到 751 個 kubelet 指標、卻 0 個 volume stats。裝上 CSI driver 後，`kubelet_volume_stats_*{namespace, persistentvolumeclaim}` 隨即出現。**所以磁碟容量 recipe 的硬前提是：PVC 由支援 volume stats 的 CSI driver 提供**（多數雲端環境都符合）。這條會寫進 recipe 使用說明與 BYO 整合前提。
 
-kubelet 只對「volume plugin 實作 `NodeGetVolumeStats`」的 volume 吐 `kubelet_volume_stats_*`。kind 預設 `local-path`（hostPath）**完全不吐**（實測：751 kubelet 指標、0 volume-stats）；裝 CSI driver（NodeGetVolumeStats）後 `kubelet_volume_stats_*{namespace,persistentvolumeclaim}` ~30s 出現。故 **disk-fill recipe 的硬前提 = PVC 由實作 NodeGetVolumeStats 的 CSI driver backing**（多數雲端 CSI 皆是）。寫進 recipe catalog 與 BYO 整合前提；e2e 用 CSI hostpath driver。
+租戶歸屬沿用平台既有的 1:1 做法——抓取階段把 `namespace` 當 `tenant`、指標名保持不變；N:1 / 1:N 的政策見 [ADR-006 §Addendum](006-tenant-mapping-topologies.md)。
 
-**3. 租戶歸屬 = scrape-relabel（recipe-path 慣例，1:1）**
+**關鍵正確性：逐顆 PVC 判斷，別被加總掩蓋。** 一個租戶可能掛好幾顆 PVC。如果把指標用 `by(tenant)` 加總再比閾值，就會出事：
 
-kubelet / cAdvisor scrape job 加 `metric_relabel` 將 `namespace → tenant`（保留真實 metric 名，遷移 UX 佳）。僅 1:1；N:1/1:N 政策見 [ADR-006 §Addendum：基礎設施指標的租戶歸屬](006-tenant-mapping-topologies.md)。cadvisor 既有 cpu/mem 規則用 `sum by(namespace, pod, container)`、會丟掉多出的 `tenant` → 副作用安全（已驗）。
+> 一顆 10GB 的設定碟已經 99% 滿、一顆 500GB 的資料碟才 10% 滿——加總後「整體還有 88% 空間」，告警永遠不觸發，但那顆小碟其實快把資料庫弄垮了。
 
-**4. Per-PVC 維度保留（聚合掩蓋修正，對抗式 review 命中）**
+所以磁碟容量 recipe **逐顆 PVC 判斷、任一顆達標就觸發**：聚合時保留 `persistentvolumeclaim` 這個維度，閾值仍是每租戶一個、套用到該租戶的每顆 PVC，告警會標出是哪顆碟。為了不讓指標基數失控，能保留的維度只有 `persistentvolumeclaim` 這一個。
 
-disk-fill recipe **必須逐 PVC 評估**：把 metric 側聚合由 `by(tenant)` 改為 `by(tenant, persistentvolumeclaim)`，任一 PVC 觸發即告警；core join 仍 `on(tenant) group_left(name, mode)`（per-tenant 閾值廣播到每個 PVC，`persistentvolumeclaim` 在 many 側自然留存、進告警標籤）。否則 `sum by(tenant)` 會讓 **99% 滿的 10GB 小碟被 10% 滿的 500GB 大碟掩蓋**（聚合後 88% free → 永不觸發、DB 仍崩）——機制同 [#819 `==` any-match](003-sentinel-alert-pattern.md)（聚合前先比）。保留 label **白名單僅 `persistentvolumeclaim`**（bounded，每租戶 PVC 數小），鎖住基數。
+**兩道防線：讓設錯的告警大聲壞掉、而非悄悄失效。** 如果租戶對一個根本沒被抓取、或抓了卻沒帶 `tenant` 的指標設告警，那條告警會編譯成功、卻永遠不觸發——這是最危險的失效。兩道防線堵住它：
 
-**5. Fail-loud 雙 guard（防 #731-class 啞彈）**
+- **編譯期（CI）**：直接解析 Prometheus 的抓取設定，確認 recipe 用到的每個指標（包含 ratio 的分母、forecast 的容量指標）確實被抓、而且該抓取工作有把它歸屬到 `tenant`，否則 CI 報錯。做法是以抓取設定本身為準，不另外維護一份會過期的清單。它只能保護對齊本平台抓取設定的情況；客戶自帶的 Prometheus 設定看不到，由下一道補上。
+- **執行期看門告警 `CustomRecipeDiskInert`**：租戶設了磁碟告警、Pod 也在跑，但歸屬後的磁碟指標一直沒出現，就觸發。這把「拓撲不支援」「漏設歸屬」「租戶根本沒掛 PVC」這幾種情況，從悄悄失效變成有人會看到的告警。
 
-- **CI lint（build-time）**：反向解析 `configmap-prometheus.yaml`（SSOT，仿 `check_ksm_version_allowlist.py` 的 parse-manifest，非 prefix 啟發式）。recipe 的 `metric` / `capacity_metric` / `denominator_metric` 三者若被某 scrape job 抓、但該 job 未設 `tenant` → **ERROR**（指標永不歸屬、告警永不 fire）。誠實限制：看不到 BYO 客戶的 `prometheus.yml`，只保護對齊本平台 scrape SSOT 的 config。
-- **Runtime sentinel（`CustomRecipeDiskInert{tenant}`）**：仿 `VersionAwareThresholdInert`，per-tenant + Running-pod gate——租戶宣告了 disk recipe、pod 在跑、但歸屬後的 disk 指標沒流 → 告警。把 N:1/1:N 誤歸屬、缺 relabel、或**租戶沒掛 PVC** 從 fail-silent 轉 fail-loud。
-
-**誠實殘留**：v2.9.0 已 ship 的 `disk_will_fill` forecast 範例（`shop.yaml` / `forecast.yaml`）引用的 `kubelet_volume_stats_*` 當時無人 scrape → 是 latent silent-alert（promtool 合成 fixture 過、真叢集永不 fire）；本 amend 的 scrape 啟用 + 雙 guard 一併修復。
+v2.9.0 曾隨範例附過一條磁碟預測告警，引用的正是當時沒人抓取的 `kubelet_volume_stats_*`——它在測試夾具上看起來正常、在真實叢集裡卻從不觸發。本次的抓取啟用加上這兩道防線一併修掉。
 
 ## Cross-Reference
 

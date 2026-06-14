@@ -14,7 +14,7 @@ lang: en
 
 ✅ **Accepted** (v2.3.0) — Platform supports both ConfigMap and Operator CRD paths; detection logic auto-selects
 📎 **Addendum** (v2.6.0) — Architecture boundary declaration added, see §Addendum: Architecture Boundary Declaration
-📎 **Addendum** (v2.10.0) — da-assembler direct-render retired + Operator path decision (Option E), see §Addendum (v2.10.0)
+📎 **Addendum** (v2.10.0) — da-assembler direct-render retired + Operator path decision, see §Addendum (v2.10.0)
 
 ## Context
 
@@ -191,13 +191,15 @@ Any new Operator-related tool or feature must pass these three questions:
 
 ## Addendum (v2.10.0): da-assembler direct-render retired + Operator path decision
 
-When the [#692](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/692) epic expanded "rule-pack drift → compiler operator" into an implementation plan, the three organs of the original idea each found a better home: **the compile brain → CI** (pure build-time, zero runtime); **the write heart → tenant-api's existing single-writer plane** ([ADR-023](023-write-plane-single-writer-invariant.md)); **the replay validation → a PR-comment backtest**. So the da-assembler-controller "long-term exploration" item in §Evolution Status above gets three decisions:
+When the [#692](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/692) epic took the originally-imagined "operator that watches a CRD and compiles rules on the fly" and pulled it apart, its three jobs each found a better home: **the compile logic stays in CI** (pure build-time, no new runtime component); **the write goes through tenant-api's existing single-writer plane** ([ADR-023](023-write-plane-single-writer-invariant.md)); **the pre-deploy replay check becomes a backtest posted as a PR comment**. All that's left is the thin skin that translates a CRD into one write request — and there is no demand for it yet. So the da-assembler-controller exploration item in §Evolution Status above gets three decisions:
 
-1. **`da_assembler` direct-render → hard-deprecated (debug-only).** With compile-in-CI settled, the only legal production-actuation path is the GitOps CI pipeline (recipe → compile → promtool → PR → ConfigMap). Direct-render bypasses the generator-of-record: a CR-declared `_custom_alerts` emits a `user_threshold` series, but CI compiles no matching rule = a **structural silent alert**. Kept for local debugging only.
-2. **`ThresholdConfig` CRD → dormant, not installed by default.** With direct-render retired the CRD has no consumer; not installing it means `kubectl apply` errors immediately = a **natural fail-loud form**, better than a description warning (nobody reads it) or an always-deny webhook (a runtime component for a zombie CRD). The schema is kept for CI validation; it is reinstalled together with the pre-decision below when the trigger fires.
-3. **"Future Operator mode" → Option E pre-decision (no standalone operator).** The da-assembler-controller / standalone compiler operator is cancelled. If a CR-native self-service interface is ever needed (**trigger = a customer RFP explicitly requiring a kubectl-native interface**), implement it as an **optional watch mode embedded in tenant-api** (flag-gated, reusing the existing client-go + `ClaimTenant` single-writer pattern) — **never a standalone operator, never a sixth version line**. Rationale: the watch layer's only value is the thin skin that translates `kubectl apply` into a write request; building a state machine / retries / auth / version-line registration for that skin has negative ROI, so defer-with-trigger plus a pre-sketched shape avoids re-diverging later.
+1. **`da_assembler`'s direct-render mode is retired, kept only for local debugging.** Rules are always produced by CI compilation (recipe → compile → promtool → PR → ConfigMap), the only legal way to ship to production. Direct-render bypasses that pipeline: a CRD-declared alert emits a metric, but CI compiles no matching rule — another alert that silently never fires.
 
-Shipping narrative: **"Zero-Runtime, Pure-GitOps PromQL Compiler"** — multi-tenant / HA-correct / version-aware alert compilation with no new controller installed in the production cluster.
+2. **The `ThresholdConfig` CRD is not installed by default (dormant).** With direct-render retired it has no consumer for now. Not installing it means `kubectl apply` errors on the spot — the most natural "fail loud," better than a warning in a description field nobody reads, or standing up an always-deny component for a CRD nobody uses. The schema is kept for CI validation and reinstated when the need returns.
+
+3. **If a CRD-native self-service interface is ever wanted, build it as an optional mode embedded in tenant-api, not a separate operator.** The original standalone-operator idea is cancelled. The trigger is a customer explicitly needing a kubectl-native interface; at that point, embed a switchable watch mode in tenant-api (reusing the existing single-writer mechanism) — no new component, and no separate release line for it. The reasoning is simple: that skin has limited value, and maintaining a dedicated state machine, retries, auth, and release process for it isn't worth it.
+
+In one sentence: multi-tenant, HA-correct, version-aware alert compilation happens entirely at build time, and the production cluster needs no new controller installed.
 
 ## Evolution Status
 
