@@ -275,6 +275,14 @@ func RecipeID(spec CustomAlertSpec) (string, error) {
 	// check) and op "==" (exact code match isn't per-PVC), keeping the eq/absence
 	// cores per-tenant. Appended LAST and only when present → no group_by keeps a
 	// byte-identical slug. MUST stay byte-identical to shape.py::recipe_id.
+	//   SLUG-ORDER CONTRACT: a NEW slug field added later MUST go in the SAME
+	//   position in shape.py::recipe_id (the golden vector enforces parity). Keep
+	//   new fields only-when-present like gb_ (an ALWAYS-appended field — like
+	//   `for` — re-slugs every existing rule, a deliberate breaking migration).
+	//   FORESIGHT: the "==" rejection is safe ONLY because the whitelist is PVC-only
+	//   (error codes aren't per-PVC). If a topology dim (e.g. pod) is whitelisted, a
+	//   tenant may legitimately want group_by:[pod] + op:"==" — then relax this AND
+	//   thread group_by into the eq-core aggregation (recipes.py::_eq_core_record).
 	gb, err := customAlertGroupBy(spec)
 	if err != nil {
 		return "", err

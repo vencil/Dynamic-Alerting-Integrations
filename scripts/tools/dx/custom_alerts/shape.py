@@ -305,10 +305,19 @@ def recipe_id(inst: dict) -> str:
     # group_by dimensions (ADR-024 §Addendum): each preserved label is a distinct
     # rule from the per-tenant default, so it enters the slug. Appended LAST and
     # only when present → a recipe without group_by keeps a byte-identical slug
-    # (existing recipe_id vectors unaffected). Per-dimension eval only applies to
-    # value-crossing recipes, so reject it for absence (a per-tenant presence
-    # check) and op '==' (exact code match is not per-PVC) — keeps the eq/absence
-    # cores per-tenant. MUST match custom_alert.go.
+    # (existing recipe_id vectors unaffected).
+    #   SLUG-ORDER CONTRACT: a NEW slug field added later MUST go in the SAME
+    #   position in custom_alert.go::RecipeID (the golden vector enforces parity).
+    #   Keep new fields only-when-present like gb_ (an ALWAYS-appended field — like
+    #   `for` — re-slugs every existing rule, a deliberate breaking migration).
+    # Per-dimension eval only applies to value-crossing recipes, so reject it for
+    # absence (a per-tenant presence check) and op '==' (exact code match is not
+    # per-PVC) — keeps the eq/absence cores per-tenant.
+    #   FORESIGHT: the '==' rejection is safe ONLY because the whitelist is PVC-only
+    #   (error codes aren't per-PVC). If a topology dim (e.g. pod) is whitelisted, a
+    #   tenant may legitimately want group_by:[pod] + op:'==' ("any pod's errno == X")
+    #   — then relax this rejection AND thread group_by into _eq_core_record's
+    #   `max by(...)`. MUST match custom_alert.go.
     group_by = _normalize_group_by(inst)
     if group_by and (recipe == "absence" or op == "=="):
         what = "the absence recipe" if recipe == "absence" else "op '=='"
