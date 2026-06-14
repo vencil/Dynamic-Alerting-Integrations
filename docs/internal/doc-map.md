@@ -59,6 +59,7 @@ lang: zh
 | `docs/governance-security.md` (.en.md) | Platform Engineers, 安全合規 | 治理、稽核與安全合規 |
 | `docs/grafana-dashboards.md` (.en.md) | Platform Engineers, SREs, DevOps | Grafana Dashboard 導覽 |
 | `docs/index.md` (.en.md) | All | Dynamic Alerting Platform — 首頁 |
+| `docs/integration/alerting-plane-self-liveness.md` (.en.md) | Platform Engineers | 告警平面自我存活性 — Watchdog + 外部 Dead-Man's-Switch（Operator 指南） |
 | `docs/integration/byo-alertmanager-integration.md` (.en.md) | Platform Engineers, SREs | BYO Alertmanager 整合指南 |
 | `docs/integration/byo-prometheus-integration.md` (.en.md) | Platform Engineers, SREs | Bring Your Own Prometheus (BYOP) — 現有監控架構整合指南 |
 | `docs/integration/deployment-sizing.md` (.en.md) | Platform Engineers, SREs, DevOps | 部署容量規劃指南 |

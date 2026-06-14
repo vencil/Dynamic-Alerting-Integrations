@@ -383,6 +383,25 @@ class TestWatchdogInhibitImmunity:
                 "target_matchers": ['severity="none"']}]
         assert len(find_watchdog_suppressing_inhibits(bad)) == 1
 
+    def test_negative_matcher_suppressing_watchdog_flagged(self):
+        # Negative-matching trap (Gemini Day-2 review): a "suppress everything
+        # that's NOT critical" rule (severity!="critical") MATCHES Watchdog's
+        # severity="none" and would silently strangle the heartbeat. The != / !~
+        # branches of the matcher evaluator must catch this fail-closed.
+        bad_ne = [{"source_matchers": ['alertname="ClusterDown"'],
+                   "target_matchers": ['severity!="critical"']}]
+        assert len(find_watchdog_suppressing_inhibits(bad_ne)) == 1
+        with pytest.raises(ValueError, match="Watchdog"):
+            assert_watchdog_inhibit_immunity(bad_ne)
+        # !~ form: "not matching the regex critical|warning" also catches none
+        bad_nre = [{"source_matchers": ['alertname="ClusterDown"'],
+                    "target_matchers": ['severity!~"critical|warning"']}]
+        assert len(find_watchdog_suppressing_inhibits(bad_nre)) == 1
+        # control: a negative matcher that EXCLUDES Watchdog must NOT be flagged
+        ok = [{"source_matchers": ['alertname="ClusterDown"'],
+               "target_matchers": ['alertname!="Watchdog"']}]
+        assert find_watchdog_suppressing_inhibits(ok) == []
+
     def test_legacy_target_match_map_supported(self):
         bad = [{"source_match": {"alertname": "ClusterDown"},
                 "target_match": {"alertname": "Watchdog"}}]

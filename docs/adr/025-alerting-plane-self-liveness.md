@@ -18,7 +18,7 @@ updated_at: 2026-06-14
 
 ## 狀態
 
-🟡 **In Progress**（實作中）。本 ADR 記錄一個決策：為平台的告警平面（Prometheus + Alertmanager）加上「自己死掉會被外部察覺」的存活心跳，並劃清「高可用與大規模儲存由 operator 負責」的責任邊界。MVP（D1 Watchdog + 外部 dead-man's-switch）實作已啟動（[#838](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/838)）；canary 租戶 / 規則 linter / 端到端合成探測等仍為 defer-with-trigger（見下方「之後再說」）。operator 設定與靜音/抑制禁區見 [告警平面自我存活性 runbook](../internal/alerting-plane-self-liveness-runbook.md)。
+🟡 **In Progress**（實作中）。本 ADR 記錄一個決策：為平台的告警平面（Prometheus + Alertmanager）加上「自己死掉會被外部察覺」的存活心跳，並劃清「高可用與大規模儲存由 operator 負責」的責任邊界。MVP（D1 Watchdog + 外部 dead-man's-switch）實作已啟動（[#838](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/838)）；canary 租戶 / 規則 linter / 端到端合成探測等仍為 defer-with-trigger（見下方「之後再說」）。operator 設定與靜音/抑制禁區見 [告警平面自我存活性 Operator 指南](../integration/alerting-plane-self-liveness.md)。
 
 ## 摘要
 

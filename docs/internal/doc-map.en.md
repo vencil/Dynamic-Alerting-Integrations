@@ -59,6 +59,7 @@ lang: en
 | `docs/governance-security.md` (.en.md) | Platform Engineers, Security & Compliance | Governance, Audit & Security Compliance |
 | `docs/grafana-dashboards.md` (.en.md) | Platform Engineers, SREs, DevOps | Grafana Dashboard Guide |
 | `docs/index.md` (.en.md) | All | Dynamic Alerting Platform — Home |
+| `docs/integration/alerting-plane-self-liveness.md` (.en.md) | Platform Engineers | Alerting-Plane Self-Liveness — Watchdog + External Dead-Man's-Switch (Operator Guide) |
 | `docs/integration/byo-alertmanager-integration.md` (.en.md) | Platform Engineers, SREs | BYO Alertmanager Integration Guide |
 | `docs/integration/byo-prometheus-integration.md` (.en.md) | Platform Engineers, SREs | Bring Your Own Prometheus (BYOP) — Existing Monitoring Infrastructure Integration Guide |
 | `docs/integration/deployment-sizing.md` (.en.md) | Platform Engineers, SREs, DevOps | Deployment Sizing Guide |
