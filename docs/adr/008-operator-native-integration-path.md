@@ -18,7 +18,8 @@ updated_at: 2026-05-13
 ## 狀態
 
 ✅ **Accepted** (v2.3.0) — 平台同時支援 ConfigMap 路徑和 Operator CRD 路徑，由偵測邏輯自動判斷
-📎 **Addendum** (v2.6.0) — 新增架構邊界宣言，見下方 §Addendum
+📎 **Addendum** (v2.6.0) — 新增架構邊界宣言，見下方 §Addendum: 架構邊界宣言
+📎 **Addendum** (v2.10.0) — da-assembler direct-render 退役 + Operator 路徑定案，見下方 §Addendum (v2.10.0)
 
 ## 背景
 
@@ -193,13 +194,25 @@ graph LR
 2. **是否需要 exporter 連線 K8s API？** → 如果是，違反邊界，應由外部工具處理
 3. **是否只是「讀取 → 轉換 → 輸出」？** → 如果是，屬於工具鏈範疇，可以進行
 
+## Addendum (v2.10.0)：da-assembler direct-render 退役 + Operator 路徑定案
+
+把本 epic（[#692](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/692)）原本設想的「監聽 CRD、即時編譯規則的 operator」拆開後，它的三個職責各自找到了更好的歸宿：**編譯邏輯留在 CI**（純建置期、不增加任何執行期元件）；**寫入交給 tenant-api 既有的單一寫入平面**（[ADR-023](023-write-plane-single-writer-invariant.md)）；**上線前的回放驗證變成 PR 留言裡的回測**。剩下的只有「把 CRD 翻成一個寫入請求」這層皮，而它的需求還沒出現。據此對上方 §演進狀態 的 da-assembler-controller 探索項做三點定案：
+
+1. **`da_assembler` 的 direct-render 模式退役，只留本機除錯用。** 規則一律由 CI 編譯產生（recipe → 編譯 → promtool → PR → ConfigMap），這是 production 唯一合法的上線路徑。direct-render 會繞過這條管線：CRD 宣告的告警會送出指標，CI 卻編不出對應規則——又是一條會悄悄不觸發的告警。
+
+2. **`ThresholdConfig` CRD 預設不安裝（休眠）。** direct-render 退役後它暫時沒有消費者。不安裝的好處是 `kubectl apply` 會當場報錯——這是最自然的「大聲壞掉」，比在描述欄寫一句沒人看的警語、或為一個沒人用的 CRD 立一個 always-deny 元件都好。schema 留著供 CI 驗證，需求出現時再一併恢復。
+
+3. **未來若要 CRD 原生的自助介面，做成 tenant-api 內嵌的選用模式，不另立 operator。** 原本的獨立 operator 構想取消。觸發條件是客戶明確需要 kubectl 原生介面；屆時就在 tenant-api 內嵌一個可開關的監聽模式（沿用既有的單一寫入機制），不蓋新元件、也不為它另開一條發版線。理由很簡單：那層皮的價值有限，為它單獨維護一套狀態機、重試、認證、發版流程並不划算。
+
+對外一句話：多租戶、HA 校正、版本感知的告警編譯全在建置期完成，production 叢集不需要安裝任何新的 controller。
+
 ## 演進狀態
 
 - **v2.3.0**（已完成）：`operator-generate` / `operator-check` 工具鏈、PrometheusRule + AlertmanagerConfig + ServiceMonitor CRD 產出
 - **v2.6.0**（已完成）：架構邊界宣言（見上方 §Addendum）、`operator-generate --kustomize` 多叢集部署、`drift_detect.py --mode operator` 跨叢集 CRD 漂移偵測
 
 **殘留**：
-- **da-assembler-controller**（長期探索）：外部 Operator watch `ThresholdConfig` CRD → 渲染 `conf.d/`。注意：此元件在 threshold-exporter 外部，不違反架構邊界宣言
+- ~~**da-assembler-controller**（長期探索）：外部 Operator watch `ThresholdConfig` CRD → 渲染 `conf.d/`~~ → **v2.10.0 取消**（見下方 §Addendum (v2.10.0)）：direct-render hard-deprecate、CRD dormant、未來 CR-native 介面改 tenant-api 內嵌 watch mode
 - **Helm Chart kube-prometheus-stack values 範例**：提供常見 Operator 部署的 values.yaml 參考
 - **ArgoCD ApplicationSet 整合**：多叢集 Federation 場景的 CRD 部署自動化
 

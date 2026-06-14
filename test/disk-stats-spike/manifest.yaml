@@ -1,0 +1,110 @@
+# #692 P0 ③ spike fixture — VERIFIED on kind 2026-06-14.
+#
+# A tenant pod mounting TWO CSI-backed PVCs of different sizes + a privileged
+# probe pod that scrapes the kubelet the way Prometheus does (in-cluster, with
+# nodes/metrics RBAC).
+#
+# PVCs use `csi-hostpath-sc` — a CSI driver implementing NodeGetVolumeStats.
+# This is REQUIRED: kind's default `local-path` (rancher.io/local-path) is
+# hostPath-backed and emits ZERO kubelet_volume_stats_* (no MetricsProvider).
+# Install the CSI driver first — see run.sh header for the exact command.
+#
+# Two PVCs (data 100Mi + config 50Mi) prove the `persistentvolumeclaim` label
+# DISTINGUISHES them — the basis for per-PVC weakest-link evaluation (a small
+# full disk must not be masked by a large empty one).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: db-a
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: data
+  namespace: db-a
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: csi-hostpath-sc
+  resources:
+    requests:
+      storage: 100Mi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: config
+  namespace: db-a
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: csi-hostpath-sc
+  resources:
+    requests:
+      storage: 50Mi
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: mariadb-sim
+  namespace: db-a
+  labels:
+    app: mariadb
+spec:
+  containers:
+    - name: app
+      image: busybox:1.36
+      command: ["sh", "-c", "sleep 3600"]
+      volumeMounts:
+        - name: data
+          mountPath: /var/lib/mysql
+        - name: config
+          mountPath: /etc/mysql/conf.d
+  volumes:
+    - name: data
+      persistentVolumeClaim:
+        claimName: data
+    - name: config
+      persistentVolumeClaim:
+        claimName: config
+---
+# Privileged probe — scrapes the kubelet :10250/metrics directly (the apiserver
+# node-proxy `/api/v1/nodes/<n>/proxy/metrics` returns NotFound in kind), with a
+# token bound to nodes/metrics — the same authz the platform's Prometheus uses.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kprobe
+  namespace: db-a
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kubelet-metrics-reader
+rules:
+  - apiGroups: [""]
+    resources: [nodes/metrics, nodes/proxy, nodes/stats]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kprobe-kubelet
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kubelet-metrics-reader
+subjects:
+  - kind: ServiceAccount
+    name: kprobe
+    namespace: db-a
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: kprobe
+  namespace: db-a
+spec:
+  serviceAccountName: kprobe
+  containers:
+    - name: curl
+      image: curlimages/curl:8.10.1
+      command: ["sh", "-c", "sleep 3600"]

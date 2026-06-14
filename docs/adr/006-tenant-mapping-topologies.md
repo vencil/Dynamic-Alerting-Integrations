@@ -18,6 +18,7 @@ updated_at: 2026-05-13
 ## 狀態
 
 ✅ **Accepted** (v2.1.0) — 工具鏈已完成，1:N 端到端整合待生產驗證
+📎 **Addendum** (v2.10.0) — 基礎設施指標（disk/PVC/node）的租戶歸屬政策，見下方 §Addendum
 
 ## 背景
 
@@ -160,6 +161,21 @@ groups:
 **殘留**：
 - 在實際多 schema Oracle 環境驗證端到端流程（待生產環境回饋）
 - Schema validation（`_instance_mapping.yaml` JSON Schema）排入後續
+
+## Addendum：基礎設施指標的租戶歸屬 (v2.10.0)
+
+**決策：磁碟、PVC、節點這類基礎設施指標，只支援 1:1 的租戶歸屬（一個 namespace = 一個租戶）。**
+
+ADR-024 的自助告警開始讓租戶對平台的基礎設施指標（例如 kubelet 的 `kubelet_volume_stats_*`）設條件。這些指標原生只帶 `namespace`、不帶 `tenant`，所以在抓取階段直接把 `namespace` 當成 `tenant`——沿用本 ADR 既有的 1:1 做法。
+
+**為什麼 N:1 與 1:N 不在這次的支援範圍。** 本 ADR 的 N:1（多個 namespace 聚合成一個租戶）和 1:N（一個實例切成多個邏輯租戶）靠的是額外的映射規則，而基礎設施指標走的是抓取階段的直接改名、拿不到那層映射：
+
+- **N:1 會靜默漏告警。** 指標被標成 `tenant="db-a-read"`，但租戶的設定用的是 `db-a` 這個名字——兩者對不上，告警永遠不觸發。
+- **1:N 本質上做不到。** 一顆 PVC 無法按 schema / tablespace 拆給不同租戶。
+
+**怎麼讓「不支援」不變成「悄悄壞掉」。** ADR-024 有一條對每個租戶的看門告警 `CustomRecipeDiskInert`：租戶設了磁碟告警、相關 Pod 也在跑，但歸屬後的指標一直沒出現，它就會響。於是 N:1 客戶在遷移當天就會收到「這條告警沒生效」的明確訊號，而不是無聲漏報。等真有 N:1 客戶（例如讀寫分離的資料庫）需要基礎設施告警，再把映射補上。
+
+相關：[ADR-024](024-version-aware-threshold-via-dimensional-label.md)、節點健康告警（#809，也用同一套 1:1 歸屬）、本 epic（#692）。
 
 ## 相關決策
 

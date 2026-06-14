@@ -13,6 +13,7 @@ lang: en
 ## Status
 
 ✅ **Accepted** (v2.1.0) — Toolchain completed, 1:N end-to-end integration pending production validation
+📎 **Addendum** (v2.10.0) — Tenant-attribution policy for infrastructure metrics (disk/PVC/node), see §Addendum below
 
 ## Background
 
@@ -155,6 +156,21 @@ groups:
 **Remaining**:
 - End-to-end validation in real multi-schema Oracle environments (pending production feedback)
 - Schema validation (`_instance_mapping.yaml` JSON Schema) deferred to next cycle
+
+## Addendum: Tenant Attribution for Infrastructure Metrics (v2.10.0)
+
+**Decision: disk, PVC, and node metrics support 1:1 tenant attribution only (one namespace = one tenant).**
+
+ADR-024's self-service alerts now let tenants set conditions on platform infrastructure metrics (e.g. kubelet's `kubelet_volume_stats_*`). These metrics natively carry only `namespace`, not `tenant`, so at scrape time the `namespace` is used directly as the `tenant` — the 1:1 approach this ADR already uses.
+
+**Why N:1 and 1:N are out of scope here.** This ADR's N:1 (several namespaces aggregated into one tenant) and 1:N (one instance split into several logical tenants) rely on an extra mapping layer; infrastructure metrics are attributed by a plain rename at scrape time and never reach that layer:
+
+- **N:1 would silently miss alerts.** The metric is labeled `tenant="db-a-read"`, but the tenant's config uses the name `db-a` — they don't match, so the alert never fires.
+- **1:N is structurally impossible.** A single PVC cannot be split per schema / tablespace across tenants.
+
+**Keeping "unsupported" from becoming "silently broken."** ADR-024 ships a per-tenant watchdog alert, `CustomRecipeDiskInert`: if a tenant declared a disk alert and its pods are running but the attributed metric never appears, it fires. So an N:1 customer gets a clear "this alert isn't working" signal on migration day instead of a silent miss. When an N:1 customer (e.g. a read/write-split database) actually needs infrastructure alerts, the mapping can be added then.
+
+Related: [ADR-024](024-version-aware-threshold-via-dimensional-label.md), node-health alerting (#809, which uses the same 1:1 attribution), the epic (#692).
 
 ## Related Decisions
 

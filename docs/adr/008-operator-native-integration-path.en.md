@@ -13,7 +13,8 @@ lang: en
 ## Status
 
 ✅ **Accepted** (v2.3.0) — Platform supports both ConfigMap and Operator CRD paths; detection logic auto-selects
-📎 **Addendum** (v2.6.0) — Architecture boundary declaration added, see §Addendum below
+📎 **Addendum** (v2.6.0) — Architecture boundary declaration added, see §Addendum: Architecture Boundary Declaration
+📎 **Addendum** (v2.10.0) — da-assembler direct-render retired + Operator path decision, see §Addendum (v2.10.0)
 
 ## Context
 
@@ -188,13 +189,25 @@ Any new Operator-related tool or feature must pass these three questions:
 2. **Does it require the exporter to connect to the K8s API?** → If yes, boundary violation — delegate to external tools
 3. **Is it purely "read → transform → output"?** → If yes, falls within toolchain scope — proceed
 
+## Addendum (v2.10.0): da-assembler direct-render retired + Operator path decision
+
+When the [#692](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/692) epic took the originally-imagined "operator that watches a CRD and compiles rules on the fly" and pulled it apart, its three jobs each found a better home: **the compile logic stays in CI** (pure build-time, no new runtime component); **the write goes through tenant-api's existing single-writer plane** ([ADR-023](023-write-plane-single-writer-invariant.md)); **the pre-deploy replay check becomes a backtest posted as a PR comment**. All that's left is the thin skin that translates a CRD into one write request — and there is no demand for it yet. So the da-assembler-controller exploration item in §Evolution Status above gets three decisions:
+
+1. **`da_assembler`'s direct-render mode is retired, kept only for local debugging.** Rules are always produced by CI compilation (recipe → compile → promtool → PR → ConfigMap), the only legal way to ship to production. Direct-render bypasses that pipeline: a CRD-declared alert emits a metric, but CI compiles no matching rule — another alert that silently never fires.
+
+2. **The `ThresholdConfig` CRD is not installed by default (dormant).** With direct-render retired it has no consumer for now. Not installing it means `kubectl apply` errors on the spot — the most natural "fail loud," better than a warning in a description field nobody reads, or standing up an always-deny component for a CRD nobody uses. The schema is kept for CI validation and reinstated when the need returns.
+
+3. **If a CRD-native self-service interface is ever wanted, build it as an optional mode embedded in tenant-api, not a separate operator.** The original standalone-operator idea is cancelled. The trigger is a customer explicitly needing a kubectl-native interface; at that point, embed a switchable watch mode in tenant-api (reusing the existing single-writer mechanism) — no new component, and no separate release line for it. The reasoning is simple: that skin has limited value, and maintaining a dedicated state machine, retries, auth, and release process for it isn't worth it.
+
+In one sentence: multi-tenant, HA-correct, version-aware alert compilation happens entirely at build time, and the production cluster needs no new controller installed.
+
 ## Evolution Status
 
 - **v2.3.0** (completed): `operator-generate` / `operator-check` toolchain, PrometheusRule + AlertmanagerConfig + ServiceMonitor CRD output
 - **v2.6.0** (completed): Architecture boundary declaration (see §Addendum above), `operator-generate --kustomize` multi-cluster deployment, `drift_detect.py --mode operator` cross-cluster CRD drift detection
 
 **Remaining**:
-- **da-assembler-controller** (long-term exploration): external Operator watches `ThresholdConfig` CRD → renders `conf.d/`. Note: this component lives outside threshold-exporter, does not violate the architecture boundary declaration
+- ~~**da-assembler-controller** (long-term exploration): external Operator watches `ThresholdConfig` CRD → renders `conf.d/`~~ → **retired in v2.10.0** (see §Addendum (v2.10.0)): direct-render hard-deprecated, CRD dormant, a future CR-native interface becomes an embedded tenant-api watch mode
 - **Helm Chart kube-prometheus-stack values examples**: provide values.yaml reference for common Operator deployments
 - **ArgoCD ApplicationSet integration**: multi-cluster Federation CRD deployment automation
 
