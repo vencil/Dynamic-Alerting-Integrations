@@ -18,6 +18,7 @@ updated_at: 2026-05-13
 ## 狀態
 
 ✅ **Accepted** (v2.1.0) — 工具鏈已完成，1:N 端到端整合待生產驗證
+📎 **Addendum** (v2.10.0) — 基礎設施指標（disk/PVC/node）的租戶歸屬政策，見下方 §Addendum
 
 ## 背景
 
@@ -160,6 +161,21 @@ groups:
 **殘留**：
 - 在實際多 schema Oracle 環境驗證端到端流程（待生產環境回饋）
 - Schema validation（`_instance_mapping.yaml` JSON Schema）排入後續
+
+## Addendum：基礎設施指標的租戶歸屬 (v2.10.0)
+
+ADR-024 的自助 recipe 首次消費**平台基礎設施指標**（kubelet `kubelet_volume_stats_*`、cAdvisor `container_fs_*`）——過去 recipe 只消費租戶自帶 exporter 指標。這類指標原生帶 `namespace` 但不帶 `tenant`，須在本 ADR 的拓撲政策下補一條明確規範。
+
+**政策：基礎設施指標的租戶歸屬僅支援 1:1。** 歸屬走 **recipe-path 慣例**——在 kubelet / cAdvisor scrape job 上以 `metric_relabel` 將 `namespace → tenant`（1:1，與 tenant-exporters job 一致，見 §決策）。這與另一條 platform-pack 慣例（recording-rule `label_replace(namespace→tenant)`，如 #809 node-health、版本感知容器規則）等價但分屬不同路徑：**recipe 消費的指標走 scrape-relabel、platform-pack 規則走 recording-rule**。
+
+**N:1 / 1:N 基礎設施歸屬：defer-with-trigger，且 fail-loud。**
+
+- **N:1**（多 namespace → 一租戶）：本 ADR 的 N:1 走 scrape `relabel_configs` regex（`scaffold_tenant.py --namespaces`），**不產生可 join 的 namespace→tenant series**，故基礎設施指標無法沿用。**關鍵風險**：per-tenant 閾值 recipe 在 N:1 下會 **fail-silent**——指標帶 `tenant="db-a-read"`，但租戶 config 的 key 是 `db-a` → `on(tenant)` join 命中零、靜默漏告警；有別於 platform-pack 告警 N:1 的 fail-loud（over-alert）。
+- **1:N**（一實例多邏輯租戶）：單一 PVC 無法按 schema / tablespace 切分 → 結構性不可服務。
+- **兜底**：ADR-024 amend 的 per-tenant runtime sentinel（`CustomRecipeDiskInert{tenant}`）把上述 fail-silent 轉為 **fail-loud**——租戶宣告了基礎設施 recipe 但歸屬後的指標沒流，即告警。
+- **Trigger**：N:1 客戶（如讀寫分離 estate）明確需要基礎設施（disk / node）歸屬時，再評估把 N:1 mapping 套到 kubelet `metric_relabel`（須與 exporter relabel 共用同一 SSOT 生成，避免第二份副本漂移）。
+
+相關：[ADR-024](024-version-aware-threshold-via-dimensional-label.md)（自助 recipe + disk recipe class + sentinel）、#809（node-health，同 1:1 idiom）、#692（epic）。
 
 ## 相關決策
 

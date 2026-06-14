@@ -18,7 +18,8 @@ updated_at: 2026-05-13
 ## 狀態
 
 ✅ **Accepted** (v2.3.0) — 平台同時支援 ConfigMap 路徑和 Operator CRD 路徑，由偵測邏輯自動判斷
-📎 **Addendum** (v2.6.0) — 新增架構邊界宣言，見下方 §Addendum
+📎 **Addendum** (v2.6.0) — 新增架構邊界宣言，見下方 §Addendum: 架構邊界宣言
+📎 **Addendum** (v2.10.0) — da-assembler direct-render 退役 + Operator 路徑裁決（Option E），見下方 §Addendum (v2.10.0)
 
 ## 背景
 
@@ -193,13 +194,23 @@ graph LR
 2. **是否需要 exporter 連線 K8s API？** → 如果是，違反邊界，應由外部工具處理
 3. **是否只是「讀取 → 轉換 → 輸出」？** → 如果是，屬於工具鏈範疇，可以進行
 
+## Addendum (v2.10.0)：da-assembler direct-render 退役 + Operator 路徑裁決
+
+[#692](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/692) epic 把「rule-pack drift → 編譯器 operator」展開成實作計畫時，原構想的三個器官各有更好歸宿：**編譯大腦 → CI**（純 build-time、零 runtime）；**寫入心臟 → tenant-api 既有單一寫者平面**（[ADR-023](023-write-plane-single-writer-invariant.md)）；**回放驗證 → PR comment 回測**。故對上方 §演進狀態 的 da-assembler-controller「長期探索」項做三點裁決：
+
+1. **`da_assembler` direct-render → hard-deprecate（debug-only）。** compile-in-CI 定案後，production actuation 的唯一合法路徑 = GitOps CI pipeline（recipe → 編譯 → promtool → PR → ConfigMap）。direct-render 繞過 generator-of-record：CR 宣告的 `_custom_alerts` 會發 `user_threshold` series，但 CI 編不出對應 rule = **結構性 silent alert**。保留僅供本機 debug。
+2. **`ThresholdConfig` CRD → dormant，預設不安裝。** direct-render 退役後 CRD 暫無消費者；不安裝 → `kubectl apply` 立即報錯 = **fail-loud 的天然形式**，優於 description 警語（沒人讀）或 always-deny webhook（為殭屍 CRD 蓋 runtime 元件）。schema 留供 CI 驗證；trigger fire 時隨下列預決策一併恢復安裝。
+3. **「未來 Operator 模式」→ Option E 預決策（取消獨立 operator）。** 原 da-assembler-controller / 獨立編譯器 operator 取消。若將來需要 CR-native 自助介面（**trigger = 客戶 RFP 明確要 kubectl-native 介面**），以 **tenant-api 內嵌的可選 watch mode** 實作（flag 開關、復用既有 client-go + `ClaimTenant` 單寫者樣式），**永不蓋獨立 operator、永不開第六條版號線**。理由：watch 層唯一價值是「把 `kubectl apply` 翻成寫入請求」一層皮，為它做狀態機 / 重試 / 認證 / 版號線註冊的 ROI 為負；故 defer-with-trigger + 預拍實作形狀，避免將來重新發散。
+
+出貨敘事：**"Zero-Runtime, Pure-GitOps PromQL Compiler"**——多租戶 / HA 校正 / 版本感知的告警編譯，production 叢集不裝任何新 controller。
+
 ## 演進狀態
 
 - **v2.3.0**（已完成）：`operator-generate` / `operator-check` 工具鏈、PrometheusRule + AlertmanagerConfig + ServiceMonitor CRD 產出
 - **v2.6.0**（已完成）：架構邊界宣言（見上方 §Addendum）、`operator-generate --kustomize` 多叢集部署、`drift_detect.py --mode operator` 跨叢集 CRD 漂移偵測
 
 **殘留**：
-- **da-assembler-controller**（長期探索）：外部 Operator watch `ThresholdConfig` CRD → 渲染 `conf.d/`。注意：此元件在 threshold-exporter 外部，不違反架構邊界宣言
+- ~~**da-assembler-controller**（長期探索）：外部 Operator watch `ThresholdConfig` CRD → 渲染 `conf.d/`~~ → **v2.10.0 取消**（見下方 §Addendum (v2.10.0)）：direct-render hard-deprecate、CRD dormant、未來 CR-native 介面改 tenant-api 內嵌 watch mode
 - **Helm Chart kube-prometheus-stack values 範例**：提供常見 Operator 部署的 values.yaml 參考
 - **ArgoCD ApplicationSet 整合**：多叢集 Federation 場景的 CRD 部署自動化
 
