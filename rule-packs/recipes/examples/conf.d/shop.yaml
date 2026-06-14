@@ -107,6 +107,11 @@ tenants:
       # supplies `horizon` (NOT a window/lookback) — the platform derives
       # lookback = max(2·horizon, 1h). `for: 30m` requires the prediction to
       # persist, smoothing transient slope flips.
+      # group_by: [persistentvolumeclaim] evaluates EACH PVC separately (ADR-024
+      # §Addendum), so a small nearly-full volume fires even when a large empty one
+      # would hide it in a by(tenant) sum. Disk-fill REQUIRES PVCs backed by a CSI
+      # driver that implements NodeGetVolumeStats (most cloud CSI do; kind's default
+      # local-path does not) — see the recipe catalog / BYO integration precondition.
       - recipe: forecast
         name: disk_will_fill
         metric: kubelet_volume_stats_available_bytes
@@ -115,3 +120,4 @@ tenants:
         horizon: 4h
         threshold: "0.15:warning"
         for: 30m
+        group_by: [persistentvolumeclaim]

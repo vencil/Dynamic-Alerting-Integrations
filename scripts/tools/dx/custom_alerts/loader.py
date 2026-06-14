@@ -270,6 +270,11 @@ def build_shapes(config_dir: Path,
                 "selectors": inst.get("selectors") or {},
                 "selectors_re": inst.get("selectors_re") or {},
                 "for": inst.get("for", "1m"),
+                # bounded per-dimension eval (e.g. per PVC; ADR-024 §Addendum) —
+                # MUST be carried so emit_shape threads it into the metric-side by();
+                # without it the slug gets `gb_*` but the rule stays by(tenant) and
+                # the per-PVC masking fix silently no-ops.
+                "group_by": inst.get("group_by") or [],
             }
         shape_sev[rid].add(sev)
 

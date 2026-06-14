@@ -66,6 +66,7 @@ type CustomAlertSpec struct {
 	SelectorsRe       map[string]string `yaml:"selectors_re"`
 	Mode              string            `yaml:"mode"`
 	For               string            `yaml:"for"`
+	GroupBy           []string          `yaml:"group_by"` // bounded per-dimension eval (e.g. per PVC)
 }
 
 var (
@@ -99,10 +100,40 @@ var (
 	customAlertForValid = map[string]bool{
 		"0s": true, "1m": true, "5m": true, "15m": true, "30m": true, "1h": true,
 	}
+	// permitted group_by dimensions (ADR-024 §Addendum disk recipes) — bounded so a
+	// per-PVC disk-fill alert can fire per volume (a small full disk is not masked
+	// by a large empty one in a by(tenant) sum) without unbounding cardinality.
+	// Each entry enters the recipe_id slug. MUST match shape.py ALLOWED_GROUP_BY +
+	// the schema enum.
+	customAlertGroupByValid = map[string]bool{"persistentvolumeclaim": true}
 )
 
 func customAlertSanitise(s string) string {
 	return customAlertSanitiseRe.ReplaceAllString(s, "_")
+}
+
+// customAlertGroupBy validates + canonicalises group_by into a sorted, deduped
+// slice. Empty → nil, so a recipe without group_by keeps a byte-identical slug
+// (existing golden vectors unaffected). Bounded to customAlertGroupByValid; sorted
+// for cross-language slug determinism. MUST match shape.py::_normalize_group_by.
+func customAlertGroupBy(spec CustomAlertSpec) ([]string, error) {
+	if len(spec.GroupBy) == 0 {
+		return nil, nil
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, label := range spec.GroupBy {
+		if !customAlertGroupByValid[label] {
+			return nil, fmt.Errorf("group_by label %q must be one of [persistentvolumeclaim] "+
+				"(bounded whitelist, ADR-024 Addendum)", label)
+		}
+		if !seen[label] {
+			seen[label] = true
+			out = append(out, label)
+		}
+	}
+	sort.Strings(out)
+	return out, nil
 }
 
 func validateCustomAlertMetric(metric, field string) error {
@@ -238,6 +269,27 @@ func RecipeID(spec CustomAlertSpec) (string, error) {
 		forVal = "1m"
 	}
 	parts = append(parts, "for"+forVal)
+
+	// group_by dimensions (ADR-024 §Addendum): per-dimension eval (e.g. per PVC).
+	// Only for value-crossing recipes — reject for absence (a per-tenant presence
+	// check) and op "==" (exact code match isn't per-PVC), keeping the eq/absence
+	// cores per-tenant. Appended LAST and only when present → no group_by keeps a
+	// byte-identical slug. MUST stay byte-identical to shape.py::recipe_id.
+	gb, err := customAlertGroupBy(spec)
+	if err != nil {
+		return "", err
+	}
+	if len(gb) > 0 && (spec.Recipe == "absence" || op == "==") {
+		what := "op \"==\""
+		if spec.Recipe == "absence" {
+			what = "the absence recipe"
+		}
+		return "", fmt.Errorf("group_by (per-dimension eval) is not supported for %s — "+
+			"it applies only to value-crossing recipes (ADR-024 Addendum)", what)
+	}
+	for _, g := range gb {
+		parts = append(parts, "gb_"+g)
+	}
 	return customAlertSanitise(strings.Join(parts, "__")), nil
 }
 
