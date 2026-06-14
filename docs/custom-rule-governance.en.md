@@ -399,7 +399,7 @@ Two `absence` properties to know up front: (1) it **respects maintenance** mode 
 
 **⚠️ absence evaluation cost (beware high cardinality)**
 
-`absence` compiles to `count_over_time(<metric><selectors>[<window>])` — each evaluation scans **every series of `<metric>` matching the selectors** over the window. A **high-cardinality metric without `selectors`** scans all of them → memory/CPU spikes (pronounced on backends like VictoriaMetrics). Always scope with `selectors` (instance/pod/a specific label); never run `absence` on a bare high-cardinality metric. This is the flip side of "prefer label-form over piling up value-form": label-form's `selectors` inherently bound the scan.
+`absence` compiles to `count_over_time(<metric><selectors>[<window>])` — each evaluation scans **every series of `<metric>` matching the selectors** over the window. A **high-cardinality metric without `selectors`** scans all of them → memory/CPU spikes (pronounced on backends like VictoriaMetrics). Always scope with a **topology selector** (`instance`/`pod`) down to a specific instance. ⚠️ **An event-dimension selector alone is not enough**: on an N-pod pool, `{errno="1236"}` still matches N series (one per pod) → just as expensive; only a topology selector bounds the scan. The value of label-form is that it **encourages pinpointing the target instance via selectors**, shrinking the TSDB scan at the source.
 
 **Staleness (a stale value)**
 
