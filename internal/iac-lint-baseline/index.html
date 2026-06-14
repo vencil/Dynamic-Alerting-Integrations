@@ -1,0 +1,2975 @@
+
+<!doctype html>
+<html lang="zh" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Enterprise-grade Multi-Tenant Dynamic Alerting Platform for Kubernetes">
+      
+      
+        <meta name="author" content="Vencil Contributors">
+      
+      
+        <link rel="canonical" href="https://vencil.github.io/Dynamic-Alerting-Integrations/internal/iac-lint-baseline/">
+      
+      
+      
+      
+        
+          <link rel="alternate" href="./" hreflang="zh">
+        
+          <link rel="alternate" href="../../en/internal/iac-lint-baseline/" hreflang="en">
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>IaC Lint Baseline — Container/k8s SAST residual findings - Dynamic Alerting Platform</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/extra.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="deep-orange" data-md-color-accent="deep-orange">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#iac-lint-baseline-containerk8s-sast-findings" class="md-skip">
+          跳转至
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="页眉">
+    <a href="../.." title="Dynamic Alerting Platform" class="md-header__button md-logo" aria-label="Dynamic Alerting Platform" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Dynamic Alerting Platform
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              IaC Lint Baseline — Container/k8s SAST residual findings
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="deep-orange" data-md-color-accent="deep-orange"  aria-label="深色模式"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="深色模式" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="deep-orange" data-md-color-accent="deep-orange"  aria-label="淺色模式"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="淺色模式" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+      <div class="md-header__option">
+  <div class="md-select">
+    
+    <button class="md-header__button md-icon" aria-label="选择当前语言">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m12.87 15.07-2.54-2.51.03-.03A17.5 17.5 0 0 0 14.07 6H17V4h-7V2H8v2H1v2h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2zm-2.62 7 1.62-4.33L19.12 17z"/></svg>
+    </button>
+    <div class="md-select__inner">
+      <ul class="md-select__list">
+        
+          <li class="md-select__item">
+            <a href="./" hreflang="zh" class="md-select__link">
+              中文
+            </a>
+          </li>
+        
+          <li class="md-select__item">
+            <a href="../../en/internal/iac-lint-baseline/" hreflang="en" class="md-select__link">
+              English
+            </a>
+          </li>
+        
+      </ul>
+    </div>
+  </div>
+</div>
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="搜索" placeholder="搜索" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="查找">
+        
+          <a href="javascript:void(0)" class="md-search__icon md-icon" title="分享" aria-label="分享" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
+            
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91s2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08"/></svg>
+          </a>
+        
+        <button type="reset" class="md-search__icon md-icon" title="清空当前内容" aria-label="清空当前内容" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            正在初始化搜索引擎
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/vencil/Dynamic-Alerting-Integrations" title="前往仓库" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    vencil/Dynamic-Alerting-Integrations
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+    
+      
+<nav class="md-tabs" aria-label="标签" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  首頁
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../getting-started/for-platform-engineers/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  快速入門
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../architecture-and-design/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  核心架構
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../integration/byo-prometheus-integration/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  整合指南
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../migration-guide/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  遷移
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../governance-security/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  治理與安全
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../scenarios/alert-routing-split/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  場景
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../cli-reference/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  參考
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+    
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="导航栏" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="Dynamic Alerting Platform" class="md-nav__button md-logo" aria-label="Dynamic Alerting Platform" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    Dynamic Alerting Platform
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/vencil/Dynamic-Alerting-Integrations" title="前往仓库" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    vencil/Dynamic-Alerting-Integrations
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    首頁
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    快速入門
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    快速入門
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/for-platform-engineers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Platform Engineers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/for-domain-experts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Domain Experts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/for-tenants/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tenants
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    核心架構
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    核心架構
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture-and-design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    架構與設計
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../benchmarks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    性能基準
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_3" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../adr/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    架構決策 (ADR)
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3_3" id="__nav_3_3_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    架構決策 (ADR)
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/001-severity-dedup-via-inhibit/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-001 Severity Dedup via Inhibit
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--accepted"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/002-oci-registry-over-chartmuseum/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-002 OCI Registry
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--accepted"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/003-sentinel-alert-pattern/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-003 Sentinel Alert Pattern
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--accepted"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/004-federation-central-exporter-first/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-004 Federation Central Exporter First
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--accepted"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/005-projected-volume-for-rule-packs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-005 Projected Volume
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--accepted"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    整合指南
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    整合指南
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/byo-prometheus-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    BYO Prometheus
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/byo-alertmanager-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    BYO Alertmanager
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/alerting-plane-self-liveness/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    告警平面自我存活性 (Watchdog)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/victoriametrics-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    VictoriaMetrics 整合
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/federation-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Federation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/tenant-federation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tenant Federation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/gitops-deployment/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    GitOps 部署
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/deployment-sizing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    部署容量規劃
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    遷移
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    遷移
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../migration-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    遷移指南
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../migration-engine/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    遷移引擎
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../migration-toolkit-installation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migration Toolkit 安裝
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../shadow-monitoring-sop/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Shadow Monitoring SOP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/troubleshooting-checklist/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migration Troubleshooting Checklist
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    治理與安全
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    治理與安全
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../governance-security/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    治理與安全
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../custom-rule-governance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Custom Rule 治理
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    場景
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    場景
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../scenarios/alert-routing-split/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Alert Routing Split
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../test-coverage-matrix/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    測試覆蓋矩陣
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../scenarios/shadow-monitoring-cutover/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Shadow Monitoring 切換
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../scenarios/staged-adoption-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Staged Adoption Lifecycle
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../scenarios/version-aware-thresholds/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Version-Aware Thresholds
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../scenarios/multi-cluster-federation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    多叢集 Federation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../scenarios/tenant-lifecycle/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tenant 生命週期
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../scenarios/multi-system-migration-playbook/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Multi-System Migration Playbook
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_8" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../api/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    參考
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_8" id="__nav_8_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    參考
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cli-reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    da-tools CLI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cheat-sheet/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CLI 速查表
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../interactive-tools/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    互動式工具
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../grafana-dashboards/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Grafana Dashboards
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../rule-packs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Rule Packs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../rule-packs/ALERT-REFERENCE/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Alert 速查
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../schemas/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    JSON Schema
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    故障排查
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../glossary/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    術語表
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../CHANGELOG/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Changelog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="目录">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      目录
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#severity-action-layer-1-blockwarn-reduction" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Severity → action 對照（Layer 1 採 BLOCK/WARN reduction）
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#severity-action-4-ssottrk-314" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        統一 Severity → Action（全 4 層 SSOT，TRK-314 收斂）
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="統一 Severity → Action（全 4 層 SSOT，TRK-314 收斂）">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#branch-protection-required-checksac-5owner-action" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Branch protection required checks（AC 5，owner action）
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#consolidated-baseline-4-trk-315-epic-448-closure" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Consolidated baseline（全 4 層總帳，TRK-315 — epic #448 closure）
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#layer-1-dockerfiletrk-311hadolint-vibe-wrapper" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Layer 1 — Dockerfile（TRK-311，hadolint + Vibe wrapper）
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#layer-2-helm-templatetrk-312kube-linter-vibe-wrapper" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Layer 2 — Helm template（TRK-312，kube-linter + Vibe wrapper）
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#layer-3-helm-values-secret-shapetrk-313-vibe-wrapper" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Layer 3 — Helm values secret-shape（TRK-313，純 Vibe wrapper）
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#layer-4-k8s-raw-manifesttrk-314kube-linter-vibe-wrapper" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Layer 4 — k8s raw manifest（TRK-314，kube-linter + Vibe wrapper）
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        關聯
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+  <nav class="md-tags" >
+    
+      
+      
+      
+      
+        <span class="md-tag">ci</span>
+      
+    
+      
+      
+      
+      
+        <span class="md-tag">iac</span>
+      
+    
+      
+      
+      
+      
+        <span class="md-tag">internal</span>
+      
+    
+      
+      
+      
+      
+        <span class="md-tag">lint</span>
+      
+    
+      
+      
+      
+      
+        <span class="md-tag">security</span>
+      
+    
+  </nav>
+
+
+  
+    <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/edit/main/internal/iac-lint-baseline.md" title="编辑此页" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20.71 7.04c.39-.39.39-1.04 0-1.41l-2.34-2.34c-.37-.39-1.02-.39-1.41 0l-1.84 1.83 3.75 3.75M3 17.25V21h3.75L17.81 9.93l-3.75-3.75z"/></svg>
+    </a>
+  
+  
+    
+      
+    
+    <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/raw/main/internal/iac-lint-baseline.md" title="查看本页的源代码" class="md-content__button md-icon">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0 8a5 5 0 0 1-5-5 5 5 0 0 1 5-5 5 5 0 0 1 5 5 5 5 0 0 1-5 5m0-12.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5"/></svg>
+    </a>
+  
+
+
+<h1 id="iac-lint-baseline-containerk8s-sast-findings">IaC Lint Baseline — Container/k8s SAST 殘留 findings<a class="headerlink" href="#iac-lint-baseline-containerk8s-sast-findings" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p>本文件登記 <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/448">epic #448</a> Container/k8s IaC SAST 各層的<strong>非阻擋（WARN / High）findings</strong> + rationale + 預計修補時程。</p>
+<p><strong>為什麼需要 baseline 表</strong>：SAST 嚴格度分兩級——<strong>Critical → BLOCK PR</strong>（必須 0）；<strong>High / WARN → 不擋 merge，但須列管</strong>（AC 7「任何 High 都需在 iac-lint-baseline.md 列入 + rationale」）。沒有 baseline 表，warning 會無限累積成無人看的雜訊；列管後每筆都有 owner 與退場條件。</p>
+<p>consolidated 全 4 層總帳見下節「Consolidated baseline（全 4 層總帳）」（<a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/596">TRK-315</a> 收斂，epic <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/448">#448</a> closure）。各層細節隨各層 PR 增補於下方分節。</p>
+</blockquote>
+<h2 id="severity-action-layer-1-blockwarn-reduction">Severity → action 對照（Layer 1 採 BLOCK/WARN reduction）<a class="headerlink" href="#severity-action-layer-1-blockwarn-reduction" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Wrapper action</th>
+<th>來源</th>
+<th>行為</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>BLOCK</strong></td>
+<td>hadolint <code>error</code> level、Vibe 規則 V0/V1/V2/V3 違反</td>
+<td>擋 commit / PR（須 0；epic AC 7 Critical=0 必須）</td>
+</tr>
+<tr>
+<td><strong>WARN</strong></td>
+<td>hadolint <code>warning</code> level</td>
+<td>記入本表（High），不擋 merge</td>
+</tr>
+<tr>
+<td><strong>INFO</strong></td>
+<td>hadolint <code>info</code> / <code>style</code> level</td>
+<td>僅 log，不列管</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>全 4 層共用的 Critical/High/Medium/Low → BLOCK/WARN/INFO 統一表已於 <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/595">TRK-314</a> 收斂 —— 見下節「統一 Severity → Action（全 4 層 SSOT）」；Layer 1 的 hadolint level → BLOCK/WARN reduction 是上表的特化。</p>
+</blockquote>
+<h2 id="severity-action-4-ssottrk-314">統一 Severity → Action（全 4 層 SSOT，TRK-314 收斂）<a class="headerlink" href="#severity-action-4-ssottrk-314" title="Permanent link">&para;</a></h2>
+<p>本表是 epic #448 四層 SAST 共用的 severity → action 對照（AC 5）。各層 detector 把 finding 映到一個 severity tier，wrapper 依本表決定 action；escape 機制依層別不同（見最右欄）。</p>
+<table>
+<thead>
+<tr>
+<th>Severity</th>
+<th>Action</th>
+<th>來源（依層）</th>
+<th>Escape 機制</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Critical</strong></td>
+<td><strong>BLOCK PR</strong>（required check 擋 merge；epic AC 7 要求 Critical=0）</td>
+<td>L1 Vibe V0–V3 / hadolint <code>error</code>；<strong>L2 / L4</strong> <code>privileged-container</code>·<code>privilege-escalation-container</code>·<code>host-network</code>·<code>host-pid</code>·<code>host-ipc</code>·<code>docker-sock</code>；L2 Mode A <code>ALLOW_EMPTY_*</code>/<code>INSECURE_*=true</code></td>
+<td><strong>無 escape</strong>（必修）</td>
+</tr>
+<tr>
+<td><strong>Secret 字面（L3）</strong></td>
+<td><strong>BLOCK</strong>（lint ship 在 0）</td>
+<td>L3 key 名像 secret 但值為非空硬編字面</td>
+<td>PR body <code>bypass-lint: helm-values-secrets</code> + <code>reason: &lt;≥30 words&gt;</code></td>
+</tr>
+<tr>
+<td><strong>High</strong></td>
+<td><strong>WARN</strong>（不擋 merge，但<strong>須列管</strong>於本文件 + rationale）</td>
+<td><strong>L2 / L4</strong> <code>run-as-non-root</code>·<code>no-read-only-root-fs</code>·<code>unset-cpu·memory-requirements</code>·<code>capabilities-add</code>（wrapper rule）；L1 hadolint <code>warning</code></td>
+<td><strong>L2 / L4</strong>：中央 <code>EXEMPTIONS</code> registry（<code>check_iac_helm.py</code> / <code>check_k8s_manifests.py</code>）+ 本表 rationale，否則未登記 High → BLOCK；L1 hadolint warning 自動入本表</td>
+</tr>
+<tr>
+<td><strong>Medium / Low</strong></td>
+<td><strong>INFO</strong>（僅 log，不列管）</td>
+<td>其餘所有 kube-linter check；hadolint <code>info</code>/<code>style</code></td>
+<td>n/a</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>CVE image scan 維持 informational</strong>（AC 5）：release.yaml 的既有 trivy image-CVE scan <strong>不</strong>升為 BLOCK —— upstream CVE 隨時爆，不應無預警卡 release（與本表的「IaC misconfig」是不同關注點）。</p>
+</blockquote>
+<h3 id="branch-protection-required-checksac-5owner-action">Branch protection required checks（AC 5，<strong>owner action</strong>）<a class="headerlink" href="#branch-protection-required-checksac-5owner-action" title="Permanent link">&para;</a></h3>
+<p>Critical → BLOCK 的最後一哩是 GitHub branch protection 的 required status checks：CI job 紅 → PR 無法 merge。Claude <strong>無權</strong>改 branch protection（人工操作），owner 須在 <strong>repo Settings → Branches → <code>main</code> → Require status checks to pass</strong> 勾選下列 check 為 required：</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong><code>Lint</code></strong> —— 含 L1 <code>iac-sast-check</code>（hadolint）+ L3 <code>helm-values-secrets-check</code>（secret-shape，含 raw k8s/）</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong><code>Container SAST (Helm L2 + raw k8s L4)</code></strong> —— L2 + L4 kube-linter 的 Critical → BLOCK gate（本 job 在 TRK-314 由「L2 (Helm)」更名，涵蓋兩層）</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> 既有：<code>Lint Rule Packs</code> / <code>Python Tests</code> / <code>Go Tests</code> / <code>Lint Documentation</code></li>
+</ul>
+<blockquote>
+<p>勾選前先確認該 check 名稱在最近一次 CI run 出現過（rename 後舊名 <code>Container SAST L2 (Helm)</code> 不再回報，勿誤設為 required → 會卡在等不到的 check）。</p>
+</blockquote>
+<h2 id="consolidated-baseline-4-trk-315-epic-448-closure">Consolidated baseline（全 4 層總帳，TRK-315 — epic #448 closure）<a class="headerlink" href="#consolidated-baseline-4-trk-315-epic-448-closure" title="Permanent link">&para;</a></h2>
+<p>epic #448 的 hybrid policy：<strong>既有 open-source engine 優先 + Vibe wrapper 疊專案政策</strong>（severity / 中央 exemption / scope），取代 DIY-only <code>check_*.py</code> 的 reactive whack-a-mole（<strong>僅 greenfield 套用</strong>，不回頭遷移既有 ~50 支）。規範同步於 <a href="../dev-rules/"><code>dev-rules.md</code> §安全紀律</a> + <code>CLAUDE.md</code>。</p>
+<p><strong>總帳（against <code>main</code> HEAD，2026-05-24）—— AC 7：0 Critical（必須）達成 ✅</strong>：</p>
+<table>
+<thead>
+<tr>
+<th>Layer</th>
+<th>工具</th>
+<th>engine</th>
+<th>scope</th>
+<th style="text-align: right;">Critical</th>
+<th style="text-align: right;">baseline-High</th>
+<th style="text-align: right;">INFO</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>L1 Dockerfile（TRK-311）</td>
+<td><code>check_iac_vibe_rules.py</code></td>
+<td>hadolint</td>
+<td>7 Dockerfile</td>
+<td style="text-align: right;"><strong>0</strong></td>
+<td style="text-align: right;">5</td>
+<td style="text-align: right;">1</td>
+</tr>
+<tr>
+<td>L2 Helm template（TRK-312）</td>
+<td><code>check_iac_helm.py</code></td>
+<td>kube-linter</td>
+<td>9 chart</td>
+<td style="text-align: right;"><strong>0</strong></td>
+<td style="text-align: right;">5</td>
+<td style="text-align: right;">3</td>
+</tr>
+<tr>
+<td>L3 values/manifest secret-shape（TRK-313）</td>
+<td><code>check_helm_values_secrets.py</code></td>
+<td>—（純 Vibe，無對應 engine）</td>
+<td>111 檔</td>
+<td style="text-align: right;"><strong>0</strong></td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+</tr>
+<tr>
+<td>L4 raw k8s manifest（TRK-314）</td>
+<td><code>check_k8s_manifests.py</code></td>
+<td>kube-linter</td>
+<td>42 manifest</td>
+<td style="text-align: right;"><strong>0</strong></td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">0</td>
+</tr>
+<tr>
+<td><strong>總計</strong></td>
+<td></td>
+<td></td>
+<td></td>
+<td style="text-align: right;"><strong>0</strong> ✅</td>
+<td style="text-align: right;"><strong>11</strong></td>
+<td style="text-align: right;">4</td>
+</tr>
+</tbody>
+</table>
+<p>11 筆 baseline-High <strong>全數</strong>有 rationale + 退場/修補欄（見各層分節表），其中 L2 <code>tenant-api</code>、L4 <code>tenant-api</code> 為同一架構事實（git workdir 需可寫）；L1 5 筆為政策性 <code>--no-cache</code>/pip-self DL3018/DL3013；L2 mariadb×2 + vector×2（root log-collector）為架構必需。<strong>0 Critical</strong> 由 branch-protection required checks（<code>Lint</code> + <code>Container SAST (Helm L2 + raw k8s L4)</code>）真擋 merge。</p>
+<blockquote>
+<p><strong>Critical → BLOCK 已真正上鎖</strong>（非裝飾）：<code>main</code> branch protection 已將 <code>Lint</code>（含 L1+L3）與 <code>Container SAST (Helm L2 + raw k8s L4)</code>（L2+L4）列為 required status checks（owner 已設，2026-05-24）。驗證：<code>gh api repos/vencil/Dynamic-Alerting-Integrations/branches/main/protection/required_status_checks --jq '.checks[].context'</code>。</p>
+</blockquote>
+<h2 id="layer-1-dockerfiletrk-311hadolint-vibe-wrapper">Layer 1 — Dockerfile（TRK-311，hadolint + Vibe wrapper）<a class="headerlink" href="#layer-1-dockerfiletrk-311hadolint-vibe-wrapper" title="Permanent link">&para;</a></h2>
+<p>跑法：<code>python3 scripts/tools/lint/check_iac_vibe_rules.py</code>（CI hook <code>iac-sast-check</code>）。</p>
+<p><strong>Baseline 截至 2026-05-23</strong>：7 個 Dockerfile，<strong>0 BLOCK</strong> ✅ / 5 WARN（High，列管如下）/ 1 INFO。</p>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>File:line</th>
+<th>Code</th>
+<th>說明</th>
+<th>Rationale</th>
+<th>退場 / 修補</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td><code>components/tenant-api/Dockerfile:44</code></td>
+<td>DL3018</td>
+<td><code>apk add --no-cache git ca-certificates tzdata</code> 未 pin 版本</td>
+<td>平台刻意採 <code>--no-cache</code> + 月度 rebuild + Trivy CRITICAL/HIGH gate，而非脆弱的 Alpine 版本 pin（Alpine repo 很快丟棄舊版本，pin 會把 build 變硬中斷）。同 <code>components/da-portal/Dockerfile</code> L30-31 註解的策略。</td>
+<td>政策性 deferred；除非改採 pinned-base 策略，否則保留</td>
+</tr>
+<tr>
+<td>2</td>
+<td><code>helm/federation-gateway/audit-sidecar/Dockerfile:22</code></td>
+<td>DL3018</td>
+<td>fetch stage <code>apk add --no-cache curl</code> 未 pin</td>
+<td>同 #1（build stage，只為下載 + checksum 驗證 mtail，不入 runtime image）</td>
+<td>同 #1</td>
+</tr>
+<tr>
+<td>3</td>
+<td><code>helm/federation-gateway/audit-sidecar/Dockerfile:34</code></td>
+<td>DL3018</td>
+<td>runtime <code>apk add --no-cache logrotate</code> 未 pin</td>
+<td>同 #1</td>
+<td>同 #1</td>
+</tr>
+<tr>
+<td>4</td>
+<td><code>helm/federation-gateway/audit-sidecar/Dockerfile:22</code></td>
+<td>DL4006</td>
+<td><code>echo "&lt;sha&gt;  file" \| sha256sum -c -</code> 的 pipe 前未設 <code>-o pipefail</code></td>
+<td>該 RUN 以 <code>&amp;&amp;</code> 串接，且 pipe 的<strong>最後一個指令就是安全關鍵的 <code>sha256sum -c</code></strong>——其 exit code 正確傳播（pipefail 缺席不影響 checksum 驗證的把關效果）；busybox sh。</td>
+<td><strong>修補候選</strong>（非急）：可加 <code>SHELL ["/bin/ash","-o","pipefail","-c"]</code>；留待 sidecar Dockerfile 下次動到時順手</td>
+</tr>
+<tr>
+<td>5</td>
+<td><code>components/da-tools/app/Dockerfile:15</code></td>
+<td>DL3013</td>
+<td><code>pip install --upgrade pip</code> 未 pin pip 版本</td>
+<td>升級 pip 自身到最新是標準且刻意的；應用相依套件<strong>已 pin</strong>（<code>PyYAML==6.0.3</code> / <code>promql-parser==0.7.0</code> / <code>croniter==6.0.0</code>）。DL3013 命中的是 <code>pip</code> 自身那一段。</td>
+<td>低價值；可選擇性 pin，不列為待辦</td>
+</tr>
+</tbody>
+</table>
+<p>INFO（不列管，僅記錄）：<code>components/da-tools/app/Dockerfile:12</code> DL3059（multiple consecutive RUN）。</p>
+<h2 id="layer-2-helm-templatetrk-312kube-linter-vibe-wrapper">Layer 2 — Helm template（TRK-312，kube-linter + Vibe wrapper）<a class="headerlink" href="#layer-2-helm-templatetrk-312kube-linter-vibe-wrapper" title="Permanent link">&para;</a></h2>
+<p>跑法：<code>python3 scripts/tools/lint/check_iac_helm.py</code>（CI job「Container SAST L2 (Helm)」；本地 on-demand：<code>pre-commit run iac-helm-sast-check --hook-stage manual --all-files</code>）。引擎：<strong>單一 kube-linter</strong>（render-then-lint）+ Mode A 源碼掃描 + wrapper <code>capabilities.add</code> 規則。<strong>trivy-config 不採用</strong>（與 kube-linter 對 K8s misconfig 高度重疊、雙引擎會 desync；trivy 仍是既有的 image-CVE informational scan，不同關注點）。</p>
+<p><strong>例外採中央註冊表</strong>（<code>check_iac_helm.py</code> 的 <code>EXEMPTIONS</code> dict，非 in-chart 註解——<code>helm template</code> 會剝掉註解，且集中式給 SecOps 單一稽核面）。</p>
+<p><strong>Baseline 截至 2026-05-23</strong>：9 個 chart × values variants，<strong>0 Critical</strong> ✅ / 5 baseline-High（中央豁免）/ 3 INFO。</p>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>Chart:check</th>
+<th>severity</th>
+<th>Rationale（= EXEMPTIONS 登記）</th>
+<th>退場 / 修補</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td><code>mariadb-instance:run-as-non-root</code></td>
+<td>High</td>
+<td>mariadb 官方 image 啟動需 root 以 chown data dir 後降權</td>
+<td>改 rootless mariadb image 才可解；政策性保留</td>
+</tr>
+<tr>
+<td>2</td>
+<td><code>mariadb-instance:no-read-only-root-fs</code></td>
+<td>High</td>
+<td>mariadb-server 需可寫 <code>/var/lib/mysql</code> data dir</td>
+<td>同 #1</td>
+</tr>
+<tr>
+<td>3</td>
+<td><code>tenant-api:no-read-only-root-fs</code></td>
+<td>High</td>
+<td>tenant-api gitops writer shells out to git，需可寫工作區</td>
+<td><strong>修補候選</strong>：把 git workdir 移到 writable volume + readOnlyRootFilesystem:true</td>
+</tr>
+<tr>
+<td>4</td>
+<td><code>vector:run-as-non-root</code></td>
+<td>High</td>
+<td>log-collector DaemonSet 需 root 讀 <code>/var/log/pods</code> host log</td>
+<td>架構事實；保留</td>
+</tr>
+<tr>
+<td>5</td>
+<td><code>vector:capabilities-add</code></td>
+<td>High</td>
+<td><code>DAC_READ_SEARCH</code> — 讀其他 UID 擁有的 host log（配 root 需求）</td>
+<td>架構事實；保留</td>
+</tr>
+</tbody>
+</table>
+<p>INFO（不列管）：<code>federation-gateway</code> / <code>federation-proxy</code> / <code>threshold-exporter</code> 的 <code>pdb-unhealthy-pod-eviction-policy</code>（PDB best-practice，非急；可於 PDB 補 <code>unhealthyPodEvictionPolicy: AlwaysAllow</code>）。</p>
+<p><strong>附帶修復（L2 catch）</strong>：<code>helm/da-portal/.helmignore</code> 用了 Helm 不支援的 <code>**/</code> glob（<code>**/README.md</code>），導致 <code>helm template</code> / <code>helm install</code> 直接中止（helm 3 + 4 皆然）——da-portal chart 原本無法 render，CI 也沒任何地方 render 它故長期未爆。已改為 bare <code>README.md</code>（任意深度仍 match）。</p>
+<blockquote>
+<p><strong>嚴重度門檻</strong>：Critical（<code>privileged-container</code> / <code>privilege-escalation-container</code> / <code>host-network</code> / <code>host-pid</code> / <code>host-ipc</code> / <code>docker-sock</code>）→ BLOCK 無 escape；High（<code>run-as-non-root</code> / <code>no-read-only-root-fs</code> / <code>unset-cpu·memory-requirements</code> / wrapper <code>capabilities-add</code>）→ 須登記 EXEMPTIONS 才豁免，否則 BLOCK；其餘 kube-linter check → INFO。</p>
+</blockquote>
+<h2 id="layer-3-helm-values-secret-shapetrk-313-vibe-wrapper">Layer 3 — Helm values secret-shape（TRK-313，純 Vibe wrapper）<a class="headerlink" href="#layer-3-helm-values-secret-shapetrk-313-vibe-wrapper" title="Permanent link">&para;</a></h2>
+<p>跑法：<code>python3 scripts/tools/lint/check_helm_values_secrets.py</code>（hook <code>helm-values-secrets-check</code>，default stage，diff-only；<code>--full-scan</code> 做週期 audit）。<strong>無 open-source engine</strong>——YAML-shape 檢查 kube-linter/trivy 無對應。</p>
+<p>抓「key 名像 secret（<code>password</code>/<code>token</code>/<code>apiKey</code>/<code>secret</code>/<code>clientSecret</code>…）但值是非空字面字串」。class (b)（negative pattern + false-positive escape），diff-only + PR-body bypass（<code>bypass-lint: helm-values-secrets</code>）。</p>
+<p><strong>與 <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/445">#445</a> trufflehog 互補不衝突</strong>：trufflehog 抓<strong>高熵值</strong>；本 lint 抓 <strong>YAML shape</strong>（連低熵 <code>password: hunter2</code> 都抓，那是 entropy detector 漏的）。兩者不雙重 fire——本 lint <strong>ship 在 0</strong>（所有現存 match 皆白名單），只對<strong>新</strong>硬編字面才響。</p>
+<p><strong>白名單（合法、非硬編 secret）</strong>：空值 <code>""</code> / <code>${VAR}</code> 環境插值 / <code>{{ .Values.* }}</code> template ref / placeholder（<code>&lt;changeme&gt;</code>/<code>REPLACE_WITH_*</code>/<code>PLACEHOLDER</code>/<code>YOUR_*</code>）/ bool / numeric / Go-duration（<code>4h</code>/<code>30s</code>，給 <code>tokenTTL</code> 類）/ <code>valueFrom</code>·<code>secretKeyRef</code>。<strong>Key-allowlist</strong>（名含 secret 但為 ref/flag）：<code>createSecret</code>/<code>secretName</code>/<code>existingSecret</code>/<code>secretRef</code>/<code>secretKeyRef</code>/<code>secretKey</code>/<code>tokenTTL</code>。</p>
+<p><strong>Scope（self + Gemini 對抗式 review 後擴大;TRK-314 再納 raw k8s/）</strong>：<code>helm/*/values*.yaml</code> + <code>helm/values*.yaml</code>（top-level overlay）+ <code>helm/*/templates/*.yaml</code>（<strong>所有 template,含 ConfigMap</strong> —— secret 誤置於 ConfigMap 是最常見外洩;key-name 語意掃描適用所有 manifest）+ <code>k8s/**/*.yaml</code>（<strong>raw manifest</strong>;secret-shape 檢查 manifest-agnostic,raw Secret 否則無任何一層掃低熵硬編 —— L4 kube-linter 無對應 check、#445 trufflehog 漏低熵）。key match 採 <strong>endswith</strong>（holder 結尾是 secret 字;<code>passwordPolicy</code>/<code>tokenTTL</code> 等 config 不誤報）；白名單另含 <strong>YAML alias/anchor</strong>（<code>*x</code>/<code>&amp;x</code>）。<strong>已知限制（accepted residual risk）</strong>：line-based KEY:VALUE 掃描不解析 YAML AST,故 block scalar（<code>key: |</code>/<code>&gt;</code>）與 list item（<code>- "literal"</code>）內的硬編值<strong>不掃</strong>,交 #445 trufflehog 高熵捕捉。</p>
+<p><strong>Baseline 截至 2026-05-24（TRK-314 更新）</strong>：scope <strong>111 檔</strong>（69 helm + 42 raw k8s）,<strong>0 findings</strong> ✅。現存全為白名單命中（mariadb <code>rootPassword: ""</code>、oauth2proxy <code>REPLACE_WITH_*</code>、<code>{{ .Values.* | quote }}</code>、<code>${SPLUNK_TOKEN}</code> 註解、<code>secretKey: *.pem</code> ref、<code>tokenTTL: 4h</code> duration 等）。<strong>附帶修復</strong>：擴 scope 到 k8s/ 時，唯一命中是 <code>k8s/03-monitoring/secret-grafana.yaml</code> 的 <code>admin-password: admin</code>（committed 弱憑證、可 <code>kubectl apply</code> 直接上線;trufflehog 因低熵漏抓）—— 已改為 <code>REPLACE_WITH_STRONG_PASSWORD</code> placeholder，對齊同 repo 的 <code>secret-oauth2proxy.yaml</code>（修真陽性而非消音;ship 在 0 且零白名單）。</p>
+<h2 id="layer-4-k8s-raw-manifesttrk-314kube-linter-vibe-wrapper">Layer 4 — k8s raw manifest（TRK-314，kube-linter + Vibe wrapper）<a class="headerlink" href="#layer-4-k8s-raw-manifesttrk-314kube-linter-vibe-wrapper" title="Permanent link">&para;</a></h2>
+<p>跑法：<code>python3 scripts/tools/lint/check_k8s_manifests.py [--ci]</code>（hook <code>k8s-manifests-sast-check</code>，<strong>manual stage</strong>，需 engine;CI 在「Container SAST (Helm L2 + raw k8s L4)」job hard-gate）。引擎：<strong>與 L2 同一個 kube-linter</strong>，但直接掃 raw manifest tree —— 不需 helm render（檔案已是 concrete k8s objects）。重用 L2 的 severity 分類（<code>classify_check</code>/<code>CRITICAL_CHECKS</code>/<code>HIGH_CHECKS</code>）與 <code>.kube-linter.yaml</code> config。</p>
+<blockquote>
+<p><strong>ticket premise 已過時（pre-flight grep 修正）</strong>：原 ticket 假設「repo 無 raw manifest → stub」，實際 <code>k8s/</code> 有 <strong>42 個</strong>真 manifest（prometheus / grafana / alertmanager Deployment、tenant-api Deployment、CronJob、ConfigMap、RBAC、NetworkPolicy、raw Secret）。故 Layer 4 是<strong>真層</strong>，非 stub。</p>
+</blockquote>
+<p><strong>例外採中央註冊表</strong>（<code>check_k8s_manifests.py</code> 的 <code>EXEMPTIONS</code> dict，key 為 <code>(repo-relative path, check)</code> —— raw manifest 以<strong>檔案</strong>為稽核單位，不像 L2 以 chart 為單位）。CRITICAL 永不可豁免（同 L2）。<strong>無 Mode A</strong>：L2 的 <code>ALLOW_EMPTY</code>/<code>INSECURE_*</code> regex 會誤報 raw manifest 的合法 key（如 Prometheus scrape <code>insecure_skip_verify: true</code>，已實測命中），且 raw manifest 無 <code>{{ if }}</code> 分支需 pre-render 掃描，故 kube-linter pass 即 L4 全部;raw Secret 的硬編字面值由 <strong>L3</strong>（scope 已含 k8s/）負責。</p>
+<p><strong>Baseline 截至 2026-05-24</strong>：scope <strong>42 manifest</strong>，<strong>0 Critical</strong> ✅ / 1 baseline-High（中央豁免;原始 2 findings，tenant-api 的 2 個 container 同 <code>(path, check)</code> 去重為 1）/ 0 INFO。</p>
+<blockquote>
+<p><strong>變更（TRK-314 follow-up，PR #600 後續）</strong>：maintenance-scheduler CronJob 原列 2 筆 FIX CANDIDATE（<code>run-as-non-root</code> / <code>no-read-only-root-fs</code>），已加固 securityContext 解除（pod <code>runAsNonRoot:true</code>/<code>runAsUser:65534</code>/<code>seccompProfile:RuntimeDefault</code> + container <code>readOnlyRootFilesystem:true</code>/<code>allowPrivilegeEscalation:false</code>/<code>capabilities.drop:[ALL]</code> + <code>/tmp</code> emptyDir + <code>PYTHONDONTWRITEBYTECODE=1</code>）。已 runtime-test：用發行 image 在 <code>--read-only --tmpfs /tmp --user 65534</code> 下跑 maintenance-scheduler，report-only 模式 exit 0、HTTP 路徑僅見連線錯誤（無 EROFS）。EXEMPTIONS 兩筆 key 已移除。</p>
+</blockquote>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>Path:check</th>
+<th>severity</th>
+<th>Rationale（= EXEMPTIONS 登記）</th>
+<th>退場 / 修補</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td><code>k8s/04-tenant-api/deployment.yaml:no-read-only-root-fs</code></td>
+<td>High</td>
+<td>git-clone init + tenant-api container 需可寫工作區 clone/commit conf.d（同 L2 tenant-api chart 豁免;oauth2-proxy sidecar 已 <code>readOnlyRootFilesystem:true</code>）</td>
+<td>架構事實;同 L2 #3「修補候選」（git workdir 移到 writable volume）</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>與其他層的關係</strong>：L4 抓 raw manifest 的 <strong>container misconfig</strong>（kube-linter）;raw Secret 的<strong>硬編字面</strong>由 L3 抓（scope 含 k8s/）;<strong>高熵值</strong>由 #445 trufflehog 抓 —— 三者互補不雙重 fire（kube-linter 無 hardcoded-secret-value check）。</p>
+</blockquote>
+<h2 id="_1">關聯<a class="headerlink" href="#_1" title="Permanent link">&para;</a></h2>
+<ul>
+<li><a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/448">epic #448</a> — Container/k8s SAST 4-layer</li>
+<li><a href="../lint-policy/"><code>lint-policy.md</code></a> — lint class / bypass / allowlist 治理</li>
+<li><a href="../dev-rules/"><code>dev-rules.md</code> §安全紀律</a> — IaC SAST 起手 pointer</li>
+<li><code>.hadolint.yaml</code>（repo root）— Layer 1 engine config</li>
+</ul>
+
+
+
+
+
+
+
+  
+  
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  回到页面顶部
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      Copyright &copy; 2025 Vencil. Licensed under Apache 2.0.
+    </div>
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+        
+<div class="md-social">
+  
+    
+    
+    
+    
+    <a href="https://github.com/vencil/Dynamic-Alerting-Integrations" target="_blank" rel="noopener" title="GitHub" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+      <div class="md-progress" data-md-component="progress" role="progressbar"></div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.instant", "navigation.instant.loading", "navigation.instant.progress", "navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.expand", "navigation.indexes", "navigation.tracking", "navigation.top", "search.suggest", "search.highlight", "search.share", "toc.follow", "content.action.edit", "content.action.view", "content.code.copy", "content.code.select", "content.code.annotate", "content.tabs.link", "content.tooltips", "announce.dismiss"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "\u5df2\u590d\u5236", "clipboard.copy": "\u590d\u5236", "search.result.more.one": "\u5728\u8be5\u9875\u4e0a\u8fd8\u6709 1 \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.more.other": "\u5728\u8be5\u9875\u4e0a\u8fd8\u6709 # \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.none": "\u6ca1\u6709\u627e\u5230\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.one": "\u627e\u5230 1 \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.other": "# \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.placeholder": "\u952e\u5165\u4ee5\u5f00\u59cb\u641c\u7d22", "search.result.term.missing": "\u7f3a\u5c11", "select.version": "\u9009\u62e9\u5f53\u524d\u7248\u672c"}, "version": {"provider": "mike"}}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+        <script src="../../assets/extra.js"></script>
+      
+        <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+      
+    
+  </body>
+</html>

@@ -1,0 +1,65 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mock-siem
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: mock-siem
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mock-siem
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: mock-siem
+    spec:
+      containers:
+        - name: collector
+          image: python:3.13-slim
+          command: ["python3", "-c"]
+          args:
+            - |
+              # Minimal "SIEM" — HTTP server that logs received payloads
+              # to stdout. Vector http sink POSTs to /ingest.
+              import http.server, json, sys
+              class H(http.server.BaseHTTPRequestHandler):
+                  def do_POST(self):
+                      n = int(self.headers.get("Content-Length", 0))
+                      body = self.rfile.read(n)
+                      # Vector ndjson: one JSON object per line
+                      lines = body.decode("utf-8", errors="replace").splitlines()
+                      for line in lines:
+                          if not line.strip():
+                              continue
+                          try:
+                              j = json.loads(line)
+                              # Print a compact one-liner so kubectl logs is readable.
+                              print(f"SIEM_RECV log_type={j.get('log_type','?')} tenant_id={j.get('tenant_id','-')} app={j.get('app','?')} msg_len={len(j.get('message',''))}", flush=True)
+                          except Exception as e:
+                              print(f"SIEM_PARSE_ERR {e}: {line[:100]}", flush=True)
+                      self.send_response(200)
+                      self.end_headers()
+                  def log_message(self, *a, **kw):
+                      pass  # silence default access log
+              http.server.HTTPServer(("0.0.0.0", 8080), H).serve_forever()
+          ports:
+            - containerPort: 8080
+              name: http
+          resources:
+            requests: { cpu: "10m", memory: "32Mi" }
+            limits: { cpu: "200m", memory: "128Mi" }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mock-siem
+  namespace: monitoring
+spec:
+  selector:
+    app.kubernetes.io/name: mock-siem
+  ports:
+    - port: 8080
+      targetPort: 8080
+      protocol: TCP

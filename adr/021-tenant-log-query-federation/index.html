@@ -1,0 +1,3315 @@
+
+<!doctype html>
+<html lang="zh" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Enterprise-grade Multi-Tenant Dynamic Alerting Platform for Kubernetes">
+      
+      
+        <meta name="author" content="Vencil Contributors">
+      
+      
+        <link rel="canonical" href="https://vencil.github.io/Dynamic-Alerting-Integrations/adr/021-tenant-log-query-federation/">
+      
+      
+      
+      
+        
+          <link rel="alternate" href="./" hreflang="zh">
+        
+          <link rel="alternate" href="../../en/adr/021-tenant-log-query-federation/" hreflang="en">
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>ADR-021: Tenant Log Query — Authorization-Plane-Only, Ingestion-Decoupled - Dynamic Alerting Platform</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/extra.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="deep-orange" data-md-color-accent="deep-orange">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#adr-021-tenant-log-query-authorization-plane-only-ingestion-decoupled" class="md-skip">
+          跳转至
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="页眉">
+    <a href="../.." title="Dynamic Alerting Platform" class="md-header__button md-logo" aria-label="Dynamic Alerting Platform" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Dynamic Alerting Platform
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              ADR-021: Tenant Log Query — Authorization-Plane-Only, Ingestion-Decoupled
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="deep-orange" data-md-color-accent="deep-orange"  aria-label="深色模式"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="深色模式" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="deep-orange" data-md-color-accent="deep-orange"  aria-label="淺色模式"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="淺色模式" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+      <div class="md-header__option">
+  <div class="md-select">
+    
+    <button class="md-header__button md-icon" aria-label="选择当前语言">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m12.87 15.07-2.54-2.51.03-.03A17.5 17.5 0 0 0 14.07 6H17V4h-7V2H8v2H1v2h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2zm-2.62 7 1.62-4.33L19.12 17z"/></svg>
+    </button>
+    <div class="md-select__inner">
+      <ul class="md-select__list">
+        
+          <li class="md-select__item">
+            <a href="./" hreflang="zh" class="md-select__link">
+              中文
+            </a>
+          </li>
+        
+          <li class="md-select__item">
+            <a href="../../en/adr/021-tenant-log-query-federation/" hreflang="en" class="md-select__link">
+              English
+            </a>
+          </li>
+        
+      </ul>
+    </div>
+  </div>
+</div>
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="搜索" placeholder="搜索" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="查找">
+        
+          <a href="javascript:void(0)" class="md-search__icon md-icon" title="分享" aria-label="分享" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
+            
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91s2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08"/></svg>
+          </a>
+        
+        <button type="reset" class="md-search__icon md-icon" title="清空当前内容" aria-label="清空当前内容" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            正在初始化搜索引擎
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/vencil/Dynamic-Alerting-Integrations" title="前往仓库" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    vencil/Dynamic-Alerting-Integrations
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+    
+      
+<nav class="md-tabs" aria-label="标签" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  首頁
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../getting-started/for-platform-engineers/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  快速入門
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../architecture-and-design/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  核心架構
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../integration/byo-prometheus-integration/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  整合指南
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../migration-guide/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  遷移
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../governance-security/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  治理與安全
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../scenarios/alert-routing-split/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  場景
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../cli-reference/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  參考
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+    
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="导航栏" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="Dynamic Alerting Platform" class="md-nav__button md-logo" aria-label="Dynamic Alerting Platform" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    Dynamic Alerting Platform
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/vencil/Dynamic-Alerting-Integrations" title="前往仓库" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    vencil/Dynamic-Alerting-Integrations
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    首頁
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    快速入門
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    快速入門
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/for-platform-engineers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Platform Engineers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/for-domain-experts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Domain Experts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/for-tenants/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tenants
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    核心架構
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    核心架構
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture-and-design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    架構與設計
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../benchmarks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    性能基準
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_3" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    架構決策 (ADR)
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3_3" id="__nav_3_3_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    架構決策 (ADR)
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../001-severity-dedup-via-inhibit/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-001 Severity Dedup via Inhibit
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--accepted"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../002-oci-registry-over-chartmuseum/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-002 OCI Registry
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--accepted"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../003-sentinel-alert-pattern/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-003 Sentinel Alert Pattern
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--accepted"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../004-federation-central-exporter-first/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-004 Federation Central Exporter First
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--accepted"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../005-projected-volume-for-rule-packs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-005 Projected Volume
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--accepted"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    整合指南
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    整合指南
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/byo-prometheus-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    BYO Prometheus
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/byo-alertmanager-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    BYO Alertmanager
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/alerting-plane-self-liveness/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    告警平面自我存活性 (Watchdog)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/victoriametrics-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    VictoriaMetrics 整合
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/federation-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Federation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/tenant-federation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tenant Federation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/gitops-deployment/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    GitOps 部署
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/deployment-sizing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    部署容量規劃
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    遷移
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    遷移
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../migration-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    遷移指南
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../migration-engine/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    遷移引擎
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../migration-toolkit-installation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migration Toolkit 安裝
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../shadow-monitoring-sop/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Shadow Monitoring SOP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/troubleshooting-checklist/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migration Troubleshooting Checklist
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    治理與安全
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    治理與安全
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../governance-security/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    治理與安全
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../custom-rule-governance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Custom Rule 治理
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    場景
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    場景
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../scenarios/alert-routing-split/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Alert Routing Split
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../internal/test-coverage-matrix/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    測試覆蓋矩陣
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../scenarios/shadow-monitoring-cutover/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Shadow Monitoring 切換
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../scenarios/staged-adoption-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Staged Adoption Lifecycle
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../scenarios/version-aware-thresholds/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Version-Aware Thresholds
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../scenarios/multi-cluster-federation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    多叢集 Federation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../scenarios/tenant-lifecycle/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tenant 生命週期
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../scenarios/multi-system-migration-playbook/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Multi-System Migration Playbook
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_8" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../api/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    參考
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_8" id="__nav_8_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    參考
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cli-reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    da-tools CLI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cheat-sheet/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CLI 速查表
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../interactive-tools/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    互動式工具
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../grafana-dashboards/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Grafana Dashboards
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../rule-packs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Rule Packs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../rule-packs/ALERT-REFERENCE/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Alert 速查
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../schemas/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    JSON Schema
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    故障排查
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../glossary/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    術語表
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../CHANGELOG/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Changelog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="目录">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      目录
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        狀態
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        背景
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="背景">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        客戶需求與訊號強度
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        既有覆蓋空白
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        為什麼這是個棘手的問題
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#locked-decision" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        設計討論紀錄（locked decision 摘要）
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_6" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        決策
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="決策">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_7" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        主決策
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ingestion-edge-tenant-stamping-guaranteethe-contract" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        前提約束：Ingestion-Edge Tenant Stamping Guarantee（the contract）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#mvp-2-tier-log-policy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MVP 範圍與可見度治理（2-tier log policy）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#token-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Token model
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#blast-radius3-layer-defense-victorialogs-logsql" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Blast radius：3-layer defense（對 VictoriaLogs / LogsQL 重新校準）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#audit-log-anomaly-metric" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Audit log + anomaly metric
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_8" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        實作計畫
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="實作計畫">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#phase-1-b-logv2100" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 1 — (b) 平台營運 log（v2.10.0）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-2-a-logdefer-with-trigger" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 2 — (a) 租戶應用 log（defer-with-trigger）
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_9" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        為什麼不用其他方案
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="為什麼不用其他方案">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#a-adr-020-prom-label-proxy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A：沿用 ADR-020 的 prom-label-proxy ⛔
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#b-logsql-filter-injector" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        B：自寫 LogsQL filter injector ⛔
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cvmauth" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        C：vmauth 動態租戶路由 ⛔
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#dnative-tenancy-gateway-header" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        D：native tenancy + gateway header 注入 ✅（採用）
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_10" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        後果
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="後果">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_11" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        正面
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_12" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        負面
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_13" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        中性
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#future-work" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Future Work
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_14" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        關聯
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_15" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        相關資源
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+  <nav class="md-tags" >
+    
+      
+      
+      
+      
+        <span class="md-tag">adr</span>
+      
+    
+      
+      
+      
+      
+        <span class="md-tag">federation</span>
+      
+    
+      
+      
+      
+      
+        <span class="md-tag">logs</span>
+      
+    
+      
+      
+      
+      
+        <span class="md-tag">multi-tenant</span>
+      
+    
+      
+      
+      
+      
+        <span class="md-tag">observability</span>
+      
+    
+      
+      
+      
+      
+        <span class="md-tag">security</span>
+      
+    
+  </nav>
+
+
+  
+    <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/edit/main/adr/021-tenant-log-query-federation.md" title="编辑此页" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20.71 7.04c.39-.39.39-1.04 0-1.41l-2.34-2.34c-.37-.39-1.02-.39-1.41 0l-1.84 1.83 3.75 3.75M3 17.25V21h3.75L17.81 9.93l-3.75-3.75z"/></svg>
+    </a>
+  
+  
+    
+      
+    
+    <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/raw/main/adr/021-tenant-log-query-federation.md" title="查看本页的源代码" class="md-content__button md-icon">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0 8a5 5 0 0 1-5-5 5 5 0 0 1 5-5 5 5 0 0 1 5 5 5 5 0 0 1-5 5m0-12.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5"/></svg>
+    </a>
+  
+
+
+<h1 id="adr-021-tenant-log-query-authorization-plane-only-ingestion-decoupled">ADR-021: Tenant Log Query — Authorization-Plane-Only, Ingestion-Decoupled<a class="headerlink" href="#adr-021-tenant-log-query-authorization-plane-only-ingestion-decoupled" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p>Tenant-user 在<strong>平台上</strong>查詢屬於<strong>自己</strong>的 log（query-in-place，不拉回 tenant 側）。
+平台<strong>只負責授權平面</strong>（租戶身分解析 + query path 強制隔離 + 可見度治理）；
+log 如何「集中送進平台並蓋上可信租戶身分」是<strong>解耦的另一份設計（ingestion plane）</strong>，本 ADR 以<strong>顯式可驗證契約</strong>約束它。</p>
+<p>與 <a href="../020-tenant-federation/">ADR-020 (Tenant Federation — Label-Injection Proxy)</a> 是<strong>姊妹件</strong>：ADR-020 讓 tenant 把 metrics <strong>拉回</strong>自有 infra（pull-back，prom-label-proxy 注入 <code>{tenant="X"}</code>）；本 ADR 讓 tenant 在平台上<strong>就地查</strong>自己的 log（query-in-place，VictoriaLogs 原生 <code>(AccountID, ProjectID)</code> 租戶隔離）。資料流向與隔離原語都不同，但<strong>授權平面複用同一套 federation-gateway</strong>。</p>
+</blockquote>
+<h2 id="_1">狀態<a class="headerlink" href="#_1" title="Permanent link">&para;</a></h2>
+<p>✅ <strong>Accepted</strong>（v2.9.0 起草）。</p>
+<p>實作分層、版本定位：</p>
+<table>
+<thead>
+<tr>
+<th>階段</th>
+<th>內容</th>
+<th>定位</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Phase 1 — (b) 平台營運 log</strong></td>
+<td>tenant 查「平台<strong>關於該租戶</strong>」的營運 log（federation audit、告警 eval 等）。資料部分<strong>已存在</strong>（<a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/539">#539</a> audit stream 已帶 <code>tenant_id</code>）。<code>ProjectID=0</code></td>
+<td><strong>v2.10.0 實作開發</strong>（milestone 待建立）</td>
+</tr>
+<tr>
+<td><strong>Phase 2 — (a) 租戶應用 log</strong></td>
+<td>tenant 查自己 workload 的應用 log。需「另外的設計」ingestion epic 把 log 集中送進平台。<code>ProjectID=1</code></td>
+<td><strong>Defer-with-trigger</strong>（Future Work，見文末）</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>EN mirror</strong>：依平台語言政策（中文為主 SSOT、不執行 ZH→EN 遷移），本 ADR 不另製 <code>.en.md</code>（同 ADR-019 / ADR-020）。</p>
+</blockquote>
+<h2 id="_2">背景<a class="headerlink" href="#_2" title="Permanent link">&para;</a></h2>
+<h3 id="_3">客戶需求與訊號強度<a class="headerlink" href="#_3" title="Permanent link">&para;</a></h3>
+<p>進入客戶導入後，浮現「tenant-user 想在平台上查自己 log」的需求：</p>
+<ul>
+<li>客戶<strong>當前實際場景是 (a)</strong>——想查自己 workload 的應用 log，但<strong>不一定要拉回</strong>自有 infra；就地在平台查即可。</li>
+<li>平台側<strong>自評 (b) 是必要的</strong>（讓租戶看「平台關於它的營運可觀測性」，例如告警為何觸發/沒觸發、它的 federation 行為），且 (b) 能作為<strong>可延伸到 (a) 的方向</strong>。</li>
+<li>訊號強度：<strong>soft signal</strong>——「隔離若做得夠硬，可主動對客戶提議」，尚非硬性 RFP。故 (a) 列 defer-with-trigger，(b) 先行。</li>
+</ul>
+<p><strong>定位</strong>：這是 cross-org（平台對客戶）的 outbound 讀取場景，trust boundary 與隔離/稽核需求等同 ADR-020 等級。</p>
+<h3 id="_4">既有覆蓋空白<a class="headerlink" href="#_4" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>場景</th>
+<th>既有方案</th>
+<th>缺口</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Tenant 拉自己 metrics 回 tenant 側</td>
+<td>ADR-020 federation（prom-label-proxy）</td>
+<td>✅ 覆蓋</td>
+</tr>
+<tr>
+<td>平台內部 log 中央聚合（gateway audit / prom query log）</td>
+<td>#539 Vector + VictoriaLogs</td>
+<td>✅ 覆蓋（但<strong>僅平台內部 log</strong>；#539 non-goal 明列「tenant-side log shipping」）</td>
+</tr>
+<tr>
+<td><strong>Tenant 在平台上就地查自己的 log</strong></td>
+<td>⛔ <strong>無方案</strong></td>
+<td>🎯 本 ADR</td>
+</tr>
+</tbody>
+</table>
+<h3 id="_5">為什麼這是個棘手的問題<a class="headerlink" href="#_5" title="Permanent link">&para;</a></h3>
+<ol>
+<li><strong>隔離是 query-in-place 也逃不掉的核心</strong>——Grafana 層過濾是 client-side trust，<strong>不是安全邊界</strong>；隔離必須由後端強制。</li>
+<li><strong>隔離是 joint property</strong>——<code>ingestion-stamping × read-enforcement</code> 兩端任一弱即 breach。本 ADR 只 own read-enforcement，故 ingestion 蓋章必須以<strong>顯式契約 + 驗證</strong>約束，不能「假定別人做對」。</li>
+<li><strong>平台 log store 是 VictoriaLogs（LogsQL），不是 Prometheus（PromQL）</strong>——直覺上「沿用 ADR-020 的 prom-label-proxy」<strong>不成立</strong>（見 §為什麼不用其他方案 A）。</li>
+<li><strong>平台營運 log 含基礎設施拓樸</strong>（node name、internal IP、他租戶 namespace 命名）——直接開給租戶會 infra-leak，需可見度治理。</li>
+</ol>
+<h3 id="locked-decision">設計討論紀錄（locked decision 摘要）<a class="headerlink" href="#locked-decision" title="Permanent link">&para;</a></h3>
+<p>本 ADR 經多輪 Socratic ideation + 兩輪外部 adversarial review（含一輪 verify-don't-claim 火力偵察），locked decision：</p>
+<ul>
+<li><strong>只 own 授權平面</strong>；ingestion 蓋章解耦為「另外的設計」，以契約約束。</li>
+<li><strong>隔離原語 = VictoriaLogs 原生 <code>(AccountID, ProjectID)</code></strong>，由既有 federation-gateway 注入 header 強制；<strong>非</strong> prom-label-proxy、<strong>非</strong>自寫 LogsQL injector、<strong>非</strong> vmauth。</li>
+<li><strong>(b) 先行（v2.10.0）→ (a) defer-with-trigger</strong>；以統一 AccountID 原語讓兩者共用同一授權平面。</li>
+<li><strong>ProjectID 分流 (a)/(b)</strong>；<strong>AccountID 單調配發、永不回收</strong>。</li>
+<li><strong>Fork B = ingest-time 敏感欄位 drop</strong>（read-time strip 留 Future Work）。</li>
+<li><strong>Admission validator = 結構性探測 + 告警</strong>（不自動熔斷）。</li>
+</ul>
+<h2 id="_6">決策<a class="headerlink" href="#_6" title="Permanent link">&para;</a></h2>
+<h3 id="_7">主決策<a class="headerlink" href="#_7" title="Permanent link">&para;</a></h3>
+<p><strong>採 VictoriaLogs 原生 <code>(AccountID, ProjectID)</code> 租戶隔離，由既有 <code>helm/federation-gateway</code> 新增 <code>victorialogs</code> mode 從驗證過的 JWT claim 注入租戶 header；平台不自寫 query endpoint、不自寫 LogsQL filter。</strong></p>
+<pre class="mermaid"><code>flowchart LR
+    subgraph CONTRACT["【契約】Ingestion Plane — 另外的設計（非本 ADR 開發範圍）"]
+      SRC["Tenant Workload (a) / 平台元件 (b)&lt;br/&gt;stdout（payload 可能夾偽造 tenant_id）"]
+      ING["Ingestion Edge · Vector DaemonSet&lt;br/&gt;丟棄 payload tenant_id&lt;br/&gt;依認證連線 / K8s namespace 蓋可信 AccountID"]
+    end
+    subgraph SCOPE["【本 ADR】Authorization Plane"]
+      USER["Tenant User（帶 federation JWT）"]
+      GW["federation-gateway · Envoy&lt;br/&gt;jwt_authn 驗章 → claim_to_headers&lt;br/&gt;strip client header + 蓋 AccountID/ProjectID"]
+    end
+    VL[("VictoriaLogs&lt;br/&gt;原生 (AccountID, ProjectID) 隔離")]
+
+    SRC --&gt; ING
+    ING -- "POST /insert/jsonline&lt;br/&gt;Header: AccountID=X" --&gt; VL
+    USER -- "LogsQL query + Bearer JWT" --&gt; GW
+    GW -- "GET /select/logsql/query&lt;br/&gt;Header: AccountID=X（已驗證覆寫）" --&gt; VL
+    VL -- "只回 AccountID=X 分區" --&gt; GW
+    GW --&gt; USER</code></pre>
+<p><strong>Gateway 為什麼能無痛承載</strong>：<code>helm/federation-gateway</code>（ADR-020 Layer 2）已是 <strong>mode-pluggable</strong>——現有 <code>prom-label-proxy</code> mode（metrics label 注入）與 <code>vm-cluster</code> mode（Lua 做 <code>/select/&lt;id&gt;/</code> path rewrite）。<strong>log 是第三個 mode <code>victorialogs</code></strong>：注入 <code>AccountID</code>/<code>ProjectID</code> <strong>header</strong>（非 label、非 path）。<code>envoy.yaml</code> 既有的 <code>jwt_authn</code>（<code>payload_in_metadata: fed_payload</code>）+ <code>revoked_check.lua</code>（verified-identity header wiring）+ per-IP / per-token / per-tenant 三層限流 + audit log，<strong>全部現成複用</strong>。</p>
+<blockquote>
+<p><strong>⚠️ Fail-closed invariant（Null-Claim Trap 防線）</strong>：若 token 缺 <code>account_id</code> claim（tenant-api bug / 空字串），<code>claim_to_headers</code> <strong>不會注入</strong> header；VictoriaLogs 對缺 <code>AccountID</code> header <strong>預設導向 <code>0</code>（platform default）</strong>→ 租戶誤讀平台 log = 越權。故 gateway <strong>route 層必須加 header 存在性 matcher</strong>：經 <code>jwt_authn</code> 後仍不具合法 <code>AccountID</code> header 的請求，在 route 直接 <code>direct_response 403</code>（比照既有 <code>/api/v1/read</code> reject route），<strong>絕不允許未標記流量穿透到 VictoriaLogs</strong>。配合 vhost <code>request_headers_to_remove</code>（擋 client 自帶）形成雙向封閉。</p>
+</blockquote>
+<p>平台側只負責：</p>
+<ol>
+<li><strong>Gateway <code>victorialogs</code> mode</strong>（驗章 → 蓋租戶 header → VictoriaLogs query/metadata 路由白名單）。</li>
+<li><strong>tenant-api</strong>：onboarding 配發穩定 uint32 AccountID、簽 federation JWT 時 embed 數值 claim、列舉/撤銷 token（複用 ADR-020 token 機制）。</li>
+<li><strong>可見度治理</strong>：2-tier log policy（platform whitelist of exposable streams/fields + tenant subset）。</li>
+<li><strong>Audit + anomaly metric</strong>（誰查了哪些 log、是否異常）。</li>
+</ol>
+<h3 id="ingestion-edge-tenant-stamping-guaranteethe-contract">前提約束：Ingestion-Edge Tenant Stamping Guarantee（the contract）<a class="headerlink" href="#ingestion-edge-tenant-stamping-guaranteethe-contract" title="Permanent link">&para;</a></h3>
+<blockquote>
+<p><strong>本 ADR 的隔離保證，上限等於 ingestion 端蓋章的誠實度。</strong> 此契約把責任<strong>切出去但不甩鍋</strong>——以顯式、可驗證形式約束「另外的設計」。</p>
+</blockquote>
+<p>ingestion plane（無論 (a) 租戶推送或 (b) 平台元件 stdout）<strong>必須</strong>：</p>
+<ol>
+<li><strong>零信任 payload</strong>——log payload 內自帶的 <code>tenant_id</code> / 任何租戶身分欄位<strong>一律視為不可信並丟棄</strong>。</li>
+<li><strong>基礎設施強蓋章</strong>——租戶身分（→ uint32 AccountID）由 <strong>node 層 Vector DaemonSet 依「認證過的連線 / K8s namespace / GitOps 受控標籤」強制判定</strong>，寫成 VictoriaLogs <code>AccountID</code> header。（對照 ADR-020「proxy 不信 query-string <code>tenant_id</code>」+「Data-layer Label Enrichment Guarantee」。）</li>
+</ol>
+<p><strong>為什麼這是 prerequisite</strong>：gateway 在 query path 強制注入 <code>AccountID=X</code>，若 ingestion 蓋錯/可被偽造，授權平面會「忠實地」把錯租戶的 log 餵出去——garbage-in。這是 silent cross-tenant breach 地雷。</p>
+<blockquote>
+<p><strong>Phase 2 (a) 額外前提 — node 隔離硬化（Stamping Illusion 防線）</strong>：(a) 靠 node 層 Vector 依 namespace 蓋章，前提是 K8s pod 邊界可信。租戶 workload 若經容器逃逸（特權逃逸 / 掛 node socket）打穿 pod 邊界，可在 node 層干擾 Vector DaemonSet 或偽造他 namespace 的 cgroup 標籤 → 蓋章失真。故 (a) 開通的<strong>先決條件</strong>含對租戶 workload 強制 Pod Security Standards + AppArmor/Seccomp（屬 ingestion plane 責任，本契約列為 (a) 門檻）。對應既有殘餘風險 <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/566">#566</a> T2-3（Vector DaemonSet root + <code>DAC_READ_SEARCH</code> 讀整 node pod log）。</p>
+</blockquote>
+<h4 id="accountid-security-critical">AccountID 配發紀律（security-critical）<a class="headerlink" href="#accountid-security-critical" title="Permanent link">&para;</a></h4>
+<table>
+<thead>
+<tr>
+<th>規則</th>
+<th>理由</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>單調配發、永不回收</strong></td>
+<td>退租後若把同一 uint32 配給新租戶、舊 log 仍在 retention 窗內 → 新租戶讀得到前租戶殘留 log = 跨租戶洩漏。registry 必須 monotonic，或保證 retention 清空後才重用</td>
+</tr>
+<tr>
+<td><strong>配發紀錄入 Git tenant registry</strong></td>
+<td>GitOps 不可繞軌跡；對映 <code>tenant_id</code>(str) ↔ <code>account_id</code>(uint32)</td>
+</tr>
+<tr>
+<td><strong>JWT embed 數值 claim</strong></td>
+<td>Envoy <code>claim_to_headers</code> 只支援 string/int/bool；AccountID 為數值 claim 才能 O(1) 注入</td>
+</tr>
+<tr>
+<td><strong>禁用 hash 映射</strong></td>
+<td>FNV-1a 等 hash 把 <code>tenant_id</code>(str)→uint32 有生日悖論碰撞 → 兩租戶撞同 AccountID = 跨租戶洩漏。一律 <strong>Git tenant registry 單調發號</strong>（發號狀態在 Git、commit-on-write，同 conf.d / tenant-api SSOT；<strong>不引入外部 stateful DB</strong>——違背 config-driven 架構，且 uint32 空間 ~40 億充足）</td>
+</tr>
+</tbody>
+</table>
+<h4 id="admission-validator">Admission validator（結構性探測 + 告警，不熔斷）<a class="headerlink" href="#admission-validator" title="Permanent link">&para;</a></h4>
+<p>read 端保留驗證機制：探測「<strong>該被蓋章卻掉進 <code>0:0</code>（platform default）的異常 log</strong>」（= ingestion 蓋章失效訊號）。</p>
+<ul>
+<li><strong>行為</strong>：發<strong>標準 Alertmanager alert</strong>（鏡像 ADR-020 <code>FederationRejectionRateAnomaly</code>，<code>severity: warning</code>，notify platform ops）。<strong>不自動熔斷租戶 query API</strong>——false positive 切斷合法租戶會引發 SLA 事故。</li>
+<li><strong>不做</strong>：content-based 異常偵測 / 自動斷流（拒絕外審初稿的 over-engineering）。</li>
+</ul>
+<h3 id="mvp-2-tier-log-policy">MVP 範圍與可見度治理（2-tier log policy）<a class="headerlink" href="#mvp-2-tier-log-policy" title="Permanent link">&para;</a></h3>
+<p><strong>安全邊界 vs 治理邊界分離</strong>（同 ADR-020 精神）：</p>
+<ul>
+<li><strong>安全邊界（資料平面）</strong>：跨租戶隔離 100% 來自 VictoriaLogs 原生 <code>(AccountID, ProjectID)</code>——租戶查得到的恆等於「自己 AccountID 分區」。</li>
+<li><strong>治理邊界（控制平面）</strong>：2-tier policy 是 UI catalogue / 可見度策展，<strong>不在 query path 硬阻擋</strong>。</li>
+</ul>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>Platform whitelist（maintainer-managed）：哪些平台 log stream / field 對租戶可曝光
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>            ↓ intersect
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>Tenant subset（tenant-self-managed）：租戶選自己要看的子集
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>            ↓ inform（非 enforce）
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>VictoriaLogs (AccountID, ProjectID)：強制隔離
+</code></pre></div>
+<h4 id="fork-bb-log-ingest-time-drop">Fork B：(b) 平台 log 可見度 = ingest-time drop（預設拒絕、白名單開放）<a class="headerlink" href="#fork-bb-log-ingest-time-drop" title="Permanent link">&para;</a></h4>
+<p>平台營運 log 含基礎設施拓樸（<code>node_name</code> / <code>pod_ip</code> / 他租戶 namespace 命名規則…），<strong>預設不對租戶可見</strong>。</p>
+<ul>
+<li><strong>做法</strong>：Vector 寫入租戶 AccountID 分區<strong>前</strong>，VRL <code>drop_fields</code> 拔除敏感欄位 → 落在 <code>AccountID:X</code> 的資料 100% 乾淨，gateway 連 read-time strip 漏濾風險都不必承擔。過濾規則入 Git 版控。</li>
+<li><strong>可見範圍是子集</strong>：(b) 對租戶可見的僅 <code>log_type=federation_audit</code> 且帶有效 <code>tenant_id</code> 的列；<code>gateway_operational</code>（Envoy 操作層錯誤，非租戶可歸屬）與 JWT-fail 列<strong>永遠 platform-only</strong>（落 <code>0:0</code>），不進租戶分區。</li>
+<li><strong>關聯性不斷鏈（Correlation id）</strong>：drop 敏感欄位<strong>之前</strong>，Vector 注入一個全域唯一、無語意的 <code>log_event_id</code>，<strong>同時存在於平台完整副本（<code>0:0</code>）與租戶淨化副本（<code>AccountID:X</code>）</strong>。值班拿租戶截圖報修時，可用此 id 跨分區 join 回完整 node 資訊，避免淨化把 MTTR 拉長。</li>
+<li><strong>已知 trade-off</strong>：ingest-time drop <strong>事後無法 un-drop</strong>（改 whitelist 要 reprocess）。對「本來就不該給租戶看」的拓樸欄位可接受；動態可調的 read-time strip 留 Future Work。</li>
+</ul>
+<h3 id="token-model">Token model<a class="headerlink" href="#token-model" title="Permanent link">&para;</a></h3>
+<p>複用 ADR-020 federation JWT（RS256 / 4h TTL / 無 server-side revocation list / gateway rate-limit 為對價補償控制），<strong>新增</strong> <code>account_id</code> 數值 claim。</p>
+<table>
+<thead>
+<tr>
+<th>屬性</th>
+<th>設計選擇</th>
+<th>理由 / trade-off</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>簽發方</td>
+<td>tenant-api（複用 ADR-020 <code>/api/v1/federation/tokens</code>，或 in-place 查詢綁平台 Grafana session）</td>
+<td>不另起 service；gateway enforcement 兩者皆同</td>
+</tr>
+<tr>
+<td>AccountID claim</td>
+<td>onboarding 配發的穩定 uint32，數值 claim</td>
+<td>Envoy <code>claim_to_headers</code> 直接注入</td>
+</tr>
+<tr>
+<td>Scope binding</td>
+<td>claim → header，gateway 強制覆寫；vhost <code>request_headers_to_remove: [AccountID, ProjectID]</code> defense-in-depth</td>
+<td>client 自帶 header 永不漏穿</td>
+</tr>
+<tr>
+<td><strong>能力 scope</strong></td>
+<td>log-query 與 ADR-020 metrics-pull <strong>分離 audience/scope claim</strong>（最小權限）</td>
+<td>持 metrics-pull token 不應自動可查 log，反之亦然；否則一個 capability 洩漏放大成兩個。⚠️ open point：同一 token + scope claim vs 各簽各的，待實作定</td>
+</tr>
+</tbody>
+</table>
+<h3 id="blast-radius3-layer-defense-victorialogs-logsql">Blast radius：3-layer defense（對 VictoriaLogs / LogsQL 重新校準）<a class="headerlink" href="#blast-radius3-layer-defense-victorialogs-logsql" title="Permanent link">&para;</a></h3>
+<p>沿用 ADR-020 三層職責分工，但<strong>資源模型不同於 Prometheus</strong>——log 沒有 metrics 的 sample/series cap，改以 <strong>time-range 上限</strong>為主護欄。</p>
+<h4 id="layer-1-storage-backendvictorialogs-query">Layer 1 — Storage backend（VictoriaLogs query 上限）<a class="headerlink" href="#layer-1-storage-backendvictorialogs-query" title="Permanent link">&para;</a></h4>
+<table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>防護對象</th>
+<th>Starting default（上線後可調）</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>-search.maxQueryTimeRange</code></td>
+<td><strong>擋無時間過濾 / 過寬範圍查詢</strong>（log 世界的主要 blast-radius 原語）</td>
+<td>例如 <code>7d</code>（依 retention 調）</td>
+</tr>
+<tr>
+<td><code>-search.maxQueryDuration</code></td>
+<td>單查詢執行時間上限（storage &lt; gateway，cascading）</td>
+<td><code>25s</code>（gateway 30s）</td>
+</tr>
+<tr>
+<td><code>-search.maxConcurrentRequests</code></td>
+<td>並發查詢上限（RAM 保護）</td>
+<td>保守起點，觀察再調</td>
+</tr>
+<tr>
+<td><code>-search.maxQueueDuration</code></td>
+<td>並發滿時排隊等待上限</td>
+<td>—</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>與 ADR-020 的關鍵差異</strong>：metrics 端擋 <code>--query.max-samples</code> / series cap；log 端<strong>沒有等價 sample cap</strong>，靠 <code>-search.maxQueryTimeRange</code> 限時窗。<strong>cascading timeout</strong> 同 ADR-020：storage（25s）須短於 gateway（30s）。</p>
+</blockquote>
+<h4 id="layer-2-api-gatewayper-token-per-tenant">Layer 2 — API Gateway（per-token / per-tenant 限流）<a class="headerlink" href="#layer-2-api-gatewayper-token-per-tenant" title="Permanent link">&para;</a></h4>
+<p><strong>完全複用</strong> ADR-020 既有三層 local_ratelimit（per-IP / per-token / per-tenant，key on <code>x-fed-token-id</code> / <code>x-tenant-id</code>）。新增 metric <strong><code>tenant_log_query_requests_total{account_id, project_id, status}</code></strong>（mtail sidecar tail access log，與 ADR-020 <code>tenant_federation_requests_total</code> 對稱）。</p>
+<blockquote>
+<p><strong>⚠️ 非對稱限流缺口（multi-replica）</strong>：<code>local_ratelimit</code> 是 <strong>per-pod</strong>；gateway HPA（#539 觀察 2–8 replica）下，單 token 實際放行量 ≈ 設定值 × replica 數。惡意租戶平行 dump 歷史 log 時可能 N× 擊穿。<strong>Layer 1 backstop</strong>：VictoriaLogs <code>-search.maxConcurrentRequests</code> 限制<strong>實際並發執行</strong>——無論 gateway 幾個 replica 都封住真正的 CPU blast（緩解，非根治）。Phase 1 先記錄 + 觀察 429 率 / storage 負載，持續觸發再評估 Redis-backed global rate limit（見 Future Work 7）。</p>
+</blockquote>
+<h4 id="layer-3-native-tenancy">Layer 3 — 隔離核心（native tenancy）<a class="headerlink" href="#layer-3-native-tenancy" title="Permanent link">&para;</a></h4>
+<p>VictoriaLogs 原生 <code>(AccountID, ProjectID)</code> 即隔離核心。</p>
+<blockquote>
+<p><strong>⭐ 比 prom-label-proxy 更乾淨</strong>：ADR-020 需顯式 <code>--enable-label-apis</code> 才擋得住 <code>/series</code> <code>/labels</code> 的 Metadata API 跨租戶拓樸洩漏（非顯性風險 + smoke test 安全網）。VictoriaLogs 的 metadata 類 endpoint（<code>field_values</code> / <code>stream_field_values</code> 等）<strong>同樣受 <code>AccountID</code> header 約束</strong>——租戶查不到別人 AccountID 的 field/stream 值，<strong>metadata leak 由原生租戶模型自動擋掉</strong>，無需額外 flag。（仍須在實作 AC 對完整 VictoriaLogs query/metadata endpoint surface 逐一驗 enforcement coverage。）</p>
+<p><strong>⚠️ Endpoint allowlist 須顯式逐一放行（非前綴比對）</strong>：VictoriaLogs query surface 含 <code>/select/logsql/query</code>（streaming、<strong>預設無 limit</strong>）、<code>/hits</code>、<code>/streams</code>、<code>/stats_query[_range]</code>、<code>/tail</code>（<strong>live 長連線</strong>）、<code>field_values</code> / <code>field_names</code> / <code>stream_field_values</code>。寬鬆前綴 <code>/select/logsql/</code> 會連 <code>/tail</code> 一起放行——長連線<strong>繞過 <code>maxQueryDuration</code></strong>（duration cap 管查詢執行、不管 stream 連線壽命）並長期佔 concurrency slot。故 MVP <strong>顯式 deny <code>/tail</code></strong>（audit log 不需即時 tail），其餘 allowed endpoint 各自驗 AccountID enforcement，<code>/query</code> 另靠 <code>maxQueryTimeRange</code> + 強制 <code>limit</code> 收斂 streaming 量。（VictoriaLogs <strong>無</strong> <code>/export</code> endpoint —— 真正的無界風險是 <code>/query</code> streaming 與 <code>/tail</code> 長連線，非某個 export endpoint。）</p>
+</blockquote>
+<h3 id="audit-log-anomaly-metric">Audit log + anomaly metric<a class="headerlink" href="#audit-log-anomaly-metric" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Data-plane</strong>（誰查了哪些 log）：gateway access log JSON（<code>account_id</code> / <code>token_id</code> / LogsQL / status / duration），與 ADR-020 同形物理分離（stdout collector-ready）。聚合層 <code>tenant_log_query_requests_total</code> 進 Prometheus。</li>
+<li><strong>Control-plane</strong>（誰授權/改了可見度）：token 生命週期 → ConfigMap-backed store；whitelist/subset 變更 → GitOps commit 歷史。</li>
+</ul>
+<h2 id="_8">實作計畫<a class="headerlink" href="#_8" title="Permanent link">&para;</a></h2>
+<h3 id="phase-1-b-logv2100">Phase 1 — (b) 平台營運 log（v2.10.0）<a class="headerlink" href="#phase-1-b-logv2100" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>內容</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>Gateway <code>victorialogs</code> mode：<code>claim_to_headers</code>/Lua 蓋 <code>AccountID</code>/<code>ProjectID</code> + <code>request_headers_to_remove</code> + VictoriaLogs endpoint route 白名單 + path 正規化（比照現有 <code>/api/v1/read</code> reject 那套嚴謹度）</td>
+</tr>
+<tr>
+<td>2</td>
+<td><strong>建立 (b) 租戶淨化投影</strong>：Vector fan-out（平台完整副本留 <code>0:0</code> + 租戶淨化副本寫 <code>AccountID:X</code>，見下 §Ingestion）</td>
+</tr>
+<tr>
+<td>3</td>
+<td>VictoriaLogs Layer 1 flags 上 storage（time-range / duration / concurrency）</td>
+</tr>
+<tr>
+<td>4</td>
+<td>(b) ingest-time 敏感欄位 drop（VRL <code>drop_fields</code>）</td>
+</tr>
+<tr>
+<td>5</td>
+<td>結構性 admission validator → Alertmanager alert（不熔斷）</td>
+</tr>
+<tr>
+<td>6</td>
+<td>2-tier log visibility policy schema + 可見度 catalogue</td>
+</tr>
+<tr>
+<td>7</td>
+<td>tenant-api：AccountID 配發 + 數值 claim + Git registry</td>
+</tr>
+<tr>
+<td>8</td>
+<td><code>tenant_log_query_requests_total</code> metric + Grafana dashboard</td>
+</tr>
+<tr>
+<td>9</td>
+<td>端對端整合測試（簽 token A → 查 <code>/select/logsql/query</code> 驗只見 A、metadata endpoint 不洩 B）+ user-facing guide</td>
+</tr>
+<tr>
+<td>AC</td>
+<td><strong>Vector route 行為測試入 CI</strong>：<code>vector validate</code>（語法，codify runbook §4.4 手動步驟）+ <strong><code>vector test</code></strong> 餵空值/惡意 <code>tenant_id</code> 的 mock log，斷言 fail-closed 落 <code>0:0</code>（驗極端 payload 的確定行為，非僅語法；對齊 lint-everything + 75% coverage gate）；<strong>(b) 淨化 negative assertion</strong>：餵帶<strong>全部</strong>敏感欄位（node_name / pod_ip…）的 mock payload，斷言租戶副本中這些欄位<strong>確實不存在</strong>（測「移除了」而非只測「有產出」）</td>
+</tr>
+</tbody>
+</table>
+<h4 id="ingestionfan-out">Ingestion：Fan-out（平台完整副本 + 租戶淨化投影），非搬移<a class="headerlink" href="#ingestionfan-out" title="Permanent link">&para;</a></h4>
+<p>關鍵澄清：(b) <strong>不是把 <code>0:0</code> 的資料搬到 per-AccountID</strong>，而是 <strong>fan-out（雙寫）</strong>——平台仍需跨租戶的完整 audit view 自用：</p>
+<ul>
+<li><strong>平台完整副本</strong>：<code>federation_audit</code> + <code>gateway_operational</code> 全欄位<strong>續留 <code>0:0</code></strong>（即 #539 現狀，平台 ops 的 cross-tenant 查詢面，<strong>不變</strong>）。</li>
+<li><strong>租戶淨化投影（net-new）</strong>：Vector <code>route</code> 對帶有效 <code>tenant_id</code> 的 audit 列，<code>drop_fields</code> 淨化 + 注入 <code>log_event_id</code>，寫入對應 <code>AccountID:X</code>（<code>ProjectID=0</code>）。<strong>租戶只有 Day 0 起的歷史</strong>——新 feature 完全可接受，故<strong>無需歷史 backfill / re-index</strong>。</li>
+<li><strong><code>tenant_id</code>(str) → <code>AccountID</code>(uint32) 映射</strong>：route <strong>不能</strong>直接拿字串 <code>tenant_id</code> 當 AccountID。Vector 以 <strong>Git tenant registry 衍生的 enrichment table</strong>（與 gateway 同一 SSOT）查表；查不到 → <strong>fail-closed 落 <code>0:0</code></strong>（絕不誤落他租戶）。</li>
+<li><strong>為何靜態 N-sink 而非單一動態 sink</strong>：Vector <code>http</code> sink 的 per-event header 模板在<strong>混租戶 batch</strong> 內會 header 污染（header 是 per-request 屬性，一 batch 一 request；官方 issue <a href="https://github.com/vectordotdev/vector/issues/21402">vectordotdev/vector#21402</a> 證實同構失敗——壞憑證污染整批；http sink 無 key-partition batching）。故 (b) 用 <code>route</code> → 靜態 N-sink（各帶固定 AccountID header）；(a) Phase 2 從 tenant registry <strong>產生</strong> route/sink（config-from-SSOT）。</li>
+<li><strong>Rollback</strong>：投影是疊加層，revert PR 即停止寫租戶分區、平台 <code>0:0</code> 不受影響；零星 orphaned 資料等 retention 回收（VictoriaLogs 不支援單筆刪）。</li>
+</ul>
+<h3 id="phase-2-a-logdefer-with-trigger">Phase 2 — (a) 租戶應用 log（defer-with-trigger）<a class="headerlink" href="#phase-2-a-logdefer-with-trigger" title="Permanent link">&para;</a></h3>
+<ul>
+<li>前置：「另外的設計」ingestion epic + namespace 蓋章（零信任 payload）。</li>
+<li>復用：<strong>同一 gateway mode</strong> + route/sink 從 tenant registry（conf.d / tenant-api SSOT）<strong>產生</strong>（config-from-SSOT，解決靜態 N-sink 在海量租戶不 scale）。<code>ProjectID=1</code>。</li>
+<li>Trigger：見 Future Work item 1。</li>
+</ul>
+<h2 id="_9">為什麼不用其他方案<a class="headerlink" href="#_9" title="Permanent link">&para;</a></h2>
+<h3 id="a-adr-020-prom-label-proxy">A：沿用 ADR-020 的 prom-label-proxy ⛔<a class="headerlink" href="#a-adr-020-prom-label-proxy" title="Permanent link">&para;</a></h3>
+<p>prom-label-proxy 解析 <strong>PromQL</strong>、注入 metric label matcher。VictoriaLogs query API 是 <strong>LogsQL</strong>（<code>/select/logsql/query</code>，語法完全不同），prom-label-proxy <strong>不認得</strong>——直接擺在 VictoriaLogs 前面不會運作。（這是直覺最容易踩的前提錯誤。）</p>
+<h3 id="b-logsql-filter-injector">B：自寫 LogsQL filter injector ⛔<a class="headerlink" href="#b-logsql-filter-injector" title="Permanent link">&para;</a></h3>
+<p>「在 query 字串 AND 進 <code>tenant_id:"X"</code>」——LogsQL 具 pipe stage 與布林邏輯（<code>OR</code> / <code>NOT</code>），字串拼接<strong>極易被構造語法逃逸</strong>造成跨租戶 breach。這正是 ADR-020 §替代方案 A 拒絕的「label sanitization 地雷」，等於把全平台單點 multi-tenant breach 風險扛回來。</p>
+<h3 id="cvmauth">C：vmauth 動態租戶路由 ⛔<a class="headerlink" href="#cvmauth" title="Permanent link">&para;</a></h3>
+<p>vmauth 雖能注入 <code>AccountID</code> header，但靠<strong>靜態 <code>auth.yml</code></strong> 路由，無法消化 tenant-api 動態簽發的 RS256 JWT（4h TTL，每次簽發重寫 <code>auth.yml</code> 不可行）——與 ADR-020 拒絕 vmauth 同理。且既有 Envoy gateway 已具 JWT 驗證 + header 改寫，無須再引入第三方元件增加維運負擔。</p>
+<h3 id="dnative-tenancy-gateway-header">D：native tenancy + gateway header 注入 ✅（採用）<a class="headerlink" href="#dnative-tenancy-gateway-header" title="Permanent link">&para;</a></h3>
+<p>優點：複用既有開源原生隔離 + 既有 gateway，工程成本數量級節省；native 隔離自動擋 metadata leak；單一隔離原語（AccountID）讓 (a)/(b) 架構一致。缺點（已接受）見 §後果。</p>
+<h2 id="_10">後果<a class="headerlink" href="#_10" title="Permanent link">&para;</a></h2>
+<h3 id="_11">正面<a class="headerlink" href="#_11" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>極高 ROI</strong>：複用 #539 現成資料 + Envoy <code>jwt_authn</code> + gateway mode-pluggable，開發量小、見效快。</li>
+<li><strong>堅固隔離</strong>：vendor 原生強隔離 + gateway 邊界覆寫，免自寫 filter 的單點資安風險；<strong>metadata leak 由原生租戶模型自動擋</strong>（無 ADR-020 <code>--enable-label-apis</code> 那類非顯性風險）。</li>
+<li><strong>架構一致性</strong>：營運 log (b) 與未來應用 log (a) 共用單一隔離原語（AccountID），授權平面同一套；ProjectID 在儲存層把 (a)/(b) 劃清。</li>
+</ul>
+<h3 id="_12">負面<a class="headerlink" href="#_12" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Blast-radius 需重校</strong>：LogsQL 資源模型異於 Prometheus（無 sample cap，改靠 time-range）。</li>
+<li><strong>客戶預期管理</strong>：MVP 階段租戶<strong>只能查平台營運級可觀測性 (b)</strong>，無法查自身應用 log (a)——產品面須清晰引導。</li>
+<li><strong>per-ProjectID 差異化 retention 不支援（Community）</strong>：VictoriaLogs <code>-retentionPeriod</code> 是全域單值；(a) 若需更長合規 retention，須<strong>另起 VictoriaLogs 實例</strong>或上 Enterprise。</li>
+<li><strong>跨 ProjectID 單查詢不可行</strong>：VictoriaLogs 無 multi-tenant select（feature request <a href="https://github.com/VictoriaMetrics/VictoriaLogs/issues/492">#492</a> 未實作），租戶同時看 (a)+(b) 須分兩個查詢 context。</li>
+<li><strong>AccountID 永不回收的維運紀律</strong>：違反即跨租戶洩漏。</li>
+<li><strong>ingestion 契約是硬外部依賴</strong>：本 ADR 隔離保證上限 = 上游蓋章誠實度；admission validator 是事後手段。</li>
+<li><strong>單 pod VictoriaLogs 的查詢負載</strong>：#539 把 VictoriaLogs 部署為 single pod + RWO PVC，容量按<strong>寫入</strong>估。租戶查詢是<strong>新的讀負載</strong>疊上去，single pod 同時是查詢 SPOF + scaling ceiling——上線前須重估容量 / HA（runbook §5 capacity 公式只算 ingestion）。</li>
+<li><strong>非對稱限流（multi-replica）</strong>：per-pod <code>local_ratelimit</code> × replica 數 = 實際上限，靠 Layer 1 <code>-search.maxConcurrentRequests</code> backstop，未根治（見 Blast radius Layer 2）。</li>
+</ul>
+<h3 id="_13">中性<a class="headerlink" href="#_13" title="Permanent link">&para;</a></h3>
+<ul>
+<li>gateway 新增一個 mode（<code>victorialogs</code>）；tenant-api 新增 <code>account_id</code> claim 欄位；新增 VictoriaLogs query route 白名單。</li>
+<li>文件多一份租戶 onboarding 指南（與 ADR-020 <code>tenant-federation.md</code> 平行）。</li>
+<li>新租戶剛 onboard、尚無 (b) 活動時查詢得<strong>空結果</strong>（empty，非 error）——預期行為，onboarding 指南須說明（同 ADR-020 cold-start 精神）。</li>
+</ul>
+<h2 id="future-work">Future Work<a class="headerlink" href="#future-work" title="Permanent link">&para;</a></h2>
+<p>按優先排序：</p>
+<ol>
+<li><strong>Phase 2 — (a) 租戶應用 log ingestion + query</strong>。觸發：(i) RFP/合約將「應用日誌代管與合規審計」列為必選；或 (ii) 客戶願付 add-on 增值授權費以合理化 storage 擴容 + DaemonSet 採集架構的常態維運成本。</li>
+<li><strong>差異化 retention（per log-class）</strong>。觸發：合規明確要求某類 log 更長保留 → 另起 VictoriaLogs 實例或 Enterprise retention filter。</li>
+<li><strong>跨 ProjectID 統一查詢</strong>。觸發：VictoriaLogs <a href="https://github.com/VictoriaMetrics/VictoriaLogs/issues/492">#492</a> 落地 / 租戶 UX 需求。</li>
+<li><strong>Read-time field sanitization</strong>（動態可調可見度，取代 ingest-time drop 的不可逆）。觸發：可見度規則需頻繁調整。</li>
+<li><strong>Server-side revocation list</strong>（與 ADR-020 Future Work item 1 共用）。</li>
+<li><strong>Log ingestion/query metrics 的 Recording-rule 降維</strong>（複用平台既有 Cardinality Guard + Recording Rule pattern，控 per-AccountID metric 基數）。</li>
+<li><strong>Redis-backed global rate limit</strong>（取代 per-pod <code>local_ratelimit</code> 的 multi-replica 非對稱缺口）。觸發：租戶頻繁觸發 429 / 觀察到 storage 負載因平行 dump 飆升。</li>
+</ol>
+<h2 id="_14">關聯<a class="headerlink" href="#_14" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong><a href="../020-tenant-federation/">ADR-020 (Tenant Federation — Label-Injection Proxy)</a></strong> — 姊妹件（pull-back metrics vs query-in-place logs）；本 ADR 複用其 gateway / token model / 3-layer blast-radius pattern</li>
+<li><strong><a href="../004-federation-central-exporter-first/">ADR-004 (Federation — Central-Exporter-First)</a></strong> — 平台內部多叢集 federation</li>
+<li><strong><a href="../009-tenant-manager-crud-api/">ADR-009 (Tenant Manager CRUD API)</a></strong> — tenant-api endpoint pattern，AccountID 配發沿用</li>
+<li><strong><a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/539">#539 — Platform log aggregation (Vector + VictoriaLogs)</a></strong> — 本 ADR 的 log store 與 (b) 資料來源</li>
+<li><strong><a href="../../internal/platform-log-aggregation-runbook/"><code>platform-log-aggregation-runbook.md</code></a></strong> — Vector/VictoriaLogs 維運 SOP</li>
+</ul>
+<h2 id="_15">相關資源<a class="headerlink" href="#_15" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>資源</th>
+<th>相關性</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><a href="../020-tenant-federation/">020-tenant-federation</a></td>
+<td>⭐⭐⭐</td>
+</tr>
+<tr>
+<td><a href="../009-tenant-manager-crud-api/">009-tenant-manager-crud-api</a></td>
+<td>⭐⭐</td>
+</tr>
+<tr>
+<td><a href="../004-federation-central-exporter-first/">004-federation-central-exporter-first</a></td>
+<td>⭐⭐</td>
+</tr>
+<tr>
+<td><a href="../../internal/platform-log-aggregation-runbook/">platform-log-aggregation-runbook</a></td>
+<td>⭐⭐⭐</td>
+</tr>
+</tbody>
+</table>
+
+
+
+
+
+
+
+  
+  
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  回到页面顶部
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      Copyright &copy; 2025 Vencil. Licensed under Apache 2.0.
+    </div>
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+        
+<div class="md-social">
+  
+    
+    
+    
+    
+    <a href="https://github.com/vencil/Dynamic-Alerting-Integrations" target="_blank" rel="noopener" title="GitHub" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+      <div class="md-progress" data-md-component="progress" role="progressbar"></div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.instant", "navigation.instant.loading", "navigation.instant.progress", "navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.expand", "navigation.indexes", "navigation.tracking", "navigation.top", "search.suggest", "search.highlight", "search.share", "toc.follow", "content.action.edit", "content.action.view", "content.code.copy", "content.code.select", "content.code.annotate", "content.tabs.link", "content.tooltips", "announce.dismiss"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "\u5df2\u590d\u5236", "clipboard.copy": "\u590d\u5236", "search.result.more.one": "\u5728\u8be5\u9875\u4e0a\u8fd8\u6709 1 \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.more.other": "\u5728\u8be5\u9875\u4e0a\u8fd8\u6709 # \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.none": "\u6ca1\u6709\u627e\u5230\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.one": "\u627e\u5230 1 \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.other": "# \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.placeholder": "\u952e\u5165\u4ee5\u5f00\u59cb\u641c\u7d22", "search.result.term.missing": "\u7f3a\u5c11", "select.version": "\u9009\u62e9\u5f53\u524d\u7248\u672c"}, "version": {"provider": "mike"}}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+        <script src="../../assets/extra.js"></script>
+      
+        <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+      
+    
+  </body>
+</html>
