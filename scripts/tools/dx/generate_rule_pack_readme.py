@@ -268,6 +268,13 @@ def count_preloaded_packs(rule_packs_dir: Path) -> int:
             1 for f in configmap_dir.glob("configmap-rules-*.yaml")
             if f.stem.replace("configmap-rules-", "") not in exclude
         )
+    # Degraded fallback (k8s tree unreachable): count ALL rule-pack files,
+    # INCLUDING custom-alerts. This deliberately does NOT reuse `exclude` —
+    # rule-packs/ has no `platform` configmap-only pack, so counting
+    # custom-alerts numerically substitutes for it to approximate the
+    # authoritative 15. Excluding it here would undercount to 14, diverging
+    # from the configmap-based primary branch above. (Hit only on a
+    # --rule-packs-dir override to a detached copy; never in CI / normal use.)
     return len(list(rule_packs_dir.glob("rule-pack-*.yaml")))
 
 
