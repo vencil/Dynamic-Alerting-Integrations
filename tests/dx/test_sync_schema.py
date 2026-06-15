@@ -6,8 +6,9 @@ class of bug) or a Go key absent from the schema fails CI — without relying on
 the manual-stage `schema-check` pre-commit hook ever being run.
 
 `extract_go_keys` previously read `app/config.go` (where the map does NOT live),
-returned empty, and made the drift check pass/fail vacuously; these tests pin the
-corrected `pkg/config/types.go` path.
+so it returned empty — and its only caller, the manual-stage `schema-check`
+hook, was never run anyway; these tests pin the corrected `pkg/config/types.go`
+path and put the Go↔schema gate in normal CI.
 """
 import os
 
@@ -19,9 +20,14 @@ _REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__
 _GO_SRC = os.path.join(_REPO, "components", "threshold-exporter", "app")
 _SCHEMA = os.path.join(_REPO, "docs", "schemas", "tenant-config.schema.json")
 
+# Gate on the Go source TREE, not a specific file path: skipping on
+# pkg/config/types.go's existence would make the whole module silently skip if
+# that file is ever moved/renamed — exactly the case extract_go_keys' glob
+# fallback handles, so the gate must still run. Only a Python-only checkout (no
+# Go tree at all) legitimately skips.
 pytestmark = pytest.mark.skipif(
-    not os.path.exists(os.path.join(_GO_SRC, "pkg", "config", "types.go")),
-    reason="Go source not present (Python-only checkout)")
+    not os.path.isdir(_GO_SRC),
+    reason="Go source tree not present (Python-only checkout)")
 
 
 class TestExtractGoKeys:
