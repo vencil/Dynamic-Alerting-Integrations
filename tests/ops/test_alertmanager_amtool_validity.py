@@ -19,6 +19,7 @@ generated config」這整類失敗。
      check-config 當權威驗證（需 docker，缺則 skip）。
 """
 import os
+import re
 import shutil
 import subprocess
 
@@ -37,11 +38,25 @@ from generate_alertmanager_routes import (
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _CONF_D = os.path.join(REPO_ROOT, "components", "threshold-exporter", "config", "conf.d")
 _BASE_CM = os.path.join(REPO_ROOT, "k8s", "03-monitoring", "configmap-alertmanager.yaml")
+_AM_DEPLOYMENT = os.path.join(REPO_ROOT, "k8s", "03-monitoring", "deployment-alertmanager.yaml")
 
-# Pin the amtool image to the version the cluster actually runs
-# (k8s/03-monitoring/deployment-alertmanager.yaml) so the guard validates against
-# the same parser production uses.
-_AM_IMAGE = "prom/alertmanager:v0.32.0"
+
+def _deployed_am_image():
+    """The amtool image, DERIVED from the deployment manifest (the SSOT) rather
+    than hardcoded — so a cluster Alertmanager version bump can't leave this
+    guard silently validating against a stale parser (false SUCCESS, prod crash).
+    Matches `prom/alertmanager:<tag>` specifically, so the configmap-reload
+    sidecar image is ignored."""
+    text = open(_AM_DEPLOYMENT, encoding="utf-8").read()
+    m = re.search(r'prom/alertmanager:[^\s"\']+', text)
+    assert m, f"no prom/alertmanager image found in {_AM_DEPLOYMENT}"
+    return m.group(0)
+
+
+# Pin the amtool image to whatever the cluster actually runs (read from the
+# deployment manifest) so the guard validates against the same parser production
+# uses, and stays aligned automatically on a version bump.
+_AM_IMAGE = _deployed_am_image()
 
 
 def _render_live_alertmanager_yml(tmp_path):
@@ -190,3 +205,11 @@ class TestAmtoolCheckConfig:
         r = self._amtool_check(yaml.dump(bad), tmp_path)
         assert r.returncode != 0
         assert "unmarshal !!seq into string" in (r.stdout + r.stderr)
+
+
+def test_am_image_tracks_deployment():
+    """The guard's amtool image is DERIVED from the deployment manifest, not a
+    hardcoded literal — so a cluster version bump can't leave it validating
+    against a stale parser (Gemini drift review). No docker needed."""
+    assert _AM_IMAGE.startswith("prom/alertmanager:")
+    assert _AM_IMAGE in open(_AM_DEPLOYMENT, encoding="utf-8").read()
