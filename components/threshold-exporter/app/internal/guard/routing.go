@@ -34,8 +34,8 @@ package guard
 //      Each receiver type has type-specific required fields per
 //      scripts/tools/_lib_constants.py::RECEIVER_TYPES (the SSOT
 //      shared with the Python tooling). e.g. webhook needs `url`,
-//      slack needs `api_url`, email needs `to` + `smarthost`,
-//      pagerduty needs `service_key`. Same checks for receivers
+//      slack needs `api_url`, email needs `to` + `smarthost` +
+//      `from`, pagerduty needs `service_key`. Same checks for receivers
 //      embedded in overrides.
 //
 //   3. Empty override matcher (error)
@@ -90,7 +90,7 @@ import (
 // errors against valid configs (false positive blocking merges).
 var receiverTypeSpecs = map[string][]string{
 	"webhook":    {"url"},
-	"email":      {"to", "smarthost"},
+	"email":      {"to", "smarthost", "from"},
 	"slack":      {"api_url"},
 	"teams":      {"webhook_url"},
 	"rocketchat": {"url"},

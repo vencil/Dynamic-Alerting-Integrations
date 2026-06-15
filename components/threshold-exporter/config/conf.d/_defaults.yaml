@@ -30,6 +30,12 @@ _routing_defaults:
   receiver:
     type: "email"
     to: ["dba-oncall@example.com"]
+    # 'from' is REQUIRED on an email receiver unless a global smtp_from is set.
+    # The deployed base (k8s/03-monitoring/configmap-alertmanager.yaml) has no
+    # global smtp_* block — SMTP is configured per-receiver here (smarthost) — so
+    # an email receiver without 'from' renders a config Alertmanager rejects with
+    # "no global SMTP from set" (amtool check-config). Keep this set.
+    from: "alerting@example.com"
     smarthost: "smtp.example.com:587"
   group_by: ["alertname", "tenant"]
   group_wait: "30s"

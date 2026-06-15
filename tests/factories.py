@@ -80,7 +80,7 @@ def make_receiver(rtype="webhook", **overrides):
     defaults = {
         "webhook": {"type": "webhook", "url": "https://hooks.example.com/alert"},
         "slack": {"type": "slack", "api_url": "https://hooks.slack.com/services/T/B/X"},
-        "email": {"type": "email", "to": "admin@example.com", "smarthost": "smtp.example.com:587"},
+        "email": {"type": "email", "to": "admin@example.com", "smarthost": "smtp.example.com:587", "from": "alerts@example.com"},
         "teams": {"type": "teams", "webhook_url": "https://outlook.office.com/webhook/test"},
         "pagerduty": {"type": "pagerduty", "service_key": "test-service-key"},
     }

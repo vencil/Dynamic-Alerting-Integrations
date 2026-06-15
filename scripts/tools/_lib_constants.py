@@ -67,8 +67,14 @@ RECEIVER_TYPES: Final[dict[str, dict[str, Any]]] = {
     },
     "email": {
         "am_key": "email_configs",
-        "required": ["to", "smarthost"],
-        "optional": ["from", "auth_username", "auth_password", "require_tls",
+        # `from` is required per-receiver: the platform configures SMTP per
+        # receiver (smarthost) with no global smtp_* block, and Alertmanager
+        # rejects an email_config without `from` UNLESS a global smtp_from is set
+        # ("no global SMTP from set" at config load). Same per-receiver SMTP
+        # assumption that already makes `smarthost` required. Keep in lock-step
+        # with the Go guard (internal/guard/routing.go receiverTypeSpecs).
+        "required": ["to", "smarthost", "from"],
+        "optional": ["auth_username", "auth_password", "require_tls",
                       "html", "text", "headers", "send_resolved"],
     },
     "slack": {

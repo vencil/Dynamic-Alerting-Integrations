@@ -1082,6 +1082,7 @@ _routing_defaults:
     type: "email"
     to: ["team@example.com"]
     smarthost: "smtp.example.com:587"
+    from: "alerts@example.com"
   group_wait: "30s"
 tenants:
   db-a:

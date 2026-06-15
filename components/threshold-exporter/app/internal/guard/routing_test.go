@@ -59,7 +59,7 @@ func TestRouting_UnknownReceiverTypeIsError(t *testing.T) {
 func TestRouting_KnownTypesAccepted(t *testing.T) {
 	cases := map[string]map[string]any{
 		"webhook":    {"type": "webhook", "url": "https://x"},
-		"email":      {"type": "email", "to": "a@b.c", "smarthost": "smtp:25"},
+		"email":      {"type": "email", "to": "a@b.c", "smarthost": "smtp:25", "from": "n@b.c"},
 		"slack":      {"type": "slack", "api_url": "https://hooks.slack/x"},
 		"teams":      {"type": "teams", "webhook_url": "https://teams/x"},
 		"rocketchat": {"type": "rocketchat", "url": "https://rc/x"},
@@ -81,10 +81,10 @@ func TestRouting_KnownTypesAccepted(t *testing.T) {
 
 func TestRouting_MissingReceiverFieldsAreErrors(t *testing.T) {
 	got := runWithRouting(t, "t1", map[string]any{
-		"receiver": map[string]any{"type": "email"}, // missing `to` AND `smarthost`
+		"receiver": map[string]any{"type": "email"}, // missing `to`, `smarthost` AND `from`
 	})
-	if len(got) != 2 {
-		t.Fatalf("got %d findings, want 2 (one per missing required field)", len(got))
+	if len(got) != 3 {
+		t.Fatalf("got %d findings, want 3 (one per missing required field)", len(got))
 	}
 	for _, f := range got {
 		if f.Kind != FindingMissingReceiverField {

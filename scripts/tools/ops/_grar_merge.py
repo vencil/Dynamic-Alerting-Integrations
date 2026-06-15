@@ -127,4 +127,14 @@ def build_receiver_config(receiver_obj: dict, tenant: str) -> tuple[dict | None,
         if field in receiver_obj:
             am_entry[field] = receiver_obj[field]
 
+    # Alertmanager's email_config.to is a single STRING (comma-separated for
+    # multiple recipients). conf.d authors — and _routing_defaults — conventionally
+    # write `to` as a YAML list (one address per line), which is far more readable.
+    # Coerce that list into AM's comma-joined string here, at the boundary where we
+    # emit AM config: a raw YAML sequence trips Alertmanager's parser with
+    # `cannot unmarshal !!seq into string` at config load (amtool check-config),
+    # a failure the dict-only Python validation never surfaces.
+    if rtype == "email" and isinstance(am_entry.get("to"), list):
+        am_entry["to"] = ", ".join(str(addr) for addr in am_entry["to"])
+
     return {spec["am_key"]: [am_entry]}, warnings
