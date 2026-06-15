@@ -177,6 +177,7 @@ lang: zh
 | `check_open_encoding.py` | flag open() text-mode calls without encoding=. |
 | `check_orphan_docs.py` | 孤兒文件偵測 |
 | `check_path_metadata_consistency.py` | Warn when conf.d/ hierarchical path disagrees with tenant `_metadata`. |
+| `check_pint.py` | Prometheus rule linting (pint engine + thin Vibe wrapper). |
 | `check_planning_status_sync.py` | CI-time PR-trailer ↔ frontmatter sync gate. |
 | `check_playbook_freshness.py` | Playbook 知識退火檢查工具。 |
 | `check_playwright_rtl_drift.py` | Detect React Testing Library API names in Playwright specs (S#96, mechanical safety net for testing-playbook §LL §10). |

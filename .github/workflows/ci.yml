@@ -181,6 +181,30 @@ jobs:
             echo "::endgroup::"
           done
 
+      # pint (ADR-025 deferred item): static analysis of the rule-pack SOURCE.
+      # The high-ROI check is alerts/template — it mechanically catches the
+      # "aggregation strips a label the alert template uses → silent-forever alert"
+      # class (burned this repo 5×, until now guarded only by hand-comments).
+      # Config + the idiom-noisy-check disables + sentinel exemptions live in
+      # .pint.hcl; baseline is 0 blocking findings (docs/internal/pint-lint-baseline.md).
+      - name: Set up pint (best-effort; check_pint.py falls back to Docker)
+        continue-on-error: true  # truly best-effort: a failed install must NOT
+                                 # fail the job — check_pint.py uses the Docker fallback.
+        run: |
+          PINT=0.86.0
+          if curl -fsSL -o /tmp/pint.tar.gz \
+              "https://github.com/cloudflare/pint/releases/download/v${PINT}/pint-${PINT}-linux-amd64.tar.gz"; then
+            tar -xzf /tmp/pint.tar.gz -C /tmp
+            # the tarball ships the binary as `pint-linux-amd64`, not `pint`.
+            sudo install -m0755 /tmp/pint-linux-amd64 /usr/local/bin/pint
+            pint --version
+          else
+            echo "::warning::pint binary install failed; check_pint.py uses the Docker fallback"
+          fi
+
+      - name: Lint Prometheus rules (pint — alerts/template label-flow gate)
+        run: python3 scripts/tools/lint/check_pint.py --ci
+
       # ADR-024 PR3-pre Commit 4: the configmap↔source copy is now a HARD gate.
       # The DEPLOYED configmaps (k8s/03-monitoring/configmap-rules-*.yaml, the
       # production source of truth via ADR-005 projected volume) must never drift
