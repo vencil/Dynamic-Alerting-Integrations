@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -82,10 +83,29 @@ def main() -> int:
     print(f"pint via: {cmd[0]} (-c .pint.hcl --offline lint rule-packs/)", file=sys.stderr)
     try:
         # generous: pint lint is seconds, but a first-run docker image pull is slow.
-        result = subprocess.run(cmd, cwd=REPO_ROOT, timeout=300)
+        result = subprocess.run(cmd, cwd=REPO_ROOT, timeout=300,
+                                capture_output=True, text=True)
     except subprocess.TimeoutExpired:
         print("ERROR: pint timed out after 300s", file=sys.stderr)
         return EXIT_VIOLATION if args.ci else EXIT_OK
+
+    # Stream pint's own output through (captured only so we can inspect entries=).
+    if result.stdout:
+        sys.stdout.write(result.stdout)
+    if result.stderr:
+        sys.stderr.write(result.stderr)
+
+    # Robustness guard: pint logs `entries=N` for how many rules it checked. If the
+    # parser.include matched nothing (a file rename / regex typo / path drift), pint
+    # exits 0 with entries=0 — which would silently DISABLE the whole gate behind a
+    # green check. Fail loud in --ci so drift can never hollow out the gate.
+    m = re.search(r"entries=(\d+)", (result.stderr or "") + (result.stdout or ""))
+    if args.ci and m is not None and int(m.group(1)) == 0:
+        print("FAIL: pint checked 0 rule entries — .pint.hcl parser.include matched "
+              "no files (gate silently disabled?). Failing loud instead of green.",
+              file=sys.stderr)
+        return EXIT_VIOLATION
+
     if result.returncode != 0 and args.ci:
         print("FAIL: pint reported blocking rule findings — see "
               "docs/internal/pint-lint-baseline.md for the policy + exemptions",

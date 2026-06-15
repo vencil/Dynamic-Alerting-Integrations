@@ -42,6 +42,12 @@ rule {
 # (lint_custom_rules.py) MANDATES a `tenant` label on every rule — so here the
 # "template uses a label the query won't have" is BY DESIGN, not a bug. A genuine
 # new rule that strips a label it actually needs is NOT name-matched → still caught.
+#
+# NB: pint AUTO-ANCHORS every `match.name` regexp (it parses `X` as `^X$`, per
+# https://cloudflare.github.io/pint/configuration.html), so `.+ExporterAbsent`
+# already means "the name ENDS with ExporterAbsent" — a name merely CONTAINING the
+# substring (e.g. `FooExporterAbsentButBuggy`) is NOT exempted (verified: it's
+# caught). No explicit `^...$` needed.
 rule {
   match {
     name = "(.+ExporterAbsent|VersionAwareThresholdInert)"
