@@ -24,6 +24,12 @@ sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
+# Repo root = FOUR parents up (scripts/tools/dx/<file> → dx → tools → scripts →
+# repo). The original default used three (→ the non-existent scripts/rule-packs/),
+# which made both `make generate-rule-pack-readme` and the validate_all `--check`
+# drift gate error out (FileNotFoundError → exit 2): a silently dead gate.
+DEFAULT_RULE_PACKS_DIR = Path(__file__).resolve().parents[3] / "rule-packs"
+
 
 def extract_rule_counts(yaml_file: Path) -> Tuple[int, int]:
     """
@@ -101,9 +107,15 @@ def generate_table_rows(rule_packs_dir: Path) -> Tuple[List[Dict], int, int]:
     return rows, total_records, total_alerts
 
 
-def generate_readme_content(rows: List[Dict], total_records: int, total_alerts: int) -> str:
+def generate_readme_content(rows: List[Dict], total_records: int, total_alerts: int,
+                            pack_count: int) -> str:
     """
     Generate the full README.md content with header, table, and footer.
+
+    `pack_count` is the prose pack-count (number of preloaded platform rule
+    packs; see the derivation in main()). It is derived by the caller rather
+    than hardcoded so the header / "Dynamic Runbook Injection" prose can't go
+    stale as packs are added.
     """
     # Build table header
     lines = []
@@ -117,10 +129,16 @@ def generate_readme_content(rows: List[Dict], total_records: int, total_alerts: 
     lines.append("# Rule Packs — 模組化 Prometheus 規則")
     lines.append("")
     lines.append("> 每個 Rule Pack 包含完整的三件套：Normalization Recording Rules + Threshold Normalization + Alert Rules。")
-    lines.append("> **所有 15 個 Rule Pack 已透過 Projected Volume 架構預載入 Prometheus 中** (分散於 `configmap-rules-*.yaml`)。")
+    lines.append(f"> **所有 {pack_count} 個 Rule Pack 已透過 Projected Volume 架構預載入 Prometheus 中** (分散於 `configmap-rules-*.yaml`)。")
     lines.append("> 未部署 exporter 的 pack 不會產生 metrics，因此 alert 不會誤觸發 (near-zero cost)。")
     lines.append(">")
-    lines.append("> **其他文件：** [README](../README.md) (概覽) · [Migration Guide](../docs/migration-guide.md) (遷移指南) · [Architecture & Design](../docs/architecture-and-design.md) (技術深度)")
+    # MkDocs-relative paths: rule_packs_bridge.py copies this file to
+    # docs/rule-packs/README.md at build time, so `../X.md` resolves to
+    # docs/X.md. These are intentionally allowlisted in .doclinkignore
+    # (check_doc_links.py traverses from the repo-root rule-packs/ dir where
+    # they look broken). Do NOT "fix" to ../README.md / ../docs/X.md — that
+    # breaks `mkdocs build --strict` (→ docs/docs/X.md, which does not exist).
+    lines.append("> **其他文件：** [Home](../index.md) (概覽) · [Migration Guide](../migration-guide.md) (遷移指南) · [Architecture & Design](../architecture-and-design.md) (技術深度)")
     lines.append("")
     lines.append("## 支援的整合 (Supported Integrations)")
     lines.append("")
@@ -189,7 +207,7 @@ def generate_readme_content(rows: List[Dict], total_records: int, total_alerts: 
     lines.append("  - name: <db>-threshold-normalization")
     lines.append("    rules:")
     lines.append("      - record: tenant:alert_threshold:<metric>")
-    lines.append("        expr: max by(tenant) (user_threshold{metric=\"<metric>\", severity=\"warning\"})")
+    lines.append("        expr: max by(tenant) (user_threshold{component=\"<component>\", metric=\"<metric>\", severity=\"warning\"})")
     lines.append("")
     lines.append("  # 3. Alert Rules (使用 group_left + unless maintenance + runbook injection)")
     lines.append("  - name: <db>-alerts")
@@ -211,7 +229,7 @@ def generate_readme_content(rows: List[Dict], total_records: int, total_alerts: 
     lines.append("")
     lines.append("Alert Rules 透過 `* on(tenant) group_left(runbook_url, owner, tier) tenant_metadata_info` 將租戶 metadata 注入 alert labels，再由 annotations 引用。`tenant_metadata_info` 由 threshold-exporter 根據租戶 `_metadata` 配置自動輸出（值永遠為 1），保證 `group_left` join 不會漏掉任何 tenant。")
     lines.append("")
-    lines.append("若租戶未設定 `_metadata`，`tenant_metadata_info` 不存在，`group_left` 回傳空向量。因此已內建的 11 個 Rule Pack 均已加入此 join，但 **自訂 Rule Pack 建議同步採用此 pattern** 以確保 runbook URL 與 owner 資訊可自動傳遞至通知。")
+    lines.append(f"若租戶未設定 `_metadata`，`tenant_metadata_info` 不存在，`group_left` 回傳空向量。因此已內建的 {pack_count} 個 Rule Pack 均已加入此 join，但 **自訂 Rule Pack 建議同步採用此 pattern** 以確保 runbook URL 與 owner 資訊可自動傳遞至通知。")
     lines.append("")
     lines.append("## Exporter 文件連結")
     lines.append("")
@@ -227,6 +245,30 @@ def generate_readme_content(rows: List[Dict], total_records: int, total_alerts: 
     lines.append("- **kube-state-metrics**: https://github.com/kubernetes/kube-state-metrics")
 
     return "\n".join(lines) + "\n"
+
+
+def count_preloaded_packs(rule_packs_dir: Path) -> int:
+    """Prose pack-count: the platform's preloaded rule packs.
+
+    = the configmap-rules-*.yaml set minus the tenant-authored custom-alerts
+    pack (which the coverage TABLE also excludes, per #741 S3b). Counting the
+    configmaps — not rule-pack-*.yaml — matches the AUTHORITATIVE set in
+    validate_docs_versions.count_rule_packs (rule-packs ∪ k8s configmaps −
+    custom-alerts): the configmaps add the configmap-only `platform`
+    self-monitoring pack that has no rule-pack-*.yaml. This is the "15" used
+    canonically across the docs (and enforced for the root READMEs by
+    validate_docs_versions). Falls back to the rule-pack file count if the k8s
+    tree isn't reachable (e.g. a --rule-packs-dir override pointed at a
+    detached copy).
+    """
+    exclude = {"custom-alerts"}
+    configmap_dir = rule_packs_dir.parent / "k8s" / "03-monitoring"
+    if configmap_dir.is_dir():
+        return sum(
+            1 for f in configmap_dir.glob("configmap-rules-*.yaml")
+            if f.stem.replace("configmap-rules-", "") not in exclude
+        )
+    return len(list(rule_packs_dir.glob("rule-pack-*.yaml")))
 
 
 def main():
@@ -247,7 +289,7 @@ def main():
     parser.add_argument(
         "--rule-packs-dir",
         type=Path,
-        default=Path(__file__).parent.parent.parent / "rule-packs",
+        default=DEFAULT_RULE_PACKS_DIR,
         help="Path to rule-packs directory",
     )
 
@@ -259,7 +301,8 @@ def main():
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
 
-    generated_content = generate_readme_content(rows, total_records, total_alerts)
+    pack_count = count_preloaded_packs(args.rule_packs_dir)
+    generated_content = generate_readme_content(rows, total_records, total_alerts, pack_count)
     readme_path = args.rule_packs_dir / "README.md"
 
     if args.check:
@@ -277,7 +320,7 @@ def main():
                 file=sys.stderr,
             )
             print(
-                "Run: python3 scripts/tools/generate_rule_pack_readme.py --update",
+                "Run: python3 scripts/tools/dx/generate_rule_pack_readme.py --update",
                 file=sys.stderr,
             )
             sys.exit(EXIT_VIOLATION)
@@ -286,9 +329,11 @@ def main():
             sys.exit(EXIT_OK)
 
     elif args.update:
-        # Write to file
+        # Write to file. newline="\n" forces LF on all platforms so a regen on
+        # the Windows host matches the `*.md eol=lf` .gitattributes + Linux-CI
+        # generator output (otherwise a CRLF working tree shows phantom drift).
         try:
-            with open(readme_path, "w", encoding="utf-8") as f:
+            with open(readme_path, "w", encoding="utf-8", newline="\n") as f:
                 f.write(generated_content)
             os.chmod(readme_path, 0o644)
             print(f"Updated {readme_path}", file=sys.stderr)

@@ -614,8 +614,8 @@ generate-nav: ## 從文件 front matter 產生 MkDocs nav 結構 (使用: make g
 	@python3 ./scripts/tools/dx/generate_nav.py
 
 .PHONY: generate-rule-pack-readme
-generate-rule-pack-readme: ## 從 Rule Pack YAML 產生 rule-packs/README.md
-	@python3 ./scripts/tools/dx/generate_rule_pack_readme.py
+generate-rule-pack-readme: ## 從 Rule Pack YAML 產生（寫入）rule-packs/README.md（dry-run 用 --check）
+	@python3 ./scripts/tools/dx/generate_rule_pack_readme.py --update
 
 .PHONY: platform-data
 platform-data: ## 產生 docs/assets/platform-data.json 與 Tenant Metadata
@@ -700,7 +700,7 @@ lint-extract: ## 拆新 lint script（PR #154/#162/#166/#169/#170 共通 boilerp
 
 lint-docs: ## 一站式文件 lint（versions + drift + tool consistency，支援 ARGS="--parallel"）
 	@python3 ./scripts/tools/validate_all.py \
-		--only versions,tool_map,doc_map,rule_pack_stats,changelog,glossary,includes,platform_data,tool_consistency,alerts \
+		--only versions,tool_map,doc_map,rule_pack_stats,rule_packs,changelog,glossary,includes,platform_data,tool_consistency,alerts \
 		$(ARGS)
 
 .PHONY: lint-egress

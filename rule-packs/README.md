@@ -22,8 +22,8 @@ lang: zh
 | Elasticsearch | rule-pack-elasticsearch.yaml | 11 | 7 | 18 |
 | JVM | rule-pack-jvm.yaml | 9 | 7 | 16 |
 | Kafka | rule-pack-kafka.yaml | 13 | 9 | 22 |
-| Kubernetes | rule-pack-kubernetes.yaml | 7 | 4 | 11 |
-| Mariadb | rule-pack-mariadb.yaml | 11 | 8 | 19 |
+| Kubernetes | rule-pack-kubernetes.yaml | 15 | 9 | 24 |
+| Mariadb | rule-pack-mariadb.yaml | 11 | 10 | 21 |
 | Mongodb | rule-pack-mongodb.yaml | 10 | 6 | 16 |
 | Nginx | rule-pack-nginx.yaml | 9 | 6 | 15 |
 | Operational | rule-pack-operational.yaml | 0 | 4 | 4 |
@@ -31,7 +31,7 @@ lang: zh
 | Postgresql | rule-pack-postgresql.yaml | 11 | 9 | 20 |
 | Rabbitmq | rule-pack-rabbitmq.yaml | 12 | 8 | 20 |
 | Redis | rule-pack-redis.yaml | 11 | 6 | 17 |
-| **TOTAL** | | **139** | **95** | **234** |
+| **TOTAL** | | **147** | **102** | **249** |
 
 ## 架構說明
 
@@ -117,4 +117,4 @@ Alert Rules 透過 `* on(tenant) group_left(runbook_url, owner, tier) tenant_met
 - **clickhouse_exporter**: https://github.com/ClickHouse/clickhouse_exporter (或 ClickHouse 內建 /metrics)
 - **kafka_exporter**: https://github.com/danielqsj/kafka-exporter
 - **rabbitmq_exporter**: https://github.com/kbudde/rabbitmq_exporter
-- **kube-state-metrics**: https://github.com/kubernetes/kube-state-metr
+- **kube-state-metrics**: https://github.com/kubernetes/kube-state-metrics
