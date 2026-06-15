@@ -85,11 +85,6 @@
           "title": "Routing Defaults (v1.4.0+)",
           "description": "Default routing config for tenants without explicit _routing. Supports {{tenant}} placeholder for per-tenant dynamic values. Typically set in _defaults.yaml, not per-tenant."
         },
-        "_operator": {
-          "$ref": "#/definitions/operatorConfig",
-          "title": "Operator CRD Settings (v2.6.0)",
-          "description": "Per-tenant Operator mode overrides. Used by operator-generate and migrate-to-operator tools."
-        },
         "_custom_alerts": {
           "$ref": "#/definitions/customAlertList",
           "title": "Custom Alerts (v2.9.0 ADR-024 Capability B)",
@@ -849,36 +844,6 @@
         "repeat_interval": {
           "type": "string",
           "title": "Default Repeat Interval"
-        }
-      },
-      "additionalProperties": false
-    },
-    "operatorConfig": {
-      "type": "object",
-      "title": "Operator CRD Settings (v2.6.0)",
-      "description": "Per-tenant Operator mode overrides. Used by operator-generate and migrate-to-operator tools.",
-      "properties": {
-        "receiver_template": {
-          "type": "string",
-          "enum": ["slack", "pagerduty", "email", "teams", "opsgenie", "webhook"],
-          "title": "Receiver Template Type",
-          "description": "Receiver template type for AlertmanagerConfig generation"
-        },
-        "secret_name": {
-          "type": "string",
-          "title": "K8s Secret Name",
-          "description": "K8s Secret name for receiver credentials (default: da-{tenant}-{type})"
-        },
-        "secret_key": {
-          "type": "string",
-          "title": "Secret Key",
-          "description": "Key within K8s Secret (default: type-specific, e.g. webhook-url for slack)"
-        },
-        "service_monitor": {
-          "type": "boolean",
-          "title": "ServiceMonitor Generation",
-          "description": "Whether to generate ServiceMonitor for this tenant",
-          "default": true
         }
       },
       "additionalProperties": false

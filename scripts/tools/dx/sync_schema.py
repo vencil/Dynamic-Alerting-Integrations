@@ -32,11 +32,31 @@ def extract_go_keys(go_source_path):
     """Extract valid tenant config keys from Go source files."""
     go_dir = Path(go_source_path)
 
-    # Read config.go to extract validReservedKeys and validReservedPrefixes
-    config_file = go_dir / "config.go"
+    # validReservedKeys / validReservedPrefixes live in pkg/config/types.go.
+    # This previously read `config.go` (where the map does NOT live), so both
+    # regexes matched nothing → extract returned empty → check_drift would then
+    # flag every real schema key as drift (false-positive, exit 1) if --check
+    # ever ran; but its only caller, the manual-stage `schema-check` hook, never
+    # ran in CI — so the gate was dead both ways (#841 review). Read the right
+    # file, with a content-based fallback so a future move can't silently
+    # re-break it the same way.
+    config_file = go_dir / "pkg" / "config" / "types.go"
     if not config_file.exists():
-        print(f"ERROR: {config_file} not found", file=sys.stderr)
-        sys.exit(EXIT_CALLER_ERROR)
+        # Production-source only: a `_test.go` or a mock/testdata/vendor copy that
+        # (re)declares `var validReservedKeys` must never become the authoritative
+        # source — otherwise the schema would get synced to a dummy test key.
+        _excluded_dirs = {"vendor", "testdata", "mocks"}
+        config_file = next(
+            (p for p in sorted(go_dir.rglob("*.go"))
+             if not p.name.endswith("_test.go")
+             and not _excluded_dirs & set(p.parts)
+             and "var validReservedKeys" in p.read_text(encoding="utf-8", errors="ignore")),
+            None,
+        )
+        if config_file is None:
+            print(f"ERROR: could not find 'var validReservedKeys' under {go_dir}",
+                  file=sys.stderr)
+            sys.exit(EXIT_CALLER_ERROR)
 
     with open(config_file, "r", encoding="utf-8") as f:
         content = f.read()
@@ -81,34 +101,25 @@ def extract_schema_keys(schema_path):
 
 
 def check_drift(go_keys, go_prefixes, schema_keys):
-    """Check for drift between Go and Schema.
+    """Check for drift between the Go reserved keys and the JSON schema.
 
-    Reserved prefixes like _state_ and _routing are special: they match keys like
-    _state_maintenance, _routing_overrides, etc. The schema lists specific keys like
-    _state_maintenance and _routing, but the Go source defines the prefix patterns.
-    We only flag real drift (schema missing a reserved key that Go requires).
+    A schema property is legitimate if it is an explicit Go reserved key OR it
+    matches a Go reserved prefix (e.g. _state_maintenance ⊂ _state_, _routing*
+    ⊂ _routing). The prefix allowance is derived from the actual ``go_prefixes``
+    — not a hardcoded example list — so a newly added _state_*/_routing* schema
+    key can't false-positive as drift.
+
+    Returns ``(missing_in_schema, extra_in_schema)``:
+      - missing_in_schema: explicit Go keys absent from the schema.
+      - extra_in_schema: schema properties that are neither an explicit Go key
+        nor covered by a Go prefix (e.g. the removed schema-only ``_operator``).
     """
-    # All explicit reserved keys in Go
-    explicit_keys = go_keys
-
-    # Map of prefixes to their documented examples in schema
-    prefix_examples = {
-        "_state_": ["_state_maintenance"],  # Only one explicitly documented
-        "_routing": ["_routing", "_routing_enforced", "_routing_defaults"]
+    missing_in_schema = go_keys - schema_keys
+    extra_in_schema = {
+        key for key in schema_keys
+        if key not in go_keys and not any(key.startswith(p) for p in go_prefixes)
     }
-
-    # Flatten all documented keys
-    documented_in_schema = schema_keys
-
-    # Check: all explicit Go reserved keys must be in schema
-    missing_explicit = explicit_keys - documented_in_schema
-
-    # Check: all documented prefix examples in schema must have their prefix in Go
-    extra_in_schema = documented_in_schema - explicit_keys - set()
-    for example in ["_state_maintenance", "_routing", "_routing_enforced", "_routing_defaults"]:
-        extra_in_schema.discard(example)
-
-    return missing_explicit, extra_in_schema
+    return missing_in_schema, extra_in_schema
 
 
 def print_drift_report(missing_in_schema, extra_in_schema):
