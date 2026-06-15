@@ -42,9 +42,15 @@ def extract_go_keys(go_source_path):
     # re-break it the same way.
     config_file = go_dir / "pkg" / "config" / "types.go"
     if not config_file.exists():
+        # Production-source only: a `_test.go` or a mock/testdata/vendor copy that
+        # (re)declares `var validReservedKeys` must never become the authoritative
+        # source — otherwise the schema would get synced to a dummy test key.
+        _excluded_dirs = {"vendor", "testdata", "mocks"}
         config_file = next(
             (p for p in sorted(go_dir.rglob("*.go"))
-             if "var validReservedKeys" in p.read_text(encoding="utf-8", errors="ignore")),
+             if not p.name.endswith("_test.go")
+             and not _excluded_dirs & set(p.parts)
+             and "var validReservedKeys" in p.read_text(encoding="utf-8", errors="ignore")),
             None,
         )
         if config_file is None:
