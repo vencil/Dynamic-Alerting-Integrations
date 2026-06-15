@@ -123,7 +123,10 @@ def _docker_available():
     try:
         return subprocess.run(
             ["docker", "version"], capture_output=True, timeout=30).returncode == 0
-    except Exception:
+    except (OSError, subprocess.SubprocessError):
+        # Expected "docker unavailable" failure modes only (binary gone after the
+        # which() check, daemon down, timeout). Anything else surfaces rather than
+        # silently skipping the guard — a silently-rotted gate is the #824 trap.
         return False
 
 
