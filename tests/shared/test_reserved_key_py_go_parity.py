@@ -33,13 +33,25 @@ def _types_go() -> str:
         return f.read()
 
 
+def _strip_go_line_comments(text: str) -> str:
+    """Drop Go `//` line comments. A key deprecated by commenting it out
+    (`// "_old": true,`) is GONE for the compiler — the parser must agree, or
+    the guard cries false drift (Gemini review). Stripping on the FULL source
+    (before the brace-match) also stops a `}` inside a comment from truncating
+    the captured block. Safe here: reserved keys/prefixes are `_`-identifiers,
+    never contain `//`."""
+    return re.sub(r"//.*", "", text)
+
+
 def _go_reserved_keys(content: str) -> set[str]:
+    content = _strip_go_line_comments(content)
     m = re.search(r"var validReservedKeys = map\[string\]bool\{(.+?)\}", content, re.DOTALL)
     assert m, "could not locate validReservedKeys map in types.go"
     return set(re.findall(r'"([^"]+)"\s*:\s*true', m.group(1)))
 
 
 def _go_reserved_prefixes(content: str) -> set[str]:
+    content = _strip_go_line_comments(content)
     m = re.search(r"var validReservedPrefixes = \[\]string\{(.+?)\}", content, re.DOTALL)
     assert m, "could not locate validReservedPrefixes slice in types.go"
     return set(re.findall(r'"([^"]+)"', m.group(1)))
@@ -63,3 +75,26 @@ class TestPyGoReservedKeyParity:
             "Python↔Go reserved-PREFIX drift. "
             f"py-only={sorted(py_prefixes - go_prefixes)}, "
             f"go-only={sorted(go_prefixes - py_prefixes)}")
+
+
+class TestGoParserRobustness:
+    """The Go parser must mirror the compiler's view, not the raw bytes."""
+
+    _SYNTHETIC = (
+        'var validReservedKeys = map[string]bool{\n'
+        '    "_silent_mode": true,\n'
+        '    // "_deprecated_old_key": true,  <- commented out = gone for Go\n'
+        '}\n'
+        'var validReservedPrefixes = []string{\n'
+        '    "_state_",\n'
+        '    // "_old_prefix",\n'
+        '}\n'
+    )
+
+    def test_commented_out_key_is_ignored(self):
+        # Without comment-stripping the regex would extract _deprecated_old_key
+        # and the parity guard would cry false drift on a deprecate-by-comment.
+        assert _go_reserved_keys(self._SYNTHETIC) == {"_silent_mode"}
+
+    def test_commented_out_prefix_is_ignored(self):
+        assert _go_reserved_prefixes(self._SYNTHETIC) == {"_state_"}
