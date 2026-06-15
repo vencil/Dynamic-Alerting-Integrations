@@ -17,10 +17,12 @@ that has burned this repo repeatedly (today guarded only by hand-written comment
 The idiom-noisy default checks are disabled in ``.pint.hcl``; see that file and
 docs/internal/pint-lint-baseline.md for the policy + the sentinel exemptions.
 
-Scope: ``rule-packs/rule-pack-*.yaml`` (the canonical source; the k8s ConfigMap +
-operator-manifest copies are ConfigMap-wrapped — pint can't parse them — and are
-kept in sync by ``check_rulepack_sync.py``). Runs ``--offline`` (no Prometheus
-needed). Baseline = 0 blocking findings.
+Scope: ``rule-packs/rule-pack-*.yaml`` (component rule-pack sources) + the platform
+self-monitoring EXTRACTS ``tests/rulepacks/*.rules.yaml`` — which put the ADR-025
+guardian (``Watchdog`` + ``AlertmanagerWebhookNotificationsFailing``) under the gate
+(the deployed ``configmap-rules-platform.yaml`` is ConfigMap-wrapped → unparseable;
+the extracts are its only pint-reachable form). Copies are sync-guarded by
+``check_rulepack_sync.py``. Runs ``--offline`` (no Prometheus). Baseline = 0 blocking.
 
 Usage:
     python3 scripts/tools/lint/check_pint.py [--ci]
@@ -49,7 +51,9 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 # used by the binary curl in CI DOES (v0.86.0).
 PINT_VERSION = "0.86.0"
 PINT_IMAGE = f"ghcr.io/cloudflare/pint:{PINT_VERSION}"
-_PINT_ARGS = ["--offline", "-c", ".pint.hcl", "lint", "rule-packs/"]
+# Scan the component rule-pack sources AND the platform extracts (tests/rulepacks/);
+# the parser.include in .pint.hcl narrows each dir to actual rule documents.
+_PINT_ARGS = ["--offline", "-c", ".pint.hcl", "lint", "rule-packs/", "tests/rulepacks/"]
 
 
 def _build_cmd() -> list[str] | None:

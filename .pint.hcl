@@ -12,10 +12,18 @@
 # perturbs the rule-pack ↔ configmap ↔ operator-manifest semantic sync.
 
 parser {
-  # Only the canonical rule-pack SOURCE files are Prometheus rule documents.
+  # The Prometheus rule documents pint can parse:
+  #   - rule-packs/rule-pack-*.yaml   : canonical component rule-pack SOURCE
+  #   - tests/rulepacks/*.rules.yaml  : the bare-rules EXTRACTS of the platform
+  #     self-monitoring pack (configmap-rules-platform.yaml is ConfigMap-wrapped →
+  #     unparseable; its extracts are the only pint-reachable form). This puts the
+  #     ADR-025 guardian (`Watchdog` + `AlertmanagerWebhookNotificationsFailing`)
+  #     and the SSE-reconnect sentinel UNDER the gate — the "guardian must not run
+  #     unguarded" point. The `*_test.yaml` promtool specs in that dir are NOT rule
+  #     files and are skipped (not matched here).
   # The k8s ConfigMap copies + operator-manifests/ are wrappers pint can't parse;
   # recipes/ + conf.d are not rule files. Copy-sync is guarded by check_rulepack_sync.py.
-  include = ["rule-packs/rule-pack-.*\\.yaml"]
+  include = ["rule-packs/rule-pack-.*\\.yaml", "tests/rulepacks/.*\\.rules\\.yaml"]
 }
 
 ci {
