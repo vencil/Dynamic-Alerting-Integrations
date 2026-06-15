@@ -32,11 +32,23 @@ def extract_go_keys(go_source_path):
     """Extract valid tenant config keys from Go source files."""
     go_dir = Path(go_source_path)
 
-    # Read config.go to extract validReservedKeys and validReservedPrefixes
-    config_file = go_dir / "config.go"
+    # validReservedKeys / validReservedPrefixes live in pkg/config/types.go.
+    # This previously read `config.go` (where the map does NOT live), so both
+    # regexes matched nothing → extract returned empty → the drift check ran
+    # vacuously regardless of real state (surfaced in the #841 review). Read the
+    # right file, with a content-based fallback so a future move can't silently
+    # re-break it the same way.
+    config_file = go_dir / "pkg" / "config" / "types.go"
     if not config_file.exists():
-        print(f"ERROR: {config_file} not found", file=sys.stderr)
-        sys.exit(EXIT_CALLER_ERROR)
+        config_file = next(
+            (p for p in sorted(go_dir.rglob("*.go"))
+             if "var validReservedKeys" in p.read_text(encoding="utf-8", errors="ignore")),
+            None,
+        )
+        if config_file is None:
+            print(f"ERROR: could not find 'var validReservedKeys' under {go_dir}",
+                  file=sys.stderr)
+            sys.exit(EXIT_CALLER_ERROR)
 
     with open(config_file, "r", encoding="utf-8") as f:
         content = f.read()

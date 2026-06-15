@@ -263,11 +263,11 @@ yamllint -d "{extends: default, rules: {document-start: disable}}" \
 To update the schema:
 
 1. **Identify the change**: New reserved key, new receiver type, changed validation rules, etc.
-2. **Update Go code first**: Modify `components/threshold-exporter/app/config.go` (ValidateTenantKeys, struct definitions)
-3. **Sync Python**: Update `scripts/tools/_lib_python.py` (validReservedKeys, RECEIVER_TYPES)
+2. **Update Go code first**: Modify `components/threshold-exporter/app/pkg/config/types.go` (`validReservedKeys` / `validReservedPrefixes` / struct definitions) and `pkg/config/resolve.go` (`ValidateTenantKeys`)
+3. **Sync Python**: Update `scripts/tools/_lib_constants.py` (`VALID_RESERVED_KEYS`, `RECEIVER_TYPES`; re-exported via `_lib_python.py`)
 4. **Update schema**: Modify `docs/schemas/tenant-config.schema.json` to match Go/Python definitions
 5. **Update docs**: Reflect changes in relevant documentation (getting-started, architecture-and-design, CHANGELOG)
-6. **Test**: Validate sample configs against new schema in VS Code or with `validate_config.py`
+6. **Test**: Validate sample configs against new schema in VS Code or with `validate_config.py`. Two drift gates run in CI: `tests/shared/test_reserved_key_py_go_parity.py` (Python↔Go reserved keys) and `tests/dx/test_sync_schema.py` (Go↔JSON-schema); `sync_schema.py --check` is the same Go↔schema check on demand.
 
 ---
 

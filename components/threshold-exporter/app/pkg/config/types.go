@@ -208,7 +208,10 @@ type ResolvedSeverityDedup struct {
 
 // validReservedKeys lists tenant config keys with special meaning.
 // Any key not matching these patterns AND not in defaults is suspicious.
-// Source of truth (Python): scripts/tools/_lib_python.py — keep in sync.
+// Source of truth (Python): scripts/tools/_lib_constants.py (VALID_RESERVED_KEYS
+// / VALID_RESERVED_PREFIXES; re-exported via _lib_python.py) — keep in sync.
+// Enforced by tests/shared/test_reserved_key_py_go_parity.py (Py↔Go) and
+// tests/dx/test_sync_schema.py (Go↔JSON-schema).
 var validReservedKeys = map[string]bool{
 	"_silent_mode":     true,
 	"_severity_dedup":  true,
