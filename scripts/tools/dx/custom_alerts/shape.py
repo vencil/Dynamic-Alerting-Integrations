@@ -359,6 +359,40 @@ def shape_signature(inst: dict) -> Tuple:
     )
 
 
+# forecast ratio-mode current-state band (RATIO MODE ONLY). recipes._forecast_records
+# gates a ratio-mode forecast's predicted value on `custom:fcbase < this` — a sanity
+# floor that suppresses transient-write-burst / cold-start false positives at high
+# headroom (a pure-slope alarm would otherwise page an 80%-empty disk). It lives HERE
+# (not in recipes.py) so the emitter AND the write/compile-time validator share ONE
+# source of truth; the Go preflight hardcodes the same value (custom_alert.go
+# `forecastCurrentBand`) and MUST stay in lockstep.
+_FORECAST_CURRENT_BAND = 0.5
+
+
+def validate_forecast_ratio_threshold(inst: dict, value: str) -> None:
+    """Reject a ratio-mode forecast whose threshold floor is not below the band.
+
+    A ratio-mode forecast (capacity_metric set) fires when predicted headroom < the
+    tenant threshold AND current headroom < _FORECAST_CURRENT_BAND. If the threshold
+    is >= the band, the band silently swallows the lead time between them (the alert
+    can only fire once current headroom is already below the band). Enforce the
+    constraint LOUDLY here (compile time) — mirrored by the Go preflight (write time).
+    Non-forecast / raw-mode recipes are unaffected; a non-numeric value falls through
+    (its validity is parse_threshold's / the Go preflight's concern)."""
+    if inst.get("recipe") != "forecast" or not inst.get("capacity_metric"):
+        return
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return
+    if v <= 0 or v >= _FORECAST_CURRENT_BAND:
+        raise RecipeError(
+            f"ratio-mode forecast threshold {v} must be in (0, {_FORECAST_CURRENT_BAND}) "
+            f"— the current-state band: a floor >= the band is silently neutered (the "
+            f"alert can only fire once current headroom drops below the band)"
+        )
+
+
 # severity is parsed from the threshold's "value:severity" tail (reuses the
 # existing thresholdScalar convention). Default severity when omitted: warning.
 def parse_threshold(threshold: str) -> Tuple[str, str]:

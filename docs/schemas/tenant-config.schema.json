@@ -976,7 +976,7 @@
         "capacity_metric": {
           "type": "string",
           "title": "Capacity Metric (forecast ratio mode)",
-          "description": "Forecast ratio mode: the denominator (e.g. total capacity). Present → predict the headroom ratio metric/capacity crossing a fractional floor in (0,1); absent → raw mode (predict the gauge crossing an absolute threshold).",
+          "description": "Forecast ratio mode: the denominator (e.g. total capacity). Present → predict the headroom ratio metric/capacity crossing a fractional floor in (0, 0.5) (the current-state band; >= 0.5 is rejected); absent → raw mode (predict the gauge crossing an absolute threshold).",
           "pattern": "^[a-zA-Z_][a-zA-Z0-9_]*$"
         },
         "op": {

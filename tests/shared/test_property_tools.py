@@ -1999,13 +1999,15 @@ class TestValidateReceiverDomainsProperties:
 class TestValidateTenantKeysProperties:
 
     @given(st.sets(
-        st.sampled_from(["_silent_mode", "_severity_dedup", "_namespaces",
-                          "_metadata", "_profile", "_routing_profile"]),
-        min_size=1, max_size=5,
+        st.sampled_from(sorted(gv.VALID_RESERVED_KEYS)),
+        min_size=1, max_size=len(gv.VALID_RESERVED_KEYS),
     ))
     @PILOT_SETTINGS
     def test_reserved_keys_no_warnings(self, keys):
-        # Property: any subset of VALID_RESERVED_KEYS produces no warnings.
+        # Property: any subset of the LIVE VALID_RESERVED_KEYS produces no
+        # warnings. Drawn from the real set (not a hardcoded mirror) so a newly
+        # added key — e.g. _custom_alerts (#741) — can't silently fall out of
+        # coverage; the stale hardcoded list is exactly what let that drift hide.
         warnings = gv.validate_tenant_keys("t", keys, set())
         assert warnings == []
 

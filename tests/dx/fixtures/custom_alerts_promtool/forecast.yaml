@@ -18,8 +18,10 @@ evaluation_interval: 1m
 
 tests:
   # ── shop-a (per-PVC, ADR-024 §Addendum): TWO PVCs prove group_by isolates each.
-  #    data-shop-0:   avail falling -1.2/min, cap flat 1000 → ratio 0.8 → ~0.18; the
+  #    data-shop-0:   avail falling -1.2/min, cap flat 1000 → current ratio ~0.18; the
   #      8h slope predicts < 0.15 within 4h → FIRES (lead time, for:30m satisfied).
+  #      W1: predict_linear overshoots negative → clamped to 0; current ratio 0.18 is
+  #      below the 0.5 sanity band → passes. Surfaced value is 0.00 (was gibberish -0.11).
   #    config-shop-0: large + flat (avail 9000 / cap 10000 = 0.9) → never fires.
   #    MASKING PROOF: WITHOUT group_by, sum(avail)/sum(cap) ≈ 0.89 (the 9000-byte
   #      config volume dwarfs the 800-byte data volume) → never crosses 0.15, so the
@@ -58,8 +60,8 @@ tests:
             exp_annotations:
               summary: "Custom alert [disk_will_fill] for shop-a"
               summary_zh: "shop-a 的自訂告警 [disk_will_fill] 觸發"
-              description: 'forecast on kubelet_volume_stats_available_bytes: value -0.11 crossed the configured threshold'
-              description_zh: 'kubelet_volume_stats_available_bytes 的 forecast: 值 -0.11 已越過設定閾值'
+              description: 'forecast on kubelet_volume_stats_available_bytes: value 0.00 crossed the configured threshold'
+              description_zh: 'kubelet_volume_stats_available_bytes 的 forecast: 值 0.00 已越過設定閾值'
               runbook_url: "http://rb/shop"
               owner: team-shop
               tier: gold
@@ -73,6 +75,30 @@ tests:
       - series: 'kubelet_volume_stats_capacity_bytes{tenant="stable-c", namespace="stab", persistentvolumeclaim="data-stab-0", instance="10.0.0.2:10250", job="kubelet"}'
         values: '1000+0x540'
       - series: 'user_threshold{component="custom", metric="kubelet_volume_stats_available_bytes", recipe_id="forecast__kubelet_volume_stats_available_bytes__lt__h4h__den_kubelet_volume_stats_capacity_bytes__for30m__gb_persistentvolumeclaim", tenant="stable-c", severity="warning", name="disk_will_fill", mode="page"}'
+        values: '0.15+0x540'
+    alert_rule_test:
+      - eval_time: 520m
+        alertname: Custom_forecast__kubelet_volume_stats_available_bytes__lt__h4h__den_kubelet_volume_stats_capacity_bytes__for30m__gb_persistentvolumeclaim
+        exp_alerts: []
+
+  # ── burst-d (W1 anti-flap / cold-start guard — NON-VACUOUS): a freshly-mounted
+  #    volume whose ~38 samples decline steeply from 0.90 but is STILL at 0.60 headroom
+  #    now. The steep slope makes predict_linear extrapolate well below 0 (clamped to
+  #    0 < 0.15) and — crucially — the firing condition holds long enough (≈33m) that
+  #    `for:30m` IS satisfied: WITHOUT the band this WOULD fire (so the test is NOT
+  #    vacuous — neither for:30m nor the `> 3` cold-start gate, which passes with 38
+  #    samples, saves us here). The current-state band blocks it solely because the
+  #    current ratio 0.60 ≥ 0.5: a disk that is still 60% free must not page on a
+  #    transient initial-write burst. This is the exact FP the band adds. MUST NOT fire. ──
+  - interval: 1m
+    input_series:
+      # _x483 → absent for the first 483m, then 38 samples falling 900→604 (ratio
+      # 0.90→0.60), an 8h-lookback slope ≈ -0.008/min → predict_linear << 0 (clamped).
+      - series: 'kubelet_volume_stats_available_bytes{tenant="burst-d", namespace="bd", persistentvolumeclaim="data-bd-0", instance="10.0.0.3:10250", job="kubelet"}'
+        values: '_x483 900-8x37'
+      - series: 'kubelet_volume_stats_capacity_bytes{tenant="burst-d", namespace="bd", persistentvolumeclaim="data-bd-0", instance="10.0.0.3:10250", job="kubelet"}'
+        values: '_x483 1000+0x37'
+      - series: 'user_threshold{component="custom", metric="kubelet_volume_stats_available_bytes", recipe_id="forecast__kubelet_volume_stats_available_bytes__lt__h4h__den_kubelet_volume_stats_capacity_bytes__for30m__gb_persistentvolumeclaim", tenant="burst-d", severity="warning", name="disk_will_fill", mode="page"}'
         values: '0.15+0x540'
     alert_rule_test:
       - eval_time: 520m

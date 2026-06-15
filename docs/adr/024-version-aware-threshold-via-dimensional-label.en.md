@@ -116,7 +116,7 @@ The compiler turns a recipe + parameters into a **vectorized `group_left` rule**
 
 ### 5. Two-layer validation: in-process Go preflight + CI authority (no promtool in the prod image)
 
-- **Layer 1 — tenant-api's Go preflight** (in-process, fast, a stateless per-tenant input gate): validates the tenant's recipe spec at `PUT` time and returns HTTP 400 + `Violations[]` on failure, so **bad input never reaches the repo**. It reuses the **same Go validator** the exporter uses (metric regex / reserved labels / recipe·op·severity·mode·for·horizon enums / ratio-floor ∈(0,1) / NaN·Inf).
+- **Layer 1 — tenant-api's Go preflight** (in-process, fast, a stateless per-tenant input gate): validates the tenant's recipe spec at `PUT` time and returns HTTP 400 + `Violations[]` on failure, so **bad input never reaches the repo**. It reuses the **same Go validator** the exporter uses (metric regex / reserved labels / recipe·op·severity·mode·for·horizon enums / ratio-floor ∈(0, 0.5) (< the current-state band) / NaN·Inf).
 - **Layer 2 — the CI Python compiler** (the global authority, stateful + promtool): cross-tree / hierarchical inheritance / vectorization / template promtool — the only gate with a global source of truth.
 
 *Trade-off*: **the prod image does not bundle promtool / Python**. Tenants never write PromQL and the recipe templates are platform-authored, so a valid spec → valid PromQL; promtool only catches "template regression" = a platform problem, kept in a **CI golden** rather than the request path (avoiding the image bloat and dev/prod blur of a Go service carrying a Python runtime + a hot-path subprocess). Checks that need the global tree (like "an own recipe duplicates an inherited policy") defer to CI — tenant-api's local disk is not the global SOT during the GitOps vacuum, so a hot-path tree-walk would false-pass against a stale tree.
@@ -132,9 +132,10 @@ The custom-alert `mode` (page / silent) label rides to the alert via `group_left
 
 `forecast` is the 6th recipe, answering real needs like "disk / memory will, on the current trend, exhaust within the next N hours". Raw `predict_linear` is a notorious false-positive factory (a momentary spike extrapolated linearly), so the platform seals off the FP sources and packages it as a parameterized recipe — exactly the core value of the recipe model over "tenants write their own PromQL".
 
-- **One recipe, two modes**: with `capacity_metric` → ratio mode (predict the ratio crossing a floor ∈(0,1)); without → raw mode (predict a gauge crossing an absolute threshold).
+- **One recipe, two modes**: with `capacity_metric` → ratio mode (predict the ratio crossing a floor ∈(0, 0.5); >=0.5 is rejected as it's neutered by the current-state band); without → raw mode (predict a gauge crossing an absolute threshold).
 - **lookback is not tenant-set**; the platform derives `lookback = max(2·horizon, 1h)` (integer seconds); the tenant only fills `horizon` (an enum, cardinality bounded). Reasoning: lookback is an expert knob whose exposure is the biggest foot-gun, and `horizon ≤ lookback` holds by construction, removing extra validation.
 - A **cold-start data-sufficiency gate** (`count_over_time(base[lookback]) > N`) blocks the wild swings of too-few samples right after deploy; **gauge-only** (a counter must be rate()'d first).
+- A **current-state band (ratio mode only)**: a ratio forecast additionally gates on `current headroom ratio < 0.5` (`_FORECAST_CURRENT_BAND`), turning a pure-slope alarm into "predicted low AND currently low" — killing the transient write-burst / cold-start steep-slope false positive on a high-headroom disk; `clamp_min(…, 0)` also floors the surfaced value (a negative headroom ratio is meaningless gibberish to on-call). The tenant threshold (compared in the core) is untouched. **Enforced**: a ratio-mode forecast threshold must be `< 0.5` — a floor `>= band` is silently neutered, so both the loader (`shape.validate_forecast_ratio_threshold`) and the Go preflight (`forecastCurrentBand`, cross-language lockstep) reject it fail-loud.
 
 A concrete example (tenant declaration, no PromQL):
 
