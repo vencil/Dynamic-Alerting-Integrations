@@ -99,7 +99,7 @@ jobs:
       - name: Validate rendered Alertmanager config (amtool)
         run: |
           mkdir -p /tmp/am-etc
-          AM_IMAGE=$(grep -oE 'prom/alertmanager:[^[:space:]"]+' k8s/03-monitoring/deployment-alertmanager.yaml | head -1)
+          AM_IMAGE=$(grep -oE "prom/alertmanager:[^[:space:]\"']+" k8s/03-monitoring/deployment-alertmanager.yaml | head -1)
           if [ -z "$AM_IMAGE" ]; then
             echo "ERROR: no prom/alertmanager image found in deployment-alertmanager.yaml" >&2
             exit 1

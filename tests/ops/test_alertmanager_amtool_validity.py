@@ -157,12 +157,21 @@ class TestAmtoolCheckConfig:
 
     def _ensure_image(self):
         """Make sure the pinned image is present; skip (don't fail) when an
-        offline dev box can't pull it — a missing image is not a config defect."""
-        if subprocess.run(["docker", "image", "inspect", _AM_IMAGE],
-                          capture_output=True, timeout=30).returncode == 0:
+        offline dev box can't pull it — a missing image is not a config defect.
+        Mirrors _docker_available's exception policy: a docker hiccup (timeout /
+        OSError) on inspect-or-pull is an environmental skip, not a red test."""
+        try:
+            inspect = subprocess.run(["docker", "image", "inspect", _AM_IMAGE],
+                                     capture_output=True, timeout=30)
+        except (OSError, subprocess.SubprocessError):
+            pytest.skip(f"cannot inspect {_AM_IMAGE} (docker unavailable/offline)")
+        if inspect.returncode == 0:
             return
-        pull = subprocess.run(["docker", "pull", _AM_IMAGE],
-                              capture_output=True, text=True, timeout=300)
+        try:
+            pull = subprocess.run(["docker", "pull", _AM_IMAGE],
+                                  capture_output=True, text=True, timeout=300)
+        except (OSError, subprocess.SubprocessError):
+            pytest.skip(f"cannot obtain {_AM_IMAGE} (docker unavailable/offline)")
         if pull.returncode != 0:
             pytest.skip(f"cannot obtain {_AM_IMAGE} (offline?): {pull.stderr.strip()}")
 
