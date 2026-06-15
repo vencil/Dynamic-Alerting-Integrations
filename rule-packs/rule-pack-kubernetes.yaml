@@ -536,6 +536,76 @@ groups:
           runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/scenarios/version-aware-thresholds.md#for-platform-operators-ksm-allowlist-remediation"
 
   # ─────────────────────────────────────────────────────────────────────
+  # Custom disk-recipe inert sentinel (#692 P0③ W2 / ADR-024 §Addendum).
+  # A tenant can declare a disk-fill custom alert (forecast/ratio over
+  # kubelet_volume_stats_*), but those series exist only when a CSI driver
+  # implements NodeGetVolumeStats AND a kubelet volume-stats scrape job
+  # attributes them to `tenant`. If either is missing the recipe compiles +
+  # passes promtool but SILENTLY NEVER FIRES (#731 class) — so make it loud: a
+  # tenant who DECLARED a disk recipe and HAS running pods, but whose volume-stats
+  # series are absent, fires CustomRecipeDiskInert.
+  #
+  # PER-TENANT (unlike the platform-scoped VersionAwareThresholdInert above): it
+  # routes to the DECLARING tenant so they can self-serve the dominant case (their
+  # workload mounts no PVC), and carries a platform_summary pair for the SRE who
+  # must check the rarer infra causes (scrape relabel / CSI). Tenant-facing text
+  # stays plain-language (no "metric_relabel" jargon); SRE triage lives in
+  # platform_summary — dual-perspective, dev-rule #10.
+  #
+  # EITHER-absent: the `unless` subtrahend keeps only tenants that have BOTH
+  # available AND capacity series, so a tenant missing EITHER fires (a forecast
+  # ratio needs both — one missing → empty vector → silent). The pods leg counts
+  # RUNNING pods (kube_pod_status_phase{phase="Running"}) — NOT bare kube_pod_info
+  # (which also keeps Completed/Failed series): a tenant whose workload isn't running
+  # has no disk data for a non-config reason, so we must NOT page it inert (mirrors
+  # node-health's Running filter). `tenant` derived from namespace via label_replace
+  # (KSM is NOT scraped through the namespace→tenant relabel). Maintenance opt-out
+  # mirrors every other pack alert. The declared-signal aggregates user_threshold with
+  # `max by(tenant)` (NOT count): HA-invariant (§4.3) — user_threshold doubles under
+  # replicaCount=2, max dedupes; only the per-tenant PRESENCE matters here (the value is
+  # unused, it just feeds the `and on(tenant)` set join). The pods/volume-stats legs use
+  # `count` — those come from KSM/kubelet (single-source, not doubled by exporter HA). NOTE: deliberately NOT an expected-vs-reporting
+  # per-PVC diff — a tenant with SOME volume-stats is "covered"; a single non-volume-
+  # stats PVC (NFS / Pending) must not flood SRE (adversarial-review reject).
+  # The declared-signal keys on the canonical disk-fill PRIMARY metric
+  # (kubelet_volume_stats_available_bytes) with an EXACT `=` matcher — the #731
+  # rulepack↔exporter contract (rulepack_contract_test.go) forbids `=~` on
+  # user_threshold's metric (the closed-label set must be statically checkable). A
+  # disk recipe keyed on a different primary metric would need an added OR leg.
+  # ─────────────────────────────────────────────────────────────────────
+  - name: kubernetes-custom-disk-recipe-sentinel
+    rules:
+      - alert: CustomRecipeDiskInert
+        expr: |
+          (
+            max by(tenant) (user_threshold{component="custom", metric="kubelet_volume_stats_available_bytes"})
+            and on(tenant)
+            count by(tenant) (
+              label_replace(kube_pod_status_phase{namespace=~"db-.+", phase="Running"} == 1, "tenant", "$1", "namespace", "(.+)")
+            )
+          )
+          unless on(tenant)
+          (
+            count by(tenant) (kubelet_volume_stats_available_bytes{tenant=~".+"})
+            and on(tenant)
+            count by(tenant) (kubelet_volume_stats_capacity_bytes{tenant=~".+"})
+          )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
+        for: 15m
+        labels:
+          severity: warning
+          tenant: "{{ $labels.tenant }}"
+        annotations:
+          summary: "Disk alert declared but no disk data is visible for {{ $labels.tenant }}"
+          summary_zh: "已設定磁碟告警，但偵測不到 {{ $labels.tenant }} 的磁碟資料"
+          platform_summary: "[SRE] {{ $labels.tenant }} disk recipe inert — volume-stats absent. Check in order: (1) tenant mounts no PVC (most common, tenant-side); (2) kubelet volume-stats scrape job + namespace→tenant relabel; (3) CSI NodeGetVolumeStats support (kind's default local-path does not)."
+          platform_summary_zh: "[SRE] 租戶 {{ $labels.tenant }} disk recipe inert — volume-stats 缺席。依序查:(1) 租戶根本沒掛 PVC(最常見、屬租戶端);(2) kubelet volume-stats scrape job 是否帶 namespace→tenant relabel;(3) CSI 是否實作 NodeGetVolumeStats(kind 預設 local-path 不實作)。"
+          description: "You declared a disk-fill custom alert, but the platform sees no disk (volume) metrics for your workload, so the alert can never fire. This usually means your service mounts no PersistentVolumeClaim — check your deployment. If you DO use a PVC, contact the platform team to investigate disk-metric collection."
+          description_zh: "您設定了磁碟填滿告警，但平台偵測不到您工作負載的磁碟(volume)指標，該告警永遠不會觸發。這通常表示您的服務沒有掛載 PersistentVolumeClaim — 請確認您的部署。若您確實使用 PVC，請聯繫平台團隊排查磁碟指標收集。"
+          runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/byo-prometheus-integration.md"
+
+  # ─────────────────────────────────────────────────────────────────────
   # Node health (#809): tenant-attributed node-NotReady alerting.
   # Infra signals (kube_node_status_condition) are node-scoped — they carry
   # no `tenant`. We attribute them via a stable node→tenant mapping built
