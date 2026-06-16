@@ -42,7 +42,7 @@ Add an **always-firing** alert (the industry calls this pattern a *Watchdog*), a
 # Rule: the expression is always true → always firing
 - alert: Watchdog
   expr: vector(1)
-  labels: { severity: none }
+  labels: { severity: none }   # not a real severity; the point is to keep it off human channels (see "silences & inhibition" below)
   annotations:
     summary: "Alerting-pipeline heartbeat — if this stops, Prometheus is dead"
 ```
@@ -54,7 +54,7 @@ route:
     # ⚠️ MUST be the FIRST entry in routes (highest priority); see note below
     - matchers: [ alertname="Watchdog" ]
       receiver: watchdog-heartbeat
-      group_by: [alertname]     # force standalone grouping; do NOT inherit the root group_by (skews heartbeat cadence)
+      group_by: [alertname]     # force standalone grouping; do NOT inherit the root group_by (this platform's root is [alertname,tenant], which would fan the beat per-tenant and skew its cadence)
       group_wait: 0s
       group_interval: 1m
       repeat_interval: 3m       # the external TTL must be longer; see margin note
@@ -114,13 +114,13 @@ If the platform ever does provide an HA reference, the chargeback telemetry (not
 
 ## Implementation status
 
-The engine-death blind spot is closed and design-readiness is 5/5 complete; the only thing not yet live is the **resident** end-to-end guarantee that "rule evaluation is correct" (see Deferred).
+The engine-death blind spot is closed and the **design-readiness half of every deferred item is done**; the only thing not yet live is the **resident** end-to-end guarantee that "rule evaluation is correct" (see Deferred).
 
 - **Watchdog + external dead-man's-switch (D1)** — implemented ([#838](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/838)).
 - **CI static rule linting (pint)** — adopted OSS `pint` with a hard-gated `alerts/template` check that catches "an aggregation drops the label the template uses → the alert is silent forever," a class this repo has been burned by repeatedly ([#843](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/843)).
 - **Backend compatibility — PromQL / value parity** — runs a representative subset of the rule-pack goldens (the **compiled output**) against a real VictoriaMetrics for function / label / value parity, turning "backend-agnostic" into a verifiable CI fact (`tests/rulepacks/test_vm_backend_parity.py` + CI job).
 - **Synthetic-probe interop** — an alert carrying `component="synthetic-probe"` is guaranteed routed to `synthetic-receiver` with `continue:false`, letting a customer verify end-to-end delivery with their own prober at zero risk (see [Synthetic-Probe Interop](../integration/synthetic-probe-interop.en.md)).
-- **runtime canary tenant** — **design-ready**: the full design, the decision of where the config lives (`conf.d/` GitOps + a reserved tenant, not hardcoded in `k8s/`), the two-layer bad-tenant-isolation account, plus a promtool example produced through the real compiler and run in CI (see [Runtime Canary Design](../design/runtime-canary.en.md)). The pipeline is wired in production; **what still defers is the resident deployment**.
+- **runtime canary tenant** — **design-ready** (full design + a CI promtool example in [Runtime Canary Design](../design/runtime-canary.en.md)); the pipeline is wired in production, and **what still defers is the resident deployment** (see Deferred).
 
 ## Deferred (with triggers)
 
@@ -128,7 +128,7 @@ The engine-death blind spot is closed and design-readiness is 5/5 complete; the 
 
 | Item | One line | Trigger |
 |---|---|---|
-| **Canary tenant (runtime)** — **design-ready** | A permanent fake tenant + an always-firing alert (`CustomAlertPipelineCanaryDown` dead-man's-switch), end-to-end catching the exporter / compile-pipeline silent death the Watchdog can't see; bad-tenant isolation rests on two layers (a bad config is blocked at compile; tenants are independent at runtime). **Full design, example, and the two-layer account are in [Runtime Canary Design](../design/runtime-canary.en.md)** | **Design + a runnable example are done**; the **resident deployment** defers: deploy as a safety net before a major rule-compiler refactor / multi-tenant routing change, or after the first production "alert evaluation silently failed" incident to prevent recurrence |
+| **Canary tenant (runtime)** — **design-ready** | A permanent fake tenant + an always-firing dead-man's-switch (`CustomAlertPipelineCanaryDown`) catching the exporter / compile-pipeline silent death the Watchdog can't see (full design, two-layer bad-tenant-isolation account, and example in [Runtime Canary Design](../design/runtime-canary.en.md)) | The **resident deployment** defers: deploy as a safety net before a major rule-compiler refactor / multi-tenant routing change, or after the first production "alert evaluation silently failed" incident to prevent recurrence |
 | **End-to-end synthetic probe (platform-built prober)** | The interop surface (sinkhole route) has **shipped** (see below); what stays deferred is a **platform-emitted** synthetic alert traversing the full Prometheus→Alertmanager→external path — interop usually suffices, so this may never be needed | After heartbeat + canary ship, when a "rule evaluation silently failed" incident occurs |
 | **Backend compatibility — staleness / temporal semantics** | Verify the **time-dependent** semantics on the customer's backend (staleness markers, `absence` over gaps, `predict_linear` extrapolation) — needs real time-series gaps, not dense fixtures | First customer integration on their own backend |
 

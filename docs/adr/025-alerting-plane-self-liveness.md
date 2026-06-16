@@ -48,7 +48,7 @@ updated_at: 2026-06-17
 # 規則：表達式永遠成立 → 永遠處於 firing
 - alert: Watchdog
   expr: vector(1)
-  labels: { severity: none }
+  labels: { severity: none }   # 非真正嚴重度；用意是讓它不落入人類頻道（詳見下方「靜音與抑制免疫」）
   annotations:
     summary: "告警管線心跳——這條一旦停了，代表 Prometheus 已死"
 ```
@@ -118,13 +118,13 @@ receivers:
 
 ## 實作現況
 
-引擎死亡的盲點已補、設計就緒 5/5 完成；唯一還沒上線的是「規則評估正確性」的**常駐**端到端保證（見〈之後再說〉）。
+引擎死亡的盲點已補，且所有延後項的**設計就緒半**都已完成；唯一還沒上線的是「規則評估正確性」的**常駐**端到端保證（見〈之後再說〉）。
 
 - **Watchdog + 外部 dead-man's-switch（D1）** — 已實作（[#838](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/838)）。
 - **CI 規則靜態檢查（pint）** — 採用 OSS `pint`、hard-gate `alerts/template`，攔截「聚合砍掉 template 用到的 label → 告警永遠靜默」這個本 repo 燒過多次的類別（[#843](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/843)）。
 - **後端相容性 — PromQL / value parity** — 對真實 VictoriaMetrics 跑代表性 rule-pack golden（餵**編譯產出**）的函數 / label / 值 parity，把「儲存後端中立」變成可驗證的 CI 事實（`tests/rulepacks/test_vm_backend_parity.py` + CI job）。
 - **合成探測對接面** — 帶 `component="synthetic-probe"` 的告警保證落 `synthetic-receiver` 且 `continue:false`，讓客戶用自己現有的探測器零風險驗端到端投遞（見 [合成探測對接](../integration/synthetic-probe-interop.md)）。
-- **runtime canary 租戶** — **設計就緒**：完整設計、「設定放哪」的決策（走 `conf.d/` GitOps + 一個保留租戶，不寫死在 `k8s/`）、壞租戶隔離的兩層說明，加上一個經真實編譯器產出、CI 會跑的 promtool 範例（見 [Runtime Canary 設計](../design/runtime-canary.md)）。管線在正式環境已串通，**仍延後的是常駐部署**。
+- **runtime canary 租戶** — **設計就緒**（完整設計 + CI promtool 範例見 [Runtime Canary 設計](../design/runtime-canary.md)）；管線在正式環境已串通，**仍延後的是常駐部署**（詳見〈之後再說〉）。
 
 ## 之後再說（各有明確觸發條件）
 
@@ -132,7 +132,7 @@ receivers:
 
 | 項目 | 一句話 | 觸發條件 |
 |---|---|---|
-| **Canary 租戶（runtime）** — **設計就緒** | 常駐假租戶 + 必觸發告警（`CustomAlertPipelineCanaryDown` 心跳開關），端到端抓 Watchdog 看不到的 exporter / 編譯管線靜默死亡；壞租戶隔離靠兩層（編譯期擋下壞設定 + 執行期各租戶獨立）。**完整設計、範例與兩層說明見 [Runtime Canary 設計](../design/runtime-canary.md)** | **設計 + 可跑的範例已完成**；**常駐部署**延後：重大規則編譯重構 / 多租戶路由大改前先佈署當安全網，或首個正式環境「告警評估悄悄失敗」事件後佈署防再犯 |
+| **Canary 租戶（runtime）** — **設計就緒** | 常駐假租戶 + 必觸發 dead-man's-switch（`CustomAlertPipelineCanaryDown`），抓 Watchdog 看不到的 exporter / 編譯管線靜默死亡（完整設計、壞租戶隔離兩層說明與範例見 [Runtime Canary 設計](../design/runtime-canary.md)） | **常駐部署**延後：重大規則編譯重構 / 多租戶路由大改前先佈署當安全網，或首個正式環境「告警評估悄悄失敗」事件後佈署防再犯 |
 | **端到端合成探測（平台自建探針）** | interop 對接面（sinkhole route）**已落地**（見下）；仍 defer 的是「**平台主動發**一條合成告警走完 Prometheus→Alertmanager→外部」的自建探針——多半 interop 即足夠、未必要做 | 心跳 + canary 上線後出現「規則評估悄悄失敗」事件 |
 | **後端相容性 — staleness / 時間語意** | 驗規則在客戶後端上的**時間相關**語意（staleness marker、gap 上的 `absence`、`predict_linear` 外插）正確——需真實時間軸 gap，非 dense fixture 測得出 | 首個客戶整合到自有後端 |
 
