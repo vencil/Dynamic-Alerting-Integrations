@@ -256,11 +256,13 @@ da-tools grafana-import \
 
 | Region | Panel | Description |
 |--------|-------|-------------|
-| Top row | **Tenants / P50 / P95 / IQR / Tukey fences / Outliers** | Population snapshot for the `(metric, severity)`: tenant count, median, P95, interquartile range, outlier fences, outlier count (green=0, red≥1) |
+| Top row | **Tenants (sample adequacy) / P50 / P95 / IQR / Tukey fences / Outliers** | Population snapshot for the `(metric, severity)`: tenant sample adequacy (❌ Sparse <4 / ⚠ Marginal 4-7 / ✓ Adequate >=8 — symbol + text + colour), median, P95, interquartile range, outlier fences, outlier count (✓ 0 / red number) |
 | Mid left | **Threshold value distribution (Histogram)** | Distribution of every tenant's current threshold — reveals the bimodality or long tail the average hides. The tallest bar is usually the platform default |
 | Mid right | **Fleet quantile band over time (P5/P50/P95)** | Drift of the distribution over time. A widening band = growing cross-tenant disagreement; a P50 creeping up over weeks = the "**threshold rot**" signal (a tenant loosened during an incident and never tightened back) |
 | Bottom left | **All tenants — value & deviation** (Table) | Every tenant's current value + signed deviation from the median, sorted — context inventory |
 | Bottom right | **⚠️ Statistical outliers** (Table) | Only tenants beyond the 1.5×IQR fence (with `side=high/low`) — the action list. Empty when healthy |
+
+> **Accessibility (ADR-012 / WCAG 1.4.1):** the top-row "sample adequacy" and "Outliers" state are labelled with a **symbol + text** (❌ / ⚠ / ✓), colour being redundant reinforcement only — red-green-colourblind operators can read the severity without relying on colour. This encoding is pinned by an a11y golden in `tests/dx/test_fleet_threshold_dashboard.py` so it can't silently regress.
 
 ### Reading Outliers (industry best practice)
 
@@ -270,7 +272,7 @@ da-tools grafana-import \
 
 ### ⚠️ Reliability: two regimes where Tukey outlier detection degenerates
 
-Tukey fences work on distributions with **genuine spread**, but collapse in two regimes — **the outlier table is a statistical hint, not ground truth**. The top-row Tenants color (red < 4 / yellow 4-7 / green ≥ 8) signals this:
+Tukey fences work on distributions with **genuine spread**, but collapse in two regimes — **the outlier table is a statistical hint, not ground truth**. The top-row Tenant sample adequacy (❌ Sparse <4 / ⚠ Marginal 4-7 / ✓ Adequate >=8 — symbol + text + colour, never colour alone, per ADR-012) signals this:
 
 - **Degeneration 1 — mode-heavy (the common case).** When most tenants sit on the platform default, the default fills the median region → IQR = 0 → the fence collapses to the median → **every customizer is flagged** (measured: 40 default + 10 customizers → all 10 flagged). The outlier table is noisy here; **use the "All tenants — value & deviation" table** (sorted by deviation magnitude) + the histogram instead — both are robust to mode-heavy data and are the primary view.
 - **Degeneration 2 — small sample.** At low tenant counts (red/yellow Tenants panel) it is unreliable in both directions — it can **miss a real extreme** (N=3 `[50,60,2000]` flags nothing) and **over-flag a trivial deviation** (N=4 `[50,50,50,51]` flags the 51). At low N trust the histogram and raw values over the outlier flag.

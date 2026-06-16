@@ -22,8 +22,8 @@
   ],
   "panels": [
     {
-      "title": "Tenants configuring this threshold",
-      "description": "Distinct tenants with a value set (custom or default) for this metric+severity. Disabled thresholds emit no series and are NOT counted. COLOR = sample adequacy for the outlier panels below: red < 4, yellow 4-7, green >= 8. At low counts the Tukey outlier detection is unreliable (see those panels).",
+      "title": "Tenants configuring (sample adequacy)",
+      "description": "Distinct tenants with a value set (custom or default) for this metric+severity — the sample size the outlier panels below depend on. Disabled thresholds emit no series and are NOT counted. ADEQUACY is encoded by symbol + text + color (ADR-012 / WCAG 1.4.1 — never colour alone): ❌ Sparse (<4) / ⚠ Marginal (4-7) / ✓ Adequate (>=8). At low counts the Tukey outlier detection is unreliable (see those panels). Exact per-tenant counts live in the 'All tenants' table.",
       "type": "stat",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "gridPos": { "h": 4, "w": 4, "x": 0, "y": 0 },
@@ -34,7 +34,12 @@
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "thresholds" },
-          "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "yellow", "value": 4 }, { "color": "green", "value": 8 }] }
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "yellow", "value": 4 }, { "color": "green", "value": 8 }] },
+          "mappings": [
+            { "type": "range", "options": { "from": null, "to": 3, "result": { "text": "❌ Sparse (<4)", "index": 0 } } },
+            { "type": "range", "options": { "from": 4, "to": 7, "result": { "text": "⚠ Marginal (4-7)", "index": 1 } } },
+            { "type": "range", "options": { "from": 8, "to": null, "result": { "text": "✓ Adequate (>=8)", "index": 2 } } }
+          ]
         }
       },
       "options": { "colorMode": "background", "graphMode": "none", "textMode": "value" }
@@ -110,7 +115,10 @@
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "thresholds" },
-          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] }
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] },
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "✓ 0", "index": 0 } } }
+          ]
         }
       },
       "options": { "colorMode": "background", "graphMode": "none", "textMode": "value" }

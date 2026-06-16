@@ -14,6 +14,10 @@ Prometheus engine against a synthetic `user_threshold` fixture with hand-compute
 golden expectations. If someone edits a covered query and changes its semantics the
 golden fails; if they rename/remove a covered panel the lookup fails (drift-aware).
 
+A11Y (ADR-012 / WCAG 1.4.1): a separate pure-JSON check asserts the two colour-coded
+stat panels encode their tier/state with a symbol + text (Grafana value mappings),
+not background colour alone — it needs no promtool and runs everywhere.
+
 Skips cleanly when promtool is absent (host / a CI job without it); runs fully in
 the dev container and CI. Mirrors tests/dx/test_custom_alerts_promtool.py.
 """
@@ -207,3 +211,48 @@ def test_dashboard_is_valid_grafana_shape():
             bx, by, bw, bh, bt = rects[j]
             overlap = not (ax + aw <= bx or bx + bw <= ax or ay + ah <= by or by + bh <= ay)
             assert not overlap, f"gridPos overlap: {at!r} <> {bt!r}"
+
+
+# ── ADR-012 / WCAG 1.4.1: severity & state must NOT be colour-only ──────────
+# The two colour-coded stat panels convey a tier (sample adequacy) / state
+# (outliers present) that a red-green-colourblind operator cannot read from the
+# background alone. They MUST carry that signal in a non-colour channel — a
+# Unicode symbol + words via Grafana value mappings (ADR-012 pattern: symbol +
+# text + colour, never colour alone). Codified here so the a11y fix can't
+# silently regress; pure JSON, so it runs even where promtool is absent.
+_A11Y_SYMBOLS = ("✓", "⚠", "❌", "✗", "✅", "🟢", "🟡", "🔴")
+
+
+def _mapping_texts(panel: dict) -> list[str]:
+    """Every result `text` across a panel's value mappings (range / value / special)."""
+    texts: list[str] = []
+    for m in panel.get("fieldConfig", {}).get("defaults", {}).get("mappings", []):
+        opts = m.get("options", {})
+        if "result" in opts:  # range / special mapping
+            texts.append(opts["result"].get("text", ""))
+        else:  # value mapping: {"<value>": {text, color, ...}, ...}
+            for v in opts.values():
+                if isinstance(v, dict):
+                    texts.append(v.get("text", ""))
+    return texts
+
+
+def test_colour_coded_panels_carry_noncolour_severity_channel():
+    """ADR-012 / WCAG 1.4.1: the colour-coded stat panels encode their tier/state
+    with a symbol + text (value mappings), not background colour alone."""
+    panels = _load_panels()
+    for title_substr in ("sample adequacy", "Outliers"):
+        panel = next((p for p in panels if title_substr in p.get("title", "")), None)
+        assert panel is not None, (
+            f"no panel title contains {title_substr!r} (renamed/removed? a11y check is drift-aware)"
+        )
+        texts = _mapping_texts(panel)
+        assert texts, (
+            f"panel {panel['title']!r} is colour-coded but has NO value mappings — "
+            f"tier/state is colour-only (ADR-012 / WCAG 1.4.1 violation)"
+        )
+        joined = " ".join(texts)
+        assert any(sym in joined for sym in _A11Y_SYMBOLS), (
+            f"panel {panel['title']!r} mappings {texts!r} carry no a11y symbol from "
+            f"{_A11Y_SYMBOLS} — colour-blind operators can't read the tier"
+        )

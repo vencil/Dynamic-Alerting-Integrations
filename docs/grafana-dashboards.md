@@ -256,11 +256,13 @@ da-tools grafana-import \
 
 | 區 | Panel | 說明 |
 |---|-------|------|
-| 頂列 | **Tenants / P50 / P95 / IQR / Tukey fences / Outliers** | 該 `(metric, severity)` 的群體統計快照：租戶數、中位數、P95、四分位距、離群邊界、離群租戶數（綠=0、紅≥1） |
+| 頂列 | **Tenants（樣本充足度）/ P50 / P95 / IQR / Tukey fences / Outliers** | 該 `(metric, severity)` 的群體統計快照：租戶樣本充足度（❌ Sparse <4／⚠ Marginal 4-7／✓ Adequate >=8，符號+文字+色三重編碼）、中位數、P95、四分位距、離群邊界、離群租戶數（✓ 0／紅底數字） |
 | 中列左 | **Threshold value distribution（Histogram）** | 全租戶當前閾值的分布形狀——揭露平均值會藏住的**雙峰**或**長尾**。最高的那根通常是平台預設值 |
 | 中列右 | **Fleet quantile band over time（P5/P50/P95）** | 分布隨時間的漂移。band 變寬＝跨租戶分歧擴大；P50 數週緩升＝「**閾值腐敗**」訊號（某租戶事故時調鬆後忘了調回） |
 | 底列左 | **All tenants — value & deviation**（Table） | 全租戶當前值 + 與中位數的帶號偏差，依偏差排序——脈絡盤點 |
 | 底列右 | **⚠️ Statistical outliers（Table）** | 只列落在 1.5×IQR fence 外的租戶（含 `side=high/low`）——行動清單。健康時為空 |
+
+> **無障礙（ADR-012 / WCAG 1.4.1）：** 頂列「樣本充足度」與「Outliers」狀態一律以**符號 + 文字**（❌ / ⚠ / ✓）標示，顏色僅作冗餘強化——紅綠色盲使用者不靠顏色也能判讀嚴重度。此編碼由 `tests/dx/test_fleet_threshold_dashboard.py` 的 a11y golden 固定，避免日後靜默退化。
 
 ### 離群判讀（業界最佳實踐）
 
@@ -270,7 +272,7 @@ da-tools grafana-import \
 
 ### ⚠️ 可靠度：Tukey 離群偵測的兩種退化情形
 
-Tukey fences 對**有離散度**的分布有效，但有兩種會崩潰的情形——**離群表是統計提示、不是 ground truth**，頂列 Tenants 顏色（紅<4／黃 4-7／綠≥8）即在提示可靠度：
+Tukey fences 對**有離散度**的分布有效，但有兩種會崩潰的情形——**離群表是統計提示、不是 ground truth**，頂列 Tenants 樣本充足度（❌ Sparse <4／⚠ Marginal 4-7／✓ Adequate >=8；符號+文字+色三重編碼、不靠單一顏色，依 ADR-012）即在提示可靠度：
 
 - **退化一：mode-heavy（最常見）。** 多數租戶吃平台 default 時，median 區被 default 佔滿 → IQR=0 → fence 塌縮到 median → **所有客製租戶被標離群**（實測：40 個 default + 10 客製 → 標滿 10 個）。此時離群表噪音大，**改用「全租戶 — value & deviation」表**（依偏差量級排序）+ histogram，這兩者對 mode-heavy 不退化，是 robust 主視圖。
 - **退化二：小樣本。** 租戶數低時（Tenants 紅/黃）兩個方向都不可靠——可能**漏抓真極端**（N=3 `[50,60,2000]` 標不出 2000）、也可能**誤標瑣碎偏差**（N=4 `[50,50,50,51]` 標 51）。低 N 時信 histogram 與原始值勝過離群旗標。
