@@ -6,10 +6,10 @@ version: v2.9.0
 lang: zh
 id: ADR-025
 tracking_kind: adr
-status: in-progress
+status: accepted
 domain: observability
 created_at: 2026-06-14
-updated_at: 2026-06-16
+updated_at: 2026-06-17
 ---
 
 # ADR-025: 告警平面自我存活性 — 讓告警系統能偵測自己的死亡
@@ -18,9 +18,9 @@ updated_at: 2026-06-16
 
 ## 狀態
 
-🟡 **In Progress**（實作中）。本 ADR 記錄一個決策：為平台的告警平面（Prometheus + Alertmanager）加上「自己死掉會被外部察覺」的存活心跳，並劃清「高可用與大規模儲存由 operator 負責」的責任邊界。MVP（D1 Watchdog + 外部 dead-man's-switch）已實作上線（[#838](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/838)），CI 規則靜態檢查（pint）亦已採用（[#843](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/843)）、後端相容性的 **PromQL/value parity** 已加入 CI、合成探測的 **interop sinkhole route** 已落地、runtime canary 已達**設計就緒**（完整設計 + CI promtool demo，見 [Runtime Canary 設計](../design/runtime-canary.md)）；canary 的**常駐部署** / 端到端合成探測的**自建探針** / 後端相容性的 staleness 時間語意仍為 defer-with-trigger（見下方「實作進度」與「之後再說」）。operator 設定與靜音/抑制禁區見 [告警平面自我存活性 Operator 指南](../integration/alerting-plane-self-liveness.md)。
+✅ **Accepted**（決策 2026-06-14 經 PR [#836](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/836) 接受；核心 MVP 已上線、設計就緒 5/5 完成，常駐 operated 元件 defer-with-trigger，見下）。本 ADR 記錄一個決策：為平台的告警平面（Prometheus + Alertmanager）加上「自己死掉會被外部察覺」的存活心跳，並劃清「高可用與大規模儲存由 operator 負責」的責任邊界。MVP（D1 Watchdog + 外部 dead-man's-switch）已實作上線（[#838](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/838)），CI 規則靜態檢查（pint）亦已採用（[#843](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/843)）、後端相容性的 **PromQL/value parity** 已加入 CI、合成探測的 **interop sinkhole route** 已落地、runtime canary 已達**設計就緒**（完整設計 + CI promtool demo，見 [Runtime Canary 設計](../design/runtime-canary.md)）；canary 的**常駐部署** / 端到端合成探測的**自建探針** / 後端相容性的 staleness 時間語意仍為 defer-with-trigger（見下方「實作進度」與「之後再說」）。operator 設定與靜音/抑制禁區見 [告警平面自我存活性 Operator 指南](../integration/alerting-plane-self-liveness.md)。
 
-**實作進度**（狀態維持 in-progress：引擎死亡的盲點已補，但「規則評估正確性」的端到端保證尚未到位）：
+**實作進度**（核心決策已 **Accepted**：引擎死亡盲點已補、設計就緒 5/5 完成；「規則評估正確性」的端到端**常駐**保證屬 operated 半，defer-with-trigger）：
 
 - **D1 Watchdog + 外部 dead-man's-switch** — 已實作（[#838](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/838)）。
 - **CI 規則靜態檢查（pint）** — 已採用 OSS `pint`、hard-gate `alerts/template`，攔截「聚合砍掉 template 用到的 label → 告警永遠靜默」這個本 repo 燒過多次的類別；baseline 0 blocking（[#843](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/843)）。
