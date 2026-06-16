@@ -25,8 +25,8 @@ updated_at: 2026-06-17
 - **D1 Watchdog + 外部 dead-man's-switch** — 已實作（[#838](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/838)）。
 - **CI 規則靜態檢查（pint）** — 已採用 OSS `pint`、hard-gate `alerts/template`，攔截「聚合砍掉 template 用到的 label → 告警永遠靜默」這個本 repo 燒過多次的類別；baseline 0 blocking（[#843](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/843)）。
 - **後端相容性 — PromQL / value parity** — 對真實 VictoriaMetrics 跑代表性 rule-pack golden（**編譯產出** + recording-rule 鏈）的函數 / label / 值（epsilon）parity smoke，把「backend-agnostic」變成可驗證 CI 事實（`tests/rulepacks/test_vm_backend_parity.py` + CI job）。
-- **合成探測 interop 對接面（sinkhole route）** — 帶 `component="synthetic-probe"` 的告警保證落 `synthetic-receiver` 且 `continue:false`（route index 2，injector pin + amtool 守護），讓客戶用自己現有的探測器零風險驗端到端投遞（`docs/integration/synthetic-probe-interop.md`）。
-- **runtime canary 租戶** — **設計就緒**（design-ready）：完整設計、config-locus 決策（`conf.d/` GitOps + 保留租戶）、壞租戶隔離的誠實兩層說明，加上一個經真實編譯器產出、CI 跑的 promtool demo（`tests/rulepacks/runtime-canary{.rules,_test}.yaml`），均見 [Runtime Canary 設計](../design/runtime-canary.md)。管線在 production 已串通；**仍 defer 的是常駐部署**（heartbeat 來源 emitter + meta-alert 接真實 on-call）。
+- **合成探測 interop 對接面（sinkhole route）** — 帶 `component="synthetic-probe"` 的告警保證落 `synthetic-receiver` 且 `continue:false`（route index 2，injector pin + amtool 守護），讓客戶用自己現有的探測器零風險驗端到端投遞（見 [合成探測對接](../integration/synthetic-probe-interop.md)）。
+- **runtime canary 租戶** — **設計就緒**：完整設計、「設定放哪」的決策（走 `conf.d/` GitOps + 一個保留租戶，不寫死在 `k8s/`）、壞租戶隔離的誠實兩層說明，加上一個經真實編譯器產出、CI 會跑的 promtool 範例（`tests/rulepacks/runtime-canary{.rules,_test}.yaml`），均見 [Runtime Canary 設計](../design/runtime-canary.md)。管線在正式環境已串通；**仍延後的是常駐部署**（心跳來源 + 把 meta-alert 接上真實 on-call）。
 - **端到端合成探測的自建探針 / 後端相容性的 staleness 時間語意** — 仍 defer-with-trigger（觸發條件見下方「之後再說」表）。
 
 ## 摘要
@@ -117,20 +117,17 @@ receivers:
 
 ## 之後再說（各有明確觸發條件）
 
-> **取捨的軸**：本平台要**取代或整合「已採用成熟監控產品」的客戶**——這些能力業界都有（Watchdog/DMS、HA、synthetic probe），所以門檻不是「我們內部多成熟」，而是**被取代的 incumbent 設下的外部標準**。據此每項拆兩半：**evaluation-time 要拿得出的可信、可 demo 的設計（便宜，值得前拉）** vs **實際營運的常駐元件（昂貴，defer 到真實 trigger）**；客戶**已有**的能力一律走 **interop 對接、不重造**。
+> **取捨的軸**：本平台要取代或整合「已經在用成熟監控產品」的客戶。這些能力（心跳/Watchdog、高可用、合成探測）業界本來就有，所以該做到哪、門檻是**被取代的既有產品設下的標準**，不是我們內部的成熟度。據此每項拆兩半：**評估階段就要拿得出的可信設計 + 一個能跑的範例（便宜，值得先做）** vs **真正營運才需要的常駐元件（昂貴，等明確觸發條件再做）**；客戶**已經有**的能力一律走**對接、不重造**。
 
 | 項目 | 一句話 | 觸發條件 |
 |---|---|---|
-| **Canary 租戶（runtime）** — **設計就緒**，見 [Runtime Canary 設計](../design/runtime-canary.md) | 常駐假租戶 + 必觸發告警（`CustomAlertPipelineCanaryDown` dead-man's-switch），端到端證明「規則編譯 + 路由」沒被改壞、且抓得到 Watchdog 看不到的 exporter / 編譯管線死亡。**壞租戶隔離**的誠實說明（修正原敘述）：本平台靠**兩層**達成，非「壞設定還能編譯」——(1) 編譯/CI **fail-closed + 指名出錯檔**（壞設定整批擋下、永不部署）；(2) 執行期 **per-tenant row 獨立**（`max by(tenant)` + `on(tenant) group_left`，別人缺 series 清不掉我的列）。canary 端到端**證明第 (2) 層活著** | **設計 + CI promtool demo 已完成**（`tests/rulepacks/runtime-canary*`）；**常駐部署** defer：重大規則編譯重構 / 多租戶路由大改前先佈署當安全網，或首個 production 自訂告警「評估悄悄失敗」事件後佈署防再犯 |
+| **Canary 租戶（runtime）** — **設計就緒** | 常駐假租戶 + 必觸發告警（`CustomAlertPipelineCanaryDown` 心跳開關），端到端抓 Watchdog 看不到的 exporter / 編譯管線靜默死亡；壞租戶隔離靠兩層（編譯期擋下壞設定 + 執行期各租戶獨立）。**完整設計、範例與兩層說明見 [Runtime Canary 設計](../design/runtime-canary.md)** | **設計 + 可跑的範例已完成**；**常駐部署**延後：重大規則編譯重構 / 多租戶路由大改前先佈署當安全網，或首個正式環境「告警評估悄悄失敗」事件後佈署防再犯 |
 | **端到端合成探測（平台自建探針）** | interop 對接面（sinkhole route）**已落地**（見下）；仍 defer 的是「**平台主動發**一條合成告警走完 Prometheus→Alertmanager→外部」的自建探針——多半 interop 即足夠、未必要做 | 心跳 + canary 上線後出現「規則評估悄悄失敗」事件 |
 | **後端相容性 — staleness / 時間語意** | 驗規則在客戶後端上的**時間相關**語意（staleness marker、gap 上的 `absence`、`predict_linear` 外插）正確——需真實時間軸 gap，非 dense fixture 測得出 | 首個客戶整合到自有後端 |
 
-> **已落地、不再 defer**：
-> - **規則靜態檢查（CI 規則 linter）** → OSS `pint`（hard-gate `alerts/template`），[#843](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/843)，詳見上方「實作進度」。
-> - **後端相容性 — PromQL / value parity** → 對真實 VictoriaMetrics 跑代表性 rule-pack golden 的 **函數 / label / 值（epsilon）parity** smoke（`tests/rulepacks/test_vm_backend_parity.py` + CI job），餵的是**編譯產出**（含 `and on()` / `group_left` / `label_replace` / `max by` 等 idiom，非標準 PromQL 題庫），把「backend-agnostic」從行銷宣稱變成可驗證 CI 事實。業界工具 `promql-compliance-tester` 經評估不適用（固定通用題庫 ≠ 編譯產出、1hr scrape 資料模型 ≠ CI smoke、非 offline）→ hybrid-policy DIY-exception（薄 harness 復用既有 promtool golden 當 Prometheus 參考）。**時間 / staleness 語意仍 defer**（見上表）。見 [backend-compat-baseline.md](../internal/backend-compat-baseline.md)。
-> - **合成探測 interop 對接面（sinkhole route）** → 帶 `component="synthetic-probe"` 的告警保證路由到 `synthetic-receiver` 且 `continue:false`（route index 2，經 generator injector 注入並 pin、撐過 `--apply` route-REPLACE，base configmap 同序、路由 orchestration + amtool 測試守護）。客戶用**自己現有的**探測器穿過平台這層、驗證端到端投遞，測試告警**零風險**（絕不 page）。平台**不自建**探針（仍 defer，見上表）。見 [合成探測對接](../integration/synthetic-probe-interop.md)。
->
-> **canary 的 CI-gate 變體已評估並否決（記此免重走）**：曾評估一個把合成 `absence` fixture 餵進「真編譯器 + promtool + amtool」的 **CI-gate** canary，但它與既有 `absence` golden 測試（`tests/dx/fixtures/custom_alerts_promtool/absence.yaml`）、Go `rulepack_contract_test.go` 的 `component` / `tenant` 標籤契約、`test_generate_routes_orchestration.py` 的路由 orchestration 測試重疊約九成；且 CI 無 exporter、須自行合成 series，反而把 ADR 要驗的端到端**砍小**為 CI fixture 自身的性質 → **否決**。上表保留的是 **runtime** canary（常駐假租戶，能抓 [#731](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/731)-class 的 exporter / 編譯管線靜默死亡），與引擎心跳互補、仍 defer-with-trigger。
+> **兩個被否決的子方案（記此免重走）**：
+> - **後端相容性不採用 `promql-compliance-tester`**：它跑的是固定通用 PromQL 題庫、需約 1 小時 scrape 資料、且不能離線，對不上我們的需求——我們要驗的是**自己編譯產出**的 idiom（`and on()` / `group_left` / `max by` …）。改用一個薄 harness、復用既有 promtool golden 當參考即可（見 [backend-compat-baseline.md](../internal/backend-compat-baseline.md)）。
+> - **canary 不做 CI-gate 變體**：曾評估把合成 `absence` fixture 餵進「編譯器 + promtool + amtool」當 CI 閘門，但它與既有 absence 測試、Go 標籤契約、路由 orchestration 測試重疊約九成，且 CI 沒有 exporter、得自行合成 series——反而把要驗的端到端**砍小**成 CI fixture 自身的性質。保留的是**常駐 runtime canary**（抓 exporter / 編譯管線的靜默死亡，[#731](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/731) 類盲點），見上表與 [Runtime Canary 設計](../design/runtime-canary.md)。
 
 ## 範圍邊界
 
