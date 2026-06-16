@@ -73,9 +73,14 @@ from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 KUBE_LINTER_VERSION = "v0.7.4"
-KUBE_LINTER_IMAGE = f"docker.io/stackrox/kube-linter:{KUBE_LINTER_VERSION}"
+# Supply-chain: pin Docker fallback images by digest (multi-arch index of the tag) so a
+# re-pushed/tampered tag can't swap the image. Re-resolve each alongside its version via
+# the registry manifest API. #849 follow-up. (check_k8s_manifests.py imports KUBE_LINTER_IMAGE.)
+KUBE_LINTER_DIGEST = "sha256:ac7873964c69d7dba2bd235c2bf10a7c61f783d5b08fdeaabc8f31916110329c"
+KUBE_LINTER_IMAGE = f"docker.io/stackrox/kube-linter:{KUBE_LINTER_VERSION}@{KUBE_LINTER_DIGEST}"
 HELM_VERSION = "3.16.4"
-HELM_IMAGE = f"docker.io/alpine/helm:{HELM_VERSION}"
+HELM_DIGEST = "sha256:9b25e60ae264940b276e32866d37e3088e70c4e2d1784b964dc3f90346281a74"
+HELM_IMAGE = f"docker.io/alpine/helm:{HELM_VERSION}@{HELM_DIGEST}"
 LINT_NAMESPACE = "lint-test"
 
 SKIP_DIR_PARTS = {".claude", ".git", "node_modules", ".venv", "venv"}

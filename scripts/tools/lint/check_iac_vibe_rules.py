@@ -87,7 +87,11 @@ from _lint_helpers import parse_bypass_tag  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 HADOLINT_VERSION = "v2.12.0"
-HADOLINT_IMAGE = f"hadolint/hadolint:{HADOLINT_VERSION}"
+# Supply-chain: pin the Docker fallback by digest (multi-arch index of the tag) so a
+# re-pushed/tampered tag can't swap the image. Re-resolve alongside the version via the
+# registry manifest API. #849 follow-up.
+HADOLINT_DIGEST = "sha256:30a8fd2e785ab6176eed53f74769e04f125afb2f74a6c52aef7d463583b6d45e"
+HADOLINT_IMAGE = f"hadolint/hadolint:{HADOLINT_VERSION}@{HADOLINT_DIGEST}"
 BYPASS_NAME = "iac-vibe-rules"
 
 # Dockerfile (repo-relative, posix) -> build-context root (repo-relative).
