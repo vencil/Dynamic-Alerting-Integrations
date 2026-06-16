@@ -43,12 +43,15 @@ curl -sS -XPOST http://<alertmanager>:9093/api/v2/alerts \
         "labels": {
           "alertname": "SyntheticProbe",
           "component": "synthetic-probe",
+          "tenant": "platform-ops",
           "severity": "none"
         },
         "annotations": {"summary": "synthetic probe — verifying end-to-end alert delivery"},
         "startsAt": "'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'"
       }]'
 ```
+
+> `tenant` does **not** affect routing on this sinkhole route (its `group_by:[alertname]` does not inherit the root `[alertname, tenant]`); it's included only to make the test data look like a real alert and to satisfy any global tenant-label requirement.
 
 Or, in blackbox_exporter / your alerting rule, simply have the synthetic alert carry the `component: synthetic-probe` label — the platform handles the rest.
 

@@ -43,12 +43,15 @@ curl -sS -XPOST http://<alertmanager>:9093/api/v2/alerts \
         "labels": {
           "alertname": "SyntheticProbe",
           "component": "synthetic-probe",
+          "tenant": "platform-ops",
           "severity": "none"
         },
         "annotations": {"summary": "synthetic probe — verifying end-to-end alert delivery"},
         "startsAt": "'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'"
       }]'
 ```
+
+> `tenant` 在此 sinkhole route **不影響路由**(route 的 `group_by:[alertname]` 不繼承 root `[alertname, tenant]`),帶上只是讓測試資料更貼近真實告警、並滿足任何全域 tenant-label 要求。
 
 或在 blackbox_exporter / 你的 alerting rule 裡,讓那條 synthetic 告警帶上 `component: synthetic-probe` 標籤即可——其餘平台處理。
 
