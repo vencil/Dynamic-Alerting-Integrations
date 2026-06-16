@@ -60,6 +60,24 @@ data:
           group_interval: 5m
           receiver: "custom-alerts-firehose"
           continue: false
+        # ── ADR-025: synthetic-probe sinkhole (interop contract) ─────────
+        # A customer's EXISTING blackbox / synthetic-monitoring probe can fire a test
+        # alert carrying component="synthetic-probe" to verify it travels end-to-end
+        # THROUGH this Alertmanager. continue:false + a dedicated synthetic-receiver
+        # guarantee the test alert is ZERO-RISK — it can never fall through to a human
+        # channel / page on-call. The platform does not emit probes itself (deferred);
+        # this is the interop SURFACE only. See the synthetic-probe interop guide.
+        # ⚠️ generate_alertmanager_routes.py RE-INJECTS this at index 2 on every regen
+        # (route.routes is REPLACED on --apply); this hand-authored copy keeps the
+        # committed base self-consistent.
+        - matchers:
+            - component="synthetic-probe"
+          group_by: ["alertname"]
+          group_wait: 0s
+          group_interval: 1m
+          repeat_interval: 1m
+          receiver: "synthetic-receiver"
+          continue: false
 
     receivers:
       - name: "default"
@@ -90,6 +108,12 @@ data:
         # limit → AM retry/queue backlog → OOM → platform P0 alerts blocked. On
         # that webhook_config set send_resolved:false + max_alerts:100 (a lossy
         # truncation cap; the ALERTS series stays the source of truth).
+      - name: "synthetic-receiver"
+        # ADR-025 synthetic-probe interop sink. NAME-ONLY by default (no notifier):
+        # an operator may point this at their own probe-ack endpoint, or leave it a
+        # no-op black hole — the contract guarantees test alerts are ISOLATED (never
+        # page), not delivered. The route above (component="synthetic-probe",
+        # continue:false) is what enforces the isolation.
 
     inhibit_rules:
       # v1.2.0 Severity Dedup: per-tenant inhibit rules

@@ -37,6 +37,7 @@ from generate_alertmanager_routes import (
     _build_tenant_routes,
     _build_custom_alert_routes,
     _build_watchdog_route,
+    _build_synthetic_probe_route,
     _parse_config_files,
     write_text_secure,
 )
@@ -163,23 +164,28 @@ class TestAssembleConfigmap:
 
         am_config = yaml.safe_load(parsed["data"]["alertmanager.yml"])
         routes_out = am_config["route"]["routes"]
-        # ADR-025 D1 (#838) + S7/S8 (#741): two platform-static routes are always
-        # injected at the FRONT — Watchdog liveness at index 0, Custom Alerts
-        # isolation at index 1 — both continue:false; the tenant route follows.
-        assert len(routes_out) == 3
+        # ADR-025 D1 (#838) + S7/S8 (#741) + ADR-025 synthetic-probe: three platform-
+        # static routes are always injected at the FRONT — Watchdog liveness (0),
+        # Custom Alerts isolation (1), synthetic-probe sinkhole (2) — all
+        # continue:false; the tenant route follows.
+        assert len(routes_out) == 4
         assert routes_out[0]["matchers"] == ['alertname="Watchdog"']
         assert routes_out[0]["receiver"] == "watchdog-heartbeat"
         assert routes_out[0]["continue"] is False
         assert routes_out[1]["matchers"] == ['component="custom"']
         assert routes_out[1]["receiver"] == "custom-alerts-firehose"
         assert routes_out[1]["continue"] is False
-        assert routes_out[2]["receiver"] == "tenant-db-a"
-        # Base receiver + tenant receiver + injected firehose + watchdog receivers
+        assert routes_out[2]["matchers"] == ['component="synthetic-probe"']
+        assert routes_out[2]["receiver"] == "synthetic-receiver"
+        assert routes_out[2]["continue"] is False
+        assert routes_out[3]["receiver"] == "tenant-db-a"
+        # Base receiver + tenant receiver + injected firehose + watchdog + synthetic
         names = {r["name"] for r in am_config["receivers"]}
         assert "default" in names
         assert "tenant-db-a" in names
         assert "custom-alerts-firehose" in names
         assert "watchdog-heartbeat" in names
+        assert "synthetic-receiver" in names
 
     def test_custom_namespace_and_name(self):
         base = load_base_config(None)
@@ -206,19 +212,19 @@ class TestAssembleConfigmap:
 # ADR-025 D1 (#838) + S7/S8 (#741): platform-static route injection
 # ============================================================
 class TestCustomAlertIsolationInjection:
-    """The two platform-static routes — Watchdog liveness (index 0) and Custom
-    Alerts isolation (index 1) — plus their receivers must be present and pinned
-    at the FRONT of the assembled ConfigMap, across BOTH the --output-configmap
-    (assemble_configmap) and --apply (_merge_routes_receivers_inhibits) paths,
-    and survive the route-REPLACE."""
+    """The three platform-static routes — Watchdog liveness (index 0), Custom
+    Alerts isolation (index 1), synthetic-probe sinkhole (index 2) — plus their
+    receivers must be present and pinned at the FRONT of the assembled ConfigMap,
+    across BOTH the --output-configmap (assemble_configmap) and --apply
+    (_merge_routes_receivers_inhibits) paths, and survive the route-REPLACE."""
 
     def _routes_of(self, cm_yaml):
         parsed = yaml.safe_load(cm_yaml)
         return yaml.safe_load(parsed["data"]["alertmanager.yml"])["route"]["routes"]
 
     def test_injected_even_with_no_tenant_routes(self):
-        # empty generated routes (no tenants) → both static routes still present
-        # and pinned: Watchdog index 0, custom index 1.
+        # empty generated routes (no tenants) → all three static routes still present
+        # and pinned: Watchdog index 0, custom index 1, synthetic-probe index 2.
         cm_yaml = assemble_configmap(load_base_config(None), [], [], [])
         routes = self._routes_of(cm_yaml)
         assert routes[0]["matchers"] == ['alertname="Watchdog"']
@@ -227,15 +233,20 @@ class TestCustomAlertIsolationInjection:
         assert routes[1]["matchers"] == ['component="custom"']
         assert routes[1]["receiver"] == "custom-alerts-firehose"
         assert routes[1]["continue"] is False
+        assert routes[2]["matchers"] == ['component="synthetic-probe"']
+        assert routes[2]["receiver"] == "synthetic-receiver"
+        assert routes[2]["continue"] is False
 
     def test_idempotent_no_duplicate(self):
-        # if Watchdog / component="custom" routes are already present, do not add
-        # a second of either — re-merging an injected config is stable.
-        existing = _build_watchdog_route()[0] + _build_custom_alert_routes()[0]
+        # if Watchdog / component="custom" / synthetic-probe routes are already
+        # present, do not add a second of any — re-merging an injected config is stable.
+        existing = (_build_watchdog_route()[0] + _build_custom_alert_routes()[0]
+                    + _build_synthetic_probe_route()[0])
         cm_yaml = assemble_configmap(load_base_config(None), list(existing), [], [])
         routes = self._routes_of(cm_yaml)
         assert sum(1 for r in routes if 'component="custom"' in r.get("matchers", [])) == 1
         assert sum(1 for r in routes if 'alertname="Watchdog"' in r.get("matchers", [])) == 1
+        assert sum(1 for r in routes if 'component="synthetic-probe"' in r.get("matchers", [])) == 1
 
     def test_static_routes_forced_to_front_even_when_not_first(self):
         # CodeRabbit gap (generalized to Watchdog): existing Watchdog/custom routes
@@ -245,16 +256,21 @@ class TestCustomAlertIsolationInjection:
         enforced = {"receiver": "platform-enforced", "continue": True}  # match-all
         existing_custom = _build_custom_alert_routes()[0][0]
         existing_wd = _build_watchdog_route()[0][0]
+        existing_probe = _build_synthetic_probe_route()[0][0]
         cm_yaml = assemble_configmap(
-            load_base_config(None), [enforced, existing_custom, existing_wd], [], [])
+            load_base_config(None),
+            [enforced, existing_custom, existing_probe, existing_wd], [], [])
         routes = self._routes_of(cm_yaml)
         wd_idx = [i for i, r in enumerate(routes)
                   if 'alertname="Watchdog"' in r.get("matchers", [])]
         custom_idx = [i for i, r in enumerate(routes)
                       if 'component="custom"' in r.get("matchers", [])]
+        probe_idx = [i for i, r in enumerate(routes)
+                     if 'component="synthetic-probe"' in r.get("matchers", [])]
         assert wd_idx == [0], routes      # Watchdog pinned to index 0
         assert custom_idx == [1], routes  # custom pinned to index 1
-        assert routes[2]["receiver"] == "platform-enforced"
+        assert probe_idx == [2], routes   # synthetic-probe pinned to index 2
+        assert routes[3]["receiver"] == "platform-enforced"
 
     def test_apply_path_prepends_and_preserves_silent_inhibit(self):
         # --apply replaces route.routes; Watchdog must lead (index 0), custom
@@ -467,6 +483,18 @@ class TestWatchdogInhibitImmunity:
         assert len(wd_recv) == 1
         wh = wd_recv[0]["webhook_configs"][0]
         assert "url" not in wh and wh["url_file"].endswith("watchdog-heartbeat-url")
+        # Same drift guard for the other two pinned static routes — custom (index 1)
+        # and synthetic-probe (index 2) — so a hand-edit to the committed base that
+        # forgets the builder (or vice-versa) fails loud here, not silently in prod.
+        assert routes[1] == _build_custom_alert_routes()[0][0]
+        assert routes[1]["matchers"] == ['component="custom"']
+        assert routes[2] == _build_synthetic_probe_route()[0][0]
+        assert routes[2]["matchers"] == ['component="synthetic-probe"']
+        assert routes[2]["receiver"] == "synthetic-receiver"
+        assert routes[2]["continue"] is False
+        # synthetic-receiver must be DEFINED in the committed base (route → defined
+        # receiver; else amtool rejects the raw file).
+        assert any(r["name"] == "synthetic-receiver" for r in am["receivers"])
 
 
 # ============================================================

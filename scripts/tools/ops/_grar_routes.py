@@ -514,6 +514,42 @@ def _build_watchdog_route() -> tuple[list[dict], list[dict]]:
     return [route], [{"name": "watchdog-heartbeat"}]
 
 
+def _build_synthetic_probe_route() -> tuple[list[dict], list[dict]]:
+    """Build the synthetic-probe sinkhole route + receiver (ADR-025 synthetic-probe
+    interop contract).
+
+    A customer's EXISTING blackbox / synthetic-monitoring probe can fire a test alert
+    carrying ``component="synthetic-probe"`` to verify it travels end-to-end THROUGH
+    the platform's Alertmanager. This route GUARANTEES that alert lands in a dedicated
+    sink (``synthetic-receiver``) with ``continue:false`` — so a test alert is
+    **zero-risk**: it can never fall through to a human channel / page on-call.
+
+    Pinned by _inject_custom_alert_isolation AHEAD of the enforced NOC match-all route
+    (same durability+correctness rationale as the Watchdog/custom routes: survive the
+    ``--apply`` route-REPLACE; never get swallowed by a broader earlier continue:false).
+    The matcher ``component="synthetic-probe"`` is mutually exclusive with Watchdog's
+    ``alertname="Watchdog"`` and the custom route's ``component="custom"``, so none
+    shadows another. ``group_by:[alertname]`` avoids inheriting the root
+    ``[alertname, tenant]`` aggregation.
+
+    Receiver emitted NAME-ONLY: an operator can point ``synthetic-receiver`` at their
+    own probe-ack sink, or leave it a no-op black hole — the contract guarantees
+    ISOLATION (test alerts never page), not delivery. See the synthetic-probe interop
+    guide. This is the interop SURFACE only; the platform does not itself emit probes
+    (that stays deferred — see ADR-025).
+    """
+    route = {
+        "matchers": ['component="synthetic-probe"'],
+        "group_by": ["alertname"],
+        "group_wait": "0s",
+        "group_interval": "1m",
+        "repeat_interval": "1m",
+        "receiver": "synthetic-receiver",
+        "continue": False,
+    }
+    return [route], [{"name": "synthetic-receiver"}]
+
+
 def generate_routes(routing_configs: dict[str, dict], allowed_domains: list[str] | None = None, enforced_routing: dict | None = None) -> tuple[list[dict], list[dict], list[str]]:
     """Generate Alertmanager route tree + receivers from routing configs.
 

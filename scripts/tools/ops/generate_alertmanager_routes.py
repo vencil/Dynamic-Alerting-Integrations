@@ -85,6 +85,7 @@ from _grar_routes import (  # noqa: E402, F401
     _build_override_route,
     _build_custom_alert_routes,
     _build_watchdog_route,
+    _build_synthetic_probe_route,
     _build_per_tenant_enforced_route,
     _build_single_enforced_route,
     _build_tenant_routes,

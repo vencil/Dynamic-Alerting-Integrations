@@ -31,31 +31,36 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 
-from _grar_routes import _build_custom_alert_routes, _build_watchdog_route  # noqa: E402
+from _grar_routes import (  # noqa: E402
+    _build_custom_alert_routes, _build_watchdog_route, _build_synthetic_probe_route)
 from _grar_validate import assert_watchdog_inhibit_immunity  # noqa: E402
 
 
 def _inject_custom_alert_isolation(routes: list[dict], receivers: list[dict]) -> tuple[list[dict], list[dict]]:
-    """Prepend the two platform-static top-of-tree routes — the Watchdog liveness
-    route (index 0, ADR-025 D1 / #838) then the Custom Alerts isolation route
-    (index 1, #741 S7/S8) — plus their receivers, so the final ConfigMap always
-    pins them AHEAD of the enforced NOC route and they survive the route-REPLACE
-    that --apply performs on route.routes.
+    """Prepend the three platform-static top-of-tree routes — the Watchdog liveness
+    route (index 0, ADR-025 D1 / #838), the Custom Alerts isolation route (index 1,
+    #741 S7/S8), then the synthetic-probe sinkhole route (index 2, ADR-025 interop) —
+    plus their receivers, so the final ConfigMap always pins them AHEAD of the
+    enforced NOC route and they survive the route-REPLACE that --apply performs on
+    route.routes.
 
     Order is load-bearing. Watchdog MUST be index 0 (highest priority) so its
     heartbeat can never be intercepted by a broader earlier route; the custom
-    isolation route follows at index 1. The two matchers are mutually exclusive
-    (alertname="Watchdog" vs component="custom"), so neither shadows the other,
-    but the positions are pinned for determinism and audit.
+    isolation route follows at index 1, the synthetic-probe sink at index 2. The
+    three matchers are mutually exclusive (alertname="Watchdog" vs component="custom"
+    vs component="synthetic-probe"), so none shadows another, but the positions are
+    pinned for determinism and audit.
 
-    Idempotent: any pre-existing Watchdog / component="custom" route is dropped
-    and re-prepended canonically (so re-merging an already-injected config does
-    not duplicate or mis-order), and the name-only placeholder receivers are
-    added only if absent — a richer existing/base definition (e.g. watchdog-
-    heartbeat's url_file) is preserved, never duplicated or clobbered, here.
+    Idempotent: any pre-existing Watchdog / component="custom" / component=
+    "synthetic-probe" route is dropped and re-prepended canonically (so re-merging an
+    already-injected config does not duplicate or mis-order), and the name-only
+    placeholder receivers are added only if absent — a richer existing/base
+    definition (e.g. watchdog-heartbeat's url_file) is preserved, never duplicated or
+    clobbered, here.
     """
     wd_routes, wd_receivers = _build_watchdog_route()
     cust_routes, cust_receivers = _build_custom_alert_routes()
+    probe_routes, probe_receivers = _build_synthetic_probe_route()
 
     def _is_watchdog(r: dict) -> bool:
         return 'alertname="Watchdog"' in r.get("matchers", [])
@@ -63,12 +68,19 @@ def _inject_custom_alert_isolation(routes: list[dict], receivers: list[dict]) ->
     def _is_custom(r: dict) -> bool:
         return 'component="custom"' in r.get("matchers", [])
 
+    def _is_probe(r: dict) -> bool:
+        return 'component="synthetic-probe"' in r.get("matchers", [])
+
     rest = [r for r in (routes or [])
-            if not _is_watchdog(r) and not _is_custom(r)]
-    out_routes = wd_routes + cust_routes + rest
+            if not _is_watchdog(r) and not _is_custom(r) and not _is_probe(r)]
+    # Order is load-bearing + pinned for determinism: Watchdog (0) → Custom (1) →
+    # synthetic-probe (2), all ahead of the enforced NOC match-all. The three
+    # matchers are mutually exclusive so none shadows another.
+    out_routes = wd_routes + cust_routes + probe_routes + rest
 
     have = {r["name"] for r in (receivers or [])}
-    add_recv = [r for r in (wd_receivers + cust_receivers) if r["name"] not in have]
+    add_recv = [r for r in (wd_receivers + cust_receivers + probe_receivers)
+                if r["name"] not in have]
     out_receivers = list(receivers or []) + add_recv
     return out_routes, out_receivers
 
