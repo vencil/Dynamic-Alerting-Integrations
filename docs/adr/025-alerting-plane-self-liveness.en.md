@@ -12,16 +12,9 @@ lang: en
 
 ## Status
 
-✅ **Accepted** (decision accepted 2026-06-14 via PR [#836](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/836); the core MVP is shipped and design-readiness is 5/5 complete, with the resident operated components deferred-with-trigger — see below). This ADR records a decision: give the platform's alerting plane (Prometheus + Alertmanager) a liveness heartbeat so that its own death is noticed from the outside, and draw the responsibility boundary that high availability and large-scale storage stay the operator's job. The MVP (D1 Watchdog + external dead-man's-switch) is implemented and shipped ([#838](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/838)), CI static rule linting (pint) has been adopted ([#843](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/843)), backend-compatibility **PromQL/value parity** is now in CI, the synthetic-probe **interop sinkhole route** has shipped, and the runtime canary is now **design-ready** (full design + a CI promtool demo, see [Runtime Canary Design](../design/runtime-canary.en.md)); the canary's **resident deployment** / a **self-built** end-to-end synthetic probe / backend-compatibility staleness-temporal semantics remain deferred-with-trigger (see "Implementation progress" and "Deferred" below). Operator setup and the silence/inhibit no-go zones live in the [Alerting-Plane Self-Liveness Operator Guide](../integration/alerting-plane-self-liveness.en.md).
+✅ **Accepted** (decision accepted 2026-06-14 via PR [#836](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/836)).
 
-**Implementation progress** (the core decision is **Accepted**: the engine-death blind spot is closed and design-readiness is 5/5 complete; the end-to-end **resident** guarantee that "rule evaluation is correct" is the operated half, deferred-with-trigger):
-
-- **D1 Watchdog + external dead-man's-switch** — implemented ([#838](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/838)).
-- **CI static rule linting (pint)** — adopted OSS `pint` with a hard-gated `alerts/template` check that catches "an aggregation drops the label the template uses → the alert is silent forever," a class this repo has been burned by repeatedly; baseline 0 blocking ([#843](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/843)).
-- **Backend compatibility — PromQL / value parity** — runs a representative subset of the rule-pack goldens (the **compiled output** + recording-rule chain) against a real VictoriaMetrics for function / label / value (epsilon) parity, turning "backend-agnostic" into a verifiable CI fact (`tests/rulepacks/test_vm_backend_parity.py` + CI job).
-- **Synthetic-probe interop sinkhole route** — an alert carrying `component="synthetic-probe"` is guaranteed routed to `synthetic-receiver` with `continue:false` (route index 2, injector-pinned + amtool-guarded), letting a customer verify end-to-end delivery with their OWN prober at zero risk (see [Synthetic-Probe Interop](../integration/synthetic-probe-interop.en.md)).
-- **runtime canary tenant** — **design-ready**: the full design, the decision of **where the config lives** (`conf.d/` GitOps + a reserved tenant, not hardcoded in `k8s/`), the honest two-layer bad-tenant-isolation account, plus a promtool example produced through the real compiler and run in CI (`tests/rulepacks/runtime-canary{.rules,_test}.yaml`), all in [Runtime Canary Design](../design/runtime-canary.en.md). The pipeline is wired in production; **what still defers is the resident deployment** (a heartbeat source + wiring the meta-alert to real on-call).
-- **a self-built end-to-end synthetic probe / backend-compatibility staleness-temporal semantics** — still deferred-with-trigger (triggers in the "Deferred" table below).
+This ADR records a decision: give the platform's alerting plane (Prometheus + Alertmanager) a liveness heartbeat so that its own death is noticed from the outside, and draw the responsibility boundary that high availability and large-scale storage stay the operator's job. Current progress is in the **Implementation status** section below; operator setup and the silence/inhibit no-go zones live in the [Operator Guide](../integration/alerting-plane-self-liveness.en.md).
 
 ## Summary
 
@@ -84,7 +77,15 @@ receivers:
 
 **The route must be first**: Alertmanager evaluates routes top-down. This Watchdog route **must be the first entry in `routes`**, or a broader earlier route with `continue: false` (e.g. a severity catch-all or the existing tenant-alert lane) could swallow it, and the heartbeat would never go out.
 
-**Immune to silences and inhibition**: even when the signal evaluates fine and reaches the top route, it can still be dropped *before Alertmanager sends it* — by a **global silence** (during a major incident SREs often apply a `.*` wildcard silence to stem an alert storm) or an **`inhibit_rule`** (e.g. when `ClusterDown` fires and suppresses all routine alerts). If it is dropped, the outside receives no heartbeat and **false-alarms "platform dead,"** causing secondary chaos. Note that Alertmanager has **no "inhibition-exempt" primitive**: `severity: none` only keeps Watchdog out of the existing severity-targeted suppression — it is **not blanket immunity**, and a future broad inhibit rule whose `target_matchers` match any label Watchdog carries would still suppress it. The real guarantee is a **design constraint plus a mechanical check**: (a) no `inhibit_rules` `target_matchers` may match `alertname="Watchdog"` (enforce via config review / lint — more reliable than a label convention); (b) the operator runbook must **forbid** any silence on `alertname="Watchdog"`, and any global wildcard silence (`.*` / `alertname=~".*"`) **must explicitly exclude** Watchdog.
+**Immune to silences and inhibition**: even when the signal evaluates fine and reaches the top route, it can still be dropped *before Alertmanager sends it* — and a dropped heartbeat makes the outside **false-alarm "platform dead."** Two drop points:
+
+- **Global silence**: during a major incident SREs often apply a `.*` wildcard silence to stem an alert storm, which sweeps up Watchdog too.
+- **`inhibit_rules`**: e.g. when `ClusterDown` fires and suppresses all routine alerts.
+
+Key fact: Alertmanager has **no "inhibition-exempt" primitive**. `severity: none` only keeps Watchdog out of the existing severity-targeted suppression — it is **not blanket immunity**; a future broad inhibit (whose `target_matchers` match any label Watchdog carries) would still suppress it. So immunity must come from a **design constraint + a mechanical check**:
+
+- no `inhibit_rules` `target_matchers` may match `alertname="Watchdog"` (enforce via lint / config review — more reliable than a label convention);
+- the operator runbook must **forbid** any silence on `alertname="Watchdog"`; any global wildcard silence (`.*`) **must explicitly exclude** Watchdog.
 
 **Leave a margin between cadence and timeout**: the external timeout (TTL) must be **longer than `repeat_interval`** to absorb network latency **and rule-evaluation lag under extreme load** — when resources are squeezed, Prometheus is alive (the pod hasn't died) but its rule-evaluation loop falls badly behind, so the heartbeat is emitted late. For example `repeat_interval: 3m` → external TTL of **5m**; that ~2m buffer defends against engine-internal scheduling starvation, not just a few seconds of network jitter. Capture this tolerance contract in the operator runbook.
 
@@ -111,6 +112,16 @@ If the platform ever does provide an HA reference, the chargeback telemetry (not
 - **A self-hosted heartbeat that dies with the platform**: if the heartbeat monitor lives in the same cluster / same network as Prometheus, they die together — which is no protection at all. To self-host, it must sit in a **genuinely independent** cluster or machine.
 - **Reusing the existing log pipeline as the heartbeat source**: the platform's log store only stores, it does not evaluate alerts; and that log stream is not even enabled in the default deployment. Using it as a heartbeat is "looks like reuse, actually builds a new stack," and it still fails to anchor outside.
 
+## Implementation status
+
+The engine-death blind spot is closed and design-readiness is 5/5 complete; the only thing not yet live is the **resident** end-to-end guarantee that "rule evaluation is correct" (see Deferred).
+
+- **Watchdog + external dead-man's-switch (D1)** — implemented ([#838](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/838)).
+- **CI static rule linting (pint)** — adopted OSS `pint` with a hard-gated `alerts/template` check that catches "an aggregation drops the label the template uses → the alert is silent forever," a class this repo has been burned by repeatedly ([#843](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/843)).
+- **Backend compatibility — PromQL / value parity** — runs a representative subset of the rule-pack goldens (the **compiled output**) against a real VictoriaMetrics for function / label / value parity, turning "backend-agnostic" into a verifiable CI fact (`tests/rulepacks/test_vm_backend_parity.py` + CI job).
+- **Synthetic-probe interop** — an alert carrying `component="synthetic-probe"` is guaranteed routed to `synthetic-receiver` with `continue:false`, letting a customer verify end-to-end delivery with their own prober at zero risk (see [Synthetic-Probe Interop](../integration/synthetic-probe-interop.en.md)).
+- **runtime canary tenant** — **design-ready**: the full design, the decision of where the config lives (`conf.d/` GitOps + a reserved tenant, not hardcoded in `k8s/`), the two-layer bad-tenant-isolation account, plus a promtool example produced through the real compiler and run in CI (see [Runtime Canary Design](../design/runtime-canary.en.md)). The pipeline is wired in production; **what still defers is the resident deployment**.
+
 ## Deferred (with triggers)
 
 > **The deferral axis**: the platform aims to replace or integrate with customers who already run a mature monitoring product. These capabilities (a heartbeat/Watchdog, HA, synthetic probing) already exist in the industry, so how far we must go — the bar — is **the standard set by the existing product we replace**, not our own internal maturity. Each item therefore splits in two: **the credible design + one runnable example you need at evaluation time (cheap — do first)** vs **the resident component only real operation needs (expensive — wait for an explicit trigger)**; capabilities the customer **already has** are reached via **interop, not a rebuild**.
@@ -135,7 +146,10 @@ If the platform ever does provide an HA reference, the chargeback telemetry (not
 ## Consequences
 
 - **Positive**: with "one rule + one route + one routing test" and zero new components, it closes the "the alerting system died and nobody knew" blind spot; consistent with the storage-backend-neutral stance, and it doesn't fight the customer's backend.
-- **Negative**: the external heartbeat is an operator-supplied dependency (the air-gap fallback is pull-based polling); the heartbeat only proves "the engine is alive," not "rule evaluation is correct" (→ left to the runtime canary tenant); under the single-replica demo deployment, a real outage still needs manual recovery (HA is the operator's responsibility).
+- **Negative**:
+    - the external heartbeat is an operator-supplied dependency (the air-gap fallback is pull-based polling);
+    - the heartbeat only proves "the engine is alive," not "rule evaluation is correct" (→ left to the runtime canary);
+    - under the single-replica demo deployment, a real outage still needs manual recovery (HA is the operator's responsibility).
 
 ## Related
 
