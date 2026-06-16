@@ -71,6 +71,7 @@ lang: en
 | `docs/integration/operator-shadow-monitoring.md` (.en.md) | Platform Engineers | Operator Shadow Monitoring Strategy |
 | `docs/integration/prometheus-operator-integration.md` (.en.md) | Platform Engineers | Prometheus Operator Integration Guide (Hub) |
 | `docs/integration/README.md` (.en.md) | Platform Engineers, SREs, DevOps | Integration Guides — Choose by your existing monitoring stack |
+| `docs/integration/synthetic-probe-interop.md` (.en.md) | Platform Engineers, SREs | Synthetic-Probe Interop — verify end-to-end delivery with your own prober |
 | `docs/integration/tenant-federation.md` | Platform Engineers, SREs | Tenant Federation Integration Guide |
 | `docs/integration/troubleshooting-checklist.md` (.en.md) | SREs, on-call, Platform Engineers, migration-engineers | Troubleshooting Checklist |
 | `docs/integration/victoriametrics-integration.md` (.en.md) | Platform Engineers, SREs, vm-operators | VictoriaMetrics Integration Guide |
