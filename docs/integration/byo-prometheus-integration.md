@@ -349,6 +349,101 @@ da-tools validate-config --config-dir /data/conf.d
 
 ---
 
+## 進階：磁碟填滿告警（Disk-Fill Recipes，需 CSI）
+
+讓租戶自助宣告「磁碟快滿」告警——對 PVC 的 `kubelet_volume_stats_*` 指標跑 forecast（預測幾小時後填滿）或 ratio（使用率超標）recipe。這是**可選**能力，且有一個**硬前提**——請先讀完前提再決定是否啟用。
+
+### 前提：叢集需有實作 NodeGetVolumeStats 的 CSI driver
+
+`kubelet_volume_stats_*` 由 kubelet 透過 CSI 的 `NodeGetVolumeStats` 取得——**沒有，就完全沒有這組指標**，磁碟 recipe 會編譯成功但在叢集裡**永遠不會觸發**（fail-silent）。
+
+- ❌ kind 預設的 `local-path`（hostPath）**不**實作 → 零 volume-stats。
+- ✅ 雲商 CSI（EBS / PD / Azure Disk…）或 `csi-driver-host-path` 等有實作 → 正常吐指標。
+- **如何確認**：查你的 Prometheus，若 `kubelet_volume_stats_available_bytes` 查不到**任何** series，代表你的儲存後端沒有 kubelet MetricsProvider。若想在配置 scrape 前就確認叢集能力，可參考內部 spike [`test/disk-stats-spike/`](https://github.com/vencil/Dynamic-Alerting-Integrations/tree/main/test/disk-stats-spike)（部署一個 PVC + pod、直接驗 kubelet 是否吐 volume-stats）。
+
+> **為何只支援 1:1 tenant 歸屬**（disk / PVC / node 等基礎設施指標不支援 N:1）：見 [ADR-006 租戶映射拓撲](../adr/006-tenant-mapping-topologies.md)。
+
+### 步驟 A：抓取 kubelet volume-stats 並注入 `tenant`
+
+volume-stats 原生帶 `namespace` 與 `persistentvolumeclaim`，但**不帶 `tenant`**。新增一個抓 kubelet 主 `/metrics` 端點的 scrape job，並用 `metric_relabel_configs` 把 `namespace` 改寫為 `tenant`（1:1，效果同步驟 1；但 kubelet 指標的 `namespace` 是**原生 metric label**，故這裡用 `metric_relabel_configs` 而非步驟 1 的 `relabel_configs`）：
+
+```yaml
+scrape_configs:
+  # ★ kubelet volume-stats（per-PVC 磁碟容量）— 需 CSI NodeGetVolumeStats
+  - job_name: "kubelet-volume-stats"
+    scheme: https
+    tls_config:
+      ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+      insecure_skip_verify: true
+    bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+    kubernetes_sd_configs:
+      - role: node
+    relabel_configs:
+      # 經 apiserver node-proxy 抓 kubelet /metrics（避開直連 kubelet 的 TLS 問題）
+      - target_label: __address__
+        replacement: kubernetes.default.svc:443
+      - source_labels: [__meta_kubernetes_node_name]
+        regex: (.+)
+        target_label: __metrics_path__
+        replacement: /api/v1/nodes/${1}/proxy/metrics
+    metric_relabel_configs:
+      # 只留 tenant namespace 的 volume-stats（與步驟 1 同慣例）
+      - source_labels: [namespace]
+        action: keep
+        regex: "db-.+"                     # ← 改成你叢集的 tenant namespace 命名模式！
+      - source_labels: [__name__]
+        action: keep
+        regex: "kubelet_volume_stats_.*"
+      # ★ 核心：1:1 把 namespace 注入為 tenant（與步驟 1 的 relabel 同效）
+      - source_labels: [namespace]
+        target_label: tenant
+```
+
+> 平台自帶的 reference 部署已含這個 job；完整可運行版本見 [`k8s/03-monitoring/configmap-prometheus.yaml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/k8s/03-monitoring/configmap-prometheus.yaml) 的 `kubelet-volume-stats`。此 job 需 `nodes/proxy` RBAC（與既有的 kubelet-cadvisor job 相同）。非 CSI 叢集套了也**無害**——`metric_relabel_configs` 的 keep 會 drop 到 0 series。
+
+### 步驟 B：租戶宣告磁碟 recipe
+
+在租戶 conf.d 的 `_custom_alerts` 宣告（forecast ratio 模式，預測 PVC 在 horizon 內填滿）：
+
+```yaml
+tenants:
+  db-a:
+    _custom_alerts:
+      - recipe: forecast
+        name: disk_will_fill
+        metric: kubelet_volume_stats_available_bytes
+        capacity_metric: kubelet_volume_stats_capacity_bytes
+        op: "<"
+        horizon: 4h                        # 預測未來 4 小時
+        threshold: "0.15:warning"          # 可用比例將跌破 15%
+        for: 30m                           # 預測需持續 30m（濾掉瞬時斜率翻轉）
+        group_by: [persistentvolumeclaim]  # 逐 PVC 評估（小卷快滿不被大空卷掩蓋）
+```
+
+完整範例（threshold / rate / ratio / p99 / absence / `==` 等所有 recipe）見 [`recipes/examples/conf.d/shop.yaml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/rule-packs/recipes/examples/conf.d/shop.yaml)；recipe 語法、各模式語義與安全採用指引（含 dead-exporter 盲點）見 [Custom Rule Governance](../custom-rule-governance.md)。改完跑 `make custom-alerts-compile` 重編規則包。
+
+### 步驟 C：驗證
+
+```bash
+da-tools byo-check prometheus --prometheus http://<your-prometheus>:9090
+```
+
+`byo-check` 的磁碟 recipe 步驟會檢查：**宣告了磁碟 recipe 且有 Running pod 的租戶，是否真的收到 tenant-attributed volume-stats**。未到貨時會明確報出「CSI / scrape job / relabel」三項待查方向。
+
+**✅ 通過條件**：磁碟 recipe 步驟為 `pass`（尚未有租戶宣告磁碟 recipe 時為 `skip`）。
+
+### 出問題時：`CustomRecipeDiskInert` 告警
+
+即使略過上面的 byo-check，平台仍有 runtime 安全網：當租戶**宣告了磁碟 recipe、有 Running pod、但歸屬後的 volume-stats 缺席**時，`CustomRecipeDiskInert` 會觸發，並依序提示三個最常見原因：
+
+1. 工作負載未掛載持久化磁碟（最常見；例如 Pod 為純無狀態服務、PVC 卡在 `Pending`、或 StatefulSet 漏寫 `volumeClaimTemplates`）→ 查該租戶的部署架構；
+2. 缺 kubelet volume-stats scrape job 或 `namespace→tenant` relabel（步驟 A 漏做）；
+3. CSI 未實作 NodeGetVolumeStats（前提不滿足）。
+
+> **能力界線（誠實）**：volume-stats 反映租戶視角的**邏輯**配額。底層 thin-provisioning 的實體爆盤（`volume_stats` 仍顯示有空間、實際 I/O 已凍結）不在此告警範圍內，應由平台 SRE 以 `node_filesystem_*` / CSI controller 指標（基礎設施視角）防禦。
+
+---
+
 ## 進階：與 Thanos / VictoriaMetrics 整合
 
 本平台的規則包純粹基於標準 PromQL，因此與 Thanos 和 VictoriaMetrics 完全相容：

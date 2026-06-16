@@ -349,6 +349,101 @@ da-tools validate-config --config-dir /data/conf.d
 
 ---
 
+## Advanced: Disk-Fill Alerts (Disk-Fill Recipes, requires CSI)
+
+Let tenants self-serve "disk is filling up" alerts — a `forecast` (predict exhaustion N hours out) or `ratio` (usage over a threshold) recipe over a PVC's `kubelet_volume_stats_*` metrics. This is an **optional** capability with one **hard prerequisite** — read the prerequisite before deciding to enable it.
+
+### Prerequisite: a CSI driver implementing NodeGetVolumeStats
+
+`kubelet_volume_stats_*` is produced by the kubelet via CSI's `NodeGetVolumeStats`. **Without it, the metrics simply do not exist** — a disk recipe compiles fine but **never fires** in the cluster (fail-silent).
+
+- ❌ kind's default `local-path` (hostPath) does **not** implement it → zero volume-stats.
+- ✅ Cloud CSI drivers (EBS / PD / Azure Disk…) and `csi-driver-host-path` do → metrics flow normally.
+- **How to check**: query your Prometheus — if `kubelet_volume_stats_available_bytes` returns **no** series at all, your storage backend has no kubelet MetricsProvider. To confirm cluster capability *before* configuring scraping, see the internal spike [`test/disk-stats-spike/`](https://github.com/vencil/Dynamic-Alerting-Integrations/tree/main/test/disk-stats-spike) (it deploys a PVC + pod and checks directly whether the kubelet emits volume-stats).
+
+> **Why only 1:1 tenant attribution** (disk / PVC / node infrastructure metrics do not support N:1): see [ADR-006 Tenant-Mapping Topologies](../adr/006-tenant-mapping-topologies.md).
+
+### Step A: Scrape kubelet volume-stats and inject `tenant`
+
+volume-stats carry `namespace` and `persistentvolumeclaim` natively, but **not `tenant`**. Add a scrape job for the kubelet's main `/metrics` endpoint, and use `metric_relabel_configs` to rewrite `namespace` into `tenant` (1:1, same effect as Step 1; but because `namespace` is a **native metric label** on kubelet metrics, this uses `metric_relabel_configs` rather than Step 1's `relabel_configs`):
+
+```yaml
+scrape_configs:
+  # ★ kubelet volume-stats (per-PVC disk capacity) — requires CSI NodeGetVolumeStats
+  - job_name: "kubelet-volume-stats"
+    scheme: https
+    tls_config:
+      ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+      insecure_skip_verify: true
+    bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+    kubernetes_sd_configs:
+      - role: node
+    relabel_configs:
+      # Scrape kubelet /metrics via the apiserver node-proxy (avoids direct-kubelet TLS issues)
+      - target_label: __address__
+        replacement: kubernetes.default.svc:443
+      - source_labels: [__meta_kubernetes_node_name]
+        regex: (.+)
+        target_label: __metrics_path__
+        replacement: /api/v1/nodes/${1}/proxy/metrics
+    metric_relabel_configs:
+      # Keep only volume-stats from tenant namespaces (same idiom as Step 1)
+      - source_labels: [namespace]
+        action: keep
+        regex: "db-.+"                     # ← change to YOUR cluster's tenant-namespace pattern!
+      - source_labels: [__name__]
+        action: keep
+        regex: "kubelet_volume_stats_.*"
+      # ★ Core: 1:1 inject namespace as tenant (same effect as Step 1's relabel)
+      - source_labels: [namespace]
+        target_label: tenant
+```
+
+> The platform's own reference deployment already ships this job; for the full runnable version see `kubelet-volume-stats` in [`k8s/03-monitoring/configmap-prometheus.yaml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/k8s/03-monitoring/configmap-prometheus.yaml). The job needs `nodes/proxy` RBAC (same as the existing kubelet-cadvisor job). On a non-CSI cluster it is **harmless** — the `metric_relabel_configs` keeps drop everything to 0 series.
+
+### Step B: A tenant declares a disk recipe
+
+Declare it in the tenant's conf.d `_custom_alerts` (forecast ratio mode — predict the PVC filling within the horizon):
+
+```yaml
+tenants:
+  db-a:
+    _custom_alerts:
+      - recipe: forecast
+        name: disk_will_fill
+        metric: kubelet_volume_stats_available_bytes
+        capacity_metric: kubelet_volume_stats_capacity_bytes
+        op: "<"
+        horizon: 4h                        # predict 4 hours out
+        threshold: "0.15:warning"          # available fraction will drop below 15%
+        for: 30m                           # require the prediction to persist 30m (smooth transient slope flips)
+        group_by: [persistentvolumeclaim]  # evaluate per-PVC (a small near-full volume isn't hidden by a large empty one)
+```
+
+For the full example (threshold / rate / ratio / p99 / absence / `==` recipes) see [`recipes/examples/conf.d/shop.yaml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/rule-packs/recipes/examples/conf.d/shop.yaml); for recipe syntax, per-mode semantics, and safe-adoption guidance (incl. the dead-exporter blind spot) see [Custom Rule Governance](../custom-rule-governance.md). Run `make custom-alerts-compile` to recompile the rule pack after editing.
+
+### Step C: Verify
+
+```bash
+da-tools byo-check prometheus --prometheus http://<your-prometheus>:9090
+```
+
+`byo-check`'s disk-recipe step checks whether **tenants that declared a disk recipe AND have Running pods actually receive tenant-attributed volume-stats**. When they don't, it names the three things to check: CSI / scrape job / relabel.
+
+**✅ Pass criteria**: the disk-recipe step is `pass` (or `skip` when no tenant has declared a disk recipe yet).
+
+### When it breaks: the `CustomRecipeDiskInert` alert
+
+Even if you skip the byo-check above, the platform has a runtime safety net: when a tenant has **declared a disk recipe, has a Running pod, but the attributed volume-stats are absent**, `CustomRecipeDiskInert` fires and lists the three most common causes in order:
+
+1. the workload mounts no persistent volume (most common; e.g. a stateless Pod, a PVC stuck `Pending`, or a StatefulSet missing `volumeClaimTemplates`) → check the tenant's deployment;
+2. the kubelet volume-stats scrape job or `namespace→tenant` relabel is missing (Step A skipped);
+3. the CSI driver does not implement NodeGetVolumeStats (prerequisite unmet).
+
+> **Capability boundary (honest)**: volume-stats reflect the tenant's view of **logical** quota. A thin-provisioned backing pool that is physically full (while `volume_stats` still reports free space and I/O has frozen) is out of scope for this alert and should be defended by the platform SRE via `node_filesystem_*` / CSI controller metrics (the infrastructure view).
+
+---
+
 ## Advanced: Integration with Thanos / VictoriaMetrics
 
 The platform's rule packs are based purely on standard PromQL, making them fully compatible with Thanos and VictoriaMetrics:
