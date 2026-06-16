@@ -12,7 +12,13 @@ lang: en
 
 ## Status
 
-🟡 **In Progress**. This ADR records a decision: give the platform's alerting plane (Prometheus + Alertmanager) a liveness heartbeat so that its own death is noticed from the outside, and draw the responsibility boundary that high availability and large-scale storage stay the operator's job. The MVP (D1 Watchdog + external dead-man's-switch) implementation has started ([#838](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/838)); the canary tenant / rule linter / end-to-end synthetic probe remain deferred-with-trigger (see "Deferred" below). Operator setup and the silence/inhibit no-go zones live in the [Alerting-Plane Self-Liveness Operator Guide](../integration/alerting-plane-self-liveness.en.md).
+🟡 **In Progress**. This ADR records a decision: give the platform's alerting plane (Prometheus + Alertmanager) a liveness heartbeat so that its own death is noticed from the outside, and draw the responsibility boundary that high availability and large-scale storage stay the operator's job. The MVP (D1 Watchdog + external dead-man's-switch) is implemented and shipped ([#838](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/838)), and CI static rule linting (pint) has been adopted ([#843](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/843)); the runtime canary tenant / end-to-end synthetic probe / backend compatibility test remain deferred-with-trigger (see "Implementation progress" and "Deferred" below). Operator setup and the silence/inhibit no-go zones live in the [Alerting-Plane Self-Liveness Operator Guide](../integration/alerting-plane-self-liveness.en.md).
+
+**Implementation progress** (status stays in-progress: the engine-death blind spot is closed, but the end-to-end guarantee that "rule evaluation is correct" is not yet in place):
+
+- **D1 Watchdog + external dead-man's-switch** — implemented ([#838](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/838)).
+- **CI static rule linting (pint)** — adopted OSS `pint` with a hard-gated `alerts/template` check that catches "an aggregation drops the label the template uses → the alert is silent forever," a class this repo has been burned by repeatedly; baseline 0 blocking ([#843](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/843)).
+- **runtime canary tenant / end-to-end synthetic probe / backend compatibility test** — still deferred-with-trigger (triggers in the "Deferred" table below).
 
 ## Summary
 
@@ -106,10 +112,13 @@ If the platform ever does provide an HA reference, the chargeback telemetry (not
 
 | Item | One line | Trigger |
 |---|---|---|
-| **Canary tenant** | A permanent fake tenant + an always-firing alert, end-to-end validating that the whole "rule compilation + routing" chain isn't broken (not just that the engine is alive) | **Deploy it as a safety net before the next major rule-compiler refactor or multi-tenant routing change** — no need to wait for an incident |
-| **Static rule linting** | Adopt a mature open-source rule linter in CI to catch inefficient / dangerous queries | When tenant-authored query complexity starts loading the backend |
+| **Canary tenant (runtime)** | A permanent fake tenant + an always-firing alert (`CustomAlertPipelineCanaryDown` meta-alert), end-to-end validating that the whole "rule compilation + routing" chain isn't broken and catching the exporter / compile-pipeline death the Watchdog can't see (not just that the engine is alive) | **Deploy it as a safety net before the next major rule-compiler refactor or multi-tenant routing change** — no need to wait for an incident |
 | **End-to-end synthetic probe** | Send a test alert from outside and verify it travels the full Prometheus→Alertmanager→external path | After heartbeat + canary ship, when a "rule evaluation silently failed" incident occurs |
 | **Backend compatibility test** | Verify rules evaluate correctly on the customer's large-scale backend (including staleness timing differences) | First customer integration on their own backend |
+
+> **Shipped, no longer deferred**: the **static rule linting (CI rule linter)** that was listed here is implemented via OSS `pint` in [#843](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/843) (hard-gated `alerts/template`); see "Implementation progress" above.
+>
+> **The CI-gate variant of the canary was evaluated and rejected (recorded here so nobody re-walks it)**: a **CI-gate** canary that feeds a synthetic `absence` fixture through "the real compiler + promtool + amtool" was evaluated, but it overlaps ~90% with the existing `absence` golden test (`tests/dx/fixtures/custom_alerts_promtool/absence.yaml`), the Go `rulepack_contract_test.go` `component` / `tenant` label contract, and the routing orchestration in `test_generate_routes_orchestration.py`; and since CI has no exporter it must synthesize the series itself — which shrinks the end-to-end the ADR wants to verify down to a property of the CI fixture → rejected. The table keeps the **runtime** canary (a resident fake tenant that catches the [#731](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/731)-class silent exporter / compile-pipeline death), complementary to the engine heartbeat and still deferred-with-trigger.
 
 ## Scope
 
@@ -121,7 +130,7 @@ If the platform ever does provide an HA reference, the chargeback telemetry (not
 ## Consequences
 
 - **Positive**: with "one rule + one route + one routing test" and zero new components, it closes the "the alerting system died and nobody knew" blind spot; consistent with the storage-backend-neutral stance, and it doesn't fight the customer's backend.
-- **Negative**: the external heartbeat is an operator-supplied dependency (the air-gap fallback is pull-based polling); the heartbeat only proves "the engine is alive," not "rule evaluation is correct" (→ left to the canary tenant); under the single-replica demo deployment, a real outage still needs manual recovery (HA is the operator's responsibility).
+- **Negative**: the external heartbeat is an operator-supplied dependency (the air-gap fallback is pull-based polling); the heartbeat only proves "the engine is alive," not "rule evaluation is correct" (→ left to the runtime canary tenant); under the single-replica demo deployment, a real outage still needs manual recovery (HA is the operator's responsibility).
 
 ## Related
 

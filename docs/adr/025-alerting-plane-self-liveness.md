@@ -9,7 +9,7 @@ tracking_kind: adr
 status: in-progress
 domain: observability
 created_at: 2026-06-14
-updated_at: 2026-06-14
+updated_at: 2026-06-16
 ---
 
 # ADR-025: 告警平面自我存活性 — 讓告警系統能偵測自己的死亡
@@ -18,7 +18,13 @@ updated_at: 2026-06-14
 
 ## 狀態
 
-🟡 **In Progress**（實作中）。本 ADR 記錄一個決策：為平台的告警平面（Prometheus + Alertmanager）加上「自己死掉會被外部察覺」的存活心跳，並劃清「高可用與大規模儲存由 operator 負責」的責任邊界。MVP（D1 Watchdog + 外部 dead-man's-switch）實作已啟動（[#838](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/838)）；canary 租戶 / 規則 linter / 端到端合成探測等仍為 defer-with-trigger（見下方「之後再說」）。operator 設定與靜音/抑制禁區見 [告警平面自我存活性 Operator 指南](../integration/alerting-plane-self-liveness.md)。
+🟡 **In Progress**（實作中）。本 ADR 記錄一個決策：為平台的告警平面（Prometheus + Alertmanager）加上「自己死掉會被外部察覺」的存活心跳，並劃清「高可用與大規模儲存由 operator 負責」的責任邊界。MVP（D1 Watchdog + 外部 dead-man's-switch）已實作上線（[#838](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/838)），CI 規則靜態檢查（pint）亦已採用（[#843](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/843)）；runtime canary 租戶 / 端到端合成探測 / 後端相容性測試仍為 defer-with-trigger（見下方「實作進度」與「之後再說」）。operator 設定與靜音/抑制禁區見 [告警平面自我存活性 Operator 指南](../integration/alerting-plane-self-liveness.md)。
+
+**實作進度**（狀態維持 in-progress：引擎死亡的盲點已補，但「規則評估正確性」的端到端保證尚未到位）：
+
+- **D1 Watchdog + 外部 dead-man's-switch** — 已實作（[#838](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/838)）。
+- **CI 規則靜態檢查（pint）** — 已採用 OSS `pint`、hard-gate `alerts/template`，攔截「聚合砍掉 template 用到的 label → 告警永遠靜默」這個本 repo 燒過多次的類別；baseline 0 blocking（[#843](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/843)）。
+- **runtime canary 租戶 / 端到端合成探測 / 後端相容性測試** — 仍 defer-with-trigger（觸發條件見下方「之後再說」表）。
 
 ## 摘要
 
@@ -110,10 +116,13 @@ receivers:
 
 | 項目 | 一句話 | 觸發條件 |
 |---|---|---|
-| **Canary 租戶** | 一個常駐假租戶 + 必觸發告警，端到端驗證「規則編譯 + 路由」整條沒被改壞（不只是引擎還活著） | **下次重大的規則編譯邏輯重構、或多租戶路由規則大改時，先行佈署當安全網**；不必等事故發生 |
-| **規則靜態檢查** | CI 引入成熟的開源規則 linter，攔截低效 / 危險查詢 | 租戶自寫查詢的複雜度開始造成後端負載 |
+| **Canary 租戶（runtime）** | 一個常駐假租戶 + 必觸發告警（`CustomAlertPipelineCanaryDown` meta-alert），端到端驗證「規則編譯 + 路由」整條沒被改壞，並抓得到 Watchdog 看不到的 exporter / 編譯管線死亡（不只是引擎還活著） | **下次重大的規則編譯邏輯重構、或多租戶路由規則大改時，先行佈署當安全網**；不必等事故發生 |
 | **端到端合成探測** | 從外部送一條測試告警，驗證它真的走完 Prometheus→Alertmanager→外部 | 心跳 + canary 上線後，出現「規則評估悄悄失敗」事件 |
 | **後端相容性測試** | 驗證規則在客戶的大規模後端上正確評估（含資料過期時序差異） | 首個客戶整合到自有後端 |
+
+> **已落地、不再 defer**：原列於此的 **規則靜態檢查（CI 規則 linter）** 已於 [#843](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/843) 採用 OSS `pint` 實作（hard-gate `alerts/template`），詳見上方「實作進度」。
+>
+> **canary 的 CI-gate 變體已評估並否決（記此免重走）**：曾評估一個把合成 `absence` fixture 餵進「真編譯器 + promtool + amtool」的 **CI-gate** canary，但它與既有 `absence` golden 測試（`tests/dx/fixtures/custom_alerts_promtool/absence.yaml`）、Go `rulepack_contract_test.go` 的 `component` / `tenant` 標籤契約、`test_generate_routes_orchestration.py` 的路由 orchestration 測試重疊約九成；且 CI 無 exporter、須自行合成 series，反而把 ADR 要驗的端到端**砍小**為 CI fixture 自身的性質 → **否決**。上表保留的是 **runtime** canary（常駐假租戶，能抓 [#731](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/731)-class 的 exporter / 編譯管線靜默死亡），與引擎心跳互補、仍 defer-with-trigger。
 
 ## 範圍邊界
 
@@ -125,7 +134,7 @@ receivers:
 ## 後果
 
 - **正面**：用「一條規則 + 一條路由 + 一個路由測試」、零新增元件，補上「告警系統自己死掉沒人知道」的盲點；與「儲存後端中立」定位一致，不和客戶後端打架。
-- **負面**：外部心跳是 operator 要自備的依賴（斷網退路＝被動探測）；心跳只能證明「引擎還活著」、不能證明「規則評估正確」（→ 留給 Canary 租戶）；單副本示範部署下，真出事仍需人工復原（高可用是 operator 的責任）。
+- **負面**：外部心跳是 operator 要自備的依賴（斷網退路＝被動探測）；心跳只能證明「引擎還活著」、不能證明「規則評估正確」（→ 留給 runtime Canary 租戶）；單副本示範部署下，真出事仍需人工復原（高可用是 operator 的責任）。
 
 ## 相關
 
