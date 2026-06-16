@@ -239,7 +239,16 @@ def main() -> int:
         return EXIT_OK
 
     out_path.write_text(_render(groups), encoding="utf-8")
-    print(f"✅ Compiled {meta['shapes']} shape(s) → {out_path.relative_to(repo)}")
+    # Display repo-relative when the out path is inside the repo, else show it as
+    # given. `relative_to` raises ValueError for an --out outside the repo (or on a
+    # different drive on Windows) — without this guard the success line would crash
+    # AFTER the file was already written, turning a successful compile into a
+    # traceback + nonzero exit (false failure).
+    try:
+        shown = out_path.relative_to(repo)
+    except ValueError:
+        shown = out_path
+    print(f"✅ Compiled {meta['shapes']} shape(s) → {shown}")
     if meta["per_tenant_counts"]:
         worst = max(meta["per_tenant_counts"].values())
         print(f"   per-tenant EFFECTIVE recipe counts (own + inherited): "

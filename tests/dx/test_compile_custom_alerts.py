@@ -293,6 +293,19 @@ def test_check_flags_stale(tmp_path, monkeypatch):
     assert cc.main() == cc.EXIT_VIOLATION
 
 
+def test_write_out_outside_repo_does_not_crash(tmp_path, monkeypatch):
+    # Regression: the success line did `out_path.relative_to(repo)`, which raises
+    # ValueError for an --out OUTSIDE the repo (a CI scratch dir, or a different
+    # drive on Windows) — and it ran AFTER the file was written, so a successful
+    # compile crashed with a traceback + nonzero exit (false failure). tmp_path is
+    # outside the repo, so the WRITE path (no --check) must still return EXIT_OK.
+    out = tmp_path / "rule-pack-custom-alerts.yaml"
+    monkeypatch.setattr(sys, "argv", [
+        "compile", "--config-dir", str(_EXAMPLES), "--out", str(out)])
+    assert cc.main() == cc.EXIT_OK
+    assert out.exists() and "groups:" in out.read_text(encoding="utf-8")
+
+
 # --- 8. forecast recipe (ADR-024 §Forecast Recipe, #741) -------------------
 def test_forecast_ratio_mode_slug_and_records(tmp_path):
     # ratio mode: capacity_metric set → headroom ratio avail/capacity; horizon
