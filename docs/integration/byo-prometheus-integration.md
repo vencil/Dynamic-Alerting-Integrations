@@ -444,6 +444,62 @@ da-tools byo-check prometheus --prometheus http://<your-prometheus>:9090
 
 ---
 
+## 進階：磁碟 IOPS / 吞吐告警（Per-Container Disk I/O Recipes）
+
+讓租戶對「磁碟 I/O 暴衝」設告警——抓 runaway query、backup storm 等異常 I/O。用 `rate` recipe 跑 `container_fs_*`（reads/writes 的 ops 或 bytes）。
+
+> **⚠ 先讀懂界線（誠實）**：這個信號**比容量（disk-fill）弱、且有環境依賴**，請先確認它對你的環境有效再依賴：
+> - **per-CONTAINER，非 per-PVC**：`container_fs_*` 來自 cAdvisor 的 cgroup blkio，**對不到特定 PVC**（[cAdvisor #3588](https://github.com/google/cadvisor/issues/3588)）。多 PVC 的 Pod 切不開，只能看容器總和。
+> - **網路儲存看不到**：cgroup blkio 只記 block-layer I/O。**NFS / EFS / Azure Files 等網路儲存走 network stack、繞過 blkio → `container_fs` 永遠是 0**（[cAdvisor #1702](https://github.com/google/cadvisor/issues/1702)）。這類環境**無法**用此告警（byo-check 會明說）。
+> - **不是 saturation**：raw IOPS/吞吐 ≠「磁碟飽和」（那是 node 級 %util / latency，屬平台 SRE，租戶側拆不出來）。把它當**相對於 baseline 的異常**信號用（`da-tools baseline` 取建議閾值），別當絕對 SLA。
+
+### 步驟 A：抓取 container_fs 並注入 `tenant`
+
+平台 reference 的 `kubelet-cadvisor` job 已把 `container_fs_{reads,writes}_total` + `_bytes_total` 納入 keep、加上 `namespace→tenant` relabel、並 drop `container=""`/`"POD"`（防 pod-root 重複計）——完整版本見 [`k8s/03-monitoring/configmap-prometheus.yaml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/k8s/03-monitoring/configmap-prometheus.yaml) 的 `kubelet-cadvisor` job。BYO 自建 Prometheus 請比照（緊 keep + relabel + container drop；別用寬 `container_fs_.*`，device label 會炸 cardinality）。
+
+### 步驟 B：租戶宣告 IOPS recipe
+
+```yaml
+tenants:
+  db-a:
+    _custom_alerts:
+      - recipe: rate
+        name: disk_write_iops_high
+        metric: container_fs_writes_total      # ops/秒；要看吞吐改 _bytes_total
+        op: ">"
+        window: 5m
+        threshold: "500:warning"               # ★ 用 da-tools baseline 取值，別憑空填
+        selectors:
+          container: "mariadb"                 # ★ 強烈建議 pin 到 DB 容器（避開 sidecar 噪音）
+```
+
+> recipe 聚合到 tenant 層（`sum by(tenant, …) (rate(...))`）、收掉 device/pod；`selectors.container` pin 到你的 DB 容器，只看它的 I/O。
+
+### 步驟 C：Fidelity Gate（上線前必做）
+
+container_fs 對你的環境**是否真的看得到** I/O，只有實證能答。上線此告警**前**：
+
+```bash
+# 1) 跑代表性負載（你的真實 workload，或 sysbench/pgbench）
+# 2) 期間用 byo-check 確認 container_fs 跟著動：
+da-tools byo-check prometheus --prometheus http://<your-prometheus>:9090
+#   step5_disk_iops_recipe_prereq:
+#     pass → container_fs 對宣告租戶有到貨 = 信號 high-fidelity，可安心啟用
+#     fail → 沒到貨（沒 scrape、或儲存 blkio-bypass）→ 此環境不能用，別依賴
+```
+
+**✅ 通過條件**：`byo-check` 的 `step5` 為 `pass`，且負載期間 `rate(container_fs_reads_total{tenant="<you>"}[5m])` 或 `..._writes_total` **任一**有非零合理值（讀多寫少的 workload 看 reads 即可——與 gate 的 reads-OR-writes 一致）。**fail / 兩者全 0 就誠實別開**——一個量不到東西的 I/O 告警，比沒有更危險。
+
+> **基礎設施變更後重跑**：cgroup 版本（v1→v2 遷移）或 storage driver 換掉時，底層 blkio 統計機制會改變——重跑這道 fidelity gate 即自動重新驗證 container_fs 在新環境仍 high-fidelity，無需信任任何靜態假設。
+
+### 出問題時：byo-check step5 報 fail
+
+依序查：(1) `container_fs_*` 是否在 cadvisor scrape keep 內、且有 `namespace→tenant` relabel（步驟 A）；(2) 你的儲存是否走網路（NFS/EFS）而**繞過 cgroup blkio**——這類 container_fs 結構上就是 0，請改由平台 SRE 用 node 級 `node_disk_*` 監控；(3) 租戶 workload 是否真的有在寫磁碟（負載期間 baseline 應為非零）。
+
+> **node 級 saturation 屬平台 SRE**：真正的「磁碟飽和」（%util、await/latency）是 node/device 級、無法 per-tenant 拆解，由平台 SRE 用 `node_disk_*` 監控——不在此租戶 recipe 範圍（同 disk-fill 的 thin-provisioning 界線）。
+
+---
+
 ## 進階：與 Thanos / VictoriaMetrics 整合
 
 本平台的規則包純粹基於標準 PromQL，因此與 Thanos 和 VictoriaMetrics 完全相容：

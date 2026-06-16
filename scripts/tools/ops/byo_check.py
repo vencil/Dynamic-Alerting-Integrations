@@ -329,6 +329,97 @@ def check_prometheus(args):
                           "tenant-attributed volume-stats",
             })
 
+    # Step 5: disk-IOPS-recipe prerequisite (#692 P0④) — container_fs scraped AND
+    # tenant-attributed. Only meaningful if a tenant declared a rate recipe over
+    # container_fs_* (per-CONTAINER disk I/O, NOT per-PVC). Unlike volume-stats, IOPS has
+    # NO runtime sentinel (cAdvisor is core-scraped, no CSI dependency → an inert IOPS
+    # recipe is ALWAYS platform-side, so a per-tenant page would be noise to the wrong
+    # audience). So THIS check is the SOLE net + the codified FIDELITY GATE: it catches
+    # the cgroup-blkio-BYPASS case — NETWORK storage (NFS/EFS) routes I/O through the
+    # network stack, bypassing blkio, so container_fs stays 0 even with a perfect scrape
+    # (cAdvisor #1702). That surfaces here as "declared but none arrive" → fail-loud,
+    # which IS the empirical proof that container_fs is high-fidelity on this cluster.
+    declaring, err = query_prometheus(
+        prom_url,
+        'count by(tenant) (user_threshold{component="custom", metric=~"container_fs_.*"})'
+    )
+    if err:
+        checks.append({
+            "check": "step5_disk_iops_recipe_prereq",
+            "status": "fail",
+            "caller_error": True,
+            "detail": f"Query failed: {err[:60]}",
+        })
+    elif not declaring:
+        checks.append({
+            "check": "step5_disk_iops_recipe_prereq",
+            "status": "skip",
+            "detail": "No disk-IOPS recipes declared (container_fs_*) — step N/A",
+        })
+    else:
+        declaring_tenants = {r.get("metric", {}).get("tenant", "?") for r in declaring}
+        # reads OR writes — NOT writes alone. A just-started pod that hasn't WRITTEN yet
+        # still emits reads (it loaded its image/config), and some cAdvisor versions only
+        # materialize a counter after its first I/O; checking writes alone would false-fail
+        # a healthy local-disk tenant as "blkio-bypass" (adversarial edge case). If ANY of
+        # the cgroup-fs family is present, blkio is not bypassed; if bypassed (NFS/EFS) the
+        # whole family is absent. The family arrives together (same scrape).
+        arriving, _e = query_prometheus(
+            prom_url,
+            'count by(tenant) (container_fs_reads_total{tenant!=""} '
+            'or container_fs_writes_total{tenant!=""})'
+        )
+        arriving_tenants = {r.get("metric", {}).get("tenant", "?") for r in (arriving or [])}
+        running, _ = query_prometheus(
+            prom_url,
+            'count by(tenant) (label_replace('
+            'kube_pod_status_phase{namespace=~"db-.+", phase="Running"} == 1, '
+            '"tenant", "$1", "namespace", "(.+)"))'
+        )
+        running_tenants = {r.get("metric", {}).get("tenant", "?") for r in (running or [])}
+        candidates = declaring_tenants & running_tenants  # running-pods guard (as Step 4)
+        missing = sorted(candidates - arriving_tenants)
+        if _e:
+            checks.append({
+                "check": "step5_disk_iops_recipe_prereq",
+                "status": "warn",
+                "detail": f"IOPS recipe(s) declared but could not query container_fs: {_e[:50]}",
+            })
+        elif not candidates:
+            checks.append({
+                "check": "step5_disk_iops_recipe_prereq",
+                "status": "warn",
+                "detail": f"{len(declaring_tenants)} disk-IOPS recipe(s) declared but no declaring "
+                          "tenant has running pods yet — deploy the workloads (or verify "
+                          "kube_pod_status_phase is scraped), then re-run.",
+            })
+        elif len(missing) == len(candidates):
+            checks.append({
+                "check": "step5_disk_iops_recipe_prereq",
+                "status": "fail",
+                "detail": f"{len(candidates)} running tenant(s) declared a disk-IOPS recipe but NO "
+                          "tenant-attributed container_fs arrives. Either container_fs_* is not in "
+                          "the cadvisor scrape keep + namespace→tenant relabel, OR the storage "
+                          "bypasses cgroup blkio (network volumes like NFS/EFS report 0) so "
+                          "container_fs cannot see it — the IOPS recipe will never fire. Confirm "
+                          "with a representative load test before relying on it.",
+            })
+        elif missing:
+            checks.append({
+                "check": "step5_disk_iops_recipe_prereq",
+                "status": "warn",
+                "detail": "container_fs arrives for some tenants, but these declaring+running "
+                          f"tenant(s) have none: {', '.join(missing[:10])} — check the cadvisor "
+                          "keep/relabel, or whether their volumes bypass blkio (network storage).",
+            })
+        else:
+            checks.append({
+                "check": "step5_disk_iops_recipe_prereq",
+                "status": "pass",
+                "detail": f"{len(candidates)} running disk-IOPS-recipe tenant(s) all have "
+                          "tenant-attributed container_fs",
+            })
+
     return checks
 
 

@@ -405,3 +405,76 @@ class TestStep4DiskRecipePrereq:
         assert "=~" not in declaring
         # namespace-scope parity with the sentinel's pods-leg.
         assert 'namespace=~"db-.+"' in running
+
+
+# ---------------------------------------------------------------------------
+# Step 5: disk-IOPS-recipe prerequisite (#692 P0④) — container_fs scraped AND
+# tenant-attributed; the codified FIDELITY GATE (blkio-bypass → fail-loud).
+# ---------------------------------------------------------------------------
+def _iops_query(declaring, arriving, running, arriving_err=None):
+    """Mock query_prometheus for Step 5 scenarios. Earlier steps (incl Step 4's
+    kubelet_volume_stats queries) return [] → Step 4 skips. The container_fs declaring
+    query is matched before the container_fs_writes_total arriving substring."""
+    def _r(tenants):
+        return [{"metric": {"tenant": t}, "value": [1, "1"]} for t in tenants]
+
+    def _query(prom_url, promql):
+        if "user_threshold" in promql and "container_fs" in promql:
+            return _r(declaring), None
+        if "container_fs_writes_total" in promql:
+            return (None, arriving_err) if arriving_err else (_r(arriving), None)
+        if "label_replace" in promql and "kube_pod_status_phase" in promql:
+            return _r(running), None
+        return [], None  # steps 1-4 benign (no kubelet_volume_stats declared)
+    return _query
+
+
+class TestStep5DiskIopsRecipePrereq:
+    def _run(self, query_fn):
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = b"OK"
+        mock_resp.__enter__ = lambda s: s
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        with patch("urllib.request.urlopen", return_value=mock_resp):
+            with patch.object(bc, "http_get_json",
+                              side_effect=_mock_http_get_json({"rules": ({"data": {"groups": []}}, None)})):
+                with patch.object(bc, "query_prometheus", side_effect=query_fn):
+                    return bc.check_prometheus(_args())
+
+    def _step5(self, checks):
+        return next(c for c in checks if c["check"] == "step5_disk_iops_recipe_prereq")
+
+    def test_skip_when_no_iops_recipes(self):
+        checks = self._run(_iops_query(declaring=[], arriving=[], running=[]))
+        assert self._step5(checks)["status"] == "skip"
+
+    def test_fail_blkio_bypass_no_container_fs(self):
+        """The fidelity gate: IOPS recipes declared + pods running, but container_fs is
+        0 (not scraped, or storage bypasses cgroup blkio — NFS/EFS) → fail-loud."""
+        checks = self._run(_iops_query(declaring=["db-a", "db-b"], arriving=[], running=["db-a", "db-b"]))
+        c = self._step5(checks)
+        assert c["status"] == "fail"
+        assert "blkio" in c["detail"]
+
+    def test_warn_partial_missing_tenant(self):
+        checks = self._run(_iops_query(declaring=["db-a", "db-b"], arriving=["db-a"], running=["db-a", "db-b"]))
+        c = self._step5(checks)
+        assert c["status"] == "warn"
+        assert "db-b" in c["detail"]
+
+    def test_pass_all_attributed(self):
+        checks = self._run(_iops_query(declaring=["db-a"], arriving=["db-a"], running=["db-a"]))
+        assert self._step5(checks)["status"] == "pass"
+
+    def test_warn_not_fail_when_no_declaring_tenant_running_yet(self):
+        checks = self._run(_iops_query(declaring=["db-a", "db-b"], arriving=[], running=[]))
+        c = self._step5(checks)
+        assert c["status"] == "warn"
+        assert "running pods yet" in c["detail"]
+
+    def test_warn_not_fail_on_container_fs_query_error(self):
+        checks = self._run(_iops_query(declaring=["db-a"], arriving=[], running=["db-a"],
+                                       arriving_err="query timeout"))
+        c = self._step5(checks)
+        assert c["status"] == "warn"
+        assert "could not query" in c["detail"]

@@ -113,9 +113,11 @@ data:
             target_label: job
 
       # -------------------------------------------------------
-      # Scenario B: kubelet cAdvisor metrics (container-level CPU/memory)
+      # Scenario B: kubelet cAdvisor metrics (container-level CPU / memory / disk I/O)
       # Uses K8s API proxy to avoid direct kubelet TLS issues in Kind.
-      # Provides: container_cpu_usage_seconds_total, container_memory_working_set_bytes
+      # Provides: container_cpu/memory (platform recording rules) + container_fs_*
+      # read/write counters for tenant disk-IOPS recipes (#692 P0④; per-CONTAINER,
+      # NOT per-PVC — see the metric_relabel notes below).
       # -------------------------------------------------------
       - job_name: "kubelet-cadvisor"
         scrape_interval: 15s
@@ -140,10 +142,36 @@ data:
           - source_labels: [namespace]
             action: keep
             regex: "db-.+"
-          # Drop high-cardinality metrics we don't need
+          # Keep CPU/memory (platform recording rules) + container_fs read/write
+          # counters (#692 P0④ tenant disk-IOPS recipes). container_fs is a TIGHT
+          # list on purpose: the full container_fs_* family × the `device` label is
+          # an ~80× cardinality trap and most of it is unused — keep only the
+          # rate-able ops + bytes counters; the rate recipe sums `by(tenant)` and
+          # collapses `device` at query time.
           - source_labels: [__name__]
             action: keep
-            regex: "container_cpu_usage_seconds_total|container_memory_working_set_bytes|container_memory_usage_bytes"
+            regex: "container_cpu_usage_seconds_total|container_memory_working_set_bytes|container_memory_usage_bytes|container_fs_reads_total|container_fs_writes_total|container_fs_reads_bytes_total|container_fs_writes_bytes_total"
+          # Drop the cgroup-root (container="") and pause (container="POD") series.
+          # The root series is a per-POD aggregate, so summing it ALONGSIDE the
+          # per-container series double-counts a pod's I/O (#692 P0④ adversarial
+          # finding). The CPU/mem recording rules already filter these at query time,
+          # so dropping at scrape is safe for them AND cleans container_fs for the
+          # tenant rate recipe (which has no built-in container filter).
+          - source_labels: [container]
+            action: drop
+            regex: "|POD"
+          # 1:1 namespace→tenant attribution at SCRAPE (ADR-024 Addendum: disk
+          # metrics map namespace→tenant at scrape time, metric name unchanged).
+          # `namespace` is a native metric label → metric_relabel (not relabel).
+          # SAFE for the CPU/mem recording rules: they `sum by(namespace,pod,container)`
+          # — which DROPS this tenant label — then re-derive tenant via label_replace
+          # (verified: no double-count, no collision). It lets tenant custom recipes
+          # (rate over container_fs_*) join `user_threshold` on `tenant`.
+          # ⚠ container_fs = cgroup blkio: NETWORK storage (NFS/EFS) bypasses blkio →
+          # 0 series (byo_check container_fs step fails loud); per-CONTAINER, NOT
+          # per-PVC (cAdvisor #3588). See byo-prometheus-integration.md disk-IOPS §.
+          - source_labels: [namespace]
+            target_label: tenant
 
       # -------------------------------------------------------
       # Scenario C: kubelet volume-stats (per-PVC disk capacity) — #692 P0③
