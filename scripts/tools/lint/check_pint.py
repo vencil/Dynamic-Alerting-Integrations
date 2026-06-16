@@ -51,8 +51,10 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 # used by the binary curl in CI DOES (v0.86.0).
 PINT_VERSION = "0.86.0"
 # Supply-chain: pin the Docker fallback by digest (multi-arch index of :0.86.0) so a
-# re-pushed/tampered tag can't swap the image. Re-resolve alongside PINT_VERSION via
-# the registry manifest API (see scripts/ops/_verify_download.sh sibling pattern). #849 follow-up.
+# re-pushed/tampered tag can't swap the image. On version bump, re-resolve with:
+#   docker buildx imagetools inspect ghcr.io/cloudflare/pint:<ver>   (take the top-level Digest)
+# Do NOT use `docker inspect` — on an arm64 host it can yield an arch-specific digest that
+# breaks the amd64 CI fallback (manifest unknown / exec format error). #849 follow-up.
 PINT_DIGEST = "sha256:93d01d7522b8d477c183d938b4263302c6ed980e187aa3af00b4bf810a9697cc"
 PINT_IMAGE = f"ghcr.io/cloudflare/pint:{PINT_VERSION}@{PINT_DIGEST}"
 # Scan the component rule-pack sources AND the platform extracts (tests/rulepacks/);

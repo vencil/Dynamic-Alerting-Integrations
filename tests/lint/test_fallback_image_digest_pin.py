@@ -36,7 +36,8 @@ _PINNED_RE = re.compile(r"^[^@\s]+:[^@\s]+@sha256:[0-9a-f]{64}$")
 def test_fallback_image_is_digest_pinned(name, image):
     assert _PINNED_RE.match(image), (
         f"{name} is not digest-pinned (expected repo:tag@sha256:<64hex>): {image!r}. "
-        f"Re-resolve the digest via the registry manifest API when bumping the version."
+        f"On a version bump, re-resolve via `docker buildx imagetools inspect <image>:<ver>` "
+        f"(take the top-level Digest; NOT `docker inspect`, which can be arch-specific)."
     )
 
 
