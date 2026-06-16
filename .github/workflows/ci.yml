@@ -50,9 +50,12 @@ jobs:
       - name: Set up hadolint
         run: |
           HADOLINT_VERSION=v2.12.0
-          sudo curl -fsSL -o /usr/local/bin/hadolint \
+          # Pinned SHA-256 of hadolint-Linux-x86_64 @ v2.12.0 (upstream .sha256).
+          HADOLINT_SHA256=56de6d5e5ec427e17b74fa48d51271c7fc0d61244bf5c90e828aab8362d55010
+          curl -fsSL -o /tmp/hadolint \
             "https://github.com/hadolint/hadolint/releases/download/${HADOLINT_VERSION}/hadolint-Linux-x86_64"
-          sudo chmod +x /usr/local/bin/hadolint
+          bash scripts/ops/_verify_download.sh /tmp/hadolint "$HADOLINT_SHA256"
+          sudo install -m0755 /tmp/hadolint /usr/local/bin/hadolint
           hadolint --version
 
       - name: Run pre-commit hooks
@@ -167,9 +170,13 @@ jobs:
 
       - name: Install promtool
         run: |
-          curl -sL https://github.com/prometheus/prometheus/releases/download/v2.53.2/prometheus-2.53.2.linux-amd64.tar.gz -o /tmp/p.tgz
+          PROM_VERSION=2.53.2
+          # Pinned SHA-256 of prometheus-2.53.2.linux-amd64.tar.gz (upstream sha256sums.txt).
+          PROM_SHA256=60c126740c9cf1206b1e72150dd17914f1c3309bb7dc78a31d4670197ed4fa69
+          curl -fsSL "https://github.com/prometheus/prometheus/releases/download/v${PROM_VERSION}/prometheus-${PROM_VERSION}.linux-amd64.tar.gz" -o /tmp/p.tgz
+          bash scripts/ops/_verify_download.sh /tmp/p.tgz "$PROM_SHA256"
           tar xzf /tmp/p.tgz -C /tmp
-          sudo cp /tmp/prometheus-2.53.2.linux-amd64/promtool /usr/local/bin/
+          sudo cp /tmp/prometheus-${PROM_VERSION}.linux-amd64/promtool /usr/local/bin/
           promtool --version
 
       - name: Rule-pack promtool unit tests (alert fire/no-fire contracts)
@@ -192,8 +199,12 @@ jobs:
                                  # fail the job — check_pint.py uses the Docker fallback.
         run: |
           PINT=0.86.0
+          # Pinned SHA-256 of pint-0.86.0-linux-amd64.tar.gz (upstream checksums.txt).
+          PINT_SHA256=6166233a8d6d726d56345cb863f749a20f398cc9ffc01cd5c36410a76afa73bc
           if curl -fsSL -o /tmp/pint.tar.gz \
               "https://github.com/cloudflare/pint/releases/download/v${PINT}/pint-${PINT}-linux-amd64.tar.gz"; then
+            # A mismatch fails this step; continue-on-error → Docker fallback runs.
+            bash scripts/ops/_verify_download.sh /tmp/pint.tar.gz "$PINT_SHA256"
             tar -xzf /tmp/pint.tar.gz -C /tmp
             # the tarball ships the binary as `pint-linux-amd64`, not `pint`.
             sudo install -m0755 /tmp/pint-linux-amd64 /usr/local/bin/pint
@@ -273,8 +284,14 @@ jobs:
         # wrapper's `docker run stackrox/kube-linter` fallback still runs Mode B.
         run: |
           KL=v0.7.4
+          # Pinned SHA-256 of kube-linter-linux.tar.gz @ v0.7.4. This release
+          # publishes a cosign .sig but NO sha256 file, so the digest is pinned
+          # here (TOFU) rather than fetched. A mismatch fails this step (security
+          # signal); a 404 falls through to the wrapper's Docker fallback.
+          KL_SHA256=1d050a5d03e3347cc1cf5b1513f646709c65d129f7aa6c2b1a6388ffb2694671
           if curl -fsSL -o /tmp/kl.tar.gz \
               "https://github.com/stackrox/kube-linter/releases/download/${KL}/kube-linter-linux.tar.gz"; then
+            bash scripts/ops/_verify_download.sh /tmp/kl.tar.gz "$KL_SHA256"
             tar -xzf /tmp/kl.tar.gz -C /tmp
             sudo install -m0755 /tmp/kube-linter /usr/local/bin/kube-linter
             kube-linter version
