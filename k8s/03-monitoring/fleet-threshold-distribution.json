@@ -1,0 +1,298 @@
+{
+  "annotations": { "list": [] },
+  "description": "Fleet-wide distribution of tenant-configured alerting thresholds (#655). Consumes the already-exported user_threshold gauge to give the platform a cross-tenant governance view: for a given (metric, severity), see how every tenant's threshold compares, and surface statistical outliers (Tukey 1.5×IQR fences) that are likely too strict (alert fatigue) or too loose (under-protected). NOTE: a tenant that DISABLED a threshold emits no user_threshold series and is therefore invisible here — disabled = blind spot, not 'in-range'.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [
+    {
+      "icon": "dashboard",
+      "title": "Platform Overview",
+      "type": "link",
+      "url": "/d/dynamic-alerting-overview/dynamic-alerting-overview"
+    },
+    {
+      "icon": "doc",
+      "title": "Dashboard Guide",
+      "type": "link",
+      "targetBlank": true,
+      "url": "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/grafana-dashboards.md"
+    }
+  ],
+  "panels": [
+    {
+      "title": "Tenants configuring this threshold",
+      "description": "Distinct tenants with a value set (custom or default) for this metric+severity. Disabled thresholds emit no series and are NOT counted. COLOR = sample adequacy for the outlier panels below: red < 4, yellow 4-7, green >= 8. At low counts the Tukey outlier detection is unreliable (see those panels).",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 0 },
+      "targets": [{
+        "expr": "count(count by(tenant) (user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"})) or vector(0)",
+        "legendFormat": ""
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "yellow", "value": 4 }, { "color": "green", "value": 8 }] }
+        }
+      },
+      "options": { "colorMode": "background", "graphMode": "none", "textMode": "value" }
+    },
+    {
+      "title": "Fleet median (P50)",
+      "description": "Median threshold value across all tenants for the selected metric+severity. The robust 'consensus' value — the recommender (#656) anchors here.",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 0 },
+      "targets": [{
+        "expr": "quantile(0.5, user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"})",
+        "legendFormat": ""
+      }],
+      "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "green" } } },
+      "options": { "colorMode": "value", "graphMode": "none", "textMode": "value" }
+    },
+    {
+      "title": "P95",
+      "description": "95th-percentile threshold value across tenants. Tenants at/above this are in the loosest 5% (under-protection risk if the rule compares with '>').",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 0 },
+      "targets": [{
+        "expr": "quantile(0.95, user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"})",
+        "legendFormat": ""
+      }],
+      "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "orange" } } },
+      "options": { "colorMode": "value", "graphMode": "none", "textMode": "value" }
+    },
+    {
+      "title": "IQR (P75 − P25)",
+      "description": "Interquartile range — the robust spread of the fleet. Wide IQR = tenants disagree a lot on this threshold; near-zero = everyone clustered (usually on the default).",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 0 },
+      "targets": [{
+        "expr": "quantile(0.75, user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"}) - quantile(0.25, user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"})",
+        "legendFormat": ""
+      }],
+      "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "purple" } } },
+      "options": { "colorMode": "value", "graphMode": "none", "textMode": "value" }
+    },
+    {
+      "title": "Upper / lower Tukey fence",
+      "description": "Statistical outlier boundaries: P75+1.5·IQR (upper) and P25−1.5·IQR (lower). Tenants outside this band are flagged as outliers in the table below. Unlike a fixed P95 cut, this flags genuine outliers only — it can be empty when the fleet is healthy.",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 0 },
+      "targets": [
+        {
+          "expr": "quantile(0.75, user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"}) + 1.5 * (quantile(0.75, user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"}) - quantile(0.25, user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"}))",
+          "legendFormat": "Upper"
+        },
+        {
+          "expr": "quantile(0.25, user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"}) - 1.5 * (quantile(0.75, user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"}) - quantile(0.25, user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"}))",
+          "legendFormat": "Lower"
+        }
+      ],
+      "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "text" } } },
+      "options": { "colorMode": "none", "graphMode": "none", "textMode": "value_and_name", "orientation": "vertical" }
+    },
+    {
+      "title": "Outliers",
+      "description": "Tenants beyond the 1.5×IQR fence (either side). ⚠️ Unreliable when the fleet is default-dominated (IQR→0 flags every customizer) or small (red/yellow Tenants panel) — read with the 'Δ from median' table + histogram, not alone. 0 here does NOT guarantee a clean fleet at low N.",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 0 },
+      "targets": [{
+        "expr": "(count((user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"} > scalar(quantile(0.75, user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"}) + 1.5 * (quantile(0.75, user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"}) - quantile(0.25, user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"})))) or (user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"} < scalar(quantile(0.25, user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"}) - 1.5 * (quantile(0.75, user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"}) - quantile(0.25, user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"})))))) or vector(0)",
+        "legendFormat": ""
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] }
+        }
+      },
+      "options": { "colorMode": "background", "graphMode": "none", "textMode": "value" }
+    },
+    {
+      "title": "Threshold value distribution across tenants",
+      "description": "Histogram of the current threshold value held by each tenant for the selected metric+severity. Reveals shape the average hides: a bimodal spread (two clusters) or a long tail of permissive outliers. The tall bar is usually the platform default.",
+      "type": "histogram",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 4 },
+      "targets": [{
+        "expr": "user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"}",
+        "legendFormat": "{{tenant}}",
+        "instant": true
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "fillOpacity": 70, "lineWidth": 1 }
+        }
+      },
+      "options": { "legend": { "showLegend": false }, "combine": true }
+    },
+    {
+      "title": "Fleet quantile band over time (P5 / P50 / P95)",
+      "description": "How the fleet's threshold distribution drifts over time. Widening band = growing disagreement / config drift across tenants; a P50 that creeps up over weeks is the 'threshold rot' signal #656 automates (e.g. a tenant loosened during an incident and never tightened back).",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 4 },
+      "targets": [
+        { "expr": "quantile(0.05, user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"})", "legendFormat": "P5" },
+        { "expr": "quantile(0.5, user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"})", "legendFormat": "P50 (median)" },
+        { "expr": "quantile(0.95, user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"})", "legendFormat": "P95" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10, "showPoints": "never" }
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "P50 (median)" }, "properties": [{ "id": "custom.lineWidth", "value": 3 }, { "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } }] }
+        ]
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } }
+    },
+    {
+      "title": "All tenants — value & deviation from median",
+      "description": "Every tenant's current threshold for this metric+severity, with its signed deviation from the fleet median. THIS IS THE ROBUST PRIMARY VIEW — deviation-from-median stays meaningful even when most tenants sit on the default (where the Tukey outlier table on the right degenerates). Sort by Δ to triage who sits furthest from consensus, by magnitude.",
+      "type": "table",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 10, "w": 12, "x": 0, "y": 13 },
+      "targets": [
+        {
+          "expr": "user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"}",
+          "format": "table",
+          "instant": true,
+          "refId": "Val"
+        },
+        {
+          "expr": "user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"} - scalar(quantile(0.5, user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"}))",
+          "format": "table",
+          "instant": true,
+          "refId": "Dev"
+        }
+      ],
+      "transformations": [
+        { "id": "merge", "options": {} },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": { "Time": true, "__name__": true, "job": true, "instance": true, "severity": true, "metric": true },
+            "renameByName": {
+              "tenant": "Tenant",
+              "component": "Component",
+              "Value #Val": "Threshold",
+              "Value #Dev": "Δ from median"
+            }
+          }
+        },
+        { "id": "sortBy", "options": { "fields": {}, "sort": [{ "field": "Δ from median", "desc": true }] } }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "Threshold" }, "properties": [{ "id": "custom.displayMode", "value": "color-text" }, { "id": "color", "value": { "mode": "continuous-BlYlRd" } }] }
+        ]
+      },
+      "options": { "showHeader": true, "footer": { "enablePagination": true } }
+    },
+    {
+      "title": "⚠️ Statistical outliers (Tukey 1.5×IQR)",
+      "description": "Tenants beyond P75+1.5·IQR (side=high) or below P25−1.5·IQR (side=low). High = more permissive (under-protection if the rule is '>'); low = stricter (fatigue risk if '>'); direction is rule-dependent, NOT hardcoded — confirm against the rule pack. ⚠️ RELIABILITY — degenerates in two common regimes: (1) when most tenants are on the default, IQR→0 and this lists EVERY customizer (triage by magnitude via the 'Δ from median' table on the left); (2) at low tenant counts (red/yellow Tenants panel) it can both miss real extremes and over-flag trivial deviations. Treat as a statistical hint, not ground truth.",
+      "type": "table",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 10, "w": 12, "x": 12, "y": 13 },
+      "targets": [{
+        "expr": "label_replace(user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"} > scalar(quantile(0.75, user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"}) + 1.5 * (quantile(0.75, user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"}) - quantile(0.25, user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"}))), \"side\", \"high\", \"tenant\", \".*\") or label_replace(user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"} < scalar(quantile(0.25, user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"}) - 1.5 * (quantile(0.75, user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"}) - quantile(0.25, user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"}))), \"side\", \"low\", \"tenant\", \".*\")",
+        "format": "table",
+        "instant": true,
+        "refId": "Outliers"
+      }],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": { "Time": true, "__name__": true, "job": true, "instance": true, "metric": true },
+            "renameByName": {
+              "tenant": "Tenant",
+              "component": "Component",
+              "severity": "Severity",
+              "side": "Side",
+              "Value": "Threshold"
+            }
+          }
+        },
+        { "id": "sortBy", "options": { "fields": {}, "sort": [{ "field": "Threshold", "desc": true }] } }
+      ],
+      "fieldConfig": {
+        "defaults": { "noValue": "✅ No statistical outliers (all tenants within 1.5×IQR)" },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "Threshold" }, "properties": [{ "id": "custom.displayMode", "value": "color-background" }, { "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }] }
+        ]
+      },
+      "options": { "showHeader": true, "footer": { "enablePagination": true } }
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["dynamic-alerting", "threshold", "governance", "multi-tenant"],
+  "templating": {
+    "list": [
+      {
+        "name": "metric",
+        "label": "Metric",
+        "description": "Threshold key (e.g. mysql_connections, container_cpu). One metric at a time keeps the value distribution scale-coherent.",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+        "query": "label_values(user_threshold, metric)",
+        "includeAll": false,
+        "multi": false,
+        "refresh": 1,
+        "sort": 1,
+        "current": {}
+      },
+      {
+        "name": "severity",
+        "label": "Severity",
+        "description": "warning and critical thresholds differ in scale — compare one at a time.",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+        "query": "label_values(user_threshold{metric=\"$metric\"}, severity)",
+        "includeAll": false,
+        "multi": false,
+        "refresh": 2,
+        "sort": 1,
+        "current": {}
+      },
+      {
+        "name": "component",
+        "label": "Component",
+        "description": "Optional drill-down (mariadb, redis, ...). 'All' is safe when the metric key implies a single component.",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+        "query": "label_values(user_threshold{metric=\"$metric\", severity=\"$severity\"}, component)",
+        "includeAll": true,
+        "multi": false,
+        "refresh": 2,
+        "sort": 1,
+        "current": { "text": "All", "value": "$__all" }
+      },
+      {
+        "name": "DS_PROMETHEUS",
+        "label": "Prometheus",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {}
+      }
+    ]
+  },
+  "time": { "from": "now-24h", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Dynamic Alerting — Fleet Threshold Distribution",
+  "uid": "fleet-threshold-distribution",
+  "version": 1
+}
