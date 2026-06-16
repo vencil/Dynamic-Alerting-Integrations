@@ -49,6 +49,7 @@ lang: en
 | `docs/design/README.md` (.en.md) | Platform Engineers, DevOps | Design Deep-Dives — Architecture spoke documents |
 | `docs/design/roadmap-future.md` (.en.md) | Platform Engineers, DevOps | Future Roadmap — K8s Operator, Design System, Auto-Discovery, and More |
 | `docs/design/rule-packs.md` (.en.md) | Platform Engineers, DevOps | Rule Packs & Projected Volume Architecture |
+| `docs/design/runtime-canary.md` (.en.md) | Platform Engineers, SREs | Runtime Canary Design — end-to-end liveness for the custom-alert compile pipeline |
 | `docs/getting-started/decision-matrix.md` (.en.md) | Platform Engineers | Deployment Decision Matrix |
 | `docs/getting-started/for-decision-makers.md` (.en.md) | decision-maker | Decision-Maker / Executive Evaluation Guide |
 | `docs/getting-started/for-domain-experts.md` (.en.md) | Domain Experts (DBA) | Domain Expert (DBA) Quick Start Guide |

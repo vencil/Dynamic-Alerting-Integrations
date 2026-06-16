@@ -36,6 +36,7 @@ lang: zh
 | [Config-Driven 設計](design/config-driven.md) | 三態配置、Directory Scanner、多層嚴重度、排程閾值、路由、Tenant API、繼承引擎 | Platform / SRE / Domain Expert |
 | [Rule Packs 與 Projected Volume](design/rule-packs.md) | 15 個規則包、三部分結構、雙語 Annotation | Platform / Domain Expert |
 | [高可用性 (HA)](design/high-availability.md) | 2 副本策略、PDB、滾動更新、SLA 99.9%+ | Platform / SRE |
+| [Runtime Canary 設計](design/runtime-canary.md) | 自訂告警編譯管線端到端活性、dead-man's-switch、壞租戶隔離兩層說明（ADR-025 設計就緒） | Platform / SRE |
 | [未來擴展路線](design/roadmap-future.md) | v2.9.0 已交付 + v2.10.0+ 長期探索 | Platform / 決策者 |
 | *專題* | | |
 | [性能基準](benchmarks.md) | 規模 / 速度 / 容量 / 穩定的實測數字 | Platform / SRE / 決策者 |

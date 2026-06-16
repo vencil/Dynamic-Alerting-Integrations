@@ -34,6 +34,7 @@ This is the **architecture Hub** for the "Multi-Tenant Dynamic Alerting Platform
 | [Config-Driven Design](design/config-driven.en.md) | Three-state config, Directory Scanner, multi-tier severity, scheduled thresholds, routing, Tenant API, inheritance engine | Platform / SRE / Domain Expert |
 | [Rule Packs & Projected Volume](design/rule-packs.en.md) | 15 rule packs, three-part structure, bilingual annotations | Platform / Domain Expert |
 | [High Availability (HA)](design/high-availability.en.md) | 2-replica strategy, PDB, rolling update, SLA 99.9%+ | Platform / SRE |
+| [Runtime Canary Design](design/runtime-canary.en.md) | End-to-end liveness of the custom-alert compile pipeline, dead-man's-switch, two-layer bad-tenant isolation account (ADR-025 design-readiness) | Platform / SRE |
 | [Future Roadmap](design/roadmap-future.en.md) | v2.9.0 delivered + v2.10.0+ exploration | Platform / decision-maker |
 | *Topics* | | |
 | [Benchmarks](benchmarks.en.md) | Scale / speed / capacity / stability measurements | Platform / SRE / decision-maker |
