@@ -14,15 +14,16 @@ lang: en
 >
 > Related docs: [Architecture] · [Troubleshooting] · [Shadow Monitoring SOP]
 
-This document introduces the two Grafana Dashboards provided by the Dynamic Alerting platform, with guidance on deployment, usage, and troubleshooting.
+This document introduces the three Grafana Dashboards provided by the Dynamic Alerting platform, with guidance on deployment, usage, and troubleshooting.
 
 ## Overview
 
-Dynamic Alerting provides two operations-oriented Dashboards:
+Dynamic Alerting provides three operations-oriented Dashboards:
 
 | Name | Purpose | Audience |
 |------|---------|----------|
 | **Dynamic Alerting — Platform Overview** | Platform health, tenant state, threshold distribution | Platform Engineer / NOC |
+| **Fleet Threshold Distribution** | Cross-tenant threshold **value** distribution + statistical outlier detection (platform-governance view) | Platform Engineer / SRE |
 | **Shadow Monitoring Progress** | Old vs. new recording rule convergence during migration | SRE / Migration Lead |
 
 ---
@@ -225,6 +226,67 @@ To modify variable definitions (e.g., add tenant or change metric names), click 
 
 ---
 
+## Dashboard 3: Fleet Threshold Distribution
+
+> **File:** `k8s/03-monitoring/fleet-threshold-distribution.json` · **uid:** `fleet-threshold-distribution` · **Source:** [#655](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/655) ([#659](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/659) last-mile activation epic)
+
+### Motivation
+
+threshold-exporter already exports every tenant's threshold as a queryable series `user_threshold{tenant, metric, component, severity}` (the value *is* the threshold), but the platform never had a **cross-tenant governance view** to consume it. This dashboard upgrades "alerting host" into active "**platform governance / SRE advisory**": for a given `(metric, severity)`, see at a glance which tenants sit far from the fleet consensus — set too strict (→ alert fatigue) or too loose (→ under-protected).
+
+> **Why compare per `(metric, severity)`?** Threshold scales differ wildly across metrics/severities (latency ms vs CPU % vs connection counts; warning vs critical). Mixing them in one chart is meaningless → the `$metric` / `$severity` / `$component` template variables pin every comparison to a single scale.
+
+### Deployment
+
+#### Method A: Grafana UI Import
+
+1. Grafana left nav → **Dashboards** → **New** → **Import**
+2. Upload JSON file: `k8s/03-monitoring/fleet-threshold-distribution.json`
+3. Select the Prometheus datasource, click **Import**
+
+#### Method B: ConfigMap Sidecar Auto-deployment
+
+```bash
+da-tools grafana-import \
+  --dashboard k8s/03-monitoring/fleet-threshold-distribution.json \
+  --name grafana-dashboard-fleet-threshold --namespace monitoring
+```
+
+### Panel Quick Reference
+
+| Region | Panel | Description |
+|--------|-------|-------------|
+| Top row | **Tenants / P50 / P95 / IQR / Tukey fences / Outliers** | Population snapshot for the `(metric, severity)`: tenant count, median, P95, interquartile range, outlier fences, outlier count (green=0, red≥1) |
+| Mid left | **Threshold value distribution (Histogram)** | Distribution of every tenant's current threshold — reveals the bimodality or long tail the average hides. The tallest bar is usually the platform default |
+| Mid right | **Fleet quantile band over time (P5/P50/P95)** | Drift of the distribution over time. A widening band = growing cross-tenant disagreement; a P50 creeping up over weeks = the "**threshold rot**" signal (a tenant loosened during an incident and never tightened back) |
+| Bottom left | **All tenants — value & deviation** (Table) | Every tenant's current value + signed deviation from the median, sorted — context inventory |
+| Bottom right | **⚠️ Statistical outliers** (Table) | Only tenants beyond the 1.5×IQR fence (with `side=high/low`) — the action list. Empty when healthy |
+
+### Reading Outliers (industry best practice)
+
+- **Use Tukey 1.5×IQR fences, not a fixed "outside P95".** A fixed P95 cut always flags ~5% of tenants (even when the fleet is healthy); Tukey fences (`P75 + 1.5·IQR` / `P25 − 1.5·IQR`) flag only **genuine** statistical outliers — the table is empty when the population is healthy.
+- **Use robust statistics (median / IQR), not mean / stddev.** Outliers themselves corrupt the mean and standard deviation; the median and interquartile range are insensitive to them — exactly the quantities a fleet-governance view should use.
+- **Direction is intentionally not hardcoded.** `side=high` (larger value) means "more permissive → under-protected" when the rule is `metric > threshold`; but if a metric's rule is `<` (e.g. free memory, success rate) the meaning inverts. The dashboard shows both tails and assumes no direction for you — confirm against the rule pack (tenant-agnostic discipline: don't bake per-metric semantics in).
+
+### ⚠️ Reliability: two regimes where Tukey outlier detection degenerates
+
+Tukey fences work on distributions with **genuine spread**, but collapse in two regimes — **the outlier table is a statistical hint, not ground truth**. The top-row Tenants color (red < 4 / yellow 4-7 / green ≥ 8) signals this:
+
+- **Degeneration 1 — mode-heavy (the common case).** When most tenants sit on the platform default, the default fills the median region → IQR = 0 → the fence collapses to the median → **every customizer is flagged** (measured: 40 default + 10 customizers → all 10 flagged). The outlier table is noisy here; **use the "All tenants — value & deviation" table** (sorted by deviation magnitude) + the histogram instead — both are robust to mode-heavy data and are the primary view.
+- **Degeneration 2 — small sample.** At low tenant counts (red/yellow Tenants panel) it is unreliable in both directions — it can **miss a real extreme** (N=3 `[50,60,2000]` flags nothing) and **over-flag a trivial deviation** (N=4 `[50,50,50,51]` flags the 51). At low N trust the histogram and raw values over the outlier flag.
+
+> Both degeneration boundaries are pinned by goldens in `tests/dx/test_fleet_threshold_dashboard.py` (pin known limits) so any future change to the behaviour is a conscious decision, not silent drift. A robust relative-deviation method (e.g. `> k×median`) is a defer-with-trigger: adopt it only if the outlier table proves too noisy in practice.
+
+### ⚠️ Known blind spot: disabled thresholds are invisible
+
+The **disable** state (`mysql_connections: "disable"`) is `continue`d at resolve time and emits **no `user_threshold` series at all** (the "absent = disabled" convention, see `components/threshold-exporter/app/pkg/config/resolve.go`). So the **most exposed tenants — the ones that turned alerting off — are completely invisible here**. This dashboard answers "are the tenants that *did* set a threshold setting it sensibly", not "who isn't monitoring at all". The latter needs a different signal (e.g. comparing `count by(tenant)(user_threshold)` against the tenant roster).
+
+### Hand-off to the Recommender (#656)
+
+This dashboard is the **passive** governance view — use the distribution data to judge whether the real Day-2 pain is fatigue or under-protection *before* committing to further investment. The top-row **P50 (median)** gives the fleet's "consensus center" for this threshold (a robust statistic); the [threshold recommender](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/656) likewise leans on robust percentiles when it proactively suggests, but **over different data** — the recommender computes P50/P95/P99 of a tenant's *observed metric* history, whereas this chart computes the distribution of *every tenant's configured threshold*. The two are complementary: this chart's outlier table is the manual precursor to the recommender's "suggest tightening/loosening to ~X" push.
+
+---
+
 ## Troubleshooting
 
 ### General Diagnostic Steps
@@ -384,4 +446,4 @@ Add a new row (Row: API Health) to the Platform Overview Dashboard with the foll
 
 ---
 
-**Version:** | **Last updated:** 2026-03-12
+**Version:** | **Last updated:** 2026-06-16

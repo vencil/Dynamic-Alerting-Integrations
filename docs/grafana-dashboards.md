@@ -14,15 +14,16 @@ lang: zh
 >
 > 相關文件：[Architecture](./architecture-and-design.md) · [Troubleshooting](./troubleshooting.md) · [Shadow Monitoring SOP](./shadow-monitoring-sop.md)
 
-本文檔介紹 Dynamic Alerting 平台提供的兩份 Grafana Dashboard，說明如何部署、使用和排查問題。
+本文檔介紹 Dynamic Alerting 平台提供的三份 Grafana Dashboard，說明如何部署、使用和排查問題。
 
 ## 概覽
 
-Dynamic Alerting 提供兩份運維導向的 Dashboard：
+Dynamic Alerting 提供三份運維導向的 Dashboard：
 
 | 名稱 | 用途 | 受眾 |
 |------|------|------|
 | **Dynamic Alerting — Platform Overview** | 平台整體健康度、Tenant 狀態、Threshold 分佈 | Platform Engineer / NOC |
+| **Fleet Threshold Distribution** | 跨租戶閾值**數值**分布 + 統計離群偵測（平台治理視角） | Platform Engineer / SRE |
 | **Shadow Monitoring Progress** | Migration 期間舊新 Rule 收斂進度 | SRE / Migration Lead |
 
 ---
@@ -225,6 +226,67 @@ da-tools grafana-import \
 
 ---
 
+## Dashboard 3: Fleet Threshold Distribution
+
+> **檔案：** `k8s/03-monitoring/fleet-threshold-distribution.json` · **uid：** `fleet-threshold-distribution` · **來源：** [#655](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/655)（[#659](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/659) last-mile activation epic）
+
+### 動機
+
+threshold-exporter 早已把每個租戶的閾值匯出成可查詢的 series `user_threshold{tenant, metric, component, severity}`（值即閾值本身），但平台一直缺一個「**跨租戶治理視角**」去消費它。本 Dashboard 把「告警代管」升級為主動的「**平台治理 / SRE 諮詢**」：對某個 `(metric, severity)`，一眼看出哪些租戶設得跟群體共識差很遠——設太嚴（→ alert fatigue）或設太鬆（→ 保護不足）。
+
+> **為什麼以 `(metric, severity)` 為比較單位？** 不同 metric / severity 的閾值尺度天差地別（延遲 ms vs CPU % vs 連線數；warning vs critical）。混在一張圖比較毫無意義 → 三個 template 變數 `$metric` / `$severity` / `$component` 把每次比較鎖在單一尺度。
+
+### 部署
+
+#### 方法 A：Grafana UI 匯入
+
+1. Grafana 左側欄 → **Dashboards** → **New** → **Import**
+2. 上傳 JSON 檔：`k8s/03-monitoring/fleet-threshold-distribution.json`
+3. 選擇 Prometheus datasource，點擊 **Import**
+
+#### Method B: ConfigMap Sidecar Auto-Deployment
+
+```bash
+da-tools grafana-import \
+  --dashboard k8s/03-monitoring/fleet-threshold-distribution.json \
+  --name grafana-dashboard-fleet-threshold --namespace monitoring
+```
+
+### Panel 快速參考
+
+| 區 | Panel | 說明 |
+|---|-------|------|
+| 頂列 | **Tenants / P50 / P95 / IQR / Tukey fences / Outliers** | 該 `(metric, severity)` 的群體統計快照：租戶數、中位數、P95、四分位距、離群邊界、離群租戶數（綠=0、紅≥1） |
+| 中列左 | **Threshold value distribution（Histogram）** | 全租戶當前閾值的分布形狀——揭露平均值會藏住的**雙峰**或**長尾**。最高的那根通常是平台預設值 |
+| 中列右 | **Fleet quantile band over time（P5/P50/P95）** | 分布隨時間的漂移。band 變寬＝跨租戶分歧擴大；P50 數週緩升＝「**閾值腐敗**」訊號（某租戶事故時調鬆後忘了調回） |
+| 底列左 | **All tenants — value & deviation**（Table） | 全租戶當前值 + 與中位數的帶號偏差，依偏差排序——脈絡盤點 |
+| 底列右 | **⚠️ Statistical outliers（Table）** | 只列落在 1.5×IQR fence 外的租戶（含 `side=high/low`）——行動清單。健康時為空 |
+
+### 離群判讀（業界最佳實踐）
+
+- **用 Tukey 1.5×IQR fences，而非固定「P95 以外」。** 固定 P95 永遠會標出 ~5% 的租戶（即使群體很健康）；Tukey fences（`P75 + 1.5·IQR` / `P25 − 1.5·IQR`）只標**真正**的統計離群值——群體健康時離群表為空。
+- **用穩健統計（median / IQR），而非 mean / stddev。** 離群值本身會污染平均值與標準差；中位數與四分位距對離群值不敏感，這正是 fleet governance 場景該用的量。
+- **方向刻意不硬編。** `side=high`（值較大）在 rule 為 `metric > threshold` 時代表「較寬鬆 → 保護不足」；但若某 metric 的 rule 是 `<`（如剩餘記憶體、成功率）則方向相反。Dashboard 同時呈現兩尾、不替你假設方向——請對照 rule pack 判讀（tenant-agnostic 紀律：不對個別 metric 寫死語義）。
+
+### ⚠️ 可靠度：Tukey 離群偵測的兩種退化情形
+
+Tukey fences 對**有離散度**的分布有效，但有兩種會崩潰的情形——**離群表是統計提示、不是 ground truth**，頂列 Tenants 顏色（紅<4／黃 4-7／綠≥8）即在提示可靠度：
+
+- **退化一：mode-heavy（最常見）。** 多數租戶吃平台 default 時，median 區被 default 佔滿 → IQR=0 → fence 塌縮到 median → **所有客製租戶被標離群**（實測：40 個 default + 10 客製 → 標滿 10 個）。此時離群表噪音大，**改用「全租戶 — value & deviation」表**（依偏差量級排序）+ histogram，這兩者對 mode-heavy 不退化，是 robust 主視圖。
+- **退化二：小樣本。** 租戶數低時（Tenants 紅/黃）兩個方向都不可靠——可能**漏抓真極端**（N=3 `[50,60,2000]` 標不出 2000）、也可能**誤標瑣碎偏差**（N=4 `[50,50,50,51]` 標 51）。低 N 時信 histogram 與原始值勝過離群旗標。
+
+> 這兩個退化邊界都由 `tests/dx/test_fleet_threshold_dashboard.py` 的 golden 固定（pin known limits），未來若改變行為會是有意識的決定、非靜默漂移。robust 的相對偏差離群法（如 `> k×median`）列為 defer-with-trigger：若實戰中離群表證實過吵再採用。
+
+### ⚠️ 已知盲點：disabled 閾值不可見
+
+三態中的 **disable** 態（`mysql_connections: "disable"`）在 resolve 時直接 `continue`、**不發任何 `user_threshold` series**（"absent = disabled" 慣例，見 `components/threshold-exporter/app/pkg/config/resolve.go`）。因此**最裸奔的租戶——把告警關掉的那些——在本 Dashboard 上完全不可見**。本圖回答的是「有設閾值的租戶設得合不合理」，不是「誰沒在監控」。後者需另一個訊號（如比對 `count by(tenant)(user_threshold)` 與租戶清單的缺口）。
+
+### 與 Recommender（#656）的銜接
+
+本 Dashboard 是**被動**治理視角——先用分布資料判斷 Day-2 真痛點到底是 fatigue 還是裸奔，再決定後續投資。頂列的 **P50（中位數）** 給出全平台對該閾值的『共識中心』（穩健統計量）；[threshold recommender](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/656) 之後對個別租戶主動建議時靠的也是同類穩健百分位，但**取的資料不同**——recommender 算的是該租戶**觀測指標**的歷史 P50/P95/P99，本圖算的是**全租戶已設閾值**的分布。兩者互補：本圖的離群表正是 recommender「建議縮緊／放寬至 ~X」推播的人工先導版。
+
+---
+
 ## 常見問題與排查
 
 ### 通用診斷步驟
@@ -384,4 +446,4 @@ modules:
 
 ---
 
-**版本：** | **最後更新：** 2026-03-12
+**版本：** | **最後更新：** 2026-06-16
