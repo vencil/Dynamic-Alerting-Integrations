@@ -567,18 +567,38 @@ groups:
   # `count` — those come from KSM/kubelet (single-source, not doubled by exporter HA). NOTE: deliberately NOT an expected-vs-reporting
   # per-PVC diff — a tenant with SOME volume-stats is "covered"; a single non-volume-
   # stats PVC (NFS / Pending) must not flood SRE (adversarial-review reject).
-  # The declared-signal keys on the canonical disk-fill PRIMARY metric
-  # (kubelet_volume_stats_available_bytes) with an EXACT `=` matcher — the #731
-  # rulepack↔exporter contract (rulepack_contract_test.go) forbids `=~` on
-  # user_threshold's metric (the closed-label set must be statically checkable). A
-  # disk recipe keyed on a different primary metric would need an added OR leg.
+  # The declared-signal keys on the disk-fill PRIMARY metrics — available_bytes
+  # (the canonical headroom signal) OR used_bytes (a usage-based fill recipe) — as
+  # an `or` of EXACT `=` matchers. The #731 rulepack↔exporter contract
+  # (rulepack_contract_test.go) forbids `=~` on user_threshold's metric (the
+  # closed-label set must be statically checkable), but it walks selectors via the
+  # PromQL AST, so an `or` of exact-matched selectors is contract-safe and is the
+  # extensible idiom for the small closed set of disk-fill primaries (add a leg if a
+  # future recipe class — e.g. inodes_free — becomes a fill signal). The `unless`
+  # presence legs stay keyed on available/capacity: kubelet emits the whole
+  # volume-stats family together, so their absence is a faithful proxy for "no
+  # volume-stats arrive" regardless of which primary the recipe declared.
+  # #9 NOTE: the pods leg's `namespace=~"db-.+"` deliberately SCOPES this sentinel to
+  # the platform tenant-namespace convention (the same db-* keep node-health uses below
+  # + the kubelet-volume-stats scrape relabel in configmap-prometheus.yaml). It is a
+  # chosen scope, NOT the only db-* gate: user_threshold's `tenant` is the conf.d id
+  # (collector.go emits `t.Tenant`; the monitoring-components scrape that reads the
+  # exporter has no tenant relabel), so the declared leg CAN carry a non-db id. Such a
+  # tenant is suppressed HERE by this filter — broadening it alone would START firing for
+  # non-db tenants (whose volume-stats are dropped scrape-side anyway), so it is not a
+  # free knob. A BYO deployment that renames tenant namespaces must change the
+  # volume-stats relabel keep, this leg, and node-health together (#692 Option E).
   # ─────────────────────────────────────────────────────────────────────
   - name: kubernetes-custom-disk-recipe-sentinel
     rules:
       - alert: CustomRecipeDiskInert
         expr: |
           (
-            max by(tenant) (user_threshold{component="custom", metric="kubelet_volume_stats_available_bytes"})
+            max by(tenant) (
+              user_threshold{component="custom", metric="kubelet_volume_stats_available_bytes"}
+              or
+              user_threshold{component="custom", metric="kubelet_volume_stats_used_bytes"}
+            )
             and on(tenant)
             count by(tenant) (
               label_replace(kube_pod_status_phase{namespace=~"db-.+", phase="Running"} == 1, "tenant", "$1", "namespace", "(.+)")
