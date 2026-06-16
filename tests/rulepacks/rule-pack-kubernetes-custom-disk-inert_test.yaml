@@ -14,6 +14,10 @@
 #   E) NOT-DECLARED    → silent: pods + no volume-stats but the recipe metric is NOT a disk one.
 #   F) NO-PODS         → silent: declared but nothing running (leg-2 guard).
 #   G) MAINTENANCE     → silent: inert but tenant in maintenance mode.
+#   H) USED_BYTES INERT→ fires: recipe declared via used_bytes (#10 OR leg), no volume-stats.
+#   I) USED_BYTES OK   → silent: used_bytes recipe but volume-stats present (no false page).
+#   J) BOTH RECIPES    → fires ONCE: available + used declared (OR must not double-fire).
+#   K) NON-DB SCOPE    → silent: shop-a (non-db namespace) suppressed by db-.+ (#9 scope).
 rule_files:
   - ../../rule-packs/rule-pack-kubernetes.yaml
 
@@ -151,6 +155,94 @@ tests:
       - series: 'kube_pod_status_phase{namespace="db-a", pod="app-1", phase="Running"}'
         values: '1x80'
       - series: 'user_state_filter{tenant="db-a", filter="maintenance"}'
+        values: '1x80'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: CustomRecipeDiskInert
+        exp_alerts: []
+
+  # ── H) #10 used_bytes recipe INERT: declared via used_bytes (NOT available) + pods + NO volume-stats → FIRE ──
+  # Regression for the declared-leg `or kubelet_volume_stats_used_bytes` exact-matcher
+  # OR leg: a usage-based disk recipe must be recognized as a disk recipe too (drop
+  # the OR leg → this tenant goes unrecognized → silent → this case fails).
+  - interval: 15s
+    input_series:
+      - series: 'user_threshold{tenant="db-a", component="custom", metric="kubelet_volume_stats_used_bytes", recipe_id="ratio__diskuse", name="disk_used", mode="page", severity="warning"}'
+        values: '0.85x80'
+      - series: 'kube_pod_status_phase{namespace="db-a", pod="app-1", phase="Running"}'
+        values: '1x80'
+      # NO kubelet_volume_stats_* series for db-a → inert.
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: CustomRecipeDiskInert
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              tenant: db-a
+            exp_annotations:
+              summary: "Disk alert declared but no disk data is visible for db-a"
+              summary_zh: "已設定磁碟告警，但偵測不到 db-a 的磁碟資料"
+              platform_summary: "[SRE] db-a disk recipe inert — volume-stats absent. Check in order: (1) tenant mounts no PVC (most common, tenant-side); (2) kubelet volume-stats scrape job + namespace→tenant relabel; (3) CSI NodeGetVolumeStats support (kind's default local-path does not)."
+              platform_summary_zh: "[SRE] 租戶 db-a disk recipe inert — volume-stats 缺席。依序查:(1) 租戶根本沒掛 PVC(最常見、屬租戶端);(2) kubelet volume-stats scrape job 是否帶 namespace→tenant relabel;(3) CSI 是否實作 NodeGetVolumeStats(kind 預設 local-path 不實作)。"
+              description: "You declared a disk-fill custom alert, but the platform sees no disk (volume) metrics for your workload, so the alert can never fire. This usually means your service mounts no PersistentVolumeClaim — check your deployment. If you DO use a PVC, contact the platform team to investigate disk-metric collection."
+              description_zh: "您設定了磁碟填滿告警，但平台偵測不到您工作負載的磁碟(volume)指標，該告警永遠不會觸發。這通常表示您的服務沒有掛載 PersistentVolumeClaim — 請確認您的部署。若您確實使用 PVC，請聯繫平台團隊排查磁碟指標收集。"
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/byo-prometheus-integration.md"
+
+  # ── I) #10 used_bytes recipe HEALTHY: declared via used_bytes + pods + volume-stats present → SILENT ──
+  # The OR leg recognizes the recipe, but the unless presence-legs (available+capacity,
+  # the whole family arrives together) are satisfied → no false inert page.
+  - interval: 15s
+    input_series:
+      - series: 'user_threshold{tenant="db-a", component="custom", metric="kubelet_volume_stats_used_bytes", recipe_id="ratio__diskuse", name="disk_used", mode="page", severity="warning"}'
+        values: '0.85x80'
+      - series: 'kube_pod_status_phase{namespace="db-a", pod="app-1", phase="Running"}'
+        values: '1x80'
+      - series: 'kubelet_volume_stats_available_bytes{tenant="db-a", persistentvolumeclaim="data"}'
+        values: '800x80'
+      - series: 'kubelet_volume_stats_capacity_bytes{tenant="db-a", persistentvolumeclaim="data"}'
+        values: '1000x80'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: CustomRecipeDiskInert
+        exp_alerts: []
+
+  # ── J) BOTH recipes (available + used) declared + inert → fires ONCE (OR no duplicate) ──
+  # max by(tenant)(available or used) collapses the two declared metrics to one series per
+  # tenant — the `or` must not double-fire. (Adversarial-review coverage add.)
+  - interval: 15s
+    input_series:
+      - series: 'user_threshold{tenant="db-a", component="custom", metric="kubelet_volume_stats_available_bytes", recipe_id="forecast__disk", name="disk_will_fill", mode="page", severity="warning"}'
+        values: '0.15x80'
+      - series: 'user_threshold{tenant="db-a", component="custom", metric="kubelet_volume_stats_used_bytes", recipe_id="ratio__diskuse", name="disk_used", mode="page", severity="warning"}'
+        values: '0.85x80'
+      - series: 'kube_pod_status_phase{namespace="db-a", pod="app-1", phase="Running"}'
+        values: '1x80'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: CustomRecipeDiskInert
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              tenant: db-a
+            exp_annotations:
+              summary: "Disk alert declared but no disk data is visible for db-a"
+              summary_zh: "已設定磁碟告警，但偵測不到 db-a 的磁碟資料"
+              platform_summary: "[SRE] db-a disk recipe inert — volume-stats absent. Check in order: (1) tenant mounts no PVC (most common, tenant-side); (2) kubelet volume-stats scrape job + namespace→tenant relabel; (3) CSI NodeGetVolumeStats support (kind's default local-path does not)."
+              platform_summary_zh: "[SRE] 租戶 db-a disk recipe inert — volume-stats 缺席。依序查:(1) 租戶根本沒掛 PVC(最常見、屬租戶端);(2) kubelet volume-stats scrape job 是否帶 namespace→tenant relabel;(3) CSI 是否實作 NodeGetVolumeStats(kind 預設 local-path 不實作)。"
+              description: "You declared a disk-fill custom alert, but the platform sees no disk (volume) metrics for your workload, so the alert can never fire. This usually means your service mounts no PersistentVolumeClaim — check your deployment. If you DO use a PVC, contact the platform team to investigate disk-metric collection."
+              description_zh: "您設定了磁碟填滿告警，但平台偵測不到您工作負載的磁碟(volume)指標，該告警永遠不會觸發。這通常表示您的服務沒有掛載 PersistentVolumeClaim — 請確認您的部署。若您確實使用 PVC，請聯繫平台團隊排查磁碟指標收集。"
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/byo-prometheus-integration.md"
+
+  # ── K) #9 deliberate scope: a NON-db-namespace tenant (shop-a) declared + inert → SILENT ──
+  # user_threshold.tenant is the conf.d id (CAN be non-db, e.g. shop-a), but the pods-leg
+  # `namespace=~"db-.+"` deliberately scopes the sentinel to db-* tenants → shop-a is
+  # suppressed here (its volume-stats are dropped scrape-side anyway). Locks the #9 scope
+  # decision: broadening db-.+ would flip this case from silent to firing.
+  - interval: 15s
+    input_series:
+      - series: 'user_threshold{tenant="shop-a", component="custom", metric="kubelet_volume_stats_available_bytes", recipe_id="forecast__disk", name="disk_will_fill", mode="page", severity="warning"}'
+        values: '0.15x80'
+      - series: 'kube_pod_status_phase{namespace="shop-a", pod="app-1", phase="Running"}'
         values: '1x80'
     alert_rule_test:
       - eval_time: 16m

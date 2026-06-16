@@ -496,3 +496,34 @@ def test_validation_contract_matches_go():
         assert accepted == c["valid"], (
             f"validation drift [{c['_note']}]: Python accepted={accepted}, contract valid={c['valid']}"
         )
+
+
+# --- D. disk-recipe prerequisite notice (#692 P0③ W3) ----------------------
+# A recipe over kubelet_volume_stats_* compiles fine but only fires if the cluster
+# has CSI NodeGetVolumeStats + a volume-stats scrape job + a namespace→tenant
+# relabel — plumbing the compiler can't verify. main() surfaces it at author-time
+# (honest: it INFORMS, does not assert). byo_check.py verifies the live flow.
+def test_disk_recipe_emits_prereq_notice(tmp_path, capsys):
+    _write_tree(tmp_path, {
+        "a.yaml": 'tenants:\n  ta:\n    _custom_alerts:\n'
+                  '      - {recipe: threshold, name: disk_chk, metric: kubelet_volume_stats_available_bytes,'
+                  ' op: ">", window: 5m, threshold: "1000000:warning"}\n',
+    })
+    # Real write path — #848 guards the success line against an out-of-repo --out, so
+    # main() returns EXIT_OK on a tmp path; the notice fires regardless of compile mode.
+    sys.argv = ["compile_custom_alerts.py", "--config-dir", str(tmp_path),
+                "--out", str(tmp_path / "pack.yaml")]
+    assert cc.main() == 0
+    assert "disk-recipe prerequisite" in capsys.readouterr().err
+
+
+def test_nondisk_recipe_no_prereq_notice(tmp_path, capsys):
+    _write_tree(tmp_path, {
+        "a.yaml": 'tenants:\n  ta:\n    _custom_alerts:\n'
+                  '      - {recipe: threshold, name: cpu_hot, metric: node_cpu, op: ">",'
+                  ' window: 5m, threshold: "80:warning"}\n',
+    })
+    sys.argv = ["compile_custom_alerts.py", "--config-dir", str(tmp_path),
+                "--out", str(tmp_path / "pack.yaml")]
+    assert cc.main() == 0
+    assert "disk-recipe prerequisite" not in capsys.readouterr().err

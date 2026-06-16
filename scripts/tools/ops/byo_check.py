@@ -221,6 +221,114 @@ def check_prometheus(args):
             "detail": "No threshold normalization output (may need data + threshold to exist)",
         })
 
+    # Step 4: disk-recipe prerequisite (#692 P0③ W3) — kubelet volume-stats scraped
+    # AND tenant-attributed. Only meaningful if a tenant declared a disk-fill custom
+    # alert (forecast/ratio over kubelet_volume_stats_*). This is the onboarding-time
+    # shift-left of the runtime CustomRecipeDiskInert sentinel: catch a rollout gap
+    # (disk recipes enabled but the volume-stats scrape job / CSI driver / relabel is
+    # missing) BEFORE the sentinel fires for every declaring tenant. We verify the
+    # ACTUAL flow — a static scrape-config lint can't prove CSI NodeGetVolumeStats /
+    # nodes-proxy RBAC / the relabel regex actually match (see test/disk-stats-spike).
+    # Scope MUST mirror the CustomRecipeDiskInert sentinel EXACTLY, or byo_check and the
+    # runtime alert split-brain (Gemini adversarial finding). Two parts: (a) the SAME
+    # metric set the sentinel's declared-leg matches — available_bytes OR used_bytes, as
+    # an exact-OR, NOT a broad `=~kubelet_volume_stats_.*` regex that would also catch
+    # capacity/inodes recipes the sentinel ignores; (b) the SAME db-.+ namespace scope on
+    # the running leg below. Keep both in sync with rule-pack-kubernetes.yaml's sentinel.
+    declaring, err = query_prometheus(
+        prom_url,
+        'count by(tenant) ('
+        'user_threshold{component="custom", metric="kubelet_volume_stats_available_bytes"}'
+        ' or user_threshold{component="custom", metric="kubelet_volume_stats_used_bytes"})'
+    )
+    if err:
+        checks.append({
+            "check": "step4_disk_recipe_prereq",
+            "status": "fail",
+            "caller_error": True,  # query transport failure = caller-error
+            "detail": f"Query failed: {err[:60]}",
+        })
+    elif not declaring:
+        checks.append({
+            "check": "step4_disk_recipe_prereq",
+            "status": "skip",
+            "detail": "No disk-fill recipes declared (kubelet_volume_stats_*) — step N/A",
+        })
+    else:
+        declaring_tenants = {r.get("metric", {}).get("tenant", "?") for r in declaring}
+        # Tenants whose attributed volume-stats actually arrive (the real outcome).
+        # available_bytes is a faithful proxy — kubelet emits the family together.
+        arriving, _e = query_prometheus(
+            prom_url, 'count by(tenant) (kubelet_volume_stats_available_bytes{tenant!=""})'
+        )
+        arriving_tenants = {r.get("metric", {}).get("tenant", "?") for r in (arriving or [])}
+        # Running-pods guard (mirrors the sentinel): a tenant whose workload isn't
+        # running yet legitimately has no volume-stats — don't flag it. KSM carries
+        # namespace (not tenant); derive tenant via label_replace (1:1, same idiom).
+        running, _ = query_prometheus(
+            prom_url,
+            'count by(tenant) (label_replace('
+            'kube_pod_status_phase{namespace=~"db-.+", phase="Running"} == 1, '
+            '"tenant", "$1", "namespace", "(.+)"))'
+        )
+        running_tenants = {r.get("metric", {}).get("tenant", "?") for r in (running or [])}
+        # NOTE: the three tenant sets derive `tenant` differently and only line up under
+        # the 1:1 conf.d-id == namespace convention (ADR-006 §Addendum): declaring =
+        # user_threshold.tenant (the conf.d id, exporter-emitted); arriving / running =
+        # namespace (via the volume-stats relabel / label_replace). A non-1:1 tenant
+        # silently drops out of `candidates` — conservative (under-flags, never
+        # false-fails), matching the runtime sentinel's own 1:1-only behavior.
+        # Only tenants we can CONFIRM have running pods (the running-pods guard). NO
+        # fallback to "all declaring": if a workload simply hasn't deployed yet (or KSM
+        # isn't scraped), we must NOT hard-fail it — that is the onboarding window, not
+        # a broken pipeline. All verdicts below key on this confirmed-running set.
+        candidates = declaring_tenants & running_tenants
+        missing = sorted(candidates - arriving_tenants)
+        if _e:
+            # The volume-stats query itself errored (transient / Prometheus-side) —
+            # empty results here are NOT a real absence; degrade to advisory.
+            checks.append({
+                "check": "step4_disk_recipe_prereq",
+                "status": "warn",
+                "detail": f"disk recipe(s) declared but could not query volume-stats: {_e[:50]}",
+            })
+        elif not candidates:
+            # No declaring tenant is confirmed running — workloads not deployed yet, or
+            # kube_pod_status_phase isn't scraped. Can't conclude a pipeline gap; advise.
+            checks.append({
+                "check": "step4_disk_recipe_prereq",
+                "status": "warn",
+                "detail": f"{len(declaring_tenants)} disk recipe(s) declared but no declaring "
+                          "tenant has running pods yet — deploy the workloads (or verify "
+                          "kube_pod_status_phase is scraped), then re-run.",
+            })
+        elif len(missing) == len(candidates):
+            # EVERY running declaring tenant lacks volume-stats → platform-wide rollout
+            # gap (volume-stats job / CSI / relabel missing) — the storm this step catches.
+            checks.append({
+                "check": "step4_disk_recipe_prereq",
+                "status": "fail",
+                "detail": f"{len(candidates)} running tenant(s) declared a disk recipe but NO "
+                          "tenant-attributed kubelet_volume_stats arrive. Verify (1) CSI "
+                          "NodeGetVolumeStats, (2) a kubelet volume-stats scrape job, (3) the "
+                          "namespace→tenant relabel. CustomRecipeDiskInert will fire for all.",
+            })
+        elif missing:
+            checks.append({
+                "check": "step4_disk_recipe_prereq",
+                "status": "warn",
+                "detail": "volume-stats arrive for some tenants, but these declaring+running "
+                          f"tenant(s) have none: {', '.join(missing[:10])} — check PVC mount / "
+                          "CSI / that the relabel value matches the tenant id.",
+            })
+        else:
+            checks.append({
+                "check": "step4_disk_recipe_prereq",
+                "status": "pass",
+                "detail": f"{len(candidates)} running disk-recipe tenant(s) all have "
+                          "tenant-attributed volume-stats",
+            })
+
     return checks
 
 

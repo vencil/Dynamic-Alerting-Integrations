@@ -223,6 +223,19 @@ def main() -> int:
     for notice in _loader.collect_lifecycle_notices(config_dir):
         print(f"  ⚠ recipe-lifecycle: {notice}", file=sys.stderr)
 
+    # Prerequisite notice (#692 P0③ W3): disk-fill recipes (kubelet_volume_stats_*)
+    # depend on cluster-side plumbing the compiler CANNOT verify — a CSI driver
+    # implementing NodeGetVolumeStats, a kubelet volume-stats scrape job, and a
+    # namespace→tenant relabel (ADR-006 §Addendum). Surface it at author-time so the
+    # GitOps author wires it (honest: we INFORM, we do not assert the prereq is met).
+    # byo_check.py verifies the live flow; CustomRecipeDiskInert is the runtime backstop.
+    if any("kubelet_volume_stats_" in r.get("expr", "")
+           for g in groups for r in g.get("rules", [])):
+        print("  ⚠ disk-recipe prerequisite: a disk-fill recipe (kubelet_volume_stats_*) "
+              "compiled — it only fires if the cluster has CSI NodeGetVolumeStats, a kubelet "
+              "volume-stats scrape job, and a namespace→tenant relabel. Verify the live flow "
+              "with `byo_check.py prometheus`.", file=sys.stderr)
+
     if args.check:
         gen_map = sync._extract(groups)
         committed = sync._extract(sync._groups_from_rulepack(out_path)) if out_path.exists() else {}

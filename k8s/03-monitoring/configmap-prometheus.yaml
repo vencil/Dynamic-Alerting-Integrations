@@ -145,6 +145,57 @@ data:
             action: keep
             regex: "container_cpu_usage_seconds_total|container_memory_working_set_bytes|container_memory_usage_bytes"
 
+      # -------------------------------------------------------
+      # Scenario C: kubelet volume-stats (per-PVC disk capacity) — #692 P0③
+      # Powers tenant self-service disk-fill custom alerts (forecast/ratio over
+      # kubelet_volume_stats_*). Scrapes the kubelet /metrics endpoint via the API
+      # proxy (same TLS/token idiom as kubelet-cadvisor, but the main metrics path,
+      # NOT /metrics/cadvisor — volume-stats live there).
+      #
+      # ⚠ REQUIRES a CSI driver implementing NodeGetVolumeStats. Kind's default
+      # local-path provisioner emits ZERO kubelet_volume_stats_* (proven in
+      # test/disk-stats-spike/). On a non-CSI cluster this job scrapes fine but
+      # keeps 0 series (harmless) — and the CustomRecipeDiskInert sentinel
+      # (configmap-rules-kubernetes.yaml) fires for any tenant that declared a disk
+      # recipe, telling SRE the prerequisite is unmet. byo_check.py prometheus
+      # verifies the live flow; compile_custom_alerts.py warns at author-time.
+      # NOTE: it still pulls the full kubelet /metrics payload each scrape before the
+      # metric_relabel keeps drop everything — a deployment with no CSI volume-stats
+      # provider (and no disk recipes) may safely omit this job to save that scrape.
+      # -------------------------------------------------------
+      - job_name: "kubelet-volume-stats"
+        scrape_interval: 30s
+        scheme: https
+        tls_config:
+          ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+          insecure_skip_verify: true
+        bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+        kubernetes_sd_configs:
+          - role: node
+        relabel_configs:
+          - target_label: __address__
+            replacement: kubernetes.default.svc:443
+          - source_labels: [__meta_kubernetes_node_name]
+            regex: (.+)
+            target_label: __metrics_path__
+            replacement: /api/v1/nodes/${1}/proxy/metrics
+        metric_relabel_configs:
+          # Keep only volume-stats from tenant (db-*) namespaces. The namespace is a
+          # NATIVE label on the kubelet metric (not an SD meta label), so the
+          # tenant attribution is a metric_relabel, not a relabel.
+          - source_labels: [namespace]
+            action: keep
+            regex: "db-.+"
+          - source_labels: [__name__]
+            action: keep
+            regex: "kubelet_volume_stats_.*"
+          # 1:1 namespace→tenant attribution (ADR-006 §Addendum: infra metrics are
+          # 1:1 only). MUST mirror the tenant-exporters relabel above — disk recipes'
+          # user_threshold carries `tenant`, and the `group_left`/`unless on(tenant)`
+          # joins (and the inert sentinel) need this side to carry the same `tenant`.
+          - source_labels: [namespace]
+            target_label: tenant
+
   # ============================================================
   # Recording Rules & Alert Rules — DECOUPLED (v0.4.1)
   # Rules are now in separate ConfigMaps (configmap-rules-*.yaml)
