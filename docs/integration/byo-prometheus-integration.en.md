@@ -444,6 +444,62 @@ Even if you skip the byo-check above, the platform has a runtime safety net: whe
 
 ---
 
+## Advanced: Disk IOPS / Throughput Alerts (Per-Container Disk I/O Recipes)
+
+Let tenants alert on disk-I/O spikes — runaway queries, backup storms, and similar anomalies — with a `rate` recipe over `container_fs_*` (read/write ops or bytes).
+
+> **⚠ Understand the boundaries first (honest)**: this signal is **weaker than capacity (disk-fill) and environment-dependent** — confirm it works on YOUR cluster before relying on it:
+> - **Per-CONTAINER, NOT per-PVC**: `container_fs_*` comes from cAdvisor's cgroup blkio and **cannot be tied to a specific PVC** ([cAdvisor #3588](https://github.com/google/cadvisor/issues/3588)). A multi-PVC pod can't be split — you only see the container total.
+> - **Network storage is invisible**: cgroup blkio only counts block-layer I/O. **Network volumes (NFS / EFS / Azure Files) go through the network stack, bypass blkio → `container_fs` is always 0** ([cAdvisor #1702](https://github.com/google/cadvisor/issues/1702)). Such environments **cannot** use this alert (byo-check says so loudly).
+> - **It is not saturation**: raw IOPS/throughput ≠ "disk saturated" (that is node-level %util / latency — a platform-SRE concern, not splittable per tenant). Use it as an **anomaly-relative-to-baseline** signal (`da-tools baseline` for a recommended threshold), not an absolute SLA.
+
+### Step A: Scrape container_fs and inject `tenant`
+
+The platform's reference `kubelet-cadvisor` job already adds `container_fs_{reads,writes}_total` + `_bytes_total` to its keep, applies a `namespace→tenant` relabel, and drops `container=""`/`"POD"` (to avoid pod-root double-counting) — see the `kubelet-cadvisor` job in [`k8s/03-monitoring/configmap-prometheus.yaml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/k8s/03-monitoring/configmap-prometheus.yaml). A BYO Prometheus should mirror it (tight keep + relabel + container drop; do NOT use a broad `container_fs_.*` — the `device` label blows up cardinality).
+
+### Step B: A tenant declares an IOPS recipe
+
+```yaml
+tenants:
+  db-a:
+    _custom_alerts:
+      - recipe: rate
+        name: disk_write_iops_high
+        metric: container_fs_writes_total      # ops/s; use _bytes_total for throughput
+        op: ">"
+        window: 5m
+        threshold: "500:warning"               # ★ derive from da-tools baseline, don't guess
+        selectors:
+          container: "mariadb"                 # ★ strongly recommended: pin to the DB container (avoid sidecar noise)
+```
+
+> The recipe aggregates to the tenant level (`sum by(tenant, …) (rate(...))`), collapsing device/pod; `selectors.container` pins it to your DB container so you only see its I/O.
+
+### Step C: The Fidelity Gate (mandatory before relying on it)
+
+Whether container_fs can actually **see** I/O on your cluster is answerable only empirically. BEFORE relying on this alert:
+
+```bash
+# 1) Run a representative load (your real workload, or sysbench/pgbench)
+# 2) During it, confirm container_fs tracks the load via byo-check:
+da-tools byo-check prometheus --prometheus http://<your-prometheus>:9090
+#   step5_disk_iops_recipe_prereq:
+#     pass → container_fs arrives tenant-attributed = the signal is high-fidelity, safe to enable
+#     fail → none arrives (not scraped, or storage bypasses blkio) → unusable here, do not rely on it
+```
+
+**✅ Pass criteria**: byo-check's `step5` is `pass`, and during the load `rate(container_fs_reads_total{tenant="<you>"}[5m])` **or** `..._writes_total` shows sane non-zero values (a read-heavy workload need only show reads — matching the gate's reads-OR-writes). **If it fails / both are 0, honestly do NOT enable it** — an I/O alert that measures nothing is more dangerous than none.
+
+> **Re-run after infrastructure changes**: a cgroup version change (v1→v2 migration) or a storage-driver swap alters the underlying blkio accounting — re-running this fidelity gate re-verifies that container_fs is still high-fidelity on the new setup, with no static assumption to trust.
+
+### When it breaks: byo-check step5 reports fail
+
+Check in order: (1) is `container_fs_*` in the cadvisor scrape keep AND does that job carry a `namespace→tenant` relabel (Step A); (2) does your storage go over the network (NFS/EFS) and thus **bypass cgroup blkio** — then container_fs is structurally 0, and the platform SRE should monitor node-level `node_disk_*` instead; (3) is the tenant workload actually writing to disk (baseline should be non-zero under load).
+
+> **Node-level saturation is platform-SRE scope**: true "disk saturated" (%util, await/latency) is node/device-level and can't be split per tenant — the platform SRE monitors it with `node_disk_*`. It is out of scope for this tenant recipe (same as disk-fill's thin-provisioning boundary).
+
+---
+
 ## Advanced: Integration with Thanos / VictoriaMetrics
 
 The platform's rule packs are based purely on standard PromQL, making them fully compatible with Thanos and VictoriaMetrics:

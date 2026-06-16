@@ -526,4 +526,23 @@ def test_nondisk_recipe_no_prereq_notice(tmp_path, capsys):
     sys.argv = ["compile_custom_alerts.py", "--config-dir", str(tmp_path),
                 "--out", str(tmp_path / "pack.yaml")]
     assert cc.main() == 0
-    assert "disk-recipe prerequisite" not in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "disk-recipe prerequisite" not in err
+    assert "disk-IOPS-recipe prerequisite" not in err
+
+
+# --- D2. disk-IOPS-recipe prerequisite notice (#692 P0④) -------------------
+# A rate recipe over container_fs_* compiles fine but only fires if cadvisor scrapes
+# container_fs with a namespace→tenant relabel AND the storage exposes I/O to cgroup
+# blkio (network volumes bypass it). main() surfaces it at author-time; byo_check is
+# the live fidelity gate.
+def test_iops_recipe_emits_prereq_notice(tmp_path, capsys):
+    _write_tree(tmp_path, {
+        "a.yaml": 'tenants:\n  ta:\n    _custom_alerts:\n'
+                  '      - {recipe: rate, name: iops_chk, metric: container_fs_writes_total,'
+                  ' op: ">", window: 5m, threshold: "500:warning"}\n',
+    })
+    sys.argv = ["compile_custom_alerts.py", "--config-dir", str(tmp_path),
+                "--out", str(tmp_path / "pack.yaml")]
+    assert cc.main() == 0
+    assert "disk-IOPS-recipe prerequisite" in capsys.readouterr().err

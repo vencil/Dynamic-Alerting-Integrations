@@ -236,6 +236,19 @@ def main() -> int:
               "volume-stats scrape job, and a namespace→tenant relabel. Verify the live flow "
               "with `byo_check.py prometheus`.", file=sys.stderr)
 
+    # Prerequisite notice (#692 P0④): disk-IOPS recipes (container_fs_*) depend on a
+    # cadvisor container_fs scrape + namespace→tenant relabel AND on the storage exposing
+    # I/O to cgroup blkio — network volumes (NFS/EFS) bypass blkio and emit 0. It is
+    # PER-CONTAINER, not per-PVC. We INFORM at author-time; byo_check.py is the live
+    # fidelity gate (no runtime sentinel — an inert IOPS recipe is always platform-side).
+    if any("container_fs_" in r.get("expr", "")
+           for g in groups for r in g.get("rules", [])):
+        print("  ⚠ disk-IOPS-recipe prerequisite: a disk-IOPS recipe (container_fs_*) compiled "
+              "— it only fires if cadvisor scrapes container_fs with a namespace→tenant relabel "
+              "AND the storage exposes I/O to cgroup blkio (network volumes like NFS/EFS bypass "
+              "it → 0). Per-CONTAINER, not per-PVC. Verify the live flow with `byo_check.py "
+              "prometheus` after a representative load test.", file=sys.stderr)
+
     if args.check:
         gen_map = sync._extract(groups)
         committed = sync._extract(sync._groups_from_rulepack(out_path)) if out_path.exists() else {}
