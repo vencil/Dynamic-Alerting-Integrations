@@ -284,3 +284,124 @@ class TestMain:
                     bc.main()
         # #452/#737: unreachable endpoints = transport caller-error → exit 2
         assert exc_info.value.code == 2
+
+
+# ---------------------------------------------------------------------------
+# Step 4: disk-recipe prerequisite (#692 P0③ W3) — kubelet volume-stats scraped
+# AND tenant-attributed when a tenant declared a disk-fill custom alert.
+# ---------------------------------------------------------------------------
+def _disk_query(declaring, arriving, running, arriving_err=None):
+    """Mock query_prometheus for Step 4 scenarios; declaring/arriving/running are
+    lists of tenant names. Earlier steps' queries return [] (benign — those checks
+    are warn/fail but the tests only assert the step4 result). Order matters: the
+    declaring query is matched on its `metric=~` regex BEFORE the available_bytes
+    substring it also contains. arriving_err simulates the volume-stats query itself
+    erroring (transient) — distinct from a real empty result."""
+    def _r(tenants):
+        return [{"metric": {"tenant": t}, "value": [1, "1"]} for t in tenants]
+
+    def _query(prom_url, promql):
+        # declaring: the only query carrying BOTH user_threshold and volume-stats.
+        if "user_threshold" in promql and "kubelet_volume_stats" in promql:
+            return _r(declaring), None
+        if "kubelet_volume_stats_available_bytes" in promql:
+            return (None, arriving_err) if arriving_err else (_r(arriving), None)
+        if "label_replace" in promql and "kube_pod_status_phase" in promql:
+            return _r(running), None
+        return [], None  # steps 1-3 benign
+    return _query
+
+
+class TestStep4DiskRecipePrereq:
+    def _run(self, query_fn):
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = b"OK"
+        mock_resp.__enter__ = lambda s: s
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        with patch("urllib.request.urlopen", return_value=mock_resp):
+            with patch.object(bc, "http_get_json",
+                              side_effect=_mock_http_get_json({"rules": ({"data": {"groups": []}}, None)})):
+                with patch.object(bc, "query_prometheus", side_effect=query_fn):
+                    return bc.check_prometheus(_args())
+
+    def _step4(self, checks):
+        return next(c for c in checks if c["check"] == "step4_disk_recipe_prereq")
+
+    def test_skip_when_no_disk_recipes(self):
+        """No disk-fill recipe declared → step is N/A (skip), not a false alarm."""
+        checks = self._run(_disk_query(declaring=[], arriving=[], running=[]))
+        assert self._step4(checks)["status"] == "skip"
+
+    def test_fail_platform_wide_no_volume_stats(self):
+        """Disk recipes declared but ZERO tenant-attributed volume-stats arrive —
+        the rollout-storm misconfiguration this step exists to catch."""
+        checks = self._run(_disk_query(declaring=["db-a", "db-b"], arriving=[], running=["db-a", "db-b"]))
+        c = self._step4(checks)
+        assert c["status"] == "fail"
+        assert "NO" in c["detail"]
+
+    def test_warn_partial_missing_tenant(self):
+        """Some tenants attributed, but a declaring+running tenant has none."""
+        checks = self._run(_disk_query(declaring=["db-a", "db-b"], arriving=["db-a"], running=["db-a", "db-b"]))
+        c = self._step4(checks)
+        assert c["status"] == "warn"
+        assert "db-b" in c["detail"]
+
+    def test_pass_all_attributed(self):
+        checks = self._run(_disk_query(declaring=["db-a"], arriving=["db-a"], running=["db-a"]))
+        assert self._step4(checks)["status"] == "pass"
+
+    def test_running_guard_excludes_unstarted_tenant(self):
+        """db-b declared but NOT running yet → not flagged (running-pods guard),
+        so a tenant mid-rollout with no workload up does not false-alarm."""
+        checks = self._run(_disk_query(declaring=["db-a", "db-b"], arriving=["db-a"], running=["db-a"]))
+        assert self._step4(checks)["status"] == "pass"
+
+    def test_warn_not_fail_on_volume_stats_query_error(self):
+        """A transient error on the volume-stats query must NOT be read as a real
+        absence (false platform-wide fail) — degrade to advisory warn."""
+        checks = self._run(_disk_query(declaring=["db-a"], arriving=[], running=["db-a"],
+                                       arriving_err="query timeout"))
+        c = self._step4(checks)
+        assert c["status"] == "warn"
+        assert "could not query" in c["detail"]
+
+    def test_warn_not_fail_when_no_declaring_tenant_running_yet(self):
+        """Onboarding window: disk recipe declared but the workload isn't deployed
+        yet (no running pods) → advisory warn, NOT a false platform-wide fail (the
+        running-pods guard must gate the fail, not just the partial-warn). Regression
+        for the adversarial-review finding."""
+        checks = self._run(_disk_query(declaring=["db-a", "db-b"], arriving=[], running=[]))
+        c = self._step4(checks)
+        assert c["status"] == "warn"
+        assert "running pods yet" in c["detail"]
+
+    def test_scope_mirrors_sentinel_exactly(self):
+        """Step 4 MUST query the same scope as the CustomRecipeDiskInert sentinel —
+        metric set (available_bytes OR used_bytes, exact, NO broad regex) AND db-.+
+        namespace on the running leg — else onboarding/runtime split-brain (a non-db
+        tenant the sentinel ignores would false-fail byo_check). Gemini adversarial
+        finding; capture the issued PromQL and assert parity with rule-pack-kubernetes."""
+        seen = []
+        def _rec(prom_url, promql):
+            seen.append(promql)
+            if "user_threshold" in promql and "kubelet_volume_stats" in promql:
+                return [{"metric": {"tenant": "db-a"}, "value": [1, "1"]}], None
+            return [], None
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = b"OK"
+        mock_resp.__enter__ = lambda s: s
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        with patch("urllib.request.urlopen", return_value=mock_resp):
+            with patch.object(bc, "http_get_json",
+                              side_effect=_mock_http_get_json({"rules": ({"data": {"groups": []}}, None)})):
+                with patch.object(bc, "query_prometheus", side_effect=_rec):
+                    bc.check_prometheus(_args())
+        declaring = next(q for q in seen if "user_threshold" in q and "kubelet_volume_stats" in q)
+        running = next(q for q in seen if "label_replace" in q and "kube_pod_status_phase" in q)
+        # metric-set parity: exact-OR of available + used, NOT a broad regex.
+        assert 'metric="kubelet_volume_stats_available_bytes"' in declaring
+        assert 'metric="kubelet_volume_stats_used_bytes"' in declaring
+        assert "=~" not in declaring
+        # namespace-scope parity with the sentinel's pods-leg.
+        assert 'namespace=~"db-.+"' in running
