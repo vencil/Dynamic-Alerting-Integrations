@@ -254,6 +254,47 @@ jobs:
       - name: "recipe-status.json matches RECIPE_STATUS SSOT (HARD gate — #741 #6)"
         run: python scripts/tools/dx/gen_recipe_status_json.py --check
 
+  backend-compat-parity:
+    name: Backend-compat PromQL parity (VictoriaMetrics)
+    # ADR-025 deferred "backend compatibility" Part 1. We claim storage-backend-
+    # agnostic (ADR-020/021) but every promtool golden runs on Prometheus only.
+    # This re-runs a representative subset of those SAME goldens against a real
+    # VictoriaMetrics, asserting VM evaluates our COMPILED rule-pack exprs (incl
+    # the recording-rule chain) to the same result (label-sets + fire/no-fire +
+    # value/epsilon). Staleness/temporal semantics stay deferred (need real gaps).
+    # Informational (not a required check); ~30s, parallel to the long jobs.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Start VictoriaMetrics (digest-pinned; large retention for fixed-epoch fixtures)
+        # docker run (not a `services:` container) so we can pass the flag:
+        # `-retentionPeriod=100y` — fixtures ingest at a FIXED epoch for determinism
+        # (Gemini trap #1); VM's default 1-month retention would silently drop them.
+        # Image digest-pinned per the supply-chain policy (#851); re-resolve with
+        # `docker buildx imagetools inspect <img>:<ver>` on a version bump.
+        run: |
+          docker run -d --name vm-parity -p 8428:8428 \
+            docker.io/victoriametrics/victoria-metrics:v1.111.0@sha256:1676d73b39297a938eb60f0894b44b264152a6a38074fa5de99d9bdc425deb65 \
+            -retentionPeriod=100y
+          for i in $(seq 1 30); do
+            curl -fsS http://localhost:8428/health >/dev/null 2>&1 && { echo "VM up"; break; }
+            sleep 1
+          done
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Install deps
+        run: pip install pyyaml pytest
+      - name: Run backend-compat parity smoke
+        # VM_PARITY_REQUIRE=1 → an unreachable VM is a HARD FAILURE, never a silent
+        # skip-to-green (the job's whole point).
+        env:
+          VM_PARITY_REQUIRE: "1"
+          VM_PARITY_ENDPOINT: http://localhost:8428
+        run: python -m pytest tests/rulepacks/test_vm_backend_parity.py -v
+
   iac-helm-sast:
     # Container/k8s SAST Layers 2 + 4 (#448 / TRK-312 + TRK-314).
     #   L2 (Helm template): renders 9 charts via helm + kube-linter (~1-2 min).
