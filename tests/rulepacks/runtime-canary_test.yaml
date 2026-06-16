@@ -1,0 +1,153 @@
+# promtool unit test — Runtime-Canary DEMO (ADR-025 design-readiness).
+# Proves, against the REAL compiler output + the hand-authored dead-man's-switch
+# (runtime-canary.rules.yaml), the three claims the design doc makes:
+#   1. LIVENESS        — heartbeat present → the canary's Custom_ alert fires end
+#                        to end; the dead-man's-switch stays quiet.
+#   2. CONTAINMENT     — a co-tenant on the SAME shape with broken data does NOT
+#                        blank the canary's row (vectorised on(tenant) isolation).
+#   3. DEAD-MAN'S-SW   — the exporter stops emitting user_threshold → the canary's
+#                        core record vanishes → CustomAlertPipelineCanaryDown PAGES.
+# Run by the CI promtool loop (`for t in tests/rulepacks/*_test.yaml`).
+rule_files:
+  - ./runtime-canary.rules.yaml
+
+evaluation_interval: 15s
+
+tests:
+  # ── 1. LIVENESS: heartbeat=1 > threshold=0 → canary fires; meta stays quiet ──
+  - interval: 15s
+    input_series:
+      - series: 'canary_pipeline_heartbeat{tenant="platform-canary"}'
+        values: '1x48'
+      - series: 'user_threshold{component="custom", metric="canary_pipeline_heartbeat", recipe_id="threshold__canary_pipeline_heartbeat__gt__w5m__for1m", tenant="platform-canary", severity="warning", name="pipeline_heartbeat", mode="silent"}'
+        values: '0x48'
+      - series: 'tenant_metadata_info{tenant="platform-canary", runbook_url="https://rb/canary", owner="platform-ops", tier="platform"}'
+        values: '1x48'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: Custom_threshold__canary_pipeline_heartbeat__gt__w5m__for1m
+        exp_alerts:
+          - exp_labels:
+              component: custom
+              severity: warning
+              tenant: platform-canary
+              recipe: threshold
+              name: pipeline_heartbeat
+              mode: silent
+              version: default
+              runbook_url: "https://rb/canary"
+              owner: platform-ops
+              tier: platform
+            exp_annotations:
+              summary: "Custom alert [pipeline_heartbeat] for platform-canary"
+              summary_zh: "platform-canary 的自訂告警 [pipeline_heartbeat] 觸發"
+              description: "threshold on canary_pipeline_heartbeat: value 1.00 crossed the configured threshold"
+              description_zh: "canary_pipeline_heartbeat 的 threshold: 值 1.00 已越過設定閾值"
+              runbook_url: "https://rb/canary"
+              owner: platform-ops
+              tier: platform
+      # The dead-man's-switch is SILENT while the canary is alive.
+      - eval_time: 11m
+        alertname: CustomAlertPipelineCanaryDown
+        exp_alerts: []
+
+  # ── 2. CONTAINMENT: a co-tenant (noisy-neighbor) on the SAME shape is PRESENT
+  #    and firing at a wildly divergent value (9999). The canary's row stays
+  #    independent: it fires at its OWN value (1.00), un-perturbed by the neighbor,
+  #    and the neighbor fires at 9999 — two independent rows, no max-across-tenant
+  #    mixing. This is the non-vacuous "another tenant's error can't break mine"
+  #    proof: the vectorised max by(tenant) + on(tenant) group_left keeps each
+  #    tenant's row independent even when a co-tenant is actively misbehaving. ──
+  - interval: 15s
+    input_series:
+      - series: 'canary_pipeline_heartbeat{tenant="platform-canary"}'
+        values: '1x48'
+      - series: 'user_threshold{component="custom", metric="canary_pipeline_heartbeat", recipe_id="threshold__canary_pipeline_heartbeat__gt__w5m__for1m", tenant="platform-canary", severity="warning", name="pipeline_heartbeat", mode="silent"}'
+        values: '0x48'
+      - series: 'tenant_metadata_info{tenant="platform-canary", runbook_url="https://rb/canary", owner="platform-ops", tier="platform"}'
+        values: '1x48'
+      # noisy-neighbor shares the shape (same recipe_id) and is PRESENT with a wild
+      # value (9999). If the join mixed values across tenants, the canary's row
+      # would be polluted — it is not.
+      - series: 'canary_pipeline_heartbeat{tenant="noisy-neighbor"}'
+        values: '9999x48'
+      - series: 'user_threshold{component="custom", metric="canary_pipeline_heartbeat", recipe_id="threshold__canary_pipeline_heartbeat__gt__w5m__for1m", tenant="noisy-neighbor", severity="warning", name="nn_heartbeat", mode="silent"}'
+        values: '0x48'
+      - series: 'tenant_metadata_info{tenant="noisy-neighbor", runbook_url="https://rb/nn", owner="team-nn", tier="bronze"}'
+        values: '1x48'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: Custom_threshold__canary_pipeline_heartbeat__gt__w5m__for1m
+        # TWO independent firing rows; the canary's value is EXACTLY 1.00 (its own),
+        # NOT 9999 — proving the neighbor's wild data did not leak into its row.
+        exp_alerts:
+          - exp_labels:
+              component: custom
+              severity: warning
+              tenant: platform-canary
+              recipe: threshold
+              name: pipeline_heartbeat
+              mode: silent
+              version: default
+              runbook_url: "https://rb/canary"
+              owner: platform-ops
+              tier: platform
+            exp_annotations:
+              summary: "Custom alert [pipeline_heartbeat] for platform-canary"
+              summary_zh: "platform-canary 的自訂告警 [pipeline_heartbeat] 觸發"
+              description: "threshold on canary_pipeline_heartbeat: value 1.00 crossed the configured threshold"
+              description_zh: "canary_pipeline_heartbeat 的 threshold: 值 1.00 已越過設定閾值"
+              runbook_url: "https://rb/canary"
+              owner: platform-ops
+              tier: platform
+          - exp_labels:
+              component: custom
+              severity: warning
+              tenant: noisy-neighbor
+              recipe: threshold
+              name: nn_heartbeat
+              mode: silent
+              version: default
+              runbook_url: "https://rb/nn"
+              owner: team-nn
+              tier: bronze
+            exp_annotations:
+              summary: "Custom alert [nn_heartbeat] for noisy-neighbor"
+              summary_zh: "noisy-neighbor 的自訂告警 [nn_heartbeat] 觸發"
+              description: "threshold on canary_pipeline_heartbeat: value 9999.00 crossed the configured threshold"
+              description_zh: "canary_pipeline_heartbeat 的 threshold: 值 9999.00 已越過設定閾值"
+              runbook_url: "https://rb/nn"
+              owner: team-nn
+              tier: bronze
+      - eval_time: 11m
+        alertname: CustomAlertPipelineCanaryDown
+        exp_alerts: []
+
+  # ── 3. DEAD-MAN'S-SWITCH: the exporter stops emitting user_threshold (a silent
+  #    compile-pipeline death Watchdog cannot see) — the heartbeat metric is still
+  #    scraped, but with no threshold series the canary's core record vanishes →
+  #    CustomAlertPipelineCanaryDown fires after its 5m for:. ──
+  - interval: 15s
+    input_series:
+      - series: 'canary_pipeline_heartbeat{tenant="platform-canary"}'
+        values: '1x32'
+      # NO user_threshold series — simulates exporter / conf.d-parse death.
+    alert_rule_test:
+      # canary alert is gone (core cannot compute without the threshold side)
+      - eval_time: 7m
+        alertname: Custom_threshold__canary_pipeline_heartbeat__gt__w5m__for1m
+        exp_alerts: []
+      # the dead-man's-switch PAGES
+      - eval_time: 7m
+        alertname: CustomAlertPipelineCanaryDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              component: platform-canary
+              tenant: platform-canary
+            exp_annotations:
+              summary: "Custom-alert COMPILE PIPELINE canary is DOWN — the exporter -> compiler -> Prometheus -> route chain may be silently broken; tenant custom alerts may be failing to fire."
+              summary_zh: "自訂告警編譯管線 canary 已停止 — exporter -> 編譯器 -> Prometheus -> 路由 鏈可能已靜默損壞；租戶自訂告警可能正在無聲失效。"
+              description: "The always-firing platform-canary custom alert is no longer firing. Investigate the custom-alert pipeline end-to-end: threshold-exporter user_threshold emission, compile_custom_alerts drift, Prometheus rule load, scrape health."
+              description_zh: "常駐必觸發的 platform-canary 自訂告警已不再觸發。請端到端檢查自訂告警管線：threshold-exporter 的 user_threshold 發送、compile_custom_alerts 漂移、Prometheus 規則載入、scrape 健康度。"
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/design/runtime-canary.md"

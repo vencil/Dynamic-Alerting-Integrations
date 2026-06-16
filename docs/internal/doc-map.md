@@ -49,6 +49,7 @@ lang: zh
 | `docs/design/README.md` (.en.md) | Platform Engineers, DevOps | 設計深潛導覽 — 架構 spoke 文件 |
 | `docs/design/roadmap-future.md` (.en.md) | Platform Engineers, DevOps | 未來擴展路線 — K8s Operator、Design System、Auto-Discovery 等 |
 | `docs/design/rule-packs.md` (.en.md) | Platform Engineers, DevOps | Rule Packs 與 Projected Volume 架構 |
+| `docs/design/runtime-canary.md` (.en.md) | Platform Engineers, SREs | Runtime Canary 設計 — 自訂告警編譯管線的端到端活性保證 |
 | `docs/getting-started/decision-matrix.md` (.en.md) | Platform Engineers | Deployment Decision Matrix |
 | `docs/getting-started/for-decision-makers.md` (.en.md) | decision-maker | 決策者 / 主管評估指南 |
 | `docs/getting-started/for-domain-experts.md` (.en.md) | Domain Experts (DBA) | Domain Expert (DBA) 快速入門指南 |
