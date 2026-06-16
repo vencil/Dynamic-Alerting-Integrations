@@ -35,6 +35,7 @@ updated_at: 2026-06-15
   - `tests/rulepacks/*.rules.yaml` — 平台自監控 pack 的 **extract**（`configmap-rules-platform.yaml` 為 ConfigMap-wrapped、pint 無法 parse；extract 是唯一可掃形式）。這把 **ADR-025 guardian**（`Watchdog` + `AlertmanagerWebhookNotificationsFailing`）+ SSE-reconnect sentinel 納入 gate——「守護者不該裸奔在靜態分析網外」。同目錄的 `*_test.yaml` promtool spec 非 rule 檔，被 `parser.include` 略過。
 - k8s ConfigMap 副本 + `operator-manifests/` 為 ConfigMap-wrapped → 不掃；三份副本一致性由 `check_rulepack_sync.py` 守。
 - **`--offline`**（CI 無需 Prometheus；跳過 `promql/series` / `promql/cost`）。引擎：CI 裝 pint binary（release tag `v0.86.0`），`check_pint.py` fallback docker tag `0.86.0`；兩者版本一致由 `tests/lint/test_check_pint.py` 守。
+- **供應鏈**：CI 的 pint binary 下載在 install 前先過 `scripts/ops/_verify_download.sh` 比對 pinned SHA-256（與 promtool / hadolint / kube-linter 同一把關），mismatch 即 fail，再落 docker fallback。docker fallback 仍以 mutable tag 拉取（digest-pin 為後續項）。
 
 ## Consolidated baseline（against `main`）— Bug/Warning = **0** 必須
 
