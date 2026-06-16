@@ -264,6 +264,10 @@ jobs:
     # value/epsilon). Staleness/temporal semantics stay deferred (need real gaps).
     # Informational (not a required check); ~30s, parallel to the long jobs.
     runs-on: ubuntu-latest
+    # The job only reads the repo (checkout → docker VM → pytest); cap
+    # GITHUB_TOKEN accordingly (CodeQL actions/missing-workflow-permissions).
+    permissions:
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@v6
