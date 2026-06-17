@@ -7,6 +7,9 @@
 # Prerequisites:
 #   - threshold-config ConfigMap with _state_maintenance.recurring
 #   - Alertmanager accessible at the configured URL
+#   - NetworkPolicy: `allow-maintenance-scheduler-egress` (network-policies.yaml)
+#     — the monitoring-ns default-deny-all egress otherwise blocks Alertmanager
+#     :9093 + DNS, silently no-op'ing this Job
 #   - (Optional) Pushgateway for CronJob observability metrics
 #
 # The CronJob reads tenant configs from the mounted ConfigMap
