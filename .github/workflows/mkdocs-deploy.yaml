@@ -1,5 +1,29 @@
 name: Deploy Documentation
 
+# Builds the MkDocs site and deploys it via the GitHub Actions Pages
+# pipeline (NOT `mkdocs gh-deploy` to a gh-pages branch).
+#
+# Why Actions-native (migrated from `mkdocs gh-deploy --force`):
+#   The previous workflow pushed the built site to the `gh-pages` branch,
+#   but GitHub Pages was serving from `main:/docs` (legacy Jekyll). The two
+#   were disconnected: every deploy was green yet the live site root 404'd
+#   because Pages ran Jekyll over the MkDocs *source* (which has no root
+#   index.html — only index.md + Liquid-hostile content). Serving via
+#   `actions/deploy-pages` deploys the SAME `mkdocs build` output the lint
+#   job runs (docs-ci `MkDocs Build Verification` -> mkdocs_strict_check.sh),
+#   so deploy and lint track one artifact instead of two disconnected build
+#   systems — closing the gap where "lint green" said nothing about what was
+#   actually served.
+#
+#   ONE-TIME prerequisite (NOT done by this workflow): the Pages serving
+#   source must be switched to "GitHub Actions" once — Settings -> Pages ->
+#   Source, or `gh api -X PUT repos/<owner>/<repo>/pages -f build_type=workflow`.
+#   `actions/configure-pages` does NOT migrate an existing legacy branch
+#   source (its `enablement` only *enables* Pages when absent, and needs a
+#   token beyond GITHUB_TOKEN). Once the source is "workflow" this pipeline
+#   owns deploys; `pages-health.yaml` then asserts the source can't silently
+#   drift back to a branch/folder, plus a live HTTP 200 backstop.
+
 on:
   push:
     branches: [main]
@@ -7,13 +31,28 @@ on:
       - 'docs/**'
       - 'mkdocs.yml'
       - 'rule-packs/*.md'
+      - 'scripts/mkdocs/**'
+      - '.github/workflows/mkdocs-deploy.yaml'
   workflow_dispatch:  # manual trigger
 
+# Least-privilege token for the Actions Pages pipeline:
+#   pages: write     — create the Pages deployment
+#   id-token: write  — OIDC token actions/deploy-pages exchanges
+#   contents: read   — checkout only (no branch push needed anymore)
 permissions:
-  contents: write  # for gh-deploy
+  contents: read
+  pages: write
+  id-token: write
+
+# Serialize deploys; never cancel an in-flight one (a half-applied Pages
+# deployment is worse than waiting). Matches the GitHub Pages starter.
+concurrency:
+  group: pages
+  cancel-in-progress: false
 
 jobs:
-  deploy:
+  build:
+    name: Build MkDocs site
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -27,5 +66,34 @@ jobs:
           key: mkdocs-${{ hashFiles('mkdocs.yml') }}
       - name: Install dependencies
         run: pip install mkdocs-material mkdocs-static-i18n pymdown-extensions
+      - name: Build site
+        # Plain `mkdocs build` (NOT --strict): the docs-ci `MkDocs Build
+        # Verification` job gates PR quality via mkdocs_strict_check.sh.
+        # Keeping the deploy build resilient means a known-acceptable link
+        # warning can't take the whole site down. Same `mkdocs build` the
+        # lint job runs (via mkdocs_strict_check.sh) — but that lint can pass
+        # on filtered known-acceptable warnings, so docs-ci stays the quality
+        # gate; this step just ships the build.
+        run: mkdocs build
+      - name: Configure Pages
+        # Provides Pages build metadata for this run. Does NOT switch an
+        # existing legacy branch source to "workflow" — that is the one-time
+        # step noted in the header. Harmless once the source is already
+        # "GitHub Actions".
+        uses: actions/configure-pages@v5
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
       - name: Deploy
-        run: mkdocs gh-deploy --force
+        id: deployment
+        uses: actions/deploy-pages@v4

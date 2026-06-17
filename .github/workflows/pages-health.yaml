@@ -1,0 +1,126 @@
+name: Pages Health
+
+# Guard against the "deploy is green but the live site is broken" class of
+# failure that 404'd the docs site root (Pages was serving legacy main:/docs
+# while CI published a correct site elsewhere; no lint/CI ever exercised the
+# served artifact, and nothing asserted the Pages source setting).
+#
+# Two independent signals, each of which would have caught that outage:
+#   1. assert-source — the Pages serving source is the expected build type
+#      (catches a UI/API setting drift that triggers NO deploy at all).
+#   2. live-health   — the production root + /en/ actually return HTTP 200
+#      AND render the real MkDocs home (catches a broken/partial deploy).
+#
+# Runs on a daily schedule (steady-state drift), on demand, and after a
+# SUCCESSFUL "Deploy Documentation" run. The conclusion gate (job-level `if`)
+# keeps a health-red meaning "deploy reported success but the site doesn't
+# actually serve" — distinct from "the deploy itself failed", which is already
+# its own red. First-cycle note: workflow_run only fires once this file is on
+# the default branch, so the very first post-merge deploy may not chain here —
+# the daily schedule + manual dispatch cover that gap.
+
+on:
+  schedule:
+    - cron: '17 6 * * *'   # daily 06:17 UTC — steady-state drift detection
+  workflow_dispatch:
+  workflow_run:
+    workflows: ["Deploy Documentation"]
+    types: [completed]
+
+permissions:
+  contents: read
+  pages: read
+
+env:
+  # Expected GitHub Pages serving source. We deploy via the GitHub Actions
+  # Pages pipeline (mkdocs-deploy.yaml), so the build type must be "workflow".
+  # If we ever revert to a branch source, change this to match.
+  EXPECTED_BUILD_TYPE: workflow
+
+jobs:
+  assert-source:
+    name: Assert Pages serving source
+    # schedule/dispatch always run; workflow_run only after a successful deploy.
+    if: >-
+      github.event_name != 'workflow_run' ||
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check Pages build_type matches expectation
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          build_type=$(gh api "repos/${GITHUB_REPOSITORY}/pages" --jq '.build_type')
+          echo "Pages build_type: ${build_type} (expected: ${EXPECTED_BUILD_TYPE})"
+          if [ "${build_type}" != "${EXPECTED_BUILD_TYPE}" ]; then
+            src=$(gh api "repos/${GITHUB_REPOSITORY}/pages" --jq '.source | "\(.branch):\(.path)"' 2>/dev/null || echo "n/a")
+            echo "::error::Pages serving source drifted to build_type='${build_type}' (source=${src}). Expected '${EXPECTED_BUILD_TYPE}'. The site is being served from the wrong place — set Settings -> Pages -> Source = 'GitHub Actions' (or: gh api -X PUT repos/${GITHUB_REPOSITORY}/pages -f build_type=workflow), then re-run 'Deploy Documentation'."
+            exit 1
+          fi
+          echo "Pages source OK."
+
+  live-health:
+    name: Live site health (HTTP 200 + content)
+    # schedule/dispatch always run; workflow_run only after a successful deploy.
+    if: >-
+      github.event_name != 'workflow_run' ||
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe production root and /en/
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          # Single source of truth for the live URL: GitHub's own Pages record.
+          base=$(gh api "repos/${GITHUB_REPOSITORY}/pages" --jq '.html_url')
+          base="${base%/}"   # strip trailing slash for clean joins
+          echo "Probing site: ${base}"
+
+          # Content sentinel: mkdocs.yml site_name. Confirms the response is
+          # the rendered MkDocs home, not a stray static file or placeholder
+          # (the prior outage served odd 200s for static files while the root
+          # 404'd — a status-only check could be fooled by the inverse).
+          sentinel="Dynamic Alerting Platform"
+
+          probe() {
+            # $1 = url. Echoes the HTTP status; sets BODY to the response body.
+            local url="$1" code
+            # No -f: keep the real status code (and body) on 4xx/5xx for
+            # diagnostics. A non-zero exit then means a transport error
+            # (DNS/timeout), which falls through to BODY="" / code="".
+            BODY=$(curl -sS --max-time 20 -w '\n%{http_code}' "$url" 2>/dev/null) || BODY=""
+            code="${BODY##*$'\n'}"
+            BODY="${BODY%$'\n'*}"
+            echo "$code"
+          }
+
+          check_url() {
+            local url="$1" want_content="$2"
+            for attempt in 1 2 3 4 5 6; do
+              code=$(probe "$url")
+              if [ "$code" = "200" ]; then
+                if [ "$want_content" = "1" ] && ! grep -qiF "$sentinel" <<<"$BODY"; then
+                  echo "  attempt ${attempt}: 200 but content sentinel '${sentinel}' missing — retrying"
+                else
+                  echo "  ${url} -> 200 OK"
+                  return 0
+                fi
+              else
+                echo "  attempt ${attempt}: ${url} -> ${code:-no-response} (retrying)"
+              fi
+              sleep 20
+            done
+            echo "::error::${url} did not return HTTP 200 with expected content after retries (last status: ${code:-no-response}). The live docs site is unhealthy."
+            return 1
+          }
+
+          rc=0
+          # Root must serve the real rendered home (status + content).
+          check_url "${base}/" 1 || rc=1
+          # English locale root: status-only (its <title> differs from the
+          # zh site_name sentinel; a 200 is enough to prove the i18n tree built).
+          check_url "${base}/en/" 0 || rc=1
+          exit $rc
