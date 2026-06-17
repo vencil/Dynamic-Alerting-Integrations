@@ -51,7 +51,10 @@ spec:
   jobTemplate:
     spec:
       backoffLimit: 1
-      # Generous: each opened PR is a tenant-api round-trip plus --throttle-seconds.
+      # Sized for the shipped --max-prs 5 (≈ 5 × (--throttle-seconds + tenant-api
+      # RTT) ≈ 20s, far under 600s). ⚠ Raise this in lockstep if you raise
+      # --max-prs substantially: a 100+ one-off fleet sweep (≈ 400s+) starts to
+      # approach the 600s hard kill.
       activeDeadlineSeconds: 600
       template:
         metadata:
