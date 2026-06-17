@@ -29,20 +29,20 @@ on:
     branches: [main]
     paths:
       - 'docs/**'
+      - 'CHANGELOG.md'   # rendered in nav (mkdocs.yml) via the docs/CHANGELOG.md symlink
       - 'mkdocs.yml'
       - 'rule-packs/*.md'
       - 'scripts/mkdocs/**'
       - '.github/workflows/mkdocs-deploy.yaml'
   workflow_dispatch:  # manual trigger
 
-# Least-privilege token for the Actions Pages pipeline:
-#   pages: write     — create the Pages deployment
-#   id-token: write  — OIDC token actions/deploy-pages exchanges
-#   contents: read   — checkout only (no branch push needed anymore)
+# Least-privilege: only `contents: read` at the workflow level (the build job
+# just checks out + builds). The Pages write scopes (pages: write + id-token:
+# write, needed only by actions/deploy-pages) live on the deploy job alone —
+# the build job (configure-pages + upload-pages-artifact) needs no write token.
+# (zizmor excessive-permissions; CodeRabbit on #861.)
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 # Serialize deploys; never cancel an in-flight one (a half-applied Pages
 # deployment is worse than waiting). Matches the GitHub Pages starter.
@@ -90,6 +90,11 @@ jobs:
     name: Deploy to GitHub Pages
     needs: build
     runs-on: ubuntu-latest
+    # Job-level override (replaces the workflow-level `contents: read`): only
+    # actions/deploy-pages needs these write scopes, so they stay off the build job.
+    permissions:
+      pages: write      # create the Pages deployment
+      id-token: write   # OIDC token actions/deploy-pages exchanges
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
