@@ -347,6 +347,7 @@ spec:
 | ADR-023 | [tenant-api 寫入平面 — 單一寫者不變式](adr/023-write-plane-single-writer-invariant.md) | ✅ Accepted | — |
 | ADR-024 | [宣告式 Dimensional 告警引擎 — Version-Aware Thresholds + Custom Alerts](adr/024-version-aware-threshold-via-dimensional-label.md) | ✅ Accepted | v2.9.0 |
 | ADR-025 | [告警平面自我存活性 — 讓告警系統能偵測自己的死亡](adr/025-alerting-plane-self-liveness.md) | ✅ Accepted | — |
+| ADR-026 | [Node/Cluster 維護告警抑制 — Liveness-Class Gap，不是子系統](adr/026-node-maintenance-liveness-suppression.md) | 🟡 Proposed | — |
 
 <!-- ADR_INDEX_END -->
 
