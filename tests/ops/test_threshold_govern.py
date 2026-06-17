@@ -12,6 +12,7 @@ Focus areas (highest-risk first):
      and dry-run sending zero network calls.
 """
 import argparse
+import json
 
 import pytest
 
@@ -336,9 +337,10 @@ def test_run_dry_run_makes_no_write_calls(monkeypatch):
     # tenant-api writes. (run_analysis is stubbed here, so this asserts no PUTs.)
     _stub_reports(monkeypatch, ["db-a", "db-b"])
     calls = _patch_http(monkeypatch)
-    plans, outcomes = tg.run(_args(apply=False))
+    plans, outcomes, ungoverned = tg.run(_args(apply=False))
     assert len(plans) == 2
     assert outcomes == []
+    assert ungoverned == []          # _stub_reports has no lower-bound `<` keys
     assert calls["put_count"] == 0
 
 
@@ -346,7 +348,7 @@ def test_run_apply_respects_max_prs(monkeypatch):
     _stub_reports(monkeypatch, ["db-a", "db-b", "db-c"])
     _patch_http(monkeypatch, per_tenant=True,
                 put_result=(200, {"status": "pending_review", "pr_url": "u", "pr_number": 1}, None))
-    plans, outcomes = tg.run(_args(apply=True, max_prs=2))
+    plans, outcomes, _ung = tg.run(_args(apply=True, max_prs=2))
     opened = [o for o in outcomes if o.status == "pr_opened"]
     skipped = [o for o in outcomes if o.status == "skipped"]
     assert len(opened) == 2
@@ -372,7 +374,7 @@ def test_run_apply_dedup_does_not_consume_cap(monkeypatch):
     monkeypatch.setattr(tg, "http_get_json", fake_get)
     monkeypatch.setattr(tg, "_http_put_yaml", fake_put)
 
-    plans, outcomes = tg.run(_args(apply=True, max_prs=1))
+    plans, outcomes, _ung = tg.run(_args(apply=True, max_prs=1))
     by_tenant = {o.tenant: o.status for o in outcomes}
     assert by_tenant["db-a"] == "already_pending"
     assert by_tenant["db-b"] == "pr_opened"
@@ -395,9 +397,64 @@ def test_run_apply_circuit_breaks_on_consecutive_errors(monkeypatch):
     n = tg.MAX_CONSECUTIVE_ERRORS + 3
     _stub_reports(monkeypatch, [f"db-{i}" for i in range(n)])
     calls = _patch_http(monkeypatch, per_tenant=True, put_result=(503, {"error": "overloaded"}, None))
-    plans, outcomes = tg.run(_args(apply=True, max_prs=100))
+    plans, outcomes, _ung = tg.run(_args(apply=True, max_prs=100))
     errors = [o for o in outcomes if o.status == "error"]
     aborted = [o for o in outcomes if o.status == "skipped" and "aborted" in o.message]
     assert len(errors) == tg.MAX_CONSECUTIVE_ERRORS          # stopped attempting after the cap
     assert len(aborted) == n - tg.MAX_CONSECUTIVE_ERRORS     # the rest are marked, not attempted
     assert calls["put_count"] == tg.MAX_CONSECUTIVE_ERRORS   # no further round-trips after the break
+
+
+# ---------------------------------------------------------------------------
+# 7. ungoverned lower-bound `<` visibility (#656 — DETECT `<` deferred; surface
+#    the blind spot so it is observable, not a silent coverage hole)
+# ---------------------------------------------------------------------------
+def test_collect_ungoverned_isolates_lower_bound():
+    # both engine skip-reason variants are caught; a non-`<` skip and an
+    # actionable key are NOT; result is sorted by (tenant, key).
+    reports = [
+        _report("db-a", [
+            _kr("mysql_connections", "2000", 100.0, -95.0, recommend.CONFIDENCE_HIGH),
+            _kr("db2_hit_ratio", "0.9",
+                reason="skipped: lower-bound (<) metric — not supported (#721 item 6)"),
+            _kr("redis_mem", "x",
+                reason="no observed-load mapping for this key — not in observed-map (skipped)"),
+        ]),
+        _report("db-b", [
+            _kr("kafka_active_controllers", "1",
+                reason="skipped: lower-bound (<) metric — P95-upper recommendation "
+                       "not applicable (#721 item 6)"),
+        ]),
+    ]
+    ung = tg.collect_ungoverned_lower_bound(reports)
+    assert [(u.tenant, u.key) for u in ung] == [
+        ("db-a", "db2_hit_ratio"), ("db-b", "kafka_active_controllers"),
+    ]
+
+
+def test_run_surfaces_ungoverned_but_keeps_it_out_of_plans(monkeypatch):
+    reports = [_report("db-a", [
+        _kr("mysql_connections", "2000", 100.0, -95.0, recommend.CONFIDENCE_HIGH, p95=100.0),
+        _kr("db2_hit_ratio", "0.9",
+            reason="skipped: lower-bound (<) metric — not supported (#721 item 6)"),
+    ])]
+    monkeypatch.setattr(recommend, "run_analysis", lambda *a, **k: reports)
+    plans, outcomes, ungoverned = tg.run(_args(apply=False))
+    assert [(u.tenant, u.key) for u in ungoverned] == [("db-a", "db2_hit_ratio")]
+    planned_keys = [c.key for p in plans for c in p.changes]
+    assert planned_keys == ["mysql_connections"]          # `<` never becomes actionable
+
+
+def test_text_report_shows_ungoverned_even_with_no_plans():
+    # guards the no-plans early-return path (must still surface the blind spot)
+    ung = [tg.UngovernedKey("db-a", "db2_hit_ratio", "skipped: lower-bound (<) ...")]
+    out = tg.format_text_report([], [], applied=False, ungoverned=ung)
+    assert "db-a / db2_hit_ratio" in out
+    assert ("未治理" in out) or ("ungoverned" in out.lower())
+
+
+def test_json_report_includes_ungoverned_count_and_list():
+    ung = [tg.UngovernedKey("db-a", "db2_hit_ratio", "skipped: lower-bound (<) ...")]
+    out = json.loads(tg.format_json_report([], [], applied=False, ungoverned=ung))
+    assert out["summary"]["ungoverned_lower_bound"] == 1
+    assert out["ungoverned_lower_bound"][0]["key"] == "db2_hit_ratio"
