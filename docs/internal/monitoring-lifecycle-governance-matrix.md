@@ -9,6 +9,7 @@ lang: zh
 
 > **用途**：讓「宣告式自動化能減輕負擔」從 overclaim 變成真的**前提模型**。所有下游產物（golden path、CRD schema、enforced gate、per-role quickstart）都**從這張表 derive**。一個行為若不在這張表裡，它就不該有 CRD 欄位、也不該有 gate。
 > **由來**：源自 [ADR-026](../adr/026-node-maintenance-liveness-suppression.md) 探索期的 Gate 1 實證 + 角色/工具/gate 盤點。對應長期 standing goal：**降低採用認知門檻**。
+> **怎麼讀**：每列是一個 {角色 × 生命週期階段} 的動作。看 `Disp` 欄判斷自動化程度（🟢/🟡/🔴，見圖例），看 `Reuse/Gap` 欄找待建項（`Gap` = net-new）。生/老多為 reuse，痛點集中在病/死。
 
 ## 設計原則（唯一該存在的「方法論」文件）
 
@@ -69,7 +70,7 @@ lang: zh
 
 | 角色 | 動作 | 工具/機制 | Gate（已存在） | Disp | Reuse/Gap |
 |---|---|---|---|---|---|
-| PE | 退役 cluster/federation | `offboard_tenant`（preflight）· `state_reconcile` | （無 cascading gate） | 🔴 | **GAP：無級聯 teardown、無 orphan 清理編排** |
+| PE | 退役 cluster/federation | `offboard_tenant`（preflight）· `state_reconcile` | （無 cascading gate） | 🔴 | **GAP：無級聯 teardown / orphan 清理；退役時序引爆 liveness（[ADR-026](../adr/026-node-maintenance-liveness-suppression.md)）** |
 | TA | offboard 自己 tenant | `offboard_tenant` | （手動 git commit） | 🔴 | **GAP：手動** |
 | SRE | 刪規則 / 清 silence | `deprecate_rule` · `silencer_drift_check`（advisory） | （無強制清理） | 🔴 | **GAP：orphan silence 清理非 enforced** |
 | DE | 棄用 rule-pack metric | `deprecate_rule` | — | 🟡 | reuse |
@@ -78,7 +79,7 @@ lang: zh
 ## Gap Register（可執行輸出：net-new vs reuse，按優先）
 
 1. **病 — 平台 liveness 類 maintenance-aware 抑制**：見 [ADR-026](../adr/026-node-maintenance-liveness-suppression.md)（窄 PARTIAL、`tenant_metadata_info` anti-join、HA-exporter-first）。cordon-aware 為 defer。
-2. **死 — 退役安全（最高 blast-radius，目前 0 hard gate）**：級聯 teardown + orphan 清理編排 + **一條 HARD pre-merge gate** + 「移除/靜音 monitoring」audit。重用 `blast_radius` + `silencer_drift_check` + `orphan/detector`，但**升級成 enforcing 而非 advisory**。
+2. **死 — 退役安全（最高 blast-radius，目前 0 hard gate）**：級聯 teardown + orphan 清理編排 + **一條 HARD pre-merge gate** + 「移除/靜音 monitoring」audit。重用 `blast_radius` + `silencer_drift_check` + `orphan/detector`，但**升級成 enforcing 而非 advisory**。**具體首個失敗模式（[ADR-026](../adr/026-node-maintenance-liveness-suppression.md) 外審揪出）**：退役時若先刪 exporter 部署、conf.d 還在 → `up` 斷但 `tenant_metadata_info` 仍發 → liveness 規則對退役租戶噴 critical。⇒ 第一條 hard-gate 即「**禁止 PR 只刪 K8s target 卻殘留 conf.d**」（強制 conf.d 先移或兩者同移，先切斷 metadata 源）。
 3. **治理 audit 缺口**：silencing / `threshold:"disable"` / `_silent_mode` 的 delta 無 hard gate / 無 audit → 升進 CI-blocking，接 `policy_opa_bridge`。
 4. **跨切：系統持有「lifecycle 狀態」**（doc 崩塌的核心引擎）：per-tenant/per-cluster 生命週期狀態面，讓角色**查「我在哪階段 / 下一步合法動作」**而非讀文件。可騎 tenant-api `configwatcher` + customalerts `status` pattern。
 
