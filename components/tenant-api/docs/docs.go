@@ -774,6 +774,12 @@ const docTemplate = `{
                         "schema": {
                             "type": "string"
                         }
+                    },
+                    {
+                        "type": "string",
+                        "description": "Attribute the PR to a non-UI write source. Allowlisted: threshold-governance (#656). Omit for tenant-manager UI.",
+                        "name": "X-DA-Write-Source",
+                        "in": "header"
                     }
                 ],
                 "responses": {

@@ -1,0 +1,132 @@
+# ============================================================
+# CronJob: threshold-govern  (#656 — Renovate-for-thresholds)
+#
+# Weekly governance loop over the threshold RECOMMENDER: detect thresholds
+# that have drifted far from their observed P95 (config rot — e.g. a latency
+# bound loosened to 2000ms during an incident and never reclaimed) and open one
+# approvable, per-tenant proposed-PR via the tenant-api (single-writer,
+# ADR-011/023). The PR — not a Slack nudge — is the human gate.
+#
+# DELIVER rung only (PREVENT `expires:` / tenant-direct / `<`-metric support are
+# deferred-with-trigger; see issue #656). Recommendation logic + data source are
+# reused verbatim from `da-tools threshold-recommend` (#719).
+#
+# ── Wiring (shipped alongside this manifest) ────────────────────────────────
+#   1. RBAC: the --identity-groups group "threshold-governance" is granted
+#      fleet-wide read+write in k8s/04-tenant-api/configmap-rbac.yaml (governance
+#      writes use the same RBAC as the portal). Scope it down there if a narrower
+#      remit is wanted. (try-local uses the demo group in conf.d/_rbac.yaml.)
+#   2. NetworkPolicy: egress `allow-threshold-govern-egress` (this dir's
+#      network-policies.yaml) lets this Job reach Prometheus:9090 + tenant-api
+#      :8080; the matching ingress (k8s/04-tenant-api/networkpolicy.yaml) already
+#      admits the monitoring ns to 8080. Port 8080 BYPASSES oauth2-proxy, so that
+#      netpol IS the control that stops anyone else injecting a governance
+#      identity here. (oauth2-proxy-fronted alternative: drop the identity
+#      headers, target port 80, pass --auth-token / $DA_GOVERN_TOKEN.)
+#   3. Image: a da-tools build that includes threshold_govern.py (#656; listed in
+#      build.sh TOOL_FILES). The tag below is bumped per-release alongside
+#      cronjob-maintenance-scheduler.
+#
+# ── Safe rollout ────────────────────────────────────────────────────────────
+#   The args run in --apply mode (opens PRs). For a first rollout, REMOVE the
+#   `- --apply` line: the Job then only logs which tenants WOULD get a PR (no
+#   writes). Start conservative (--min-delta-pct high, --max-prs low) and relax
+#   as the recommendations prove themselves. Re-runs are idempotent: a tenant
+#   with an open governance PR returns 409 and is skipped (no duplicate spam).
+# ============================================================
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: threshold-govern
+  namespace: monitoring
+  labels:
+    app: dynamic-alerting
+    component: threshold-govern
+spec:
+  # Weekly, Monday 03:00 UTC — off-peak; thresholds rot over weeks, not hours.
+  schedule: "0 3 * * 1"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      # Sized for the shipped --max-prs 5 (≈ 5 × (--throttle-seconds + tenant-api
+      # RTT) ≈ 20s, far under 600s). ⚠ Raise this in lockstep if you raise
+      # --max-prs substantially: a 100+ one-off fleet sweep (≈ 400s+) starts to
+      # approach the 600s hard kill.
+      activeDeadlineSeconds: 600
+      template:
+        metadata:
+          labels:
+            app: dynamic-alerting
+            component: threshold-govern
+        spec:
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534
+            runAsGroup: 65534
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: govern
+              image: ghcr.io/vencil/da-tools:v2.9.0
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              args:
+                - threshold-govern
+                - --config-dir
+                - /etc/config/conf.d
+                - --prometheus
+                - http://prometheus.monitoring.svc.cluster.local:9090
+                # tenant-api api-internal port (8080) — bypasses oauth2-proxy;
+                # gate with a NetworkPolicy (see prerequisites above).
+                - --tenant-api-url
+                - http://tenant-api.tenant-api.svc.cluster.local:8080
+                - --identity-email
+                - threshold-governance@platform.local
+                - --identity-groups
+                - threshold-governance
+                # Conservative gate: only meaningfully-drifted thresholds, capped
+                # per run so a first deploy can't flood reviewers (alert-fatigue
+                # budget). Raise --max-prs as the loop earns trust.
+                - --min-delta-pct
+                - "25"
+                - --max-prs
+                - "5"
+                - --throttle-seconds
+                - "2"
+                - --json
+                # Open the PRs. Remove this line for a report-only dry-run.
+                - --apply
+              env:
+                # readOnlyRootFilesystem:true blocks .pyc writes next to the
+                # bundled scripts; skip bytecode caching entirely (one-shot CLI).
+                - name: PYTHONDONTWRITEBYTECODE
+                  value: "1"
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 96Mi
+                limits:
+                  cpu: 200m
+                  memory: 256Mi
+              volumeMounts:
+                - name: threshold-config
+                  mountPath: /etc/config/conf.d
+                  readOnly: true
+                # Writable scratch for the read-only root fs (Python /tmp, etc).
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: threshold-config
+              configMap:
+                name: threshold-config
+            - name: tmp
+              emptyDir:
+                medium: Memory
+                sizeLimit: 16Mi

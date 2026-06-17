@@ -168,6 +168,7 @@ da-tools <command> --help
 | `tenant-verify` | 印 tenant effective config + merged_hash（v2.8.0；incremental migration playbook rollback checklist） | `<tenant-id> [--conf-d <dir>] [--expect-merged-hash <hash>]` 或 `--all --json` |
 | `test-notification` | 多通道通知連通性測試（驗證 receiver 可達性） | `--config-dir <dir>` |
 | `threshold-recommend` | 閾值推薦引擎（基於歷史 P50/P95/P99 數據） | `--config-dir <dir>` + `--prometheus <url>` |
+| `threshold-govern` | 閾值治理迴路：推薦→過濾→經 tenant-api 開 per-tenant proposed-PR（#656） | `--config-dir <dir>` + `--prometheus <url>` + `--apply` |
 | `explain-route` | 路由合併管線除錯器（四層展開 + 設定檔擴展，ADR-007） | `--config-dir <dir>` |
 | `discover-mappings` | 自動發現 1:N 實例-租戶映射（掃描 exporter /metrics，ADR-006） | `--endpoint <url>` 或 `--prometheus <url>` |
 
@@ -2578,6 +2579,44 @@ da-tools threshold-recommend --config-dir conf.d/ --dry-run
 # JSON 輸出
 da-tools threshold-recommend --config-dir conf.d/ --prometheus http://prometheus:9090 --json
 ```
+
+---
+
+#### threshold-govern
+
+閾值治理迴路（Renovate-for-thresholds，#656）— 把 `threshold-recommend` 的推薦接成**主動迴路**：過濾出腐敗夠大的閾值，經 tenant-api 為每個租戶開一個可一鍵批准的 proposed-PR（單寫者 ADR-011/023），而非只發通知。**預設 dry-run**，須 `--apply` 才真正開 PR。
+
+**用法**
+
+```bash
+# Dry-run（預設）：印出會為哪些租戶開 PR，不發任何寫入
+da-tools threshold-govern --config-dir <PATH> [--prometheus <URL>] [--min-delta-pct <N>] [--json]
+
+# 真正開 PR（per-tenant governance PR）
+da-tools threshold-govern --config-dir <PATH> --prometheus <URL> --apply \
+  --tenant-api-url <URL> --identity-groups <RBAC_GROUP>
+```
+
+**參數**
+
+| 參數 | 說明 | 預設值 |
+|------|------|--------|
+| `--config-dir` | conf.d/ 目錄路徑（必填） | - |
+| `--prometheus` | Prometheus Query API URL | `$PROMETHEUS_URL` 或 `http://localhost:9090` |
+| `--tenant` | 只分析指定租戶 | 全部 |
+| `--lookback` | 歷史資料回溯期間 | `7d` |
+| `--min-samples` | 最低樣本數門檻 | `100` |
+| `--min-delta-pct` | 治理介入門檻：\|delta%\| 須 ≥ 此值才開 PR | `25` |
+| `--max-prs` | 每次最多開幾個 PR（防洪 / alert-fatigue budget） | `10` |
+| `--apply` | 真正經 tenant-api 開 PR（預設僅 dry-run，不寫入） | - |
+| `--tenant-api-url` | tenant-api base URL（`--apply` 必填） | `$TENANT_API_URL` |
+| `--identity-email` | X-Forwarded-Email（PR git author / 治理身分） | `threshold-governance@platform.local` |
+| `--identity-groups` | X-Forwarded-Groups（須具 write 權限的 RBAC 群組；直連 `--apply` 必填） | `$DA_GOVERN_GROUPS` |
+| `--auth-token` | Bearer token（oauth2-proxy 前置模式；或 `$DA_GOVERN_TOKEN`） | - |
+| `--throttle-seconds` | 開 PR 之間的間隔秒數 | `2` |
+| `--json` | JSON 輸出 | - |
+
+> **閘門**：只納 \|delta\| ≥ `--min-delta-pct` 且 confidence ∈ {HIGH, MEDIUM} 的推薦（樣本不足不開 PR，防破窗）。**Dedup**：tenant-api 對「該租戶已有 pending PR」回 409 → 視為已在處理、跳過，重跑不洗版。**通道隔離**：PUT 帶 `X-DA-Write-Source: threshold-governance` → PR 走獨立 label / 標題 / 來源，不冒充 tenant-manager UI、不污染告警平面。讀-改-寫只 surgical 取代被推薦的值行（保留註解，PR diff 乾淨）。推薦邏輯 / 資料源完全沿用 `threshold-recommend`（Day-N observed recording rule，#719）。
 
 #### test-notification
 

@@ -50,6 +50,7 @@ type PutTenantResponse struct {
 // @Produce     json
 // @Param       id    path     string true  "Tenant ID"
 // @Param       body  body     string true  "Tenant YAML content"
+// @Param       X-DA-Write-Source header string false "Attribute the PR to a non-UI write source. Allowlisted: threshold-governance (#656). Omit for tenant-manager UI."
 // @Success     200   {object} PutTenantResponse
 // @Failure     400   {object} map[string]string
 // @Failure     403   {object} map[string]string
@@ -184,11 +185,15 @@ func putTenantPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, tenantID,
 
 	// Create PR/MR via platform client + register in tracker.
 	// PR-6/11: shared with BatchTenants via createPRAndRegister.
-	prTitle := fmt.Sprintf("[tenant-api] Update %s configuration", tenantID)
-	prBody := fmt.Sprintf("**Operator:** %s\n**Source:** tenant-manager UI\n**Tenant:** %s", email, tenantID)
+	// #656: attribute the PR to its declared write source (UI by default; an
+	// allowlisted X-DA-Write-Source header routes automation writes like the
+	// threshold governance loop onto their own label/title/Source channel).
+	ws := resolveWriteSource(r)
+	prTitle := ws.titleSingle(tenantID)
+	prBody := fmt.Sprintf("**Operator:** %s\n**Source:** %s\n**Tenant:** %s", email, ws.sourceLine, tenantID)
 	pr, err := createPRAndRegister(d,
 		prTitle, prBody, result.BranchName,
-		[]string{"tenant-api", "auto-generated"},
+		ws.labels(),
 		[]string{tenantID},
 	)
 	if err != nil {

@@ -72,6 +72,7 @@ lang: zh
 | `shadow_verify.py` | Shadow Monitoring readiness and convergence verification. |
 | `silencer_drift_check.py` | Alertmanager silence drift auditor. |
 | `state_reconcile.py` | Migration State directory reconciliation. |
+| `threshold_govern.py` | 閾值治理迴路（Renovate-for-thresholds，#656）。 |
 | `threshold_recommend.py` | 閾值推薦引擎。 |
 | `validate_config.py` | One-stop configuration validation. |
 | `validate_migration.py` | Shadow Monitoring 驗證工具。 |

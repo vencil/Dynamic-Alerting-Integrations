@@ -48,6 +48,7 @@ da-tools command quick reference. Full docs at [cli-reference.en.md](cli-referen
 | `config-diff` | Compare two config directories (GitOps PR review) | --old-dir <PATH>, --new-dir <PATH>, --json-output | `da-tools config-diff --help` |
 | `test-notification` | Multi-channel notification connectivity testing | --config-dir <PATH>, --tenant <NAME>, --dry-run, --ci | `da-tools test-notification --help` |
 | `threshold-recommend` | Threshold recommendation engine (historical P50/P95/P99) | --config-dir <PATH>, --prometheus <URL>, --lookback, --json | `da-tools threshold-recommend --help` |
+| `threshold-govern` | Threshold governance loop: recommend→gate→open per-tenant proposed-PR via tenant-api (#656) | --config-dir <PATH>, --prometheus <URL>, --apply, --min-delta-pct | `da-tools threshold-govern --help` |
 | `explain-route` | Routing merge pipeline debugger: four-layer expansion + profile (ADR-007) | --config-dir <PATH>, --tenant <NAME>, --show-profile-expansion, --json | `da-tools explain-route --help` |
 | `discover-mappings` | Auto-discover 1:N instance-tenant mappings (ADR-006) | --endpoint <URL> or --prometheus <URL> --instance <INST>, --job, -o, --json | `da-tools discover-mappings --help` |
 | `init` | Project skeleton generation (CI/CD + conf.d + Kustomize overlays) | --ci <PLATFORM>, --tenants <LIST>, --non-interactive, --dry-run | `da-tools init --help` |

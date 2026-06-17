@@ -158,6 +158,7 @@ docker run --rm \
 |------|------|----------|
 | `baseline` | 觀測指標 + 閾值建議 | `--tenant <name>` |
 | `threshold-recommend` | 閾值推薦引擎（歷史 P50/P95/P99） | `--tenant <name> --metric <key>` |
+| `threshold-govern` | 閾值治理迴路（#656）：推薦→過濾→經 tenant-api 開 per-tenant proposed-PR | `--config-dir <dir> --apply --tenant-api-url <url>` |
 | `patch-config` | ConfigMap 局部更新（`--diff` 模式預覽） | `<tenant> <metric> <value>` 或 `--diff` |
 | `explain-route` | 路由 merge pipeline 除錯器（四層展開 + profile） | `--tenant <name>` |
 
