@@ -88,39 +88,54 @@ jobs:
           probe() {
             # $1 = url. Echoes the HTTP status; sets BODY to the response body.
             local url="$1" code
+            # --compressed: REQUIRED. GitHub Pages sends `Vary: Accept-Encoding`
+            # and the CI runner's curl requests gzip, so WITHOUT this the body
+            # arrives as gzip bytes and the content grep below never matches
+            # (200-but-"sentinel missing" — the #864 false-red). --compressed
+            # makes curl decompress, so BODY is always plaintext HTML. (The bug
+            # was masked when reproduced with a bare local `curl` that sends no
+            # Accept-Encoding and thus gets identity.)
             # No -f: keep the real status code (and body) on 4xx/5xx for
-            # diagnostics. A non-zero exit then means a transport error
-            # (DNS/timeout), which falls through to BODY="" / code="".
-            BODY=$(curl -sS --max-time 20 -w '\n%{http_code}' "$url" 2>/dev/null) || BODY=""
+            # diagnostics. A non-zero exit = transport error (DNS/timeout),
+            # which falls through to BODY="" / code="".
+            BODY=$(curl -sS --compressed --max-time 20 -w '\n%{http_code}' "$url" 2>/dev/null) || BODY=""
             code="${BODY##*$'\n'}"
             BODY="${BODY%$'\n'*}"
             echo "$code"
           }
 
-          check_url() {
-            local url="$1" want_content="$2"
-            for attempt in 1 2 3 4 5 6; do
-              code=$(probe "$url")
-              if [ "$code" = "200" ]; then
-                if [ "$want_content" = "1" ] && ! grep -qiF "$sentinel" <<<"$BODY"; then
-                  echo "  attempt ${attempt}: 200 but content sentinel '${sentinel}' missing — retrying"
-                else
-                  echo "  ${url} -> 200 OK"
-                  return 0
-                fi
-              else
-                echo "  attempt ${attempt}: ${url} -> ${code:-no-response} (retrying)"
-              fi
-              sleep 20
-            done
-            echo "::error::${url} did not return HTTP 200 with expected content after retries (last status: ${code:-no-response}). The live docs site is unhealthy."
-            return 1
-          }
-
-          rc=0
-          # Root must serve the real rendered home (status + content).
-          check_url "${base}/" 1 || rc=1
-          # English locale root: status-only (its <title> differs from the
-          # zh site_name sentinel; a 200 is enough to prove the i18n tree built).
-          check_url "${base}/en/" 0 || rc=1
-          exit $rc
+          # Shared retry window across BOTH URLs (one budget, not one per URL),
+          # a modest cushion for genuine transient post-deploy unavailability —
+          # the workflow_run fires the moment deploy-pages reports success.
+          # NOTE: the #864 false-red was NOT a propagation/timing issue — it was
+          # the missing `--compressed` above (gzip body → unsearchable sentinel).
+          # Retries never fixed it; don't inflate this budget chasing a ghost.
+          ATTEMPTS=8
+          SLEEP=20
+          ok=0
+          root_status=""; en_status=""; root_ok=0
+          for attempt in $(seq 1 "$ATTEMPTS"); do
+            root_status=$(probe "${base}/"); root_body="$BODY"
+            en_status=$(probe "${base}/en/")
+            root_ok=0; en_ok=0
+            # Root: status 200 AND rendered-home content — guards the "200 but
+            # wrong content" inverse (a stray static file 200 while the real
+            # root is broken, the shape the original outage could have taken).
+            if [ "$root_status" = "200" ] && grep -qiF "$sentinel" <<<"$root_body"; then root_ok=1; fi
+            # /en/: status-only. Its <title> also carries the sentinel, but a
+            # 200 is enough to prove the i18n locale tree built and serves.
+            if [ "$en_status" = "200" ]; then en_ok=1; fi
+            if [ "$root_ok" = 1 ] && [ "$en_ok" = 1 ]; then
+              echo "✅ attempt ${attempt}/${ATTEMPTS}: / -> 200 (content OK), /en/ -> 200"
+              ok=1; break
+            fi
+            if [ "$root_ok" = 1 ]; then root_note=ok; else root_note="bad(${root_status:-no-response})"; fi
+            if [ "$en_ok" = 1 ]; then en_note=ok; else en_note="bad(${en_status:-no-response})"; fi
+            echo "attempt ${attempt}/${ATTEMPTS}: root=${root_note} /en/=${en_note} — waiting for propagation"
+            if [ "$attempt" -lt "$ATTEMPTS" ]; then sleep "$SLEEP"; fi
+          done
+          if [ "$ok" != 1 ]; then
+            root_content=$([ "$root_ok" = 1 ] && echo ok || echo missing)
+            echo "::error::Live docs site unhealthy after ${ATTEMPTS} attempts (~$((ATTEMPTS * SLEEP / 60)) min). Last: root status=${root_status:-no-response} content=${root_content}, /en/ status=${en_status:-no-response}. Either the deploy didn't actually serve, or propagation is abnormally slow."
+            exit 1
+          fi
