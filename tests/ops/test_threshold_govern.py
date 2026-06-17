@@ -453,6 +453,22 @@ def test_text_report_shows_ungoverned_even_with_no_plans():
     assert ("未治理" in out) or ("ungoverned" in out.lower())
 
 
+def test_text_report_plans_path_detail_above_summary_count_in_summary():
+    # CLI bottom-line convention (Gemini UX nitpick): Summary is the LAST line; the
+    # `<` blind-spot DETAIL list sits above it, and the COUNT is folded INTO Summary
+    # so a reader scanning the tail catches the blind spot without scrolling up.
+    report = _report("db-a", [
+        _kr("mysql_connections", "2000", 100.0, -95.0, recommend.CONFIDENCE_HIGH, p95=100.0)])
+    plans = tg.build_governance_plan([report], 25.0)
+    ung = [tg.UngovernedKey("db-b", "db2_hit_ratio", "skipped: lower-bound (<) ...")]
+    lines = tg.format_text_report(plans, [], applied=False, ungoverned=ung).splitlines()
+    summary_idx = next(i for i, ln in enumerate(lines) if ln.startswith("Summary:"))
+    detail_idx = next(i for i, ln in enumerate(lines) if "db-b / db2_hit_ratio" in ln)
+    assert detail_idx < summary_idx                  # detail ABOVE the bottom line
+    assert summary_idx == len(lines) - 1             # Summary IS the last line
+    assert ("未治理" in lines[summary_idx]) or ("ungoverned" in lines[summary_idx].lower())
+
+
 def test_json_report_includes_ungoverned_count_and_list():
     ung = [tg.UngovernedKey("db-a", "db2_hit_ratio", "skipped: lower-bound (<) ...")]
     out = json.loads(tg.format_json_report([], [], applied=False, ungoverned=ung))

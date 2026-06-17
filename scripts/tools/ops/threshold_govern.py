@@ -591,6 +591,16 @@ def format_text_report(
         )
         return ["", "-" * 78, head] + [f"    {u.tenant} / {u.key}" for u in ung]
 
+    def _ungoverned_note() -> str:
+        # Folded into Summary so a tail-scan catches the blind spot even when the
+        # per-tenant output is long; the detail list sits just above the summary.
+        n = len(ungoverned or [])
+        if not n:
+            return ""
+        return (f" ⚠ 另有 {n} 個 lower-bound `<` 閾值未治理（需人工 review）。"
+                if _LANG == "zh" else
+                f" ⚠ {n} lower-bound `<` threshold(s) also ungoverned (manual review).")
+
     if not plans:
         lines.append(
             "未發現需要治理的閾值（全部在閾值內或樣本不足）。"
@@ -624,6 +634,11 @@ def format_text_report(
             detail = o.pr_url or o.message
             lines.append(f"  [{tag}] {o.tenant}: {detail}")
 
+    # Blind-spot detail goes ABOVE the bottom line so Summary stays the last line
+    # a reader scanning the tail expects (CLI bottom-line convention); the count
+    # itself is folded into Summary via _ungoverned_note().
+    lines += _ungoverned_lines()
+
     opened = sum(1 for o in outcomes if o.status == "pr_opened")
     pending = sum(1 for o in outcomes if o.status == "already_pending")
     errors = sum(1 for o in outcomes if o.status == "error")
@@ -631,15 +646,14 @@ def format_text_report(
     if applied:
         lines.append(
             f"Summary: {opened} PR(s) opened, {pending} already-pending (skipped), "
-            f"{errors} error(s); {len(plans)} tenant(s) actionable."
+            f"{errors} error(s); {len(plans)} tenant(s) actionable." + _ungoverned_note()
         )
     else:
         total_changes = sum(len(p.changes) for p in plans)
         lines.append(
             f"Summary: {len(plans)} tenant(s) / {total_changes} change(s) would get a PR. "
-            "Re-run with --apply to open them."
+            "Re-run with --apply to open them." + _ungoverned_note()
         )
-    lines += _ungoverned_lines()
     return "\n".join(lines)
 
 
