@@ -85,23 +85,24 @@ jobs:
           # 404'd — a status-only check could be fooled by the inverse).
           sentinel="Dynamic Alerting Platform"
 
+          # probe <url> — sets globals PSTATUS (HTTP code) and PBODY (body).
+          # MUST be called DIRECTLY, not in $(...): a command-substitution
+          # subshell loses these globals in the parent → `unbound variable`
+          # under set -u (the #864 follow-up regression this fix addresses).
           probe() {
-            # $1 = url. Echoes the HTTP status; sets BODY to the response body.
-            local url="$1" code
+            local url="$1" raw
             # --compressed: REQUIRED. GitHub Pages sends `Vary: Accept-Encoding`
             # and the CI runner's curl requests gzip, so WITHOUT this the body
             # arrives as gzip bytes and the content grep below never matches
-            # (200-but-"sentinel missing" — the #864 false-red). --compressed
-            # makes curl decompress, so BODY is always plaintext HTML. (The bug
-            # was masked when reproduced with a bare local `curl` that sends no
-            # Accept-Encoding and thus gets identity.)
+            # (200-but-"sentinel missing"). --compressed makes curl decompress,
+            # so PBODY is always plaintext HTML. (Masked by a bare local curl
+            # that sends no Accept-Encoding and thus gets identity.)
             # No -f: keep the real status code (and body) on 4xx/5xx for
             # diagnostics. A non-zero exit = transport error (DNS/timeout),
-            # which falls through to BODY="" / code="".
-            BODY=$(curl -sS --compressed --max-time 20 -w '\n%{http_code}' "$url" 2>/dev/null) || BODY=""
-            code="${BODY##*$'\n'}"
-            BODY="${BODY%$'\n'*}"
-            echo "$code"
+            # which falls through to PSTATUS="" / PBODY="".
+            raw=$(curl -sS --compressed --max-time 20 -w '\n%{http_code}' "$url" 2>/dev/null) || raw=""
+            PSTATUS="${raw##*$'\n'}"
+            PBODY="${raw%$'\n'*}"
           }
 
           # Shared retry window across BOTH URLs (one budget, not one per URL),
@@ -113,10 +114,10 @@ jobs:
           ATTEMPTS=8
           SLEEP=20
           ok=0
-          root_status=""; en_status=""; root_ok=0
+          PSTATUS=""; PBODY=""; root_status=""; en_status=""; root_body=""; root_ok=0
           for attempt in $(seq 1 "$ATTEMPTS"); do
-            root_status=$(probe "${base}/"); root_body="$BODY"
-            en_status=$(probe "${base}/en/")
+            probe "${base}/";    root_status="$PSTATUS"; root_body="$PBODY"
+            probe "${base}/en/"; en_status="$PSTATUS"
             root_ok=0; en_ok=0
             # Root: status 200 AND rendered-home content — guards the "200 but
             # wrong content" inverse (a stray static file 200 while the real
