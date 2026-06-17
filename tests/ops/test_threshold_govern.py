@@ -458,3 +458,42 @@ def test_json_report_includes_ungoverned_count_and_list():
     out = json.loads(tg.format_json_report([], [], applied=False, ungoverned=ung))
     assert out["summary"]["ungoverned_lower_bound"] == 1
     assert out["ungoverned_lower_bound"][0]["key"] == "db2_hit_ratio"
+
+
+# --- contract: marker must stay a substring of the REAL engine output ---------
+# The tests above feed HAND-WRITTEN reason strings; on their own they'd let the
+# engine's reason drift away from `_LOWER_BOUND_SKIP_MARKER` and the detector
+# would silently count 0 (a no-op blind-spot detector). These two tie the marker
+# to what the engine ACTUALLY emits, so a drift fails loudly here.
+def test_lower_bound_marker_is_substring_of_live_engine_skip_reason():
+    # Exercise the REAL resolve_observed (the fn threshold_recommend calls) for a
+    # `<` metric, reproduce analyze_tenant's `skipped:` wrapping, and confirm the
+    # collector catches it end-to-end. (test_observed_map_lib only pins the looser
+    # "lower-bound" — NOT the marker's `(<)`, so this guards the gap.)
+    import _observed_map_lib as oml
+    _, skip_reason = oml.resolve_observed({"scope": "tenant", "direction": "<"})
+    assert skip_reason and tg._LOWER_BOUND_SKIP_MARKER in skip_reason
+    rec = recommend.KeyRecommendation(
+        key="hit_ratio", current_value="0.9", reason=f"skipped: {skip_reason}")
+    ung = tg.collect_ungoverned_lower_bound(
+        [recommend.TenantRecommendation(tenant="db-x", keys=[rec])])
+    assert [(u.tenant, u.key) for u in ung] == [("db-x", "hit_ratio")]
+
+
+def test_lower_bound_marker_matches_committed_observed_map():
+    # PRODUCTION path: a `<` metric is flagged needs_review in build_map with the
+    # line-226 reason, materialised in the committed metric_observed_map.yaml.
+    # Every committed `<` entry's reason must carry the marker → a regen that
+    # drifts the string fails here. (The test above is the deterministic guard;
+    # this tolerates zero `<` entries but in practice covers db2/kafka/rabbitmq.)
+    import os
+    import yaml
+    import _observed_map_lib as oml
+    map_path = os.path.join(os.path.dirname(oml.__file__), "metric_observed_map.yaml")
+    with open(map_path, encoding="utf-8") as fh:
+        keys = (yaml.safe_load(fh) or {}).get("keys", {})
+    lower_bound = {k: v for k, v in keys.items()
+                   if isinstance(v, dict) and v.get("direction") == "<"}
+    for k, entry in lower_bound.items():
+        assert tg._LOWER_BOUND_SKIP_MARKER in (entry.get("reason") or ""), \
+            f"{k}: committed observed-map reason drifted from marker"
