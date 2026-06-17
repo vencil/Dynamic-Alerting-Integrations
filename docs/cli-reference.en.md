@@ -167,6 +167,7 @@ These tools operate on local YAML files and don't require network.
 | `tenant-verify` | Print tenant effective config + merged_hash (v2.8.0; incremental migration playbook rollback checklist) | `<tenant-id> [--conf-d <dir>] [--expect-merged-hash <hash>]` or `--all --json` |
 | `test-notification` | Multi-channel notification connectivity testing | `--config-dir <dir>` |
 | `threshold-recommend` | Threshold recommendation engine (historical P50/P95/P99) | `--config-dir <dir>` + `--prometheus <url>` |
+| `threshold-govern` | Threshold governance loop: recommend→gate→open per-tenant proposed-PR via tenant-api (#656) | `--config-dir <dir>` + `--prometheus <url>` + `--apply` |
 | `explain-route` | Routing merge pipeline debugger (four-layer expansion + profile, ADR-007) | `--config-dir <dir>` |
 | `discover-mappings` | Auto-discover 1:N instance-tenant mappings (scrape exporter /metrics, ADR-006) | `--endpoint <url>` or `--prometheus <url>` |
 
@@ -2839,6 +2840,44 @@ da-tools threshold-recommend --config-dir conf.d/ --prometheus http://prometheus
 # Dry-run: show PromQL only
 da-tools threshold-recommend --config-dir conf.d/ --dry-run
 ```
+
+---
+
+#### threshold-govern
+
+Threshold governance loop (Renovate-for-thresholds, #656) — turns `threshold-recommend`'s output into an **active loop**: gate on rot magnitude, then open one approvable per-tenant proposed-PR via the tenant-api (single-writer, ADR-011/023) instead of a nudge. **Dry-run by default** — pass `--apply` to actually open PRs.
+
+**Usage**
+
+```bash
+# Dry-run (default): print which tenants would get a PR; no writes
+da-tools threshold-govern --config-dir <PATH> [--prometheus <URL>] [--min-delta-pct <N>] [--json]
+
+# Actually open per-tenant governance PRs
+da-tools threshold-govern --config-dir <PATH> --prometheus <URL> --apply \
+  --tenant-api-url <URL> --identity-groups <RBAC_GROUP>
+```
+
+**Parameters**
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `--config-dir` | conf.d/ directory path (required) | - |
+| `--prometheus` | Prometheus Query API URL | `$PROMETHEUS_URL` or `http://localhost:9090` |
+| `--tenant` | Analyze only this tenant | all |
+| `--lookback` | Historical lookback period | `7d` |
+| `--min-samples` | Minimum sample count | `100` |
+| `--min-delta-pct` | Governance gate: only open a PR when \|delta%\| >= this | `25` |
+| `--max-prs` | Max PRs opened per run (anti-flood / alert-fatigue budget) | `10` |
+| `--apply` | Actually open PRs via tenant-api (default: dry-run, no writes) | - |
+| `--tenant-api-url` | tenant-api base URL (required with `--apply`) | `$TENANT_API_URL` |
+| `--identity-email` | X-Forwarded-Email (PR git author / governance identity) | `threshold-governance@platform.local` |
+| `--identity-groups` | X-Forwarded-Groups (an RBAC group with write perm; required for direct `--apply`) | `$DA_GOVERN_GROUPS` |
+| `--auth-token` | Bearer token (oauth2-proxy mode; or `$DA_GOVERN_TOKEN`) | - |
+| `--throttle-seconds` | Seconds to pause between opened PRs | `2` |
+| `--json` | JSON output | - |
+
+> **Gate**: only recommendations with \|delta\| >= `--min-delta-pct` AND confidence ∈ {HIGH, MEDIUM} (never act on a thin sample — anti-broken-window). **Dedup**: the tenant-api returns 409 when a PR for that tenant is already open → treated as already-in-flight and skipped, so re-runs don't spam duplicates. **Channel isolation**: the PUT carries `X-DA-Write-Source: threshold-governance` → the PR gets its own label / title / source instead of masquerading as a tenant-manager UI edit, and never touches the alert plane. The read-modify-write surgically replaces only the recommended value lines (comments preserved → clean PR diff). Recommendation logic / data source are reused verbatim from `threshold-recommend` (Day-N observed recording rule, #719).
 
 #### test-notification
 

@@ -296,3 +296,50 @@ spec:
           port: 53
         - protocol: TCP
           port: 53
+---
+# threshold-govern CronJob (#656): reach Prometheus (read observed-workload
+# percentiles) + the tenant-api internal port 8080 (open per-tenant PRs) + DNS.
+# Without this egress allow, the monitoring-ns default-deny-all blocks the Job
+# and it silently no-ops (every Prometheus query fails → empty plan). This is
+# ALSO the control the cron manifest's security note relies on: only this pod
+# may reach tenant-api:8080 to inject a governance identity.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-threshold-govern-egress
+  namespace: monitoring
+spec:
+  podSelector:
+    matchLabels:
+      component: threshold-govern
+  policyTypes:
+    - Egress
+  egress:
+    # Prometheus (recommendation percentiles)
+    - to:
+        - podSelector:
+            matchLabels:
+              app: prometheus
+      ports:
+        - protocol: TCP
+          port: 9090
+    # tenant-api internal port (8080) in the tenant-api namespace — open PRs.
+    # Matching ingress: k8s/04-tenant-api/networkpolicy.yaml (monitoring ns → 8080).
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: tenant-api
+          podSelector:
+            matchLabels:
+              app: tenant-api
+      ports:
+        - protocol: TCP
+          port: 8080
+    # DNS resolution
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53

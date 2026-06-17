@@ -1001,6 +1001,11 @@ paths:
         required: true
         schema:
           type: string
+      - description: 'Attribute the PR to a non-UI write source. Allowlisted: threshold-governance
+          (#656). Omit for tenant-manager UI.'
+        in: header
+        name: X-DA-Write-Source
+        type: string
       produces:
       - application/json
       responses:

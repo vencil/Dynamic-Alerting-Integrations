@@ -27,6 +27,18 @@ data:
         permissions: [read, write]
         environments: [production, staging]
 
+      # threshold-governance — the #656 governance loop's identity
+      # (X-Forwarded-Groups injected by the threshold-govern CronJob). Fleet-wide
+      # read+write because cross-tenant threshold rot is the whole point;
+      # contained by (1) the tenant-api NetworkPolicy (only the monitoring-ns cron
+      # may reach port 8080 to inject this identity), (2) PR-gate — every write is
+      # a human-reviewed proposed-PR, never a direct commit, and (3) read,write
+      # only (never admin). Scope down via tenants:[...] if a narrower remit is
+      # wanted.
+      - name: threshold-governance
+        tenants: ["*"]
+        permissions: [read, write]
+
       - name: finance-viewers
         tenants: ["*"]
         permissions: [read]

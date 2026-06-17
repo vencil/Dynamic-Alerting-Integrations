@@ -72,6 +72,7 @@ lang: en
 | `shadow_verify.py` | Shadow Monitoring readiness and convergence verification. |
 | `silencer_drift_check.py` | Alertmanager silence drift auditor. |
 | `state_reconcile.py` | Migration State directory reconciliation. |
+| `threshold_govern.py` | 閾值治理迴路（Renovate-for-thresholds，#656）。 |
 | `threshold_recommend.py` | 閾值推薦引擎。 |
 | `validate_config.py` | One-stop configuration validation. |
 | `validate_migration.py` | Shadow Monitoring 驗證工具。 |
@@ -96,6 +97,7 @@ lang: en
 | `diag_pr_ci.py` | PR CI auto-diagnostic CLI (issue #446). |
 | `doc_coverage.py` | 文件覆蓋率 Dashboard |
 | `doc_impact.py` | 文件變更影響分析 |
+| `gen_recipe_status_json.py` | Generate recipe-status.json from the compiler SSOT (ADR-024 §8, #741 #6 / A1). |
 | `generate_alert_reference.py` | Auto-generate ALERT-REFERENCE.md from Rule Pack YAML files. |
 | `generate_changelog.py` | Generate CHANGELOG draft entries from conventional commits. |
 | `generate_doc_map.py` | 文件導覽自動生成 |
@@ -176,6 +178,7 @@ lang: en
 | `check_open_encoding.py` | flag open() text-mode calls without encoding=. |
 | `check_orphan_docs.py` | 孤兒文件偵測 |
 | `check_path_metadata_consistency.py` | Warn when conf.d/ hierarchical path disagrees with tenant `_metadata`. |
+| `check_pint.py` | Prometheus rule linting (pint engine + thin Vibe wrapper). |
 | `check_planning_status_sync.py` | CI-time PR-trailer ↔ frontmatter sync gate. |
 | `check_playbook_freshness.py` | Playbook 知識退火檢查工具。 |
 | `check_playwright_rtl_drift.py` | Detect React Testing Library API names in Playwright specs (S#96, mechanical safety net for testing-playbook §LL §10). |
@@ -186,6 +189,8 @@ lang: en
 | `check_repo_name.py` | Prevent wrong repository name in source files. |
 | `check_routing_profiles.py` | Lint routing profiles and domain policies (ADR-007). |
 | `check_rulepack_sync.py` | Rule-pack copy drift guard (ADR-024 PR3-pre). |
+| `check_session_guard_liveness.py` | PreToolUse session-guard 可執行性 gate（#824 方案 B）。 |
+| `check_single_writer_invariant.py` | Single-writer invariant lint for the tenant-api write plane (ADR-023). |
 | `check_skip_a11y_justification.py` | Require ticket-justification for `skipA11y: true` in E2E specs (testing-playbook §LL §5, TD-039). |
 | `check_structure.py` | Project structure enforcement. |
 | `check_subprocess_timeout.py` | flag subprocess calls without explicit timeout. |
