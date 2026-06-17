@@ -120,6 +120,17 @@ da_config_event{event="threshold_expired",reason="mysql_connections: incident #1
 	if err := testutil.CollectAndCompare(collector, strings.NewReader(expected), "da_config_event"); err != nil {
 		t.Errorf("da_config_event mismatch: %v", err)
 	}
+
+	// And the VALUE fail-safes to the platform default (80), NOT the expired
+	// override (2000) — proven at the collector level, not just resolve.
+	expectedThreshold := `
+# HELP user_threshold User-defined alerting threshold (config-driven, three-state: custom/default/disable)
+# TYPE user_threshold gauge
+user_threshold{component="mysql",metric="connections",severity="warning",tenant="db-a"} 80
+`
+	if err := testutil.CollectAndCompare(collector, strings.NewReader(expectedThreshold), "user_threshold"); err != nil {
+		t.Errorf("expired threshold must fail-safe to default 80: %v", err)
+	}
 }
 
 // ============================================================

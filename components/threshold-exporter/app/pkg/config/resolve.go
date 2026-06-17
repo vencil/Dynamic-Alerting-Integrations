@@ -269,6 +269,10 @@ func (c *ThresholdConfig) resolveCriticalRows(tenant string, overrides map[strin
 			continue
 		}
 
+		// PREVENT #656 v1: `expires:` is intentionally NOT honored on _critical
+		// overrides — they have no platform default to fail-safe back to (reverting
+		// would go SILENT, the very thing PREVENT avoids). expires here is a no-op;
+		// ValidateTenantKeys warns the author. Honored only in resolveBaseRows.
 		override := sv.ResolveValue(now)
 		lower := strings.TrimSpace(strings.ToLower(override))
 		if isDisabled(lower) {
@@ -321,6 +325,10 @@ func (c *ThresholdConfig) resolveDimensionalRows(tenant string, overrides map[st
 			continue
 		}
 
+		// PREVENT #656 v1: `expires:` is intentionally NOT honored on dimensional
+		// overrides — no platform default to fail-safe to (reverting would go
+		// SILENT). expires here is a no-op; ValidateTenantKeys warns. See
+		// resolveBaseRows for the honored path.
 		valStr := sv.ResolveValue(now)
 		lower := strings.TrimSpace(strings.ToLower(valStr))
 		if isDisabled(lower) {

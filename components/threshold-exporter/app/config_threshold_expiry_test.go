@@ -122,3 +122,31 @@ func TestValidateTenantKeys_ExpiresFailLoud(t *testing.T) {
 		}
 	}
 }
+
+func TestResolveBaseRows_ExpiryWinsOverTimeWindows(t *testing.T) {
+	t.Parallel()
+	// expires gates the WHOLE override: an expired override reverts to the default
+	// even if it also carries time-window overrides (the window is never consulted).
+	// A non-expired override still applies its window. Fixed `now` (inside the
+	// window) keeps this deterministic.
+	now := time.Date(2026, 6, 18, 5, 0, 0, 0, time.UTC) // inside 01:00-09:00
+	win := []TimeWindowOverride{{Window: "01:00-09:00", Value: "3000"}}
+	cfg := &ThresholdConfig{
+		Defaults: map[string]float64{"mysql_connections": 80},
+		Tenants: map[string]map[string]ScheduledValue{
+			"db-expired": {"mysql_connections": {Default: "2000", Overrides: win, Expires: "2020-01-01T00:00:00Z"}},
+			"db-active":  {"mysql_connections": {Default: "2000", Overrides: win, Expires: "2999-01-01T00:00:00Z"}},
+		},
+	}
+	rows, _ := cfg.ResolveAtWithStats(now)
+	got := map[string]float64{}
+	for _, r := range rows {
+		got[r.Tenant] = r.Value
+	}
+	if got["db-expired"] != 80 {
+		t.Errorf("expired override (despite a matching window) must revert to default 80, got %v", got["db-expired"])
+	}
+	if got["db-active"] != 3000 {
+		t.Errorf("active override should apply its 01:00-09:00 window value 3000 at 05:00, got %v", got["db-active"])
+	}
+}
