@@ -1,0 +1,169 @@
+{
+  "flows": {
+    "onboarding": {
+      "title": { "en": "Platform Onboarding", "zh": "平台入門導覽" },
+      "desc": {
+        "en": "Get from zero to production-ready in 6 guided steps",
+        "zh": "六步引導，從零到生產就緒"
+      },
+      "audience": ["platform", "domain", "tenant"],
+      "steps": [
+        {
+          "tool": "wizard",
+          "component": "../getting-started/wizard.jsx",
+          "title": { "en": "Find Your Path", "zh": "找到路徑" },
+          "hint": {
+            "en": "Start by telling us about your role. This personalizes the rest of the flow.",
+            "zh": "先告訴我們你的角色，後續引導會依此個人化。"
+          }
+        },
+        {
+          "tool": "rule-pack-selector",
+          "component": "../interactive/tools/rule-pack-selector.jsx",
+          "title": { "en": "Pick Rule Packs", "zh": "選擇 Rule Pack" },
+          "hint": {
+            "en": "Select the Rule Packs that match your database and middleware stack.",
+            "zh": "選擇匹配你的資料庫和中間件的 Rule Pack。"
+          },
+          "validation": {
+            "required_state": ["role"],
+            "warn": { "en": "Please go back and select your role first.", "zh": "請先返回選擇你的角色。" }
+          }
+        },
+        {
+          "tool": "capacity-planner",
+          "component": "../interactive/tools/capacity-planner.jsx",
+          "title": { "en": "Plan Capacity", "zh": "規劃容量" },
+          "hint": {
+            "en": "Estimate Prometheus memory and TSDB size based on your stack selections.",
+            "zh": "根據你的選擇估算 Prometheus 記憶體和 TSDB 大小。"
+          },
+          "condition": { "role": ["platform", "domain"] }
+        },
+        {
+          "tool": "playground",
+          "component": "../interactive/tools/playground.jsx",
+          "title": { "en": "Write Config", "zh": "撰寫配置" },
+          "hint": {
+            "en": "Create your first tenant YAML configuration. Use a template or start from scratch.",
+            "zh": "建立你的第一個 Tenant YAML。使用模板或從頭開始。"
+          }
+        },
+        {
+          "tool": "config-lint",
+          "component": "../interactive/tools/config-lint.jsx",
+          "title": { "en": "Validate", "zh": "驗證" },
+          "hint": {
+            "en": "Check your config against best practices — thresholds, severity pairs, and routing guardrails.",
+            "zh": "以最佳實踐檢查配置 — 閾值、嚴重度配對和路由護欄。"
+          },
+          "validation": {
+            "required_state": ["selectedPacks"],
+            "warn": { "en": "Select at least one Rule Pack before validating.", "zh": "驗證前請至少選擇一個 Rule Pack。" }
+          }
+        },
+        {
+          "tool": "onboarding-checklist",
+          "component": "../interactive/tools/onboarding-checklist.jsx",
+          "title": { "en": "Track Progress", "zh": "追蹤進度" },
+          "hint": {
+            "en": "Review what's done and what's left. Export your checklist as Markdown.",
+            "zh": "檢查已完成和待完成項目，匯出清單為 Markdown。"
+          }
+        }
+      ]
+    },
+    "tenant-setup": {
+      "title": { "en": "Tenant Quick Setup", "zh": "Tenant 快速設置" },
+      "desc": {
+        "en": "Configure your first tenant YAML in 4 steps",
+        "zh": "四步配置你的第一個 Tenant YAML"
+      },
+      "audience": ["tenant", "domain"],
+      "steps": [
+        {
+          "tool": "template-gallery",
+          "component": "../interactive/tools/template-gallery.jsx",
+          "title": { "en": "Choose Template", "zh": "選擇模板" },
+          "hint": {
+            "en": "Browse templates for common stacks — MariaDB, PostgreSQL, Redis, Kafka, and more.",
+            "zh": "瀏覽常用堆疊的模板 — MariaDB、PostgreSQL、Redis、Kafka 等。"
+          }
+        },
+        {
+          "tool": "threshold-calculator",
+          "component": "../interactive/tools/threshold-calculator.jsx",
+          "title": { "en": "Tune Thresholds", "zh": "調整閾值" },
+          "hint": {
+            "en": "Input your workload stats and pick percentile targets to get recommended values.",
+            "zh": "輸入工作負載統計並選擇百分位目標以獲得建議值。"
+          }
+        },
+        {
+          "tool": "playground",
+          "component": "../interactive/tools/playground.jsx",
+          "title": { "en": "Validate YAML", "zh": "驗證 YAML" },
+          "hint": {
+            "en": "Paste and validate your tenant configuration. Fix any issues before deploying.",
+            "zh": "貼上並驗證你的 Tenant 配置。部署前修正問題。"
+          }
+        },
+        {
+          "tool": "config-lint",
+          "component": "../interactive/tools/config-lint.jsx",
+          "title": { "en": "Lint Check", "zh": "Lint 檢查" },
+          "hint": {
+            "en": "Run best-practice checks: severity pairs, routing guardrails, and threshold bounds.",
+            "zh": "執行最佳實踐檢查：嚴重度配對、路由護欄和閾值範圍。"
+          }
+        }
+      ]
+    },
+    "alert-deep-dive": {
+      "title": { "en": "Alert Deep Dive", "zh": "告警深入探索" },
+      "desc": {
+        "en": "Understand how alerts work — from rules to routing to resolution",
+        "zh": "理解告警運作 — 從規則到路由到解決"
+      },
+      "audience": ["domain", "platform"],
+      "steps": [
+        {
+          "tool": "rule-pack-detail",
+          "component": "../interactive/tools/rule-pack-detail.jsx",
+          "title": { "en": "Browse Rules", "zh": "瀏覽規則" },
+          "hint": {
+            "en": "Explore recording and alert rules across all 15 Rule Packs — see PromQL, severity, and thresholds.",
+            "zh": "探索 15 個 Rule Pack 的 recording 和 alert 規則 — 查看 PromQL、嚴重度和閾值。"
+          }
+        },
+        {
+          "tool": "alert-simulator",
+          "component": "../interactive/tools/alert-simulator.jsx",
+          "title": { "en": "Simulate Alerts", "zh": "模擬告警" },
+          "hint": {
+            "en": "Set metric values and see which alerts fire. Understand severity dedup in action.",
+            "zh": "設定指標值，觀察哪些告警觸發。理解嚴重度去重的實際運作。"
+          }
+        },
+        {
+          "tool": "alert-timeline",
+          "component": "../interactive/tools/alert-timeline.jsx",
+          "title": { "en": "Watch Timeline", "zh": "觀看時間線" },
+          "hint": {
+            "en": "Animated replay of metric scenarios — see alerts fire, dedup, and resolve over time.",
+            "zh": "指標情境的動畫重播 — 觀看告警觸發、去重和隨時間解決的過程。"
+          }
+        },
+        {
+          "tool": "runbook-viewer",
+          "component": "../interactive/tools/runbook-viewer.jsx",
+          "title": { "en": "Diagnose & Fix", "zh": "診斷與修復" },
+          "hint": {
+            "en": "Interactive runbooks: what the alert means, how to diagnose, fix, and verify resolution.",
+            "zh": "互動 Runbook：告警含義、診斷方法、修復步驟和驗證解決。"
+          }
+        }
+      ]
+    }
+  }
+}

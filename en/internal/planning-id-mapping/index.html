@@ -1,0 +1,3381 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Enterprise-grade Multi-Tenant Dynamic Alerting Platform for Kubernetes">
+      
+      
+        <meta name="author" content="Vencil Contributors">
+      
+      
+        <link rel="canonical" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/planning-id-mapping/">
+      
+      
+      
+      
+        
+          <link rel="alternate" href="../../../internal/planning-id-mapping/" hreflang="zh">
+        
+          <link rel="alternate" href="./" hreflang="en">
+        
+      
+      
+      <link rel="icon" href="../../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>Planning ID Mapping — Legacy → TRK Redirect - Dynamic Alerting Platform</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../../assets/extra.css">
+    
+    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="deep-orange" data-md-color-accent="deep-orange">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#planning-id-mapping-legacy-trk-redirect" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../../" title="Dynamic Alerting Platform" class="md-header__button md-logo" aria-label="Dynamic Alerting Platform" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Dynamic Alerting Platform
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Planning ID Mapping — Legacy → TRK Redirect
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="deep-orange" data-md-color-accent="deep-orange"  aria-label="深色模式"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="深色模式" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="deep-orange" data-md-color-accent="deep-orange"  aria-label="淺色模式"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="淺色模式" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+      <div class="md-header__option">
+  <div class="md-select">
+    
+    <button class="md-header__button md-icon" aria-label="Select language">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m12.87 15.07-2.54-2.51.03-.03A17.5 17.5 0 0 0 14.07 6H17V4h-7V2H8v2H1v2h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2zm-2.62 7 1.62-4.33L19.12 17z"/></svg>
+    </button>
+    <div class="md-select__inner">
+      <ul class="md-select__list">
+        
+          <li class="md-select__item">
+            <a href="../../../internal/planning-id-mapping/" hreflang="zh" class="md-select__link">
+              中文
+            </a>
+          </li>
+        
+          <li class="md-select__item">
+            <a href="./" hreflang="en" class="md-select__link">
+              English
+            </a>
+          </li>
+        
+      </ul>
+    </div>
+  </div>
+</div>
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+          <a href="javascript:void(0)" class="md-search__icon md-icon" title="Share" aria-label="Share" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
+            
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91s2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08"/></svg>
+          </a>
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/vencil/Dynamic-Alerting-Integrations" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    vencil/Dynamic-Alerting-Integrations
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+    
+      
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../getting-started/for-platform-engineers/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Getting Started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../architecture-and-design/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Core Architecture
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../integration/byo-prometheus-integration/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Integration Guides
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../migration-guide/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Migration
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../governance-security/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Governance & Security
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../scenarios/alert-routing-split/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Scenarios
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../cli-reference/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+    
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../../" title="Dynamic Alerting Platform" class="md-nav__button md-logo" aria-label="Dynamic Alerting Platform" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    Dynamic Alerting Platform
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/vencil/Dynamic-Alerting-Integrations" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    vencil/Dynamic-Alerting-Integrations
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Getting Started
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/for-platform-engineers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Platform Engineers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/for-domain-experts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Domain Experts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/for-tenants/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tenants
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Core Architecture
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Core Architecture
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture-and-design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture & Design
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../benchmarks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Performance Benchmarks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_3" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../adr/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture Decisions (ADR)
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3_3" id="__nav_3_3_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture Decisions (ADR)
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/001-severity-dedup-via-inhibit/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-001 Severity Dedup via Inhibit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/002-oci-registry-over-chartmuseum/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-002 OCI Registry
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/003-sentinel-alert-pattern/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-003 Sentinel Alert Pattern
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/004-federation-central-exporter-first/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-004 Federation Central Exporter First
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/005-projected-volume-for-rule-packs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-005 Projected Volume
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Integration Guides
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Integration Guides
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/byo-prometheus-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    BYO Prometheus
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/byo-alertmanager-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    BYO Alertmanager
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/alerting-plane-self-liveness/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    告警平面自我存活性 (Watchdog)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/synthetic-probe-interop/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    合成探測對接 (Synthetic-Probe)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/victoriametrics-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    VictoriaMetrics 整合
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/federation-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Federation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/tenant-federation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tenant Federation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/gitops-deployment/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    GitOps Deployment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/deployment-sizing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    部署容量規劃
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migration
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Migration
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../migration-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migration Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../migration-engine/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migration Engine
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../migration-toolkit-installation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migration Toolkit 安裝
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../shadow-monitoring-sop/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Shadow Monitoring SOP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/troubleshooting-checklist/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migration Troubleshooting Checklist
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Governance & Security
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Governance & Security
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../governance-security/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Governance & Security
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../custom-rule-governance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Custom Rule Governance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Scenarios
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Scenarios
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../scenarios/alert-routing-split/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Alert Routing Split
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../test-coverage-matrix/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    測試覆蓋矩陣
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../scenarios/shadow-monitoring-cutover/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Shadow Monitoring Cutover
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../scenarios/staged-adoption-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Staged Adoption Lifecycle
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../scenarios/version-aware-thresholds/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Version-Aware Thresholds
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../scenarios/multi-cluster-federation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Multi-cluster Federation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../scenarios/tenant-lifecycle/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tenant Lifecycle
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../scenarios/multi-system-migration-playbook/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Multi-System Migration Playbook
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_8" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../api/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_8" id="__nav_8_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cli-reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    da-tools CLI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cheat-sheet/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CLI Cheat Sheet
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../interactive-tools/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Interactive Tools
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../grafana-dashboards/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Grafana Dashboards
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../rule-packs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Rule Packs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../rule-packs/ALERT-REFERENCE/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Alert Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../schemas/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    JSON Schema
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../glossary/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Glossary
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../CHANGELOG/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Changelog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#namespace" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Namespace 政策回顧
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        編號分區
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#mapping" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Mapping 表
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Mapping 表">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#ha-n-trk-001-018dx-hardening-automation-tracking" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        HA-N → TRK-001 ~ 018（DX hardening / automation tracking）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#reg-nnn-trk-101-199-portal-regression-registry" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        REG-NNN → TRK-101 ~ 199（產品 / portal regression registry）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tech-debt-nnn-td-nnn-trk-201-299platform-tech-debt" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        TECH-DEBT-NNN / TD-NNN → TRK-201 ~ 299（platform tech debt）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#trk-300-post-migration-legacy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        TRK-300+ — post-migration 新分配（無 legacy 對映）
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#mapping_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        不在 mapping 範圍
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v281" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        引用慣例（v2.8.1+）
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#lint" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        影響的 lint / 工具
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#changelog-archive-docsinternalarchive" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CHANGELOG-archive 與 docs/internal/archive 不動
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        後續工作
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        關聯
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+  <nav class="md-tags" >
+    
+      
+      
+      
+      
+        <span class="md-tag">dx</span>
+      
+    
+      
+      
+      
+      
+        <span class="md-tag">internal</span>
+      
+    
+      
+      
+      
+      
+        <span class="md-tag">planning</span>
+      
+    
+      
+      
+      
+      
+        <span class="md-tag">redirect</span>
+      
+    
+  </nav>
+
+
+  
+    <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/edit/main/internal/planning-id-mapping.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20.71 7.04c.39-.39.39-1.04 0-1.41l-2.34-2.34c-.37-.39-1.02-.39-1.41 0l-1.84 1.83 3.75 3.75M3 17.25V21h3.75L17.81 9.93l-3.75-3.75z"/></svg>
+    </a>
+  
+  
+    
+      
+    
+    <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/raw/main/internal/planning-id-mapping.md" title="View source of this page" class="md-content__button md-icon">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0 8a5 5 0 0 1-5-5 5 5 0 0 1 5-5 5 5 0 0 1 5 5 5 5 0 0 1-5 5m0-12.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5"/></svg>
+    </a>
+  
+
+
+<h1 id="planning-id-mapping-legacy-trk-redirect">Planning ID Mapping — Legacy → TRK Redirect<a class="headerlink" href="#planning-id-mapping-legacy-trk-redirect" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p><strong>本文件用途</strong>：<a href="../../adr/019-planning-ssot/">ADR-019</a> 採 <strong>Option C refined hybrid</strong>——把舊的 <code>TECH-DEBT-NNN</code> / <code>TD-NN</code> / <code>HA-NN</code> / <code>REG-NNN</code> 四個 namespace 統一為單一 <code>TRK-NNN</code>。本文是 <strong>redirect 表</strong>：當你在 commit / PR / 文件 / external citation 看到舊 ID，到這裡查對應的現代 <code>TRK-NNN</code>。</p>
+<p><strong>這不是 backlog</strong>，只是 ID 翻譯表。Backlog 本體（current status / pr_ref / owner）放在各自 source frontmatter，最終透過 <code>scripts/dx/generate_planning_index.py</code>（issue <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/379">#379</a> chunk 2a）匯出 <code>planning-index.md</code>。</p>
+</blockquote>
+<h2 id="namespace">Namespace 政策回顧<a class="headerlink" href="#namespace" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Namespace</th>
+<th>用途</th>
+<th>v2.8.1-dx-interim 後狀態</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>TRK-NNN</strong></td>
+<td>統一 debt / regression / dx tracking</td>
+<td><strong>唯一新增進入點</strong>（v2.8.1+ 一律 TRK）</td>
+</tr>
+<tr>
+<td><strong>ADR-NNN</strong></td>
+<td>架構設計決策史</td>
+<td>保留（不參與本 mapping）</td>
+</tr>
+<tr>
+<td><strong>S#NNN</strong></td>
+<td>Sprint planning ledger</td>
+<td>保留（不參與本 mapping）</td>
+</tr>
+<tr>
+<td>~~<code>TECH-DEBT-NNN</code>~~</td>
+<td>(legacy)</td>
+<td>凍結；本表查對應 TRK</td>
+</tr>
+<tr>
+<td>~~<code>TD-NN</code>~~</td>
+<td>(legacy 簡寫)</td>
+<td>凍結；本表查對應 TRK</td>
+</tr>
+<tr>
+<td>~~<code>HA-NN</code>~~</td>
+<td>(legacy)</td>
+<td>凍結；本表查對應 TRK</td>
+</tr>
+<tr>
+<td>~~<code>REG-NNN</code>~~</td>
+<td>(legacy)</td>
+<td>凍結；本表查對應 TRK</td>
+</tr>
+</tbody>
+</table>
+<h2 id="_1">編號分區<a class="headerlink" href="#_1" title="Permanent link">&para;</a></h2>
+<p>為了讓 grep / review 一眼可辨原 namespace，TRK 編號採三段分區：</p>
+<table>
+<thead>
+<tr>
+<th>區段</th>
+<th>來源</th>
+<th>範例</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>TRK-001 ~ TRK-099</strong></td>
+<td><code>HA-N</code> 序列</td>
+<td><code>HA-11</code> → <code>TRK-011</code></td>
+</tr>
+<tr>
+<td><strong>TRK-100 ~ TRK-199</strong></td>
+<td><code>REG-NNN</code> 序列</td>
+<td><code>REG-004</code> → <code>TRK-104</code></td>
+</tr>
+<tr>
+<td><strong>TRK-200 ~ TRK-299</strong></td>
+<td><code>TECH-DEBT-NNN</code> / <code>TD-NN</code> 序列</td>
+<td><code>TECH-DEBT-005</code> → <code>TRK-205</code>、<code>TD-022</code> → <code>TRK-222</code></td>
+</tr>
+<tr>
+<td><strong>TRK-300 +</strong></td>
+<td><strong>post-migration 新分配</strong></td>
+<td>—</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><code>TECH-DEBT-NNN</code> 與 <code>TD-NN</code> 是同一個 namespace 的長短形（v2.7.x 之後簡寫為 <code>TD-</code>，數字編號連續），同號 alias 合併到同一個 TRK：<code>TECH-DEBT-022</code> ≡ <code>TD-022</code> → <code>TRK-222</code>。</p>
+<p>字母 suffix（e.g. <code>TD-030a</code>, <code>TD-030z</code>, <code>TD-032e</code>）保留，遷移為 <code>TRK-230a</code>, <code>TRK-230z</code>, <code>TRK-232e</code>。</p>
+</blockquote>
+<h2 id="mapping">Mapping 表<a class="headerlink" href="#mapping" title="Permanent link">&para;</a></h2>
+<h3 id="ha-n-trk-001-018dx-hardening-automation-tracking">HA-N → TRK-001 ~ 018（DX hardening / automation tracking）<a class="headerlink" href="#ha-n-trk-001-018dx-hardening-automation-tracking" title="Permanent link">&para;</a></h3>
+<p>SOT 在 <a href="../dx-tooling-backlog/"><code>dx-tooling-backlog.md</code></a>。</p>
+<table>
+<thead>
+<tr>
+<th>Legacy</th>
+<th>TRK</th>
+<th>主題</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>HA-1</td>
+<td>TRK-001</td>
+<td><code>check_noqa_hygiene.py</code> noqa/nosec 必要性驗證</td>
+</tr>
+<tr>
+<td>HA-2</td>
+<td>TRK-002</td>
+<td><code>make test-impact</code> 變更影響測試自動縮減</td>
+</tr>
+<tr>
+<td>HA-3</td>
+<td>TRK-003</td>
+<td>Pre-commit hook CI gate</td>
+</tr>
+<tr>
+<td>HA-4</td>
+<td>TRK-004</td>
+<td>Lint tool self-test framework（negative fixtures）</td>
+</tr>
+<tr>
+<td>HA-5</td>
+<td>TRK-005</td>
+<td><code>check_test_isolation.py</code> 測試隔離驗證</td>
+</tr>
+<tr>
+<td>HA-6</td>
+<td>TRK-006</td>
+<td>Skip budget CI gate（<code>make test-skip-audit</code>）</td>
+</tr>
+<tr>
+<td>HA-7</td>
+<td>TRK-007</td>
+<td>Lint test coverage 補齊</td>
+</tr>
+<tr>
+<td>HA-8</td>
+<td>TRK-008</td>
+<td>CI ignore 文件化與 test-map 更新</td>
+</tr>
+<tr>
+<td>HA-9</td>
+<td>TRK-009</td>
+<td>Coverage source 一致性 lint</td>
+</tr>
+<tr>
+<td>HA-10</td>
+<td>TRK-010</td>
+<td>Flake 自動重試 CI Policy</td>
+</tr>
+<tr>
+<td>HA-11</td>
+<td>TRK-011</td>
+<td>Fake-Clock 注入（根因修復 Go 時間相依測試）</td>
+</tr>
+<tr>
+<td>HA-12</td>
+<td>TRK-012</td>
+<td>ADR / 內部連結檔名一致性 Lint</td>
+</tr>
+<tr>
+<td>HA-13</td>
+<td>TRK-013</td>
+<td>Spoke 文件 Freshness Gate</td>
+</tr>
+<tr>
+<td>HA-14</td>
+<td>TRK-014</td>
+<td>FUSE-side Git Write 防護 Wrapper</td>
+</tr>
+<tr>
+<td>HA-15</td>
+<td>TRK-015</td>
+<td>Session 起手式 PATH+PATHEXT Smoke Test</td>
+</tr>
+<tr>
+<td>HA-16</td>
+<td>TRK-016</td>
+<td>CHANGELOG 計數一致性 Lint</td>
+</tr>
+<tr>
+<td>HA-17</td>
+<td>TRK-017</td>
+<td>Desktop Commander 長命令 Watchdog Wrapper</td>
+</tr>
+<tr>
+<td>HA-18</td>
+<td>TRK-018</td>
+<td><code>engineering:testing-strategy</code> Skill 驅動的測試設計還債</td>
+</tr>
+</tbody>
+</table>
+<h3 id="reg-nnn-trk-101-199-portal-regression-registry">REG-NNN → TRK-101 ~ 199（產品 / portal regression registry）<a class="headerlink" href="#reg-nnn-trk-101-199-portal-regression-registry" title="Permanent link">&para;</a></h3>
+<blockquote>
+<p><code>known-regressions.md</code> 於 <a href="../../CHANGELOG/">Session #16 radical-delete policy phantom-deleted</a>，REG 條目分散於各 PR commit / playbook 引用。</p>
+</blockquote>
+<table>
+<thead>
+<tr>
+<th>Legacy</th>
+<th>TRK</th>
+<th>主題</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>REG-001</td>
+<td>TRK-101</td>
+<td>(reserved placeholder — 從未實際登錄)</td>
+</tr>
+<tr>
+<td>REG-003</td>
+<td>TRK-103</td>
+<td><code>docs/interactive/changelog.html</code> 缺 v2.1-v2.6 timeline（v2.8.0 resolved，CHANGELOG.md Phase .a SSOT bundle）</td>
+</tr>
+<tr>
+<td>REG-004</td>
+<td>TRK-104</td>
+<td>portal-safe hrefs：絕對根路徑 <code>href="/foo"</code> 在 portal sub-path 部署會 404；<code>assertNoAbsoluteRootHrefs</code> helper 防守</td>
+</tr>
+</tbody>
+</table>
+<h3 id="tech-debt-nnn-td-nnn-trk-201-299platform-tech-debt">TECH-DEBT-NNN / TD-NNN → TRK-201 ~ 299（platform tech debt）<a class="headerlink" href="#tech-debt-nnn-td-nnn-trk-201-299platform-tech-debt" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Legacy</th>
+<th>TRK</th>
+<th>主題</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>TECH-DEBT-001</td>
+<td>TRK-201</td>
+<td>(early-era debt tracking)</td>
+</tr>
+<tr>
+<td>TECH-DEBT-002</td>
+<td>TRK-202</td>
+<td>(early-era)</td>
+</tr>
+<tr>
+<td>TECH-DEBT-003</td>
+<td>TRK-203</td>
+<td>(early-era)</td>
+</tr>
+<tr>
+<td>TECH-DEBT-005</td>
+<td>TRK-205</td>
+<td>palette 殘留導致 dark mode 斷層（ADR-015 cited）</td>
+</tr>
+<tr>
+<td>TECH-DEBT-006</td>
+<td>TRK-206</td>
+<td>scrollable container axe-core a11y</td>
+</tr>
+<tr>
+<td>TECH-DEBT-007</td>
+<td>TRK-207</td>
+<td>design-system token canonical 值校正（次要文字 <code>#475569</code>）</td>
+</tr>
+<tr>
+<td>TECH-DEBT-008</td>
+<td>TRK-208</td>
+<td>form element accessible name CRITICAL violation</td>
+</tr>
+<tr>
+<td>TECH-DEBT-009</td>
+<td>TRK-209</td>
+<td>(dev-rules 縮寫引用 <code>-009</code> — early-era)</td>
+</tr>
+<tr>
+<td>TECH-DEBT-010</td>
+<td>TRK-210</td>
+<td>(early-era) known-regressions registry parser 相關</td>
+</tr>
+<tr>
+<td>TECH-DEBT-011</td>
+<td>TRK-211</td>
+<td>(dev-rules 縮寫引用 <code>-011</code> — Day 5 runtime axe a11y violation)</td>
+</tr>
+<tr>
+<td>TECH-DEBT-012</td>
+<td>TRK-212</td>
+<td>(dev-rules 縮寫引用 <code>-012</code> — 同上)</td>
+</tr>
+<tr>
+<td>TECH-DEBT-016</td>
+<td>TRK-216</td>
+<td>MetricCard subStyle 雙背景 dark mode</td>
+</tr>
+<tr>
+<td>TECH-DEBT-017</td>
+<td>TRK-217</td>
+<td>WatchLoop time.Sleep flake → FakeClock 結構性修復（v2.8.0 PRs #363–#369）</td>
+</tr>
+<tr>
+<td>TECH-DEBT-018</td>
+<td>TRK-218</td>
+<td>tenant-api async path 測試補洞（<a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/223">issue #223</a>）</td>
+</tr>
+<tr>
+<td>TECH-DEBT-019</td>
+<td>TRK-219</td>
+<td>tenant-api WebSocket hub housekeeping（含後續可被刪除的 dead-path 標記）</td>
+</tr>
+<tr>
+<td>TECH-DEBT-020</td>
+<td>TRK-220</td>
+<td>Playwright axe-core a11y spec 從 6 條擴展到 23 條（<a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/225">issue #225</a>；tenant-manager / saved-views 等多個面板的 WCAG 2.1 掃描皆屬此擴展）</td>
+</tr>
+<tr>
+<td>TECH-DEBT-021</td>
+<td>TRK-221</td>
+<td><code>make api-docs</code> Makefile target / tenant-api swag → OpenAPI spec pipeline（v2.8.0 <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/226">#226</a>）</td>
+</tr>
+<tr>
+<td>TECH-DEBT-022 ≡ TD-022</td>
+<td>TRK-222</td>
+<td>schemathesis 契約測試（<a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/231">issue #231</a>）</td>
+</tr>
+<tr>
+<td>TD-024</td>
+<td>TRK-224</td>
+<td>tenant-api taskmanager / authz 測試以 <code>pollUntilTerminal</code> 取代 50ms blind sleep（async terminal-state assertion）</td>
+</tr>
+<tr>
+<td>TECH-DEBT-026</td>
+<td>TRK-226</td>
+<td>nightly Go race detector <code>-count=10</code>（<a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/235">issue #235</a>；<code>.github/workflows/nightly-race.yaml</code>）</td>
+</tr>
+<tr>
+<td>TD-028 ≡ TECH-DEBT-028</td>
+<td>TRK-228</td>
+<td><code>/api/v1/me</code> JSON wire shape nil-vs-empty-array drift（<a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/242">issue #242</a>）</td>
+</tr>
+<tr>
+<td>TD-029 ≡ TECH-DEBT-029</td>
+<td>TRK-229</td>
+<td>(historic alias slot; 0 current code refs — 保留供舊 PR / commit message 引用對應)</td>
+</tr>
+<tr>
+<td>TD-030 ≡ TECH-DEBT-030</td>
+<td>TRK-230</td>
+<td>Portal ESM build + Vitest（<a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/247">issue #247</a> Option C sweep）</td>
+</tr>
+<tr>
+<td>TD-030a</td>
+<td>TRK-230a</td>
+<td>sub-PR a — foundation</td>
+</tr>
+<tr>
+<td>TD-030b</td>
+<td>TRK-230b</td>
+<td>sub-PR b — first wave migration</td>
+</tr>
+<tr>
+<td>TD-030c</td>
+<td>TRK-230c</td>
+<td>sub-PR c — <code>_common/components/</code> ESM exports（EmptyState、ErrorBoundary 等）</td>
+</tr>
+<tr>
+<td>TD-030e</td>
+<td>TRK-230e</td>
+<td>sub-PR e — cicd-setup-wizard fixtures + generators ESM exports（後在 TD-030z 移除）</td>
+</tr>
+<tr>
+<td>TD-030f</td>
+<td>TRK-230f</td>
+<td>sub-PR f — <code>AlertPreviewTab</code> / <code>glossary.jsx</code> ESM imports（jsx-loader <code>transformImports</code> 改寫為 window read）</td>
+</tr>
+<tr>
+<td>TD-030z</td>
+<td>TRK-230z</td>
+<td>sub-PR z — <code>jsx-loader.html</code> 最終下架</td>
+</tr>
+<tr>
+<td>TD-031</td>
+<td>TRK-231</td>
+<td>(historic; 0 current code refs — 保留供舊 PR / commit message 引用對應)</td>
+</tr>
+<tr>
+<td>TD-032</td>
+<td>TRK-232</td>
+<td>Portal E2E coverage push（v2.8.0 LL）</td>
+</tr>
+<tr>
+<td>TD-032a</td>
+<td>TRK-232a</td>
+<td>sub-PR a — <code>check_portal_bundle_size.py</code> lint（post TD-030 Option C migration）</td>
+</tr>
+<tr>
+<td>TD-032b</td>
+<td>TRK-232b</td>
+<td>sub-PR b — cicd-setup-wizard generators property + unit tests</td>
+</tr>
+<tr>
+<td>TD-032c</td>
+<td>TRK-232c</td>
+<td>sub-PR c — Alert Noise Analyzer / Alert Simulator E2E smoke specs</td>
+</tr>
+<tr>
+<td>TD-032d</td>
+<td>TRK-232d</td>
+<td>sub-PR d — Migration ROI Calculator / Migration Dry-Run Simulator E2E smoke specs</td>
+</tr>
+<tr>
+<td>TD-032e</td>
+<td>TRK-232e</td>
+<td>sub-PR e — debug iteration</td>
+</tr>
+<tr>
+<td>TD-033</td>
+<td>TRK-233</td>
+<td>PR-E rebuild ESM dist regression（chunk-split eval order）</td>
+</tr>
+<tr>
+<td>TD-034</td>
+<td>TRK-234</td>
+<td>（配對 TRK-233 codify S6 規則）</td>
+</tr>
+<tr>
+<td>TD-035</td>
+<td>TRK-235</td>
+<td><code>skipA11y: true</code> debt 藏起來，audit 顯示 13/17 多餘</td>
+</tr>
+<tr>
+<td>TD-036</td>
+<td>TRK-236</td>
+<td>pre-commit hook（Plan C）擋 <code>^const \w+\s*=\s*window\.__\w+\s*;</code></td>
+</tr>
+<tr>
+<td>TD-037</td>
+<td>TRK-237</td>
+<td>pre-commit hook S6 — 禁 module-scope <code>const X = window.__X;</code> no-fallback reads（hook id <code>window-x-no-fallback-check</code>，entry <code>check_window_x_no_fallback.py</code>；TRK-236 為前身 draft "Plan C"，已收編於此 hook）</td>
+</tr>
+<tr>
+<td>TD-038</td>
+<td>TRK-238</td>
+<td>Visual regression baseline 擴張 — Playwright <code>toHaveScreenshot</code> 5 staged baselines（Plan A 跨類別覆蓋）</td>
+</tr>
+<tr>
+<td>TD-039</td>
+<td>TRK-239</td>
+<td><code>check_dist_source_consistency.py</code> + <code>check_skip_a11y_justification.py</code>（兩支 lint <strong>docstring 仍寫 <code>TD-039</code></strong> — 它們也是 <code>tool-map.md</code> 自動生成的來源；tool-map 因此沿用 <code>TD-039</code>。重寫 docstring 會牽動 <code>check_skip_a11y_justification.py</code> 的 <code>RE_JUSTIFICATION = r"//\s*skipA11y:\s*TD-\d+\b"</code> 正則 + 所有 E2E spec 內已存在的 <code>// skipA11y: TD-040 ...</code> 註解；留待 chunk 2b 引入新 lint 時一併處理）</td>
+</tr>
+<tr>
+<td>TD-040</td>
+<td>TRK-240</td>
+<td><code>// skipA11y: TD-040</code> justification ID（同上，docstring + 正則 + spec 註解整套留待 chunk 2b）</td>
+</tr>
+<tr>
+<td>TD-042 ≡ TECH-DEBT-042</td>
+<td>TRK-242</td>
+<td>monorepo restructure — portal source 從 <code>docs/*</code> 遷至 <code>tools/portal/*</code>；<code>check_dist_source_consistency.py</code> + <code>.pre-commit-config.yaml</code> file-hygiene exclude 也帶有此標</td>
+</tr>
+</tbody>
+</table>
+<h3 id="trk-300-post-migration-legacy">TRK-300+ — post-migration 新分配（無 legacy 對映）<a class="headerlink" href="#trk-300-post-migration-legacy" title="Permanent link">&para;</a></h3>
+<blockquote>
+<p>此區段<strong>不是 redirect</strong>（無舊 ID 來源），而是 v2.8.1+ 直接以 <code>TRK-NNN</code> 新登錄的 tracking entry 索引。backlog 本體（status / owner / pr_ref）在各 issue body + frontmatter；本表給 <code>TRK ↔ GitHub issue</code> 快查。</p>
+</blockquote>
+<table>
+<thead>
+<tr>
+<th>TRK</th>
+<th>Issue</th>
+<th>主題</th>
+<th>Epic</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>TRK-300</td>
+<td><a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/570">#570</a></td>
+<td>AI Tooling Hardening（epic：AI agent 與 Vibe 規則體系交界系統性問題收斂）</td>
+<td>—</td>
+</tr>
+<tr>
+<td>TRK-301</td>
+<td><a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/571">#571</a></td>
+<td>Plugin prune + CLAUDE.md skill 優先級宣告</td>
+<td>TRK-300</td>
+</tr>
+<tr>
+<td>TRK-302</td>
+<td><a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/572">#572</a></td>
+<td>High-freq feedback 提升進 CLAUDE.md root</td>
+<td>TRK-300</td>
+</tr>
+<tr>
+<td>TRK-303</td>
+<td><a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/573">#573</a></td>
+<td>Adversarial self-review 第 6 lens — Mermaid / C4 drift</td>
+<td>TRK-300</td>
+</tr>
+<tr>
+<td>TRK-304</td>
+<td><a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/574">#574</a></td>
+<td>Hook/Skill 邊界稽核矩陣（<code>hook-vs-skill-coverage.md</code>）</td>
+<td>TRK-300</td>
+</tr>
+<tr>
+<td>TRK-305</td>
+<td><a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/575">#575</a></td>
+<td><code>vibe-subagent-review</code> skill — IaC-aware blast radius（complements #448）</td>
+<td>TRK-300</td>
+</tr>
+<tr>
+<td>TRK-306</td>
+<td><a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/576">#576</a></td>
+<td><code>vibe-release</code> skill — extends #474 Layer 3</td>
+<td>TRK-300</td>
+</tr>
+<tr>
+<td>TRK-307</td>
+<td><a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/577">#577</a></td>
+<td><code>audit_rules_drift.py</code> + 季度 cron（rule compaction）</td>
+<td>TRK-300</td>
+</tr>
+<tr>
+<td>TRK-308</td>
+<td><a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/578">#578</a></td>
+<td><code>vibe-brainstorm</code> skill（deferred → post-ADR-020）</td>
+<td>TRK-300</td>
+</tr>
+<tr>
+<td>TRK-309</td>
+<td><a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/579">#579</a></td>
+<td>Upstream skill-system FR tracker（Anthropic / Cowork；backlog，無 milestone）</td>
+<td>TRK-300</td>
+</tr>
+<tr>
+<td>TRK-310</td>
+<td><a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/581">#581</a></td>
+<td>epic #570 收尾 — CLAUDE.md 瘦身 + 淨 token 核算</td>
+<td>TRK-300</td>
+</tr>
+<tr>
+<td>TRK-311</td>
+<td><a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/592">#592</a></td>
+<td>Container SAST Layer 1 — Dockerfile（hadolint + Vibe wrapper + .dockerignore）</td>
+<td><a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/448">#448</a></td>
+</tr>
+<tr>
+<td>TRK-312</td>
+<td><a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/593">#593</a></td>
+<td>Container SAST Layer 2 — Helm template security（kube-linter dual-mode + rationale wrapper）</td>
+<td><a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/448">#448</a></td>
+</tr>
+<tr>
+<td>TRK-313</td>
+<td><a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/594">#594</a></td>
+<td>Container SAST Layer 3 — Helm values secret-shape lint</td>
+<td><a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/448">#448</a></td>
+</tr>
+<tr>
+<td>TRK-314</td>
+<td><a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/595">#595</a></td>
+<td>Container SAST Layer 4 stub + CI integration + branch protection</td>
+<td><a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/448">#448</a></td>
+</tr>
+<tr>
+<td>TRK-315</td>
+<td><a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/596">#596</a></td>
+<td>Container SAST — hybrid-policy codify + consolidated baseline + epic closure</td>
+<td><a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/448">#448</a></td>
+</tr>
+<tr>
+<td>TRK-316</td>
+<td><a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/609">#609</a></td>
+<td>Tenant Log Query Federation — authz-plane-only, ingestion-decoupled（<a href="../../adr/021-tenant-log-query-federation/">ADR-021</a> 實作 epic, Phase 1 b → v2.10.0）</td>
+<td>—</td>
+</tr>
+<tr>
+<td>TRK-317</td>
+<td><a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/670">#670</a></td>
+<td>[Epic] GitOps 寫入平面 resilience hardening（ADR-023，PR <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/pull/669">#669</a>）</td>
+<td>—</td>
+</tr>
+<tr>
+<td>TRK-318</td>
+<td><a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/671">#671</a></td>
+<td>WritePR 本地 base stale → 共享檔 silent data loss（鎖內 fetch 方案甲）</td>
+<td>TRK-317</td>
+</tr>
+<tr>
+<td>TRK-319</td>
+<td><a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/672">#672</a></td>
+<td>Circuit Breaker GitHub secondary-rate-limit 403 盲點（<code>isForgeDegradation</code> 只判 5xx）</td>
+<td>TRK-317</td>
+</tr>
+<tr>
+<td>TRK-320</td>
+<td><a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/673">#673</a></td>
+<td>寫入鎖 load-shedding semaphore + context-aware 取得（消孤兒寫入）</td>
+<td>TRK-317</td>
+</tr>
+<tr>
+<td>TRK-321</td>
+<td><a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/674">#674</a></td>
+<td>SSE sync-on-reconnect 前端契約（at-most-once 廣播缺口；Portal track, deferred）</td>
+<td>—</td>
+</tr>
+<tr>
+<td>TRK-322</td>
+<td><a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/675">#675</a></td>
+<td>SIGTERM 優雅關機 SSE shutdown 廣播（reconnect storm；Portal track, deferred）</td>
+<td>—</td>
+</tr>
+<tr>
+<td>TRK-323</td>
+<td><a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/676">#676</a></td>
+<td>（wontfix / not planned）special-file 左移驗證 — da-guard CI gate + handler 已覆蓋</td>
+<td>—</td>
+</tr>
+<tr>
+<td>TRK-324</td>
+<td><a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/677">#677</a></td>
+<td>幽靈副本：滾動更新交疊多寫者（Recreate now-fix / Lease deferred）</td>
+<td>TRK-317</td>
+</tr>
+<tr>
+<td>TRK-325</td>
+<td><a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/678">#678</a></td>
+<td>讀寫拆分部署（CQRS）+ read-only enforcement 模式（deferred）</td>
+<td>TRK-317</td>
+</tr>
+<tr>
+<td>TRK-326</td>
+<td><a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/751">#751</a></td>
+<td>Custom-alert <code>for</code> divergence：<code>for</code> 納 recipe_id slug + schema enum（向量化靜默覆蓋 P0）</td>
+<td><a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/741">#741</a></td>
+</tr>
+</tbody>
+</table>
+<h2 id="mapping_1">不在 mapping 範圍<a class="headerlink" href="#mapping_1" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong><code>ADR-NNN</code></strong> — 架構決策 ID，永不重編號（ADR-019 namespace policy）</li>
+<li><strong><code>S#NNN</code></strong> — sprint planning ledger，保留原 namespace（時序語意不同於 TRK）</li>
+<li><strong><code>Trap #N</code></strong>（<a href="../windows-mcp-playbook/"><code>windows-mcp-playbook.md</code></a>）— 環境 trap catalogue，獨立 namespace</li>
+<li><strong><code>pitfall #N</code></strong>（<a href="../windows-mcp-playbook/"><code>windows-mcp-playbook.md</code></a>）— 同上</li>
+</ul>
+<h2 id="v281">引用慣例（v2.8.1+）<a class="headerlink" href="#v281" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>✅ 新 entry / commit / PR body / 文件： Resolves TRK-228
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>✅ 引用歷史記載: 依 source 原文保留（如 ADR-019 內的 TD-NN / HA-NN / REG-NN 字樣若是政策論述引用則照原樣）
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>⚠️ 過渡期 PR body 寫 `Resolves TD-028` 仍可 work，CI 透過本 mapping 自動翻譯，但會 emit warning「用 TRK-228 取代」
+</code></pre></div>
+<h2 id="lint">影響的 lint / 工具<a class="headerlink" href="#lint" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>工具</th>
+<th>狀態</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>~~<code>scripts/tools/lint/check_techdebt_drift.py</code>~~</td>
+<td><strong>已移除</strong> — <code>known-regressions.md</code> 撤除後成 phantom no-op；繼任者 <code>check_planning_status_sync.py</code>（chunk 2b，ADR-019 Layer 3）已上線</td>
+</tr>
+<tr>
+<td><code>scripts/dx/generate_planning_index.py</code></td>
+<td>chunk 2a 新增，掃 frontmatter 產 <code>planning-index.md</code></td>
+</tr>
+<tr>
+<td>Pre-commit hooks</td>
+<td>暫不擋舊 ID（過渡期）；chunk 5 收編後正式 deprecate</td>
+</tr>
+</tbody>
+</table>
+<h2 id="changelog-archive-docsinternalarchive">CHANGELOG-archive 與 docs/internal/archive 不動<a class="headerlink" href="#changelog-archive-docsinternalarchive" title="Permanent link">&para;</a></h2>
+<p><code>CHANGELOG-archive.md</code>（repo root）+ <code>docs/internal/archive/</code> 的歷史敘述<strong>不重寫</strong>——pre-v2.2.0 引用作歷史保留，需要對應 TRK 時來查本表。</p>
+<h2 id="_2">後續工作<a class="headerlink" href="#_2" title="Permanent link">&para;</a></h2>
+<p>本文件落地（chunk 1）之後：</p>
+<ul>
+<li>chunk 2a — <code>generate_planning_index.py</code>（產 <code>planning-index.md</code>）</li>
+<li>chunk 3 — 既有 backlog frontmatter migration（一律 TRK-NNN，後續 entries 從 TRK-300+ 分配）</li>
+<li>chunk 2b — <code>check_planning_status_sync.py</code> + CI wire（讀 PR body <code>Resolves TRK-NNN</code>，驗 frontmatter status）</li>
+<li>chunk 5 — CLAUDE.md 起手式收編 + dev-rules.md / commit-convention.md 強制 TRK</li>
+</ul>
+<h2 id="_3">關聯<a class="headerlink" href="#_3" title="Permanent link">&para;</a></h2>
+<ul>
+<li><a href="../../adr/019-planning-ssot/">ADR-019</a> — 本 mapping 的政策依據</li>
+<li><a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/379">issue #379</a> — 本 mapping 是 chunk 1 deliverable</li>
+<li><a href="../dev-rules/">dev-rules.md §P1</a> — commit trailer 規範</li>
+<li><a href="../dx-tooling-backlog/">dx-tooling-backlog.md</a> — TRK-001~018 的 source</li>
+</ul>
+
+
+
+
+
+
+
+  
+  
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      Copyright &copy; 2025 Vencil. Licensed under Apache 2.0.
+    </div>
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+        
+<div class="md-social">
+  
+    
+    
+    
+    
+    <a href="https://github.com/vencil/Dynamic-Alerting-Integrations" target="_blank" rel="noopener" title="GitHub" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+      <div class="md-progress" data-md-component="progress" role="progressbar"></div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.instant", "navigation.instant.loading", "navigation.instant.progress", "navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.expand", "navigation.indexes", "navigation.tracking", "navigation.top", "search.suggest", "search.highlight", "search.share", "toc.follow", "content.action.edit", "content.action.view", "content.code.copy", "content.code.select", "content.code.annotate", "content.tabs.link", "content.tooltips", "announce.dismiss"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"provider": "mike"}}</script>
+    
+    
+      <script src="../../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+        <script src="../../../assets/extra.js"></script>
+      
+        <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+      
+    
+  </body>
+</html>

@@ -1,0 +1,19 @@
+source:
+  # Phase 1 log-generator was torn down — let vector tail prometheus
+  # via the primary source for this smoke test; constant data flow.
+  extraLabelSelector: "app=prometheus"
+additionalSources: []
+additionalSinks:
+  - name: mock_siem
+    type: http
+    inputs: [demux]
+    uri: http://mock-siem.monitoring.svc:8080/ingest
+    encoding:
+      codec: json
+    framing:
+      method: newline_delimited
+    compression: none
+    healthcheck:
+      enabled: false
+    _buffer_when_full: drop_newest
+    _buffer_max_events: 5000

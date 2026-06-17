@@ -1,0 +1,4978 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Enterprise-grade Multi-Tenant Dynamic Alerting Platform for Kubernetes">
+      
+      
+        <meta name="author" content="Vencil Contributors">
+      
+      
+        <link rel="canonical" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/scenarios/multi-system-migration-playbook/">
+      
+      
+        <link rel="prev" href="../tenant-lifecycle/">
+      
+      
+        <link rel="next" href="../../cli-reference/">
+      
+      
+        
+          <link rel="alternate" href="../../../scenarios/multi-system-migration-playbook/" hreflang="zh">
+        
+          <link rel="alternate" href="./" hreflang="en">
+        
+      
+      
+      <link rel="icon" href="../../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>Multi-System Migration Playbook - Dynamic Alerting Platform</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../../assets/extra.css">
+    
+    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="deep-orange" data-md-color-accent="deep-orange">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#multi-system-migration-playbook" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../../" title="Dynamic Alerting Platform" class="md-header__button md-logo" aria-label="Dynamic Alerting Platform" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Dynamic Alerting Platform
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Multi-System Migration Playbook
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="deep-orange" data-md-color-accent="deep-orange"  aria-label="深色模式"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="深色模式" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="deep-orange" data-md-color-accent="deep-orange"  aria-label="淺色模式"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="淺色模式" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+      <div class="md-header__option">
+  <div class="md-select">
+    
+    <button class="md-header__button md-icon" aria-label="Select language">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m12.87 15.07-2.54-2.51.03-.03A17.5 17.5 0 0 0 14.07 6H17V4h-7V2H8v2H1v2h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2zm-2.62 7 1.62-4.33L19.12 17z"/></svg>
+    </button>
+    <div class="md-select__inner">
+      <ul class="md-select__list">
+        
+          <li class="md-select__item">
+            <a href="../../../scenarios/multi-system-migration-playbook/" hreflang="zh" class="md-select__link">
+              中文
+            </a>
+          </li>
+        
+          <li class="md-select__item">
+            <a href="./" hreflang="en" class="md-select__link">
+              English
+            </a>
+          </li>
+        
+      </ul>
+    </div>
+  </div>
+</div>
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+          <a href="javascript:void(0)" class="md-search__icon md-icon" title="Share" aria-label="Share" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
+            
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91s2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08"/></svg>
+          </a>
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/vencil/Dynamic-Alerting-Integrations" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    vencil/Dynamic-Alerting-Integrations
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+    
+      
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../getting-started/for-platform-engineers/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Getting Started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../architecture-and-design/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Core Architecture
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../integration/byo-prometheus-integration/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Integration Guides
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../migration-guide/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Migration
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../governance-security/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Governance & Security
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../alert-routing-split/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Scenarios
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../cli-reference/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+    
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../../" title="Dynamic Alerting Platform" class="md-nav__button md-logo" aria-label="Dynamic Alerting Platform" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    Dynamic Alerting Platform
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/vencil/Dynamic-Alerting-Integrations" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    vencil/Dynamic-Alerting-Integrations
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Getting Started
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/for-platform-engineers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Platform Engineers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/for-domain-experts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Domain Experts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/for-tenants/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tenants
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Core Architecture
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Core Architecture
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture-and-design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture & Design
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../benchmarks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Performance Benchmarks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_3" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../adr/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture Decisions (ADR)
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3_3" id="__nav_3_3_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture Decisions (ADR)
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/001-severity-dedup-via-inhibit/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-001 Severity Dedup via Inhibit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/002-oci-registry-over-chartmuseum/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-002 OCI Registry
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/003-sentinel-alert-pattern/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-003 Sentinel Alert Pattern
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/004-federation-central-exporter-first/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-004 Federation Central Exporter First
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/005-projected-volume-for-rule-packs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-005 Projected Volume
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Integration Guides
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Integration Guides
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/byo-prometheus-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    BYO Prometheus
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/byo-alertmanager-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    BYO Alertmanager
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/alerting-plane-self-liveness/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    告警平面自我存活性 (Watchdog)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/synthetic-probe-interop/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    合成探測對接 (Synthetic-Probe)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/victoriametrics-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    VictoriaMetrics 整合
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/federation-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Federation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/tenant-federation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tenant Federation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/gitops-deployment/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    GitOps Deployment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/deployment-sizing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    部署容量規劃
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migration
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Migration
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../migration-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migration Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../migration-engine/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migration Engine
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../migration-toolkit-installation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migration Toolkit 安裝
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../shadow-monitoring-sop/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Shadow Monitoring SOP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/troubleshooting-checklist/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migration Troubleshooting Checklist
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Governance & Security
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Governance & Security
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../governance-security/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Governance & Security
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../custom-rule-governance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Custom Rule Governance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Scenarios
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Scenarios
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../alert-routing-split/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Alert Routing Split
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../internal/test-coverage-matrix/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    測試覆蓋矩陣
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../shadow-monitoring-cutover/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Shadow Monitoring Cutover
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../staged-adoption-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Staged Adoption Lifecycle
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../version-aware-thresholds/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Version-Aware Thresholds
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../multi-cluster-federation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Multi-cluster Federation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tenant-lifecycle/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tenant Lifecycle
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Multi-System Migration Playbook
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Multi-System Migration Playbook
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#0-three-tier-reading-speed-how-to-read-this-document" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        0. Three-tier reading speed (how to read this document)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#1-which-type-of-customer-am-i-routing-decision-tree" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Which type of customer am I? (Routing Decision Tree)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-the-5-phase-landscape" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. The 5-Phase landscape
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-phase-0-discovery-inventory" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Phase 0 — Discovery &amp; Inventory
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3. Phase 0 — Discovery &amp; Inventory">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#30-sec-tldr" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        30-sec TL;DR
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#architect-narrative" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Architect Narrative
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cutover-checklist" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cutover Checklist
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#failure-modes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Failure modes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#gate-1-phase-1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Gate 1 → Phase 1
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-phase-1-pre-flight-dual-write-infrastructure" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Phase 1 — Pre-flight &amp; Dual-Write Infrastructure
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="4. Phase 1 — Pre-flight &amp; Dual-Write Infrastructure">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#30-sec-tldr_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        30-sec TL;DR
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#architect-narrative_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Architect Narrative
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cutover-checklist_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cutover Checklist
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#gate-2-phase-2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Gate 2 → Phase 2
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-phase-2-shadow-deployment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Phase 2 — Shadow Deployment
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="5. Phase 2 — Shadow Deployment">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#30-sec-tldr_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        30-sec TL;DR
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#architect-narrative_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Architect Narrative
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cutover-checklist_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cutover Checklist
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#gate-3-phase-3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Gate 3 → Phase 3
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-phase-3-incremental-cutover" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. Phase 3 — Incremental Cutover
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="6. Phase 3 — Incremental Cutover">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#30-sec-tldr_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        30-sec TL;DR
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#architect-narrative_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Architect Narrative
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cutover-checklist_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cutover Checklist
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#gate-4-canary-full-rollout" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Gate 4 (canary) → full rollout
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#gate-5-full-phase-4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Gate 5 (full) → Phase 4
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7-phase-4-decommission" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7. Phase 4 — Decommission
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="7. Phase 4 — Decommission">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#30-sec-tldr_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        30-sec TL;DR
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#architect-narrative_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Architect Narrative
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cutover-checklist_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cutover Checklist
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#failure-modes_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Failure modes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#gate-51-archive-complete" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Gate 5+1 (archive complete)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8-plan-a-vs-plan-b-git-layout-choice" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8. Plan A vs Plan B (Git layout choice)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="8. Plan A vs Plan B (Git layout choice)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#plan-a-single-sot-per-cluster-exporter-version-skew-default" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Plan A — Single SOT + Per-cluster Exporter Version Skew (default)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#plan-b-base-overlay-escape-hatch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Plan B — Base + Overlay (escape hatch)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#9-partial-migration-x-y-matrix" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9. Partial Migration (X-Y matrix)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#10-gate-reference-table" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        10. Gate Reference Table
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#11-rollback-three-tier-reversibility-boundary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        11. Rollback three-tier reversibility boundary
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#12-failure-mode-catalog-cross-phase-summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        12. Failure Mode Catalog (cross-phase summary)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="12. Failure Mode Catalog (cross-phase summary)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#phase-0-discovery-inventory" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 0 — Discovery &amp; Inventory
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-1-pre-flight-dual-write" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 1 — Pre-flight &amp; Dual-Write
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-2-shadow-deployment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 2 — Shadow Deployment
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-3-incremental-cutover" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 3 — Incremental Cutover
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-4-decommission" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 4 — Decommission
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#13-appendices" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13. Appendices
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="13. Appendices">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#a-composite-customer-walkthrough-frankenstein-style" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A. Composite Customer Walkthrough (Frankenstein style)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#b-cross-references" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        B. Cross-references
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#c-adr-design-references" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        C. ADR / Design references
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_8" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../api/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_8" id="__nav_8_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cli-reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    da-tools CLI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cheat-sheet/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CLI Cheat Sheet
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../interactive-tools/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Interactive Tools
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../grafana-dashboards/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Grafana Dashboards
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../rule-packs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Rule Packs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../rule-packs/ALERT-REFERENCE/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Alert Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../schemas/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    JSON Schema
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../glossary/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Glossary
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../CHANGELOG/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Changelog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#0-three-tier-reading-speed-how-to-read-this-document" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        0. Three-tier reading speed (how to read this document)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#1-which-type-of-customer-am-i-routing-decision-tree" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Which type of customer am I? (Routing Decision Tree)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-the-5-phase-landscape" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. The 5-Phase landscape
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-phase-0-discovery-inventory" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Phase 0 — Discovery &amp; Inventory
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3. Phase 0 — Discovery &amp; Inventory">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#30-sec-tldr" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        30-sec TL;DR
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#architect-narrative" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Architect Narrative
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cutover-checklist" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cutover Checklist
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#failure-modes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Failure modes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#gate-1-phase-1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Gate 1 → Phase 1
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-phase-1-pre-flight-dual-write-infrastructure" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Phase 1 — Pre-flight &amp; Dual-Write Infrastructure
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="4. Phase 1 — Pre-flight &amp; Dual-Write Infrastructure">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#30-sec-tldr_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        30-sec TL;DR
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#architect-narrative_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Architect Narrative
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cutover-checklist_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cutover Checklist
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#gate-2-phase-2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Gate 2 → Phase 2
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-phase-2-shadow-deployment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Phase 2 — Shadow Deployment
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="5. Phase 2 — Shadow Deployment">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#30-sec-tldr_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        30-sec TL;DR
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#architect-narrative_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Architect Narrative
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cutover-checklist_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cutover Checklist
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#gate-3-phase-3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Gate 3 → Phase 3
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-phase-3-incremental-cutover" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. Phase 3 — Incremental Cutover
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="6. Phase 3 — Incremental Cutover">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#30-sec-tldr_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        30-sec TL;DR
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#architect-narrative_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Architect Narrative
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cutover-checklist_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cutover Checklist
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#gate-4-canary-full-rollout" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Gate 4 (canary) → full rollout
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#gate-5-full-phase-4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Gate 5 (full) → Phase 4
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7-phase-4-decommission" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7. Phase 4 — Decommission
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="7. Phase 4 — Decommission">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#30-sec-tldr_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        30-sec TL;DR
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#architect-narrative_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Architect Narrative
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cutover-checklist_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cutover Checklist
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#failure-modes_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Failure modes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#gate-51-archive-complete" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Gate 5+1 (archive complete)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8-plan-a-vs-plan-b-git-layout-choice" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8. Plan A vs Plan B (Git layout choice)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="8. Plan A vs Plan B (Git layout choice)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#plan-a-single-sot-per-cluster-exporter-version-skew-default" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Plan A — Single SOT + Per-cluster Exporter Version Skew (default)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#plan-b-base-overlay-escape-hatch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Plan B — Base + Overlay (escape hatch)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#9-partial-migration-x-y-matrix" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9. Partial Migration (X-Y matrix)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#10-gate-reference-table" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        10. Gate Reference Table
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#11-rollback-three-tier-reversibility-boundary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        11. Rollback three-tier reversibility boundary
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#12-failure-mode-catalog-cross-phase-summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        12. Failure Mode Catalog (cross-phase summary)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="12. Failure Mode Catalog (cross-phase summary)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#phase-0-discovery-inventory" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 0 — Discovery &amp; Inventory
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-1-pre-flight-dual-write" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 1 — Pre-flight &amp; Dual-Write
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-2-shadow-deployment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 2 — Shadow Deployment
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-3-incremental-cutover" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 3 — Incremental Cutover
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-4-decommission" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 4 — Decommission
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#13-appendices" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13. Appendices
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="13. Appendices">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#a-composite-customer-walkthrough-frankenstein-style" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A. Composite Customer Walkthrough (Frankenstein style)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#b-cross-references" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        B. Cross-references
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#c-adr-design-references" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        C. ADR / Design references
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+  <nav class="md-tags" >
+    
+      
+      
+      
+      
+        <span class="md-tag">hybrid-format</span>
+      
+    
+      
+      
+      
+      
+        <span class="md-tag">migration</span>
+      
+    
+      
+      
+      
+      
+        <span class="md-tag">multi-system</span>
+      
+    
+      
+      
+      
+      
+        <span class="md-tag">playbook</span>
+      
+    
+      
+      
+      
+      
+        <span class="md-tag">scenarios</span>
+      
+    
+  </nav>
+
+
+  
+    <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/edit/main/scenarios/multi-system-migration-playbook.en.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20.71 7.04c.39-.39.39-1.04 0-1.41l-2.34-2.34c-.37-.39-1.02-.39-1.41 0l-1.84 1.83 3.75 3.75M3 17.25V21h3.75L17.81 9.93l-3.75-3.75z"/></svg>
+    </a>
+  
+  
+    
+      
+    
+    <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/raw/main/scenarios/multi-system-migration-playbook.en.md" title="View source of this page" class="md-content__button md-icon">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0 8a5 5 0 0 1-5-5 5 5 0 0 1 5-5 5 5 0 0 1 5 5 5 5 0 0 1-5 5m0-12.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5"/></svg>
+    </a>
+  
+
+
+<h1 id="multi-system-migration-playbook">Multi-System Migration Playbook<a class="headerlink" href="#multi-system-migration-playbook" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p><strong>When this applies</strong>: the customer is swapping storage backend (Prom→VM), the rule layer, and AM routing simultaneously, plus adopting the platform's <code>_defaults.yaml</code> metric-split feature. <strong>Does not apply</strong> to: greenfield / 1-system / 2-system → see the decision tree below for the correct redirect.</p>
+<p><strong>Tone assumption</strong>: this playbook assumes the customer already runs a mature Prometheus + Alertmanager operation. <strong>It does not teach Prometheus fundamentals</strong>; it maps existing customer concepts onto this platform.</p>
+</blockquote>
+<hr />
+<h2 id="0-three-tier-reading-speed-how-to-read-this-document">0. Three-tier reading speed (how to read this document)<a class="headerlink" href="#0-three-tier-reading-speed-how-to-read-this-document" title="Permanent link">&para;</a></h2>
+<p>Every Phase has the same structure; pick your tier by role:</p>
+<table>
+<thead>
+<tr>
+<th>Who you are</th>
+<th>Read</th>
+<th>Time budget</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Manager / cross-team broadcast</strong></td>
+<td>The 「30-sec TL;DR」 (3 bullets) at the start of each Phase</td>
+<td>Entire playbook &lt; 5 min</td>
+</tr>
+<tr>
+<td><strong>Architect / SRE lead</strong> (decision-making)</td>
+<td>30-sec TL;DR + Architect Narrative + Gates + Decision Trees</td>
+<td>Entire playbook ~30 min</td>
+</tr>
+<tr>
+<td><strong>On-call / Executor</strong> (running cutover at 3 AM)</td>
+<td>Jump to the <code>&lt;details&gt;</code> "Cutover Checklist" + bash code blocks</td>
+<td>Single Phase &lt; 5 min</td>
+</tr>
+</tbody>
+</table>
+<p>Design motivation: <strong>readers should not have to extract their own TL;DR</strong>. We extract it for them; people who shouldn't run commands don't see them (collapsibles default-closed); people who should can copy-paste directly.</p>
+<hr />
+<h2 id="1-which-type-of-customer-am-i-routing-decision-tree">1. Which type of customer am I? (Routing Decision Tree)<a class="headerlink" href="#1-which-type-of-customer-am-i-routing-decision-tree" title="Permanent link">&para;</a></h2>
+<pre class="mermaid"><code>flowchart TD
+    Q1{Which best describes your situation?}
+    Q1 --&gt;|No existing rules, fresh Prom install| GS["[for-tenants.md](../getting-started/for-tenants.md)&lt;br/&gt;Greenfield onboarding"]
+    Q1 --&gt;|Have rules, keep Prom infra, no AM change| MG1["[migration-guide.md](../migration-guide.md)&lt;br/&gt;Rule import (1-system)"]
+    Q1 --&gt;|Full Prom+AM+rules but keep infra| MG2["[migration-guide.md](../migration-guide.md) §rule+AM&lt;br/&gt;Rule + AM migration (2-system)"]
+    Q1 --&gt;|&lt;b&gt;Prom→VM + rules + AM swapped simultaneously&lt;/b&gt;| THIS["✅ &lt;b&gt;This playbook&lt;/b&gt;&lt;br/&gt;3-system migration"]
+
+    style THIS fill:#dff,stroke:#066</code></pre>
+<p>If you're unsure which path applies, ask yourself: "<strong>Are you swapping the underlying storage?</strong>" Yes → this playbook; no → migration-guide.md.</p>
+<hr />
+<h2 id="2-the-5-phase-landscape">2. The 5-Phase landscape<a class="headerlink" href="#2-the-5-phase-landscape" title="Permanent link">&para;</a></h2>
+<pre class="mermaid"><code>sequenceDiagram
+    participant D as Discovery
+    participant P as Pre-flight
+    participant S as Shadow
+    participant C as Cutover
+    participant K as Decommission
+    Note over D: Tier A static audit (hard)&lt;br/&gt;Tier B/C bonus
+    D-&gt;&gt;P: Gate 1
+    Note over P: VM up, dual-write, old Prom retained
+    P-&gt;&gt;S: Gate 2
+    Note over S: Rules into git, AM carries shadow label
+    S-&gt;&gt;C: Gate 3
+    Note over C: Canary → full, git revert as safety net
+    C-&gt;&gt;K: Gate 4 + 5
+    Note over K: Shut down old Prom, cleanup, _defaults rollout</code></pre>
+<p>All 5 Gates use <strong>invariants</strong> (not "alert counts match") — see §10.</p>
+<hr />
+<h2 id="3-phase-0-discovery-inventory">3. Phase 0 — Discovery &amp; Inventory<a class="headerlink" href="#3-phase-0-discovery-inventory" title="Permanent link">&para;</a></h2>
+<h3 id="30-sec-tldr">30-sec TL;DR<a class="headerlink" href="#30-sec-tldr" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Three-tier audit: A static (hard gate) / B live snapshot (soft) / C historical telemetry (bonus)</li>
+<li>Dual output: <strong><code>.da/migration-state.json</code></strong> (machine-readable, drives later-phase automation) + Markdown summary (for PR description / human readers)</li>
+<li>Schema: see <a href="../../schemas/migration-state/">migration-state.md</a> (<strong>ZH only — <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/409">#409</a></strong>)</li>
+</ul>
+<h3 id="architect-narrative">Architect Narrative<a class="headerlink" href="#architect-narrative" title="Permanent link">&para;</a></h3>
+<h4 id="why-phase-0-is-a-hard-gate-and-cant-be-skipped">Why Phase 0 is a hard gate and can't be skipped<a class="headerlink" href="#why-phase-0-is-a-hard-gate-and-cant-be-skipped" title="Permanent link">&para;</a></h4>
+<p><strong>"I think I know my own inventory" is the most common illusion in enterprise monitoring</strong>. A Prometheus deployment more than 5 years old accumulates: rules that were committed but no-one remembers why, receivers whose webhook URLs belong to people who left the company, tenant IDs hard-coded into PromQL by some long-ago hotfix that no-one removed, multi-region deployments where rules diverged due to team-split, and Operator-migration leftovers where ConfigMap + <code>PrometheusRule</code> CRD live in parallel.</p>
+<p>Phase 0 forces <strong>one thorough inventory</strong> — not to fix everything perfectly (that's Phase 3), but to give the customer and us a shared mental model of "what we are about to migrate". Skipping discovery = every step in Phase 1+ is built on assumptions rather than facts.</p>
+<h4 id="why-the-three-tiers-are-split-this-way">Why the three tiers are split this way<a class="headerlink" href="#why-the-three-tiers-are-split-this-way" title="Permanent link">&para;</a></h4>
+<p>Customer telemetry maturity varies dramatically — from "only Prom is online, no long-term storage at all" to "Thanos + ELK + Datadog". A single hard gate for all is unrealistic. The three tiers map to three customer states:</p>
+<ul>
+<li>
+<p><strong>Tier A — Static analysis</strong> (hard gate, accessible to every customer)
+  Fully offline analysis of rule files themselves: <code>PrometheusRule</code> CRD / <code>rules.yaml</code> / vmalert ConfigMap. Catches: syntax errors, orphan rules (no matching receiver), rules without a route, unused receivers, tenant IDs that violate schema, cross-file duplicate definitions. <strong>Typical 100-rule customer &lt; 30 seconds to run</strong>. Output is <code>.da/migration-state.json</code> + Markdown summary (dual output details in <a href="../../schemas/migration-state/">migration-state.md</a>).</p>
+</li>
+<li>
+<p><strong>Tier B — Live snapshot</strong> (soft gate, ~80% of customers can reach this)
+  Run <code>ALERTS{}</code> against the live Prometheus to grab "the set of alerts currently firing" + hit AM's <code>/api/v2/alerts/groups</code> for active routes. Answers "what is actually screaming right now?" — a question Tier A cannot. Limits: requires Prom auth + reachability; some shops' policy doesn't allow query access; high-cardinality customers may hit query timeouts. <strong>Missing Tier B does not block Phase 1.</strong></p>
+</li>
+<li>
+<p><strong>Tier C — Historical telemetry</strong> (bonus, ~20% of customers can reach this)
+  Run "alert fire distribution over the last N days / which rules haven't triggered in a year / which receivers have ever received a webhook" against Thanos / VM long-retention / ELK alert logs. <strong>Most customers don't have this layer</strong> — doesn't block; the Shadow phase performs dynamic noise filtering as a substitute.</p>
+</li>
+</ul>
+<h4 id="why-dual-output-format">Why dual-output format<a class="headerlink" href="#why-dual-output-format" title="Permanent link">&para;</a></h4>
+<p>JSON (<code>.da/migration-state.json</code>) + Markdown summary are derived from the same internal state. <strong>They are not two separately-maintained files; they are one source rendered as two views</strong>:</p>
+<ul>
+<li>JSON: machine-readable. Phase 3 cutover candidate selector / CI gates / later-phase automation advancement logs all depend on it</li>
+<li>Markdown: human-readable. Paste into PR descriptions for reviewers / broadcast to customer stakeholders</li>
+</ul>
+<p><strong>Per-cluster split</strong> is the convention established from the start of Phase 0 (see <a href="../../schemas/migration-state/">migration-state.md §Storage Layout</a>). When multiple clusters progress through different phases in parallel, a single-file approach is GitOps merge-conflict hell; per-cluster <code>.da/state/&lt;cluster&gt;.json</code> is the default posture.</p>
+<h4 id="common-phase-0-surprises">Common Phase 0 surprises<a class="headerlink" href="#common-phase-0-surprises" title="Permanent link">&para;</a></h4>
+<p>When customers hear Phase 0 results, three reactions are common:</p>
+<ol>
+<li><strong>"We have <em>that many</em> orphan rules?"</strong> — rules committed but their matching receiver is no longer in AM config. Phase 0 surfaces them on the first sweep; on average 5–15 orphans per 100 rules</li>
+<li><strong>"This tenant ID is hard-coded?"</strong> — PromQL like <code>instance="db-prod-1"</code> baked in; a dev-rule #2 violation. Must be fixed before Phase 1</li>
+<li><strong>"That PagerDuty token died ages ago"</strong> — the customer just realised that an entire domain's alerts haven't been reaching anyone for months. An <strong>unexpected repair</strong> rather than a planned Phase 0 outcome</li>
+</ol>
+<h3 id="cutover-checklist">Cutover Checklist<a class="headerlink" href="#cutover-checklist" title="Permanent link">&para;</a></h3>
+<details>
+<summary>📋 Phase 0 Checklist (for the executor)</summary>
+
+- [ ] Run Tier A static audit
+  <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>da-tools<span class="w"> </span>onboard<span class="w"> </span>--analyze<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">    </span>--output<span class="w"> </span>.da/migration-state.json<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">    </span>--markdown-summary<span class="w"> </span>&gt;<span class="w"> </span>migration-summary.md
+</code></pre></div>
+- [ ] Paste the Markdown summary into the PR description (for reviewers)
+- [ ] Confirm Tier A hard gates pass:
+  - [ ] No orphan rules with syntax errors
+  - [ ] Every receiver has a corresponding routing entry
+  - [ ] Tenant ID naming is compatible with our schema (dev-rule #2)
+- [ ] **Optional** Tier B: run `ALERTS{}` snapshot against live Prom
+- [ ] **Optional** Tier C: historical queries against Thanos / VM long-retention
+- [ ] Commit `.da/migration-state.json` into the customer's GitOps repo
+</details>
+
+<h3 id="failure-modes">Failure modes<a class="headerlink" href="#failure-modes" title="Permanent link">&para;</a></h3>
+<ul>
+<li>"Tier A blocked on syntax error": common when hand-written PromQL uses VM-only functions → flagged by <code>da-parser --strict-promql</code></li>
+<li>"Tier B can't pull <code>ALERTS{}</code>": Prom hasn't done alert evaluation for too long, or query timeouts → accept Tier A is sufficient to proceed</li>
+</ul>
+<h3 id="gate-1-phase-1">Gate 1 → Phase 1<a class="headerlink" href="#gate-1-phase-1" title="Permanent link">&para;</a></h3>
+<p><strong>Pass condition</strong>: all Tier A hard checks pass + <code>.da/migration-state.json</code> committed.</p>
+<hr />
+<h2 id="4-phase-1-pre-flight-dual-write-infrastructure">4. Phase 1 — Pre-flight &amp; Dual-Write Infrastructure<a class="headerlink" href="#4-phase-1-pre-flight-dual-write-infrastructure" title="Permanent link">&para;</a></h2>
+<h3 id="30-sec-tldr_1">30-sec TL;DR<a class="headerlink" href="#30-sec-tldr_1" title="Permanent link">&para;</a></h3>
+<ul>
+<li>VM cluster comes online (vmagent / vmselect / vmstorage, or vmsingle)</li>
+<li>Customer's old Prom + new VM <strong>simultaneously scrape</strong> the same targets (dual-write)</li>
+<li>The exporter comes up in our cluster, emitting the <code>user_threshold</code> metric</li>
+</ul>
+<h3 id="architect-narrative_1">Architect Narrative<a class="headerlink" href="#architect-narrative_1" title="Permanent link">&para;</a></h3>
+<h4 id="choosing-vm-topology">Choosing VM topology<a class="headerlink" href="#choosing-vm-topology" title="Permanent link">&para;</a></h4>
+<p><strong>Start with vmsingle; promote to vmcluster only when a real threshold is hit</strong> — do <em>not</em> roll out vmcluster in Phase 1.</p>
+<table>
+<thead>
+<tr>
+<th>Topology</th>
+<th>Suitable scale</th>
+<th>HA</th>
+<th>Complexity</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>vmsingle</strong> (single binary)</td>
+<td>&lt; 1M active series</td>
+<td>❌ Single point</td>
+<td>Low (one binary)</td>
+</tr>
+<tr>
+<td><strong>vmcluster</strong> (vmstorage + vmselect + vminsert)</td>
+<td>1M+ active series or multi-tenant requirements</td>
+<td>✅ Replicas + horizontal scale</td>
+<td>High (3 components + replication-factor tuning)</td>
+</tr>
+</tbody>
+</table>
+<p>Practical experience: customers who stand up vmcluster in Phase 1 are 3–5× more likely to get stuck in Phase 1 than those on vmsingle — not because of VM bugs, but because the customer's ops team is unfamiliar with vmcluster, and deployment + debug + tuning together is too much cognitive load. <strong>Reserve the vmcluster upgrade as a post-Phase-4 capacity planning topic.</strong></p>
+<p>vmsingle disk budget rule of thumb:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>bytes-per-datapoint × datapoints-per-day × series count × retention days × 1.5 (overhead buffer)
+</code></pre></div>
+<p>Typical factor values:</p>
+<ul>
+<li><strong>bytes-per-datapoint</strong>: VM's extreme compression yields ~<strong>0.4–1 byte</strong> (depending on churn rate / value entropy; official examples report &lt; 1 byte)</li>
+<li><strong>datapoints-per-day</strong>: <code>86400 / scrape_interval_seconds</code> (15s scrape → 5760; 30s → 2880; 60s → 1440)</li>
+<li><strong>series count</strong>: active series (not sample count)</li>
+<li><strong>retention days</strong>: retention period</li>
+<li><strong>1.5</strong>: overhead buffer (index / metadata / WAL / compaction temp)</li>
+</ul>
+<p>For real estimates, <strong>use the <a href="https://docs.victoriametrics.com/Single-server-VictoriaMetrics.html#capacity-planning">VM official Capacity Calculator</a> as the source of truth</strong> — it incorporates churn / dedup / replication factor more accurately than this rule-of-thumb formula. The formula here is only for sanity-check and initial procurement order-of-magnitude reasoning.</p>
+<p><strong>Counter-example</strong>: an early v0.1 outline wrote "bytes-per-series-per-day ~8–15 bytes", which was wrong — it confused bytes/datapoint with bytes/series/day. For 1M series × 15s scrape × 30 days the two algorithms diverge as follows:</p>
+<ul>
+<li><strong>Wrong</strong>: <code>8 bytes/series/day × 1M × 30 × 1.5 ≈ 360 MB</code> ← computes disk requirement &lt; 1 GB, obviously off</li>
+<li><strong>Right</strong>: <code>1 byte/dp × 5760 dp/day × 1M × 30 × 1.5 ≈ 260 GB</code> (5760 = 86400 / 15s scrape)</li>
+</ul>
+<p>The two differ by ~700×. Phase 1 disk-fill incidents mostly stem from this class of error — mistaking bytes/series/day as the formula unit while the actual value is at bytes/datapoint magnitude.</p>
+<h4 id="dual-write-strategy">Dual-write strategy<a class="headerlink" href="#dual-write-strategy" title="Permanent link">&para;</a></h4>
+<p>The term "dual-write" is used loosely here — more precisely it means "<strong>both systems receive the same metric</strong>", <em>not</em> "perform <code>remote_write</code> to two storage backends". Why does this framing matter? Because Prometheus <strong>does not accept <code>remote_write</code> by default</strong> (it requires restart with <code>--web.enable-remote-write-receiver</code>), and forcing Prom from pull-mode into push-receive breaks the <code>up</code> metric and staleness tracking — customers relying on <code>up == 0</code> alerts would see them silently fail. So <strong>leave the old Prom alone in its pull mode</strong>; new traffic is handled separately.</p>
+<p>Two valid paths:</p>
+<p><strong>Option 1 — Side-by-Side Dual Scrape</strong> (recommended, most customers take this path)</p>
+<p>The old Prom is <strong>completely untouched</strong> (its scrape config and all alerting rules remain). In parallel, <strong>deploy a new vmagent</strong> that scrapes the exact same targets as the old Prom and <code>remote_write</code>s to VM.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># New vmagent (Phase 1 new deployment, runs in parallel with the old Prom)</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="nt">scrape_configs</span><span class="p">:</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span><span class="c1"># Copy the old Prom&#39;s scrape_configs verbatim (same job/relabel/static_configs)</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">job_name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">...</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="nt">remoteWrite</span><span class="p">:</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">url</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;http://vminsert.vm.svc:8480/insert/0/prometheus&quot;</span>
+</code></pre></div>
+<p>Key points:</p>
+<ul>
+<li>The old Prom keeps its pull model — <code>up</code> / staleness tracking are fully preserved; the customer's existing <code>up == 0</code> alerts continue working</li>
+<li>The new vmagent is an <strong>independent scraper</strong> — it pulls one copy, the old Prom pulls another, target endpoints see 2× scrape load (this is the real cost of dual-write)</li>
+<li>The vmagent side can do relabel / drop on metrics it doesn't care about, to control cardinality</li>
+<li>Risk boundary: <strong>if the vmagent scrape config diverges from the old Prom's</strong>, the Gate 1 invariant ("VM and Prom have the same metric count, ±5%") will catch it</li>
+</ul>
+<p><strong>Option 2 — Prom adds <code>remote_write</code> to VM</strong> (for customers who don't want a new component)</p>
+<p>The old Prom keeps its pull model and adds a <code>remote_write</code> block fanning samples out to VM. <strong>Prom → VM is legitimate</strong> (VM accepts remote_write; Prom also supports being a remote_write client).</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="c1"># Add to the old prometheus.yml</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="nt">remote_write</span><span class="p">:</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">url</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;http://vminsert.vm.svc:8480/insert/0/prometheus&quot;</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">    </span><span class="c1"># 🚨 queue_config is mandatory — without it, production will OOM or take down vminsert</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">    </span><span class="nt">queue_config</span><span class="p">:</span>
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w">      </span><span class="nt">max_samples_per_send</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10000</span><span class="w">   </span><span class="c1"># cap on single payload (avoid huge HTTP bodies)</span>
+<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="w">      </span><span class="nt">max_shards</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">30</span><span class="w">                </span><span class="c1"># parallel-shard cap (Prom default 200 is too high; memory will blow up)</span>
+<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="w">      </span><span class="nt">capacity</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">25000</span><span class="w">               </span><span class="c1"># per-shard buffer (max_shards × capacity ≈ in-flight sample cap)</span>
+</code></pre></div>
+<p><strong>Why <code>queue_config</code> cannot be omitted</strong> — this YAML looks innocent; omitting <code>queue_config</code> is fine on small Prom, but <strong>on production-scale Prom (millions of series) the default behaviour after reload is catastrophic</strong>:</p>
+<ol>
+<li>Reload triggers WAL replay / catch-up; Prom pushes data to VM as aggressively as possible</li>
+<li>Default <code>max_shards: 200</code> opens 200 concurrent connections; each shard has its own buffer → memory <strong>multiplies</strong> several-fold → Prom OOMKilled</li>
+<li>Sudden write traffic hits vminsert → HTTP 503 / <code>connection refused</code> (even when vminsert's steady-state capacity is fine)</li>
+<li>The customer thinks "I only added three lines" but has actually introduced a major performance regression</li>
+</ol>
+<p><strong>Trade-off behind the baseline numbers</strong> (memory ≈ <code>max_shards × capacity × ~bytes/sample</code>):</p>
+<ul>
+<li>The recommended baseline <code>30 × 25000 = 750k samples in flight</code> is ~37% of Prom's default <code>200 × 10000 = 2M</code>, <strong>a conservative safe starting point</strong></li>
+<li>Customers with high series count and high-latency WAN can raise <code>max_shards</code>; those with low series / Prom OOM risk should lower it</li>
+<li>The VictoriaMetrics official capacity calculator also gives a corresponding <code>max_shards</code> recommendation</li>
+</ul>
+<p>Note: <strong>this path runs in the opposite direction to Option 1</strong> — Option 2 has Prom push to VM; Option 1 has vmagent pull independently and push to VM. <strong>No option pushes data to the old Prom.</strong></p>
+<table>
+<thead>
+<tr>
+<th>Comparison</th>
+<th>Option 1 (Dual Scrape)</th>
+<th>Option 2 (Prom remote_write)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Old Prom config changes</td>
+<td>0 (untouched)</td>
+<td>Add <code>remote_write</code> block + reload</td>
+</tr>
+<tr>
+<td>New components added</td>
+<td>1 vmagent</td>
+<td>0</td>
+</tr>
+<tr>
+<td>Scrape load on targets</td>
+<td>2×</td>
+<td>1× (shares old Prom's scrape)</td>
+</tr>
+<tr>
+<td>Cardinality control point</td>
+<td>vmagent side, via relabel</td>
+<td>Prom side + VM side</td>
+</tr>
+<tr>
+<td>Failure impact</td>
+<td>vmagent down → old Prom unaffected</td>
+<td>Prom down → both sides fail</td>
+</tr>
+<tr>
+<td>Customer Prom version requirement</td>
+<td>Any</td>
+<td>Prom v2.25+ (remote_write 1.0)</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Dual-write means 2× scrape load</strong> (Option 1) or <strong>Prom→VM reverse traffic</strong> (Option 2). Before Phase 1 starts, verify the target endpoints can handle it — some client metric endpoints (e.g. redis exporter) are sensitive to high-frequency scrape.</p>
+<h4 id="why-the-exporter-comes-up-in-phase-1-but-doesnt-connect-to-am">Why the exporter comes up in Phase 1 but doesn't connect to AM<a class="headerlink" href="#why-the-exporter-comes-up-in-phase-1-but-doesnt-connect-to-am" title="Permanent link">&para;</a></h4>
+<p><code>threshold-exporter</code> is deployed in Phase 1 but <strong>deliberately not connected to AM</strong>:</p>
+<ul>
+<li><strong>Motivation</strong>: only Phase 2 (Shadow) has the <code>user_threshold</code> metric to compare against; shipping it before that creates a chicken-and-egg problem</li>
+<li><strong>Side effect</strong>: during Phase 1, the exporter's metrics are purely collected; the Prom side will show <code>user_threshold{...}</code> but with no alert path. Customer ops may be confused — tell them up-front "during this period the metric is in silent state; AM connection lands in Phase 2"</li>
+</ul>
+<h4 id="cardinality-budget-watch">Cardinality budget watch<a class="headerlink" href="#cardinality-budget-watch" title="Permanent link">&para;</a></h4>
+<p>Cardinality temporarily doubles during dual-write. Phase 1 Gate 1 invariant includes "VM and Prom have the same metric count, ±5%" to confirm dual-write health — but <strong>this only checks consistency between the two sides</strong>, not absolute capacity.</p>
+<p><strong>Capacity-observation focus points</strong> (run <strong>at least</strong> once before Phase 1 ends):</p>
+<ul>
+<li>VM <code>vm_data_size_bytes</code> growth rate vs disk capacity</li>
+<li>Whether Prom <code>prometheus_tsdb_head_series</code> cardinality is exploding</li>
+<li>vmagent <code>vmagent_remotewrite_pending_data_bytes</code> should not be &gt; 0 for long (&gt;0 = falling behind on writes, possible OOM precursor)</li>
+</ul>
+<h3 id="cutover-checklist_1">Cutover Checklist<a class="headerlink" href="#cutover-checklist_1" title="Permanent link">&para;</a></h3>
+<details>
+<summary>📋 Phase 1 Checklist</summary>
+
+**Pre-flight**
+- [ ] Confirm VM topology choice (vmsingle default / vmcluster only for multi-tenant scale + HA needs)
+- [ ] Calculate disk budget: `bytes-per-datapoint × datapoints-per-day × series × retention × 1.5` (VM is ~0.4–1 byte/datapoint; use the [VM Capacity Calculator](https://docs.victoriametrics.com/Single-server-VictoriaMetrics.html#capacity-planning) as source of truth)
+- [ ] Estimate whether cardinality increase will exceed VM budget (Option 1 = new vmagent scrape; Option 2 = Prom→VM remote_write)
+
+**Deployment**
+- [ ] Deploy VM to staging cluster
+- [ ] Configure dual-write: **Option 1** parallel new vmagent scraping the same targets + remote_write to VM (**old Prom untouched**); **Option 2** old Prom adds `remote_write` to VM
+- [ ] **Option 2 must-verify**: the `remote_write` block contains `queue_config` (`max_shards` / `capacity` / `max_samples_per_send`) — omitting it = large-Prom reload OOM or takes down vminsert
+- [ ] Verify that **no** component is trying to `remote_write` to the old Prom (unless the old Prom has `--web.enable-remote-write-receiver` explicitly enabled — but that design breaks Prom's native `up` / staleness tracking; not recommended)
+- [ ] Deploy threshold-exporter to staging (**not connected to AM**)
+- [ ] Verify `user_threshold` metric is queryable in VM (`vmselect ... /api/v1/query`)
+
+**Gate 1 verification**
+- [ ] VM and Prom metric count within ±5% (over a week)
+- [ ] vmagent `pending_data_bytes` sustained ≈ 0
+- [ ] VM disk growth matches estimate
+- [ ] dual-write ≥ 7 days with no break
+</details>
+
+<h3 id="gate-2-phase-2">Gate 2 → Phase 2<a class="headerlink" href="#gate-2-phase-2" title="Permanent link">&para;</a></h3>
+<p><strong>Pass condition</strong>: dual-write ≥ 7 days with no drop + Tier B live snapshot comparing staging vs prod-Prom shows no cardinality drift.</p>
+<hr />
+<h2 id="5-phase-2-shadow-deployment">5. Phase 2 — Shadow Deployment<a class="headerlink" href="#5-phase-2-shadow-deployment" title="Permanent link">&para;</a></h2>
+<h3 id="30-sec-tldr_2">30-sec TL;DR<a class="headerlink" href="#30-sec-tldr_2" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Rules committed to git (single SOT or base + overlay, per <a href="#8-plan-a-vs-plan-b-git-layout-choice">Plan A vs B</a>)</li>
+<li>AM routing carries <code>migration_status: shadow</code> label everywhere; alerts go to <code>/dev/null</code> or a debug channel</li>
+<li>Old Prom + AM remain online and remain the production source-of-truth</li>
+</ul>
+<h3 id="architect-narrative_2">Architect Narrative<a class="headerlink" href="#architect-narrative_2" title="Permanent link">&para;</a></h3>
+<h4 id="why-shadow-doesnt-connect-directly-to-production-am">Why Shadow doesn't connect directly to production AM<a class="headerlink" href="#why-shadow-doesnt-connect-directly-to-production-am" title="Permanent link">&para;</a></h4>
+<p>The core of Phase 2 is <strong>manufacturing a "visible but inaudible" parallel world</strong> — new rules evaluate fully, metrics write through fully, alert payloads form fully, <strong>but they don't reach the production receiver</strong>. Three reasons:</p>
+<ol>
+<li><strong>Customer confidence is shaky</strong>: connecting directly to production means the first false positive triggers a rollback demand. Shadow gives the customer a two-week window of "look at the alert data" to build confidence</li>
+<li><strong>Customer ops isn't trained yet</strong>: the new platform's alert label schema, severity tiers, and escalation routes differ from the old system; on-call engineers need time to switch mental models</li>
+<li><strong>Catch our own bugs</strong>: a golden rule we ship may have design flaws; the Shadow phase is effectively free staging — if it breaks, customer ops doesn't get paged</li>
+</ol>
+<p><strong>Shadow is not "a test environment"</strong> — it's a dry-run on production traffic. Every condition is real; only the routing is diverted. Closer to reality than staging, safer than going live.</p>
+<h4 id="how-plan-a-vs-plan-b-lands-in-phase-2">How Plan A vs Plan B lands in Phase 2<a class="headerlink" href="#how-plan-a-vs-plan-b-lands-in-phase-2" title="Permanent link">&para;</a></h4>
+<p>The two Git layouts behave differently during Phase 2:</p>
+<p><strong>Plan A (single SOT + version skew)</strong>:
+- New rules committed to <code>conf.d/</code>; all clusters share the same source
+- AM <code>migration_status: shadow</code> matcher takes effect simultaneously across all clusters
+- The staging cluster runs the v2.8.0 exporter and Shadow activates; prod clusters still run v2.7.0 with forward-compat
+- <strong>Advantage</strong>: a single PR review, minimal cross-cluster change
+- <strong>Constraint</strong>: all clusters enter Phase 2 together (the X axis of the X-Y matrix can only do staging-first, not per-cluster feature toggle)</p>
+<p><strong>Plan B (base + overlay)</strong>:
+- New rules go into <code>overlays/staging/conf.d/</code>; other clusters' overlays don't include them
+- It is legitimate at the same point in time for staging to be in Phase 2 and prod still in Phase 1 (dual-write only)
+- <strong>Advantage</strong>: full freedom for per-cluster feature toggle
+- <strong>Constraint</strong>: the overlay mechanism is a v2.9 backlog item; not shipped today</p>
+<p>→ Most customers take Plan A with staging-first ordering, achieving ~80% of "per-cluster phase" flexibility without needing the overlay mechanism.</p>
+<h4 id="why-gate-3-invariants-are-designed-this-way">Why Gate 3 invariants are designed this way<a class="headerlink" href="#why-gate-3-invariants-are-designed-this-way" title="Permanent link">&para;</a></h4>
+<p>Gate 3 pass conditions:</p>
+<ol>
+<li><strong><em>Subset overlap = 100%</em></strong> (<strong>or</strong> <em>Intentional noise reduction</em> — see <a href="../staged-adoption-guide/">Staged Adoption Lifecycle §4</a>)</li>
+<li><strong>Extra alerts explicitly signed off</strong></li>
+<li>≥ 2 weeks in shadow phase</li>
+</ol>
+<p>"Alert volume matches" is <strong>not</strong> a Gate 3 condition — this is the key differentiator of this playbook:</p>
+<ul>
+<li>Old rule fires 50 times a week; new rule fires 5 — overlap &lt; 100%, but this is actually intended noise reduction (smarter conditions, time windows, threshold tuning)</li>
+<li>Old rule misses some catastrophic case; new rule catches it — looks like "noise" but is actually a regression fix</li>
+</ul>
+<p>"Alert volume" is an <strong>outcome</strong>, not a <strong>gate</strong>. The invariants look at "<strong>every condition the old system fired on, the new system must also fire on</strong>" + "<strong>any extra alerts are design intent</strong>". See <a href="../staged-adoption-guide/">Staged Adoption Lifecycle §4</a> for the (2a) pure overlap vs (2b) intentional reduction dual-path logic — the same standard is shared between Phase 2 and staged adoption.</p>
+<h4 id="why-2-weeks-for-the-shadow-period">Why 2 weeks for the shadow period<a class="headerlink" href="#why-2-weeks-for-the-shadow-period" title="Permanent link">&para;</a></h4>
+<p>The 2-week minimum isn't arbitrary. It corresponds to <strong>at least one full work-week cycle + one non-work weekend</strong> + a 1-week buffer for delayed-trigger alerts. Shorter than 2 weeks fails to catch "the batch-job alert that only fires on weekends" or "the Monday morning traffic-spike alert" — weekly-cycle anomalies.</p>
+<p>For monthly-batch / quarter-end customers (financial / e-commerce), extend to 4 weeks or 1 month.</p>
+<h3 id="cutover-checklist_2">Cutover Checklist<a class="headerlink" href="#cutover-checklist_2" title="Permanent link">&para;</a></h3>
+<details>
+<summary>📋 Phase 2 Checklist</summary>
+
+**Rules into git**
+- [ ] Commit rules into git (move from the old flat layout → `conf.d/<domain>/<region>/<tenant>.yaml` hierarchy; use `git mv` to preserve history)
+  <div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="c1"># Example: move old rules/&lt;tenant&gt;.yaml into the hierarchy</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="c1"># For each tenant, decide the target path from its _metadata.domain / region:</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="nv">TENANT_FILE</span><span class="o">=</span><span class="s2">&quot;rules/redis-prod-1.yaml&quot;</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="nv">DOMAIN</span><span class="o">=</span><span class="k">$(</span>yq<span class="w"> </span><span class="s1">&#39;._metadata.domain&#39;</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$TENANT_FILE</span><span class="s2">&quot;</span><span class="k">)</span><span class="w">      </span><span class="c1"># e.g., &quot;redis&quot;</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="nv">REGION</span><span class="o">=</span><span class="k">$(</span>yq<span class="w"> </span><span class="s1">&#39;._metadata.region&#39;</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$TENANT_FILE</span><span class="s2">&quot;</span><span class="k">)</span><span class="w">      </span><span class="c1"># e.g., &quot;us-east&quot;</span>
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>mkdir<span class="w"> </span>-p<span class="w"> </span><span class="s2">&quot;conf.d/</span><span class="si">${</span><span class="nv">DOMAIN</span><span class="si">}</span><span class="s2">/</span><span class="si">${</span><span class="nv">REGION</span><span class="si">}</span><span class="s2">/&quot;</span>
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a>git<span class="w"> </span>mv<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$TENANT_FILE</span><span class="s2">&quot;</span><span class="w"> </span><span class="s2">&quot;conf.d/</span><span class="si">${</span><span class="nv">DOMAIN</span><span class="si">}</span><span class="s2">/</span><span class="si">${</span><span class="nv">REGION</span><span class="si">}</span><span class="s2">/</span><span class="k">$(</span>basename<span class="w"> </span><span class="nv">$TENANT_FILE</span><span class="k">)</span><span class="s2">&quot;</span>
+<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="c1"># Run da-tools validate-config to confirm conf.d structure is correct</span>
+</code></pre></div>
+- [ ] Every rule's emitted alert carries the `migration_status: shadow` label
+- [ ] CI runs schema validation + `da-tools alert-quality` pre-flight against `conf.d`
+
+**AM configuration**
+- [ ] Add shadow matcher to AM routing (**as the first route — otherwise other matchers intercept first**):
+  <div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="nt">route</span><span class="p">:</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span><span class="nt">routes</span><span class="p">:</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">matchers</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">migration_status=&quot;shadow&quot;</span><span class="p p-Indicator">]</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">      </span><span class="nt">receiver</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;null&quot;</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">      </span><span class="nt">continue</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span><span class="w">   </span><span class="c1"># no fall-through</span>
+</code></pre></div>
+- [ ] Confirm the `null` receiver exists (no webhook, no email — a real `/dev/null`)
+- [ ] After AM `/-/reload`, verify: manually inject a test alert with shadow label; **no** pages should be received
+
+**Shadow-period monitoring**
+- [ ] `da-tools shadow-verify preflight` passes (pre-shadow sanity check)
+- [ ] Shadow period ≥ 2 weeks (4 weeks recommended for monthly-batch customers)
+- [ ] Daily tracking of shadow alert volume + *Subset overlap* progress
+
+**Gate 3 verification**
+- [ ] *Subset overlap = 100%* (or *Intentional noise reduction* with sign-off)
+- [ ] List of extra alerts → domain owner confirms each is design intent
+- [ ] Invariants hold every week (not on average — every week)
+</details>
+
+<h3 id="gate-3-phase-3">Gate 3 → Phase 3<a class="headerlink" href="#gate-3-phase-3" title="Permanent link">&para;</a></h3>
+<p><strong>Pass conditions</strong>:
+1. <strong><em>Subset overlap = 100%</em></strong>: every condition the old system fires on, the new system also fires on (zero catastrophic false negatives)
+2. <strong>Extra alerts explicitly signed off</strong>: customer ops nods at each additional alert (confirming it's not a bug or noise)
+3. CI / CD sticky reports on changes to <code>_metric_federation_policy.yaml</code> etc. show no unexpected delta</p>
+<hr />
+<h2 id="6-phase-3-incremental-cutover">6. Phase 3 — Incremental Cutover<a class="headerlink" href="#6-phase-3-incremental-cutover" title="Permanent link">&para;</a></h2>
+<h3 id="30-sec-tldr_3">30-sec TL;DR<a class="headerlink" href="#30-sec-tldr_3" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Canary tenants (5–10%) cut over first: in the <strong>rule config files</strong> remove that tenant's <code>migration_status: shadow</code> label → <strong>rule evaluator (Prom / vmalert) reload</strong> → that tenant's alert payloads no longer carry the shadow label → AM's existing route table naturally sends them to the production receiver</li>
+<li>24h–1 ops cycle observation → roll out to full</li>
+<li>Rollback path: <strong>git revert</strong> the config commit → rule evaluator reload → shadow label restored → alerts are once again routed to <code>/dev/null</code> by AM's existing shadow matcher (&lt; 5 minutes)</li>
+</ul>
+<h3 id="architect-narrative_3">Architect Narrative<a class="headerlink" href="#architect-narrative_3" title="Permanent link">&para;</a></h3>
+<p><strong>Key mechanism clarification</strong> (avoid the common misunderstanding):</p>
+<blockquote>
+<p>Phase 3 changes the <strong>rule files</strong> (rule-evaluator side), not the AM config. AM's existing route table (containing the <code>migration_status="shadow"</code> matcher) <strong>stays unchanged</strong>.</p>
+<ul>
+<li><strong>Where the change happens</strong>: rule configuration (Prom <code>rules.yml</code> / vmalert rule files) — strip the <code>migration_status: shadow</code> label off that tenant's rules</li>
+<li><strong>What gets reloaded</strong>: the rule evaluator (Prometheus / vmalert), <strong>not</strong> Alertmanager</li>
+<li><strong>AM's behaviour</strong>: AM receives alert payloads without the shadow label → the existing route's shadow matcher doesn't match → falls through to the production receiver. AM config is not touched at all</li>
+</ul>
+<p>This division is exactly why canary is possible: if you modified AM config to remove the shadow matcher, it would affect all tenants at once (no canary possible). Modifying per-tenant rule labels is what allows surgical cuts of 5–10% subsets.</p>
+</blockquote>
+<h4 id="canary-tenant-selection-criteria">Canary tenant selection criteria<a class="headerlink" href="#canary-tenant-selection-criteria" title="Permanent link">&para;</a></h4>
+<p><strong>Don't just take a random 5%</strong> — picking the wrong canary tenant concentrates first-wave risk on production-critical customers:</p>
+<p><strong>Prefer</strong> (high tolerance):
+- Internal / staging tenants — the customer's own dev / SRE monitoring
+- Early partner customers — known expectations from onboarding
+- Median traffic / cardinality tenants — won't trigger edge cases due to outlier behaviour</p>
+<p><strong>Avoid</strong> (concentrated risk):
+- Customer's highest SLA-tier production tenants
+- Tenants who were just paged / just complained (already sensitive to monitoring)
+- Cross-region mixed-traffic tenants (multi-region label variables expand)
+- Compliance-critical (financial / healthcare) — alert mishaps can trigger audits</p>
+<p>Practical experience: customers usually proactively designate an <strong>"early-experience cohort"</strong> — 1–3 tenants owned by their own ops team — and can name them directly in the PR. When they don't, we recommend listing a candidate set for customer sign-off first.</p>
+<h4 id="24h-vs-1-ops-cycle-observation-window-which-to-pick">24h vs 1 ops cycle observation window — which to pick<a class="headerlink" href="#24h-vs-1-ops-cycle-observation-window-which-to-pick" title="Permanent link">&para;</a></h4>
+<table>
+<thead>
+<tr>
+<th>Observation window</th>
+<th>Catches</th>
+<th>Misses</th>
+<th>When to use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>24h</strong></td>
+<td>Smoke regressions, obvious routing bugs, dead receivers</td>
+<td>Weekly batch jobs, weekly cron alerts, monthly closing</td>
+<td>Minimum; only when there's strong timeline pressure and low risk</td>
+</tr>
+<tr>
+<td><strong>1 ops cycle (1 week)</strong></td>
+<td>Above + weekly weekly</td>
+<td>Monthly batch, quarter-end</td>
+<td><strong>Default</strong> (recommended)</td>
+</tr>
+<tr>
+<td><strong>2–4 weeks</strong></td>
+<td>Above + monthly</td>
+<td>Yearly anomalies</td>
+<td>High-stakes domains (compliance / financial)</td>
+</tr>
+</tbody>
+</table>
+<p>Why the ops cycle's hidden rhythm matters: many production systems have a weekly rhythm engineers don't advertise — "the Sunday 3 AM cron job", "the last batch of PRs before Friday-evening deploy freeze", "Monday morning traffic spike". A canary that doesn't cross a full week cycle leaves those corners un-exercised.</p>
+<h4 id="disablement-drift-a-concept-borrowed-from-staged-adoption">Disablement drift — a concept borrowed from staged adoption<a class="headerlink" href="#disablement-drift-a-concept-borrowed-from-staged-adoption" title="Permanent link">&para;</a></h4>
+<p>If the customer silenced certain v1 rules during Phase 2 (to suppress shadow noise), <strong>before Phase 3 cutover you must verify whether those silencers will mis-match v2 rules due to alertname / label changes</strong> — otherwise after cutover the v1 silencers fail and v2 rules are active = a double-firing alert storm.</p>
+<p>See <a href="../staged-adoption-guide/">Staged Adoption Lifecycle §7.3 disablement drift</a> — the same mechanism applies to Rule Pack upgrades. Phase 3 cutover is the first time it's applied; thereafter every Rule Pack upgrade repeats this check.</p>
+<h4 id="grafana-datasource-switch-the-third-migration-track">Grafana Datasource switch — the third migration track<a class="headerlink" href="#grafana-datasource-switch-the-third-migration-track" title="Permanent link">&para;</a></h4>
+<p>So far this playbook has covered two switching tracks: the metric path (Phase 1 dual-write) and the alert path (Phase 3 label flip). <strong>It's easy to forget the third: the Grafana dashboard datasource that customer ops looks at every day</strong>. If you don't proactively handle it, you fall into one of two traps:</p>
+<ul>
+<li><strong>Trap A</strong>: the old Prom stops alerting in Phase 4 Step 1 but keeps scraping and serving queries → wasted resources, customer ops habitually still views the old dashboard, and the new platform's value goes unseen</li>
+<li><strong>Trap B</strong>: the old Prom is shut down entirely in Phase 4 Step 4 and the customer suddenly notices "capacity dashboard is all red" → emergency rollback or customer-emotion incident (this is precisely what §13 walkthrough ContosoMfg ran into)</li>
+</ul>
+<p><strong>The right time to switch datasources</strong>: <strong>synchronously during Phase 3 full rollout</strong> — by then alerts are cut over, metric dual-write is stable, and the dashboard datasource should also point at VM.</p>
+<p>Switching steps:</p>
+<ol>
+<li><strong>Add the datasource</strong>: in Grafana add a <code>victoriametrics</code> datasource (pointing at vmselect); <strong>do not set it as default yet</strong></li>
+<li><strong>Migrate dashboards' datasource UIDs one by one</strong>: Grafana provides bulk dashboard datasource migration (via API or grafana-toolkit), but <strong>some dashboard JSON has hardcoded UIDs</strong> — you must grep the dashboard's raw JSON, not just the panel-level datasource setting</li>
+<li><strong>Set the new datasource as default</strong>: <code>isDefault: true</code>; rename the old Prom datasource to <code>legacy-prom</code> and mark <code>description: "Read-only, decommissioning Phase 4. Do not create new dashboards against this."</code></li>
+<li><strong>After Phase 4 Step 1</strong>: keep <code>legacy-prom</code> as a query-only reference until Step 4</li>
+<li><strong>After Phase 4 Step 4</strong>: remove the <code>legacy-prom</code> datasource (dashboards still referencing that UID will fail-loud instead of silent No-Data)</li>
+</ol>
+<p><strong>Why Phase 3 full rollout, not Phase 4 Step 1</strong>: switching the dashboard datasource is <strong>a key onboarding moment for customer ops</strong> — seeing "ah, the new platform's dashboard is faster / has more metric dimensions / looks different" is when confidence is built. Wait until Phase 4 Step 1 to switch and customer ops spends the Phase 3 full-rollout period looking at the old dashboard, feeling no new-platform value; switching in Phase 4 adds the grace-period uncertainty on top, turning it into a negative "why am I switching?" question.</p>
+<p><strong>Why hardcoded UIDs are commonly missed</strong>: panel-level datasource references in Grafana dashboard JSON are usually reference names (<code>{"uid": "prometheus", "type": "prometheus"}</code>), but <strong>some query references</strong> (<code>expr: "..."</code>) may also hardcode specific UID strings (template variables, annotation queries, derived fields). Bulk migration tools miss these — you must additionally grep the full dashboard JSON.</p>
+<h4 id="division-of-labour-with-staged-adoption-lifecycle">Division of labour with Staged Adoption Lifecycle<a class="headerlink" href="#division-of-labour-with-staged-adoption-lifecycle" title="Permanent link">&para;</a></h4>
+<p>Phase 3 <strong>only performs the cutover label flip</strong> — stripping the shadow label, not handling <code>custom_</code> → golden promotion.</p>
+<p>The <code>custom_*</code> → golden promotion flow is a <strong>lifecycle pattern</strong>: it recurs every six months when a new tenant onboards, every time a Rule Pack v2 ships, and is handled separately in <a href="../staged-adoption-guide/">Staged Adoption Lifecycle</a>. After Phase 3's cutover label flip completes, the customer <strong>enters Staged Adoption Lifecycle's "Initial migration" scenario</strong> (§7.1) and begins the first promotion round. Phase 4 decommissioning must complete before the multi-system migration is over — but staged adoption is an endless lifecycle.</p>
+<h3 id="cutover-checklist_3">Cutover Checklist<a class="headerlink" href="#cutover-checklist_3" title="Permanent link">&para;</a></h3>
+<details>
+<summary>📋 Phase 3 Checklist</summary>
+
+**Canary stage**
+- [ ] Pick canary tenants (typically 5–10%)
+- [ ] git commit: in the **rule config files** remove the `migration_status: shadow` label from canary tenants' rules (**not** AM config)
+- [ ] **Rule evaluator (Prom / vmalert) reload** (automatic via GitOps reconcile or SIGHUP / `/-/reload`) — **not** AM reload
+- [ ] Verify: the next alert payload that tenant triggers no longer carries `migration_status: shadow`
+- [ ] 24h observation: alert firing rate, receiver response, human-reported incidents
+- [ ] Gate 4 passes → roll out to full
+
+**Full-rollout stage**
+- [ ] git commit: remove shadow labels from the remaining tenants (rule side)
+- [ ] Rule evaluator reload
+- [ ] **Grafana datasource switch** (run synchronously here; don't defer to Phase 4):
+  - [ ] In Grafana, add a `victoriametrics` datasource without setting it as default
+  - [ ] Bulk-migrate dashboard panel-level datasource UIDs
+  - [ ] **grep the full dashboard JSON** for hardcoded UIDs (template variables / annotations / derived fields frequently miss)
+  - [ ] Set `victoriametrics` as `isDefault: true`; rename the old Prom to `legacy-prom` and add `Read-only, decommissioning` description
+- [ ] Observe ≥ 1 ops cycle (1 week recommended)
+- [ ] Gate 5 passes → Phase 4
+
+**Rollback**
+- [ ] git revert the corresponding commit → rule evaluator reload → shadow labels restored to alert payloads → AM's existing shadow matcher takes effect again → alerts are routed to `/dev/null`
+- [ ] **Reversibility boundary**: see §11 (config fully reversible / monitoring state semi-reversible / data layer irreversible)
+
+> **Common mistake**: thinking you need to modify AM config to remove the shadow matcher. **Don't do this** — it would affect all tenants at once and prevents canary.
+</details>
+
+<h3 id="gate-4-canary-full-rollout">Gate 4 (canary) → full rollout<a class="headerlink" href="#gate-4-canary-full-rollout" title="Permanent link">&para;</a></h3>
+<p><strong>Pass condition</strong>: canary tenants pass 24h with no unexpected alert + customer ops sign-off.</p>
+<h3 id="gate-5-full-phase-4">Gate 5 (full) → Phase 4<a class="headerlink" href="#gate-5-full-phase-4" title="Permanent link">&para;</a></h3>
+<p><strong>Pass condition</strong>: full rollout passes ≥ 1 ops cycle with no incident.</p>
+<hr />
+<h2 id="7-phase-4-decommission">7. Phase 4 — Decommission<a class="headerlink" href="#7-phase-4-decommission" title="Permanent link">&para;</a></h2>
+<h3 id="30-sec-tldr_4">30-sec TL;DR<a class="headerlink" href="#30-sec-tldr_4" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Old Prom enters read-only (alerting evaluation stopped) → N-day grace period → full shutdown</li>
+<li>Tear down dual-write infrastructure (remove old <code>remote_write</code> from vmagent; archive old AM config)</li>
+<li>Roll out <code>_defaults.yaml</code> metric-split feature progressively, transitioning naturally into <a href="../staged-adoption-guide/">Staged Adoption Lifecycle</a></li>
+</ul>
+<h3 id="architect-narrative_4">Architect Narrative<a class="headerlink" href="#architect-narrative_4" title="Permanent link">&para;</a></h3>
+<h4 id="why-two-steps-read-only-off-not-direct-shutdown">Why two steps (read-only → off), not direct shutdown<a class="headerlink" href="#why-two-steps-read-only-off-not-direct-shutdown" title="Permanent link">&para;</a></h4>
+<p>The temptation to just shut the old Prom down is strong — Phase 3 is done, the new system is stable, why keep it? The answer is <strong>the demand to query historical data doesn't disappear at the moment of cutover</strong>:</p>
+<ul>
+<li><strong>Compliance / audit</strong>: financial / medical / SOX customers must retain N months (or even N years) of alert history; at the moment of cutover the auditors may still be working through the previous round</li>
+<li><strong>SRE retrospective / blameless post-mortem</strong>: in the 1–2 weeks after cutover, incidents often need comparison with "how would the old system have judged this?"; keeping old Prom online is a low-cost reference truth</li>
+<li><strong>Customer ops muscle-memory transition</strong>: five years of the same Grafana datasource, the same alert UI — cognitive switching takes time. The read-only period lets ops gradually build confidence with "both are present but trust only the new one"</li>
+<li><strong>Natural defense against CAB freeze periods</strong> (real-world bonus): enterprise customers often have quarter-end / fiscal-close / holiday change-freeze periods where CAB doesn't approve any production change. If you shut down immediately after cutover, any oversight during the freeze (hardcoded datasource UIDs, hard-linked old alert URLs, capacity dashboards not yet pointed at the new datasource) <strong>cannot be hot-fixed</strong>. A live read-only Prom = dashboards / queries automatically fall back, no PR needs to go through CAB. See the real-world case in <a href="#a-composite-customer-walkthrough-frankenstein-style">§13 ContosoMfg walkthrough Phase 4</a>.</li>
+</ul>
+<p><strong>Precise definition of "read-only"</strong>: remove <code>alerting.rules.yml</code> (stops evaluation and firing), keep <code>prometheus.yml</code> query path and storage. <code>/api/v1/query</code> remains usable, but Alertmanager no longer receives alert payloads from the old Prom. In implementation, after Prometheus reload, <code>prometheus_rule_evaluations_total</code> no longer increases but <code>/api/v1/query</code> continues serving historical data.</p>
+<h4 id="why-30-days-is-the-default-grace-period">Why 30 days is the default grace period<a class="headerlink" href="#why-30-days-is-the-default-grace-period" title="Permanent link">&para;</a></h4>
+<p>Not an arbitrary number — it corresponds to <strong>one full month-end settlement cycle + 1 week buffer</strong>. Most enterprises have month-start finance close / capacity review / SLA reporting workflows that may reference old Prom data. 30 days ensures at least one complete monthly cycle runs through the read-only period, and customer ops confirms "no month-end ritual still depends on the old Prom".</p>
+<p>Adjustment directions:</p>
+<table>
+<thead>
+<tr>
+<th>Customer context</th>
+<th>Recommended grace period</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>General SaaS / non-regulated</td>
+<td>30 days (default)</td>
+</tr>
+<tr>
+<td>Quarter-close heavy (manufacturing / retail)</td>
+<td>90 days (covers one quarter cycle)</td>
+</tr>
+<tr>
+<td>Compliance (financial / medical)</td>
+<td>Retention as required by regulation (could be 1–7 years), but you shouldn't keep Prom on at that point — export history to cold storage instead</td>
+</tr>
+<tr>
+<td>Pre-prod / staging</td>
+<td>7 days is enough</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Don't shrink below 7 days</strong>: the first week after cutover is the most likely to surface issues; the old Prom is free fallback reference.</p>
+<h4 id="decommission-order-evaluation-first-then-storage">Decommission order: evaluation first, then storage<a class="headerlink" href="#decommission-order-evaluation-first-then-storage" title="Permanent link">&para;</a></h4>
+<p>Correct order:</p>
+<ol>
+<li><strong>Step 1</strong>: remove the old Prom's <code>alerting.rules.yml</code> (stops alerting evaluation) — this change is GitOps-revertible</li>
+<li><strong>Step 2</strong>: wait out the grace period (30 days)</li>
+<li><strong>Step 3</strong>: tear down the dual-write path (remove old-Prom remote_write target from vmagent, or reverse the Prom remote_write to VM federation)</li>
+<li><strong>Step 4</strong>: shut down the old Prom (<strong>use <code>replicas: 0</code>, not <code>helm uninstall</code></strong> — see the nuke warning below)</li>
+<li><strong>Step 5</strong>: wait another 14 days to confirm no query complaints → consider deleting the PVC (<strong>irreversible</strong> boundary, proceed carefully)</li>
+</ol>
+<p><strong>Pitfall #1</strong>: moving Step 3 ahead of Step 1. Some customers want to "clean it all up in one go" by tearing down dual-write before stopping alerting, then during the grace period they want to compare new-vs-old alert behaviour but the old Prom no longer has fresh data — the reference is invalidated.</p>
+<h5 id="step-4-nuke-warning-never-use-helm-uninstall-to-shut-down-the-old-prom">☢️ Step 4 nuke warning: never use <code>helm uninstall</code> to shut down the old Prom<a class="headerlink" href="#step-4-nuke-warning-never-use-helm-uninstall-to-shut-down-the-old-prom" title="Permanent link">&para;</a></h5>
+<p>If the customer's Prometheus is deployed via <code>kube-prometheus-stack</code> or a similar Helm chart, <strong><code>helm uninstall</code> is a PVC nuke</strong>:</p>
+<ul>
+<li><code>helm uninstall</code> deletes all resources managed by the chart (<code>StatefulSet</code> / <code>Deployment</code> / <code>ConfigMap</code> / <code>Secret</code>)</li>
+<li>If the PVC's <code>StorageClass</code> has <code>reclaimPolicy: Delete</code> (<strong>the default for most cloud providers</strong>), deleting the PVC will <strong>also delete the PV and the underlying disk</strong></li>
+<li>Result: the Step 5 safety net of "wait 14 days then dual sign-off to delete PVC" <strong>becomes purely cosmetic</strong> — historical data vaporises <strong>within seconds</strong> of running <code>helm uninstall</code></li>
+<li>AM's old config / Prom config disappear at the same time (already warned about in Phase 4 catalog: <code>helm uninstall</code> nukes PVC)</li>
+</ul>
+<p><strong>The correct shutdown approach</strong>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="c1"># values.yaml (kube-prometheus-stack example)</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="nt">prometheus</span><span class="p">:</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span><span class="nt">prometheusSpec</span><span class="p">:</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">    </span><span class="nt">replicas</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">0</span><span class="w">   </span><span class="c1"># ← Set this instead of helm uninstall</span>
+</code></pre></div>
+<p>Or for raw StatefulSet/Deployment:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="c1"># Just scale, don&#39;t uninstall</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>kubectl<span class="w"> </span>scale<span class="w"> </span>statefulset<span class="w"> </span>prometheus-k8s<span class="w"> </span>--replicas<span class="o">=</span><span class="m">0</span><span class="w"> </span>-n<span class="w"> </span>monitoring
+</code></pre></div>
+<p><strong>Why <code>replicas: 0</code> is safe</strong>:</p>
+<ul>
+<li>The StatefulSet/Deployment still exists; the PVC remains bound (<code>reclaimPolicy: Retain</code> or <code>Delete</code> — neither is triggered)</li>
+<li>ConfigMap / Secret / NetworkPolicy are all retained → Step 5 dual sign-off has something to review</li>
+<li>For real rescue, <code>replicas: 1</code> brings the pod back in 30 seconds with data intact</li>
+<li>The Helm release still exists; if you later need <code>helm uninstall</code>, patch the PVC <code>reclaimPolicy: Retain</code> first, then uninstall — that's safe</li>
+</ul>
+<p><strong>Pitfall #2</strong>: a customer SRE in Phase 4 Step 5 wants to "clean it all up at once" with <code>helm uninstall prometheus-stack</code> — that <code>helm uninstall</code> should <strong>never be run within Phase 4</strong>. Even after Step 5's PVC dual sign-off is done, the correct flow is: (a) manually <code>kubectl delete pvc &lt;name&gt;</code>, observe for 1 week, (b) confirm nothing breaks, then <code>helm uninstall</code>. <strong>Split PVC deletion and Helm-release uninstall into two manual steps</strong> — avoid chart hooks or finalisers taking unexpected resources with them.</p>
+<h4 id="why-_defaultsyaml-metric-split-waits-until-after-phase-4">Why <code>_defaults.yaml</code> metric-split waits until after Phase 4<a class="headerlink" href="#why-_defaultsyaml-metric-split-waits-until-after-phase-4" title="Permanent link">&para;</a></h4>
+<p><code>_defaults.yaml</code> (the <a href="../../adr/018-profile-as-directory-default/">Profile-as-Directory-Default</a> mechanism) is the platform v2.8.0 metric-split feature — it lets tenants inherit directory-default rules automatically. <strong>Deliberately not enabled in Phase 2/3</strong>:</p>
+<ul>
+<li><strong>Phase 2 shadow</strong>: the customer is distinguishing "is this new-system noise or a <code>_defaults</code> design oversight?" — too many variables in flight</li>
+<li><strong>Phase 3 cutover</strong>: cutover is already a high-risk window; layering metric-split activation on top makes incident root-cause analysis hard</li>
+<li><strong>Only after Phase 4 decommissioning</strong> is the right time: the new system is stable, customer ops has a baseline mental model of new-platform behaviour, so any alert delta from enabling metric-split can be attributed to the new feature</li>
+</ul>
+<p>The activation method is <strong>not big bang</strong> — follow <a href="../staged-adoption-guide/">Staged Adoption Lifecycle</a> per-domain / per-region progressive rollout. Staged adoption becomes the <strong>continuous lifecycle pattern</strong> after multi-system migration ends, applied each time a Rule Pack upgrades or a new tenant onboards.</p>
+<h4 id="the-precise-boundary-between-migration-ends-and-lifecycle-begins">The precise boundary between "migration ends" and "lifecycle begins"<a class="headerlink" href="#the-precise-boundary-between-migration-ends-and-lifecycle-begins" title="Permanent link">&para;</a></h4>
+<p>Phase 4's Gate 5 passing means <strong>the multi-system migration's one-time event ends</strong> — the 5-Phase model is not run a second time. But this is not the end of monitoring evolution:</p>
+<ul>
+<li><strong>Migration ends</strong>: old Prom shut down, dual-write torn down, AM old config archived. This is a <strong>bounded event</strong> with a start and an end</li>
+<li><strong>Lifecycle begins</strong>: <code>custom_*</code> → golden promotions, Rule Pack v2/v3 ships, new tenant onboarding, quarterly threshold tuning. This is an <strong>infinite loop</strong></li>
+</ul>
+<p>This playbook's responsibility ends at Phase 4 GA. Every "rule-evolution" issue the customer encounters thereafter falls to <a href="../staged-adoption-guide/">Staged Adoption Lifecycle</a> — which assumes multi-system migration is complete, the customer is already using the platform, and discusses only "how do rules evolve".</p>
+<h4 id="post-mortem-and-data-retention">Post-mortem and data retention<a class="headerlink" href="#post-mortem-and-data-retention" title="Permanent link">&para;</a></h4>
+<p>After every Phase 4 completion, <strong>a mandatory internal post-mortem</strong> — regardless of how smooth it was. The post-mortem should record:</p>
+<ul>
+<li>Phase 0 Tier A findings vs the final actual migration scope (which orphans turned out to be active)</li>
+<li>Actual time taken per Gate vs estimate</li>
+<li>Which failure modes weren't in the catalog and were hit for the first time (→ add them to §12)</li>
+<li>Which Phase did customer ops get stuck on the longest, and why</li>
+<li>Whether the rollback drill was actually performed (most customers skip — platform-side should push for it)</li>
+</ul>
+<p><strong>Migration telemetry retention</strong>: all historical <code>migration-state.json</code> commits, every Gate's sign-off PR, shadow-period alert volume data — retain ≥ 1 year. For the next customer migration, this is invaluable reference data.</p>
+<h3 id="cutover-checklist_4">Cutover Checklist<a class="headerlink" href="#cutover-checklist_4" title="Permanent link">&para;</a></h3>
+<details>
+<summary>📋 Phase 4 Checklist</summary>
+
+**Step 1: stop alerting evaluation**
+- [ ] Remove old Prom's `alerting.rules.yml` (keep `prometheus.yml` and storage)
+- [ ] Prom reload + verify `prometheus_rule_evaluations_total` no longer increases
+- [ ] Verify AM no longer receives alert payloads from old Prom (`alertmanager_alerts_received_total{instance="<old-prom>"}` is flat)
+
+**Step 2: grace-period observation**
+- [ ] Grace period (default 30 days, 90 days for quarterly-close customers)
+- [ ] Log any query complaints during this period into `migration-state.json` `phase_4.grace_period_queries[]`
+- [ ] If new-vs-old alert behaviour comparison is needed, the old Prom remains query-able
+
+**Step 3: dual-write teardown**
+- [ ] vmagent removes the old-Prom remote_write target (or reverse the Prom-side federation)
+- [ ] Verify vmagent `vmagent_remotewrite_pending_data_bytes` to that target returns to 0
+- [ ] Archive AM's old config (git tag + commit into the customer's GitOps repo `archive/`)
+
+**Step 4: Prom shutdown**
+- [ ] ☢️ **Never `helm uninstall`** — it deletes the PVC too; historical data vaporises
+- [ ] Use `replicas: 0` (kube-prometheus-stack: `prometheus.prometheusSpec.replicas: 0`, or `kubectl scale ... --replicas=0`)
+- [ ] Confirm PVC remains bound, ConfigMap / Secret / Helm release all retained
+- [ ] Observe 14 days with no query complaints
+- [ ] PVC deletion → **irreversible boundary**; requires customer ops + platform team dual sign-off
+- [ ] **Two manual steps**: first `kubectl delete pvc` and observe for 1 week, then `helm uninstall` (don't do both at once)
+
+**Step 5: gradual metric-split rollout**
+- [ ] Confirm entry into [Staged Adoption Lifecycle](staged-adoption-guide.en.md) default scenario
+- [ ] Activate `_defaults.yaml` for the first domain × region
+- [ ] After 1 ops cycle of observation, expand to the next scope
+
+**Post-Phase 4**
+- [ ] Internal post-mortem (record Phase 0–4 lessons → add to §12 Catalog)
+- [ ] Update customer's internal docs / runbooks (remove old-Prom Grafana datasource, old AM URLs)
+- [ ] Archive migration telemetry for ≥ 1 year
+- [ ] Customer ops transitions from "multi-system migration ends" to "Staged Adoption Lifecycle begins"
+</details>
+
+<h3 id="failure-modes_1">Failure modes<a class="headerlink" href="#failure-modes_1" title="Permanent link">&para;</a></h3>
+<ul>
+<li>"Customer suddenly wants to query 6-month-old data during the 30-day grace period": read-only Prom remains query-able; if retention &lt; 6 months, export to cold storage in advance</li>
+<li>"After dual-write teardown, a dashboard still references old Prom": run a Grafana datasource audit before Phase 4; on miss, defer the teardown and fix the dashboards</li>
+</ul>
+<h3 id="gate-51-archive-complete">Gate 5+1 (archive complete)<a class="headerlink" href="#gate-51-archive-complete" title="Permanent link">&para;</a></h3>
+<p><strong>Final confirmation</strong>: all dual-write torn down + old config archived in the customer's GitOps repo + post-mortem doc complete → the multi-system migration is <strong>formally closed</strong>. Subsequent evolution → Staged Adoption Lifecycle.</p>
+<hr />
+<h2 id="8-plan-a-vs-plan-b-git-layout-choice">8. Plan A vs Plan B (Git layout choice)<a class="headerlink" href="#8-plan-a-vs-plan-b-git-layout-choice" title="Permanent link">&para;</a></h2>
+<h3 id="plan-a-single-sot-per-cluster-exporter-version-skew-default">Plan A — Single SOT + Per-cluster Exporter Version Skew (<strong>default</strong>)<a class="headerlink" href="#plan-a-single-sot-per-cluster-exporter-version-skew-default" title="Permanent link">&para;</a></h3>
+<p><code>conf.d/</code> is a single Git tree; all clusters share it. Differences are determined by the threshold-exporter version deployed in each cluster — that decides which phase that cluster is in.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>conf.d/
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>├─ _defaults.yaml          # v2.8+ exporters read this; v2.7 silently ignores
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>├─ &lt;domain&gt;/
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>│  └─ &lt;region&gt;/
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>│     └─ &lt;tenant&gt;.yaml
+</code></pre></div>
+<p><strong>Forward-compat is verified</strong> (PR #375 P0 check): the v2.7.0 exporter gracefully ignores new fields in v2.8.0 (<code>yaml.Unmarshal</code> lenient + <code>_*</code> underscore-file skip convention).</p>
+<p><strong>When to use Plan A</strong>: cluster version skew ≤ 1 minor, no per-cluster selective feature requirement. Covers ~80% of customer scenarios.</p>
+<h3 id="plan-b-base-overlay-escape-hatch">Plan B — Base + Overlay (escape hatch)<a class="headerlink" href="#plan-b-base-overlay-escape-hatch" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>conf.d/
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>├─ base/                  # Shared by all clusters
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>└─ overlays/
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>   ├─ staging/            # Advanced features
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a>   │  └─ _defaults.yaml
+<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a>   └─ prod/               # Still in Shadow
+<a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a>      └─ migration_status_routing.yaml
+</code></pre></div>
+<p><strong>When to use Plan B</strong>: the customer needs per-cluster selective feature adoption (staging enables <code>_defaults</code>, prod doesn't yet).</p>
+<p><strong>Plan B platform investment</strong>: the exporter needs multi-mount-point overlay merge logic — <strong>not shipped today</strong>, it's a v2.9 backlog item. When a customer triggers Plan B, please confirm platform team's roadmap first.</p>
+<hr />
+<h2 id="9-partial-migration-x-y-matrix">9. Partial Migration (X-Y matrix)<a class="headerlink" href="#9-partial-migration-x-y-matrix" title="Permanent link">&para;</a></h2>
+<p>5-Phase is the <strong>Y axis</strong>; scope wave is the <strong>X axis</strong> — the two are orthogonal.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>                 Phase 0  Phase 1  Phase 2  Phase 3  Phase 4
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>staging cluster   ✅       ✅       ✅       ✅       ✅
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>prod canary       ✅       ✅       🔄 (in)   —        —
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>prod-rest         ✅       ✅       —        —        —
+</code></pre></div>
+<p>Legal states: <strong>staging in Phase 4 while prod is in Phase 2 simultaneously</strong>. The playbook does not assume "all clusters sync".</p>
+<hr />
+<h2 id="10-gate-reference-table">10. Gate Reference Table<a class="headerlink" href="#10-gate-reference-table" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Gate</th>
+<th>Phase exiting</th>
+<th>Phase entering</th>
+<th>Pass condition</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Gate 1</td>
+<td>Phase 0 Discovery</td>
+<td>Phase 1 Pre-flight</td>
+<td>Tier A static-audit hard checks pass + <code>migration-state.json</code> committed</td>
+</tr>
+<tr>
+<td>Gate 2</td>
+<td>Phase 1 Pre-flight</td>
+<td>Phase 2 Shadow</td>
+<td>Dual-write ≥ 7 days with no drop + Tier B comparing staging vs prod shows no cardinality drift</td>
+</tr>
+<tr>
+<td>Gate 3</td>
+<td>Phase 2 Shadow</td>
+<td>Phase 3 Cutover</td>
+<td><strong><em>Subset overlap = 100%</em></strong> + extra alerts explicitly signed off + ≥ 2-week shadow period</td>
+</tr>
+<tr>
+<td>Gate 4</td>
+<td>Phase 3 Canary</td>
+<td>Phase 3 full</td>
+<td>Canary tenants pass 24h with no unexpected alert + ops sign-off</td>
+</tr>
+<tr>
+<td>Gate 5</td>
+<td>Phase 3 full</td>
+<td>Phase 4 Decommission</td>
+<td>Full rollout passes ≥ 1 ops cycle with no incident</td>
+</tr>
+</tbody>
+</table>
+<p><strong>All Gates use invariants</strong> (<em>Subset overlap</em>, cardinality drift bound, etc.) — <strong>not</strong> timing-sensitive propositions like "alert volume matches".</p>
+<hr />
+<h2 id="11-rollback-three-tier-reversibility-boundary">11. Rollback three-tier reversibility boundary<a class="headerlink" href="#11-rollback-three-tier-reversibility-boundary" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Layer</th>
+<th>Reversibility</th>
+<th>Rollback mechanism</th>
+<th>Estimated time</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Config</strong> (<code>rules.yaml</code> / AM routing / <code>_defaults.yaml</code>)</td>
+<td>✅</td>
+<td><code>git revert &lt;commit&gt;</code> → AM/exporter reload</td>
+<td>&lt; 5 min</td>
+</tr>
+<tr>
+<td><strong>Monitoring state</strong> (already-silenced alerts / maintenance windows)</td>
+<td>⚠️ Semi-reversible</td>
+<td>git revert + manual cleanup script (pending ship)</td>
+<td>~30 min</td>
+</tr>
+<tr>
+<td><strong>Data layer</strong> (metrics already ingested into VM / chunks already GC'd from Prom)</td>
+<td>❌ Irreversible</td>
+<td>Accept it</td>
+<td>—</td>
+</tr>
+</tbody>
+</table>
+<p><strong>The playbook must give the customer this mental model</strong>: rollback ≠ undo all.</p>
+<hr />
+<h2 id="12-failure-mode-catalog-cross-phase-summary">12. Failure Mode Catalog (cross-phase summary)<a class="headerlink" href="#12-failure-mode-catalog-cross-phase-summary" title="Permanent link">&para;</a></h2>
+<p>Each Phase lists known failure modes + hyper-realistic anchors.</p>
+<blockquote>
+<p><strong><code>(e.g., ...)</code> is an educated guess</strong> — not necessarily mapped to a real incident #, but a high-probability event reasoned out from industry SRE knowledge and this platform's architecture. At maintainer review time, anyone who's hit it personally can patch in a real Issue #; the others stay as defensive reminders (still carrying mental-anchor value). <strong>Deeper triage + concrete kubectl commands</strong> → <a href="../../integration/troubleshooting-checklist/">Migration Troubleshooting Checklist</a> (<strong>ZH only — <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/409">#409</a></strong>, symptom-keyed runbook).</p>
+</blockquote>
+<h3 id="phase-0-discovery-inventory">Phase 0 — Discovery &amp; Inventory<a class="headerlink" href="#phase-0-discovery-inventory" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Symptom</th>
+<th>First-look triage</th>
+<th>Anchor</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Tier A blocked on PromQL syntax error</strong></td>
+<td><code>da-parser --strict-promql --report</code> shows which files fail; usually hand-written PromQL using vmalert-only functions but the source is labelled prometheus</td>
+<td>(e.g., customer mixes <code>histogram_quantile_bucket</code> (metricsql) with <code>histogram_quantile</code> (promql); da-parser dialect detector marks ambiguous)</td>
+</tr>
+<tr>
+<td><strong>Tier A surfaces 100+ orphan rules</strong></td>
+<td>Customer claims "those were silenced"; verify whether AM silencers are still active; cross-check Tier B snapshot for <code>silences[?] expires</code></td>
+<td>(e.g., a region's alert was silenced 5 years ago, the silence has long expired but the rule wasn't pruned → orphan report is a false positive)</td>
+</tr>
+<tr>
+<td><strong>Tier A catches hardcoded tenant IDs</strong></td>
+<td>dev-rule #2 violation; <code>migration-state.json</code> lists every site; must fix before Phase 1</td>
+<td>(e.g., emergency hotfix left <code>instance="db-prod-1"</code> in PromQL; original author left the company; rationale lost)</td>
+</tr>
+<tr>
+<td><strong>PrometheusRule CRD + raw rules.yaml dual-write</strong></td>
+<td>Operator-migration leftover; manual reconcile when da-parser dedupe fails</td>
+<td>(e.g., three-year-old Operator migration half-complete, <code>PrometheusRule</code> and <code>ConfigMap</code> coexist, current active source unclear)</td>
+</tr>
+<tr>
+<td><strong>Tier B <code>ALERTS{}</code> query timeout</strong></td>
+<td>Prom hasn't GC'd in 5+ years or cardinality is too high; shrink the window with <code>ALERTS{}[1d]</code> or accept Tier B as missing</td>
+<td>(e.g., 100k+ ALERTS series — full query times out at 30s; querying the last 24h yields ~2k series and works)</td>
+</tr>
+<tr>
+<td><strong>Tier C sources fragmentary (multi-region uses different logging stacks)</strong></td>
+<td>Some regions use ELK, others Splunk → Tier C partial</td>
+<td>(e.g., us-east has ELK with 5y retention, eu-west doesn't → Tier C covers only 50% of scope; accept and record in <code>migration-state.json</code> <code>tier_c.coverage</code>)</td>
+</tr>
+<tr>
+<td><strong>Tenant ID naming collision</strong></td>
+<td>Customer's tenant name clashes with our reserved scheme (<code>prod</code> / <code>staging</code> / <code>default</code>) → rename before Phase 1</td>
+<td>(e.g., customer uses <code>default</code> as the fallback tenant ID, which collides with our routing default; da-tools onboard recommends renaming to <code>customer-default</code>)</td>
+</tr>
+<tr>
+<td><strong>A receiver is dead and the customer doesn't know</strong></td>
+<td>Expired PagerDuty tokens, dissolved Slack channels, ex-employee email → Tier B shows "N routes have never fired"</td>
+<td>(e.g., customer ops sees the dead-receiver list and reacts "oh, that was the incident owner from 6 months ago; he left"; not a planned Phase 0 outcome but common)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="phase-1-pre-flight-dual-write">Phase 1 — Pre-flight &amp; Dual-Write<a class="headerlink" href="#phase-1-pre-flight-dual-write" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Symptom</th>
+<th>First-look triage</th>
+<th>Anchor</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>vmagent OOMKilled in initial dual-write</strong></td>
+<td>Pod restart count spikes, events contain OOMKilled; bump memory limit</td>
+<td>(e.g., vmagent initially uses default 64Mi limit, 100k+ series + label cardinality bursts cause immediate OOMKilled; stable after bumping to 1Gi + reducing <code>-remoteWrite.maxBlockSize</code>)</td>
+</tr>
+<tr>
+<td><strong>VM disk fills (dual-write doubles ingest)</strong></td>
+<td><code>vm_data_size_bytes</code> growth exceeds estimate; customer mis-estimated cardinality</td>
+<td>(e.g., customer estimated 10k tenant labels but multi-region label combinations actually reach 100k; VM single-node disk fills within 24h; emergency hourly snapshot + retention pruning or disk expansion)</td>
+</tr>
+<tr>
+<td><strong>Exporter scrape timeout (conf.d too large)</strong></td>
+<td>Exporter <code>/metrics</code> 30s timeout; conf.d contains 1000+ tenant configurations</td>
+<td>(e.g., conf.d 1500 tenants × 3 metrics each = 4500 series; single-shot serialise is slow; change to incremental rebuild or split conf.d across shards)</td>
+</tr>
+<tr>
+<td><strong>ServiceMonitor mismatch between staging/prod</strong></td>
+<td>Exporter isn't being scraped in prod; staging uses Operator + ServiceMonitor / prod still on ConfigMap</td>
+<td>(e.g., multiple clusters aren't aligned on deployment pattern; prod cluster uses <code>kubernetes_sd_config</code> static target instead of ServiceMonitor, prod exporter pod is up but no-one scrapes it)</td>
+</tr>
+<tr>
+<td><strong>dual-write metric drift &gt; 5% (Gate 1 fail)</strong></td>
+<td>Prom relabel and vmagent relabel out of sync; diff the corresponding metric names</td>
+<td>(e.g., customer's Prom has a <code>__tmp_metric_name</code> relabel rule that drops staging-only metrics; vmagent doesn't copy it; VM has 5–8% more metrics than Prom → drift fail)</td>
+</tr>
+<tr>
+<td><strong>NetworkPolicy blocks vmagent/Prom from scraping the exporter</strong></td>
+<td>threshold-exporter is pull-based (exposes <code>/metrics</code>; does <strong>not</strong> push); the scraper side (vmagent / Prom) shows target <code>DOWN</code>, log contains <code>context deadline exceeded</code> or <code>connection refused</code></td>
+<td>(e.g., exporter in monitoring NS, scraper in vm NS, NetworkPolicy ingress on exporter pod doesn't allow port 8080 from vm NS → vmagent target page all red, <code>scrape_duration_seconds</code> timeout, metrics absent)</td>
+</tr>
+<tr>
+<td><strong>vmagent <code>pending_data_bytes</code> long-running &gt; 0</strong></td>
+<td>Writes lagging → OOM precursor warning; on-disk buffer accumulates</td>
+<td>(e.g., remote_write target slow; vmagent buffer grows from 0 to 500MB then hits memory limit; the day before the incident the buffer was already creeping up but no alert fired)</td>
+</tr>
+<tr>
+<td><strong>threshold-exporter <code>user_threshold</code> not queryable in VM</strong></td>
+<td>Confirm vmagent is scraping the exporter; confirm VM ingest isn't dropping</td>
+<td>(e.g., customer forgot to add the exporter to vmagent scrape config; metric is being emitted but no-one's collecting; driver ran for a week before noticing the empty dashboard)</td>
+</tr>
+<tr>
+<td><strong>Option 2: Prom remote_write reload OOM or takes down vminsert</strong></td>
+<td>Prom added <code>remote_write</code> but <strong>omitted <code>queue_config</code></strong>; reload triggers WAL catch-up using default <code>max_shards: 200</code> → Prom memory explodes OR vminsert sees 503 spike</td>
+<td>(e.g., customer's 2M-series Prom adds <code>remote_write</code> without <code>queue_config</code>; 30s after reload Prom memory rockets from 8GB to 16GB and gets OOMKilled, while vminsert HTTP 5xx rate spikes to 70%; customer thinks it's a VM capacity problem but it's actually client-side queue tuning missing)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="phase-2-shadow-deployment">Phase 2 — Shadow Deployment<a class="headerlink" href="#phase-2-shadow-deployment" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Symptom</th>
+<th>First-look triage</th>
+<th>Anchor</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Shadow alerts leak to the production receiver</strong></td>
+<td>AM route order wrong: shadow matcher isn't the first route — another matcher intercepts first</td>
+<td>(e.g., customer placed the shadow matcher at the end of <code>route.routes</code>; an earlier <code>severity=critical</code> catch-all routes first; shadow alerts leak to PagerDuty and explode on-call at night)</td>
+</tr>
+<tr>
+<td><strong>New rules don't fire</strong> (shadow alert volume = 0)</td>
+<td>Rule evaluator didn't reload, or conf.d mount didn't take effect; first check <code>prometheus_config_last_reload_successful</code></td>
+<td>(e.g., customer's GitOps reconcile stuck on conf.d ConfigMap projection delay; commit merged but evaluator reloads 1h later, half the shadow window is already gone)</td>
+</tr>
+<tr>
+<td><strong>Subset overlap &lt; 100% (catastrophic miss vs intentional reduction can't be told apart)</strong></td>
+<td>Use <a href="../staged-adoption-guide/">staged-adoption-guide §4</a>'s (2a)/(2b) dual-path logic to classify each case; reviewer marks each missing case <code>intentional-reduction</code> or <code>genuine-regression</code></td>
+<td>(e.g., golden rule has an extra <code>for: 5m</code> vs <code>custom_</code>; 60% of missing cases are intentional reduction (transient spikes shouldn't fire), but 2% are golden bugs missing sustained spikes — stop the line on those)</td>
+</tr>
+<tr>
+<td><strong>Customer ops can't distinguish shadow alerts from production alerts</strong></td>
+<td>Shadow lacks visible label; shadow channel name not prominent; alert text has no prefix</td>
+<td>(e.g., shadow alerts go to Slack <code>#alerts-debug</code> but customer ops only watches <code>#alerts-prod</code>; 2-week shadow period had zero viewers → Gate 3 sign-off was perfunctory)</td>
+</tr>
+<tr>
+<td><strong>Shadow + dual-write double cardinality blows VM</strong></td>
+<td>Phase 1 dual-write already doubled, Phase 2 shadow rules add <code>ALERTS{}</code> series on top; combined exceeds budget</td>
+<td>(e.g., customer estimated Phase 1 capacity but forgot Phase 2 ALERTS{} cardinality; in shadow week 2 the VM disk fills over the weekend, cardinality limit trips, new metric ingest rejected)</td>
+</tr>
+<tr>
+<td><strong>Subset overlap = 100% with a "fake 100% trap"</strong></td>
+<td>Shadow rule written as "exactly equivalent to <code>custom_</code>" is too conservative; essentially didn't test golden's smarter logic; customer thinks ready, but cutover exposes golden behaviour</td>
+<td>(e.g., customer says "let's just copy <code>custom_</code> rules 1:1 to golden"; 2-week shadow shows 100% overlap but golden's smart filter never activated; after cutover the customer notices alert volume is unchanged — partial value lost)</td>
+</tr>
+<tr>
+<td><strong>Plan A staging-first but customer accidentally upgrades prod to v2.8.0 exporter</strong></td>
+<td>Exporter version skew manually overridden; prod also picks up shadow rules</td>
+<td>(e.g., customer SRE doesn't know the staging-first convention, sees v2.8.0 release and runs <code>helm upgrade</code> on prod directly; prod shadow rule fires but customer treats it as a production alert and gets paged at night)</td>
+</tr>
+<tr>
+<td><strong>AM <code>migration_status: shadow</code> matcher rule written incorrectly</strong></td>
+<td>Matcher uses <code>migration_status=~"shadow"</code> regex but falls through, or <code>matchers</code> is an empty array</td>
+<td>(e.g., AM v0.27 vs v0.32 matcher syntax differs slightly; customer copies sample config without checking AM version; matchers parse incorrectly and silently fall through to production)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="phase-3-incremental-cutover">Phase 3 — Incremental Cutover<a class="headerlink" href="#phase-3-incremental-cutover" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Symptom</th>
+<th>First-look triage</th>
+<th>Anchor</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Canary tenant really does fire an alert (not a false positive)</strong></td>
+<td>Confirm whether it's a production signal or a cutover artifact; check metric trace for corresponding anomalies</td>
+<td>(e.g., first canary tenant fires a critical alert within 1h of cutover — confirm the tenant actually has an issue (golden rule caught it right!); don't roll back just because "canary period shouldn't fire")</td>
+</tr>
+<tr>
+<td><strong>Rule reload race (some evaluator pods reload, some don't)</strong></td>
+<td><code>prometheus_config_last_reload_successful</code> out of sync between two HA Prom replicas; one replica still emits alerts with shadow label</td>
+<td>(e.g., HA Prom 2 pods, one SIGHUP fails; within 5 minutes alert payloads are half with shadow / half without; AM dedup fails, receiver gets a 50/50 split)</td>
+</tr>
+<tr>
+<td><strong>Dashboard shows mixed state (old + new metrics during cutover)</strong></td>
+<td>Grafana panel uses <code>or</code> joining old and new metrics; both have data during cutover</td>
+<td>(e.g., dashboard panel <code>up{job="legacy"} or up{job="new"}</code> during cutover both = 1; graph looks like doubled value, frightens customer ops, mistaken for metric corruption)</td>
+</tr>
+<tr>
+<td><strong>AM silencer mismatches v2 alertname (disablement drift)</strong></td>
+<td>Customer silenced some v1 alertname in Phase 2, cutover to v2 changes alertname → silencer doesn't match → double fire</td>
+<td>(e.g., customer silenced <code>alertname=MySQLDown</code>; golden v2 changes to <code>alertname=DatabaseDown_MySQL</code>; after cutover the silencer fails, <code>custom_</code>+golden fire simultaneously — see staged-adoption-guide §7.3)</td>
+</tr>
+<tr>
+<td><strong>Customer's SLO calculation misjudges due to sudden alert-volume drop</strong></td>
+<td>Customer's SLO dashboard uses <code>alert fire count</code> as input; cutover changes alert patterns but SLO logic isn't updated</td>
+<td>(e.g., customer uses <code>alert_count{severity="critical"}</code> for weekly health; after cutover critical alerts drop from 50 to 5 (intentional reduction); SLO dashboard misjudges "monitoring is broken")</td>
+</tr>
+<tr>
+<td><strong>Partial revert during canary leaves inconsistent state</strong></td>
+<td>git revert only reverts the canary tenants' commit; other tenants haven't been cut over yet; observe cross-tenant dashboard comparison</td>
+<td>(e.g., 5% canary 12h after cut-over something breaks and gets reverted, but a <code>1 domain × all regions × full tenant</code> PR has also already merged → revert accidentally drops still-in-shadow tenants' state; overall regression)</td>
+</tr>
+<tr>
+<td><strong>Network partition during the period makes Gate 4 unverifiable</strong></td>
+<td>During canary, a network partition between staging-VM and staging-AM means alert payloads don't reach AM; can't tell whether "24h with no alert" means really nothing or partition silenced everything</td>
+<td>(e.g., AWS region network jitter for 1h during canary, alert delivery interrupted unnoticed; Gate 4 signed off, only later discovered that 1h actually had alerts that were dropped)</td>
+</tr>
+<tr>
+<td><strong>Customer ops isn't watching during the canary observation window</strong></td>
+<td>Canary crosses a weekend or holiday; customer ops has no-one on call to watch dashboards; Gate 4's "24h with no unexpected alert" actually means "no-one watched for 24h"</td>
+<td>(e.g., canary cut over Friday evening; customer ops after Friday COB nobody watches the dashboard; Gate 4 only reviewed Monday morning; 12h of alerts went unnoticed and burned the observation window)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="phase-4-decommission">Phase 4 — Decommission<a class="headerlink" href="#phase-4-decommission" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Symptom</th>
+<th>First-look triage</th>
+<th>Anchor</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Some Grafana dashboards turn red after old Prom shuts down</strong></td>
+<td>Customer dashboards still point at old-Prom URL; audit should have run before Phase 4; recovery is to switch back to read-only Prom temporarily and batch-fix datasource</td>
+<td>(e.g., capacity-planning dashboard maintained by customer SRE team uses <code>legacy-prom</code> datasource; pre-Phase-4 grafana-audit missed dashboard JSON hardcoded UIDs; after Step 4 shutdown all panels show <code>No data</code>, capacity review meeting urgently rescheduled)</td>
+</tr>
+<tr>
+<td><strong>Compliance audit wants 6-month-old data, but old Prom retention is 3 months</strong></td>
+<td>Confirm retention ≥ customer audit needs before Phase 4; if missed, export to cold storage but it disrupts the audit timeline</td>
+<td>(e.g., customer SOX audit Q2 asks for Q4-prior-year alert history; old Prom 90-day retention falls short; pre-cutover the audit needs weren't confirmed; emergency Thanos-backup excavation from PVC snapshots, audit delayed 3 weeks)</td>
+</tr>
+<tr>
+<td><strong>dual-write left attached; vmagent retries to a dead endpoint</strong></td>
+<td>Step 3 skipped or forgotten; vmagent log keeps showing <code>connection refused</code>, buffer accumulates; eventually OOMs</td>
+<td>(e.g., Phase 4 Step 4 directly shut down old Prom but vmagent remote_write still points at old-Prom URL; vmagent buffer grows unbounded for 48h then OOMKilled; incident RCA reveals Step 3 was missed on the ticket)</td>
+</tr>
+<tr>
+<td><strong><code>helm uninstall</code> nukes the PVC</strong> (most severe incident class)</td>
+<td><code>helm uninstall</code> deletes ConfigMap + StatefulSet + <strong>PVC</strong> (default <code>reclaimPolicy: Delete</code>) simultaneously; historical data vaporises within seconds</td>
+<td>(e.g., Phase 4 Step 4 customer SRE runs <code>helm uninstall prometheus-stack</code> to "clean up"; within 60s ConfigMap + PVC + underlying disk delete cascade; AM v1 routing all vanishes, Prom 30-day history vaporised; 2 months later compliance wants original routing rules + 6 months alert history; git history restores routing but metric data can only be partially backfilled from vmagent dual-write period — baseline before Phase 1 is completely lost)</td>
+</tr>
+<tr>
+<td><strong><code>_defaults.yaml</code> big-bang activation causes major alert change, mistaken for incident</strong></td>
+<td>metric-split should roll out per-domain; big-bang causes customer ops to look at the dashboard and panic</td>
+<td>(e.g., customer platform team "cleans it all up at once" after Phase 4 and enables <code>_defaults.yaml</code> across all clusters; alert volume swings ±40% within a week; customer ops urgently pages platform team thinking it's an incident; root cause is metric-split design working as intended, communication gap)</td>
+</tr>
+<tr>
+<td><strong>Quarter-end / fiscal close collides with grace period</strong></td>
+<td>Grace period default 30 days hits month-end / quarter-end finance close; no-one can validate</td>
+<td>(e.g., Phase 4 Step 1 scheduled 12/15; grace period crosses year-end + Q1 close + Lunar New Year; customer finance team unavailable for a full month; Step 4 shutdown drags to March; maintenance cost doubles in the interim)</td>
+</tr>
+<tr>
+<td><strong>PVC deleted, then 1 week later customer suddenly wants to query old data</strong></td>
+<td>Step 4's 14-day wait before PVC deletion is the default; some cases need longer</td>
+<td>(e.g., customer legal team after 6 weeks discloses they need an alert history from last year as evidence in an SLA dispute; old PVC deleted, Thanos backup expired; weekly snapshot partial restore; dispute goes to arbitration)</td>
+</tr>
+<tr>
+<td><strong>Customer ops still logs into the old Grafana / old Prom UI</strong></td>
+<td>Muscle memory; Phase 4 should push internal docs updates + add a banner "Read-Only / Decommission" to the old UI</td>
+<td>(e.g., 1 week before shutdown the customer ops notices a panel isn't updating data and realises Prom is in read-only; complains "why didn't anyone say so?"; later traced to internal-docs updates not synced to ops-onboarding deck)</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>Deeper triage + concrete kubectl commands → <a href="../../integration/troubleshooting-checklist/">Migration Troubleshooting Checklist</a> (<strong>ZH only — <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/409">#409</a></strong>).</p>
+</blockquote>
+<hr />
+<h2 id="13-appendices">13. Appendices<a class="headerlink" href="#13-appendices" title="Permanent link">&para;</a></h2>
+<h3 id="a-composite-customer-walkthrough-frankenstein-style">A. Composite Customer Walkthrough (Frankenstein style)<a class="headerlink" href="#a-composite-customer-walkthrough-frankenstein-style" title="Permanent link">&para;</a></h3>
+<blockquote>
+<p><strong>Disclaimer</strong>: "ContosoMfg" below is a composite customer that fuses pain points and design considerations from multiple real customers — <strong>no single customer looks exactly like this</strong>. The Frankenstein writing style's purpose is to let the reader see 5–6 common pitfalls interwoven into one timeline, instead of stitching together scattered individual cases. All tenant names, cluster names, and numbers are illustrative; for real customer mappings, see the internal post-mortem files (not public).</p>
+</blockquote>
+<h4 id="setting">Setting<a class="headerlink" href="#setting" title="Permanent link">&para;</a></h4>
+<p><strong>ContosoMfg</strong>: a 1200-tenant global manufacturing customer (automotive parts supply chain), self-managing Prom + AM for 5 years.</p>
+<table>
+<thead>
+<tr>
+<th>Dimension</th>
+<th>State</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Scale</strong></td>
+<td>4 clusters: staging-eu / prod-eu / prod-us / prod-apac; 1200 tenants; ~4M active series</td>
+</tr>
+<tr>
+<td><strong>Existing monitoring stack</strong></td>
+<td>Prometheus 2.45 (1 HA pair per cluster), Alertmanager 0.27, Grafana 10.x; no Thanos / VM long-retention (Tier C unavailable)</td>
+</tr>
+<tr>
+<td><strong>Maturity</strong></td>
+<td>Stage 4 (mature multi-system ops) — has SRE team, GitOps, incident response process</td>
+</tr>
+<tr>
+<td><strong>Trigger</strong></td>
+<td>(1) Prom cardinality saturated, want to switch to VM; (2) want this platform's <code>_defaults.yaml</code> metric-split to simplify rule maintenance; (3) 5 years of rule accumulation, take this chance to clean up</td>
+</tr>
+<tr>
+<td><strong>Constraints</strong></td>
+<td>Q4 finance close period — no production change 11/15–1/15; customer SRE team is 6 people, can't support two parallel multi-system migrations</td>
+</tr>
+</tbody>
+</table>
+<h4 id="phase-0-discovery-customers-mental-model-resets-after-seeing-tier-a-results-2-weeks">Phase 0: Discovery — customer's mental model resets after seeing Tier A results (2 weeks)<a class="headerlink" href="#phase-0-discovery-customers-mental-model-resets-after-seeing-tier-a-results-2-weeks" title="Permanent link">&para;</a></h4>
+<p><code>da-tools onboard --analyze</code> runs, and Tier A's results force customer ops to confront "we actually don't know what we have":</p>
+<ul>
+<li><strong>380 rules</strong> (customer thought ~250) — no-one has audited in 5 years; dead code piled up</li>
+<li><strong>47 orphan rules</strong> (rules committed but corresponding receiver no longer in AM) — 12 of them have PagerDuty tokens belonging to an employee who left 3 years ago; long expired</li>
+<li><strong>5 hardcoded tenant ID instances</strong> (PromQL like <code>instance="db-prod-fra-1"</code>) — dev-rule #2 violation</li>
+<li><strong>1 namespace collision</strong>: customer uses <code>default</code> as fallback tenant — collides with this platform's routing default — must rename before Phase 1</li>
+</ul>
+<p>Tier B runs <code>ALERTS{}</code> against live Prom and grabs the 7 currently firing alerts; cross-checking Tier A reveals <strong>3 of those firing alerts correspond to rules marked orphan in the Tier A report</strong> = <strong>7–15% of currently firing alerts have no audience</strong>. Customer SRE lead goes silent for 30 seconds in the review meeting.</p>
+<p>Tier C unavailable (no Thanos / VM-long-retention / ELK alert log). Acceptable; record per schema as <code>tier_c.available: false</code>.</p>
+<p><code>migration-state.json</code> per-cluster split committed into the customer's GitOps repo at <code>monitoring-config/.da/state/</code>. Markdown summary pasted into the Phase 0 closing PR description; 7 stakeholders sign off → Gate 1 passes.</p>
+<p><strong>Pitfall</strong>: customer SRE lead initially wants to skip Phase 0 — "we know our setup well"; platform team pushes back and insists on running it → discovers 47 orphans + 7–15% silent-failure rate. Phase 0's value is <strong>not "fixing things"</strong> but <strong>building a shared mental model</strong>.</p>
+<h4 id="phase-1-pre-flight-vmagent-oom-namespace-collision-scope-shrink-4-weeks">Phase 1: Pre-flight — vmagent OOM, namespace collision, scope shrink (4 weeks)<a class="headerlink" href="#phase-1-pre-flight-vmagent-oom-namespace-collision-scope-shrink-4-weeks" title="Permanent link">&para;</a></h4>
+<p>VM topology chosen as vmsingle (&lt; 5M series doesn't need vmcluster). Disk budget using the correct formula: <code>0.7 byte/dp × 5760 dp/day (15s scrape) × 4M series × 30 days × 1.5 buffer ≈ 725GB SSD per cluster</code>, 4 clusters budgeted ~3TB. Customer SRE initially applied a blog's <code>8 bytes/series/day</code> formula and estimated &lt; 4GB (obviously wrong); platform team intervened to correct, directing them to use the <a href="https://docs.victoriametrics.com/Single-server-VictoriaMetrics.html#capacity-planning">VM Capacity Calculator</a> for verification.</p>
+<p>Dual-write follows Option 1 Side-by-Side Dual Scrape: old Prom untouched, parallel new vmagent scraping same targets + remote_write to VM. First-week pitfalls:</p>
+<ul>
+<li><strong>vmagent OOMKilled</strong>: initial deployment used default 64Mi memory limit, 4M series immediately overflowed. Bump to 1Gi + reduce <code>-remoteWrite.maxBlockSize</code>, stabilises (→ catalog Phase 1: vmagent OOMKilled in initial dual-write)</li>
+<li><strong>prod-apac vmagent can't scrape threshold-exporter metric</strong>: NetworkPolicy ingress didn't allow exporter pod port 8080 from vm NS. vmagent target page shows <code>DOWN</code>, <code>scrape_duration_seconds</code> timeout. Customer network team intervened, took 1 week to unblock (→ catalog Phase 1: NetworkPolicy blocks vmagent/Prom scraping exporter)</li>
+</ul>
+<p>threshold-exporter deployed to staging-eu; <code>user_threshold</code> metric appears in VM, queryable. <strong>Deliberately not connected to AM</strong> (Phase 2 only).</p>
+<p>Namespace collision fix: customer's <code>default</code> tenant renamed to <code>customer-default</code>; cross-references in 1200 tenant PromQL grep + 30+ Grafana dashboards datasource label edits; takes 2 weeks.</p>
+<p>Gate 2 pass condition: dual-write ≥ 7 days + Tier B compares staging vs prod-Prom no cardinality drift &gt; 5%. First verification shows 8% drift; root cause is customer's Prom has a <code>__tmp_metric_name</code> relabel rule that drops staging-only metrics — vmagent didn't copy it. Fix vmagent relabel config and re-run; drift drops to 1.2%.</p>
+<p><strong>Unexpected discovery</strong>: during Phase 1, customer's capacity-planning team's self-managed Grafana dashboards surfaced — they point at <code>legacy-prom</code> datasource, weren't in the original monitoring team's Phase 4 audit scope. Record into <code>migration-state.json</code> <code>phase_1.discovered_dashboards[]</code>; must handle before Phase 4 (→ catalog Phase 4: dashboards turn red after old Prom shuts down).</p>
+<h4 id="phase-2-shadow-fake-100-trap-am-rule-order-wrong-weekend-nobody-watching-3-weeks-originally-planned-2">Phase 2: Shadow — "fake 100%" trap, AM rule order wrong, weekend nobody watching (3 weeks, originally planned 2)<a class="headerlink" href="#phase-2-shadow-fake-100-trap-am-rule-order-wrong-weekend-nobody-watching-3-weeks-originally-planned-2" title="Permanent link">&para;</a></h4>
+<p>Rules into git, <code>conf.d</code> structure built. AM routing adds shadow matcher as <strong>first route</strong> (critical-first):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="nt">route</span><span class="p">:</span>
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="w">  </span><span class="nt">routes</span><span class="p">:</span>
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">matchers</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">migration_status=&quot;shadow&quot;</span><span class="p p-Indicator">]</span>
+<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="w">      </span><span class="nt">receiver</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;null&quot;</span>
+<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a><span class="w">      </span><span class="nt">continue</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span>
+</code></pre></div>
+<p>Week 1: shadow alert volume = 0. Reason → GitOps reconcile stuck on conf.d ConfigMap projection delay for 1h (→ catalog Phase 2: new rules don't fire (rule evaluator didn't reload)). Flux force-reconcile resolves.</p>
+<p>Week 2: <em>Subset overlap</em> reaches 92%; the remaining 8% missing cases customer ops wants to directly sign off as "intentional reduction". Platform team insists on the (2a)/(2b) dual-path logic case-by-case (per <a href="../staged-adoption-guide/">staged-adoption-guide §4</a>) — 60% are intentional reduction (golden adds <code>for: 5m</code> to filter transient spikes), but <strong>2% are golden bugs missing sustained spikes</strong>. Stop the line, fix golden, re-run shadow in week 3.</p>
+<p><strong>"Fake 100%" trap</strong>: customer SRE initially suggested "just copy <code>custom_</code> rules 1:1 to golden"; thinks 100% overlap is safe. Platform team explains that means shadow doesn't test golden's smarter logic; after cutover the customer will find alert volume unchanged — partial value lost (→ catalog Phase 2: Subset overlap = 100% with a "fake 100% trap"). Customer accepts; golden rewritten using smarter <code>histogram_quantile</code> + time window.</p>
+<p><strong>Weekend nobody watching</strong>: week 2 shadow crosses a weekend; 7 alerts fire from Saturday-morning batch jobs (with shadow label) → into <code>null</code> receiver, no page. Monday ops review of the dashboard finds "no-one was watching during the weekend"; if these had been production, 7 alerts would have been missed (→ catalog Phase 3: customer ops not in canary observation window, flagged here pre-emptively). Gate 3 sign-off PR notes "weekend coverage as follow-up".</p>
+<p>Gate 3 passes: <em>Subset overlap = 100%</em> (including (2b) intentional annotations) + 23 extra alerts signed off case-by-case by domain owners.</p>
+<h4 id="phase-3-cutover-canary-tenant-has-a-real-incident-ha-prom-reload-race-slo-miscalculation-5-weeks">Phase 3: Cutover — canary tenant has a real incident, HA Prom reload race, SLO miscalculation (5 weeks)<a class="headerlink" href="#phase-3-cutover-canary-tenant-has-a-real-incident-ha-prom-reload-race-slo-miscalculation-5-weeks" title="Permanent link">&para;</a></h4>
+<p>Canary tenant selection: customer designates 3 internal SRE-owned tenants (median cardinality, stable traffic, ops watch the dashboard themselves).</p>
+<p>First canary cut over and fires a critical alert within 1 hour. Customer SRE's first reaction: "Roll back!" Platform team analyses the metric trace and <strong>confirms this is a production signal, not a cutover artifact</strong>:</p>
+<ul>
+<li>Old <code>custom_</code> rule uses a <strong>static threshold</strong>: <code>node_memory_MemAvailable_bytes &lt; 1G</code> (triggers = memory nearly exhausted)</li>
+<li>New golden rule uses <strong>predictive analysis</strong>: <code>predict_linear(node_memory_MemAvailable_bytes[1h], 4*3600) &lt; 0</code> (triggers = projecting based on last hour's slope, memory will exhaust in 4 hours)</li>
+</ul>
+<p>The new rule caught <strong>a slow memory leak the old system had missed for 2 years</strong> — a Java service's GC behaviour gradually degraded, losing ~50MB/day; the old static threshold wouldn't warn until the service hit ~3 weeks of growth and approached OOM (already mid-incident); the new <code>predict_linear</code> warns ~4 hours after the slope changes, giving ops plenty of time to restart / rolling-update. Customer SRE lead's reaction: "...how did we even survive the last 2 years?" (→ catalog Phase 3: canary tenant really fires alert (not a false positive); also a living example of §6 "why <em>Subset overlap</em> &lt; 100% isn't necessarily bad").</p>
+<p>Customer SRE accepts, handles the leak (restart + ticket to service team for GC tuning); Gate 4 observation period continues. <strong>After this incident, customer platform team shifts from "cautious evaluation" to "actively driving" migration pace</strong> — one rule recovered 2 years of missed production risk, more persuasive than any demo.</p>
+<p>24h observation didn't cross a weekend (deliberately scheduled Tuesday); Gate 4 passes → roll out to full.</p>
+<p>Full cutover: one of HA Prom's 2 pods SIGHUP fails (→ catalog Phase 3: rule reload race); within 5 minutes alert payloads half with shadow / half without; AM dedup fails. Customer ops Tuesday-morning sees the dashboard anomaly, manually SIGHUPs the second pod, recovers in 5 minutes. Incident recorded in <code>migration-state.json</code> <code>phase_3.incidents[]</code>; added to the catalog.</p>
+<p><strong>SLO misjudgement</strong>: customer SLO dashboard uses <code>alert_count{severity="critical"}</code> for weekly health. After cutover, critical alerts drop from 50 to 5 (intentional reduction); SLO dashboard misjudges "monitoring is broken" (→ catalog Phase 3: SLO calculation misjudges due to alert-volume drop). Customer SRE spends 3 days revising SLO logic (switch from alert count to direct SLI query).</p>
+<p><strong>Disablement drift</strong>: customer silenced a v1 alertname <code>MySQLDown</code> in Phase 2; after cutover v2 uses <code>DatabaseDown_MySQL</code> (→ catalog Phase 3: AM silencer mismatches v2 alertname). Silencer fails, <code>custom_</code>+golden fire simultaneously for 30 minutes before ops notices; manually add silencer. Incident recorded and drives the <a href="../staged-adoption-guide/">staged-adoption-guide §7.3 disablement drift</a> section.</p>
+<p>Gate 5 pass condition: full cutover ≥ 1 ops cycle no incident. Customer picks 2 weeks (usually 1) — Q4 is approaching, want extra buffer.</p>
+<h4 id="phase-4-decommission-q4-freeze-collides-with-grace-period-capacity-dashboard-turns-red-gradual-metric-split-13-weeks-including-q4-freeze">Phase 4: Decommission — Q4 freeze collides with grace period, capacity dashboard turns red, gradual metric-split (13 weeks including Q4 freeze)<a class="headerlink" href="#phase-4-decommission-q4-freeze-collides-with-grace-period-capacity-dashboard-turns-red-gradual-metric-split-13-weeks-including-q4-freeze" title="Permanent link">&para;</a></h4>
+<p>Phase 3 ends late October; original plan was Step 1 (<code>alerting.rules.yml</code> removal) 11/8 → grace period 30 days → 12/8 dual-write teardown.</p>
+<p><strong>Q4 freeze collision</strong>: 11/15 customer enters Q4 finance close + production change freeze until 1/15. Step 1 already executed 11/8 (just in time); but Step 3 dual-write teardown postponed past 1/15 (→ catalog Phase 4: quarter-end / fiscal close collides with grace period). Grace period becomes ~70 days instead of the default 30 — acceptable, actually safer.</p>
+<p><strong>Capacity dashboard turns red — Grace Period saves everyone</strong>: early December (during Q4 freeze), customer SRE capacity team notices the capacity-planning dashboard has multiple panels showing <code>No data</code>. Root cause → Phase 1 migration-state.json recorded <code>discovered_dashboards[]</code>, but the pre-Phase-4 grafana-audit still missed these few (datasource UID is hardcoded in dashboard JSON; audit script grep'd <code>legacy-prom</code> URL but missed the UID strings).</p>
+<p><strong>Under normal circumstances</strong> this would be a "batch-fix 30 dashboard datasource UIDs in a week" task — but <strong>right in the middle of Q4 freeze, CAB will absolutely not approve 30+ dashboards changing simultaneously</strong>. Five years ago without this architecture design, the old Prom would already have been <code>helm uninstall</code>'d; Q4 finance close would have zero capacity data, impacting finance team's month-end settlement and capex review.</p>
+<p><strong>This is where Phase 4's core architectural decision saves everyone</strong>: "don't shut down old Prom directly; instead use a read-only grace period of at least 30 days" — designed originally for compliance audit / SRE retrospective / ops muscle-memory transition — <strong>turns out to be natural defence against enterprise CAB freeze</strong>.</p>
+<p>Actual handling:</p>
+<ul>
+<li>Customer SRE confirms capacity dashboard still points at <code>legacy-prom</code> datasource; old Prom remains read-only online; <code>/api/v1/query</code> still works → <strong>dashboards keep working automatically; no PR needs to go into freeze</strong></li>
+<li>Add to <code>migration-state.json</code> <code>phase_4.deferred_dashboard_fixes[]</code>; batch fix after 1/15 freeze release</li>
+<li>Customer SRE lead leaves a famous quote in internal Slack: "<strong>Thank god we didn't listen to the director's 'just clean up the old Prom in one shot'</strong> — Q4's capacity data the entire quarter depended on this 'useless trash we didn't shut down'"</li>
+<li>After 1/15 freeze release, calmly batch-fix dashboard UIDs in ~3 working days</li>
+</ul>
+<p>(→ catalog Phase 4: dashboards turn red after old Prom shuts down; also a living endorsement of §7 "why read-only → off in two steps" — the grace period originally designed for audit / blameless post-mortem unexpectedly rescued a CAB-locked customer.)</p>
+<p>After 1/15 freeze release + dashboard fix complete: Step 3 dual-write teardown (vmagent removes old-Prom remote_write target) → Step 4 Prom pod <strong><code>replicas: 0</code></strong> (<strong>not <code>helm uninstall</code></strong>; PVC not yet deleted) → wait 14 days no query complaints → early February PVC dual sign-off then delete.</p>
+<p><strong><code>_defaults.yaml</code> gradual activation</strong>: Phase 4 Step 5 enters <a href="../staged-adoption-guide/">Staged Adoption Lifecycle</a>. Customer picks staging-eu's first domain; observe 1 ops cycle; then expand. <strong>Not big bang</strong> (→ catalog Phase 4: <code>_defaults.yaml</code> big-bang activation, this case as the positive counter-example).</p>
+<p>Post-mortem:</p>
+<table>
+<thead>
+<tr>
+<th>Estimate vs reality</th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Rules 250 → 380 (discovery surprise)</td>
+<td>+52%</td>
+</tr>
+<tr>
+<td>Phase 0 estimated 1 week, actually 2 weeks</td>
+<td>+100%</td>
+</tr>
+<tr>
+<td>Phase 1 estimated 2 weeks, actually 4 weeks (vmagent OOM + firewall + namespace rename)</td>
+<td>+100%</td>
+</tr>
+<tr>
+<td>Phase 2 estimated 2 weeks, actually 3 weeks (fake 100% trap, golden rework)</td>
+<td>+50%</td>
+</tr>
+<tr>
+<td>Phase 3 estimated 3 weeks, actually 5 weeks (HA reload race + SLO misjudgement + disablement drift)</td>
+<td>+67%</td>
+</tr>
+<tr>
+<td>Phase 4 estimated 5 weeks, actually 13 weeks (Q4 freeze)</td>
+<td>+160%</td>
+</tr>
+<tr>
+<td><strong>Total</strong>: estimated 13 weeks, actually 27 weeks</td>
+<td><strong>+108%</strong></td>
+</tr>
+</tbody>
+</table>
+<p>Key lessons learned (add to §12 Catalog entries):</p>
+<ul>
+<li>When the customer claims 250 rules, add a 30–50% buffer to the estimate</li>
+<li>Q4 freeze / quarter-end <strong>must enter the timeline at Phase 0</strong>; don't leave to Phase 4 to discover</li>
+<li>HA Prom reload race needs platform team to ship a reload-verifier tool in advance (v2.9 backlog)</li>
+<li>Grafana dashboard audit must grep dashboard JSON for hardcoded datasource UIDs, not just URLs</li>
+<li>SLO dashboards should query SLI directly instead of using alert counts (<strong>universal recommendation</strong>)</li>
+<li><strong>The hidden value of Grace Period</strong>: Phase 4 read-only Prom was designed originally for compliance / blameless post-mortem / ops muscle memory; unexpectedly turns out to be <strong>natural defence against enterprise CAB freeze</strong>. Every "can't change dashboards during freeze" incident the customer hit was rescued by it — this experience feeds back into §7 narrative as a use case to emphasise</li>
+</ul>
+<p>Internal post-mortem doc archived at <code>docs/internal/migrations/contosomfg-2026-q1-postmortem.md</code> (not public); <code>migration-state.json</code> commit history retained ≥ 1 year.</p>
+<h4 id="why-this-walkthrough-is-frankenstein-rather-than-a-single-customer">Why this walkthrough is Frankenstein rather than a single customer<a class="headerlink" href="#why-this-walkthrough-is-frankenstein-rather-than-a-single-customer" title="Permanent link">&para;</a></h4>
+<p>Every anchor has a real origin — but scattered across 5–7 different customers' incidents. Lifting any one real customer directly would:</p>
+<ul>
+<li><strong>Lose focus</strong>: real customers have abundant noise details (compliance specifics, personnel changes, organisational politics) that don't help the playbook reader</li>
+<li><strong>Privacy risk</strong>: even desensitised, combined characteristics can re-identify the customer</li>
+<li><strong>Lack density</strong>: a single customer steps on 2–3 pitfalls, not 5–6; the reader would need to read 2 walkthroughs to sweep all modes</li>
+</ul>
+<p>The Frankenstein style <strong>trades narrative authenticity for educational density</strong>. The reader knows clearly this is a composite, can use it as teaching material without worrying "can this actually transfer to my own setting?" The answer is: every sub-pattern really happened; the combined scenario is reasonable and authentic.</p>
+<blockquote>
+<p>Real customer incident # links → internal post-mortem files (not public). At maintainer review of this walkthrough, anyone whose team has hit one can manually add the real Issue # to the corresponding catalog anchor; but don't expose customer identity in the walkthrough narrative itself.</p>
+</blockquote>
+<h3 id="b-cross-references">B. Cross-references<a class="headerlink" href="#b-cross-references" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Schema</strong>: <a href="../../schemas/migration-state/"><code>docs/schemas/migration-state.md</code></a> — <code>.da/migration-state.json</code> field spec (<strong>ZH only — <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/409">#409</a></strong>)</li>
+<li><strong>Shadow mechanism deep dive</strong>: <a href="../../shadow-monitoring-sop/"><code>docs/shadow-monitoring-sop.md</code></a></li>
+<li><strong>Rule-only migration</strong> (1/2-system): <a href="../../migration-guide/"><code>docs/migration-guide.md</code></a></li>
+<li><strong>Staged adoption</strong> (<code>custom_</code> → golden progressive): <a href="../staged-adoption-guide/"><code>docs/scenarios/staged-adoption-guide.md</code></a> — I-2, shipped</li>
+<li><strong>Troubleshooting</strong>: <a href="../../integration/troubleshooting-checklist/"><code>docs/integration/troubleshooting-checklist.md</code></a> (<strong>ZH only — <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/409">#409</a></strong>) — symptom-keyed runbook (complements this playbook's §12 catalog)</li>
+<li><strong>VM integration entry</strong>: <a href="../../integration/victoriametrics-integration/"><code>docs/integration/victoriametrics-integration.md</code></a> — I-3, shipped</li>
+</ul>
+<h3 id="c-adr-design-references">C. ADR / Design references<a class="headerlink" href="#c-adr-design-references" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Design commitments locked from PR #375 strategic discussion + multiple rounds of adversarial review iterations</li>
+<li>5-Phase / Gate invariants / Plan A vs B / Rollback boundaries / X-Y matrix are the core constraints</li>
+<li>The document's evolution history is in <code>git log</code> (<code>docs/scenarios/multi-system-migration-playbook.md</code>) and the corresponding PR series</li>
+</ul>
+
+
+
+
+
+
+
+  
+  
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      Copyright &copy; 2025 Vencil. Licensed under Apache 2.0.
+    </div>
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+        
+<div class="md-social">
+  
+    
+    
+    
+    
+    <a href="https://github.com/vencil/Dynamic-Alerting-Integrations" target="_blank" rel="noopener" title="GitHub" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+      <div class="md-progress" data-md-component="progress" role="progressbar"></div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.instant", "navigation.instant.loading", "navigation.instant.progress", "navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.expand", "navigation.indexes", "navigation.tracking", "navigation.top", "search.suggest", "search.highlight", "search.share", "toc.follow", "content.action.edit", "content.action.view", "content.code.copy", "content.code.select", "content.code.annotate", "content.tabs.link", "content.tooltips", "announce.dismiss"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"provider": "mike"}}</script>
+    
+    
+      <script src="../../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+        <script src="../../../assets/extra.js"></script>
+      
+        <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+      
+    
+  </body>
+</html>

@@ -1,0 +1,3459 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Enterprise-grade Multi-Tenant Dynamic Alerting Platform for Kubernetes">
+      
+      
+        <meta name="author" content="Vencil Contributors">
+      
+      
+        <link rel="canonical" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/adr/020-tenant-federation/">
+      
+      
+      
+      
+        
+          <link rel="alternate" href="../../../adr/020-tenant-federation/" hreflang="zh">
+        
+          <link rel="alternate" href="./" hreflang="en">
+        
+      
+      
+      <link rel="icon" href="../../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>ADR-020: Tenant Federation — Label-Injection Proxy over Self-Built Endpoint - Dynamic Alerting Platform</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../../assets/extra.css">
+    
+    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="deep-orange" data-md-color-accent="deep-orange">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#adr-020-tenant-federation-label-injection-proxy-over-self-built-endpoint" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../../" title="Dynamic Alerting Platform" class="md-header__button md-logo" aria-label="Dynamic Alerting Platform" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Dynamic Alerting Platform
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              ADR-020: Tenant Federation — Label-Injection Proxy over Self-Built Endpoint
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="deep-orange" data-md-color-accent="deep-orange"  aria-label="深色模式"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="深色模式" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="deep-orange" data-md-color-accent="deep-orange"  aria-label="淺色模式"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="淺色模式" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+      <div class="md-header__option">
+  <div class="md-select">
+    
+    <button class="md-header__button md-icon" aria-label="Select language">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m12.87 15.07-2.54-2.51.03-.03A17.5 17.5 0 0 0 14.07 6H17V4h-7V2H8v2H1v2h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2zm-2.62 7 1.62-4.33L19.12 17z"/></svg>
+    </button>
+    <div class="md-select__inner">
+      <ul class="md-select__list">
+        
+          <li class="md-select__item">
+            <a href="../../../adr/020-tenant-federation/" hreflang="zh" class="md-select__link">
+              中文
+            </a>
+          </li>
+        
+          <li class="md-select__item">
+            <a href="./" hreflang="en" class="md-select__link">
+              English
+            </a>
+          </li>
+        
+      </ul>
+    </div>
+  </div>
+</div>
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+          <a href="javascript:void(0)" class="md-search__icon md-icon" title="Share" aria-label="Share" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
+            
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91s2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08"/></svg>
+          </a>
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/vencil/Dynamic-Alerting-Integrations" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    vencil/Dynamic-Alerting-Integrations
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+    
+      
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../getting-started/for-platform-engineers/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Getting Started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../architecture-and-design/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Core Architecture
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../integration/byo-prometheus-integration/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Integration Guides
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../migration-guide/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Migration
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../governance-security/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Governance & Security
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../scenarios/alert-routing-split/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Scenarios
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../cli-reference/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+    
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../../" title="Dynamic Alerting Platform" class="md-nav__button md-logo" aria-label="Dynamic Alerting Platform" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    Dynamic Alerting Platform
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/vencil/Dynamic-Alerting-Integrations" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    vencil/Dynamic-Alerting-Integrations
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Getting Started
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/for-platform-engineers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Platform Engineers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/for-domain-experts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Domain Experts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/for-tenants/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tenants
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Core Architecture
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Core Architecture
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture-and-design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture & Design
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../benchmarks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Performance Benchmarks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_3" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture Decisions (ADR)
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3_3" id="__nav_3_3_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture Decisions (ADR)
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../001-severity-dedup-via-inhibit/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-001 Severity Dedup via Inhibit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../002-oci-registry-over-chartmuseum/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-002 OCI Registry
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../003-sentinel-alert-pattern/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-003 Sentinel Alert Pattern
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../004-federation-central-exporter-first/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-004 Federation Central Exporter First
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../005-projected-volume-for-rule-packs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-005 Projected Volume
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Integration Guides
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Integration Guides
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/byo-prometheus-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    BYO Prometheus
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/byo-alertmanager-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    BYO Alertmanager
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/alerting-plane-self-liveness/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    告警平面自我存活性 (Watchdog)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/synthetic-probe-interop/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    合成探測對接 (Synthetic-Probe)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/victoriametrics-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    VictoriaMetrics 整合
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/federation-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Federation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/tenant-federation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tenant Federation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/gitops-deployment/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    GitOps Deployment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/deployment-sizing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    部署容量規劃
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migration
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Migration
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../migration-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migration Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../migration-engine/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migration Engine
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../migration-toolkit-installation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migration Toolkit 安裝
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../shadow-monitoring-sop/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Shadow Monitoring SOP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/troubleshooting-checklist/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migration Troubleshooting Checklist
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Governance & Security
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Governance & Security
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../governance-security/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Governance & Security
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../custom-rule-governance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Custom Rule Governance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Scenarios
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Scenarios
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../scenarios/alert-routing-split/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Alert Routing Split
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../internal/test-coverage-matrix/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    測試覆蓋矩陣
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../scenarios/shadow-monitoring-cutover/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Shadow Monitoring Cutover
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../scenarios/staged-adoption-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Staged Adoption Lifecycle
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../scenarios/version-aware-thresholds/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Version-Aware Thresholds
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../scenarios/multi-cluster-federation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Multi-cluster Federation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../scenarios/tenant-lifecycle/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tenant Lifecycle
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../scenarios/multi-system-migration-playbook/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Multi-System Migration Playbook
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_8" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../api/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_8" id="__nav_8_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cli-reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    da-tools CLI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cheat-sheet/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CLI Cheat Sheet
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../interactive-tools/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Interactive Tools
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../grafana-dashboards/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Grafana Dashboards
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../rule-packs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Rule Packs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../rule-packs/ALERT-REFERENCE/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Alert Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../schemas/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    JSON Schema
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../glossary/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Glossary
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../CHANGELOG/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Changelog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        狀態
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        背景
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="背景">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        客戶需求
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#federation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        既有 federation 架構覆蓋空白
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        為什麼這是個棘手的問題
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        設計討論紀錄
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_6" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        決策
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="決策">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_7" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        主決策
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#mvp-2-tier-policy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MVP 範圍（2-tier policy）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#data-layer-label-enrichment-guarantee" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        前提約束：Data-layer Label Enrichment Guarantee
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#token-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Token model
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#blast-radius3-layer-defense" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Blast radius：3-layer defense
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#audit-log-anomaly-metric" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Audit log + anomaly metric
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_8" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        為什麼不用其他方案
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="為什麼不用其他方案">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#aself-built-federation-endpoint" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        替代方案 A：Self-built federation endpoint（純自寫）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#b-rbac-on-remote_read-proxy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        替代方案 B：純 RBAC on remote_read（無 proxy）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cpush-basedremote_write-to-tenant" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        替代方案 C：Push-based（remote_write to tenant）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#dlabel-injection-proxy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        替代方案 D：label-injection proxy（採用）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#proxy-prom-label-proxy-vmauth" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Proxy 選型：prom-label-proxy 而非 vmauth
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_9" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        實作計畫
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#consequences" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        後果（Consequences）
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="後果（Consequences）">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_10" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        正面
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_11" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        負面
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_12" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        中性
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#future-work" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Future Work
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_13" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        關聯
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_14" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        相關資源
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+  <nav class="md-tags" >
+    
+      
+      
+      
+      
+        <span class="md-tag">adr</span>
+      
+    
+      
+      
+      
+      
+        <span class="md-tag">federation</span>
+      
+    
+      
+      
+      
+      
+        <span class="md-tag">multi-tenant</span>
+      
+    
+      
+      
+      
+      
+        <span class="md-tag">security</span>
+      
+    
+  </nav>
+
+
+  
+    <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/edit/main/adr/020-tenant-federation.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20.71 7.04c.39-.39.39-1.04 0-1.41l-2.34-2.34c-.37-.39-1.02-.39-1.41 0l-1.84 1.83 3.75 3.75M3 17.25V21h3.75L17.81 9.93l-3.75-3.75z"/></svg>
+    </a>
+  
+  
+    
+      
+    
+    <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/raw/main/adr/020-tenant-federation.md" title="View source of this page" class="md-content__button md-icon">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0 8a5 5 0 0 1-5-5 5 5 0 0 1 5-5 5 5 0 0 1 5 5 5 5 0 0 1-5 5m0-12.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5"/></svg>
+    </a>
+  
+
+
+<h1 id="adr-020-tenant-federation-label-injection-proxy-over-self-built-endpoint">ADR-020: Tenant Federation — Label-Injection Proxy over Self-Built Endpoint<a class="headerlink" href="#adr-020-tenant-federation-label-injection-proxy-over-self-built-endpoint" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p>Tenant-user 拉取<strong>自己</strong>的 metrics 子集回 tenant 側 infra 自管 federation。
+平台<strong>不自寫</strong> federation endpoint，採 prom-label-proxy 做 label-enforced rewriting。</p>
+<p>與 <a href="../004-federation-central-exporter-first/">ADR-004 (Federation — Central-Exporter-First)</a> 是兩件事：ADR-004 是<strong>平台內部</strong>多叢集 federation（中央 exporter 服務邊緣 Prometheus），本 ADR 是<strong>跨平台邊界</strong> federation（tenant 把自己的 metrics 拉回 tenant 自有 Prom/VM 自管）。</p>
+</blockquote>
+<h2 id="_1">狀態<a class="headerlink" href="#_1" title="Permanent link">&para;</a></h2>
+<p>✅ <strong>Accepted</strong>（v2.8.0 起草，issue <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/380">#380</a>；v2.9.0 federation epic 實作期間經 owner 拍板正式昇格，設計鎖定見 issue <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/504">#504</a>）</p>
+<blockquote>
+<p>EN mirror：原規劃「進入 <code>Accepted</code> 後再起 EN 翻譯」已不執行 —— 平台語言政策定案「中文為主 SSOT、不執行 ZH→EN 遷移」後，ADR EN mirror 慣例停止（ADR-019 同樣無 EN mirror）。本 ADR 不另製 <code>.en.md</code>。</p>
+</blockquote>
+<h2 id="_2">背景<a class="headerlink" href="#_2" title="Permanent link">&para;</a></h2>
+<h3 id="_3">客戶需求<a class="headerlink" href="#_3" title="Permanent link">&para;</a></h3>
+<p>進入 v2.8.0 客戶導入準備階段，多個 prospective customer 在 RFP / pre-onboarding 訪談中提出需求：</p>
+<ul>
+<li>我們已有自己的 Prometheus / VictoriaMetrics infra（NOC / SRE team 自管）</li>
+<li>想把<strong>屬於我們自己</strong> tenant 的 metrics 子集拉回我們 infra，做：</li>
+<li>自己 SRE team 的 long-term retention（平台側預設 retention 可能不滿足合規）</li>
+<li>整合到自己既有 Grafana dashboard / oncall workflow</li>
+<li>自管告警 evaluation（不依賴平台 Alertmanager）</li>
+</ul>
+<p><strong>注意定位</strong>：這不是「平台幫客戶 federation」（那是 <a href="../004-federation-central-exporter-first/">ADR-004</a>），是「<strong>客戶從平台拉自己的 metrics 出去</strong>」。資料流向相反，trust boundary 也不同——ADR-004 是「平台信任邊緣叢集（同組織內 N 個 cluster）」的 inbound 場景；ADR-020 是「平台對客戶（cross-org）」的 outbound 場景，被取走的資料離開平台控制邊界後就可能被 tenant 自己再轉、再存、再泄。Multi-tenant isolation 與 audit 需求因此更嚴格。</p>
+<h3 id="federation">既有 federation 架構覆蓋空白<a class="headerlink" href="#federation" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>場景</th>
+<th>既有方案</th>
+<th>缺口</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>平台內部多叢集 federation</td>
+<td>ADR-004 中央 exporter + 邊緣 remote_read</td>
+<td>✅ 覆蓋</td>
+</tr>
+<tr>
+<td>平台自管 alert eval</td>
+<td>tenant-api SSE + Alertmanager</td>
+<td>✅ 覆蓋</td>
+</tr>
+<tr>
+<td><strong>Tenant 拉自己 metrics 回 tenant 側自管</strong></td>
+<td>⛔ <strong>無方案</strong></td>
+<td>🎯 本 ADR</td>
+</tr>
+</tbody>
+</table>
+<h3 id="_4">為什麼這是個棘手的問題<a class="headerlink" href="#_4" title="Permanent link">&para;</a></h3>
+<p>「給 tenant 開一個 read endpoint 把自己 metrics 拉出去」表面簡單，實際有四個交叉約束：</p>
+<ol>
+<li><strong>Multi-tenant isolation</strong>（強制）— Tenant A 絕對不能讀到 Tenant B 的資料。Platform 後端 storage（VictoriaMetrics / Mimir / Prom）通常<strong>沒有強制的 label filter</strong>：寫一個自寫 endpoint 容易在 label sanitization 漏一個矩陣維度（cluster / node / namespace 在某些 metric 上不帶 tenant），變成 multi-tenant breach。</li>
+<li><strong>Blast radius</strong>（強制）— Tenant 拉自己 100 萬 series 的查詢若沒限制，會把 platform storage 拖垮（影響其他 tenant + 影響平台 alert eval pipeline）。</li>
+<li><strong>Auth / Token lifecycle</strong>（強制）— Token 簽發 / 失效 / 替換 / 撤銷的 surface。</li>
+<li><strong>平台 engineering cost</strong>（限制）— 自寫 endpoint + 多 tenant rewrite engine 是 6+ month workload；在單一 minor release 的時程內不現實。</li>
+</ol>
+<h3 id="_5">設計討論紀錄<a class="headerlink" href="#_5" title="Permanent link">&para;</a></h3>
+<p><a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/380">Issue #380</a> 記錄四輪 strategic discussion 與兩輪外部 adversarial review，locked decision 摘要：</p>
+<ul>
+<li><strong>不自寫 endpoint</strong>：用既有開源 proxy（prom-label-proxy）做 label injection</li>
+<li><strong>MVP 2-tier policy</strong>（Platform whitelist + Tenant subset）— Domain layer 暫 drop 到 Future Work</li>
+<li><strong>Token TTL 4h + 無 server-side revocation list</strong> — 明寫 trade-off 換實作簡單</li>
+<li><strong>Blast radius 三件組</strong>：concurrency cap / request timeout / series count cap</li>
+<li><strong>3-tier permission model</strong>（include compliance / audit 角色分離）→ Future Work，等 compliance 客戶觸發再做</li>
+</ul>
+<h2 id="_6">決策<a class="headerlink" href="#_6" title="Permanent link">&para;</a></h2>
+<h3 id="_7">主決策<a class="headerlink" href="#_7" title="Permanent link">&para;</a></h3>
+<p><strong>採 prom-label-proxy 作為 label-enforced read proxy，不自寫 federation endpoint。</strong></p>
+<pre class="mermaid"><code>flowchart LR
+    API["tenant-api（簽發 federation JWT）"]
+    G["Tenant 自管 Grafana / Prometheus"]
+    GW["federation-gateway · Envoy（驗章 / 撤銷 / 限流）"]
+    PX["federation-proxy · prom-label-proxy"]
+    ST[("平台 Storage · Prometheus / VictoriaMetrics")]
+
+    API -. "4h RS256 JWT" .-&gt; G
+    G -- "federation query + Bearer JWT" --&gt; GW
+    GW -- "已驗證請求" --&gt; PX
+    PX -- "注入 tenant 標籤後轉送" --&gt; ST</code></pre>
+<p>prom-label-proxy 是 prometheus-community 維護的成熟開源工具，front 任何相容 Prometheus query API 的後端（Prometheus / Thanos / 單機 VictoriaMetrics），在 query path 強制把 <code>{tenant="&lt;X&gt;"}</code> 注入所有 selector。</p>
+<p><strong>VictoriaMetrics cluster</strong> 模式不經 prom-label-proxy：其租戶隔離由 API gateway 直接把 URL 改寫到 <code>/select/&lt;accountID&gt;/prometheus/</code> 達成（gateway 已從驗證過的 JWT 取得 <code>tenant_id</code>）。proxy 選型理由（為什麼不是 vmauth）見 §為什麼不用其他方案。</p>
+<p>Platform 側只負責：</p>
+<ol>
+<li><strong>Helm chart</strong> 把 prom-label-proxy 拉進部署（<code>helm/federation-proxy</code> chart，issue <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/506">#506</a>；front Prometheus / Thanos / VictoriaMetrics 單機）</li>
+<li><strong>tenant-api token endpoint</strong> 簽發 / 列舉 / 撤銷 tenant federation token</li>
+<li><strong>Policy schema validation</strong>（platform whitelist + tenant subset 兩層）</li>
+<li><strong>Audit log + anomaly metric</strong>（誰拉了什麼、拉多少、是否超 cap）</li>
+</ol>
+<h3 id="mvp-2-tier-policy">MVP 範圍（2-tier policy）<a class="headerlink" href="#mvp-2-tier-policy" title="Permanent link">&para;</a></h3>
+<p><strong>架構安全聲明 —— 安全邊界與治理邊界分離</strong>：</p>
+<ul>
+<li><strong>安全邊界（資料平面）</strong>：跨租戶隔離 100% 來自 prom-label-proxy 在 query path 強制注入的 <code>{tenant="&lt;X&gt;"}</code> label matcher。租戶查得到的資料恆等於「帶它自己 <code>tenant</code> label 的 series」—— 前提是該 metric 在 data-layer 確實帶 <code>tenant</code> label（見 §前提約束；缺 label 時結果為 empty vector，不是洩漏）。</li>
+<li><strong>治理邊界（控制平面）</strong>：2-tier policy（platform whitelist + tenant subset）是 UI catalogue、admission validator 檢查標的、subset 策展的依據，<strong>不在 query path 做硬阻擋</strong>。緊急阻斷某 metric 外洩須走 ingestion 階段（見下方 ⚠️）。</li>
+</ul>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>┌───────────────────────────────────────────────┐
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>│ Platform whitelist (maintainer-managed)       │
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>│ 允許 tenant 拉的 metric name + label 範圍上限 │
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>└───────────────────────────────────────────────┘
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>                    ↓ intersect
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>┌───────────────────────────────────────────────┐
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>│ Tenant subset (tenant-self-managed via API)   │
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>│ Tenant 從 whitelist 中選自己要拉的子集        │
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>└───────────────────────────────────────────────┘
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>                    ↓ inform（非 enforce）
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>┌───────────────────────────────────────────────┐
+<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>│ prom-label-proxy                              │
+<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>│ 強制注入 tenant=&quot;&lt;X&gt;&quot; 到所有 query            │
+<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>└───────────────────────────────────────────────┘
+</code></pre></div>
+<p><strong>為什麼 whitelist 不能在 query path 強制</strong>：prom-label-proxy 只做 label 注入、無 metric-name allowlist 能力，gateway 也無法可靠地用 regex 從 PromQL AST 攔截 metric name。租戶若查 whitelist 外的 metric，proxy 一樣注入它自己的 tenant label，它只會拿到自己的資料（查自己的 custom metric 因此是 feature，不是漏洞）。<code>tenant subset ⊆ whitelist</code> 的不變式為治理一致性、非安全邊界：靜態檔案過期時以 read-repair（讀取端取交集）修復，不掃改租戶檔。</p>
+<blockquote>
+<p><strong>⚠️ Hard-revocation 警告</strong>：whitelist 不在 query path 強制執行，所以<strong>從 whitelist 移除一個 metric 無法阻斷對它的查詢</strong>。read-repair 只擋「發現」（GET 不再列出它），擋不住「已知名稱的查詢」：已知該 metric 名稱的租戶仍可直接對 gateway 送該 PromQL、無阻礙地拉到自己的資料。<strong>若需緊急阻斷某 metric 被 federate（例如該 metric 被發現夾帶 PII），改 whitelist 無效</strong>——必須在 <strong>ingestion 階段</strong>處理：Prometheus / VictoriaMetrics 的 <code>relabel_configs</code> 以 <code>drop</code> action 丟棄該 metric，或調整底層存取權限。federation proxy 不具備阻擋特定 metric 的能力。</p>
+</blockquote>
+<p><strong>Domain layer</strong>（讓 tenant 內再分 sub-team scope）<strong>留 Future Work</strong>。理由：v2.9.0 customer base 是「單一 SRE/NOC team 拉自己 tenant 全部」，sub-team scope 是更晚的需求；現在做會增加 2-tier → 3-tier schema 複雜度，但無 customer signal。</p>
+<h3 id="data-layer-label-enrichment-guarantee">前提約束：Data-layer Label Enrichment Guarantee<a class="headerlink" href="#data-layer-label-enrichment-guarantee" title="Permanent link">&para;</a></h3>
+<p>平台 data-layer 的租戶 label 名為 <strong><code>tenant</code></strong>（Prometheus relabel <code>target_label: tenant</code>、threshold-exporter、tenant-scoped rule pack 一律 <code>on(tenant)</code>）。本 ADR prose 凡指「proxy 注入到 metric 的 label」一律為 <code>tenant</code>。JWT claim 名為 <code>tenant_id</code>——claim 名與 metric label 名為獨立命名空間，互不要求一致；§Token model 與 token JSON 範例的 <code>tenant_id</code> 即 claim。data-layer 租戶 label 現況盤點詳 <a href="../../internal/federation-label-enrichment-audit/"><code>federation-label-enrichment-audit.md</code></a>（issue <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/505">#505</a>）。</p>
+<p>所有 platform whitelist 列入的 metric，平台<strong>必須</strong>確保在 ingest / scrape 階段（Prometheus <code>scrape_configs.relabel_configs</code>、VictoriaMetrics <code>relabel_config</code>、或統一 ingestion pipeline）已可靠注入 <code>tenant</code> label。</p>
+<p><strong>為什麼這是 prerequisite</strong>：proxy 在 query path 強制把 <code>{tenant="&lt;X&gt;"}</code> 注入到所有 selector。如果某 metric 原生不帶 <code>tenant</code> label，query 結果就是 empty vector——tenant 看到「dashboard 空白」，會報修「federation 壞了」，SRE 要從 token 一路查到 scrape config 才能發現是 data-layer 沒打 label。是個典型的 silent-failure 地雷。</p>
+<p><strong>典型踩坑 metric 來源</strong>（無 <code>tenant</code> native label）：</p>
+<ul>
+<li><code>container_*</code>（cAdvisor）</li>
+<li><code>node_*</code>（node-exporter）</li>
+<li><code>kube_*</code>（kube-state-metrics）</li>
+<li>任何透過 federation 從上游 Prom 抓進來、上游沒打 tenant label 的 metric</li>
+</ul>
+<h4 id="admission-validatorsoft-gate-force-override">Admission validator（soft gate + force override）<a class="headerlink" href="#admission-validatorsoft-gate-force-override" title="Permanent link">&para;</a></h4>
+<p>whitelist 加入新 metric 時，admission validator 對「過去 24h 該 metric 在後端 storage 至少有一筆帶 <code>tenant</code> label 的 sample」做檢查（2-tier policy schema 與 admission validator 見 issue <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/510">#510</a>）。</p>
+<p>檢查只走 <strong>Series metadata API</strong>（<code>GET /api/v1/series</code>），不用 range query —— 後者會把 24h raw sample 載進記憶體、對高基數 metric 把 Prometheus 打到 OOM。探測用 <code>metric{tenant!=""}</code> 把過濾下推 TSDB inverted index（近零成本）；每次呼叫三重 bound（<code>limit=1</code> + <code>io.LimitReader</code> + <code>context</code> 5s timeout），validator 自身不會變成 resource sink。後端不可達 / timeout 視為 WARN（查不到無法證明 metric 壞）。validator 另含 <strong>PII label-name heuristic</strong>：metric 的 label 名命中 <code>email</code> / <code>customer</code> / <code>user_ip</code> 等樣式 → 列為 advisory soft warning（非 hard block，heuristic 必然不精準）。</p>
+<p>hard-block 的判準是「<strong>沒有任何</strong> series 帶 <code>tenant</code> label」，<strong>不是</strong>「有 series 缺 label」。K8s 共享叢集裡 <code>up</code> / <code>container_*</code> 等 metric，租戶 pod 帶 <code>tenant</code>、平台 pod（kube-system / API server）不帶——proxy 注入 <code>{tenant="&lt;X&gt;"}</code> 已把每個租戶隔離到自己的 series，平台那些無 label 的 series 無害。若以「任一 series 缺 label」為準則，會把所有 K8s 原生 metric 永久 hard-block。故探測 <code>metric{tenant!=""}</code>：非空即 Pass。</p>
+<p><strong>輸出分三種</strong>：</p>
+<table>
+<thead>
+<tr>
+<th>觀察結果</th>
+<th>Validator 行為</th>
+<th>為何</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>metric 有帶 <code>tenant</code> label 的 series</td>
+<td>✅ Pass</td>
+<td>該 metric 可 federate；共用 metric 上同時存在的無 <code>tenant</code> 平台 series 不影響（proxy 注入 <code>{tenant="&lt;X&gt;"}</code> 自動隔離）</td>
+</tr>
+<tr>
+<td>metric 有 sample、但<strong>沒有任何</strong> series 帶 <code>tenant</code> label</td>
+<td>⛔ <strong>Hard block</strong></td>
+<td>True positive failure mode——scrape config 沒打 label，federate 後對所有租戶都是 empty vector</td>
+</tr>
+<tr>
+<td>過去 24h 完全無 sample</td>
+<td>⚠️ <strong>WARN，不 block</strong>——要求 admin 顯式 <code>--force</code> 才能通過</td>
+<td>Cold start（新 tenant deploy 新 service）/ sparse metric（<code>critical_error_count</code> 週發一次）都是合法情境；hard block 會卡死合法 whitelist 更新</td>
+</tr>
+</tbody>
+</table>
+<p><code>--force</code> bypass 路徑同時寫進兩處稽核軌跡：tenant-api 的 slog audit line，以及該次 git commit message 的 <code>[Bypass-Validator]</code> trailer（operator + reason + metrics）—— commit message 是 GitOps 不可繞、不會 rotate 的固化軌跡。hard block <strong>不可</strong> <code>--force</code>。<strong>為什麼不直接 hard block 全部</strong>：cardinality guard 也是 soft gate 設計（<a href="../017-defaults-yaml-inheritance-dual-hash/">ADR-017</a> precedent）——平台級防護要區分「結構性錯誤（hard block）」與「資料時序性缺漏（warn + 人工確認）」，否則 false positive 把合法 ops 鎖死。</p>
+<h3 id="token-model">Token model<a class="headerlink" href="#token-model" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>屬性</th>
+<th>設計選擇</th>
+<th>理由 / trade-off</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>簽發方</strong></td>
+<td>tenant-api <code>/api/v1/federation/tokens</code> POST</td>
+<td>與既有 tenant-api auth pipeline 一致；不另起 service</td>
+</tr>
+<tr>
+<td><strong>TTL</strong></td>
+<td>4h（hardcoded MVP，Helm value 可調）</td>
+<td>4h 在「短到撤銷不重要」與「長到 ops 不痛苦」之間平衡</td>
+</tr>
+<tr>
+<td><strong>撤銷機制</strong></td>
+<td>⚠️ <strong>無 server-side revocation list</strong>（MVP）。⚠️⚠️ <strong>Compensating control 強制要求</strong>：API Gateway 必須實作嚴格 per-token + per-IP rate limiting（見 §Blast radius Layer 2），確保 4h 曝險窗內外洩 token 即便被併發濫用也無法把後端 storage CPU 打滿</td>
+<td>Trade-off：避免 token revocation table 的 cache / propagation / TTL 複雜度。換來代價：token 洩漏後<strong>最多</strong> 4h 曝險（前提：gateway rate limit 確實到位；缺它則 4h 曝險升級為 4h DoS 樂園）。Gateway rate limit <strong>不是</strong> nice-to-have，是放棄 revocation 的對價</td>
+</tr>
+<tr>
+<td><strong>Scope binding</strong></td>
+<td>token 內 embed <code>tenant_id</code> claim，proxy 強制 inject</td>
+<td>proxy 不能信 query string 帶的 tenant_id</td>
+</tr>
+<tr>
+<td><strong>Refresh</strong></td>
+<td>過期前 tenant 自行重新簽發；無 sliding refresh</td>
+<td>簡化實作；4h 重簽對 self-service tenant 不痛</td>
+</tr>
+</tbody>
+</table>
+<p><strong>簽章金鑰</strong>：RS256 簽章金鑰的生成 / 輪替由 <code>da-tools fed-key</code> 命令負責（issue <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/518">#518</a>）——私鑰吐成 Kubernetes Secret manifest（不落地）、公鑰吐成 JWKS 供 gateway。每把公鑰的 <code>kid</code> 為其 <strong>RFC 7638 thumbprint</strong>；tenant-api 簽 token 時對載入金鑰算同一 thumbprint、注入 <code>kid</code> header，故 gateway <code>jwt_authn</code> 可用 <code>kid</code> O(1) 選鑰（輪替期 JWKS 多鑰並存也不會放大壞簽章 flood 的 RSA 成本）。計畫性輪替走 grace-period overlap、私鑰外洩走緊急汰換——標準流程見 <a href="../../internal/federation-key-rotation-runbook/"><code>federation-key-rotation-runbook.md</code></a>。</p>
+<h3 id="blast-radius3-layer-defense">Blast radius：3-layer defense<a class="headerlink" href="#blast-radius3-layer-defense" title="Permanent link">&para;</a></h3>
+<p>Blast-radius 控制分布於三層，每層做它最適合的事——<code>prom-label-proxy</code> 是極輕量的 label-injection middleware（解析 PromQL AST 注入 label 後把 request 原封轉給後端），不解析 response body、不追蹤 per-token state，無法獨力承擔 series cap 或 concurrency 控制。三層職責一覽：</p>
+<ul>
+<li><strong>Layer 1 — Storage backend</strong>：query 資源上限（sample / series cap + timeout），防 OOM-by-query。</li>
+<li><strong>Layer 2 — API Gateway（Envoy）</strong>：per-token / per-tenant 限流 + 並發控制，防 token-level abuse。</li>
+<li><strong>Layer 3 — Proxy（prom-label-proxy）</strong>：強制 <code>{tenant="&lt;X&gt;"}</code> 注入，租戶隔離的核心保證。</li>
+</ul>
+<p>三層由內而外標號（Layer 1 = 最內層 storage）；請求實際流向為 gateway → proxy → storage。</p>
+<h4 id="layer-1-storage-backendseries-sample">Layer 1 — Storage backend（series / sample 上限）<a class="headerlink" href="#layer-1-storage-backendseries-sample" title="Permanent link">&para;</a></h4>
+<table>
+<thead>
+<tr>
+<th>後端</th>
+<th>Flag / Config</th>
+<th>防護對象</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Prometheus</td>
+<td><code>--query.max-samples</code>（單 query sample 總數上限） + <code>--query.timeout</code>（global query 超時）</td>
+<td>防 OOM-by-query</td>
+</tr>
+<tr>
+<td>VictoriaMetrics</td>
+<td><code>-search.maxUniqueTimeseries</code>（單 query 唯一 series 上限） + <code>-search.maxSamplesPerQuery</code> + <code>-search.maxQueryDuration</code></td>
+<td>同上</td>
+</tr>
+</tbody>
+</table>
+<p>平台必須在部署時<strong>強制配置</strong>這些 flag。<strong>Starting default</strong>（上線後觀察實際 customer query pattern 再 tuning）：</p>
+<table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Starting default</th>
+<th>Tuning range</th>
+<th>Rationale</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Prom <code>--query.max-samples</code></td>
+<td>5M</td>
+<td>5M–50M（Prom native 預設 50M）</td>
+<td>federation read 比 internal eval 嚴；5M 是「典型 1000 series × 1d @ 30s scrape ≈ 3M」之上的保守起點，觀察 false-positive 再放寬</td>
+</tr>
+<tr>
+<td>VM <code>-search.maxUniqueTimeseries</code></td>
+<td>100k</td>
+<td>50k–300k（VM native 預設 300k）</td>
+<td>同上邏輯；100k 對應「能撐 cluster-wide dashboard panel 但擋 <code>count by (instance) (...)</code> 意外高基查詢」</td>
+</tr>
+<tr>
+<td>Prom <code>--query.timeout</code> / VM <code>-search.maxQueryDuration</code></td>
+<td>25s（storage；gateway 維持 30s）</td>
+<td>storage &lt; gateway</td>
+<td><strong>Cascading timeout（非等值）</strong>：storage 須<strong>短於</strong> gateway —— inner layer 先逾時才能砍 query、釋放記憶體並回精確 error code 給 gateway 記錄。兩層相等會 race：gateway 計時較早起跑、會先 504，Prometheus 卻還在跑、clean error 無處可回</td>
+</tr>
+</tbody>
+</table>
+<h4 id="layer-2-api-gatewayper-token-concurrency-per-token-rate-limit">Layer 2 — API Gateway（per-token concurrency + per-token rate limit）<a class="headerlink" href="#layer-2-api-gatewayper-token-concurrency-per-token-rate-limit" title="Permanent link">&para;</a></h4>
+<p><code>prom-label-proxy</code> 沒有 per-token concurrency 原生支援 → 必須由前置 <strong>API Gateway</strong> 擋。Gateway 以 <strong>Envoy</strong>（<code>distroless</code> image）實作，交付為 <code>helm/federation-gateway</code> chart（issue <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/507">#507</a>）。選 Envoy 的關鍵：最不能錯的 RS256 驗章交給原生 <code>jwt_authn</code> filter（純設定、audited、無 alg-confusion footgun）。</p>
+<p>Gateway 的 filter chain 採 cheap-before-expensive 排序：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>per-IP local_ratelimit
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>  → jwt_authn（RS256 驗章，kid O(1) 選鑰）
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>  → Lua（revoked-set 查驗 + 已驗證 tenant header 覆寫）
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>  → per-token / per-tenant local_ratelimit
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>  → router
+</code></pre></div>
+<p>per-token + per-tenant 雙層限流以 wildcard descriptor 達成（防單 token 濫用 + 防 round-robin ≤16 token 的 Sybil）。revoked-set 由 Lua filter time-gated 重讀 ConfigMap projected volume。詳 <code>helm/federation-gateway</code> chart README。</p>
+<p><strong>Rate limit 取值</strong>：per-token sustained ≈ 30 req/min（平均每 2s 一次 query），對應 Grafana 預設 dashboard refresh interval（30s）× 多 panel 場景的合理上限；容忍「打開 dashboard 一次性發 ~10 個 panel query」的初始 burst。<strong>刻意不用 web API 數量級（如 10 r/s）</strong>：PromQL query 是 CPU/memory-expensive 操作；一個外洩 token 在 4h 曝險窗 + 10 r/s ≈ 144k 次 query，足以把後端 storage CPU 打滿。Web API 預設值對 TSDB read 而言錯了一個數量級。Tuning corridor：panel-heavy customer 可調高至 60 req/min；觀察到 abuse 則降到 15 req/min。</p>
+<p>Rate-limit key 用 <code>token_id</code>（由 JWT claim 解出），<strong>不是用 IP</strong>——否則公司 NAT 後所有 tenant 互相影響。</p>
+<h4 id="layer-3-proxylabel-injection">Layer 3 — Proxy（label injection）<a class="headerlink" href="#layer-3-proxylabel-injection" title="Permanent link">&para;</a></h4>
+<p><code>prom-label-proxy</code> 在此層只做一件事：強制把 <code>{tenant="&lt;X&gt;"}</code> 注入所有 selector（核心安全保證）。</p>
+<blockquote>
+<p><strong>Audit log 不在此層</strong>：access log 由 <strong>Layer 2 gateway</strong> 產出（見 §Audit log + anomaly metric），因為只有 gateway 持有 <code>jwt_authn</code> 驗證過的 claims（<code>tenant_id</code> / <code>token_id</code>）；Layer 3 proxy 看不到 token。</p>
+</blockquote>
+<p><strong>⚠️ Metadata API 防護承諾（critical）</strong>：proxy 的 enforcement 必須<strong>同時涵蓋 Query API 與 Metadata API</strong>，否則跨租戶拓樸資訊外洩：</p>
+<table>
+<thead>
+<tr>
+<th>API class</th>
+<th>Endpoints</th>
+<th>為何必須涵蓋</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Query API</td>
+<td><code>/api/v1/query</code>, <code>/api/v1/query_range</code></td>
+<td>明顯目標</td>
+</tr>
+<tr>
+<td><strong>Metadata API</strong></td>
+<td><code>/api/v1/series</code>, <code>/api/v1/labels</code>, <code>/api/v1/label/&lt;name&gt;/values</code></td>
+<td>Grafana variable dropdown（<code>label_values(pod)</code> 等）走這些 endpoint。<strong>沒擋 = tenant A 在自家 Grafana variable dropdown 看到 tenant B 的 pod name / instance / hostname → multi-tenant breach</strong></td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>⚠️ 上表 endpoints 為<strong>最常見</strong>且 Grafana 必用的子集，<strong>非 exhaustive</strong>。Prom HTTP API 還有 <code>/api/v1/metadata</code>、<code>/api/v1/targets</code>、VM <code>/api/v1/status/active_queries</code> 等也可能洩漏 metadata。實作的 acceptance criteria 含「完整 Prom HTTP API surface audit」，把所有 query/metadata endpoint 逐一驗 enforcement coverage（不只本表列出的 3 個）。</p>
+</blockquote>
+<p>prom-label-proxy 必須<strong>顯式啟用</strong> label/metadata API enforcement（<code>--enable-label-apis</code>；早期版本預設 OFF）。Helm chart 必須 hardcode 啟用，<strong>不開放 customer override</strong>。Smoke test：簽 token A，用它連 <code>/api/v1/series?match[]={__name__=~".+"}</code> 查所有 series，驗證 response 不含任何 tenant B 的 label value；同樣對 <code>/api/v1/labels</code> 與 <code>/api/v1/label/pod/values</code> 各驗一次，並擴張至上述 non-exhaustive note 列出的其他 endpoint。</p>
+<h4 id="default-rationale">Default 值 rationale（上線後實測可調）<a class="headerlink" href="#default-rationale" title="Permanent link">&para;</a></h4>
+<table>
+<thead>
+<tr>
+<th>控制項</th>
+<th>預設值</th>
+<th>Where</th>
+<th>Rationale</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Concurrency / token</td>
+<td>4</td>
+<td>Gateway L7</td>
+<td>一個 tenant 的 Grafana / 自管 alert eval / oncall 並行 query 通常 ≤ 3；4 留 headroom 擋明顯 abuse</td>
+</tr>
+<tr>
+<td>Request timeout</td>
+<td>gateway 30s / storage 25s</td>
+<td>Gateway L7 + storage backend</td>
+<td>Grafana 預設 query timeout 在 30s 附近；長跑離線分析應走 batch export 非 federation 即時 path。storage 取 25s（&lt; gateway）為 <strong>cascading timeout</strong> —— inner 先逾時、乾淨回錯；等值會 race</td>
+</tr>
+<tr>
+<td>Series per query</td>
+<td>100k</td>
+<td>Storage backend</td>
+<td>100k series 是「撐得起 cluster-wide dashboard panel」與「不至於 OOM」的中間值；擋住 <code>count by (instance) (...)</code> 類意外高基查詢</td>
+</tr>
+<tr>
+<td>Sample per query</td>
+<td>5M</td>
+<td>Storage backend</td>
+<td>與 series cap 互補：tenant 可能拉低基數但長時段範圍</td>
+</tr>
+</tbody>
+</table>
+<p><strong>三層缺一不可，且職責不可錯位</strong>：proxy 擋 label 注入；storage 擋 query 資源；gateway 擋 token-level abuse。錯放層（例如指望 proxy 擋 series cap）= 工程上做不到，最後還是得自寫 middleware，<strong>違背本 ADR 不自寫 endpoint 的初衷</strong>。</p>
+<h3 id="audit-log-anomaly-metric">Audit log + anomaly metric<a class="headerlink" href="#audit-log-anomaly-metric" title="Permanent link">&para;</a></h3>
+<p>audit log（issue <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/511">#511</a>）<strong>分兩個維度，物理分離</strong>。</p>
+<h4 id="data-plane-audit">Data-plane audit（誰查了什麼）<a class="headerlink" href="#data-plane-audit" title="Permanent link">&para;</a></h4>
+<p>由 <strong>Layer 2 gateway（Envoy）</strong> 產出，不經 tenant-api。每個 federation request 一筆 JSON：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>{
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>  &quot;ts&quot;: &quot;2026-05-11T10:23:00Z&quot;,
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>  &quot;tenant_id&quot;: &quot;db-anonymized-001&quot;,
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>  &quot;token_id&quot;: &quot;ftk_8a3f...&quot;,
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>  &quot;method&quot;: &quot;POST&quot;,
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>  &quot;path&quot;: &quot;/api/v1/query_range&quot;,              // 截斷 2048 字元
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>  &quot;query&quot;: &quot;rate(http_requests_total[5m])&quot;,   // Lua 統一抽取，見下
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>  &quot;status&quot;: 200,                              // 原始 HTTP code
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>  &quot;duration_ms&quot;: 1843
+<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a>}
+</code></pre></div>
+<ul>
+<li><strong><code>query</code></strong>：Envoy access log 無 native 的 request-body 變數，故由 audit Lua filter（<code>audit_extract.lua</code>）<strong>統一抽取</strong> PromQL —— GET 取自 URL query-string、POST 取自 form body，URL-decode、截斷 2048 字元，GET/POST 輸出格式一致。audit / <code>buffer</code> filter 置於限流器<strong>之後</strong>，被限流拒絕的請求因此不進 Envoy 記憶體緩衝。</li>
+<li><strong><code>status</code></strong>：access log 記<strong>原始 HTTP code</strong>；下游 metric 的 <code>status</code> label 才是分桶 enum。</li>
+<li>audit schema <strong>不含</strong> <code>matched_whitelist_rule</code>（whitelist 不在查詢路徑執行，沒有「規則匹配」這回事）與 <code>series_returned</code>（Envoy 不該 buffer 並解 response body 來數 series——成本過高；blast-radius 的執行靠 storage 的 <code>--query.max-samples</code>，不靠 log 算）。</li>
+</ul>
+<p>新 metric <strong><code>tenant_federation_requests_total{tenant,status}</code></strong> 由 gateway pod 的 <strong>mtail sidecar</strong> tail access log 產出（Envoy 原生 stats 無法產生 per-tenant 高基數 label）。<code>status</code> label 為 HTTP code 分桶 enum：</p>
+<table>
+<thead>
+<tr>
+<th>enum</th>
+<th>HTTP</th>
+<th>意義</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ok</code></td>
+<td>2xx</td>
+<td>成功</td>
+</tr>
+<tr>
+<td><code>client_aborted</code></td>
+<td>0 / 499</td>
+<td>client 在收到回應前中斷連線（如 Grafana 切換時間範圍 / 下拉選單時取消查詢）；非平台拒絕，不計入 rejection rate</td>
+</tr>
+<tr>
+<td><code>rate_limited</code></td>
+<td>429</td>
+<td>gateway 限流</td>
+</tr>
+<tr>
+<td><code>auth_failed</code></td>
+<td>401 / 403</td>
+<td>JWT 驗證失敗 / token 撤銷</td>
+</tr>
+<tr>
+<td><code>bad_request</code></td>
+<td>其他 4xx（含 422）</td>
+<td>錯誤請求；422 = storage <code>--query.max-samples</code> 超標（blast-radius 觸發訊號）</td>
+</tr>
+<tr>
+<td><code>backend_error</code></td>
+<td>5xx</td>
+<td>平台故障</td>
+</tr>
+</tbody>
+</table>
+<p>配 alert <code>FederationRejectionRateAnomaly</code>（per-tenant rejection ratio 異常 → <code>severity: warning</code>，notify platform ops；非 <code>severity: none</code> inhibit sentinel）。該規則 join <code>tenant_metadata_info</code>，只評估仍在 conf.d 的活躍租戶 —— 已退租租戶的殭屍 token 持續被 <code>403</code> 拒絕（撤銷後、4h TTL 未到期前計入 <code>auth_failed</code>，見下「Metric 邊界」）不會誤報（<a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/550">#550</a>）。</p>
+<blockquote>
+<p><strong>Metric 邊界</strong>：mtail 以 <code>tenant_id</code> 為必要分桶欄位，故<strong>純 JWT 驗證失敗</strong>的請求（偽造 / 過期 token —— <code>jwt_authn</code> 在 claim 注入前就 401，access log 無 <code>tenant_id</code>）<strong>不計入</strong> <code>tenant_federation_requests_total</code>：它們無有效租戶、不屬 per-tenant 用量，屬攻擊噪音，由 Envoy <code>jwt_authn</code> 自身的 stats 觀測。被撤銷的 token 不同 —— 那是合法 JWT（claim 已注入）、由 revoked set 擋下的 403，正常計入 <code>auth_failed</code>。</p>
+</blockquote>
+<h4 id="control-plane-audit">Control-plane audit（誰授權了什麼）<a class="headerlink" href="#control-plane-audit" title="Permanent link">&para;</a></h4>
+<p>federation 控制平面操作（簽發／撤銷 token、改 whitelist／subset、<code>--force</code> bypass）的稽核軌跡<strong>是既有的兩個持久層，不需另建 store</strong>：</p>
+<ul>
+<li><strong>token 生命週期</strong> → <code>tenant-federation-store</code> ConfigMap 內的 token <code>Record</code>（<code>token_id</code> / <code>tenant_id</code> / <code>issued_by</code> / <code>issued_at</code> / <code>expires_at</code>）+ revoked set。</li>
+<li><strong>whitelist / subset 變更</strong> → GitOps commit 歷史，每次變更一個 commit，帶 author 與（<code>--force</code> 時）bypass trailer（ADR-009 / 011）。</li>
+<li>tenant-api 的 slog request log 為輔助訊號（走 stderr，非持久查詢來源）。</li>
+</ul>
+<h4 id="trade-off">持久化邊界（已知 trade-off）<a class="headerlink" href="#trade-off" title="Permanent link">&para;</a></h4>
+<p>data-plane audit log 的<strong>持久、可中央查詢的合規儲存不在本 ADR 交付範圍</strong>。平台目前無 log 聚合 stack（無 Loki / ELK / Fluentd / Vector）；把 audit log 寫 per-pod PVC 是 cloud-native anti-pattern——RWO PVC 在 gateway 的 <code>replicaCount&gt;1</code> / <code>podAntiAffinity</code> 下根本無法多副本掛載，RWX 則拖入 NFS／EFS 依賴。交付的是：</p>
+<ol>
+<li><strong>aggregate 層</strong>——<code>tenant_federation_requests_total</code> 進 Prometheus，本即 durable + queryable（誰拉多少、拒絕率多少）。</li>
+<li><strong>per-request 層</strong>——結構化 JSON 寫 gateway stdout（collector-ready），持久度等同 node container-log 輪替，<strong>尚非中央可查</strong>；另有一份 in-pod emptyDir mirror 供 mtail，為 ephemeral metrics feed，非系統紀錄。</li>
+</ol>
+<p>真正的中央 forensic log store（node-level log shipper + Loki／SIEM + retention policy）為 follow-up <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/539">#539</a>。觸發條件：合規客戶要求中央 forensic 查詢，或 stdout audit log volume 超出 node container-log 輪替可用保留。</p>
+<blockquote>
+<p><strong>與 chargeback 無關</strong>：把 audit log 變中央可查（#539）解決的是「合規 forensic 查詢」，不是「計費」—— audit log 記<strong>請求次數</strong>、不記<strong>查詢成本</strong>（掃了幾條 series、耗多少 CPU），不能當帳單來源。federation 流量計費為何不能靠這條 log、正解為何，見 §Future Work item 5。</p>
+</blockquote>
+<h2 id="_8">為什麼不用其他方案<a class="headerlink" href="#_8" title="Permanent link">&para;</a></h2>
+<h3 id="aself-built-federation-endpoint">替代方案 A：Self-built federation endpoint（純自寫）<a class="headerlink" href="#aself-built-federation-endpoint" title="Permanent link">&para;</a></h3>
+<p>「在 tenant-api 加 <code>/api/v1/federation/read</code> proxy 到後端 storage，自己做 label rewrite。」</p>
+<p><strong>問題</strong>：</p>
+<ol>
+<li><strong>Label sanitization 是地雷</strong>：後端 storage 不同 metric 的 label 矩陣不一致（有些 metric 帶 <code>tenant</code>，有些只帶 <code>cluster_id</code> + reverse mapping）。自寫 sanitizer 漏一個矩陣維度 = multi-tenant breach。prom-label-proxy 在 production 跑了多年，這類 corner case 已被解掉</li>
+<li><strong>Engineering cost</strong>：6+ months 寫一個「比現成開源 proxy 還弱」的東西，無 value-add</li>
+<li><strong>Maintenance cost</strong>：自寫的安全 patch 要自己追</li>
+</ol>
+<p><strong>結論</strong>：拒絕。Open-source proxy 是「贏家通吃」場景：自寫只虧不賺。</p>
+<h3 id="b-rbac-on-remote_read-proxy">替代方案 B：純 RBAC on remote_read（無 proxy）<a class="headerlink" href="#b-rbac-on-remote_read-proxy" title="Permanent link">&para;</a></h3>
+<p>「給 tenant 後端 Prom 開 read-only user，靠 storage 層 RBAC 做隔離。」</p>
+<p><strong>對 VM 客戶</strong>：VictoriaMetrics 沒有 native multi-tenant RBAC——這條路對 VM 客戶不成立。</p>
+<p><strong>對 Prom 客戶</strong>：</p>
+<ol>
+<li><strong>Prometheus 本身沒 multi-tenant RBAC</strong>：要靠 Cortex / Mimir 這種第三方層做，但既有平台後端不是 Mimir（見 <code>byo-prometheus-integration.md</code>，平台<strong>不</strong>強制客戶用特定後端）</li>
+<li><strong>PromQL metadata leakage</strong>：tenant 可以寫 <code>count by (tenant) (up)</code> 之類的 query 探測其他 tenant 是否存在；純 RBAC（檔案級權限 / basic auth）擋不掉這類查詢層資料外洩。<strong>proxy 方案如 prom-label-proxy 在 query path 強制注入 <code>{tenant="&lt;X&gt;"}</code> matcher 才擋得住</strong>——這正是它存在的原因</li>
+<li><strong>Audit 缺口</strong>：純 RBAC 只記「誰連線」，不記「誰拉了什麼 query / 多少 series」；compliance 要求的查詢層稽核做不到</li>
+</ol>
+<p><strong>結論</strong>：拒絕。沒有 universal 後端 RBAC；prom-label-proxy 本來就是補這缺口的方案。</p>
+<h3 id="cpush-basedremote_write-to-tenant">替代方案 C：Push-based（remote_write to tenant）<a class="headerlink" href="#cpush-basedremote_write-to-tenant" title="Permanent link">&para;</a></h3>
+<p>「平台主動 remote_write tenant 自己的 metrics 到 tenant 端 Prom/VM。」</p>
+<p><strong>問題</strong>：</p>
+<ol>
+<li><strong>逆向 trust</strong>：平台要主動連到 tenant 內網，network ingress 與 firewall 規則複雜度爆炸</li>
+<li><strong>Tenant 控制權</strong>：tenant 沒法選擇拉什麼、何時拉、拉多少；只能照平台 push 的 schedule</li>
+<li><strong>Backpressure</strong>：tenant 端 storage 滿了 / 慢了，會反壓回平台 remote_write queue</li>
+<li><strong>Multi-tenant ergonomic 倒置</strong>：tenant N 個的話平台要維護 N 條 outbound remote_write，運維極差</li>
+</ol>
+<p><strong>結論</strong>：拒絕。Pull-based 是 Prom ecosystem 的 first-principle，不要違背它。</p>
+<h3 id="dlabel-injection-proxy">替代方案 D：label-injection proxy（採用）<a class="headerlink" href="#dlabel-injection-proxy" title="Permanent link">&para;</a></h3>
+<p>優點（vs A/B/C）：</p>
+<ul>
+<li><strong>Engineering cost</strong>：用既有開源 proxy + Helm 整合，相對自寫 6+ months 是數量級的節省</li>
+<li><strong>Label injection 安全性</strong>：prom-label-proxy 在 label injection / query rewrite 範疇是 multi-year production-hardened（<strong>注意 scope 限定</strong>：proxy 不負責 series cap / 並發控制——那些靠 storage backend + API gateway，見 §Blast radius 3-layer。但每層用的都是 well-established 工具，不是自寫）</li>
+<li><strong>Ecosystem 對齊</strong>：Prom 客戶看到 prom-label-proxy = 熟悉，沒新東西要學</li>
+<li><strong>後端解耦</strong>：proxy 在「客戶 → 後端 storage」中間，後端 storage 換什麼（Prom / VM / Mimir）proxy 都吃</li>
+</ul>
+<p>缺點（已接受）：</p>
+<ul>
+<li><strong>3 component coordination</strong>（proxy + gateway + storage backend）比自寫單 endpoint 多三套變動點，每次 upstream 升級要 multi-layer regression</li>
+<li>VM cluster 模式的隔離不走 proxy，改由 gateway URL rewrite 處理——架構上多一條分支</li>
+</ul>
+<p><strong>結論</strong>：採用。本 ADR 主決策。Multi-component 缺點 acceptable，因為每層都是 well-established 工具，不是自寫——比自寫 endpoint 的單點變成「全平台單點 multi-tenant breach 風險」要好。</p>
+<h3 id="proxy-prom-label-proxy-vmauth">Proxy 選型：prom-label-proxy 而非 vmauth<a class="headerlink" href="#proxy-prom-label-proxy-vmauth" title="Permanent link">&para;</a></h3>
+<p>採用 label-injection proxy 後，仍要在 vmauth 與 prom-label-proxy 間選一個。設計初稿曾規劃「VM 客戶走 vmauth、Prom 客戶走 prom-label-proxy」的配對，盤點後確認不可行：</p>
+<ol>
+<li><strong>vmauth 不做 label 注入</strong>：vmauth 是 auth router，不解析 PromQL、不注入 label matcher。其多租戶僅靠把使用者路由到 VictoriaMetrics cluster 的 <code>accountID</code> 路徑達成，對單機 VM 無隔離能力。</li>
+<li><strong>vmauth 吃不下動態 JWT</strong>：vmauth 靠<strong>靜態 <code>auth.yml</code></strong> 的 username / bearer token 路由，無法消化 tenant-api 動態簽發的 RS256 federation JWT（4h TTL，每次簽發都重寫 <code>auth.yml</code> 不可行）。</li>
+</ol>
+<p>故統一採 prom-label-proxy。VictoriaMetrics <strong>cluster</strong> 的租戶隔離不走 proxy，改由 API gateway 直接 URL-rewrite 到 <code>/select/&lt;accountID&gt;/prometheus/</code>（gateway 已從驗證過的 JWT 取得 <code>tenant_id</code>）。</p>
+<h2 id="_9">實作計畫<a class="headerlink" href="#_9" title="Permanent link">&para;</a></h2>
+<p>本 ADR 經 v2.9.0 federation epic（<a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/380">#380</a>）實作完成，工作分解：</p>
+<table>
+<thead>
+<tr>
+<th>階段</th>
+<th>內容</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>本 ADR draft + 外部 adversarial review</td>
+</tr>
+<tr>
+<td>2</td>
+<td>prom-label-proxy 整合 + <code>helm/federation-proxy</code> chart</td>
+</tr>
+<tr>
+<td>3</td>
+<td>API Gateway（Envoy）rate-limit <code>helm/federation-gateway</code> chart + JWT claim extraction</td>
+</tr>
+<tr>
+<td>4</td>
+<td>Storage backend tuning：平台 Prometheus deployment 加 <code>--query.max-samples</code> / <code>--query.timeout</code>（BYO-VM 的 <code>-search.maxUniqueTimeseries</code> 等以文件交代，VM 非平台部署元件）</td>
+</tr>
+<tr>
+<td>5</td>
+<td>tenant-api token endpoint：<code>POST/GET/DELETE /api/v1/federation/tokens</code> + 簽章 + ConfigMap-backed 持久化</td>
+</tr>
+<tr>
+<td>6</td>
+<td>2-tier whitelist/subset policy schema + admission validator（<code>tenant</code> label-enrichment 驗證，擋 empty-vector silent failure）</td>
+</tr>
+<tr>
+<td>7</td>
+<td>Audit log + anomaly metric：結構化 log + sentinel alert + Grafana dashboard</td>
+</tr>
+<tr>
+<td>8</td>
+<td>Metadata API smoke test：簽 token A 驗 <code>/series</code>/<code>/labels</code>/<code>/label/&lt;name&gt;/values</code> 都不洩 tenant B 拓樸</td>
+</tr>
+<tr>
+<td>9</td>
+<td>端對端整合測試 + user-facing guide + Helm chart README + sample policy</td>
+</tr>
+</tbody>
+</table>
+<p>各階段的 sub-issue 與 PR 追溯見 epic <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/380">#380</a>。設計過程中，外部 adversarial review 補入了三層 blast-radius defense（原稿誤把三件組全放 proxy layer）、admission validator 的 <code>tenant</code> enrichment 驗證、以及 Metadata API smoke test——這些都已併入上表。</p>
+<h2 id="consequences">後果（Consequences）<a class="headerlink" href="#consequences" title="Permanent link">&para;</a></h2>
+<h3 id="_10">正面<a class="headerlink" href="#_10" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Tenant 拿到 standards-compliant federation 介面（Prom remote_read / VM read API），整合既有 oncall workflow 零摩擦</li>
+<li>Platform engineering cost 相對自寫 6+ months 是數量級的節省</li>
+<li>Multi-tenant <strong>label-level</strong> isolation 由 production-hardened proxy 保證；resource isolation 由 storage backend 強制；rate isolation 由 API gateway 強制——三層每層都是 well-established 工具，不是自寫</li>
+<li>後端 storage 演進不影響 federation 介面（proxy 抽象層解耦）</li>
+<li>2-tier policy 讓 platform 與 tenant 各自有 audit-able 控制點</li>
+</ul>
+<h3 id="_11">負面<a class="headerlink" href="#_11" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>3-component coordination</strong>（proxy + API gateway + storage backend）——每次 upstream 升級要 multi-layer regression；任一層配錯都會造成 silent failure 或安全破口</li>
+<li>Token TTL 4h + 無 revocation list = token 洩漏曝險窗 4h；<strong>critical dependency on gateway rate limit</strong>——gateway 配錯 → 4h 變 DoS 樂園</li>
+<li><strong>Data-layer prerequisite</strong>：所有 whitelist 列入的 metric 必須在 ingest/scrape 階段帶 <code>tenant</code> label；admission validator 是必需，不是 nice-to-have</li>
+<li><strong>Metadata API coverage 是非顯性風險</strong>：prom-label-proxy <code>--enable-label-apis</code> 是顯式 flag——Helm chart 設計時容易只想到 <code>/api/v1/query</code> 而漏掉 <code>/series</code> / <code>/labels</code>；smoke test 是這個非顯性風險的安全網</li>
+<li><strong>Admission validator soft-gate 留人為判斷空間</strong>：<code>--force</code> 路徑（針對 cold-start / sparse-metric）依賴 admin 判斷正確性；audit log 是事後追蹤手段，misuse 仍可能埋雷</li>
+<li>Domain layer scope 在 MVP 缺席，sub-team 客戶來時要 schema migration</li>
+<li>prom-label-proxy 上游 break change，platform Helm chart 須同步更新</li>
+<li>Audit log size：每個 federation request 寫一筆 → tenant 高頻拉時 log volume 不小，需 retention policy</li>
+</ul>
+<h3 id="_12">中性<a class="headerlink" href="#_12" title="Permanent link">&para;</a></h3>
+<ul>
+<li>新 tenant-api endpoint 一組（<code>/api/v1/federation/*</code>）— 比照既有 <code>/api/v1/events</code> / <code>/api/v1/tenants</code> 風格</li>
+<li>文件多一份 <a href="../../integration/tenant-federation/"><code>docs/integration/tenant-federation.md</code></a> — 租戶 onboarding 操作指南（與 <a href="../../integration/federation-integration/"><code>federation-integration.md</code></a> ADR-004 平行）</li>
+<li>新增 platform Grafana dashboard：3-layer rejection rate（gateway 429 / proxy 4xx / storage 5xx）給 platform ops 觀察 blast radius hit rate</li>
+</ul>
+<h2 id="future-work">Future Work<a class="headerlink" href="#future-work" title="Permanent link">&para;</a></h2>
+<p>按優先排序：</p>
+<ol>
+<li><strong>Server-side revocation list</strong>（觸發條件：compliance 客戶 RFP 顯式要求 / 第一次 token 洩漏事件）。設計時須處理 cache propagation TTL（典型 5min vs 即時 invalidate 二選一）</li>
+<li><strong>Domain-layer policy（3-tier）</strong>（觸發條件：tenant 內 sub-team 隔離需求）。schema 從 <code>{platform_whitelist, tenant_subset}</code> 擴成 <code>{platform_whitelist, tenant_subset, domain_scope}</code></li>
+<li><strong>3-tier permission model</strong>（compliance / audit / operator 角色分離）— 觸發條件：合規客戶（SOX / ISO 27001 / SOC 2）。可能與「server-side revocation」同時 trigger，一起做</li>
+<li><strong>Series cap auto-tuning</strong>：依 tenant 歷史 federation 流量 dynamic 調 <code>max_series_per_response</code>（避免一刀切過鬆 / 過嚴）</li>
+<li><strong>Federation 流量 chargeback</strong>（觸發條件：平台商業化、federation 流量要計費）。<strong>不可</strong>靠 gateway audit log 加總 —— <code>tenant_federation_requests_total</code> 只計「請求<strong>次數</strong>」，分不出一次拉 10 條 series 還是 100,000 條（IV-2f 刻意砍掉 <code>series_returned</code>：Envoy 不該 buffer + 解壓 + 解析 response body 數 series，成本過高），一次重查詢與一次輕查詢計同樣的帳不可行。正解：開後端 storage 的 query logging（Prometheus 的 <code>query_log_file</code> 全域設定 / VictoriaMetrics 的 query log）→ 倒進中央 log store → 由離線大數據 pipeline 非同步算每個 <code>tenant_id</code> 實際掃描的 series 數與 CPU 時間，作為企業級帳單來源。中央 log store 基礎設施可與 item 6 / <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/539">#539</a> 一起評估（#539 收 gateway audit log、chargeback 另需 storage query log 進同一個 store）。前置盤點見 <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/552">#552</a>。</li>
+<li><strong>中央 forensic log store</strong>：node-level log shipper + Loki／SIEM + retention policy，把 data-plane audit log 變成中央可查的合規儲存（follow-up <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/539">#539</a>）</li>
+</ol>
+<h2 id="_13">關聯<a class="headerlink" href="#_13" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong><a href="../004-federation-central-exporter-first/">ADR-004 (Federation — Central-Exporter-First)</a></strong> — 平台內部多叢集 federation。本 ADR 與之<strong>互補</strong>（platform-internal vs cross-boundary），非取代</li>
+<li><strong><a href="../009-tenant-manager-crud-api/">ADR-009 (Tenant Manager CRUD API)</a></strong> — tenant-api 既有 endpoint pattern，本 ADR 的 token endpoint 沿用其 conventions</li>
+<li><strong><a href="../../integration/tenant-federation/"><code>docs/integration/tenant-federation.md</code></a></strong> — 本 ADR 的租戶 onboarding 操作指南（IV-2h）</li>
+<li><strong><a href="../../integration/victoriametrics-integration/"><code>docs/integration/victoriametrics-integration.md</code></a></strong> — §7「已知 gap / Future Work」table 已預先 cross-link 本 ADR</li>
+<li><strong><a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/380">Issue #380</a></strong> — 本 ADR + federation 實作 epic</li>
+</ul>
+<h2 id="_14">相關資源<a class="headerlink" href="#_14" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>資源</th>
+<th>相關性</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><a href="../004-federation-central-exporter-first/">004-federation-central-exporter-first</a></td>
+<td>⭐⭐⭐</td>
+</tr>
+<tr>
+<td><a href="../009-tenant-manager-crud-api/">009-tenant-manager-crud-api</a></td>
+<td>⭐⭐</td>
+</tr>
+<tr>
+<td><a href="../../integration/federation-integration/">federation-integration</a></td>
+<td>⭐⭐</td>
+</tr>
+<tr>
+<td><a href="../../integration/victoriametrics-integration/">victoriametrics-integration</a></td>
+<td>⭐⭐</td>
+</tr>
+<tr>
+<td><a href="../">README</a></td>
+<td>⭐⭐</td>
+</tr>
+</tbody>
+</table>
+
+
+
+
+
+
+
+  
+  
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      Copyright &copy; 2025 Vencil. Licensed under Apache 2.0.
+    </div>
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+        
+<div class="md-social">
+  
+    
+    
+    
+    
+    <a href="https://github.com/vencil/Dynamic-Alerting-Integrations" target="_blank" rel="noopener" title="GitHub" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+      <div class="md-progress" data-md-component="progress" role="progressbar"></div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.instant", "navigation.instant.loading", "navigation.instant.progress", "navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.expand", "navigation.indexes", "navigation.tracking", "navigation.top", "search.suggest", "search.highlight", "search.share", "toc.follow", "content.action.edit", "content.action.view", "content.code.copy", "content.code.select", "content.code.annotate", "content.tabs.link", "content.tooltips", "announce.dismiss"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"provider": "mike"}}</script>
+    
+    
+      <script src="../../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+        <script src="../../../assets/extra.js"></script>
+      
+        <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+      
+    
+  </body>
+</html>

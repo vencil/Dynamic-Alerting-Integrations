@@ -1,0 +1,3610 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Enterprise-grade Multi-Tenant Dynamic Alerting Platform for Kubernetes">
+      
+      
+        <meta name="author" content="Vencil Contributors">
+      
+      
+        <link rel="canonical" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/scenarios/staged-adoption-guide/">
+      
+      
+        <link rel="prev" href="../shadow-monitoring-cutover/">
+      
+      
+        <link rel="next" href="../version-aware-thresholds/">
+      
+      
+        
+          <link rel="alternate" href="../../../scenarios/staged-adoption-guide/" hreflang="zh">
+        
+          <link rel="alternate" href="./" hreflang="en">
+        
+      
+      
+      <link rel="icon" href="../../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>Staged Rule Adoption Lifecycle - Dynamic Alerting Platform</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../../assets/extra.css">
+    
+    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="deep-orange" data-md-color-accent="deep-orange">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#staged-rule-adoption-lifecycle" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../../" title="Dynamic Alerting Platform" class="md-header__button md-logo" aria-label="Dynamic Alerting Platform" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Dynamic Alerting Platform
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Staged Rule Adoption Lifecycle
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="deep-orange" data-md-color-accent="deep-orange"  aria-label="深色模式"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="深色模式" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="deep-orange" data-md-color-accent="deep-orange"  aria-label="淺色模式"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="淺色模式" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+      <div class="md-header__option">
+  <div class="md-select">
+    
+    <button class="md-header__button md-icon" aria-label="Select language">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m12.87 15.07-2.54-2.51.03-.03A17.5 17.5 0 0 0 14.07 6H17V4h-7V2H8v2H1v2h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2zm-2.62 7 1.62-4.33L19.12 17z"/></svg>
+    </button>
+    <div class="md-select__inner">
+      <ul class="md-select__list">
+        
+          <li class="md-select__item">
+            <a href="../../../scenarios/staged-adoption-guide/" hreflang="zh" class="md-select__link">
+              中文
+            </a>
+          </li>
+        
+          <li class="md-select__item">
+            <a href="./" hreflang="en" class="md-select__link">
+              English
+            </a>
+          </li>
+        
+      </ul>
+    </div>
+  </div>
+</div>
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+          <a href="javascript:void(0)" class="md-search__icon md-icon" title="Share" aria-label="Share" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
+            
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91s2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08"/></svg>
+          </a>
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/vencil/Dynamic-Alerting-Integrations" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    vencil/Dynamic-Alerting-Integrations
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+    
+      
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../getting-started/for-platform-engineers/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Getting Started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../architecture-and-design/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Core Architecture
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../integration/byo-prometheus-integration/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Integration Guides
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../migration-guide/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Migration
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../governance-security/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Governance & Security
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../alert-routing-split/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Scenarios
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../cli-reference/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+    
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../../" title="Dynamic Alerting Platform" class="md-nav__button md-logo" aria-label="Dynamic Alerting Platform" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    Dynamic Alerting Platform
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/vencil/Dynamic-Alerting-Integrations" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    vencil/Dynamic-Alerting-Integrations
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Getting Started
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/for-platform-engineers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Platform Engineers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/for-domain-experts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Domain Experts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/for-tenants/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tenants
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Core Architecture
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Core Architecture
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture-and-design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture & Design
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../benchmarks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Performance Benchmarks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_3" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../adr/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture Decisions (ADR)
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3_3" id="__nav_3_3_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture Decisions (ADR)
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/001-severity-dedup-via-inhibit/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-001 Severity Dedup via Inhibit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/002-oci-registry-over-chartmuseum/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-002 OCI Registry
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/003-sentinel-alert-pattern/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-003 Sentinel Alert Pattern
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/004-federation-central-exporter-first/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-004 Federation Central Exporter First
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/005-projected-volume-for-rule-packs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-005 Projected Volume
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Integration Guides
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Integration Guides
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/byo-prometheus-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    BYO Prometheus
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/byo-alertmanager-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    BYO Alertmanager
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/alerting-plane-self-liveness/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    告警平面自我存活性 (Watchdog)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/synthetic-probe-interop/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    合成探測對接 (Synthetic-Probe)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/victoriametrics-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    VictoriaMetrics 整合
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/federation-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Federation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/tenant-federation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tenant Federation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/gitops-deployment/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    GitOps Deployment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/deployment-sizing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    部署容量規劃
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migration
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Migration
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../migration-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migration Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../migration-engine/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migration Engine
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../migration-toolkit-installation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migration Toolkit 安裝
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../shadow-monitoring-sop/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Shadow Monitoring SOP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/troubleshooting-checklist/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migration Troubleshooting Checklist
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Governance & Security
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Governance & Security
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../governance-security/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Governance & Security
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../custom-rule-governance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Custom Rule Governance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Scenarios
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Scenarios
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../alert-routing-split/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Alert Routing Split
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../internal/test-coverage-matrix/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    測試覆蓋矩陣
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../shadow-monitoring-cutover/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Shadow Monitoring Cutover
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Staged Adoption Lifecycle
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Staged Adoption Lifecycle
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#1-the-two-states-custom_-vs-golden" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. The two states: custom_* vs golden
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-why-staged-not-big-bang" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. Why staged, not big-bang
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-three-tier-reading-speed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Three-tier reading speed
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-when-to-promote-decision-criteria" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. When to promote — decision criteria
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="4. When to promote — decision criteria">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#30-sec-tldr" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        30-sec TL;DR
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#decision-principles" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Decision principles
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#exceptions-when-to-deliberately-keep-custom_" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Exceptions — when to deliberately keep custom_
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-batch-sizing-how-much-to-push-at-once" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Batch sizing — how much to push at once
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="5. Batch sizing — how much to push at once">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#30-sec-tldr_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        30-sec TL;DR
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#decision-principles_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Decision principles
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#canary-tenant-selection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Canary tenant selection
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#conditions-for-accelerating" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Conditions for accelerating
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-observation-period-rollback" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. Observation period &amp; rollback
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="6. Observation period &amp; rollback">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#30-sec-tldr_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        30-sec TL;DR
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#observation-period-length" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Observation-period length
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#rollback-path" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rollback path
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7-the-three-scenarios-lifecycle-framing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7. The three scenarios (lifecycle framing)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="7. The three scenarios (lifecycle framing)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#71-initial-migration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7.1 Initial migration
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#72-new-tenant-onboarding-6-months-later-new-team-comes-in" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7.2 New tenant onboarding (6 months later, new team comes in)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#73-rule-pack-upgrade-the-platform-ships-a-new-version" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7.3 Rule Pack upgrade (the platform ships a new version)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-pattern-shared-by-all-three-scenarios" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The pattern shared by all three scenarios
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8-relationship-to-other-docs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8. Relationship to other docs
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#9-when-not-to-use-staged-adoption" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9. When not to use staged adoption
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#10-observation-metrics-dashboards" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        10. Observation metrics &amp; dashboards
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#11-cross-references" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        11. Cross-references
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../version-aware-thresholds/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Version-Aware Thresholds
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../multi-cluster-federation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Multi-cluster Federation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tenant-lifecycle/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tenant Lifecycle
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../multi-system-migration-playbook/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Multi-System Migration Playbook
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_8" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../api/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_8" id="__nav_8_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cli-reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    da-tools CLI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cheat-sheet/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CLI Cheat Sheet
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../interactive-tools/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Interactive Tools
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../grafana-dashboards/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Grafana Dashboards
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../rule-packs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Rule Packs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../rule-packs/ALERT-REFERENCE/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Alert Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../schemas/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    JSON Schema
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../glossary/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Glossary
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../CHANGELOG/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Changelog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#1-the-two-states-custom_-vs-golden" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. The two states: custom_* vs golden
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-why-staged-not-big-bang" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. Why staged, not big-bang
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-three-tier-reading-speed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Three-tier reading speed
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-when-to-promote-decision-criteria" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. When to promote — decision criteria
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="4. When to promote — decision criteria">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#30-sec-tldr" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        30-sec TL;DR
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#decision-principles" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Decision principles
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#exceptions-when-to-deliberately-keep-custom_" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Exceptions — when to deliberately keep custom_
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-batch-sizing-how-much-to-push-at-once" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Batch sizing — how much to push at once
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="5. Batch sizing — how much to push at once">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#30-sec-tldr_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        30-sec TL;DR
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#decision-principles_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Decision principles
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#canary-tenant-selection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Canary tenant selection
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#conditions-for-accelerating" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Conditions for accelerating
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-observation-period-rollback" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. Observation period &amp; rollback
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="6. Observation period &amp; rollback">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#30-sec-tldr_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        30-sec TL;DR
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#observation-period-length" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Observation-period length
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#rollback-path" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rollback path
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7-the-three-scenarios-lifecycle-framing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7. The three scenarios (lifecycle framing)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="7. The three scenarios (lifecycle framing)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#71-initial-migration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7.1 Initial migration
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#72-new-tenant-onboarding-6-months-later-new-team-comes-in" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7.2 New tenant onboarding (6 months later, new team comes in)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#73-rule-pack-upgrade-the-platform-ships-a-new-version" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7.3 Rule Pack upgrade (the platform ships a new version)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-pattern-shared-by-all-three-scenarios" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The pattern shared by all three scenarios
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8-relationship-to-other-docs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8. Relationship to other docs
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#9-when-not-to-use-staged-adoption" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9. When not to use staged adoption
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#10-observation-metrics-dashboards" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        10. Observation metrics &amp; dashboards
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#11-cross-references" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        11. Cross-references
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+  <nav class="md-tags" >
+    
+      
+      
+      
+      
+        <span class="md-tag">custom-rules</span>
+      
+    
+      
+      
+      
+      
+        <span class="md-tag">golden-rules</span>
+      
+    
+      
+      
+      
+      
+        <span class="md-tag">lifecycle</span>
+      
+    
+      
+      
+      
+      
+        <span class="md-tag">rule-packs</span>
+      
+    
+      
+      
+      
+      
+        <span class="md-tag">scenarios</span>
+      
+    
+  </nav>
+
+
+  
+    <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/edit/main/scenarios/staged-adoption-guide.en.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20.71 7.04c.39-.39.39-1.04 0-1.41l-2.34-2.34c-.37-.39-1.02-.39-1.41 0l-1.84 1.83 3.75 3.75M3 17.25V21h3.75L17.81 9.93l-3.75-3.75z"/></svg>
+    </a>
+  
+  
+    
+      
+    
+    <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/raw/main/scenarios/staged-adoption-guide.en.md" title="View source of this page" class="md-content__button md-icon">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0 8a5 5 0 0 1-5-5 5 5 0 0 1 5-5 5 5 0 0 1 5 5 5 5 0 0 1-5 5m0-12.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5"/></svg>
+    </a>
+  
+
+
+<h1 id="staged-rule-adoption-lifecycle">Staged Rule Adoption Lifecycle<a class="headerlink" href="#staged-rule-adoption-lifecycle" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p><strong>This is not "the final step of migration"</strong> — it's a <strong>rule curation pattern</strong> that runs through the entire customer lifecycle: every time new custom rules are introduced, every time the platform ships a new Rule Pack, every time a new team takes over a tenant.</p>
+<p><strong>Three scenarios it applies to</strong> (detailed in §7):
+1. <strong>Initial migration</strong> — progressive consolidation after a large initial import of <code>custom_*</code> rules
+2. <strong>New tenant onboarding</strong> — a new team comes online six months later, takes the same "custom_ first, golden later" path
+3. <strong>Rule Pack upgrade</strong> — when the platform ships new golden rules, existing <code>custom_*</code> overrides are re-evaluated</p>
+</blockquote>
+<hr />
+<h2 id="1-the-two-states-custom_-vs-golden">1. The two states: <code>custom_*</code> vs golden<a class="headerlink" href="#1-the-two-states-custom_-vs-golden" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>State</th>
+<th>Naming</th>
+<th>Source</th>
+<th>Trust model</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong><code>custom_*</code></strong></td>
+<td><code>custom_&lt;domain&gt;_&lt;metric&gt;</code></td>
+<td>Imported from the customer's existing system, or hand-written</td>
+<td>Customer owns; platform takes no responsibility</td>
+</tr>
+<tr>
+<td><strong>golden</strong></td>
+<td><code>&lt;rule-pack-name&gt;:&lt;metric&gt;</code></td>
+<td>Platform-curated Rule Pack</td>
+<td>Platform owns; per-version SLA</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Core motivation</strong>: customers come from heterogeneous systems, and <strong>rules are business logic</strong> — they can't be force-stripped and rewritten. <code>custom_*</code> gives customers a buffer to bring their existing logic in; golden is the long-term target.</p>
+<p>→ Full namespace rules: <a href="../../custom-rule-governance/"><code>custom-rule-governance.md</code></a>.</p>
+<hr />
+<h2 id="2-why-staged-not-big-bang">2. Why staged, not big-bang<a class="headerlink" href="#2-why-staged-not-big-bang" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Risk</th>
+<th>Big-bang</th>
+<th>Staged</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Missed rules</strong></td>
+<td>One failed cutover blasts every tenant</td>
+<td>One failed cutover only affects the current batch</td>
+</tr>
+<tr>
+<td><strong>Semantic drift</strong></td>
+<td>Subtle behaviour differences between golden and <code>custom_</code> all surface together</td>
+<td>Each batch validates equivalence; differences are isolated</td>
+</tr>
+<tr>
+<td><strong>Customer confidence</strong></td>
+<td>"If something breaks after we cut everything over, we get paged" fear</td>
+<td>First batch stabilises, then we push the next</td>
+</tr>
+<tr>
+<td><strong>Rollback</strong></td>
+<td>Reverting the whole batch via git affects a wide surface</td>
+<td>Per-batch revert; blast radius small</td>
+</tr>
+<tr>
+<td><strong>Knowledge transfer</strong></td>
+<td>Customers have no time to internalise golden semantics</td>
+<td>Each batch comes with its own mapping document</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Best-practice from the SRE community</strong>: every production cutover should have a <em>canary tier</em> + <em>observation period</em>. Staged adoption is that principle applied to the rule layer.</p>
+<hr />
+<h2 id="3-three-tier-reading-speed">3. Three-tier reading speed<a class="headerlink" href="#3-three-tier-reading-speed" title="Permanent link">&para;</a></h2>
+<p>Each section (§4–§6) shares the same structure:</p>
+<ul>
+<li><strong>30-sec TL;DR</strong> — for managers / cross-team broadcast</li>
+<li><strong>Decision principles</strong> — for architects (the <em>why</em> of each decision)</li>
+<li><strong>Operator Checklist</strong> (collapsed in <code>&lt;details&gt;</code>) — for on-call running a promotion</li>
+</ul>
+<hr />
+<h2 id="4-when-to-promote-decision-criteria">4. When to promote — decision criteria<a class="headerlink" href="#4-when-to-promote-decision-criteria" title="Permanent link">&para;</a></h2>
+<h3 id="30-sec-tldr">30-sec TL;DR<a class="headerlink" href="#30-sec-tldr" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Hard requirements</strong>: ≥ 2 weeks in shadow phase, <em>Subset overlap = 100%</em>, no unexpected new alerts</li>
+<li><strong>Customer sign-off</strong>: domain owner confirms golden semantics are equivalent to the existing <code>custom_</code></li>
+<li><strong>Rollback path rehearsed</strong>: customer ops is fluent with the <code>git revert</code> command</li>
+</ul>
+<h3 id="decision-principles">Decision principles<a class="headerlink" href="#decision-principles" title="Permanent link">&para;</a></h3>
+<p><strong>Hard requirements</strong> (all must hold):</p>
+<ol>
+<li><strong>Shadow-phase data evidence</strong>: at least 2 weeks in shadow monitoring (multi-system migration playbook §5)</li>
+<li><strong>Coverage gate (replaces "pure 100% overlap")</strong>: pick <strong>one</strong> of the following and satisfy its sub-conditions:</li>
+<li><strong>(2a) Subset overlap = 100%</strong>: whatever <code>custom_</code> fires on, golden must fire on too (avoiding catastrophic false negatives) — applies when "golden is the equivalent or superset of <code>custom_</code>"</li>
+<li><strong>(2b) Intentional noise reduction</strong>: for <strong>every</strong> case where <code>custom_</code> fires but golden does not, all of:<ul>
+<li>The domain owner explicitly classifies it as an "intended noise filter" (not a bug)</li>
+<li>The reviewer can articulate why golden's smarter logic (extra conditions / time window / threshold tuning) is correctly suppressing that alert</li>
+<li>The corresponding "why this didn't fire this time" reasoning is written into the PR description (so future incident reviews can find it)</li>
+</ul>
+</li>
+<li>Strictly forbidden: "reduction because golden missed a catastrophic case" sneaking in under (2b). If in doubt, default to (2a).</li>
+<li><strong>Extra alerts explicitly signed off</strong>: alerts that golden fires but <code>custom_</code> doesn't are not treated as bugs — the customer confirms they're design intent</li>
+</ol>
+<blockquote>
+<p><strong>Design motivation</strong> (countering the "100% overlap paradox"): hard-coding 100% overlap traps customers inside bad rules. Example: customer's old <code>custom_mysql_cpu</code> is <code>cpu &gt; 80%</code> (firing 50× a day); the new golden is <code>cpu &gt; 80% AND io_wait &gt; 20% for 5m</code> (firing 5× a day, only when it should). Shadow-phase overlap will inevitably be below 100% — but this is <strong>intended noise reduction</strong>, not regression. Gate (2b) gives this legitimate path a home.</p>
+</blockquote>
+<p><strong>Soft acceptance signals</strong> (any of these is bonus reason to push forward):</p>
+<ul>
+<li>Domain owner (DBA / SRE / platform team) nods at golden's semantics</li>
+<li>Customer has an incident-response runbook that maps to golden's alert label schema</li>
+<li>Time exists for one ops cycle of observation (recommended: 1 week including weekly anomalies)</li>
+</ul>
+<h3 id="exceptions-when-to-deliberately-keep-custom_">Exceptions — when to deliberately keep <code>custom_</code><a class="headerlink" href="#exceptions-when-to-deliberately-keep-custom_" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Customer has a proprietary metric source that isn't in the platform metric dictionary (e.g. a self-written business-KPI scrape exporter)</li>
+<li>Customer has a compliance requirement that alert text must contain specific fields (golden doesn't necessarily cover this)</li>
+<li>The domain is too niche to have a corresponding Rule Pack (e.g. customised IoT device monitoring)</li>
+</ul>
+<p>→ Keeping <code>custom_</code> is not failure — it's a <strong>stable equilibrium</strong>. This guide's promotion does not force everything onto golden.</p>
+<details>
+<summary>📋 Promotion gate checklist (for the executor)</summary>
+
+- [ ] Shadow phase ≥ 2 weeks, no alert noise (`da-tools shadow-verify --window=14d`)
+- [ ] **Coverage gate**, one of:
+  - [ ] (2a) *Subset overlap = 100%* (`da-tools shadow-verify --check-subset-overlap`) — default strict path
+  - [ ] (2b) *Intentional noise reduction* — when overlap is below 100%, each missing case in the PR description has the domain owner's "why this didn't fire" classification + the reviewer's reasoning
+- [ ] List of extra alerts signed off by customer ops (PR description records the sign-off)
+- [ ] Customer ops is fluent with `git revert <batch-commit>` rollback path
+- [ ] Domain owner approval (Slack / email / PR review approval)
+- [ ] Rollback rehearsal record retained for 30 days
+</details>
+
+<hr />
+<h2 id="5-batch-sizing-how-much-to-push-at-once">5. Batch sizing — how much to push at once<a class="headerlink" href="#5-batch-sizing-how-much-to-push-at-once" title="Permanent link">&para;</a></h2>
+<h3 id="30-sec-tldr_1">30-sec TL;DR<a class="headerlink" href="#30-sec-tldr_1" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Default = 1 domain × 1 region × canary tenant-group (5% of tenants)</strong></li>
+<li>The first wave is canary tenants only; expand to that region's full tenant set after</li>
+<li>For a 1000-tenant customer: ~10 batches × (canary + full) × 1 ops cycle = ~10–12 weeks</li>
+<li>Speed up = higher risk; if it's not life-saving, push slowly</li>
+</ul>
+<h3 id="decision-principles_1">Decision principles<a class="headerlink" href="#decision-principles_1" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Batch granularity</th>
+<th>Rules × tenants</th>
+<th>When</th>
+<th>Risk</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Single rule × canary tenants</strong></td>
+<td>1 × 5%-tenants</td>
+<td>High-risk / customer's first contact</td>
+<td>Lowest risk; too slow</td>
+</tr>
+<tr>
+<td><strong>1 domain × 1 region × canary tenants</strong> (<strong>default</strong>)</td>
+<td>5–15 × 5%-tenants</td>
+<td>First wave</td>
+<td>Best balance</td>
+</tr>
+<tr>
+<td><strong>1 domain × 1 region × full tenants</strong></td>
+<td>5–15 × 100%-tenants</td>
+<td>After canary passes 1 ops cycle</td>
+<td>Medium</td>
+</tr>
+<tr>
+<td><strong>1 domain × all regions × full tenants</strong></td>
+<td>20–60 × 100%</td>
+<td>Domain matured / 3+ incident-free batches</td>
+<td>Higher (cross-region variables expand)</td>
+</tr>
+<tr>
+<td><strong>Cross-domain bundle × full tenants</strong></td>
+<td>50+ × 100%</td>
+<td>Rushing to wrap up, customer experienced</td>
+<td>Large blast radius; not recommended</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Why the default adds a canary-tenant dimension</strong>:</p>
+<ul>
+<li>In a multi-tenant platform, "1 domain × 1 region" already means cutting all ~1000 tenants — blast radius is too large</li>
+<li>Cut 5% canary tenants first (pick high-tolerance internal / early-partner customers) → observe across 1 ops cycle → if clean, expand to full region</li>
+<li>Customers usually nominate some "dev / staging tenants" or "early-experience cohort" as the canary pool</li>
+<li>Domain isolation + Region isolation + Tenant isolation = <strong>three-layer blast-radius fence</strong></li>
+</ul>
+<h3 id="canary-tenant-selection">Canary tenant selection<a class="headerlink" href="#canary-tenant-selection" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Prefer</strong>: customer's internal tenants, staging-only tenants, high-tolerance early customers</li>
+<li><strong>Avoid</strong>: production-critical tenants, customer's highest-SLA-tier tenants, customers who just raised an alert</li>
+<li><strong>Quantity</strong>: 5–10% is the sweet spot; below 5% the signal is too weak, above 10% the blast starts to matter</li>
+</ul>
+<h3 id="conditions-for-accelerating">Conditions for accelerating<a class="headerlink" href="#conditions-for-accelerating" title="Permanent link">&para;</a></h3>
+<ul>
+<li>First canary batch passes 1 ops cycle cleanly → push to full-tenant tier</li>
+<li>3 consecutive incident-free batches (canary + full) → can grow to 1 domain × all regions × full</li>
+<li>But <strong>never</strong> skip the canary stage. Acceleration is about scale, not about steps.</li>
+</ul>
+<details>
+<summary>📋 Batch planning checklist</summary>
+
+- [ ] Inventory: list all current `custom_*` rules + their promotable golden counterparts
+- [ ] Group by `domain × region`
+- [ ] Order: low-risk / signal-rich domains first (DB / network typically first; business-KPI later)
+- [ ] **Designate the canary tenant pool**: negotiate with the customer for 5–10% high-tolerance tenants (internal / staging / early partners)
+- [ ] Batch 1: smallest granularity (5–10 rules) × canary tenant pool — to build process confidence
+- [ ] PR description contains the mapping table (`custom_` name → golden name) + canary tenant list
+- [ ] Wait one ops cycle after canary before opening the full-tenant promotion PR
+</details>
+
+<hr />
+<h2 id="6-observation-period-rollback">6. Observation period &amp; rollback<a class="headerlink" href="#6-observation-period-rollback" title="Permanent link">&para;</a></h2>
+<h3 id="30-sec-tldr_2">30-sec TL;DR<a class="headerlink" href="#30-sec-tldr_2" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>At least 1 ops cycle per batch</strong> (1 week recommended, covering weekly anomaly windows)</li>
+<li>If something goes wrong during observation: <code>git revert</code> the per-batch commit</li>
+<li>Monitoring state (already silenced alerts) needs manual cleanup (same as multi-system playbook §11 semi-reversible layer)</li>
+</ul>
+<h3 id="observation-period-length">Observation-period length<a class="headerlink" href="#observation-period-length" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Observation period</th>
+<th>When</th>
+<th>What it catches</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>24h</strong></td>
+<td>Minimum; canary-tenant tier</td>
+<td>Smoke tests, obvious regressions</td>
+</tr>
+<tr>
+<td><strong>1 ops cycle (typically 1 week)</strong></td>
+<td><strong>Default</strong></td>
+<td>Weekly batch jobs / weekly cron alerts</td>
+</tr>
+<tr>
+<td><strong>1 month</strong></td>
+<td>High-stakes domain (compliance / financial)</td>
+<td>Monthly closing alerts, quarterly anomalies</td>
+</tr>
+</tbody>
+</table>
+<p><strong>What it can't catch</strong>: rare events (quarter-end / big promo / Black Friday traffic) — sync the customer's calendar in advance and avoid sensitive windows.</p>
+<h3 id="rollback-path">Rollback path<a class="headerlink" href="#rollback-path" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="c1"># Find the batch&#39;s commit</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>git<span class="w"> </span>log<span class="w"> </span>--grep<span class="o">=</span><span class="s2">&quot;staged-adoption batch &lt;N&gt;&quot;</span><span class="w"> </span>--oneline
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="c1"># Revert</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>git<span class="w"> </span>revert<span class="w"> </span>&lt;commit-sha&gt;
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="c1"># AM / exporter auto-reload</span>
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="c1"># Monitoring-state cleanup:</span>
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="c1">#   - Silenced alerts → manually unsilence (AM UI)</span>
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="c1">#   - Maintenance windows → manually close (tenant API)</span>
+</code></pre></div>
+<p><strong>Rollback reversibility boundary</strong> (same as <a href="../multi-system-migration-playbook/#11-rollback-三層可逆界線">multi-system-migration-playbook §11</a> — <strong>ZH only — <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/409">#409</a></strong>):</p>
+<table>
+<thead>
+<tr>
+<th>Layer</th>
+<th>Reversibility</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Config (<code>custom_</code> rule rolled back to golden)</td>
+<td>✅ git revert</td>
+</tr>
+<tr>
+<td>Monitoring state (already-silenced alerts)</td>
+<td>⚠️ manual cleanup</td>
+</tr>
+<tr>
+<td>Data layer (already-ingested metrics)</td>
+<td>❌ accept it</td>
+</tr>
+</tbody>
+</table>
+<details>
+<summary>📋 Observation + rollback checklist</summary>
+
+**Observation phase**
+- [ ] Start counting 1 ops cycle from batch-promotion PR merge
+- [ ] Daily check on alert volume + receiver delivery (`da-tools alert-quality --tenant=<batch-tenants>`)
+- [ ] Smoke-check that the new alert label schema is compatible with the receiver
+- [ ] Cover weekends / night shifts / month-end corner cases
+
+**Rollback (if triggered)**
+- [ ] Announce in Slack / on-call channel
+- [ ] `git revert <batch-commit>` + push to the GitOps branch
+- [ ] AM reload (auto via ArgoCD / Flux)
+- [ ] Manually unsilence affected alerts
+- [ ] Postmortem: which rule failed; where golden and `custom_` diverged on input
+- [ ] Either fix golden or keep `custom_`. Don't pretend it wasn't a bug.
+</details>
+
+<hr />
+<h2 id="7-the-three-scenarios-lifecycle-framing">7. The three scenarios (lifecycle framing)<a class="headerlink" href="#7-the-three-scenarios-lifecycle-framing" title="Permanent link">&para;</a></h2>
+<h3 id="71-initial-migration">7.1 Initial migration<a class="headerlink" href="#71-initial-migration" title="Permanent link">&para;</a></h3>
+<p><strong>Trigger</strong>: the multi-system migration playbook has run through Phase 3 full cutover (all <code>custom_</code> are active); promotion to golden now begins.</p>
+<p><strong>Key decisions</strong> (<strong>these are domain-owner business judgments and are not being automated</strong> — see below):
+- Which rules have golden equivalents: the domain owner manually compares <code>custom_</code> and golden rule triggers + semantics against <a href="../../rule-packs/ALERT-REFERENCE/">Rule Pack ALERT-REFERENCE</a>
+- Which rules should stay <code>custom_</code> (no Rule Pack counterpart, customer-business-specific)</p>
+<blockquote>
+<p>📝 <strong>Why we don't build a <code>rule-pack-mapping --suggest</code> tool</strong> (tracked: <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/405">issue #405</a>): auto-suggesting "custom_X should promote to golden Y" requires deep PromQL semantic analysis (AST + equivalence judgment) with a low accuracy ceiling. A wrong suggestion gives the customer false confidence — worse than no suggestion. <strong>Business-semantic judgment</strong> stays a human decision; we won't force-automate it. <code>rule-pack-diff</code> (mechanical comparison between versions) is factual work, will be built; <code>--suggest</code> (judging which <code>custom_</code> should be promoted) is judgment work, will not.</p>
+</blockquote>
+<p><strong>End condition</strong>: all promotable rules have been upgraded, or the customer decides to stop at some point.</p>
+<h3 id="72-new-tenant-onboarding-6-months-later-new-team-comes-in">7.2 New tenant onboarding (6 months later, new team comes in)<a class="headerlink" href="#72-new-tenant-onboarding-6-months-later-new-team-comes-in" title="Permanent link">&para;</a></h3>
+<p><strong>Trigger</strong>: the platform is stable; a new team takes over a service or a new tenant comes in.</p>
+<p><strong>Pattern</strong>:
+- The new team starts with the Rule Pack (golden) as their starter
+- When they're not satisfied with a Rule Pack condition, they write a <code>custom_*</code> override first
+- As the Rule Pack naturally evolves to match the new team's needs → promote <code>custom_*</code> away → delete the override</p>
+<p><strong>This is the inverse of 7.1</strong>: 7.1 is <code>custom_ → golden</code>; 7.2 is <code>golden → custom_ → golden</code> (reverse onboarding). But the <strong>decision criteria are the same</strong> (<em>Subset overlap</em>, observation period, rollback path).</p>
+<h3 id="73-rule-pack-upgrade-the-platform-ships-a-new-version">7.3 Rule Pack upgrade (the platform ships a new version)<a class="headerlink" href="#73-rule-pack-upgrade-the-platform-ships-a-new-version" title="Permanent link">&para;</a></h3>
+<p><strong>Trigger</strong>: the platform ships Rule Pack v2; the customer has existing <code>custom_*</code> overrides targeting Rule Pack v1.</p>
+<p><strong>The problem</strong>: Rule Pack v2 might:
+- Add new alerts (the customer's <code>custom_*</code> doesn't need to override)
+- Change alert semantics (the customer's <code>custom_*</code> override becomes outdated, redundant)
+- Break existing labels (the customer's <code>custom_*</code> is still using old label names)</p>
+<h4 id="disablement-drift-the-real-risk-of-a-double-fire-alert-storm">⚠️ Disablement drift — the real risk of a double-fire alert storm<a class="headerlink" href="#disablement-drift-the-real-risk-of-a-double-fire-alert-storm" title="Permanent link">&para;</a></h4>
+<p>When a customer wrote a <code>custom_*</code> rule, it <strong>usually means they also disabled / silenced the corresponding v1 golden rule</strong> in the system (to prevent <code>custom_</code> and golden firing simultaneously and double-firing).</p>
+<p>If a Rule Pack v2 upgrade <strong>changes the alert name or label schema</strong>, the customer's v1-targeted disable configuration (e.g. <code>_defaults.yaml</code>'s <code>disable: [&lt;v1-name&gt;]</code> or AM silencer's <code>matchers: [alertname="&lt;v1-name&gt;"]</code>) <strong>may silently break</strong>. Consequences:</p>
+<ol>
+<li>The customer's <code>custom_*</code> still fires as usual</li>
+<li>v2 golden (the disable no longer matches) also fires</li>
+<li>→ <strong>Alert storm</strong> (the same incident pages two alert paths simultaneously, PagerDuty goes off the rails)</li>
+</ol>
+<p><strong>SOP</strong>:</p>
+<ol>
+<li>List the diff points between Rule Pack v1 and v2 (alertname / label-schema breaking changes)</li>
+<li>
+<p><strong>✅ <code>da-tools rule-pack-diff --from &lt;v1.yaml&gt; --to &lt;v2.yaml&gt;</code></strong> (<a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/405">issue #405</a> Category D, shipped 2026-05-12) — outputs added / removed / breaking-label-schema categories; <code>--ci</code> mode exits 1 on breaking changes. Typical invocation:</p>
+<p><div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>git<span class="w"> </span>show<span class="w"> </span>v1.0.0:rule-packs/rule-pack-mariadb.yaml<span class="w"> </span>&gt;<span class="w"> </span>/tmp/v1.yaml
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>git<span class="w"> </span>show<span class="w"> </span>v2.0.0:rule-packs/rule-pack-mariadb.yaml<span class="w"> </span>&gt;<span class="w"> </span>/tmp/v2.yaml
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>da-tools<span class="w"> </span>rule-pack-diff<span class="w"> </span>--from<span class="w"> </span>/tmp/v1.yaml<span class="w"> </span>--to<span class="w"> </span>/tmp/v2.yaml
+</code></pre></div>
+   - <strong>Manual fallback</strong> (when the tool is unavailable): cross-reference the Rule Pack version's <code>CHANGELOG.md</code> (<a href="../../rule-packs/ALERT-REFERENCE/">ALERT-REFERENCE</a> lists current stable alertnames) + <code>git diff rule-packs/&lt;pack&gt;/v1.0.0/...rule-packs/&lt;pack&gt;/v2.0.0/</code>
+2. <strong>Disablement drift check</strong>: for every alert where the customer has a <code>custom_*</code>, verify the corresponding disable config still hits v2:
+   - <code>_defaults.yaml</code>'s disable list — confirm the v2 alertname is on the list (or add it)
+   - AM's silencer matchers — confirm the v2 label schema doesn't make existing matchers miss
+   - <strong>Missing either one = double-fire; both must be fixed before shipping v2</strong>
+   - Concrete diagnostic commands: <a href="../../integration/troubleshooting-checklist/#132-silencer-mismatchdisablement-drift-double-fire-alert-storm">troubleshooting-checklist §1.3.2</a> (<strong>ZH only — <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/409">#409</a></strong>)
+3. For each <code>custom_*</code>: judge whether v2 absorbs it → if yes, run this guide's promotion flow
+4. For semantic changes in v2: either rewrite <code>custom_*</code> to align with v2's schema or leave it as-is (<strong>and</strong> synchronize the disable config)
+5. For v2 breaking changes: promotion is mandatory (forced upgrade)</p>
+</li>
+</ol>
+<p><strong>Audit-hook suggestion</strong> (tracked: <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/405">issue #405</a>): <code>da-tools upgrade-check</code> runs at v1→v2 upgrade time, auto-detects disablement drift, lists "alerts that would double-fire", and must hit zero before merge. May be unified with <code>silencer-drift-check</code>.</p>
+<h3 id="the-pattern-shared-by-all-three-scenarios">The pattern shared by all three scenarios<a class="headerlink" href="#the-pattern-shared-by-all-three-scenarios" title="Permanent link">&para;</a></h3>
+<p>Regardless of scenario, promotion runs the same §4–§6 decision criteria / batch sizing / observation period — that's the core reason this is a lifecycle pattern, not a migration step.</p>
+<hr />
+<h2 id="8-relationship-to-other-docs">8. Relationship to other docs<a class="headerlink" href="#8-relationship-to-other-docs" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>multi-system-migration-playbook.md  ─ Phase 3 cutover (routing flip done)
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>                       │
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>                       └─ Phase 4 starts ──────────►
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>                                                  │
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>                                                  ▼
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>                              This guide (Staged Adoption Lifecycle)
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>                                                  │
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>                                                  ├─► custom-rule-governance.md (custom_ namespace rules)
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>                                                  ├─► multi-system-migration-playbook §11 (Rollback boundaries)
+<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a>                                                  └─► rule-packs/ALERT-REFERENCE.md (golden cheat sheet)
+</code></pre></div>
+<ul>
+<li><strong>multi-system-migration-playbook</strong>: responsible for cutover routing (one-time event during migration)</li>
+<li><strong>This guide</strong>: responsible for the promotion lifecycle (applies every time new rules enter)</li>
+<li><strong>custom-rule-governance</strong>: defines the <code>custom_*</code> namespace itself</li>
+<li><strong>rule-packs/ALERT-REFERENCE</strong>: full golden alert table for mapping lookups</li>
+</ul>
+<hr />
+<h2 id="9-when-not-to-use-staged-adoption">9. When <em>not</em> to use staged adoption<a class="headerlink" href="#9-when-not-to-use-staged-adoption" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>You only have 1–2 rules</strong>: just promote — staged would be ceremony</li>
+<li><strong>dev / staging environments</strong>: push everything, break things, learn fast</li>
+<li><strong>Pure noise reduction</strong>: turning off a too-noisy alert doesn't need staged
+<strong>Core judgment</strong>: the cost of staged is time + ops attention; only worth it when blast radius × cutover frequency is high enough.</li>
+</ul>
+<hr />
+<h2 id="10-observation-metrics-dashboards">10. Observation metrics &amp; dashboards<a class="headerlink" href="#10-observation-metrics-dashboards" title="Permanent link">&para;</a></h2>
+<p>Platform-side, you can see:</p>
+<ul>
+<li><code>da_alert_promotion_batch_status{batch_id, status="active|reverted|done"}</code></li>
+<li><code>da_alert_quality_diff{custom_, golden, metric}</code> (if enabled)</li>
+<li>Grafana dashboard: <code>Staged Adoption Progress</code> panel (v2.9 ship; currently use <a href="../../grafana-dashboards/">grafana-dashboards</a>' existing <code>shadow-rules-active</code> panel for visibility)</li>
+</ul>
+<p>→ Watch continuously during Phase 3 + 1 ops cycle; afterwards the dashboard can be downgraded to weekly review.</p>
+<hr />
+<h2 id="11-cross-references">11. Cross-references<a class="headerlink" href="#11-cross-references" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Rule namespace governance</strong>: <a href="../../custom-rule-governance/"><code>docs/custom-rule-governance.md</code></a></li>
+<li><strong>Multi-system migration (cutover phase)</strong>: <a href="../multi-system-migration-playbook/"><code>docs/scenarios/multi-system-migration-playbook.md</code></a> (<strong>ZH only — <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/409">#409</a></strong>)</li>
+<li><strong>Shadow monitoring SOP</strong>: <a href="../../shadow-monitoring-sop/"><code>docs/shadow-monitoring-sop.md</code></a></li>
+<li><strong>Rule Pack cheat sheet</strong>: <a href="../../rule-packs/ALERT-REFERENCE/"><code>rule-packs/ALERT-REFERENCE.md</code></a></li>
+<li><strong>Design origin</strong>: this document's framework crystallised from the PR #389 strategic discussion, locked as the "lifecycle pattern not migration step" perspective (replacing the initial "migration final step" design)</li>
+</ul>
+
+
+
+
+
+
+
+  
+  
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      Copyright &copy; 2025 Vencil. Licensed under Apache 2.0.
+    </div>
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+        
+<div class="md-social">
+  
+    
+    
+    
+    
+    <a href="https://github.com/vencil/Dynamic-Alerting-Integrations" target="_blank" rel="noopener" title="GitHub" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+      <div class="md-progress" data-md-component="progress" role="progressbar"></div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.instant", "navigation.instant.loading", "navigation.instant.progress", "navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.expand", "navigation.indexes", "navigation.tracking", "navigation.top", "search.suggest", "search.highlight", "search.share", "toc.follow", "content.action.edit", "content.action.view", "content.code.copy", "content.code.select", "content.code.annotate", "content.tabs.link", "content.tooltips", "announce.dismiss"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"provider": "mike"}}</script>
+    
+    
+      <script src="../../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+        <script src="../../../assets/extra.js"></script>
+      
+        <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+      
+    
+  </body>
+</html>

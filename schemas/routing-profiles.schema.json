@@ -1,0 +1,166 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/vencil/Dynamic-Alerting-Integrations/docs/schemas/routing-profiles.schema.json",
+  "title": "Dynamic Alerting Platform — Routing Profiles Schema (ADR-007)",
+  "description": "JSON Schema (draft-07) for validating _routing_profiles.yaml. Defines reusable named routing configurations that tenants reference via _routing_profile.",
+  "version": "v2.1.0",
+  "$comment": "Add to VS Code settings.json: \"yaml.schemas\": { \"./docs/schemas/routing-profiles.schema.json\": \"conf.d/_routing_profiles.yaml\" }",
+  "type": "object",
+  "required": ["routing_profiles"],
+  "properties": {
+    "routing_profiles": {
+      "type": "object",
+      "title": "Routing Profiles Map",
+      "description": "Mapping of profile-name to routing configuration. Naming convention: team-{team}-{region} or domain-{domain}-{tier}.",
+      "additionalProperties": {
+        "$ref": "#/definitions/routingProfile"
+      },
+      "minProperties": 1
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "routingProfile": {
+      "type": "object",
+      "title": "Named Routing Profile",
+      "description": "Reusable routing configuration applied as Layer 2 in the four-layer merge pipeline. Profile values override _routing_defaults but are overridden by tenant _routing.",
+      "properties": {
+        "receiver": {
+          "$ref": "#/definitions/receiver",
+          "title": "Profile Receiver",
+          "description": "Default receiver for tenants using this profile."
+        },
+        "group_by": {
+          "type": "array",
+          "title": "Group By Labels",
+          "description": "Alertmanager grouping labels.",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "examples": [["tenant", "alertname", "severity"]]
+        },
+        "group_wait": {
+          "type": "string",
+          "title": "Group Wait Duration",
+          "description": "Wait time before sending initial notification (Go duration). Guardrail: 5s–5m.",
+          "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$",
+          "examples": ["30s", "1m"]
+        },
+        "group_interval": {
+          "type": "string",
+          "title": "Group Interval Duration",
+          "description": "Interval between notifications for same group (Go duration). Guardrail: 5s–5m.",
+          "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$",
+          "examples": ["5m", "10m"]
+        },
+        "repeat_interval": {
+          "type": "string",
+          "title": "Repeat Interval Duration",
+          "description": "Interval for re-sending unresolved alerts (Go duration). Guardrail: 1m–72h.",
+          "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$",
+          "examples": ["1h", "4h", "8h"]
+        },
+        "routes": {
+          "type": "array",
+          "title": "Sub-Routes",
+          "description": "Optional sub-routes for severity-based or label-based routing within this profile.",
+          "items": {
+            "$ref": "#/definitions/profileSubRoute"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "profileSubRoute": {
+      "type": "object",
+      "title": "Profile Sub-Route",
+      "description": "A sub-route within a profile for conditional routing (e.g., severity-based escalation).",
+      "required": ["match", "receiver"],
+      "properties": {
+        "match": {
+          "type": "object",
+          "title": "Match Labels",
+          "description": "Label matchers for this sub-route (e.g., {severity: critical}).",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "receiver": {
+          "$ref": "#/definitions/receiver",
+          "title": "Sub-Route Receiver"
+        },
+        "group_wait": {
+          "type": "string",
+          "title": "Group Wait Override",
+          "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
+        },
+        "group_interval": {
+          "type": "string",
+          "title": "Group Interval Override",
+          "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
+        },
+        "repeat_interval": {
+          "type": "string",
+          "title": "Repeat Interval Override",
+          "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "receiver": {
+      "oneOf": [
+        { "$ref": "#/definitions/webhookReceiver" },
+        { "$ref": "#/definitions/slackReceiver" },
+        { "$ref": "#/definitions/pagerdutReceiver" },
+        { "$ref": "#/definitions/emailReceiver" }
+      ],
+      "title": "Receiver Configuration"
+    },
+    "webhookReceiver": {
+      "type": "object",
+      "required": ["type", "url"],
+      "properties": {
+        "type": { "const": "webhook" },
+        "url": { "type": "string", "format": "uri" },
+        "send_resolved": { "type": "boolean", "default": true }
+      },
+      "additionalProperties": false
+    },
+    "slackReceiver": {
+      "type": "object",
+      "required": ["type", "api_url"],
+      "properties": {
+        "type": { "const": "slack" },
+        "api_url": { "type": "string", "format": "uri" },
+        "channel": { "type": "string" },
+        "send_resolved": { "type": "boolean", "default": true }
+      },
+      "additionalProperties": false
+    },
+    "pagerdutReceiver": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": { "const": "pagerduty" },
+        "service_key": { "type": "string" },
+        "routing_key": { "type": "string" },
+        "severity": { "type": "string" },
+        "send_resolved": { "type": "boolean", "default": true }
+      },
+      "additionalProperties": false
+    },
+    "emailReceiver": {
+      "type": "object",
+      "required": ["type", "to", "smarthost"],
+      "properties": {
+        "type": { "const": "email" },
+        "to": { "type": "array", "items": { "type": "string", "format": "email" }, "minItems": 1 },
+        "smarthost": { "type": "string" },
+        "from": { "type": "string", "format": "email" },
+        "send_resolved": { "type": "boolean", "default": true }
+      },
+      "additionalProperties": false
+    }
+  }
+}

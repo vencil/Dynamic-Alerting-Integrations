@@ -1,0 +1,110 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/vencil/Dynamic-Alerting-Integrations/docs/schemas/domain-policy.schema.json",
+  "title": "Dynamic Alerting Platform — Domain Policy Schema (ADR-007)",
+  "description": "JSON Schema (draft-07) for validating _domain_policy.yaml. Defines business domain compliance constraints applied after the four-layer routing merge.",
+  "version": "v2.1.0",
+  "$comment": "Add to VS Code settings.json: \"yaml.schemas\": { \"./docs/schemas/domain-policy.schema.json\": \"conf.d/_domain_policy.yaml\" }",
+  "type": "object",
+  "required": ["domain_policies"],
+  "properties": {
+    "domain_policies": {
+      "type": "object",
+      "title": "Domain Policies Map",
+      "description": "Mapping of domain-name to policy configuration. Policies validate (not inject) the final resolved routing config.",
+      "additionalProperties": {
+        "$ref": "#/definitions/domainPolicy"
+      },
+      "minProperties": 1
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "domainPolicy": {
+      "type": "object",
+      "title": "Domain Policy",
+      "description": "Business domain compliance constraints. Violations are reported as WARN by default, or ERROR with --strict mode.",
+      "required": ["tenants", "constraints"],
+      "properties": {
+        "description": {
+          "type": "string",
+          "title": "Policy Description",
+          "description": "Human-readable description of this domain policy.",
+          "examples": ["Finance domain compliance requirements", "E-commerce domain standards"]
+        },
+        "tenants": {
+          "type": "array",
+          "title": "Applicable Tenants",
+          "description": "List of tenant IDs this policy applies to. A tenant may appear in multiple policies.",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1,
+          "examples": [["db-a", "db-b"]]
+        },
+        "constraints": {
+          "$ref": "#/definitions/policyConstraints",
+          "title": "Policy Constraints",
+          "description": "Validation constraints applied to the tenant's final resolved routing config."
+        }
+      },
+      "additionalProperties": false
+    },
+    "policyConstraints": {
+      "type": "object",
+      "title": "Policy Constraints",
+      "description": "Set of validation rules for routing configuration. All constraints are optional; only specified ones are checked.",
+      "properties": {
+        "allowed_receiver_types": {
+          "type": "array",
+          "title": "Allowed Receiver Types",
+          "description": "Whitelist of permitted receiver types. If set, any receiver type NOT in this list triggers a violation.",
+          "items": {
+            "type": "string",
+            "enum": ["webhook", "email", "slack", "teams", "rocketchat", "pagerduty", "opsgenie"]
+          },
+          "minItems": 1,
+          "examples": [["pagerduty", "email", "opsgenie"]]
+        },
+        "forbidden_receiver_types": {
+          "type": "array",
+          "title": "Forbidden Receiver Types",
+          "description": "Blacklist of prohibited receiver types. Any receiver type in this list triggers a violation.",
+          "items": {
+            "type": "string",
+            "enum": ["webhook", "email", "slack", "teams", "rocketchat", "pagerduty", "opsgenie"]
+          },
+          "minItems": 1,
+          "examples": [["slack", "webhook"]]
+        },
+        "enforce_group_by": {
+          "type": "array",
+          "title": "Required Group By Labels",
+          "description": "Labels that MUST be present in group_by. Violation if any required label is missing.",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1,
+          "examples": [["tenant", "alertname", "severity"]]
+        },
+        "max_repeat_interval": {
+          "type": "string",
+          "title": "Maximum Repeat Interval",
+          "description": "Upper bound for repeat_interval (Go duration). Violation if tenant's repeat_interval exceeds this value.",
+          "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$",
+          "examples": ["1h", "15m", "12h"]
+        },
+        "min_group_wait": {
+          "type": "string",
+          "title": "Minimum Group Wait",
+          "description": "Lower bound for group_wait (Go duration). Violation if tenant's group_wait is below this value.",
+          "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$",
+          "examples": ["10s", "30s"]
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

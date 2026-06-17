@@ -1,0 +1,5013 @@
+
+<!doctype html>
+<html lang="zh" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Enterprise-grade Multi-Tenant Dynamic Alerting Platform for Kubernetes">
+      
+      
+        <meta name="author" content="Vencil Contributors">
+      
+      
+        <link rel="canonical" href="https://vencil.github.io/Dynamic-Alerting-Integrations/scenarios/multi-system-migration-playbook/">
+      
+      
+        <link rel="prev" href="../tenant-lifecycle/">
+      
+      
+        <link rel="next" href="../../cli-reference/">
+      
+      
+        
+          <link rel="alternate" href="./" hreflang="zh">
+        
+          <link rel="alternate" href="../../en/scenarios/multi-system-migration-playbook/" hreflang="en">
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>Multi-System Migration Playbook - Dynamic Alerting Platform</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/extra.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="deep-orange" data-md-color-accent="deep-orange">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#multi-system-migration-playbook" class="md-skip">
+          跳转至
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="页眉">
+    <a href="../.." title="Dynamic Alerting Platform" class="md-header__button md-logo" aria-label="Dynamic Alerting Platform" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Dynamic Alerting Platform
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Multi-System Migration Playbook
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="deep-orange" data-md-color-accent="deep-orange"  aria-label="深色模式"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="深色模式" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="deep-orange" data-md-color-accent="deep-orange"  aria-label="淺色模式"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="淺色模式" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+      <div class="md-header__option">
+  <div class="md-select">
+    
+    <button class="md-header__button md-icon" aria-label="选择当前语言">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m12.87 15.07-2.54-2.51.03-.03A17.5 17.5 0 0 0 14.07 6H17V4h-7V2H8v2H1v2h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2zm-2.62 7 1.62-4.33L19.12 17z"/></svg>
+    </button>
+    <div class="md-select__inner">
+      <ul class="md-select__list">
+        
+          <li class="md-select__item">
+            <a href="./" hreflang="zh" class="md-select__link">
+              中文
+            </a>
+          </li>
+        
+          <li class="md-select__item">
+            <a href="../../en/scenarios/multi-system-migration-playbook/" hreflang="en" class="md-select__link">
+              English
+            </a>
+          </li>
+        
+      </ul>
+    </div>
+  </div>
+</div>
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="搜索" placeholder="搜索" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="查找">
+        
+          <a href="javascript:void(0)" class="md-search__icon md-icon" title="分享" aria-label="分享" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
+            
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91s2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08"/></svg>
+          </a>
+        
+        <button type="reset" class="md-search__icon md-icon" title="清空当前内容" aria-label="清空当前内容" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            正在初始化搜索引擎
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/vencil/Dynamic-Alerting-Integrations" title="前往仓库" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    vencil/Dynamic-Alerting-Integrations
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+    
+      
+<nav class="md-tabs" aria-label="标签" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  首頁
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../getting-started/for-platform-engineers/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  快速入門
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../architecture-and-design/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  核心架構
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../integration/byo-prometheus-integration/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  整合指南
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../migration-guide/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  遷移
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../governance-security/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  治理與安全
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../alert-routing-split/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  場景
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../cli-reference/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  參考
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+    
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="导航栏" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="Dynamic Alerting Platform" class="md-nav__button md-logo" aria-label="Dynamic Alerting Platform" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    Dynamic Alerting Platform
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/vencil/Dynamic-Alerting-Integrations" title="前往仓库" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    vencil/Dynamic-Alerting-Integrations
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    首頁
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    快速入門
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    快速入門
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/for-platform-engineers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Platform Engineers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/for-domain-experts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Domain Experts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/for-tenants/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tenants
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    核心架構
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    核心架構
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture-and-design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    架構與設計
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../benchmarks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    性能基準
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_3" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../adr/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    架構決策 (ADR)
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3_3" id="__nav_3_3_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    架構決策 (ADR)
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/001-severity-dedup-via-inhibit/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-001 Severity Dedup via Inhibit
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--accepted"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/002-oci-registry-over-chartmuseum/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-002 OCI Registry
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--accepted"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/003-sentinel-alert-pattern/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-003 Sentinel Alert Pattern
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--accepted"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/004-federation-central-exporter-first/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-004 Federation Central Exporter First
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--accepted"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/005-projected-volume-for-rule-packs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-005 Projected Volume
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--accepted"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    整合指南
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    整合指南
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/byo-prometheus-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    BYO Prometheus
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/byo-alertmanager-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    BYO Alertmanager
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/alerting-plane-self-liveness/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    告警平面自我存活性 (Watchdog)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/synthetic-probe-interop/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    合成探測對接 (Synthetic-Probe)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/victoriametrics-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    VictoriaMetrics 整合
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/federation-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Federation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/tenant-federation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tenant Federation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/gitops-deployment/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    GitOps 部署
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/deployment-sizing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    部署容量規劃
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    遷移
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    遷移
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../migration-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    遷移指南
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../migration-engine/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    遷移引擎
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../migration-toolkit-installation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migration Toolkit 安裝
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../shadow-monitoring-sop/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Shadow Monitoring SOP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/troubleshooting-checklist/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migration Troubleshooting Checklist
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    治理與安全
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    治理與安全
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../governance-security/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    治理與安全
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../custom-rule-governance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Custom Rule 治理
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    場景
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    場景
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../alert-routing-split/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Alert Routing Split
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../internal/test-coverage-matrix/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    測試覆蓋矩陣
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../shadow-monitoring-cutover/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Shadow Monitoring 切換
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../staged-adoption-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Staged Adoption Lifecycle
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../version-aware-thresholds/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Version-Aware Thresholds
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../multi-cluster-federation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    多叢集 Federation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tenant-lifecycle/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tenant 生命週期
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Multi-System Migration Playbook
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Multi-System Migration Playbook
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="目录">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      目录
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#0-reading-speed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        0. 三層 reading speed（怎麼讀本文）
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#1-routing-decision-tree" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. 我是哪一型客戶？（Routing Decision Tree）
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-5-phase" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. 5-Phase 全景
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-phase-0-discovery-inventory" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Phase 0 — Discovery &amp; Inventory
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3. Phase 0 — Discovery &amp; Inventory">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#30-tldr" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        30 秒 TL;DR
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#architect-narrative" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Architect Narrative
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cutover-checklist" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cutover Checklist
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#failure-modes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Failure modes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#gate-1-phase-1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Gate 1 → Phase 1
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-phase-1-pre-flight-dual-write-infrastructure" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Phase 1 — Pre-flight &amp; Dual-Write Infrastructure
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="4. Phase 1 — Pre-flight &amp; Dual-Write Infrastructure">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#30-tldr_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        30 秒 TL;DR
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#architect-narrative_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Architect Narrative
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cutover-checklist_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cutover Checklist
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#gate-2-phase-2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Gate 2 → Phase 2
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-phase-2-shadow-deployment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Phase 2 — Shadow Deployment
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="5. Phase 2 — Shadow Deployment">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#30-tldr_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        30 秒 TL;DR
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#architect-narrative_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Architect Narrative
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cutover-checklist_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cutover Checklist
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#gate-3-phase-3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Gate 3 → Phase 3
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-phase-3-incremental-cutover" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. Phase 3 — Incremental Cutover
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="6. Phase 3 — Incremental Cutover">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#30-tldr_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        30 秒 TL;DR
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#architect-narrative_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Architect Narrative
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cutover-checklist_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cutover Checklist
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#gate-4canary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Gate 4（canary）→ 全量
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#gate-5-phase-4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Gate 5（全量）→ Phase 4
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7-phase-4-decommission" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7. Phase 4 — Decommission
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="7. Phase 4 — Decommission">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#30-tldr_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        30 秒 TL;DR
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#architect-narrative_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Architect Narrative
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cutover-checklist_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cutover Checklist
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#failure-modes_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Failure modes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#gate-51archive-complete" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Gate 5+1（archive complete）
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8-plan-a-vs-plan-bgit-layout" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8. Plan A vs Plan B（Git layout 選擇）
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="8. Plan A vs Plan B（Git layout 選擇）">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#plan-a-single-sot-per-cluster-exporter-version-skew" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Plan A — Single SOT + Per-cluster Exporter Version Skew（預設）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#plan-b-base-overlayescape-hatch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Plan B — Base + Overlay（escape hatch）
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#9-partial-migrationx-y-matrix" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9. Partial Migration（X-Y matrix）
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#10-gate-reference-table" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        10. Gate Reference Table
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#11-rollback" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        11. Rollback 三層可逆界線
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#12-failure-mode-catalogcross-phase-summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        12. Failure Mode Catalog（cross-phase summary）
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="12. Failure Mode Catalog（cross-phase summary）">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#phase-0-discovery-inventory" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 0 — Discovery &amp; Inventory
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-1-pre-flight-dual-write" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 1 — Pre-flight &amp; Dual-Write
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-2-shadow-deployment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 2 — Shadow Deployment
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-3-incremental-cutover" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 3 — Incremental Cutover
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-4-decommission" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 4 — Decommission
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#13-appendices" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13. Appendices
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="13. Appendices">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#a-composite-customer-walkthroughfrankenstein" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A. Composite Customer Walkthrough（Frankenstein 寫法）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#b-cross-references" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        B. Cross-references
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#c-adr-design-references" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        C. ADR / Design references
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_8" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../api/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    參考
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_8" id="__nav_8_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    參考
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cli-reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    da-tools CLI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cheat-sheet/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CLI 速查表
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../interactive-tools/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    互動式工具
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../grafana-dashboards/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Grafana Dashboards
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../rule-packs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Rule Packs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../rule-packs/ALERT-REFERENCE/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Alert 速查
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../schemas/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    JSON Schema
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    故障排查
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../glossary/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    術語表
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../CHANGELOG/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Changelog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="目录">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      目录
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#0-reading-speed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        0. 三層 reading speed（怎麼讀本文）
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#1-routing-decision-tree" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. 我是哪一型客戶？（Routing Decision Tree）
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-5-phase" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. 5-Phase 全景
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-phase-0-discovery-inventory" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Phase 0 — Discovery &amp; Inventory
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3. Phase 0 — Discovery &amp; Inventory">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#30-tldr" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        30 秒 TL;DR
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#architect-narrative" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Architect Narrative
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cutover-checklist" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cutover Checklist
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#failure-modes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Failure modes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#gate-1-phase-1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Gate 1 → Phase 1
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-phase-1-pre-flight-dual-write-infrastructure" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Phase 1 — Pre-flight &amp; Dual-Write Infrastructure
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="4. Phase 1 — Pre-flight &amp; Dual-Write Infrastructure">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#30-tldr_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        30 秒 TL;DR
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#architect-narrative_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Architect Narrative
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cutover-checklist_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cutover Checklist
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#gate-2-phase-2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Gate 2 → Phase 2
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-phase-2-shadow-deployment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Phase 2 — Shadow Deployment
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="5. Phase 2 — Shadow Deployment">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#30-tldr_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        30 秒 TL;DR
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#architect-narrative_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Architect Narrative
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cutover-checklist_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cutover Checklist
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#gate-3-phase-3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Gate 3 → Phase 3
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-phase-3-incremental-cutover" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. Phase 3 — Incremental Cutover
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="6. Phase 3 — Incremental Cutover">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#30-tldr_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        30 秒 TL;DR
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#architect-narrative_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Architect Narrative
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cutover-checklist_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cutover Checklist
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#gate-4canary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Gate 4（canary）→ 全量
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#gate-5-phase-4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Gate 5（全量）→ Phase 4
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7-phase-4-decommission" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7. Phase 4 — Decommission
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="7. Phase 4 — Decommission">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#30-tldr_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        30 秒 TL;DR
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#architect-narrative_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Architect Narrative
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cutover-checklist_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cutover Checklist
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#failure-modes_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Failure modes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#gate-51archive-complete" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Gate 5+1（archive complete）
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8-plan-a-vs-plan-bgit-layout" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8. Plan A vs Plan B（Git layout 選擇）
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="8. Plan A vs Plan B（Git layout 選擇）">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#plan-a-single-sot-per-cluster-exporter-version-skew" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Plan A — Single SOT + Per-cluster Exporter Version Skew（預設）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#plan-b-base-overlayescape-hatch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Plan B — Base + Overlay（escape hatch）
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#9-partial-migrationx-y-matrix" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9. Partial Migration（X-Y matrix）
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#10-gate-reference-table" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        10. Gate Reference Table
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#11-rollback" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        11. Rollback 三層可逆界線
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#12-failure-mode-catalogcross-phase-summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        12. Failure Mode Catalog（cross-phase summary）
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="12. Failure Mode Catalog（cross-phase summary）">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#phase-0-discovery-inventory" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 0 — Discovery &amp; Inventory
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-1-pre-flight-dual-write" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 1 — Pre-flight &amp; Dual-Write
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-2-shadow-deployment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 2 — Shadow Deployment
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-3-incremental-cutover" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 3 — Incremental Cutover
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-4-decommission" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 4 — Decommission
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#13-appendices" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13. Appendices
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="13. Appendices">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#a-composite-customer-walkthroughfrankenstein" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A. Composite Customer Walkthrough（Frankenstein 寫法）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#b-cross-references" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        B. Cross-references
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#c-adr-design-references" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        C. ADR / Design references
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+  <nav class="md-tags" >
+    
+      
+      
+      
+      
+        <span class="md-tag">hybrid-format</span>
+      
+    
+      
+      
+      
+      
+        <span class="md-tag">migration</span>
+      
+    
+      
+      
+      
+      
+        <span class="md-tag">multi-system</span>
+      
+    
+      
+      
+      
+      
+        <span class="md-tag">playbook</span>
+      
+    
+      
+      
+      
+      
+        <span class="md-tag">scenarios</span>
+      
+    
+  </nav>
+
+
+  
+    <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/edit/main/scenarios/multi-system-migration-playbook.md" title="编辑此页" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20.71 7.04c.39-.39.39-1.04 0-1.41l-2.34-2.34c-.37-.39-1.02-.39-1.41 0l-1.84 1.83 3.75 3.75M3 17.25V21h3.75L17.81 9.93l-3.75-3.75z"/></svg>
+    </a>
+  
+  
+    
+      
+    
+    <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/raw/main/scenarios/multi-system-migration-playbook.md" title="查看本页的源代码" class="md-content__button md-icon">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0 8a5 5 0 0 1-5-5 5 5 0 0 1 5-5 5 5 0 0 1 5 5 5 5 0 0 1-5 5m0-12.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5"/></svg>
+    </a>
+  
+
+
+<h1 id="multi-system-migration-playbook">Multi-System Migration Playbook<a class="headerlink" href="#multi-system-migration-playbook" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p><strong>適用情境</strong>：客戶同時換 storage backend (Prom→VM)、規則層、AM routing，並追加平台的 <code>_defaults.yaml</code> metric-split feature。<strong>不適合</strong>：greenfield / 1-system / 2-system → 走決策樹下方對應 redirect。</p>
+<p><strong>語氣假設</strong>：本 playbook 假設客戶已有成熟 Prometheus + Alertmanager 運維。<strong>不教 Prometheus 基礎</strong>；映射客戶既有概念到本平台。</p>
+</blockquote>
+<hr />
+<h2 id="0-reading-speed">0. 三層 reading speed（怎麼讀本文）<a class="headerlink" href="#0-reading-speed" title="Permanent link">&para;</a></h2>
+<p>每個 Phase 同樣結構，依角色挑層次：</p>
+<table>
+<thead>
+<tr>
+<th>你是誰</th>
+<th>讀哪段</th>
+<th>預估</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Manager / 跨團隊溝通</strong>（broadcast 用）</td>
+<td>每 Phase 開頭的 「30 秒 TL;DR」（3 bullets）</td>
+<td>整 playbook &lt; 5 分鐘</td>
+</tr>
+<tr>
+<td><strong>Architect / SRE Lead</strong>（決策用）</td>
+<td>30 秒 TL;DR + Architect Narrative + Gates + Decision Trees</td>
+<td>整 playbook ~30 分鐘</td>
+</tr>
+<tr>
+<td><strong>On-call / Executor</strong>（凌晨 cutover 用）</td>
+<td>跳到「Cutover Checklist」<code>&lt;details&gt;</code> + bash code blocks</td>
+<td>單 Phase &lt; 5 分鐘</td>
+</tr>
+</tbody>
+</table>
+<p>設計動機：<strong>讀者不該抽自己的 TL;DR</strong>。我們先抽好；不該跑命令的人不會看到命令（折疊預設關）；該執行的人 copy-paste 即可。</p>
+<hr />
+<h2 id="1-routing-decision-tree">1. 我是哪一型客戶？（Routing Decision Tree）<a class="headerlink" href="#1-routing-decision-tree" title="Permanent link">&para;</a></h2>
+<pre class="mermaid"><code>flowchart TD
+    Q1{現況描述哪一類？}
+    Q1 --&gt;|沒既有 rules、剛裝 Prom| GS["[for-tenants.md](../getting-started/for-tenants.md)&lt;br/&gt;Greenfield onboarding"]
+    Q1 --&gt;|有 rules、留 Prom infra、不換 AM| MG1["[migration-guide.md](../migration-guide.md)&lt;br/&gt;Rule import (1-system)"]
+    Q1 --&gt;|完整 Prom+AM+rules、留 infra| MG2["[migration-guide.md](../migration-guide.md) §rule+AM&lt;br/&gt;Rule + AM migration (2-system)"]
+    Q1 --&gt;|&lt;b&gt;Prom→VM + rules + AM 同時換&lt;/b&gt;| THIS["✅ &lt;b&gt;本 playbook&lt;/b&gt;&lt;br/&gt;3-system migration"]
+
+    style THIS fill:#dff,stroke:#066</code></pre>
+<p>如果你不確定該走哪一條，問自己：「<strong>底層 storage 換不換？</strong>」 換 → 本 playbook；不換 → migration-guide.md。</p>
+<hr />
+<h2 id="2-5-phase">2. 5-Phase 全景<a class="headerlink" href="#2-5-phase" title="Permanent link">&para;</a></h2>
+<pre class="mermaid"><code>sequenceDiagram
+    participant D as Discovery
+    participant P as Pre-flight
+    participant S as Shadow
+    participant C as Cutover
+    participant K as Decommission
+    Note over D: Tier A 靜態 audit (hard)&lt;br/&gt;Tier B/C bonus
+    D-&gt;&gt;P: Gate 1
+    Note over P: VM 起、雙寫、舊 Prom 留
+    P-&gt;&gt;S: Gate 2
+    Note over S: 規則上 git，AM 帶 shadow label
+    S-&gt;&gt;C: Gate 3
+    Note over C: Canary → 全量、git revert 保底
+    C-&gt;&gt;K: Gate 4 + 5
+    Note over K: 關舊 Prom、清理、_defaults 漸進</code></pre>
+<p>5 個 Gate 全部用 <strong>invariants</strong>（不是「告警量一致」）—— 詳見 §10。</p>
+<hr />
+<h2 id="3-phase-0-discovery-inventory">3. Phase 0 — Discovery &amp; Inventory<a class="headerlink" href="#3-phase-0-discovery-inventory" title="Permanent link">&para;</a></h2>
+<h3 id="30-tldr">30 秒 TL;DR<a class="headerlink" href="#30-tldr" title="Permanent link">&para;</a></h3>
+<ul>
+<li>三層 tier audit：A 靜態（hard gate）/ B live snapshot（soft）/ C 歷史 telemetry（bonus）</li>
+<li>產出 dual：<strong><code>.da/migration-state.json</code></strong>（機器讀，後續 phase 自動化用）+ Markdown summary（給 PR description / 給人類）</li>
+<li>Schema 詳見 <a href="../../schemas/migration-state/">migration-state.md</a></li>
+</ul>
+<h3 id="architect-narrative">Architect Narrative<a class="headerlink" href="#architect-narrative" title="Permanent link">&para;</a></h3>
+<h4 id="phase-0-hard-gate">為什麼 Phase 0 是 hard gate，不能跳<a class="headerlink" href="#phase-0-hard-gate" title="Permanent link">&para;</a></h4>
+<p><strong>「我以為我懂自己的 inventory」是企業 monitoring 最常見的錯覺</strong>。5 年以上的 Prometheus deployment 累積：規則被 commit 但沒人記得目的、receiver 用的 webhook URL 對應的人離職了、tenant id 在某次 hotfix 直接 hardcode 進 PromQL 沒人移除、multi-region 部署規則因為團隊分工各自演化、Operator 遷移過程留下 ConfigMap + PrometheusRule CRD 雙寫遺跡。</p>
+<p>Phase 0 強制做<strong>一次徹底的盤點</strong>——不是為了完美修復（那要 Phase 3 才做），而是為了讓客戶與我們對「即將遷移什麼」有共同 mental model。Discovery 跳過 = Phase 1+ 每一步都基於假設不基於事實。</p>
+<h4 id="tier">三層 Tier 為什麼這樣切分<a class="headerlink" href="#tier" title="Permanent link">&para;</a></h4>
+<p>客戶 telemetry 成熟度差異極大——從「只有 Prom 在線、無任何長期儲存」到「Thanos + ELK + Datadog」都有。一個 hard gate fits all 是不切實際。三層 tier 對應三種客戶現況：</p>
+<ul>
+<li>
+<p><strong>Tier A — 靜態分析</strong>（hard gate，所有客戶都能過）
+  完全脫機分析 PromRule CRD / rules.yaml / vmalert ConfigMap 等規則檔本身。Catches: syntax errors、orphan rules（無對應 receiver）、rules without route、receivers unused、tenant id 違反 schema、跨檔重複定義。<strong>典型 100 規則客戶 &lt; 30 秒跑完</strong>。output 為 <code>.da/migration-state.json</code> + Markdown summary（dual output 詳見 <a href="../../schemas/migration-state/">migration-state.md</a>）。</p>
+</li>
+<li>
+<p><strong>Tier B — Live snapshot</strong>（soft gate，~80% 客戶可達）
+  對活著的 Prometheus 跑 <code>ALERTS{}</code> 抓「現在 firing 的告警集合」+ 對 AM 跑 <code>/api/v2/alerts/groups</code> 抓 active routes。回答「現在實際在叫的東西是什麼？」這個 Tier A 沒法回答的問題。Limits: 需要 Prom auth + reachable；某些 shops policy 不開查詢權；高 cardinality 客戶查詢可能 timeout。<strong>Tier B 缺席不擋 Phase 1</strong>。</p>
+</li>
+<li>
+<p><strong>Tier C — 歷史 telemetry</strong>（bonus，~20% 客戶可達）
+  對 Thanos / VM long-retention / ELK alert logs 跑「過去 N 天 alert fire 分布」「哪些規則一年沒觸發過」「哪些 receiver 收過 webhook」。<strong>多數客戶沒這層 telemetry</strong>——不擋；Shadow phase 會做 dynamic noise filtering 替代。</p>
+</li>
+</ul>
+<h4 id="output-dual-format">Output dual format 的由來<a class="headerlink" href="#output-dual-format" title="Permanent link">&para;</a></h4>
+<p>JSON (<code>.da/migration-state.json</code>) + Markdown summary 來自同一個 internal state。<strong>不是兩份檔案分別維護，是一個 derive 兩種視圖</strong>：</p>
+<ul>
+<li>JSON：機器讀。Phase 3 cutover candidate selector / CI gate / 後續 phase 自動 advance log 都依賴它</li>
+<li>Markdown：人類讀。貼進 PR description 給 reviewer / 客戶 stakeholder broadcast</li>
+</ul>
+<p><strong>Per-cluster split</strong> 是 Phase 0 起手就建立的慣例（見 <a href="../../schemas/migration-state/">migration-state.md §Storage Layout</a>）。多 cluster 並行推進不同 phase 時，single-file 會 GitOps merge conflict 地獄；per-cluster <code>.da/state/&lt;cluster&gt;.json</code> 是預設姿勢。</p>
+<h4 id="phase-0-surprise">Phase 0 通常的 surprise<a class="headerlink" href="#phase-0-surprise" title="Permanent link">&para;</a></h4>
+<p>客戶聽到 Phase 0 結果常見三種反應：</p>
+<ol>
+<li><strong>「我們有那麼多 orphan rules？」</strong> — 規則被 commit 但對應 receiver 已不在 AM config，Phase 0 一掃就出來，平均每 100 規則有 5-15 條 orphan</li>
+<li><strong>「這個 tenant id 是 hardcode 的？」</strong> — <code>instance="db-prod-1"</code> 之類的 PromQL 直接寫死，dev-rule #2 violation。Phase 1 之前必須改</li>
+<li><strong>「receiver 那個 PagerDuty token 早不能用了」</strong> — 客戶才發現好幾個月來某域 alert 根本沒人收到。屬於 Phase 0 額外的<strong>意外修復</strong>而非預期成果</li>
+</ol>
+<h3 id="cutover-checklist">Cutover Checklist<a class="headerlink" href="#cutover-checklist" title="Permanent link">&para;</a></h3>
+<details>
+<summary>📋 Phase 0 Checklist（給 executor）</summary>
+
+- [ ] 跑 Tier A 靜態 audit
+  <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>da-tools<span class="w"> </span>onboard<span class="w"> </span>--analyze<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">    </span>--output<span class="w"> </span>.da/migration-state.json<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">    </span>--markdown-summary<span class="w"> </span>&gt;<span class="w"> </span>migration-summary.md
+</code></pre></div>
+- [ ] 把 Markdown summary 貼進 PR description（給 reviewer）
+- [ ] 確認 Tier A hard gates 通過：
+  - [ ] 沒 syntax error 的孤兒 rule
+  - [ ] 每個 receiver 都有對應 routing entry
+  - [ ] tenant id 命名與我們的 schema 相容（dev-rule #2）
+- [ ] **可選** Tier B：對活的 Prom 跑 `ALERTS{}` snapshot
+- [ ] **可選** Tier C：對 Thanos / VM-long-retention 跑歷史查詢
+- [ ] commit `.da/migration-state.json` 進 customer GitOps repo
+</details>
+
+<h3 id="failure-modes">Failure modes<a class="headerlink" href="#failure-modes" title="Permanent link">&para;</a></h3>
+<ul>
+<li>「Tier A 卡在 syntax error」：常見於手寫 PromQL 用 VM-only 函數 → <code>da-parser --strict-promql</code> 標出</li>
+<li>「Tier B 拉不到 ALERTS{}」：Prom 太久沒 alert 評估 / 或 query timeout → 接受 Tier A 即可推進</li>
+</ul>
+<h3 id="gate-1-phase-1">Gate 1 → Phase 1<a class="headerlink" href="#gate-1-phase-1" title="Permanent link">&para;</a></h3>
+<p><strong>通過條件</strong>：Tier A 全 hard checks pass + <code>.da/migration-state.json</code> 已 commit。</p>
+<hr />
+<h2 id="4-phase-1-pre-flight-dual-write-infrastructure">4. Phase 1 — Pre-flight &amp; Dual-Write Infrastructure<a class="headerlink" href="#4-phase-1-pre-flight-dual-write-infrastructure" title="Permanent link">&para;</a></h2>
+<h3 id="30-tldr_1">30 秒 TL;DR<a class="headerlink" href="#30-tldr_1" title="Permanent link">&para;</a></h3>
+<ul>
+<li>VM cluster 起來（vmagent / vmselect / vmstorage 或 vmsingle）</li>
+<li>客戶舊 Prom + 新 VM <strong>同時 scrape</strong> 相同 targets（dual-write）</li>
+<li>exporter 在我們的 cluster 起、發 <code>user_threshold</code> metric</li>
+</ul>
+<h3 id="architect-narrative_1">Architect Narrative<a class="headerlink" href="#architect-narrative_1" title="Permanent link">&para;</a></h3>
+<h4 id="vm-topology">VM topology 選擇<a class="headerlink" href="#vm-topology" title="Permanent link">&para;</a></h4>
+<p><strong>起跑用 vmsingle，達某水位再升 vmcluster</strong>——不要在 Phase 1 就上 cluster。</p>
+<table>
+<thead>
+<tr>
+<th>Topology</th>
+<th>適用規模</th>
+<th>HA</th>
+<th>複雜度</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>vmsingle</strong>（單 binary）</td>
+<td>&lt; 1M active series</td>
+<td>❌ 單點</td>
+<td>低（單一 binary）</td>
+</tr>
+<tr>
+<td><strong>vmcluster</strong>（vmstorage + vmselect + vminsert）</td>
+<td>1M+ active series 或 multi-tenant 需求</td>
+<td>✅ replica + horizontal scale</td>
+<td>高（3 component 部署 + replication factor 調校）</td>
+</tr>
+</tbody>
+</table>
+<p>實務經驗：客戶在 Phase 1 上 vmcluster 的，Phase 1 stuck 機率比 vmsingle 高 3-5 倍——原因不是 VM bug，而是客戶 ops 對 vmcluster 不熟悉，部署 + debug + tuning 認知負擔過大。<strong>保留 vmcluster 升級為 Phase 4 後的 capacity planning 議題</strong>。</p>
+<p>vmsingle disk budget rule of thumb：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>bytes-per-datapoint × datapoints-per-day × series count × retention days × 1.5 (overhead buffer)
+</code></pre></div>
+<p>各因子典型值：</p>
+<ul>
+<li><strong>bytes-per-datapoint</strong>：VM 極致壓縮下約 <strong>0.4–1 byte</strong>（依 churn rate / value entropy 而定；官方範例 &lt; 1 byte）</li>
+<li><strong>datapoints-per-day</strong>：<code>86400 / scrape_interval_seconds</code>（15s scrape → 5760；30s scrape → 2880；60s → 1440）</li>
+<li><strong>series count</strong>：active series（不是 sample count）</li>
+<li><strong>retention days</strong>：保留期</li>
+<li><strong>1.5</strong>：overhead buffer（index / metadata / WAL / compaction temp）</li>
+</ul>
+<p>實際估算<strong>請以 <a href="https://docs.victoriametrics.com/Single-server-VictoriaMetrics.html#capacity-planning">VM 官方 Capacity Calculator</a> 為準</strong>——它會把 churn / dedup / replication factor 一起納入，比 rule-of-thumb 公式精確。本公式只供 sanity check 與初次採購估算的數量級判斷。</p>
+<p><strong>反例</strong>：早期 v0.1 outline 寫過「bytes-per-series-per-day ~8-15 bytes」是錯的——把 bytes/datapoint 與 bytes/series/day 混淆。1M series × 15s scrape × 30 days 兩種算法的差異：</p>
+<ul>
+<li><strong>錯</strong>：<code>8 bytes/series/day × 1M × 30 × 1.5 ≈ 360 MB</code> ←算出 disk 需求 &lt; 1GB，明顯有問題</li>
+<li><strong>對</strong>：<code>1 byte/dp × 5760 dp/day × 1M × 30 × 1.5 ≈ 260 GB</code>（5760 = 86400/15s scrape）</li>
+</ul>
+<p>兩者差 ~700 倍。Phase 1 disk 撐爆的事故多半出自這類算錯——把 bytes/series/day 誤當公式單位、實際數值卻在 bytes/datapoint 量級。</p>
+<h4 id="dual-write">Dual-write 策略<a class="headerlink" href="#dual-write" title="Permanent link">&para;</a></h4>
+<p>「Dual-write」一詞在這裡用得寬鬆——精確說是「<strong>讓兩個系統都拿到一份相同 metric</strong>」，而不是「對兩個 storage <code>remote_write</code>」。為什麼這個 framing 重要？因為 Prometheus 預設<strong>不接收 <code>remote_write</code></strong>（要重啟並加 <code>--web.enable-remote-write-receiver</code>），且把 Prom 從 pull 模型強推成 push 接收端會破壞 <code>up</code> 與 staleness 追蹤——客戶仰賴 <code>up == 0</code> 的告警會集體失效。所以<strong>舊 Prom 一律保持原樣自己 pull</strong>，新流量另外處理。</p>
+<p>兩條合理 path：</p>
+<p><strong>Option 1 — Side-by-Side Dual Scrape</strong>（推薦，多數客戶走這條）</p>
+<p>舊 Prom <strong>完全不動</strong>（保留原 scrape config 與所有 alerting 規則）。並行<strong>新部署一組 vmagent</strong>，讓它 scrape 與舊 Prom 一模一樣的 targets，然後 <code>remote_write</code> 給 VM。</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># 新 vmagent（Phase 1 新部署，與舊 Prom 並行不互相依賴）</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="nt">scrape_configs</span><span class="p">:</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span><span class="c1"># 抄舊 Prom 的 scrape_configs（一模一樣的 job/relabel/static_configs）</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">job_name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">...</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="nt">remoteWrite</span><span class="p">:</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">url</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;http://vminsert.vm.svc:8480/insert/0/prometheus&quot;</span>
+</code></pre></div>
+<p>關鍵點：</p>
+<ul>
+<li>舊 Prom 維持 pull 模型——<code>up</code> / staleness 追蹤完整保留、客戶既有 <code>up == 0</code> 告警照常運作</li>
+<li>新 vmagent 是<strong>獨立的 scraper</strong>——它 pull 一份、舊 Prom pull 一份，targets 對外是 2x scrape load（這是 dual-write 真實成本）</li>
+<li>vmagent 端可以做 relabel / drop 不關心的 metric 控制 cardinality</li>
+<li>風險邊界：<strong>vmagent scrape config 若與舊 Prom 不一致</strong>，Gate 1 invariant「VM 與 Prom 同 metric 數量 ±5%」會抓出來</li>
+</ul>
+<p><strong>Option 2 — Prom 加 <code>remote_write</code> 給 VM</strong>（適合不想加新 component 的客戶）</p>
+<p>舊 Prom 維持 pull、加一個 <code>remote_write</code> block 把 sample fan-out 到 VM。<strong>Prom → VM 是合法的</strong>（VM 接受 remote_write，Prom 也支援當 remote_write client）。</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="c1"># 舊 prometheus.yml 加這段</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="nt">remote_write</span><span class="p">:</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">url</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;http://vminsert.vm.svc:8480/insert/0/prometheus&quot;</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">    </span><span class="c1"># 🚨 必須加 queue_config 否則生產環境會 OOM 或打趴 vminsert</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">    </span><span class="nt">queue_config</span><span class="p">:</span>
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w">      </span><span class="nt">max_samples_per_send</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10000</span><span class="w">   </span><span class="c1"># 單次 payload 上限（避免 HTTP body 過大）</span>
+<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="w">      </span><span class="nt">max_shards</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">30</span><span class="w">                </span><span class="c1"># 並發 shard 上限（Prom 預設 200 太高，記憶體會炸）</span>
+<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="w">      </span><span class="nt">capacity</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">25000</span><span class="w">               </span><span class="c1"># 每 shard buffer 大小（max_shards × capacity ≈ 在飛 sample 上限）</span>
+</code></pre></div>
+<p><strong>為什麼 <code>queue_config</code> 不可省略</strong>——這段 YAML 看起來很無辜，省略 <code>queue_config</code> 在小 Prom 上不會出事，但<strong>有規模的 Prom（百萬 series 級）reload 後 Prom 預設行為會災難</strong>：</p>
+<ol>
+<li>Reload 觸發 WAL replay / catch-up，Prom 用最激進方式追送資料給 VM</li>
+<li>預設 <code>max_shards: 200</code> 同時開 200 條並發連接，每 shard 各自 buffer → 記憶體<strong>幾倍</strong> spike → Prom OOMKilled</li>
+<li>突發寫入流量直接打 vminsert → HTTP 503 / connection refused（即使 vminsert 平時撐得住穩態流量）</li>
+<li>客戶以為「我只加了三行」實際引入了一個重大效能 regression</li>
+</ol>
+<p><strong>baseline 數值的取捨</strong>（記憶體 ≈ <code>max_shards × capacity × ~bytes/sample</code>）：</p>
+<ul>
+<li>推薦的 baseline <code>30 × 25000 = 750k samples in flight</code> 是 Prom 預設 <code>200 × 10000 = 2M</code> 的 ~37%，<strong>保守的安全起點</strong></li>
+<li>客戶 series 量大、WAN 高 latency 時，可往上調 <code>max_shards</code>；series 少 / Prom OOM 風險高時往下調</li>
+<li>VictoriaMetrics 官方 capacity calculator 也會給出對應 <code>max_shards</code> 建議</li>
+</ul>
+<p>注意：<strong>這條路與 Option 1 的方向相反</strong>——Option 2 是 Prom push 給 VM；Option 1 是 vmagent 獨立 pull 後 push 給 VM。<strong>沒有任何 option 是把資料 push 給舊 Prom</strong>。</p>
+<table>
+<thead>
+<tr>
+<th>比較項</th>
+<th>Option 1 (Dual Scrape)</th>
+<th>Option 2 (Prom remote_write)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>舊 Prom 設定變動</td>
+<td>0（完全不動）</td>
+<td>加 <code>remote_write</code> block + reload</td>
+</tr>
+<tr>
+<td>新增 component</td>
+<td>1 個 vmagent</td>
+<td>0</td>
+</tr>
+<tr>
+<td>Scrape load on targets</td>
+<td>2×</td>
+<td>1×（共享舊 Prom 的 scrape）</td>
+</tr>
+<tr>
+<td>Cardinality 控制點</td>
+<td>vmagent 端可 relabel</td>
+<td>Prom 端 + VM 端</td>
+</tr>
+<tr>
+<td>失敗影響</td>
+<td>vmagent 掛掉舊 Prom 不受影響</td>
+<td>Prom 掛掉雙邊都失效</td>
+</tr>
+<tr>
+<td>客戶 Prom 版本要求</td>
+<td>不限</td>
+<td>Prom v2.25+（remote_write 1.0）</td>
+</tr>
+</tbody>
+</table>
+<p><strong>雙寫意味雙倍 scrape load</strong>（Option 1）或 Prom→VM 反向流量（Option 2）。Phase 1 開始前確認 target endpoints 撐得住——某些 client metric endpoint（如 redis exporter）對高頻 scrape 敏感。</p>
+<h4 id="exporter-phase-1-am">為什麼 exporter 在 Phase 1 起、AM 不接<a class="headerlink" href="#exporter-phase-1-am" title="Permanent link">&para;</a></h4>
+<p>threshold-exporter 在 Phase 1 部署，但<strong>故意不接 AM</strong>：</p>
+<ul>
+<li><strong>動機</strong>：Phase 2 shadow 才有 <code>user_threshold</code> metric 可比對；不在 Phase 1 預先 ship 會 chicken-and-egg</li>
+<li><strong>副作用</strong>：Phase 1 期 exporter 的 metric 純 collect，Prom 那邊 <code>user_threshold{...}</code> 會出現但無 alert 路徑。客戶 ops 看到時可能困惑——預先告知「此期間 metric 是 silent state，AM 接線在 Phase 2」</li>
+</ul>
+<h4 id="cardinality-budget-watch">Cardinality budget watch<a class="headerlink" href="#cardinality-budget-watch" title="Permanent link">&para;</a></h4>
+<p>Dual-write 期間 cardinality 會臨時 doubling。Phase 1 Gate 1 invariant 包含「VM 與 Prom 同 metric 數量 ±5%」確認 dual-write 健康——但<strong>這只檢查兩邊一致性</strong>，不檢查容量上限。</p>
+<p><strong>容量觀察重點</strong>（Phase 1 結束前<strong>至少</strong>過一次）：</p>
+<ul>
+<li>VM <code>vm_data_size_bytes</code> 增速 vs disk capacity</li>
+<li>Prom <code>prometheus_tsdb_head_series</code> cardinality 是否爆量</li>
+<li>vmagent <code>vmagent_remotewrite_pending_data_bytes</code> 不該長期 &gt; 0（&gt;0 = 寫不完，可能 OOM 預兆）</li>
+</ul>
+<h3 id="cutover-checklist_1">Cutover Checklist<a class="headerlink" href="#cutover-checklist_1" title="Permanent link">&para;</a></h3>
+<details>
+<summary>📋 Phase 1 Checklist</summary>
+
+**Pre-flight**
+- [ ] 確認 VM topology 選擇（vmsingle 預設 / vmcluster 僅 multi-tenant 規模 + HA 需求）
+- [ ] 計算 disk budget：`bytes-per-datapoint × datapoints-per-day × series × retention × 1.5`（VM 約 0.4-1 byte/datapoint；用 [VM Capacity Calculator](https://docs.victoriametrics.com/Single-server-VictoriaMetrics.html#capacity-planning) 為準）
+- [ ] 預估 cardinality 增量在 VM 是否超 budget（Option 1 是新增 vmagent scrape；Option 2 是 Prom→VM remote_write）
+
+**部署**
+- [ ] 部署 VM 至 staging cluster
+- [ ] 配置 dual-write：**Option 1** 並行新 vmagent scrape 同 targets + remote_write 給 VM（**舊 Prom 不動**）；**Option 2** 舊 Prom 加 `remote_write` 給 VM
+- [ ] **Option 2 必檢**：`remote_write` block 含 `queue_config`（`max_shards` / `capacity` / `max_samples_per_send`）—— 省略 = 大 Prom reload 時 OOM 或打趴 vminsert
+- [ ] 驗證**沒有**任何 component 嘗試 `remote_write` 給舊 Prom（除非舊 Prom 已開 `--web.enable-remote-write-receiver`，但此設計會破壞 Prom 原生 `up`/staleness 追蹤、不建議）
+- [ ] 部署 threshold-exporter 到 staging（**不接 AM**）
+- [ ] 驗證 `user_threshold` metric 在 VM 可查（`vmselect ... /api/v1/query`）
+
+**Gate 1 verification**
+- [ ] VM 與 Prom 同 metric 數量 ±5% 內（跑一週）
+- [ ] vmagent `pending_data_bytes` 持續 ≈ 0
+- [ ] VM disk 增速符合估算
+- [ ] dual-write ≥ 7 天無斷點
+</details>
+
+<h3 id="gate-2-phase-2">Gate 2 → Phase 2<a class="headerlink" href="#gate-2-phase-2" title="Permanent link">&para;</a></h3>
+<p><strong>通過條件</strong>：dual-write ≥ 7 天無掉點 + Tier B live snapshot 比對 staging vs prod-Prom 無 cardinality drift。</p>
+<hr />
+<h2 id="5-phase-2-shadow-deployment">5. Phase 2 — Shadow Deployment<a class="headerlink" href="#5-phase-2-shadow-deployment" title="Permanent link">&para;</a></h2>
+<h3 id="30-tldr_2">30 秒 TL;DR<a class="headerlink" href="#30-tldr_2" title="Permanent link">&para;</a></h3>
+<ul>
+<li>規則 commit 到 git（單一 SOT 或 base + overlay，依 <a href="#8-plan-a-vs-plan-bgit-layout-選擇">Plan A vs B</a>）</li>
+<li>AM routing 全部帶 <code>migration_status: shadow</code> label，告警導 /dev/null 或 debug channel</li>
+<li>既有舊 Prom + AM 仍在線、仍是 production source-of-truth</li>
+</ul>
+<h3 id="architect-narrative_2">Architect Narrative<a class="headerlink" href="#architect-narrative_2" title="Permanent link">&para;</a></h3>
+<h4 id="shadow-production-am">為什麼 Shadow 不直接接 production AM<a class="headerlink" href="#shadow-production-am" title="Permanent link">&para;</a></h4>
+<p>Phase 2 的核心是<strong>製造一個「看得見、聽不見」的並行世界</strong>——新規則完全 evaluate、metric 完全寫入、alert payload 完全產生，<strong>但不抵達 production receiver</strong>。原因有三：</p>
+<ol>
+<li><strong>客戶信心不足</strong>：直接接 production，第一個 false positive 就讓客戶要求 rollback；Shadow 給客戶兩週「看 alert 數據」的窗口建立信心</li>
+<li><strong>客戶 ops 還沒培訓</strong>：新平台的 alert label schema、severity 分級、escalation route 跟舊系統不同；on-call 工程師需要 mental model 切換時間</li>
+<li><strong>catch own bugs</strong>：我們自己 ship 的 golden rule 可能有設計失誤；Shadow 期等於免費 staging — 出問題客戶 ops 不會 paged</li>
+</ol>
+<p><strong>Shadow 不是「測試環境」</strong>——它是 production traffic 上的 dry-run，所有條件都是真的，只有 routing 改道。比 staging 更接近真實，比直切更安全。</p>
+<h4 id="plan-a-vs-plan-b-phase-2">Plan A vs Plan B 在 Phase 2 的具體落地<a class="headerlink" href="#plan-a-vs-plan-b-phase-2" title="Permanent link">&para;</a></h4>
+<p>兩種 Git layout 在 Phase 2 期表現不同：</p>
+<p><strong>Plan A（單 SOT + version skew）</strong>：
+- 新規則 commit 到 conf.d/，所有 cluster 共用同一份 source
+- AM <code>migration_status: shadow</code> matcher 在所有 cluster 同步生效
+- staging cluster 升 v2.8.0 exporter 即啟用 shadow；prod cluster 仍跑 v2.7.0 仍 forward-compat
+- <strong>優點</strong>：單一 PR review，跨 cluster 變動最小
+- <strong>限制</strong>：所有 cluster 一起進 Phase 2（X-Y matrix 的 X 軸只能 staging-first 不能 per-cluster feature toggle）</p>
+<p><strong>Plan B（base + overlay）</strong>：
+- 新規則進 <code>overlays/staging/conf.d/</code>，其他 cluster overlay 不含
+- 同一個時間點 staging 在 Phase 2、prod 仍在 Phase 1（dual-write only）合法
+- <strong>優點</strong>：per-cluster feature toggle 完整自由
+- <strong>限制</strong>：overlay 機制是 v2.9 backlog，目前未 ship</p>
+<p>→ 多數客戶走 Plan A 配 staging-first ordering，達到 80% 「per-cluster phase」彈性而不需要 overlay 機制。</p>
+<h4 id="gate-3-invariants">Gate 3 invariants 為什麼這樣設計<a class="headerlink" href="#gate-3-invariants" title="Permanent link">&para;</a></h4>
+<p>Gate 3 通過條件：</p>
+<ol>
+<li><strong>Subset overlap = 100%</strong>（<strong>或</strong> intentional noise reduction，見 <a href="../staged-adoption-guide/">Staged Adoption Lifecycle §4</a>）</li>
+<li><strong>新增 alert 顯式 sign-off</strong></li>
+<li>≥ 2 週 shadow 期</li>
+</ol>
+<p>「告警量一致」<strong>不是</strong> Gate 3 條件——這是這套 playbook 的關鍵差異點：</p>
+<ul>
+<li>舊規則一週叫 50 次、新規則一週叫 5 次 — overlap &lt; 100% 但其實是 intended noise reduction（更聰明的條件、time window、threshold tuning）</li>
+<li>舊規則漏抓某個 catastrophic case、新規則抓到 — 看起來像「noise」但其實是 regression 修復</li>
+</ul>
+<p>「告警量」是 <strong>outcome</strong>，不是 <strong>gate</strong>。invariants 看「<strong>舊有的能觸發的條件，新規則必觸發</strong>」+「<strong>多出的 alert 是 design intent</strong>」。詳見 <a href="../staged-adoption-guide/">Staged Adoption Lifecycle §4</a> 對 (2a) 純 overlap vs (2b) intentional reduction 的二擇一邏輯——同套標準在 Phase 2 與 staged adoption 共用。</p>
+<h4 id="shadow-2">Shadow 期長度為什麼 2 週<a class="headerlink" href="#shadow-2" title="Permanent link">&para;</a></h4>
+<p>2 週 minimum 不是任意數字。它對應<strong>至少跨 1 個完整工作週循環 + 1 個非工作週末</strong> + 預留 1 週 buffer 給延遲觸發 alert。短於 2 週抓不到「週末才會 fire 的 batch job alert」「週一早晨 traffic spike alert」這類 weekly-cycle 異常。</p>
+<p>對 monthly batch / quarter-end 客戶（金融 / e-commerce），可拉長到 4 週或 1 個月。</p>
+<h3 id="cutover-checklist_2">Cutover Checklist<a class="headerlink" href="#cutover-checklist_2" title="Permanent link">&para;</a></h3>
+<details>
+<summary>📋 Phase 2 Checklist</summary>
+
+**規則上 git**
+- [ ] 規則 commit 進 git（從舊扁平結構 → `conf.d/<domain>/<region>/<tenant>.yaml` 階層；用 `git mv` 保留 history）
+  <div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="c1"># 範例：把舊 rules/&lt;tenant&gt;.yaml 移到階層結構</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="c1"># 對每個 tenant，依其 _metadata.domain / region 決定目標路徑：</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="nv">TENANT_FILE</span><span class="o">=</span><span class="s2">&quot;rules/redis-prod-1.yaml&quot;</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="nv">DOMAIN</span><span class="o">=</span><span class="k">$(</span>yq<span class="w"> </span><span class="s1">&#39;._metadata.domain&#39;</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$TENANT_FILE</span><span class="s2">&quot;</span><span class="k">)</span><span class="w">      </span><span class="c1"># e.g., &quot;redis&quot;</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="nv">REGION</span><span class="o">=</span><span class="k">$(</span>yq<span class="w"> </span><span class="s1">&#39;._metadata.region&#39;</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$TENANT_FILE</span><span class="s2">&quot;</span><span class="k">)</span><span class="w">      </span><span class="c1"># e.g., &quot;us-east&quot;</span>
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>mkdir<span class="w"> </span>-p<span class="w"> </span><span class="s2">&quot;conf.d/</span><span class="si">${</span><span class="nv">DOMAIN</span><span class="si">}</span><span class="s2">/</span><span class="si">${</span><span class="nv">REGION</span><span class="si">}</span><span class="s2">/&quot;</span>
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a>git<span class="w"> </span>mv<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$TENANT_FILE</span><span class="s2">&quot;</span><span class="w"> </span><span class="s2">&quot;conf.d/</span><span class="si">${</span><span class="nv">DOMAIN</span><span class="si">}</span><span class="s2">/</span><span class="si">${</span><span class="nv">REGION</span><span class="si">}</span><span class="s2">/</span><span class="k">$(</span>basename<span class="w"> </span><span class="nv">$TENANT_FILE</span><span class="k">)</span><span class="s2">&quot;</span>
+<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="c1"># 跑 da-tools validate-config 確認 conf.d 結構正確</span>
+</code></pre></div>
+- [ ] 所有規則 emit 的 alert 都帶 `migration_status: shadow` label
+- [ ] CI 對 conf.d 跑 schema validation + `da-tools alert-quality` 預檢
+
+**AM 配置**
+- [ ] AM routing 加 shadow matcher（**第一個 route，避免被其他 matcher 截走**）：
+  <div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="nt">route</span><span class="p">:</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span><span class="nt">routes</span><span class="p">:</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">matchers</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">migration_status=&quot;shadow&quot;</span><span class="p p-Indicator">]</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">      </span><span class="nt">receiver</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;null&quot;</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">      </span><span class="nt">continue</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span><span class="w">   </span><span class="c1"># 不再 fall through</span>
+</code></pre></div>
+- [ ] 確認 `null` receiver 存在（無 webhook、無 email — 真的 /dev/null）
+- [ ] AM `/-/reload` 後驗證：人工 inject test alert with shadow label，**不應**收到任何 page
+
+**Shadow 期 monitoring**
+- [ ] `da-tools shadow-verify preflight` 通過（pre-shadow sanity check）
+- [ ] Shadow 期 ≥ 2 週（monthly batch 客戶建議 4 週）
+- [ ] 每天追蹤 shadow alert volume + subset overlap progress
+
+**Gate 3 verification**
+- [ ] Subset overlap = 100%（或 intentional noise reduction with sign-off）
+- [ ] 新增 alert 列表 → domain owner 逐筆確認 design intent
+- [ ] 任一週內 invariants 都 hold（不是平均，是 every week）
+</details>
+
+<h3 id="gate-3-phase-3">Gate 3 → Phase 3<a class="headerlink" href="#gate-3-phase-3" title="Permanent link">&para;</a></h3>
+<p><strong>通過條件</strong>：
+1. <strong>Subset overlap = 100%</strong>：舊系統有觸發的條件，新系統必觸發（catastrophic 假陰性 0）
+2. <strong>新增 alert 顯式 sign-off</strong>：客戶 ops 對每條額外 alert 點頭（確認不是 bug 雜訊）
+3. CI / CD 對 <code>_metric_federation_policy.yaml</code> 等變動 sticky 報告無 unexpected delta</p>
+<hr />
+<h2 id="6-phase-3-incremental-cutover">6. Phase 3 — Incremental Cutover<a class="headerlink" href="#6-phase-3-incremental-cutover" title="Permanent link">&para;</a></h2>
+<h3 id="30-tldr_3">30 秒 TL;DR<a class="headerlink" href="#30-tldr_3" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Canary tenant（5-10%）先切：在 <strong>rule 配置檔</strong>移除該 tenant 的 <code>migration_status: shadow</code> label → <strong>rule evaluator (Prom / vmalert) reload</strong> → 該 tenant 觸發的告警 payload 不再帶 shadow label → AM 既有 route table 自然把它送進 production receiver</li>
+<li>24h-1 ops cycle 觀察 → 推全量</li>
+<li>Rollback path：<strong>git revert</strong> config commit → rule evaluator reload → shadow label 恢復 → 告警重新被 AM 既有 shadow matcher 路由到 /dev/null（&lt; 5 分鐘）</li>
+</ul>
+<h3 id="architect-narrative_3">Architect Narrative<a class="headerlink" href="#architect-narrative_3" title="Permanent link">&para;</a></h3>
+<p><strong>關鍵機制澄清</strong>（避免常見誤解）：</p>
+<blockquote>
+<p>Phase 3 改的是<strong>規則檔</strong>（rule evaluator 端），不是 AM config。AM 既有的 route table（含 <code>migration_status="shadow"</code> matcher）<strong>完全不變</strong>。</p>
+<ul>
+<li><strong>改動處</strong>：rule 配置（Prom rules.yml / vmalert rule files）—— 拔除該 tenant 規則上的 <code>migration_status: shadow</code> label</li>
+<li><strong>觸發 reload 的對象</strong>：rule evaluator (Prometheus / vmalert)，<strong>不是</strong> Alertmanager</li>
+<li><strong>AM 端的行為</strong>：AM 收到不帶 shadow label 的 alert payload → 既有 route 的 shadow matcher 不 match → fall through 到 production receiver。AM config 完全沒動</li>
+</ul>
+<p>這個分工是 Canary 之所以可行的原因：如果改 AM config 移除 shadow matcher，會一次影響所有 tenants（無法 canary）。改 per-tenant rule label 才能精準切 5-10% 子集。</p>
+</blockquote>
+<h4 id="canary-tenant">Canary tenant 選擇標準<a class="headerlink" href="#canary-tenant" title="Permanent link">&para;</a></h4>
+<p><strong>不是隨機抽 5%</strong>——選錯 canary tenant 等於把第一波風險集中到 production-critical 客戶身上：</p>
+<p><strong>優先</strong>（容忍度高）：
+- 內部 / staging tenant — 客戶自家 dev / SRE 用的監控
+- 早期合作客戶 — onboarding 期已知 expectations
+- 流量 / cardinality 中位數 tenant — 不會因為 outlier 行為觸發 edge case</p>
+<p><strong>避免</strong>（風險集中）：
+- 客戶 SLA tier 最高的 production tenant
+- 剛 paged / 剛抱怨過的 tenant（已對監控敏感）
+- 跨 region 流量混合 tenant（多 region label 變因擴大）
+- compliance-critical（financial / healthcare）— alert mishap 可能觸發 audit</p>
+<p>實務經驗：客戶通常會主動指定 <strong>「先行體驗組」</strong> —— 1-3 個 tenants 由客戶 ops 自己 owner，可在 PR 直接指名。沒指名時我們建議先列 candidate list 給客戶 sign-off。</p>
+<h4 id="24h-vs-1-ops-cycle">24h vs 1 ops cycle 觀察期 — 該選哪個<a class="headerlink" href="#24h-vs-1-ops-cycle" title="Permanent link">&para;</a></h4>
+<table>
+<thead>
+<tr>
+<th>觀察期</th>
+<th>抓得到</th>
+<th>抓不到</th>
+<th>適用</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>24h</strong></td>
+<td>smoke regression、明顯 routing bug、receiver 不通</td>
+<td>weekly batch jobs、weekly cron alerts、monthly closing</td>
+<td>minimum；只在客戶有強烈 timeline 壓力且風險低時</td>
+</tr>
+<tr>
+<td><strong>1 ops cycle (1 week)</strong></td>
+<td>上述 + weekly weekly</td>
+<td>monthly batch、quarter-end</td>
+<td><strong>預設</strong>（推薦）</td>
+</tr>
+<tr>
+<td><strong>2-4 weeks</strong></td>
+<td>上述 + monthly</td>
+<td>yearly anomalies</td>
+<td>高 stakes domain（compliance / financial）</td>
+</tr>
+</tbody>
+</table>
+<p>為什麼 ops cycle 的隱性週期重要：很多 production system 有不對外說但工程師都知道的 weekly rhythm —— 「週日 3am cron job」「週五傍晚 deploy freeze 前的最後一批 PR」「週一上班 traffic spike」—— canary 沒跨完整週循環，這些角落不會被 exercise。</p>
+<h4 id="disablement-drift-staged-adoption">Disablement drift — 從 staged adoption 借的概念<a class="headerlink" href="#disablement-drift-staged-adoption" title="Permanent link">&para;</a></h4>
+<p>如果客戶在 Phase 2 期間 silenced 某些 v1 rules（避免 shadow noise），<strong>Phase 3 cutover 前必須驗證 silencer 是否會因 alertname / label 變動 mismatch v2 rules</strong>——否則 cutover 後 v1 silencer 失效 + v2 rules active = double-firing alert storm。</p>
+<p>詳見 <a href="../staged-adoption-guide/">Staged Adoption Lifecycle §7.3 disablement drift</a> — 同套機制應用在 Rule Pack 升級。Phase 3 cutover 是首次套用、之後每次 Rule Pack 升級都重複此檢查。</p>
+<h4 id="grafana-datasource">Grafana Datasource 切換——第三條切換軌道<a class="headerlink" href="#grafana-datasource" title="Permanent link">&para;</a></h4>
+<p>playbook 至此講了兩條切換軌道：metric 路徑（Phase 1 dual-write）與 alert 路徑（Phase 3 label flip）。<strong>很容易遺漏第三條：客戶 ops 每天看的 Grafana dashboard datasource</strong>。如果不主動處理，會掉進兩個陷阱之一：</p>
+<ul>
+<li><strong>陷阱 A</strong>：舊 Prom 在 Phase 4 Step 1 停 alerting 但仍繼續 scrape 等 query → 浪費資源、客戶 ops 仍習慣性看舊 dashboard、新平台的價值看不到</li>
+<li><strong>陷阱 B</strong>：舊 Prom 在 Phase 4 Step 4 整個 shutdown 後客戶才發現「咦，capacity dashboard 全紅」→ 緊急回滾或客戶情緒事故（這是 §13 walkthrough ContosoMfg 真實踩到的）</li>
+</ul>
+<p><strong>正確的 datasource 切換時點</strong>：<strong>Phase 3 全量階段同步進行</strong>——alert 切完、metric dual-write 已穩定，dashboard datasource 也該指向 VM。</p>
+<p>切換步驟：</p>
+<ol>
+<li><strong>新增 datasource</strong>：Grafana 加 <code>victoriametrics</code> datasource（指向 vmselect），<strong>不要先設為 default</strong></li>
+<li><strong>逐 dashboard 改 datasource UID</strong>：Grafana 提供 bulk dashboard datasource migration（API 或 grafana-toolkit），但<strong>有些 dashboard JSON 內 hardcoded UID</strong>——必須 grep dashboard 原始 JSON，不只 grep panel-level datasource setting</li>
+<li><strong>將新 datasource 設 default</strong>：<code>isDefault: true</code>，舊 Prom datasource 改名為 <code>legacy-prom</code> 並標記為 <code>description: "Read-only, decommissioning Phase 4. Do not create new dashboards against this."</code></li>
+<li><strong>Phase 4 Step 1 完成後</strong>：保留 <code>legacy-prom</code> 為 query-only reference 直到 Step 4</li>
+<li><strong>Phase 4 Step 4 後</strong>：移除 <code>legacy-prom</code> datasource（dashboard 仍 reference 該 UID 會 fail-loud 而不是 silent No-Data）</li>
+</ol>
+<p><strong>為什麼是 Phase 3 全量、不是 Phase 4 Step 1</strong>：dashboard datasource 切換是<strong>客戶 ops 體驗的關鍵 onboarding moment</strong>——他們看到「啊新平台的 dashboard 比舊的快 / metric 維度多 / 顏色不一樣」是建立信心的時機。等到 Phase 4 Step 1 才切，客戶 ops 在 Phase 3 全量期看的是舊 dashboard、感受不到新平台價值，Phase 4 才切又疊加 grace period 的不確定感、變成「我為什麼要換」的負向問題。</p>
+<p><strong>hardcoded UID 為什麼是常見漏抓</strong>：Grafana dashboard JSON 內 panel-level datasource 通常是 reference name (<code>{"uid": "prometheus", "type": "prometheus"}</code>)，但<strong>某些 query 引用</strong> (<code>expr: "..."</code>) 內也可能 hardcoded reference 特定 UID 字串（template variable、annotation query、derived field）。bulk migration tool 抓不到這些，必須額外 grep dashboard JSON 全文。</p>
+<h4 id="staged-adoption-lifecycle">與 Staged Adoption Lifecycle 的分工<a class="headerlink" href="#staged-adoption-lifecycle" title="Permanent link">&para;</a></h4>
+<p>Phase 3 <strong>只做 cutover 的 label flip</strong>——把 shadow label 拔掉，不處理 custom_ → golden 升級。</p>
+<p><code>custom_*</code> → golden 升級流程是 <strong>lifecycle pattern</strong>，半年後新 tenant 上線、Rule Pack v2 ship 都重複走，由 <a href="../staged-adoption-guide/">Staged Adoption Lifecycle</a> 獨立處理。Phase 3 的 cutover label flip 完成後，客戶<strong>進入 Staged Adoption Lifecycle 的「Initial migration」情境</strong>（§7.1），開始首輪 promotion。Phase 4 decommission 完成才算整個 multi-system migration 結束，但 staged adoption 是無止盡的 lifecycle。</p>
+<h3 id="cutover-checklist_3">Cutover Checklist<a class="headerlink" href="#cutover-checklist_3" title="Permanent link">&para;</a></h3>
+<details>
+<summary>📋 Phase 3 Checklist</summary>
+
+**Canary 階段**
+- [ ] 選擇 canary tenants（典型 5-10%）
+- [ ] git commit：在 **rule 配置檔** 移除 canary tenants 的 `migration_status: shadow` label（**不是** AM config）
+- [ ] **Rule evaluator (Prom / vmalert) reload**（自動 — 透過 GitOps reconcile 或 SIGHUP / `/-/reload`）—— **不是** AM reload
+- [ ] 驗證：該 tenant 觸發的下一個 alert payload 不再帶 `migration_status: shadow`
+- [ ] 24h 觀察期：alert 觸發率、receiver 響應、人為 incidents
+- [ ] Gate 4 通過 → 推全量
+
+**全量階段**
+- [ ] git commit：移除剩餘 tenants 的 shadow label（rule 端）
+- [ ] Rule evaluator reload
+- [ ] **Grafana datasource 切換**（同步進行，不留到 Phase 4）：
+  - [ ] Grafana 加 `victoriametrics` datasource、暫不設 default
+  - [ ] Bulk migrate dashboard panel-level datasource UID
+  - [ ] **grep dashboard JSON 全文** 抓 hardcoded UID（template variable / annotation / derived field 內常漏抓）
+  - [ ] `victoriametrics` 設為 `isDefault: true`、舊 Prom 改名 `legacy-prom` 並加 `Read-only, decommissioning` 描述
+- [ ] 觀察 ≥ 1 ops cycle（推薦 1 week）
+- [ ] Gate 5 通過 → Phase 4
+
+**Rollback**
+- [ ] git revert 對應 commit → rule evaluator reload → shadow label 恢復在 alert payload → AM 既有 shadow matcher 重新生效 → 告警再次路由到 /dev/null
+- [ ] **可逆性界線**：見 §11（config 全可逆 / 監控狀態半可逆 / 資料層不可逆）
+
+> **常見錯誤**：以為要改 AM config 移除 shadow matcher。**不要這麼做** —— 那會一次影響所有 tenants 無法 canary。
+</details>
+
+<h3 id="gate-4canary">Gate 4（canary）→ 全量<a class="headerlink" href="#gate-4canary" title="Permanent link">&para;</a></h3>
+<p><strong>通過條件</strong>：Canary tenants 跨 24h 無 unexpected alert + 客戶 ops sign-off。</p>
+<h3 id="gate-5-phase-4">Gate 5（全量）→ Phase 4<a class="headerlink" href="#gate-5-phase-4" title="Permanent link">&para;</a></h3>
+<p><strong>通過條件</strong>：全量切換 ≥ 1 ops cycle 無 incident。</p>
+<hr />
+<h2 id="7-phase-4-decommission">7. Phase 4 — Decommission<a class="headerlink" href="#7-phase-4-decommission" title="Permanent link">&para;</a></h2>
+<h3 id="30-tldr_4">30 秒 TL;DR<a class="headerlink" href="#30-tldr_4" title="Permanent link">&para;</a></h3>
+<ul>
+<li>舊 Prom 進入 read-only（停 alerting evaluation）→ N 天 grace period → 完全關閉</li>
+<li>拆除 dual-write infrastructure（vmagent 移除舊 remote_write、AM 舊 config 歸檔）</li>
+<li>漸進啟用 <code>_defaults.yaml</code> metric-split feature，自然進入 <a href="../staged-adoption-guide/">Staged Adoption Lifecycle</a></li>
+</ul>
+<h3 id="architect-narrative_4">Architect Narrative<a class="headerlink" href="#architect-narrative_4" title="Permanent link">&para;</a></h3>
+<h4 id="read-only-off">為什麼分 read-only → off 兩步、不直接關<a class="headerlink" href="#read-only-off" title="Permanent link">&para;</a></h4>
+<p>直接關舊 Prom 的誘惑很大——Phase 3 切完、新系統穩了、為什麼還留？答案是<strong>舊資料的 query 需求不會在 cutover 那一刻消失</strong>：</p>
+<ul>
+<li><strong>Compliance / audit</strong>：金融 / 醫療 / SOX 客戶需要保留 N 個月（甚至 N 年）告警歷史可查；切換當下審計人員可能還沒看完上一輪資料</li>
+<li><strong>SRE 回顧 / blameless post-mortem</strong>：cutover 後 1-2 週內常有 incident 需要對比「舊系統當時會怎麼判斷」，舊 Prom 在線是低成本的 reference truth</li>
+<li><strong>客戶 ops 肌肉記憶過渡期</strong>：5 年用同一個 Grafana datasource、同一個 alert UI，認知切換需要時間。read-only 期讓客戶 ops 用「兩個都在但只信新的」漸進建立信心</li>
+<li><strong>CAB freeze 期的天然防禦</strong>（real-world bonus）：enterprise 客戶常有 quarter-end / fiscal-close / holiday 變更凍結期，期間 CAB 不放行任何生產變動——若 cutover 後立刻 shutdown，freeze 期間任何遺漏（hardcoded datasource UID、舊 alert URL hard-link、capacity dashboard 沒切 datasource）都<strong>沒辦法緊急修復</strong>。read-only Prom 還活著 = dashboard / query 自動 fallback、不需任何 PR 進 CAB。詳見 <a href="#13-appendices">§13 ContosoMfg walkthrough Phase 4</a> 的真實案例。</li>
+</ul>
+<p><strong>read-only 的精確定義</strong>：移除 <code>alerting.rules.yml</code>（停 evaluation 與 fire），保留 <code>prometheus.yml</code> 中的 query path 與儲存。<code>/api/v1/query</code> 仍可用，但 Alertmanager 端不再收到舊 Prom 的 alert payload。實作上是 Prometheus reload 後 <code>prometheus_rule_evaluations_total</code> 不再增長，但 <code>/api/v1/query</code> 持續服務歷史資料。</p>
+<h4 id="30-grace-period">30 天 grace period 為什麼是預設<a class="headerlink" href="#30-grace-period" title="Permanent link">&para;</a></h4>
+<p>不是任意數字——對應<strong>1 個完整月份結算週期 + 1 週 buffer</strong>。多數 enterprise 月初有 finance close / capacity review / SLA reporting 流程，這些流程可能 reference 舊 Prom 資料。30 天讓至少 1 次完整月循環在 read-only 期跑過、客戶 ops 確認「沒有任何月底 ritual 還在依賴舊 Prom」。</p>
+<p>調整方向：</p>
+<table>
+<thead>
+<tr>
+<th>客戶情境</th>
+<th>建議 grace period</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>一般 SaaS / non-regulated</td>
+<td>30 天（預設）</td>
+</tr>
+<tr>
+<td>季度 close 重的（manufacturing / retail）</td>
+<td>90 天（涵蓋 1 個 quarter cycle）</td>
+</tr>
+<tr>
+<td>Compliance（金融 / 醫療）</td>
+<td>法規要求 retention 期（可能 1-7 年），但這時不該關 Prom，改 export 歷史到 cold storage）</td>
+</tr>
+<tr>
+<td>Pre-prod / staging</td>
+<td>7 天即可</td>
+</tr>
+</tbody>
+</table>
+<p><strong>不該縮到 &lt; 7 天</strong>：cutover 後第一週是最容易踩坑的，舊 Prom 是免費的 fallback reference。</p>
+<h4 id="decommission-evaluation-storage">Decommission 順序：先 evaluation、後 storage<a class="headerlink" href="#decommission-evaluation-storage" title="Permanent link">&para;</a></h4>
+<p>正確順序：</p>
+<ol>
+<li><strong>Step 1</strong>：移除舊 Prom <code>alerting.rules.yml</code>（停 alerting evaluation）— 這個改動 GitOps revert 即可逆</li>
+<li><strong>Step 2</strong>：等 grace period（30 天）</li>
+<li><strong>Step 3</strong>：拆除 dual-write 路徑（vmagent 移除舊 Prom remote_write target，或 Prom remote_write 對 VM 的 federation 反向）</li>
+<li><strong>Step 4</strong>：舊 Prom shutdown（<strong>用 <code>replicas: 0</code> 而非 <code>helm uninstall</code></strong>——見下方核彈警告）</li>
+<li><strong>Step 5</strong>：再等 14 天確認無 query 投訴 → 可考慮刪 PVC（<strong>不可逆</strong>邊界，謹慎）</li>
+</ol>
+<p><strong>踩坑點 #1</strong>：把 Step 3 提到 Step 1 之前。某些客戶想「一次清完」，先拆 dual-write 再停 alerting，結果 grace period 內想對比新舊 alert 行為時舊 Prom 已沒最新資料、reference 失效。</p>
+<h5 id="step-4-helm-uninstall-prom">☢️ Step 4 核彈警告：絕對不要用 <code>helm uninstall</code> 關舊 Prom<a class="headerlink" href="#step-4-helm-uninstall-prom" title="Permanent link">&para;</a></h5>
+<p>如果客戶用的是 <code>kube-prometheus-stack</code> 或類似 Helm chart 部署的 Prometheus，<strong><code>helm uninstall</code> 是 PVC 核彈</strong>：</p>
+<ul>
+<li>Helm uninstall 會刪掉所有 chart 管理的 resources（StatefulSet / Deployment / ConfigMap / Secret）</li>
+<li>如果 PVC 的 <code>StorageClass</code> 設 <code>reclaimPolicy: Delete</code>（<strong>多數雲廠商預設</strong>），刪除 PVC 會<strong>連帶刪除 PV 與底層 disk</strong></li>
+<li>結果：Step 5「等 14 天才刪 PVC 雙人 sign-off」的安全網<strong>形同虛設</strong>——歷史資料在 <code>helm uninstall</code> 執行後<strong>秒級內灰飛煙滅</strong></li>
+<li>AM 舊 config / Prom config 同時消失（前面 Phase 4 catalog: <code>helm uninstall</code> 連 PVC 一起核平 已警告）</li>
+</ul>
+<p><strong>正確的 shutdown 方式</strong>：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="c1"># values.yaml（kube-prometheus-stack 範例）</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="nt">prometheus</span><span class="p">:</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span><span class="nt">prometheusSpec</span><span class="p">:</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">    </span><span class="nt">replicas</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">0</span><span class="w">   </span><span class="c1"># ← 不用 helm uninstall，改設這個</span>
+</code></pre></div>
+<p>或對 raw StatefulSet/Deployment：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="c1"># 直接 scale，不 uninstall</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>kubectl<span class="w"> </span>scale<span class="w"> </span>statefulset<span class="w"> </span>prometheus-k8s<span class="w"> </span>--replicas<span class="o">=</span><span class="m">0</span><span class="w"> </span>-n<span class="w"> </span>monitoring
+</code></pre></div>
+<p><strong>為什麼 <code>replicas: 0</code> 安全</strong>：</p>
+<ul>
+<li>StatefulSet/Deployment 還在、PVC 還 bound（<code>reclaimPolicy: Retain</code> 或 <code>Delete</code> 都不觸發）</li>
+<li>ConfigMap / Secret / NetworkPolicy 全部保留 → Step 5 雙人 sign-off 才有東西 review</li>
+<li>真要救援時 <code>replicas: 1</code> 30 秒內 Pod 起回來、資料完整</li>
+<li>Helm release 仍存在、後續若需 <code>helm uninstall</code> 也是先把 PVC <code>reclaimPolicy: Retain</code> patch 掉再 uninstall 才安全</li>
+</ul>
+<p><strong>踩坑點 #2</strong>：客戶 SRE 在 Phase 4 Step 5 想「一次清乾淨」跑 <code>helm uninstall prometheus-stack</code>——這個 <code>helm uninstall</code> 應該<strong>永遠不要在 Phase 4 內執行</strong>。即便 Step 5 PVC 雙人 sign-off 過了，正確流程是：(a) 手動 <code>kubectl delete pvc &lt;name&gt;</code> 觀察 1 週、(b) 確認沒事再 <code>helm uninstall</code>。把 PVC 刪除與 Helm release 卸載<strong>手動拆成兩步</strong>，避免 chart hooks 或 finalizer 把預期外的 resource 一起帶走。</p>
+<h4 id="_defaultsyaml-metric-split-phase-4"><code>_defaults.yaml</code> metric-split 為什麼留到 Phase 4 之後<a class="headerlink" href="#_defaultsyaml-metric-split-phase-4" title="Permanent link">&para;</a></h4>
+<p><code>_defaults.yaml</code>（<a href="../../adr/018-profile-as-directory-default/">Profile-as-Directory-Default</a> 機制）是平台 v2.8.0 的 metric-split feature——讓 tenant 用目錄繼承的 default 規則自動套用。<strong>故意不在 Phase 2/3 啟用</strong>：</p>
+<ul>
+<li><strong>Phase 2 shadow</strong> 期間：客戶在分辨「是新系統 noise 還是 _defaults 設計疏漏」，雙重變因不可控</li>
+<li><strong>Phase 3 cutover</strong> 期間：cutover 已是高風險窗口，再疊加 metric-split 啟用會讓 incident root cause 難判</li>
+<li><strong>Phase 4 decommission 後</strong> 才是合理時機：新系統已穩定、客戶 ops 對新平台行為有 baseline，此時開 metric-split 引入的任何 alert delta 都歸因得到新 feature</li>
+</ul>
+<p>啟用方式<strong>不是 big bang</strong>，按 <a href="../staged-adoption-guide/">Staged Adoption Lifecycle</a> 走 per-domain / per-region 漸進——staged adoption 變成 multi-system migration 結束後的<strong>永續 lifecycle pattern</strong>，每次 Rule Pack 升版、新 tenant 上線都重複套用。</p>
+<h4 id="migration-lifecycle">「migration 結束」與「lifecycle 開始」的精確分界<a class="headerlink" href="#migration-lifecycle" title="Permanent link">&para;</a></h4>
+<p>Phase 4 的 Gate 5 通過代表 <strong>multi-system migration 一次性事件結束</strong>——5-Phase 不會再走第二輪。但這不等於監控演進結束：</p>
+<ul>
+<li><strong>migration 結束</strong>：舊 Prom 關了、dual-write 拆了、AM 舊 config 歸檔。這是<strong>有限事件</strong>，有開始有終點</li>
+<li><strong>lifecycle 開始</strong>：<code>custom_*</code> → golden 升級、Rule Pack v2/v3 ship、新 tenant onboarding、quarterly threshold tuning。這是<strong>無限循環</strong></li>
+</ul>
+<p>playbook 的責任到 Phase 4 GA 為止。之後客戶持續使用平台時遇到的所有「規則演化」議題都改由 <a href="../staged-adoption-guide/">Staged Adoption Lifecycle</a> 接手——它假設 multi-system migration 已完成、客戶已在使用平台、只討論「規則如何演進」。</p>
+<h4 id="post-mortem">Post-mortem 與資料保留<a class="headerlink" href="#post-mortem" title="Permanent link">&para;</a></h4>
+<p>每個 Phase 4 完成後<strong>強制做一次 internal post-mortem</strong>——不論順利與否。Post-mortem 應記錄：</p>
+<ul>
+<li>Phase 0 Tier A 結果與最終實際遷移範圍的差異（哪些 orphan 後來其實是 active）</li>
+<li>每個 Gate 通過花的實際時間 vs 估算</li>
+<li>哪些 failure mode 是 catalog 沒列、第一次踩到的（→ 補進 §12）</li>
+<li>客戶 ops 在哪個 Phase 卡最久、為什麼</li>
+<li>Rollback drill 是否真的有跑（多數客戶會省略，這是平台側該推動的）</li>
+</ul>
+<p><strong>遷移 telemetry 保留</strong>：<code>.da/migration-state.json</code> 全部歷史 commit、每個 Gate 的 sign-off PR、shadow 期 alert volume 數據——保留至少 1 年。下一個客戶遷移時這些是寶貴的 reference data。</p>
+<h3 id="cutover-checklist_4">Cutover Checklist<a class="headerlink" href="#cutover-checklist_4" title="Permanent link">&para;</a></h3>
+<details>
+<summary>📋 Phase 4 Checklist</summary>
+
+**Step 1：alerting evaluation 關閉**
+- [ ] 舊 Prom 移除 `alerting.rules.yml`（保留 `prometheus.yml` 與儲存）
+- [ ] Prom reload + 驗證 `prometheus_rule_evaluations_total` 不再增長
+- [ ] 驗證 AM 不再收到舊 Prom 來源的 alert payload（`alertmanager_alerts_received_total{instance="<old-prom>"}` 持平）
+
+**Step 2：grace period 觀察**
+- [ ] grace period（預設 30 天，季度結算客戶 90 天）
+- [ ] 期間任何 query 投訴記錄到 migration-state.json `phase_4.grace_period_queries[]`
+- [ ] 期間若需對比新舊 alert 行為，舊 Prom 仍 query-able
+
+**Step 3：dual-write 拆除**
+- [ ] vmagent 移除舊 Prom remote_write target（或 Prom 端 federation 反向移除）
+- [ ] 驗證 vmagent `vmagent_remotewrite_pending_data_bytes` 對該 target 歸 0
+- [ ] AM 舊 config 歸檔（git tag + commit 進客戶 GitOps repo `archive/`）
+
+**Step 4：Prom shutdown**
+- [ ] ☢️ **絕對不要 `helm uninstall`**——會連 PVC 一起刪、歷史資料瞬間蒸發
+- [ ] 用 `replicas: 0`（kube-prometheus-stack: `prometheus.prometheusSpec.replicas: 0`，或 `kubectl scale ... --replicas=0`）
+- [ ] 確認 PVC 仍 bound、ConfigMap / Secret / Helm release 全部保留
+- [ ] 觀察 14 天無 query 投訴
+- [ ] PVC 刪除 → **不可逆界線**，需客戶 ops + platform team 雙人 sign-off
+- [ ] **手動拆兩步**：先 `kubectl delete pvc` 觀察 1 週、再 `helm uninstall`（不要一步到位）
+
+**Step 5：metric-split 漸進啟用**
+- [ ] 確認進入 [Staged Adoption Lifecycle](staged-adoption-guide.md) 預設情境
+- [ ] 第一個 domain × region 啟用 `_defaults.yaml`
+- [ ] 觀察 1 ops cycle 後擴展下一個 scope
+
+**Post-Phase 4**
+- [ ] Internal post-mortem（記錄 Phase 0-4 lessons → 補進 §12 Catalog）
+- [ ] 更新客戶 internal docs / runbooks（移除舊 Prom Grafana datasource、舊 AM URL）
+- [ ] migration telemetry 歸檔保留 ≥ 1 年
+- [ ] 客戶 ops 從 multi-system migration 結束 → Staged Adoption Lifecycle 開始
+</details>
+
+<h3 id="failure-modes_1">Failure modes<a class="headerlink" href="#failure-modes_1" title="Permanent link">&para;</a></h3>
+<ul>
+<li>「30 天 grace 期客戶突然要查 6 個月前資料」：read-only Prom 仍可 query；若 retention &lt; 6 個月，需事先 export 到 cold storage</li>
+<li>「dual-write 拆除後發現某 dashboard 還在 reference 舊 Prom」：Phase 4 之前應跑 Grafana datasource audit；遺漏時可暫緩拆除、回頭修 dashboard</li>
+</ul>
+<h3 id="gate-51archive-complete">Gate 5+1（archive complete）<a class="headerlink" href="#gate-51archive-complete" title="Permanent link">&para;</a></h3>
+<p><strong>最終確認</strong>：所有 dual-write 拆除 + 舊 config 歸檔 commit 在 customer GitOps repo + post-mortem doc 完成 → multi-system migration formally closed。後續演化 → Staged Adoption Lifecycle。</p>
+<hr />
+<h2 id="8-plan-a-vs-plan-bgit-layout">8. Plan A vs Plan B（Git layout 選擇）<a class="headerlink" href="#8-plan-a-vs-plan-bgit-layout" title="Permanent link">&para;</a></h2>
+<h3 id="plan-a-single-sot-per-cluster-exporter-version-skew">Plan A — Single SOT + Per-cluster Exporter Version Skew（<strong>預設</strong>）<a class="headerlink" href="#plan-a-single-sot-per-cluster-exporter-version-skew" title="Permanent link">&para;</a></h3>
+<p><code>conf.d/</code> 是單一 Git 樹，所有 cluster 共用。差異透過該 cluster 部署的 threshold-exporter 版本決定該 cluster 在哪個 phase。</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>conf.d/
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>├─ _defaults.yaml          # v2.8+ exporter 讀；v2.7 silently ignore
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>├─ &lt;domain&gt;/
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>│  └─ &lt;region&gt;/
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>│     └─ &lt;tenant&gt;.yaml
+</code></pre></div>
+<p><strong>Forward-compat 已驗證</strong>（PR #375 P0 check）：v2.7.0 exporter 對 v2.8.0 新欄位 graceful ignore（<code>yaml.Unmarshal</code> lenient + <code>_*</code> 底線檔案跳過慣例）。</p>
+<p><strong>何時用 Plan A</strong>：cluster 間版本差距 ≤ 1 minor、無 per-cluster selective feature 需求。Cover ~80% 客戶情境。</p>
+<h3 id="plan-b-base-overlayescape-hatch">Plan B — Base + Overlay（escape hatch）<a class="headerlink" href="#plan-b-base-overlayescape-hatch" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>conf.d/
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>├─ base/                  # 所有 cluster 共用
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>└─ overlays/
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>   ├─ staging/            # 進階 feature
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a>   │  └─ _defaults.yaml
+<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a>   └─ prod/               # 還在 Shadow
+<a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a>      └─ migration_status_routing.yaml
+</code></pre></div>
+<p><strong>何時用 Plan B</strong>：客戶要 per-cluster selective feature adoption（staging 啟用 _defaults、prod 暫不啟用）。</p>
+<p><strong>Plan B platform investment</strong>：exporter 需要 multi-mount-point overlay merge 邏輯——<strong>目前未 ship</strong>，是 v2.9 backlog 項。客戶觸發 Plan B 時請先確認 platform team 排期。</p>
+<hr />
+<h2 id="9-partial-migrationx-y-matrix">9. Partial Migration（X-Y matrix）<a class="headerlink" href="#9-partial-migrationx-y-matrix" title="Permanent link">&para;</a></h2>
+<p>5-Phase 是 <strong>Y 軸</strong>；scope wave 是 <strong>X 軸</strong>——兩者正交。</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>                 Phase 0  Phase 1  Phase 2  Phase 3  Phase 4
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>staging cluster   ✅       ✅       ✅       ✅       ✅
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>prod canary       ✅       ✅       🔄 (in)   —        —
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>prod-rest         ✅       ✅       —        —        —
+</code></pre></div>
+<p>合法狀態：<strong>staging 在 Phase 4 + prod 在 Phase 2 同時發生</strong>。playbook 不要假設「全 cluster 同步」。</p>
+<hr />
+<h2 id="10-gate-reference-table">10. Gate Reference Table<a class="headerlink" href="#10-gate-reference-table" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Gate</th>
+<th>Phase 出</th>
+<th>Phase 入</th>
+<th>通過條件</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Gate 1</td>
+<td>Phase 0 Discovery</td>
+<td>Phase 1 Pre-flight</td>
+<td>Tier A 靜態 audit hard checks pass + migration-state.json committed</td>
+</tr>
+<tr>
+<td>Gate 2</td>
+<td>Phase 1 Pre-flight</td>
+<td>Phase 2 Shadow</td>
+<td>Dual-write ≥ 7 天無掉點 + Tier B 比對 staging vs prod 無 cardinality drift</td>
+</tr>
+<tr>
+<td>Gate 3</td>
+<td>Phase 2 Shadow</td>
+<td>Phase 3 Cutover</td>
+<td><strong>Subset overlap = 100%</strong> + 新增 alert 顯式 sign-off + ≥ 2 週 shadow 期</td>
+</tr>
+<tr>
+<td>Gate 4</td>
+<td>Phase 3 Canary</td>
+<td>Phase 3 全量</td>
+<td>Canary tenants 跨 24h 無 unexpected alert + ops sign-off</td>
+</tr>
+<tr>
+<td>Gate 5</td>
+<td>Phase 3 全量</td>
+<td>Phase 4 Decommission</td>
+<td>全量切換 ≥ 1 ops cycle 無 incident</td>
+</tr>
+</tbody>
+</table>
+<p><strong>所有 Gate 用 invariants</strong>（subset overlap、cardinality drift bound 等），<strong>不是</strong>「告警量一致」這類 timing-sensitive 命題。</p>
+<hr />
+<h2 id="11-rollback">11. Rollback 三層可逆界線<a class="headerlink" href="#11-rollback" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Layer</th>
+<th>可逆性</th>
+<th>Rollback 機制</th>
+<th>預估時間</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Config</strong>（rules.yaml / AM routing / <code>_defaults.yaml</code>）</td>
+<td>✅</td>
+<td><code>git revert &lt;commit&gt;</code> → AM/exporter reload</td>
+<td>&lt; 5 分鐘</td>
+</tr>
+<tr>
+<td><strong>監控狀態</strong>（已 silenced alert / maintenance window）</td>
+<td>⚠️ 半可逆</td>
+<td>git revert + manual cleanup script（待 ship）</td>
+<td>~30 分鐘</td>
+</tr>
+<tr>
+<td><strong>資料層</strong>（VM 已 ingest 的 metric / Prom 已 GC 的 chunk）</td>
+<td>❌ 不可逆</td>
+<td>接受</td>
+<td>—</td>
+</tr>
+</tbody>
+</table>
+<p><strong>playbook 必須讓客戶建立 mental model</strong>：rollback ≠ undo all.</p>
+<hr />
+<h2 id="12-failure-mode-catalogcross-phase-summary">12. Failure Mode Catalog（cross-phase summary）<a class="headerlink" href="#12-failure-mode-catalogcross-phase-summary" title="Permanent link">&para;</a></h2>
+<p>每 Phase 列已知 failure mode + hyper-realistic anchor。</p>
+<blockquote>
+<p><strong><code>(e.g., ...)</code> 是 educated guess</strong> — 不一定對應真實 incident #，但是基於業界 SRE 知識與本平台架構推斷的高機率事故。Maintainer review 時遇到團隊踩過的可順手補真 Issue #；沒踩過的保留作 defensive reminder（仍有 mental-anchor 價值）。<strong>深入排查 + 具體 kubectl 命令</strong> → <a href="../../integration/troubleshooting-checklist/">Migration Troubleshooting Checklist</a>（symptom-keyed runbook）。</p>
+</blockquote>
+<h3 id="phase-0-discovery-inventory">Phase 0 — Discovery &amp; Inventory<a class="headerlink" href="#phase-0-discovery-inventory" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>症狀</th>
+<th>第一手排查</th>
+<th>Anchor</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Tier A 卡在 PromQL syntax error</strong></td>
+<td><code>da-parser --strict-promql --report</code> 看哪些檔案 fail；常見是手寫 PromQL 用了 vmalert-only 函數但 source 標 prometheus</td>
+<td>(e.g., 客戶混用 <code>histogram_quantile_bucket</code> (metricsql) 與 <code>histogram_quantile</code> (promql)，da-parser dialect detector 標 ambiguous)</td>
+</tr>
+<tr>
+<td><strong>Tier A 撈到 100+ orphan rules</strong></td>
+<td>客戶聲稱「那些是 silenced」；驗證 AM silencer 是否仍 active；Tier B snapshot 比對 <code>silences[?] expires</code></td>
+<td>(e.g., 5 年前 silenced 一個 region 的 alert，silence 早 expire 但 rule 沒 prune → orphan 結果 = false positive)</td>
+</tr>
+<tr>
+<td><strong>Tier A 抓到 hardcoded tenant id</strong></td>
+<td>dev-rule #2 違反；migration-state.json 列出每處；Phase 1 之前必須 fix</td>
+<td>(e.g., 急救 hotfix 留下 <code>instance="db-prod-1"</code> PromQL，原作者離職、rationale 失傳)</td>
+</tr>
+<tr>
+<td><strong>PromRule CRD + 原始 rules.yaml 雙寫</strong></td>
+<td>Operator 遷移過程留遺跡；da-parser dedupe 失敗時手動 reconcile</td>
+<td>(e.g., 三年前 Operator 遷移半完成，PromRule 與 ConfigMap 並存，當前 active source 不明)</td>
+</tr>
+<tr>
+<td><strong>Tier B <code>ALERTS{}</code> 查詢 timeout</strong></td>
+<td>Prom 5+ 年沒 GC 或 cardinality 過高；改縮窗口 <code>ALERTS{}[1d]</code> 或接受 Tier B 缺失</td>
+<td>(e.g., 100k+ ALERTS series 全量查 30s timeout，改近 24h 約 2k series 可查)</td>
+</tr>
+<tr>
+<td><strong>Tier C 來源不齊全（multi-region 各用不同 logging stack）</strong></td>
+<td>部分 region 用 ELK 部分用 Splunk → Tier C partial</td>
+<td>(e.g., us-east 有 ELK 5y retention、eu-west 沒 → Tier C 只覆蓋 50% scope；接受並記入 migration-state.json <code>tier_c.coverage</code>)</td>
+</tr>
+<tr>
+<td><strong>Tenant id naming collision</strong></td>
+<td>客戶 tenant 命名碰我們 reserved scheme（<code>prod</code> / <code>staging</code> / <code>default</code>）→ Phase 1 之前 rename</td>
+<td>(e.g., 客戶用 <code>default</code> 作 fallback tenant id，與我們 routing default 衝突；da-tools onboard 建議改名 <code>customer-default</code>)</td>
+</tr>
+<tr>
+<td><strong>Receiver 已死但客戶不知道</strong></td>
+<td>過期的 PagerDuty token、解散的 Slack channel、離職員工 email → Tier B 顯示「N 個 routes 從未 fire」</td>
+<td>(e.g., 客戶 ops 看到 dead receiver 列表反應「啊那個是 6 個月前的事故 owner，他離職了」；非 Phase 0 預期成果但常見）</td>
+</tr>
+</tbody>
+</table>
+<h3 id="phase-1-pre-flight-dual-write">Phase 1 — Pre-flight &amp; Dual-Write<a class="headerlink" href="#phase-1-pre-flight-dual-write" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>症狀</th>
+<th>第一手排查</th>
+<th>Anchor</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>vmagent OOMKilled in 初次 dual-write</strong></td>
+<td>Pod restart count 飆升、events 含 OOMKilled；bump memory limit</td>
+<td>(e.g., vmagent 初次 dual-write 用預設 64Mi limit、100k+ series + label cardinality bursts 直接 OOMKilled。bump 到 1Gi + reduce <code>-remoteWrite.maxBlockSize</code> 後穩定)</td>
+</tr>
+<tr>
+<td><strong>VM disk 撐爆（dual-write 加倍 ingest）</strong></td>
+<td><code>vm_data_size_bytes</code> 增速超估算；client 估錯 cardinality</td>
+<td>(e.g., 客戶估 10k tenant labels 但實際因 multi-region label combination 達 100k，VM single-node 24h 內 disk full；緊急上 hourly snapshot 撤 retention 或加 disk)</td>
+</tr>
+<tr>
+<td><strong>exporter scrape timeout（conf.d 過大）</strong></td>
+<td>exporter <code>/metrics</code> 30s timeout；conf.d 含 1000+ tenant 配置</td>
+<td>(e.g., conf.d 1500 tenants × 3 metrics each = 4500 series，single-shot serialize 慢；改 incremental rebuild 或 split conf.d 跨 shard)</td>
+</tr>
+<tr>
+<td><strong>ServiceMonitor mismatch staging/prod</strong></td>
+<td>exporter 在 prod 沒被 scrape；staging 用 Operator + ServiceMonitor / prod 還在 ConfigMap</td>
+<td>(e.g., 多 cluster 不對齊部署模式，prod cluster 用 <code>kubernetes_sd_config</code> static target 而不是 ServiceMonitor，prod exporter pod 起來但無人 scrape)</td>
+</tr>
+<tr>
+<td><strong>dual-write metric drift &gt; 5%（Gate 1 fail）</strong></td>
+<td>Prom relabel 與 vmagent relabel 不同步；diff 對應 metric 名</td>
+<td>(e.g., 客戶 Prom 有 <code>__tmp_metric_name</code> 拋棄 staging-only metrics 的 relabel rule，vmagent 沒抄；VM 比 Prom 多 5-8% metric → drift fail)</td>
+</tr>
+<tr>
+<td><strong>NetworkPolicy 阻擋 vmagent/Prom scrape exporter</strong></td>
+<td>threshold-exporter 是 pull-based（暴露 <code>/metrics</code>，<strong>不</strong>主動 push）；scraper 端（vmagent / Prom）顯示 target <code>DOWN</code>、log 含 <code>context deadline exceeded</code> 或 <code>connection refused</code></td>
+<td>(e.g., exporter 在 monitoring NS、scraper 在 vm NS，NetworkPolicy ingress 沒在 exporter pod 開來自 vm NS 的 8080 port → vmagent target page 整片紅、<code>scrape_duration_seconds</code> 顯示 timeout、metric 抓不到)</td>
+</tr>
+<tr>
+<td><strong>vmagent <code>pending_data_bytes</code> 長期 &gt; 0</strong></td>
+<td>寫不完 → 警告 OOM 預兆；磁碟 buffer 累積</td>
+<td>(e.g., remote_write target 響應慢，vmagent buffer 從 0 漲到 500MB 後 hit memory limit；事故前一天 buffer 已開始累積但無 alert)</td>
+</tr>
+<tr>
+<td><strong>threshold-exporter <code>user_threshold</code> 在 VM 查不到</strong></td>
+<td>確認 vmagent 有 scrape exporter；確認 VM ingest 沒 drop</td>
+<td>(e.g., 客戶忘了把 exporter 加進 vmagent scrape config，metric 起飛但無人收集；driver 跑了 1 週才注意到 dashboard 是空的)</td>
+</tr>
+<tr>
+<td><strong>Option 2：Prom remote_write reload 後 OOM 或打趴 vminsert</strong></td>
+<td>Prom 加 <code>remote_write</code> 但<strong>省略 <code>queue_config</code></strong>；reload 觸發 WAL catch-up 用預設 <code>max_shards: 200</code> 並發 → Prom 記憶體暴漲 OR vminsert 收 503 spike</td>
+<td>(e.g., 客戶 200 萬 series Prom 加 remote_write 沒設 queue_config，reload 後 30 秒內 Prom 記憶體從 8GB 暴衝 16GB OOMKilled、同時 vminsert HTTP 5xx rate spike 到 70%、客戶誤以為是 VM 容量問題、實際是 client 端 queue tuning 缺失)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="phase-2-shadow-deployment">Phase 2 — Shadow Deployment<a class="headerlink" href="#phase-2-shadow-deployment" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>症狀</th>
+<th>第一手排查</th>
+<th>Anchor</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Shadow alert 漏到 production receiver</strong></td>
+<td>AM route 順序錯：shadow matcher 不是第一個 route，被其他 matcher 先截走</td>
+<td>(e.g., 客戶把 shadow matcher 加在 <code>route.routes</code> 末段，前面有 <code>severity=critical</code> 全 catch route，shadow alerts 漏到 PagerDuty 半夜炸 on-call)</td>
+</tr>
+<tr>
+<td><strong>新規則沒 fire</strong>（shadow alert volume = 0）</td>
+<td>rule evaluator 沒 reload 或 conf.d mount 沒生效；先驗 <code>prometheus_config_last_reload_successful</code></td>
+<td>(e.g., 客戶 GitOps reconcile 卡在 conf.d ConfigMap projection delay，commit 已 merge 但 evaluator 1 小時後才 reload，期間 shadow window 已過半)</td>
+</tr>
+<tr>
+<td><strong>Subset overlap &lt; 100%（catastrophic miss vs intentional reduction 分不清）</strong></td>
+<td>用 <a href="../staged-adoption-guide/">staged-adoption-guide §4</a> 的 (2a)/(2b) 二擇一邏輯逐筆分類；reviewer 對每個 missing case 標 <code>intentional-reduction</code> 或 <code>genuine-regression</code></td>
+<td>(e.g., golden rule 比 custom_ 多 <code>for: 5m</code>，60% missing case 屬 intentional reduction（短暫 spike 不該 fire），但其中 2% 是 golden bug 漏抓 sustained spike — 後者 stop the line)</td>
+</tr>
+<tr>
+<td><strong>客戶 ops 看不出 shadow alert vs production alert</strong></td>
+<td>shadow 沒帶可視 label；shadow channel 名稱不顯眼；alert text 沒 prefix</td>
+<td>(e.g., shadow alerts 收進 Slack <code>#alerts-debug</code> channel 但客戶 ops 只盯 <code>#alerts-prod</code>，shadow 期 2 週 0 人看 → Gate 3 sign-off 變成走過場)</td>
+</tr>
+<tr>
+<td><strong>Shadow 期 + dual-write 雙重 cardinality 撐爆 VM</strong></td>
+<td>Phase 1 dual-write 已 doubling、Phase 2 shadow rule 額外產生 <code>ALERTS{}</code> series；總和超 budget</td>
+<td>(e.g., 客戶估 Phase 1 容量但忘 Phase 2 ALERTS{} cardinality，shadow week-2 VM disk 週末爆滿、cardinality limit 觸發、新 metric ingest 被拒)</td>
+</tr>
+<tr>
+<td><strong>Subset overlap = 100% 但有「假 100%」陷阱</strong></td>
+<td>shadow rule 寫成「與 custom_ 完全等價」太保守，本質沒測 golden 的 smarter logic；客戶以為 ready，實際 cutover 才暴露 golden 行為</td>
+<td>(e.g., 客戶「先抄 custom_ 規則一比一變 golden」，2 週 shadow overlap 100% 但 golden smart filter 沒生效；cutover 後客戶發現 alert volume 不變、partial value lost)</td>
+</tr>
+<tr>
+<td><strong>Plan A staging-first 但客戶意外把 prod 升 v2.8.0 exporter</strong></td>
+<td>exporter version skew 被 manual override；prod 也 picked up shadow rule</td>
+<td>(e.g., 客戶 SRE 不知 staging-first 慣例、看到 v2.8.0 release 直接 helm upgrade prod，prod shadow rule 觸發但客戶以為是 production alert 半夜 paged)</td>
+</tr>
+<tr>
+<td><strong>AM <code>migration_status: shadow</code> matcher 規則寫錯</strong></td>
+<td>matcher 用 <code>migration_status=~"shadow"</code> regex 但被 fall-through；或 matchers 為空陣列</td>
+<td>(e.g., AM v0.27 vs v0.32 matcher 語法輕微差異，客戶複製 sample config 沒檢查 AM 版本，matchers 解析錯誤靜默 fall through 到 production)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="phase-3-incremental-cutover">Phase 3 — Incremental Cutover<a class="headerlink" href="#phase-3-incremental-cutover" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>症狀</th>
+<th>第一手排查</th>
+<th>Anchor</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Canary tenant 真的 fire alert（不是 false positive）</strong></td>
+<td>確認是 production signal 還是 cutover artifact；查 metric trace 是否有對應 anomaly</td>
+<td>(e.g., 第一個 canary tenant 切後 1h 內 fire critical alert — 確認是該 tenant 真的有 issue（goldenrule 抓對了！），不該因為「canary 期不該 fire」就 rollback)</td>
+</tr>
+<tr>
+<td><strong>Rule reload race（部分 evaluator pod reload、部分沒）</strong></td>
+<td><code>prometheus_config_last_reload_successful</code> 在 HA Prom 兩個 replica 不同步；某 replica 仍發帶 shadow label 的 alert</td>
+<td>(e.g., HA Prom 兩 pod 中一個 SIGHUP 失敗，5 分鐘內 alert payload 一半帶 shadow 一半不帶，AM dedup 失敗、receiver 收到 50/50 split)</td>
+</tr>
+<tr>
+<td><strong>Dashboard 顯示 mixed state（cutover 中混雜舊+新 metric）</strong></td>
+<td>Grafana panel 用了 <code>or</code> 接舊新 metric、cutover 期兩邊同時有資料</td>
+<td>(e.g., dashboard panel <code>up{job="legacy"} or up{job="new"}</code> 在 cutover 期兩個都 = 1，graph 看起來是 doubled value 嚇到客戶 ops、誤以為 metric 失真）</td>
+</tr>
+<tr>
+<td><strong>AM silencer 對 v1 alertname mismatch v2（disablement drift）</strong></td>
+<td>客戶在 Phase 2 silenced 某 v1 alertname，cutover 後 v2 用新 alertname → silencer 沒命中 → double fire</td>
+<td>(e.g., 客戶 silenced <code>alertname=MySQLDown</code>，golden v2 改 <code>alertname=DatabaseDown_MySQL</code>；cutover 後 silencer 失效、custom_+golden 同時 fire — 詳見 staged-adoption-guide §7.3)</td>
+</tr>
+<tr>
+<td><strong>客戶 SLO calculation 因 alert volume 突降而誤判</strong></td>
+<td>客戶 SLO dashboard 用 <code>alert fire count</code> 為 input；cutover 期 alert pattern 改變但 SLO 邏輯沒更新</td>
+<td>(e.g., 客戶用 <code>alert_count{severity="critical"}</code> 算 weekly 健康度，cutover 後 critical alert 從 50 降到 5（intentional reduction），SLO dashboard 誤判「監控壞了」)</td>
+</tr>
+<tr>
+<td><strong>Canary 期 partial revert 留下 inconsistent state</strong></td>
+<td>git revert 只 revert canary tenants 的 commit、其他 tenants 還沒切；觀察 dashboard 跨 tenant 比對</td>
+<td>(e.g., 5% canary 切完 12h 出事 git revert，但同時 <code>1 domain × 全 region × full tenant</code> PR 也已合進 main → revert 同時誤撤了 still-in-shadow tenant 的東西、整體 state 倒退)</td>
+</tr>
+<tr>
+<td><strong>網路 partition 期間 Gate 4 無法驗證</strong></td>
+<td>canary 期 staging-VM 與 staging-AM 之間出現網路 partition，alert payload 送不到 AM；無法判斷「24h 無 alert」是真無事還是 partition 期間 silent</td>
+<td>(e.g., AWS region 網路抖動 1h，canary 期間 alert delivery 中斷未察覺，Gate 4 sign-off 後才發現該 1h 真的有 alert 但都 dropped)</td>
+</tr>
+<tr>
+<td><strong>客戶 ops 不在 canary 觀察窗</strong></td>
+<td>canary 跨週末或假期，客戶 ops 沒人值班看 dashboard；Gate 4「24h 無 unexpected alert」實際是「沒人看了 24h」</td>
+<td>(e.g., 排定週五傍晚切 canary，客戶 ops Friday COB 後沒人看 dashboard，Gate 4 在週一上班才被檢視、期間 12h alert 未注意已 burn 掉觀察窗)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="phase-4-decommission">Phase 4 — Decommission<a class="headerlink" href="#phase-4-decommission" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>症狀</th>
+<th>第一手排查</th>
+<th>Anchor</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>舊 Prom 關閉後某 Grafana dashboard 全紅</strong></td>
+<td>客戶 dashboard datasource 仍指舊 Prom URL；audit 應在 Phase 4 之前；事後修法是切回 read-only Prom 暫救、再批次改 datasource</td>
+<td>(e.g., 客戶 SRE team 自管的 capacity-planning dashboard 用 <code>legacy-prom</code> datasource，Phase 4 之前的 grafana-audit 漏抓 dashboard JSON 內 hardcoded UID，Step 4 shutdown 後該 dashboard 全 panel <code>No data</code>，capacity review meeting 緊急延期)</td>
+</tr>
+<tr>
+<td><strong>Compliance audit 要 6 個月前資料、舊 Prom retention 只剩 3 個月</strong></td>
+<td>Phase 4 之前應確認 retention ≥ 客戶 audit 需求；事後處理：cold storage export，但會 disrupt audit timeline</td>
+<td>(e.g., 客戶 SOX audit Q2 開始問 Q4 前年的 alert 歷史，舊 Prom 90 天 retention 撐不到，cutover 前未確認 audit 需求，緊急從 PVC snapshot 刨 Thanos backup 補資料、audit 延 3 週)</td>
+</tr>
+<tr>
+<td><strong>dual-write 忘了拆、vmagent 對死 endpoint 持續 retry</strong></td>
+<td>Step 3 跳過或忘記；vmagent log 持續 <code>connection refused</code>、buffer 累積；最終 OOM</td>
+<td>(e.g., Phase 4 Step 4 直接 shutdown 舊 Prom 但 vmagent remote_write 仍指舊 Prom URL，vmagent buffer 無限增長 48h 後 OOMKilled，事故 RCA 才發現 Step 3 在 ticket 上漏勾)</td>
+</tr>
+<tr>
+<td><strong><code>helm uninstall</code> 連 PVC 一起核平</strong>（最嚴重事故類型）</td>
+<td><code>helm uninstall</code> 同時刪 ConfigMap + StatefulSet + <strong>PVC</strong>（<code>reclaimPolicy: Delete</code> 預設）；歷史資料在秒級內灰飛煙滅</td>
+<td>(e.g., Phase 4 Step 4 客戶 SRE 跑 <code>helm uninstall prometheus-stack</code> 圖清爽，60s 內 ConfigMap + PVC + 底層 disk 連環刪除，AM v1 routing 全消失、Prom 30 天歷史資料蒸發、2 個月後 compliance 要原始 routing 規則 + 6 個月 alert 歷史，git history 還原 routing 但 metric 資料只能從 vmagent dual-write 期 partial 回填——錯過 Phase 1 之前的 baseline 全失)</td>
+</tr>
+<tr>
+<td><strong><code>_defaults.yaml</code> big-bang 啟用造成 alert 大幅變動誤判為事故</strong></td>
+<td>metric-split 應 per-domain 漸進；big-bang 啟用會讓客戶 ops 看 dashboard 嚇到</td>
+<td>(e.g., 客戶平台 team 想「一次清完」Phase 4 後直接全 cluster 啟用 <code>_defaults.yaml</code>，alert volume 一週內變動 ±40%、客戶 ops 緊急 page 平台 team 以為事故，溯源是 metric-split 設計符合預期、但 communication gap)</td>
+</tr>
+<tr>
+<td><strong>Quarter-end / fiscal close 期撞上 grace period</strong></td>
+<td>grace period 預設 30 天碰到月底 / 季底 finance close、無人能配合驗證</td>
+<td>(e.g., Phase 4 Step 1 排在 12/15、grace period 跨年底 + Q1 close + 春節，客戶 finance team 整月不可用、Step 4 shutdown 拖到 3 月才能執行，期間維護成本 doubling)</td>
+</tr>
+<tr>
+<td><strong>PVC 刪除後 1 週客戶突然要查舊資料</strong></td>
+<td>Step 4 後等 14 天才刪 PVC 是預設；某些 case 需更長</td>
+<td>(e.g., 客戶法務 6 週後才告知需要去年某 alert 歷史佐證 SLA 爭議，舊 PVC 已刪、Thanos backup 過期，從 weekly snapshot 還原 partial 資料、爭議走仲裁）</td>
+</tr>
+<tr>
+<td><strong>客戶 ops 仍登入舊 Grafana / 舊 Prom UI</strong></td>
+<td>肌肉記憶；Phase 4 應推 internal docs 更新 + 舊 UI 加 banner 「Read-Only / Decommission」</td>
+<td>(e.g., shutdown 前 1 週客戶 ops 發現某 panel 不會更新數據才意識到 Prom 在 read-only、抱怨「為什麼沒人講」，事後追溯是 internal docs 改了但 ops onboarding deck 沒同步更新)</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>深入排查 + 具體 kubectl 命令 → <a href="../../integration/troubleshooting-checklist/">Migration Troubleshooting Checklist</a>。</p>
+</blockquote>
+<hr />
+<h2 id="13-appendices">13. Appendices<a class="headerlink" href="#13-appendices" title="Permanent link">&para;</a></h2>
+<h3 id="a-composite-customer-walkthroughfrankenstein">A. Composite Customer Walkthrough（Frankenstein 寫法）<a class="headerlink" href="#a-composite-customer-walkthroughfrankenstein" title="Permanent link">&para;</a></h3>
+<blockquote>
+<p><strong>聲明</strong>：以下「ContosoMfg」為 composite customer，融合多個真實客戶的踩坑點與設計思考——<strong>沒有任何單一客戶長這樣</strong>。Frankenstein 寫法的目的是讓讀者一次看到 5-6 個常見 pitfall 在同一個 timeline 上如何交織，而不需要拼湊散落的個案。所有 tenant 名、cluster 名、數字皆為示範值；對應真實客戶請看 internal post-mortem 檔案（不公開）。</p>
+</blockquote>
+<h4 id="setting">Setting<a class="headerlink" href="#setting" title="Permanent link">&para;</a></h4>
+<p><strong>ContosoMfg</strong>：1200 tenant 全球製造業客戶（汽車零組件供應鏈），原本自管 Prom + AM 共 5 年。</p>
+<table>
+<thead>
+<tr>
+<th>維度</th>
+<th>現況</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>規模</strong></td>
+<td>4 cluster：staging-eu / prod-eu / prod-us / prod-apac，1200 tenant，~4M active series</td>
+</tr>
+<tr>
+<td><strong>既有 monitoring 棧</strong></td>
+<td>Prometheus 2.45（每 cluster 1 個 HA pair）、Alertmanager 0.27、Grafana 10.x、無 Thanos / VM long-retention（Tier C 不可用）</td>
+</tr>
+<tr>
+<td><strong>Maturity</strong></td>
+<td>Stage 4（mature multi-system ops）— 有 SRE team、有 GitOps、有 incident response process</td>
+</tr>
+<tr>
+<td><strong>Trigger 動機</strong></td>
+<td>(1) Prom cardinality 爆滿、想換 VM；(2) 想要本平台的 <code>_defaults.yaml</code> metric-split 簡化規則維護；(3) 規則 5 年累積、想藉換代清理</td>
+</tr>
+<tr>
+<td><strong>Constraints</strong></td>
+<td>Q4 為 finance close，11/15-1/15 不准任何 production 變動；客戶 SRE team 6 人、無法支撐 2 個 multi-system migration 平行</td>
+</tr>
+</tbody>
+</table>
+<h4 id="phase-0discovery-tier-a-reset-2">Phase 0：Discovery — 客戶聽完 Tier A 結果腦袋先 reset 一次（2 週）<a class="headerlink" href="#phase-0discovery-tier-a-reset-2" title="Permanent link">&para;</a></h4>
+<p><code>da-tools onboard --analyze</code> 跑下去，Tier A 結果讓客戶 ops 第一次正視「我們其實不知道自己有什麼」：</p>
+<ul>
+<li><strong>380 條規則</strong>（客戶以為 ~250）—— 5 年來沒人 audit，dead code 累積</li>
+<li><strong>47 條 orphan rule</strong>（規則 commit 但對應 receiver 早不在 AM）—— 其中 12 條的 PagerDuty token 是 3 年前離職員工的個人 token，過期已久</li>
+<li><strong>5 處 hardcoded tenant id</strong>（<code>instance="db-prod-fra-1"</code> 之類的 PromQL）—— 違反 dev-rule #2</li>
+<li><strong>1 個 namespace collision</strong>：客戶用 <code>default</code> 作 fallback tenant，與本平台 routing default 衝突 —— Phase 1 之前必須 rename</li>
+</ul>
+<p>Tier B 對活的 Prom 跑 <code>ALERTS{}</code> 抓 currently firing 的 7 條 alert，比對 Tier A → 發現 3 條 firing alert 對應的規則在 Tier A 報告中標 orphan，<strong>= 7-15% 的 currently firing alert 沒人收</strong>。客戶 SRE lead 在 review meeting 上沉默 30 秒。</p>
+<p>Tier C 不可用（無 Thanos / VM-long-retention / ELK alert log）。可接受，按 schema 記入 <code>tier_c.available: false</code>。</p>
+<p><code>migration-state.json</code> per-cluster split commit 進客戶 GitOps repo <code>monitoring-config/.da/state/</code>。Markdown summary 貼進 Phase 0 closing PR description，跨 7 個 stakeholders sign-off → Gate 1 通過。</p>
+<p><strong>踩坑點</strong>：客戶 SRE lead 一開始想跳 Phase 0「我們很熟自己的 setup」，platform team push back 堅持跑 → 結果發現 47 條 orphan + 7-15% silent fail rate。Phase 0 的價值不是「修復」、是<strong>建立共同 mental model</strong>。</p>
+<h4 id="phase-1pre-flight-vmagent-oomnamespace-collisionscope-4">Phase 1：Pre-flight — vmagent OOM、namespace collision、scope 縮小（4 週）<a class="headerlink" href="#phase-1pre-flight-vmagent-oomnamespace-collisionscope-4" title="Permanent link">&para;</a></h4>
+<p>VM topology 選 vmsingle（&lt; 5M series 不需要 vmcluster）。disk budget 用對的公式：<code>0.7 byte/dp × 5760 dp/day (15s scrape) × 4M series × 30 days × 1.5 buffer ≈ 725GB SSD per cluster</code>，4 cluster 預算 ~3TB。客戶 SRE 一開始套用網路上某 blog 的 <code>8 bytes/series/day</code> 公式估出 &lt; 4GB（顯然錯）；platform team 介入修正、引導用 <a href="https://docs.victoriametrics.com/Single-server-VictoriaMetrics.html#capacity-planning">VM Capacity Calculator</a> 校驗。</p>
+<p>dual-write 走 Option 1 Side-by-Side Dual Scrape：舊 Prom 完全不動、並行新部署一組 vmagent 抓同 targets + remote_write 給 VM。第一週踩坑：</p>
+<ul>
+<li><strong>vmagent OOMKilled</strong>：初次部署用預設 64Mi memory limit、4M series 直接撐爆。bump 到 1Gi + reduce <code>-remoteWrite.maxBlockSize</code> 後穩定（→ catalog Phase 1: vmagent OOMKilled in 初次 dual-write）</li>
+<li><strong>prod-apac vmagent 抓不到 threshold-exporter metric</strong>：NetworkPolicy ingress 沒開 exporter pod 8080 port 來自 vm NS 的流量。vmagent target page 顯示 <code>DOWN</code>、<code>scrape_duration_seconds</code> timeout。客戶 network team 介入 1 週才開通（→ catalog Phase 1: NetworkPolicy 阻擋 vmagent/Prom scrape exporter）</li>
+</ul>
+<p>threshold-exporter 部署到 staging-eu，<code>user_threshold</code> metric 出現在 VM、確認可查。<strong>故意不接 AM</strong>（Phase 2 才接）。</p>
+<p>namespace collision 修復：客戶 <code>default</code> tenant rename 為 <code>customer-default</code>，跨 1200 tenant 的 PromQL grep + 30+ Grafana dashboard 改 datasource label，花 2 週。</p>
+<p>Gate 2 通過條件：dual-write ≥ 7 天 + Tier B 比對 staging vs prod-Prom 無 cardinality drift &gt; 5%。第一次驗證有 8% drift，root cause 是客戶 Prom 端有 <code>__tmp_metric_name</code> 拋棄 staging-only metric 的 relabel rule，vmagent 沒抄。修 vmagent relabel config 後重跑、drift 降到 1.2%。</p>
+<p><strong>意外發現</strong>：Phase 1 期間客戶 capacity-planning team 自管的 Grafana dashboard 暴露——它們指 <code>legacy-prom</code> datasource、沒被原 monitoring team 列入 Phase 4 audit scope。先記入 migration-state.json <code>phase_1.discovered_dashboards[]</code>，Phase 4 之前須處理（→ catalog Phase 4: 舊 Prom 關閉後某 Grafana dashboard 全紅）。</p>
+<h4 id="phase-2shadow-100am-weekend-3-2">Phase 2：Shadow — 「假 100%」陷阱、AM 規則順序錯、weekend 人不在（3 週，原計畫 2 週）<a class="headerlink" href="#phase-2shadow-100am-weekend-3-2" title="Permanent link">&para;</a></h4>
+<p>規則上 git，conf.d 結構建立。AM routing 加 shadow matcher 為<strong>第一個 route</strong>（critical-first）：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="nt">route</span><span class="p">:</span>
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="w">  </span><span class="nt">routes</span><span class="p">:</span>
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">matchers</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">migration_status=&quot;shadow&quot;</span><span class="p p-Indicator">]</span>
+<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="w">      </span><span class="nt">receiver</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;null&quot;</span>
+<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a><span class="w">      </span><span class="nt">continue</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span>
+</code></pre></div>
+<p>第一週：shadow alert volume 為 0。原因 → GitOps reconcile 卡住 conf.d ConfigMap projection 1 小時延遲（→ catalog Phase 2: 新規則沒 fire (rule evaluator 沒 reload)）。flux 強制 reconcile 後正常。</p>
+<p>第二週：subset overlap 達 92%，剩 8% missing case 客戶 ops 想直接 sign-off「intentional reduction」。platform team 堅持逐筆走 (2a)/(2b) 二擇一邏輯（per <a href="../staged-adoption-guide/">staged-adoption-guide §4</a>）—— 60% 屬 intentional reduction（golden 加了 <code>for: 5m</code> 過濾短暫 spike），但其中 <strong>2% 是 golden bug 漏抓 sustained spike</strong>。stop the line、回頭修 golden、第三週重跑 shadow。</p>
+<p><strong>「假 100%」陷阱</strong>：客戶 SRE 一開始建議「先抄 custom_ 規則一比一變 golden」、認為 100% overlap 才安全。platform team 解釋這樣 shadow 期等於沒測 golden 的 smarter logic、cutover 後客戶會發現 alert volume 不變、partial value lost（→ catalog Phase 2: Subset overlap = 100% 但有「假 100%」陷阱）。客戶接受、改寫 golden 用更聰明的 <code>histogram_quantile</code> + time window。</p>
+<p><strong>Weekend 人不在</strong>：第二週 shadow 跨週末，週六凌晨 batch job 觸發 7 條 alert（shadow label）→ 進 <code>null</code> receiver 沒 page。週一 ops review dashboard 才發現「shadow 期週末沒人盯」、若是 production 就漏了 7 條（→ catalog Phase 3: 客戶 ops 不在 canary 觀察窗，在此先警示）。Gate 3 sign-off PR 加註「週末覆蓋作 follow-up」。</p>
+<p>Gate 3 通過：subset overlap 100%（含 (2b) intentional 標註）+ 新增 alert 23 條逐筆 domain owner sign-off。</p>
+<h4 id="phase-3cutover-canary-tenant-ha-prom-reload-raceslo-5">Phase 3：Cutover — Canary tenant 真的有事、HA Prom reload race、SLO 計算誤判（5 週）<a class="headerlink" href="#phase-3cutover-canary-tenant-ha-prom-reload-raceslo-5" title="Permanent link">&para;</a></h4>
+<p>Canary tenant 選擇：客戶指定 3 個 internal SRE 自家 tenant（cardinality 中位數、流量穩定、ops 自家盯 dashboard）。</p>
+<p>第一個 canary 切後 1 小時 fire critical alert。客戶 SRE 第一反應「rollback！」platform team 介入分析 metric trace，<strong>confirm 這是 production signal、不是 cutover artifact</strong>：</p>
+<ul>
+<li>舊 custom_ rule 用<strong>靜態閾值</strong>：<code>node_memory_MemAvailable_bytes &lt; 1G</code>（觸發=記憶體已快用完）</li>
+<li>新 golden rule 用<strong>預測性分析</strong>：<code>predict_linear(node_memory_MemAvailable_bytes[1h], 4*3600) &lt; 0</code>（觸發=以過去 1 小時斜率推 4 小時後會見底）</li>
+</ul>
+<p>新規則抓到一個<strong>舊系統漏抓 2 年的緩慢 memory leak</strong>——某 Java service GC behavior 慢慢退化，每天記憶體少 ~50MB，舊靜態閾值要等到 service 撐 ~3 週快要 OOM 才警告（已是事故發生中）；新 predict_linear 在斜率改變後 ~4 小時內就警告，給 ops 充裕時間 restart / 滾動更新。客戶 SRE lead 的反應：「⋯⋯ 那我們 2 年來都怎麼活的？」（→ catalog Phase 3: Canary tenant 真的 fire alert（不是 false positive）；同時是 §6「為什麼 subset overlap &lt; 100% 不見得是壞事」的活生生案例）。</p>
+<p>客戶 SRE 接受、處理 leak（重啟 + 開 ticket 給 service team 做 GC tuning），Gate 4 觀察期繼續。<strong>這個 incident 後客戶平台 team 直接從「審慎評估」改為「主動推動」遷移節奏</strong>——一條規則救回 2 年漏抓的 production risk，比任何 demo 都有說服力。</p>
+<p>24h 觀察期沒撞週末（特意排週二切）、Gate 4 通過 → 推全量。</p>
+<p>全量切換期 HA Prom 兩 pod 中一個 SIGHUP 失敗（→ catalog Phase 3: Rule reload race），5 分鐘內 alert payload 一半帶 shadow / 一半不帶、AM dedup 失敗。客戶 ops 在週二上午看到 dashboard 異常、人工 SIGHUP 第二個 pod、5 分鐘後恢復。事故記入 migration-state.json <code>phase_3.incidents[]</code>、補進本 catalog。</p>
+<p><strong>SLO 誤判</strong>：客戶 SLO dashboard 用 <code>alert_count{severity="critical"}</code> 算 weekly 健康度。cutover 後 critical alert 從 50 降到 5（intentional reduction），SLO dashboard 誤判「監控壞了」（→ catalog Phase 3: 客戶 SLO calculation 因 alert volume 突降而誤判）。客戶 SRE 花 3 天改 SLO 計算邏輯（從 alert count 改用 SLI 直接 query）。</p>
+<p><strong>Disablement drift</strong>：客戶在 Phase 2 silenced 一條 v1 alertname <code>MySQLDown</code>，cutover 後 v2 用 <code>DatabaseDown_MySQL</code>（→ catalog Phase 3: AM silencer 對 v1 alertname mismatch v2）。silencer 失效、custom_+golden 同時 fire 30 分鐘才被 ops 發現、手動加 silencer。事故記入並驅動 <a href="../staged-adoption-guide/">staged-adoption-guide §7.3 disablement drift</a> 的補充。</p>
+<p>Gate 5 通過條件：全量切換 ≥ 1 ops cycle 無 incident。客戶選 2 週（一般是 1 週）—— 因 Q4 將至，想多 buffer。</p>
+<h4 id="phase-4decommission-q4-freeze-grace-periodcapacity-dashboard-metric-split-13-q4">Phase 4：Decommission — Q4 freeze 撞 grace period、capacity dashboard 全紅、metric-split 漸進（13 週，含 Q4 凍結）<a class="headerlink" href="#phase-4decommission-q4-freeze-grace-periodcapacity-dashboard-metric-split-13-q4" title="Permanent link">&para;</a></h4>
+<p>Phase 3 結束在 10 月底、原計畫 Step 1（移 alerting.rules.yml）11/8 執行 → grace period 30 天 → 12/8 拆 dual-write。</p>
+<p><strong>Q4 freeze 撞期</strong>：11/15 客戶啟動 Q4 finance close + production change freeze 至 1/15。Step 1 已在 11/8 執行（剛好趕上），但 Step 3 dual-write 拆除卡到 1/15 之後（→ catalog Phase 4: Quarter-end / fiscal close 期撞上 grace period）。grace period 變成 ~70 天而非預設 30 天，可接受、實際更安全。</p>
+<p><strong>Capacity dashboard 全紅 — Grace Period 救了所有人</strong>：12 月初（Q4 freeze 期間）客戶 SRE capacity team 發現 capacity-planning dashboard 多個 panel <code>No data</code>。root cause → Phase 1 期 migration-state.json 已記錄 <code>discovered_dashboards[]</code>，但 Phase 4 之前的 grafana-audit 仍漏掉這幾個（datasource UID 是 hardcoded 在 dashboard JSON 內，audit script grep <code>legacy-prom</code> URL 漏抓）。</p>
+<p><strong>正常情境下</strong>這應該是「批次改 dashboard datasource UID 一週修完」的事——但<strong>正在 Q4 freeze 期、CAB 絕對不會放行 30+ dashboard 同步變更</strong>。換成五年前還沒這套架構設計時、舊 Prom 已經 helm uninstall 掉，Q4 finance close 期間 capacity 數據完全空白，影響 finance team 月底結算與 capex review。</p>
+<p><strong>這時 Phase 4 的核心架構決策救了所有人</strong>：「不直接 shutdown 舊 Prom、而是 read-only grace period 至少 30 天」這個設計本來是為 compliance audit / SRE 回顧 / ops 肌肉記憶過渡設想的——意外發現它<strong>對 enterprise CAB freeze 也是天然防禦</strong>。</p>
+<p>實際處置：</p>
+<ul>
+<li>客戶 SRE 確認 capacity dashboard 仍指 <code>legacy-prom</code> datasource、舊 Prom 仍 read-only 在線、<code>/api/v1/query</code> 仍工作 → <strong>dashboard 自動維持運作，沒有任何 PR 需要送進 freeze</strong></li>
+<li>補進 migration-state.json <code>phase_4.deferred_dashboard_fixes[]</code>，待 1/15 freeze 解除後再 batch fix</li>
+<li>客戶 SRE lead 在內部 Slack 留下名言：「<strong>還好當時沒有聽 director 的『一鍵清掉舊 Prom』</strong>——Q4 整季的 capacity 數據都靠這個『沒關掉的廢物』撐著」</li>
+<li>1/15 freeze 解除後才從容批次改 dashboard UID，~3 個工作天修完</li>
+</ul>
+<p>（→ catalog Phase 4: 舊 Prom 關閉後某 Grafana dashboard 全紅；同時是 §7「為什麼分 read-only → off 兩步」的活生生背書——當初為 audit / blameless post-mortem 設計的 grace period，意外救了 CAB-locked 客戶一命。）</p>
+<p>1/15 freeze 解除後 + dashboard fix 完成：Step 3 dual-write 拆除（vmagent 移除舊 Prom remote_write target）→ Step 4 Prom pod <strong><code>replicas: 0</code></strong>（<strong>不是 helm uninstall</strong>，先不刪 PVC）→ 等 14 天無 query 投訴 → 2 月初 PVC 雙人 sign-off 後刪除。</p>
+<p><strong><code>_defaults.yaml</code> 漸進啟用</strong>：Phase 4 Step 5 開始進入 <a href="../staged-adoption-guide/">Staged Adoption Lifecycle</a>。客戶選 staging-eu 一個 domain 先啟用、觀察 1 ops cycle、再擴展。<strong>不是 big bang</strong>（→ catalog Phase 4: <code>_defaults.yaml</code> big-bang 啟用造成 alert 大幅變動誤判為事故，本案是正面對比例子）。</p>
+<p>Post-mortem：</p>
+<table>
+<thead>
+<tr>
+<th>預期 vs 實際</th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>規則 250 → 380（discovery surprise）</td>
+<td>+52%</td>
+</tr>
+<tr>
+<td>Phase 0 估 1 週、實際 2 週</td>
+<td>+100%</td>
+</tr>
+<tr>
+<td>Phase 1 估 2 週、實際 4 週（vmagent OOM + firewall + namespace rename）</td>
+<td>+100%</td>
+</tr>
+<tr>
+<td>Phase 2 估 2 週、實際 3 週（假 100% 陷阱回頭修 golden）</td>
+<td>+50%</td>
+</tr>
+<tr>
+<td>Phase 3 估 3 週、實際 5 週（HA reload race + SLO 誤判 + disablement drift）</td>
+<td>+67%</td>
+</tr>
+<tr>
+<td>Phase 4 估 5 週、實際 13 週（Q4 freeze）</td>
+<td>+160%</td>
+</tr>
+<tr>
+<td><strong>總計</strong>：估 13 週、實際 27 週</td>
+<td><strong>+108%</strong></td>
+</tr>
+</tbody>
+</table>
+<p>關鍵 lessons learned（補進 §12 Catalog 的條目）：</p>
+<ul>
+<li>客戶宣稱 250 規則時要加 30-50% buffer 估算</li>
+<li>Q4 freeze / quarter-end 必須 <strong>Phase 0 就排進 timeline</strong>，不能留到 Phase 4 才發現</li>
+<li>HA Prom reload race 要 platform team 預先 ship reload-verifier tool（v2.9 backlog）</li>
+<li>Grafana dashboard audit 要 grep dashboard JSON 內 hardcoded datasource UID，不只 grep URL</li>
+<li>SLO dashboard 改用 SLI 直接 query 而非 alert count（<strong>universal recommendation</strong>）</li>
+<li><strong>Grace Period 的隱藏價值</strong>：Phase 4 read-only Prom 設計初衷是 compliance / blameless post-mortem / ops 肌肉記憶，意外發現它<strong>對 enterprise CAB freeze 期是天然防禦</strong>。客戶踩到的所有「freeze 期不能改 dashboard」事故都靠它救回——這條經驗逆向 feed 回 §7 narrative 強調此用途</li>
+</ul>
+<p>Internal post-mortem doc 歸檔到 <code>docs/internal/migrations/contosomfg-2026-q1-postmortem.md</code>（不公開），migration-state.json 全部 commit 歷史保留 ≥ 1 年。</p>
+<h4 id="walkthrough-frankenstein">為什麼這個 walkthrough 是 Frankenstein 而非單一客戶<a class="headerlink" href="#walkthrough-frankenstein" title="Permanent link">&para;</a></h4>
+<p>每個 anchor 都有真實出處——但散落在 5-7 個不同客戶的 incident。直接搬任一個真實客戶會：</p>
+<ul>
+<li><strong>失焦</strong>：真客戶有大量噪音細節（compliance 細節、人事變動、組織政治），對 playbook 讀者無幫助</li>
+<li><strong>隱私風險</strong>：即使脫敏、組合特徵仍可識別客戶</li>
+<li><strong>缺乏密度</strong>：單一客戶踩 2-3 坑、不會 5-6 個全踩；讀者讀 2 個 walkthrough 才能掃完所有 mode</li>
+</ul>
+<p>Frankenstein 寫法<strong>犧牲 narrative authenticity 換 educational density</strong>。讀者明確知道這是 composite，可以放心當教材使用、不需懷疑「這真的能 transfer 到我自己的 setting？」答案是：每個 sub-pattern 都真的發生過、組合的場景也真實合理。</p>
+<blockquote>
+<p>真實客戶 incident # 連結 → internal post-mortem 檔案（不公開）。Maintainer review 此 walkthrough 時遇到團隊踩過的可手動補真 Issue # 進對應 catalog anchor，但不在 walkthrough narrative 裡 expose 客戶身份。</p>
+</blockquote>
+<h3 id="b-cross-references">B. Cross-references<a class="headerlink" href="#b-cross-references" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Schema</strong>：<a href="../../schemas/migration-state/"><code>docs/schemas/migration-state.md</code></a> — <code>.da/migration-state.json</code> 欄位 spec</li>
+<li><strong>Shadow 機制深入</strong>：<a href="../../shadow-monitoring-sop/"><code>docs/shadow-monitoring-sop.md</code></a></li>
+<li><strong>Rule-only migration</strong>（1/2-system）：<a href="../../migration-guide/"><code>docs/migration-guide.md</code></a></li>
+<li><strong>Staged adoption</strong>（custom_ → golden 漸進）：<a href="../staged-adoption-guide/"><code>docs/scenarios/staged-adoption-guide.md</code></a> — I-2，已 ship</li>
+<li><strong>Troubleshooting</strong>：<a href="../../integration/troubleshooting-checklist/"><code>docs/integration/troubleshooting-checklist.md</code></a> — symptom-keyed runbook（與本 playbook §12 catalog 互補）</li>
+<li><strong>VM integration entry</strong>：<a href="../../integration/victoriametrics-integration/"><code>docs/integration/victoriametrics-integration.md</code></a> — I-3，已 ship</li>
+</ul>
+<h3 id="c-adr-design-references">C. ADR / Design references<a class="headerlink" href="#c-adr-design-references" title="Permanent link">&para;</a></h3>
+<ul>
+<li>設計 commitments locked from PR #375 strategic discussion + 多輪 adversarial review iterations</li>
+<li>5-Phase / Gate invariants / Plan A vs B / Rollback 邊界 / X-Y matrix 為核心約束</li>
+<li>文件演進歷程詳見 git log（<code>docs/scenarios/multi-system-migration-playbook.md</code>）與對應 PR series</li>
+</ul>
+
+
+
+
+
+
+
+  
+  
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  回到页面顶部
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      Copyright &copy; 2025 Vencil. Licensed under Apache 2.0.
+    </div>
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+        
+<div class="md-social">
+  
+    
+    
+    
+    
+    <a href="https://github.com/vencil/Dynamic-Alerting-Integrations" target="_blank" rel="noopener" title="GitHub" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+      <div class="md-progress" data-md-component="progress" role="progressbar"></div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.instant", "navigation.instant.loading", "navigation.instant.progress", "navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.expand", "navigation.indexes", "navigation.tracking", "navigation.top", "search.suggest", "search.highlight", "search.share", "toc.follow", "content.action.edit", "content.action.view", "content.code.copy", "content.code.select", "content.code.annotate", "content.tabs.link", "content.tooltips", "announce.dismiss"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "\u5df2\u590d\u5236", "clipboard.copy": "\u590d\u5236", "search.result.more.one": "\u5728\u8be5\u9875\u4e0a\u8fd8\u6709 1 \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.more.other": "\u5728\u8be5\u9875\u4e0a\u8fd8\u6709 # \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.none": "\u6ca1\u6709\u627e\u5230\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.one": "\u627e\u5230 1 \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.other": "# \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.placeholder": "\u952e\u5165\u4ee5\u5f00\u59cb\u641c\u7d22", "search.result.term.missing": "\u7f3a\u5c11", "select.version": "\u9009\u62e9\u5f53\u524d\u7248\u672c"}, "version": {"provider": "mike"}}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+        <script src="../../assets/extra.js"></script>
+      
+        <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+      
+    
+  </body>
+</html>

@@ -1,0 +1,3044 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Enterprise-grade Multi-Tenant Dynamic Alerting Platform for Kubernetes">
+      
+      
+        <meta name="author" content="Vencil Contributors">
+      
+      
+        <link rel="canonical" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/adr/024-version-aware-threshold-via-dimensional-label/">
+      
+      
+      
+      
+        
+          <link rel="alternate" href="../../../adr/024-version-aware-threshold-via-dimensional-label/" hreflang="zh">
+        
+          <link rel="alternate" href="./" hreflang="en">
+        
+      
+      
+      <link rel="icon" href="../../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>ADR-024: Declarative Dimensional Alerting Engine — Version-Aware Thresholds + Custom Alerts - Dynamic Alerting Platform</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../../assets/extra.css">
+    
+    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="deep-orange" data-md-color-accent="deep-orange">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#adr-024-declarative-dimensional-alerting-engine-version-aware-thresholds-custom-alerts" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../../" title="Dynamic Alerting Platform" class="md-header__button md-logo" aria-label="Dynamic Alerting Platform" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Dynamic Alerting Platform
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              ADR-024: Declarative Dimensional Alerting Engine — Version-Aware Thresholds + Custom Alerts
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="deep-orange" data-md-color-accent="deep-orange"  aria-label="深色模式"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="深色模式" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="deep-orange" data-md-color-accent="deep-orange"  aria-label="淺色模式"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="淺色模式" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+      <div class="md-header__option">
+  <div class="md-select">
+    
+    <button class="md-header__button md-icon" aria-label="Select language">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m12.87 15.07-2.54-2.51.03-.03A17.5 17.5 0 0 0 14.07 6H17V4h-7V2H8v2H1v2h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2zm-2.62 7 1.62-4.33L19.12 17z"/></svg>
+    </button>
+    <div class="md-select__inner">
+      <ul class="md-select__list">
+        
+          <li class="md-select__item">
+            <a href="../../../adr/024-version-aware-threshold-via-dimensional-label/" hreflang="zh" class="md-select__link">
+              中文
+            </a>
+          </li>
+        
+          <li class="md-select__item">
+            <a href="./" hreflang="en" class="md-select__link">
+              English
+            </a>
+          </li>
+        
+      </ul>
+    </div>
+  </div>
+</div>
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+          <a href="javascript:void(0)" class="md-search__icon md-icon" title="Share" aria-label="Share" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
+            
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91s2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08"/></svg>
+          </a>
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/vencil/Dynamic-Alerting-Integrations" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    vencil/Dynamic-Alerting-Integrations
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+    
+      
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../getting-started/for-platform-engineers/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Getting Started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../architecture-and-design/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Core Architecture
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../integration/byo-prometheus-integration/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Integration Guides
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../migration-guide/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Migration
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../governance-security/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Governance & Security
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../scenarios/alert-routing-split/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Scenarios
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../cli-reference/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+    
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../../" title="Dynamic Alerting Platform" class="md-nav__button md-logo" aria-label="Dynamic Alerting Platform" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    Dynamic Alerting Platform
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/vencil/Dynamic-Alerting-Integrations" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    vencil/Dynamic-Alerting-Integrations
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Getting Started
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/for-platform-engineers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Platform Engineers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/for-domain-experts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Domain Experts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/for-tenants/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tenants
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Core Architecture
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Core Architecture
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture-and-design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture & Design
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../benchmarks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Performance Benchmarks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_3" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture Decisions (ADR)
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3_3" id="__nav_3_3_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture Decisions (ADR)
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../001-severity-dedup-via-inhibit/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-001 Severity Dedup via Inhibit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../002-oci-registry-over-chartmuseum/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-002 OCI Registry
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../003-sentinel-alert-pattern/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-003 Sentinel Alert Pattern
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../004-federation-central-exporter-first/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-004 Federation Central Exporter First
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../005-projected-volume-for-rule-packs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-005 Projected Volume
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Integration Guides
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Integration Guides
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/byo-prometheus-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    BYO Prometheus
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/byo-alertmanager-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    BYO Alertmanager
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/alerting-plane-self-liveness/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    告警平面自我存活性 (Watchdog)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/synthetic-probe-interop/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    合成探測對接 (Synthetic-Probe)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/victoriametrics-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    VictoriaMetrics 整合
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/federation-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Federation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/tenant-federation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tenant Federation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/gitops-deployment/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    GitOps Deployment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/deployment-sizing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    部署容量規劃
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migration
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Migration
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../migration-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migration Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../migration-engine/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migration Engine
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../migration-toolkit-installation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migration Toolkit 安裝
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../shadow-monitoring-sop/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Shadow Monitoring SOP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/troubleshooting-checklist/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migration Troubleshooting Checklist
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Governance & Security
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Governance & Security
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../governance-security/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Governance & Security
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../custom-rule-governance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Custom Rule Governance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Scenarios
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Scenarios
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../scenarios/alert-routing-split/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Alert Routing Split
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../internal/test-coverage-matrix/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    測試覆蓋矩陣
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../scenarios/shadow-monitoring-cutover/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Shadow Monitoring Cutover
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../scenarios/staged-adoption-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Staged Adoption Lifecycle
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../scenarios/version-aware-thresholds/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Version-Aware Thresholds
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../scenarios/multi-cluster-federation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Multi-cluster Federation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../scenarios/tenant-lifecycle/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tenant Lifecycle
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../scenarios/multi-system-migration-playbook/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Multi-System Migration Playbook
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_8" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../api/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_8" id="__nav_8_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cli-reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    da-tools CLI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cheat-sheet/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CLI Cheat Sheet
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../interactive-tools/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Interactive Tools
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../grafana-dashboards/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Grafana Dashboards
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../rule-packs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Rule Packs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../rule-packs/ALERT-REFERENCE/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Alert Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../schemas/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    JSON Schema
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../glossary/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Glossary
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../CHANGELOG/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Changelog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#status" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Status
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#context" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Context
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#decision-one-engine-two-capabilities" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Decision: One Engine, Two Capabilities
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Decision: One Engine, Two Capabilities">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#1-express-multi-version-thresholds-via-the-metrics-dimensional-version-label-not-a-new-schema" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Express multi-version thresholds via the metric's dimensional version label (not a new schema)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2-rule-pack-normalize-layer-inject-version-fallback-degrade-split-per-severity" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. Rule-pack normalize layer: inject version → fallback degrade → split per-severity
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3-custom-alerts-platform-authored-parameterized-recipes-never-write-promql" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Custom Alerts: platform-authored parameterized recipes, never write PromQL
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#4-vectorized-compilation-honest-cost-three-guardrails" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Vectorized compilation: honest cost + three guardrails
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#5-two-layer-validation-in-process-go-preflight-ci-authority-no-promtool-in-the-prod-image" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Two-layer validation: in-process Go preflight + CI authority (no promtool in the prod image)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#6-silent-routing-isolation-reuse-the-existing-sentinel-inhibit" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. Silent + routing isolation: reuse the existing sentinel + inhibit
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#7-forecast-recipe-trend-exhaustion-prediction-dual-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7. Forecast recipe: trend / exhaustion prediction (dual-mode)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#8-recipe-lifecycle-governance-active-deprecated-eol" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8. Recipe lifecycle governance: active / deprecated / eol
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#data-flow-ingest-define-compile" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Data Flow: Ingest → Define → Compile
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#reuse-of-existing-machinery-why-both-capabilities-share-one-adr" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reuse of existing machinery (why both capabilities share one ADR)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#key-trade-offs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Key Trade-offs
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#consequences" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Consequences
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#rejected-alternatives" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rejected Alternatives
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#boundary-with-scheduled-thresholds-26" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Boundary with Scheduled Thresholds (§2.6)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#addendum-disk-and-pvc-alerts-v2100" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Addendum: Disk and PVC Alerts (v2.10.0)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cross-reference" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cross-Reference
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+  <nav class="md-tags" >
+    
+      
+      
+      
+      
+        <span class="md-tag">adr</span>
+      
+    
+      
+      
+      
+      
+        <span class="md-tag">alerting</span>
+      
+    
+      
+      
+      
+      
+        <span class="md-tag">dimensional-metric</span>
+      
+    
+      
+      
+      
+      
+        <span class="md-tag">gitops</span>
+      
+    
+      
+      
+      
+      
+        <span class="md-tag">rule-pack</span>
+      
+    
+      
+      
+      
+      
+        <span class="md-tag">threshold-exporter</span>
+      
+    
+  </nav>
+
+
+  
+    <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/edit/main/adr/024-version-aware-threshold-via-dimensional-label.en.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20.71 7.04c.39-.39.39-1.04 0-1.41l-2.34-2.34c-.37-.39-1.02-.39-1.41 0l-1.84 1.83 3.75 3.75M3 17.25V21h3.75L17.81 9.93l-3.75-3.75z"/></svg>
+    </a>
+  
+  
+    
+      
+    
+    <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/raw/main/adr/024-version-aware-threshold-via-dimensional-label.en.md" title="View source of this page" class="md-content__button md-icon">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0 8a5 5 0 0 1-5-5 5 5 0 0 1 5-5 5 5 0 0 1 5 5 5 5 0 0 1-5 5m0-12.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5"/></svg>
+    </a>
+  
+
+
+<h1 id="adr-024-declarative-dimensional-alerting-engine-version-aware-thresholds-custom-alerts">ADR-024: Declarative Dimensional Alerting Engine — Version-Aware Thresholds + Custom Alerts<a class="headerlink" href="#adr-024-declarative-dimensional-alerting-engine-version-aware-thresholds-custom-alerts" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p><strong>Language / 語言：</strong> <a href="./">中文</a> | <strong>English (Current)</strong></p>
+</blockquote>
+<h2 id="status">Status<a class="headerlink" href="#status" title="Permanent link">&para;</a></h2>
+<p>✅ <strong>Accepted</strong> (v2.9.0). This ADR records one <strong>declarative dimensional alerting engine</strong> made of two capabilities that share the same machinery:</p>
+<ul>
+<li><strong>Version-Aware Thresholds</strong> — on platform-authored rule packs, lets tenants declare multi-version numeric thresholds.</li>
+<li><strong>Custom Alerts</strong> — opens the same machinery to every level (platform / domain / tenant) so they author the alerts standard rule packs do not cover, using parameterized recipes (not PromQL).</li>
+</ul>
+<p>Both shipped in v2.9.0. Trackers: <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/423">#423</a> (version-aware), <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/741">#741</a> (custom alerts); per-PR history is in the CHANGELOG.</p>
+<p>📎 <strong>Addendum</strong> (v2.10.0) — Disk and PVC alerts (capacity evaluated per PVC + CSI driver required + two guards), see §Addendum below; epic <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/692">#692</a>.</p>
+<blockquote>
+<p>This ADR does <strong>not</strong> replace or modify <a href="../../design/config-driven/">config-driven.md §2.6 Scheduled Thresholds</a> — they coexist as distinct mechanisms; the boundary is in the last section.</p>
+</blockquote>
+<h2 id="context">Context<a class="headerlink" href="#context" title="Permanent link">&para;</a></h2>
+<p>Tenants need: (1) rules they can commit to <code>conf.d/</code> ahead of time without taking effect immediately; (2) effect aligned to app version cutover; (3) an answer, while debugging, to "which version is Prometheus running right now?"; (4) no accumulation of meaningless historical effective-dates in YAML. Separately, standard rule packs can't cover every domain- and app-level alert, so tenants need to self-author — without being forced to write PromQL.</p>
+<p>The whole design is bound by three existing contracts:</p>
+<ul>
+<li><strong>Declarative-only</strong> — the platform team writes the rule-pack PromQL; tenants only set plain numeric thresholds in YAML / fill in form parameters. <strong>Any approach that makes a tenant write PromQL violates this rule</strong> (<a href="../008-operator-native-integration-path/">ADR-008</a>).</li>
+<li><strong><code>user_threshold</code> is already a dimensional metric</strong> — <code>user_threshold{tenant, component, metric, severity, &lt;any dimensional labels&gt;}</code> already supports dimensions like <code>env</code> and <code>tablespace_re</code>.</li>
+<li><strong>Complexity stays in the platform-team-managed rule packs</strong>, not pushed to tenants; a per-tenant cardinality guard already exists (<code>max_metrics_per_tenant</code>, truncate on overflow).</li>
+</ul>
+<h2 id="decision-one-engine-two-capabilities">Decision: One Engine, Two Capabilities<a class="headerlink" href="#decision-one-engine-two-capabilities" title="Permanent link">&para;</a></h2>
+<p>One <strong>declarative dimensional machine</strong> — the dimensional-label model, scrape-time relabel, the rule-pack normalize / compile layer, graceful-degradation joins, the promtool safety net, per-tenant isolation — carries both capabilities. Version-Aware first proves the machine runs safely in prod on platform rule packs; Custom Alerts then opens it to every level. They share one underlying engine, one tenant-api write boundary, and one CI pipeline — which is exactly why they live in one ADR (splitting them would cut the causal link explaining why the foundation is laid this heavily).</p>
+<p>The seven decisions below make up this engine; each carries its trade-off.</p>
+<h3 id="1-express-multi-version-thresholds-via-the-metrics-dimensional-version-label-not-a-new-schema">1. Express multi-version thresholds via the metric's dimensional <code>version</code> label (not a new schema)<a class="headerlink" href="#1-express-multi-version-thresholds-via-the-metrics-dimensional-version-label-not-a-new-schema" title="Permanent link">&para;</a></h3>
+<p>Cutover is <strong>emergent behavior</strong>: whichever <code>version</code> the app metric carries after an upgrade is the version whose threshold the PromQL join aligns to. <strong>The existing dimensional-label mechanism produces this shape with zero exporter parse / emit changes</strong> — a tenant can write today:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nt">tenants</span><span class="p">:</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span><span class="nt">db-a</span><span class="p">:</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">    </span><span class="l l-Scalar l-Scalar-Plain">container_cpu{version=&quot;v1&quot;}</span><span class="p p-Indicator">:</span><span class="w"> </span><span class="s">&quot;80&quot;</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">    </span><span class="l l-Scalar l-Scalar-Plain">container_cpu{version=&quot;v2&quot;}</span><span class="p p-Indicator">:</span><span class="w"> </span><span class="s">&quot;60&quot;</span>
+</code></pre></div>
+<p>and the exporter emits directly (no new code):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>user_threshold{tenant=&quot;db-a&quot;, component=&quot;container&quot;, metric=&quot;cpu&quot;, severity=&quot;warning&quot;, version=&quot;v1&quot;} 80
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>user_threshold{tenant=&quot;db-a&quot;, component=&quot;container&quot;, metric=&quot;cpu&quot;, severity=&quot;warning&quot;, version=&quot;v2&quot;} 60
+</code></pre></div>
+<p><code>version</code> is the same dimensional path as <code>env</code> / <code>tablespace_re</code> — <strong>one mental model</strong>. <em>Trade-off</em>: choosing this over a new <code>versioned:</code> YAML block is <strong>reuse-over-build</strong> — it avoids touching the thousand-tenant hot-reload config parser (the highest blast radius), at the cost of multiple versions living in adjacent keys (weaker atomic review, but a single diff hunk). "Zero changes" applies only to the <strong>threshold-declaration half</strong>; the real engineering is the normalize layer below plus the metric-side version injection.</p>
+<h3 id="2-rule-pack-normalize-layer-inject-version-fallback-degrade-split-per-severity">2. Rule-pack normalize layer: inject version → fallback degrade → split per-severity<a class="headerlink" href="#2-rule-pack-normalize-layer-inject-version-fallback-degrade-split-per-severity" title="Permanent link">&para;</a></h3>
+<p>This is the real engineering core of version-aware. The app metric (e.g. cAdvisor's <code>container_cpu_usage_seconds_total</code>) <strong>carries no version</strong>, so a recording rule must inject <code>app.kubernetes.io/version</code> (relabeled from <code>kube_pod_labels</code> by kube-state-metrics) as the <code>version</code> label, and every <code>by(...)</code> aggregation must preserve it. After normalize, both sides use <code>label_replace(..., "version", "default", "version", "^$")</code> to fill missing versions to <code>default</code> before joining.</p>
+<p>The alert rule uses an <strong>exact-or-degrade</strong> structure:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="o">-</span><span class="w"> </span><span class="nv">alert</span><span class="err">:</span><span class="w"> </span><span class="nv">PodContainerHighCPUWarning</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="nv">expr</span><span class="err">:</span><span class="w"> </span><span class="err">|</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">    </span><span class="o">(</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">      </span><span class="c1"># exact hit on this (tenant, version)&#39;s threshold (one-to-one)</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">      </span><span class="nv">app_metric_vlabeled</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">      </span><span class="o">&gt;</span><span class="w"> </span><span class="k">on</span><span class="o">(</span><span class="nv">tenant</span><span class="p">,</span><span class="w"> </span><span class="nv">version</span><span class="o">)</span><span class="w"> </span><span class="k">group_left</span><span class="o">()</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">        </span><span class="nv">threshold_vlabeled</span><span class="p">{</span><span class="nl">severity</span><span class="o">=</span><span class="p">&quot;</span><span class="s">warning</span><span class="p">&quot;}</span>
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="w">    </span><span class="o">)</span>
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="w">    </span><span class="ow">or</span>
+<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="w">    </span><span class="o">(</span>
+<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="w">      </span><span class="c1"># degrade: no matching versioned threshold → apply version=&quot;default&quot;. group_left keeps the real version</span>
+<a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a><span class="w">      </span><span class="o">(</span><span class="nv">app_metric_vlabeled</span><span class="w"> </span><span class="ow">unless</span><span class="w"> </span><span class="k">on</span><span class="o">(</span><span class="nv">tenant</span><span class="p">,</span><span class="w"> </span><span class="nv">version</span><span class="o">)</span><span class="w"> </span><span class="nv">threshold_vlabeled</span><span class="p">{</span><span class="nl">severity</span><span class="o">=</span><span class="p">&quot;</span><span class="s">warning</span><span class="p">&quot;}</span><span class="o">)</span>
+<a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a><span class="w">      </span><span class="o">&gt;</span><span class="w"> </span><span class="k">on</span><span class="o">(</span><span class="nv">tenant</span><span class="o">)</span><span class="w"> </span><span class="k">group_left</span><span class="o">()</span>
+<a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a><span class="w">        </span><span class="nv">threshold_vlabeled</span><span class="p">{</span><span class="nl">version</span><span class="o">=</span><span class="p">&quot;</span><span class="s">default</span><span class="p">&quot;,</span><span class="w"> </span><span class="nl">severity</span><span class="o">=</span><span class="p">&quot;</span><span class="s">warning</span><span class="p">&quot;}</span>
+<a id="__codelineno-2-15" name="__codelineno-2-15" href="#__codelineno-2-15"></a><span class="w">    </span><span class="o">)</span>
+<a id="__codelineno-2-16" name="__codelineno-2-16" href="#__codelineno-2-16"></a><span class="w">    </span><span class="ow">unless</span><span class="w"> </span><span class="k">on</span><span class="o">(</span><span class="nv">tenant</span><span class="o">)</span><span class="w"> </span><span class="o">(</span><span class="nv">user_state_filter</span><span class="p">{</span><span class="nl">filter</span><span class="o">=</span><span class="p">&quot;</span><span class="s">maintenance</span><span class="p">&quot;}</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">1</span><span class="o">)</span>
+<a id="__codelineno-2-17" name="__codelineno-2-17" href="#__codelineno-2-17"></a><span class="w">    </span><span class="o">*</span><span class="w"> </span><span class="k">on</span><span class="o">(</span><span class="nv">tenant</span><span class="o">)</span><span class="w"> </span><span class="k">group_left</span><span class="o">(</span><span class="nv">runbook_url</span><span class="p">,</span><span class="w"> </span><span class="nv">owner</span><span class="p">,</span><span class="w"> </span><span class="nv">tier</span><span class="o">)</span><span class="w"> </span><span class="nv">tenant_metadata_info</span>
+<a id="__codelineno-2-18" name="__codelineno-2-18" href="#__codelineno-2-18"></a><span class="w">  </span><span class="nv">labels</span><span class="err">:</span>
+<a id="__codelineno-2-19" name="__codelineno-2-19" href="#__codelineno-2-19"></a><span class="w">    </span><span class="nv">severity</span><span class="err">:</span><span class="w"> </span><span class="nv">warning</span><span class="w">   </span><span class="c1"># fixed on the alert label; the Critical rule is a mirror copy</span>
+</code></pre></div>
+<p>Three deliberate designs:</p>
+<ul>
+<li><strong>Dynamic degradation</strong> — a tenant declares <code>{version="v2"}</code> only when "a specific major version needs a special threshold"; routine small bumps (multiple deploys a day) don't require touching the alert YAML, and a missing version automatically falls back to <code>default</code> without dropping the series. This upgrades the highest risk — "observed-but-not-declared = silent gap" — from "fix it after the fact" to "built into the architecture".</li>
+<li><strong>Split per-severity rules</strong> — you <strong>cannot</strong> use <code>group_left(severity)</code>: the <code>version × severity</code> cross-product forms a cardinality deadlock in the join (the exact branch crashes one-to-many, the fallback branch crashes many-to-many) → the whole alerting engine seizes. Fixing severity collapses the RHS to a singleton, so all joins become clean one-to-one / many-to-one.</li>
+<li><strong>The asymmetric join key is safe</strong> — threshold comparison uses <code>on(tenant, version)</code>, but <code>user_state_filter</code> (maintenance) and <code>tenant_metadata_info</code> are version-less per-tenant singletons, so <code>unless on(tenant)</code> / <code>group_left</code> directions are legal and undisturbed by version.</li>
+</ul>
+<p>⛔ <strong>Deployment prerequisite (HARD)</strong>: kube-state-metrics MUST set <code>--metric-labels-allowlist=pods=[app.kubernetes.io/version]</code>, or <code>kube_pod_labels</code> carries no version, the injection join matches an empty set, and versioned thresholds go <strong>silently inert</strong>. Three defense layers guard this: a runtime sentinel (<code>VersionAwareThresholdInert</code>) + a CI static lint (<code>check_ksm_version_allowlist.py</code>) + the operator-manifest allowlist. Before metric-side injection ships, the whole mechanism is inert and 100% backward-compatible (missing version → fill default → align to the un-versioned threshold).</p>
+<p><em>Example metrics</em>: the v2.9.0 pilot landed <code>container_cpu</code> + <code>container_memory</code> as a "capability proof"; version-awareness for other packs is defer-with-trigger (when a customer asks for versioned thresholds on a non-k8s metric).</p>
+<h3 id="3-custom-alerts-platform-authored-parameterized-recipes-never-write-promql">3. Custom Alerts: platform-authored parameterized recipes, never write PromQL<a class="headerlink" href="#3-custom-alerts-platform-authored-parameterized-recipes-never-write-promql" title="Permanent link">&para;</a></h3>
+<p>Of the three risks the "never write PromQL" rule guards against, the hardest — <strong>cross-tenant isolation</strong> — is already solved structurally by the existing architecture (the scrape job brands a <code>tenant</code> label from the namespace; tenants can't forge it). So the real design question isn't "can we do it" but "<strong>expressiveness + rule-count cost</strong>".</p>
+<ul>
+<li><strong>MVP = parameterized recipes</strong>: a platform-authored recipe library (<strong>6 recipes</strong>: threshold / rate / ratio / absence / p99_latency / forecast); each level fills a form (metric / window / op / threshold / severity / <code>mode</code>) → stored as declarative YAML. A Level-2 bounded DSL / Level-3 raw-PromQL escape hatch is Future. <em>Trade-off</em>: expressiveness is bounded by the recipe library, in exchange for <strong>structural</strong> safety (valid spec → valid PromQL, not luck).</li>
+<li><strong>Hierarchical scope = the declaration level</strong>: which <code>_defaults.yaml</code> level the recipe is declared at (platform / domain / subdomain / tenant leaf, see <a href="../017-defaults-yaml-inheritance-dual-hash/">ADR-017</a>) decides its blast radius. A domain SRE writes once and covers a whole subtree. <strong>Platform / domain policies are generated rules tenants can't override</strong> — the rules live in <code>_defaults.yaml</code> + CI-generated files that a tenant's RBAC can't write, so non-overridability is <strong>structural</strong>, not a lock flag.</li>
+<li><strong>Metric discovery = a read-only stateless Prometheus proxy</strong>: tenant-api queries Prometheus for <strong>this tenant's own</strong> app-metric names (filtered <code>{tenant="&lt;authID&gt;"}</code>) to feed the portal's recipe metric autocomplete — it does not build a catalog state that would drift from Prometheus. The query string is locked down (tenant input can't reach the matcher structure, the <code>tenant</code> label is scrape-branded, prefix search is escaped) and the existing per-caller rate limiter prevents a proxy thundering herd. Pre-creating a recipe for a metric "that will appear later" is legitimate (the GitOps vacuum), so the backend does <strong>not</strong> hard-block "metric doesn't exist yet"; the portal soft-warns instead.</li>
+<li><strong>Recipe authoring UX = smart form, backend owns the write</strong>: the portal's recipe builder is a pure <code>(Context) =&gt; RecipeObject</code> component that <strong>does not own the write</strong>; the write goes through tenant-api's <code>PUT .../custom-alerts</code>, with the <strong>backend owning the YAML round-trip</strong> (the client only sends / receives JSON). The write uses yaml.Node AST surgery to preserve comments / indentation, with whole-file-hash optimistic concurrency (mismatched base_hash → 409).</li>
+</ul>
+<h3 id="4-vectorized-compilation-honest-cost-three-guardrails">4. Vectorized compilation: honest cost + three guardrails<a class="headerlink" href="#4-vectorized-compilation-honest-cost-three-guardrails" title="Permanent link">&para;</a></h3>
+<p>The compiler turns a recipe + parameters into a <strong>vectorized <code>group_left</code> rule</strong>: one <code>app_metric &gt; on(tenant[,version]) group_left(...) &lt;that recipe's user_threshold&gt;</code> covers every tenant that declared the recipe — <strong>the rule count equals the number of shapes, not the number of tenants</strong>.</p>
+<p><strong>Cost honesty</strong>: "O(M), independent of N" holds <strong>only for shared metrics</strong>. Vectorization removes "fan-out copies of the same metric across N rules", but it <strong>cannot</strong> remove "different metrics necessarily mean different rules" — tenant A's <code>order_created_total</code> and tenant B's <code>payment_failed_total</code> must generate two rules. So custom-alert rule count grows <strong>linearly with the total number of custom alerts</strong> and does NOT enjoy the rule-pack O(M) guarantee of <a href="../../benchmarks/">benchmarks.md §2</a>. <strong>Three guardrails</strong>: (a) a hard <code>max_custom_recipes</code> per-tenant cap (implemented); (b) a global rule-count budget (<strong>planned, not yet implemented</strong> — its value is to be derived from a measured rule-eval-duration, so it is deferred together with that benchmark); (c) a bad rule only breaks its own rule-file group + Prometheus's native rule-group <code>limit</code> + the promtool hard gate (implemented).</p>
+<p><strong>Deployment source = the live conf.d</strong>: the compile source must be the same conf.d the exporter actually serves, or the generated rule's shape won't match the <code>user_threshold</code> series the exporter emits → the rule never fires (silent failure). The custom-alert pack is <strong>tenant-authored, not platform coverage</strong>, so it is excluded from the platform rule-pack / alert counts (the badge stays unchanged).</p>
+<h3 id="5-two-layer-validation-in-process-go-preflight-ci-authority-no-promtool-in-the-prod-image">5. Two-layer validation: in-process Go preflight + CI authority (no promtool in the prod image)<a class="headerlink" href="#5-two-layer-validation-in-process-go-preflight-ci-authority-no-promtool-in-the-prod-image" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Layer 1 — tenant-api's Go preflight</strong> (in-process, fast, a stateless per-tenant input gate): validates the tenant's recipe spec at <code>PUT</code> time and returns HTTP 400 + <code>Violations[]</code> on failure, so <strong>bad input never reaches the repo</strong>. It reuses the <strong>same Go validator</strong> the exporter uses (metric regex / reserved labels / recipe·op·severity·mode·for·horizon enums / ratio-floor ∈(0, 0.5) (&lt; the current-state band) / NaN·Inf).</li>
+<li><strong>Layer 2 — the CI Python compiler</strong> (the global authority, stateful + promtool): cross-tree / hierarchical inheritance / vectorization / template promtool — the only gate with a global source of truth.</li>
+</ul>
+<p><em>Trade-off</em>: <strong>the prod image does not bundle promtool / Python</strong>. Tenants never write PromQL and the recipe templates are platform-authored, so a valid spec → valid PromQL; promtool only catches "template regression" = a platform problem, kept in a <strong>CI golden</strong> rather than the request path (avoiding the image bloat and dev/prod blur of a Go service carrying a Python runtime + a hot-path subprocess). Checks that need the global tree (like "an own recipe duplicates an inherited policy") defer to CI — tenant-api's local disk is not the global SOT during the GitOps vacuum, so a hot-path tree-walk would false-pass against a stale tree.</p>
+<h3 id="6-silent-routing-isolation-reuse-the-existing-sentinel-inhibit">6. Silent + routing isolation: reuse the existing sentinel + inhibit<a class="headerlink" href="#6-silent-routing-isolation-reuse-the-existing-sentinel-inhibit" title="Permanent link">&para;</a></h3>
+<p>The custom-alert <code>mode</code> (page / silent) label rides to the alert via <code>group_left</code>. The Alertmanager-side consumption:</p>
+<ul>
+<li><strong>Silent goes through a sentinel + inhibit, not route-to-null</strong> — this deliberately reuses the existing tri-state silent paradigm of <a href="../003-sentinel-alert-pattern/">ADR-003</a>. The compiler injects a single global sentinel <code>CustomRecipeSilent</code> (severity=none, derived from <code>user_threshold{mode="silent"}</code>), and an Alertmanager inhibit with <code>equal:[tenant, name]</code> suppresses only that (tenant, recipe)'s notification; a silenced alert is still a Prometheus <code>ALERTS{...}</code> series → <strong>silent ≡ dashboard-only</strong>. Inhibit over route-to-null: consistent with the platform, the suppressed state is visible in the AM UI, and a dict-keyed route-to-null would break inheritance semantics (see Rejected).</li>
+<li><strong>Routing isolation</strong>: custom alerts carry a static <code>component="custom"</code> label (no platform alert carries it, so the match is exact and unambiguous); the Alertmanager route sits <strong>first + <code>continue:false</code></strong> ahead of the platform NOC route, so a tenant alert storm can't flood the platform NOC. <code>group_by</code> is <code>[tenant, alertname]</code> (alertname already encodes the shape, so unrelated alerts don't group together). The page-mode firehose receiver is, for MVP, an isolated empty receiver (outbound goes to a log backend, not a rate-limited IM — to avoid 429 → queue → OOM).</li>
+</ul>
+<h3 id="7-forecast-recipe-trend-exhaustion-prediction-dual-mode">7. Forecast recipe: trend / exhaustion prediction (dual-mode)<a class="headerlink" href="#7-forecast-recipe-trend-exhaustion-prediction-dual-mode" title="Permanent link">&para;</a></h3>
+<p><code>forecast</code> is the 6th recipe, answering real needs like "disk / memory will, on the current trend, exhaust within the next N hours". Raw <code>predict_linear</code> is a notorious false-positive factory (a momentary spike extrapolated linearly), so the platform seals off the FP sources and packages it as a parameterized recipe — exactly the core value of the recipe model over "tenants write their own PromQL".</p>
+<ul>
+<li><strong>One recipe, two modes</strong>: with <code>capacity_metric</code> → ratio mode (predict the ratio crossing a floor ∈(0, 0.5); &gt;=0.5 is rejected as it's neutered by the current-state band); without → raw mode (predict a gauge crossing an absolute threshold).</li>
+<li><strong>lookback is not tenant-set</strong>; the platform derives <code>lookback = max(2·horizon, 1h)</code> (integer seconds); the tenant only fills <code>horizon</code> (an enum, cardinality bounded). Reasoning: lookback is an expert knob whose exposure is the biggest foot-gun, and <code>horizon ≤ lookback</code> holds by construction, removing extra validation.</li>
+<li>A <strong>cold-start data-sufficiency gate</strong> (<code>count_over_time(base[lookback]) &gt; N</code>) blocks the wild swings of too-few samples right after deploy; <strong>gauge-only</strong> (a counter must be rate()'d first).</li>
+<li>A <strong>current-state band (ratio mode only)</strong>: a ratio forecast additionally gates on <code>current headroom ratio &lt; 0.5</code> (<code>_FORECAST_CURRENT_BAND</code>), turning a pure-slope alarm into "predicted low AND currently low" — killing the transient write-burst / cold-start steep-slope false positive on a high-headroom disk; <code>clamp_min(…, 0)</code> also floors the surfaced value (a negative headroom ratio is meaningless gibberish to on-call). The tenant threshold (compared in the core) is untouched. <strong>Enforced</strong>: a ratio-mode forecast threshold must be <code>&lt; 0.5</code> — a floor <code>&gt;= band</code> is silently neutered, so both the loader (<code>shape.validate_forecast_ratio_threshold</code>) and the Go preflight (<code>forecastCurrentBand</code>, cross-language lockstep) reject it fail-loud.</li>
+</ul>
+<p>A concrete example (tenant declaration, no PromQL):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">recipe</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">forecast</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">disk_will_fill</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span><span class="nt">metric</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">kubelet_volume_stats_available_bytes</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">  </span><span class="nt">capacity_metric</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">kubelet_volume_stats_capacity_bytes</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">  </span><span class="nt">op</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;&lt;&quot;</span>
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w">  </span><span class="nt">horizon</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">4h</span>
+<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="w">  </span><span class="nt">threshold</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;0.15:warning&quot;</span><span class="w">   </span><span class="c1"># predict the available ratio dropping below 15% within 4h</span>
+</code></pre></div>
+<p>Designing forecast surfaced a correctness bug the existing recipes already carried: <code>for</code> (the sustain duration) was not part of a recipe's shape identity, so when two tenants shared a shape but set different <code>for</code>, the latter's <code>for</code> was silently dropped. <code>mode</code> can ride the data plane via <code>group_left</code>, but <code>for</code> is a control-plane static rule attribute that <code>group_left</code> can't save — so <code>for</code> was brought into the shape slug + a schema enum (including and preserving the existing <code>default: "1m"</code>), locking cardinality to a constant.</p>
+<h3 id="8-recipe-lifecycle-governance-active-deprecated-eol">8. Recipe lifecycle governance: active / deprecated / eol<a class="headerlink" href="#8-recipe-lifecycle-governance-active-deprecated-eol" title="Permanent link">&para;</a></h3>
+<p>A recipe is platform-authored; its <code>status</code> governs whether tenants may keep using it — this is RECIPE versioning (distinct from capability-A APP <code>version</code>). The status SSOT lives in the compiler (<code>shape.py::RECIPE_STATUS</code>) and is derived downstream (the human governance contracts <code>recipes/*.yaml</code> mirror it, the Go side generates a <code>recipe-status.json</code> consumed via <code>go:embed</code>, plus the portal and an info-metric) — <strong>never hand-authored in multiple places</strong> (a drift guard locks parity).</p>
+<ul>
+<li><strong>active</strong>: normal.</li>
+<li><strong>deprecated</strong>: still compiles + a non-fatal compiler notice + a portal warning badge; still addable. "Migrate away, still works."</li>
+<li><strong>eol</strong>: <strong>existing declarations keep compiling</strong> (the batch compiler must never drop a deployed tenant's rule just because the platform retired the recipe — no silent alert loss); but writes that <strong>EXPAND</strong> usage are rejected.</li>
+</ul>
+<p><strong>The eol rejection rule = "block expansion, never collateral-block"</strong>: for each eol recipe, the count of instances using it in the PUT must not exceed the current count — blocking "add", "add more", and "swap in another eol recipe", while allowing "edit params / rename / remove / re-save an existing one". It is deliberately NOT "reject any PUT that contains an eol recipe": that full-overlay collateral block would, at 2 a.m. during an outage, let a two-year-old unrelated eol recipe block the tenant's whole write — including the firefighting alert they are trying to add. eol freezes debt <em>growth</em> only; it never touches what already exists.</p>
+<p><strong>Why enforce at the write path</strong>: blocking expansion means comparing "current vs about-to-be-written", a stateful check, so it lives in tenant-api's <strong>shared write gate</strong> — every write entrypoint (full-tenant PUT / custom-alerts PUT / batch) is covered, no bypass. By contrast the CI / GitOps-direct compiler sees the whole declaration tree but cannot tell which declarations are new → it can only warn, not hard-reject.</p>
+<p><strong>Making the debt visible</strong>: the compiler emits a static info-metric <code>custom_recipe_info{recipe_id, recipe, status}</code> per in-use shape, so SRE can join "usage" to "status" for a tech-debt burn-down:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="k">count</span><span class="w"> </span><span class="k">by</span><span class="o">(</span><span class="nv">recipe_id</span><span class="o">)(</span><span class="k">count</span><span class="w"> </span><span class="k">by</span><span class="o">(</span><span class="nv">recipe_id</span><span class="p">,</span><span class="w"> </span><span class="nv">tenant</span><span class="o">)(</span><span class="nv">user_threshold</span><span class="p">{</span><span class="nl">component</span><span class="o">=</span><span class="p">&quot;</span><span class="s">custom</span><span class="p">&quot;}</span><span class="o">))</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span><span class="o">*</span><span class="w"> </span><span class="k">on</span><span class="o">(</span><span class="nv">recipe_id</span><span class="o">)</span><span class="w"> </span><span class="k">group_left</span><span class="o">(</span><span class="nv">recipe</span><span class="p">,</span><span class="w"> </span><span class="nv">status</span><span class="o">)</span><span class="w"> </span><span class="nv">custom_recipe_info</span>
+</code></pre></div>
+<p>(The inner <code>count by(recipe_id, tenant)</code> de-duplicates tenants first — <code>recipe_id</code> excludes severity, so a plain <code>count</code> would score one tenant's warning + critical as two.) Retirement itself stays <strong>SRE-manual</strong>: the metric is a view, not an automatic takedown.</p>
+<p><strong>eol ≠ emergency removal</strong>: if a recipe is <strong>harmful and must go now</strong>, the tool is NOT eol (it keeps existing rules alive) but <strong>deleting the recipe definition from the library</strong> — existing instances then fail to compile, a hard forced removal.</p>
+<h2 id="data-flow-ingest-define-compile">Data Flow: Ingest → Define → Compile<a class="headerlink" href="#data-flow-ingest-define-compile" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Ingest</strong> — tenant app metrics enter Prometheus + are scrape-time branded with <code>tenant</code> / <code>version</code>. Reuses the existing <code>tenant-exporters</code> job + a platform-default relabel mapping <code>app.kubernetes.io/version</code> → <code>version</code> (centralized, not pushed per-tenant).</li>
+<li><strong>Define</strong> — each level fills a recipe form in <code>_defaults.yaml</code>, stored as declarative YAML; the declaration level decides scope.</li>
+<li><strong>Compile</strong> — recipe → vectorized <code>group_left</code> rule → version graceful-join → promtool gate → rule-file isolation → GitOps deploy (operator manifest + ConfigMap projected volume + Prometheus reload; no ArgoCD/Flux).</li>
+</ul>
+<h2 id="reuse-of-existing-machinery-why-both-capabilities-share-one-adr">Reuse of existing machinery (why both capabilities share one ADR)<a class="headerlink" href="#reuse-of-existing-machinery-why-both-capabilities-share-one-adr" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Custom Alerts needs</th>
+<th>Reused existing asset</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>scrape ingestion + version branding</td>
+<td>the <code>tenant-exporters</code> job + the platform-default <code>app.kubernetes.io/version</code> relabel</td>
+</tr>
+<tr>
+<td>version graceful join</td>
+<td>the version-aware normalize layer's <code>version=~"\|default"</code> left-outer join</td>
+</tr>
+<tr>
+<td>cross-tenant isolation</td>
+<td>namespace→<code>tenant</code> scrape-stamp + prom-label-proxy (<a href="../020-tenant-federation/">ADR-020</a>)</td>
+</tr>
+<tr>
+<td>hierarchical scope</td>
+<td><code>_defaults.yaml</code> directory-tree inheritance (<a href="../017-defaults-yaml-inheritance-dual-hash/">ADR-017</a>)</td>
+</tr>
+<tr>
+<td>one vectorized rule covering all tenants</td>
+<td>the rule-pack <code>on(tenant) group_left</code> O(M) pattern</td>
+</tr>
+<tr>
+<td>silent</td>
+<td><a href="../003-sentinel-alert-pattern/">ADR-003</a> sentinel + inhibit</td>
+</tr>
+<tr>
+<td>write validation / default merge / maintenance suppression</td>
+<td>tenant-api <code>validate()</code> + <code>MergeTenantWithRootDefaults</code> + <code>user_state_filter{filter="maintenance"}</code></td>
+</tr>
+</tbody>
+</table>
+<p>The only <strong>net-new core</strong>: the recipe library + parameter schema + recipe compiler + discovery proxy + cost cap + the recipe-editing UX.</p>
+<h2 id="key-trade-offs">Key Trade-offs<a class="headerlink" href="#key-trade-offs" title="Permanent link">&para;</a></h2>
+<p>The core judgment is <strong>reuse-over-build</strong>: 90% of the target capability already exists in the dimensional mechanism. The only real gain from building a new schema is authoring grouping, at the cost of touching the hot-reload critical path + introducing a second, duplicative default-injection path + turning backward compatibility from "automatic" into "must verify". So everything reuses existing machinery with the minimum net-new surface, with the cost stated honestly (custom-alert rule count is linear in unique metrics, capped) in exchange for letting every level author business alerts without writing PromQL.</p>
+<h2 id="consequences">Consequences<a class="headerlink" href="#consequences" title="Permanent link">&para;</a></h2>
+<p><strong>Gets easier</strong>: version-threshold cutover auto-aligns with the K8s rolling update with no timing drift; "which version is running" answers directly via <code>count by(version)(&lt;app metric&gt;)</code>; YAML stops accumulating historical effective-dates; each level self-authors alerts without the platform adding a rule one at a time.</p>
+<p><strong>Gets harder / new failure modes</strong> (and their resolution):</p>
+<ul>
+<li><strong>observed-but-not-declared</strong> (a metric is running, no threshold declared for that version) → dynamic degradation <strong>resolves it architecturally</strong> (auto-fallback to default, no dropped series). Residual: a typo'd version silently lands on default, caught by orphan detection.</li>
+<li><strong><code>default</code> name collision</strong> — da-guard <strong>forbids an explicit <code>default</code></strong> (reserved for the fallback), avoiding the ambiguity of taking a max in the same bucket as an un-versioned threshold.</li>
+<li><strong>cardinality truncation must be deterministic</strong> — the per-tenant guard must sort dimensional keys deterministically before truncating (protect un-versioned / <code>default</code> first), or Go's random map order makes the truncated version flicker per scrape → <strong>alert flapping + repeated pages</strong>.</li>
+<li><strong>shared <code>user_threshold</code> leaks across packs</strong> — non-pilot packs add <code>version=~"|default"</code> to their normalize matcher (accept only un-versioned / default), keeping existing alerting safe even if the CI guard fails (preventing double-count).</li>
+<li><strong>Dashboards / portal queries assume no version label</strong> — once tenants write version keys, un-aggregated queries grow series carrying <code>version</code> → Grafana / portal panels must be reviewed.</li>
+<li><strong>ops-review tools' inheritance consistency</strong> — <code>_custom_alerts</code> inheritance is UNION (own + inherited), unlike the REPLACE of generic arrays; diagnostic tools (describe_tenant / blast_radius) must delegate to the compiler's inheritance resolution (the SSOT), or they under-report a platform-policy change for override tenants.</li>
+</ul>
+<p><strong>Key invariants</strong> (acceptance contract, not a tracking checklist): (1) an existing tenant that never wrote a version is 100% behavior-equivalent after the upgrade (no series-count change); (2) over-cap truncation drops the same version across scrapes (no flapping); (3) a <code>mode: silent</code> recipe firing does not reach PagerDuty / Slack, leaving only a Grafana trace; (4) after a rolling update ends and the old-version metric disappears, a firing alert receives a proper Resolve (no zombie alert); (5) a recipe on a version-aware metric graceful-joins automatically, falling to default when the label is absent, producing no NaN / empty set.</p>
+<h2 id="rejected-alternatives">Rejected Alternatives<a class="headerlink" href="#rejected-alternatives" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong><code>ScheduledValue.from/until</code> absolute-date schema extension</strong> — YAML accumulates meaningless effective-dates (an expired <code>from</code> is always true) + dual-write atomicity risk. Swallowing the time axis into declarative config is a structural error.</li>
+<li><strong>A <code>POST /active-version</code> write-state API</strong> — introduces a second state that breaks the single SOT; calling it mid-rolling creates transient misalignment. The metric carrying its version IS the SOT.</li>
+<li><strong>Scheduled PR-merge orchestration</strong> — Git's instantaneous binary merge can't align with K8s's 5–10 minute progressive rollout + GitOps propagation lag + helm rollback doesn't reverse-revert the Git PR.</li>
+<li><strong>PromQL normalize via <code>or on() vector(0)</code></strong> — breaks downstream aggregation and false-positives rules that alert on value 0. The fix is <code>label_replace(..., "version", "default", "version", "^$")</code>.</li>
+<li><strong>Tenants write PromQL directly</strong> — violates the declarative-only rule; conceptually correct but adapted into the dimensional-label / recipe approach.</li>
+<li><strong>Silent via a route-to-null receiver</strong> — inconsistent with <a href="../003-sentinel-alert-pattern/">ADR-003</a>'s existing inhibit paradigm and the suppressed state is invisible in the AM UI; reuses sentinel + inhibit instead.</li>
+<li><strong>Change <code>_custom_alerts</code> from a list to a dict (keyed by name)</strong> — dict-merge is override-on-key-collision, which is <strong>not</strong> the UNION inheritance ADR-024 requires (a tenant reusing a platform recipe's name would silently wipe the policy); and the list shape is wired through the whole engine (Go exporter / tenant-api / portal / compiler) → a disproportionate blast radius. ops-review tools delegate to the compiler's inheritance resolution instead, with no schema change.</li>
+</ul>
+<h2 id="boundary-with-scheduled-thresholds-26">Boundary with Scheduled Thresholds (§2.6)<a class="headerlink" href="#boundary-with-scheduled-thresholds-26" title="Permanent link">&para;</a></h2>
+<p><a href="../../design/config-driven/">config-driven.md §2.6</a>'s <code>ScheduledValue.overrides: [{window, value}]</code> is a <strong>recurring time-window</strong> mechanism, deliberately separate from this ADR and able to act on the same tenant at the same time:</p>
+<table>
+<thead>
+<tr>
+<th>Dimension</th>
+<th>§2.6 Scheduled Thresholds</th>
+<th>ADR-024 Version-Aware</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Switch axis</td>
+<td><strong>time</strong> (recurring window, reads wall-clock)</td>
+<td><strong>state / version label</strong> (does not evaluate time)</td>
+</tr>
+<tr>
+<td>Trigger</td>
+<td>UTC clock tick, daily recurring</td>
+<td>app upgrade brings a new version on the metric, a one-time cutover</td>
+</tr>
+<tr>
+<td>Typical case</td>
+<td>"relax to 200 nightly 22:00–06:00"</td>
+<td>"tighten the CPU threshold from 80 to 60 after v2 ships"</td>
+</tr>
+</tbody>
+</table>
+<p>The two are orthogonal: §2.6 handles periodic windows, this ADR handles one-time version alignment.</p>
+<h2 id="addendum-disk-and-pvc-alerts-v2100">Addendum: Disk and PVC Alerts (v2.10.0)<a class="headerlink" href="#addendum-disk-and-pvc-alerts-v2100" title="Permanent link">&para;</a></h2>
+<p>Lets tenants alert on disk capacity and throughput — the "the disk is filling up" need that comes up most often during database-customer migrations (<a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/692">#692</a>). It reuses the existing recipes (forecast / ratio / threshold / rate) with no new recipe kind, but a few things differ from an ordinary recipe.</p>
+<p><strong>Two signals, two granularities.</strong></p>
+<table>
+<thead>
+<tr>
+<th>What you want to alert on</th>
+<th>Metric</th>
+<th>Granularity</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Disk filling up / capacity utilization</td>
+<td><code>kubelet_volume_stats_*</code> (available / capacity / used)</td>
+<td><strong>per PVC</strong> (carries <code>persistentvolumeclaim</code>)</td>
+</tr>
+<tr>
+<td>Disk throughput / IOPS</td>
+<td><code>container_fs_*</code> (reads / writes)</td>
+<td><strong>per container</strong> (not per PVC)</td>
+</tr>
+</tbody>
+</table>
+<p>The throughput signal comes from container-filesystem stats, whose <code>device</code> is the node's block device and can't be tied to a specific PVC — a single-PVC pod is roughly equivalent, but multiple PVCs can't be told apart. So "precise to one PVC" is only possible on the capacity side.</p>
+<p><strong>Precondition: disk-capacity metrics need a CSI driver.</strong> The kubelet only emits <code>kubelet_volume_stats_*</code> for storage backends that implement the volume-stats interface (<code>NodeGetVolumeStats</code>). Cloud CSI drivers (EBS, GCE PD, etc.) all do; kind's default local storage (hostPath) emits none — verification measured 751 kubelet metrics but 0 volume-stats. After installing a CSI driver, <code>kubelet_volume_stats_*{namespace, persistentvolumeclaim}</code> appears. <strong>So a disk-capacity recipe's hard precondition is PVCs provided by a CSI driver that supports volume stats</strong> (most cloud environments qualify). This is recorded in the recipe usage docs and the BYO integration precondition.</p>
+<p>Tenant attribution reuses the platform's existing 1:1 approach — at scrape time the <code>namespace</code> is used as the <code>tenant</code>, with the metric name unchanged; the N:1 / 1:N policy is in <a href="../006-tenant-mapping-topologies/">ADR-006 §Addendum</a>.</p>
+<p><strong>Correctness that matters: evaluate each PVC, don't let a sum hide it.</strong> A tenant may mount several PVCs. Summing the metric with <code>by(tenant)</code> before comparing to the threshold goes wrong:</p>
+<blockquote>
+<p>A 10GB config disk is already 99% full while a 500GB data disk is only 10% full — summed together "88% space remains," so the alert never fires, but that small disk is about to take the database down.</p>
+</blockquote>
+<p>So a disk-capacity recipe <strong>evaluates each PVC and fires if any one crosses</strong>: the aggregation keeps the <code>persistentvolumeclaim</code> dimension, the threshold is still one per tenant applied to each of that tenant's PVCs, and the alert names which disk. To keep metric cardinality in check, the only dimension allowed to survive is <code>persistentvolumeclaim</code>.</p>
+<p><strong>Two guards: make a misconfigured alert fail loudly instead of silently.</strong> If a tenant sets an alert on a metric that is never scraped, or scraped without a <code>tenant</code> label, the alert compiles fine but never fires — the most dangerous failure. Two guards close it:</p>
+<ul>
+<li><strong>At build time (CI)</strong>: parse the Prometheus scrape config directly and confirm every metric a recipe uses (including a ratio's denominator and a forecast's capacity metric) is actually scraped and attributed to a <code>tenant</code> by its scrape job; otherwise CI errors. It reads the scrape config as the source of truth rather than maintaining a separate list that would go stale. It can only protect configs aligned with this platform's scrape config; a customer's own Prometheus config is invisible to it, which the next guard covers.</li>
+<li><strong>At run time, the watchdog alert <code>CustomRecipeDiskInert</code></strong>: if a tenant set a disk alert and its pods are running but the attributed disk metric never appears, it fires. This turns "topology unsupported," "attribution not set up," and "the tenant mounts no PVC" from silent failures into an alert someone will see.</li>
+</ul>
+<p>v2.9.0 once shipped a disk-forecast example that referenced <code>kubelet_volume_stats_*</code> — which nothing scraped at the time. It looked fine on the test fixtures but never fired in a real cluster. The scrape enablement plus these two guards fix it.</p>
+<h2 id="cross-reference">Cross-Reference<a class="headerlink" href="#cross-reference" title="Permanent link">&para;</a></h2>
+<ul>
+<li><a href="../006-tenant-mapping-topologies/">ADR-006: Tenant Mapping Topologies</a> — the 1:1 infrastructure-attribution policy + N:1/1:N defer.</li>
+<li><a href="../003-sentinel-alert-pattern/">ADR-003: Sentinel Alert Pattern</a> — the sentinel + inhibit basis for silent / tri-state.</li>
+<li><a href="../008-operator-native-integration-path/">ADR-008: Operator-Native Integration Path</a> — the declarative-only rule.</li>
+<li><a href="../017-defaults-yaml-inheritance-dual-hash/">ADR-017: <code>_defaults.yaml</code> inheritance</a> — directory-tree inheritance for hierarchical scope.</li>
+<li><a href="../020-tenant-federation/">ADR-020: Tenant Federation</a> — cross-tenant read-path isolation (prom-label-proxy).</li>
+<li><a href="../../scenarios/version-aware-thresholds/">Version-Aware Thresholds usage guide</a> — the operational side of tenant declaration + platform KSM setup.</li>
+<li><a href="../../design/config-driven/">config-driven.md §2.x</a> — the living spec for dimensional thresholds and recipes.</li>
+</ul>
+
+
+
+
+
+
+
+  
+  
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      Copyright &copy; 2025 Vencil. Licensed under Apache 2.0.
+    </div>
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+        
+<div class="md-social">
+  
+    
+    
+    
+    
+    <a href="https://github.com/vencil/Dynamic-Alerting-Integrations" target="_blank" rel="noopener" title="GitHub" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+      <div class="md-progress" data-md-component="progress" role="progressbar"></div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.instant", "navigation.instant.loading", "navigation.instant.progress", "navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.expand", "navigation.indexes", "navigation.tracking", "navigation.top", "search.suggest", "search.highlight", "search.share", "toc.follow", "content.action.edit", "content.action.view", "content.code.copy", "content.code.select", "content.code.annotate", "content.tabs.link", "content.tooltips", "announce.dismiss"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"provider": "mike"}}</script>
+    
+    
+      <script src="../../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+        <script src="../../../assets/extra.js"></script>
+      
+        <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+      
+    
+  </body>
+</html>
