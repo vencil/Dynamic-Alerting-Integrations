@@ -256,13 +256,13 @@ da-tools grafana-import \
 
 | 區 | Panel | 說明 |
 |---|-------|------|
-| 頂列 | **Tenants（樣本充足度）/ P50 / P95 / IQR / Tukey fences / Outliers** | 該 `(metric, severity)` 的群體統計快照：租戶樣本充足度（❌ Sparse <4／⚠ Marginal 4-7／✓ Adequate >=8，符號+文字+色三重編碼）、中位數、P95、四分位距、離群邊界、離群租戶數（✓ 0／⚠ ≥1，符號+文字標示） |
+| 頂列 | **Tenants（樣本充足度）/ P50 / P95 / IQR / Tukey fences / Outliers** | 該 `(metric, severity)` 的群體統計快照：租戶樣本充足度（❌/⚠/✓）、中位數、P95、四分位距、離群邊界、離群租戶數（✓ 0／⚠ ≥1）。符號意義見下方無障礙說明 |
 | 中列左 | **Threshold value distribution（Histogram）** | 全租戶當前閾值的分布形狀——揭露平均值會藏住的**雙峰**或**長尾**。最高的那根通常是平台預設值 |
 | 中列右 | **Fleet quantile band over time（P5/P50/P95）** | 分布隨時間的漂移。band 變寬＝跨租戶分歧擴大；P50 數週緩升＝「**閾值腐敗**」訊號（某租戶事故時調鬆後忘了調回） |
 | 底列左 | **All tenants — value & deviation**（Table） | 全租戶當前值 + 與中位數的帶號偏差，依偏差排序——脈絡盤點 |
 | 底列右 | **⚠️ Statistical outliers（Table）** | 只列落在 1.5×IQR fence 外的租戶（含 `side=high/low`）——行動清單。健康時為空 |
 
-> **無障礙（ADR-012 / WCAG 1.4.1）：** 頂列「樣本充足度」與「Outliers」狀態一律以**符號 + 文字**（❌ / ⚠ / ✓）標示，顏色僅作冗餘強化——紅綠色盲使用者不靠顏色也能判讀嚴重度。此編碼由 `tests/dx/test_fleet_threshold_dashboard.py` 的 a11y golden 固定，避免日後靜默退化。
+> **色盲也能判讀（無障礙）：** 頂列「樣本充足度」與「Outliers」不只靠顏色——都配上**符號＋文字**：樣本充足度 `❌ Sparse (<4)`／`⚠ Marginal (4-7)`／`✓ Adequate (>=8)`，Outliers `✓ 0`／`⚠ ≥1`。紅綠色盲使用者也讀得出嚴重度——顏色只是輔助、不是唯一依據。（依 ADR-012 / WCAG 1.4.1；`tests/dx/test_fleet_threshold_dashboard.py` 的 a11y golden 鎖住「每個顏色階都有符號」、防日後退化。）
 
 ### 離群判讀（業界最佳實踐）
 
@@ -272,12 +272,12 @@ da-tools grafana-import \
 
 ### ⚠️ 可靠度：Tukey 離群偵測的兩種退化情形
 
-Tukey fences 對**有離散度**的分布有效，但有兩種會崩潰的情形——**離群表是統計提示、不是 ground truth**，頂列 Tenants 樣本充足度（❌ Sparse <4／⚠ Marginal 4-7／✓ Adequate >=8；符號+文字+色三重編碼、不靠單一顏色，依 ADR-012）即在提示可靠度：
+Tukey fences 需要分布**有離散度**才準。有兩種常見情形會讓它失準——此時**離群表只是統計提示、不是定論**，請改看下方的分布圖與偏差表。頂列的 **Tenants 樣本充足度**（❌/⚠/✓）就在預警這件事：
 
-- **退化一：mode-heavy（最常見）。** 多數租戶吃平台 default 時，median 區被 default 佔滿 → IQR=0 → fence 塌縮到 median → **所有客製租戶被標離群**（實測：40 個 default + 10 客製 → 標滿 10 個）。此時離群表噪音大，**改用「全租戶 — value & deviation」表**（依偏差量級排序）+ histogram，這兩者對 mode-heavy 不退化，是 robust 主視圖。
+- **退化一：多數租戶同值（mode-heavy，最常見）。** 多數租戶吃平台 default 時，median 區被 default 佔滿 → IQR=0 → fence 塌縮到 median → **所有客製租戶被標離群**（實測：40 個 default + 10 客製 → 標滿 10 個）。此時離群表噪音大，**改用「全租戶 — value & deviation」表**（依偏差量級排序）+ histogram，這兩者對 mode-heavy 不退化，是 robust 主視圖。
 - **退化二：小樣本。** 租戶數低時（Tenants 紅/黃）兩個方向都不可靠——可能**漏抓真極端**（N=3 `[50,60,2000]` 標不出 2000）、也可能**誤標瑣碎偏差**（N=4 `[50,50,50,51]` 標 51）。低 N 時信 histogram 與原始值勝過離群旗標。
 
-> 這兩個退化邊界都由 `tests/dx/test_fleet_threshold_dashboard.py` 的 golden 固定（pin known limits），未來若改變行為會是有意識的決定、非靜默漂移。robust 的相對偏差離群法（如 `> k×median`）列為 defer-with-trigger：若實戰中離群表證實過吵再採用。
+> 這兩個退化邊界都由 `tests/dx/test_fleet_threshold_dashboard.py` 的 golden 固定（pin known limits），未來若改變行為會是有意識的決定、非靜默漂移。另有一種較穩健的相對偏差法（如 `> k×median`）**暫不實作**——待觸發：若實戰中離群表證實太吵再採用。
 
 ### ⚠️ 已知盲點：disabled 閾值不可見
 

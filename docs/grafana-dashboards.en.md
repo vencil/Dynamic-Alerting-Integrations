@@ -256,13 +256,13 @@ da-tools grafana-import \
 
 | Region | Panel | Description |
 |--------|-------|-------------|
-| Top row | **Tenants (sample adequacy) / P50 / P95 / IQR / Tukey fences / Outliers** | Population snapshot for the `(metric, severity)`: tenant sample adequacy (❌ Sparse <4 / ⚠ Marginal 4-7 / ✓ Adequate >=8 — symbol + text + colour), median, P95, interquartile range, outlier fences, outlier count (✓ 0 / ⚠ ≥1 — symbol + text) |
+| Top row | **Tenants (sample adequacy) / P50 / P95 / IQR / Tukey fences / Outliers** | Population snapshot for the `(metric, severity)`: tenant sample adequacy (❌/⚠/✓), median, P95, interquartile range, outlier fences, outlier count (✓ 0 / ⚠ ≥1). Symbol meanings in the accessibility note below |
 | Mid left | **Threshold value distribution (Histogram)** | Distribution of every tenant's current threshold — reveals the bimodality or long tail the average hides. The tallest bar is usually the platform default |
 | Mid right | **Fleet quantile band over time (P5/P50/P95)** | Drift of the distribution over time. A widening band = growing cross-tenant disagreement; a P50 creeping up over weeks = the "**threshold rot**" signal (a tenant loosened during an incident and never tightened back) |
 | Bottom left | **All tenants — value & deviation** (Table) | Every tenant's current value + signed deviation from the median, sorted — context inventory |
 | Bottom right | **⚠️ Statistical outliers** (Table) | Only tenants beyond the 1.5×IQR fence (with `side=high/low`) — the action list. Empty when healthy |
 
-> **Accessibility (ADR-012 / WCAG 1.4.1):** the top-row "sample adequacy" and "Outliers" state are labelled with a **symbol + text** (❌ / ⚠ / ✓), colour being redundant reinforcement only — red-green-colourblind operators can read the severity without relying on colour. This encoding is pinned by an a11y golden in `tests/dx/test_fleet_threshold_dashboard.py` so it can't silently regress.
+> **Readable without colour (accessibility):** the top-row "sample adequacy" and "Outliers" panels don't rely on colour alone — each pairs a **symbol + text**: sample adequacy `❌ Sparse (<4)` / `⚠ Marginal (4-7)` / `✓ Adequate (>=8)`, Outliers `✓ 0` / `⚠ ≥1`. Red-green-colourblind operators can still read the severity — colour is reinforcement only, never the sole channel. (Per ADR-012 / WCAG 1.4.1; an a11y golden in `tests/dx/test_fleet_threshold_dashboard.py` pins "every colour tier has a symbol" against regression.)
 
 ### Reading Outliers (industry best practice)
 
@@ -272,12 +272,12 @@ da-tools grafana-import \
 
 ### ⚠️ Reliability: two regimes where Tukey outlier detection degenerates
 
-Tukey fences work on distributions with **genuine spread**, but collapse in two regimes — **the outlier table is a statistical hint, not ground truth**. The top-row Tenant sample adequacy (❌ Sparse <4 / ⚠ Marginal 4-7 / ✓ Adequate >=8 — symbol + text + colour, never colour alone, per ADR-012) signals this:
+Tukey fences need a distribution with **genuine spread** to work. Two common regimes break them — when that happens the **outlier table is only a statistical hint, not the final word**, so read the distribution chart and deviation table below instead. The top-row **Tenant sample adequacy** tier (❌/⚠/✓) is what warns you:
 
-- **Degeneration 1 — mode-heavy (the common case).** When most tenants sit on the platform default, the default fills the median region → IQR = 0 → the fence collapses to the median → **every customizer is flagged** (measured: 40 default + 10 customizers → all 10 flagged). The outlier table is noisy here; **use the "All tenants — value & deviation" table** (sorted by deviation magnitude) + the histogram instead — both are robust to mode-heavy data and are the primary view.
+- **Degeneration 1 — most tenants share one value (mode-heavy, the common case).** When most tenants sit on the platform default, the default fills the median region → IQR = 0 → the fence collapses to the median → **every customizer is flagged** (measured: 40 default + 10 customizers → all 10 flagged). The outlier table is noisy here; **use the "All tenants — value & deviation" table** (sorted by deviation magnitude) + the histogram instead — both are robust to mode-heavy data and are the primary view.
 - **Degeneration 2 — small sample.** At low tenant counts (red/yellow Tenants panel) it is unreliable in both directions — it can **miss a real extreme** (N=3 `[50,60,2000]` flags nothing) and **over-flag a trivial deviation** (N=4 `[50,50,50,51]` flags the 51). At low N trust the histogram and raw values over the outlier flag.
 
-> Both degeneration boundaries are pinned by goldens in `tests/dx/test_fleet_threshold_dashboard.py` (pin known limits) so any future change to the behaviour is a conscious decision, not silent drift. A robust relative-deviation method (e.g. `> k×median`) is a defer-with-trigger: adopt it only if the outlier table proves too noisy in practice.
+> Both degeneration boundaries are pinned by goldens in `tests/dx/test_fleet_threshold_dashboard.py` (pin known limits) so any future change to the behaviour is a conscious decision, not silent drift. A more robust relative-deviation method (e.g. `> k×median`) is deferred — adopt it only if the outlier table proves too noisy in practice.
 
 ### ⚠️ Known blind spot: disabled thresholds are invisible
 
