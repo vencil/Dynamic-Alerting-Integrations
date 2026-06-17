@@ -1,5 +1,5 @@
 ---
-title: "Recipe would-fire 預覽設計 — 自訂告警的 authoring→confidence 閉環"
+title: "Recipe would-fire 預覽設計 — 填完當場確認告警會不會觸發"
 tags: [architecture, alerting, custom-alerts, recipe, would-fire, preview, design]
 audience: [platform-engineer, domain-expert, sre]
 version: v2.9.0
@@ -14,46 +14,44 @@ parent: architecture-and-design.md
 
 > ← [返回主文件](../architecture-and-design.md)
 >
-> **相關**：[#657](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/657)（would-fire eval spike）、[ADR-024 自訂告警](../adr/024-version-aware-threshold-via-dimensional-label.md)。本文是 #657 的 **P1 設計就緒 (design-readiness) 產出**：
-> - **已鎖**：facade host（獨立 Python preview 服務、try-local 先行）、API 契約、三道護欄。
-> - **提案中（本文凍結、待審）**：MVP 範圍為 threshold/equals 兩型。
-> - **defer（觸發條件見 §9）**：prod 部署、時間相依型 recipe、歷史回測。
+> **相關**：[ADR-024 自訂告警](../adr/024-version-aware-threshold-via-dimensional-label.md)，追蹤 issue [#657](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/657)。本文是**設計就緒**產出——設計與契約定案，尚未實作：
+> - **已定案**：預覽後端形態（獨立 Python 服務、先上 try-local）、API 契約、生產護欄。
+> - **首版範圍**：threshold 類 recipe（含 `>` `>=` `<` `<=` `==`）。
+> - **延後**（觸發條件見文末）：正式環境部署、時間相依型 recipe、歷史回測。
 
-## 1. 它補的盲點：最後一個 plane-switch
+## 1. 要解決的問題
 
-[#692](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/692) 的靈魂是 **simplicity**——domain/tenant 不切平面、不寫 PromQL。authoring 這側已經是單平面：portal recipe modal → tenant-api → git commit，全程不碰 YAML / PromQL。
+租戶／領域專家在 portal 的表單填完一條 recipe → 直接寫入 → git commit，全程不碰 PromQL。**唯一還得跨出這個畫面的一步是「確認」**：填完後，得另外去 Grafana 看 `ALERTS`、或先把 recipe 設成 silent 模式觀察一陣，才知道它會不會如預期觸發。
 
-唯一還跨平面的是 **confidence**。寫完一條 recipe，要**離開 modal**、去 Grafana 看 `ALERTS`、或先掛 `mode: silent` 觀察一陣，才知道它會不會如預期 fire。
+本設計把這個確認收回**同一個表單**：填完當場按一下，就看到「會觸發 / 不會觸發」，不用離開畫面。
 
-本設計把 would-fire 信心收回**同一個 modal**：填完 recipe，當場看到「會 fire / 不會 fire」，**零平面切換**。這是 #692 simplicity 承諾裡的**最後一個 plane-switch**。
+## 2. 核心原則：重用既有的評估引擎，絕不另寫一份
 
-## 2. 設計鐵則：兩個 eval 家，絕不重寫
+平台已經有一條把 recipe 編譯成 Prometheus 規則、再用 `promtool` 驗證的管線。預覽**只呼叫這條既有管線**，不在前端或別處另寫一份比較邏輯。
 
-| 規則類 | 權威 eval 家 | 狀態 |
+| 規則類 | 權威評估引擎 | 狀態 |
 |---|---|---|
-| flat threshold / rule-pack | `scripts/tools/ops/backtest_threshold.py` | ✅ 已建（純量 breach；本次補了對 `_custom_alerts` 的 fail-loud） |
-| custom-alert recipe (ADR-024) | 編譯器 `compile_custom_alerts.py` + `promtool` | 引擎與 golden harness 皆已建；本設計把它接成 preview |
+| 扁平閾值 | `backtest_threshold.py` | 已建；本次補上「遇 recipe 會明確提示、不再靜默略過」 |
+| 自訂告警 recipe | 編譯器 `compile_custom_alerts.py` + `promtool` | 引擎與測試夾具皆已建；本設計把它接成預覽 |
 
-**鐵則：eval 每個規則類只有一個權威家，所有 consumer 都呼叫它，絕不在 JS / Go / Python 重寫**（[#731](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/731) / [#719](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/719) 的跨語言 drift 教訓）。**前端笨**：不在 JS 重算 Prometheus eval；後端回 state，前端只渲染。
+**為什麼不抄捷徑？** threshold 看起來「不就是 `值 {運算子} 閾值`」，很想在前端用 JavaScript 比一下就好——**不行**。編譯器的真實語意還包含：版本對齊的閾值 fallback、維護期抑制、`==` 的「多副本任一匹配」、附掛 runbook／owner 的 metadata join。前端另抄一份，一定會在這些情況算錯，而**預覽算錯比沒有預覽更糟**（給人錯誤的信心）。所以連最簡單的 threshold 也走真正的編譯器 + `promtool`。（這條「一個規則類只有一個權威引擎」的原則，源自過去跨語言重寫造成規則漂移的教訓。）
 
-**禁止的捷徑。** threshold 看起來「只是 `value {op} threshold`」，誘人在 JS/Python 抄一個純量比較——**不行**。編譯器的真語意還含：version-aware exact-or-fallback、maintenance 抑制、`==` 的 any-match（[#819](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/819) 修過的 silent-miss）、`group_left` enrichment。抄捷徑會在這些情況給**錯**答案——而 preview 給錯比沒 preview 更糟（false confidence）。所以**即使最簡單的 threshold 也走 compiler+promtool**。
+## 3. 預覽後端：一支獨立的 Python 服務（先上 try-local）
 
-## 3. Facade host：獨立 Python preview 服務（try-local 先行）
+**決策**：預覽後端是一支**獨立的 Python 服務**，內含編譯器 + `promtool`，先放進 try-local 的 docker-compose；正式環境部署延後。（定案的是「形態與契約」；服務本身在實作階段才寫，正式部署的觸發條件見文末。）
 
-**決策（已鎖）**：preview 後端 = 一支**獨立的 Python 服務**，內含編譯器 + `promtool`，先進 try-local 的 docker-compose stack；prod 部署 defer。**「已鎖」指架構與契約（P1）；服務實裝在 P2、prod 部署觸發見 §9**——不是說服務已存在。
+為什麼是獨立服務，而不是塞進現有的 tenant-api：
 
-| 方案 | 換到 | 犧牲 |
+| 方案 | 好處 | 代價 |
 |---|---|---|
-| **A. 獨立 Python 服務（採用）** | Py→Py 乾淨——facade **直接 import 編譯器**（`build_pack` / `shape.recipe_id`），原生重用、零跨語言 drift（見 §5.3）；`promtool` **不進 prod 核心 image**（守 [ADR-024 §5](../adr/024-version-aware-threshold-via-dimensional-label.md)「prod image 不打包 promtool」）；fork 的 blast-radius 隔離；三道護欄有天然落點 | 要自己的 nginx route + auth；prod = 新部署 / 新版號線 → try-local 先閉、prod defer |
-| B. 擴 tenant-api（Go + `os/exec`） | 重用 tenant-api 既有 nginx upstream + oauth2 auth + exec 樣式；prod 環 day-1 就閉 | image 膨脹、把 eval 耦進 authoring **寫入路徑**、長駐 HA 服務的 subprocess 併發風險 |
+| **A. 獨立 Python 服務（採用）** | 同為 Python，可**直接 import 編譯器**（見 §5.3），零跨語言重寫；`promtool` 不必塞進正式環境的核心 image；萬一評估卡住，影響只侷限在這支服務 | 要自己的 nginx 路由 + 認證；正式環境是一條新部署 → 因此先只上 try-local |
+| B. 擴充現有 tenant-api（Go 呼叫外部程式） | 重用 tenant-api 既有的路由 + 認證；正式環境一次到位 | image 變肥；把「評估」耦進「寫入」的關鍵路徑；長駐服務裡反覆 fork 子程序有併發風險 |
 
-選 A 的理由：本平台一向偏 **fail-isolation**、最小 data-plane image（#448）、portal **demo-by-default**；且 recipe preview 近期受眾是 onboarding / 評估（try-local）。把 eval 耦進 prod 寫入路徑，正是要避開的 blast-radius。
+選 A 的理由：平台一向把正式環境的核心元件保持精簡、把故障影響侷限化，而預覽近期的使用者就是試用／評估階段（try-local）。把評估耦進正式環境的寫入路徑，正是要避開的風險。（A／B 的完整比較見 [#657](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/657) 討論串。）
 
-> 方案 A vs B 的完整對抗式評估（3-lens review）置於 #657 comment；本 repo 只留 operative 決策。
+## 4. API 契約
 
-## 4. API 契約（凍結）
-
-preview 服務暴露單一 endpoint（portal 經 nginx route 轉發）：
+預覽服務只暴露一個 endpoint（portal 經 nginx 轉發）：
 
 ```
 POST /preview
@@ -63,121 +61,124 @@ POST /preview
 
 ```json
 {
-  "recipe":   { "...": "ADR-024 recipe object（同 portal recipe builder 產出）" },
+  "recipe":   { "...": "ADR-024 recipe 物件（同 portal 表單產出）" },
   "tenant":   "shop-a",
   "scenario": { "value": 1500 }
 }
 ```
 
-- MVP 的 `scenario` = 單一測試值（threshold/equals 不需時序）。
-- P3 把 `scenario` 擴成時序模型（見 §5.1），契約欄位前向相容。
+- 首版的 `scenario` 是單一測試值（threshold 類不需要時間序列）。
+- 契約欄位向前相容：未來支援時間相依型時，`scenario` 可擴成「期間／趨勢」描述；甚至**逐維度的陣列**（例如每顆 PVC 一個值 `[{pvc, value}, …]`），用來示範「大碟掩蓋小碟」這類多副本場景。
 
-**Response（`state-only`，no route）**
+**Response**（只回狀態，不回「誰會被通知」）
 
 ```json
 {
   "alertname": "Custom_threshold__order_queue_depth__gt__w5m__for1m",
   "supported": true,
   "states": [
-    { "severity": "warning", "mode": "page", "state": "firing", "reason": "1500 > 1000" }
+    { "severity": "warning", "mode": "page", "state": "firing", "reason": "value 1500 > threshold 1000" }
   ],
   "warnings": []
 }
 ```
 
-- **三種互斥結果**：`supported: false`（recipe 型尚未支援 → **不嘗試編譯**，見 §7）；`state: error`（型有支援但編譯 / eval 失敗或逾時，見 §5.2）；`state: firing | inactive`（乾淨 eval 結果）。
-- `for:` 以「需持續 N 分鐘才觸發」當 context 文字呈現，**不另設 `pending` live 狀態**；`suppressed`（maintenance / silent）與多副本場景屬未來的 scenario 擴充（見 §5.1、§9）。
-- **不回 route / 誰被 page**——那屬四層路由的另一元件，MVP 不承諾（§9 defer）。
+- **三種互斥結果**：`supported: false`（此 recipe 型尚未支援，不會嘗試編譯，見 §7）；`state: error`（型有支援但編譯／評估失敗或逾時，見 §5.2）；`state: firing | inactive`（正常評估結果）。
+- `for:`（需持續幾分鐘才觸發）以說明文字呈現，不另設 live 的「pending」狀態。維護期抑制、多副本等場景屬未來擴充。
+- **不回「誰會被通知」**——通知路由屬於另一個元件，首版不承諾。
 
-### 4.1 Auth 與租戶隔離
+### 4.1 認證與租戶隔離
 
-preview 服務**繼承 portal 的 auth**：try-local 走 `--dev-bypass-auth`（[ADR-022](../adr/022-dev-auth-bypass-four-layer-containment.md) 四層防線），prod 經 oauth2-proxy（與 tenant-api 同樣式）。facade **必須驗證 request 的 `tenant` 屬於已驗證身分可存取的租戶**，否則 403——否則「評自己的 recipe」會退化成跨租戶面（這是 §10「安全」的**前提**，非自動成立）。`recipe` / `scenario` 為使用者輸入：facade 須先 schema 驗證（或捕捉 `build_pack` 拋的 `CustomAlertConfigError`）→ 失敗回 `state: error`，**驗過才編譯**（見 §5.2）。
+預覽服務**沿用 portal 的認證**：try-local 走 dev-bypass（[ADR-022](../adr/022-dev-auth-bypass-four-layer-containment.md) 四層防線），正式環境經 oauth2-proxy（與 tenant-api 同樣式）。服務**必須驗證 request 的 `tenant` 屬於登入者可存取的租戶**，否則回 403——否則「評自己的 recipe」會退化成跨租戶的查詢面（這是下方「安全」宣稱的**前提**，並非自動成立）。`recipe` / `scenario` 是使用者輸入：服務要先做 schema 驗證（或捕捉編譯器拋出的設定錯誤）→ 失敗即回 `state: error`，**驗過才編譯**（見 §5.2）。
 
-## 5. 後端如何算出 state：合成輸入 + eval 機制
+## 5. 後端如何算出狀態
 
-### 5.1 合成輸入：label-correct graph，不是「滑桿值展開」
+### 5.1 合成輸入：要餵的是「規則實際 join 的那組 series」，不是一個數字
 
-要餵 `promtool` 的不是一個值，是一張 **label-correct 的依賴圖**。以 threshold 為例（已驗 `tests/dx/fixtures/custom_alerts_promtool/threshold.yaml`），最小可觸發只需 3 條序列：
+要餵給 `promtool` 的不是一個值，而是規則評估時實際會 join 的那組 series。以 threshold 為例（已對照 `tests/dx/fixtures/custom_alerts_promtool/threshold.yaml` 驗證），最小可觸發只需 3 條：
 
 | series | 內容 | 來源 |
 |---|---|---|
-| 觀測 metric `@` 測試值 | 使用者填的測試值 | `scenario.value` |
-| `user_threshold @ 閾值`，帶 `recipe_id` slug + `severity` + `name` + `mode` | 閾值與標籤 | `recipe_id` slug 來自編譯器自身（見 §5.3），不另推 |
-| `tenant_metadata_info @ 1` | enrichment | `group_left` join 用 |
+| 觀測指標 `@` 測試值 | 使用者填的測試值 | `scenario.value` |
+| `user_threshold @ 閾值`（帶 recipe 識別字 + severity + name + mode） | 閾值與標籤 | 識別字直接取自編譯器（見 §5.3），不另外推算 |
+| `tenant_metadata_info @ 1` | metadata 附掛 | 給規則的 `group_left` join 用 |
 
-> preview 的合成輸入**一律附上** `tenant_metadata_info`，故預覽到的是 enriched alert；真實執行期租戶若缺 metadata，告警仍 fire 但 runbook / owner 標籤為空——屬 ADR-024 執行期關注，與 preview 正交。
+> 合成輸入**一律附上** `tenant_metadata_info`，所以預覽看到的是帶 runbook／owner 的完整告警；真實環境若租戶缺 metadata，告警仍會觸發、只是這些標籤為空——那是執行期的另一個議題，與預覽無關。
 
-**關鍵分界**——序列的「**形狀**」才是 recipe-type 相依的：
+**關鍵分界——只有序列的「形狀」才跟 recipe 型別有關**：
 
-- **threshold / equals**：**flat 常數序列**（如 `1500x48`）。`for:` 靠序列長度滿足，無斜率 / 趨勢 → **MVP 範圍**。
-- **rate / ratio / forecast / absence**：需 recipe-type-aware 形狀（rate=斜率、ratio=分子+分母、forecast=趨勢+lookback、absence=缺口）→ **P3 defer**。
+- **threshold 類**：**平的常數序列**（值固定）。這正是 threshold 類預覽便宜的原因：一個固定值就夠，不需要斜率或趨勢。
+- **rate / ratio / forecast / absence**：需要型別專屬的形狀（rate 要斜率、ratio 要分子分母、forecast 要趨勢、absence 要缺口）→ 延後。
 
-> Gemini 的「Time-Vector 護欄」（單一值餵不動 `for:` / `rate` / `forecast`）只打在**時間相依型**；threshold/equals 不受影響——這正是 MVP 能便宜閉環的原因。
+> 預覽回答的是「在這個值／場景下會不會觸發」，不是重新驗證規則本身的正確性——後者由既有 CI 測試保證。所以單一測試值對 threshold 類已正確且足夠；多副本、趨勢等多序列場景留待未來擴充。
 
-> **preview 評的是「場景」，不是重測規則正確性。** 例如 `==` 的多副本 any-match（#819）正確性由 CI golden 保證；preview 只回答「在這個值/場景下會不會 fire」。單一測試值對 threshold/equals 的 preview 問題是**正確且足夠**的；多序列場景（多副本、趨勢）屬未來的 scenario-model 擴充。
+### 5.2 評估機制：請 `promtool`「斷言不會觸發」，它若反對就代表會觸發
 
-### 5.2 Eval 機制：inverted-assert probe（已實測 promtool 2.53.2）
+`promtool test rules` 是個**斷言**工具（比對「預期觸發哪些告警」），不會主動「回報誰觸發」——但預覽不知道答案。做法是反過來用：餵合成輸入 + **斷言「不會觸發任何告警」（`exp_alerts: []`）**，再看 `promtool` 的反應：
 
-`promtool test rules` 是**斷言**工具（比對 `exp_alerts`），不是「回報誰 fire」的 eval 工具——而 preview 並不知道答案。解法是**反向斷言**：合成輸入 + **`exp_alerts: []`（宣稱不會 fire）**，再讀 `promtool` 結果：
-
-| promtool 結果 | 判定 |
+| `promtool` 結果 | 判定 |
 |---|---|
-| `returncode == 0`（SUCCESS） | 沒 fire → `inactive` |
-| `returncode != 0`（FAILED） | 有 fire → `firing`；mismatch 的 "got" 區塊**直接帶出實際 alert**（labels + annotations + severity） |
+| 成功（returncode 0） | 沒有任何告警觸發 → `inactive` |
+| 失敗，且輸出含 `FAILED:` + 非空的 `got:`（實際觸發的告警） | 有告警觸發 → `firing`；該區塊直接帶出 labels / annotations |
+| 失敗，但**沒有**上述匹配字樣 | 編譯／語法錯、逾時、被 kill 等 → `error`（**絕不可當成 firing**） |
 
-實測（example pack + threshold golden、`exp_alerts` 翻成 `[]`）：value 1500 > 1000 → `rc=1` 且輸出含完整 alert（`value 1500.00 crossed…` + owner/tier/runbook）；value 500 → `rc=0`。所以 **fire/no-fire 走 returncode（穩健、不靠脆弱字串解析）**；per-severity 與標籤明細從 "got" 區塊取，或對每個宣告的 severity 各跑一次 probe。**不需** throwaway Prometheus（此為外審原始疑慮，已被實測推翻）。
+兩個必守的細節（不照做就會算錯）：
 
-**錯誤 ≠ firing（fail-loud）**：`rc≠0` 必須能分辨「真 fire」與「規則沒編成 / promtool 語法錯」，否則把錯誤誤標成 firing（= §7 要避免的 false confidence）。故分三層：① `build_pack` 對 bad recipe 拋 `CustomAlertConfigError` → `state: error`；② 對編出的 pack 先跑 `promtool check rules`（語法 gate，既有 test 已用）→ 失敗 → `state: error`；③ **語法驗過後**才跑 `promtool test rules` 的 inverted-assert，此時 `rc≠0` 才穩定等於「fire」。
+1. **評估時間點必須大於 recipe 的 `for:` 視窗。** 告警在滿足 `for:` 之前處於 pending（尚未真正觸發），而「斷言不會觸發」**不會**把 pending 當成違反 → `promtool` 會回成功 → 預覽誤判為「不會觸發」（明明已越過閾值）。所以合成測試的評估時間要**嚴格大於 `for:`**（例如 `for: 30m` → 評估設 35m），序列也要長到跨過 `for:`。
+2. **returncode 非 0 不等於「觸發」。** OOM 被 kill、找不到 `promtool`、合成測試檔語法錯，都會讓 returncode 非 0。若盲目把「非 0」當成觸發，會把基礎設施錯誤誤報成 firing。所以判定 firing **必須同時**看到失敗簽章（`FAILED:` + `got:`）；否則一律當 `error`，並噴出真正的錯誤訊息。
 
-### 5.3 單一 recipe 編譯 + Python 原生重用
+為了讓「編譯失敗」永遠不會被誤標成「觸發」，分三層把關：① 編譯器對壞 recipe 直接拋例外 → `error`；② 編出的規則先過 `promtool check rules`（語法）→ 失敗即 `error`；③ 語法過了，才跑上面的斷言。
 
-facade 是 Python，故**直接 import 編譯器**：把 modal 的單一 recipe 寫進一份 temp `conf.d`（含最小 `_defaults.yaml`）→ `compile_custom_alerts.build_pack(temp_dir)` → 取得規則與 `shape.recipe_id()` 的 slug。slug 是呼叫編譯器**同一支函式**得到的，不是 Go / 正則回推——所以「兩個 eval 家、絕不重寫」在 Python facade 下是**原生達成、零跨語言 drift**（也是選方案 A 的附帶好處）。單一 recipe 在隔離 temp tree 編出的規則，正是「若你宣告這條 recipe，會長這樣」——恰好是 preview 要的。
+> 本機已實測（`promtool` 2.53.2）：值 1500 > 閾值 1000 → 失敗、輸出帶完整告警；值 500 → 成功。整套用既有工具即可，不需要另起一個 Prometheus 實例。
 
-## 6. 三道生產護欄
+### 5.3 單一 recipe 編譯 + 直接重用編譯器
 
-`promtool` 是 ~1s 的 subprocess fork（#655 實測量級；ADR-024 §5 已明載 prod 不打包它）。preview 服務每請求 fork，故需護欄：
+服務是 Python，所以**直接 import 編譯器**：把表單那一條 recipe 寫進一份暫存設定 → 呼叫編譯器 → 拿到規則，以及它算出的 recipe 識別字。識別字是呼叫**編譯器同一支函式**得到的，不是另外用正則或在 Go 重推——這就是「直接重用、零跨語言重寫」在 Python 服務下自然成立的原因。單一 recipe 在隔離的暫存設定裡編出的規則，正是「你宣告這條 recipe 會長這樣」，恰好是預覽要的。
 
-1. **concurrency cap**——限制同時 fork 數，滿了排隊 / 拒絕（防 fork 風暴）。
-2. **per-request timeout**——`promtool` 逾時即殺、回 `state: error`（防 zombie / hang）。
-3. **rate-limit**——per-tenant 限流（防被當 DoS 面）。
-4. **UX 反推**——因為 ~1s fork，**不做即時滑桿連發**：手動「Run preview」按鈕 + loading state。此妥協由「不重寫 eval（嚴守 promtool）」原則反推而來。
-5. **promtool 版本鎖**——inverted-assert 的 returncode / 輸出格式是**版本相依的契約**（實測基準 2.53.2）；facade image 須 pin promtool 版本、啟動時 log `promtool --version`。
+## 6. 生產護欄
 
-## 7. 誠實的 per-type gating（避免 false confidence）
+`promtool` 每次評估是一個約 1 秒的子程序 fork；預覽服務每個請求都會 fork，所以需要：
 
-MVP 只支援 threshold/equals 的 preview。其餘型**不可靜默**——portal 對未支援型明確顯示「此 recipe 型的 would-fire 預覽即將支援」，而非裝作能算或留白。
+1. **併發上限**——限制同時 fork 數，滿了排隊／拒絕。
+2. **單一請求逾時**——`promtool` 逾時即殺、回 `error`。
+3. **速率限制**——每租戶限流，避免被當成攻擊面。
+4. **互動設計**——因為約 1 秒延遲，不做即時連發；用手動「Run preview」按鈕 + loading 狀態。
+5. **`promtool` 版本鎖**——上面的 returncode／輸出格式是跟版本綁的契約（實測基準 2.53.2）；服務 image 要鎖版本、啟動時記錄版本。
 
-理由：若 portal 讓使用者**存了** ratio recipe 卻**沒** preview，使用者會以為「存了就對」= false confidence（違反 fail-loud）。所以 loop-closure 是**逐型宣告**的，**不從 threshold-only 宣稱全閉環**。
+## 7. 誠實標示尚未支援的型別
 
-**機制**：facade 硬編 `SUPPORTED_RECIPES_MVP = {threshold, equals}`；型別不在內 → 直接回 `supported: false` + warning、**不嘗試編譯**——故 unsupported 型永遠不會被誤標成 `firing` 或 `error`（與 §5.2 的錯誤路徑互斥）。
+首版只支援 threshold 類。其餘型別**不可靜默**——portal 對未支援型別要明確顯示「此型別的預覽即將推出」，而不是裝作能算或留白。
+
+理由：若使用者**存得進**一條 ratio recipe 卻**看不到**預覽，他會以為「存了就對」——這是錯誤的信心。所以「閉環」是**逐型別宣告**的，不會因為支援了 threshold 就宣稱全部完成。
+
+機制：服務硬編支援清單（目前 `{threshold}`，涵蓋其各種運算子）；不在清單內就直接回 `supported: false` + 說明、**不嘗試編譯**——所以未支援型別永遠不會被誤標成 `firing` 或 `error`。
 
 ## 8. 分階段交付
 
-| Phase | 範圍 | 狀態 |
+| 階段 | 範圍 | 狀態 |
 |---|---|---|
-| **P1**（本文） | facade host + 契約凍結 + 護欄 + 合成輸入設計；flat 工具補 `_custom_alerts` fail-loud | ← 本 PR |
-| **P2** | threshold/equals MVP——獨立 Python preview 服務（try-local）+ flat 序列產生器 + portal modal renderer（資料源無關）+ per-type gating | next |
-| **P3** | time-vector 型——recipe-type-aware 序列產生器 + scenario-model UX + 逐型翻開 gating | defer（§9） |
+| **設計（本文）** | 後端形態 + 契約定案 + 護欄 + 合成輸入設計；扁平工具補 recipe 提示 | 本 PR |
+| **首版實作** | threshold 類：獨立 Python 服務（try-local）+ 合成序列產生器 + portal 表單渲染 + 型別 gating | 下一步 |
+| **時間相依型** | rate／ratio／forecast／absence：型別專屬序列產生器 + 場景模型 + 逐型別開放 | 延後（見文末） |
 
-## 9. Defer-with-trigger（每條給觸發條件，非模糊 TODO）
+## 9. 延後項目（每項都有觸發條件，不是模糊的 TODO）
 
 | 延後項 | 觸發條件 |
 |---|---|
-| **prod 部署 preview 服務** | 真 prod 客戶在 portal authoring 且要 preview（try-local / onboarding 不夠用時）。屆時重評 host：獨立部署 vs 折進既有服務 |
-| **P3 time-vector 型**（rate/ratio/forecast/absence） | domain/tenant 實際要這些型的 preview |
-| **B2 歷史回測**（「過去 24h 我真資料 fire 幾次」） | recipe 的 recording-rule 落地 + `for:` 語意就緒 |
-| **A1 rule-pack matrix-impact CI**（+ 快照 pipeline） | rule-pack 變更造成預期外的全租戶告警漂移 / SRE 要 pre-merge blast-radius。**注意**：recipe preview 用合成輸入，**不需**快照 pipeline；快照只屬 A1 |
-| **route attribution**（誰被 page） | consumer 真需要（屬四層路由元件） |
-| **A2 operator 遷移 PR backtest** | operator（#692）解除 defer |
+| 正式環境部署預覽服務 | 真正的正式客戶在 portal 寫 recipe 且需要預覽（試用／onboarding 不夠時）。屆時重評部署形態 |
+| 時間相依型（rate／ratio／forecast／absence） | 領域專家／租戶實際需要這些型別的預覽 |
+| 歷史回測（「過去 24h 我的真實資料觸發過幾次」） | recipe 的 recording rule 落地、`for:` 語意就緒 |
+| rule-pack 影響矩陣 CI（改 rule-pack 前評估對全租戶的影響） | rule-pack 變更造成預期外的全租戶告警漂移，或需要合併前的影響評估。注意：預覽用合成輸入，**不需要**這條的快照資料 |
+| 「誰會被通知」歸因 | 有消費者真的需要（屬通知路由元件） |
+| operator 遷移回測 | operator 解除延後時 |
 
-## 10. 受眾 / 隔離
+## 10. 使用者與隔離
 
-recipe preview = **domain expert（authoring）+ tenant（own recipe）**：評**自己的** recipe + **合成**輸入 → **安全**——無跨租戶資料、無歷史拉取、無打 live prod-Prom。與平台向的 A1 matrix（rule-pack blast-radius、跨全租戶）受眾與隔離面截然不同。
+預覽的使用者 = 領域專家（寫 recipe）+ 租戶（自己的 recipe）：評**自己的** recipe + **合成**輸入 → 安全（不碰其他租戶資料、不拉歷史、不打正式環境的 Prometheus）。
 
-## Cross-Reference
+## 相關文件
 
-- [#657](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/657) — 本設計的 spike 與 build-split 追蹤。
-- [ADR-024: 版本感知閾值 + 自訂告警](../adr/024-version-aware-threshold-via-dimensional-label.md) — recipe 引擎；本設計是其 capability B 的 confidence last-mile。
-- [ADR-024 §5](../adr/024-version-aware-threshold-via-dimensional-label.md) — 驗證雙層、prod image 不打包 promtool → 為何 preview 走獨立服務。
-- [Runtime Canary 設計](./runtime-canary.md) — 同為「設計就緒、部署 defer」的姊妹設計。
-- `scripts/tools/ops/backtest_threshold.py` — flat eval 家；本次已補對 `_custom_alerts` 的 fail-loud 友善訊息（#657）。
+- [ADR-024：版本感知閾值 + 自訂告警](../adr/024-version-aware-threshold-via-dimensional-label.md) — recipe 引擎本身；本設計是它的「填完即確認」最後一哩。
+- [ADR-024 §5](../adr/024-version-aware-threshold-via-dimensional-label.md) — 正式環境核心 image 不打包 `promtool` 的決定，也是預覽走獨立服務的理由之一。
+- [Runtime Canary 設計](./runtime-canary.md) — 同樣是「設計就緒、部署延後」的姊妹設計。
+- `scripts/tools/ops/backtest_threshold.py` — 扁平閾值的評估引擎；本次補上遇 recipe 的明確提示。

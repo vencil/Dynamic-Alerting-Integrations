@@ -1,5 +1,5 @@
 ---
-title: "Recipe Would-Fire Preview Design — closing the custom-alert authoring→confidence loop"
+title: "Recipe Would-Fire Preview Design — confirm an alert fires, right in the form"
 tags: [architecture, alerting, custom-alerts, recipe, would-fire, preview, design]
 audience: [platform-engineer, domain-expert, sre]
 version: v2.9.0
@@ -14,46 +14,44 @@ parent: architecture-and-design.en.md
 
 > ← [Back to main doc](../architecture-and-design.en.md)
 >
-> **Related**: [#657](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/657) (would-fire eval spike), [ADR-024 Custom Alerts](../adr/024-version-aware-threshold-via-dimensional-label.en.md). This is the **P1 design-readiness** output of #657:
-> - **Locked**: facade host (isolated Python preview service, try-local first), API contract, the three guardrails.
-> - **Proposed (frozen here, pending review)**: MVP scope = threshold/equals only.
-> - **Deferred (triggers in §9)**: prod deployment, time-dependent recipe types, historical backtest.
+> **Related**: [ADR-024 Custom Alerts](../adr/024-version-aware-threshold-via-dimensional-label.en.md); tracking issue [#657](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/657). This is a **design-readiness** output — the design and contract are settled, the code is not yet written:
+> - **Settled**: the preview backend's shape (a standalone Python service, try-local first), the API contract, the production guardrails.
+> - **First scope**: the threshold recipe (operators `>`, `>=`, `<`, `<=`, `==`).
+> - **Deferred** (triggers at the end): production deployment, time-dependent recipe types, historical backtest.
 
-## 1. The blind spot it fills: the last plane-switch
+## 1. The problem
 
-[#692](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/692)'s soul is **simplicity** — domain/tenant never switch planes, never write PromQL. Authoring is already single-plane: portal recipe modal → tenant-api → git commit, never touching YAML / PromQL.
+A tenant / domain expert fills in a recipe in the portal form → it's written → git commit, never touching PromQL. **The one step that still takes them out of that screen is "confirmation"**: after filling it in, they have to go to Grafana's `ALERTS`, or set the recipe to silent mode and watch for a while, to learn whether it fires as intended.
 
-The one thing still cross-plane is **confidence**. After writing a recipe you must **leave the modal**, go to Grafana's `ALERTS`, or set `mode: silent` and watch a while, before you know whether it fires as intended.
+This design brings that confirmation back into **the same form**: fill it in, click once, and see "fires / doesn't fire" — without leaving the screen.
 
-This design pulls would-fire confidence back into **the same modal**: fill in the recipe, see "fires / doesn't fire" **right there**, **zero plane-switch**. This is the **last plane-switch** in #692's simplicity promise.
+## 2. Core principle: reuse the existing eval engine, never write a second one
 
-## 2. Design rule: two eval homes, never re-implement
+The platform already has a pipeline that compiles a recipe into Prometheus rules and verifies them with `promtool`. The preview **only calls that existing pipeline** — it does not write a second comparison anywhere (frontend or elsewhere).
 
-| Rule class | Authoritative eval home | Status |
+| Rule class | Authoritative eval engine | Status |
 |---|---|---|
-| flat threshold / rule-pack | `scripts/tools/ops/backtest_threshold.py` | ✅ built (scalar breach; this change added fail-loud on `_custom_alerts`) |
-| custom-alert recipe (ADR-024) | compiler `compile_custom_alerts.py` + `promtool` | engine + golden harness built; this design wires it into a preview |
+| Flat threshold | `backtest_threshold.py` | Built; this change adds "surface recipes explicitly, no longer silently skip them" |
+| Custom-alert recipe | compiler `compile_custom_alerts.py` + `promtool` | Engine + test fixtures built; this design wires it into a preview |
 
-**The rule: each rule class has exactly ONE authoritative eval home, every consumer calls it, never re-implement in JS / Go / Python** (the cross-language drift lesson of [#731](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/731) / [#719](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/719)). **Dumb frontend**: no Prometheus eval re-done in JS; the backend returns state, the frontend just renders.
+**Why not take a shortcut?** threshold looks like "just `value {op} threshold`", which tempts a quick JavaScript compare in the frontend — **don't**. The compiler's real semantics also include: version-aligned threshold fallback, maintenance suppression, the `==` "any replica matches" rule, and the runbook/owner metadata join. A second copy in the frontend will get these wrong, and **a wrong preview is worse than no preview** (it gives false confidence). So even the simplest threshold goes through the real compiler + `promtool`. (This "one authoritative engine per rule class" principle comes from past cross-language rewrites that drifted.)
 
-**The forbidden shortcut.** threshold looks like "just `value {op} threshold`", tempting a scalar compare in JS/Python — **don't**. The compiler's real semantics also include version-aware exact-or-fallback, maintenance suppression, `==` any-match (the silent-miss fixed in [#819](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/819)), and `group_left` enrichment. A shortcut gives the **wrong** answer in these cases — and a preview that's wrong is worse than no preview (false confidence). So **even the simplest threshold goes through compiler+promtool**.
+## 3. Preview backend: a standalone Python service (try-local first)
 
-## 3. Facade host: isolated Python preview service (try-local first)
+**Decision**: the preview backend is a **standalone Python service** bundling the compiler + `promtool`, landing first in the try-local docker-compose; production deployment is deferred. (What's settled is the shape and contract; the service itself is written in the implementation phase, and the production-deploy trigger is at the end.)
 
-**Decision (locked)**: the preview backend = a **standalone Python service** bundling the compiler + `promtool`, landing first in the try-local docker-compose stack; prod deployment deferred. **"Locked" refers to the architecture and contract (P1); the service is implemented in P2 and its prod deployment trigger is in §9** — it does not mean the service already exists.
+Why a standalone service rather than folding it into the existing tenant-api:
 
-| Option | Buys | Costs |
+| Option | Upside | Cost |
 |---|---|---|
-| **A. Standalone Python service (chosen)** | clean Py→Py — the facade **imports the compiler directly** (`build_pack` / `shape.recipe_id`), native reuse, zero cross-language drift (see §5.3); `promtool` **stays out of prod core images** (honors [ADR-024 §5](../adr/024-version-aware-threshold-via-dimensional-label.en.md) "prod image does not bundle promtool"); fork blast-radius isolated; the three guardrails get a natural home | needs its own nginx route + auth; prod = new deployment / new version line → try-local first, prod deferred |
-| B. Extend tenant-api (Go + `os/exec`) | reuses tenant-api's nginx upstream + oauth2 auth + exec pattern; prod loop closes day-1 | image bloat; couples eval into the authoring **write path**; subprocess-concurrency risk in a long-running HA service |
+| **A. Standalone Python service (chosen)** | Also Python, so it can **import the compiler directly** (see §5.3), zero cross-language rewrite; `promtool` need not go into the production core image; if an eval hangs, the impact is contained in this one service | Needs its own nginx route + auth; production is a new deployment → so it ships try-local first |
+| B. Extend the existing tenant-api (Go calling out to a subprocess) | Reuses tenant-api's existing route + auth; production in one shot | Image grows; couples "eval" into the "write" critical path; repeatedly forking a subprocess inside a long-running service risks concurrency issues |
 
-Why A: this platform consistently favors **fail-isolation**, minimal data-plane images (#448), and portal **demo-by-default**; and recipe preview's near-term audience is onboarding / evaluation (try-local). Coupling eval into the prod write path is exactly the blast-radius to avoid.
+Why A: the platform consistently keeps production core components lean and contains failure impact, and the preview's near-term users are the trial / evaluation stage (try-local). Coupling eval into the production write path is exactly the risk to avoid. (Full A/B comparison is in the [#657](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/657) thread.)
 
-> The full adversarial A vs B evaluation (3-lens review) lives in the #657 comment; the repo keeps only the operative decision.
+## 4. API contract
 
-## 4. API contract (frozen)
-
-The preview service exposes a single endpoint (the portal forwards via an nginx route):
+The preview service exposes a single endpoint (the portal forwards via nginx):
 
 ```
 POST /preview
@@ -63,121 +61,124 @@ POST /preview
 
 ```json
 {
-  "recipe":   { "...": "ADR-024 recipe object (same as the portal recipe builder emits)" },
+  "recipe":   { "...": "ADR-024 recipe object (same as the portal form emits)" },
   "tenant":   "shop-a",
   "scenario": { "value": 1500 }
 }
 ```
 
-- MVP `scenario` = a single test value (threshold/equals need no time series).
-- P3 extends `scenario` into a time-series model (see §5.1); the contract fields are forward-compatible.
+- The first version's `scenario` is a single test value (threshold types need no time series).
+- The contract fields are forward-compatible: when time-dependent types arrive, `scenario` can grow into a "period / trend" description; or even a **per-dimension array** (e.g. one value per PVC, `[{pvc, value}, …]`) to demo multi-replica cases like "a big disk masking a small full one".
 
-**Response (`state-only`, no route)**
+**Response** (state only — it does not say "who gets paged")
 
 ```json
 {
   "alertname": "Custom_threshold__order_queue_depth__gt__w5m__for1m",
   "supported": true,
   "states": [
-    { "severity": "warning", "mode": "page", "state": "firing", "reason": "1500 > 1000" }
+    { "severity": "warning", "mode": "page", "state": "firing", "reason": "value 1500 > threshold 1000" }
   ],
   "warnings": []
 }
 ```
 
-- **Three mutually-exclusive outcomes**: `supported: false` (recipe type not yet supported → **no compile attempted**, see §7); `state: error` (a supported recipe that failed to compile / eval or timed out, see §5.2); `state: firing | inactive` (a clean eval result).
-- `for:` is surfaced as context text ("fires after N minutes of breach"), **not** as a live `pending` state; `suppressed` (maintenance / silent) and multi-replica scenarios are future scenario extensions (see §5.1, §9).
-- **No route / who-gets-paged** — that belongs to the four-layer routing component; the MVP makes no promise (§9 defer).
+- **Three mutually-exclusive outcomes**: `supported: false` (recipe type not yet supported — no compile attempted, see §7); `state: error` (a supported type that failed to compile/eval or timed out, see §5.2); `state: firing | inactive` (a normal eval result).
+- `for:` (how many minutes it must hold to fire) is shown as explanatory text, not a live "pending" state. Maintenance suppression and multi-replica cases are future extensions.
+- **It does not say "who gets paged"** — notification routing belongs to another component; the first version makes no promise there.
 
 ### 4.1 Auth and tenant isolation
 
-The preview service **inherits the portal's auth**: try-local uses `--dev-bypass-auth` ([ADR-022](../adr/022-dev-auth-bypass-four-layer-containment.md) four-layer containment), prod goes through oauth2-proxy (same pattern as tenant-api). The facade **must validate that the request's `tenant` is one the authenticated identity may access**, else 403 — otherwise "preview your own recipe" degrades into a cross-tenant surface (this is the **precondition** for §10's "safe", not an automatic property). `recipe` / `scenario` are user input: the facade must schema-validate first (or catch the `CustomAlertConfigError` raised by `build_pack`) → return `state: error` on failure, and **only compile after it validates** (see §5.2).
+The preview service **inherits the portal's auth**: try-local uses dev-bypass ([ADR-022](../adr/022-dev-auth-bypass-four-layer-containment.md) four-layer containment), production goes through oauth2-proxy (same pattern as tenant-api). The service **must validate that the request's `tenant` is one the signed-in user may access**, else return 403 — otherwise "preview your own recipe" degrades into a cross-tenant query surface (this is the **precondition** for the "safe" claim below, not an automatic property). `recipe` / `scenario` are user input: the service schema-validates first (or catches the compiler's config error) → returns `state: error` on failure, and **only compiles after it validates** (see §5.2).
 
-## 5. How the backend computes state: synthetic input + eval mechanism
+## 5. How the backend computes the state
 
-### 5.1 Synthetic input: a label-correct graph, not a "slider value expansion"
+### 5.1 Synthetic input: feed "the exact set of series the rule joins", not one number
 
-What `promtool` needs is not a single value but a **label-correct dependency graph**. For threshold (verified against `tests/dx/fixtures/custom_alerts_promtool/threshold.yaml`), the minimal firing set is just 3 series:
+What `promtool` needs is not a single value but the exact set of series the rule joins at eval time. For threshold (verified against `tests/dx/fixtures/custom_alerts_promtool/threshold.yaml`), the minimal firing set is 3 series:
 
 | series | content | source |
 |---|---|---|
 | observed metric `@` test value | the user's test value | `scenario.value` |
-| `user_threshold @ threshold`, carrying `recipe_id` slug + `severity` + `name` + `mode` | threshold + labels | the `recipe_id` slug comes from the compiler itself (see §5.3), not re-derived |
-| `tenant_metadata_info @ 1` | enrichment | for the `group_left` join |
+| `user_threshold @ threshold` (with the recipe id + severity + name + mode) | threshold + labels | the id comes straight from the compiler (see §5.3), not re-derived |
+| `tenant_metadata_info @ 1` | metadata attach | for the rule's `group_left` join |
 
-> The preview's synthetic input **always supplies** `tenant_metadata_info`, so the previewed alert is enriched; at real runtime, if a tenant lacks metadata the alert still fires but runbook / owner labels are empty — an ADR-024 runtime concern, orthogonal to preview.
+> The synthetic input **always supplies** `tenant_metadata_info`, so the preview shows the full alert with runbook/owner; in the real environment, if a tenant lacks metadata the alert still fires, those labels are just empty — that's a separate runtime concern, unrelated to preview.
 
-**The key boundary** — only the series' **shape** is recipe-type-dependent:
+**The key dividing line — only the series' *shape* depends on the recipe type**:
 
-- **threshold / equals**: a **flat constant series** (e.g. `1500x48`). `for:` is satisfied by series length, no slope / trend → **MVP scope**.
-- **rate / ratio / forecast / absence**: need recipe-type-aware shapes (rate = slope, ratio = numerator + denominator, forecast = trend + lookback, absence = gap) → **P3 defer**.
+- **threshold types**: a **flat constant series** (the value held steady). This is exactly why threshold previews are cheap: a single fixed value suffices, no slope or trend needed.
+- **rate / ratio / forecast / absence**: need a type-specific shape (rate needs a slope, ratio a numerator + denominator, forecast a trend, absence a gap) → deferred.
 
-> Gemini's "Time-Vector shield" (a single value can't drive `for:` / `rate` / `forecast`) only hits the **time-dependent** types; threshold/equals are unaffected — which is exactly why the MVP closes the loop cheaply.
+> The preview answers "would it fire at this value/scenario", not "is the rule itself correct" — the latter is guaranteed by existing CI tests. So a single test value is correct and sufficient for threshold types; multi-series cases (replicas, trends) wait for a future extension.
 
-> **Preview evaluates a "scenario", it does not re-test rule correctness.** E.g. `==` multi-replica any-match (#819) correctness is guaranteed by the CI golden; the preview only answers "at this value/scenario, does it fire". A single test value is **correct and sufficient** for the threshold/equals preview question; multi-series scenarios (replicas, trends) are a future scenario-model extension.
+### 5.2 Eval mechanism: ask `promtool` to "assert nothing fires" — if it objects, it fires
 
-### 5.2 Eval mechanism: inverted-assert probe (empirically tested, promtool 2.53.2)
+`promtool test rules` is an **assert** tool (it compares against "which alerts you expect to fire") — it won't volunteer "who fired", but the preview doesn't know the answer. So we use it in reverse: feed the synthetic input + **assert "no alert fires" (`exp_alerts: []`)**, then read `promtool`'s reaction:
 
-`promtool test rules` is an **assert** tool (it compares against `exp_alerts`), not an eval tool that "reports who fired" — and the preview doesn't know the answer. The solution is an **inverted assert**: synthetic input + **`exp_alerts: []` (claim nothing fires)**, then read `promtool`'s result:
-
-| promtool result | verdict |
+| `promtool` result | verdict |
 |---|---|
-| `returncode == 0` (SUCCESS) | nothing fired → `inactive` |
-| `returncode != 0` (FAILED) | something fired → `firing`; the mismatch "got" block **carries the actual alert** (labels + annotations + severity) |
+| success (returncode 0) | no alert fired → `inactive` |
+| failure, output containing `FAILED:` + a non-empty `got:` (the alerts that actually fired) | an alert fired → `firing`; that block carries the labels / annotations |
+| failure **without** the above signature | compile/syntax error, timeout, killed, etc. → `error` (**must never be treated as firing**) |
 
-Empirically (example pack + threshold golden, `exp_alerts` flipped to `[]`): value 1500 > 1000 → `rc=1` with the full alert in the output (`value 1500.00 crossed…` + owner/tier/runbook); value 500 → `rc=0`. So **fire/no-fire goes by returncode (robust, no fragile string parsing)**; per-severity and label detail come from the "got" block, or run one probe per declared severity. **No** throwaway Prometheus needed (this was the external reviewer's original concern, refuted by the test).
+Two details that must be followed (skip them and the answer is wrong):
 
-**Error ≠ firing (fail-loud)**: `rc≠0` must distinguish "actually fired" from "the rule never compiled / promtool syntax error", else an error is mislabeled as firing (= the false confidence §7 warns against). So three layers: ① `build_pack` raises `CustomAlertConfigError` on a bad recipe → `state: error`; ② run `promtool check rules` on the compiled pack first (syntax gate, already used by existing tests) → failure → `state: error`; ③ **only after syntax validates** run the `promtool test rules` inverted-assert, where `rc≠0` then reliably means "fire".
+1. **The eval time must be greater than the recipe's `for:` window.** Before `for:` is satisfied an alert is *pending* (not yet firing), and "assert nothing fires" does **not** count pending as a violation → `promtool` returns success → the preview wrongly reports "doesn't fire" (even though the value already crossed the threshold). So the synthetic test's eval time must be **strictly greater than `for:`** (e.g. `for: 30m` → eval at 35m), and the series must be long enough to span `for:`.
+2. **A non-zero returncode does not mean "fired".** An OOM kill, a missing `promtool`, or a malformed synthetic test file all return non-zero. Blindly treating "non-zero" as firing would report an infrastructure error as firing. So a `firing` verdict **must also** see the failure signature (`FAILED:` + `got:`); otherwise it is `error`, surfacing the real error.
 
-### 5.3 Single-recipe compilation + native Python reuse
+To make sure a compile failure is never mislabeled as "fired", gate in three layers: ① the compiler raises on a bad recipe → `error`; ② the compiled rules first pass `promtool check rules` (syntax) → failure is `error`; ③ only after syntax passes do we run the assert above.
 
-The facade is Python, so it **imports the compiler directly**: write the modal's single recipe into a temp `conf.d` (with a minimal `_defaults.yaml`) → `compile_custom_alerts.build_pack(temp_dir)` → get the rules and the `shape.recipe_id()` slug. The slug comes from calling the compiler's **own function**, not a Go / regex re-derivation — so "two eval homes, never re-implement" is **natively satisfied with zero cross-language drift** under a Python facade (also a bonus of choosing option A). A single recipe compiled in an isolated temp tree is exactly "if you declare this recipe, here's what it looks like" — precisely what the preview wants.
+> Verified locally (`promtool` 2.53.2): value 1500 > threshold 1000 → failure, output carries the full alert; value 500 → success. The whole thing uses existing tools — no separate Prometheus instance needed.
 
-## 6. Three production guardrails
+### 5.3 Single-recipe compilation + reusing the compiler directly
 
-`promtool` is a ~1s subprocess fork (the #655 order-of-magnitude; ADR-024 §5 already notes prod doesn't bundle it). The preview service forks per request, so it needs guardrails:
+The service is Python, so it **imports the compiler directly**: write the form's single recipe into a temporary config → call the compiler → get the rules, plus the recipe id it computed. The id comes from calling the **compiler's own function**, not from a regex or a Go re-derivation — which is why "reuse directly, zero cross-language rewrite" falls out naturally with a Python service. A single recipe compiled in an isolated temporary config is exactly "here's what your recipe would look like", which is what the preview wants.
 
-1. **concurrency cap** — limit simultaneous forks, queue / reject when full (prevents a fork storm).
-2. **per-request timeout** — kill `promtool` on timeout, return `state: error` (prevents zombies / hangs).
-3. **rate-limit** — per-tenant throttle (prevents it becoming a DoS surface).
-4. **UX corollary** — because of the ~1s fork, **no live slider spamming**: a manual "Run preview" button + loading state. This compromise is back-derived from the "don't re-implement eval (stick to promtool)" rule.
-5. **promtool version pin** — the inverted-assert returncode / output format is a **version-dependent contract** (tested against 2.53.2); the facade image must pin the promtool version and log `promtool --version` at startup.
+## 6. Production guardrails
 
-## 7. Honest per-type gating (avoiding false confidence)
+Each `promtool` eval is an ~1s subprocess fork; the preview service forks per request, so it needs:
 
-The MVP only supports threshold/equals preview. Other types **must not be silent** — the portal explicitly shows "would-fire preview for this recipe type is coming soon" for unsupported types, rather than faking it or leaving a blank.
+1. **A concurrency cap** — limit simultaneous forks; queue / reject when full.
+2. **A per-request timeout** — kill `promtool` on timeout, return `error`.
+3. **Rate limiting** — per tenant, so it can't be used as an attack surface.
+4. **Interaction design** — because of the ~1s latency, no live spamming; a manual "Run preview" button + loading state.
+5. **A pinned `promtool` version** — the returncode / output format above is a version-bound contract (baseline 2.53.2); the service image pins the version and logs it at startup.
 
-Reason: if the portal lets a user **save** a ratio recipe but gives **no** preview, the user assumes "saved = correct" = false confidence (violates fail-loud). So loop-closure is declared **per type**, and we **do not claim full loop-closure from threshold-only**.
+## 7. Honestly mark types that aren't supported yet
 
-**Mechanism**: the facade hardcodes `SUPPORTED_RECIPES_MVP = {threshold, equals}`; a type not in the set → immediately return `supported: false` + warning, **no compile attempted** — so an unsupported type is never mislabeled `firing` or `error` (mutually exclusive with the §5.2 error path).
+The first version supports only threshold types. Other types **must not be silent** — for an unsupported type, the portal must clearly show "preview for this type is coming soon" rather than pretend it works or leave a blank.
+
+The reason: if a user can **save** a ratio recipe but **can't see** a preview, they'll assume "saved means correct" — which is false confidence. So "closing the loop" is declared **per type**; supporting threshold does not let us claim the whole thing is done.
+
+The mechanism: the service hardcodes the supported set (currently `{threshold}`, covering its operators); anything not in it returns `supported: false` + a note and **does not attempt a compile** — so an unsupported type can never be mislabeled `firing` or `error`.
 
 ## 8. Phased delivery
 
 | Phase | Scope | Status |
 |---|---|---|
-| **P1** (this doc) | facade host + contract freeze + guardrails + synthetic-input design; flat tool gets `_custom_alerts` fail-loud | ← this PR |
-| **P2** | threshold/equals MVP — standalone Python preview service (try-local) + flat-series generator + portal modal renderer (data-source-agnostic) + per-type gating | next |
-| **P3** | time-vector types — recipe-type-aware series generator + scenario-model UX + per-type gating flip | defer (§9) |
+| **Design (this doc)** | Backend shape + contract + guardrails + synthetic-input design; flat tool gets a recipe notice | This PR |
+| **First implementation** | threshold types: standalone Python service (try-local) + synthetic-series generator + portal form rendering + type gating | Next |
+| **Time-dependent types** | rate/ratio/forecast/absence: type-specific series generator + scenario model + open per type | Deferred (see end) |
 
-## 9. Defer-with-trigger (each with a concrete trigger, not a vague TODO)
+## 9. Deferred items (each with a concrete trigger — not a vague TODO)
 
 | Deferred item | Trigger |
 |---|---|
-| **prod deployment of the preview service** | a real prod customer authoring in the portal who wants preview (when try-local / onboarding isn't enough). Re-evaluate host then: standalone deployment vs folding into an existing service |
-| **P3 time-vector types** (rate/ratio/forecast/absence) | domain/tenant actually want preview for those types |
-| **B2 historical backtest** ("how many times did my real data fire in the past 24h") | the recipe's recording rule lands + `for:` semantics are ready |
-| **A1 rule-pack matrix-impact CI** (+ snapshot pipeline) | a rule-pack change causes an unexpected fleet-wide alert shift / SRE wants pre-merge blast-radius. **Note**: recipe preview uses synthetic input and does **not** need the snapshot pipeline; snapshots belong to A1 only |
-| **route attribution** (who gets paged) | a consumer genuinely needs it (belongs to the four-layer routing component) |
-| **A2 operator migration-PR backtest** | the operator (#692) is un-deferred |
+| Production deployment of the preview service | A real production customer authoring in the portal who needs preview (when try-local / onboarding isn't enough). Re-evaluate the deployment shape then |
+| Time-dependent types (rate/ratio/forecast/absence) | Domain experts / tenants actually need previews for these types |
+| Historical backtest ("how many times did my real data fire in the past 24h") | The recipe's recording rule lands; `for:` semantics ready |
+| Rule-pack impact-matrix CI (assess fleet-wide impact before changing a rule-pack) | A rule-pack change causes an unexpected fleet-wide alert shift, or a pre-merge impact assessment is needed. Note: the preview uses synthetic input and does **not** need this one's snapshot data |
+| "Who gets paged" attribution | A consumer genuinely needs it (belongs to the notification-routing component) |
+| Operator migration backtest | When the operator is un-deferred |
 
-## 10. Audience / isolation
+## 10. Users and isolation
 
-recipe preview = **domain expert (authoring) + tenant (own recipe)**: evaluating **their own** recipe + **synthetic** input → **safe** — no cross-tenant data, no historical pull, no hitting live prod-Prometheus. This differs sharply in audience and isolation from the platform-facing A1 matrix (rule-pack blast-radius, across all tenants).
+The preview's users = domain experts (writing a recipe) + tenants (their own recipe): evaluating **their own** recipe + **synthetic** input → safe (no other tenant's data, no historical pull, no hitting production Prometheus).
 
-## Cross-Reference
+## Related docs
 
-- [#657](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/657) — the spike and build-split tracker for this design.
-- [ADR-024: version-aware thresholds + custom alerts](../adr/024-version-aware-threshold-via-dimensional-label.en.md) — the recipe engine; this design is the confidence last-mile of its capability B.
-- [ADR-024 §5](../adr/024-version-aware-threshold-via-dimensional-label.en.md) — the dual-layer validation, prod image not bundling promtool → why preview is a standalone service.
-- [Runtime Canary Design](./runtime-canary.en.md) — a sibling "design-ready, deployment-deferred" design.
-- `scripts/tools/ops/backtest_threshold.py` — the flat eval home; this change added a fail-loud friendly message on `_custom_alerts` (#657).
+- [ADR-024: version-aware thresholds + custom alerts](../adr/024-version-aware-threshold-via-dimensional-label.en.md) — the recipe engine itself; this design is its "confirm as you write" last mile.
+- [ADR-024 §5](../adr/024-version-aware-threshold-via-dimensional-label.en.md) — the decision to keep `promtool` out of the production core image, also a reason the preview is a standalone service.
+- [Runtime Canary Design](./runtime-canary.en.md) — likewise a "design-ready, deployment-deferred" sibling design.
+- `scripts/tools/ops/backtest_threshold.py` — the flat-threshold eval engine; this change adds the explicit notice when it meets a recipe.

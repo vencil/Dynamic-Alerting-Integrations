@@ -48,7 +48,7 @@ lang: zh
 | `docs/design/config-driven.md` (.en.md) | Platform Engineers, DevOps | Config-Driven 架構設計 — 三態配置、動態路由、Tenant API |
 | `docs/design/high-availability.md` (.en.md) | Platform Engineers, DevOps | 高可用性 (HA) 設計 — 副本、PDB、防雙倍計算 |
 | `docs/design/README.md` (.en.md) | Platform Engineers, DevOps | 設計深潛導覽 — 架構 spoke 文件 |
-| `docs/design/recipe-would-fire-preview.md` (.en.md) | Platform Engineers, Domain Experts (DBA), SREs | Recipe would-fire 預覽設計 — 自訂告警的 authoring→confidence 閉環 |
+| `docs/design/recipe-would-fire-preview.md` (.en.md) | Platform Engineers, Domain Experts (DBA), SREs | Recipe would-fire 預覽設計 — 填完當場確認告警會不會觸發 |
 | `docs/design/roadmap-future.md` (.en.md) | Platform Engineers, DevOps | 未來擴展路線 — K8s Operator、Design System、Auto-Discovery 等 |
 | `docs/design/rule-packs.md` (.en.md) | Platform Engineers, DevOps | Rule Packs 與 Projected Volume 架構 |
 | `docs/design/runtime-canary.md` (.en.md) | Platform Engineers, SREs | Runtime Canary 設計 — 自訂告警編譯管線的端到端活性保證 |
