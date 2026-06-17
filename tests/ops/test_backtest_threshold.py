@@ -406,3 +406,99 @@ class TestRiskThresholds:
         """HIGH > MEDIUM > LOW。"""
         assert bt.RISK_THRESHOLDS["HIGH"] > bt.RISK_THRESHOLDS["MEDIUM"]
         assert bt.RISK_THRESHOLDS["MEDIUM"] > bt.RISK_THRESHOLDS["LOW"]
+
+
+# ── 自訂告警 recipe 感知（#657 fail-loud）─────────────────────────
+
+
+class TestCustomAlertDetection:
+    """find_custom_alert_tenants / keep_flat_threshold_changes — 把 flat 工具
+    對 _custom_alerts 的隱性無-recipe-path 補成顯性 fail-loud。conf.d 用
+    `tenants: {<id>: {<metric>: <value>, _custom_alerts: [...]}}` 包裹格式。"""
+
+    def _write(self, d, name, text):
+        with open(os.path.join(d, name), "w") as f:
+            f.write(text)
+
+    _RECIPE_BLOCK = (
+        "    _custom_alerts:\n"
+        "      - recipe: threshold\n"
+        "        name: q\n"
+        "        metric: mysql_global_status_threads_connected\n"
+        "        op: '>'\n"
+        "        window: 5m\n"
+        "        threshold: '150:warning'\n"
+    )
+
+    def test_detects_recipe_tenant(self):
+        """tenants.<id>._custom_alerts 非空 → 該租戶 id 被偵測，純 flat 租戶不誤報。"""
+        with tempfile.TemporaryDirectory() as d:
+            self._write(d, "db-b.yaml",
+                        "tenants:\n  db-b:\n    mysql_connections: '100'\n" + self._RECIPE_BLOCK)
+            self._write(d, "db-a.yaml",
+                        "tenants:\n  db-a:\n    mysql_connections: '70'\n")
+            parsed = bt.load_conf_files([
+                os.path.join(d, "db-b.yaml"),
+                os.path.join(d, "db-a.yaml"),
+            ])
+            assert bt.find_custom_alert_tenants(parsed) == ["db-b"]
+
+    def test_empty_custom_alerts_not_flagged(self):
+        """空 _custom_alerts（[]）不算 recipe 租戶。"""
+        with tempfile.TemporaryDirectory() as d:
+            self._write(d, "db-b.yaml",
+                        "tenants:\n  db-b:\n    mysql_connections: '100'\n    _custom_alerts: []\n")
+            parsed = bt.load_conf_files([os.path.join(d, "db-b.yaml")])
+            assert bt.find_custom_alert_tenants(parsed) == []
+
+    def test_multi_tenant_file_uses_key_not_filename(self):
+        """一個檔含多租戶 → 只有帶 recipe 的那個 id 被列出（id 來自 key，非檔名）。"""
+        with tempfile.TemporaryDirectory() as d:
+            self._write(d, "shop.yaml",
+                        "tenants:\n"
+                        "  shop-a:\n    mysql_connections: '80'\n"
+                        "  shop-b:\n    mysql_connections: '90'\n" + self._RECIPE_BLOCK)
+            parsed = bt.load_conf_files([os.path.join(d, "shop.yaml")])
+            assert bt.find_custom_alert_tenants(parsed) == ["shop-b"]
+
+    def test_skips_underscore_platform_files(self):
+        """_ 前綴平台檔（如 _defaults.yaml）不被當成租戶。"""
+        with tempfile.TemporaryDirectory() as d:
+            self._write(d, "_defaults.yaml", "defaults:\n  mysql_connections: '50'\n")
+            parsed = bt.load_conf_files([os.path.join(d, "_defaults.yaml")])
+            assert parsed == {}
+            assert bt.find_custom_alert_tenants(parsed) == []
+
+    def test_keep_flat_drops_recipe_inner_fields(self):
+        """git-diff line parser 誤抽的 recipe 內層欄位（recipe/name/op/threshold/metric）
+        被濾掉，只留真正在 tenants.<id> 下的純量閾值。"""
+        parsed = {"db-b": {"tenants": {"db-b": {
+            "mysql_connections": "100",
+            "_custom_alerts": [{"recipe": "threshold", "name": "q",
+                                "metric": "x", "op": ">", "threshold": "150:warning"}],
+        }}}}
+        changes = [
+            {"tenant": "db-b", "metric": "mysql_connections", "old_value": "70", "new_value": "100"},
+            {"tenant": "db-b", "metric": "threshold", "old_value": "150:warning", "new_value": "200:warning"},
+            {"tenant": "db-b", "metric": "metric", "old_value": "x", "new_value": "y"},
+            {"tenant": "db-b", "metric": "op", "old_value": ">", "new_value": "<"},
+        ]
+        kept = bt.keep_flat_threshold_changes(changes, parsed)
+        assert [c["metric"] for c in kept] == ["mysql_connections"]
+
+    def test_keep_flat_keeps_when_file_unavailable(self):
+        """檔案不可得（如純移除）→ 保留，不臆測。"""
+        changes = [{"tenant": "gone", "metric": "mysql_connections",
+                    "old_value": "70", "new_value": None}]
+        assert bt.keep_flat_threshold_changes(changes, {}) == changes
+
+    def test_notice_empty_when_no_recipes(self):
+        """無 recipe 租戶 → notice 為空字串。"""
+        assert bt.custom_alert_notice([]) == ""
+
+    def test_notice_and_markdown_point_at_657(self):
+        """notice / markdown 都列出租戶並指向 #657。"""
+        note = bt.custom_alert_notice(["db-a", "db-b"])
+        assert "db-a" in note and "db-b" in note and "#657" in note
+        md = bt.custom_alert_markdown(["db-b"])
+        assert "#657" in md and "`db-b`" in md
