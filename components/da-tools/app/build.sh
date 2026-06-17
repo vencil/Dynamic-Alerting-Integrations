@@ -105,6 +105,7 @@ TOOL_FILES=(
     ops/cardinality_forecasting.py
     ops/notification_tester.py
     ops/threshold_recommend.py
+    ops/threshold_govern.py
     ops/byo_check.py
     ops/federation_check.py
     ops/grafana_import.py

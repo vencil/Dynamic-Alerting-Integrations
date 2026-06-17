@@ -170,7 +170,8 @@ def _build_tools_rules():
     # CI workflow and K8s manifest image tags
     for f in [".github/workflows/config-diff.yaml",
               ".gitlab/ci/config-diff.gitlab-ci.yml",
-              "k8s/03-monitoring/cronjob-maintenance-scheduler.yaml"]:
+              "k8s/03-monitoring/cronjob-maintenance-scheduler.yaml",
+              "k8s/03-monitoring/cronjob-threshold-govern.yaml"]:
         rules.append({
             "file": f,
             "desc": f"da-tools image tag in {f}",
