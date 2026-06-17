@@ -18,8 +18,9 @@ A11Y (ADR-012 / WCAG 1.4.1): a separate pure-JSON check asserts the two colour-c
 stat panels encode their tier/state with a symbol + text (Grafana value mappings),
 not background colour alone — it needs no promtool and runs everywhere.
 
-Skips cleanly when promtool is absent (host / a CI job without it); runs fully in
-the dev container and CI. Mirrors tests/dx/test_custom_alerts_promtool.py.
+Only the promtool golden test skips when promtool is absent (host / a CI job without
+it); the shape + a11y checks are pure JSON and run everywhere. Mirrors
+tests/dx/test_custom_alerts_promtool.py.
 """
 
 from __future__ import annotations
@@ -29,13 +30,14 @@ import subprocess
 from pathlib import Path
 
 import pytest
-import yaml
 
 _REPO = Path(__file__).resolve().parents[2]
 _DASHBOARD = _REPO / "k8s" / "03-monitoring" / "fleet-threshold-distribution.json"
 _PROMTOOL = shutil.which("promtool")
 
-pytestmark = pytest.mark.skipif(_PROMTOOL is None, reason="promtool not on PATH")
+# Only the promtool golden test needs a real Prometheus engine; the shape + a11y
+# checks are pure JSON, so the skip is scoped to that one test (not the module).
+_needs_promtool = pytest.mark.skipif(_PROMTOOL is None, reason="promtool not on PATH")
 
 # ── Synthetic fleet (the test fixture, legitimately fixed) ──────────────────
 # Scenario LAG (metric=lag, severity=warning, component=db): a spread distribution
@@ -169,8 +171,13 @@ def _build_test_file() -> dict:
     }
 
 
+@_needs_promtool
 def test_dashboard_promql_goldens(tmp_path):
     """Every covered dashboard query, read from the JSON, returns its golden value."""
+    # yaml is local to this promtool-gated path, so the pure-JSON shape + a11y tests
+    # import even where pyyaml is absent.
+    import yaml
+
     test_file = tmp_path / "fleet_dashboard_promql_test.yaml"
     test_file.write_text(yaml.safe_dump(_build_test_file(), sort_keys=False), encoding="utf-8")
     result = subprocess.run(
@@ -239,7 +246,9 @@ def _mapping_texts(panel: dict) -> list[str]:
 
 def test_colour_coded_panels_carry_noncolour_severity_channel():
     """ADR-012 / WCAG 1.4.1: the colour-coded stat panels encode their tier/state
-    with a symbol + text (value mappings), not background colour alone."""
+    with a symbol + text (value mappings), not background colour alone — and EVERY
+    colour tier (threshold step) must have a symbol-bearing counterpart, so no state
+    (including the alarming one) is left distinguished by colour alone."""
     panels = _load_panels()
     for title_substr in ("sample adequacy", "Outliers"):
         panel = next((p for p in panels if title_substr in p.get("title", "")), None)
@@ -251,8 +260,13 @@ def test_colour_coded_panels_carry_noncolour_severity_channel():
             f"panel {panel['title']!r} is colour-coded but has NO value mappings — "
             f"tier/state is colour-only (ADR-012 / WCAG 1.4.1 violation)"
         )
-        joined = " ".join(texts)
-        assert any(sym in joined for sym in _A11Y_SYMBOLS), (
-            f"panel {panel['title']!r} mappings {texts!r} carry no a11y symbol from "
-            f"{_A11Y_SYMBOLS} — colour-blind operators can't read the tier"
+        symbol_texts = [t for t in texts if any(sym in t for sym in _A11Y_SYMBOLS)]
+        n_steps = len(
+            panel.get("fieldConfig", {}).get("defaults", {}).get("thresholds", {}).get("steps", [])
+        )
+        # One symbol-bearing mapping per colour tier → no tier is colour-only.
+        assert len(symbol_texts) >= n_steps, (
+            f"panel {panel['title']!r}: {len(symbol_texts)} symbol-bearing mapping text(s) "
+            f"{symbol_texts!r} for {n_steps} colour tiers — a state (e.g. the alarming one) "
+            f"is still distinguished by colour alone (ADR-012 / WCAG 1.4.1)"
         )

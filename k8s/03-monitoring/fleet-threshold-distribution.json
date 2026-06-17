@@ -117,7 +117,8 @@
           "color": { "mode": "thresholds" },
           "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] },
           "mappings": [
-            { "type": "value", "options": { "0": { "text": "✓ 0", "index": 0 } } }
+            { "type": "value", "options": { "0": { "text": "✓ 0", "index": 0 } } },
+            { "type": "range", "options": { "from": 1, "to": null, "result": { "text": "⚠ ≥1", "index": 1 } } }
           ]
         }
       },

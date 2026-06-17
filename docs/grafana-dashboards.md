@@ -256,7 +256,7 @@ da-tools grafana-import \
 
 | 區 | Panel | 說明 |
 |---|-------|------|
-| 頂列 | **Tenants（樣本充足度）/ P50 / P95 / IQR / Tukey fences / Outliers** | 該 `(metric, severity)` 的群體統計快照：租戶樣本充足度（❌ Sparse <4／⚠ Marginal 4-7／✓ Adequate >=8，符號+文字+色三重編碼）、中位數、P95、四分位距、離群邊界、離群租戶數（✓ 0／紅底數字） |
+| 頂列 | **Tenants（樣本充足度）/ P50 / P95 / IQR / Tukey fences / Outliers** | 該 `(metric, severity)` 的群體統計快照：租戶樣本充足度（❌ Sparse <4／⚠ Marginal 4-7／✓ Adequate >=8，符號+文字+色三重編碼）、中位數、P95、四分位距、離群邊界、離群租戶數（✓ 0／⚠ ≥1，符號+文字標示） |
 | 中列左 | **Threshold value distribution（Histogram）** | 全租戶當前閾值的分布形狀——揭露平均值會藏住的**雙峰**或**長尾**。最高的那根通常是平台預設值 |
 | 中列右 | **Fleet quantile band over time（P5/P50/P95）** | 分布隨時間的漂移。band 變寬＝跨租戶分歧擴大；P50 數週緩升＝「**閾值腐敗**」訊號（某租戶事故時調鬆後忘了調回） |
 | 底列左 | **All tenants — value & deviation**（Table） | 全租戶當前值 + 與中位數的帶號偏差，依偏差排序——脈絡盤點 |

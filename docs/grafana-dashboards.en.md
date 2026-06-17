@@ -256,7 +256,7 @@ da-tools grafana-import \
 
 | Region | Panel | Description |
 |--------|-------|-------------|
-| Top row | **Tenants (sample adequacy) / P50 / P95 / IQR / Tukey fences / Outliers** | Population snapshot for the `(metric, severity)`: tenant sample adequacy (❌ Sparse <4 / ⚠ Marginal 4-7 / ✓ Adequate >=8 — symbol + text + colour), median, P95, interquartile range, outlier fences, outlier count (✓ 0 / red number) |
+| Top row | **Tenants (sample adequacy) / P50 / P95 / IQR / Tukey fences / Outliers** | Population snapshot for the `(metric, severity)`: tenant sample adequacy (❌ Sparse <4 / ⚠ Marginal 4-7 / ✓ Adequate >=8 — symbol + text + colour), median, P95, interquartile range, outlier fences, outlier count (✓ 0 / ⚠ ≥1 — symbol + text) |
 | Mid left | **Threshold value distribution (Histogram)** | Distribution of every tenant's current threshold — reveals the bimodality or long tail the average hides. The tallest bar is usually the platform default |
 | Mid right | **Fleet quantile band over time (P5/P50/P95)** | Drift of the distribution over time. A widening band = growing cross-tenant disagreement; a P50 creeping up over weeks = the "**threshold rot**" signal (a tenant loosened during an incident and never tightened back) |
 | Bottom left | **All tenants — value & deviation** (Table) | Every tenant's current value + signed deviation from the median, sorted — context inventory |
