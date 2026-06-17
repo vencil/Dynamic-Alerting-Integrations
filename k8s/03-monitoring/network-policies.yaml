@@ -343,3 +343,38 @@ spec:
           port: 53
         - protocol: TCP
           port: 53
+---
+# maintenance-scheduler CronJob: creates Alertmanager silences for recurring
+# maintenance windows (its core function). Reaches Alertmanager:9093 + DNS.
+# Without this egress allow, the monitoring-ns default-deny-all blocks the Job
+# and every silence call fails — the cron silently no-ops. (Pushgateway egress
+# is intentionally omitted: the cron's --pushgateway flag is commented out; add
+# a port-9091 rule here if it is enabled.)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-maintenance-scheduler-egress
+  namespace: monitoring
+spec:
+  podSelector:
+    matchLabels:
+      component: maintenance-scheduler
+  policyTypes:
+    - Egress
+  egress:
+    # Alertmanager (create / expire silences)
+    - to:
+        - podSelector:
+            matchLabels:
+              app: alertmanager
+      ports:
+        - protocol: TCP
+          port: 9093
+    # DNS resolution
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
