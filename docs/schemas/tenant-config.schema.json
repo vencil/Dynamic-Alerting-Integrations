@@ -144,6 +144,19 @@
               }
             ]
           ]
+        },
+        "expires": {
+          "type": "string",
+          "format": "date-time",
+          "title": "Override Expiry (time-boxed threshold, PREVENT #656)",
+          "description": "ISO 8601 / RFC 3339 instant after which this override auto-reverts to the platform default (fail-safe: more protection, never silent) and emits da_config_event{event=\"threshold_expired\"} to trigger a cleanup PR. v1: honored only on base standard metrics (those in _defaults.yaml); ignored on dimensional / _critical / custom-alert keys.",
+          "examples": ["2026-07-01T00:00:00Z"]
+        },
+        "reason": {
+          "type": "string",
+          "title": "Expiry Reason",
+          "description": "Human-readable reason for the time-boxed override (e.g. the incident it mitigates). Surfaced in da_config_event on expiry.",
+          "examples": ["incident #1234 mitigation", "load-test window"]
         }
       },
       "additionalProperties": false

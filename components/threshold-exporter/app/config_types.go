@@ -23,6 +23,7 @@ type (
 	ResolvedStateFilter       = config.ResolvedStateFilter
 	ResolvedSilentMode        = config.ResolvedSilentMode
 	ResolvedMaintenanceExpiry = config.ResolvedMaintenanceExpiry
+	ResolvedThresholdExpiry   = config.ResolvedThresholdExpiry
 	RecurringSchedule         = config.RecurringSchedule
 	TenantMetadata            = config.TenantMetadata
 	ResolvedMetadata          = config.ResolvedMetadata

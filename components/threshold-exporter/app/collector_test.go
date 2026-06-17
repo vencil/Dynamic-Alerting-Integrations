@@ -98,6 +98,30 @@ func TestCollector_Collect_MaintenanceExpiry(t *testing.T) {
 	_ = eventCount // Just verify no panic
 }
 
+// Collect — expired threshold override emits da_config_event (PREVENT #656).
+// The metric key is encoded into the reason so each (tenant, metric) event is a
+// distinct series; the threshold VALUE itself fail-safes to the default
+// (user_threshold, not compared here).
+func TestCollector_Collect_ThresholdExpiry_EmitsEvent(t *testing.T) {
+	cfg := &ThresholdConfig{
+		Defaults: map[string]float64{"mysql_connections": 80},
+		Tenants: map[string]map[string]ScheduledValue{
+			"db-a": {"mysql_connections": {Default: "2000", Expires: "2020-01-01T00:00:00Z", Reason: "incident #1234"}},
+		},
+	}
+	manager := newTestManager(cfg)
+	collector := NewThresholdCollector(manager)
+
+	expected := `
+# HELP da_config_event Config lifecycle event (1=event active). Emitted when timed config expires. Labels identify event type and tenant.
+# TYPE da_config_event gauge
+da_config_event{event="threshold_expired",reason="mysql_connections: incident #1234",tenant="db-a"} 1
+`
+	if err := testutil.CollectAndCompare(collector, strings.NewReader(expected), "da_config_event"); err != nil {
+		t.Errorf("da_config_event mismatch: %v", err)
+	}
+}
+
 // ============================================================
 // MetricsHandler — returns valid HTTP handler
 // ============================================================
@@ -282,18 +306,18 @@ func TestConfigViewHandler_CustomLabelsDisplay(t *testing.T) {
 func TestCollector_FullConfig(t *testing.T) {
 	cfg := &ThresholdConfig{
 		Defaults: map[string]float64{
-			"mysql_connections": 80,
+			"mysql_connections":  80,
 			"mysql_slow_queries": 100,
 		},
 		Tenants: map[string]map[string]ScheduledValue{
 			"db-a": {
-				"mysql_connections":  SV("90"),
+				"mysql_connections": SV("90"),
 				"_silent_mode":      SV("critical"),
 				"_severity_dedup":   SV("enable"),
 				"_metadata":         SV("owner: dba-team\ntier: gold"),
 			},
 			"db-b": {
-				"mysql_connections":  SV("70"),
+				"mysql_connections": SV("70"),
 				"_severity_dedup":   SV("disable"),
 			},
 		},

@@ -35,12 +35,16 @@ func (sv *ScheduledValue) UnmarshalYAML(value *yaml.Node) error {
 			var structured struct {
 				Default   string               `yaml:"default"`
 				Overrides []TimeWindowOverride `yaml:"overrides"`
+				Expires   string               `yaml:"expires"` // PREVENT #656: time-boxed override
+				Reason    string               `yaml:"reason"`
 			}
 			if err := value.Decode(&structured); err != nil {
 				return err
 			}
 			sv.Default = structured.Default
 			sv.Overrides = structured.Overrides
+			sv.Expires = structured.Expires
+			sv.Reason = structured.Reason
 			return nil
 		}
 		// Arbitrary mapping (e.g., _routing): serialize back to YAML string
