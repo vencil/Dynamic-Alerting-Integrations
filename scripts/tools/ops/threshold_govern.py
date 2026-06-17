@@ -140,6 +140,21 @@ class TenantOutcome:
     message: str = ""
 
 
+@dataclass
+class UngovernedKey:
+    """A threshold governance cannot act on — lower-bound ``<`` (engine-skipped).
+
+    Surfaced so the deferred ``<`` support (#656) is an OBSERVABLE blind spot,
+    not a silent coverage hole: these never reach a PR (``recommended is None``
+    fails the gate), and ``<`` rot lowers a hit-ratio / availability floor =
+    protection silently reduced.
+    """
+
+    tenant: str
+    key: str
+    reason: str
+
+
 # ---------------------------------------------------------------------------
 # Governance gate
 # ---------------------------------------------------------------------------
@@ -195,6 +210,33 @@ def build_governance_plan(
             plans.append(TenantPlan(tenant=report.tenant, changes=changes))
     plans.sort(key=lambda p: p.tenant)
     return plans
+
+
+# The recommender marks lower-bound ``<`` thresholds (hit-ratio / availability —
+# where rot means LOWERING a floor) as skipped: a P95-upper recommendation would
+# REDUCE protection, so the engine emits ``recommended=None`` and never queries
+# them (threshold_recommend → _observed_map_lib.resolve_observed). Both engine
+# skip-reason paths share this stable token. Matching it (plus the None guard)
+# isolates the ``<`` blind spot from other skips (unmapped / no-data).
+_LOWER_BOUND_SKIP_MARKER = "lower-bound (<)"
+
+
+def collect_ungoverned_lower_bound(
+    reports: list["recommend.TenantRecommendation"],
+) -> list[UngovernedKey]:
+    """Lower-bound ``<`` keys the engine skipped → the governance blind spot.
+
+    These fail the gate silently (``recommended is None``), so surfacing a count
+    keeps the deferred ``<`` support (#656) observable instead of an invisible
+    coverage hole. NOT actionable here (no PR) — they need manual review.
+    """
+    out: list[UngovernedKey] = []
+    for report in reports:
+        for r in report.keys:
+            if r.recommended is None and _LOWER_BOUND_SKIP_MARKER in (r.reason or ""):
+                out.append(UngovernedKey(report.tenant, r.key, r.reason))
+    out.sort(key=lambda u: (u.tenant, u.key))
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -529,12 +571,35 @@ def open_governance_pr(
 # Reporting
 # ---------------------------------------------------------------------------
 def format_text_report(
-    plans: list[TenantPlan], outcomes: list[TenantOutcome], applied: bool
+    plans: list[TenantPlan], outcomes: list[TenantOutcome], applied: bool,
+    ungoverned: Optional[list["UngovernedKey"]] = None,
 ) -> str:
     lines: list[str] = []
     mode = "APPLY" if applied else "DRY-RUN (no writes — pass --apply to open PRs)"
     lines.append(f"Threshold governance loop — {mode}")
     lines.append("=" * 78)
+
+    def _ungoverned_lines() -> list[str]:
+        ung = ungoverned or []
+        if not ung:
+            return []
+        head = (
+            f"⚠ {len(ung)} 個閾值未治理（lower-bound `<`，需人工 review；#656 DETECT `<` 暫緩）："
+            if _LANG == "zh" else
+            f"⚠ {len(ung)} threshold(s) ungoverned (lower-bound `<`, manual review — "
+            "#656 DETECT `<` deferred):"
+        )
+        return ["", "-" * 78, head] + [f"    {u.tenant} / {u.key}" for u in ung]
+
+    def _ungoverned_note() -> str:
+        # Folded into Summary so a tail-scan catches the blind spot even when the
+        # per-tenant output is long; the detail list sits just above the summary.
+        n = len(ungoverned or [])
+        if not n:
+            return ""
+        return (f" ⚠ 另有 {n} 個 lower-bound `<` 閾值未治理（需人工 review）。"
+                if _LANG == "zh" else
+                f" ⚠ {n} lower-bound `<` threshold(s) also ungoverned (manual review).")
 
     if not plans:
         lines.append(
@@ -542,6 +607,7 @@ def format_text_report(
             if _LANG == "zh" else
             "No thresholds need governance (all within margin or low-confidence)."
         )
+        lines += _ungoverned_lines()
         return "\n".join(lines)
 
     for plan in plans:
@@ -568,6 +634,11 @@ def format_text_report(
             detail = o.pr_url or o.message
             lines.append(f"  [{tag}] {o.tenant}: {detail}")
 
+    # Blind-spot detail goes ABOVE the bottom line so Summary stays the last line
+    # a reader scanning the tail expects (CLI bottom-line convention); the count
+    # itself is folded into Summary via _ungoverned_note().
+    lines += _ungoverned_lines()
+
     opened = sum(1 for o in outcomes if o.status == "pr_opened")
     pending = sum(1 for o in outcomes if o.status == "already_pending")
     errors = sum(1 for o in outcomes if o.status == "error")
@@ -575,31 +646,35 @@ def format_text_report(
     if applied:
         lines.append(
             f"Summary: {opened} PR(s) opened, {pending} already-pending (skipped), "
-            f"{errors} error(s); {len(plans)} tenant(s) actionable."
+            f"{errors} error(s); {len(plans)} tenant(s) actionable." + _ungoverned_note()
         )
     else:
         total_changes = sum(len(p.changes) for p in plans)
         lines.append(
             f"Summary: {len(plans)} tenant(s) / {total_changes} change(s) would get a PR. "
-            "Re-run with --apply to open them."
+            "Re-run with --apply to open them." + _ungoverned_note()
         )
     return "\n".join(lines)
 
 
 def format_json_report(
-    plans: list[TenantPlan], outcomes: list[TenantOutcome], applied: bool
+    plans: list[TenantPlan], outcomes: list[TenantOutcome], applied: bool,
+    ungoverned: Optional[list["UngovernedKey"]] = None,
 ) -> str:
+    ung = ungoverned or []
     out = {
         "tool": "threshold-govern",
         "applied": applied,
         "plans": [asdict(p) for p in plans],
         "outcomes": [asdict(o) for o in outcomes],
+        "ungoverned_lower_bound": [asdict(u) for u in ung],
         "summary": {
             "tenants_actionable": len(plans),
             "changes": sum(len(p.changes) for p in plans),
             "prs_opened": sum(1 for o in outcomes if o.status == "pr_opened"),
             "already_pending": sum(1 for o in outcomes if o.status == "already_pending"),
             "errors": sum(1 for o in outcomes if o.status == "error"),
+            "ungoverned_lower_bound": len(ung),
         },
     }
     return json.dumps(out, indent=2, ensure_ascii=False)
@@ -608,10 +683,14 @@ def format_json_report(
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
-def run(args: argparse.Namespace) -> tuple[list[TenantPlan], list[TenantOutcome]]:
+def run(
+    args: argparse.Namespace,
+) -> tuple[list[TenantPlan], list[TenantOutcome], list[UngovernedKey]]:
     """Run the recommender, gate, and (if --apply) open per-tenant PRs.
 
-    Returns ``(plans, outcomes)``. In dry-run, outcomes is empty (no writes).
+    Returns ``(plans, outcomes, ungoverned)``. In dry-run, outcomes is empty (no
+    writes). ``ungoverned`` is the lower-bound ``<`` blind spot — always surfaced,
+    independent of --apply, since it is informational (no PR is ever opened).
     """
     reports = recommend.run_analysis(
         args.config_dir,
@@ -622,10 +701,11 @@ def run(args: argparse.Namespace) -> tuple[list[TenantPlan], list[TenantOutcome]
         dry_run=False,
     )
     plans = build_governance_plan(reports, args.min_delta_pct)
+    ungoverned = collect_ungoverned_lower_bound(reports)
 
     outcomes: list[TenantOutcome] = []
     if not args.apply:
-        return plans, outcomes
+        return plans, outcomes, ungoverned
 
     opened = 0
     attempted = 0
@@ -661,7 +741,7 @@ def run(args: argparse.Namespace) -> tuple[list[TenantPlan], list[TenantOutcome]
             consecutive_errors += 1
         else:
             consecutive_errors = 0
-    return plans, outcomes
+    return plans, outcomes, ungoverned
 
 
 def main() -> None:
@@ -751,12 +831,12 @@ def main() -> None:
             print(msg, file=sys.stderr)
             sys.exit(EXIT_CALLER_ERROR)
 
-    plans, outcomes = run(args)
+    plans, outcomes, ungoverned = run(args)
 
     if args.json_output:
-        print(format_json_report(plans, outcomes, args.apply))
+        print(format_json_report(plans, outcomes, args.apply, ungoverned))
     else:
-        print(format_text_report(plans, outcomes, args.apply))
+        print(format_text_report(plans, outcomes, args.apply, ungoverned))
 
 
 if __name__ == "__main__":
