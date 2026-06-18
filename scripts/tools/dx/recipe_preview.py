@@ -1,0 +1,232 @@
+#!/usr/bin/env python3
+"""recipe_preview.py — recipe would-fire preview core (#657 P2).
+
+Given ONE ADR-024 custom-alert recipe + a scenario value, answer "would it
+fire?" by going through the SAME authoritative engine the platform uses —
+`compile_custom_alerts.build_pack` + `promtool` — never re-implementing eval
+(the two-eval-homes rule; see docs/design/recipe-would-fire-preview.md).
+
+MVP scope: the `threshold` recipe (ops >, >=, <, <=, ==). These are NOT
+time-dependent, so a flat constant synthetic series is correct + sufficient.
+Time-dependent recipes (rate / ratio / forecast / absence / p99_latency) need
+recipe-type-aware synthetic series → `supported: false` until P3.
+
+Eval mechanism (§5.2): `promtool test rules` is an ASSERT tool, so we run an
+INVERTED assert (synthetic input + `exp_alerts: []`): returncode 0 → nothing
+fired (inactive); returncode != 0 → it fired. A compile error must NOT be
+mislabeled as firing, so we gate with `build_pack` exception handling +
+`promtool check rules` (syntax) BEFORE the inverted-assert (§5.2 layering).
+"""
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+import yaml
+
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _THIS_DIR)
+import compile_custom_alerts as cc  # noqa: E402
+from custom_alerts import shape  # noqa: E402
+
+# The `threshold` recipe covers >, >=, <, <=, == (equals): all value-crossing,
+# none time-dependent → a flat series previews them correctly. The others are
+# deferred to P3 (recipe-type-aware series). Per-type gating (§7): an
+# unsupported type returns supported:false WITHOUT attempting a compile, so it
+# is never mislabeled firing/error.
+SUPPORTED_RECIPES_MVP = frozenset({"threshold"})
+
+# `for:` is enum-bounded (shape.ALLOWED_FOR). Map to minutes to size the
+# synthetic series + pick an eval_time PAST the pending window.
+_FOR_MINUTES = {"0s": 0, "1m": 1, "5m": 5, "15m": 15, "30m": 30, "1h": 60}
+
+_PROMTOOL = shutil.which("promtool")
+
+_TIMEOUT = 60
+
+
+def _labels(d):
+    """Render a Prometheus label set `{k="v", ...}` (insertion order)."""
+    return "{" + ", ".join(f'{k}="{v}"' for k, v in d.items()) + "}"
+
+
+def build_preview_test(recipe, tenant, value, slug):
+    """Build a promtool test (YAML str) for a threshold recipe — inverted assert.
+
+    Emits the minimal label-correct graph the compiled rule joins against:
+      - the observed metric @ the scenario test value (+ any selector labels);
+      - `user_threshold` @ the configured threshold, carrying the compiler's
+        recipe_id slug + severity + name (+ mode when the recipe sets it);
+      - a constant `tenant_metadata_info` for the group_left enrichment.
+    Flat constant series held long enough to clear the recipe's `for:` window.
+    Returns (yaml_text, severity, mode, threshold_value).
+    """
+    thr_value, severity = shape.parse_threshold(recipe["threshold"])
+    name = recipe["name"]
+    mode = recipe.get("mode")
+    selectors = {str(k): v for k, v in (recipe.get("selectors") or {}).items()}
+
+    for_min = _FOR_MINUTES.get(str(recipe.get("for", "1m")), 1)
+    n = for_min + 10            # series length (interval 1m): clears `for:` + buffer
+    eval_min = for_min + 5      # eval PAST the pending window
+
+    metric_labels = {"tenant": tenant, **selectors}
+    ut_labels = {
+        "component": "custom",
+        "metric": recipe["metric"],
+        "recipe_id": slug,
+        "tenant": tenant,
+        "severity": severity,
+        "name": name,
+    }
+    if mode:
+        ut_labels["mode"] = str(mode)
+
+    doc = (
+        "rule_files:\n"
+        "  - rule-pack-custom-alerts.yaml\n"
+        "evaluation_interval: 1m\n"
+        "tests:\n"
+        "  - interval: 1m\n"
+        "    input_series:\n"
+        f"      - series: '{recipe['metric']}{_labels(metric_labels)}'\n"
+        f"        values: '{value}x{n}'\n"
+        f"      - series: 'user_threshold{_labels(ut_labels)}'\n"
+        f"        values: '{thr_value}x{n}'\n"
+        f"      - series: 'tenant_metadata_info{{tenant=\"{tenant}\", "
+        f"runbook_url=\"http://rb/{tenant}\", owner=\"team-{tenant}\", tier=\"gold\"}}'\n"
+        f"        values: '1x{n}'\n"
+        "    alert_rule_test:\n"
+        f"      - eval_time: {eval_min}m\n"
+        f"        alertname: Custom_{slug}\n"
+        "        exp_alerts: []\n"
+    )
+    return doc, severity, mode, thr_value
+
+
+def _err(reason, alertname=None):
+    return {"alertname": alertname, "supported": True,
+            "states": [{"state": "error", "reason": reason}], "warnings": []}
+
+
+def classify_promtool_result(returncode, output):
+    """Map a promtool `test rules` (run with `exp_alerts: []`) result to a state.
+
+    rc != 0 alone is NOT "firing": promtool exits non-zero for OOM/kill, a
+    missing binary, or a test-file parse error too. Treating any of those as
+    "firing" would be a false positive (the exact false-confidence the design
+    forbids). So FIRING requires the alert-mismatch signature promtool prints
+    when an alert fires against our empty expectation — `FAILED:` plus a
+    non-empty `got:` block (verified verbatim on promtool 2.53.2). Anything
+    else with rc != 0 is an infrastructure/parse error → `error`.
+
+      rc == 0                      → inactive (nothing fired)
+      rc != 0 + FAILED: + got:[    → firing
+      rc != 0 otherwise            → error
+    """
+    if returncode == 0:
+        return "inactive"
+    if "FAILED:" in output and "got:[" in output:
+        return "firing"
+    return "error"
+
+
+def preview_recipe(recipe, tenant, scenario):
+    """Would-fire preview for ONE recipe. Returns the §4 contract dict:
+    {alertname, supported, states:[{severity, mode, state, reason}], warnings}.
+
+    state ∈ firing | inactive | error. Per-type gating: unsupported recipe
+    types return supported:false (no compile). promtool absent → supported:true
+    with a warning and no states (cannot evaluate locally).
+    """
+    rtype = recipe.get("recipe")
+    if rtype not in SUPPORTED_RECIPES_MVP:
+        return {
+            "alertname": None,
+            "supported": False,
+            "states": [],
+            "warnings": [
+                f"would-fire preview for recipe type {rtype!r} is coming soon "
+                f"(P3); supported now: {sorted(SUPPORTED_RECIPES_MVP)}"
+            ],
+        }
+
+    # Compute the slug via the compiler's OWN function (zero cross-language
+    # drift, §5.3). A structurally invalid recipe fails loud here → state:error.
+    try:
+        slug = shape.recipe_id(recipe)
+    except shape.RecipeError as exc:
+        return _err(str(exc))
+
+    if _PROMTOOL is None:
+        return {"alertname": f"Custom_{slug}", "supported": True, "states": [],
+                "warnings": ["promtool not available — cannot evaluate locally"]}
+
+    value = (scenario or {}).get("value")
+    if value is None:
+        return _err("scenario.value is required for a threshold preview",
+                    alertname=f"Custom_{slug}")
+
+    work = Path(tempfile.mkdtemp(prefix="recipe-preview-"))
+    try:
+        confd = work / "conf.d"
+        confd.mkdir()
+        (confd / f"{tenant}.yaml").write_text(
+            yaml.safe_dump({"tenants": {tenant: {"_custom_alerts": [recipe]}}},
+                           sort_keys=False, allow_unicode=True),
+            encoding="utf-8",
+        )
+
+        # ── compile (errors → state:error, never mislabeled firing) ──
+        try:
+            pack = cc.build_pack(confd)
+        except Exception as exc:  # RecipeError / CustomAlertConfigError / loader errors
+            return _err(f"recipe failed to compile: {exc}", alertname=f"Custom_{slug}")
+
+        pack_path = work / "rule-pack-custom-alerts.yaml"
+        pack_path.write_text(cc._render(pack["groups"]), encoding="utf-8")
+
+        # ── syntax gate, then inverted-assert; both fail-closed to state:error
+        # rather than ever mislabel an infra/timeout failure as firing (§5.2) ──
+        try:
+            chk = subprocess.run(
+                [_PROMTOOL, "check", "rules", pack_path.name],
+                cwd=work, capture_output=True, text=True, timeout=_TIMEOUT,
+            )
+            if chk.returncode != 0:
+                return _err(f"compiled rule failed promtool check: "
+                            f"{(chk.stderr or chk.stdout).strip()[:300]}",
+                            alertname=f"Custom_{slug}")
+            test_doc, severity, mode, thr_value = build_preview_test(recipe, tenant, value, slug)
+            (work / "preview_test.yaml").write_text(test_doc, encoding="utf-8")
+            res = subprocess.run(
+                [_PROMTOOL, "test", "rules", "preview_test.yaml"],
+                cwd=work, capture_output=True, text=True, timeout=_TIMEOUT,
+            )
+        except subprocess.TimeoutExpired:
+            return _err(f"promtool timed out (>{_TIMEOUT}s)", alertname=f"Custom_{slug}")
+
+        out = (res.stdout or "") + (res.stderr or "")
+        state = classify_promtool_result(res.returncode, out)
+        if state == "error":
+            return _err(f"promtool eval error (rc={res.returncode}): "
+                        f"{out.strip()[:300] or 'no output'}", alertname=f"Custom_{slug}")
+        op = recipe.get("op", ">")
+        verb = "==" if op == "==" else op
+        reason = (f"value {value} {verb} threshold {thr_value}" if state == "firing"
+                  else f"value {value} does not cross threshold {thr_value} ({op})")
+        return {
+            "alertname": f"Custom_{slug}",
+            "supported": True,
+            "states": [{
+                "severity": severity,
+                "mode": str(mode) if mode else "page",
+                "state": state,
+                "reason": reason,
+            }],
+            "warnings": [],
+        }
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
