@@ -79,6 +79,15 @@ class TestGatingAndErrors:
         assert out["states"][0]["state"] == "error"
         assert "promtool eval failed" in out["states"][0]["reason"]
 
+    def test_unsupported_for_window_is_error(self, monkeypatch):
+        """If `for:` is valid for the compiler but unmapped in _FOR_MINUTES
+        (enum drift), fail closed to error — never silently shrink to 1m and
+        risk a false 'inactive' (CodeRabbit #873)."""
+        monkeypatch.setattr(rp, "_FOR_MINUTES", {"5m": 5})  # drop "1m"
+        out = rp.preview_recipe(_THRESHOLD, "shop-a", {"value": 1500})  # for: 1m
+        assert out["states"][0]["state"] == "error"
+        assert "for-window" in out["states"][0]["reason"]
+
 
 # ── synthetic-input builder (pure; no promtool) ──
 

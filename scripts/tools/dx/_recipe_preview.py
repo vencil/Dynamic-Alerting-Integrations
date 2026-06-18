@@ -81,7 +81,7 @@ def build_preview_test(recipe, tenant, value, slug):
     mode = recipe.get("mode")
     selectors = {str(k): v for k, v in (recipe.get("selectors") or {}).items()}
 
-    for_min = _FOR_MINUTES.get(str(recipe.get("for", "1m")), 1)
+    for_min = _FOR_MINUTES[str(recipe.get("for", "1m"))]   # caller pre-validates membership
     n = for_min + 10            # series length (interval 1m): clears `for:` + buffer
     eval_min = for_min + 5      # eval PAST the pending window
 
@@ -202,6 +202,16 @@ def preview_recipe(recipe, tenant, scenario):
         float(value)
     except (TypeError, ValueError):
         return _err(f"scenario.value must be numeric, got {value!r}",
+                    alertname=f"Custom_{slug}")
+    # `for:` is enum-bounded by shape.ALLOWED_FOR, but the preview must also be
+    # able to SIZE the synthetic series from it. If the two ever drift (a new
+    # ALLOWED_FOR value unmapped in _FOR_MINUTES), fail closed to error rather
+    # than silently shrink the window to 1m → wrong eval_time/length → a real
+    # firing misread as inactive (CodeRabbit #873).
+    _for = str(recipe.get("for", "1m"))
+    if _for not in _FOR_MINUTES:
+        return _err(f"preview cannot size the series for for-window {_for!r} "
+                    f"(sync _FOR_MINUTES with shape.ALLOWED_FOR)",
                     alertname=f"Custom_{slug}")
 
     if _PROMTOOL is None:
