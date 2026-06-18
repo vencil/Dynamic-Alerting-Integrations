@@ -149,7 +149,7 @@
           "type": "string",
           "format": "date-time",
           "title": "Override Expiry (time-boxed threshold, PREVENT #656)",
-          "description": "ISO 8601 / RFC 3339 instant after which this override auto-reverts to the platform default (fail-safe: more protection, never silent) and emits da_config_event{event=\"threshold_expired\"} to trigger a cleanup PR. v1: honored only on base standard metrics (those in _defaults.yaml); ignored on dimensional / _critical / custom-alert keys.",
+          "description": "ISO 8601 / RFC 3339 instant after which this override auto-reverts to the platform default (fail-safe: more protection, never silent) and emits da_config_event{event=\"threshold_expired\"} to trigger a cleanup PR. v1: honored only on base standard metrics (those in _defaults.yaml); ignored on dimensional / _critical / custom-alert keys. On expiry it reverts to whatever platform default is in effect AT THAT TIME (the SSOT baseline) — which may be tighter than the default when this expires was set, if the platform default changed in between.",
           "examples": ["2026-07-01T00:00:00Z"]
         },
         "reason": {
