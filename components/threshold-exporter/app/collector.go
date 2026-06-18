@@ -58,7 +58,11 @@ func (c *ThresholdCollector) Collect(ch chan<- prometheus.Metric) {
 	// follows the m.getMetrics() pattern (see config.go IncReloadTrigger
 	// / IncParseFailure call sites); writing to the global singleton
 	// here would break that test-isolation contract.
-	resolved, stats := cfg.ResolveAtWithStats(time.Now())
+	// One timestamp for the whole scrape so threshold values and expiry events
+	// resolve consistently — a separate time.Now() per resolver could straddle an
+	// `expires:` boundary and emit a one-scrape value/event mismatch (CodeRabbit).
+	now := time.Now()
+	resolved, stats := cfg.ResolveAtWithStats(now)
 	c.manager.getMetrics().PublishTenantMetricsOverLimit(stats.PerTenantOverLimit)
 
 	// Each metric family is emitted by a focused collector method; order is
@@ -68,7 +72,7 @@ func (c *ThresholdCollector) Collect(ch chan<- prometheus.Metric) {
 	c.collectStateFilters(ch, cfg)
 	c.collectSilentModes(ch, cfg)
 	c.collectMaintenanceExpiries(ch, cfg)
-	c.collectThresholdExpiries(ch, cfg)
+	c.collectThresholdExpiries(ch, cfg, now)
 	c.collectSeverityDedup(ch, cfg)
 	c.collectConfigInfo(ch)
 	c.collectMetadata(ch, cfg)
@@ -243,14 +247,14 @@ func (c *ThresholdCollector) collectMaintenanceExpiries(ch chan<- prometheus.Met
 // metric key is encoded into the reason so each (tenant, metric) event is a
 // distinct da_config_event series (the label set is {tenant,event,reason}, so a
 // shared user reason on two metrics would otherwise collide into one series).
-func (c *ThresholdCollector) collectThresholdExpiries(ch chan<- prometheus.Metric, cfg *ThresholdConfig) {
+func (c *ThresholdCollector) collectThresholdExpiries(ch chan<- prometheus.Metric, cfg *ThresholdConfig, now time.Time) {
 	configEventDesc := prometheus.NewDesc(
 		"da_config_event",
 		"Config lifecycle event (1=event active). Emitted when timed config expires. Labels identify event type and tenant.",
 		[]string{"tenant", "event", "reason"},
 		nil,
 	)
-	for _, te := range cfg.ResolveThresholdExpiries() {
+	for _, te := range cfg.ResolveThresholdExpiriesAt(now) {
 		if !te.Expired {
 			continue // not yet past its TTL — the override is still active
 		}
