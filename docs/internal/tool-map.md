@@ -83,6 +83,7 @@ lang: zh
 | 工具 | 用途 |
 |------|------|
 | `_atomic_write.py` | Atomic write helper for regen tools (v2.8.0 Trap #60 mitigation). |
+| `_recipe_preview.py` | recipe would-fire preview core (#657 P2). |
 | `add_frontmatter.py` | Add YAML front matter to documentation files for MkDocs/Docusaurus integration. |
 | `analyze_bench_history.py` | Aggregate bench-record nightly history into per-benchmark stats. |
 | `analyze_tier1_fp_rate.py` | Tier 1 bench-gate friction-rate observer (issue #433 W3). |
@@ -113,7 +114,6 @@ lang: zh
 | `migrate_conf_d.py` | Migrate flat conf.d/ to hierarchical domain/region/env/ layout. |
 | `migrate_ssot_language.py` | SSOT 語言切換遷移工具 (DORMANT, S#101 policy lock) |
 | `pr_preflight.py` | PR Preflight Check — branch 收尾前的自動化檢查。 |
-| `recipe_preview.py` | recipe would-fire preview core (#657 P2). |
 | `render_soak_diff.py` | v2.8.0 readiness harness: chaos soak result renderer. |
 | `reword_chain.py` | 批次改寫 commit chain 的 subject line（preserve tree + author/committer date） |
 | `run_chaos_soak.py` | v2.8.0 readiness harness: compressed-time chaos soak runner. |

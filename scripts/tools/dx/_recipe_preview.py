@@ -1,15 +1,20 @@
 #!/usr/bin/env python3
-"""recipe_preview.py — recipe would-fire preview core (#657 P2).
+"""_recipe_preview.py — recipe would-fire preview core (#657 P2).
 
 Given ONE ADR-024 custom-alert recipe + a scenario value, answer "would it
 fire?" by going through the SAME authoritative engine the platform uses —
 `compile_custom_alerts.build_pack` + `promtool` — never re-implementing eval
 (the two-eval-homes rule; see docs/design/recipe-would-fire-preview.md).
 
-MVP scope: the `threshold` recipe (ops >, >=, <, <=, ==). These are NOT
-time-dependent, so a flat constant synthetic series is correct + sufficient.
-Time-dependent recipes (rate / ratio / forecast / absence / p99_latency) need
-recipe-type-aware synthetic series → `supported: false` until P3.
+MVP scope: the `threshold` recipe (ops >, >=, <, <=, ==) with at most exact
+`selectors`. These are NOT time-dependent, so a flat constant synthetic series
+is correct + sufficient. Two shapes fall back to `supported: false` because a
+flat exact-match series can't faithfully stand in for them:
+  - time-dependent recipes (rate / ratio / forecast / absence / p99_latency) —
+    need recipe-type-aware series (deferred to P3);
+  - `selectors_re` (regex label filters) — we can't synthesize a value
+    guaranteed to match an arbitrary regex, so a preview could silently report
+    a false "inactive". Refusing is honest; lying is not.
 
 Eval mechanism (§5.2): `promtool test rules` is an ASSERT tool, so we run an
 INVERTED assert (synthetic input + `exp_alerts: []`): returncode 0 → nothing
@@ -48,8 +53,16 @@ _TIMEOUT = 60
 
 
 def _labels(d):
-    """Render a Prometheus label set `{k="v", ...}` (insertion order)."""
-    return "{" + ", ".join(f'{k}="{v}"' for k, v in d.items()) + "}"
+    """Render a Prometheus label set `{k="v", ...}` (insertion order).
+
+    Values are escaped with the compiler's own `shape._escape_value`, so a
+    selector value containing a quote, backslash, or newline yields the SAME
+    label literal the compiled rule matches against — otherwise the synthetic
+    series wouldn't match (false "inactive") or would be an unparseable series.
+    """
+    return "{" + ", ".join(
+        f'{k}="{shape._escape_value(str(v))}"' for k, v in d.items()
+    ) + "}"
 
 
 def build_preview_test(recipe, tenant, value, slug):
@@ -153,6 +166,22 @@ def preview_recipe(recipe, tenant, scenario):
             ],
         }
 
+    # selectors_re (regex label filters) gate: we hand-build a flat synthetic
+    # series and can't synthesize a value guaranteed to match an arbitrary
+    # regex, so the compiled `{k=~"re"}` filter could exclude our series and
+    # the preview would silently report a false "inactive". Refuse honestly
+    # (exact `selectors` ARE reproducible — see _labels / build_preview_test).
+    if recipe.get("selectors_re"):
+        return {
+            "alertname": None,
+            "supported": False,
+            "states": [],
+            "warnings": [
+                "would-fire preview does not yet support regex selectors "
+                "(`selectors_re`); only exact `selectors` can be previewed"
+            ],
+        }
+
     # Compute the slug via the compiler's OWN function (zero cross-language
     # drift, §5.3). A structurally invalid recipe fails loud here → state:error.
     try:
@@ -167,6 +196,13 @@ def preview_recipe(recipe, tenant, scenario):
     value = (scenario or {}).get("value")
     if value is None:
         return _err("scenario.value is required for a threshold preview",
+                    alertname=f"Custom_{slug}")
+    # Numeric-only: reject e.g. "1+2" / "5.." which promtool's series grammar
+    # would misread as a slope/range rather than a flat constant → wrong verdict.
+    try:
+        float(value)
+    except (TypeError, ValueError):
+        return _err(f"scenario.value must be numeric, got {value!r}",
                     alertname=f"Custom_{slug}")
 
     work = Path(tempfile.mkdtemp(prefix="recipe-preview-"))
@@ -186,11 +222,14 @@ def preview_recipe(recipe, tenant, scenario):
             return _err(f"recipe failed to compile: {exc}", alertname=f"Custom_{slug}")
 
         pack_path = work / "rule-pack-custom-alerts.yaml"
-        pack_path.write_text(cc._render(pack["groups"]), encoding="utf-8")
 
-        # ── syntax gate, then inverted-assert; both fail-closed to state:error
-        # rather than ever mislabel an infra/timeout failure as firing (§5.2) ──
+        # ── render → syntax gate → inverted-assert. Every failure here is
+        # fail-closed to state:error rather than ever mislabel an infra / IO /
+        # timeout failure as firing (§5.2 layering). `except OSError` catches
+        # promtool vanishing after the `which` probe or an unwritable temp dir,
+        # so the {state:error} contract holds even then. ──
         try:
+            pack_path.write_text(cc._render(pack["groups"]), encoding="utf-8")
             chk = subprocess.run(
                 [_PROMTOOL, "check", "rules", pack_path.name],
                 cwd=work, capture_output=True, text=True, timeout=_TIMEOUT,
@@ -207,6 +246,8 @@ def preview_recipe(recipe, tenant, scenario):
             )
         except subprocess.TimeoutExpired:
             return _err(f"promtool timed out (>{_TIMEOUT}s)", alertname=f"Custom_{slug}")
+        except OSError as exc:
+            return _err(f"promtool eval failed: {exc}", alertname=f"Custom_{slug}")
 
         out = (res.stdout or "") + (res.stderr or "")
         state = classify_promtool_result(res.returncode, out)
