@@ -237,6 +237,182 @@ def extract_changes_from_dirs(config_dir, baseline_dir):
     return changes
 
 
+# ---------------------------------------------------------------------------
+# Custom-alert recipe awareness (#657)
+#
+# This tool is the *flat-threshold* eval home: it only understands scalar
+# `metric: value` thresholds. Custom-alert recipes (ADR-024 `_custom_alerts`)
+# are evaluated by a different authoritative engine (the compiler + promtool).
+# Without these guards a recipe-only change passes silently (the flat tool
+# finds nothing) and the line-based git-diff parser can even mis-capture a
+# recipe's inner fields as bogus flat changes. We surface recipes loudly and
+# keep them out of the flat report instead. Recipe would-fire preview: #657.
+# ---------------------------------------------------------------------------
+
+def changed_conf_files():
+    """Tenant conf.d files changed in HEAD~1..HEAD, as `conf.d/<name>` paths.
+
+    `git diff --name-only` emits REPO-ROOT-relative paths even when run from a
+    subdirectory — and CI runs this tool from components/.../config, so the raw
+    output (`components/.../conf.d/db-a.yaml`) is NOT loadable relative to cwd.
+    Reduce each to `conf.d/<basename>`, the cwd-relative form the rest of the
+    tool uses (matching the `git diff -- conf.d/` contract). Works whether
+    conf.d sits at the repo root (customer convention) or under a subtree
+    (this repo). (#657)
+    """
+    try:
+        result = subprocess.run(
+            ["git", "diff", "--name-only", "HEAD~1", "--", "conf.d/"],
+            capture_output=True, text=True, timeout=15,
+        )
+        if result.returncode != 0:
+            return []
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return []
+    return [f"conf.d/{Path(ln.strip()).name}" for ln in result.stdout.splitlines()
+            if ln.strip().endswith(".yaml")]
+
+
+def load_conf_files(paths):
+    """Parse tenant conf.d files into {tenant: parsed_dict}.
+
+    Skips platform files (`_`-prefixed) and anything that isn't a YAML
+    mapping; missing files are skipped silently (e.g. a path deleted in the
+    working tree).
+    """
+    parsed = {}
+    for p in paths:
+        path = Path(p)
+        if path.name.startswith("_") or not path.is_file():
+            continue
+        data = load_yaml_file(str(path), default={})
+        if isinstance(data, dict):
+            parsed[path.stem] = data
+    return parsed
+
+
+def find_custom_alert_tenants(parsed):
+    """Tenant IDs that declare a non-empty `_custom_alerts` block.
+
+    conf.d wraps tenants as `tenants: {<id>: {<metric>: <value>,
+    _custom_alerts: [...]}}`, so recipes live at `tenants.<id>._custom_alerts`
+    (NOT top-level) and the tenant id is the KEY (not the filename). These
+    recipes are evaluated by the compiler+promtool eval home, NOT by this
+    flat-threshold backtest. Surfacing them keeps a "no flat changes" result
+    from being mistaken for "nothing to review". See issue #657.
+    """
+    found = []
+    for file_data in parsed.values():
+        tenants = file_data.get("tenants")
+        if not isinstance(tenants, dict):
+            continue
+        for tid, tconf in tenants.items():
+            if isinstance(tconf, dict) and tconf.get("_custom_alerts"):
+                found.append(tid)
+    return sorted(set(found))
+
+
+def _flat_keys_at_head1(tenant):
+    """Top-level scalar threshold keys for `tenant` as of HEAD~1.
+
+    Used to classify a REMOVED key, which is gone from the working tree so the
+    current-file scan can't see it. `git show HEAD~1:./conf.d/<tenant>.yaml` —
+    the leading `./` forces a cwd-relative path (git's `<rev>:<path>` is
+    repo-root by default). Returns an empty set if the old file is unavailable
+    (then the removal is conservatively dropped, the prior behaviour). (#657)
+    """
+    try:
+        result = subprocess.run(
+            ["git", "show", f"HEAD~1:./conf.d/{tenant}.yaml"],
+            capture_output=True, text=True, timeout=15,
+        )
+        if result.returncode != 0:
+            return set()
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return set()
+    import yaml
+    try:
+        data = yaml.safe_load(result.stdout) or {}
+    except yaml.YAMLError:
+        return set()
+    tenants = data.get("tenants") if isinstance(data, dict) else None
+    keys = set()
+    for tconf in (tenants.values() if isinstance(tenants, dict) else []):
+        if isinstance(tconf, dict):
+            keys |= {k for k, v in tconf.items()
+                     if not str(k).startswith("_") and not isinstance(v, (dict, list))}
+    return keys
+
+
+def keep_flat_threshold_changes(changes, parsed):
+    """Drop changes whose key isn't a real flat threshold.
+
+    The line-based git-diff parser captures any `key: value` line regardless
+    of nesting, so it mis-captures `_custom_alerts` recipe inner fields
+    (recipe / name / op / window / threshold / metric / mode) as flat changes.
+    A real flat threshold is a SCALAR directly under `tenants.<id>`.
+
+    Adds / modifies are classified against the CURRENT file. A REMOVAL (the key
+    is gone from the working tree, so the current-file scan would always say
+    "not flat") is classified against HEAD~1 instead — so a real flat-threshold
+    removal (a disable transition the backtest reports) is kept, while a removed
+    recipe inner-field is dropped. (#657)
+    """
+    kept = []
+    head1 = {}
+    for c in changes:
+        if c["new_value"] is None:  # removal — the key is gone from the tree
+            if c["tenant"] not in head1:
+                head1[c["tenant"]] = _flat_keys_at_head1(c["tenant"])
+            if c["metric"] in head1[c["tenant"]]:
+                kept.append(c)
+            continue
+        file_data = parsed.get(c["tenant"])
+        if file_data is None:
+            kept.append(c)
+            continue
+        tenants = file_data.get("tenants")
+        tconfs = list(tenants.values()) if isinstance(tenants, dict) else []
+        is_flat = any(
+            isinstance(tc, dict)
+            and c["metric"] in tc
+            and not isinstance(tc[c["metric"]], (dict, list))
+            for tc in tconfs
+        )
+        if is_flat:
+            kept.append(c)
+    return kept
+
+
+def custom_alert_notice(tenants):
+    """stderr notice listing tenants with custom-alert recipes (or '' if none)."""
+    if not tenants:
+        return ""
+    listed = ", ".join(tenants)
+    return (
+        f"NOTE: {len(tenants)} tenant(s) declare custom-alert recipes "
+        f"(_custom_alerts): {listed}\n"
+        "      Recipes are evaluated by the compiler+promtool eval home, "
+        "not by this flat-threshold backtest.\n"
+        "      Recipe would-fire preview: see issue #657 (portal recipe builder)."
+    )
+
+
+def custom_alert_markdown(tenants):
+    """Markdown block surfacing recipe changes in the PR comment."""
+    listed = ", ".join(f"`{t}`" for t in tenants)
+    return (
+        "## Custom-Alert Recipes (not flat-backtested)\n"
+        "\n"
+        f"{len(tenants)} tenant(s) declare custom-alert recipes "
+        f"(`_custom_alerts`): {listed}\n"
+        "\n"
+        "> Recipes are evaluated by the **compiler + promtool** eval home, "
+        "not by this flat-threshold backtest. For a recipe would-fire preview "
+        "see [#657](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/657)."
+    )
+
+
 def backtest_change(prom_url, change, lookback_seconds):
     """Backtest a single threshold change against historical data.
 
@@ -490,10 +666,29 @@ def main():
     )
     args = parser.parse_args()
 
+    # Surface custom-alert recipes (parsed from disk; Prometheus-independent),
+    # BEFORE the availability gate — a recipe-only change must not pass
+    # silently just because the flat backtest has nothing to do or Prometheus
+    # is unreachable. Recipes use the compiler+promtool eval home, not this
+    # flat-threshold tool. (#657)
+    if args.git_diff:
+        parsed_conf = load_conf_files(changed_conf_files())
+    elif args.config_dir:
+        parsed_conf = load_conf_files(
+            [str(p) for p in sorted(Path(args.config_dir).glob("*.yaml"))]
+        )
+    else:
+        parsed_conf = {}
+    recipe_tenants = find_custom_alert_tenants(parsed_conf)
+    if recipe_tenants:
+        print(custom_alert_notice(recipe_tenants), file=sys.stderr)
+
     # Check Prometheus availability
     if not prometheus_available(args.prometheus):
         if args.skip_if_unavailable:
             print("Prometheus unavailable — skipping backtest (--skip-if-unavailable)")
+            if recipe_tenants and args.markdown_output:
+                write_text_secure(args.markdown_output, custom_alert_markdown(recipe_tenants))
             sys.exit(EXIT_OK)
         else:
             print(f"ERROR: Prometheus not reachable at {args.prometheus}", file=sys.stderr)
@@ -502,7 +697,7 @@ def main():
 
     # Extract changes
     if args.git_diff:
-        changes = extract_changes_from_git_diff()
+        changes = keep_flat_threshold_changes(extract_changes_from_git_diff(), parsed_conf)
     elif args.config_dir:
         if not args.baseline:
             print("ERROR: --config-dir requires --baseline", file=sys.stderr)
@@ -525,6 +720,8 @@ def main():
 
     if not changes:
         print("No threshold changes found.")
+        if recipe_tenants and args.markdown_output:
+            write_text_secure(args.markdown_output, custom_alert_markdown(recipe_tenants))
         sys.exit(EXIT_OK)
 
     # Run backtests
@@ -550,6 +747,8 @@ def main():
 
     if args.markdown_output:
         md = generate_markdown(report)
+        if recipe_tenants:
+            md += "\n\n" + custom_alert_markdown(recipe_tenants)
         write_text_secure(args.markdown_output, md)
         if not args.json:
             print(f"  Markdown report: {args.markdown_output}")

@@ -274,3 +274,4 @@ v2.9.0 once shipped a disk-forecast example that referenced `kubelet_volume_stat
 - [ADR-020: Tenant Federation](020-tenant-federation.md) — cross-tenant read-path isolation (prom-label-proxy).
 - [Version-Aware Thresholds usage guide](../scenarios/version-aware-thresholds.md) — the operational side of tenant declaration + platform KSM setup.
 - [config-driven.md §2.x](../design/config-driven.md) — the living spec for dimensional thresholds and recipes.
+- [Recipe Would-Fire Preview Design](../design/recipe-would-fire-preview.md) — the confidence last-mile of capability B (#657 P1 design-readiness).
