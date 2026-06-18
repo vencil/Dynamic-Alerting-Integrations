@@ -189,10 +189,9 @@ def preview_recipe(recipe, tenant, scenario):
     except shape.RecipeError as exc:
         return _err(str(exc))
 
-    if _PROMTOOL is None:
-        return {"alertname": f"Custom_{slug}", "supported": True, "states": [],
-                "warnings": ["promtool not available — cannot evaluate locally"]}
-
+    # Validate the request BEFORE the promtool-availability check, so bad input
+    # is reported as an error regardless of whether we can evaluate locally
+    # (the "Python Tests" CI job has no promtool on PATH).
     value = (scenario or {}).get("value")
     if value is None:
         return _err("scenario.value is required for a threshold preview",
@@ -204,6 +203,10 @@ def preview_recipe(recipe, tenant, scenario):
     except (TypeError, ValueError):
         return _err(f"scenario.value must be numeric, got {value!r}",
                     alertname=f"Custom_{slug}")
+
+    if _PROMTOOL is None:
+        return {"alertname": f"Custom_{slug}", "supported": True, "states": [],
+                "warnings": ["promtool not available — cannot evaluate locally"]}
 
     work = Path(tempfile.mkdtemp(prefix="recipe-preview-"))
     try:
