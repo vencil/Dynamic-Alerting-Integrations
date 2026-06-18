@@ -81,6 +81,11 @@ def build_preview_test(recipe, tenant, value, slug):
     mode = recipe.get("mode")
     selectors = {str(k): v for k, v in (recipe.get("selectors") or {}).items()}
 
+    # NOTE (P3): this +10/+5 buffer is correct ONLY for a flat constant series.
+    # Time-dependent recipes (rate / ratio / absence) — currently gated to
+    # supported:false — will need `n`/`eval_min` to become polymorphic by
+    # recipe_type: `absence` needs the series to STOP at a point then eval after
+    # the gap + `for:`; `rate` needs eval_time to fully populate the lookback.
     for_min = _FOR_MINUTES[str(recipe.get("for", "1m"))]   # caller pre-validates membership
     n = for_min + 10            # series length (interval 1m): clears `for:` + buffer
     eval_min = for_min + 5      # eval PAST the pending window
