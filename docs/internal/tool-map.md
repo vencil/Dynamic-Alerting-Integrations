@@ -83,6 +83,7 @@ lang: zh
 | 工具 | 用途 |
 |------|------|
 | `_atomic_write.py` | Atomic write helper for regen tools (v2.8.0 Trap #60 mitigation). |
+| `_recipe_preview.py` | recipe would-fire preview core (#657 P2). |
 | `add_frontmatter.py` | Add YAML front matter to documentation files for MkDocs/Docusaurus integration. |
 | `analyze_bench_history.py` | Aggregate bench-record nightly history into per-benchmark stats. |
 | `analyze_tier1_fp_rate.py` | Tier 1 bench-gate friction-rate observer (issue #433 W3). |
