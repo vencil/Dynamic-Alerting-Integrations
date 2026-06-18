@@ -106,7 +106,7 @@ func TestCollector_Collect_ThresholdExpiry_EmitsEvent(t *testing.T) {
 	cfg := &ThresholdConfig{
 		Defaults: map[string]float64{"mysql_connections": 80},
 		Tenants: map[string]map[string]ScheduledValue{
-			"db-a": {"mysql_connections": {Default: "2000", Expires: "2020-01-01T00:00:00Z", Reason: "incident #1234"}},
+			"db-a": {"mysql_connections": {Default: "2000", Expiry: &ExpiryMeta{Expires: "2020-01-01T00:00:00Z", Reason: "incident #1234"}}},
 		},
 	}
 	manager := newTestManager(cfg)

@@ -21,16 +21,17 @@ func TestScheduledValue_ParsesExpiresAndReason(t *testing.T) {
 	if err := yaml.Unmarshal([]byte(in), &sv); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if sv.Default != "2000" || sv.Expires != "2026-07-01T00:00:00Z" || sv.Reason != "incident #1234" {
-		t.Fatalf("unexpected parse: %+v", sv)
+	if sv.Default != "2000" || sv.Expiry == nil ||
+		sv.Expiry.Expires != "2026-07-01T00:00:00Z" || sv.Expiry.Reason != "incident #1234" {
+		t.Fatalf("unexpected parse: %+v (expiry %+v)", sv, sv.Expiry)
 	}
-	// Scalar form carries no expiry (permanent threshold).
+	// Scalar form carries no expiry (permanent threshold) → nil Expiry pointer.
 	var scalar ScheduledValue
 	if err := yaml.Unmarshal([]byte(`"80"`), &scalar); err != nil {
 		t.Fatalf("unmarshal scalar: %v", err)
 	}
-	if scalar.Expires != "" {
-		t.Fatalf("scalar should have no expires, got %q", scalar.Expires)
+	if scalar.Expiry != nil {
+		t.Fatalf("scalar should have no expiry, got %+v", scalar.Expiry)
 	}
 }
 
@@ -44,9 +45,9 @@ func TestResolveBaseRows_ExpiredOverrideFailsSafeToDefault(t *testing.T) {
 	cfg := &ThresholdConfig{
 		Defaults: map[string]float64{"mysql_connections": 80},
 		Tenants: map[string]map[string]ScheduledValue{
-			"db-expired": {"mysql_connections": {Default: "2000", Expires: past}},   // expired → default 80
-			"db-active":  {"mysql_connections": {Default: "2000", Expires: future}}, // not yet → 2000
-			"db-perm":    {"mysql_connections": {Default: "2000"}},                  // no expiry → 2000
+			"db-expired": {"mysql_connections": {Default: "2000", Expiry: &ExpiryMeta{Expires: past}}},   // expired → default 80
+			"db-active":  {"mysql_connections": {Default: "2000", Expiry: &ExpiryMeta{Expires: future}}}, // not yet → 2000
+			"db-perm":    {"mysql_connections": {Default: "2000"}},                                       // no expiry → 2000
 		},
 	}
 	got := map[string]float64{}
@@ -71,11 +72,11 @@ func TestResolveThresholdExpiriesAt_ScopeAndState(t *testing.T) {
 		Defaults: map[string]float64{"mysql_connections": 80, "mysql_cpu": 80},
 		Tenants: map[string]map[string]ScheduledValue{
 			"db-a": {
-				"mysql_connections":  {Default: "2000", Expires: "2020-01-01T00:00:00Z", Reason: "old incident"}, // expired (in Defaults)
-				"mysql_cpu":          {Default: "95", Expires: "2999-01-01T00:00:00Z"},                           // active (in Defaults)
-				"unmapped_widget":    {Default: "5", Expires: "2020-01-01T00:00:00Z"},                            // NOT in Defaults → excluded (v1)
-				"mysql_cpu_critical": {Default: "99", Expires: "2020-01-01T00:00:00Z"},                           // _critical → not in Defaults → excluded
-				"_custom_alerts":     SV("- recipe: x\n"),                                                        // reserved → excluded
+				"mysql_connections":  {Default: "2000", Expiry: &ExpiryMeta{Expires: "2020-01-01T00:00:00Z", Reason: "old incident"}}, // expired (in Defaults)
+				"mysql_cpu":          {Default: "95", Expiry: &ExpiryMeta{Expires: "2999-01-01T00:00:00Z"}},                           // active (in Defaults)
+				"unmapped_widget":    {Default: "5", Expiry: &ExpiryMeta{Expires: "2020-01-01T00:00:00Z"}},                            // NOT in Defaults → excluded (v1)
+				"mysql_cpu_critical": {Default: "99", Expiry: &ExpiryMeta{Expires: "2020-01-01T00:00:00Z"}},                           // _critical → not in Defaults → excluded
+				"_custom_alerts":     SV("- recipe: x\n"),                                                                             // reserved → excluded
 			},
 		},
 	}
@@ -104,9 +105,9 @@ func TestValidateTenantKeys_ExpiresFailLoud(t *testing.T) {
 	cfg := &ThresholdConfig{
 		Defaults: map[string]float64{"mysql_connections": 80},
 		Tenants: map[string]map[string]ScheduledValue{
-			"db-ok":        {"mysql_connections": {Default: "2000", Expires: "2026-07-01T00:00:00Z"}}, // valid + in Defaults → no expires warn
-			"db-malformed": {"mysql_connections": {Default: "2000", Expires: "not-a-timestamp"}},      // in Defaults, bad ts → warn
-			"db-scope":     {"unmapped_widget": {Default: "5", Expires: "2026-07-01T00:00:00Z"}},      // out of scope → warn
+			"db-ok":        {"mysql_connections": {Default: "2000", Expiry: &ExpiryMeta{Expires: "2026-07-01T00:00:00Z"}}}, // valid + in Defaults → no expires warn
+			"db-malformed": {"mysql_connections": {Default: "2000", Expiry: &ExpiryMeta{Expires: "not-a-timestamp"}}},      // in Defaults, bad ts → warn
+			"db-scope":     {"unmapped_widget": {Default: "5", Expiry: &ExpiryMeta{Expires: "2026-07-01T00:00:00Z"}}},      // out of scope → warn
 		},
 	}
 	all := strings.Join(cfg.ValidateTenantKeys(), "\n")
@@ -134,8 +135,8 @@ func TestResolveBaseRows_ExpiryWinsOverTimeWindows(t *testing.T) {
 	cfg := &ThresholdConfig{
 		Defaults: map[string]float64{"mysql_connections": 80},
 		Tenants: map[string]map[string]ScheduledValue{
-			"db-expired": {"mysql_connections": {Default: "2000", Overrides: win, Expires: "2020-01-01T00:00:00Z"}},
-			"db-active":  {"mysql_connections": {Default: "2000", Overrides: win, Expires: "2999-01-01T00:00:00Z"}},
+			"db-expired": {"mysql_connections": {Default: "2000", Overrides: win, Expiry: &ExpiryMeta{Expires: "2020-01-01T00:00:00Z"}}},
+			"db-active":  {"mysql_connections": {Default: "2000", Overrides: win, Expiry: &ExpiryMeta{Expires: "2999-01-01T00:00:00Z"}}},
 		},
 	}
 	rows, _ := cfg.ResolveAtWithStats(now)

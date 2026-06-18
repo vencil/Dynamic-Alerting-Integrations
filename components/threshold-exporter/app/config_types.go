@@ -29,6 +29,7 @@ type (
 	ResolvedMetadata          = config.ResolvedMetadata
 	TimeWindowOverride        = config.TimeWindowOverride
 	ScheduledValue            = config.ScheduledValue
+	ExpiryMeta                = config.ExpiryMeta
 	ThresholdConfig           = config.ThresholdConfig
 	ResolvedThreshold         = config.ResolvedThreshold
 	ResolvedSeverityDedup     = config.ResolvedSeverityDedup

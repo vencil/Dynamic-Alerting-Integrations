@@ -158,13 +158,24 @@ type TimeWindowOverride struct {
 type ScheduledValue struct {
 	Default   string
 	Overrides []TimeWindowOverride
-	// Expires (PREVENT #656): RFC3339 instant after which this becomes a
-	// *time-boxed* override that auto-reverts to the platform default (fail-safe:
-	// more protection, never silent) and emits da_config_event{event=
-	// "threshold_expired"}. Empty = permanent override. Honored only on base
-	// standard metrics (those in _defaults.yaml); ignored elsewhere (v1).
-	Expires string
-	Reason  string // human-readable reason for the time-boxed override (surfaced on expiry)
+	// Expiry (PREVENT #656): non-nil makes this a *time-boxed* override that
+	// auto-reverts to the platform default after Expiry.Expires (fail-safe: more
+	// protection, never silent) and emits da_config_event{event="threshold_expired"}.
+	// nil = permanent override. Behind a POINTER so the common (no-expiry)
+	// ScheduledValue stays small — it is held per-override in
+	// map[tenant]map[metric]ScheduledValue and copied on every config merge /
+	// scrape, so two inline strings measurably regressed ResolveSilentModes /
+	// MergePartialConfigs (bench-gate #871). Honored only on base standard metrics
+	// (those in _defaults.yaml); ignored elsewhere (v1).
+	Expiry *ExpiryMeta
+}
+
+// ExpiryMeta carries a ScheduledValue's optional time-box (PREVENT #656).
+// Allocated only when `expires:` / `reason:` are present (rare — an incident
+// loosening), keeping the hot ScheduledValue struct small in the common case.
+type ExpiryMeta struct {
+	Expires string // RFC3339 instant; empty = no time-box
+	Reason  string // human-readable reason (surfaced on expiry)
 }
 
 // DefaultMaxMetricsPerTenant is the default cardinality limit per tenant.

@@ -43,8 +43,11 @@ func (sv *ScheduledValue) UnmarshalYAML(value *yaml.Node) error {
 			}
 			sv.Default = structured.Default
 			sv.Overrides = structured.Overrides
-			sv.Expires = structured.Expires
-			sv.Reason = structured.Reason
+			// Allocate the expiry meta only when actually time-boxed — keeps the
+			// common (no-expiry) ScheduledValue a nil pointer, not 2 inline strings.
+			if structured.Expires != "" || structured.Reason != "" {
+				sv.Expiry = &ExpiryMeta{Expires: structured.Expires, Reason: structured.Reason}
+			}
 			return nil
 		}
 		// Arbitrary mapping (e.g., _routing): serialize back to YAML string

@@ -178,10 +178,10 @@ func (c *ThresholdConfig) ResolveAtWithStats(now time.Time) ([]ResolvedThreshold
 // override is kept — mirrors ResolveMaintenanceExpiriesAt; ValidateTenantKeys
 // warns on it). Empty expires = a permanent override (never expires).
 func isThresholdExpired(sv ScheduledValue, now time.Time) bool {
-	if sv.Expires == "" {
+	if sv.Expiry == nil || sv.Expiry.Expires == "" {
 		return false
 	}
-	t, err := time.Parse(time.RFC3339, sv.Expires)
+	t, err := time.Parse(time.RFC3339, sv.Expiry.Expires)
 	if err != nil {
 		return false // fail-open; validation surfaces the malformed value
 	}
@@ -657,7 +657,7 @@ func (c *ThresholdConfig) ResolveThresholdExpiriesAt(now time.Time) []ResolvedTh
 	var result []ResolvedThresholdExpiry
 	for tenant, overrides := range c.Tenants {
 		for metricKey, sv := range overrides {
-			if sv.Expires == "" {
+			if sv.Expiry == nil || sv.Expiry.Expires == "" {
 				continue
 			}
 			// v1 scope: expires is honored only on base standard metrics — those
@@ -670,16 +670,16 @@ func (c *ThresholdConfig) ResolveThresholdExpiriesAt(now time.Time) []ResolvedTh
 			if _, isDefault := c.Defaults[metricKey]; !isDefault {
 				continue
 			}
-			t, err := time.Parse(time.RFC3339, sv.Expires)
+			t, err := time.Parse(time.RFC3339, sv.Expiry.Expires)
 			if err != nil {
-				log.Printf("WARN: invalid expires %q in threshold %q for tenant=%s: %v", sv.Expires, metricKey, tenant, err)
+				log.Printf("WARN: invalid expires %q in threshold %q for tenant=%s: %v", sv.Expiry.Expires, metricKey, tenant, err)
 				continue
 			}
 			result = append(result, ResolvedThresholdExpiry{
 				Tenant:    tenant,
 				MetricKey: metricKey,
 				Expires:   t,
-				Reason:    sv.Reason,
+				Reason:    sv.Expiry.Reason,
 				Expired:   now.After(t),
 			})
 		}
@@ -826,13 +826,13 @@ func (c *ThresholdConfig) ValidateTenantKeys() []string {
 			// (resolveBaseRows is the only resolution path with the fail-safe hook).
 			// Warn when it appears elsewhere (silent no-op) or is malformed (would
 			// never auto-revert) — fail-loud per dev-rule #5.
-			if sv.Expires != "" {
+			if sv.Expiry != nil && sv.Expiry.Expires != "" {
 				if _, isDefault := c.Defaults[key]; !isDefault {
 					warnings = append(warnings, fmt.Sprintf(
 						"WARN: tenant=%s: `expires:` on %q is ignored — only base standard metrics (in _defaults.yaml) support time-boxed thresholds in v1", tenant, key))
-				} else if _, err := time.Parse(time.RFC3339, sv.Expires); err != nil {
+				} else if _, err := time.Parse(time.RFC3339, sv.Expiry.Expires); err != nil {
 					warnings = append(warnings, fmt.Sprintf(
-						"WARN: tenant=%s: invalid `expires:` %q on %q (need RFC3339 e.g. 2026-07-01T00:00:00Z) — override will NOT auto-revert", tenant, sv.Expires, key))
+						"WARN: tenant=%s: invalid `expires:` %q on %q (need RFC3339 e.g. 2026-07-01T00:00:00Z) — override will NOT auto-revert", tenant, sv.Expiry.Expires, key))
 				}
 			}
 
