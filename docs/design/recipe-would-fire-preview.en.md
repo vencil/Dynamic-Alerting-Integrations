@@ -53,7 +53,7 @@ Why A: the platform consistently keeps production core components lean and conta
 
 The preview service exposes a single endpoint (the portal forwards via nginx):
 
-```
+```http
 POST /preview
 ```
 

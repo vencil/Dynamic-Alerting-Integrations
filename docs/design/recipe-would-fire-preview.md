@@ -53,7 +53,7 @@ parent: architecture-and-design.md
 
 預覽服務只暴露一個 endpoint（portal 經 nginx 轉發）：
 
-```
+```http
 POST /preview
 ```
 

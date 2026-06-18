@@ -250,11 +250,15 @@ def extract_changes_from_dirs(config_dir, baseline_dir):
 # ---------------------------------------------------------------------------
 
 def changed_conf_files():
-    """Tenant conf.d files changed in HEAD~1..HEAD (paths relative to cwd).
+    """Tenant conf.d files changed in HEAD~1..HEAD, as `conf.d/<name>` paths.
 
-    Mirrors the `git diff -- conf.d/` contract of
-    extract_changes_from_git_diff(); used only to surface recipes touched
-    by the PR.
+    `git diff --name-only` emits REPO-ROOT-relative paths even when run from a
+    subdirectory — and CI runs this tool from components/.../config, so the raw
+    output (`components/.../conf.d/db-a.yaml`) is NOT loadable relative to cwd.
+    Reduce each to `conf.d/<basename>`, the cwd-relative form the rest of the
+    tool uses (matching the `git diff -- conf.d/` contract). Works whether
+    conf.d sits at the repo root (customer convention) or under a subtree
+    (this repo). (#657)
     """
     try:
         result = subprocess.run(
@@ -265,7 +269,7 @@ def changed_conf_files():
             return []
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return []
-    return [ln.strip() for ln in result.stdout.splitlines()
+    return [f"conf.d/{Path(ln.strip()).name}" for ln in result.stdout.splitlines()
             if ln.strip().endswith(".yaml")]
 
 
@@ -308,18 +312,61 @@ def find_custom_alert_tenants(parsed):
     return sorted(set(found))
 
 
+def _flat_keys_at_head1(tenant):
+    """Top-level scalar threshold keys for `tenant` as of HEAD~1.
+
+    Used to classify a REMOVED key, which is gone from the working tree so the
+    current-file scan can't see it. `git show HEAD~1:./conf.d/<tenant>.yaml` —
+    the leading `./` forces a cwd-relative path (git's `<rev>:<path>` is
+    repo-root by default). Returns an empty set if the old file is unavailable
+    (then the removal is conservatively dropped, the prior behaviour). (#657)
+    """
+    try:
+        result = subprocess.run(
+            ["git", "show", f"HEAD~1:./conf.d/{tenant}.yaml"],
+            capture_output=True, text=True, timeout=15,
+        )
+        if result.returncode != 0:
+            return set()
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return set()
+    import yaml
+    try:
+        data = yaml.safe_load(result.stdout) or {}
+    except yaml.YAMLError:
+        return set()
+    tenants = data.get("tenants") if isinstance(data, dict) else None
+    keys = set()
+    for tconf in (tenants.values() if isinstance(tenants, dict) else []):
+        if isinstance(tconf, dict):
+            keys |= {k for k, v in tconf.items()
+                     if not str(k).startswith("_") and not isinstance(v, (dict, list))}
+    return keys
+
+
 def keep_flat_threshold_changes(changes, parsed):
-    """Drop changes whose key isn't a real flat threshold in the current file.
+    """Drop changes whose key isn't a real flat threshold.
 
     The line-based git-diff parser captures any `key: value` line regardless
     of nesting, so it mis-captures `_custom_alerts` recipe inner fields
     (recipe / name / op / window / threshold / metric / mode) as flat changes.
-    A real flat threshold is a SCALAR directly under `tenants.<id>`; a recipe
-    inner field is not. When the file is unavailable (e.g. a pure removal) the
-    change is kept — we don't guess. (#657)
+    A real flat threshold is a SCALAR directly under `tenants.<id>`.
+
+    Adds / modifies are classified against the CURRENT file. A REMOVAL (the key
+    is gone from the working tree, so the current-file scan would always say
+    "not flat") is classified against HEAD~1 instead — so a real flat-threshold
+    removal (a disable transition the backtest reports) is kept, while a removed
+    recipe inner-field is dropped. (#657)
     """
     kept = []
+    head1 = {}
     for c in changes:
+        if c["new_value"] is None:  # removal — the key is gone from the tree
+            if c["tenant"] not in head1:
+                head1[c["tenant"]] = _flat_keys_at_head1(c["tenant"])
+            if c["metric"] in head1[c["tenant"]]:
+                kept.append(c)
+            continue
         file_data = parsed.get(c["tenant"])
         if file_data is None:
             kept.append(c)

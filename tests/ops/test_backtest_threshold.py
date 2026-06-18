@@ -486,11 +486,43 @@ class TestCustomAlertDetection:
         kept = bt.keep_flat_threshold_changes(changes, parsed)
         assert [c["metric"] for c in kept] == ["mysql_connections"]
 
-    def test_keep_flat_keeps_when_file_unavailable(self):
-        """檔案不可得（如純移除）→ 保留，不臆測。"""
-        changes = [{"tenant": "gone", "metric": "mysql_connections",
+    def test_keep_flat_removal_of_real_threshold_kept(self, monkeypatch):
+        """純量閾值被移除（HEAD~1 有該 top-level key）→ 保留（disable transition，#657）。"""
+        monkeypatch.setattr(bt, "_flat_keys_at_head1",
+                            lambda t: {"mysql_connections", "mysql_cpu"})
+        changes = [{"tenant": "db-b", "metric": "mysql_connections",
                     "old_value": "70", "new_value": None}]
         assert bt.keep_flat_threshold_changes(changes, {}) == changes
+
+    def test_keep_flat_removal_of_recipe_field_dropped(self, monkeypatch):
+        """recipe 內層欄位被移除（HEAD~1 top-level 沒有它）→ 丟棄。"""
+        monkeypatch.setattr(bt, "_flat_keys_at_head1", lambda t: {"mysql_connections"})
+        changes = [{"tenant": "db-b", "metric": "threshold",
+                    "old_value": "150:warning", "new_value": None}]
+        assert bt.keep_flat_threshold_changes(changes, {}) == []
+
+    def test_keep_flat_removal_head1_unavailable_dropped(self, monkeypatch):
+        """HEAD~1 不可得（空集合）→ 移除型保守丟棄，不臆測。"""
+        monkeypatch.setattr(bt, "_flat_keys_at_head1", lambda t: set())
+        changes = [{"tenant": "gone", "metric": "mysql_connections",
+                    "old_value": "70", "new_value": None}]
+        assert bt.keep_flat_threshold_changes(changes, {}) == []
+
+    def test_changed_conf_files_reduces_repo_root_to_cwd_relative(self, monkeypatch):
+        """git diff 的 repo-root 路徑被縮成 conf.d/<basename>（CI 在子目錄跑也載得到）。"""
+        out = ("components/threshold-exporter/config/conf.d/db-b.yaml\n"
+               "components/threshold-exporter/config/conf.d/_defaults.yaml\n")
+        monkeypatch.setattr(subprocess, "run",
+                            lambda *a, **k: type("R", (), {"returncode": 0, "stdout": out})())
+        assert bt.changed_conf_files() == ["conf.d/db-b.yaml", "conf.d/_defaults.yaml"]
+
+    def test_flat_keys_at_head1_parses_tenants_wrapper(self, monkeypatch):
+        """從 HEAD~1 的 tenants-wrapper 抽 top-level 純量閾值 key（排除 _ 與 recipe 區塊）。"""
+        yaml_text = ("tenants:\n  db-b:\n    mysql_connections: '100'\n    mysql_cpu: '60'\n"
+                     "    _silent_mode: warning\n    _custom_alerts:\n      - recipe: threshold\n")
+        monkeypatch.setattr(subprocess, "run",
+                            lambda *a, **k: type("R", (), {"returncode": 0, "stdout": yaml_text})())
+        assert bt._flat_keys_at_head1("db-b") == {"mysql_connections", "mysql_cpu"}
 
     def test_notice_empty_when_no_recipes(self):
         """無 recipe 租戶 → notice 為空字串。"""
