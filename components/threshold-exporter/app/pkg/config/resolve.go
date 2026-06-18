@@ -173,6 +173,21 @@ func (c *ThresholdConfig) ResolveAtWithStats(now time.Time) ([]ResolvedThreshold
 	}
 }
 
+// isThresholdExpired reports whether a time-boxed threshold override (PREVENT
+// #656) has passed its `expires:` instant. A malformed expires fails OPEN (the
+// override is kept — mirrors ResolveMaintenanceExpiriesAt; ValidateTenantKeys
+// warns on it). Empty expires = a permanent override (never expires).
+func isThresholdExpired(sv ScheduledValue, now time.Time) bool {
+	if sv.Expiry == nil || sv.Expiry.Expires == "" {
+		return false
+	}
+	t, err := time.Parse(time.RFC3339, sv.Expiry.Expires)
+	if err != nil {
+		return false // fail-open; validation surfaces the malformed value
+	}
+	return now.After(t)
+}
+
 // resolveBaseRows resolves a tenant's base thresholds from c.Defaults using the
 // three-state contract (custom value / omitted→default / disable) plus the
 // inline "value:severity" suffix. Extracted verbatim from the
@@ -193,8 +208,13 @@ func (c *ThresholdConfig) resolveBaseRows(tenant string, overrides map[string]Sc
 		component, metric := parseMetricKey(metricKey)
 		severity := "warning" // default severity
 
-		// Check tenant override (skip _state_ overrides)
-		if sv, exists := overrides[metricKey]; exists {
+		// Check tenant override (skip _state_ overrides).
+		// PREVENT #656: a time-boxed override past its expires: instant is treated
+		// as absent → falls through to State 2 (platform default). The value still
+		// emits (with the default) so this is fail-safe (more protection, never
+		// silent) and leaves the cardinality count unchanged; collectThresholdExpiries
+		// emits da_config_event so a cleanup PR removes the stale YAML.
+		if sv, exists := overrides[metricKey]; exists && !isThresholdExpired(sv, now) {
 			override := sv.ResolveValue(now)
 			lower := strings.TrimSpace(strings.ToLower(override))
 
@@ -249,6 +269,10 @@ func (c *ThresholdConfig) resolveCriticalRows(tenant string, overrides map[strin
 			continue
 		}
 
+		// PREVENT #656 v1: `expires:` is intentionally NOT honored on _critical
+		// overrides — they have no platform default to fail-safe back to (reverting
+		// would go SILENT, the very thing PREVENT avoids). expires here is a no-op;
+		// ValidateTenantKeys warns the author. Honored only in resolveBaseRows.
 		override := sv.ResolveValue(now)
 		lower := strings.TrimSpace(strings.ToLower(override))
 		if isDisabled(lower) {
@@ -301,6 +325,10 @@ func (c *ThresholdConfig) resolveDimensionalRows(tenant string, overrides map[st
 			continue
 		}
 
+		// PREVENT #656 v1: `expires:` is intentionally NOT honored on dimensional
+		// overrides — no platform default to fail-safe to (reverting would go
+		// SILENT). expires here is a no-op; ValidateTenantKeys warns. See
+		// resolveBaseRows for the honored path.
 		valStr := sv.ResolveValue(now)
 		lower := strings.TrimSpace(strings.ToLower(valStr))
 		if isDisabled(lower) {
@@ -617,6 +645,48 @@ func (c *ThresholdConfig) ResolveMaintenanceExpiriesAt(now time.Time) []Resolved
 	return result
 }
 
+// ResolveThresholdExpiries resolves time-boxed threshold expiry state for all
+// tenants (PREVENT #656). Used by the collector to emit da_config_event when a
+// loosened threshold's TTL lapses. v1: base standard metrics only.
+func (c *ThresholdConfig) ResolveThresholdExpiries() []ResolvedThresholdExpiry {
+	return c.ResolveThresholdExpiriesAt(time.Now())
+}
+
+// ResolveThresholdExpiriesAt is the time-parameterized version for testability.
+func (c *ThresholdConfig) ResolveThresholdExpiriesAt(now time.Time) []ResolvedThresholdExpiry {
+	var result []ResolvedThresholdExpiry
+	for tenant, overrides := range c.Tenants {
+		for metricKey, sv := range overrides {
+			if sv.Expiry == nil || sv.Expiry.Expires == "" {
+				continue
+			}
+			// v1 scope: expires is honored only on base standard metrics — those
+			// with a platform default to fail-safe back to (resolveBaseRows is the
+			// only resolution path with the expiry hook). Reserved keys, dimensional
+			// ({...}), _critical variants and custom alerts are NOT in c.Defaults →
+			// skipped here so we never emit an expiry event for a threshold whose
+			// value won't actually revert. ValidateTenantKeys warns on out-of-scope
+			// expires so it isn't a silent no-op.
+			if _, isDefault := c.Defaults[metricKey]; !isDefault {
+				continue
+			}
+			t, err := time.Parse(time.RFC3339, sv.Expiry.Expires)
+			if err != nil {
+				log.Printf("WARN: invalid expires %q in threshold %q for tenant=%s: %v", sv.Expiry.Expires, metricKey, tenant, err)
+				continue
+			}
+			result = append(result, ResolvedThresholdExpiry{
+				Tenant:    tenant,
+				MetricKey: metricKey,
+				Expires:   t,
+				Reason:    sv.Expiry.Reason,
+				Expired:   now.After(t),
+			})
+		}
+	}
+	return result
+}
+
 // IsMaintenanceActive checks if a structured _state_maintenance is currently active (not expired).
 // For scalar "enable" values (no expires), it always returns true.
 // For structured values with expires in the past, it returns false.
@@ -751,7 +821,21 @@ func (c *ThresholdConfig) ValidateTenantKeys() []string {
 			}
 		}
 
-		for key := range overrides {
+		for key, sv := range overrides {
+			// PREVENT #656 v1: `expires:` is honored only on base standard metrics
+			// (resolveBaseRows is the only resolution path with the fail-safe hook).
+			// Warn when it appears elsewhere (silent no-op) or is malformed (would
+			// never auto-revert) — fail-loud per dev-rule #5.
+			if sv.Expiry != nil && sv.Expiry.Expires != "" {
+				if _, isDefault := c.Defaults[key]; !isDefault {
+					warnings = append(warnings, fmt.Sprintf(
+						"WARN: tenant=%s: `expires:` on %q is ignored — only base standard metrics (in _defaults.yaml) support time-boxed thresholds in v1", tenant, key))
+				} else if _, err := time.Parse(time.RFC3339, sv.Expiry.Expires); err != nil {
+					warnings = append(warnings, fmt.Sprintf(
+						"WARN: tenant=%s: invalid `expires:` %q on %q (need RFC3339 e.g. 2026-07-01T00:00:00Z) — override will NOT auto-revert", tenant, sv.Expiry.Expires, key))
+				}
+			}
+
 			// Known reserved key
 			if validReservedKeys[key] {
 				continue

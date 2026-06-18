@@ -23,11 +23,13 @@ type (
 	ResolvedStateFilter       = config.ResolvedStateFilter
 	ResolvedSilentMode        = config.ResolvedSilentMode
 	ResolvedMaintenanceExpiry = config.ResolvedMaintenanceExpiry
+	ResolvedThresholdExpiry   = config.ResolvedThresholdExpiry
 	RecurringSchedule         = config.RecurringSchedule
 	TenantMetadata            = config.TenantMetadata
 	ResolvedMetadata          = config.ResolvedMetadata
 	TimeWindowOverride        = config.TimeWindowOverride
 	ScheduledValue            = config.ScheduledValue
+	ExpiryMeta                = config.ExpiryMeta
 	ThresholdConfig           = config.ThresholdConfig
 	ResolvedThreshold         = config.ResolvedThreshold
 	ResolvedSeverityDedup     = config.ResolvedSeverityDedup
