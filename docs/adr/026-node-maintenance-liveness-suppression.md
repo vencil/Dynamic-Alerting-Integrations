@@ -2,7 +2,7 @@
 title: "ADR-026: Node/Cluster 維護告警抑制 — Liveness-Class Gap，不是子系統"
 tags: [adr, alerting, maintenance, k8s]
 audience: [platform-engineers, sre]
-version: v2.10.0
+version: v2.9.0
 lang: zh
 id: ADR-026
 tracking_kind: adr
