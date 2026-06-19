@@ -828,6 +828,62 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/v1/tenants/{id}/access": {
+            "get": {
+                "description": "Lightweight authorization probe that reuses the tenant read\nRBAC decision: returns 200 {allow:true} when the caller has\nread permission on {id}, or 403 otherwise. Purpose-built for\nsibling services (e.g. the recipe-preview service, #657) so\nthey never re-implement RBAC or over-fetch the tenant config.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "tenants"
+                ],
+                "summary": "Check whether the caller may read a tenant (RBAC probe)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Tenant ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_handler.AccessResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/v1/tenants/{id}/custom-alerts": {
             "put": {
                 "description": "Merges the supplied recipe array into the tenant's\n` + "`" + `_custom_alerts` + "`" + ` (comment-preserving AST edit), validates\n(S5 Go validator), and commits. Optimistic concurrency via\nbase_hash (409 on drift). Empty array deletes the key.",
@@ -1569,6 +1625,23 @@ const docTemplate = `{
                 },
                 "web_url": {
                     "description": "Browser-accessible URL",
+                    "type": "string"
+                }
+            }
+        },
+        "internal_handler.AccessResponse": {
+            "type": "object",
+            "properties": {
+                "allow": {
+                    "description": "Allow is always true in a 200 response (see the type doc).",
+                    "type": "boolean"
+                },
+                "permission": {
+                    "description": "Permission is the permission level that was checked.",
+                    "type": "string"
+                },
+                "tenant": {
+                    "description": "Tenant echoes the authorized tenant ID.",
                     "type": "string"
                 }
             }

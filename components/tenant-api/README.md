@@ -73,6 +73,7 @@
 | `GET` | `/api/v1/tenants/search` | read | 伺服端 search / filter / 分頁(`q` / `environment` / `tier` / `domain` / `db_type` / `tag` / `page_size` / `offset` / `sort`);內含短期快照快取,為大量租戶下的低延遲設計 |
 | `GET` | `/api/v1/tenants/{id}` | read | 取得 raw YAML + 解析後的閾值 |
 | `GET` | `/api/v1/tenants/{id}/effective` | read | 最終生效設定(租戶覆寫與平台預設逐層合併後的值)+ 繼承來源鏈 + 雙重 hash(`source_hash` / `merged_hash`,供變更偵測) |
+| `GET` | `/api/v1/tenants/{id}/access` | read | 輕量 RBAC 授權探測:可讀該租戶回 `200 {allow,tenant,permission}`、否則 `403`。供姊妹服務(如 recipe-preview #657)重用 tenant-isolation 決策、不重寫 RBAC 也不過度取得設定 |
 | `PUT` | `/api/v1/tenants/{id}` | write | 寫入(驗證 → policy → 寫入 → commit / PR);body 格式錯誤回 400 |
 | `POST` | `/api/v1/tenants/{id}/validate` | read | Dry-run 驗證,不寫入 |
 | `POST` | `/api/v1/tenants/{id}/diff` | read | 預覽 unified diff |

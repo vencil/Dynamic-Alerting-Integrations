@@ -1,0 +1,70 @@
+package handler
+
+import (
+	"net/http"
+
+	"github.com/go-chi/chi/v5"
+)
+
+// AccessResponse is the body of GET /api/v1/tenants/{id}/access.
+//
+// It is only ever returned with Allow=true. The route's RBAC read
+// middleware (rbac.Middleware(PermRead, TenantIDFromPath)) already responds
+// 403 to any caller lacking read access to {id}, so reaching the handler
+// means the caller is authorized. The body is deliberately minimal — a
+// sibling service learns the decision from the HTTP status (200 = allow,
+// 403 = deny) and never receives the tenant's config (least privilege).
+type AccessResponse struct {
+	// Allow is always true in a 200 response (see the type doc).
+	Allow bool `json:"allow"`
+	// Tenant echoes the authorized tenant ID.
+	Tenant string `json:"tenant"`
+	// Permission is the permission level that was checked.
+	Permission string `json:"permission"`
+}
+
+// CheckTenantAccess handles GET /api/v1/tenants/{id}/access.
+//
+// A lightweight RBAC read-probe, purpose-built so a sibling service (the
+// recipe-preview service, #657) can reuse this tenant-isolation decision
+// WITHOUT re-implementing _rbac.yaml / HasPermission in a second language
+// (which would risk authorization drift = a cross-tenant hole) and WITHOUT
+// over-fetching the tenant config (as probing GET /tenants/{id} would). The
+// route's rbac.Middleware(PermRead, TenantIDFromPath) makes the whole
+// decision: 200 {allow:true} = the caller may read this tenant, 403 = it may
+// not. This handler holds zero authorization logic.
+//
+// @Summary     Check whether the caller may read a tenant (RBAC probe)
+// @Description Lightweight authorization probe that reuses the tenant read
+// @Description RBAC decision: returns 200 {allow:true} when the caller has
+// @Description read permission on {id}, or 403 otherwise. Purpose-built for
+// @Description sibling services (e.g. the recipe-preview service, #657) so
+// @Description they never re-implement RBAC or over-fetch the tenant config.
+// @Tags        tenants
+// @Produce     json
+// @Param       id  path     string true "Tenant ID"
+// @Success     200 {object} AccessResponse
+// @Failure     400 {object} map[string]string
+// @Failure     401 {object} map[string]string
+// @Failure     403 {object} map[string]string
+// @Router      /api/v1/tenants/{id}/access [get]
+func CheckTenantAccess() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := chi.URLParam(r, "id")
+		// The route middleware already authorized read on {id}; but the
+		// open-mode and "*"-grant RBAC paths also authorize an EMPTY id (an
+		// empty path segment, /tenants//access, reaches here), which is not a
+		// real tenant. Mirror the ValidateTenantID guard every sibling read
+		// handler has (e.g. GetTenant) so a consumer never receives allow:true
+		// for a non-tenant — fail closed, not open.
+		if err := ValidateTenantID(id); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, AccessResponse{
+			Allow:      true,
+			Tenant:     id,
+			Permission: "read",
+		})
+	}
+}
