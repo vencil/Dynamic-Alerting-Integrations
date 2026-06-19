@@ -11,7 +11,7 @@
 | kubernetes | cAdvisor + kube-state-metrics | 15 | 9 |
 | liveness | liveness | 0 | 1 |
 | mariadb | mysqld_exporter (Percona) | 11 | 10 |
-| mongodb | mongodb_exporter | 10 | 6 |
+| mongodb | mongodb_exporter | 10 | 8 |
 | nginx | nginx-prometheus-exporter | 9 | 6 |
 | operational | threshold-exporter operational mode | 0 | 4 |
 | oracle | oracledb_exporter | 11 | 7 |
@@ -19,4 +19,4 @@
 | rabbitmq | rabbitmq_exporter | 12 | 8 |
 | redis | redis_exporter | 11 | 6 |
 | platform | threshold-exporter self-monitoring | 0 | 21 |
-| **Total** | | **147** | **124** |
+| **Total** | | **147** | **126** |
