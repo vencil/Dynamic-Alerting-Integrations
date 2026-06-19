@@ -25,7 +25,9 @@
 
 ## 護欄（§6）
 
-並發上限（`PREVIEW_MAX_CONCURRENCY`）、每租戶滑動視窗限流（`PREVIEW_RATE_LIMIT_PER_MIN`）、`promtool` **2.53.2 SHA-pin**（firing/inactive 判定的 returncode/輸出格式與版本綁）、啟動時記錄版本。
+並發上限（`PREVIEW_MAX_CONCURRENCY`）、每租戶滑動視窗限流（`PREVIEW_RATE_LIMIT_PER_MIN`，限流器自我 GC 過期 key、key 空間有上限）、request body 上限（`PREVIEW_MAX_BODY_BYTES`，預設 64 KiB，讀進記憶體前先擋）、`promtool` **2.53.2 SHA-pin**（firing/inactive 判定的 returncode/輸出格式與版本綁）、啟動時記錄版本。
+
+授權**先於**限流與評估：未授權的呼叫者既無法消耗受害租戶的限流額度、也無法把 key 灌進限流器（pre-auth DoS 防線）。dev-bypass 在偵測到 Kubernetes 環境時**拒絕啟動**（ADR-022 圍堵，防直連 pod 被自動注入 demo 身分）。
 
 ## 設定（env）
 
@@ -35,7 +37,8 @@
 | `PREVIEW_LISTEN_PORT` | `8082` | 監聽埠 |
 | `PREVIEW_MAX_CONCURRENCY` | `4` | 同時評估上限（每次評估開一個 `promtool` 子程序）|
 | `PREVIEW_RATE_LIMIT_PER_MIN` | `30` | 每租戶每分鐘上限（`0`=關閉）|
-| `PREVIEW_DEV_BYPASS_AUTH` | `false` | try-local：無身分標頭時注入 demo 身分（k8s 內**不可**開）|
+| `PREVIEW_MAX_BODY_BYTES` | `65536` | request body 上限（讀進記憶體前擋；超過回 `413`）|
+| `PREVIEW_DEV_BYPASS_AUTH` | `false` | try-local：無身分標頭時注入 demo 身分（k8s 內開會**拒絕啟動**）|
 
 ## 範圍
 

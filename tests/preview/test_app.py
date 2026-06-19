@@ -58,6 +58,14 @@ class TestValidation:
     def test_bad_scenario_type(self):
         assert _preview({"recipe": RECIPE, "tenant": "shop-a", "scenario": 5})[0] == 400
 
+    def test_falsy_nondict_scenario_is_400(self):
+        # `or {}` would have coerced these falsy non-dicts past the type check.
+        for bad in (0, "", False, []):
+            assert _preview({"recipe": RECIPE, "tenant": "shop-a", "scenario": bad})[0] == 400, repr(bad)
+
+    def test_oversized_tenant_is_400(self):
+        assert _preview({"recipe": RECIPE, "tenant": "x" * 300, "scenario": {"value": 1}})[0] == 400
+
 
 # ── identity + tenant-isolation (fail closed) ──
 class TestAuthz:
@@ -96,6 +104,14 @@ class TestRateLimit:
         assert _preview(dict(body, tenant="shop-b"), now=100.0)[0] == 200  # other tenant ok
         assert _preview(body, now=200.0)[0] == 200            # window slid → ok again
 
+    def test_denied_request_does_not_consume_budget(self, monkeypatch):
+        # Authz runs BEFORE the rate limit, so an UNAUTHORIZED request must NOT
+        # decrement the victim tenant's budget (else cross-tenant rate-limit DoS).
+        monkeypatch.setattr(app, "_rate", app.RateLimiter(1))
+        body = {"recipe": RECIPE, "tenant": "shop-a", "scenario": {"value": 1500}}
+        assert _preview(body, authorizer=DENY, now=100.0)[0] == 403   # denied
+        assert _preview(body, authorizer=ALLOW, now=100.0)[0] == 200  # budget intact
+
 
 class TestRateLimiterUnit:
     def test_sliding_window(self):
@@ -107,6 +123,22 @@ class TestRateLimiterUnit:
     def test_disabled_when_zero(self):
         rl = app.RateLimiter(0)
         assert all(rl.allow("k", float(i)) for i in range(100))
+
+    def test_expired_keys_are_gced_past_cap(self):
+        # A new key past max_keys sweeps keys whose window fully expired, so the
+        # map can't grow without bound from sprayed distinct tenants.
+        rl = app.RateLimiter(5, max_keys=2)
+        rl.allow("a", 0.0)
+        rl.allow("b", 0.0)
+        rl.allow("c", 100.0)                       # a,b expired (cutoff 40) → GC'd
+        assert "a" not in rl._hits and "b" not in rl._hits and "c" in rl._hits
+
+    def test_active_keys_survive_gc(self):
+        rl = app.RateLimiter(5, max_keys=2)
+        rl.allow("a", 90.0)                         # still in-window at t=100
+        rl.allow("b", 0.0)                          # expired by t=100
+        rl.allow("c", 100.0)
+        assert "a" in rl._hits and "b" not in rl._hits
 
 
 # ── PEP: authorize_tenant must fail closed + forward only identity headers ──

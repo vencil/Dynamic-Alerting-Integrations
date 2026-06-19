@@ -24,6 +24,7 @@ import os
 import sys
 import threading
 import time
+import traceback
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -56,6 +57,13 @@ LISTEN_PORT = int(os.environ.get("PREVIEW_LISTEN_PORT", "8082"))
 DEV_BYPASS = os.environ.get("PREVIEW_DEV_BYPASS_AUTH", "").lower() in ("1", "true", "yes")
 DEV_BYPASS_EMAIL = os.environ.get("PREVIEW_DEV_BYPASS_EMAIL", "dev@local")
 DEV_BYPASS_GROUPS = os.environ.get("PREVIEW_DEV_BYPASS_GROUPS", "demo-admins")
+MAX_BODY_BYTES = int(os.environ.get("PREVIEW_MAX_BODY_BYTES", str(64 * 1024)))
+
+# ADR-022-style containment: dev-bypass is a LOCAL-DEV escape hatch. Refuse to
+# run it inside Kubernetes — where a real oauth2-proxy must front the service —
+# so a direct-to-pod caller can never be auto-injected the demo admin identity.
+if DEV_BYPASS and os.environ.get("KUBERNETES_SERVICE_HOST"):
+    raise SystemExit("PREVIEW_DEV_BYPASS_AUTH must not be enabled inside Kubernetes")
 
 _IDENTITY_HEADERS = ("X-Forwarded-Email", "X-Forwarded-Groups")
 
@@ -71,8 +79,9 @@ class RateLimiter:
     surface (§6) without a new dependency.
     """
 
-    def __init__(self, per_min):
+    def __init__(self, per_min, max_keys=10000):
         self._per_min = per_min
+        self._max_keys = max_keys
         self._hits = defaultdict(deque)
         self._lock = threading.Lock()
 
@@ -80,8 +89,15 @@ class RateLimiter:
         if self._per_min <= 0:
             return True
         with self._lock:
-            dq = self._hits[key]
             cutoff = now - 60.0
+            # Bound the key map: a NEW key past the cap triggers a sweep of keys
+            # whose window has fully expired (amortized GC — only when large). So
+            # the map is bounded by tenants ACTIVE in the last 60s, not by the
+            # number of distinct tenant strings an authorized caller has sprayed.
+            if key not in self._hits and len(self._hits) >= self._max_keys:
+                for k in [k for k, d in self._hits.items() if not d or d[-1] < cutoff]:
+                    del self._hits[k]
+            dq = self._hits[key]
             while dq and dq[0] < cutoff:
                 dq.popleft()
             if len(dq) >= self._per_min:
@@ -129,7 +145,7 @@ def authorize_tenant(headers, tenant):
 def handle_preview(body, headers, *, authorizer=authorize_tenant,
                    evaluator=core.preview_recipe, now=None):
     """Pure request logic → (http_status:int, response:dict). Order matters:
-    validate → rate-limit → identity → authorize → bounded eval. Deps are
+    validate → identity → authorize → rate-limit → bounded eval. Deps are
     injectable so the logic is unit-testable without HTTP / network / promtool.
     """
     now = time.monotonic() if now is None else now
@@ -137,24 +153,33 @@ def handle_preview(body, headers, *, authorizer=authorize_tenant,
         return 400, {"error": "request body must be a JSON object"}
     recipe = body.get("recipe")
     tenant = body.get("tenant")
-    scenario = body.get("scenario") or {}
+    # NB: get-with-default, NOT `or {}` — `or {}` would coerce a falsy non-dict
+    # (0 / "" / False / []) to {} and slip it past the type check below.
+    scenario = body.get("scenario", {})
     if not isinstance(recipe, dict) or not recipe:
         return 400, {"error": "`recipe` (object) is required"}
     if not isinstance(tenant, str) or not tenant:
         return 400, {"error": "`tenant` (string) is required"}
+    if len(tenant) > 253:
+        return 400, {"error": "`tenant` is too long"}
     if not isinstance(scenario, dict):
         return 400, {"error": "`scenario` must be an object"}
 
-    # per-tenant rate limit (§6) — keyed by the requested tenant
-    if not _rate.allow(tenant, now):
-        return 429, {"error": "rate limit exceeded for this tenant"}
-
-    # identity + tenant-isolation: fail closed if we can't authorize
+    # Identity + tenant-isolation FIRST, fail closed. Authorizing BEFORE the
+    # rate-limit/eval is deliberate: an unauthenticated/unauthorized caller must
+    # not consume a victim tenant's rate-limit budget or grow the limiter's key
+    # map (both keyed by the requested tenant). So only authorized requests ever
+    # reach — or key — the limiter.
     hdrs = _apply_dev_bypass(headers)
     if not hdrs.get("X-Forwarded-Email"):
         return 401, {"error": "missing identity: X-Forwarded-Email required"}
     if not authorizer(hdrs, tenant):
         return 403, {"error": f"not authorized to preview tenant {tenant!r}"}
+
+    # per-tenant rate limit (§6) — reached only AFTER authz, so an unauthorized
+    # caller can't key (or exhaust) it; the limiter itself GCs expired keys.
+    if not _rate.allow(tenant, now):
+        return 429, {"error": "rate limit exceeded for this tenant"}
 
     # bounded concurrency around the (promtool subprocess) eval (§6)
     if not _eval_slots.acquire(timeout=QUEUE_TIMEOUT):
@@ -187,14 +212,27 @@ class _Handler(BaseHTTPRequestHandler):
         if self.path.split("?", 1)[0] != "/preview":
             self._send(404, {"error": "not found"})
             return
-        length = int(self.headers.get("Content-Length") or 0)
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            self._send(400, {"error": "invalid Content-Length"})
+            return
+        if length > MAX_BODY_BYTES:
+            # recipes are tiny; reject an oversized body BEFORE reading it into
+            # memory — a pre-auth memory-exhaustion guard.
+            self._send(413, {"error": "request body too large"})
+            return
         raw = self.rfile.read(length) if length else b""
         try:
             body = json.loads(raw or b"{}")
         except (ValueError, UnicodeDecodeError):
             self._send(400, {"error": "request body must be valid JSON"})
             return
-        status, resp = handle_preview(body, self.headers)
+        try:
+            status, resp = handle_preview(body, self.headers)
+        except Exception:  # never leak a traceback to the client; fail safe
+            traceback.print_exc(file=sys.stderr)
+            status, resp = 500, {"error": "internal error"}
         self._send(status, resp)
 
     def log_message(self, fmt, *args):  # quieter, structured-ish access log
