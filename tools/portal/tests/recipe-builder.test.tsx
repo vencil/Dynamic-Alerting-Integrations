@@ -265,4 +265,20 @@ describe('RecipeBuilder would-fire preview (#657)', () => {
     resolveIt({ supported: true, states: [{ state: 'inactive' }], warnings: [] });
     await waitFor(() => expect(screen.getByTestId('wouldfire-inactive')).toBeInTheDocument());
   });
+
+  it('invalidates a stale verdict when the recipe is edited after a run', async () => {
+    const previewFetch = vi.fn(() => Promise.resolve({
+      supported: true, states: [{ state: 'firing', reason: 'value 1500 > threshold 100' }], warnings: [],
+    }));
+    render(<RecipeBuilder tenantId="db-a" fetchMetrics={mockFetch(['queue_depth'])} previewFetch={previewFetch} />);
+    fillThresholdRecipe();
+    fill('wouldfire-value', '1500');
+    fireEvent.click(screen.getByTestId('wouldfire-run'));
+    await waitFor(() => expect(screen.getByTestId('wouldfire-firing')).toBeInTheDocument());
+    // edit the threshold (raising it above the test value) without re-running:
+    // the now-false "firing" verdict must clear — no preview beats a wrong preview
+    fill('field-threshold', '2000:warning');
+    expect(screen.queryByTestId('wouldfire-firing')).toBeNull();
+    expect(screen.getByTestId('wouldfire-run')).not.toBeDisabled();   // recipe still valid → can re-run
+  });
 });

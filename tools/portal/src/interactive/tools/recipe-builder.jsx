@@ -324,6 +324,17 @@ function WouldFirePanel({ recipeObj, tenantId, previewFetch, inputClass }) {
   const abortRef = useRef(null);
   const resultRef = useRef(null);
 
+  // Invalidate a stale verdict: when the recipe definition or tenant changes, a
+  // previously-shown firing/inactive result no longer matches the form (e.g. the
+  // user edits the threshold after a run but doesn't re-run). Reset to EMPTY and
+  // drop any in-flight run — "no preview" is far safer than a wrong preview.
+  useEffect(() => {
+    if (abortRef.current) abortRef.current.abort();
+    setStatus(PREVIEW.EMPTY);
+    setResult(null);
+    setErrorInfo(null);
+  }, [recipeObj, tenantId]);
+
   const numeric = value.trim() === '' ? NaN : Number(value);
   const canRun = !!recipeObj && !!tenantId && Number.isFinite(numeric) && status !== PREVIEW.LOADING;
 
