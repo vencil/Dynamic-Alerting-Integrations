@@ -86,6 +86,12 @@ groups:
           description: "mysql_up=0 for 15s on {{ $labels.instance }}"
           description_zh: "mysql_up=0，持續 15 秒，實例：{{ $labels.instance }}"
 
+      # DEPRECATED (#869): superseded by TenantExporterAbsent in rule-pack-liveness.yaml.
+      # This GLOBAL absent() fires only when EVERY tenant's mysql_up is gone (one live
+      # tenant masks another's outage) and its `tenant` label is always empty (absent()
+      # returns an empty-matcher vector). Kept ONE release as a deprecation shim so
+      # external Alertmanager matchers on MariaDBExporterAbsent don't break silently.
+      # Removal: next release (drop this rule + update tests/ops/test_scaffold_db.py).
       - alert: MariaDBExporterAbsent
         expr: absent(mysql_up{job="tenant-exporters"})
         for: 30s

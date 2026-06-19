@@ -377,6 +377,45 @@ func TestCollector_TenantMetadataInfo_NoMetadata(t *testing.T) {
 	}
 }
 
+func TestCollector_TenantExpectedExporter(t *testing.T) {
+	// #869: emit tenant_expected_exporter{tenant,db_type}=1 ONLY for tenants that
+	// declare a db_type in _metadata. db-a declares mariadb (emits); db-b declares
+	// postgresql (emits); db-c has _metadata but NO db_type (must NOT emit — the
+	// db_type="" guard); db-d has no _metadata at all (must NOT emit).
+	cfg := &ThresholdConfig{
+		Defaults: map[string]float64{},
+		Tenants: map[string]map[string]ScheduledValue{
+			"db-a": {
+				"_metadata": SV("db_type: mariadb\nowner: dba-team"),
+			},
+			"db-b": {
+				"_metadata": SV("db_type: postgresql\nowner: pg-team"),
+			},
+			"db-c": {
+				// _metadata present but db_type omitted → DBType=="" → skipped.
+				"_metadata": SV("owner: misc-team\ntier: bronze"),
+			},
+			"db-d": {
+				// No _metadata at all → DBType=="" → skipped.
+			},
+		},
+	}
+
+	manager := newTestManager(cfg)
+	collector := NewThresholdCollector(manager)
+
+	// Only db-a and db-b appear; db-c and db-d are absent (opt-in via db_type).
+	expected := `
+		# HELP tenant_expected_exporter Liveness expectation (always 1) for each tenant that declares a db_type in _metadata. LHS of the TenantExporterAbsent anti-join (#869). One series per declaring tenant.
+		# TYPE tenant_expected_exporter gauge
+		tenant_expected_exporter{db_type="mariadb",tenant="db-a"} 1
+		tenant_expected_exporter{db_type="postgresql",tenant="db-b"} 1
+	`
+	if err := testutil.CollectAndCompare(collector, strings.NewReader(expected), "tenant_expected_exporter"); err != nil {
+		t.Errorf("tenant_expected_exporter output mismatch: %v", err)
+	}
+}
+
 func TestCollector_SilentMode_Expired_EmitsConfigEvent(t *testing.T) {
 	cfg := &ThresholdConfig{
 		Defaults: map[string]float64{},

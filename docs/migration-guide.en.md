@@ -73,7 +73,7 @@ flowchart TD
 
 The standard path from zero to cutover: **install → reverse-analyze (if any) → generate / convert config → deploy → routing → verify**.
 
-> **Why it's low-friction**: the platform preloads **15 Rule Pack ConfigMaps** (MariaDB, PostgreSQL, Kubernetes, Redis, MongoDB, Elasticsearch, Oracle, DB2, ClickHouse, Kafka, RabbitMQ, JVM, Nginx, Operational, Platform self-monitoring), distributed via **Projected Volume**. **Rule Packs without a deployed exporter produce no metrics and trigger no false alerts** — you only configure `_defaults.yaml` + tenant YAML. See [design/rule-packs.en.md](design/rule-packs.en.md).
+> **Why it's low-friction**: the platform preloads **16 Rule Pack ConfigMaps** (MariaDB, PostgreSQL, Kubernetes, Redis, MongoDB, Elasticsearch, Oracle, DB2, ClickHouse, Kafka, RabbitMQ, JVM, Nginx, Operational, Platform self-monitoring), distributed via **Projected Volume**. **Rule Packs without a deployed exporter produce no metrics and trigger no false alerts** — you only configure `_defaults.yaml` + tenant YAML. See [design/rule-packs.en.md](design/rule-packs.en.md).
 
 ### 1. Install the Migration Toolkit
 
@@ -269,7 +269,7 @@ When `da-tools migrate` hits an unparseable rule (e.g. `absent()` / `predict_lin
 
 ### 11. Extending Unsupported DB Types
 
-The preloaded 15 Rule Packs already cover mainstream DBs / middleware (MariaDB / PostgreSQL / Redis / MongoDB / Elasticsearch / Oracle / DB2 / ClickHouse / Kafka / RabbitMQ / JVM / Nginx / Kubernetes / Operational / Platform self-monitoring). Adding a new rule pack requires a manual normalization layer.
+The preloaded 16 Rule Packs already cover mainstream DBs / middleware (MariaDB / PostgreSQL / Redis / MongoDB / Elasticsearch / Oracle / DB2 / ClickHouse / Kafka / RabbitMQ / JVM / Nginx / Kubernetes / Operational / Platform self-monitoring). Adding a new rule pack requires a manual normalization layer.
 
 **Normalization naming**: `tenant:<component>_<metric>:<aggregation_function>`
 
@@ -336,7 +336,7 @@ Full SOP (shadow route interception, `migration_status` label, K8s Job sample, t
 
 ### 14. Rule Pack Dynamic Toggle
 
-All 15 Rule Pack projected-volume entries use `optional: true`, allowing on-demand unmount / re-enable:
+All 16 Rule Pack projected-volume entries use `optional: true`, allowing on-demand unmount / re-enable:
 
 ```bash
 # Unmount (e.g. when you bring your own MariaDB rules and want the golden pack off)

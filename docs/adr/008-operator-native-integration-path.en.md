@@ -66,7 +66,7 @@ graph TB
 ### Path B Tool Design
 
 **`da-tools operator-generate`**:
-- Read `rule-packs/` → output 15 PrometheusRule CRD YAML
+- Read `rule-packs/` → output 16 PrometheusRule CRD YAML
 - Read `conf.d/` → output per-tenant AlertmanagerConfig CRD
 - Output ServiceMonitor for threshold-exporter
 - `--api-version` flag specifies AlertmanagerConfig API version (`v1alpha1` | `v1beta1`, default `v1beta1`)
@@ -120,7 +120,7 @@ We evaluated rewriting threshold-exporter to watch a custom `DynamicAlertTenant`
 ### Why not just provide documentation (instead of building tools)?
 
 v2.2.0 BYO documentation's Operator Appendix was only CRD example translation. User feedback revealed:
-- Manual conversion of 15 Rule Pack ConfigMaps → PrometheusRule is time-consuming and error-prone
+- Manual conversion of 16 Rule Pack ConfigMaps → PrometheusRule is time-consuming and error-prone
 - AlertmanagerConfig API version differences are easy to get wrong
 - GitOps pipelines require deterministic output
 

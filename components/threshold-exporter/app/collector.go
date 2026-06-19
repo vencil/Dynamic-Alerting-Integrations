@@ -76,6 +76,7 @@ func (c *ThresholdCollector) Collect(ch chan<- prometheus.Metric) {
 	c.collectSeverityDedup(ch, cfg)
 	c.collectConfigInfo(ch)
 	c.collectMetadata(ch, cfg)
+	c.collectTenantExpectedExporter(ch, cfg)
 }
 
 // collectThresholds emits the user_threshold gauge for every resolved
@@ -320,6 +321,57 @@ func (c *ThresholdCollector) collectMetadata(ch chan<- prometheus.Metric, cfg *T
 			md.Tenant, md.RunbookURL, md.Owner, md.Tier)
 		if err != nil {
 			log.Printf("WARN: failed to create tenant_metadata_info metric for tenant=%s: %v", md.Tenant, err)
+			continue
+		}
+		ch <- m
+	}
+}
+
+// collectTenantExpectedExporter emits tenant_expected_exporter{tenant, db_type}=1
+// for every tenant that DECLARES a db_type in its _metadata block (#869).
+//
+// This is the LEFT-hand input to the per-tenant liveness anti-join
+// (TenantExporterAbsent in rule-pack-liveness.yaml):
+//
+//	tenant_expected_exporter unless on(tenant) (up{job="tenant-exporters"} == 1)
+//
+// so each declaring tenant for which no live exporter target reports up==1 is
+// flagged — fixing the global `absent(<db>_up)` false-negative where one live
+// tenant masked another tenant's total exporter outage.
+//
+// Opt-in contract — db_type guard is LOAD-BEARING, not cosmetic:
+// ResolveMetadata() returns EVERY tenant unconditionally, and a tenant with no
+// _metadata resolves to DBType=="" (resolve.go:763-765). Emitting db_type="" for
+// such tenants would put a left-hand series into the anti-join for a tenant that
+// has no corresponding `<db>_up` series at all → the rule would fire a permanent
+// false-positive critical against it. So we emit ONLY for tenants that declared a
+// db_type: liveness coverage is OPT-IN via declaring db_type. (Hence "1 series per
+// tenant that declares db_type", not "1 per tenant" — see #869 design note.)
+//
+// Deliberately a NEW, SEPARATE metric — db_type is intentionally NOT added to
+// tenant_metadata_info. types.go:102-103 records the v2.5.0 decision that db_type
+// is NOT a Prometheus label (cardinality concern); tenant_metadata_info is also a
+// load-bearing 1-series-per-tenant info metric consumed by ~15 group_left joins,
+// so widening its label set is forbidden. This is a SCOPED reversal of types.go:102
+// limited to the narrow, low-cardinality (1 series/declaring tenant) liveness need.
+func (c *ThresholdCollector) collectTenantExpectedExporter(ch chan<- prometheus.Metric, cfg *ThresholdConfig) {
+	expectedDesc := prometheus.NewDesc(
+		"tenant_expected_exporter",
+		"Liveness expectation (always 1) for each tenant that declares a db_type in _metadata. "+
+			"LHS of the TenantExporterAbsent anti-join (#869). One series per declaring tenant.",
+		[]string{"tenant", "db_type"},
+		nil,
+	)
+	for _, md := range cfg.ResolveMetadata() {
+		// Opt-in: only tenants that declared a db_type are expected to have a
+		// live exporter. Skipping db_type="" avoids a false-positive TenantExporterAbsent.
+		if md.DBType == "" {
+			continue
+		}
+		m, err := prometheus.NewConstMetric(expectedDesc, prometheus.GaugeValue, 1.0,
+			md.Tenant, md.DBType)
+		if err != nil {
+			log.Printf("WARN: failed to create tenant_expected_exporter metric for tenant=%s: %v", md.Tenant, err)
 			continue
 		}
 		ch <- m

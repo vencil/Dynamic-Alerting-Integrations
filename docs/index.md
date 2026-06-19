@@ -107,7 +107,7 @@ graph LR
 ```mermaid
 graph TB
     A["租戶配置\n(conf.d/*.yaml)"] -->|per-tenant threshold| B["threshold-exporter\n(×2 HA)"]
-    B -->|"Prometheus metric\n(tenant:alert_threshold:*)"| C["Prometheus\n(15 Rule Packs)"]
+    B -->|"Prometheus metric\n(tenant:alert_threshold:*)"| C["Prometheus\n(16 Rule Packs)"]
     C -->|group_left matching| D["Alert Rules\n(固定數量)"]
     D -->|AlertGroup| E["Alertmanager"]
     E -->|dynamic route| F["Receivers\nwebhook/email/slack/teams"]
@@ -141,7 +141,7 @@ graph TB
 
 ## 平台能力
 
-**規則引擎：** O(M) 複雜度（`group_left` 向量匹配）· 15 個 Rule Pack Projected Volume 獨立部署 · Severity Dedup via Alertmanager Inhibit（[ADR-001](adr/001-severity-dedup-via-inhibit.md)）
+**規則引擎：** O(M) 複雜度（`group_left` 向量匹配）· 16 個 Rule Pack Projected Volume 獨立部署 · Severity Dedup via Alertmanager Inhibit（[ADR-001](adr/001-severity-dedup-via-inhibit.md)）
 
 **租戶管理：** 三態模式（Normal/Silent/Maintenance）· 四層路由合併（[ADR-007](adr/007-cross-domain-routing-profiles.md)）· 排程式閾值與維護窗口 · Schema Validation · Cardinality Guard
 
@@ -160,7 +160,7 @@ graph TB
 | [治理與安全](governance-security.md) | 合規、主管 | 三層治理模型、審計 |
 | [基準測試](benchmarks.md) | Platform Engineer | 效能數據與方法論 |
 | 整合指南 | Platform Engineer | [BYO Prometheus](integration/byo-prometheus-integration.md) · [BYO Alertmanager](integration/byo-alertmanager-integration.md) · [Federation](integration/federation-integration.md) · [GitOps](integration/gitops-deployment.md) · [VCS](vcs-integration-guide.md) |
-| [Rule Packs](rule-packs/README.md) | All | 15 個規則包 + [Alert 速查](rule-packs/ALERT-REFERENCE.md) |
+| [Rule Packs](rule-packs/README.md) | All | 16 個規則包 + [Alert 速查](rule-packs/ALERT-REFERENCE.md) |
 | [場景指南](scenarios/) | All | 9 個實戰場景 |
 | [疑難排解](troubleshooting.md) | All | 常見問題與解法 |
 

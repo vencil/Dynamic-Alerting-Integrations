@@ -168,6 +168,13 @@ jobs:
             --policy .github/custom-rule-policy.yaml \
             --ci
 
+      - name: RETIRE-ordering gate (#869 — no K8s-target delete with conf.d _metadata残留)
+        # Unfiltered over HEAD (the pre-commit mirror's path filter can miss
+        # delete-only PRs). Forbids stranding tenant_expected_exporter → a
+        # false-positive TenantExporterAbsent critical against a de-provisioned tenant.
+        run: |
+          python scripts/tools/lint/check_retire_drift.py --ci
+
       - name: Install promtool
         run: |
           PROM_VERSION=2.53.2

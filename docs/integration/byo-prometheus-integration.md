@@ -27,7 +27,7 @@ lang: zh
 | 2 | 抓取 `threshold-exporter` | ~2 分鐘 |
 | 3 | 掛載黃金規則包 (Rule Packs) | ~5 分鐘 |
 
-整合後，你的 Prometheus 會新增：1 個 relabel 設定、1 個 scrape job、以及 15 個 Rule Pack ConfigMap（可選擇性掛載）。**現有的 scrape job、recording rule、alerting rule 完全不受影響。**
+整合後，你的 Prometheus 會新增：1 個 relabel 設定、1 個 scrape job、以及 16 個 Rule Pack ConfigMap（可選擇性掛載）。**現有的 scrape job、recording rule、alerting rule 完全不受影響。**
 
 ```mermaid
 graph LR
@@ -42,7 +42,7 @@ graph LR
 
     subgraph DA["Dynamic Alerting (新增)"]
         TE["threshold-exporter<br/>×2 HA :8080"]
-        RP["15 Rule Pack<br/>ConfigMaps"]
+        RP["16 Rule Pack<br/>ConfigMaps"]
     end
 
     NS -->|"① relabel_configs<br/>namespace → tenant"| P

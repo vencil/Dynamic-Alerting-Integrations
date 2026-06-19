@@ -25,7 +25,7 @@ lang: zh
 
 **1. threshold-exporter 是核心。** 它讀取 YAML 設定、產生 Prometheus Metrics、支援 SHA-256 hot-reload。兩個副本以 HA 方式運行在 port 8080。
 
-**2. Rule Pack 是自成一體的單位。** 15 個 Rule Pack 透過 Projected Volume 掛載到 Prometheus，每個涵蓋一個資料庫或服務類型（MariaDB、PostgreSQL、Redis 等）。用 `optional: true` 機制安全卸載不需要的 Rule Pack。
+**2. Rule Pack 是自成一體的單位。** 16 個 Rule Pack 透過 Projected Volume 掛載到 Prometheus，每個涵蓋一個資料庫或服務類型（MariaDB、PostgreSQL、Redis 等）。用 `optional: true` 機制安全卸載不需要的 Rule Pack。
 
 **3. 一切都由配置驅動。** `_defaults.yaml` 控制平台全局行為，tenant YAML 覆蓋預設值，`_profiles.yaml` 提供繼承鏈。沒有硬編碼，沒有秘密。
 

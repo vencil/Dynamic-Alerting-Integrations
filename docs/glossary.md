@@ -128,7 +128,7 @@ lang: zh
 :   da-portal 的互動式路由 profile 產生工具（JSX），協助以視覺化方式組裝 Routing Profile 與 Domain Policies。
 
 **Projected Volume**
-:   Kubernetes Volume 類型，可將多個 ConfigMap 掛載至同一目錄。本平台用於將 15 個 Rule Pack ConfigMap 掛載至 Prometheus 的 rules 目錄，每個設定 `optional: true`。
+:   Kubernetes Volume 類型，可將多個 ConfigMap 掛載至同一目錄。本平台用於將 16 個 Rule Pack ConfigMap 掛載至 Prometheus 的 rules 目錄，每個設定 `optional: true`。
 
 **Prometheus Operator**
 :   CNCF 的 Kubernetes operator，以 CRD 管理 Prometheus / Alertmanager。本平台可與既有 Operator 環境整合（見 Operator CRD、operator-manifests）。

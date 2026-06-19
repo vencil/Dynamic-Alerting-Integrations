@@ -92,7 +92,7 @@ lang: zh
 
 **文件**: [`005-projected-volume-for-rule-packs.md`](./005-projected-volume-for-rule-packs.md)
 
-採用 Projected Volume 與 `optional: true` 實現 15 個 Rule Pack 的可選卸載。租戶可刪除個別 ConfigMap 來禁用特定 Rule Pack，Prometheus 不會因缺失 pack 而失敗。
+採用 Projected Volume 與 `optional: true` 實現 16 個 Rule Pack 的可選卸載。租戶可刪除個別 ConfigMap 來禁用特定 Rule Pack，Prometheus 不會因缺失 pack 而失敗。
 
 ---
 

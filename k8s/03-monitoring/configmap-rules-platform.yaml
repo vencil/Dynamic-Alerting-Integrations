@@ -457,6 +457,75 @@ data:
                 split) trigger are documented in
                 docs/api/tenant-api-hardening.md. Dashboard: tenant_api_sse_clients.
 
+          # --- Tenant-exporter liveness: catastrophic fallback (#869) ---
+          # Per-tenant TenantExporterAbsent (rule-pack-liveness.yaml) anti-joins
+          # tenant_expected_exporter (LHS) against up==1. If the WHOLE
+          # tenant-exporters job vanishes — Prometheus loses the scrape job, or
+          # the threshold-exporter that PRODUCES tenant_expected_exporter itself
+          # dies — the anti-join's LHS goes empty and the per-tenant rule cannot
+          # fire (you can't anti-join nothing). This `absent()` over the raw job
+          # is the dead-man's-switch for that catastrophe class. It lives HERE
+          # (platform, hand-authored) not in rule-packs/ because it is platform-
+          # scoped with NO tenant fan-out: absent() returns an empty-matcher
+          # vector with no tenant label, which would (a) make rule-packs/'s
+          # required_labels:[tenant] policy meaningless and (b) trip pint
+          # alerts/template — exactly why the *ExporterAbsent class has always
+          # been the absent()-sentinel exception. (`alerts/comparison` is globally
+          # disabled in .pint.hcl for this absent()-always-firing-by-design class.)
+          - alert: TenantExporterJobAbsent
+            expr: absent(up{job="tenant-exporters"})
+            for: 3m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Entire tenant-exporters scrape job is absent — per-tenant liveness is BLIND"
+              description: |
+                No `up{job="tenant-exporters"}` series exist at all. Either
+                Prometheus lost the scrape job (SD/config regression) or the
+                threshold-exporter that emits tenant_expected_exporter is down —
+                in BOTH cases the per-tenant TenantExporterAbsent rule cannot fire
+                (its anti-join LHS is empty), so this catastrophic fallback is the
+                only signal. Check Prometheus /targets for the tenant-exporters job
+                and the threshold-exporter Deployment.
+
+          # --- Mass exporter outage: page-storm sentinel (#869, scale guard) ---
+          # When a shared dependency (node pool, network partition, registry
+          # outage on a rolling restart) knocks out MANY tenants' exporters at
+          # once, TenantExporterAbsent fans out into one critical PER tenant — a
+          # page storm. This single sentinel collapses that into ONE actionable
+          # page. It mirrors the DefaultsTruncationStorm idiom (above): aggregate
+          # the RAW anti-join expression (NOT the alertname — `count(...)(Foo)` is
+          # not valid PromQL, and there is no ALERTS{} idiom in this repo), and use
+          # `count without (tenant, db_type)` to collapse the per-tenant fan-out
+          # into ONE global count. NB BOTH labels must be dropped: the anti-join
+          # result carries db_type (from tenant_expected_exporter), so a bare
+          # `without (tenant)` would split the count PER db_type — 6 mariadb + 5
+          # postgresql down would give two sub-counts (6, 5), neither > 10, and the
+          # storm would SILENTLY not fire despite 11 total down. Dropping db_type too
+          # yields a single mixed-DB outage count. Counting the raw expression (not
+          # ALERTS) also means it fires WITHOUT waiting for TenantExporterAbsent's
+          # for:3m to elapse per tenant. The `without(...)` form + no tenant label is
+          # exactly why this cannot live in rule-packs/ (lint_custom_rules denies
+          # `without(tenant)` and mandates a tenant label).
+          # Threshold 10 is a provisional page-storm floor — tune to the deployment's
+          # tenant count (a handful of tenants down = the per-tenant pages suffice).
+          - alert: MassExporterOutage
+            expr: count without (tenant, db_type) (tenant_expected_exporter unless on(tenant) (up{job="tenant-exporters"} == 1)) > 10
+            for: 3m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Mass exporter outage ({{ $value }} tenants) — shared-dependency failure suspected"
+              description: |
+                More than 10 tenants simultaneously have no healthy
+                up{job="tenant-exporters"}==1 target. This is almost certainly a
+                SHARED failure (node pool drained, network partition, image-pull
+                outage on a rolling restart) rather than N independent exporter
+                deaths. Treat as ONE incident: inspect node health / network /
+                recent cluster-wide changes FIRST — remediating tenants one by one
+                will not address the common cause. Per-tenant detail is in the
+                fanned-out TenantExporterAbsent alerts.
+
       # ============================================================
       # Federation Audit (ADR-020 IV-2f, issue #511)
       # Monitors the federation data plane via the metric

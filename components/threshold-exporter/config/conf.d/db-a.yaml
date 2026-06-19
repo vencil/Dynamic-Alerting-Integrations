@@ -5,3 +5,10 @@ tenants:
   db-a:
     mysql_connections: "70"
     container_cpu: "70"
+    # v2.10.0 (#869): db_type opts this tenant into per-tenant exporter liveness.
+    # The exporter emits tenant_expected_exporter{tenant="db-a",db_type="mariadb"}=1,
+    # the LHS of TenantExporterAbsent (rule-pack-liveness.yaml). Without a db_type
+    # the tenant is NOT liveness-monitored (opt-in). db_type does NOT become a
+    # tenant_metadata_info label (that stays {tenant,runbook_url,owner,tier}).
+    _metadata:
+      db_type: mariadb

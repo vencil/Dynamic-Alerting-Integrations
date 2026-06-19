@@ -82,6 +82,10 @@ groups:
   # -------------------------------------------------------
   - name: rabbitmq-alerts
     rules:
+      # DEPRECATED (#869): superseded by TenantExporterAbsent in rule-pack-liveness.yaml.
+      # GLOBAL absent() → false-negative when one live tenant masks another's outage,
+      # and empty `tenant` label. Kept ONE release as a deprecation shim so external
+      # matchers on RabbitMQExporterAbsent don't break. Removal: next release.
       - alert: RabbitMQExporterAbsent
         expr: absent(rabbitmq_identity_info{job="tenant-exporters"})
         for: 30s
