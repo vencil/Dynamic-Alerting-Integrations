@@ -33,6 +33,13 @@ spec:
               drop:
                 - ALL
           env:
+            # promtool is Go: pre-Go-1.25 it sets GOMAXPROCS to the NODE's CPU
+            # count (NOT this cgroup's cpu limit), so on a many-core node a light
+            # `promtool test` would spin up dozens of OS threads thrashing in this
+            # ~200m-CPU cgroup. Pin to the cpu limit — one short rule-eval needs no
+            # parallelism. (Python ignores GOMAXPROCS; only the promtool child reads it.)
+            - name: GOMAXPROCS
+              value: "1"
             - name: PREVIEW_TENANT_API_URL
               value: {{ .Values.tenantApiUrl | quote }}
             - name: PREVIEW_LISTEN_PORT

@@ -25,8 +25,11 @@ service:
   type: ClusterIP
   port: 8082                    # single port; matches da-portal recipePreviewUrl :8082
 
-# tenant-api base URL the PEP calls for the /access authz probe.
-tenantApiUrl: "http://tenant-api.monitoring.svc.cluster.local:8080"
+# tenant-api base URL the PEP calls for the /access authz probe. Short same-
+# namespace name (NOT the .cluster.local FQDN) for DNS portability — clusters with
+# a custom DNS domain still resolve it via the pod's search domain; also matches
+# app.py's own default. Override with an FQDN for a cross-namespace tenant-api.
+tenantApiUrl: "http://tenant-api:8080"
 
 # §6 guardrails (app.py env). These match the binary defaults; override if needed.
 preview:
