@@ -2,6 +2,6 @@
   "version": 3,
   "sources": ["../../../tools/portal/entries/recipe-builder.entry.jsx"],
   "sourcesContent": ["import React from 'react';\nimport { createRoot } from 'react-dom/client';\nimport RecipeBuilder from '../src/interactive/tools/recipe-builder.jsx';\nimport { ErrorBoundary } from '../src/interactive/tools/_common/components/ErrorBoundary.jsx';\n\nconst rootEl = document.getElementById('root');\nif (rootEl) {\n  createRoot(rootEl).render(\n    React.createElement(ErrorBoundary, { scope: 'recipe-builder' },\n      React.createElement(RecipeBuilder),\n    ),\n  );\n}\n"],
-  "mappings": "iIAAA,IAAAA,EAAkB,SAClBC,EAA2B,SAI3B,IAAMC,EAAS,SAAS,eAAe,MAAM,EACzCA,MACF,cAAWA,CAAM,EAAE,OACjB,EAAAC,QAAM,cAAcC,EAAe,CAAE,MAAO,gBAAiB,EAC3D,EAAAD,QAAM,cAAcE,CAAa,CACnC,CACF",
+  "mappings": "6JAAA,IAAAA,EAAkB,SAClBC,EAA2B,SAI3B,IAAMC,EAAS,SAAS,eAAe,MAAM,EACzCA,MACF,cAAWA,CAAM,EAAE,OACjB,EAAAC,QAAM,cAAcC,EAAe,CAAE,MAAO,gBAAiB,EAC3D,EAAAD,QAAM,cAAcE,CAAa,CACnC,CACF",
   "names": ["import_react", "import_client", "rootEl", "React", "ErrorBoundary", "RecipeBuilder"]
 }

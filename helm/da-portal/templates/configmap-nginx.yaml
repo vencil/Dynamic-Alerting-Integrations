@@ -77,6 +77,26 @@ data:
         proxy_buffers 4 256k;
       }
 
+      # ── Reverse Proxy to recipe-preview for /preview (#657 would-fire) ─────
+      # Same-origin keeps CSP connect-src 'self' intact. recipe-preview is a PEP
+      # that delegates tenant authz to tenant-api; forward the oauth2-proxy
+      # identity headers (it reads X-Forwarded-Email / X-Forwarded-Groups).
+      location = /preview {
+        proxy_pass {{ .Values.portal.recipePreviewUrl }}/preview;
+        proxy_http_version 1.1;
+
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Email  $http_x_forwarded_email;
+        proxy_set_header X-Forwarded-User   $http_x_forwarded_user;
+        proxy_set_header X-Forwarded-Groups $http_x_forwarded_groups;
+
+        proxy_connect_timeout 5s;
+        proxy_read_timeout 30s;
+      }
+
       # ── Static Files (Interactive Tools, JSX, platform-data.json, etc.) ────
       location / {
         root /usr/share/nginx/html;

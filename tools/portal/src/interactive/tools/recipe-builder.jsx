@@ -11,6 +11,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useDebouncedValue } from './_common/hooks/useDebouncedValue.js';
 import ENUMS from './_common/data/recipe-enums.json';
 import RECIPE_STATUS from './_common/data/recipe-status.json';
+import { Loading } from './_common/components/Loading.jsx';
 
 /* ── i18n helper ───────────────────────────────────────────────────── */
 const t = window.__t || ((zh, en) => en);
@@ -200,6 +201,28 @@ function defaultFetchMetrics(tenantId, q, signal) {
     .then((j) => (Array.isArray(j.metrics) ? j.metrics : []));
 }
 
+/* ── default live would-fire fetcher (#657; overridable for tests) ────
+ * POSTs the recipe + a scenario value to the recipe-preview service via the
+ * SAME-ORIGIN nginx /preview proxy (never cross-origin to :8082 — CSP
+ * connect-src 'self'). Returns the service's verdict object verbatim; the
+ * panel renders it as-is (dumb handoff — the backend owns the firing
+ * contract). Surfaces the structured {error} body like defaultFetchMetrics. */
+function defaultPreviewFetch(tenantId, recipeObj, scenario, signal) {
+  return fetch('/preview', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ recipe: recipeObj, tenant: tenantId, scenario }),
+    signal,
+  }).then(async (r) => {
+    if (!r.ok) {
+      let detail = r.statusText || `HTTP ${r.status}`;
+      try { const b = await r.json(); if (b && typeof b.error === 'string') detail = b.error; } catch (_) { /* keep detail */ }
+      const e = new Error(detail); e.status = r.status; throw e;
+    }
+    return r.json();
+  });
+}
+
 /* ── MetricField — an INDEPENDENT autocomplete fetcher (review Reef 4):
  * own debounce + AbortController; ghost validation DECOUPLED from the
  * suggestion list (review Reef 3). Module-scope (jsx-loader-compat). ── */
@@ -284,6 +307,165 @@ function MetricField({ label, value, onChange, tenantId, fetchMetrics, inputClas
   );
 }
 
+/* ── would-fire preview panel (#657): answer "will this recipe fire?" in
+ * the same form. Manual button ONLY — no auto-fire (design §6 #4: ~1s promtool
+ * latency). Four explicit states (never derived from is-null). The verdict is
+ * shown VERBATIM: firing / inactive / error come from the backend's states[];
+ * an unsupported recipe type surfaces response.warnings as an honest "coming
+ * soon" (§7 — never blank, never fake-OK). This panel NEVER computes firing
+ * client-side (dumb handoff — the backend owns the cross-language contract). */
+const PREVIEW = { EMPTY: 'empty', LOADING: 'loading', READY: 'ready', ERROR: 'error' };
+
+function WouldFirePanel({ recipeObj, tenantId, previewFetch, inputClass }) {
+  const [value, setValue] = useState('');
+  const [status, setStatus] = useState(PREVIEW.EMPTY);
+  const [result, setResult] = useState(null);
+  const [errorInfo, setErrorInfo] = useState(null);
+  const abortRef = useRef(null);
+  const resultRef = useRef(null);
+
+  // Invalidate a stale verdict: when the recipe definition or tenant changes, a
+  // previously-shown firing/inactive result no longer matches the form (e.g. the
+  // user edits the threshold after a run but doesn't re-run). Reset to EMPTY and
+  // drop any in-flight run — "no preview" is far safer than a wrong preview.
+  useEffect(() => {
+    if (abortRef.current) abortRef.current.abort();
+    setStatus(PREVIEW.EMPTY);
+    setResult(null);
+    setErrorInfo(null);
+  }, [recipeObj, tenantId]);
+
+  const numeric = value.trim() === '' ? NaN : Number(value);
+  const canRun = !!recipeObj && !!tenantId && Number.isFinite(numeric) && status !== PREVIEW.LOADING;
+
+  // Why Run is disabled — surfaced to the user. A greyed button with no reason
+  // is a dead end, and an incomplete recipe is otherwise only visible in the
+  // separate summary box above this panel.
+  const blocker = !tenantId
+    ? t('需要 tenant id（網址帶 ?tenant_id=…）', 'tenant id required (add ?tenant_id=…)')
+    : !recipeObj
+      ? t('先填妥上方必填參數', 'complete the required fields above first')
+      : !Number.isFinite(numeric)
+        ? t('測試值需為數字', 'test value must be a number')
+        : null;
+
+  async function run() {
+    if (!canRun) return;
+    if (abortRef.current) abortRef.current.abort();          // supersede in-flight
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
+    setStatus(PREVIEW.LOADING);
+    setErrorInfo(null);
+    // Move focus to the result so keyboard / screen-reader users land on the
+    // verdict (the aria-live announcement alone doesn't move sighted focus).
+    const focusResult = () => requestAnimationFrame(() => { if (resultRef.current) resultRef.current.focus(); });
+    try {
+      const data = await previewFetch(tenantId, recipeObj, { value: numeric }, ctrl.signal);
+      if (ctrl.signal.aborted || data == null) return;       // a newer run supersedes
+      setResult(data);
+      setStatus(PREVIEW.READY);
+      focusResult();
+    } catch (err) {
+      if (err && err.name === 'AbortError') return;
+      setErrorInfo({ message: err.message, status: err.status });
+      setStatus(PREVIEW.ERROR);
+      focusResult();
+    }
+  }
+
+  // Verdict view: shape glyph (aria-hidden) + word + color, so firing / inactive
+  // / error are distinguishable WITHOUT relying on colour alone (ADR-012 / #655 /
+  // #860). The glyph is decorative — the WORD is what AT announces.
+  function stateView(s, i) {
+    if (s.state === 'firing') {
+      return (
+        <div key={i} data-testid="wouldfire-firing"
+          className="p-2 rounded border border-[color:var(--da-color-error)] bg-[color:var(--da-color-error-soft)] text-sm text-[color:var(--da-color-error-text)]">
+          <strong><span aria-hidden="true">● </span>{t('會觸發', 'Would fire')}</strong>{s.reason ? <span> — {s.reason}</span> : null}
+        </div>
+      );
+    }
+    if (s.state === 'inactive') {
+      return (
+        <div key={i} data-testid="wouldfire-inactive"
+          className="p-2 rounded border border-[color:var(--da-color-surface-border)] text-sm text-[color:var(--da-color-muted)]">
+          <strong className="text-[color:var(--da-color-fg)]"><span aria-hidden="true">○ </span>{t('不會觸發', 'Would not fire')}</strong>
+          {s.reason ? <span> — {s.reason}</span>
+            : <span> — {t('在此測試值下條件未達', 'condition not met at this test value')}</span>}
+        </div>
+      );
+    }
+    // 'error' (or any non-firing/inactive): the eval couldn't produce a verdict
+    // (often "this scenario can't be evaluated for this recipe", not a fault).
+    return (
+      <div key={i} data-testid="wouldfire-eval-error"
+        className="p-2 rounded border border-[color:var(--da-color-warning)] bg-[color:var(--da-color-warning-soft)] text-sm text-[color:var(--da-color-warning-text)]">
+        <strong><span aria-hidden="true">▲ </span>{t('無法試算', 'Can’t preview this')}</strong>{s.reason ? <span> — {s.reason}</span> : null}
+      </div>
+    );
+  }
+
+  const warns = (result && Array.isArray(result.warnings)) ? result.warnings.filter(Boolean) : [];
+
+  return (
+    <div className="my-4 p-3 rounded-md border border-[color:var(--da-color-surface-border)]" data-testid="wouldfire">
+      <label htmlFor="wouldfire-value" className="block text-sm font-medium mb-1">
+        {t('會不會觸發？填一個測試值試算', 'Would it fire? Enter a test value and preview')}
+      </label>
+      <div className="flex items-center gap-2 mb-1">
+        <input type="number" id="wouldfire-value" inputMode="decimal" className={inputClass} value={value}
+          aria-label={t('測試值', 'Test value')} data-testid="wouldfire-value" placeholder="1500"
+          onChange={(e) => setValue(e.target.value)} />
+        <button type="button" data-testid="wouldfire-run" disabled={!canRun} aria-disabled={!canRun}
+          title={blocker || undefined} onClick={run}
+          className="px-3 py-2 rounded-md text-sm font-medium whitespace-nowrap border border-[color:var(--da-color-accent)] bg-[color:var(--da-color-accent)] text-[color:var(--da-color-accent-fg)] disabled:opacity-50">
+          {t('試算', 'Run preview')}
+        </button>
+      </div>
+      {blocker && status !== PREVIEW.LOADING && (
+        <p className="text-xs mb-2 text-[color:var(--da-color-muted)]" data-testid="wouldfire-blocker">{blocker}</p>
+      )}
+      <div ref={resultRef} tabIndex={-1} role="status" aria-live="polite" aria-atomic="true" className="focus:outline-none">
+        {status === PREVIEW.EMPTY && !blocker && (
+          <p data-testid="wouldfire-state-empty" className="text-xs text-[color:var(--da-color-muted)]">
+            {t('按「試算」查看會不會觸發。', 'Press Run preview to see whether it fires.')}
+          </p>
+        )}
+        {status === PREVIEW.LOADING && (
+          <Loading testid="wouldfire-state-loading" size="sm" message={t('試算中…', 'Previewing…')} />
+        )}
+        {status === PREVIEW.ERROR && errorInfo && (
+          <div data-testid="wouldfire-state-error" role="alert"
+            className="p-2 rounded border border-[color:var(--da-color-error)] bg-[color:var(--da-color-error-soft)] text-sm text-[color:var(--da-color-error-text)]">
+            <div className="font-semibold">
+              {errorInfo.status
+                ? t(`連線錯誤 (HTTP ${errorInfo.status})`, `Request error (HTTP ${errorInfo.status})`)
+                : t('連線錯誤', 'Request error')}
+            </div>
+            <div className="mt-1 break-words">{errorInfo.message}</div>
+          </div>
+        )}
+        {status === PREVIEW.READY && result && (
+          result.supported === false ? (
+            <div data-testid="wouldfire-state-unsupported"
+              className="p-2 rounded border border-[color:var(--da-color-surface-border)] text-sm text-[color:var(--da-color-muted)]">
+              {warns.length ? warns.join(' ')
+                : t('此 recipe 類型的試算即將推出。', 'Preview for this recipe type is coming soon.')}
+            </div>
+          ) : (
+            <div data-testid="wouldfire-state-ready" className="space-y-2">
+              {(result.states || []).map((s, i) => stateView(s, i))}
+              {warns.length > 0 && (
+                <p data-testid="wouldfire-warnings" className="text-xs text-[color:var(--da-color-warning-text)]">{warns.join(' ')}</p>
+              )}
+            </div>
+          )
+        )}
+      </div>
+    </div>
+  );
+}
+
 /* ── main component ───────────────────────────────────────────────── */
 export default function RecipeBuilder(props) {
   const {
@@ -291,6 +473,7 @@ export default function RecipeBuilder(props) {
       ? new URLSearchParams(window.location.search).get('tenant_id') || ''
       : ''),
     fetchMetrics = defaultFetchMetrics,
+    previewFetch = defaultPreviewFetch,
     onSubmit = null,
     initialValue = null,
   } = props || {};
@@ -422,6 +605,10 @@ export default function RecipeBuilder(props) {
               {t('等待填寫必填參數以生成規則摘要…', 'Waiting for required fields to generate the rule summary...')}
             </span>}
       </div>
+
+      {/* would-fire preview (#657): "will this fire?" answered in the same form */}
+      <WouldFirePanel recipeObj={recipeObj} tenantId={tenantId}
+        previewFetch={previewFetch} inputClass={inputClass} />
 
       {/* exit: onSubmit (tenant-manager) or YAML snippet (GitOps persona) */}
       {onSubmit ? (
