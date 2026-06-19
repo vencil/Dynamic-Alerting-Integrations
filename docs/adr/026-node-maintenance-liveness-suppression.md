@@ -100,7 +100,12 @@ defer 的是「在 per-tenant liveness 告警上再疊一層維護 opt-out」，
 - **新建 `da-tools maintenance extend` CLI**：現行 `maintenance_scheduler.extend_silence` 是 Silence 平面、只被 CronJob 內部呼叫、無 CLI 入口（這兩點是查證修正過的事實）。
 - **盲區護欄**：抑制 liveness = 維護窗內對真實 down 盲，故設 Max-TTL 自動到期 + 事後對賬。
 
-> **為何 defer**：殘量窄、且現場數據顯示當前客戶根本不 fire 這個殘量 → 不值一套會「自己關掉 critical 告警」的常駐機制。
+> **為何 defer（而非現在就做）**：不是因為場景罕見（維護窗靜音是標準需求），而是三點不對稱——
+> 1. **零現用 demand**：當前 HA 客戶不 fire 這個殘量（見上「現場數據」段）。
+> 2. **下檔風險不對稱**：這功能本質是「維護期間靜音一條 critical liveness」，配置一錯就能藏住真實 outage。
+> 3. **之後補很便宜**：真出現單實例客戶時，opt-out 只是在 [#869](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/869) 規則尾巴加一條 `unless on(tenant)(user_state_filter{maintenance}==1)`（`_state_maintenance` 機制已存在）。
+>
+> 即「等待成本≈一行、現在做≈替零 demand 開一個能靜音 critical 的口子」→ 維持 defer。
 
 ## 不做什麼
 
