@@ -95,11 +95,13 @@ def deployment_mounts(deployment_path: Path) -> Dict[str, Set[str]]:
     return out
 
 
-def check(monitor_dir: Path, deployment_path: Path) -> List[str]:
-    """Return a list of human-readable violation strings (empty = ok)."""
+def check(packs: Dict[str, Set[str]], mounts: Dict[str, Set[str]]) -> List[str]:
+    """Return a list of human-readable violation strings (empty = ok).
+
+    `packs` / `mounts` are precomputed by the caller (configmap_rule_packs /
+    deployment_mounts) so each manifest is parsed exactly once.
+    """
     violations: List[str] = []
-    packs = configmap_rule_packs(monitor_dir)
-    mounts = deployment_mounts(deployment_path)
 
     for name, data_keys in sorted(packs.items()):
         if name not in mounts:
@@ -145,12 +147,14 @@ def main(argv: List[str] | None = None) -> int:
         return EXIT_CALLER_ERROR
 
     try:
-        violations = check(monitor_dir, deployment)
+        packs = configmap_rule_packs(monitor_dir)
+        mounts = deployment_mounts(deployment)
+        violations = check(packs, mounts)
     except yaml.YAMLError as exc:
         print(f"Error: failed to parse YAML: {exc}", file=sys.stderr)
         return EXIT_CALLER_ERROR
 
-    n_packs = len(configmap_rule_packs(monitor_dir))
+    n_packs = len(packs)
     if violations:
         print(f"ConfigMap mount completeness: {len(violations)} violation(s) "
               f"across {n_packs} configmap-rules-* pack(s):", file=sys.stderr)
