@@ -1,5 +1,5 @@
 ---
-title: "ADR-026: Node/Cluster 維護告警抑制 — Liveness-Class Gap，不是子系統"
+title: "ADR-026: Node/Cluster 維護告警抑制 — 不需要子系統"
 tags: [adr, alerting, maintenance, k8s]
 audience: [platform-engineers, sre]
 version: v2.9.0
@@ -9,135 +9,125 @@ tracking_kind: adr
 status: proposed
 domain: k8s
 created_at: 2026-06-18
-updated_at: 2026-06-18
+updated_at: 2026-06-19
 ---
 
-# ADR-026: Node/Cluster 維護告警抑制 — Liveness-Class Gap，不是子系統
+# ADR-026: Node/Cluster 維護告警抑制 — 不需要子系統
 
 ## 狀態
 
-🟡 **Proposed**（2026-06-18）。owner 核可後昇格 Accepted。
+🟡 **Proposed**（2026-06-18；2026-06-19 依客戶現場數據改寫）。owner 核可後昇格 Accepted。
 
 > 依語言政策，ADR 自 ADR-019 起不另製 `.en.md`。
 
 ## TL;DR
 
-- **問題**：Kubernetes node 維修 / 多叢集 rolling upgrade 時，想靜音受影響租戶的告警，又不波及其他叢集。
-- **結論**：**不需要**一個「維護抑制子系統」。實證顯示乾淨的 drain 對架構正確（HA）的租戶幾乎不產生告警；唯一真正的殘量，是**單實例 exporter 在其節點被 drain 時的 `*ExporterAbsent`（critical）**。
-- **決策**：收斂成三件小事 —— (1) 以 **HA exporter 為主**讓殘量自然歸零；(2) 對 liveness 類加一個**窄、需顯式觸發、會自動到期**的維護 opt-out；(3) **全部重用既有機制、零新常駐元件**。
+- **問題**：Kubernetes node 維修、多叢集 rolling upgrade 時，想靜音受影響租戶的告警，又不波及其他叢集。
+- **結論**：**不需要**一個「維護抑制子系統」。乾淨 drain 對架構正確（HA）的租戶幾乎不產生告警；現場數據也證實客戶 HA 叢集下沒有需要抑制的殘量。
+- **三條決策**：
+  1. **HA exporter 為主**——讓殘量自然歸零，零新元件。
+  2. 客戶真正的 drain 噪音是**另一個問題**（告警粒度錯置），改走 HA-aware 語意分級（[#875](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/875)），不是維護抑制。
+  3. 唯一一套維護抑制機制**設計完成、但 defer**（[#870](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/870)），reopen-trigger = 第一個非 HA 單實例客戶。
+- **副產品**：探索過程挖到一個與維護無關的真實 liveness 缺陷，已獨立修復（P0，[#869](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/869)）。
 
-## 背景：先把目的校正回來
+## 背景：先分清「手段」和「目的」
 
-起點是「想在 node 維修時做 node-level 靜音」。但真正的目的不是「靜音」本身，而是——
+起點是「想在 node 維修時做 node-level 靜音」。但靜音是手段，真正的目的是——
 
-> **讓「預期內」的擾動對人隱形，同時讓「預期外」的擾動照樣可見。**
+> **讓「預期內」的擾動對人隱形，同時讓「預期外」的真實事故照樣可見。**
 
-用這把尺一量，「blanket 把整個 cluster 靜音」就出局了：它在靜音預期內擾動的同時，也把維護窗內**非預期**的真實事故一起蓋掉，不通過目的。
+用這把尺一量，「把整個 cluster 一鍵靜音」就出局了：它蓋掉預期內擾動的同時，也蓋掉維護窗內**非預期**的真實事故。
 
-## Gate 1：乾淨 drain 到底會 fire 什麼
+## 一個零成本檢查：乾淨 drain 到底會 fire 什麼
 
 不開叢集、零成本——直接讀 rule pack，逐條問「乾淨 `kubectl drain` 期間這條會不會 fire、能不能用既有機制抑制」：
 
-| 告警類別 | 乾淨 drain 會 fire？ | 既有 `_state_maintenance` 抑制？ |
+| 告警類別 | 乾淨 drain 會 fire？ | 既有 `_state_maintenance` 能抑制？ |
 |---|---|---|
-| `NodeNotReady`（for:3m） | cordon ≠ NotReady → **不會**（除非 reboot 階段 node down >3min） | ✅ 經 `node_owner` opt-out |
+| `NodeNotReady`（for:3m） | cordon ≠ NotReady → **不會** | ✅ |
 | `ContainerCrashLoop` | graceful evict ≠ crash → **不會** | n/a |
-| 閾值類（如 `MariaDBHighConnections`） | 看負載 | ✅ 帶 `unless on(tenant) user_state_filter{maintenance}` |
-| Custom recipe（含 `absence`） | 看宣告 | ✅ 編譯器無條件注入 opt-out |
-| **平台 `*ExporterAbsent`**（critical, for:30s） | **單實例 exporter 的節點被 drain → 會** | ❌ **無 opt-out ← 唯一殘量** |
+| 閾值類（如連線數過高） | 看負載 | ✅ |
+| 租戶自訂告警（含 absence） | 看宣告 | ✅ 編譯器自動注入 |
+| **平台 `*ExporterAbsent`**（critical） | **單實例 exporter 的節點被 drain → 會** | ❌ **← 唯一殘量** |
 
-**判決：narrow PARTIAL。** 乾淨 drain 的唯一不可抑制殘量 = **平台 `*ExporterAbsent` 類 × 單實例 exporter**。HA exporter（≥2 副本）下 `absent()` 恆 false、殘量≈0。精確地說，殘量由 `absent()`（exporter pod 被 evict、`<up>` series 缺席）觸發，不是 `<db>Down`（`_up==0` 需 series 在場為 0）。
+**結論：殘量很窄，只剩一類**——平台 `*ExporterAbsent` × 單實例 exporter。HA exporter（≥2 副本）下這條恆不 fire，殘量趨近於零。
 
-**第二類殘量（不同處置）**：平台自我監控 pack（`k8s/03-monitoring/configmap-rules-platform.yaml` 約 10 條：`ThresholdExporterDown`/`TooFewReplicas`/`ConfigReloadStuck`…）無 tenant label、無 opt-out，drain 到承載平台元件的節點時會 fire。但受眾是**平台 SRE**、且多半是「計畫性升級期間**該看到**」的（`TooFewReplicas` = HA 正在降級）→ 處置是**升級 runbook 預期它**，不是抑制。
+（另有一類平台自我監控告警會在升級時響，但受眾是平台 SRE、且多半是「升級期間就該看到」的，處置是寫進 runbook，不是抑制。）
 
-## 決策：不建子系統，三條 locked decision
+## 現場數據把方向改了（2026-06-19）
 
-1. **HA exporter 為主（最 durable 的解）。** 單實例 exporter 是殘量的根因。推動 HA exporter（≥2 副本 + pod anti-affinity）讓 `absent()` 恆 false、殘量歸零。這是 SRE 正解（不替單點故障掩蓋告警），不是把問題推給租戶。
-   - *Trade-off*：要求改部署姿態；架構上真的只能單實例的，殘量交給 decision 2。
+我們本來要為上面那個「單實例 `*ExporterAbsent`」殘量設計一套抑制機制。**但跨到實作時拿到客戶現場數據，方向被推翻：**
 
-2. **對 liveness 類做窄、gated、會自動到期的維護 opt-out。** 僅針對 `*ExporterAbsent`（必要時含 `<db>Down`），由**顯式 maintenance flag** 觸發，並在文件明寫「這同時會蓋掉真實的 exporter-down」。
-   - **Max-TTL ≤1h**：抑制造成的盲區，恰好與「HA 降到單副本」最脆弱的窗重疊 → flag 強制自動到期、優先綁實際維護窗，不開放式。
-   - **已知限制（Max-TTL 懸崖）**：升級若卡住超過 TTL，flag 過期 → 告警一次湧入、ops 一邊修一邊被吵。緩解 = 提供 `da-tools maintenance extend --tenant <id> --duration 30m` 一鍵延長（重用 `maintenance_scheduler` 既有 `extend_silence`），並把這個指令直接印進告警的 `platform_summary`（工具即引導）。結構解見 Defer。
+- 客戶的 mariadb / mongodb 都是 **HA 叢集**。drain 期間真正的噪音來自**告警粒度錯置**——`<db>_up==0` 是**單實例**級信號卻被定成 **Critical**，正常 failover 切換一台 replica 就誤 page。**完全不是** `*ExporterAbsent`（HA 下它恆不 fire）。
 
-3. **重用既有機制、零新常駐元件。** silence / inhibit（[ADR-003](003-sentinel-alert-pattern.md)）+ `_state_maintenance` opt-out（schema `maintenanceMode` + exporter `user_state_filter`）+ `maintenance_scheduler` CronJob（level-triggered，已存在）。**不引入 controller / operator**，延續 [ADR-008](008-operator-native-integration-path.md) v2.10.0 的取消決策。
+兩個後果：
 
-### 技術實作：用 `tenant_metadata_info` anti-join 還原 tenant label
+1. **坐實「不建」**：我們正要花力氣抑制的殘量，在客戶的 HA 拓撲上**根本不會 fire**。
+2. **客戶面工作改向**：客戶真正的痛是另一個問題 → 改走 HA-aware 語意分級（[#875](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/875)：instance 級降 warning、叢集存活用 quorum 信號定 critical）。
 
-bare `absent()` 會清空 selector 以外所有 label → 產出的告警**沒有 `tenant`**。這帶來兩個後果：(1) Alertmanager 層用 `equal:["tenant"]` 做 inhibit/silence 是**結構性死路**（AM 拿不到 tenant，只能 cluster-wide 抑制，違反多租戶隔離）；(2) 現行 `*ExporterAbsent` 連「是哪個租戶缺席」都分不出來（既有缺陷）。
+> **這一課**：多輪對抗式 review 把實作層（規則該寫幾條、維護該走哪個平面）磨得很細，卻沒先用真實現場數據驗證「**這是不是客戶的痛**」——差點為一個窄、且不是客戶痛點的殘量建一套常駐機制。**先驗方向，再投入實作深度。**
 
-解法是 repo 既有的 enforced idiom——`tenant_metadata_info` anti-join（由 pre-commit `check_leftouterjoin_enrichment` 強制）：
+## 決策：不建子系統
 
-```promql
-# 用「有 metadata、卻沒有存活 exporter target」反推出帶 tenant 的 liveness 信號
-(
-  tenant_metadata_info
-  unless on(tenant) up{job="tenant-exporters"}
-)
-unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
-```
+1. **HA exporter 為主（最 durable 的解）。** 單實例 exporter 是殘量的根因；推 HA exporter（≥2 副本 + anti-affinity）讓殘量歸零。這是 SRE 正解（不替單點故障掩蓋告警），平台可降門檻（預設 HA exporter sidecar chart）。
 
-- **生出 tenant label**，順手修掉上述既有缺陷；
-- **直接串既有 `_state_maintenance` opt-out**，零新機制、零架構污染；
-- 邊界：`tenant_metadata_info` 對每個 conf.d 租戶無條件 =1（`components/threshold-exporter/app/collector.go`），故只有「真的不在 conf.d 的租戶」不在偵測範圍（正確行為）。
+2. **客戶面 drain 噪音交給 HA-aware 語意分級（[#875](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/875)），不是維護抑制。** instance 級存活降 warning、可被維護 opt-out；叢集存活改用 quorum 信號定 critical、不可 opt-out（drain 期間只要叢集選不出 primary 就必須叫醒）。單實例（非 HA）的期待值用一行說明管理即可，不建正式的 Service Tier 系統。
 
-> **實作注意（防抖）**：用 **target-existence**（`up{job=...}` 的**有無**），**不要**用 `up == 1`。`up` 在單次 scrape 失敗時立刻變 0，`up==1` 會在 rolling drain 的 pod 重新路由瞬間誤觸；以「target 是否還在 service discovery」為準 + 告警 `for: ≥1m`，可容忍重調度期間的單次 scrape 失敗。
+3. **重用既有機制、零新常駐元件。** silence / inhibit（[ADR-003](003-sentinel-alert-pattern.md)）+ `_state_maintenance` opt-out + 既有的 `maintenance_scheduler`。不引入 controller / operator，延續 [ADR-008](008-operator-native-integration-path.md) 的取消決策。
 
-## Trade-offs（explicit，供日後重評）
+## 探索的副產品：一個真的 liveness 缺陷（[#869](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/869)）
 
-- **抑制 liveness = 維護窗內對真實 down 盲**：接受（計畫性、窄、gated、會自動到期）。
-- **HA-exporter-first = 把韌性責任放回部署姿態**：是正解非規避；平台可降門檻（預設 HA exporter sidecar chart）。
-- **不建子系統 = 自動化程度低於「cordon 自動跟隨」**：接受——殘量窄到不值一個常駐元件及其 silent-failure 面。
+查證 `*ExporterAbsent` 行為時，意外挖到一個**與維護無關**的真實缺陷，值得跟維護抑制分開講：
 
-## 不做什麼（rejected）
+- 現行 `absent(mysql_up{job="tenant-exporters"})` 是**全域**判斷——只要還有任一租戶的 exporter 活著，它就不 fire。於是**某一租戶的 exporter 整個消失、其他租戶還在 → 零告警**（連完美 HA 租戶「整體」掛掉也中）。核心 liveness 承諾被靜默擊穿。
 
-- **Blanket cluster silence**：蓋掉預期外事故，SRE maintenance-window anti-pattern。
-- **Cordon-aware 資料面子系統 / 每 recipe topology-join**：殘量窄到不值，over-build，違 ADR-008「不建 controller」。
-- **動態生成 per-tenant rule / 自建 operator**：ADR-008 v2.10.0 已取消。
+這跟「維護抑制」是兩件事，必須分開：
 
-## Defer-with-trigger
+| 層 | 內容 | 狀態 |
+|---|---|---|
+| **liveness 正確性** | per-tenant 缺席偵測（專屬 expected-set metric + anti-join，用 `up==1` 同時接住「pod 消失」與「在但死」兩種情形） | **在修，P0 → [#869](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/869)**（已 promtool 驗證；不在本 ADR 的 defer 範圍） |
+| **維護抑制** | 在 liveness 告警上再疊一層維護 opt-out | **deferred → 下方「架構冷宮」 / [#870](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/870)** |
 
-- **HA-breach load class**（CPU/mem 因負載轉移而爆）：defer。Trigger = 真實 drain 觀測到、且判定為 noise（目前判為「該響」——那是假 HA 的信號）。
-- **多叢集 cluster-label 抑制**（A 靜音、B/C/D 正常）：defer。Trigger = 實際多叢集部署 + 確認 edge-eval 下 `cluster` external_label 流到 AM（現 lab 單叢集、無 external_labels）。
-- **Taint/cordon-driven 宣告式抑制 + 平台 pack rollout-aware 降級**：defer。手動 flag 在大規模下會 ops-exhaustion，metric-driven 是對的方向；但本案 liveness 信號是 tenant-keyed（anti-join 後沒有 `node` 維度），`unless on(node)` 接不上（dimension-collapse），要 node-scope 須引 `node_owner` 拓撲橋——那正是刻意 defer 的複雜度。Trigger = 手動 flag 的規模痛點實際發生（見「已知限制」的兩個 landmine，它們都指向這同一塊 pipeline/state-driven 信號）。
-- **全 CRD-native / operator**：維持 ADR-008 deferred。Trigger = 客戶 RFP 要 kubectl 原生介面；形態 = tenant-api 內嵌 watch-mode，非新 operator。
+本 ADR 的「不建子系統」只針對**維護抑制層**。liveness 正確性是獨立的 bug 修復，照自身價值排程；設計細節在 [#869](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/869)，不在此重複。
 
-## 已知限制與既有缺陷
+## 架構冷宮（Deferred）：維護抑制層
 
-- **Max-TTL 懸崖**（見 decision 2）：升級超時 → 告警湧入；緩解 = 一鍵 extend，結構解屬 Defer 的 state-driven 信號。
-- **退役時序引爆（offboarding ordering）**：若租戶下線時**先刪 exporter 部署、後刪 conf.d**（或 GitOps 同步有時間差），則 `up` 已斷、`tenant_metadata_info` 還在 → anti-join 對一個**正在退役**的租戶噴 critical。這坐實了[生命週期治理矩陣](../internal/monitoring-lifecycle-governance-matrix.md)裡「RETIRE 階段 0 條 hard-gate」的盲區；正解是一條 GitOps CI hard-gate：**禁止 PR 只刪 K8s target 卻殘留 conf.d**（強制 conf.d 先移、或兩者同移，先切斷 metadata 源）。
-- **`*ExporterAbsent` 既有缺陷**：bare `absent()` 無 tenant label → 現在分不出哪個 tenant 缺席。獨立於本題；上述 anti-join 改寫順手修掉它（另案實作）。
+> **為何保留**：設計成熟、零成本存放；但其前提（單實例殘量會 fire）在當前 HA 客戶上不成立。**reopen-trigger = 第一個非 HA 單實例客戶**。完整設計骨架見 [#870](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/870)。
 
-## Blast-radius 護欄
+defer 的是「在 per-tenant liveness 告警上再疊一層維護 opt-out」，要點：
 
-decision 2 引入「會自主關掉 critical 告警」的能力，護欄：
+- **雙軌 opt-out**：計畫性維護走 config（`_state_maintenance`，慢但本就提前規劃）；緊急延長走 Alertmanager Silence API（秒級、不依賴 exporter 存活——config 平面要過 GitOps + owner 批太慢）。業界（Grafana）也是這樣分宣告式 / 即時兩種用途。
+- **新建 `da-tools maintenance extend` CLI**：現行 `maintenance_scheduler.extend_silence` 是 Silence 平面、只被 CronJob 內部呼叫、無 CLI 入口（這兩點是查證修正過的事實）。
+- **盲區護欄**：抑制 liveness = 維護窗內對真實 down 盲，故設 Max-TTL 自動到期 + 事後對賬。
 
-- **gated**：顯式 maintenance flag，非預設開啟；
-- **會自動到期**：`maintenance_scheduler` 的 `endsAt`（dead-man's-switch）；
-- **observer-paradox**：若 exporter 自己就在被 drain 的節點上 → `user_state_filter` 隨之消失 → opt-out 失效（恰在需要時）→ 須把監控面 pin 在 drain target 之外（與 [ADR-025](025-alerting-plane-self-liveness.md) 的 liveness 同源風險）；
-- **套用前可檢視**：`blast_radius` diff + `silencer_drift_check` 收尾（皆已存在）。
+> **為何 defer（而非現在就做）**：不是因為場景罕見（維護窗靜音是標準需求），而是三點不對稱——
+> 1. **零現用 demand**：當前 HA 客戶不 fire 這個殘量（見上「現場數據」段）。
+> 2. **下檔風險不對稱**：這功能本質是「維護期間靜音一條 critical liveness」，配置一錯就能藏住真實 outage。
+> 3. **之後補很便宜**：真出現單實例客戶時，opt-out 只是在 [#869](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/869) 規則尾巴加一條 `unless on(tenant)(user_state_filter{maintenance}==1)`（`_state_maintenance` 機制已存在）。
+>
+> 即「等待成本≈一行、現在做≈替零 demand 開一個能靜音 critical 的口子」→ 維持 defer。
 
-## 外部審查（2 輪 Gemini adversarial review）
+## 不做什麼
 
-兩輪外部對抗式審查改變了三件事，並背書 promote：
+- **把整個 cluster 一鍵靜音**：會蓋掉預期外事故，是維護窗的 anti-pattern。
+- **跟著 cordon 自動抑制的資料面子系統**：殘量窄到不值，違 [ADR-008](008-operator-native-integration-path.md)「不建 controller」。
+- **動態生成 per-tenant rule / 自建 operator**：[ADR-008](008-operator-native-integration-path.md) 已取消。
+- **為單實例建正式 Service Tier 系統**：過度，一行說明即可。
 
-1. **技術路徑定案**：審查確認 Alertmanager 層抑制因 `absent()` 無 tenant label 而**結構性不可行**，逼向 PromQL 層的 `tenant_metadata_info` anti-join（即上方技術實作）。
-2. **抑制邊界收緊**：補上 Max-TTL（HA 降級窗的盲區風險），並確認「平台自我監控 pack 殘量該由 runbook 預期、不該擴大抑制」。
-3. **確認該 defer 的就 defer**：審查一度提議用 `unless on(node)` 做宣告式 cordon 抑制，但這與 anti-join 的 tenant-keyed 信號**維度衝突**（dimension-collapse）——審查最終認同此路須先建 `node_owner` 拓撲橋，維持 defer 是誠實且正確的。
+## 還沒做、各自留 trigger
 
-審查也標出兩個規模化 landmine（Max-TTL 懸崖、平台 pack 的「狼來了」習慣化），二者都指向同一塊已 defer 的 pipeline/state-driven 信號——它們實際發生時，就是建那塊的具體 trigger。
-
-## Day-3 / 規模化 roadmap（out-of-scope，列入 radar）
-
-1. **SLO / burn-rate recipe（症狀 > 原因）**：最深的 lever——告警若是 SLO 型，乾淨 drain 不破 SLO 就根本不 page，本題大半蒸發。roadmap 第一順位。
-2. **控制面 per-tenant 解耦編譯**：合理的 scale 顧慮；tenant-api 已有 shift-left per-tenant 驗證、已在 deep-water radar。
-3. **Auto-quarantine GC**（殭屍告警自動回收）：對應生命週期矩陣 RETIRE 段的缺口；偏好 **auto-mute + notify**（auto-delete 屬高 blast-radius，須 hard-gate）。
+- **維護抑制層**（上面的冷宮）：trigger = 第一個非 HA 單實例客戶（[#870](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/870)）。
+- **多叢集 cluster-label 抑制**（A 靜音、B/C/D 正常）：trigger = 實際多叢集部署、且 `cluster` 標籤有流到 Alertmanager（現為單叢集）。
+- **跟著 taint/cordon 的宣告式抑制**：手動 flag 在大規模下會累人，但需先建 node↔租戶的拓撲橋。trigger = 手動 flag 的規模痛點實際發生。
+- **全 CRD-native / operator**：維持 [ADR-008](008-operator-native-integration-path.md) deferred。trigger = 客戶 RFP 要 kubectl 原生介面。
 
 ## 關聯
 
-- [ADR-003](003-sentinel-alert-pattern.md) — sentinel + inhibit paradigm
-- [ADR-008](008-operator-native-integration-path.md) — operator 取消 / tenant-api watch-mode；本 ADR 延續「不建 controller」
-- [ADR-023](023-write-plane-single-writer-invariant.md) — single-writer 寫入面護欄
-- [ADR-024](024-version-aware-threshold-via-dimensional-label.md) — custom alerts compiler；absence recipe 已吃 opt-out 的證據
-- [ADR-025](025-alerting-plane-self-liveness.md) — alerting-plane liveness / dead-man's-switch；observer-paradox 護欄
+- [ADR-003](003-sentinel-alert-pattern.md) — sentinel + inhibit
+- [ADR-008](008-operator-native-integration-path.md) — operator 取消；本 ADR 延續「不建 controller」
+- [ADR-024](024-version-aware-threshold-via-dimensional-label.md) — 自訂告警編譯器；租戶自訂告警自動吃 opt-out 的依據
+- [ADR-025](025-alerting-plane-self-liveness.md) — 告警平面自我存活
 - [生命週期治理矩陣](../internal/monitoring-lifecycle-governance-matrix.md) — 本 ADR 所屬的 {角色 × 生老病死 × gate} SSOT
-- `_state_maintenance` / `user_state_filter` opt-out — schema `maintenanceMode` + threshold-exporter `collector.go`（本 ADR 擴其覆蓋到 liveness class）
+- [#875](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/875) — HA-aware 語意分級（客戶當前的 drain 噪音）
+- [#869](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/869) — per-tenant liveness 缺陷修復（P0，獨立於維護）
+- [#870](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/870) — 維護抑制層（架構冷宮，deferred）
