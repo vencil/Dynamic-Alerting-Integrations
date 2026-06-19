@@ -5,6 +5,7 @@
 # What you get (full stack):
 #   - da-portal      :8081  live Tenant Manager (2 demo tenants + a saved view)
 #   - tenant-api     :8080  file-based config API (commit-on-write, dev-bypass auth)
+#   - recipe-preview :8082  would-fire preview API (POST /preview; #657)
 #   - prometheus     :9090  /alerts shows the headline critical FIRING
 #   - alertmanager   :9093  the firing alert, routed to a null receiver
 #   - threshold-exporter    config-driven user_threshold metrics (internal)
@@ -107,6 +108,35 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
+    restart: unless-stopped
+
+  recipe-preview:
+    # Would-fire preview service (#657). Built from source like tenant-api
+    # (no published image yet). Answers POST /preview = "would this recipe
+    # fire?" via the platform's real compiler + a SHA-pinned promtool.
+    build:
+      context: ..
+      dockerfile: components/recipe-preview/Dockerfile
+    image: da-try-local/recipe-preview:source
+    environment:
+      PREVIEW_TENANT_API_URL: http://tenant-api:8080
+      PREVIEW_LISTEN_PORT: "8082"
+      # try-local only (mirrors tenant-api ADR-022): inject a demo identity when
+      # no oauth2-proxy header is present, so a header-less curl / the portal
+      # work. In prod the auth proxy injects the real identity + a NetworkPolicy
+      # restricts ingress to it; the service forwards that identity to
+      # tenant-api's /access probe for the RBAC decision.
+      PREVIEW_DEV_BYPASS_AUTH: "true"
+      PREVIEW_DEV_BYPASS_EMAIL: dev@local
+      PREVIEW_DEV_BYPASS_GROUPS: demo-admins
+    ports:
+      # Loopback-only (same posture as tenant-api): dev-bypass treats any caller
+      # as the demo admin, so LAN exposure would be an access risk.
+      - "127.0.0.1:${EXPOSE_PREVIEW_PORT:-8082}:8082"
+    depends_on:
+      # the PEP calls tenant-api GET /tenants/{id}/access — it must be up first.
+      tenant-api:
+        condition: service_started
     restart: unless-stopped
 
   # ── Monitoring stack (official multi-arch images) ────────────────────────

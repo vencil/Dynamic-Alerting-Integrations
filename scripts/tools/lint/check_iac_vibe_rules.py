@@ -106,6 +106,7 @@ BYPASS_NAME = "iac-vibe-rules"
 DOCKERFILE_CONTEXTS: dict[str, str] = {
     "components/da-tools/app/Dockerfile": "components/da-tools/app",
     "components/da-portal/Dockerfile": ".",
+    "components/recipe-preview/Dockerfile": ".",
     "components/tenant-api/Dockerfile": ".",
     "components/threshold-exporter/app/Dockerfile": "components/threshold-exporter/app",
     "tests/e2e-bench/driver/Dockerfile": "tests/e2e-bench/driver",

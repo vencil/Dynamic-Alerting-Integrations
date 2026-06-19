@@ -33,3 +33,15 @@
 !/docs/interactive/
 !/docs/assets/
 !/docs/.nojekyll
+
+# Re-include the eval-core files the recipe-preview image COPYs from the
+# repo-root context (#657 PR 2); /scripts/ is excluded above. Same exclude-
+# then-re-include pattern (BuildKit required). The unanchored *.md/*.log/.env*
+# exclusions still apply underneath, so only these .py sources are restored.
+# tools/ is a DIRECT child of the excluded /scripts/, so this one-level re-
+# include works (grandchild re-includes like /scripts/tools/dx/ do NOT — the
+# intermediate /scripts/tools/ stays pruned, same rule as .gitignore). The
+# recipe-preview Dockerfile COPYs only a handful of these files; the rest of
+# scripts/tools/ rides along in the build context (the unanchored *.md/*.log/
+# .env* exclusions still strip docs/logs/secrets underneath).
+!/scripts/tools/
