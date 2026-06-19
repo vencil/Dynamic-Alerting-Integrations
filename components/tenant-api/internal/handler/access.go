@@ -45,6 +45,8 @@ type AccessResponse struct {
 // @Param       id  path     string true "Tenant ID"
 // @Success     200 {object} AccessResponse
 // @Failure     400 {object} map[string]string
+// @Failure     401 {object} map[string]string
+// @Failure     403 {object} map[string]string
 // @Router      /api/v1/tenants/{id}/access [get]
 func CheckTenantAccess() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
