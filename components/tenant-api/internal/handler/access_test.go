@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -98,5 +99,25 @@ func TestCheckTenantAccess_OpenMode(t *testing.T) {
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("open-mode status = %d, want %d, body: %s", w.Code, http.StatusOK, w.Body.String())
+	}
+}
+
+func TestCheckTenantAccess_EmptyID_FailsClosed(t *testing.T) {
+	t.Parallel()
+	// The RBAC middleware authorizes an EMPTY id under open-mode / a "*" grant
+	// (and chi routes /tenants//access to id=""), but "" is not a real tenant.
+	// Reaching the handler with id="" must fail closed (400) — never allow:true
+	// — mirroring GetTenant's ValidateTenantID. Invoke the handler directly with
+	// id="" so the test is independent of router empty-segment matching.
+	req := httptest.NewRequest("GET", "/api/v1/tenants//access", nil)
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("id", "")
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+	w := httptest.NewRecorder()
+	CheckTenantAccess().ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("empty-id status = %d, want %d (must fail closed), body: %s",
+			w.Code, http.StatusBadRequest, w.Body.String())
 	}
 }

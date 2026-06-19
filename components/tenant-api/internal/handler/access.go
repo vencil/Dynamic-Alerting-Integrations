@@ -44,13 +44,24 @@ type AccessResponse struct {
 // @Produce     json
 // @Param       id  path     string true "Tenant ID"
 // @Success     200 {object} AccessResponse
+// @Failure     400 {object} map[string]string
 // @Router      /api/v1/tenants/{id}/access [get]
 func CheckTenantAccess() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// Reaching here means the middleware already authorized read on {id}.
+		id := chi.URLParam(r, "id")
+		// The route middleware already authorized read on {id}; but the
+		// open-mode and "*"-grant RBAC paths also authorize an EMPTY id (an
+		// empty path segment, /tenants//access, reaches here), which is not a
+		// real tenant. Mirror the ValidateTenantID guard every sibling read
+		// handler has (e.g. GetTenant) so a consumer never receives allow:true
+		// for a non-tenant — fail closed, not open.
+		if err := ValidateTenantID(id); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
 		writeJSON(w, http.StatusOK, AccessResponse{
 			Allow:      true,
-			Tenant:     chi.URLParam(r, "id"),
+			Tenant:     id,
 			Permission: "read",
 		})
 	}

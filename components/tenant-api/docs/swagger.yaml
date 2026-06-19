@@ -1073,6 +1073,12 @@ paths:
           description: OK
           schema:
             $ref: '#/definitions/internal_handler.AccessResponse'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
       summary: Check whether the caller may read a tenant (RBAC probe)
       tags:
       - tenants

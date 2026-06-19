@@ -853,6 +853,15 @@ const docTemplate = `{
                         "schema": {
                             "$ref": "#/definitions/internal_handler.AccessResponse"
                         }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
                     }
                 }
             }
