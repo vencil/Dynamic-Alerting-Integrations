@@ -436,6 +436,15 @@ func main() {
 			r.With(rbacMgr.Middleware(rbac.PermRead, handler.TenantIDFromPath)).
 				Get("/metrics", handler.DiscoverMetrics(deps))
 
+			// #657: lightweight RBAC read-probe for sibling services (the
+			// recipe-preview would-fire service). 200 {allow:true} if the
+			// caller may read {id}, 403 otherwise — reuses this exact read
+			// middleware so the tenant-isolation decision is never
+			// re-implemented elsewhere, and returns only the boolean (not the
+			// tenant config). See §4.1 of the recipe-preview design.
+			r.With(rbacMgr.Middleware(rbac.PermRead, handler.TenantIDFromPath)).
+				Get("/access", handler.CheckTenantAccess())
+
 			// v2.9.0 ADR-024 §S6b-2 (#741): comment-preserving write of a
 			// tenant's _custom_alerts (RecipeBuilder modal). PermWrite —
 			// this commits to GitOps.
