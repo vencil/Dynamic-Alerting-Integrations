@@ -220,7 +220,7 @@ python3 scripts/tools/ops/scaffold_tenant.py
 ## 常見問題
 
 **Q: 我修改了 YAML 後多久生效？**
-A: threshold-exporter 每 16 秒檢查 ConfigMap 的 SHA-256 hash。偵測到變更後 hot-reload，不需重啟。
+A: threshold-exporter 每 15 秒檢查 ConfigMap 的 SHA-256 hash。偵測到變更後 hot-reload，不需重啟。
 
 **Q: 我可以只用部分 Rule Pack 嗎？**
 A: 不需要用的 Rule Pack 不會產生 alert（沒有對應的 exporter metric = 沒有數據 = 不觸發）。如果你想完全移除，Projected Volume 的 `optional: true` 機制允許安全卸載。

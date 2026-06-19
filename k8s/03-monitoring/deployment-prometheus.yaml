@@ -232,6 +232,12 @@ spec:
                     - key: platform-alert.yml
                       path: platform-alert.yml
               - configMap:
+                  name: prometheus-rules-liveness
+                  optional: true
+                  items:
+                    - key: liveness-alert.yml
+                      path: liveness-alert.yml
+              - configMap:
                   name: prometheus-rules-operational
                   optional: true
                   items:
