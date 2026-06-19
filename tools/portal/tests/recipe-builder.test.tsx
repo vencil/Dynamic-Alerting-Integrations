@@ -168,3 +168,117 @@ describe('RecipeBuilder', () => {
     expect((screen.getByTestId('submit') as HTMLButtonElement).disabled).toBe(false);
   });
 });
+
+describe('RecipeBuilder would-fire preview (#657)', () => {
+  // threshold recipe ready = name + metric + window + threshold all valid
+  function fillThresholdRecipe() {
+    fill('field-name', 'queue_high');
+    fill('field-metric', 'queue_depth');
+    fill('field-window', '5m');
+    fill('field-threshold', '100:warning');
+  }
+
+  it('firing verdict: renders the firing badge + backend reason verbatim (dumb handoff)', async () => {
+    const previewFetch = vi.fn(() => Promise.resolve({
+      supported: true, states: [{ state: 'firing', reason: 'value 1500 > threshold 100' }], warnings: [],
+    }));
+    render(<RecipeBuilder tenantId="db-a" fetchMetrics={mockFetch(['queue_depth'])} previewFetch={previewFetch} />);
+    fillThresholdRecipe();
+    fill('wouldfire-value', '1500');
+    fireEvent.click(screen.getByTestId('wouldfire-run'));
+    await waitFor(() => expect(screen.getByTestId('wouldfire-firing')).toBeInTheDocument());
+    const txt = screen.getByTestId('wouldfire-firing').textContent || '';
+    expect(txt).toMatch(/Would fire/);
+    expect(txt).toMatch(/value 1500 > threshold 100/);          // backend reason shown verbatim
+    // the recipe object + scenario were handed to the service (never re-derived here)
+    expect(previewFetch).toHaveBeenCalledWith(
+      'db-a', expect.objectContaining({ recipe: 'threshold', metric: 'queue_depth' }),
+      { value: 1500 }, expect.anything());
+  });
+
+  it('inactive verdict: renders the neutral "would not fire"', async () => {
+    const previewFetch = vi.fn(() => Promise.resolve({ supported: true, states: [{ state: 'inactive' }], warnings: [] }));
+    render(<RecipeBuilder tenantId="db-a" fetchMetrics={mockFetch(['queue_depth'])} previewFetch={previewFetch} />);
+    fillThresholdRecipe();
+    fill('wouldfire-value', '5');
+    fireEvent.click(screen.getByTestId('wouldfire-run'));
+    await waitFor(() => expect(screen.getByTestId('wouldfire-inactive')).toBeInTheDocument());
+    expect(screen.getByTestId('wouldfire-inactive').textContent).toMatch(/Would not fire/);
+  });
+
+  it('unsupported type: surfaces the backend warning verbatim, never blank/fake-OK (§7)', async () => {
+    const previewFetch = vi.fn(() => Promise.resolve({
+      supported: false, states: [], warnings: ['preview for rate is coming soon'],
+    }));
+    render(<RecipeBuilder tenantId="db-a" fetchMetrics={mockFetch(['http_requests_total'])} previewFetch={previewFetch} />);
+    fireEvent.change(screen.getByTestId('field-recipe'), { target: { value: 'rate' } });
+    fill('field-name', 'req_rate');
+    fill('field-metric', 'http_requests_total');
+    fill('field-window', '5m');
+    fill('field-threshold', '100:warning');
+    fill('wouldfire-value', '50');
+    fireEvent.click(screen.getByTestId('wouldfire-run'));
+    await waitFor(() => expect(screen.getByTestId('wouldfire-state-unsupported')).toBeInTheDocument());
+    expect(screen.getByTestId('wouldfire-state-unsupported').textContent).toMatch(/coming soon/);
+    // must NOT claim a firing/inactive verdict for an unsupported type
+    expect(screen.queryByTestId('wouldfire-firing')).toBeNull();
+    expect(screen.queryByTestId('wouldfire-inactive')).toBeNull();
+  });
+
+  it('a failed request surfaces the error with its HTTP status (visible, not blank)', async () => {
+    const previewFetch = vi.fn(() => {
+      const e = new Error('rate limit exceeded for this tenant') as Error & { status?: number };
+      e.status = 429;
+      return Promise.reject(e);
+    });
+    render(<RecipeBuilder tenantId="db-a" fetchMetrics={mockFetch(['queue_depth'])} previewFetch={previewFetch} />);
+    fillThresholdRecipe();
+    fill('wouldfire-value', '1500');
+    fireEvent.click(screen.getByTestId('wouldfire-run'));
+    await waitFor(() => expect(screen.getByTestId('wouldfire-state-error')).toBeInTheDocument());
+    const txt = screen.getByTestId('wouldfire-state-error').textContent || '';
+    expect(txt).toMatch(/429/);
+    expect(txt).toMatch(/rate limit exceeded/);
+  });
+
+  it('Run is disabled with a reason until tenant + valid recipe + numeric value', () => {
+    render(<RecipeBuilder tenantId="db-a" fetchMetrics={mockFetch(['queue_depth'])} previewFetch={vi.fn()} />);
+    // recipe incomplete → disabled, reason names the missing fields
+    expect((screen.getByTestId('wouldfire-run') as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByTestId('wouldfire-blocker').textContent).toMatch(/required fields/i);
+    fillThresholdRecipe();
+    // recipe ready but no test value → still disabled, reason updates
+    expect((screen.getByTestId('wouldfire-run') as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByTestId('wouldfire-blocker').textContent).toMatch(/number/i);
+    fill('wouldfire-value', '1500');
+    expect((screen.getByTestId('wouldfire-run') as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('shows a loading state while the request is in flight', async () => {
+    let resolveIt: (v: unknown) => void = () => {};
+    const previewFetch = vi.fn(() => new Promise((r) => { resolveIt = r; }));
+    render(<RecipeBuilder tenantId="db-a" fetchMetrics={mockFetch(['queue_depth'])} previewFetch={previewFetch} />);
+    fillThresholdRecipe();
+    fill('wouldfire-value', '1500');
+    fireEvent.click(screen.getByTestId('wouldfire-run'));
+    await waitFor(() => expect(screen.getByTestId('wouldfire-state-loading')).toBeInTheDocument());
+    resolveIt({ supported: true, states: [{ state: 'inactive' }], warnings: [] });
+    await waitFor(() => expect(screen.getByTestId('wouldfire-inactive')).toBeInTheDocument());
+  });
+
+  it('invalidates a stale verdict when the recipe is edited after a run', async () => {
+    const previewFetch = vi.fn(() => Promise.resolve({
+      supported: true, states: [{ state: 'firing', reason: 'value 1500 > threshold 100' }], warnings: [],
+    }));
+    render(<RecipeBuilder tenantId="db-a" fetchMetrics={mockFetch(['queue_depth'])} previewFetch={previewFetch} />);
+    fillThresholdRecipe();
+    fill('wouldfire-value', '1500');
+    fireEvent.click(screen.getByTestId('wouldfire-run'));
+    await waitFor(() => expect(screen.getByTestId('wouldfire-firing')).toBeInTheDocument());
+    // edit the threshold (raising it above the test value) without re-running:
+    // the now-false "firing" verdict must clear — no preview beats a wrong preview
+    fill('field-threshold', '2000:warning');
+    expect(screen.queryByTestId('wouldfire-firing')).toBeNull();
+    expect(screen.getByTestId('wouldfire-run')).not.toBeDisabled();   // recipe still valid → can re-run
+  });
+});
