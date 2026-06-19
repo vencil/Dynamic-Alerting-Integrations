@@ -35,29 +35,55 @@ data:
     \    expr: max by(tenant) (user_threshold{component=\"mysql\", metric=\"cpu\"\
     , severity=\"critical\"})\n"
   mariadb-alert.yml: "groups:\n- name: mariadb-alerts\n  rules:\n  - alert: MariaDBDown\n\
-    \    expr: mysql_up == 0\n    for: 15s\n    labels:\n      severity: critical\n\
-    \      tenant: '{{ $labels.tenant }}'\n    annotations:\n      summary: MariaDB\
-    \ instance {{ $labels.instance }} is DOWN\n      summary_zh: MariaDB 實例 {{ $labels.instance\
-    \ }} 已關閉\n      description: mysql_up=0 for 15s on {{ $labels.instance }}\n  \
-    \    description_zh: mysql_up=0，持續 15 秒，實例：{{ $labels.instance }}\n  - alert:\
-    \ MariaDBExporterAbsent\n    expr: absent(mysql_up{job=\"tenant-exporters\"})\n\
-    \    for: 30s\n    labels:\n      severity: critical\n      tenant: '{{ $labels.tenant\
-    \ }}'\n    annotations:\n      summary: mysqld-exporter target missing\n     \
-    \ summary_zh: mysqld-exporter 目標缺失\n      description: No mysql_up metric found\
-    \ for 30s\n      description_zh: 找不到 mysql_up 指標，持續 30 秒\n  - alert: MariaDBHighConnections\n\
-    \    expr: \"(\\n  (\\n    (\\n      tenant:mysql_threads_connected:max\\n   \
-    \   > on(tenant) group_left\\n      tenant:alert_threshold:mysql_connections\\\
-    n    )\\n    unless on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\
-    \"} == 1)\\n  )\\n  * on(tenant) group_left(runbook_url, owner, tier)\\n    tenant_metadata_info\\\
-    n)\\nor\\n(\\n  (\\n    (\\n      tenant:mysql_threads_connected:max\\n      >\
-    \ on(tenant) group_left\\n      tenant:alert_threshold:mysql_connections\\n  \
-    \  )\\n    unless on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\
-    \"} == 1)\\n  )\\n  unless on(tenant) tenant_metadata_info\\n)\\n\"\n    for:\
-    \ 30s\n    labels:\n      severity: warning\n      metric_group: connections\n\
-    \      tenant: '{{ $labels.tenant }}'\n    annotations:\n      summary: High connections\
-    \ on {{ $labels.tenant }}\n      summary_zh: '{{ $labels.tenant }} 連線數過高'\n  \
-    \    platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant }}: connection\
-    \ threshold breached — review connection pool sizing'\n      platform_summary_zh:\
+    \    expr: '(mysql_up == 0)\n\n      unless on(tenant)\n\n      (user_state_filter{filter=\"\
+    maintenance\"} == 1)\n\n      '\n    for: 15s\n    labels:\n      severity: warning\n\
+    \      metric_group: liveness\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
+    \      summary: MariaDB instance {{ $labels.instance }} is down (tenant {{ $labels.tenant\
+    \ }})\n      summary_zh: MariaDB 實例 {{ $labels.instance }} 停機（租戶 {{ $labels.tenant\
+    \ }}）\n      description: mysql_up=0 on {{ $labels.instance }}. One replica down\
+    \ in a primary-replica set keeps the service available (warning). Total outage\
+    \ escalates to MariaDBClusterDown (critical); loss of the writable primary to\
+    \ MariaDBNoPrimary (critical).\n      description_zh: '{{ $labels.instance }}\
+    \ 的 mysql_up=0。primary-replica 架構下單一 replica 停機時服務仍可用（warning）。整體中斷會升級為 MariaDBClusterDown（critical）；失去可寫\
+    \ primary 則為 MariaDBNoPrimary（critical）。'\n  - alert: MariaDBClusterDown\n   \
+    \ expr: max by(tenant) (mysql_up{job=\"tenant-exporters\"}) == 0\n    for: 1m\n\
+    \    labels:\n      severity: critical\n      metric_group: liveness\n      tenant:\
+    \ '{{ $labels.tenant }}'\n    annotations:\n      summary: 'MariaDB: ALL instances\
+    \ down for tenant {{ $labels.tenant }}'\n      summary_zh: MariaDB：租戶 {{ $labels.tenant\
+    \ }} 的所有實例皆停機\n      description: No mysqld reports up=1 for tenant {{ $labels.tenant\
+    \ }} — total service outage, not a single-replica failover. For a planned single-instance\
+    \ drain, silence via the Alertmanager Silence API (cluster-survival has no config\
+    \ opt-out by design).\n      description_zh: 租戶 {{ $labels.tenant }} 沒有任何 mysqld\
+    \ 回報 up=1 — 整體服務中斷，非單一 replica failover。若為計畫性單實例維護，請用 Alertmanager Silence API\
+    \ 靜音（叢集存活告警刻意不提供 config opt-out）。\n  - alert: MariaDBNoPrimary\n    expr: 'count\
+    \ by(tenant) (mysql_global_variables_read_only{job=\"tenant-exporters\"})\n\n\
+    \      unless\n\n      count by(tenant) (mysql_global_variables_read_only{job=\"\
+    tenant-exporters\"} == 0)\n\n      '\n    for: 2m\n    labels:\n      severity:\
+    \ critical\n      metric_group: liveness\n      tenant: '{{ $labels.tenant }}'\n\
+    \    annotations:\n      summary: 'MariaDB: no writable primary for tenant {{\
+    \ $labels.tenant }}'\n      summary_zh: MariaDB：租戶 {{ $labels.tenant }} 沒有可寫 primary\n\
+    \      description: All instances are read_only for tenant {{ $labels.tenant }}\
+    \ — no writable primary (failover stuck / primary lost) → writes rejected. Unlike\
+    \ MariaDBClusterDown this fires while replicas are still up.\n      description_zh:\
+    \ 租戶 {{ $labels.tenant }} 的所有實例皆為 read_only — 沒有可寫 primary（failover 卡住／primary\
+    \ 遺失）→ 寫入被拒。與 MariaDBClusterDown 不同，此告警在 replica 仍存活時就會觸發。\n  - alert: MariaDBExporterAbsent\n\
+    \    expr: absent(mysql_up{job=\"tenant-exporters\"})\n    for: 30s\n    labels:\n\
+    \      severity: critical\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
+    \      summary: mysqld-exporter target missing\n      summary_zh: mysqld-exporter\
+    \ 目標缺失\n      description: No mysql_up metric found for 30s\n      description_zh:\
+    \ 找不到 mysql_up 指標，持續 30 秒\n  - alert: MariaDBHighConnections\n    expr: \"(\\\
+    n  (\\n    (\\n      tenant:mysql_threads_connected:max\\n      > on(tenant) group_left\\\
+    n      tenant:alert_threshold:mysql_connections\\n    )\\n    unless on(tenant)\\\
+    n    (user_state_filter{filter=\\\"maintenance\\\"} == 1)\\n  )\\n  * on(tenant)\
+    \ group_left(runbook_url, owner, tier)\\n    tenant_metadata_info\\n)\\nor\\n(\\\
+    n  (\\n    (\\n      tenant:mysql_threads_connected:max\\n      > on(tenant) group_left\\\
+    n      tenant:alert_threshold:mysql_connections\\n    )\\n    unless on(tenant)\\\
+    n    (user_state_filter{filter=\\\"maintenance\\\"} == 1)\\n  )\\n  unless on(tenant)\
+    \ tenant_metadata_info\\n)\\n\"\n    for: 30s\n    labels:\n      severity: warning\n\
+    \      metric_group: connections\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
+    \      summary: High connections on {{ $labels.tenant }}\n      summary_zh: '{{\
+    \ $labels.tenant }} 連線數過高'\n      platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant\
+    \ }}: connection threshold breached — review connection pool sizing'\n      platform_summary_zh:\
     \ '[{{ $labels.tier }}] {{ $labels.tenant }}：連線數閾值超出 — 檢查連線集區大小設定'\n      description:\
     \ '{{ $value }} threads connected (warning threshold exceeded)'\n      description_zh:\
     \ '{{ $value }} 個執行緒已連接（超過警告閾值）'\n      runbook_url: '{{ $labels.runbook_url }}'\n\

@@ -74,17 +74,79 @@ groups:
   # -------------------------------------------------------
   - name: mariadb-alerts
     rules:
+      # ── HA-aware liveness tiering (#875 / ADR-026) ───────────────────────
+      # Customer topology: primary-replica SEMI-SYNC (not Galera → no wsrep quorum).
+      # A single replica down during failover/drain is NOT a service outage →
+      # warning + maintenance opt-out. Total outage and loss-of-writable-primary
+      # are caught at CRITICAL by the two rules below.
       - alert: MariaDBDown
-        expr: mysql_up == 0
+        expr: |
+          (mysql_up == 0)
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         for: 15s
         labels:
-          severity: critical
+          severity: warning
+          metric_group: liveness
           tenant: "{{ $labels.tenant }}"
         annotations:
-          summary: "MariaDB instance {{ $labels.instance }} is DOWN"
-          summary_zh: "MariaDB 實例 {{ $labels.instance }} 已關閉"
-          description: "mysql_up=0 for 15s on {{ $labels.instance }}"
-          description_zh: "mysql_up=0，持續 15 秒，實例：{{ $labels.instance }}"
+          summary: "MariaDB instance {{ $labels.instance }} is down (tenant {{ $labels.tenant }})"
+          summary_zh: "MariaDB 實例 {{ $labels.instance }} 停機（租戶 {{ $labels.tenant }}）"
+          description: "mysql_up=0 on {{ $labels.instance }}. One replica down in a primary-replica set keeps the service available (warning). Total outage escalates to MariaDBClusterDown (critical); loss of the writable primary to MariaDBNoPrimary (critical)."
+          description_zh: "{{ $labels.instance }} 的 mysql_up=0。primary-replica 架構下單一 replica 停機時服務仍可用（warning）。整體中斷會升級為 MariaDBClusterDown（critical）；失去可寫 primary 則為 MariaDBNoPrimary（critical）。"
+
+      # Cluster-survival (total outage): NO instance reports up=1 for the tenant.
+      # max by(tenant)(mysql_up)==0 is topology-agnostic — fires iff EVERY instance
+      # is down (1 or N). The critical backstop that makes the MariaDBDown downgrade
+      # safe (catches "exporter alive, mysqld unreachable, all nodes" — which
+      # TenantExporterAbsent misses). NOT quorum/primary-loss (that is
+      # MariaDBNoPrimary). NO maintenance opt-out. tenant-only annotation
+      # (max by(tenant) strips instance → pint alerts/template).
+      - alert: MariaDBClusterDown
+        expr: max by(tenant) (mysql_up{job="tenant-exporters"}) == 0
+        for: 1m
+        labels:
+          severity: critical
+          metric_group: liveness
+          tenant: "{{ $labels.tenant }}"
+        annotations:
+          summary: "MariaDB: ALL instances down for tenant {{ $labels.tenant }}"
+          summary_zh: "MariaDB：租戶 {{ $labels.tenant }} 的所有實例皆停機"
+          description: "No mysqld reports up=1 for tenant {{ $labels.tenant }} — total service outage, not a single-replica failover. For a planned single-instance drain, silence via the Alertmanager Silence API (cluster-survival has no config opt-out by design)."
+          description_zh: "租戶 {{ $labels.tenant }} 沒有任何 mysqld 回報 up=1 — 整體服務中斷，非單一 replica failover。若為計畫性單實例維護，請用 Alertmanager Silence API 靜音（叢集存活告警刻意不提供 config opt-out）。"
+
+      # Write-availability (primary-replica semi-sync): instances are reachable but
+      # NONE is the writable primary. mysql_global_variables_read_only==0 means
+      # read-write (the primary); replicas are read_only==1. No read-write node →
+      # failover stuck / primary lost → writes rejected = service effectively down.
+      # This is the case max(up)==0 MISSES (primary down, replicas up → max=1).
+      #
+      # read_only is emitted by the mysqld_exporter global_variables collector — the
+      # SAME collector already feeding mysql_global_variables_max_connections
+      # (mariadb-normalization above), so its presence is tied to a metric this pack
+      # already uses. The `A unless B` shape handles the empty-primary vector — a
+      # plain count(...==0)==0 would NEVER fire (an empty vector is absent, not 0).
+      # for:2m absorbs the normal promotion window (old primary demoted -> new
+      # promoted). NO maintenance opt-out.
+      # NOTE semi-sync: a primary that loses all semi-sync replicas can STALL writes
+      # while still read_only==0 (rpl_semi_sync_master_status / _clients). That
+      # "primary isolated" signal is a documented follow-up, not this MVP.
+      # ⚠ At customer rollout, verify read_only is scraped (global_variables collector on).
+      - alert: MariaDBNoPrimary
+        expr: |
+          count by(tenant) (mysql_global_variables_read_only{job="tenant-exporters"})
+          unless
+          count by(tenant) (mysql_global_variables_read_only{job="tenant-exporters"} == 0)
+        for: 2m
+        labels:
+          severity: critical
+          metric_group: liveness
+          tenant: "{{ $labels.tenant }}"
+        annotations:
+          summary: "MariaDB: no writable primary for tenant {{ $labels.tenant }}"
+          summary_zh: "MariaDB：租戶 {{ $labels.tenant }} 沒有可寫 primary"
+          description: "All instances are read_only for tenant {{ $labels.tenant }} — no writable primary (failover stuck / primary lost) → writes rejected. Unlike MariaDBClusterDown this fires while replicas are still up."
+          description_zh: "租戶 {{ $labels.tenant }} 的所有實例皆為 read_only — 沒有可寫 primary（failover 卡住／primary 遺失）→ 寫入被拒。與 MariaDBClusterDown 不同，此告警在 replica 仍存活時就會觸發。"
 
       # DEPRECATED (#869): superseded by TenantExporterAbsent in rule-pack-liveness.yaml.
       # This GLOBAL absent() fires only when EVERY tenant's mysql_up is gone (one live
