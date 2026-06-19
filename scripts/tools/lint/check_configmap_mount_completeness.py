@@ -52,6 +52,12 @@ RULES_VOLUME_NAME = "rules"
 # "platform forgot to mount a new gold-standard pack" guard this lint enforces.
 CUSTOMER_MANAGED_PREFIX = "configmap-rules-custom-"
 
+# Prometheus loads rules via `rule_files: /etc/prometheus/rules/*.yml`
+# (configmap-prometheus.yaml:33). A projected `path:` (or, for whole-ConfigMap
+# projection, a data key) that does NOT end with this suffix is mounted but never
+# globbed → silently dead code — one layer deeper than "is it mounted at all".
+RULE_FILE_GLOB_SUFFIX = ".yml"
+
 
 def configmap_rule_packs(monitor_dir: Path) -> Dict[str, Set[str]]:
     """{metadata.name: {data keys}} for every configmap-rules-*.yaml."""
@@ -70,9 +76,12 @@ def configmap_rule_packs(monitor_dir: Path) -> Dict[str, Set[str]]:
     return out
 
 
-def deployment_mounts(deployment_path: Path) -> Dict[str, Set[str]]:
-    """{configMap.name: {projected items[].key}} from the `rules` projected volume."""
-    out: Dict[str, Set[str]] = {}
+def deployment_mounts(deployment_path: Path) -> Dict[str, Dict[str, str]]:
+    """{configMap.name: {projected items[].key: path}} from the `rules` projected volume.
+
+    An empty inner dict means no `items:` → the whole ConfigMap is projected.
+    """
+    out: Dict[str, Dict[str, str]] = {}
     for doc in yaml.safe_load_all(deployment_path.read_text(encoding="utf-8")):
         if not isinstance(doc, dict) or doc.get("kind") != "Deployment":
             continue
@@ -89,9 +98,13 @@ def deployment_mounts(deployment_path: Path) -> Dict[str, Set[str]]:
                 if not name:
                     continue
                 items = cm.get("items") or []
-                keys = {it.get("key") for it in items if isinstance(it, dict) and it.get("key")}
-                # No `items:` means the whole ConfigMap is projected (all keys).
-                out[str(name)] = keys
+                # {key: projected path}; path defaults to key when omitted.
+                key_paths = {
+                    str(it["key"]): str(it.get("path", it["key"]))
+                    for it in items
+                    if isinstance(it, dict) and it.get("key")
+                }
+                out[str(name)] = key_paths
     return out
 
 
@@ -107,14 +120,23 @@ def check(packs: Dict[str, Set[str]], mounts: Dict[str, Set[str]]) -> List[str]:
         if name not in mounts:
             violations.append(
                 f"ConfigMap '{name}' (configmap-rules-*.yaml) is NOT mounted in "
-                f"{deployment_path}'s '{RULES_VOLUME_NAME}' projected volume → its rules "
+                f"{DEPLOYMENT.name}'s '{RULES_VOLUME_NAME}' projected volume → its rules "
                 f"are never loaded by Prometheus (dead code). Add a configMap source for it."
             )
             continue
-        item_keys = mounts[name]
-        if not item_keys:
-            # whole-ConfigMap projection: every data key reaches /etc/prometheus/rules
+        key_paths = mounts[name]
+        if not key_paths:
+            # whole-ConfigMap projection: each data key becomes a file named after the
+            # key, so each key must itself end with the rule_files glob suffix.
+            for k in sorted(data_keys):
+                if not k.endswith(RULE_FILE_GLOB_SUFFIX):
+                    violations.append(
+                        f"ConfigMap '{name}': data: key '{k}' (whole-ConfigMap projection → "
+                        f"filename) does not end with '{RULE_FILE_GLOB_SUFFIX}' → Prometheus "
+                        f"rule_files glob ignores it (dead code)."
+                    )
             continue
+        item_keys = set(key_paths)
         for k in sorted(item_keys - data_keys):
             violations.append(
                 f"ConfigMap '{name}': projected items[].key '{k}' has no matching data: "
@@ -125,6 +147,14 @@ def check(packs: Dict[str, Set[str]], mounts: Dict[str, Set[str]]) -> List[str]:
                 f"ConfigMap '{name}': data: key '{k}' is not projected by any items[].key → "
                 f"that rule file is silently dropped. Add an items entry (key+path)."
             )
+        for k in sorted(item_keys):
+            path = key_paths[k]
+            if path and not path.endswith(RULE_FILE_GLOB_SUFFIX):
+                violations.append(
+                    f"ConfigMap '{name}': projected items[].path '{path}' (key '{k}') does not "
+                    f"end with '{RULE_FILE_GLOB_SUFFIX}' → mounted but Prometheus rule_files "
+                    f"glob ignores it (dead code). Fix the path extension."
+                )
     return violations
 
 
