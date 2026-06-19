@@ -130,10 +130,12 @@ def conf_d_declared_db_type_tenants(config_dir: Path) -> Dict[str, str]:
                 # resolve.go ResolveMetadata: yaml.Unmarshal of the scalar).
                 parsed = yaml.safe_load(meta_raw)
                 if isinstance(parsed, dict):
-                    db_type = str(parsed.get("db_type") or "")
+                    dt = parsed.get("db_type")
+                    db_type = dt if isinstance(dt, str) else ""
             elif isinstance(meta_raw, dict):
                 # Also accept _metadata authored as a native mapping.
-                db_type = str(meta_raw.get("db_type") or "")
+                dt = meta_raw.get("db_type")
+                db_type = dt if isinstance(dt, str) else ""
             if db_type:
                 out[str(tenant)] = db_type
     return out
@@ -161,6 +163,8 @@ def namespace_declared_targets(namespaces_file: Path) -> Set[str]:
         if not isinstance(doc, dict) or doc.get("kind") != "Namespace":
             continue
         labels = ((doc.get("metadata") or {}).get("labels")) or {}
+        if not isinstance(labels, dict):
+            continue
         inst = labels.get("instance")
         if inst:
             targets.add(str(inst))
