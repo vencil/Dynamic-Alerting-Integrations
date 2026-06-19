@@ -784,6 +784,14 @@ repos:
         # branch. Source-only: configmaps are sync-checked against source
         # separately. Semantic proof: tests/rulepacks/*-void_test.yaml.
 
+      - id: configmap-mount-completeness
+        name: "Every configmap-rules-* must be mounted in Prometheus projected volume (#869 dead-rule guard)"
+        entry: python3 -X utf8 scripts/tools/lint/check_configmap_mount_completeness.py --ci
+        language: python
+        pass_filenames: false
+        additional_dependencies: ['pyyaml']
+        files: ^k8s/03-monitoring/(configmap-rules-.*\.yaml|deployment-prometheus\.yaml)$
+
       - id: rulepack-configmap-drift
         name: "ADR-024: configmap-rules-*.yaml must match rule-packs/ source (Commit 4 hard gate)"
         entry: python3 -X utf8 scripts/tools/dx/generate_rulepack_configmaps.py --check
