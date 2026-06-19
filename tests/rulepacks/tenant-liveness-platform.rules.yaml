@@ -22,7 +22,14 @@ groups:
           summary: "Entire tenant-exporters scrape job is absent — per-tenant liveness is BLIND"
 
       - alert: MassExporterOutage
-        expr: count without (tenant, db_type) (tenant_expected_exporter unless on(tenant) (up{job="tenant-exporters"} == 1)) > 10
+        expr: |
+          count without (tenant, db_type) (tenant_expected_exporter unless on(tenant) (up{job="tenant-exporters"} == 1)) > 5
+          and
+          (
+            count without (tenant, db_type) (tenant_expected_exporter unless on(tenant) (up{job="tenant-exporters"} == 1))
+            /
+            count without (tenant, db_type) (tenant_expected_exporter)
+          ) > 0.1
         for: 3m
         labels:
           severity: critical

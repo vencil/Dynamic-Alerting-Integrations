@@ -497,34 +497,61 @@ data:
           # the RAW anti-join expression (NOT the alertname — `count(...)(Foo)` is
           # not valid PromQL, and there is no ALERTS{} idiom in this repo), and use
           # `count without (tenant, db_type)` to collapse the per-tenant fan-out
-          # into ONE global count. NB BOTH labels must be dropped: the anti-join
-          # result carries db_type (from tenant_expected_exporter), so a bare
-          # `without (tenant)` would split the count PER db_type — 6 mariadb + 5
-          # postgresql down would give two sub-counts (6, 5), neither > 10, and the
-          # storm would SILENTLY not fire despite 11 total down. Dropping db_type too
-          # yields a single mixed-DB outage count. Counting the raw expression (not
-          # ALERTS) also means it fires WITHOUT waiting for TenantExporterAbsent's
-          # for:3m to elapse per tenant. The `without(...)` form + no tenant label is
-          # exactly why this cannot live in rule-packs/ (lint_custom_rules denies
-          # `without(tenant)` and mandates a tenant label).
-          # Threshold 10 is a provisional page-storm floor — tune to the deployment's
-          # tenant count (a handful of tenants down = the per-tenant pages suffice).
+          # into ONE global count. NB BOTH labels must be dropped on BOTH the
+          # numerator AND the denominator: the anti-join result and
+          # tenant_expected_exporter both carry db_type, so a bare `without (tenant)`
+          # would split each count PER db_type and the ratio below would degrade into
+          # per-db_type ratios. Dropping db_type too yields one mixed-DB count / one
+          # mixed-DB total. Counting the raw expression (not ALERTS) also means it
+          # fires WITHOUT waiting for TenantExporterAbsent's for:3m per tenant. The
+          # `without(...)` form + no tenant label is exactly why this cannot live in
+          # rule-packs/ (lint_custom_rules denies `without(tenant)` and mandates a
+          # tenant label).
+          #
+          # RATIO + FLOOR (#880, replaces the provisional magic `> 10`): an absolute
+          # threshold mis-scales at both ends. Small deployment (8 tenants, all 8
+          # down < 10) → the sentinel never fires and on-call eats 8 individual
+          # pages. Large deployment (a single node's ~15 exporters > 10) → a ROUTINE
+          # node failure false-escalates to a machine-room incident. So fire only
+          # when BOTH hold:
+          #   (a) count(down) > 5                  — absolute floor: a handful down is
+          #                                          fine as per-tenant pages.
+          #   (b) count(down) / count(expected) > 0.1  — proportional: >10% of the
+          #                                          fleet down ⇒ systemic, not N
+          #                                          independent deaths.
+          # `$value` is clause (a) (the down COUNT) because it is the LHS of the
+          # top-level `and`, so the "{{ $value }} tenants" summary stays a count.
+          # CAVEAT: the denominator count(tenant_expected_exporter) goes EMPTY if the
+          # threshold-exporter that emits it dies — then the whole expression is
+          # empty and this sentinel cannot fire. That collector-death catastrophe is
+          # deliberately NOT this rule's job: TenantExporterJobAbsent (absent(up{job})
+          # above) is the dead-man's-switch for it, so the sentinel is never the sole
+          # dependency. Tune 5 / 0.1 to the deployment.
           - alert: MassExporterOutage
-            expr: count without (tenant, db_type) (tenant_expected_exporter unless on(tenant) (up{job="tenant-exporters"} == 1)) > 10
+            expr: |
+              count without (tenant, db_type) (tenant_expected_exporter unless on(tenant) (up{job="tenant-exporters"} == 1)) > 5
+              and
+              (
+                count without (tenant, db_type) (tenant_expected_exporter unless on(tenant) (up{job="tenant-exporters"} == 1))
+                /
+                count without (tenant, db_type) (tenant_expected_exporter)
+              ) > 0.1
             for: 3m
             labels:
               severity: critical
             annotations:
               summary: "Mass exporter outage ({{ $value }} tenants) — shared-dependency failure suspected"
               description: |
-                More than 10 tenants simultaneously have no healthy
-                up{job="tenant-exporters"}==1 target. This is almost certainly a
-                SHARED failure (node pool drained, network partition, image-pull
-                outage on a rolling restart) rather than N independent exporter
-                deaths. Treat as ONE incident: inspect node health / network /
-                recent cluster-wide changes FIRST — remediating tenants one by one
-                will not address the common cause. Per-tenant detail is in the
-                fanned-out TenantExporterAbsent alerts.
+                More than 5 tenants AND over 10% of the expected-exporter fleet
+                simultaneously have no healthy up{job="tenant-exporters"}==1 target.
+                Both conditions together mean this is almost certainly a SHARED
+                failure (node pool drained, network partition, image-pull outage on a
+                rolling restart) rather than N independent exporter deaths or a
+                routine single-node blip. Treat as ONE incident: inspect node health
+                / network / recent cluster-wide changes FIRST — remediating tenants
+                one by one will not address the common cause. Per-tenant detail is in
+                the fanned-out TenantExporterAbsent alerts. If instead the WHOLE
+                tenant-exporters job is gone, TenantExporterJobAbsent fires instead.
 
       # ============================================================
       # Federation Audit (ADR-020 IV-2f, issue #511)

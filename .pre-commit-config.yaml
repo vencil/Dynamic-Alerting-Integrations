@@ -466,6 +466,21 @@ repos:
         files: ^(components/threshold-exporter/config/|scripts/tools/lint/check_routing_profiles)
         additional_dependencies: ['pyyaml']
 
+      # #880 Day-3 hardening: validate every tenant-shaped conf.d file against
+      # tenant-config.schema.json (metadata additionalProperties:false + db_type
+      # enum). Shifts the #869 db_type-typo silent-failure (dbType/db_typ key or a
+      # maraidb value → DBType="" → tenant silently dropped from liveness) left to
+      # author/CI time. jsonschema is REQUIRED here (unlike md-yaml-drift it does not
+      # degrade) so it is in additional_dependencies. Also wired into ci.yml's Lint
+      # job (pre-commit run confd-schema-check) like routing-profiles-check.
+      - id: confd-schema-check
+        name: conf.d tenant YAML ↔ tenant-config schema (#880 db_type-typo guard)
+        entry: python3 -X utf8 scripts/tools/lint/check_confd_schema.py --config-dir components/threshold-exporter/config/conf.d
+        language: python
+        pass_filenames: false
+        files: ^(components/threshold-exporter/config/|scripts/tools/lint/check_confd_schema|docs/schemas/tenant-config\.schema\.json)
+        additional_dependencies: ['pyyaml', 'jsonschema']
+
       # --- v2.4.0 Phase A: 防守工具補強 ---
       - id: build-completeness-check
         name: build.sh ↔ COMMAND_MAP bidirectional sync
