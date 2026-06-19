@@ -1,0 +1,4 @@
+# recipe-preview service runtime deps (the Dockerfile pins these too).
+# The HTTP layer + PEP + guardrails are pure stdlib; the only third-party
+# dependency is PyYAML, used by the eval core (compile_custom_alerts).
+PyYAML==6.0.3
