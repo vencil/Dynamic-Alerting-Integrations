@@ -2,6 +2,10 @@ apiVersion: v2
 name: recipe-preview            # → Service name "recipe-preview" (matches da-portal recipePreviewUrl)
 description: Would-fire preview service for the Dynamic Alerting Platform (#657)
 type: application
+# version / appVersion are PROVISIONAL. recipe-preview bundles the platform
+# compiler, so at release it is "sync-bumped" to the platform version (like
+# exporter/portal) — the release wiring (PR-D2) sets these so the derived image
+# tag (v<appVersion>) matches the published recipe-preview/v<platform> image.
 version: 0.1.0
 appVersion: "0.1.0"
 home: https://github.com/vencil/Dynamic-Alerting-Integrations
