@@ -248,6 +248,9 @@ jobs:
       - name: "Rule-pack 3-copy sync incl. operator (HARD gate — ADR-024 PR3-pre)"
         run: python scripts/tools/lint/check_rulepack_sync.py --ci
 
+      - name: "ConfigMap mount completeness (#869 dead-rule guard)"
+        run: python scripts/tools/lint/check_configmap_mount_completeness.py --ci
+
       # #741 S3b: the deployed custom-alert pack is COMPILED from the live conf.d
       # _custom_alerts (not hand-edited). This is the source→pack drift gate that
       # sits upstream of the configmap/operator copies above — edit a tenant's
