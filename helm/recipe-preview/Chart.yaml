@@ -1,0 +1,9 @@
+apiVersion: v2
+name: recipe-preview            # → Service name "recipe-preview" (matches da-portal recipePreviewUrl)
+description: Would-fire preview service for the Dynamic Alerting Platform (#657)
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/vencil/Dynamic-Alerting-Integrations
+maintainers:
+  - name: vencil

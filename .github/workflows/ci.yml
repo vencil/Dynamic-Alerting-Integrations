@@ -311,7 +311,7 @@ jobs:
 
   iac-helm-sast:
     # Container/k8s SAST Layers 2 + 4 (#448 / TRK-312 + TRK-314).
-    #   L2 (Helm template): renders 9 charts via helm + kube-linter (~1-2 min).
+    #   L2 (Helm template): renders 10 charts via helm + kube-linter (~1-2 min).
     #   L4 (raw k8s): kube-linter on k8s/ raw manifests (no render, ~3-5s).
     # Both run in this one job because they share the kube-linter engine setup
     # below; dedicated (not folded into Lint) so the slow render doesn't gate

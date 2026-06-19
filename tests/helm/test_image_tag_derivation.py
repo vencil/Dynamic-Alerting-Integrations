@@ -35,6 +35,7 @@ _CHARTS = [
     ("helm/threshold-exporter", "ghcr.io/vencil/threshold-exporter"),
     ("helm/tenant-api", "ghcr.io/vencil/tenant-api"),
     ("helm/da-portal", "ghcr.io/vencil/da-portal"),
+    ("helm/recipe-preview", "ghcr.io/vencil/recipe-preview"),
 ]
 
 _DERIVE_RE = re.compile(

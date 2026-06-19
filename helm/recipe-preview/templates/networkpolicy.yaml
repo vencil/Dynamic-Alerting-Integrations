@@ -1,0 +1,29 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "recipe-preview.name" . }}-netpol
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "recipe-preview.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "recipe-preview.selectorLabels" . | nindent 6 }}
+  # Ingress-only (mirrors tenant-api's default posture). recipe-preview blindly
+  # trusts the X-Forwarded-* identity headers, so the load-bearing security control
+  # is that ONLY the da-portal pod (the same-origin /preview proxy) may reach :8082.
+  # Any other pod reaching it directly could spoof identity. (Egress restriction —
+  # to tenant-api + DNS only — is a hardening follow-up; left open here so the
+  # /access call can't break on a mis-specified egress rule.)
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: {{ .Values.networkPolicy.daPortalName }}
+      ports:
+        - port: {{ .Values.service.port }}
+          protocol: TCP
+{{- end }}
