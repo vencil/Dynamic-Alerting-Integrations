@@ -58,6 +58,7 @@ DEV_BYPASS = os.environ.get("PREVIEW_DEV_BYPASS_AUTH", "").lower() in ("1", "tru
 DEV_BYPASS_EMAIL = os.environ.get("PREVIEW_DEV_BYPASS_EMAIL", "dev@local")
 DEV_BYPASS_GROUPS = os.environ.get("PREVIEW_DEV_BYPASS_GROUPS", "demo-admins")
 MAX_BODY_BYTES = int(os.environ.get("PREVIEW_MAX_BODY_BYTES", str(64 * 1024)))
+REQUEST_TIMEOUT = float(os.environ.get("PREVIEW_REQUEST_TIMEOUT", "60"))
 
 # ADR-022-style containment: dev-bypass is a LOCAL-DEV escape hatch. Refuse to
 # run it inside Kubernetes — where a real oauth2-proxy must front the service —
@@ -74,9 +75,12 @@ _eval_slots = threading.BoundedSemaphore(MAX_CONCURRENCY)
 class RateLimiter:
     """Per-key sliding-window limiter (in-memory; correct for a single replica).
 
-    A horizontally-scaled deployment would need a shared store, but the preview
-    service is try-local-first / low-QPS; this bounds the per-tenant abuse
-    surface (§6) without a new dependency.
+    A horizontally-scaled deployment would need a shared store: with N replicas
+    behind a load balancer the effective per-tenant ceiling becomes
+    RATE_LIMIT_PER_MIN * N (and is non-deterministic per request). That's an
+    accepted MVP trade-off — this is a blast-radius guard, not billing — but a
+    Platform Engineer scaling it out must know. try-local-first / low-QPS; bounds
+    the per-tenant abuse surface (§6) without a new dependency.
     """
 
     def __init__(self, per_min, max_keys=10000):
@@ -211,6 +215,11 @@ def parse_content_length(raw_header):
 
 class _Handler(BaseHTTPRequestHandler):
     server_version = "recipe-preview/1.0"
+    # Bound per-connection socket reads so an idle / abandoned / slow-drip client
+    # can't pin a ThreadingHTTPServer thread indefinitely (thread-leak guard).
+    # NOT a full Slowloris defense — that's the auth proxy + a future production
+    # WSGI server (design §9); this just caps dead-connection thread leakage.
+    timeout = REQUEST_TIMEOUT
 
     def _send(self, status, obj):
         payload = json.dumps(obj).encode("utf-8")

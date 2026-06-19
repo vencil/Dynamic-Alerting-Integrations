@@ -38,11 +38,20 @@
 | `PREVIEW_MAX_CONCURRENCY` | `4` | 同時評估上限（每次評估開一個 `promtool` 子程序）|
 | `PREVIEW_RATE_LIMIT_PER_MIN` | `30` | 每租戶每分鐘上限（`0`=關閉）|
 | `PREVIEW_MAX_BODY_BYTES` | `65536` | request body 上限（讀進記憶體前擋；超過回 `413`）|
+| `PREVIEW_REQUEST_TIMEOUT` | `60` | 每連線 socket 讀取 timeout 秒數（防 idle／慢速連線占住 thread）|
 | `PREVIEW_DEV_BYPASS_AUTH` | `false` | try-local：無身分標頭時注入 demo 身分（k8s 內開會**拒絕啟動**）|
 
 ## 範圍
 
-首版 `threshold` recipe（`>` `>=` `<` `<=` `==`）；時間相依型（rate/ratio/forecast/absence）回 `supported:false`（誠實標示、不靜默）。正式環境部署延後（[設計 §9](../../docs/design/recipe-would-fire-preview.md)）。
+首版 `threshold` recipe（`>` `>=` `<` `<=` `==`）；時間相依型（rate/ratio/forecast/absence）回 `supported:false`（誠實標示、不靜默）。
+
+**正式環境部署延後**（[設計 §9](../../docs/design/recipe-would-fire-preview.md)）；隨 prod 部署一起補的加固 bundle：
+
+- **`tini` 當 PID 1** — SIGTERM 轉發 + graceful 終止。（非殭屍回收：`subprocess.run` 為同步 `wait()`、已回收 `promtool`，且 `promtool` 不 fork 孫行程，故無 PID-1 殭屍堆積路徑。）
+- **生產級 WSGI**（gunicorn／waitress）取代 stdlib `ThreadingHTTPServer` — 完整 worker／timeout／Slowloris 管理。（現以 auth proxy + 每連線 socket timeout 部分緩解。）
+- **`/metrics` 端點** — `recipe_preview_requests_total{tenant,result_state}` 與 `recipe_preview_eval_duration_seconds`，把本服務狀態納入平台觀測體系。
+
+觸發＝prod 部署，或 Domain Expert 開始實際使用。
 
 ## try-local
 
