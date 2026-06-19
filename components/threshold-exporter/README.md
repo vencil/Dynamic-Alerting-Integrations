@@ -92,6 +92,7 @@
 | `user_silent_mode` | Gauge | silent mode 生效中（告警仍進 TSDB，只抑制通知；label: tenant / target_severity） |
 | `user_severity_dedup` | Gauge | critical 觸發時抑制 warning 通知（label: tenant / mode） |
 | `tenant_metadata_info` | Gauge | metadata 注入用，值恆 1（labels: runbook_url / owner / tier） |
+| `tenant_expected_exporter` | Gauge | per-tenant exporter liveness 期望，值恆 1（labels: tenant / db_type；**僅對宣告 `_metadata.db_type` 的租戶 emit**）。`TenantExporterAbsent` anti-join 的左手邊（#869） |
 | `da_config_event` | Gauge | timed config 失效事件（silent / maintenance 自動解除） |
 | `da_custom_alert_parse_errors` | Gauge | 每租戶被丟棄的 `_custom_alerts` 數（fail-loud；0 = 全數有效） |
 | `da_tenant_metrics_over_limit` | Gauge | 每租戶超出 cardinality 上限的量（`max(0, 產出數 − 上限)`；持續超限就持續報該值） |

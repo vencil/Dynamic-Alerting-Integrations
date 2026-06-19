@@ -98,6 +98,10 @@ groups:
           description: "pg_up=0 for 15s on {{ $labels.instance }}"
           description_zh: "pg_up=0，持續 15 秒，實例：{{ $labels.instance }}"
 
+      # DEPRECATED (#869): superseded by TenantExporterAbsent in rule-pack-liveness.yaml.
+      # GLOBAL absent() → false-negative when one live tenant masks another's outage,
+      # and empty `tenant` label. Kept ONE release as a deprecation shim so external
+      # matchers on PostgreSQLExporterAbsent don't break. Removal: next release.
       - alert: PostgreSQLExporterAbsent
         expr: absent(pg_up{job="tenant-exporters"})
         for: 30s

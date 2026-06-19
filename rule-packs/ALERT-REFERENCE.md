@@ -103,6 +103,14 @@ lang: zh
 
 ---
 
+## liveness
+
+| 告警名稱 | 嚴重度 | 觸發條件 | 建議動作 | 相關指標 |
+|---|---|---|---|---|
+| TenantExporterAbsent | critical | No healthy up{job="tenant-exporters"}==1 target for tenant {{ $labels.tenant }} (db_type={{ $labels. | 確認相關元件已啟動、配置正確；檢查元件日誌 | tenant_expected_exporter |
+
+---
+
 ## MariaDB Rule Pack
 
 | 告警名稱 | 嚴重度 | 觸發條件 | 建議動作 | 相關指標 |

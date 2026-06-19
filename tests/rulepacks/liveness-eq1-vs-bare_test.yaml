@@ -1,0 +1,34 @@
+# promtool unit test — #869 value-aware `up == 1` vs bare `unless up`.
+# Run: promtool test rules tests/rulepacks/liveness-eq1-vs-bare_test.yaml
+#
+# Oracle for liveness-eq1-vs-bare.rules.yaml. Single scenario: static-SD target
+# PRESENT but up=0 (dead pod, Service alive). The value-aware rule (AbsentEq1)
+# FIRES; the bare rule (AbsentBareUnless) MISSES — the latent bug #869 fixes by
+# choosing `unless on(tenant) (up == 1)` for TenantExporterAbsent.
+rule_files:
+  - liveness-eq1-vs-bare.rules.yaml
+
+evaluation_interval: 30s
+
+tests:
+  - interval: 30s
+    name: static-sd-up-zero-eq1-fires-bare-misses
+    input_series:
+      - series: 'tenant_expected_exporter{tenant="db-a", db_type="mariadb"}'
+        values: '1x10'
+      # target present the whole time, but reporting up=0 (pod down, Service alive).
+      - series: 'up{job="tenant-exporters", tenant="db-a", instance="db-a:9104"}'
+        values: '0x10'
+    alert_rule_test:
+      # value-aware: up=0 is NOT up==1 → anti-join keeps db-a → FIRES.
+      - eval_time: 3m
+        alertname: AbsentEq1
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              tenant: db-a
+              db_type: mariadb
+      # bare: the present up=0 series suppresses the anti-join → MISSES (no alert).
+      - eval_time: 3m
+        alertname: AbsentBareUnless
+        exp_alerts: []

@@ -1,0 +1,103 @@
+# promtool unit test — #869 platform-side tenant-liveness sentinels.
+# Run: promtool test rules tests/rulepacks/tenant-liveness-platform_test.yaml
+#
+# Oracle for tenant-liveness-platform.rules.yaml (the EXTRACT of
+# TenantExporterJobAbsent + MassExporterOutage from configmap-rules-platform.yaml).
+#
+#   JOB-ABSENT     whole tenant-exporters job vanishes (no up series at all) →
+#                  TenantExporterJobAbsent fires (per-tenant rule would be blind).
+#   JOB-PRESENT    at least one up series exists → TenantExporterJobAbsent silent.
+#   STORM          >10 tenants' exporters down at once → MassExporterOutage fires once.
+#   NO-STORM       a handful (<=10) down → MassExporterOutage silent (per-tenant pages suffice).
+rule_files:
+  - tenant-liveness-platform.rules.yaml
+
+evaluation_interval: 30s
+
+tests:
+  # ── TenantExporterJobAbsent: whole job gone → fires ──
+  - interval: 30s
+    name: job-absent-fires
+    input_series:
+      # tenant_expected_exporter still present (exporter that emits it could be a
+      # separate concern) but NO up{job="tenant-exporters"} series exist at all.
+      - series: 'tenant_expected_exporter{tenant="db-a", db_type="mariadb"}'
+        values: '1x12'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: TenantExporterJobAbsent
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: tenant-exporters
+            exp_annotations:
+              summary: "Entire tenant-exporters scrape job is absent — per-tenant liveness is BLIND"
+
+  # ── TenantExporterJobAbsent: at least one up present → silent ──
+  - interval: 30s
+    name: job-present-silent
+    input_series:
+      - series: 'up{job="tenant-exporters", tenant="db-a", instance="db-a:9104"}'
+        values: '1x12'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: TenantExporterJobAbsent
+        exp_alerts: []
+
+  # ── MassExporterOutage: 11 tenants down at once → fires once ──
+  - interval: 30s
+    name: storm-11-down-mixed-dbtypes-fires
+    input_series:
+      # 11 tenants expected, NONE healthy (no up==1 for any) → anti-join count = 11 > 10.
+      # MIXED db_types on purpose: proves `without (tenant, db_type)` collapses to ONE
+      # global count of 11. A bare `without (tenant)` would split into per-db_type
+      # sub-counts (7 mariadb + 2 postgresql + 2 redis), none > 10 → would SILENTLY
+      # not fire despite 11 total down. This scenario is the regression guard for that.
+      - series: 'tenant_expected_exporter{tenant="t01", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="t02", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="t03", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="t04", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="t05", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="t06", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="t07", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="t08", db_type="postgresql"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="t09", db_type="postgresql"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="t10", db_type="redis"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="t11", db_type="redis"}'
+        values: '1x12'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: MassExporterOutage
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: "Mass exporter outage (11 tenants) — shared-dependency failure suspected"
+
+  # ── MassExporterOutage: only 2 down → silent (per-tenant pages suffice) ──
+  - interval: 30s
+    name: no-storm-2-down-silent
+    input_series:
+      # 2 down (no up), the rest healthy. count = 2, not > 10 → no storm.
+      - series: 'tenant_expected_exporter{tenant="t01", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="t02", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="t03", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'up{job="tenant-exporters", tenant="t03", instance="t03:9104"}'
+        values: '1x12'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: MassExporterOutage
+        exp_alerts: []

@@ -37,7 +37,7 @@ Dynamic Alerting 平台的完整文件導覽。根據你的角色快速找到所
 | 文件 | 用途 |
 |------|------|
 | [快速入門](getting-started/for-domain-experts.md) | Domain Expert 30 分鐘入門：Rule Pack 概念、Custom 規則治理 |
-| [Rule Pack 文件](rule-packs/README.md) | 15 個 Rule Pack 目錄 + optional 卸載說明 |
+| [Rule Pack 文件](rule-packs/README.md) | 16 個 Rule Pack 目錄 + optional 卸載說明 |
 | [Custom Rule 治理](custom-rule-governance.md) | 三層治理模型、Linting、Schema 驗證、Best Practices |
 | [遷移引擎](migration-engine.md) | AST 遷移引擎架構、跨方言規則轉換、Triage 邏輯 |
 

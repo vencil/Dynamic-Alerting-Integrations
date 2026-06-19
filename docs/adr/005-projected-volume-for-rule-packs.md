@@ -21,7 +21,7 @@ updated_at: 2026-05-13
 
 ## 背景
 
-平台提供 15 個預構建的 Rule Pack，涵蓋不同的基礎設施與應用場景 (Kubernetes、JVM、Nginx、Database、等)。
+平台提供 16 個預構建的 Rule Pack，涵蓋不同的基礎設施與應用場景 (Kubernetes、JVM、Nginx、Database、等)。
 
 ### Rule Pack 分發的挑戰
 
@@ -61,7 +61,7 @@ volumes:
             items:
               - key: rules.yaml
                 path: jvm-rules.yaml
-        # ... 其他 15 個 rule pack
+        # ... 其他 16 個 rule pack
 ```
 
 ## 基本原理
@@ -80,7 +80,7 @@ volumes:
 
 - **All-or-nothing**：無法選擇卸載，租戶被迫接受所有 pack
 - **版本管理困難**：Rule Pack 的更新週期不同 (K8s pack 頻繁，Database pack 穩定)，難以統一版本
-- **故障放大**：單一 ConfigMap 包含 15 個 pack，若其中一個有錯誤，整個系統啟動失敗
+- **故障放大**：單一 ConfigMap 包含 16 個 pack，若其中一個有錯誤，整個系統啟動失敗
 
 ## 後果
 
@@ -94,8 +94,8 @@ volumes:
 
 ### 負面影響
 
-⚠️ Kubernetes manifests 變複雜 (Projected Volume + 15 個 ConfigMap source)
-⚠️ 需維護 15 個 ConfigMap，初期佈署時間增加
+⚠️ Kubernetes manifests 變複雜 (Projected Volume + 16 個 ConfigMap source)
+⚠️ 需維護 16 個 ConfigMap，初期佈署時間增加
 ⚠️ 租戶需瞭解 `optional: true` 的語意，避免誤刪
 
 ### 運維考量
@@ -121,7 +121,7 @@ volumes:
 
 ## 實施檢查清單
 
-- [x] Rule Pack YAML 拆分為 15 個獨立 ConfigMap
+- [x] Rule Pack YAML 拆分為 16 個獨立 ConfigMap
 - [x] Helm chart 配置 Projected Volume + optional:true
 - [x] 測試卸載單個 Rule Pack 不造成 Prometheus 啟動失敗
 - [x] 文件說明租戶如何禁用特定 Rule Pack

@@ -1,0 +1,71 @@
+# ============================================================
+# Rule Pack: Tenant Exporter Liveness (#869) — 預設啟用 (always-on)
+#
+# 不需要額外 exporter — 讀取 threshold-exporter 的 tenant_expected_exporter
+# 指標 + Prometheus 注入的 up{job="tenant-exporters"}。
+#
+# === 為什麼存在 (修正的 latent bug) ===
+# 舊的 per-db *ExporterAbsent 規則用 `absent(<db>_up{job="tenant-exporters"})`
+# 做【全域】判斷：只要【任一】租戶的 exporter 還活著，absent() 就回空 →
+# 規則不 fire。結果某個租戶的 exporter 整個消失、別的租戶還在 → 零告警
+# (silent false-negative)。而且 absent() 回空向量，舊規則的
+# `tenant: "{{ $labels.tenant }}"` 模板【恆為空字串】(第二個既有缺陷)。
+#
+# === 修法：per-tenant value-aware anti-join ===
+#   tenant_expected_exporter unless on(tenant) (up{job="tenant-exporters"} == 1)
+#
+# 左手邊 tenant_expected_exporter{tenant,db_type}=1 由 threshold-exporter 對
+# 【每個宣告 db_type 的租戶】emit 一條 (collector.go collectTenantExpectedExporter,
+# #869)。右手邊用 `up == 1`【值感知】，不是裸 `unless up`：
+#   - service-role SD (configmap-prometheus.yaml:55) 下，pod 死但 Service 還在
+#     → up=0【在場】(target present, value 0)，裸 `unless up` 會被這條 up=0
+#     series 騙過、誤判「在場」而漏報；`up == 1` 只承認真正健康的 target →
+#     up=0 不被當作存活 → 正確 fire。
+#   - Service 物件被刪 (退租) → up series 缺席 → 兩種寫法都 fire。
+#   `== 1` 同時覆蓋 up=0 (pod 死、Service 在) 與 series-absent (Service 刪) 兩種失效。
+#   promtool S4 (up==1 vs 裸 unless) 證明此差異。
+#
+# === Label 來源 (與舊規則相反，這次真的會 populate) ===
+# `unless on(tenant)` 只用 tenant 做反向配對，並【保留左手邊全部 label】，
+# 所以 fired alert 帶 tenant + db_type (來自 tenant_expected_exporter)。
+# promtool exp_labels 驗證 tenant + db_type 都出現。
+#
+# === Opt-in 契約 (營運須知) ===
+# 只有在 _metadata 宣告了 db_type 的租戶才會被納入 liveness 監看
+# (collector 對 db_type="" 不 emit，見 collector.go 註解)。沒宣告 db_type 的
+# 租戶【不會】被 TenantExporterAbsent 監看 — 這是刻意的 opt-in，不是 bug。
+#
+# === 取代 / 覆蓋面 ===
+# 取代分散在 db-pack 的 4 條 per-db *ExporterAbsent (MariaDB/PostgreSQL/Kafka/
+# RabbitMQ)，這 4 條在本 release 以 deprecation shim 形式【保留】(防外部
+# Alertmanager matcher 靜默斷)，下一個 release 移除。同時把 liveness 覆蓋面
+# 【擴張】到所有宣告 db_type 且有 up{job="tenant-exporters"} 的 DB
+# (Redis/MongoDB/Oracle/... 原本完全沒有 ExporterAbsent 規則)。
+#
+# === Scale sentinel / catastrophic fallback ===
+# 整 job 蒸發 (collector 自己掛 → anti-join 左手邊空) 的 catastrophic 兜底
+# 與 page-storm 守門 (MassExporterOutage) 因為帶 `without(tenant)` /
+# 無-tenant-label 會被 lint_custom_rules deny-list 擋在 rule-packs/ 外，
+# 改放手維護的 k8s/03-monitoring/configmap-rules-platform.yaml
+# (platform-self-monitoring group，與 DefaultsTruncationStorm 同居)。
+#
+# 3-copy cascade：編輯本檔後須 `make rulepack-configmaps` +
+# operator_generate 同步 configmap-rules-liveness.yaml + da-rule-pack-liveness.yaml。
+# ============================================================
+groups:
+  - name: tenant-liveness
+    rules:
+      # Rule A — per-tenant exporter liveness (取代全域 absent() 漏報)。
+      # for:3m 起點：吸收 scrape 抖動 (staleness lookback) 與滾動 drain 期間
+      # pod reschedule (< 3m 重新上線不 fire，promtool S1/S3)。可後調。
+      - alert: TenantExporterAbsent
+        expr: tenant_expected_exporter unless on(tenant) (up{job="tenant-exporters"} == 1)
+        for: 3m
+        labels:
+          severity: critical
+          tenant: "{{ $labels.tenant }}"
+        annotations:
+          summary: "Exporter absent for tenant {{ $labels.tenant }} ({{ $labels.db_type }})"
+          summary_zh: "租戶 {{ $labels.tenant }} ({{ $labels.db_type }}) 的 exporter 缺席"
+          description: "No healthy up{job=\"tenant-exporters\"}==1 target for tenant {{ $labels.tenant }} (db_type={{ $labels.db_type }}) for 3m. Either the exporter pod is down (up=0, Service alive) or the tenant's scrape target was removed (series absent). If this tenant was de-provisioned, ensure its conf.d _metadata was removed too (otherwise this is a stale-config false positive)."
+          description_zh: "租戶 {{ $labels.tenant }} (db_type={{ $labels.db_type }}) 已 3 分鐘沒有健康的 up{job=\"tenant-exporters\"}==1 目標。可能是 exporter pod 掛了 (up=0、Service 還在) 或租戶的 scrape target 被移除 (series 缺席)。若此租戶已退租，請確認 conf.d _metadata 也一併移除 (否則這是殘留組態造成的假陽性)。"

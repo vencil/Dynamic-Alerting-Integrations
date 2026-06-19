@@ -6,6 +6,11 @@ tenants:
     mysql_cpu: "60"
     container_memory: "90"
     _state_container_crashloop: "disable"
+    # v2.10.0 (#869): db_type opts this tenant into per-tenant exporter liveness
+    # (emits tenant_expected_exporter{tenant="db-b",db_type="mariadb"}=1, the LHS of
+    # TenantExporterAbsent). Opt-in via db_type; not a tenant_metadata_info label.
+    _metadata:
+      db_type: mariadb
     # v1.2.0 Silent Mode: alerts fire (TSDB records) but notifications suppressed
     # Options: "warning" | "critical" | "all" | "disable"
     _silent_mode: "warning"

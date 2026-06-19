@@ -20,7 +20,7 @@ lang: zh
 |------|------|-----------|
 | [Config-Driven 架構設計](config-driven.md) | 三態配置、動態路由、Tenant API、SHA-256 熱重載 | 想了解「YAML 如何驅動全鏈路」 |
 | [高可用性 (HA) 設計](high-availability.md) | 副本、PodDisruptionBudget、防雙倍計算 | 規劃生產級 HA 部署 |
-| [Rule Packs 與 Projected Volume 架構](rule-packs.md) | 規則包獨立部署、零 PR 衝突、按需評估 | 想了解 15 個 Rule Pack 如何隔離交付 |
+| [Rule Packs 與 Projected Volume 架構](rule-packs.md) | 規則包獨立部署、零 PR 衝突、按需評估 | 想了解 16 個 Rule Pack 如何隔離交付 |
 | [未來擴展路線](roadmap-future.md) | K8s Operator、Design System、Auto-Discovery | 想了解中長期演進方向 |
 
 ## 下一步

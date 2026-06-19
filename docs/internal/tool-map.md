@@ -188,6 +188,7 @@ lang: zh
 | `check_pr_scope_drift.py` | PR scope drift 偵測（pr-preflight 級）。 |
 | `check_property_coverage.py` | Property-pilot coverage drift detector. |
 | `check_repo_name.py` | Prevent wrong repository name in source files. |
+| `check_retire_drift.py` | RETIRE-ordering hard gate (#869 design item 7; matrix Gap #2). |
 | `check_routing_profiles.py` | Lint routing profiles and domain policies (ADR-007). |
 | `check_rulepack_sync.py` | Rule-pack copy drift guard (ADR-024 PR3-pre). |
 | `check_session_guard_liveness.py` | PreToolUse session-guard 可執行性 gate（#824 方案 B）。 |

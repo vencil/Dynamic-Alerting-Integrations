@@ -1,0 +1,31 @@
+# Demo rule extract (#869) — isolates the value-aware `up == 1` vs bare `unless up`
+# semantic, the crux of why TenantExporterAbsent uses `== 1`.
+#
+# NOT a deployed pack: these two for:0 rules exist ONLY to give promtool a side-by-
+# side oracle (paired with liveness-eq1-vs-bare_test.yaml). The production rule is
+# AbsentEq1 (the `== 1` form, debounced to for:3m in rule-pack-liveness.yaml). The
+# bare form AbsentBareUnless is the LATENT BUG: under service-role SD a dead pod
+# leaves up=0 IN PLACE (target present, value 0), and `unless up` treats that
+# present-but-zero series as "exporter exists" → it MISSES the outage. `unless
+# (up == 1)` only credits genuinely-healthy targets, so up=0 correctly fires.
+#
+# `for: 0` here removes the debounce so the EXPR difference is visible at a single
+# eval_time without waiting out a 3m window.
+groups:
+  - name: liveness-eq1-vs-bare-demo
+    rules:
+      # Value-aware — matches the production semantics (sans the for:3m debounce).
+      - alert: AbsentEq1
+        expr: tenant_expected_exporter unless on(tenant) (up{job="tenant-exporters"} == 1)
+        for: 0m
+        labels:
+          severity: critical
+          tenant: "{{ $labels.tenant }}"
+
+      # Bare unless — the BUG: up=0 (present) silently suppresses the alert.
+      - alert: AbsentBareUnless
+        expr: tenant_expected_exporter unless on(tenant) up{job="tenant-exporters"}
+        for: 0m
+        labels:
+          severity: critical
+          tenant: "{{ $labels.tenant }}"

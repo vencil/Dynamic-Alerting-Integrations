@@ -128,7 +128,7 @@ This page lists common terms and abbreviations found throughout the Dynamic Aler
 :   da-portal's interactive routing-profile generator (JSX), helping assemble Routing Profiles and Domain Policies visually.
 
 **Projected Volume**
-:   A Kubernetes Volume type that mounts multiple ConfigMaps into a single directory. This platform uses it to mount 15 Rule Pack ConfigMaps into Prometheus's rules directory, each set to `optional: true`.
+:   A Kubernetes Volume type that mounts multiple ConfigMaps into a single directory. This platform uses it to mount 16 Rule Pack ConfigMaps into Prometheus's rules directory, each set to `optional: true`.
 
 **Prometheus Operator**
 :   The CNCF Kubernetes operator that manages Prometheus / Alertmanager via CRDs. The platform can integrate with an existing Operator environment (see Operator CRD, operator-manifests).

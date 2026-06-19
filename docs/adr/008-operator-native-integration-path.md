@@ -71,7 +71,7 @@ graph TB
 ### Path B 工具設計
 
 **`da-tools operator-generate`**：
-- 讀取 `rule-packs/` → 產出 15 個 PrometheusRule CRD YAML
+- 讀取 `rule-packs/` → 產出 16 個 PrometheusRule CRD YAML
 - 讀取 `conf.d/` → 產出 per-tenant AlertmanagerConfig CRD
 - 產出 ServiceMonitor for threshold-exporter
 - `--api-version` flag 指定 AlertmanagerConfig API 版本（`v1alpha1` | `v1beta1`，預設 `v1beta1`）
@@ -125,7 +125,7 @@ def detect_deployment_mode(kubeconfig=None):
 ### 為什麼不只提供文件指引（而是建工具）？
 
 v2.2.0 BYO 文件的 Operator Appendix 僅是 CRD 範例翻譯，用戶反映：
-- 手工轉換 15 個 Rule Pack ConfigMap → PrometheusRule 耗時且易錯
+- 手工轉換 16 個 Rule Pack ConfigMap → PrometheusRule 耗時且易錯
 - AlertmanagerConfig API 版本差異容易踩坑
 - GitOps pipeline 需要 deterministic 輸出
 

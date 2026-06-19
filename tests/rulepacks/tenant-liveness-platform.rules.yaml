@@ -1,0 +1,30 @@
+# Bare-rules promtool target for the platform-side tenant-liveness sentinels
+# (#869): TenantExporterJobAbsent (catastrophic fallback) + MassExporterOutage
+# (page-storm scale guard).
+#
+# promtool can't consume the deployed ConfigMap directly (it needs a top-level
+# `groups:` document, not `data: platform-alert.yml: |`), so this is an EXTRACTED
+# COPY of just these two alerts from k8s/03-monitoring/configmap-rules-platform.yaml.
+#
+# ⚠️ KEEP IN SYNC with that ConfigMap — expr / labels / `for` must match exactly.
+# `description` is intentionally omitted (promtool requires an EXACT annotation-set
+# match against exp_annotations, so the extract carries only `summary`, like
+# platform-watchdog.rules.yaml).
+groups:
+  - name: platform-self-monitoring
+    rules:
+      - alert: TenantExporterJobAbsent
+        expr: absent(up{job="tenant-exporters"})
+        for: 3m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Entire tenant-exporters scrape job is absent — per-tenant liveness is BLIND"
+
+      - alert: MassExporterOutage
+        expr: count without (tenant, db_type) (tenant_expected_exporter unless on(tenant) (up{job="tenant-exporters"} == 1)) > 10
+        for: 3m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Mass exporter outage ({{ $value }} tenants) — shared-dependency failure suspected"

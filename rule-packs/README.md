@@ -8,7 +8,7 @@ lang: zh
 # Rule Packs — 模組化 Prometheus 規則
 
 > 每個 Rule Pack 包含完整的三件套：Normalization Recording Rules + Threshold Normalization + Alert Rules。
-> **所有 15 個 Rule Pack 已透過 Projected Volume 架構預載入 Prometheus 中** (分散於 `configmap-rules-*.yaml`)。
+> **所有 16 個 Rule Pack 已透過 Projected Volume 架構預載入 Prometheus 中** (分散於 `configmap-rules-*.yaml`)。
 > 未部署 exporter 的 pack 不會產生 metrics，因此 alert 不會誤觸發 (near-zero cost)。
 >
 > **其他文件：** [Home](../index.md) (概覽) · [Migration Guide](../migration-guide.md) (遷移指南) · [Architecture & Design](../architecture-and-design.md) (技術深度)
@@ -23,6 +23,7 @@ lang: zh
 | JVM | rule-pack-jvm.yaml | 9 | 7 | 16 |
 | Kafka | rule-pack-kafka.yaml | 13 | 9 | 22 |
 | Kubernetes | rule-pack-kubernetes.yaml | 15 | 9 | 24 |
+| Liveness | rule-pack-liveness.yaml | 0 | 1 | 1 |
 | Mariadb | rule-pack-mariadb.yaml | 11 | 10 | 21 |
 | Mongodb | rule-pack-mongodb.yaml | 10 | 6 | 16 |
 | Nginx | rule-pack-nginx.yaml | 9 | 6 | 15 |
@@ -31,7 +32,7 @@ lang: zh
 | Postgresql | rule-pack-postgresql.yaml | 11 | 9 | 20 |
 | Rabbitmq | rule-pack-rabbitmq.yaml | 12 | 8 | 20 |
 | Redis | rule-pack-redis.yaml | 11 | 6 | 17 |
-| **TOTAL** | | **147** | **102** | **249** |
+| **TOTAL** | | **147** | **103** | **250** |
 
 ## 架構說明
 
@@ -104,7 +105,7 @@ groups:
 
 Alert Rules 透過 `* on(tenant) group_left(runbook_url, owner, tier) tenant_metadata_info` 將租戶 metadata 注入 alert labels，再由 annotations 引用。`tenant_metadata_info` 由 threshold-exporter 根據租戶 `_metadata` 配置自動輸出（值永遠為 1），保證 `group_left` join 不會漏掉任何 tenant。
 
-若租戶未設定 `_metadata`，`tenant_metadata_info` 不存在，`group_left` 回傳空向量。因此已內建的 15 個 Rule Pack 均已加入此 join，但 **自訂 Rule Pack 建議同步採用此 pattern** 以確保 runbook URL 與 owner 資訊可自動傳遞至通知。
+若租戶未設定 `_metadata`，`tenant_metadata_info` 不存在，`group_left` 回傳空向量。因此已內建的 16 個 Rule Pack 均已加入此 join，但 **自訂 Rule Pack 建議同步採用此 pattern** 以確保 runbook URL 與 owner 資訊可自動傳遞至通知。
 
 ## Exporter 文件連結
 

@@ -73,7 +73,7 @@ flowchart TD
 
 從零到 cutover 的標準路徑：**安裝 → 反向分析（如有）→ 產生 / 轉換設定 → 部署 → 路由 → 驗證**。
 
-> **為何低摩擦**：平台已預載 **15 個 Rule Pack ConfigMap**（MariaDB、PostgreSQL、Kubernetes、Redis、MongoDB、Elasticsearch、Oracle、DB2、ClickHouse、Kafka、RabbitMQ、JVM、Nginx、Operational、Platform 自我監控），透過 **Projected Volume** 分散管理。**未部署 exporter 的 Rule Pack 不會產生 metrics、alert 也不會誤觸發**——你只需配置 `_defaults.yaml` + tenant YAML。詳見 [design/rule-packs.md](design/rule-packs.md)。
+> **為何低摩擦**：平台已預載 **16 個 Rule Pack ConfigMap**（MariaDB、PostgreSQL、Kubernetes、Redis、MongoDB、Elasticsearch、Oracle、DB2、ClickHouse、Kafka、RabbitMQ、JVM、Nginx、Operational、Platform 自我監控），透過 **Projected Volume** 分散管理。**未部署 exporter 的 Rule Pack 不會產生 metrics、alert 也不會誤觸發**——你只需配置 `_defaults.yaml` + tenant YAML。詳見 [design/rule-packs.md](design/rule-packs.md)。
 
 ### 1. 安裝 Migration Toolkit
 
@@ -269,7 +269,7 @@ tenants:
 
 ### 11. 擴展不支援的 DB 類型
 
-平台預載 15 個 Rule Pack 已涵蓋主流 DB / 中介軟體（MariaDB / PostgreSQL / Redis / MongoDB / Elasticsearch / Oracle / DB2 / ClickHouse / Kafka / RabbitMQ / JVM / Nginx / Kubernetes / Operational / Platform 自我監控）。要新增規則包，需手動建立正規化層。
+平台預載 16 個 Rule Pack 已涵蓋主流 DB / 中介軟體（MariaDB / PostgreSQL / Redis / MongoDB / Elasticsearch / Oracle / DB2 / ClickHouse / Kafka / RabbitMQ / JVM / Nginx / Kubernetes / Operational / Platform 自我監控）。要新增規則包，需手動建立正規化層。
 
 **正規化命名**：`tenant:<component>_<metric>:<aggregation_function>`
 
@@ -336,7 +336,7 @@ da-tools batch-diagnose && da-tools blind-spot --config-dir /data/conf.d
 
 ### 14. Rule Pack 動態開關
 
-15 個 Rule Pack 的 Projected Volume 都設 `optional: true`，允許隨時卸載 / 啟用：
+16 個 Rule Pack 的 Projected Volume 都設 `optional: true`，允許隨時卸載 / 啟用：
 
 ```bash
 # 卸載（如自帶 MariaDB 規則想關掉黃金標準）

@@ -103,6 +103,14 @@ This document provides tenants with a unified reference for all alerts across Ru
 
 ---
 
+## liveness
+
+| Alert Name | Severity | Trigger Condition | Recommended Action | Related Metric |
+|---|---|---|---|---|
+| TenantExporterAbsent | critical | No healthy up{job="tenant-exporters"}==1 target for tenant {{ $labels.tenant }} (db_type={{ $labels. | Verify component is running and configured correctly; check component logs | tenant_expected_exporter |
+
+---
+
 ## MariaDB Rule Pack
 
 | Alert Name | Severity | Trigger Condition | Recommended Action | Related Metric |

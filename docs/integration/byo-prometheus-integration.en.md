@@ -27,7 +27,7 @@ Simply complete the following **3 minimal integration steps** (approximately 12 
 | 2 | Scrape `threshold-exporter` | ~2 minutes |
 | 3 | Mount Rule Pack ConfigMaps | ~5 minutes |
 
-After integration, your Prometheus will gain: 1 relabel config, 1 scrape job, and 15 Rule Pack ConfigMaps (selectively mounted). **All existing scrape jobs, recording rules, and alerting rules remain completely unaffected.**
+After integration, your Prometheus will gain: 1 relabel config, 1 scrape job, and 16 Rule Pack ConfigMaps (selectively mounted). **All existing scrape jobs, recording rules, and alerting rules remain completely unaffected.**
 
 ```mermaid
 graph LR
@@ -42,7 +42,7 @@ graph LR
 
     subgraph DA["Dynamic Alerting (Added)"]
         TE["threshold-exporter<br/>×2 HA :8080"]
-        RP["15 Rule Pack<br/>ConfigMaps"]
+        RP["16 Rule Pack<br/>ConfigMaps"]
     end
 
     NS -->|"① relabel_configs<br/>namespace → tenant"| P

@@ -1,0 +1,29 @@
+# ============================================================
+# liveness Rule Pack — Recording & Alert Rules (ConfigMap)
+# GENERATED from rule-packs/rule-pack-liveness.yaml by
+# scripts/tools/dx/generate_rulepack_configmaps.py — DO NOT EDIT.
+# Run `make rulepack-configmaps` after editing the rule pack.
+# ============================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-rules-liveness
+  namespace: monitoring
+  labels:
+    app: prometheus
+    rule-pack: liveness
+data:
+  liveness-alert.yml: "groups:\n- name: tenant-liveness\n  rules:\n  - alert: TenantExporterAbsent\n\
+    \    expr: tenant_expected_exporter unless on(tenant) (up{job=\"tenant-exporters\"\
+    } == 1)\n    for: 3m\n    labels:\n      severity: critical\n      tenant: '{{\
+    \ $labels.tenant }}'\n    annotations:\n      summary: Exporter absent for tenant\
+    \ {{ $labels.tenant }} ({{ $labels.db_type }})\n      summary_zh: 租戶 {{ $labels.tenant\
+    \ }} ({{ $labels.db_type }}) 的 exporter 缺席\n      description: No healthy up{job=\"\
+    tenant-exporters\"}==1 target for tenant {{ $labels.tenant }} (db_type={{ $labels.db_type\
+    \ }}) for 3m. Either the exporter pod is down (up=0, Service alive) or the tenant's\
+    \ scrape target was removed (series absent). If this tenant was de-provisioned,\
+    \ ensure its conf.d _metadata was removed too (otherwise this is a stale-config\
+    \ false positive).\n      description_zh: 租戶 {{ $labels.tenant }} (db_type={{\
+    \ $labels.db_type }}) 已 3 分鐘沒有健康的 up{job=\"tenant-exporters\"}==1 目標。可能是 exporter\
+    \ pod 掛了 (up=0、Service 還在) 或租戶的 scrape target 被移除 (series 缺席)。若此租戶已退租，請確認 conf.d\
+    \ _metadata 也一併移除 (否則這是殘留組態造成的假陽性)。\n"

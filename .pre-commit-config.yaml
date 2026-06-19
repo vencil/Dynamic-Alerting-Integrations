@@ -819,6 +819,21 @@ repos:
         additional_dependencies: ['pyyaml']
         pass_filenames: false
         files: ^(rule-packs/rule-pack-custom-alerts\.yaml|components/threshold-exporter/config/conf\.d/.*\.yaml)$
+
+      - id: retire-drift-check
+        name: "#869: forbid removing a K8s exporter target while conf.d _metadata.db_type remains (false-positive guard)"
+        entry: python3 -X utf8 scripts/tools/lint/check_retire_drift.py --ci
+        language: python
+        additional_dependencies: ['pyyaml']
+        pass_filenames: false
+        files: ^(components/threshold-exporter/config/conf\.d/.*\.yaml|helm/values-.*\.yaml|k8s/00-namespaces/namespaces\.yaml)$
+        # A tenant that declares _metadata.db_type emits tenant_expected_exporter=1
+        # (collector.go). If a PR deletes its K8s target (helm/values-<t>.yaml or its
+        # db-* namespace) but leaves the conf.d _metadata, TenantExporterAbsent
+        # (#869) fires a permanent FALSE-POSITIVE critical against the dead tenant.
+        # This blocks that order. Fix: remove the conf.d _metadata entry first (or
+        # in the same PR). NOTE the files: path filter can miss some PRs (e.g. a
+        # delete-only diff) — the CI mirror in ci.yml runs unfiltered over HEAD.
         # The deployed custom-alert pack is COMPILED from the live conf.d
         # _custom_alerts (NOT hand-edited). Edit a tenant's _custom_alerts but
         # forget to recompile → this fails locally before CI. Fix:

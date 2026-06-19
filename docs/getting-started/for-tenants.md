@@ -23,7 +23,7 @@ lang: zh
 
 ## 你需要知道的三件事
 
-**1. 你的監控已經啟用了。** 平台預載 15 個 Rule Pack，涵蓋 MariaDB、PostgreSQL、Redis、MongoDB、Elasticsearch、Kafka 等。只要你的 exporter 在跑，alert rules 就已經生效。
+**1. 你的監控已經啟用了。** 平台預載 16 個 Rule Pack，涵蓋 MariaDB、PostgreSQL、Redis、MongoDB、Elasticsearch、Kafka 等。只要你的 exporter 在跑，alert rules 就已經生效。
 
 **2. 你只需要管理一個 YAML 檔案（或用 Web UI）。** 所有自訂都在 `conf.d/<tenant>.yaml`，包括閾值調整、通知路由、維護窗口。如果 Platform Team 部署了 Self-Service Portal（tenant-manager UI），你可以直接在瀏覽器中管理，無需編輯 YAML。
 
