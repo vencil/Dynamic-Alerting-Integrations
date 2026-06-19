@@ -191,6 +191,24 @@ def handle_preview(body, headers, *, authorizer=authorize_tenant,
 
 
 # ── HTTP layer (thin wrapper over handle_preview) ────────────────────────
+def parse_content_length(raw_header):
+    """Validate a Content-Length header BEFORE reading the body.
+
+    Returns ((status, body) | None, length). A NEGATIVE length is rejected as
+    400 — it must never reach rfile.read(), where a negative size reads to EOF
+    and would bypass the MAX_BODY_BYTES cap (a memory-exhaustion vector).
+    """
+    try:
+        length = int(raw_header or 0)
+    except (TypeError, ValueError):
+        return (400, {"error": "invalid Content-Length"}), 0
+    if length < 0:
+        return (400, {"error": "invalid Content-Length"}), 0
+    if length > MAX_BODY_BYTES:
+        return (413, {"error": "request body too large"}), 0
+    return None, length
+
+
 class _Handler(BaseHTTPRequestHandler):
     server_version = "recipe-preview/1.0"
 
@@ -212,15 +230,11 @@ class _Handler(BaseHTTPRequestHandler):
         if self.path.split("?", 1)[0] != "/preview":
             self._send(404, {"error": "not found"})
             return
-        try:
-            length = int(self.headers.get("Content-Length") or 0)
-        except ValueError:
-            self._send(400, {"error": "invalid Content-Length"})
-            return
-        if length > MAX_BODY_BYTES:
-            # recipes are tiny; reject an oversized body BEFORE reading it into
-            # memory — a pre-auth memory-exhaustion guard.
-            self._send(413, {"error": "request body too large"})
+        # recipes are tiny; validate Content-Length (reject non-numeric, negative,
+        # and oversized) BEFORE reading the body into memory — a pre-auth guard.
+        err, length = parse_content_length(self.headers.get("Content-Length"))
+        if err:
+            self._send(*err)
             return
         raw = self.rfile.read(length) if length else b""
         try:

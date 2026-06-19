@@ -141,6 +141,26 @@ class TestRateLimiterUnit:
         assert "a" in rl._hits and "b" not in rl._hits
 
 
+# ── Content-Length guard (a negative value must not reach rfile.read) ──
+class TestContentLength:
+    def test_absent_is_zero(self):
+        assert app.parse_content_length(None) == (None, 0)
+
+    def test_valid_passes_through(self):
+        assert app.parse_content_length("50") == (None, 50)
+
+    def test_non_numeric_is_400(self):
+        assert app.parse_content_length("abc")[0][0] == 400
+
+    def test_negative_is_400_not_read_to_eof(self):
+        # int("-1") would otherwise reach rfile.read(-1) → read to EOF, bypassing
+        # the size cap (memory-exhaustion). It must be rejected up front.
+        assert app.parse_content_length("-1")[0][0] == 400
+
+    def test_oversized_is_413(self):
+        assert app.parse_content_length(str(app.MAX_BODY_BYTES + 1))[0][0] == 413
+
+
 # ── PEP: authorize_tenant must fail closed + forward only identity headers ──
 class _Resp:
     def __init__(self, status):
