@@ -121,12 +121,23 @@ jobs:
           set -euo pipefail
           NAME='${{ matrix.name }}'
           JSON="trivy-${NAME}.json"
+          # Fail-LOUD on a broken/changed Trivy JSON. A swallowed jq error that
+          # degrades to COUNT=0 ("clean") is the EXACT fail-open this scan exists to
+          # prevent — it would report "all clear" every night while Trivy is broken
+          # (schema change / OOM-truncated output), until release night undeceives
+          # us. So: assert the file parses + still has the expected shape, and let
+          # ANY jq error abort the job (set -e) instead of hiding it.
+          jq empty "$JSON"                            # malformed / truncated → abort
+          jq -e 'has("Results")' "$JSON" >/dev/null   # schema drift (Results renamed) → abort
           # One line per UNIQUE CVE (dedup by VulnerabilityID across all packages).
-          mapfile -t LINES < <(jq -r '
+          # Capture via $() so a jq runtime error propagates (set -e), NOT via a
+          # process substitution whose failure mapfile would silently ignore.
+          RAW="$(jq -r '
             [.Results[]?.Vulnerabilities[]?]
             | group_by(.VulnerabilityID)[] | .[0]
             | "\(.Severity)|\(.VulnerabilityID)|\(.PkgName) \(.InstalledVersion) → \(.FixedVersion // "?")"
-          ' "$JSON" 2>/dev/null || true)
+          ' "$JSON")"
+          if [ -n "$RAW" ]; then mapfile -t LINES <<< "$RAW"; else LINES=(); fi
           COUNT="${#LINES[@]}"
           FRAG="frag-${NAME}.txt"
           # Line 1 = machine-readable "name<TAB>count"; the rest = human markdown.
@@ -219,30 +230,51 @@ jobs:
           fi
 
           LABEL=nightly-cve
-          TITLE="🛡️ Nightly image CVE scan — open HIGH/CRITICAL findings"
+          TITLE="🛡️ Nightly image scan — open findings (CVEs / build failures) on main"
           gh label create "$LABEL" --repo "$REPO" --color B60205 \
-            --description "Nightly scan found fixable HIGH/CRITICAL CVEs in a component image on main" \
+            --description "Nightly image scan: fixable HIGH/CRITICAL CVEs and/or images failing to build/scan on main" \
             --force || true
           num="$(gh issue list --repo "$REPO" --label "$LABEL" --state open --json number --jq '.[0].number // empty')"
 
-          if [ "$total" -gt 0 ]; then
-            body="$(printf 'Nightly image CVE scan found **%s** fixable HIGH/CRITICAL CVE(s) across %s/%s component images built from `main` (%s).\n\n%s\n%s\n**Remediate**: most are upstream base-image (Alpine / distroless / nginx) CVEs — a fresh image rebuild or a base-image tag bump usually clears them; otherwise bump the pinned package. The release-time Trivy gate (release.yaml) blocks a tag until these are 0, so fixing now avoids a release-night scramble (security-audit-runbook §37). This issue is updated nightly and auto-closes when all images are clean again.' \
-              "$total" "$present" "$EXPECTED" "$RUN_URL" "$table" "$details")"
+          # A "problem" is EITHER fixable CVEs (total>0) OR an image that failed to
+          # build/scan (missing>0). Folding build-failures in means a broken
+          # Dockerfile on main can't sit silently until release night — the scan
+          # must NOT claim "clean" when it didn't actually scan everything.
+          problem=0
+          [ "$total" -gt 0 ] && problem=1
+          [ "$missing" -gt 0 ] && problem=1
+          degraded_note=""
+          if [ "$missing" -gt 0 ]; then
+            # Build via direct expansion + $'\n\n', NOT $(printf '...\n\n') whose
+            # command substitution strips trailing newlines → the note would run
+            # straight into the next sentence.
+            degraded_note="🚨 **Scan degraded** — ${missing} of ${EXPECTED} images failed to build/scan (see the matrix jobs in ${RUN_URL}). Results below are PARTIAL, and a non-building image is itself a release blocker."$'\n\n'
+          fi
+
+          if [ "$problem" -eq 1 ]; then
+            body="$(printf '%sNightly image scan on `main` (%s): **%s** fixable HIGH/CRITICAL CVE(s) across %s/%s images scanned.\n\n%s\n%s\n**Remediate**: most CVEs are upstream base-image (Alpine / distroless / nginx) — a fresh rebuild or base-image bump usually clears them; otherwise bump the pinned package. A failed build is a Dockerfile/COPY break to fix directly. The release-time Trivy gate (release.yaml) blocks a tag until CVEs are 0, so fixing now avoids a release-night scramble (security-audit-runbook §37). This issue is REFRESHED nightly (body edited in place — no comment spam) and auto-closes once all images build clean.' \
+              "$degraded_note" "$RUN_URL" "$total" "$present" "$EXPECTED" "$table" "$details")"
             if [ -n "$num" ]; then
-              echo "updating existing tracking issue #${num}"
-              gh issue comment "$num" --repo "$REPO" --body "$body"
+              # EDIT the body in place rather than adding a daily comment: a comment
+              # emails the assignee EVERY morning while an upstream patch is pending
+              # (alert nagging → fatigue → muted scan). An edit keeps the issue
+              # current WITHOUT a notification; only the initial create (state 0→1)
+              # and the final close notify.
+              echo "refreshing existing tracking issue #${num} (silent body edit)"
+              gh issue edit "$num" --repo "$REPO" --body "$body"
             else
-              echo "filing new tracking issue"
+              echo "filing new tracking issue (state change → notify)"
               gh issue create --repo "$REPO" --title "$TITLE" --label "$LABEL" \
                 --assignee vencil --body "$body"
             fi
           else
-            if [ -n "$num" ] && [ "$missing" -eq 0 ]; then
-              echo "all ${EXPECTED} images clean — closing tracking issue #${num}"
+            # problem==0 ⇒ total==0 AND missing==0 ⇒ genuinely all-clean, all scanned.
+            if [ -n "$num" ]; then
+              echo "all ${EXPECTED} images build clean — closing tracking issue #${num}"
               gh issue comment "$num" --repo "$REPO" \
-                --body "✅ All ${EXPECTED} component images clean (0 fixable HIGH/CRITICAL) as of $(date -u +%F). Auto-closing. (${RUN_URL})"
+                --body "✅ All ${EXPECTED} component images build clean (0 fixable HIGH/CRITICAL) as of $(date -u +%F). Auto-closing. (${RUN_URL})"
               gh issue close "$num" --repo "$REPO"
             else
-              echo "clean or incomplete (${present}/${EXPECTED} scanned) — nothing to file."
+              echo "all clean, no open issue — nothing to do."
             fi
           fi
