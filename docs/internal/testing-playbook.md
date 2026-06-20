@@ -248,7 +248,7 @@ CHANGELOG / CLAUDE.md 的測試計數必須在 `pytest -v` 執行後才寫入。
 ### 版號管理
 
 > **完整版號治理流程見 [GitHub Release Playbook](github-release-playbook.md)**。
-> 五條獨立版號線（`v*` platform / `exporter/v*` / `tools/v*` / `portal/v*` / `tenant-api/v*`）各有各的生命週期。
+> 六條獨立版號線（`v*` platform / `exporter/v*` / `tools/v*` / `portal/v*` / `recipe-preview/v*` / `tenant-api/v*`）各有各的生命週期。
 
 測試相關的版號重點：
 

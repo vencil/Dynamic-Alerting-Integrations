@@ -15,19 +15,29 @@ ENV PATH="/opt/venv/bin:$PATH"
 RUN pip install --no-cache-dir --upgrade pip \
  && pip install --no-cache-dir PyYAML==6.0.3
 
-# promtool, SHA-256 pinned (§6 #5 + the #849/#851 supply-chain policy: verify
-# every downloaded release binary before use). Same version + digest as ci.yml's
-# promtool gate. busybox wget/sha256sum/tar (no apk add). amd64 only for now —
-# try-local on arm64 runs it under Docker emulation; a TARGETARCH split is a
-# follow-up.
+# promtool, SHA-256 pinned PER ARCH (§6 #5 + the #849/#851 supply-chain policy:
+# verify every downloaded release binary before use). PROM_VERSION + the amd64
+# digest must equal ci.yml's promtool gate — the firing/inactive verdict format
+# is version-bound, so a skew would silently misclassify; the equality is
+# CI-enforced (tests/preview/test_promtool_pin_parity.py). Multi-arch: buildx
+# injects TARGETARCH (amd64 / arm64) per platform; pick the matching tarball +
+# its OWN pinned digest. busybox wget/sha256sum/tar (no apk add).
+ARG TARGETARCH
 ARG PROM_VERSION=2.53.2
-ARG PROM_SHA256=60c126740c9cf1206b1e72150dd17914f1c3309bb7dc78a31d4670197ed4fa69
-RUN wget -qO /tmp/p.tgz "https://github.com/prometheus/prometheus/releases/download/v${PROM_VERSION}/prometheus-${PROM_VERSION}.linux-amd64.tar.gz" \
- && printf '%s  /tmp/p.tgz\n' "${PROM_SHA256}" > /tmp/p.sha256 \
- && sha256sum -c /tmp/p.sha256 \
- && tar xzf /tmp/p.tgz -C /tmp \
- && cp "/tmp/prometheus-${PROM_VERSION}.linux-amd64/promtool" /usr/local/bin/promtool \
- && /usr/local/bin/promtool --version
+ARG PROM_SHA256_amd64=60c126740c9cf1206b1e72150dd17914f1c3309bb7dc78a31d4670197ed4fa69
+ARG PROM_SHA256_arm64=efe454571f621e755f6d8560e7666bd25e1b6a0c256eec8e01fec29cb0364c4c
+RUN set -eu; \
+    case "${TARGETARCH}" in \
+      amd64) PROM_SHA256="${PROM_SHA256_amd64}" ;; \
+      arm64) PROM_SHA256="${PROM_SHA256_arm64}" ;; \
+      *) echo "ERROR: unsupported/empty TARGETARCH='${TARGETARCH}' (need amd64|arm64)" >&2; exit 1 ;; \
+    esac; \
+    wget -qO /tmp/p.tgz "https://github.com/prometheus/prometheus/releases/download/v${PROM_VERSION}/prometheus-${PROM_VERSION}.linux-${TARGETARCH}.tar.gz"; \
+    printf '%s  /tmp/p.tgz\n' "${PROM_SHA256}" > /tmp/p.sha256; \
+    sha256sum -c /tmp/p.sha256; \
+    tar xzf /tmp/p.tgz -C /tmp; \
+    cp "/tmp/prometheus-${PROM_VERSION}.linux-${TARGETARCH}/promtool" /usr/local/bin/promtool; \
+    /usr/local/bin/promtool --version
 
 # ── runtime ──────────────────────────────────────────────────────────────
 FROM python:3.13.13-alpine3.22
@@ -36,6 +46,14 @@ LABEL org.opencontainers.image.title="recipe-preview" \
       org.opencontainers.image.description="Would-fire preview service (#657) — POST /preview" \
       org.opencontainers.image.source="https://github.com/vencil/Dynamic-Alerting-Integrations" \
       org.opencontainers.image.vendor="Dynamic Alerting Platform"
+
+# Build provenance — the release/CI build stamps the git SHA so /healthz reports
+# exactly which source built this image. recipe-preview bundles a byte-identical
+# snapshot of the platform compiler; GIT_SHA lets an operator confirm WHICH
+# commit's compiler is running (drift observability, design §6 #5). Local /
+# un-stamped builds report "unknown".
+ARG GIT_SHA=unknown
+ENV GIT_SHA=${GIT_SHA}
 
 RUN apk --no-cache upgrade
 
