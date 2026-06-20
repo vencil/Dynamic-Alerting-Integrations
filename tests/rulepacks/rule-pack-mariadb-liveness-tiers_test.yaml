@@ -93,8 +93,8 @@ tests:
             exp_annotations:
               summary: "MariaDB: ALL instances down for tenant db-a"
               summary_zh: "MariaDB：租戶 db-a 的所有實例皆停機"
-              description: "No mysqld reports up=1 for tenant db-a — total service outage, not a single-replica failover. For a planned single-instance drain, silence via the Alertmanager Silence API (cluster-survival has no config opt-out by design)."
-              description_zh: "租戶 db-a 沒有任何 mysqld 回報 up=1 — 整體服務中斷，非單一 replica failover。若為計畫性單實例維護，請用 Alertmanager Silence API 靜音（叢集存活告警刻意不提供 config opt-out）。"
+              description: "No mysqld reports up=1 for tenant db-a — total service outage, not a single-replica failover. For a planned single-instance drain, silence via the Alertmanager Silence API (no maintenance-window opt-out by design; a tenant's silent-critical sentinel still suppresses it)."
+              description_zh: "租戶 db-a 沒有任何 mysqld 回報 up=1 — 整體服務中斷，非單一 replica failover。若為計畫性單實例維護，請用 Alertmanager Silence API 靜音（刻意不提供維護窗 opt-out；租戶的 silent-critical sentinel 仍會壓制此告警）。"
       - eval_time: 3m
         alertname: MariaDBNoPrimary
         exp_alerts: []
@@ -168,6 +168,41 @@ tests:
       - series: 'mysql_global_variables_read_only{job="tenant-exporters", tenant="db-a", instance="db-a-1:9104"}'
         values: '1x8'
     alert_rule_test:
+      # mid-window (t=60s; no-primary since t=30s, 30s elapsed << for:2m): MUST be
+      # pending-not-firing — THIS is the assertion that exercises the for: debounce
+      # (a for:0s regression fires here; the 4m-only check below would false-green).
+      # (#875 adversarial review finding)
+      - eval_time: 60s
+        alertname: MariaDBNoPrimary
+        exp_alerts: []
       - eval_time: 4m
         alertname: MariaDBNoPrimary
         exp_alerts: []
+
+  # ── S7 — cross-tenant isolation: db-a in maintenance must NOT suppress db-b ──
+  #    Proves `unless on(tenant)` scopes per-tenant: db-a's maintenance silences
+  #    only db-a's Down; db-b (down, no maintenance) still fires. (#875 review gap)
+  - interval: 30s
+    name: S7-cross-tenant-maintenance-isolation
+    input_series:
+      - series: 'mysql_up{job="tenant-exporters", tenant="db-a", instance="db-a-0:9104"}'
+        values: '0x8'
+      - series: 'user_state_filter{tenant="db-a", filter="maintenance"}'
+        values: '1x8'
+      - series: 'mysql_up{job="tenant-exporters", tenant="db-b", instance="db-b-0:9104"}'
+        values: '0x8'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: MariaDBDown
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              metric_group: liveness
+              tenant: db-b
+              job: tenant-exporters
+              instance: db-b-0:9104
+            exp_annotations:
+              summary: "MariaDB instance db-b-0:9104 is down (tenant db-b)"
+              summary_zh: "MariaDB 實例 db-b-0:9104 停機（租戶 db-b）"
+              description: "mysql_up=0 on db-b-0:9104. One replica down in a primary-replica set keeps the service available (warning). Total outage escalates to MariaDBClusterDown (critical); loss of the writable primary to MariaDBNoPrimary (critical)."
+              description_zh: "db-b-0:9104 的 mysql_up=0。primary-replica 架構下單一 replica 停機時服務仍可用（warning）。整體中斷會升級為 MariaDBClusterDown（critical）；失去可寫 primary 則為 MariaDBNoPrimary（critical）。"

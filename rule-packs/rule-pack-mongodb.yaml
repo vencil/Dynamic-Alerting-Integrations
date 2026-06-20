@@ -110,9 +110,12 @@ groups:
       # that is MongoDBNoPrimary's job. NO maintenance opt-out — a real total
       # outage must always page. Annotation references tenant ONLY (max by(tenant)
       # strips instance → pint alerts/template).
+      # for:30s outlasts a scrape gap; total-down needs no election debounce
+      # (that is MongoDBNoPrimary's for:2m) — keeps time-to-critical near the
+      # pre-#875 15s rather than regressing it to 1m.
       - alert: MongoDBClusterDown
         expr: max by(tenant) (mongodb_up{job="tenant-exporters"}) == 0
-        for: 1m
+        for: 30s
         labels:
           severity: critical
           metric_group: liveness
@@ -120,8 +123,8 @@ groups:
         annotations:
           summary: "MongoDB: ALL instances down for tenant {{ $labels.tenant }}"
           summary_zh: "MongoDB：租戶 {{ $labels.tenant }} 的所有實例皆停機"
-          description: "No mongod reports up=1 for tenant {{ $labels.tenant }} — total service outage, not a single-member failover. For a planned single-instance drain, silence via the Alertmanager Silence API (cluster-survival has no config opt-out by design)."
-          description_zh: "租戶 {{ $labels.tenant }} 沒有任何 mongod 回報 up=1 — 整體服務中斷，非單一成員 failover。若為計畫性單實例維護，請用 Alertmanager Silence API 靜音（叢集存活告警刻意不提供 config opt-out）。"
+          description: "No mongod reports up=1 for tenant {{ $labels.tenant }} — total service outage, not a single-member failover. For a planned single-instance drain, silence via the Alertmanager Silence API (no maintenance-window opt-out by design; a tenant's silent-critical sentinel still suppresses it)."
+          description_zh: "租戶 {{ $labels.tenant }} 沒有任何 mongod 回報 up=1 — 整體服務中斷，非單一成員 failover。若為計畫性單實例維護，請用 Alertmanager Silence API 靜音（刻意不提供維護窗 opt-out；租戶的 silent-critical sentinel 仍會壓制此告警）。"
 
       # Quorum / write-availability: members are reachable but NONE is PRIMARY
       # (member_state==1). This is the case max(up)==0 MISSES — e.g. 3 nodes, 2
@@ -133,12 +136,17 @@ groups:
       # collector — the SAME collector already feeding mongodb_mongod_replset_
       # member_replication_lag (consumed in mongodb-normalization above), so its
       # presence is tied to a metric this pack already alerts on. Value 1 = PRIMARY
-      # (MongoDB replica-state enum). The `A unless B` shape is robust to the
-      # exporter's per-member series multiplicity AND correctly handles the
-      # empty-PRIMARY vector — a plain count(...==1)==0 would NEVER fire (an empty
-      # vector is absent, not 0). for:2m absorbs normal elections (electionTimeout
-      # ~10s); a genuine no-primary (failed election / lost quorum) persists and
-      # pages. NO maintenance opt-out.
+      # (MongoDB replica-state enum). The `A unless B` shape tolerates BENIGN
+      # per-member duplication (many identical state=1 rows) AND correctly handles
+      # the empty-PRIMARY vector — a plain count(...==1)==0 would NEVER fire (an
+      # empty vector is absent, not 0). for:2m absorbs normal elections
+      # (electionTimeout ~10s); a genuine no-primary (failed election / lost
+      # quorum) persists and pages. NO maintenance opt-out.
+      # ⚠ KNOWN LIMITATION (defer-trigger = customer split-brain incident): under
+      # a network partition a STALE reporter still emitting the old PRIMARY as
+      # state=1 keeps the RHS non-empty → this rule can MISS a real no-primary.
+      # The robustness is to duplication, NOT to a divergent stale view. The
+      # MariaDB semi-sync "primary isolated" note is the analogue.
       # ⚠ At customer rollout, verify member_state is scraped and is the metric
       # VALUE (percona <0.42); newer exporters may encode state as a label.
       - alert: MongoDBNoPrimary

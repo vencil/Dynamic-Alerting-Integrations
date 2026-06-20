@@ -45,16 +45,17 @@ data:
     \ (critical).\n      description_zh: '{{ $labels.instance }} 的 mongodb_up=0。HA\
     \ replica set 的單一成員停機時叢集仍可用（warning）。整體中斷會升級為 MongoDBClusterDown（critical）；失去\
     \ PRIMARY 則為 MongoDBNoPrimary（critical）。'\n  - alert: MongoDBClusterDown\n   \
-    \ expr: max by(tenant) (mongodb_up{job=\"tenant-exporters\"}) == 0\n    for: 1m\n\
+    \ expr: max by(tenant) (mongodb_up{job=\"tenant-exporters\"}) == 0\n    for: 30s\n\
     \    labels:\n      severity: critical\n      metric_group: liveness\n      tenant:\
     \ '{{ $labels.tenant }}'\n    annotations:\n      summary: 'MongoDB: ALL instances\
     \ down for tenant {{ $labels.tenant }}'\n      summary_zh: MongoDB：租戶 {{ $labels.tenant\
     \ }} 的所有實例皆停機\n      description: No mongod reports up=1 for tenant {{ $labels.tenant\
     \ }} — total service outage, not a single-member failover. For a planned single-instance\
-    \ drain, silence via the Alertmanager Silence API (cluster-survival has no config\
-    \ opt-out by design).\n      description_zh: 租戶 {{ $labels.tenant }} 沒有任何 mongod\
-    \ 回報 up=1 — 整體服務中斷，非單一成員 failover。若為計畫性單實例維護，請用 Alertmanager Silence API 靜音（叢集存活告警刻意不提供\
-    \ config opt-out）。\n  - alert: MongoDBNoPrimary\n    expr: 'count by(tenant) (mongodb_mongod_replset_member_state{job=\"\
+    \ drain, silence via the Alertmanager Silence API (no maintenance-window opt-out\
+    \ by design; a tenant's silent-critical sentinel still suppresses it).\n     \
+    \ description_zh: 租戶 {{ $labels.tenant }} 沒有任何 mongod 回報 up=1 — 整體服務中斷，非單一成員 failover。若為計畫性單實例維護，請用\
+    \ Alertmanager Silence API 靜音（刻意不提供維護窗 opt-out；租戶的 silent-critical sentinel 仍會壓制此告警）。\n\
+    \  - alert: MongoDBNoPrimary\n    expr: 'count by(tenant) (mongodb_mongod_replset_member_state{job=\"\
     tenant-exporters\"})\n\n      unless\n\n      count by(tenant) (mongodb_mongod_replset_member_state{job=\"\
     tenant-exporters\"} == 1)\n\n      '\n    for: 2m\n    labels:\n      severity:\
     \ critical\n      metric_group: liveness\n      tenant: '{{ $labels.tenant }}'\n\

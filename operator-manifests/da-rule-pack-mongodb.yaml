@@ -65,7 +65,7 @@ spec:
           MongoDBClusterDown（critical）；失去 PRIMARY 則為 MongoDBNoPrimary（critical）。'
     - alert: MongoDBClusterDown
       expr: max by(tenant) (mongodb_up{job="tenant-exporters"}) == 0
-      for: 1m
+      for: 30s
       labels:
         severity: critical
         metric_group: liveness
@@ -75,10 +75,11 @@ spec:
         summary_zh: MongoDB：租戶 {{ $labels.tenant }} 的所有實例皆停機
         description: No mongod reports up=1 for tenant {{ $labels.tenant }} — total
           service outage, not a single-member failover. For a planned single-instance
-          drain, silence via the Alertmanager Silence API (cluster-survival has no
-          config opt-out by design).
+          drain, silence via the Alertmanager Silence API (no maintenance-window opt-out
+          by design; a tenant's silent-critical sentinel still suppresses it).
         description_zh: 租戶 {{ $labels.tenant }} 沒有任何 mongod 回報 up=1 — 整體服務中斷，非單一成員
-          failover。若為計畫性單實例維護，請用 Alertmanager Silence API 靜音（叢集存活告警刻意不提供 config opt-out）。
+          failover。若為計畫性單實例維護，請用 Alertmanager Silence API 靜音（刻意不提供維護窗 opt-out；租戶的
+          silent-critical sentinel 仍會壓制此告警）。
     - alert: MongoDBNoPrimary
       expr: 'count by(tenant) (mongodb_mongod_replset_member_state{job="tenant-exporters"})
 

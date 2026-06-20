@@ -73,7 +73,7 @@ spec:
           則為 MariaDBNoPrimary（critical）。'
     - alert: MariaDBClusterDown
       expr: max by(tenant) (mysql_up{job="tenant-exporters"}) == 0
-      for: 1m
+      for: 30s
       labels:
         severity: critical
         metric_group: liveness
@@ -83,10 +83,11 @@ spec:
         summary_zh: MariaDB：租戶 {{ $labels.tenant }} 的所有實例皆停機
         description: No mysqld reports up=1 for tenant {{ $labels.tenant }} — total
           service outage, not a single-replica failover. For a planned single-instance
-          drain, silence via the Alertmanager Silence API (cluster-survival has no
-          config opt-out by design).
+          drain, silence via the Alertmanager Silence API (no maintenance-window opt-out
+          by design; a tenant's silent-critical sentinel still suppresses it).
         description_zh: 租戶 {{ $labels.tenant }} 沒有任何 mysqld 回報 up=1 — 整體服務中斷，非單一 replica
-          failover。若為計畫性單實例維護，請用 Alertmanager Silence API 靜音（叢集存活告警刻意不提供 config opt-out）。
+          failover。若為計畫性單實例維護，請用 Alertmanager Silence API 靜音（刻意不提供維護窗 opt-out；租戶的
+          silent-critical sentinel 仍會壓制此告警）。
     - alert: MariaDBNoPrimary
       expr: 'count by(tenant) (mysql_global_variables_read_only{job="tenant-exporters"})
 

@@ -102,9 +102,12 @@ groups:
       # TenantExporterAbsent misses). NOT quorum/primary-loss (that is
       # MariaDBNoPrimary). NO maintenance opt-out. tenant-only annotation
       # (max by(tenant) strips instance → pint alerts/template).
+      # for:30s outlasts a scrape gap; total-down needs no election debounce
+      # (that is MariaDBNoPrimary's for:2m) — keeps time-to-critical near the
+      # pre-#875 15s rather than regressing it to 1m.
       - alert: MariaDBClusterDown
         expr: max by(tenant) (mysql_up{job="tenant-exporters"}) == 0
-        for: 1m
+        for: 30s
         labels:
           severity: critical
           metric_group: liveness
@@ -112,8 +115,8 @@ groups:
         annotations:
           summary: "MariaDB: ALL instances down for tenant {{ $labels.tenant }}"
           summary_zh: "MariaDB：租戶 {{ $labels.tenant }} 的所有實例皆停機"
-          description: "No mysqld reports up=1 for tenant {{ $labels.tenant }} — total service outage, not a single-replica failover. For a planned single-instance drain, silence via the Alertmanager Silence API (cluster-survival has no config opt-out by design)."
-          description_zh: "租戶 {{ $labels.tenant }} 沒有任何 mysqld 回報 up=1 — 整體服務中斷，非單一 replica failover。若為計畫性單實例維護，請用 Alertmanager Silence API 靜音（叢集存活告警刻意不提供 config opt-out）。"
+          description: "No mysqld reports up=1 for tenant {{ $labels.tenant }} — total service outage, not a single-replica failover. For a planned single-instance drain, silence via the Alertmanager Silence API (no maintenance-window opt-out by design; a tenant's silent-critical sentinel still suppresses it)."
+          description_zh: "租戶 {{ $labels.tenant }} 沒有任何 mysqld 回報 up=1 — 整體服務中斷，非單一 replica failover。若為計畫性單實例維護，請用 Alertmanager Silence API 靜音（刻意不提供維護窗 opt-out；租戶的 silent-critical sentinel 仍會壓制此告警）。"
 
       # Write-availability (primary-replica semi-sync): instances are reachable but
       # NONE is the writable primary. mysql_global_variables_read_only==0 means
