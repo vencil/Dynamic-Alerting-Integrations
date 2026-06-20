@@ -1,0 +1,84 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "recipe-preview.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "recipe-preview.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "recipe-preview.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "recipe-preview.labels" . | nindent 8 }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "recipe-preview.name" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: recipe-preview
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default (printf "v%s" .Chart.AppVersion) }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          env:
+            # promtool is Go: pre-Go-1.25 it sets GOMAXPROCS to the NODE's CPU
+            # count (NOT this cgroup's cpu limit), so on a many-core node a light
+            # `promtool test` would spin up dozens of OS threads thrashing in this
+            # ~200m-CPU cgroup. Pin to the cpu limit — one short rule-eval needs no
+            # parallelism. (Python ignores GOMAXPROCS; only the promtool child reads it.)
+            - name: GOMAXPROCS
+              value: "1"
+            - name: PREVIEW_TENANT_API_URL
+              value: {{ .Values.tenantApiUrl | quote }}
+            - name: PREVIEW_LISTEN_PORT
+              value: {{ .Values.service.port | quote }}
+            - name: PREVIEW_MAX_CONCURRENCY
+              value: {{ .Values.preview.maxConcurrency | quote }}
+            - name: PREVIEW_RATE_LIMIT_PER_MIN
+              value: {{ .Values.preview.rateLimitPerMin | quote }}
+            - name: PREVIEW_MAX_BODY_BYTES
+              value: {{ .Values.preview.maxBodyBytes | quote }}
+            - name: PREVIEW_REQUEST_TIMEOUT
+              value: {{ .Values.preview.requestTimeout | quote }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.port }}
+              protocol: TCP
+          volumeMounts:
+            # readOnlyRootFilesystem: true → promtool needs a writable /tmp for its
+            # synthetic rule + data files (the eval core uses tempfile.mkdtemp).
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: {{ .Values.service.port }}
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: {{ .Values.service.port }}
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            failureThreshold: 3
+      volumes:
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 32Mi

@@ -1,0 +1,68 @@
+# recipe-preview — would-fire preview service (#657)
+# A small stateless PEP: it answers POST /preview by running the platform's
+# compiler + promtool, delegating tenant authz to tenant-api's /access probe.
+# It sits behind the da-portal same-origin /preview proxy (no own oauth2-proxy)
+# and trusts the portal-forwarded X-Forwarded-* identity headers.
+#
+# DEPLOY CONTRACT: install into the `monitoring` namespace
+# (`helm install recipe-preview ./helm/recipe-preview/ -n monitoring`) — da-portal's
+# `recipePreviewUrl` hardcodes recipe-preview.monitoring.svc.cluster.local:8082, so
+# the Service name (= Chart.Name, stable regardless of release name) + namespace
+# must resolve to that FQDN or the portal's /preview proxy gets a 502.
+
+# In-memory per-tenant rate limiter is per-replica (app.py RateLimiter); >1 replica
+# multiplies the effective per-tenant ceiling. Keep at 1 unless a shared store lands.
+replicaCount: 1
+
+image:
+  repository: ghcr.io/vencil/recipe-preview
+  # tag "" → derived "v{{ .Chart.AppVersion }}" (the tested image-tag invariant, #682).
+  # Do NOT hardcode a tag here.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 8082                    # single port; matches da-portal recipePreviewUrl :8082
+
+# tenant-api base URL the PEP calls for the /access authz probe. Short same-
+# namespace name (NOT the .cluster.local FQDN) for DNS portability — clusters with
+# a custom DNS domain still resolve it via the pod's search domain; also matches
+# app.py's own default. Override with an FQDN for a cross-namespace tenant-api.
+tenantApiUrl: "http://tenant-api:8080"
+
+# §6 guardrails (app.py env). These match the binary defaults; override if needed.
+preview:
+  maxConcurrency: 4
+  rateLimitPerMin: 30
+  maxBodyBytes: 65536
+  requestTimeout: 60
+  # NB: PREVIEW_DEV_BYPASS_AUTH is deliberately NOT templated. The app refuses to
+  # start if it is truthy inside Kubernetes (ADR-022 containment); leaving it unset
+  # is correct-by-construction in prod.
+
+resources:
+  requests:
+    cpu: 25m
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    # Headroom for up to PREVIEW_MAX_CONCURRENCY (4) concurrent promtool
+    # subprocesses (~30-40Mi each) + the Python parent. 128Mi could OOMKill
+    # under full concurrent preview load — keep this >= maxConcurrency * ~40Mi.
+    memory: 256Mi
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65534
+  runAsGroup: 65534
+  seccompProfile:
+    type: RuntimeDefault
+
+networkPolicy:
+  enabled: true
+  # recipe-preview blindly trusts X-Forwarded-Email, so ingress MUST be locked to
+  # the da-portal pod (the same-origin /preview proxy) — the anti-spoof boundary.
+  daPortalName: da-portal
+
+podAnnotations: {}              # no /metrics endpoint yet (deferred), so no scrape annotations
