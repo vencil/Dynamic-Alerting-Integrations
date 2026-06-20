@@ -190,6 +190,7 @@ describe('RecipeBuilder would-fire preview (#657)', () => {
     const txt = screen.getByTestId('wouldfire-firing').textContent || '';
     expect(txt).toMatch(/Would fire/);
     expect(txt).toMatch(/value 1500 > threshold 100/);          // backend reason shown verbatim
+    expect(txt).toMatch(/not an environment prediction/i);      // firing-only scope qualifier
     // the recipe object + scenario were handed to the service (never re-derived here)
     expect(previewFetch).toHaveBeenCalledWith(
       'db-a', expect.objectContaining({ recipe: 'threshold', metric: 'queue_depth' }),
@@ -287,6 +288,6 @@ describe('RecipeBuilder would-fire preview (#657)', () => {
     const note = screen.getByTestId('wouldfire-scope-note');
     expect(note).toBeInTheDocument();
     // it must NOT let the user read the verdict as "my alert will fire in prod"
-    expect(note.textContent).toMatch(/does NOT mean an alert will fire/i);
+    expect(note.textContent).toMatch(/does NOT mean your environment will actually alert/i);
   });
 });

@@ -379,9 +379,11 @@ function WouldFirePanel({ recipeObj, tenantId, previewFetch, inputClass }) {
   function stateView(s, i) {
     if (s.state === 'firing') {
       return (
-        <div key={i} data-testid="wouldfire-firing"
+        <div key={i} data-testid="wouldfire-firing" aria-describedby="wouldfire-scope-note"
           className="p-2 rounded border border-[color:var(--da-color-error)] bg-[color:var(--da-color-error-soft)] text-sm text-[color:var(--da-color-error-text)]">
           <strong><span aria-hidden="true">● </span>{t('會觸發', 'Would fire')}</strong>{s.reason ? <span> — {s.reason}</span> : null}
+          {/* firing-only qualifier — the one verdict misread as "it'll page"; static chrome, not the backend verdict */}
+          <span className="text-[color:var(--da-color-muted)]"> {t('（此測試值下；非環境預測）', '(at this test value; not an environment prediction)')}</span>
         </div>
       );
     }
@@ -462,13 +464,14 @@ function WouldFirePanel({ recipeObj, tenantId, previewFetch, inputClass }) {
           )
         )}
       </div>
-      {/* Persistent scope note: the verdict is a threshold-logic what-if on a
-          SYNTHETIC series, not a prediction that an alert fires in the tenant's
-          environment. Keeps the preview honest about what it does and doesn't
-          model (real data trend / for: duration / Alertmanager silencing). */}
-      <p className="text-xs mt-2 text-[color:var(--da-color-muted)]" data-testid="wouldfire-scope-note">
-        {t('此為閾值邏輯試算（你填的測試值 + 合成數據），確認規則寫對了；不代表在你環境會發出通知——未模擬真實數據走勢、for: 持續時間、或靜默／路由。',
-           'A threshold-logic preview (your test value + synthetic data) that checks the rule is correct; it does NOT mean an alert will fire in your environment — it does not model real-data trends, the for: duration, or silencing/routing.')}
+      {/* Persistent scope note (a styled callout, not an ignorable grey footnote):
+          the verdict is a RULE-LOGIC what-if on a SYNTHETIC series, not a prediction
+          that an alert fires in the tenant's environment. Linked from the firing
+          verdict via aria-describedby so AT hears the caveat WITH the verdict. */}
+      <p id="wouldfire-scope-note" data-testid="wouldfire-scope-note"
+        className="text-xs mt-2 pl-2 pr-2 py-1 rounded-sm border-l-2 border-[color:var(--da-color-info)] bg-[color:var(--da-color-info-soft)] text-[color:var(--da-color-muted)]">
+        {t('這是「規則邏輯」試算（測試值＋合成數據），用來確認規則寫對了；不代表你的環境真的會發出告警——未計入真實數據走勢、for 持續時間與靜默／路由。',
+           'A rule-logic check (your test value + synthetic data) to confirm the rule is written correctly. It does NOT mean your environment will actually alert — real-data trends, the for duration, and silencing/routing are not modeled.')}
       </p>
     </div>
   );
