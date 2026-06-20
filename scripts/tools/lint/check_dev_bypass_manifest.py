@@ -39,7 +39,10 @@ from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SCAN_DIRS = ("helm", "k8s", "operator-manifests")
-FORBIDDEN = re.compile(r"(?i)(TA_DEV_BYPASS_AUTH|dev-bypass-auth)")
+# tenant-api uses TA_DEV_BYPASS_AUTH / --dev-bypass-auth; recipe-preview (#657) uses
+# PREVIEW_DEV_BYPASS_AUTH. Both are local-dev-only escape hatches that must never
+# appear in a deployable manifest (ADR-022 L4); list every component's token here.
+FORBIDDEN = re.compile(r"(?i)(TA_DEV_BYPASS_AUTH|PREVIEW_DEV_BYPASS_AUTH|dev-bypass-auth)")
 
 
 def find_violations(root: Path | None = None) -> list[tuple[str, int, str]]:
