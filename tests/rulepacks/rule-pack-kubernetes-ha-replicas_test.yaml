@@ -82,10 +82,10 @@ tests:
             exp_annotations:
               summary: "HA workload for db-a is running with reduced redundancy"
               summary_zh: "db-a 的 HA 工作負載正以降級（失去備援）狀態運行"
-              platform_summary: "[gold] db-a: ready replicas < desired on an HA set (≥2) — a pod/replica is MISSING (vanished, not crashed-in-place), so the value-based DB liveness rules (#875) cannot see it. Check kube_statefulset/deployment status + node health / scheduling."
-              platform_summary_zh: "[gold] db-a: HA 工作負載（≥2）就緒副本數 < 期望數 — 有 pod/副本「消失」（非原地崩潰），value-based DB 存活規則（#875）看不到。請查 kube_statefulset/deployment 狀態 + 節點健康 / 排程。"
-              description: "Your HA database has fewer ready replicas than desired — it is still serving but has lost redundancy. A node/pod failure or a stuck reschedule is the usual cause; one more failure could take the service down."
-              description_zh: "您的 HA 資料庫就緒副本數少於期望值 — 服務仍可用，但已失去備援。通常成因是節點/Pod 故障或排程卡住；再壞一個就可能導致服務中斷。"
+              platform_summary: "[gold] db-a: ready replicas < desired on an HA set (≥2) — a replica is missing or not-ready. A vanished or stuck-rescheduled pod is invisible to the value-based DB liveness rules (#875), so this is the K8s-layer complement. Check kube_statefulset/deployment status + node health / scheduling."
+              platform_summary_zh: "[gold] db-a: HA 工作負載（≥2）就緒副本數 < 期望數 — 有副本消失或未就緒。消失或重排卡住的 pod 對 value-based DB 存活規則（#875）不可見，故為 K8s 層互補。請查 kube_statefulset/deployment 狀態 + 節點健康 / 排程。"
+              description: "Your HA database has fewer ready replicas than desired — redundancy is reduced or lost (at zero ready the workload is down, with a critical alert also firing). A node/pod failure or a stuck reschedule is the usual cause; one more failure could take the service down."
+              description_zh: "您的 HA 資料庫就緒副本數少於期望值 — 備援已降低或失去（就緒數為 0 時工作負載已中斷，並應同時有 critical 告警）。通常成因是節點/Pod 故障或排程卡住；再壞一個就可能導致服務中斷。"
               runbook_url: "http://rb/a"
               owner: team-a
               tier: gold
@@ -95,10 +95,10 @@ tests:
             exp_annotations:
               summary: "HA workload for db-b is running with reduced redundancy"
               summary_zh: "db-b 的 HA 工作負載正以降級（失去備援）狀態運行"
-              platform_summary: "[] db-b: ready replicas < desired on an HA set (≥2) — a pod/replica is MISSING (vanished, not crashed-in-place), so the value-based DB liveness rules (#875) cannot see it. Check kube_statefulset/deployment status + node health / scheduling."
-              platform_summary_zh: "[] db-b: HA 工作負載（≥2）就緒副本數 < 期望數 — 有 pod/副本「消失」（非原地崩潰），value-based DB 存活規則（#875）看不到。請查 kube_statefulset/deployment 狀態 + 節點健康 / 排程。"
-              description: "Your HA database has fewer ready replicas than desired — it is still serving but has lost redundancy. A node/pod failure or a stuck reschedule is the usual cause; one more failure could take the service down."
-              description_zh: "您的 HA 資料庫就緒副本數少於期望值 — 服務仍可用，但已失去備援。通常成因是節點/Pod 故障或排程卡住；再壞一個就可能導致服務中斷。"
+              platform_summary: "[] db-b: ready replicas < desired on an HA set (≥2) — a replica is missing or not-ready. A vanished or stuck-rescheduled pod is invisible to the value-based DB liveness rules (#875), so this is the K8s-layer complement. Check kube_statefulset/deployment status + node health / scheduling."
+              platform_summary_zh: "[] db-b: HA 工作負載（≥2）就緒副本數 < 期望數 — 有副本消失或未就緒。消失或重排卡住的 pod 對 value-based DB 存活規則（#875）不可見，故為 K8s 層互補。請查 kube_statefulset/deployment 狀態 + 節點健康 / 排程。"
+              description: "Your HA database has fewer ready replicas than desired — redundancy is reduced or lost (at zero ready the workload is down, with a critical alert also firing). A node/pod failure or a stuck reschedule is the usual cause; one more failure could take the service down."
+              description_zh: "您的 HA 資料庫就緒副本數少於期望值 — 備援已降低或失去（就緒數為 0 時工作負載已中斷，並應同時有 critical 告警）。通常成因是節點/Pod 故障或排程卡住；再壞一個就可能導致服務中斷。"
               runbook_url: ""
               owner: ""
               tier: ""
@@ -161,10 +161,10 @@ tests:
             exp_annotations:
               summary: "HA workload for db-a is running with reduced redundancy"
               summary_zh: "db-a 的 HA 工作負載正以降級（失去備援）狀態運行"
-              platform_summary: "[gold] db-a: ready replicas < desired on an HA set (≥2) — a pod/replica is MISSING (vanished, not crashed-in-place), so the value-based DB liveness rules (#875) cannot see it. Check kube_statefulset/deployment status + node health / scheduling."
-              platform_summary_zh: "[gold] db-a: HA 工作負載（≥2）就緒副本數 < 期望數 — 有 pod/副本「消失」（非原地崩潰），value-based DB 存活規則（#875）看不到。請查 kube_statefulset/deployment 狀態 + 節點健康 / 排程。"
-              description: "Your HA database has fewer ready replicas than desired — it is still serving but has lost redundancy. A node/pod failure or a stuck reschedule is the usual cause; one more failure could take the service down."
-              description_zh: "您的 HA 資料庫就緒副本數少於期望值 — 服務仍可用，但已失去備援。通常成因是節點/Pod 故障或排程卡住；再壞一個就可能導致服務中斷。"
+              platform_summary: "[gold] db-a: ready replicas < desired on an HA set (≥2) — a replica is missing or not-ready. A vanished or stuck-rescheduled pod is invisible to the value-based DB liveness rules (#875), so this is the K8s-layer complement. Check kube_statefulset/deployment status + node health / scheduling."
+              platform_summary_zh: "[gold] db-a: HA 工作負載（≥2）就緒副本數 < 期望數 — 有副本消失或未就緒。消失或重排卡住的 pod 對 value-based DB 存活規則（#875）不可見，故為 K8s 層互補。請查 kube_statefulset/deployment 狀態 + 節點健康 / 排程。"
+              description: "Your HA database has fewer ready replicas than desired — redundancy is reduced or lost (at zero ready the workload is down, with a critical alert also firing). A node/pod failure or a stuck reschedule is the usual cause; one more failure could take the service down."
+              description_zh: "您的 HA 資料庫就緒副本數少於期望值 — 備援已降低或失去（就緒數為 0 時工作負載已中斷，並應同時有 critical 告警）。通常成因是節點/Pod 故障或排程卡住；再壞一個就可能導致服務中斷。"
               runbook_url: "http://rb/a"
               owner: team-a
               tier: gold
@@ -251,10 +251,10 @@ tests:
             exp_annotations:
               summary: "HA workload for db-f is running with reduced redundancy"
               summary_zh: "db-f 的 HA 工作負載正以降級（失去備援）狀態運行"
-              platform_summary: "[silver] db-f: ready replicas < desired on an HA set (≥2) — a pod/replica is MISSING (vanished, not crashed-in-place), so the value-based DB liveness rules (#875) cannot see it. Check kube_statefulset/deployment status + node health / scheduling."
-              platform_summary_zh: "[silver] db-f: HA 工作負載（≥2）就緒副本數 < 期望數 — 有 pod/副本「消失」（非原地崩潰），value-based DB 存活規則（#875）看不到。請查 kube_statefulset/deployment 狀態 + 節點健康 / 排程。"
-              description: "Your HA database has fewer ready replicas than desired — it is still serving but has lost redundancy. A node/pod failure or a stuck reschedule is the usual cause; one more failure could take the service down."
-              description_zh: "您的 HA 資料庫就緒副本數少於期望值 — 服務仍可用，但已失去備援。通常成因是節點/Pod 故障或排程卡住；再壞一個就可能導致服務中斷。"
+              platform_summary: "[silver] db-f: ready replicas < desired on an HA set (≥2) — a replica is missing or not-ready. A vanished or stuck-rescheduled pod is invisible to the value-based DB liveness rules (#875), so this is the K8s-layer complement. Check kube_statefulset/deployment status + node health / scheduling."
+              platform_summary_zh: "[silver] db-f: HA 工作負載（≥2）就緒副本數 < 期望數 — 有副本消失或未就緒。消失或重排卡住的 pod 對 value-based DB 存活規則（#875）不可見，故為 K8s 層互補。請查 kube_statefulset/deployment 狀態 + 節點健康 / 排程。"
+              description: "Your HA database has fewer ready replicas than desired — redundancy is reduced or lost (at zero ready the workload is down, with a critical alert also firing). A node/pod failure or a stuck reschedule is the usual cause; one more failure could take the service down."
+              description_zh: "您的 HA 資料庫就緒副本數少於期望值 — 備援已降低或失去（就緒數為 0 時工作負載已中斷，並應同時有 critical 告警）。通常成因是節點/Pod 故障或排程卡住；再壞一個就可能導致服務中斷。"
               runbook_url: "http://rb/f"
               owner: team-f
               tier: silver
@@ -303,6 +303,88 @@ tests:
       - series: 'kube_statefulset_status_replicas_updated{namespace="db-a", statefulset="mariadb"}'
         values: '2x49 1 2x29'
       - series: 'tenant_metadata_info{tenant="db-a", runbook_url="http://rb/a", owner="team-a", tier="gold"}'
+        values: '1x80'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: TenantHAReplicasDegraded
+        exp_alerts: []
+
+  # ── REFINEMENT (2) on the DEPLOYMENT leg: the rollout-exclusion above is
+  #    StatefulSet-only, so the Deployment gate (changes(kube_deployment_status_
+  #    replicas_updated[10m]) == 0) had NO mutation guard. A degraded HA Deployment
+  #    (available 2 < spec 3) whose updated churns inside the trailing 10m →
+  #    changes()>0 → gate closes → no fire at 16m. Neutralise the Deploy gate and
+  #    this fires; the db-b positive case (updated constant) keeps the gate-open path. ──
+  - interval: 15s
+    name: rollout-exclusion-deployment
+    input_series:
+      - series: 'kube_deployment_spec_replicas{namespace="db-b", deployment="mongo"}'
+        values: '3x80'
+      - series: 'kube_deployment_status_replicas_available{namespace="db-b", deployment="mongo"}'
+        values: '2x80'
+      - series: 'kube_deployment_status_replicas_updated{namespace="db-b", deployment="mongo"}'
+        values: '3x49 2 3x29'
+      - series: 'tenant_metadata_info{tenant="db-b", runbook_url="http://rb/b", owner="team-b", tier="bronze"}'
+        values: '1x80'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: TenantHAReplicasDegraded
+        exp_alerts: []
+
+  # ── for:15m POSITIVE edge — a permanently degraded HA Deployment (enriched) must
+  #    be PENDING (not firing) at 14m45s and FIRE at exactly 15m. Every other positive
+  #    scenario asserts at 16m (well past any shortened for:), so a for:5m / for:1m
+  #    regression would pass the whole suite — this pins the lower edge. Doubles as the
+  #    only metadata-ENRICHED Deployment path (db-b elsewhere is bare). ──
+  - interval: 15s
+    name: for15m-firing-edge-deployment-enriched
+    input_series:
+      - series: 'kube_deployment_spec_replicas{namespace="db-b", deployment="mongo"}'
+        values: '2x80'
+      - series: 'kube_deployment_status_replicas_available{namespace="db-b", deployment="mongo"}'
+        values: '1x80'
+      - series: 'kube_deployment_status_replicas_updated{namespace="db-b", deployment="mongo"}'
+        values: '2x80'
+      - series: 'tenant_metadata_info{tenant="db-b", runbook_url="http://rb/b", owner="team-b", tier="bronze"}'
+        values: '1x80'
+    alert_rule_test:
+      # 14m45s: degraded since t=0 but < for:15m → pending, not firing.
+      - eval_time: 14m45s
+        alertname: TenantHAReplicasDegraded
+        exp_alerts: []
+      # 15m: for:15m satisfied → fires, with metadata enrichment attached.
+      - eval_time: 15m
+        alertname: TenantHAReplicasDegraded
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              tenant: db-b
+              runbook_url: "http://rb/b"
+              owner: team-b
+              tier: bronze
+            exp_annotations:
+              summary: "HA workload for db-b is running with reduced redundancy"
+              summary_zh: "db-b 的 HA 工作負載正以降級（失去備援）狀態運行"
+              platform_summary: "[bronze] db-b: ready replicas < desired on an HA set (≥2) — a replica is missing or not-ready. A vanished or stuck-rescheduled pod is invisible to the value-based DB liveness rules (#875), so this is the K8s-layer complement. Check kube_statefulset/deployment status + node health / scheduling."
+              platform_summary_zh: "[bronze] db-b: HA 工作負載（≥2）就緒副本數 < 期望數 — 有副本消失或未就緒。消失或重排卡住的 pod 對 value-based DB 存活規則（#875）不可見，故為 K8s 層互補。請查 kube_statefulset/deployment 狀態 + 節點健康 / 排程。"
+              description: "Your HA database has fewer ready replicas than desired — redundancy is reduced or lost (at zero ready the workload is down, with a critical alert also firing). A node/pod failure or a stuck reschedule is the usual cause; one more failure could take the service down."
+              description_zh: "您的 HA 資料庫就緒副本數少於期望值 — 備援已降低或失去（就緒數為 0 時工作負載已中斷，並應同時有 critical 告警）。通常成因是節點/Pod 故障或排程卡住；再壞一個就可能導致服務中斷。"
+              runbook_url: "http://rb/b"
+              owner: team-b
+              tier: bronze
+
+  # ── Deployment leg maintenance opt-out (only the StatefulSet leg was tested in
+  #    maintenance-suppresses): a degraded HA Deployment in maintenance → suppressed. ──
+  - interval: 15s
+    name: deployment-maintenance-suppressed
+    input_series:
+      - series: 'kube_deployment_spec_replicas{namespace="db-b", deployment="mongo"}'
+        values: '3x80'
+      - series: 'kube_deployment_status_replicas_available{namespace="db-b", deployment="mongo"}'
+        values: '2x80'
+      - series: 'kube_deployment_status_replicas_updated{namespace="db-b", deployment="mongo"}'
+        values: '3x80'
+      - series: 'user_state_filter{tenant="db-b", filter="maintenance"}'
         values: '1x80'
     alert_rule_test:
       - eval_time: 16m

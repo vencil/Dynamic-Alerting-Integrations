@@ -361,16 +361,19 @@ spec:
         summary: HA workload for {{ $labels.tenant }} is running with reduced redundancy
         summary_zh: '{{ $labels.tenant }} 的 HA 工作負載正以降級（失去備援）狀態運行'
         platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant }}: ready replicas
-          < desired on an HA set (≥2) — a pod/replica is MISSING (vanished, not crashed-in-place),
-          so the value-based DB liveness rules (#875) cannot see it. Check kube_statefulset/deployment
+          < desired on an HA set (≥2) — a replica is missing or not-ready. A vanished
+          or stuck-rescheduled pod is invisible to the value-based DB liveness rules
+          (#875), so this is the K8s-layer complement. Check kube_statefulset/deployment
           status + node health / scheduling.'
         platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant }}: HA 工作負載（≥2）就緒副本數
-          < 期望數 — 有 pod/副本「消失」（非原地崩潰），value-based DB 存活規則（#875）看不到。請查 kube_statefulset/deployment
-          狀態 + 節點健康 / 排程。'
-        description: Your HA database has fewer ready replicas than desired — it is
-          still serving but has lost redundancy. A node/pod failure or a stuck reschedule
-          is the usual cause; one more failure could take the service down.
-        description_zh: 您的 HA 資料庫就緒副本數少於期望值 — 服務仍可用，但已失去備援。通常成因是節點/Pod 故障或排程卡住；再壞一個就可能導致服務中斷。
+          < 期望數 — 有副本消失或未就緒。消失或重排卡住的 pod 對 value-based DB 存活規則（#875）不可見，故為 K8s 層互補。請查
+          kube_statefulset/deployment 狀態 + 節點健康 / 排程。'
+        description: Your HA database has fewer ready replicas than desired — redundancy
+          is reduced or lost (at zero ready the workload is down, with a critical
+          alert also firing). A node/pod failure or a stuck reschedule is the usual
+          cause; one more failure could take the service down.
+        description_zh: 您的 HA 資料庫就緒副本數少於期望值 — 備援已降低或失去（就緒數為 0 時工作負載已中斷，並應同時有 critical
+          告警）。通常成因是節點/Pod 故障或排程卡住；再壞一個就可能導致服務中斷。
         runbook_url: '{{ $labels.runbook_url }}'
         owner: '{{ $labels.owner }}'
         tier: '{{ $labels.tier }}'
