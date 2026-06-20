@@ -45,6 +45,8 @@
 
 首版 `threshold` recipe（`>` `>=` `<` `<=` `==`）；時間相依型（rate/ratio/forecast/absence）回 `supported:false`（誠實標示、不靜默）。
 
+**預覽答的範圍**：餵的是合成、固定序列，回答的是「這條 recipe 的閾值邏輯在某測試值會不會越線」，**不是**「在你環境會不會發出通知」——不模擬真實數據走勢、`for:` 計時、Alertmanager 靜默／路由（前端 would-fire 面板對使用者明示這條界線）。
+
 **正式環境部署延後**（[設計 §9](../../docs/design/recipe-would-fire-preview.md)）；隨 prod 部署一起補的加固 bundle：
 
 - **`tini` 當 PID 1** — SIGTERM 轉發 + graceful 終止。（非殭屍回收：`subprocess.run` 為同步 `wait()`、已回收 `promtool`，且 `promtool` 不 fork 孫行程，故無 PID-1 殭屍堆積路徑。）
