@@ -18,8 +18,8 @@ parent: architecture-and-design.en.md
 >
 > This is a **design-readiness** output (design and contract settled, not yet implemented). It focuses on two decisions: **a standalone backend service**, and **how the synthetic input is fed**.
 > - **Settled**: the backend's shape (a standalone Python service, try-local first), the API contract, the production guardrails.
-> - **First scope**: the threshold recipe (`>` `>=` `<` `<=` `==`).
-> - **Deferred**: production deployment, time-dependent recipe types, historical backtest (triggers for each in §9).
+> - **First scope**: the threshold recipe (`>` `>=` `<` `<=` `==`) + absence (gap detection — the synthetic series simply doesn't emit the metric).
+> - **Deferred**: production deployment, the remaining time-dependent recipe types (rate / ratio / forecast / p99), historical backtest (triggers for each in §9).
 
 ## 1. The problem
 
@@ -119,7 +119,8 @@ A Prometheus rule compares "series" (labelled time series), not a single number.
 **The key dividing line — only the series' *shape* depends on the recipe type**:
 
 - **threshold types**: a **flat constant series** (the value held steady). This is exactly why threshold previews are cheap: a single fixed value suffices, no slope or trend needed.
-- **rate / ratio / forecast / absence**: need a type-specific shape (rate needs a slope, ratio a numerator + denominator, forecast a trend, absence a gap) → deferred.
+- **absence**: gap-shaped — the synthetic series simply **doesn't emit the metric** (the rule's `count_over_time(metric[window])` finds no samples → `unless` fires), so it previews as cheaply as threshold → **supported** (eval clears window + `for:`).
+- **rate / ratio / forecast / p99**: need a type-specific shape (rate needs a slope, ratio a numerator + denominator, forecast a trend) → deferred.
 
 > The preview answers "would it fire at this value/scenario", not "is the rule itself correct" (the latter is guaranteed by existing CI tests). So a single test value is enough for threshold types; multi-series cases (replicas, trends) wait for the future.
 
@@ -160,11 +161,11 @@ Each `promtool` eval forks an ~1s subprocess; the preview service forks one per 
 
 ## 7. Honestly mark types that aren't supported yet
 
-The first version supports only threshold types. Other types **must not be silent** — for an unsupported type, the portal must clearly show "preview for this type is coming soon" rather than pretend it works or leave a blank.
+The first version supports threshold and absence types. Other types (rate / ratio / forecast / p99) **must not be silent** — for an unsupported type, the portal must clearly show "preview for this type is coming soon" rather than pretend it works or leave a blank.
 
 The reason: if a user can **save** a ratio recipe but **can't see** a preview, they'll assume "saved means correct" — which is false confidence. So "closing the loop" is declared **per type**; supporting threshold does not let us claim the whole thing is done.
 
-The mechanism: the service hardcodes the supported set (currently `{threshold}`, covering its operators); anything not in it returns `supported: false` + a note and **does not attempt a compile** — so an unsupported type can never be mislabeled `firing` or `error`.
+The mechanism: the service hardcodes the supported set (currently `{threshold, absence}`); anything not in it returns `supported: false` + a note and **does not attempt a compile** — so an unsupported type can never be mislabeled `firing` or `error`.
 
 ## 8. Phased delivery
 
@@ -172,14 +173,15 @@ The mechanism: the service hardcodes the supported set (currently `{threshold}`,
 |---|---|---|
 | **Design (this doc)** | Backend shape + contract + guardrails + synthetic-input design; flat tool gets a recipe notice | This PR |
 | **First implementation** | threshold types: standalone Python service (try-local) + synthetic-series generator + portal form rendering + per-type release | Next |
-| **Time-dependent types** | rate/ratio/forecast/absence: type-specific series generator + scenario model + opened per type | Deferred (see §9) |
+| **absence type** | gap-shaped: the synthetic series omits the metric (as cheap as threshold) | ✅ This PR (PR-B) |
+| **Remaining time-dependent types** | rate/ratio/forecast/p99: type-specific series generator + scenario model + opened per type | Deferred (see §9) |
 
 ## 9. Deferred items (each with a concrete trigger — not a vague TODO)
 
 | Deferred item | Trigger |
 |---|---|
 | Production deployment of the preview service | A real production customer authoring in the portal who needs preview (when the local trial isn't enough). Re-evaluate the deployment shape then |
-| Time-dependent types (rate/ratio/forecast/absence) | Domain experts / tenants actually need previews for these types |
+| Remaining time-dependent types (rate/ratio/forecast/p99) | Domain experts / tenants actually need previews for these types |
 | Historical backtest ("how many times did my real data fire in the past 24h") | The recipe's recording rule lands; `for:` semantics ready |
 | Rule-pack impact-matrix CI (assess fleet-wide impact before changing a rule-pack) | A rule-pack change causes an unexpected fleet-wide alert shift, or a pre-merge impact assessment is needed. Note: the preview uses synthetic input and does **not** need this one's snapshot data |
 | "Who gets paged" attribution | A consumer genuinely needs it (belongs to the notification-routing component) |

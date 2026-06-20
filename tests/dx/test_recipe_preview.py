@@ -27,19 +27,47 @@ _EQUALS = {
     "recipe": "threshold", "metric": "mysql_semisync_master_last_errno", "op": "==",
     "window": "5m", "for": "1m", "threshold": "1236:critical", "name": "errno_1236",
 }
+# absence: presence-based (no `op`, no scenario value). Fires where a declaring
+# tenant's metric had no sample over `window`. threshold carries the severity
+# (value is a presence flag). Mirrors tests/dx/fixtures/.../absence.yaml.
+_ABSENCE = {
+    "recipe": "absence", "metric": "app_heartbeat_total",
+    "window": "10m", "for": "1m", "threshold": "0:critical", "name": "heartbeat_gone",
+}
 
 
 # ── per-type gating + error handling (no promtool needed — run everywhere) ──
 
 class TestGatingAndErrors:
     def test_unsupported_recipe_type_not_compiled(self):
-        """rate/ratio/forecast/absence/p99 → supported:false, no compile, no states."""
+        """rate/ratio/forecast/p99 (still time-dependent) → supported:false, no
+        compile, no states. (threshold + absence ARE supported — see TestWouldFire.)"""
         rate = {"recipe": "rate", "metric": "http_requests_total", "op": ">",
                 "window": "5m", "threshold": "1:warning", "name": "r"}
         out = rp.preview_recipe(rate, "shop-a", {"value": 5})
         assert out["supported"] is False
         assert out["states"] == []
         assert any("rate" in w for w in out["warnings"])
+
+    def test_absence_malformed_window_is_error(self):
+        """absence needs a parseable `window` to size eval_time; a bad one →
+        state:error BEFORE promtool (fail-closed, never a guessed window → wrong
+        verdict). Runs everywhere (no promtool)."""
+        bad = dict(_ABSENCE, window="later")
+        out = rp.preview_recipe(bad, "shop-a", {})
+        assert out["supported"] is True
+        assert out["states"][0]["state"] == "error"
+        assert "window" in out["states"][0]["reason"]
+
+    def test_absence_needs_no_scenario_value(self):
+        """absence is presence-based — an absent scenario.value must NOT be a
+        'value is required' error (that gate is threshold-only). With no promtool
+        it returns the can't-evaluate-locally warning, NOT an error."""
+        out = rp.preview_recipe(_ABSENCE, "shop-a", {})
+        # either evaluates (promtool present) or warns (absent) — never the
+        # threshold 'scenario.value is required' error.
+        reasons = [s.get("reason", "") for s in out["states"]]
+        assert not any("scenario.value is required" in r for r in reasons)
 
     def test_malformed_recipe_is_error_not_firing(self):
         """A structurally invalid recipe → state:error (never mislabeled firing)."""
@@ -119,6 +147,19 @@ class TestBuildPreviewTest:
         esc = rp.shape._escape_value('a"b')     # compiler's canonical escaping
         assert f'path="{esc}"' in doc
 
+    def test_absence_omits_metric_and_sizes_window(self):
+        """absence emits ONLY the declaration (user_threshold) + metadata and does
+        NOT emit the metric (→ count_over_time empty → `unless` fires); eval clears
+        window(10) + for(1) + buffer(5) = 16m. `value` is unused (None)."""
+        slug = rp.shape.recipe_id(_ABSENCE)
+        doc, severity, mode, thr = rp.build_preview_test(_ABSENCE, "shop-a", None, slug)
+        assert severity == "critical"
+        assert "user_threshold{" in doc and "tenant_metadata_info{" in doc
+        assert "app_heartbeat_total{" not in doc      # metric intentionally absent
+        assert "eval_time: 16m" in doc                # window 10 + for 1 + 5
+        assert "exp_alerts: []" in doc                # inverted-assert
+        assert f"alertname: Custom_{slug}" in doc
+
 
 # ── promtool result classification (pure; finding 2 — rc!=0 ≠ firing) ──
 
@@ -175,3 +216,14 @@ class TestWouldFire:
         r = dict(_THRESHOLD, selectors={"queue": "checkout"})
         out = rp.preview_recipe(r, "shop-a", {"value": 1500})
         assert out["states"][0]["state"] == "firing"
+
+    def test_absence_fires_on_simulated_absence(self):
+        """⛔ PR-B hard gate: an absence recipe, with its metric absent over the
+        window, ACTUALLY fires through the real compiler + promtool — assert
+        state == 'firing' (NOT merely 'no crash'; the P2 selectors_re
+        false-inactive lesson). No scenario value needed (presence-based)."""
+        out = rp.preview_recipe(_ABSENCE, "shop-a", {})
+        assert out["supported"] is True
+        assert out["states"][0]["state"] == "firing"
+        assert out["states"][0]["severity"] == "critical"
+        assert out["alertname"] == "Custom_" + rp.shape.recipe_id(_ABSENCE)
