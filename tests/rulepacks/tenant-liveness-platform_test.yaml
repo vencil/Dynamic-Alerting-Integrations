@@ -1,26 +1,46 @@
-# promtool unit test — #869 platform-side tenant-liveness sentinels.
+# promtool unit test - #869/#880 platform-side tenant-liveness sentinels.
 # Run: promtool test rules tests/rulepacks/tenant-liveness-platform_test.yaml
 #
 # Oracle for tenant-liveness-platform.rules.yaml (the EXTRACT of
 # TenantExporterJobAbsent + MassExporterOutage from configmap-rules-platform.yaml).
 #
-#   JOB-ABSENT     whole tenant-exporters job vanishes (no up series at all) →
-#                  TenantExporterJobAbsent fires (per-tenant rule would be blind).
-#   JOB-PRESENT    at least one up series exists → TenantExporterJobAbsent silent.
-#   STORM          >10 tenants' exporters down at once → MassExporterOutage fires once.
-#   NO-STORM       a handful (<=10) down → MassExporterOutage silent (per-tenant pages suffice).
+#   JOB-ABSENT     whole tenant-exporters job gone -> TenantExporterJobAbsent fires.
+#   JOB-PRESENT    at least one up series -> TenantExporterJobAbsent silent.
+#
+#   MassExporterOutage (#880 ratio+floor, replaces the provisional magic > 10;
+#   plus an `unless on() absent(...)` job-presence gate, CodeRabbit #882):
+#   fires iff  count(down) > 5  AND  count(down)/count(expected) > 0.1  AND the
+#   tenant-exporters job is PRESENT (not wholly absent).
+#     small-all-down  8 of 8 down via up==0 (job present, exporters unhealthy)
+#                     -> FIRES. The headline #880 fix: the old `> 10` absolute floor
+#                     MISSED an 8-tenant cluster going dark. Mixed db_types also prove
+#                     `without (tenant, db_type)` collapses BOTH numerator and
+#                     denominator to one mixed count.
+#     job-absent-8    same 8 expected but NO up at all (whole job gone) -> SILENT.
+#                     The gate hands this catastrophe to TenantExporterJobAbsent (which
+#                     fires), instead of double-paging. CodeRabbit #882 regression.
+#     floor-guard     5 of 8 down  -> silent. 5 is not > 5, so a handful down
+#                     stays as per-tenant TenantExporterAbsent pages (ratio 0.625
+#                     would pass; the floor is what holds it back).
+#     ratio-guard     6 of 61 down -> silent. 6 > 5 passes the floor, but 9.8% is
+#                     not > 10%, so a routine large-cluster blip (one node's worth
+#                     of exporters) does NOT false-escalate to a mass page. This is
+#                     the clause that the old absolute `> 10` could not express.
+#     collector-dead  no tenant_expected_exporter at all -> MassExporterOutage
+#                     emits nothing (empty numerator AND denominator; count over an
+#                     empty vector is absent, not 0, so there is no 0/0 false fire).
+#                     The job-absent dead-man's-switch is the catastrophe signal,
+#                     so the ratio sentinel is never the sole dependency.
 rule_files:
   - tenant-liveness-platform.rules.yaml
 
 evaluation_interval: 30s
 
 tests:
-  # ── TenantExporterJobAbsent: whole job gone → fires ──
   - interval: 30s
     name: job-absent-fires
     input_series:
-      # tenant_expected_exporter still present (exporter that emits it could be a
-      # separate concern) but NO up{job="tenant-exporters"} series exist at all.
+      # tenant_expected_exporter present but NO up{job="tenant-exporters"} at all.
       - series: 'tenant_expected_exporter{tenant="db-a", db_type="mariadb"}'
         values: '1x12'
     alert_rule_test:
@@ -33,7 +53,6 @@ tests:
             exp_annotations:
               summary: "Entire tenant-exporters scrape job is absent — per-tenant liveness is BLIND"
 
-  # ── TenantExporterJobAbsent: at least one up present → silent ──
   - interval: 30s
     name: job-present-silent
     input_series:
@@ -44,37 +63,47 @@ tests:
         alertname: TenantExporterJobAbsent
         exp_alerts: []
 
-  # ── MassExporterOutage: 11 tenants down at once → fires once ──
   - interval: 30s
-    name: storm-11-down-mixed-dbtypes-fires
+    name: mass-small-cluster-8-all-down-fires
     input_series:
-      # 11 tenants expected, NONE healthy (no up==1 for any) → anti-join count = 11 > 10.
-      # MIXED db_types on purpose: proves `without (tenant, db_type)` collapses to ONE
-      # global count of 11. A bare `without (tenant)` would split into per-db_type
-      # sub-counts (7 mariadb + 2 postgresql + 2 redis), none > 10 → would SILENTLY
-      # not fire despite 11 total down. This scenario is the regression guard for that.
-      - series: 'tenant_expected_exporter{tenant="t01", db_type="mariadb"}'
+      # 8 tenants expected, ALL reporting up==0 (a shared-dependency outage: targets
+      # present + scraped, exporters unhealthy). The job is PRESENT (up series exist,
+      # value 0) so the `unless on() absent(...)` gate does NOT suppress; up==0 is not
+      # up==1 so all 8 stay in the anti-join. count(down)=8 > 5 and ratio 8/8 = 1.0 >
+      # 0.1 -> fires. The old `> 10` floor would MISS this small cluster. Mixed
+      # db_types prove the without(tenant,db_type) collapse on both num and denom.
+      - series: 'tenant_expected_exporter{tenant="s01", db_type="mariadb"}'
         values: '1x12'
-      - series: 'tenant_expected_exporter{tenant="t02", db_type="mariadb"}'
+      - series: 'tenant_expected_exporter{tenant="s02", db_type="mariadb"}'
         values: '1x12'
-      - series: 'tenant_expected_exporter{tenant="t03", db_type="mariadb"}'
+      - series: 'tenant_expected_exporter{tenant="s03", db_type="mariadb"}'
         values: '1x12'
-      - series: 'tenant_expected_exporter{tenant="t04", db_type="mariadb"}'
+      - series: 'tenant_expected_exporter{tenant="s04", db_type="mariadb"}'
         values: '1x12'
-      - series: 'tenant_expected_exporter{tenant="t05", db_type="mariadb"}'
+      - series: 'tenant_expected_exporter{tenant="s05", db_type="postgresql"}'
         values: '1x12'
-      - series: 'tenant_expected_exporter{tenant="t06", db_type="mariadb"}'
+      - series: 'tenant_expected_exporter{tenant="s06", db_type="postgresql"}'
         values: '1x12'
-      - series: 'tenant_expected_exporter{tenant="t07", db_type="mariadb"}'
+      - series: 'tenant_expected_exporter{tenant="s07", db_type="redis"}'
         values: '1x12'
-      - series: 'tenant_expected_exporter{tenant="t08", db_type="postgresql"}'
+      - series: 'tenant_expected_exporter{tenant="s08", db_type="redis"}'
         values: '1x12'
-      - series: 'tenant_expected_exporter{tenant="t09", db_type="postgresql"}'
-        values: '1x12'
-      - series: 'tenant_expected_exporter{tenant="t10", db_type="redis"}'
-        values: '1x12'
-      - series: 'tenant_expected_exporter{tenant="t11", db_type="redis"}'
-        values: '1x12'
+      - series: 'up{job="tenant-exporters", tenant="s01", instance="s01:9104"}'
+        values: '0x12'
+      - series: 'up{job="tenant-exporters", tenant="s02", instance="s02:9104"}'
+        values: '0x12'
+      - series: 'up{job="tenant-exporters", tenant="s03", instance="s03:9104"}'
+        values: '0x12'
+      - series: 'up{job="tenant-exporters", tenant="s04", instance="s04:9104"}'
+        values: '0x12'
+      - series: 'up{job="tenant-exporters", tenant="s05", instance="s05:9104"}'
+        values: '0x12'
+      - series: 'up{job="tenant-exporters", tenant="s06", instance="s06:9104"}'
+        values: '0x12'
+      - series: 'up{job="tenant-exporters", tenant="s07", instance="s07:9104"}'
+        values: '0x12'
+      - series: 'up{job="tenant-exporters", tenant="s08", instance="s08:9104"}'
+        values: '0x12'
     alert_rule_test:
       - eval_time: 4m
         alertname: MassExporterOutage
@@ -82,22 +111,340 @@ tests:
           - exp_labels:
               severity: critical
             exp_annotations:
-              summary: "Mass exporter outage (11 tenants) — shared-dependency failure suspected"
+              summary: "Mass exporter outage (8 tenants) — shared-dependency failure suspected"
 
-  # ── MassExporterOutage: only 2 down → silent (per-tenant pages suffice) ──
   - interval: 30s
-    name: no-storm-2-down-silent
+    name: mass-job-absent-8-expected-silent-jobabsent-fires
     input_series:
-      # 2 down (no up), the rest healthy. count = 2, not > 10 → no storm.
-      - series: 'tenant_expected_exporter{tenant="t01", db_type="mariadb"}'
+      # Same 8 expected, but the WHOLE tenant-exporters job is gone (NO up series at
+      # all) -> every expected tenant looks "down" (ratio 1.0, count 8 > 5). Without
+      # the gate this would fire ON TOP OF TenantExporterJobAbsent (duplicate critical
+      # for one root cause). The `unless on() absent(...)` gate suppresses
+      # MassExporterOutage here, leaving JobAbsent as the single catastrophe signal.
+      - series: 'tenant_expected_exporter{tenant="s01", db_type="mariadb"}'
         values: '1x12'
-      - series: 'tenant_expected_exporter{tenant="t02", db_type="mariadb"}'
+      - series: 'tenant_expected_exporter{tenant="s02", db_type="mariadb"}'
         values: '1x12'
-      - series: 'tenant_expected_exporter{tenant="t03", db_type="mariadb"}'
+      - series: 'tenant_expected_exporter{tenant="s03", db_type="mariadb"}'
         values: '1x12'
-      - series: 'up{job="tenant-exporters", tenant="t03", instance="t03:9104"}'
+      - series: 'tenant_expected_exporter{tenant="s04", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="s05", db_type="postgresql"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="s06", db_type="postgresql"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="s07", db_type="redis"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="s08", db_type="redis"}'
         values: '1x12'
     alert_rule_test:
       - eval_time: 4m
         alertname: MassExporterOutage
         exp_alerts: []
+      - eval_time: 4m
+        alertname: TenantExporterJobAbsent
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: tenant-exporters
+            exp_annotations:
+              summary: "Entire tenant-exporters scrape job is absent — per-tenant liveness is BLIND"
+
+  - interval: 30s
+    name: mass-floor-5-down-silent
+    input_series:
+      # 8 expected, 3 healthy (up==1) -> 5 down. count(down)=5 is NOT > 5 (strict)
+      # so the floor holds it silent even though ratio 5/8 = 0.625 > 0.1.
+      - series: 'tenant_expected_exporter{tenant="f01", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="f02", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="f03", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="f04", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="f05", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="f06", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="f07", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="f08", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'up{job="tenant-exporters", tenant="f01", instance="f01:9104"}'
+        values: '1x12'
+      - series: 'up{job="tenant-exporters", tenant="f02", instance="f02:9104"}'
+        values: '1x12'
+      - series: 'up{job="tenant-exporters", tenant="f03", instance="f03:9104"}'
+        values: '1x12'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: MassExporterOutage
+        exp_alerts: []
+
+  - interval: 30s
+    name: mass-ratio-guard-6-of-61-silent
+    input_series:
+      # 61 expected, 55 healthy (up==1) -> 6 down. count(down)=6 > 5 (floor passes)
+      # but ratio 6/61 = 0.0983 is NOT > 0.1, so a routine large-cluster blip does
+      # not escalate. This isolates the ratio clause (a count-only rule would fire).
+      - series: 'tenant_expected_exporter{tenant="r001", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="r002", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="r003", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="r004", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="r005", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="r006", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="r007", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="r008", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="r009", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="r010", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="r011", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="r012", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="r013", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="r014", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="r015", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="r016", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="r017", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="r018", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="r019", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="r020", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="r021", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="r022", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="r023", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="r024", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="r025", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="r026", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="r027", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="r028", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="r029", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="r030", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="r031", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="r032", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="r033", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="r034", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="r035", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="r036", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="r037", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="r038", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="r039", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="r040", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="r041", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="r042", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="r043", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="r044", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="r045", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="r046", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="r047", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="r048", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="r049", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="r050", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="r051", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="r052", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="r053", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="r054", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="r055", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="r056", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="r057", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="r058", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="r059", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="r060", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="r061", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'up{job="tenant-exporters", tenant="r007", instance="r007:9104"}'
+        values: '1x12'
+      - series: 'up{job="tenant-exporters", tenant="r008", instance="r008:9104"}'
+        values: '1x12'
+      - series: 'up{job="tenant-exporters", tenant="r009", instance="r009:9104"}'
+        values: '1x12'
+      - series: 'up{job="tenant-exporters", tenant="r010", instance="r010:9104"}'
+        values: '1x12'
+      - series: 'up{job="tenant-exporters", tenant="r011", instance="r011:9104"}'
+        values: '1x12'
+      - series: 'up{job="tenant-exporters", tenant="r012", instance="r012:9104"}'
+        values: '1x12'
+      - series: 'up{job="tenant-exporters", tenant="r013", instance="r013:9104"}'
+        values: '1x12'
+      - series: 'up{job="tenant-exporters", tenant="r014", instance="r014:9104"}'
+        values: '1x12'
+      - series: 'up{job="tenant-exporters", tenant="r015", instance="r015:9104"}'
+        values: '1x12'
+      - series: 'up{job="tenant-exporters", tenant="r016", instance="r016:9104"}'
+        values: '1x12'
+      - series: 'up{job="tenant-exporters", tenant="r017", instance="r017:9104"}'
+        values: '1x12'
+      - series: 'up{job="tenant-exporters", tenant="r018", instance="r018:9104"}'
+        values: '1x12'
+      - series: 'up{job="tenant-exporters", tenant="r019", instance="r019:9104"}'
+        values: '1x12'
+      - series: 'up{job="tenant-exporters", tenant="r020", instance="r020:9104"}'
+        values: '1x12'
+      - series: 'up{job="tenant-exporters", tenant="r021", instance="r021:9104"}'
+        values: '1x12'
+      - series: 'up{job="tenant-exporters", tenant="r022", instance="r022:9104"}'
+        values: '1x12'
+      - series: 'up{job="tenant-exporters", tenant="r023", instance="r023:9104"}'
+        values: '1x12'
+      - series: 'up{job="tenant-exporters", tenant="r024", instance="r024:9104"}'
+        values: '1x12'
+      - series: 'up{job="tenant-exporters", tenant="r025", instance="r025:9104"}'
+        values: '1x12'
+      - series: 'up{job="tenant-exporters", tenant="r026", instance="r026:9104"}'
+        values: '1x12'
+      - series: 'up{job="tenant-exporters", tenant="r027", instance="r027:9104"}'
+        values: '1x12'
+      - series: 'up{job="tenant-exporters", tenant="r028", instance="r028:9104"}'
+        values: '1x12'
+      - series: 'up{job="tenant-exporters", tenant="r029", instance="r029:9104"}'
+        values: '1x12'
+      - series: 'up{job="tenant-exporters", tenant="r030", instance="r030:9104"}'
+        values: '1x12'
+      - series: 'up{job="tenant-exporters", tenant="r031", instance="r031:9104"}'
+        values: '1x12'
+      - series: 'up{job="tenant-exporters", tenant="r032", instance="r032:9104"}'
+        values: '1x12'
+      - series: 'up{job="tenant-exporters", tenant="r033", instance="r033:9104"}'
+        values: '1x12'
+      - series: 'up{job="tenant-exporters", tenant="r034", instance="r034:9104"}'
+        values: '1x12'
+      - series: 'up{job="tenant-exporters", tenant="r035", instance="r035:9104"}'
+        values: '1x12'
+      - series: 'up{job="tenant-exporters", tenant="r036", instance="r036:9104"}'
+        values: '1x12'
+      - series: 'up{job="tenant-exporters", tenant="r037", instance="r037:9104"}'
+        values: '1x12'
+      - series: 'up{job="tenant-exporters", tenant="r038", instance="r038:9104"}'
+        values: '1x12'
+      - series: 'up{job="tenant-exporters", tenant="r039", instance="r039:9104"}'
+        values: '1x12'
+      - series: 'up{job="tenant-exporters", tenant="r040", instance="r040:9104"}'
+        values: '1x12'
+      - series: 'up{job="tenant-exporters", tenant="r041", instance="r041:9104"}'
+        values: '1x12'
+      - series: 'up{job="tenant-exporters", tenant="r042", instance="r042:9104"}'
+        values: '1x12'
+      - series: 'up{job="tenant-exporters", tenant="r043", instance="r043:9104"}'
+        values: '1x12'
+      - series: 'up{job="tenant-exporters", tenant="r044", instance="r044:9104"}'
+        values: '1x12'
+      - series: 'up{job="tenant-exporters", tenant="r045", instance="r045:9104"}'
+        values: '1x12'
+      - series: 'up{job="tenant-exporters", tenant="r046", instance="r046:9104"}'
+        values: '1x12'
+      - series: 'up{job="tenant-exporters", tenant="r047", instance="r047:9104"}'
+        values: '1x12'
+      - series: 'up{job="tenant-exporters", tenant="r048", instance="r048:9104"}'
+        values: '1x12'
+      - series: 'up{job="tenant-exporters", tenant="r049", instance="r049:9104"}'
+        values: '1x12'
+      - series: 'up{job="tenant-exporters", tenant="r050", instance="r050:9104"}'
+        values: '1x12'
+      - series: 'up{job="tenant-exporters", tenant="r051", instance="r051:9104"}'
+        values: '1x12'
+      - series: 'up{job="tenant-exporters", tenant="r052", instance="r052:9104"}'
+        values: '1x12'
+      - series: 'up{job="tenant-exporters", tenant="r053", instance="r053:9104"}'
+        values: '1x12'
+      - series: 'up{job="tenant-exporters", tenant="r054", instance="r054:9104"}'
+        values: '1x12'
+      - series: 'up{job="tenant-exporters", tenant="r055", instance="r055:9104"}'
+        values: '1x12'
+      - series: 'up{job="tenant-exporters", tenant="r056", instance="r056:9104"}'
+        values: '1x12'
+      - series: 'up{job="tenant-exporters", tenant="r057", instance="r057:9104"}'
+        values: '1x12'
+      - series: 'up{job="tenant-exporters", tenant="r058", instance="r058:9104"}'
+        values: '1x12'
+      - series: 'up{job="tenant-exporters", tenant="r059", instance="r059:9104"}'
+        values: '1x12'
+      - series: 'up{job="tenant-exporters", tenant="r060", instance="r060:9104"}'
+        values: '1x12'
+      - series: 'up{job="tenant-exporters", tenant="r061", instance="r061:9104"}'
+        values: '1x12'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: MassExporterOutage
+        exp_alerts: []
+
+  - interval: 30s
+    name: mass-collector-dead-silent-jobabsent-fires
+    input_series:
+      # No tenant_expected_exporter (the threshold-exporter that emits it is gone)
+      # and no up{job="tenant-exporters"}. MassExporterOutage's numerator AND
+      # denominator are empty -> it emits nothing (no 0/0 false fire). The unrelated
+      # up{job="prometheus"} filler does not match the tenant-exporters job, so
+      # TenantExporterJobAbsent (absent(up{job="tenant-exporters"})) still fires --
+      # the catastrophe signal, proving the ratio sentinel is not the sole dependency.
+      - series: 'up{job="prometheus", instance="localhost:9090"}'
+        values: '1x12'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: MassExporterOutage
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: TenantExporterJobAbsent
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: tenant-exporters
+            exp_annotations:
+              summary: "Entire tenant-exporters scrape job is absent — per-tenant liveness is BLIND"
