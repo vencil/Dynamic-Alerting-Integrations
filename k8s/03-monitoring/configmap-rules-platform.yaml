@@ -340,10 +340,17 @@ data:
           # the exporter-pod attribution and on-call would not know
           # which replica to inspect. `without (tenant)` collapses only
           # the tenant fan-out and preserves topology labels.
-          # threshold-exporter is single-replica by design (helm
-          # replicaCount=1), so the count groups into one series per
-          # exporter pod; > 50 means a single pod is seeing >50 tenants
-          # over the cap at once — defaults-chain disaster class.
+          # Under the HA default (helm replicaCount=2, no leader-election;
+          # only environments/local + environments/ci override to 1) BOTH
+          # threshold-exporter pods emit da_tenant_metrics_over_limit, so
+          # `count without (tenant)` yields ONE count series PER pod (instance /
+          # pod retained) and `> 50` is evaluated per-pod. Both pods load the same
+          # conf.d, so each independently sees the same >50-tenant storm and fires —
+          # i.e. this pages once per replica (the same HA per-pod-duplicate-series
+          # nuance as MassExporterOutage, #882). Acceptable for a critical
+          # defaults-chain sentinel: > 50 means a pod is seeing >50 tenants over the
+          # cap at once, and the per-pod payload keeps the exporter-pod attribution
+          # on-call needs.
           - alert: DefaultsTruncationStorm
             expr: count without (tenant) (da_tenant_metrics_over_limit > 0) > 50
             for: 2m
