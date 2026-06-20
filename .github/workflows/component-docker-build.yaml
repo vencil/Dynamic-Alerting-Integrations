@@ -30,6 +30,13 @@ on:
       - "components/tenant-api/**"
       - "components/da-portal/**"
       - "components/da-tools/app/**"
+      - "components/recipe-preview/**"
+      - "scripts/tools/dx/_recipe_preview.py"          # recipe-preview Dockerfile COPY source (bundled eval core)
+      - "scripts/tools/dx/compile_custom_alerts.py"    # recipe-preview COPY source (bundled compiler)
+      - "scripts/tools/dx/custom_alerts/**"            # recipe-preview COPY source
+      - "scripts/tools/lint/check_rulepack_sync.py"    # recipe-preview COPY source
+      - "scripts/tools/_lib_exitcodes.py"              # recipe-preview COPY source
+      - "scripts/tools/_lib_compat.py"                 # recipe-preview COPY source
       - "docs/interactive/**"        # da-portal Dockerfile COPY source
       - "tools/portal/src/**"        # da-portal COPY source (post TD-042 restructure)
       - "docs/assets/**"             # da-portal COPY source
@@ -50,16 +57,16 @@ jobs:
     strategy:
       fail-fast: false  # build all components so one break doesn't mask another
       matrix:
-        # All 4 production Dockerfiles. 3 are self-contained (build from source in
-        # Docker / COPY in-repo assets): threshold-exporter, da-portal, tenant-api —
-        # exactly where source-COPY paths drift (#472 da-portal moved file, #473
-        # exporter pkg/ COPY). da-tools COPYs pre-built Go binaries + a build.sh-
+        # All 5 production Dockerfiles. 4 are self-contained (build from source in
+        # Docker / COPY in-repo assets): threshold-exporter, da-portal, tenant-api,
+        # recipe-preview — exactly where source-COPY paths drift (#472 da-portal
+        # moved file, #473 exporter pkg/ COPY; recipe-preview COPYs the bundled
+        # scripts/tools eval core). da-tools COPYs pre-built Go binaries + a build.sh-
         # assembled tools/ dir; we STUB those (empty tools/ + touch'd binaries, see
         # the stub step) so `docker build` validates the Dockerfile COPY *paths* +
         # syntax — the #472/#473 class — WITHOUT the Go cross-compile (that stays in
         # release.yaml; binary functionality is covered by Go CI). The stub proves
-        # COPY targets resolve, not that binaries run. All 4 verified building
-        # locally during #474 self-review (da-tools via the same stub).
+        # COPY targets resolve, not that binaries run.
         include:
           - name: threshold-exporter
             context: components/threshold-exporter/app
@@ -73,6 +80,9 @@ jobs:
           - name: tenant-api
             context: .
             dockerfile: components/tenant-api/Dockerfile
+          - name: recipe-preview
+            context: .
+            dockerfile: components/recipe-preview/Dockerfile
     steps:
       - uses: actions/checkout@v6
 
