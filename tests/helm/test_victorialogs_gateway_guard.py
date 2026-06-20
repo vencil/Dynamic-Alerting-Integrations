@@ -98,6 +98,24 @@ def _all_header_removals(node) -> list[str]:
     return out
 
 
+def _collect(node, key) -> list:
+    """Collect every value stored under dict key `key`, anywhere in the tree.
+
+    Operates on the PARSED config, so comments mentioning the key by name do
+    not count — only an actual matcher/field does.
+    """
+    out: list = []
+    if isinstance(node, dict):
+        for k, v in node.items():
+            if k == key:
+                out.append(v)
+            out += _collect(v, key)
+    elif isinstance(node, list):
+        for v in node:
+            out += _collect(v, key)
+    return out
+
+
 @_needs_helm
 def test_victorialogs_renders_and_pins_invariants(repo_root: Path):
     res = _render(repo_root, {"mode": "victorialogs", "jwt.audience": "tenant-federation-logs"})
@@ -108,6 +126,21 @@ def test_victorialogs_renders_and_pins_invariants(repo_root: Path):
     assert "AccountID" not in removals and "ProjectID" not in removals, (
         "AccountID/ProjectID must not be stripped (router-after-Lua would drop the "
         f"injected value -> partition 0 breach); request_headers_to_remove = {removals}"
+    )
+    # CodeRabbit #889: the allowlist must use EXACT-anchored safe_regex, not a
+    # path-separated prefix — `path_separated_prefix: /select/logsql/query` also
+    # matches `/select/logsql/query/foo`, letting an unknown sub-path slip the
+    # allowlist (default-deny regression). Check the PARSED config (the raw text
+    # mentions the term in comments): victorialogs carries NO path_separated_prefix
+    # MATCHER (the /api/v1/read deny route is prom-label-proxy only), and each
+    # allowed endpoint is an anchored `^…/?$` regex.
+    assert not _collect(cfg, "path_separated_prefix"), (
+        "victorialogs allowlist must use exact-anchored safe_regex, not a "
+        "subpath-permitting path_separated_prefix matcher"
+    )
+    regexes = [v.get("regex") for v in _collect(cfg, "safe_regex") if isinstance(v, dict)]
+    assert any(r and r.endswith("/?$") for r in regexes), (
+        f"allowlist endpoints must render as exact-anchored ^…/?$ regex; got {regexes}"
     )
 
 

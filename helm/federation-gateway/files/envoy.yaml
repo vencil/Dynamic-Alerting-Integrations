@@ -177,19 +177,26 @@ static_resources:
                         # /query streaming and /tail — /tail is denied, /query
                         # is bounded by -search.maxQueryTimeRange at Layer 1.)
                         #
-                        # path_separated_prefix (not exact `path:`): an exact
-                        # match is bypassed by a trailing slash, so each entry
-                        # matches the endpoint and its sub-paths only at
-                        # path-segment boundaries (so `/select/logsql/query`
-                        # does NOT over-match a sibling like
-                        # `/select/logsql/query_other`). Combined with
+                        # EXACT-path safe_regex (`^<endpoint>/?$`), NOT
+                        # path_separated_prefix: a path-separated prefix matches
+                        # the endpoint AND every sub-path under it
+                        # (`/select/logsql/query/anything`), which would let an
+                        # unknown sub-path slip through the allowlist and breaks
+                        # the default-deny claim (CodeRabbit, #889). The anchored
+                        # regex matches ONLY the exact endpoint plus an optional
+                        # trailing slash — so `/select/logsql/query` is allowed
+                        # while BOTH `/select/logsql/query/foo` (sub-path) and the
+                        # sibling `/select/logsql/query_other` fall through to the
+                        # catch-all 403. Envoy strips the query string before
+                        # matching (so a real `?query=...` is unaffected), and
                         # merge_slashes / normalize_path /
-                        # path_with_escaped_slashes_action above, no
-                        # non-canonical variant (`//`, `%2F`) slips past the
-                        # allowlist into the catch-all.
+                        # path_with_escaped_slashes_action above canonicalise the
+                        # path first, so no `//` / `%2F` variant bypasses it.
+                        # regexQuoteMeta escapes any regex metachar in the path.
                         {{- range .Values.victorialogs.allowedEndpoints }}
                         - match:
-                            path_separated_prefix: {{ . | quote }}
+                            safe_regex:
+                              regex: {{ printf "^%s/?$" (regexQuoteMeta .) | quote }}
                             # Defense-in-depth: only READ methods reach the log
                             # store. VictoriaLogs shares ingest / query / DELETE
                             # on one unauthenticated port and scopes the
@@ -207,7 +214,7 @@ static_resources:
                               - name: ":method"
                                 string_match:
                                   safe_regex:
-                                    regex: "GET|POST"
+                                    regex: "^(GET|POST)$"
                           route:
                             cluster: federation_upstream
                             timeout: 30s
