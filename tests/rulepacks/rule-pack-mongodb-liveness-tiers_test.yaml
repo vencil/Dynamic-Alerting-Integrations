@@ -57,7 +57,7 @@ tests:
             exp_annotations:
               summary: "MongoDB member db-a-0:9216 is down (tenant db-a)"
               summary_zh: "MongoDB 成員 db-a-0:9216 停機（租戶 db-a）"
-              description: "mongodb_up=0 on db-a-0:9216. One member of an HA replica set being down keeps the set available (warning). Total outage escalates to MongoDBClusterDown (critical); loss of PRIMARY to MongoDBNoPrimary (critical)."
+              description: "mongodb_up=0 on db-a-0:9216 — one member of an HA replica set being down keeps the set available (warning). Total outage escalates to MongoDBClusterDown (critical); loss of PRIMARY to MongoDBNoPrimary (critical)."
               description_zh: "db-a-0:9216 的 mongodb_up=0。HA replica set 的單一成員停機時叢集仍可用（warning）。整體中斷會升級為 MongoDBClusterDown（critical）；失去 PRIMARY 則為 MongoDBNoPrimary（critical）。"
       - eval_time: 2m
         alertname: MongoDBClusterDown
@@ -222,5 +222,5 @@ tests:
             exp_annotations:
               summary: "MongoDB member db-b-0:9216 is down (tenant db-b)"
               summary_zh: "MongoDB 成員 db-b-0:9216 停機（租戶 db-b）"
-              description: "mongodb_up=0 on db-b-0:9216. One member of an HA replica set being down keeps the set available (warning). Total outage escalates to MongoDBClusterDown (critical); loss of PRIMARY to MongoDBNoPrimary (critical)."
+              description: "mongodb_up=0 on db-b-0:9216 — one member of an HA replica set being down keeps the set available (warning). Total outage escalates to MongoDBClusterDown (critical); loss of PRIMARY to MongoDBNoPrimary (critical)."
               description_zh: "db-b-0:9216 的 mongodb_up=0。HA replica set 的單一成員停機時叢集仍可用（warning）。整體中斷會升級為 MongoDBClusterDown（critical）；失去 PRIMARY 則為 MongoDBNoPrimary（critical）。"

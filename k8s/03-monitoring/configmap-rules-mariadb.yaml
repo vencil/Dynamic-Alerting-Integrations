@@ -40,7 +40,7 @@ data:
     \      metric_group: liveness\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
     \      summary: MariaDB instance {{ $labels.instance }} is down (tenant {{ $labels.tenant\
     \ }})\n      summary_zh: MariaDB 實例 {{ $labels.instance }} 停機（租戶 {{ $labels.tenant\
-    \ }}）\n      description: mysql_up=0 on {{ $labels.instance }}. One replica down\
+    \ }}）\n      description: mysql_up=0 on {{ $labels.instance }} — one replica down\
     \ in a primary-replica set keeps the service available (warning). Total outage\
     \ escalates to MariaDBClusterDown (critical); loss of the writable primary to\
     \ MariaDBNoPrimary (critical).\n      description_zh: '{{ $labels.instance }}\

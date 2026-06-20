@@ -48,7 +48,7 @@ tests:
             exp_annotations:
               summary: "MariaDB instance db-a-0:9104 is down (tenant db-a)"
               summary_zh: "MariaDB 實例 db-a-0:9104 停機（租戶 db-a）"
-              description: "mysql_up=0 on db-a-0:9104. One replica down in a primary-replica set keeps the service available (warning). Total outage escalates to MariaDBClusterDown (critical); loss of the writable primary to MariaDBNoPrimary (critical)."
+              description: "mysql_up=0 on db-a-0:9104 — one replica down in a primary-replica set keeps the service available (warning). Total outage escalates to MariaDBClusterDown (critical); loss of the writable primary to MariaDBNoPrimary (critical)."
               description_zh: "db-a-0:9104 的 mysql_up=0。primary-replica 架構下單一 replica 停機時服務仍可用（warning）。整體中斷會升級為 MariaDBClusterDown（critical）；失去可寫 primary 則為 MariaDBNoPrimary（critical）。"
       - eval_time: 2m
         alertname: MariaDBClusterDown
@@ -204,5 +204,5 @@ tests:
             exp_annotations:
               summary: "MariaDB instance db-b-0:9104 is down (tenant db-b)"
               summary_zh: "MariaDB 實例 db-b-0:9104 停機（租戶 db-b）"
-              description: "mysql_up=0 on db-b-0:9104. One replica down in a primary-replica set keeps the service available (warning). Total outage escalates to MariaDBClusterDown (critical); loss of the writable primary to MariaDBNoPrimary (critical)."
+              description: "mysql_up=0 on db-b-0:9104 — one replica down in a primary-replica set keeps the service available (warning). Total outage escalates to MariaDBClusterDown (critical); loss of the writable primary to MariaDBNoPrimary (critical)."
               description_zh: "db-b-0:9104 的 mysql_up=0。primary-replica 架構下單一 replica 停機時服務仍可用（warning）。整體中斷會升級為 MariaDBClusterDown（critical）；失去可寫 primary 則為 MariaDBNoPrimary（critical）。"

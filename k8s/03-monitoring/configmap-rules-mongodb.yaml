@@ -39,8 +39,8 @@ data:
     \      metric_group: liveness\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
     \      summary: MongoDB member {{ $labels.instance }} is down (tenant {{ $labels.tenant\
     \ }})\n      summary_zh: MongoDB 成員 {{ $labels.instance }} 停機（租戶 {{ $labels.tenant\
-    \ }}）\n      description: mongodb_up=0 on {{ $labels.instance }}. One member of\
-    \ an HA replica set being down keeps the set available (warning). Total outage\
+    \ }}）\n      description: mongodb_up=0 on {{ $labels.instance }} — one member\
+    \ of an HA replica set being down keeps the set available (warning). Total outage\
     \ escalates to MongoDBClusterDown (critical); loss of PRIMARY to MongoDBNoPrimary\
     \ (critical).\n      description_zh: '{{ $labels.instance }} 的 mongodb_up=0。HA\
     \ replica set 的單一成員停機時叢集仍可用（warning）。整體中斷會升級為 MongoDBClusterDown（critical）；失去\

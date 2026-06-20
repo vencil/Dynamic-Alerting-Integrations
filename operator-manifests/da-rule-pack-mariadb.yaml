@@ -65,9 +65,10 @@ spec:
         summary: MariaDB instance {{ $labels.instance }} is down (tenant {{ $labels.tenant
           }})
         summary_zh: MariaDB 實例 {{ $labels.instance }} 停機（租戶 {{ $labels.tenant }}）
-        description: mysql_up=0 on {{ $labels.instance }}. One replica down in a primary-replica
-          set keeps the service available (warning). Total outage escalates to MariaDBClusterDown
-          (critical); loss of the writable primary to MariaDBNoPrimary (critical).
+        description: mysql_up=0 on {{ $labels.instance }} — one replica down in a
+          primary-replica set keeps the service available (warning). Total outage
+          escalates to MariaDBClusterDown (critical); loss of the writable primary
+          to MariaDBNoPrimary (critical).
         description_zh: '{{ $labels.instance }} 的 mysql_up=0。primary-replica 架構下單一
           replica 停機時服務仍可用（warning）。整體中斷會升級為 MariaDBClusterDown（critical）；失去可寫 primary
           則為 MariaDBNoPrimary（critical）。'
