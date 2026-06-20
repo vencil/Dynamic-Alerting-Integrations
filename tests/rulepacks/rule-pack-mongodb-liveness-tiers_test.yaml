@@ -1,0 +1,226 @@
+# promtool unit test — MongoDB HA-aware liveness tiers (#875 / ADR-026).
+# Semantic oracle for the instance / cluster / quorum tiering in
+# rule-pack-mongodb.yaml:
+#   MongoDBDown        instance  warning   mongodb_up==0          (opt-out-able)
+#   MongoDBClusterDown cluster   critical  max by(tenant)(up)==0  (total outage)
+#   MongoDBNoPrimary   quorum    critical  members reachable, no PRIMARY (member_state==1)
+#
+# The behaviours #875 acceptance requires:
+#   S1 HA one member down, sibling up + PRIMARY present
+#        → MongoDBDown warning ONLY (no ClusterDown, no NoPrimary)   [failover ≠ page]
+#   S2 S1 + tenant in maintenance
+#        → MongoDBDown SUPPRESSED (instance tier is opt-out-able)
+#   S3 HA all members down (member_state absent — exporters can't query replset)
+#        → MongoDBClusterDown critical                               [total outage]
+#   S4 quorum loss: 1 secondary up, NO PRIMARY among reachable members
+#        → MongoDBNoPrimary critical; ClusterDown does NOT fire (max(up)=1)
+#          [the case max(up)==0 structurally MISSES — the core HA-correctness win]
+#   S5 all healthy with a PRIMARY → nothing fires
+#   S6 brief election (no PRIMARY < for:2m) then PRIMARY returns → NoPrimary stays quiet [de-flap]
+#
+# HA is modelled as multiple mongodb_up series per tenant at distinct `instance`
+# (the #869 convention, rule-pack-liveness_test.yaml S5a/S5b). member_state carries
+# a synthetic `member` label; the rules count by(tenant) so it aggregates away.
+# member_state values follow the MongoDB replica-state enum (1=PRIMARY, 2=SECONDARY,
+# 8=(Down)). promtool inputs are synthetic — the lab reference mongo is standalone
+# (replicas:1), so the replset shape is encoded here, not scraped (same as #869).
+# Run: promtool test rules tests/rulepacks/rule-pack-mongodb-liveness-tiers_test.yaml
+rule_files:
+  - ../../rule-packs/rule-pack-mongodb.yaml
+
+evaluation_interval: 30s
+
+tests:
+  # ── S1 — HA one member down, sibling up + PRIMARY present → warning ONLY ──
+  - interval: 30s
+    name: S1-ha-one-member-down-warning-only
+    input_series:
+      - series: 'mongodb_up{job="tenant-exporters", tenant="db-a", instance="db-a-0:9216"}'
+        values: '1 1 0 0 0 0 0 0 0'
+      - series: 'mongodb_up{job="tenant-exporters", tenant="db-a", instance="db-a-1:9216"}'
+        values: '1x8'
+      # PRIMARY still present (db-a-1) → no quorum loss
+      - series: 'mongodb_mongod_replset_member_state{job="tenant-exporters", tenant="db-a", member="db-a-1"}'
+        values: '1x8'
+      - series: 'mongodb_mongod_replset_member_state{job="tenant-exporters", tenant="db-a", member="db-a-0"}'
+        values: '2 2 8 8 8 8 8 8 8'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: MongoDBDown
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              metric_group: liveness
+              tenant: db-a
+              job: tenant-exporters
+              instance: db-a-0:9216
+            exp_annotations:
+              summary: "MongoDB member db-a-0:9216 is down (tenant db-a)"
+              summary_zh: "MongoDB 成員 db-a-0:9216 停機（租戶 db-a）"
+              description: "mongodb_up=0 on db-a-0:9216 — one member of an HA replica set being down keeps the set available (warning). Total outage escalates to MongoDBClusterDown (critical); loss of PRIMARY to MongoDBNoPrimary (critical)."
+              description_zh: "db-a-0:9216 的 mongodb_up=0。HA replica set 的單一成員停機時叢集仍可用（warning）。整體中斷會升級為 MongoDBClusterDown（critical）；失去 PRIMARY 則為 MongoDBNoPrimary（critical）。"
+      - eval_time: 2m
+        alertname: MongoDBClusterDown
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: MongoDBNoPrimary
+        exp_alerts: []
+
+  # ── S2 — S1 + maintenance → instance warning SUPPRESSED (opt-out-able) ──
+  - interval: 30s
+    name: S2-maintenance-suppresses-instance-warning
+    input_series:
+      - series: 'mongodb_up{job="tenant-exporters", tenant="db-a", instance="db-a-0:9216"}'
+        values: '1 1 0 0 0 0 0 0 0'
+      - series: 'mongodb_up{job="tenant-exporters", tenant="db-a", instance="db-a-1:9216"}'
+        values: '1x8'
+      - series: 'user_state_filter{tenant="db-a", filter="maintenance"}'
+        values: '1x8'
+      - series: 'mongodb_mongod_replset_member_state{job="tenant-exporters", tenant="db-a", member="db-a-1"}'
+        values: '1x8'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: MongoDBDown
+        exp_alerts: []
+
+  # ── S3 — HA all members down → MongoDBClusterDown critical ──
+  #    member_state absent (no reachable member can answer replSetGetStatus) →
+  #    NoPrimary correctly does NOT fire; ClusterDown (max(up)==0) is the net.
+  - interval: 30s
+    name: S3-all-members-down-clusterdown-critical
+    input_series:
+      - series: 'mongodb_up{job="tenant-exporters", tenant="db-a", instance="db-a-0:9216"}'
+        values: '1 0 0 0 0 0 0 0 0'
+      - series: 'mongodb_up{job="tenant-exporters", tenant="db-a", instance="db-a-1:9216"}'
+        values: '1 0 0 0 0 0 0 0 0'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: MongoDBClusterDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              metric_group: liveness
+              tenant: db-a
+            exp_annotations:
+              summary: "MongoDB: ALL instances down for tenant db-a"
+              summary_zh: "MongoDB：租戶 db-a 的所有實例皆停機"
+              description: "No mongod reports up=1 for tenant db-a — total service outage, not a single-member failover. For a planned single-instance drain, silence via the Alertmanager Silence API (no maintenance-window opt-out by design; a tenant's silent-critical sentinel still suppresses it)."
+              description_zh: "租戶 db-a 沒有任何 mongod 回報 up=1 — 整體服務中斷，非單一成員 failover。若為計畫性單實例維護，請用 Alertmanager Silence API 靜音（刻意不提供維護窗 opt-out；租戶的 silent-critical sentinel 仍會壓制此告警）。"
+      - eval_time: 3m
+        alertname: MongoDBNoPrimary
+        exp_alerts: []
+
+  # ── S4 — quorum loss: secondary up, NO PRIMARY → MongoDBNoPrimary critical ──
+  #    3 nodes, 2 down (one secondary survives): max(mongodb_up)=1 so ClusterDown
+  #    stays silent — NoPrimary is the ONLY signal. This is the gap #875 exists for.
+  - interval: 30s
+    name: S4-quorum-loss-noprimary-critical
+    input_series:
+      - series: 'mongodb_up{job="tenant-exporters", tenant="db-a", instance="db-a-1:9216"}'
+        values: '1x8'
+      - series: 'mongodb_up{job="tenant-exporters", tenant="db-a", instance="db-a-0:9216"}'
+        values: '1 0 0 0 0 0 0 0 0'
+      - series: 'mongodb_up{job="tenant-exporters", tenant="db-a", instance="db-a-2:9216"}'
+        values: '1 0 0 0 0 0 0 0 0'
+      # member_state from the surviving secondary's view: a PRIMARY at t=0, then
+      # none from t=30s onward (quorum lost → no election possible).
+      - series: 'mongodb_mongod_replset_member_state{job="tenant-exporters", tenant="db-a", member="db-a-1"}'
+        values: '1 2 2 2 2 2 2 2 2'
+      - series: 'mongodb_mongod_replset_member_state{job="tenant-exporters", tenant="db-a", member="db-a-0"}'
+        values: '2 8 8 8 8 8 8 8 8'
+      - series: 'mongodb_mongod_replset_member_state{job="tenant-exporters", tenant="db-a", member="db-a-2"}'
+        values: '2 8 8 8 8 8 8 8 8'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: MongoDBNoPrimary
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              metric_group: liveness
+              tenant: db-a
+            exp_annotations:
+              summary: "MongoDB: no PRIMARY in replica set for tenant db-a"
+              summary_zh: "MongoDB：租戶 db-a 的 replica set 沒有 PRIMARY"
+              description: "Replica-set members are reachable but none is PRIMARY for tenant db-a — elections failing / quorum lost → writes rejected. Unlike MongoDBClusterDown this fires while secondaries are still up."
+              description_zh: "租戶 db-a 的 replica set 成員可連線但沒有 PRIMARY — 選舉失敗／失去 quorum → 寫入被拒。與 MongoDBClusterDown 不同，此告警在 secondary 仍存活時就會觸發。"
+      - eval_time: 3m
+        alertname: MongoDBClusterDown
+        exp_alerts: []
+
+  # ── S5 — all healthy with a PRIMARY → nothing fires ──
+  - interval: 30s
+    name: S5-all-healthy-no-fire
+    input_series:
+      - series: 'mongodb_up{job="tenant-exporters", tenant="db-a", instance="db-a-0:9216"}'
+        values: '1x8'
+      - series: 'mongodb_up{job="tenant-exporters", tenant="db-a", instance="db-a-1:9216"}'
+        values: '1x8'
+      - series: 'mongodb_mongod_replset_member_state{job="tenant-exporters", tenant="db-a", member="db-a-0"}'
+        values: '1x8'
+      - series: 'mongodb_mongod_replset_member_state{job="tenant-exporters", tenant="db-a", member="db-a-1"}'
+        values: '2x8'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: MongoDBDown
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: MongoDBClusterDown
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: MongoDBNoPrimary
+        exp_alerts: []
+
+  # ── S6 — brief election (no PRIMARY < for:2m) then PRIMARY returns → de-flap ──
+  #    No member_state==1 for ~60s (t=30s..90s), recovers at t=120s. for:2m never
+  #    elapses → NoPrimary stays quiet (proves normal failover does not page).
+  - interval: 30s
+    name: S6-brief-election-absorbed
+    input_series:
+      - series: 'mongodb_up{job="tenant-exporters", tenant="db-a", instance="db-a-0:9216"}'
+        values: '1x8'
+      - series: 'mongodb_up{job="tenant-exporters", tenant="db-a", instance="db-a-1:9216"}'
+        values: '1x8'
+      # db-a-0 is PRIMARY, loses it during a brief election (t=30..90s), regains at t=120s.
+      - series: 'mongodb_mongod_replset_member_state{job="tenant-exporters", tenant="db-a", member="db-a-0"}'
+        values: '1 2 2 1 1 1 1 1 1'
+      - series: 'mongodb_mongod_replset_member_state{job="tenant-exporters", tenant="db-a", member="db-a-1"}'
+        values: '2x8'
+    alert_rule_test:
+      # mid-window (t=60s; no-primary since t=30s, 30s elapsed << for:2m): MUST be
+      # pending-not-firing — THIS is the assertion that exercises the for: debounce
+      # (a for:0s regression fires here; the 4m-only check below would false-green).
+      # (#875 adversarial review finding)
+      - eval_time: 60s
+        alertname: MongoDBNoPrimary
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: MongoDBNoPrimary
+        exp_alerts: []
+
+  # ── S7 — cross-tenant isolation: db-a in maintenance must NOT suppress db-b ──
+  #    Proves `unless on(tenant)` scopes per-tenant: db-a's maintenance silences
+  #    only db-a's Down; db-b (down, no maintenance) still fires. (#875 review gap)
+  - interval: 30s
+    name: S7-cross-tenant-maintenance-isolation
+    input_series:
+      - series: 'mongodb_up{job="tenant-exporters", tenant="db-a", instance="db-a-0:9216"}'
+        values: '0x8'
+      - series: 'user_state_filter{tenant="db-a", filter="maintenance"}'
+        values: '1x8'
+      - series: 'mongodb_up{job="tenant-exporters", tenant="db-b", instance="db-b-0:9216"}'
+        values: '0x8'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: MongoDBDown
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              metric_group: liveness
+              tenant: db-b
+              job: tenant-exporters
+              instance: db-b-0:9216
+            exp_annotations:
+              summary: "MongoDB member db-b-0:9216 is down (tenant db-b)"
+              summary_zh: "MongoDB 成員 db-b-0:9216 停機（租戶 db-b）"
+              description: "mongodb_up=0 on db-b-0:9216 — one member of an HA replica set being down keeps the set available (warning). Total outage escalates to MongoDBClusterDown (critical); loss of PRIMARY to MongoDBNoPrimary (critical)."
+              description_zh: "db-b-0:9216 的 mongodb_up=0。HA replica set 的單一成員停機時叢集仍可用（warning）。整體中斷會升級為 MongoDBClusterDown（critical）；失去 PRIMARY 則為 MongoDBNoPrimary（critical）。"

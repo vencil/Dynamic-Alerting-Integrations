@@ -1,0 +1,208 @@
+# promtool unit test — MariaDB HA-aware liveness tiers (#875 / ADR-026).
+# Customer topology: primary-replica SEMI-SYNC (no Galera/wsrep quorum), so the
+# cluster-survival signal is primary-EXISTENCE, not quorum.
+#   MariaDBDown        instance  warning   mysql_up==0                 (opt-out-able)
+#   MariaDBClusterDown cluster   critical  max by(tenant)(mysql_up)==0 (total outage)
+#   MariaDBNoPrimary   primary   critical  no writable primary (no read_only==0)
+#
+# read_only==0 marks the writable primary (replicas are read_only==1). "No instance
+# with read_only==0" = no writable primary = failover stuck / primary lost = writes
+# rejected — the case max(up)==0 MISSES (primary down, replicas up → max=1).
+#
+#   S1 HA one replica down, primary writable     → MariaDBDown warning ONLY
+#   S2 S1 + maintenance                          → MariaDBDown SUPPRESSED
+#   S3 all instances down (read_only absent)     → MariaDBClusterDown critical
+#   S4 primary lost, replicas up, none read_only==0 → MariaDBNoPrimary critical, ClusterDown silent
+#   S5 healthy (one read_only==0)                → nothing fires
+#   S6 brief promotion window (<for:2m) then primary back → NoPrimary stays quiet
+# Run: promtool test rules tests/rulepacks/rule-pack-mariadb-liveness-tiers_test.yaml
+rule_files:
+  - ../../rule-packs/rule-pack-mariadb.yaml
+
+evaluation_interval: 30s
+
+tests:
+  # ── S1 — HA one replica down, primary writable → warning ONLY ──
+  - interval: 30s
+    name: S1-ha-one-replica-down-warning-only
+    input_series:
+      - series: 'mysql_up{job="tenant-exporters", tenant="db-a", instance="db-a-0:9104"}'
+        values: '1 1 0 0 0 0 0 0 0'
+      - series: 'mysql_up{job="tenant-exporters", tenant="db-a", instance="db-a-1:9104"}'
+        values: '1x8'
+      # db-a-1 is the writable primary (read_only=0); db-a-0 is a replica.
+      - series: 'mysql_global_variables_read_only{job="tenant-exporters", tenant="db-a", instance="db-a-1:9104"}'
+        values: '0x8'
+      - series: 'mysql_global_variables_read_only{job="tenant-exporters", tenant="db-a", instance="db-a-0:9104"}'
+        values: '1x8'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: MariaDBDown
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              metric_group: liveness
+              tenant: db-a
+              job: tenant-exporters
+              instance: db-a-0:9104
+            exp_annotations:
+              summary: "MariaDB instance db-a-0:9104 is down (tenant db-a)"
+              summary_zh: "MariaDB 實例 db-a-0:9104 停機（租戶 db-a）"
+              description: "mysql_up=0 on db-a-0:9104 — one replica down in a primary-replica set keeps the service available (warning). Total outage escalates to MariaDBClusterDown (critical); loss of the writable primary to MariaDBNoPrimary (critical)."
+              description_zh: "db-a-0:9104 的 mysql_up=0。primary-replica 架構下單一 replica 停機時服務仍可用（warning）。整體中斷會升級為 MariaDBClusterDown（critical）；失去可寫 primary 則為 MariaDBNoPrimary（critical）。"
+      - eval_time: 2m
+        alertname: MariaDBClusterDown
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: MariaDBNoPrimary
+        exp_alerts: []
+
+  # ── S2 — S1 + maintenance → instance warning SUPPRESSED ──
+  - interval: 30s
+    name: S2-maintenance-suppresses-instance-warning
+    input_series:
+      - series: 'mysql_up{job="tenant-exporters", tenant="db-a", instance="db-a-0:9104"}'
+        values: '1 1 0 0 0 0 0 0 0'
+      - series: 'mysql_up{job="tenant-exporters", tenant="db-a", instance="db-a-1:9104"}'
+        values: '1x8'
+      - series: 'user_state_filter{tenant="db-a", filter="maintenance"}'
+        values: '1x8'
+      - series: 'mysql_global_variables_read_only{job="tenant-exporters", tenant="db-a", instance="db-a-1:9104"}'
+        values: '0x8'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: MariaDBDown
+        exp_alerts: []
+
+  # ── S3 — all instances down → MariaDBClusterDown critical ──
+  - interval: 30s
+    name: S3-all-instances-down-clusterdown-critical
+    input_series:
+      - series: 'mysql_up{job="tenant-exporters", tenant="db-a", instance="db-a-0:9104"}'
+        values: '1 0 0 0 0 0 0 0 0'
+      - series: 'mysql_up{job="tenant-exporters", tenant="db-a", instance="db-a-1:9104"}'
+        values: '1 0 0 0 0 0 0 0 0'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: MariaDBClusterDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              metric_group: liveness
+              tenant: db-a
+            exp_annotations:
+              summary: "MariaDB: ALL instances down for tenant db-a"
+              summary_zh: "MariaDB：租戶 db-a 的所有實例皆停機"
+              description: "No mysqld reports up=1 for tenant db-a — total service outage, not a single-replica failover. For a planned single-instance drain, silence via the Alertmanager Silence API (no maintenance-window opt-out by design; a tenant's silent-critical sentinel still suppresses it)."
+              description_zh: "租戶 db-a 沒有任何 mysqld 回報 up=1 — 整體服務中斷，非單一 replica failover。若為計畫性單實例維護，請用 Alertmanager Silence API 靜音（刻意不提供維護窗 opt-out；租戶的 silent-critical sentinel 仍會壓制此告警）。"
+      - eval_time: 3m
+        alertname: MariaDBNoPrimary
+        exp_alerts: []
+
+  # ── S4 — primary lost, replicas up, none read_only==0 → MariaDBNoPrimary critical ──
+  #    max(mysql_up)=1 (replicas up) so ClusterDown stays silent — NoPrimary is the
+  #    only signal. The case max(up)==0 structurally misses.
+  - interval: 30s
+    name: S4-no-writable-primary-noprimary-critical
+    input_series:
+      - series: 'mysql_up{job="tenant-exporters", tenant="db-a", instance="db-a-1:9104"}'
+        values: '1x8'
+      - series: 'mysql_up{job="tenant-exporters", tenant="db-a", instance="db-a-2:9104"}'
+        values: '1x8'
+      # db-a-1 was the writable primary at t=0, demoted at t=30s; no node repromoted.
+      - series: 'mysql_global_variables_read_only{job="tenant-exporters", tenant="db-a", instance="db-a-1:9104"}'
+        values: '0 1 1 1 1 1 1 1 1'
+      - series: 'mysql_global_variables_read_only{job="tenant-exporters", tenant="db-a", instance="db-a-2:9104"}'
+        values: '1x8'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: MariaDBNoPrimary
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              metric_group: liveness
+              tenant: db-a
+            exp_annotations:
+              summary: "MariaDB: no writable primary for tenant db-a"
+              summary_zh: "MariaDB：租戶 db-a 沒有可寫 primary"
+              description: "All instances are read_only for tenant db-a — no writable primary (failover stuck / primary lost) → writes rejected. Unlike MariaDBClusterDown this fires while replicas are still up."
+              description_zh: "租戶 db-a 的所有實例皆為 read_only — 沒有可寫 primary（failover 卡住／primary 遺失）→ 寫入被拒。與 MariaDBClusterDown 不同，此告警在 replica 仍存活時就會觸發。"
+      - eval_time: 3m
+        alertname: MariaDBClusterDown
+        exp_alerts: []
+
+  # ── S5 — healthy (one writable primary) → nothing fires ──
+  - interval: 30s
+    name: S5-healthy-no-fire
+    input_series:
+      - series: 'mysql_up{job="tenant-exporters", tenant="db-a", instance="db-a-0:9104"}'
+        values: '1x8'
+      - series: 'mysql_up{job="tenant-exporters", tenant="db-a", instance="db-a-1:9104"}'
+        values: '1x8'
+      - series: 'mysql_global_variables_read_only{job="tenant-exporters", tenant="db-a", instance="db-a-0:9104"}'
+        values: '0x8'
+      - series: 'mysql_global_variables_read_only{job="tenant-exporters", tenant="db-a", instance="db-a-1:9104"}'
+        values: '1x8'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: MariaDBDown
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: MariaDBClusterDown
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: MariaDBNoPrimary
+        exp_alerts: []
+
+  # ── S6 — brief promotion window (<for:2m) then primary back → NoPrimary de-flap ──
+  - interval: 30s
+    name: S6-brief-promotion-window-absorbed
+    input_series:
+      - series: 'mysql_up{job="tenant-exporters", tenant="db-a", instance="db-a-0:9104"}'
+        values: '1x8'
+      - series: 'mysql_up{job="tenant-exporters", tenant="db-a", instance="db-a-1:9104"}'
+        values: '1x8'
+      # primary (db-a-0) briefly demoted t=30..90s, repromoted at t=120s (< for:2m).
+      - series: 'mysql_global_variables_read_only{job="tenant-exporters", tenant="db-a", instance="db-a-0:9104"}'
+        values: '0 1 1 0 0 0 0 0 0'
+      - series: 'mysql_global_variables_read_only{job="tenant-exporters", tenant="db-a", instance="db-a-1:9104"}'
+        values: '1x8'
+    alert_rule_test:
+      # mid-window (t=60s; no-primary since t=30s, 30s elapsed << for:2m): MUST be
+      # pending-not-firing — THIS is the assertion that exercises the for: debounce
+      # (a for:0s regression fires here; the 4m-only check below would false-green).
+      # (#875 adversarial review finding)
+      - eval_time: 60s
+        alertname: MariaDBNoPrimary
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: MariaDBNoPrimary
+        exp_alerts: []
+
+  # ── S7 — cross-tenant isolation: db-a in maintenance must NOT suppress db-b ──
+  #    Proves `unless on(tenant)` scopes per-tenant: db-a's maintenance silences
+  #    only db-a's Down; db-b (down, no maintenance) still fires. (#875 review gap)
+  - interval: 30s
+    name: S7-cross-tenant-maintenance-isolation
+    input_series:
+      - series: 'mysql_up{job="tenant-exporters", tenant="db-a", instance="db-a-0:9104"}'
+        values: '0x8'
+      - series: 'user_state_filter{tenant="db-a", filter="maintenance"}'
+        values: '1x8'
+      - series: 'mysql_up{job="tenant-exporters", tenant="db-b", instance="db-b-0:9104"}'
+        values: '0x8'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: MariaDBDown
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              metric_group: liveness
+              tenant: db-b
+              job: tenant-exporters
+              instance: db-b-0:9104
+            exp_annotations:
+              summary: "MariaDB instance db-b-0:9104 is down (tenant db-b)"
+              summary_zh: "MariaDB 實例 db-b-0:9104 停機（租戶 db-b）"
+              description: "mysql_up=0 on db-b-0:9104 — one replica down in a primary-replica set keeps the service available (warning). Total outage escalates to MariaDBClusterDown (critical); loss of the writable primary to MariaDBNoPrimary (critical)."
+              description_zh: "db-b-0:9104 的 mysql_up=0。primary-replica 架構下單一 replica 停機時服務仍可用（warning）。整體中斷會升級為 MariaDBClusterDown（critical）；失去可寫 primary 則為 MariaDBNoPrimary（critical）。"
