@@ -104,4 +104,48 @@ function envoy_on_request(handle)
       ":path",
       (path:gsub("^/api/v1/", "/select/" .. tenant_id .. "/prometheus/api/v1/")))
   end
+
+  if MODE == "victorialogs" then
+    -- ADR-021 tenant log query: VictoriaLogs isolates by the native
+    -- (AccountID, ProjectID) header pair. This Lua is the PRIMARY
+    -- fail-closed defence for the Null-Claim Trap.
+    --
+    -- Why fail-closed HERE and not at the route layer: VictoriaLogs
+    -- defaults a request with NO AccountID header to AccountID 0 — the
+    -- PLATFORM partition. So a token missing a valid account_id claim must
+    -- NEVER reach the upstream, or the tenant reads platform-operational
+    -- logs = cross-tenant breach. The Lua holds the already-verified claim
+    -- and can reject deterministically, with no dependence on route-cache
+    -- timing. jwt_authn has already enforced the `tenant-federation-logs`
+    -- audience (a metrics token 401s before this runs); this is the
+    -- in-depth check that the federation-logs claim is actually well-formed.
+    local account_id = payload.account_id
+    -- Fail-closed validation. Accept ONLY a whole number in the valid
+    -- VictoriaLogs AccountID range [1000, 2^32-1]:
+    --   * nil / empty / non-numeric          -> tonumber returns nil -> reject
+    --   * < 1000  (the 0–999 reserved band;     0 = platform partition) -> reject
+    --   * non-integer ("12.5")                -> floor mismatch         -> reject
+    --   * > 2^32-1 (AccountID is uint32; e.g. "9e9" parses but overflows) -> reject
+    -- tonumber tolerates a string OR a numeric JSON claim (jwt_authn may
+    -- surface either) and trims surrounding whitespace.
+    local n = account_id ~= nil and tonumber(account_id) or nil
+    if n == nil or n < 1000 or n > 4294967295 or n ~= math.floor(n) then
+      handle:respond(
+        {[":status"] = "403"},
+        "federation: missing or invalid account_id claim for log query")
+      return
+    end
+    -- Inject the verified tenant headers. replace() OVERWRITES any
+    -- client-supplied AccountID/ProjectID — the verified value always wins,
+    -- so spoofing is closed at injection (NO route/vhost
+    -- request_headers_to_remove for these two: that removal runs in the
+    -- router AFTER this Lua and would delete the value we just set).
+    --   AccountID — the verified numeric tenant partition (stringified).
+    --   ProjectID — pinned 0: ADR-021 capability (b), the platform's
+    --               operational log about this tenant. Phase 2 capability
+    --               (a) (the tenant's own application logs) will use 1;
+    --               this PR is (b)-only and hard-codes 0 by design.
+    handle:headers():replace("AccountID", string.format("%d", n))
+    handle:headers():replace("ProjectID", "0")
+  end
 end

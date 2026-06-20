@@ -47,7 +47,7 @@ static_resources:
                 # (ADR-020 §Blast radius Layer 3).
                 merge_slashes: true
                 normalize_path: true
-                {{- if eq .Values.mode "prom-label-proxy" }}
+                {{- if or (eq .Values.mode "prom-label-proxy") (eq .Values.mode "victorialogs") }}
                 # normalize_path percent-decodes only UNRESERVED octets per
                 # RFC 3986 §6.2.2.2 (%72 -> r, %2e -> .); a percent-encoded
                 # RESERVED slash (%2F) is deliberately left encoded — decoding
@@ -57,10 +57,14 @@ static_resources:
                 # is forwarded to a Layer 3 proxy that cannot tenant-scope
                 # remote_read. UNESCAPE_AND_FORWARD decodes %2F (and %5C)
                 # before routing, so the path is fully canonical and the
-                # /api/v1/read 403 guard cannot be bypassed. Scoped to
-                # prom-label-proxy mode: that is the only mode carrying the
-                # guard; vm-cluster does its own Lua path rewrite and is left
-                # untouched (hardens #542; ADR-020 §Blast radius Layer 3).
+                # path-segment route guards cannot be bypassed. Both
+                # prom-label-proxy (the /api/v1/read 403 guard) and
+                # victorialogs (the default-deny endpoint allowlist; ADR-021
+                # §Blast radius Layer 3 — `/select/logsql%2Fquery` must not
+                # slip past the allowlist into the catch-all) carry route-layer
+                # guards and need a fully canonical path. vm-cluster does its
+                # own Lua path rewrite and is left untouched (hardens #542;
+                # ADR-020 §Blast radius Layer 3).
                 path_with_escaped_slashes_action: UNESCAPE_AND_FORWARD
                 {{- end }}
                 # ── Audit log (ADR-020 §Audit log; IV-2f) ──────────────
@@ -85,6 +89,12 @@ static_resources:
                           ts: "%START_TIME%"
                           tenant_id: "%DYNAMIC_METADATA(envoy.filters.http.jwt_authn:fed_payload:tenant_id)%"
                           token_id: "%DYNAMIC_METADATA(envoy.filters.http.jwt_authn:fed_payload:token_id)%"
+                          # victorialogs mode (ADR-021): the verified numeric
+                          # tenant partition. Empty in prom-label-proxy /
+                          # vm-cluster modes (those tokens carry no account_id
+                          # claim) — present so the PR-4 mtail sidecar can
+                          # derive tenant_log_query_requests_total per-tenant.
+                          account_id: "%DYNAMIC_METADATA(envoy.filters.http.jwt_authn:fed_payload:account_id)%"
                           method: "%REQ(:METHOD)%"
                           # Truncated — a tenant can pack a multi-KB selector
                           # into a GET ?query=; an unbounded :path bloats
@@ -150,6 +160,86 @@ static_resources:
                             status: 403
                             body:
                               inline_string: "federation gateway: remote_read (/api/v1/read) is not supported for this tenant; use /api/v1/query or /api/v1/query_range\n"
+                        {{- end }}
+                        {{- if eq .Values.mode "victorialogs" }}
+                        # ── VictoriaLogs LogsQL read surface — DEFAULT-DENY ──
+                        # ADR-021 §Blast radius Layer 3: this is an explicit
+                        # ALLOWLIST, not a denylist. Each VictoriaLogs LogsQL
+                        # query / metadata endpoint is named below and routed
+                        # to the upstream; the catch-all 403 immediately after
+                        # rejects EVERYTHING else — including `/tail` (a live
+                        # long-lived connection that bypasses
+                        # -search.maxQueryDuration and squats a concurrency
+                        # slot) and any unknown / future endpoint. A new
+                        # VictoriaLogs endpoint is denied until a maintainer
+                        # adds it here on purpose. (VictoriaLogs has NO
+                        # /export endpoint; the real unbounded surfaces are
+                        # /query streaming and /tail — /tail is denied, /query
+                        # is bounded by -search.maxQueryTimeRange at Layer 1.)
+                        #
+                        # path_separated_prefix (not exact `path:`): an exact
+                        # match is bypassed by a trailing slash, so each entry
+                        # matches the endpoint and its sub-paths only at
+                        # path-segment boundaries (so `/select/logsql/query`
+                        # does NOT over-match a sibling like
+                        # `/select/logsql/query_other`). Combined with
+                        # merge_slashes / normalize_path /
+                        # path_with_escaped_slashes_action above, no
+                        # non-canonical variant (`//`, `%2F`) slips past the
+                        # allowlist into the catch-all.
+                        {{- range .Values.victorialogs.allowedEndpoints }}
+                        - match:
+                            path_separated_prefix: {{ . | quote }}
+                            # Defense-in-depth: only READ methods reach the log
+                            # store. VictoriaLogs shares ingest / query / DELETE
+                            # on one unauthenticated port and scopes the
+                            # destructive endpoints by PATH (/insert, /delete/*),
+                            # which the default-deny catch-all already 403s. This
+                            # method gate adds a second fence: a non-GET/POST to
+                            # an allowlisted *query* path no longer matches here
+                            # and falls through to the catch-all 403 — so even if
+                            # a future VictoriaLogs ever attached a mutating
+                            # behaviour to a /select/logsql/* path, it could not
+                            # be reached with a write method through this gateway.
+                            # (LogsQL queries are GET, or POST for a form-body
+                            # selector; metadata endpoints are GET.)
+                            headers:
+                              - name: ":method"
+                                string_match:
+                                  safe_regex:
+                                    regex: "GET|POST"
+                          route:
+                            cluster: federation_upstream
+                            timeout: 30s
+                          # x-fed-token-id is the internal per-token rate-limit
+                          # key — stripped here so it never reaches the upstream
+                          # (the rate-limit filters ran earlier and already
+                          # keyed on it). Same as the shared route below.
+                          #
+                          # ⚠️ AccountID / ProjectID are deliberately NOT listed
+                          # here. Route- and vhost-level request_headers_to_remove
+                          # are applied by the ROUTER filter, which runs AFTER
+                          # the Lua filter that injected them — listing them here
+                          # would STRIP the verified value Lua just set, leaving
+                          # NO AccountID header → VictoriaLogs defaults to
+                          # AccountID 0 (the platform partition) = cross-tenant
+                          # breach. Client-supplied AccountID/ProjectID spoofing
+                          # is already closed by revoked_check.lua's replace(),
+                          # which unconditionally OVERWRITES any client value
+                          # with the verified one before any downstream read.
+                          request_headers_to_remove:
+                            - x-fed-token-id
+                        {{- end }}
+                        # Catch-all DENY for victorialogs mode. Placed BEFORE
+                        # the shared upstream `prefix: "/"` route below, so in
+                        # victorialogs mode every non-allowlisted path gets a
+                        # 403 here and the shared route is never reached.
+                        - match:
+                            prefix: "/"
+                          direct_response:
+                            status: 403
+                            body:
+                              inline_string: "federation gateway: endpoint not permitted for tenant log query — only the VictoriaLogs LogsQL query/metadata APIs are allowed\n"
                         {{- end }}
                         - match:
                             prefix: "/"
