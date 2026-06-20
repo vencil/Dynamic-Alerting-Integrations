@@ -521,21 +521,36 @@ data:
           #                                          independent deaths.
           # `$value` is clause (a) (the down COUNT) because it is the LHS of the
           # top-level `and`, so the "{{ $value }} tenants" summary stays a count.
+          # JOB-PRESENCE GATE (`unless on() absent(...)`): when the ENTIRE
+          # tenant-exporters job is absent (all up series gone — SD / scrape-config
+          # regression), every expected tenant looks "down", the ratio is 1.0, and
+          # this would fire ON TOP OF TenantExporterJobAbsent — a duplicate critical
+          # for one root cause. `unless on() absent(up{job="tenant-exporters"})`
+          # suppresses this rule exactly when the job is wholly absent, leaving
+          # JobAbsent as the single signal for that catastrophe. The rule still fires
+          # for the case it OWNS — the job is PRESENT but many targets report up=0 (or
+          # are individually absent), a shared-dependency outage JobAbsent does NOT
+          # catch. `on()` matches globally: absent() carries only job=, which would
+          # not line up with the threshold-exporter scrape labels on the LHS, so a
+          # labelled match would never suppress. (CodeRabbit #882.)
           # CAVEAT: the denominator count(tenant_expected_exporter) goes EMPTY if the
           # threshold-exporter that emits it dies — then the whole expression is
           # empty and this sentinel cannot fire. That collector-death catastrophe is
-          # deliberately NOT this rule's job: TenantExporterJobAbsent (absent(up{job})
-          # above) is the dead-man's-switch for it, so the sentinel is never the sole
-          # dependency. Tune 5 / 0.1 to the deployment.
+          # deliberately NOT this rule's job; the job-absent / collector-down classes
+          # are owned by TenantExporterJobAbsent + ThresholdExporterAbsent, so the
+          # sentinel is never the sole dependency. Tune 5 / 0.1 to the deployment.
           - alert: MassExporterOutage
             expr: |
-              count without (tenant, db_type) (tenant_expected_exporter unless on(tenant) (up{job="tenant-exporters"} == 1)) > 5
-              and
               (
-                count without (tenant, db_type) (tenant_expected_exporter unless on(tenant) (up{job="tenant-exporters"} == 1))
-                /
-                count without (tenant, db_type) (tenant_expected_exporter)
-              ) > 0.1
+                count without (tenant, db_type) (tenant_expected_exporter unless on(tenant) (up{job="tenant-exporters"} == 1)) > 5
+                and
+                (
+                  count without (tenant, db_type) (tenant_expected_exporter unless on(tenant) (up{job="tenant-exporters"} == 1))
+                  /
+                  count without (tenant, db_type) (tenant_expected_exporter)
+                ) > 0.1
+              )
+              unless on() absent(up{job="tenant-exporters"})
             for: 3m
             labels:
               severity: critical

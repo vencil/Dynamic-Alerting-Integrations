@@ -101,6 +101,14 @@ class TestValidateDir:
         _checked, viol, _skipped = validate_dir(confd, schema, jsonschema)
         assert any("tenants" in v for v in viol)
 
+    def test_non_dict_tenant_file_flagged(self, confd, schema):
+        # A tenant-shaped (non-`_`) file whose top doc is a list/scalar must be
+        # FLAGGED, not silently skipped (#880 CodeRabbit hardening gap).
+        _write(confd, "oops-list.yaml", "- a\n- b\n")
+        _write(confd, "oops-scalar.yaml", "just-a-string\n")
+        _checked, viol, _skipped = validate_dir(confd, schema, jsonschema)
+        assert sum("must be a mapping" in v for v in viol) == 2
+
     def test_real_confd_is_clean(self, schema):
         # The shipped conf.d must stay schema-valid (regression guard).
         checked, viol, _skipped = validate_dir(_REAL_CONFD, schema, jsonschema)

@@ -77,10 +77,20 @@ def validate_dir(config_dir: str, schema: dict, validator) -> tuple[int, list[st
         try:
             with open(path, encoding="utf-8") as fh:
                 docs = list(yaml.safe_load_all(fh))
-        except yaml.YAMLError as exc:
-            raise _CallerError(f"{rel}: malformed YAML: {exc}")
+        except (OSError, yaml.YAMLError) as exc:
+            # Unreadable file or malformed YAML is an environment/caller error, not
+            # a schema violation — surface it as exit 2 (open() can raise OSError
+            # too, not only yaml.YAMLError).
+            raise _CallerError(f"{rel}: cannot read/parse YAML: {exc}")
         for doc in docs:
             if not isinstance(doc, dict):
+                # A tenant-shaped file (no `_` prefix) whose top document is a
+                # list / scalar / empty (None) is malformed — flag it instead of
+                # silently skipping, or it would escape this hardening gate
+                # entirely (the schema below is only applied to mappings).
+                violations.append(
+                    f"ERROR: {rel}: top-level YAML document must be a mapping with a "
+                    f"`tenants:` block (got {type(doc).__name__})")
                 continue
             checked += 1
             try:

@@ -7,12 +7,18 @@
 #   JOB-ABSENT     whole tenant-exporters job gone -> TenantExporterJobAbsent fires.
 #   JOB-PRESENT    at least one up series -> TenantExporterJobAbsent silent.
 #
-#   MassExporterOutage (#880 ratio+floor, replaces the provisional magic > 10):
-#   fires iff  count(down) > 5  AND  count(down) / count(expected) > 0.1 .
-#     small-all-down  8 of 8 down  -> FIRES. The headline #880 fix: the old
-#                     `> 10` absolute floor MISSED an 8-tenant cluster going fully
-#                     dark. Mixed db_types also prove `without (tenant, db_type)`
-#                     collapses BOTH numerator and denominator to one mixed count.
+#   MassExporterOutage (#880 ratio+floor, replaces the provisional magic > 10;
+#   plus an `unless on() absent(...)` job-presence gate, CodeRabbit #882):
+#   fires iff  count(down) > 5  AND  count(down)/count(expected) > 0.1  AND the
+#   tenant-exporters job is PRESENT (not wholly absent).
+#     small-all-down  8 of 8 down via up==0 (job present, exporters unhealthy)
+#                     -> FIRES. The headline #880 fix: the old `> 10` absolute floor
+#                     MISSED an 8-tenant cluster going dark. Mixed db_types also prove
+#                     `without (tenant, db_type)` collapses BOTH numerator and
+#                     denominator to one mixed count.
+#     job-absent-8    same 8 expected but NO up at all (whole job gone) -> SILENT.
+#                     The gate hands this catastrophe to TenantExporterJobAbsent (which
+#                     fires), instead of double-paging. CodeRabbit #882 regression.
 #     floor-guard     5 of 8 down  -> silent. 5 is not > 5, so a handful down
 #                     stays as per-tenant TenantExporterAbsent pages (ratio 0.625
 #                     would pass; the floor is what holds it back).
@@ -60,9 +66,61 @@ tests:
   - interval: 30s
     name: mass-small-cluster-8-all-down-fires
     input_series:
-      # 8 tenants expected, NONE healthy (no up==1 for any). count(down)=8 > 5 and
-      # ratio 8/8 = 1.0 > 0.1 -> fires. The old `> 10` floor would MISS this. Mixed
+      # 8 tenants expected, ALL reporting up==0 (a shared-dependency outage: targets
+      # present + scraped, exporters unhealthy). The job is PRESENT (up series exist,
+      # value 0) so the `unless on() absent(...)` gate does NOT suppress; up==0 is not
+      # up==1 so all 8 stay in the anti-join. count(down)=8 > 5 and ratio 8/8 = 1.0 >
+      # 0.1 -> fires. The old `> 10` floor would MISS this small cluster. Mixed
       # db_types prove the without(tenant,db_type) collapse on both num and denom.
+      - series: 'tenant_expected_exporter{tenant="s01", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="s02", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="s03", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="s04", db_type="mariadb"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="s05", db_type="postgresql"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="s06", db_type="postgresql"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="s07", db_type="redis"}'
+        values: '1x12'
+      - series: 'tenant_expected_exporter{tenant="s08", db_type="redis"}'
+        values: '1x12'
+      - series: 'up{job="tenant-exporters", tenant="s01", instance="s01:9104"}'
+        values: '0x12'
+      - series: 'up{job="tenant-exporters", tenant="s02", instance="s02:9104"}'
+        values: '0x12'
+      - series: 'up{job="tenant-exporters", tenant="s03", instance="s03:9104"}'
+        values: '0x12'
+      - series: 'up{job="tenant-exporters", tenant="s04", instance="s04:9104"}'
+        values: '0x12'
+      - series: 'up{job="tenant-exporters", tenant="s05", instance="s05:9104"}'
+        values: '0x12'
+      - series: 'up{job="tenant-exporters", tenant="s06", instance="s06:9104"}'
+        values: '0x12'
+      - series: 'up{job="tenant-exporters", tenant="s07", instance="s07:9104"}'
+        values: '0x12'
+      - series: 'up{job="tenant-exporters", tenant="s08", instance="s08:9104"}'
+        values: '0x12'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: MassExporterOutage
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: "Mass exporter outage (8 tenants) — shared-dependency failure suspected"
+
+  - interval: 30s
+    name: mass-job-absent-8-expected-silent-jobabsent-fires
+    input_series:
+      # Same 8 expected, but the WHOLE tenant-exporters job is gone (NO up series at
+      # all) -> every expected tenant looks "down" (ratio 1.0, count 8 > 5). Without
+      # the gate this would fire ON TOP OF TenantExporterJobAbsent (duplicate critical
+      # for one root cause). The `unless on() absent(...)` gate suppresses
+      # MassExporterOutage here, leaving JobAbsent as the single catastrophe signal.
       - series: 'tenant_expected_exporter{tenant="s01", db_type="mariadb"}'
         values: '1x12'
       - series: 'tenant_expected_exporter{tenant="s02", db_type="mariadb"}'
@@ -82,11 +140,15 @@ tests:
     alert_rule_test:
       - eval_time: 4m
         alertname: MassExporterOutage
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: TenantExporterJobAbsent
         exp_alerts:
           - exp_labels:
               severity: critical
+              job: tenant-exporters
             exp_annotations:
-              summary: "Mass exporter outage (8 tenants) — shared-dependency failure suspected"
+              summary: "Entire tenant-exporters scrape job is absent — per-tenant liveness is BLIND"
 
   - interval: 30s
     name: mass-floor-5-down-silent
