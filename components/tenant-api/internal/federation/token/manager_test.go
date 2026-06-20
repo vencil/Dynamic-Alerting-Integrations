@@ -199,6 +199,109 @@ func TestIssue_SignsVerifiableJWT(t *testing.T) {
 	}
 }
 
+func TestIssueLogs_EmbedsAccountIDAndLogsAudience(t *testing.T) {
+	t.Parallel()
+	keyPath, key := writeTestKey(t)
+	m, err := NewManager(keyPath, newJSONStore(t), time.Hour)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	signed, rec, err := m.IssueLogs("tenant-logs", "ops@example.com", "vmlogs pull", 1042)
+	if err != nil {
+		t.Fatalf("IssueLogs: %v", err)
+	}
+	if rec.Capability != CapLogs {
+		t.Errorf("Record.Capability = %q, want %q", rec.Capability, CapLogs)
+	}
+	if rec.AccountID != 1042 {
+		t.Errorf("Record.AccountID = %d, want 1042", rec.AccountID)
+	}
+
+	var claims Claims
+	tok, err := jwt.ParseWithClaims(signed, &claims, func(*jwt.Token) (interface{}, error) {
+		return &key.PublicKey, nil
+	})
+	if err != nil || !tok.Valid {
+		t.Fatalf("ParseWithClaims: %v (valid=%v)", err, tok.Valid)
+	}
+	if claims.AccountID != 1042 {
+		t.Errorf("claim account_id = %d, want 1042", claims.AccountID)
+	}
+	if len(claims.Audience) != 1 || claims.Audience[0] != audienceLogs {
+		t.Errorf("claim aud = %v, want [%s]", claims.Audience, audienceLogs)
+	}
+	if claims.TenantID != "tenant-logs" {
+		t.Errorf("claim tenant_id = %q", claims.TenantID)
+	}
+}
+
+// TestIssueLogs_RejectsZeroAccountID: a logs token with account_id 0 would be
+// omitempty'd out of the JWT and route the tenant's logs to the platform
+// default partition (AccountID 0). IssueLogs must FAIL LOUD instead, never
+// mint a token that reads the wrong partition.
+func TestIssueLogs_RejectsZeroAccountID(t *testing.T) {
+	t.Parallel()
+	keyPath, _ := writeTestKey(t)
+	m, err := NewManager(keyPath, newJSONStore(t), time.Hour)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	if _, _, err := m.IssueLogs("tenant-logs", "ops@example.com", "", 0); err == nil {
+		t.Fatal("IssueLogs with account_id 0 should error, not mint a default-partition token")
+	}
+}
+
+// TestIssue_MetricsHasNoAccountIDAndMetricsAudience pins the back-compat
+// contract: the metrics-plane token carries NO account_id and the original
+// audience, so existing callers are byte-for-byte unaffected.
+func TestIssue_MetricsHasNoAccountIDAndMetricsAudience(t *testing.T) {
+	t.Parallel()
+	keyPath, key := writeTestKey(t)
+	m, err := NewManager(keyPath, newJSONStore(t), time.Hour)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	signed, rec, err := m.Issue("tenant-metrics", "ops@example.com", "")
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	if rec.AccountID != 0 {
+		t.Errorf("metrics Record.AccountID = %d, want 0", rec.AccountID)
+	}
+	if rec.Capability != CapMetrics {
+		t.Errorf("metrics Record.Capability = %q, want %q", rec.Capability, CapMetrics)
+	}
+
+	var claims Claims
+	if _, err := jwt.ParseWithClaims(signed, &claims, func(*jwt.Token) (interface{}, error) {
+		return &key.PublicKey, nil
+	}); err != nil {
+		t.Fatalf("ParseWithClaims: %v", err)
+	}
+	if claims.AccountID != 0 {
+		t.Errorf("metrics claim account_id = %d, want 0 (omitted)", claims.AccountID)
+	}
+	if len(claims.Audience) != 1 || claims.Audience[0] != audienceMetrics {
+		t.Errorf("metrics claim aud = %v, want [%s]", claims.Audience, audienceMetrics)
+	}
+
+	// Belt-and-braces: the raw payload must not even carry an account_id key
+	// (omitempty), so a metrics verifier sees the pre-ADR-021 shape exactly.
+	parts := strings.Split(signed, ".")
+	if len(parts) != 3 {
+		t.Fatalf("token has %d segments, want 3", len(parts))
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+	if strings.Contains(string(payload), "account_id") {
+		t.Errorf("metrics token payload contains account_id: %s", payload)
+	}
+}
+
 func TestIssue_StampsKeyID(t *testing.T) {
 	t.Parallel()
 	keyPath, key := writeTestKey(t)

@@ -21,6 +21,7 @@ package handler
 
 import (
 	"github.com/vencil/tenant-api/internal/async"
+	"github.com/vencil/tenant-api/internal/federation/account"
 	"github.com/vencil/tenant-api/internal/federation/fedpolicy"
 	"github.com/vencil/tenant-api/internal/federation/token"
 	"github.com/vencil/tenant-api/internal/gitops"
@@ -82,6 +83,14 @@ type Deps struct {
 	// main.go leaves the /federation/tokens routes unregistered, so
 	// handlers reading it are never reached with a nil value.
 	Federation *token.Manager
+
+	// Accounts allocates monotonic per-tenant AccountIDs for log
+	// federation (ADR-021 / #609), persisted commit-on-write into
+	// conf.d/_account_registry.yaml via Writer. Wired alongside
+	// Federation (same --federation-key gate) — it is only consulted when
+	// a logs-plane (capability=logs) token is requested, so it shares the
+	// federation feature's nil-when-disabled lifecycle.
+	Accounts *account.Allocator
 
 	// FederationPolicy holds the platform federation whitelist
 	// (ADR-020 IV-2e, `_federation_policy.yaml`). Always wired — the

@@ -9,24 +9,38 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/vencil/tenant-api/internal/federation/token"
+	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/handler"
 	"github.com/vencil/tenant-api/internal/rbac"
 )
 
 // CreateFederationTokenRequest is the body of POST /api/v1/federation/tokens.
+//
+// Capability selects the federation plane (ADR-021): "metrics" (default,
+// the ADR-020 behaviour — metrics audience, no account_id) or "logs" (logs
+// audience + the tenant's account_id embedded). An ABSENT capability means
+// metrics, so a pre-ADR-021 client body issues exactly the token it always
+// did — full back-compat.
 type CreateFederationTokenRequest struct {
 	TenantID    string `json:"tenant_id" validate:"required,min=1,max=128"`
 	Description string `json:"description" validate:"max=256"`
+	Capability  string `json:"capability" validate:"omitempty,oneof=metrics logs"`
 }
 
 // FederationTokenRecord is the listable metadata for one issued token.
 // The signed JWT is never included — it is returned exactly once, by
 // CreateFederationToken, and is not stored server-side.
+//
+// Capability + AccountID (ADR-021) are omitempty: a metrics-plane record
+// renders exactly as the pre-ADR-021 shape, and AccountID surfaces only
+// on a logs-plane token.
 type FederationTokenRecord struct {
 	TokenID     string `json:"token_id"`
 	TenantID    string `json:"tenant_id"`
 	IssuedBy    string `json:"issued_by"`
 	Description string `json:"description,omitempty"`
+	Capability  string `json:"capability,omitempty"`
+	AccountID   uint32 `json:"account_id,omitempty"`
 	IssuedAt    string `json:"issued_at"`
 	ExpiresAt   string `json:"expires_at"`
 }
@@ -45,6 +59,8 @@ func toFederationTokenRecord(r token.Record) FederationTokenRecord {
 		TenantID:    r.TenantID,
 		IssuedBy:    r.IssuedBy,
 		Description: r.Description,
+		Capability:  string(r.Capability),
+		AccountID:   r.AccountID,
 		IssuedAt:    r.IssuedAt.UTC().Format(time.RFC3339),
 		ExpiresAt:   r.ExpiresAt.UTC().Format(time.RFC3339),
 	}
@@ -58,8 +74,13 @@ func toFederationTokenRecord(r token.Record) FederationTokenRecord {
 // egress, a higher bar than config write. The tenant ID is in the
 // body, so that check is here rather than in route middleware.
 //
+// capability=logs (ADR-021) issues a LOGS-plane token instead: it resolves
+// (allocating if needed) the tenant's monotonic account_id, embeds it, and
+// binds the token to the logs audience. capability defaults to metrics, so
+// a body without the field issues the unchanged ADR-020 metrics token.
+//
 // @Summary     Issue a tenant federation token
-// @Description Mints a short-lived RS256 JWT for the named tenant (ADR-020). Requires admin permission on the tenant. The signed token is returned once and is not retrievable afterwards.
+// @Description Mints a short-lived RS256 JWT for the named tenant. capability=metrics (default, ADR-020) → metrics audience, no account_id. capability=logs (ADR-021) → logs audience with the tenant's monotonic account_id embedded (allocated on first use). Requires admin permission on the tenant. The signed token is returned once and is not retrievable afterwards.
 // @Tags        federation
 // @Accept      json
 // @Produce     json
@@ -70,6 +91,7 @@ func toFederationTokenRecord(r token.Record) FederationTokenRecord {
 // @Failure     409  {object} map[string]string
 // @Failure     429  {object} map[string]string
 // @Failure     500  {object} map[string]string
+// @Failure     503  {object} map[string]string
 // @Router      /api/v1/federation/tokens [post]
 func CreateFederationToken(d *handler.Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -105,7 +127,46 @@ func CreateFederationToken(d *handler.Deps) http.HandlerFunc {
 			return
 		}
 
-		jwt, rec, err := d.Federation.Issue(req.TenantID, rbac.RequestEmail(r), req.Description)
+		email := rbac.RequestEmail(r)
+		// capability defaults to metrics when absent — back-compat (ADR-021).
+		capability := token.Capability(req.Capability)
+		if capability == "" {
+			capability = token.CapMetrics
+		}
+
+		var (
+			jwt string
+			rec token.Record
+		)
+		switch capability {
+		case token.CapLogs:
+			// Resolve (allocate-if-missing) the tenant's account_id BEFORE
+			// signing. This commits to the GitOps registry; a degraded forge
+			// or overloaded write plane surfaces as 503 so the client retries
+			// rather than getting a token with a bogus id.
+			if d.Accounts == nil {
+				handler.WriteJSONError(w, r, http.StatusServiceUnavailable,
+					"logs federation is not configured on this server")
+				return
+			}
+			accountID, aerr := d.Accounts.EnsureAccountID(r.Context(), req.TenantID, email)
+			if aerr != nil {
+				if errors.Is(aerr, gitops.ErrWriteOverloaded) || errors.Is(aerr, gitops.ErrForgeDegraded) {
+					handler.WriteOverloaded(w, r)
+					return
+				}
+				if errors.Is(aerr, gitops.ErrConflict) {
+					handler.WriteJSONError(w, r, http.StatusConflict, aerr.Error())
+					return
+				}
+				handler.WriteJSONError(w, r, http.StatusInternalServerError,
+					"allocate account id: "+aerr.Error())
+				return
+			}
+			jwt, rec, err = d.Federation.IssueLogs(req.TenantID, email, req.Description, accountID)
+		default:
+			jwt, rec, err = d.Federation.Issue(req.TenantID, email, req.Description)
+		}
 		if err != nil {
 			switch {
 			case errors.Is(err, token.ErrTokenLimitReached):

@@ -18,6 +18,53 @@ const docTemplate = `{
     "host": "{{.Host}}",
     "basePath": "{{.BasePath}}",
     "paths": {
+        "/api/v1/federation/accounts/backfill": {
+            "post": {
+                "description": "Assigns a monotonic account_id (ADR-021) to every conf.d tenant lacking one, in one committed registry write. Idempotent. Requires platform admin.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "federation"
+                ],
+                "summary": "Backfill account IDs for all existing tenants",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_handler_federation.BackfillAccountsResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/v1/federation/policy": {
             "get": {
                 "produces": [
@@ -153,7 +200,7 @@ const docTemplate = `{
                 }
             },
             "post": {
-                "description": "Mints a short-lived RS256 JWT for the named tenant (ADR-020). Requires admin permission on the tenant. The signed token is returned once and is not retrievable afterwards.",
+                "description": "Mints a short-lived RS256 JWT for the named tenant. capability=metrics (default, ADR-020) → metrics audience, no account_id. capability=logs (ADR-021) → logs audience with the tenant's monotonic account_id embedded (allocated on first use). Requires admin permission on the tenant. The signed token is returned once and is not retrievable afterwards.",
                 "consumes": [
                     "application/json"
                 ],
@@ -220,6 +267,15 @@ const docTemplate = `{
                     },
                     "500": {
                         "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -2164,12 +2220,42 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_handler_federation.BackfillAccountsResponse": {
+            "type": "object",
+            "properties": {
+                "allocated": {
+                    "description": "Allocated lists the tenants that received a NEW account_id, in\nallocation (id-ascending) order.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "allocated_count": {
+                    "description": "AllocatedCount is len(Allocated) — convenient for the operator.",
+                    "type": "integer"
+                },
+                "already_present": {
+                    "description": "AlreadyPresent is how many scanned tenants already held an id (so a\nre-run shows 0 newly allocated and every tenant already present).",
+                    "type": "integer"
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
         "internal_handler_federation.CreateFederationTokenRequest": {
             "type": "object",
             "required": [
                 "tenant_id"
             ],
             "properties": {
+                "capability": {
+                    "type": "string",
+                    "enum": [
+                        "metrics",
+                        "logs"
+                    ]
+                },
                 "description": {
                     "type": "string",
                     "maxLength": 256
@@ -2195,6 +2281,12 @@ const docTemplate = `{
         "internal_handler_federation.FederationTokenRecord": {
             "type": "object",
             "properties": {
+                "account_id": {
+                    "type": "integer"
+                },
+                "capability": {
+                    "type": "string"
+                },
                 "description": {
                     "type": "string"
                 },
