@@ -462,6 +462,14 @@ function WouldFirePanel({ recipeObj, tenantId, previewFetch, inputClass }) {
           )
         )}
       </div>
+      {/* Persistent scope note: the verdict is a threshold-logic what-if on a
+          SYNTHETIC series, not a prediction that an alert fires in the tenant's
+          environment. Keeps the preview honest about what it does and doesn't
+          model (real data trend / for: duration / Alertmanager silencing). */}
+      <p className="text-xs mt-2 text-[color:var(--da-color-muted)]" data-testid="wouldfire-scope-note">
+        {t('此為閾值邏輯試算（你填的測試值 + 合成數據），確認規則寫對了；不代表在你環境會發出通知——未模擬真實數據走勢、for: 持續時間、或靜默／路由。',
+           'A threshold-logic preview (your test value + synthetic data) that checks the rule is correct; it does NOT mean an alert will fire in your environment — it does not model real-data trends, the for: duration, or silencing/routing.')}
+      </p>
     </div>
   );
 }

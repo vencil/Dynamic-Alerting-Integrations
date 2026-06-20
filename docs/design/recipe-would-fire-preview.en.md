@@ -123,6 +123,8 @@ A Prometheus rule compares "series" (labelled time series), not a single number.
 
 > The preview answers "would it fire at this value/scenario", not "is the rule itself correct" (the latter is guaranteed by existing CI tests). So a single test value is enough for threshold types; multi-series cases (replicas, trends) wait for the future.
 
+> **Scope of the verdict (surfaced to the user)**: because the fed series is synthetic and flat, the preview answers "**would this recipe's threshold logic cross at this test value**", **not** "would an alert actually fire in your environment" — it does not model real-data trends/noise, the `for:` timer over time, or Alertmanager silencing/routing. The would-fire panel states this boundary via a persistent note, so "the logic would fire" isn't read as "my alert will page".
+
 ### 5.2 Eval mechanism: a proof-by-contradiction that makes `promtool` tell you
 
 `promtool test rules` is an **assert** tool — you give it "which alerts you expect to fire" and it checks; but it won't volunteer "who fired", and the preview is exactly what doesn't know the answer. So we use it in reverse: feed the synthetic input + **assert "no alert fires"** (`exp_alerts: []`), then read `promtool`'s reaction — **no objection means nothing fired; an objection means something fired**.

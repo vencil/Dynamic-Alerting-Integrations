@@ -281,4 +281,12 @@ describe('RecipeBuilder would-fire preview (#657)', () => {
     expect(screen.queryByTestId('wouldfire-firing')).toBeNull();
     expect(screen.getByTestId('wouldfire-run')).not.toBeDisabled();   // recipe still valid → can re-run
   });
+
+  it('shows a persistent scope note (verdict is a threshold-logic what-if, not an env prediction)', () => {
+    render(<RecipeBuilder tenantId="db-a" fetchMetrics={mockFetch(['queue_depth'])} previewFetch={vi.fn()} />);
+    const note = screen.getByTestId('wouldfire-scope-note');
+    expect(note).toBeInTheDocument();
+    // it must NOT let the user read the verdict as "my alert will fire in prod"
+    expect(note.textContent).toMatch(/does NOT mean an alert will fire/i);
+  });
 });
