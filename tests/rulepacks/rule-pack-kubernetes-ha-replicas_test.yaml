@@ -4,16 +4,24 @@
 # TenantHAReplicasDegraded fires when a db-* HA workload (desired >= 2) has fewer
 # ready/available replicas than desired — the "a pod VANISHED in an HA set"
 # degradation that the value-based DB liveness rules (#875) structurally miss.
-# Covers StatefulSet (status_replicas_ready) + Deployment (status_replicas_
-# available); tenant derived from namespace via label_replace; LOJ metadata
-# enrichment (enriched + bare branches); maintenance opt-out; for:15m de-flap.
+#
+# The rule ADOPTS kube-prometheus's KubeStatefulSetReplicasMismatch /
+# KubeDeploymentReplicasMismatch core, so the test exercises BOTH upstream
+# refinements, each in its own scenario:
+#   • created-vs-ready (SS: ready < status_replicas, not spec) → scaleup-no-fp
+#   • rollout-exclusion (changes(*_status_replicas_updated[10m]) == 0) → rollout-exclusion
+# StatefulSet reads ready < status_replicas(created); Deployment reads
+# available < spec (surge-safe); tenant via label_replace; LOJ metadata (enriched
+# + bare); maintenance opt-out; for:15m de-flap.
 #
 # Oracle:
-#   db-a  SS  desired=2 ready=1, metadata present  → fires (ENRICHED)
-#   db-b  Dep desired=3 avail=2, NO metadata       → fires (BARE)
-#   db-c  SS  desired=2 ready=2 (healthy)          → no fire
-#   db-e  SS  desired=1 ready=0 (single-instance)  → no fire (desired<2 gate; that
-#                                                    1→0 loss is #875 ClusterDown's)
+#   db-a SS  spec2 created2 ready1, metadata        → fires (ENRICHED)
+#   db-b Dep spec3 avail2,        NO metadata        → fires (BARE)
+#   db-c SS  spec2 created2 ready2 (healthy)         → no fire
+#   db-e SS  spec1 created1 ready0 (single-instance) → no fire (desired<2 gate; #875's)
+#   db-f SS  spec2 created2 ready0 (HA fully down)   → fires (degraded boundary)
+#   scale-up SS spec3 created2 ready2                → no fire (created-vs-ready)
+#   rollout  SS spec2 created2 ready1 + updated churn → no fire (rollout gate)
 rule_files:
   - ../../rule-packs/rule-pack-kubernetes.yaml
 
@@ -21,15 +29,19 @@ evaluation_interval: 15s
 
 tests:
   # ── degraded HA SS (enriched) + degraded HA Deploy (bare) fire; healthy &
-  #    single-instance stay silent. (80 samples × 15s = 20m, past for:15m) ──
+  #    single-instance stay silent. (81 samples × 15s = 20m, past for:15m) ──
   - interval: 15s
     name: ha-degraded-fires-healthy-and-singleinstance-silent
     input_series:
-      # db-a — StatefulSet, desired 2, only 1 ready → degraded; metadata present.
+      # db-a — StatefulSet, desired 2, created 2, only 1 ready → degraded; metadata.
       - series: 'kube_statefulset_replicas{namespace="db-a", statefulset="mariadb"}'
+        values: '2x80'
+      - series: 'kube_statefulset_status_replicas{namespace="db-a", statefulset="mariadb"}'
         values: '2x80'
       - series: 'kube_statefulset_status_replicas_ready{namespace="db-a", statefulset="mariadb"}'
         values: '1x80'
+      - series: 'kube_statefulset_status_replicas_updated{namespace="db-a", statefulset="mariadb"}'
+        values: '2x80'
       - series: 'tenant_metadata_info{tenant="db-a", runbook_url="http://rb/a", owner="team-a", tier="gold"}'
         values: '1x80'
       # db-b — Deployment, desired 3, only 2 available → degraded; NO metadata (bare).
@@ -37,16 +49,26 @@ tests:
         values: '3x80'
       - series: 'kube_deployment_status_replicas_available{namespace="db-b", deployment="mongo"}'
         values: '2x80'
+      - series: 'kube_deployment_status_replicas_updated{namespace="db-b", deployment="mongo"}'
+        values: '3x80'
       # db-c — StatefulSet, desired 2, 2 ready → healthy → no fire.
       - series: 'kube_statefulset_replicas{namespace="db-c", statefulset="mariadb"}'
         values: '2x80'
+      - series: 'kube_statefulset_status_replicas{namespace="db-c", statefulset="mariadb"}'
+        values: '2x80'
       - series: 'kube_statefulset_status_replicas_ready{namespace="db-c", statefulset="mariadb"}'
         values: '2x80'
-      # db-e — StatefulSet, desired 1, 0 ready → single-instance → no fire (gate).
+      - series: 'kube_statefulset_status_replicas_updated{namespace="db-c", statefulset="mariadb"}'
+        values: '2x80'
+      # db-e — StatefulSet, desired 1, created 1, 0 ready → single-instance → no fire (gate).
       - series: 'kube_statefulset_replicas{namespace="db-e", statefulset="mariadb"}'
+        values: '1x80'
+      - series: 'kube_statefulset_status_replicas{namespace="db-e", statefulset="mariadb"}'
         values: '1x80'
       - series: 'kube_statefulset_status_replicas_ready{namespace="db-e", statefulset="mariadb"}'
         values: '0x80'
+      - series: 'kube_statefulset_status_replicas_updated{namespace="db-e", statefulset="mariadb"}'
+        values: '1x80'
     alert_rule_test:
       - eval_time: 16m
         alertname: TenantHAReplicasDegraded
@@ -87,8 +109,12 @@ tests:
     input_series:
       - series: 'kube_statefulset_replicas{namespace="db-d", statefulset="mariadb"}'
         values: '2x80'
+      - series: 'kube_statefulset_status_replicas{namespace="db-d", statefulset="mariadb"}'
+        values: '2x80'
       - series: 'kube_statefulset_status_replicas_ready{namespace="db-d", statefulset="mariadb"}'
         values: '1x80'
+      - series: 'kube_statefulset_status_replicas_updated{namespace="db-d", statefulset="mariadb"}'
+        values: '2x80'
       - series: 'tenant_metadata_info{tenant="db-d", runbook_url="http://rb/d", owner="team-d", tier="bronze"}'
         values: '1x80'
       - series: 'user_state_filter{tenant="db-d", filter="maintenance"}'
@@ -104,14 +130,22 @@ tests:
     input_series:
       - series: 'kube_statefulset_replicas{namespace="db-a", statefulset="mariadb"}'
         values: '2x80'
+      - series: 'kube_statefulset_status_replicas{namespace="db-a", statefulset="mariadb"}'
+        values: '2x80'
       - series: 'kube_statefulset_status_replicas_ready{namespace="db-a", statefulset="mariadb"}'
         values: '1x80'
+      - series: 'kube_statefulset_status_replicas_updated{namespace="db-a", statefulset="mariadb"}'
+        values: '2x80'
       - series: 'tenant_metadata_info{tenant="db-a", runbook_url="http://rb/a", owner="team-a", tier="gold"}'
         values: '1x80'
       - series: 'kube_statefulset_replicas{namespace="db-d", statefulset="mariadb"}'
         values: '2x80'
+      - series: 'kube_statefulset_status_replicas{namespace="db-d", statefulset="mariadb"}'
+        values: '2x80'
       - series: 'kube_statefulset_status_replicas_ready{namespace="db-d", statefulset="mariadb"}'
         values: '1x80'
+      - series: 'kube_statefulset_status_replicas_updated{namespace="db-d", statefulset="mariadb"}'
+        values: '2x80'
       - series: 'user_state_filter{tenant="db-d", filter="maintenance"}'
         values: '1x80'
     alert_rule_test:
@@ -135,19 +169,25 @@ tests:
               owner: team-a
               tier: gold
 
-  # ── for:15m de-flap: a rolling update degrades ready 2→1 for ~5m then recovers
-  #    to 2 — must NEVER fire. The MID-WINDOW assert (4m45s, degraded since t=0,
-  #    << for:15m) is the one that actually exercises for: — a for:0s regression
+  # ── for:15m de-flap: a TRANSIENT readiness blip (probe flap / quick reschedule —
+  #    NOT a revision rollout, so status_replicas_updated stays constant; the true
+  #    rollout case is the rollout-exclusion scenario below). ready dips 2→1 for ~5m
+  #    then recovers — must NEVER fire. The MID-WINDOW assert (4m45s, degraded since
+  #    t=0, << for:15m) is the one that actually exercises for: — a for:0s regression
   #    fires there, the 20m-only check would false-green. (#875+#888 review lesson:
   #    assert at the LAST still-degraded sample, NOT the recovery boundary.) ──
   - interval: 15s
-    name: rolling-update-deflap
+    name: transient-blip-deflap
     input_series:
       - series: 'kube_statefulset_replicas{namespace="db-a", statefulset="mariadb"}'
+        values: '2x80'
+      - series: 'kube_statefulset_status_replicas{namespace="db-a", statefulset="mariadb"}'
         values: '2x80'
       # ready=1 for samples 0..19 (t=0 … t=4m45s), then 2 (recovered) from sample 20 (t=5m).
       - series: 'kube_statefulset_status_replicas_ready{namespace="db-a", statefulset="mariadb"}'
         values: '1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 2+0x60'
+      - series: 'kube_statefulset_status_replicas_updated{namespace="db-a", statefulset="mariadb"}'
+        values: '2x80'
       - series: 'tenant_metadata_info{tenant="db-a", runbook_url="http://rb/a", owner="team-a", tier="gold"}'
         values: '1x80'
     alert_rule_test:
@@ -170,24 +210,32 @@ tests:
     input_series:
       - series: 'kube_statefulset_replicas{namespace="prod", statefulset="api"}'
         values: '3x80'
+      - series: 'kube_statefulset_status_replicas{namespace="prod", statefulset="api"}'
+        values: '3x80'
       - series: 'kube_statefulset_status_replicas_ready{namespace="prod", statefulset="api"}'
         values: '1x80'
+      - series: 'kube_statefulset_status_replicas_updated{namespace="prod", statefulset="api"}'
+        values: '3x80'
     alert_rule_test:
       - eval_time: 16m
         alertname: TenantHAReplicasDegraded
         exp_alerts: []
 
-  # ── HA fully down (desired=2, ready=0) → still fires (deficit=2>0, desired>=2) —
-  #    the boundary between "degraded" and single-instance (desired<2). The critical
-  #    layer (#875 ClusterDown / #869 TenantExporterAbsent) pages this too, but the
-  #    redundancy-lost warning still correctly surfaces. ──
+  # ── HA fully down (desired=2, created=2, ready=0) → still fires (ready<created,
+  #    desired>=2) — the boundary between "degraded" and single-instance (desired<2).
+  #    The critical layer (#875 ClusterDown / #869 TenantExporterAbsent) pages this
+  #    too, but the redundancy-lost warning still correctly surfaces. ──
   - interval: 15s
     name: ha-fully-down-fires
     input_series:
       - series: 'kube_statefulset_replicas{namespace="db-f", statefulset="mariadb"}'
         values: '2x80'
+      - series: 'kube_statefulset_status_replicas{namespace="db-f", statefulset="mariadb"}'
+        values: '2x80'
       - series: 'kube_statefulset_status_replicas_ready{namespace="db-f", statefulset="mariadb"}'
         values: '0x80'
+      - series: 'kube_statefulset_status_replicas_updated{namespace="db-f", statefulset="mariadb"}'
+        values: '2x80'
       - series: 'tenant_metadata_info{tenant="db-f", runbook_url="http://rb/f", owner="team-f", tier="silver"}'
         values: '1x80'
     alert_rule_test:
@@ -210,3 +258,53 @@ tests:
               runbook_url: "http://rb/f"
               owner: team-f
               tier: silver
+
+  # ── REFINEMENT (1) created-vs-ready: a SCALE-UP in progress (desired 3, controller
+  #    has created only 2, both ready) is desired>ready but NOT a degradation. Reading
+  #    ready < status_replicas(created) → 2<2 false → no fire. The OLD spec-vs-ready
+  #    rule (kube_statefulset_replicas - ready) would have fired 3-2=1>0 — a false
+  #    positive on a legitimate scale-up. updated is constant here, so the gate is
+  #    OPEN: the ONLY thing preventing the alert is created-vs-ready (isolates it). ──
+  - interval: 15s
+    name: scaleup-no-false-positive
+    input_series:
+      - series: 'kube_statefulset_replicas{namespace="db-a", statefulset="mariadb"}'
+        values: '3x80'
+      - series: 'kube_statefulset_status_replicas{namespace="db-a", statefulset="mariadb"}'
+        values: '2x80'
+      - series: 'kube_statefulset_status_replicas_ready{namespace="db-a", statefulset="mariadb"}'
+        values: '2x80'
+      - series: 'kube_statefulset_status_replicas_updated{namespace="db-a", statefulset="mariadb"}'
+        values: '2x80'
+      - series: 'tenant_metadata_info{tenant="db-a", runbook_url="http://rb/a", owner="team-a", tier="gold"}'
+        values: '1x80'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: TenantHAReplicasDegraded
+        exp_alerts: []
+
+  # ── REFINEMENT (2) rollout-exclusion: a genuinely degraded HA SS (ready 1 < created 2
+  #    throughout — WOULD fire) whose status_replicas_updated churns inside the trailing
+  #    10m (a revision rollout) → changes(updated[10m])>0 → gate closes → no fire at 16m.
+  #    Strips the gate? this fires. Narrows the [10m] window? the churn ages out & it
+  #    fires. Either mutation is caught. (The settled-then-fires path is the main
+  #    scenario, where updated is constant → gate open → fires.) ──
+  - interval: 15s
+    name: rollout-exclusion
+    input_series:
+      - series: 'kube_statefulset_replicas{namespace="db-a", statefulset="mariadb"}'
+        values: '2x80'
+      - series: 'kube_statefulset_status_replicas{namespace="db-a", statefulset="mariadb"}'
+        values: '2x80'
+      - series: 'kube_statefulset_status_replicas_ready{namespace="db-a", statefulset="mariadb"}'
+        values: '1x80'
+      # updated = 2 except a dip at sample 50 (t=12m30s, inside (6m,16m]) → a rollout
+      # churn → changes(updated[10m]) at 16m = 2 (>0) → gate closed.
+      - series: 'kube_statefulset_status_replicas_updated{namespace="db-a", statefulset="mariadb"}'
+        values: '2x49 1 2x29'
+      - series: 'tenant_metadata_info{tenant="db-a", runbook_url="http://rb/a", owner="team-a", tier="gold"}'
+        values: '1x80'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: TenantHAReplicasDegraded
+        exp_alerts: []

@@ -236,29 +236,30 @@ data:
     \      runbook_url: '{{ $labels.runbook_url }}'\n      owner: '{{ $labels.owner\
     \ }}'\n      tier: '{{ $labels.tier }}'\n- name: kubernetes-ha-replicas\n  rules:\n\
     \  - record: rule_pack_kubernetes:ha_replicas_degraded:core\n    expr: \"(\\n\
-    \  max by(tenant) (\\n    label_replace(\\n      (\\n        kube_statefulset_replicas{namespace=~\\\
-    \"db-.+\\\"}\\n        - kube_statefulset_status_replicas_ready{namespace=~\\\"\
-    db-.+\\\"}\\n        > 0\\n      )\\n      and on(namespace, statefulset)\\n \
-    \       (kube_statefulset_replicas{namespace=~\\\"db-.+\\\"} >= 2),\\n      \\\
-    \"tenant\\\", \\\"$1\\\", \\\"namespace\\\", \\\"(.+)\\\"\\n    )\\n  )\\n  or\\\
-    n  max by(tenant) (\\n    label_replace(\\n      (\\n        kube_deployment_spec_replicas{namespace=~\\\
-    \"db-.+\\\"}\\n        - kube_deployment_status_replicas_available{namespace=~\\\
-    \"db-.+\\\"}\\n        > 0\\n      )\\n      and on(namespace, deployment)\\n\
-    \        (kube_deployment_spec_replicas{namespace=~\\\"db-.+\\\"} >= 2),\\n  \
-    \    \\\"tenant\\\", \\\"$1\\\", \\\"namespace\\\", \\\"(.+)\\\"\\n    )\\n  )\\\
-    n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\"maintenance\\\"} == 1)\\\
-    n\"\n  - alert: TenantHAReplicasDegraded\n    expr: \"(\\n  rule_pack_kubernetes:ha_replicas_degraded:core\\\
-    n  * on(tenant) group_left(runbook_url, owner, tier)\\n    tenant_metadata_info\\\
-    n)\\nor\\n(\\n  rule_pack_kubernetes:ha_replicas_degraded:core\\n  unless on(tenant)\
-    \ tenant_metadata_info\\n)\\n\"\n    for: 15m\n    labels:\n      severity: warning\n\
-    \      tenant: '{{ $labels.tenant }}'\n    annotations:\n      summary: HA workload\
-    \ for {{ $labels.tenant }} is running with reduced redundancy\n      summary_zh:\
-    \ '{{ $labels.tenant }} 的 HA 工作負載正以降級（失去備援）狀態運行'\n      platform_summary: '[{{\
-    \ $labels.tier }}] {{ $labels.tenant }}: ready replicas < desired on an HA set\
-    \ (≥2) — a pod/replica is MISSING (vanished, not crashed-in-place), so the value-based\
-    \ DB liveness rules (#875) cannot see it. Check kube_statefulset/deployment status\
-    \ + node health / scheduling.'\n      platform_summary_zh: '[{{ $labels.tier }}]\
-    \ {{ $labels.tenant }}: HA 工作負載（≥2）就緒副本數 < 期望數 — 有 pod/副本「消失」（非原地崩潰），value-based\
+    \  max by(tenant) (\\n    label_replace(\\n      (\\n        kube_statefulset_status_replicas_ready{namespace=~\\\
+    \"db-.+\\\"}\\n        < kube_statefulset_status_replicas{namespace=~\\\"db-.+\\\
+    \"}\\n      )\\n      and on(namespace, statefulset)\\n        (changes(kube_statefulset_status_replicas_updated{namespace=~\\\
+    \"db-.+\\\"}[10m]) == 0)\\n      and on(namespace, statefulset)\\n        (kube_statefulset_replicas{namespace=~\\\
+    \"db-.+\\\"} >= 2),\\n      \\\"tenant\\\", \\\"$1\\\", \\\"namespace\\\", \\\"\
+    (.+)\\\"\\n    )\\n  )\\n  or\\n  max by(tenant) (\\n    label_replace(\\n   \
+    \   (\\n        kube_deployment_status_replicas_available{namespace=~\\\"db-.+\\\
+    \"}\\n        < kube_deployment_spec_replicas{namespace=~\\\"db-.+\\\"}\\n   \
+    \   )\\n      and on(namespace, deployment)\\n        (changes(kube_deployment_status_replicas_updated{namespace=~\\\
+    \"db-.+\\\"}[10m]) == 0)\\n      and on(namespace, deployment)\\n        (kube_deployment_spec_replicas{namespace=~\\\
+    \"db-.+\\\"} >= 2),\\n      \\\"tenant\\\", \\\"$1\\\", \\\"namespace\\\", \\\"\
+    (.+)\\\"\\n    )\\n  )\\n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\"\
+    maintenance\\\"} == 1)\\n\"\n  - alert: TenantHAReplicasDegraded\n    expr: \"\
+    (\\n  rule_pack_kubernetes:ha_replicas_degraded:core\\n  * on(tenant) group_left(runbook_url,\
+    \ owner, tier)\\n    tenant_metadata_info\\n)\\nor\\n(\\n  rule_pack_kubernetes:ha_replicas_degraded:core\\\
+    n  unless on(tenant) tenant_metadata_info\\n)\\n\"\n    for: 15m\n    labels:\n\
+    \      severity: warning\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
+    \      summary: HA workload for {{ $labels.tenant }} is running with reduced redundancy\n\
+    \      summary_zh: '{{ $labels.tenant }} 的 HA 工作負載正以降級（失去備援）狀態運行'\n      platform_summary:\
+    \ '[{{ $labels.tier }}] {{ $labels.tenant }}: ready replicas < desired on an HA\
+    \ set (≥2) — a pod/replica is MISSING (vanished, not crashed-in-place), so the\
+    \ value-based DB liveness rules (#875) cannot see it. Check kube_statefulset/deployment\
+    \ status + node health / scheduling.'\n      platform_summary_zh: '[{{ $labels.tier\
+    \ }}] {{ $labels.tenant }}: HA 工作負載（≥2）就緒副本數 < 期望數 — 有 pod/副本「消失」（非原地崩潰），value-based\
     \ DB 存活規則（#875）看不到。請查 kube_statefulset/deployment 狀態 + 節點健康 / 排程。'\n      description:\
     \ Your HA database has fewer ready replicas than desired — it is still serving\
     \ but has lost redundancy. A node/pod failure or a stuck reschedule is the usual\

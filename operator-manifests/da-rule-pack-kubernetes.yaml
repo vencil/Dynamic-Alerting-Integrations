@@ -337,16 +337,18 @@ spec:
   - name: kubernetes-ha-replicas
     rules:
     - record: rule_pack_kubernetes:ha_replicas_degraded:core
-      expr: "(\n  max by(tenant) (\n    label_replace(\n      (\n        kube_statefulset_replicas{namespace=~\"\
-        db-.+\"}\n        - kube_statefulset_status_replicas_ready{namespace=~\"db-.+\"\
-        }\n        > 0\n      )\n      and on(namespace, statefulset)\n        (kube_statefulset_replicas{namespace=~\"\
+      expr: "(\n  max by(tenant) (\n    label_replace(\n      (\n        kube_statefulset_status_replicas_ready{namespace=~\"\
+        db-.+\"}\n        < kube_statefulset_status_replicas{namespace=~\"db-.+\"\
+        }\n      )\n      and on(namespace, statefulset)\n        (changes(kube_statefulset_status_replicas_updated{namespace=~\"\
+        db-.+\"}[10m]) == 0)\n      and on(namespace, statefulset)\n        (kube_statefulset_replicas{namespace=~\"\
         db-.+\"} >= 2),\n      \"tenant\", \"$1\", \"namespace\", \"(.+)\"\n    )\n\
-        \  )\n  or\n  max by(tenant) (\n    label_replace(\n      (\n        kube_deployment_spec_replicas{namespace=~\"\
-        db-.+\"}\n        - kube_deployment_status_replicas_available{namespace=~\"\
-        db-.+\"}\n        > 0\n      )\n      and on(namespace, deployment)\n    \
-        \    (kube_deployment_spec_replicas{namespace=~\"db-.+\"} >= 2),\n      \"\
-        tenant\", \"$1\", \"namespace\", \"(.+)\"\n    )\n  )\n)\nunless on(tenant)\n\
-        (user_state_filter{filter=\"maintenance\"} == 1)\n"
+        \  )\n  or\n  max by(tenant) (\n    label_replace(\n      (\n        kube_deployment_status_replicas_available{namespace=~\"\
+        db-.+\"}\n        < kube_deployment_spec_replicas{namespace=~\"db-.+\"}\n\
+        \      )\n      and on(namespace, deployment)\n        (changes(kube_deployment_status_replicas_updated{namespace=~\"\
+        db-.+\"}[10m]) == 0)\n      and on(namespace, deployment)\n        (kube_deployment_spec_replicas{namespace=~\"\
+        db-.+\"} >= 2),\n      \"tenant\", \"$1\", \"namespace\", \"(.+)\"\n    )\n\
+        \  )\n)\nunless on(tenant)\n(user_state_filter{filter=\"maintenance\"} ==\
+        \ 1)\n"
     - alert: TenantHAReplicasDegraded
       expr: "(\n  rule_pack_kubernetes:ha_replicas_degraded:core\n  * on(tenant) group_left(runbook_url,\
         \ owner, tier)\n    tenant_metadata_info\n)\nor\n(\n  rule_pack_kubernetes:ha_replicas_degraded:core\n\
