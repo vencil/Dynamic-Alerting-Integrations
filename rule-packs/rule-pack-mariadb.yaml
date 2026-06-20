@@ -75,6 +75,12 @@ groups:
   - name: mariadb-alerts
     rules:
       # ── HA-aware liveness tiering (#875 / ADR-026) ───────────────────────
+      # SCOPE (#875 review): all three rules are VALUE-based (mysql_up / read_only)
+      # → they catch process-death with the pod ALIVE. A pod/replica VANISHING in an
+      # HA set makes the series ABSENT (not 0), masked by surviving nodes at every
+      # rule here → HA replica-COUNT degradation is out of scope; it needs a K8s
+      # replica-readiness alert (kube_*_status_replicas_ready), not yet in the k8s
+      # pack — tracked follow-up, NOT covered by this liveness tier.
       # Customer topology: primary-replica SEMI-SYNC (not Galera → no wsrep quorum).
       # A single replica down during failover/drain is NOT a service outage →
       # warning + maintenance opt-out. Total outage and loss-of-writable-primary
