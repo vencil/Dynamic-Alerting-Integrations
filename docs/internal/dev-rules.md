@@ -98,16 +98,17 @@ lang: zh
 **規則**：版號管理流程：
 1. `make version-check` — 檢查六線版號是否一致
 2. `make bump-docs` — 自動更新文件內的版號字串
-3. 推 tag — 五條線各自：
+3. 推 tag — 六條線各自：
    - `v*` — platform（Helm chart + Rule Packs）
    - `exporter/v*` — threshold-exporter
    - `tools/v*` — da-tools Python CLI
    - `portal/v*` — Self-Hosted Portal
+   - `recipe-preview/v*` — recipe-preview would-fire 預覽服務（#657 同步升）
    - `tenant-api/v*` — Tenant Manager API
 
-**為什麼**：五個 component 獨立發版，避免「小修一個 tool 要 bump 整個 platform」。
+**為什麼**：六個 component 獨立發版，避免「小修一個元件要 bump 整個 platform」。
 
-**⛔ tag 版號鐵則（v2.9.0 燒過）**：component tag 的版號 = **該 component `Chart.yaml` 的 `version`**（不是 `appVersion`、不是平台線版號）。`release.yaml` 每個 component job 起手有 `Verify Chart.yaml version matches tag` 硬 gate，chart `version` ≠ tag 直接 fail。**exporter / portal** chart 與 release 線同步升（feature PR 不 bump），故 tag = 平台同版；**tenant-api** chart 是 per-change（每 PR bump，見規則內「版號不變不推」），版號走在平台線前，故**以自己的 chart 版號發版**（如 chart 2.9.7 → `tenant-api/v2.9.7`），**不跟平台版**。硬壓 chart 回平台版 = 降級，禁止。
+**⛔ tag 版號鐵則（v2.9.0 燒過）**：component tag 的版號 = **該 component `Chart.yaml` 的 `version`**（不是 `appVersion`、不是平台線版號）。`release.yaml` 每個 component job 起手有 `Verify Chart.yaml version matches tag` 硬 gate，chart `version` ≠ tag 直接 fail。**exporter / portal / recipe-preview** chart 與 release 線同步升（feature PR 不 bump），故 tag = 平台同版；**tenant-api** chart 是 per-change（每 PR bump，見規則內「版號不變不推」），版號走在平台線前，故**以自己的 chart 版號發版**（如 chart 2.9.7 → `tenant-api/v2.9.7`），**不跟平台版**。硬壓 chart 回平台版 = 降級，禁止。
 
 **細節**：見 [github-release-playbook.md](github-release-playbook.md)（§Step 3 + §Release-gate 陷阱 R2）。
 

@@ -2,7 +2,7 @@
 """bump_docs.py — 版號一致性管理工具
 
 掃描 repo 中的文件、Chart.yaml、VERSION 檔案，批次更新版號引用。
-五條版號線獨立管理：--platform / --exporter / --tools / --portal / --tenant-api。
+六條版號線獨立管理：--platform / --exporter / --tools / --portal / --recipe-preview / --tenant-api。
 
 Chart.yaml version 與 appVersion 同步，統一由 --exporter 管理。
 --exporter 同時更新：Chart.yaml version + appVersion + image tag + OCI chart references。
@@ -1485,7 +1485,7 @@ def main():
         unmatched = 0
         missing = 0
 
-        for line in ("platform", "exporter", "tools", "portal", "tenant-api"):
+        for line in ("platform", "exporter", "tools", "portal", "recipe-preview", "tenant-api"):
             ver = versions.get(line)
             if not ver:
                 print(f"\n⚠️  {line}: version not found in source-of-truth")
