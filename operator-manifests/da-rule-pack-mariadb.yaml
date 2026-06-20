@@ -49,16 +49,68 @@ spec:
   - name: mariadb-alerts
     rules:
     - alert: MariaDBDown
-      expr: mysql_up == 0
+      expr: '(mysql_up == 0)
+
+        unless on(tenant)
+
+        (user_state_filter{filter="maintenance"} == 1)
+
+        '
       for: 15s
       labels:
-        severity: critical
+        severity: warning
+        metric_group: liveness
         tenant: '{{ $labels.tenant }}'
       annotations:
-        summary: MariaDB instance {{ $labels.instance }} is DOWN
-        summary_zh: MariaDB 實例 {{ $labels.instance }} 已關閉
-        description: mysql_up=0 for 15s on {{ $labels.instance }}
-        description_zh: mysql_up=0，持續 15 秒，實例：{{ $labels.instance }}
+        summary: MariaDB instance {{ $labels.instance }} is down (tenant {{ $labels.tenant
+          }})
+        summary_zh: MariaDB 實例 {{ $labels.instance }} 停機（租戶 {{ $labels.tenant }}）
+        description: mysql_up=0 on {{ $labels.instance }} — one replica down in a
+          primary-replica set keeps the service available (warning). Total outage
+          escalates to MariaDBClusterDown (critical); loss of the writable primary
+          to MariaDBNoPrimary (critical).
+        description_zh: '{{ $labels.instance }} 的 mysql_up=0。primary-replica 架構下單一
+          replica 停機時服務仍可用（warning）。整體中斷會升級為 MariaDBClusterDown（critical）；失去可寫 primary
+          則為 MariaDBNoPrimary（critical）。'
+    - alert: MariaDBClusterDown
+      expr: max by(tenant) (mysql_up{job="tenant-exporters"}) == 0
+      for: 30s
+      labels:
+        severity: critical
+        metric_group: liveness
+        tenant: '{{ $labels.tenant }}'
+      annotations:
+        summary: 'MariaDB: ALL instances down for tenant {{ $labels.tenant }}'
+        summary_zh: MariaDB：租戶 {{ $labels.tenant }} 的所有實例皆停機
+        description: No mysqld reports up=1 for tenant {{ $labels.tenant }} — total
+          service outage, not a single-replica failover. For a planned single-instance
+          drain, silence via the Alertmanager Silence API (no maintenance-window opt-out
+          by design; a tenant's silent-critical sentinel still suppresses it).
+        description_zh: 租戶 {{ $labels.tenant }} 沒有任何 mysqld 回報 up=1 — 整體服務中斷，非單一 replica
+          failover。若為計畫性單實例維護，請用 Alertmanager Silence API 靜音（刻意不提供維護窗 opt-out；租戶的
+          silent-critical sentinel 仍會壓制此告警）。
+    - alert: MariaDBNoPrimary
+      expr: 'count by(tenant) (mysql_global_variables_read_only{job="tenant-exporters"})
+
+        unless
+
+        count by(tenant) (mysql_global_variables_read_only{job="tenant-exporters"}
+        == 0)
+
+        '
+      for: 2m
+      labels:
+        severity: critical
+        metric_group: liveness
+        tenant: '{{ $labels.tenant }}'
+      annotations:
+        summary: 'MariaDB: no writable primary for tenant {{ $labels.tenant }}'
+        summary_zh: MariaDB：租戶 {{ $labels.tenant }} 沒有可寫 primary
+        description: All instances are read_only for tenant {{ $labels.tenant }} —
+          no writable primary (failover stuck / primary lost) → writes rejected. Unlike
+          MariaDBClusterDown this fires while replicas are still up.
+        description_zh: 租戶 {{ $labels.tenant }} 的所有實例皆為 read_only — 沒有可寫 primary（failover
+          卡住／primary 遺失）→ 寫入被拒。與 MariaDBClusterDown 不同，此告警在 replica 仍存活時就會觸發。
     - alert: MariaDBExporterAbsent
       expr: absent(mysql_up{job="tenant-exporters"})
       for: 30s

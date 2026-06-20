@@ -116,7 +116,9 @@ This document provides tenants with a unified reference for all alerts across Ru
 
 | Alert Name | Severity | Trigger Condition | Recommended Action | Related Metric |
 |---|---|---|---|---|
-| MariaDBDown | critical | mysql_up=0 for 15s on {{ $labels.instance }} | Immediately check server status and network connectivity; review system logs | mysql_up |
+| MariaDBDown | warning | mysql_up=0 on {{ $labels.instance }}  | Immediately check server status and network connectivity; review system logs | mysql_up |
+| MariaDBClusterDown | critical | No mysqld reports up=1 for tenant {{ $labels.tenant }}  | Immediately check server status and network connectivity; review system logs | mysql_up |
+| MariaDBNoPrimary | critical | All instances are read_only for tenant {{ $labels.tenant }}  | Check alert metrics and review related logs; contact platform team for assistance if needed | mysql_global_variables_read_only |
 | MariaDBExporterAbsent | critical | No mysql_up metric found for 30s | Verify component is running and configured correctly; check component logs | mysql_up |
 | MariaDBHighConnections | warning | [{{ $labels.tier }}] {{ $labels.tenant }}: connection threshold breached  | Check connection pool configuration and potential leaks; consider increasing max connections | tenant:mysql_threads_connected:max |
 | MariaDBHighConnectionsCritical | critical | [{{ $labels.tier }}] {{ $labels.tenant }}: critical connection saturation  | Check connection pool configuration and potential leaks; consider increasing max connections | tenant:mysql_threads_connected:max |
@@ -133,7 +135,9 @@ This document provides tenants with a unified reference for all alerts across Ru
 
 | Alert Name | Severity | Trigger Condition | Recommended Action | Related Metric |
 |---|---|---|---|---|
-| MongoDBDown | critical |  | Immediately check server status and network connectivity; review system logs | mongodb_up |
+| MongoDBDown | warning | mongodb_up=0 on {{ $labels.instance }}  | Immediately check server status and network connectivity; review system logs | mongodb_up |
+| MongoDBClusterDown | critical | No mongod reports up=1 for tenant {{ $labels.tenant }}  | Immediately check server status and network connectivity; review system logs | mongodb_up |
+| MongoDBNoPrimary | critical | Replica-set members are reachable but none is PRIMARY for tenant {{ $labels.tenant }}  | Check alert metrics and review related logs; contact platform team for assistance if needed | mongodb_mongod_replset_member_state |
 | MongoDBHighConnections | warning | [{{ $labels.tier }}] {{ $labels.tenant }}: MongoDB connection threshold breached  | Check connection pool configuration and potential leaks; consider increasing max connections | tenant:mongodb_connections_current:max |
 | MongoDBReplicationLag | warning | [{{ $labels.tier }}] {{ $labels.tenant }}: MongoDB replication lag  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:mongodb_replication_lag:max |
 | MongoDBHighOperations | warning | [{{ $labels.tier }}] {{ $labels.tenant }}: MongoDB operation rate elevated  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:mongodb_opcounters:rate5m |

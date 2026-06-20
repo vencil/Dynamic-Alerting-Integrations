@@ -79,15 +79,97 @@ groups:
   # -------------------------------------------------------
   - name: mongodb-alerts
     rules:
+      # ── HA-aware liveness tiering (#875 / ADR-026) ───────────────────────
+      # SCOPE (#875 review): all three rules are VALUE-based (up / member_state) →
+      # they catch process-death with the pod ALIVE. A pod/replica VANISHING in an
+      # HA set makes the series ABSENT (not 0), masked by surviving nodes at every
+      # rule here → HA replica-COUNT degradation is out of scope; it needs a K8s
+      # replica-readiness alert (kube_*_status_replicas_ready), not yet in the k8s
+      # pack — tracked follow-up, NOT covered by this liveness tier.
+      # Instance vs cluster vs quorum. A single replica-set member dying during a
+      # normal failover/drain is NOT a service outage → warning + maintenance
+      # opt-out (so planned drains stay quiet). Total outage and loss-of-PRIMARY
+      # are caught at CRITICAL by the two rules below.
       - alert: MongoDBDown
-        expr: mongodb_up == 0
+        expr: |
+          (mongodb_up == 0)
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         for: 15s
         labels:
-          severity: critical
+          severity: warning
+          metric_group: liveness
           tenant: "{{ $labels.tenant }}"
         annotations:
-          summary: "MongoDB instance {{ $labels.instance }} is DOWN"
-          summary_zh: "MongoDB 實例 {{ $labels.instance }} 已停機"
+          summary: "MongoDB member {{ $labels.instance }} is down (tenant {{ $labels.tenant }})"
+          summary_zh: "MongoDB 成員 {{ $labels.instance }} 停機（租戶 {{ $labels.tenant }}）"
+          description: "mongodb_up=0 on {{ $labels.instance }} — one member of an HA replica set being down keeps the set available (warning). Total outage escalates to MongoDBClusterDown (critical); loss of PRIMARY to MongoDBNoPrimary (critical)."
+          description_zh: "{{ $labels.instance }} 的 mongodb_up=0。HA replica set 的單一成員停機時叢集仍可用（warning）。整體中斷會升級為 MongoDBClusterDown（critical）；失去 PRIMARY 則為 MongoDBNoPrimary（critical）。"
+
+      # Cluster-survival (total outage): NO member reports up=1 for the tenant.
+      # max by(tenant)(mongodb_up)==0 is topology-agnostic — fires iff EVERY
+      # instance is down (1 instance or N). This is the critical backstop that
+      # makes the MongoDBDown downgrade safe: it catches "exporter pod alive but
+      # mongod unreachable, all members" — the case TenantExporterAbsent (which
+      # watches the exporter scrape-target, not mongod) misses.
+      # It does NOT catch quorum-loss-while-partial (3-node, 2 down → max(up)=1);
+      # that is MongoDBNoPrimary's job. NO maintenance opt-out — a real total
+      # outage must always page. Annotation references tenant ONLY (max by(tenant)
+      # strips instance → pint alerts/template).
+      # for:30s outlasts a scrape gap; total-down needs no election debounce
+      # (that is MongoDBNoPrimary's for:2m) — keeps time-to-critical near the
+      # pre-#875 15s rather than regressing it to 1m.
+      - alert: MongoDBClusterDown
+        expr: max by(tenant) (mongodb_up{job="tenant-exporters"}) == 0
+        for: 30s
+        labels:
+          severity: critical
+          metric_group: liveness
+          tenant: "{{ $labels.tenant }}"
+        annotations:
+          summary: "MongoDB: ALL instances down for tenant {{ $labels.tenant }}"
+          summary_zh: "MongoDB：租戶 {{ $labels.tenant }} 的所有實例皆停機"
+          description: "No mongod reports up=1 for tenant {{ $labels.tenant }} — total service outage, not a single-member failover. For a planned single-instance drain, silence via the Alertmanager Silence API (no maintenance-window opt-out by design; a tenant's silent-critical sentinel still suppresses it)."
+          description_zh: "租戶 {{ $labels.tenant }} 沒有任何 mongod 回報 up=1 — 整體服務中斷，非單一成員 failover。若為計畫性單實例維護，請用 Alertmanager Silence API 靜音（刻意不提供維護窗 opt-out；租戶的 silent-critical sentinel 仍會壓制此告警）。"
+
+      # Quorum / write-availability: members are reachable but NONE is PRIMARY
+      # (member_state==1). This is the case max(up)==0 MISSES — e.g. 3 nodes, 2
+      # down → max(mongodb_up)=1 (a secondary is up) yet no PRIMARY → writes
+      # rejected = service effectively down. This is the quorum-aware signal
+      # #875/ADR-026 require (NOT sum(up)==0).
+      #
+      # member_state is emitted by the percona mongodb_exporter replSetGetStatus
+      # collector — the SAME collector already feeding mongodb_mongod_replset_
+      # member_replication_lag (consumed in mongodb-normalization above), so its
+      # presence is tied to a metric this pack already alerts on. Value 1 = PRIMARY
+      # (MongoDB replica-state enum). The `A unless B` shape tolerates BENIGN
+      # per-member duplication (many identical state=1 rows) AND correctly handles
+      # the empty-PRIMARY vector — a plain count(...==1)==0 would NEVER fire (an
+      # empty vector is absent, not 0). for:2m absorbs normal elections
+      # (electionTimeout ~10s); a genuine no-primary (failed election / lost
+      # quorum) persists and pages. NO maintenance opt-out.
+      # ⚠ KNOWN LIMITATION (defer-trigger = customer split-brain incident): under
+      # a network partition a STALE reporter still emitting the old PRIMARY as
+      # state=1 keeps the RHS non-empty → this rule can MISS a real no-primary.
+      # The robustness is to duplication, NOT to a divergent stale view. The
+      # MariaDB semi-sync "primary isolated" note is the analogue.
+      # ⚠ At customer rollout, verify member_state is scraped and is the metric
+      # VALUE (percona <0.42); newer exporters may encode state as a label.
+      - alert: MongoDBNoPrimary
+        expr: |
+          count by(tenant) (mongodb_mongod_replset_member_state{job="tenant-exporters"})
+          unless
+          count by(tenant) (mongodb_mongod_replset_member_state{job="tenant-exporters"} == 1)
+        for: 2m
+        labels:
+          severity: critical
+          metric_group: liveness
+          tenant: "{{ $labels.tenant }}"
+        annotations:
+          summary: "MongoDB: no PRIMARY in replica set for tenant {{ $labels.tenant }}"
+          summary_zh: "MongoDB：租戶 {{ $labels.tenant }} 的 replica set 沒有 PRIMARY"
+          description: "Replica-set members are reachable but none is PRIMARY for tenant {{ $labels.tenant }} — elections failing / quorum lost → writes rejected. Unlike MongoDBClusterDown this fires while secondaries are still up."
+          description_zh: "租戶 {{ $labels.tenant }} 的 replica set 成員可連線但沒有 PRIMARY — 選舉失敗／失去 quorum → 寫入被拒。與 MongoDBClusterDown 不同，此告警在 secondary 仍存活時就會觸發。"
 
       - alert: MongoDBHighConnections
         expr: |
