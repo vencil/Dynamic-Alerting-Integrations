@@ -1,0 +1,248 @@
+name: Nightly Image CVE Scan
+
+# Closes the "release-night CVE ambush" gap (docs/internal/security-audit-runbook.md
+# §37). Today the CVE posture has two points only:
+#   - PR time (component-docker-build.yaml): Trivy is INFORMATIONAL (exit-code 0,
+#     #448 — a fresh upstream base-image CVE must not block unrelated PRs).
+#   - Tag time (release.yaml): Trivy is a HARD GATE (exit-code 1, CRITICAL,HIGH,
+#     ignore-unfixed) on every component job.
+# The gap: a new base-image (Alpine/distroless/nginx) CVE landing between the last
+# PR and a tag push is discovered ONLY at release — blocking it (v2.9.0 hit 3
+# freshly-disclosed HIGHs at tag time; runbook §37). This is the missing third
+# dimension: scan the 5 component images built from CURRENT main every night and
+# file ONE deduped tracking issue when fixable HIGH/CRITICAL CVEs appear, so they
+# surface days early. NON-BLOCKING by construction — it gates nothing (release.yaml
+# stays the last line of defense); it only raises a heads-up.
+#
+# Scope honesty: da-tools is built with STUBBED Go binaries (zero-byte, mirroring
+# component-docker-build.yaml's COPY-path stub) — its OS/base-image CVEs ARE
+# scanned, but its Go binaries' module CVEs are NOT here (covered by release.yaml's
+# real-build scan + Go CI / CodeQL govulncheck). The other 4 images build real, so
+# their full image surface is scanned.
+
+on:
+  schedule:
+    # 03:23 UTC daily — off-hour (avoids GH top-of-hour congestion), clear of
+    # try-local-smoke (02:00) and nightly-mutation-pilot (17:00).
+    - cron: "23 3 * * *"
+  workflow_dispatch:
+    inputs:
+      file_issue:
+        description: "Also file/update the tracking issue (schedule does this automatically)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-image-cve-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    name: scan ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false # scan every image so one build break doesn't mask the rest
+      matrix:
+        # Same 5 build configs as component-docker-build.yaml (#474). Keep in sync
+        # with that matrix when a component is added/removed.
+        include:
+          - name: threshold-exporter
+            context: components/threshold-exporter/app
+            dockerfile: components/threshold-exporter/app/Dockerfile
+          - name: da-tools
+            context: components/da-tools/app
+            dockerfile: components/da-tools/app/Dockerfile
+          - name: da-portal
+            context: .
+            dockerfile: components/da-portal/Dockerfile
+          - name: tenant-api
+            context: .
+            dockerfile: components/tenant-api/Dockerfile
+          - name: recipe-preview
+            context: .
+            dockerfile: components/recipe-preview/Dockerfile
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Same stubs as component-docker-build.yaml: da-portal needs the vendor dir
+      # (CDN fallback at runtime), da-tools stubs its pre-built Go binaries
+      # (COPY-path only — see the scope note in the header).
+      - name: Ensure da-portal vendor dir exists
+        if: matrix.name == 'da-portal'
+        run: mkdir -p docs/assets/vendor
+
+      - name: Stub da-tools build inputs
+        if: matrix.name == 'da-tools'
+        run: |
+          mkdir -p components/da-tools/app/tools
+          for b in da-guard da-batchpr da-parser; do
+            for a in amd64 arm64; do
+              touch "components/da-tools/app/$b.$a"
+            done
+          done
+
+      # Build from CURRENT main (load, no push). pull + no-cache force a FRESH
+      # base-image pull and re-run of the RUN layers (apk/apt upgrade) — that
+      # freshness is the whole point: it surfaces base-image CVEs disclosed since
+      # the last build. A build failure fails THIS matrix job (a real main-health
+      # signal; the report job notes the missing image and won't claim "all clean").
+      - name: Build image (load, no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          load: true
+          pull: true
+          no-cache: true
+          tags: local-scan/${{ matrix.name }}:nightly
+
+      # Trivy with the SAME contract as release.yaml (CRITICAL,HIGH + ignore-unfixed
+      # = only actionable/fixable) but exit-code 0 — we CAPTURE findings here and let
+      # the report job decide on alerting. JSON output for machine aggregation.
+      - name: Trivy scan (JSON)
+        uses: aquasecurity/trivy-action@0.35.0
+        with:
+          image-ref: local-scan/${{ matrix.name }}:nightly
+          format: json
+          output: trivy-${{ matrix.name }}.json
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: 0
+
+      - name: Summarize findings
+        run: |
+          set -euo pipefail
+          NAME='${{ matrix.name }}'
+          JSON="trivy-${NAME}.json"
+          # One line per UNIQUE CVE (dedup by VulnerabilityID across all packages).
+          mapfile -t LINES < <(jq -r '
+            [.Results[]?.Vulnerabilities[]?]
+            | group_by(.VulnerabilityID)[] | .[0]
+            | "\(.Severity)|\(.VulnerabilityID)|\(.PkgName) \(.InstalledVersion) → \(.FixedVersion // "?")"
+          ' "$JSON" 2>/dev/null || true)
+          COUNT="${#LINES[@]}"
+          FRAG="frag-${NAME}.txt"
+          # Line 1 = machine-readable "name<TAB>count"; the rest = human markdown.
+          printf '%s\t%s\n' "$NAME" "$COUNT" > "$FRAG"
+          if [ "$COUNT" -gt 0 ]; then
+            {
+              printf '<details><summary><b>%s</b> — %s fixable HIGH/CRITICAL</summary>\n\n' "$NAME" "$COUNT"
+              printf '| Severity | CVE | Package (installed → fixed) |\n|---|---|---|\n'
+              for l in "${LINES[@]}"; do
+                IFS='|' read -r sev cve pkg <<< "$l"
+                printf '| %s | %s | %s |\n' "$sev" "$cve" "$pkg"
+              done
+              printf '\n</details>\n'
+            } >> "$FRAG"
+          else
+            printf '✅ **%s** — clean (0 fixable HIGH/CRITICAL)\n' "$NAME" >> "$FRAG"
+          fi
+          # Mirror into this job's Step Summary too.
+          { tail -n +2 "$FRAG"; echo; } >> "$GITHUB_STEP_SUMMARY"
+          echo "scanned ${NAME}: ${COUNT} fixable HIGH/CRITICAL"
+
+      - name: Upload fragment
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cve-frag-${{ matrix.name }}
+          path: frag-${{ matrix.name }}.txt
+          retention-days: 14
+
+  report:
+    name: aggregate + alert
+    needs: scan
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Download fragments
+        uses: actions/download-artifact@v4
+        with:
+          pattern: cve-frag-*
+          path: frags
+          merge-multiple: true
+
+      - name: Aggregate + maybe file the tracking issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          EXPECTED: "5"
+          # schedule always files; manual dispatch only when file_issue is checked.
+          DO_FILE: ${{ github.event_name == 'schedule' || inputs.file_issue }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          frags=(frags/frag-*.txt)
+          present="${#frags[@]}"
+          total=0
+          table=$'| Image | Fixable HIGH/CRITICAL |\n|---|---|\n'
+          details=""
+          for f in "${frags[@]}"; do
+            head1="$(head -n1 "$f")"
+            name="${head1%%$'\t'*}"
+            count="${head1#*$'\t'}"
+            count="${count//[^0-9]/}"; count="${count:-0}"
+            total=$(( total + count ))
+            table="${table}| ${name} | ${count} |"$'\n'
+            details="${details}$(tail -n +2 "$f")"$'\n\n'
+          done
+          missing=$(( EXPECTED - present ))
+
+          {
+            echo "# Nightly Image CVE Scan — $(date -u +%F)"
+            echo ""
+            echo "Fixable HIGH/CRITICAL across ${present}/${EXPECTED} images: **${total}**"
+            if [ "$missing" -gt 0 ]; then
+              echo ""
+              echo "⚠️ ${missing} image(s) failed to build/scan — see the matrix jobs above."
+            fi
+            echo ""
+            printf '%s' "$table"
+            echo ""
+            printf '%s' "$details"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$DO_FILE" != "true" ]; then
+            echo "manual dispatch without file_issue — leaving issues untouched."
+            exit 0
+          fi
+
+          LABEL=nightly-cve
+          TITLE="🛡️ Nightly image CVE scan — open HIGH/CRITICAL findings"
+          gh label create "$LABEL" --repo "$REPO" --color B60205 \
+            --description "Nightly scan found fixable HIGH/CRITICAL CVEs in a component image on main" \
+            --force || true
+          num="$(gh issue list --repo "$REPO" --label "$LABEL" --state open --json number --jq '.[0].number // empty')"
+
+          if [ "$total" -gt 0 ]; then
+            body="$(printf 'Nightly image CVE scan found **%s** fixable HIGH/CRITICAL CVE(s) across %s/%s component images built from `main` (%s).\n\n%s\n%s\n**Remediate**: most are upstream base-image (Alpine / distroless / nginx) CVEs — a fresh image rebuild or a base-image tag bump usually clears them; otherwise bump the pinned package. The release-time Trivy gate (release.yaml) blocks a tag until these are 0, so fixing now avoids a release-night scramble (security-audit-runbook §37). This issue is updated nightly and auto-closes when all images are clean again.' \
+              "$total" "$present" "$EXPECTED" "$RUN_URL" "$table" "$details")"
+            if [ -n "$num" ]; then
+              echo "updating existing tracking issue #${num}"
+              gh issue comment "$num" --repo "$REPO" --body "$body"
+            else
+              echo "filing new tracking issue"
+              gh issue create --repo "$REPO" --title "$TITLE" --label "$LABEL" \
+                --assignee vencil --body "$body"
+            fi
+          else
+            if [ -n "$num" ] && [ "$missing" -eq 0 ]; then
+              echo "all ${EXPECTED} images clean — closing tracking issue #${num}"
+              gh issue comment "$num" --repo "$REPO" \
+                --body "✅ All ${EXPECTED} component images clean (0 fixable HIGH/CRITICAL) as of $(date -u +%F). Auto-closing. (${RUN_URL})"
+              gh issue close "$num" --repo "$REPO"
+            else
+              echo "clean or incomplete (${present}/${EXPECTED} scanned) — nothing to file."
+            fi
+          fi
