@@ -34,7 +34,7 @@ lang: zh
 - patch-level bump 且 trivy 已驗 base tag 0/0
 - 純 doc / config 改動
 
-> **⚠️ Release-day CVE drift（v2.9.0 實戰）**：`release.yaml` 每個 component job 末段有 `Scan image with Trivy`（`severity HIGH,CRITICAL` + `ignore-unfixed` + `exit-code 1`）**hard gate**——這是 image 出廠前的最後一道線，且**在 tag push 當下才掃**。CVE 會在「上次乾淨掃描」與「真正打 tag」之間落地，於是 release 當下被擋。v2.9.0 五線 GA 就連撞 3 組剛揭露的 HIGH（Go stdlib `CVE-2026-42504` / nginx `CVE-2026-9256` RCE + `CVE-2026-49975` / golang-jwt `CVE-2025-30204`）。因此：(1) pre-tag audit 要**貼近打 tag 時點**跑、別用幾天前的結果；(2) fixable 一律 patch 不 exempt；(3) 重打 tag 前先用本地預驗 recipe 證明 0/0，避免每修一個 CVE 燒一輪 CI。流程細節見 [github-release-playbook.md §Release-gate 陷阱](github-release-playbook.md#release-gate-陷阱component-releaseyaml-實戰v290-首次五線-ga)。
+> **⚠️ Release-day CVE drift（v2.9.0 實戰）**：`release.yaml` 每個 component job 末段有 `Scan image with Trivy`（`severity HIGH,CRITICAL` + `ignore-unfixed` + `exit-code 1`）**hard gate**——這是 image 出廠前的最後一道線，且**在 tag push 當下才掃**。CVE 會在「上次乾淨掃描」與「真正打 tag」之間落地，於是 release 當下被擋。v2.9.0 五線 GA 就連撞 3 組剛揭露的 HIGH（Go stdlib `CVE-2026-42504` / nginx `CVE-2026-9256` RCE + `CVE-2026-49975` / golang-jwt `CVE-2025-30204`）。因此：(1) pre-tag audit 要**貼近打 tag 時點**跑、別用幾天前的結果；(2) fixable 一律 patch 不 exempt；(3) 重打 tag 前先用本地預驗 recipe 證明 0/0，避免每修一個 CVE 燒一輪 CI；(4) **自動化偵測（2026-06）**：`nightly-image-scan.yaml`（schedule）每晚對 `main` build 的 5 個 component image 跑同一份 Trivy 契約（`CRITICAL,HIGH` + `ignore-unfixed`），fixable CVE 一出現就開／更新一個 deduped tracking issue（label `nightly-cve`、全清自動關），把「發版夜才發現」提早成「平日就看到」——non-blocking、不取代 release.yaml 的 hard gate，只是讓它別在最糟時機才第一次發現。流程細節見 [github-release-playbook.md §Release-gate 陷阱](github-release-playbook.md#release-gate-陷阱component-releaseyaml-實戰v290-首次五線-ga)。
 
 ---
 

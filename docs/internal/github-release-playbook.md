@@ -134,6 +134,9 @@ make pre-tag                    # 一鍵整合（含以上 + docker-build-all + 
 | `bench-record.yaml` | `schedule` + `workflow_dispatch` | ✅ 已有手動 dispatch |
 | `nightly-race.yaml` / `nightly-mutation-pilot.yaml` | `schedule` | ⬜ 待評估加 `workflow_dispatch` |
 | `weekly-fuzz.yaml` | `schedule` | ⬜ 待評估 |
+| `nightly-image-scan.yaml` | `schedule` + `workflow_dispatch` | ✅ build/scan 邏輯鏡 `component-docker-build.yaml`；它本身就是 release.yaml CVE gate 的**時間維度補位**（見下） |
+
+> **時間維度補位（release-night CVE ambush）**：release.yaml 的 Trivy 是 tag-time **hard gate**，但 base-image（Alpine/distroless/nginx）CVE 會在「上次 PR」與「真正打 tag」之間落地（[security-audit-runbook §Release-day CVE drift](security-audit-runbook.md)），於是發版夜才被擋。`nightly-image-scan.yaml`（schedule）每晚對 `main` build 出的 5 個 component image 跑 Trivy（同 release 契約：`CRITICAL,HIGH` + `ignore-unfixed`），有 fixable 就開／更新一個 deduped tracking issue（label `nightly-cve`、全清自動關），讓 CVE 提早幾天浮現而非發版當下才撞。**non-blocking**——不 gate 任何東西，release.yaml 仍是最後一道線。（scope：da-tools 走 stub build，只掃 OS/base-image 層、不掃 Go binary module CVE——後者由 release 真 build + Go CI 覆蓋。）
 
 ### Step 3: 建立 Tag
 
