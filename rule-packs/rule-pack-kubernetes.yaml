@@ -723,3 +723,89 @@ groups:
           runbook_url: "{{ $labels.runbook_url }}"
           owner: "{{ $labels.owner }}"
           tier: "{{ $labels.tier }}"
+
+  # ─────────────────────────────────────────────────────────────────────
+  # HA replica-readiness (#875 follow-up; Gemini adversarial review). The
+  # value-based DB liveness rules (rule-pack-mariadb/mongodb.yaml: *Down /
+  # *ClusterDown / *NoPrimary, plus TenantExporterAbsent #869) all read a
+  # metric VALUE (<db>_up==0 / member_state / read_only / up==1). When a
+  # pod/replica VANISHES in an HA set the series goes ABSENT (not 0) and the
+  # surviving replica masks it at every one of those rules → an HA DB silently
+  # degrading N→N-1 (serving, but with NO redundancy) emits nothing. This is
+  # the K8s-layer complement: fire when a db-* HA workload (desired ≥2) has
+  # fewer ready/available replicas than desired. `tenant` is derived from
+  # namespace via label_replace (KSM is NOT scraped through the namespace→
+  # tenant relabel — same idiom as node-health above). Covers BOTH StatefulSet
+  # (status_replicas_ready) and Deployment (status_replicas_available).
+  # Single-instance (desired<2) is intentionally OUT: a 1→0 loss there is
+  # total-down, already paged by #875 ClusterDown / TenantExporterAbsent.
+  # severity:warning (degraded-but-serving); for:15m rides out rolling updates
+  # + node-drain reschedule, fires on STUCK degradation. Maintenance opt-out +
+  # metadata LOJ mirror every other pack alert. Metric names per KSM v2.18.0
+  # (the deployed version, see node-health note); all kube_* are scraped by the
+  # monitoring-components job with no metric_relabel keep-list.
+  # ─────────────────────────────────────────────────────────────────────
+  - name: kubernetes-ha-replicas
+    rules:
+      - record: rule_pack_kubernetes:ha_replicas_degraded:core
+        expr: |
+          (
+            max by(tenant) (
+              label_replace(
+                (
+                  kube_statefulset_replicas{namespace=~"db-.+"}
+                  - kube_statefulset_status_replicas_ready{namespace=~"db-.+"}
+                  > 0
+                )
+                and on(namespace, statefulset)
+                  (kube_statefulset_replicas{namespace=~"db-.+"} >= 2),
+                "tenant", "$1", "namespace", "(.+)"
+              )
+            )
+            or
+            max by(tenant) (
+              label_replace(
+                (
+                  kube_deployment_spec_replicas{namespace=~"db-.+"}
+                  - kube_deployment_status_replicas_available{namespace=~"db-.+"}
+                  > 0
+                )
+                and on(namespace, deployment)
+                  (kube_deployment_spec_replicas{namespace=~"db-.+"} >= 2),
+                "tenant", "$1", "namespace", "(.+)"
+              )
+            )
+          )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
+
+      # left-outer-join metadata enrichment (onboarding-vacuum safe) — same
+      # two-branch pattern as node-health and the threshold alerts: a tenant
+      # with NO tenant_metadata_info still fires (the bare `*` inner-join alone
+      # would silently drop it).
+      - alert: TenantHAReplicasDegraded
+        expr: |
+          (
+            rule_pack_kubernetes:ha_replicas_degraded:core
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
+          )
+          or
+          (
+            rule_pack_kubernetes:ha_replicas_degraded:core
+            unless on(tenant) tenant_metadata_info
+          )
+        for: 15m
+        labels:
+          severity: warning
+          tenant: "{{ $labels.tenant }}"
+        annotations:
+          summary: "HA workload for {{ $labels.tenant }} is running with reduced redundancy"
+          summary_zh: "{{ $labels.tenant }} 的 HA 工作負載正以降級（失去備援）狀態運行"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: ready replicas < desired on an HA set (≥2) — a pod/replica is MISSING (vanished, not crashed-in-place), so the value-based DB liveness rules (#875) cannot see it. Check kube_statefulset/deployment status + node health / scheduling."
+          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}: HA 工作負載（≥2）就緒副本數 < 期望數 — 有 pod/副本「消失」（非原地崩潰），value-based DB 存活規則（#875）看不到。請查 kube_statefulset/deployment 狀態 + 節點健康 / 排程。"
+          description: "Your HA database has fewer ready replicas than desired — it is still serving but has lost redundancy. A node/pod failure or a stuck reschedule is the usual cause; one more failure could take the service down."
+          description_zh: "您的 HA 資料庫就緒副本數少於期望值 — 服務仍可用，但已失去備援。通常成因是節點/Pod 故障或排程卡住；再壞一個就可能導致服務中斷。"
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"

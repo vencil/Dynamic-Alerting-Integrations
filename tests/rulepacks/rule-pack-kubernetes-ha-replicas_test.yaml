@@ -1,0 +1,160 @@
+# promtool unit test — HA replica-readiness (#875 follow-up; Gemini review).
+# Run: promtool test rules tests/rulepacks/rule-pack-kubernetes-ha-replicas_test.yaml
+#
+# TenantHAReplicasDegraded fires when a db-* HA workload (desired >= 2) has fewer
+# ready/available replicas than desired — the "a pod VANISHED in an HA set"
+# degradation that the value-based DB liveness rules (#875) structurally miss.
+# Covers StatefulSet (status_replicas_ready) + Deployment (status_replicas_
+# available); tenant derived from namespace via label_replace; LOJ metadata
+# enrichment (enriched + bare branches); maintenance opt-out; for:15m de-flap.
+#
+# Oracle:
+#   db-a  SS  desired=2 ready=1, metadata present  → fires (ENRICHED)
+#   db-b  Dep desired=3 avail=2, NO metadata       → fires (BARE)
+#   db-c  SS  desired=2 ready=2 (healthy)          → no fire
+#   db-e  SS  desired=1 ready=0 (single-instance)  → no fire (desired<2 gate; that
+#                                                    1→0 loss is #875 ClusterDown's)
+rule_files:
+  - ../../rule-packs/rule-pack-kubernetes.yaml
+
+evaluation_interval: 15s
+
+tests:
+  # ── degraded HA SS (enriched) + degraded HA Deploy (bare) fire; healthy &
+  #    single-instance stay silent. (80 samples × 15s = 20m, past for:15m) ──
+  - interval: 15s
+    name: ha-degraded-fires-healthy-and-singleinstance-silent
+    input_series:
+      # db-a — StatefulSet, desired 2, only 1 ready → degraded; metadata present.
+      - series: 'kube_statefulset_replicas{namespace="db-a", statefulset="mariadb"}'
+        values: '2x80'
+      - series: 'kube_statefulset_status_replicas_ready{namespace="db-a", statefulset="mariadb"}'
+        values: '1x80'
+      - series: 'tenant_metadata_info{tenant="db-a", runbook_url="http://rb/a", owner="team-a", tier="gold"}'
+        values: '1x80'
+      # db-b — Deployment, desired 3, only 2 available → degraded; NO metadata (bare).
+      - series: 'kube_deployment_spec_replicas{namespace="db-b", deployment="mongo"}'
+        values: '3x80'
+      - series: 'kube_deployment_status_replicas_available{namespace="db-b", deployment="mongo"}'
+        values: '2x80'
+      # db-c — StatefulSet, desired 2, 2 ready → healthy → no fire.
+      - series: 'kube_statefulset_replicas{namespace="db-c", statefulset="mariadb"}'
+        values: '2x80'
+      - series: 'kube_statefulset_status_replicas_ready{namespace="db-c", statefulset="mariadb"}'
+        values: '2x80'
+      # db-e — StatefulSet, desired 1, 0 ready → single-instance → no fire (gate).
+      - series: 'kube_statefulset_replicas{namespace="db-e", statefulset="mariadb"}'
+        values: '1x80'
+      - series: 'kube_statefulset_status_replicas_ready{namespace="db-e", statefulset="mariadb"}'
+        values: '0x80'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: TenantHAReplicasDegraded
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              tenant: db-a
+              runbook_url: "http://rb/a"
+              owner: team-a
+              tier: gold
+            exp_annotations:
+              summary: "HA workload for db-a is running with reduced redundancy"
+              summary_zh: "db-a 的 HA 工作負載正以降級（失去備援）狀態運行"
+              platform_summary: "[gold] db-a: ready replicas < desired on an HA set (≥2) — a pod/replica is MISSING (vanished, not crashed-in-place), so the value-based DB liveness rules (#875) cannot see it. Check kube_statefulset/deployment status + node health / scheduling."
+              platform_summary_zh: "[gold] db-a: HA 工作負載（≥2）就緒副本數 < 期望數 — 有 pod/副本「消失」（非原地崩潰），value-based DB 存活規則（#875）看不到。請查 kube_statefulset/deployment 狀態 + 節點健康 / 排程。"
+              description: "Your HA database has fewer ready replicas than desired — it is still serving but has lost redundancy. A node/pod failure or a stuck reschedule is the usual cause; one more failure could take the service down."
+              description_zh: "您的 HA 資料庫就緒副本數少於期望值 — 服務仍可用，但已失去備援。通常成因是節點/Pod 故障或排程卡住；再壞一個就可能導致服務中斷。"
+              runbook_url: "http://rb/a"
+              owner: team-a
+              tier: gold
+          - exp_labels:
+              severity: warning
+              tenant: db-b
+            exp_annotations:
+              summary: "HA workload for db-b is running with reduced redundancy"
+              summary_zh: "db-b 的 HA 工作負載正以降級（失去備援）狀態運行"
+              platform_summary: "[] db-b: ready replicas < desired on an HA set (≥2) — a pod/replica is MISSING (vanished, not crashed-in-place), so the value-based DB liveness rules (#875) cannot see it. Check kube_statefulset/deployment status + node health / scheduling."
+              platform_summary_zh: "[] db-b: HA 工作負載（≥2）就緒副本數 < 期望數 — 有 pod/副本「消失」（非原地崩潰），value-based DB 存活規則（#875）看不到。請查 kube_statefulset/deployment 狀態 + 節點健康 / 排程。"
+              description: "Your HA database has fewer ready replicas than desired — it is still serving but has lost redundancy. A node/pod failure or a stuck reschedule is the usual cause; one more failure could take the service down."
+              description_zh: "您的 HA 資料庫就緒副本數少於期望值 — 服務仍可用，但已失去備援。通常成因是節點/Pod 故障或排程卡住；再壞一個就可能導致服務中斷。"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+
+  # ── maintenance opt-out: db-d degraded HA SS but in maintenance → suppressed. ──
+  - interval: 15s
+    name: maintenance-suppresses
+    input_series:
+      - series: 'kube_statefulset_replicas{namespace="db-d", statefulset="mariadb"}'
+        values: '2x80'
+      - series: 'kube_statefulset_status_replicas_ready{namespace="db-d", statefulset="mariadb"}'
+        values: '1x80'
+      - series: 'tenant_metadata_info{tenant="db-d", runbook_url="http://rb/d", owner="team-d", tier="bronze"}'
+        values: '1x80'
+      - series: 'user_state_filter{tenant="db-d", filter="maintenance"}'
+        values: '1x80'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: TenantHAReplicasDegraded
+        exp_alerts: []
+
+  # ── cross-tenant isolation: db-d in maintenance must NOT suppress db-a. ──
+  - interval: 15s
+    name: cross-tenant-maintenance-isolation
+    input_series:
+      - series: 'kube_statefulset_replicas{namespace="db-a", statefulset="mariadb"}'
+        values: '2x80'
+      - series: 'kube_statefulset_status_replicas_ready{namespace="db-a", statefulset="mariadb"}'
+        values: '1x80'
+      - series: 'tenant_metadata_info{tenant="db-a", runbook_url="http://rb/a", owner="team-a", tier="gold"}'
+        values: '1x80'
+      - series: 'kube_statefulset_replicas{namespace="db-d", statefulset="mariadb"}'
+        values: '2x80'
+      - series: 'kube_statefulset_status_replicas_ready{namespace="db-d", statefulset="mariadb"}'
+        values: '1x80'
+      - series: 'user_state_filter{tenant="db-d", filter="maintenance"}'
+        values: '1x80'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: TenantHAReplicasDegraded
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              tenant: db-a
+              runbook_url: "http://rb/a"
+              owner: team-a
+              tier: gold
+            exp_annotations:
+              summary: "HA workload for db-a is running with reduced redundancy"
+              summary_zh: "db-a 的 HA 工作負載正以降級（失去備援）狀態運行"
+              platform_summary: "[gold] db-a: ready replicas < desired on an HA set (≥2) — a pod/replica is MISSING (vanished, not crashed-in-place), so the value-based DB liveness rules (#875) cannot see it. Check kube_statefulset/deployment status + node health / scheduling."
+              platform_summary_zh: "[gold] db-a: HA 工作負載（≥2）就緒副本數 < 期望數 — 有 pod/副本「消失」（非原地崩潰），value-based DB 存活規則（#875）看不到。請查 kube_statefulset/deployment 狀態 + 節點健康 / 排程。"
+              description: "Your HA database has fewer ready replicas than desired — it is still serving but has lost redundancy. A node/pod failure or a stuck reschedule is the usual cause; one more failure could take the service down."
+              description_zh: "您的 HA 資料庫就緒副本數少於期望值 — 服務仍可用，但已失去備援。通常成因是節點/Pod 故障或排程卡住；再壞一個就可能導致服務中斷。"
+              runbook_url: "http://rb/a"
+              owner: team-a
+              tier: gold
+
+  # ── for:15m de-flap: a rolling update degrades ready 2→1 for ~5m then recovers
+  #    to 2 — must NEVER fire. The MID-WINDOW assert (5m, degraded since t=0, only
+  #    5m << for:15m) is the one that actually exercises for: — a for:0s regression
+  #    fires there, the 20m-only check would false-green. (#875 review lesson) ──
+  - interval: 15s
+    name: rolling-update-deflap
+    input_series:
+      - series: 'kube_statefulset_replicas{namespace="db-a", statefulset="mariadb"}'
+        values: '2x80'
+      # ready=1 for samples 0..19 (0..~5m), then 2 (recovered) for the rest.
+      - series: 'kube_statefulset_status_replicas_ready{namespace="db-a", statefulset="mariadb"}'
+        values: '1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 2+0x60'
+      - series: 'tenant_metadata_info{tenant="db-a", runbook_url="http://rb/a", owner="team-a", tier="gold"}'
+        values: '1x80'
+    alert_rule_test:
+      # mid-window (5m, degraded since t=0, 5m << for:15m) → MUST be pending-not-firing.
+      - eval_time: 5m
+        alertname: TenantHAReplicasDegraded
+        exp_alerts: []
+      # after recovery (20m) → not firing.
+      - eval_time: 20m
+        alertname: TenantHAReplicasDegraded
+        exp_alerts: []
