@@ -45,8 +45,13 @@ def test_promtool_version_pin_matches_ci() -> None:
     df = _DOCKERFILE.read_text(encoding="utf-8")
     ci = _CI_YML.read_text(encoding="utf-8")
 
-    df_ver = _one(r"^ARG PROM_VERSION=(\S+)", df, "Dockerfile PROM_VERSION")
-    ci_ver = _one(r"^\s*PROM_VERSION=(\S+)", ci, "ci.yml PROM_VERSION")
+    # Capture the bare version token, tolerant of optional surrounding quotes and
+    # a trailing comment/whitespace ([^\s"'#]+ stops at the first of those), so a
+    # cosmetic `="2.53.2"` or `=2.53.2  # note` on either side does NOT produce a
+    # false skew (or a 0-match crash). Both sides go through the SAME extraction,
+    # so equal versions compare equal regardless of quoting style.
+    df_ver = _one(r"""^ARG PROM_VERSION=["']?([^\s"'#]+)""", df, "Dockerfile PROM_VERSION")
+    ci_ver = _one(r"""^\s*PROM_VERSION=["']?([^\s"'#]+)""", ci, "ci.yml PROM_VERSION")
 
     assert df_ver == ci_ver, (
         f"promtool VERSION skew: recipe-preview Dockerfile pins {df_ver!r} but "

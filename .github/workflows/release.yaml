@@ -599,6 +599,15 @@ jobs:
           # commit's bundled compiler snapshot is running (drift observability).
           build-args: |
             GIT_SHA=${{ github.sha }}
+          # Machine-readable provenance: stamp the source commit into the image
+          # MANIFEST as standard OCI annotations, so admission controllers /
+          # scanners (Kyverno, cosign policy, etc.) can read it WITHOUT pulling +
+          # running the image — the manifest-level complement to the runtime
+          # GIT_SHA in /healthz (+ the cosign signature + SBOM). Sibling component
+          # jobs can adopt the same block.
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=v${{ steps.version.outputs.VERSION }}
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/recipe-preview:v${{ steps.version.outputs.VERSION }}
             ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/recipe-preview:latest
