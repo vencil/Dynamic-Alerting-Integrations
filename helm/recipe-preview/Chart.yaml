@@ -2,12 +2,16 @@ apiVersion: v2
 name: recipe-preview            # → Service name "recipe-preview" (matches da-portal recipePreviewUrl)
 description: Would-fire preview service for the Dynamic Alerting Platform (#657)
 type: application
-# version / appVersion are PROVISIONAL. recipe-preview bundles the platform
-# compiler, so at release it is "sync-bumped" to the platform version (like
-# exporter/portal) — the release wiring (PR-D2) sets these so the derived image
-# tag (v<appVersion>) matches the published recipe-preview/v<platform> image.
-version: 0.1.0
-appVersion: "0.1.0"
+# recipe-preview bundles the platform compiler (a byte-identical snapshot), so it
+# is "sync-bumped" to the platform version like exporter/portal — NOT an
+# independent cadence (prevents bundled-compiler drift). version == appVersion ==
+# the cohort's current platform line (exporter/portal sit at the SAME value;
+# bump_docs moves all three together at each release wrap). The image-tag invariant
+# (#682) derives ghcr.io/vencil/recipe-preview:v<appVersion>; the release.yaml
+# `recipe-preview/v*` job gates Chart.yaml version == tag. Bump via
+# `bump_docs.py --recipe-preview <ver>` (registered in the wrap batch).
+version: 2.9.0
+appVersion: "2.9.0"
 home: https://github.com/vencil/Dynamic-Alerting-Integrations
 maintainers:
   - name: vencil

@@ -93,10 +93,10 @@ lang: zh
 
 **檢查方式**：⚠️ **reviewer convention（v2.8.0, PR #169）** — 此規則目前**未由 pre-commit hook 自動掃描**，靠 reviewer 在 PR review 時審視 README / 文件 / commit message 是否含推銷語言。Real lint candidate（簡單 keyword scan，~50 LOC）已排入 backlog；ship 後本句改為實際 hook 引用。
 
-### 7. 版號治理：五線 tag
+### 7. 版號治理：六線 tag
 
 **規則**：版號管理流程：
-1. `make version-check` — 檢查五線版號是否一致
+1. `make version-check` — 檢查六線版號是否一致
 2. `make bump-docs` — 自動更新文件內的版號字串
 3. 推 tag — 五條線各自：
    - `v*` — platform（Helm chart + Rule Packs）

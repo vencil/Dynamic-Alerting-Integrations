@@ -9,7 +9,7 @@
 | Method | Path | 說明 |
 |---|---|---|
 | `POST` | `/preview` | `{recipe, tenant, scenario}` → `{alertname, supported, states, warnings}`；`state ∈ firing / inactive / error` |
-| `GET` | `/healthz` | `200 {status, promtool}`（含 `promtool` 版本）|
+| `GET` | `/healthz` | `200 {status, promtool, git_sha}`（`promtool` 版本 + image build 的 `GIT_SHA`，供 drift 觀測）|
 
 `POST /preview` request：
 

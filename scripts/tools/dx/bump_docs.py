@@ -79,6 +79,7 @@ CHART_YAML = REPO_ROOT / "helm" / "threshold-exporter" / "Chart.yaml"
 DA_TOOLS_VERSION = REPO_ROOT / "components" / "da-tools" / "app" / "VERSION"
 TENANT_API_CHART_YAML = REPO_ROOT / "helm" / "tenant-api" / "Chart.yaml"
 DA_PORTAL_CHART_YAML = REPO_ROOT / "helm" / "da-portal" / "Chart.yaml"
+RECIPE_PREVIEW_CHART_YAML = REPO_ROOT / "helm" / "recipe-preview" / "Chart.yaml"
 
 # ---------------------------------------------------------------------------
 # Replacement rules per version line
@@ -720,17 +721,48 @@ def _build_portal_rules():
     return rules
 
 
+def _build_recipe_preview_rules():
+    """Build version replacement rules for recipe-preview (#657).
+
+    recipe-preview bundles a byte-identical snapshot of the platform compiler,
+    so it is "sync-bumped" to the platform version like exporter/portal — NOT an
+    independent cadence (prevents bundled-compiler drift). The ONLY version
+    source is helm/recipe-preview/Chart.yaml (version == appVersion); the
+    release.yaml `recipe-preview/v*` job gates Chart.yaml version == tag, and the
+    image-tag invariant (#682) derives the image from appVersion. The README
+    carries no version string (no H1 version / image tag / OCI --version), so —
+    unlike portal — there is nothing else to rewrite.
+
+    Returns list of rule dicts for the 'recipe-preview' version line.
+    """
+    return [
+        {
+            "file": "helm/recipe-preview/Chart.yaml",
+            "desc": "recipe-preview Chart.yaml version",
+            "pattern": r"^version:\s*[0-9]+\.[0-9]+\.[0-9]+",
+            "replacement": lambda v: f"version: {v}",
+        },
+        {
+            "file": "helm/recipe-preview/Chart.yaml",
+            "desc": "recipe-preview Chart.yaml appVersion",
+            "pattern": r'^appVersion:\s*"[0-9]+\.[0-9]+\.[0-9]+"',
+            "replacement": lambda v: f'appVersion: "{v}"',
+        },
+    ]
+
+
 def _build_rules():
     """Build all version replacement rules, grouped by version line.
 
     Returns {"platform": [...], "exporter": [...], "tools": [...],
-    "portal": [...], "tenant-api": [...]}.
+    "portal": [...], "recipe-preview": [...], "tenant-api": [...]}.
     """
     return {
         "platform": _build_platform_rules(),
         "exporter": _build_exporter_rules(),
         "tools": _build_tools_rules(),
         "portal": _build_portal_rules(),
+        "recipe-preview": _build_recipe_preview_rules(),
         "tenant-api": _build_tenant_api_rules(),
     }
 
@@ -1098,6 +1130,15 @@ def read_current_versions():
         if m:
             versions["portal"] = m.group(1)
 
+    # recipe-preview version from its Chart.yaml (sync-bump; version == appVersion).
+    if RECIPE_PREVIEW_CHART_YAML.exists():
+        content = RECIPE_PREVIEW_CHART_YAML.read_text(encoding="utf-8")
+        m = re.search(
+            r'^appVersion:\s*"([0-9]+\.[0-9]+\.[0-9]+)"', content, re.MULTILINE
+        )
+        if m:
+            versions["recipe-preview"] = m.group(1)
+
     return versions
 
 
@@ -1351,6 +1392,8 @@ def main():
                         help="New da-tools version (e.g. 0.2.0)")
     parser.add_argument("--portal", metavar="VER",
                         help="New da-portal version (e.g. 2.8.0)")
+    parser.add_argument("--recipe-preview", metavar="VER",
+                        help="New recipe-preview version (sync-bump; e.g. 2.9.0)")
     parser.add_argument("--tenant-api", metavar="VER",
                         help="New tenant-api version (e.g. 2.4.0)")
     parser.add_argument("--check", action="store_true",
@@ -1512,7 +1555,7 @@ def main():
 
     # --check mode: read current versions and verify all references match
     if args.check and not (args.platform or args.exporter or args.tools
-                           or args.portal):
+                           or args.portal or args.recipe_preview):
         versions = read_current_versions()
         if not versions:
             print("ERROR: Cannot read current versions from source files", file=sys.stderr)
@@ -1540,7 +1583,7 @@ def main():
 
     # Explicit bump mode
     if not (args.platform or args.exporter or args.tools or args.portal
-            or args.tenant_api):
+            or args.recipe_preview or args.tenant_api):
         parser.print_help()
         sys.exit(EXIT_CALLER_ERROR)
 
@@ -1551,6 +1594,7 @@ def main():
                           ("exporter", args.exporter),
                           ("tools", args.tools),
                           ("portal", args.portal),
+                          ("recipe-preview", args.recipe_preview),
                           ("tenant-api", args.tenant_api)]:
         if not new_ver:
             continue

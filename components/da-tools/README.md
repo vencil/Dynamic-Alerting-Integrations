@@ -1,7 +1,7 @@
 # da-tools (v2.9.0)
 
 <!-- 標題版號 = 最後 released tag（目前 v2.8.0）；下一版 in-flight feature 在內文以 inline 版號標記。
-     Release wrap 切五線 tag 時，本標題 + VERSION 檔 + 下方版號表跟著批次同步 bump。 -->
+     Release wrap 切六線 tag 時，本標題 + VERSION 檔 + 下方版號表跟著批次同步 bump。 -->
 
 > 💡 **想快速把這個元件跑起來？** → **[app/QUICKSTART.md](app/QUICKSTART.md)**（`docker run` 對 fixture 跑 da-guard、≤2 分鐘看到 CI 紅字攔截）。本篇 README 是完整子命令 / 客戶旅程 **參考（Reference）**。
 
@@ -378,7 +378,7 @@ DA_LANG=en docker run --rm ghcr.io/vencil/da-tools migrate --help
 | da-portal | v2.9.0 | `portal/v2.9.0` | Interactive Tools Hub image |
 | tenant-api | v2.8.0 | `tenant-api/v2.8.0` | Go HTTP API |
 
-> 命令表的 ✨vX.Y.Z 標記表示該命令於該版引入；下一版 in-flight 命令沿用同款 inline 標記。Release 收尾切五線 tag 時，本 README 標題與 [VERSION](app/VERSION) 跟著批次同步 bump。
+> 命令表的 ✨vX.Y.Z 標記表示該命令於該版引入；下一版 in-flight 命令沿用同款 inline 標記。Release 收尾切六線 tag 時，本 README 標題與 [VERSION](app/VERSION) 跟著批次同步 bump。
 >
 > **升級相容性** — da-tools 跨版本維持 **additive**：既有命令保留原 flag 介面，客戶 CI 內既有 `docker run ... da-tools <cmd>` 不需改動。
 

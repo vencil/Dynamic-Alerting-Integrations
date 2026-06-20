@@ -1,6 +1,6 @@
 # da-portal (v2.9.0)
 
-<!-- 標題版號 = 最後 released portal tag（目前 v2.8.0）。Release wrap 切五線 tag 時，
+<!-- 標題版號 = 最後 released portal tag（目前 v2.8.0）。Release wrap 切六線 tag 時，
      本標題 + 下方 helm --version 跟著批次同步 bump。 -->
 
 > 💡 **只想把元件跑起來看看？** → **[QUICKSTART.md](QUICKSTART.md)**（`docker run` 一行、≤ 2 分鐘看到一整套互動工具）。本篇 README 是給**部署 / 維運 portal 的人**看的進階配置與 packaging **參考**。

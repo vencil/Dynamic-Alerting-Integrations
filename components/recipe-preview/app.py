@@ -231,7 +231,8 @@ class _Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path.split("?", 1)[0] == "/healthz":
-            self._send(200, {"status": "ok", "promtool": _PROMTOOL_VERSION})
+            self._send(200, {"status": "ok", "promtool": _PROMTOOL_VERSION,
+                             "git_sha": _GIT_SHA})
             return
         self._send(404, {"error": "not found"})
 
@@ -277,13 +278,20 @@ def _detect_promtool_version():
 
 _PROMTOOL_VERSION = _detect_promtool_version()
 
+# Build provenance — the release/CI build stamps the image's GIT_SHA (Dockerfile
+# ARG→ENV); /healthz echoes it so an operator can confirm WHICH commit's bundled
+# compiler snapshot is running (drift observability, design §6 #5). "unknown" for
+# local/un-stamped builds.
+_GIT_SHA = os.environ.get("GIT_SHA", "unknown")
+
 
 def main():
     # §6 #5: record the promtool version at startup — the firing/inactive
     # verdict contract is version-bound (baseline 2.53.2).
     sys.stderr.write(
         f"recipe-preview listening on {LISTEN_HOST}:{LISTEN_PORT} "
-        f"(promtool: {_PROMTOOL_VERSION}, tenant-api: {TENANT_API_URL}, "
+        f"(promtool: {_PROMTOOL_VERSION}, git-sha: {_GIT_SHA}, "
+        f"tenant-api: {TENANT_API_URL}, "
         f"dev-bypass: {DEV_BYPASS}, max-concurrency: {MAX_CONCURRENCY}, "
         f"rate/min: {RATE_LIMIT_PER_MIN})\n"
     )
