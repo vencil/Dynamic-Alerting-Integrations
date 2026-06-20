@@ -744,6 +744,14 @@ groups:
   # metadata LOJ mirror every other pack alert. Metric names per KSM v2.18.0
   # (the deployed version, see node-health note); all kube_* are scraped by the
   # monitoring-components job with no metric_relabel keep-list.
+  # Two by-design calls (#888 adversarial review): (1) NO metric_group — matches
+  # the NodeNotReady sibling and keeps this a DISTINCT signal from the #875
+  # liveness criticals (different detection plane: kube_* topology vs exporter
+  # up/value), so during a total outage both surface (no dedup inhibit). (2)
+  # `max(SS) or max(Deploy)` value-masks a tenant with BOTH a degraded SS AND
+  # Deploy (keeps the SS deficit) — latent: the alert fires on PRESENCE, no
+  # annotation renders $value, and tenant↔workload is 1:1 here. Restructure to
+  # `max((SS) or (Deploy))` only if $value / a deficit threshold is added later.
   # ─────────────────────────────────────────────────────────────────────
   - name: kubernetes-ha-replicas
     rules:

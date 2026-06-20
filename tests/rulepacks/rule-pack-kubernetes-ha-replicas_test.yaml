@@ -136,25 +136,77 @@ tests:
               tier: gold
 
   # ── for:15m de-flap: a rolling update degrades ready 2→1 for ~5m then recovers
-  #    to 2 — must NEVER fire. The MID-WINDOW assert (5m, degraded since t=0, only
-  #    5m << for:15m) is the one that actually exercises for: — a for:0s regression
-  #    fires there, the 20m-only check would false-green. (#875 review lesson) ──
+  #    to 2 — must NEVER fire. The MID-WINDOW assert (4m45s, degraded since t=0,
+  #    << for:15m) is the one that actually exercises for: — a for:0s regression
+  #    fires there, the 20m-only check would false-green. (#875+#888 review lesson:
+  #    assert at the LAST still-degraded sample, NOT the recovery boundary.) ──
   - interval: 15s
     name: rolling-update-deflap
     input_series:
       - series: 'kube_statefulset_replicas{namespace="db-a", statefulset="mariadb"}'
         values: '2x80'
-      # ready=1 for samples 0..19 (0..~5m), then 2 (recovered) for the rest.
+      # ready=1 for samples 0..19 (t=0 … t=4m45s), then 2 (recovered) from sample 20 (t=5m).
       - series: 'kube_statefulset_status_replicas_ready{namespace="db-a", statefulset="mariadb"}'
         values: '1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 2+0x60'
       - series: 'tenant_metadata_info{tenant="db-a", runbook_url="http://rb/a", owner="team-a", tier="gold"}'
         values: '1x80'
     alert_rule_test:
-      # mid-window (5m, degraded since t=0, 5m << for:15m) → MUST be pending-not-firing.
-      - eval_time: 5m
+      # mid-window: t=4m45s is the LAST still-degraded sample (ready=1, degraded since
+      # t=0, 4m45s << for:15m) → MUST be pending-not-firing. Asserting at 5m would land
+      # on the first RECOVERED sample (ready=2, core empty) and false-green a for:0s
+      # regression — exactly the #875 S6 trap, re-caught here in #888 review.
+      - eval_time: 4m45s
         alertname: TenantHAReplicasDegraded
         exp_alerts: []
       # after recovery (20m) → not firing.
       - eval_time: 20m
         alertname: TenantHAReplicasDegraded
         exp_alerts: []
+
+  # ── non-db namespace must NOT fire — guards the `namespace=~"db-.+"` filter
+  #    (the only test standing between that filter and a silent removal). ──
+  - interval: 15s
+    name: non-db-namespace-excluded
+    input_series:
+      - series: 'kube_statefulset_replicas{namespace="prod", statefulset="api"}'
+        values: '3x80'
+      - series: 'kube_statefulset_status_replicas_ready{namespace="prod", statefulset="api"}'
+        values: '1x80'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: TenantHAReplicasDegraded
+        exp_alerts: []
+
+  # ── HA fully down (desired=2, ready=0) → still fires (deficit=2>0, desired>=2) —
+  #    the boundary between "degraded" and single-instance (desired<2). The critical
+  #    layer (#875 ClusterDown / #869 TenantExporterAbsent) pages this too, but the
+  #    redundancy-lost warning still correctly surfaces. ──
+  - interval: 15s
+    name: ha-fully-down-fires
+    input_series:
+      - series: 'kube_statefulset_replicas{namespace="db-f", statefulset="mariadb"}'
+        values: '2x80'
+      - series: 'kube_statefulset_status_replicas_ready{namespace="db-f", statefulset="mariadb"}'
+        values: '0x80'
+      - series: 'tenant_metadata_info{tenant="db-f", runbook_url="http://rb/f", owner="team-f", tier="silver"}'
+        values: '1x80'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: TenantHAReplicasDegraded
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              tenant: db-f
+              runbook_url: "http://rb/f"
+              owner: team-f
+              tier: silver
+            exp_annotations:
+              summary: "HA workload for db-f is running with reduced redundancy"
+              summary_zh: "db-f 的 HA 工作負載正以降級（失去備援）狀態運行"
+              platform_summary: "[silver] db-f: ready replicas < desired on an HA set (≥2) — a pod/replica is MISSING (vanished, not crashed-in-place), so the value-based DB liveness rules (#875) cannot see it. Check kube_statefulset/deployment status + node health / scheduling."
+              platform_summary_zh: "[silver] db-f: HA 工作負載（≥2）就緒副本數 < 期望數 — 有 pod/副本「消失」（非原地崩潰），value-based DB 存活規則（#875）看不到。請查 kube_statefulset/deployment 狀態 + 節點健康 / 排程。"
+              description: "Your HA database has fewer ready replicas than desired — it is still serving but has lost redundancy. A node/pod failure or a stuck reschedule is the usual cause; one more failure could take the service down."
+              description_zh: "您的 HA 資料庫就緒副本數少於期望值 — 服務仍可用，但已失去備援。通常成因是節點/Pod 故障或排程卡住；再壞一個就可能導致服務中斷。"
+              runbook_url: "http://rb/f"
+              owner: team-f
+              tier: silver
