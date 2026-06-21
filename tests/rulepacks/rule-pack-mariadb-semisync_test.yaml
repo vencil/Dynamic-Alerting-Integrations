@@ -85,11 +85,13 @@ tests:
         values: '2x20'
       - series: 'user_state_filter{tenant="db-d", filter="maintenance"}'
         values: '1x20'
-      # db-e — ReplicasGone condition + maintenance → STILL FIRES (critical, no opt-out).
+      # db-e — the SHARP case: BOTH conditions true (status=0 AND clients=0) + maintenance.
+      # Proves the asymmetry on ONE entity: the warning (Degraded) is PromQL-suppressed by
+      # the opt-out while the critical (ReplicasGone) STILL fires (no opt-out).
       - series: 'mysql_global_variables_rpl_semi_sync_master_enabled{job="tenant-exporters", tenant="db-e", instance="db-e-0"}'
         values: '1x20'
       - series: 'mysql_global_status_rpl_semi_sync_master_status{job="tenant-exporters", tenant="db-e", instance="db-e-0"}'
-        values: '1x20'
+        values: '0x20'
       - series: 'mysql_global_status_rpl_semi_sync_master_clients{job="tenant-exporters", tenant="db-e", instance="db-e-0"}'
         values: '0x20'
       - series: 'user_state_filter{tenant="db-e", filter="maintenance"}'
@@ -133,3 +135,43 @@ tests:
       - eval_time: 4m
         alertname: MariaDBSemiSyncDegraded
         exp_alerts: []
+
+  # ── Convergence steady state: a REAL clients=0 outage has BOTH status=0 AND
+  #    clients=0 on the SAME tenant (clients=0 → after the timeout, status flips to 0).
+  #    Both rules fire at the PromQL level; in production Alertmanager inhibit
+  #    (metric_group:liveness) suppresses the Degraded warning so only the
+  #    ReplicasGone critical pages — that inhibit is not promtool-testable. ──
+  - interval: 15s
+    name: convergence-both-conditions-both-rules-fire
+    input_series:
+      - series: 'mysql_global_variables_rpl_semi_sync_master_enabled{job="tenant-exporters", tenant="db-f", instance="db-f-0"}'
+        values: '1x20'
+      - series: 'mysql_global_status_rpl_semi_sync_master_status{job="tenant-exporters", tenant="db-f", instance="db-f-0"}'
+        values: '0x20'
+      - series: 'mysql_global_status_rpl_semi_sync_master_clients{job="tenant-exporters", tenant="db-f", instance="db-f-0"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: MariaDBSemiSyncDegraded
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              metric_group: liveness
+              tenant: db-f
+            exp_annotations:
+              summary: "MariaDB semi-sync degraded — durability guarantee lost for tenant db-f"
+              summary_zh: "MariaDB semi-sync 降級 — 租戶 db-f 失去持久性保證"
+              description: "Tenant db-f has semi-sync enabled but it fell back to ASYNC (rpl_semi_sync_master_status=0) — writes continue but the semi-sync durability guarantee is lost (a primary failure now risks data loss). Usually a replica timed out / disconnected. read_only stays 0, so MariaDBNoPrimary cannot see this."
+              description_zh: "租戶 db-f 啟用了 semi-sync 但已 fallback 到 ASYNC（status=0）— 寫入照常，但失去 semi-sync 持久性保證（此時 primary 故障有資料遺失風險）。通常是 replica timeout／斷線。read_only 仍為 0，故 MariaDBNoPrimary 看不到。"
+      - eval_time: 3m
+        alertname: MariaDBSemiSyncReplicasGone
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              metric_group: liveness
+              tenant: db-f
+            exp_annotations:
+              summary: "MariaDB semi-sync has ZERO connected replicas for tenant db-f"
+              summary_zh: "MariaDB semi-sync 租戶 db-f 連線的 replica 數為 0"
+              description: "Tenant db-f has semi-sync enabled but ZERO semi-sync replicas connected (rpl_semi_sync_master_clients=0) — durability redundancy is gone and cannot self-recover until a replica reconnects. With wait_no_slave=ON, commits stall up to the timeout before falling back to async. A structural failure, not a transient blip."
+              description_zh: "租戶 db-f 啟用了 semi-sync 但連線的 semi-sync replica 數為 0（clients=0）— 持久性備援歸零，且在 replica 重連前無法自癒。wait_no_slave=ON 時每筆 commit 會 stall 到 timeout 才 fallback async。結構性故障，非短暫抖動。"

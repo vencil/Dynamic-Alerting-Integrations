@@ -173,8 +173,10 @@ groups:
       # semi-sync is built-in, NOT a loadable plugin; VERIFIED on real
       # prom/mysqld-exporter v0.18.0 + mariadb:11.8), so a bare _status==0 would STORM
       # every non-semi-sync tenant. enabled==1 = "this instance WANTS semi-sync" →
-      # expected-vs-observed, same idiom as #869 TenantExporterAbsent. Per-instance:
-      # the PRIMARY is the one with master_enabled=1 (replicas =0 so they don't match).
+      # expected-vs-observed, same idiom as #869 TenantExporterAbsent. The gate is purely
+      # INTENT (semi-sync vs not) — NOT primary-vs-replica: the tenant-exporters scrape is
+      # role:service with instance=namespace → ONE series per tenant (the service-routed
+      # pod); master_enabled discriminates per-pod only if the scrape moves to role:endpoints.
       # metric_group:liveness → severity-dedup (NoPrimary/ReplicasGone critical inhibits
       # this warning). Lab can't produce the EVENT (needs 2-node semi-sync) → promtool
       # synthetic only; ⛔ verify metric presence at customer rollout.
