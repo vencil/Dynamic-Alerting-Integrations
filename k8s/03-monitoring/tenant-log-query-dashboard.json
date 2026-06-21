@@ -52,11 +52,11 @@
     },
     {
       "title": "Active Log-Query Tenants",
-      "description": "Distinct account partitions that have sent at least one log-query request",
+      "description": "Account partitions with log-query activity in the last 5m (rate > 0) — window-active, not all-time (CodeRabbit #900)",
       "type": "stat",
       "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
       "targets": [{
-        "expr": "count(count by(account_id) (tenant_log_query_requests_total)) or vector(0)",
+        "expr": "count(sum by(account_id) (rate(tenant_log_query_requests_total[5m])) > 0) or vector(0)",
         "legendFormat": ""
       }],
       "fieldConfig": {
