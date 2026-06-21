@@ -23,7 +23,6 @@ fired (inactive); returncode != 0 → it fired. A compile error must NOT be
 mislabeled as firing, so we gate with `build_pack` exception handling +
 `promtool check rules` (syntax) BEFORE the inverted-assert (§5.2 layering).
 """
-import math
 import os
 import re
 import shutil
@@ -61,20 +60,31 @@ _FOR_MINUTES = {"0s": 0, "1m": 1, "5m": 5, "15m": 15, "30m": 30, "1h": 60}
 # guess → wrong eval_time → a real firing misread (CodeRabbit #873).
 _DUR_FULL_RE = re.compile(r"^([0-9]+(?:ns|us|µs|ms|s|m|h))+$")
 _DUR_TOKEN_RE = re.compile(r"(\d+)(ns|us|µs|ms|s|m|h)")
-_DUR_UNIT_SECONDS = {"ns": 1e-9, "us": 1e-6, "µs": 1e-6, "ms": 1e-3,
-                     "s": 1, "m": 60, "h": 3600}
+# nanoseconds per unit — INTEGER, so a pathological 400-digit window stays in
+# Python's arbitrary-precision int and NEVER hits an int→float OverflowError (the
+# earlier `math.ceil(secs / 60)` form crashed on a huge window — CodeRabbit). µs==us.
+_DUR_UNIT_NS = {"ns": 1, "us": 1000, "µs": 1000, "ms": 1_000_000,
+                "s": 1_000_000_000, "m": 60_000_000_000, "h": 3_600_000_000_000}
+_NS_PER_MIN = 60_000_000_000
+# the preview synthesizes a 1-sample-PER-MINUTE series, so a window beyond ~a day
+# is impractical to preview — cap it. This also bounds the series length so an
+# absurd window fails fast as state:error instead of OOM-ing/timing-out promtool.
+_MAX_WINDOW_MIN = 1440  # 24h
 
 
 def _window_minutes(window):
     """Prometheus duration (compound + sub-second ok) → whole minutes (ceil; min 1).
-    None on a malformed / non-positive window."""
+    INTEGER arithmetic throughout. None on a malformed / non-positive / absurdly
+    large (> _MAX_WINDOW_MIN) window — the preview can't synthesize a series that
+    long, and a recipe with such a window still deploys (the preview just abstains)."""
     w = str(window or "").strip()
     if not _DUR_FULL_RE.match(w):
         return None
-    secs = sum(int(n) * _DUR_UNIT_SECONDS[u] for n, u in _DUR_TOKEN_RE.findall(w))
-    if secs <= 0:
+    ns = sum(int(n) * _DUR_UNIT_NS[u] for n, u in _DUR_TOKEN_RE.findall(w))
+    if ns <= 0:
         return None
-    return max(1, math.ceil(secs / 60))
+    minutes = -(-ns // _NS_PER_MIN)   # integer ceil-div: no float → no overflow
+    return minutes if minutes <= _MAX_WINDOW_MIN else None
 
 _PROMTOOL = shutil.which("promtool")
 

@@ -183,8 +183,13 @@ class TestBuildPreviewTest:
         assert rp._window_minutes("1h30m") == 90
         assert rp._window_minutes("500ms") == 1
         assert rp._window_minutes("2h") == 120
-        assert rp._window_minutes("10") is None       # no unit → still rejected
+        assert rp._window_minutes("10") is None        # no unit → still rejected
         assert rp._window_minutes("0s") is None        # zero → fail-closed
+        assert rp._window_minutes("24h") == 1440        # at the cap → allowed
+        assert rp._window_minutes("2000h") is None      # past the cap → fail-closed
+        # pathological huge window: INTEGER arithmetic must not OverflowError on
+        # int→float (the earlier math.ceil(secs/60) form did — CodeRabbit).
+        assert rp._window_minutes("9" * 400 + "h") is None
 
 
 # ── promtool result classification (pure; finding 2 — rc!=0 ≠ firing) ──
