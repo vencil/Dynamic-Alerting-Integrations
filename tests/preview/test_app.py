@@ -222,3 +222,31 @@ class TestEndToEnd:
             {"recipe": rate, "tenant": "shop-a", "scenario": {"value": 5}},
             HDR, authorizer=ALLOW)
         assert s == 200 and r["supported"] is False
+
+
+# ── HTTP layer: /healthz reports build provenance (no promtool needed) ──
+def test_healthz_reports_promtool_and_git_sha():
+    """GET /healthz → 200 {status, promtool, git_sha}. git_sha echoes the image's
+    GIT_SHA build-arg (drift observability, PR-D2); defaults to "unknown" locally."""
+    import json
+    import threading
+    import urllib.request
+    from http.server import ThreadingHTTPServer
+
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), app._Handler)
+    port = srv.server_address[1]
+    t = threading.Thread(target=srv.serve_forever, daemon=True)
+    t.start()
+    try:
+        with urllib.request.urlopen(
+                f"http://127.0.0.1:{port}/healthz", timeout=5) as resp:
+            assert resp.status == 200
+            body = json.loads(resp.read())
+    finally:
+        srv.shutdown()
+        srv.server_close()
+        t.join(timeout=5)
+
+    assert body["status"] == "ok"
+    assert "promtool" in body
+    assert body["git_sha"] == app._GIT_SHA   # module reads env GIT_SHA, default "unknown"

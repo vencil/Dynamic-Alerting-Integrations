@@ -1,6 +1,6 @@
 # Threshold Exporter (v2.9.0)
 
-<!-- 標題版號 = 最後 released tag。Release wrap 切五線 tag 時，本標題 + §Deploy 的 helm --version 跟著批次同步 bump。 -->
+<!-- 標題版號 = 最後 released tag。Release wrap 切六線 tag 時，本標題 + §Deploy 的 helm --version 跟著批次同步 bump。 -->
 
 > 把告警閾值寫成 YAML、SHA-256 熱重載的多租戶 Prometheus exporter——**改一個數字即生效，不重啟、不碰 Prometheus rule**。
 

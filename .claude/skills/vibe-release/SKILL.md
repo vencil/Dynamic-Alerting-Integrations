@@ -1,21 +1,21 @@
 ---
 name: vibe-release
-description: Vibe 五線版號 release 收尾 SOP — make pre-tag → CHANGELOG distill + project-face refresh → 5-line tag push → gh release ×5。Use when wrapping a Vibe release：user 說「release 收尾 / 進入 phase e / 準備 release」、問「release 準備好了嗎」、branch 名 `chore/v*-release-wrapup`、或動到 `make pre-tag` / 五線 tag push / `gh release create`。延伸 #474 Layer 3 的 inline checklist 為系統化流程。
+description: Vibe 六線版號 release 收尾 SOP — make pre-tag → CHANGELOG distill + project-face refresh → 6-line tag push → gh release ×6。Use when wrapping a Vibe release：user 說「release 收尾 / 進入 phase e / 準備 release」、問「release 準備好了嗎」、branch 名 `chore/v*-release-wrapup`、或動到 `make pre-tag` / 六線 tag push / `gh release create`。延伸 #474 Layer 3 的 inline checklist 為系統化流程。
 ---
 
-# vibe-release — 五線版號 release 收尾
+# vibe-release — 六線版號 release 收尾
 
 完整步驟、distribution artifacts、benchmark gate、踩坑見 [`github-release-playbook.md`](../../../docs/internal/github-release-playbook.md)。本 skill 是**收尾 agent 紀律**的濃縮：三條規則（源自 v2.8.0 收尾踩的 2 個 release blocker），加 release-type 分流。
 
 ## 何時觸發
 
-release-wrap-up 情境（**非**一般 dev）：「release 收尾 / 進入 phase e / 準備 release」、「release 準備好了嗎」、`chore/v*-release-wrapup` branch、`make pre-tag` / 五線 tag push / `gh release create ×5`。
+release-wrap-up 情境（**非**一般 dev）：「release 收尾 / 進入 phase e / 準備 release」、「release 準備好了嗎」、`chore/v*-release-wrapup` branch、`make pre-tag` / 六線 tag push / `gh release create ×6`。
 
 ## Release-type 分流
 
 | 類型 | 範例 | 推哪些 tag |
 |---|---|---|
-| **GA**（component 有變更） | v2.8.0 | 五線中有 code change 的線：`v*` / `exporter/v*` / `tools/v*` / `portal/v*` / `tenant-api/v*` |
+| **GA**（component 有變更） | v2.8.0 | 六線中有 code change 的線：`v*` / `exporter/v*` / `tools/v*` / `portal/v*` / `recipe-preview/v*` / `tenant-api/v*` |
 | **Interim DX**（僅平台 / 內部工具） | v2.8.1 | 通常只 `v*`（platform tag）；component binary 不變則不推其 tag |
 | **Hotfix** | 假想 v2.8.2 | 受影響 component tag（觸發 build/image）**＋ 平台 `v*` tag**（見下「錨點鐵則」） |
 
@@ -27,7 +27,7 @@ release-wrap-up 情境（**非**一般 dev）：「release 收尾 / 進入 phase
 
 ### 1. `make pre-tag`（硬性閘門）
 
-含 version-check + lint-docs + playbook-freshness + benchmark-report-warn + **`docker-build-all`（hard gate）+ `trivy-scan-all`（informational）**（#474 Layer 2 已把 4 component image build + CVE scan 收進 pre-tag）。
+含 version-check + lint-docs + playbook-freshness + benchmark-report-warn + **`docker-build-all`（hard gate）+ `trivy-scan-all`（informational）**（#474 Layer 2 已把 5 component image build + CVE scan 收進 pre-tag）。
 
 > **仍是 authoritative-but-incomplete**：pre-tag 是**最低標**，`release.yaml` 才是真 contract。release-only 的步驟（cosign 簽章、helm chart OCI push、digest verification #445 L3）不在 pre-tag——agent 須 audit「pre-tag 涵蓋了什麼 vs release.yaml 實際做什麼」，缺的手動補驗。#474 已把 docker build + Trivy 那段機械化（過去是純 discipline）。
 
@@ -43,7 +43,7 @@ release-wrap-up 情境（**非**一般 dev）：「release 收尾 / 進入 phase
 
 issue triage 每天動、docs 月級更新——靜態 issue list 幾天就說謊。roadmap 拆三段：(1) vX.Y.0 delivered 靜態成就；(2) v.next 方向 + **單一 live milestone link** + 3-5 focus bullet；(3) 長期願景。docs = SSOT for「打算做什麼」，milestone = SSOT for「正在做什麼」，不同抽象層故不漂移。
 
-### 4. 五線 tag push + `gh release create`
+### 4. 六線 tag push + `gh release create`
 
 依分流推 tag；步驟、artifact、benchmark gate 見 [`github-release-playbook.md`](../../../docs/internal/github-release-playbook.md)。
 

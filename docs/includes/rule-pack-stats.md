@@ -8,10 +8,10 @@
 | elasticsearch | elasticsearch_exporter | 11 | 7 |
 | jvm | jmx_exporter | 9 | 7 |
 | kafka | kafka_exporter | 13 | 9 |
-| kubernetes | cAdvisor + kube-state-metrics | 15 | 9 |
+| kubernetes | cAdvisor + kube-state-metrics | 16 | 10 |
 | liveness | liveness | 0 | 1 |
-| mariadb | mysqld_exporter (Percona) | 11 | 10 |
-| mongodb | mongodb_exporter | 10 | 6 |
+| mariadb | mysqld_exporter (Percona) | 11 | 12 |
+| mongodb | mongodb_exporter | 10 | 8 |
 | nginx | nginx-prometheus-exporter | 9 | 6 |
 | operational | threshold-exporter 運營模式 | 0 | 4 |
 | oracle | oracledb_exporter | 11 | 7 |
@@ -19,4 +19,4 @@
 | rabbitmq | rabbitmq_exporter | 12 | 8 |
 | redis | redis_exporter | 11 | 6 |
 | platform | threshold-exporter 自監控 | 0 | 21 |
-| **合計** | | **147** | **124** |
+| **合計** | | **148** | **129** |

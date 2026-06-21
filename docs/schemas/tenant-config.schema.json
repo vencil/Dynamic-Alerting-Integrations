@@ -228,7 +228,9 @@
         "db_type": {
           "type": "string",
           "title": "Database Type",
-          "description": "Primary database type for this tenant. Used for dimension-based grouping.",
+          "description": "Primary database type for this tenant. Used for dimension-based grouping AND (since #869) to opt the tenant into per-tenant exporter liveness: the exporter emits tenant_expected_exporter{tenant,db_type} ONLY when db_type is set — the LHS of the TenantExporterAbsent anti-join. A typo'd KEY (e.g. dbType / db_typ) is caught by this object's additionalProperties:false; a typo'd VALUE is caught by this enum. Either typo previously dropped db_type silently to \"\", removing the tenant from liveness with no signal (#880 Day-3 hardening).",
+          "$comment": "enum SSOT = the database rule-packs in PACK_ORDER (scripts/tools/dx/generate_platform_data.py) minus the app/platform packs (jvm/nginx/kubernetes/operational/platform/custom-alerts/liveness). Extend this list when adding a new DB exporter rule-pack.",
+          "enum": ["mariadb", "postgresql", "redis", "mongodb", "elasticsearch", "oracle", "db2", "clickhouse", "kafka", "rabbitmq"],
           "examples": ["postgresql", "mariadb", "mongodb", "redis"]
         },
         "tags": {
@@ -246,7 +248,8 @@
           "examples": [["team-alpha", "tier-1-dbs"]]
         }
       },
-      "additionalProperties": true
+      "$comment": "additionalProperties:false (was true) so a mistyped _metadata KEY is rejected at author/CI time instead of being silently swallowed — this is the shift-left half of the #880 db_type-typo fix (a dbType/db_typ key no longer parses to DBType=\"\" undetected). All legitimate metadata fields are enumerated above; add a property here before introducing a new one.",
+      "additionalProperties": false
     },
     "silentMode": {
       "oneOf": [
@@ -296,46 +299,59 @@
       ]
     },
     "maintenanceMode": {
-      "type": "object",
       "title": "Maintenance Mode Configuration",
-      "description": "Suppress alerts at PromQL level (no TSDB records). Useful for planned maintenance. Supports one-time expiry and recurring schedules (cron). Distinct from silent_mode.",
-      "properties": {
-        "target": {
+      "description": "Suppress alerts at PromQL level (no TSDB records). Useful for planned maintenance. Distinct from silent_mode. Accepts the scalar state-filter shorthand ('enable'/'disable', like every other _state_* filter) OR the structured object (one-time expiry / recurring schedules).",
+      "$comment": "oneOf[scalar, object] mirrors silentMode. The scalar form is what the exporter actually accepts for any _state_* filter (resolve.go ResolveStateFiltersAt: any non-'disable' value enables; the structured branch is taken only when the value contains 'expires:'). Modelling it object-only previously rejected the valid scalar form at schema-validation time (#880 surfaced this on examples/redis-tenant.yaml).",
+      "oneOf": [
+        {
           "type": "string",
-          "title": "Target",
-          "description": "Status: 'enable' (default) or 'disable'. When 'disable', maintenance mode is inactive.",
-          "enum": ["enable", "disable"],
-          "default": "enable"
+          "title": "Maintenance State (Scalar shorthand)",
+          "description": "'enable' = this tenant is in maintenance (its alerts are suppressed via the user_state_filter{filter=\"maintenance\"} unless-join); 'disable' = inactive. For one-time expiry or recurring windows use the structured object form below.",
+          "enum": ["enable", "disable"]
         },
-        "enabled": {
-          "type": "boolean",
-          "title": "Enabled Flag",
-          "description": "Boolean equivalent of target field. true = 'enable', false = 'disable'. Use either 'target' (string) or 'enabled' (boolean).",
-          "examples": [true, false]
-        },
-        "expires": {
-          "type": "string",
-          "title": "Expiration Timestamp (ISO 8601)",
-          "description": "ISO 8601 UTC timestamp. Maintenance mode auto-expires at this time. Optional; omit for indefinite maintenance.",
-          "format": "date-time",
-          "examples": ["2026-03-15T06:00:00Z", "2026-03-20T18:00:00Z"]
-        },
-        "reason": {
-          "type": "string",
-          "title": "Reason",
-          "description": "Human-readable reason for maintenance. Optional; appears in observability logs.",
-          "examples": ["Planned DB migration", "Hardware upgrade", "System maintenance window"]
-        },
-        "recurring": {
-          "type": "array",
-          "title": "Recurring Maintenance Windows (v1.11.0+)",
-          "description": "List of periodic maintenance schedules (e.g., weekly backups). Processed by maintenance_scheduler.py CronJob to auto-generate Alertmanager silences.",
-          "items": {
-            "$ref": "#/definitions/recurringSchedule"
-          }
+        {
+          "type": "object",
+          "title": "Maintenance Mode (Structured)",
+          "description": "Structured form with optional one-time expiry and recurring schedules (cron).",
+          "properties": {
+            "target": {
+              "type": "string",
+              "title": "Target",
+              "description": "Status: 'enable' (default) or 'disable'. When 'disable', maintenance mode is inactive.",
+              "enum": ["enable", "disable"],
+              "default": "enable"
+            },
+            "enabled": {
+              "type": "boolean",
+              "title": "Enabled Flag",
+              "description": "Boolean equivalent of target field. true = 'enable', false = 'disable'. Use either 'target' (string) or 'enabled' (boolean).",
+              "examples": [true, false]
+            },
+            "expires": {
+              "type": "string",
+              "title": "Expiration Timestamp (ISO 8601)",
+              "description": "ISO 8601 UTC timestamp. Maintenance mode auto-expires at this time. Optional; omit for indefinite maintenance.",
+              "format": "date-time",
+              "examples": ["2026-03-15T06:00:00Z", "2026-03-20T18:00:00Z"]
+            },
+            "reason": {
+              "type": "string",
+              "title": "Reason",
+              "description": "Human-readable reason for maintenance. Optional; appears in observability logs.",
+              "examples": ["Planned DB migration", "Hardware upgrade", "System maintenance window"]
+            },
+            "recurring": {
+              "type": "array",
+              "title": "Recurring Maintenance Windows (v1.11.0+)",
+              "description": "List of periodic maintenance schedules (e.g., weekly backups). Processed by maintenance_scheduler.py CronJob to auto-generate Alertmanager silences.",
+              "items": {
+                "$ref": "#/definitions/recurringSchedule"
+              }
+            }
+          },
+          "additionalProperties": false
         }
-      },
-      "additionalProperties": false
+      ]
     },
     "recurringSchedule": {
       "type": "object",

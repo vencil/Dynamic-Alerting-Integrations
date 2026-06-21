@@ -1,18 +1,21 @@
 # release.yaml — Build & push container images + Helm chart on tag
 #
-# 觸發條件（五線版號策略）：
-#   - exporter/v*    → threshold-exporter Docker image + Helm chart
-#   - tools/v*       → da-tools Docker image
-#   - portal/v*      → da-portal Docker image (Interactive Tools Portal)
-#   - tenant-api/v*  → tenant-api Docker image + Helm chart
-#   - v*             → platform tag，僅用於 GitHub Release 錨點，不觸發 build
+# 觸發條件（六線版號策略）：
+#   - exporter/v*        → threshold-exporter Docker image + Helm chart
+#   - tools/v*           → da-tools Docker image
+#   - portal/v*          → da-portal Docker image (Interactive Tools Portal)
+#   - recipe-preview/v*  → recipe-preview Docker image + Helm chart (#657 would-fire preview)
+#   - tenant-api/v*      → tenant-api Docker image + Helm chart
+#   - v*                 → platform tag，僅用於 GitHub Release 錨點，不觸發 build
 #
 # 產出：
 #   - ghcr.io/vencil/threshold-exporter:v<version>  (Docker image, v-prefixed)
 #   - ghcr.io/vencil/da-tools:v<da-tools-version>    (Docker image, v-prefixed)
 #   - ghcr.io/vencil/da-portal:v<version>             (Docker image, v-prefixed)
+#   - ghcr.io/vencil/recipe-preview:v<version>        (Docker image, v-prefixed)
 #   - ghcr.io/vencil/tenant-api:v<version>             (Docker image, v-prefixed)
 #   - oci://ghcr.io/vencil/charts/threshold-exporter (Helm chart)
+#   - oci://ghcr.io/vencil/charts/recipe-preview     (Helm chart)
 #   - oci://ghcr.io/vencil/charts/tenant-api         (Helm chart)
 #
 # 前置條件：
@@ -27,6 +30,7 @@ on:
       - "exporter/v*"
       - "tools/v*"
       - "portal/v*"
+      - "recipe-preview/v*"
       - "tenant-api/v*"
 
 env:
@@ -531,7 +535,134 @@ jobs:
           ignore-unfixed: true
 
   # ----------------------------------------------------------------
-  # Job 4: Build & push tenant-api image + Helm chart
+  # Job 4: Build & push recipe-preview image + Helm chart (#657)
+  # ----------------------------------------------------------------
+  # recipe-preview is a "sync-bumped" line — re-tagged at EVERY platform release
+  # (same commit as the rule-pack ConfigMap), NOT an independent cadence — so its
+  # bundled compiler snapshot can't silently drift from the platform compiler.
+  # The image bundles a SHA-pinned promtool because the firing/inactive verdict
+  # format is version-bound; PROM_VERSION + amd64 digest == ci.yml's promtool gate
+  # is CI-enforced (tests/preview/test_promtool_pin_parity.py).
+  release-recipe-preview:
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/recipe-preview/')
+    permissions:
+      contents: read
+      packages: write
+      # cosign keyless signing (sigstore): exchange the GitHub OIDC token for an
+      # ephemeral Fulcio cert, publish to the Rekor transparency log — no
+      # long-term keys. Job-level perms REPLACE the workflow default, so
+      # contents/packages are re-declared here.
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Extract version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF_NAME#recipe-preview/v}" >> "$GITHUB_OUTPUT"
+
+      - name: Verify Chart.yaml version matches tag
+        run: |
+          CHART_VER=$(grep '^version:' helm/recipe-preview/Chart.yaml | awk '{print $2}')
+          if [ "$CHART_VER" != "${{ steps.version.outputs.VERSION }}" ]; then
+            echo "ERROR: helm/recipe-preview/Chart.yaml version ($CHART_VER) != tag (${{ steps.version.outputs.VERSION }})"
+            echo "Run: make bump-docs RECIPE_PREVIEW=${{ steps.version.outputs.VERSION }}"
+            exit 1
+          fi
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3.7.0
+        with:
+          cosign-release: v2.4.1
+
+      # --- Docker image (multi-arch: amd64 + arm64, #463) ---
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push recipe-preview image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: components/recipe-preview/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          # GIT_SHA → image ENV → /healthz, so an operator can confirm which
+          # commit's bundled compiler snapshot is running (drift observability).
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+          # Machine-readable provenance: stamp the source commit into the image
+          # MANIFEST as standard OCI annotations, so admission controllers /
+          # scanners (Kyverno, cosign policy, etc.) can read it WITHOUT pulling +
+          # running the image — the manifest-level complement to the runtime
+          # GIT_SHA in /healthz (+ the cosign signature + SBOM). Sibling component
+          # jobs can adopt the same block.
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=v${{ steps.version.outputs.VERSION }}
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/recipe-preview:v${{ steps.version.outputs.VERSION }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/recipe-preview:latest
+
+      - name: Verify multi-arch manifest (#463)
+        run: bash scripts/ops/verify_multiarch.sh ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/recipe-preview:v${{ steps.version.outputs.VERSION }}
+
+      # --- L3 supply-chain digest verification (#445 AC iii) ---
+      # recipe-preview is sync-bumped: appVersion == version == tag, so this
+      # confirms the image we just pushed is queryable in GHCR.
+      - name: Verify image digest (#445 AC iii)
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash scripts/ops/verify_release_digest.sh recipe-preview helm/recipe-preview/Chart.yaml
+
+      # Sign by IMMUTABLE digest (tags can move, digests can't) before any later
+      # step can abort, so the published image is always signed.
+      - name: Sign Docker image (cosign keyless)
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          set -euo pipefail
+          IMG="${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/recipe-preview:v${VERSION}"
+          DIGEST=$(docker buildx imagetools inspect "$IMG" --format '{{.Manifest.Digest}}')
+          echo "▸ Signing image at digest: $DIGEST"
+          cosign sign --yes "${IMG}@${DIGEST}"
+
+      # --- Helm chart (before scan so a Trivy failure doesn't block distribution) ---
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+
+      - name: Package Helm chart
+        run: |
+          mkdir -p .build
+          helm package helm/recipe-preview -d .build/
+
+      - name: Push Helm chart to OCI registry
+        run: |
+          helm push .build/recipe-preview-${{ steps.version.outputs.VERSION }}.tgz \
+            oci://${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/charts
+
+      # --- Security scan (post-push, hard gate — same stance as sibling jobs) ---
+      - name: Scan image with Trivy
+        uses: aquasecurity/trivy-action@0.35.0
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/recipe-preview:v${{ steps.version.outputs.VERSION }}
+          format: table
+          exit-code: 1
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+
+  # ----------------------------------------------------------------
+  # Job 5: Build & push tenant-api image + Helm chart
   # ----------------------------------------------------------------
   release-tenant-api:
     runs-on: ubuntu-latest

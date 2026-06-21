@@ -34,6 +34,26 @@
 # 只有在 _metadata 宣告了 db_type 的租戶才會被納入 liveness 監看
 # (collector 對 db_type="" 不 emit，見 collector.go 註解)。沒宣告 db_type 的
 # 租戶【不會】被 TenantExporterAbsent 監看 — 這是刻意的 opt-in，不是 bug。
+# ⚠️ opt-in 的反面風險：db_type 鍵打錯 (dbType / db_typ) 或值打錯 (maraidb)
+# → DBType="" → 該租戶被【靜默】移出 liveness。#880 把這道防線 shift-left 到
+# author/CI：tenant-config.schema.json 的 _metadata 改 additionalProperties:false
+# + db_type enum，由 check_confd_schema.py (pre-commit + ci.yml) 強制，打錯字在
+# 進 repo 前就被擋下 (不再靠 runtime 才發現)。
+#
+# === Scope 邊界：乾淨死透 vs 詐屍 flap (#880 Day-3) ===
+# Rule A (for:3m) 抓的是「乾淨死透 / 缺席」: exporter 持續 up=0 或 series 缺席
+# 滿 3 分鐘。它【不】抓「詐屍」CrashLoopBackOff flap —— exporter 每 <3m 短暫
+# up==1 一次，unless 左手邊被那一瞬間清掉、for: 計時器 reset，於是 90% 時間死
+# 的 exporter 永不觸發 Rule A。這個盲區【刻意】不在 liveness pack 補:
+#   詐屍 flap 由 ContainerCrashLoop (rule-pack-kubernetes.yaml) 覆蓋。它讀 kubelet
+#   的 kube_pod_container_status_waiting_reason{reason="CrashLoopBackOff"} —— 這個
+#   waiting-reason 在 backoff 退避期間【穩定為 1】(不像 up 那樣 flap)，for:30s，
+#   且 container_crashloop 在 _defaults.yaml state_filters 中【預設啟用】，所以
+#   絕大多數租戶免額外設定就被覆蓋。兩條規則互補:「死透」走 liveness、「半死」走
+#   ContainerCrashLoop，刻意不在 Rule A 疊邏輯 (會把穩定的 anti-join 弄成 flappy)。
+# 殘量 (operator 須知): 租戶若設 _state_container_crashloop: "disable" (如 db-b)
+#   就【同時】退出 ContainerCrashLoop，而其 exporter 的詐屍 flap 也不會被 Rule A
+#   接到 → 兩者皆不覆蓋。這是租戶自選的取捨，非平台漏洞。
 #
 # === 取代 / 覆蓋面 ===
 # 取代分散在 db-pack 的 4 條 per-db *ExporterAbsent (MariaDB/PostgreSQL/Kafka/
@@ -58,6 +78,8 @@ groups:
       # Rule A — per-tenant exporter liveness (取代全域 absent() 漏報)。
       # for:3m 起點：吸收 scrape 抖動 (staleness lookback) 與滾動 drain 期間
       # pod reschedule (< 3m 重新上線不 fire，promtool S1/S3)。可後調。
+      # Scope: 只抓「乾淨死透/缺席」; 詐屍 CrashLoop flap 由 ContainerCrashLoop
+      # (kubelet waiting-reason) 覆蓋，刻意不在此疊邏輯 — 見檔頭「Scope 邊界」段 (#880)。
       - alert: TenantExporterAbsent
         expr: tenant_expected_exporter unless on(tenant) (up{job="tenant-exporters"} == 1)
         for: 3m

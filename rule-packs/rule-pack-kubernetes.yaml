@@ -723,3 +723,130 @@ groups:
           runbook_url: "{{ $labels.runbook_url }}"
           owner: "{{ $labels.owner }}"
           tier: "{{ $labels.tier }}"
+
+  # ─────────────────────────────────────────────────────────────────────
+  # HA replica-readiness (#875 follow-up; Gemini adversarial review). The
+  # value-based DB liveness rules (rule-pack-mariadb/mongodb.yaml: *Down /
+  # *ClusterDown / *NoPrimary, plus TenantExporterAbsent #869) all read a
+  # metric VALUE (<db>_up==0 / member_state / read_only / up==1). When a
+  # pod/replica VANISHES in an HA set the series goes ABSENT (not 0) and the
+  # surviving replica masks it → an HA DB silently degrading N→N-1 (serving,
+  # but with NO redundancy) emits nothing. This is the K8s-layer complement.
+  #
+  # ADOPTED, NOT DIY: this is kube-prometheus's KubeStatefulSetReplicasMismatch
+  # / KubeDeploymentReplicasMismatch core (shipped in every prometheus-operator
+  # install) wrapped in the platform's tenant model — per the hybrid-adoption
+  # rule (authoritative OSS core + thin Vibe wrapper, not a hand-rolled expr).
+  # The two upstream refinements are the whole reason to adopt over reinvent:
+  #   (1) StatefulSet compares ready < status_replicas (CREATED), not spec
+  #       (DESIRED): a scale-up where the controller has not yet created the new
+  #       pod is desired>ready but NOT a degradation → comparing vs created
+  #       avoids that false-positive. Deployment compares available < spec
+  #       instead (surge-safe: a Deploy rollout can have created>spec, so
+  #       created-vs-ready is wrong there — the upstream asymmetry is deliberate).
+  #       The vanish IS still caught (this rule's whole purpose): a stuck/Pending
+  #       replacement AND a Terminating pod both COUNT in status_replicas, so
+  #       created stays ≥2 while ready drops → ready<created fires. Live KSM
+  #       2026-06-20: cordon + force-delete a replica → status_replicas=2, ready=1.
+  #   (2) `changes(kube_*_status_replicas_updated[10m]) == 0` excludes the
+  #       rolling-update window (revision churn cycles pods not-ready for the
+  #       rollout duration, which for a DB can exceed for:15m) → no rollout
+  #       false-positive. TRADEOFF: a vanish+recreate also moves *_replicas_
+  #       updated, so AFTER churn stops this gate delays detection up to ~10m
+  #       (the change ages out of the window) before for:15m starts — ~25m
+  #       end-to-end worst case. And a workload whose revision/replica count
+  #       flaps CONTINUOUSLY (e.g. an operator reconcile hot-loop) is suppressed
+  #       for as long as the flap lasts — a known limitation inherited from the
+  #       upstream gate; an un-gated escape hatch was considered + deferred (do
+  #       not diverge from the standard for a rare trigger). Accepted — warning.
+  #
+  # Vibe wrapper on that core: tenant derived from namespace via label_replace
+  # (KSM is NOT scraped through the namespace→tenant relabel — same idiom as
+  # node-health above); db-.+ namespace scope; desired ≥2 HA gate (single-
+  # instance 1→0 is total-down, already paged by #875 ClusterDown /
+  # TenantExporterAbsent — this rule deliberately does NOT overlap); maintenance
+  # opt-out + metadata LOJ mirroring every other pack alert; DB-context
+  # annotations. severity:warning (degraded-but-serving).
+  #
+  # PRECONDITION: fires only for in-cluster K8s StatefulSet/Deployment DBs
+  # scraped by the platform KSM. An external / BYO-managed DB emits no kube_*
+  # series → this rule is INERT for it (the #875 exporter-value rules are the
+  # only liveness signal there). Verified against live KSM v2.18.0 (2026-06-20,
+  # throwaway kind): the series + labels (namespace, statefulset) are real and
+  # status_replicas_ready / _updated behave as assumed on a real degrade+rollout.
+  #
+  # Metric names per KSM v2.18.0 (the deployed version); all kube_* are scraped
+  # by the monitoring-components job with no metric_relabel keep-list.
+  # Two by-design calls: (1) NO metric_group — matches the NodeNotReady sibling
+  # and keeps this a DISTINCT signal from the #875 liveness criticals (kube_*
+  # topology vs exporter up/value), so during a total outage both surface. (2)
+  # `max(SS) or max(Deploy)` value-masks a tenant with BOTH degraded (keeps SS);
+  # latent — fires on PRESENCE, no annotation renders $value, tenant↔workload
+  # 1:1. Restructure to `max((SS) or (Deploy))` only if $value is added later.
+  # ─────────────────────────────────────────────────────────────────────
+  - name: kubernetes-ha-replicas
+    rules:
+      - record: rule_pack_kubernetes:ha_replicas_degraded:core
+        expr: |
+          (
+            max by(tenant) (
+              label_replace(
+                (
+                  kube_statefulset_status_replicas_ready{namespace=~"db-.+"}
+                  < kube_statefulset_status_replicas{namespace=~"db-.+"}
+                )
+                and on(namespace, statefulset)
+                  (changes(kube_statefulset_status_replicas_updated{namespace=~"db-.+"}[10m]) == 0)
+                and on(namespace, statefulset)
+                  (kube_statefulset_replicas{namespace=~"db-.+"} >= 2),
+                "tenant", "$1", "namespace", "(.+)"
+              )
+            )
+            or
+            max by(tenant) (
+              label_replace(
+                (
+                  kube_deployment_status_replicas_available{namespace=~"db-.+"}
+                  < kube_deployment_spec_replicas{namespace=~"db-.+"}
+                )
+                and on(namespace, deployment)
+                  (changes(kube_deployment_status_replicas_updated{namespace=~"db-.+"}[10m]) == 0)
+                and on(namespace, deployment)
+                  (kube_deployment_spec_replicas{namespace=~"db-.+"} >= 2),
+                "tenant", "$1", "namespace", "(.+)"
+              )
+            )
+          )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
+
+      # left-outer-join metadata enrichment (onboarding-vacuum safe) — same
+      # two-branch pattern as node-health and the threshold alerts: a tenant
+      # with NO tenant_metadata_info still fires (the bare `*` inner-join alone
+      # would silently drop it).
+      - alert: TenantHAReplicasDegraded
+        expr: |
+          (
+            rule_pack_kubernetes:ha_replicas_degraded:core
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
+          )
+          or
+          (
+            rule_pack_kubernetes:ha_replicas_degraded:core
+            unless on(tenant) tenant_metadata_info
+          )
+        for: 15m
+        labels:
+          severity: warning
+          tenant: "{{ $labels.tenant }}"
+        annotations:
+          summary: "HA workload for {{ $labels.tenant }} is running with reduced redundancy"
+          summary_zh: "{{ $labels.tenant }} 的 HA 工作負載正以降級（失去備援）狀態運行"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: ready replicas < desired on an HA set (≥2) — a replica is missing or not-ready. A vanished or stuck-rescheduled pod is invisible to the value-based DB liveness rules (#875), so this is the K8s-layer complement. Check kube_statefulset/deployment status + node health / scheduling."
+          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}: HA 工作負載（≥2）就緒副本數 < 期望數 — 有副本消失或未就緒。消失或重排卡住的 pod 對 value-based DB 存活規則（#875）不可見，故為 K8s 層互補。請查 kube_statefulset/deployment 狀態 + 節點健康 / 排程。"
+          description: "Your HA database has fewer ready replicas than desired — redundancy is reduced or lost (at zero ready the workload is down, with a critical alert also firing). A node/pod failure or a stuck reschedule is the usual cause; one more failure could take the service down."
+          description_zh: "您的 HA 資料庫就緒副本數少於期望值 — 備援已降低或失去（就緒數為 0 時工作負載已中斷，並應同時有 critical 告警）。通常成因是節點/Pod 故障或排程卡住；再壞一個就可能導致服務中斷。"
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"
