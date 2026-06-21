@@ -357,6 +357,11 @@ GitOps self-heal，**不在 chart 內、是部署叢集的責任**：
 
 讓租戶在平台上**就地查自己的**營運 log（federation audit），又**看不到**基礎設施拓樸或他租戶的列。資料平面（本 PR）鋪好後，查詢授權平面（gateway `victorialogs` mode + tenant-api AccountID 配發）才把租戶接上。完整設計見 [ADR-021](../adr/021-tenant-log-query-federation.md)；本節是 operator 的 how-to。
 
+> **可見度治理 / 租戶端視角（#609 PR-5）**：本節講投影**怎麼運作**；「哪些 stream / field
+> 對租戶可見」的策展邊界見 [2-Tier 日誌可見度 Catalogue](log-visibility-2tier-catalogue.md)，
+> 租戶端操作（取 logs token、查詢、cold-start）見
+> [租戶日誌查詢 onboarding 指南](../integration/tenant-log-query.md)。
+
 ### 8.1 Fan-out（雙寫，非搬移）拓樸
 
 ```

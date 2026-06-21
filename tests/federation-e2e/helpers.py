@@ -38,14 +38,28 @@ def new_token_id():
     return "ftk_" + secrets.token_hex(8)
 
 
+# Sentinel distinguishing "account_id claim omitted entirely" from an
+# explicit None claim (None is a valid malformed-claim test input).
+_UNSET = object()
+
+
 def sign_token(tenant_id, *, private_key_pem, kid, token_id=None,
-               iss="tenant-api", aud="tenant-federation", ttl_seconds=3600):
+               iss="tenant-api", aud="tenant-federation", ttl_seconds=3600,
+               account_id=_UNSET):
     """RS256-sign a federation JWT with tenant-api's claim shape.
 
     Returns (token_id, compact_jwt). The gateway's jwt_authn verifies
     signature + iss + aud and the Lua reads tenant_id / token_id from
     the payload, so a token of this shape signed with the federation key
-    is indistinguishable from one tenant-api issued (README §fidelity)."""
+    is indistinguishable from one tenant-api issued (README §fidelity).
+
+    `account_id` (ADR-021 logs plane): when supplied, embed it as the
+    numeric `account_id` claim a logs-capability token carries (the
+    VictoriaLogs partition key the gateway injects). Pass it through
+    VERBATIM (no coercion) so a test can mint a deliberately malformed
+    claim — None, "", "12.5", 0, 999 (reserved band), an overflow — to
+    exercise the gateway's fail-closed validation. Left absent by default
+    so a metrics-plane token carries no account_id (byte-shape parity)."""
     tid = token_id or new_token_id()
     now = int(time.time())
     claims = {
@@ -56,9 +70,21 @@ def sign_token(tenant_id, *, private_key_pem, kid, token_id=None,
         "iat": now,
         "exp": now + ttl_seconds,
     }
+    if account_id is not _UNSET:
+        claims["account_id"] = account_id
     token = pyjwt.encode(
         claims, private_key_pem, algorithm="RS256", headers={"kid": kid})
     return tid, token
+
+
+def sign_logs_token(tenant_id, *, private_key_pem, kid, account_id,
+                    aud="tenant-federation-logs", **kw):
+    """RS256-sign a LOGS-capability federation JWT (ADR-021): audience
+    `tenant-federation-logs` + a numeric `account_id` claim. Thin wrapper
+    over sign_token mirroring what tenant-api issues for `capability=logs`
+    (audience-bound model B). `account_id` is passed through verbatim."""
+    return sign_token(tenant_id, private_key_pem=private_key_pem, kid=kid,
+                      aud=aud, account_id=account_id, **kw)
 
 
 def gateway_request(gateway_url, path, *, token=None, method="GET",

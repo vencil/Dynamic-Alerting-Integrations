@@ -76,6 +76,7 @@ lang: zh
 | `docs/integration/README.md` (.en.md) | Platform Engineers, SREs, DevOps | 整合指南導覽 — 依你現有的監控架構選讀 |
 | `docs/integration/synthetic-probe-interop.md` (.en.md) | Platform Engineers, SREs | 合成探測對接 (Synthetic-Probe Interop) — 用你現有的探測器驗證端到端投遞 |
 | `docs/integration/tenant-federation.md` | Platform Engineers, SREs | Tenant Federation Integration Guide |
+| `docs/integration/tenant-log-query.md` | Platform Engineers, SREs | Tenant Log Query Integration Guide |
 | `docs/integration/troubleshooting-checklist.md` (.en.md) | SREs, on-call, Platform Engineers, migration-engineers | Troubleshooting Checklist |
 | `docs/integration/victoriametrics-integration.md` (.en.md) | Platform Engineers, SREs, vm-operators | VictoriaMetrics 整合指南 |
 | `docs/interactive-tools.md` (.en.md) | All | 互動式工具 |
