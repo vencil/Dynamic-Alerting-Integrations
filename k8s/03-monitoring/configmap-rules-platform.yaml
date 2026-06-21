@@ -77,6 +77,62 @@ data:
                 live?) and the egress/firewall path to the heartbeat endpoint. If
                 the url_file is still the deploy placeholder, populate the Secret.
 
+          # --- Platform governance loop liveness (#656) ---
+          # The weekly threshold-governance CronJob (`threshold-govern`, Mondays
+          # 03:00 UTC) retightens drifted thresholds into proposed-PRs. If it
+          # silently stops, config rot accrues with no signal. KSM already scrapes
+          # kube_cronjob_* (Prometheus job "kube-state-metrics"). Design notes:
+          #   - did-it-run != did-it-work: a run that opens ZERO PRs because every
+          #     tenant-api write failed still "ran" and would advance
+          #     last_successful_time. threshold_govern.py was changed (#656) to exit
+          #     non-zero on a TOTAL write failure (_is_systemic_failure) → the Job is
+          #     marked Failed and last_successful_time is NOT advanced, so this
+          #     staleness alert is honest, not a placebo.
+          #   - `max by (cronjob, namespace)` projects away the KSM scrape labels
+          #     (instance/job) so the fired alert identity is a stable {cronjob,
+          #     namespace} (and collapses cleanly if KSM ever runs >1 replica) — a
+          #     bare `time() - vector` would carry a meaningless KSM pod `instance`.
+          #   - `unless ... spec_suspend == 1`: a deliberately-paused CronJob (e.g.
+          #     during an incident) must not page.
+          #   - Cold-start safe: before the first successful run the series is absent
+          #     → max-by is empty → no fire. A CronJob DELETED entirely is NOT caught
+          #     here (its series vanishes); that belongs to deploy/review, not this
+          #     alert.
+          # severity:warning — config rot degrades over WEEKS; there is no 3am
+          # action, triage in business hours. ⚠️ KEEP IN SYNC with
+          # tests/rulepacks/platform-watchdog.rules.yaml (expr / labels / `for`).
+          - alert: ThresholdGovernanceStale
+            expr: |
+              (
+                max by (cronjob, namespace) (
+                  time() - kube_cronjob_status_last_successful_time{cronjob="threshold-govern", namespace="monitoring"}
+                ) > 691200
+              )
+              unless on (cronjob, namespace)
+                kube_cronjob_spec_suspend{cronjob="threshold-govern", namespace="monitoring"} == 1
+            for: 15m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Threshold-governance loop has not succeeded in 8 days"
+              description: |
+                The weekly threshold-governance CronJob (threshold-govern,
+                Mondays 03:00 UTC) has not recorded a successful run for 8
+                days — at least one weekly run was missed or has been
+                failing, so drifted thresholds are no longer being
+                retightened into proposed-PRs.
+                NOT urgent: config rot degrades over weeks, there is no 3am
+                action — triage in business hours. Check (a) the CronJob is
+                not suspended, (b) recent threshold-govern Jobs and their
+                logs (`kubectl get jobs -n monitoring`), (c) tenant-api
+                reachability from the monitoring namespace.
+                did-it-run != did-it-work: a run that opened ZERO PRs because
+                every tenant-api write failed now exits non-zero (Job Failed)
+                and does NOT advance last_successful_time, so this fires on a
+                silent all-fail too — not only when the scheduler stops. A
+                CronJob deleted entirely is not caught here (its KSM series
+                vanishes); that surfaces at deploy/review time.
+
           # --- Exporter Health ---
           - alert: ThresholdExporterDown
             expr: up{job="threshold-exporter"} == 0

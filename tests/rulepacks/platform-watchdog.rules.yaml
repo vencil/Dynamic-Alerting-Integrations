@@ -1,5 +1,6 @@
-# Bare-rules promtool target for the alerting-plane self-liveness alerts
-# (ADR-025 D1 / #838). promtool can't consume the deployed ConfigMap directly
+# Bare-rules promtool target for the platform self-liveness alerts: the
+# alerting-plane heartbeat (ADR-025 D1 / #838) AND the governance CronJob
+# dead-man's-switch (#656). promtool can't consume the deployed ConfigMap directly
 # (it needs a top-level `groups:` document, not `data: platform-alert.yml: |`),
 # so this is an EXTRACTED COPY of the alerts from
 # k8s/03-monitoring/configmap-rules-platform.yaml.
@@ -28,3 +29,23 @@ groups:
           severity: warning
         annotations:
           summary: "Alertmanager webhook notifications are failing — Watchdog heartbeat may not be egressing"
+
+      # Governance CronJob dead-man's-switch (#656). expr / labels / `for` are an
+      # EXACT copy of the ConfigMap rule; the `description` is omitted per this
+      # file's convention. Behavioural contract (fires past `for`, projects the KSM
+      # scrape labels away, cold-start-safe, suspend-suppressed) is in
+      # platform-watchdog_test.yaml.
+      - alert: ThresholdGovernanceStale
+        expr: |
+          (
+            max by (cronjob, namespace) (
+              time() - kube_cronjob_status_last_successful_time{cronjob="threshold-govern", namespace="monitoring"}
+            ) > 691200
+          )
+          unless on (cronjob, namespace)
+            kube_cronjob_spec_suspend{cronjob="threshold-govern", namespace="monitoring"} == 1
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Threshold-governance loop has not succeeded in 8 days"
