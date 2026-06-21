@@ -513,3 +513,104 @@ def test_lower_bound_marker_matches_committed_observed_map():
     for k, entry in lower_bound.items():
         assert tg._LOWER_BOUND_SKIP_MARKER in (entry.get("reason") or ""), \
             f"{k}: committed observed-map reason drifted from marker"
+
+
+# ---------------------------------------------------------------------------
+# 7. #656 dead-man's-switch exit code — a governance run where EVERY write failed
+#    must exit non-zero so the CronJob Job is marked Failed AND
+#    kube_cronjob_status_last_successful_time stays frozen (→ ThresholdGovernanceStale
+#    can fire). Without it the run exits 0 / Job Successful / clock advances while
+#    ZERO PRs opened — the staleness alert would be a placebo. STRICTER than
+#    maintenance_scheduler's any-error exit contract: only a TOTAL write failure trips
+#    it (a single flaky tenant amid successes must not freeze the staleness clock).
+# ---------------------------------------------------------------------------
+def _oc(status):
+    return tg.TenantOutcome("t", status)
+
+
+def test_systemic_failure_true_when_apply_run_all_errored():
+    assert tg._is_systemic_failure([_oc("error"), _oc("error")], applied=True) is True
+
+
+def test_systemic_failure_false_when_any_pr_opened():
+    # a partial success means the write plane works — one flaky tenant must not
+    # fail the whole governance run.
+    assert tg._is_systemic_failure([_oc("pr_opened"), _oc("error")], applied=True) is False
+
+
+def test_systemic_failure_false_when_any_already_pending():
+    # a 409 already-pending proves tenant-api is reachable → not a total outage.
+    assert tg._is_systemic_failure([_oc("already_pending"), _oc("error")], applied=True) is False
+
+
+def test_systemic_failure_false_in_dry_run():
+    # dry-run issues no writes, so even all-error planning never fails the Job.
+    assert tg._is_systemic_failure([_oc("error"), _oc("error")], applied=False) is False
+
+
+def test_systemic_failure_false_when_nothing_actionable():
+    # healthy fleet, nothing drifted → no outcomes → exit 0.
+    assert tg._is_systemic_failure([], applied=True) is False
+
+
+def test_systemic_failure_false_when_skipped_only():
+    # circuit-breaker / max-prs skips are not errors — a run that only skipped
+    # (e.g. cap reached) is not a total write failure.
+    assert tg._is_systemic_failure([_oc("skipped"), _oc("skipped")], applied=True) is False
+
+
+def test_systemic_failure_live_path_all_503(monkeypatch):
+    # INPUT-EDGE: drive the REAL run() so the helper classifies the statuses run()
+    # actually emits (not hand-built ones). tenant-api 503 for every tenant → every
+    # outcome is "error" → systemic.
+    _stub_reports(monkeypatch, ["db-a", "db-b"])
+    _patch_http(monkeypatch, per_tenant=True, put_result=(503, {"error": "overloaded"}, None))
+    _plans, outcomes, _ung = tg.run(_args(apply=True, max_prs=100))
+    assert outcomes and all(o.status == "error" for o in outcomes)
+    assert tg._is_systemic_failure(outcomes, applied=True) is True
+
+
+def test_systemic_failure_live_path_success_is_clean(monkeypatch):
+    _stub_reports(monkeypatch, ["db-a", "db-b"])
+    _patch_http(monkeypatch, per_tenant=True,
+                put_result=(200, {"status": "pending_review", "pr_url": "u", "pr_number": 1}, None))
+    _plans, outcomes, _ung = tg.run(_args(apply=True, max_prs=100))
+    assert outcomes and all(o.status == "pr_opened" for o in outcomes)
+    assert tg._is_systemic_failure(outcomes, applied=True) is False
+
+
+def test_main_exits_violation_on_total_apply_failure(monkeypatch, tmp_path):
+    # END-TO-END wiring: main() must convert a systemic failure into a non-zero exit.
+    monkeypatch.setattr(tg, "run",
+                        lambda args: ([], [tg.TenantOutcome("t", "error")], []))
+    monkeypatch.setattr(argparse.ArgumentParser, "parse_args",
+                        lambda self: _args(apply=True, config_dir=str(tmp_path)))
+    with pytest.raises(SystemExit) as exc:
+        tg.main()
+    assert exc.value.code == tg.EXIT_VIOLATION
+
+
+def test_main_exits_ok_on_successful_apply(monkeypatch, tmp_path):
+    monkeypatch.setattr(tg, "run",
+                        lambda args: ([], [tg.TenantOutcome("t", "pr_opened")], []))
+    monkeypatch.setattr(argparse.ArgumentParser, "parse_args",
+                        lambda self: _args(apply=True, config_dir=str(tmp_path)))
+    with pytest.raises(SystemExit) as exc:
+        tg.main()
+    assert exc.value.code == tg.EXIT_OK
+
+
+def test_systemic_failure_live_path_circuit_breaker_many_tenants(monkeypatch):
+    # HEADLINE #656 scenario: tenant-api down for a week with MANY drifted tenants.
+    # After MAX_CONSECUTIVE_ERRORS the circuit breaker emits "skipped" outcomes — pin
+    # that the {error, skipped} mix STILL trips the switch (errors>0 dominates), so a
+    # future breaker refactor can't silently turn the headline case green. The 2-tenant
+    # live tests above stay below the breaker, so this is the only case that exercises
+    # the error+skipped path end-to-end.
+    n = tg.MAX_CONSECUTIVE_ERRORS + 3
+    _stub_reports(monkeypatch, [f"db-{i}" for i in range(n)])
+    _patch_http(monkeypatch, per_tenant=True, put_result=(503, {"error": "down"}, None))
+    _plans, outcomes, _ung = tg.run(_args(apply=True, max_prs=100))
+    statuses = {o.status for o in outcomes}
+    assert "error" in statuses and "skipped" in statuses   # breaker actually tripped
+    assert tg._is_systemic_failure(outcomes, applied=True) is True

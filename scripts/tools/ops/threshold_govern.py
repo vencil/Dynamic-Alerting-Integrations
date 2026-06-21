@@ -78,7 +78,7 @@ from _lib_python import (  # noqa: E402
     parse_duration_seconds,
 )
 from _lib_prometheus import _validate_url_scheme  # noqa: E402
-from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION  # noqa: E402
 
 # Reuse the recommendation engine wholesale — threshold_govern is its active
 # layer, never a re-implementation (the engine owns percentiles / observed-map /
@@ -744,6 +744,34 @@ def run(
     return plans, outcomes, ungoverned
 
 
+def _is_systemic_failure(outcomes: list[TenantOutcome], applied: bool) -> bool:
+    """Whether an ``--apply`` run attempted governance writes and EVERY one failed.
+
+    #656 dead-man's-switch honesty: a run where tenant-api was unreachable for every
+    tenant still *executed*, so without a non-zero exit the process returns 0, K8s
+    marks the Job Successful, and ``kube_cronjob_status_last_successful_time`` advances
+    even though ZERO PRs were opened — the staleness alert would stay green during
+    exactly the silent degradation it exists to catch (did-it-run != did-it-work).
+    Exiting non-zero on a TOTAL write failure makes it honest: the Job is marked Failed
+    AND last_successful_time is not advanced, so ``ThresholdGovernanceStale`` can fire.
+
+    Shares maintenance_scheduler's MECHANISM (a non-zero exit -> Job Failed -> the KSM
+    signal stays honest) but with a deliberately STRICTER trip condition. That sibling
+    exits non-zero on ANY error (``EXIT_VIOLATION if errors``); a governance run, by
+    contrast, legitimately has per-tenant errors amid successes, so only a TOTAL write
+    failure trips this -- no PR opened, none already-pending. A single flaky tenant
+    amid successes never fails the whole run (the staleness clock correctly advances);
+    an all-already-pending run (tenant-api healthy, nothing new to do) stays exit 0;
+    dry-run never fails -- it issues no writes.
+    """
+    if not applied:
+        return False
+    opened = sum(1 for o in outcomes if o.status == "pr_opened")
+    pending = sum(1 for o in outcomes if o.status == "already_pending")
+    errors = sum(1 for o in outcomes if o.status == "error")
+    return errors > 0 and opened == 0 and pending == 0
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
@@ -837,6 +865,12 @@ def main() -> None:
         print(format_json_report(plans, outcomes, args.apply, ungoverned))
     else:
         print(format_text_report(plans, outcomes, args.apply, ungoverned))
+
+    # #656: surface a governance run where EVERY write failed as a non-zero exit
+    # (-> Job Failed + a frozen last_successful_time so ThresholdGovernanceStale can
+    # fire). A clean / partial-success / dry-run run stays exit 0. See
+    # _is_systemic_failure for why the dead-man's-switch needs this to be honest.
+    sys.exit(EXIT_VIOLATION if _is_systemic_failure(outcomes, args.apply) else EXIT_OK)
 
 
 if __name__ == "__main__":
