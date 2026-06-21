@@ -3,11 +3,12 @@
 # on its HTTP listener — ingest + query + DELETE all share :9428. The
 # §2 hard rule guards the producer side (gateway → stdout, not direct
 # push) but does not protect the store itself from compromised
-# in-cluster pods. This NetworkPolicy locks the port to the four
+# in-cluster pods. This NetworkPolicy locks the port to the five
 # legitimate consumers: the Vector DaemonSet (ingest), the chargeback
-# CronJob (query), Grafana (query), and same-pod loopback (probes).
-# Any other pod in the cluster — including a freshly attacker-deployed
-# one in the same namespace — cannot reach :9428.
+# CronJob (query), Grafana (query), the federation-gateway in
+# `mode: victorialogs` (tenant-scoped log query, ADR-021 #609), and
+# same-pod loopback (probes). Any other pod in the cluster — including a
+# freshly attacker-deployed one in the same namespace — cannot reach :9428.
 #
 # Building auth (`-httpAuthKey`) into the chart is the deeper fix and
 # is tracked as a separate follow-up; NetworkPolicy is the minimum
@@ -31,7 +32,7 @@ spec:
         - port: {{ .Values.listenPort }}
           protocol: TCP
       from:
-        {{- /* Same-namespace pod selectors — the four legitimate consumers. */}}
+        {{- /* Same-namespace pod selectors — the legitimate consumers (Vector / chargeback / Grafana / federation-gateway). */}}
         {{- range .Values.networkPolicy.allowedPodSelectors }}
         - podSelector:
             {{- toYaml . | nindent 12 }}

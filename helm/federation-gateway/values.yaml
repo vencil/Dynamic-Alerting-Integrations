@@ -12,13 +12,22 @@
 #
 # A request only reaches the upstream if all four pass.
 
-# prom-label-proxy | vm-cluster
+# prom-label-proxy | vm-cluster | victorialogs
 #   prom-label-proxy — inject the verified tenant id as a trusted header
 #                      and forward to the federation-proxy service (IV-2a).
 #   vm-cluster       — rewrite the path to /select/<tenant_id>/prometheus/
 #                      and forward to a VictoriaMetrics cluster vmselect
 #                      (ADR-020: VM-cluster isolation is accountID routing,
 #                      done here rather than by a Layer 3 proxy).
+#   victorialogs     — tenant LOG query (ADR-021). Inject the verified
+#                      numeric AccountID + ProjectID header pair (VictoriaLogs
+#                      native tenancy) and forward to the VictoriaLogs store.
+#                      The Lua filter FAILS CLOSED if the token has no valid
+#                      account_id claim; routing is a default-deny allowlist of
+#                      the LogsQL query/metadata endpoints (see victorialogs.*).
+#                      ⚠️ this mode REQUIRES jwt.audience=tenant-federation-logs
+#                      (a metrics-pull token must not query the log store) —
+#                      enforced at template render (fail-loud).
 mode: prom-label-proxy
 
 # Emergency global kill switch (#551). false in steady state. Set true
@@ -64,8 +73,44 @@ jwt:
 upstream:
   # prom-label-proxy mode: the federation-proxy Service (IV-2a).
   # vm-cluster mode: a vmselect host:port.
+  # victorialogs mode: the VictoriaLogs Service — e.g.
+  #   host: victorialogs.monitoring.svc
+  #   port: 9428
+  # (helm/victorialogs Service name = `victorialogs`, port 9428). Set these
+  # when mode=victorialogs; the default below is the prom-label-proxy target.
   host: federation-proxy.monitoring.svc
   port: 8080
+
+# ── victorialogs mode (ADR-021 — tenant log query) ───────────────────
+# Only consulted when mode=victorialogs. The gateway is the AUTHORIZATION
+# PLANE for tenant log queries: it injects the verified VictoriaLogs
+# (AccountID, ProjectID) tenant header pair and forwards to the VictoriaLogs
+# store. Cross-tenant isolation is VictoriaLogs-native; this chart enforces
+# (1) fail-closed on a missing/invalid account_id claim (revoked_check.lua),
+# (2) a default-deny endpoint allowlist (below). See the chart README.
+victorialogs:
+  # Endpoint allowlist — DEFAULT-DENY. Only the VictoriaLogs LogsQL
+  # query / metadata endpoints below are forwarded; EVERYTHING else (incl.
+  # `/select/logsql/tail`, `/insert/*`, and any unknown/future endpoint)
+  # gets a catch-all 403. This is an allowlist, NOT a denylist: a new
+  # VictoriaLogs endpoint stays denied until a maintainer adds it here on
+  # purpose (ADR-021 §Blast radius Layer 3). `/tail` is intentionally
+  # ABSENT — a live long-lived connection bypasses -search.maxQueryDuration
+  # and squats a concurrency slot; audit-log queries do not need it.
+  # Matched as path-segment prefixes (a trailing slash / sub-path is
+  # covered, a sibling like `_other` is not over-matched).
+  allowedEndpoints:
+    - /select/logsql/query
+    - /select/logsql/hits
+    - /select/logsql/facets
+    - /select/logsql/stats_query
+    - /select/logsql/stats_query_range
+    - /select/logsql/streams
+    - /select/logsql/stream_ids
+    - /select/logsql/stream_field_names
+    - /select/logsql/stream_field_values
+    - /select/logsql/field_names
+    - /select/logsql/field_values
 
 # ── Revoked set (ADR-020 Posture B) ──────────────────────────────────
 # tenant-api writes revoked.txt into the tenant-federation-store ConfigMap
