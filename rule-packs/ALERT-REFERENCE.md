@@ -119,6 +119,8 @@ lang: zh
 | MariaDBDown | warning | mysql_up=0 on {{ $labels.instance }}  | 立即檢查伺服器狀態、網路連線；查看系統日誌 | mysql_up |
 | MariaDBClusterDown | critical | No mysqld reports up=1 for tenant {{ $labels.tenant }}  | 立即檢查伺服器狀態、網路連線；查看系統日誌 | mysql_up |
 | MariaDBNoPrimary | critical | All instances are read_only for tenant {{ $labels.tenant }}  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | mysql_global_variables_read_only |
+| MariaDBSemiSyncDegraded | warning | Tenant {{ $labels.tenant }} has semi-sync enabled but it fell back to ASYNC (rpl_semi_sync_master_st | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | mysql_global_variables_rpl_semi_sync_master_enabled |
+| MariaDBSemiSyncReplicasGone | critical | Tenant {{ $labels.tenant }} has semi-sync enabled but ZERO semi-sync replicas connected (rpl_semi_sy | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | mysql_global_variables_rpl_semi_sync_master_enabled |
 | MariaDBExporterAbsent | critical | No mysql_up metric found for 30s | 確認相關元件已啟動、配置正確；檢查元件日誌 | mysql_up |
 | MariaDBHighConnections | warning | [{{ $labels.tier }}] {{ $labels.tenant }}: connection threshold breached  | 檢查連線池配置、應用連線是否有洩漏；考慮增加最大連線數 | tenant:mysql_threads_connected:max |
 | MariaDBHighConnectionsCritical | critical | [{{ $labels.tier }}] {{ $labels.tenant }}: critical connection saturation  | 檢查連線池配置、應用連線是否有洩漏；考慮增加最大連線數 | tenant:mysql_threads_connected:max |
