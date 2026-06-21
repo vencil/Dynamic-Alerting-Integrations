@@ -69,6 +69,16 @@ class TestGatingAndErrors:
         reasons = [s.get("reason", "") for s in out["states"]]
         assert not any("scenario.value is required" in r for r in reasons)
 
+    def test_missing_required_field_is_error_not_crash(self):
+        """A recipe missing a required key (e.g. `metric`, which `recipe_id` reads
+        as `inst["metric"]`) → state:error (the §4 contract), NOT an uncaught
+        KeyError that the HTTP facade would mask as a 500. Runs everywhere."""
+        bad = {k: v for k, v in _ABSENCE.items() if k != "metric"}
+        out = rp.preview_recipe(bad, "shop-a", {})
+        assert out["supported"] is True
+        assert out["states"][0]["state"] == "error"
+        assert "missing required field" in out["states"][0]["reason"]
+
     def test_malformed_recipe_is_error_not_firing(self):
         """A structurally invalid recipe → state:error (never mislabeled firing)."""
         bad = {"recipe": "threshold", "metric": "not a metric", "op": ">",
@@ -160,6 +170,22 @@ class TestBuildPreviewTest:
         assert "exp_alerts: []" in doc                # inverted-assert
         assert f"alertname: Custom_{slug}" in doc
 
+    def test_absence_compound_and_subsecond_window(self):
+        """A compound / sub-second window (schema grammar, e.g. 1h30m / 500ms) must
+        NOT false-error: the compiler interpolates it raw into count_over_time, so
+        the preview parses the same Prometheus-duration grammar to size eval_time
+        (adversarial-review gap — a narrow Nh/Nm/Ns regex rejected valid recipes)."""
+        # 1h30m = 90m → eval 90+1+5 = 96m ; 500ms → ceil to 1m → eval 1+1+5 = 7m
+        for win, eval_line in (("1h30m", "eval_time: 96m"), ("500ms", "eval_time: 7m")):
+            r = dict(_ABSENCE, window=win)
+            doc, *_ = rp.build_preview_test(r, "shop-a", None, rp.shape.recipe_id(r))
+            assert eval_line in doc, win
+        assert rp._window_minutes("1h30m") == 90
+        assert rp._window_minutes("500ms") == 1
+        assert rp._window_minutes("2h") == 120
+        assert rp._window_minutes("10") is None       # no unit → still rejected
+        assert rp._window_minutes("0s") is None        # zero → fail-closed
+
 
 # ── promtool result classification (pure; finding 2 — rc!=0 ≠ firing) ──
 
@@ -218,10 +244,14 @@ class TestWouldFire:
         assert out["states"][0]["state"] == "firing"
 
     def test_absence_fires_on_simulated_absence(self):
-        """⛔ PR-B hard gate: an absence recipe, with its metric absent over the
-        window, ACTUALLY fires through the real compiler + promtool — assert
-        state == 'firing' (NOT merely 'no crash'; the P2 selectors_re
-        false-inactive lesson). No scenario value needed (presence-based)."""
+        """absence, with its metric absent over the window, ACTUALLY fires through
+        the real compiler + promtool — assert state == 'firing' (NOT merely
+        'no crash'; the P2 selectors_re false-inactive lesson). No scenario value
+        needed (presence-based). NB: promtool-gated like all of TestWouldFire →
+        runs in the dev container / locally but SKIPS in the 'Python Tests' CI job;
+        the in-CI absence guards are the builder test + the promtool-pin parity
+        test + the compiler's absence.yaml fixture (run under promtool in Lint
+        Rule Packs)."""
         out = rp.preview_recipe(_ABSENCE, "shop-a", {})
         assert out["supported"] is True
         assert out["states"][0]["state"] == "firing"

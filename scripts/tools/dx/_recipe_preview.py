@@ -23,6 +23,7 @@ fired (inactive); returncode != 0 → it fired. A compile error must NOT be
 mislabeled as firing, so we gate with `build_pack` exception handling +
 `promtool check rules` (syntax) BEFORE the inverted-assert (§5.2 layering).
 """
+import math
 import os
 import re
 import shutil
@@ -50,20 +51,30 @@ SUPPORTED_RECIPES_MVP = frozenset({"threshold", "absence"})
 # synthetic series + pick an eval_time PAST the pending window.
 _FOR_MINUTES = {"0s": 0, "1m": 1, "5m": 5, "15m": 15, "30m": 30, "1h": 60}
 
-# `window` is a Go duration (Nh/Nm/Ns), NOT enum-bounded like `for:` — so PARSE
-# it (not a fixed map) to size the absence eval_time. _window_minutes returns
-# None on a malformed/empty window so the caller fail-closes to error rather than
-# guessing a window → wrong eval_time → a real firing misread (CodeRabbit #873).
-_DUR_RE = re.compile(r"^(\d+)(h|m|s)$")
+# `window` is a Prometheus/Go duration, NOT enum-bounded like `for:` — so PARSE it
+# (not a fixed map) to size the absence eval_time. It can be COMPOUND ("1h30m") and
+# carry sub-second units ("500ms"), per the schema grammar
+# ^([0-9]+(ns|us|µs|ms|s|m|h))+$ — the compiler interpolates it RAW into
+# count_over_time(metric[window]) (Prometheus parses it), so a narrower parser here
+# would false-ERROR a valid, would-actually-fire recipe (adversarial review). Return
+# None on a malformed / zero window so the caller fail-closes to error rather than
+# guess → wrong eval_time → a real firing misread (CodeRabbit #873).
+_DUR_FULL_RE = re.compile(r"^([0-9]+(?:ns|us|µs|ms|s|m|h))+$")
+_DUR_TOKEN_RE = re.compile(r"(\d+)(ns|us|µs|ms|s|m|h)")
+_DUR_UNIT_SECONDS = {"ns": 1e-9, "us": 1e-6, "µs": 1e-6, "ms": 1e-3,
+                     "s": 1, "m": 60, "h": 3600}
 
 
 def _window_minutes(window):
-    """Go-duration window → whole minutes (ceil; min 1). None if malformed."""
-    m = _DUR_RE.match(str(window or "").strip())
-    if not m:
+    """Prometheus duration (compound + sub-second ok) → whole minutes (ceil; min 1).
+    None on a malformed / non-positive window."""
+    w = str(window or "").strip()
+    if not _DUR_FULL_RE.match(w):
         return None
-    secs = int(m.group(1)) * {"h": 3600, "m": 60, "s": 1}[m.group(2)]
-    return max(1, -(-secs // 60))  # ceil division
+    secs = sum(int(n) * _DUR_UNIT_SECONDS[u] for n, u in _DUR_TOKEN_RE.findall(w))
+    if secs <= 0:
+        return None
+    return max(1, math.ceil(secs / 60))
 
 _PROMTOOL = shutil.which("promtool")
 
@@ -231,11 +242,17 @@ def preview_recipe(recipe, tenant, scenario):
         }
 
     # Compute the slug via the compiler's OWN function (zero cross-language
-    # drift, §5.3). A structurally invalid recipe fails loud here → state:error.
+    # drift, §5.3). A structurally invalid recipe (RecipeError) OR one missing a
+    # required key (KeyError, e.g. no `metric` — recipe_id does `inst["metric"]`)
+    # fails loud here → state:error, honouring the §4 contract that a config error
+    # is a verdict-less error (the catch-all in app.py would otherwise mask it as a
+    # 500). Pre-existing on the threshold path too; caught here for both.
     try:
         slug = shape.recipe_id(recipe)
     except shape.RecipeError as exc:
         return _err(str(exc))
+    except KeyError as exc:
+        return _err(f"recipe is missing required field {exc}")
 
     # Validate the request BEFORE the promtool-availability check, so bad input
     # is reported as an error regardless of whether we can evaluate locally
@@ -269,7 +286,8 @@ def preview_recipe(recipe, tenant, scenario):
     # eval_time → a real firing misread as inactive (same class as the for guard).
     if rtype == "absence" and _window_minutes(recipe.get("window")) is None:
         return _err(f"preview cannot size the absence window "
-                    f"{recipe.get('window')!r} (expected a Go duration like 10m / 1h)",
+                    f"{recipe.get('window')!r} (expected a Prometheus duration "
+                    f"like 10m / 1h30m / 500ms)",
                     alertname=f"Custom_{slug}")
 
     if _PROMTOOL is None:
