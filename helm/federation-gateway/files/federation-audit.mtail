@@ -51,3 +51,107 @@ counter tenant_federation_requests_total by tenant, status
         }
     }
 }
+
+# ── tenant_log_query_requests_total (ADR-021 §Audit, #609 PR-4) ──────────────
+#
+# Symmetric sibling of tenant_federation_requests_total, but for the LOG plane:
+# counts tenant log-query requests by (account_id, project_id, status) from the
+# SAME Envoy audit access log. The two metrics share one log stream because the
+# gateway is mode-pluggable (ADR-021 §100) — the access log shape is identical;
+# only `account_id` is populated, and only in `victorialogs` mode.
+#
+# WHY account_id is the log-vs-metrics discriminator (not path):
+#   `account_id` is "%DYNAMIC_METADATA(...:fed_payload:account_id)%" — the
+#   verified numeric VictoriaLogs partition. In prom-label-proxy / vm-cluster
+#   modes those tokens carry NO account_id claim, so Envoy renders the field as
+#   an EMPTY string ("account_id":"" or "account_id":). `(?P<account>\d+)`
+#   requires >=1 digit, so a metrics-pull row (empty value) never matches and is
+#   excluded — no path allowlist to keep in sync with envoy.yaml. (A valid logs
+#   token's account_id is >=1000. NOTE (adversarial-review #900): jwt_authn
+#   writes fed_payload:account_id into dynamic metadata BEFORE revoked_check.lua
+#   runs, so a logs-audience token DECLARING account_id 0 (or 1-999) is still
+#   access-logged with that value — the Lua 403 blocks the upstream forward, not
+#   the already-written log line. Such a row IS counted here, labelled with its
+#   low id (e.g. account_id="0", colliding with the platform 0:0 partition name).
+#   It is a mis-issued/forged token's auth_failed, NOT a real partition. In
+#   practice tenant-api only ever mints account_id >=1000, so this is latent; the
+#   per-account dashboard would simply show an account "0" bar if it ever occurs.)
+#
+# project_id: the audit access log has NO project_id field, and Phase 1 (b)
+# pins ProjectID=0 for the platform-operational projection (envoy victorialogs
+# mode injects a constant ProjectID; Vector's tenantProjectionProjectId=0). So
+# the label is emitted as the constant "0". When Phase 2 (a) introduces
+# ProjectID=1 for tenant APPLICATION logs, add a project_id field to &audit_json
+# and switch this to a captured value — the metric's label set already carries
+# the dimension, so dashboards/alerts won't need reshaping.
+#
+# As in the program above, `account_id` and `status` are matched by separate
+# `[{,]`-anchored patterns (mtail has no JSON parser; Envoy emits keys
+# alphabetically, so `account_id` precedes `status` precedes `tenant_id` on the
+# wire, but the metric never depends on key order). The optional surrounding
+# quotes tolerate quoted/unquoted numeric emission across Envoy versions.
+counter tenant_log_query_requests_total by account_id, project_id, status
+
+/[{,]"account_id":"?(?P<account>\d+)"?/ {
+    /[{,]"status":"?(?P<code>\d+)"?/ {
+        $code >= 200 && $code < 300 {
+            tenant_log_query_requests_total[$account, "0", "ok"]++
+        }
+        # Grafana/LogsQL UI cancelling a query on a time-range / panel change
+        # (Envoy logs status 0; some setups remap to 499). Its own bucket so a
+        # surge of impatient cancels is visible, not silently dropped or
+        # mistaken for a rejection.
+        $code == 0 || $code == 499 {
+            tenant_log_query_requests_total[$account, "0", "client_aborted"]++
+        }
+        $code == 429 {
+            tenant_log_query_requests_total[$account, "0", "rate_limited"]++
+        }
+        # 401/403 — wrong/expired token, OR the victorialogs-mode guards firing:
+        # default-deny endpoint catch-all, null/<1000 account_id Lua reject,
+        # non-GET/POST method on an allowlisted path (envoy.yaml).
+        $code == 401 || $code == 403 {
+            tenant_log_query_requests_total[$account, "0", "auth_failed"]++
+        }
+        # Other 4xx (notably 400/422) — how VictoriaLogs rejects a malformed
+        # LogsQL query or one tripping -search.maxQueryTimeRange at Layer 1.
+        $code >= 400 && $code < 500 && $code != 429 && $code != 401 && $code != 403 && $code != 499 {
+            tenant_log_query_requests_total[$account, "0", "bad_request"]++
+        }
+        $code >= 500 {
+            tenant_log_query_requests_total[$account, "0", "backend_error"]++
+        }
+    }
+}
+
+# ── tenant_log_query_duration_ms (ADR-021 §Audit, #609 PR-4; Gemini fold-in a) ──
+#
+# Per-tenant log-query LATENCY distribution, from the audit log's `duration_ms`
+# field (= Envoy "%DURATION%", the total request time in INTEGER milliseconds).
+# A Prometheus-native histogram, so the dashboard's histogram_quantile() reads
+# the emitted `_bucket{le=...}` / `_sum` / `_count` series directly — the
+# request counter above carries no latency, so latency MUST be its own metric.
+#
+# Same `account_id`-gated match as the counter: only victorialogs-mode rows
+# (non-empty numeric account_id) are observed; metrics-pull rows have an empty
+# account_id and never match. project_id is the same constant "0" (Phase 1 (b)).
+#
+# Buckets (ms) are chosen around the Layer-1 + gateway timeout budget: a
+# VictoriaLogs query is bounded by -search.maxQueryDuration=25s, strictly under
+# the gateway route timeout 30s (ADR-021 cascading-timeout). So 25000 is the
+# meaningful top finite bucket — a query landing in the +Inf overflow is at/over
+# the storage abort ceiling and is the actionable tail. Lower buckets give
+# resolution where healthy LogsQL queries actually live (single-digit ms to ~1s).
+# The 15000 bucket splits the otherwise-15s-wide 10000→25000 gap so a P95 of
+# heavy historical queries landing in that range isn't smeared by linear
+# interpolation across a 15s span (±7s error) — Gemini #900 long-tail fold-in.
+histogram tenant_log_query_duration_ms by account_id, project_id buckets 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 15000, 25000
+
+/[{,]"account_id":"?(?P<account>\d+)"?/ {
+    # `duration_ms` is integer ms; the optional quotes tolerate quoted/unquoted
+    # numeric emission. A row with no parseable duration simply doesn't record
+    # (the inner block never enters) — it is still counted by the counter above.
+    /[{,]"duration_ms":"?(?P<dur>\d+)"?/ {
+        tenant_log_query_duration_ms[$account, "0"] = $dur
+    }
+}

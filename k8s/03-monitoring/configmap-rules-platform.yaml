@@ -753,3 +753,119 @@ data:
                 `_buffer_max_events` for that sink in helm/vector
                 values). For compliance-relevant streams this is an
                 audit-trail integrity event — investigate immediately.
+
+          # ── Tenant log-query rejection surge (ADR-021 #609 PR-4) ────
+          # Symmetric to FederationRejectionRateAnomaly above, but for the
+          # LOG-query plane: >50% of an account partition's log-query
+          # requests rejected (rate-limited / auth-failed / bad-request)
+          # for 15m, floored at ~1 rejection/min so a single fluke on a
+          # near-idle tenant can't trip it. Source metric:
+          # tenant_log_query_requests_total{account_id,project_id,status}
+          # (gateway victorialogs-mode mtail sidecar, #609 PR-4).
+          #
+          # Keyed by account_id (the verified VictoriaLogs partition,
+          # tenant-agnostic), NOT tenant — the log-query audit line carries
+          # the numeric account_id, not the conf.d tenant name, so there is
+          # no `tenant_metadata_info` join to scope to live tenants the way
+          # the metrics-plane alert does. The min-rate floor is the
+          # idle-tenant guard instead. `sum by(account_id)` is applied to
+          # BOTH numerator and denominator so the ratio aligns on the same
+          # label set — a bare `sum` would strip account_id and the division
+          # would mis-pair / empty out (the topology-label trap this repo
+          # has been burned by).
+          #
+          # auth_failed dominating for one account is the actionable case:
+          # a leaked/expired logs token, OR the victorialogs-mode guards
+          # firing (default-deny endpoint catch-all, null/<1000 account_id
+          # Lua reject, non-GET/POST on an allowlisted path).
+          - alert: TenantLogQueryRejectionRateAnomaly
+            expr: |
+              (
+                sum by (account_id) (
+                  rate(tenant_log_query_requests_total{status=~"rate_limited|auth_failed|bad_request"}[10m])
+                )
+                /
+                sum by (account_id) (rate(tenant_log_query_requests_total[10m]))
+              ) > 0.5
+              and
+              sum by (account_id) (
+                rate(tenant_log_query_requests_total{status=~"rate_limited|auth_failed|bad_request"}[10m])
+              ) > 0.0167
+            for: 15m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Log-query requests for account {{ $labels.account_id }} are mostly rejected"
+              description: |
+                Over 50% of account {{ $labels.account_id }}'s tenant
+                log-query requests have been rejected (rate-limited /
+                auth-failed / bad-request) for 15m. Check the
+                tenant-log-query dashboard — likely a REVOKED token (Lua
+                403), a tenant exceeding its rate limit, or a client hitting
+                the victorialogs-mode endpoint allowlist. NOTE: this counts
+                POST-JWT rejections only — an EXPIRED / bad-signature / wrong-
+                audience token 401s at jwt_authn BEFORE account_id is stamped,
+                so it is NOT counted here (attack noise; see jwt_authn stats,
+                per ADR-020).
+
+          # ── Tenant-projection fan-out discard spike (ADR-021 #609 PR-4) ──
+          # ⛔ COARSE ANOMALY TRIPWIRE, not a precise gap detector — read the
+          # honest-limitation note below before tuning.
+          #
+          # The (b) tenant-sanitized projection (helm/vector tenant_project
+          # remap) is fail-closed: a row that is non-audit / blank-or-unknown
+          # tenant_id / parse-error is `abort`-dropped from the tenant branch
+          # (it still reaches the platform 0:0 copy). Runbook §8.7 wants ops
+          # visibility when a registry desync (a tenant sending audit traffic
+          # but missing from `tenantProjections`) or a malicious payload flood
+          # causes a SURGE of drops — rather than waiting for a tenant to file
+          # a "my logs are missing" ticket.
+          #
+          # ⚠️ Why this is `> N` sustained, NOT `> 0` (the §8.7 prose's naive
+          # form): `vector_component_discarded_events_total{component_id=
+          # "tenant_project"}` is a COMPONENT-level counter that aggregates
+          # EVERY abort reason. By design the bulk of demux rows are non-audit
+          # (gateway_operational / prometheus_query_log / JWT-fail /
+          # suspicious_audit) and ALL of them are legitimately aborted from
+          # this branch — so `> 0` is effectively always-true and would be
+          # pure noise. There is no abort-REASON label on the counter to
+          # separate "unknown mappable tenant" (the real gap) from "non-audit
+          # row" (normal). So this alert can only catch a gross SPIKE above
+          # the operational-drop baseline; it cannot pinpoint which tenant's
+          # projection broke. The floor (5/s) + 15m hold are deliberately
+          # conservative; tune the floor against the observed steady-state
+          # drop rate of YOUR gateway's operational-log volume (a busy
+          # gateway's baseline may exceed it → raise it). A precise
+          # per-account gap detector needs a new per-partition row-count
+          # metric (option b) — tracked as a defer-with-trigger follow-up.
+          #
+          # Requires helm/vector `metrics.enabled=true` + a Prometheus scrape
+          # target (same precondition as VectorBufferEventsDropped above).
+          # `sum without (instance, pod)` collapses the per-DaemonSet-pod
+          # series into one platform-wide rate WITHOUT stripping every label
+          # (a bare `sum()` would also drop component_id; the topology-label
+          # trap) — component_id is pinned by the matcher anyway, so the
+          # result is a single series.
+          - alert: TenantProjectionFanoutDiscardSpike
+            expr: |
+              sum without (instance, pod) (
+                rate(vector_component_discarded_events_total{component_id="tenant_project"}[10m])
+              ) > 5
+            for: 15m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Vector tenant-projection drop rate >5/s for 15m — above baseline (usually rising operational-log volume, NOT registry desync; compare baseline first)"
+              description: |
+                The (b) tenant-sanitized projection (`tenant_project` remap)
+                is `abort`-dropping events well above the operational-log
+                baseline. The platform 0:0 copy is unaffected (this is the
+                tenant-facing projection only), but tenants whose rows are
+                being dropped will NOT see their own platform-operational
+                logs. Likely causes: (a) a tenant sending federation_audit
+                traffic but missing from helm/vector `tenantProjections`
+                (registry desync — reconcile `_account_registry.yaml` →
+                `tenantProjections`); (b) a malicious / malformed payload
+                flood. This is a COARSE signal — it cannot name the affected
+                account; correlate with the Vector logs and the account
+                registry. See platform-log-aggregation-runbook §8.7.

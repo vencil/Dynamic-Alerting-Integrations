@@ -456,11 +456,34 @@ vector test /tmp/rendered-vector.yaml helm/vector/tests/projection_tests.yaml
 - **query 長度上限**：`tenantProjectionMaxQueryBytes`（預設 8 KiB）`truncate` 租戶副本的 `query`——防 500 KB 超長 query 撐爆 `encode_json` 或 VictoriaLogs 單行限制。
 - **Stream-field 高基數**：`tenantProjectionStreamFields` 僅低基數維度（`tenant_id`/`log_type`/`status`）；⛔ **絕不**放 `query`/`token_id`/`path` 等動態值（每個 distinct 值建一條 stream → RAM 爆）。
 - **K8s 資源 / 排程**（ops）：fan-out 增加 Vector CPU。確保 `resources.requests/limits` 對 N 租戶有餘裕，並考慮給 ingestion DaemonSet 一個 `PriorityClass`（node 資源枯竭時優先驅逐低優先 batch job、保 ingestion 存活）。
-- **無聲丟棄的可觀測性**：fail-closed 的 `abort`+`drop_on_abort` 讓異常列**無聲消失**——平台須監控 Vector 原生 `vector_component_discarded_events_total{component="tenant_project"}`（registry 未同步／惡意 payload 導致大量 drop 時要有能見度，而非等租戶報修）。**此告警在 PR-4 補**（metric + admission alert）。
+- **無聲丟棄的可觀測性（PR-4 已補）**：fail-closed 的 `abort`+`drop_on_abort` 讓異常列**無聲消失**——平台須監控 Vector 原生 `vector_component_discarded_events_total{component_id="tenant_project"}`（registry 未同步／惡意 payload 導致大量 drop 時要有能見度，而非等租戶報修）。#609 PR-4 落地 `TenantProjectionFanoutDiscardSpike`（`configmap-rules-platform.yaml` `federation-audit` group，warning）。⚠️ **標籤是 `component_id` 非 `component`**（Vector internal_metrics 原生標籤；本文件原寫 `component` 是非正式 prose，照 sibling `VectorBufferEventsDropped` 用 `component_id`），且需 `helm/vector metrics.enabled=true` + Prometheus scrape。⚠️ **這是粗粒度 spike tripwire 非精準 gap 偵測**：此 component-level counter 把**所有** abort 原因合計，而設計上**多數** demux 列為 non-audit（`gateway_operational`／`prometheus_query_log`／JWT-fail／`suspicious_audit`）被合法 drop，故**不可**用 `> 0`（恆真噪音）——改用 `rate > 5/s` 持續 `15m`（floor 須照各 gateway 營運 log 量的 steady-state drop rate 調）。精準的 per-account「可對映租戶投影缺漏」偵測需新增 per-partition row-count metric（option b），列 **defer-with-trigger**。⛔ **但精準 runtime 偵測器是 band-aid 非根治**：desync 的根因是 **config drift**（`tenantProjections` 落後 `_account_registry.yaml`），真正的修法是 **Phase 2 (a) config-from-SSOT**——從 registry **自動生成** `tenantProjections`、drift 根本不可能發生，屆時 option b 即不需要。在那之前流程防線＝onboarding guide 的配發紀律（§8.2）+ 本 coarse tripwire 接大規模事件。**trigger（任一）**：首次真實 registry desync 事故、租戶報修「看不到自己的 log」、或 Phase 2 (a) 自動生成排程時（屆時重估是否還需 option b）。需 mtail / metric 對照見下 §8.8。
+
+### 8.8 租戶日誌查詢可觀測層（ADR-021 #609 PR-4）
+
+把 victorialogs-mode 的**查詢平面**做可觀測（與 §8.7 的 **ingestion 平面**互補：§8.7 盯「投影斷掉」，本節盯「誰在查、查得順不順」）。三件交付（皆與 ADR-020 metrics-plane 對稱）：
+
+- **mtail metric**（`helm/federation-gateway/files/federation-audit.mtail`，與 `tenant_federation_requests_total` 同檔同 sidecar）：
+  - `tenant_log_query_requests_total{account_id, project_id, status}`（counter）——從**同一條** Envoy audit access log 累計租戶日誌查詢請求。
+  - `tenant_log_query_duration_ms{account_id, project_id}`（histogram，buckets 5…25000ms）——查詢延遲分布（Gemini fold-in a），來源 access log `duration_ms`(=`%DURATION%`，整數 ms)。counter 不帶延遲，故延遲必為獨立 metric。
+  - **log-query vs metrics-pull 判別**：用「`account_id` 為非空正整數」(`(?P<account>\d+)`)——metrics-pull token 無 account_id claim → Envoy render 空字串 → 不 match → 自然排除（**不**靠 path allowlist，免與 envoy.yaml 同步漂移）。
+  - **`project_id` 來源 = 常數 `"0"`**：access log **無** project_id 欄位，Phase 1 (b) 平台營運 log 固定 ProjectID=0（對齊 Vector `tenantProjectionProjectId=0`）。Phase 2 (a) 引入 ProjectID=1（租戶**應用** log）時，需在 `&audit_json` 補 `project_id` 欄位、把 mtail 從常數改成擷取值——metric 標籤集已預留此維度，dashboard/alert 不必重塑。
+  - ✅ **mtail 程式編譯已驗**（對抗 review #900）：用 pinned `mtail 3.0.8`（== Dockerfile `MTAIL_VERSION`）跑 `--compile_only`，含「注入語法錯誤」正控確認檢查真在驗 grammar，real 檔乾淨；histogram `by … buckets …` 順序 + comma-index 經官方 `parser.y` 查證合法。dev container/host 皆**無 mtail binary** 故 CI 未自動驗——**follow-up**：加 `mtail --compile_only` CI job（與 promtool gate 同層），讓未來 mtail 改動不靠人工。
+- **Grafana dashboard**：`k8s/03-monitoring/tenant-log-query-dashboard.json`（uid `tenant-log-query`，獨立 dashboard、非塞進 federation-audit）——per-account 查詢量／status 分布／**延遲 heatmap + P95**（platform-wide 與 per-tenant）。⚠️ **PromQL topology-label 陷阱**：所有 `histogram_quantile` 的聚合**保留 `le`**（`sum by(account_id, le)`／`sum by(le)`），缺 `le` 會靜默回 NaN——drift-proof golden（`tests/dx/test_tenant_log_query_dashboard.py`，從 JSON 讀 query、promtool 驗、含 `le`-present shape lint）釘住。檔案部署沿用 sibling（`federation-audit-dashboard.json` 同樣為 standalone、非 configmap-grafana 內聯）。
+- **alert `TenantLogQueryRejectionRateAnomaly`**（`configmap-rules-platform.yaml` `federation-audit` group，warning）：>50% 某 account 的查詢被拒（rate_limited／auth_failed／bad_request）持續 15m + floor ~1 拒/min。key 為 `account_id`（audit line 帶數值 account_id 非 conf.d tenant 名，故**無** `tenant_metadata_info` join，改用 min-rate floor 當 idle 守門）。`sum by(account_id)` 同時套分子分母（ratio 對齊；裸 `sum` 會 strip account_id 致 mis-pair——topology 陷阱）。
+
+promtool fire/no-fire 與上述 §8.7 spike alert 同放 `tests/rulepacks/tenant-log-query-platform{.rules,_test}.yaml`（extracted-copy 模式，比照 `platform-watchdog`；`configmap-rules-platform.yaml` 非由 `rule-packs/` 生成、無 regen）。
+
+**⚠️ 觀測層的限制與調校（對抗 review #900 + Gemini fold-ins）**：
+
+- **兩條 alert 的預設啟用不對稱**：`TenantLogQueryRejectionRateAnomaly` 靠 mtail sidecar（`auditLog.enabled` 預設 **on**）→ 預設可 fire；但 `TenantProjectionFanoutDiscardSpike`（§8.7）靠 Vector `internal_metrics`（`helm/vector` `metrics.enabled` 預設 **off**）→ **預設靜默、永不 fire**。開啟 (b) 投影時務必一併設 `metrics.enabled=true` + Prometheus scrape，否則投影斷掉無告警。
+- **FanoutDiscardSpike 的 floor 是猜測值、須量測**：`>5/s` 非依實測 baseline 調——`tenant_project` 對**每條** non-audit 列（gateway_operational／JWT-fail／未對映／suspicious）都 `abort`、全計入 `vector_component_discarded_events_total`；忙 gateway 的 operational-log 量很容易 >5/s → **false-fire**（summary 已改為「先比對 baseline 再懷疑 desync」避免誤導 triage）。部署後 query 該 component 的 steady-state rate、設 floor = baseline × N。長線可改 **dynamic threshold**（`avg_over_time` + stddev，如 `rate > baseline + 3*stddev`）自適應，繫 §8.7 精準偵測的 defer-with-trigger（Gemini）。
+- **mtail 在 log flood 下的殘留丟失**：logrotate 用 **rename + Envoy `/reopen_logs`**（非 copytruncate，rotation 當下**不丟行**），但極端洪流（瞬間海量 401/403）下 mtail（CPU limit `100m`）parse 落後到 >`keep` 次 rotation 時，最舊的 renamed 檔會在讀完前被刪 → 靜默丟數 → rejection alert 分子採樣不足而延後/漏 fire。**load-test 50MB/10s 洪流、量 mtail CPU + 丟失率**，必要時放寬 mtail CPU limit；順帶監控 mtail 自身 `mtail_progs_processing_errors_total` 與延遲（Gemini）。
+- **metric 能見度邊界**：counter 只計**通過 JWT 後**的拒絕；過期/壞簽/錯 audience token 由 `jwt_authn` 在 account_id 注入**前** 401、**不計入**（攻擊噪音，由 jwt_authn 自身 stats 觀測，與 ADR-020 一致）。`account_id`<1000 的誤發 token 若被 Lua 403 仍會計入並標成該低 id（實務 tenant-api 不發 <1000，latent）。3xx/1xx status 不落任何 bucket（VictoriaLogs read API 幾乎不回，刻意不計）。
 
 ## Refs
 
 - 源 issue：[#539](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/539)
 - 產生 audit JSON 的 Envoy access_log：`helm/federation-gateway/files/envoy.yaml`
 - ADR-020 §Audit log
+- ADR-021 §Audit log + anomaly metric（#609 PR-4 觀測層）
 - Consumer #2：[#552](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/552)

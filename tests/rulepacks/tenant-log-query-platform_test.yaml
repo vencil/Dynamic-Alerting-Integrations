@@ -1,0 +1,131 @@
+# promtool behavioural test for the tenant log-query plane alerts
+# (ADR-021 / #609 PR-4). Run: promtool test rules tests/rulepacks/tenant-log-query-platform_test.yaml
+#
+# Validates:
+#   1) TenantLogQueryRejectionRateAnomaly FIRES for an account whose log-query
+#      requests are mostly rejected (>50%) AND above the ~1/min idle floor.
+#   2) It does NOT fire for an account that is mostly OK (ratio < 0.5).
+#   3) It does NOT fire on a near-idle account with a high ratio but a rejection
+#      rate below the floor (the idle-tenant guard) — proves the floor clause.
+#   4) Per-account isolation: a rejected account and a healthy account evaluated
+#      together produce exactly ONE alert (the rejected one), not a smeared
+#      platform-wide verdict — the `sum by(account_id)` keeps accounts separate.
+#   5) TenantProjectionFanoutDiscardSpike FIRES on a SUSTAINED drop rate above the
+#      floor, summed across multiple Vector DaemonSet pods (`sum without
+#      (instance, pod)` collapses per-pod series) — exercises the topology-label
+#      handling on real-shaped Vector metric series, not a lab-clean single series.
+#   6) It does NOT fire at/below the floor — proves it is the `> N` form, NOT the
+#      always-true `> 0` form the runbook §8.7 prose naively implied.
+rule_files:
+  - tenant-log-query-platform.rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # 1) Rejection surge fires. account 1000: auth_failed climbs 6/min (0.1/s over
+  #    [10m]); ok climbs 1/min (~0.0167/s). ratio = 0.1/0.1167 ≈ 0.857 > 0.5 and
+  #    rejected-rate 0.1 > 0.0167 floor → fires after the 15m hold.
+  - interval: 1m
+    name: log-query-rejection-surge-fires
+    input_series:
+      - series: 'tenant_log_query_requests_total{account_id="1000",project_id="0",status="auth_failed"}'
+        values: '0+6x40'
+      - series: 'tenant_log_query_requests_total{account_id="1000",project_id="0",status="ok"}'
+        values: '0+1x40'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: TenantLogQueryRejectionRateAnomaly
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              account_id: "1000"
+            exp_annotations:
+              summary: "Log-query requests for account 1000 are mostly rejected"
+
+  # 2) Mostly-OK account does NOT fire. account 1001: ok 10/min, auth_failed
+  #    1/min → ratio ≈ 0.09 < 0.5.
+  - interval: 1m
+    name: log-query-mostly-ok-no-fire
+    input_series:
+      - series: 'tenant_log_query_requests_total{account_id="1001",project_id="0",status="ok"}'
+        values: '0+10x40'
+      - series: 'tenant_log_query_requests_total{account_id="1001",project_id="0",status="auth_failed"}'
+        values: '0+1x40'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: TenantLogQueryRejectionRateAnomaly
+        exp_alerts: []
+
+  # 3) Near-idle account, high ratio but BELOW the floor → no fire. account 1002:
+  #    a single auth_failed bump then flat → rate over [10m] ≈ 1/600 = 0.00167/s
+  #    << 0.0167 floor, even though the ratio is 1.0 (no ok traffic). Proves the
+  #    min-rate floor guards a near-idle tenant from a single fluke.
+  - interval: 1m
+    name: log-query-idle-fluke-below-floor-no-fire
+    input_series:
+      - series: 'tenant_log_query_requests_total{account_id="1002",project_id="0",status="auth_failed"}'
+        values: '0 0 0 0 0 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: TenantLogQueryRejectionRateAnomaly
+        exp_alerts: []
+
+  # 4) Per-account isolation: rejected account 1000 + healthy account 1001 in the
+  #    SAME evaluation → exactly ONE alert (1000). A bare `sum` (no by account_id)
+  #    would merge them and could mask/smear the verdict; this pins separation.
+  - interval: 1m
+    name: log-query-rejection-per-account-isolation
+    input_series:
+      - series: 'tenant_log_query_requests_total{account_id="1000",project_id="0",status="auth_failed"}'
+        values: '0+6x40'
+      - series: 'tenant_log_query_requests_total{account_id="1000",project_id="0",status="ok"}'
+        values: '0+1x40'
+      - series: 'tenant_log_query_requests_total{account_id="1001",project_id="0",status="ok"}'
+        values: '0+10x40'
+      - series: 'tenant_log_query_requests_total{account_id="1001",project_id="0",status="auth_failed"}'
+        values: '0+1x40'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: TenantLogQueryRejectionRateAnomaly
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              account_id: "1000"
+            exp_annotations:
+              summary: "Log-query requests for account 1000 are mostly rejected"
+
+  # 5) Fan-out discard spike fires, summed across two DaemonSet pods. Each pod
+  #    drops 360/min (6/s over [10m]); sum = 12/s > 5 floor → fires after 15m.
+  #    The two series differ ONLY in instance/pod, so a correct `sum without
+  #    (instance, pod)` collapses them into one 12/s series (and does NOT strip
+  #    component_id, which is pinned by the matcher).
+  - interval: 1m
+    name: fanout-discard-spike-fires-summed-across-pods
+    input_series:
+      - series: 'vector_component_discarded_events_total{component_id="tenant_project",component_kind="transform",instance="10.0.0.1:9598",pod="vector-aaaaa"}'
+        values: '0+360x40'
+      - series: 'vector_component_discarded_events_total{component_id="tenant_project",component_kind="transform",instance="10.0.0.2:9598",pod="vector-bbbbb"}'
+        values: '0+360x40'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: TenantProjectionFanoutDiscardSpike
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              component_id: tenant_project
+              component_kind: transform
+            exp_annotations:
+              summary: "Vector tenant-projection drop rate >5/s for 15m — above baseline (usually rising operational-log volume, NOT registry desync; compare baseline first)"
+
+  # 6) Below-floor steady drops do NOT fire — proves `> 5`, not always-true `> 0`.
+  #    A single pod dropping 120/min = 2/s < 5 floor (the by-design operational
+  #    non-audit drop baseline must NOT page).
+  - interval: 1m
+    name: fanout-discard-below-floor-no-fire
+    input_series:
+      - series: 'vector_component_discarded_events_total{component_id="tenant_project",component_kind="transform",instance="10.0.0.1:9598",pod="vector-aaaaa"}'
+        values: '0+120x40'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: TenantProjectionFanoutDiscardSpike
+        exp_alerts: []
