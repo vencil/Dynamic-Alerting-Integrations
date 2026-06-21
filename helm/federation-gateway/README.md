@@ -40,6 +40,16 @@ A request reaches the upstream only if all checks pass.
 - **`vm-cluster`** — rewrite the path to `/select/<tenant_id>/prometheus/…`
   and forward to a VictoriaMetrics cluster vmselect. VM-cluster isolation is
   accountID-path routing, so no Layer 3 proxy is needed (ADR-020).
+- **`victorialogs`** — tenant **log** query (ADR-021). The gateway is the
+  authorization plane: it injects the verified VictoriaLogs `AccountID` /
+  `ProjectID` tenant header pair and forwards to the VictoriaLogs store, whose
+  native `(AccountID, ProjectID)` tenancy enforces cross-tenant isolation. The
+  Lua filter **fails closed** (`403`) if the token carries no valid numeric
+  `account_id` claim, and routing is a **default-deny allowlist** of the
+  LogsQL query / metadata endpoints (see "Supported read APIs"). This mode
+  **requires** `jwt.audience: tenant-federation-logs` — a metrics-pull token
+  (`aud: tenant-federation`) must not be able to query the log store; the
+  chart enforces this at template render (fail-loud).
 
 ### Supported read APIs
 
@@ -62,12 +72,45 @@ Which read APIs a tenant can call through the gateway depends on the mode:
 - **`vm-cluster`** — the full VictoriaMetrics `/select/<id>/prometheus/…`
   surface, `remote_read` included: the path rewrite scopes every request to
   the tenant's accountID, so no per-API allow-listing is needed.
+- **`victorialogs`** — a **default-deny allowlist** of the VictoriaLogs LogsQL
+  query / metadata endpoints (`victorialogs.allowedEndpoints`):
+  `/select/logsql/query`, `/hits`, `/facets`, `/stats_query[_range]`,
+  `/streams`, `/stream_ids`, `/stream_field_names`, `/stream_field_values`,
+  `/field_names`, `/field_values`. **Everything else gets a `403`** — including
+  `/select/logsql/tail` (a live long-lived connection that bypasses
+  `-search.maxQueryDuration` and squats a concurrency slot), the `/insert/*`
+  ingestion surface, the cross-tenant `/select/tenant_ids` enumeration
+  endpoint, and any unknown / future endpoint. A new VictoriaLogs endpoint
+  stays denied until a maintainer adds it to `allowedEndpoints` on purpose.
+  The block is matched as path-segment prefixes and the path is fully
+  canonicalised first (`merge_slashes` / `normalize_path` /
+  `path_with_escaped_slashes_action`), so no non-canonical variant — a
+  trailing slash, `//`, or `%2F` — slips past the allowlist into the catch-all
+  (same rigor as the `prom-label-proxy` `/api/v1/read` guard).
 
 ## Security model
 
 - **Header spoofing is structurally impossible.** The Lua filter sets the
   trusted headers with `replace()`, which *overwrites* any client-supplied
-  `x-tenant-id` / `x-fed-token-id`. The verified value always wins.
+  `x-tenant-id` / `x-fed-token-id` (and, in `victorialogs` mode, `AccountID`
+  / `ProjectID`). The verified value always wins. The Lua `replace()` is the
+  *complete* anti-spoofing control: it is deliberately **not** paired with a
+  route-/vhost-level `request_headers_to_remove` for `AccountID` / `ProjectID`,
+  because Envoy applies those removals in the **router** filter — *after* the
+  Lua decoder filter — so listing the tenant headers there would strip the
+  value Lua just injected, leaving the request with **no** `AccountID` →
+  VictoriaLogs would default it to `0` (the platform partition) = a
+  cross-tenant breach. Overwrite-at-injection closes the spoofing window with
+  no such ordering hazard.
+- **`victorialogs` fail-closed on a missing/invalid claim (Null-Claim Trap).**
+  VictoriaLogs routes a request with **no** `AccountID` header to AccountID
+  `0` — the platform partition. So a federation-logs token whose `account_id`
+  claim is absent / empty / non-integer / `< 1000` (the reserved band) is
+  rejected with `403` **in the Lua filter** (which holds the already-verified
+  claim and can reject deterministically, with no route-cache timing
+  dependence) — it never reaches the upstream. `jwt_authn` additionally
+  rejects any token whose audience is not `tenant-federation-logs` before the
+  Lua even runs, so a metrics-pull token cannot reach the log store at all.
 - **Tokens never reach a log.** `jwt_authn` is configured `from_headers`
   only — an `?access_token=` in the URL is not accepted, so a token cannot
   land in an access log via the query string.
@@ -113,8 +156,11 @@ replica count afterwards.
 ## Audit log & metrics (ADR-020 IV-2f)
 
 Envoy writes one JSON line per federation request to **two sinks** of
-identical shape (`ts` / `tenant_id` / `token_id` / `method` / `path` /
-`query` / `status` / `duration_ms`):
+identical shape (`ts` / `tenant_id` / `token_id` / `account_id` / `method` /
+`path` / `query` / `status` / `duration_ms`). `account_id` is populated only
+in `victorialogs` mode (the verified numeric tenant partition; empty in the
+other modes, whose tokens carry no `account_id` claim) — it lets the PR-4
+mtail sidecar derive a per-tenant `tenant_log_query_requests_total`:
 
 - **`stdout`** — the durable, collector-ready compliance trail. Shipping
   it to a central store (Loki / SIEM) is follow-up
@@ -166,12 +212,13 @@ exposed, 1 = one ingress, …).
 
 | Key | Default | Notes |
 |---|---|---|
-| `mode` | `prom-label-proxy` | `prom-label-proxy` \| `vm-cluster` |
+| `mode` | `prom-label-proxy` | `prom-label-proxy` \| `vm-cluster` \| `victorialogs` |
+| `victorialogs.allowedEndpoints` | LogsQL query/metadata list | **`victorialogs` mode only.** Default-deny allowlist; everything else (incl. `/tail`, `/insert/*`, `/select/tenant_ids`) gets `403`. Adding an endpoint is an explicit maintainer action |
 | `emergencyGlobalBlock` | `false` | Incident kill switch — `true` ⇒ a `direct_response` 503 to every request (see "Emergency global block") |
 | `jwt.jwks` | `""` | **Required.** Public JWKS of tenant-api's RS256 key. Empty ⇒ keyless JWKS ⇒ Envoy refuses to start (fail-loud CrashLoopBackOff). Produced by IV-2l (#518) |
-| `jwt.issuer` / `jwt.audience` | `tenant-api` / `tenant-federation` | Must match what tenant-api signs |
+| `jwt.issuer` / `jwt.audience` | `tenant-api` / `tenant-federation` | Must match what tenant-api signs. **`victorialogs` mode requires `jwt.audience: tenant-federation-logs`** (fail-loud at render) |
 | `jwt.clockSkewSeconds` | `60` | Leeway for signer/verifier clock drift |
-| `upstream.host` / `upstream.port` | `federation-proxy.monitoring.svc` / `8080` | The Layer 3 proxy, or a vmselect |
+| `upstream.host` / `upstream.port` | `federation-proxy.monitoring.svc` / `8080` | The Layer 3 proxy, a vmselect, or — in `victorialogs` mode — the VictoriaLogs Service (`victorialogs.monitoring.svc` / `9428`) |
 | `revokedSet.configMapName` | `tenant-federation-store` | ConfigMap tenant-api writes `revoked.txt` into |
 | `network.xffTrustedHops` | `0` | Trusted L7 proxy hops — see "Client IP behind a load balancer". No safe universal default |
 | `rateLimit.perToken.*` / `perTenant.*` / `perIp.*` | see values.yaml | Token-bucket params; tuning corridors in comments |

@@ -146,6 +146,17 @@ prometheusScrapeAnnotations:
 #   - Vector DaemonSet (ingest)              app.kubernetes.io/name=vector
 #   - chargeback-aggregator CronJob (query)  app.kubernetes.io/name=chargeback-aggregator
 #   - Grafana (query)                        app=grafana  (k8s/03-monitoring label)
+#   - federation-gateway (query, ADR-021)    app.kubernetes.io/name=federation-gateway
+#
+# ⚠️ Trust boundary of this allowlist (ADR-021): every entry is EITHER a
+# platform-trusted component (Vector / chargeback / Grafana never carry a
+# tenant identity — they read the platform partition or set their own
+# AccountID) OR the federation-gateway, which is the ONLY tenant-facing
+# reader and pins a verified AccountID header on every request (it is the
+# authorization plane). This list must NEVER contain a pod a tenant can
+# reach directly with an arbitrary AccountID — that would bypass the
+# gateway's per-tenant enforcement. The gateway is allowed unconditionally
+# (it only initiates :9428 traffic in `mode: victorialogs`).
 #
 # Cross-namespace consumers go in `allowedNamespaces`. Setting
 # `enabled: false` reverts to no policy (cluster-wide reachable);
@@ -159,6 +170,11 @@ networkPolicy:
         app.kubernetes.io/name: chargeback-aggregator
     - matchLabels:
         app: grafana
+    # federation-gateway in `mode: victorialogs` (ADR-021 #609): the
+    # tenant log-query authorization plane. Without this entry the gateway
+    # → :9428 forward is dropped and the whole mode is DOA in-cluster.
+    - matchLabels:
+        app.kubernetes.io/name: federation-gateway
   allowedNamespaces: []
 
 # Pod placement. Single pod has no affinity rules; if scaled up the

@@ -101,6 +101,8 @@ flowchart LR
 
 > **⚠️ Fail-closed invariant（Null-Claim Trap 防線）**：若 token 缺 `account_id` claim（tenant-api bug / 空字串），`claim_to_headers` **不會注入** header；VictoriaLogs 對缺 `AccountID` header **預設導向 `0`（platform default）**→ 租戶誤讀平台 log = 越權。故 gateway **route 層必須加 header 存在性 matcher**：經 `jwt_authn` 後仍不具合法 `AccountID` header 的請求，在 route 直接 `direct_response 403`（比照既有 `/api/v1/read` reject route），**絕不允許未標記流量穿透到 VictoriaLogs**。配合 vhost `request_headers_to_remove`（擋 client 自帶）形成雙向封閉。
 
+> **🔧 實作修正（#609 gateway 實作期）**：上一段「route 層 header 存在性 matcher + vhost `request_headers_to_remove: [AccountID, ProjectID]`」在實作時查證 Envoy filter ordering 後發現**不安全**，已被取代。route/vhost 的 `request_headers_to_remove` 由 **router filter** 在注入 header 的 **Lua decoder filter 之後**執行——把 `AccountID`/`ProjectID` 列入會**刪掉 Lua 剛注入的已驗證值**，請求到 VictoriaLogs 反而無 `AccountID` → 落 `0` 平台分區 = 正是本防線要擋的 breach。正確實作改為 **`revoked_check.lua` 內 fail-closed**：對缺/空/非整數/`<1000`（保留區）/`>2^32-1` 的 `account_id` claim 一律在注入**前** `respond 403`；合法才 `replace()`，而 `replace()` 本身**無條件覆寫**任何 client 自帶 `AccountID`/`ProjectID`（注入點即關死偽造、無殘留窗），故這兩個 header **刻意不**出現在任何 `request_headers_to_remove`。endpoint default-deny allowlist 仍在 route 層。**⚠️ 實作 Phase 2 (a) 時切勿照上一段原文「還原」route-layer header-strip**——會重新引入 breach。實作與佐證見 `helm/federation-gateway/files/{revoked_check.lua,envoy.yaml}` 註解。
+
 平台側只負責：
 
 1. **Gateway `victorialogs` mode**（驗章 → 蓋租戶 header → VictoriaLogs query/metadata 路由白名單）。
@@ -168,9 +170,9 @@ VictoriaLogs (AccountID, ProjectID)：強制隔離
 | 屬性 | 設計選擇 | 理由 / trade-off |
 |---|---|---|
 | 簽發方 | tenant-api（複用 ADR-020 `/api/v1/federation/tokens`，或 in-place 查詢綁平台 Grafana session）| 不另起 service；gateway enforcement 兩者皆同 |
-| AccountID claim | onboarding 配發的穩定 uint32，數值 claim | Envoy `claim_to_headers` 直接注入 |
-| Scope binding | claim → header，gateway 強制覆寫；vhost `request_headers_to_remove: [AccountID, ProjectID]` defense-in-depth | client 自帶 header 永不漏穿 |
-| **能力 scope** | log-query 與 ADR-020 metrics-pull **分離 audience/scope claim**（最小權限）| 持 metrics-pull token 不應自動可查 log，反之亦然；否則一個 capability 洩漏放大成兩個。⚠️ open point：同一 token + scope claim vs 各簽各的，待實作定 |
+| AccountID claim | onboarding 配發的穩定 uint32，數值 claim | gateway `revoked_check.lua` 讀已驗證 claim 後 `replace()` 注入 header（見下 Scope binding 列；**非** `claim_to_headers`——實作改用 Lua 以一併做 fail-closed 與 overwrite-at-injection）|
+| Scope binding | claim → header，gateway 在 `revoked_check.lua` 內 `replace()` **強制覆寫**任何 client 自帶 `AccountID`/`ProjectID`（注入點關死偽造）。⚠️ **不**用 vhost `request_headers_to_remove` 移除這兩 header——router filter 在 Lua 後執行會刪掉注入值（見上 §Fail-closed 實作修正）| client 自帶 header 永不漏穿 |
+| **能力 scope** | log-query 與 ADR-020 metrics-pull **分離 audience claim**（最小權限）| **已定（#609 tenant-api token 實作）= audience-bound（B 案）**：logs token `aud=tenant-federation-logs`、metrics 維持 `tenant-federation`，能力以 `aud` 切、由 Envoy `jwt_authn` **原生**強制（純 metrics token → 401）；非「同一 token 多 scope claim」（後者 jwt_authn 不認、需手刻檢查、防護點更弱）。原 open point 已收斂 |
 
 ### Blast radius：3-layer defense（對 VictoriaLogs / LogsQL 重新校準）
 

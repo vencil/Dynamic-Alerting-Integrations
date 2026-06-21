@@ -8,7 +8,10 @@ type: application
 # 0.2.2 — ADR-020 IV-2b: close the residual %2F escaped-slash 403 bypass
 # 0.2.3 — ADR-020 IV-2f: fix mtail regex — Envoy sorts JSON keys, audit metric never emitted
 # 0.2.4 — #551: emergency global kill switch (emergencyGlobalBlock → 503)
-version: 0.2.4
+# 0.3.0 — ADR-021 (#609) PR-2: victorialogs mode — tenant log-query authz plane
+#         (AccountID/ProjectID injection, fail-closed null-claim guard,
+#         default-deny LogsQL endpoint allowlist, aud=tenant-federation-logs)
+version: 0.3.0
 # appVersion: pinned Envoy release
 appVersion: "v1.38.0"
 # kubeVersion: the deployment uses the native preStop.sleep lifecycle
