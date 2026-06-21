@@ -74,3 +74,69 @@ tests:
       - eval_time: 25m
         alertname: AlertmanagerWebhookNotificationsFailing
         exp_alerts: []
+
+  # 5) Governance loop stale: last successful run is far in the past. A NEGATIVE
+  #    sample value makes time() - value exceed the 8d (691200s) threshold at a
+  #    tiny eval_time, so no 8-day test window is needed. Realistic KSM scrape
+  #    labels (job/instance) are included to prove `max by (cronjob, namespace)`
+  #    PROJECTS THEM AWAY — exp_labels asserts exactly {severity,cronjob,namespace}
+  #    with no instance/job (the regression guard for the dedup-identity bug), and
+  #    the 10m/16m split proves the 15m `for` (a for:0s mutant fires at 10m → red).
+  - interval: 1m
+    name: governance-stale-fires-after-for-and-projects-labels
+    input_series:
+      - series: 'kube_cronjob_status_last_successful_time{cronjob="threshold-govern",namespace="monitoring",job="kube-state-metrics",instance="10.0.0.1:8080"}'
+        values: '-700000x20'      # time() - (-700000) = time()+700000 >> 691200
+    alert_rule_test:
+      - eval_time: 10m            # condition true since t0 but < for:15m → PENDING
+        alertname: ThresholdGovernanceStale
+        exp_alerts: []
+      - eval_time: 16m            # past the 15m hold → FIRING
+        alertname: ThresholdGovernanceStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              cronjob: threshold-govern
+              namespace: monitoring
+            exp_annotations:
+              summary: "Threshold-governance loop has not succeeded in 8 days"
+
+  # 6) Recent success: last_successful_time ~now → time() - value small → no fire.
+  - interval: 1m
+    name: governance-recent-success-no-fire
+    input_series:
+      - series: 'kube_cronjob_status_last_successful_time{cronjob="threshold-govern",namespace="monitoring",job="kube-state-metrics",instance="10.0.0.1:8080"}'
+        values: '0x20'            # time() - 0 = eval seconds (<< 691200)
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: ThresholdGovernanceStale
+        exp_alerts: []
+
+  # 7) Cold-start: before the first successful run the series is ABSENT → max-by is
+  #    empty → no fire (an unrelated series is fed so the eval still runs). This is
+  #    why the design relies on series-absence, NOT a pure absent() arm, for
+  #    cold-start safety — a fresh deploy must not page for up to a week until the
+  #    first weekly run lands.
+  - interval: 1m
+    name: governance-cold-start-absent-no-fire
+    input_series:
+      - series: 'up{job="kube-state-metrics"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: ThresholdGovernanceStale
+        exp_alerts: []
+
+  # 8) Suspended CronJob: stale AND kube_cronjob_spec_suspend == 1 → the `unless`
+  #    arm suppresses it, so a deliberately-paused governance loop does not page.
+  - interval: 1m
+    name: governance-suspended-no-fire
+    input_series:
+      - series: 'kube_cronjob_status_last_successful_time{cronjob="threshold-govern",namespace="monitoring",job="kube-state-metrics",instance="10.0.0.1:8080"}'
+        values: '-700000x20'
+      - series: 'kube_cronjob_spec_suspend{cronjob="threshold-govern",namespace="monitoring",job="kube-state-metrics",instance="10.0.0.1:8080"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: ThresholdGovernanceStale
+        exp_alerts: []
