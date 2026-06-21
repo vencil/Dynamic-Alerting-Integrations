@@ -150,7 +150,7 @@ curl -H "Authorization: Bearer <logs-jwt>" \
 gateway 採 **default-deny 白名單**——只放行 VictoriaLogs 的 LogsQL **query / metadata** endpoint，
 其餘（含寫入面 `/insert/*`、跨租戶列舉、長連線 `/tail`、任何未知/未來 endpoint）一律 `403`：
 
-| 可用 | `/select/logsql/query`、`/hits`、`/facets`、`/stats_query`、`/stats_query_range`、`/streams`、`/stream_ids`、`/stream_field_names`、`/stream_field_values`、`/field_names`、`/field_values` |
+| 可用（皆在 `/select/logsql/` **前綴下**——勿用相對短形）| `/select/logsql/` 下的 `query`、`hits`、`facets`、`stats_query`、`stats_query_range`、`streams`、`stream_ids`、`stream_field_names`、`stream_field_values`、`field_names`、`field_values` |
 |---|---|
 | **不支援** | `/select/logsql/tail`（live 長連線——繞過查詢時限、佔並發槽；audit 查詢不需即時 tail）、任何 `/insert/*` 寫入、任何未列出的 endpoint → `403` |
 
