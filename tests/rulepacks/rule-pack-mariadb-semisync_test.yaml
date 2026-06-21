@@ -68,8 +68,8 @@ tests:
             exp_annotations:
               summary: "MariaDB semi-sync has ZERO connected replicas for tenant db-b"
               summary_zh: "MariaDB semi-sync 租戶 db-b 連線的 replica 數為 0"
-              description: "Tenant db-b has semi-sync enabled but ZERO semi-sync replicas connected (rpl_semi_sync_master_clients=0) — durability redundancy is gone and cannot self-recover until a replica reconnects. With wait_no_slave=ON, commits stall up to the timeout before falling back to async. A structural failure, not a transient blip."
-              description_zh: "租戶 db-b 啟用了 semi-sync 但連線的 semi-sync replica 數為 0（clients=0）— 持久性備援歸零，且在 replica 重連前無法自癒。wait_no_slave=ON 時每筆 commit 會 stall 到 timeout 才 fallback async。結構性故障，非短暫抖動。"
+              description: "Tenant db-b has semi-sync enabled but ZERO semi-sync replicas connected (rpl_semi_sync_master_clients=0) — durability redundancy is gone, no self-recovery until a replica reconnects. By the time this pages, the ~10s write-stall (wait_no_slave) has usually auto-recovered to async — the live risk is LOST DURABILITY (a primary failure now risks data loss), so the runbook's first step is to find WHY all replicas disconnected, not to chase the stall."
+              description_zh: "租戶 db-b 啟用了 semi-sync 但連線的 semi-sync replica 數為 0（clients=0）— 持久性備援歸零、replica 重連前無法自癒。此告警響起時 ~10s 寫入 stall（wait_no_slave）通常已自動 fallback async — 真正風險是失去持久性（此時 primary 故障會資料遺失），故 runbook 第一步是追查為何所有 replica 斷線、而非修 stall。"
 
   # ── Maintenance opt-out ASYMMETRY: warning (Degraded) opts out; critical
   #    (ReplicasGone) does NOT (matches NoPrimary — a durability outage always pages). ──
@@ -110,8 +110,8 @@ tests:
             exp_annotations:
               summary: "MariaDB semi-sync has ZERO connected replicas for tenant db-e"
               summary_zh: "MariaDB semi-sync 租戶 db-e 連線的 replica 數為 0"
-              description: "Tenant db-e has semi-sync enabled but ZERO semi-sync replicas connected (rpl_semi_sync_master_clients=0) — durability redundancy is gone and cannot self-recover until a replica reconnects. With wait_no_slave=ON, commits stall up to the timeout before falling back to async. A structural failure, not a transient blip."
-              description_zh: "租戶 db-e 啟用了 semi-sync 但連線的 semi-sync replica 數為 0（clients=0）— 持久性備援歸零，且在 replica 重連前無法自癒。wait_no_slave=ON 時每筆 commit 會 stall 到 timeout 才 fallback async。結構性故障，非短暫抖動。"
+              description: "Tenant db-e has semi-sync enabled but ZERO semi-sync replicas connected (rpl_semi_sync_master_clients=0) — durability redundancy is gone, no self-recovery until a replica reconnects. By the time this pages, the ~10s write-stall (wait_no_slave) has usually auto-recovered to async — the live risk is LOST DURABILITY (a primary failure now risks data loss), so the runbook's first step is to find WHY all replicas disconnected, not to chase the stall."
+              description_zh: "租戶 db-e 啟用了 semi-sync 但連線的 semi-sync replica 數為 0（clients=0）— 持久性備援歸零、replica 重連前無法自癒。此告警響起時 ~10s 寫入 stall（wait_no_slave）通常已自動 fallback async — 真正風險是失去持久性（此時 primary 故障會資料遺失），故 runbook 第一步是追查為何所有 replica 斷線、而非修 stall。"
 
   # ── for:2m de-flap (Degraded): a transient async-fallback blip (status=0 for ~1m45s,
   #    < for:2m, then recovers) must NEVER fire. Mid-window assert at 1m45s (last
@@ -173,5 +173,5 @@ tests:
             exp_annotations:
               summary: "MariaDB semi-sync has ZERO connected replicas for tenant db-f"
               summary_zh: "MariaDB semi-sync 租戶 db-f 連線的 replica 數為 0"
-              description: "Tenant db-f has semi-sync enabled but ZERO semi-sync replicas connected (rpl_semi_sync_master_clients=0) — durability redundancy is gone and cannot self-recover until a replica reconnects. With wait_no_slave=ON, commits stall up to the timeout before falling back to async. A structural failure, not a transient blip."
-              description_zh: "租戶 db-f 啟用了 semi-sync 但連線的 semi-sync replica 數為 0（clients=0）— 持久性備援歸零，且在 replica 重連前無法自癒。wait_no_slave=ON 時每筆 commit 會 stall 到 timeout 才 fallback async。結構性故障，非短暫抖動。"
+              description: "Tenant db-f has semi-sync enabled but ZERO semi-sync replicas connected (rpl_semi_sync_master_clients=0) — durability redundancy is gone, no self-recovery until a replica reconnects. By the time this pages, the ~10s write-stall (wait_no_slave) has usually auto-recovered to async — the live risk is LOST DURABILITY (a primary failure now risks data loss), so the runbook's first step is to find WHY all replicas disconnected, not to chase the stall."
+              description_zh: "租戶 db-f 啟用了 semi-sync 但連線的 semi-sync replica 數為 0（clients=0）— 持久性備援歸零、replica 重連前無法自癒。此告警響起時 ~10s 寫入 stall（wait_no_slave）通常已自動 fallback async — 真正風險是失去持久性（此時 primary 故障會資料遺失），故 runbook 第一步是追查為何所有 replica 斷線、而非修 stall。"
