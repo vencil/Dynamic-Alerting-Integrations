@@ -78,13 +78,17 @@ groups:
       # SCOPE (#875 review): all three rules are VALUE-based (mysql_up / read_only)
       # → they catch process-death with the pod ALIVE. A pod/replica VANISHING in an
       # HA set makes the series ABSENT (not 0), masked by surviving nodes at every
-      # rule here → HA replica-COUNT degradation is out of scope; it needs a K8s
-      # replica-readiness alert (kube_*_status_replicas_ready), not yet in the k8s
-      # pack — tracked follow-up, NOT covered by this liveness tier.
+      # rule here → HA replica-COUNT degradation is out of scope here; it is the
+      # K8s-layer complement TenantHAReplicasDegraded (kube_*_status_replicas_ready,
+      # #888, rule-pack-kubernetes.yaml) — SHIPPED, pairs with this value-based tier.
       # Customer topology: primary-replica SEMI-SYNC (not Galera → no wsrep quorum).
       # A single replica down during failover/drain is NOT a service outage →
       # warning + maintenance opt-out. Total outage and loss-of-writable-primary
       # are caught at CRITICAL by the two rules below.
+      # ENGINE-EXPANSION (defer-with-trigger, #892): to apply this tiering to another
+      # engine, SPLIT the trigger — instance(warning)+ClusterDown(critical) need only
+      # <db>_up (trigger = first HA tenant on that engine); the NoPrimary/quorum tier
+      # needs that engine's cluster-state metric (patroni/sentinel/wsrep). Don't bundle.
       - alert: MariaDBDown
         expr: |
           (mysql_up == 0)
@@ -138,8 +142,9 @@ groups:
       # for:2m absorbs the normal promotion window (old primary demoted -> new
       # promoted). NO maintenance opt-out.
       # NOTE semi-sync: a primary that loses all semi-sync replicas can STALL writes
-      # while still read_only==0 (rpl_semi_sync_master_status / _clients). That
-      # "primary isolated" signal is a documented follow-up, not this MVP.
+      # (clients=0) or silently fall back to async / lose durability (status=0) while
+      # read_only stays 0 → NoPrimary is structurally blind. #875 defer re-evaluated:
+      # metric available (global_status collector) + customer's real topology → #892.
       # ⚠ At customer rollout, verify read_only is scraped (global_variables collector on).
       - alert: MariaDBNoPrimary
         expr: |

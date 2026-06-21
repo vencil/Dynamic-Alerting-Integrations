@@ -83,13 +83,17 @@ groups:
       # SCOPE (#875 review): all three rules are VALUE-based (up / member_state) →
       # they catch process-death with the pod ALIVE. A pod/replica VANISHING in an
       # HA set makes the series ABSENT (not 0), masked by surviving nodes at every
-      # rule here → HA replica-COUNT degradation is out of scope; it needs a K8s
-      # replica-readiness alert (kube_*_status_replicas_ready), not yet in the k8s
-      # pack — tracked follow-up, NOT covered by this liveness tier.
+      # rule here → HA replica-COUNT degradation is out of scope here; it is the
+      # K8s-layer complement TenantHAReplicasDegraded (kube_*_status_replicas_ready,
+      # #888, rule-pack-kubernetes.yaml) — SHIPPED, pairs with this value-based tier.
       # Instance vs cluster vs quorum. A single replica-set member dying during a
       # normal failover/drain is NOT a service outage → warning + maintenance
       # opt-out (so planned drains stay quiet). Total outage and loss-of-PRIMARY
       # are caught at CRITICAL by the two rules below.
+      # ENGINE-EXPANSION (defer-with-trigger, #892): to apply this tiering to another
+      # engine, SPLIT the trigger — instance(warning)+ClusterDown(critical) need only
+      # <db>_up (trigger = first HA tenant on that engine); the NoPrimary/quorum tier
+      # needs that engine's cluster-state metric (patroni/sentinel/wsrep). Don't bundle.
       - alert: MongoDBDown
         expr: |
           (mongodb_up == 0)
