@@ -6,12 +6,13 @@ fire?" by going through the SAME authoritative engine the platform uses —
 `compile_custom_alerts.build_pack` + `promtool` — never re-implementing eval
 (the two-eval-homes rule; see docs/design/recipe-would-fire-preview.md).
 
-MVP scope: the `threshold` recipe (ops >, >=, <, <=, ==) with at most exact
-`selectors`. These are NOT time-dependent, so a flat constant synthetic series
-is correct + sufficient. Two shapes fall back to `supported: false` because a
-flat exact-match series can't faithfully stand in for them:
-  - time-dependent recipes (rate / ratio / forecast / absence / p99_latency) —
-    need recipe-type-aware series (deferred to P3);
+MVP scope: `threshold` (ops >, >=, <, <=, ==; a flat constant series at the
+scenario value) and `absence` (the metric is simply NOT emitted → it is absent
+over the window). Both are faithfully reproducible with a hand-built synthetic
+series. The remaining recipes fall back to `supported: false` because a flat /
+absent series can't stand in for them:
+  - rate / ratio / forecast / p99_latency — time-dependent; need a populated
+    lookback or slope the preview can't fake yet (deferred to a later pass);
   - `selectors_re` (regex label filters) — we can't synthesize a value
     guaranteed to match an arbitrary regex, so a preview could silently report
     a false "inactive". Refusing is honest; lying is not.
@@ -23,6 +24,7 @@ mislabeled as firing, so we gate with `build_pack` exception handling +
 `promtool check rules` (syntax) BEFORE the inverted-assert (§5.2 layering).
 """
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -36,16 +38,53 @@ sys.path.insert(0, _THIS_DIR)
 import compile_custom_alerts as cc  # noqa: E402
 from custom_alerts import shape  # noqa: E402
 
-# The `threshold` recipe covers >, >=, <, <=, == (equals): all value-crossing,
-# none time-dependent → a flat series previews them correctly. The others are
-# deferred to P3 (recipe-type-aware series). Per-type gating (§7): an
-# unsupported type returns supported:false WITHOUT attempting a compile, so it
-# is never mislabeled firing/error.
-SUPPORTED_RECIPES_MVP = frozenset({"threshold"})
+# `threshold` covers >, >=, <, <=, == (all value-crossing, flat series). `absence`
+# is presence-based — fires where a DECLARING tenant's metric had no sample over
+# the window — so a "don't emit the metric" series reproduces it exactly. The
+# remaining (rate/ratio/forecast/p99_latency) stay deferred (need a populated
+# lookback). Per-type gating (§7): an unsupported type returns supported:false
+# WITHOUT a compile, so it is never mislabeled firing/error.
+SUPPORTED_RECIPES_MVP = frozenset({"threshold", "absence"})
 
 # `for:` is enum-bounded (shape.ALLOWED_FOR). Map to minutes to size the
 # synthetic series + pick an eval_time PAST the pending window.
 _FOR_MINUTES = {"0s": 0, "1m": 1, "5m": 5, "15m": 15, "30m": 30, "1h": 60}
+
+# `window` is a Prometheus/Go duration, NOT enum-bounded like `for:` — so PARSE it
+# (not a fixed map) to size the absence eval_time. It can be COMPOUND ("1h30m") and
+# carry sub-second units ("500ms"), per the schema grammar
+# ^([0-9]+(ns|us|µs|ms|s|m|h))+$ — the compiler interpolates it RAW into
+# count_over_time(metric[window]) (Prometheus parses it), so a narrower parser here
+# would false-ERROR a valid, would-actually-fire recipe (adversarial review). Return
+# None on a malformed / zero window so the caller fail-closes to error rather than
+# guess → wrong eval_time → a real firing misread (CodeRabbit #873).
+_DUR_FULL_RE = re.compile(r"^([0-9]+(?:ns|us|µs|ms|s|m|h))+$")
+_DUR_TOKEN_RE = re.compile(r"(\d+)(ns|us|µs|ms|s|m|h)")
+# nanoseconds per unit — INTEGER, so a pathological 400-digit window stays in
+# Python's arbitrary-precision int and NEVER hits an int→float OverflowError (the
+# earlier `math.ceil(secs / 60)` form crashed on a huge window — CodeRabbit). µs==us.
+_DUR_UNIT_NS = {"ns": 1, "us": 1000, "µs": 1000, "ms": 1_000_000,
+                "s": 1_000_000_000, "m": 60_000_000_000, "h": 3_600_000_000_000}
+_NS_PER_MIN = 60_000_000_000
+# the preview synthesizes a 1-sample-PER-MINUTE series, so a window beyond ~a day
+# is impractical to preview — cap it. This also bounds the series length so an
+# absurd window fails fast as state:error instead of OOM-ing/timing-out promtool.
+_MAX_WINDOW_MIN = 1440  # 24h
+
+
+def _window_minutes(window):
+    """Prometheus duration (compound + sub-second ok) → whole minutes (ceil; min 1).
+    INTEGER arithmetic throughout. None on a malformed / non-positive / absurdly
+    large (> _MAX_WINDOW_MIN) window — the preview can't synthesize a series that
+    long, and a recipe with such a window still deploys (the preview just abstains)."""
+    w = str(window or "").strip()
+    if not _DUR_FULL_RE.match(w):
+        return None
+    ns = sum(int(n) * _DUR_UNIT_NS[u] for n, u in _DUR_TOKEN_RE.findall(w))
+    if ns <= 0:
+        return None
+    minutes = -(-ns // _NS_PER_MIN)   # integer ceil-div: no float → no overflow
+    return minutes if minutes <= _MAX_WINDOW_MIN else None
 
 _PROMTOOL = shutil.which("promtool")
 
@@ -66,31 +105,26 @@ def _labels(d):
 
 
 def build_preview_test(recipe, tenant, value, slug):
-    """Build a promtool test (YAML str) for a threshold recipe — inverted assert.
+    """Build a promtool test (YAML str) for a supported recipe — inverted assert.
 
-    Emits the minimal label-correct graph the compiled rule joins against:
-      - the observed metric @ the scenario test value (+ any selector labels);
-      - `user_threshold` @ the configured threshold, carrying the compiler's
-        recipe_id slug + severity + name (+ mode when the recipe sets it);
-      - a constant `tenant_metadata_info` for the group_left enrichment.
-    Flat constant series held long enough to clear the recipe's `for:` window.
+    POLYMORPHIC by recipe type (a flat series can't fake every shape):
+      - threshold (>, >=, <, <=, ==): the observed metric @ the scenario `value`
+        (+ selector labels) + `user_threshold` @ the configured threshold +
+        a constant `tenant_metadata_info`; flat, held past `for:`.
+      - absence: emit ONLY the declaration (`user_threshold`, which the compiler
+        records as `custom:threshold:{id}`) + `tenant_metadata_info`, and DO NOT
+        emit the metric. The rule is `custom:threshold:{id} unless on(tenant)
+        count by(tenant)(count_over_time(metric[window]) > 0)`, so an absent
+        metric leaves the `unless` arm empty → the declaring tenant fires (the
+        absence.yaml firing case). `value` is unused. eval past `window` + `for:`.
     Returns (yaml_text, severity, mode, threshold_value).
     """
+    rtype = recipe.get("recipe")
     thr_value, severity = shape.parse_threshold(recipe["threshold"])
     name = recipe["name"]
     mode = recipe.get("mode")
-    selectors = {str(k): v for k, v in (recipe.get("selectors") or {}).items()}
-
-    # NOTE (P3): this +10/+5 buffer is correct ONLY for a flat constant series.
-    # Time-dependent recipes (rate / ratio / absence) — currently gated to
-    # supported:false — will need `n`/`eval_min` to become polymorphic by
-    # recipe_type: `absence` needs the series to STOP at a point then eval after
-    # the gap + `for:`; `rate` needs eval_time to fully populate the lookback.
     for_min = _FOR_MINUTES[str(recipe.get("for", "1m"))]   # caller pre-validates membership
-    n = for_min + 10            # series length (interval 1m): clears `for:` + buffer
-    eval_min = for_min + 5      # eval PAST the pending window
 
-    metric_labels = {"tenant": tenant, **selectors}
     ut_labels = {
         "component": "custom",
         "metric": recipe["metric"],
@@ -102,6 +136,42 @@ def build_preview_test(recipe, tenant, value, slug):
     if mode:
         ut_labels["mode"] = str(mode)
 
+    def _md(n):
+        # constant tenant_metadata_info for the group_left enrichment (both shapes)
+        return (
+            f"      - series: 'tenant_metadata_info{{tenant=\"{tenant}\", "
+            f"runbook_url=\"http://rb/{tenant}\", owner=\"team-{tenant}\", tier=\"gold\"}}'\n"
+            f"        values: '1x{n}'\n"
+        )
+
+    if rtype == "absence":
+        # eval must clear BOTH the absence detection window AND `for:`. The metric
+        # is INTENTIONALLY absent (no series), so count_over_time(metric[window])
+        # is empty → the rule's `unless on(tenant)` keeps the declaring tenant →
+        # fires. `value` is irrelevant to a presence check.
+        win_min = _window_minutes(recipe["window"])   # caller pre-validates (not None)
+        eval_min = win_min + for_min + 5
+        n = eval_min + 5
+        input_series = (
+            f"      - series: 'user_threshold{_labels(ut_labels)}'\n"
+            f"        values: '{thr_value}x{n}'\n"
+            + _md(n)
+        )
+    else:
+        # threshold / == : a flat constant series at the scenario value, held long
+        # enough to clear `for:`.
+        eval_min = for_min + 5
+        n = for_min + 10
+        selectors = {str(k): v for k, v in (recipe.get("selectors") or {}).items()}
+        metric_labels = {"tenant": tenant, **selectors}
+        input_series = (
+            f"      - series: '{recipe['metric']}{_labels(metric_labels)}'\n"
+            f"        values: '{value}x{n}'\n"
+            f"      - series: 'user_threshold{_labels(ut_labels)}'\n"
+            f"        values: '{thr_value}x{n}'\n"
+            + _md(n)
+        )
+
     doc = (
         "rule_files:\n"
         "  - rule-pack-custom-alerts.yaml\n"
@@ -109,13 +179,7 @@ def build_preview_test(recipe, tenant, value, slug):
         "tests:\n"
         "  - interval: 1m\n"
         "    input_series:\n"
-        f"      - series: '{recipe['metric']}{_labels(metric_labels)}'\n"
-        f"        values: '{value}x{n}'\n"
-        f"      - series: 'user_threshold{_labels(ut_labels)}'\n"
-        f"        values: '{thr_value}x{n}'\n"
-        f"      - series: 'tenant_metadata_info{{tenant=\"{tenant}\", "
-        f"runbook_url=\"http://rb/{tenant}\", owner=\"team-{tenant}\", tier=\"gold\"}}'\n"
-        f"        values: '1x{n}'\n"
+        + input_series +
         "    alert_rule_test:\n"
         f"      - eval_time: {eval_min}m\n"
         f"        alertname: Custom_{slug}\n"
@@ -188,26 +252,35 @@ def preview_recipe(recipe, tenant, scenario):
         }
 
     # Compute the slug via the compiler's OWN function (zero cross-language
-    # drift, §5.3). A structurally invalid recipe fails loud here → state:error.
+    # drift, §5.3). A structurally invalid recipe (RecipeError) OR one missing a
+    # required key (KeyError, e.g. no `metric` — recipe_id does `inst["metric"]`)
+    # fails loud here → state:error, honouring the §4 contract that a config error
+    # is a verdict-less error (the catch-all in app.py would otherwise mask it as a
+    # 500). Pre-existing on the threshold path too; caught here for both.
     try:
         slug = shape.recipe_id(recipe)
     except shape.RecipeError as exc:
         return _err(str(exc))
+    except KeyError as exc:
+        return _err(f"recipe is missing required field {exc}")
 
     # Validate the request BEFORE the promtool-availability check, so bad input
     # is reported as an error regardless of whether we can evaluate locally
     # (the "Python Tests" CI job has no promtool on PATH).
     value = (scenario or {}).get("value")
-    if value is None:
-        return _err("scenario.value is required for a threshold preview",
-                    alertname=f"Custom_{slug}")
-    # Numeric-only: reject e.g. "1+2" / "5.." which promtool's series grammar
-    # would misread as a slope/range rather than a flat constant → wrong verdict.
-    try:
-        float(value)
-    except (TypeError, ValueError):
-        return _err(f"scenario.value must be numeric, got {value!r}",
-                    alertname=f"Custom_{slug}")
+    # threshold is value-crossing → the scenario value is required and must be a
+    # bare number (promtool's series grammar reads "1+2" / "5.." as a slope/range
+    # → a wrong verdict). absence is presence-based: it needs no value (the metric
+    # is simply not emitted), so don't demand one.
+    if rtype == "threshold":
+        if value is None:
+            return _err("scenario.value is required for a threshold preview",
+                        alertname=f"Custom_{slug}")
+        try:
+            float(value)
+        except (TypeError, ValueError):
+            return _err(f"scenario.value must be numeric, got {value!r}",
+                        alertname=f"Custom_{slug}")
     # `for:` is enum-bounded by shape.ALLOWED_FOR, but the preview must also be
     # able to SIZE the synthetic series from it. If the two ever drift (a new
     # ALLOWED_FOR value unmapped in _FOR_MINUTES), fail closed to error rather
@@ -217,6 +290,14 @@ def preview_recipe(recipe, tenant, scenario):
     if _for not in _FOR_MINUTES:
         return _err(f"preview cannot size the series for for-window {_for!r} "
                     f"(sync _FOR_MINUTES with shape.ALLOWED_FOR)",
+                    alertname=f"Custom_{slug}")
+    # absence sizes its eval_time from `window` (a Go duration, NOT enum-bounded).
+    # If it can't be parsed, fail closed to error — never guess a window → wrong
+    # eval_time → a real firing misread as inactive (same class as the for guard).
+    if rtype == "absence" and _window_minutes(recipe.get("window")) is None:
+        return _err(f"preview cannot size the absence window "
+                    f"{recipe.get('window')!r} (expected a Prometheus duration "
+                    f"like 10m / 1h30m / 500ms)",
                     alertname=f"Custom_{slug}")
 
     if _PROMTOOL is None:
@@ -272,10 +353,17 @@ def preview_recipe(recipe, tenant, scenario):
         if state == "error":
             return _err(f"promtool eval error (rc={res.returncode}): "
                         f"{out.strip()[:300] or 'no output'}", alertname=f"Custom_{slug}")
-        op = recipe.get("op", ">")
-        verb = "==" if op == "==" else op
-        reason = (f"value {value} {verb} threshold {thr_value}" if state == "firing"
-                  else f"value {value} does not cross threshold {thr_value} ({op})")
+        if rtype == "absence":
+            win = recipe.get("window")
+            reason = (f"{recipe['metric']} absent over {win} → would fire ({severity})"
+                      if state == "firing"
+                      else "simulated absence did not fire — verify the recipe "
+                           "compiles to an absence alert for this tenant")
+        else:
+            op = recipe.get("op", ">")
+            verb = "==" if op == "==" else op
+            reason = (f"value {value} {verb} threshold {thr_value}" if state == "firing"
+                      else f"value {value} does not cross threshold {thr_value} ({op})")
         return {
             "alertname": f"Custom_{slug}",
             "supported": True,
