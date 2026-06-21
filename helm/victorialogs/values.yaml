@@ -40,9 +40,39 @@ listenPort: 9428
 # operators override per environment via Helm values.
 retentionPeriod: "30d"
 
+# ── Layer-1 query guardrails — ADR-021 §Blast radius Layer 1 / #609 ─────────
+# Tenant log query (ADR-021) puts a NEW read load on this single-pod store
+# (#539 sized it for ingestion only). LogsQL has no Prometheus-style sample
+# cap, so the primary blast-radius primitive is a TIME-RANGE limit plus an
+# execution-duration cap. These are rendered as `-search.*` flags on the
+# deployment. Starting values per ADR-021 — observe and tune after rollout.
+search:
+  # Reject queries with no/too-wide time filter — the main blast-radius
+  # control in the log world. Keep <= retentionPeriod (a wider window can
+  # never return data anyway, but bounding it stops a full-retention scan).
+  maxQueryTimeRange: "7d"
+  # ⛔ Single-query execution-time cap. MUST be SHORTER than the gateway
+  # route timeout (ADR-020/021 gateway = 30s) so the CASCADE makes
+  # VictoriaLogs abort FIRST — otherwise a query the gateway already gave up
+  # on keeps burning a storage concurrency slot as a zombie. 25s < 30s.
+  # (Gemini fold-in — do not raise to/above 30s without raising the gateway
+  # timeout in lockstep.)
+  maxQueryDuration: "25s"
+  # Concurrent query cap — the real RAM/CPU backstop. Also the per-pod
+  # rate-limit backstop for the multi-replica gateway asymmetry (ADR-021
+  # Layer 2 note): no matter how many gateway replicas wave a single token
+  # through, actual concurrent execution here is bounded. Conservative
+  # start; raise once steady-state read load is understood.
+  maxConcurrentRequests: 6
+  # How long an over-the-concurrency-limit query waits in queue before being
+  # rejected (vs failing instantly). Bounded so a backlog can't pile up
+  # unboundedly behind the concurrency cap.
+  maxQueueDuration: "10s"
+
 # Extra command-line flags. VictoriaLogs has "sane defaults" for most
 # knobs (per upstream); the chart only sets retention + listen + data
-# path. Add overrides here without forking the deployment template.
+# path + the ADR-021 Layer-1 search guardrails above. Add overrides here
+# without forking the deployment template.
 # Example: ["-loggerLevel=WARN", "-storage.minFreeDiskSpaceBytes=10GB"]
 extraArgs: []
 

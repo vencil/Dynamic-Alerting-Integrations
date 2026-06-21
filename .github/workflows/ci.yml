@@ -405,6 +405,24 @@ jobs:
       - name: Set up Helm
         uses: azure/setup-helm@v4
 
+      # Vector CLI — same rationale as setup-Helm above. The ADR-021 #609
+      # projection AC behavior gate (tests/shared/test_vector_projection_vrl.py
+      # TestVectorValidateAndTest: `vector validate` + `vector test` proving
+      # fail-closed tenant isolation, topology strip, parse-error→0:0) is gated
+      # on `vector` being on PATH (shutil.which); without it those 3 SILENTLY
+      # SKIP and the security-critical fan-out behavior gets zero CI coverage.
+      # Pinned + checksum-verified, mirroring the promtool install above.
+      - name: Install Vector
+        run: |
+          VECTOR_VERSION=0.55.0
+          # Pinned SHA-256 of vector-0.55.0-x86_64-unknown-linux-gnu.tar.gz (upstream SHA256SUMS).
+          VECTOR_SHA256=e0221681b1cd1f93c46008fde19c5ac5811718d10a803a4e320ff4e72ab9e4a9
+          curl -fsSL "https://github.com/vectordotdev/vector/releases/download/v${VECTOR_VERSION}/vector-${VECTOR_VERSION}-x86_64-unknown-linux-gnu.tar.gz" -o /tmp/vector.tgz
+          bash scripts/ops/_verify_download.sh /tmp/vector.tgz "$VECTOR_SHA256"
+          tar xzf /tmp/vector.tgz -C /tmp
+          sudo cp /tmp/vector-x86_64-unknown-linux-gnu/bin/vector /usr/local/bin/
+          vector --version
+
       - name: Cache pip packages
         uses: actions/cache@v5
         with:

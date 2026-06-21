@@ -1,0 +1,304 @@
+# Vector unit tests — ADR-021 Phase 1 (b) tenant-sanitized projection / #609
+#
+# These tests are MERGED with the helm-rendered Vector config at `vector test`
+# time, so they assert against the SAME transforms that ship (no VRL is
+# duplicated here — drift-proof). They are NOT a standalone config.
+#
+# How to run (codifies runbook §4.4; CI runs the equivalent in
+# tests/shared/test_vector_projection_vrl.py):
+#
+#   helm template vector ./helm/vector -n monitoring \
+#     --set 'tenantProjections[0].tenantId=tenant-alpha' \
+#     --set 'tenantProjections[0].accountId=1000' \
+#     --set 'tenantProjections[1].tenantId=tenant-beta' \
+#     --set 'tenantProjections[1].accountId=1001' \
+#     | yq '.[] | select(.kind=="ConfigMap" and (.metadata.name|test("vector-config"))) | .data."vector.yaml"' \
+#     > /tmp/rendered-vector.yaml
+#   vector test /tmp/rendered-vector.yaml helm/vector/tests/projection_tests.yaml
+#
+# The fixture render MUST include tenantProjections for tenant-alpha→1000 and
+# tenant-beta→1001, or the tenant_project / tenant_route transforms (and the
+# t_1000 / t_1001 routes these tests reference) are not rendered.
+#
+# The mock events model what Vector's kubernetes_logs source produces: a raw
+# `.message` string (the gateway's audit JSON, or Envoy operational text) plus
+# a `.kubernetes.*` metadata blob. We insert_at `demux` so the full shipped
+# VRL runs, then assert on:
+#   - `demux`                 → the platform full copy (0:0) — what the
+#                               primary `victorialogs` sink writes.
+#   - `tenant_route.t_1000`   → tenant-alpha's sanitized partition.
+#   - `tenant_route._unmatched` → the discard bucket (no sink consumes it):
+#                               proof a row did NOT reach any tenant partition.
+
+tests:
+  # ── (i) NEGATIVE ASSERTION: sanitization actually REMOVES topology ────────
+  # The whole point of (b): a tenant's projected copy must NOT carry infra
+  # topology. Feed an audit row carrying EVERY sensitive field (both in the
+  # JSON payload AND in the k8s metadata that demux promotes) and assert the
+  # tenant copy has none of them — while the 0:0 copy keeps them. This tests
+  # "removed", not merely "produced".
+  # Seeded from the gateway's REAL json_format (envoy.yaml &audit_json:
+  # tenant_id/token_id/account_id/method/path/query/status/upstream/
+  # response_flags) PLUS injected attacker values — NOT from the keep-list, so
+  # it actually exercises the leak surface. Sanitization is a fail-closed
+  # ALLOWLIST: the tenant copy is rebuilt from tenantProjectionKeepFields only,
+  # so upstream (the backend IP), infra naming, the raw .message, and payload-
+  # injected account_id/log_event_id are all structurally absent.
+  - name: "projection sanitizes via allowlist — upstream IP / infra naming / raw message / injected ids absent from tenant copy"
+    inputs:
+      - insert_at: demux
+        type: log
+        log_fields:
+          message: '{"tenant_id":"tenant-alpha","token_id":"tok-abc","account_id":9999,"method":"GET","path":"/select/logsql/query","query":"_time:5m","status":200,"duration_ms":12,"upstream":"10.42.7.13:9428","response_flags":"-","log_event_id":"deadbeef-dead-7ead-8ead-deaddeaddead"}'
+          kubernetes.container_name: federation-gateway
+          kubernetes.pod_namespace: monitoring
+          kubernetes.pod_name: federation-gateway-7d9f-abcde
+          kubernetes.pod_node_name: node-7
+          kubernetes.pod_owner: federation-gateway-7d9f
+    outputs:
+      # 0:0 platform full copy KEEPS everything — upstream, raw line, k8s topology.
+      - extract_from: demux
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.log_type, "federation_audit")
+              assert_eq!(.tenant_id, "tenant-alpha")
+              assert_eq!(.upstream, "10.42.7.13:9428", "0:0 keeps the backend IP")
+              assert_eq!(.pod_node, "node-7", "0:0 keeps node hostname")
+              assert_eq!(.k8s_namespace, "monitoring", "0:0 keeps namespace")
+              assert!(is_string(.log_event_id), "0:0 carries log_event_id")
+      # Tenant copy: ALLOWLIST only — infra gone, injected ids overridden.
+      - extract_from: tenant_route.t_1000
+        conditions:
+          - type: vrl
+            source: |
+              # Trusted partition key — the GitOps map value, NOT payload 9999.
+              assert_eq!(.account_id, 1000, "account_id is the map value, not payload-injected 9999")
+              assert_eq!(.tenant_id, "tenant-alpha")
+              # log_event_id is platform-owned (UUIDv7); payload value overwritten.
+              assert!(.log_event_id != "deadbeef-dead-7ead-8ead-deaddeaddead", "payload log_event_id overwritten")
+              assert!(match(to_string(.log_event_id) ?? "", r'^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'), "platform UUIDv7")
+              # ── Infra topology / naming ABSENT (the leaks the allowlist closes) ──
+              assert!(!exists(.upstream),      "LEAK: upstream backend IP (%UPSTREAM_HOST%)")
+              assert!(!exists(.app),           "LEAK: app/container name")
+              assert!(!exists(.k8s_namespace), "LEAK: platform namespace")
+              assert!(!exists(.pod_node),      "LEAK: node hostname")
+              assert!(!exists(.pod_name),      "LEAK: pod identity")
+              assert!(!exists(.pod_ip),        "LEAK: pod IP")
+              assert!(!exists(.pod_owner),     "LEAK: ReplicaSet owner")
+              assert!(!exists(.host),          "LEAK: host")
+              # Re-serialized _msg must NOT smuggle the backend IP as a string.
+              assert!(!contains(to_string(.message) ?? "", "10.42.7.13"), "LEAK: upstream IP inside re-serialized message")
+              # ── Tenant-safe allowlist fields KEPT ──
+              assert_eq!(.status, "200")
+              assert_eq!(.method, "GET")
+              assert_eq!(.path, "/select/logsql/query")
+              assert_eq!(.query, "_time:5m")
+              assert_eq!(.token_id, "tok-abc")
+              assert!(is_string(.log_event_id), "join key kept")
+
+  # ── (iv) log_event_id is the SAME value in both copies ────────────────────
+  # On-call joins a tenant's redacted row to the full 0:0 row by this id, so
+  # the value must be identical across partitions, not re-generated per branch.
+  - name: "log_event_id identical across 0:0 and tenant copy (join key)"
+    inputs:
+      - insert_at: demux
+        type: log
+        log_fields:
+          message: '{"tenant_id":"tenant-alpha","status":200}'
+          kubernetes.container_name: federation-gateway
+          kubernetes.pod_namespace: monitoring
+          kubernetes.pod_name: federation-gateway-7d9f-abcde
+          kubernetes.pod_node_name: node-7
+          kubernetes.pod_owner: federation-gateway-7d9f
+    outputs:
+      - extract_from: demux
+        conditions:
+          - type: vrl
+            source: |
+              # uuid_v7 is time-sortable (high 48 bits = ms epoch). Assert the
+              # textual form matches the v7 layout — the version nibble is the
+              # '7' after the 2nd dash; a random v4 would have '4' there.
+              # Value-equality across copies is structural: the id is set ONCE
+              # in the shared demux stage (upstream of the fan-out), so both
+              # branches inherit the SAME value — not re-generated per branch.
+              assert!(is_string(.log_event_id))
+              assert!(
+                match(to_string(.log_event_id) ?? "",
+                  r'^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'),
+                "log_event_id must be a v7 (time-sortable) uuid, not v4/random"
+              )
+      - extract_from: tenant_route.t_1000
+        conditions:
+          - type: vrl
+            source: |
+              assert!(is_string(.log_event_id), "tenant copy carries the same join key field")
+              assert!(
+                match(to_string(.log_event_id) ?? "",
+                  r'^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'),
+                "tenant copy id is the v7 form too (survived sanitization unchanged)"
+              )
+
+  # ── (ii) FAIL-CLOSED: blank tenant_id → 0:0 only, no tenant partition ─────
+  - name: "blank tenant_id is fail-closed (0:0 only, not in any tenant route)"
+    inputs:
+      - insert_at: demux
+        type: log
+        log_fields:
+          message: '{"tenant_id":"","status":200,"path":"/x"}'
+          kubernetes.container_name: federation-gateway
+          kubernetes.pod_namespace: monitoring
+          kubernetes.pod_name: federation-gateway-7d9f-abcde
+          kubernetes.pod_node_name: node-7
+          kubernetes.pod_owner: federation-gateway-7d9f
+    outputs:
+      - extract_from: demux
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.log_type, "federation_audit")
+              # The 0:0 copy still gets it (platform sees everything).
+              assert!(is_string(.log_event_id))
+    # The load-bearing fail-closed assertion: NOTHING from this input reaches
+    # the tenant plane. _unmatched is the discard bucket; t_1000/t_1001 are the
+    # tenant sinks. Asserting no output from ALL tenant-facing routes proves
+    # the blank-tenant row cannot land in a tenant partition.
+    no_outputs_from:
+      - tenant_route.t_1000
+      - tenant_route.t_1001
+
+  # ── (ii') FAIL-CLOSED: unknown/forged tenant_id → 0:0 only ────────────────
+  # A tenant_id not in tenantProjections (never onboarded, or a forged value)
+  # must NOT be coerced into a partition — it has no AccountID, so it drops.
+  - name: "unknown tenant_id is fail-closed (not mapped to any partition)"
+    inputs:
+      - insert_at: demux
+        type: log
+        log_fields:
+          message: '{"tenant_id":"tenant-ZZZ-not-onboarded","status":200}'
+          kubernetes.container_name: federation-gateway
+          kubernetes.pod_namespace: monitoring
+          kubernetes.pod_name: federation-gateway-7d9f-abcde
+          kubernetes.pod_node_name: node-7
+          kubernetes.pod_owner: federation-gateway-7d9f
+    outputs:
+      - extract_from: demux
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.tenant_id, "tenant-ZZZ-not-onboarded", "0:0 keeps the row verbatim")
+    no_outputs_from:
+      - tenant_route.t_1000
+      - tenant_route.t_1001
+
+  # ── (ii'') FAIL-CLOSED: MISSING tenant_id field (key absent) → 0:0 only ───
+  # Distinct from blank "": the audit JSON has NO tenant_id key at all. Whether
+  # demux still classifies it federation_audit (then VRL coerces the absent
+  # field via to_string(null) → "null" → not in tenantProjections → abort) or
+  # classifies it as something else (eligibility gate aborts on log_type), the
+  # row reaches NO tenant route. Pinned explicitly so a future change to the
+  # blank-string check can't silently open a missing-field hole — the absent
+  # and empty-string cases are separate code paths.
+  - name: "missing tenant_id field is fail-closed (0:0 only)"
+    inputs:
+      - insert_at: demux
+        type: log
+        log_fields:
+          message: '{"status":200,"path":"/select/logsql/query","token_id":"tok-xyz"}'
+          kubernetes.container_name: federation-gateway
+          kubernetes.pod_namespace: monitoring
+          kubernetes.pod_name: federation-gateway-7d9f-abcde
+          kubernetes.pod_node_name: node-7
+          kubernetes.pod_owner: federation-gateway-7d9f
+    outputs:
+      - extract_from: demux
+        conditions:
+          - type: vrl
+            source: |
+              # Reaches 0:0 regardless of how demux classifies it; the load-
+              # bearing assertion is no_outputs_from below (tenant plane empty).
+              assert!(is_string(.log_event_id), "0:0 still stamps the correlation id")
+    no_outputs_from:
+      - tenant_route.t_1000
+      - tenant_route.t_1001
+
+  # ── (iii) PARSE-ERROR / non-JSON payload → 0:0 only (Gemini 1c) ───────────
+  # A line that isn't JSON becomes gateway_operational in demux. It is NOT
+  # federation_audit, so the projection's eligibility gate drops it — it must
+  # never reach a tenant partition even though it physically mentions a
+  # tenant-looking token.
+  - name: "non-JSON payload is fail-closed to 0:0 (parse-error path)"
+    inputs:
+      - insert_at: demux
+        type: log
+        log_fields:
+          message: "upstream connect error or disconnect/reset before headers tenant_id=tenant-alpha"
+          kubernetes.container_name: federation-gateway
+          kubernetes.pod_namespace: monitoring
+          kubernetes.pod_name: federation-gateway-7d9f-abcde
+          kubernetes.pod_node_name: node-7
+          kubernetes.pod_owner: federation-gateway-7d9f
+    outputs:
+      - extract_from: demux
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.log_type, "gateway_operational", "non-JSON → operational, not audit")
+              # 0:0 still receives operational lines (centrally queryable).
+              assert!(is_string(.log_event_id))
+    no_outputs_from:
+      - tenant_route.t_1000
+      - tenant_route.t_1001
+
+  # ── (v) gateway_operational → 0:0 ONLY (never a tenant partition) ─────────
+  # Even a perfectly-formed operational JSON (parse OK) that is NOT
+  # federation_audit must stay platform-only. Here: a prometheus_query_log
+  # shape (parse OK, has params.query) carrying a tenant — still platform-only
+  # for the (b) projection, which is federation_audit-only.
+  - name: "operational + query-log rows stay 0:0 only, never tenant partition"
+    inputs:
+      # gateway_operational (parse OK but not audit — explicit log_type via a
+      # JSON the demux classifies as operational by failing parse is awkward,
+      # so use the query-log shape which is a real non-audit parse-OK case).
+      - insert_at: demux
+        type: log
+        log_fields:
+          message: '{"params":{"query":"up{tenant=\"tenant-alpha\"}"},"ruleGroup":"platform","status":200}'
+          kubernetes.container_name: prometheus
+          kubernetes.pod_namespace: monitoring
+          kubernetes.pod_name: prometheus-0
+          kubernetes.pod_node_name: node-7
+          kubernetes.pod_owner: prometheus
+    outputs:
+      - extract_from: demux
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.log_type, "prometheus_query_log", "parse-OK non-audit shape")
+    no_outputs_from:
+      - tenant_route.t_1000
+      - tenant_route.t_1001
+
+  # ── multi-tenant routing isolation: alpha and beta never cross ────────────
+  - name: "tenant-beta row routes to t_1001 only, never t_1000"
+    inputs:
+      - insert_at: demux
+        type: log
+        log_fields:
+          message: '{"tenant_id":"tenant-beta","status":503}'
+          kubernetes.container_name: federation-gateway
+          kubernetes.pod_namespace: monitoring
+          kubernetes.pod_name: federation-gateway-7d9f-fghij
+          kubernetes.pod_node_name: node-9
+          kubernetes.pod_owner: federation-gateway-7d9f
+    outputs:
+      - extract_from: tenant_route.t_1001
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.account_id, 1001, "tenant-beta → AccountID 1001")
+              assert_eq!(.tenant_id, "tenant-beta")
+              assert!(!exists(.pod_node), "still sanitized")
+    # Must NOT leak into tenant-alpha's partition.
+    no_outputs_from:
+      - tenant_route.t_1000

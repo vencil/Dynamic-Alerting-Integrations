@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "title": "vector chart values — ADR-021 #609 tenantProjections type validation",
+  "description": "Constrains ONLY the tenant-isolation trust root (tenantProjections); all other values are left unconstrained (additionalProperties defaults true). A quoted or non-integer accountId would otherwise render invalid VRL and only fail later at `vector validate`; this fails it at `helm template` with a clear message. Uniqueness of tenantId/accountId is enforced separately by a render-time {{ fail }} guard in templates/configmap.yaml (JSON Schema cannot express field-level cross-item uniqueness).",
+  "type": "object",
+  "properties": {
+    "tenantProjections": {
+      "type": "array",
+      "description": "Per-tenant log projection map — a reviewed, GitOps-versioned projection of the Git account registry.",
+      "items": {
+        "type": "object",
+        "required": ["tenantId", "accountId"],
+        "properties": {
+          "tenantId": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Must equal the federation-gateway audit JSON .tenant_id (the JWT claim)."
+          },
+          "accountId": {
+            "type": "integer",
+            "minimum": 1000,
+            "maximum": 4294967295,
+            "description": "The tenant's monotonic uint32 AccountID from _account_registry.yaml. >=1000 (0=platform, 1-999 reserved); must be quoted-free (a string makes the VRL route never match → silent empty partition)."
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  }
+}

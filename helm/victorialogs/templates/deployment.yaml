@@ -37,6 +37,26 @@ spec:
             - "-storageDataPath=/storage"
             - "-httpListenAddr=:{{ .Values.listenPort }}"
             - "-retentionPeriod={{ .Values.retentionPeriod }}"
+            # Layer-1 query guardrails (ADR-021 §Blast radius Layer 1 / #609).
+            # Rendered from .Values.search; only emit a flag when its value is
+            # set so an operator can null any single knob back to the
+            # VictoriaLogs default. extraArgs below comes AFTER these, so a
+            # duplicate flag there wins (last-flag-wins) — the documented
+            # override seam.
+            {{- with .Values.search }}
+            {{- with .maxQueryTimeRange }}
+            - "-search.maxQueryTimeRange={{ . }}"
+            {{- end }}
+            {{- with .maxQueryDuration }}
+            - "-search.maxQueryDuration={{ . }}"
+            {{- end }}
+            {{- if .maxConcurrentRequests }}
+            - "-search.maxConcurrentRequests={{ .maxConcurrentRequests }}"
+            {{- end }}
+            {{- with .maxQueueDuration }}
+            - "-search.maxQueueDuration={{ . }}"
+            {{- end }}
+            {{- end }}
             {{- range .Values.extraArgs }}
             - {{ . | quote }}
             {{- end }}
