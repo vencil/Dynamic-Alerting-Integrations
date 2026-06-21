@@ -47,4 +47,4 @@ groups:
         labels:
           severity: warning
         annotations:
-          summary: "Vector tenant-projection dropping >5 events/s for 15m — possible registry desync or payload flood"
+          summary: "Vector tenant-projection drop rate >5/s for 15m — above baseline (usually rising operational-log volume, NOT registry desync; compare baseline first)"

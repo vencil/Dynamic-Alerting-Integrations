@@ -22,6 +22,7 @@ without it); the pure-JSON shape check runs everywhere.
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -165,10 +166,14 @@ def test_dashboard_is_valid_grafana_shape():
         assert p["type"] in known_types, f"unknown panel type {p['type']}"
         for tg in p.get("targets", []):
             expr = tg["expr"]
-            # Any histogram_quantile MUST group by le, else it silently returns NaN.
+            # Any histogram_quantile MUST aggregate `by (... le ...)`, else it
+            # silently returns NaN. Check the actual `by(...le...)` clause — NOT
+            # a bare `"le" in expr`, which is ALWAYS TRUE because the function
+            # name "histogram_quanti·le·" itself contains the substring "le", so
+            # the assertion could never fire (adversarial-review #900 finding).
             if "histogram_quantile" in expr:
-                assert "le" in expr, (
-                    f"panel {p['title']!r}: histogram_quantile without `le` in the grouping "
+                assert re.search(r"\bby\s*\([^)]*\ble\b", expr), (
+                    f"panel {p['title']!r}: histogram_quantile without `by(... le ...)` "
                     f"— the topology-label trap (would return NaN in prod): {expr}"
                 )
         g = p["gridPos"]

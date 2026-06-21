@@ -67,8 +67,15 @@ counter tenant_federation_requests_total by tenant, status
 #   an EMPTY string ("account_id":"" or "account_id":). `(?P<account>\d+)`
 #   requires >=1 digit, so a metrics-pull row (empty value) never matches and is
 #   excluded — no path allowlist to keep in sync with envoy.yaml. (A valid logs
-#   token's account_id is >=1000; revoked_check.lua 403s anything <1000, so a
-#   bucketed row here is always a real, verified partition.)
+#   token's account_id is >=1000. NOTE (adversarial-review #900): jwt_authn
+#   writes fed_payload:account_id into dynamic metadata BEFORE revoked_check.lua
+#   runs, so a logs-audience token DECLARING account_id 0 (or 1-999) is still
+#   access-logged with that value — the Lua 403 blocks the upstream forward, not
+#   the already-written log line. Such a row IS counted here, labelled with its
+#   low id (e.g. account_id="0", colliding with the platform 0:0 partition name).
+#   It is a mis-issued/forged token's auth_failed, NOT a real partition. In
+#   practice tenant-api only ever mints account_id >=1000, so this is latent; the
+#   per-account dashboard would simply show an account "0" bar if it ever occurs.)
 #
 # project_id: the audit access log has NO project_id field, and Phase 1 (b)
 # pins ProjectID=0 for the platform-operational projection (envoy victorialogs
@@ -135,7 +142,10 @@ counter tenant_log_query_requests_total by account_id, project_id, status
 # meaningful top finite bucket — a query landing in the +Inf overflow is at/over
 # the storage abort ceiling and is the actionable tail. Lower buckets give
 # resolution where healthy LogsQL queries actually live (single-digit ms to ~1s).
-histogram tenant_log_query_duration_ms by account_id, project_id buckets 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 25000
+# The 15000 bucket splits the otherwise-15s-wide 10000→25000 gap so a P95 of
+# heavy historical queries landing in that range isn't smeared by linear
+# interpolation across a 15s span (±7s error) — Gemini #900 long-tail fold-in.
+histogram tenant_log_query_duration_ms by account_id, project_id buckets 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 15000, 25000
 
 /[{,]"account_id":"?(?P<account>\d+)"?/ {
     # `duration_ms` is integer ms; the optional quotes tolerate quoted/unquoted

@@ -115,7 +115,7 @@ tests:
               component_id: tenant_project
               component_kind: transform
             exp_annotations:
-              summary: "Vector tenant-projection dropping >5 events/s for 15m — possible registry desync or payload flood"
+              summary: "Vector tenant-projection drop rate >5/s for 15m — above baseline (usually rising operational-log volume, NOT registry desync; compare baseline first)"
 
   # 6) Below-floor steady drops do NOT fire — proves `> 5`, not always-true `> 0`.
   #    A single pod dropping 120/min = 2/s < 5 floor (the by-design operational

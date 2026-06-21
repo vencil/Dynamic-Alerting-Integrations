@@ -800,9 +800,13 @@ data:
                 Over 50% of account {{ $labels.account_id }}'s tenant
                 log-query requests have been rejected (rate-limited /
                 auth-failed / bad-request) for 15m. Check the
-                tenant-log-query dashboard — likely a leaked or expired
-                logs token, a tenant exceeding its rate limit, or a client
-                hitting the victorialogs-mode endpoint allowlist.
+                tenant-log-query dashboard — likely a REVOKED token (Lua
+                403), a tenant exceeding its rate limit, or a client hitting
+                the victorialogs-mode endpoint allowlist. NOTE: this counts
+                POST-JWT rejections only — an EXPIRED / bad-signature / wrong-
+                audience token 401s at jwt_authn BEFORE account_id is stamped,
+                so it is NOT counted here (attack noise; see jwt_authn stats,
+                per ADR-020).
 
           # ── Tenant-projection fan-out discard spike (ADR-021 #609 PR-4) ──
           # ⛔ COARSE ANOMALY TRIPWIRE, not a precise gap detector — read the
@@ -851,7 +855,7 @@ data:
             labels:
               severity: warning
             annotations:
-              summary: "Vector tenant-projection dropping >5 events/s for 15m — possible registry desync or payload flood"
+              summary: "Vector tenant-projection drop rate >5/s for 15m — above baseline (usually rising operational-log volume, NOT registry desync; compare baseline first)"
               description: |
                 The (b) tenant-sanitized projection (`tenant_project` remap)
                 is `abort`-dropping events well above the operational-log
