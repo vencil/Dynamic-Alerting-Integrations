@@ -90,10 +90,13 @@ groups:
       # normal failover/drain is NOT a service outage → warning + maintenance
       # opt-out (so planned drains stay quiet). Total outage and loss-of-PRIMARY
       # are caught at CRITICAL by the two rules below.
-      # ENGINE-EXPANSION (defer-with-trigger, #892): to apply this tiering to another
-      # engine, SPLIT the trigger — instance(warning)+ClusterDown(critical) need only
-      # <db>_up (trigger = first HA tenant on that engine); the NoPrimary/quorum tier
-      # needs that engine's cluster-state metric (patroni/sentinel/wsrep). Don't bundle.
+      # ENGINE-EXPANSION (defer-with-trigger, #892): only ClusterDown (max(up)==0,
+      # critical total-outage backstop) is <db>_up-only. The instance Down→warning
+      # DOWNGRADE is NOT — it is safe only with BOTH ClusterDown AND NoPrimary; with
+      # ClusterDown alone a no-primary while some nodes are up (max(up)≠0) under-alerts
+      # (#884 keystone). So the downgrade is COUPLED to NoPrimary → needs the engine's
+      # cluster-state metric (patroni/sentinel/wsrep). Trigger: ClusterDown on first HA
+      # tenant; Down→warning + NoPrimary TOGETHER on that metric.
       - alert: MongoDBDown
         expr: |
           (mongodb_up == 0)
