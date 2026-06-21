@@ -101,6 +101,15 @@ def repo(tmp_path, monkeypatch):
         def git(self, *args):
             return _git(*args)
 
+    # Hermetic env: the CI runner sets GITHUB_BASE_REF (= the PR's base branch)
+    # for the real Lint job, but this fixture is a standalone temp repo with no
+    # such remote ref. Clear both diff-base envs so a test drives --base
+    # explicitly (or exercises the no-base staged-vs-HEAD default) rather than
+    # inheriting CI's ambient base — which would resolve to a non-existent
+    # `origin/main` HERE and make the lint exit 2 (caller error) instead of the
+    # behaviour under test. (Host passes without this; CI sets the var.)
+    monkeypatch.delenv("GITHUB_BASE_REF", raising=False)
+    monkeypatch.delenv("LINT_DIFF_BASE", raising=False)
     monkeypatch.setattr(mono, "PROJECT_ROOT", root)
     return _Repo()
 
