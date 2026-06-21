@@ -111,6 +111,52 @@ spec:
           MariaDBClusterDown this fires while replicas are still up.
         description_zh: 租戶 {{ $labels.tenant }} 的所有實例皆為 read_only — 沒有可寫 primary（failover
           卡住／primary 遺失）→ 寫入被拒。與 MariaDBClusterDown 不同，此告警在 replica 仍存活時就會觸發。
+    - alert: MariaDBSemiSyncDegraded
+      expr: "(\n  max by(tenant) (\n    mysql_global_variables_rpl_semi_sync_master_enabled{job=\"\
+        tenant-exporters\"} == 1\n    and on(tenant, instance)\n    mysql_global_status_rpl_semi_sync_master_status{job=\"\
+        tenant-exporters\"} == 0\n  )\n)\nunless on(tenant) (user_state_filter{filter=\"\
+        maintenance\"} == 1)\n"
+      for: 2m
+      labels:
+        severity: warning
+        metric_group: liveness
+        tenant: '{{ $labels.tenant }}'
+      annotations:
+        summary: MariaDB semi-sync degraded — durability guarantee lost for tenant
+          {{ $labels.tenant }}
+        summary_zh: MariaDB semi-sync 降級 — 租戶 {{ $labels.tenant }} 失去持久性保證
+        description: Tenant {{ $labels.tenant }} has semi-sync enabled but it fell
+          back to ASYNC (rpl_semi_sync_master_status=0) — writes continue but the
+          semi-sync durability guarantee is lost (a primary failure now risks data
+          loss). Usually a replica timed out / disconnected. read_only stays 0, so
+          MariaDBNoPrimary cannot see this.
+        description_zh: 租戶 {{ $labels.tenant }} 啟用了 semi-sync 但已 fallback 到 ASYNC（status=0）—
+          寫入照常，但失去 semi-sync 持久性保證（此時 primary 故障有資料遺失風險）。通常是 replica timeout／斷線。read_only
+          仍為 0，故 MariaDBNoPrimary 看不到。
+    - alert: MariaDBSemiSyncReplicasGone
+      expr: "max by(tenant) (\n  mysql_global_variables_rpl_semi_sync_master_enabled{job=\"\
+        tenant-exporters\"} == 1\n  and on(tenant, instance)\n  mysql_global_status_rpl_semi_sync_master_clients{job=\"\
+        tenant-exporters\"} == 0\n)\n"
+      for: 1m
+      labels:
+        severity: critical
+        metric_group: liveness
+        tenant: '{{ $labels.tenant }}'
+      annotations:
+        summary: MariaDB semi-sync has ZERO connected replicas for tenant {{ $labels.tenant
+          }}
+        summary_zh: MariaDB semi-sync 租戶 {{ $labels.tenant }} 連線的 replica 數為 0
+        description: Tenant {{ $labels.tenant }} has semi-sync enabled but ZERO semi-sync
+          replicas connected (rpl_semi_sync_master_clients=0) — durability redundancy
+          is gone, no self-recovery until a replica reconnects. By the time this pages,
+          the ~10s write-stall (wait_no_slave) has usually auto-recovered to async
+          — the live risk is LOST DURABILITY (a primary failure now risks data loss),
+          so the runbook's first step is to find WHY all replicas disconnected, not
+          to chase the stall.
+        description_zh: 租戶 {{ $labels.tenant }} 啟用了 semi-sync 但連線的 semi-sync replica
+          數為 0（clients=0）— 持久性備援歸零、replica 重連前無法自癒。此告警響起時 ~10s 寫入 stall（wait_no_slave）通常已自動
+          fallback async — 真正風險是失去持久性（此時 primary 故障會資料遺失），故 runbook 第一步是追查為何所有 replica
+          斷線、而非修 stall。
     - alert: MariaDBExporterAbsent
       expr: absent(mysql_up{job="tenant-exporters"})
       for: 30s

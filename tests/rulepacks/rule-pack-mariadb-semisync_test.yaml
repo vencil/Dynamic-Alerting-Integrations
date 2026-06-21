@@ -1,0 +1,177 @@
+# promtool unit test — MariaDB semi-sync write-availability (#892; Gemini external review).
+# Run: promtool test rules tests/rulepacks/rule-pack-mariadb-semisync_test.yaml
+#
+# MariaDBNoPrimary (read_only==0) is structurally blind to semi-sync health. These two
+# rules cover it: Degraded (enabled=1 AND status=0 = async fallback, durability lost) +
+# ReplicasGone (enabled=1 AND clients=0 = zero semi-sync replicas, structural).
+# The load-bearing test is the STORM GATE: a non-semi-sync instance STILL emits
+# status=0/clients=0 (MariaDB ≥10.3 semi-sync is built-in — verified on real
+# prom/mysqld-exporter v0.18.0), so enabled==1 MUST gate it or every tenant storms.
+rule_files:
+  - ../../rule-packs/rule-pack-mariadb.yaml
+evaluation_interval: 15s
+
+tests:
+  # ── Degraded fires (db-a) + ReplicasGone fires (db-b) + healthy silent (db-c) +
+  #    ⛔ NON-semi-sync silent (db-z = the storm gate). (20 samples × 15s = 5m) ──
+  - interval: 15s
+    name: degraded-replicasgone-fire-healthy-and-non-semisync-silent
+    input_series:
+      # db-a — semi-sync enabled, fell back to ASYNC (status=0) → Degraded.
+      - series: 'mysql_global_variables_rpl_semi_sync_master_enabled{job="tenant-exporters", tenant="db-a", instance="db-a-0"}'
+        values: '1x20'
+      - series: 'mysql_global_status_rpl_semi_sync_master_status{job="tenant-exporters", tenant="db-a", instance="db-a-0"}'
+        values: '0x20'
+      - series: 'mysql_global_status_rpl_semi_sync_master_clients{job="tenant-exporters", tenant="db-a", instance="db-a-0"}'
+        values: '2x20'
+      # db-b — enabled, status still active (1) but ZERO replicas (clients=0) → ReplicasGone.
+      - series: 'mysql_global_variables_rpl_semi_sync_master_enabled{job="tenant-exporters", tenant="db-b", instance="db-b-0"}'
+        values: '1x20'
+      - series: 'mysql_global_status_rpl_semi_sync_master_status{job="tenant-exporters", tenant="db-b", instance="db-b-0"}'
+        values: '1x20'
+      - series: 'mysql_global_status_rpl_semi_sync_master_clients{job="tenant-exporters", tenant="db-b", instance="db-b-0"}'
+        values: '0x20'
+      # db-c — healthy semi-sync (enabled=1, status=1, clients=2) → no fire.
+      - series: 'mysql_global_variables_rpl_semi_sync_master_enabled{job="tenant-exporters", tenant="db-c", instance="db-c-0"}'
+        values: '1x20'
+      - series: 'mysql_global_status_rpl_semi_sync_master_status{job="tenant-exporters", tenant="db-c", instance="db-c-0"}'
+        values: '1x20'
+      - series: 'mysql_global_status_rpl_semi_sync_master_clients{job="tenant-exporters", tenant="db-c", instance="db-c-0"}'
+        values: '2x20'
+      # db-z — NON-semi-sync (enabled=0) but STILL emits status=0/clients=0 → MUST NOT fire.
+      - series: 'mysql_global_variables_rpl_semi_sync_master_enabled{job="tenant-exporters", tenant="db-z", instance="db-z-0"}'
+        values: '0x20'
+      - series: 'mysql_global_status_rpl_semi_sync_master_status{job="tenant-exporters", tenant="db-z", instance="db-z-0"}'
+        values: '0x20'
+      - series: 'mysql_global_status_rpl_semi_sync_master_clients{job="tenant-exporters", tenant="db-z", instance="db-z-0"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: MariaDBSemiSyncDegraded
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              metric_group: liveness
+              tenant: db-a
+            exp_annotations:
+              summary: "MariaDB semi-sync degraded — durability guarantee lost for tenant db-a"
+              summary_zh: "MariaDB semi-sync 降級 — 租戶 db-a 失去持久性保證"
+              description: "Tenant db-a has semi-sync enabled but it fell back to ASYNC (rpl_semi_sync_master_status=0) — writes continue but the semi-sync durability guarantee is lost (a primary failure now risks data loss). Usually a replica timed out / disconnected. read_only stays 0, so MariaDBNoPrimary cannot see this."
+              description_zh: "租戶 db-a 啟用了 semi-sync 但已 fallback 到 ASYNC（status=0）— 寫入照常，但失去 semi-sync 持久性保證（此時 primary 故障有資料遺失風險）。通常是 replica timeout／斷線。read_only 仍為 0，故 MariaDBNoPrimary 看不到。"
+      - eval_time: 3m
+        alertname: MariaDBSemiSyncReplicasGone
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              metric_group: liveness
+              tenant: db-b
+            exp_annotations:
+              summary: "MariaDB semi-sync has ZERO connected replicas for tenant db-b"
+              summary_zh: "MariaDB semi-sync 租戶 db-b 連線的 replica 數為 0"
+              description: "Tenant db-b has semi-sync enabled but ZERO semi-sync replicas connected (rpl_semi_sync_master_clients=0) — durability redundancy is gone, no self-recovery until a replica reconnects. By the time this pages, the ~10s write-stall (wait_no_slave) has usually auto-recovered to async — the live risk is LOST DURABILITY (a primary failure now risks data loss), so the runbook's first step is to find WHY all replicas disconnected, not to chase the stall."
+              description_zh: "租戶 db-b 啟用了 semi-sync 但連線的 semi-sync replica 數為 0（clients=0）— 持久性備援歸零、replica 重連前無法自癒。此告警響起時 ~10s 寫入 stall（wait_no_slave）通常已自動 fallback async — 真正風險是失去持久性（此時 primary 故障會資料遺失），故 runbook 第一步是追查為何所有 replica 斷線、而非修 stall。"
+
+  # ── Maintenance opt-out ASYMMETRY: warning (Degraded) opts out; critical
+  #    (ReplicasGone) does NOT (matches NoPrimary — a durability outage always pages). ──
+  - interval: 15s
+    name: maintenance-suppresses-warning-not-critical
+    input_series:
+      # db-d — Degraded condition + maintenance → SUPPRESSED.
+      - series: 'mysql_global_variables_rpl_semi_sync_master_enabled{job="tenant-exporters", tenant="db-d", instance="db-d-0"}'
+        values: '1x20'
+      - series: 'mysql_global_status_rpl_semi_sync_master_status{job="tenant-exporters", tenant="db-d", instance="db-d-0"}'
+        values: '0x20'
+      - series: 'mysql_global_status_rpl_semi_sync_master_clients{job="tenant-exporters", tenant="db-d", instance="db-d-0"}'
+        values: '2x20'
+      - series: 'user_state_filter{tenant="db-d", filter="maintenance"}'
+        values: '1x20'
+      # db-e — the SHARP case: BOTH conditions true (status=0 AND clients=0) + maintenance.
+      # Proves the asymmetry on ONE entity: the warning (Degraded) is PromQL-suppressed by
+      # the opt-out while the critical (ReplicasGone) STILL fires (no opt-out).
+      - series: 'mysql_global_variables_rpl_semi_sync_master_enabled{job="tenant-exporters", tenant="db-e", instance="db-e-0"}'
+        values: '1x20'
+      - series: 'mysql_global_status_rpl_semi_sync_master_status{job="tenant-exporters", tenant="db-e", instance="db-e-0"}'
+        values: '0x20'
+      - series: 'mysql_global_status_rpl_semi_sync_master_clients{job="tenant-exporters", tenant="db-e", instance="db-e-0"}'
+        values: '0x20'
+      - series: 'user_state_filter{tenant="db-e", filter="maintenance"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: MariaDBSemiSyncDegraded
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: MariaDBSemiSyncReplicasGone
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              metric_group: liveness
+              tenant: db-e
+            exp_annotations:
+              summary: "MariaDB semi-sync has ZERO connected replicas for tenant db-e"
+              summary_zh: "MariaDB semi-sync 租戶 db-e 連線的 replica 數為 0"
+              description: "Tenant db-e has semi-sync enabled but ZERO semi-sync replicas connected (rpl_semi_sync_master_clients=0) — durability redundancy is gone, no self-recovery until a replica reconnects. By the time this pages, the ~10s write-stall (wait_no_slave) has usually auto-recovered to async — the live risk is LOST DURABILITY (a primary failure now risks data loss), so the runbook's first step is to find WHY all replicas disconnected, not to chase the stall."
+              description_zh: "租戶 db-e 啟用了 semi-sync 但連線的 semi-sync replica 數為 0（clients=0）— 持久性備援歸零、replica 重連前無法自癒。此告警響起時 ~10s 寫入 stall（wait_no_slave）通常已自動 fallback async — 真正風險是失去持久性（此時 primary 故障會資料遺失），故 runbook 第一步是追查為何所有 replica 斷線、而非修 stall。"
+
+  # ── for:2m de-flap (Degraded): a transient async-fallback blip (status=0 for ~1m45s,
+  #    < for:2m, then recovers) must NEVER fire. Mid-window assert at 1m45s (last
+  #    still-degraded sample, << 2m) is the one that catches a for:0s regression. ──
+  - interval: 15s
+    name: degraded-deflap
+    input_series:
+      - series: 'mysql_global_variables_rpl_semi_sync_master_enabled{job="tenant-exporters", tenant="db-a", instance="db-a-0"}'
+        values: '1x20'
+      # status=0 for samples 0..7 (t=0 … 1m45s), then 1 (recovered) from sample 8 (t=2m).
+      - series: 'mysql_global_status_rpl_semi_sync_master_status{job="tenant-exporters", tenant="db-a", instance="db-a-0"}'
+        values: '0 0 0 0 0 0 0 0 1+0x12'
+      - series: 'mysql_global_status_rpl_semi_sync_master_clients{job="tenant-exporters", tenant="db-a", instance="db-a-0"}'
+        values: '2x20'
+    alert_rule_test:
+      # 1m45s: degraded since t=0 but < for:2m → pending, not firing (a for:0s mutant fires here).
+      - eval_time: 1m45s
+        alertname: MariaDBSemiSyncDegraded
+        exp_alerts: []
+      # after recovery (4m) → not firing.
+      - eval_time: 4m
+        alertname: MariaDBSemiSyncDegraded
+        exp_alerts: []
+
+  # ── Convergence steady state: a REAL clients=0 outage has BOTH status=0 AND
+  #    clients=0 on the SAME tenant (clients=0 → after the timeout, status flips to 0).
+  #    Both rules fire at the PromQL level; in production Alertmanager inhibit
+  #    (metric_group:liveness) suppresses the Degraded warning so only the
+  #    ReplicasGone critical pages — that inhibit is not promtool-testable. ──
+  - interval: 15s
+    name: convergence-both-conditions-both-rules-fire
+    input_series:
+      - series: 'mysql_global_variables_rpl_semi_sync_master_enabled{job="tenant-exporters", tenant="db-f", instance="db-f-0"}'
+        values: '1x20'
+      - series: 'mysql_global_status_rpl_semi_sync_master_status{job="tenant-exporters", tenant="db-f", instance="db-f-0"}'
+        values: '0x20'
+      - series: 'mysql_global_status_rpl_semi_sync_master_clients{job="tenant-exporters", tenant="db-f", instance="db-f-0"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: MariaDBSemiSyncDegraded
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              metric_group: liveness
+              tenant: db-f
+            exp_annotations:
+              summary: "MariaDB semi-sync degraded — durability guarantee lost for tenant db-f"
+              summary_zh: "MariaDB semi-sync 降級 — 租戶 db-f 失去持久性保證"
+              description: "Tenant db-f has semi-sync enabled but it fell back to ASYNC (rpl_semi_sync_master_status=0) — writes continue but the semi-sync durability guarantee is lost (a primary failure now risks data loss). Usually a replica timed out / disconnected. read_only stays 0, so MariaDBNoPrimary cannot see this."
+              description_zh: "租戶 db-f 啟用了 semi-sync 但已 fallback 到 ASYNC（status=0）— 寫入照常，但失去 semi-sync 持久性保證（此時 primary 故障有資料遺失風險）。通常是 replica timeout／斷線。read_only 仍為 0，故 MariaDBNoPrimary 看不到。"
+      - eval_time: 3m
+        alertname: MariaDBSemiSyncReplicasGone
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              metric_group: liveness
+              tenant: db-f
+            exp_annotations:
+              summary: "MariaDB semi-sync has ZERO connected replicas for tenant db-f"
+              summary_zh: "MariaDB semi-sync 租戶 db-f 連線的 replica 數為 0"
+              description: "Tenant db-f has semi-sync enabled but ZERO semi-sync replicas connected (rpl_semi_sync_master_clients=0) — durability redundancy is gone, no self-recovery until a replica reconnects. By the time this pages, the ~10s write-stall (wait_no_slave) has usually auto-recovered to async — the live risk is LOST DURABILITY (a primary failure now risks data loss), so the runbook's first step is to find WHY all replicas disconnected, not to chase the stall."
+              description_zh: "租戶 db-f 啟用了 semi-sync 但連線的 semi-sync replica 數為 0（clients=0）— 持久性備援歸零、replica 重連前無法自癒。此告警響起時 ~10s 寫入 stall（wait_no_slave）通常已自動 fallback async — 真正風險是失去持久性（此時 primary 故障會資料遺失），故 runbook 第一步是追查為何所有 replica 斷線、而非修 stall。"
