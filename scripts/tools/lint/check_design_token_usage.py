@@ -4,6 +4,9 @@
 掃描 JSX 工具檔案, 檢測:
   (a) hardcoded hex 色碼（應使用 var(--da-color-*) token）
   (b) hardcoded px 數值在 style object 中（應使用 --da-space-* 或 --da-font-size-* token）
+  (c) 飽和語意 stroke token 當文字色（--da-color-error/-warning 在 `text-[color:…]`）
+      — 淺色主題對比 3.76:1 / 2.15:1 < AA 4.5:1（WCAG 1.4.3）；應改 AA 版
+      `-error-text` / `-warning-text`。#885/#904 的 stroke-as-text 類，codify 防復發。
 
 例外規則:
   - 行末註解 /* token-exempt */ 豁免整行
@@ -276,17 +279,60 @@ def check_hardcoded_px_values(content: str, filename: str) -> List[Dict]:
     return issues
 
 
-def scan_jsx_files(diff_base: str | None = None) -> Tuple[Dict[str, List[Dict]], Dict[str, List[Dict]]]:
+# Saturated semantic STROKE tokens used as a TEXT color. --da-color-error
+# (#ef4444 = 3.76:1) and --da-color-warning (#f59e0b = 2.15:1) are below the
+# WCAG 1.4.3 AA floor (4.5:1) as text on the light-theme page background; the
+# design system ships AA-verified `-text` variants (#991b1b / #92400e) for
+# exactly this. Only error/warning are flagged: --da-color-info (#2563eb ~5.2:1)
+# and -success (#047857 ~5.5:1) already pass as text and have NO `-text` variant.
+# The trailing `\)` anchors the BARE token, so `-error-text` / `-error-soft` are
+# not matched; the `text-\[` prefix means border-/bg- usages are never flagged
+# (saturated is correct for strokes/borders). This is the #885/#904 class.
+_SATURATED_TEXT_RE = re.compile(r"text-\[color:var\(--da-color-(error|warning)\)\]")
+
+
+def check_saturated_token_as_text(content: str, filename: str) -> List[Dict]:
+    """Scan for a saturated error/warning token used as a Tailwind text color.
+
+    Flags ``text-[color:var(--da-color-error)]`` / ``…-warning)]``. The fix is
+    the AA-verified ``-text`` variant. ``border-[…]`` / ``bg-[…]`` usages are
+    NOT flagged (only the ``text-[color:…]`` utility); ``-error-text`` and the
+    ``-soft`` background tokens are not matched. Honors the same
+    ``/* token-exempt */`` line marker and comment-stripping as the other checks.
+
+    Returns list of {line, token, suggestion, context}.
+    """
+    issues = []
+    lines = content.splitlines()
+    code_lines = _strip_comments(content)
+    for i, line in enumerate(lines, 1):
+        if _is_exempt(line):
+            continue
+        # Scan comment-stripped code so the bad pattern inside a doc comment
+        # (e.g. this very docstring quoted elsewhere) is not flagged.
+        for m in _SATURATED_TEXT_RE.finditer(code_lines[i - 1]):
+            token = m.group(1)  # 'error' | 'warning'
+            issues.append({
+                "line": i,
+                "token": f"--da-color-{token}",
+                "suggestion": f"--da-color-{token}-text",
+                "context": line.strip()[:80],
+            })
+    return issues
+
+
+def scan_jsx_files(diff_base: str | None = None) -> Tuple[Dict[str, List[Dict]], Dict[str, List[Dict]], Dict[str, List[Dict]]]:
     """Scan JSX files for design token violations.
 
     If ``diff_base`` is None: full-scan all JSX files in JSX_TOOLS_DIR + WIZARD_DIR.
     If ``diff_base`` is a ref: only flag findings on lines ADDED in the current
     diff vs that base. Existing pre-existing violations are not re-emitted.
 
-    Returns (hex_issues_by_file, px_issues_by_file).
+    Returns (hex_issues_by_file, px_issues_by_file, token_issues_by_file).
     """
     hex_issues = defaultdict(list)
     px_issues = defaultdict(list)
+    token_issues = defaultdict(list)
 
     jsx_dirs = [JSX_TOOLS_DIR, WIZARD_DIR]
 
@@ -309,6 +355,7 @@ def scan_jsx_files(diff_base: str | None = None) -> Tuple[Dict[str, List[Dict]],
             # Run full scan to get all findings
             hex_found = check_hardcoded_hex_colors(content, jsx_file.name)
             px_found = check_hardcoded_px_values(content, jsx_file.name)
+            token_found = check_saturated_token_as_text(content, jsx_file.name)
 
             # If diff-only, filter findings to lines actually added in current diff
             if diff_base is not None:
@@ -320,13 +367,16 @@ def scan_jsx_files(diff_base: str | None = None) -> Tuple[Dict[str, List[Dict]],
                 if added_lines is not None:
                     hex_found = [h for h in hex_found if h["line"] in added_lines]
                     px_found = [h for h in px_found if h["line"] in added_lines]
+                    token_found = [h for h in token_found if h["line"] in added_lines]
 
             if hex_found:
                 hex_issues[rel_path] = hex_found
             if px_found:
                 px_issues[rel_path] = px_found
+            if token_found:
+                token_issues[rel_path] = token_found
 
-    return dict(hex_issues), dict(px_issues)
+    return dict(hex_issues), dict(px_issues), dict(token_issues)
 
 
 def _read_pr_body(pr_body_file: str | None) -> str | None:
@@ -379,9 +429,9 @@ def main():
             sys.exit(EXIT_CALLER_ERROR)
         scan_mode = f"diff vs {diff_base}"
 
-    hex_issues, px_issues = scan_jsx_files(diff_base=diff_base)
+    hex_issues, px_issues, token_issues = scan_jsx_files(diff_base=diff_base)
 
-    all_files = set(hex_issues.keys()) | set(px_issues.keys())
+    all_files = set(hex_issues.keys()) | set(px_issues.keys()) | set(token_issues.keys())
     total_violations = 0
 
     if not all_files:
@@ -406,6 +456,13 @@ def main():
                       f"in {issue['property']} (use --da-space-* or --da-font-size-*)")
                 total_violations += 1
 
+        # Saturated stroke token used as a text color (WCAG 1.4.3, #885/#904)
+        if filename in token_issues:
+            for issue in token_issues[filename]:
+                print(f"  L{issue['line']}: saturated var({issue['token']}) used as text color "
+                      f"— fails WCAG AA contrast in light theme; use var({issue['suggestion']})")
+                total_violations += 1
+
         print()
 
     # Summary
@@ -425,8 +482,10 @@ def main():
     # Exit with appropriate code
     if args.ci and total_violations > 0:
         print(
-            "\nFix: replace hardcoded values with --da-* tokens, OR add\n"
-            "  /* token-exempt */ on the line if intentional.\n"
+            "\nFix: replace hardcoded values with --da-* tokens; for a saturated\n"
+            "  error/warning token used as text, switch to its -text variant\n"
+            "  (--da-color-error-text / --da-color-warning-text). OR add\n"
+            "  /* token-exempt */ on the line if intentional (e.g. on a dark bg).\n"
             "Or add to PR description (per lint-policy.md §4):\n"
             "  bypass-lint: design-token-usage\n"
             "  reason: <≥30 words explaining why this is legitimate>",
