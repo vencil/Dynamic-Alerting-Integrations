@@ -364,7 +364,7 @@ demux (VRL，注入 log_event_id)
    │
    ├─▶ victorialogs sink ─────────▶ VictoriaLogs (0:0)   平台完整副本（全欄位，#539 現狀不變）
    │
-   └─▶ tenant_project (remap)      eligibility gate + tenant_id→AccountID 富集 + drop_fields 淨化
+   └─▶ tenant_project (remap)      eligibility gate + tenant_id→AccountID 富集 + allowlist 淨化（重建）
           │                        （drop_on_abort/error + reroute_dropped:false = fail-closed）
           └─▶ tenant_route (route, by account_id)
                  ├─▶ vl_tenant_<id> sink (固定 AccountID header) ─▶ VictoriaLogs (AccountID:X, ProjectID:0)
@@ -389,11 +389,17 @@ tenantProjections:
 
 > ⛔ **配發紀律（違反即跨租戶洩漏）**：`accountId` 一律從 registry 抄；registry 單調發號、**永不回收**（退租後重用同 id → 新租戶讀得到舊租戶 retention 窗內殘留 log）。`tenantId` 打錯（如 typo）→ 該租戶查無自己的 log（fail-closed，不會誤給他人）；`accountId` 抄錯 → 可能落他租戶分區，**這是唯一會洩漏的人為錯誤**，PR review 必對照 registry。
 >
+> **render-time 守門**（對抗 review 補）：**重複** `accountId`（兩租戶混入同分區）或**重複** `tenantId`（mis-route）→ `helm template` 直接 `{{ fail }}`；**非整數/quoted** `accountId`（會 render 出無效 VRL → 靜默空分區）→ `values.schema.json` 在 render 時擋。但「抄成**另一個合法租戶**的 id」是唯一守門擋不到的、仍須 PR review 對照 registry 抓。
+>
 > 預設 `tenantProjections: []` → 投影**整個關閉**，pipeline 為 byte-相容 #539 單租戶行為（不 render 任何 `tenant_project`/`tenant_route`/`vl_tenant_*`）。
 
-### 8.3 敏感欄位淨化（ingest-time drop，不可逆）
+### 8.3 敏感欄位淨化（allowlist，fail-closed）
 
-`tenant_project` 在寫租戶分區**前** `del()` 掉拓樸欄位（`tenantProjectionDropFields`，預設 `pod_name`/`pod_node`/`node_name`/`pod_ip`/`pod_node_name`/`pod_owner`/`host`）。落在 `AccountID:X` 的資料 100% 乾淨，gateway 連 read-time strip 漏濾風險都不必擔。**ingest-time drop 事後無法 un-drop**（改清單只影響改後新進的列；要回補舊資料須等 retention 自然汰換）——對「本來就不該給租戶看」的拓樸欄位可接受；動態 read-time strip 留 Future Work。新增要 drop 的欄位＝改 `tenantProjectionDropFields`（不必動 VRL），但屬資安相關變更：review 該欄位租戶能推斷出什麼。
+`tenant_project` 在寫租戶分區**前從零重建** event，只保留 `tenantProjectionKeepFields` 列舉的安全欄位（`tenant_id`/`status`/`method`/`path`/`query`/`token_id`/`duration_ms`/`response_flags` + 結構性注入的 `account_id`/`log_event_id`/`timestamp`），**其餘一律結構性排除**。租戶分區的 `_msg` 由這些安全欄位 **re-serialize**，原始 audit 行（內含 `upstream`=後端 IP:port）直接丟棄。
+
+> ⛔ **為何 allowlist 而非 denylist**（對抗 review 修正——曾為 denylist 而漏）：demux 把整包 gateway audit JSON `merge(deep)` 進 event root，所以 denylist（`del()` 固定清單）是 **fail-open**——它接不到原始 `.message` 字串（內嵌 `upstream` 後端 IP），也接不到 gateway／未來 producer 新增或巢狀的任何欄位。allowlist **fail-closed**：未列舉者一律不進租戶分區。**新增要給租戶看的欄位＝改 `tenantProjectionKeepFields`**——這是資安相關變更，須確認該欄位不洩漏平台基礎設施或他租戶資訊（把「記得 drop」的負擔反轉成「明確 opt-in」）。
+
+> ingest-time 重建不可逆（改清單只影響改後新進的列；舊資料等 retention 自然汰換）。動態 read-time strip 留 Future Work。`projection_tests.yaml` 的 allowlist 案例以 gateway **真實 json_format**（含 `upstream`）+ 注入值 seed，斷言租戶副本只剩安全欄位、`upstream`/raw-message/注入 id 皆無。
 
 ### 8.4 `log_event_id` 跨分區 join SOP（淨化不拉長 MTTR）
 
@@ -408,7 +414,7 @@ kubectl exec -n monitoring deploy/victorialogs -- \
 # 不帶 AccountID header = 查 0:0（平台分區），可見 pod_node / pod_name / 完整 audit
 ```
 
-> `log_event_id` 在共用 `demux` 階段（drop **之前**）注入，故必在兩副本；它**不在** `tenantProjectionDropFields`（drop 它會斷 join 鏈）。用 UUIDv7 而非隨機 v4：VictoriaLogs 時序優化，k-sortable id 讓 `0:0` 全域檢索 join 便宜（Gemini fold-in）。
+> `log_event_id` 在共用 `demux` 階段**無條件**注入（平台所有、**覆寫** producer 自帶值——防 producer 經 deep-merge 控制 join key、污染值班的 `0:0` 反查），故必在兩副本且為平台產生的 UUIDv7；它在 `tenantProjectionKeepFields` 內（移除它會斷 join 鏈）。用 UUIDv7 而非隨機 v4：VictoriaLogs 時序優化，k-sortable id 讓 `0:0` 全域檢索 join 便宜（Gemini fold-in）。audit-signing seam 落地後可改回「verified-origin 才 idempotent 保留 producer 值」。
 
 ### 8.5 VictoriaLogs Layer-1 查詢護欄
 

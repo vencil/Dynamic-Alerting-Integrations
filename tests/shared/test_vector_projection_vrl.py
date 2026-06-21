@@ -70,6 +70,29 @@ def _vector_yaml(docs: list[dict]) -> dict:
     return yaml.safe_load(cm["data"]["vector.yaml"])
 
 
+def _render_result(chart_dir: Path, *, sets: dict[str, str] | None = None,
+                   string_sets: dict[str, str] | None = None) -> subprocess.CompletedProcess:
+    """helm template WITHOUT check=True — for asserting a render-time {{ fail }}
+    guard or a values.schema.json rejection (the success path uses _render)."""
+    cmd = ["helm", "template", "test-release", str(chart_dir), "-n", "monitoring"]
+    for k, v in (sets or {}).items():
+        cmd += ["--set", f"{k}={v}"]
+    for k, v in (string_sets or {}).items():
+        cmd += ["--set-string", f"{k}={v}"]
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+
+
+def _dur_to_seconds(d: str) -> int:
+    """Parse a Go-style duration (25s / 2m / 1h) to seconds — robust so the
+    cascade test ASSERTS on an override rather than crashing (int('2m'-'s')
+    raised ValueError before; adversarial-review finding)."""
+    d = d.strip()
+    units = {"s": 1, "m": 60, "h": 3600}
+    if d and d[-1] in units:
+        return int(float(d[:-1]) * units[d[-1]])
+    return int(d)  # bare number = seconds
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Render shape — projection DISABLED by default (no #539 regression)
 # ──────────────────────────────────────────────────────────────────────────────
@@ -154,16 +177,60 @@ class TestProjectionEnabledShape:
             assert headers["ProjectID"] == "0", "(b) operational logs use ProjectID 0"
 
     @_needs_helm
-    def test_sensitive_fields_in_drop_list(self, repo_root: Path) -> None:
-        """The VRL must del() the topology fields. Assert the rendered source
-        contains the del() for each sensitive field the projection promises to
-        strip (drives the runtime negative assertion in tests.yaml)."""
+    def test_allowlist_sanitization_not_denylist(self, repo_root: Path) -> None:
+        """Sanitization is a fail-closed ALLOWLIST (adversarial-review finding):
+        tenant_project rebuilds the event from tenantProjectionKeepFields ONLY,
+        so the raw .message (which embeds upstream=%UPSTREAM_HOST%, the backend
+        IP) and any unlisted/infra field are structurally absent — NOT del()'d
+        off a denylist (which left the raw message + `upstream` leaking)."""
         cfg = _vector_yaml(_render(repo_root / "helm/vector", sets=_PROJECTION_SETS))
         vrl = cfg["transforms"]["tenant_project"]["source"]
-        for f in ("pod_name", "pod_node", "node_name", "pod_ip", "pod_owner", "host"):
-            assert f"del(.{f})" in vrl, f"projection must strip {f}"
-        # log_event_id must NOT be dropped — it is the join key.
-        assert "del(.log_event_id)" not in vrl
+        # Allowlist-rebuild markers.
+        assert "kept = {}" in vrl
+        assert "kept.account_id = aid" in vrl, "partition key is the trusted map value, not payload"
+        assert "kept.message = encode_json(kept)" in vrl, "re-serialized sanitized _msg (raw line discarded)"
+        assert ". = kept" in vrl, "event rebuilt from the allowlist (fail-closed)"
+        for safe in ("tenant_id", "log_event_id", "status", "query", "token_id"):
+            assert f"kept.{safe} = .{safe}" in vrl, f"{safe} must be allowlisted"
+        # Infra / raw fields must NOT be copied into the tenant event.
+        for infra in ("upstream", "app", "k8s_namespace", "pod_name", "host"):
+            assert f"kept.{infra}" not in vrl, f"{infra} must NOT be allowlisted (would leak)"
+        # log_event_id is unconditionally platform-stamped (not payload-trusted).
+        assert ".log_event_id = uuid_v7()" in cfg["transforms"]["demux"]["source"]
+        assert "if !exists(.log_event_id)" not in cfg["transforms"]["demux"]["source"]
+
+    @_needs_helm
+    def test_duplicate_accountid_fails_render(self, repo_root: Path) -> None:
+        """A duplicate accountId would co-mingle two tenants into ONE partition
+        (cross-tenant leak); the render-time uniqueness guard must {{ fail }}
+        (vector validate would NOT catch it — serde_yaml dup-key = last-wins)."""
+        r = _render_result(repo_root / "helm/vector", sets={
+            "tenantProjections[0].tenantId": "tenant-alpha", "tenantProjections[0].accountId": "1000",
+            "tenantProjections[1].tenantId": "tenant-beta", "tenantProjections[1].accountId": "1000",
+        })
+        assert r.returncode != 0, "duplicate accountId must fail render"
+        assert "duplicate accountId" in r.stderr
+
+    @_needs_helm
+    def test_duplicate_tenantid_fails_render(self, repo_root: Path) -> None:
+        """A duplicate tenantId would mis-route a tenant to a foreign AccountID."""
+        r = _render_result(repo_root / "helm/vector", sets={
+            "tenantProjections[0].tenantId": "tenant-alpha", "tenantProjections[0].accountId": "1000",
+            "tenantProjections[1].tenantId": "tenant-alpha", "tenantProjections[1].accountId": "1001",
+        })
+        assert r.returncode != 0, "duplicate tenantId must fail render"
+        assert "duplicate tenantId" in r.stderr
+
+    @_needs_helm
+    def test_noninteger_accountid_fails_schema(self, repo_root: Path) -> None:
+        """values.schema.json constrains accountId to integer — a quoted/typo'd
+        id (which would render an invalid VRL identifier → silent empty
+        partition) must fail at helm template, not silently."""
+        r = _render_result(repo_root / "helm/vector",
+                           sets={"tenantProjections[0].tenantId": "tenant-alpha"},
+                           string_sets={"tenantProjections[0].accountId": "1000"})
+        assert r.returncode != 0, "string accountId must fail schema"
+        assert "integer" in r.stderr.lower() or "schema" in r.stderr.lower()
 
     @_needs_helm
     def test_account_map_does_not_hash_tenant_id(self, repo_root: Path) -> None:
@@ -206,7 +273,7 @@ class TestVictoriaLogsLayer1Flags:
         dep = [d for d in docs if d.get("kind") == "Deployment"][0]
         args = dep["spec"]["template"]["spec"]["containers"][0]["args"]
         dur = next(a for a in args if a.startswith("-search.maxQueryDuration="))
-        secs = int(dur.split("=", 1)[1].removesuffix("s"))
+        secs = _dur_to_seconds(dur.split("=", 1)[1])
         GATEWAY_TIMEOUT_S = 30
         assert secs < GATEWAY_TIMEOUT_S, (
             f"maxQueryDuration {secs}s must be < gateway {GATEWAY_TIMEOUT_S}s "

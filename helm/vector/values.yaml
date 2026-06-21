@@ -188,25 +188,45 @@ tenantProjections: []
   # - tenantId: "tenant-beta"
   #   accountId: 1001
 
-# Sensitive infrastructure-topology fields stripped from the tenant
-# projection BEFORE it reaches a tenant partition (ADR-021 §Fork B
-# ingest-time drop — predefault-deny, irreversible by design; read-time
-# strip is Future Work). These are top-level keys the `demux` transform
-# already promoted off `.kubernetes`. The platform full copy (0:0) KEEPS
-# them; only the tenant copy is sanitized. `log_event_id` is deliberately
-# NOT dropped — it must survive into the tenant copy so on-call can join a
-# tenant's redacted row back to the full 0:0 row for node/pod context.
-# Drop fields are EXPRESSED HERE (not hardcoded in VRL) so a future
-# topology field can be added without editing the template — but adding one
-# is a security-relevant change: review what a tenant could infer from it.
-tenantProjectionDropFields:
-  - pod_name      # individual pod identity (HPA churn / infra detail)
-  - pod_node      # node hostname — infra topology leak
-  - node_name     # node hostname (alt field name if present in source JSON)
-  - pod_ip        # pod IP — infra topology leak
-  - pod_node_name # node hostname (raw source field name, defense-in-depth)
-  - pod_owner     # ReplicaSet/owner name — infra topology + naming scheme
-  - host          # Vector-added host enrichment (node identity)
+# ⛔ ALLOWLIST of the ONLY fields projected into a tenant partition (ADR-021
+# §Fork B; fail-CLOSED sanitization). The tenant copy is rebuilt from scratch
+# containing ONLY these fields (+ the trusted `account_id`) — everything else
+# is structurally absent. This is a DENYLIST→ALLOWLIST inversion (adversarial
+# review): demux deep-merges the whole gateway audit JSON to the event root, so
+# a denylist (drop a fixed list) was FAIL-OPEN — it left the raw `.message`
+# string (which embeds `upstream`=%UPSTREAM_HOST%, the backend IP), and any new
+# gateway/producer field or nested object, riding into the tenant partition.
+# An allowlist fails CLOSED: a field a tenant must not see (upstream IP, app /
+# k8s_namespace infra naming, pod/node topology, payload-injected account_id,
+# unknown future fields) is dropped unless EXPLICITLY opted in here.
+#
+# ⛔ Adding a field here is the SECURITY-REVIEWED action: it makes that field
+# visible to every onboarded tenant about its OWN rows — confirm it carries no
+# platform-infra or cross-tenant information. `_msg` is re-synthesized from this
+# set (the raw audit line is discarded). `log_event_id` MUST stay (the 0:0 join
+# key); `account_id` is injected by the template (the trusted map value).
+# Listed fields are copied only `if exists` — listing an absent one is a no-op.
+tenantProjectionKeepFields:
+  - tenant_id      # the tenant's own id (the partition is theirs)
+  - log_type       # federation_audit (stream field)
+  - log_event_id   # ⛔ cross-partition join key back to 0:0 — never remove
+  - timestamp      # event time (sink _time_field)
+  - status         # the tenant's own request outcome (stream field)
+  - method         # the tenant's own request method
+  - path           # the tenant's own request path
+  - query          # the tenant's own LogsQL query
+  - token_id       # the tenant's own federation token id
+  - duration_ms    # the tenant's own request latency (if emitted)
+  - response_flags # Envoy response flags (not infra-identifying)
+
+# Stream fields for the TENANT projection sink — a tenant-safe subset (must be
+# a subset of tenantProjectionKeepFields, else the field won't exist on the
+# projected event). Deliberately NOT the platform `streamFields` below, which
+# carries `app`/`k8s_namespace` infra naming the allowlist drops.
+tenantProjectionStreamFields:
+  - tenant_id
+  - log_type
+  - status
 
 # ProjectID for the (b) platform-operational tenant projection. ADR-021
 # reserves ProjectID=0 for (b) and ProjectID=1 for the future (a) tenant

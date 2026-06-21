@@ -37,49 +37,65 @@ tests:
   # JSON payload AND in the k8s metadata that demux promotes) and assert the
   # tenant copy has none of them — while the 0:0 copy keeps them. This tests
   # "removed", not merely "produced".
-  - name: "projection strips all sensitive topology fields from tenant copy"
+  # Seeded from the gateway's REAL json_format (envoy.yaml &audit_json:
+  # tenant_id/token_id/account_id/method/path/query/status/upstream/
+  # response_flags) PLUS injected attacker values — NOT from the keep-list, so
+  # it actually exercises the leak surface. Sanitization is a fail-closed
+  # ALLOWLIST: the tenant copy is rebuilt from tenantProjectionKeepFields only,
+  # so upstream (the backend IP), infra naming, the raw .message, and payload-
+  # injected account_id/log_event_id are all structurally absent.
+  - name: "projection sanitizes via allowlist — upstream IP / infra naming / raw message / injected ids absent from tenant copy"
     inputs:
       - insert_at: demux
         type: log
         log_fields:
-          # Audit JSON deliberately seeded with topology fields a malicious /
-          # over-sharing gateway could emit at top level (node_name, pod_ip).
-          message: '{"tenant_id":"tenant-alpha","status":200,"path":"/select/logsql/query","token_id":"tok-abc","node_name":"node-7","pod_ip":"10.1.2.3","host":"node-7"}'
+          message: '{"tenant_id":"tenant-alpha","token_id":"tok-abc","account_id":9999,"method":"GET","path":"/select/logsql/query","query":"_time:5m","status":200,"duration_ms":12,"upstream":"10.42.7.13:9428","response_flags":"-","log_event_id":"deadbeef-dead-7ead-8ead-deaddeaddead"}'
           kubernetes.container_name: federation-gateway
           kubernetes.pod_namespace: monitoring
           kubernetes.pod_name: federation-gateway-7d9f-abcde
           kubernetes.pod_node_name: node-7
           kubernetes.pod_owner: federation-gateway-7d9f
     outputs:
-      # 0:0 platform full copy KEEPS topology + the audit content.
+      # 0:0 platform full copy KEEPS everything — upstream, raw line, k8s topology.
       - extract_from: demux
         conditions:
           - type: vrl
             source: |
-              assert_eq!(.log_type, "federation_audit", "should classify as audit")
+              assert_eq!(.log_type, "federation_audit")
               assert_eq!(.tenant_id, "tenant-alpha")
-              assert_eq!(.pod_node, "node-7", "0:0 copy keeps node hostname")
-              assert_eq!(.pod_name, "federation-gateway-7d9f-abcde", "0:0 keeps pod identity")
-              assert_eq!(.node_name, "node-7", "0:0 keeps payload node_name")
-              assert_eq!(.pod_ip, "10.1.2.3", "0:0 keeps payload pod_ip")
-              assert!(is_string(.log_event_id), "0:0 copy carries log_event_id")
-      # Tenant copy: topology GONE, audit substance + correlation id KEPT.
+              assert_eq!(.upstream, "10.42.7.13:9428", "0:0 keeps the backend IP")
+              assert_eq!(.pod_node, "node-7", "0:0 keeps node hostname")
+              assert_eq!(.k8s_namespace, "monitoring", "0:0 keeps namespace")
+              assert!(is_string(.log_event_id), "0:0 carries log_event_id")
+      # Tenant copy: ALLOWLIST only — infra gone, injected ids overridden.
       - extract_from: tenant_route.t_1000
         conditions:
           - type: vrl
             source: |
-              # Routed to the right tenant.
-              assert_eq!(.account_id, 1000, "must carry tenant-alpha AccountID")
+              # Trusted partition key — the GitOps map value, NOT payload 9999.
+              assert_eq!(.account_id, 1000, "account_id is the map value, not payload-injected 9999")
               assert_eq!(.tenant_id, "tenant-alpha")
-              # The negative core: every sensitive field absent.
-              assert!(!exists(.pod_node),  "pod_node (node hostname) must be stripped")
-              assert!(!exists(.pod_name),  "pod_name (pod identity) must be stripped")
-              assert!(!exists(.node_name), "payload node_name must be stripped")
-              assert!(!exists(.pod_ip),    "payload pod_ip must be stripped")
-              assert!(!exists(.pod_owner), "pod_owner must be stripped")
-              assert!(!exists(.host),      "host (node identity) must be stripped")
-              # Correlation id survives sanitization (join key back to 0:0).
-              assert!(is_string(.log_event_id), "log_event_id must survive into tenant copy")
+              # log_event_id is platform-owned (UUIDv7); payload value overwritten.
+              assert!(.log_event_id != "deadbeef-dead-7ead-8ead-deaddeaddead", "payload log_event_id overwritten")
+              assert!(match(to_string(.log_event_id) ?? "", r'^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'), "platform UUIDv7")
+              # ── Infra topology / naming ABSENT (the leaks the allowlist closes) ──
+              assert!(!exists(.upstream),      "LEAK: upstream backend IP (%UPSTREAM_HOST%)")
+              assert!(!exists(.app),           "LEAK: app/container name")
+              assert!(!exists(.k8s_namespace), "LEAK: platform namespace")
+              assert!(!exists(.pod_node),      "LEAK: node hostname")
+              assert!(!exists(.pod_name),      "LEAK: pod identity")
+              assert!(!exists(.pod_ip),        "LEAK: pod IP")
+              assert!(!exists(.pod_owner),     "LEAK: ReplicaSet owner")
+              assert!(!exists(.host),          "LEAK: host")
+              # Re-serialized _msg must NOT smuggle the backend IP as a string.
+              assert!(!contains(to_string(.message) ?? "", "10.42.7.13"), "LEAK: upstream IP inside re-serialized message")
+              # ── Tenant-safe allowlist fields KEPT ──
+              assert_eq!(.status, "200")
+              assert_eq!(.method, "GET")
+              assert_eq!(.path, "/select/logsql/query")
+              assert_eq!(.query, "_time:5m")
+              assert_eq!(.token_id, "tok-abc")
+              assert!(is_string(.log_event_id), "join key kept")
 
   # ── (iv) log_event_id is the SAME value in both copies ────────────────────
   # On-call joins a tenant's redacted row to the full 0:0 row by this id, so

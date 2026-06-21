@@ -205,11 +205,15 @@ data:
           # with no arg stamps the current wall-clock into the high 48 bits
           # and is infallible (returns a String) — no `??` (Vector 0.55+
           # rejects unnecessary error coalescing on an infallible call).
-          # Idempotent: skip if the producer ever starts emitting its own
-          # (audit-signing seam below could add one) so we never clobber it.
-          if !exists(.log_event_id) {
-            .log_event_id = uuid_v7()
-          }
+          # ⚠️ UNCONDITIONAL overwrite (adversarial-review finding): the audit
+          # JSON is deep-merged at the top of demux, so a producer emitting its
+          # OWN `log_event_id` would otherwise control the cross-partition join
+          # key (a forensic-integrity / join-poisoning channel — a tenant could
+          # collide ids to corrupt on-call's 0:0 join). Until the audit-signing
+          # seam below verifies producer origin, the platform OWNS this id —
+          # always stamp a fresh one. When signing lands, re-introduce
+          # `if !exists` gated on a verified-origin signal.
+          .log_event_id = uuid_v7()
           # Audit-signing schema seam (#566 X-2 reserve). Producer-side
           # signing (federation-gateway HMACs each audit JSON line with
           # a short-lived key) lets the SIEM verify "this row really came
@@ -222,6 +226,25 @@ data:
           # implicit field policy. No-op today; ready when gateway-side
           # signing lands.
       {{- if .Values.tenantProjections }}
+      {{- /* ── Uniqueness guard (adversarial-review finding; fail-loud) ──────
+             tenantProjections is the ENTIRE trust root of tenant isolation, yet
+             a copy-paste typo could give two tenantIds the SAME accountId
+             (co-mingle two tenants into ONE partition = cross-tenant data leak)
+             or one tenantId TWO accountIds (mis-route to a foreign partition).
+             Both render with helm exit=0 and survive `vector validate`
+             (serde_yaml duplicate-key = last-wins, NOT error), so guard here.
+             Helm has no native set → build seen-dicts and {{ fail }} at render
+             time, mirroring the additionalSinks guards below. */}}
+      {{- $seenAcct := dict }}
+      {{- $seenTid := dict }}
+      {{- range $p := .Values.tenantProjections }}
+      {{-   $acct := toString $p.accountId }}
+      {{-   $tid := toString $p.tenantId }}
+      {{-   if hasKey $seenAcct $acct }}{{- fail (printf "tenantProjections: duplicate accountId %s — two tenants would co-mingle into one VictoriaLogs partition (cross-tenant leak). Each accountId must be unique." $acct) }}{{- end }}
+      {{-   if hasKey $seenTid $tid }}{{- fail (printf "tenantProjections: duplicate tenantId %q — it would mis-route to a foreign AccountID. Each tenantId must be unique." $tid) }}{{- end }}
+      {{-   $_ := set $seenAcct $acct true }}
+      {{-   $_ := set $seenTid $tid true }}
+      {{- end }}
       # ── (b) Tenant-sanitized projection — ADR-021 Phase 1 / #609 ────────
       # FAN-OUT, not a move: the platform full copy keeps flowing to the
       # `victorialogs` sink (0:0) below, UNCHANGED. This adds a SECOND,
@@ -232,7 +255,7 @@ data:
       #
       # Two-stage by design:
       #   tenant_project  (remap)  — eligibility gate + tenant_id→AccountID
-      #                              enrichment + drop_fields sanitization
+      #                              enrichment + ALLOWLIST sanitization
       #   tenant_route    (route)  — static per-AccountID fan to N sinks
       #
       # FAIL-CLOSED is structural, not a runtime branch we hope fires:
@@ -308,18 +331,34 @@ data:
             # or a forged value) → fail-closed, drop from the tenant plane.
             abort
           }
-          .account_id = aid
-          # ── Sanitize: strip infra topology BEFORE it can reach a tenant ──
-          # (ADR-021 §Fork B "ingest-time drop"). These are the sensitive
-          # fields the platform full copy (0:0) keeps but a tenant must never
-          # see: node identity, pod IP/identity, owner, and the cross-tenant
-          # namespace naming scheme. log_event_id is intentionally NOT here —
-          # it must survive into the tenant copy for the 0:0 join.
-          # Ingest-time drop is irreversible (ADR accepted trade-off);
-          # read-time strip is Future Work.
-          {{- range $f := .Values.tenantProjectionDropFields }}
-          del(.{{ $f }})
+          # ── Sanitize via ALLOWLIST (fail-closed; adversarial-review finding) ──
+          # A denylist (del per field) is FAIL-OPEN here: demux deep-merges the
+          # entire gateway audit JSON to the event root, so (a) the raw `.message`
+          # string still embeds every emitted field — including `upstream` =
+          # %UPSTREAM_HOST% the backend IP:port; (b) any field the gateway (or a
+          # future producer / the audit-signing seam) adds, or any NESTED object,
+          # rides through unless someone remembers to del() it. For a tenant-
+          # facing partition the boundary must fail CLOSED: build a FRESH event
+          # from an explicit safe-field allowlist, so everything not listed (raw
+          # message, upstream IP, app/k8s_namespace infra naming, pod/node
+          # topology, payload-injected account_id/log_type, unknown future
+          # fields) is structurally ABSENT. Adding a field to
+          # `tenantProjectionKeepFields` is the security-reviewed action — this
+          # inverts the old "remember to drop" burden into "opt a field in".
+          kept = {}
+          kept.account_id = aid   # the TRUSTED GitOps map value, never the payload's
+          {{- range $f := .Values.tenantProjectionKeepFields }}
+          if exists(.{{ $f }}) {
+            kept.{{ $f }} = .{{ $f }}
+          }
           {{- end }}
+          # Re-serialize a SANITIZED _msg from the allowlisted fields only — the
+          # tenant sink's `_msg_field` is `message`, and the original raw audit
+          # line (which carried `upstream` etc.) is intentionally discarded, so
+          # synthesize a clean structured message from what survived the
+          # allowlist. encode_json is infallible (no `??`).
+          kept.message = encode_json(kept)
+          . = kept
       tenant_route:
         type: route
         inputs:
@@ -388,7 +427,11 @@ data:
         query:
           _msg_field: message
           _time_field: timestamp
-          _stream_fields: {{ join "," $.Values.streamFields | quote }}
+          # Tenant-safe stream fields ONLY — NOT the platform `streamFields`
+          # (which carries `app`/`k8s_namespace` infra naming that the allowlist
+          # sanitization deliberately drops). Every entry here must also be in
+          # `tenantProjectionKeepFields` or it won't exist on the projected event.
+          _stream_fields: {{ join "," $.Values.tenantProjectionStreamFields | quote }}
         request:
           headers:
             # Verified, server-side-derived tenant partition. NEVER trust a
