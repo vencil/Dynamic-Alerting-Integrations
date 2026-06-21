@@ -342,3 +342,43 @@ describe('RecipeBuilder would-fire preview (#657)', () => {
     expect(note).not.toMatch(/test value/i);                         // no stale threshold wording
   });
 });
+
+describe('RecipeBuilder a11y — WCAG 2.1 AA audit fixes (PR #901 follow-up)', () => {
+  // 1.4.3 contrast: the saturated stroke tokens --da-color-error / --da-color-warning
+  // compute to 3.76:1 / 2.15:1 on the light-theme page background — below the 4.5:1 AA
+  // floor. Inline validation NOTES must use the AA-verified -text variants
+  // (#991b1b / #92400e); the border-l-2 accents may stay saturated (non-text). #885
+  // fixed the would-fire verdict UI but missed these form-field spots.
+
+  it('invalid-name note uses the AA error-text token, not the saturated stroke (1.4.3)', () => {
+    render(<RecipeBuilder tenantId="db-a" fetchMetrics={mockFetch([])} />);
+    fill('field-name', 'Bad Name');                 // space → fails ^[a-z][a-z0-9_]*$
+    const note = screen.getByText(/name must match/i).closest('p')!;
+    expect(note.className).toContain('text-[color:var(--da-color-error-text)]');
+    expect(note.className).not.toMatch(/text-\[color:var\(--da-color-error\)\]/);
+  });
+
+  it('ghost soft-warn note uses the AA warning-text token, not the saturated stroke (1.4.3)', async () => {
+    render(<RecipeBuilder tenantId="db-a" fetchMetrics={mockFetch(['real_metric'])} />);
+    const input = screen.getByTestId('field-metric');
+    fireEvent.change(input, { target: { value: 'ghost_metric' } });
+    fireEvent.blur(input, { target: { value: 'ghost_metric' } });
+    const note = await screen.findByTestId('field-metric-ghost');
+    expect(note.className).toContain('text-[color:var(--da-color-warning-text)]');
+    expect(note.className).not.toMatch(/text-\[color:var\(--da-color-warning\)\]/);
+  });
+
+  it('the test-value input has no redundant aria-label; its visible <label> is the accessible name (2.5.3)', () => {
+    render(<RecipeBuilder tenantId="db-a" fetchMetrics={mockFetch(['queue_depth'])} previewFetch={vi.fn()} />);
+    const input = screen.getByTestId('wouldfire-value');
+    expect(input).not.toHaveAttribute('aria-label');
+    expect(screen.getByLabelText(/Would it fire\?/i)).toBe(input);   // label htmlFor/id wins
+  });
+
+  it('the would-fire result region carries a visible focus ring for programmatic focus (2.4.7)', () => {
+    render(<RecipeBuilder tenantId="db-a" fetchMetrics={mockFetch(['queue_depth'])} previewFetch={vi.fn()} />);
+    const region = screen.getByRole('status');
+    expect(region).toHaveAttribute('tabindex', '-1');                // run() focuses it
+    expect(region.className).toContain('focus:ring-2');              // …with a visible indicator
+  });
+});

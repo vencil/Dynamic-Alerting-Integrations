@@ -286,7 +286,7 @@ function MetricField({ label, value, onChange, tenantId, fetchMetrics, inputClas
         {suggestions.map((s) => <option key={s} value={s} />)}
       </datalist>
       {badFormat && (
-        <p className="text-xs mt-1 pl-2 border-l-2 border-[color:var(--da-color-error)] text-[color:var(--da-color-error)]" data-testid={`${testid}-badformat`}>
+        <p className="text-xs mt-1 pl-2 border-l-2 border-[color:var(--da-color-error)] text-[color:var(--da-color-error-text)]" data-testid={`${testid}-badformat`}>
           {t('指標名稱不合法（只允許 [a-zA-Z_][a-zA-Z0-9_]*）', 'invalid metric name (only [a-zA-Z_][a-zA-Z0-9_]*)')}
         </p>
       )}
@@ -294,7 +294,7 @@ function MetricField({ label, value, onChange, tenantId, fetchMetrics, inputClas
         <p className="text-xs mt-1 text-[color:var(--da-color-muted)]">{t('驗證中…', 'Validating...')}</p>
       )}
       {ghost === 'ghost' && (
-        <p className="text-xs mt-1 pl-2 border-l-2 border-[color:var(--da-color-warning)] text-[color:var(--da-color-warning)]" data-testid={`${testid}-ghost`}>
+        <p className="text-xs mt-1 pl-2 border-l-2 border-[color:var(--da-color-warning)] text-[color:var(--da-color-warning-text)]" data-testid={`${testid}-ghost`}>
           {t('此 metric 目前無數據，確認名稱無誤？', 'This metric has no data right now — confirm the name?')}
         </p>
       )}
@@ -442,7 +442,7 @@ function WouldFirePanel({ recipeObj, tenantId, previewFetch, inputClass }) {
           </span>
         ) : (
           <input type="number" id="wouldfire-value" inputMode="decimal" className={inputClass} value={value}
-            aria-label={t('測試值', 'Test value')} data-testid="wouldfire-value" placeholder="1500"
+            data-testid="wouldfire-value" placeholder="1500"
             onChange={(e) => setValue(e.target.value)} />
         )}
         <button type="button" data-testid="wouldfire-run" disabled={!canRun} aria-disabled={!canRun}
@@ -455,7 +455,8 @@ function WouldFirePanel({ recipeObj, tenantId, previewFetch, inputClass }) {
       {blocker && status !== PREVIEW.LOADING && (
         <p className="text-xs mb-2 text-[color:var(--da-color-muted)]" data-testid="wouldfire-blocker">{blocker}</p>
       )}
-      <div ref={resultRef} tabIndex={-1} role="status" aria-live="polite" aria-atomic="true" className="focus:outline-none">
+      <div ref={resultRef} tabIndex={-1} role="status" aria-live="polite" aria-atomic="true"
+        className="focus:outline-none focus:ring-2 focus:ring-[color:var(--da-color-focus-ring)] rounded-sm">
         {status === PREVIEW.EMPTY && !blocker && (
           <p data-testid="wouldfire-state-empty" className="text-xs text-[color:var(--da-color-muted)]">
             {t('按「試算」查看會不會觸發。', 'Press Run preview to see whether it fires.')}
@@ -613,13 +614,13 @@ export default function RecipeBuilder(props) {
           })}
         </select>
         {status === 'deprecated' && (
-          <p className="text-xs mt-1 pl-2 border-l-2 border-[color:var(--da-color-warning)] text-[color:var(--da-color-warning)]" data-testid="recipe-deprecated">
+          <p className="text-xs mt-1 pl-2 border-l-2 border-[color:var(--da-color-warning)] text-[color:var(--da-color-warning-text)]" data-testid="recipe-deprecated">
             {t('此 recipe 已標記 deprecated（已棄用），仍可使用，建議盡早改用支援中的 recipe。',
                'This recipe is deprecated — it still works, but migrate to a supported recipe soon.')}
           </p>
         )}
         {status === 'eol' && (
-          <p className="text-xs mt-1 pl-2 border-l-2 border-[color:var(--da-color-error)] text-[color:var(--da-color-error)]" data-testid="recipe-eol">
+          <p className="text-xs mt-1 pl-2 border-l-2 border-[color:var(--da-color-error)] text-[color:var(--da-color-error-text)]" data-testid="recipe-eol">
             {t('此 recipe 已退役（EOL）：可儲存此既有告警的變更，但無法新增使用它的告警。請改用支援中的 recipe。',
                'This recipe is end-of-life (EOL): you can save changes to this existing alert, but new alerts using it are rejected. Migrate to a supported recipe.')}
           </p>
@@ -631,7 +632,7 @@ export default function RecipeBuilder(props) {
         <input className={inputClass} value={f.name} aria-label="name" data-testid="field-name"
           onChange={(e) => set('name', e.target.value)} placeholder="queue_depth_high" />
         {f.name && !isValidName(f.name) && (
-          <p className="text-xs mt-1 pl-2 border-l-2 border-[color:var(--da-color-error)] text-[color:var(--da-color-error)]">
+          <p className="text-xs mt-1 pl-2 border-l-2 border-[color:var(--da-color-error)] text-[color:var(--da-color-error-text)]">
             {t('名稱須符合 ^[a-z][a-z0-9_]*$', 'name must match ^[a-z][a-z0-9_]*$')}
           </p>
         )}
