@@ -290,4 +290,55 @@ describe('RecipeBuilder would-fire preview (#657)', () => {
     // it must NOT let the user read the verdict as "my alert will fire in prod"
     expect(note.textContent).toMatch(/does NOT mean your environment will actually alert/i);
   });
+
+  // ── absence recipe (#657 P3 / #891): presence-based, no scenario value ──
+  function fillAbsenceRecipe() {
+    fireEvent.change(screen.getByTestId('field-recipe'), { target: { value: 'absence' } });
+    fill('field-name', 'metric_gone');
+    fill('field-metric', 'up');
+    fill('field-window', '10m');
+    fill('field-threshold', '1:critical');
+  }
+
+  it('absence recipe: Run is enabled with NO test value, and the number input is hidden', () => {
+    render(<RecipeBuilder tenantId="db-a" fetchMetrics={mockFetch(['up'])} previewFetch={vi.fn()} />);
+    fillAbsenceRecipe();
+    // presence-based → enabled without a test value; no numeric input; an explanatory hint instead
+    expect((screen.getByTestId('wouldfire-run') as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.queryByTestId('wouldfire-value')).toBeNull();
+    expect(screen.getByTestId('wouldfire-absence-hint')).toBeInTheDocument();
+    expect(screen.queryByTestId('wouldfire-blocker')).toBeNull();    // no "test value must be a number" blocker
+    // the hint is programmatically linked to Run so AT announces "why no value" (the a11y fix)
+    expect(screen.getByTestId('wouldfire-run')).toHaveAttribute('aria-describedby', 'wouldfire-absence-hint');
+  });
+
+  it('absence recipe: Run sends an EMPTY scenario (not { value }), verdict shown verbatim', async () => {
+    const previewFetch = vi.fn(() => Promise.resolve({ supported: true, states: [{ state: 'firing' }], warnings: [] }));
+    render(<RecipeBuilder tenantId="db-a" fetchMetrics={mockFetch(['up'])} previewFetch={previewFetch} />);
+    fillAbsenceRecipe();
+    fireEvent.click(screen.getByTestId('wouldfire-run'));
+    await waitFor(() => expect(screen.getByTestId('wouldfire-firing')).toBeInTheDocument());
+    expect(previewFetch).toHaveBeenCalledWith(
+      'db-a', expect.objectContaining({ recipe: 'absence', metric: 'up' }),
+      {}, expect.anything());                                        // empty scenario — presence-based
+  });
+
+  it('absence recipe: the firing qualifier says "simulating absence", not "at this test value"', async () => {
+    const previewFetch = vi.fn(() => Promise.resolve({ supported: true, states: [{ state: 'firing' }], warnings: [] }));
+    render(<RecipeBuilder tenantId="db-a" fetchMetrics={mockFetch(['up'])} previewFetch={previewFetch} />);
+    fillAbsenceRecipe();
+    fireEvent.click(screen.getByTestId('wouldfire-run'));
+    await waitFor(() => expect(screen.getByTestId('wouldfire-firing')).toBeInTheDocument());
+    const txt = screen.getByTestId('wouldfire-firing').textContent || '';
+    expect(txt).toMatch(/going silent/i);                            // absence-correct qualifier (no-data wording)
+    expect(txt).not.toMatch(/at this test value/i);                  // the threshold wording must NOT leak
+  });
+
+  it('absence recipe: the persistent scope note drops "test value" wording (honesty)', () => {
+    render(<RecipeBuilder tenantId="db-a" fetchMetrics={mockFetch(['up'])} previewFetch={vi.fn()} />);
+    fillAbsenceRecipe();
+    const note = screen.getByTestId('wouldfire-scope-note').textContent || '';
+    expect(note).toMatch(/simulating the metric going silent/i);     // absence-correct synthetic-data wording
+    expect(note).not.toMatch(/test value/i);                         // no stale threshold wording
+  });
 });
