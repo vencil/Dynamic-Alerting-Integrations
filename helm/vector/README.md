@@ -34,6 +34,28 @@ The stream-field set is locked at the values level (`streamFields`) — changing
 
 `source.extraLabelSelector` defaults to `app.kubernetes.io/name=federation-gateway`. Per #539 §7 non-goals this is **not** a general platform log roll-up — every new consumer opens its own ticket. When #552 (chargeback) lands, extend the selector or add a second source.
 
+## Tenant-sanitized projection (ADR-021 Phase 1 (b) — [#609](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/609))
+
+Off by default. When `tenantProjections` is set, the chart fans out a **second, sanitized** copy of each tenant's `federation_audit` rows into that tenant's native VictoriaLogs `(AccountID, ProjectID=0)` partition — so a tenant can query the platform's operational logs *about itself* without seeing infra topology or another tenant's rows. The platform full copy keeps flowing to the primary `victorialogs` sink (`0:0`) **unchanged**.
+
+```yaml
+# values.yaml — copy each tenant's id from the Git account registry
+# (_account_registry.yaml). NEVER invent or reuse a retired AccountID.
+tenantProjections:
+  - tenantId: "tenant-alpha"   # must equal the audit JSON .tenant_id (JWT claim)
+    accountId: 1000
+```
+
+| Property | How |
+|---|---|
+| **Fail-closed** | `tenant_project` (remap) runs `drop_on_abort` + `drop_on_error` + `reroute_dropped:false`. Non-audit / blank / unknown `tenant_id` / parse-error → `abort` → dropped from the tenant branch. Unmapped `account_id` → `tenant_route._unmatched` (no sink consumes it). No catch-all tenant sink — a mis-stamp cannot reach another tenant. |
+| **Enrichment** | `tenant_id`→`AccountID` is an explicit committed map templated from `tenantProjections` (NOT a hash — collision = cross-tenant leak). |
+| **Static N-sink** | One `vl_tenant_<id>` sink per tenant, each with a **constant** `AccountID` header. A single dynamic header-templated sink would mis-stamp mixed-tenant batches ([vectordotdev/vector#21402](https://github.com/vectordotdev/vector/issues/21402)). |
+| **Sanitization** | `tenantProjectionDropFields` (`pod_name`/`pod_node`/`node_name`/`pod_ip`/...) `del()`'d before the tenant write. Irreversible (ingest-time drop). |
+| **Correlation** | `log_event_id` (time-sortable **UUIDv7**) injected in the shared `demux` stage (before drop) → present in BOTH `0:0` and the tenant copy → on-call joins a redacted tenant row back to the full `0:0` row. |
+
+Behavior is pinned by `vector test` (`tests/projection_tests.yaml`) + `tests/shared/test_vector_projection_vrl.py`. See [`platform-log-aggregation-runbook.md` §8](../../docs/internal/platform-log-aggregation-runbook.md) for the operator how-to and the `log_event_id` join SOP.
+
 ## RBAC
 
 `kubernetes_logs` needs `list/watch/get` on `pods`, `namespaces`, `nodes` cluster-wide. The ClusterRole + binding ship with the chart; the pod also drops all capabilities except `DAC_READ_SEARCH` (the minimum to read root-owned hostPath log files).

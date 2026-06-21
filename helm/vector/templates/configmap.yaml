@@ -188,6 +188,28 @@ data:
           # Drop the .kubernetes blob now that the keys we need are
           # promoted — keeps the per-line payload small.
           del(.kubernetes)
+          # ── Cross-partition correlation id (ADR-021 §Fork B / #609) ──────
+          # Stamp a globally-unique id into EVERY line in the shared demux
+          # stage so it lands in BOTH the platform full copy (0:0) AND the
+          # tenant-sanitized projection (AccountID:X). The projection's
+          # drop_fields strips topology (node_name/pod_ip/...) but KEEPS this
+          # id, so on-call can take a tenant's redacted screenshot and join
+          # the id back to the full 0:0 row for the node/pod context — i.e.
+          # sanitization doesn't blow up MTTR.
+          # Must be injected HERE (upstream of the projection's drop_fields),
+          # never inside the tenant branch — otherwise the 0:0 copy would
+          # lack the id and the join breaks.
+          # Gemini fold-in: use a TIME-SORTABLE id (UUIDv7), not random
+          # uuid_v4 — VictoriaLogs is time-series-optimized, so a
+          # k-sortable id keeps the 0:0 global-search join cheap. uuid_v7()
+          # with no arg stamps the current wall-clock into the high 48 bits
+          # and is infallible (returns a String) — no `??` (Vector 0.55+
+          # rejects unnecessary error coalescing on an infallible call).
+          # Idempotent: skip if the producer ever starts emitting its own
+          # (audit-signing seam below could add one) so we never clobber it.
+          if !exists(.log_event_id) {
+            .log_event_id = uuid_v7()
+          }
           # Audit-signing schema seam (#566 X-2 reserve). Producer-side
           # signing (federation-gateway HMACs each audit JSON line with
           # a short-lived key) lets the SIEM verify "this row really came
@@ -199,6 +221,118 @@ data:
           # through to sinks verbatim instead of being dropped by the
           # implicit field policy. No-op today; ready when gateway-side
           # signing lands.
+      {{- if .Values.tenantProjections }}
+      # ── (b) Tenant-sanitized projection — ADR-021 Phase 1 / #609 ────────
+      # FAN-OUT, not a move: the platform full copy keeps flowing to the
+      # `victorialogs` sink (0:0) below, UNCHANGED. This adds a SECOND,
+      # net-new write of a *sanitized* subset into each tenant's native
+      # VictoriaLogs (AccountID, ProjectID) partition so a tenant can read
+      # the platform's operational logs ABOUT ITSELF without seeing infra
+      # topology or another tenant's rows.
+      #
+      # Two-stage by design:
+      #   tenant_project  (remap)  — eligibility gate + tenant_id→AccountID
+      #                              enrichment + drop_fields sanitization
+      #   tenant_route    (route)  — static per-AccountID fan to N sinks
+      #
+      # FAIL-CLOSED is structural, not a runtime branch we hope fires:
+      #   - Only `federation_audit` rows with a NON-EMPTY, KNOWN tenant_id
+      #     get an `account_id` stamped. Everything else (gateway_operational,
+      #     JWT-fail, suspicious_audit, prometheus_query_log, parse-error
+      #     non-JSON, blank/forged/unknown tenant_id) leaves `account_id`
+      #     ABSENT.
+      #   - `tenant_route` matches a row to `t_<id>` ONLY on an exact numeric
+      #     `account_id == <id>`. A row with no `account_id` matches no route
+      #     and lands in the reserved `_unmatched` output, which nothing
+      #     consumes — so it is DISCARDED from the tenant plane (it still
+      #     reached 0:0 via `demux`). There is no default/catch-all tenant
+      #     sink, so a mis-stamp cannot leak into another tenant.
+      tenant_project:
+        type: remap
+        inputs:
+          - demux
+        # Fail-closed error handling (§Fork B / Gemini 1c): a row that aborts
+        # (eligibility/enrichment miss) OR hits a runtime VRL error is DROPPED
+        # from this branch — NOT sent onward, NOT rerouted to a tenant sink.
+        # Both knobs are load-bearing and set EXPLICITLY:
+        #   - drop_on_abort: every `abort` below (non-audit, blank/unknown
+        #     tenant_id) must drop. This is the PRIMARY fail-closed path.
+        #     (We don't rely on its default — the whole isolation guarantee
+        #     hinges on it, so it's pinned.)
+        #   - drop_on_error: a parse/coercion error must ALSO drop, never
+        #     default-allow a half-processed row into a partition.
+        #   - reroute_dropped:false: dropped events vanish from this branch
+        #     entirely (no `.dropped` output wired to any tenant sink).
+        # The 0:0 full copy is unaffected — it is fed from `demux`, upstream
+        # of this transform.
+        drop_on_abort: true
+        drop_on_error: true
+        reroute_dropped: false
+        source: |
+          # Eligibility gate (ADR-021 §Fork B): tenant projection is the
+          # SUBSET `log_type == "federation_audit"` AND a non-empty tenant_id.
+          # gateway_operational / suspicious_audit / prometheus_query_log /
+          # JWT-fail rows are platform-only — abort so drop_on_abort removes
+          # them from THIS branch (they remain in 0:0 via demux).
+          if .log_type != "federation_audit" {
+            abort
+          }
+          tid = to_string(.tenant_id) ?? ""
+          if tid == "" {
+            # Blank / missing / non-string tenant_id → fail-closed, drop.
+            abort
+          }
+          # tenant_id(str) → AccountID(uint32) enrichment.
+          # SSOT is the Git account registry (`_account_registry.yaml`,
+          # PR-1 #887). For Phase 1 (b) the resolved {tenant_id: account_id}
+          # rows are projected into Helm `tenantProjections` (a reviewed,
+          # GitOps-versioned derivation of the registry) and templated into
+          # this static map; Phase 2 (a) generates it from the registry at
+          # render time (config-from-SSOT) — see ADR-021 §Ingestion.
+          # We DELIBERATELY do not coerce the string tenant_id into a number
+          # (ADR forbids hash/derived ids — collision = cross-tenant leak);
+          # an unknown tenant simply isn't in the map → account_id stays
+          # absent → _unmatched → dropped (fail-closed, never another tenant).
+          account_map = {
+          {{- range $p := .Values.tenantProjections }}
+            {{ $p.tenantId | quote }}: {{ $p.accountId }},
+          {{- end }}
+          }
+          # get() returns null (or errors) on a missing key; `?? null`
+          # collapses both to null → the abort below. Map values are integer
+          # literals, so a hit is already an integer — assign directly (no
+          # int!() coercion, which the compiler could flag as unnecessary).
+          aid = get(account_map, [tid]) ?? null
+          if aid == null {
+            # Unknown tenant_id (not yet onboarded into tenantProjections,
+            # or a forged value) → fail-closed, drop from the tenant plane.
+            abort
+          }
+          .account_id = aid
+          # ── Sanitize: strip infra topology BEFORE it can reach a tenant ──
+          # (ADR-021 §Fork B "ingest-time drop"). These are the sensitive
+          # fields the platform full copy (0:0) keeps but a tenant must never
+          # see: node identity, pod IP/identity, owner, and the cross-tenant
+          # namespace naming scheme. log_event_id is intentionally NOT here —
+          # it must survive into the tenant copy for the 0:0 join.
+          # Ingest-time drop is irreversible (ADR accepted trade-off);
+          # read-time strip is Future Work.
+          {{- range $f := .Values.tenantProjectionDropFields }}
+          del(.{{ $f }})
+          {{- end }}
+      tenant_route:
+        type: route
+        inputs:
+          - tenant_project
+        # reroute_unmatched defaults true → a row that matches no `t_<id>`
+        # (i.e. no/foreign account_id) goes to `tenant_route._unmatched`,
+        # which NOTHING consumes = discarded. This is the load-bearing
+        # fail-closed sink-of-last-resort: there is no tenant catch-all.
+        route:
+        {{- range $p := .Values.tenantProjections }}
+          t_{{ $p.accountId }}: '.account_id == {{ $p.accountId }}'
+        {{- end }}
+      {{- end }}
 
     sinks:
       victorialogs:
@@ -225,6 +359,46 @@ data:
             ProjectID: {{ . | quote }}
             {{- end }}
         {{- end }}
+      {{- if .Values.tenantProjections }}
+      # ── (b) Tenant-sanitized projection sinks — ADR-021 / #609 ──────────
+      # One STATIC sink per tenant, each pinned to a FIXED AccountID header.
+      # Why static-N and not one dynamic header-templated sink:
+      # Vector's elasticsearch/http sinks set request headers PER-BATCH (one
+      # batch = one request), and a batch can mix events from many tenants —
+      # a per-event header template would stamp ALL events in a mixed batch
+      # with ONE tenant's AccountID = cross-tenant write leak. (Upstream
+      # vectordotdev/vector#21402 confirms the isomorphic per-batch header
+      # failure.) Routing first, then a sink with a CONSTANT header, makes
+      # each sink's batches single-tenant by construction.
+      # ProjectID is fixed 0 for (b) platform-operational logs; (a) tenant
+      # application logs (Phase 2) will use ProjectID 1 in the same store.
+      {{- range $p := .Values.tenantProjections }}
+      vl_tenant_{{ $p.accountId }}:
+        type: elasticsearch
+        inputs:
+          # Consume ONLY this tenant's route output — a single-tenant stream,
+          # so the constant AccountID header below can never mis-stamp.
+          - tenant_route.t_{{ $p.accountId }}
+        endpoints:
+          - http://{{ $.Values.victorialogs.host }}:{{ $.Values.victorialogs.port }}/insert/elasticsearch/
+        api_version: v8
+        compression: gzip
+        healthcheck:
+          enabled: false
+        query:
+          _msg_field: message
+          _time_field: timestamp
+          _stream_fields: {{ join "," $.Values.streamFields | quote }}
+        request:
+          headers:
+            # Verified, server-side-derived tenant partition. NEVER trust a
+            # tenant_id carried in the payload (zero-trust ingestion, ADR-021
+            # §contract) — this AccountID comes from the Git-registry-derived
+            # tenantProjections map, not the log line.
+            AccountID: {{ $p.accountId | quote }}
+            ProjectID: {{ $.Values.tenantProjectionProjectId | quote }}
+      {{- end }}
+      {{- end }}
       {{- range $sink := .Values.additionalSinks }}
       # ── additionalSinks (#539 Phase 3 fan-out) ───────────────────
       # Wrapped with `buffer: {when_full: <_buffer_when_full>}` so the

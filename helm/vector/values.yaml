@@ -152,6 +152,69 @@ additionalSinks: []
 audit:
   gatewayPodOwnerPrefix: "federation-gateway-"
 
+# ── (b) Tenant-sanitized log projection — ADR-021 Phase 1 / #609 ────────────
+# Fan-out (NOT a move): the platform full copy keeps flowing to the primary
+# `victorialogs` sink at (AccountID, ProjectID) = (victorialogs.accountId,
+# victorialogs.projectId) — by default (0, 0). This list adds a SECOND,
+# net-new, SANITIZED write of each tenant's own federation_audit rows into
+# that tenant's native VictoriaLogs partition, so a tenant can query the
+# platform's operational logs ABOUT ITSELF (why an alert fired, its
+# federation behavior) without seeing infra topology or another tenant's rows.
+#
+# ⛔ SECURITY MODEL (read before editing — a wrong entry is a cross-tenant leak):
+#   - `accountId` is the tenant's monotonic uint32 AccountID from the Git
+#     account registry (`_account_registry.yaml`, ADR-021 / #609 PR-1). It is
+#     the SSOT. This list is a REVIEWED, GitOps-versioned PROJECTION of that
+#     registry (Phase 1 (b) is static-N; Phase 2 (a) generates it from the
+#     registry at render time). When you onboard a tenant for log query, copy
+#     its `tenant_id: account_id` row from the registry to here — do NOT
+#     invent an id, and NEVER reuse a retired id (the registry is monotonic
+#     for exactly this reason: a recycled id would expose the old tenant's
+#     logs still inside the retention window).
+#   - `tenantId` MUST be the SAME string the federation-gateway audit JSON
+#     carries in `.tenant_id` (the JWT `tenant_id` claim). A row whose
+#     tenant_id is not in this list gets NO projection (fail-closed → the
+#     line stays platform-only in 0:0, never lands in a tenant partition).
+#   - Default empty: single-tenant store, projection disabled, pipeline is
+#     byte-for-byte the #539 behavior (no extra transforms/sinks rendered).
+#
+# Each entry renders: a `t_<accountId>` route on the `tenant_route` transform
+# + a `vl_tenant_<accountId>` elasticsearch sink with a FIXED `AccountID`
+# header (static-N, because a per-event header template pollutes mixed-tenant
+# batches — vectordotdev/vector#21402; see configmap.yaml).
+tenantProjections: []
+  # - tenantId: "tenant-alpha"
+  #   accountId: 1000
+  # - tenantId: "tenant-beta"
+  #   accountId: 1001
+
+# Sensitive infrastructure-topology fields stripped from the tenant
+# projection BEFORE it reaches a tenant partition (ADR-021 §Fork B
+# ingest-time drop — predefault-deny, irreversible by design; read-time
+# strip is Future Work). These are top-level keys the `demux` transform
+# already promoted off `.kubernetes`. The platform full copy (0:0) KEEPS
+# them; only the tenant copy is sanitized. `log_event_id` is deliberately
+# NOT dropped — it must survive into the tenant copy so on-call can join a
+# tenant's redacted row back to the full 0:0 row for node/pod context.
+# Drop fields are EXPRESSED HERE (not hardcoded in VRL) so a future
+# topology field can be added without editing the template — but adding one
+# is a security-relevant change: review what a tenant could infer from it.
+tenantProjectionDropFields:
+  - pod_name      # individual pod identity (HPA churn / infra detail)
+  - pod_node      # node hostname — infra topology leak
+  - node_name     # node hostname (alt field name if present in source JSON)
+  - pod_ip        # pod IP — infra topology leak
+  - pod_node_name # node hostname (raw source field name, defense-in-depth)
+  - pod_owner     # ReplicaSet/owner name — infra topology + naming scheme
+  - host          # Vector-added host enrichment (node identity)
+
+# ProjectID for the (b) platform-operational tenant projection. ADR-021
+# reserves ProjectID=0 for (b) and ProjectID=1 for the future (a) tenant
+# application logs — both isolated under the same AccountID in one store.
+# Stringified into the VictoriaLogs header. Do not change without revisiting
+# the (a)/(b) ProjectID split in ADR-021.
+tenantProjectionProjectId: 0
+
 # Stream fields VictoriaLogs splits on. Per #539 §3 load-bearing schema:
 # bounded keys only. pod_name / token_id / query are intentionally NOT
 # here — they are high-cardinality data fields, not stream fields.

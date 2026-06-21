@@ -353,6 +353,97 @@ GitOps self-heal，**不在 chart 內、是部署叢集的責任**：
 
 > 狀態與 fix shape 以 [#566](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/566) 為 SSOT;本表只列「operator 該知道的殘餘邊界」，不重複 issue 內的 severity / rollout 細節。
 
+## 8. (b) 租戶淨化投影（ADR-021 Phase 1 / #609）
+
+讓租戶在平台上**就地查自己的**營運 log（federation audit），又**看不到**基礎設施拓樸或他租戶的列。資料平面（本 PR）鋪好後，查詢授權平面（gateway `victorialogs` mode + tenant-api AccountID 配發）才把租戶接上。完整設計見 [ADR-021](../adr/021-tenant-log-query-federation.md)；本節是 operator 的 how-to。
+
+### 8.1 Fan-out（雙寫，非搬移）拓樸
+
+```
+demux (VRL，注入 log_event_id)
+   │
+   ├─▶ victorialogs sink ─────────▶ VictoriaLogs (0:0)   平台完整副本（全欄位，#539 現狀不變）
+   │
+   └─▶ tenant_project (remap)      eligibility gate + tenant_id→AccountID 富集 + drop_fields 淨化
+          │                        （drop_on_abort/error + reroute_dropped:false = fail-closed）
+          └─▶ tenant_route (route, by account_id)
+                 ├─▶ vl_tenant_<id> sink (固定 AccountID header) ─▶ VictoriaLogs (AccountID:X, ProjectID:0)
+                 └─▶ _unmatched（無 sink 消費 = 丟棄）
+```
+
+- **平台完整副本續留 `0:0`**——平台 ops 的跨租戶查詢面**不變**；`gateway_operational`／JWT-fail／`suspicious_audit`／`prometheus_query_log` 列**永遠只在 `0:0`**，不進任何租戶分區。
+- **租戶淨化投影是疊加層**——只有「`log_type=federation_audit` 且帶有效 `tenant_id`」的列會被投影。租戶只有 Day-0 起的歷史（新 feature，無需 backfill）。
+
+### 8.2 啟用：把 registry 配發投影進 `tenantProjections`
+
+`tenant_id(str) → AccountID(uint32)` 的 SSOT 是 Git 帳號 registry（`_account_registry.yaml`，PR-1 #887：`next_account_id` + `allocations: {tenant_id: uint32}`）。本 PR (b) 為**靜態 N-sink**：把已配發的租戶 `tenant_id: account_id` **逐筆抄進** `helm/vector` values 的 `tenantProjections`（一份經 review、GitOps 版控的 registry 投影）。Phase 2 (a) 才從 registry **render 時自動產生**（config-from-SSOT，解決海量租戶不 scale）。
+
+```yaml
+# helm/vector values（或 values-prod-vector.yaml overlay）
+tenantProjections:
+  - tenantId: "tenant-alpha"   # 必須等同 audit JSON 的 .tenant_id（JWT tenant_id claim）
+    accountId: 1000            # 抄自 _account_registry.yaml 的 allocations，勿自創、勿重用退租 id
+  - tenantId: "tenant-beta"
+    accountId: 1001
+```
+
+> ⛔ **配發紀律（違反即跨租戶洩漏）**：`accountId` 一律從 registry 抄；registry 單調發號、**永不回收**（退租後重用同 id → 新租戶讀得到舊租戶 retention 窗內殘留 log）。`tenantId` 打錯（如 typo）→ 該租戶查無自己的 log（fail-closed，不會誤給他人）；`accountId` 抄錯 → 可能落他租戶分區，**這是唯一會洩漏的人為錯誤**，PR review 必對照 registry。
+>
+> 預設 `tenantProjections: []` → 投影**整個關閉**，pipeline 為 byte-相容 #539 單租戶行為（不 render 任何 `tenant_project`/`tenant_route`/`vl_tenant_*`）。
+
+### 8.3 敏感欄位淨化（ingest-time drop，不可逆）
+
+`tenant_project` 在寫租戶分區**前** `del()` 掉拓樸欄位（`tenantProjectionDropFields`，預設 `pod_name`/`pod_node`/`node_name`/`pod_ip`/`pod_node_name`/`pod_owner`/`host`）。落在 `AccountID:X` 的資料 100% 乾淨，gateway 連 read-time strip 漏濾風險都不必擔。**ingest-time drop 事後無法 un-drop**（改清單只影響改後新進的列；要回補舊資料須等 retention 自然汰換）——對「本來就不該給租戶看」的拓樸欄位可接受；動態 read-time strip 留 Future Work。新增要 drop 的欄位＝改 `tenantProjectionDropFields`（不必動 VRL），但屬資安相關變更：review 該欄位租戶能推斷出什麼。
+
+### 8.4 `log_event_id` 跨分區 join SOP（淨化不拉長 MTTR）
+
+值班拿到租戶報修（其畫面只有淨化過的列、無 node 資訊）時：
+
+1. 從租戶提供的列取 `log_event_id`（time-sortable UUIDv7，`0:0` 與租戶副本**同值**）。
+2. 在 `0:0`（平台完整副本）反查它，拿回完整 node/pod 拓樸：
+
+```sh
+kubectl exec -n monitoring deploy/victorialogs -- \
+  wget -qO- 'http://localhost:9428/select/logsql/query?query=log_event_id:"<那個 id>"&limit=5'
+# 不帶 AccountID header = 查 0:0（平台分區），可見 pod_node / pod_name / 完整 audit
+```
+
+> `log_event_id` 在共用 `demux` 階段（drop **之前**）注入，故必在兩副本；它**不在** `tenantProjectionDropFields`（drop 它會斷 join 鏈）。用 UUIDv7 而非隨機 v4：VictoriaLogs 時序優化，k-sortable id 讓 `0:0` 全域檢索 join 便宜（Gemini fold-in）。
+
+### 8.5 VictoriaLogs Layer-1 查詢護欄
+
+租戶查詢是疊在 single-pod store 上的**新讀負載**（#539 容量只估 ingestion）。LogsQL 無 Prometheus 式 sample cap，主護欄是 time-range + 執行時間上限（`helm/victorialogs` values 的 `search:`）：
+
+| flag | 值 | 防護 |
+|---|---|---|
+| `-search.maxQueryTimeRange` | `7d` | 擋無時間過濾／過寬查詢（log 世界主要 blast-radius）。≤ `retentionPeriod` |
+| `-search.maxQueryDuration` | `25s` | ⛔ 單查詢執行上限，**必須 < gateway route 30s**——cascade 讓 VictoriaLogs **先** abort、不留 zombie query 佔並發槽（Gemini fold-in） |
+| `-search.maxConcurrentRequests` | `6` | 並發上限（RAM/CPU backstop；亦兜 multi-replica gateway 限流非對稱——不論幾個 replica 放行，實際並發執行封頂） |
+| `-search.maxQueueDuration` | `10s` | 並發滿時排隊等待上限 |
+
+調整走 `--set search.maxConcurrentRequests=N`；或用 `extraArgs`（render 在 search flags **之後**，last-flag-wins 可覆寫）。**改 `maxQueryDuration` 勿觸及/超過 gateway 30s**，否則 cascading-timeout 失效。
+
+### 8.6 驗證 / fail-closed 自證（`vector test` 入 CI）
+
+語法 + 行為都進 CI（`tests/shared/test_vector_projection_vrl.py`，本機重現）：
+
+```sh
+# 1) 語法（codify 本 runbook §4.4 手動步驟）
+helm template vector ./helm/vector -n monitoring \
+  --set 'tenantProjections[0].tenantId=tenant-alpha' --set 'tenantProjections[0].accountId=1000' \
+  --set 'tenantProjections[1].tenantId=tenant-beta'  --set 'tenantProjections[1].accountId=1001' \
+  | yq '.[] | select(.kind=="ConfigMap" and (.metadata.name|test("vector-config"))) | .data."vector.yaml"' \
+  > /tmp/rendered-vector.yaml
+vector validate --no-environment /tmp/rendered-vector.yaml
+
+# 2) 行為（餵極端 payload 斷言確定行為）
+vector test /tmp/rendered-vector.yaml helm/vector/tests/projection_tests.yaml
+```
+
+`projection_tests.yaml` 守的不變式：**negative assertion**（餵帶全部敏感欄位的 mock，斷言租戶副本中 `pod_node`/`pod_name`/`node_name`/`pod_ip`/`host` **確實不存在**——測「移除了」非「有產出」）／空與未知與 parse-error `tenant_id` → 僅 `0:0`（`no_outputs_from` 租戶 routes）／`log_event_id` 兩副本同在／`gateway_operational`+query-log 僅 `0:0`／跨租戶 routing 不交叉。
+
+> ⚠️ **CI 前置**：這兩步要 `vector` binary 在 PATH。`helm` 已在 `python-tests` job（`azure/setup-helm`）；`vector` 需在該 job 補裝（見 [github-release-playbook.md] 或本 PR 待辦）。未裝時測試 SKIP（同既有 helm-gating 慣例），但 SKIP ≠ 綠燈守門——務必補裝成真 gate。
+
 ## Refs
 
 - 源 issue：[#539](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/539)
