@@ -1,0 +1,223 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "description": "ADR-021 (#609) tenant log-query plane observability. Source metrics: tenant_log_query_requests_total{account_id,project_id,status} (counter) and tenant_log_query_duration_ms (histogram), emitted by the mtail sidecar in helm/federation-gateway from the Envoy audit access log when the gateway runs in victorialogs mode. account_id is the verified VictoriaLogs partition key (>=1000); project_id is 0 for the Phase 1 (b) platform-operational projection.",
+  "panels": [
+    {
+      "title": "Log Queries /s (5m)",
+      "description": "Total tenant log-query request rate across all account partitions (victorialogs mode)",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "targets": [{
+        "expr": "sum(rate(tenant_log_query_requests_total[5m]))",
+        "legendFormat": ""
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "unit": "reqps",
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }] }
+        }
+      },
+      "options": { "colorMode": "background", "graphMode": "area", "textMode": "value" }
+    },
+    {
+      "title": "Rejection Rate (5m)",
+      "description": "Fraction of log-query requests rejected (rate_limited / auth_failed / bad_request / backend_error). Excludes client_aborted - a Grafana/LogsQL UI cancelling its own query is not a platform rejection. Mirrors the TenantLogQueryRejectionRateAnomaly alert.",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "targets": [{
+        "expr": "sum(rate(tenant_log_query_requests_total{status=~\"rate_limited|auth_failed|bad_request|backend_error\"}[5m])) / clamp_min(sum(rate(tenant_log_query_requests_total[5m])), 0.0001)",
+        "legendFormat": ""
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "unit": "percentunit",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 0.2 },
+              { "color": "red", "value": 0.5 }
+            ]
+          }
+        }
+      },
+      "options": { "colorMode": "background", "graphMode": "none", "textMode": "value" }
+    },
+    {
+      "title": "Active Log-Query Tenants",
+      "description": "Distinct account partitions that have sent at least one log-query request",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "targets": [{
+        "expr": "count(count by(account_id) (tenant_log_query_requests_total)) or vector(0)",
+        "legendFormat": ""
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }] }
+        }
+      },
+      "options": { "colorMode": "background", "graphMode": "none", "textMode": "value" }
+    },
+    {
+      "title": "Query Latency P95 (5m)",
+      "description": "95th-percentile log-query latency across all tenants, from the tenant_log_query_duration_ms histogram. Bounded by VictoriaLogs -search.maxQueryDuration=25s (< gateway route 30s); a P95 approaching 25s means queries are hitting the storage abort ceiling.",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "targets": [{
+        "expr": "histogram_quantile(0.95, sum by(le) (rate(tenant_log_query_duration_ms_bucket[5m])))",
+        "legendFormat": ""
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "unit": "ms",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 5000 },
+              { "color": "red", "value": 20000 }
+            ]
+          }
+        }
+      },
+      "options": { "colorMode": "background", "graphMode": "none", "textMode": "value" }
+    },
+    {
+      "title": "Request Rate by Status",
+      "description": "Log-query request rate broken down by status enum (stacked)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "targets": [{
+        "expr": "sum by(status) (rate(tenant_log_query_requests_total[5m]))",
+        "legendFormat": "{{ status }}"
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "unit": "reqps",
+          "custom": { "fillOpacity": 30, "lineWidth": 1, "drawStyle": "line", "stacking": { "mode": "normal", "group": "A" } }
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "ok" }, "properties": [{ "id": "color", "value": { "fixedColor": "green", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "client_aborted" }, "properties": [{ "id": "color", "value": { "fixedColor": "blue", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "rate_limited" }, "properties": [{ "id": "color", "value": { "fixedColor": "yellow", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "auth_failed" }, "properties": [{ "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "bad_request" }, "properties": [{ "id": "color", "value": { "fixedColor": "super-light-orange", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "backend_error" }, "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }] }
+        ]
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "title": "Query Latency Heatmap (duration_ms)",
+      "description": "Distribution of log-query latency over time, from the tenant_log_query_duration_ms histogram buckets. Reads the native _bucket series; le is preserved in the grouping (without it histogram_quantile / the heatmap break — the PromQL topology-label trap).",
+      "type": "heatmap",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "targets": [{
+        "expr": "sum by(le) (rate(tenant_log_query_duration_ms_bucket[5m]))",
+        "legendFormat": "{{ le }}",
+        "format": "heatmap"
+      }],
+      "fieldConfig": {
+        "defaults": { "unit": "ms", "custom": { "scaleDistribution": { "type": "linear" } } },
+        "overrides": []
+      },
+      "options": {
+        "calculate": false,
+        "cellGap": 1,
+        "color": { "scheme": "Spectral", "mode": "scheme" },
+        "yAxis": { "unit": "ms" }
+      }
+    },
+    {
+      "title": "Queries per Tenant (5m rate)",
+      "description": "Log-query request rate per account partition — watch for one tenant dominating the log-query gateway",
+      "type": "barchart",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "targets": [{
+        "expr": "sum by(account_id) (rate(tenant_log_query_requests_total[5m]))",
+        "legendFormat": "{{ account_id }}"
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "unit": "reqps"
+        }
+      },
+      "options": { "orientation": "horizontal", "showValue": "always", "barWidth": 0.7 }
+    },
+    {
+      "title": "Per-Tenant Query Latency P95 (5m)",
+      "description": "95th-percentile log-query latency per account partition (5m). le is grouped alongside account_id so histogram_quantile aggregates buckets correctly per tenant.",
+      "type": "barchart",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "targets": [{
+        "expr": "histogram_quantile(0.95, sum by(account_id, le) (rate(tenant_log_query_duration_ms_bucket[5m])))",
+        "legendFormat": "{{ account_id }}"
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "unit": "ms"
+        }
+      },
+      "options": { "orientation": "horizontal", "showValue": "always", "barWidth": 0.7 }
+    },
+    {
+      "title": "Per-Tenant Query Breakdown",
+      "description": "Log-query request rate per account partition and status (10m rate). One row per account+status.",
+      "type": "table",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 20 },
+      "targets": [{
+        "expr": "sum by(account_id, status) (rate(tenant_log_query_requests_total[10m]))",
+        "legendFormat": "",
+        "format": "table",
+        "instant": true
+      }],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": { "Time": true, "__name__": true, "job": true, "instance": true, "project_id": true },
+            "renameByName": {
+              "account_id": "Account (Tenant)",
+              "status": "Status",
+              "Value": "Req/sec (10m)"
+            }
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "reqps" },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Status" },
+            "properties": [{ "id": "custom.displayMode", "value": "color-background" }, { "id": "mappings", "value": [
+              { "type": "value", "options": { "ok": { "color": "green", "index": 0 }, "client_aborted": { "color": "blue", "index": 5 }, "rate_limited": { "color": "yellow", "index": 1 }, "auth_failed": { "color": "orange", "index": 2 }, "bad_request": { "color": "super-light-orange", "index": 3 }, "backend_error": { "color": "red", "index": 4 } } }
+            ] }]
+          }
+        ]
+      },
+      "options": { "showHeader": true, "footer": { "enablePagination": true } }
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["dynamic-alerting", "federation", "multi-tenant", "logs"],
+  "templating": { "list": [] },
+  "time": { "from": "now-6h", "to": "now" },
+  "timepicker": {},
+  "timezone": "",
+  "title": "Tenant Log Query — Federation (ADR-021)",
+  "uid": "tenant-log-query",
+  "version": 1
+}

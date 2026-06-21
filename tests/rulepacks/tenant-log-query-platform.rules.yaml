@@ -1,0 +1,50 @@
+# Bare-rules promtool target for the tenant log-query plane alerts
+# (ADR-021 / #609 PR-4). promtool can't consume the deployed ConfigMap directly
+# (it needs a top-level `groups:` document, not `data: <name>.yml: |`), so this
+# is an EXTRACTED COPY of the two PR-4 alerts from
+# k8s/03-monitoring/configmap-rules-platform.yaml (group `federation-audit`).
+#
+# ⚠️ KEEP IN SYNC with that ConfigMap — expr / labels / `for` must match exactly.
+# The `description` annotation is intentionally omitted here (promtool requires an
+# EXACT annotation-set match against the test's exp_annotations, so the extracted
+# copy carries only `summary`, like platform-watchdog.rules.yaml). The behavioural
+# contracts are exercised by tenant-log-query-platform_test.yaml against this file:
+#   - TenantLogQueryRejectionRateAnomaly: fires when >50% of an account's
+#     log-query requests are rejected AND above the idle-tenant floor; does NOT
+#     fire on a mostly-ok account or a single fluke on a near-idle one; per-account
+#     isolation (a rejected account does not drag a healthy sibling, and vice versa).
+#   - TenantProjectionFanoutDiscardSpike: fires on a SUSTAINED drop rate above the
+#     floor; does NOT fire at/below the floor (proving it is not the always-true
+#     `> 0` form); the `sum without(instance,pod)` collapses per-pod series.
+groups:
+  - name: federation-audit
+    rules:
+      - alert: TenantLogQueryRejectionRateAnomaly
+        expr: |
+          (
+            sum by (account_id) (
+              rate(tenant_log_query_requests_total{status=~"rate_limited|auth_failed|bad_request"}[10m])
+            )
+            /
+            sum by (account_id) (rate(tenant_log_query_requests_total[10m]))
+          ) > 0.5
+          and
+          sum by (account_id) (
+            rate(tenant_log_query_requests_total{status=~"rate_limited|auth_failed|bad_request"}[10m])
+          ) > 0.0167
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Log-query requests for account {{ $labels.account_id }} are mostly rejected"
+
+      - alert: TenantProjectionFanoutDiscardSpike
+        expr: |
+          sum without (instance, pod) (
+            rate(vector_component_discarded_events_total{component_id="tenant_project"}[10m])
+          ) > 5
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Vector tenant-projection dropping >5 events/s for 15m — possible registry desync or payload flood"
