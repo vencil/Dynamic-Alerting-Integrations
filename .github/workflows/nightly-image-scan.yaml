@@ -9,16 +9,25 @@ name: Nightly Image CVE Scan
 # The gap: a new base-image (Alpine/distroless/nginx) CVE landing between the last
 # PR and a tag push is discovered ONLY at release — blocking it (v2.9.0 hit 3
 # freshly-disclosed HIGHs at tag time; runbook §37). This is the missing third
-# dimension: scan the 5 component images built from CURRENT main every night and
-# file ONE deduped tracking issue when fixable HIGH/CRITICAL CVEs appear, so they
-# surface days early. NON-BLOCKING by construction — it gates nothing (release.yaml
-# stays the last line of defense); it only raises a heads-up.
+# dimension: scan the 5 self-built component images (built from CURRENT main) PLUS
+# the third-party upstream images our charts/manifests pull (#902 L1-A) every night,
+# and file ONE deduped tracking issue when fixable HIGH/CRITICAL CVEs appear, so
+# they surface days early. NON-BLOCKING by construction — it gates nothing
+# (release.yaml stays the last line of defense); it only raises a heads-up.
 #
 # Scope honesty: da-tools is built with STUBBED Go binaries (zero-byte, mirroring
 # component-docker-build.yaml's COPY-path stub) — its OS/base-image CVEs ARE
 # scanned, but its Go binaries' module CVEs are NOT here (covered by release.yaml's
 # real-build scan + Go CI / CodeQL govulncheck). The other 4 images build real, so
 # their full image surface is scanned.
+#
+# Third-party images our helm charts AND k8s/ manifests pull (vector, victoria-logs,
+# envoy, oauth2-proxy, prom-label-proxy, python, mariadb, mysqld-exporter, grafana,
+# prometheus, alertmanager, kube-state-metrics, configmap-reload, alpine/git) are NOT
+# built here — the scan-thirdparty job pulls each ref and Trivy-scans it directly. They
+# had ZERO automated CVE detection before #902 (PR/release/this job's build path
+# all scan only self-built images). Keep each ref in sync with the chart values /
+# k8s manifest it deploys from.
 
 on:
   schedule:
@@ -116,48 +125,81 @@ jobs:
           ignore-unfixed: true
           exit-code: 0
 
+      # Shared fail-loud summarizer → emits frag-<name>.txt for the report job.
+      # Same script as the scan-thirdparty job (one implementation, not two).
       - name: Summarize findings
-        run: |
-          set -euo pipefail
-          NAME='${{ matrix.name }}'
-          JSON="trivy-${NAME}.json"
-          # Fail-LOUD on a broken/changed Trivy JSON. A swallowed jq error that
-          # degrades to COUNT=0 ("clean") is the EXACT fail-open this scan exists to
-          # prevent — it would report "all clear" every night while Trivy is broken
-          # (schema change / OOM-truncated output), until release night undeceives
-          # us. So: assert the file parses + still has the expected shape, and let
-          # ANY jq error abort the job (set -e) instead of hiding it.
-          jq empty "$JSON"                            # malformed / truncated → abort
-          jq -e 'has("Results")' "$JSON" >/dev/null   # schema drift (Results renamed) → abort
-          # One line per UNIQUE CVE (dedup by VulnerabilityID across all packages).
-          # Capture via $() so a jq runtime error propagates (set -e), NOT via a
-          # process substitution whose failure mapfile would silently ignore.
-          RAW="$(jq -r '
-            [.Results[]?.Vulnerabilities[]?]
-            | group_by(.VulnerabilityID)[] | .[0]
-            | "\(.Severity)|\(.VulnerabilityID)|\(.PkgName) \(.InstalledVersion) → \(.FixedVersion // "?")"
-          ' "$JSON")"
-          if [ -n "$RAW" ]; then mapfile -t LINES <<< "$RAW"; else LINES=(); fi
-          COUNT="${#LINES[@]}"
-          FRAG="frag-${NAME}.txt"
-          # Line 1 = machine-readable "name<TAB>count"; the rest = human markdown.
-          printf '%s\t%s\n' "$NAME" "$COUNT" > "$FRAG"
-          if [ "$COUNT" -gt 0 ]; then
-            {
-              printf '<details><summary><b>%s</b> — %s fixable HIGH/CRITICAL</summary>\n\n' "$NAME" "$COUNT"
-              printf '| Severity | CVE | Package (installed → fixed) |\n|---|---|---|\n'
-              for l in "${LINES[@]}"; do
-                IFS='|' read -r sev cve pkg <<< "$l"
-                printf '| %s | %s | %s |\n' "$sev" "$cve" "$pkg"
-              done
-              printf '\n</details>\n'
-            } >> "$FRAG"
-          else
-            printf '✅ **%s** — clean (0 fixable HIGH/CRITICAL)\n' "$NAME" >> "$FRAG"
-          fi
-          # Mirror into this job's Step Summary too.
-          { tail -n +2 "$FRAG"; echo; } >> "$GITHUB_STEP_SUMMARY"
-          echo "scanned ${NAME}: ${COUNT} fixable HIGH/CRITICAL"
+        run: bash scripts/ops/summarize_trivy_cve.sh '${{ matrix.name }}'
+
+      - name: Upload fragment
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cve-frag-${{ matrix.name }}
+          path: frag-${{ matrix.name }}.txt
+          retention-days: 14
+
+  scan-thirdparty:
+    name: scan ${{ matrix.name }} (third-party)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false # scan every image so one pull failure doesn't mask the rest
+      matrix:
+        # Third-party upstream images our charts / k8s manifests PULL (not build).
+        # Trivy pulls each ref and scans it directly — these had ZERO automated CVE
+        # detection before #902. Keep each ref in sync with the source-of-truth file
+        # noted alongside it.
+        #
+        # NOTE: the Docker Hub refs are pulled anonymously; if GH-runner shared-IP
+        # rate limits start failing pulls, they surface as a degraded/"missing"
+        # alert (NOT a silent clean) — add a docker/login-action step then.
+        include:
+          - name: vector # helm/vector/values.yaml
+            ref: "timberio/vector:0.55.0-distroless-libc"
+          - name: victoria-logs # helm/victorialogs/values.yaml
+            ref: "victoriametrics/victoria-logs:v1.50.0"
+          - name: chargeback-python # helm/chargeback-aggregator/values.yaml
+            ref: "python:3.13-slim"
+          - name: envoy # helm/federation-gateway/values.yaml
+            ref: "envoyproxy/envoy:distroless-v1.38.0"
+          - name: oauth2-proxy # helm/da-portal + helm/tenant-api values.yaml
+            ref: "quay.io/oauth2-proxy/oauth2-proxy:v7.15.2"
+          - name: prom-label-proxy # helm/federation-proxy/values.yaml
+            ref: "quay.io/prometheuscommunity/prom-label-proxy:v0.13.0"
+          - name: mariadb # helm/mariadb-instance/values.yaml
+            ref: "mariadb:11.8.8"
+          - name: mysqld-exporter # helm/mariadb-instance/values.yaml
+            ref: "prom/mysqld-exporter:v0.18.0"
+          - name: grafana # k8s/03-monitoring/deployment-grafana.yaml
+            ref: "grafana/grafana:12.4.2"
+          - name: prometheus # k8s/03-monitoring/deployment-prometheus.yaml
+            ref: "prom/prometheus:v3.11.2"
+          - name: alertmanager # k8s/03-monitoring/deployment-alertmanager.yaml
+            ref: "prom/alertmanager:v0.32.0"
+          - name: kube-state-metrics # k8s/03-monitoring/deployment-kube-state-metrics.yaml
+            ref: "registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.18.0"
+          - name: configmap-reload # k8s/03-monitoring/deployment-alertmanager.yaml (sidecar)
+            ref: "ghcr.io/jimmidyson/configmap-reload:v0.15.0"
+          - name: alpine-git # k8s/04-tenant-api/deployment.yaml (gitops sidecar)
+            ref: "alpine/git:v2.52.0"
+    steps:
+      - uses: actions/checkout@v6 # for scripts/ops/summarize_trivy_cve.sh
+
+      # No build: Trivy pulls the upstream ref and scans it directly. SAME contract
+      # as the scan job (CRITICAL,HIGH + ignore-unfixed, exit-code 0 — capture,
+      # don't gate; the report job decides on alerting).
+      - name: Trivy scan (JSON)
+        uses: aquasecurity/trivy-action@0.35.0
+        with:
+          image-ref: ${{ matrix.ref }}
+          format: json
+          output: trivy-${{ matrix.name }}.json
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: 0
+
+      - name: Summarize findings
+        run: bash scripts/ops/summarize_trivy_cve.sh '${{ matrix.name }}'
 
       - name: Upload fragment
         if: always()
@@ -169,7 +211,7 @@ jobs:
 
   report:
     name: aggregate + alert
-    needs: scan
+    needs: [scan, scan-thirdparty]
     if: always()
     runs-on: ubuntu-latest
     permissions:
@@ -188,7 +230,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          EXPECTED: "5"
+          # 5 self-built (scan) + 14 third-party (scan-thirdparty) = 19 expected frags.
+          EXPECTED: "19"
           # schedule always files; manual dispatch only when file_issue is checked.
           DO_FILE: ${{ github.event_name == 'schedule' || inputs.file_issue }}
         run: |
@@ -272,7 +315,7 @@ jobs:
             if [ -n "$num" ]; then
               echo "all ${EXPECTED} images build clean — closing tracking issue #${num}"
               gh issue comment "$num" --repo "$REPO" \
-                --body "✅ All ${EXPECTED} component images build clean (0 fixable HIGH/CRITICAL) as of $(date -u +%F). Auto-closing. (${RUN_URL})"
+                --body "✅ All ${EXPECTED} images build clean (0 fixable HIGH/CRITICAL) as of $(date -u +%F). Auto-closing. (${RUN_URL})"
               gh issue close "$num" --repo "$REPO"
             else
               echo "all clean, no open issue — nothing to do."
