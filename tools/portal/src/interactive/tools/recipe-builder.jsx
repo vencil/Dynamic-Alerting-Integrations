@@ -336,7 +336,12 @@ function WouldFirePanel({ recipeObj, tenantId, previewFetch, inputClass }) {
   }, [recipeObj, tenantId]);
 
   const numeric = value.trim() === '' ? NaN : Number(value);
-  const canRun = !!recipeObj && !!tenantId && Number.isFinite(numeric) && status !== PREVIEW.LOADING;
+  // Absence ("fires when the metric goes silent") is PRESENCE-based — there is no
+  // scenario value to enter. The backend evaluates it by simulating the metric
+  // stopping, so Run is NOT gated on a numeric and no test-value input is shown.
+  // (#657 P3 / #891 — backend already supports absence; this unlocks it in the UI.)
+  const isAbsence = !!recipeObj && recipeObj.recipe === 'absence';
+  const canRun = !!recipeObj && !!tenantId && (isAbsence || Number.isFinite(numeric)) && status !== PREVIEW.LOADING;
 
   // Why Run is disabled — surfaced to the user. A greyed button with no reason
   // is a dead end, and an incomplete recipe is otherwise only visible in the
@@ -345,7 +350,7 @@ function WouldFirePanel({ recipeObj, tenantId, previewFetch, inputClass }) {
     ? t('需要 tenant id（網址帶 ?tenant_id=…）', 'tenant id required (add ?tenant_id=…)')
     : !recipeObj
       ? t('先填妥上方必填參數', 'complete the required fields above first')
-      : !Number.isFinite(numeric)
+      : (!isAbsence && !Number.isFinite(numeric))
         ? t('測試值需為數字', 'test value must be a number')
         : null;
 
@@ -360,7 +365,10 @@ function WouldFirePanel({ recipeObj, tenantId, previewFetch, inputClass }) {
     // verdict (the aria-live announcement alone doesn't move sighted focus).
     const focusResult = () => requestAnimationFrame(() => { if (resultRef.current) resultRef.current.focus(); });
     try {
-      const data = await previewFetch(tenantId, recipeObj, { value: numeric }, ctrl.signal);
+      // Absence sends NO scenario value (presence-based); threshold-class recipes
+      // send the test value. The backend's build_preview_test is recipe_type-aware.
+      const scenario = isAbsence ? {} : { value: numeric };
+      const data = await previewFetch(tenantId, recipeObj, scenario, ctrl.signal);
       if (ctrl.signal.aborted || data == null) return;       // a newer run supersedes
       setResult(data);
       setStatus(PREVIEW.READY);
@@ -382,8 +390,11 @@ function WouldFirePanel({ recipeObj, tenantId, previewFetch, inputClass }) {
         <div key={i} data-testid="wouldfire-firing" aria-describedby="wouldfire-scope-note"
           className="p-2 rounded border border-[color:var(--da-color-error)] bg-[color:var(--da-color-error-soft)] text-sm text-[color:var(--da-color-error-text)]">
           <strong><span aria-hidden="true">● </span>{t('會觸發', 'Would fire')}</strong>{s.reason ? <span> — {s.reason}</span> : null}
-          {/* firing-only qualifier — the one verdict misread as "it'll page"; static chrome, not the backend verdict */}
-          <span className="text-[color:var(--da-color-muted)]"> {t('（此測試值下；非環境預測）', '(at this test value; not an environment prediction)')}</span>
+          {/* firing-only qualifier — the one verdict misread as "it'll page"; static chrome, not the backend verdict.
+              Absence has no test value, so the "at this test value" wording would be a lie — say "simulating absence" instead. */}
+          <span className="text-[color:var(--da-color-muted)]"> {isAbsence
+            ? t('（模擬指標停止上報；非環境預測）', '(simulating the metric going silent; not an environment prediction)')
+            : t('（此測試值下；非環境預測）', '(at this test value; not an environment prediction)')}</span>
         </div>
       );
     }
@@ -393,7 +404,9 @@ function WouldFirePanel({ recipeObj, tenantId, previewFetch, inputClass }) {
           className="p-2 rounded border border-[color:var(--da-color-surface-border)] text-sm text-[color:var(--da-color-muted)]">
           <strong className="text-[color:var(--da-color-fg)]"><span aria-hidden="true">○ </span>{t('不會觸發', 'Would not fire')}</strong>
           {s.reason ? <span> — {s.reason}</span>
-            : <span> — {t('在此測試值下條件未達', 'condition not met at this test value')}</span>}
+            : <span> — {isAbsence
+                ? t('模擬停報下條件未達', 'no-data condition not met in the simulation')
+                : t('在此測試值下條件未達', 'condition not met at this test value')}</span>}
         </div>
       );
     }
@@ -411,14 +424,29 @@ function WouldFirePanel({ recipeObj, tenantId, previewFetch, inputClass }) {
 
   return (
     <div className="my-4 p-3 rounded-md border border-[color:var(--da-color-surface-border)]" data-testid="wouldfire">
-      <label htmlFor="wouldfire-value" className="block text-sm font-medium mb-1">
-        {t('會不會觸發？填一個測試值試算', 'Would it fire? Enter a test value and preview')}
-      </label>
+      {isAbsence ? (
+        <p className="block text-sm font-medium mb-1" data-testid="wouldfire-absence-label">
+          {t('會不會觸發？試算這條無數據規則', 'Would it fire? Preview this no-data rule')}
+        </p>
+      ) : (
+        <label htmlFor="wouldfire-value" className="block text-sm font-medium mb-1">
+          {t('會不會觸發？填一個測試值試算', 'Would it fire? Enter a test value and preview')}
+        </label>
+      )}
       <div className="flex items-center gap-2 mb-1">
-        <input type="number" id="wouldfire-value" inputMode="decimal" className={inputClass} value={value}
-          aria-label={t('測試值', 'Test value')} data-testid="wouldfire-value" placeholder="1500"
-          onChange={(e) => setValue(e.target.value)} />
+        {isAbsence ? (
+          <span id="wouldfire-absence-hint" className="flex-1 text-sm text-[color:var(--da-color-muted)]" data-testid="wouldfire-absence-hint">
+            <strong className="font-medium text-[color:var(--da-color-fg)]">{t('無需另填試算值', 'No preview value needed')}</strong>
+            {t('——這條規則在指標停止上報時觸發，試算只用合成數據模擬停報。',
+               ' — this rule fires when the metric stops reporting; the preview just simulates that with synthetic data.')}
+          </span>
+        ) : (
+          <input type="number" id="wouldfire-value" inputMode="decimal" className={inputClass} value={value}
+            aria-label={t('測試值', 'Test value')} data-testid="wouldfire-value" placeholder="1500"
+            onChange={(e) => setValue(e.target.value)} />
+        )}
         <button type="button" data-testid="wouldfire-run" disabled={!canRun} aria-disabled={!canRun}
+          aria-describedby={isAbsence ? 'wouldfire-absence-hint' : undefined}
           title={blocker || undefined} onClick={run}
           className="px-3 py-2 rounded-md text-sm font-medium whitespace-nowrap border border-[color:var(--da-color-accent)] bg-[color:var(--da-color-accent)] text-[color:var(--da-color-accent-fg)] disabled:opacity-50">
           {t('試算', 'Run preview')}
@@ -470,8 +498,11 @@ function WouldFirePanel({ recipeObj, tenantId, previewFetch, inputClass }) {
           verdict via aria-describedby so AT hears the caveat WITH the verdict. */}
       <p id="wouldfire-scope-note" data-testid="wouldfire-scope-note"
         className="text-xs mt-2 pl-2 pr-2 py-1 rounded-sm border-l-2 border-[color:var(--da-color-info)] bg-[color:var(--da-color-info-soft)] text-[color:var(--da-color-muted)]">
-        {t('這是「規則邏輯」試算（測試值＋合成數據），用來確認規則寫對了；不代表你的環境真的會發出告警——未計入真實數據走勢、for 持續時間與靜默／路由。',
-           'A rule-logic check (your test value + synthetic data) to confirm the rule is written correctly. It does NOT mean your environment will actually alert — real-data trends, the for duration, and silencing/routing are not modeled.')}
+        {isAbsence
+          ? t('這是「規則邏輯」試算（合成數據——模擬指標停止上報），用來確認規則寫對了；不代表你的環境真的會發出告警——未計入真實數據走勢、for 持續時間與靜默／路由。',
+              'A rule-logic check (synthetic data — simulating the metric going silent) to confirm the rule is written correctly. It does NOT mean your environment will actually alert — real-data trends, the for duration, and silencing/routing are not modeled.')
+          : t('這是「規則邏輯」試算（測試值＋合成數據），用來確認規則寫對了；不代表你的環境真的會發出告警——未計入真實數據走勢、for 持續時間與靜默／路由。',
+              'A rule-logic check (your test value + synthetic data) to confirm the rule is written correctly. It does NOT mean your environment will actually alert — real-data trends, the for duration, and silencing/routing are not modeled.')}
       </p>
     </div>
   );
