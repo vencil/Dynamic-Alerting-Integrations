@@ -234,4 +234,38 @@ data:
     \ running pod(s) is NotReady; the workload may be rescheduled or unavailable.\n\
     \      description_zh: 承載此租戶運行中 Pod 的 Kubernetes 節點處於 NotReady 狀態；工作負載可能被重新調度或無法使用。\n\
     \      runbook_url: '{{ $labels.runbook_url }}'\n      owner: '{{ $labels.owner\
-    \ }}'\n      tier: '{{ $labels.tier }}'\n"
+    \ }}'\n      tier: '{{ $labels.tier }}'\n- name: kubernetes-ha-replicas\n  rules:\n\
+    \  - record: rule_pack_kubernetes:ha_replicas_degraded:core\n    expr: \"(\\n\
+    \  max by(tenant) (\\n    label_replace(\\n      (\\n        kube_statefulset_status_replicas_ready{namespace=~\\\
+    \"db-.+\\\"}\\n        < kube_statefulset_status_replicas{namespace=~\\\"db-.+\\\
+    \"}\\n      )\\n      and on(namespace, statefulset)\\n        (changes(kube_statefulset_status_replicas_updated{namespace=~\\\
+    \"db-.+\\\"}[10m]) == 0)\\n      and on(namespace, statefulset)\\n        (kube_statefulset_replicas{namespace=~\\\
+    \"db-.+\\\"} >= 2),\\n      \\\"tenant\\\", \\\"$1\\\", \\\"namespace\\\", \\\"\
+    (.+)\\\"\\n    )\\n  )\\n  or\\n  max by(tenant) (\\n    label_replace(\\n   \
+    \   (\\n        kube_deployment_status_replicas_available{namespace=~\\\"db-.+\\\
+    \"}\\n        < kube_deployment_spec_replicas{namespace=~\\\"db-.+\\\"}\\n   \
+    \   )\\n      and on(namespace, deployment)\\n        (changes(kube_deployment_status_replicas_updated{namespace=~\\\
+    \"db-.+\\\"}[10m]) == 0)\\n      and on(namespace, deployment)\\n        (kube_deployment_spec_replicas{namespace=~\\\
+    \"db-.+\\\"} >= 2),\\n      \\\"tenant\\\", \\\"$1\\\", \\\"namespace\\\", \\\"\
+    (.+)\\\"\\n    )\\n  )\\n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\"\
+    maintenance\\\"} == 1)\\n\"\n  - alert: TenantHAReplicasDegraded\n    expr: \"\
+    (\\n  rule_pack_kubernetes:ha_replicas_degraded:core\\n  * on(tenant) group_left(runbook_url,\
+    \ owner, tier)\\n    tenant_metadata_info\\n)\\nor\\n(\\n  rule_pack_kubernetes:ha_replicas_degraded:core\\\
+    n  unless on(tenant) tenant_metadata_info\\n)\\n\"\n    for: 15m\n    labels:\n\
+    \      severity: warning\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
+    \      summary: HA workload for {{ $labels.tenant }} is running with reduced redundancy\n\
+    \      summary_zh: '{{ $labels.tenant }} 的 HA 工作負載正以降級（失去備援）狀態運行'\n      platform_summary:\
+    \ '[{{ $labels.tier }}] {{ $labels.tenant }}: ready replicas < desired on an HA\
+    \ set (≥2) — a replica is missing or not-ready. A vanished or stuck-rescheduled\
+    \ pod is invisible to the value-based DB liveness rules (#875), so this is the\
+    \ K8s-layer complement. Check kube_statefulset/deployment status + node health\
+    \ / scheduling.'\n      platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant\
+    \ }}: HA 工作負載（≥2）就緒副本數 < 期望數 — 有副本消失或未就緒。消失或重排卡住的 pod 對 value-based DB 存活規則（#875）不可見，故為\
+    \ K8s 層互補。請查 kube_statefulset/deployment 狀態 + 節點健康 / 排程。'\n      description:\
+    \ Your HA database has fewer ready replicas than desired — redundancy is reduced\
+    \ or lost (at zero ready the workload is down, with a critical alert also firing).\
+    \ A node/pod failure or a stuck reschedule is the usual cause; one more failure\
+    \ could take the service down.\n      description_zh: 您的 HA 資料庫就緒副本數少於期望值 — 備援已降低或失去（就緒數為\
+    \ 0 時工作負載已中斷，並應同時有 critical 告警）。通常成因是節點/Pod 故障或排程卡住；再壞一個就可能導致服務中斷。\n      runbook_url:\
+    \ '{{ $labels.runbook_url }}'\n      owner: '{{ $labels.owner }}'\n      tier:\
+    \ '{{ $labels.tier }}'\n"

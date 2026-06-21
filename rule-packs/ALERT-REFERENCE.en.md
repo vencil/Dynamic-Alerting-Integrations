@@ -100,6 +100,7 @@ This document provides tenants with a unified reference for all alerts across Ru
 | VersionAwareThresholdInert | warning | {{ $value \| printf "%.0f" }} version-specific container CPU threshold(s) declared and tenant pods ar | Check alert metrics and review related logs; contact platform team for assistance if needed | user_threshold |
 | CustomRecipeDiskInert | warning | [SRE] {{ $labels.tenant }} disk recipe inert  | Check alert metrics and review related logs; contact platform team for assistance if needed | user_threshold |
 | NodeNotReady | warning | [{{ $labels.tier }}] {{ $labels.tenant }}: node {{ $labels.node }} NotReady  | Check alert metrics and review related logs; contact platform team for assistance if needed | rule_pack_kubernetes:node_not_ready:core |
+| TenantHAReplicasDegraded | warning | [{{ $labels.tier }}] {{ $labels.tenant }}: ready replicas < desired on an HA set (≥2)  | Check alert metrics and review related logs; contact platform team for assistance if needed | rule_pack_kubernetes:ha_replicas_degraded:core |
 
 ---
 
