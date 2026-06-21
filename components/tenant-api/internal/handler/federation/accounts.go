@@ -17,12 +17,12 @@ package federation
 // concurrent backfill + lazy allocation cannot collide.
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
-	"os"
-	"strings"
 
+	"github.com/vencil/tenant-api/internal/federation/account"
 	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/handler"
 	"github.com/vencil/tenant-api/internal/rbac"
@@ -55,6 +55,7 @@ type BackfillAccountsResponse struct {
 // @Produce     json
 // @Success     200 {object} BackfillAccountsResponse
 // @Failure     403 {object} map[string]string
+// @Failure     409 {object} map[string]string
 // @Failure     500 {object} map[string]string
 // @Failure     503 {object} map[string]string
 // @Router      /api/v1/federation/accounts/backfill [post]
@@ -73,14 +74,30 @@ func BackfillAccounts(d *handler.Deps) http.HandlerFunc {
 			return
 		}
 
-		tenantIDs, err := listTenantIDs(d.ConfigDir)
+		tenantIDs, err := account.ListTenantIDs(d.ConfigDir)
 		if err != nil {
 			handler.WriteJSONError(w, r, http.StatusInternalServerError,
 				"enumerate tenants: "+err.Error())
 			return
 		}
 
-		res, err := d.Accounts.Backfill(r.Context(), tenantIDs, rbac.RequestEmail(r))
+		// Run the GitOps backfill on a context DETACHED from the request's
+		// deadline (the global chi middleware.Timeout caps requests at 30s).
+		// Backfill enumerates the whole fleet and does a single committed
+		// registry write — on a large fleet / slow forge that can exceed 30s
+		// before the operator-tuned --write-timeout would. WithoutCancel keeps
+		// the request's values (request_id for log correlation) while dropping
+		// its deadline+cancellation; we then bound it by d.BackfillTimeout()
+		// (wired from --write-timeout) so the write still can't run unbounded.
+		// The gitops writer's own per-command timeout + admission control remain
+		// the inner safety net. A client disconnect no longer aborts a half-done
+		// allocation — acceptable here: Backfill is idempotent (a re-run
+		// allocates nothing) and a severed commit would otherwise leave a dirty
+		// tree, mirroring the writer's acquireWrite once-committed boundary.
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), d.BackfillTimeout())
+		defer cancel()
+
+		res, err := d.Accounts.Backfill(ctx, tenantIDs, rbac.RequestEmail(r))
 		if err != nil {
 			if errors.Is(err, gitops.ErrWriteOverloaded) || errors.Is(err, gitops.ErrForgeDegraded) {
 				handler.WriteOverloaded(w, r)
@@ -102,29 +119,4 @@ func BackfillAccounts(d *handler.Deps) http.HandlerFunc {
 			AlreadyPresent: res.AlreadyPresent,
 		})
 	}
-}
-
-// listTenantIDs returns the tenant IDs in configDir — one per non-hidden,
-// non-`_`-prefixed *.yaml / *.yml file. This mirrors the enumeration
-// ListTenants and the threshold-exporter loader use, so backfill sees
-// exactly the set of files that count as tenants (and skips _defaults.yaml,
-// _groups.yaml, the new _account_registry.yaml, etc.).
-func listTenantIDs(configDir string) ([]string, error) {
-	entries, err := os.ReadDir(configDir)
-	if err != nil {
-		return nil, err
-	}
-	ids := make([]string, 0, len(entries))
-	for _, e := range entries {
-		name := e.Name()
-		if e.IsDir() || strings.HasPrefix(name, "_") || strings.HasPrefix(name, ".") {
-			continue
-		}
-		if !strings.HasSuffix(name, ".yaml") && !strings.HasSuffix(name, ".yml") {
-			continue
-		}
-		id := strings.TrimSuffix(strings.TrimSuffix(name, ".yaml"), ".yml")
-		ids = append(ids, id)
-	}
-	return ids, nil
 }

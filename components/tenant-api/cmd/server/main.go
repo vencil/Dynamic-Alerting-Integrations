@@ -301,6 +301,15 @@ func main() {
 	var accountAllocator *account.Allocator
 	if federationMgr != nil {
 		accountAllocator = account.NewAllocator(writer)
+		// #609 (Gemini #2) fail-loud startup guard: if the AccountID registry is
+		// blank/missing BUT conf.d already holds tenants, the ledger was lost
+		// (truncated mount / interrupted write) and booting would silently
+		// re-issue ids from the floor → cross-tenant log leak. Day-0 (no tenants
+		// yet) with a blank registry is fine and proceeds. Refuse to start
+		// otherwise — before any token can be issued against the reset registry.
+		if err := account.VerifyRegistryNotResetWithFleet(*configDir); err != nil {
+			log.Fatalf("FATAL: %v", err)
+		}
 		slog.Info("federation token endpoint enabled",
 			"token_ttl", federationMgr.TTL(),
 			"store_configmap", *federationStore, "store_namespace", federationNS,
@@ -330,6 +339,11 @@ func main() {
 		PRTracker:          prTracker,
 		WriteMode:          wm,
 		SearchCache:        handler.NewTenantSnapshotCache(),
+		// #609 CodeRabbit: the fleet-wide AccountID backfill must be bounded by
+		// the operator's --write-timeout, NOT the global 30s request Timeout
+		// middleware — the handler detaches from the request deadline and uses
+		// this instead (see federation.BackfillAccounts).
+		BackfillTimeoutDur: *writeTimeout,
 	}
 
 	// ── RBAC + policy hot-reload goroutines ───────────────────────────────────

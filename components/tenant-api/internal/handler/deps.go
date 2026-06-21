@@ -20,6 +20,8 @@ package handler
 //	allocation-free.
 
 import (
+	"time"
+
 	"github.com/vencil/tenant-api/internal/async"
 	"github.com/vencil/tenant-api/internal/federation/account"
 	"github.com/vencil/tenant-api/internal/federation/fedpolicy"
@@ -139,6 +141,18 @@ type Deps struct {
 	// in tests that construct Deps literally) falls back to the
 	// default instead of rejecting every write.
 	MaxBodyBytes int64
+
+	// BackfillTimeout bounds the AccountID backfill's GitOps write
+	// (POST /federation/accounts/backfill). Wired from the server's
+	// --write-timeout, NOT the global request Timeout middleware:
+	// backfill enumerates the WHOLE fleet and does one committed registry
+	// write, which on a large fleet / slow forge can legitimately exceed
+	// the 30s chi request timeout. The handler runs its allocation on a
+	// context derived from --write-timeout (detached from the request
+	// deadline) so the operator's tuning — not the fixed 30s — governs it.
+	// Read via d.BackfillTimeout() so a zero value (tests that build Deps
+	// literally) falls back to a safe default.
+	BackfillTimeoutDur time.Duration
 }
 
 // MaxBody returns d.MaxBodyBytes with a fallback to
@@ -151,4 +165,21 @@ func (d *Deps) MaxBody() int64 {
 		return DefaultMaxBodyBytes
 	}
 	return d.MaxBodyBytes
+}
+
+// DefaultBackfillTimeout is the fallback bound for the AccountID backfill
+// GitOps write when BackfillTimeoutDur is unset. Matches the server's
+// default --write-timeout (30s would be the very value backfill needs to
+// escape, so the fallback is deliberately generous — a fleet-wide single
+// committed write).
+const DefaultBackfillTimeout = 5 * time.Minute
+
+// BackfillTimeout returns BackfillTimeoutDur with a fallback to
+// DefaultBackfillTimeout when unset (zero / negative), so test fixtures that
+// build Deps literally keep working without wiring the field.
+func (d *Deps) BackfillTimeout() time.Duration {
+	if d.BackfillTimeoutDur <= 0 {
+		return DefaultBackfillTimeout
+	}
+	return d.BackfillTimeoutDur
 }

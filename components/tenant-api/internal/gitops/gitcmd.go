@@ -136,7 +136,32 @@ func (w *Writer) gitErr(ctx context.Context, op string, err error, out []byte) e
 		return fmt.Errorf("git %s timed out after %s — write lock released: %w — %s",
 			op, timeout, context.DeadlineExceeded, string(out))
 	}
+	// Lock CONTENTION (a live competitor holds index.lock right now), NOT the
+	// stale lock the timeout branch above sweeps: map to ErrWriteOverloaded so
+	// the handler returns a retryable 503 (+ Retry-After) instead of a 500 that
+	// would page as a server fault. The write plane is replicaCount=1 + an
+	// in-process mutex, so this is rare; it surfaces only if an external git
+	// process (an ops shell, a CronJob) races the writer on the same repo. A
+	// transient "wait and retry" is the correct client contract — not an alarm.
+	if isGitLockContention(out) {
+		return fmt.Errorf("git %s: %w — %s", op, ErrWriteOverloaded, string(out))
+	}
 	return fmt.Errorf("git %s: %w — %s", op, err, string(out))
+}
+
+// isGitLockContention reports whether git's output is the "another process holds
+// the index lock" failure (`fatal: Unable to create '…/index.lock': File
+// exists.`). Matched on the stable substrings git emits rather than an errno so
+// it is portable across git versions / locales-that-keep-the-English-template.
+// Deliberately NARROW — only the index.lock-already-exists shape — so an
+// unrelated git failure still maps to a 500 (a genuine server fault), not a
+// misleading "retry later".
+func isGitLockContention(out []byte) bool {
+	s := strings.ToLower(string(out))
+	if !strings.Contains(s, "index.lock") {
+		return false
+	}
+	return strings.Contains(s, "file exists") || strings.Contains(s, "unable to create")
 }
 
 // clearStaleGitLocks best-effort removes git write-locks a deadline-killed git

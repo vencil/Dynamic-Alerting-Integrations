@@ -27,6 +27,12 @@ func (f fakeRegistryWriter) MutateConfigFile(_ context.Context, _, _, _ string, 
 	return f.err
 }
 
+// HistoricalMaxUint is a no-op here so EnsureAccountID reaches the MutateConfigFile
+// error path this fake exercises (the revert-floor read returns "no history").
+func (f fakeRegistryWriter) HistoricalMaxUint(_ context.Context, _, _ string) (uint32, error) {
+	return 0, nil
+}
+
 // newLogsFederationDeps builds a Deps wired for logs-plane issuance: a real
 // git-backed configDir (so the allocator commits the registry), a real
 // token.Manager, and the account.Allocator over the same Writer.
@@ -109,7 +115,11 @@ func TestCreateFederationToken_LogsAllocationIsIdempotent(t *testing.T) {
 }
 
 // TestCreateFederationToken_DefaultCapabilityIsMetrics: a body WITHOUT a
-// capability field issues the unchanged metrics token — no account_id.
+// capability field issues the unchanged metrics token — no account_id, and the
+// serialised record carries NEITHER a `capability` nor an `account_id` key, so
+// it is byte-identical to the pre-ADR-021 shape (struct docstring L34-36;
+// CodeRabbit follow-up — toFederationTokenRecord must not echo
+// Capability:"metrics").
 func TestCreateFederationToken_DefaultCapabilityIsMetrics(t *testing.T) {
 	t.Parallel()
 	d, _ := newLogsFederationDeps(t, platformAdminRBAC, nil)
@@ -126,8 +136,25 @@ func TestCreateFederationToken_DefaultCapabilityIsMetrics(t *testing.T) {
 	if resp.Record.AccountID != 0 {
 		t.Errorf("default-capability record account_id = %d, want 0", resp.Record.AccountID)
 	}
-	if resp.Record.Capability != "" && resp.Record.Capability != "metrics" {
-		t.Errorf("default-capability record capability = %q, want metrics", resp.Record.Capability)
+	if resp.Record.Capability != "" {
+		t.Errorf("default-capability record capability = %q, want empty (pre-ADR shape)", resp.Record.Capability)
+	}
+
+	// Byte-level back-compat: re-decode the `record` object into a raw map and
+	// assert the metrics-plane keys are ABSENT (omitempty dropped them), not
+	// merely zero-valued. This is the contract toFederationTokenRecord must hold
+	// — a metrics record renders exactly as a pre-ADR-021 client expects.
+	var rawResp struct {
+		Record map[string]json.RawMessage `json:"record"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &rawResp); err != nil {
+		t.Fatalf("unmarshal raw: %v", err)
+	}
+	if _, present := rawResp.Record["capability"]; present {
+		t.Errorf("metrics record JSON unexpectedly contains a 'capability' key (breaks pre-ADR-021 shape): %s", w.Body.String())
+	}
+	if _, present := rawResp.Record["account_id"]; present {
+		t.Errorf("metrics record JSON unexpectedly contains an 'account_id' key (breaks pre-ADR-021 shape): %s", w.Body.String())
 	}
 }
 
@@ -231,6 +258,47 @@ func TestCreateFederationToken_LogsAllocatorErrorMapping(t *testing.T) {
 				t.Errorf("status = %d, want %d (body: %s)", w.Code, tc.want, w.Body.String())
 			}
 		})
+	}
+}
+
+// TestBackfillAccounts_SurvivesExpiredRequestDeadline: the backfill GitOps write
+// must NOT be cancelled by the request's own deadline (the global chi
+// middleware.Timeout caps requests at 30s, but a fleet-wide registry write can
+// legitimately exceed it). The handler detaches via context.WithoutCancel +
+// d.BackfillTimeout(). We prove the detachment by handing the handler a request
+// whose context is ALREADY past its deadline: a handler that threaded r.Context()
+// into Backfill would commit nothing (ctx.Err() != nil aborts the write); the
+// detached handler still allocates the fleet and returns 200.
+func TestBackfillAccounts_SurvivesExpiredRequestDeadline(t *testing.T) {
+	t.Parallel()
+	files := map[string]string{
+		"db-a.yaml": "tenants:\n  db-a: {}\n",
+		"db-b.yaml": "tenants:\n  db-b: {}\n",
+	}
+	d, configDir := newLogsFederationDeps(t, platformAdminRBAC, files)
+
+	req := fedReq(t, "POST", "/api/v1/federation/accounts/backfill", "", "", "")
+	// Simulate the chi request-Timeout having already fired: an expired-deadline
+	// context on the incoming request.
+	expired, cancel := context.WithDeadline(req.Context(), time.Now().Add(-time.Second))
+	defer cancel()
+	req = req.WithContext(expired)
+
+	w := executeWithRBAC(t, BackfillAccounts(d), req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (backfill must survive an expired request deadline), body: %s",
+			w.Code, w.Body.String())
+	}
+	var resp BackfillAccountsResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if resp.AllocatedCount != 2 {
+		t.Errorf("allocated_count = %d, want 2 (the write was not cancelled by the request deadline)", resp.AllocatedCount)
+	}
+	// The registry was actually committed despite the expired request context.
+	if _, ok := readRegistry(t, configDir).Lookup("db-a"); !ok {
+		t.Error("registry has no allocation for db-a — the detached backfill write did not commit")
 	}
 }
 

@@ -119,6 +119,14 @@ jobs:
           # operator-manifests). Deploy-time complement to the runtime k8s
           # poison pill. HARD block.
           pre-commit run dev-bypass-manifest-guard --all-files
+          # ADR-021/#609: forbid lowering _account_registry.yaml's
+          # next_account_id across a commit (git-revert / hand-edit of an
+          # onboarding → re-issues a monotonic account_id while the reverted
+          # tenant's logs are still in the retention window = cross-tenant
+          # leak). --ci auto-detects PR-vs-base from GITHUB_BASE_REF (the
+          # fetch-depth: 0 above gives the base ref); no-ops when the registry
+          # is absent/untracked (runtime conf.d state, not committed).
+          pre-commit run account-registry-monotonic --all-files
 
   lint-rule-packs:
     # Custom Prometheus rule-pack governance linter.

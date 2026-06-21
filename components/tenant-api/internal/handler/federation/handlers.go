@@ -54,16 +54,25 @@ type CreateFederationTokenResponse struct {
 }
 
 func toFederationTokenRecord(r token.Record) FederationTokenRecord {
-	return FederationTokenRecord{
+	out := FederationTokenRecord{
 		TokenID:     r.TokenID,
 		TenantID:    r.TenantID,
 		IssuedBy:    r.IssuedBy,
 		Description: r.Description,
-		Capability:  string(r.Capability),
 		AccountID:   r.AccountID,
 		IssuedAt:    r.IssuedAt.UTC().Format(time.RFC3339),
 		ExpiresAt:   r.ExpiresAt.UTC().Format(time.RFC3339),
 	}
+	// Surface capability ONLY for a logs-plane record. A metrics record (the
+	// default / absent capability) keeps the pre-ADR-021 shape: with Capability
+	// left empty, `omitempty` drops the field, so the metrics token response is
+	// byte-identical to what a pre-ADR-021 client received. Echoing
+	// Capability:"metrics" here would break that back-compat contract (struct
+	// docstring L34-36). AccountID is already 0 for metrics → omitempty drops it.
+	if r.Capability == token.CapLogs {
+		out.Capability = string(r.Capability)
+	}
+	return out
 }
 
 // CreateFederationToken handles POST /api/v1/federation/tokens.

@@ -31,7 +31,17 @@ const commitEntity = "account-registry"
 // MutateConfigFile method.
 type RegistryWriter interface {
 	MutateConfigFile(ctx context.Context, filename, entityType, authorEmail string, transform func(current []byte) (next []byte, err error)) error
+	// HistoricalMaxUint returns the largest value the uint YAML field has EVER
+	// held across the git history of conf.d/<filename> (0 if the file has no
+	// history). This is the revert-proof high-water mark the allocator floors to
+	// — see EnsureAccountID.
+	HistoricalMaxUint(ctx context.Context, filename, field string) (uint32, error)
 }
+
+// counterField is the registry's monotonic counter key. Its git-history
+// high-water mark floors every allocation so a reverted/hand-lowered counter
+// can never re-issue an id (ADR-021 §AccountID #1/#3).
+const counterField = "next_account_id"
 
 // Allocator hands out monotonic AccountIDs, persisting each new allocation
 // through the GitOps writer. It holds no mutable state of its own — the
@@ -67,11 +77,28 @@ func (a *Allocator) EnsureAccountID(ctx context.Context, tenantID, authorEmail s
 		return 0, fmt.Errorf("account: empty tenant id")
 	}
 
+	// Revert-proof floor: the highest next_account_id the registry has EVER
+	// committed (across git history). A `git revert` or hand-edit on the conf.d
+	// plane can lower the on-disk counter — but not erase the higher value from
+	// history — so WITHOUT this floor a reverted counter would re-issue ids that
+	// retired tenants' logs still occupy inside the VictoriaLogs retention window
+	// (ADR-021 §AccountID #1/#3 cross-tenant leak). Read OUTSIDE the writer mutex
+	// (it only ever rises; a concurrent advance is reflected by the in-lock disk
+	// read below) and applied in-lock. FAIL-CLOSED: an unreadable history refuses
+	// the allocation rather than trust an unverifiable counter.
+	histMax, err := a.w.HistoricalMaxUint(ctx, RegistryFileName, counterField)
+	if err != nil {
+		return 0, fmt.Errorf("account: read registry high-water mark: %w", err)
+	}
+
 	var allocated uint32
 	transform := func(current []byte) ([]byte, error) {
 		reg, err := Parse(current)
 		if err != nil {
 			return nil, err
+		}
+		if histMax > reg.NextAccountID {
+			reg.NextAccountID = histMax // never re-issue a reverted-away id
 		}
 		id, changed, err := reg.ensure(tenantID)
 		if err != nil {
@@ -117,11 +144,20 @@ func (a *Allocator) Backfill(ctx context.Context, tenantIDs []string, authorEmai
 	ids := append([]string(nil), tenantIDs...)
 	sort.Strings(ids)
 
+	// Revert-proof floor — same high-water mark as EnsureAccountID (ADR-021 #1/#3).
+	histMax, err := a.w.HistoricalMaxUint(ctx, RegistryFileName, counterField)
+	if err != nil {
+		return BackfillResult{}, fmt.Errorf("account: read registry high-water mark: %w", err)
+	}
+
 	var res BackfillResult
 	transform := func(current []byte) ([]byte, error) {
 		reg, err := Parse(current)
 		if err != nil {
 			return nil, err
+		}
+		if histMax > reg.NextAccountID {
+			reg.NextAccountID = histMax // never re-issue a reverted-away id
 		}
 		res = BackfillResult{} // derive res solely from this single transform run (MutateConfigFile invokes the transform exactly once; this also keeps it correct if a retry-on-conflict is ever added)
 		anyChange := false

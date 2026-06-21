@@ -2,6 +2,7 @@ package account
 
 import (
 	"context"
+	"errors"
 	"sort"
 	"sync"
 	"testing"
@@ -16,6 +17,8 @@ type fakeWriter struct {
 	mu      sync.Mutex
 	data    []byte // current committed bytes (nil = file absent)
 	commits int    // number of actual writes (no-op transforms don't count)
+	histMax uint32 // simulated git-history high-water mark (0 = no history)
+	histErr error  // simulated HistoricalMaxUint failure (fail-closed path)
 }
 
 func (f *fakeWriter) MutateConfigFile(_ context.Context, _, _, _ string, transform func([]byte) ([]byte, error)) error {
@@ -31,6 +34,46 @@ func (f *fakeWriter) MutateConfigFile(_ context.Context, _, _, _ string, transfo
 	f.data = next
 	f.commits++
 	return nil
+}
+
+func (f *fakeWriter) HistoricalMaxUint(_ context.Context, _, _ string) (uint32, error) {
+	return f.histMax, f.histErr
+}
+
+// TestAllocator_FloorsToHistoricalMax: a registry whose ON-DISK next_account_id
+// was reverted/hand-lowered BELOW the git-history high-water mark must still
+// allocate from that mark — never re-issuing an id a reverted-away commit
+// already handed out (ADR-021 §AccountID #1/#3 cross-tenant leak).
+func TestAllocator_FloorsToHistoricalMax(t *testing.T) {
+	t.Parallel()
+	// On-disk registry looks like a clean revert: counter back at 1002, only the
+	// two oldest tenants survive — internally consistent, so Parse accepts it.
+	fw := &fakeWriter{
+		data:    []byte("schema_version: v1\nnext_account_id: 1002\nallocations:\n  a: 1000\n  b: 1001\n"),
+		histMax: 1005, // but history shows the counter once reached 1005
+	}
+	a := NewAllocator(fw)
+	id, err := a.EnsureAccountID(context.Background(), "tenant-new", "ops@example.com")
+	if err != nil {
+		t.Fatalf("EnsureAccountID: %v", err)
+	}
+	if id != 1005 {
+		t.Errorf("allocated id = %d, want 1005 (floored to history, NOT the reverted 1002–1004)", id)
+	}
+}
+
+// TestAllocator_HistoryReadErrorFailsClosed: an unreadable git history refuses
+// the allocation — never allocates against a counter it cannot verify.
+func TestAllocator_HistoryReadErrorFailsClosed(t *testing.T) {
+	t.Parallel()
+	fw := &fakeWriter{histErr: errors.New("git unavailable")}
+	a := NewAllocator(fw)
+	if _, err := a.EnsureAccountID(context.Background(), "t", "ops@example.com"); err == nil {
+		t.Fatal("EnsureAccountID must fail closed when the history read fails")
+	}
+	if fw.commits != 0 {
+		t.Errorf("must not commit when history is unreadable; commits=%d", fw.commits)
+	}
 }
 
 func TestAllocator_EnsureAllocatesAndPersists(t *testing.T) {
