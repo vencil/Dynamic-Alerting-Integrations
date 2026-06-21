@@ -177,6 +177,19 @@ class TestProjectionEnabledShape:
             assert headers["ProjectID"] == "0", "(b) operational logs use ProjectID 0"
 
     @_needs_helm
+    def test_tenant_sinks_drop_newest_no_hol_blocking(self, repo_root: Path) -> None:
+        """Fan-out resilience (#539 §2 / Gemini #894): each tenant sink MUST
+        buffer with when_full=drop_newest so VictoriaLogs backpressure on ONE
+        tenant's partition drops LOCALLY instead of head-of-line-blocking the
+        shared demux → 0:0 write + every other tenant."""
+        cfg = _vector_yaml(_render(repo_root / "helm/vector", sets=_PROJECTION_SETS))
+        for aid in (1000, 1001):
+            buf = cfg["sinks"][f"vl_tenant_{aid}"].get("buffer", {})
+            assert buf.get("when_full") == "drop_newest", (
+                f"vl_tenant_{aid} must not block the shared pipeline on backpressure"
+            )
+
+    @_needs_helm
     def test_allowlist_sanitization_not_denylist(self, repo_root: Path) -> None:
         """Sanitization is a fail-closed ALLOWLIST (adversarial-review finding):
         tenant_project rebuilds the event from tenantProjectionKeepFields ONLY,
@@ -190,6 +203,7 @@ class TestProjectionEnabledShape:
         assert "kept.account_id = aid" in vrl, "partition key is the trusted map value, not payload"
         assert "kept.message = encode_json(kept)" in vrl, "re-serialized sanitized _msg (raw line discarded)"
         assert ". = kept" in vrl, "event rebuilt from the allowlist (fail-closed)"
+        assert "truncate(" in vrl, "unbounded query field is capped (per-line / RAM bound, Gemini #894)"
         for safe in ("tenant_id", "log_event_id", "status", "query", "token_id"):
             assert f"kept.{safe} = .{safe}" in vrl, f"{safe} must be allowlisted"
         # Infra / raw fields must NOT be copied into the tenant event.

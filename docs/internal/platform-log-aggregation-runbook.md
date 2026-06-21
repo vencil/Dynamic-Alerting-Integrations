@@ -448,7 +448,15 @@ vector test /tmp/rendered-vector.yaml helm/vector/tests/projection_tests.yaml
 
 `projection_tests.yaml` 守的不變式：**negative assertion**（餵帶全部敏感欄位的 mock，斷言租戶副本中 `pod_node`/`pod_name`/`node_name`/`pod_ip`/`host` **確實不存在**——測「移除了」非「有產出」）／空與未知與 parse-error `tenant_id` → 僅 `0:0`（`no_outputs_from` 租戶 routes）／`log_event_id` 兩副本同在／`gateway_operational`+query-log 僅 `0:0`／跨租戶 routing 不交叉。
 
-> ⚠️ **CI 前置**：這兩步要 `vector` binary 在 PATH。`helm` 已在 `python-tests` job（`azure/setup-helm`）；`vector` 需在該 job 補裝（見 [github-release-playbook.md] 或本 PR 待辦）。未裝時測試 SKIP（同既有 helm-gating 慣例），但 SKIP ≠ 綠燈守門——務必補裝成真 gate。
+> ⚠️ **CI 前置**：這兩步要 `vector` binary 在 PATH。`helm` 已在 `python-tests` job（`azure/setup-helm`）；`vector` **本 PR 已補裝**（`ci.yml` 的 `Install Vector` step，checksum-pinned，照 promtool 先例）——`vector validate` + `vector test` 現為 CI **真 gate**（非 SKIP；否則安全關鍵的 allowlist/fail-closed 行為在 CI 零覆蓋）。
+
+### 8.7 Fan-out 韌性 / 資源隔離（Gemini #894）
+
+- **Tenant sink 不阻塞 shared pipeline**：每個 `vl_tenant_<id>` sink 配 `buffer: {when_full: drop_newest}`（`tenantProjectionBufferMaxEvents` 可調）。VictoriaLogs 對**單一租戶**分區背壓時，該 sink **本地丟最新**，不會經 `tenant_route → demux` 反壓卡住 `0:0` 寫入與其他租戶（head-of-line blocking）。`0:0` 是 source of truth、投影為 best-effort；bounded memory buffer 同時擋 noisy-neighbor 的 RAM 突波（無 OOM）。需 restart-durability 的 operator 可改 disk buffer。
+- **query 長度上限**：`tenantProjectionMaxQueryBytes`（預設 8 KiB）`truncate` 租戶副本的 `query`——防 500 KB 超長 query 撐爆 `encode_json` 或 VictoriaLogs 單行限制。
+- **Stream-field 高基數**：`tenantProjectionStreamFields` 僅低基數維度（`tenant_id`/`log_type`/`status`）；⛔ **絕不**放 `query`/`token_id`/`path` 等動態值（每個 distinct 值建一條 stream → RAM 爆）。
+- **K8s 資源 / 排程**（ops）：fan-out 增加 Vector CPU。確保 `resources.requests/limits` 對 N 租戶有餘裕，並考慮給 ingestion DaemonSet 一個 `PriorityClass`（node 資源枯竭時優先驅逐低優先 batch job、保 ingestion 存活）。
+- **無聲丟棄的可觀測性**：fail-closed 的 `abort`+`drop_on_abort` 讓異常列**無聲消失**——平台須監控 Vector 原生 `vector_component_discarded_events_total{component="tenant_project"}`（registry 未同步／惡意 payload 導致大量 drop 時要有能見度，而非等租戶報修）。**此告警在 PR-4 補**（metric + admission alert）。
 
 ## Refs
 

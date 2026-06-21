@@ -223,10 +223,26 @@ tenantProjectionKeepFields:
 # a subset of tenantProjectionKeepFields, else the field won't exist on the
 # projected event). Deliberately NOT the platform `streamFields` below, which
 # carries `app`/`k8s_namespace` infra naming the allowlist drops.
+# ⛔ NEVER add a high-cardinality / unbounded field (`query`, `token_id`,
+# `path`, `pod_name`, `log_event_id`) here — VictoriaLogs builds a stream per
+# distinct combination, so an unbounded value = stream explosion → RAM
+# exhaustion (Gemini #894). Stream fields must be LOW-cardinality dimensions
+# only (tenant_id, log_type, status); everything else is a queryable data field.
 tenantProjectionStreamFields:
   - tenant_id
   - log_type
   - status
+
+# Tenant sink buffer (fan-out resilience): bounded memory buffer with
+# drop_newest so a backpressured tenant partition drops LOCALLY instead of
+# head-of-line-blocking the shared 0:0 write + other tenants (Gemini #894).
+# Raise for burstier tenants; the memory ceiling is max_events × per-event size.
+tenantProjectionBufferMaxEvents: 1000
+
+# Cap (bytes) on the tenant's own `query` field projected into its partition —
+# the only unbounded audit field. Prevents a pathologically long query from
+# spiking Vector RAM (encode_json) or exceeding VictoriaLogs' per-line limit.
+tenantProjectionMaxQueryBytes: 8192
 
 # ProjectID for the (b) platform-operational tenant projection. ADR-021
 # reserves ProjectID=0 for (b) and ProjectID=1 for the future (a) tenant

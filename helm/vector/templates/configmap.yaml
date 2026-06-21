@@ -352,6 +352,14 @@ data:
             kept.{{ $f }} = .{{ $f }}
           }
           {{- end }}
+          # Bound the one unbounded field — a tenant's own LogsQL/PromQL `query`
+          # (Gemini #894). A 500 KB query would expand in encode_json below and
+          # blow VictoriaLogs' per-line limit / spike Vector RAM. Cap it; a real
+          # query is well under this. (path is already %…:2048%-capped upstream;
+          # the other kept fields are bounded scalars.)
+          if exists(kept.query) {
+            kept.query = truncate(to_string(kept.query) ?? "", {{ .Values.tenantProjectionMaxQueryBytes | default 8192 }})
+          }
           # Re-serialize a SANITIZED _msg from the allowlisted fields only — the
           # tenant sink's `_msg_field` is `message`, and the original raw audit
           # line (which carried `upstream` etc.) is intentionally discarded, so
@@ -424,6 +432,18 @@ data:
         compression: gzip
         healthcheck:
           enabled: false
+        # ── Fan-out resilience: a tenant sink MUST NOT block (#539 §2 hard rule
+        # / Gemini #894 head-of-line-blocking). VictoriaLogs backpressure on ONE
+        # tenant's partition would otherwise propagate up tenant_route → demux
+        # and wedge the SHARED 0:0 write AND every other tenant. drop_newest
+        # keeps the loss LOCAL to the backpressured tenant — the platform 0:0
+        # copy is the source of truth, so this projection is explicitly best-
+        # effort. The bounded memory buffer also caps RAM (no OOM under a noisy-
+        # neighbor spike); operators needing restart-durability can raise
+        # tenantProjectionBufferMaxEvents or front it with a disk buffer.
+        buffer:
+          max_events: {{ $.Values.tenantProjectionBufferMaxEvents | default 1000 }}
+          when_full: drop_newest
         query:
           _msg_field: message
           _time_field: timestamp
