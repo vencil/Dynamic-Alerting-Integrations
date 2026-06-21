@@ -154,9 +154,15 @@ def test_victorialogs_wrong_audience_aborts(repo_root: Path):
 
 
 @_needs_helm
-def test_other_modes_have_no_victorialogs_catchall(repo_root: Path):
-    res = _render(repo_root, {})  # default mode = prom-label-proxy
-    assert res.returncode == 0, f"default mode must render: {res.stderr}"
+@pytest.mark.parametrize(
+    "mode_set, label",
+    [({}, "prom-label-proxy (default)"), ({"mode": "vm-cluster"}, "vm-cluster")],
+)
+def test_other_modes_have_no_victorialogs_catchall(repo_root: Path, mode_set, label):
+    # Both non-victorialogs modes (CodeRabbit #889): the docstring promises the
+    # catch-all is ABSENT in the other TWO modes, so render each and assert it.
+    res = _render(repo_root, mode_set)
+    assert res.returncode == 0, f"{label} must render: {res.stderr}"
     assert _CATCHALL_403 not in res.stdout, (
-        "the victorialogs default-deny route leaked into a non-victorialogs mode"
+        f"the victorialogs default-deny route leaked into {label} mode"
     )
