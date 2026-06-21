@@ -132,6 +132,7 @@ lang: zh
 |------|------|
 | `_lint_helpers.py` | Shared utilities for lint tools. |
 | `_version_patterns.py` | Version pattern registry for validate_docs_versions.py |
+| `check_account_registry_monotonic.py` | guard _account_registry.yaml's |
 | `check_ad_hoc_git_scripts.py` | Ad-hoc Windows shell script guard (L1 pre-commit hook). |
 | `check_bat_ascii_purity.py` | - L1 guard for pitfall #45 (CJK-in-.bat). |
 | `check_bilingual_annotations.py` | check_bilingual_annotations.py |

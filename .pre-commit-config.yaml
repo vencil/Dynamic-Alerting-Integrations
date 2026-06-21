@@ -787,6 +787,24 @@ repos:
         # Layer 2 of ADR-023 enforcement; layer 1 is the chart's render-time
         # `fail` guard. Horizontal write scaling needs a K8s Lease (Deferred A3).
 
+      - id: account-registry-monotonic
+        name: "ADR-021/#609: _account_registry.yaml next_account_id must never decrease (cross-tenant log-leak guard)"
+        entry: python3 -X utf8 scripts/tools/lint/check_account_registry_monotonic.py --ci
+        language: python
+        additional_dependencies: ['pyyaml']
+        pass_filenames: false
+        files: ^(components/threshold-exporter/config/conf\.d/_account_registry\.yaml|scripts/tools/lint/check_account_registry_monotonic\.py)$
+        # FATAL: account_id is the monotonic, NEVER-reused VictoriaLogs partition
+        # key (account/registry.go). The runtime allocator only increases the
+        # high-water mark; the threat is a HUMAN commit — a `git revert` of an
+        # onboarding (rolls next_account_id back AND shrinks allocations in
+        # lockstep, so Parse()'s "id>=next" integrity check is satisfied and
+        # MISSES it) or a hand-edit lowering the counter. Re-issuing a reverted
+        # tenant's id while its logs are still in the retention window is a
+        # cross-tenant leak. Pre-commit compares staged-vs-HEAD; the CI mirror
+        # (--base) compares PR-vs-base. No-ops when the registry is absent/
+        # untracked (the live file is runtime conf.d state, not committed here).
+
       - id: leftouterjoin-enrichment
         name: "ADR-024: alert metadata enrichment must be left-outer-join (no onboarding-vacuum drop)"
         entry: python3 -X utf8 scripts/tools/lint/check_leftouterjoin_enrichment.py --ci

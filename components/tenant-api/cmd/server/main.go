@@ -30,6 +30,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/vencil/tenant-api/internal/async"
+	"github.com/vencil/tenant-api/internal/federation/account"
 	"github.com/vencil/tenant-api/internal/federation/fedpolicy"
 	"github.com/vencil/tenant-api/internal/federation/orphan"
 	"github.com/vencil/tenant-api/internal/federation/token"
@@ -292,10 +293,27 @@ func main() {
 	if err != nil {
 		log.Fatalf("FATAL: federation init: %v", err)
 	}
+	// v2.10.0 ADR-021 (#609): monotonic AccountID allocator for log
+	// federation. Shares federation's --federation-key gate — it is only
+	// consulted for capability=logs token issuance and the backfill
+	// endpoint. Persisted commit-on-write into conf.d/_account_registry.yaml
+	// via the same gitops Writer (no external stateful DB).
+	var accountAllocator *account.Allocator
 	if federationMgr != nil {
+		accountAllocator = account.NewAllocator(writer)
+		// #609 (Gemini #2) fail-loud startup guard: if the AccountID registry is
+		// blank/missing BUT conf.d already holds tenants, the ledger was lost
+		// (truncated mount / interrupted write) and booting would silently
+		// re-issue ids from the floor → cross-tenant log leak. Day-0 (no tenants
+		// yet) with a blank registry is fine and proceeds. Refuse to start
+		// otherwise — before any token can be issued against the reset registry.
+		if err := account.VerifyRegistryNotResetWithFleet(*configDir); err != nil {
+			log.Fatalf("FATAL: %v", err)
+		}
 		slog.Info("federation token endpoint enabled",
 			"token_ttl", federationMgr.TTL(),
-			"store_configmap", *federationStore, "store_namespace", federationNS)
+			"store_configmap", *federationStore, "store_namespace", federationNS,
+			"account_registry", account.RegistryFileName)
 		if len(rbacMgr.Get().Groups) == 0 {
 			slog.Warn("federation endpoint enabled but RBAC is in open mode — every token issuance will be denied (admin permission required); supply --rbac")
 		}
@@ -312,6 +330,7 @@ func main() {
 		Groups:             groupMgr,
 		Views:              viewMgr,
 		Federation:         federationMgr,
+		Accounts:           accountAllocator,
 		FederationPolicy:   federationPolicyMgr,
 		AdmissionValidator: federationValidator,
 		MetricDiscoverer:   metricDiscoverer,
@@ -320,6 +339,11 @@ func main() {
 		PRTracker:          prTracker,
 		WriteMode:          wm,
 		SearchCache:        handler.NewTenantSnapshotCache(),
+		// #609 CodeRabbit: the fleet-wide AccountID backfill must be bounded by
+		// the operator's --write-timeout, NOT the global 30s request Timeout
+		// middleware — the handler detaches from the request deadline and uses
+		// this instead (see federation.BackfillAccounts).
+		BackfillTimeoutDur: *writeTimeout,
 	}
 
 	// ── RBAC + policy hot-reload goroutines ───────────────────────────────────
@@ -538,6 +562,12 @@ func main() {
 				r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
 					Delete("/{id}", federation.DeleteFederationToken(deps))
 			})
+
+			// v2.10.0 ADR-021 (#609): one-shot AccountID backfill for the
+			// existing fleet. Route middleware confirms authentication; the
+			// handler enforces platform-admin (the whole-fleet bar).
+			r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
+				Post("/federation/accounts/backfill", federation.BackfillAccounts(deps))
 		}
 	})
 

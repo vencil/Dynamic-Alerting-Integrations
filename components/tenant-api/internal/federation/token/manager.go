@@ -47,11 +47,43 @@ const DefaultTTL = 4 * time.Hour
 // issuer is the JWT `iss` claim — identifies tenant-api as the signer.
 const issuer = "tenant-api"
 
-// audience is the JWT `aud` claim. Binding every federation token to a
-// single audience lets a verifier reject a token replayed against any
-// other API that happens to trust the same signing key (cross-service
-// replay). ADR-020 Wave-0 decision 3.
-const audience = "tenant-federation"
+// Capability selects which federation plane a token grants access to, and
+// thereby its audience (the JWT `aud` claim). Binding every token to a
+// single audience lets a verifier reject a token replayed against a
+// DIFFERENT plane that happens to trust the same signing key — so a
+// metrics-proxy token cannot be presented to the logs plane and vice
+// versa (cross-plane replay). ADR-020 Wave-0 decision 3 / ADR-021 §B.
+type Capability string
+
+const (
+	// CapMetrics is the original metrics-federation plane (ADR-020). Its
+	// audience is unchanged and it carries NO account_id, so existing
+	// callers are entirely unaffected (full back-compat).
+	CapMetrics Capability = "metrics"
+	// CapLogs is the tenant log-federation plane (ADR-021). Its token
+	// embeds the tenant's numeric account_id and binds to a distinct
+	// audience so it is only ever accepted by the logs plane.
+	CapLogs Capability = "logs"
+)
+
+// audienceMetrics is the `aud` of a metrics-plane token. UNCHANGED from
+// ADR-020 — existing verifiers and callers keep working verbatim.
+const audienceMetrics = "tenant-federation"
+
+// audienceLogs is the `aud` of a logs-plane token (ADR-021). A distinct
+// audience keeps a logs token from being replayed against the metrics
+// proxy (and the reverse).
+const audienceLogs = "tenant-federation-logs"
+
+// audienceFor maps a capability to its JWT audience. An unknown/zero
+// capability defaults to the metrics plane so a zero-value request stays
+// back-compatible.
+func audienceFor(c Capability) string {
+	if c == CapLogs {
+		return audienceLogs
+	}
+	return audienceMetrics
+}
 
 // clockSkewLeeway backdates the JWT `iat` claim. A signer clock a few
 // seconds ahead of the verifier would otherwise place `iat` in the
@@ -92,22 +124,36 @@ var ErrMintRateLimited = errors.New("federation: token mint rate limit exceeded"
 // ADR-020 Wave-0 decision 3: the proxy reads TenantID to inject
 // {tenant_id="<X>"} into every selector, and the API gateway reads
 // TokenID as the per-token rate-limit key.
+//
+// AccountID is the ADR-021 addition: the tenant's numeric log-partition
+// id, embedded ONLY in a logs-plane token (Capability == CapLogs). It is
+// `omitempty` so a metrics-plane token serialises byte-identically to the
+// pre-ADR-021 shape — a metrics verifier never sees the field. The logs
+// gateway reads it as the VictoriaLogs AccountID header.
 type Claims struct {
-	TenantID string `json:"tenant_id"`
-	TokenID  string `json:"token_id"`
+	TenantID  string `json:"tenant_id"`
+	TokenID   string `json:"token_id"`
+	AccountID uint32 `json:"account_id,omitempty"`
 	jwt.RegisteredClaims
 }
 
 // Record is the bookkeeping metadata for one issued token. The signed
 // JWT itself is never stored — only what GET needs to list issued
 // tokens and DELETE needs to identify one. TokenID is the public handle.
+//
+// Capability and AccountID (ADR-021) are both `omitempty`: a metrics-plane
+// record serialises exactly as before, so records written by an older
+// binary round-trip unchanged. Capability defaults to metrics on read when
+// absent; AccountID is meaningful only on a logs-plane record.
 type Record struct {
-	TokenID     string    `json:"token_id"`
-	TenantID    string    `json:"tenant_id"`
-	IssuedBy    string    `json:"issued_by"`
-	Description string    `json:"description,omitempty"`
-	IssuedAt    time.Time `json:"issued_at"`
-	ExpiresAt   time.Time `json:"expires_at"`
+	TokenID     string     `json:"token_id"`
+	TenantID    string     `json:"tenant_id"`
+	IssuedBy    string     `json:"issued_by"`
+	Description string     `json:"description,omitempty"`
+	Capability  Capability `json:"capability,omitempty"`
+	AccountID   uint32     `json:"account_id,omitempty"`
+	IssuedAt    time.Time  `json:"issued_at"`
+	ExpiresAt   time.Time  `json:"expires_at"`
 }
 
 // expired reports whether the record is past its expiry as of now.
@@ -179,12 +225,42 @@ func NewManagerForTest(key *rsa.PrivateKey, storePath string, ttl time.Duration)
 // TTL returns the configured token lifetime.
 func (m *Manager) TTL() time.Duration { return m.ttl }
 
-// Issue mints a signed federation JWT for tenantID and persists its
-// Record. issuedBy is the operator email (audit trail); description is
-// an optional free-text label. The returned token string is the
-// compact-serialised JWT — tenant-api does not store it and cannot
-// re-display it, so the caller must surface it to the operator once.
+// Issue mints a signed metrics-plane federation JWT for tenantID and
+// persists its Record (ADR-020). issuedBy is the operator email (audit
+// trail); description is an optional free-text label. The returned token
+// string is the compact-serialised JWT — tenant-api does not store it and
+// cannot re-display it, so the caller must surface it to the operator
+// once.
+//
+// This is the unchanged ADR-020 entry point: metrics audience, no
+// account_id. Logs-plane issuance goes through IssueLogs.
 func (m *Manager) Issue(tenantID, issuedBy, description string) (string, Record, error) {
+	return m.issue(tenantID, issuedBy, description, CapMetrics, 0)
+}
+
+// IssueLogs mints a signed LOGS-plane federation JWT for tenantID (ADR-021)
+// with the tenant's numeric accountID embedded as the `account_id` claim
+// and the logs audience. The caller (the handler) resolves accountID via
+// the account.Allocator BEFORE calling this — keeping AccountID allocation
+// (a Git-committed side effect) out of the signing path, which stays pure.
+func (m *Manager) IssueLogs(tenantID, issuedBy, description string, accountID uint32) (string, Record, error) {
+	return m.issue(tenantID, issuedBy, description, CapLogs, accountID)
+}
+
+// issue is the shared minting path. capability selects the audience;
+// accountID is embedded only for the logs plane (it is zero, and thus
+// omitted, for metrics).
+func (m *Manager) issue(tenantID, issuedBy, description string, capability Capability, accountID uint32) (string, Record, error) {
+	// Fail LOUD: a logs token with account_id 0 would be omitempty'd out of
+	// the JWT, and the gateway maps an absent account_id to the platform
+	// default partition (AccountID 0) — silently merging this tenant's logs
+	// into the unattributed default stream. No live caller reaches here with
+	// 0 (the handler always allocates >= FirstTenantAccountID first), but
+	// IssueLogs is exported, so guard the invariant rather than emit a token
+	// that reads the wrong partition.
+	if capability == CapLogs && accountID == 0 {
+		return "", Record{}, fmt.Errorf("federation: logs token requires a non-zero account_id")
+	}
 	now := time.Now()
 	if !m.mints.allow(tenantID, now) {
 		return "", Record{}, ErrMintRateLimited
@@ -199,10 +275,15 @@ func (m *Manager) Issue(tenantID, issuedBy, description string) (string, Record,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    issuer,
 			Subject:   tenantID,
-			Audience:  jwt.ClaimStrings{audience},
+			Audience:  jwt.ClaimStrings{audienceFor(capability)},
 			IssuedAt:  jwt.NewNumericDate(now.Add(-clockSkewLeeway)),
 			ExpiresAt: jwt.NewNumericDate(now.Add(m.ttl)),
 		},
+	}
+	// account_id is logs-plane only — omitempty keeps a metrics token's
+	// serialised payload byte-identical to the pre-ADR-021 shape.
+	if capability == CapLogs {
+		claims.AccountID = accountID
 	}
 	tok := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
 	// Stamp the key id so the gateway verifier selects the right JWKS key
@@ -217,8 +298,12 @@ func (m *Manager) Issue(tenantID, issuedBy, description string) (string, Record,
 		TenantID:    tenantID,
 		IssuedBy:    issuedBy,
 		Description: description,
+		Capability:  capability,
 		IssuedAt:    now,
 		ExpiresAt:   now.Add(m.ttl),
+	}
+	if capability == CapLogs {
+		rec.AccountID = accountID
 	}
 	// store.put enforces maxTokensPerTenant inside its write transaction
 	// — the authoritative, race-free check. A list()-then-put() here
