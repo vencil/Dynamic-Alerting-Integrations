@@ -101,6 +101,12 @@ DEFAULT_IDENTITY_EMAIL = "threshold-governance@platform.local"
 # Circuit-break: stop attempting after this many CONSECUTIVE errors so a degraded
 # write plane (503 / git contention) isn't hammered once per remaining tenant.
 MAX_CONSECUTIVE_ERRORS = 5
+# #656 dead-man's-switch: a no-PR-opened run whose failure share (errors + breaker
+# skips) reaches this fraction of the attempted set is a SYSTEMIC write failure and
+# exits non-zero. < 1.0 so a single surviving already_pending can't mask a near-total
+# outage (Gemini adversarial review); high enough that ordinary partial degradation
+# (a few flaky tenants among many successes) does NOT trip it.
+_SYSTEMIC_FAILURE_RATIO = 0.90
 
 
 # ---------------------------------------------------------------------------
@@ -745,31 +751,44 @@ def run(
 
 
 def _is_systemic_failure(outcomes: list[TenantOutcome], applied: bool) -> bool:
-    """Whether an ``--apply`` run attempted governance writes and EVERY one failed.
+    """Whether an ``--apply`` run made NO governance progress because writes failed.
 
-    #656 dead-man's-switch honesty: a run where tenant-api was unreachable for every
-    tenant still *executed*, so without a non-zero exit the process returns 0, K8s
-    marks the Job Successful, and ``kube_cronjob_status_last_successful_time`` advances
-    even though ZERO PRs were opened — the staleness alert would stay green during
-    exactly the silent degradation it exists to catch (did-it-run != did-it-work).
-    Exiting non-zero on a TOTAL write failure makes it honest: the Job is marked Failed
-    AND last_successful_time is not advanced, so ``ThresholdGovernanceStale`` can fire.
+    #656 dead-man's-switch honesty: a run where the write plane is broken still
+    *executed*, so without a non-zero exit the process returns 0, K8s marks the Job
+    Successful, and ``kube_cronjob_status_last_successful_time`` advances even though
+    ZERO PRs were opened — the staleness alert would stay green during exactly the
+    silent degradation it exists to catch (did-it-run != did-it-work). Exiting
+    non-zero makes it honest: the Job is marked Failed AND last_successful_time is not
+    advanced, so ``ThresholdGovernanceStale`` can fire.
 
-    Shares maintenance_scheduler's MECHANISM (a non-zero exit -> Job Failed -> the KSM
-    signal stays honest) but with a deliberately STRICTER trip condition. That sibling
-    exits non-zero on ANY error (``EXIT_VIOLATION if errors``); a governance run, by
-    contrast, legitimately has per-tenant errors amid successes, so only a TOTAL write
-    failure trips this -- no PR opened, none already-pending. A single flaky tenant
-    amid successes never fails the whole run (the staleness clock correctly advances);
-    an all-already-pending run (tenant-api healthy, nothing new to do) stays exit 0;
-    dry-run never fails -- it issues no writes.
+    Shares maintenance_scheduler's MECHANISM (non-zero exit -> Job Failed -> KSM signal
+    stays honest) but is STRICTER than that sibling's any-error contract: a governance
+    run legitimately has per-tenant errors amid successes, so a single flaky tenant
+    must not fail the whole run.
+
+    Trip condition = NO new PR opened (``opened == 0`` = no forward progress) AND the
+    failure share of the attempted set is overwhelming (>= ``_SYSTEMIC_FAILURE_RATIO``).
+    Two non-obvious choices (both from adversarial review):
+      * The share is ``(errors + skipped) / total``, NOT ``errors / total``. The run's
+        own circuit breaker caps consecutive errors at ``MAX_CONSECUTIVE_ERRORS`` then
+        emits ``skipped`` for the rest, so a TOTAL outage shows up as ~5 errors + N
+        skips — a bare error ratio would dilute that to ~5% and miss it. (With
+        ``opened == 0`` a ``skipped`` can only be a breaker skip, never the --max-prs
+        cap, which needs ``opened >= max_prs``.)
+      * It is a RATIO, NOT ``pending == 0``. A single surviving ``already_pending``
+        (tenant-api happened to answer 409 for ONE tenant) must not mask a 99%-error
+        outage (Gemini review). A genuinely half-degraded run (errors ~= pending) and
+        an all-already-pending run (healthy, nothing new to do) both stay exit 0;
+        dry-run never fails -- it issues no writes.
     """
-    if not applied:
+    if not applied or not outcomes:
         return False
     opened = sum(1 for o in outcomes if o.status == "pr_opened")
-    pending = sum(1 for o in outcomes if o.status == "already_pending")
     errors = sum(1 for o in outcomes if o.status == "error")
-    return errors > 0 and opened == 0 and pending == 0
+    if opened > 0 or errors == 0:
+        return False
+    skipped = sum(1 for o in outcomes if o.status == "skipped")
+    return (errors + skipped) / len(outcomes) >= _SYSTEMIC_FAILURE_RATIO
 
 
 def main() -> None:

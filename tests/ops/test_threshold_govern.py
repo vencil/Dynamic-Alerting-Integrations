@@ -538,9 +538,33 @@ def test_systemic_failure_false_when_any_pr_opened():
     assert tg._is_systemic_failure([_oc("pr_opened"), _oc("error")], applied=True) is False
 
 
-def test_systemic_failure_false_when_any_already_pending():
-    # a 409 already-pending proves tenant-api is reachable → not a total outage.
-    assert tg._is_systemic_failure([_oc("already_pending"), _oc("error")], applied=True) is False
+def test_systemic_failure_false_when_failures_dont_dominate():
+    # A balanced error/already-pending split (50% failure) is partial degradation,
+    # not a systemic write outage — the loop still functions for half the fleet.
+    assert tg._is_systemic_failure([_oc("error"), _oc("already_pending")], applied=True) is False
+
+
+def test_systemic_failure_true_when_errors_swamp_one_pending_survivor():
+    # Gemini adversarial review: a 99%-error outage must NOT be masked by ONE surviving
+    # already_pending (tenant-api answered 409 for a single tenant whose PR already
+    # existed). The old `pending == 0` gate false-negatived here; the ratio gate trips.
+    outcomes = [_oc("error")] * 99 + [_oc("already_pending")]
+    assert tg._is_systemic_failure(outcomes, applied=True) is True
+
+
+def test_systemic_failure_true_when_breaker_skips_with_pending_survivor():
+    # Same masking scenario WITH the circuit breaker engaged: a total outage shows up
+    # as ~MAX_CONSECUTIVE_ERRORS errors + many `skipped`. Counting skips as failures
+    # keeps the share high; a bare error ratio (5/100) would dilute it and miss it.
+    outcomes = [_oc("error")] * 5 + [_oc("skipped")] * 94 + [_oc("already_pending")]
+    assert tg._is_systemic_failure(outcomes, applied=True) is True
+
+
+def test_systemic_failure_false_when_few_errors_among_many_pending():
+    # A few flaky tenants among a mostly-healthy (already-pending) fleet is NOT
+    # systemic — low failure share, the write plane clearly works.
+    outcomes = [_oc("error")] * 3 + [_oc("already_pending")] * 97
+    assert tg._is_systemic_failure(outcomes, applied=True) is False
 
 
 def test_systemic_failure_false_in_dry_run():
