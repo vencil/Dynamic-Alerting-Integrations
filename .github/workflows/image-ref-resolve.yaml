@@ -1,0 +1,53 @@
+name: Image Ref Resolve
+
+# Verify every concrete PUBLIC third-party image ref in helm values / k8s manifests
+# actually RESOLVES in its registry — catches a typo'd / yanked tag at PR time
+# (the #897 class: a non-existent `mariadb:11.8.1` shipped → ImagePullBackOff).
+# This is #902 L1-B; it complements the nightly scan (which resolves the WORKFLOW
+# MATRIX refs, not the values.yaml ones — so a values typo / matrix↔values drift
+# slips past it).
+#
+# First-party (ghcr.io/vencil/*) and locally-built (federation-audit-sidecar) refs
+# are skipped by the script — see scripts/ops/check_image_refs_resolve.py.
+#
+# Path-filtered: only runs when a deployment source carrying an image ref changes
+# (or the checker itself), so it doesn't tax unrelated PRs.
+
+on:
+  pull_request:
+    paths:
+      - "helm/**/values.yaml"
+      - "k8s/**"
+      - "scripts/ops/check_image_refs_resolve.py"
+      - ".github/workflows/image-ref-resolve.yaml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: image-ref-resolve-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  resolve:
+    name: resolve chart/manifest image refs
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+
+      # skopeo is the purpose-built registry-query tool (no daemon); the script
+      # prefers it over `docker manifest inspect`. Anonymous manifest inspects are
+      # light (no layer pulls) so Docker Hub rate limits are not a concern here.
+      - name: Install skopeo
+        run: sudo apt-get update && sudo apt-get install -y skopeo
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Resolve image refs
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 scripts/ops/check_image_refs_resolve.py
