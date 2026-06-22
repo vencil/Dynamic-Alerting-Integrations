@@ -3,7 +3,8 @@ name: da-portal
 description: Self-Hosted Interactive Tools Portal for the Dynamic Alerting Platform
 type: application
 # version: Helm Chart 版本（隨 Chart 結構/模板變更升級）
-version: 2.9.0
+# 2.9.1 — #902 L2: pin oauth2-proxy sidecar by digest (oauth2Proxy.image.digest)
+version: 2.9.1
 # appVersion: Portal image 版本
 appVersion: "2.9.0"
 keywords:
