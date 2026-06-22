@@ -62,4 +62,20 @@ if bash "$SCRIPT" imgD >/dev/null 2>&1; then
 fi
 echo "ok: case4 (malformed → abort)"
 
+# --- Case 5: defensive filter — LOW + unfixed are excluded even if Trivy emits them ---
+cat > trivy-imgE.json <<'JSON'
+{ "Results": [ { "Vulnerabilities": [
+  {"Severity":"LOW","VulnerabilityID":"CVE-2026-9001","PkgName":"a","InstalledVersion":"1","FixedVersion":"2"},
+  {"Severity":"HIGH","VulnerabilityID":"CVE-2026-9002","PkgName":"b","InstalledVersion":"1","FixedVersion":""},
+  {"Severity":"CRITICAL","VulnerabilityID":"CVE-2026-9003","PkgName":"c","InstalledVersion":"1","FixedVersion":"2"}
+] } ] }
+JSON
+bash "$SCRIPT" imgE
+head1="$(head -n1 frag-imgE.txt)"
+[ "$head1" = "$(printf 'imgE\t1')" ] || fail "case5 expected 'imgE<TAB>1' (only fixable HIGH/CRITICAL), got '$head1'"
+grep -q "CVE-2026-9003" frag-imgE.txt || fail "case5 missing the fixable CRITICAL"
+grep -q "CVE-2026-9001" frag-imgE.txt && fail "case5 LOW must be excluded"
+grep -q "CVE-2026-9002" frag-imgE.txt && fail "case5 unfixed HIGH must be excluded"
+echo "ok: case5 (defensive filter excludes LOW + unfixed)"
+
 echo "PASS: all summarize_trivy_cve.sh cases"

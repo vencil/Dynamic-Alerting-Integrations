@@ -29,7 +29,14 @@ jq -e 'has("Results")' "$JSON" >/dev/null   # schema drift (Results renamed) →
 # Capture via $() so a jq runtime error propagates (set -e), NOT via a process
 # substitution whose failure mapfile would silently ignore.
 RAW="$(jq -r '
-  [.Results[]?.Vulnerabilities[]?]
+  [
+    .Results[]?.Vulnerabilities[]?
+    # Defensive: only fixable HIGH/CRITICAL, regardless of the workflow Trivy
+    # flags — keeps this script self-consistent with its "fixable HIGH/CRITICAL"
+    # label if the severity/ignore-unfixed flags ever drift (CodeRabbit #907).
+    | select((.Severity == "HIGH" or .Severity == "CRITICAL")
+             and ((.FixedVersion // "") != ""))
+  ]
   | group_by(.VulnerabilityID)[] | .[0]
   | "\(.Severity)|\(.VulnerabilityID)|\(.PkgName) \(.InstalledVersion) → \(.FixedVersion // "?")"
 ' "$JSON")"
