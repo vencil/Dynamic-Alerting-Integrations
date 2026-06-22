@@ -195,6 +195,11 @@ VictoriaLogs (AccountID, ProjectID)：強制隔離
 > 同 metrics federation 的 cold-start 精神（[Tenant Federation 指南 §8](tenant-federation.md)
 > 「查詢回 200 但 result 為空」）。空結果**不要**無腦重試或當故障報修。
 
+> ⚠️ **「查無資料」≠「查詢寫錯」**（慣用 PromQL 的人最容易搞混）：若回 **`400`** 且內文含
+> `parse error` / `cannot parse`，代表你的 **LogsQL 語法結構錯了**（LogsQL 不是 PromQL，過濾器
+> 寫法不同）——檢查 query 格式、別當沒資料。**唯有 `200` + 空 result** 才是「該時間範圍內無日誌
+> 活動」（cold-start 或真的沒資料）。先看回應碼再判斷（§7 速查）。
+
 ### 6.2 撤銷是最終一致的；查詢資源有上限
 
 - **撤銷延遲**：`DELETE` 一個 token 後不是即時生效（最終一致，~1–2 分鐘窗）——同 metrics

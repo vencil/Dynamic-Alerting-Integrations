@@ -24,8 +24,11 @@ already has the metrics conftest.py, and a second conftest.py cannot coexist the
 The victorialogs stack runs on its own port (E2E_VL_GATEWAY_PORT, default 18081,
 distinct from the metrics gateway's 18080) with its own readiness probe.
 """
+import http.client
+import json
 import os
 import time
+from urllib.parse import urlencode
 
 import pytest
 import requests
@@ -102,6 +105,31 @@ def _query(url, token, *, path="/select/logsql/query", extra_headers=None,
         headers=hdr, timeout=35)
 
 
+def _query_wire_duplicate_accountid(url, token, dup_values):
+    """Send a query with TRUE WIRE-DUPLICATE AccountID headers — multiple same-key
+    headers on the HTTP/1.1 wire — which the requests/urllib3 client cannot express
+    (its header store is a case-insensitive single-value dict). Uses raw http.client.
+    Probes header-smuggling (#905 隱患一 / Gemini): Envoy merges duplicate request
+    headers into one comma-joined value; the gateway's Lua replace() must overwrite the
+    WHOLE header with the JWT-verified value, so the store never receives a smuggled id
+    nor a merged `a,b`. Returns (status_code, parsed_json_body)."""
+    host = url.rsplit(":", 1)[0].replace("http://", "")
+    port = int(url.rsplit(":", 1)[1])
+    qs = urlencode({"query": "log_type:federation_audit", "limit": "50"})
+    conn = http.client.HTTPConnection(host, port, timeout=35)
+    try:
+        conn.putrequest("GET", "/select/logsql/query?" + qs, skip_accept_encoding=True)
+        conn.putheader("Authorization", "Bearer " + token)
+        for v in dup_values:               # two same-key AccountID headers on the wire
+            conn.putheader("AccountID", v)
+        conn.endheaders()
+        resp = conn.getresponse()
+        raw = resp.read()
+        return resp.status, (json.loads(raw) if raw else {})
+    finally:
+        conn.close()
+
+
 # ── VL1 — happy path ──────────────────────────────────────────────────────────
 def test_vl1_happy_path(vl_gateway_url, logs_signer):
     """A logs-capability token (aud=tenant-federation-logs + account_id=1000)
@@ -156,11 +184,10 @@ def test_vl3_client_accountid_spoof_overwritten(vl_gateway_url, logs_signer):
     1001. A regression (route-layer header-strip re-introduced, or replace()
     weakened to add()) would surface here as received_account_id=1001 or =0.
 
-    NB on coverage honesty: a true wire-DUPLICATE of the same header key is not
-    expressible from the requests/urllib3 client (its header store is a
-    case-insensitive single-value dict), so the smuggling vector tested here is the
-    case-variant + the platform-0 spoof (VL3b); a raw-socket duplicate-header probe
-    would be a stronger-but-heavier follow-up if ever warranted."""
+    NB on coverage: this case tests the case-variant spoof (one header per request,
+    requests-expressible); the platform-0 spoof is VL3b; a true wire-DUPLICATE of the
+    same header key (two `AccountID:` headers on the wire, requests cannot express it)
+    is exercised by VL3c below via raw http.client (#905 隱患一)."""
     tenant, acct = TENANT_A  # 1000
     spoof = str(TENANT_B[1])  # 1001
     _, token = logs_signer(tenant, acct)
@@ -197,6 +224,29 @@ def test_vl3b_spoof_does_not_select_platform_partition(vl_gateway_url, logs_sign
         f"— a tenant could read the platform 0:0 partition (breach)")
     assert body["received_account_id"] != "0", body
     assert "PLATFORM-DEFAULT-PARTITION" not in str(body["rows"]), body
+
+
+# ── VL3c — TRUE wire-duplicate header smuggling (raw http.client) ──────────────
+def test_vl3c_wire_duplicate_accountid_smuggling(vl_gateway_url, logs_signer):
+    """Stronger than VL3 (#905 隱患一 / Gemini adversarial): a TRUE wire-duplicate of
+    the AccountID header — two `AccountID:` headers on the HTTP/1.1 wire, which the
+    requests client cannot express. Tenant A (verified 1000) smuggles two spoofed
+    AccountIDs (1001, 1002). Envoy merges duplicate request headers into one comma-
+    joined value (`1001,1002`); the gateway's Lua `replace("AccountID", verified)` must
+    overwrite the WHOLE header, so the store receives ONLY the verified 1000 — never a
+    smuggled id, never a merged `1001,1002`. A regression to `add()` (instead of
+    replace) or a header-strip ordering bug would surface here as a non-1000 / comma id."""
+    tenant, acct = TENANT_A          # verified 1000
+    b1, b2 = str(TENANT_B[1]), "1002"  # two spoofs, neither is the verified value
+    _, token = logs_signer(tenant, acct)
+    status, body = _query_wire_duplicate_accountid(vl_gateway_url, token, [b1, b2])
+    assert status == 200, body
+    got = str(body.get("received_account_id"))
+    assert got == str(acct), (
+        f"wire-duplicate AccountID smuggling was NOT overwritten — store received "
+        f"{got!r} (expected verified {acct}); a duplicate/merged header leaked through")
+    assert "," not in got, f"merged comma-value {got!r} reached the store (replace() did not fully overwrite)"
+    assert {r["account_id"] for r in body["rows"]} == {str(acct)}, body
 
 
 # ── VL4 — audience enforcement (capability model B) ───────────────────────────

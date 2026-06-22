@@ -42,10 +42,14 @@ _CATALOGUE = "docs/internal/log-visibility-2tier-catalogue.md"
 _MUST_BE_EXCLUDED = ("upstream", "app", "k8s_namespace", "pod_name", "pod_ip",
                      "pod_node", "node_name")
 
-# Fields the template INJECTS into the rebuilt tenant event (not copied from the source
-# row), so they are legitimately documented in the Tier-2 table but are NOT entries in
-# `tenantProjectionKeepFields`. Excluded from the verbatim set-equality both-ways check.
-_TEMPLATE_INJECTED = frozenset({"account_id", "log_event_id", "timestamp"})
+# The template-injected fields (documented in Tier-2 but NOT enumerated in
+# tenantProjectionKeepFields) are MARKDOWN-DRIVEN, not a hardcoded test constant
+# (adversarial-review #905 隱患三): they are parsed from the catalogue's dedicated
+# "結構性注入欄位" subsection by the `template_injected` fixture below. A future injected
+# field (Phase 2 project_id, …) added to the test's allowlist but forgotten in the doc
+# would otherwise become a silent defense hole — markdown-driving it closes that.
+
+_CONFIGMAP = "helm/vector/templates/configmap.yaml"
 
 
 @pytest.fixture(scope="session")
@@ -118,11 +122,24 @@ def _table_first_col_codes(section: str) -> list[str]:
     return fields
 
 
-def test_tier2_table_matches_enforced_keep_fields(catalogue_text: str, keep_fields: list[str]) -> None:
+@pytest.fixture(scope="session")
+def template_injected(catalogue_text: str) -> set[str]:
+    """Structurally-injected fields, parsed from the catalogue's dedicated subsection
+    (markdown-driven, NOT a hardcoded constant — #905 隱患三)."""
+    section = _section(catalogue_text, "結構性注入欄位")
+    injected = set(_table_first_col_codes(section))
+    assert injected, "the 結構性注入欄位 subsection must list the injected fields (markdown-driven SSOT)"
+    return injected
+
+
+def test_tier2_table_matches_enforced_keep_fields(
+    catalogue_text: str, keep_fields: list[str], template_injected: set[str]
+) -> None:
     """The Tier-2 field table must list EXACTLY the enforced allowlist (minus the
     template-injected fields, which the table documents but values.yaml does not
-    enumerate). Both directions: a field in values.yaml but missing from the doc, OR
-    documented but not enforced, fails — that is the drift this guard exists to catch."""
+    enumerate — and which the catalogue itself declares in §結構性注入欄位, so the
+    exclusion set is markdown-driven not hardcoded). Both directions: a field in
+    values.yaml but missing from the doc, OR documented but not enforced, fails."""
     section = _section(catalogue_text, "Tier-2")
     documented = set(_table_first_col_codes(section))
     enforced = set(keep_fields)
@@ -134,13 +151,32 @@ def test_tier2_table_matches_enforced_keep_fields(catalogue_text: str, keep_fiel
         f"(doc drifted behind values.yaml): {sorted(missing_from_doc)}"
     )
 
-    # Everything the table documents (except template-injected) must be an enforced
-    # keep-field — the doc must not claim a field is tenant-visible when it isn't.
-    documented_copied = documented - _TEMPLATE_INJECTED
+    # Everything the table documents (except markdown-declared template-injected) must be
+    # an enforced keep-field — the doc must not claim a field is tenant-visible when it isn't.
+    documented_copied = documented - template_injected
     phantom = documented_copied - enforced
     assert not phantom, (
-        f"Tier-2 catalogue table lists field(s) NOT in tenantProjectionKeepFields "
-        f"(doc claims visibility the config does not enforce): {sorted(phantom)}"
+        f"Tier-2 catalogue table lists field(s) NOT in tenantProjectionKeepFields nor "
+        f"§結構性注入欄位 (doc claims visibility the config does not enforce): {sorted(phantom)}"
+    )
+
+
+def test_vrl_keeps_keepfields_via_loop(repo_root: Path, keep_fields: list[str]) -> None:
+    """3-way binding (adversarial-review #905 隱患二): the catalogue↔values check is only
+    forensic if the VRL actually keeps EXACTLY keepFields. The `tenant_project` transform
+    must copy them via the `{{ range $f := .Values.tenantProjectionKeepFields }}` loop with
+    `kept.{{ $f }} = .{{ $f }}` — the SAME field on both sides, so a `kept.status = .state`
+    name-mismatch (which would silently vanish a tenant field) is structurally impossible.
+    Reads the template SOURCE (no helm render), so it stays in the plain pytest job; the
+    rendered-behaviour layer is test_vector_projection_vrl.py."""
+    src = (repo_root / _CONFIGMAP).read_text(encoding="utf-8")
+    assert "range $f := .Values.tenantProjectionKeepFields" in src, (
+        "tenant_project must copy keepFields via the range loop, NOT hand-written per-field "
+        "mappings (those can silently mismatch field names — #905 隱患二)"
+    )
+    assert "kept.{{ $f }} = .{{ $f }}" in src, (
+        "the keepFields loop body must be `kept.{{ $f }} = .{{ $f }}` (identical field both "
+        "sides) — a divergent mapping would drop the field from the tenant copy"
     )
 
 
