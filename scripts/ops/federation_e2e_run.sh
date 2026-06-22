@@ -32,6 +32,10 @@ _cleanup() {
         return
     fi
     (cd "$E2E_DIR" && docker compose down -v 2>/dev/null || true)
+    # The victorialogs-mode stack (ADR-021 #609 PR-5) is a SEPARATE compose
+    # project file — tear it down too. -p keeps its containers/network
+    # namespaced apart from the metrics stack so neither clobbers the other.
+    (cd "$E2E_DIR" && docker compose -p fedvl -f victorialogs-compose.yml down -v 2>/dev/null || true)
 }
 trap _cleanup EXIT
 
@@ -101,7 +105,47 @@ print("[fed-e2e] rendered envoy.yaml + revoked_check.lua + "
 PYEOF
 
 # ---------------------------------------------------------------------------
-# Step 3: throwaway federation keypair + JWKS.
+# Step 2b: render the gateway in VICTORIALOGS mode (ADR-021 #609 PR-5) into
+# rendered/victorialogs/. Same chart, mode=victorialogs + the logs audience
+# (the chart's _helpers guard requires jwt.audience=tenant-federation-logs in
+# this mode). upstream points at the mock log store. Generous rate limits —
+# the victorialogs scenarios are isolation/spoofing, not rate-limit, tests.
+# ---------------------------------------------------------------------------
+echo "[fed-e2e] rendering victorialogs-mode gateway into rendered/victorialogs/"
+mkdir -p "$RENDERED/victorialogs"
+helm template fedlogs "$GATEWAY_CHART" \
+    --show-only templates/configmap-envoy.yaml \
+    --set mode=victorialogs \
+    --set jwt.audience=tenant-federation-logs \
+    --set upstream.host=mock-logstore \
+    --set upstream.port=9428 \
+    --set network.xffTrustedHops=0 \
+    --set rateLimit.perTenant.maxTokens=100000 \
+    --set rateLimit.perTenant.tokensPerFill=100000 \
+    --set rateLimit.perToken.maxTokens=100000 \
+    --set rateLimit.perToken.tokensPerFill=100000 \
+    --set rateLimit.perIp.maxTokens=100000 \
+    --set rateLimit.perIp.tokensPerFill=100000 \
+    --set revokedSet.reloadIntervalSeconds=2 \
+    --set auditLog.enabled=false \
+    > /tmp/fed-e2e-cm-envoy-vl.yaml
+
+"$PY" - "$RENDERED/victorialogs" <<'PYEOF'
+import sys
+import yaml
+
+rendered = sys.argv[1]
+cm = yaml.safe_load(open("/tmp/fed-e2e-cm-envoy-vl.yaml"))
+for key in ("envoy.yaml", "revoked_check.lua", "audit_extract.lua"):
+    with open(f"{rendered}/{key}", "w", newline="\n") as fh:
+        fh.write(cm["data"][key])
+print("[fed-e2e] rendered victorialogs envoy.yaml + revoked_check.lua + audit_extract.lua")
+PYEOF
+: > "$RENDERED/victorialogs/revoked.txt"
+
+# ---------------------------------------------------------------------------
+# Step 3: throwaway federation keypair + JWKS. SHARED by both the metrics and
+# victorialogs gateways (rendered/jwks.json + rendered/private-key.pem).
 # ---------------------------------------------------------------------------
 "$PY" "$E2E_DIR/gen_keys.py" "$RENDERED"
 
@@ -117,38 +161,61 @@ mkdir -p "$RENDERED/audit-log"
 chmod 0777 "$RENDERED/audit-log"
 
 # ---------------------------------------------------------------------------
-# Step 5: bring the stack up (--build for the mtail audit-sidecar image).
+# Step 5: bring the METRICS stack up (--build for the mtail audit-sidecar
+# image).
 # ---------------------------------------------------------------------------
-echo "[fed-e2e] docker compose up..."
+echo "[fed-e2e] docker compose up (metrics stack)..."
 docker compose up -d --build
 
 # ---------------------------------------------------------------------------
-# Step 6: run the pytest driver. It does its own end-to-end readiness
-# probe before the first scenario (compose healthchecks gate service
-# ordering; the distroless gateway has no healthcheck).
+# Step 6: run the metrics-plane pytest driver (S1–S9). Each test module is
+# named explicitly so the victorialogs driver (a DIFFERENT stack/port) is not
+# collected here — it runs in Step 6b against its own stack.
 # ---------------------------------------------------------------------------
 set +e
-"$VENV/bin/pytest" -v "$E2E_DIR"
+"$VENV/bin/pytest" -v "$E2E_DIR/test_federation_e2e.py"
 rc=$?
 set -e
 
-# ---------------------------------------------------------------------------
-# Step 7: on failure, dump container logs — the driver runs on the host
-# so a scenario failure otherwise hides the in-container cause.
-# ---------------------------------------------------------------------------
 if [[ "$rc" -ne 0 ]]; then
-    echo "[fed-e2e] ===== scenario failure — container logs ====="
+    echo "[fed-e2e] ===== metrics scenario failure — container logs ====="
     docker compose logs --tail=100 || true
 fi
 
-# ---------------------------------------------------------------------------
-# Step 8: teardown.
-# ---------------------------------------------------------------------------
+# Tear the metrics stack down before the victorialogs stack comes up (frees the
+# gateway port; keeps the two stacks from sharing resources).
 docker compose down -v
+
+# ---------------------------------------------------------------------------
+# Step 6b: victorialogs-mode stack (ADR-021 #609 PR-5). Separate compose
+# project (-p fedvl) + file so it is namespaced apart from the metrics stack.
+# Only runs if the metrics phase passed (a metrics-stack failure already fails
+# the run; no point bringing up the second stack). The mock-logstore image is
+# python:alpine (no --build), gateway is the same distroless Envoy.
+# ---------------------------------------------------------------------------
+if [[ "$rc" -eq 0 ]]; then
+    echo "[fed-e2e] docker compose up (victorialogs stack)..."
+    docker compose -p fedvl -f victorialogs-compose.yml up -d
+    set +e
+    # E2E_METRICS_STACK=0 tells the shared conftest.py to skip its metrics
+    # readiness probe (autouse) — the metrics stack is down in this phase.
+    E2E_METRICS_STACK=0 "$VENV/bin/pytest" -v "$E2E_DIR/test_victorialogs_e2e.py"
+    rc=$?
+    set -e
+    if [[ "$rc" -ne 0 ]]; then
+        echo "[fed-e2e] ===== victorialogs scenario failure — container logs ====="
+        docker compose -p fedvl -f victorialogs-compose.yml logs --tail=100 || true
+    fi
+    docker compose -p fedvl -f victorialogs-compose.yml down -v
+fi
+
+# ---------------------------------------------------------------------------
+# Step 8: teardown done above per-stack; mark cleanup complete.
+# ---------------------------------------------------------------------------
 _cleanup_done=1
 
 if [[ "$rc" -eq 0 ]]; then
-    echo "[fed-e2e] PASS — all scenarios green"
+    echo "[fed-e2e] PASS — all scenarios green (metrics + victorialogs)"
 else
     echo "[fed-e2e] FAIL — see logs above"
 fi

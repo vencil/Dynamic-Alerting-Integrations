@@ -1,0 +1,51 @@
+# Victorialogs-mode federation E2E stack — ADR-021 #609 PR-5. SEPARATE from the
+# metrics-plane docker-compose.yml so the existing federation E2E is untouched.
+# Launched by scripts/ops/federation_e2e_run.sh (victorialogs phase), which renders
+# the federation-gateway chart in `mode=victorialogs` into rendered/victorialogs/
+# before `compose up`.
+#
+# Stack (gateway-focused, not full-stack VictoriaLogs):
+#   mock-logstore <-- federation-gateway(victorialogs mode) <-- pytest driver (host)
+#
+# The mock-logstore echoes the AccountID/ProjectID headers the gateway injected (it
+# does NOT reimplement VictoriaLogs partitioning — see mock_logstore.py + README
+# §victorialogs fidelity boundary). The assertion target is the gateway's header
+# handling: JWT-verified AccountID always wins over any client spoof, fail-closed on
+# a missing/malformed claim, audience-bound (metrics token 401s), endpoint allowlist.
+
+services:
+  # Stand-in for VictoriaLogs — a pure-stdlib echo server. python:alpine has no pip
+  # deps needed (mock_logstore.py is stdlib only).
+  mock-logstore:
+    image: python:3.12-alpine
+    command: ["python", "/app/mock_logstore.py", "9428"]
+    volumes:
+      - ./mock_logstore.py:/app/mock_logstore.py:ro
+    expose:
+      - "9428"
+    healthcheck:
+      # The echo server answers any path; /healthz is fine. wget is in alpine.
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9428/healthz"]
+      interval: 2s
+      timeout: 1s
+      retries: 30
+
+  # Layer 2 — Envoy gateway in victorialogs mode. Config rendered from the REAL
+  # Helm chart into rendered/victorialogs/ by the runner (helm template
+  # --set mode=victorialogs --set jwt.audience=tenant-federation-logs). The
+  # distroless image has no shell, so no compose healthcheck — the pytest driver
+  # does its own readiness probe.
+  federation-gateway-logs:
+    image: envoyproxy/envoy:distroless-v1.38.0
+    command: ["-c", "/etc/envoy/envoy.yaml"]
+    volumes:
+      - ./rendered/victorialogs/envoy.yaml:/etc/envoy/envoy.yaml:ro
+      - ./rendered/victorialogs/revoked_check.lua:/etc/envoy/revoked_check.lua:ro
+      - ./rendered/victorialogs/audit_extract.lua:/etc/envoy/audit_extract.lua:ro
+      - ./rendered/jwks.json:/etc/jwks/jwks.json:ro
+      - ./rendered/victorialogs/revoked.txt:/etc/revoked/revoked.txt
+    ports:
+      - "${E2E_VL_GATEWAY_PORT:-18081}:8080"
+    depends_on:
+      mock-logstore:
+        condition: service_healthy

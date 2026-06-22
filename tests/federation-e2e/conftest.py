@@ -54,7 +54,16 @@ def _stack_ready(signer):
     a per-tenant rate-limit token, and this loop can run up to 120s. db-b
     has fixture data (so the full-chain check is real) but no scenario
     spends db-b's token budget, so a slow startup cannot deplete the
-    db-a bucket S1/S2/S7/S8 share."""
+    db-a bucket S1/S2/S7/S8 share.
+
+    Skipped when E2E_METRICS_STACK=0 (the runner's victorialogs-only phase,
+    ADR-021 #609 PR-5): this conftest is in the shared harness dir, so its
+    autouse probe would otherwise fire against the metrics gateway (a
+    different, not-up stack) and time out the victorialogs run. The
+    victorialogs driver has its own inline readiness probe — the
+    `_vl_stack_ready` autouse fixture in test_victorialogs_e2e.py."""
+    if os.environ.get("E2E_METRICS_STACK") == "0":
+        return
     _, token = signer("db-b")
     deadline = time.monotonic() + 120.0
     while time.monotonic() < deadline:

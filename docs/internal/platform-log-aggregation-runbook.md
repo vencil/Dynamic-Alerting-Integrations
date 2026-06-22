@@ -357,6 +357,11 @@ GitOps self-heal，**不在 chart 內、是部署叢集的責任**：
 
 讓租戶在平台上**就地查自己的**營運 log（federation audit），又**看不到**基礎設施拓樸或他租戶的列。資料平面（本 PR）鋪好後，查詢授權平面（gateway `victorialogs` mode + tenant-api AccountID 配發）才把租戶接上。完整設計見 [ADR-021](../adr/021-tenant-log-query-federation.md)；本節是 operator 的 how-to。
 
+> **可見度治理 / 租戶端視角（#609 PR-5）**：本節講投影**怎麼運作**；「哪些 stream / field
+> 對租戶可見」的策展邊界見 [2-Tier 日誌可見度 Catalogue](log-visibility-2tier-catalogue.md)，
+> 租戶端操作（取 logs token、查詢、cold-start）見
+> [租戶日誌查詢 onboarding 指南](../integration/tenant-log-query.md)。
+
 ### 8.1 Fan-out（雙寫，非搬移）拓樸
 
 ```
@@ -455,7 +460,7 @@ vector test /tmp/rendered-vector.yaml helm/vector/tests/projection_tests.yaml
 - **Tenant sink 不阻塞 shared pipeline**：每個 `vl_tenant_<id>` sink 配 `buffer: {when_full: drop_newest}`（`tenantProjectionBufferMaxEvents` 可調）。VictoriaLogs 對**單一租戶**分區背壓時，該 sink **本地丟最新**，不會經 `tenant_route → demux` 反壓卡住 `0:0` 寫入與其他租戶（head-of-line blocking）。`0:0` 是 source of truth、投影為 best-effort；bounded memory buffer 同時擋 noisy-neighbor 的 RAM 突波（無 OOM）。需 restart-durability 的 operator 可改 disk buffer。
 - **query 長度上限**：`tenantProjectionMaxQueryBytes`（預設 8 KiB）`truncate` 租戶副本的 `query`——防 500 KB 超長 query 撐爆 `encode_json` 或 VictoriaLogs 單行限制。
 - **Stream-field 高基數**：`tenantProjectionStreamFields` 僅低基數維度（`tenant_id`/`log_type`/`status`）；⛔ **絕不**放 `query`/`token_id`/`path` 等動態值（每個 distinct 值建一條 stream → RAM 爆）。
-- **K8s 資源 / 排程**（ops）：fan-out 增加 Vector CPU。確保 `resources.requests/limits` 對 N 租戶有餘裕，並考慮給 ingestion DaemonSet 一個 `PriorityClass`（node 資源枯竭時優先驅逐低優先 batch job、保 ingestion 存活）。
+- **K8s 資源 / 排程**（ops）：fan-out 增加 Vector CPU。確保 `resources.requests/limits` 對 N 租戶有餘裕，並考慮給 ingestion DaemonSet 一個 `PriorityClass`（node 資源枯竭時優先驅逐低優先 batch job、保 ingestion 存活）。⛔ **Phase 2 (a) 觸發時這從「考慮」升為硬不變式**（Gemini #905）：成千上萬 pod 應用 log 湧入時，Vector CPU 因大量 `uuid_v7()` 配發 + `encode_json` 階躍式暴增；若不綁高 `PriorityClass`，Kubelet 在 node starvation 時可能誤殺 shipper → **全叢集日誌斷流**。Phase 2 排程時 ingestion DaemonSet 的高 PriorityClass 列為生產 hard requirement。
 - **無聲丟棄的可觀測性（PR-4 已補）**：fail-closed 的 `abort`+`drop_on_abort` 讓異常列**無聲消失**——平台須監控 Vector 原生 `vector_component_discarded_events_total{component_id="tenant_project"}`（registry 未同步／惡意 payload 導致大量 drop 時要有能見度，而非等租戶報修）。#609 PR-4 落地 `TenantProjectionFanoutDiscardSpike`（`configmap-rules-platform.yaml` `federation-audit` group，warning）。⚠️ **標籤是 `component_id` 非 `component`**（Vector internal_metrics 原生標籤；本文件原寫 `component` 是非正式 prose，照 sibling `VectorBufferEventsDropped` 用 `component_id`），且需 `helm/vector metrics.enabled=true` + Prometheus scrape。⚠️ **這是粗粒度 spike tripwire 非精準 gap 偵測**：此 component-level counter 把**所有** abort 原因合計，而設計上**多數** demux 列為 non-audit（`gateway_operational`／`prometheus_query_log`／JWT-fail／`suspicious_audit`）被合法 drop，故**不可**用 `> 0`（恆真噪音）——改用 `rate > 5/s` 持續 `15m`（floor 須照各 gateway 營運 log 量的 steady-state drop rate 調）。精準的 per-account「可對映租戶投影缺漏」偵測需新增 per-partition row-count metric（option b），列 **defer-with-trigger**。⛔ **但精準 runtime 偵測器是 band-aid 非根治**：desync 的根因是 **config drift**（`tenantProjections` 落後 `_account_registry.yaml`），真正的修法是 **Phase 2 (a) config-from-SSOT**——從 registry **自動生成** `tenantProjections`、drift 根本不可能發生，屆時 option b 即不需要。在那之前流程防線＝onboarding guide 的配發紀律（§8.2）+ 本 coarse tripwire 接大規模事件。**trigger（任一）**：首次真實 registry desync 事故、租戶報修「看不到自己的 log」、或 Phase 2 (a) 自動生成排程時（屆時重估是否還需 option b）。需 mtail / metric 對照見下 §8.8。
 
 ### 8.8 租戶日誌查詢可觀測層（ADR-021 #609 PR-4）

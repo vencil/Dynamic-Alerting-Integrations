@@ -115,3 +115,53 @@ The runner renders the chart configs, generates a throwaway federation
 keypair, brings the stack up, runs pytest, and tears down. It is **not**
 part of `make test` / pre-commit and is **excluded from the unit-test
 coverage gate** — it runs as its own CI job.
+
+## Victorialogs-mode stack (ADR-021 #609 — tenant log query)
+
+A **second, separate** stack exercises the gateway's `victorialogs` mode
+(tenant log-query authorization plane). It is namespaced apart from the
+metrics stack (compose project `fedvl`, file `victorialogs-compose.yml`,
+gateway port `E2E_VL_GATEWAY_PORT` default `18081`) and the runner brings
+it up in its own phase after the metrics phase passes.
+
+```
+mock-logstore <── federation-gateway (mode=victorialogs) <── pytest driver (host)
+```
+
+| File | Role |
+|---|---|
+| `test_victorialogs_e2e.py` | the 14 scenarios + their fixtures (fixtures live in the test module, not a sibling conftest — a second `conftest.py` cannot coexist with the metrics one in this dir) |
+| `mock_logstore.py` | stand-in for VictoriaLogs: a pure-stdlib echo server that reflects the `AccountID`/`ProjectID` headers the gateway injected + serves synthetic rows keyed by the received AccountID |
+| `victorialogs-compose.yml` | the 2-service stack (mock-logstore + gateway) |
+
+### Scenarios
+
+| # | Scenario | Asserts |
+|---|----------|---------|
+| VL1 | Happy path | logs token (`aud=tenant-federation-logs` + `account_id=1000`) → gateway injects the verified AccountID → store echoes 1000, serves its rows |
+| VL2 | **Cross-tenant isolation** | tenant A reaches the store as 1000 and sees ONLY 1000's rows; tenant B as 1001, ONLY 1001's — the AccountID the store receives is always the verified one (gateway half of the isolation joint property) |
+| VL3 | **Header-spoofing / case-variant** | client sends `AccountID`/`accountid`/`ACCOUNTID`/mixed-case = another tenant's id (+ a forged `ProjectID`) → the Lua `replace()` overwrites it, store always receives the verified value, never the spoof (Gemini fold-in regression guard) |
+| VL3b | Platform-partition spoof | client sends `AccountID: 0` to reach the platform `0:0` partition → verified value still wins, never 0 |
+| VL4 | Audience enforcement | a metrics token (`aud=tenant-federation`) → jwt_authn 403 "Audiences in Jwt are not allowed" before the Lua (capability model B) |
+| VL5 | **Fail-closed claim** | a logs-audience token with a missing / empty / `<1000` / `0` / non-integer / non-numeric / overflow `account_id` claim → 403 before injection (never reaches the store → never lands in partition 0) |
+| VL5b | Valid-floor control | `account_id=1000` (the reserved floor) is accepted — so VL5's 403s are malformed-claim rejection, not a blanket deny |
+| VL6 | Endpoint default-deny | `/tail`, `/insert/*`, a cross-tenant enumeration, an unknown path, and a sub-path of an allowed endpoint → 403; an allowlisted metadata endpoint → 200 |
+
+### Victorialogs fidelity boundary
+
+The scope is **gateway-focused, by deliberate choice.** The cross-tenant
+isolation PRIMITIVE is VictoriaLogs-native (`(AccountID, ProjectID)`
+partitioning) — an upstream open-source guarantee, not platform code. What
+the gateway (the platform's code) owns is the **authorization plane**:
+inject the JWT-verified AccountID, overwrite any client-supplied spoof,
+fail-closed on a missing/malformed claim, enforce the logs audience,
+default-deny the endpoint surface. The mock log store makes *what AccountID
+reached the store* observable, so these scenarios assert exactly the
+gateway's half of the isolation joint property — a regression that forwards
+a spoofed or zero AccountID goes red.
+
+A **full-stack** variant (a real VictoriaLogs container + a Vector
+sanitized-projection pipeline, asserting the native partition half + the
+ingest-time field allowlist end-to-end) is a heavier, separate follow-up —
+the same "mock is enough for the boundary we own" reasoning that keeps
+tenant-api out of the metrics stack (§fidelity boundary above).
