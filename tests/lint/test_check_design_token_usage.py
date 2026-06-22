@@ -316,15 +316,88 @@ class TestPxValues:
 
 
 # ---------------------------------------------------------------------------
+# Tests for check_saturated_token_as_text (#885/#904 stroke-as-text guard)
+# ---------------------------------------------------------------------------
+
+class TestSaturatedTokenAsText:
+    def test_bare_error_token_as_text_flagged(self):
+        issues = dtu.check_saturated_token_as_text(
+            '<p className="text-xs text-[color:var(--da-color-error)]">bad</p>', "x.jsx"
+        )
+        assert len(issues) == 1
+        assert issues[0]["token"] == "--da-color-error"
+        assert issues[0]["suggestion"] == "--da-color-error-text"
+        assert issues[0]["line"] == 1
+
+    def test_warning_token_as_text_flagged(self):
+        issues = dtu.check_saturated_token_as_text(
+            '<p className="text-[color:var(--da-color-warning)]">bad</p>', "x.jsx"
+        )
+        assert [i["suggestion"] for i in issues] == ["--da-color-warning-text"]
+
+    def test_text_variant_is_the_fix_not_flagged(self):
+        """The AA -text variant is the FIX — must never be flagged (else the lint
+        would reject its own remediation; the trailing \\) anchors the bare token)."""
+        assert dtu.check_saturated_token_as_text(
+            '<p className="text-[color:var(--da-color-error-text)]">ok</p>', "x.jsx"
+        ) == []
+        assert dtu.check_saturated_token_as_text(
+            '<p className="text-[color:var(--da-color-warning-text)]">ok</p>', "x.jsx"
+        ) == []
+
+    def test_border_and_bg_not_flagged(self):
+        """Saturated token is CORRECT for strokes/borders/backgrounds — only the
+        text- utility is the violation."""
+        assert dtu.check_saturated_token_as_text(
+            '<p className="border-l-2 border-[color:var(--da-color-error)] '
+            'bg-[color:var(--da-color-error-soft)]">ok</p>', "x.jsx"
+        ) == []
+
+    def test_info_and_success_not_flagged(self):
+        """info (#2563eb ~5.2:1) / success (#047857 ~5.5:1) already pass AA as text
+        on white and have NO -text variant — out of scope for this rule."""
+        assert dtu.check_saturated_token_as_text(
+            '<p className="text-[color:var(--da-color-info)] '
+            'text-[color:var(--da-color-success)]">ok</p>', "x.jsx"
+        ) == []
+
+    def test_real_904_shape_border_kept_text_swapped(self):
+        """The exact #904 line shape: border stays saturated, text uses -text →
+        zero findings; the pre-fix form (bare text- token) → exactly one."""
+        fixed = ('<p className="border-l-2 border-[color:var(--da-color-error)] '
+                 'text-[color:var(--da-color-error-text)]">fixed</p>')
+        assert dtu.check_saturated_token_as_text(fixed, "x.jsx") == []
+        broken = ('<p className="border-l-2 border-[color:var(--da-color-error)] '
+                  'text-[color:var(--da-color-error)]">broken</p>')
+        assert len(dtu.check_saturated_token_as_text(broken, "x.jsx")) == 1
+
+    def test_token_exempt_marker_honored(self):
+        """A documented exemption (e.g. genuinely on a dark background where the
+        saturated token passes) suppresses the finding, like the other checks."""
+        assert dtu.check_saturated_token_as_text(
+            '<p className="text-[color:var(--da-color-error)]"> '
+            '/* token-exempt: rendered on dark hero bg */ </p>', "x.jsx"
+        ) == []
+
+    def test_pattern_inside_comment_not_flagged(self):
+        """The bad pattern quoted in a // or /* */ comment is not real code."""
+        assert dtu.check_saturated_token_as_text(
+            '// avoid text-[color:var(--da-color-error)] here — use the -text variant',
+            "x.jsx",
+        ) == []
+
+
+# ---------------------------------------------------------------------------
 # Tests for scan_jsx_files and exit logic
 # ---------------------------------------------------------------------------
 
 class TestScanResults:
     def test_scan_jsx_files_returns_tuple(self):
-        """scan_jsx_files returns (hex_issues_dict, px_issues_dict)."""
-        hex_issues, px_issues = dtu.scan_jsx_files()
+        """scan_jsx_files returns (hex, px, token) issue dicts."""
+        hex_issues, px_issues, token_issues = dtu.scan_jsx_files()
         assert isinstance(hex_issues, dict)
         assert isinstance(px_issues, dict)
+        assert isinstance(token_issues, dict)
 
     def test_direct_function_hex_detection(self, jsx_file_hex_violation):
         """Direct test of hex detection logic."""
