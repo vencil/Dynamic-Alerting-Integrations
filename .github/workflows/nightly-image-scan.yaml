@@ -130,11 +130,13 @@ jobs:
       - name: Summarize findings
         run: bash scripts/ops/summarize_trivy_cve.sh '${{ matrix.name }}'
 
+      # Artifact prefixed `sb-` so the report buckets self-built apart from
+      # third-party (`tp-`) — #902 L1-A.1.
       - name: Upload fragment
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: cve-frag-${{ matrix.name }}
+          name: cve-frag-sb-${{ matrix.name }}
           path: frag-${{ matrix.name }}.txt
           retention-days: 14
 
@@ -205,7 +207,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: cve-frag-${{ matrix.name }}
+          name: cve-frag-tp-${{ matrix.name }}
           path: frag-${{ matrix.name }}.txt
           retention-days: 14
 
@@ -218,106 +220,45 @@ jobs:
       contents: read
       issues: write
     steps:
-      - name: Download fragments
+      - uses: actions/checkout@v6 # for scripts/ops/file_cve_report.sh
+
+      # Self-built and third-party fragments download into SEPARATE dirs → SEPARATE
+      # tracking issues (#902 L1-A.1): a self-built regression (release.yaml
+      # Trivy-gated) must not get buried under the larger third-party CVE debt.
+      - name: Download self-built fragments
         uses: actions/download-artifact@v4
         with:
-          pattern: cve-frag-*
-          path: frags
+          pattern: cve-frag-sb-*
+          path: frags-sb
           merge-multiple: true
 
-      - name: Aggregate + maybe file the tracking issue
+      - name: Download third-party fragments
+        uses: actions/download-artifact@v4
+        with:
+          pattern: cve-frag-tp-*
+          path: frags-tp
+          merge-multiple: true
+
+      - name: Aggregate + maybe file the tracking issues
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          # 5 self-built (scan) + 14 third-party (scan-thirdparty) = 19 expected frags.
-          EXPECTED: "19"
           # schedule always files; manual dispatch only when file_issue is checked.
           DO_FILE: ${{ github.event_name == 'schedule' || inputs.file_issue }}
         run: |
           set -euo pipefail
-          shopt -s nullglob
-          frags=(frags/frag-*.txt)
-          present="${#frags[@]}"
-          total=0
-          table=$'| Image | Fixable HIGH/CRITICAL |\n|---|---|\n'
-          details=""
-          for f in "${frags[@]}"; do
-            head1="$(head -n1 "$f")"
-            name="${head1%%$'\t'*}"
-            count="${head1#*$'\t'}"
-            count="${count//[^0-9]/}"; count="${count:-0}"
-            total=$(( total + count ))
-            table="${table}| ${name} | ${count} |"$'\n'
-            details="${details}$(tail -n +2 "$f")"$'\n\n'
-          done
-          missing=$(( EXPECTED - present ))
-
-          {
-            echo "# Nightly Image CVE Scan — $(date -u +%F)"
-            echo ""
-            echo "Fixable HIGH/CRITICAL across ${present}/${EXPECTED} images: **${total}**"
-            if [ "$missing" -gt 0 ]; then
-              echo ""
-              echo "⚠️ ${missing} image(s) failed to build/scan — see the matrix jobs above."
-            fi
-            echo ""
-            printf '%s' "$table"
-            echo ""
-            printf '%s' "$details"
-          } >> "$GITHUB_STEP_SUMMARY"
-
-          if [ "$DO_FILE" != "true" ]; then
-            echo "manual dispatch without file_issue — leaving issues untouched."
-            exit 0
-          fi
-
-          LABEL=nightly-cve
-          TITLE="🛡️ Nightly image scan — open findings (CVEs / build failures) on main"
-          gh label create "$LABEL" --repo "$REPO" --color B60205 \
-            --description "Nightly image scan: fixable HIGH/CRITICAL CVEs and/or images failing to build/scan on main" \
-            --force || true
-          num="$(gh issue list --repo "$REPO" --label "$LABEL" --state open --json number --jq '.[0].number // empty')"
-
-          # A "problem" is EITHER fixable CVEs (total>0) OR an image that failed to
-          # build/scan (missing>0). Folding build-failures in means a broken
-          # Dockerfile on main can't sit silently until release night — the scan
-          # must NOT claim "clean" when it didn't actually scan everything.
-          problem=0
-          [ "$total" -gt 0 ] && problem=1
-          [ "$missing" -gt 0 ] && problem=1
-          degraded_note=""
-          if [ "$missing" -gt 0 ]; then
-            # Build via direct expansion + $'\n\n', NOT $(printf '...\n\n') whose
-            # command substitution strips trailing newlines → the note would run
-            # straight into the next sentence.
-            degraded_note="🚨 **Scan degraded** — ${missing} of ${EXPECTED} images failed to build/scan (see the matrix jobs in ${RUN_URL}). Results below are PARTIAL, and a non-building image is itself a release blocker."$'\n\n'
-          fi
-
-          if [ "$problem" -eq 1 ]; then
-            body="$(printf '%sNightly image scan on `main` (%s): **%s** fixable HIGH/CRITICAL CVE(s) across %s/%s images scanned.\n\n%s\n%s\n**Remediate**: most CVEs are upstream base-image (Alpine / distroless / nginx) — a fresh rebuild or base-image bump usually clears them; otherwise bump the pinned package. A failed build is a Dockerfile/COPY break to fix directly. The release-time Trivy gate (release.yaml) blocks a tag until CVEs are 0, so fixing now avoids a release-night scramble (security-audit-runbook §37). This issue is REFRESHED nightly (body edited in place — no comment spam) and auto-closes once all images build clean.' \
-              "$degraded_note" "$RUN_URL" "$total" "$present" "$EXPECTED" "$table" "$details")"
-            if [ -n "$num" ]; then
-              # EDIT the body in place rather than adding a daily comment: a comment
-              # emails the assignee EVERY morning while an upstream patch is pending
-              # (alert nagging → fatigue → muted scan). An edit keeps the issue
-              # current WITHOUT a notification; only the initial create (state 0→1)
-              # and the final close notify.
-              echo "refreshing existing tracking issue #${num} (silent body edit)"
-              gh issue edit "$num" --repo "$REPO" --body "$body"
-            else
-              echo "filing new tracking issue (state change → notify)"
-              gh issue create --repo "$REPO" --title "$TITLE" --label "$LABEL" \
-                --assignee vencil --body "$body"
-            fi
-          else
-            # problem==0 ⇒ total==0 AND missing==0 ⇒ genuinely all-clean, all scanned.
-            if [ -n "$num" ]; then
-              echo "all ${EXPECTED} images build clean — closing tracking issue #${num}"
-              gh issue comment "$num" --repo "$REPO" \
-                --body "✅ All ${EXPECTED} images build clean (0 fixable HIGH/CRITICAL) as of $(date -u +%F). Auto-closing. (${RUN_URL})"
-              gh issue close "$num" --repo "$REPO"
-            else
-              echo "all clean, no open issue — nothing to do."
-            fi
-          fi
+          rc=0
+          # Self-built (5) — feeds the release.yaml Trivy gate; keep this signal clean.
+          bash scripts/ops/file_cve_report.sh frags-sb \
+            nightly-cve \
+            "🛡️ Nightly image scan — self-built component CVEs / build failures on main" \
+            5 "self-built component" \
+            "The release-time Trivy gate (release.yaml) blocks a tag until these are 0 (security-audit-runbook §37)." || rc=1
+          # Third-party (14) — informational; remediation is an upstream image bump.
+          bash scripts/ops/file_cve_report.sh frags-tp \
+            nightly-cve-thirdparty \
+            "🛡️ Nightly image scan — third-party upstream image CVEs on main" \
+            14 "third-party upstream image" \
+            "Remediation = bump the pinned upstream image tag (tracked toward #902 L2 digest-pin + L3 auto-bump)." || rc=1
+          exit $rc
