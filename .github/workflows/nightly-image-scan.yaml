@@ -53,6 +53,8 @@ jobs:
     name: scan ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }} # mirror for the `if` guard below
     strategy:
       fail-fast: false # scan every image so one build break doesn't mask the rest
       matrix:
@@ -75,6 +77,16 @@ jobs:
             context: .
             dockerfile: components/recipe-preview/Dockerfile
     steps:
+      # Authenticated Docker Hub pulls (200/6h, per-account not shared-IP) when creds
+      # are set; guarded — a no-op for forks / when the secret is unset. `secrets`
+      # isn't allowed in `if`, so gate on the mirrored env var (#902 / #907 review).
+      - name: Docker Hub login (no-op without creds)
+        if: ${{ env.DOCKERHUB_USERNAME != '' }}
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
       - uses: actions/checkout@v6
 
       - name: Set up Docker Buildx
@@ -144,6 +156,8 @@ jobs:
     name: scan ${{ matrix.name }} (third-party)
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }} # mirror for the `if` guard below
     strategy:
       fail-fast: false # scan every image so one pull failure doesn't mask the rest
       matrix:
@@ -185,6 +199,14 @@ jobs:
           - name: alpine-git # k8s/04-tenant-api/deployment.yaml (gitops sidecar)
             ref: "alpine/git:v2.52.0"
     steps:
+      # Authenticated Docker Hub pulls (rate-limit headroom); guarded no-op without creds.
+      - name: Docker Hub login (no-op without creds)
+        if: ${{ env.DOCKERHUB_USERNAME != '' }}
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
       - uses: actions/checkout@v6 # for scripts/ops/summarize_trivy_cve.sh
 
       # No build: Trivy pulls the upstream ref and scans it directly. SAME contract
