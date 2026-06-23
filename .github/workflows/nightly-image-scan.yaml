@@ -177,11 +177,11 @@ jobs:
           - name: chargeback-python # helm/chargeback-aggregator/values.yaml
             ref: "python:3.13-slim"
           - name: envoy # helm/federation-gateway/values.yaml
-            ref: "envoyproxy/envoy:distroless-v1.38.0"
+            ref: "envoyproxy/envoy:distroless-v1.38.0@sha256:a7a56545102f7a682e0cafea2c9b8448af1b09ebb710eab688dfb931e3ec7ff6"
           - name: oauth2-proxy # helm/da-portal + helm/tenant-api values.yaml
-            ref: "quay.io/oauth2-proxy/oauth2-proxy:v7.15.2"
+            ref: "quay.io/oauth2-proxy/oauth2-proxy:v7.15.2@sha256:aa0bd8dd5ab0c78e4c91c92755ad573a5f92241f88138b4141b8ec803463b4fd"
           - name: prom-label-proxy # helm/federation-proxy/values.yaml
-            ref: "quay.io/prometheuscommunity/prom-label-proxy:v0.13.0"
+            ref: "quay.io/prometheuscommunity/prom-label-proxy:v0.13.0@sha256:11ccecc8f08d0ff8f978ada9de7f3a31518c9bb0ce8e15e6cf97dd5251b84f59"
           - name: mariadb # helm/mariadb-instance/values.yaml
             ref: "mariadb:11.8.8"
           - name: mysqld-exporter # helm/mariadb-instance/values.yaml

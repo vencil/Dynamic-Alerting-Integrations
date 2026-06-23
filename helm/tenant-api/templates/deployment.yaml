@@ -219,7 +219,7 @@ spec:
         # ── Sidecar: oauth2-proxy ──────────────────────────────────────────────
         {{- if .Values.oauth2Proxy.enabled }}
         - name: oauth2-proxy
-          image: "{{ .Values.oauth2Proxy.image.repository }}:{{ .Values.oauth2Proxy.image.tag }}"
+          image: "{{ .Values.oauth2Proxy.image.repository }}:{{ .Values.oauth2Proxy.image.tag }}{{ with .Values.oauth2Proxy.image.digest }}@{{ . }}{{ end }}"
           imagePullPolicy: {{ .Values.oauth2Proxy.image.pullPolicy }}
           securityContext:
             allowPrivilegeEscalation: false

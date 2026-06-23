@@ -66,6 +66,17 @@ def _repo_of(ref: str) -> str:
     return ref.split("@", 1)[0].rsplit(":", 1)[0]
 
 
+def _resolvable(ref: str) -> str:
+    """A form the resolver can parse. skopeo/docker reject a ref carrying BOTH a
+    `:tag` AND an `@digest` (fatal "Error parsing reference"); the digest is
+    authoritative, so resolve `<repo>@<digest>` and drop the informational tag.
+    Tag-only refs pass through unchanged. (#902 L2 pins as `repo:tag@digest` —
+    readable tag + immutable digest, which Kubernetes accepts but skopeo won't.)"""
+    if "@" in ref:
+        return f"{_repo_of(ref)}@{ref.split('@', 1)[1]}"
+    return ref
+
+
 def _is_concrete(ref: str) -> bool:
     """A ref we can actually resolve: has a tag, isn't a Helm template."""
     if "{{" in ref or "}}" in ref:
@@ -177,10 +188,11 @@ def main() -> int:
     print(f"Resolving {len(refs)} concrete image ref(s) via {name}...")
     failed: list[tuple[str, str]] = []
     for ref in refs:
-        ok, reason = _resolve_once(build_cmd(ref), args.timeout)
+        resolvable = _resolvable(ref)  # `repo:tag@digest` → `repo@digest` for the resolver
+        ok, reason = _resolve_once(build_cmd(resolvable), args.timeout)
         if not ok:
             # One retry absorbs a transient registry blip before failing the gate.
-            ok, reason = _resolve_once(build_cmd(ref), args.timeout)
+            ok, reason = _resolve_once(build_cmd(resolvable), args.timeout)
         if ok:
             print(f"  ok       {ref}")
         else:

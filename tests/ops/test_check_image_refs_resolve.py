@@ -6,11 +6,17 @@ by the image-ref-resolve workflow, not here.
 """
 from __future__ import annotations
 
+import importlib.util
 import subprocess
 import sys
 from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "ops" / "check_image_refs_resolve.py"
+
+# Load the script as a module to unit-test pure helpers directly (no subprocess).
+_spec = importlib.util.spec_from_file_location("_check_image_refs_resolve", SCRIPT)
+_cir = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_cir)
 
 
 def _write(p: Path, text: str) -> None:
@@ -98,3 +104,17 @@ def test_first_party_namespace_is_skipped(tmp_path: Path) -> None:
         '        - image: "quay.io/o/p:v1"\n',
     )
     assert _list_refs(tmp_path) == {"quay.io/o/p:v1"}
+
+
+def test_resolvable_drops_tag_when_digest_present() -> None:
+    # skopeo/docker reject a ref carrying BOTH a :tag and an @digest ("Error
+    # parsing reference"); resolve `repo@digest` (the digest is authoritative).
+    # #902 L2 pins as `repo:tag@digest`, so the resolver MUST normalize it.
+    assert _cir._resolvable("quay.io/o/p:v1@sha256:abc") == "quay.io/o/p@sha256:abc"
+    assert (
+        _cir._resolvable("envoyproxy/envoy:distroless-v1.0@sha256:def")
+        == "envoyproxy/envoy@sha256:def"
+    )
+    # tag-only and digest-only refs pass through unchanged.
+    assert _cir._resolvable("foo/bar:1.0") == "foo/bar:1.0"
+    assert _cir._resolvable("foo/bar@sha256:xyz") == "foo/bar@sha256:xyz"

@@ -46,6 +46,14 @@ image:
   repository: envoyproxy/envoy
   # distroless: nonroot, no shell, core binary only — the production tag.
   tag: "distroless-v1.38.0"
+  # Pinned by digest (#902 L2 supply-chain): immutable content ref; tag kept for
+  # readability. Bump via `docker buildx imagetools inspect <repo>:<tag> --format
+  # '{{ .Manifest.Digest }}'`. MUST stay in sync with the scan-thirdparty matrix in
+  # .github/workflows/nightly-image-scan.yaml (the drift-guard test enforces it).
+  # ⛔ Digest is AUTHORITATIVE: `--set image.tag=…` ALONE does NOT upgrade — k8s
+  #    silently keeps running THIS digest (tag becomes a lie). To upgrade you MUST
+  #    also `--set image.digest=<new>` (or `=""`). L3/Renovate will automate both.
+  digest: "sha256:a7a56545102f7a682e0cafea2c9b8448af1b09ebb710eab688dfb931e3ec7ff6"
   pullPolicy: IfNotPresent
 
 # ── JWT verification (ADR-020 §Token model) ──────────────────────────

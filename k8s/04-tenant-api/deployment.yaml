@@ -170,7 +170,8 @@ spec:
         # Listens on :4180, authenticates via GitHub/OIDC, forwards to localhost:8080.
         # Injects X-Forwarded-Email and X-Forwarded-Groups headers consumed by tenant-api RBAC.
         - name: oauth2-proxy
-          image: quay.io/oauth2-proxy/oauth2-proxy:v7.15.2
+          # Pinned by digest (#902 L2) — same digest as the helm charts' oauth2-proxy.
+          image: quay.io/oauth2-proxy/oauth2-proxy:v7.15.2@sha256:aa0bd8dd5ab0c78e4c91c92755ad573a5f92241f88138b4141b8ec803463b4fd
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false

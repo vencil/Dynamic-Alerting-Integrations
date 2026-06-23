@@ -11,7 +11,8 @@ type: application
 # 0.3.0 — ADR-021 (#609) PR-2: victorialogs mode — tenant log-query authz plane
 #         (AccountID/ProjectID injection, fail-closed null-claim guard,
 #         default-deny LogsQL endpoint allowlist, aud=tenant-federation-logs)
-version: 0.3.0
+# 0.3.1 — #902 L2: pin the Envoy image by digest (image.digest knob) — supply-chain
+version: 0.3.1
 # appVersion: pinned Envoy release
 appVersion: "v1.38.0"
 # kubeVersion: the deployment uses the native preStop.sleep lifecycle
