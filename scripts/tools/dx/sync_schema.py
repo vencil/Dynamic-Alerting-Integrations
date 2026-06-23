@@ -148,6 +148,12 @@ def extract_python_keys(py_source_path):
     there's no Go AST in Python; here Python parses Python.) A SyntaxError in the
     SSOT is intentionally left to propagate — that file is imported app-wide, so
     a malformed edit is already caught by every other test.
+
+    Scans MODULE-LEVEL statements only (`tree.body`), not `ast.walk` — the SSOT
+    is a module-level constant, and walking every nested node would let a
+    function-local `VALID_RESERVED_KEYS = {...}` decoy shadow it (adversarial
+    review NIT-1). Non-literal / augmented (`|=`) forms aren't matched → return
+    empty → the 3-way gate fail-louds the drift.
     """
     path = Path(py_source_path)
     with open(path, "r", encoding="utf-8") as f:
@@ -155,7 +161,7 @@ def extract_python_keys(py_source_path):
 
     reserved_keys = set()
     reserved_prefixes = []
-    for node in ast.walk(tree):
+    for node in tree.body:
         if isinstance(node, ast.Assign):
             names = {t.id for t in node.targets if isinstance(t, ast.Name)}
             value = node.value

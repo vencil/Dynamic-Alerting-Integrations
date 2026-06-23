@@ -153,6 +153,21 @@ class TestExtractPythonKeysEdge:
         assert keys == set()
         assert prefixes == []
 
+    def test_module_level_only_ignores_nested_decoy(self, tmp_path):
+        # A function-local VALID_RESERVED_KEYS must NOT shadow the module-level one
+        # (module-level `tree.body` scan, not ast.walk). Adversarial review NIT-1.
+        tmp = tmp_path / "decoy.py"
+        tmp.write_text(
+            'VALID_RESERVED_KEYS = {"_real"}\n'
+            'VALID_RESERVED_PREFIXES = ("_state_",)\n'
+            'def f():\n'
+            '    VALID_RESERVED_KEYS = {"_decoy"}\n'
+            '    return VALID_RESERVED_KEYS\n',
+            encoding="utf-8")
+        keys, prefixes = ss.extract_python_keys(str(tmp))
+        assert keys == {"_real"}
+        assert prefixes == ["_state_"]
+
 
 class TestPrintDriftReport:
     """print_drift_report: has_drift return + every drift section renders."""
