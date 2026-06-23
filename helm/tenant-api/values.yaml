@@ -27,6 +27,9 @@ oauth2Proxy:
     tag: "v7.15.2"
     # Pinned by digest (#902 L2) — same digest as da-portal's oauth2-proxy; the
     # drift-guard requires both charts + the scan matrix to carry it identically.
+    # ⛔ Digest is AUTHORITATIVE: `--set oauth2Proxy.image.tag=…` ALONE does NOT
+    #    upgrade — k8s silently keeps running THIS digest. Also set/clear
+    #    oauth2Proxy.image.digest. L3/Renovate will automate both.
     digest: "sha256:aa0bd8dd5ab0c78e4c91c92755ad573a5f92241f88138b4141b8ec803463b4fd"
     pullPolicy: IfNotPresent
   # Provider: github | google | oidc | gitlab
