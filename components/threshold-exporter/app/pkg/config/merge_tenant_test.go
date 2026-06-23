@@ -3,6 +3,8 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -88,5 +90,157 @@ func TestCheckTenantRootKeys(t *testing.T) {
 				t.Errorf("CheckTenantRootKeys(%q) = %v, want no warning", tt.yaml, got)
 			}
 		})
+	}
+}
+
+// TestMergeTenantWithRootDefaults_FlatKVFallback pins the flat key-value
+// fallback (merge_tenant.go "Fallback: a flat key-value document …"): a body
+// with NO top-level `tenants:` wrapper is wrapped under tenantID, preserving the
+// historical loadMergedConfig behavior. This path is documented as load-bearing
+// but was previously unexercised — a wholesale rewrite could silently drop it
+// while the wrapper-form tests stayed green (the false-green trap this suite
+// closes).
+func TestMergeTenantWithRootDefaults_FlatKVFallback(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir() // no _defaults.yaml needed
+
+	body := []byte("container_cpu: \"70\"\nmysql_cpu: \"60\"\n")
+	merged := MergeTenantWithRootDefaults(dir, "db-a", body)
+
+	tenant, ok := merged.Tenants["db-a"]
+	if !ok {
+		t.Fatalf("flat-KV body should be wrapped under tenantID db-a, got tenants: %v", merged.Tenants)
+	}
+	if got := tenant["container_cpu"].Default; got != "70" {
+		t.Errorf("container_cpu = %q, want \"70\"", got)
+	}
+	if got := tenant["mysql_cpu"].Default; got != "60" {
+		t.Errorf("mysql_cpu = %q, want \"60\"", got)
+	}
+	if len(merged.Tenants) != 1 {
+		t.Errorf("only the requested tenant should be present, got: %v", merged.Tenants)
+	}
+}
+
+// TestMergeTenantWithRootDefaults_BodyShapes characterizes how the parse paths
+// (tenants-block, flat-KV fallback, and unparseable/empty) shape the resulting
+// Tenants map. It pins two non-obvious behaviors: the `tenants:` block takes
+// precedence — when it already contains the requested tenantID the flat-KV
+// fallback does NOT fire (no phantom key); and a multi-tenant body merges EVERY
+// tenant in the block, not just tenantID.
+func TestMergeTenantWithRootDefaults_BodyShapes(t *testing.T) {
+	t.Parallel()
+	// shape flattens Tenants to tenant -> sorted metric keys, so each case can
+	// assert the EXACT merged shape without depending on ScheduledValue internals.
+	shape := func(c ThresholdConfig) map[string][]string {
+		out := make(map[string][]string, len(c.Tenants))
+		for tenant, metrics := range c.Tenants {
+			keys := make([]string, 0, len(metrics))
+			for k := range metrics {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			out[tenant] = keys
+		}
+		return out
+	}
+	tests := []struct {
+		name     string
+		tenantID string
+		body     string
+		want     map[string][]string
+	}{
+		{
+			name:     "tenants block, requested id present — no flat-KV phantom",
+			tenantID: "db-a",
+			body:     "tenants:\n  db-a:\n    container_cpu: \"70\"\n",
+			want:     map[string][]string{"db-a": {"container_cpu"}},
+		},
+		{
+			name:     "multi-tenant block merges all tenants",
+			tenantID: "db-a",
+			body:     "tenants:\n  db-a:\n    container_cpu: \"70\"\n  db-b:\n    mysql_cpu: \"60\"\n",
+			want:     map[string][]string{"db-a": {"container_cpu"}, "db-b": {"mysql_cpu"}},
+		},
+		{
+			name:     "empty body merges nothing",
+			tenantID: "db-a",
+			body:     "",
+			want:     map[string][]string{},
+		},
+		{
+			name:     "scalar (non-mapping) body merges nothing",
+			tenantID: "db-a",
+			body:     "just-a-string\n",
+			want:     map[string][]string{},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			merged := MergeTenantWithRootDefaults(t.TempDir(), tt.tenantID, []byte(tt.body))
+			if got := shape(merged); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("tenant shape = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestMergeTenantWithRootDefaults_PropagatesStateFilters pins that state_filters
+// from the root _defaults.yaml are carried into the merged config (alongside
+// Defaults). The original suite asserted only Defaults propagation, leaving
+// StateFilters — a second thing the defaults overlay copies — unpinned.
+func TestMergeTenantWithRootDefaults_PropagatesStateFilters(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	defaults := "state_filters:\n" +
+		"  container_crashloop:\n" +
+		"    reasons: [\"CrashLoopBackOff\"]\n" +
+		"    severity: critical\n"
+	if err := os.WriteFile(filepath.Join(dir, "_defaults.yaml"), []byte(defaults), 0o644); err != nil {
+		t.Fatalf("write defaults: %v", err)
+	}
+
+	body := []byte("tenants:\n  db-a:\n    container_cpu: \"70\"\n")
+	merged := MergeTenantWithRootDefaults(dir, "db-a", body)
+
+	sf, ok := merged.StateFilters["container_crashloop"]
+	if !ok {
+		t.Fatalf("state_filters from _defaults.yaml should propagate, got: %v", merged.StateFilters)
+	}
+	if sf.Severity != "critical" {
+		t.Errorf("severity = %q, want \"critical\"", sf.Severity)
+	}
+	if len(sf.Reasons) != 1 || sf.Reasons[0] != "CrashLoopBackOff" {
+		t.Errorf("reasons = %v, want [CrashLoopBackOff]", sf.Reasons)
+	}
+}
+
+// TestMergeTenantWithRootDefaults_MalformedDefaultsTolerated pins the CURRENT
+// tolerance of a corrupt _defaults.yaml in THIS helper: a syntactically invalid
+// file is skipped (empty Defaults, no panic, no fabricated values) and does NOT
+// block the tenant merge. corrupt != missing, and this helper (the lightweight
+// tenant-api GET/validate/PUT boundary) tolerates it silently — but the platform
+// is NOT blind to it: the production scanner emits
+// da_config_parse_failure_total{file_basename="_defaults.yaml"} and pages via the
+// ConfigDefaultsParseFailure critical alert (k8s/03-monitoring/configmap-rules-
+// platform.yaml, issue #643). Pinned as this helper's current behavior.
+func TestMergeTenantWithRootDefaults_MalformedDefaultsTolerated(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	// Unclosed flow mapping → yaml.Unmarshal returns an error.
+	if err := os.WriteFile(filepath.Join(dir, "_defaults.yaml"),
+		[]byte("{ this is: not valid yaml\n"), 0o644); err != nil {
+		t.Fatalf("write defaults: %v", err)
+	}
+
+	body := []byte("tenants:\n  db-a:\n    container_cpu: \"70\"\n")
+	merged := MergeTenantWithRootDefaults(dir, "db-a", body)
+
+	if len(merged.Defaults) != 0 {
+		t.Errorf("malformed _defaults.yaml should yield empty Defaults, got: %v", merged.Defaults)
+	}
+	if _, ok := merged.Tenants["db-a"]["container_cpu"]; !ok {
+		t.Error("tenant body should still merge despite a malformed _defaults.yaml")
 	}
 }
