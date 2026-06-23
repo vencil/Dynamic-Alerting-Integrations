@@ -7,7 +7,8 @@ type: application
 # 0.1.1 — #539: self-review — exec_time_ms→_s (correctness), PVC resource-policy: keep, query both _s + _ms legacy across upgrade window
 # 0.1.2 — #566 T5: image.digest knob (supply-chain pinning); default empty so existing deploys are no-op
 # 0.2.0 — #566 batch C: CSV sha256 sidecar + append-only manifest.jsonl (T2-4 tamper-evident); extraEnv/extraEnvFrom (Q5 platform convention)
-version: 0.2.0
+# 0.2.1 — #902 L2 slice-2: pin the python base image by digest (image.digest)
+version: 0.2.1
 # appVersion: pinned python image
 appVersion: "3.13"
 keywords:

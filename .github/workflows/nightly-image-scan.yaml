@@ -171,11 +171,11 @@ jobs:
         # alert (NOT a silent clean) — add a docker/login-action step then.
         include:
           - name: vector # helm/vector/values.yaml
-            ref: "timberio/vector:0.55.0-distroless-libc"
+            ref: "timberio/vector:0.55.0-distroless-libc@sha256:2fe99882ec787d8641bc620a7e3a1ce3b5e41375c8d681cacfac219620ba7a7e"
           - name: victoria-logs # helm/victorialogs/values.yaml
-            ref: "victoriametrics/victoria-logs:v1.50.0"
+            ref: "victoriametrics/victoria-logs:v1.50.0@sha256:ae9bea8d8a3b0fc47c7f0058bcca410e79c84b4a0acd12d4dac71b9302526590"
           - name: chargeback-python # helm/chargeback-aggregator/values.yaml
-            ref: "python:3.13-slim"
+            ref: "python:3.13-slim@sha256:c33f0bc4364a6881bed1ec0cc2665e6c53c87a43e774aaeab88e6f17af105e4f"
           - name: envoy # helm/federation-gateway/values.yaml
             ref: "envoyproxy/envoy:distroless-v1.38.0@sha256:a7a56545102f7a682e0cafea2c9b8448af1b09ebb710eab688dfb931e3ec7ff6"
           - name: oauth2-proxy # helm/da-portal + helm/tenant-api values.yaml
@@ -183,21 +183,21 @@ jobs:
           - name: prom-label-proxy # helm/federation-proxy/values.yaml
             ref: "quay.io/prometheuscommunity/prom-label-proxy:v0.13.0@sha256:11ccecc8f08d0ff8f978ada9de7f3a31518c9bb0ce8e15e6cf97dd5251b84f59"
           - name: mariadb # helm/mariadb-instance/values.yaml
-            ref: "mariadb:11.8.8"
+            ref: "mariadb:11.8.8@sha256:be1ef4fe5f14589325c08a41c76334097ce66c86264b75e1d28342c742782a61"
           - name: mysqld-exporter # helm/mariadb-instance/values.yaml
-            ref: "prom/mysqld-exporter:v0.18.0"
+            ref: "prom/mysqld-exporter:v0.18.0@sha256:2598c0571f383708e19016d119bb45c06128a9ebc962c9f49483278ac5a94c41"
           - name: grafana # k8s/03-monitoring/deployment-grafana.yaml
-            ref: "grafana/grafana:12.4.2"
+            ref: "grafana/grafana:12.4.2@sha256:83749231c3835e390a3144e5e940203e42b9589761f20ef3169c716e734ad505"
           - name: prometheus # k8s/03-monitoring/deployment-prometheus.yaml
-            ref: "prom/prometheus:v3.11.2"
+            ref: "prom/prometheus:v3.11.2@sha256:5550dc63da361dc30f6fe02ac0e4dfc736ededfef3c8d12a634db04a67824d78"
           - name: alertmanager # k8s/03-monitoring/deployment-alertmanager.yaml
-            ref: "prom/alertmanager:v0.32.0"
+            ref: "prom/alertmanager:v0.32.0@sha256:58e117eabccebbff04e6643a3432d6315a2cc3a8c24ab5849bc628886bf08857"
           - name: kube-state-metrics # k8s/03-monitoring/deployment-kube-state-metrics.yaml
-            ref: "registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.18.0"
+            ref: "registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.18.0@sha256:1545919b72e3ae035454fc054131e8d0f14b42ef6fc5b2ad5c751cafa6b2130e"
           - name: configmap-reload # k8s/03-monitoring/deployment-alertmanager.yaml (sidecar)
-            ref: "ghcr.io/jimmidyson/configmap-reload:v0.15.0"
+            ref: "ghcr.io/jimmidyson/configmap-reload:v0.15.0@sha256:b578b7599d65c0279f6e1aad201bba737b9b15e6a4f308281d9e26f765e6657f"
           - name: alpine-git # k8s/04-tenant-api/deployment.yaml (gitops sidecar)
-            ref: "alpine/git:v2.52.0"
+            ref: "alpine/git:v2.52.0@sha256:4a0e72d49596a1f5d3701aeedafdadc5c0da4062be4657c7bdc4017387f591cc"
     steps:
       # Authenticated Docker Hub pulls (rate-limit headroom); guarded no-op without creds.
       - name: Docker Hub login (no-op without creds)

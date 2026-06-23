@@ -61,7 +61,7 @@ spec:
       {{- if .Values.gitRepoUrl }}
       initContainers:
         - name: git-clone
-          image: alpine/git:v2.52.0
+          image: alpine/git:v2.52.0@sha256:4a0e72d49596a1f5d3701aeedafdadc5c0da4062be4657c7bdc4017387f591cc
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false

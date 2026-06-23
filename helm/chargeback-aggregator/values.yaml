@@ -16,7 +16,9 @@ image:
   tag: "3.13-slim"
   # Optional digest pin (#566 T5). See helm/victorialogs/values.yaml
   # for rationale + how to fetch.
-  digest: ""
+  # ⛔ Digest AUTHORITATIVE: `--set image.tag=…` alone won't upgrade (k8s keeps THIS
+  #    digest); also set/clear image.digest. #902 L2 (L3/Renovate will automate).
+  digest: "sha256:c33f0bc4364a6881bed1ec0cc2665e6c53c87a43e774aaeab88e6f17af105e4f"
   pullPolicy: IfNotPresent
 
 # Where the report lands. PVC because: CronJob output that nobody reads

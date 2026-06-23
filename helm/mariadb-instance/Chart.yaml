@@ -1,6 +1,7 @@
 apiVersion: v2
 name: mariadb-instance
 description: MariaDB instance with mysqld-exporter sidecar for Prometheus monitoring
-version: 0.1.0
+# 0.1.1 — #902 L2 slice-2: pin mariadb + mysqld-exporter images by digest
+version: 0.1.1
 appVersion: "11"
 type: application

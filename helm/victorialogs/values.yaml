@@ -26,7 +26,9 @@ image:
   # Empty (default) keeps `repo:tag` form — vulnerable to upstream
   # registry compromise but matches existing chart convention. Flip
   # the moment you have a supply-chain threat model that names this.
-  digest: ""
+  # ⛔ Digest AUTHORITATIVE: `--set image.tag=…` alone won't upgrade (k8s keeps THIS
+  #    digest); also set/clear image.digest. #902 L2 (L3/Renovate will automate).
+  digest: "sha256:ae9bea8d8a3b0fc47c7f0058bcca410e79c84b4a0acd12d4dac71b9302526590"
   pullPolicy: IfNotPresent
 
 # HTTP listen port for ingestion + query. VictoriaLogs default is 9428.
