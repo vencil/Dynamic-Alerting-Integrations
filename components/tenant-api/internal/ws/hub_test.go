@@ -133,13 +133,14 @@ func TestConcurrentBroadcasts(t *testing.T) {
 	for cidx, ch := range clients {
 		received := 0
 		timeout := time.After(5 * time.Second)
+	clientLoop:
 		for received < numEvents {
 			select {
 			case <-ch:
 				received++
 			case <-timeout:
 				t.Errorf("client %d: only received %d/%d events before timeout", cidx, received, numEvents)
-				break
+				break clientLoop
 			}
 		}
 	}

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -41,7 +42,7 @@ func startWatchLoopWithFakeClock(t *testing.T, m *ConfigManager, interval time.D
 	// Advance call lands; otherwise Advance happens before the ticker
 	// exists and the next tick is delayed by `interval` of fake-time
 	// rather than firing immediately.
-	fakeClock.BlockUntil(1)
+	_ = fakeClock.BlockUntilContext(context.Background(), 1)
 
 	stop := func() {
 		close(stopCh)
@@ -90,7 +91,7 @@ tenants:
 
 	// Fire one tick so the loop is observably alive before we stop it.
 	fakeClock.Advance(50 * time.Millisecond)
-	fakeClock.BlockUntil(1) // wait for tickOnce → ticker re-arm
+	_ = fakeClock.BlockUntilContext(context.Background(), 1) // wait for tickOnce → ticker re-arm
 
 	stop() // closes stopCh + asserts WatchLoop exited within 2s
 }
@@ -218,7 +219,7 @@ invalid: [yaml
 	// re-arms once tickOnce returns), proving WatchLoop survived the
 	// bad file without panicking.
 	fakeClock.Advance(50 * time.Millisecond)
-	fakeClock.BlockUntil(1)
+	_ = fakeClock.BlockUntilContext(context.Background(), 1)
 
 	// Should still have a valid config (partial load).
 	if cfg := m.GetConfig(); cfg == nil {
@@ -423,7 +424,7 @@ defaults:
 	// returns cleanly. BlockUntil proves we made it through the
 	// iteration without panic.
 	fakeClock.Advance(50 * time.Millisecond)
-	fakeClock.BlockUntil(1)
+	_ = fakeClock.BlockUntilContext(context.Background(), 1)
 	// Should not crash — just log warning. (No assertion; survival = pass.)
 }
 
@@ -457,7 +458,7 @@ defaults:
 	// Fire one tick; tickOnce hits the loadFile error branch and
 	// returns. Survival of the BlockUntil = no panic = pass.
 	fakeClock.Advance(50 * time.Millisecond)
-	fakeClock.BlockUntil(1)
+	_ = fakeClock.BlockUntilContext(context.Background(), 1)
 }
 
 // ============================================================

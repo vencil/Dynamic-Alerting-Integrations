@@ -122,7 +122,7 @@ func TestMerge_CanonicalKeyOrderAndQuoting(t *testing.T) {
 	mi := strings.Index(block, "metric: m")
 	wi := strings.Index(block, "window:")
 	ti := strings.Index(block, `threshold: "100`)
-	if !(ri >= 0 && ri < ni && ni < mi && mi < wi && wi < ti) {
+	if ri < 0 || ri >= ni || ni >= mi || mi >= wi || wi >= ti {
 		t.Errorf("recipe keys not in canonical order (recipe<name<metric<window<threshold):\n%s", out)
 	}
 	// value:severity must be quoted (colon → ambiguous unquoted)

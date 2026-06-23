@@ -205,8 +205,6 @@ func TestGetTask_CompletedTask(t *testing.T) {
 				if respTask.Summary == "" {
 					t.Errorf("expected non-empty summary, got empty string")
 				}
-
-				break
 			}
 		}
 

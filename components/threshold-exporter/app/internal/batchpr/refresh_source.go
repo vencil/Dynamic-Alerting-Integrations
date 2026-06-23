@@ -365,13 +365,13 @@ func finaliseRefreshSourceSummary(r *RefreshSourceResult) {
 func renderRefreshSourceReport(in RefreshSourceInput, r *RefreshSourceResult) string {
 	out := strings.Builder{}
 	out.WriteString("# Patch plan (data-layer hot-fix)\n\n")
-	out.WriteString(fmt.Sprintf("**Repo**: `%s`\n", in.Repo.FullName()))
+	fmt.Fprintf(&out, "**Repo**: `%s`\n", in.Repo.FullName())
 	if in.DryRun {
 		out.WriteString("**Mode**: dry-run (no checkout / write / commit / push / comment executed)\n")
 	}
-	out.WriteString(fmt.Sprintf("**Targets**: %d tenant PR(s)\n", len(in.Targets)))
+	fmt.Fprintf(&out, "**Targets**: %d tenant PR(s)\n", len(in.Targets))
 	allRuleIDs := uniqueSourceRuleIDs(in.Targets)
-	out.WriteString(fmt.Sprintf("**Source rules**: %d unique rule ID(s)\n\n", len(allRuleIDs)))
+	fmt.Fprintf(&out, "**Source rules**: %d unique rule ID(s)\n\n", len(allRuleIDs))
 
 	if len(r.Items) == 0 {
 		out.WriteString("No tenant PRs were targeted; refresh-source is a no-op.\n")
@@ -379,16 +379,16 @@ func renderRefreshSourceReport(in RefreshSourceInput, r *RefreshSourceResult) st
 	}
 
 	out.WriteString("## Summary\n\n")
-	out.WriteString(fmt.Sprintf("- Total targets: %d\n", r.Summary.TotalTargets))
-	out.WriteString(fmt.Sprintf("- Updated: %d (%d file(s) total)\n",
-		r.Summary.UpdatedCount, r.Summary.TotalFilesPatch))
-	out.WriteString(fmt.Sprintf("- Skipped (closed / merged): %d\n", r.Summary.SkippedCount))
-	out.WriteString(fmt.Sprintf("- No change (caller diff was empty): %d\n", r.Summary.NoChangeCount))
+	fmt.Fprintf(&out, "- Total targets: %d\n", r.Summary.TotalTargets)
+	fmt.Fprintf(&out, "- Updated: %d (%d file(s) total)\n",
+		r.Summary.UpdatedCount, r.Summary.TotalFilesPatch)
+	fmt.Fprintf(&out, "- Skipped (closed / merged): %d\n", r.Summary.SkippedCount)
+	fmt.Fprintf(&out, "- No change (caller diff was empty): %d\n", r.Summary.NoChangeCount)
 	if r.Summary.DryRunCount > 0 {
-		out.WriteString(fmt.Sprintf("- Dry-run: %d\n", r.Summary.DryRunCount))
+		fmt.Fprintf(&out, "- Dry-run: %d\n", r.Summary.DryRunCount)
 	}
 	if r.Summary.FailedCount > 0 {
-		out.WriteString(fmt.Sprintf("- Failed: %d\n", r.Summary.FailedCount))
+		fmt.Fprintf(&out, "- Failed: %d\n", r.Summary.FailedCount)
 	}
 	out.WriteString("\n")
 
@@ -405,8 +405,8 @@ func renderRefreshSourceReport(in RefreshSourceInput, r *RefreshSourceResult) st
 		case PatchSkippedNoChange:
 			notes = "caller's diff was empty for this tenant"
 		}
-		out.WriteString(fmt.Sprintf("| #%d | `%s` | %s | %s | %d | %s |\n",
-			it.PRNumber, mdCell(it.BranchName), it.PRState, it.Status, it.FilesUpdated, notes))
+		fmt.Fprintf(&out, "| #%d | `%s` | %s | %s | %d | %s |\n",
+			it.PRNumber, mdCell(it.BranchName), it.PRState, it.Status, it.FilesUpdated, notes)
 	}
 	out.WriteString("\n")
 
@@ -424,8 +424,8 @@ func renderRefreshSourceReport(in RefreshSourceInput, r *RefreshSourceResult) st
 			for i, n := range prs {
 				prStrs[i] = fmt.Sprintf("#%d", n)
 			}
-			out.WriteString(fmt.Sprintf("- `%s` → %s\n",
-				ruleID, strings.Join(prStrs, ", ")))
+			fmt.Fprintf(&out, "- `%s` → %s\n",
+				ruleID, strings.Join(prStrs, ", "))
 		}
 		out.WriteString("\n")
 	}
@@ -433,7 +433,7 @@ func renderRefreshSourceReport(in RefreshSourceInput, r *RefreshSourceResult) st
 	if len(r.Warnings) > 0 {
 		out.WriteString("## Warnings\n\n")
 		for _, w := range r.Warnings {
-			out.WriteString(fmt.Sprintf("- %s\n", w))
+			fmt.Fprintf(&out, "- %s\n", w)
 		}
 		out.WriteString("\n")
 	}

@@ -39,10 +39,10 @@ func (r *GuardReport) Markdown() string {
 	out := strings.Builder{}
 	out.WriteString("## Dangling Defaults Guard\n\n")
 	out.WriteString("### Summary\n\n")
-	out.WriteString(fmt.Sprintf("- Tenants in scope: **%d**\n", r.Summary.TotalTenants))
-	out.WriteString(fmt.Sprintf("- Errors: **%d**\n", r.Summary.Errors))
-	out.WriteString(fmt.Sprintf("- Warnings: **%d**\n", r.Summary.Warnings))
-	out.WriteString(fmt.Sprintf("- Tenants passing (zero errors): **%d**\n", r.Summary.PassedTenantCount))
+	fmt.Fprintf(&out, "- Tenants in scope: **%d**\n", r.Summary.TotalTenants)
+	fmt.Fprintf(&out, "- Errors: **%d**\n", r.Summary.Errors)
+	fmt.Fprintf(&out, "- Warnings: **%d**\n", r.Summary.Warnings)
+	fmt.Fprintf(&out, "- Tenants passing (zero errors): **%d**\n", r.Summary.PassedTenantCount)
 	out.WriteString("\n")
 
 	if len(r.Findings) == 0 {
@@ -80,12 +80,11 @@ func writeFindingsTable(out *strings.Builder, findings []Finding) {
 	out.WriteString("| Tenant | Field | Kind | Message |\n")
 	out.WriteString("|--------|-------|------|---------|\n")
 	for _, f := range findings {
-		out.WriteString(fmt.Sprintf("| %s | %s | %s | %s |\n",
+		fmt.Fprintf(out, "| %s | %s | %s | %s |\n",
 			emptyOrDash(f.TenantID),
 			emptyOrDash(f.Field),
 			f.Kind,
-			escapeMarkdownTableCell(f.Message),
-		))
+			escapeMarkdownTableCell(f.Message))
 	}
 }
 

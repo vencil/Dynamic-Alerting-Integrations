@@ -383,7 +383,7 @@ func (m *ConfigManager) IncrementalLoad() error {
 	}
 
 	m.mu.RLock()
-	hasCache := m.flat.hashes != nil && len(m.flat.hashes) > 0
+	hasCache := len(m.flat.hashes) > 0
 	m.mu.RUnlock()
 
 	if !hasCache {

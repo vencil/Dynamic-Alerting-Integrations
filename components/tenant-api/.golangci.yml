@@ -1,6 +1,33 @@
 version: "2"
 linters:
   default: standard
+  enable:
+    - depguard
+  settings:
+    errcheck:
+      # CLI/stdout writes are intentional fire-and-forget; checking their error is
+      # noise (they only fail on a broken stdout, where there is nothing to do).
+      exclude-functions:
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - fmt.Fprint
+    depguard:
+      # Dependency-direction ratchet (codifies the import-graph audit): the domain
+      # layer must not depend on the HTTP handler layer. Keeps the core verifiable,
+      # testable, and regenerable independently of the volatile HTTP boundary.
+      # Currently satisfied — this pins it so an AI rewrite cannot silently invert it.
+      rules:
+        domain-no-handler:
+          list-mode: lax
+          files:
+            - "**/internal/policy/**"
+            - "**/internal/rbac/**"
+            - "**/internal/customalerts/**"
+            - "**/internal/groups/**"
+            - "**/internal/views/**"
+          deny:
+            - pkg: github.com/vencil/tenant-api/internal/handler
+              desc: domain packages must not import the HTTP handler layer
   exclusions:
     rules:
       - path: _test\.go

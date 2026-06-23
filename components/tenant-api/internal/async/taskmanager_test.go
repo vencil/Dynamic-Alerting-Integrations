@@ -141,7 +141,6 @@ func TestWorkerCompletion(t *testing.T) {
 					t.Errorf("expected summary='1 succeeded, 1 failed', got %q", retrieved.Summary)
 				}
 				completed = true
-				break
 			}
 		}
 		if completed {

@@ -173,10 +173,8 @@ func TestServeHTTP_HeartbeatEmitted(t *testing.T) {
 
 	// Poll for a heartbeat to land (no blind sleep).
 	deadline := time.After(2 * time.Second)
-	for {
-		if strings.Contains(conn.body(), ": keepalive") {
-			break
-		}
+	for !strings.Contains(conn.body(), ": keepalive") {
+
 		select {
 		case <-deadline:
 			cancel()

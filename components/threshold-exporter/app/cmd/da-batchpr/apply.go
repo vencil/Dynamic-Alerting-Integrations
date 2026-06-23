@@ -182,33 +182,33 @@ func runApply(f *applyFlags, repo batchpr.Repo, stdout, errOut io.Writer, git ba
 func renderApplyReport(repo batchpr.Repo, in batchpr.ApplyInput, r *batchpr.ApplyResult) string {
 	out := strings.Builder{}
 	out.WriteString("# Apply report\n\n")
-	out.WriteString(fmt.Sprintf("**Repo**: `%s` (base branch: `%s`)\n", repo.FullName(), repo.BaseBranch))
+	fmt.Fprintf(&out, "**Repo**: `%s` (base branch: `%s`)\n", repo.FullName(), repo.BaseBranch)
 	if in.BranchPrefix != "" {
-		out.WriteString(fmt.Sprintf("**Branch prefix**: `%s`\n", in.BranchPrefix))
+		fmt.Fprintf(&out, "**Branch prefix**: `%s`\n", in.BranchPrefix)
 	}
 	if in.DryRun {
 		out.WriteString("**Mode**: dry-run (no git or GitHub API calls executed)\n")
 	}
 	if r.BasePRNumber > 0 {
-		out.WriteString(fmt.Sprintf("**Base PR**: #%d\n", r.BasePRNumber))
+		fmt.Fprintf(&out, "**Base PR**: #%d\n", r.BasePRNumber)
 	}
 	out.WriteString("\n")
 
 	out.WriteString("## Summary\n\n")
-	out.WriteString(fmt.Sprintf("- Total items: %d\n", r.Summary.TotalItems))
-	out.WriteString(fmt.Sprintf("- Created: %d\n", r.Summary.CreatedCount))
-	out.WriteString(fmt.Sprintf("- Skipped (existing): %d\n", r.Summary.SkippedExistingCount))
+	fmt.Fprintf(&out, "- Total items: %d\n", r.Summary.TotalItems)
+	fmt.Fprintf(&out, "- Created: %d\n", r.Summary.CreatedCount)
+	fmt.Fprintf(&out, "- Skipped (existing): %d\n", r.Summary.SkippedExistingCount)
 	if r.Summary.DryRunCount > 0 {
-		out.WriteString(fmt.Sprintf("- Dry-run: %d\n", r.Summary.DryRunCount))
+		fmt.Fprintf(&out, "- Dry-run: %d\n", r.Summary.DryRunCount)
 	}
 	if r.Summary.EmptyFilesCount > 0 {
-		out.WriteString(fmt.Sprintf("- Empty files (skipped): %d\n", r.Summary.EmptyFilesCount))
+		fmt.Fprintf(&out, "- Empty files (skipped): %d\n", r.Summary.EmptyFilesCount)
 	}
 	if r.Summary.FailedCount > 0 {
-		out.WriteString(fmt.Sprintf("- Failed: %d\n", r.Summary.FailedCount))
+		fmt.Fprintf(&out, "- Failed: %d\n", r.Summary.FailedCount)
 	}
 	if r.Summary.BasePlaceholderRewrites > 0 {
-		out.WriteString(fmt.Sprintf("- Base placeholder rewrites: %d\n", r.Summary.BasePlaceholderRewrites))
+		fmt.Fprintf(&out, "- Base placeholder rewrites: %d\n", r.Summary.BasePlaceholderRewrites)
 	}
 	out.WriteString("\n")
 
@@ -224,15 +224,15 @@ func renderApplyReport(repo batchpr.Repo, in batchpr.ApplyInput, r *batchpr.Appl
 		if it.PRNumber > 0 {
 			prCol = fmt.Sprintf("[#%d](%s)", it.PRNumber, it.PRURL)
 		}
-		out.WriteString(fmt.Sprintf("| %d | %s | `%s` | %s | %s | %s |\n",
-			it.PlanItemIndex, it.Kind, mdCell(it.BranchName), it.Status, prCol, notes))
+		fmt.Fprintf(&out, "| %d | %s | `%s` | %s | %s | %s |\n",
+			it.PlanItemIndex, it.Kind, mdCell(it.BranchName), it.Status, prCol, notes)
 	}
 	out.WriteString("\n")
 
 	if len(r.Warnings) > 0 {
 		out.WriteString("## Warnings\n\n")
 		for _, w := range r.Warnings {
-			out.WriteString(fmt.Sprintf("- %s\n", w))
+			fmt.Fprintf(&out, "- %s\n", w)
 		}
 		out.WriteString("\n")
 	}

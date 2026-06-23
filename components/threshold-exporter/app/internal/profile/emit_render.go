@@ -20,16 +20,16 @@ import (
 
 func renderProposalMarkdown(propIdx int, prop ExtractionProposal, tenantKey string) string {
 	out := strings.Builder{}
-	out.WriteString(fmt.Sprintf("# Proposal %d\n\n", propIdx))
-	out.WriteString(fmt.Sprintf("**Confidence**: %s  \n", prop.Confidence))
-	out.WriteString(fmt.Sprintf("**Dialect**: %s  \n", prop.Dialect))
-	out.WriteString(fmt.Sprintf("**Members**: %d rules  \n", len(prop.MemberRuleIDs)))
+	fmt.Fprintf(&out, "# Proposal %d\n\n", propIdx)
+	fmt.Fprintf(&out, "**Confidence**: %s  \n", prop.Confidence)
+	fmt.Fprintf(&out, "**Dialect**: %s  \n", prop.Dialect)
+	fmt.Fprintf(&out, "**Members**: %d rules  \n", len(prop.MemberRuleIDs))
 	if tenantKey != "" {
-		out.WriteString(fmt.Sprintf("**Tenant key**: `%s`  \n", tenantKey))
+		fmt.Fprintf(&out, "**Tenant key**: `%s`  \n", tenantKey)
 	} else {
 		out.WriteString("**Tenant key**: _(none — proposal has no varying labels)_  \n")
 	}
-	out.WriteString(fmt.Sprintf("**Estimated YAML lines saved**: %d  \n\n", prop.EstimatedYAMLLineSavings))
+	fmt.Fprintf(&out, "**Estimated YAML lines saved**: %d  \n\n", prop.EstimatedYAMLLineSavings)
 
 	out.WriteString("## Reason\n\n")
 	out.WriteString(prop.Reason)
@@ -40,23 +40,23 @@ func renderProposalMarkdown(propIdx int, prop ExtractionProposal, tenantKey stri
 
 	out.WriteString("## Member rules\n\n")
 	for _, rid := range prop.MemberRuleIDs {
-		out.WriteString(fmt.Sprintf("- `%s`\n", rid))
+		fmt.Fprintf(&out, "- `%s`\n", rid)
 	}
 	out.WriteString("\n")
 
 	out.WriteString("## Shared structure\n\n")
-	out.WriteString(fmt.Sprintf("- Expression template (normalised): `%s`\n", prop.SharedExprTemplate))
+	fmt.Fprintf(&out, "- Expression template (normalised): `%s`\n", prop.SharedExprTemplate)
 	if prop.SharedFor != "" {
-		out.WriteString(fmt.Sprintf("- For: `%s`\n", prop.SharedFor))
+		fmt.Fprintf(&out, "- For: `%s`\n", prop.SharedFor)
 	}
 	if len(prop.SharedLabels) > 0 {
 		out.WriteString("- Shared labels:\n")
 		for _, k := range sortedKeys(prop.SharedLabels) {
-			out.WriteString(fmt.Sprintf("  - `%s`: `%s`\n", k, prop.SharedLabels[k]))
+			fmt.Fprintf(&out, "  - `%s`: `%s`\n", k, prop.SharedLabels[k])
 		}
 	}
 	if len(prop.VaryingLabelKeys) > 0 {
-		out.WriteString(fmt.Sprintf("- Varying label keys: %s\n", strings.Join(quoteAll(prop.VaryingLabelKeys), ", ")))
+		fmt.Fprintf(&out, "- Varying label keys: %s\n", strings.Join(quoteAll(prop.VaryingLabelKeys), ", "))
 	}
 
 	out.WriteString("\n---\n\n")
@@ -71,29 +71,29 @@ func renderProposalMarkdown(propIdx int, prop ExtractionProposal, tenantKey stri
 // see the conf.d-shape decisions without opening the YAML files.
 func renderTranslatedProposalMarkdown(propIdx int, prop ExtractionProposal, translation *ProposalTranslation, tenantKey string) string {
 	out := strings.Builder{}
-	out.WriteString(fmt.Sprintf("# Proposal %d (translated to conf.d)\n\n", propIdx))
-	out.WriteString(fmt.Sprintf("**Confidence**: %s  \n", prop.Confidence))
-	out.WriteString(fmt.Sprintf("**Dialect**: %s  \n", prop.Dialect))
-	out.WriteString(fmt.Sprintf("**Translation status**: %s  \n", translation.Status))
-	out.WriteString(fmt.Sprintf("**Members**: %d rules  \n", len(prop.MemberRuleIDs)))
+	fmt.Fprintf(&out, "# Proposal %d (translated to conf.d)\n\n", propIdx)
+	fmt.Fprintf(&out, "**Confidence**: %s  \n", prop.Confidence)
+	fmt.Fprintf(&out, "**Dialect**: %s  \n", prop.Dialect)
+	fmt.Fprintf(&out, "**Translation status**: %s  \n", translation.Status)
+	fmt.Fprintf(&out, "**Members**: %d rules  \n", len(prop.MemberRuleIDs))
 	if tenantKey != "" {
-		out.WriteString(fmt.Sprintf("**Tenant key**: `%s`  \n", tenantKey))
+		fmt.Fprintf(&out, "**Tenant key**: `%s`  \n", tenantKey)
 	}
 	out.WriteString("\n")
 
 	out.WriteString("## Translation summary\n\n")
-	out.WriteString(fmt.Sprintf("- Metric key: `%s`\n", translation.MetricKey))
-	out.WriteString(fmt.Sprintf("- Default threshold (cluster median): `%g`\n", translation.DefaultThreshold))
+	fmt.Fprintf(&out, "- Metric key: `%s`\n", translation.MetricKey)
+	fmt.Fprintf(&out, "- Default threshold (cluster median): `%g`\n", translation.DefaultThreshold)
 	if translation.Operator != "" {
-		out.WriteString(fmt.Sprintf("- Comparison operator: `%s`\n", translation.Operator))
+		fmt.Fprintf(&out, "- Comparison operator: `%s`\n", translation.Operator)
 	}
 	if translation.Severity != "" {
-		out.WriteString(fmt.Sprintf("- Severity: `%s`\n", translation.Severity))
+		fmt.Fprintf(&out, "- Severity: `%s`\n", translation.Severity)
 	}
 	if len(translation.PerTenantOverrides) > 0 {
 		out.WriteString("- Per-tenant overrides (only tenants whose value differs from default):\n")
 		for _, k := range sortedTenantKeys(translation.PerTenantOverrides) {
-			out.WriteString(fmt.Sprintf("  - `%s` → `%g`\n", k, translation.PerTenantOverrides[k]))
+			fmt.Fprintf(&out, "  - `%s` → `%g`\n", k, translation.PerTenantOverrides[k])
 		}
 	}
 	out.WriteString("\n")
@@ -110,11 +110,11 @@ func renderTranslatedProposalMarkdown(propIdx int, prop ExtractionProposal, tran
 	for _, m := range translation.MemberStatuses {
 		switch m.Status {
 		case TranslationOK:
-			out.WriteString(fmt.Sprintf("- ✅ `%s` — threshold=`%g`\n", m.SourceRuleID, m.Threshold))
+			fmt.Fprintf(&out, "- ✅ `%s` — threshold=`%g`\n", m.SourceRuleID, m.Threshold)
 		case TranslationPartial:
-			out.WriteString(fmt.Sprintf("- ⚠️ `%s` — threshold=`%g` (partial: %s)\n", m.SourceRuleID, m.Threshold, strings.Join(m.Warnings, "; ")))
+			fmt.Fprintf(&out, "- ⚠️ `%s` — threshold=`%g` (partial: %s)\n", m.SourceRuleID, m.Threshold, strings.Join(m.Warnings, "; "))
 		case TranslationSkipped:
-			out.WriteString(fmt.Sprintf("- ⏭️ `%s` — skipped (%s)\n", m.SourceRuleID, m.SkipReason))
+			fmt.Fprintf(&out, "- ⏭️ `%s` — skipped (%s)\n", m.SourceRuleID, m.SkipReason)
 		}
 	}
 	out.WriteString("\n")

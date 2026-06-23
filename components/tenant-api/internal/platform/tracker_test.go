@@ -430,7 +430,7 @@ func TestWatchLoop_TickerTriggersAdditionalSyncs(t *testing.T) {
 	// 2. Wait for the WatchLoop goroutine to register its ticker on the
 	//    fake clock. Without this, an early Advance() can fire before the
 	//    ticker exists and be swallowed.
-	clock.BlockUntil(1)
+	_ = clock.BlockUntilContext(context.Background(), 1)
 
 	// 3. Advance the fake clock by syncInterval to fire one tick, then
 	//    wait for the goroutine to consume it (signaled by the lister

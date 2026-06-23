@@ -21,7 +21,7 @@ package main
 
 import (
 	"fmt"
-	"io/ioutil"
+
 	"os"
 	"path/filepath"
 	"runtime"
@@ -107,7 +107,7 @@ func fetchHierarchicalFixture(b *testing.B, numTenants int, freshDir bool) strin
 		// Cached fixtures go in os.TempDir() so they outlive the per-test
 		// tmpdir cleanup — otherwise the second benchmark using the same
 		// cache entry would find the dir deleted.
-		dir, err := ioutil.TempDir("", fmt.Sprintf("hierbench-%d-", numTenants))
+		dir, err := os.MkdirTemp("", fmt.Sprintf("hierbench-%d-", numTenants))
 		if err != nil {
 			entry.err = err
 			return

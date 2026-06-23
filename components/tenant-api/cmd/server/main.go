@@ -597,7 +597,9 @@ func main() {
 	<-quit
 	slog.Info("tenant-api shutting down")
 
-	taskMgr.Close()
+	if err := taskMgr.Close(); err != nil {
+		slog.Warn("task manager close error", "error", err)
+	}
 	close(stopCh)
 
 	// #675: gracefully tear down SSE before srv.Shutdown. SSE streams are never

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
@@ -384,7 +385,7 @@ func (c *ThresholdCollector) MetricsHandler() http.Handler {
 	reg := prometheus.NewRegistry()
 	reg.MustRegister(c)
 	// Also register default Go collector for process metrics
-	reg.MustRegister(prometheus.NewGoCollector())
+	reg.MustRegister(collectors.NewGoCollector())
 
 	// v2.7.0 Phase 4: register hierarchical scan / reload metrics on the
 	// same registry so /metrics serves them alongside everything else.
