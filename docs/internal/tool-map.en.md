@@ -122,7 +122,7 @@ lang: en
 | `scan_component_health.py` | JSX 元件健康快照（v2.7.0 Phase .a A-1 首發） |
 | `suggest_related.py` | 基於 audience 重疊 + tags 相似度推薦 related tools |
 | `sync_glossary_abbr.py` | Sync abbreviations from glossary.md to MkDocs snippet. |
-| `sync_schema.py` | Sync JSON Schema with Go source definitions. |
+| `sync_schema.py` | Check tenant reserved-key drift across Schema / Go / Python. |
 | `sync_tool_registry.py` | 從 tool-registry.yaml 同步 Hub 卡片 + CUSTOM_FLOW_MAP + JSX frontmatter |
 | `tenant_verify.py` | Verify a tenant's effective config — print merged_hash and source_hash. |
 
@@ -132,6 +132,7 @@ lang: en
 |------|------|
 | `_lint_helpers.py` | Shared utilities for lint tools. |
 | `_version_patterns.py` | Version pattern registry for validate_docs_versions.py |
+| `check_account_registry_monotonic.py` | guard _account_registry.yaml's |
 | `check_ad_hoc_git_scripts.py` | Ad-hoc Windows shell script guard (L1 pre-commit hook). |
 | `check_bat_ascii_purity.py` | - L1 guard for pitfall #45 (CJK-in-.bat). |
 | `check_bilingual_annotations.py` | check_bilingual_annotations.py |
