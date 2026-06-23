@@ -217,15 +217,14 @@ func TestMergeTenantWithRootDefaults_PropagatesStateFilters(t *testing.T) {
 }
 
 // TestMergeTenantWithRootDefaults_MalformedDefaultsTolerated pins the CURRENT
-// tolerance of a corrupt _defaults.yaml: a syntactically invalid file is skipped
-// (empty Defaults, no panic, no fabricated values) and does NOT block the tenant
-// merge. This is fail-SOFT, NOT verified fail-safe — corrupt != missing: missing
-// is operator intent to inherit nothing, whereas a corrupt platform-defaults file
-// is a typo that silently drops the inherited safety net for affected tenants.
-// The production scanner (config.go parsedDefaults pre-parse) tolerates it the
-// same way by design — log-and-skip so one broken file can't poison the whole
-// cache — but the skip is log-only, not alertable (follow-up: emit a metric).
-// Pinned as current behavior, NOT endorsed as safe.
+// tolerance of a corrupt _defaults.yaml in THIS helper: a syntactically invalid
+// file is skipped (empty Defaults, no panic, no fabricated values) and does NOT
+// block the tenant merge. corrupt != missing, and this helper (the lightweight
+// tenant-api GET/validate/PUT boundary) tolerates it silently — but the platform
+// is NOT blind to it: the production scanner emits
+// da_config_parse_failure_total{file_basename="_defaults.yaml"} and pages via the
+// ConfigDefaultsParseFailure critical alert (k8s/03-monitoring/configmap-rules-
+// platform.yaml, issue #643). Pinned as this helper's current behavior.
 func TestMergeTenantWithRootDefaults_MalformedDefaultsTolerated(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
