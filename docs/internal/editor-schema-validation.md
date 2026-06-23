@@ -15,7 +15,7 @@ lang: zh
 ## 適用範圍（哪些檔吃 tenant schema）
 
 - ✅ **租戶檔**：`conf.d/<id>.yaml`、`conf.d/**/<id>.yaml`（含 `examples/`）、`try-local/seed/conf.d/<id>.yaml`。
-- ❌ **平台檔 `_*.yaml`**（`_defaults` / `_profiles` / `_routing_profiles` / `_rbac` / `_domain_policy` / `_instance_mapping` …）**刻意排除**。它們形狀彼此不同（不是 tenant schema 的 `required: [tenants]` 結構），硬套 tenant schema 會對合法檔亮紅勾 → 反而誤導。`_*` 的專屬 schema（特別是爆炸半徑最大的 `_defaults.yaml`）為 near-term fast-follow，見下節〈平台檔 `_*.yaml`〉。
+- ❌ **平台檔 `_*.yaml`** 從 tenant schema **刻意排除**（它們不是 `required: [tenants]` 結構，硬套會對合法檔亮紅勾）。其中 **`_defaults*.yaml` 改接專屬的 `platform-defaults.schema.json`**（頂層 key 守門，見下節）；其餘 `_*`（`_profiles` / `_routing_profiles` / `_rbac` / `_domain_policy` / `_instance_mapping`）各有自家 shape/validator，仍不接 schema。
 
 排除是用 glob 的字元類 `[^_]`（檔名第一字非底線）達成。
 
@@ -86,11 +86,18 @@ tenants:
 JetBrains 內建 YAML schema 支援（不需 yaml-language-server）：
 *Settings → Languages & Frameworks → Schemas and DTDs → JSON Schema Mappings* → 新增，Schema file 指 `docs/schemas/tenant-config.schema.json`，File path pattern 加 `conf.d/*.yaml`（JetBrains 的 pattern 不支援 `[^_]` 字元類排除 → 平台檔 `_*.yaml` 請逐檔在 *JSON schema* 下拉選 "No mapping"，或忽略其紅勾）。
 
-## 平台檔 `_*.yaml`（fast-follow）
+## 平台檔 `_defaults*.yaml` — 頂層 key 守門
 
-`_*.yaml` 目前在編輯器**不接任何 schema**（也被 CI 的 `check_confd_schema.py` 跳過）。最該補的是 `_defaults.yaml`——由領域專家撰寫、爆炸半徑最大（影響該目錄下全部租戶）。把它接上需要先把 `defaults` / `state_filters` / `_routing_defaults` 三個 top-level 區塊**確實建模**（現有 schema 的 `defaultsConfig` 定義只涵蓋繼承用的 tenant-like override 鍵、且 `additionalProperties: true`，套上去等於不驗 → 寧缺勿濫，不接半套假驗證）。
+**`_defaults*.yaml` 接 [`platform-defaults.schema.json`](../schemas/platform-defaults.schema.json)**（#658 fast-follow）。`_defaults.yaml` 由領域專家撰寫、爆炸半徑最大（影響該目錄下全部租戶），一個頂層 key typo（`state_flters` / `defalts`）會讓整塊平台預設**被 YAML 解析器靜默忽略**。
 
-**Trigger（何時做）**：(1) 收到一筆「編輯器對合法 config 亮紅 / 對錯 config 放行」的 value-level 回報；或 (2) 有人手動踩到 `_defaults.yaml` typo 進 production。屆時開獨立 PR 建 `platform-defaults.schema.json` + 對 `_defaults.yaml` 同時接編輯器與 `check_confd_schema.py`（跨 surface 一致）。
+此 schema 是**最小守門**：
+
+- **頂層 key 嚴格**（`additionalProperties:false`）→ 擋上述非前綴類 typo。`^_state_` / `^_routing` patternProperties 放行 prefix-class（同 tenant validator 的寬鬆 prefix 模型 → prefix **內部** typo 如 `_routing_defualts` **不在守備**）。
+- **巢狀值刻意 loose**（`defaults` / `state_filters` 下的 metric / filter 名是動態的、不建模）。
+- 頂層 properties 同時鏡像 Go `ThresholdConfig`（`tenants` / `profiles` / `max_metrics_per_tenant` 也放行——loader 從任何檔讀它們）。
+- **CI（`check_confd_schema.py`）與編輯器（devcontainer `yaml.schemas`）用同一 schema → 跨 surface 一致**。
+
+**仍 fast-follow（defer-with-trigger）**：(1) `_defaults` 的 **full 巢狀結構** schema（metric / filter 名動態，須真建模）——trigger＝收到 value-level「對合法亮紅 / 對錯放行」回報；(2) 其餘 `_*`（`_profiles` / `_routing_profiles` / `_rbac` / `_domain_policy` / `_instance_mapping`）的專屬 schema——形狀各異，`_routing_profiles` 等已有自家 validator（`check_routing_profiles.py`）。
 
 ## 相關
 
