@@ -56,17 +56,18 @@ lang: zh
 
 ### 方法 A：file modeline（最可攜，跨所有 yaml-language-server client）
 
-在單一檔頂端加一行 magic comment，任何支援 `yaml-language-server` 的編輯器（VS Code / Neovim / JetBrains LSP）都會吃：
+在單一檔頂端加一行 magic comment，任何支援 `yaml-language-server` 的編輯器（VS Code / Neovim / JetBrains LSP）都會吃。**用絕對 https URL，不要用相對路徑**：
 
 ```yaml
-# yaml-language-server: $schema=../../docs/schemas/tenant-config.schema.json
+# yaml-language-server: $schema=https://raw.githubusercontent.com/vencil/Dynamic-Alerting-Integrations/main/docs/schemas/tenant-config.schema.json
 tenants:
   my-tenant:
     mysql_connections: 90
 ```
 
-`$schema` 路徑相對於該 YAML 檔自身位置（也可用 `file://` 絕對路徑或 https URL）。
-代價：會寫進檔案內容；`conf.d` 含 generated / 客戶檔時不建議全面鋪。主路徑仍以 workspace 設定為準，modeline 當「某一檔臨時想要強驗」的逃生門。
+> ⚠️ **相對 modeline 會腐敗**：`$schema=` 的相對路徑是相對「該 YAML 檔自身位置」。若有人把帶 `../../docs/...` modeline 的檔**複製到別的目錄深度**（例如 `conf.d/asia/db-c.yaml`），相對層數就錯了 → 該檔**靜默失去驗證**（沒紅線 ≠ 正確）。絕對 https URL 與**位置無關**、複製到哪都對。（注意 `$schema=/docs/...` 的前導斜線在多數 language server 是**檔案系統絕對路徑**、非 workspace-root，不可靠。）
+
+代價：會寫進檔案內容；`conf.d` 含 generated / 客戶檔時不建議全面鋪。**主路徑仍以 dev-container/workspace 的 glob 設定為準**（`**/conf.d/[^_]*.yaml` 與檔案位置無關、不會腐敗），modeline 當「某一檔臨時想要強驗」的逃生門。
 
 ### 方法 B：Neovim（coc.nvim + coc-yaml）
 

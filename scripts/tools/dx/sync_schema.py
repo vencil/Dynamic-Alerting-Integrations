@@ -32,6 +32,7 @@ Options:
 """
 
 import argparse
+import ast
 import json
 import os
 import re
@@ -122,40 +123,51 @@ def extract_schema_keys(schema_path):
     return schema_properties
 
 
+def _string_literals(node):
+    """Return the str constants of a set/list/tuple literal AST node, in order.
+
+    Non-literal forms (a comprehension, a name reference, a call) have no `.elts`
+    of plain string constants → returns [] (caller treats as empty, the 3-way
+    gate then fail-louds the resulting drift so a maintainer notices).
+    """
+    if not isinstance(node, (ast.Set, ast.List, ast.Tuple)):
+        return []
+    return [
+        elt.value for elt in node.elts
+        if isinstance(elt, ast.Constant) and isinstance(elt.value, str)
+    ]
+
+
 def extract_python_keys(py_source_path):
     """Extract VALID_RESERVED_KEYS / VALID_RESERVED_PREFIXES from the Python SSOT.
 
-    Parser-simple by design (mirrors extract_go_keys' regex shape): the Python
-    allowlist is a `set` literal and a `tuple` literal of `_`-identifiers. Line
-    comments are stripped first so a deprecate-by-comment (`# "_old",`) — GONE for
-    the interpreter — is GONE for the gate too.
+    Uses the stdlib `ast` module, NOT regex — the source IS Python, so the
+    compiler's own parser gives 100% accuracy immune to `#` comments (incl.
+    quoted tokens inside them, e.g. _lib_constants.py's `component="custom"`),
+    multi-line literals, and reformatting. (extract_go_keys must stay regex —
+    there's no Go AST in Python; here Python parses Python.) A SyntaxError in the
+    SSOT is intentionally left to propagate — that file is imported app-wide, so
+    a malformed edit is already caught by every other test.
     """
     path = Path(py_source_path)
     with open(path, "r", encoding="utf-8") as f:
-        content = f.read()
-
-    # Strip Python `#` line comments (line-scoped — `.` doesn't cross newlines).
-    content = re.sub(r"#.*", "", content)
+        tree = ast.parse(f.read(), filename=str(path))
 
     reserved_keys = set()
-    keys_match = re.search(
-        r"VALID_RESERVED_KEYS\s*(?::[^=]*)?=\s*\{(.+?)\}",
-        content,
-        re.DOTALL
-    )
-    if keys_match:
-        for match in re.finditer(r"""['"]([^'"]+)['"]""", keys_match.group(1)):
-            reserved_keys.add(match.group(1))
-
     reserved_prefixes = []
-    prefixes_match = re.search(
-        r"VALID_RESERVED_PREFIXES\s*(?::[^=]*)?=\s*\((.+?)\)",
-        content,
-        re.DOTALL
-    )
-    if prefixes_match:
-        for match in re.finditer(r"""['"]([^'"]+)['"]""", prefixes_match.group(1)):
-            reserved_prefixes.append(match.group(1))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            names = {t.id for t in node.targets if isinstance(t, ast.Name)}
+            value = node.value
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and node.value is not None:
+            names = {node.target.id}  # `X: Final[...] = {...}`
+            value = node.value
+        else:
+            continue
+        if "VALID_RESERVED_KEYS" in names:
+            reserved_keys = set(_string_literals(value))
+        if "VALID_RESERVED_PREFIXES" in names:
+            reserved_prefixes = _string_literals(value)
 
     return reserved_keys, reserved_prefixes
 
