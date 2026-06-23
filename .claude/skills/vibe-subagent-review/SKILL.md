@@ -30,7 +30,21 @@ description: IaC-aware 兩階段 review — code 走 spec→quality、IaC 走 bl
 1. **Spec 符合度**：對照 issue / ticket，做的是不是「要做的事」？範圍有無 over/under？
 2. **Code quality**：錯誤處理、邊界、並發、測試 seam（用對 `freshMetrics` / FakeClock，見 [`test-map.md`](../../../docs/internal/test-map.md)）、tenant-agnostic（dev-rule #2）。
 
-> **Go `Close()` 讀/寫不對稱**（review 必查，errcheck 分不出）：`defer func(){ _ = x.Close() }()` 只對 **read-closer** 安全（`resp.Body` / `sql.Rows` / `os.Open` 唯讀檔——關閉只釋放資源）。**write-closer**（`os.Create` / `gzip.Writer` / 任何寫入檔）的 `Close()` error **必須**顯式檢查或併入回傳 `err`——寫入的 disk-flush 常延到 `Close()` 才發生，吞掉 = silent data loss。errcheck 逼你對每個 `Close()` 表態，但無法分辨讀/寫，故這條靠 review 把關（來源：#912 對抗 review）。
+> **Go `Close()` 讀/寫不對稱**（review 必查，errcheck 分不出）：`defer func(){ _ = x.Close() }()` 只對 **read-closer** 安全（`resp.Body` / `sql.Rows` / `os.Open` 唯讀檔——關閉只釋放資源）。**write-closer**（`os.Create` / `gzip.Writer` / 自訂 `io.WriteCloser`）的 `Close()` error **不可吞**——寫入的 disk-flush 常延到 `Close()` 才發生，吞掉 = silent data loss。
+>
+> 盲區：自訂介面（如 `GetStorage() TenantStateStorage`，內嵌 `io.WriteCloser`）AI/review 缺全域 context 判不出讀/寫，易把 `_ = store.Close()` 誤當資源釋放放行。**正規防禦 = named return + defer 捕捉**（一眼可辨、且擋 panic / early-return 漏判，不靠判斷讀/寫）：
+>
+> ```go
+> func WriteTenant() (err error) {
+>     f, err := os.Create(p)
+>     if err != nil { return err }
+>     defer func() { err = errors.Join(err, f.Close()) }() // disk-flush 錯誤必上傳
+>     // ... 寫入 ...
+>     return nil
+> }
+> ```
+>
+> （來源：#912 + #914 對抗 review）
 
 ## Blast-radius checklist（`values.yaml` / template）
 
