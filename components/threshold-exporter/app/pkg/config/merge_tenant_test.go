@@ -216,11 +216,16 @@ func TestMergeTenantWithRootDefaults_PropagatesStateFilters(t *testing.T) {
 	}
 }
 
-// TestMergeTenantWithRootDefaults_MalformedDefaultsTolerated pins the fail-safe
-// in the defaults overlay: a syntactically invalid _defaults.yaml is silently
-// skipped (empty Defaults, no panic, no fabricated values) and does NOT block
-// the tenant body from merging. merge_tenant.go promises "A missing file is
-// fine"; this extends that contract to a corrupt file.
+// TestMergeTenantWithRootDefaults_MalformedDefaultsTolerated pins the CURRENT
+// tolerance of a corrupt _defaults.yaml: a syntactically invalid file is skipped
+// (empty Defaults, no panic, no fabricated values) and does NOT block the tenant
+// merge. This is fail-SOFT, NOT verified fail-safe — corrupt != missing: missing
+// is operator intent to inherit nothing, whereas a corrupt platform-defaults file
+// is a typo that silently drops the inherited safety net for affected tenants.
+// The production scanner (config.go parsedDefaults pre-parse) tolerates it the
+// same way by design — log-and-skip so one broken file can't poison the whole
+// cache — but the skip is log-only, not alertable (follow-up: emit a metric).
+// Pinned as current behavior, NOT endorsed as safe.
 func TestMergeTenantWithRootDefaults_MalformedDefaultsTolerated(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
