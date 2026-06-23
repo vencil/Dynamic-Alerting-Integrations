@@ -1,6 +1,29 @@
 version: "2"
 linters:
   default: standard
+  enable:
+    - depguard
+  settings:
+    errcheck:
+      # CLI/stdout writes are intentional fire-and-forget; checking their error is
+      # noise (they only fail on a broken stdout, where there is nothing to do).
+      exclude-functions:
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - fmt.Fprint
+    depguard:
+      # Dependency-direction ratchet: the pure-logic packages (reused by the CLI
+      # tools da-parser / da-guard) must stay HTTP-agnostic so they remain
+      # importable outside an HTTP server. Currently satisfied — pinned as a ratchet.
+      rules:
+        logic-no-nethttp:
+          list-mode: lax
+          files:
+            - "**/internal/parser/**"
+            - "**/internal/guard/**"
+          deny:
+            - pkg: net/http
+              desc: pure logic packages (CLI-reusable) must not import net/http
   exclusions:
     rules:
       - path: _test\.go

@@ -305,12 +305,12 @@ func finaliseRefreshSummary(r *RefreshResult) {
 func renderRefreshReport(in RefreshInput, r *RefreshResult) string {
 	out := strings.Builder{}
 	out.WriteString("# Refresh report\n\n")
-	out.WriteString(fmt.Sprintf("**Repo**: `%s`\n", in.Repo.FullName()))
+	fmt.Fprintf(&out, "**Repo**: `%s`\n", in.Repo.FullName())
 	if in.BaseMergedPRNumber > 0 {
-		out.WriteString(fmt.Sprintf("**Base PR**: #%d merged at `%s`\n",
-			in.BaseMergedPRNumber, shortSHA(in.BaseMergedSHA)))
+		fmt.Fprintf(&out, "**Base PR**: #%d merged at `%s`\n",
+			in.BaseMergedPRNumber, shortSHA(in.BaseMergedSHA))
 	} else {
-		out.WriteString(fmt.Sprintf("**Base merged at**: `%s`\n", shortSHA(in.BaseMergedSHA)))
+		fmt.Fprintf(&out, "**Base merged at**: `%s`\n", shortSHA(in.BaseMergedSHA))
 	}
 	if in.DryRun {
 		out.WriteString("**Mode**: dry-run (no rebase / push / comment executed)\n")
@@ -323,15 +323,15 @@ func renderRefreshReport(in RefreshInput, r *RefreshResult) string {
 	}
 
 	out.WriteString("## Summary\n\n")
-	out.WriteString(fmt.Sprintf("- Total targets: %d\n", r.Summary.TotalTargets))
-	out.WriteString(fmt.Sprintf("- Clean rebases: %d\n", r.Summary.CleanCount))
-	out.WriteString(fmt.Sprintf("- Conflicts (need manual rebase): %d\n", r.Summary.ConflictsCount))
-	out.WriteString(fmt.Sprintf("- Skipped (closed / merged): %d\n", r.Summary.SkippedCount))
+	fmt.Fprintf(&out, "- Total targets: %d\n", r.Summary.TotalTargets)
+	fmt.Fprintf(&out, "- Clean rebases: %d\n", r.Summary.CleanCount)
+	fmt.Fprintf(&out, "- Conflicts (need manual rebase): %d\n", r.Summary.ConflictsCount)
+	fmt.Fprintf(&out, "- Skipped (closed / merged): %d\n", r.Summary.SkippedCount)
 	if r.Summary.DryRunCount > 0 {
-		out.WriteString(fmt.Sprintf("- Dry-run: %d\n", r.Summary.DryRunCount))
+		fmt.Fprintf(&out, "- Dry-run: %d\n", r.Summary.DryRunCount)
 	}
 	if r.Summary.FailedCount > 0 {
-		out.WriteString(fmt.Sprintf("- Failed (non-conflict errors): %d\n", r.Summary.FailedCount))
+		fmt.Fprintf(&out, "- Failed (non-conflict errors): %d\n", r.Summary.FailedCount)
 	}
 	out.WriteString("\n")
 
@@ -349,8 +349,8 @@ func renderRefreshReport(in RefreshInput, r *RefreshResult) string {
 		case RebaseDryRun:
 			notes = "would rebase + push + comment"
 		}
-		out.WriteString(fmt.Sprintf("| #%d | `%s` | %s | %s | %s |\n",
-			it.PRNumber, mdCell(it.BranchName), it.PRState, it.Status, notes))
+		fmt.Fprintf(&out, "| #%d | `%s` | %s | %s | %s |\n",
+			it.PRNumber, mdCell(it.BranchName), it.PRState, it.Status, notes)
 	}
 	out.WriteString("\n")
 
@@ -366,14 +366,14 @@ func renderRefreshReport(in RefreshInput, r *RefreshResult) string {
 		out.WriteString("## Conflicts\n\n")
 		out.WriteString("These PRs need a manual rebase. Suggested commands:\n\n")
 		out.WriteString("```\n")
-		out.WriteString(fmt.Sprintf("git fetch origin\ngit checkout <branch>\ngit rebase --onto %s <old-base>\n",
-			in.BaseMergedSHA))
+		fmt.Fprintf(&out, "git fetch origin\ngit checkout <branch>\ngit rebase --onto %s <old-base>\n",
+			in.BaseMergedSHA)
 		out.WriteString("# resolve conflicts in the listed files, then:\ngit rebase --continue\ngit push --force-with-lease\n")
 		out.WriteString("```\n\n")
 		for _, it := range conflicted {
-			out.WriteString(fmt.Sprintf("### PR #%d (`%s`)\n\n", it.PRNumber, it.BranchName))
+			fmt.Fprintf(&out, "### PR #%d (`%s`)\n\n", it.PRNumber, it.BranchName)
 			for _, f := range it.ConflictedFiles {
-				out.WriteString(fmt.Sprintf("- `%s`\n", f))
+				fmt.Fprintf(&out, "- `%s`\n", f)
 			}
 			out.WriteString("\n")
 		}
@@ -382,7 +382,7 @@ func renderRefreshReport(in RefreshInput, r *RefreshResult) string {
 	if len(r.Warnings) > 0 {
 		out.WriteString("## Warnings\n\n")
 		for _, w := range r.Warnings {
-			out.WriteString(fmt.Sprintf("- %s\n", w))
+			fmt.Fprintf(&out, "- %s\n", w)
 		}
 		out.WriteString("\n")
 	}

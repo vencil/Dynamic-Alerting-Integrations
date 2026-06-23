@@ -134,9 +134,10 @@ func ResolveEffective(configDir, tenantID string) (*EffectiveConfig, error) {
 		if strings.HasPrefix(name, "_") {
 			// Only _defaults.yaml enters the chain map. .yaml wins over .yml
 			// if both exist at the same level.
-			if lower == "_defaults.yaml" {
+			switch lower {
+			case "_defaults.yaml":
 				defaultsByDir[filepath.Dir(clean)] = clean
-			} else if lower == "_defaults.yml" {
+			case "_defaults.yml":
 				// Don't overwrite an existing .yaml entry at the same dir.
 				dir := filepath.Dir(clean)
 				if _, exists := defaultsByDir[dir]; !exists {

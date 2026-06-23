@@ -76,17 +76,6 @@ func buildDirConfigMixed(b *testing.B, flatTenants, hierTenants int) string {
 	return root
 }
 
-// buildDirConfigMixedFresh returns a non-cached temp dir with a
-// fresh fixture — for benches that mutate the tree.
-func buildDirConfigMixedFresh(b *testing.B, flatTenants, hierTenants int) string {
-	b.Helper()
-	root := b.TempDir()
-	if err := writeMixedBenchFixtureContent(root, flatTenants, hierTenants); err != nil {
-		b.Fatalf("write mixed fixture: %v", err)
-	}
-	return root
-}
-
 // writeMixedBenchFixtureContent builds a realistic mid-migration
 // mixed-mode tree:
 //

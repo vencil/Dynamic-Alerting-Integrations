@@ -18,7 +18,7 @@ func fixtureRefreshSourceInput(targetNums ...int) RefreshSourceInput {
 			BranchName: branchFor(n),
 			Files: map[string][]byte{
 				fmt.Sprintf("conf.d/foo/tenant-%d.yaml", n): []byte("bytes-a"),
-				fmt.Sprintf("conf.d/foo/_defaults.yaml"):    []byte("bytes-b"),
+				"conf.d/foo/_defaults.yaml":                 []byte("bytes-b"),
 			},
 			SourceRuleIDs: []string{fmt.Sprintf("rules.yaml#groups[0].rules[%d]", n)},
 		})
@@ -460,11 +460,6 @@ func TestRefreshSource_EmptySourceRuleIDsHandledGracefully(t *testing.T) {
 		body := p.commentCalls[num][0]
 		// Should NOT contain a dangling "for source rules" with
 		// nothing after it — fallback message handles empty case.
-		if strings.Contains(body, "for source rules ") &&
-			!strings.Contains(body, "for source rules .") {
-			// Allow legitimate "for source rules X." but not the
-			// dangling "for source rules " (note trailing space, no IDs).
-		}
 		if strings.Contains(body, "for source rules \n") ||
 			strings.HasSuffix(strings.TrimSpace(body), "for source rules") {
 			t.Errorf("PR #%d comment has dangling 'for source rules' with no IDs; got %q",

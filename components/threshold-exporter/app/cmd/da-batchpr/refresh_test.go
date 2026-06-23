@@ -11,21 +11,6 @@ import (
 	"github.com/vencil/threshold-exporter/internal/batchpr"
 )
 
-// fixtureRefreshInputJSON returns a minimal valid RefreshInput JSON.
-func fixtureRefreshInputJSON() []byte {
-	in := batchpr.RefreshInput{
-		Repo:               batchpr.Repo{Owner: "o", Name: "r", BaseBranch: "main"},
-		BaseMergedSHA:      "abc1234567890",
-		BaseMergedPRNumber: 100,
-		Targets: []batchpr.RefreshTarget{
-			{PRNumber: 101, BranchName: "tenant-a"},
-			{PRNumber: 102, BranchName: "tenant-b"},
-		},
-	}
-	body, _ := json.Marshal(in)
-	return body
-}
-
 func TestRefresh_HelpExitsOK(t *testing.T) {
 	t.Parallel()
 	stderr := &bytes.Buffer{}

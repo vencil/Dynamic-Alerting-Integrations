@@ -34,18 +34,18 @@ func (p *Plan) Markdown() string {
 	// Summary block — one-line counts so a reviewer can sanity-check
 	// scale before reading the per-item list.
 	out.WriteString("## Summary\n\n")
-	out.WriteString(fmt.Sprintf("- Total proposals: **%d**\n", p.Summary.TotalProposals))
-	out.WriteString(fmt.Sprintf("- Base PRs: **%d**\n", p.Summary.BasePRCount))
-	out.WriteString(fmt.Sprintf("- Tenant PRs: **%d**\n", p.Summary.TenantPRCount))
-	out.WriteString(fmt.Sprintf("- Total tenants: **%d**\n", p.Summary.TotalTenants))
-	out.WriteString(fmt.Sprintf("- Chunk strategy: `%s`\n", p.Summary.ChunkBy))
-	out.WriteString(fmt.Sprintf("- Effective chunk size: %d\n", p.Summary.EffectiveChunkSize))
+	fmt.Fprintf(&out, "- Total proposals: **%d**\n", p.Summary.TotalProposals)
+	fmt.Fprintf(&out, "- Base PRs: **%d**\n", p.Summary.BasePRCount)
+	fmt.Fprintf(&out, "- Tenant PRs: **%d**\n", p.Summary.TenantPRCount)
+	fmt.Fprintf(&out, "- Total tenants: **%d**\n", p.Summary.TotalTenants)
+	fmt.Fprintf(&out, "- Chunk strategy: `%s`\n", p.Summary.ChunkBy)
+	fmt.Fprintf(&out, "- Effective chunk size: %d\n", p.Summary.EffectiveChunkSize)
 	out.WriteString("\n")
 
 	if len(p.Warnings) > 0 {
 		out.WriteString("## Warnings\n\n")
 		for _, w := range p.Warnings {
-			out.WriteString(fmt.Sprintf("- ⚠ %s\n", w))
+			fmt.Fprintf(&out, "- ⚠ %s\n", w)
 		}
 		out.WriteString("\n")
 	}
@@ -64,8 +64,8 @@ func (p *Plan) Markdown() string {
 		if item.Kind == PlanItemTenant {
 			tenantCol = fmt.Sprintf("%d", len(item.TenantIDs))
 		}
-		out.WriteString(fmt.Sprintf("| %d | %s | %s | %s | %s |\n",
-			i+1, item.Kind, item.Title, blocked, tenantCol))
+		fmt.Fprintf(&out, "| %d | %s | %s | %s | %s |\n",
+			i+1, item.Kind, item.Title, blocked, tenantCol)
 	}
 	out.WriteString("\n")
 
@@ -73,7 +73,7 @@ func (p *Plan) Markdown() string {
 	// tooling pastes these into the actual PR body.
 	out.WriteString("## Item details\n\n")
 	for i, item := range p.Items {
-		out.WriteString(fmt.Sprintf("### %d. %s\n\n", i+1, item.Title))
+		fmt.Fprintf(&out, "### %d. %s\n\n", i+1, item.Title)
 		out.WriteString(item.Description)
 		if !strings.HasSuffix(item.Description, "\n") {
 			out.WriteString("\n")

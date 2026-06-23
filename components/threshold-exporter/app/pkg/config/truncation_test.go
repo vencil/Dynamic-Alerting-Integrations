@@ -158,20 +158,22 @@ func TestTruncationSortKey_TierOrdering(t *testing.T) {
 		RegexLabels: map[string]string{"version": "v.*"}}
 
 	// Tier 0 (unversioned, default) must sort strictly before tier 1 (versioned).
-	if !(truncationSortKey(unversioned) < truncationSortKey(v2)) {
+	if truncationSortKey(unversioned) >= truncationSortKey(v2) {
 		t.Errorf("unversioned key %q must sort before versioned %q",
 			truncationSortKey(unversioned), truncationSortKey(v2))
 	}
-	if !(truncationSortKey(defaultVer) < truncationSortKey(v2)) {
+	if truncationSortKey(defaultVer) >= truncationSortKey(v2) {
 		t.Errorf("version=default key %q must sort before version=v2 %q",
 			truncationSortKey(defaultVer), truncationSortKey(v2))
 	}
 	// Regex version label is also treated as versioned (tier 1).
-	if !(truncationSortKey(unversioned) < truncationSortKey(v2regex)) {
+	if truncationSortKey(unversioned) >= truncationSortKey(v2regex) {
 		t.Errorf("unversioned must sort before regex-versioned")
 	}
 	// Determinism: identical input → identical key.
-	if truncationSortKey(v2) != truncationSortKey(v2) {
+	k1 := truncationSortKey(v2)
+	k2 := truncationSortKey(v2)
+	if k1 != k2 {
 		t.Error("truncationSortKey not deterministic for identical input")
 	}
 }

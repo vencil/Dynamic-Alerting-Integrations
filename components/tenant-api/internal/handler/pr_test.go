@@ -361,7 +361,7 @@ type mockPlatformClient struct {
 	createPRFunc func(title, body, headBranch string, labels []string) (*platform.PRInfo, error)
 }
 
-func (m *mockPlatformClient) ValidateToken() error                { return nil }
+func (m *mockPlatformClient) ValidateToken() error                 { return nil }
 func (m *mockPlatformClient) CreateBranch(branchName string) error { return nil }
 func (m *mockPlatformClient) DeleteBranch(branchName string) error { return nil }
 func (m *mockPlatformClient) SetBaseURL(url string)                {}
@@ -397,7 +397,7 @@ type mockPlatformTracker struct {
 }
 
 func (m *mockPlatformTracker) WatchLoop(stopCh <-chan struct{}) {}
-func (m *mockPlatformTracker) PendingPRs() []platform.PRInfo     { return m.prs }
+func (m *mockPlatformTracker) PendingPRs() []platform.PRInfo    { return m.prs }
 func (m *mockPlatformTracker) PendingPRForTenant(tenantID string) (platform.PRInfo, bool) {
 	for _, pr := range m.prs {
 		if pr.TenantID == tenantID {
@@ -468,7 +468,8 @@ func TestPutTenant_PRMode_HappyPath(t *testing.T) {
 	// WritePR requires git, so in test env it will fail at git operations.
 	// We verify the handler correctly routes to PR mode (not direct mode).
 	// If it returns 500 with "PR write failed", it means PR routing worked.
-	if w.Code == http.StatusOK {
+	switch w.Code {
+	case http.StatusOK:
 		// If git was available, verify the PR response format
 		var resp PutTenantResponse
 		json.Unmarshal(w.Body.Bytes(), &resp)
@@ -478,16 +479,16 @@ func TestPutTenant_PRMode_HappyPath(t *testing.T) {
 		if resp.PRNumber != 42 {
 			t.Errorf("pr_number = %d, want 42", resp.PRNumber)
 		}
-	} else if w.Code == http.StatusInternalServerError {
+	case http.StatusInternalServerError:
 		// Expected in test env without git — verify it's the PR write path, not direct
 		bodyStr := w.Body.String()
 		if !strings.Contains(bodyStr, "PR write failed") {
 			t.Errorf("expected PR write path error, got: %s", bodyStr)
 		}
-	} else if w.Code == http.StatusConflict {
+	case http.StatusConflict:
 		// 409 means pending_pr_exists check is working
 		t.Log("PR mode routing verified (conflict path)")
-	} else {
+	default:
 		t.Logf("PutTenant PR mode: status=%d body=%s", w.Code, w.Body.String())
 	}
 }
@@ -991,4 +992,3 @@ func TestPutTenant_PRMode_InFlightClaimNoRefresh(t *testing.T) {
 		t.Errorf("refreshCalls = %d, want 0 (in-flight only → no cache to refresh)", got)
 	}
 }
-

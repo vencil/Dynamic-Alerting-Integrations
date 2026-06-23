@@ -80,30 +80,9 @@ func parsePartialConfig(name, path string, data []byte, metrics *configMetrics, 
 	return partial, true
 }
 
-// loadDir scans a directory for *.yaml files, parses and deep-merges them.
-//
-// File naming convention:
-//   - _defaults.yaml: contains 'defaults' and 'state_filters' (loaded first due to underscore prefix)
-//   - <tenant-name>.yaml: contains tenant-specific overrides under 'tenants' key
-//
-// Merge rules:
-//   - Files are processed in sorted order (underscore prefix sorts first)
-//   - defaults: later values overwrite earlier ones for the same key
-//   - state_filters: later values overwrite earlier ones for the same filter name
-//   - tenants: deep merge per tenant (later key-values overwrite)
-//
-// Boundary rule: state_filters should only be defined in _defaults.yaml.
-// Tenant files should only contain a 'tenants' block. This is enforced with warnings.
-//
-// Legacy wrapper that uses the package-level metrics + logger singletons.
-// Production code should call loadDirWithMetrics with their owned
-// *configMetrics + *log.Logger so per-test isolation works (#4a + #4b).
-func loadDir(dir string) (ThresholdConfig, string, error) {
-	return loadDirWithMetrics(dir, getConfigMetrics(), log.Default())
-}
-
-// loadDirWithMetrics is the injectable variant of loadDir. Same behavior;
-// metric observations + log lines route to the caller-supplied
+// loadDirWithMetrics scans a directory for *.yaml files, parses and
+// deep-merges them (the flat path described in the package overview).
+// Metric observations + log lines route to the caller-supplied
 // *configMetrics + *log.Logger instead of the package singletons. Use
 // this from production code paths that own a ConfigManager. Either
 // argument may be nil → falls back to the package singleton (struct-

@@ -67,7 +67,7 @@ func TestBase26Encode_RoundTripStable(t *testing.T) {
 		// (numericLiteral) ignores letters so the placeholder
 		// survives. If digits sneak in here, that contract breaks.
 		for _, c := range enc {
-			if !(c >= 'a' && c <= 'z') {
+			if c < 'a' || c > 'z' {
 				t.Errorf("base26Encode(%d) = %q contains non-letter %q", n, enc, c)
 			}
 		}
@@ -88,8 +88,8 @@ func TestBase26Encode_NegativeInputDefensiveOnly(t *testing.T) {
 func TestCanonicaliseDurations_BasicEquivalence(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
-		name    string
-		a, b    string
+		name     string
+		a, b     string
 		shouldEq bool
 	}{
 		{"5m equals 300s", "rate(foo[5m])", "rate(foo[300s])", true},
@@ -435,7 +435,7 @@ func TestSignatureForFuzzy_DialectAndForStillSeparate(t *testing.T) {
 	// key, only loosens duration. A regression that drops `for:`
 	// from the fuzzy key would silently merge alert tiers.
 	r1 := makeRule("a", `rate(foo[5m]) > 0.9`, "5m", "prom", nil)
-	r2 := makeRule("b", `rate(foo[5m]) > 0.9`, "10m", "prom", nil) // different for
+	r2 := makeRule("b", `rate(foo[5m]) > 0.9`, "10m", "prom", nil)     // different for
 	r3 := makeRule("c", `rate(foo[5m]) > 0.9`, "5m", "metricsql", nil) // different dialect
 	if signatureForFuzzy(r1) == signatureForFuzzy(r2) {
 		t.Error("fuzzy signature should distinguish different `for:` durations")

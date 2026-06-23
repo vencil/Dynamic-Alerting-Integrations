@@ -31,11 +31,6 @@ func deepMerge(base, override map[string]any) map[string]any {
 	return config.DeepMerge(base, override)
 }
 
-// deepCopyMap clones a map and all nested maps/slices.
-func deepCopyMap(m map[string]any) map[string]any {
-	return config.DeepCopyMap(m)
-}
-
 // normalizeYAMLToJSON rewrites yaml.v3's map[any]any into
 // map[string]any so encoding/json can marshal it.
 func normalizeYAMLToJSON(v any) any {

@@ -251,13 +251,12 @@ func buildBasePR(proposals []ProposalRef) PlanItem {
 	body.WriteString("| # | Tenants | Dialect | For | Shared label keys |\n")
 	body.WriteString("|---|---------|---------|-----|-------------------|\n")
 	for i, p := range proposals {
-		body.WriteString(fmt.Sprintf("| %d | %d | %s | %s | %s |\n",
+		fmt.Fprintf(&body, "| %d | %d | %s | %s | %s |\n",
 			i+1,
 			len(p.MemberTenantIDs),
 			emptyOrValue(p.Dialect, "—"),
 			emptyOrValue(p.SharedFor, "—"),
-			emptyOrValue(strings.Join(sortedKeys(p.SharedLabels), ", "), "—"),
-		))
+			emptyOrValue(strings.Join(sortedKeys(p.SharedLabels), ", "), "—"))
 	}
 	body.WriteString("\nMerge this PR before any tenant chunk PR (each carries `Blocked by: <base>`).\n")
 
@@ -272,11 +271,11 @@ func buildBasePR(proposals []ProposalRef) PlanItem {
 // buildTenantPR composes one tenant chunk PlanItem.
 func buildTenantPR(chunkIdx, total int, c chunk, proposals []ProposalRef) PlanItem {
 	body := strings.Builder{}
-	body.WriteString(fmt.Sprintf("Tenant chunk %d of %d.\n\n", chunkIdx, total))
-	body.WriteString(fmt.Sprintf("**Bucket key**: `%s`\n", c.key))
-	body.WriteString(fmt.Sprintf("**Tenants in this chunk** (%d):\n\n", len(c.tenants)))
+	fmt.Fprintf(&body, "Tenant chunk %d of %d.\n\n", chunkIdx, total)
+	fmt.Fprintf(&body, "**Bucket key**: `%s`\n", c.key)
+	fmt.Fprintf(&body, "**Tenants in this chunk** (%d):\n\n", len(c.tenants))
 	for _, t := range c.tenants {
-		body.WriteString(fmt.Sprintf("- `%s`\n", t))
+		fmt.Fprintf(&body, "- `%s`\n", t)
 	}
 	body.WriteString("\n**Blocked by** the Base Infrastructure PR — review only after that has merged.\n")
 

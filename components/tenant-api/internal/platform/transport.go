@@ -51,7 +51,7 @@ func JSONRoundTrip(httpClient *http.Client, provider, baseURL, method, path stri
 	if err != nil {
 		return nil, nil, fmt.Errorf("http request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {

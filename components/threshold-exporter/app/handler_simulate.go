@@ -59,7 +59,7 @@ func simulateHandler() http.HandlerFunc {
 		// reading the full Content-Length up front and lets us reject
 		// chunked uploads too.
 		body := http.MaxBytesReader(w, r.Body, simulateMaxBodyBytes)
-		defer body.Close()
+		defer func() { _ = body.Close() }()
 
 		var req config.SimulateRequest
 		dec := json.NewDecoder(body)

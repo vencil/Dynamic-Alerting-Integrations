@@ -95,8 +95,11 @@ func (m *ConfigManager) triggerDebouncedReload(reason string) {
 		// zero-window opt-out still feed the SLO histogram (B-3).
 		m.recordReason(reason)
 		t0 := time.Now()
-		m.diffAndReload()
+		_, _, err := m.diffAndReload()
 		m.getMetrics().ObserveReloadDuration(time.Since(t0))
+		if err != nil {
+			m.getLogger().Printf("ERROR: synchronous reload failed: %v", err)
+		}
 		m.maybeFreeOSMemory()
 		return
 	}

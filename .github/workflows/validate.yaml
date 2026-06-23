@@ -6,6 +6,7 @@
 # Checks:
 #   1. Python tests (450+ tests)
 #   2. Go tests (threshold-exporter)
+#   2b. Go lint (golangci standard + depguard dependency-direction; both modules)
 #   3. Tenant config validation (schema + routing + policy)
 #   4. Custom rule linting (deny-list)
 #   5. Version consistency (bump_docs --check)
@@ -68,6 +69,38 @@ jobs:
         with:
           go-version: "1.26"
       - run: go test -v ./...
+
+  go-lint:
+    name: Go Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+      # golangci-lint v2.12.2 (matches the dev container). Download the pinned
+      # install script and verify its SHA-256 BEFORE executing — no unverified
+      # `curl | sh` — matching the hadolint download-then-verify pattern in
+      # ci.yml. The verified script in turn checks the golangci-lint binary's
+      # own checksum against the release.
+      - name: Install golangci-lint
+        run: |
+          GOLANGCI_VERSION=v2.12.2
+          GOLANGCI_INSTALL_SHA256=d32d3534af96cfd59546a084d22b213e8a47541cada5013aa8a84c4fa2589905
+          curl -fsSL -o /tmp/golangci-install.sh \
+            "https://raw.githubusercontent.com/golangci/golangci-lint/${GOLANGCI_VERSION}/install.sh"
+          bash scripts/ops/_verify_download.sh /tmp/golangci-install.sh "$GOLANGCI_INSTALL_SHA256"
+          sh /tmp/golangci-install.sh -b "$(go env GOPATH)/bin" "$GOLANGCI_VERSION"
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+          "$(go env GOPATH)/bin/golangci-lint" version
+      # standard linters + depguard dependency-direction ratchet (per-module
+      # .golangci.yml: domain↛handler for tenant-api, logic↛net/http for exporter).
+      - name: Lint tenant-api
+        working-directory: components/tenant-api
+        run: golangci-lint run ./...
+      - name: Lint threshold-exporter
+        working-directory: components/threshold-exporter/app
+        run: golangci-lint run ./...
 
   validate-config:
     name: Validate Tenant Config & Routes
