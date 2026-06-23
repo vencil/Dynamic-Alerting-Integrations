@@ -9,14 +9,14 @@
   "additionalProperties": false,
   "properties": {
     "defaults": {
-      "type": "object",
+      "type": ["object", "null"],
       "title": "Platform default thresholds (metric → value)",
-      "description": "Map of metric key → default threshold (scalar or scheduled). Keys are dynamic metric names → values left loose; only the top-level `defaults` key itself is guarded."
+      "description": "Map of metric key → default threshold (scalar or scheduled). Keys are dynamic metric names → values left loose; only the top-level `defaults` key itself is guarded. `null`/empty is tolerated — Go unmarshals `defaults: null` (or `defaults:`) into a nil map (a valid empty-defaults placeholder); rejecting it would be Schema-red-but-system-runs friction (Gemini #913 對抗1)."
     },
     "state_filters": {
-      "type": "object",
+      "type": ["object", "null"],
       "title": "Platform default state filters",
-      "description": "Map of filter-name → {reasons, severity, default_state}. Filter names are dynamic → values left loose."
+      "description": "Map of filter-name → {reasons, severity, default_state}. Filter names are dynamic → values left loose. `null`/empty tolerated for the same nil-map reason as `defaults`."
     },
     "tenants": {
       "title": "ThresholdConfig.tenants — loader-legitimate top-level field (left loose; guarded by tenant-config.schema.json when in a tenant file)"

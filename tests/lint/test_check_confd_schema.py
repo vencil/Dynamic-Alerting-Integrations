@@ -184,6 +184,14 @@ class TestDefaultsValidation:
         _checked, viol, _skipped = validate_dir(confd, schema, jsonschema, platform_schema)
         assert any("must be a mapping" in v for v in viol)
 
+    def test_null_nested_blocks_tolerated(self, confd, schema, platform_schema):
+        # `defaults: null` / empty `state_filters:` → Go unmarshals into a nil map
+        # (valid empty-block placeholder) → schema must tolerate `null`, else
+        # Schema-red-but-system-runs friction. Gemini #913 對抗1.
+        _write(confd, "_defaults.yaml", "defaults: null\nstate_filters:\n")
+        _checked, viol, _skipped = validate_dir(confd, schema, jsonschema, platform_schema)
+        assert viol == [], f"null nested defaults/state_filters false-rejected: {viol}"
+
     def test_other_meta_still_skipped(self, confd, schema, platform_schema):
         # Only _defaults* route to the platform schema; other _* stay skipped even
         # when a platform_schema is supplied.
