@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""check_confd_schema.py — validate conf.d tenant YAML against the tenant-config JSON Schema (#880).
+"""check_confd_schema.py — validate conf.d tenant YAML + _defaults.yaml against their JSON Schemas (#880).
 
 WHY (the silent-failure this shifts left):
   The threshold-exporter opts a tenant INTO per-tenant exporter liveness only when
@@ -12,10 +12,13 @@ WHY (the silent-failure this shifts left):
 
 SCOPE:
   Validates every TENANT-shaped conf.d file (filename NOT starting with "_") against
-  the schema. The schema's top-level `required: [tenants]` also flags a tenant file
-  that forgot its `tenants:` wrapper. Meta-files (_defaults* / _routing_profiles /
-  _domain_policy / _instance_mapping ... — basename starts with "_") have their own
-  shapes and validators (check_routing_profiles.py); they are SKIPPED and listed
+  tenant-config.schema.json. The schema's top-level `required: [tenants]` also flags a
+  tenant file that forgot its `tenants:` wrapper. _defaults*.yaml validate against
+  platform-defaults.schema.json (top-level-key guard — a typo like `state_flters`
+  silently drops the whole platform-default block, the highest-blast-radius config;
+  #658 fast-follow / Gemini #911 對抗3). All OTHER meta-files (_routing_profiles /
+  _domain_policy / _instance_mapping / _rbac ... — basename starts with "_") have their
+  own shapes and validators (check_routing_profiles.py); they are SKIPPED and listed
   explicitly so coverage is never silently capped.
 
 Exit codes (scripts/tools/_lib_exitcodes.py):
@@ -44,6 +47,20 @@ from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E
 _DEFAULT_SCHEMA = os.path.normpath(
     os.path.join(_THIS_DIR, "..", "..", "..", "docs", "schemas", "tenant-config.schema.json")
 )
+# #658 fast-follow / Gemini #911 對抗3: _defaults.yaml has its own (top-level-key
+# strict, nested-loose) schema. Every OTHER `_`-prefixed meta-file keeps its own
+# validator and is still skipped here.
+_DEFAULT_PLATFORM_SCHEMA = os.path.normpath(
+    os.path.join(_THIS_DIR, "..", "..", "..", "docs", "schemas", "platform-defaults.schema.json")
+)
+
+
+def _is_defaults_file(basename: str) -> bool:
+    """`_defaults.yaml` / `_defaults-multidb.yaml` … — the platform default files
+    (top-level keys guarded by platform-defaults.schema.json). Other `_*` files
+    (`_routing_profiles`, `_domain_policy`, `_instance_mapping`, `_rbac` …) have
+    their own shapes/validators and remain skipped."""
+    return basename.startswith("_defaults") and basename.endswith((".yaml", ".yml"))
 
 
 class _CallerError(Exception):
@@ -59,19 +76,26 @@ def _iter_yaml_files(config_dir: str) -> list[str]:
     return sorted(out)
 
 
-def validate_dir(config_dir: str, schema: dict, validator) -> tuple[int, list[str], list[str]]:
+def validate_dir(config_dir: str, schema: dict, validator,
+                 platform_schema: dict | None = None) -> tuple[int, list[str], list[str]]:
     """Return (checked_count, violation_messages, skipped_relpaths).
 
     `validator` is the jsonschema module (injected so the import stays lazy — the
     CI exit-code gate runs `--help` in an env that may not have jsonschema, so a
     module-level import would crash --help and fail the gate).
+
+    Tenant files (no `_` prefix) validate against `schema`; `_defaults*.yaml`
+    validate against `platform_schema` (top-level-key guard, #658 fast-follow)
+    when provided; all other `_*` meta-files are skipped (own validators).
     """
     violations: list[str] = []
     skipped: list[str] = []
     checked = 0
     for path in _iter_yaml_files(config_dir):
         rel = os.path.relpath(path, config_dir).replace(os.sep, "/")
-        if os.path.basename(path).startswith("_"):
+        basename = os.path.basename(path)
+        is_defaults = platform_schema is not None and _is_defaults_file(basename)
+        if basename.startswith("_") and not is_defaults:
             skipped.append(rel)
             continue
         try:
@@ -82,19 +106,23 @@ def validate_dir(config_dir: str, schema: dict, validator) -> tuple[int, list[st
             # a schema violation — surface it as exit 2 (open() can raise OSError
             # too, not only yaml.YAMLError).
             raise _CallerError(f"{rel}: cannot read/parse YAML: {exc}")
+        active_schema = platform_schema if is_defaults else schema
         for doc in docs:
             if not isinstance(doc, dict):
                 # A tenant-shaped file (no `_` prefix) whose top document is a
                 # list / scalar / empty (None) is malformed — flag it instead of
                 # silently skipping, or it would escape this hardening gate
-                # entirely (the schema below is only applied to mappings).
+                # entirely (the schema below is only applied to mappings). A
+                # `_defaults*.yaml` that is empty/non-mapping is likewise flagged.
+                kind = "`_defaults` platform file" if is_defaults else (
+                    "tenant file with a `tenants:` block")
                 violations.append(
-                    f"ERROR: {rel}: top-level YAML document must be a mapping with a "
-                    f"`tenants:` block (got {type(doc).__name__})")
+                    f"ERROR: {rel}: top-level YAML document must be a mapping "
+                    f"({kind}; got {type(doc).__name__})")
                 continue
             checked += 1
             try:
-                validator.validate(doc, schema)
+                validator.validate(doc, active_schema)
             except validator.ValidationError as exc:
                 loc = "/".join(str(p) for p in exc.absolute_path)
                 violations.append(f"ERROR: {rel}: {exc.message} @ /{loc}")
@@ -107,7 +135,10 @@ def main() -> int:
     parser.add_argument("--config-dir", required=True,
                         help="conf.d directory to scan (recurses into examples/)")
     parser.add_argument("--schema", default=_DEFAULT_SCHEMA,
-                        help="JSON Schema path (default: docs/schemas/tenant-config.schema.json)")
+                        help="Tenant JSON Schema path (default: docs/schemas/tenant-config.schema.json)")
+    parser.add_argument("--platform-schema", default=_DEFAULT_PLATFORM_SCHEMA,
+                        help="_defaults.yaml JSON Schema path "
+                             "(default: docs/schemas/platform-defaults.schema.json)")
     parser.add_argument("--ci", action="store_true",
                         help="CI mode (accepted for symmetry with sibling lints; no behaviour change)")
     args = parser.parse_args()
@@ -123,6 +154,14 @@ def main() -> int:
         print(f"ERROR: cannot load schema {args.schema}: {exc}", file=sys.stderr)
         return EXIT_CALLER_ERROR
 
+    try:
+        with open(args.platform_schema, encoding="utf-8") as fh:
+            platform_schema = json.load(fh)
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"ERROR: cannot load platform schema {args.platform_schema}: {exc}",
+              file=sys.stderr)
+        return EXIT_CALLER_ERROR
+
     # Lazy import: keep --help / invalid-args (the exit-code gate) working in a
     # jsonschema-less env.
     try:
@@ -133,20 +172,21 @@ def main() -> int:
         return EXIT_CALLER_ERROR
 
     try:
-        checked, violations, skipped = validate_dir(args.config_dir, schema, jsonschema)
+        checked, violations, skipped = validate_dir(
+            args.config_dir, schema, jsonschema, platform_schema)
     except _CallerError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return EXIT_CALLER_ERROR
 
     if skipped:
         print(f"skipped {len(skipped)} meta-file(s) not modelled by the tenant-config "
-              f"schema (own shape/validator): {', '.join(skipped)}")
+              f"or platform-defaults schema (own shape/validator): {', '.join(skipped)}")
     if violations:
         for msg in violations:
             print(msg, file=sys.stderr)
-        print(f"\n{len(violations)} schema violation(s) across {checked} tenant file(s). "
-              f"Fix the conf.d YAML, or docs/schemas/tenant-config.schema.json if the "
-              f"schema is wrong.", file=sys.stderr)
+        print(f"\n{len(violations)} schema violation(s) across {checked} conf.d file(s). "
+              f"Fix the conf.d YAML, or the schema (docs/schemas/tenant-config.schema.json "
+              f"/ platform-defaults.schema.json) if the schema is wrong.", file=sys.stderr)
         return EXIT_VIOLATION
 
     print(f"OK: {checked} tenant conf.d file(s) valid against tenant-config.schema.json")

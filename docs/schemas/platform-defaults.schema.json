@@ -1,0 +1,37 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/vencil/Dynamic-Alerting-Integrations/docs/schemas/platform-defaults.schema.json",
+  "title": "Platform _defaults.yaml — top-level key guard (#658 fast-follow)",
+  "version": "v2.9.0",
+  "description": "MINIMAL schema for conf.d _defaults.yaml. The top-level keys are STRICT (additionalProperties:false), so a typo like `state_flters` / `defalts` / `_routing_defualts`-class mistakes that would otherwise SILENTLY drop the whole platform-default block (the highest-blast-radius config file — affects every tenant under that directory) fail at author/CI time. NESTED values are intentionally LEFT LOOSE ({} = accept anything): the keys under `defaults` (metric names) and `state_filters` (filter names) are dynamic and platform-authored, so they are NOT modelled here (a full structural schema is the deferred #658 item (a)). This is the cheap, high-value middle ground between 'no validation' and 'full JSON Schema'.",
+  "$comment": "The `_*` properties mirror _lib_constants.py VALID_RESERVED_KEYS (the Go/Python/Schema 3-way reserved-key SSOT). tests/lint/test_check_confd_schema.py asserts this set stays a superset of VALID_RESERVED_KEYS so a newly added reserved key can't silently make this guard false-reject a legitimate inherited override in _defaults.yaml. The `^_state_` / `^_routing` patternProperties mirror VALID_RESERVED_PREFIXES (prefix-class keys are accepted, exactly as the tenant validator does — prefix-internal typos are out of scope here, same as the tenant model).",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "defaults": {
+      "type": "object",
+      "title": "Platform default thresholds (metric → value)",
+      "description": "Map of metric key → default threshold (scalar or scheduled). Keys are dynamic metric names → values left loose; only the top-level `defaults` key itself is guarded."
+    },
+    "state_filters": {
+      "type": "object",
+      "title": "Platform default state filters",
+      "description": "Map of filter-name → {reasons, severity, default_state}. Filter names are dynamic → values left loose."
+    },
+    "_routing_defaults": {
+      "title": "Default routing inherited by all tenants under this directory"
+    },
+    "_metadata": {},
+    "_routing": {},
+    "_routing_profile": {},
+    "_silent_mode": {},
+    "_severity_dedup": {},
+    "_namespaces": {},
+    "_profile": {},
+    "_custom_alerts": {}
+  },
+  "patternProperties": {
+    "^_state_": {},
+    "^_routing": {}
+  }
+}

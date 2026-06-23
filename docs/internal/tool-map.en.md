@@ -144,7 +144,7 @@ lang: en
 | `check_codename_gate.py` | Layer 2 glossary-driven codename gate (#469). |
 | `check_codename_leak.py` | Block internal codenames from leaking to user-facing files. |
 | `check_commit_scope_doc.py` | Commit-scope doc drift gate (L1 pre-commit hook + validate_all integration). |
-| `check_confd_schema.py` | validate conf.d tenant YAML against the tenant-config JSON Schema (#880). |
+| `check_confd_schema.py` | validate conf.d tenant YAML + _defaults.yaml against their JSON Schemas (#880). |
 | `check_configmap_mount_completeness.py` | Guard: every `configmap-rules-*.yaml` must be mounted into Prometheus. |
 | `check_design_token_usage.py` | JSX 設計 token 使用完整性 lint |
 | `check_dev_bypass_manifest.py` | ADR-022 Layer 4 (deploy-time guard). |

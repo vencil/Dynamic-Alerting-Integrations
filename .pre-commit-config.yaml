@@ -474,11 +474,11 @@ repos:
       # degrade) so it is in additional_dependencies. Also wired into ci.yml's Lint
       # job (pre-commit run confd-schema-check) like routing-profiles-check.
       - id: confd-schema-check
-        name: conf.d tenant YAML ↔ tenant-config schema (#880 db_type-typo guard)
+        name: conf.d tenant YAML + _defaults.yaml ↔ schemas (#880 db_type-typo + #658 _defaults key guard)
         entry: python3 -X utf8 scripts/tools/lint/check_confd_schema.py --config-dir components/threshold-exporter/config/conf.d
         language: python
         pass_filenames: false
-        files: ^(components/threshold-exporter/config/|scripts/tools/lint/check_confd_schema|docs/schemas/tenant-config\.schema\.json)
+        files: ^(components/threshold-exporter/config/|scripts/tools/lint/check_confd_schema|docs/schemas/(tenant-config|platform-defaults)\.schema\.json)
         additional_dependencies: ['pyyaml', 'jsonschema']
 
       # --- v2.4.0 Phase A: 防守工具補強 ---
