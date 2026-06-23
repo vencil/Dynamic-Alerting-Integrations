@@ -285,22 +285,22 @@ class TestVector:
 
     @_needs_helm
     def test_image_digest_knob(self, repo_root: Path) -> None:
-        """#566 T5: image.digest empty → `repo:tag`; digest set →
-        `repo:tag@sha256:...`. Templating the @-form wrong silently
-        ships a colon-without-digest and kubelet falls back to tag pulls
-        — defeating the pinning."""
-        # Empty default → no @
-        docs = _render(repo_root / "helm/vector")
-        ds = [d for d in docs if d.get("kind") == "DaemonSet"][0]
-        img = ds["spec"]["template"]["spec"]["containers"][0]["image"]
-        assert "@" not in img, "default empty digest must NOT add @"
-        # Set digest → @sha256: appended
-        docs = _render(repo_root / "helm/vector", sets={
-            "image.digest": "sha256:0123456789abcdef",
-        })
-        ds = [d for d in docs if d.get("kind") == "DaemonSet"][0]
-        img = ds["spec"]["template"]["spec"]["containers"][0]["image"]
-        assert img.endswith("@sha256:0123456789abcdef")
+        """#566 T5 knob + #902 L2 pin: the chart now SHIPS a pinned digest by
+        default (`repo:tag@sha256:...`); the knob can be cleared
+        (`--set image.digest=""` → `repo:tag`) or overridden. Templating the
+        @-form wrong silently ships a colon-without-digest and kubelet falls
+        back to tag pulls — defeating the pinning."""
+        def _image(sets=None):
+            docs = _render(repo_root / "helm/vector", sets=sets) if sets else _render(repo_root / "helm/vector")
+            ds = [d for d in docs if d.get("kind") == "DaemonSet"][0]
+            return ds["spec"]["template"]["spec"]["containers"][0]["image"]
+
+        # Default now ships a pinned digest (#902 L2).
+        assert "@sha256:" in _image(), "default should now ship a pinned digest (#902 L2)"
+        # Cleared digest → plain repo:tag (knob still works).
+        assert "@" not in _image({"image.digest": ""}), "cleared digest must NOT add @"
+        # Overridden digest → that @sha256: appended.
+        assert _image({"image.digest": "sha256:0123456789abcdef"}).endswith("@sha256:0123456789abcdef")
 
     @_needs_helm
     def test_extra_env_renders_into_daemonset(self, repo_root: Path) -> None:

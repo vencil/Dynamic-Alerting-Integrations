@@ -16,7 +16,9 @@ image:
   tag: "0.55.0-distroless-libc"
   # Optional digest pin (#566 T5). See helm/victorialogs/values.yaml
   # for rationale + how to fetch.
-  digest: ""
+  # ⛔ Digest AUTHORITATIVE: `--set image.tag=…` alone won't upgrade (k8s keeps THIS
+  #    digest); also set/clear image.digest. #902 L2 (L3/Renovate will automate).
+  digest: "sha256:2fe99882ec787d8641bc620a7e3a1ce3b5e41375c8d681cacfac219620ba7a7e"
   pullPolicy: IfNotPresent
 
 # Where to ship logs. Default points at the in-cluster VictoriaLogs

@@ -29,7 +29,7 @@ spec:
           # generic webhook since v0.26.0 (PR prometheus/alertmanager#3223). The
           # pin below (a current stable release) is well past that floor — keep any
           # future bump ≥ v0.26.0 so the heartbeat secret keeps loading.
-          image: prom/alertmanager:v0.32.0
+          image: prom/alertmanager:v0.32.0@sha256:58e117eabccebbff04e6643a3432d6315a2cc3a8c24ab5849bc628886bf08857
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -77,7 +77,7 @@ spec:
             initialDelaySeconds: 10
             periodSeconds: 10
         - name: config-reloader
-          image: ghcr.io/jimmidyson/configmap-reload:v0.15.0
+          image: ghcr.io/jimmidyson/configmap-reload:v0.15.0@sha256:b578b7599d65c0279f6e1aad201bba737b9b15e6a4f308281d9e26f765e6657f
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

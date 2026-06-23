@@ -9,7 +9,8 @@ type: application
 # 0.1.3 — #566 T5: image.digest knob (supply-chain pinning); default empty so existing deploys are no-op
 # 0.1.4 — #566 Q5: extraEnv/extraEnvFrom (platform convention with helm/vector + helm/chargeback-aggregator)
 # 0.2.0 — ADR-021 Phase 1 / #609: Layer-1 query guardrails (.Values.search → -search.maxQueryTimeRange / maxQueryDuration / maxConcurrentRequests / maxQueueDuration); maxQueryDuration 25s < gateway 30s (cascading-timeout)
-version: 0.2.0
+# 0.2.1 — #902 L2 slice-2: pin the VictoriaLogs image by digest (image.digest)
+version: 0.2.1
 # appVersion: pinned VictoriaLogs release
 appVersion: "v1.50.0"
 keywords:
