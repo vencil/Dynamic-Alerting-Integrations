@@ -53,16 +53,23 @@
       ],
       // #658: wire the tenant-config JSON Schema to conf.d tenant YAML so
       // authors get inline validation + autocomplete in-container. The `[^_]`
-      // char-class EXCLUDES platform files (_defaults / _profiles / _routing*
-      // / _rbac ...) whose shapes differ from the tenant schema. We inject this
-      // here (not .vscode/settings.json — that path is gitignored: .gitignore
-      // `.vscode/*`) so the association ships with the dev container.
+      // char-class EXCLUDES platform files (_profiles / _routing* / _rbac ...)
+      // whose shapes differ from the tenant schema. We inject this here (not
+      // .vscode/settings.json — that path is gitignored: .gitignore `.vscode/*`)
+      // so the association ships with the dev container.
+      // _defaults*.yaml get the platform-defaults schema (top-level key guard,
+      // #658 fast-follow) — same schema the CI confd-schema-check validates them
+      // against, so the editor and CI agree (cross-surface consistency).
       // Non-container editors: see docs/internal/editor-schema-validation.md.
       "settings": {
         "yaml.schemas": {
           "./docs/schemas/tenant-config.schema.json": [
             "**/conf.d/[^_]*.yaml",
             "**/conf.d/**/[^_]*.yaml"
+          ],
+          "./docs/schemas/platform-defaults.schema.json": [
+            "**/conf.d/_defaults*.yaml",
+            "**/conf.d/**/_defaults*.yaml"
           ]
         }
       }
