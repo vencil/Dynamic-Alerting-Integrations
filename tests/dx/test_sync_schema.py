@@ -141,3 +141,31 @@ class TestThreeWayInSync:
             f"schema-missing-go={sorted(missing)}, schema-extra={sorted(extra)}, "
             f"go-python-key-drift={sorted(key_drift)}, "
             f"go-python-prefix-drift={sorted(prefix_drift)}")
+
+
+class TestExtractPythonKeysEdge:
+    """Cover extract_python_keys' no-match fallback (constants block absent)."""
+
+    def test_empty_when_constants_absent(self, tmp_path):
+        tmp = tmp_path / "no_constants.py"
+        tmp.write_text("X = 1\nY = 'foo'\n", encoding="utf-8")
+        keys, prefixes = ss.extract_python_keys(str(tmp))
+        assert keys == set()
+        assert prefixes == []
+
+
+class TestPrintDriftReport:
+    """print_drift_report: has_drift return + every drift section renders."""
+
+    def test_no_drift_returns_false(self, capsys):
+        assert ss.print_drift_report(set(), set(), set(), set()) is False
+        assert "in sync" in capsys.readouterr().out
+
+    def test_each_drift_branch_returns_true(self, capsys):
+        # One member in each of the four drift buckets → all sections print.
+        assert ss.print_drift_report({"_a"}, {"_b"}, {"_c"}, {"_d"}) is True
+        out = capsys.readouterr().out
+        assert "missing in Schema" in out          # missing_in_schema
+        assert "not defined in Go source" in out    # extra_in_schema
+        assert "Reserved KEYS differ between Go and Python" in out
+        assert "Reserved PREFIXES differ between Go and Python" in out
