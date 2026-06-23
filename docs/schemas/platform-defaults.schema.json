@@ -3,8 +3,8 @@
   "$id": "https://github.com/vencil/Dynamic-Alerting-Integrations/docs/schemas/platform-defaults.schema.json",
   "title": "Platform _defaults.yaml — top-level key guard (#658 fast-follow)",
   "version": "v2.9.0",
-  "description": "MINIMAL schema for conf.d _defaults.yaml. The top-level keys are STRICT (additionalProperties:false), so a typo like `state_flters` / `defalts` / `_routing_defualts`-class mistakes that would otherwise SILENTLY drop the whole platform-default block (the highest-blast-radius config file — affects every tenant under that directory) fail at author/CI time. NESTED values are intentionally LEFT LOOSE ({} = accept anything): the keys under `defaults` (metric names) and `state_filters` (filter names) are dynamic and platform-authored, so they are NOT modelled here (a full structural schema is the deferred #658 item (a)). This is the cheap, high-value middle ground between 'no validation' and 'full JSON Schema'.",
-  "$comment": "The `_*` properties mirror _lib_constants.py VALID_RESERVED_KEYS (the Go/Python/Schema 3-way reserved-key SSOT). tests/lint/test_check_confd_schema.py asserts this set stays a superset of VALID_RESERVED_KEYS so a newly added reserved key can't silently make this guard false-reject a legitimate inherited override in _defaults.yaml. The `^_state_` / `^_routing` patternProperties mirror VALID_RESERVED_PREFIXES (prefix-class keys are accepted, exactly as the tenant validator does — prefix-internal typos are out of scope here, same as the tenant model).",
+  "description": "MINIMAL schema for conf.d _defaults.yaml. The top-level keys are STRICT (additionalProperties:false), so a NON-prefix typo like `state_flters` / `defalts` that would otherwise SILENTLY drop the whole platform-default block (the highest-blast-radius config file — affects every tenant under that directory) fails at author/CI time. SCOPE LIMIT: prefix-class keys (`_state_*` / `_routing*`) are accepted via patternProperties to mirror the tenant validator, so a prefix-INTERNAL typo (e.g. `_routing_defualts`) is NOT caught here — same lenient prefix model as ValidateTenantKeys. NESTED values are intentionally LEFT LOOSE ({} = accept anything): the keys under `defaults` (metric names) and `state_filters` (filter names) are dynamic and platform-authored, so they are NOT modelled here (a full structural schema is the deferred #658 item (a)). This is the cheap, high-value middle ground between 'no validation' and 'full JSON Schema'.",
+  "$comment": "Top-level properties mirror what the Go loader (pkg/config/types.go ThresholdConfig) reads from ANY conf.d file: the platform-default blocks (defaults / state_filters / _routing_defaults) PLUS the struct's other top-level fields (tenants / profiles / max_metrics_per_tenant) — Go yaml.Unmarshal has no KnownFields, so these are loader-legitimate in a _defaults.yaml and must NOT false-reject (e.g. a platform-wide max_metrics_per_tenant cap, which has no other `_*` file home). The `_*` properties additionally mirror _lib_constants.py VALID_RESERVED_KEYS (the 3-way reserved-key SSOT); tests/lint/test_check_confd_schema.py asserts this set stays a superset of VALID_RESERVED_KEYS so a newly added reserved key can't silently make this guard false-reject a legitimate inherited override. The `^_state_` / `^_routing` patternProperties mirror VALID_RESERVED_PREFIXES.",
   "type": "object",
   "additionalProperties": false,
   "properties": {
@@ -17,6 +17,15 @@
       "type": "object",
       "title": "Platform default state filters",
       "description": "Map of filter-name → {reasons, severity, default_state}. Filter names are dynamic → values left loose."
+    },
+    "tenants": {
+      "title": "ThresholdConfig.tenants — loader-legitimate top-level field (left loose; guarded by tenant-config.schema.json when in a tenant file)"
+    },
+    "profiles": {
+      "title": "ThresholdConfig.profiles — loader-legitimate top-level field (profile map; usually in _routing_profiles.yaml but the loader reads it from any file)"
+    },
+    "max_metrics_per_tenant": {
+      "title": "ThresholdConfig.max_metrics_per_tenant — platform-wide cardinality cap; loader reads it from any file, no other `_*` home"
     },
     "_routing_defaults": {
       "title": "Default routing inherited by all tenants under this directory"

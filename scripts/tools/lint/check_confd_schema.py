@@ -108,12 +108,20 @@ def validate_dir(config_dir: str, schema: dict, validator,
             raise _CallerError(f"{rel}: cannot read/parse YAML: {exc}")
         active_schema = platform_schema if is_defaults else schema
         for doc in docs:
+            if doc is None and is_defaults:
+                # An empty / comment-only / explicit-`null` _defaults.yaml is
+                # loader-LEGAL: hierarchy.go's extractDefaultsBlock returns nil for
+                # a non-map defaults doc → no-op (a placeholder file is valid). Do
+                # NOT flag it (the old skip-all-`_*` behaviour never did, and a
+                # tenant file's `None` is still flagged below because it needs a
+                # `tenants:` block). A LIST/scalar _defaults is still malformed.
+                continue
             if not isinstance(doc, dict):
                 # A tenant-shaped file (no `_` prefix) whose top document is a
                 # list / scalar / empty (None) is malformed — flag it instead of
                 # silently skipping, or it would escape this hardening gate
                 # entirely (the schema below is only applied to mappings). A
-                # `_defaults*.yaml` that is empty/non-mapping is likewise flagged.
+                # `_defaults*.yaml` with a list/scalar top document is likewise flagged.
                 kind = "`_defaults` platform file" if is_defaults else (
                     "tenant file with a `tenants:` block")
                 violations.append(

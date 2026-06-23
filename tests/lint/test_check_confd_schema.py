@@ -160,6 +160,30 @@ class TestDefaultsValidation:
         _checked, viol, _skipped = validate_dir(confd, schema, jsonschema, platform_schema)
         assert viol == []
 
+    def test_loader_legit_toplevel_keys_pass(self, confd, schema, platform_schema):
+        # ThresholdConfig (types.go) reads `tenants`/`profiles`/`max_metrics_per_tenant`
+        # from ANY conf.d file (Go has no KnownFields) → they are loader-legitimate in a
+        # _defaults.yaml and must NOT false-red (esp. a platform-wide cardinality cap with
+        # no other `_*` home). Adversarial review S1.
+        _write(confd, "_defaults.yaml",
+               "defaults:\n  mysql_cpu: 80\nmax_metrics_per_tenant: 500\n"
+               "profiles:\n  std: {}\n")
+        _checked, viol, _skipped = validate_dir(confd, schema, jsonschema, platform_schema)
+        assert viol == [], f"loader-legit top-level keys false-rejected: {viol}"
+
+    def test_empty_or_null_defaults_tolerated(self, confd, schema, platform_schema):
+        # An empty / comment-only / explicit-`null` _defaults.yaml is loader-legal (a
+        # placeholder) → must NOT be flagged "must be a mapping". Adversarial review N1.
+        _write(confd, "_defaults.yaml", "# placeholder, no defaults yet\nnull\n")
+        _checked, viol, _skipped = validate_dir(confd, schema, jsonschema, platform_schema)
+        assert viol == [], f"null/empty _defaults.yaml false-rejected: {viol}"
+
+    def test_list_defaults_still_flagged(self, confd, schema, platform_schema):
+        # A _defaults.yaml whose top doc is a LIST/scalar (not None) is still malformed.
+        _write(confd, "_defaults.yaml", "- a\n- b\n")
+        _checked, viol, _skipped = validate_dir(confd, schema, jsonschema, platform_schema)
+        assert any("must be a mapping" in v for v in viol)
+
     def test_other_meta_still_skipped(self, confd, schema, platform_schema):
         # Only _defaults* route to the platform schema; other _* stay skipped even
         # when a platform_schema is supplied.
