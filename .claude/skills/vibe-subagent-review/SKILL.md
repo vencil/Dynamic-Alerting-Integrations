@@ -30,6 +30,8 @@ description: IaC-aware 兩階段 review — code 走 spec→quality、IaC 走 bl
 1. **Spec 符合度**：對照 issue / ticket，做的是不是「要做的事」？範圍有無 over/under？
 2. **Code quality**：錯誤處理、邊界、並發、測試 seam（用對 `freshMetrics` / FakeClock，見 [`test-map.md`](../../../docs/internal/test-map.md)）、tenant-agnostic（dev-rule #2）。
 
+> **Go `Close()` 讀/寫不對稱**（review 必查，errcheck 分不出）：`defer func(){ _ = x.Close() }()` 只對 **read-closer** 安全（`resp.Body` / `sql.Rows` / `os.Open` 唯讀檔——關閉只釋放資源）。**write-closer**（`os.Create` / `gzip.Writer` / 任何寫入檔）的 `Close()` error **必須**顯式檢查或併入回傳 `err`——寫入的 disk-flush 常延到 `Close()` 才發生，吞掉 = silent data loss。errcheck 逼你對每個 `Close()` 表態，但無法分辨讀/寫，故這條靠 review 把關（來源：#912 對抗 review）。
+
 ## Blast-radius checklist（`values.yaml` / template）
 
 改 Helm values / template 時逐項問：
