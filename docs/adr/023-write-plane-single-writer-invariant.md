@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: tenant-api
 created_at: 2026-05-30
-updated_at: 2026-06-06
+updated_at: 2026-06-24
 ---
 # ADR-023: tenant-api 寫入平面 — 單一寫者不變式
 
@@ -125,6 +125,7 @@ ADR-023 single-writer invariant violated: tenant-api replicaCount=2 but MUST be 
 - **K8s Lease 分散式寫入鎖（A3，[#787](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/787)）** — 雙重動機：(1) 寫入部署需 zero-downtime 成硬需求；(2) 執行期多寫者向量（`kubectl scale`／KEDA／GitOps patch）需根治。任一觸發即開工。
 - **讀寫拆分部署（A4，[#788](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/788)）** — 觸發：讀取 HA 成需求（Portal 上線、讀 QPS 上升）。前提：binary 新增 read-only 模式 + 路由。
 - **寫入水平擴展** — 觸發：單寫者吞吐量成實測瓶頸。走 Lease，不放寬單鎖。
+- **寫入平面 QoS 雙車道（human-interactive vs machine-batch，[#746](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/746)，2026-06-24 closed-with-trigger）** — 在單寫者內分 human/machine 優先級車道（人類絕對搶佔、機器批次降為 preemptible micro-batch、鎖內偵測高優先即釋放退佇列）。現況的 load-shedding（[#673](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/673)）是 **priority-blind** 單 FIFO 許可佇列，足以應付「全人類寫入」的現狀（所有寫路徑皆 X-Forwarded-Email 歸屬，無機器寫者走 `Writer` 鎖）。**觸發**：第一個走寫平面（`Writer` 鎖／許可佇列）且能非平凡時長持有的 automated writer 上線（auto-GC／過期清理／批次重編譯），與延遲敏感的人類寫入共存時 → 重開 #746，並以 leading SLI（write source 打標 + human-write queue-wait p95 + `ErrWriteOverloaded` by-source 計數）為工程啟動依據。push-timeout 前置（[#630](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/630)）已 DONE。
 
 ## 實作對照
 
