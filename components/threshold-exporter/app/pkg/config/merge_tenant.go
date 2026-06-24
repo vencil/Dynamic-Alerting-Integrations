@@ -157,7 +157,10 @@ func mergeTenantConfig(configDir string, tenantCfg ThresholdConfig) ThresholdCon
 	// Merge the tenant config's `tenants:` block on top.
 	for tenant, overrides := range tenantCfg.Tenants {
 		if merged.Tenants[tenant] == nil {
-			merged.Tenants[tenant] = make(map[string]ScheduledValue)
+			// Pre-size to the known override count: a tenant can carry many
+			// metric thresholds, so sizing the destination lets the copy below
+			// fill without incremental map growth/rehashing (#708 review nit).
+			merged.Tenants[tenant] = make(map[string]ScheduledValue, len(overrides))
 		}
 		for k, v := range overrides {
 			merged.Tenants[tenant][k] = v
