@@ -162,10 +162,25 @@ class TestBinaryResolutionExplicitFlag:
         ])
         captured = capsys.readouterr()
         assert rc == 2
-        # Error message names the binary; specific path may render
-        # with different escapes per platform (repr Windows vs Linux).
+        # The attempted path is echoed RAW (no repr() backslash-escaping), so it
+        # renders identically on Windows and POSIX — assert it appears verbatim.
         assert "fake-binary" in captured.err
         assert "not found" in captured.err.lower()
+        assert nonexistent in captured.err
+
+    def test_explicit_missing_path_echoed_without_backslash_escaping(
+            self, make_dispatcher, capsys):
+        """Regression guard: the missing-binary error must echo the attempted
+        path RAW, never via repr() — repr doubles backslashes in Windows paths
+        (confusing for users; it broke a guard-dispatch substring test). The
+        literal-backslash input makes this fail on POSIX CI too if repr() ever
+        returns, since repr escapes backslashes regardless of OS."""
+        d = make_dispatcher()
+        winish = r"Z:\no\such\fake-binary"  # literal backslashes; never a real file
+        rc = d.dispatch(["do-thing", "--fake-binary-path", winish])
+        captured = capsys.readouterr()
+        assert rc == 2
+        assert winish in captured.err  # raw path — no doubled backslashes
 
     def test_trailing_bare_flag_handled(self, make_dispatcher, capsys):
         """`--flag` with no value should not crash. Falls through to env
