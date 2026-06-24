@@ -90,7 +90,7 @@ class TestExtraction:
         m = L.build_map([p])
         assert m["bar"].get("needs_review") is True
         assert m["bar"]["direction"] == "<"
-        assert "#721 item 6" in m["bar"]["reason"]
+        assert "lower-bound" in m["bar"]["reason"]  # semantic, not a brittle issue-ref pin
         assert "observed_series" not in m["bar"]
 
     def test_composite_needs_review_with_candidates(self, tmp_path):

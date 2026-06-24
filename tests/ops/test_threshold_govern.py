@@ -416,14 +416,14 @@ def test_collect_ungoverned_isolates_lower_bound():
         _report("db-a", [
             _kr("mysql_connections", "2000", 100.0, -95.0, recommend.CONFIDENCE_HIGH),
             _kr("db2_hit_ratio", "0.9",
-                reason="skipped: lower-bound (<) metric — not supported (#721 item 6)"),
+                reason="skipped: lower-bound (<) metric — not supported (#916)"),
             _kr("redis_mem", "x",
                 reason="no observed-load mapping for this key — not in observed-map (skipped)"),
         ]),
         _report("db-b", [
             _kr("kafka_active_controllers", "1",
                 reason="skipped: lower-bound (<) metric — P95-upper recommendation "
-                       "not applicable (#721 item 6)"),
+                       "not applicable (#916)"),
         ]),
     ]
     ung = tg.collect_ungoverned_lower_bound(reports)
@@ -436,7 +436,7 @@ def test_run_surfaces_ungoverned_but_keeps_it_out_of_plans(monkeypatch):
     reports = [_report("db-a", [
         _kr("mysql_connections", "2000", 100.0, -95.0, recommend.CONFIDENCE_HIGH, p95=100.0),
         _kr("db2_hit_ratio", "0.9",
-            reason="skipped: lower-bound (<) metric — not supported (#721 item 6)"),
+            reason="skipped: lower-bound (<) metric — not supported (#916)"),
     ])]
     monkeypatch.setattr(recommend, "run_analysis", lambda *a, **k: reports)
     plans, outcomes, ungoverned = tg.run(_args(apply=False))

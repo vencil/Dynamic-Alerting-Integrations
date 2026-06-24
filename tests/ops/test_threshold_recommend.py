@@ -289,13 +289,13 @@ class TestAnalyzeTenant:
             "direction": "<",
             "candidates": ["tenant:broker_count:max"],
             "needs_review": True,
-            "reason": "lower-bound (<) metric — #721 item 6",
+            "reason": "lower-bound (<) metric — #916",
         },
         "container_cpu": {
             "scope": "tenant_version",
             "candidates": ["tenant_version:pod_weakest_cpu_percent:vlabeled"],
             "needs_review": True,
-            "reason": "unsupported scope — #721 item 7",
+            "reason": "unsupported scope — #916",
         },
     }
 
@@ -318,16 +318,16 @@ class TestAnalyzeTenant:
         assert "not in observed-map" in rec.reason
 
     def test_lower_bound_key_skipped(self):
-        """下界 (<) key skip（#721 item 6）。"""
+        """下界 (<) key skip（#916）。"""
         config = {"broker_count": 3}
         report = tr.analyze_tenant("db-a", config, dry_run=True, observed_map=self.HERMETIC_MAP)
         rec = report.keys[0]
         assert rec.promql == ""
         assert "skipped" in rec.reason
-        assert "#721 item 6" in rec.reason
+        assert "lower-bound" in rec.reason  # semantic, not a brittle issue-ref pin
 
     def test_unsupported_scope_key_skipped(self):
-        """version-aware (tenant_version scope) key skip（#721 item 7）。"""
+        """version-aware (tenant_version scope) key skip（#916）。"""
         config = {"container_cpu": 80}
         report = tr.analyze_tenant("db-a", config, dry_run=True, observed_map=self.HERMETIC_MAP)
         rec = report.keys[0]
@@ -476,7 +476,7 @@ class TestExportPatch:
                                      delta_pct=-2.2, confidence="HIGH",
                                      reason="within 5% margin, no change needed"),
                 tr.KeyRecommendation("kafka_broker_count", "3", recommended=None,
-                                     reason="skipped: lower-bound (<) metric — #721 item 6"),
+                                     reason="skipped: lower-bound (<) metric — #916"),
             ],
             total_keys=3,
             recommended_changes=1,

@@ -22,7 +22,7 @@ What it checks (via _observed_map_lib.check_consistency)
   observed-series prefix (split-brain). These fail CI.
 - **infos (OK)**: known-deferred keys (KNOWN_DEFERRED allowlist, e.g. the
   version-aware ``container_cpu`` / ``container_memory`` whose comparison lives
-  in a ``:core`` recording rule, deferred to #721 item 7). Printed as INFO,
+  in a ``:core`` recording rule, deferred to #916). Printed as INFO,
   NEVER an error — otherwise this bugfix could never merge.
 - **orphan_thresholds (WARN)**: a ``record: tenant:alert_threshold:<key>`` with
   NO alert referencing it — a rule-pack gap, surfaced for the pack authors, not
