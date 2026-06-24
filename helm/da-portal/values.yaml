@@ -30,6 +30,7 @@ nginx:
 oauth2Proxy:
   enabled: true
   image:
+    # renovate: datasource=docker depName=quay.io/oauth2-proxy/oauth2-proxy
     repository: quay.io/oauth2-proxy/oauth2-proxy
     tag: "v7.15.2"
     # Pinned by digest (#902 L2) — same digest as tenant-api's oauth2-proxy; the

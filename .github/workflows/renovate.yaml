@@ -1,0 +1,80 @@
+name: Renovate
+
+# Self-hosted Renovate (#902 L3) — auto-bumps the 14 third-party container image
+# tags + digests pinned in #902 L2 (renovate.json scopes Renovate to ONLY those
+# images via custom.regex managers). This closes the L1+L2 toil loop: a digest pin
+# freezes the image, so the nightly CVE scan can no longer auto-close on an upstream
+# tag-patch — Renovate re-resolves the digest (and bumps the tag) on a schedule.
+#
+# WHY self-hosted (not the Mend-hosted Renovate App): this repo self-hosts / pins
+# its whole supply chain; a self-hosted run avoids granting an external SaaS app
+# write access to the repo, and is the prerequisite for the future tool-SHA
+# postUpgradeTasks (#902 L3 Category B — see docs/internal/dx-tooling-backlog.md).
+#
+# ⛔ REQUIRES a RENOVATE_TOKEN secret — a fine-grained PAT with Contents +
+#    Pull requests + Workflows (read/write). Workflows is REQUIRED because Renovate
+#    edits the scan-matrix ref in nightly-image-scan.yaml (a `.github/workflows/`
+#    file) — GitHub rejects a token without workflow scope updating workflow files.
+#    A PAT (NOT the default GITHUB_TOKEN) is required so
+#    Renovate's PRs trigger the other workflows' CI — that is the drift-guard safety
+#    net that catches a deploy-ref/scan-matrix desync. Add it under
+#    Settings → Secrets and variables → Actions. First run: trigger manually with
+#    "Dry run" = true and read the log to validate before letting the schedule open PRs.
+
+on:
+  schedule:
+    # Mondays 06:17 UTC — off the top-of-hour (avoids GH congestion); weekly cadence.
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+    inputs:
+      dryRun:
+        description: "Dry run — log what WOULD change, open no branches/PRs (run this first to validate)"
+        type: boolean
+        default: false
+      logLevel:
+        description: "Renovate log level"
+        type: choice
+        options: ["info", "debug"]
+        default: "info"
+
+# The PAT (RENOVATE_TOKEN) does the branch/PR writes; the workflow's own GITHUB_TOKEN
+# only needs read (checkout).
+permissions:
+  contents: read
+
+concurrency:
+  group: renovate
+  cancel-in-progress: false
+
+jobs:
+  renovate:
+    # Don't run on forks (the token + repo are the upstream's).
+    if: ${{ github.repository == 'vencil/Dynamic-Alerting-Integrations' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # secrets can't be used in a step `if:` — mirror presence to a job env var.
+      RENOVATE_TOKEN_SET: ${{ secrets.RENOVATE_TOKEN != '' }}
+    steps:
+      - name: Require RENOVATE_TOKEN
+        if: ${{ env.RENOVATE_TOKEN_SET != 'true' }}
+        run: |
+          echo "::error::RENOVATE_TOKEN secret is missing. Add a fine-grained PAT (Contents + Pull requests + Workflows: read/write — Workflows is needed because Renovate edits nightly-image-scan.yaml) under Settings → Secrets and variables → Actions. A PAT — NOT GITHUB_TOKEN — is required so Renovate's PRs trigger CI (the drift-guard safety net). See docs/internal/dx-tooling-backlog.md (#902 L3)."
+          exit 1
+
+      - uses: actions/checkout@v6
+
+      - name: Renovate
+        uses: renovatebot/github-action@v46
+        with:
+          configurationFile: renovate.json
+          token: ${{ secrets.RENOVATE_TOKEN }}
+        env:
+          RENOVATE_REPOSITORIES: ${{ github.repository }}
+          RENOVATE_ONBOARDING: "false"
+          RENOVATE_REQUIRE_CONFIG: "required"
+          # 'null' (not '') on the non-dry path: an explicit sentinel Renovate parses
+          # as "not a dry run". If it were ever misparsed it errors LOUD rather than
+          # silently treating the scheduled run as dry (→ no PRs, unnoticed).
+          RENOVATE_DRY_RUN: ${{ inputs.dryRun && 'full' || 'null' }}
+          LOG_LEVEL: ${{ inputs.logLevel || 'info' }}

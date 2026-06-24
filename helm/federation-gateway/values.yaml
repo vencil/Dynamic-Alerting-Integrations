@@ -43,6 +43,7 @@ emergencyGlobalBlock: false
 replicaCount: 2
 
 image:
+  # renovate: datasource=docker depName=envoyproxy/envoy
   repository: envoyproxy/envoy
   # distroless: nonroot, no shell, core binary only — the production tag.
   tag: "distroless-v1.38.0"

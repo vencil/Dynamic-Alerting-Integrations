@@ -1,0 +1,62 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "enabledManagers": ["custom.regex"],
+  "pinDigests": true,
+  "semanticCommits": "enabled",
+  "semanticCommitType": "chore",
+  "semanticCommitScope": null,
+  "dependencyDashboard": true,
+  "dependencyDashboardTitle": "Renovate Dashboard — #902 L3 third-party image digests",
+  "prConcurrentLimit": 3,
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "#902 L3 — split-knob Helm values (image.repository/tag/digest) for the 7 digest-pinned third-party charts. The '# renovate:' annotation above each 'repository:' anchors the match so multi-image charts (da-portal/tenant-api also carry a first-party app image) cannot cross-match tag/digest across blocks.",
+      "managerFilePatterns": ["/^helm/.+/values\\.yaml$/"],
+      "matchStrings": [
+        "# renovate:\\s*datasource=(?<datasource>\\S+)\\s+depName=(?<depName>\\S+)[\\s\\S]*?\\n[ \\t]*tag:[ \\t]*[\"']?(?<currentValue>[^\"'\\s]+)[\"']?[\\s\\S]*?\\n[ \\t]*digest:[ \\t]*[\"']?(?<currentDigest>sha256:[0-9a-f]+)[\"']?"
+      ],
+      "datasourceTemplate": "docker",
+      "versioningTemplate": "docker"
+    },
+    {
+      "customType": "regex",
+      "description": "#902 L3 — single-line 'image: repo:tag@sha256:...' refs: mariadb-instance Helm values, raw k8s manifests, and the tenant-api alpine/git init template. Only refs that already carry an @sha256 digest match — first-party tag-only images (handled by the release flow) are skipped.",
+      "managerFilePatterns": [
+        "/^helm/mariadb-instance/values\\.yaml$/",
+        "/^k8s/.+\\.yaml$/",
+        "/^helm/tenant-api/templates/deployment\\.yaml$/"
+      ],
+      "matchStrings": [
+        "image:[ \\t]+[\"']?(?<depName>[^\\s:\"']+(?:/[^\\s:\"']+)*):(?<currentValue>[^\\s\"'@]+)@(?<currentDigest>sha256:[0-9a-f]+)[\"']?"
+      ],
+      "datasourceTemplate": "docker",
+      "versioningTemplate": "docker"
+    },
+    {
+      "customType": "regex",
+      "description": "#902 L3 — the scan-thirdparty matrix 'ref:' entries in nightly-image-scan.yaml. Renovate updates these in the SAME branch as the deploy ref (identical depName) so the drift-guard test (matrix == deploy refs) stays green; a missed sync turns the drift-guard RED in the Renovate PR's own CI.",
+      "managerFilePatterns": ["/^\\.github/workflows/nightly-image-scan\\.yaml$/"],
+      "matchStrings": [
+        "ref:[ \\t]*[\"'](?<depName>[^\\s:\"']+(?:/[^\\s:\"']+)*):(?<currentValue>[^\\s\"'@]+)@(?<currentDigest>sha256:[0-9a-f]+)[\"']"
+      ],
+      "datasourceTemplate": "docker",
+      "versioningTemplate": "docker"
+    }
+  ],
+  "packageRules": [
+    {
+      "description": "#902 L3 — group all non-major third-party image updates (incl. digest-only refreshes) into ONE PR for low review noise. The self-hosted workflow's weekly cron sets the cadence; a manual workflow_dispatch (incl. dry-run) runs on demand.",
+      "matchDatasources": ["docker"],
+      "matchUpdateTypes": ["minor", "patch", "digest", "pin"],
+      "groupName": "third-party container images"
+    },
+    {
+      "description": "#902 L3 — MAJOR upgrades can break (grafana/prometheus/mariadb majors carry config/schema changes). Require an explicit tick on the Dependency Dashboard before Renovate opens the PR, rather than auto-flooding a breaking bump.",
+      "matchDatasources": ["docker"],
+      "matchUpdateTypes": ["major"],
+      "dependencyDashboardApproval": true
+    }
+  ]
+}
