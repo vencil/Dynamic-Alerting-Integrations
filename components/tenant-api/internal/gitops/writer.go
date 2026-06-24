@@ -519,7 +519,12 @@ func validate(configDir, tenantID, yamlContent string) []string {
 	if configDir == "" {
 		keyErrs = tcfg.ValidateTenantKeys()
 	} else {
-		merged := cfg.MergeTenantWithRootDefaults(configDir, tenantID, []byte(yamlContent))
+		// Reuse the body we already decoded into tcfg above instead of handing
+		// raw bytes to MergeTenantWithRootDefaults, which would Unmarshal the
+		// same yamlContent a third time (#708). tcfg.Tenants[tenantID] is proven
+		// present by the check above, so the byte variant's flat-KV fallback —
+		// the only behavior the parsed sibling omits — is unreachable here.
+		merged := cfg.MergeParsedTenantWithRootDefaults(configDir, tcfg)
 		keyErrs = merged.ValidateTenantKeys()
 	}
 	// S5 shift-left preflight (ADR-024 §S5): validate the tenant's OWN `_custom_alerts`

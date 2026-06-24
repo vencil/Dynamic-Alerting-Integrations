@@ -56,14 +56,16 @@ func CheckTenantRootKeys(yamlContent []byte) []string {
 //
 // This is the single source of truth for the lightweight, root-only merge used
 // across the tenant-api boundary:
-//   - GET  /api/v1/tenants/{id}            (handler.loadMergedConfig)
-//   - POST /api/v1/tenants/{id}/validate   (dry-run validation)
-//   - PUT  /api/v1/tenants/{id}            (gitops write-boundary validation)
+//   - GET  /api/v1/tenants/{id}            (handler.loadMergedConfig, raw bytes)
+//   - POST /api/v1/tenants/{id}/validate   (dry-run validation, raw bytes)
+//   - PUT  /api/v1/tenants/{id}            (gitops write-boundary validation,
+//     via the MergeParsedTenantWithRootDefaults sibling — same merge core, a
+//     pre-decoded body to avoid a redundant Unmarshal, #708)
 //
-// Consolidating these three call sites here is deliberate: a previous copy in
-// the write path did NOT merge defaults, so a tenant-only body validated clean
-// on GET//validate but was rejected at write time — the asymmetry tracked by
-// ADR-024 PR4 / #704.
+// Consolidating these call sites on one merge core is deliberate: a previous
+// copy in the write path did NOT merge defaults, so a tenant-only body validated
+// clean on GET//validate but was rejected at write time — the asymmetry tracked
+// by ADR-024 PR4 / #704.
 //
 // It is intentionally NOT the full L0..Ln cascade that ResolveEffective walks
 // (that one is parity-pinned to describe_tenant.py for the /effective
@@ -71,6 +73,64 @@ func CheckTenantRootKeys(yamlContent []byte) []string {
 // _defaults.yaml cascades are out of scope here, matching the historical
 // loadMergedConfig behavior this consolidates.
 func MergeTenantWithRootDefaults(configDir, tenantID string, tenantData []byte) ThresholdConfig {
+	// Decode the tenant body into the typed config. A decode error contributes
+	// no overrides (the historical behavior: the merge loop was guarded by
+	// `err == nil`); YAML validity is the caller's gate.
+	var tenantCfg ThresholdConfig
+	if err := yaml.Unmarshal(tenantData, &tenantCfg); err != nil {
+		tenantCfg = ThresholdConfig{}
+	}
+
+	merged := mergeTenantConfig(configDir, tenantCfg)
+
+	// Fallback: a flat key-value document (no `tenants:` wrapper) is wrapped
+	// under tenantID. Preserves the historical loadMergedConfig behavior. This
+	// raw-bytes re-decode lives only on the byte entry point — the parsed
+	// variant's callers (the write boundary) have already asserted a
+	// `tenants.<id>` block, so the fallback is unreachable for them.
+	if _, exists := merged.Tenants[tenantID]; !exists {
+		var flatKV map[string]ScheduledValue
+		if err := yaml.Unmarshal(tenantData, &flatKV); err == nil && len(flatKV) > 0 {
+			merged.Tenants[tenantID] = flatKV
+		}
+	}
+
+	merged.ApplyProfiles()
+	return merged
+}
+
+// MergeParsedTenantWithRootDefaults is the parse-once variant of
+// MergeTenantWithRootDefaults for callers that have ALREADY decoded the tenant
+// body into a ThresholdConfig. It overlays that parsed config on the root
+// _defaults.yaml in configDir without re-Unmarshalling the same bytes.
+//
+// Motivation (#708): the tenant-api write-path validation (gitops.validate)
+// decoded the incoming YAML three times — once for the structural tenant check,
+// once for the root-key contract, and a third time inside this merge. validate
+// now decodes the typed body once and threads it here, dropping that redundant
+// third decode. The root-key contract (CheckTenantRootKeys) still decodes a
+// separate map[string]any because a typed ThresholdConfig cannot surface stray
+// top-level keys — that decode targets a genuinely different shape, not the same
+// one twice.
+//
+// It deliberately omits the byte variant's flat-KV fallback (that path serves
+// the GET read path's legacy flat on-disk files; a parsed caller has already
+// asserted a `tenants.<id>` block is present). The defaults overlay, tenant
+// merge, and ApplyProfiles are otherwise identical, so for a tenants-block body
+// this returns the same result as the byte entry point.
+func MergeParsedTenantWithRootDefaults(configDir string, tenantCfg ThresholdConfig) ThresholdConfig {
+	merged := mergeTenantConfig(configDir, tenantCfg)
+	merged.ApplyProfiles()
+	return merged
+}
+
+// mergeTenantConfig is the shared core behind both Merge*TenantWithRootDefaults
+// entry points: it builds a fresh ThresholdConfig, overlays the root
+// _defaults.yaml (Defaults + StateFilters) from configDir, then merges the
+// already-decoded tenantCfg's `tenants:` block on top. It does NOT run the
+// flat-KV fallback or ApplyProfiles — the entry points layer those on so each
+// preserves its exact step ordering.
+func mergeTenantConfig(configDir string, tenantCfg ThresholdConfig) ThresholdConfig {
 	merged := ThresholdConfig{
 		Defaults:     make(map[string]float64),
 		StateFilters: make(map[string]StateFilter),
@@ -94,28 +154,18 @@ func MergeTenantWithRootDefaults(configDir, tenantID string, tenantData []byte) 
 		}
 	}
 
-	// Merge the tenant file's `tenants:` block on top.
-	var tenantCfg ThresholdConfig
-	if err := yaml.Unmarshal(tenantData, &tenantCfg); err == nil {
-		for tenant, overrides := range tenantCfg.Tenants {
-			if merged.Tenants[tenant] == nil {
-				merged.Tenants[tenant] = make(map[string]ScheduledValue)
-			}
-			for k, v := range overrides {
-				merged.Tenants[tenant][k] = v
-			}
+	// Merge the tenant config's `tenants:` block on top.
+	for tenant, overrides := range tenantCfg.Tenants {
+		if merged.Tenants[tenant] == nil {
+			// Pre-size to the known override count: a tenant can carry many
+			// metric thresholds, so sizing the destination lets the copy below
+			// fill without incremental map growth/rehashing (#708 review nit).
+			merged.Tenants[tenant] = make(map[string]ScheduledValue, len(overrides))
+		}
+		for k, v := range overrides {
+			merged.Tenants[tenant][k] = v
 		}
 	}
 
-	// Fallback: a flat key-value document (no `tenants:` wrapper) is wrapped
-	// under tenantID. Preserves the historical loadMergedConfig behavior.
-	if _, exists := merged.Tenants[tenantID]; !exists {
-		var flatKV map[string]ScheduledValue
-		if err := yaml.Unmarshal(tenantData, &flatKV); err == nil && len(flatKV) > 0 {
-			merged.Tenants[tenantID] = flatKV
-		}
-	}
-
-	merged.ApplyProfiles()
 	return merged
 }

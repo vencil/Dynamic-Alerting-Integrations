@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 // TestMergeTenantWithRootDefaults_PopulatesDefaults verifies the consolidation
@@ -242,5 +244,99 @@ func TestMergeTenantWithRootDefaults_MalformedDefaultsTolerated(t *testing.T) {
 	}
 	if _, ok := merged.Tenants["db-a"]["container_cpu"]; !ok {
 		t.Error("tenant body should still merge despite a malformed _defaults.yaml")
+	}
+}
+
+// TestMergeParsedTenantWithRootDefaults_MatchesByteVariant pins the #708
+// parse-once consolidation: for a tenants-block body (the tenant-api write-path
+// shape), the parsed-input MergeParsedTenantWithRootDefaults returns a config
+// deep-equal to the byte-input MergeTenantWithRootDefaults on the same body — so
+// the write boundary's switch from re-Unmarshalling raw bytes a third time to
+// threading the already-decoded ThresholdConfig is behavior-preserving.
+//
+// The DeepEqual is a PARITY/DRIFT guard between the two entry points, NOT an
+// absolute check of the shared mergeTenantConfig core: both arms route through
+// that core, so a regression INSIDE it breaks both identically and DeepEqual
+// still holds. It catches one entry point drifting from its sibling (e.g. the
+// parsed arm stops loading defaults, drops ApplyProfiles, or reorders steps).
+// The explicit assertions on `parsed` below add absolute coverage so a shared-
+// core regression (lost defaults overlay / state_filters / tenant merge) also
+// fails here, not only via the byte-path tests above (#708 adversarial review).
+func TestMergeParsedTenantWithRootDefaults_MatchesByteVariant(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	defaults := "defaults:\n  container_cpu: 80\n  mysql_cpu: 80\n" +
+		"state_filters:\n" +
+		"  container_crashloop:\n" +
+		"    reasons: [\"CrashLoopBackOff\"]\n" +
+		"    severity: critical\n"
+	if err := os.WriteFile(filepath.Join(dir, "_defaults.yaml"), []byte(defaults), 0o644); err != nil {
+		t.Fatalf("write defaults: %v", err)
+	}
+
+	tests := []struct {
+		name     string
+		tenantID string
+		body     string
+	}{
+		{"single tenant", "db-a", "tenants:\n  db-a:\n    container_cpu: \"70\"\n"},
+		{"multi tenant block", "db-a", "tenants:\n  db-a:\n    container_cpu: \"70\"\n  db-b:\n    mysql_cpu: \"60\"\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			var tcfg ThresholdConfig
+			if err := yaml.Unmarshal([]byte(tt.body), &tcfg); err != nil {
+				t.Fatalf("decode body: %v", err)
+			}
+			parsed := MergeParsedTenantWithRootDefaults(dir, tcfg)
+			bytewise := MergeTenantWithRootDefaults(dir, tt.tenantID, []byte(tt.body))
+			if !reflect.DeepEqual(parsed, bytewise) {
+				t.Errorf("parsed variant diverged from byte variant:\n parsed = %+v\n bytes  = %+v", parsed, bytewise)
+			}
+			// Absolute pins on the parsed result itself (independent of the byte
+			// arm) so a shared-core regression — which the parity check above
+			// cannot catch, since it would break both arms identically — still
+			// fails here. Both table bodies carry db-a.container_cpu and share the
+			// _defaults.yaml above (container_cpu default + container_crashloop
+			// state_filter), so these hold for every case.
+			if parsed.Defaults["container_cpu"] != 80 {
+				t.Errorf("parsed: defaults overlay lost — container_cpu = %v, want 80", parsed.Defaults["container_cpu"])
+			}
+			if sf, ok := parsed.StateFilters["container_crashloop"]; !ok || sf.Severity != "critical" {
+				t.Errorf("parsed: state_filters not propagated from _defaults.yaml, got: %v", parsed.StateFilters)
+			}
+			if _, ok := parsed.Tenants[tt.tenantID]["container_cpu"]; !ok {
+				t.Errorf("parsed: tenant override missing — Tenants[%q] = %v", tt.tenantID, parsed.Tenants[tt.tenantID])
+			}
+		})
+	}
+}
+
+// TestMergeParsedTenantWithRootDefaults_OmitsFlatKVFallback documents the one
+// intentional difference from the byte entry point: the parsed variant does NOT
+// wrap a flat key-value document under tenantID. That fallback serves the GET
+// read path's legacy on-disk files; the write boundary that uses this variant
+// has already asserted a `tenants.<id>` block is present (gitops.validate's
+// structural check), so the fallback is unreachable for it. A flat body decodes
+// into a ThresholdConfig with no `tenants:`, so the merged result has no entry
+// for the tenant — unlike MergeTenantWithRootDefaults, which synthesises one.
+func TestMergeParsedTenantWithRootDefaults_OmitsFlatKVFallback(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir() // no _defaults.yaml needed
+
+	flat := "container_cpu: \"70\"\nmysql_cpu: \"60\"\n" // no tenants: wrapper
+	var tcfg ThresholdConfig
+	if err := yaml.Unmarshal([]byte(flat), &tcfg); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if got := MergeParsedTenantWithRootDefaults(dir, tcfg); len(got.Tenants) != 0 {
+		t.Errorf("parsed variant must not synthesise a tenant from a flat-KV body, got tenants: %v", got.Tenants)
+	}
+
+	// The byte entry point, by contrast, still applies the flat-KV fallback —
+	// pinning that this refactor left the GET read-path behavior untouched.
+	if _, ok := MergeTenantWithRootDefaults(dir, "db-a", []byte(flat)).Tenants["db-a"]; !ok {
+		t.Error("byte variant should still wrap a flat-KV body under tenantID (GET read-path behavior)")
 	}
 }
