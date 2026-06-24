@@ -324,7 +324,7 @@ class TestAnalyzeTenant:
         rec = report.keys[0]
         assert rec.promql == ""
         assert "skipped" in rec.reason
-        assert "#916" in rec.reason
+        assert "lower-bound" in rec.reason  # semantic, not a brittle issue-ref pin
 
     def test_unsupported_scope_key_skipped(self):
         """version-aware (tenant_version scope) key skip（#916）。"""
