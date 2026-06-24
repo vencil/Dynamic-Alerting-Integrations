@@ -59,6 +59,11 @@ def _py_regex(renovate_pattern: str) -> re.Pattern:
     # Renovate uses RE2 named groups `(?<name>...)`; Python's re wants `(?P<name>...)`.
     # The constructs used in this config (named groups, [\s\S], non-greedy, [ \t]) are
     # otherwise RE2/Python-compatible, so the translation is faithful for validation.
+    #
+    # ⚠️ RE2 (Renovate's engine) does NOT support lookaround — (?=...) (?!...) (?<=...)
+    #    (?<!...) — but Python's `re` DOES. A matchString using them would PASS this
+    #    suite yet CRASH Renovate at runtime (false confidence). test_no_re2_lookaround()
+    #    forbids them so this offline guard can't lie about a config Renovate can't run.
     translated = re.sub(r"\(\?<([a-zA-Z][a-zA-Z0-9]*)>", r"(?P<\1>", renovate_pattern)
     return re.compile(translated)
 
@@ -157,3 +162,21 @@ def test_renovate_config_validator_if_available():
     res = subprocess.run([validator, str(RENOVATE_JSON)],
                          capture_output=True, text=True, timeout=180)
     assert res.returncode == 0, f"renovate-config-validator failed:\n{res.stdout}\n{res.stderr}"
+
+
+def test_no_re2_incompatible_lookarounds():
+    """Renovate's regex engine is RE2 (linear-time guarantee) — it does NOT support
+    lookahead/lookbehind. Python's `re` DOES, so a matchString using them would PASS
+    the rest of this suite yet CRASH Renovate at runtime (false confidence). Forbid
+    them in the config so this offline guard can never green a config Renovate can't
+    parse. (Named groups `(?<name>...)` are fine — only `(?<=`/`(?<!`/`(?=`/`(?!` are
+    lookaround.)"""
+    cfg = _load_config()
+    banned = ["(?=", "(?!", "(?<=", "(?<!"]
+    for mgr in cfg["customManagers"]:
+        for s in mgr["matchStrings"]:
+            for tok in banned:
+                assert tok not in s, (
+                    f"RE2 (Renovate) does not support lookaround {tok!r}; it would crash "
+                    f"at runtime though Python's re accepts it. Offending matchString: {s[:90]}"
+                )

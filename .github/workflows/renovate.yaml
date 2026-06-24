@@ -20,6 +20,15 @@ name: Renovate
 #    net that catches a deploy-ref/scan-matrix desync. Add it under
 #    Settings → Secrets and variables → Actions. First run: trigger manually with
 #    "Dry run" = true and read the log to validate before letting the schedule open PRs.
+#
+# ⚠️ The PAT EXPIRES — fine-grained PATs last at most 365 days. When it lapses the
+#    RENOVATE_TOKEN secret still EXISTS (so the guard below stays green) but Renovate
+#    401s and the scheduled run goes red unnoticed (a cron nobody watches) → digests
+#    silently re-freeze. The "Explain a likely failure cause" step below makes that red
+#    run self-explanatory; the #902 L1 nightly scan is the slow backstop (frozen digests
+#    accrue CVEs). Long-term fix (defer; do before Category B/C): replace the PAT with a
+#    GitHub App token via actions/create-github-app-token — 1-hour lifetime, never
+#    expires, PRs carry a renovate[bot] identity instead of the owner's account.
 
 on:
   schedule:
@@ -78,3 +87,11 @@ jobs:
           # silently treating the scheduled run as dry (→ no PRs, unnoticed).
           RENOVATE_DRY_RUN: ${{ inputs.dryRun && 'full' || 'null' }}
           LOG_LEVEL: ${{ inputs.logLevel || 'info' }}
+
+      # Turn a silent cron death into a self-explanatory red run (the #1 cause is an
+      # expired RENOVATE_TOKEN — see the header note). Uses GITHUB_TOKEN-free echo so
+      # it works even when the PAT is the thing that failed.
+      - name: Explain a likely failure cause
+        if: ${{ failure() }}
+        run: |
+          echo "::error title=Renovate failed::Most common cause: RENOVATE_TOKEN expired (fine-grained PATs last at most 365 days) or is missing a scope. Regenerate the PAT (Contents + Pull requests + Workflows) and update the secret. A dead Renovate silently re-freezes the #902 image digests; the L1 nightly CVE scan is the slow backstop. Long-term fix: migrate to a GitHub App token (actions/create-github-app-token)."
