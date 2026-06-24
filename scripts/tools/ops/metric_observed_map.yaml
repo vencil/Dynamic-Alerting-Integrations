@@ -39,8 +39,7 @@ keys:
     candidates:
     - tenant:db2_bufferpool_hit_ratio:min
     needs_review: true
-    reason: lower-bound (<) metric — P95-upper recommendation not applicable (#721
-      item 6)
+    reason: lower-bound (<) metric — P95-upper recommendation not applicable (#916)
   db2_connections_active:
     pack: rule-pack-db2.yaml
     scope: tenant
@@ -120,8 +119,7 @@ keys:
     candidates:
     - tenant:kafka_active_controllers:max
     needs_review: true
-    reason: lower-bound (<) metric — P95-upper recommendation not applicable (#721
-      item 6)
+    reason: lower-bound (<) metric — P95-upper recommendation not applicable (#916)
   kafka_broker_count:
     pack: rule-pack-kafka.yaml
     scope: tenant
@@ -129,8 +127,7 @@ keys:
     candidates:
     - tenant:kafka_broker_count:max
     needs_review: true
-    reason: lower-bound (<) metric — P95-upper recommendation not applicable (#721
-      item 6)
+    reason: lower-bound (<) metric — P95-upper recommendation not applicable (#916)
   kafka_consumer_lag:
     pack: rule-pack-kafka.yaml
     scope: tenant
@@ -285,8 +282,7 @@ keys:
     candidates:
     - tenant:rabbitmq_consumers:max
     needs_review: true
-    reason: lower-bound (<) metric — P95-upper recommendation not applicable (#721
-      item 6)
+    reason: lower-bound (<) metric — P95-upper recommendation not applicable (#916)
   rabbitmq_node_mem_percent:
     pack: rule-pack-rabbitmq.yaml
     scope: tenant

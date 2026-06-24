@@ -20,7 +20,7 @@ Guardrails baked in (#719 / Gemini adversarial review):
     ``needs_review`` (don't auto-pick), unless a clean ``<key>_critical`` sibling
     disambiguates it.
   - R2 direction: capture ``>`` / ``<``. Lower-bound (``<``) metrics get
-    ``needs_review`` (P95-upper recommendation is wrong for them; #721 item 6).
+    ``needs_review`` (P95-upper recommendation is wrong for them; #916).
   - R3 denylist: only ``tenant:`` / ``tenant_version:`` colon-delimited recording
     rules count as observed; ``tenant_metadata_info`` / ``user_state_filter`` /
     ``tenant:alert_threshold:*`` are excluded.
@@ -193,7 +193,7 @@ def build_map(pack_paths: list[str]) -> dict[str, Any]:
         # Only auto-resolve a single observed_series for SUPPORTED (tenant) scope.
         # Unsupported-scope (e.g. tenant_version) alerts are often compound
         # (sentinels cross-reference multiple thresholds) so containment can't
-        # reliably pick the operand — emit candidates honestly for #721 item 7.
+        # reliably pick the operand — emit candidates honestly for #916.
         resolved: Optional[str] = None
         if scope not in SUPPORTED_SCOPES:
             resolved = None
@@ -214,7 +214,7 @@ def build_map(pack_paths: list[str]) -> dict[str, Any]:
         if scope not in SUPPORTED_SCOPES:
             reasons.append(
                 f"unsupported recommendation scope '{scope}' — engine supports "
-                "'tenant' granularity only (deferred #721 item 7)"
+                "'tenant' granularity only (deferred #916)"
             )
         if e["scaled"]:
             reasons.append("alert applies numeric scaling to observed operand — verify exact query expression")
@@ -223,7 +223,7 @@ def build_map(pack_paths: list[str]) -> dict[str, Any]:
         elif len(dirs) > 1:
             reasons.append(f"ambiguous direction {dirs}")
         elif dirs == ["<"]:
-            reasons.append("lower-bound (<) metric — P95-upper recommendation not applicable (#721 item 6)")
+            reasons.append("lower-bound (<) metric — P95-upper recommendation not applicable (#916)")
         if not resolved and len(cands) != 1:
             reasons.append(f"{len(cands)} observed candidates in composite alert — pick one")
 
@@ -262,11 +262,11 @@ DEFAULT_RULE_PACKS_DIR = os.path.join(_REPO_ROOT, "rule-packs")
 # Keys deliberately NOT in the observed-map: their threshold comparison lives in
 # a recording rule (`:core`), not a `- alert:`, so the alert-based extractor
 # cannot reach them. Version-aware (ADR-024) recommendation — extraction AND
-# per-version logic — is tracked as #721 item 7. The drift-guard treats these as
+# per-version logic — is tracked as #916. The drift-guard treats these as
 # INFO (known-deferred), NOT an error, so this bugfix can merge.
 KNOWN_DEFERRED: dict[str, str] = {
-    "container_cpu": "version-aware (ADR-024) — recording-rule sourced, #721 item 7",
-    "container_memory": "version-aware (ADR-024) — recording-rule sourced, #721 item 7",
+    "container_cpu": "version-aware (ADR-024) — recording-rule sourced, #916",
+    "container_memory": "version-aware (ADR-024) — recording-rule sourced, #916",
 }
 
 
@@ -343,7 +343,7 @@ def resolve_observed(entry: dict[str, Any]) -> tuple[Optional[str], Optional[str
     if scope not in SUPPORTED_SCOPES:
         return None, (
             f"unsupported scope '{scope}' — engine supports 'tenant' only "
-            "(deferred #721 item 7)"
+            "(deferred #916)"
         )
     direction = entry.get("direction")
     if direction != ">":
@@ -352,7 +352,7 @@ def resolve_observed(entry: dict[str, Any]) -> tuple[Optional[str], Optional[str
         # through to a recommendation — the percentile strategy is only valid
         # for ``observed > threshold`` alerts.
         if direction == "<":
-            return None, "lower-bound (<) metric — not supported (#721 item 6)"
+            return None, "lower-bound (<) metric — not supported (#916)"
         return None, "missing or ambiguous comparison direction — manual review required"
     series = entry.get("observed_series")
     if not series:
