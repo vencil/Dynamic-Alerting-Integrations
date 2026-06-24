@@ -12,6 +12,7 @@
 image:
   # Pure stdlib — `requests` not needed since urllib handles the HTTP.
   # Pinning to the official slim image keeps the bug surface small.
+  # renovate: datasource=docker depName=python
   repository: python
   tag: "3.13-slim"
   # Optional digest pin (#566 T5). See helm/victorialogs/values.yaml

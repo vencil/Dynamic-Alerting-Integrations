@@ -16,6 +16,7 @@
 replicaCount: 1
 
 image:
+  # renovate: datasource=docker depName=victoriametrics/victoria-logs
   repository: victoriametrics/victoria-logs
   tag: "v1.50.0"
   # Optional digest pin (#566 T5 — supply-chain hardening). When set,

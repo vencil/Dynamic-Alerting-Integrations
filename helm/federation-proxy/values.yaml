@@ -16,6 +16,7 @@
 replicaCount: 2
 
 image:
+  # renovate: datasource=docker depName=quay.io/prometheuscommunity/prom-label-proxy
   repository: quay.io/prometheuscommunity/prom-label-proxy
   tag: "v0.13.0"
   # Pinned by digest (#902 L2 supply-chain). MUST stay in sync with the
