@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: tenant-api
 created_at: 2026-05-30
-updated_at: 2026-06-06
+updated_at: 2026-06-25
 ---
 # ADR-023: tenant-api 寫入平面 — 單一寫者不變式
 
@@ -125,6 +125,10 @@ ADR-023 single-writer invariant violated: tenant-api replicaCount=2 but MUST be 
 - **K8s Lease 分散式寫入鎖（A3，[#787](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/787)）** — 雙重動機：(1) 寫入部署需 zero-downtime 成硬需求；(2) 執行期多寫者向量（`kubectl scale`／KEDA／GitOps patch）需根治。任一觸發即開工。
 - **讀寫拆分部署（A4，[#788](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/788)）** — 觸發：讀取 HA 成需求（Portal 上線、讀 QPS 上升）。前提：binary 新增 read-only 模式 + 路由。
 - **寫入水平擴展** — 觸發：單寫者吞吐量成實測瓶頸。走 Lease，不放寬單鎖。
+- **寫入依優先級分流：真人即時操作優先於機器批次（[#746](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/746)，2026-06-24 暫緩、附重啟條件）** — 構想是讓真人在 Portal 上的即時設定永遠插到機器的大量背景寫入前面（機器寫入切成小段，一發現有人要寫就讓出）。
+    - **為何現在不做**：目前所有寫入都來自真人（以登入身分寫回 git），沒有任何背景程式會自動改租戶設定。現有的過載保護（[#673](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/673)）會在塞車時擋下多餘請求、請對方稍後重試，但它「先到先服務、不分人或機器」—— 對「全是真人寫入」的現狀已足夠。
+    - **何時重啟**：等第一支「會自動寫入、且可能長時間佔住寫入鎖」的背景程式上線時（例如自動清理過期規則、批次重新編譯規則）。判斷不靠「等到出事」：先加一個觀測指標，把每筆寫入標記為人或機器，量「真人寫入平均等多久」「有多少真人寫入因機器佔線被擋下」，指標一惡化就動工。
+    - **前置已備妥**：先前擔心的「git push 卡住會無限佔住寫入鎖」已修好 —— 每個 git 操作都有逾時上限（[#630](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/630)）。
 
 ## 實作對照
 
