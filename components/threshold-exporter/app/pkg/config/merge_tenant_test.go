@@ -252,9 +252,16 @@ func TestMergeTenantWithRootDefaults_MalformedDefaultsTolerated(t *testing.T) {
 // shape), the parsed-input MergeParsedTenantWithRootDefaults returns a config
 // deep-equal to the byte-input MergeTenantWithRootDefaults on the same body — so
 // the write boundary's switch from re-Unmarshalling raw bytes a third time to
-// threading the already-decoded ThresholdConfig is behavior-preserving. A
-// divergence in the shared merge core (defaults overlay, state_filters
-// propagation, multi-tenant merge, ApplyProfiles) fails here.
+// threading the already-decoded ThresholdConfig is behavior-preserving.
+//
+// The DeepEqual is a PARITY/DRIFT guard between the two entry points, NOT an
+// absolute check of the shared mergeTenantConfig core: both arms route through
+// that core, so a regression INSIDE it breaks both identically and DeepEqual
+// still holds. It catches one entry point drifting from its sibling (e.g. the
+// parsed arm stops loading defaults, drops ApplyProfiles, or reorders steps).
+// The explicit assertions on `parsed` below add absolute coverage so a shared-
+// core regression (lost defaults overlay / state_filters / tenant merge) also
+// fails here, not only via the byte-path tests above (#708 adversarial review).
 func TestMergeParsedTenantWithRootDefaults_MatchesByteVariant(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -286,6 +293,21 @@ func TestMergeParsedTenantWithRootDefaults_MatchesByteVariant(t *testing.T) {
 			bytewise := MergeTenantWithRootDefaults(dir, tt.tenantID, []byte(tt.body))
 			if !reflect.DeepEqual(parsed, bytewise) {
 				t.Errorf("parsed variant diverged from byte variant:\n parsed = %+v\n bytes  = %+v", parsed, bytewise)
+			}
+			// Absolute pins on the parsed result itself (independent of the byte
+			// arm) so a shared-core regression — which the parity check above
+			// cannot catch, since it would break both arms identically — still
+			// fails here. Both table bodies carry db-a.container_cpu and share the
+			// _defaults.yaml above (container_cpu default + container_crashloop
+			// state_filter), so these hold for every case.
+			if parsed.Defaults["container_cpu"] != 80 {
+				t.Errorf("parsed: defaults overlay lost — container_cpu = %v, want 80", parsed.Defaults["container_cpu"])
+			}
+			if sf, ok := parsed.StateFilters["container_crashloop"]; !ok || sf.Severity != "critical" {
+				t.Errorf("parsed: state_filters not propagated from _defaults.yaml, got: %v", parsed.StateFilters)
+			}
+			if _, ok := parsed.Tenants[tt.tenantID]["container_cpu"]; !ok {
+				t.Errorf("parsed: tenant override missing — Tenants[%q] = %v", tt.tenantID, parsed.Tenants[tt.tenantID])
 			}
 		})
 	}
