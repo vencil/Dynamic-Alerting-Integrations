@@ -516,9 +516,61 @@ data:
                 healthy fleet reconnects within seconds. Sustained 0 means
                 clients are NOT recovering — check the tenant-api pod readiness,
                 the ingress/oauth2-proxy path to `/api/v1/events`, and recent
-                deploys. Expected reconnect behaviour + the #678 (read/write
-                split) trigger are documented in
+                deploys. Expected reconnect behaviour + the read/write-split
+                re-trigger (TenantApiReadHANeeded, below) are documented in
                 docs/api/tenant-api-hardening.md. Dashboard: tenant_api_sse_clients.
+
+          # --- tenant-api read-HA defer re-trigger (ADR-023 A4 / #678 / #788, CLOSED-deferred) ---
+          # CODIFIED re-trigger for a CLOSED-deferred design item. #678 (TRK-325
+          # read/write CQRS split) and its RFC duplicate #788 were closed deferred:
+          # tenant-api's read path (GET /tenants /search /effective /me + the SSE
+          # Tenant-Manager stream) shares the single-writer WRITE deployment, so a
+          # `strategy: Recreate` deploy briefly drops READS too. ADR-023 accepted
+          # that blip as the interim — the read path is a low-frequency admin UI and
+          # the blip was never measured to hurt. Building the CQRS split BEFORE read
+          # load is real = serving a phantom requirement, so it was deferred. A prose
+          # "revisit when Portal scales" note in a closed issue is a clue nobody sees;
+          # THIS alert is the codified clue — it fires (info, never pages) once read
+          # engagement has genuinely SUSTAINED, telling the platform team "read HA is
+          # now a real requirement → reopen ADR-023 Deferred A4".
+          #
+          # Signal: 7-day trailing AVERAGE of concurrent SSE clients > 2. avg_over_time
+          # (not max) so a transient spike — one busy afternoon — does NOT trip it; only
+          # a sustained shift to a multi-viewer steady state does. The [7d:1h] subquery
+          # samples the single-writer-safe `sum without (pod, instance, endpoint)`
+          # aggregate hourly across the week (the SAME aggregation the sibling
+          # TenantApiSSEReconnectFailure uses, so it survives a Recreate pod-identity
+          # change — a new pod after a deploy is a different series under per-pod scrape
+          # labels). N=2 = "typically >=2 admins watching the Portal at once, all week"
+          # = a shared always-on read surface, not one operator. N is deliberately
+          # conservative (info, slow signal) — tune in values for your Portal scale.
+          # COMPLEMENTARY read-QPS face an operator should also weigh:
+          # rate(tenant_api_requests_total) (read-dominated; writes are the tiny
+          # writes_total) — NOT encoded here, to keep the contract single-signal and
+          # promtool-testable. CAVEAT when it fires: A4 (this split) only buys READ
+          # zero-downtime; the WRITE path (Save) still drops on every deploy until A3
+          # (K8s Lease, #787) lands — sequence both, don't ship A4 alone.
+          # Behavioural contract: tests/rulepacks/platform-read-ha-trigger_test.yaml.
+          - alert: TenantApiReadHANeeded
+            expr: |
+              avg_over_time(
+                sum without (pod, instance, endpoint) (tenant_api_sse_clients{job="tenant-api"})[7d:1h]
+              ) > 2
+            labels:
+              severity: info
+            annotations:
+              summary: "tenant-api read load sustained — revisit read/write CQRS split (ADR-023 A4)"
+              description: |
+                The 7-day average of concurrent tenant-api SSE (/api/v1/events)
+                clients has exceeded 2 — the Tenant-Manager read path is now a
+                sustained multi-viewer surface, not the single-operator admin UI
+                ADR-023 assumed when it accepted a brief read outage on every
+                `strategy: Recreate` deploy. This is the codified RE-TRIGGER for the
+                deferred read/write split (#678 / #788, closed deferred; see ADR-023
+                Deferred A4). NOT an outage. Action: reopen the CQRS split, and
+                sequence it WITH the write-plane K8s Lease (#787 / A3) — A4 alone
+                leaves writes (Save) dropping on deploy. Details:
+                docs/api/tenant-api-hardening.md §5.6. Dashboard: tenant_api_sse_clients.
 
           # --- Tenant-exporter liveness: catastrophic fallback (#869) ---
           # Per-tenant TenantExporterAbsent (rule-pack-liveness.yaml) anti-joins

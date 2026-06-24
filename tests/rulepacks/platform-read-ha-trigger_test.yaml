@@ -1,0 +1,66 @@
+# promtool behavioural test for TenantApiReadHANeeded (ADR-023 Deferred A4 /
+# #678 / #788). Validates the codified read-HA re-trigger contract:
+#   1) FIRES when concurrent SSE clients have SUSTAINED above the threshold for a
+#      full week — modelled across TWO DISTINCT pod series (pod-A then pod-B) so
+#      the test proves the `sum without (pod, ...)` aggregate bridges a Recreate
+#      pod-identity change (the same regression guard the sibling SSE-reconnect
+#      test carries; a single-series model would silently pass a broken expr).
+#   2) does NOT fire when sustained load sits AT/BELOW the threshold (1 viewer all
+#      week) — the conservative N=2 floor must hold.
+#   3) does NOT fire on a TRANSIENT spike (a few busy hours of 20 viewers in an
+#      otherwise-idle week) — avg_over_time, not max_over_time, is what makes the
+#      signal "sustained shift", not "one busy afternoon".
+# Evaluated at 1h resolution so the [7d:1h] subquery window is cheap to populate.
+# The aggregated expr strips pod/instance/endpoint, so the firing alert carries
+# only {severity} (no pod/instance).
+# Run: promtool test rules tests/rulepacks/platform-read-ha-trigger_test.yaml
+rule_files:
+  - platform-read-ha-trigger.rules.yaml
+
+evaluation_interval: 1h
+
+tests:
+  # 1) Sustained 3 concurrent viewers for a full week, ACROSS a Recreate deploy:
+  #    pod-A serves 3 for t0..t90h then is replaced; pod-B serves 3 for t91..t180h.
+  #    Two SEPARATE series — only the `sum without (pod...)` aggregate yields a
+  #    continuous 3 spanning the handoff, so its 7d average is 3 (> 2) → FIRES.
+  - interval: 1h
+    name: sustained-multiviewer-across-recreate-fires
+    input_series:
+      - series: 'tenant_api_sse_clients{job="tenant-api", pod="tenant-api-a", instance="10.0.0.1:8080"}'
+        values: '3+0x90 _x90'        # pod-A: 3 for t0..t90h, then absent (killed by Recreate)
+      - series: 'tenant_api_sse_clients{job="tenant-api", pod="tenant-api-b", instance="10.0.0.2:8080"}'
+        values: '_x91 3+0x89'        # pod-B: absent t0..t90h, then 3 for t91..t180h
+    alert_rule_test:
+      - eval_time: 170h              # 7d window [2h,170h] sees aggregate=3 throughout → avg 3 > 2
+        alertname: TenantApiReadHANeeded
+        exp_alerts:
+          - exp_labels:
+              severity: info
+              job: tenant-api
+            exp_annotations:
+              summary: "tenant-api read load sustained — revisit read/write CQRS split (ADR-023 A4)"
+
+  # 2) Sustained but BELOW threshold: a single viewer all week. 7d avg = 1 → no fire.
+  - interval: 1h
+    name: sustained-single-viewer-no-fire
+    input_series:
+      - series: 'tenant_api_sse_clients{job="tenant-api", pod="tenant-api-b", instance="10.0.0.2:8080"}'
+        values: '1+0x180'
+    alert_rule_test:
+      - eval_time: 170h
+        alertname: TenantApiReadHANeeded
+        exp_alerts: []
+
+  # 3) Transient spike: idle week (0) with a 3-hour burst to 20 viewers. The 7d
+  #    average is ~0.36 (60 client-hours / 168h) → must NOT fire. This is the
+  #    avg-over-max guarantee: a busy afternoon does not trip the re-trigger.
+  - interval: 1h
+    name: transient-spike-no-fire
+    input_series:
+      - series: 'tenant_api_sse_clients{job="tenant-api", pod="tenant-api-b", instance="10.0.0.2:8080"}'
+        values: '0+0x80 20+0x2 0+0x97'   # 0 for t0..t80h, 20 for t81..t83h, 0 for t84..t180h
+    alert_rule_test:
+      - eval_time: 170h
+        alertname: TenantApiReadHANeeded
+        exp_alerts: []
