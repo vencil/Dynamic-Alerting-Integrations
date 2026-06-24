@@ -172,10 +172,15 @@ class GoBinaryDispatcher:
         """Print friendly missing-binary error to stderr."""
         bn = self.binary_name
         if explicit_attempt:
+            # Quote the path manually, NOT with !r. repr() escapes backslashes,
+            # so a Windows path C:\x\bin renders as 'C:\\x\\bin' — confusing for
+            # the user (looks like doubled separators) and it differs from the raw
+            # path the user typed. Manual quotes show the boundary without escaping
+            # (POSIX paths are unchanged — repr added no escapes there either).
             print(self._msg(
                 f"Error: {bn} binary not found "
-                f"at {explicit_attempt!r}.\n",
-                f"錯誤: 在 {explicit_attempt!r} 找不到 {bn} 執行檔。\n"
+                f"at '{explicit_attempt}'.\n",
+                f"錯誤: 在 '{explicit_attempt}' 找不到 {bn} 執行檔。\n"
             ), file=sys.stderr)
             return
 
