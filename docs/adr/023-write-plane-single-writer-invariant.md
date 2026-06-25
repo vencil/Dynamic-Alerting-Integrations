@@ -123,7 +123,7 @@ ADR-023 single-writer invariant violated: tenant-api replicaCount=2 but MUST be 
 ## Deferred（附 re-evaluation trigger）
 
 - **K8s Lease 分散式寫入鎖（A3，[#787](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/787)）** — 雙重動機：(1) 寫入部署需 zero-downtime 成硬需求；(2) 執行期多寫者向量（`kubectl scale`／KEDA／GitOps patch）需根治。任一觸發即開工。
-- **讀寫拆分部署（A4，[#788](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/788)）** — 觸發：讀取 HA 成需求（Portal 上線、讀 QPS 上升）。前提：binary 新增 read-only 模式 + 路由。
+- **讀寫拆分部署（A4，[#678](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/678) / [#788](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/788)，已關閉、defer 不變）** — issue 不留 open：「讀取 HA 是需求」前提目前無 field data 驗證（讀路徑為低頻 admin UI），留 open 只會變 zombie。觸發改 **codify 成自觸發 alert** `TenantApiReadHANeeded`（`k8s/03-monitoring/configmap-rules-platform.yaml`，severity `info`、不 page）：`tenant_api_sse_clients` **7d 平均並發 > 2**（取平均非峰值＝持續多人讀取面，非單日尖峰；另加 `count_over_time(...) >= 150` 守 cold-start，fresh deploy 的 partial 視窗不誤觸；互補可看 `rate(tenant_api_requests_total)`）即「讀取 HA 成真實需求」→ reopen 本項實作。前提：binary 新增 read-only enforcement + method 路由。**⚠️ A4 只買讀 zero-downtime，寫路徑（Save）發版仍中斷，須與 A3 同排、勿單獨出。** 行為契約 `tests/rulepacks/platform-read-ha-trigger_test.yaml`。
 - **寫入水平擴展** — 觸發：單寫者吞吐量成實測瓶頸。走 Lease，不放寬單鎖。
 - **寫入依優先級分流：真人即時操作優先於機器批次（[#746](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/746)，2026-06-24 暫緩、附重啟條件）** — 構想是讓真人在 Portal 上的即時設定永遠插到機器的大量背景寫入前面（機器寫入切成小段，一發現有人要寫就讓出）。
     - **為何現在不做**：目前所有寫入都來自真人（以登入身分寫回 git），沒有任何背景程式會自動改租戶設定。現有的過載保護（[#673](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/673)）會在塞車時擋下多餘請求、請對方稍後重試，但它「先到先服務、不分人或機器」—— 對「全是真人寫入」的現狀已足夠。
@@ -139,7 +139,7 @@ ADR-023 single-writer invariant violated: tenant-api replicaCount=2 but MUST be 
 | 寫入前鎖內 fetch 最新 base + `TA_GIT_FETCH_TIMEOUT` | ✅ | [#671](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/671) |
 | forge secondary-rate-limit 熔斷 + 尊重 `Retry-After` | ✅ | [#672](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/672) |
 | 過載卸載 + context 綁排隊（`TA_WRITE_QUEUE_DEPTH`） | ✅ | [#673](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/673) |
-| K8s Lease（A3）／讀寫拆分（A4） | deferred | [#787](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/787)／[#788](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/788) |
+| K8s Lease（A3）／讀寫拆分（A4） | deferred（A4 已 codify re-trigger alert `TenantApiReadHANeeded`） | [#787](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/787)／[#678](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/678)·[#788](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/788)（closed） |
 
 每筆的詳細實作敘述見對應 PR；本 ADR 只保留決策與理由。
 
