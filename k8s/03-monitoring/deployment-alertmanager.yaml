@@ -29,7 +29,7 @@ spec:
           # generic webhook since v0.26.0 (PR prometheus/alertmanager#3223). The
           # pin below (a current stable release) is well past that floor — keep any
           # future bump ≥ v0.26.0 so the heartbeat secret keeps loading.
-          image: prom/alertmanager:v0.32.0@sha256:58e117eabccebbff04e6643a3432d6315a2cc3a8c24ab5849bc628886bf08857
+          image: prom/alertmanager:v0.33.0@sha256:af26fbe4dd1886ac0efd7bd55cd9027da262e105b137a376522b7c14c3626e4a
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
