@@ -57,6 +57,12 @@
       "matchDatasources": ["docker"],
       "matchUpdateTypes": ["major"],
       "dependencyDashboardApproval": true
+    },
+    {
+      "description": "#902 L3 — `python:3.x-slim` numbers its tag by Python FEATURE release, so a 3.13→3.14 bump is semver-MINOR to Docker but a real language-version jump (new interpreter, possible C-ABI / stdlib breakage for dependent components). Gate python's MINOR bumps behind the Dependency Dashboard like a major, rather than letting them auto-flow in the grouped PR. Digest-only refreshes (same tag, security re-pin) still auto-flow — only the version bump waits for a tick.",
+      "matchDepNames": ["python"],
+      "matchUpdateTypes": ["minor"],
+      "dependencyDashboardApproval": true
     }
   ]
 }

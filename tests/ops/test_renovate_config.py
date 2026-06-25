@@ -180,3 +180,24 @@ def test_no_re2_incompatible_lookarounds():
                     f"RE2 (Renovate) does not support lookaround {tok!r}; it would crash "
                     f"at runtime though Python's re accepts it. Offending matchString: {s[:90]}"
                 )
+
+
+def test_python_minor_bump_requires_dashboard_approval():
+    """`python:3.x-slim` numbers its tag by Python FEATURE release, so a 3.13→3.14
+    bump is semver-MINOR to Docker but a real language-version jump. Assert a
+    packageRule gates python's MINOR updates behind dependencyDashboardApproval (so
+    it can't silently auto-flow in the grouped PR), while NOT gating its digest-only
+    refresh — the security re-pin must stay automatic."""
+    cfg = _load_config()
+    gated = [
+        r for r in cfg.get("packageRules", [])
+        if "python" in r.get("matchDepNames", [])
+        and "minor" in r.get("matchUpdateTypes", [])
+        and r.get("dependencyDashboardApproval") is True
+    ]
+    assert gated, "expected a packageRule gating python MINOR bumps behind the Dependency Dashboard"
+    for r in gated:
+        assert "digest" not in r.get("matchUpdateTypes", []), (
+            "python digest-only refresh must stay automatic — only the version (minor) "
+            "bump should wait for a Dependency Dashboard tick"
+        )
