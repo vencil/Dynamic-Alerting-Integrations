@@ -14,12 +14,12 @@ image:
   # renovate: datasource=docker depName=timberio/vector
   repository: timberio/vector
   # distroless-libc: no shell, no package manager — production tag.
-  tag: "0.55.0-distroless-libc"
+  tag: "0.56.0-distroless-libc"
   # Optional digest pin (#566 T5). See helm/victorialogs/values.yaml
   # for rationale + how to fetch.
   # ⛔ Digest AUTHORITATIVE: `--set image.tag=…` alone won't upgrade (k8s keeps THIS
   #    digest); also set/clear image.digest. #902 L2 (L3/Renovate will automate).
-  digest: "sha256:2fe99882ec787d8641bc620a7e3a1ce3b5e41375c8d681cacfac219620ba7a7e"
+  digest: "sha256:58c37f908648388a8a771426451476d60ebbd393fe52cc08a94573bcbb1c629a"
   pullPolicy: IfNotPresent
 
 # Where to ship logs. Default points at the in-cluster VictoriaLogs

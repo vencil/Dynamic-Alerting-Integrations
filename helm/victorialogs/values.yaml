@@ -18,7 +18,7 @@ replicaCount: 1
 image:
   # renovate: datasource=docker depName=victoriametrics/victoria-logs
   repository: victoriametrics/victoria-logs
-  tag: "v1.50.0"
+  tag: "v1.51.0"
   # Optional digest pin (#566 T5 — supply-chain hardening). When set,
   # the rendered image becomes `repo:tag@sha256:...` and kubelet pulls
   # by digest (immutable; upstream tag-swap cannot substitute). Get
@@ -29,7 +29,7 @@ image:
   # the moment you have a supply-chain threat model that names this.
   # ⛔ Digest AUTHORITATIVE: `--set image.tag=…` alone won't upgrade (k8s keeps THIS
   #    digest); also set/clear image.digest. #902 L2 (L3/Renovate will automate).
-  digest: "sha256:ae9bea8d8a3b0fc47c7f0058bcca410e79c84b4a0acd12d4dac71b9302526590"
+  digest: "sha256:e16dd33a95623cc21730cf5285344ed9f97419eeaff7d24b039c135beb85ee7e"
   pullPolicy: IfNotPresent
 
 # HTTP listen port for ingestion + query. VictoriaLogs default is 9428.
