@@ -74,7 +74,11 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Renovate
-        uses: renovatebot/github-action@v46
+        # renovatebot/github-action ships ONLY full vMAJOR.MINOR.PATCH tags — there is no
+        # floating @v46 major alias (unlike actions/checkout@v6), so a bare @v46 fails to
+        # resolve ("unable to find version v46"). Pin the full version. Renovate won't
+        # self-bump this (enabledManagers is images-only), so it's manually maintained.
+        uses: renovatebot/github-action@v46.1.16
         with:
           configurationFile: renovate.json
           token: ${{ secrets.RENOVATE_TOKEN }}
