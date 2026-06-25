@@ -27,6 +27,12 @@ jobs:
   self-review-pass2:
     name: Validate Self-Review-Pass-2 trailer
     runs-on: ubuntu-latest
+    # Bot-authored PRs (Renovate #902 L3 image-digest auto-bumps) legitimately
+    # carry no Self-Review-Pass-2 trailer — they're machine-generated dependency
+    # bumps, not human changes that dogfood the intentional-break self-review. Skip
+    # the gate for `renovate/*` branches so it doesn't show a perpetual red status
+    # row on every Renovate PR. The gate still runs for ALL human-authored PRs.
+    if: ${{ !startsWith(github.head_ref, 'renovate/') }}
     # Soft-fail rollout: status appears but doesn't block merge until adoption
     # plateaus. Track #454 follow-up to flip off.
     continue-on-error: true
