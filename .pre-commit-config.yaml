@@ -433,6 +433,27 @@ repos:
         pass_filenames: false
         files: \.(py|jsx|yaml)$
 
+      # #717 (supersedes #456 residue): a new scripts/tools/lint/check_*.py that
+      # is wired into no runner is a dead lint — documented (tool-map glob) but
+      # never run (#141 had to revive one by hand). Fires when a lint file is
+      # added/removed or any runner config changes; full-scan, <1s.
+      - id: orphan-lint-check
+        name: Orphan / dead-lint detection (lint wired to no runner)
+        entry: python3 -X utf8 scripts/tools/lint/check_orphan_lint.py --ci
+        language: python
+        pass_filenames: false
+        files: ^(scripts/tools/lint/check_.*\.py|scripts/tools/validate_all\.py|scripts/tools/(dx|ops)/.*\.py|\.pre-commit-config\.yaml|Makefile|\.github/workflows/.*\.ya?ml)$
+
+      # #444 follow-up meta-lint: stop reinventing ESLint/stylelint. Wired here
+      # (#717) — lint-policy.md §自動強制 claimed it was auto-enforced but it had
+      # no runner, making it itself a dead lint. Fires on any lint/*.py change.
+      - id: lint-toolchain-fit
+        name: Lint toolchain fit (no reinvented JS/JSX/CSS linters)
+        entry: python3 -X utf8 scripts/tools/lint/check_lint_toolchain_fit.py --ci
+        language: python
+        pass_filenames: false
+        files: ^scripts/tools/lint/.*\.py$
+
       - id: doc-links-check
         name: Documentation link validation
         entry: python3 -X utf8 scripts/tools/lint/check_doc_links.py --ci
