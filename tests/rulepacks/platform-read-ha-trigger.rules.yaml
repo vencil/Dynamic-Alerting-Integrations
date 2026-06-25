@@ -5,9 +5,11 @@
 # k8s/03-monitoring/configmap-rules-platform.yaml.
 #
 # ⚠️ KEEP IN SYNC with that ConfigMap. The behavioural contract (fire on a
-# SUSTAINED multi-viewer read surface; NOT on a transient spike; bridges a
-# Recreate pod-identity change) is exercised by platform-read-ha-trigger_test.yaml
-# against this file.
+# SUSTAINED multi-viewer read surface; NOT on a transient spike; NOT on a fresh
+# deploy's partial <7d window; bridges a Recreate pod-identity change) is exercised
+# by platform-read-ha-trigger_test.yaml against this file. The count_over_time >= 150
+# clause is the cold-start guard — avg_over_time averages only existing samples, so a
+# partial window would otherwise fire before a real 7d baseline exists.
 groups:
   - name: platform-self-monitoring
     rules:
@@ -16,6 +18,10 @@ groups:
           avg_over_time(
             sum without (pod, instance, endpoint) (tenant_api_sse_clients{job="tenant-api"})[7d:1h]
           ) > 2
+          and
+          count_over_time(
+            sum without (pod, instance, endpoint) (tenant_api_sse_clients{job="tenant-api"})[7d:1h]
+          ) >= 150
         labels:
           severity: info
         annotations:

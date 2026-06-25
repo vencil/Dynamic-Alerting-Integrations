@@ -10,9 +10,14 @@
 #   3) does NOT fire on a TRANSIENT spike (a few busy hours of 20 viewers in an
 #      otherwise-idle week) — avg_over_time, not max_over_time, is what makes the
 #      signal "sustained shift", not "one busy afternoon".
+#   4) does NOT fire at the exact boundary (sustained 2 viewers all week → avg == 2,
+#      and `> 2` is strict) — the gloss "exactly 2 does NOT fire" must hold.
+#   5) does NOT fire on a COLD START / partial window (a fresh deploy with only ~2
+#      days of data at 5 viewers): the avg is 5 (> 2) but the count_over_time >= 150
+#      guard suppresses it until ~a full 7d of samples exist.
 # Evaluated at 1h resolution so the [7d:1h] subquery window is cheap to populate.
 # The aggregated expr strips pod/instance/endpoint, so the firing alert carries
-# only {severity} (no pod/instance).
+# only {severity, job} (no pod/instance/endpoint).
 # Run: promtool test rules tests/rulepacks/platform-read-ha-trigger_test.yaml
 rule_files:
   - platform-read-ha-trigger.rules.yaml
@@ -62,5 +67,31 @@ tests:
         values: '0+0x80 20+0x2 0+0x97'   # 0 for t0..t80h, 20 for t81..t83h, 0 for t84..t180h
     alert_rule_test:
       - eval_time: 170h
+        alertname: TenantApiReadHANeeded
+        exp_alerts: []
+
+  # 4) Exact boundary: a steady TWO viewers all week → 7d avg == 2. `> 2` is strict,
+  #    so this must NOT fire — pins the "exactly 2 does not fire" gloss.
+  - interval: 1h
+    name: sustained-exactly-two-no-fire
+    input_series:
+      - series: 'tenant_api_sse_clients{job="tenant-api", pod="tenant-api-b", instance="10.0.0.2:8080"}'
+        values: '2+0x180'            # 181 samples (full window), all = 2 → avg == 2, count == 169
+    alert_rule_test:
+      - eval_time: 170h              # count 169 >= 150 (guard passes) but avg 2 is NOT > 2 → no fire
+        alertname: TenantApiReadHANeeded
+        exp_alerts: []
+
+  # 5) Cold start / partial window: a FRESH deployment with only ~2 days of data, all
+  #    at 5 concurrent viewers (avg == 5 > 2). WITHOUT the count_over_time guard this
+  #    would fire on the partial window before any real 7d baseline exists; the
+  #    >= 150-samples clause suppresses it until ~a full week of history is present.
+  - interval: 1h
+    name: cold-start-partial-window-no-fire
+    input_series:
+      - series: 'tenant_api_sse_clients{job="tenant-api", pod="tenant-api-b", instance="10.0.0.2:8080"}'
+        values: '5+0x48'            # only 49 hourly samples (t0..t48h ≈ 2 days), all = 5
+    alert_rule_test:
+      - eval_time: 48h              # avg over available = 5 (> 2) BUT count ~49 (< 150) → guard blocks → no fire
         alertname: TenantApiReadHANeeded
         exp_alerts: []

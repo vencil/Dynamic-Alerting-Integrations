@@ -541,10 +541,17 @@ data:
           # aggregate hourly across the week (the SAME aggregation the sibling
           # TenantApiSSEReconnectFailure uses, so it survives a Recreate pod-identity
           # change — a new pod after a deploy is a different series under per-pod scrape
-          # labels). N=2 = "typically >=2 admins watching the Portal at once, all week"
-          # = a shared always-on read surface, not one operator. N is deliberately
-          # conservative (info, slow signal) — tune in values for your Portal scale.
-          # COMPLEMENTARY read-QPS face an operator should also weigh:
+          # labels). Threshold > 2 = the 7d average EXCEEDS two, i.e. a 3rd concurrent
+          # viewer is ROUTINELY present beyond a typical pair — read is now a shared
+          # always-on surface, not one operator (exactly 2 sustained does NOT fire; the
+          # bar is deliberately conservative — info, slow signal, rather-late-than-early;
+          # tune in values for your Portal scale). The `and count_over_time(...) >= 150`
+          # clause requires ~a full week of samples present (>=150 of 168 hourly points):
+          # avg_over_time averages only the samples that EXIST, so WITHOUT this guard a
+          # day-old deployment with a brief multi-viewer burst would average > 2 over its
+          # short partial window and fire before any real 7d baseline exists. Errs late
+          # (a long scrape gap / <7d retention suppresses it) — correct for a planning
+          # signal. COMPLEMENTARY read-QPS face an operator should also weigh:
           # rate(tenant_api_requests_total) (read-dominated; writes are the tiny
           # writes_total) — NOT encoded here, to keep the contract single-signal and
           # promtool-testable. CAVEAT when it fires: A4 (this split) only buys READ
@@ -556,6 +563,10 @@ data:
               avg_over_time(
                 sum without (pod, instance, endpoint) (tenant_api_sse_clients{job="tenant-api"})[7d:1h]
               ) > 2
+              and
+              count_over_time(
+                sum without (pod, instance, endpoint) (tenant_api_sse_clients{job="tenant-api"})[7d:1h]
+              ) >= 150
             labels:
               severity: info
             annotations:
