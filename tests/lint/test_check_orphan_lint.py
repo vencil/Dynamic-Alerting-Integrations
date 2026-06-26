@@ -131,6 +131,18 @@ class TestGatherReferencers:
         corpus = ol.read_corpus(refs)
         assert ol.find_orphans(["check_a.py"], corpus) == []
 
+    def test_gitlab_ci_reference_rescues(self, tmp_path):
+        """A lint wired only into GitLab CI must not be false-flagged."""
+        lint_dir = self._scaffold(tmp_path)
+        (lint_dir / "check_a.py").write_text("", encoding="utf-8")
+        gl = tmp_path / ".gitlab" / "ci"
+        gl.mkdir(parents=True)
+        (gl / "lint.gitlab-ci.yml").write_text(
+            "lint:\n  script: python3 scripts/tools/lint/check_a.py --ci\n",
+            encoding="utf-8")
+        refs = ol.gather_referencers(tmp_path, lint_dir)
+        assert ol.find_orphans(["check_a.py"], ol.read_corpus(refs)) == []
+
 
 # ---------------------------------------------------------------------------
 # Real-repo integration — the wired repo must be clean
@@ -147,22 +159,26 @@ class TestRealRepo:
         )
         assert result.returncode == 0, result.stdout + result.stderr
 
-    def test_planted_stub_is_caught_then_removed(self, tmp_path):
-        """Dogfood on the real tree: plant an unwired stub, expect exit 1."""
-        lint_dir = _REPO_ROOT / "scripts" / "tools" / "lint"
-        stub = lint_dir / "check_orphan_dogfood_stub.py"
-        stub.write_text("# unwired stub\n", encoding="utf-8")
-        try:
-            script = lint_dir / "check_orphan_lint.py"
-            result = subprocess.run(
-                [sys.executable, str(script), "--ci"],
-                capture_output=True, text=True, encoding="utf-8",
-                errors="replace", timeout=60, cwd=str(_REPO_ROOT),
-            )
-            assert result.returncode == 1
-            assert "check_orphan_dogfood_stub.py" in result.stdout
-        finally:
-            stub.unlink()
+    def test_dogfood_planted_stub_in_scaffold(self, tmp_path):
+        """AC dogfood, xdist-safe: plant an unwired check_xxx_stub.py into a
+        scaffolded tmp repo (NOT the shared real lint dir — that would race a
+        concurrent test_repo_is_clean under pytest -n auto) and assert the full
+        gather_referencers→find_orphans path flags it, while a wired sibling
+        passes."""
+        lint_dir = tmp_path / "scripts" / "tools" / "lint"
+        lint_dir.mkdir(parents=True)
+        (tmp_path / ".pre-commit-config.yaml").write_text(
+            "entry: scripts/tools/lint/check_wired.py --ci\n", encoding="utf-8")
+        (tmp_path / "scripts" / "tools" / "validate_all.py").write_text(
+            "TOOLS = []\n", encoding="utf-8")
+        (lint_dir / "check_wired.py").write_text("", encoding="utf-8")
+        (lint_dir / "check_xxx_stub.py").write_text(
+            "# unwired stub\n", encoding="utf-8")
+
+        refs = ol.gather_referencers(tmp_path, lint_dir)
+        corpus = ol.read_corpus(refs)
+        orphans = ol.find_orphans(ol.find_check_lints(lint_dir), corpus)
+        assert orphans == ["check_xxx_stub.py"]
 
 
 if __name__ == "__main__":

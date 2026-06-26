@@ -131,6 +131,17 @@ def gather_referencers(project_root: Path, lint_dir: Path) -> list[Path]:
         referencers.extend(sorted(workflows.glob("*.yml")))
         referencers.extend(sorted(workflows.glob("*.yaml")))
 
+    # GitLab CI is a first-class runner too (the repo carries GitLab lineage,
+    # e.g. .gitlab/ci/config-diff.gitlab-ci.yml). Include it so a lint wired
+    # only into GitLab CI is not false-flagged as orphan.
+    root_gitlab_ci = project_root / ".gitlab-ci.yml"
+    if root_gitlab_ci.exists():
+        referencers.append(root_gitlab_ci)
+    gitlab_dir = project_root / ".gitlab"
+    if gitlab_dir.is_dir():
+        referencers.extend(sorted(gitlab_dir.glob("**/*.yml")))
+        referencers.extend(sorted(gitlab_dir.glob("**/*.yaml")))
+
     scripts_dir = project_root / "scripts"
     if scripts_dir.is_dir():
         for pattern in ("**/*.py", "**/*.sh"):
