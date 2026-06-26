@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/vencil/tenant-api/internal/platform"
 )
@@ -46,7 +47,7 @@ func NewClient(token, projectPath, targetBranch string) (*Client, error) {
 		token:        token,
 		projectPath:  projectPath,
 		targetBranch: targetBranch,
-		httpClient:   platform.NewHTTPClient(),
+		httpClient:   platform.NewHTTPClient(30 * time.Second),
 		baseURL:      "https://gitlab.com",
 		breaker:      platform.NewCircuitBreaker("gitlab"),
 	}, nil

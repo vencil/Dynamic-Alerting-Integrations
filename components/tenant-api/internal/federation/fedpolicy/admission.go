@@ -48,6 +48,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/vencil/tenant-api/internal/platform"
 )
 
 // tenantLabel is the per-tenant label the platform's data layer carries
@@ -174,7 +176,7 @@ func NewAdmissionValidator(prometheusURL string) *AdmissionValidator {
 	return &AdmissionValidator{
 		q: &seriesQuerier{
 			baseURL: strings.TrimRight(prometheusURL, "/"),
-			http:    &http.Client{Timeout: defaultQueryTimeout},
+			http:    platform.NewHTTPClient(defaultQueryTimeout),
 		},
 		window:  admissionWindow,
 		timeout: defaultQueryTimeout,

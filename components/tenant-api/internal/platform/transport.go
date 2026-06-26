@@ -11,23 +11,25 @@ import (
 	"time"
 )
 
-// NewHTTPClient builds the standard forge HTTP client shared by the GitHub and
-// GitLab clients: a 30s timeout over an ISOLATED transport.
+// NewHTTPClient builds an outbound HTTP client with the given timeout over an
+// ISOLATED transport. Used by the GitHub/GitLab forge clients and the
+// federation fedpolicy queriers — anything that talks to an external endpoint
+// and runs alongside httptest-based parallel tests.
 //
 // The transport is a clone of http.DefaultTransport rather than the shared
 // singleton (the previous `&http.Client{Timeout: ...}` left Transport nil,
 // which falls back to http.DefaultTransport). Sharing the default lets any
 // other code path that flushes its idle-connection pool reach in under an
-// in-flight forge request — notably httptest.Server.Close(), which calls
+// in-flight request — notably httptest.Server.Close(), which calls
 // http.DefaultTransport.CloseIdleConnections(). Under the nightly
 // `-race -count=10` run that surfaced as a flaky
 // "transport connection broken: CloseIdleConnections called" error when
 // parallel subtests closed their servers concurrently (#932). A per-client
-// pool removes that cross-talk and lets the forge clients own their
-// connection-reuse policy.
-func NewHTTPClient() *http.Client {
+// pool removes that cross-talk and lets each caller own its connection-reuse
+// policy.
+func NewHTTPClient(timeout time.Duration) *http.Client {
 	return &http.Client{
-		Timeout:   30 * time.Second,
+		Timeout:   timeout,
 		Transport: http.DefaultTransport.(*http.Transport).Clone(),
 	}
 }

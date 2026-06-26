@@ -47,6 +47,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/vencil/tenant-api/internal/platform"
 )
 
 const (
@@ -95,7 +97,7 @@ func NewMetricDiscoverer(prometheusURL string) *MetricDiscoverer {
 	}
 	return &MetricDiscoverer{
 		baseURL: strings.TrimRight(prometheusURL, "/"),
-		http:    &http.Client{Timeout: defaultQueryTimeout},
+		http:    platform.NewHTTPClient(defaultQueryTimeout),
 		window:  discoveryWindow,
 	}
 }

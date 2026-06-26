@@ -17,7 +17,7 @@ import (
 func TestNewHTTPClient_IsolatedTransport(t *testing.T) {
 	t.Parallel()
 
-	c := NewHTTPClient()
+	c := NewHTTPClient(30 * time.Second)
 
 	if c.Timeout != 30*time.Second {
 		t.Errorf("Timeout = %v, want 30s", c.Timeout)
@@ -37,8 +37,8 @@ func TestNewHTTPClient_IsolatedTransport(t *testing.T) {
 func TestNewHTTPClient_DistinctPoolsPerClient(t *testing.T) {
 	t.Parallel()
 
-	a := NewHTTPClient()
-	b := NewHTTPClient()
+	a := NewHTTPClient(30 * time.Second)
+	b := NewHTTPClient(5 * time.Second)
 
 	if a.Transport == b.Transport {
 		t.Fatal("two NewHTTPClient() instances share one *http.Transport; pools must be per-client (#932)")
