@@ -8,7 +8,39 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 )
+
+// NewHTTPClient builds an outbound HTTP client with the given timeout over an
+// ISOLATED transport. Used by the GitHub/GitLab forge clients and the
+// federation fedpolicy queriers — anything that talks to an external endpoint
+// and runs alongside httptest-based parallel tests.
+//
+// The transport is a clone of http.DefaultTransport rather than the shared
+// singleton (the previous `&http.Client{Timeout: ...}` left Transport nil,
+// which falls back to http.DefaultTransport). Sharing the default lets any
+// other code path that flushes its idle-connection pool reach in under an
+// in-flight request — notably httptest.Server.Close(), which calls
+// http.DefaultTransport.CloseIdleConnections(). Under the nightly
+// `-race -count=10` run that surfaced as a flaky
+// "transport connection broken: CloseIdleConnections called" error when
+// parallel subtests closed their servers concurrently (#932). A per-client
+// pool removes that cross-talk and lets each caller own its connection-reuse
+// policy.
+//
+// WARNING: each call allocates a fresh *http.Transport, which owns a
+// connection pool and background goroutines that live until IdleConnTimeout
+// (~90s). Construct ONE per long-lived dependency at startup (as the forge
+// clients and fedpolicy validators do) — never per-request/per-tenant in a hot
+// path, or idle connections and goroutines accumulate into FD/goroutine leaks.
+// A short-lived caller must call c.Transport.(*http.Transport).CloseIdleConnections()
+// when done.
+func NewHTTPClient(timeout time.Duration) *http.Client {
+	return &http.Client{
+		Timeout:   timeout,
+		Transport: http.DefaultTransport.(*http.Transport).Clone(),
+	}
+}
 
 // JSONRoundTrip performs one authenticated JSON request against a forge REST API
 // and returns the response body and headers. It centralizes the transport policy

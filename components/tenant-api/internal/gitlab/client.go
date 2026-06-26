@@ -47,7 +47,7 @@ func NewClient(token, projectPath, targetBranch string) (*Client, error) {
 		token:        token,
 		projectPath:  projectPath,
 		targetBranch: targetBranch,
-		httpClient:   &http.Client{Timeout: 30 * time.Second},
+		httpClient:   platform.NewHTTPClient(30 * time.Second),
 		baseURL:      "https://gitlab.com",
 		breaker:      platform.NewCircuitBreaker("gitlab"),
 	}, nil

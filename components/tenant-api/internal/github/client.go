@@ -56,7 +56,7 @@ func NewClient(token, repoFullName, baseBranch string) (*Client, error) {
 		owner:      parts[0],
 		repo:       parts[1],
 		baseBranch: baseBranch,
-		httpClient: &http.Client{Timeout: 30 * time.Second},
+		httpClient: platform.NewHTTPClient(30 * time.Second),
 		baseURL:    "https://api.github.com",
 		breaker:    platform.NewCircuitBreaker("github"),
 	}, nil
