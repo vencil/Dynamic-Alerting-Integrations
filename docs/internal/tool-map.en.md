@@ -181,6 +181,7 @@ lang: en
 | `check_metric_dictionary.py` | Metric Dictionary 自動驗證 |
 | `check_open_encoding.py` | flag open() text-mode calls without encoding=. |
 | `check_orphan_docs.py` | 孤兒文件偵測 |
+| `check_orphan_lint.py` | orphan / dead-lint detector (#717; supersedes #456 residue). |
 | `check_path_metadata_consistency.py` | Warn when conf.d/ hierarchical path disagrees with tenant `_metadata`. |
 | `check_pint.py` | Prometheus rule linting (pint engine + thin Vibe wrapper). |
 | `check_planning_status_sync.py` | CI-time PR-trailer ↔ frontmatter sync gate. |
