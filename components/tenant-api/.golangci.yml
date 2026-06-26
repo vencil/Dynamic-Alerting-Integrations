@@ -3,7 +3,29 @@ linters:
   default: standard
   enable:
     - depguard
+    - forbidigo
   settings:
+    forbidigo:
+      # #932 follow-up: keep outbound HTTP clients off the process-wide
+      # http.DefaultClient/DefaultTransport pool. Sharing it let
+      # httptest.Server.Close() flush a connection out from under a parallel
+      # in-flight request (a flaky "CloseIdleConnections called"). Route every
+      # client through platform.NewHTTPClient, which clones an isolated
+      # transport. transport.go is the one sanctioned site that names
+      # http.DefaultTransport (to clone it) and is excluded below.
+      #
+      # Scope note: forbidigo matches identifiers/selectors, so it cannot express
+      # "a raw &http.Client{} literal with a nil Transport" — #932's exact shape.
+      # That specific regression is held by platform's NewHTTPClient isolation
+      # test + review; these rules forbid the shared-pool entrypoints that would
+      # reintroduce the class.
+      forbid:
+        - pattern: 'http\.DefaultClient'
+          msg: 'http.DefaultClient shares a process-wide connection pool; use platform.NewHTTPClient (#932).'
+        - pattern: 'http\.DefaultTransport'
+          msg: 'http.DefaultTransport is the shared pool #932 flushed; get an isolated transport via platform.NewHTTPClient.'
+        - pattern: 'http\.(Get|Post|Head|PostForm)\b'
+          msg: 'package-level http.Get/Post/Head/PostForm use the shared DefaultClient; build a platform.NewHTTPClient instance (#932).'
     errcheck:
       # CLI/stdout writes are intentional fire-and-forget; checking their error is
       # noise (they only fail on a broken stdout, where there is nothing to do).
@@ -33,3 +55,12 @@ linters:
       - path: _test\.go
         linters:
           - errcheck
+      - path: internal/platform/transport\.go
+        linters:
+          - forbidigo
+      # tests legitimately name http.DefaultTransport/DefaultClient for assertions
+      # (e.g. the NewHTTPClient isolation test asserts tr != http.DefaultTransport)
+      # and use raw clients against real forges, not the unit-test httptest pool.
+      - path: _test\.go
+        linters:
+          - forbidigo
