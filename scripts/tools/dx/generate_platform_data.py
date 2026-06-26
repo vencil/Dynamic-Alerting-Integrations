@@ -145,6 +145,7 @@ PACK_CATEGORY = {
     "jvm": "runtime",
     "nginx": "webserver",
     "kubernetes": "infrastructure",
+    "liveness": "infrastructure",
     "operational": "infrastructure",
     "platform": "infrastructure",
 }
@@ -164,6 +165,7 @@ EXPORTER_SHORT = {
     "jvm": "jmx_exporter",
     "nginx": "nginx-prometheus-exporter",
     "kubernetes": "cAdvisor + kube-state-metrics",
+    "liveness": "threshold-exporter",
     "operational": "threshold-exporter",
     "platform": "threshold-exporter",
 }
@@ -183,6 +185,7 @@ PACK_LABELS = {
     "jvm": "JVM",
     "nginx": "Nginx",
     "kubernetes": "Kubernetes",
+    "liveness": "Exporter Liveness",
     "operational": "Operational",
     "platform": "Platform",
 }
@@ -202,6 +205,7 @@ METRICS_COVERAGE = {
     "jvm": ["gc_pause", "heap_usage", "thread_pool", "class_loading"],
     "nginx": ["active_connections", "request_rate", "connection_backlog"],
     "kubernetes": ["pod_restart", "cpu_limit", "memory_limit", "pvc_usage"],
+    "liveness": ["expected_exporter", "exporter_up"],
     "operational": ["exporter_health", "config_reload"],
     "platform": ["threshold_metric_count", "recording_rule_health", "scrape_success"],
 }
@@ -223,7 +227,7 @@ DEPENDENCIES = {
 }
 
 # Required packs (always included, cannot be deselected)
-REQUIRED_PACKS = {"operational", "platform"}
+REQUIRED_PACKS = {"operational", "platform", "liveness"}
 
 # Default-on packs (selected by default for new tenants)
 DEFAULT_ON_PACKS = {"kubernetes", "mariadb"}
@@ -233,7 +237,7 @@ PACK_ORDER = [
     "mariadb", "postgresql", "redis", "mongodb",
     "elasticsearch", "oracle", "db2", "clickhouse",
     "kafka", "rabbitmq", "jvm", "nginx",
-    "kubernetes", "operational", "platform",
+    "kubernetes", "liveness", "operational", "platform",
 ]
 
 

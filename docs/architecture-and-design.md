@@ -34,7 +34,7 @@ lang: zh
 |------|---------|---------|
 | *設計深入（spoke）* | | |
 | [Config-Driven 設計](design/config-driven.md) | 三態配置、Directory Scanner、多層嚴重度、排程閾值、路由、Tenant API、繼承引擎 | Platform / SRE / Domain Expert |
-| [Rule Packs 與 Projected Volume](design/rule-packs.md) | 15 個規則包、三部分結構、雙語 Annotation | Platform / Domain Expert |
+| [Rule Packs 與 Projected Volume](design/rule-packs.md) | 16 個規則包、三部分結構、雙語 Annotation | Platform / Domain Expert |
 | [高可用性 (HA)](design/high-availability.md) | 2 副本策略、PDB、滾動更新、SLA 99.9%+ | Platform / SRE |
 | [Runtime Canary 設計](design/runtime-canary.md) | 自訂告警編譯管線端到端活性、dead-man's-switch、壞租戶隔離兩層說明（ADR-025 設計就緒） | Platform / SRE |
 | [Recipe would-fire 預覽設計](design/recipe-would-fire-preview.md) | 在同一 modal 看 recipe 會不會 fire；compiler+promtool inverted-assert、facade host、合成輸入（#657 P1 設計就緒） | Platform / Domain Expert / SRE |
@@ -63,7 +63,7 @@ graph TB
 
     subgraph DAP["Dynamic Alerting Platform"]
         TE["threshold-exporter<br/>×2 HA"]
-        PM["Prometheus<br/>+ 15 Rule Packs"]
+        PM["Prometheus<br/>+ 16 Rule Packs"]
         CM["ConfigMap<br/>threshold-config"]
     end
 
@@ -151,7 +151,7 @@ graph TB
 **架構要點：**
 1. **Directory Scanner** 掃描 `conf.d/` 目錄，自動發現 `_defaults.yaml` 和租戶配置文件
 2. **threshold-exporter × 2 HA Replicas** 讀取 ConfigMap，輸出三態 Prometheus 指標
-3. **Projected Volume** 掛載 15 個獨立規則包，零 PR 衝突，各團隊獨立擁有
+3. **Projected Volume** 掛載 16 個獨立規則包，零 PR 衝突，各團隊獨立擁有
 4. **Prometheus** 使用 `group_left` 向量匹配與用戶閾值進行聯接，實現 O(M) 複雜度（相比傳統 O(M×N)：固定 M 條規則 vs N×M 線性增長）
 
 ### 1.3 客戶導入與 GitOps 治理管線 (Day-0 / Day-1 / Day-2)
@@ -228,7 +228,7 @@ Config-Driven 是平台核心：租戶與平台只改 YAML、不寫 PromQL，由
 
 ## 3. Projected Volume 架構 (Rule Packs) — 簡介
 
-平台管理 **15 個獨立規則包**，共 **139 個 Recording Rules + 99 個 Alert Rules**。每個 Rule Pack 為自包含的三部分結構：
+平台管理 **16 個獨立規則包**，共 **139 個 Recording Rules + 99 個 Alert Rules**。每個 Rule Pack 為自包含的三部分結構：
 
 1. **Part 1：標準化記錄規則** — 正規化不同匯出器的原始指標
 2. **Part 2：閾值標準化** — 產出 `tenant:alert_threshold:*` 指標，供 Alert Rule 匹配

@@ -61,7 +61,7 @@ volumes:
             items:
               - key: rules.yaml
                 path: jvm-rules.yaml
-        # ... 其他 16 個 rule pack
+        # ... 其餘比照（共 16 個 rule pack）
 ```
 
 ## 基本原理

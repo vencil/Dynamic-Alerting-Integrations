@@ -37,7 +37,7 @@ Responsible for alert rule configuration, Rule Pack management, custom rule revi
 | Document | Purpose |
 |----------|---------|
 | [Quick Start](getting-started/for-domain-experts.en.md) | 30-minute onboarding for Domain Experts: Rule Pack concepts, custom rule governance |
-| [Rule Packs](rule-packs/README.md) | 15 Rule Packs directory + optional uninstall instructions |
+| [Rule Packs](rule-packs/README.md) | 16 Rule Packs directory + optional uninstall instructions |
 | [Custom Rule Governance](custom-rule-governance.en.md) | Three-tier governance model, linting, schema validation, best practices |
 | [Migration Engine](migration-engine.en.md) | AST migration engine architecture, cross-dialect rule transformation, triage logic |
 

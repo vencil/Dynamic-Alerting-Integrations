@@ -107,7 +107,7 @@ Not sure which role? Try the [Getting Started Wizard](https://vencil.github.io/D
 ```mermaid
 graph TB
     A["Tenant Config\n(conf.d/*.yaml)"] -->|per-tenant threshold| B["threshold-exporter\n(×2 HA)"]
-    B -->|"Prometheus metric\n(tenant:alert_threshold:*)"| C["Prometheus\n(15 Rule Packs)"]
+    B -->|"Prometheus metric\n(tenant:alert_threshold:*)"| C["Prometheus\n(16 Rule Packs)"]
     C -->|group_left matching| D["Alert Rules\n(fixed count)"]
     D -->|AlertGroup| E["Alertmanager"]
     E -->|dynamic route| F["Receivers\nwebhook/email/slack/teams"]
@@ -141,7 +141,7 @@ For detailed architecture, see [Architecture & Design](architecture-and-design.m
 
 ## Platform Capabilities
 
-**Rule Engine:** O(M) complexity via `group_left` · 15 Rule Pack Projected Volumes · Severity Dedup via Alertmanager Inhibit ([ADR-001](adr/001-severity-dedup-via-inhibit.md))
+**Rule Engine:** O(M) complexity via `group_left` · 16 Rule Pack Projected Volumes · Severity Dedup via Alertmanager Inhibit ([ADR-001](adr/001-severity-dedup-via-inhibit.md))
 
 **Tenant Management:** Tri-state mode (Normal/Silent/Maintenance) · Four-layer routing merge ([ADR-007](adr/007-cross-domain-routing-profiles.md)) · Scheduled thresholds & maintenance windows · Schema validation · Cardinality Guard
 
@@ -160,7 +160,7 @@ For detailed architecture, see [Architecture & Design](architecture-and-design.m
 | [Governance & Security](governance-security.md) | Compliance, Leads | Three-layer governance, audit |
 | [Benchmarks](benchmarks.md) | Platform Engineers | Performance data & methodology |
 | Integration guides | Platform Engineers | [BYO Prometheus](integration/byo-prometheus-integration.md) · [BYO Alertmanager](integration/byo-alertmanager-integration.md) · [Federation](integration/federation-integration.md) · [GitOps](integration/gitops-deployment.md) · [VCS](vcs-integration-guide.md) |
-| [Rule Packs](rule-packs/README.md) | All | 15 packs + [Alert Reference](rule-packs/ALERT-REFERENCE.md) |
+| [Rule Packs](rule-packs/README.md) | All | 16 packs + [Alert Reference](rule-packs/ALERT-REFERENCE.md) |
 | [Scenarios](scenarios/) | All | 9 hands-on scenarios |
 | [Troubleshooting](troubleshooting.md) | All | Common issues & solutions |
 

@@ -31,7 +31,7 @@ monitoring-config/
 │   │   ├── da-rule-pack-mariadb.yaml
 │   │   ├── da-rule-pack-postgresql.yaml
 │   │   ├── da-rule-pack-kubernetes.yaml
-│   │   └── ...（15 Rule Packs）
+│   │   └── ...（16 Rule Packs）
 │   ├── alertmanagerconfig/
 │   │   ├── da-tenant-db-a.yaml
 │   │   ├── da-tenant-db-b.yaml

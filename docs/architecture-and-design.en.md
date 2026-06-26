@@ -32,7 +32,7 @@ This is the **architecture Hub** for the "Multi-Tenant Dynamic Alerting Platform
 |------|---------|---------|
 | *Design deep-dives (spoke)* | | |
 | [Config-Driven Design](design/config-driven.en.md) | Three-state config, Directory Scanner, multi-tier severity, scheduled thresholds, routing, Tenant API, inheritance engine | Platform / SRE / Domain Expert |
-| [Rule Packs & Projected Volume](design/rule-packs.en.md) | 15 rule packs, three-part structure, bilingual annotations | Platform / Domain Expert |
+| [Rule Packs & Projected Volume](design/rule-packs.en.md) | 16 rule packs, three-part structure, bilingual annotations | Platform / Domain Expert |
 | [High Availability (HA)](design/high-availability.en.md) | 2-replica strategy, PDB, rolling update, SLA 99.9%+ | Platform / SRE |
 | [Runtime Canary Design](design/runtime-canary.en.md) | End-to-end liveness of the custom-alert compile pipeline, dead-man's-switch, two-layer bad-tenant isolation account (ADR-025 design-readiness) | Platform / SRE |
 | [Recipe Would-Fire Preview Design](design/recipe-would-fire-preview.en.md) | see whether a recipe fires in the same modal; compiler+promtool inverted-assert, facade host, synthetic input (#657 P1 design-readiness) | Platform / Domain Expert / SRE |
@@ -61,7 +61,7 @@ graph TB
 
     subgraph DAP["Dynamic Alerting Platform"]
         TE["threshold-exporter<br/>×2 HA"]
-        PM["Prometheus<br/>+ 15 Rule Packs"]
+        PM["Prometheus<br/>+ 16 Rule Packs"]
         CM["ConfigMap<br/>threshold-config"]
     end
 
@@ -149,7 +149,7 @@ graph TB
 **Architecture highlights:**
 1. **Directory Scanner** scans the `conf.d/` directory, automatically discovering `_defaults.yaml` and tenant configuration files
 2. **threshold-exporter × 2 HA Replicas** read ConfigMap and output three-state Prometheus metrics
-3. **Projected Volume** mounts 15 independent rule packs, zero PR conflicts, each team independently owns their rules
+3. **Projected Volume** mounts 16 independent rule packs, zero PR conflicts, each team independently owns their rules
 4. **Prometheus** uses `group_left` vector matching to join with user thresholds, achieving O(M) complexity (vs traditional O(M×N): fixed M rules vs N×M linear growth)
 
 ### 1.3 Customer Migration & GitOps Governance Pipeline (Day-0 / Day-1 / Day-2)
@@ -226,7 +226,7 @@ Config-Driven is the platform core: tenants and the platform only edit YAML, nev
 
 ## 3. Projected Volume Architecture (Rule Packs) — Overview
 
-The platform manages **15 independent rule packs** with **139 Recording Rules + 99 Alert Rules**. Each Rule Pack is a self-contained three-part structure:
+The platform manages **16 independent rule packs** with **139 Recording Rules + 99 Alert Rules**. Each Rule Pack is a self-contained three-part structure:
 
 1. **Part 1: Normalization Recording Rules** — normalize raw metrics from different exporters
 2. **Part 2: Threshold Normalization** — produces `tenant:alert_threshold:*` metrics for Alert Rule matching

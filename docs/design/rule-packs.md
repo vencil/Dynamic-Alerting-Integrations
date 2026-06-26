@@ -16,17 +16,18 @@ parent: architecture-and-design.md
 
 ## 3. Projected Volume 架構 (Rule Packs)
 
-> **⚠️ 計數陷阱**：Rule Pack **總數為 15**（以 `docs/assets/platform-data.json` 為準），但 `rule-packs/` 目錄下只會看到 **14 個 YAML 檔案**——因為 `prometheus-rules-platform` 是透過 ConfigMap 直接管理，不以 YAML 形式存在。當 Agent 或工具要報告 Rule Pack 數量時，請以 `platform-data.json` 為單一真實來源，不要用 `ls rule-packs/*.yaml | wc -l`。
+> **⚠️ 計數陷阱**：Rule Pack **總數為 16**（以 `docs/assets/platform-data.json` 為準，= `PACK_ORDER` 的 16 個 pack）。**別直接 `ls rule-packs/*.yaml | wc -l`**——雖然目前剛好也算出 16，但組成不同、隨時會偏掉：`rule-packs/` 的 16 個 YAML **含** `custom-alerts`（租戶自助告警的編譯產物，不列入標準計數）、**不含** `platform`（以 ConfigMap 直接管理、無 YAML 但列入計數）。這兩個 offset 目前剛好抵銷成 16，任一邊變動（例如新增一個編譯 pack）就會讓 `ls` 與真實計數分歧。報告 Rule Pack 數量時一律以 `platform-data.json` 為單一真實來源。
 
-### 3.1 十五個獨立規則包
+### 3.1 十六個獨立規則包
+
+> 計數與每包規則數以 [`docs/assets/platform-data.json`](../assets/platform-data.json) 為準（由 `generate_platform_data.py` 產生）；下表為其快照。`custom-alerts`（租戶編譯 pack）刻意不列入標準計數。
 
 | Rule Pack | 擁有團隊 | ConfigMap 名稱 | Recording Rules | Alert Rules |
 |-----------|---------|-----------------|----------------|-------------|
-| MariaDB | DBA | `prometheus-rules-mariadb` | 11 | 8 |
+| MariaDB/MySQL | DBA | `prometheus-rules-mariadb` | 11 | 14 |
 | PostgreSQL | DBA | `prometheus-rules-postgresql` | 11 | 9 |
-| Kubernetes | Infra | `prometheus-rules-kubernetes` | 7 | 4 |
 | Redis | Cache | `prometheus-rules-redis` | 11 | 6 |
-| MongoDB | AppData | `prometheus-rules-mongodb` | 10 | 6 |
+| MongoDB | AppData | `prometheus-rules-mongodb` | 10 | 8 |
 | Elasticsearch | Search | `prometheus-rules-elasticsearch` | 11 | 7 |
 | Oracle | DBA / Oracle | `prometheus-rules-oracle` | 11 | 7 |
 | DB2 | DBA / DB2 | `prometheus-rules-db2` | 12 | 7 |
@@ -35,9 +36,11 @@ parent: architecture-and-design.md
 | RabbitMQ | Messaging | `prometheus-rules-rabbitmq` | 12 | 8 |
 | JVM | AppDev | `prometheus-rules-jvm` | 9 | 7 |
 | Nginx | Infra | `prometheus-rules-nginx` | 9 | 6 |
+| Kubernetes | Infra | `prometheus-rules-kubernetes` | 16 | 10 |
+| Exporter Liveness | Platform | `prometheus-rules-liveness` | 0 | 1 |
 | Operational | Platform | `prometheus-rules-operational` | 0 | 4 |
-| Platform | Platform | `prometheus-rules-platform` | 0 | 4 |
-| **總計** | | | **139** | **99** (= **238** rules) |
+| Platform | Platform | `prometheus-rules-platform` | 0 | 25 |
+| **總計** | | | **148** | **135** (= **283** rules) |
 
 ### 3.2 自包含三部分結構
 
