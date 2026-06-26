@@ -56,18 +56,23 @@ and never match the ``check_*.py`` glob, so they need no allowlist entry. The
 allowlist is currently empty: every executable lint is wired to a runner.
 
 Known limitation (accepted, like check_lint_toolchain_fit.py): detection is a
-filename-substring match against the runner corpus — a tripwire for the common case,
-not an airtight proof. A runner that builds the script name dynamically from pieces
-would slip through; a stray prose mention of ``check_foo.py`` inside a *runner* file
-(not a lint file, which we already exclude) could falsely mark it live. Both are
-rare; revisit if they ever happen in practice rather than over-engineering now.
+word-boundary filename match against the runner corpus (see ``_is_referenced`` —
+not a bare substring, so ``disable_check_foo.py`` / a ``.pyc`` path no longer masks
+``check_foo.py``). It is still a tripwire, not an airtight proof: a runner that
+builds the script name dynamically from pieces would slip through, and a
+commented-out invocation of the *exact* filename inside a *runner* file (not a lint
+file, which we already exclude) would still read as live. Both are rare; revisit if
+they ever happen in practice rather than reaching for an AST analyzer now.
 
 Scope discipline (#717)
 -----------------------
 Repo-internal reference-graph only. This does NOT reimplement #456's staged-diff
 heuristic (high false-positive; the wiring-triple body is already covered by
 ``tool-map-check`` / ``build-completeness-check`` / ``cli-coverage-check`` /
-``doc-datools-cmds`` / ``check_changelog_no_tbd``).
+``doc-datools-cmds`` / ``check_changelog_no_tbd``). We also trust that the runners
+themselves are live — a lint wired only into a runner that is itself never invoked
+("second-order orphan") is out of scope; in practice every runner here (pre-commit,
+the validate_all Drift-Detection CI job, Makefile targets, workflows) is reachable.
 
 Usage:
     python3 scripts/tools/lint/check_orphan_lint.py        # report mode
@@ -82,6 +87,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -105,6 +111,16 @@ if hasattr(sys.stdout, "reconfigure"):
 ALLOWLIST: dict[str, str] = {
     # "check_example_manual.py": "manual-only forensic tool, run on demand (#NNN)",
 }
+
+# Directories to never descend into when scanning scripts/ for sibling-script
+# referencers. Tree-walking under scripts/ must skip local virtualenvs and vendored
+# trees: a dev's scripts/.venv/ holds thousands of third-party .py files that would
+# explode the corpus (slow / OOM) and could even false-rescue a dead lint by an
+# incidental filename collision in dependency source.
+_SKIP_DIRS = frozenset({
+    "__pycache__", ".venv", "venv", ".tox", ".nox",
+    "node_modules", ".git", ".mypy_cache", ".pytest_cache",
+})
 
 # ── Reference-graph builders ────────────────────────────────────────
 
@@ -146,7 +162,7 @@ def gather_referencers(project_root: Path, lint_dir: Path) -> list[Path]:
     if scripts_dir.is_dir():
         for pattern in ("**/*.py", "**/*.sh"):
             for p in scripts_dir.glob(pattern):
-                if "__pycache__" in p.parts:
+                if _SKIP_DIRS.intersection(p.parts):  # skip venv / vendored trees
                     continue
                 if p.parent == lint_dir:  # lint files are not referencers
                     continue
@@ -166,6 +182,22 @@ def read_corpus(referencers: list[Path]) -> str:
     return "\n".join(chunks)
 
 
+def _is_referenced(name: str, corpus: str) -> bool:
+    """True iff `name` appears as a standalone filename token in `corpus`.
+
+    Word-boundary match, NOT a bare substring: the char before the name must not
+    be a filename char and the char after `.py` must not be alphanumeric. This
+    stops a longer filename from masking a shorter one —  e.g. a runner invoking
+    `disable_check_foo.py` / `old_check_foo.py` must NOT count as referencing the
+    distinct `check_foo.py`, and a `.pyc` bytecode path must not count either.
+    (It does NOT defang a literal prose mention of the *exact* filename inside a
+    runner file; `lint/` — the usual cross-reference source — is already excluded,
+    and commented-out invocations in Makefile/CI are rare.)
+    """
+    pattern = rf"(?<![A-Za-z0-9_-]){re.escape(name)}(?![A-Za-z0-9_])"
+    return re.search(pattern, corpus) is not None
+
+
 def find_orphans(
     check_lints: list[str],
     corpus: str,
@@ -180,7 +212,7 @@ def find_orphans(
     for name in check_lints:
         if name in allow:
             continue
-        if name not in corpus:
+        if not _is_referenced(name, corpus):
             orphans.append(name)
     return orphans
 

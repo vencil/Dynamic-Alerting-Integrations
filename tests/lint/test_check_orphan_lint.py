@@ -56,6 +56,25 @@ class TestFindOrphans:
         out = ol.find_orphans(["check_b.py", "check_a.py"], corpus)
         assert out == ["check_b.py", "check_a.py"]  # preserves input order
 
+    def test_longer_name_does_not_mask_shorter(self):
+        """A reference to disable_check_foo.py must NOT rescue check_foo.py."""
+        corpus = "entry: scripts/tools/lint/disable_check_foo.py --ci\n"
+        assert ol.find_orphans(["check_foo.py"], corpus) == ["check_foo.py"]
+
+    def test_underscore_prefix_does_not_mask(self):
+        corpus = "run old_check_foo.py\n"
+        assert ol.find_orphans(["check_foo.py"], corpus) == ["check_foo.py"]
+
+    def test_pyc_bytecode_does_not_mask(self):
+        corpus = "stale: check_foo.pyc\n"
+        assert ol.find_orphans(["check_foo.py"], corpus) == ["check_foo.py"]
+
+    def test_real_path_reference_still_matches(self):
+        """Genuine path/quote/colon-delimited references must still rescue."""
+        for ref in ("scripts/tools/lint/check_foo.py --ci",
+                    '"check_foo.py"', "check_foo.py:", "- check_foo.py\n"):
+            assert ol.find_orphans(["check_foo.py"], ref) == [], ref
+
 
 # ---------------------------------------------------------------------------
 # find_check_lints — glob scope
@@ -130,6 +149,21 @@ class TestGatherReferencers:
         refs = ol.gather_referencers(tmp_path, lint_dir)
         corpus = ol.read_corpus(refs)
         assert ol.find_orphans(["check_a.py"], corpus) == []
+
+    def test_skips_venv_and_vendored_trees(self, tmp_path):
+        """A check_*.py name appearing inside scripts/.venv or node_modules must
+        NOT be scanned (local-dev dependency-black-hole guard)."""
+        lint_dir = self._scaffold(tmp_path)
+        (lint_dir / "check_a.py").write_text("", encoding="utf-8")
+        for blackhole in (".venv", "venv", "node_modules", "__pycache__"):
+            d = tmp_path / "scripts" / blackhole / "pkg"
+            d.mkdir(parents=True)
+            (d / "vendored.py").write_text("check_a.py\n", encoding="utf-8")
+        refs = ol.gather_referencers(tmp_path, lint_dir)
+        assert all(not (ol._SKIP_DIRS & set(p.parts)) for p in refs)
+        # check_a is referenced ONLY inside the black holes → still orphan
+        assert ol.find_orphans(["check_a.py"], ol.read_corpus(refs)) == \
+            ["check_a.py"]
 
     def test_gitlab_ci_reference_rescues(self, tmp_path):
         """A lint wired only into GitLab CI must not be false-flagged."""
