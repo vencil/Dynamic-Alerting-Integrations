@@ -111,7 +111,9 @@ def _forecast_records(rid: str, metric: str, sel: str, horizon: str,
     else:
         # raw mode: an arbitrary gauge (may exceed 1 or be legitimately negative) — no
         # [0,1] clamp, no ratio band. A raw-mode anti-flap gate would have to be
-        # threshold-relative; out of scope here (raw-mode forecast is rare).
+        # threshold-relative; out of scope here (raw-mode forecast is rare). Deferred
+        # with trigger — see TRK-327 (#936): wakes on raw-mode adoption crossing an
+        # early band, or the first transient-spike false-positive ticket.
         predict_inner = (
             f"predict_linear({base}[{lb_s}s], {h_s})\n"
             f"  and\n"
