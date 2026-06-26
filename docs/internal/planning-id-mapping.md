@@ -159,6 +159,7 @@ SOT 在 [`dx-tooling-backlog.md`](dx-tooling-backlog.md)。
 | TRK-324 | [#677](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/677) | 幽靈副本：滾動更新交疊多寫者（Recreate now-fix / Lease deferred） | TRK-317 |
 | TRK-325 | [#678](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/678) | 讀寫拆分部署（CQRS）+ read-only enforcement 模式（deferred、**已關閉**；RFC dup [#788](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/788)；re-trigger codify 成 alert `TenantApiReadHANeeded`，見 ADR-023 A4） | TRK-317 |
 | TRK-326 | [#751](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/751) | Custom-alert `for` divergence：`for` 納 recipe_id slug + schema enum（向量化靜默覆蓋 P0） | [#741](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/741) |
+| TRK-327 | [#936](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/936) | Raw-mode forecast 缺現值防抖動地板（anti-flap floor）— defer-with-trigger（Gemini Day-2 review；ratio 模式已有 `_FORECAST_CURRENT_BAND`，raw 模式 out-of-scope at GA） | [#741](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/741) |
 
 ## 不在 mapping 範圍
 
