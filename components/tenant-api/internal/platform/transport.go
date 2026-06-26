@@ -27,6 +27,14 @@ import (
 // parallel subtests closed their servers concurrently (#932). A per-client
 // pool removes that cross-talk and lets each caller own its connection-reuse
 // policy.
+//
+// WARNING: each call allocates a fresh *http.Transport, which owns a
+// connection pool and background goroutines that live until IdleConnTimeout
+// (~90s). Construct ONE per long-lived dependency at startup (as the forge
+// clients and fedpolicy validators do) — never per-request/per-tenant in a hot
+// path, or idle connections and goroutines accumulate into FD/goroutine leaks.
+// A short-lived caller must call c.Transport.(*http.Transport).CloseIdleConnections()
+// when done.
 func NewHTTPClient(timeout time.Duration) *http.Client {
 	return &http.Client{
 		Timeout:   timeout,
