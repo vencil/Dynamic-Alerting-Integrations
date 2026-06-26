@@ -139,7 +139,7 @@ lang: zh
 :   Prometheus 預計算規則，將複雜查詢結果存為新的時間序列。本平台的 Rule Pack 中大量使用，如 `tenant:mysql_threads_connected:max`。
 
 **Rule Pack**
-:   預定義的 Prometheus recording rule + alert rule 套件。目前共 15 個（MariaDB, Redis, PostgreSQL, MongoDB, ElasticSearch, Kafka, RabbitMQ, HAProxy, Kubernetes, Node, JVM, Nginx, Blackbox, Custom, Platform Health）。
+:   預定義的 Prometheus recording rule + alert rule 套件。目前共 16 個（MariaDB/MySQL、PostgreSQL、Redis、MongoDB、Elasticsearch、Oracle、DB2、ClickHouse、Kafka、RabbitMQ、JVM、Nginx、Kubernetes、Exporter Liveness、Operational、Platform）。
 
 **Routing Profile（路由設定檔）**
 :   定義告警如何路由至各接收端的設定檔，由 `generate_alertmanager_routes.py` 消費，搭配 Domain Policies 的 webhook 域名護欄。

@@ -92,7 +92,7 @@ Prioritize "Central Exporter + Edge Prometheus" architecture (80-20 principle). 
 
 **Document**: [`005-projected-volume-for-rule-packs.en.md`](./005-projected-volume-for-rule-packs.en.md)
 
-Use Projected Volume with `optional: true` to implement selective Rule Pack unloading for 15 Rule Packs. Tenants can delete individual ConfigMaps to disable specific Rule Packs; Prometheus does not fail when packs are missing.
+Use Projected Volume with `optional: true` to implement selective Rule Pack unloading for 16 Rule Packs. Tenants can delete individual ConfigMaps to disable specific Rule Packs; Prometheus does not fail when packs are missing.
 
 ---
 
