@@ -23,7 +23,7 @@ lang: en
 
 ## Three Things You Need to Know
 
-**1. Your monitoring is already active.** The platform ships with 15 Rule Packs covering MariaDB, PostgreSQL, Redis, MongoDB, Elasticsearch, Kafka, and more. As long as your exporter is running, alert rules are in effect.
+**1. Your monitoring is already active.** The platform ships with 16 Rule Packs covering MariaDB, PostgreSQL, Redis, MongoDB, Elasticsearch, Kafka, and more. As long as your exporter is running, alert rules are in effect.
 
 **2. You only manage one YAML file (or use the Web UI).** All customization lives in `conf.d/<tenant>.yaml` — thresholds, notification routing, maintenance windows, everything. If your Platform Team has deployed the Self-Service Portal (tenant-manager UI), you can manage everything directly in the browser without editing YAML.
 

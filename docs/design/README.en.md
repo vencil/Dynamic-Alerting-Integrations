@@ -20,7 +20,7 @@ This directory holds the **deep-dive spoke documents** for [Architecture & Desig
 |------|------|-----------|
 | [Config-Driven Architecture](config-driven.en.md) | Tri-state config, dynamic routing, Tenant API, SHA-256 hot-reload | Understand how YAML drives the whole chain |
 | [High Availability (HA) Design](high-availability.en.md) | Replicas, PodDisruptionBudget, double-counting prevention | Planning a production-grade HA deployment |
-| [Rule Packs & Projected Volume](rule-packs.en.md) | Independent rule-pack delivery, zero PR conflicts, on-demand evaluation | Understand how the 15 Rule Packs are delivered in isolation |
+| [Rule Packs & Projected Volume](rule-packs.en.md) | Independent rule-pack delivery, zero PR conflicts, on-demand evaluation | Understand how the 16 Rule Packs are delivered in isolation |
 | [Future Roadmap](roadmap-future.en.md) | K8s Operator, Design System, Auto-Discovery | Understand the mid/long-term direction |
 
 ## Next steps

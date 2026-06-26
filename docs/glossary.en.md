@@ -139,7 +139,7 @@ This page lists common terms and abbreviations found throughout the Dynamic Aler
 :   Prometheus pre-computation rules that store complex query results as new time series. Extensively used in this platform's Rule Packs, e.g., `tenant:mysql_threads_connected:max`.
 
 **Rule Pack**
-:   Predefined bundles of Prometheus recording rules + alert rules. Currently 15 packs: MariaDB, Redis, PostgreSQL, MongoDB, ElasticSearch, Kafka, RabbitMQ, HAProxy, Kubernetes, Node, JVM, Nginx, Blackbox, Custom, Platform Health.
+:   Predefined bundles of Prometheus recording rules + alert rules. Currently 16 packs: MariaDB/MySQL, PostgreSQL, Redis, MongoDB, Elasticsearch, Oracle, DB2, ClickHouse, Kafka, RabbitMQ, JVM, Nginx, Kubernetes, Exporter Liveness, Operational, Platform.
 
 **Routing Profile**
 :   A profile defining how alerts route to receivers, consumed by `generate_alertmanager_routes.py`, paired with the Domain Policies webhook-domain guardrails.

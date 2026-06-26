@@ -16,7 +16,7 @@ lang: en
 
 ## Background
 
-The platform provides 15 pre-built Rule Packs covering different infrastructure and application scenarios (Kubernetes, JVM, Nginx, Database, etc.).
+The platform provides 16 pre-built Rule Packs covering different infrastructure and application scenarios (Kubernetes, JVM, Nginx, Database, etc.).
 
 ### Challenges of Rule Pack Distribution
 
@@ -56,7 +56,7 @@ volumes:
             items:
               - key: rules.yaml
                 path: jvm-rules.yaml
-        # ... other 15 rule packs
+        # ... rest follow the same pattern (16 rule packs total)
 ```
 
 ## Rationale
@@ -75,7 +75,7 @@ volumes:
 
 - **All-or-Nothing**: No selective unloading; tenants forced to accept all packs
 - **Version Management Difficulty**: Rule Packs have different update cycles (K8s pack frequent, Database pack stable), difficult to unify versioning
-- **Failure Amplification**: Single ConfigMap containing 15 packs; if one has errors, entire system fails to start
+- **Failure Amplification**: Single ConfigMap containing 16 packs; if one has errors, entire system fails to start
 
 ## Consequences
 
@@ -89,8 +89,8 @@ volumes:
 
 ### Negative Impact
 
-⚠️ Kubernetes manifests become more complex (Projected Volume + 15 ConfigMap sources)
-⚠️ Maintain 15 ConfigMaps; initial deployment time increases
+⚠️ Kubernetes manifests become more complex (Projected Volume + 16 ConfigMap sources)
+⚠️ Maintain 16 ConfigMaps; initial deployment time increases
 ⚠️ Tenants must understand `optional: true` semantics to avoid accidental deletion
 
 ### Operational Considerations
@@ -116,7 +116,7 @@ volumes:
 
 ## Implementation Checklist
 
-- [x] Partition Rule Pack YAML into 15 independent ConfigMaps
+- [x] Partition Rule Pack YAML into 16 independent ConfigMaps
 - [x] Configure Helm chart Projected Volume + optional:true
 - [x] Test unloading single Rule Pack does not cause Prometheus startup failure
 - [x] Document how tenants disable specific Rule Packs

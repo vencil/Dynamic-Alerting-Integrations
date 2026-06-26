@@ -25,7 +25,7 @@ lang: en
 
 **1. threshold-exporter is the core.** It reads YAML config, emits Prometheus metrics, and supports SHA-256 hot-reload. Two replicas run HA on port 8080.
 
-**2. Rule Packs are self-contained units.** 15 Rule Packs mount via Projected Volume into Prometheus, each covering a database or service type (MariaDB, PostgreSQL, Redis, etc.). Use the `optional: true` mechanism to safely uninstall unwanted Rule Packs.
+**2. Rule Packs are self-contained units.** 16 Rule Packs mount via Projected Volume into Prometheus, each covering a database or service type (MariaDB, PostgreSQL, Redis, etc.). Use the `optional: true` mechanism to safely uninstall unwanted Rule Packs.
 
 **3. Everything is config-driven.** `_defaults.yaml` controls global platform behavior, tenant YAML overrides defaults, and `_profiles.yaml` provides inheritance chains. No hardcoding, no secrets.
 

@@ -65,7 +65,7 @@ thresholds:
     dimensions_re: ["role=~^primary|replica$"]  # Regex dimensions
 ```
 
-> 💡 **Interactive Tools** — Want to browse all Rule Packs' recording/alert rules? Use [Rule Pack Details](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/rule-pack-detail.jsx). Compare metrics across all 15 Rule Packs? Try [Rule Pack Matrix](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/rule-pack-matrix.jsx). Calculate recommended thresholds from p50/p90/p99? Use [Threshold Calculator](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/threshold-calculator.jsx).
+> 💡 **Interactive Tools** — Want to browse all Rule Packs' recording/alert rules? Use [Rule Pack Details](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/rule-pack-detail.jsx). Compare metrics across all 16 Rule Packs? Try [Rule Pack Matrix](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/rule-pack-matrix.jsx). Calculate recommended thresholds from p50/p90/p99? Use [Threshold Calculator](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/threshold-calculator.jsx).
 
 ### Part 3: Alert Rules
 

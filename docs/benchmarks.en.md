@@ -57,7 +57,7 @@ Measured proof — scale tenants by 51×, eval time barely moves:
 
 A 51× tenant increase moves eval time from 59.1 ms to 60.6 ms (**+2.5%**) — exactly as O(M) predicts.
 
-**Undeployed metrics ≈ zero cost**: all 15 rule packs are preloaded; a pack with no deployed exporter evaluates in < 1 ms (empty-vector compute ≈ O(1)). Customers **don't need to select rule packs** — install them all; unused packs add almost nothing to Prometheus overhead.
+**Undeployed metrics ≈ zero cost**: all 16 rule packs are preloaded; a pack with no deployed exporter evaluates in < 1 ms (empty-vector compute ≈ O(1)). Customers **don't need to select rule packs** — install them all; unused packs add almost nothing to Prometheus overhead.
 
 | Rule pack | State | Rules | Eval time |
 |---|:-:|---:|---:|

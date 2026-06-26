@@ -37,6 +37,7 @@ lang: en
 | `docs/adr/023-write-plane-single-writer-invariant.md` | Platform Engineers, contributors | ADR-023: tenant-api 寫入平面 — 單一寫者不變式 |
 | `docs/adr/024-version-aware-threshold-via-dimensional-label.md` (.en.md) | Platform Engineers, contributors, SREs | ADR-024: Declarative Dimensional Alerting Engine — Version-Aware Thresholds + Custom Alerts |
 | `docs/adr/025-alerting-plane-self-liveness.md` (.en.md) | Platform Engineers, SREs, contributors | ADR-025: Alerting-Plane Self-Liveness — Detecting When the Alerting System Itself Dies |
+| `docs/adr/026-node-maintenance-liveness-suppression.md` | Platform Engineers, SREs | ADR-026: Node/Cluster 維護告警抑制 — 不需要子系統 |
 | `docs/api/README.md` (.en.md) | Platform Engineers, SREs | Threshold Exporter API Reference |
 | `docs/api/tenant-api-hardening.md` (.en.md) | platform-ops, sre, security | Tenant API Hardening (v2.8.0) |
 | `docs/architecture-and-design.md` (.en.md) | Platform Engineers, SREs, decision-maker | Architecture and Design — Multi-Tenant Dynamic Alerting Platform Technical Whitepaper |
@@ -47,6 +48,7 @@ lang: en
 | `docs/design/config-driven.md` (.en.md) | Platform Engineers, DevOps | Config-Driven Architecture Design — Three-State Config, Dynamic Routing, Tenant API |
 | `docs/design/high-availability.md` (.en.md) | Platform Engineers, DevOps | High Availability (HA) Design — Replicas, PDB, Preventing Double-Counting |
 | `docs/design/README.md` (.en.md) | Platform Engineers, DevOps | Design Deep-Dives — Architecture spoke documents |
+| `docs/design/recipe-would-fire-preview.md` (.en.md) | Platform Engineers, Domain Experts (DBA), SREs | Recipe Would-Fire Preview Design — confirm an alert fires, right in the form |
 | `docs/design/roadmap-future.md` (.en.md) | Platform Engineers, DevOps | Future Roadmap — K8s Operator, Design System, Auto-Discovery, and More |
 | `docs/design/rule-packs.md` (.en.md) | Platform Engineers, DevOps | Rule Packs & Projected Volume Architecture |
 | `docs/design/runtime-canary.md` (.en.md) | Platform Engineers, SREs | Runtime Canary Design — end-to-end liveness for the custom-alert compile pipeline |
@@ -74,6 +76,7 @@ lang: en
 | `docs/integration/README.md` (.en.md) | Platform Engineers, SREs, DevOps | Integration Guides — Choose by your existing monitoring stack |
 | `docs/integration/synthetic-probe-interop.md` (.en.md) | Platform Engineers, SREs | Synthetic-Probe Interop — verify end-to-end delivery with your own prober |
 | `docs/integration/tenant-federation.md` | Platform Engineers, SREs | Tenant Federation Integration Guide |
+| `docs/integration/tenant-log-query.md` | Platform Engineers, SREs | Tenant Log Query Integration Guide |
 | `docs/integration/troubleshooting-checklist.md` (.en.md) | SREs, on-call, Platform Engineers, migration-engineers | Troubleshooting Checklist |
 | `docs/integration/victoriametrics-integration.md` (.en.md) | Platform Engineers, SREs, vm-operators | VictoriaMetrics Integration Guide |
 | `docs/interactive-tools.md` (.en.md) | All | Interactive Tools |
@@ -104,6 +107,6 @@ lang: en
 | `docs/internal/doc-map.en.md` | AI Agent | This file (documentation map) |
 | `docs/internal/tool-map.en.md` | AI Agent | Tool map (auto-generated) |
 | `docs/schemas/tenant-config.schema.json` | All | Tenant YAML JSON Schema (VS Code autocomplete) |
-| `rule-packs/README.md` | All | 15 Rule Packs + optional unload |
+| `rule-packs/README.md` | All | 16 Rule Packs + optional unload |
 | `rule-packs/ALERT-REFERENCE.md (.en.md)` | Tenants, SREs | 96 Alert definitions + recommended actions |
 | `k8s/03-monitoring/dynamic-alerting-overview.json` | SRE | Grafana Dashboard |
