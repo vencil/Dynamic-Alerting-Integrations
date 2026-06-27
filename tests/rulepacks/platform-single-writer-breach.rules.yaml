@@ -18,6 +18,10 @@ groups:
           max by (namespace, deployment) (
             kube_deployment_spec_replicas{namespace="tenant-api", deployment="tenant-api"}
           ) > 1
+          or
+          max by (namespace, deployment) (
+            kube_deployment_status_replicas{namespace="tenant-api", deployment="tenant-api"}
+          ) > 1
         for: 2m
         labels:
           severity: critical

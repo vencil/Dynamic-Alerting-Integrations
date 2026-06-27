@@ -12,6 +12,13 @@
 #      drift does not page.
 #   4) FIRES at 3 replicas (the HPA / autoscaler vector) — any value > 1 is a breach,
 #      not just exactly 2.
+#   5) FIRES on a spec/status DIVERGENCE: spec_replicas stays 1 but status_replicas
+#      runs 2 (a node-eviction replacement racing a stuck-Terminating pod). Cases 1-4
+#      exercise the SPEC arm (intent); case 5 exercises the STATUS arm (reality) — the
+#      `or` of the two gauges is what catches an actual-running-pod breach the spec
+#      arm alone would miss. (The network-partition ghost pod is NOT testable here and
+#      NOT claimed: KSM reads control-plane state, which can't see a partitioned node —
+#      that residual is what L3 Lease+fencing closes, see the rule comment.)
 # Evaluated at 1m resolution so the `for: 2m` window is cheap and exact.
 # Run: promtool test rules tests/rulepacks/platform-single-writer-breach_test.yaml
 rule_files:
@@ -84,6 +91,30 @@ tests:
         values: '3+0x9'
     alert_rule_test:
       - eval_time: 5m
+        alertname: TenantApiSingleWriterBreach
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              namespace: tenant-api
+              deployment: tenant-api
+            exp_annotations:
+              summary: "tenant-api running >1 replica — single-writer invariant (ADR-023) breached at runtime"
+
+  # 5) Spec/status DIVERGENCE (eviction/ghost-pod class): spec stays 1 (no breach by
+  #    intent) but status runs 2 (actual pods) → the STATUS arm fires. Proves the `or`
+  #    catches a real running-pod breach the spec arm alone would miss.
+  - interval: 1m
+    name: spec-clean-status-divergence-fires
+    input_series:
+      - series: 'kube_deployment_spec_replicas{namespace="tenant-api", deployment="tenant-api", job="kube-state-metrics", instance="10.0.0.5:8080"}'
+        values: '1+0x9'              # spec pinned at 1 → spec arm never fires
+      - series: 'kube_deployment_status_replicas{namespace="tenant-api", deployment="tenant-api", job="kube-state-metrics", instance="10.0.0.5:8080"}'
+        values: '2+0x9'              # but 2 pods actually running → status arm fires
+    alert_rule_test:
+      - eval_time: 1m               # pending (for: 2m not elapsed) → no page yet
+        alertname: TenantApiSingleWriterBreach
+        exp_alerts: []
+      - eval_time: 3m               # for elapsed → FIRES via the status arm
         alertname: TenantApiSingleWriterBreach
         exp_alerts:
           - exp_labels:

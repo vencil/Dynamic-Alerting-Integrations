@@ -117,7 +117,7 @@ ADR-023 single-writer invariant violated: tenant-api replicaCount=2 but MUST be 
 **負面 / 待審視**
 
 - 寫平面是顯式 SPOF。代價是部署期短暫不可用，直到 Lease 落地。
-- 執行期改副本數的向量（`kubectl scale`／KEDA-runtime／GitOps patch）L1/L2 擋不到——這是**已知殘留風險**。預防仍只有 L3 Lease（延後），但**偵測**已補上：alert `TenantApiSingleWriterBreach`（severity `critical`，`kube_deployment_spec_replicas{...tenant-api} > 1`、`for: 2m`）一旦 live Deployment 宣告 >1 副本即 page，把殘留風險從「等資料毀損事故才知道」變成 leading 訊號（詳 §5.7）。
+- 執行期改副本數的向量（`kubectl scale`／KEDA-runtime／GitOps patch）L1/L2 擋不到——這是**已知殘留風險**。預防仍只有 L3 Lease（延後），但**偵測**已補上：alert `TenantApiSingleWriterBreach`（severity `critical`，`kube_deployment_spec_replicas` **或** `kube_deployment_status_replicas` `{...tenant-api} > 1`、`for: 2m`）一旦 live Deployment 的宣告副本**或實際運行 pod** >1 即 page，把殘留風險從「等資料毀損事故才知道」變成 leading 訊號。**誠實邊界**：兩 gauge 皆讀 control-plane 狀態，擋不住網路分割的 ghost pod（被分割節點對 control plane 隱形）——此殘留唯 L3 Lease+push fencing 可封（詳 §5.7）。
 - 多一個運維旋鈕 `TA_GIT_FETCH_TIMEOUT`，需文件化它與 `TENANT_API_GIT_TIMEOUT` 的分工。
 
 ## Deferred（附 re-evaluation trigger）
