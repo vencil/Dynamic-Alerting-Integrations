@@ -28,7 +28,15 @@ tests:
       - series: 'kube_deployment_spec_replicas{namespace="tenant-api", deployment="tenant-api", job="kube-state-metrics", instance="10.0.0.5:8080"}'
         values: '2+0x9'              # 2 replicas for t0..t9
     alert_rule_test:
-      - eval_time: 5m               # true since t0 → pending 2m → firing well before 5m
+      # At 1m the breach is already true (t0..t1) but `for: 2m` has NOT elapsed →
+      # still PENDING, must NOT page. Load-bearing guard for `for`: a missing/zero
+      # `for` would fire here, so this eval pins the debounce delay.
+      - eval_time: 1m
+        alertname: TenantApiSingleWriterBreach
+        exp_alerts: []
+      # By 3m the `for: 2m` window has elapsed → FIRING (aggregation has stripped
+      # job/instance: the alert carries only namespace/deployment).
+      - eval_time: 3m
         alertname: TenantApiSingleWriterBreach
         exp_alerts:
           - exp_labels:
@@ -50,13 +58,20 @@ tests:
         exp_alerts: []
 
   # 3) Sub-`for` transient: a 1-min spike to 2 that a GitOps self-heal reverts to 1.
-  #    The breach condition is true for only one sample (< 2m) → `for` never elapses → no page.
+  #    The breach is true for only one sample (< 2m) → `for` never elapses → no page.
   - interval: 1m
     name: transient-self-heal-no-fire
     input_series:
       - series: 'kube_deployment_spec_replicas{namespace="tenant-api", deployment="tenant-api", job="kube-state-metrics", instance="10.0.0.5:8080"}'
         values: '1 2 1 1 1 1 1 1 1 1'   # spike to 2 at t1 only, reverted to 1 at t2
     alert_rule_test:
+      # AT the spike peak (t1, value=2) the breach is momentarily true, but `for: 2m`
+      # has not elapsed → no page. A missing/zero `for` would page here on the 1-min
+      # blip — this eval is what distinguishes the debounce from no-debounce.
+      - eval_time: 1m
+        alertname: TenantApiSingleWriterBreach
+        exp_alerts: []
+      # Long resolved (reverted to 1 since t2) → still no page.
       - eval_time: 5m
         alertname: TenantApiSingleWriterBreach
         exp_alerts: []
