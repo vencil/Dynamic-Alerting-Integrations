@@ -1,0 +1,125 @@
+# promtool behavioural test for TenantApiSingleWriterBreach (ADR-023 L3 / Deferred
+# A3 / #787). Validates the codified runtime single-writer-breach contract:
+#   1) FIRES when the live Deployment declares 2 replicas, SUSTAINED past `for: 2m`
+#      — modelled with the scrape-added job/instance labels PRESENT so the test
+#      proves `max by (namespace, deployment)` collapses them to one logical series
+#      and the firing alert carries only {severity, namespace, deployment} (a raw
+#      `> 1` on the un-aggregated series would leak job/instance and, under an HA
+#      KSM, fire per-instance — this guards the silent-never-fire / label-leak trap).
+#   2) does NOT fire at the pinned, healthy single replica (the L1-guarded steady state).
+#   3) does NOT fire on a sub-`for` transient (a 1-min spike to 2 that a GitOps
+#      self-heal reverts to 1) — the `for: 2m` debounce must hold so a corrected
+#      drift does not page.
+#   4) FIRES at 3 replicas (the HPA / autoscaler vector) — any value > 1 is a breach,
+#      not just exactly 2.
+#   5) FIRES on a spec/status DIVERGENCE: spec_replicas stays 1 but status_replicas
+#      runs 2 (a node-eviction replacement racing a stuck-Terminating pod). Cases 1-4
+#      exercise the SPEC arm (intent); case 5 exercises the STATUS arm (reality) — the
+#      `or` of the two gauges is what catches an actual-running-pod breach the spec
+#      arm alone would miss. (The network-partition ghost pod is NOT testable here and
+#      NOT claimed: KSM reads control-plane state, which can't see a partitioned node —
+#      that residual is what L3 Lease+fencing closes, see the rule comment.)
+# Evaluated at 1m resolution so the `for: 2m` window is cheap and exact.
+# Run: promtool test rules tests/rulepacks/platform-single-writer-breach_test.yaml
+rule_files:
+  - platform-single-writer-breach.rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # 1) Sustained 2-replica breach WITH scrape labels present → FIRES after `for: 2m`,
+  #    and the aggregation strips job/instance (alert carries only namespace/deployment).
+  - interval: 1m
+    name: sustained-two-replicas-fires
+    input_series:
+      - series: 'kube_deployment_spec_replicas{namespace="tenant-api", deployment="tenant-api", job="kube-state-metrics", instance="10.0.0.5:8080"}'
+        values: '2+0x9'              # 2 replicas for t0..t9
+    alert_rule_test:
+      # At 1m the breach is already true (t0..t1) but `for: 2m` has NOT elapsed →
+      # still PENDING, must NOT page. Load-bearing guard for `for`: a missing/zero
+      # `for` would fire here, so this eval pins the debounce delay.
+      - eval_time: 1m
+        alertname: TenantApiSingleWriterBreach
+        exp_alerts: []
+      # By 3m the `for: 2m` window has elapsed → FIRING (aggregation has stripped
+      # job/instance: the alert carries only namespace/deployment).
+      - eval_time: 3m
+        alertname: TenantApiSingleWriterBreach
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              namespace: tenant-api
+              deployment: tenant-api
+            exp_annotations:
+              summary: "tenant-api running >1 replica — single-writer invariant (ADR-023) breached at runtime"
+
+  # 2) Healthy pinned single replica all the way → never > 1 → no fire.
+  - interval: 1m
+    name: single-replica-no-fire
+    input_series:
+      - series: 'kube_deployment_spec_replicas{namespace="tenant-api", deployment="tenant-api", job="kube-state-metrics", instance="10.0.0.5:8080"}'
+        values: '1+0x9'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: TenantApiSingleWriterBreach
+        exp_alerts: []
+
+  # 3) Sub-`for` transient: a 1-min spike to 2 that a GitOps self-heal reverts to 1.
+  #    The breach is true for only one sample (< 2m) → `for` never elapses → no page.
+  - interval: 1m
+    name: transient-self-heal-no-fire
+    input_series:
+      - series: 'kube_deployment_spec_replicas{namespace="tenant-api", deployment="tenant-api", job="kube-state-metrics", instance="10.0.0.5:8080"}'
+        values: '1 2 1 1 1 1 1 1 1 1'   # spike to 2 at t1 only, reverted to 1 at t2
+    alert_rule_test:
+      # AT the spike peak (t1, value=2) the breach is momentarily true, but `for: 2m`
+      # has not elapsed → no page. A missing/zero `for` would page here on the 1-min
+      # blip — this eval is what distinguishes the debounce from no-debounce.
+      - eval_time: 1m
+        alertname: TenantApiSingleWriterBreach
+        exp_alerts: []
+      # Long resolved (reverted to 1 since t2) → still no page.
+      - eval_time: 5m
+        alertname: TenantApiSingleWriterBreach
+        exp_alerts: []
+
+  # 4) HPA / autoscaler vector: 3 replicas sustained → FIRES (any value > 1 is a breach).
+  - interval: 1m
+    name: three-replicas-hpa-fires
+    input_series:
+      - series: 'kube_deployment_spec_replicas{namespace="tenant-api", deployment="tenant-api", job="kube-state-metrics", instance="10.0.0.5:8080"}'
+        values: '3+0x9'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: TenantApiSingleWriterBreach
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              namespace: tenant-api
+              deployment: tenant-api
+            exp_annotations:
+              summary: "tenant-api running >1 replica — single-writer invariant (ADR-023) breached at runtime"
+
+  # 5) Spec/status DIVERGENCE (eviction/ghost-pod class): spec stays 1 (no breach by
+  #    intent) but status runs 2 (actual pods) → the STATUS arm fires. Proves the `or`
+  #    catches a real running-pod breach the spec arm alone would miss.
+  - interval: 1m
+    name: spec-clean-status-divergence-fires
+    input_series:
+      - series: 'kube_deployment_spec_replicas{namespace="tenant-api", deployment="tenant-api", job="kube-state-metrics", instance="10.0.0.5:8080"}'
+        values: '1+0x9'              # spec pinned at 1 → spec arm never fires
+      - series: 'kube_deployment_status_replicas{namespace="tenant-api", deployment="tenant-api", job="kube-state-metrics", instance="10.0.0.5:8080"}'
+        values: '2+0x9'              # but 2 pods actually running → status arm fires
+    alert_rule_test:
+      - eval_time: 1m               # pending (for: 2m not elapsed) → no page yet
+        alertname: TenantApiSingleWriterBreach
+        exp_alerts: []
+      - eval_time: 3m               # for elapsed → FIRES via the status arm
+        alertname: TenantApiSingleWriterBreach
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              namespace: tenant-api
+              deployment: tenant-api
+            exp_annotations:
+              summary: "tenant-api running >1 replica — single-writer invariant (ADR-023) breached at runtime"
