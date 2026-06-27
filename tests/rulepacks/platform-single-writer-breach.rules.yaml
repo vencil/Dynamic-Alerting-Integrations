@@ -1,0 +1,25 @@
+# Bare-rules promtool/pint target for the TenantApiSingleWriterBreach alert
+# (ADR-023 L3 / Deferred A3 / #787). promtool can't consume the deployed ConfigMap
+# directly (it needs a top-level `groups:` document, not `data: platform-alert.yml: |`),
+# so this is an EXTRACTED COPY of the alert from
+# k8s/03-monitoring/configmap-rules-platform.yaml.
+#
+# ⚠️ KEEP IN SYNC with that ConfigMap (expr + for + labels + summary — the long
+# `description` annotation is intentionally dropped here; the behavioural contract
+# is the firing logic, not the prose). The contract (FIRES on a sustained runtime
+# replicas>1 breach; NOT at the pinned single replica; NOT on a sub-`for` self-heal
+# transient; aggregation strips scrape labels so it can't silently never fire) is
+# exercised by platform-single-writer-breach_test.yaml against this file.
+groups:
+  - name: platform-self-monitoring
+    rules:
+      - alert: TenantApiSingleWriterBreach
+        expr: |
+          max by (namespace, deployment) (
+            kube_deployment_spec_replicas{namespace="tenant-api", deployment="tenant-api"}
+          ) > 1
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "tenant-api running >1 replica — single-writer invariant (ADR-023) breached at runtime"

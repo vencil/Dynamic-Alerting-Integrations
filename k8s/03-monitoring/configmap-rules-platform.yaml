@@ -583,6 +583,69 @@ data:
                 leaves writes (Save) dropping on deploy. Details:
                 docs/api/tenant-api-hardening.md §5.6. Dashboard: tenant_api_sse_clients.
 
+          # --- tenant-api single-writer RUNTIME breach (ADR-023 L3 / A3 / #787) ---
+          # The DETECTIVE control for the one residual vector ADR-023 leaves open.
+          # L1 (Helm `fail` guard + check_single_writer_invariant.py) and L2
+          # (`strategy: Recreate`) are STATIC — they bind only the config-authoring /
+          # deploy-time vector. Three paths drive replicas > 1 AFTER deploy and bypass
+          # every static check: `kubectl scale --replicas=2`, an HPA a controller
+          # (KEDA) materialises at runtime, or a GitOps controller reconciling a hand-
+          # patched `replicas` (especially when `replicas` sits under
+          # `ignoreDifferences` — a common footgun that silently defeats L1/L2). Two
+          # pods then push to the same git working tree → tree corruption + SILENT
+          # data loss (ADR-023 背景). The real fix is L3 (K8s Lease, A3 / #787),
+          # deferred until a forcing trigger. This alert IS that trigger, codified as a
+          # LEADING signal: instead of discovering the breach via a corruption incident
+          # (lagging — the worst possible discovery), it pages the moment the live
+          # Deployment declares > 1 replica, and doubles as the codified re-eval trigger
+          # for #787 (mirrors how the sibling TenantApiReadHANeeded codifies A4's).
+          #
+          # Signal: kube_deployment_spec_replicas (KSM job="kube-state-metrics"; KSM
+          # runs with NO --namespaces filter so the tenant-api namespace IS covered)
+          # for the tenant-api/tenant-api Deployment. `max by (namespace, deployment)`
+          # collapses the scrape-added job/instance labels to ONE logical series (and
+          # survives a KSM rescrape under a new instance), so a stray label can't make
+          # the `> 1` comparison silently never match — the same anti-silent-fire
+          # discipline the SSE alerts use. spec (declared) not status (observed): it is
+          # the EARLIEST signal and the exact runtime mirror of the L1 replicaCount==1
+          # guard, catching kubectl scale / HPA / GitOps-patch the instant they mutate
+          # intent. COMPLEMENTARY face (not encoded, to keep the contract single-signal
+          # + promtool-testable): kube_deployment_status_replicas > 1 (pods actually
+          # Running). `for: 2m` debounces a GitOps self-heal that reverts a manual scale
+          # within its sync loop (no page for a corrected transient) yet still pages
+          # fast on a STUCK breach — there is NO legitimate 2-replica state, so any
+          # sustained firing is real. severity critical (an ACTIVE correctness breach,
+          # unlike A4's info planning signal). Depends on KSM being up (a dead KSM is
+          # the KSM-absence alert's job, not this rule's).
+          # Behavioural contract: tests/rulepacks/platform-single-writer-breach_test.yaml.
+          - alert: TenantApiSingleWriterBreach
+            expr: |
+              max by (namespace, deployment) (
+                kube_deployment_spec_replicas{namespace="tenant-api", deployment="tenant-api"}
+              ) > 1
+            for: 2m
+            labels:
+              severity: critical
+            annotations:
+              summary: "tenant-api running >1 replica — single-writer invariant (ADR-023) breached at runtime"
+              description: |
+                The tenant-api Deployment declares more than one replica
+                ({{ $value }}). The write plane is a SINGLE WRITER by design
+                (ADR-023): a per-process write lock + in-memory PR tracker that do NOT
+                coordinate across pods, so two replicas push to the same git working
+                tree → tree corruption + silent data loss. The static guards (Helm
+                `fail` + check_single_writer_invariant.py lint, `strategy: Recreate`)
+                bind only deploy-time config; THIS is a runtime breach — a
+                `kubectl scale`, an HPA, or a GitOps controller reconciling a patched
+                `replicas`. ACTION NOW: scale back to one
+                (`kubectl -n tenant-api scale deploy/tenant-api --replicas=1`) and find
+                what set it — check `kubectl get events`, the GitOps app's sync history
+                / an `ignoreDifferences` on replicas, and any HPA targeting tenant-api.
+                This alert is ALSO the codified re-eval trigger for the deferred K8s
+                Lease (ADR-023 Deferred A3 / #787): if multi-writer is now a real
+                operational need, build leader-election — do NOT raise replicaCount.
+                Details: docs/api/tenant-api-hardening.md §5.7.
+
           # --- Tenant-exporter liveness: catastrophic fallback (#869) ---
           # Per-tenant TenantExporterAbsent (rule-pack-liveness.yaml) anti-joins
           # tenant_expected_exporter (LHS) against up==1. If the WHOLE

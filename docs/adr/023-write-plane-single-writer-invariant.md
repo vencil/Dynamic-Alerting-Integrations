@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: tenant-api
 created_at: 2026-05-30
-updated_at: 2026-06-25
+updated_at: 2026-06-27
 ---
 # ADR-023: tenant-api 寫入平面 — 單一寫者不變式
 
@@ -117,12 +117,12 @@ ADR-023 single-writer invariant violated: tenant-api replicaCount=2 but MUST be 
 **負面 / 待審視**
 
 - 寫平面是顯式 SPOF。代價是部署期短暫不可用，直到 Lease 落地。
-- 執行期改副本數的向量（`kubectl scale`／KEDA-runtime／GitOps patch）L1/L2 擋不到——這是**已知殘留風險**，由 L3 的 trigger 控管。
+- 執行期改副本數的向量（`kubectl scale`／KEDA-runtime／GitOps patch）L1/L2 擋不到——這是**已知殘留風險**。預防仍只有 L3 Lease（延後），但**偵測**已補上：alert `TenantApiSingleWriterBreach`（severity `critical`，`kube_deployment_spec_replicas{...tenant-api} > 1`、`for: 2m`）一旦 live Deployment 宣告 >1 副本即 page，把殘留風險從「等資料毀損事故才知道」變成 leading 訊號（詳 §5.7）。
 - 多一個運維旋鈕 `TA_GIT_FETCH_TIMEOUT`，需文件化它與 `TENANT_API_GIT_TIMEOUT` 的分工。
 
 ## Deferred（附 re-evaluation trigger）
 
-- **K8s Lease 分散式寫入鎖（A3，[#787](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/787)）** — 雙重動機：(1) 寫入部署需 zero-downtime 成硬需求；(2) 執行期多寫者向量（`kubectl scale`／KEDA／GitOps patch）需根治。任一觸發即開工。
+- **K8s Lease 分散式寫入鎖（A3，[#787](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/787)）** — 雙重動機：(1) 寫入部署需 zero-downtime 成硬需求；(2) 執行期多寫者向量（`kubectl scale`／KEDA／GitOps patch）需根治。任一觸發即開工。trigger (2) 已從「等事故」升為 **leading 偵測**：alert `TenantApiSingleWriterBreach`（critical、page）在 live Deployment 副本 >1 時即觸發，本身即 #787 的 codify re-eval trigger（對稱於 A4 的 `TenantApiReadHANeeded`；詳 [tenant-api-hardening §5.7](../api/tenant-api-hardening.md)、behavioural contract `tests/rulepacks/platform-single-writer-breach_test.yaml`）。屆時實作走 Lease／leader-election，**勿**抬高 replicaCount。doing-it-right 須在 push 路徑帶 fencing（git `--force-with-lease`／ref-CAS）以防 GC-pause／網路分割下舊 leader 仍完成 in-flight push（leaderelection 只 gate serve、不 fence push）。
 - **讀寫拆分部署（A4，[#678](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/678) / [#788](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/788)，已關閉、defer 不變）** — issue 不留 open：「讀取 HA 是需求」前提目前無 field data 驗證（讀路徑為低頻 admin UI），留 open 只會變 zombie。觸發改 **codify 成自觸發 alert** `TenantApiReadHANeeded`（`k8s/03-monitoring/configmap-rules-platform.yaml`，severity `info`、不 page）：`tenant_api_sse_clients` **7d 平均並發 > 2**（取平均非峰值＝持續多人讀取面，非單日尖峰；另加 `count_over_time(...) >= 150` 守 cold-start，fresh deploy 的 partial 視窗不誤觸；互補可看 `rate(tenant_api_requests_total)`）即「讀取 HA 成真實需求」→ reopen 本項實作。前提：binary 新增 read-only enforcement + method 路由。**⚠️ A4 只買讀 zero-downtime，寫路徑（Save）發版仍中斷，須與 A3 同排、勿單獨出。** 行為契約 `tests/rulepacks/platform-read-ha-trigger_test.yaml`。
 - **寫入水平擴展** — 觸發：單寫者吞吐量成實測瓶頸。走 Lease，不放寬單鎖。
 - **寫入依優先級分流：真人即時操作優先於機器批次（[#746](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/746)，2026-06-24 暫緩、附重啟條件）** — 構想是讓真人在 Portal 上的即時設定永遠插到機器的大量背景寫入前面（機器寫入切成小段，一發現有人要寫就讓出）。
@@ -139,7 +139,7 @@ ADR-023 single-writer invariant violated: tenant-api replicaCount=2 but MUST be 
 | 寫入前鎖內 fetch 最新 base + `TA_GIT_FETCH_TIMEOUT` | ✅ | [#671](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/671) |
 | forge secondary-rate-limit 熔斷 + 尊重 `Retry-After` | ✅ | [#672](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/672) |
 | 過載卸載 + context 綁排隊（`TA_WRITE_QUEUE_DEPTH`） | ✅ | [#673](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/673) |
-| K8s Lease（A3）／讀寫拆分（A4） | deferred（A4 已 codify re-trigger alert `TenantApiReadHANeeded`） | [#787](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/787)／[#678](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/678)·[#788](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/788)（closed） |
+| K8s Lease（A3）／讀寫拆分（A4） | deferred（A3 已 codify 偵測+re-trigger alert `TenantApiSingleWriterBreach`；A4 已 codify re-trigger alert `TenantApiReadHANeeded`） | [#787](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/787)／[#678](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/678)·[#788](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/788)（closed） |
 
 每筆的詳細實作敘述見對應 PR；本 ADR 只保留決策與理由。
 
