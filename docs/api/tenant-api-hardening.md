@@ -279,6 +279,12 @@ SSE Hub 廣播是 **at-most-once**：per-client buffer 16（`internal/ws/hub.go:
 - **任何** reconnect（`server_shutdown` 重連、網路斷線重連、分頁喚醒）後，前端**必須主動** `GET /api/v1/tenants/<id>` 拉 authoritative state，**不得**把重連空窗錯過的廣播當資料遺失、亦不得卡在「儲存中…」spinner 等一則可能永不到達的廣播。
 - Save 的成敗以該請求的 HTTP 回應為準；UI 一致性以 reconnect 後的 GET 為準。
 
+**重連韌性（契約硬條款，外部對抗 review 補強）**：
+- **Exponential backoff + jitter（防 thundering herd）**：reconnect **與其後的 `GET`** 一律帶退避加抖動（`delay = base·2^retry + random(0,1s)`），**不得**斷線瞬間 `reconnect()`。deploy 場景已由 §5.6 的 `server_shutdown` → `reconnect_delay_ms` + client jitter hint 覆蓋；本條把同一紀律推及**所有**重連成因——**網路斷線 / 分頁喚醒收不到 server hint，且 EventSource 原生重連是固定間隔、非退避**。否則一次 rollout 會讓 N 個分頁同毫秒重連 + `GET`、自我 DDoS。
+- **Heartbeat watchdog（防 TCP half-open 假死）**：§5.3（#143）後端已每 `TA_SSE_HEARTBEAT`（預設 25s）送 `: keepalive`。前端**必須**據此跑 watchdog timer：逾 ~2× heartbeat（建議 60s，容一次漏接 + §5.6 proxy buffering）未收到**任何** SSE 訊息（含 keepalive）即主動視為斷線、`.close()` 後走重連 + refetch。否則 half-open 時 EventSource `readyState` 仍為 `OPEN` → 前端「自以為連著」永不重連 → 永久 stale data，繞過整個契約。
+
+**未來優化（opt-in，⚠️ 非零後端成本）**：在 SSE event payload 帶 **revision id（git commit SHA）**，前端 `if event.rev > local.rev` 才 fetch、並抑制剛 `PUT` 完的 self-echo（`onWrite` 在 commit 成功後、HTTP 200 返回**前**廣播，故剛存檔的 client 會收到自己的 echo 而多打一次 `GET`），可再砍冗餘 re-fetch。**需後端**在 `onWrite` event（現為 `Type/TenantID/TaskID/Timestamp/Detail`）加 SHA 欄位——逾越本節「零後端成本」定性，故列為對接時優化、**不**入 MVP 契約。
+
 **業界對齊**：SSE 規格上即 at-most-once（可靠重送須 `Last-Event-ID` + server-side event buffer，本服務刻意不實作）；thin-notification + re-fetch 是 webhook 正典（Stripe / GitHub：事件僅提示、狀態回 API 重抓、勿信 payload 為真相）。補完 §5.6 已註的「前端 jitter 重連屬 Portal 對接 future work」—— 本節即該前端契約的內容。
 
 **Scope（#674 分半）**：本節是 #674 的**第 1 半（前端契約，零後端成本、correct-by-design）**。**第 2 半**後端 replay（`Last-Event-ID` / 序號 / event buffer）維持 defer；⚠️ 本契約一旦落地，第 2 半 trigger 即**結構性不可達**（at-most-once 遺失不再有業務後果）→ 屆時轉 close-with-reopen-trigger。對齊 §5.6 `TenantApiReadHANeeded` / §5.7 `TenantApiSingleWriterBreach` 的 codify-trigger 紀律。**狀態**：契約已訂；前端落地隨 Portal 對接（目前無 SSE consumer）。
