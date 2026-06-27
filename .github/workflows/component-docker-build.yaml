@@ -135,4 +135,8 @@ jobs:
           exit-code: 0
           severity: CRITICAL,HIGH
           ignore-unfixed: true
+          # recipe-preview: waive evidence-backed bundled-promtool CVEs so PR-time
+          # output matches the release gate (components/recipe-preview/.trivyignore.yaml
+          # + promtool.openvex.json). Empty → no-op for the other components.
+          trivyignores: ${{ matrix.name == 'recipe-preview' && 'components/recipe-preview/.trivyignore.yaml' || '' }}
         continue-on-error: true

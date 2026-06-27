@@ -136,6 +136,12 @@ jobs:
           severity: CRITICAL,HIGH
           ignore-unfixed: true
           exit-code: 0
+          # recipe-preview: apply the SAME evidence-backed waiver as the release gate
+          # so the #895 tracking issue reflects the governed posture (these 11 bundled-
+          # promtool CVEs are handled, not unhandled noise). NEW promtool CVEs or
+          # EXPIRED entries are NOT in the file → they still surface here (early warning
+          # preserved). Empty → no-op for the other 4 self-built images.
+          trivyignores: ${{ matrix.name == 'recipe-preview' && 'components/recipe-preview/.trivyignore.yaml' || '' }}
 
       # Shared fail-loud summarizer → emits frag-<name>.txt for the report job.
       # Same script as the scan-thirdparty job (one implementation, not two).

@@ -287,7 +287,7 @@ _GIT_SHA = os.environ.get("GIT_SHA", "unknown")
 
 def main():
     # §6 #5: record the promtool version at startup — the firing/inactive
-    # verdict contract is version-bound (baseline 2.53.2).
+    # verdict contract is version-bound (baseline 3.12.0).
     sys.stderr.write(
         f"recipe-preview listening on {LISTEN_HOST}:{LISTEN_PORT} "
         f"(promtool: {_PROMTOOL_VERSION}, git-sha: {_GIT_SHA}, "

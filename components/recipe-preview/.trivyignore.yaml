@@ -1,0 +1,70 @@
+# Trivy ignore / VEX-style risk register — bundled promtool binary only.
+#
+# recipe-preview is a PYTHON service; ALL of these HIGH findings live in the
+# Prometheus `promtool` Go binary it bundles (PROM_VERSION pinned in the
+# Dockerfile), NOT in any first-party code. They cannot be cleared by a
+# first-party dependency bump.
+#
+# EVIDENCE: govulncheck (binary-mode, real call-graph) against the actual
+# promtool v3.12.0 binary — committed alongside as ./promtool.openvex.json.
+# Regenerate after any promtool re-pin:
+#   docker create --name t <recipe-preview-image>; docker cp t:/usr/local/bin/promtool ./promtool
+#   govulncheck -mode binary -format openvex ./promtool > components/recipe-preview/promtool.openvex.json
+#
+# GOVERNANCE: per-CVE, each with an expiry. Re-validate against a fresh
+# govulncheck run whenever PROM_SHA256 changes (promtool re-pin) or an entry
+# expires. This is consumed by the release.yaml + nightly-image-scan Trivy
+# steps via the `trivyignores:` input. The hard gate (exit-code 1) is unchanged
+# — only these evidence-backed, time-boxed entries are waived.
+
+vulnerabilities:
+  # ── Group A — golang.org/x/crypto/ssh — NOT AFFECTED ────────────────────────
+  # govulncheck verdict: not_affected / vulnerable_code_not_present. promtool is
+  # a rule-linting CLI; it opens no SSH, so the Go linker dead-code-eliminates
+  # x/crypto/ssh out of the binary entirely (the symbols are not even present).
+  # Strongest justification class. Expiry 90d → re-confirm on next promtool re-pin.
+  - id: CVE-2026-39827
+    statement: "promtool: x/crypto/ssh DCE'd out of binary — govulncheck not_affected/vulnerable_code_not_present (promtool.openvex.json)"
+    expired_at: 2026-09-25
+  - id: CVE-2026-39828
+    statement: "promtool: x/crypto/ssh not present in binary — govulncheck not_affected/vulnerable_code_not_present"
+    expired_at: 2026-09-25
+  - id: CVE-2026-39829
+    statement: "promtool: x/crypto/ssh not present in binary — govulncheck not_affected/vulnerable_code_not_present"
+    expired_at: 2026-09-25
+  - id: CVE-2026-39830
+    statement: "promtool: x/crypto/ssh not present in binary — govulncheck not_affected/vulnerable_code_not_present"
+    expired_at: 2026-09-25
+  - id: CVE-2026-39832
+    statement: "promtool: x/crypto/ssh/agent not present in binary — govulncheck not_affected/vulnerable_code_not_present"
+    expired_at: 2026-09-25
+  - id: CVE-2026-39835
+    statement: "promtool: x/crypto/ssh not present in binary — govulncheck not_affected/vulnerable_code_not_present"
+    expired_at: 2026-09-25
+  - id: CVE-2026-42508
+    statement: "promtool: x/crypto/ssh/knownhosts not present in binary — govulncheck not_affected/vulnerable_code_not_present"
+    expired_at: 2026-09-25
+  - id: CVE-2026-46595
+    statement: "promtool: x/crypto/ssh not present in binary — govulncheck not_affected/vulnerable_code_not_present"
+    expired_at: 2026-09-25
+  - id: CVE-2026-46597
+    statement: "promtool: x/crypto/ssh not present in binary — govulncheck not_affected/vulnerable_code_not_present"
+    expired_at: 2026-09-25
+
+  # ── Group B — Go stdlib (crypto/x509, mime/textproto) — RISK ACCEPTANCE ──────
+  # govulncheck verdict: AFFECTED (reachable — promtool query/push use TLS+HTTP).
+  # This is NOT a not_affected claim. It is a time-boxed risk acceptance:
+  # recipe-preview invokes ONLY offline `promtool check rules` + `test rules`
+  # (_recipe_preview.py:332/342) — no TLS handshake, no MIME parsing — so the
+  # affected x509-hostname-verify / MIME-decode paths are never exercised by this
+  # service. Both are DoS / quadratic-complexity (not RCE). Fixed in Go 1.26.4 /
+  # 1.25.11; promtool v3.12.0 was built with Go 1.26.3.
+  # TRIGGER (delete these two entries): bump PROM_VERSION once Prometheus ships a
+  # 3.12.x patch / 3.13.0 GA built with Go >= 1.26.4 (prometheus/golang-builder is
+  # already on 1.26.4 — next routine release inherits it). Expiry 60d (short).
+  - id: CVE-2026-27145
+    statement: "stdlib crypto/x509: reachable in promtool but recipe-preview runs only offline check/test rules (no TLS); fixed Go 1.26.4, promtool built 1.26.3; risk-accepted until upstream Go>=1.26.4 rebuild"
+    expired_at: 2026-08-26
+  - id: CVE-2026-42504
+    statement: "stdlib mime/textproto: reachable in promtool but recipe-preview runs only offline check/test rules (no MIME); fixed Go 1.26.4, promtool built 1.26.3; risk-accepted until upstream Go>=1.26.4 rebuild"
+    expired_at: 2026-08-26
