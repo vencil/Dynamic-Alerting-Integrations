@@ -23,12 +23,19 @@ Scope (honest boundary)
     epsilon)** against the `exp_samples` golden — this is where numeric divergence
     (`rate()` extrapolation, division) is caught. The positive-control test also
     proves the value/epsilon path end-to-end.
-- OUT of scope (NOT a gap — a different layer):
-  * `for:` duration + alert templating → the rule *evaluator*'s job (Prometheus /
-    vmalert), identical regardless of storage backend.
+- Covered by the SIBLING gate (test_vm_alert_parity.py), NOT here:
+  * `for:` duration + range-function evaluation → the rule *evaluator*'s job
+    (promtool / vmalert). This was assumed "identical regardless of storage backend"
+    — EMPIRICALLY FALSE: MetricsQL's range-function cold-start semantics (changes() /
+    rate() while the window still predates the series' first sample) feed the `for:`
+    timer differently, so an alert can fire ~10m late (or spuriously) on vmalert. Now
+    gated by test_vm_alert_parity.py (FULL fixture set on the vmalert MetricsQL engine,
+    fire/no-fire) + vm_deviation_catalog.yaml. Worked example: TenantHAReplicasDegraded.
   * staleness / `absence`-over-real-gaps + `predict_linear` temporal semantics →
-    need real time-series gaps, not dense fixtures. Stays deferred-with-trigger
-    (first customer integration on their own backend). See ADR-025.
+    the deferred-with-trigger condition ("first customer on their own backend") has
+    FIRED with the VictoriaMetrics-migration customers. The vmalert-tool gate covers
+    the for:/range-function layer; full real-gap staleness parity is the remaining
+    slice. See ADR-025.
 
 Reference & determinism
 -----------------------

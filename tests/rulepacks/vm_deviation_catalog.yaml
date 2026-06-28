@@ -1,0 +1,46 @@
+# VM (MetricsQL) ↔ Prometheus (PromQL) deviation catalog — SSOT for accepted engine
+# divergences in rule-pack alerting unit tests.
+#
+# WHY: Vibe rule packs are "pure PromQL", but VictoriaMetrics' MetricsQL intentionally
+# deviates from PromQL in several rollup/range functions (rate/increase/changes at series
+# cold-start, etc.). VM documents this as deliberate and explicitly does not target 100%
+# PromQL compatibility. For tenants on the VictoriaMetrics storage backend, rules evaluate
+# on vmalert (MetricsQL), so a unit test that is green on promtool (Prometheus engine) can
+# diverge on the production engine.
+#
+# GATE (tests/rulepacks/test_vm_alert_parity.py): every tests/rulepacks/*_test.yaml is run
+# through `vmalert-tool unittest` (the MetricsQL engine vmalert runs). A fixture that
+# DIVERGES (fails on vmalert-tool while green on promtool) MUST have an entry here. An
+# UNCATALOGUED divergence fails CI — that is the point. A catalogued entry that silently
+# HEALS (now passes) also fails — remove the stale entry so the catalog == reality.
+#
+# Schema per entry:
+#   fixture:     tests/rulepacks/<name>_test.yaml that diverges  (required, unique key)
+#   rules:       alert/recording rule(s) affected
+#   mechanism:   the precise MetricsQL behaviour that differs
+#   direction:   under-fire (false-negative) | over-fire (false-positive)
+#   vm_behavior: what vmalert does vs Prometheus
+#   prod_impact: real-world blast radius + any mitigating layer
+#   disposition: accept-document | fix-pending | exempt
+#   ref:         issue / doc tracking the disposition
+
+deviations:
+  - fixture: rule-pack-kubernetes-ha-replicas_test.yaml
+    rules: [TenantHAReplicasDegraded]
+    mechanism: >-
+      MetricsQL changes(X[10m]) counts the series birth as a change (returns 1, not 0)
+      while the [10m] window still extends before the first sample. The rule's
+      rollout-exclusion gate changes(kube_*_status_replicas_updated[10m]) == 0 is
+      therefore false for the first ~10m of a new series, so the :core recording rule is
+      empty and the for:15m timer never accumulates within a normal window.
+    direction: under-fire
+    vm_behavior: >-
+      Fires ~10m later than Prometheus after a series is born (new StatefulSet/Deployment,
+      kube-state-metrics restart, or a scrape gap > 10m). Verified empirically: promtool
+      fires by 16m, vmalert by ~26m. Steady-state (warm series) is identical on both.
+    prod_impact: >-
+      Transient (~25m) blind spot for a freshly-created HA workload that comes up degraded.
+      A fully-down cluster is still paged by the critical liveness layer (#875), so the
+      redundancy-lost warning being late is low severity.
+    disposition: accept-document
+    ref: docs/integration/victoriametrics-integration.md （§3.1 MetricsQL 已知限制）
