@@ -91,6 +91,18 @@ def test_malformed_allocations_registry_unreadable():
     assert v.category == gate.CAT_REGISTRY_UNREADABLE
 
 
+@pytest.mark.parametrize("bad_value", ["1000", True, 999, 1000.5, None])
+def test_malformed_registry_VALUE_is_registry_unreadable(bad_value):
+    # A registry whose VALUE is the wrong type (string "1000", bool, float) or
+    # sub-floor (<1000) is a CORRUPT registry → registry_unreadable (degrade),
+    # NOT a mismatch that would hard-fail the pod in enforce mode on an infra
+    # problem. Guards the fail-available contract for the trust-root input.
+    # (CodeRabbit #950 — comparing int accountId vs string "1000" mis-fired as
+    # mismatch.) bool is excluded explicitly because isinstance(True, int) is True.
+    v = gate.evaluate(_reg({"tenant-alpha": bad_value}), [{"tenantId": "tenant-alpha", "accountId": 1000}])
+    assert v.category == gate.CAT_REGISTRY_UNREADABLE, f"value {bad_value!r} should be registry_unreadable"
+
+
 def test_empty_projections_pass():
     v = gate.evaluate(_reg({"tenant-alpha": 1000}), [])
     assert v.ok

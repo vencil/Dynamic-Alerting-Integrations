@@ -112,6 +112,26 @@ def evaluate(registry: dict[str, Any], projections: list[dict[str, Any]]) -> Ver
             [f"registry `allocations` is {type(allocations).__name__}, want a mapping"],
         )
 
+    # A registry whose ENTRIES are malformed (non-str tenant, or a non-int / bool
+    # / sub-floor accountId) is a corrupt/untrustworthy registry, NOT a config
+    # mismatch: comparing a projection's int accountId against e.g. a string
+    # "1000" would otherwise mis-fire as CAT_MISMATCH and hard-fail the pod in
+    # enforce mode, violating fail-available. Treat it as registry_unreadable →
+    # degrade (mirrors the Go account.Parse fail-closed-on-corrupt posture).
+    malformed = [
+        f"{tenant_id!r}: {account_id!r}"
+        for tenant_id, account_id in allocations.items()
+        if not isinstance(tenant_id, str)
+        or not isinstance(account_id, int)
+        or isinstance(account_id, bool)
+        or account_id < _FIRST_TENANT_ACCOUNT_ID
+    ]
+    if malformed:
+        return Verdict(
+            CAT_REGISTRY_UNREADABLE,
+            [f"registry `allocations` has malformed entries (want str→int>={_FIRST_TENANT_ACCOUNT_ID}): {', '.join(malformed)}"],
+        )
+
     violations: list[str] = []
     for i, p in enumerate(projections):
         if not isinstance(p, dict):

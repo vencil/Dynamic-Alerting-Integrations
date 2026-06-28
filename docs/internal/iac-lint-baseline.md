@@ -51,7 +51,7 @@ Critical → BLOCK 的最後一哩是 GitHub branch protection 的 required stat
 
 epic #448 的 hybrid policy：**既有 open-source engine 優先 + Vibe wrapper 疊專案政策**（severity / 中央 exemption / scope），取代 DIY-only `check_*.py` 的 reactive whack-a-mole（**僅 greenfield 套用**，不回頭遷移既有 ~50 支）。規範同步於 [`dev-rules.md` §安全紀律](dev-rules.md) + `CLAUDE.md`。
 
-**總帳（against `main` HEAD，2026-05-24）—— AC 7：0 Critical（必須）達成 ✅**：
+**總帳（against `main` HEAD，2026-06-28）—— AC 7：0 Critical（必須）達成 ✅**：
 
 | Layer | 工具 | engine | scope | Critical | baseline-High | INFO |
 |---|---|---|---|---:|---:|---:|
