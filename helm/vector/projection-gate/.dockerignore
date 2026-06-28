@@ -1,0 +1,12 @@
+# Container SAST baseline — epic #448 / TRK-311 (Layer 1).
+# Build context: helm/vector/projection-gate/. The Dockerfile COPYs only
+# verify_tenant_projections.py from this context, so this baseline is a uniform
+# hygiene floor that also keeps any stray .env / *.log out of the context upload.
+/.git/
+/.github/
+/scripts/
+/tests/
+/docs/
+*.md
+*.log
+.env*
