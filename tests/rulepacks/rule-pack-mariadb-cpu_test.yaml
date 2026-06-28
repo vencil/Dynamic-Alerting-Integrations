@@ -194,3 +194,13 @@ tests:
         exp_samples:
           - labels: '{tenant="db-osc"}'
             value: 1
+      # (3) …and MariaDBHighCPU actually FIRES end-to-end for db-osc (so a rule rewired to read
+      #     the RAW gauge, not just the recording rule, still fails here). `count()` keeps it both
+      #     deterministic (1 regardless of which tick's avg the alert reads) AND backend-portable:
+      #     it collapses the promtool↔vmalert ALERTS label-set difference (vmalert adds
+      #     `alertgroup`, even with --disableAlertgroupLabel). Raw-gauge revert → silent → count≠1.
+      - expr: 'count(ALERTS{alertname="MariaDBHighCPU", tenant="db-osc", alertstate="firing"})'
+        eval_time: 6m
+        exp_samples:
+          - labels: '{}'
+            value: 1
