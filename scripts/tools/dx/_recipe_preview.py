@@ -201,7 +201,7 @@ def classify_promtool_result(returncode, output):
     "firing" would be a false positive (the exact false-confidence the design
     forbids). So FIRING requires the alert-mismatch signature promtool prints
     when an alert fires against our empty expectation — `FAILED:` plus a
-    non-empty `got:` block (verified verbatim on promtool 2.53.2). Anything
+    non-empty `got:` block (verified verbatim on promtool 3.12.0). Anything
     else with rc != 0 is an infrastructure/parse error → `error`.
 
       rc == 0                      → inactive (nothing fired)

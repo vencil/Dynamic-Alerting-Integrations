@@ -143,7 +143,7 @@ Two details that must be followed (skip them and the answer is wrong):
 
 To make sure a compile failure is never mislabeled as "fired", gate in three layers: ① the compiler raises on a bad recipe → `error`; ② the compiled rules first pass `promtool check rules` (syntax) → failure is `error`; ③ only after syntax passes do we run the proof-by-contradiction above.
 
-> Verified locally (`promtool` 2.53.2): value 1500 > threshold 1000 → failure, output carries the full alert; value 500 → success. The whole thing uses existing tools — no separate Prometheus instance needed.
+> Verified locally (`promtool` 3.12.0): value 1500 > threshold 1000 → failure, output carries the full alert; value 500 → success. The whole thing uses existing tools — no separate Prometheus instance needed.
 
 ### 5.3 Single-recipe compilation + reusing the compiler directly
 
@@ -157,7 +157,7 @@ Each `promtool` eval forks an ~1s subprocess; the preview service forks one per 
 2. **A per-request timeout** — kill `promtool` on timeout, return `error`.
 3. **Rate limiting** — per tenant, so it can't be used as an attack surface.
 4. **Interaction design** — because of the ~1s latency, no live spamming; a manual "Run preview" button + loading state.
-5. **A pinned `promtool` version** — the returncode / output format above is a version-bound contract (baseline 2.53.2); the service image pins the version and logs it at startup.
+5. **A pinned `promtool` version** — the returncode / output format above is a version-bound contract (baseline 3.12.0); the service image pins the version and logs it at startup.
 
 ## 7. Honestly mark types that aren't supported yet
 

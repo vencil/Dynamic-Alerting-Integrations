@@ -2,8 +2,8 @@
 
 The would-fire verdict (`firing` / `inactive` / `error`) is classified from
 promtool's *return code + output format*, which is version-bound:
-`_recipe_preview.classify_promtool_result` hard-codes the 2.53.x `FAILED:` /
-`got:[` markers. The recipe-preview IMAGE bundles a SHA-pinned promtool; the CI
+`_recipe_preview.classify_promtool_result` hard-codes the `FAILED:` /
+`got:[` markers (version-bound; spike-verified stable through promtool 3.12.x). The recipe-preview IMAGE bundles a SHA-pinned promtool; the CI
 rule-pack gate (`.github/workflows/ci.yml`) installs its OWN pinned promtool.
 
 If those two pins ever skew, the image could classify a verdict differently from

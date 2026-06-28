@@ -190,9 +190,9 @@ jobs:
 
       - name: Install promtool
         run: |
-          PROM_VERSION=2.53.2
-          # Pinned SHA-256 of prometheus-2.53.2.linux-amd64.tar.gz (upstream sha256sums.txt).
-          PROM_SHA256=60c126740c9cf1206b1e72150dd17914f1c3309bb7dc78a31d4670197ed4fa69
+          PROM_VERSION=3.12.0
+          # Pinned SHA-256 of prometheus-3.12.0.linux-amd64.tar.gz (upstream sha256sums.txt).
+          PROM_SHA256=20da47f8e5303f74aecb78edd7f7e39041dac08ac4939dba75efd7a900ae8867
           curl -fsSL "https://github.com/prometheus/prometheus/releases/download/v${PROM_VERSION}/prometheus-${PROM_VERSION}.linux-amd64.tar.gz" -o /tmp/p.tgz
           bash scripts/ops/_verify_download.sh /tmp/p.tgz "$PROM_SHA256"
           tar xzf /tmp/p.tgz -C /tmp

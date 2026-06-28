@@ -240,8 +240,9 @@ spec:
           breached — review running-thread load'
         platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant }}：CPU 閾值超出 —
           檢查執行緒負載'
-        description: '{{ $value }} running threads (warning threshold exceeded)'
-        description_zh: '{{ $value }} 個執行中執行緒（超過警告閾值）'
+        description: '{{ $value | printf "%.0f" }} running threads (warning threshold
+          exceeded)'
+        description_zh: '{{ $value | printf "%.0f" }} 個執行中執行緒（超過警告閾值）'
         runbook_url: '{{ $labels.runbook_url }}'
         owner: '{{ $labels.owner }}'
         tier: '{{ $labels.tier }}'
@@ -265,8 +266,9 @@ spec:
         platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant }}: critical CPU
           saturation — immediate investigation needed'
         platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant }}：CPU 飽和 — 需立即調查'
-        description: '{{ $value }} running threads (critical threshold exceeded)'
-        description_zh: '{{ $value }} 個執行中執行緒（超過嚴重閾值）'
+        description: '{{ $value | printf "%.0f" }} running threads (critical threshold
+          exceeded)'
+        description_zh: '{{ $value | printf "%.0f" }} 個執行中執行緒（超過嚴重閾值）'
         runbook_url: '{{ $labels.runbook_url }}'
         owner: '{{ $labels.owner }}'
         tier: '{{ $labels.tier }}'
