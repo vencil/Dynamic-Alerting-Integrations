@@ -10,7 +10,7 @@
           "tenant": "db-a"
         },
         {
-          "alertname": "MariaDBHighCPU",
+          "alertname": "MariaDBHighThreadsRunning",
           "severity": "warning",
           "tenant": "db-a"
         }

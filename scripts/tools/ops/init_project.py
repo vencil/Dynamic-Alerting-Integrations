@@ -134,7 +134,7 @@ RULE_PACK_CATALOG = {
         'defaults': {
             'mysql_connections': 80,
             'mysql_connections_critical': 150,
-            'mysql_cpu': 80,
+            'mysql_cpu': 30,  # running-thread saturation warning (NOT host CPU%); 80→30 PMM/Nichter (#944)
             'mysql_slow_queries': 10,
             'mysql_replication_lag': 30,
             'mysql_replication_lag_critical': 120,

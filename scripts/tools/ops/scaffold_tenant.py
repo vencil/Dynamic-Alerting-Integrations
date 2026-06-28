@@ -212,11 +212,11 @@ RULE_PACKS = {
         "rule_pack_file": "rule-packs/rule-pack-mariadb.yaml",
         "defaults": {
             "mysql_connections": {"value": 80, "unit": "count", "desc": "Max threads_connected warning"},
-            "mysql_cpu": {"value": 80, "unit": "threads", "desc": "Running threads, 1m-avg saturation (warning)"},
+            "mysql_cpu": {"value": 30, "unit": "threads", "desc": "Running-threads 1m-avg saturation warning; 80→30 = PMM/Nichter 'high' (#944). NOT host CPU% — key still mysql_cpu pending #944 key-PR"},
         },
         "optional_overrides": {
             "mysql_connections_critical": {"value": 120, "unit": "count", "desc": "Critical tier (Scenario D)"},
-            "mysql_cpu_critical": {"value": 120, "unit": "threads", "desc": "Critical tier (running-threads saturation)"},
+            "mysql_cpu_critical": {"value": 50, "unit": "threads", "desc": "Critical tier (running-threads saturation); 120→50 = PMM critical-load / Nichter 'overloaded' (#944)"},
         },
     },
     "redis": {

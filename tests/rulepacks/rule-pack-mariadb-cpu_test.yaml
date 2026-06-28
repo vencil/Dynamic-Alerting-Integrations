@@ -1,18 +1,22 @@
-# promtool unit test — mariadb CPU severity tiers (cpu_critical orphan fix).
+# promtool unit test — mariadb running-thread SATURATION severity tiers.
 # Run: promtool test rules tests/rulepacks/rule-pack-mariadb-cpu_test.yaml
 #
-# Semantic oracle for the standalone MariaDBHighCPU (warning) + MariaDBHighCPUCritical
-# (critical) alerts added to consume the previously-orphan
-# `tenant:alert_threshold:mysql_cpu_critical` recording rule (and give `cpu` warning a
-# standalone firing path, symmetric with connections). Covers, per severity:
+# Semantic oracle for the standalone MariaDBHighThreadsRunning (warning) +
+# MariaDBHighThreadsRunningCritical (critical) alerts — RENAMED from the misnamed
+# MariaDBHighCPU/Critical in #944 (they always measured threads_running, never host
+# CPU%; "CPU" was a v1.0 demo-scaffold misnomer). They consume the
+# `tenant:alert_threshold:mysql_cpu` / `:mysql_cpu_critical` recording rules (the
+# threshold KEY stays `mysql_cpu` this release — routing/config stability — and
+# renames in the #944 key-PR). Covers, per severity:
 #   - db-a: metadata present              → fires ENRICHED (branch A).
 #   - db-b: NO metadata (onboarding vacuum) → STILL fires BARE (branch B).
 #   - db-c: over threshold but maintenance  → suppressed.
 #   - db-d: below threshold                → no alert.
-# The CPU observed series is tenant:mysql_threads_running:avg1m =
+# The observed series is tenant:mysql_threads_running:avg1m =
 #   max by(tenant)(avg_over_time(mysql_global_status_threads_running[1m])). The leaf
 # mysql_global_status_threads_running is a GAUGE (concurrent threads executing — a
-# USE-method saturation proxy, NOT host CPU%), 1m-SMOOTHED before thresholding to kill
+# USE-method SATURATION proxy, NOT host CPU%; for true CPU UTILISATION see
+# PodContainerHighCPU in rule-pack-kubernetes), 1m-SMOOTHED before thresholding to kill
 # the spiky-gauge `for` reset-trap (see the 3rd test block). A stable 82 ⇒ avg = 82,
 # which the %.0f-formatted annotation renders as "82" with a "(1m avg)" qualifier.
 rule_files:
@@ -21,7 +25,7 @@ rule_files:
 evaluation_interval: 15s
 
 tests:
-  # ── Warning tier: MariaDBHighCPU (threshold cpu=50, smoothed gauge 82 > 50) ──
+  # ── Warning tier: MariaDBHighThreadsRunning (threshold cpu=50, smoothed gauge 82 > 50) ──
   - interval: 15s
     input_series:
       # db-a: 82 running threads > 50 warning, metadata present → enriched fire.
@@ -53,7 +57,7 @@ tests:
 
     alert_rule_test:
       - eval_time: 6m
-        alertname: MariaDBHighCPU
+        alertname: MariaDBHighThreadsRunning
         exp_alerts:
           # db-a: enriched (branch A) — carries runbook_url/owner/tier.
           - exp_labels:
@@ -64,10 +68,10 @@ tests:
               owner: team-a
               tier: gold
             exp_annotations:
-              summary: "High CPU on db-a"
-              summary_zh: "db-a CPU 過高"
-              platform_summary: "[gold] db-a: CPU threshold breached — review running-thread load"
-              platform_summary_zh: "[gold] db-a：CPU 閾值超出 — 檢查執行緒負載"
+              summary: "High running-thread saturation on db-a"
+              summary_zh: "db-a 執行緒飽和過高"
+              platform_summary: "[gold] db-a: running-thread saturation (threads_running, NOT host CPU%) breached — check lock waits / slow queries / IO stalls. True CPU% → PodContainerHighCPU."
+              platform_summary_zh: "[gold] db-a：執行緒飽和（threads_running，非主機 CPU%）超出 — 檢查鎖等待 / 慢查詢 / IO 停滯。真 CPU% 見 PodContainerHighCPU。"
               description: "82 running threads (1m avg, warning threshold exceeded)"
               description_zh: "82 個執行中執行緒（1m 平均，超過警告閾值）"
               runbook_url: "http://rb/a"
@@ -79,18 +83,18 @@ tests:
               metric_group: cpu
               tenant: db-b
             exp_annotations:
-              summary: "High CPU on db-b"
-              summary_zh: "db-b CPU 過高"
-              platform_summary: "[] db-b: CPU threshold breached — review running-thread load"
-              platform_summary_zh: "[] db-b：CPU 閾值超出 — 檢查執行緒負載"
+              summary: "High running-thread saturation on db-b"
+              summary_zh: "db-b 執行緒飽和過高"
+              platform_summary: "[] db-b: running-thread saturation (threads_running, NOT host CPU%) breached — check lock waits / slow queries / IO stalls. True CPU% → PodContainerHighCPU."
+              platform_summary_zh: "[] db-b：執行緒飽和（threads_running，非主機 CPU%）超出 — 檢查鎖等待 / 慢查詢 / IO 停滯。真 CPU% 見 PodContainerHighCPU。"
               description: "82 running threads (1m avg, warning threshold exceeded)"
               description_zh: "82 個執行中執行緒（1m 平均，超過警告閾值）"
               runbook_url: ""
               owner: ""
               tier: ""
-        # db-c (maintenance) and db-d (below threshold) produce NO MariaDBHighCPU alert.
+        # db-c (maintenance) and db-d (below threshold) produce NO MariaDBHighThreadsRunning alert.
 
-  # ── Critical tier: MariaDBHighCPUCritical (consumes the orphan cpu_critical) ──
+  # ── Critical tier: MariaDBHighThreadsRunningCritical (consumes the orphan cpu_critical) ──
   - interval: 15s
     input_series:
       # db-a: 82 > 50 critical, metadata present → enriched critical fire.
@@ -122,7 +126,7 @@ tests:
 
     alert_rule_test:
       - eval_time: 6m
-        alertname: MariaDBHighCPUCritical
+        alertname: MariaDBHighThreadsRunningCritical
         exp_alerts:
           # db-a: enriched (branch A) — carries runbook_url/owner/tier.
           - exp_labels:
@@ -133,10 +137,10 @@ tests:
               owner: team-a
               tier: gold
             exp_annotations:
-              summary: "Critical CPU on db-a"
-              summary_zh: "db-a CPU 嚴重過高"
-              platform_summary: "[gold] db-a: critical CPU saturation — immediate investigation needed"
-              platform_summary_zh: "[gold] db-a：CPU 飽和 — 需立即調查"
+              summary: "Critical running-thread saturation on db-a"
+              summary_zh: "db-a 執行緒飽和嚴重過高"
+              platform_summary: "[gold] db-a: CRITICAL running-thread saturation (threads_running, NOT host CPU%) — immediate investigation (lock waits / runaway queries). True CPU% → PodContainerHighCPU."
+              platform_summary_zh: "[gold] db-a：執行緒飽和達臨界（threads_running，非主機 CPU%）— 需立即調查（鎖等待 / 失控查詢）。真 CPU% 見 PodContainerHighCPU。"
               description: "82 running threads (1m avg, critical threshold exceeded)"
               description_zh: "82 個執行中執行緒（1m 平均，超過嚴重閾值）"
               runbook_url: "http://rb/a"
@@ -148,22 +152,23 @@ tests:
               metric_group: cpu
               tenant: db-b
             exp_annotations:
-              summary: "Critical CPU on db-b"
-              summary_zh: "db-b CPU 嚴重過高"
-              platform_summary: "[] db-b: critical CPU saturation — immediate investigation needed"
-              platform_summary_zh: "[] db-b：CPU 飽和 — 需立即調查"
+              summary: "Critical running-thread saturation on db-b"
+              summary_zh: "db-b 執行緒飽和嚴重過高"
+              platform_summary: "[] db-b: CRITICAL running-thread saturation (threads_running, NOT host CPU%) — immediate investigation (lock waits / runaway queries). True CPU% → PodContainerHighCPU."
+              platform_summary_zh: "[] db-b：執行緒飽和達臨界（threads_running，非主機 CPU%）— 需立即調查（鎖等待 / 失控查詢）。真 CPU% 見 PodContainerHighCPU。"
               description: "82 running threads (1m avg, critical threshold exceeded)"
               description_zh: "82 個執行中執行緒（1m 平均，超過嚴重閾值）"
               runbook_url: ""
               owner: ""
               tier: ""
-        # db-c (maintenance) and db-d (below threshold) produce NO MariaDBHighCPUCritical alert.
+        # db-c (maintenance) and db-d (below threshold) produce NO MariaDBHighThreadsRunningCritical alert.
 
   # ── Smoothing regression (#943 / Gemini reset-trap review): rule reads the 1m AVG, not raw ──
   # At eval the INSTANTANEOUS gauge has dipped to 40 (BELOW the 80 threshold) but the 1m
-  # AVERAGE is 100 (ABOVE) → MariaDBHighCPU FIRES. A pre-fix `max by(tenant)(threads_running)`
-  # raw rule reads 40 and stays silent (and on genuinely oscillating load its `for:` timer
-  # keeps resetting → deadlock-only) — that revert is exactly what this guards.
+  # AVERAGE is 100 (ABOVE) → MariaDBHighThreadsRunning FIRES. A pre-fix
+  # `max by(tenant)(threads_running)` raw rule reads 40 and stays silent (and on genuinely
+  # oscillating load its `for:` timer keeps resetting → deadlock-only) — that revert is
+  # exactly what this guards.
   # ⚠ The leading 100 sample (= avg of the trailing 120,120,120,40) pins the 1m avg to 100
   # whether promtool's [1m] window is left-OPEN (4 samples, prom 3.x) or left-CLOSED (5
   # samples, 2.53.2) → the asserted value is VERSION-STABLE. (An oscillating window is NOT:
@@ -177,17 +182,17 @@ tests:
         values: '80x27'
     alert_rule_test:
       - eval_time: 6m
-        alertname: MariaDBHighCPU
+        alertname: MariaDBHighThreadsRunning
         exp_alerts:
           - exp_labels:
               severity: warning
               metric_group: cpu
               tenant: db-osc
             exp_annotations:
-              summary: "High CPU on db-osc"
-              summary_zh: "db-osc CPU 過高"
-              platform_summary: "[] db-osc: CPU threshold breached — review running-thread load"
-              platform_summary_zh: "[] db-osc：CPU 閾值超出 — 檢查執行緒負載"
+              summary: "High running-thread saturation on db-osc"
+              summary_zh: "db-osc 執行緒飽和過高"
+              platform_summary: "[] db-osc: running-thread saturation (threads_running, NOT host CPU%) breached — check lock waits / slow queries / IO stalls. True CPU% → PodContainerHighCPU."
+              platform_summary_zh: "[] db-osc：執行緒飽和（threads_running，非主機 CPU%）超出 — 檢查鎖等待 / 慢查詢 / IO 停滯。真 CPU% 見 PodContainerHighCPU。"
               description: "100 running threads (1m avg, warning threshold exceeded)"
               description_zh: "100 個執行中執行緒（1m 平均，超過警告閾值）"
               runbook_url: ""
