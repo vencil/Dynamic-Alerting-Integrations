@@ -61,7 +61,11 @@ def test_unique_but_wrong_accountid_is_caught():
         [{"tenantId": "tenant-alpha", "accountId": 1001}],
     )
     assert not v.ok and v.category == gate.CAT_MISMATCH
-    assert any("1001" in s and "1000" in s for s in v.violations), v.violations
+    # The leak DESTINATION named in the message must be the PROJECTED partition (1001,
+    # where Vector actually routes), not the registry's allocated 1000 — else the
+    # message points on-call at the wrong partition (CodeRabbit #950).
+    assert any("partition 1001" in s for s in v.violations), v.violations
+    assert any("1000" in s for s in v.violations), v.violations  # allocated value, for comparison
 
 
 def test_unknown_tenant_is_caught():

@@ -165,7 +165,8 @@ def evaluate(registry: dict[str, Any], projections: list[dict[str, Any]]) -> Ver
         if acct != want:
             violations.append(
                 f"tenantId {tid!r} projects accountId {acct} but the registry allocates {want} "
-                f"— unique-but-wrong: this tenant's logs would land in partition {want} (cross-tenant leak)"
+                f"— unique-but-wrong: this tenant's logs would land in partition {acct} instead of "
+                f"its allocated {want} (cross-tenant leak)"
             )
 
     return Verdict(CAT_MISMATCH if violations else CAT_OK, violations)
