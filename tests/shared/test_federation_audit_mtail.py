@@ -68,9 +68,13 @@ def _compile(progdir: Path) -> subprocess.CompletedProcess:
 
 def test_mtail_program_exists(mtail_prog: Path) -> None:
     """Non-gated guard: the program is at the path configmap-mtail.yaml's
-    ``.Files.Get`` expects. Catches a rename/move even where mtail is not
-    installed (so the gate's premise never silently rots)."""
+    ``.Files.Get`` expects, AND is non-empty. Catches a rename/move — or a
+    truncate-to-zero (cf. dev-rule #11, the ``sed -i`` on a mount-path footgun) —
+    even where mtail is not installed, so the gate's premise never silently rots.
+    Non-emptiness matters: an empty program compiles to rc0 (see the compile
+    test), so a 0-byte file would otherwise pass the whole gate."""
     assert mtail_prog.is_file(), f"mtail program missing at {_MTAIL_PROG}"
+    assert mtail_prog.stat().st_size > 0, f"mtail program is empty at {_MTAIL_PROG}"
 
 
 @_needs_mtail
@@ -84,9 +88,13 @@ def test_federation_audit_mtail_compiles(mtail_prog: Path, tmp_path: Path) -> No
     but an isolated dir keeps the gate hermetic)."""
     progdir = tmp_path / "progs"
     progdir.mkdir()
-    (progdir / mtail_prog.name).write_text(
-        mtail_prog.read_text(encoding="utf-8"), encoding="utf-8"
-    )
+    copied = progdir / mtail_prog.name
+    copied.write_text(mtail_prog.read_text(encoding="utf-8"), encoding="utf-8")
+    # Fail-open guard: `mtail --compile_only --progs <dir>` returns 0 for an EMPTY
+    # progdir too, so rc==0 is necessary-but-not-sufficient — a silently-empty copy
+    # would make this gate a no-op. Pin that a non-empty program is actually present
+    # so rc==0 means OUR program compiled, not that mtail compiled nothing.
+    assert copied.stat().st_size > 0, "copied mtail program is empty — gate would be a no-op"
 
     res = _compile(progdir)
     assert res.returncode == 0, (
