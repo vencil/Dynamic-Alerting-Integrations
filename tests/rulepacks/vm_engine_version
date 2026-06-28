@@ -1,0 +1,16 @@
+# SSOT for the VictoriaMetrics engine version. Consumed by BOTH:
+#   1. the per-PR vmalert-tool (MetricsQL) parity gate — CI "Lint Rule Packs" job sources
+#      this to install vmalert-tool (drives tests/rulepacks/test_vm_alert_parity.py); and
+#   2. the on-demand vmalert-tool == live-vmsingle equivalence anchor
+#      (tests/rulepacks/test_vm_backend_parity.py): its test_engine_version_matches_pin
+#      precondition asserts the live vmsingle it validates reports THIS version.
+#
+# One pin is load-bearing (pin-coupling guard): the anchor only LICENSES trusting the
+# vmalert-tool gate as a real-vmsingle proxy if BOTH run the SAME engine version. The old
+# layout had two independently-maintained pins (vmutils in one CI job, the vmsingle image in
+# another) that could silently drift.
+#
+# Bump: change VM_VERSION here, update VMUTILS_SHA256 in .github/workflows/ci.yml (the
+# SHA-verify there fails a version/hash mismatch, coupling them), then re-run the equivalence
+# anchor against a matching live vmsingle — see docs/internal/backend-compat-baseline.md.
+VM_VERSION=1.146.0

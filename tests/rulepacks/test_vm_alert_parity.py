@@ -7,10 +7,12 @@ Why this exists (see docs/integration/victoriametrics-integration.md known-limit
 MetricsQL deviates from PromQL *by design* (rate / increase / changes at series cold-start,
 etc.; VM explicitly does not target 100% PromQL compatibility). A fixture that is green on
 promtool can therefore diverge on vmalert, so VM-backend tenants need the production engine
-in the loop. promtool stays the Prometheus-backend oracle (Makefile ``rulepack-promtool-test``
-+ CI "Lint Rule Packs"); this adds the VictoriaMetrics-backend oracle for the ``for:`` /
-range-function layer that an instant-query parity check (test_vm_backend_parity.py) cannot
-see.
+in the loop. promtool stays the Prometheus-backend oracle (Makefile ``rulepack-promtool-test`` + CI
+"Lint Rule Packs"); this is the SOLE per-PR VictoriaMetrics-backend oracle — the full fixture
+set (fire/no-fire + labels + annotations + ``for:`` + range-function layer) on the MetricsQL
+engine. The on-demand ``test_vm_backend_parity.py`` anchor (run on VM-version bumps) licenses
+trusting this in-memory tool as a real-vmsingle proxy by cross-checking the two at the pinned
+engine version (#947 consolidation).
 
 Gate semantics:
   * uncatalogued fixture diverges on vmalert  -> FAIL (a new, undocumented divergence)
@@ -25,7 +27,7 @@ are modelled by the unittest harness, not the production vmstorage. The MetricsQ
 verified bit-identical to a live vmsingle (rate cold-start spot-check), but the staleness/
 gap *timing* is not, so a storage-layer staleness / absence-over-real-gaps divergence can
 still pass here. Full storage-layer parity needs ``vmalert -replay`` against a real vmsingle
-and stays deferred (Phase 2; see test_vm_backend_parity.py + ADR-025).
+over real gaps and stays deferred (Phase 2; tracked in #947 + ADR-025).
 
 vmalert-tool is located via $VMALERT_TOOL, then PATH (vmalert-tool / vmalert-tool-prod),
 then the dev-container default /tmp/vm/vmalert-tool-prod. If none is found the whole module
