@@ -49,6 +49,19 @@ the security logic with synthetic fixtures, decoupled from any cluster (the
 plane-split means CI has no real registry). `main()` is the thin init-container
 glue that loads files, calls `evaluate()`, selects the effective config, and emits
 a Prometheus textfile metric.
+
+DEPLOYMENT CONTRACT (the chart wiring MUST honour these, or the gate is silently
+undermined — both surfaced in adversarial review):
+  - One-shot-at-boot trust. The gate validates ONLY when the init-container runs,
+    so Vector MUST NOT enable config watch / auto-reload (`--watch-config`), and a
+    change to EITHER the registry or the projections MUST force a pod restart
+    (Helm `checksum/config` annotation over both inputs) so the gate re-runs.
+    Otherwise a post-boot registry mutation (Kubelet ConfigMap sync) drifts
+    unvalidated while Vector keeps using the boot-time config (TOCTOU).
+  - The verdict metric lives in the pod's emptyDir, so it goes ABSENT (not "ok")
+    if the pod dies (OOM / node loss). The alert rule MUST treat absence as
+    not-healthy (pair the `category="mismatch"` series with an `absent()` /
+    per-node liveness check) — else a crash falsely auto-resolves a real mismatch.
 """
 from __future__ import annotations
 
