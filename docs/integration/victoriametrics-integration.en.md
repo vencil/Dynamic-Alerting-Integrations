@@ -46,9 +46,18 @@ Our official support boundaries for the VM ecosystem:
 |---|---|---|---|
 | **vmagent** | Scrape source; customer-managed | ✅ Full | Same as vanilla Prom — the threshold-exporter `/metrics` endpoint can be read by any scraper |
 | **vmsingle / vmcluster (vmstorage + vmselect + vminsert)** | Metric storage backend; threshold-exporter `remote_write` target | ✅ Full | This platform **does not replace** your VM; non-invasive integration (the design principle in [`byo-prometheus-integration.md`](byo-prometheus-integration.en.md) §1 applies equally to VM) |
-| **vmalert** | Rule evaluator; can load our Rule Pack | ✅ Full | This platform's Rule Pack is pure standard PromQL; vmalert evaluates it directly (see [`byo-prometheus-integration.md`](byo-prometheus-integration.en.md)) |
+| **vmalert** | Rule evaluator; can load our Rule Pack | ✅ Full | This platform's Rule Pack is pure standard PromQL; vmalert evaluates it directly (see [`byo-prometheus-integration.md`](byo-prometheus-integration.en.md)). **⚠️ Range-function cold-start semantics diverge from Prometheus — see §3.1 below.** |
 | **vmauth** | Auth proxy; multi-tenant isolation front line | ⚠️ Documentation thin | The tenant-federation ADR ([issue #380](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/380)) will use vmauth for forced label injection; current federation scope is primarily platform-internal |
 | **MetricsQL extensions** | Non-portable function detection | ✅ Full | `da-parser` `vm_only_functions.yaml` allowlist + freshness CI gate (details in [`cli-reference.md`](../cli-reference.en.md) §MetricsQL-as-Superset PromRule parser) |
+
+### 3.1 MetricsQL known limitation: range-fn cold-start
+
+"vmalert evaluates it directly" holds at **steady state**. But MetricsQL **intentionally does not extrapolate** range functions (`rate` / `increase` / `changes` / `delta` …) at a series' **cold-start** — when the evaluation window still extends *before* the series' first sample — using the actual data span instead, so it diverges from Prometheus. Triggers = the first window after a **new series / exporter or kube-state-metrics restart / counter reset / a scrape gap longer than the window**; at steady state (warm series) both engines agree.
+
+- **Bidirectional**: an alert gated on `rate(X) > threshold` **over-fires** at cold-start (VM's rate reads high and crosses the threshold first); an alert gated on `changes(X[w]) == 0` **fires late / misses** (VM counts the series birth as one change).
+- **Worked example**: `TenantHAReplicasDegraded` (rule-pack-kubernetes) fires **~10 minutes late** after a new series is born (steady-state is fine).
+- **Governance (codified)**: every accepted divergence is catalogued in [`vm_deviation_catalog.yaml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/tests/rulepacks/vm_deviation_catalog.yaml) and enforced by [`test_vm_alert_parity.py`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/tests/rulepacks/test_vm_alert_parity.py) (runs every rule-pack fixture through the `vmalert-tool` MetricsQL engine) — **an uncatalogued new divergence fails CI**.
+- VM's official stance: MetricsQL is a PromQL superset but **deliberately does not target 100% compatibility**; this is a design difference, not a bug.
 
 ---
 
