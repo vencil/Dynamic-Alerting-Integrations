@@ -769,7 +769,7 @@ _routing_defaults → routing_profiles[ref] → tenant _routing → _routing_enf
   expr: |
     tenant:cpu_usage:rate5m
     > on(tenant) group_left()
-    tenant:alert_threshold:mysql_cpu_usage
+    tenant:alert_threshold:cpu_usage
 ```
 
 Recording Rule 在背景將 10,000 條 raw series 聚合成 N 個 tenant 級數字。Alert 評估時，Prometheus 只做 N 個數字 vs N 個數字的 Vector Join。運算量 O(tenants)，與 Pod 數量無關。

@@ -24,8 +24,20 @@ groups:
   - name: mariadb-normalization
     interval: 15s
     rules:
-      - record: tenant:mysql_cpu_usage:rate5m
-        expr: sum by(tenant) (rate(mysql_global_status_threads_running[5m]))
+      # Running-threads SATURATION proxy (USE method), NOT host CPU%. Counts the
+      # threads actively executing a query — a GAUGE (the prior rate() was wrong:
+      # gauge dips read as counter resets → ~0, so the threshold never fired).
+      # SMOOTHED over 1m (avg_over_time) BEFORE thresholding: threads_running is a
+      # spiky instantaneous gauge, and alerting on the RAW value with a `for:` clause
+      # has a reset-trap — a single 15s dip below threshold resets the `for` timer, so
+      # a sustained-but-oscillating overload (e.g. 120/120/120/60, avg 105) NEVER fires
+      # (promtool-verified). avg_over_time absorbs the dips; max by(tenant) still keeps
+      # the per-tenant busiest instance (topology-aware: the saturated primary, not
+      # diluted by idle replicas — which avg-across-instances would, and sum would
+      # false-fire). Consumed by the `mysql_cpu` threshold key + MariaDBHighCPU alert
+      # (metric-dictionary.yaml). Corroborate with host CPU% — complementary, not equal.
+      - record: tenant:mysql_threads_running:avg1m
+        expr: max by(tenant) (avg_over_time(mysql_global_status_threads_running[1m]))
 
       - record: tenant:mysql_threads_connected:max
         expr: max by(tenant) (mysql_global_status_threads_connected)
@@ -343,7 +355,7 @@ groups:
           (
             (
               (
-                tenant:mysql_cpu_usage:rate5m
+                tenant:mysql_threads_running:avg1m
                 > on(tenant) group_left
                 tenant:alert_threshold:mysql_cpu
               )
@@ -357,7 +369,7 @@ groups:
           (
             (
               (
-                tenant:mysql_cpu_usage:rate5m
+                tenant:mysql_threads_running:avg1m
                 > on(tenant) group_left
                 tenant:alert_threshold:mysql_cpu
               )
@@ -366,6 +378,9 @@ groups:
             )
             unless on(tenant) tenant_metadata_info
           )
+        # for:30s: the metric is already 1m-smoothed (avg_over_time, see recording rule),
+        # which removes the spiky-gauge `for` reset-trap — so a long `for:` is unnecessary
+        # and a 30s debounce both suffices and responds faster than the raw+for:1m would.
         for: 30s
         labels:
           severity: warning
@@ -376,8 +391,8 @@ groups:
           summary_zh: "{{ $labels.tenant }} CPU 過高"
           platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: CPU threshold breached — review running-thread load"
           platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}：CPU 閾值超出 — 檢查執行緒負載"
-          description: "{{ $value | printf \"%.0f\" }} running threads (warning threshold exceeded)"
-          description_zh: "{{ $value | printf \"%.0f\" }} 個執行中執行緒（超過警告閾值）"
+          description: "{{ $value | printf \"%.0f\" }} running threads (1m avg, warning threshold exceeded)"
+          description_zh: "{{ $value | printf \"%.0f\" }} 個執行中執行緒（1m 平均，超過警告閾值）"
 
           runbook_url: "{{ $labels.runbook_url }}"
           owner: "{{ $labels.owner }}"
@@ -388,7 +403,7 @@ groups:
           (
             (
               (
-                tenant:mysql_cpu_usage:rate5m
+                tenant:mysql_threads_running:avg1m
                 > on(tenant) group_left
                 tenant:alert_threshold:mysql_cpu_critical
               )
@@ -402,7 +417,7 @@ groups:
           (
             (
               (
-                tenant:mysql_cpu_usage:rate5m
+                tenant:mysql_threads_running:avg1m
                 > on(tenant) group_left
                 tenant:alert_threshold:mysql_cpu_critical
               )
@@ -411,6 +426,7 @@ groups:
             )
             unless on(tenant) tenant_metadata_info
           )
+        # for:30s — metric is 1m-smoothed (see warning tier); 30s debounce suffices.
         for: 30s
         labels:
           severity: critical
@@ -421,8 +437,8 @@ groups:
           summary_zh: "{{ $labels.tenant }} CPU 嚴重過高"
           platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: critical CPU saturation — immediate investigation needed"
           platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}：CPU 飽和 — 需立即調查"
-          description: "{{ $value | printf \"%.0f\" }} running threads (critical threshold exceeded)"
-          description_zh: "{{ $value | printf \"%.0f\" }} 個執行中執行緒（超過嚴重閾值）"
+          description: "{{ $value | printf \"%.0f\" }} running threads (1m avg, critical threshold exceeded)"
+          description_zh: "{{ $value | printf \"%.0f\" }} 個執行中執行緒（1m 平均，超過嚴重閾值）"
 
           runbook_url: "{{ $labels.runbook_url }}"
           owner: "{{ $labels.owner }}"
@@ -440,7 +456,7 @@ groups:
                 )
                 and on(tenant)
                 (
-                  tenant:mysql_cpu_usage:rate5m
+                  tenant:mysql_threads_running:avg1m
                   > on(tenant) group_left
                   tenant:alert_threshold:mysql_cpu
                 )
@@ -462,7 +478,7 @@ groups:
                 )
                 and on(tenant)
                 (
-                  tenant:mysql_cpu_usage:rate5m
+                  tenant:mysql_threads_running:avg1m
                   > on(tenant) group_left
                   tenant:alert_threshold:mysql_cpu
                 )

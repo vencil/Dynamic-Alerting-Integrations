@@ -14,8 +14,8 @@ metadata:
     rule-pack: mariadb
 data:
   mariadb-recording.yml: "groups:\n- name: mariadb-normalization\n  interval: 15s\n\
-    \  rules:\n  - record: tenant:mysql_cpu_usage:rate5m\n    expr: sum by(tenant)\
-    \ (rate(mysql_global_status_threads_running[5m]))\n  - record: tenant:mysql_threads_connected:max\n\
+    \  rules:\n  - record: tenant:mysql_threads_running:avg1m\n    expr: max by(tenant)\
+    \ (avg_over_time(mysql_global_status_threads_running[1m]))\n  - record: tenant:mysql_threads_connected:max\n\
     \    expr: max by(tenant) (mysql_global_status_threads_connected)\n  - record:\
     \ tenant:mysql_connection_usage:ratio\n    expr: 'sum by(tenant) (mysql_global_status_threads_connected)\n\
     \n      / sum by(tenant) (mysql_global_variables_max_connections)\n\n      '\n\
@@ -137,49 +137,50 @@ data:
     \ '{{ $value }} threads connected (critical threshold exceeded)'\n      description_zh:\
     \ '{{ $value }} 個執行緒已連接（超過嚴重閾值）'\n      runbook_url: '{{ $labels.runbook_url }}'\n\
     \      owner: '{{ $labels.owner }}'\n      tier: '{{ $labels.tier }}'\n  - alert:\
-    \ MariaDBHighCPU\n    expr: \"(\\n  (\\n    (\\n      tenant:mysql_cpu_usage:rate5m\\\
+    \ MariaDBHighCPU\n    expr: \"(\\n  (\\n    (\\n      tenant:mysql_threads_running:avg1m\\\
     n      > on(tenant) group_left\\n      tenant:alert_threshold:mysql_cpu\\n   \
     \ )\\n    unless on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\"\
     } == 1)\\n  )\\n  * on(tenant) group_left(runbook_url, owner, tier)\\n    tenant_metadata_info\\\
-    n)\\nor\\n(\\n  (\\n    (\\n      tenant:mysql_cpu_usage:rate5m\\n      > on(tenant)\
-    \ group_left\\n      tenant:alert_threshold:mysql_cpu\\n    )\\n    unless on(tenant)\\\
-    n    (user_state_filter{filter=\\\"maintenance\\\"} == 1)\\n  )\\n  unless on(tenant)\
-    \ tenant_metadata_info\\n)\\n\"\n    for: 30s\n    labels:\n      severity: warning\n\
-    \      metric_group: cpu\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
-    \      summary: High CPU on {{ $labels.tenant }}\n      summary_zh: '{{ $labels.tenant\
-    \ }} CPU 過高'\n      platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant\
-    \ }}: CPU threshold breached — review running-thread load'\n      platform_summary_zh:\
-    \ '[{{ $labels.tier }}] {{ $labels.tenant }}：CPU 閾值超出 — 檢查執行緒負載'\n      description:\
-    \ '{{ $value | printf \"%.0f\" }} running threads (warning threshold exceeded)'\n\
-    \      description_zh: '{{ $value | printf \"%.0f\" }} 個執行中執行緒（超過警告閾值）'\n    \
-    \  runbook_url: '{{ $labels.runbook_url }}'\n      owner: '{{ $labels.owner }}'\n\
-    \      tier: '{{ $labels.tier }}'\n  - alert: MariaDBHighCPUCritical\n    expr:\
-    \ \"(\\n  (\\n    (\\n      tenant:mysql_cpu_usage:rate5m\\n      > on(tenant)\
-    \ group_left\\n      tenant:alert_threshold:mysql_cpu_critical\\n    )\\n    unless\
-    \ on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\"} == 1)\\n  )\\\
-    n  * on(tenant) group_left(runbook_url, owner, tier)\\n    tenant_metadata_info\\\
-    n)\\nor\\n(\\n  (\\n    (\\n      tenant:mysql_cpu_usage:rate5m\\n      > on(tenant)\
-    \ group_left\\n      tenant:alert_threshold:mysql_cpu_critical\\n    )\\n    unless\
-    \ on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\"} == 1)\\n  )\\\
-    n  unless on(tenant) tenant_metadata_info\\n)\\n\"\n    for: 30s\n    labels:\n\
-    \      severity: critical\n      metric_group: cpu\n      tenant: '{{ $labels.tenant\
-    \ }}'\n    annotations:\n      summary: Critical CPU on {{ $labels.tenant }}\n\
-    \      summary_zh: '{{ $labels.tenant }} CPU 嚴重過高'\n      platform_summary: '[{{\
-    \ $labels.tier }}] {{ $labels.tenant }}: critical CPU saturation — immediate investigation\
-    \ needed'\n      platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant\
-    \ }}：CPU 飽和 — 需立即調查'\n      description: '{{ $value | printf \"%.0f\" }} running\
-    \ threads (critical threshold exceeded)'\n      description_zh: '{{ $value | printf\
-    \ \"%.0f\" }} 個執行中執行緒（超過嚴重閾值）'\n      runbook_url: '{{ $labels.runbook_url }}'\n\
-    \      owner: '{{ $labels.owner }}'\n      tier: '{{ $labels.tier }}'\n  - alert:\
-    \ MariaDBSystemBottleneck\n    expr: \"(\\n  (\\n    (\\n      (\\n        tenant:mysql_threads_connected:max\\\
-    n        > on(tenant) group_left\\n        tenant:alert_threshold:mysql_connections\\\
-    n      )\\n      and on(tenant)\\n      (\\n        tenant:mysql_cpu_usage:rate5m\\\
+    n)\\nor\\n(\\n  (\\n    (\\n      tenant:mysql_threads_running:avg1m\\n      >\
+    \ on(tenant) group_left\\n      tenant:alert_threshold:mysql_cpu\\n    )\\n  \
+    \  unless on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\"} == 1)\\\
+    n  )\\n  unless on(tenant) tenant_metadata_info\\n)\\n\"\n    for: 30s\n    labels:\n\
+    \      severity: warning\n      metric_group: cpu\n      tenant: '{{ $labels.tenant\
+    \ }}'\n    annotations:\n      summary: High CPU on {{ $labels.tenant }}\n   \
+    \   summary_zh: '{{ $labels.tenant }} CPU 過高'\n      platform_summary: '[{{ $labels.tier\
+    \ }}] {{ $labels.tenant }}: CPU threshold breached — review running-thread load'\n\
+    \      platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant }}：CPU 閾值超出\
+    \ — 檢查執行緒負載'\n      description: '{{ $value | printf \"%.0f\" }} running threads\
+    \ (1m avg, warning threshold exceeded)'\n      description_zh: '{{ $value | printf\
+    \ \"%.0f\" }} 個執行中執行緒（1m 平均，超過警告閾值）'\n      runbook_url: '{{ $labels.runbook_url\
+    \ }}'\n      owner: '{{ $labels.owner }}'\n      tier: '{{ $labels.tier }}'\n\
+    \  - alert: MariaDBHighCPUCritical\n    expr: \"(\\n  (\\n    (\\n      tenant:mysql_threads_running:avg1m\\\
+    n      > on(tenant) group_left\\n      tenant:alert_threshold:mysql_cpu_critical\\\
+    n    )\\n    unless on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\
+    \"} == 1)\\n  )\\n  * on(tenant) group_left(runbook_url, owner, tier)\\n    tenant_metadata_info\\\
+    n)\\nor\\n(\\n  (\\n    (\\n      tenant:mysql_threads_running:avg1m\\n      >\
+    \ on(tenant) group_left\\n      tenant:alert_threshold:mysql_cpu_critical\\n \
+    \   )\\n    unless on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\
+    \"} == 1)\\n  )\\n  unless on(tenant) tenant_metadata_info\\n)\\n\"\n    for:\
+    \ 30s\n    labels:\n      severity: critical\n      metric_group: cpu\n      tenant:\
+    \ '{{ $labels.tenant }}'\n    annotations:\n      summary: Critical CPU on {{\
+    \ $labels.tenant }}\n      summary_zh: '{{ $labels.tenant }} CPU 嚴重過高'\n     \
+    \ platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant }}: critical CPU saturation\
+    \ — immediate investigation needed'\n      platform_summary_zh: '[{{ $labels.tier\
+    \ }}] {{ $labels.tenant }}：CPU 飽和 — 需立即調查'\n      description: '{{ $value | printf\
+    \ \"%.0f\" }} running threads (1m avg, critical threshold exceeded)'\n      description_zh:\
+    \ '{{ $value | printf \"%.0f\" }} 個執行中執行緒（1m 平均，超過嚴重閾值）'\n      runbook_url: '{{\
+    \ $labels.runbook_url }}'\n      owner: '{{ $labels.owner }}'\n      tier: '{{\
+    \ $labels.tier }}'\n  - alert: MariaDBSystemBottleneck\n    expr: \"(\\n  (\\\
+    n    (\\n      (\\n        tenant:mysql_threads_connected:max\\n        > on(tenant)\
+    \ group_left\\n        tenant:alert_threshold:mysql_connections\\n      )\\n \
+    \     and on(tenant)\\n      (\\n        tenant:mysql_threads_running:avg1m\\\
     n        > on(tenant) group_left\\n        tenant:alert_threshold:mysql_cpu\\\
     n      )\\n    )\\n    unless on(tenant)\\n    (user_state_filter{filter=\\\"\
     maintenance\\\"} == 1)\\n  )\\n  * on(tenant) group_left(runbook_url, owner, tier)\\\
     n    tenant_metadata_info\\n)\\nor\\n(\\n  (\\n    (\\n      (\\n        tenant:mysql_threads_connected:max\\\
     n        > on(tenant) group_left\\n        tenant:alert_threshold:mysql_connections\\\
-    n      )\\n      and on(tenant)\\n      (\\n        tenant:mysql_cpu_usage:rate5m\\\
+    n      )\\n      and on(tenant)\\n      (\\n        tenant:mysql_threads_running:avg1m\\\
     n        > on(tenant) group_left\\n        tenant:alert_threshold:mysql_cpu\\\
     n      )\\n    )\\n    unless on(tenant)\\n    (user_state_filter{filter=\\\"\
     maintenance\\\"} == 1)\\n  )\\n  unless on(tenant) tenant_metadata_info\\n)\\\

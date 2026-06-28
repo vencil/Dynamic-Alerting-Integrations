@@ -12,7 +12,11 @@ tenants:
   db-demo:
     mysql_connections: "50"            # warning threshold
     mysql_connections_critical: "120"  # critical threshold → headline alert
-    mysql_cpu: "75"
+    # Running-threads saturation warning (gauge: concurrent threads executing, a
+    # USE-method proxy — NOT host CPU%). Dormant by design: push-metrics.sh seeds no
+    # mysql_global_status_threads_running, so MariaDBHighCPU stays quiet and the single
+    # connections-critical red light remains the headline. 75→40 = realistic example.
+    mysql_cpu: "40"
     _metadata:
       owner: "platform-db-team"
       tier: "tier-1"

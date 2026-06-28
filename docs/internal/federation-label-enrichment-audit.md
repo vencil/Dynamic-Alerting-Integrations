@@ -47,7 +47,7 @@ issue #505 的 PR 一併處理：
 |---|---|---|---|
 | `mysql_*` / `pg_*` / `redis_*` / `mongodb_*` / `elasticsearch_*` / `oracle_*` / `db2_*` / `clickhouse_*` / `kafka_*` / `rabbitmq_*` / `nginx_*` / JVM 等 DB / middleware exporter metric | 各 exporter，經 Prometheus job `tenant-exporters` 抓取 | ✅ 有 | job `tenant-exporters` 的 `relabel_configs` 從 K8s namespace 推導 `target_label: tenant` |
 | `user_threshold` / `user_state_filter` / `user_silent_mode` / `user_severity_dedup` / `da_config_event` / `tenant_metadata_info` | platform threshold-exporter | ✅ 有 | exporter 原生 emit `tenant` label（`collector.go`） |
-| `tenant:*`（recording-rule 輸出，如 `tenant:mysql_cpu_usage:rate5m`、`tenant:container_cpu_percent:by_container`） | rule pack recording rules | ✅ 有 | recording rule `sum by(tenant)(...)` / `label_replace` 產出 |
+| `tenant:*`（recording-rule 輸出，如 `tenant:mysql_threads_running:avg1m`、`tenant:container_cpu_percent:by_container`） | rule pack recording rules | ✅ 有 | recording rule `sum by(tenant)(...)` / `label_replace` 產出 |
 | `container_*`（cAdvisor） | kubelet cAdvisor，Prometheus job `kubelet-cadvisor` | ❌ **無** | job 只有 namespace filter（`regex: db-.+`），**無 `target_label: tenant` relabel**。租戶維度目前靠 recording rule 後補 `label_replace(namespace)` |
 | `kube_*`（kube-state-metrics） | kube-state-metrics，job `monitoring-components` | ❌ **無** | 自 `monitoring` namespace 抓取，平台內部用途，未打租戶 label |
 | `node_*`（node-exporter） | — | ❌ **未抓取** | 現行 Prometheus 設定無 node-exporter job |

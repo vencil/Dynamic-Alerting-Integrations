@@ -9,45 +9,47 @@
 #   - db-b: NO metadata (onboarding vacuum) → STILL fires BARE (branch B).
 #   - db-c: over threshold but maintenance  → suppressed.
 #   - db-d: below threshold                → no alert.
-# The CPU observed series is tenant:mysql_cpu_usage:rate5m =
-#   sum by(tenant)(rate(mysql_global_status_threads_running[5m])), so the leaf
-# input series is mysql_global_status_threads_running (a counter → use a ramp so
-# rate() is well-defined). ~1 running-thread/sec sustained ⇒ rate ≈ 1.0.
+# The CPU observed series is tenant:mysql_threads_running:avg1m =
+#   max by(tenant)(avg_over_time(mysql_global_status_threads_running[1m])). The leaf
+# mysql_global_status_threads_running is a GAUGE (concurrent threads executing — a
+# USE-method saturation proxy, NOT host CPU%), 1m-SMOOTHED before thresholding to kill
+# the spiky-gauge `for` reset-trap (see the 3rd test block). A stable 82 ⇒ avg = 82,
+# which the %.0f-formatted annotation renders as "82" with a "(1m avg)" qualifier.
 rule_files:
   - ../../rule-packs/rule-pack-mariadb.yaml
 
 evaluation_interval: 15s
 
 tests:
-  # ── Warning tier: MariaDBHighCPU (threshold cpu=0.5, rate≈1.0 > 0.5) ──
+  # ── Warning tier: MariaDBHighCPU (threshold cpu=50, smoothed gauge 82 > 50) ──
   - interval: 15s
     input_series:
-      # db-a: rate≈1.0 > 0.5 warning, metadata present → enriched fire.
+      # db-a: 82 running threads > 50 warning, metadata present → enriched fire.
       - series: 'mysql_global_status_threads_running{tenant="db-a"}'
-        values: '0+15x40'
+        values: '82x40'
       - series: 'user_threshold{tenant="db-a", component="mysql", metric="cpu", severity="warning"}'
-        values: '0.5x40'
+        values: '50x40'
       - series: 'tenant_metadata_info{tenant="db-a", runbook_url="http://rb/a", owner="team-a", tier="gold"}'
         values: '1x40'
-      # db-b: rate≈1.0 > 0.5, NO tenant_metadata_info → VACUUM-FIRE (branch B).
+      # db-b: 82 > 50, NO tenant_metadata_info → VACUUM-FIRE (branch B).
       - series: 'mysql_global_status_threads_running{tenant="db-b"}'
-        values: '0+15x40'
+        values: '82x40'
       - series: 'user_threshold{tenant="db-b", component="mysql", metric="cpu", severity="warning"}'
-        values: '0.5x40'
-      # db-c: rate≈1.0 > 0.5, metadata present, BUT maintenance active → suppressed.
+        values: '50x40'
+      # db-c: 82 > 50, metadata present, BUT maintenance active → suppressed.
       - series: 'mysql_global_status_threads_running{tenant="db-c"}'
-        values: '0+15x40'
+        values: '82x40'
       - series: 'user_threshold{tenant="db-c", component="mysql", metric="cpu", severity="warning"}'
-        values: '0.5x40'
+        values: '50x40'
       - series: 'tenant_metadata_info{tenant="db-c", runbook_url="http://rb/c", owner="team-c", tier="silver"}'
         values: '1x40'
       - series: 'user_state_filter{tenant="db-c", filter="maintenance"}'
         values: '1x40'
-      # db-d: rate≈1.0 < 2.0 warning threshold → no fire.
+      # db-d: 82 < 100 warning threshold → no fire.
       - series: 'mysql_global_status_threads_running{tenant="db-d"}'
-        values: '0+15x40'
+        values: '82x40'
       - series: 'user_threshold{tenant="db-d", component="mysql", metric="cpu", severity="warning"}'
-        values: '2.0x40'
+        values: '100x40'
 
     alert_rule_test:
       - eval_time: 6m
@@ -66,8 +68,8 @@ tests:
               summary_zh: "db-a CPU 過高"
               platform_summary: "[gold] db-a: CPU threshold breached — review running-thread load"
               platform_summary_zh: "[gold] db-a：CPU 閾值超出 — 檢查執行緒負載"
-              description: "1 running threads (warning threshold exceeded)"
-              description_zh: "1 個執行中執行緒（超過警告閾值）"
+              description: "82 running threads (1m avg, warning threshold exceeded)"
+              description_zh: "82 個執行中執行緒（1m 平均，超過警告閾值）"
               runbook_url: "http://rb/a"
               owner: team-a
               tier: gold
@@ -81,8 +83,8 @@ tests:
               summary_zh: "db-b CPU 過高"
               platform_summary: "[] db-b: CPU threshold breached — review running-thread load"
               platform_summary_zh: "[] db-b：CPU 閾值超出 — 檢查執行緒負載"
-              description: "1 running threads (warning threshold exceeded)"
-              description_zh: "1 個執行中執行緒（超過警告閾值）"
+              description: "82 running threads (1m avg, warning threshold exceeded)"
+              description_zh: "82 個執行中執行緒（1m 平均，超過警告閾值）"
               runbook_url: ""
               owner: ""
               tier: ""
@@ -91,32 +93,32 @@ tests:
   # ── Critical tier: MariaDBHighCPUCritical (consumes the orphan cpu_critical) ──
   - interval: 15s
     input_series:
-      # db-a: rate≈1.0 > 0.5 critical, metadata present → enriched critical fire.
+      # db-a: 82 > 50 critical, metadata present → enriched critical fire.
       - series: 'mysql_global_status_threads_running{tenant="db-a"}'
-        values: '0+15x40'
+        values: '82x40'
       - series: 'user_threshold{tenant="db-a", component="mysql", metric="cpu", severity="critical"}'
-        values: '0.5x40'
+        values: '50x40'
       - series: 'tenant_metadata_info{tenant="db-a", runbook_url="http://rb/a", owner="team-a", tier="gold"}'
         values: '1x40'
-      # db-b: rate≈1.0 > 0.5, NO tenant_metadata_info → VACUUM-FIRE (branch B).
+      # db-b: 82 > 50, NO tenant_metadata_info → VACUUM-FIRE (branch B).
       - series: 'mysql_global_status_threads_running{tenant="db-b"}'
-        values: '0+15x40'
+        values: '82x40'
       - series: 'user_threshold{tenant="db-b", component="mysql", metric="cpu", severity="critical"}'
-        values: '0.5x40'
-      # db-c: rate≈1.0 > 0.5, metadata present, BUT maintenance active → suppressed.
+        values: '50x40'
+      # db-c: 82 > 50, metadata present, BUT maintenance active → suppressed.
       - series: 'mysql_global_status_threads_running{tenant="db-c"}'
-        values: '0+15x40'
+        values: '82x40'
       - series: 'user_threshold{tenant="db-c", component="mysql", metric="cpu", severity="critical"}'
-        values: '0.5x40'
+        values: '50x40'
       - series: 'tenant_metadata_info{tenant="db-c", runbook_url="http://rb/c", owner="team-c", tier="silver"}'
         values: '1x40'
       - series: 'user_state_filter{tenant="db-c", filter="maintenance"}'
         values: '1x40'
-      # db-d: rate≈1.0 < 2.0 critical threshold → no critical fire.
+      # db-d: 82 < 100 critical threshold → no critical fire.
       - series: 'mysql_global_status_threads_running{tenant="db-d"}'
-        values: '0+15x40'
+        values: '82x40'
       - series: 'user_threshold{tenant="db-d", component="mysql", metric="cpu", severity="critical"}'
-        values: '2.0x40'
+        values: '100x40'
 
     alert_rule_test:
       - eval_time: 6m
@@ -135,8 +137,8 @@ tests:
               summary_zh: "db-a CPU 嚴重過高"
               platform_summary: "[gold] db-a: critical CPU saturation — immediate investigation needed"
               platform_summary_zh: "[gold] db-a：CPU 飽和 — 需立即調查"
-              description: "1 running threads (critical threshold exceeded)"
-              description_zh: "1 個執行中執行緒（超過嚴重閾值）"
+              description: "82 running threads (1m avg, critical threshold exceeded)"
+              description_zh: "82 個執行中執行緒（1m 平均，超過嚴重閾值）"
               runbook_url: "http://rb/a"
               owner: team-a
               tier: gold
@@ -150,9 +152,44 @@ tests:
               summary_zh: "db-b CPU 嚴重過高"
               platform_summary: "[] db-b: critical CPU saturation — immediate investigation needed"
               platform_summary_zh: "[] db-b：CPU 飽和 — 需立即調查"
-              description: "1 running threads (critical threshold exceeded)"
-              description_zh: "1 個執行中執行緒（超過嚴重閾值）"
+              description: "82 running threads (1m avg, critical threshold exceeded)"
+              description_zh: "82 個執行中執行緒（1m 平均，超過嚴重閾值）"
               runbook_url: ""
               owner: ""
               tier: ""
         # db-c (maintenance) and db-d (below threshold) produce NO MariaDBHighCPUCritical alert.
+
+  # ── Smoothing regression (#943 / Gemini reset-trap review): rule reads the 1m AVG, not raw ──
+  # At eval the INSTANTANEOUS gauge has dipped to 40 (BELOW the 80 threshold) but the 1m
+  # AVERAGE is 100 (ABOVE) → MariaDBHighCPU FIRES. A pre-fix `max by(tenant)(threads_running)`
+  # raw rule reads 40 and stays silent (and on genuinely oscillating load its `for:` timer
+  # keeps resetting → deadlock-only) — that revert is exactly what this guards.
+  # ⚠ The leading 100 sample (= avg of the trailing 120,120,120,40) pins the 1m avg to 100
+  # whether promtool's [1m] window is left-OPEN (4 samples, prom 3.x) or left-CLOSED (5
+  # samples, 2.53.2) → the asserted value is VERSION-STABLE. (An oscillating window is NOT:
+  # the same 120/120/120/60 input rendered 108 on 2.53.2 but 105 on CI's 3.x → flaky red.)
+  - interval: 15s
+    input_series:
+      # idx 0..19 sustained 120 | 20 = 100 (boundary-stabiliser) | 21..23 = 120 | 24 = 40 (eval dip) | 25..27 = 120
+      - series: 'mysql_global_status_threads_running{tenant="db-osc"}'
+        values: '120 120 120 120 120 120 120 120 120 120 120 120 120 120 120 120 120 120 120 120 100 120 120 120 40 120 120 120'
+      - series: 'user_threshold{tenant="db-osc", component="mysql", metric="cpu", severity="warning"}'
+        values: '80x27'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: MariaDBHighCPU
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              metric_group: cpu
+              tenant: db-osc
+            exp_annotations:
+              summary: "High CPU on db-osc"
+              summary_zh: "db-osc CPU 過高"
+              platform_summary: "[] db-osc: CPU threshold breached — review running-thread load"
+              platform_summary_zh: "[] db-osc：CPU 閾值超出 — 檢查執行緒負載"
+              description: "100 running threads (1m avg, warning threshold exceeded)"
+              description_zh: "100 個執行中執行緒（1m 平均，超過警告閾值）"
+              runbook_url: ""
+              owner: ""
+              tier: ""
