@@ -388,6 +388,13 @@ jobs:
       matrix:
         python: ["3.13"]
       fail-fast: false
+    # Fail-closed signal for the #908 mtail compile gate (guard against silent
+    # disarmament): this job INSTALLS mtail below, so if mtail is missing at pytest
+    # time the Install step regressed — test_mtail_present_when_required then FAILS
+    # instead of letting the gated compile tests silently skip. Jobs that
+    # legitimately run pytest without mtail (validate.yaml) don't set this.
+    env:
+      VIBE_REQUIRE_MTAIL: "1"
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
