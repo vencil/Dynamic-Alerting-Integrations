@@ -22,6 +22,7 @@ Security hotfix，backport 於 v2.9.0 之上。收斂 tenant-api / da-portal 的
 - **tenant-api header-trust 面硬化（GHSA-3g2h-rf85-5rrv）**：內部 8080 埠刻意繞過 oauth2-proxy、盲信 `X-Forwarded-Groups` / `X-Forwarded-Email`，原 NetworkPolicy 僅 namespace 級 → monitoring ns 內任一 pod 可偽造身分（含 `platform-admins`）。收斂為 **pod 級白名單**（僅 `app=prometheus` + `component=threshold-govern`）＋ namespace **default-deny-ingress**；並把 `networkPolicy.enabled=false`（及空 `internalPortAllow` selector）codified 為 `helm template` 硬失敗（fail-closed）。
 - **da-portal 收斂 + open-proxy guard**：`allowedNamespaces` 移除租戶 ns（`db-a`/`db-b`）；新增 render-time guard——`oauth2Proxy.enabled=false` 時強制 `portal.tenantApiUrl` 為空（否則 nginx 無 strip proxy 會把 client 原始標頭直送 header-trusting 後端＝未認證開放代理）。
 - **文件 / 運維可見性**：`governance-security.md` 補 header-trust + **CNI-enforcement（security theater）** 警告；tenant-api / da-portal chart 新增 install-time `NOTES.txt`。此為 **L4 縱深止血**；與 CNI 無關的根因層 L7 caller 身分驗證另行追蹤。
+- **依賴 CVE 清理（backport #895/#940）**：tenant-api Go binary 的 `golang.org/x/net`（→ `v0.55.0`）+ `golang.org/x/crypto`（→ `v0.52.0`），清掉 v2.9.0 發版後才披露的 HIGH CVE（CVE-2026-46595 SSH auth-bypass、CVE-2026-39821 IDNA punycode privesc、x/net HTTP/2 DoS 等）。appVersion `2.7.0` 不變（image tag rebuild 帶入新 deps）——release-time Trivy gate 所需。
 
 ### 版號
 
