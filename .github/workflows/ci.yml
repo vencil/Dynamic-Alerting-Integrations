@@ -423,6 +423,27 @@ jobs:
           sudo cp /tmp/vector-x86_64-unknown-linux-gnu/bin/vector /usr/local/bin/
           vector --version
 
+      # mtail CLI — same rationale as the Vector / Helm installs above. The #908
+      # mtail-compile gate (tests/shared/test_federation_audit_mtail.py) compiles
+      # helm/federation-gateway/files/federation-audit.mtail under the SAME mtail
+      # the audit-sidecar deploys (3.0.8) — a syntax / type regression in the
+      # program would otherwise surface only as a sidecar CrashLoop at deploy, not
+      # in CI. Gated on `mtail` on PATH (shutil.which) → without this install the
+      # gate SILENTLY SKIPS. Pinned + checksum-verified (identical digest to
+      # helm/federation-gateway/audit-sidecar/Dockerfile).
+      - name: Install mtail
+        run: |
+          MTAIL_VERSION=3.0.8
+          # sha256 of mtail_3.0.8_linux_amd64.tar.gz (upstream release
+          # checksums.txt); identical pin to audit-sidecar/Dockerfile.
+          MTAIL_SHA256=123c2ee5f48c3eff12ebccee38befd2233d715da736000ccde49e3d5607724e4
+          curl -fsSL "https://github.com/google/mtail/releases/download/v${MTAIL_VERSION}/mtail_${MTAIL_VERSION}_linux_amd64.tar.gz" -o /tmp/mtail.tgz
+          bash scripts/ops/_verify_download.sh /tmp/mtail.tgz "$MTAIL_SHA256"
+          tar xzf /tmp/mtail.tgz -C /tmp mtail
+          sudo install -m0755 /tmp/mtail /usr/local/bin/mtail
+          mtail --version 2>&1 | head -n1 || true
+          command -v mtail
+
       - name: Cache pip packages
         uses: actions/cache@v5
         with:
