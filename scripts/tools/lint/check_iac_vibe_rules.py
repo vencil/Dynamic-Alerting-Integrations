@@ -112,6 +112,7 @@ DOCKERFILE_CONTEXTS: dict[str, str] = {
     "tests/e2e-bench/driver/Dockerfile": "tests/e2e-bench/driver",
     "tests/e2e-bench/receiver/Dockerfile": "tests/e2e-bench/receiver",
     "helm/federation-gateway/audit-sidecar/Dockerfile": "helm/federation-gateway/audit-sidecar",
+    "helm/vector/projection-gate/Dockerfile": "helm/vector/projection-gate",
 }
 
 # Mandated .dockerignore baseline (epic #448 AC 1). Each is (label, probe):
