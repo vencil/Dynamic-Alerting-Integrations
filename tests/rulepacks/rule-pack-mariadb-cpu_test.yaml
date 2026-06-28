@@ -159,37 +159,48 @@ tests:
               tier: ""
         # db-c (maintenance) and db-d (below threshold) produce NO MariaDBHighCPUCritical alert.
 
-  # ── Smoothing regression (#943 / Gemini reset-trap review): rule reads the 1m AVG, not raw ──
-  # At eval the INSTANTANEOUS gauge has dipped to 40 (BELOW the 80 threshold) but the 1m
-  # AVERAGE is 100 (ABOVE) → MariaDBHighCPU FIRES. A pre-fix `max by(tenant)(threads_running)`
-  # raw rule reads 40 and stays silent (and on genuinely oscillating load its `for:` timer
-  # keeps resetting → deadlock-only) — that revert is exactly what this guards.
-  # ⚠ The leading 100 sample (= avg of the trailing 120,120,120,40) pins the 1m avg to 100
-  # whether promtool's [1m] window is left-OPEN (4 samples, prom 3.x) or left-CLOSED (5
-  # samples, 2.53.2) → the asserted value is VERSION-STABLE. (An oscillating window is NOT:
-  # the same 120/120/120/60 input rendered 108 on 2.53.2 but 105 on CI's 3.x → flaky red.)
+  # ── Smoothing regression (#943 / Gemini reset-trap review): rule fires off the 1m AVG, not raw ──
+  # Contract: at the 6m eval the INSTANTANEOUS gauge has dipped to 40 (BELOW the 80 threshold),
+  # yet MariaDBHighCPU still FIRES — because the rule thresholds the 1m-SMOOTHED recording rule
+  # tenant:mysql_threads_running:avg1m (= avg_over_time(...[1m])), not the raw gauge. A pre-fix
+  # `max by(tenant)(threads_running)` raw rule reads 40 and stays silent (and on oscillating load
+  # its `for:` timer keeps resetting → never fires) — that revert is exactly what this guards.
+  #
+  # ⚠ DETERMINISM (#943 flake fix): assert the threshold-CROSSING (`> bool 80`), NOT the exact avg.
+  # promtool evaluates the recording group (mariadb-normalization) and the consuming query in a
+  # nondeterministic order within the eval tick, so a read of avg1m resolves to EITHER the eval
+  # tick (t=360 → 100) or the previous tick (t=345 → 116 on 2.53.2 / 115 on CI's 3.x). All exceed
+  # 80, so `> bool 80` is a stable 1, but an exact value (the old alert_rule_test's
+  # `description: "100 …"`) is a coin-flip → flaky red. (A deterministic exact value is impossible
+  # while a raw dip sits on the eval sample.) db-a/db-b above pin the exact rendered alert value.
   - interval: 15s
     input_series:
-      # idx 0..19 sustained 120 | 20 = 100 (boundary-stabiliser) | 21..23 = 120 | 24 = 40 (eval dip) | 25..27 = 120
+      # idx 0..19 sustained 120 | 20 = 100 | 21..23 = 120 | 24 = 40 (the 6m eval dip) | 25..27 = 120
       - series: 'mysql_global_status_threads_running{tenant="db-osc"}'
         values: '120 120 120 120 120 120 120 120 120 120 120 120 120 120 120 120 120 120 120 120 100 120 120 120 40 120 120 120'
       - series: 'user_threshold{tenant="db-osc", component="mysql", metric="cpu", severity="warning"}'
         values: '80x27'
-    alert_rule_test:
-      - eval_time: 6m
-        alertname: MariaDBHighCPU
-        exp_alerts:
-          - exp_labels:
-              severity: warning
-              metric_group: cpu
-              tenant: db-osc
-            exp_annotations:
-              summary: "High CPU on db-osc"
-              summary_zh: "db-osc CPU 過高"
-              platform_summary: "[] db-osc: CPU threshold breached — review running-thread load"
-              platform_summary_zh: "[] db-osc：CPU 閾值超出 — 檢查執行緒負載"
-              description: "100 running threads (1m avg, warning threshold exceeded)"
-              description_zh: "100 個執行中執行緒（1m 平均，超過警告閾值）"
-              runbook_url: ""
-              owner: ""
-              tier: ""
+    promql_expr_test:
+      # (1) raw instantaneous gauge at eval IS the dip — 40, below the 80 threshold.
+      - expr: 'mysql_global_status_threads_running{tenant="db-osc"}'
+        eval_time: 6m
+        exp_samples:
+          - labels: 'mysql_global_status_threads_running{tenant="db-osc"}'
+            value: 40
+      # (2) the 1m-smoothed recording rule still clears the threshold — value-agnostic: 100/116/115
+      #     all > 80 ⇒ `> bool 80` is deterministically 1; a raw-gauge revert would read 40 ⇒ 0.
+      - expr: 'tenant:mysql_threads_running:avg1m{tenant="db-osc"} > bool 80'
+        eval_time: 6m
+        exp_samples:
+          - labels: '{tenant="db-osc"}'
+            value: 1
+      # (3) …and MariaDBHighCPU actually FIRES end-to-end for db-osc (so a rule rewired to read
+      #     the RAW gauge, not just the recording rule, still fails here). `count()` keeps it both
+      #     deterministic (1 regardless of which tick's avg the alert reads) AND backend-portable:
+      #     it collapses the promtool↔vmalert ALERTS label-set difference (vmalert adds
+      #     `alertgroup`, even with --disableAlertgroupLabel). Raw-gauge revert → silent → count≠1.
+      - expr: 'count(ALERTS{alertname="MariaDBHighCPU", tenant="db-osc", alertstate="firing"})'
+        eval_time: 6m
+        exp_samples:
+          - labels: '{}'
+            value: 1
