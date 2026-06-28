@@ -777,7 +777,7 @@ With N tenants and 10,000 Pods, every 15-second evaluation cycle requires Promet
   expr: |
     tenant:cpu_usage:rate5m
     > on(tenant) group_left()
-    tenant:alert_threshold:mysql_cpu_usage
+    tenant:alert_threshold:cpu_usage
 ```
 
 Recording Rules aggregate 10,000 raw series into N tenant-level numbers in the background. Alert evaluation only performs an N-vs-N Vector Join in memory. Computation is O(tenants), independent of Pod count.

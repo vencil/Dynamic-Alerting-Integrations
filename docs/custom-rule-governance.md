@@ -116,7 +116,7 @@ tenants:
     )
     and on(tenant)
     (
-      tenant:mysql_cpu_usage:rate5m
+      tenant:mysql_threads_running:avg1m
       > on(tenant) group_left
       tenant:alert_threshold:mysql_cpu
     )
