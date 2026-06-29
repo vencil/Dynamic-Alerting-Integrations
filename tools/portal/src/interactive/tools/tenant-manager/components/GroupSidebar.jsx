@@ -29,6 +29,16 @@ import { styles } from '../styles.js';
 
 import { useState } from "react";  // TRK-233 ESM import
 
+// TRK-233: `t` was previously read as a bare ambient global (jsx-loader
+// leaks `t` at host-page level in the browser/dist path). That made the
+// component ReferenceError the moment it's actually rendered under a
+// non-leaking runtime (Vitest, or any stricter bundler) — the same
+// chunk-/scope-fragility class the `styles` import above fixed. Declare
+// it the same way every sibling component does (TenantCard /
+// SavedViewsPanel / CustomAlertsModal): prefer the registered helper,
+// fall back to English. Behavior identical in the browser.
+const t = window.__t || ((zh, en) => en);
+
 function GroupSidebar({ groups, activeGroupId, onSelectGroup, onCreateGroup, onDeleteGroup, canWrite }) {
   const [showCreate, setShowCreate] = useState(false);
   const [newGroupId, setNewGroupId] = useState('');
