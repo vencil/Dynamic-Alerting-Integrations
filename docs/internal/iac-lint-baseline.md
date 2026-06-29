@@ -51,17 +51,17 @@ Critical → BLOCK 的最後一哩是 GitHub branch protection 的 required stat
 
 epic #448 的 hybrid policy：**既有 open-source engine 優先 + Vibe wrapper 疊專案政策**（severity / 中央 exemption / scope），取代 DIY-only `check_*.py` 的 reactive whack-a-mole（**僅 greenfield 套用**，不回頭遷移既有 ~50 支）。規範同步於 [`dev-rules.md` §安全紀律](dev-rules.md) + `CLAUDE.md`。
 
-**總帳（against `main` HEAD，2026-05-24）—— AC 7：0 Critical（必須）達成 ✅**：
+**總帳（against `main` HEAD，2026-06-28）—— AC 7：0 Critical（必須）達成 ✅**：
 
 | Layer | 工具 | engine | scope | Critical | baseline-High | INFO |
 |---|---|---|---|---:|---:|---:|
-| L1 Dockerfile（TRK-311）| `check_iac_vibe_rules.py` | hadolint | 7 Dockerfile | **0** | 5 | 1 |
+| L1 Dockerfile（TRK-311）| `check_iac_vibe_rules.py` | hadolint | 8 Dockerfile | **0** | 6 | 1 |
 | L2 Helm template（TRK-312）| `check_iac_helm.py` | kube-linter | 9 chart | **0** | 5 | 3 |
 | L3 values/manifest secret-shape（TRK-313）| `check_helm_values_secrets.py` | —（純 Vibe，無對應 engine）| 111 檔 | **0** | 0 | 0 |
 | L4 raw k8s manifest（TRK-314）| `check_k8s_manifests.py` | kube-linter | 42 manifest | **0** | 1 | 0 |
-| **總計** | | | | **0** ✅ | **11** | 4 |
+| **總計** | | | | **0** ✅ | **12** | 4 |
 
-11 筆 baseline-High **全數**有 rationale + 退場/修補欄（見各層分節表），其中 L2 `tenant-api`、L4 `tenant-api` 為同一架構事實（git workdir 需可寫）；L1 5 筆為政策性 `--no-cache`/pip-self DL3018/DL3013；L2 mariadb×2 + vector×2（root log-collector）為架構必需。**0 Critical** 由 branch-protection required checks（`Lint` + `Container SAST (Helm L2 + raw k8s L4)`）真擋 merge。
+12 筆 baseline-High **全數**有 rationale + 退場/修補欄（見各層分節表），其中 L2 `tenant-api`、L4 `tenant-api` 為同一架構事實（git workdir 需可寫）；L1 6 筆為政策性 `--no-cache`/pip-self DL3018/DL3013（含 #908 vector projection-gate）；L2 mariadb×2 + vector×2（root log-collector）為架構必需。**0 Critical** 由 branch-protection required checks（`Lint` + `Container SAST (Helm L2 + raw k8s L4)`）真擋 merge。
 
 > **Critical → BLOCK 已真正上鎖**（非裝飾）：`main` branch protection 已將 `Lint`（含 L1+L3）與 `Container SAST (Helm L2 + raw k8s L4)`（L2+L4）列為 required status checks（owner 已設，2026-05-24）。驗證：`gh api repos/vencil/Dynamic-Alerting-Integrations/branches/main/protection/required_status_checks --jq '.checks[].context'`。
 
@@ -69,7 +69,7 @@ epic #448 的 hybrid policy：**既有 open-source engine 優先 + Vibe wrapper 
 
 跑法：`python3 scripts/tools/lint/check_iac_vibe_rules.py`（CI hook `iac-sast-check`）。
 
-**Baseline 截至 2026-05-23**：7 個 Dockerfile，**0 BLOCK** ✅ / 5 WARN（High，列管如下）/ 1 INFO。
+**Baseline 截至 2026-06-28**：8 個 Dockerfile，**0 BLOCK** ✅ / 6 WARN（High，列管如下）/ 1 INFO。
 
 | # | File:line | Code | 說明 | Rationale | 退場 / 修補 |
 |---|---|---|---|---|---|
@@ -78,6 +78,7 @@ epic #448 的 hybrid policy：**既有 open-source engine 優先 + Vibe wrapper 
 | 3 | `helm/federation-gateway/audit-sidecar/Dockerfile:34` | DL3018 | runtime `apk add --no-cache logrotate` 未 pin | 同 #1 | 同 #1 |
 | 4 | `helm/federation-gateway/audit-sidecar/Dockerfile:22` | DL4006 | `echo "<sha>  file" \| sha256sum -c -` 的 pipe 前未設 `-o pipefail` | 該 RUN 以 `&&` 串接，且 pipe 的**最後一個指令就是安全關鍵的 `sha256sum -c`**——其 exit code 正確傳播（pipefail 缺席不影響 checksum 驗證的把關效果）；busybox sh。 | **修補候選**（非急）：可加 `SHELL ["/bin/ash","-o","pipefail","-c"]`；留待 sidecar Dockerfile 下次動到時順手 |
 | 5 | `components/da-tools/app/Dockerfile:15` | DL3013 | `pip install --upgrade pip` 未 pin pip 版本 | 升級 pip 自身到最新是標準且刻意的；應用相依套件**已 pin**（`PyYAML==6.0.3` / `promql-parser==0.7.0` / `croniter==6.0.0`）。DL3013 命中的是 `pip` 自身那一段。 | 低價值；可選擇性 pin，不列為待辦 |
+| 6 | `helm/vector/projection-gate/Dockerfile:19` | DL3018 | #908 tenantProjections gate 的 init-container image `apk add --no-cache python3 py3-yaml` 未 pin | 同 #1（`--no-cache` + 月度 rebuild + Trivy gate 策略；py3-yaml 是 distro 套件，image 無 pip 與 build toolchain） | 同 #1 |
 
 INFO（不列管，僅記錄）：`components/da-tools/app/Dockerfile:12` DL3059（multiple consecutive RUN）。
 
