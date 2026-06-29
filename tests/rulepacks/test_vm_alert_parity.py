@@ -36,6 +36,7 @@ is skipped (CI provisions it like promtool).
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -69,11 +70,50 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def _catalogued_fixtures() -> set[str]:
+def _catalog() -> dict[str, dict]:
+    """Deviation-catalog entries keyed by fixture name. Each entry's ``rules`` +
+    ``direction`` are LOAD-BEARING (enforced by the granularity check in
+    test_rulepack_parity_on_vmalert), not just documentation."""
     if not _CATALOG.exists():
-        return set()
+        return {}
     data = yaml.safe_load(_CATALOG.read_text(encoding="utf-8")) or {}
-    return {d["fixture"] for d in (data.get("deviations") or [])}
+    return {d["fixture"]: d for d in (data.get("deviations") or [])}
+
+
+def _catalogued_fixtures() -> set[str]:
+    return set(_catalog())
+
+
+# vmalert-tool unittest emits one block per FAILING assertion (no JSON mode as of v1.146.0):
+#   testGroupName: <block>, ... alertname: <A>, time: <T>, exp:[...], got:[...]
+# Direction is read from emptiness: under-fire = expected alerts but none fired
+# (exp non-empty, got:[]); over-fire = expected none but fired (exp:[], got non-empty);
+# mismatch = both non-empty but differ (label/annotation/value drift). Narrow parse on
+# stable tokens; test_failure_parser_pins_vmalert_format pins the format vs vmalert drift.
+_FAIL_HEAD_RE = re.compile(r"alertname:\s*(?P<alert>\S+?),\s*time:\s*(?P<time>\S+?),")
+_EMPTY_EXP_RE = re.compile(r"exp:\s*\[\s*\]")
+_EMPTY_GOT_RE = re.compile(r"got:\s*\[\s*\]")
+
+
+def _parse_vmalert_failures(output: str) -> list[dict]:
+    """Parse vmalert-tool unittest failure output -> [{group, alert, time, direction}].
+    Pass stdout+stderr concatenated (the failure detail's stream is not contracted)."""
+    failures: list[dict] = []
+    for chunk in output.split("testGroupName:")[1:]:
+        head = _FAIL_HEAD_RE.search(chunk)
+        if not head:
+            continue
+        exp_empty = bool(_EMPTY_EXP_RE.search(chunk))
+        got_empty = bool(_EMPTY_GOT_RE.search(chunk))
+        direction = ("under-fire" if got_empty and not exp_empty else
+                     "over-fire" if exp_empty and not got_empty else "mismatch")
+        failures.append({
+            "group": chunk.split(",", 1)[0].strip(),
+            "alert": head.group("alert"),
+            "time": head.group("time"),
+            "direction": direction,
+        })
+    return failures
 
 
 def _fixtures() -> list[str]:
@@ -119,6 +159,36 @@ def test_rulepack_parity_on_vmalert(fixture: str, xlate_dir: Path) -> None:
             f"{fixture} is listed in vm_deviation_catalog.yaml but now PASSES on "
             f"vmalert-tool — the divergence appears healed. Remove the stale catalog entry "
             f"so the catalog stays in sync with reality."
+        )
+        # Granularity gate: a catalogued fixture must diverge ONLY in the catalogued
+        # alert(s) + direction. Without this, the per-fixture catalog key + bare returncode
+        # mask a SECOND, unrelated divergence — the fixture is already "expected to fail",
+        # so a new break in a different alert OR a direction-flip (under-fire -> wrong-label)
+        # is invisible. This turns the entry's `rules`/`direction` from docs into a gate.
+        entry = _catalog()[fixture]
+        allowed_alerts = set(entry.get("rules") or [])
+        _dirs = entry.get("direction")
+        allowed_dirs = set(_dirs) if isinstance(_dirs, list) else {_dirs}
+        failures = _parse_vmalert_failures(proc.stdout + "\n" + proc.stderr)
+        assert failures, (
+            f"{fixture} is catalogued and vmalert-tool returned non-zero, but NO per-assertion "
+            f"divergence parsed from its output. Either the fixture now fails to PARSE "
+            f"(schema/xlate gap, not a behavioural divergence) or vmalert-tool's output format "
+            f"drifted (see test_failure_parser_pins_vmalert_format). Do NOT assume the "
+            f"catalogued divergence still holds.\n\n--- stdout ---\n{proc.stdout}\n"
+            f"--- stderr ---\n{proc.stderr}"
+        )
+        rogue = [f for f in failures
+                 if f["alert"] not in allowed_alerts or f["direction"] not in allowed_dirs]
+        assert not rogue, (
+            f"{fixture}: vmalert-tool diverges OUTSIDE the catalogued signature "
+            f"(rules={sorted(allowed_alerts)}, direction={sorted(allowed_dirs)}). A NEW, "
+            f"uncatalogued divergence is hiding behind the existing catalog entry — exactly "
+            f"the per-fixture-key false-negative this granularity check closes. Fix the rule, "
+            f"or widen/justify the catalog entry. Rogue assertion(s):\n"
+            + "\n".join(f"  • {f['group']} [{f['alert']}] @{f['time']}: {f['direction']}"
+                        for f in rogue)
+            + f"\n\n--- full vmalert-tool output ---\n{proc.stdout}\n{proc.stderr}"
         )
     else:
         # Distinguish a real MetricsQL behavioural divergence from a harness/format gap:
@@ -182,3 +252,31 @@ def test_gate_detects_a_known_divergence(tmp_path: Path) -> None:
         "gate may have become a no-op (vmalert-tool flag/format drift?).\n"
         f"{proc.stdout}\n{proc.stderr}"
     )
+
+
+def test_failure_parser_pins_vmalert_format() -> None:
+    """Teeth-test for _parse_vmalert_failures: pin the exact vmalert-tool v1.146.0 unittest
+    failure-output shapes the granularity check parses — under-fire (exp non-empty / got:[])
+    and over-fire (exp:[] / got non-empty). Both samples are captured VERBATIM from real
+    vmalert-tool runs (ha-replicas under-fire; a rate() cold-start over-fire). If vmalert-tool
+    changes its output format on a version bump, this fails LOUDLY — otherwise the granularity
+    check could silently parse zero rogue divergences and wave a NEW divergence through."""
+    under = (
+        'failed to run unit test for file "x": \n[\n'
+        'testGroupName: blk-under,\n    groupname: , alertname: TenantHAReplicasDegraded, '
+        'time: 16m0s, \n        exp:[\n            0:\n              Labels:{tenant="t1"}\n'
+        '            ], \n        got:[]  \n'
+    )
+    over = (
+        'testGroupName: blk-over,\n    groupname: , alertname: OverFire, time: 30s, \n'
+        '        exp:[], \n        got:[\n            0:\n              '
+        'Labels:{alertname="OverFire", instance="t"}\n              Annotations:{}\n'
+        '            ] ]2026/06/29 05:11:30 unittest failed'
+    )
+    assert _parse_vmalert_failures(under + over) == [
+        {"group": "blk-under", "alert": "TenantHAReplicasDegraded", "time": "16m0s",
+         "direction": "under-fire"},
+        {"group": "blk-over", "alert": "OverFire", "time": "30s", "direction": "over-fire"},
+    ]
+    # A green run (or any output without failing-assertion blocks) parses to no failures.
+    assert _parse_vmalert_failures("Unit Testing: x\n  SUCCESS\n") == []

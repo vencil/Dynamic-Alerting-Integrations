@@ -16,9 +16,14 @@
 #
 # Schema per entry:
 #   fixture:     tests/rulepacks/<name>_test.yaml that diverges  (required, unique key)
-#   rules:       alert/recording rule(s) affected
+#   rules:       alert rule(s) that diverge (list). ENFORCED by the granularity check in
+#                test_vm_alert_parity.py — a catalogued fixture may diverge ONLY in these
+#                alert(s); a divergence in any OTHER alert is treated as new/uncatalogued.
 #   mechanism:   the precise MetricsQL behaviour that differs
-#   direction:   under-fire (false-negative) | over-fire (false-positive)
+#   direction:   under-fire (false-negative) | over-fire (false-positive) |
+#                mismatch (both fire but labels/values differ) | a list of these.
+#                ENFORCED: every catalogued divergence must match this direction; a flip
+#                (e.g. under-fire -> over-fire/mismatch) is treated as a new divergence.
 #   vm_behavior: what vmalert does vs Prometheus
 #   prod_impact: real-world blast radius + any mitigating layer
 #   disposition: accept-document | fix-pending | exempt
