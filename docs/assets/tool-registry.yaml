@@ -597,7 +597,7 @@ tools:
   file: interactive/tools/alert-noise-analyzer.jsx
   audience:
   - platform
-  - domain-expert
+  - domain
   icon: chart
   tags:
   - alerts
@@ -886,7 +886,7 @@ tools:
   audience:
   - platform
   - sre
-  - management
+  - maintainer
   icon: calculator
   tags:
   - cost
@@ -937,7 +937,7 @@ tools:
   file: interactive/tools/multi-tenant-comparison.jsx
   audience:
   - platform
-  - domain-expert
+  - domain
   icon: chart
   tags:
   - tenant
@@ -1118,7 +1118,7 @@ tools:
   file: interactive/tools/component-health.jsx
   audience:
   - platform
-  - contributor
+  - maintainer
   icon: health
   tags:
   - health
