@@ -15,7 +15,8 @@ type: application
 # 0.5.0 — #566 batch B: additionalSinks `_buffer_type: disk` mode (X-3); fail-loud guard on unknown buffer type; VRL audit-signing schema seam reserved (X-2)
 # 0.6.0 — ADR-021 Phase 1 / #609: (b) tenant-sanitized projection fan-out — log_event_id (uuid_v7) in demux; tenant_project (eligibility+enrichment+drop_fields, drop_on_error fail-closed) + tenant_route → static per-AccountID sinks (tenantProjections); demux/0:0 platform copy unchanged
 # 0.6.1 — #902 L2 slice-2: pin the Vector image by digest (image.digest)
-version: 0.6.1
+# 0.7.0 — #908 PR-2: fail-closed tenantProjections-vs-registry gate. config-dir split (vector.yaml base + 30-tenant-routing.yaml tenant-sink fragment) + projection-gate init-container that places the fragment only when the projections match the conf.d registry (degrade→0:0 / enforce→fail-pod)
+version: 0.7.0
 # appVersion: pinned Vector release
 appVersion: "0.55.0"
 keywords:

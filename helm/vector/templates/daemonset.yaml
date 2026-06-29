@@ -44,13 +44,68 @@ spec:
       affinity:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- if .Values.tenantProjections }}
+      # ── Projection gate (#908 PR-2) ──────────────────────────────────────────
+      # Validate the rendered tenantProjections against the authoritative
+      # _account_registry.yaml BEFORE Vector starts, then populate Vector's
+      # --config-dir: 00-base.yaml always; the tenant-routing fragment ONLY when
+      # every {tenantId→accountId} matches the registry. On a mismatch (or an
+      # unreadable registry) the fragment is omitted → Vector runs platform-only
+      # 0:0 (the safe default). This is the only un-bypassable enforcement point —
+      # Vector cannot load a config the gate did not place. enforce mode hard-fails
+      # the pod on a config-bug mismatch instead.
+      initContainers:
+        - name: projection-gate
+          image: "{{ .Values.projectionGate.image.repository }}:{{ .Values.projectionGate.image.tag }}{{ with .Values.projectionGate.image.digest }}@{{ . }}{{ end }}"
+          imagePullPolicy: {{ .Values.projectionGate.image.pullPolicy }}
+          args:
+            - "--registry"
+            - "/conf.d/_account_registry.yaml"
+            - "--projections"
+            - "/staging/tenant-projections.json"
+            - "--base-config"
+            - "/staging/vector.yaml"
+            - "--fragment-config"
+            - "/staging/30-tenant-routing.yaml"
+            - "--config-dir"
+            - "/etc/vector"
+            - "--mode"
+            - {{ .Values.tenantProjectionGate | quote }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.projectionGate.resources | nindent 12 }}
+          volumeMounts:
+            # Rendered configs to validate + place (read-only staging).
+            - name: staging
+              mountPath: /staging
+              readOnly: true
+            # The conf.d registry (operator-provided ConfigMap), read-only.
+            - name: registry
+              mountPath: /conf.d
+              readOnly: true
+            # The config-dir Vector loads — the gate WRITES the chosen files here.
+            - name: config
+              mountPath: /etc/vector
+      {{- end }}
       containers:
         - name: vector
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}{{ with .Values.image.digest }}@{{ . }}{{ end }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:
+            {{- if .Values.tenantProjections }}
+            # config-dir: the projection-gate init-container populates this emptyDir
+            # (00-base.yaml always + 30-tenant-routing.yaml ONLY when the gate passes);
+            # Vector merges the dir. No --watch-config — the gate is one-shot-at-boot,
+            # and projection changes roll the DaemonSet (checksum/config) so the gate
+            # re-validates on the new pod (#908 PR-2).
+            - "--config-dir"
+            - "/etc/vector"
+            {{- else }}
+            # No tenant projections → the single base config, mounted directly.
             - "--config"
             - "/etc/vector/vector.yaml"
+            {{- end }}
           env:
             # Vector enriches with k8s metadata via the API server using
             # the in-pod ServiceAccount token. VECTOR_SELF_NODE_NAME
@@ -105,9 +160,24 @@ spec:
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
       volumes:
+        {{- if .Values.tenantProjections }}
+        # Gate active: Vector reads the init-populated config-dir (emptyDir); the
+        # rendered configs are staged from the ConfigMap for the gate to validate.
+        - name: config
+          emptyDir: {}
+        - name: staging
+          configMap:
+            name: {{ include "vector.name" . }}-config
+        - name: registry
+          # conf.d registry materialised by the operator (key: _account_registry.yaml),
+          # read-only. Same read-side pattern as threshold-exporter — NOT a git write.
+          configMap:
+            name: {{ required "projectionGate.registry.configMapName is required when tenantProjections is set (the conf.d _account_registry.yaml ConfigMap)" .Values.projectionGate.registry.configMapName }}
+        {{- else }}
         - name: config
           configMap:
             name: {{ include "vector.name" . }}-config
+        {{- end }}
         - name: var-log
           hostPath:
             path: /var/log
