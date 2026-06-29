@@ -658,9 +658,16 @@ groups:
           (
             count by(tenant) (
               label_replace(
-                kube_pod_container_resource_limits{resource="cpu", namespace=~"db-.+"}
-                or
-                kube_pod_container_resource_requests{resource="cpu", namespace=~"db-.+"},
+                # RUNNING pods only (#951 CodeRabbit): a Pending/Completed/old-rollout
+                # pod whose bounds linger in KSM must NOT mask a Running BestEffort pod
+                # — the covered leg has to match the firing leg's phase="Running" filter.
+                (
+                  kube_pod_container_resource_limits{resource="cpu", namespace=~"db-.+"}
+                  or
+                  kube_pod_container_resource_requests{resource="cpu", namespace=~"db-.+"}
+                )
+                and on(namespace, pod)
+                  (kube_pod_status_phase{namespace=~"db-.+", phase="Running"} == 1),
                 "tenant", "$1", "namespace", "(.+)"
               )
             )

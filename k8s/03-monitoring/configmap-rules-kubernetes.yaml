@@ -217,18 +217,23 @@ data:
     \    expr: \"(\\n  count by(tenant) (\\n    label_replace(\\n      kube_pod_status_phase{namespace=~\\\
     \"db-.+\\\", phase=\\\"Running\\\"} == 1,\\n      \\\"tenant\\\", \\\"$1\\\",\
     \ \\\"namespace\\\", \\\"(.+)\\\"\\n    )\\n  )\\n)\\nunless on(tenant)\\n(\\\
-    n  count by(tenant) (\\n    label_replace(\\n      kube_pod_container_resource_limits{resource=\\\
-    \"cpu\\\", namespace=~\\\"db-.+\\\"}\\n      or\\n      kube_pod_container_resource_requests{resource=\\\
-    \"cpu\\\", namespace=~\\\"db-.+\\\"},\\n      \\\"tenant\\\", \\\"$1\\\", \\\"\
-    namespace\\\", \\\"(.+)\\\"\\n    )\\n  )\\n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\
-    \"maintenance\\\"} == 1)\\n\"\n    for: 15m\n    labels:\n      severity: warning\n\
-    \      tenant: '{{ $labels.tenant }}'\n    annotations:\n      summary: DB pods\
-    \ run with no CPU request/limit on {{ $labels.tenant }} — CPU% monitoring blind\n\
-    \      summary_zh: '{{ $labels.tenant }} 的 DB pod 未設 CPU request/limit — CPU%\
-    \ 監控盲區'\n      platform_summary: '[SRE] {{ $labels.tenant }}: db pods are BestEffort\
-    \ for CPU (no limit AND no request) → tenant:container_cpu_percent can''t be computed\
-    \ and PodContainerHighCPU is blind for them. Running-thread saturation (MariaDBHighThreadsRunning)\
-    \ still covers query concurrency, but a heavy query pinning a core (low threads_running,\
+    n  count by(tenant) (\\n    label_replace(\\n      # RUNNING pods only (#951 CodeRabbit):\
+    \ a Pending/Completed/old-rollout\\n      # pod whose bounds linger in KSM must\
+    \ NOT mask a Running BestEffort pod\\n      # — the covered leg has to match the\
+    \ firing leg's phase=\\\"Running\\\" filter.\\n      (\\n        kube_pod_container_resource_limits{resource=\\\
+    \"cpu\\\", namespace=~\\\"db-.+\\\"}\\n        or\\n        kube_pod_container_resource_requests{resource=\\\
+    \"cpu\\\", namespace=~\\\"db-.+\\\"}\\n      )\\n      and on(namespace, pod)\\\
+    n        (kube_pod_status_phase{namespace=~\\\"db-.+\\\", phase=\\\"Running\\\"\
+    } == 1),\\n      \\\"tenant\\\", \\\"$1\\\", \\\"namespace\\\", \\\"(.+)\\\"\\\
+    n    )\\n  )\\n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\"maintenance\\\
+    \"} == 1)\\n\"\n    for: 15m\n    labels:\n      severity: warning\n      tenant:\
+    \ '{{ $labels.tenant }}'\n    annotations:\n      summary: DB pods run with no\
+    \ CPU request/limit on {{ $labels.tenant }} — CPU% monitoring blind\n      summary_zh:\
+    \ '{{ $labels.tenant }} 的 DB pod 未設 CPU request/limit — CPU% 監控盲區'\n      platform_summary:\
+    \ '[SRE] {{ $labels.tenant }}: db pods are BestEffort for CPU (no limit AND no\
+    \ request) → tenant:container_cpu_percent can''t be computed and PodContainerHighCPU\
+    \ is blind for them. Running-thread saturation (MariaDBHighThreadsRunning) still\
+    \ covers query concurrency, but a heavy query pinning a core (low threads_running,\
     \ high CPU) is invisible. Fix: set a CPU LIMIT — PodContainerHighCPU divides by\
     \ the limit, so a request alone restores QoS and silences this sentinel but does\
     \ NOT enable CPU% yet. Native limitless-pod CPU% measurement is tracked in the\

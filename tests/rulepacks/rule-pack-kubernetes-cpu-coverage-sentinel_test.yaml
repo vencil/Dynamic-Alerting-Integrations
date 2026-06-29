@@ -6,7 +6,7 @@
 # tenant:container_cpu_percent divides by the limit, so it's empty and PodContainerHighCPU
 # is blind for them (#944 saturation↔utilisation decoupling). NOT the opinionated "always
 # set a limit" page: it fires ONLY for the BestEffort case (rare; a request is normally
-# set), tenant-level (ANY bound on ANY container = covered → anti-flood, mirrors
+# set), tenant-level (ANY bound on ANY RUNNING container = covered → anti-flood, mirrors
 # CustomRecipeDiskInert). Maintenance opt-out + PER-TENANT isolation (`unless on(tenant)`).
 # `for: 15m` → eval at 16m. tenant=db-* (must match the namespace=~"db-.+" keep).
 #   A) BESTEFFORT  → fires (db-a): running pod, NO cpu limit AND NO request. [full annotations]
@@ -18,6 +18,8 @@
 #   G) NON-DB SCOPE→ silent: shop-a (non-db namespace) suppressed by db-.+ scope.
 #   H) PARTIAL     → silent (db-a): 2 pods, one BestEffort + one with a request → tenant-level
 #                    ANY-bound=covered (documents the deliberate anti-flood granularity).
+#   I) NON-RUN MASK→ fires (db-a): Running BestEffort + a Pending pod w/ a lingering cpu limit —
+#                    covered leg is Running-filtered, so non-Running bounds aren't coverage (#951).
 rule_files:
   - ../../rule-packs/rule-pack-kubernetes.yaml
 
@@ -146,3 +148,33 @@ tests:
       - eval_time: 16m
         alertname: ContainerCpuSignalAbsent
         exp_alerts: []
+
+  # ── I) NON-RUNNING MASK regression (#951 CodeRabbit): a non-Running pod whose CPU
+  # bounds linger in KSM must NOT mask a Running BestEffort pod → db-a STILL FIRES.
+  # Guards the covered-leg `and on(namespace,pod) phase="Running"` filter (a lingering
+  # bound on a Pending/Completed/old-rollout pod is not real coverage).
+  - interval: 15s
+    input_series:
+      # db-a: the blind one — a Running BestEffort pod.
+      - series: 'kube_pod_status_phase{namespace="db-a", pod="mysql-0", phase="Running"}'
+        values: '1x80'
+      # ... + a PENDING pod carrying a cpu limit (lingering spec) — must NOT count as coverage.
+      - series: 'kube_pod_status_phase{namespace="db-a", pod="mysql-1", phase="Pending"}'
+        values: '1x80'
+      - series: 'kube_pod_container_resource_limits{namespace="db-a", pod="mysql-1", container="mysqld", resource="cpu"}'
+        values: '2x80'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: ContainerCpuSignalAbsent
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              tenant: db-a
+            exp_annotations:
+              summary: "DB pods run with no CPU request/limit on db-a — CPU% monitoring blind"
+              summary_zh: "db-a 的 DB pod 未設 CPU request/limit — CPU% 監控盲區"
+              platform_summary: "[SRE] db-a: db pods are BestEffort for CPU (no limit AND no request) → tenant:container_cpu_percent can't be computed and PodContainerHighCPU is blind for them. Running-thread saturation (MariaDBHighThreadsRunning) still covers query concurrency, but a heavy query pinning a core (low threads_running, high CPU) is invisible. Fix: set a CPU LIMIT — PodContainerHighCPU divides by the limit, so a request alone restores QoS and silences this sentinel but does NOT enable CPU% yet. Native limitless-pod CPU% measurement is tracked in the #944 key-PR."
+              platform_summary_zh: "[SRE] db-a: db pod 為 CPU BestEffort（無 limit 也無 request）→ tenant:container_cpu_percent 算不出、PodContainerHighCPU 對其盲。執行緒飽和（MariaDBHighThreadsRunning）仍涵蓋查詢並發，但單一重查詢釘核（低 threads_running、高 CPU）不可見。修法：設 CPU LIMIT — PodContainerHighCPU 除以 limit，故只設 request 可恢復 QoS、靜默此哨兵，但今天仍無法啟用 CPU%。limitless pod 原生 CPU% 量測見 #944 key-PR。"
+              description: "Your DB pods have no CPU limit or request set (BestEffort), so the platform cannot compute their CPU utilisation — the CPU% alert (PodContainerHighCPU) can never fire for them. Saturation alerting (running threads) still works. Set a CPU LIMIT to enable CPU% monitoring (PodContainerHighCPU measures usage as a % of the limit); a CPU request alone restores scheduling QoS but does not enable CPU% yet (limitless-pod CPU% is a follow-up)."
+              description_zh: "您的 DB pod 未設定 CPU limit 或 request（BestEffort），平台無法計算其 CPU 使用率 — CPU% 告警（PodContainerHighCPU）對其永不觸發。飽和告警（執行緒數）仍有效。設 CPU LIMIT 才能啟用 CPU% 監控（PodContainerHighCPU 量的是 % of limit）；只設 CPU request 可恢復排程 QoS 但尚無法啟用 CPU%（limitless pod CPU% 為後續項目）。"
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/byo-prometheus-integration.md"

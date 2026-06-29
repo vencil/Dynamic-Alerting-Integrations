@@ -305,11 +305,15 @@ spec:
       expr: "(\n  count by(tenant) (\n    label_replace(\n      kube_pod_status_phase{namespace=~\"\
         db-.+\", phase=\"Running\"} == 1,\n      \"tenant\", \"$1\", \"namespace\"\
         , \"(.+)\"\n    )\n  )\n)\nunless on(tenant)\n(\n  count by(tenant) (\n  \
-        \  label_replace(\n      kube_pod_container_resource_limits{resource=\"cpu\"\
-        , namespace=~\"db-.+\"}\n      or\n      kube_pod_container_resource_requests{resource=\"\
-        cpu\", namespace=~\"db-.+\"},\n      \"tenant\", \"$1\", \"namespace\", \"\
-        (.+)\"\n    )\n  )\n)\nunless on(tenant)\n(user_state_filter{filter=\"maintenance\"\
-        } == 1)\n"
+        \  label_replace(\n      # RUNNING pods only (#951 CodeRabbit): a Pending/Completed/old-rollout\n\
+        \      # pod whose bounds linger in KSM must NOT mask a Running BestEffort\
+        \ pod\n      # — the covered leg has to match the firing leg's phase=\"Running\"\
+        \ filter.\n      (\n        kube_pod_container_resource_limits{resource=\"\
+        cpu\", namespace=~\"db-.+\"}\n        or\n        kube_pod_container_resource_requests{resource=\"\
+        cpu\", namespace=~\"db-.+\"}\n      )\n      and on(namespace, pod)\n    \
+        \    (kube_pod_status_phase{namespace=~\"db-.+\", phase=\"Running\"} == 1),\n\
+        \      \"tenant\", \"$1\", \"namespace\", \"(.+)\"\n    )\n  )\n)\nunless\
+        \ on(tenant)\n(user_state_filter{filter=\"maintenance\"} == 1)\n"
       for: 15m
       labels:
         severity: warning
