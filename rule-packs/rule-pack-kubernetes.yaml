@@ -636,7 +636,9 @@ groups:
   # limitless to avoid CFS throttling): it fires ONLY for BestEffort-for-CPU pods
   # — NEITHER limit NOR request — which is poor QoS by consensus and rare (a
   # request is normally set for scheduling). Tenant-level (ANY bound on ANY
-  # container = covered) mirrors CustomRecipeDiskInert's anti-flood philosophy.
+  # RUNNING container = covered) mirrors CustomRecipeDiskInert's anti-flood philosophy;
+  # the covered leg is phase="Running"-filtered (#951 CodeRabbit) so a Pending/Completed/
+  # old-rollout pod whose bounds linger in KSM cannot mask a Running BestEffort pod.
   # The native limitless-pod CPU% MEASUREMENT (node-allocatable / absolute-cores,
   # which needs a new threshold key) is deferred to the #944 key-PR; until then
   # this is the honest, zero-new-key coverage signal. Maintenance opt-out mirrors
@@ -658,9 +660,6 @@ groups:
           (
             count by(tenant) (
               label_replace(
-                # RUNNING pods only (#951 CodeRabbit): a Pending/Completed/old-rollout
-                # pod whose bounds linger in KSM must NOT mask a Running BestEffort pod
-                # — the covered leg has to match the firing leg's phase="Running" filter.
                 (
                   kube_pod_container_resource_limits{resource="cpu", namespace=~"db-.+"}
                   or
