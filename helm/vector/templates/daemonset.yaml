@@ -171,8 +171,15 @@ spec:
         - name: registry
           # conf.d registry materialised by the operator (key: _account_registry.yaml),
           # read-only. Same read-side pattern as threshold-exporter — NOT a git write.
+          # optional:true — an ABSENT registry ConfigMap must DEGRADE (the gate reads a
+          # missing file → registry_unreadable → drops the fragment → platform-only
+          # 0:0), NOT wedge the pod at mount time. A hard mount failure would self-DoS
+          # ALL log shipping (incl the platform copy), contradicting the gate's
+          # fail-available design. configMapName is still `required` (the operator MUST
+          # declare it); optional only governs the absent-at-runtime case.
           configMap:
             name: {{ required "projectionGate.registry.configMapName is required when tenantProjections is set (the conf.d _account_registry.yaml ConfigMap)" .Values.projectionGate.registry.configMapName }}
+            optional: true
         {{- else }}
         - name: config
           configMap:
