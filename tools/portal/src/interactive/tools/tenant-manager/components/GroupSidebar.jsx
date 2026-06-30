@@ -123,6 +123,11 @@ function GroupSidebar({ groups, activeGroupId, onSelectGroup, onCreateGroup, onD
       )}
 
       {groupEntries.map(([id, group]) => (
+        // a11y: outer row is NON-interactive (plain div); select + delete are
+        // SIBLING <button>s. Was `<div role="button">` wrapping a nested
+        // delete <button> → axe `nested-interactive` (WCAG 4.1.2) once this
+        // sidebar started rendering. Native <button>s are keyboard-accessible
+        // (drop the manual role/tabIndex/onKeyDown).
         <div
           key={id}
           style={{
@@ -132,20 +137,23 @@ function GroupSidebar({ groups, activeGroupId, onSelectGroup, onCreateGroup, onD
             justifyContent: 'space-between',
             alignItems: 'center',
           }}
-          role="button"
-          tabIndex={0}
-          aria-label={`${t('選擇群組', 'Select group')}: ${group.label || id}`}
-          aria-pressed={activeGroupId === id}
-          onClick={() => onSelectGroup(id)}
-          onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelectGroup(id); } }}
         >
-          <span>
-            {group.label || id}
-            <span style={styles.groupMemberCount}>({(group.members || []).length})</span>
-          </span>
+          <button
+            type="button"
+            aria-pressed={activeGroupId === id}
+            aria-label={`${t('選擇群組', 'Select group')}: ${group.label || id}`}
+            onClick={() => onSelectGroup(id)}
+            style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'none', border: 'none', padding: 0, margin: 0, font: 'inherit', color: 'inherit', cursor: 'pointer', textAlign: 'left' }}
+          >
+            <span>
+              {group.label || id}
+              <span style={styles.groupMemberCount}>({(group.members || []).length})</span>
+            </span>
+          </button>
           {canWrite && (
             <button
-              style={{ ...styles.chipClose, fontSize: 'var(--da-font-size-sm-md)', color: 'var(--da-color-muted)', background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px' }}
+              type="button"
+              style={{ ...styles.chipClose, fontSize: 'var(--da-font-size-sm-md)', color: 'var(--da-color-muted)', background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px', marginLeft: 'var(--da-space-1)', flexShrink: 0 }}
               title={t('刪除此群組', 'Delete this group')}
               aria-label={`${t('刪除群組', 'Delete group')}: ${group.label || id}`}
               onClick={(e) => { e.stopPropagation(); onDeleteGroup(id); }}
