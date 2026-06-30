@@ -21,6 +21,18 @@ spec:
         db-.+\"},\n        \"version\", \"$1\", \"label_app_kubernetes_io_version\"\
         , \"(.+)\"\n      )\n  ),\n  \"tenant\", \"$1\", \"namespace\", \"(.*)\"\n\
         )\n"
+    - record: tenant:pod_cpu_node_share:limitless
+      expr: "label_replace(\n  (\n    (\n      (\n        sum by(namespace, pod) (\n\
+        \          rate(container_cpu_usage_seconds_total{namespace=~\"db-.+\", container!=\"\
+        \", container!=\"POD\"}[5m])\n        )\n        unless on(namespace, pod)\n\
+        \        sum by(namespace, pod) (\n          kube_pod_container_resource_limits{resource=\"\
+        cpu\", namespace=~\"db-.+\"}\n        )\n      )\n      /\n      max by(namespace,\
+        \ pod) (\n        max by(node) (kube_node_status_allocatable{resource=\"cpu\"\
+        })\n        * on(node) group_right()\n          kube_pod_info{namespace=~\"\
+        db-.+\"}\n      )\n      * 100\n    )\n    * on(namespace, pod) group_left(version)\n\
+        \      label_replace(\n        kube_pod_labels{namespace=~\"db-.+\"},\n  \
+        \      \"version\", \"$1\", \"label_app_kubernetes_io_version\", \"(.+)\"\n\
+        \      )\n  ),\n  \"tenant\", \"$1\", \"namespace\", \"(.*)\"\n)\n"
     - record: tenant:container_memory_percent:by_container
       expr: "label_replace(\n  (\n    (\n      sum by(namespace, pod, container) (\n\
         \        container_memory_working_set_bytes{namespace=~\"db-.+\", container!=\"\
@@ -31,7 +43,13 @@ spec:
         \      \"version\", \"$1\", \"label_app_kubernetes_io_version\", \"(.+)\"\n\
         \      )\n  ),\n  \"tenant\", \"$1\", \"namespace\", \"(.*)\"\n)\n"
     - record: tenant:pod_weakest_cpu_percent:max
-      expr: max by(tenant, pod, version) (tenant:container_cpu_percent:by_container)
+      expr: 'max by(tenant, pod, version) (tenant:container_cpu_percent:by_container)
+
+        or
+
+        tenant:pod_cpu_node_share:limitless
+
+        '
     - record: tenant:pod_weakest_memory_percent:max
       expr: max by(tenant, pod, version) (tenant:container_memory_percent:by_container)
   - name: kubernetes-state-matching
@@ -298,50 +316,6 @@ spec:
           disk-metric collection.
         description_zh: 您設定了磁碟填滿告警，但平台偵測不到您工作負載的磁碟(volume)指標，該告警永遠不會觸發。這通常表示您的服務沒有掛載
           PersistentVolumeClaim — 請確認您的部署。若您確實使用 PVC，請聯繫平台團隊排查磁碟指標收集。
-        runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/byo-prometheus-integration.md
-  - name: kubernetes-container-cpu-coverage-sentinel
-    rules:
-    - alert: ContainerCpuSignalAbsent
-      expr: "(\n  count by(tenant) (\n    label_replace(\n      kube_pod_status_phase{namespace=~\"\
-        db-.+\", phase=\"Running\"} == 1,\n      \"tenant\", \"$1\", \"namespace\"\
-        , \"(.+)\"\n    )\n  )\n)\nunless on(tenant)\n(\n  count by(tenant) (\n  \
-        \  label_replace(\n      (\n        kube_pod_container_resource_limits{resource=\"\
-        cpu\", namespace=~\"db-.+\"}\n        or\n        kube_pod_container_resource_requests{resource=\"\
-        cpu\", namespace=~\"db-.+\"}\n      )\n      and on(namespace, pod)\n    \
-        \    (kube_pod_status_phase{namespace=~\"db-.+\", phase=\"Running\"} == 1),\n\
-        \      \"tenant\", \"$1\", \"namespace\", \"(.+)\"\n    )\n  )\n)\nunless\
-        \ on(tenant)\n(user_state_filter{filter=\"maintenance\"} == 1)\n"
-      for: 15m
-      labels:
-        severity: warning
-        tenant: '{{ $labels.tenant }}'
-      annotations:
-        summary: DB pods run with no CPU request/limit on {{ $labels.tenant }} — CPU%
-          monitoring blind
-        summary_zh: '{{ $labels.tenant }} 的 DB pod 未設 CPU request/limit — CPU% 監控盲區'
-        platform_summary: '[SRE] {{ $labels.tenant }}: db pods are BestEffort for
-          CPU (no limit AND no request) → tenant:container_cpu_percent can''t be computed
-          and PodContainerHighCPU is blind for them. Running-thread saturation (MariaDBHighThreadsRunning)
-          still covers query concurrency, but a heavy query pinning a core (low threads_running,
-          high CPU) is invisible. Fix: set a CPU LIMIT — PodContainerHighCPU divides
-          by the limit, so a request alone restores QoS and silences this sentinel
-          but does NOT enable CPU% yet. Native limitless-pod CPU% measurement is tracked
-          in the #944 key-PR.'
-        platform_summary_zh: '[SRE] {{ $labels.tenant }}: db pod 為 CPU BestEffort（無
-          limit 也無 request）→ tenant:container_cpu_percent 算不出、PodContainerHighCPU
-          對其盲。執行緒飽和（MariaDBHighThreadsRunning）仍涵蓋查詢並發，但單一重查詢釘核（低 threads_running、高
-          CPU）不可見。修法：設 CPU LIMIT — PodContainerHighCPU 除以 limit，故只設 request 可恢復 QoS、靜默此哨兵，但今天仍無法啟用
-          CPU%。limitless pod 原生 CPU% 量測見 #944 key-PR。'
-        description: Your DB pods have no CPU limit or request set (BestEffort), so
-          the platform cannot compute their CPU utilisation — the CPU% alert (PodContainerHighCPU)
-          can never fire for them. Saturation alerting (running threads) still works.
-          Set a CPU LIMIT to enable CPU% monitoring (PodContainerHighCPU measures
-          usage as a % of the limit); a CPU request alone restores scheduling QoS
-          but does not enable CPU% yet (limitless-pod CPU% is a follow-up).
-        description_zh: 您的 DB pod 未設定 CPU limit 或 request（BestEffort），平台無法計算其 CPU
-          使用率 — CPU% 告警（PodContainerHighCPU）對其永不觸發。飽和告警（執行緒數）仍有效。設 CPU LIMIT 才能啟用
-          CPU% 監控（PodContainerHighCPU 量的是 % of limit）；只設 CPU request 可恢復排程 QoS 但尚無法啟用
-          CPU%（limitless pod CPU% 為後續項目）。
         runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/byo-prometheus-integration.md
   - name: kubernetes-node-health
     rules:

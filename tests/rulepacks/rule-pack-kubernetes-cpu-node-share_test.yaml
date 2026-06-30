@@ -1,0 +1,152 @@
+# promtool unit test — #944 PR-2b: limitless-pod CPU% via NODE-ALLOCATABLE.
+# Run: promtool test rules tests/rulepacks/rule-pack-kubernetes-cpu-node-share_test.yaml
+#
+# A pod WITHOUT a cpu limit has no %-of-limit denominator, so PodContainerHighCPU was
+# blind (the gap the now-retired ContainerCpuSignalAbsent sentinel flagged). PR-2b
+# measures such pods' POD-TOTAL cpu usage as a % of their NODE's allocatable cpu
+# (tenant:pod_cpu_node_share:limitless), `or`-unioned into tenant:pod_weakest_cpu_percent
+# so the SAME PodContainerHighCPU alert + container_cpu threshold (80) now cover them.
+# Reuses the existing container threshold key (no new key, no #731 contract change).
+#   A) LIMITLESS hogging node  → fires (db-x): 3.4 cores / 4-core node = 85% > 80.
+#   B) LIMITLESS below thresh   → silent (db-y): 1.0 core / 4-core node = 25% < 80.
+#   C) LIMITED pod (has limit)  → STILL fires via %-of-limit (db-z, 90%) — node-share is
+#      empty for it (`unless` the limit), so the limited path is unchanged + no double-fire.
+#   D) LIMITLESS + version label → node-share carries the real version (db-w, v2, 85%).
+rule_files:
+  - ../../rule-packs/rule-pack-kubernetes.yaml
+
+evaluation_interval: 15s
+
+tests:
+  # ── A) LIMITLESS hogging its node: rate 3.4 cores / node 4 = 85% > 80 → FIRES ──
+  - interval: 15s
+    input_series:
+      - series: 'container_cpu_usage_seconds_total{namespace="db-x", pod="mysql-0", container="mysqld"}'
+        values: '0+51x48'
+      # NO kube_pod_container_resource_limits for db-x → limitless → node-share path.
+      - series: 'kube_pod_info{namespace="db-x", pod="mysql-0", node="node-1"}'
+        values: '1x48'
+      - series: 'kube_node_status_allocatable{node="node-1", resource="cpu"}'
+        values: '4x48'
+      - series: 'kube_pod_labels{namespace="db-x", pod="mysql-0"}'
+        values: '1x48'
+      - series: 'user_threshold{tenant="db-x", component="container", metric="cpu", severity="warning"}'
+        values: '80x48'
+      - series: 'tenant_metadata_info{tenant="db-x", runbook_url="http://rb/x", owner="team-x", tier="gold"}'
+        values: '1x48'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: PodContainerHighCPU
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              tenant: db-x
+              version: default
+              runbook_url: "http://rb/x"
+              owner: team-x
+              tier: gold
+            exp_annotations:
+              summary: "High container CPU in db-x"
+              summary_zh: "db-x 的容器 CPU 使用率過高"
+              platform_summary: "[gold] db-x: container CPU pressure — evaluate resource limits"
+              platform_summary_zh: "[gold] db-x: 容器 CPU 壓力過高 — 請評估資源限制"
+              description: "Max container CPU usage: 85.0% (threshold exceeded)"
+              description_zh: "最大容器 CPU 使用率: 85.0% (超過閾值)"
+              runbook_url: "http://rb/x"
+              owner: team-x
+              tier: gold
+
+  # ── B) LIMITLESS below threshold: rate 1.0 core / node 4 = 25% < 80 → SILENT ──
+  - interval: 15s
+    input_series:
+      - series: 'container_cpu_usage_seconds_total{namespace="db-y", pod="mysql-0", container="mysqld"}'
+        values: '0+15x48'
+      - series: 'kube_pod_info{namespace="db-y", pod="mysql-0", node="node-1"}'
+        values: '1x48'
+      - series: 'kube_node_status_allocatable{node="node-1", resource="cpu"}'
+        values: '4x48'
+      - series: 'kube_pod_labels{namespace="db-y", pod="mysql-0"}'
+        values: '1x48'
+      - series: 'user_threshold{tenant="db-y", component="container", metric="cpu", severity="warning"}'
+        values: '80x48'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: PodContainerHighCPU
+        exp_alerts: []
+
+  # ── C) LIMITED pod still fires via %-of-limit (node-share empty for it): 0.9/1 = 90% ──
+  - interval: 15s
+    input_series:
+      - series: 'container_cpu_usage_seconds_total{namespace="db-z", pod="app-0", container="app"}'
+        values: '0+13.5x48'
+      - series: 'kube_pod_container_resource_limits{resource="cpu", namespace="db-z", pod="app-0", container="app"}'
+        values: '1x48'
+      # node metrics present too — but db-z HAS a limit, so node-share must NOT apply.
+      - series: 'kube_pod_info{namespace="db-z", pod="app-0", node="node-1"}'
+        values: '1x48'
+      - series: 'kube_node_status_allocatable{node="node-1", resource="cpu"}'
+        values: '4x48'
+      - series: 'kube_pod_labels{namespace="db-z", pod="app-0"}'
+        values: '1x48'
+      - series: 'user_threshold{tenant="db-z", component="container", metric="cpu", severity="warning"}'
+        values: '80x48'
+      - series: 'tenant_metadata_info{tenant="db-z", runbook_url="http://rb/z", owner="team-z", tier="silver"}'
+        values: '1x48'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: PodContainerHighCPU
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              tenant: db-z
+              version: default
+              runbook_url: "http://rb/z"
+              owner: team-z
+              tier: silver
+            exp_annotations:
+              summary: "High container CPU in db-z"
+              summary_zh: "db-z 的容器 CPU 使用率過高"
+              platform_summary: "[silver] db-z: container CPU pressure — evaluate resource limits"
+              platform_summary_zh: "[silver] db-z: 容器 CPU 壓力過高 — 請評估資源限制"
+              description: "Max container CPU usage: 90.0% (threshold exceeded)"
+              description_zh: "最大容器 CPU 使用率: 90.0% (超過閾值)"
+              runbook_url: "http://rb/z"
+              owner: team-z
+              tier: silver
+
+  # ── D) LIMITLESS + version label: node-share carries the real version (v2), 85% ──
+  - interval: 15s
+    input_series:
+      - series: 'container_cpu_usage_seconds_total{namespace="db-w", pod="app-v2", container="app"}'
+        values: '0+51x48'
+      - series: 'kube_pod_info{namespace="db-w", pod="app-v2", node="node-2"}'
+        values: '1x48'
+      - series: 'kube_node_status_allocatable{node="node-2", resource="cpu"}'
+        values: '4x48'
+      - series: 'kube_pod_labels{namespace="db-w", pod="app-v2", label_app_kubernetes_io_version="v2"}'
+        values: '1x48'
+      - series: 'user_threshold{tenant="db-w", component="container", metric="cpu", severity="warning", version="v2"}'
+        values: '80x48'
+      - series: 'tenant_metadata_info{tenant="db-w", runbook_url="http://rb/w", owner="team-w", tier="gold"}'
+        values: '1x48'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: PodContainerHighCPU
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              tenant: db-w
+              version: v2
+              runbook_url: "http://rb/w"
+              owner: team-w
+              tier: gold
+            exp_annotations:
+              summary: "High container CPU in db-w"
+              summary_zh: "db-w 的容器 CPU 使用率過高"
+              platform_summary: "[gold] db-w: container CPU pressure — evaluate resource limits"
+              platform_summary_zh: "[gold] db-w: 容器 CPU 壓力過高 — 請評估資源限制"
+              description: "Max container CPU usage: 85.0% (threshold exceeded)"
+              description_zh: "最大容器 CPU 使用率: 85.0% (超過閾值)"
+              runbook_url: "http://rb/w"
+              owner: team-w
+              tier: gold
