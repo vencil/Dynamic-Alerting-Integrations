@@ -68,17 +68,23 @@ describe('TenantManager — last-mile activation', () => {
     }
   });
 
-  it('selecting a group filters the tenant table via onSelectGroup', async () => {
+  it('selecting a group filters the tenant TABLE to its members', async () => {
     await renderAndSettle();
+    // Before selection a non-staging tenant is on screen.
+    expect(screen.getAllByText('prod-mariadb-01').length).toBeGreaterThan(0);
     const sidebar = screen.getByRole('complementary', { name: 'Group management sidebar' });
     // staging-all has exactly one member (staging-pg-01). Click it.
     const stagingBtn = within(sidebar).getByRole('button', { name: /Select group: All Staging/ });
     const { fireEvent } = await import('@testing-library/react');
     fireEvent.click(stagingBtn);
-    // Active-group panel surfaces the selected group's member count.
-    await waitFor(() =>
-      expect(screen.getByRole('region', { name: 'Group: All Staging' })).toBeInTheDocument(),
-    );
+    // After selecting "All Staging" the TABLE is filtered to its sole
+    // member — non-members disappear. Proves the selection drives the
+    // tenant filter, not just the active-group panel: if onSelectGroup
+    // stopped filtering, prod-mariadb-01 would still render and this fails.
+    await waitFor(() => expect(screen.queryAllByText('prod-mariadb-01').length).toBe(0));
+    expect(screen.getAllByText('staging-pg-01').length).toBeGreaterThan(0);
+    // …and the active-group panel still surfaces the selection.
+    expect(screen.getByRole('region', { name: 'Group: All Staging' })).toBeInTheDocument();
   });
 
   it('domain dropdown options are derived from filterOptions (live data), not hardcoded', async () => {
@@ -99,6 +105,31 @@ describe('TenantManager — last-mile activation', () => {
       .map((o) => o.value)
       .filter((v) => v !== ''); // drop the leading "All DB Types"
     expect(optionValues).toEqual(EXPECTED_DBTYPES);
+  });
+
+  it('dropdowns are truly DATA-DRIVEN — a sentinel value absent from the old hardcoded lists appears', async () => {
+    // The old hardcoded <option> lists were [finance,cache,analytics,
+    // mobile,streaming] / [mariadb,redis,postgresql,mongodb,kafka] — which
+    // happen to equal the demo distinct set, so the EXPECTED_* assertions
+    // above cannot tell a regression-to-hardcoded apart. Override the data
+    // with a SENTINEL domain/db_type the legacy lists never contained: only
+    // a filterOptions-driven dropdown can surface it.
+    vi.stubGlobal('__DEMO_TENANTS', {
+      'sentinel-01': {
+        environment: 'production', region: 'x', tier: 'tier-1',
+        domain: 'zzz-sentinel-domain', db_type: 'zzz-sentinel-db',
+        rule_packs: [], owner: 'x', routing_channel: 'x',
+        operational_mode: 'normal', metric_count: 0,
+        last_config_commit: 'x', tags: [], groups: [],
+      },
+    });
+    await renderAndSettle();
+    const domainOpts = Array.from((document.getElementById('filter-domain') as HTMLSelectElement).options).map((o) => o.value);
+    const dbOpts = Array.from((document.getElementById('filter-dbtype') as HTMLSelectElement).options).map((o) => o.value);
+    expect(domainOpts).toContain('zzz-sentinel-domain');
+    expect(dbOpts).toContain('zzz-sentinel-db');
+    // A legacy hardcoded value cannot appear (that tenant no longer exists).
+    expect(domainOpts).not.toContain('finance');
   });
 
   it('still renders the fixed-enum filters (env/tier/mode) untouched', async () => {
