@@ -1,6 +1,6 @@
 # ============================================================
 # Rule Pack: MariaDB / MySQL (via mysqld_exporter / Percona)
-# 預設啟用 — 涵蓋連線數、CPU、複合瓶頸、重啟偵測
+# 預設啟用 — 涵蓋連線數、執行緒飽和、複合瓶頸、重啟偵測
 #
 # 需要的 exporter:
 #   - mysqld_exporter (https://github.com/prometheus/mysqld_exporter)
@@ -8,14 +8,14 @@
 #
 # 對應的 threshold-exporter defaults:
 #   mysql_connections: 80
-#   mysql_cpu: 80
+#   mysql_cpu: 30      # running-thread SATURATION (NOT host CPU%); warning≈30/critical≈50 (PMM/Nichter). key renames in #944 key-PR
 #
 # Tenant config 範例 (conf.d/db-a.yaml):
 #   tenants:
 #     db-a:
 #       mysql_connections: "70"        # 自訂連線數警告閾值
 #       mysql_connections_critical: "120"  # Critical 閾值
-#       mysql_cpu: "60"               # 自訂 CPU 警告閾值
+#       mysql_cpu: "60"               # 自訂執行緒飽和警告閾值（threshold key 仍名 mysql_cpu，#944 key-PR 待改）
 # ============================================================
 groups:
   # -------------------------------------------------------
@@ -34,8 +34,10 @@ groups:
       # (promtool-verified). avg_over_time absorbs the dips; max by(tenant) still keeps
       # the per-tenant busiest instance (topology-aware: the saturated primary, not
       # diluted by idle replicas — which avg-across-instances would, and sum would
-      # false-fire). Consumed by the `mysql_cpu` threshold key + MariaDBHighCPU alert
-      # (metric-dictionary.yaml). Corroborate with host CPU% — complementary, not equal.
+      # false-fire). Consumed by the `mysql_cpu` threshold key + MariaDBHighThreadsRunning alert
+      # (metric-dictionary.yaml). This is SATURATION; for true CPU UTILISATION see
+      # PodContainerHighCPU (rule-pack-kubernetes, cAdvisor ÷ limit/request) — complementary
+      # signals, NOT equal (USE method; threads_running and CPU% decouple both ways).
       - record: tenant:mysql_threads_running:avg1m
         expr: max by(tenant) (avg_over_time(mysql_global_status_threads_running[1m]))
 
@@ -344,13 +346,17 @@ groups:
           runbook_url: "{{ $labels.runbook_url }}"
           owner: "{{ $labels.owner }}"
           tier: "{{ $labels.tier }}"
-      # CPU: standalone warning + critical (mirrors the connections pair above).
-      # Before this, `cpu` warning was only consumed by the composite
-      # MariaDBSystemBottleneck and `cpu_critical` had NO consumer at all (an
-      # orphan threshold-normalization recording rule). These two alerts give
-      # both CPU severity tiers a standalone firing path, symmetric with
-      # connections (Scenario D multi-tier).
-      - alert: MariaDBHighCPU
+      # Running-thread SATURATION: standalone warning + critical (mirrors the
+      # connections pair above). This is query-concurrency saturation
+      # (threads_running, USE method), NOT host CPU% — renamed from the misnamed
+      # MariaDBHighCPU in #944 (the alert ALWAYS measured threads_running; the
+      # "CPU" name was a v1.0 demo-scaffold misnomer, never a Percona/PMM port).
+      # For true CPU UTILISATION see PodContainerHighCPU (rule-pack-kubernetes,
+      # cAdvisor ÷ limit/request) — they decouple both ways (a single heavy query
+      # pins a core at low threads_running; lock/IO waits pile threads at low CPU).
+      # NOTE: the threshold key (`mysql_cpu`) and metric_group ("cpu") are KEPT
+      # this release for routing/config stability; they rename in the #944 key-PR.
+      - alert: MariaDBHighThreadsRunning
         expr: |
           (
             (
@@ -387,10 +393,10 @@ groups:
           metric_group: "cpu"
           tenant: "{{ $labels.tenant }}"
         annotations:
-          summary: "High CPU on {{ $labels.tenant }}"
-          summary_zh: "{{ $labels.tenant }} CPU 過高"
-          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: CPU threshold breached — review running-thread load"
-          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}：CPU 閾值超出 — 檢查執行緒負載"
+          summary: "High running-thread saturation on {{ $labels.tenant }}"
+          summary_zh: "{{ $labels.tenant }} 執行緒飽和過高"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: running-thread saturation (threads_running, NOT host CPU%) breached — check lock waits / slow queries / IO stalls. True CPU% → PodContainerHighCPU."
+          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}：執行緒飽和（threads_running，非主機 CPU%）超出 — 檢查鎖等待 / 慢查詢 / IO 停滯。真 CPU% 見 PodContainerHighCPU。"
           description: "{{ $value | printf \"%.0f\" }} running threads (1m avg, warning threshold exceeded)"
           description_zh: "{{ $value | printf \"%.0f\" }} 個執行中執行緒（1m 平均，超過警告閾值）"
 
@@ -398,7 +404,7 @@ groups:
           owner: "{{ $labels.owner }}"
           tier: "{{ $labels.tier }}"
       # Critical tier
-      - alert: MariaDBHighCPUCritical
+      - alert: MariaDBHighThreadsRunningCritical
         expr: |
           (
             (
@@ -433,10 +439,10 @@ groups:
           metric_group: "cpu"
           tenant: "{{ $labels.tenant }}"
         annotations:
-          summary: "Critical CPU on {{ $labels.tenant }}"
-          summary_zh: "{{ $labels.tenant }} CPU 嚴重過高"
-          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: critical CPU saturation — immediate investigation needed"
-          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}：CPU 飽和 — 需立即調查"
+          summary: "Critical running-thread saturation on {{ $labels.tenant }}"
+          summary_zh: "{{ $labels.tenant }} 執行緒飽和嚴重過高"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: CRITICAL running-thread saturation (threads_running, NOT host CPU%) — immediate investigation (lock waits / runaway queries). True CPU% → PodContainerHighCPU."
+          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}：執行緒飽和達臨界（threads_running，非主機 CPU%）— 需立即調查（鎖等待 / 失控查詢）。真 CPU% 見 PodContainerHighCPU。"
           description: "{{ $value | printf \"%.0f\" }} running threads (1m avg, critical threshold exceeded)"
           description_zh: "{{ $value | printf \"%.0f\" }} 個執行中執行緒（1m 平均，超過嚴重閾值）"
 
@@ -495,10 +501,10 @@ groups:
         annotations:
           summary: "System bottleneck on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 系統瓶頸"
-          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: CPU + connections both exceeded — multi-resource bottleneck, escalate"
-          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}：CPU 與連線皆超出 — 多資源瓶頸，需升級處理"
-          description: "Both connections AND CPU thresholds exceeded simultaneously"
-          description_zh: "CPU 與連線數閾值同時超出"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: running-thread saturation + connections both exceeded — multi-resource bottleneck, escalate"
+          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}：執行緒飽和與連線皆超出 — 多資源瓶頸，需升級處理"
+          description: "Both connections AND running-thread saturation thresholds exceeded simultaneously"
+          description_zh: "連線數與執行緒飽和閾值同時超出"
 
           runbook_url: "{{ $labels.runbook_url }}"
           owner: "{{ $labels.owner }}"

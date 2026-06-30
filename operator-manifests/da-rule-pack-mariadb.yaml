@@ -219,7 +219,7 @@ spec:
         runbook_url: '{{ $labels.runbook_url }}'
         owner: '{{ $labels.owner }}'
         tier: '{{ $labels.tier }}'
-    - alert: MariaDBHighCPU
+    - alert: MariaDBHighThreadsRunning
       expr: "(\n  (\n    (\n      tenant:mysql_threads_running:avg1m\n      > on(tenant)\
         \ group_left\n      tenant:alert_threshold:mysql_cpu\n    )\n    unless on(tenant)\n\
         \    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n  * on(tenant)\
@@ -234,19 +234,20 @@ spec:
         metric_group: cpu
         tenant: '{{ $labels.tenant }}'
       annotations:
-        summary: High CPU on {{ $labels.tenant }}
-        summary_zh: '{{ $labels.tenant }} CPU 過高'
-        platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant }}: CPU threshold
-          breached — review running-thread load'
-        platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant }}：CPU 閾值超出 —
-          檢查執行緒負載'
+        summary: High running-thread saturation on {{ $labels.tenant }}
+        summary_zh: '{{ $labels.tenant }} 執行緒飽和過高'
+        platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant }}: running-thread
+          saturation (threads_running, NOT host CPU%) breached — check lock waits
+          / slow queries / IO stalls. True CPU% → PodContainerHighCPU.'
+        platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant }}：執行緒飽和（threads_running，非主機
+          CPU%）超出 — 檢查鎖等待 / 慢查詢 / IO 停滯。真 CPU% 見 PodContainerHighCPU。'
         description: '{{ $value | printf "%.0f" }} running threads (1m avg, warning
           threshold exceeded)'
         description_zh: '{{ $value | printf "%.0f" }} 個執行中執行緒（1m 平均，超過警告閾值）'
         runbook_url: '{{ $labels.runbook_url }}'
         owner: '{{ $labels.owner }}'
         tier: '{{ $labels.tier }}'
-    - alert: MariaDBHighCPUCritical
+    - alert: MariaDBHighThreadsRunningCritical
       expr: "(\n  (\n    (\n      tenant:mysql_threads_running:avg1m\n      > on(tenant)\
         \ group_left\n      tenant:alert_threshold:mysql_cpu_critical\n    )\n   \
         \ unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"} == 1)\n\
@@ -261,11 +262,13 @@ spec:
         metric_group: cpu
         tenant: '{{ $labels.tenant }}'
       annotations:
-        summary: Critical CPU on {{ $labels.tenant }}
-        summary_zh: '{{ $labels.tenant }} CPU 嚴重過高'
-        platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant }}: critical CPU
-          saturation — immediate investigation needed'
-        platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant }}：CPU 飽和 — 需立即調查'
+        summary: Critical running-thread saturation on {{ $labels.tenant }}
+        summary_zh: '{{ $labels.tenant }} 執行緒飽和嚴重過高'
+        platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant }}: CRITICAL running-thread
+          saturation (threads_running, NOT host CPU%) — immediate investigation (lock
+          waits / runaway queries). True CPU% → PodContainerHighCPU.'
+        platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant }}：執行緒飽和達臨界（threads_running，非主機
+          CPU%）— 需立即調查（鎖等待 / 失控查詢）。真 CPU% 見 PodContainerHighCPU。'
         description: '{{ $value | printf "%.0f" }} running threads (1m avg, critical
           threshold exceeded)'
         description_zh: '{{ $value | printf "%.0f" }} 個執行中執行緒（1m 平均，超過嚴重閾值）'
@@ -292,12 +295,13 @@ spec:
       annotations:
         summary: System bottleneck on {{ $labels.tenant }}
         summary_zh: '{{ $labels.tenant }} 系統瓶頸'
-        platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant }}: CPU + connections
-          both exceeded — multi-resource bottleneck, escalate'
-        platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant }}：CPU 與連線皆超出
+        platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant }}: running-thread
+          saturation + connections both exceeded — multi-resource bottleneck, escalate'
+        platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant }}：執行緒飽和與連線皆超出
           — 多資源瓶頸，需升級處理'
-        description: Both connections AND CPU thresholds exceeded simultaneously
-        description_zh: CPU 與連線數閾值同時超出
+        description: Both connections AND running-thread saturation thresholds exceeded
+          simultaneously
+        description_zh: 連線數與執行緒飽和閾值同時超出
         runbook_url: '{{ $labels.runbook_url }}'
         owner: '{{ $labels.owner }}'
         tier: '{{ $labels.tier }}'
