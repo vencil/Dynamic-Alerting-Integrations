@@ -1,0 +1,67 @@
+# VM engine-equivalence anchor — runs ONLY when the VM engine version pin changes.
+#
+# Why path-filtered (not per-PR, not nightly):
+#   The anchor (tests/rulepacks/test_vm_backend_parity.py) proves vmalert-tool — the in-memory
+#   MetricsQL engine the per-PR gate A (test_vm_alert_parity.py) uses — evaluates our compiled
+#   idioms IDENTICALLY to a real vmsingle (storage + query) at the PINNED engine version, which
+#   LICENSES gate A standing alone per-PR. That equivalence is a property of the pinned version:
+#   it can only change when the pin changes. So re-verify exactly then —
+#     * NOT every PR: #952 removed the per-PR docker-VM job as redundant (its 3+1 subset ⊂ gate
+#       A's full-set fire/no-fire+labels+annotations; the one divergent axis, real-TSDB
+#       staleness, is deferred by both).
+#     * NOT nightly: that re-confirms the SAME pinned equivalence every night for no new signal.
+#       Empirically vmalert-tool == vmsingle on idioms incl. histogram_quantile / nested
+#       label_replace (3-way promtool/vmalert-tool/vmsingle all agree — #958 B1 finding); a
+#       divergence needs a VM-internal regression, which only a version bump can introduce.
+#   This closes the only real gap from that finding: the on-demand anchor otherwise runs solely
+#   via the bump runbook (documented-not-codified). The workflow's OWN path is in the filter, so
+#   the PR that adds/edits it runs it (self-validating).
+#
+# INFORMATIONAL — do NOT add to branch-protection required checks: it only runs on pin-change
+# PRs, so a required check would sit "pending" forever on every other PR.
+name: VM equivalence anchor (on pin change)
+
+on:
+  pull_request:
+    paths:
+      - tests/rulepacks/vm_engine_version
+      - tests/rulepacks/test_vm_backend_parity.py
+      - .github/workflows/vm-anchor-on-pin-change.yml
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  vm-anchor:
+    name: VM equivalence anchor (vmalert-tool == live vmsingle)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Start pinned VictoriaMetrics (vmsingle)
+        # Digest-pinned per the supply-chain policy (#851). On a VM_VERSION bump, update this
+        # image+digest ALONGSIDE tests/rulepacks/vm_engine_version + ci.yml VMUTILS_SHA256 (see
+        # docs/internal/backend-compat-baseline.md "版本 pin 單一 SSOT"). If you forget, the
+        # anchor's test_engine_version_matches_pin fails loudly (live vmsingle version != pin).
+        # -retentionPeriod=100y: the anchor ingests at a FIXED 2023 epoch for determinism; VM's
+        # default 1-month retention would silently drop those samples.
+        run: |
+          docker run -d --name vm-anchor -p 8428:8428 \
+            docker.io/victoriametrics/victoria-metrics:v1.146.0@sha256:b8703ff12ed437effad4fc36492fec14824277f2890a5876b8a9e6cfe5139839 \
+            -retentionPeriod=100y
+          for i in $(seq 1 30); do
+            curl -fsS http://localhost:8428/health >/dev/null 2>&1 && { echo "VM up"; break; }
+            sleep 1
+          done
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Install deps
+        run: pip install pyyaml pytest
+      - name: Run equivalence anchor (VM_PARITY_REQUIRE=1 → unreachable VM hard-fails, never skip-to-green)
+        env:
+          VM_PARITY_REQUIRE: "1"
+          VM_PARITY_ENDPOINT: http://localhost:8428
+        run: python -m pytest tests/rulepacks/test_vm_backend_parity.py -v
