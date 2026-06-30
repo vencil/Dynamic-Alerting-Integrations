@@ -88,18 +88,24 @@ def _catalogued_fixtures() -> set[str]:
 #   testGroupName: <block>, ... alertname: <A>, time: <T>, exp:[...], got:[...]
 # Direction is read from emptiness: under-fire = expected alerts but none fired
 # (exp non-empty, got:[]); over-fire = expected none but fired (exp:[], got non-empty);
-# mismatch = both non-empty but differ (label/annotation/value drift). Narrow parse on
-# stable tokens; test_failure_parser_pins_vmalert_format pins the format vs vmalert drift.
-_FAIL_HEAD_RE = re.compile(r"alertname:\s*(?P<alert>\S+?),\s*time:\s*(?P<time>\S+?),")
-_EMPTY_EXP_RE = re.compile(r"exp:\s*\[\s*\]")
-_EMPTY_GOT_RE = re.compile(r"got:\s*\[\s*\]")
+# mismatch = both non-empty but differ (label/annotation/value drift).
+# The exp:/got:/testGroupName: fields are matched LINE-ANCHORED (``(?m)^[ \t]*``) so a
+# rendered annotation/label *value* containing the literal substring ``exp:[]`` / ``got:[]`` /
+# ``testGroupName:`` cannot corrupt emptiness detection or inject a phantom block (such a value
+# sits mid-line after ``Annotations:{``/``Labels:{``, never at a field line-start). alertname
+# is captured as ``[^,]*`` (not ``\S+``) so an empty alertname yields "" -> a LOUD rogue, not a
+# silently-dropped failure. test_failure_parser_pins_vmalert_format pins the format + a poison case.
+_BLOCK_SPLIT_RE = re.compile(r"(?m)^[ \t]*testGroupName:")
+_FAIL_HEAD_RE = re.compile(r"alertname:[ \t]*(?P<alert>[^,]*?)[ \t]*,[ \t]*time:[ \t]*(?P<time>[^,]+?)[ \t]*,")
+_EMPTY_EXP_RE = re.compile(r"(?m)^[ \t]*exp:[ \t]*\[[ \t]*\]")
+_EMPTY_GOT_RE = re.compile(r"(?m)^[ \t]*got:[ \t]*\[[ \t]*\]")
 
 
 def _parse_vmalert_failures(output: str) -> list[dict]:
     """Parse vmalert-tool unittest failure output -> [{group, alert, time, direction}].
     Pass stdout+stderr concatenated (the failure detail's stream is not contracted)."""
     failures: list[dict] = []
-    for chunk in output.split("testGroupName:")[1:]:
+    for chunk in _BLOCK_SPLIT_RE.split(output)[1:]:
         head = _FAIL_HEAD_RE.search(chunk)
         if not head:
             continue
@@ -169,14 +175,25 @@ def test_rulepack_parity_on_vmalert(fixture: str, xlate_dir: Path) -> None:
         allowed_alerts = set(entry.get("rules") or [])
         _dirs = entry.get("direction")
         allowed_dirs = set(_dirs) if isinstance(_dirs, list) else {_dirs}
+        _VALID_DIRS = {"under-fire", "over-fire", "mismatch"}
+        assert allowed_alerts and allowed_dirs <= _VALID_DIRS, (
+            f"{fixture}: malformed vm_deviation_catalog.yaml entry — `rules` must be a non-empty "
+            f"list and `direction` ∈ {sorted(_VALID_DIRS)} (got rules={sorted(allowed_alerts)}, "
+            f"direction={sorted(allowed_dirs)}). Fix the catalog entry — this is a catalog error, "
+            f"not a rule divergence."
+        )
         failures = _parse_vmalert_failures(proc.stdout + "\n" + proc.stderr)
+        schema_err = "unmarshal" in proc.stderr or "not found in type" in proc.stderr
         assert failures, (
             f"{fixture} is catalogued and vmalert-tool returned non-zero, but NO per-assertion "
-            f"divergence parsed from its output. Either the fixture now fails to PARSE "
-            f"(schema/xlate gap, not a behavioural divergence) or vmalert-tool's output format "
-            f"drifted (see test_failure_parser_pins_vmalert_format). Do NOT assume the "
-            f"catalogued divergence still holds.\n\n--- stdout ---\n{proc.stdout}\n"
-            f"--- stderr ---\n{proc.stderr}"
+            f"divergence parsed. " + (
+                "vmalert-tool reports a SCHEMA/parse error (unmarshal / not found in type) — the "
+                "fixture or xlate broke, NOT a behavioural divergence; fix that."
+                if schema_err else
+                "This is a non-assertion error path (panic / unsupported function) OR vmalert-tool "
+                "output-format drift (the teeth-test pins the assertion-block shape, not error "
+                "paths). Do NOT assume the catalogued divergence still holds — investigate."
+            ) + f"\n\n--- stdout ---\n{proc.stdout}\n--- stderr ---\n{proc.stderr}"
         )
         rogue = [f for f in failures
                  if f["alert"] not in allowed_alerts or f["direction"] not in allowed_dirs]
@@ -280,3 +297,20 @@ def test_failure_parser_pins_vmalert_format() -> None:
     ]
     # A green run (or any output without failing-assertion blocks) parses to no failures.
     assert _parse_vmalert_failures("Unit Testing: x\n  SUCCESS\n") == []
+
+    # Poison: an annotation VALUE that contains the literal exp:[] / got:[] / testGroupName: /
+    # alertname: tokens must NOT corrupt emptiness detection or inject a phantom block — the
+    # line-anchored field match ignores mid-line occurrences. Regression guard: pre-fix parser
+    # (free re.search + bare split) mis-classified this under-fire as mismatch AND hallucinated a
+    # "Ghost" alert; the line-anchored parser yields exactly the one real under-fire failure.
+    poison = (
+        'failed to run unit test for file "x": \n[\n'
+        'testGroupName: blk-poison,\n    groupname: , alertname: TenantHAReplicasDegraded, '
+        'time: 16m0s, \n        exp:[\n            0:\n              Labels:{tenant="t1"}\n'
+        '              Annotations:{summary="value with exp:[] got:[] testGroupName: x, '
+        'alertname: Ghost, time: 9s"}\n            ], \n        got:[]  \n'
+    )
+    assert _parse_vmalert_failures(poison) == [
+        {"group": "blk-poison", "alert": "TenantHAReplicasDegraded", "time": "16m0s",
+         "direction": "under-fire"},
+    ]
