@@ -1,54 +1,50 @@
-"""Backend-compat parity smoke: do our COMPILED rule-pack exprs evaluate the same
-on VictoriaMetrics as on Prometheus? (ADR-025 deferred "backend compatibility",
-Part 1 — PromQL parity.)
+"""vmalert-tool == live-vmsingle ENGINE-EQUIVALENCE ANCHOR (on-demand; ADR-025 backend
+compatibility, Part 1).
 
-Why this exists
----------------
-We market the platform as storage-backend-agnostic (ADR-020/021) and ship a
-`docs/integration/victoriametrics-integration.md`, but every promtool golden runs
-on the *Prometheus* engine only. This re-runs a representative subset of those
-SAME goldens (SSOT — no second fixture to drift) against a real VictoriaMetrics,
-to catch cross-engine PromQL divergence in the idioms our compiler emits:
-`and on(...)` topology joins, `group_left` enrichment, `or vector(0)` sentinels,
-`label_replace`, `max by(tenant)` dedup, exact-match version joins.
+Role (read first)
+-----------------
+This is NOT a per-PR gate. Per-PR VM rule-pack parity is owned SOLELY by the sibling
+``test_vm_alert_parity.py`` (gate A): it runs the FULL fixture set through ``vmalert-tool
+unittest`` — the MetricsQL engine production vmalert actually runs — on every PR
+(informational step in "Lint Rule Packs"), catalog-gated by ``vm_deviation_catalog.yaml``.
 
-Scope (honest boundary)
------------------------
-- IN scope — does the BACKEND evaluate our `expr` to the same RESULT VECTOR?
-  * alert rules (`alert_rule_test`) → ALERT-DECISION parity: the fired label-sets
-    + fire/no-fire (the decision-relevant output). promtool alert goldens assert
-    labels, not values, so alert-level value *magnitude* isn't checked there —
-    only a sign-flip that changes the threshold cross is visible.
-  * recording-rule exprs (`promql_expr_test`) → label-set **+ VALUE parity (float
-    epsilon)** against the `exp_samples` golden — this is where numeric divergence
-    (`rate()` extrapolation, division) is caught. The positive-control test also
-    proves the value/epsilon path end-to-end.
-- Covered by the SIBLING gate (test_vm_alert_parity.py), NOT here:
-  * `for:` duration + range-function evaluation → the rule *evaluator*'s job
-    (promtool / vmalert). This was assumed "identical regardless of storage backend"
-    — EMPIRICALLY FALSE: MetricsQL's range-function cold-start semantics (changes() /
-    rate() while the window still predates the series' first sample) feed the `for:`
-    timer differently, so an alert can fire ~10m late (or spuriously) on vmalert. Now
-    gated by test_vm_alert_parity.py (FULL fixture set on the vmalert MetricsQL engine,
-    fire/no-fire) + vm_deviation_catalog.yaml. Worked example: TenantHAReplicasDegraded.
-  * staleness / `absence`-over-real-gaps + `predict_linear` temporal semantics →
-    the deferred-with-trigger condition ("first customer on their own backend") has
-    FIRED with the VictoriaMetrics-migration customers. The vmalert-tool gate covers
-    the for:/range-function layer; full real-gap staleness parity is the remaining
-    slice. See ADR-025.
+This file is the on-demand ANCHOR that LICENSES treating gate A's in-memory ``vmalert-tool``
+as a faithful proxy for a real ``vmsingle`` (storage + query). It imports a representative
+subset of the SAME promtool goldens into a REAL VictoriaMetrics (docker, HTTP import + query)
+and proves the live engine evaluates our COMPILED idioms — ``and on(...)`` topology joins,
+``group_left`` enrichment, ``or vector(0)`` sentinels, ``label_replace``, ``max by(tenant)``
+dedup, exact-match version joins, + recording-rule VALUE/epsilon — identically to the
+Prometheus golden. Gate A separately proves ``vmalert-tool == golden`` on the full set; with
+both at the SAME pinned engine version (test_engine_version_matches_pin), that gives
+``vmalert-tool == vmsingle`` on these idioms, so gate A can stand alone per-PR.
 
-Reference & determinism
------------------------
-The promtool golden's asserted outcome IS the Prometheus reference (validated by
-the existing `Rule-pack promtool unit tests` CI step). We import the golden's
-`input_series` into VM, materialize the recording-rule chain (so multi-layer
-leaf→recording→alert exprs resolve), then compare VM's result to the golden.
-Each logical test ingests at a fixed, unique epoch window (`T0 + slot*GAP`,
-GAP >> VM staleness, slot unique per worker×case×block) so tests can't cross-talk
-and CI speed never shifts the result (Gemini trap #1); re-import is idempotent.
-Queries pass `nocache=1`; values compare with a float epsilon (Gemini trap #2).
-The CI job sets VM_PARITY_REQUIRE=1 so an unreachable VM hard-fails (never a
-silent skip-to-green).
+Why on-demand, not a per-PR job (consolidation, #947)
+-----------------------------------------------------
+The old per-PR ``backend-compat-parity`` docker-VM job was redundant: its 3+1-case subset is
+a SUBSET of gate A's full-set fire/no-fire + labels + annotations parity (gate A even checks
+annotation templating this expr-level harness structurally cannot), and the one axis where
+the two engines genuinely diverge — real-TSDB STALENESS / scrape-gap timing — is DEFERRED by
+BOTH (this harness uses dense fixed-epoch series, GAP >> staleness). So per-PR it only
+re-verified the shared-math instant layer gate A already covers more broadly. The equivalence
+is a property of the PINNED engine version, so it only needs re-verifying when the pin
+changes — not every PR (wasteful), not never (rots). Run it on a VM-version bump and in any
+dev-container with a pinned vmsingle; it skips when no VM is reachable.
+
+Honest residual — still UNCOVERED by either gate: real storage-layer staleness / ``absence``
+over real gaps / ``predict_linear`` temporal semantics. The ADR-025 defer-trigger ("first
+customer on their own backend") has FIRED (VM-migration customers); the remaining slice is
+``vmalert -replay`` over real gaps against a real vmsingle — tracked in #947, NOT done here.
+
+Reference & determinism (unchanged)
+-----------------------------------
+The promtool golden's asserted outcome IS the Prometheus reference (validated by the
+``Rule-pack promtool unit tests`` CI step). We import each golden's ``input_series`` into VM,
+materialize the recording-rule chain (so multi-layer leaf→recording→alert exprs resolve),
+then compare VM's result to the golden. Each logical test ingests at a fixed, unique epoch
+window (``T0 + slot*GAP``, GAP >> VM staleness, slot unique per worker×case×block) so tests
+can't cross-talk and CI speed never shifts the result (Gemini trap #1); re-import is
+idempotent. Queries pass ``nocache=1``; values compare with a float epsilon (Gemini trap #2).
+Set VM_PARITY_REQUIRE=1 to force-run (unreachable VM then hard-fails, never skip-to-green).
 """
 from __future__ import annotations
 
@@ -99,21 +95,47 @@ def _vm_reachable() -> bool:
         return False
 
 
-# In CI the dedicated job sets VM_PARITY_REQUIRE=1: an unreachable VM is then a hard
-# FAILURE (the job's whole point), never a silent skip-to-green. Locally (unset) it
-# skips when no VM is present.
+# ON-DEMAND anchor (no per-PR CI job): skips when no VM is reachable (the normal case —
+# local dev, python-tests). Set VM_PARITY_REQUIRE=1 to force it (unreachable VM then HARD-
+# fails instead of skipping) — used when re-verifying equivalence on a VM-version bump
+# (docs/internal/backend-compat-baseline.md).
 _REQUIRE_VM = os.environ.get("VM_PARITY_REQUIRE") == "1"
 _needs_vm = pytest.mark.skipif(
     not _REQUIRE_VM and not _vm_reachable(),
-    reason=f"no VictoriaMetrics at {VM_ENDPOINT} (CI job provides it + sets "
-           f"VM_PARITY_REQUIRE=1; skipped locally — set VM_PARITY_ENDPOINT to run)",
+    reason=f"no VictoriaMetrics at {VM_ENDPOINT} (on-demand anchor; start a pinned vmsingle "
+           f"+ set VM_PARITY_ENDPOINT, or VM_PARITY_REQUIRE=1 to force — see backend-compat-baseline.md)",
 )
 
 
 def _require_vm_or_fail() -> None:
     if _REQUIRE_VM and not _vm_reachable():
         pytest.fail(f"VM_PARITY_REQUIRE=1 but no VictoriaMetrics at {VM_ENDPOINT} — the "
-                    f"parity job must not silently skip to green (service container down?)")
+                    f"equivalence anchor must not silently skip to green (vmsingle not started?)")
+
+
+def _ssot_vm_version() -> str:
+    """The single VM engine-version pin (tests/rulepacks/vm_engine_version), also sourced by
+    the CI vmalert-tool install, so the gate's engine and this anchor's engine can't drift."""
+    for line in (_FIXTURE_DIR / "vm_engine_version").read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line.startswith("VM_VERSION="):
+            return line.split("=", 1)[1].strip()
+    raise AssertionError(f"VM_VERSION not found in {_FIXTURE_DIR / 'vm_engine_version'}")
+
+
+def _vm_server_version() -> str | None:
+    """Live vmsingle's semver from /metrics ``vm_app_version{...v<X.Y.Z>...}`` (label-name
+    agnostic). None if unreachable / not exposed."""
+    try:
+        with urllib.request.urlopen(f"{VM_ENDPOINT}/metrics", timeout=5) as r:
+            text = r.read().decode("utf-8", "replace")
+    except Exception:
+        return None
+    line = re.search(r"vm_app_version\{[^}]*\}", text)
+    if not line:
+        return None
+    ver = re.search(r"v(\d+\.\d+\.\d+)", line.group(0))
+    return ver.group(1) if ver else None
 
 
 # ---- promtool series-values notation --------------------------------------
@@ -380,6 +402,25 @@ def test_vm_expr_value_parity(fixture_name, expr):
                     f"VM↔Prometheus VALUE divergence in {fixture_name} [{expr}] "
                     f"test#{ti} for {dict(ls)}: VM={got[ls]} golden={exp_v}")
     assert saw_block, f"no promql_expr_test for {expr!r} in {fixture_name} (stale _EXPR_CASES?)"
+
+
+@_needs_vm
+def test_engine_version_matches_pin():
+    """Pin-coupling guard: this anchor only LICENSES trusting the per-PR vmalert-tool gate
+    (test_vm_alert_parity.py) as a real-vmsingle proxy if the live vmsingle it validates runs
+    the SAME engine version the gate's vmalert-tool does. Both read the one pin
+    (tests/rulepacks/vm_engine_version); assert the running VM matches it, so a silent version
+    drift can't make this anchor validate the wrong engine."""
+    _require_vm_or_fail()
+    want = _ssot_vm_version()
+    got = _vm_server_version()
+    assert got is not None, (
+        f"could not read vm_app_version from {VM_ENDPOINT}/metrics — cannot confirm the live "
+        f"vmsingle matches the pinned engine v{want}; the equivalence anchor must not run blind")
+    assert got == want, (
+        f"VM engine pin drift: anchor is validating vmsingle v{got} but the SSOT pin "
+        f"(tests/rulepacks/vm_engine_version, also used by the CI vmalert-tool install) is "
+        f"v{want}. Run the anchor against a v{want} vmsingle, or bump both in lockstep.")
 
 
 @_needs_vm
