@@ -863,11 +863,7 @@ export default function TenantManager() {
                 {groups[activeGroupId].label}
               </div>
               <button
-                onClick={() => {
-                  if (window.confirm(t('確定要刪除此群組嗎?', 'Are you sure you want to delete this group?'))) {
-                    handleDeleteGroup(activeGroupId);
-                  }
-                }}
+                onClick={() => handleDeleteGroup(activeGroupId)}
                 style={{ ...styles.button, ...styles.buttonSecondary, color: 'var(--da-color-error)' }}
               >
                 {t('刪除群組', 'Delete Group')}
