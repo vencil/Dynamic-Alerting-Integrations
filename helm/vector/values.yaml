@@ -191,6 +191,55 @@ tenantProjections: []
   # - tenantId: "tenant-beta"
   #   accountId: 1001
 
+# ── Fail-closed projection GATE (#908) — active ONLY when tenantProjections is set.
+# A Vector init-container validates the rendered tenantProjections against the
+# authoritative _account_registry.yaml (conf.d) BEFORE Vector starts, and places
+# the tenant-routing config-dir fragment ONLY when every {tenantId→accountId} pair
+# matches the registry. This catches a "unique-but-wrong" accountId (a copy-paste
+# typo the render-time uniqueness {{fail}} and the integer schema both pass) — the
+# cross-tenant-leak case the other guards are blind to.
+#   degrade (default) — mismatch / unreadable registry → OMIT the tenant fragment;
+#                       Vector runs platform-only 0:0 (the safe default) and stays up.
+#                       ⚠️ ONE-SHOT-AT-BOOT: if the registry ConfigMap is absent at pod
+#                       start (e.g. a fresh-deploy ORDERING RACE — Vector boots before
+#                       the registry is synced; optional:true lets it start), the gate
+#                       degrades to 0:0 and STAYS there even after the registry arrives
+#                       (Vector won't re-read the boot config). Symptom: everything
+#                       green, but tenant routing silently off. Recovery:
+#                       `kubectl rollout restart ds/<vector>`. (A follow-up PR alerts on
+#                       the gate's registry_unreadable metric so this isn't silent.)
+#   enforce           — a config-bug mismatch hard-fails the pod (paranoid envs).
+#                       ⚠️ On a DaemonSet this DEADLOCKS the rollout: a bad config makes
+#                       the new pod Init:CrashLoopBackOff, and maxUnavailable halts the
+#                       rollout cluster-wide (the mid-roll node loses logging; un-rolled
+#                       nodes keep the old config). Intended fail-closed — REVERT the bad
+#                       config (or delete the stuck pod) to recover.
+tenantProjectionGate: degrade
+projectionGate:
+  image:
+    # The vector-projection-gate image (helm/vector/projection-gate/Dockerfile).
+    # Published by the release pipeline; override to your registry/tag.
+    repository: ghcr.io/vencil/vector-projection-gate
+    tag: "0.1.0"
+    digest: ""
+    pullPolicy: IfNotPresent
+  registry:
+    # Operator-provided ConfigMap materialising the conf.d registry, exposing the
+    # key `_account_registry.yaml` (read-only — the gate never writes it). Same
+    # read-side pattern as threshold-exporter's conf.d ConfigMap mount, NOT the
+    # tenant-api git-write plane. REQUIRED when tenantProjections is set.
+    configMapName: ""
+  # Small fixed footprint — the gate is a short-lived one-shot validator that
+  # parses two YAML files. Set explicitly so kube-linter (Container SAST L4
+  # unset-cpu/memory-requirements) is satisfied; override if your registry is large.
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      cpu: 100m
+      memory: 64Mi
+
 # ⛔ ALLOWLIST of the ONLY fields projected into a tenant partition (ADR-021
 # §Fork B; fail-CLOSED sanitization). The tenant copy is rebuilt from scratch
 # containing ONLY these fields (+ the trusted `account_id`) — everything else

@@ -53,11 +53,19 @@ a Prometheus textfile metric.
 DEPLOYMENT CONTRACT (the chart wiring MUST honour these, or the gate is silently
 undermined — both surfaced in adversarial review):
   - One-shot-at-boot trust. The gate validates ONLY when the init-container runs,
-    so Vector MUST NOT enable config watch / auto-reload (`--watch-config`), and a
-    change to EITHER the registry or the projections MUST force a pod restart
-    (Helm `checksum/config` annotation over both inputs) so the gate re-runs.
-    Otherwise a post-boot registry mutation (Kubelet ConfigMap sync) drifts
-    unvalidated while Vector keeps using the boot-time config (TOCTOU).
+    so Vector MUST NOT enable config watch / auto-reload (`--watch-config`), and
+    Vector MUST load from the gate-populated emptyDir (NOT a direct ConfigMap mount
+    — else Kubelet ConfigMap sync would mutate the loaded config post-boot, a
+    TOCTOU). PROJECTIONS live in the chart's ConfigMap, so a projection change rolls
+    the pod via the Helm `checksum/config` annotation and the gate re-runs. The
+    REGISTRY is an operator-provided EXTERNAL ConfigMap the chart cannot hash, so a
+    registry edit does NOT auto-roll the pod — it needs a manual `kubectl rollout
+    restart`. This is bounded-safe because the registry is monotonic / never-recycle
+    (an existing tenantId→accountId binding cannot change, so a boot-OK verdict
+    cannot silently flip to a leak); the only residual is fail-available recovery —
+    a registry that was unreadable/wrong at boot (→ degraded 0:0) stays degraded
+    until that manual restart, by design (re-enabling tenant routing is an explicit
+    operator action, not an automatic one).
   - The verdict metric lives in the pod's emptyDir, so it goes ABSENT (not "ok")
     if the pod dies (OOM / node loss). The alert rule MUST treat absence as
     not-healthy (pair the `category="mismatch"` series with an `absent()` /
