@@ -200,7 +200,20 @@ tenantProjections: []
 # cross-tenant-leak case the other guards are blind to.
 #   degrade (default) — mismatch / unreadable registry → OMIT the tenant fragment;
 #                       Vector runs platform-only 0:0 (the safe default) and stays up.
+#                       ⚠️ ONE-SHOT-AT-BOOT: if the registry ConfigMap is absent at pod
+#                       start (e.g. a fresh-deploy ORDERING RACE — Vector boots before
+#                       the registry is synced; optional:true lets it start), the gate
+#                       degrades to 0:0 and STAYS there even after the registry arrives
+#                       (Vector won't re-read the boot config). Symptom: everything
+#                       green, but tenant routing silently off. Recovery:
+#                       `kubectl rollout restart ds/<vector>`. (A follow-up PR alerts on
+#                       the gate's registry_unreadable metric so this isn't silent.)
 #   enforce           — a config-bug mismatch hard-fails the pod (paranoid envs).
+#                       ⚠️ On a DaemonSet this DEADLOCKS the rollout: a bad config makes
+#                       the new pod Init:CrashLoopBackOff, and maxUnavailable halts the
+#                       rollout cluster-wide (the mid-roll node loses logging; un-rolled
+#                       nodes keep the old config). Intended fail-closed — REVERT the bad
+#                       config (or delete the stuck pod) to recover.
 tenantProjectionGate: degrade
 projectionGate:
   image:
