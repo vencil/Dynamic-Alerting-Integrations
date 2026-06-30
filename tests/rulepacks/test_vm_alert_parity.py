@@ -121,6 +121,14 @@ def _allowed_from_entry(fixture: str, entry: dict) -> tuple[set[str], set[str]]:
     return set(rules), allowed_dirs
 
 
+# ⚠️ ACTION-ITEM (gate-hardening, Gemini #958 review): regex-parsing vmalert-tool's
+# human-readable stdout is a SHORT-TERM compromise — the SRE-canonical fragility of scraping
+# CLI text, brittle against output-format drift across VM versions. The ROOT fix is upstream
+# structured output: `vmalert-tool unittest --output=json`, which our pinned engine v1.146.0
+# does NOT provide (no JSON mode). When a VM release ships JSON unittest output, switch this
+# parser to it and retire the line-anchored regex below. Until then,
+# test_failure_parser_pins_vmalert_format is the drift tripwire that fails LOUD on a format change.
+#
 # vmalert-tool unittest emits one block per FAILING assertion (no JSON mode as of v1.146.0):
 #   testGroupName: <block>, ... alertname: <A>, time: <T>, exp:[...], got:[...]
 # Direction is read from emptiness: under-fire = expected alerts but none fired
