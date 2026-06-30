@@ -96,6 +96,7 @@ jobs:
           pre-commit run bat-ascii-purity-check --all-files
           pre-commit run design-token-usage --all-files
           pre-commit run tool-consistency-check --all-files
+          pre-commit run portal-audience-enum-check --all-files
           pre-commit run structure-check --all-files
           pre-commit run routing-profiles-check --all-files
           # #880: conf.d tenant YAML vs tenant-config schema (db_type-typo guard).

@@ -426,6 +426,20 @@ repos:
         # files); CI --all-files is the backstop for removed dist bundles.
         files: ^(docs/(assets/(tool-registry\.yaml|jsx-loader\.html|flows\.json|dist/[^/]+\.js)|interactive/index\.html|.*\.md)|tools/portal/src/.*\.jsx|README[^/]*\.md|mkdocs\.yml)$
 
+      - id: portal-audience-enum-check
+        name: Portal audience values must be in the closed vocabulary
+        entry: python3 -X utf8 scripts/tools/lint/check_portal_audience_enum.py
+        language: python
+        additional_dependencies: ['pyyaml']
+        pass_filenames: false
+        # Locks audience / data-audience to {platform,tenant,domain,sre,
+        # maintainer,sec} so the Hub role filter can't silently drop tools
+        # again (the domain-expert / management / contributor drift this PR
+        # normalised). Reads fixed paths → pass_filenames:false; CI Lint job
+        # invokes it directly (was only in `make lint-portal`, which nothing
+        # calls → not actually gated).
+        files: ^(docs/assets/tool-registry\.yaml|docs/interactive/index\.html)$
+
       - id: structure-check
         name: Project structure enforcement
         entry: python3 -X utf8 scripts/tools/lint/check_structure.py --ci
