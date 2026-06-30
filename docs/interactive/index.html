@@ -880,7 +880,7 @@
   <!-- alert-timeline (interactive/tools/alert-timeline.jsx) -->
   <a class="card" data-audience="domain,tenant" href="interactive/tools/alert-timeline.jsx">Alert Timeline Replay</a>
   <!-- alert-noise-analyzer (interactive/tools/alert-noise-analyzer.jsx) -->
-  <a class="card" data-audience="domain-expert,platform" href="interactive/tools/alert-noise-analyzer.jsx">Alert Noise Analyzer</a>
+  <a class="card" data-audience="domain,platform" href="interactive/tools/alert-noise-analyzer.jsx">Alert Noise Analyzer</a>
   <!-- schema-explorer (interactive/tools/schema-explorer.jsx) -->
   <a class="card" data-audience="domain,platform" href="interactive/tools/schema-explorer.jsx">YAML Schema Explorer</a>
   <!-- capacity-planner (interactive/tools/capacity-planner.jsx) -->
@@ -902,7 +902,7 @@
   <!-- self-service-portal (interactive/tools/self-service-portal.jsx) -->
   <a class="card" data-audience="domain,platform,tenant" href="interactive/tools/self-service-portal.jsx">Tenant Self-Service Portal</a>
   <!-- multi-tenant-comparison (interactive/tools/multi-tenant-comparison.jsx) -->
-  <a class="card" data-audience="domain-expert,platform" href="interactive/tools/multi-tenant-comparison.jsx">Multi-Tenant Comparison</a>
+  <a class="card" data-audience="domain,platform" href="interactive/tools/multi-tenant-comparison.jsx">Multi-Tenant Comparison</a>
   <!-- tenant-manager (interactive/tools/tenant-manager.jsx) -->
   <a class="card" data-audience="platform,sre" href="interactive/tools/tenant-manager.jsx">Tenant Manager</a>
   <!-- deployment-wizard (interactive/tools/deployment-wizard.jsx) -->
@@ -914,13 +914,13 @@
   <!-- migration-roi-calculator (interactive/tools/migration-roi-calculator.jsx) -->
   <a class="card" data-audience="maintainer" href="interactive/tools/migration-roi-calculator.jsx">Migration ROI Calculator</a>
   <!-- cost-estimator (interactive/tools/cost-estimator.jsx) -->
-  <a class="card" data-audience="management,platform,sre" href="interactive/tools/cost-estimator.jsx">Cost Estimator</a>
+  <a class="card" data-audience="maintainer,platform,sre" href="interactive/tools/cost-estimator.jsx">Cost Estimator</a>
   <!-- release-notes-generator (interactive/tools/release-notes-generator.jsx) -->
   <a class="card" data-audience="maintainer" href="interactive/tools/release-notes-generator.jsx">Release Notes Generator</a>
   <!-- threshold-heatmap (interactive/tools/threshold-heatmap.jsx) -->
   <a class="card" data-audience="domain,platform,sre" href="interactive/tools/threshold-heatmap.jsx">Threshold Heatmap</a>
   <!-- component-health (interactive/tools/component-health.jsx) -->
-  <a class="card" data-audience="contributor,platform" href="interactive/tools/component-health.jsx">Component Health Dashboard</a>
+  <a class="card" data-audience="maintainer,platform" href="interactive/tools/component-health.jsx">Component Health Dashboard</a>
 </div>
 
 <footer>
@@ -1184,24 +1184,33 @@
     })
     .catch(function() { console.log('Could not load tool-registry.yaml'); });
 
-  // Role-based filter
+  // Role-based filter.
+  // FIX (#811 findability): the visible tool cards are injected ASYNCHRONOUSLY
+  // by renderTools() inside the tool-registry fetch().then() above, so a
+  // NodeList captured here at script-eval time only ever held the hidden
+  // #linter-cards block — clicking a role did nothing visible. Re-query the
+  // live `.cards` containers on each click instead; the `.cards` scope excludes
+  // the id-only #linter-cards mirror (which has no class="cards").
   var buttons = document.querySelectorAll('.role-filter');
-  var cards = document.querySelectorAll('a.card[data-audience]');
+
+  function applyRoleFilter(role) {
+    var cards = document.querySelectorAll('.cards a.card[data-audience]');
+    cards.forEach(function(card) {
+      if (role === 'all') {
+        card.setAttribute('data-hidden', 'false');
+      } else {
+        var audiences = (card.getAttribute('data-audience') || '').split(',');
+        card.setAttribute('data-hidden', audiences.indexOf(role) === -1 ? 'true' : 'false');
+      }
+    });
+  }
 
   buttons.forEach(function(btn) {
     btn.addEventListener('click', function() {
       buttons.forEach(function(b) { b.classList.remove('active'); b.setAttribute('aria-pressed', 'false'); });
       btn.classList.add('active');
       btn.setAttribute('aria-pressed', 'true');
-      var role = btn.getAttribute('data-role');
-      cards.forEach(function(card) {
-        if (role === 'all') {
-          card.setAttribute('data-hidden', 'false');
-        } else {
-          var audiences = (card.getAttribute('data-audience') || '').split(',');
-          card.setAttribute('data-hidden', audiences.indexOf(role) === -1 ? 'true' : 'false');
-        }
-      });
+      applyRoleFilter(btn.getAttribute('data-role'));
     });
   });
 
