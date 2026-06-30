@@ -77,11 +77,48 @@ def _catalog() -> dict[str, dict]:
     if not _CATALOG.exists():
         return {}
     data = yaml.safe_load(_CATALOG.read_text(encoding="utf-8")) or {}
-    return {d["fixture"]: d for d in (data.get("deviations") or [])}
+    catalog: dict[str, dict] = {}
+    for d in data.get("deviations") or []:
+        fixture = d["fixture"]
+        if fixture in catalog:
+            # Fail LOUD on a repeated fixture: a plain dict comprehension would silently
+            # last-wins, dropping the earlier entry and weakening the granularity gate
+            # (a real divergence could go uncatalogued under the shadowed key). (#958 CodeRabbit)
+            raise ValueError(
+                f"vm_deviation_catalog.yaml: duplicate fixture {fixture!r} — a repeated entry "
+                f"silently overwrites the earlier one and weakens the granularity gate. Merge the "
+                f"duplicates into ONE entry (combine their `rules` / `direction`)."
+            )
+        catalog[fixture] = d
+    return catalog
 
 
 def _catalogued_fixtures() -> set[str]:
     return set(_catalog())
+
+
+_VALID_DIRECTIONS = frozenset({"under-fire", "over-fire", "mismatch"})
+
+
+def _allowed_from_entry(fixture: str, entry: dict) -> tuple[set[str], set[str]]:
+    """Validate a catalogued entry and return its (allowed_alerts, allowed_directions).
+
+    `rules` MUST be a non-empty LIST: ``set(entry.get("rules") or [])`` on a bare scalar
+    string (e.g. ``rules: FooAlert``) yields a CHAR-set {'F','o',...} that passes a
+    truthiness check yet makes the rogue-alert membership test (``alert not in allowed``)
+    nonsense → a catalog typo gets misclassified as a rogue divergence. `direction` is
+    scalar-or-list. Fails LOUD on a malformed entry — a catalog error, not a divergence. (#958)
+    """
+    rules = entry.get("rules")
+    dirs = entry.get("direction")
+    allowed_dirs = set(dirs) if isinstance(dirs, list) else {dirs}
+    assert isinstance(rules, list) and rules and allowed_dirs <= _VALID_DIRECTIONS, (
+        f"{fixture}: malformed vm_deviation_catalog.yaml entry — `rules` must be a non-empty "
+        f"list and `direction` ∈ {sorted(_VALID_DIRECTIONS)} (got rules={rules!r}, "
+        f"direction={sorted(allowed_dirs)}). Fix the catalog entry — this is a catalog error, "
+        f"not a rule divergence."
+    )
+    return set(rules), allowed_dirs
 
 
 # vmalert-tool unittest emits one block per FAILING assertion (no JSON mode as of v1.146.0):
@@ -171,17 +208,9 @@ def test_rulepack_parity_on_vmalert(fixture: str, xlate_dir: Path) -> None:
         # mask a SECOND, unrelated divergence — the fixture is already "expected to fail",
         # so a new break in a different alert OR a direction-flip (under-fire -> wrong-label)
         # is invisible. This turns the entry's `rules`/`direction` from docs into a gate.
-        entry = _catalog()[fixture]
-        allowed_alerts = set(entry.get("rules") or [])
-        _dirs = entry.get("direction")
-        allowed_dirs = set(_dirs) if isinstance(_dirs, list) else {_dirs}
-        _VALID_DIRS = {"under-fire", "over-fire", "mismatch"}
-        assert allowed_alerts and allowed_dirs <= _VALID_DIRS, (
-            f"{fixture}: malformed vm_deviation_catalog.yaml entry — `rules` must be a non-empty "
-            f"list and `direction` ∈ {sorted(_VALID_DIRS)} (got rules={sorted(allowed_alerts)}, "
-            f"direction={sorted(allowed_dirs)}). Fix the catalog entry — this is a catalog error, "
-            f"not a rule divergence."
-        )
+        # Validate + extract the catalogued (alerts, directions); see _allowed_from_entry —
+        # `rules` must be a non-empty LIST so set() can't char-explode a scalar string. (#958)
+        allowed_alerts, allowed_dirs = _allowed_from_entry(fixture, _catalog()[fixture])
         failures = _parse_vmalert_failures(proc.stdout + "\n" + proc.stderr)
         schema_err = "unmarshal" in proc.stderr or "not found in type" in proc.stderr
         assert failures, (
@@ -314,3 +343,39 @@ def test_failure_parser_pins_vmalert_format() -> None:
         {"group": "blk-poison", "alert": "TenantHAReplicasDegraded", "time": "16m0s",
          "direction": "under-fire"},
     ]
+
+
+def test_catalog_loader_and_entry_validation_fail_loud(tmp_path, monkeypatch) -> None:
+    """#958: the deviation catalog is a LOAD-BEARING gate — a DUPLICATE fixture or a MALFORMED
+    entry must FAIL LOUD, never silently weaken the granularity check. Two silent-weakening
+    traps this pins: (a) a plain dict-comprehension last-wins on a repeated fixture; (b)
+    ``set(entry.get("rules") or [])`` char-explodes a scalar ``rules: FooAlert`` into
+    {'F','o',...}, which slips past a truthiness check and breaks the rogue-alert membership
+    test → a catalog typo is misread as a rogue divergence."""
+    import sys
+    # (a) duplicate fixture key -> ValueError (not a silent last-wins overwrite).
+    dup = tmp_path / "dup.yaml"
+    dup.write_text(
+        "deviations:\n"
+        "  - {fixture: a_test.yaml, rules: [X], direction: under-fire}\n"
+        "  - {fixture: a_test.yaml, rules: [Y], direction: over-fire}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(sys.modules[__name__], "_CATALOG", dup)
+    with pytest.raises(ValueError, match="duplicate fixture"):
+        _catalog()
+    # (b) malformed entries -> AssertionError: scalar `rules` (char-set trap), empty list, bad dir.
+    for bad in (
+        {"rules": "FooAlert", "direction": "under-fire"},
+        {"rules": [], "direction": "under-fire"},
+        {"rules": ["X"], "direction": "sideways"},
+    ):
+        with pytest.raises(AssertionError, match="malformed vm_deviation_catalog"):
+            _allowed_from_entry("a_test.yaml", bad)
+    # A well-formed entry passes and normalises a scalar OR list direction.
+    assert _allowed_from_entry("a_test.yaml", {"rules": ["X", "Y"], "direction": "under-fire"}) == (
+        {"X", "Y"}, {"under-fire"},
+    )
+    assert _allowed_from_entry("b_test.yaml", {"rules": ["Z"], "direction": ["under-fire", "mismatch"]}) == (
+        {"Z"}, {"under-fire", "mismatch"},
+    )
