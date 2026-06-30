@@ -183,27 +183,33 @@ const ROLE_AXIS = {
 
 // ── Grow-ops action handoff (#811) ───────────────────────────────────────
 // After the curated reading list, point each role at the interactive tool(s)
-// that are its natural next action — reusing the master-onboarding handoff
-// pattern (a plain anchor card with `href: '<tool>.html'`, opens the existing
-// tool page). These are the SAME portal pages jsx-loader serves; we link by
-// bare `<tool>.html` (sibling pages), never a portal-absolute `/foo` (TRK-104).
+// that are its natural next action. Link via the loader's `?component=<key>`
+// form — the SAME form the Hub's quick-access chips + dynamic cards use
+// (verified working). A bare `<tool>.html` does NOT resolve to the tool: no
+// per-tool `.html` file exists, and da-portal's nginx
+// `try_files $uri $uri/ /interactive/index.html` (components/da-portal/
+// nginx.conf) falls a missing path back to the Hub HOME — so a `<tool>.html`
+// link silently lands on the home page, not the tool. (master-onboarding.jsx
+// still uses the bare form on `main` = a latent portal-wide bug, tracked
+// separately — do NOT copy it.)
 //
 // DOC-ONLY SEAM: #811 deliberately ships links only. A future D2 "emit YAML
 // skeleton" step (option 2) would slot in HERE — e.g. a button that hands the
 // chosen role+option to recipe-builder pre-filled — but no emit/generate logic
 // is built now (out of #811 scope). Keep this list link-only until then.
+const LOADER = "../assets/jsx-loader.html?component=";
 const HANDOFF_TARGETS = {
   tenant: [
-    { href: "recipe-builder.html", label: () => t("配方建構器", "Recipe Builder"), desc: () => t("用引導表單組出 custom alert 配方。", "Build a custom-alert recipe with a guided form.") },
-    { href: "playground.html", label: () => t("互動沙盒", "Playground"), desc: () => t("在沙盒中試玩 tenant 設定。", "Experiment with tenant config in a sandbox.") },
+    { href: `${LOADER}recipe-builder`, label: () => t("配方建構器", "Recipe Builder"), desc: () => t("用引導表單組出 custom alert 配方。", "Build a custom-alert recipe with a guided form.") },
+    { href: `${LOADER}playground`, label: () => t("互動沙盒", "Playground"), desc: () => t("在沙盒中試玩 tenant 設定。", "Experiment with tenant config in a sandbox.") },
   ],
   platform: [
-    { href: "deployment-wizard.html", label: () => t("部署精靈", "Deployment Wizard"), desc: () => t("產出 Helm values 或 Kustomize patch。", "Generate Helm values or a Kustomize patch.") },
-    { href: "cli-playground.html", label: () => t("CLI 沙盒", "CLI Playground"), desc: () => t("試跑 da-tools 指令。", "Try da-tools commands interactively.") },
+    { href: `${LOADER}deployment-wizard`, label: () => t("部署精靈", "Deployment Wizard"), desc: () => t("產出 Helm values 或 Kustomize patch。", "Generate Helm values or a Kustomize patch.") },
+    { href: `${LOADER}cli-playground`, label: () => t("CLI 沙盒", "CLI Playground"), desc: () => t("試跑 da-tools 指令。", "Try da-tools commands interactively.") },
   ],
   domain: [
-    { href: "rule-pack-selector.html", label: () => t("Rule Pack 選擇器", "Rule Pack Selector"), desc: () => t("挑出你資料庫需要的 rule pack。", "Pick the rule packs your database needs.") },
-    { href: "threshold-calculator.html", label: () => t("閾值計算器", "Threshold Calculator"), desc: () => t("從觀測指標推算建議閾值。", "Derive suggested thresholds from observed metrics.") },
+    { href: `${LOADER}rule-pack-selector`, label: () => t("Rule Pack 選擇器", "Rule Pack Selector"), desc: () => t("挑出你資料庫需要的 rule pack。", "Pick the rule packs your database needs.") },
+    { href: `${LOADER}threshold-calculator`, label: () => t("閾值計算器", "Threshold Calculator"), desc: () => t("從觀測指標推算建議閾值。", "Derive suggested thresholds from observed metrics.") },
   ],
 };
 
@@ -510,6 +516,7 @@ const PathCompare = ({ currentKey, role, onClose }) => {
       <div>
         <label className="text-sm font-medium text-[color:var(--da-color-fg)] block mb-2">{t('選擇另一條路徑比較：', 'Compare with another path:')}</label>
         <select
+          aria-label={t('選擇另一條路徑比較', 'Compare with another path')}
           value={compareKey || ''}
           onChange={(e) => setCompareKey(e.target.value || null)}
           className="w-full px-3 py-2 border border-[color:var(--da-color-surface-border)] rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[color:var(--da-color-focus-ring)]"

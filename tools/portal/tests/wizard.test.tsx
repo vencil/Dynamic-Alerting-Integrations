@@ -92,7 +92,11 @@ describe('GettingStartedWizard — #811 role-scoped IA', () => {
     ).toBeInTheDocument();
     // The grow-ops handoff seam is present for the tenant role.
     expect(screen.getByRole('heading', { name: /Ready to act\?/i })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /Recipe Builder/i })).toHaveAttribute('href', 'recipe-builder.html');
+    // Handoff links must use the WORKING loader form (?component=<key>). A
+    // bare `<tool>.html` 404-falls-back to the Hub home via nginx try_files —
+    // asserting the resolvable form guards against that regression.
+    expect(screen.getByRole('link', { name: /Recipe Builder/i }))
+      .toHaveAttribute('href', '../assets/jsx-loader.html?component=recipe-builder');
   });
 
   it('(b2) PathCompare lists only same-role paths (no cross-role leak)', () => {
@@ -134,5 +138,28 @@ describe('GettingStartedWizard — #811 role-scoped IA', () => {
     fireEvent.click(markUnread);
     expect(window.location.hash).not.toMatch(/read=/);
     expect(screen.getByText(/^0\/\d+$/)).toBeInTheDocument();
+  });
+
+  it('(d) deep-link to a NON-first-bucket platform option lands on step-2', () => {
+    // `monitoring` is the sole member of platform's "operate" bucket (not the
+    // first bucket). Proves lifecycle bucketing is display-only and does not
+    // break the option= deep link for options living in a later bucket.
+    window.history.replaceState(null, '', CLEAN_PATH + '#role=platform&option=monitoring');
+    render(<GettingStartedWizard />);
+    expect(
+      screen.getByRole('heading', { level: 2, name: /Platform Monitoring & Scaling/i })
+    ).toBeInTheDocument();
+  });
+
+  it('(e) a11y: active step is aria-current and the Compare toggle reflects pressed state', () => {
+    window.history.replaceState(null, '', CLEAN_PATH + '#role=tenant&option=routing');
+    render(<GettingStartedWizard />);
+    // Exactly one progress node is marked as the current step.
+    expect(document.querySelectorAll('[aria-current="step"]').length).toBe(1);
+    // The Compare-Paths toggle exposes + flips aria-pressed for assistive tech.
+    const compareBtn = screen.getByRole('button', { name: /Compare Paths/i });
+    expect(compareBtn).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.click(compareBtn);
+    expect(compareBtn).toHaveAttribute('aria-pressed', 'true');
   });
 });
