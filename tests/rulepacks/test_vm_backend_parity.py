@@ -120,7 +120,7 @@ def _ssot_vm_version() -> str:
         line = line.strip()
         if line.startswith("VM_VERSION="):
             return line.split("=", 1)[1].strip()
-    raise AssertionError("VM_VERSION not found in tests/rulepacks/vm_engine_version")
+    raise AssertionError(f"VM_VERSION not found in {_FIXTURE_DIR / 'vm_engine_version'}")
 
 
 def _vm_server_version() -> str | None:

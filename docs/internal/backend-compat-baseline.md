@@ -41,8 +41,8 @@
 - **唯一性時間窗**：每個 (worker, case, test-block) 用唯一且確定性的 `T0 + slot*GAP`（`GAP=3600s` ≫ VM 5m staleness lookback）→ 不跨 fixture/worker 污染、重跑冪等。`-n auto` 安全。
 - **fail-loud**：設 `VM_PARITY_REQUIRE=1`（版本-bump 重驗時用）→ VM 連不上即**硬 fail**，絕不靜默 skip→假綠；`force_flush` 失敗在 REQUIRE 下也 raise（避免 unflushed race）。預設（未設）無 VM 即 skip。
 - **plumbing guard**：每個 case 斷言 recording-rule 鏈**有寫出 ≥1 series**——否則空的 alert 結果可能是 no-op 假裝「no-fire」。
-- **版本 pin 單一 SSOT**：引擎版本只在 `tests/rulepacks/vm_engine_version`（`VM_VERSION`）；ci.yml 的 vmalert-tool install `source` 它、anchor 讀它。**bump 程序**：改 `VM_VERSION` → 同步 ci.yml 的 `VMUTILS_SHA256`（不符 `_verify_download.sh` 會 fail，強制版本↔hash 耦合）→ 起 matching live vmsingle 重跑 anchor（`VM_PARITY_REQUIRE=1`）驗等價仍成立。image digest-pin（供應鏈 #851）原用於已移除的 CI job；dev-container 的 vmsingle 由 vmutils tarball 提供（SHA 已驗）。
-- **跑 anchor**（主路徑）：無 VM → 自動 skip、純函式單元測試照跑；要跑：起 pinned vmsingle（`docker run -d -p 8428:8428 victoriametrics/victoria-metrics:v<VM_VERSION> -retentionPeriod=100y`）後 `VM_PARITY_REQUIRE=1 VM_PARITY_ENDPOINT=http://localhost:8428 pytest tests/rulepacks/test_vm_backend_parity.py`。dev-container 直接用 `/tmp/vm/victoria-metrics-prod`（與 vmalert-tool-prod 同 tarball、天生同版）。
+- **版本 pin 單一 SSOT**：引擎版本只在 `tests/rulepacks/vm_engine_version`（`VM_VERSION`）；ci.yml 的 vmalert-tool install `source` 它、anchor 讀它。**bump 程序**：改 `VM_VERSION` → 同步 ci.yml 的 `VMUTILS_SHA256`（不符 `_verify_download.sh` 會 fail，強制版本↔hash 耦合）→ 起 matching live vmsingle 重跑 anchor（`VM_PARITY_REQUIRE=1`）驗等價仍成立。image digest-pin（供應鏈 #851）原用於已移除的 CI job；dev-container 的 vmsingle（`victoria-metrics-prod`）來自**獨立的** `victoria-metrics-*.tar.gz`（**非** vmutils tarball——後者只含 vmalert-tool 等工具），與 vmalert-tool **同 release tag**；版本不符由 anchor 的 `test_engine_version_matches_pin` 擋。
+- **跑 anchor**（主路徑）：無 VM → 自動 skip、純函式單元測試照跑；要跑：起 pinned vmsingle（`docker run -d -p 8428:8428 victoriametrics/victoria-metrics:v<VM_VERSION> -retentionPeriod=100y`）後 `VM_PARITY_REQUIRE=1 VM_PARITY_ENDPOINT=http://localhost:8428 pytest tests/rulepacks/test_vm_backend_parity.py`。dev-container 直接用 `/tmp/vm/victoria-metrics-prod`（vmsingle，與 vmalert-tool **同 release tag、不同 tarball**；見上「版本 pin 單一 SSOT」）。
 
 ## 加覆蓋
 
