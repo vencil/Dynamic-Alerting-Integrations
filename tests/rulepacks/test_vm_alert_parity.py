@@ -36,6 +36,7 @@ is skipped (CI provisions it like promtool).
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -69,11 +70,101 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def _catalogued_fixtures() -> set[str]:
+def _catalog() -> dict[str, dict]:
+    """Deviation-catalog entries keyed by fixture name. Each entry's ``rules`` +
+    ``direction`` are LOAD-BEARING (enforced by the granularity check in
+    test_rulepack_parity_on_vmalert), not just documentation."""
     if not _CATALOG.exists():
-        return set()
+        return {}
     data = yaml.safe_load(_CATALOG.read_text(encoding="utf-8")) or {}
-    return {d["fixture"] for d in (data.get("deviations") or [])}
+    catalog: dict[str, dict] = {}
+    for d in data.get("deviations") or []:
+        fixture = d["fixture"]
+        if fixture in catalog:
+            # Fail LOUD on a repeated fixture: a plain dict comprehension would silently
+            # last-wins, dropping the earlier entry and weakening the granularity gate
+            # (a real divergence could go uncatalogued under the shadowed key). (#958 CodeRabbit)
+            raise ValueError(
+                f"vm_deviation_catalog.yaml: duplicate fixture {fixture!r} — a repeated entry "
+                f"silently overwrites the earlier one and weakens the granularity gate. Merge the "
+                f"duplicates into ONE entry (combine their `rules` / `direction`)."
+            )
+        catalog[fixture] = d
+    return catalog
+
+
+def _catalogued_fixtures() -> set[str]:
+    return set(_catalog())
+
+
+_VALID_DIRECTIONS = frozenset({"under-fire", "over-fire", "mismatch"})
+
+
+def _allowed_from_entry(fixture: str, entry: dict) -> tuple[set[str], set[str]]:
+    """Validate a catalogued entry and return its (allowed_alerts, allowed_directions).
+
+    `rules` MUST be a non-empty LIST: ``set(entry.get("rules") or [])`` on a bare scalar
+    string (e.g. ``rules: FooAlert``) yields a CHAR-set {'F','o',...} that passes a
+    truthiness check yet makes the rogue-alert membership test (``alert not in allowed``)
+    nonsense → a catalog typo gets misclassified as a rogue divergence. `direction` is
+    scalar-or-list. Fails LOUD on a malformed entry — a catalog error, not a divergence. (#958)
+    """
+    rules = entry.get("rules")
+    dirs = entry.get("direction")
+    allowed_dirs = set(dirs) if isinstance(dirs, list) else {dirs}
+    assert isinstance(rules, list) and rules and allowed_dirs <= _VALID_DIRECTIONS, (
+        f"{fixture}: malformed vm_deviation_catalog.yaml entry — `rules` must be a non-empty "
+        f"list and `direction` ∈ {sorted(_VALID_DIRECTIONS)} (got rules={rules!r}, "
+        f"direction={sorted(allowed_dirs)}). Fix the catalog entry — this is a catalog error, "
+        f"not a rule divergence."
+    )
+    return set(rules), allowed_dirs
+
+
+# ⚠️ ACTION-ITEM (gate-hardening, Gemini #958 review): regex-parsing vmalert-tool's
+# human-readable stdout is a SHORT-TERM compromise — the SRE-canonical fragility of scraping
+# CLI text, brittle against output-format drift across VM versions. The ROOT fix is upstream
+# structured output: `vmalert-tool unittest --output=json`, which our pinned engine v1.146.0
+# does NOT provide (no JSON mode). When a VM release ships JSON unittest output, switch this
+# parser to it and retire the line-anchored regex below. Until then,
+# test_failure_parser_pins_vmalert_format is the drift tripwire that fails LOUD on a format change.
+#
+# vmalert-tool unittest emits one block per FAILING assertion (no JSON mode as of v1.146.0):
+#   testGroupName: <block>, ... alertname: <A>, time: <T>, exp:[...], got:[...]
+# Direction is read from emptiness: under-fire = expected alerts but none fired
+# (exp non-empty, got:[]); over-fire = expected none but fired (exp:[], got non-empty);
+# mismatch = both non-empty but differ (label/annotation/value drift).
+# The exp:/got:/testGroupName: fields are matched LINE-ANCHORED (``(?m)^[ \t]*``) so a
+# rendered annotation/label *value* containing the literal substring ``exp:[]`` / ``got:[]`` /
+# ``testGroupName:`` cannot corrupt emptiness detection or inject a phantom block (such a value
+# sits mid-line after ``Annotations:{``/``Labels:{``, never at a field line-start). alertname
+# is captured as ``[^,]*`` (not ``\S+``) so an empty alertname yields "" -> a LOUD rogue, not a
+# silently-dropped failure. test_failure_parser_pins_vmalert_format pins the format + a poison case.
+_BLOCK_SPLIT_RE = re.compile(r"(?m)^[ \t]*testGroupName:")
+_FAIL_HEAD_RE = re.compile(r"alertname:[ \t]*(?P<alert>[^,]*?)[ \t]*,[ \t]*time:[ \t]*(?P<time>[^,]+?)[ \t]*,")
+_EMPTY_EXP_RE = re.compile(r"(?m)^[ \t]*exp:[ \t]*\[[ \t]*\]")
+_EMPTY_GOT_RE = re.compile(r"(?m)^[ \t]*got:[ \t]*\[[ \t]*\]")
+
+
+def _parse_vmalert_failures(output: str) -> list[dict]:
+    """Parse vmalert-tool unittest failure output -> [{group, alert, time, direction}].
+    Pass stdout+stderr concatenated (the failure detail's stream is not contracted)."""
+    failures: list[dict] = []
+    for chunk in _BLOCK_SPLIT_RE.split(output)[1:]:
+        head = _FAIL_HEAD_RE.search(chunk)
+        if not head:
+            continue
+        exp_empty = bool(_EMPTY_EXP_RE.search(chunk))
+        got_empty = bool(_EMPTY_GOT_RE.search(chunk))
+        direction = ("under-fire" if got_empty and not exp_empty else
+                     "over-fire" if exp_empty and not got_empty else "mismatch")
+        failures.append({
+            "group": chunk.split(",", 1)[0].strip(),
+            "alert": head.group("alert"),
+            "time": head.group("time"),
+            "direction": direction,
+        })
+    return failures
 
 
 def _fixtures() -> list[str]:
@@ -119,6 +210,39 @@ def test_rulepack_parity_on_vmalert(fixture: str, xlate_dir: Path) -> None:
             f"{fixture} is listed in vm_deviation_catalog.yaml but now PASSES on "
             f"vmalert-tool — the divergence appears healed. Remove the stale catalog entry "
             f"so the catalog stays in sync with reality."
+        )
+        # Granularity gate: a catalogued fixture must diverge ONLY in the catalogued
+        # alert(s) + direction. Without this, the per-fixture catalog key + bare returncode
+        # mask a SECOND, unrelated divergence — the fixture is already "expected to fail",
+        # so a new break in a different alert OR a direction-flip (under-fire -> wrong-label)
+        # is invisible. This turns the entry's `rules`/`direction` from docs into a gate.
+        # Validate + extract the catalogued (alerts, directions); see _allowed_from_entry —
+        # `rules` must be a non-empty LIST so set() can't char-explode a scalar string. (#958)
+        allowed_alerts, allowed_dirs = _allowed_from_entry(fixture, _catalog()[fixture])
+        failures = _parse_vmalert_failures(proc.stdout + "\n" + proc.stderr)
+        schema_err = "unmarshal" in proc.stderr or "not found in type" in proc.stderr
+        assert failures, (
+            f"{fixture} is catalogued and vmalert-tool returned non-zero, but NO per-assertion "
+            f"divergence parsed. " + (
+                "vmalert-tool reports a SCHEMA/parse error (unmarshal / not found in type) — the "
+                "fixture or xlate broke, NOT a behavioural divergence; fix that."
+                if schema_err else
+                "This is a non-assertion error path (panic / unsupported function) OR vmalert-tool "
+                "output-format drift (the teeth-test pins the assertion-block shape, not error "
+                "paths). Do NOT assume the catalogued divergence still holds — investigate."
+            ) + f"\n\n--- stdout ---\n{proc.stdout}\n--- stderr ---\n{proc.stderr}"
+        )
+        rogue = [f for f in failures
+                 if f["alert"] not in allowed_alerts or f["direction"] not in allowed_dirs]
+        assert not rogue, (
+            f"{fixture}: vmalert-tool diverges OUTSIDE the catalogued signature "
+            f"(rules={sorted(allowed_alerts)}, direction={sorted(allowed_dirs)}). A NEW, "
+            f"uncatalogued divergence is hiding behind the existing catalog entry — exactly "
+            f"the per-fixture-key false-negative this granularity check closes. Fix the rule, "
+            f"or widen/justify the catalog entry. Rogue assertion(s):\n"
+            + "\n".join(f"  • {f['group']} [{f['alert']}] @{f['time']}: {f['direction']}"
+                        for f in rogue)
+            + f"\n\n--- full vmalert-tool output ---\n{proc.stdout}\n{proc.stderr}"
         )
     else:
         # Distinguish a real MetricsQL behavioural divergence from a harness/format gap:
@@ -181,4 +305,85 @@ def test_gate_detects_a_known_divergence(tmp_path: Path) -> None:
         "vmalert-tool did NOT flag the known rate() cold-start divergence — the parity "
         "gate may have become a no-op (vmalert-tool flag/format drift?).\n"
         f"{proc.stdout}\n{proc.stderr}"
+    )
+
+
+def test_failure_parser_pins_vmalert_format() -> None:
+    """Teeth-test for _parse_vmalert_failures: pin the exact vmalert-tool v1.146.0 unittest
+    failure-output shapes the granularity check parses — under-fire (exp non-empty / got:[])
+    and over-fire (exp:[] / got non-empty). Both samples are captured VERBATIM from real
+    vmalert-tool runs (ha-replicas under-fire; a rate() cold-start over-fire). If vmalert-tool
+    changes its output format on a version bump, this fails LOUDLY — otherwise the granularity
+    check could silently parse zero rogue divergences and wave a NEW divergence through."""
+    under = (
+        'failed to run unit test for file "x": \n[\n'
+        'testGroupName: blk-under,\n    groupname: , alertname: TenantHAReplicasDegraded, '
+        'time: 16m0s, \n        exp:[\n            0:\n              Labels:{tenant="t1"}\n'
+        '            ], \n        got:[]  \n'
+    )
+    over = (
+        'testGroupName: blk-over,\n    groupname: , alertname: OverFire, time: 30s, \n'
+        '        exp:[], \n        got:[\n            0:\n              '
+        'Labels:{alertname="OverFire", instance="t"}\n              Annotations:{}\n'
+        '            ] ]2026/06/29 05:11:30 unittest failed'
+    )
+    assert _parse_vmalert_failures(under + over) == [
+        {"group": "blk-under", "alert": "TenantHAReplicasDegraded", "time": "16m0s",
+         "direction": "under-fire"},
+        {"group": "blk-over", "alert": "OverFire", "time": "30s", "direction": "over-fire"},
+    ]
+    # A green run (or any output without failing-assertion blocks) parses to no failures.
+    assert _parse_vmalert_failures("Unit Testing: x\n  SUCCESS\n") == []
+
+    # Poison: an annotation VALUE that contains the literal exp:[] / got:[] / testGroupName: /
+    # alertname: tokens must NOT corrupt emptiness detection or inject a phantom block — the
+    # line-anchored field match ignores mid-line occurrences. Regression guard: pre-fix parser
+    # (free re.search + bare split) mis-classified this under-fire as mismatch AND hallucinated a
+    # "Ghost" alert; the line-anchored parser yields exactly the one real under-fire failure.
+    poison = (
+        'failed to run unit test for file "x": \n[\n'
+        'testGroupName: blk-poison,\n    groupname: , alertname: TenantHAReplicasDegraded, '
+        'time: 16m0s, \n        exp:[\n            0:\n              Labels:{tenant="t1"}\n'
+        '              Annotations:{summary="value with exp:[] got:[] testGroupName: x, '
+        'alertname: Ghost, time: 9s"}\n            ], \n        got:[]  \n'
+    )
+    assert _parse_vmalert_failures(poison) == [
+        {"group": "blk-poison", "alert": "TenantHAReplicasDegraded", "time": "16m0s",
+         "direction": "under-fire"},
+    ]
+
+
+def test_catalog_loader_and_entry_validation_fail_loud(tmp_path, monkeypatch) -> None:
+    """#958: the deviation catalog is a LOAD-BEARING gate — a DUPLICATE fixture or a MALFORMED
+    entry must FAIL LOUD, never silently weaken the granularity check. Two silent-weakening
+    traps this pins: (a) a plain dict-comprehension last-wins on a repeated fixture; (b)
+    ``set(entry.get("rules") or [])`` char-explodes a scalar ``rules: FooAlert`` into
+    {'F','o',...}, which slips past a truthiness check and breaks the rogue-alert membership
+    test → a catalog typo is misread as a rogue divergence."""
+    import sys
+    # (a) duplicate fixture key -> ValueError (not a silent last-wins overwrite).
+    dup = tmp_path / "dup.yaml"
+    dup.write_text(
+        "deviations:\n"
+        "  - {fixture: a_test.yaml, rules: [X], direction: under-fire}\n"
+        "  - {fixture: a_test.yaml, rules: [Y], direction: over-fire}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(sys.modules[__name__], "_CATALOG", dup)
+    with pytest.raises(ValueError, match="duplicate fixture"):
+        _catalog()
+    # (b) malformed entries -> AssertionError: scalar `rules` (char-set trap), empty list, bad dir.
+    for bad in (
+        {"rules": "FooAlert", "direction": "under-fire"},
+        {"rules": [], "direction": "under-fire"},
+        {"rules": ["X"], "direction": "sideways"},
+    ):
+        with pytest.raises(AssertionError, match="malformed vm_deviation_catalog"):
+            _allowed_from_entry("a_test.yaml", bad)
+    # A well-formed entry passes and normalises a scalar OR list direction.
+    assert _allowed_from_entry("a_test.yaml", {"rules": ["X", "Y"], "direction": "under-fire"}) == (
+        {"X", "Y"}, {"under-fire"},
+    )
+    assert _allowed_from_entry("b_test.yaml", {"rules": ["Z"], "direction": ["under-fire", "mismatch"]}) == (
+        {"Z"}, {"under-fire", "mismatch"},
     )
