@@ -599,7 +599,7 @@
       "exporter": "threshold-exporter",
       "configMap": "prometheus-rules-platform",
       "recordingRules": 0,
-      "alertRules": 26,
+      "alertRules": 29,
       "required": true,
       "defaultOn": false,
       "metrics": [
@@ -634,8 +634,8 @@
   "totals": {
     "packs": 16,
     "recordingRules": 149,
-    "alertRules": 136,
-    "total": 285
+    "alertRules": 139,
+    "total": 288
   },
   "tenant_groups": {},
   "tenant_metadata": {

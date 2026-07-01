@@ -485,10 +485,62 @@ promtool fire/no-fire 與上述 §8.7 spike alert 同放 `tests/rulepacks/tenant
 - **mtail 在 log flood 下的殘留丟失**：logrotate 用 **rename + Envoy `/reopen_logs`**（非 copytruncate，rotation 當下**不丟行**），但極端洪流（瞬間海量 401/403）下 mtail（CPU limit `100m`）parse 落後到 >`keep` 次 rotation 時，最舊的 renamed 檔會在讀完前被刪 → 靜默丟數 → rejection alert 分子採樣不足而延後/漏 fire。**load-test 50MB/10s 洪流、量 mtail CPU + 丟失率**，必要時放寬 mtail CPU limit；順帶監控 mtail 自身 `mtail_progs_processing_errors_total` 與延遲（Gemini）。
 - **metric 能見度邊界**：counter 只計**通過 JWT 後**的拒絕；過期/壞簽/錯 audience token 由 `jwt_authn` 在 account_id 注入**前** 401、**不計入**（攻擊噪音，由 jwt_authn 自身 stats 觀測，與 ADR-020 一致）。`account_id`<1000 的誤發 token 若被 Lua 403 仍會計入並標成該低 id（實務 tenant-api 不發 <1000，latent）。3xx/1xx status 不落任何 bucket（VictoriaLogs read API 幾乎不回，刻意不計）。
 
+### 8.9 投影 GATE degrade/enforce 觀測與復原（ADR-021 Phase 2(a) / #908 PR-3a）
+
+§8.7 盯「投影被 abort 丟棄」，本節盯**更上游**的「投影 GATE 本身降級/卡死」——`tenantProjections` 與 conf.d `_account_registry.yaml` 不符（unique-but-wrong accountId 跨租戶洩漏類）或 boot 時讀不到 registry 時，fail-closed gate 的反應與**復原 SOP**。
+
+**觀測管線（為何不是 node-exporter / 不是 per-node absent）**：gate init-container 把判定寫進 pod-local emptyDir 的 Prometheus textfile（`--metrics-file /gate-metrics/gate.prom`，metric `vector_tenant_projection_gate_info{category,mode}`）；一支長駐 **exposer sidecar**（`serve_metrics.py`，同 image、`command` override）把該檔以 HTTP 重新 serve，經**獨立 headless Service**（`<vector>-projection-gate-metrics`，gated on `tenantProjections`、**不**綁 `metrics.enabled`）被 Prometheus `monitoring-components`（role:service）scrape。本叢集**無 node-exporter / textfile collector**，Vector 自身 exporter 又只讀 `internal_metrics`，故走 sidecar——且 sidecar 與 pod 同生死 → pod 死時 series **變 absent 而非殘留 stale-"ok"**（crash 不會假性 resolve 真實 mismatch）。Vector 是 DaemonSet、每 node 掛**相同** registry+projections → 每 node 判定**相同**，故 alert 一律 `max by(...)` **跨 pod 聚合**（per-node absent 非必要，且 role:service scrape 本就不給穩定 per-node series）。⚠️ **enforce 死鎖時 sidecar 不會啟動**（init 非零退出 → pod 卡 Init → Vector 與 sidecar 皆未起 → verdict metric **無人 serve**），故那條 alert 改走 **KSM**（見 §8.9.3）。
+
+對應三條 alert（`configmap-rules-platform.yaml` `federation-audit` group，promtool 契約 `tests/rulepacks/platform-projection-gate{.rules,_test}.yaml`）：
+
+#### 8.9.1 `VectorProjectionGateMismatch`（critical，degrade 模式抄錯號碼）
+
+某 `tenantProjections` entry 的 accountId 與 registry 配發不符（render-time `{{fail}}` 唯一性 + integer schema 都放行的「唯一但錯」洩漏類）。degrade 模式下 gate **丟掉**租戶投影片段 → Vector 只送平台 0:0（**洩漏已被擋下**，從未寫到錯分區），但租戶淨化投影**靜默關閉**。復原：
+
+```bash
+# 1) 抓出抄錯的那對 tenantId→accountId（gate 把違規逐條印到 stderr）
+kubectl logs <vector-pod> -c projection-gate
+#    → 例：tenantId 'tenant-alpha' projects accountId 1001 but the registry allocates 1000 ...
+# 2) 以 registry 為 SSOT 對帳、修正 helm values 的 tenantProjections（或 --set override）
+#    切勿反向改 registry——registry 是單調權威，錯的是投影。
+# 3) 重新部署/套用後滾動 DaemonSet 讓 gate 重新驗證（projection 改動本就會經
+#    checksum/config 觸發 rollout；手動補一刀保險）：
+kubectl rollout restart ds/<vector> -n <ns>
+```
+復原後該 node 重啟、gate 判定回 `ok` → 片段重新 place → alert 自動 clear。
+
+#### 8.9.2 `VectorRegistryUnreadableAtBoot`（critical，ghost race / registry 讀不到）
+
+gate boot 時無法**信任** registry（degrade 到 0:0，`category="registry_unreadable"`）。最陰險的觸發＝**fresh-deploy 順序競態**：Vector 早於 registry ConfigMap 同步就啟動（`optional:true` 讓 pod 起得來）→ gate 讀到缺檔→降級，而 **one-shot-at-boot** 使它在 registry 之後到達仍**維持降級**（症狀：全綠、但租戶路由永久靜默關）。也可能是 registry 格式壞/schema 較新（fail-closed 拒驗）。復原：
+
+```bash
+# 1) 確認 registry ConfigMap 存在且 well-formed（projectionGate.registry.configMapName 指的那個）
+kubectl get configmap <registry-cm> -n <ns> -o jsonpath='{.data._account_registry\.yaml}' | head
+# 2) 確認無誤後，滾動 DaemonSet 讓 one-shot gate 對「現在存在」的 registry 重跑：
+kubectl rollout restart ds/<vector> -n <ns>
+```
+⚠️ **這是唯一需要人工介入離開 degrade 的設計點**（gate 不自動重驗；重新啟用租戶路由是 operator 的明確動作，非自動）。若反覆 ghost-race，檢查部署順序（registry ConfigMap 應先於 Vector DaemonSet apply）。
+
+#### 8.9.3 `VectorProjectionGateEnforceDeadlock`（critical，enforce 模式 rollout 死鎖）
+
+僅當 `tenantProjectionGate: enforce`。config-bug mismatch 使 gate init **非零退出** → pod 卡 `Init:CrashLoopBackOff` → Vector 與 exposer sidecar **皆不啟動**（故 verdict metric 無人 serve，degrade alert 看不到 → 本條改靠 KSM `kube_pod_init_container_status_waiting_reason{container="projection-gate",reason="CrashLoopBackOff"}`）。DaemonSet 上 `maxUnavailable` 會**卡死整個 rollout**（rolling 中的 node 失去日誌、未滾到的 node 維持舊 config＝split-brain）。復原：
+
+```bash
+# 1) 看卡住那刻的 gate 退出原因（--previous 取已崩潰容器的 log）
+kubectl logs <vector-pod> -c projection-gate --previous
+# 2) 這是 fail-closed 正常運作——REVERT 那筆錯的 tenantProjections（或修對 config 後刪卡住的 pod）
+kubectl delete pod <stuck-vector-pod> -n <ns>   # 修好 config 後，讓它以正確 config 重排
+```
+📝 **解除滯後（正常現象，勿驚慌）**：本 alert 的 expr 用 `max_over_time(...[5m])` 防抖（見規則註解）。你修好 config、看到新 pod 回 `Running` 後，**alert 仍會續鳴約 5 分鐘才自動 resolve**——因為那條回溯窗還會掃到剛才的 `CrashLoopBackOff` 樣本，`> 0` 在窗口滑出前仍成立。這是換取告警穩定（不因 backoff 間短暫重啟而漏發）的合理代價，不是卡住。
+**模式取捨**：若「硬卡 rollout」比「fail-available 退回 0:0」更糟（多數平台是），用預設 `degrade` 模式——它把同一筆抄錯轉成 §8.9.1 的可觀測降級而非死鎖。`enforce` 只適合「寧可全斷也不要錯路由」的偏執環境。
+
+**觀測層自身的盲點（誠實標註）**：(a) 若 exposer sidecar 全掛（或 Service/scrape 斷），§8.9.1/8.9.2 的 verdict-metric alert 會失明——但那同時是一場 Vector 全面故障，另有其面向；KSM 路徑（§8.9.3）不受影響。(b) `tenantProjections` 未啟用時不部署 sidecar/Service，故**不**設「verdict metric absent」哨兵 alert（否則每個未用投影的部署都假性 fire）；gate 觀測只在投影啟用時存在。
+
 ## Refs
 
 - 源 issue：[#539](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/539)
 - 產生 audit JSON 的 Envoy access_log：`helm/federation-gateway/files/envoy.yaml`
 - ADR-020 §Audit log
 - ADR-021 §Audit log + anomaly metric（#609 PR-4 觀測層）
+- ADR-021 Phase 2(a) 投影 GATE 觀測（#908 PR-3a，§8.9）：[#908](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/908)
 - Consumer #2：[#552](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/552)

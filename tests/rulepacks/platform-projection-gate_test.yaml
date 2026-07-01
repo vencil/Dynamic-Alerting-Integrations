@@ -1,0 +1,182 @@
+# promtool behavioural test for the projection-gate observability alerts
+# (ADR-021 Phase 2(a) / #908 PR-3a). Validates the codified contract for all three:
+#
+#   VectorProjectionGateMismatch / VectorRegistryUnreadableAtBoot (verdict metric):
+#     1) FIRE on their OWN category only — modelled with the scrape topology labels
+#        (instance/pod/job) PRESENT, so the test proves `max by (mode)` collapses them
+#        and the firing alert carries only {severity, mode} (a raw `> 0` on the
+#        un-aggregated series would leak instance/pod/job and, under per-pod scrape,
+#        fire per-instance — this guards the silent-never-fire / label-leak trap).
+#     2) are DEBOUNCED by `for: 5m` — the MID-window eval (4m, condition already true)
+#        must be PENDING-not-firing; a `for: 0s` mutant would fire there and this flips
+#        it red (the load-bearing debounce guard, not just a post-window check).
+#     3) do NOT cross-fire: mismatch ignores registry_unreadable and vice-versa, and
+#        NEITHER fires on the healthy category="ok" verdict.
+#
+#   VectorProjectionGateEnforceDeadlock (KSM init-container signal — the case where
+#   the verdict metric is NEVER served because the pod never leaves Init):
+#     4) FIRES on container="projection-gate" + reason="CrashLoopBackOff", debounced,
+#        aggregating to {severity, namespace}.
+#     5) does NOT fire on a benign init wait (reason="PodInitializing") nor on a
+#        DIFFERENT container crashlooping (container="vector") — scoping guards.
+#
+# Evaluated at 1m resolution so the `for: 5m` window is cheap and exact.
+# Run: promtool test rules tests/rulepacks/platform-projection-gate_test.yaml
+rule_files:
+  - platform-projection-gate.rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # 1) mismatch in degrade mode, sustained, WITH scrape labels present → FIRES after
+  #    `for: 5m`; aggregation strips instance/pod/job (alert carries only severity+mode).
+  - interval: 1m
+    name: mismatch-degrade-fires-strips-scrape-keeps-mode-namespace
+    input_series:
+      # namespace present (a scrape that attaches it) → aggregation must KEEP it so two
+      # Vector installs don't collapse; instance/pod/job are the noisy labels to strip.
+      - series: 'vector_tenant_projection_gate_info{category="mismatch", mode="degrade", namespace="monitoring", instance="10.0.0.5:9599", pod="vector-abc12", job="vector-projection-gate-metrics"}'
+        values: '1+0x9'
+    alert_rule_test:
+      # MID-window: the mismatch is already true (t0..t4) but `for: 5m` has NOT elapsed
+      # → PENDING, must NOT page. Load-bearing `for` guard: a missing/zero `for` fires here.
+      - eval_time: 4m
+        alertname: VectorProjectionGateMismatch
+        exp_alerts: []
+      # Past the window → FIRING; instance/pod/job stripped, mode + namespace KEPT.
+      - eval_time: 6m
+        alertname: VectorProjectionGateMismatch
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              mode: degrade
+              namespace: monitoring
+            exp_annotations:
+              summary: "Vector projection gate found a wrong accountId (mode=degrade) — tenant log routing degraded to 0:0"
+
+  # 2) the healthy "ok" verdict is present → mismatch alert must NOT fire (the `> 0`
+  #    only matches the mismatch category, not the always-emitted ok series).
+  - interval: 1m
+    name: ok-verdict-does-not-fire-mismatch
+    input_series:
+      - series: 'vector_tenant_projection_gate_info{category="ok", mode="degrade", instance="10.0.0.5:9599", pod="vector-abc12", job="vector-projection-gate-metrics"}'
+        values: '1+0x9'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: VectorProjectionGateMismatch
+        exp_alerts: []
+
+  # 3) a registry_unreadable verdict must NOT trip the MISMATCH alert (category isolation).
+  - interval: 1m
+    name: registry-unreadable-does-not-fire-mismatch
+    input_series:
+      - series: 'vector_tenant_projection_gate_info{category="registry_unreadable", mode="degrade", instance="10.0.0.5:9599", pod="vector-abc12"}'
+        values: '1+0x9'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: VectorProjectionGateMismatch
+        exp_alerts: []
+
+  # 4) registry_unreadable (ghost race), sustained → its OWN alert FIRES after `for: 5m`,
+  #    debounced mid-window, aggregating to {severity, mode, namespace}.
+  - interval: 1m
+    name: registry-unreadable-fires-debounced
+    input_series:
+      - series: 'vector_tenant_projection_gate_info{category="registry_unreadable", mode="degrade", namespace="monitoring", instance="10.0.0.7:9599", pod="vector-def34", job="vector-projection-gate-metrics"}'
+        values: '1+0x9'
+    alert_rule_test:
+      - eval_time: 4m   # true since t0 but < for:5m → PENDING (pins the debounce)
+        alertname: VectorRegistryUnreadableAtBoot
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: VectorRegistryUnreadableAtBoot
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              mode: degrade
+              namespace: monitoring
+            exp_annotations:
+              summary: "Vector projection gate could not read the account registry at boot (mode=degrade) — tenant routing silently degraded"
+
+  # 5) a mismatch verdict must NOT trip the REGISTRY-UNREADABLE alert (category isolation).
+  - interval: 1m
+    name: mismatch-does-not-fire-registry-unreadable
+    input_series:
+      - series: 'vector_tenant_projection_gate_info{category="mismatch", mode="degrade", instance="10.0.0.5:9599", pod="vector-abc12"}'
+        values: '1+0x9'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: VectorRegistryUnreadableAtBoot
+        exp_alerts: []
+
+  # 6) enforce-mode deadlock: the gate init-container is CrashLoopBackOff (KSM), sustained
+  #    → FIRES after `for: 5m`, debounced, aggregating per-node duplicates to {severity, namespace}.
+  - interval: 1m
+    name: enforce-deadlock-fires-debounced
+    input_series:
+      - series: 'kube_pod_init_container_status_waiting_reason{container="projection-gate", reason="CrashLoopBackOff", namespace="monitoring", pod="vector-ghi56", instance="10.0.0.9:8080", job="kube-state-metrics"}'
+        values: '1+0x9'
+    alert_rule_test:
+      - eval_time: 4m   # crashlooping since t0 but < for:5m → PENDING
+        alertname: VectorProjectionGateEnforceDeadlock
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: VectorProjectionGateEnforceDeadlock
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              namespace: monitoring
+            exp_annotations:
+              summary: "Vector projection-gate init-container is CrashLoopBackOff (enforce mode) — DaemonSet rollout deadlocked in monitoring"
+
+  # 7) a benign init wait (PodInitializing) must NOT fire the deadlock alert — only
+  #    CrashLoopBackOff is the deadlock signal (a normal startup briefly waits).
+  - interval: 1m
+    name: pod-initializing-does-not-fire-deadlock
+    input_series:
+      - series: 'kube_pod_init_container_status_waiting_reason{container="projection-gate", reason="PodInitializing", namespace="monitoring", pod="vector-ghi56"}'
+        values: '1+0x9'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: VectorProjectionGateEnforceDeadlock
+        exp_alerts: []
+
+  # 8) a DIFFERENT container crashlooping (not the gate) must NOT fire — the
+  #    container="projection-gate" matcher scopes the alert to the gate only.
+  - interval: 1m
+    name: other-container-crashloop-does-not-fire-deadlock
+    input_series:
+      - series: 'kube_pod_init_container_status_waiting_reason{container="vector", reason="CrashLoopBackOff", namespace="monitoring", pod="vector-ghi56"}'
+        values: '1+0x9'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: VectorProjectionGateEnforceDeadlock
+        exp_alerts: []
+
+  # 9) FLAPPING crashloop: the CrashLoopBackOff series drops to absent while kubelet
+  #    briefly re-runs the init between backoffs (samples at t0,2,4,6,8, gaps between).
+  #    The alert must still FIRE through the gaps. NOTE (verified by mutation): promtool
+  #    bridges these short `_` gaps via lookback, so this case passes on BOTH the raw
+  #    `> 0` and the max_over_time form — it is NOT a distinguisher between them (it pins
+  #    the flap-robustness PROPERTY, not the implementation). The max_over_time(...[5m])
+  #    wrapper is justified against REAL Prometheus, which injects a staleness marker on
+  #    the first missing scrape rather than carrying the value 5m, so a raw `> 0` there
+  #    could reset `for: 5m` on a gap; max_over_time is the kube-prometheus
+  #    KubePodCrashLooping idiom for exactly that.
+  - interval: 1m
+    name: enforce-deadlock-flapping-still-fires
+    input_series:
+      - series: 'kube_pod_init_container_status_waiting_reason{container="projection-gate", reason="CrashLoopBackOff", namespace="monitoring", pod="vector-ghi56"}'
+        values: '1 _ 1 _ 1 _ 1 _ 1 _'   # present every other minute (gaps = brief re-run)
+    alert_rule_test:
+      - eval_time: 4m   # crashlooping since t0 but < for:5m → PENDING despite the gaps
+        alertname: VectorProjectionGateEnforceDeadlock
+        exp_alerts: []
+      - eval_time: 7m
+        alertname: VectorProjectionGateEnforceDeadlock
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              namespace: monitoring
+            exp_annotations:
+              summary: "Vector projection-gate init-container is CrashLoopBackOff (enforce mode) — DaemonSet rollout deadlocked in monitoring"
