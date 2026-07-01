@@ -450,6 +450,30 @@ class TestProjectionGateMetricsWiring:
                        and not d["metadata"]["name"].endswith("-projection-gate-metrics")
                        for d in docs)
 
+    @_needs_helm
+    def test_gate_containers_are_least_privilege_non_root(self, repo_root: Path) -> None:
+        """#908 PR-3 m3: the gate init-container + exposer sidecar run LEAST-PRIVILEGE
+        (non-root, drop ALL caps, NO DAC_READ_SEARCH) — they only read a ConfigMap
+        registry + the emptyDirs. The Vector container is the ONLY one that stays root
+        with DAC_READ_SEARCH (it reads root-owned /var/log host files). Guards the
+        security split: a regression that reused the root context for the gate, or
+        dropped root from Vector, both fail here."""
+        spec = self._daemonset(repo_root, sets=_PROJECTION_SETS)
+        gate = {c["name"]: c for c in spec["initContainers"]}["projection-gate"]
+        sidecar = {c["name"]: c for c in spec["containers"]}["projection-gate-metrics"]
+        for name, c in (("init", gate), ("sidecar", sidecar)):
+            sc = c["securityContext"]
+            assert sc["runAsNonRoot"] is True, f"{name} must be non-root"
+            assert sc.get("runAsUser") == 65532, f"{name} must run as the image's 65532 uid"
+            assert sc["capabilities"].get("drop") == ["ALL"], f"{name} must drop ALL caps"
+            assert "add" not in sc["capabilities"], f"{name} must NOT add DAC_READ_SEARCH (only Vector needs it)"
+            assert sc["readOnlyRootFilesystem"] is True
+        # The Vector container is the deliberate exception — root + DAC_READ_SEARCH.
+        vector = {c["name"]: c for c in spec["containers"]}["vector"]
+        vsc = vector["securityContext"]
+        assert vsc.get("runAsUser") == 0, "Vector must stay root to read /var/log"
+        assert "DAC_READ_SEARCH" in vsc["capabilities"].get("add", []), "Vector keeps DAC_READ_SEARCH"
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # VictoriaLogs Layer-1 search guardrails
