@@ -75,8 +75,11 @@ spec:
             # metrics-exposer sidecar re-serves it for Prometheus (#908 PR-3a).
             - "--metrics-file"
             - "/gate-metrics/gate.prom"
+          # Least-privilege: the gate reads a ConfigMap-mounted registry + writes the
+          # emptyDirs — it needs NEITHER root NOR DAC_READ_SEARCH (unlike the Vector
+          # container, which reads root-owned /var/log host files). #908 PR-3 m3.
           securityContext:
-            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+            {{- toYaml .Values.projectionGate.securityContext | nindent 12 }}
           resources:
             {{- toYaml .Values.projectionGate.resources | nindent 12 }}
           volumeMounts:
@@ -187,8 +190,10 @@ spec:
             - "/gate-metrics/gate.prom"
             - "--port"
             - {{ .Values.projectionGate.metrics.port | quote }}
+          # Least-privilege — the exposer only reads the verdict emptyDir + binds a
+          # port; non-root, no added caps (#908 PR-3 m3).
           securityContext:
-            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+            {{- toYaml .Values.projectionGate.securityContext | nindent 12 }}
           ports:
             - name: gate-metrics
               containerPort: {{ .Values.projectionGate.metrics.port }}
