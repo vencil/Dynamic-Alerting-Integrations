@@ -10,8 +10,13 @@
 #   A) LIMITLESS hogging node  → fires (db-x): 3.4 cores / 4-core node = 85% > 80.
 #   B) LIMITLESS below thresh   → silent (db-y): 1.0 core / 4-core node = 25% < 80.
 #   C) LIMITED pod (has limit)  → STILL fires via %-of-limit (db-z, 90%) — node-share is
-#      empty for it (`unless` the limit), so the limited path is unchanged + no double-fire.
+#      empty for it (its only container is bounded), so the limited path is unchanged.
 #   D) LIMITLESS + version label → node-share carries the real version (db-w, v2, 85%).
+#   E) MIXED pod (limited sidecar + unlimited db) → fires on the UNLIMITED container's node
+#      monopoly (db-m, 85%). Per-container `unless` keeps the sidecar on %-of-limit AND the db
+#      container on node-share; `max(A or B)` unions them so the limitless db is NOT hidden
+#      behind the sidecar's limit (#961 CodeRabbit regression guard — `unless on(ns,pod)` +
+#      `max(A) or B` used to drop node-share for the whole pod once any container had a limit).
 rule_files:
   - ../../rule-packs/rule-pack-kubernetes.yaml
 
@@ -149,4 +154,49 @@ tests:
               description_zh: "最大容器 CPU 使用率: 85.0% (超過閾值)"
               runbook_url: "http://rb/w"
               owner: team-w
+              tier: gold
+
+  # ── E) MIXED pod: unlimited db (3.4 cores, node-share 85%) + limited sidecar (0.1/0.5=20%).
+  #    Without the per-container `unless` + `max(A or B)` fix, the sidecar's limit dropped the
+  #    WHOLE pod from node-share and %-of-limit only saw the sidecar (20% < 80) → the node-
+  #    hogging db went silent. The fix keeps both lenses → max(20%, 85%) = 85% → FIRES (#961). ──
+  - interval: 15s
+    input_series:
+      - series: 'container_cpu_usage_seconds_total{namespace="db-m", pod="mysql-0", container="mysqld"}'
+        values: '0+51x48'
+      - series: 'container_cpu_usage_seconds_total{namespace="db-m", pod="mysql-0", container="exporter"}'
+        values: '0+1.5x48'
+      # ONLY the sidecar is limited; the main db container is unbounded.
+      - series: 'kube_pod_container_resource_limits{resource="cpu", namespace="db-m", pod="mysql-0", container="exporter"}'
+        values: '0.5x48'
+      - series: 'kube_pod_info{namespace="db-m", pod="mysql-0", node="node-1"}'
+        values: '1x48'
+      - series: 'kube_node_status_allocatable{node="node-1", resource="cpu"}'
+        values: '4x48'
+      - series: 'kube_pod_labels{namespace="db-m", pod="mysql-0"}'
+        values: '1x48'
+      - series: 'user_threshold{tenant="db-m", component="container", metric="cpu", severity="warning"}'
+        values: '80x48'
+      - series: 'tenant_metadata_info{tenant="db-m", runbook_url="http://rb/m", owner="team-m", tier="gold"}'
+        values: '1x48'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: PodContainerHighCPU
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              tenant: db-m
+              version: default
+              runbook_url: "http://rb/m"
+              owner: team-m
+              tier: gold
+            exp_annotations:
+              summary: "High container CPU in db-m"
+              summary_zh: "db-m 的容器 CPU 使用率過高"
+              platform_summary: "[gold] db-m: container CPU pressure — evaluate resource limits"
+              platform_summary_zh: "[gold] db-m: 容器 CPU 壓力過高 — 請評估資源限制"
+              description: "Max container CPU usage: 85.0% (threshold exceeded)"
+              description_zh: "最大容器 CPU 使用率: 85.0% (超過閾值)"
+              runbook_url: "http://rb/m"
+              owner: team-m
               tier: gold

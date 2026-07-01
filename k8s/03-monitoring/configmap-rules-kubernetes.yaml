@@ -25,11 +25,12 @@ data:
     \", \\\"(.+)\\\"\\n      )\\n  ),\\n  \\\"tenant\\\", \\\"$1\\\", \\\"namespace\\\
     \", \\\"(.*)\\\"\\n)\\n\"\n  - record: tenant:pod_cpu_node_share:limitless\n \
     \   expr: \"label_replace(\\n  (\\n    (\\n      (\\n        sum by(namespace,\
-    \ pod) (\\n          rate(container_cpu_usage_seconds_total{namespace=~\\\"db-.+\\\
-    \", container!=\\\"\\\", container!=\\\"POD\\\"}[5m])\\n        )\\n        unless\
-    \ on(namespace, pod)\\n        sum by(namespace, pod) (\\n          kube_pod_container_resource_limits{resource=\\\
-    \"cpu\\\", namespace=~\\\"db-.+\\\"}\\n        )\\n      )\\n      /\\n      max\
-    \ by(namespace, pod) (\\n        max by(node) (kube_node_status_allocatable{resource=\\\
+    \ pod) (\\n          sum by(namespace, pod, container) (\\n            rate(container_cpu_usage_seconds_total{namespace=~\\\
+    \"db-.+\\\", container!=\\\"\\\", container!=\\\"POD\\\"}[5m])\\n          )\\\
+    n          unless on(namespace, pod, container)\\n          sum by(namespace,\
+    \ pod, container) (\\n            kube_pod_container_resource_limits{resource=\\\
+    \"cpu\\\", namespace=~\\\"db-.+\\\"}\\n          )\\n        )\\n      )\\n  \
+    \    /\\n      max by(namespace, pod) (\\n        max by(node) (kube_node_status_allocatable{resource=\\\
     \"cpu\\\"})\\n        * on(node) group_right()\\n          kube_pod_info{namespace=~\\\
     \"db-.+\\\"}\\n      )\\n      * 100\\n    )\\n    * on(namespace, pod) group_left(version)\\\
     n      label_replace(\\n        kube_pod_labels{namespace=~\\\"db-.+\\\"},\\n\
@@ -45,11 +46,10 @@ data:
     \"db-.+\\\"},\\n        \\\"version\\\", \\\"$1\\\", \\\"label_app_kubernetes_io_version\\\
     \", \\\"(.+)\\\"\\n      )\\n  ),\\n  \\\"tenant\\\", \\\"$1\\\", \\\"namespace\\\
     \", \\\"(.*)\\\"\\n)\\n\"\n  - record: tenant:pod_weakest_cpu_percent:max\n  \
-    \  expr: 'max by(tenant, pod, version) (tenant:container_cpu_percent:by_container)\n\
-    \n      or\n\n      tenant:pod_cpu_node_share:limitless\n\n      '\n  - record:\
-    \ tenant:pod_weakest_memory_percent:max\n    expr: max by(tenant, pod, version)\
-    \ (tenant:container_memory_percent:by_container)\n- name: kubernetes-state-matching\n\
-    \  interval: 15s\n  rules:\n  - record: tenant:container_waiting_reason:count\n\
+    \  expr: \"max by(tenant, pod, version) (\\n  tenant:container_cpu_percent:by_container\\\
+    n  or\\n  tenant:pod_cpu_node_share:limitless\\n)\\n\"\n  - record: tenant:pod_weakest_memory_percent:max\n\
+    \    expr: max by(tenant, pod, version) (tenant:container_memory_percent:by_container)\n\
+    - name: kubernetes-state-matching\n  interval: 15s\n  rules:\n  - record: tenant:container_waiting_reason:count\n\
     \    expr: \"label_replace(\\n  count by(namespace, reason) (\\n    kube_pod_container_status_waiting_reason{namespace=~\\\
     \"db-.+\\\"} > 0\\n  ),\\n  \\\"tenant\\\", \\\"$1\\\", \\\"namespace\\\", \\\"\
     (.*)\\\"\\n)\\n\"\n- name: kubernetes-threshold-normalization\n  interval: 15s\n\
