@@ -116,7 +116,10 @@ def _vm_reachable() -> bool:
 _VMALERT = _find_vmalert()
 _PROMTOOL = shutil.which("promtool")
 _missing = (
-    "no VictoriaMetrics" if not (_REQUIRE or _vm_reachable()) else
+    # VM reachability is INDEPENDENT of _REQUIRE: under VM_REPLAY_REQUIRE=1 with vmsingle
+    # down, _require_deps_or_fail() must hard-fail with the clear "no VictoriaMetrics"
+    # message, not proceed and blow up later with a raw urllib error (CodeRabbit #968).
+    "no VictoriaMetrics" if not _vm_reachable() else
     "no vmalert binary" if _VMALERT is None else
     "no promtool" if _PROMTOOL is None else None
 )
