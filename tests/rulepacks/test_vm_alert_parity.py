@@ -26,8 +26,9 @@ storage semantics: stale markers, scrape-gap handling and ``-search.maxStaleness
 are modelled by the unittest harness, not the production vmstorage. The MetricsQL math is
 verified bit-identical to a live vmsingle (rate cold-start spot-check), but the staleness/
 gap *timing* is not, so a storage-layer staleness / absence-over-real-gaps divergence can
-still pass here. Full storage-layer parity needs ``vmalert -replay`` against a real vmsingle
-over real gaps and stays deferred (Phase 2; tracked in #947 + ADR-025).
+still pass here. That storage-layer axis is now characterized on-demand by the sibling
+``test_vm_replay_staleness.py`` (``vmalert -replay`` over real gaps against a real vmsingle;
+#947 + ADR-025) — pinned as a divergence characterization, not yet promoted to a per-PR gate.
 
 vmalert-tool is located via $VMALERT_TOOL, then PATH (vmalert-tool / vmalert-tool-prod),
 then the dev-container default /tmp/vm/vmalert-tool-prod. If none is found the whole module

@@ -33,7 +33,7 @@
 | 涵蓋 | 不涵蓋（不同層 / 仍 defer） |
 |---|---|
 | 後端對**編譯 expr（含 recording 鏈）**的函數 / label / 值（epsilon）評估一致 | `for:` duration、alert templating → rule **evaluator**（Prometheus/vmalert）的事，與儲存後端無關 |
-| alert fire/no-fire 決策一致 | **staleness / gap 上的 `absence` / `predict_linear` 時間外插** → 需真實時間軸 gap，dense fixture 測不出 → **兩 gate 都未涵蓋**；defer-trigger（首客戶自有後端）**已觸發**，剩餘 slice = `vmalert -replay`（#947）|
+| alert fire/no-fire 決策一致 | **staleness / gap 上的 `absence` 時序** → 需真實時間軸 gap，dense fixture 測不出、本 anchor + gate A 都未涵蓋；defer-trigger（首客戶自有後端）**已觸發** → 已由 on-demand replay bench [`test_vm_replay_staleness.py`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/tests/rulepacks/test_vm_replay_staleness.py) 刻畫（`vmalert -replay` 對真 vmsingle 跑 synthetic gap，pin VM staleness 時序、對 promtool 比對；#947，見 [`victoriametrics-integration.md §3.2`](../integration/victoriametrics-integration.md)）。仍開：`predict_linear` 時間外插 |
 
 > **⚠️ 運營／資源等價 NOT 涵蓋（Gemini #959）**：gate A（`vmalert-tool`）與本 anchor 都只驗**邏輯／數學**等價——`vmalert-tool` 是**無資源界線的純記憶體運算器**，對 query 的**效能與資源消耗提供 0 保證**。一條數學正確但昂貴的規則（如跨維度 many-to-many join）在 gate A 亮綠，部署到真 vmsingle 卻可能撞 `-search.maxQueryDuration`（超時）／`-search.maxMemoryPerQuery`（OOM）→ 生產 HTTP 503 或被 kill＝**silent False Negative**。效能防線**不在 anchor**：靠 query-複雜度 lint（pint）＋客戶 vmsingle 的資源上限＋soak 期雙活觀察。
 
