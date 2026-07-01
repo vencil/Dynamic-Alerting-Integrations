@@ -32,8 +32,9 @@ dev-container with a pinned vmsingle; it skips when no VM is reachable.
 
 Honest residual — still UNCOVERED by either gate: real storage-layer staleness / ``absence``
 over real gaps / ``predict_linear`` temporal semantics. The ADR-025 defer-trigger ("first
-customer on their own backend") has FIRED (VM-migration customers); the remaining slice is
-``vmalert -replay`` over real gaps against a real vmsingle — tracked in #947, NOT done here.
+customer on their own backend") has FIRED (VM-migration customers); the remaining slice —
+``vmalert -replay`` over real gaps against a real vmsingle — is now characterized on-demand by
+``test_vm_replay_staleness.py`` (#947), not here (``predict_linear`` temporal semantics still open).
 
 Reference & determinism (unchanged)
 -----------------------------------

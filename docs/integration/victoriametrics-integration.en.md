@@ -59,6 +59,16 @@ Our official support boundaries for the VM ecosystem:
 - **Governance (codified)**: every accepted divergence is catalogued in [`vm_deviation_catalog.yaml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/tests/rulepacks/vm_deviation_catalog.yaml) and enforced by [`test_vm_alert_parity.py`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/tests/rulepacks/test_vm_alert_parity.py) (runs every rule-pack fixture through the `vmalert-tool` MetricsQL engine) — **an uncatalogued new divergence fails CI**.
 - VM's official stance: MetricsQL is a PromQL superset but **deliberately does not target 100% compatibility**; this is a design difference, not a bug.
 
+### 3.2 Storage-layer staleness / scrape-gap timing (characterized via `vmalert -replay`)
+
+§3.1 is the rule **evaluator** (engine-math) layer; a separate **storage-layer** divergence is *when a series is considered "gone" after a real gap* — MetricsQL derives it from the sample interval (~1 scrape interval), Prometheus uses a fixed 5m lookback. This axis governs (a) when a firing value-alert **resolves** after a gap and (b) when an `absent()`-style sentinel **fires** after a gap; neither `vmalert-tool unittest` (§3.1's gate A) nor the dense-fixture anchor can model it (both use dense fixed series, deliberately avoiding this axis).
+
+- **TC2 Staleness (value-alert resolve + `absent()` fire)**: a metric stops reporting. VM resolves the value-alert and fires `absent()` **~1 scrape interval** after the last sample (measured ~+360s at a 30s interval); Prometheus holds ~5m (~+600–660s). → **VM ~240–300s earlier**: `absent()`-based sentinels (e.g. the [ADR-025](../adr/025-alerting-plane-self-liveness.en.md) watchdog) fire earlier on VM than on Prometheus, so a soak dual-run looks "noisier".
+- **TC1 Threshold+Gap (`for:`-gated value alert across a missed scrape)**: a value stays above threshold but a few scrapes are missed. VM's series goes stale → the `for:` timer **resets** → late fire (measured ~+480s); Prometheus carries the last value 5m across the gap → `for:` keeps accumulating → fires ~+180s. → **VM ~300s later (under-fires)**: a `for:`-gated alert across a gap triggers later on VM.
+- **Not a parity problem**: the two engines' staleness across a gap **differs by design**; forcing alignment is the wrong bar. This characterization exists to be the **machine-readable explanation for soak dual-run reconciliation** — during a dual-run VM will fire/resolve staleness-driven alerts minutes off from Prometheus, and this measures by how much and in which direction.
+- **Governance (codified)**: [`test_vm_replay_staleness.py`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/tests/rulepacks/test_vm_replay_staleness.py) uses materialization parity (one logical history → vmsingle import + promtool fixture generated together) to **pin** the VM timing above and diff it against promtool (the Prometheus 5m reference); it is **on-demand** (skip-if-no-VM, `VM_REPLAY_REQUIRE=1` to force), not per-PR. A drift in VM's staleness timing (e.g. an engine version bump) fails it. Infrastructure and how to run: [`backend-compat-baseline.md`](../internal/backend-compat-baseline.md).
+- **Scope boundary**: `rate()` / `increase()` cold-start is **engine-math** (§3.1) and is **identical** on `vmalert-tool` and real vmsingle (measured 3.333 vs Prometheus 1.667, storage-path invariant), already covered by gate A — the replay bench does not duplicate it.
+
 ---
 
 ## 4. Rule Pack on vmalert (simple scenario)
@@ -137,6 +147,7 @@ That playbook assumes "mature multi-system ops" and covers Phase 0 three-tier di
 | **vmauth-based tenant federation** | Design phase | See [issue #380](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/380) (v2.9 epic) — ADR uses vmauth + label-enforced rewriting + 4h TTL token |
 | **vmalert-specific shadow monitoring** | The `migration_status: shadow` label mechanism in [`shadow-monitoring-sop.md`](../shadow-monitoring-sop.en.md) is sufficient | vmalert also supports `migration_status` matchers → no VM-specific documentation needed |
 | **VM-optimized rule pack variants** | Does not exist | Our Rule Pack is pure PromQL; in theory a new pack could be opened for MetricsQL performance optimization (e.g. `histogram_quantile_bucket`); no customer signal currently |
+| **Storage-layer staleness/gap timing parity** | ✅ Characterized (on-demand replay bench) | `vmalert -replay` runs synthetic gap histories against a real vmsingle, pinning VM's staleness timing and diffing against promtool (see §3.2 / [`test_vm_replay_staleness.py`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/tests/rulepacks/test_vm_replay_staleness.py)). Remaining: promote→required pending ≥2 weeks of soak with zero unexplained divergence OR the first VM-backend customer cutover ([#947](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/947)) |
 
 ---
 
