@@ -131,9 +131,12 @@ test.describe('Portal Home Page @critical', () => {
 test.describe('Portal Home — role filter (LD-1 union) @critical', () => {
   // Wait until the async tool-registry fetch has injected the dynamic cards.
   async function waitForCards(page) {
-    await expect(page.locator('.cards a.card').first()).toBeVisible({ timeout: 10000 });
-    // platform-health is one of the dynamic cards — gate on it specifically so
-    // the audience-bearing cards we assert against are guaranteed present.
+    // Gate on the platform-health sentinel's PRESENCE (toHaveCount), not on the
+    // first card being visible: renderTools() injects every container in one
+    // synchronous pass, so once platform-health exists all cards exist — and a
+    // count check is order-independent. (A `.first().toBeVisible()` gate would
+    // hang in test (d), where a reload restores a persisted filter that may
+    // hide the first DOM card even though rendering already finished.)
     await expect(
       page.locator('.cards a.card[href*="component=platform-health"]')
     ).toHaveCount(1, { timeout: 10000 });
