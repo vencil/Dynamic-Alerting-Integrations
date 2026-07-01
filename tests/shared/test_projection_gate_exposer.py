@@ -17,7 +17,7 @@ import importlib.util
 import sys
 import threading
 import urllib.request
-from http.server import ThreadingHTTPServer
+from http.server import HTTPServer
 from pathlib import Path
 
 import pytest
@@ -64,10 +64,11 @@ def test_read_metrics_absent_yields_no_series(tmp_path: Path):
 
 @pytest.fixture()
 def _served(tmp_path: Path):
-    """Start the real ThreadingHTTPServer the sidecar runs, on an ephemeral port,
-    serving tmp_path/gate.prom. Yields (base_url, metrics_file_path)."""
+    """Start the real single-threaded HTTPServer the sidecar runs (see serve_metrics.py:
+    single-threaded, fixed-footprint, on purpose), on an ephemeral port, serving
+    tmp_path/gate.prom. Yields (base_url, metrics_file_path)."""
     metrics_file = tmp_path / "gate.prom"
-    server = ThreadingHTTPServer(("127.0.0.1", 0), exposer._make_handler(metrics_file))
+    server = HTTPServer(("127.0.0.1", 0), exposer._make_handler(metrics_file))
     t = threading.Thread(target=server.serve_forever, daemon=True)
     t.start()
     host, port = server.server_address

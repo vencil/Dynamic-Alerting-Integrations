@@ -531,6 +531,7 @@ kubectl logs <vector-pod> -c projection-gate --previous
 # 2) 這是 fail-closed 正常運作——REVERT 那筆錯的 tenantProjections（或修對 config 後刪卡住的 pod）
 kubectl delete pod <stuck-vector-pod> -n <ns>   # 修好 config 後，讓它以正確 config 重排
 ```
+📝 **解除滯後（正常現象，勿驚慌）**：本 alert 的 expr 用 `max_over_time(...[5m])` 防抖（見規則註解）。你修好 config、看到新 pod 回 `Running` 後，**alert 仍會續鳴約 5 分鐘才自動 resolve**——因為那條回溯窗還會掃到剛才的 `CrashLoopBackOff` 樣本，`> 0` 在窗口滑出前仍成立。這是換取告警穩定（不因 backoff 間短暫重啟而漏發）的合理代價，不是卡住。
 **模式取捨**：若「硬卡 rollout」比「fail-available 退回 0:0」更糟（多數平台是），用預設 `degrade` 模式——它把同一筆抄錯轉成 §8.9.1 的可觀測降級而非死鎖。`enforce` 只適合「寧可全斷也不要錯路由」的偏執環境。
 
 **觀測層自身的盲點（誠實標註）**：(a) 若 exposer sidecar 全掛（或 Service/scrape 斷），§8.9.1/8.9.2 的 verdict-metric alert 會失明——但那同時是一場 Vector 全面故障，另有其面向；KSM 路徑（§8.9.3）不受影響。(b) `tenantProjections` 未啟用時不部署 sidecar/Service，故**不**設「verdict metric absent」哨兵 alert（否則每個未用投影的部署都假性 fire）；gate 觀測只在投影啟用時存在。

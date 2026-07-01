@@ -41,7 +41,7 @@ import argparse
 import signal
 import sys
 import threading
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 # Prometheus text exposition content-type (matches what node-exporter / client
@@ -66,6 +66,14 @@ def _read_metrics(path: Path) -> bytes:
 
 def _make_handler(metrics_file: Path) -> type[BaseHTTPRequestHandler]:
     class _Handler(BaseHTTPRequestHandler):
+        # Per-connection socket timeout. The server is single-threaded (see main()),
+        # so a slow/stalled client (e.g. a slowloris-style connection that opens but
+        # never finishes its request headers) would otherwise hold the ONE serving
+        # thread indefinitely and starve Prometheus's scrape. BaseHTTPRequestHandler
+        # applies this via socket.settimeout, so a stalled read aborts after 10s and
+        # the server is free again — bounding the block without any per-request thread.
+        timeout = 10
+
         # Serve the verdict at ANY path so the scrape works regardless of the
         # Service's prometheus.io/path annotation (we set /metrics, but a path
         # mismatch should still expose the data rather than 404).
@@ -93,7 +101,13 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--addr", default="0.0.0.0", help="listen address (default 0.0.0.0)")
     args = ap.parse_args(argv)
 
-    server = ThreadingHTTPServer((args.addr, args.port), _make_handler(args.metrics_file))
+    # Single-threaded HTTPServer (NOT ThreadingHTTPServer) on purpose: this endpoint is
+    # scraped by one Prometheus every ~15s — zero concurrency need — and a threaded
+    # server would spawn a thread per connection, so a burst of slow/stalled clients
+    # could pile up threads and blow the sidecar's tight 64Mi limit (OOMKilled → restart
+    # noise). Single-threaded serves scrapes serially with a fixed footprint; the
+    # handler `timeout` above stops a slow client from wedging the one thread.
+    server = HTTPServer((args.addr, args.port), _make_handler(args.metrics_file))
     # Clean shutdown on the SIGTERM Kubernetes sends at pod termination — the default
     # SIGTERM disposition would kill the process mid-scrape without closing the socket.
     # serve_forever() runs in a WORKER thread so the handler can call shutdown() from
