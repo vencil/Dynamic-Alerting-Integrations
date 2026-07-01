@@ -354,6 +354,104 @@ class TestProjectionGateWiring:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Projection-gate verdict-metric observability (#908 PR-3a) — init --metrics-file,
+# metrics-exposer sidecar, headless scrape Service
+# ──────────────────────────────────────────────────────────────────────────────
+
+class TestProjectionGateMetricsWiring:
+    @staticmethod
+    def _daemonset(repo_root: Path, *, sets: dict[str, str] | None = None) -> dict:
+        docs = _render(repo_root / "helm/vector", sets=sets)
+        return [d for d in docs if d.get("kind") == "DaemonSet"][0]["spec"]["template"]["spec"]
+
+    @_needs_helm
+    def test_init_writes_verdict_to_shared_emptydir(self, repo_root: Path) -> None:
+        """The gate init-container must write its verdict to the shared gate-metrics
+        emptyDir (`--metrics-file`), mounted READ-WRITE — that file is the input the
+        exposer sidecar re-serves. Without this wiring the verdict metric never exists."""
+        spec = self._daemonset(repo_root, sets=_PROJECTION_SETS)
+        gate = {c["name"]: c for c in spec["initContainers"]}["projection-gate"]
+        args = gate["args"]
+        assert "--metrics-file" in args, "gate must be told where to write the verdict"
+        mf = args[args.index("--metrics-file") + 1]
+        assert mf == "/gate-metrics/gate.prom"
+        mounts = {m["name"]: m for m in gate["volumeMounts"]}
+        assert "gate-metrics" in mounts, "init must mount the shared verdict volume"
+        assert mounts["gate-metrics"]["mountPath"] == "/gate-metrics"
+        # The init WRITES here (not readOnly) — distinct from its read-only registry/staging.
+        assert mounts["gate-metrics"].get("readOnly", False) is False
+        # And the destination dir is a pod-local emptyDir (absent-on-pod-death semantics).
+        vols = {v["name"]: v for v in spec["volumes"]}
+        assert "emptyDir" in vols["gate-metrics"], "verdict volume must be pod-local emptyDir"
+
+    @_needs_helm
+    def test_metrics_exposer_sidecar_present_and_readonly(self, repo_root: Path) -> None:
+        """A long-lived sidecar re-serves the verdict file over HTTP. It runs
+        serve_metrics.py (NOT the validator — it never re-evaluates), mounts the
+        shared emptyDir READ-ONLY, exposes a named port, and has resources set
+        (kube-linter L4). It lives beside Vector so the series goes absent on pod death."""
+        spec = self._daemonset(repo_root, sets=_PROJECTION_SETS)
+        sidecars = {c["name"]: c for c in spec["containers"]}
+        assert "projection-gate-metrics" in sidecars, "metrics-exposer sidecar must run when projections are set"
+        sc = sidecars["projection-gate-metrics"]
+        # Command override → the exposer, not the validator entrypoint.
+        assert sc["command"] == ["python3", "/usr/local/bin/serve_metrics.py"]
+        assert "--metrics-file" in sc["args"] and "/gate-metrics/gate.prom" in sc["args"]
+        # Same image as the init-container (one image, two roles).
+        assert sc["image"].startswith("ghcr.io/vencil/vector-projection-gate")
+        mounts = {m["name"]: m for m in sc["volumeMounts"]}
+        assert mounts["gate-metrics"].get("readOnly") is True, "exposer only READS the verdict"
+        port = {p["name"]: p for p in sc["ports"]}["gate-metrics"]
+        assert port["containerPort"] == 9599
+        assert sc["resources"]["requests"]["cpu"], "sidecar must set resources (kube-linter L4)"
+
+    @_needs_helm
+    def test_scrape_service_headless_and_annotated(self, repo_root: Path) -> None:
+        """The verdict is scraped via a dedicated headless Service (annotation-based
+        SD, like vector-metrics) — gated on tenantProjections, NOT metrics.enabled, so
+        the gate observability does not require turning on Vector self-telemetry.
+        Headless so per-node pods aren't collapsed to one address."""
+        docs = _render(repo_root / "helm/vector", sets=_PROJECTION_SETS)
+        svcs = [d for d in docs if d.get("kind") == "Service"
+                and d["metadata"]["name"].endswith("-projection-gate-metrics")]
+        assert len(svcs) == 1, "projection-gate metrics Service must render when projections are set"
+        svc = svcs[0]
+        ann = svc["metadata"]["annotations"]
+        assert ann["prometheus.io/scrape"] == "true"
+        assert ann["prometheus.io/port"] == "9599"
+        assert svc["spec"]["clusterIP"] == "None", "headless — do not collapse N nodes to one address"
+        assert svc["spec"]["ports"][0]["targetPort"] == "gate-metrics"
+
+    @_needs_helm
+    def test_no_metrics_overhead_when_projections_empty(self, repo_root: Path) -> None:
+        """Default (no projections): no exposer sidecar, no gate-metrics volume, no
+        scrape Service — zero observability overhead, matching the no-gate default."""
+        spec = self._daemonset(repo_root)
+        assert not any(c["name"] == "projection-gate-metrics" for c in spec["containers"])
+        assert not any(v["name"] == "gate-metrics" for v in spec["volumes"])
+        docs = _render(repo_root / "helm/vector")
+        assert not any(d.get("kind") == "Service"
+                       and d["metadata"]["name"].endswith("-projection-gate-metrics") for d in docs)
+
+    @_needs_helm
+    def test_scrape_service_independent_of_metrics_enabled(self, repo_root: Path) -> None:
+        """The gate scrape Service must render even with Vector's own metrics.enabled
+        OFF (the default) — a degrade can happen with self-telemetry off, so its
+        observability must not be coupled to it."""
+        docs = _render(repo_root / "helm/vector",
+                       sets={**_PROJECTION_SETS, "metrics.enabled": "false"})
+        assert any(d.get("kind") == "Service"
+                   and d["metadata"]["name"].endswith("-projection-gate-metrics") for d in docs), (
+            "gate scrape Service must not depend on metrics.enabled"
+        )
+        # And the Vector self-telemetry Service is indeed absent in this config.
+        assert not any(d.get("kind") == "Service"
+                       and d["metadata"]["name"].endswith("-metrics")
+                       and not d["metadata"]["name"].endswith("-projection-gate-metrics")
+                       for d in docs)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # VictoriaLogs Layer-1 search guardrails
 # ──────────────────────────────────────────────────────────────────────────────
 

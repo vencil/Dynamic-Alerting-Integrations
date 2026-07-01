@@ -71,6 +71,10 @@ spec:
             - "/etc/vector"
             - "--mode"
             - {{ .Values.tenantProjectionGate | quote }}
+            # Write the verdict to a Prometheus textfile in a shared emptyDir; the
+            # metrics-exposer sidecar re-serves it for Prometheus (#908 PR-3a).
+            - "--metrics-file"
+            - "/gate-metrics/gate.prom"
           securityContext:
             {{- toYaml .Values.containerSecurityContext | nindent 12 }}
           resources:
@@ -87,6 +91,9 @@ spec:
             # The config-dir Vector loads — the gate WRITES the chosen files here.
             - name: config
               mountPath: /etc/vector
+            # Verdict textfile destination — the sidecar reads it read-only (#908 PR-3a).
+            - name: gate-metrics
+              mountPath: /gate-metrics
       {{- end }}
       containers:
         - name: vector
@@ -159,6 +166,41 @@ spec:
               mountPath: /vector-data-dir
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+        {{- if .Values.tenantProjections }}
+        # ── Projection-gate metrics exposer (#908 PR-3a) ─────────────────────────
+        # Long-lived sidecar (same image as the init-container, command overridden
+        # to serve_metrics.py) that re-serves the init-container's verdict textfile
+        # over HTTP. Scraped via the headless projection-gate Service
+        # (templates/service-projection-gate.yaml). It NEVER re-evaluates the gate —
+        # the verdict is decided once at boot; this only re-reads the shared
+        # emptyDir. Tying exposure to this pod means the series goes ABSENT (not
+        # stale-"ok") if the pod dies, so a crash cannot falsely auto-resolve a real
+        # mismatch. NOTE: in ENFORCE mode a config-bug mismatch makes the init exit
+        # non-zero → the pod never reaches this container, so the verdict is NOT
+        # served — that deadlock is covered by the KSM init-container alert instead.
+        - name: projection-gate-metrics
+          image: "{{ .Values.projectionGate.image.repository }}:{{ .Values.projectionGate.image.tag }}{{ with .Values.projectionGate.image.digest }}@{{ . }}{{ end }}"
+          imagePullPolicy: {{ .Values.projectionGate.image.pullPolicy }}
+          command: ["python3", "/usr/local/bin/serve_metrics.py"]
+          args:
+            - "--metrics-file"
+            - "/gate-metrics/gate.prom"
+            - "--port"
+            - {{ .Values.projectionGate.metrics.port | quote }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          ports:
+            - name: gate-metrics
+              containerPort: {{ .Values.projectionGate.metrics.port }}
+              protocol: TCP
+          volumeMounts:
+            # Read-only — the sidecar only re-serves the verdict the init wrote.
+            - name: gate-metrics
+              mountPath: /gate-metrics
+              readOnly: true
+          resources:
+            {{- toYaml .Values.projectionGate.metrics.resources | nindent 12 }}
+        {{- end }}
       volumes:
         {{- if .Values.tenantProjections }}
         # Gate active: Vector reads the init-populated config-dir (emptyDir); the
@@ -180,6 +222,11 @@ spec:
           configMap:
             name: {{ required "projectionGate.registry.configMapName is required when tenantProjections is set (the conf.d _account_registry.yaml ConfigMap)" .Values.projectionGate.registry.configMapName }}
             optional: true
+        # Shared verdict textfile: the init-container WRITES gate.prom here, the
+        # metrics-exposer sidecar READs it (#908 PR-3a). Pod-local so the series
+        # goes absent when the pod dies (a crash must not stale-"ok").
+        - name: gate-metrics
+          emptyDir: {}
         {{- else }}
         - name: config
           configMap:

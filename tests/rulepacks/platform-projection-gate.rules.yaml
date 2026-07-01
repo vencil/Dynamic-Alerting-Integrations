@@ -1,0 +1,50 @@
+# Bare-rules promtool/pint target for the projection-gate observability alerts
+# (ADR-021 Phase 2(a) / #908 PR-3a). promtool can't consume the deployed ConfigMap
+# directly (it needs a top-level `groups:` document, not `data: platform-alert.yml: |`),
+# so this is an EXTRACTED COPY of the three alerts from
+# k8s/03-monitoring/configmap-rules-platform.yaml (the `federation-audit` group).
+#
+# ⚠️ KEEP IN SYNC with that ConfigMap (expr + for + labels + summary — the long
+# `description` annotations are intentionally dropped here; the behavioural contract
+# is the firing logic, not the prose). Contract exercised by
+# platform-projection-gate_test.yaml against this file:
+#   - the two verdict-metric alerts (mismatch / registry_unreadable) FIRE on their
+#     OWN category only, are debounced by `for: 5m`, and aggregate away the scrape
+#     topology labels (instance/pod/job) so a stray label can't silently never-fire;
+#   - the enforce-deadlock alert FIRES on the KSM init-container CrashLoopBackOff
+#     signal (the case where the verdict metric is never served).
+groups:
+  - name: federation-audit
+    rules:
+      - alert: VectorProjectionGateMismatch
+        expr: |
+          max by (mode) (
+            vector_tenant_projection_gate_info{category="mismatch"}
+          ) > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Vector projection gate found a wrong accountId (mode={{ $labels.mode }}) — tenant log routing degraded to 0:0"
+
+      - alert: VectorRegistryUnreadableAtBoot
+        expr: |
+          max by (mode) (
+            vector_tenant_projection_gate_info{category="registry_unreadable"}
+          ) > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Vector projection gate could not read the account registry at boot (mode={{ $labels.mode }}) — tenant routing silently degraded"
+
+      - alert: VectorProjectionGateEnforceDeadlock
+        expr: |
+          max by (namespace) (
+            kube_pod_init_container_status_waiting_reason{container="projection-gate", reason="CrashLoopBackOff"}
+          ) > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Vector projection-gate init-container is CrashLoopBackOff (enforce mode) — DaemonSet rollout deadlocked in {{ $labels.namespace }}"

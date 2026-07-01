@@ -239,6 +239,27 @@ projectionGate:
     limits:
       cpu: 100m
       memory: 64Mi
+  # ── Verdict-metric observability (#908 PR-3a) ───────────────────────────────
+  # The init-container writes its verdict to a Prometheus textfile in a shared
+  # emptyDir; a long-lived metrics-exposer SIDECAR (serve_metrics.py, same image)
+  # re-serves it over HTTP so Prometheus can scrape it via a headless Service
+  # (rendered ONLY when tenantProjections is set — the gate observability does NOT
+  # require Vector's own metrics.enabled). The verdict is decided ONCE at boot; the
+  # sidecar never re-evaluates. Tying the endpoint to the pod means the series goes
+  # ABSENT (not stale-"ok") on a pod crash — see serve_metrics.py + the
+  # VectorProjectionGateDegraded / EnforceDeadlock alerts (configmap-rules-platform).
+  metrics:
+    # Port the exposer listens on (distinct from Vector's own metrics.port 9598).
+    port: 9599
+    # Sidecar footprint — a stdlib HTTP server re-reading one small textfile per
+    # scrape. Set explicitly so kube-linter L4 (unset cpu/memory) is satisfied.
+    resources:
+      requests:
+        cpu: 10m
+        memory: 32Mi
+      limits:
+        cpu: 50m
+        memory: 64Mi
 
 # ⛔ ALLOWLIST of the ONLY fields projected into a tenant partition (ADR-021
 # §Fork B; fail-CLOSED sanitization). The tenant copy is rebuilt from scratch
