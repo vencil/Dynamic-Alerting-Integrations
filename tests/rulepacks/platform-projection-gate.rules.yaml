@@ -18,7 +18,7 @@ groups:
     rules:
       - alert: VectorProjectionGateMismatch
         expr: |
-          max by (mode) (
+          max by (mode, namespace) (
             vector_tenant_projection_gate_info{category="mismatch"}
           ) > 0
         for: 5m
@@ -29,7 +29,7 @@ groups:
 
       - alert: VectorRegistryUnreadableAtBoot
         expr: |
-          max by (mode) (
+          max by (mode, namespace) (
             vector_tenant_projection_gate_info{category="registry_unreadable"}
           ) > 0
         for: 5m

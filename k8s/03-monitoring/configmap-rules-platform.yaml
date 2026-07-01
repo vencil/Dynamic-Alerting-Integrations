@@ -1027,18 +1027,22 @@ data:
           #
           # Metric: vector_tenant_projection_gate_info{category="mismatch",mode}=1, written
           # by the init-container and re-served by the metrics-exposer sidecar. `max by
-          # (mode)` collapses the per-node DaemonSet duplicates (every node mounts the
-          # IDENTICAL registry+projections → identical verdict) to one series, keeps the
-          # `mode` toggle on the page, and strips scrape topology labels (instance/pod/job)
-          # so a stray label cannot make `> 0` silently never match. ENFORCE-mode mismatch
-          # does NOT reach here (the init exits non-zero, Vector never starts, the sidecar
-          # never serves) — that is VectorProjectionGateEnforceDeadlock below. `for: 5m`
-          # debounces a brief mid-rollout window; a real mismatch is sticky (one-shot-at-
-          # boot) and will not self-clear before this fires.
+          # (mode, namespace)` collapses the per-node DaemonSet duplicates (every node
+          # mounts the IDENTICAL registry+projections → identical verdict) to one series,
+          # keeps the `mode` toggle + `namespace` (so two Vector INSTALLS in different
+          # namespaces don't silently collapse into one verdict — same keep-topology
+          # discipline as the sibling KSM alert), and strips the noisy scrape labels
+          # (instance/pod/job) so a stray label cannot make `> 0` silently never match.
+          # (namespace is a no-op group key if the scrape does not attach it — harmless.)
+          # ENFORCE-mode mismatch does NOT reach here (the init exits non-zero, Vector
+          # never starts, the sidecar never serves) — that is
+          # VectorProjectionGateEnforceDeadlock below. `for: 5m` debounces a brief
+          # mid-rollout window; a real mismatch is sticky (one-shot-at-boot) and will not
+          # self-clear before this fires.
           # Behavioural contract: tests/rulepacks/platform-projection-gate_test.yaml.
           - alert: VectorProjectionGateMismatch
             expr: |
-              max by (mode) (
+              max by (mode, namespace) (
                 vector_tenant_projection_gate_info{category="mismatch"}
               ) > 0
             for: 5m
@@ -1081,7 +1085,7 @@ data:
           # Behavioural contract: tests/rulepacks/platform-projection-gate_test.yaml.
           - alert: VectorRegistryUnreadableAtBoot
             expr: |
-              max by (mode) (
+              max by (mode, namespace) (
                 vector_tenant_projection_gate_info{category="registry_unreadable"}
               ) > 0
             for: 5m

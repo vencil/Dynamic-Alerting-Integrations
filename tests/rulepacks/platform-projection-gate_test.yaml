@@ -31,9 +31,11 @@ tests:
   # 1) mismatch in degrade mode, sustained, WITH scrape labels present → FIRES after
   #    `for: 5m`; aggregation strips instance/pod/job (alert carries only severity+mode).
   - interval: 1m
-    name: mismatch-degrade-fires-and-strips-scrape-labels
+    name: mismatch-degrade-fires-strips-scrape-keeps-mode-namespace
     input_series:
-      - series: 'vector_tenant_projection_gate_info{category="mismatch", mode="degrade", instance="10.0.0.5:9599", pod="vector-abc12", job="vector-projection-gate-metrics"}'
+      # namespace present (a scrape that attaches it) → aggregation must KEEP it so two
+      # Vector installs don't collapse; instance/pod/job are the noisy labels to strip.
+      - series: 'vector_tenant_projection_gate_info{category="mismatch", mode="degrade", namespace="monitoring", instance="10.0.0.5:9599", pod="vector-abc12", job="vector-projection-gate-metrics"}'
         values: '1+0x9'
     alert_rule_test:
       # MID-window: the mismatch is already true (t0..t4) but `for: 5m` has NOT elapsed
@@ -41,13 +43,14 @@ tests:
       - eval_time: 4m
         alertname: VectorProjectionGateMismatch
         exp_alerts: []
-      # Past the window → FIRING, with the scrape topology labels aggregated away.
+      # Past the window → FIRING; instance/pod/job stripped, mode + namespace KEPT.
       - eval_time: 6m
         alertname: VectorProjectionGateMismatch
         exp_alerts:
           - exp_labels:
               severity: critical
               mode: degrade
+              namespace: monitoring
             exp_annotations:
               summary: "Vector projection gate found a wrong accountId (mode=degrade) — tenant log routing degraded to 0:0"
 
@@ -75,11 +78,11 @@ tests:
         exp_alerts: []
 
   # 4) registry_unreadable (ghost race), sustained → its OWN alert FIRES after `for: 5m`,
-  #    debounced mid-window, aggregating to {severity, mode}.
+  #    debounced mid-window, aggregating to {severity, mode, namespace}.
   - interval: 1m
     name: registry-unreadable-fires-debounced
     input_series:
-      - series: 'vector_tenant_projection_gate_info{category="registry_unreadable", mode="degrade", instance="10.0.0.7:9599", pod="vector-def34", job="vector-projection-gate-metrics"}'
+      - series: 'vector_tenant_projection_gate_info{category="registry_unreadable", mode="degrade", namespace="monitoring", instance="10.0.0.7:9599", pod="vector-def34", job="vector-projection-gate-metrics"}'
         values: '1+0x9'
     alert_rule_test:
       - eval_time: 4m   # true since t0 but < for:5m → PENDING (pins the debounce)
@@ -91,6 +94,7 @@ tests:
           - exp_labels:
               severity: critical
               mode: degrade
+              namespace: monitoring
             exp_annotations:
               summary: "Vector projection gate could not read the account registry at boot (mode=degrade) — tenant routing silently degraded"
 

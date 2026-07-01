@@ -38,7 +38,9 @@ fresh verdict) is reflected without restarting this process.
 from __future__ import annotations
 
 import argparse
+import signal
 import sys
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -92,13 +94,24 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
 
     server = ThreadingHTTPServer((args.addr, args.port), _make_handler(args.metrics_file))
+    # Clean shutdown on the SIGTERM Kubernetes sends at pod termination — the default
+    # SIGTERM disposition would kill the process mid-scrape without closing the socket.
+    # serve_forever() runs in a WORKER thread so the handler can call shutdown() from
+    # the main thread: shutdown() blocks until serve_forever() returns, so calling it
+    # on the SAME thread that runs serve_forever() would deadlock.
+    stop = threading.Event()
+    signal.signal(signal.SIGTERM, lambda *_: stop.set())
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
     print(f"[projection-gate-exposer] serving {args.metrics_file} on {args.addr}:{args.port}", file=sys.stderr)
     try:
-        server.serve_forever()
+        stop.wait()  # returns on SIGTERM (handler) or SIGINT (KeyboardInterrupt below)
     except KeyboardInterrupt:
         pass
     finally:
+        server.shutdown()      # main thread → safe (serve_forever runs on `worker`)
         server.server_close()
+        worker.join(timeout=5)
     return 0
 
 
