@@ -69,14 +69,29 @@ def _load_yaml(p: Path) -> dict:
 
 
 def declared_alerts() -> dict[str, str]:
-    """{alertname: pack_filename} for every alert declared in rule-packs/*.yaml."""
+    """{alertname: pack_filename} for every alert declared in rule-packs/*.yaml.
+
+    Alertnames are globally unique in this repo by convention (component-prefixed, e.g.
+    ``OracleDatabaseDown``). The "covered" check keys on the bare alertname, so a cross-pack
+    collision would (a) silently drop one pack's alert from tracking via dict-overwrite and
+    (b) let a test in one pack falsely "cover" a same-named untested alert in another. Rather
+    than mask that, a collision is detected and FAILS loudly (CodeRabbit #969)."""
     out: dict[str, str] = {}
+    dupes: dict[str, list[str]] = {}
     for f in sorted(_RULE_PACKS.glob("*.yaml")):
         for grp in (_load_yaml(f).get("groups") or []):
             for rule in (grp.get("rules") or []):
                 name = rule.get("alert")
-                if name:
-                    out[name] = f.name
+                if not name:
+                    continue
+                if name in out and out[name] != f.name:
+                    dupes.setdefault(name, [out[name]]).append(f.name)
+                out[name] = f.name
+    if dupes:
+        raise ValueError(
+            "duplicate alertname(s) across rule-packs — alertnames must be globally unique, "
+            "else a pack's alert is silently dropped from coverage tracking: "
+            + "; ".join(f"{a} in {sorted(set(ps))}" for a, ps in sorted(dupes.items())))
     return out
 
 
@@ -163,10 +178,14 @@ def main() -> int:
         print(f"check_vmalert_coverage: rule-packs/ or tests/rulepacks/ not found under {_REPO}",
               file=sys.stderr)
         return 2
-    if args.generate:
-        generate()
-        return 0
-    return check()
+    try:
+        if args.generate:
+            generate()
+            return 0
+        return check()
+    except ValueError as e:   # duplicate-alertname collision (declared_alerts) — fail loud
+        print(f"check_vmalert_coverage: {e}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

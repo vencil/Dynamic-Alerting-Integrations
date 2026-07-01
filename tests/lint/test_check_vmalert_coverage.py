@@ -110,3 +110,23 @@ def test_generate_makes_reality(tree):
     cov.generate()
     assert cov.load_baseline() == {"rule-pack-x.yaml": ["Buncovered"]}
     assert cov.check() == 0
+
+
+def test_duplicate_alertname_across_packs_fails_loud(tree):
+    """A cross-pack alertname collision must FAIL LOUDLY (CodeRabbit #969) — the global
+    "covered" namespace would otherwise silently drop one pack's alert / false-cover it."""
+    rp, tr = tree
+    (rp / "rule-pack-a.yaml").write_text(_pack(["Dup"]), encoding="utf-8")
+    (rp / "rule-pack-b.yaml").write_text(_pack(["Dup"]), encoding="utf-8")   # same name, 2 packs
+    _write_baseline(tr, {})
+    with pytest.raises(ValueError, match="duplicate alertname"):
+        cov.declared_alerts()
+
+
+def test_main_reports_duplicate_as_violation_not_traceback(tree, monkeypatch):
+    rp, tr = tree
+    (rp / "rule-pack-a.yaml").write_text(_pack(["Dup"]), encoding="utf-8")
+    (rp / "rule-pack-b.yaml").write_text(_pack(["Dup"]), encoding="utf-8")
+    _write_baseline(tr, {})
+    monkeypatch.setattr(sys, "argv", ["check_vmalert_coverage.py", "--ci"])
+    assert cov.main() == 1   # graceful violation exit, not an uncaught ValueError
