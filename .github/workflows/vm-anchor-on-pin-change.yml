@@ -1,45 +1,79 @@
-# VM engine-equivalence anchor — runs ONLY when the VM engine version pin changes.
+# VM Anchor Gate — engine-equivalence anchor, run ONLY when the VM engine version pin
+# (or the anchor / this workflow) changes, but wired as a REQUIRED-eligible check that
+# ALWAYS reports a status.
 #
-# Why path-filtered (not per-PR, not nightly):
-#   The anchor (tests/rulepacks/test_vm_backend_parity.py) proves vmalert-tool — the in-memory
-#   MetricsQL engine the per-PR gate A (test_vm_alert_parity.py) uses — evaluates our compiled
-#   idioms IDENTICALLY to a real vmsingle (storage + query) at the PINNED engine version, which
-#   LICENSES gate A standing alone per-PR. That equivalence is a property of the pinned version:
-#   it can only change when the pin changes. So re-verify exactly then —
-#     * NOT every PR: #952 removed the per-PR docker-VM job as redundant (its 3+1 subset ⊂ gate
-#       A's full-set fire/no-fire+labels+annotations; the one divergent axis, real-TSDB
-#       staleness, is deferred by both).
-#     * NOT nightly: that re-confirms the SAME pinned equivalence every night for no new signal.
-#       Empirically vmalert-tool == vmsingle on idioms incl. histogram_quantile / nested
-#       label_replace (3-way promtool/vmalert-tool/vmsingle all agree — #958 B1 finding); a
-#       divergence needs a VM-internal regression, which only a version bump can introduce.
-#   This closes the only real gap from that finding: the on-demand anchor otherwise runs solely
-#   via the bump runbook (documented-not-codified). The workflow's OWN path is in the filter, so
-#   the PR that adds/edits it runs it (self-validating).
+# Why the anchor matters:
+#   tests/rulepacks/test_vm_backend_parity.py proves vmalert-tool — the in-memory MetricsQL
+#   engine the per-PR gate A (test_vm_alert_parity.py) uses — evaluates our compiled idioms
+#   IDENTICALLY to a real vmsingle (storage + query) at the PINNED engine version, which
+#   LICENSES gate A standing alone per-PR. That equivalence is a property of the pinned
+#   version, so re-verify exactly when the pin changes — NOT every PR (#952 removed the
+#   redundant per-PR docker-VM job), NOT nightly (re-confirms the same pin for no new signal;
+#   3-way promtool/vmalert-tool/vmsingle agree on the idioms — #958 finding — so only a
+#   VM-internal regression, which a version bump introduces, can diverge them).
 #
-# INFORMATIONAL — do NOT add to branch-protection required checks: it only runs on pin-change
-# PRs, so a required check would sit "pending" forever on every other PR.
-name: VM equivalence anchor (on pin change)
+# Why ALWAYS-RUN + skip-to-green, NOT `on.paths` (Gemini review #959):
+#   An `on.pull_request.paths` filter skips the WHOLE workflow on non-pin PRs → it emits NO
+#   check there, so it can never be a Required check (a Required check that never runs sits
+#   "pending" forever and blocks every PR). Left informational, a RED result on a pin-change
+#   PR does NOT block "Squash & Merge" — the hard block would rest on reviewer eyeballs.
+#   Instead this single job ALWAYS runs and emits one stable check ("VM Anchor Gate"):
+#     * pin / anchor / this-workflow NOT changed → skip the anchor, exit GREEN (cheap: no
+#       vmsingle, no downloads) — a normal PR is never gated.
+#     * changed → run the anchor with VM_PARITY_REQUIRE=1 (unreachable/failed VM HARD-fails).
+#   ⇒ Add "VM Anchor Gate" to branch-protection required checks (owner action): normal PRs
+#     pass instantly, a broken engine bump is genuinely BLOCKED, not merely flagged. Editing
+#     this workflow is in the trigger set, so the PR that changes it runs the anchor
+#     (self-validating). Scope: LOGICAL/math equivalence only — no guarantee about query
+#     performance / resource limits on a live vmsingle (see backend-compat-baseline.md
+#     §誠實 scope "運營/資源等價").
+name: VM Anchor Gate
 
 on:
-  pull_request:
-    paths:
-      - tests/rulepacks/vm_engine_version
-      - tests/rulepacks/test_vm_backend_parity.py
-      - .github/workflows/vm-anchor-on-pin-change.yml
+  pull_request: {}
   workflow_dispatch: {}
 
 permissions:
   contents: read
+  pull-requests: read   # gh pr diff --name-only (scope step)
 
 jobs:
-  vm-anchor:
-    name: VM equivalence anchor (vmalert-tool == live vmsingle)
+  vm-anchor-gate:
+    name: VM Anchor Gate
     runs-on: ubuntu-latest
     steps:
+      - name: Scope — did this PR change the VM engine pin / anchor?
+        id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # workflow_dispatch has no PR context → always run the anchor.
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "manual dispatch → running the equivalence anchor."
+            exit 0
+          fi
+          # Fail-SAFE: if we cannot determine the changed set, RUN the anchor rather than
+          # skip-to-green blind (a transient gh/API hiccup must not silently bypass the gate).
+          if ! changed="$(gh pr diff "${{ github.event.pull_request.number }}" \
+              --repo "${{ github.repository }}" --name-only)"; then
+            echo "gh pr diff failed → running the anchor (fail-safe, not skipping to green)."
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if printf '%s\n' "$changed" | grep -qE '^(tests/rulepacks/vm_engine_version|tests/rulepacks/test_vm_backend_parity\.py|\.github/workflows/vm-anchor-on-pin-change\.yml)$'; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "VM engine pin / anchor changed → running the equivalence anchor."
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "No VM engine pin / anchor change → anchor N/A; passing GREEN without running it."
+          fi
       - name: Checkout
+        if: steps.scope.outputs.run == 'true'
         uses: actions/checkout@v6
       - name: Start pinned VictoriaMetrics (vmsingle)
+        if: steps.scope.outputs.run == 'true'
         # Digest-pinned per the supply-chain policy (#851). On a VM_VERSION bump, update this
         # image+digest ALONGSIDE tests/rulepacks/vm_engine_version + ci.yml VMUTILS_SHA256 (see
         # docs/internal/backend-compat-baseline.md "版本 pin 單一 SSOT"). If you forget, the
@@ -55,12 +89,15 @@ jobs:
             sleep 1
           done
       - name: Set up Python
+        if: steps.scope.outputs.run == 'true'
         uses: actions/setup-python@v6
         with:
           python-version: "3.13"
       - name: Install deps
+        if: steps.scope.outputs.run == 'true'
         run: pip install pyyaml pytest
       - name: Run equivalence anchor (VM_PARITY_REQUIRE=1 → unreachable VM hard-fails, never skip-to-green)
+        if: steps.scope.outputs.run == 'true'
         env:
           VM_PARITY_REQUIRE: "1"
           VM_PARITY_ENDPOINT: http://localhost:8428
