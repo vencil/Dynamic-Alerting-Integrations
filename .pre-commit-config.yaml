@@ -994,7 +994,7 @@ repos:
         # firing tests) fails unless grandfathered; a baselined alert that gains a test
         # / is removed also fails (baseline == reality). Fix: add an alert_rule_test, or
         # `python scripts/tools/lint/check_vmalert_coverage.py --generate` + commit.
-        files: ^(rule-packs/rule-pack-.*\.yaml|tests/rulepacks/(.*_test\.yaml|vmalert_coverage_baseline\.yaml)|scripts/tools/lint/check_vmalert_coverage\.py)$
+        files: ^(rule-packs/rule-pack-.*\.ya?ml|tests/rulepacks/(.*_test\.ya?ml|vmalert_coverage_baseline\.yaml)|scripts/tools/lint/check_vmalert_coverage\.py)$
 
       - id: undefined-tokens-check
         name: Detect JSX/CSS/HTML references to --da-* tokens not defined in design-tokens.css

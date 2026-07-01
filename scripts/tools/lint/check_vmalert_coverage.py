@@ -23,9 +23,13 @@ bidirectional discipline of vm_deviation_catalog.yaml (catalog == reality):
         -> FAIL: remove the stale baseline entry so the baseline stays == reality.
 
 "Covered" = the alert name appears in an ``alert_rule_test[].alertname`` in any
-tests/rulepacks/*_test.yaml. Threshold-only fixtures (``promql_expr_test`` on
+tests/rulepacks/*_test.{yaml,yml}. Threshold-only fixtures (``promql_expr_test`` on
 ``tenant:alert_threshold:*``) verify the value contract, not the firing decision, so they
-do NOT count as firing coverage.
+do NOT count as firing coverage. ⚠️ It counts a *test case*, not necessarily a *firing*
+case: a block asserting ``exp_alerts: []`` (no-fire) also marks the alert covered, so
+"covered" alone does not guarantee the alert's ``for:`` state machine or its
+annotation-template rendering were exercised — requiring a non-empty ``exp_alerts`` is a
+deliberate future step, not taken here to avoid churning the baseline in this PR (Gemini #969).
 
 Usage:
   check_vmalert_coverage.py            # check; exit 1 on drift (dev-rule #13: 0 ok / 1 violation / 2 caller-error)
@@ -56,10 +60,14 @@ _BASELINE_HEADER = """\
 # scripts/tools/lint/check_vmalert_coverage.py (bidirectional, like vm_deviation_catalog.yaml):
 #   * a NEW uncovered alert not listed here          -> CI FAIL (add an alert_rule_test or list it)
 #   * a listed alert that now HAS a test / was removed -> CI FAIL (remove the stale entry)
-# "Covered" = the alert appears in an alert_rule_test[].alertname in tests/rulepacks/*_test.yaml.
+# "Covered" = the alert appears in an alert_rule_test[].alertname in tests/rulepacks/*_test.{yaml,yml}
+# (a test CASE, not necessarily a FIRING case — exp_alerts:[] also counts; see the lint docstring).
 # Listing an alert here is NOT an endorsement — it is TRACKED coverage debt. Most entries are
 # firing-decision gaps in OPTIONAL DB reference packs (their threshold VALUE contract is tested
-# via rule-pack-<db>-threshold_test.yaml); Oracle/DB2 are active Splunk→VM migration targets (#947).
+# via rule-pack-<db>-threshold_test.yaml).
+# ⚠️ MIGRATION BURN-DOWN (Gemini #969): the Oracle/DB2 entries are the active Splunk→VM migration
+# targets (#947) — without a firing test we cannot verify their for:/group_by/label rendering on
+# vmalert before soak. Treat THIS list as the soak burn-down: clear Oracle/DB2 first.
 # Regenerate after an intentional change: python scripts/tools/lint/check_vmalert_coverage.py --generate
 """
 
@@ -68,8 +76,22 @@ def _load_yaml(p: Path) -> dict:
     return yaml.safe_load(p.read_text(encoding="utf-8")) or {}
 
 
+def _rule_pack_files() -> list[Path]:
+    """Rule-pack YAML files — matches BOTH ``.yaml`` and ``.yml`` so a ``.yml``-suffixed pack
+    cannot silently escape the gate. A bare ``glob("*.yaml")`` would ignore it, letting all its
+    alerts bypass the coverage check (no test, not baselined) — a fail-OPEN hole (Gemini #969)."""
+    return sorted(f for f in _RULE_PACKS.iterdir()
+                  if f.is_file() and f.suffix in (".yaml", ".yml"))
+
+
+def _fixture_files() -> list[Path]:
+    """``*_test.{yaml,yml}`` fixtures — same ``.yml`` defence as rule packs."""
+    return sorted(f for f in _TESTS.iterdir()
+                  if f.is_file() and (f.name.endswith("_test.yaml") or f.name.endswith("_test.yml")))
+
+
 def declared_alerts() -> dict[str, str]:
-    """{alertname: pack_filename} for every alert declared in rule-packs/*.yaml.
+    """{alertname: pack_filename} for every alert declared in rule-packs/*.{yaml,yml}.
 
     Alertnames are globally unique in this repo by convention (component-prefixed, e.g.
     ``OracleDatabaseDown``). The "covered" check keys on the bare alertname, so a cross-pack
@@ -78,7 +100,7 @@ def declared_alerts() -> dict[str, str]:
     than mask that, a collision is detected and FAILS loudly (CodeRabbit #969)."""
     out: dict[str, str] = {}
     dupes: dict[str, list[str]] = {}
-    for f in sorted(_RULE_PACKS.glob("*.yaml")):
+    for f in _rule_pack_files():
         for grp in (_load_yaml(f).get("groups") or []):
             for rule in (grp.get("rules") or []):
                 name = rule.get("alert")
@@ -96,9 +118,16 @@ def declared_alerts() -> dict[str, str]:
 
 
 def tested_alertnames() -> set[str]:
-    """Alert names exercised by an alert_rule_test in any tests/rulepacks/*_test.yaml."""
+    """Alert names exercised by an alert_rule_test in any tests/rulepacks/*_test.{yaml,yml}.
+
+    ⚠️ "Covered" here means only that the alert appears in an ``alert_rule_test`` — NOT that a
+    FIRING (true-positive) case exists. A block with ``exp_alerts: []`` (asserting no-fire)
+    also counts, so this does not by itself guarantee the alert's ``for:`` state machine or its
+    annotation-template rendering (``{{ $value }}`` / ``{{ $labels.* }}``) were exercised. That
+    deeper guarantee (require a non-empty ``exp_alerts``) is a deliberate future step, not done
+    here to avoid churning the baseline + coverage semantics in this PR (Gemini #969)."""
     out: set[str] = set()
-    for f in sorted(_TESTS.glob("*_test.yaml")):
+    for f in _fixture_files():
         for t in (_load_yaml(f).get("tests") or []):
             for art in (t.get("alert_rule_test") or []):
                 name = art.get("alertname")

@@ -130,3 +130,23 @@ def test_main_reports_duplicate_as_violation_not_traceback(tree, monkeypatch):
     _write_baseline(tr, {})
     monkeypatch.setattr(sys, "argv", ["check_vmalert_coverage.py", "--ci"])
     assert cov.main() == 1   # graceful violation exit, not an uncaught ValueError
+
+
+def test_yml_rule_pack_is_not_silently_ignored(tree):
+    """A `.yml`-suffixed pack must be tracked, not skipped by a `.yaml`-only glob (Gemini #969)
+    — otherwise its alerts fail OPEN (no test, not baselined, straight past the gate)."""
+    rp, tr = tree
+    (rp / "rule-pack-legacy.yml").write_text(_pack(["YmlAlert"]), encoding="utf-8")   # .yml!
+    _write_baseline(tr, {})
+    assert "YmlAlert" in cov.declared_alerts()   # tracked
+    assert cov.check() == 1                       # untested + un-baselined -> NEW gap, fail-closed
+
+
+def test_yml_fixture_counts_as_coverage(tree):
+    """A `*_test.yml` fixture must count as coverage, symmetric with the rule-pack `.yml` defence."""
+    rp, tr = tree
+    (rp / "rule-pack-x.yaml").write_text(_pack(["A"]), encoding="utf-8")
+    (tr / "x_test.yml").write_text(_fixture_alert_test(["A"]), encoding="utf-8")   # .yml fixture
+    _write_baseline(tr, {})
+    assert "A" in cov.tested_alertnames()
+    assert cov.check() == 0                       # A covered by the .yml fixture -> clean
