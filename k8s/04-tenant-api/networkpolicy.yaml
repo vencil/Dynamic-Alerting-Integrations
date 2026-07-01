@@ -1,6 +1,15 @@
 # NetworkPolicy: restrict who can reach tenant-api's internal port (8080).
 # The oauth2-proxy port (4180) is open to all within the cluster (Ingress/Portal).
-# The raw API port (8080) is restricted to the monitoring namespace only (Prometheus scrape).
+#
+# ⚠️ SECURITY (GHSA-3g2h-rf85-5rrv): port 8080 BYPASSES oauth2-proxy and blindly
+# trusts X-Forwarded-Groups / X-Forwarded-Email. Anything that can reach 8080 can
+# assert ANY identity (incl. platform-admins). This netpol IS the identity control
+# for that port — it must be pod-scoped, NOT namespace-scoped. Only the two workloads
+# that legitimately scrape/write over 8080 are admitted:
+#   • Prometheus scrape           — pod label app=prometheus            (deployment-prometheus.yaml)
+#   • threshold-govern CronJob    — pod label component=threshold-govern (cronjob-threshold-govern.yaml)
+# Every OTHER pod in the monitoring namespace (Grafana, Alertmanager, KSM, exporters,
+# ad-hoc debug pods) is now denied — closing the ns-level over-grant.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -22,11 +31,57 @@ spec:
         - port: 4180
           protocol: TCP
 
-    # Allow Prometheus scrape on internal port (monitoring namespace only)
+    # Allow ONLY Prometheus + threshold-govern (pod-scoped) on internal port 8080.
+    # Two separate `from` entries: each ns+pod pair is AND-ed within an entry, and
+    # the entries are OR-ed — so this admits (monitoring ∧ prometheus) OR
+    # (monitoring ∧ threshold-govern), and nothing else. (A single entry with two
+    # bare podSelectors would OR the pod labels across ANY namespace — wrong.)
     - from:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: monitoring
+          podSelector:
+            matchLabels:
+              app: prometheus
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+          podSelector:
+            matchLabels:
+              component: threshold-govern
       ports:
         - port: 8080
           protocol: TCP
+---
+# Default-deny INGRESS for the whole tenant-api namespace (GHSA-3g2h-rf85-5rrv,
+# #4a). Mirrors the intent of k8s/03-monitoring/network-policies.yaml's
+# `default-deny-all`, but INGRESS-ONLY on purpose:
+#
+#   • Ingress default-deny closes the gap where a second / rogue / debug pod
+#     scheduled into this namespace would otherwise be fully reachable. With the
+#     app policy above being pod-scoped (app=tenant-api), any pod NOT matching it
+#     had NO ingress policy at all → open. This blanket deny fixes that: only pods
+#     explicitly allowed by another policy (i.e. the tenant-api pod above) accept
+#     ingress; everything else in the ns is denied.
+#
+#   • Egress is DELIBERATELY NOT denied here. tenant-api's egress is
+#     deployment-specific and wide (git forge + OAuth2 provider = arbitrary
+#     external IPs, plus K8s API / Prometheus when federation/discovery is on).
+#     Egress restriction is opt-in and separately governed by the Helm chart's
+#     `networkPolicy.egress.enabled` (default off = egress unrestricted). Adding a
+#     ns-wide egress default-deny WITHOUT the full allow-list would break every
+#     tenant-api write (git push) and OAuth flow — the exact "break the platform"
+#     failure mode this hardening must avoid. Enable egress restriction via the
+#     chart, with its extraEgress allow-list, when the environment's egress targets
+#     are known.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: tenant-api
+  labels:
+    app.kubernetes.io/part-of: dynamic-alerting
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress

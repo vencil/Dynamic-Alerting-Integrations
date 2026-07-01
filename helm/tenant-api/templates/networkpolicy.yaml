@@ -1,4 +1,15 @@
-{{- if .Values.networkPolicy.enabled }}
+{{- /*
+  Fail-closed guard (GHSA-3g2h-rf85-5rrv). tenant-api ALWAYS trusts injected
+  identity headers (X-Forwarded-Groups / X-Forwarded-Email) on internal port 8080,
+  which deliberately bypasses oauth2-proxy. The NetworkPolicy is the ONLY control
+  that stops an arbitrary pod from asserting any identity (incl. platform-admins)
+  over that port — it is a REQUIRED security control, never an optional toggle.
+  `--set networkPolicy.enabled=false` therefore renders a hard failure instead of
+  silently dropping the policy.
+*/ -}}
+{{- if not .Values.networkPolicy.enabled }}
+{{- fail "networkPolicy.enabled=false is forbidden: tenant-api trusts internal headers on port 8080 (X-Forwarded-Groups/Email bypass oauth2-proxy); the NetworkPolicy is a REQUIRED security control (GHSA-3g2h-rf85-5rrv), not an optional feature. Do not disable it." }}
+{{- end }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -21,11 +32,25 @@ spec:
         - port: 4180
           protocol: TCP
 
-    # Allow Prometheus scrape on internal port (monitoring namespace only)
+    # Allow ONLY the workloads that legitimately use internal port 8080, pod-scoped
+    # (GHSA-3g2h-rf85-5rrv). Port 8080 bypasses oauth2-proxy and trusts injected
+    # identity headers, so a bare namespaceSelector over-grants every pod in the
+    # monitoring ns. Each `from` entry AND-s ns+pod; entries are OR-ed.
     - from:
+        # Prometheus scrape (/metrics on 8080).
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: {{ .Values.networkPolicy.prometheusNamespace }}
+          podSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.internalPortAllow.prometheus | nindent 14 }}
+        # threshold-govern CronJob (#656) — opens per-tenant governance PRs.
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.prometheusNamespace }}
+          podSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.internalPortAllow.thresholdGovern | nindent 14 }}
       ports:
         - port: 8080
           protocol: TCP
@@ -52,4 +77,22 @@ spec:
     {{- toYaml . | nindent 4 }}
     {{- end }}
   {{- end }}
-{{- end }}
+---
+# Default-deny INGRESS for the tenant-api namespace (GHSA-3g2h-rf85-5rrv, #4a).
+# INGRESS-ONLY on purpose: the app policy above is pod-scoped, so any pod NOT
+# matching it (a rogue/debug/second workload in this ns) would otherwise have no
+# ingress policy = fully open. This blanket deny closes that. Egress is NOT denied
+# here — it is opt-in via networkPolicy.egress.enabled above, because tenant-api's
+# egress (git forge + OAuth provider = arbitrary external IPs) is deployment-specific
+# and a ns-wide egress deny without the full allow-list would break every write.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "tenant-api.name" . }}-default-deny-ingress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "tenant-api.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress

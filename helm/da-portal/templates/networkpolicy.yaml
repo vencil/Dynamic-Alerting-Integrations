@@ -1,3 +1,13 @@
+{{- /*
+  Fail-closed guard (GHSA-3g2h-rf85-5rrv). da-portal fronts tenant-api's
+  header-trusting proxy path; whenever it runs in authenticated-proxy mode
+  (oauth2Proxy.enabled=true) the NetworkPolicy is a REQUIRED security control and
+  MUST NOT be disabled. Tier 1 static-only portals (oauth2Proxy.enabled=false,
+  no tenant-api behind it) are exempt — there is no header-trust surface to guard.
+*/ -}}
+{{- if and .Values.oauth2Proxy.enabled (not .Values.networkPolicy.enabled) }}
+{{- fail "networkPolicy.enabled=false is forbidden when oauth2Proxy.enabled=true: da-portal then fronts tenant-api's header-trusting path; the NetworkPolicy is a REQUIRED security control (GHSA-3g2h-rf85-5rrv), not an optional feature." }}
+{{- end }}
 {{- if .Values.networkPolicy.enabled }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
