@@ -1121,14 +1121,24 @@ data:
           # no --metric-allowlist filter). `max by (namespace)` collapses the per-node
           # DaemonSet pods to one series and keeps `namespace` on the page (Vector may be
           # installed outside `monitoring`); the stable container name `projection-gate`
-          # scopes it. `for: 5m` debounces a transient crashloop (image pull / registry
-          # mount flap); a real enforce deadlock persists until the config is reverted.
-          # Depends on KSM being up (a dead KSM is ThresholdExporter*/its own concern).
+          # scopes it. `max_over_time(...[5m])` is the kube-prometheus KubePodCrashLooping
+          # idiom: a CrashLoopBackOff series briefly drops to absent while kubelet re-runs
+          # the container between backoffs, and real Prometheus injects a staleness marker
+          # on the first missing scrape (it does NOT carry the value forward), so a raw
+          # `> 0` could reset `for: 5m` on such a gap and delay firing. max_over_time is 1
+          # if it crashlooped at ANY point in the trailing 5m, making the signal robust to
+          # that flap; `for: 5m` then requires it SUSTAINED, debouncing a single transient
+          # crash (image pull / registry mount flap). In practice the ms-long re-run rarely
+          # coincides with a 15s scrape, so even a raw form would fire — this is defense in
+          # depth. A real enforce deadlock persists until the config is reverted. Depends
+          # on KSM being up (a dead KSM is its own concern).
           # Behavioural contract: tests/rulepacks/platform-projection-gate_test.yaml.
           - alert: VectorProjectionGateEnforceDeadlock
             expr: |
               max by (namespace) (
-                kube_pod_init_container_status_waiting_reason{container="projection-gate", reason="CrashLoopBackOff"}
+                max_over_time(
+                  kube_pod_init_container_status_waiting_reason{container="projection-gate", reason="CrashLoopBackOff"}[5m]
+                )
               ) > 0
             for: 5m
             labels:

@@ -41,7 +41,9 @@ groups:
       - alert: VectorProjectionGateEnforceDeadlock
         expr: |
           max by (namespace) (
-            kube_pod_init_container_status_waiting_reason{container="projection-gate", reason="CrashLoopBackOff"}
+            max_over_time(
+              kube_pod_init_container_status_waiting_reason{container="projection-gate", reason="CrashLoopBackOff"}[5m]
+            )
           ) > 0
         for: 5m
         labels:

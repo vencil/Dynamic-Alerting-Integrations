@@ -148,3 +148,31 @@ tests:
       - eval_time: 6m
         alertname: VectorProjectionGateEnforceDeadlock
         exp_alerts: []
+
+  # 9) FLAPPING crashloop: the CrashLoopBackOff series drops to absent while kubelet
+  #    briefly re-runs the init between backoffs (samples at t0,2,4,6,8, gaps between).
+  #    The alert must still FIRE through the gaps. NOTE (verified by mutation): promtool
+  #    bridges these short `_` gaps via lookback, so this case passes on BOTH the raw
+  #    `> 0` and the max_over_time form — it is NOT a distinguisher between them (it pins
+  #    the flap-robustness PROPERTY, not the implementation). The max_over_time(...[5m])
+  #    wrapper is justified against REAL Prometheus, which injects a staleness marker on
+  #    the first missing scrape rather than carrying the value 5m, so a raw `> 0` there
+  #    could reset `for: 5m` on a gap; max_over_time is the kube-prometheus
+  #    KubePodCrashLooping idiom for exactly that.
+  - interval: 1m
+    name: enforce-deadlock-flapping-still-fires
+    input_series:
+      - series: 'kube_pod_init_container_status_waiting_reason{container="projection-gate", reason="CrashLoopBackOff", namespace="monitoring", pod="vector-ghi56"}'
+        values: '1 _ 1 _ 1 _ 1 _ 1 _'   # present every other minute (gaps = brief re-run)
+    alert_rule_test:
+      - eval_time: 4m   # crashlooping since t0 but < for:5m → PENDING despite the gaps
+        alertname: VectorProjectionGateEnforceDeadlock
+        exp_alerts: []
+      - eval_time: 7m
+        alertname: VectorProjectionGateEnforceDeadlock
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              namespace: monitoring
+            exp_annotations:
+              summary: "Vector projection-gate init-container is CrashLoopBackOff (enforce mode) — DaemonSet rollout deadlocked in monitoring"
