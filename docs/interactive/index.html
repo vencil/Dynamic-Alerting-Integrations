@@ -315,6 +315,14 @@
   }
   .role-filter:hover { border-color: var(--da-color-accent); color: var(--da-color-accent); }
   .role-filter.active { background: var(--da-color-accent); color: #fff; border-color: var(--da-color-accent); }
+  /* LD-1 (#962): low-key view-state hint (symmetric: focus cue in All state,
+     reset cue when filtered); hidden only before cards load / on empty page */
+  .filter-hint {
+    margin: 10px 0 0 0;
+    font-size: 0.72rem;
+    color: var(--da-color-muted);
+  }
+  .filter-hint[hidden] { display: none; }
 
   /* ── Flow Analytics ── */
   .flow-analytics {
@@ -690,6 +698,10 @@
       <button class="role-filter" data-role="tenant" aria-pressed="false">Tenants</button>
       <button class="role-filter" data-role="sre" aria-pressed="false">SRE</button>
     </div>
+    <!-- LD-1 (#962): low-key view-state hint (focus cue in the All state,
+         reset cue when filtered); populated + toggled by the role-filter
+         script; hidden before cards load / on empty page. -->
+    <p class="filter-hint" id="filter-hint" hidden></p>
   </div>
 
   <!-- Guided Flows section -->
@@ -1181,6 +1193,12 @@
 
       TOOLS_DATA = tools;
       renderTools(tools);
+      // LD-1 (#962): cards now exist — re-apply the restored role filter so a
+      // persisted selection takes effect on the freshly injected cards (and
+      // the hint's tool count reflects the real total, not the empty page).
+      if (typeof window.__daApplyRoleFilter === 'function') {
+        window.__daApplyRoleFilter();
+      }
     })
     .catch(function() { console.log('Could not load tool-registry.yaml'); });
 
@@ -1193,26 +1211,125 @@
   // the id-only #linter-cards mirror (which has no class="cards").
   var buttons = document.querySelectorAll('.role-filter');
 
-  function applyRoleFilter(role) {
-    var cards = document.querySelectorAll('.cards a.card[data-audience]');
-    cards.forEach(function(card) {
-      if (role === 'all') {
-        card.setAttribute('data-hidden', 'false');
-      } else {
-        var audiences = (card.getAttribute('data-audience') || '').split(',');
-        card.setAttribute('data-hidden', audiences.indexOf(role) === -1 ? 'true' : 'false');
-      }
-    });
+  // LD-1 (#962): multi-select UNION role filter + localStorage persistence.
+  // Model: an `active` Set of role tokens. Invariant — set empty ⟺ "All"
+  // active ⟺ everything visible. We NEVER leave the set empty while "All" is
+  // visually off (that would blank the page); applyActiveFilter() re-derives
+  // the "All" visual state from `active.size === 0` every time, so the
+  // invariant is structural, not something callers must remember.
+  //
+  // Buttons are a deliberate SUBSET of the audience vocabulary
+  // (maintainer/sec have no button — see check_portal_audience_enum.py), so
+  // the persisted allow-list below is exactly the four button roles. Unknown
+  // tokens from dirty localStorage are filtered out → fall back to All.
+  var ALLOWED_ROLES = ['platform', 'domain', 'tenant', 'sre'];
+  var STORAGE_KEY = '__da_hub_roles';
+  var active = new Set();
+
+  function loadRoles() {
+    try {
+      var raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return;
+      var arr = JSON.parse(raw);
+      if (!Array.isArray(arr)) return;
+      arr.forEach(function(r) {
+        if (ALLOWED_ROLES.indexOf(r) !== -1) active.add(r);
+      });
+    } catch (e) {
+      // Corrupt / unavailable storage → behave as All (empty set).
+      active.clear();
+    }
   }
+
+  function saveRoles() {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(Array.from(active)));
+    } catch (e) { /* storage unavailable — persistence is best-effort */ }
+  }
+
+  // Re-query the live `.cards` containers every call: cards are injected
+  // ASYNCHRONOUSLY by renderTools() (the #954 fix), so a cached NodeList
+  // would miss them. `.cards` scope also excludes the id-only #linter-cards
+  // mirror. A card is visible iff its audience set intersects `active`;
+  // empty `active` shows everything.
+  function applyActiveFilter() {
+    var cards = document.querySelectorAll('.cards a.card[data-audience]');
+    var showAll = active.size === 0;
+    cards.forEach(function(card) {
+      if (showAll) {
+        card.setAttribute('data-hidden', 'false');
+        return;
+      }
+      var audiences = (card.getAttribute('data-audience') || '').split(',');
+      var hit = audiences.some(function(a) { return active.has(a); });
+      card.setAttribute('data-hidden', hit ? 'false' : 'true');
+    });
+
+    // Sync button visuals from the set. "All" reflects emptiness; each role
+    // button reflects its own membership. Multiple aria-pressed="true" is
+    // intentional and valid for a multi-select toggle group.
+    buttons.forEach(function(b) {
+      var role = b.getAttribute('data-role');
+      var on = role === 'all' ? showAll : active.has(role);
+      b.classList.toggle('active', on);
+      b.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
+
+    // View-state hint — SYMMETRIC so both directions are legible:
+    //   All state      → nudge toward focusing ("click a role to focus")
+    //   Filtered state → offer the way back ("click All to reset"). This is
+    //     the return cue for a persisted / shared-machine selection, shown
+    //     exactly when the All-state hint would otherwise be gone.
+    // Guarded on total > 0: before the async cards inject (sync init) or if
+    // the tool-registry fetch fails (.catch does NOT re-run this), there is
+    // nothing to describe — stay hidden rather than flash a wrong-language
+    // "0 tools" that would never get repainted.
+    var hint = document.getElementById('filter-hint');
+    if (hint) {
+      var total = document.querySelectorAll('.cards a.card').length;
+      var lang = window.__DA_HUB_LANG || 'en';
+      if (total === 0) {
+        hint.hidden = true;
+      } else if (showAll) {
+        hint.textContent = lang === 'zh'
+          ? ('顯示全部 ' + total + ' 個工具 · 點角色聚焦')
+          : ('Showing all ' + total + ' tools · click a role to focus');
+        hint.hidden = false;
+      } else {
+        var shown = document.querySelectorAll('.cards a.card:not([data-hidden="true"])').length;
+        hint.textContent = lang === 'zh'
+          ? ('顯示 ' + shown + ' / ' + total + ' 個工具 · 點 All 看全部')
+          : ('Showing ' + shown + ' of ' + total + ' tools · click All to reset');
+        hint.hidden = false;
+      }
+    }
+  }
+
+  // Expose so the async renderTools() fetch().then() can re-apply once the
+  // real cards exist (init-time call below runs before they're injected).
+  window.__daApplyRoleFilter = applyActiveFilter;
 
   buttons.forEach(function(btn) {
     btn.addEventListener('click', function() {
-      buttons.forEach(function(b) { b.classList.remove('active'); b.setAttribute('aria-pressed', 'false'); });
-      btn.classList.add('active');
-      btn.setAttribute('aria-pressed', 'true');
-      applyRoleFilter(btn.getAttribute('data-role'));
+      var role = btn.getAttribute('data-role');
+      if (role === 'all') {
+        active.clear();            // All = clear the set → everything shows
+      } else {
+        if (active.has(role)) {
+          active.delete(role);     // toggle off; emptying → auto-All via invariant
+        } else {
+          active.add(role);        // toggle on (union; multiple may coexist)
+        }
+      }
+      saveRoles();
+      applyActiveFilter();
     });
   });
+
+  // Restore persisted selection. Cards may not exist yet (async inject), so
+  // this paints button visuals/hint now and renderTools() re-applies later.
+  loadRoles();
+  applyActiveFilter();
 
 })();
 </script>
