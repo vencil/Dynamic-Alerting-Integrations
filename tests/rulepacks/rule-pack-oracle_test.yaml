@@ -11,11 +11,18 @@
 #   * a `for:` debounce case (expr already true, eval BEFORE the for: window ⇒ no alert).
 # Threshold alerts additionally exercise the pack's per-alert branch plumbing
 # (hand-copied per alert, so a typo in one alert's clause is only caught by testing
-# THAT alert), following the rule-pack-mariadb-cpu_test.yaml four-tenant scaffold:
+# THAT alert), extending the rule-pack-mariadb-cpu_test.yaml scaffold to FIVE tenants:
 #   - db-a: over threshold, metadata present    → fires ENRICHED (branch A).
 #   - db-b: over threshold, NO metadata          → STILL fires BARE (branch B, vacuum).
-#   - db-c: over threshold, maintenance active   → suppressed.
+#   - db-c: over threshold, maintenance active   → suppressed via the ENRICHED arm's clause.
 #   - db-d: below threshold, metadata present    → no alert (threshold-driven no-fire).
+#   - db-e: over threshold, maintenance, NO meta → suppressed via the BARE arm's clause.
+#     Each alert hand-copies the maintenance `unless` TWICE (once per or-arm); db-c only
+#     exercises the enriched copy, so without db-e deleting the bare arm's copy stays
+#     green — and a metadata-less onboarding tenant in maintenance would still page
+#     (adversarial-review find; the four-tenant mariadb-cpu scaffold shares this hole).
+# db-a's tablespace input carries a SECOND, healthy dimension so the :max recording
+# rule's worst-dimension-wins direction is pinned (a min↔max flip turns the test red).
 # All input values are steady-state (constant gauges / linear counters ⇒ constant rate
 # once the 5m window is covered), so cross-group recording-rule tick skew cannot flip an
 # exact $value at the asserted evals (#943/#949 flake).
@@ -67,8 +74,10 @@ tests:
         values: '1x48'
       - series: 'user_state_filter{tenant="db-c", filter="maintenance"}'
         values: '1x48'
+      - series: 'user_state_filter{tenant="db-e", filter="maintenance"}'
+        values: '1x48'
 
-      # Active sessions: 250 > 200 warning (db-a/b/c); db-d 100 < 200.
+      # Active sessions: 250 > 200 warning (db-a/b/c, and db-e in its block below); db-d 100 < 200.
       - series: 'oracledb_sessions_active{tenant="db-a"}'
         values: '250x48'
       - series: 'oracledb_sessions_active{tenant="db-b"}'
@@ -100,6 +109,10 @@ tests:
       # Tablespace usage: 92 > 85 warning; db-d 70 < 85.
       - series: 'oracledb_tablespace_used_percent{tenant="db-a", tablespace_name="USERS"}'
         values: '92x48'
+      # Second, HEALTHY dimension for db-a — pins worst-dimension-wins (:max) direction:
+      # max(92, 70) = 92 fires; a max→min flip reads 70 (< 85) and goes red.
+      - series: 'oracledb_tablespace_used_percent{tenant="db-a", tablespace_name="TEMP"}'
+        values: '70x48'
       - series: 'oracledb_tablespace_used_percent{tenant="db-b", tablespace_name="USERS"}'
         values: '92x48'
       - series: 'oracledb_tablespace_used_percent{tenant="db-c", tablespace_name="USERS"}'
@@ -115,15 +128,19 @@ tests:
       - series: 'user_threshold{tenant="db-d", component="oracle", metric="tablespace_used_percent", severity="warning"}'
         values: '85x48'
 
-      # Wait-time counter: +30/15s ⇒ steady rate5m = 2.0 s/s > 1 (db-a/b/c); db-d +7.5/15s ⇒ 0.5.
+      # Wait-time counter: +30/15s ⇒ steady rate5m = 2.0 s/s > 1 (db-a/b/c/e); db-d +7.5/15s ⇒ 0.5.
       # ⚠️ rate() cold-start (#946): with series starting at t=0, Prometheus'
       # extrapolatedRate divides by the FULL 5m window (not the sampled span), so the
       # Prom rate ramps ~linearly with window coverage and only crosses the 1.0 threshold
-      # at ~2.5m (⇒ for: 5m fires at ~7.5m); MetricsQL uses the actual data span and reads
-      # 2.0 from the first ticks (⇒ fires at ~5m15s). The firing assertion below sits at
-      # 8m — past BOTH engines' fire point, with a fully-covered window ⇒ $value is
-      # exactly 2.0 on both — so the known cold-start divergence axis is avoided by
-      # construction instead of catalogued.
+      # at ~2m45s (⇒ for: 5m fires at ~7m45s); MetricsQL uses the actual data span and
+      # reads 2.0 from the first ticks (⇒ fires at ~5m15s). The firing assertion below
+      # sits at 9m — past BOTH engines' fire point with ≥5 ticks of margin against
+      # promtool extrapolation-math drift (at 8m the margin was a single tick), window
+      # fully covered ⇒ $value is exactly 2.0 on both — so the known cold-start
+      # divergence axis is avoided by construction instead of catalogued. Soak
+      # expectation: at a REAL cold-start (new tenant / exporter restart / counter
+      # reset) VM's first fire leads Prometheus by up to one window — expected engine
+      # math, NOT a false positive; see docs/integration/victoriametrics-integration.md §3.1.
       - series: 'oracledb_wait_time_seconds_total{tenant="db-a"}'
         values: '0+30x48'
       - series: 'oracledb_wait_time_seconds_total{tenant="db-b"}'
@@ -178,6 +195,33 @@ tests:
       - series: 'user_threshold{tenant="db-d", component="oracle", metric="pga_allocated_bytes", severity="warning"}'
         values: '4294967296x48'
 
+      # db-e: BARE-arm maintenance control — breaches EVERY metric, is in maintenance,
+      # has NO tenant_metadata_info. Only the bare arm's hand-copied
+      # `unless (user_state_filter{filter="maintenance"} == 1)` can suppress it; delete
+      # or typo that clause in any alert and its implicit no-fire assertion turns red.
+      - series: 'oracledb_sessions_active{tenant="db-e"}'
+        values: '250x48'
+      - series: 'user_threshold{tenant="db-e", component="oracle", metric="sessions_active", severity="warning"}'
+        values: '200x48'
+      - series: 'oracledb_resource_limit{tenant="db-e", resource="sessions"}'
+        values: '250x48'
+      - series: 'oracledb_tablespace_used_percent{tenant="db-e", tablespace_name="USERS"}'
+        values: '92x48'
+      - series: 'user_threshold{tenant="db-e", component="oracle", metric="tablespace_used_percent", severity="warning"}'
+        values: '85x48'
+      - series: 'oracledb_wait_time_seconds_total{tenant="db-e"}'
+        values: '0+30x48'
+      - series: 'user_threshold{tenant="db-e", component="oracle", metric="wait_time_rate", severity="warning"}'
+        values: '1x48'
+      - series: 'oracledb_process_count{tenant="db-e"}'
+        values: '350x48'
+      - series: 'user_threshold{tenant="db-e", component="oracle", metric="process_count", severity="warning"}'
+        values: '300x48'
+      - series: 'oracledb_pga_allocated_bytes{tenant="db-e"}'
+        values: '5368709120x48'
+      - series: 'user_threshold{tenant="db-e", component="oracle", metric="pga_allocated_bytes", severity="warning"}'
+        values: '4294967296x48'
+
     alert_rule_test:
       # ── OracleHighActiveSessions (for: 5m) ──
       - eval_time: 3m           # debounce: expr true since ~15s, still < 5m ⇒ pending only
@@ -217,7 +261,7 @@ tests:
               runbook_url: ""
               owner: ""
               tier: ""
-        # db-c (maintenance) and db-d (below threshold) produce NO alert.
+        # db-c/db-e (maintenance, via the enriched/bare arm resp.) and db-d (below threshold) produce NO alert.
 
       # ── OracleTablespaceAlmostFull (for: 5m) ──
       - eval_time: 3m
@@ -255,14 +299,14 @@ tests:
               runbook_url: ""
               owner: ""
               tier: ""
-        # db-c (maintenance) and db-d (below threshold) produce NO alert.
+        # db-c/db-e (maintenance, via the enriched/bare arm resp.) and db-d (below threshold) produce NO alert.
 
-      # ── OracleHighWaitTime (for: 5m, rate-based — firing eval at 8m, see the
+      # ── OracleHighWaitTime (for: 5m, rate-based — firing eval at 9m, see the
       #    cold-start note on the input series; 3m is inside BOTH engines' pending window) ──
       - eval_time: 3m
         alertname: OracleHighWaitTime
         exp_alerts: []
-      - eval_time: 8m
+      - eval_time: 9m
         alertname: OracleHighWaitTime
         exp_alerts:
           - exp_labels:
@@ -294,7 +338,7 @@ tests:
               runbook_url: ""
               owner: ""
               tier: ""
-        # db-c (maintenance) and db-d (rate 0.5 < 1) produce NO alert.
+        # db-c/db-e (maintenance, via the enriched/bare arm resp.) and db-d (rate 0.5 < 1) produce NO alert.
 
       # ── OracleHighProcessCount (for: 5m) ──
       - eval_time: 3m
@@ -332,7 +376,7 @@ tests:
               runbook_url: ""
               owner: ""
               tier: ""
-        # db-c (maintenance) and db-d (below threshold) produce NO alert.
+        # db-c/db-e (maintenance, via the enriched/bare arm resp.) and db-d (below threshold) produce NO alert.
 
       # ── OracleHighPGAUsage (for: 10m — longer debounce window) ──
       - eval_time: 6m           # 5m-alerts already fire here, but the 10m one must NOT yet
@@ -370,14 +414,15 @@ tests:
               runbook_url: ""
               owner: ""
               tier: ""
-        # db-c (maintenance) and db-d (2 GiB < 4 GiB) produce NO alert.
+        # db-c/db-e (maintenance, via the enriched/bare arm resp.) and db-d (2 GiB < 4 GiB) produce NO alert.
 
       # ── OracleHighSessionUtilization (for: 5m, hardcoded ratio > 0.85) ──
-      # ⚠️ Characterization, not endorsement: $value is the RAW ratio (here 250/250 = 1.0)
-      # but the description template renders `{{ $value | printf "%.0f" }}%` — i.e. 100%
-      # utilization is shown as "1%". Pinned as-is so the rendering gap is visible and any
-      # fix (e.g. humanizePercentage) must consciously update this fixture. Flagged in the
-      # burn-down PR as a follow-up on the pack, out of scope for a tests-only change.
+      # ⚠️ Characterization, not endorsement — tracked in #975: $value is the RAW ratio
+      # (here 250/250 = 1.0) but the description template renders
+      # `{{ $value | printf "%.0f" }}%` — i.e. 100% utilization is shown as "1%". Pinned
+      # as-is so the rendering gap is visible; the #975 fix (humanizePercentage, also
+      # covers MongoDBConnectionSaturation) must update these pinned annotations in the
+      # same change.
       - eval_time: 3m
         alertname: OracleHighSessionUtilization
         exp_alerts: []
@@ -413,4 +458,4 @@ tests:
               runbook_url: ""
               owner: ""
               tier: ""
-        # db-c (maintenance) and db-d (0.1 < 0.85) produce NO alert.
+        # db-c/db-e (maintenance, via the enriched/bare arm resp.) and db-d (0.1 < 0.85) produce NO alert.

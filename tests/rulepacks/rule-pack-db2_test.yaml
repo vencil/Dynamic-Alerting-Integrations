@@ -10,11 +10,18 @@
 #   * a no-fire control (below/above threshold on the safe side / exporter healthy),
 #   * a `for:` debounce case (expr already true, eval BEFORE the for: window ⇒ no alert).
 # Threshold alerts additionally exercise the pack's per-alert branch plumbing
-# (hand-copied per alert), following the rule-pack-mariadb-cpu_test.yaml scaffold:
+# (hand-copied per alert), extending the rule-pack-mariadb-cpu_test.yaml scaffold
+# to FIVE tenants:
 #   - db-a: breaching, metadata present    → fires ENRICHED (branch A).
 #   - db-b: breaching, NO metadata          → STILL fires BARE (branch B, vacuum).
-#   - db-c: breaching, maintenance active   → suppressed.
+#   - db-c: breaching, maintenance active   → suppressed via the ENRICHED arm's clause.
 #   - db-d: healthy value, metadata present → no alert (threshold-driven no-fire).
+#   - db-e: breaching, maintenance, NO meta → suppressed via the BARE arm's clause
+#     (each alert hand-copies the maintenance `unless` once per or-arm; db-c only
+#     exercises the enriched copy — see the oracle fixture twin for the rationale).
+# db-a's bufferpool and tablespace inputs carry a SECOND, healthy dimension so the
+# worst-dimension-wins aggregation direction is pinned (:min for hit ratio, :max for
+# tablespace usage — a min↔max flip turns the firing assertion red).
 # Note DB2LowBufferpoolHitRatio inverts the comparison (min < threshold), so its db-d
 # no-fire control sits ABOVE the threshold. All input values are steady-state (constant
 # gauges / linear counters ⇒ constant rate once the 5m window is covered), so cross-group
@@ -67,8 +74,10 @@ tests:
         values: '1x48'
       - series: 'user_state_filter{tenant="db-c", filter="maintenance"}'
         values: '1x48'
+      - series: 'user_state_filter{tenant="db-e", filter="maintenance"}'
+        values: '1x48'
 
-      # Active connections: 250 > 200 warning (db-a/b/c); db-d 100 < 200.
+      # Active connections: 250 > 200 warning (db-a/b/c, and db-e in its block below); db-d 100 < 200.
       - series: 'db2_connections_active{tenant="db-a"}'
         values: '250x48'
       - series: 'db2_connections_active{tenant="db-b"}'
@@ -90,6 +99,10 @@ tests:
       # breaches (db-a/b/c); db-d 0.99 ≥ 0.95 is the healthy no-fire control.
       - series: 'db2_bufferpool_hit_ratio{tenant="db-a", bufferpool_name="IBMDEFAULTBP"}'
         values: '0.9x48'
+      # Second, HEALTHY dimension for db-a — pins worst-dimension-wins (:min) direction:
+      # min(0.9, 0.99) = 0.9 fires; a min→max flip reads 0.99 (≥ 0.95) and goes red.
+      - series: 'db2_bufferpool_hit_ratio{tenant="db-a", bufferpool_name="BP_USER"}'
+        values: '0.99x48'
       - series: 'db2_bufferpool_hit_ratio{tenant="db-b", bufferpool_name="IBMDEFAULTBP"}'
         values: '0.9x48'
       - series: 'db2_bufferpool_hit_ratio{tenant="db-c", bufferpool_name="IBMDEFAULTBP"}'
@@ -123,15 +136,19 @@ tests:
       - series: 'user_threshold{tenant="db-d", component="db2", metric="log_usage_percent", severity="warning"}'
         values: '70x48'
 
-      # Deadlock counter: +300/15s ⇒ steady rate5m = 20/s > 5 (db-a/b/c); db-d +30/15s ⇒ 2.0.
+      # Deadlock counter: +300/15s ⇒ steady rate5m = 20/s > 5 (db-a/b/c/e); db-d +30/15s ⇒ 2.0.
       # ⚠️ rate() cold-start (#946): with series starting at t=0, Prometheus'
       # extrapolatedRate divides by the FULL 5m window, so the Prom rate ramps with
       # window coverage — a steady rate close to the threshold would cross very late.
-      # 20 vs 5 crosses at ~1.5m on Prom (⇒ for: 5m fires at ~6.5m); MetricsQL uses the
-      # actual data span and reads 20 from the first ticks (⇒ fires at ~5m15s). The
-      # firing assertion below sits at 8m — past BOTH engines' fire point, with a
-      # fully-covered window ⇒ $value is exactly 20.0 on both — so the known cold-start
-      # divergence axis is avoided by construction instead of catalogued.
+      # 20 vs 5 crosses at ~1m30s on Prom (⇒ for: 5m fires at ~6m30s); MetricsQL uses
+      # the actual data span and reads 20 from the first ticks (⇒ fires at ~5m15s). The
+      # firing assertion below sits at 9m — past BOTH engines' fire point with wide
+      # margin against promtool extrapolation-math drift, window fully covered ⇒ $value
+      # is exactly 20.0 on both — so the known cold-start divergence axis is avoided by
+      # construction instead of catalogued. Soak expectation: at a REAL cold-start
+      # (new tenant / exporter restart / counter reset) VM's first fire leads Prometheus
+      # by up to one window — expected engine math, NOT a false positive; see
+      # docs/integration/victoriametrics-integration.md §3.1.
       - series: 'db2_deadlocks_total{tenant="db-a"}'
         values: '0+300x48'
       - series: 'db2_deadlocks_total{tenant="db-b"}'
@@ -152,6 +169,10 @@ tests:
       # Tablespace usage: 92 > 85 warning; db-d 70 < 85.
       - series: 'db2_tablespace_used_percent{tenant="db-a", tablespace_name="USERSPACE1"}'
         values: '92x48'
+      # Second, HEALTHY dimension for db-a — pins worst-dimension-wins (:max) direction:
+      # max(92, 70) = 92 fires; a max→min flip reads 70 (< 85) and goes red.
+      - series: 'db2_tablespace_used_percent{tenant="db-a", tablespace_name="SYSCATSPACE"}'
+        values: '70x48'
       - series: 'db2_tablespace_used_percent{tenant="db-b", tablespace_name="USERSPACE1"}'
         values: '92x48'
       - series: 'db2_tablespace_used_percent{tenant="db-c", tablespace_name="USERSPACE1"}'
@@ -183,6 +204,35 @@ tests:
       - series: 'db2_total_sorts{tenant="db-c"}'
         values: '100x48'
       - series: 'db2_total_sorts{tenant="db-d"}'
+        values: '100x48'
+
+      # db-e: BARE-arm maintenance control — breaches EVERY metric, is in maintenance,
+      # has NO tenant_metadata_info. Only the bare arm's hand-copied
+      # `unless (user_state_filter{filter="maintenance"} == 1)` can suppress it; delete
+      # or typo that clause in any alert and its implicit no-fire assertion turns red.
+      - series: 'db2_connections_active{tenant="db-e"}'
+        values: '250x48'
+      - series: 'user_threshold{tenant="db-e", component="db2", metric="connections_active", severity="warning"}'
+        values: '200x48'
+      - series: 'db2_bufferpool_hit_ratio{tenant="db-e", bufferpool_name="IBMDEFAULTBP"}'
+        values: '0.9x48'
+      - series: 'user_threshold{tenant="db-e", component="db2", metric="bufferpool_hit_ratio", severity="warning"}'
+        values: '0.95x48'
+      - series: 'db2_log_usage_percent{tenant="db-e"}'
+        values: '85x48'
+      - series: 'user_threshold{tenant="db-e", component="db2", metric="log_usage_percent", severity="warning"}'
+        values: '70x48'
+      - series: 'db2_deadlocks_total{tenant="db-e"}'
+        values: '0+300x48'
+      - series: 'user_threshold{tenant="db-e", component="db2", metric="deadlock_rate", severity="warning"}'
+        values: '5x48'
+      - series: 'db2_tablespace_used_percent{tenant="db-e", tablespace_name="USERSPACE1"}'
+        values: '92x48'
+      - series: 'user_threshold{tenant="db-e", component="db2", metric="tablespace_used_percent", severity="warning"}'
+        values: '85x48'
+      - series: 'db2_sort_overflows{tenant="db-e"}'
+        values: '8x48'
+      - series: 'db2_total_sorts{tenant="db-e"}'
         values: '100x48'
 
     alert_rule_test:
@@ -224,7 +274,7 @@ tests:
               runbook_url: ""
               owner: ""
               tier: ""
-        # db-c (maintenance) and db-d (below threshold) produce NO alert.
+        # db-c/db-e (maintenance, via the enriched/bare arm resp.) and db-d (below threshold) produce NO alert.
 
       # ── DB2LowBufferpoolHitRatio (for: 10m, inverted comparison) ──
       - eval_time: 6m           # 5m-alerts already fire here, but the 10m one must NOT yet
@@ -262,7 +312,7 @@ tests:
               runbook_url: ""
               owner: ""
               tier: ""
-        # db-c (maintenance) and db-d (0.99 ≥ 0.95, healthy) produce NO alert.
+        # db-c/db-e (maintenance, via the enriched/bare arm resp.) and db-d (0.99 ≥ 0.95, healthy) produce NO alert.
 
       # ── DB2HighLogUsage (for: 5m) ──
       - eval_time: 3m
@@ -300,14 +350,14 @@ tests:
               runbook_url: ""
               owner: ""
               tier: ""
-        # db-c (maintenance) and db-d (below threshold) produce NO alert.
+        # db-c/db-e (maintenance, via the enriched/bare arm resp.) and db-d (below threshold) produce NO alert.
 
-      # ── DB2HighDeadlockRate (for: 5m, rate-based — firing eval at 8m, see the
+      # ── DB2HighDeadlockRate (for: 5m, rate-based — firing eval at 9m, see the
       #    cold-start note on the input series; 3m is inside BOTH engines' pending window) ──
       - eval_time: 3m
         alertname: DB2HighDeadlockRate
         exp_alerts: []
-      - eval_time: 8m
+      - eval_time: 9m
         alertname: DB2HighDeadlockRate
         exp_alerts:
           - exp_labels:
@@ -339,7 +389,7 @@ tests:
               runbook_url: ""
               owner: ""
               tier: ""
-        # db-c (maintenance) and db-d (rate 2.0 < 5) produce NO alert.
+        # db-c/db-e (maintenance, via the enriched/bare arm resp.) and db-d (rate 2.0 < 5) produce NO alert.
 
       # ── DB2TablespaceAlmostFull (for: 5m) ──
       - eval_time: 3m
@@ -377,7 +427,7 @@ tests:
               runbook_url: ""
               owner: ""
               tier: ""
-        # db-c (maintenance) and db-d (below threshold) produce NO alert.
+        # db-c/db-e (maintenance, via the enriched/bare arm resp.) and db-d (below threshold) produce NO alert.
 
       # ── DB2HighSortOverflow (for: 10m, hardcoded ratio > 0.05) ──
       - eval_time: 6m
@@ -415,4 +465,4 @@ tests:
               runbook_url: ""
               owner: ""
               tier: ""
-        # db-c (maintenance) and db-d (0.02 < 0.05) produce NO alert.
+        # db-c/db-e (maintenance, via the enriched/bare arm resp.) and db-d (0.02 < 0.05) produce NO alert.
