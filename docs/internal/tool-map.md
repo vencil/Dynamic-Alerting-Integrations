@@ -176,6 +176,7 @@ lang: zh
 | `check_leftouterjoin_enrichment.py` | Left-outer-join enrichment invariant lint (ADR-024 PR3-pre Commit 3). |
 | `check_lint_toolchain_fit.py` | meta-lint: stop reinventing ESLint/stylelint. |
 | `check_log_egress_policy.py` | #566 batch D (T4-1/T4-2) egress allowlist gate. |
+| `check_maintenance_symmetry.py` | check_maintenance_symmetry — per-arm maintenance-clause symmetry guard for rule-pack alerts. |
 | `check_makefile_targets.py` | Makefile target 與 DX 工具聯動檢查 |
 | `check_md_yaml_drift.py` | Markdown 內 YAML 範例與 Schema 漂移偵測 |
 | `check_metric_dictionary.py` | Metric Dictionary 自動驗證 |
