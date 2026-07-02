@@ -455,7 +455,7 @@ Let tenants alert on disk-I/O spikes — runaway queries, backup storms, and sim
 
 ### Step A: Scrape container_fs and inject `tenant`
 
-The platform's reference `kubelet-cadvisor` job already adds `container_fs_{reads,writes}_total` + `_bytes_total` to its keep, applies a `namespace→tenant` relabel, and drops `container=""`/`"POD"` (to avoid pod-root double-counting) — see the `kubelet-cadvisor` job in [`k8s/03-monitoring/configmap-prometheus.yaml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/k8s/03-monitoring/configmap-prometheus.yaml). A BYO Prometheus should mirror it (tight keep + relabel + container drop; do NOT use a broad `container_fs_.*` — the `device` label blows up cardinality).
+The platform's reference `kubelet-cadvisor` job already adds `container_fs_{reads,writes}_total` + `_bytes_total` to its keep, applies a `namespace→tenant` relabel, and drops `container=""`/`"POD"` (to avoid pod-root double-counting) — see the `kubelet-cadvisor` job in [`k8s/03-monitoring/configmap-prometheus.yaml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/k8s/03-monitoring/configmap-prometheus.yaml). A BYO Prometheus should mirror it (tight keep + relabel + container drop; do NOT use a broad `container_fs_.*` — the `device` label blows up cardinality). The same keep must also include `container_cpu_cfs_throttled_periods_total` + `container_cpu_cfs_periods_total` (the data source for the CFS-throttle alert `PodContainerCPUThrottled`; only cpu-limited containers emit them, a cardinality subset of the cpu-usage series, #944).
 
 ### Step B: A tenant declares an IOPS recipe
 

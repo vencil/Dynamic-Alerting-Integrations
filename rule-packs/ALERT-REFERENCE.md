@@ -95,6 +95,8 @@ lang: zh
 | PodContainerHighCPUCritical | critical | [{{ $labels.tier }}] {{ $labels.tenant }}: container CPU CRITICAL  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | rule_pack_kubernetes:pod_container_high_cpu_critical:core |
 | PodContainerHighMemory | warning | [{{ $labels.tier }}] {{ $labels.tenant }}: container memory pressure  | 檢查資源消耗、優化配置；考慮增加記憶體或啟用壓縮 | rule_pack_kubernetes:pod_container_high_memory_warning:core |
 | PodContainerHighMemoryCritical | critical | [{{ $labels.tier }}] {{ $labels.tenant }}: container memory CRITICAL  | 檢查資源消耗、優化配置；考慮增加記憶體或啟用壓縮 | rule_pack_kubernetes:pod_container_high_memory_critical:core |
+| PodContainerCPUThrottled | warning | [{{ $labels.tier }}] {{ $labels.tenant }}: sustained CFS throttling  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | rule_pack_kubernetes:pod_cpu_throttled_warning:core |
+| PodContainerCPUThrottledCritical | critical | [{{ $labels.tier }}] {{ $labels.tenant }}: CFS throttling CRITICAL  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | rule_pack_kubernetes:pod_cpu_throttled_critical:core |
 | ContainerCrashLoop | critical | [{{ $labels.tier }}] {{ $labels.tenant }}: crash loop detected  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:container_waiting_reason:count |
 | ContainerImagePullFailure | warning | [{{ $labels.tier }}] {{ $labels.tenant }}: image pull failing  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:container_waiting_reason:count |
 | VersionAwareThresholdInert | warning | {{ $value \| printf "%.0f" }} version-specific container CPU threshold(s) declared and tenant pods ar | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | user_threshold |

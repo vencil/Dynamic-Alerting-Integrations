@@ -23,6 +23,7 @@ thresholdConfig:
     mysql_connections: 80
     mysql_cpu: 80
     container_cpu: 80
+    container_cpu_throttle: 25
     container_memory: 85
   state_filters:
     container_crashloop:

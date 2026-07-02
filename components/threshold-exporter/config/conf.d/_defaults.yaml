@@ -9,6 +9,7 @@ defaults:
   pg_connections: 80
   pg_replication_lag: 30
   container_cpu: 80
+  container_cpu_throttle: 25  # chronic CFS throttle: % of ACTIVE 100ms periods throttled (duty-cycle invariant, NOT "% CPU lost"); 25 = kubernetes-mixin CPUThrottlingHigh parity (#944 PR-2c)
   container_memory: 85
 
 state_filters:

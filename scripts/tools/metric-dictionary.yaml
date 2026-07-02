@@ -69,6 +69,18 @@ container_cpu_usage_seconds_total:
   rule_pack: kubernetes
   note: "容器 CPU — 使用黃金標準的 max by(tenant) 聚合"
 
+container_cpu_cfs_throttled_periods_total:
+  maps_to: container_cpu_throttle
+  golden_rule: PodContainerCPUThrottled
+  rule_pack: kubernetes
+  note: "CFS 掐頸分子 — 建議直接用 container_cpu_throttle 閾值（活躍週期被掐比例，非 CPU 時間損失；#944）"
+
+container_cpu_cfs_periods_total:
+  maps_to: container_cpu_throttle
+  golden_rule: PodContainerCPUThrottled
+  rule_pack: kubernetes
+  note: "CFS 掐頸分母（活躍週期數）— 與 throttled_periods 成對消費，同上"
+
 container_memory_working_set_bytes:
   maps_to: container_memory
   golden_rule: ContainerHighMemory

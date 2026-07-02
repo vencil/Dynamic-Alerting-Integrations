@@ -62,6 +62,8 @@ thresholdConfig:
     mysql_cpu: 80
     # Scenario B: Container resource thresholds (% of limit)
     container_cpu: 80
+    # Chronic CFS throttle: % of ACTIVE 100ms periods throttled (#944 PR-2c)
+    container_cpu_throttle: 25
     container_memory: 85
 
   # Scenario C: State-based monitoring filters

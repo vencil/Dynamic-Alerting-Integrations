@@ -455,7 +455,7 @@ da-tools byo-check prometheus --prometheus http://<your-prometheus>:9090
 
 ### 步驟 A：抓取 container_fs 並注入 `tenant`
 
-平台 reference 的 `kubelet-cadvisor` job 已把 `container_fs_{reads,writes}_total` + `_bytes_total` 納入 keep、加上 `namespace→tenant` relabel、並 drop `container=""`/`"POD"`（防 pod-root 重複計）——完整版本見 [`k8s/03-monitoring/configmap-prometheus.yaml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/k8s/03-monitoring/configmap-prometheus.yaml) 的 `kubelet-cadvisor` job。BYO 自建 Prometheus 請比照（緊 keep + relabel + container drop；別用寬 `container_fs_.*`，device label 會炸 cardinality）。
+平台 reference 的 `kubelet-cadvisor` job 已把 `container_fs_{reads,writes}_total` + `_bytes_total` 納入 keep、加上 `namespace→tenant` relabel、並 drop `container=""`/`"POD"`（防 pod-root 重複計）——完整版本見 [`k8s/03-monitoring/configmap-prometheus.yaml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/k8s/03-monitoring/configmap-prometheus.yaml) 的 `kubelet-cadvisor` job。BYO 自建 Prometheus 請比照（緊 keep + relabel + container drop；別用寬 `container_fs_.*`，device label 會炸 cardinality）。同一 keep 也需含 `container_cpu_cfs_throttled_periods_total` + `container_cpu_cfs_periods_total`（CFS 掐頸告警 `PodContainerCPUThrottled` 的資料來源；僅設 cpu limit 的容器會發出，cardinality 為 cpu-usage 序列的子集，#944）。
 
 ### 步驟 B：租戶宣告 IOPS recipe
 
