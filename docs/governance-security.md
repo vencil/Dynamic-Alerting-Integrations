@@ -215,7 +215,7 @@ Default deny-all（Ingress + Egress）+ 逐元件白名單：
 | threshold-exporter | Prometheus (8080) | DNS only |
 | kube-state-metrics | Prometheus (8080/8081) | K8s API 6443, DNS |
 | tenant-api | 4180（oauth2-proxy，全叢集）；**8080 僅 Prometheus pod（`app=prometheus`）+ threshold-govern CronJob（`component=threshold-govern`）** — pod 級白名單 | Egress opt-in（`networkPolicy.egress.enabled`，預設 off）；啟用後 DNS + Prometheus 9090 + `extraEgress`（K8s API / git forge） |
-| da-portal | 4180 + listenPort，僅 `allowedNamespaces`（monitoring + ingress-controller ns；**不含租戶 ns**） | — |
+| da-portal | 4180 + listenPort，僅 `allowedNamespaces`（monitoring + `ingress-nginx`〔values 預設；換成你的 ingress controller ns〕；**不含租戶 ns**） | — |
 
 > ⛔ **8080 是 header-trust 面（GHSA-3g2h-rf85-5rrv）**：tenant-api 的 8080 埠刻意繞過 oauth2-proxy、盲信 `X-Forwarded-Groups` / `X-Forwarded-Email`。任何能連到 8080 的 pod 可主張任意身分（含 `platform-admins`）。因此 8080 的 NetworkPolicy 必須是 **pod 級**（只放行上表兩類 workload），且 **不可停用** — 兩個 chart 的 `networkPolicy.enabled=false` 已 codified 為 `helm template` 硬失敗（tenant-api 無條件；da-portal 於 `oauth2Proxy.enabled=true` 時）。tenant-api namespace 另掛 **default-deny-ingress**（`podSelector:{}`，僅 Ingress）補齊「非 tenant-api pod 進入該 ns 即全開」的缺口。da-portal 另有 render-time **open-proxy guard**：`oauth2Proxy.enabled=false` 時強制 `portal.tenantApiUrl` / `portal.recipePreviewUrl` 為空（否則 nginx 無 strip proxy 會把 client 原始 `X-Forwarded-Groups` 直送後端 = 未認證開放代理），此 guard 為 render-time、**不依賴 CNI**。
 
