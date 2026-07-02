@@ -148,9 +148,20 @@ data:
           # an ~80× cardinality trap and most of it is unused — keep only the
           # rate-able ops + bytes counters; the rate recipe sums `by(tenant)` and
           # collapses `device` at query time.
+          # container_cpu_cfs_* (#944 PR-2c prerequisite): the CFS throttle-ratio pair
+          # (rate(throttled_periods)/rate(periods) = "how hard is the kernel choking this
+          # container") for the LIMITED tier — the USE-method signal %-of-limit cannot see.
+          # Cardinality-checked (structural): both are plain per-container counters with the
+          # SAME label shape as container_cpu_usage_seconds_total (no extra dimension — unlike
+          # the container_fs × device trap above) and cAdvisor emits them ONLY for containers
+          # with a CFS quota (i.e. a cpu limit) → a strict SUBSET of the already-kept cpu-usage
+          # series; worst case +2 series per limited db container. Inherits the db-.+ namespace
+          # keep above + the container=""/POD drop below. Collected AHEAD of the PR-2c alert
+          # rules so threshold tuning has history to look at. NOT kept (no consumer, stays
+          # dropped): container_cpu_load_average_10s and the rest of the cfs family.
           - source_labels: [__name__]
             action: keep
-            regex: "container_cpu_usage_seconds_total|container_memory_working_set_bytes|container_memory_usage_bytes|container_fs_reads_total|container_fs_writes_total|container_fs_reads_bytes_total|container_fs_writes_bytes_total"
+            regex: "container_cpu_usage_seconds_total|container_cpu_cfs_throttled_periods_total|container_cpu_cfs_periods_total|container_memory_working_set_bytes|container_memory_usage_bytes|container_fs_reads_total|container_fs_writes_total|container_fs_reads_bytes_total|container_fs_writes_bytes_total"
           # Drop the cgroup-root (container="") and pause (container="POD") series.
           # The root series is a per-POD aggregate, so summing it ALONGSIDE the
           # per-container series double-counts a pod's I/O (#692 P0④ adversarial
