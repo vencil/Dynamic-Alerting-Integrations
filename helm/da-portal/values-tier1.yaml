@@ -37,9 +37,14 @@ image:
 # Portal application settings
 portal:
   listenPort: 80
-  # Tier 1: NO tenant API proxy — portal runs in read-only static mode
-  # 租戶 API 禁用：Portal 以靜態模式運行（僅參考工具，無管理功能）
+  # Tier 1: NO reverse-proxy backends — portal runs in read-only static mode.
+  # BOTH must stay empty (GHSA-3g2h-rf85-5rrv): with oauth2Proxy disabled there is
+  # no proxy to strip client identity headers, so any non-empty target would make
+  # nginx an unauthenticated open proxy to a header-trusting backend. The da-portal
+  # networkpolicy.yaml open-proxy guard enforces this at render time.
+  # 租戶 API / recipe-preview 皆禁用：Portal 以靜態模式運行（僅參考工具，無管理/代理功能）
   tenantApiUrl: ""
+  recipePreviewUrl: ""
 
 # nginx configuration
 nginx:
