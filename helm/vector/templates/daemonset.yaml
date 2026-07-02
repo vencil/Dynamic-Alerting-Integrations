@@ -78,8 +78,12 @@ spec:
           # Least-privilege: the gate reads a ConfigMap-mounted registry + writes the
           # emptyDirs — it needs NEITHER root NOR DAC_READ_SEARCH (unlike the Vector
           # container, which reads root-owned /var/log host files). #908 PR-3 m3.
+          # `required`: `helm upgrade --reuse-values` from <=0.8.0 ERASES new chart
+          # defaults → a nil here would render `securityContext: null` (= unset) and
+          # the hardening would silently not apply. Fail loud instead (same
+          # secure-by-default posture as projectionGate.registry.configMapName).
           securityContext:
-            {{- toYaml .Values.projectionGate.securityContext | nindent 12 }}
+            {{- toYaml (required "projectionGate.securityContext is required when tenantProjections is set (nil = the least-privilege hardening silently not applied — supply it, or upgrade without --reuse-values so chart defaults apply)" .Values.projectionGate.securityContext) | nindent 12 }}
           resources:
             {{- toYaml .Values.projectionGate.resources | nindent 12 }}
           volumeMounts:
@@ -191,9 +195,10 @@ spec:
             - "--port"
             - {{ .Values.projectionGate.metrics.port | quote }}
           # Least-privilege — the exposer only reads the verdict emptyDir + binds a
-          # port; non-root, no added caps (#908 PR-3 m3).
+          # port; non-root, no added caps (#908 PR-3 m3). `required` for the same
+          # --reuse-values-erases-defaults reason as the init-container above.
           securityContext:
-            {{- toYaml .Values.projectionGate.securityContext | nindent 12 }}
+            {{- toYaml (required "projectionGate.securityContext is required when tenantProjections is set (nil = the least-privilege hardening silently not applied — supply it, or upgrade without --reuse-values so chart defaults apply)" .Values.projectionGate.securityContext) | nindent 12 }}
           ports:
             - name: gate-metrics
               containerPort: {{ .Values.projectionGate.metrics.port }}

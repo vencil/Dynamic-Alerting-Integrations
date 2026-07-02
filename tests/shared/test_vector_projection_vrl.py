@@ -465,9 +465,17 @@ class TestProjectionGateMetricsWiring:
             sc = c["securityContext"]
             assert sc["runAsNonRoot"] is True, f"{name} must be non-root"
             assert sc.get("runAsUser") == 65532, f"{name} must run as the image's 65532 uid"
+            assert sc.get("runAsGroup") == 65532, f"{name} must pin the gid too"
             assert sc["capabilities"].get("drop") == ["ALL"], f"{name} must drop ALL caps"
             assert "add" not in sc["capabilities"], f"{name} must NOT add DAC_READ_SEARCH (only Vector needs it)"
             assert sc["readOnlyRootFilesystem"] is True
+            # kube-linter L2 cannot see these containers under the DEFAULT values
+            # render (tenantProjections empty → the whole block is un-rendered), so
+            # THIS test + the values-projection.yaml lint variant are the enforced
+            # guards — pin the privilege-escalation + seccomp knobs explicitly
+            # (independent-review finding: deleting them passed every other gate).
+            assert sc["allowPrivilegeEscalation"] is False, f"{name} must forbid privilege escalation"
+            assert sc["seccompProfile"]["type"] == "RuntimeDefault", f"{name} must pin seccomp"
         # The Vector container is the deliberate exception — root + DAC_READ_SEARCH.
         vector = {c["name"]: c for c in spec["containers"]}["vector"]
         vsc = vector["securityContext"]
