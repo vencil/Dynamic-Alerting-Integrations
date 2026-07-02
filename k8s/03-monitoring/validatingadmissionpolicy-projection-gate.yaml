@@ -2,6 +2,13 @@
 # (ADR-021 Phase 2(a) / #908 PR-3). The K8s-native generalisation of the #945
 # mtail-compile lesson: a security control that can be SILENTLY removed is fragile.
 #
+# ⚠️ REQUIRES KUBERNETES >= 1.30 (admissionregistration.k8s.io/v1 GA). On older
+# clusters `kubectl apply` on this file errors with `no matches for kind
+# "ValidatingAdmissionPolicy"` (pre-1.30 it is v1beta1/alpha behind a feature
+# gate). If your cluster is < 1.30, SKIP/REMOVE this file — the policy is
+# defense-in-depth, nothing else depends on it. This matters because the
+# getting-started guide applies k8s/03-monitoring/*.yaml as one loop.
+#
 # WHAT IT GUARDS
 # --------------
 # The fail-closed projection gate (helm/vector) runs as a Vector DaemonSet
@@ -39,6 +46,17 @@
 # labels (gate intact, passes), update 2 removes the init (binding no longer
 # matches, skipped). NB a SINGLE update stripping labels+init together IS caught:
 # the binding's objectSelector matches old OR new object on UPDATE.
+#
+# EMPTY-SHELL variants (name kept, container broken — e.g. a bad merge-conflict
+# resolution) are deliberately NOT CEL-checked here, because each is already
+# covered by a cheaper layer: a MISSING image is rejected by built-in API
+# validation (image is a required field — a `has(c.image)` here would warn on a
+# request that is about to be rejected anyway); MISSING/garbled args make the
+# gate's argparse exit non-zero -> Init CrashLoopBackOff; a WRONG image wedges the
+# pod in ImagePullBackOff — both waiting states are caught by the
+# VectorProjectionGateStuck KSM alert (configmap-rules-platform.yaml, runbook
+# 8.9.3). A `has()` check cannot catch the remaining case (a VALID no-op
+# image/args), which is threat (b) above.
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy

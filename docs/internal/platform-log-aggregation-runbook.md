@@ -521,18 +521,26 @@ kubectl rollout restart ds/<vector> -n <ns>
 ```
 ⚠️ **這是唯一需要人工介入離開 degrade 的設計點**（gate 不自動重驗；重新啟用租戶路由是 operator 的明確動作，非自動）。若反覆 ghost-race，檢查部署順序（registry ConfigMap 應先於 Vector DaemonSet apply）。
 
-#### 8.9.3 `VectorProjectionGateEnforceDeadlock`（critical，enforce 模式 rollout 死鎖）
+#### 8.9.3 `VectorProjectionGateStuck`（critical，gate init 卡死 → rollout 全卡）
 
-僅當 `tenantProjectionGate: enforce`。config-bug mismatch 使 gate init **非零退出** → pod 卡 `Init:CrashLoopBackOff` → Vector 與 exposer sidecar **皆不啟動**（故 verdict metric 無人 serve，degrade alert 看不到 → 本條改靠 KSM `kube_pod_init_container_status_waiting_reason{container="projection-gate",reason="CrashLoopBackOff"}`）。DaemonSet 上 `maxUnavailable` 會**卡死整個 rollout**（rolling 中的 node 失去日誌、未滾到的 node 維持舊 config＝split-brain）。復原：
+**任何**讓 gate init **無法跑完**的狀態：pod 卡在 Init → Vector 與 exposer sidecar **皆不啟動**（故 verdict metric 無人 serve，degrade alert 看不到 → 本條改靠 KSM `kube_pod_init_container_status_waiting_reason{container="projection-gate", reason=~"CrashLoopBackOff|ImagePullBackOff|ErrImagePull|InvalidImageName|CreateContainerConfigError"}`）。DaemonSet 上 `maxUnavailable` 會**卡死整個 rollout**（rolling 中的 node 失去日誌、未滾到的 node 維持舊 config＝split-brain）。三類成因：
+- **`enforce` + config-bug mismatch**（原始場景）：gate 依設計非零退出 → `CrashLoopBackOff`
+- **image 打錯/清壞**（任何模式；Gemini #970 空殼 review 揪出——原本只 match CrashLoopBackOff 對這類**零告警**）→ `ImagePullBackOff`/`ErrImagePull`/`InvalidImageName`
+- **args/entrypoint 壞掉、staging ConfigMap 缺失**（任何模式）→ `CrashLoopBackOff`/`CreateContainerConfigError`
+
+（更名註記：原名 `VectorProjectionGateEnforceDeadlock`——matcher 擴到 image-level 卡死後「enforce」成為 misnomer（degrade 模式也會中），比照 #944 名實相符原則趁早改。）復原：
 
 ```bash
-# 1) 看卡住那刻的 gate 退出原因（--previous 取已崩潰容器的 log）
+# 1) 先看卡住的 waiting reason（分辨 config-bug vs image vs configmap 缺失）
+kubectl describe pod <stuck-vector-pod> -n <ns> | grep -A3 "State:\|Reason:"
+# 2a) CrashLoopBackOff（enforce config-bug）→ 看 gate 退出原因、REVERT 錯的 tenantProjections
 kubectl logs <vector-pod> -c projection-gate --previous
-# 2) 這是 fail-closed 正常運作——REVERT 那筆錯的 tenantProjections（或修對 config 後刪卡住的 pod）
-kubectl delete pod <stuck-vector-pod> -n <ns>   # 修好 config 後，讓它以正確 config 重排
+# 2b) ImagePullBackOff 類 → 修 projectionGate.image（tag/repo 打錯、或 overlay 清壞了 image）
+# 2c) CreateContainerConfigError → staging/registry ConfigMap 名字或存在性
+kubectl delete pod <stuck-vector-pod> -n <ns>   # 修好後，讓它以正確 spec 重排
 ```
-📝 **解除滯後（正常現象，勿驚慌）**：本 alert 的 expr 用 `max_over_time(...[5m])` 防抖（見規則註解）。你修好 config、看到新 pod 回 `Running` 後，**alert 仍會續鳴約 5 分鐘才自動 resolve**——因為那條回溯窗還會掃到剛才的 `CrashLoopBackOff` 樣本，`> 0` 在窗口滑出前仍成立。這是換取告警穩定（不因 backoff 間短暫重啟而漏發）的合理代價，不是卡住。
-**模式取捨**：若「硬卡 rollout」比「fail-available 退回 0:0」更糟（多數平台是），用預設 `degrade` 模式——它把同一筆抄錯轉成 §8.9.1 的可觀測降級而非死鎖。`enforce` 只適合「寧可全斷也不要錯路由」的偏執環境。
+📝 **解除滯後（正常現象，勿驚慌）**：本 alert 的 expr 用 `max_over_time(...[5m])` 防抖（見規則註解）。你修好 config、看到新 pod 回 `Running` 後，**alert 仍會續鳴約 5 分鐘才自動 resolve**——因為那條回溯窗還會掃到剛才的 waiting 樣本，`> 0` 在窗口滑出前仍成立。這是換取告警穩定（不因 backoff 間短暫重啟而漏發）的合理代價，不是卡住。
+**模式取捨**：若「硬卡 rollout」比「fail-available 退回 0:0」更糟（多數平台是），用預設 `degrade` 模式——它把 config-bug 抄錯轉成 §8.9.1 的可觀測降級而非死鎖（但 image/configmap 類卡死與模式無關，兩種模式都會中本 alert）。`enforce` 只適合「寧可全斷也不要錯路由」的偏執環境。
 
 **觀測層自身的盲點（誠實標註）**：(a) 若 exposer sidecar 全掛（或 Service/scrape 斷），§8.9.1/8.9.2 的 verdict-metric alert 會失明——但那同時是一場 Vector 全面故障，另有其面向；KSM 路徑（§8.9.3）不受影響。(b) `tenantProjections` 未啟用時不部署 sidecar/Service，故**不**設「verdict metric absent」哨兵 alert（否則每個未用投影的部署都假性 fire）；gate 觀測只在投影啟用時存在。
 

@@ -13,12 +13,15 @@
 #     3) do NOT cross-fire: mismatch ignores registry_unreadable and vice-versa, and
 #        NEITHER fires on the healthy category="ok" verdict.
 #
-#   VectorProjectionGateEnforceDeadlock (KSM init-container signal — the case where
+#   VectorProjectionGateStuck (KSM init-container signal — the case where
 #   the verdict metric is NEVER served because the pod never leaves Init):
 #     4) FIRES on container="projection-gate" + reason="CrashLoopBackOff", debounced,
 #        aggregating to {severity, namespace}.
 #     5) does NOT fire on a benign init wait (reason="PodInitializing") nor on a
 #        DIFFERENT container crashlooping (container="vector") — scoping guards.
+#     6) FIRES on reason="ImagePullBackOff" — the wrong-image wedge (Gemini #970
+#        empty-shell review). LOAD-BEARING: this case is RED on the original
+#        CrashLoopBackOff-only matcher, pinning the broadened reason regex.
 #
 # Evaluated at 1m resolution so the `for: 5m` window is cheap and exact.
 # Run: promtool test rules tests/rulepacks/platform-projection-gate_test.yaml
@@ -118,16 +121,16 @@ tests:
         values: '1+0x9'
     alert_rule_test:
       - eval_time: 4m   # crashlooping since t0 but < for:5m → PENDING
-        alertname: VectorProjectionGateEnforceDeadlock
+        alertname: VectorProjectionGateStuck
         exp_alerts: []
       - eval_time: 6m
-        alertname: VectorProjectionGateEnforceDeadlock
+        alertname: VectorProjectionGateStuck
         exp_alerts:
           - exp_labels:
               severity: critical
               namespace: monitoring
             exp_annotations:
-              summary: "Vector projection-gate init-container is CrashLoopBackOff (enforce mode) — DaemonSet rollout deadlocked in monitoring"
+              summary: "Vector projection-gate init-container is stuck (crash loop / image pull) — DaemonSet rollout wedged in monitoring"
 
   # 7) a benign init wait (PodInitializing) must NOT fire the deadlock alert — only
   #    CrashLoopBackOff is the deadlock signal (a normal startup briefly waits).
@@ -138,7 +141,7 @@ tests:
         values: '1+0x9'
     alert_rule_test:
       - eval_time: 6m
-        alertname: VectorProjectionGateEnforceDeadlock
+        alertname: VectorProjectionGateStuck
         exp_alerts: []
 
   # 8) a DIFFERENT container crashlooping (not the gate) must NOT fire — the
@@ -150,7 +153,7 @@ tests:
         values: '1+0x9'
     alert_rule_test:
       - eval_time: 6m
-        alertname: VectorProjectionGateEnforceDeadlock
+        alertname: VectorProjectionGateStuck
         exp_alerts: []
 
   # 9) FLAPPING crashloop: the CrashLoopBackOff series drops to absent while kubelet
@@ -170,13 +173,37 @@ tests:
         values: '1 _ 1 _ 1 _ 1 _ 1 _'   # present every other minute (gaps = brief re-run)
     alert_rule_test:
       - eval_time: 4m   # crashlooping since t0 but < for:5m → PENDING despite the gaps
-        alertname: VectorProjectionGateEnforceDeadlock
+        alertname: VectorProjectionGateStuck
         exp_alerts: []
       - eval_time: 7m
-        alertname: VectorProjectionGateEnforceDeadlock
+        alertname: VectorProjectionGateStuck
         exp_alerts:
           - exp_labels:
               severity: critical
               namespace: monitoring
             exp_annotations:
-              summary: "Vector projection-gate init-container is CrashLoopBackOff (enforce mode) — DaemonSet rollout deadlocked in monitoring"
+              summary: "Vector projection-gate init-container is stuck (crash loop / image pull) — DaemonSet rollout wedged in monitoring"
+
+  # 10) WRONG-IMAGE wedge: a garbled/typo'd gate image never pulls → the init sits in
+  #     ImagePullBackOff, in ANY mode, and the verdict metric is never served (Vector +
+  #     sidecar never start). LOAD-BEARING distinguisher (Gemini #970 empty-shell
+  #     review): the original reason="CrashLoopBackOff" matcher was BLIND here — a
+  #     zero-alert cluster-wide rollout wedge; this case is RED on that matcher and
+  #     pins the broadened reason=~ regex.
+  - interval: 1m
+    name: image-pull-wedge-fires
+    input_series:
+      - series: 'kube_pod_init_container_status_waiting_reason{container="projection-gate", reason="ImagePullBackOff", namespace="monitoring", pod="vector-jkl78", instance="10.0.0.9:8080", job="kube-state-metrics"}'
+        values: '1+0x9'
+    alert_rule_test:
+      - eval_time: 4m   # wedged since t0 but < for:5m → PENDING (same debounce contract)
+        alertname: VectorProjectionGateStuck
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: VectorProjectionGateStuck
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              namespace: monitoring
+            exp_annotations:
+              summary: "Vector projection-gate init-container is stuck (crash loop / image pull) — DaemonSet rollout wedged in monitoring"
