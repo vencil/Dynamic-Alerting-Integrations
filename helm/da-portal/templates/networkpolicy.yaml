@@ -8,6 +8,24 @@
 {{- if and .Values.oauth2Proxy.enabled (not .Values.networkPolicy.enabled) }}
 {{- fail "networkPolicy.enabled=false is forbidden when oauth2Proxy.enabled=true: da-portal then fronts tenant-api's header-trusting path; the NetworkPolicy is a REQUIRED security control (GHSA-3g2h-rf85-5rrv), not an optional feature." }}
 {{- end }}
+{{- /*
+  Open-proxy guard (GHSA-3g2h-rf85-5rrv). nginx reverse-proxies /api/v1/ ->
+  tenantApiUrl and /preview -> recipePreviewUrl, forwarding the RAW client
+  X-Forwarded-Groups/Email headers (configmap-nginx.yaml). The oauth2-proxy
+  sidecar is the ONLY thing that strips client-supplied identity headers before
+  nginx sees them. With oauth2Proxy.enabled=false there is no stripping proxy, so
+  any upstream still configured turns nginx into an UNAUTHENTICATED open proxy to
+  a header-trusting backend (assert X-Forwarded-Groups: platform-admins -> fleet
+  admin). A Tier-1 static-only portal (no auth proxy) MUST therefore carry no
+  reverse-proxy targets. This is render-time and CNI-independent — it does not
+  rely on the NetworkPolicy being enforced. If a deployment fronts da-portal with
+  an EXTERNAL auth proxy that strips client identity headers, that is a distinct
+  (currently unsupported) topology; add an explicit opt-in value before relaxing
+  this — do not silently widen it.
+*/ -}}
+{{- if and (not .Values.oauth2Proxy.enabled) (or .Values.portal.tenantApiUrl .Values.portal.recipePreviewUrl) }}
+{{- fail "oauth2Proxy.enabled=false requires portal.tenantApiUrl AND portal.recipePreviewUrl to be empty (GHSA-3g2h-rf85-5rrv): with no auth proxy stripping client headers, nginx would forward raw X-Forwarded-Groups to a header-trusting backend = unauthenticated identity spoofing. A static-only (Tier 1) portal must not reverse-proxy to tenant-api/recipe-preview." }}
+{{- end }}
 {{- if .Values.networkPolicy.enabled }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
