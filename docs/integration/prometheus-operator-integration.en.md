@@ -2,7 +2,7 @@
 title: "Prometheus Operator Integration Guide (Hub)"
 tags: [operator, integration, kube-prometheus-stack]
 audience: [platform-engineer]
-version: v2.9.0
+version: v2.9.1
 lang: en
 ---
 # Prometheus Operator Integration Guide

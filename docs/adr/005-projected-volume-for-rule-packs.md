@@ -2,7 +2,7 @@
 title: "ADR-005: 投影卷掛載 Rule Pack"
 tags: [adr, architecture]
 audience: [platform-engineers]
-version: v2.9.0
+version: v2.9.1
 lang: zh
 id: ADR-005
 tracking_kind: adr

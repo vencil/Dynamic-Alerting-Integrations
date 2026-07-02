@@ -1,0 +1,19 @@
+tenant-api installed — ADR-009 Tenant Manager CRUD API.
+
+  Service   : {{ include "tenant-api.name" . }}.{{ .Release.Namespace }}.svc
+  Write mode: single-writer (replicaCount={{ .Values.replicaCount }}, strategy Recreate)
+
+SECURITY (GHSA-3g2h-rf85-5rrv) — internal port 8080 BYPASSES oauth2-proxy and
+  blindly trusts X-Forwarded-Groups / X-Forwarded-Email. Anything that can reach
+  8080 can assert ANY identity (incl. platform-admins -> fleet admin write +
+  federation token minting + git PR-write). The pod-scoped NetworkPolicy (only
+  Prometheus + threshold-govern admitted) is the ONLY control on that port — this
+  is why networkPolicy.enabled=false is a hard failure.
+
+NetworkPolicy only works if your CNI ENFORCES it. Flannel (base) and some managed
+  "simple" CNIs SILENTLY IGNORE NetworkPolicy: the API server accepts it and this
+  install succeeds, but port 8080 is left open to the whole cluster (security
+  theater). Use a NetworkPolicy-aware CNI (Calico / Cilium / Antrea) and verify by
+  sending a packet that SHOULD be denied — do not trust a successful install. The
+  CNI-independent root-cause fix is L7 identity verification (roadmap #5); this
+  policy is L4 defense-in-depth.

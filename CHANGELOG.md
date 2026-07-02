@@ -13,6 +13,20 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 
 <!-- 下一版 in-flight 工作暫存區。每筆 entry 目標 3-6 行使用者重點 + 一行指回內部 artifact；session 過程 / FUSE trap / 完整 commit list 不入此處。release 收尾時做最終 condensation 並切正式 `## [vX.Y.Z]` heading。 -->
 
+## [v2.9.1] — 安全 hotfix：header-trust NetworkPolicy 硬化 (GHSA-3g2h-rf85-5rrv) (2026-07-02)
+
+Security hotfix，backport 於 v2.9.0 之上。收斂 tenant-api / da-portal 的身分標頭信任面（GHSA-3g2h-rf85-5rrv）——一個叢集內、需 monitoring/租戶 ns 立足點才可觸發的提權面（RED/High，非遠端可利用）。純 Helm chart / 運維文件變更，無 component binary 改動。
+
+### Security
+
+- **tenant-api header-trust 面硬化（GHSA-3g2h-rf85-5rrv）**：內部 8080 埠刻意繞過 oauth2-proxy、盲信 `X-Forwarded-Groups` / `X-Forwarded-Email`，原 NetworkPolicy 僅 namespace 級 → monitoring ns 內任一 pod 可偽造身分（含 `platform-admins`）。收斂為 **pod 級白名單**（僅 `app=prometheus` + `component=threshold-govern`）＋ namespace **default-deny-ingress**；並把 `networkPolicy.enabled=false`（及空 `internalPortAllow` selector）codified 為 `helm template` 硬失敗（fail-closed）。
+- **da-portal 收斂 + open-proxy guard**：`allowedNamespaces` 移除租戶 ns（`db-a`/`db-b`）；新增 render-time guard——`oauth2Proxy.enabled=false` 時強制 `portal.tenantApiUrl` 為空（否則 nginx 無 strip proxy 會把 client 原始標頭直送 header-trusting 後端＝未認證開放代理）。
+- **文件 / 運維可見性**：`governance-security.md` 補 header-trust + **CNI-enforcement（security theater）** 警告；tenant-api / da-portal chart 新增 install-time `NOTES.txt`。此為 **L4 縱深止血**；與 CNI 無關的根因層 L7 caller 身分驗證另行追蹤。
+
+### 版號
+
+- 平台 `v2.9.0 → v2.9.1`；tenant-api chart `2.9.7 → 2.9.8`（OCI 重發，appVersion `2.7.0` 不變）。da-portal chart 不變（image 未動、chart 隨 repo 樹發佈）。
+
 ## [v2.9.0] — 租戶自助告警 (Custom Alerts) + 租戶聯邦 + 寫入平面韌性 (2026-06-06)
 
 v2.9.0 把平台從「平台 authored 告警」推進為**租戶自助的宣告式告警引擎**，並讓 v2.8.0 outline 的多項深水區能力落地。戰略主題是**從第一個客戶的實際使用去 harden — reactive > predictive**：三條主線是 (1) **Custom Alerts**（租戶用平台 authored 的參數化 recipe 自訂告警、**不寫 PromQL**，ADR-024 能力 B）、(2) **Tenant Federation**（ADR-020 token endpoint + gateway + policy + offboarding 從 outline 走到可部署）、(3) **寫入平面 single-writer 韌性**（ADR-023 把 GitOps 寫入路徑的幽靈寫者 / 孤兒寫入 / rate-limit / 優雅關機系統性補強）。同時平台日誌彙整、IaC SAST 四層、與一輪 silent-failure 反應式硬化（含一個燒了兩個月的 P0 prod drift）一併收斂。

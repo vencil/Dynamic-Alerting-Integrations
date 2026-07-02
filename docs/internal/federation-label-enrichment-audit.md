@@ -2,7 +2,7 @@
 title: "Federation Data-Layer Label Enrichment Audit（IV-2.0 / #505）"
 tags: [internal, federation, audit]
 audience: [platform-engineer, sre]
-version: v2.9.0
+version: v2.9.1
 lang: zh
 ---
 

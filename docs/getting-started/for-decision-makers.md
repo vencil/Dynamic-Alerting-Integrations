@@ -2,7 +2,7 @@
 title: "決策者 / 主管評估指南"
 tags: [getting-started, evaluation]
 audience: [decision-maker]
-version: v2.9.0
+version: v2.9.1
 lang: zh
 ---
 # 決策者 / 主管評估指南

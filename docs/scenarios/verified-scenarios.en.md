@@ -2,7 +2,7 @@
 title: "Verified Scenarios & Platform Behavior"
 tags: [scenario, testing, maintenance]
 audience: [platform-engineer, sre, decision-maker]
-version: v2.9.0
+version: v2.9.1
 lang: en
 ---
 # Verified Scenarios & Platform Behavior

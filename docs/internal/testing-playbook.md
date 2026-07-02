@@ -2,7 +2,7 @@
 title: "測試注意事項 — 排錯手冊 (Testing Playbook)"
 tags: [documentation]
 audience: [all]
-version: v2.9.0
+version: v2.9.1
 verified-at-version: v2.8.0
 lang: zh
 ---

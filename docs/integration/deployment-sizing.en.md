@@ -2,7 +2,7 @@
 title: "Deployment Sizing Guide"
 tags: [deployment, sizing, memory, performance]
 audience: [platform-engineer, sre, devops]
-version: v2.9.0
+version: v2.9.1
 lang: en
 ---
 # Deployment Sizing Guide

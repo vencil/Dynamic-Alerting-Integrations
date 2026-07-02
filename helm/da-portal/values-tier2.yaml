@@ -171,13 +171,14 @@ podSecurityContext:
 # 啟用 NetworkPolicy：限制進出站流量，提高安全性
 networkPolicy:
   enabled: true
-  # Namespaces allowed to query Portal (client-side)
-  # 允許訪問 Portal 的命名空間列表
+  # Namespaces allowed to reach the Portal (client-side).
+  # ⛔ SECURITY (GHSA-3g2h-rf85-5rrv): do NOT list tenant namespaces (db-a/db-b).
+  # Browser traffic arrives via the ingress controller (→ oauth2-proxy), NOT from
+  # tenant pods; admitting a tenant ns widens the blast radius of a compromised tenant.
+  # 允許訪問 Portal 的命名空間（僅基礎設施來源）：
   allowedNamespaces:
-    - monitoring    # Infrastructure metrics
-    - db-a          # Tenant A
-    - db-b          # Tenant B
-    - default       # Optional: if Portal accessed from default NS
+    - monitoring     # Infrastructure metrics / internal health checks
+    - ingress-nginx  # Ingress controller fronting external browser traffic
 
 # Pod annotations for monitoring / logging
 # 如有 Prometheus、Loki 等監控系統，可新增相應註解

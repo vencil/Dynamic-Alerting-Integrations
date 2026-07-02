@@ -2,7 +2,7 @@
 title: "治理、稽核與安全合規"
 tags: [governance, security, audit]
 audience: [platform-engineer, security]
-version: v2.9.0
+version: v2.9.1
 lang: zh
 ---
 # 治理、稽核與安全合規
@@ -214,6 +214,12 @@ Default deny-all（Ingress + Egress）+ 逐元件白名單：
 | Grafana | monitoring namespace (3000) | Prometheus 9090, DNS |
 | threshold-exporter | Prometheus (8080) | DNS only |
 | kube-state-metrics | Prometheus (8080/8081) | K8s API 6443, DNS |
+| tenant-api | 4180（oauth2-proxy，全叢集）；**8080 僅 Prometheus pod（`app=prometheus`）+ threshold-govern CronJob（`component=threshold-govern`）** — pod 級白名單 | Egress opt-in（`networkPolicy.egress.enabled`，預設 off） |
+| da-portal | 4180 + listenPort，僅 `allowedNamespaces`（monitoring + `ingress-nginx`；**不含租戶 ns**） | — |
+
+> ⛔ **8080 是 header-trust 面（GHSA-3g2h-rf85-5rrv）**：tenant-api 的 8080 埠刻意繞過 oauth2-proxy、盲信 `X-Forwarded-Groups` / `X-Forwarded-Email`。任何能連到 8080 的 pod 可主張任意身分（含 `platform-admins`）。因此 8080 的 NetworkPolicy 必須是 **pod 級**（只放行上表兩類 workload），且 **不可停用** — 兩個 chart 的 `networkPolicy.enabled=false` 已 codified 為 `helm template` 硬失敗（tenant-api 無條件；da-portal 於 `oauth2Proxy.enabled=true` 時）。tenant-api namespace 另掛 **default-deny-ingress**（`podSelector:{}`，僅 Ingress）。da-portal 另有 render-time **open-proxy guard**：`oauth2Proxy.enabled=false` 時強制 `portal.tenantApiUrl` 為空（否則 nginx 無 strip proxy 會把 client 原始 header 直送後端 = 未認證開放代理）。
+
+> ⚠️ **NetworkPolicy 需 CNI 支援才生效（避免安全劇場）**：上述 8080 pod 級限制、default-deny-ingress 全部依賴叢集 CNI 實作 NetworkPolicy。若 CNI 不支援（基礎版 Flannel、部分雲廠商預設簡易 CNI），K8s API server 仍會「接受」物件、`helm install` 也成功，但流量**完全不受限** — 8080 對整個叢集敞開（*security theater*）。生產務必用 NetworkPolicy-aware CNI（Calico / Cilium / Antrea）並以「實際送一個應被拒的封包」實測 enforcement。與 CNI 無關的終局是 L7 caller 身分驗證；本節 NetworkPolicy 為 L4 stopgap。
 
 ### Portal 安全標頭
 

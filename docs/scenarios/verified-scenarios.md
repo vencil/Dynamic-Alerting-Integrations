@@ -2,7 +2,7 @@
 title: "驗證場景與平台行為 (Verified Scenarios)"
 tags: [scenario, testing, maintenance]
 audience: [platform-engineer, sre, decision-maker]
-version: v2.9.0
+version: v2.9.1
 lang: zh
 ---
 # 驗證場景與平台行為 (Verified Scenarios)

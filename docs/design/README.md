@@ -2,7 +2,7 @@
 title: "設計深潛導覽 — 架構 spoke 文件"
 tags: [design, architecture, navigation]
 audience: [platform-engineer, devops]
-version: v2.9.0
+version: v2.9.1
 lang: zh
 ---
 

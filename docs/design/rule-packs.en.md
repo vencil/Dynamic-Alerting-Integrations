@@ -2,7 +2,7 @@
 title: "Rule Packs & Projected Volume Architecture"
 tags: [architecture, rule-packs, design]
 audience: [platform-engineer, devops]
-version: v2.9.0
+version: v2.9.1
 lang: en
 parent: architecture-and-design.en.md
 ---

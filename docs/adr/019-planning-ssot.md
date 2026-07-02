@@ -2,7 +2,7 @@
 title: "ADR-019: Planning SSOT — Frontmatter Contract + Discovery-based Index"
 tags: [adr, dx, planning, ai-agent, governance]
 audience: [platform-engineers, contributors, ai-agents]
-version: v2.9.0
+version: v2.9.1
 lang: zh
 id: ADR-019
 tracking_kind: adr

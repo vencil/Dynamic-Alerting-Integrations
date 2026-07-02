@@ -2,7 +2,7 @@
 title: "ADR-024: Declarative Dimensional Alerting Engine — Version-Aware Thresholds + Custom Alerts"
 tags: [adr, threshold-exporter, rule-pack, alerting, dimensional-metric, gitops]
 audience: [platform-engineers, contributors, sre]
-version: v2.9.0
+version: v2.9.1
 lang: en
 ---
 

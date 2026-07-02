@@ -2,7 +2,7 @@
 title: "Version-Aware Thresholds — 版本感知閾值使用攻略"
 tags: [scenarios, version-aware, threshold, rolling-upgrade, kubernetes, lifecycle]
 audience: [tenant-admins, platform-engineers, sre]
-version: v2.9.0
+version: v2.9.1
 lang: zh
 ---
 

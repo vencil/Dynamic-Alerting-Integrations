@@ -2,14 +2,14 @@
 title: "Scenario: Multi-Domain Hierarchical Configuration — conf.d/ Directory Restructuring (v2.7.0)"
 tags: [scenario, configuration, conf.d, hierarchy, multi-domain]
 audience: [platform-engineer, operator, devops]
-version: v2.9.0
+version: v2.9.1
 lang: en
 ---
 # Scenario: Multi-Domain Hierarchical Configuration — conf.d/ Directory Restructuring (v2.7.0)
 
 > **Language / 語言：** **English (Current)** | [中文](./multi-domain-conf-layout.md)
 
-> **v2.9.0** | Related docs: [ADR-016 (Architecture Decision)](../adr/016-conf-d-directory-hierarchy-mixed-mode.md), [ADR-017 (Inheritance)](../adr/017-defaults-yaml-inheritance-dual-hash.md)
+> **v2.9.1** | Related docs: [ADR-016 (Architecture Decision)](../adr/016-conf-d-directory-hierarchy-mixed-mode.md), [ADR-017 (Inheritance)](../adr/017-defaults-yaml-inheritance-dual-hash.md)
 
 ## Background and Problem
 

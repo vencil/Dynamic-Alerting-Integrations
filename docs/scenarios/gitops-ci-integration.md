@@ -2,14 +2,14 @@
 title: "場景：GitOps CI/CD 整合指南"
 tags: [scenario, gitops, ci-cd, adoption]
 audience: [platform-engineer]
-version: v2.9.0
+version: v2.9.1
 lang: zh
 ---
 # 場景：GitOps CI/CD 整合指南
 
 > **Language / 語言：** **中文 (Current)** | [English](./gitops-ci-integration.en.md)
 
-> **v2.9.0** | 相關文件：[`architecture-and-design.md`](../architecture-and-design.md)、[`for-platform-engineers.md`](../getting-started/for-platform-engineers.md)、[`cli-reference.md`](../cli-reference.md) · 互動工具：[CI/CD Setup Wizard](../assets/jsx-loader.html?component=../interactive/tools/cicd-setup-wizard.jsx)
+> **v2.9.1** | 相關文件：[`architecture-and-design.md`](../architecture-and-design.md)、[`for-platform-engineers.md`](../getting-started/for-platform-engineers.md)、[`cli-reference.md`](../cli-reference.md) · 互動工具：[CI/CD Setup Wizard](../assets/jsx-loader.html?component=../interactive/tools/cicd-setup-wizard.jsx)
 
 ## 概述
 

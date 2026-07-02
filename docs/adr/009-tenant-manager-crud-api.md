@@ -2,7 +2,7 @@
 title: "ADR-009: Tenant Manager CRUD API 架構"
 tags: [adr, architecture, api, tenant-management]
 audience: [platform-engineers, developers]
-version: v2.9.0
+version: v2.9.1
 lang: zh
 id: ADR-009
 tracking_kind: adr

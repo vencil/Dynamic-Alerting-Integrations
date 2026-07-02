@@ -2,14 +2,14 @@
 title: "Pitch Deck Talking Points — v2.8.0 Phase 1 Baseline"
 tags: [internal, pitch, sales, baseline]
 audience: [maintainers, business]
-version: v2.9.0
+version: v2.9.1
 lang: zh
 ---
 
 # Pitch Deck Talking Points — v2.8.0 Phase 1 Baseline
 
 > **受眾**：Maintainers + business / sales（內部對外溝通協作）
-> **版本**：v2.9.0（current canonical；Phase 1 baseline 量測於 `v2.8.0` 開發中）
+> **版本**：v2.9.1（current canonical；Phase 1 baseline 量測於 `v2.8.0` 開發中）
 >
 > **相關文件**：[Benchmark Playbook §v2.8.0 1000-Tenant Hierarchical Baseline](./benchmark-playbook.md#v280-1000-tenant-hierarchical-baseline-phase-1-b-1) · [ADR-017: dual-hash hot-reload](../adr/017-defaults-yaml-inheritance-dual-hash.md) · [`config_debounce.go`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/app/config_debounce.go)
 

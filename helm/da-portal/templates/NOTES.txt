@@ -1,0 +1,19 @@
+da-portal installed.
+
+  Service : {{ include "da-portal.name" . }}.{{ .Release.Namespace }}.svc
+  Auth    : {{ if .Values.oauth2Proxy.enabled }}oauth2-proxy sidecar (client identity headers stripped + re-set){{ else }}NONE — static-only Tier 1 (reverse-proxy target must be empty){{ end }}
+
+SECURITY (GHSA-3g2h-rf85-5rrv) — header-trust surface:
+  nginx reverse-proxies /api/v1/ to tenant-api, forwarding X-Forwarded-Groups /
+  X-Forwarded-Email. tenant-api TRUSTS that header on its internal port 8080
+  (oauth2-proxy bypass). The NetworkPolicy shipped here is a REQUIRED control, not
+  optional — this is why oauth2Proxy.enabled=false forbids a non-empty
+  reverse-proxy target (render fails).
+
+NetworkPolicy only works if your CNI ENFORCES it. Flannel (base) and some managed
+  "simple" CNIs SILENTLY IGNORE NetworkPolicy: the API server accepts it and this
+  install succeeds, but traffic is left unrestricted (security theater). Use a
+  NetworkPolicy-aware CNI (Calico / Cilium / Antrea) and verify by sending a packet
+  that SHOULD be denied — do not trust a successful install. The CNI-independent
+  root-cause fix is L7 identity verification (roadmap #5); this policy is L4
+  defense-in-depth.

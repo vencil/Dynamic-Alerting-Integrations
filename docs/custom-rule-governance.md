@@ -2,7 +2,7 @@
 title: "多租戶客製化規則治理規範 (Custom Rule Governance Model)"
 tags: [governance, custom-rules]
 audience: [platform-engineer]
-version: v2.9.0
+version: v2.9.1
 lang: zh
 ---
 # 多租戶客製化規則治理規範 (Custom Rule Governance Model)

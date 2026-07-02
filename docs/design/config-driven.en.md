@@ -2,7 +2,7 @@
 title: "Config-Driven Architecture Design — Three-State Config, Dynamic Routing, Tenant API"
 tags: [architecture, config-driven, design]
 audience: [platform-engineer, devops]
-version: v2.9.0
+version: v2.9.1
 lang: en
 parent: architecture-and-design.en.md
 ---

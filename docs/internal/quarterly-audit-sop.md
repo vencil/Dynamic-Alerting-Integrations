@@ -2,7 +2,7 @@
 title: "季度 Rule-corpus Drift 稽核 SOP"
 tags: [internal, dx, governance, sop]
 audience: [maintainers]
-version: v2.9.0
+version: v2.9.1
 verified-at-version: v2.8.1
 lang: zh
 ---

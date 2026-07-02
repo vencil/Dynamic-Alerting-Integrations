@@ -2,7 +2,7 @@
 title: "Threshold Exporter API Reference"
 tags: [api, reference, threshold-exporter]
 audience: [platform-engineer, sre]
-version: v2.9.0
+version: v2.9.1
 lang: zh
 ---
 

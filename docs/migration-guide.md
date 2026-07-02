@@ -2,7 +2,7 @@
 title: "Migration Guide — 遷移指南"
 tags: [migration, getting-started]
 audience: [tenant, devops, platform-engineer, sre]
-version: v2.9.0
+version: v2.9.1
 lang: zh
 ---
 # Migration Guide — 遷移指南

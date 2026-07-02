@@ -2,7 +2,7 @@
 title: "VictoriaMetrics Integration Guide"
 tags: [integration, victoriametrics, vmagent, vmalert, metricsql]
 audience: [platform-engineers, sre, vm-operators]
-version: v2.9.0
+version: v2.9.1
 lang: en
 ---
 

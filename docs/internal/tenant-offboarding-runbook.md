@@ -2,7 +2,7 @@
 title: "租戶 Offboarding Runbook — Federation 清理"
 tags: [runbook, federation, offboarding, security, operations]
 audience: [platform-engineers, sre]
-version: v2.9.0
+version: v2.9.1
 lang: zh
 status: active
 domain: tenant-api

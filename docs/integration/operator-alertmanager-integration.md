@@ -2,7 +2,7 @@
 title: "Operator Alertmanager 整合指南"
 tags: [operator, alertmanager, integration, receiver]
 audience: [platform-engineer]
-version: v2.9.0
+version: v2.9.1
 lang: zh
 ---
 # Operator Alertmanager 整合指南

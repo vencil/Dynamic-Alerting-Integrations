@@ -2,7 +2,7 @@
 title: "Hook / Skill 邊界稽核矩陣"
 tags: [internal, dx, governance, ai-agent]
 audience: [ai-agents, maintainers]
-version: v2.9.0
+version: v2.9.1
 verified-at-version: v2.8.1
 lang: zh
 ---

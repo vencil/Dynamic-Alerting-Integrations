@@ -2,7 +2,7 @@
 title: "ADR-005: Projected Volume for Rule Packs"
 tags: [adr, architecture]
 audience: [platform-engineers]
-version: v2.9.0
+version: v2.9.1
 lang: en
 ---
 

@@ -2,7 +2,7 @@
 title: "Skill-system Feature Requests（upstream：Anthropic / Cowork）"
 tags: [internal, dx, ai-agent, upstream]
 audience: [maintainers, ai-agents]
-version: v2.9.0
+version: v2.9.1
 verified-at-version: v2.8.1
 lang: zh
 ---

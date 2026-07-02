@@ -2,7 +2,7 @@
 title: "部署容量規劃指南"
 tags: [deployment, sizing, memory, performance]
 audience: [platform-engineer, sre, devops]
-version: v2.9.0
+version: v2.9.1
 lang: zh
 ---
 # 部署容量規劃指南

@@ -2,7 +2,7 @@
 title: "ADR-009: Tenant Manager CRUD API Architecture"
 tags: [adr, architecture, api, tenant-management]
 audience: [platform-engineers, developers]
-version: v2.9.0
+version: v2.9.1
 lang: en
 ---
 

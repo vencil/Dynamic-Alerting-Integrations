@@ -2,7 +2,7 @@
 title: "Architecture and Design — Multi-Tenant Dynamic Alerting Platform Technical Whitepaper"
 tags: [architecture, core-design]
 audience: [platform-engineer, sre, decision-maker]
-version: v2.9.0
+version: v2.9.1
 lang: en
 ---
 # Architecture and Design — Multi-Tenant Dynamic Alerting Platform Technical Whitepaper

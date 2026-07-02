@@ -2,7 +2,7 @@
 title: "ADR-016: conf.d/ 目錄分層 + 混合模式 + 遷移策略"
 tags: [adr, conf.d, directory-scanner, hierarchy, migration, v2.7.0]
 audience: [platform-engineers, sre, contributors]
-version: v2.9.0
+version: v2.9.1
 lang: zh
 id: ADR-016
 tracking_kind: adr

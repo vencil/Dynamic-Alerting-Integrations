@@ -2,7 +2,7 @@
 title: "ADR-023: tenant-api 寫入平面 — 單一寫者不變式"
 tags: [adr, tenant-api, gitops, scalability, resilience]
 audience: [platform-engineers, contributors]
-version: v2.9.0
+version: v2.9.1
 lang: zh
 id: ADR-023
 tracking_kind: adr

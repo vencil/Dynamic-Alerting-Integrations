@@ -2,7 +2,7 @@
 title: "ADR-008: Operator-Native 整合路徑"
 tags: [adr, architecture, operator]
 audience: [platform-engineers]
-version: v2.9.0
+version: v2.9.1
 lang: zh
 id: ADR-008
 tracking_kind: adr

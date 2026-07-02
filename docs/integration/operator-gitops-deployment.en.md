@@ -2,7 +2,7 @@
 title: "Operator GitOps Deployment Guide"
 tags: [operator, gitops, argocd, flux]
 audience: [platform-engineer]
-version: v2.9.0
+version: v2.9.1
 lang: en
 ---
 # Operator GitOps Deployment Guide

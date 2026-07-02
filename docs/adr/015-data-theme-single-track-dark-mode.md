@@ -2,7 +2,7 @@
 title: "ADR-015: 全面改用 `[data-theme]` 單軌 dark mode，移除 Tailwind `dark:` 變體"
 tags: [adr, design-tokens, dark-mode, v2.7.0]
 audience: [frontend-developers, designers, maintainers]
-version: v2.9.0
+version: v2.9.1
 lang: zh
 id: ADR-015
 tracking_kind: adr
