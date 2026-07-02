@@ -148,3 +148,120 @@ describe('TenantManager — last-mile activation', () => {
     expect(screen.queryByText('Exit Compare Mode')).toBeNull();
   });
 });
+
+/**
+ * LD-7 (#962): IdentityStrip — legible identity/view + soft empty-state.
+ *
+ * Unlike the block above (which fails EVERY fetch → demo mode → authUser
+ * stays null), these tests resolve /api/v1/me with a real MeResponse so
+ * `authUser` is populated, while /api/v1/prs and the tenant data-chain
+ * still fall through to the offline DEMO fixtures. The stub keys on URL.
+ */
+describe('TenantManager — LD-7 IdentityStrip', () => {
+  // Build a fetch stub that returns `meBody` (200) for /api/v1/me and
+  // rejects everything else (→ DEMO fixtures + no pending PRs).
+  function stubFetchWithMe(meBody: any) {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string) => {
+        const u = String(url);
+        if (u.includes('/api/v1/me')) {
+          return Promise.resolve({
+            ok: true,
+            json: () => Promise.resolve(meBody),
+          } as any);
+        }
+        return Promise.reject(new Error('offline test'));
+      })
+    );
+  }
+
+  const ME_WITH_ACCESS = {
+    email: 'alice@example.com',
+    user: 'alice',
+    groups: ['production-dba'],
+    accessible_tenants: ['prod-mariadb-01'],
+    accessible_domains: ['finance'],
+    permissions: { 'production-dba': ['read', 'write'] },
+  };
+
+  const ME_EMPTY_PERMISSIONS = {
+    // Real-bug shape: a mistyped group name → non-empty `groups` but the
+    // RBAC lookup found nothing → empty `permissions` → maps to no tenants.
+    email: 'bob@example.com',
+    user: 'bob',
+    groups: ['dba-typoo'],
+    accessible_tenants: [],
+    accessible_domains: [],
+    permissions: {},
+  };
+
+  it('does NOT render the identity strip in demo mode (authUser == null)', async () => {
+    // Every fetch fails → no /api/v1/me body → authUser stays null.
+    vi.stubGlobal('fetch', vi.fn(() => Promise.reject(new Error('offline test'))));
+    await renderAndSettle();
+    expect(screen.queryByTestId('identity-strip')).toBeNull();
+  });
+
+  it('renders email + view summary when authenticated', async () => {
+    stubFetchWithMe(ME_WITH_ACCESS);
+    await renderAndSettle();
+    const strip = await screen.findByTestId('identity-strip');
+    expect(strip).toBeInTheDocument();
+    // identity (email) is shown
+    expect(within(strip).getByText('alice@example.com')).toBeInTheDocument();
+    // current-view label is present; with no active filters/group it reads
+    // "All tenants" (the neutral default, not a blank).
+    expect(within(strip).getByText(/Current view:/)).toBeInTheDocument();
+    expect(within(strip).getByText('All tenants')).toBeInTheDocument();
+    // groups shown as a NEUTRAL fact — no "authorized"/green-check semantics.
+    expect(within(strip).getByText(/Your groups:/)).toBeInTheDocument();
+    expect(within(strip).queryByText(/authorized/i)).toBeNull();
+    // no empty-state notice when the user has permissions
+    expect(screen.queryByTestId('identity-no-access')).toBeNull();
+  });
+
+  it('empty permissions → soft warning banner, but functions stay visible (SOFT)', async () => {
+    stubFetchWithMe(ME_EMPTY_PERMISSIONS);
+    await renderAndSettle();
+    // the advisory banner appears…
+    const notice = await screen.findByTestId('identity-no-access');
+    expect(notice).toBeInTheDocument();
+    expect(notice.getAttribute('role')).toBe('status');
+    expect(notice.textContent).toMatch(/bob@example.com/);
+    // …and NOTHING is hard-hidden: the group sidebar and the search box
+    // remain in the DOM (soft notice, not a lockout). NOTE: the CREATE
+    // button is absent here — that's the pre-existing canWrite=false
+    // gating (empty permissions), not the strip hiding anything.
+    const sidebar = screen.getByRole('complementary', { name: 'Group management sidebar' });
+    expect(within(sidebar).getByText('All Tenants')).toBeInTheDocument();
+    expect(screen.getByLabelText('Search')).toBeInTheDocument();
+  });
+
+  it('search text joins the view summary (list is narrowed → strip must say so)', async () => {
+    stubFetchWithMe(ME_WITH_ACCESS);
+    await renderAndSettle();
+    const strip = await screen.findByTestId('identity-strip');
+    expect(within(strip).getByText('All tenants')).toBeInTheDocument();
+
+    const { fireEvent } = await import('@testing-library/react');
+    fireEvent.change(screen.getByLabelText('Search'), { target: { value: 'mariadb' } });
+
+    // The strip reflects the narrowing search instead of claiming
+    // "All tenants" (which would be a wrong fact about the visible list).
+    expect(within(strip).getByText(/Search: "mariadb"/)).toBeInTheDocument();
+    expect(within(strip).queryByText('All tenants')).toBeNull();
+  });
+
+  it('identity display does not touch canWrite — write controls follow permissions only', async () => {
+    // ME_WITH_ACCESS grants write → the group-create form (canWrite-gated)
+    // is available. The identity strip must not gate this either way.
+    stubFetchWithMe(ME_WITH_ACCESS);
+    await renderAndSettle();
+    await screen.findByTestId('identity-strip');
+    const sidebar = screen.getByRole('complementary', { name: 'Group management sidebar' });
+    // GroupSidebar shows its create affordance (aria-label "Create new
+    // group") only when canWrite=true — proves write access survived.
+    expect(within(sidebar).getByRole('button', { name: 'Create new group' })).toBeInTheDocument();
+  });
+});

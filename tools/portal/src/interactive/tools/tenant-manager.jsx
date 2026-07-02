@@ -16,6 +16,7 @@ dependencies: [
   "tenant-manager/components/OverflowBanner.jsx",
   "tenant-manager/components/TenantCard.jsx",
   "tenant-manager/components/CustomAlertsModal.jsx",
+  "tenant-manager/components/IdentityStrip.jsx",
   "_common/hooks/useDebouncedValue.js",
   "_common/hooks/useURLState.js",
   "_common/hooks/useVirtualGrid.js",
@@ -42,6 +43,7 @@ import { ApiNotificationToast } from './tenant-manager/components/ApiNotificatio
 import { OverflowBanner } from './tenant-manager/components/OverflowBanner.jsx';
 import { TenantCard } from './tenant-manager/components/TenantCard.jsx';
 import { CustomAlertsModal } from './tenant-manager/components/CustomAlertsModal.jsx';
+import { IdentityStrip } from './tenant-manager/components/IdentityStrip.jsx';
 import { SavedViewsPanel } from './tenant-manager/components/SavedViewsPanel.jsx';
 import { useDebouncedValue } from './_common/hooks/useDebouncedValue.js';
 import { useModalFocusTrap } from './_common/hooks/useModalFocusTrap.js';
@@ -469,6 +471,22 @@ export default function TenantManager() {
         <div style={styles.title}>{t('租戶管理器', 'Tenant Manager')}</div>
         <div style={styles.subtitle}>{t('查看、搜尋和批量操作多租戶配置', 'View, search, and batch-operate tenant configurations')}</div>
       </div>
+
+      {/* LD-7 (#962): legible identity + view summary + soft empty-state
+          notice on the authed surface. Renders nothing in demo mode
+          (authUser == null). `activeGroupLabel` is derived here from the
+          already-in-scope activeGroupId/groups — the strip stays purely
+          presentational and reaches into no orchestrator state itself. */}
+      <IdentityStrip
+        authUser={authUser}
+        activeFilters={activeFilters}
+        searchText={searchText}
+        activeGroupLabel={
+          activeGroupId && groups[activeGroupId]
+            ? groups[activeGroupId].label
+            : null
+        }
+      />
 
       {/* Page-level context (stats + banners) spans the full centred
           width above the sidebar/table split below. */}
