@@ -10,6 +10,11 @@
 #     the inner-join would have silently dropped it. This is the fix.
 #   - redis-c: threshold exceeded but maintenance active → suppressed.
 #   - redis-d: below threshold → no alert.
+#   - redis-e: maintenance + NO metadata → suppressed by the BARE arm's OWN
+#     maintenance clause (#973-review hole, same fix as rule-pack-mariadb-cpu:
+#     each arm hand-copies the clause, and redis-c gives the bare copy zero
+#     mutation coverage — delete that copy and redis-c is still excluded by the
+#     bare arm's `unless tenant_metadata_info` — so only this tenant has teeth).
 # Leaf series feed the full recording chain (max → threshold → alert).
 rule_files:
   - ../../rule-packs/rule-pack-redis.yaml
@@ -47,6 +52,14 @@ tests:
         values: '500x30'
       - series: 'tenant_metadata_info{tenant="redis-d", runbook_url="http://rb/d", owner="team-d", tier="bronze"}'
         values: '1x30'
+      # redis-e: 600 > 500, maintenance active, NO tenant_metadata_info → suppressed
+      # by the BARE arm's own maintenance clause (the only tenant whose suppression depends on it).
+      - series: 'redis_connected_clients{tenant="redis-e"}'
+        values: '600x30'
+      - series: 'user_threshold{tenant="redis-e", component="redis", metric="connected_clients", severity="warning"}'
+        values: '500x30'
+      - series: 'user_state_filter{tenant="redis-e", filter="maintenance"}'
+        values: '1x30'
 
     alert_rule_test:
       - eval_time: 6m
@@ -83,4 +96,5 @@ tests:
               runbook_url: ""
               owner: ""
               tier: ""
-        # redis-c (maintenance) and redis-d (below threshold) produce NO alert.
+        # redis-c (maintenance, enriched arm), redis-d (below threshold) and redis-e
+        # (maintenance, BARE arm — no metadata) produce NO alert.
