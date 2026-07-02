@@ -29,9 +29,16 @@
 #
 # THREAT MODEL (honest scope): operator good-faith mistake / accidental disarm of
 # a LIVE gated DaemonSet — the init-container is edited out but the `registry`
-# volume remains. A malicious cluster-admin who strips BOTH the volume and the
-# init-container (or downgrades to a pre-gate chart that emits neither) is out of
-# scope — no in-cluster admission policy binds an actor who controls the cluster.
+# volume remains. OUT OF SCOPE (deliberate bypasses; the defense there is GitOps
+# PR review): (a) a malicious cluster-admin stripping BOTH the volume and the
+# init-container, or downgrading to a pre-gate chart (neither renders) — no
+# in-cluster admission policy binds an actor who controls the cluster; (b)
+# name-preserving neutering — patching the projection-gate init-container's
+# image/args to a no-op while keeping the name (this policy checks presence by
+# NAME only); (c) a two-step label strip — update 1 removes only the DaemonSet
+# labels (gate intact, passes), update 2 removes the init (binding no longer
+# matches, skipped). NB a SINGLE update stripping labels+init together IS caught:
+# the binding's objectSelector matches old OR new object on UPDATE.
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
@@ -55,7 +62,12 @@ spec:
   # tenant projection, keyed on the gate's `registry` volume (rendered by
   # helm/vector ONLY when tenantProjections is set). A single-tenant Vector with
   # no projection has no `registry` volume → skipped (no false warning). The
-  # `has()` guard keeps the CEL runtime-safe on a DaemonSet with no volumes.
+  # `has()` guards the ABSENT-volumes leaf; a structurally degenerate object
+  # (e.g. missing spec.template.spec — admission runs BEFORE strategy validation)
+  # could still error mid-path traversal. Harmless under the Warn+Audit binding
+  # (an eval error is reported, never enforced); after a Deny promotion an eval
+  # error becomes a hard reject under failurePolicy Fail — see the runbook 8.9.4
+  # promotion checklist, which requires re-deciding failurePolicy at that point.
   matchConditions:
     - name: gated-tenant-projection-active
       expression: >-

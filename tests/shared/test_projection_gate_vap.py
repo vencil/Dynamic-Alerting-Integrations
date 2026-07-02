@@ -94,11 +94,37 @@ def test_cel_keys_on_real_gate_artifacts_with_has_guards(policy):
     assert "'projection-gate'" in val
 
 
+# ── CEL full-text pin — the security-load-bearing expressions, verbatim ───────
+
+def _norm(cel: str) -> str:
+    return re.sub(r"\s+", " ", cel).strip()
+
+
+def test_cel_expressions_pinned_verbatim(policy):
+    """PIN the two CEL expressions exactly (whitespace-normalized). The name
+    extraction + logic-model below prove the INTENT but cannot catch a boolean
+    RESTRUCTURING (e.g. `!has(...) || exists(...)` — which would flip a
+    no-initContainers DaemonSet from warned to silently-passed, fail-open) —
+    the name substrings and `has(`/`exists(` markers all still match. These are
+    security-load-bearing expressions: ANY change must consciously update this
+    pin AND re-derive the logic-model expectations (independent-review finding)."""
+    assert _norm(policy["spec"]["matchConditions"][0]["expression"]) == (
+        "has(object.spec.template.spec.volumes) && "
+        "object.spec.template.spec.volumes.exists(v, v.name == 'registry')"
+    )
+    assert _norm(policy["spec"]["validations"][0]["expression"]) == (
+        "has(object.spec.template.spec.initContainers) && "
+        "object.spec.template.spec.initContainers.exists(c, c.name == 'projection-gate')"
+    )
+
+
 # ── Logic-model: mirror the two CEL booleans over the 4 DaemonSet shapes ──────
 
 def _extract_quoted_name(cel: str, field: str) -> str:
     """Pull the single-quoted identifier the CEL compares `<field>.name` against,
-    so the model uses the SAME names the manifest does (no silent drift)."""
+    so the model uses the SAME names the manifest does. NB this pins NAMES only;
+    the boolean STRUCTURE is pinned by test_cel_expressions_pinned_verbatim —
+    the model alone cannot detect a restructured expression."""
     m = re.search(rf"{field}\.exists\(\w+,\s*\w+\.name\s*==\s*'([^']+)'\)", cel)
     assert m, f"could not extract the {field} name from CEL: {cel}"
     return m.group(1)
