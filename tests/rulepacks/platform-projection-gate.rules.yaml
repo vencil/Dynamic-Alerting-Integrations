@@ -11,8 +11,9 @@
 #   - the two verdict-metric alerts (mismatch / registry_unreadable) FIRE on their
 #     OWN category only, are debounced by `for: 5m`, and aggregate away the scrape
 #     topology labels (instance/pod/job) so a stray label can't silently never-fire;
-#   - the enforce-deadlock alert FIRES on the KSM init-container CrashLoopBackOff
-#     signal (the case where the verdict metric is never served).
+#   - the stuck-init alert FIRES on the KSM init-container waiting signal — crash
+#     loop AND image-pull/config wedges (the cases where the verdict metric is
+#     never served).
 groups:
   - name: federation-audit
     rules:
@@ -38,15 +39,15 @@ groups:
         annotations:
           summary: "Vector projection gate could not read the account registry at boot (mode={{ $labels.mode }}) — tenant routing silently degraded"
 
-      - alert: VectorProjectionGateEnforceDeadlock
+      - alert: VectorProjectionGateStuck
         expr: |
           max by (namespace) (
             max_over_time(
-              kube_pod_init_container_status_waiting_reason{container="projection-gate", reason="CrashLoopBackOff"}[5m]
+              kube_pod_init_container_status_waiting_reason{container="projection-gate", reason=~"CrashLoopBackOff|ImagePullBackOff|ErrImagePull|InvalidImageName|CreateContainerConfigError"}[5m]
             )
           ) > 0
         for: 5m
         labels:
           severity: critical
         annotations:
-          summary: "Vector projection-gate init-container is CrashLoopBackOff (enforce mode) — DaemonSet rollout deadlocked in {{ $labels.namespace }}"
+          summary: "Vector projection-gate init-container is stuck (crash loop / image pull) — DaemonSet rollout wedged in {{ $labels.namespace }}"

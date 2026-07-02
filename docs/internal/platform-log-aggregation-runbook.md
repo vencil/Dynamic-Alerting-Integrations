@@ -521,20 +521,39 @@ kubectl rollout restart ds/<vector> -n <ns>
 ```
 ⚠️ **這是唯一需要人工介入離開 degrade 的設計點**（gate 不自動重驗；重新啟用租戶路由是 operator 的明確動作，非自動）。若反覆 ghost-race，檢查部署順序（registry ConfigMap 應先於 Vector DaemonSet apply）。
 
-#### 8.9.3 `VectorProjectionGateEnforceDeadlock`（critical，enforce 模式 rollout 死鎖）
+#### 8.9.3 `VectorProjectionGateStuck`（critical，gate init 卡死 → rollout 全卡）
 
-僅當 `tenantProjectionGate: enforce`。config-bug mismatch 使 gate init **非零退出** → pod 卡 `Init:CrashLoopBackOff` → Vector 與 exposer sidecar **皆不啟動**（故 verdict metric 無人 serve，degrade alert 看不到 → 本條改靠 KSM `kube_pod_init_container_status_waiting_reason{container="projection-gate",reason="CrashLoopBackOff"}`）。DaemonSet 上 `maxUnavailable` 會**卡死整個 rollout**（rolling 中的 node 失去日誌、未滾到的 node 維持舊 config＝split-brain）。復原：
+**任何**讓 gate init **無法跑完**的狀態：pod 卡在 Init → Vector 與 exposer sidecar **皆不啟動**（故 verdict metric 無人 serve，degrade alert 看不到 → 本條改靠 KSM `kube_pod_init_container_status_waiting_reason{container="projection-gate", reason=~"CrashLoopBackOff|ImagePullBackOff|ErrImagePull|InvalidImageName|CreateContainerConfigError"}`）。DaemonSet 上 `maxUnavailable` 會**卡死整個 rollout**（rolling 中的 node 失去日誌、未滾到的 node 維持舊 config＝split-brain）。三類成因：
+- **`enforce` + config-bug mismatch**（原始場景）：gate 依設計非零退出 → `CrashLoopBackOff`
+- **image 打錯/清壞**（任何模式；Gemini #970 空殼 review 揪出——原本只 match CrashLoopBackOff 對這類**零告警**）→ `ImagePullBackOff`/`ErrImagePull`/`InvalidImageName`
+- **args/entrypoint 壞掉、staging ConfigMap 缺失**（任何模式）→ `CrashLoopBackOff`/`CreateContainerConfigError`
+
+（更名註記：原名 `VectorProjectionGateEnforceDeadlock`——matcher 擴到 image-level 卡死後「enforce」成為 misnomer（degrade 模式也會中），比照 #944 名實相符原則趁早改。）復原：
 
 ```bash
-# 1) 看卡住那刻的 gate 退出原因（--previous 取已崩潰容器的 log）
+# 1) 先看卡住的 waiting reason（分辨 config-bug vs image vs configmap 缺失）
+kubectl describe pod <stuck-vector-pod> -n <ns> | grep -A3 "State:\|Reason:"
+# 2a) CrashLoopBackOff（enforce config-bug）→ 看 gate 退出原因、REVERT 錯的 tenantProjections
 kubectl logs <vector-pod> -c projection-gate --previous
-# 2) 這是 fail-closed 正常運作——REVERT 那筆錯的 tenantProjections（或修對 config 後刪卡住的 pod）
-kubectl delete pod <stuck-vector-pod> -n <ns>   # 修好 config 後，讓它以正確 config 重排
+# 2b) ImagePullBackOff 類 → 修 projectionGate.image（tag/repo 打錯、或 overlay 清壞了 image）
+# 2c) CreateContainerConfigError → staging/registry ConfigMap 名字或存在性
+kubectl delete pod <stuck-vector-pod> -n <ns>   # 修好後，讓它以正確 spec 重排
 ```
-📝 **解除滯後（正常現象，勿驚慌）**：本 alert 的 expr 用 `max_over_time(...[5m])` 防抖（見規則註解）。你修好 config、看到新 pod 回 `Running` 後，**alert 仍會續鳴約 5 分鐘才自動 resolve**——因為那條回溯窗還會掃到剛才的 `CrashLoopBackOff` 樣本，`> 0` 在窗口滑出前仍成立。這是換取告警穩定（不因 backoff 間短暫重啟而漏發）的合理代價，不是卡住。
-**模式取捨**：若「硬卡 rollout」比「fail-available 退回 0:0」更糟（多數平台是），用預設 `degrade` 模式——它把同一筆抄錯轉成 §8.9.1 的可觀測降級而非死鎖。`enforce` 只適合「寧可全斷也不要錯路由」的偏執環境。
+📝 **解除滯後（正常現象，勿驚慌）**：本 alert 的 expr 用 `max_over_time(...[5m])` 防抖（見規則註解）。你修好 config、看到新 pod 回 `Running` 後，**alert 仍會續鳴約 5 分鐘才自動 resolve**——因為那條回溯窗還會掃到剛才的 waiting 樣本，`> 0` 在窗口滑出前仍成立。這是換取告警穩定（不因 backoff 間短暫重啟而漏發）的合理代價，不是卡住。
+**模式取捨**：若「硬卡 rollout」比「fail-available 退回 0:0」更糟（多數平台是），用預設 `degrade` 模式——它把 config-bug 抄錯轉成 §8.9.1 的可觀測降級而非死鎖（但 image/configmap 類卡死與模式無關，兩種模式都會中本 alert）。`enforce` 只適合「寧可全斷也不要錯路由」的偏執環境。
 
 **觀測層自身的盲點（誠實標註）**：(a) 若 exposer sidecar 全掛（或 Service/scrape 斷），§8.9.1/8.9.2 的 verdict-metric alert 會失明——但那同時是一場 Vector 全面故障，另有其面向；KSM 路徑（§8.9.3）不受影響。(b) `tenantProjections` 未啟用時不部署 sidecar/Service，故**不**設「verdict metric absent」哨兵 alert（否則每個未用投影的部署都假性 fire）；gate 觀測只在投影啟用時存在。
+
+#### 8.9.4 anti-silent-disarm：ValidatingAdmissionPolicy（#908 PR-3，防 gate 被靜默移除）
+
+§8.9.1-8.9.3 盯 gate **執行後**的降級/死鎖；本節是**部署時**的防線——防有人把 `projection-gate` init-container 從 live 的 Vector DaemonSet **編輯掉**（`kubectl edit`／Kustomize/GitOps overlay 拿掉它）而 tenant routing 管線還在＝**靜默解除** fail-closed 跨租戶洩漏 gate（#945 mtail 教訓的 K8s 版）。
+
+- **機制**：[`k8s/03-monitoring/validatingadmissionpolicy-projection-gate.yaml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/k8s/03-monitoring/validatingadmissionpolicy-projection-gate.yaml) — 一條 `ValidatingAdmissionPolicy`（API-server 內建、無 webhook deadlock、GA 1.30）+ Binding。CEL 斷言：一個**還掛著 gate `registry` volume**（＝ tenant projection 仍啟用）的 Vector log-shipper DaemonSet **必須**含名為 `projection-gate` 的 init-container；否則違規。matchConditions（registry volume）+ 綁定的 objectSelector（`app.kubernetes.io/name=vector` + `component=log-shipper`）確保只評估「有 gate 的 Vector DaemonSet」，單租戶無投影者跳過（零誤報）。
+- **⚠️ Day-1 是 `validationActions: [Warn, Audit]`（非 Deny）**：這是 repo 第一條 VAP，且 dev loop 無真叢集可驗證 CEL 的 match/allow 行為。Warn+Audit 經 K8s reference 查證**永不阻擋請求**（即使 CEL runtime error，只要無 `Deny` action 就只回報不強制）→ blind ship 零 blast-radius。**訊號通道（誠實認識）**：`Warn` = HTTP warning header——`kubectl apply/edit` 當場印黃字，是**主訊號**；`Audit` = API **audit event 的 annotation**（`validation.policy.admission.k8s.io/...`），只進 audit log **且叢集要先配好 audit pipeline**——⛔ **不會**產生 `kubectl get events` 可見的 core Event。
+- **⚠️ Day-1 偵測盲區（獨立 review 揪出，誠實標註）**：對「**GitOps overlay 拿掉 init-container**」這條主要威脅，Warn+Audit 的實際覆蓋**近乎為零**——Argo/Flux 會吞掉 API warning（頂多留在 controller log），audit annotation 依賴多數叢集沒配的 audit pipeline；且 init 被移除後 `gate.prom` **從未被寫**、verdict metric absent，而 §8.9(b) 刻意不設 absent 哨兵 → §8.9.1-8.9.3 的 runtime alert 也蓋不到。**Day-1 的 GitOps-disarm 防線實質只剩 PR review**；本 policy 在升 Deny 前主要價值＝攔 `kubectl` 互動路徑 + audit 佐證。**Promotion trigger：任一真叢集（kind/staging 即可）可用時立即跑下方檢查表升 Deny**，不要讓 Warn+Audit 變成永久狀態。
+- **升級 Deny 檢查表（真叢集驗證後）**：(1) `kubectl apply` 一個正常 gated Vector DaemonSet → **不**該 warn；(2) `kubectl edit` 拿掉 init-container → **終端當場出現黃色 Warning**（勿用 `kubectl get events` 驗證——見上，Audit 不產 Event；有 audit pipeline 者可另查 audit log annotation）；(3) apply 一個單租戶（無 registry volume）Vector → **不**該 warn；(4) apply 無關 DaemonSet（kube-proxy 等）→ policy 完全不評估。四項都對後，把 Binding 的 `validationActions` 從 `["Warn","Audit"]` 改成 `["Deny"]`（Deny 與 Warn 互斥，是**取代**非新增）。⛔ 升 Deny 時**同步重新決定 `failurePolicy`**：「Fail 永不 block」只在 Warn+Audit 下成立——翻成 Deny 後，任何 CEL eval error（如結構異常的物件在 mid-path traversal 出錯）會變成**硬拒**；要嘛接受（fail-closed）、要嘛改 `Ignore`（fail-open），要有意識選。同時考慮給 Binding 加 `namespaceSelector` 限縮到 Vector 所在 namespace——cluster-wide Deny 下，別團隊若巧合湊齊同組標籤 + 一個叫 `registry` 的 volume 會被誤擋。⛔ 未經真叢集驗證**勿**直接上 Deny：CEL 若有誤會把**全叢集** Vector 部署擋死。
+- **威脅模型（誠實 scope）**：擋的是「操作者善意誤刪 live gated DaemonSet 的 init-container（volume 還在）」。**Out of scope（列全）**：(a) 惡意 cluster-admin 同時拿掉 volume+init、或降級 pre-gate chart（兩者都不 render）；(b) **保名神經化**——`kubectl patch` 把 `projection-gate` 的 image/args 換成 no-op 但名字不動 → policy 只驗 presence-by-name，全綠但 gate 已解除；(c) **兩步 label-strip**——update 1 只剝 DaemonSet 標籤（gate 完好，policy pass；註：單次 update 同時剝標籤+剝 init **會**被抓，objectSelector 對 old/new 任一 match 即評估）、update 2 再剝 init（binding 不 match → skip）。沒有任何叢集內 admission policy 能約束控制該叢集的人；(b)(c) 屬蓄意繞過，防線是 GitOps PR review。offline 驗證（manifest 結構 + CEL 邏輯 model + 整條 CEL 全文釘死）見 `tests/shared/test_projection_gate_vap.py`；真 enforcement 靠上述真叢集檢查表。
+- **部署面註記**：本 manifest 放在 `k8s/03-monitoring/`，會隨 getting-started 的 `kubectl apply -f k8s/03-monitoring/*.yaml` loop 一併安裝——需 **K8s ≥1.30**（GA API）與 **cluster-scope** 權限（admissionregistration 資源非 namespaced）；1.29- 叢集或 namespace-scoped 安裝者會在這兩個檔上吃 error（可安全跳過，policy 是縱深非必需）。
 
 ## Refs
 
