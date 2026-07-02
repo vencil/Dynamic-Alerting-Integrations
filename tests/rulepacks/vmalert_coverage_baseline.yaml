@@ -21,14 +21,6 @@ uncovered:
   - ClickHouseHighPartCount
   - ClickHouseHighQueryRate
   - ClickHouseReplicationLag
-  rule-pack-db2.yaml:
-  - DB2DatabaseDown
-  - DB2HighConnections
-  - DB2HighDeadlockRate
-  - DB2HighLogUsage
-  - DB2HighSortOverflow
-  - DB2LowBufferpoolHitRatio
-  - DB2TablespaceAlmostFull
   rule-pack-elasticsearch.yaml:
   - ElasticsearchClusterRed
   - ElasticsearchClusterYellow
@@ -84,14 +76,6 @@ uncovered:
   - TenantSeverityDedupEnabled
   - TenantSilentCritical
   - TenantSilentWarning
-  rule-pack-oracle.yaml:
-  - OracleDatabaseDown
-  - OracleHighActiveSessions
-  - OracleHighPGAUsage
-  - OracleHighProcessCount
-  - OracleHighSessionUtilization
-  - OracleHighWaitTime
-  - OracleTablespaceAlmostFull
   rule-pack-postgresql.yaml:
   - PostgreSQLDown
   - PostgreSQLExporterAbsent

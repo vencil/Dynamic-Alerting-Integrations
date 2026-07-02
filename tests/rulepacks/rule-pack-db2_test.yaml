@@ -1,0 +1,468 @@
+# promtool unit test — DB2 rule-pack FIRING coverage (#947 Splunk→VM migration burn-down).
+# Run: promtool test rules tests/rulepacks/rule-pack-db2_test.yaml
+#
+# Burns down the rule-pack-db2.yaml entries in vmalert_coverage_baseline.yaml (#969):
+# the DB2 pack is an active Splunk→VM migration target, and until now only its threshold
+# VALUE contract was tested (rule-pack-db2-threshold_test.yaml) — the firing decision,
+# `for:` state machine and label/annotation rendering escaped both promtool and the
+# vmalert-tool gate A. Every alert gets, at minimum:
+#   * a FIRING case (non-empty exp_alerts — pins labels + rendered annotations),
+#   * a no-fire control (below/above threshold on the safe side / exporter healthy),
+#   * a `for:` debounce case (expr already true, eval BEFORE the for: window ⇒ no alert).
+# Threshold alerts additionally exercise the pack's per-alert branch plumbing
+# (hand-copied per alert), extending the rule-pack-mariadb-cpu_test.yaml scaffold
+# to FIVE tenants:
+#   - db-a: breaching, metadata present    → fires ENRICHED (branch A).
+#   - db-b: breaching, NO metadata          → STILL fires BARE (branch B, vacuum).
+#   - db-c: breaching, maintenance active   → suppressed via the ENRICHED arm's clause.
+#   - db-d: healthy value, metadata present → no alert (threshold-driven no-fire).
+#   - db-e: breaching, maintenance, NO meta → suppressed via the BARE arm's clause
+#     (each alert hand-copies the maintenance `unless` once per or-arm; db-c only
+#     exercises the enriched copy — see the oracle fixture twin for the rationale).
+# db-a's bufferpool and tablespace inputs carry a SECOND, healthy dimension so the
+# worst-dimension-wins aggregation direction is pinned (:min for hit ratio, :max for
+# tablespace usage — a min↔max flip turns the firing assertion red).
+# Note DB2LowBufferpoolHitRatio inverts the comparison (min < threshold), so its db-d
+# no-fire control sits ABOVE the threshold. All input values are steady-state (constant
+# gauges / linear counters ⇒ constant rate once the 5m window is covered), so cross-group
+# recording-rule tick skew cannot flip an exact $value at the asserted evals (#943/#949).
+rule_files:
+  - ../../rule-packs/rule-pack-db2.yaml
+
+evaluation_interval: 15s
+
+tests:
+  # ── Availability: DB2DatabaseDown (raw leaf expr, no threshold/branch plumbing) ──
+  - interval: 15s
+    input_series:
+      # db-a: exporter reports the instance down for the whole window.
+      - series: 'db2_up{tenant="db-a", instance="db2-exporter-a:9953"}'
+        values: '0x8'
+      # db-b: healthy instance → no-fire control.
+      - series: 'db2_up{tenant="db-b", instance="db2-exporter-b:9953"}'
+        values: '1x8'
+
+    alert_rule_test:
+      # for: 15s debounce — expr true at t=0 but the alert is only PENDING until 15s.
+      - eval_time: 0m
+        alertname: DB2DatabaseDown
+        exp_alerts: []
+      - eval_time: 1m
+        alertname: DB2DatabaseDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              tenant: db-a
+              instance: db2-exporter-a:9953
+            exp_annotations:
+              summary: "DB2 instance db2-exporter-a:9953 is DOWN"
+              summary_zh: "DB2 實例 db2-exporter-a:9953 已關閉"
+              description: "db2_up=0 for 15s on db2-exporter-a:9953"
+              description_zh: "db2_up=0，持續 15 秒，實例：db2-exporter-a:9953"
+        # db-b (db2_up=1) produces NO alert.
+
+  # ── Threshold + ratio alerts: four-tenant scaffold, one shared input set ──
+  - interval: 15s
+    input_series:
+      # Tenant scaffold — metadata for db-a/db-c/db-d (db-b is the onboarding vacuum),
+      # maintenance flag on db-c only.
+      - series: 'tenant_metadata_info{tenant="db-a", runbook_url="http://rb/a", owner="team-a", tier="gold"}'
+        values: '1x48'
+      - series: 'tenant_metadata_info{tenant="db-c", runbook_url="http://rb/c", owner="team-c", tier="silver"}'
+        values: '1x48'
+      - series: 'tenant_metadata_info{tenant="db-d", runbook_url="http://rb/d", owner="team-d", tier="bronze"}'
+        values: '1x48'
+      - series: 'user_state_filter{tenant="db-c", filter="maintenance"}'
+        values: '1x48'
+      - series: 'user_state_filter{tenant="db-e", filter="maintenance"}'
+        values: '1x48'
+
+      # Active connections: 250 > 200 warning (db-a/b/c, and db-e in its block below); db-d 100 < 200.
+      - series: 'db2_connections_active{tenant="db-a"}'
+        values: '250x48'
+      - series: 'db2_connections_active{tenant="db-b"}'
+        values: '250x48'
+      - series: 'db2_connections_active{tenant="db-c"}'
+        values: '250x48'
+      - series: 'db2_connections_active{tenant="db-d"}'
+        values: '100x48'
+      - series: 'user_threshold{tenant="db-a", component="db2", metric="connections_active", severity="warning"}'
+        values: '200x48'
+      - series: 'user_threshold{tenant="db-b", component="db2", metric="connections_active", severity="warning"}'
+        values: '200x48'
+      - series: 'user_threshold{tenant="db-c", component="db2", metric="connections_active", severity="warning"}'
+        values: '200x48'
+      - series: 'user_threshold{tenant="db-d", component="db2", metric="connections_active", severity="warning"}'
+        values: '200x48'
+
+      # Bufferpool hit ratio — INVERTED comparison (min < threshold fires): 0.9 < 0.95
+      # breaches (db-a/b/c); db-d 0.99 ≥ 0.95 is the healthy no-fire control.
+      - series: 'db2_bufferpool_hit_ratio{tenant="db-a", bufferpool_name="IBMDEFAULTBP"}'
+        values: '0.9x48'
+      # Second, HEALTHY dimension for db-a — pins worst-dimension-wins (:min) direction:
+      # min(0.9, 0.99) = 0.9 fires; a min→max flip reads 0.99 (≥ 0.95) and goes red.
+      - series: 'db2_bufferpool_hit_ratio{tenant="db-a", bufferpool_name="BP_USER"}'
+        values: '0.99x48'
+      - series: 'db2_bufferpool_hit_ratio{tenant="db-b", bufferpool_name="IBMDEFAULTBP"}'
+        values: '0.9x48'
+      - series: 'db2_bufferpool_hit_ratio{tenant="db-c", bufferpool_name="IBMDEFAULTBP"}'
+        values: '0.9x48'
+      - series: 'db2_bufferpool_hit_ratio{tenant="db-d", bufferpool_name="IBMDEFAULTBP"}'
+        values: '0.99x48'
+      - series: 'user_threshold{tenant="db-a", component="db2", metric="bufferpool_hit_ratio", severity="warning"}'
+        values: '0.95x48'
+      - series: 'user_threshold{tenant="db-b", component="db2", metric="bufferpool_hit_ratio", severity="warning"}'
+        values: '0.95x48'
+      - series: 'user_threshold{tenant="db-c", component="db2", metric="bufferpool_hit_ratio", severity="warning"}'
+        values: '0.95x48'
+      - series: 'user_threshold{tenant="db-d", component="db2", metric="bufferpool_hit_ratio", severity="warning"}'
+        values: '0.95x48'
+
+      # Transaction log usage: 85 > 70 warning; db-d 50 < 70.
+      - series: 'db2_log_usage_percent{tenant="db-a"}'
+        values: '85x48'
+      - series: 'db2_log_usage_percent{tenant="db-b"}'
+        values: '85x48'
+      - series: 'db2_log_usage_percent{tenant="db-c"}'
+        values: '85x48'
+      - series: 'db2_log_usage_percent{tenant="db-d"}'
+        values: '50x48'
+      - series: 'user_threshold{tenant="db-a", component="db2", metric="log_usage_percent", severity="warning"}'
+        values: '70x48'
+      - series: 'user_threshold{tenant="db-b", component="db2", metric="log_usage_percent", severity="warning"}'
+        values: '70x48'
+      - series: 'user_threshold{tenant="db-c", component="db2", metric="log_usage_percent", severity="warning"}'
+        values: '70x48'
+      - series: 'user_threshold{tenant="db-d", component="db2", metric="log_usage_percent", severity="warning"}'
+        values: '70x48'
+
+      # Deadlock counter: +300/15s ⇒ steady rate5m = 20/s > 5 (db-a/b/c/e); db-d +30/15s ⇒ 2.0.
+      # ⚠️ rate() cold-start (#946): with series starting at t=0, Prometheus'
+      # extrapolatedRate divides by the FULL 5m window, so the Prom rate ramps with
+      # window coverage — a steady rate close to the threshold would cross very late.
+      # 20 vs 5 crosses at ~1m30s on Prom (⇒ for: 5m fires at ~6m30s); MetricsQL uses
+      # the actual data span and reads 20 from the first ticks (⇒ fires at ~5m15s). The
+      # firing assertion below sits at 9m — past BOTH engines' fire point with wide
+      # margin against promtool extrapolation-math drift, window fully covered ⇒ $value
+      # is exactly 20.0 on both — so the known cold-start divergence axis is avoided by
+      # construction instead of catalogued. Soak expectation: at a REAL cold-start
+      # (new tenant / exporter restart / counter reset) VM's first fire leads Prometheus
+      # by up to one window — expected engine math, NOT a false positive; see
+      # docs/integration/victoriametrics-integration.md §3.1.
+      - series: 'db2_deadlocks_total{tenant="db-a"}'
+        values: '0+300x48'
+      - series: 'db2_deadlocks_total{tenant="db-b"}'
+        values: '0+300x48'
+      - series: 'db2_deadlocks_total{tenant="db-c"}'
+        values: '0+300x48'
+      - series: 'db2_deadlocks_total{tenant="db-d"}'
+        values: '0+30x48'
+      - series: 'user_threshold{tenant="db-a", component="db2", metric="deadlock_rate", severity="warning"}'
+        values: '5x48'
+      - series: 'user_threshold{tenant="db-b", component="db2", metric="deadlock_rate", severity="warning"}'
+        values: '5x48'
+      - series: 'user_threshold{tenant="db-c", component="db2", metric="deadlock_rate", severity="warning"}'
+        values: '5x48'
+      - series: 'user_threshold{tenant="db-d", component="db2", metric="deadlock_rate", severity="warning"}'
+        values: '5x48'
+
+      # Tablespace usage: 92 > 85 warning; db-d 70 < 85.
+      - series: 'db2_tablespace_used_percent{tenant="db-a", tablespace_name="USERSPACE1"}'
+        values: '92x48'
+      # Second, HEALTHY dimension for db-a — pins worst-dimension-wins (:max) direction:
+      # max(92, 70) = 92 fires; a max→min flip reads 70 (< 85) and goes red.
+      - series: 'db2_tablespace_used_percent{tenant="db-a", tablespace_name="SYSCATSPACE"}'
+        values: '70x48'
+      - series: 'db2_tablespace_used_percent{tenant="db-b", tablespace_name="USERSPACE1"}'
+        values: '92x48'
+      - series: 'db2_tablespace_used_percent{tenant="db-c", tablespace_name="USERSPACE1"}'
+        values: '92x48'
+      - series: 'db2_tablespace_used_percent{tenant="db-d", tablespace_name="USERSPACE1"}'
+        values: '70x48'
+      - series: 'user_threshold{tenant="db-a", component="db2", metric="tablespace_used_percent", severity="warning"}'
+        values: '85x48'
+      - series: 'user_threshold{tenant="db-b", component="db2", metric="tablespace_used_percent", severity="warning"}'
+        values: '85x48'
+      - series: 'user_threshold{tenant="db-c", component="db2", metric="tablespace_used_percent", severity="warning"}'
+        values: '85x48'
+      - series: 'user_threshold{tenant="db-d", component="db2", metric="tablespace_used_percent", severity="warning"}'
+        values: '85x48'
+
+      # Sort overflow ratio (hardcoded > 0.05): 8/100 = 0.08 breaches; db-d 2/100 = 0.02.
+      - series: 'db2_sort_overflows{tenant="db-a"}'
+        values: '8x48'
+      - series: 'db2_sort_overflows{tenant="db-b"}'
+        values: '8x48'
+      - series: 'db2_sort_overflows{tenant="db-c"}'
+        values: '8x48'
+      - series: 'db2_sort_overflows{tenant="db-d"}'
+        values: '2x48'
+      - series: 'db2_total_sorts{tenant="db-a"}'
+        values: '100x48'
+      - series: 'db2_total_sorts{tenant="db-b"}'
+        values: '100x48'
+      - series: 'db2_total_sorts{tenant="db-c"}'
+        values: '100x48'
+      - series: 'db2_total_sorts{tenant="db-d"}'
+        values: '100x48'
+
+      # db-e: BARE-arm maintenance control — breaches EVERY metric, is in maintenance,
+      # has NO tenant_metadata_info. Only the bare arm's hand-copied
+      # `unless (user_state_filter{filter="maintenance"} == 1)` can suppress it; delete
+      # or typo that clause in any alert and its implicit no-fire assertion turns red.
+      - series: 'db2_connections_active{tenant="db-e"}'
+        values: '250x48'
+      - series: 'user_threshold{tenant="db-e", component="db2", metric="connections_active", severity="warning"}'
+        values: '200x48'
+      - series: 'db2_bufferpool_hit_ratio{tenant="db-e", bufferpool_name="IBMDEFAULTBP"}'
+        values: '0.9x48'
+      - series: 'user_threshold{tenant="db-e", component="db2", metric="bufferpool_hit_ratio", severity="warning"}'
+        values: '0.95x48'
+      - series: 'db2_log_usage_percent{tenant="db-e"}'
+        values: '85x48'
+      - series: 'user_threshold{tenant="db-e", component="db2", metric="log_usage_percent", severity="warning"}'
+        values: '70x48'
+      - series: 'db2_deadlocks_total{tenant="db-e"}'
+        values: '0+300x48'
+      - series: 'user_threshold{tenant="db-e", component="db2", metric="deadlock_rate", severity="warning"}'
+        values: '5x48'
+      - series: 'db2_tablespace_used_percent{tenant="db-e", tablespace_name="USERSPACE1"}'
+        values: '92x48'
+      - series: 'user_threshold{tenant="db-e", component="db2", metric="tablespace_used_percent", severity="warning"}'
+        values: '85x48'
+      - series: 'db2_sort_overflows{tenant="db-e"}'
+        values: '8x48'
+      - series: 'db2_total_sorts{tenant="db-e"}'
+        values: '100x48'
+
+    alert_rule_test:
+      # ── DB2HighConnections (for: 5m) ──
+      - eval_time: 3m           # debounce: expr true since ~15s, still < 5m ⇒ pending only
+        alertname: DB2HighConnections
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: DB2HighConnections
+        exp_alerts:
+          # db-a: enriched (branch A) — carries runbook_url/owner/tier.
+          - exp_labels:
+              severity: warning
+              tenant: db-a
+              runbook_url: "http://rb/a"
+              owner: team-a
+              tier: gold
+            exp_annotations:
+              summary: "DB2 high active connections on db-a"
+              summary_zh: "db-a 上 DB2 連線數過高"
+              platform_summary: "[gold] db-a: DB2 connection usage high — pool sizing review"
+              platform_summary_zh: "[gold] db-a：DB2 連線使用率過高 — pool 大小調整審查"
+              description: "250 active connections"
+              description_zh: "250 個活動連線"
+              runbook_url: "http://rb/a"
+              owner: team-a
+              tier: gold
+          # db-b: VACUUM-FIRE (branch B) — fires WITHOUT enrichment labels.
+          - exp_labels:
+              severity: warning
+              tenant: db-b
+            exp_annotations:
+              summary: "DB2 high active connections on db-b"
+              summary_zh: "db-b 上 DB2 連線數過高"
+              platform_summary: "[] db-b: DB2 connection usage high — pool sizing review"
+              platform_summary_zh: "[] db-b：DB2 連線使用率過高 — pool 大小調整審查"
+              description: "250 active connections"
+              description_zh: "250 個活動連線"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+        # db-c/db-e (maintenance, via the enriched/bare arm resp.) and db-d (below threshold) produce NO alert.
+
+      # ── DB2LowBufferpoolHitRatio (for: 10m, inverted comparison) ──
+      - eval_time: 6m           # 5m-alerts already fire here, but the 10m one must NOT yet
+        alertname: DB2LowBufferpoolHitRatio
+        exp_alerts: []
+      - eval_time: 11m
+        alertname: DB2LowBufferpoolHitRatio
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              tenant: db-a
+              runbook_url: "http://rb/a"
+              owner: team-a
+              tier: gold
+            exp_annotations:
+              summary: "DB2 low bufferpool hit ratio on db-a"
+              summary_zh: "db-a 上 DB2 bufferpool 命中率偏低"
+              platform_summary: "[gold] db-a: DB2 bufferpool hit ratio low — memory tuning review"
+              platform_summary_zh: "[gold] db-a：DB2 bufferpool 命中率偏低 — 記憶體調優審查"
+              description: "Hit ratio: 0.9000 — check bufferpool sizing"
+              description_zh: "命中率：0.9000 — 檢查 bufferpool 大小調整"
+              runbook_url: "http://rb/a"
+              owner: team-a
+              tier: gold
+          - exp_labels:
+              severity: warning
+              tenant: db-b
+            exp_annotations:
+              summary: "DB2 low bufferpool hit ratio on db-b"
+              summary_zh: "db-b 上 DB2 bufferpool 命中率偏低"
+              platform_summary: "[] db-b: DB2 bufferpool hit ratio low — memory tuning review"
+              platform_summary_zh: "[] db-b：DB2 bufferpool 命中率偏低 — 記憶體調優審查"
+              description: "Hit ratio: 0.9000 — check bufferpool sizing"
+              description_zh: "命中率：0.9000 — 檢查 bufferpool 大小調整"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+        # db-c/db-e (maintenance, via the enriched/bare arm resp.) and db-d (0.99 ≥ 0.95, healthy) produce NO alert.
+
+      # ── DB2HighLogUsage (for: 5m) ──
+      - eval_time: 3m
+        alertname: DB2HighLogUsage
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: DB2HighLogUsage
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              tenant: db-a
+              runbook_url: "http://rb/a"
+              owner: team-a
+              tier: gold
+            exp_annotations:
+              summary: "DB2 high transaction log usage on db-a"
+              summary_zh: "db-a 上 DB2 交易日誌使用率過高"
+              platform_summary: "[gold] db-a: DB2 transaction log usage high — log space review"
+              platform_summary_zh: "[gold] db-a：DB2 交易日誌使用率過高 — 日誌空間審查"
+              description: "Log usage: 85.0%"
+              description_zh: "日誌使用率：85.0%"
+              runbook_url: "http://rb/a"
+              owner: team-a
+              tier: gold
+          - exp_labels:
+              severity: warning
+              tenant: db-b
+            exp_annotations:
+              summary: "DB2 high transaction log usage on db-b"
+              summary_zh: "db-b 上 DB2 交易日誌使用率過高"
+              platform_summary: "[] db-b: DB2 transaction log usage high — log space review"
+              platform_summary_zh: "[] db-b：DB2 交易日誌使用率過高 — 日誌空間審查"
+              description: "Log usage: 85.0%"
+              description_zh: "日誌使用率：85.0%"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+        # db-c/db-e (maintenance, via the enriched/bare arm resp.) and db-d (below threshold) produce NO alert.
+
+      # ── DB2HighDeadlockRate (for: 5m, rate-based — firing eval at 9m, see the
+      #    cold-start note on the input series; 3m is inside BOTH engines' pending window) ──
+      - eval_time: 3m
+        alertname: DB2HighDeadlockRate
+        exp_alerts: []
+      - eval_time: 9m
+        alertname: DB2HighDeadlockRate
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              tenant: db-a
+              runbook_url: "http://rb/a"
+              owner: team-a
+              tier: gold
+            exp_annotations:
+              summary: "DB2 high deadlock rate on db-a"
+              summary_zh: "db-a 上 DB2 死鎖率過高"
+              platform_summary: "[gold] db-a: DB2 deadlock rate elevated — application contention review"
+              platform_summary_zh: "[gold] db-a：DB2 死鎖率升高 — 應用程式爭用審查"
+              description: "20.0 deadlocks/sec"
+              description_zh: "20.0 個死鎖/秒"
+              runbook_url: "http://rb/a"
+              owner: team-a
+              tier: gold
+          - exp_labels:
+              severity: warning
+              tenant: db-b
+            exp_annotations:
+              summary: "DB2 high deadlock rate on db-b"
+              summary_zh: "db-b 上 DB2 死鎖率過高"
+              platform_summary: "[] db-b: DB2 deadlock rate elevated — application contention review"
+              platform_summary_zh: "[] db-b：DB2 死鎖率升高 — 應用程式爭用審查"
+              description: "20.0 deadlocks/sec"
+              description_zh: "20.0 個死鎖/秒"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+        # db-c/db-e (maintenance, via the enriched/bare arm resp.) and db-d (rate 2.0 < 5) produce NO alert.
+
+      # ── DB2TablespaceAlmostFull (for: 5m) ──
+      - eval_time: 3m
+        alertname: DB2TablespaceAlmostFull
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: DB2TablespaceAlmostFull
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              tenant: db-a
+              runbook_url: "http://rb/a"
+              owner: team-a
+              tier: gold
+            exp_annotations:
+              summary: "DB2 tablespace nearing capacity on db-a"
+              summary_zh: "db-a 上 DB2 tablespace 即將滿容"
+              platform_summary: "[gold] db-a: DB2 tablespace nearing capacity — storage review"
+              platform_summary_zh: "[gold] db-a：DB2 tablespace 即將滿容 — 儲存審查"
+              description: "Tablespace usage: 92.0%"
+              description_zh: "Tablespace 使用率：92.0%"
+              runbook_url: "http://rb/a"
+              owner: team-a
+              tier: gold
+          - exp_labels:
+              severity: warning
+              tenant: db-b
+            exp_annotations:
+              summary: "DB2 tablespace nearing capacity on db-b"
+              summary_zh: "db-b 上 DB2 tablespace 即將滿容"
+              platform_summary: "[] db-b: DB2 tablespace nearing capacity — storage review"
+              platform_summary_zh: "[] db-b：DB2 tablespace 即將滿容 — 儲存審查"
+              description: "Tablespace usage: 92.0%"
+              description_zh: "Tablespace 使用率：92.0%"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+        # db-c/db-e (maintenance, via the enriched/bare arm resp.) and db-d (below threshold) produce NO alert.
+
+      # ── DB2HighSortOverflow (for: 10m, hardcoded ratio > 0.05) ──
+      - eval_time: 6m
+        alertname: DB2HighSortOverflow
+        exp_alerts: []
+      - eval_time: 11m
+        alertname: DB2HighSortOverflow
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              tenant: db-a
+              runbook_url: "http://rb/a"
+              owner: team-a
+              tier: gold
+            exp_annotations:
+              summary: "DB2 high sort overflow ratio on db-a"
+              summary_zh: "db-a 上 DB2 sort overflow 比率過高"
+              platform_summary: "[gold] db-a: DB2 sort overflow ratio high — SORTHEAP tuning review"
+              platform_summary_zh: "[gold] db-a：DB2 sort overflow 比率過高 — SORTHEAP 調優審查"
+              description: "Sort overflow ratio: 0.08 — consider increasing SORTHEAP"
+              description_zh: "Sort overflow 比率：0.08 — 考慮增加 SORTHEAP"
+              runbook_url: "http://rb/a"
+              owner: team-a
+              tier: gold
+          - exp_labels:
+              severity: warning
+              tenant: db-b
+            exp_annotations:
+              summary: "DB2 high sort overflow ratio on db-b"
+              summary_zh: "db-b 上 DB2 sort overflow 比率過高"
+              platform_summary: "[] db-b: DB2 sort overflow ratio high — SORTHEAP tuning review"
+              platform_summary_zh: "[] db-b：DB2 sort overflow 比率過高 — SORTHEAP 調優審查"
+              description: "Sort overflow ratio: 0.08 — consider increasing SORTHEAP"
+              description_zh: "Sort overflow 比率：0.08 — 考慮增加 SORTHEAP"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+        # db-c/db-e (maintenance, via the enriched/bare arm resp.) and db-d (0.02 < 0.05) produce NO alert.

@@ -7,7 +7,8 @@ The per-PR VM parity gate A (tests/rulepacks/test_vm_alert_parity.py) and the pr
 gate only exercise alerts that have an ``alert_rule_test`` in some
 tests/rulepacks/*_test.yaml. An alert declared in rule-packs/*.yaml with NO such test
 escapes BOTH engines silently — nobody verifies it fires/no-fires correctly on
-Prometheus OR on VictoriaMetrics. Today 90 of 114 rule-pack alerts are in that state
+Prometheus OR on VictoriaMetrics. At gate introduction 90 of 113 rule-pack alerts were
+in that state
 (mostly OPTIONAL DB reference packs whose threshold VALUE contract IS tested via
 rule-pack-<db>-threshold_test.yaml, but whose firing decision is not) — including the
 Oracle / DB2 packs that are the active Splunk→VM migration targets (#947).
