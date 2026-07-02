@@ -1,0 +1,22 @@
+# values-projection.yaml — Container SAST L2 lint VARIANT (#908 PR-3 m3).
+#
+# NOT a deployment profile — this exists so kube-linter actually SEES the
+# projection-gate init-container + metrics-exposer sidecar. Under the chart's
+# DEFAULT values (tenantProjections: []) the entire gate block is un-rendered,
+# so check_iac_helm.py's default render lints a DaemonSet with no gate containers
+# at all (independent-review finding: their securityContext could regress without
+# any CI gate noticing). check_iac_helm.py auto-discovers every values*.yaml as a
+# render variant, so this file makes the gated topology a first-class L2 target.
+#
+# Values are synthetic fixtures (same shape as tests/shared _PROJECTION_SETS);
+# accountIds are registry-floor-range ints, NEVER real tenant allocations.
+tenantProjections:
+  - tenantId: "tenant-alpha"
+    accountId: 1000
+  - tenantId: "tenant-beta"
+    accountId: 1001
+
+projectionGate:
+  registry:
+    # Required by the chart whenever tenantProjections is set; synthetic name.
+    configMapName: "lint-registry"

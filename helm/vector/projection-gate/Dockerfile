@@ -18,6 +18,16 @@ FROM alpine:3.23.4
 # the distro package, so the image carries no pip and no build toolchain.
 RUN apk add --no-cache python3 py3-yaml \
  && rm -rf /var/cache/apk/*
+# The chart runs these containers with readOnlyRootFilesystem:true (#908 PR-3 m3),
+# so the rootfs contract is: NOTHING here may write outside the mounted volumes.
+# PYTHONDONTWRITEBYTECODE makes Python's __pycache__ behavior explicit — without it
+# Python merely degrades gracefully (a failed .pyc write on the read-only rootfs is
+# swallowed); with it the write is never attempted (Gemini #971 review). NB there is
+# deliberately NO /tmp volume: neither script uses tempfile/temp dirs today. IF a
+# future dependency needs one (C-extensions, archive handling, tempfile.*), the
+# container will crash at startup on the read-only rootfs — the fix THEN is an
+# emptyDir mounted at /tmp in the DaemonSet, not loosening the read-only rootfs.
+ENV PYTHONDONTWRITEBYTECODE=1
 COPY verify_tenant_projections.py /usr/local/bin/verify_tenant_projections.py
 # serve_metrics.py runs as a long-lived SIDECAR (command override in the DaemonSet)
 # that re-serves the init-container's verdict textfile over HTTP for Prometheus

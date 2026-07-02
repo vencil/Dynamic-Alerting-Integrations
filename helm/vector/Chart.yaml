@@ -17,7 +17,8 @@ type: application
 # 0.6.1 — #902 L2 slice-2: pin the Vector image by digest (image.digest)
 # 0.7.0 — #908 PR-2: fail-closed tenantProjections-vs-registry gate. config-dir split (vector.yaml base + 30-tenant-routing.yaml tenant-sink fragment) + projection-gate init-container that places the fragment only when the projections match the conf.d registry (degrade→0:0 / enforce→fail-pod)
 # 0.8.0 — #908 PR-3a: projection-gate observability. init-container --metrics-file → gate-metrics emptyDir; metrics-exposer sidecar (serve_metrics.py) re-serves the verdict over HTTP; headless projection-gate Service for Prometheus scrape (degrade/ghost-race alerting)
-version: 0.8.0
+# 0.9.0 — #908 PR-3 m3: least-privilege securityContext for the gate init-container + exposer sidecar (projectionGate.securityContext — non-root 65532, drop ALL caps, no DAC_READ_SEARCH; Vector container stays root for /var/log)
+version: 0.9.0
 # appVersion: pinned Vector release
 appVersion: "0.55.0"
 keywords:

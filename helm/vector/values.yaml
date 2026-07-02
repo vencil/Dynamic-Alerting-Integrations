@@ -229,6 +229,27 @@ projectionGate:
     # read-side pattern as threshold-exporter's conf.d ConfigMap mount, NOT the
     # tenant-api git-write plane. REQUIRED when tenantProjections is set.
     configMapName: ""
+  # ── Least-privilege securityContext for the gate init-container + exposer sidecar
+  # (#908 PR-3 m3). SEPARATE from the Vector container's `containerSecurityContext`
+  # (which MUST run as root + keep DAC_READ_SEARCH to read root-owned /var/log host
+  # files): the gate only reads a ConfigMap-mounted registry and writes the shared
+  # emptyDirs, so it needs neither. The image is already USER 65532; this pins it
+  # non-root + drops ALL capabilities. The emptyDirs stay writable via the pod's
+  # `fsGroup: 0` (adds gid 0 to the container's supplementary groups, and the
+  # emptyDir is group-0 + group-writable; strictly, kubelet already creates
+  # emptyDirs 0777 so ANY uid can write — fsGroup is belt-and-suspenders, not the
+  # load-bearing permission) — readOnlyRootFilesystem does not block writes to
+  # MOUNTED volumes, only to the container rootfs.
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+    capabilities:
+      drop: ["ALL"]
+    seccompProfile:
+      type: RuntimeDefault
   # Small fixed footprint — the gate is a short-lived one-shot validator that
   # parses two YAML files. Set explicitly so kube-linter (Container SAST L4
   # unset-cpu/memory-requirements) is satisfied; override if your registry is large.
