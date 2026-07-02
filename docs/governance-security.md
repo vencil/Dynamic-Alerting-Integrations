@@ -221,6 +221,10 @@ Default deny-all（Ingress + Egress）+ 逐元件白名單：
 
 > ⚠️ **NetworkPolicy 需 CNI 支援才生效（避免安全劇場）**：上表所有 Ingress/Egress 白名單、8080 pod 級限制、default-deny-ingress **全部依賴叢集 CNI 實作 NetworkPolicy**。若 CNI 不支援（基礎版 Flannel、部分雲廠商預設簡易 CNI），K8s API server 仍會「接受」這些物件、`helm install` 也照樣成功，但流量**完全不受限** — 8080 header-trust 面對整個叢集敞開，形成 *security theater*（看似封鎖、實際全開）。**生產部署務必使用 NetworkPolicy-aware CNI（Calico / Cilium / Antrea）**，並以「實際送一個應被拒的封包」實測 enforcement，不可只看 `helm install` 成功。這也是為何根因層 **#5（L7：KSA OIDC + TokenReview 或內部身分簽章，與 CNI 無關）才是唯一真信任邊界**、而本節的 NetworkPolicy 縱深屬 **L4 stopgap** 的原因。
 
+> ⚠️ **L4 涵蓋限制（即使 CNI 正確 enforce 仍有結構性繞過面）**：pod 級 NetworkPolicy 是止血、非信任邊界，以下兩類攻擊 L4 無法防，唯 **#5 的 L7 caller 身分驗證**能覆蓋：
+> - **同 namespace label 偽造（lateral movement）**：`podSelector` 盲信 pod label。若 monitoring ns 內某 pod 取得 `patch` / `create pods` 的 RBAC（或某 operator 以使用者輸入為 label 生成物件），攻擊者可自貼 `app=prometheus` 騙過 8080 白名單，再注入 `X-Forwarded-Groups: platform-admins`。
+> - **host-network 降維**：NetworkPolicy 只治理 pod netns。`hostNetwork: true` 的 pod（node-exporter / fluentd 等特權 DaemonSet）或被攻破的 node 本身，可從 host netns 直接向 tenant-api Pod IP:8080 發包，多數 CNI 對此 local routing 預設放行 → 繞過規則。
+
 ### Portal 安全標頭
 
 `nginx.conf` 設定：X-Frame-Options (SAMEORIGIN), X-Content-Type-Options (nosniff), Referrer-Policy, Content-Security-Policy（限制 script/style/connect 來源）, Strict-Transport-Security (HSTS)。
