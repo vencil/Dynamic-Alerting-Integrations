@@ -143,6 +143,6 @@ data:
     \ '[{{ $labels.tier }}] {{ $labels.tenant }}: MongoDB connection pool near saturation\
     \ — capacity action needed'\n      platform_summary_zh: '[{{ $labels.tier }}]\
     \ {{ $labels.tenant }}: MongoDB 連線池接近飽和 — 需要容量擴展'\n      description: '{{ $value\
-    \ | printf \"%.0f\" }}% of connections used'\n      description_zh: 已使用 {{ $value\
-    \ | printf \"%.0f\" }}% 的連線\n      runbook_url: '{{ $labels.runbook_url }}'\n\
+    \ | humanizePercentage }} of connections used'\n      description_zh: 已使用 {{ $value\
+    \ | humanizePercentage }} 的連線\n      runbook_url: '{{ $labels.runbook_url }}'\n\
     \      owner: '{{ $labels.owner }}'\n      tier: '{{ $labels.tier }}'\n"
