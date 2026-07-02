@@ -115,13 +115,23 @@ podSecurityContext:
     type: RuntimeDefault
 
 # NetworkPolicy
+# ⛔ enabled: false is FORBIDDEN and will fail `helm template`/`install`
+# (GHSA-3g2h-rf85-5rrv). da-portal fronts tenant-api (header-trusting port 8080);
+# this policy is a required security control, not a toggle.
 networkPolicy:
   enabled: true
-  # Namespaces allowed to access the portal
+  # Namespaces allowed to reach the portal.
+  # ⛔ SECURITY (GHSA-3g2h-rf85-5rrv): do NOT list tenant namespaces (db-a/db-b).
+  # Real user traffic arrives through the ingress controller (browser → oauth2-proxy),
+  # NOT directly from tenant pods — a tenant pod has no legitimate reason to reach the
+  # portal, and granting it widens the blast radius of a compromised tenant workload.
+  # Keep this to infrastructure sources only:
+  #   • monitoring        — internal health checks / cluster tooling
+  #   • ingress-nginx      — the ingress controller that fronts external browser traffic
+  # Set to YOUR ingress controller's namespace (ingress-nginx | istio-system | traefik | …).
   allowedNamespaces:
     - monitoring
-    - db-a
-    - db-b
+    - ingress-nginx
 
 # Pod annotations
 podAnnotations:
