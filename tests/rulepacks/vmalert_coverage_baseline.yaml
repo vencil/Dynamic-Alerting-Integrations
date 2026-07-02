@@ -1,0 +1,119 @@
+# Rule-pack alert FIRING-decision coverage baseline — SSOT for alerts that escape the
+# promtool + vmalert-tool (gate A) firing tests. Managed by
+# scripts/tools/lint/check_vmalert_coverage.py (bidirectional, like vm_deviation_catalog.yaml):
+#   * a NEW uncovered alert not listed here          -> CI FAIL (add an alert_rule_test or list it)
+#   * a listed alert that now HAS a test / was removed -> CI FAIL (remove the stale entry)
+# "Covered" = the alert appears in an alert_rule_test[].alertname in tests/rulepacks/*_test.{yaml,yml}
+# (a test CASE, not necessarily a FIRING case — exp_alerts:[] also counts; see the lint docstring).
+# Listing an alert here is NOT an endorsement — it is TRACKED coverage debt. Most entries are
+# firing-decision gaps in OPTIONAL DB reference packs (their threshold VALUE contract is tested
+# via rule-pack-<db>-threshold_test.yaml).
+# ⚠️ MIGRATION BURN-DOWN (Gemini #969): the Oracle/DB2 entries are the active Splunk→VM migration
+# targets (#947) — without a firing test we cannot verify their for:/group_by/label rendering on
+# vmalert before soak. Treat THIS list as the soak burn-down: clear Oracle/DB2 first.
+# Regenerate after an intentional change: python scripts/tools/lint/check_vmalert_coverage.py --generate
+uncovered:
+  rule-pack-clickhouse.yaml:
+  - ClickHouseDown
+  - ClickHouseHighConnections
+  - ClickHouseHighFailedQueryRate
+  - ClickHouseHighMemoryUsage
+  - ClickHouseHighPartCount
+  - ClickHouseHighQueryRate
+  - ClickHouseReplicationLag
+  rule-pack-db2.yaml:
+  - DB2DatabaseDown
+  - DB2HighConnections
+  - DB2HighDeadlockRate
+  - DB2HighLogUsage
+  - DB2HighSortOverflow
+  - DB2LowBufferpoolHitRatio
+  - DB2TablespaceAlmostFull
+  rule-pack-elasticsearch.yaml:
+  - ElasticsearchClusterRed
+  - ElasticsearchClusterYellow
+  - ElasticsearchHighDiskUsage
+  - ElasticsearchHighHeapUsage
+  - ElasticsearchHighSearchLatency
+  - ElasticsearchPendingTasks
+  - ElasticsearchUnassignedShards
+  rule-pack-jvm.yaml:
+  - JVMHighGCPause
+  - JVMHighGCPauseCritical
+  - JVMMemoryPressure
+  - JVMMemoryPressureCritical
+  - JVMPerformanceDegraded
+  - JVMThreadPoolExhaustion
+  - JVMThreadPoolExhaustionCritical
+  rule-pack-kafka.yaml:
+  - KafkaExporterAbsent
+  - KafkaHighConsumerLag
+  - KafkaHighConsumerLagCritical
+  - KafkaHighRequestRate
+  - KafkaHighRequestRateCritical
+  - KafkaLowBrokerCount
+  - KafkaNoActiveController
+  - KafkaUnderReplicatedPartitions
+  - KafkaUnderReplicatedPartitionsCritical
+  rule-pack-kubernetes.yaml:
+  - ContainerCrashLoop
+  - ContainerImagePullFailure
+  rule-pack-mariadb.yaml:
+  - MariaDBExporterAbsent
+  - MariaDBHighAbortedConnections
+  - MariaDBHighConnections
+  - MariaDBHighConnectionsCritical
+  - MariaDBHighSlowQueries
+  - MariaDBRecentRestart
+  - MariaDBSystemBottleneck
+  rule-pack-mongodb.yaml:
+  - MongoDBConnectionSaturation
+  - MongoDBHighConnections
+  - MongoDBHighOperations
+  - MongoDBHighPageFaults
+  - MongoDBReplicationLag
+  rule-pack-nginx.yaml:
+  - NginxConnectionBacklog
+  - NginxConnectionBacklogCritical
+  - NginxHighConnections
+  - NginxHighConnectionsCritical
+  - NginxRequestRateSpike
+  - NginxRequestRateSpikeCritical
+  rule-pack-operational.yaml:
+  - TenantConfigEvent
+  - TenantSeverityDedupEnabled
+  - TenantSilentCritical
+  - TenantSilentWarning
+  rule-pack-oracle.yaml:
+  - OracleDatabaseDown
+  - OracleHighActiveSessions
+  - OracleHighPGAUsage
+  - OracleHighProcessCount
+  - OracleHighSessionUtilization
+  - OracleHighWaitTime
+  - OracleTablespaceAlmostFull
+  rule-pack-postgresql.yaml:
+  - PostgreSQLDown
+  - PostgreSQLExporterAbsent
+  - PostgreSQLHighConnections
+  - PostgreSQLHighConnectionsCritical
+  - PostgreSQLHighDeadlocks
+  - PostgreSQLHighReplicationLag
+  - PostgreSQLHighReplicationLagCritical
+  - PostgreSQLHighRollbackRatio
+  - PostgreSQLRecentRestart
+  rule-pack-rabbitmq.yaml:
+  - RabbitMQExporterAbsent
+  - RabbitMQHighConnections
+  - RabbitMQHighMemory
+  - RabbitMQHighMemoryCritical
+  - RabbitMQHighQueueDepth
+  - RabbitMQHighQueueDepthCritical
+  - RabbitMQHighUnackedMessages
+  - RabbitMQLowConsumers
+  rule-pack-redis.yaml:
+  - RedisDown
+  - RedisHighKeyEvictions
+  - RedisHighMemory
+  - RedisLowHitRatio
+  - RedisReplicationLag

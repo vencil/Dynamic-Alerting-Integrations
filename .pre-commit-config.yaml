@@ -983,6 +983,19 @@ repos:
         # --generate-observed-map` + re-resolve needs_review, then commit the map.
         files: ^(scripts/tools/ops/metric_observed_map\.yaml|rule-packs/rule-pack-.*\.yaml|scripts/tools/(ops/_observed_map_lib|lint/check_threshold_observed_map)\.py)$
 
+      - id: vmalert-coverage-check
+        name: rule-pack alert firing-coverage baseline (#947 gate A/replay gap guard)
+        entry: python3 -X utf8 scripts/tools/lint/check_vmalert_coverage.py --ci
+        language: python
+        additional_dependencies: ['pyyaml']
+        pass_filenames: false
+        # Fires when a rule pack, a *_test.yaml fixture, the baseline, or the lint
+        # changes. A NEW alert with no alert_rule_test (escapes both promtool + gate A
+        # firing tests) fails unless grandfathered; a baselined alert that gains a test
+        # / is removed also fails (baseline == reality). Fix: add an alert_rule_test, or
+        # `python scripts/tools/lint/check_vmalert_coverage.py --generate` + commit.
+        files: ^(rule-packs/rule-pack-.*\.ya?ml|tests/rulepacks/(.*_test\.ya?ml|vmalert_coverage_baseline\.yaml)|scripts/tools/lint/check_vmalert_coverage\.py)$
+
       - id: undefined-tokens-check
         name: Detect JSX/CSS/HTML references to --da-* tokens not defined in design-tokens.css
         entry: python3 -X utf8 scripts/tools/lint/check_undefined_tokens.py --ci
