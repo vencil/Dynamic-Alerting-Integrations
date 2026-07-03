@@ -188,16 +188,17 @@ data:
     \ warning\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n      summary:\
     \ Chronic CPU throttling in {{ $labels.tenant }}\n      summary_zh: '{{ $labels.tenant\
     \ }} 的容器 CPU 遭核心持續掐頸'\n      platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant\
-    \ }}: sustained CFS throttling — raise the container cpu limit or spread the burst;\
+    \ }}: sustained CFS throttling — first spread the burst / tune worker concurrency\
+    \ (e.g. GOMAXPROCS); raise the cpu limit only if genuinely under-provisioned;\
     \ drill down via tenant:container_cpu_throttle_percent:by_container'\n      platform_summary_zh:\
-    \ '[{{ $labels.tier }}] {{ $labels.tenant }}: CFS 持續掐頸 — 請提高容器 cpu limit 或攤平突發負載；以\
-    \ tenant:container_cpu_throttle_percent:by_container 定位容器'\n      description:\
-    \ '{{ $value | printf \"%.1f\" }}% of the container''s active CFS periods were\
-    \ throttled (sustained; usage may look fine — this is quota enforcement, see also\
-    \ PodContainerHighCPU)'\n      description_zh: 容器活躍 CFS 週期中有 {{ $value | printf\
-    \ \"%.1f\" }}% 被核心限流（持續發生；平均使用率可能看似正常 — 這是配額壓制，另見 PodContainerHighCPU）\n     \
-    \ runbook_url: '{{ $labels.runbook_url }}'\n      owner: '{{ $labels.owner }}'\n\
-    \      tier: '{{ $labels.tier }}'\n  - alert: PodContainerCPUThrottledCritical\n\
+    \ '[{{ $labels.tier }}] {{ $labels.tenant }}: CFS 持續掐頸 — 請先攤平突發負載／調降併發（如 GOMAXPROCS）；確屬容量不足才提高\
+    \ cpu limit；以 tenant:container_cpu_throttle_percent:by_container 定位容器'\n     \
+    \ description: '{{ $value | printf \"%.1f\" }}% of the container''s active CFS\
+    \ periods were throttled (sustained; usage may look fine — this is quota enforcement,\
+    \ see also PodContainerHighCPU)'\n      description_zh: 容器活躍 CFS 週期中有 {{ $value\
+    \ | printf \"%.1f\" }}% 被核心限流（持續發生；平均使用率可能看似正常 — 這是配額壓制，另見 PodContainerHighCPU）\n\
+    \      runbook_url: '{{ $labels.runbook_url }}'\n      owner: '{{ $labels.owner\
+    \ }}'\n      tier: '{{ $labels.tier }}'\n  - alert: PodContainerCPUThrottledCritical\n\
     \    expr: \"(\\n  rule_pack_kubernetes:pod_cpu_throttled_critical:core\\n  *\
     \ on(tenant) group_left(runbook_url, owner, tier)\\n    tenant_metadata_info\\\
     n)\\nor\\n(\\n  rule_pack_kubernetes:pod_cpu_throttled_critical:core\\n  unless\
@@ -205,45 +206,46 @@ data:
     \ critical\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n      summary:\
     \ CRITICAL CPU throttling in {{ $labels.tenant }}\n      summary_zh: '{{ $labels.tenant\
     \ }} 的容器 CPU 掐頸達臨界'\n      platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant\
-    \ }}: CFS throttling CRITICAL — raise the container cpu limit now; drill down\
-    \ via tenant:container_cpu_throttle_percent:by_container'\n      platform_summary_zh:\
-    \ '[{{ $labels.tier }}] {{ $labels.tenant }}: CFS 掐頸達臨界 — 請立即提高容器 cpu limit；以\
-    \ tenant:container_cpu_throttle_percent:by_container 定位容器'\n      description:\
-    \ '{{ $value | printf \"%.1f\" }}% of the container''s active CFS periods were\
-    \ throttled (critical threshold exceeded; quota enforcement, see also PodContainerHighCPU)'\n\
-    \      description_zh: 容器活躍 CFS 週期中有 {{ $value | printf \"%.1f\" }}% 被核心限流（超過臨界閾值；配額壓制，另見\
-    \ PodContainerHighCPU）\n      runbook_url: '{{ $labels.runbook_url }}'\n     \
-    \ owner: '{{ $labels.owner }}'\n      tier: '{{ $labels.tier }}'\n- name: kubernetes-pod-state-alerts\n\
-    \  rules:\n  - alert: ContainerCrashLoop\n    expr: \"(\\n  (\\n    (\\n     \
-    \ (\\n        tenant:container_waiting_reason:count{reason=\\\"CrashLoopBackOff\\\
+    \ }}: CFS throttling CRITICAL — raise the cpu limit now as emergency mitigation,\
+    \ then right-size and spread the burst (limit inflation erodes node headroom);\
+    \ drill down via tenant:container_cpu_throttle_percent:by_container'\n      platform_summary_zh:\
+    \ '[{{ $labels.tier }}] {{ $labels.tenant }}: CFS 掐頸達臨界 — 緊急緩解可先提高 cpu limit，事後請右調容量並攤平突發（limit\
+    \ 膨脹會侵蝕節點餘裕）；以 tenant:container_cpu_throttle_percent:by_container 定位容器'\n    \
+    \  description: '{{ $value | printf \"%.1f\" }}% of the container''s active CFS\
+    \ periods were throttled (critical threshold exceeded; quota enforcement, see\
+    \ also PodContainerHighCPU)'\n      description_zh: 容器活躍 CFS 週期中有 {{ $value |\
+    \ printf \"%.1f\" }}% 被核心限流（超過臨界閾值；配額壓制，另見 PodContainerHighCPU）\n      runbook_url:\
+    \ '{{ $labels.runbook_url }}'\n      owner: '{{ $labels.owner }}'\n      tier:\
+    \ '{{ $labels.tier }}'\n- name: kubernetes-pod-state-alerts\n  rules:\n  - alert:\
+    \ ContainerCrashLoop\n    expr: \"(\\n  (\\n    (\\n      (\\n        tenant:container_waiting_reason:count{reason=\\\
+    \"CrashLoopBackOff\\\"}\\n        * on(tenant) group_left\\n        user_state_filter{filter=\\\
+    \"container_crashloop\\\"}\\n      ) > 0\\n    )\\n    unless on(tenant)\\n  \
+    \  (user_state_filter{filter=\\\"maintenance\\\"} == 1)\\n  )\\n  * on(tenant)\
+    \ group_left(runbook_url, owner, tier)\\n    tenant_metadata_info\\n)\\nor\\n(\\\
+    n  (\\n    (\\n      (\\n        tenant:container_waiting_reason:count{reason=\\\
+    \"CrashLoopBackOff\\\"}\\n        * on(tenant) group_left\\n        user_state_filter{filter=\\\
+    \"container_crashloop\\\"}\\n      ) > 0\\n    )\\n    unless on(tenant)\\n  \
+    \  (user_state_filter{filter=\\\"maintenance\\\"} == 1)\\n  )\\n  unless on(tenant)\
+    \ tenant_metadata_info\\n)\\n\"\n    for: 30s\n    labels:\n      severity: critical\n\
+    \      tenant: '{{ $labels.tenant }}'\n    annotations:\n      summary: Container\
+    \ crash loop detected in {{ $labels.tenant }}\n      summary_zh: '{{ $labels.tenant\
+    \ }} 偵測到容器崩潰迴圈'\n      platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant\
+    \ }}: crash loop detected — check deployment and image health'\n      platform_summary_zh:\
+    \ '[{{ $labels.tier }}] {{ $labels.tenant }}: 偵測到崩潰迴圈 — 請檢查部署和映像檔案狀態'\n      description:\
+    \ '{{ $value }} container(s) in CrashLoopBackOff state'\n      description_zh:\
+    \ '{{ $value }} 個容器處於 CrashLoopBackOff 狀態'\n      runbook_url: '{{ $labels.runbook_url\
+    \ }}'\n      owner: '{{ $labels.owner }}'\n      tier: '{{ $labels.tier }}'\n\
+    \  - alert: ContainerImagePullFailure\n    expr: \"(\\n  (\\n    (\\n      (\\\
+    n        tenant:container_waiting_reason:count{reason=~\\\"ImagePullBackOff|InvalidImageName\\\
     \"}\\n        * on(tenant) group_left\\n        user_state_filter{filter=\\\"\
-    container_crashloop\\\"}\\n      ) > 0\\n    )\\n    unless on(tenant)\\n    (user_state_filter{filter=\\\
+    container_imagepull\\\"}\\n      ) > 0\\n    )\\n    unless on(tenant)\\n    (user_state_filter{filter=\\\
     \"maintenance\\\"} == 1)\\n  )\\n  * on(tenant) group_left(runbook_url, owner,\
     \ tier)\\n    tenant_metadata_info\\n)\\nor\\n(\\n  (\\n    (\\n      (\\n   \
-    \     tenant:container_waiting_reason:count{reason=\\\"CrashLoopBackOff\\\"}\\\
-    n        * on(tenant) group_left\\n        user_state_filter{filter=\\\"container_crashloop\\\
-    \"}\\n      ) > 0\\n    )\\n    unless on(tenant)\\n    (user_state_filter{filter=\\\
+    \     tenant:container_waiting_reason:count{reason=~\\\"ImagePullBackOff|InvalidImageName\\\
+    \"}\\n        * on(tenant) group_left\\n        user_state_filter{filter=\\\"\
+    container_imagepull\\\"}\\n      ) > 0\\n    )\\n    unless on(tenant)\\n    (user_state_filter{filter=\\\
     \"maintenance\\\"} == 1)\\n  )\\n  unless on(tenant) tenant_metadata_info\\n)\\\
-    n\"\n    for: 30s\n    labels:\n      severity: critical\n      tenant: '{{ $labels.tenant\
-    \ }}'\n    annotations:\n      summary: Container crash loop detected in {{ $labels.tenant\
-    \ }}\n      summary_zh: '{{ $labels.tenant }} 偵測到容器崩潰迴圈'\n      platform_summary:\
-    \ '[{{ $labels.tier }}] {{ $labels.tenant }}: crash loop detected — check deployment\
-    \ and image health'\n      platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant\
-    \ }}: 偵測到崩潰迴圈 — 請檢查部署和映像檔案狀態'\n      description: '{{ $value }} container(s) in\
-    \ CrashLoopBackOff state'\n      description_zh: '{{ $value }} 個容器處於 CrashLoopBackOff\
-    \ 狀態'\n      runbook_url: '{{ $labels.runbook_url }}'\n      owner: '{{ $labels.owner\
-    \ }}'\n      tier: '{{ $labels.tier }}'\n  - alert: ContainerImagePullFailure\n\
-    \    expr: \"(\\n  (\\n    (\\n      (\\n        tenant:container_waiting_reason:count{reason=~\\\
-    \"ImagePullBackOff|InvalidImageName\\\"}\\n        * on(tenant) group_left\\n\
-    \        user_state_filter{filter=\\\"container_imagepull\\\"}\\n      ) > 0\\\
-    n    )\\n    unless on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\
-    \"} == 1)\\n  )\\n  * on(tenant) group_left(runbook_url, owner, tier)\\n    tenant_metadata_info\\\
-    n)\\nor\\n(\\n  (\\n    (\\n      (\\n        tenant:container_waiting_reason:count{reason=~\\\
-    \"ImagePullBackOff|InvalidImageName\\\"}\\n        * on(tenant) group_left\\n\
-    \        user_state_filter{filter=\\\"container_imagepull\\\"}\\n      ) > 0\\\
-    n    )\\n    unless on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\
-    \"} == 1)\\n  )\\n  unless on(tenant) tenant_metadata_info\\n)\\n\"\n    for:\
-    \ 30s\n    labels:\n      severity: warning\n      tenant: '{{ $labels.tenant\
+    n\"\n    for: 30s\n    labels:\n      severity: warning\n      tenant: '{{ $labels.tenant\
     \ }}'\n    annotations:\n      summary: Image pull failure detected in {{ $labels.tenant\
     \ }}\n      summary_zh: '{{ $labels.tenant }} 偵測到映像檔案拉取失敗'\n      platform_summary:\
     \ '[{{ $labels.tier }}] {{ $labels.tenant }}: image pull failing — verify registry\

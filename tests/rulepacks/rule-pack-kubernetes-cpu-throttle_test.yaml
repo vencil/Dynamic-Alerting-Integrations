@@ -79,8 +79,8 @@ tests:
             exp_annotations:
               summary: "Chronic CPU throttling in db-a"
               summary_zh: "db-a 的容器 CPU 遭核心持續掐頸"
-              platform_summary: "[gold] db-a: sustained CFS throttling — raise the container cpu limit or spread the burst; drill down via tenant:container_cpu_throttle_percent:by_container"
-              platform_summary_zh: "[gold] db-a: CFS 持續掐頸 — 請提高容器 cpu limit 或攤平突發負載；以 tenant:container_cpu_throttle_percent:by_container 定位容器"
+              platform_summary: "[gold] db-a: sustained CFS throttling — first spread the burst / tune worker concurrency (e.g. GOMAXPROCS); raise the cpu limit only if genuinely under-provisioned; drill down via tenant:container_cpu_throttle_percent:by_container"
+              platform_summary_zh: "[gold] db-a: CFS 持續掐頸 — 請先攤平突發負載／調降併發（如 GOMAXPROCS）；確屬容量不足才提高 cpu limit；以 tenant:container_cpu_throttle_percent:by_container 定位容器"
               description: "30.0% of the container's active CFS periods were throttled (sustained; usage may look fine — this is quota enforcement, see also PodContainerHighCPU)"
               description_zh: "容器活躍 CFS 週期中有 30.0% 被核心限流（持續發生；平均使用率可能看似正常 — 這是配額壓制，另見 PodContainerHighCPU）"
               runbook_url: "http://rb/a"
@@ -113,8 +113,8 @@ tests:
             exp_annotations:
               summary: "Chronic CPU throttling in db-b"
               summary_zh: "db-b 的容器 CPU 遭核心持續掐頸"
-              platform_summary: "[] db-b: sustained CFS throttling — raise the container cpu limit or spread the burst; drill down via tenant:container_cpu_throttle_percent:by_container"
-              platform_summary_zh: "[] db-b: CFS 持續掐頸 — 請提高容器 cpu limit 或攤平突發負載；以 tenant:container_cpu_throttle_percent:by_container 定位容器"
+              platform_summary: "[] db-b: sustained CFS throttling — first spread the burst / tune worker concurrency (e.g. GOMAXPROCS); raise the cpu limit only if genuinely under-provisioned; drill down via tenant:container_cpu_throttle_percent:by_container"
+              platform_summary_zh: "[] db-b: CFS 持續掐頸 — 請先攤平突發負載／調降併發（如 GOMAXPROCS）；確屬容量不足才提高 cpu limit；以 tenant:container_cpu_throttle_percent:by_container 定位容器"
               description: "30.0% of the container's active CFS periods were throttled (sustained; usage may look fine — this is quota enforcement, see also PodContainerHighCPU)"
               description_zh: "容器活躍 CFS 週期中有 30.0% 被核心限流（持續發生；平均使用率可能看似正常 — 這是配額壓制，另見 PodContainerHighCPU）"
               runbook_url: ""
@@ -225,8 +225,8 @@ tests:
             exp_annotations:
               summary: "CRITICAL CPU throttling in db-f"
               summary_zh: "db-f 的容器 CPU 掐頸達臨界"
-              platform_summary: "[gold] db-f: CFS throttling CRITICAL — raise the container cpu limit now; drill down via tenant:container_cpu_throttle_percent:by_container"
-              platform_summary_zh: "[gold] db-f: CFS 掐頸達臨界 — 請立即提高容器 cpu limit；以 tenant:container_cpu_throttle_percent:by_container 定位容器"
+              platform_summary: "[gold] db-f: CFS throttling CRITICAL — raise the cpu limit now as emergency mitigation, then right-size and spread the burst (limit inflation erodes node headroom); drill down via tenant:container_cpu_throttle_percent:by_container"
+              platform_summary_zh: "[gold] db-f: CFS 掐頸達臨界 — 緊急緩解可先提高 cpu limit，事後請右調容量並攤平突發（limit 膨脹會侵蝕節點餘裕）；以 tenant:container_cpu_throttle_percent:by_container 定位容器"
               description: "55.0% of the container's active CFS periods were throttled (critical threshold exceeded; quota enforcement, see also PodContainerHighCPU)"
               description_zh: "容器活躍 CFS 週期中有 55.0% 被核心限流（超過臨界閾值；配額壓制，另見 PodContainerHighCPU）"
               runbook_url: "http://rb/f"
@@ -352,8 +352,8 @@ tests:
             exp_annotations:
               summary: "Chronic CPU throttling in db-j"
               summary_zh: "db-j 的容器 CPU 遭核心持續掐頸"
-              platform_summary: "[gold] db-j: sustained CFS throttling — raise the container cpu limit or spread the burst; drill down via tenant:container_cpu_throttle_percent:by_container"
-              platform_summary_zh: "[gold] db-j: CFS 持續掐頸 — 請提高容器 cpu limit 或攤平突發負載；以 tenant:container_cpu_throttle_percent:by_container 定位容器"
+              platform_summary: "[gold] db-j: sustained CFS throttling — first spread the burst / tune worker concurrency (e.g. GOMAXPROCS); raise the cpu limit only if genuinely under-provisioned; drill down via tenant:container_cpu_throttle_percent:by_container"
+              platform_summary_zh: "[gold] db-j: CFS 持續掐頸 — 請先攤平突發負載／調降併發（如 GOMAXPROCS）；確屬容量不足才提高 cpu limit；以 tenant:container_cpu_throttle_percent:by_container 定位容器"
               description: "30.0% of the container's active CFS periods were throttled (sustained; usage may look fine — this is quota enforcement, see also PodContainerHighCPU)"
               description_zh: "容器活躍 CFS 週期中有 30.0% 被核心限流（持續發生；平均使用率可能看似正常 — 這是配額壓制，另見 PodContainerHighCPU）"
               runbook_url: "http://rb/j"
