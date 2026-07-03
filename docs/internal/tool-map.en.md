@@ -176,6 +176,7 @@ lang: en
 | `check_leftouterjoin_enrichment.py` | Left-outer-join enrichment invariant lint (ADR-024 PR3-pre Commit 3). |
 | `check_lint_toolchain_fit.py` | meta-lint: stop reinventing ESLint/stylelint. |
 | `check_log_egress_policy.py` | #566 batch D (T4-1/T4-2) egress allowlist gate. |
+| `check_maintenance_symmetry.py` | check_maintenance_symmetry — per-arm maintenance-clause symmetry guard for rule-pack alerts. |
 | `check_makefile_targets.py` | Makefile target 與 DX 工具聯動檢查 |
 | `check_md_yaml_drift.py` | Markdown 內 YAML 範例與 Schema 漂移偵測 |
 | `check_metric_dictionary.py` | Metric Dictionary 自動驗證 |
@@ -207,6 +208,7 @@ lang: en
 | `check_undefined_tokens.py` | Detect JSX/CSS/HTML references to --da-* tokens not defined in design-tokens.css (with --report-orphans discovery mode). |
 | `check_vmalert_coverage.py` | check_vmalert_coverage — rule-pack alert FIRING-decision coverage baseline guard. |
 | `check_window_x_no_fallback.py` | Forbid module-scope `const X = window.__X;` no-fallback reads (dev-rules.md §S6). |
+| `check_workflow_git_push_permissions.py` | guard against a silently no-op `git push`. |
 | `detect_sed_damage.py` | Detect sed -i damage on staged files. |
 | `fix_doc_links.py` | Auto-fix broken MkDocs cross-reference links. |
 | `fix_file_hygiene.py` | Fix file hygiene issues: strip null bytes and ensure EOF newline. |

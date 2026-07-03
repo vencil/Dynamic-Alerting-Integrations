@@ -208,6 +208,7 @@ lang: zh
 | `check_undefined_tokens.py` | Detect JSX/CSS/HTML references to --da-* tokens not defined in design-tokens.css (with --report-orphans discovery mode). |
 | `check_vmalert_coverage.py` | check_vmalert_coverage — rule-pack alert FIRING-decision coverage baseline guard. |
 | `check_window_x_no_fallback.py` | Forbid module-scope `const X = window.__X;` no-fallback reads (dev-rules.md §S6). |
+| `check_workflow_git_push_permissions.py` | guard against a silently no-op `git push`. |
 | `detect_sed_damage.py` | Detect sed -i damage on staged files. |
 | `fix_doc_links.py` | Auto-fix broken MkDocs cross-reference links. |
 | `fix_file_hygiene.py` | Fix file hygiene issues: strip null bytes and ensure EOF newline. |

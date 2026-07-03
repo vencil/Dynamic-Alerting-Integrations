@@ -1085,3 +1085,18 @@ repos:
         # Comment lines (`//` and JSDoc ` *`) and inline backtick code-spans
         # auto-skipped; per-line escape `// playwright-rtl-drift: ignore`
         # (3-line lookback) for residual cases.
+
+      - id: workflow-git-push-permission-check
+        name: "Forbid a git push step in .github/workflows/ without an explicit contents: write grant"
+        entry: python3 -X utf8 scripts/tools/lint/check_workflow_git_push_permissions.py --ci
+        language: python
+        additional_dependencies: ['pyyaml']
+        pass_filenames: false
+        files: ^\.github/workflows/.*\.ya?ml$|^scripts/tools/lint/check_workflow_git_push_permissions\.py$
+        # docs-ci.yaml's check-coverage job ran `git commit` + `git push || true`
+        # with no `contents: write` permission anywhere (repo's default Workflow
+        # permissions is read-only). Every push since v2.0.0-preview silently
+        # failed; `|| true` swallowed the error and nobody noticed because the
+        # committed file had no consumer (found in PR #983 review, 2026-07-03;
+        # the dead auto-commit step was removed). This hook makes a future
+        # instance of the same mistake fail loudly instead of silently.
