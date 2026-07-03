@@ -37,6 +37,13 @@ on:
   push:
     branches: [main]
 
+# Explicit least-privilege grant (repo default is read-only; every sibling
+# workflow declares this block too). pull-requests:read is specifically for
+# detect-changes' dorny/paths-filter@v3 REST-API mode below.
+permissions:
+  contents: read
+  pull-requests: read
+
 jobs:
   detect-changes:
     name: Detect Documentation Changes
@@ -48,9 +55,10 @@ jobs:
     outputs:
       docs_changed: ${{ steps.filter.outputs.docs }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
+      # No actions/checkout here: dorny/paths-filter's default REST-API mode
+      # for pull_request events queries the changed-files list via the
+      # GitHub API and doesn't need a local clone (see its README's "For
+      # pull requests it's not necessary to checkout the code").
       - name: Filter changed paths
         id: filter
         uses: dorny/paths-filter@v3
