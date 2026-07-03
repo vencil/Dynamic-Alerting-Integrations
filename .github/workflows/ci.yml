@@ -96,6 +96,7 @@ jobs:
           pre-commit run bat-ascii-purity-check --all-files
           pre-commit run design-token-usage --all-files
           pre-commit run tool-consistency-check --all-files
+          pre-commit run portal-audience-enum-check --all-files
           pre-commit run structure-check --all-files
           pre-commit run routing-profiles-check --all-files
           # #880: conf.d tenant YAML vs tenant-config schema (db_type-typo guard).
@@ -216,8 +217,12 @@ jobs:
         continue-on-error: true
         run: |
           pip install pytest
-          VM_VERSION=1.146.0
-          # Pinned SHA-256 of vmutils-linux-amd64-v1.146.0.tar.gz (upstream release).
+          # VM engine version comes from the single pins SSOT (tests/rulepacks/
+          # vm_engine_version) shared with the equivalence anchor (test_vm_backend_parity.py)
+          # so the gate's engine and the anchor-verified engine can't drift (pin-coupling guard).
+          . tests/rulepacks/vm_engine_version
+          # Pinned SHA-256 of vmutils-linux-amd64-v${VM_VERSION}.tar.gz (upstream release);
+          # a version/hash mismatch fails _verify_download.sh below (couples SHA <-> version).
           VMUTILS_SHA256=ec597bc2168d0792638ab0dc847e37041bace57a358bafa0da034c9fd438efac
           curl -fsSL "https://github.com/VictoriaMetrics/VictoriaMetrics/releases/download/v${VM_VERSION}/vmutils-linux-amd64-v${VM_VERSION}.tar.gz" -o /tmp/vmutils.tgz
           bash scripts/ops/_verify_download.sh /tmp/vmutils.tgz "$VMUTILS_SHA256"
@@ -309,51 +314,6 @@ jobs:
       # Edit a recipe status but forget `make recipe-status-json` → fail here.
       - name: "recipe-status.json matches RECIPE_STATUS SSOT (HARD gate — #741 #6)"
         run: python scripts/tools/dx/gen_recipe_status_json.py --check
-
-  backend-compat-parity:
-    name: Backend-compat PromQL parity (VictoriaMetrics)
-    # ADR-025 deferred "backend compatibility" Part 1. We claim storage-backend-
-    # agnostic (ADR-020/021) but every promtool golden runs on Prometheus only.
-    # This re-runs a representative subset of those SAME goldens against a real
-    # VictoriaMetrics, asserting VM evaluates our COMPILED rule-pack exprs (incl
-    # the recording-rule chain) to the same result (label-sets + fire/no-fire +
-    # value/epsilon). Staleness/temporal semantics stay deferred (need real gaps).
-    # Informational (not a required check); ~30s, parallel to the long jobs.
-    runs-on: ubuntu-latest
-    # The job only reads the repo (checkout → docker VM → pytest); cap
-    # GITHUB_TOKEN accordingly (CodeQL actions/missing-workflow-permissions).
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-      - name: Start VictoriaMetrics (digest-pinned; large retention for fixed-epoch fixtures)
-        # docker run (not a `services:` container) so we can pass the flag:
-        # `-retentionPeriod=100y` — fixtures ingest at a FIXED epoch for determinism
-        # (Gemini trap #1); VM's default 1-month retention would silently drop them.
-        # Image digest-pinned per the supply-chain policy (#851); re-resolve with
-        # `docker buildx imagetools inspect <img>:<ver>` on a version bump.
-        run: |
-          docker run -d --name vm-parity -p 8428:8428 \
-            docker.io/victoriametrics/victoria-metrics:v1.146.0@sha256:b8703ff12ed437effad4fc36492fec14824277f2890a5876b8a9e6cfe5139839 \
-            -retentionPeriod=100y
-          for i in $(seq 1 30); do
-            curl -fsS http://localhost:8428/health >/dev/null 2>&1 && { echo "VM up"; break; }
-            sleep 1
-          done
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.13"
-      - name: Install deps
-        run: pip install pyyaml pytest
-      - name: Run backend-compat parity smoke
-        # VM_PARITY_REQUIRE=1 → an unreachable VM is a HARD FAILURE, never a silent
-        # skip-to-green (the job's whole point).
-        env:
-          VM_PARITY_REQUIRE: "1"
-          VM_PARITY_ENDPOINT: http://localhost:8428
-        run: python -m pytest tests/rulepacks/test_vm_backend_parity.py -v
 
   iac-helm-sast:
     # Container/k8s SAST Layers 2 + 4 (#448 / TRK-312 + TRK-314).

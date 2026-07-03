@@ -5,7 +5,7 @@
 # Only this file should contain 'defaults', 'state_filters', and '_routing_defaults'.
 defaults:
   mysql_connections: 80
-  mysql_cpu: 80
+  mysql_cpu: 30      # running-thread SATURATION warning (threads_running, NOT host CPU%); 80→30 = PMM/Nichter "high" tier (#944)
   pg_connections: 80
   pg_replication_lag: 30
   container_cpu: 80

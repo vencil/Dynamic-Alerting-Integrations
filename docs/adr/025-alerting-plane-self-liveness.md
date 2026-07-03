@@ -122,7 +122,7 @@ receivers:
 
 - **Watchdog + 外部 dead-man's-switch（D1）** — 已實作（[#838](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/838)）。
 - **CI 規則靜態檢查（pint）** — 採用 OSS `pint`、hard-gate `alerts/template`，攔截「聚合砍掉 template 用到的 label → 告警永遠靜默」這個本 repo 燒過多次的類別（[#843](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/843)）。
-- **後端相容性 — PromQL / value parity** — 對真實 VictoriaMetrics 跑代表性 rule-pack golden（餵**編譯產出**）的函數 / label / 值 parity，把「儲存後端中立」變成可驗證的 CI 事實（`tests/rulepacks/test_vm_backend_parity.py` + CI job）。
+- **後端相容性 — PromQL / value parity** — 每 PR 由 `tests/rulepacks/test_vm_alert_parity.py`（全 fixture 過 `vmalert-tool unittest` = 生產 MetricsQL 引擎）守，把「儲存後端中立」變成可驗證 CI 事實；`test_vm_backend_parity.py` 退役成 on-demand 的「vmalert-tool == 真 vmsingle」等價 anchor（原 docker-VM job 已併入 gate A，[#947](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/947)）。
 - **合成探測對接面** — 帶 `component="synthetic-probe"` 的告警保證落 `synthetic-receiver` 且 `continue:false`，讓客戶用自己現有的探測器零風險驗端到端投遞（見 [合成探測對接](../integration/synthetic-probe-interop.md)）。
 - **runtime canary 租戶** — **設計就緒**（完整設計 + CI promtool 範例見 [Runtime Canary 設計](../design/runtime-canary.md)）；管線在正式環境已串通，**仍延後的是常駐部署**（詳見〈之後再說〉）。
 

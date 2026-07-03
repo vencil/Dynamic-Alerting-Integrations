@@ -1,0 +1,458 @@
+# promtool unit test — Oracle rule-pack FIRING coverage (#947 Splunk→VM migration burn-down).
+# Run: promtool test rules tests/rulepacks/rule-pack-oracle_test.yaml
+#
+# Burns down the rule-pack-oracle.yaml entries in vmalert_coverage_baseline.yaml (#969):
+# the Oracle pack is an active Splunk→VM migration target, and until now only its
+# threshold VALUE contract was tested (rule-pack-oracle-threshold_test.yaml) — the firing
+# decision, `for:` state machine and label/annotation rendering escaped both promtool and
+# the vmalert-tool gate A. Every alert gets, at minimum:
+#   * a FIRING case (non-empty exp_alerts — pins labels + rendered annotations),
+#   * a no-fire control (below threshold / exporter healthy),
+#   * a `for:` debounce case (expr already true, eval BEFORE the for: window ⇒ no alert).
+# Threshold alerts additionally exercise the pack's per-alert branch plumbing
+# (hand-copied per alert, so a typo in one alert's clause is only caught by testing
+# THAT alert), extending the rule-pack-mariadb-cpu_test.yaml scaffold to FIVE tenants:
+#   - db-a: over threshold, metadata present    → fires ENRICHED (branch A).
+#   - db-b: over threshold, NO metadata          → STILL fires BARE (branch B, vacuum).
+#   - db-c: over threshold, maintenance active   → suppressed via the ENRICHED arm's clause.
+#   - db-d: below threshold, metadata present    → no alert (threshold-driven no-fire).
+#   - db-e: over threshold, maintenance, NO meta → suppressed via the BARE arm's clause.
+#     Each alert hand-copies the maintenance `unless` TWICE (once per or-arm); db-c only
+#     exercises the enriched copy, so without db-e deleting the bare arm's copy stays
+#     green — and a metadata-less onboarding tenant in maintenance would still page
+#     (adversarial-review find; the four-tenant mariadb-cpu scaffold shares this hole).
+# db-a's tablespace input carries a SECOND, healthy dimension so the :max recording
+# rule's worst-dimension-wins direction is pinned (a min↔max flip turns the test red).
+# All input values are steady-state (constant gauges / linear counters ⇒ constant rate
+# once the 5m window is covered), so cross-group recording-rule tick skew cannot flip an
+# exact $value at the asserted evals (#943/#949 flake).
+rule_files:
+  - ../../rule-packs/rule-pack-oracle.yaml
+
+evaluation_interval: 15s
+
+tests:
+  # ── Availability: OracleDatabaseDown (raw leaf expr, no threshold/branch plumbing) ──
+  - interval: 15s
+    input_series:
+      # db-a: exporter reports the instance down for the whole window.
+      - series: 'oracledb_up{tenant="db-a", instance="oracledb-exporter-a:9161"}'
+        values: '0x8'
+      # db-b: healthy instance → no-fire control.
+      - series: 'oracledb_up{tenant="db-b", instance="oracledb-exporter-b:9161"}'
+        values: '1x8'
+
+    alert_rule_test:
+      # for: 15s debounce — expr true at t=0 but the alert is only PENDING until 15s.
+      - eval_time: 0m
+        alertname: OracleDatabaseDown
+        exp_alerts: []
+      - eval_time: 1m
+        alertname: OracleDatabaseDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              tenant: db-a
+              instance: oracledb-exporter-a:9161
+            exp_annotations:
+              summary: "Oracle instance oracledb-exporter-a:9161 is DOWN"
+              summary_zh: "Oracle 實例 oracledb-exporter-a:9161 已關閉"
+              description: "oracledb_up=0 for 15s on oracledb-exporter-a:9161"
+              description_zh: "oracledb_up=0，持續 15 秒，實例：oracledb-exporter-a:9161"
+        # db-b (oracledb_up=1) produces NO alert.
+
+  # ── Threshold + ratio alerts: four-tenant scaffold, one shared input set ──
+  - interval: 15s
+    input_series:
+      # Tenant scaffold — metadata for db-a/db-c/db-d (db-b is the onboarding vacuum),
+      # maintenance flag on db-c only.
+      - series: 'tenant_metadata_info{tenant="db-a", runbook_url="http://rb/a", owner="team-a", tier="gold"}'
+        values: '1x48'
+      - series: 'tenant_metadata_info{tenant="db-c", runbook_url="http://rb/c", owner="team-c", tier="silver"}'
+        values: '1x48'
+      - series: 'tenant_metadata_info{tenant="db-d", runbook_url="http://rb/d", owner="team-d", tier="bronze"}'
+        values: '1x48'
+      - series: 'user_state_filter{tenant="db-c", filter="maintenance"}'
+        values: '1x48'
+      - series: 'user_state_filter{tenant="db-e", filter="maintenance"}'
+        values: '1x48'
+
+      # Active sessions: 250 > 200 warning (db-a/b/c, and db-e in its block below); db-d 100 < 200.
+      - series: 'oracledb_sessions_active{tenant="db-a"}'
+        values: '250x48'
+      - series: 'oracledb_sessions_active{tenant="db-b"}'
+        values: '250x48'
+      - series: 'oracledb_sessions_active{tenant="db-c"}'
+        values: '250x48'
+      - series: 'oracledb_sessions_active{tenant="db-d"}'
+        values: '100x48'
+      - series: 'user_threshold{tenant="db-a", component="oracle", metric="sessions_active", severity="warning"}'
+        values: '200x48'
+      - series: 'user_threshold{tenant="db-b", component="oracle", metric="sessions_active", severity="warning"}'
+        values: '200x48'
+      - series: 'user_threshold{tenant="db-c", component="oracle", metric="sessions_active", severity="warning"}'
+        values: '200x48'
+      - series: 'user_threshold{tenant="db-d", component="oracle", metric="sessions_active", severity="warning"}'
+        values: '200x48'
+
+      # Session limit (drives tenant:oracle_session_utilization:ratio = active/limit):
+      # db-a/b/c 250/250 = 1.0 > 0.85 hardcoded; db-d 100/1000 = 0.1.
+      - series: 'oracledb_resource_limit{tenant="db-a", resource="sessions"}'
+        values: '250x48'
+      - series: 'oracledb_resource_limit{tenant="db-b", resource="sessions"}'
+        values: '250x48'
+      - series: 'oracledb_resource_limit{tenant="db-c", resource="sessions"}'
+        values: '250x48'
+      - series: 'oracledb_resource_limit{tenant="db-d", resource="sessions"}'
+        values: '1000x48'
+
+      # Tablespace usage: 92 > 85 warning; db-d 70 < 85.
+      - series: 'oracledb_tablespace_used_percent{tenant="db-a", tablespace_name="USERS"}'
+        values: '92x48'
+      # Second, HEALTHY dimension for db-a — pins worst-dimension-wins (:max) direction:
+      # max(92, 70) = 92 fires; a max→min flip reads 70 (< 85) and goes red.
+      - series: 'oracledb_tablespace_used_percent{tenant="db-a", tablespace_name="TEMP"}'
+        values: '70x48'
+      - series: 'oracledb_tablespace_used_percent{tenant="db-b", tablespace_name="USERS"}'
+        values: '92x48'
+      - series: 'oracledb_tablespace_used_percent{tenant="db-c", tablespace_name="USERS"}'
+        values: '92x48'
+      - series: 'oracledb_tablespace_used_percent{tenant="db-d", tablespace_name="USERS"}'
+        values: '70x48'
+      - series: 'user_threshold{tenant="db-a", component="oracle", metric="tablespace_used_percent", severity="warning"}'
+        values: '85x48'
+      - series: 'user_threshold{tenant="db-b", component="oracle", metric="tablespace_used_percent", severity="warning"}'
+        values: '85x48'
+      - series: 'user_threshold{tenant="db-c", component="oracle", metric="tablespace_used_percent", severity="warning"}'
+        values: '85x48'
+      - series: 'user_threshold{tenant="db-d", component="oracle", metric="tablespace_used_percent", severity="warning"}'
+        values: '85x48'
+
+      # Wait-time counter: +30/15s ⇒ steady rate5m = 2.0 s/s > 1 (db-a/b/c/e); db-d +7.5/15s ⇒ 0.5.
+      # ⚠️ rate() cold-start (#946): with series starting at t=0, Prometheus'
+      # extrapolatedRate divides by the FULL 5m window (not the sampled span), so the
+      # Prom rate ramps ~linearly with window coverage and only crosses the 1.0 threshold
+      # at ~2m45s (⇒ for: 5m fires at ~7m45s); MetricsQL uses the actual data span and
+      # reads 2.0 from the first ticks (⇒ fires at ~5m15s). The firing assertion below
+      # sits at 9m — past BOTH engines' fire point with ≥5 ticks of margin against
+      # promtool extrapolation-math drift (at 8m the margin was a single tick), window
+      # fully covered ⇒ $value is exactly 2.0 on both — so the known cold-start
+      # divergence axis is avoided by construction instead of catalogued. Soak
+      # expectation: at a REAL cold-start (new tenant / exporter restart / counter
+      # reset) VM's first fire leads Prometheus by up to one window — expected engine
+      # math, NOT a false positive; see docs/integration/victoriametrics-integration.md §3.1.
+      - series: 'oracledb_wait_time_seconds_total{tenant="db-a"}'
+        values: '0+30x48'
+      - series: 'oracledb_wait_time_seconds_total{tenant="db-b"}'
+        values: '0+30x48'
+      - series: 'oracledb_wait_time_seconds_total{tenant="db-c"}'
+        values: '0+30x48'
+      - series: 'oracledb_wait_time_seconds_total{tenant="db-d"}'
+        values: '0+7.5x48'
+      - series: 'user_threshold{tenant="db-a", component="oracle", metric="wait_time_rate", severity="warning"}'
+        values: '1x48'
+      - series: 'user_threshold{tenant="db-b", component="oracle", metric="wait_time_rate", severity="warning"}'
+        values: '1x48'
+      - series: 'user_threshold{tenant="db-c", component="oracle", metric="wait_time_rate", severity="warning"}'
+        values: '1x48'
+      - series: 'user_threshold{tenant="db-d", component="oracle", metric="wait_time_rate", severity="warning"}'
+        values: '1x48'
+
+      # Process count: 350 > 300 warning; db-d 100 < 300.
+      - series: 'oracledb_process_count{tenant="db-a"}'
+        values: '350x48'
+      - series: 'oracledb_process_count{tenant="db-b"}'
+        values: '350x48'
+      - series: 'oracledb_process_count{tenant="db-c"}'
+        values: '350x48'
+      - series: 'oracledb_process_count{tenant="db-d"}'
+        values: '100x48'
+      - series: 'user_threshold{tenant="db-a", component="oracle", metric="process_count", severity="warning"}'
+        values: '300x48'
+      - series: 'user_threshold{tenant="db-b", component="oracle", metric="process_count", severity="warning"}'
+        values: '300x48'
+      - series: 'user_threshold{tenant="db-c", component="oracle", metric="process_count", severity="warning"}'
+        values: '300x48'
+      - series: 'user_threshold{tenant="db-d", component="oracle", metric="process_count", severity="warning"}'
+        values: '300x48'
+
+      # PGA allocated: 5 GiB (5368709120) > 4 GiB threshold; db-d 2 GiB. Exact powers of
+      # two keep humanize1024's %.4g rendering unambiguous ("5Gi").
+      - series: 'oracledb_pga_allocated_bytes{tenant="db-a"}'
+        values: '5368709120x48'
+      - series: 'oracledb_pga_allocated_bytes{tenant="db-b"}'
+        values: '5368709120x48'
+      - series: 'oracledb_pga_allocated_bytes{tenant="db-c"}'
+        values: '5368709120x48'
+      - series: 'oracledb_pga_allocated_bytes{tenant="db-d"}'
+        values: '2147483648x48'
+      - series: 'user_threshold{tenant="db-a", component="oracle", metric="pga_allocated_bytes", severity="warning"}'
+        values: '4294967296x48'
+      - series: 'user_threshold{tenant="db-b", component="oracle", metric="pga_allocated_bytes", severity="warning"}'
+        values: '4294967296x48'
+      - series: 'user_threshold{tenant="db-c", component="oracle", metric="pga_allocated_bytes", severity="warning"}'
+        values: '4294967296x48'
+      - series: 'user_threshold{tenant="db-d", component="oracle", metric="pga_allocated_bytes", severity="warning"}'
+        values: '4294967296x48'
+
+      # db-e: BARE-arm maintenance control — breaches EVERY metric, is in maintenance,
+      # has NO tenant_metadata_info. Only the bare arm's hand-copied
+      # `unless (user_state_filter{filter="maintenance"} == 1)` can suppress it; delete
+      # or typo that clause in any alert and its implicit no-fire assertion turns red.
+      - series: 'oracledb_sessions_active{tenant="db-e"}'
+        values: '250x48'
+      - series: 'user_threshold{tenant="db-e", component="oracle", metric="sessions_active", severity="warning"}'
+        values: '200x48'
+      - series: 'oracledb_resource_limit{tenant="db-e", resource="sessions"}'
+        values: '250x48'
+      - series: 'oracledb_tablespace_used_percent{tenant="db-e", tablespace_name="USERS"}'
+        values: '92x48'
+      - series: 'user_threshold{tenant="db-e", component="oracle", metric="tablespace_used_percent", severity="warning"}'
+        values: '85x48'
+      - series: 'oracledb_wait_time_seconds_total{tenant="db-e"}'
+        values: '0+30x48'
+      - series: 'user_threshold{tenant="db-e", component="oracle", metric="wait_time_rate", severity="warning"}'
+        values: '1x48'
+      - series: 'oracledb_process_count{tenant="db-e"}'
+        values: '350x48'
+      - series: 'user_threshold{tenant="db-e", component="oracle", metric="process_count", severity="warning"}'
+        values: '300x48'
+      - series: 'oracledb_pga_allocated_bytes{tenant="db-e"}'
+        values: '5368709120x48'
+      - series: 'user_threshold{tenant="db-e", component="oracle", metric="pga_allocated_bytes", severity="warning"}'
+        values: '4294967296x48'
+
+    alert_rule_test:
+      # ── OracleHighActiveSessions (for: 5m) ──
+      - eval_time: 3m           # debounce: expr true since ~15s, still < 5m ⇒ pending only
+        alertname: OracleHighActiveSessions
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: OracleHighActiveSessions
+        exp_alerts:
+          # db-a: enriched (branch A) — carries runbook_url/owner/tier.
+          - exp_labels:
+              severity: warning
+              tenant: db-a
+              runbook_url: "http://rb/a"
+              owner: team-a
+              tier: gold
+            exp_annotations:
+              summary: "Oracle high active sessions on db-a"
+              summary_zh: "db-a 上 Oracle 活動 session 數過高"
+              platform_summary: "[gold] db-a: Oracle active sessions elevated — connection pool review"
+              platform_summary_zh: "[gold] db-a：Oracle 活動 session 數升高 — connection pool 審查"
+              description: "250 active sessions"
+              description_zh: "250 個活動 session"
+              runbook_url: "http://rb/a"
+              owner: team-a
+              tier: gold
+          # db-b: VACUUM-FIRE (branch B) — fires WITHOUT enrichment labels.
+          - exp_labels:
+              severity: warning
+              tenant: db-b
+            exp_annotations:
+              summary: "Oracle high active sessions on db-b"
+              summary_zh: "db-b 上 Oracle 活動 session 數過高"
+              platform_summary: "[] db-b: Oracle active sessions elevated — connection pool review"
+              platform_summary_zh: "[] db-b：Oracle 活動 session 數升高 — connection pool 審查"
+              description: "250 active sessions"
+              description_zh: "250 個活動 session"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+        # db-c/db-e (maintenance, via the enriched/bare arm resp.) and db-d (below threshold) produce NO alert.
+
+      # ── OracleTablespaceAlmostFull (for: 5m) ──
+      - eval_time: 3m
+        alertname: OracleTablespaceAlmostFull
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: OracleTablespaceAlmostFull
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              tenant: db-a
+              runbook_url: "http://rb/a"
+              owner: team-a
+              tier: gold
+            exp_annotations:
+              summary: "Oracle tablespace nearing capacity on db-a"
+              summary_zh: "db-a 上 Oracle tablespace 即將滿容"
+              platform_summary: "[gold] db-a: Oracle tablespace nearing capacity — storage review"
+              platform_summary_zh: "[gold] db-a：Oracle tablespace 即將滿容 — 儲存審查"
+              description: "Tablespace usage: 92.0%"
+              description_zh: "Tablespace 使用率：92.0%"
+              runbook_url: "http://rb/a"
+              owner: team-a
+              tier: gold
+          - exp_labels:
+              severity: warning
+              tenant: db-b
+            exp_annotations:
+              summary: "Oracle tablespace nearing capacity on db-b"
+              summary_zh: "db-b 上 Oracle tablespace 即將滿容"
+              platform_summary: "[] db-b: Oracle tablespace nearing capacity — storage review"
+              platform_summary_zh: "[] db-b：Oracle tablespace 即將滿容 — 儲存審查"
+              description: "Tablespace usage: 92.0%"
+              description_zh: "Tablespace 使用率：92.0%"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+        # db-c/db-e (maintenance, via the enriched/bare arm resp.) and db-d (below threshold) produce NO alert.
+
+      # ── OracleHighWaitTime (for: 5m, rate-based — firing eval at 9m, see the
+      #    cold-start note on the input series; 3m is inside BOTH engines' pending window) ──
+      - eval_time: 3m
+        alertname: OracleHighWaitTime
+        exp_alerts: []
+      - eval_time: 9m
+        alertname: OracleHighWaitTime
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              tenant: db-a
+              runbook_url: "http://rb/a"
+              owner: team-a
+              tier: gold
+            exp_annotations:
+              summary: "Oracle high wait time on db-a"
+              summary_zh: "db-a 上 Oracle 等待時間過高"
+              platform_summary: "[gold] db-a: Oracle wait time elevated — performance bottleneck review"
+              platform_summary_zh: "[gold] db-a：Oracle 等待時間升高 — 效能瓶頸審查"
+              description: "Wait time rate: 2.0s/s"
+              description_zh: "等待時間速率：2.0秒/秒"
+              runbook_url: "http://rb/a"
+              owner: team-a
+              tier: gold
+          - exp_labels:
+              severity: warning
+              tenant: db-b
+            exp_annotations:
+              summary: "Oracle high wait time on db-b"
+              summary_zh: "db-b 上 Oracle 等待時間過高"
+              platform_summary: "[] db-b: Oracle wait time elevated — performance bottleneck review"
+              platform_summary_zh: "[] db-b：Oracle 等待時間升高 — 效能瓶頸審查"
+              description: "Wait time rate: 2.0s/s"
+              description_zh: "等待時間速率：2.0秒/秒"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+        # db-c/db-e (maintenance, via the enriched/bare arm resp.) and db-d (rate 0.5 < 1) produce NO alert.
+
+      # ── OracleHighProcessCount (for: 5m) ──
+      - eval_time: 3m
+        alertname: OracleHighProcessCount
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: OracleHighProcessCount
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              tenant: db-a
+              runbook_url: "http://rb/a"
+              owner: team-a
+              tier: gold
+            exp_annotations:
+              summary: "Oracle high process count on db-a"
+              summary_zh: "db-a 上 Oracle process 數過高"
+              platform_summary: "[gold] db-a: Oracle process count high — resource review"
+              platform_summary_zh: "[gold] db-a：Oracle process 數過高 — 資源審查"
+              description: "350 active processes"
+              description_zh: "350 個活動 process"
+              runbook_url: "http://rb/a"
+              owner: team-a
+              tier: gold
+          - exp_labels:
+              severity: warning
+              tenant: db-b
+            exp_annotations:
+              summary: "Oracle high process count on db-b"
+              summary_zh: "db-b 上 Oracle process 數過高"
+              platform_summary: "[] db-b: Oracle process count high — resource review"
+              platform_summary_zh: "[] db-b：Oracle process 數過高 — 資源審查"
+              description: "350 active processes"
+              description_zh: "350 個活動 process"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+        # db-c/db-e (maintenance, via the enriched/bare arm resp.) and db-d (below threshold) produce NO alert.
+
+      # ── OracleHighPGAUsage (for: 10m — longer debounce window) ──
+      - eval_time: 6m           # 5m-alerts already fire here, but the 10m one must NOT yet
+        alertname: OracleHighPGAUsage
+        exp_alerts: []
+      - eval_time: 11m
+        alertname: OracleHighPGAUsage
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              tenant: db-a
+              runbook_url: "http://rb/a"
+              owner: team-a
+              tier: gold
+            exp_annotations:
+              summary: "Oracle high PGA usage on db-a"
+              summary_zh: "db-a 上 Oracle PGA 使用率過高"
+              platform_summary: "[gold] db-a: Oracle PGA usage high — memory sizing review"
+              platform_summary_zh: "[gold] db-a：Oracle PGA 使用率過高 — 記憶體大小調整審查"
+              description: "PGA allocated: 5GiB"
+              description_zh: "配置的 PGA：5GiB"
+              runbook_url: "http://rb/a"
+              owner: team-a
+              tier: gold
+          - exp_labels:
+              severity: warning
+              tenant: db-b
+            exp_annotations:
+              summary: "Oracle high PGA usage on db-b"
+              summary_zh: "db-b 上 Oracle PGA 使用率過高"
+              platform_summary: "[] db-b: Oracle PGA usage high — memory sizing review"
+              platform_summary_zh: "[] db-b：Oracle PGA 使用率過高 — 記憶體大小調整審查"
+              description: "PGA allocated: 5GiB"
+              description_zh: "配置的 PGA：5GiB"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+        # db-c/db-e (maintenance, via the enriched/bare arm resp.) and db-d (2 GiB < 4 GiB) produce NO alert.
+
+      # ── OracleHighSessionUtilization (for: 5m, hardcoded ratio > 0.85) ──
+      # $value is the RAW ratio (here 250/250 = 1.0); the description renders it via
+      # `humanizePercentage` → "100%" (#975 fix, also covers MongoDBConnectionSaturation;
+      # the earlier `printf "%.0f" }}%` variant showed 100% utilization as "1%").
+      - eval_time: 3m
+        alertname: OracleHighSessionUtilization
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: OracleHighSessionUtilization
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              tenant: db-a
+              runbook_url: "http://rb/a"
+              owner: team-a
+              tier: gold
+            exp_annotations:
+              summary: "Oracle session limit approaching on db-a"
+              summary_zh: "db-a 上 Oracle session 限制即將達到"
+              platform_summary: "[gold] db-a: Oracle session limit approaching — capacity action needed"
+              platform_summary_zh: "[gold] db-a：Oracle session 限制即將達到 — 需採取容量擴增行動"
+              description: "Session utilization: 100%"
+              description_zh: "Session 使用率：100%"
+              runbook_url: "http://rb/a"
+              owner: team-a
+              tier: gold
+          - exp_labels:
+              severity: warning
+              tenant: db-b
+            exp_annotations:
+              summary: "Oracle session limit approaching on db-b"
+              summary_zh: "db-b 上 Oracle session 限制即將達到"
+              platform_summary: "[] db-b: Oracle session limit approaching — capacity action needed"
+              platform_summary_zh: "[] db-b：Oracle session 限制即將達到 — 需採取容量擴增行動"
+              description: "Session utilization: 100%"
+              description_zh: "Session 使用率：100%"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+        # db-c/db-e (maintenance, via the enriched/bare arm resp.) and db-d (0.1 < 0.85) produce NO alert.

@@ -1,6 +1,14 @@
 # Backend-compat parity baseline（VictoriaMetrics）
 
-> ADR-025 deferred「後端相容性」Part 1。把「平台 backend-agnostic」（[ADR-020](../adr/020-tenant-federation.md)/021）從行銷宣稱變成**可驗證的 CI 事實**：對真實 VictoriaMetrics 跑代表性 rule-pack golden，斷言它與 Prometheus 評估**我們編譯出的 expr** 結果一致。
+> ADR-025 deferred「後端相容性」Part 1。把「平台 backend-agnostic」（[ADR-020](../adr/020-tenant-federation.md)/021）從行銷宣稱變成可驗證事實：對真實 VictoriaMetrics 跑代表性 rule-pack golden，斷言它與 Prometheus 評估**我們編譯出的 expr** 結果一致。
+
+## 角色（#947 consolidation 後）
+
+**per-PR 的 VM rule-pack parity 由 `tests/rulepacks/test_vm_alert_parity.py` 單獨負責**（gate A：全 fixture 過 `vmalert-tool unittest` = 生產 vmalert 跑的 MetricsQL 引擎，比 promtool 多守 `for:`／range／annotation templating 層）。
+
+本 harness（`test_vm_backend_parity.py`）退役成 **on-demand 等價 anchor**：證「in-memory `vmalert-tool` == 真 `vmsingle`（storage+query）」，**授權**把 gate A 當 vmsingle proxy。**不再每 PR 跑**（原 `backend-compat-parity` docker-VM job 已移除）——等價是「pinned 引擎版本」的性質，只在**版本 bump** 時需重驗；每 PR 跑只是重複驗 gate A 已更廣涵蓋的 shared-math instant 層（唯一真分歧軸 storage-staleness 兩 gate 都 defer）。跑時機：**`tests/rulepacks/vm_engine_version` 改動時由 CI 自動跑**（[`.github/workflows/vm-anchor-on-pin-change.yml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/.github/workflows/vm-anchor-on-pin-change.yml)，path-filtered＝在等價*可能*改變的唯一時點驗、非 nightly；#958 B1 實證：idiom 上 vmalert-tool==vmsingle，只 VM 版本 bump 可能引入分歧）；或手動 `workflow_dispatch`／任何有 pinned vmsingle 的 dev-container。
+
+**pin-coupling guard**：gate A 的 vmalert-tool 與本 anchor 的 vmsingle 共用單一版本 pin `tests/rulepacks/vm_engine_version`（ci.yml 的 vmalert-tool install `source` 它；`test_engine_version_matches_pin` 斷言 live vmsingle 報的版本 == 它）。舊雙-pin（vmutils 在一個 job、vmsingle image 在另一個）會靜默漂移 → anchor 驗錯版本。
 
 ## 為什麼自己寫（不接 OSS 工具）
 
@@ -25,16 +33,18 @@
 | 涵蓋 | 不涵蓋（不同層 / 仍 defer） |
 |---|---|
 | 後端對**編譯 expr（含 recording 鏈）**的函數 / label / 值（epsilon）評估一致 | `for:` duration、alert templating → rule **evaluator**（Prometheus/vmalert）的事，與儲存後端無關 |
-| alert fire/no-fire 決策一致 | **staleness / gap 上的 `absence` / `predict_linear` 時間外插** → 需真實時間軸 gap，dense fixture 測不出 → **仍 defer**（trigger：首個客戶整合自有後端）|
+| alert fire/no-fire 決策一致 | **staleness / gap 上的 `absence` 時序** → 需真實時間軸 gap，dense fixture 測不出、本 anchor + gate A 都未涵蓋；defer-trigger（首客戶自有後端）**已觸發** → 已由 on-demand replay bench [`test_vm_replay_staleness.py`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/tests/rulepacks/test_vm_replay_staleness.py) 刻畫（`vmalert -replay` 對真 vmsingle 跑 synthetic gap，pin VM staleness 時序、對 promtool 比對；#947，見 [`victoriametrics-integration.md §3.2`](../integration/victoriametrics-integration.md)）。仍開：`predict_linear` 時間外插 |
+
+> **⚠️ 運營／資源等價 NOT 涵蓋（Gemini #959）**：gate A（`vmalert-tool`）與本 anchor 都只驗**邏輯／數學**等價——`vmalert-tool` 是**無資源界線的純記憶體運算器**，對 query 的**效能與資源消耗提供 0 保證**。一條數學正確但昂貴的規則（如跨維度 many-to-many join）在 gate A 亮綠，部署到真 vmsingle 卻可能撞 `-search.maxQueryDuration`（超時）／`-search.maxMemoryPerQuery`（OOM）→ 生產 HTTP 503 或被 kill＝**silent False Negative**。效能防線**不在 anchor**：靠 query-複雜度 lint（pint）＋客戶 vmsingle 的資源上限＋soak 期雙活觀察。
 
 ## 關鍵實作決策（gotchas，動它前先讀）
 
 - **VM 須帶 `-retentionPeriod=100y`**：fixture 用**固定 epoch T0**（確定性，不用 `now`；CI 快慢不影響結果）。VM 預設 1 個月 retention 會把 2023 的 T0 樣本**靜默丟棄**（import 回 204 卻查不到）。
 - **唯一性時間窗**：每個 (worker, case, test-block) 用唯一且確定性的 `T0 + slot*GAP`（`GAP=3600s` ≫ VM 5m staleness lookback）→ 不跨 fixture/worker 污染、重跑冪等。`-n auto` 安全。
-- **fail-loud**：CI job 設 `VM_PARITY_REQUIRE=1` → VM 連不上即**硬 fail**，絕不靜默 skip→假綠；`force_flush` 失敗在 REQUIRE 下也 raise（避免 unflushed race）。
+- **fail-loud**：設 `VM_PARITY_REQUIRE=1`（版本-bump 重驗時用）→ VM 連不上即**硬 fail**，絕不靜默 skip→假綠；`force_flush` 失敗在 REQUIRE 下也 raise（避免 unflushed race）。預設（未設）無 VM 即 skip。
 - **plumbing guard**：每個 case 斷言 recording-rule 鏈**有寫出 ≥1 series**——否則空的 alert 結果可能是 no-op 假裝「no-fire」。
-- **VM image digest-pin**（供應鏈，#851 政策）：CI 用 `victoriametrics/victoria-metrics:v1.111.0@sha256:…`；bump 版本時用 `docker buildx imagetools inspect <img>:<ver>` 重解 digest（勿用 `docker inspect`，arm64 會給 arch-specific digest）。
-- **本地**：無 VM → parity 自動 skip、純函式單元測試照跑；要本地跑 parity：`docker run -d -p 8428:8428 …:v1.111.0 -retentionPeriod=100y` 後 `VM_PARITY_ENDPOINT=http://localhost:8428 pytest …`。
+- **版本 pin 單一 SSOT**：引擎版本只在 `tests/rulepacks/vm_engine_version`（`VM_VERSION`）；ci.yml 的 vmalert-tool install `source` 它、anchor 讀它。**bump 程序**：改 `VM_VERSION` → 同步 ci.yml 的 `VMUTILS_SHA256`（不符 `_verify_download.sh` 會 fail，強制版本↔hash 耦合）→ 同步 [`vm-anchor-on-pin-change.yml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/.github/workflows/vm-anchor-on-pin-change.yml) 的 **vmsingle image+digest**。改 `vm_engine_version`／anchor 的 PR 會讓 **VM Anchor Gate** workflow（**always-run；無關改動時 skip-to-green、不起 vmsingle**）起 matching vmsingle 跑 anchor（`VM_PARITY_REQUIRE=1`）驗等價仍成立——忘了同步 image 版本 → `test_engine_version_matches_pin` 自爆。**該 gate 設計為 required-eligible**（owner 可加入 branch-protection required checks → 破壞性 bump 被**硬擋**、非只 informational；Gemini #959 修正 path-filter 的「紅燈仍可 squash-merge」漏洞）。image digest-pin（供應鏈 #851）原用於已移除的 CI job；dev-container 的 vmsingle（`victoria-metrics-prod`）來自**獨立的** `victoria-metrics-*.tar.gz`（**非** vmutils tarball——後者只含 vmalert-tool 等工具），與 vmalert-tool **同 release tag**；版本不符由 anchor 的 `test_engine_version_matches_pin` 擋。
+- **跑 anchor**（主路徑）：無 VM → 自動 skip、純函式單元測試照跑；要跑：起 pinned vmsingle（`docker run -d -p 8428:8428 victoriametrics/victoria-metrics:v<VM_VERSION> -retentionPeriod=100y`）後 `VM_PARITY_REQUIRE=1 VM_PARITY_ENDPOINT=http://localhost:8428 pytest tests/rulepacks/test_vm_backend_parity.py`。dev-container 直接用 `/tmp/vm/victoria-metrics-prod`（vmsingle，與 vmalert-tool **同 release tag、不同 tarball**；見上「版本 pin 單一 SSOT」）。
 
 ## 加覆蓋
 

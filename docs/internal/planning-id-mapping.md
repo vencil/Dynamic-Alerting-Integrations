@@ -160,6 +160,8 @@ SOT 在 [`dx-tooling-backlog.md`](dx-tooling-backlog.md)。
 | TRK-325 | [#678](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/678) | 讀寫拆分部署（CQRS）+ read-only enforcement 模式（deferred、**已關閉**；RFC dup [#788](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/788)；re-trigger codify 成 alert `TenantApiReadHANeeded`，見 ADR-023 A4） | TRK-317 |
 | TRK-326 | [#751](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/751) | Custom-alert `for` divergence：`for` 納 recipe_id slug + schema enum（向量化靜默覆蓋 P0） | [#741](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/741) |
 | TRK-327 | [#936](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/936) | Raw-mode forecast 缺現值防抖動地板（anti-flap floor）— defer-with-trigger（Gemini Day-2 review；ratio 模式已有 `_FORECAST_CURRENT_BAND`，raw 模式 out-of-scope at GA） | [#741](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/741) |
+| TRK-328 | [#964](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/964) | VM parity gate count/time masking — rogue-check 只比 `(alert,direction)` 集合、漏既有分歧惡化成更多 failing assertion（gate-hardening；count-vs-time-vs-tolerance 設計取捨；defer-with-trigger 提議；#958 Gemini ext-review ①） | [#947](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/947) |
+| TRK-329 | [#978](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/978) | percent-render 範式守門 — renderer↔fixture 耦合 lint + 慣例 codify（`*100`/`humanizePercentage` 混用防呆、防 8500% 誤渲染；defer-with-trigger；#975 Gemini ext-review 盲區①） | [#947](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/947) |
 
 ## 不在 mapping 範圍
 

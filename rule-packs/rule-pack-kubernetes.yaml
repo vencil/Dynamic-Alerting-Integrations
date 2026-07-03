@@ -64,6 +64,57 @@ groups:
             "tenant", "$1", "namespace", "(.*)"
           )
 
+      # Limitless-pod CPU% via NODE-ALLOCATABLE (#944 PR-2b): a pod WITHOUT a cpu limit
+      # has no %-of-limit denominator (the rule above yields NOTHING for it), so
+      # PodContainerHighCPU was blind. A limitless container's REAL ceiling is the NODE it
+      # runs on — so measure the pod's UNBOUNDED-container cpu usage as a % of the node's
+      # allocatable cpu (USE-method saturation: "is this pod monopolising its node / starving
+      # neighbours"). Reuses the `container_cpu` threshold (80) — % of the EFFECTIVE ceiling
+      # (limit if set, else node). Scoped PER CONTAINER (`unless on(namespace, pod, container)`),
+      # NOT per pod: a MIXED pod (limited sidecar + unlimited db) keeps %-of-limit for its
+      # bounded containers AND this node-share for its unbounded ones, so the unlimited db
+      # container is never dropped just because a sidecar has a limit (#961 CodeRabbit).
+      # Why node-allocatable, NOT %-of-request: a cpu request is CFS *shares*
+      # (a scheduling floor), not a usage ceiling — a Burstable pod is MEANT to burst above
+      # its request when the node is idle, so %-of-request would false-fire on correct K8s
+      # behaviour (external review). The pod→node join reuses the proven kube_pod_info{node}
+      # pattern (see tenant:node_owner:info below). Pre-aggregate allocatable `max by(node)`
+      # so a duplicate per-node series can't break the group_right cardinality.
+      # ⛔ KSM prerequisites: kube_pod_labels allowlist (version, as above) +
+      # kube_node_status_allocatable + kube_pod_info (both core KSM, not allowlist-gated).
+      - record: tenant:pod_cpu_node_share:limitless
+        expr: |
+          label_replace(
+            (
+              (
+                (
+                  sum by(namespace, pod) (
+                    sum by(namespace, pod, container) (
+                      rate(container_cpu_usage_seconds_total{namespace=~"db-.+", container!="", container!="POD"}[5m])
+                    )
+                    unless on(namespace, pod, container)
+                    sum by(namespace, pod, container) (
+                      kube_pod_container_resource_limits{resource="cpu", namespace=~"db-.+"}
+                    )
+                  )
+                )
+                /
+                max by(namespace, pod) (
+                  max by(node) (kube_node_status_allocatable{resource="cpu"})
+                  * on(node) group_right()
+                    kube_pod_info{namespace=~"db-.+"}
+                )
+                * 100
+              )
+              * on(namespace, pod) group_left(version)
+                label_replace(
+                  kube_pod_labels{namespace=~"db-.+"},
+                  "version", "$1", "label_app_kubernetes_io_version", "(.+)"
+                )
+            ),
+            "tenant", "$1", "namespace", "(.*)"
+          )
+
       # Container memory usage as % of limit.
       # ADR-024 (0a) version injection: join kube_pod_labels at the outermost
       # level to attach `version` (from app.kubernetes.io/version) — mirrors the
@@ -94,8 +145,21 @@ groups:
       # Weakest link: MAX across containers per pod.
       # ADR-024 (0b): `version` is carried through every aggregation layer so
       # the per-version dimension survives to the alert join (CPU and memory).
+      # CPU% per pod: bounded containers → %-of-limit; unbounded containers → %-of-node-
+      # allocatable (#944 PR-2b). Both are `or`-unioned then MAX'd INSIDE one aggregation, so a
+      # MIXED pod contributes BOTH signals and takes its worst (a bounded container's %-of-limit
+      # vs the unbounded containers' %-of-node). `max(A) or B` would instead DROP node-share for
+      # any pod that already has a %-of-limit series, hiding a limitless db container behind a
+      # limited sidecar (#961 CodeRabbit). Every container is covered by exactly one lens, so
+      # EVERY scheduled db pod has a CPU% → PodContainerHighCPU is never blind, even for mixed
+      # pods (this is what retired the ContainerCpuSignalAbsent sentinel).
       - record: tenant:pod_weakest_cpu_percent:max
-        expr: max by(tenant, pod, version) (tenant:container_cpu_percent:by_container)
+        expr: |
+          max by(tenant, pod, version) (
+            tenant:container_cpu_percent:by_container
+            or
+            tenant:pod_cpu_node_share:limitless
+          )
 
       - record: tenant:pod_weakest_memory_percent:max
         expr: max by(tenant, pod, version) (tenant:container_memory_percent:by_container)
@@ -625,6 +689,12 @@ groups:
           description_zh: "您設定了磁碟填滿告警，但平台偵測不到您工作負載的磁碟(volume)指標，該告警永遠不會觸發。這通常表示您的服務沒有掛載 PersistentVolumeClaim — 請確認您的部署。若您確實使用 PVC，請聯繫平台團隊排查磁碟指標收集。"
           runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/byo-prometheus-integration.md"
 
+  # ─────────────────────────────────────────────────────────────────────
+  # (#944 PR-2b) The ContainerCpuSignalAbsent sentinel that lived here was RETIRED:
+  # it flagged limitless db pods as a CPU% blind spot, but tenant:pod_cpu_node_share
+  # (above) now measures every pod's UNBOUNDED containers via node-allocatable —
+  # per-container, so even a MIXED pod's unlimited db container is covered (#961) — so
+  # PodContainerHighCPU is no longer blind for any scheduled pod; the stopgap is obsolete.
   # ─────────────────────────────────────────────────────────────────────
   # Node health (#809): tenant-attributed node-NotReady alerting.
   # Infra signals (kube_node_status_condition) are node-scoped — they carry

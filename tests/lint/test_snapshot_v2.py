@@ -70,11 +70,11 @@ def _make_sample_alerts():
             labels={"alertname": "MariaDBHighConnections", "tenant": "db-a"},
         ),
         ac.AlertEvent(
-            tenant="db-a", alertname="MariaDBHighCPU",
+            tenant="db-a", alertname="MariaDBHighThreadsRunning",
             severity="warning", namespace="db-a",
             starts_at=(base.timestamp() + 60),
             ends_at=(base.timestamp() + 600),
-            labels={"alertname": "MariaDBHighCPU", "tenant": "db-a"},
+            labels={"alertname": "MariaDBHighThreadsRunning", "tenant": "db-a"},
         ),
         ac.AlertEvent(
             tenant="db-b", alertname="PostgreSQLHighConnections",

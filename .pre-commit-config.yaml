@@ -426,6 +426,20 @@ repos:
         # files); CI --all-files is the backstop for removed dist bundles.
         files: ^(docs/(assets/(tool-registry\.yaml|jsx-loader\.html|flows\.json|dist/[^/]+\.js)|interactive/index\.html|.*\.md)|tools/portal/src/.*\.jsx|README[^/]*\.md|mkdocs\.yml)$
 
+      - id: portal-audience-enum-check
+        name: Portal audience values must be in the closed vocabulary
+        entry: python3 -X utf8 scripts/tools/lint/check_portal_audience_enum.py
+        language: python
+        additional_dependencies: ['pyyaml']
+        pass_filenames: false
+        # Locks audience / data-audience to {platform,tenant,domain,sre,
+        # maintainer,sec} so the Hub role filter can't silently drop tools
+        # again (the domain-expert / management / contributor drift this PR
+        # normalised). Reads fixed paths → pass_filenames:false; CI Lint job
+        # invokes it directly (was only in `make lint-portal`, which nothing
+        # calls → not actually gated).
+        files: ^(docs/assets/tool-registry\.yaml|docs/interactive/index\.html)$
+
       - id: structure-check
         name: Project structure enforcement
         entry: python3 -X utf8 scripts/tools/lint/check_structure.py --ci
@@ -968,6 +982,19 @@ repos:
         # (Gemini final-check). Fix: `da-tools threshold-recommend
         # --generate-observed-map` + re-resolve needs_review, then commit the map.
         files: ^(scripts/tools/ops/metric_observed_map\.yaml|rule-packs/rule-pack-.*\.yaml|scripts/tools/(ops/_observed_map_lib|lint/check_threshold_observed_map)\.py)$
+
+      - id: vmalert-coverage-check
+        name: rule-pack alert firing-coverage baseline (#947 gate A/replay gap guard)
+        entry: python3 -X utf8 scripts/tools/lint/check_vmalert_coverage.py --ci
+        language: python
+        additional_dependencies: ['pyyaml']
+        pass_filenames: false
+        # Fires when a rule pack, a *_test.yaml fixture, the baseline, or the lint
+        # changes. A NEW alert with no alert_rule_test (escapes both promtool + gate A
+        # firing tests) fails unless grandfathered; a baselined alert that gains a test
+        # / is removed also fails (baseline == reality). Fix: add an alert_rule_test, or
+        # `python scripts/tools/lint/check_vmalert_coverage.py --generate` + commit.
+        files: ^(rule-packs/rule-pack-.*\.ya?ml|tests/rulepacks/(.*_test\.ya?ml|vmalert_coverage_baseline\.yaml)|scripts/tools/lint/check_vmalert_coverage\.py)$
 
       - id: undefined-tokens-check
         name: Detect JSX/CSS/HTML references to --da-* tokens not defined in design-tokens.css

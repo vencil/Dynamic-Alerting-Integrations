@@ -191,6 +191,97 @@ tenantProjections: []
   # - tenantId: "tenant-beta"
   #   accountId: 1001
 
+# ── Fail-closed projection GATE (#908) — active ONLY when tenantProjections is set.
+# A Vector init-container validates the rendered tenantProjections against the
+# authoritative _account_registry.yaml (conf.d) BEFORE Vector starts, and places
+# the tenant-routing config-dir fragment ONLY when every {tenantId→accountId} pair
+# matches the registry. This catches a "unique-but-wrong" accountId (a copy-paste
+# typo the render-time uniqueness {{fail}} and the integer schema both pass) — the
+# cross-tenant-leak case the other guards are blind to.
+#   degrade (default) — mismatch / unreadable registry → OMIT the tenant fragment;
+#                       Vector runs platform-only 0:0 (the safe default) and stays up.
+#                       ⚠️ ONE-SHOT-AT-BOOT: if the registry ConfigMap is absent at pod
+#                       start (e.g. a fresh-deploy ORDERING RACE — Vector boots before
+#                       the registry is synced; optional:true lets it start), the gate
+#                       degrades to 0:0 and STAYS there even after the registry arrives
+#                       (Vector won't re-read the boot config). Symptom: everything
+#                       green, but tenant routing silently off. Recovery:
+#                       `kubectl rollout restart ds/<vector>`. (A follow-up PR alerts on
+#                       the gate's registry_unreadable metric so this isn't silent.)
+#   enforce           — a config-bug mismatch hard-fails the pod (paranoid envs).
+#                       ⚠️ On a DaemonSet this DEADLOCKS the rollout: a bad config makes
+#                       the new pod Init:CrashLoopBackOff, and maxUnavailable halts the
+#                       rollout cluster-wide (the mid-roll node loses logging; un-rolled
+#                       nodes keep the old config). Intended fail-closed — REVERT the bad
+#                       config (or delete the stuck pod) to recover.
+tenantProjectionGate: degrade
+projectionGate:
+  image:
+    # The vector-projection-gate image (helm/vector/projection-gate/Dockerfile).
+    # Published by the release pipeline; override to your registry/tag.
+    repository: ghcr.io/vencil/vector-projection-gate
+    tag: "0.1.0"
+    digest: ""
+    pullPolicy: IfNotPresent
+  registry:
+    # Operator-provided ConfigMap materialising the conf.d registry, exposing the
+    # key `_account_registry.yaml` (read-only — the gate never writes it). Same
+    # read-side pattern as threshold-exporter's conf.d ConfigMap mount, NOT the
+    # tenant-api git-write plane. REQUIRED when tenantProjections is set.
+    configMapName: ""
+  # ── Least-privilege securityContext for the gate init-container + exposer sidecar
+  # (#908 PR-3 m3). SEPARATE from the Vector container's `containerSecurityContext`
+  # (which MUST run as root + keep DAC_READ_SEARCH to read root-owned /var/log host
+  # files): the gate only reads a ConfigMap-mounted registry and writes the shared
+  # emptyDirs, so it needs neither. The image is already USER 65532; this pins it
+  # non-root + drops ALL capabilities. The emptyDirs stay writable via the pod's
+  # `fsGroup: 0` (adds gid 0 to the container's supplementary groups, and the
+  # emptyDir is group-0 + group-writable; strictly, kubelet already creates
+  # emptyDirs 0777 so ANY uid can write — fsGroup is belt-and-suspenders, not the
+  # load-bearing permission) — readOnlyRootFilesystem does not block writes to
+  # MOUNTED volumes, only to the container rootfs.
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+    capabilities:
+      drop: ["ALL"]
+    seccompProfile:
+      type: RuntimeDefault
+  # Small fixed footprint — the gate is a short-lived one-shot validator that
+  # parses two YAML files. Set explicitly so kube-linter (Container SAST L4
+  # unset-cpu/memory-requirements) is satisfied; override if your registry is large.
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      cpu: 100m
+      memory: 64Mi
+  # ── Verdict-metric observability (#908 PR-3a) ───────────────────────────────
+  # The init-container writes its verdict to a Prometheus textfile in a shared
+  # emptyDir; a long-lived metrics-exposer SIDECAR (serve_metrics.py, same image)
+  # re-serves it over HTTP so Prometheus can scrape it via a headless Service
+  # (rendered ONLY when tenantProjections is set — the gate observability does NOT
+  # require Vector's own metrics.enabled). The verdict is decided ONCE at boot; the
+  # sidecar never re-evaluates. Tying the endpoint to the pod means the series goes
+  # ABSENT (not stale-"ok") on a pod crash — see serve_metrics.py + the
+  # VectorProjectionGateDegraded / EnforceDeadlock alerts (configmap-rules-platform).
+  metrics:
+    # Port the exposer listens on (distinct from Vector's own metrics.port 9598).
+    port: 9599
+    # Sidecar footprint — a stdlib HTTP server re-reading one small textfile per
+    # scrape. Set explicitly so kube-linter L4 (unset cpu/memory) is satisfied.
+    resources:
+      requests:
+        cpu: 10m
+        memory: 32Mi
+      limits:
+        cpu: 50m
+        memory: 64Mi
+
 # ⛔ ALLOWLIST of the ONLY fields projected into a tenant partition (ADR-021
 # §Fork B; fail-CLOSED sanitization). The tenant copy is rebuilt from scratch
 # containing ONLY these fields (+ the trusted `account_id`) — everything else

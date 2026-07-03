@@ -55,9 +55,9 @@ function useTenantData({ setApiNotification, t, q = '' }) {
           setTenants(apiData.tenants);
           setSearchOverflow(apiData.overflow);
           setDataSource('api');
-          // Custom groups still come from the static path (the
-          // tenant-api doesn't yet expose group definitions —
-          // they live in `_groups.yaml` adjacent to the tenants).
+          // Seed groups for the group filter: prefer the live API (GET
+          // /api/v1/groups) so a PUT-created group survives reload, then
+          // platform-data.json, then DEMO_GROUPS (see loadGroupsBestEffort).
           await loadGroupsBestEffort();
           return;
         }
@@ -226,11 +226,30 @@ function useTenantData({ setApiNotification, t, q = '' }) {
       return n;
     }
 
-    // loadGroupsBestEffort tries to seed `groups` even in API
-    // mode by reading platform-data.json's custom_groups block.
-    // If platform-data.json doesn't exist either, fall back to
-    // DEMO_GROUPS so the group-management UI has SOMETHING.
+    // loadGroupsBestEffort seeds `groups` in API mode. Priority:
+    //   1. live API GET /api/v1/groups (ListGroups) — so a group
+    //      created via PUT survives a refresh (closes the
+    //      read/write asymmetry: groups were WRITTEN to the API but
+    //      previously READ only from the static path, so a created
+    //      group vanished on reload in live mode).
+    //   2. platform-data.json's custom_groups block.
+    //   3. DEMO_GROUPS, so the group-management UI has SOMETHING.
+    // Falls through on any failure so the static docs-site path
+    // (no backend) still works.
     async function loadGroupsBestEffort() {
+      // ---- 1: live API ----
+      // A reachable backend returns its real group set — including an
+      // empty {} when it has zero groups (or RBAC-filtered to zero),
+      // which is truthy, so we intentionally show NO groups rather than
+      // falling through to demo (a live empty backend must not fake demo
+      // groups). Only null (network error / no backend / non-array body)
+      // falls through to the static path below.
+      const apiGroups = await fetchGroupsFromAPI();
+      if (apiGroups) {
+        setGroups(apiGroups);
+        return;
+      }
+      // ---- 2 + 3: static platform-data.json → DEMO ----
       try {
         const resp = await fetch('platform-data.json');
         if (!resp.ok) {
@@ -246,6 +265,46 @@ function useTenantData({ setApiNotification, t, q = '' }) {
       } catch (_e) {
         setGroups(DEMO_GROUPS);
       }
+    }
+
+    // fetchGroupsFromAPI reads GET /api/v1/groups (ListGroups). The
+    // endpoint returns a JSON ARRAY of GroupResponse
+    // ({id,label,description,filters,members}); the orchestrator's
+    // `groups` state is a keyed-by-id object ({[id]:{label,...}}), so
+    // coerce array → map here. Returns null on any failure (404 /
+    // network / non-array body) so the caller falls back to the
+    // static path — same silent-fallthrough idiom as
+    // fetchTenantsFromAPI (a static docs site with no backend must
+    // NOT surface a console-error or empty group list).
+    async function fetchGroupsFromAPI() {
+      let resp;
+      try {
+        resp = await fetch('/api/v1/groups');
+      } catch (_e) {
+        return null; // network error / no backend
+      }
+      if (!resp || !resp.ok) return null;
+      let body;
+      try {
+        body = await resp.json();
+      } catch (_e) {
+        return null;
+      }
+      if (!Array.isArray(body)) return null;
+      const keyed = {};
+      for (const g of body) {
+        if (!g || !g.id) continue;
+        keyed[g.id] = {
+          label: g.label || g.id,
+          description: g.description || '',
+          members: Array.isArray(g.members) ? g.members : [],
+          // Preserve filters if present (ADR-010); the current UI
+          // doesn't consume them but round-tripping avoids silently
+          // dropping server state on a later create/delete merge.
+          ...(g.filters ? { filters: g.filters } : {}),
+        };
+      }
+      return keyed;
     }
 
     loadData().finally(() => setLoading(false));

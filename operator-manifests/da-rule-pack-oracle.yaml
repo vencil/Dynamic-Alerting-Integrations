@@ -201,8 +201,8 @@ spec:
           limit approaching — capacity action needed'
         platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant }}：Oracle session
           限制即將達到 — 需採取容量擴增行動'
-        description: 'Session utilization: {{ $value | printf "%.0f" }}%'
-        description_zh: Session 使用率：{{ $value | printf "%.0f" }}%
+        description: 'Session utilization: {{ $value | humanizePercentage }}'
+        description_zh: Session 使用率：{{ $value | humanizePercentage }}
         runbook_url: '{{ $labels.runbook_url }}'
         owner: '{{ $labels.owner }}'
         tier: '{{ $labels.tier }}'

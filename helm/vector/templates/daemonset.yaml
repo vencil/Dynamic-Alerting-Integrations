@@ -44,13 +44,82 @@ spec:
       affinity:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- if .Values.tenantProjections }}
+      # ── Projection gate (#908 PR-2) ──────────────────────────────────────────
+      # Validate the rendered tenantProjections against the authoritative
+      # _account_registry.yaml BEFORE Vector starts, then populate Vector's
+      # --config-dir: 00-base.yaml always; the tenant-routing fragment ONLY when
+      # every {tenantId→accountId} matches the registry. On a mismatch (or an
+      # unreadable registry) the fragment is omitted → Vector runs platform-only
+      # 0:0 (the safe default). This is the only un-bypassable enforcement point —
+      # Vector cannot load a config the gate did not place. enforce mode hard-fails
+      # the pod on a config-bug mismatch instead.
+      initContainers:
+        - name: projection-gate
+          image: "{{ .Values.projectionGate.image.repository }}:{{ .Values.projectionGate.image.tag }}{{ with .Values.projectionGate.image.digest }}@{{ . }}{{ end }}"
+          imagePullPolicy: {{ .Values.projectionGate.image.pullPolicy }}
+          args:
+            - "--registry"
+            - "/conf.d/_account_registry.yaml"
+            - "--projections"
+            - "/staging/tenant-projections.json"
+            - "--base-config"
+            - "/staging/vector.yaml"
+            - "--fragment-config"
+            - "/staging/30-tenant-routing.yaml"
+            - "--config-dir"
+            - "/etc/vector"
+            - "--mode"
+            - {{ .Values.tenantProjectionGate | quote }}
+            # Write the verdict to a Prometheus textfile in a shared emptyDir; the
+            # metrics-exposer sidecar re-serves it for Prometheus (#908 PR-3a).
+            - "--metrics-file"
+            - "/gate-metrics/gate.prom"
+          # Least-privilege: the gate reads a ConfigMap-mounted registry + writes the
+          # emptyDirs — it needs NEITHER root NOR DAC_READ_SEARCH (unlike the Vector
+          # container, which reads root-owned /var/log host files). #908 PR-3 m3.
+          # `required`: `helm upgrade --reuse-values` from <=0.8.0 ERASES new chart
+          # defaults → a nil here would render `securityContext: null` (= unset) and
+          # the hardening would silently not apply. Fail loud instead (same
+          # secure-by-default posture as projectionGate.registry.configMapName).
+          securityContext:
+            {{- toYaml (required "projectionGate.securityContext is required when tenantProjections is set (nil = the least-privilege hardening silently not applied — supply it, or upgrade without --reuse-values so chart defaults apply)" .Values.projectionGate.securityContext) | nindent 12 }}
+          resources:
+            {{- toYaml .Values.projectionGate.resources | nindent 12 }}
+          volumeMounts:
+            # Rendered configs to validate + place (read-only staging).
+            - name: staging
+              mountPath: /staging
+              readOnly: true
+            # The conf.d registry (operator-provided ConfigMap), read-only.
+            - name: registry
+              mountPath: /conf.d
+              readOnly: true
+            # The config-dir Vector loads — the gate WRITES the chosen files here.
+            - name: config
+              mountPath: /etc/vector
+            # Verdict textfile destination — the sidecar reads it read-only (#908 PR-3a).
+            - name: gate-metrics
+              mountPath: /gate-metrics
+      {{- end }}
       containers:
         - name: vector
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}{{ with .Values.image.digest }}@{{ . }}{{ end }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:
+            {{- if .Values.tenantProjections }}
+            # config-dir: the projection-gate init-container populates this emptyDir
+            # (00-base.yaml always + 30-tenant-routing.yaml ONLY when the gate passes);
+            # Vector merges the dir. No --watch-config — the gate is one-shot-at-boot,
+            # and projection changes roll the DaemonSet (checksum/config) so the gate
+            # re-validates on the new pod (#908 PR-2).
+            - "--config-dir"
+            - "/etc/vector"
+            {{- else }}
+            # No tenant projections → the single base config, mounted directly.
             - "--config"
             - "/etc/vector/vector.yaml"
+            {{- end }}
           env:
             # Vector enriches with k8s metadata via the API server using
             # the in-pod ServiceAccount token. VECTOR_SELF_NODE_NAME
@@ -104,10 +173,75 @@ spec:
               mountPath: /vector-data-dir
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+        {{- if .Values.tenantProjections }}
+        # ── Projection-gate metrics exposer (#908 PR-3a) ─────────────────────────
+        # Long-lived sidecar (same image as the init-container, command overridden
+        # to serve_metrics.py) that re-serves the init-container's verdict textfile
+        # over HTTP. Scraped via the headless projection-gate Service
+        # (templates/service-projection-gate.yaml). It NEVER re-evaluates the gate —
+        # the verdict is decided once at boot; this only re-reads the shared
+        # emptyDir. Tying exposure to this pod means the series goes ABSENT (not
+        # stale-"ok") if the pod dies, so a crash cannot falsely auto-resolve a real
+        # mismatch. NOTE: in ENFORCE mode a config-bug mismatch makes the init exit
+        # non-zero → the pod never reaches this container, so the verdict is NOT
+        # served — that deadlock is covered by the KSM init-container alert instead.
+        - name: projection-gate-metrics
+          image: "{{ .Values.projectionGate.image.repository }}:{{ .Values.projectionGate.image.tag }}{{ with .Values.projectionGate.image.digest }}@{{ . }}{{ end }}"
+          imagePullPolicy: {{ .Values.projectionGate.image.pullPolicy }}
+          command: ["python3", "/usr/local/bin/serve_metrics.py"]
+          args:
+            - "--metrics-file"
+            - "/gate-metrics/gate.prom"
+            - "--port"
+            - {{ .Values.projectionGate.metrics.port | quote }}
+          # Least-privilege — the exposer only reads the verdict emptyDir + binds a
+          # port; non-root, no added caps (#908 PR-3 m3). `required` for the same
+          # --reuse-values-erases-defaults reason as the init-container above.
+          securityContext:
+            {{- toYaml (required "projectionGate.securityContext is required when tenantProjections is set (nil = the least-privilege hardening silently not applied — supply it, or upgrade without --reuse-values so chart defaults apply)" .Values.projectionGate.securityContext) | nindent 12 }}
+          ports:
+            - name: gate-metrics
+              containerPort: {{ .Values.projectionGate.metrics.port }}
+              protocol: TCP
+          volumeMounts:
+            # Read-only — the sidecar only re-serves the verdict the init wrote.
+            - name: gate-metrics
+              mountPath: /gate-metrics
+              readOnly: true
+          resources:
+            {{- toYaml .Values.projectionGate.metrics.resources | nindent 12 }}
+        {{- end }}
       volumes:
+        {{- if .Values.tenantProjections }}
+        # Gate active: Vector reads the init-populated config-dir (emptyDir); the
+        # rendered configs are staged from the ConfigMap for the gate to validate.
+        - name: config
+          emptyDir: {}
+        - name: staging
+          configMap:
+            name: {{ include "vector.name" . }}-config
+        - name: registry
+          # conf.d registry materialised by the operator (key: _account_registry.yaml),
+          # read-only. Same read-side pattern as threshold-exporter — NOT a git write.
+          # optional:true — an ABSENT registry ConfigMap must DEGRADE (the gate reads a
+          # missing file → registry_unreadable → drops the fragment → platform-only
+          # 0:0), NOT wedge the pod at mount time. A hard mount failure would self-DoS
+          # ALL log shipping (incl the platform copy), contradicting the gate's
+          # fail-available design. configMapName is still `required` (the operator MUST
+          # declare it); optional only governs the absent-at-runtime case.
+          configMap:
+            name: {{ required "projectionGate.registry.configMapName is required when tenantProjections is set (the conf.d _account_registry.yaml ConfigMap)" .Values.projectionGate.registry.configMapName }}
+            optional: true
+        # Shared verdict textfile: the init-container WRITES gate.prom here, the
+        # metrics-exposer sidecar READs it (#908 PR-3a). Pod-local so the series
+        # goes absent when the pod dies (a crash must not stale-"ok").
+        - name: gate-metrics
+          emptyDir: {}
+        {{- else }}
         - name: config
           configMap:
             name: {{ include "vector.name" . }}-config
+        {{- end }}
         - name: var-log
           hostPath:
             path: /var/log

@@ -187,6 +187,7 @@ lang: zh
 | `check_planning_status_sync.py` | CI-time PR-trailer ↔ frontmatter sync gate. |
 | `check_playbook_freshness.py` | Playbook 知識退火檢查工具。 |
 | `check_playwright_rtl_drift.py` | Detect React Testing Library API names in Playwright specs (S#96, mechanical safety net for testing-playbook §LL §10). |
+| `check_portal_audience_enum.py` | portal `audience` values must come from a closed vocabulary. |
 | `check_portal_bundle_size.py` | Portal dist bundle size budget gate. |
 | `check_portal_i18n.py` | Portal JSX i18n hardcoded string detector |
 | `check_pr_scope_drift.py` | PR scope drift 偵測（pr-preflight 級）。 |
@@ -204,6 +205,7 @@ lang: zh
 | `check_tool_registry_jsx_parity.py` | every tool-registry.yaml entry must have a backing .jsx file (and vice versa). |
 | `check_translation.py` | 自動化翻譯品質檢查 |
 | `check_undefined_tokens.py` | Detect JSX/CSS/HTML references to --da-* tokens not defined in design-tokens.css (with --report-orphans discovery mode). |
+| `check_vmalert_coverage.py` | check_vmalert_coverage — rule-pack alert FIRING-decision coverage baseline guard. |
 | `check_window_x_no_fallback.py` | Forbid module-scope `const X = window.__X;` no-fallback reads (dev-rules.md §S6). |
 | `detect_sed_damage.py` | Detect sed -i damage on staged files. |
 | `fix_doc_links.py` | Auto-fix broken MkDocs cross-reference links. |

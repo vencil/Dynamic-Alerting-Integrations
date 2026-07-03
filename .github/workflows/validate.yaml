@@ -36,6 +36,15 @@ on:
       - "tests/**"
       - ".github/custom-rule-policy.yaml"
       - ".github/workflows/validate.yaml"
+      # helm/** and docs/** PRs (chart hardening, governance docs) hit the SAME
+      # required-checks-contract gap the tenant-api note above describes: main's
+      # branch protection requires this workflow's jobs, but the path filter
+      # excluded these trees, so a helm-only / docs-only PR could not satisfy the
+      # contract and fell back to admin override. Included for the same reason —
+      # the jobs are cheap and Version Consistency (bump_docs --check) is in fact
+      # relevant to docs changes. Surfaced by GHSA-3g2h-rf85-5rrv hardening (#972).
+      - "helm/**"
+      - "docs/**"
 
 jobs:
   python-tests:

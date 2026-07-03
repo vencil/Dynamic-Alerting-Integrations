@@ -22,6 +22,7 @@ Maps to ADR-021 implementation-plan AC (L224-226) and §Ingestion fan-out.
 """
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 import tempfile
@@ -53,6 +54,10 @@ _PROJECTION_SETS = {
     "tenantProjections[0].accountId": "1000",
     "tenantProjections[1].tenantId": "tenant-beta",
     "tenantProjections[1].accountId": "1001",
+    # #908 PR-2: the projection gate's init-container needs the conf.d registry
+    # ConfigMap; the chart `required`s it whenever tenantProjections is set, so
+    # every projection-enabled render must provide it.
+    "projectionGate.registry.configMapName": "test-registry",
 }
 
 
@@ -65,9 +70,23 @@ def _render(chart_dir: Path, *, sets: dict[str, str] | None = None) -> list[dict
 
 
 def _vector_yaml(docs: list[dict]) -> dict:
+    """Reconstruct the FULL Vector config from the #908 PR-2 config-dir split:
+    deep-merge `vector.yaml` (the base: sources / demux / tenant TRANSFORMS / 0:0
+    sink / additionalSinks / prometheus) with the `30-tenant-routing.yaml` fragment
+    (tenant SINKS only) — exactly as Vector merges the --config-dir at runtime. The
+    fragment key is absent when tenantProjections is empty. Every assertion below
+    runs against this reconstructed full config, so the split is transparent to the
+    invariants it pins."""
     cm = [d for d in docs
           if d.get("kind") == "ConfigMap" and "vector-config" in d["metadata"]["name"]][0]
-    return yaml.safe_load(cm["data"]["vector.yaml"])
+    cfg = yaml.safe_load(cm["data"]["vector.yaml"])
+    fragment = cm["data"].get("30-tenant-routing.yaml")
+    if fragment:
+        for section, items in (yaml.safe_load(fragment) or {}).items():
+            # Top-level Vector sections (sinks:) merge key-by-key, mirroring
+            # config-dir merge semantics — base sinks + the fragment's tenant sinks.
+            cfg.setdefault(section, {}).update(items)
+    return cfg
 
 
 def _render_result(chart_dir: Path, *, sets: dict[str, str] | None = None,
@@ -221,6 +240,7 @@ class TestProjectionEnabledShape:
         r = _render_result(repo_root / "helm/vector", sets={
             "tenantProjections[0].tenantId": "tenant-alpha", "tenantProjections[0].accountId": "1000",
             "tenantProjections[1].tenantId": "tenant-beta", "tenantProjections[1].accountId": "1000",
+            "projectionGate.registry.configMapName": "test-registry",
         })
         assert r.returncode != 0, "duplicate accountId must fail render"
         assert "duplicate accountId" in r.stderr
@@ -231,6 +251,7 @@ class TestProjectionEnabledShape:
         r = _render_result(repo_root / "helm/vector", sets={
             "tenantProjections[0].tenantId": "tenant-alpha", "tenantProjections[0].accountId": "1000",
             "tenantProjections[1].tenantId": "tenant-alpha", "tenantProjections[1].accountId": "1001",
+            "projectionGate.registry.configMapName": "test-registry",
         })
         assert r.returncode != 0, "duplicate tenantId must fail render"
         assert "duplicate tenantId" in r.stderr
@@ -241,7 +262,8 @@ class TestProjectionEnabledShape:
         id (which would render an invalid VRL identifier → silent empty
         partition) must fail at helm template, not silently."""
         r = _render_result(repo_root / "helm/vector",
-                           sets={"tenantProjections[0].tenantId": "tenant-alpha"},
+                           sets={"tenantProjections[0].tenantId": "tenant-alpha",
+                                 "projectionGate.registry.configMapName": "test-registry"},
                            string_sets={"tenantProjections[0].accountId": "1000"})
         assert r.returncode != 0, "string accountId must fail schema"
         assert "integer" in r.stderr.lower() or "schema" in r.stderr.lower()
@@ -259,6 +281,206 @@ class TestProjectionEnabledShape:
         # Eligibility + fail-closed aborts present.
         assert 'if .log_type != "federation_audit"' in vrl
         assert "abort" in vrl
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Projection gate wiring (#908 PR-2) — init-container + config-dir + drift seam
+# ──────────────────────────────────────────────────────────────────────────────
+
+class TestProjectionGateWiring:
+    @_needs_helm
+    def test_init_container_present_and_wired_when_projections_set(self, repo_root: Path) -> None:
+        """The fail-closed gate runs as a Vector init-container: it reads the
+        registry + projections (read-only), WRITES the config-dir Vector loads, and
+        honours the degrade/enforce toggle. Vector then loads --config-dir from the
+        gate-populated emptyDir, not the ConfigMap directly."""
+        docs = _render(repo_root / "helm/vector", sets=_PROJECTION_SETS)
+        spec = [d for d in docs if d.get("kind") == "DaemonSet"][0]["spec"]["template"]["spec"]
+        inits = {c["name"]: c for c in spec.get("initContainers", [])}
+        assert "projection-gate" in inits, "gate init-container must run when projections are set"
+        gate = inits["projection-gate"]
+        assert gate["args"][:2] == ["--registry", "/conf.d/_account_registry.yaml"]
+        assert "/staging/tenant-projections.json" in gate["args"]
+        assert "--config-dir" in gate["args"]
+        mounts = {m["name"]: m for m in gate["volumeMounts"]}
+        assert mounts["registry"].get("readOnly") is True, "registry is read-only (gate never writes it)"
+        assert mounts["staging"].get("readOnly") is True
+        assert mounts["config"].get("readOnly", False) is False, "gate must WRITE the config-dir emptyDir"
+        vector = [c for c in spec["containers"] if c["name"] == "vector"][0]
+        assert "--config-dir" in vector["args"], "Vector loads the gate-populated config-dir"
+        vols = {v["name"]: v for v in spec["volumes"]}
+        assert "emptyDir" in vols["config"], "Vector's config-dir is the init-populated emptyDir"
+        assert vols["staging"]["configMap"]["name"].endswith("-config")
+        assert vols["registry"]["configMap"]["name"], "registry ConfigMap must be wired"
+
+    @_needs_helm
+    def test_no_gate_overhead_when_projections_empty(self, repo_root: Path) -> None:
+        """Default (no projections): no init-container, Vector mounts the ConfigMap
+        directly and loads the single base config — zero gate overhead, byte-for-byte
+        the prior single-tenant deployment."""
+        docs = _render(repo_root / "helm/vector")
+        spec = [d for d in docs if d.get("kind") == "DaemonSet"][0]["spec"]["template"]["spec"]
+        assert not any(c["name"] == "projection-gate" for c in spec.get("initContainers", []))
+        vector = [c for c in spec["containers"] if c["name"] == "vector"][0]
+        assert "--config" in vector["args"] and "/etc/vector/vector.yaml" in vector["args"]
+        vols = {v["name"]: v for v in spec["volumes"]}
+        assert "configMap" in vols["config"], "default mounts the ConfigMap directly"
+
+    @_needs_helm
+    def test_gate_input_matches_rendered_sinks_and_map(self, repo_root: Path) -> None:
+        """DRIFT-SEAM closure: the gate validates `tenant-projections.json`, but
+        Vector ROUTES on the rendered account_map (tenant_project VRL) + the
+        vl_tenant_<id> sinks. All three derive from .Values.tenantProjections — pin
+        them in lockstep so a template bug can't let the gate bless a set that
+        diverges from what Vector actually writes (gate validates X, Vector writes Y)."""
+        docs = _render(repo_root / "helm/vector", sets=_PROJECTION_SETS)
+        cm = [d for d in docs if d.get("kind") == "ConfigMap"
+              and "vector-config" in d["metadata"]["name"]][0]
+        gate_pairs = {(p["tenantId"], p["accountId"])
+                      for p in json.loads(cm["data"]["tenant-projections.json"])}
+        assert gate_pairs, "fixture must project at least one tenant"
+        cfg = _vector_yaml(docs)
+        vrl = cfg["transforms"]["tenant_project"]["source"]
+        for tid, aid in gate_pairs:
+            assert f'"{tid}": {aid}' in vrl, f"account_map must carry {tid}->{aid} (no drift, no hash)"
+            sink = cfg["sinks"][f"vl_tenant_{aid}"]
+            assert sink["request"]["headers"]["AccountID"] == str(aid), "sink header pinned to the gate's accountId"
+            assert sink["inputs"] == [f"tenant_route.t_{aid}"], "sink consumes its own route"
+        rendered = {int(n.rsplit("_", 1)[1]) for n in cfg["sinks"] if n.startswith("vl_tenant_")}
+        assert rendered == {a for _, a in gate_pairs}, (
+            "rendered tenant sinks must be EXACTLY the gate-validated accountIds — no "
+            "orphan partition the gate never checked, none missing it expects"
+        )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Projection-gate verdict-metric observability (#908 PR-3a) — init --metrics-file,
+# metrics-exposer sidecar, headless scrape Service
+# ──────────────────────────────────────────────────────────────────────────────
+
+class TestProjectionGateMetricsWiring:
+    @staticmethod
+    def _daemonset(repo_root: Path, *, sets: dict[str, str] | None = None) -> dict:
+        docs = _render(repo_root / "helm/vector", sets=sets)
+        return [d for d in docs if d.get("kind") == "DaemonSet"][0]["spec"]["template"]["spec"]
+
+    @_needs_helm
+    def test_init_writes_verdict_to_shared_emptydir(self, repo_root: Path) -> None:
+        """The gate init-container must write its verdict to the shared gate-metrics
+        emptyDir (`--metrics-file`), mounted READ-WRITE — that file is the input the
+        exposer sidecar re-serves. Without this wiring the verdict metric never exists."""
+        spec = self._daemonset(repo_root, sets=_PROJECTION_SETS)
+        gate = {c["name"]: c for c in spec["initContainers"]}["projection-gate"]
+        args = gate["args"]
+        assert "--metrics-file" in args, "gate must be told where to write the verdict"
+        mf = args[args.index("--metrics-file") + 1]
+        assert mf == "/gate-metrics/gate.prom"
+        mounts = {m["name"]: m for m in gate["volumeMounts"]}
+        assert "gate-metrics" in mounts, "init must mount the shared verdict volume"
+        assert mounts["gate-metrics"]["mountPath"] == "/gate-metrics"
+        # The init WRITES here (not readOnly) — distinct from its read-only registry/staging.
+        assert mounts["gate-metrics"].get("readOnly", False) is False
+        # And the destination dir is a pod-local emptyDir (absent-on-pod-death semantics).
+        vols = {v["name"]: v for v in spec["volumes"]}
+        assert "emptyDir" in vols["gate-metrics"], "verdict volume must be pod-local emptyDir"
+
+    @_needs_helm
+    def test_metrics_exposer_sidecar_present_and_readonly(self, repo_root: Path) -> None:
+        """A long-lived sidecar re-serves the verdict file over HTTP. It runs
+        serve_metrics.py (NOT the validator — it never re-evaluates), mounts the
+        shared emptyDir READ-ONLY, exposes a named port, and has resources set
+        (kube-linter L4). It lives beside Vector so the series goes absent on pod death."""
+        spec = self._daemonset(repo_root, sets=_PROJECTION_SETS)
+        sidecars = {c["name"]: c for c in spec["containers"]}
+        assert "projection-gate-metrics" in sidecars, "metrics-exposer sidecar must run when projections are set"
+        sc = sidecars["projection-gate-metrics"]
+        # Command override → the exposer, not the validator entrypoint.
+        assert sc["command"] == ["python3", "/usr/local/bin/serve_metrics.py"]
+        assert "--metrics-file" in sc["args"] and "/gate-metrics/gate.prom" in sc["args"]
+        # Same image as the init-container (one image, two roles).
+        assert sc["image"].startswith("ghcr.io/vencil/vector-projection-gate")
+        mounts = {m["name"]: m for m in sc["volumeMounts"]}
+        assert mounts["gate-metrics"].get("readOnly") is True, "exposer only READS the verdict"
+        port = {p["name"]: p for p in sc["ports"]}["gate-metrics"]
+        assert port["containerPort"] == 9599
+        assert sc["resources"]["requests"]["cpu"], "sidecar must set resources (kube-linter L4)"
+
+    @_needs_helm
+    def test_scrape_service_headless_and_annotated(self, repo_root: Path) -> None:
+        """The verdict is scraped via a dedicated headless Service (annotation-based
+        SD, like vector-metrics) — gated on tenantProjections, NOT metrics.enabled, so
+        the gate observability does not require turning on Vector self-telemetry.
+        Headless so per-node pods aren't collapsed to one address."""
+        docs = _render(repo_root / "helm/vector", sets=_PROJECTION_SETS)
+        svcs = [d for d in docs if d.get("kind") == "Service"
+                and d["metadata"]["name"].endswith("-projection-gate-metrics")]
+        assert len(svcs) == 1, "projection-gate metrics Service must render when projections are set"
+        svc = svcs[0]
+        ann = svc["metadata"]["annotations"]
+        assert ann["prometheus.io/scrape"] == "true"
+        assert ann["prometheus.io/port"] == "9599"
+        assert svc["spec"]["clusterIP"] == "None", "headless — do not collapse N nodes to one address"
+        assert svc["spec"]["ports"][0]["targetPort"] == "gate-metrics"
+
+    @_needs_helm
+    def test_no_metrics_overhead_when_projections_empty(self, repo_root: Path) -> None:
+        """Default (no projections): no exposer sidecar, no gate-metrics volume, no
+        scrape Service — zero observability overhead, matching the no-gate default."""
+        spec = self._daemonset(repo_root)
+        assert not any(c["name"] == "projection-gate-metrics" for c in spec["containers"])
+        assert not any(v["name"] == "gate-metrics" for v in spec["volumes"])
+        docs = _render(repo_root / "helm/vector")
+        assert not any(d.get("kind") == "Service"
+                       and d["metadata"]["name"].endswith("-projection-gate-metrics") for d in docs)
+
+    @_needs_helm
+    def test_scrape_service_independent_of_metrics_enabled(self, repo_root: Path) -> None:
+        """The gate scrape Service must render even with Vector's own metrics.enabled
+        OFF (the default) — a degrade can happen with self-telemetry off, so its
+        observability must not be coupled to it."""
+        docs = _render(repo_root / "helm/vector",
+                       sets={**_PROJECTION_SETS, "metrics.enabled": "false"})
+        assert any(d.get("kind") == "Service"
+                   and d["metadata"]["name"].endswith("-projection-gate-metrics") for d in docs), (
+            "gate scrape Service must not depend on metrics.enabled"
+        )
+        # And the Vector self-telemetry Service is indeed absent in this config.
+        assert not any(d.get("kind") == "Service"
+                       and d["metadata"]["name"].endswith("-metrics")
+                       and not d["metadata"]["name"].endswith("-projection-gate-metrics")
+                       for d in docs)
+
+    @_needs_helm
+    def test_gate_containers_are_least_privilege_non_root(self, repo_root: Path) -> None:
+        """#908 PR-3 m3: the gate init-container + exposer sidecar run LEAST-PRIVILEGE
+        (non-root, drop ALL caps, NO DAC_READ_SEARCH) — they only read a ConfigMap
+        registry + the emptyDirs. The Vector container is the ONLY one that stays root
+        with DAC_READ_SEARCH (it reads root-owned /var/log host files). Guards the
+        security split: a regression that reused the root context for the gate, or
+        dropped root from Vector, both fail here."""
+        spec = self._daemonset(repo_root, sets=_PROJECTION_SETS)
+        gate = {c["name"]: c for c in spec["initContainers"]}["projection-gate"]
+        sidecar = {c["name"]: c for c in spec["containers"]}["projection-gate-metrics"]
+        for name, c in (("init", gate), ("sidecar", sidecar)):
+            sc = c["securityContext"]
+            assert sc["runAsNonRoot"] is True, f"{name} must be non-root"
+            assert sc.get("runAsUser") == 65532, f"{name} must run as the image's 65532 uid"
+            assert sc.get("runAsGroup") == 65532, f"{name} must pin the gid too"
+            assert sc["capabilities"].get("drop") == ["ALL"], f"{name} must drop ALL caps"
+            assert "add" not in sc["capabilities"], f"{name} must NOT add DAC_READ_SEARCH (only Vector needs it)"
+            assert sc["readOnlyRootFilesystem"] is True
+            # kube-linter L2 cannot see these containers under the DEFAULT values
+            # render (tenantProjections empty → the whole block is un-rendered), so
+            # THIS test + the values-projection.yaml lint variant are the enforced
+            # guards — pin the privilege-escalation + seccomp knobs explicitly
+            # (independent-review finding: deleting them passed every other gate).
+            assert sc["allowPrivilegeEscalation"] is False, f"{name} must forbid privilege escalation"
+            assert sc["seccompProfile"]["type"] == "RuntimeDefault", f"{name} must pin seccomp"
+        # The Vector container is the deliberate exception — root + DAC_READ_SEARCH.
+        vector = {c["name"]: c for c in spec["containers"]}["vector"]
+        vsc = vector["securityContext"]
+        assert vsc.get("runAsUser") == 0, "Vector must stay root to read /var/log"
+        assert "DAC_READ_SEARCH" in vsc["capabilities"].get("add", []), "Vector keeps DAC_READ_SEARCH"
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -344,6 +566,30 @@ class TestVectorValidateAndTest:
             r = subprocess.run(["vector", "validate", "--no-environment", str(p)],
                                capture_output=True, text=True, timeout=60)
             assert r.returncode == 0, f"vector validate failed:\n{r.stdout}\n{r.stderr}"
+
+    @_needs_vector
+    def test_vector_validate_config_dir_merge(self, repo_root: Path) -> None:
+        """`vector validate --config-dir` over the ACTUAL two files Vector loads at
+        runtime (#908 PR-2): the base + the tenant fragment, merged by VECTOR ITSELF
+        — not the Python-modelled `_vector_yaml` merge the render tests use. Catches
+        a fragment-split bug (e.g. a sink in the fragment whose `tenant_route` input
+        moved, or a section that fails to merge across files) that single-file
+        validation cannot see. The gate writes the staging `vector.yaml` into the
+        config-dir as `00-base.yaml` (its `_BASE_NAME`), so mirror that filename;
+        `tenant-projections.json` is NEVER placed here (the gate reads it from
+        /staging only)."""
+        docs = _render(repo_root / "helm/vector", sets=_PROJECTION_SETS)
+        cm = [d for d in docs if d.get("kind") == "ConfigMap"
+              and "vector-config" in d["metadata"]["name"]][0]
+        with tempfile.TemporaryDirectory() as d:
+            confdir = Path(d)
+            (confdir / "00-base.yaml").write_text(cm["data"]["vector.yaml"], encoding="utf-8")
+            (confdir / "30-tenant-routing.yaml").write_text(
+                cm["data"]["30-tenant-routing.yaml"], encoding="utf-8")
+            r = subprocess.run(
+                ["vector", "validate", "--no-environment", "--config-dir", str(confdir)],
+                capture_output=True, text=True, timeout=60)
+            assert r.returncode == 0, f"vector validate --config-dir failed:\n{r.stdout}\n{r.stderr}"
 
     @_needs_vector
     def test_vector_unit_tests_pass(self, repo_root: Path) -> None:

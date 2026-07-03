@@ -34,12 +34,17 @@ test.describe('Authentication Flow @critical', () => {
   });
 
   test('should fetch user identity from /api/v1/me endpoint', async ({ page }) => {
-    // Mock the /api/v1/me endpoint response
+    // Mock the /api/v1/me endpoint with the REAL MeResponse shape
+    // (components/tenant-api/internal/handler/me.go): email/user/groups/
+    // accessible_tenants/accessible_domains/permissions. The earlier
+    // {id,name,roles} shape never matched the handler contract.
     const mockUser = {
-      id: 'test-user-123',
       email: 'test@example.com',
-      name: 'Test User',
-      roles: ['viewer'],
+      user: 'test',
+      groups: ['production-dba'],
+      accessible_tenants: ['prod-mariadb-01'],
+      accessible_domains: ['finance'],
+      permissions: { 'production-dba': ['read', 'write'] },
     };
 
     await page.route('**/api/v1/me', async (route) => {
@@ -64,15 +69,18 @@ test.describe('Authentication Flow @critical', () => {
     });
 
     expect(response.email).toBe('test@example.com');
-    expect(response.id).toBe('test-user-123');
+    expect(response.user).toBe('test');
+    expect(response.permissions['production-dba']).toContain('write');
   });
 
   test('should display authenticated user email in UI when available', async ({ page }) => {
     const mockUser = {
-      id: 'user-456',
       email: 'authenticated@example.com',
-      name: 'Authenticated User',
-      roles: ['admin'],
+      user: 'authenticated',
+      groups: ['production-dba'],
+      accessible_tenants: ['prod-mariadb-01'],
+      accessible_domains: ['finance'],
+      permissions: { 'production-dba': ['read', 'write', 'admin'] },
     };
 
     // Mock the identity endpoint
@@ -84,20 +92,59 @@ test.describe('Authentication Flow @critical', () => {
       });
     });
 
-    await page.goto('./');
+    // The IdentityStrip lives on the tenant-manager surface — the Hub
+    // (`./`) is the public static face and never fetches /api/v1/me, so
+    // navigate to the component page via jsx-loader (same URL shape as
+    // tenant-manager.spec.ts). Tenant-data fetches stay unmocked → the
+    // component falls back to its offline DEMO fixtures, while authUser
+    // is populated from the mocked /me.
+    await page.goto('../assets/jsx-loader.html?component=../interactive/tools/tenant-manager.jsx');
+    await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
 
-    // Optionally wait for auth to be loaded by the app
-    await page.waitForLoadState('networkidle', { timeout: 1000 }).catch(() => {});
+    // LD-7 (#962): the IdentityStrip surfaces the authed email on-screen.
+    // It renders only when authUser is populated (non-demo), so this both
+    // proves the strip mounted and that the email is legible.
+    const strip = page.getByTestId('identity-strip');
+    await expect(strip).toContainText('authenticated@example.com');
+    // With access (non-empty permissions) the empty-state notice is absent.
+    await expect(page.getByTestId('identity-no-access')).toHaveCount(0);
+  });
 
-    // Look for email display in various common locations
-    const emailDisplays = page.locator(
-      ':text-is("authenticated@example.com"), [data-testid="user-email"], .user-email, .auth-email, [aria-label*="user" i]'
-    );
+  test('LD-7: empty permissions surfaces a soft no-access notice (real-bug guard)', async ({ page }) => {
+    // Real-bug shape: a mistyped group in _rbac.yaml yields a non-empty
+    // `groups` but an empty `permissions` map → the user maps to no visible
+    // tenants. Before LD-7 they only saw the generic "no tenants matched"
+    // empty state, with nothing pointing at the RBAC config as the cause.
+    const mockUser = {
+      email: 'orphan@example.com',
+      user: 'orphan',
+      groups: ['dba-typoo'],
+      accessible_tenants: [],
+      accessible_domains: [],
+      permissions: {},
+    };
 
-    // UI may or may not display email depending on implementation
-    // Just verify no errors occurred
-    const bodyText = await page.locator('body').textContent();
-    expect(bodyText).toBeTruthy();
+    await page.route('**/api/v1/me', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(mockUser),
+      });
+    });
+
+    // Same tenant-manager surface as the test above — the Hub never
+    // renders the strip.
+    await page.goto('../assets/jsx-loader.html?component=../interactive/tools/tenant-manager.jsx');
+    await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+
+    // The advisory (role="status") notice is visible and names the user.
+    const notice = page.getByTestId('identity-no-access');
+    await expect(notice).toBeVisible();
+    await expect(notice).toContainText('orphan@example.com');
+    // SOFT: nothing is hard-hidden — the search box is still on screen.
+    // (CI headless Chromium reports `navigator.language` = en-US, so the
+    // jsx-loader i18n helper renders the English label.)
+    await expect(page.getByLabel('Search')).toBeVisible();
   });
 
   test('should handle unauthorized access gracefully', async ({ page }) => {

@@ -371,8 +371,8 @@ groups:
           summary_zh: "{{ $labels.tenant }} 的 MongoDB 連線池接近飽和"
           platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: MongoDB connection pool near saturation — capacity action needed"
           platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}: MongoDB 連線池接近飽和 — 需要容量擴展"
-          description: "{{ $value | printf \"%.0f\" }}% of connections used"
-          description_zh: "已使用 {{ $value | printf \"%.0f\" }}% 的連線"
+          description: "{{ $value | humanizePercentage }} of connections used"
+          description_zh: "已使用 {{ $value | humanizePercentage }} 的連線"
 
           runbook_url: "{{ $labels.runbook_url }}"
           owner: "{{ $labels.owner }}"

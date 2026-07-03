@@ -16,6 +16,7 @@ dependencies: [
   "tenant-manager/components/OverflowBanner.jsx",
   "tenant-manager/components/TenantCard.jsx",
   "tenant-manager/components/CustomAlertsModal.jsx",
+  "tenant-manager/components/IdentityStrip.jsx",
   "_common/hooks/useDebouncedValue.js",
   "_common/hooks/useURLState.js",
   "_common/hooks/useVirtualGrid.js",
@@ -42,6 +43,7 @@ import { ApiNotificationToast } from './tenant-manager/components/ApiNotificatio
 import { OverflowBanner } from './tenant-manager/components/OverflowBanner.jsx';
 import { TenantCard } from './tenant-manager/components/TenantCard.jsx';
 import { CustomAlertsModal } from './tenant-manager/components/CustomAlertsModal.jsx';
+import { IdentityStrip } from './tenant-manager/components/IdentityStrip.jsx';
 import { SavedViewsPanel } from './tenant-manager/components/SavedViewsPanel.jsx';
 import { useDebouncedValue } from './_common/hooks/useDebouncedValue.js';
 import { useModalFocusTrap } from './_common/hooks/useModalFocusTrap.js';
@@ -165,16 +167,6 @@ export default function TenantManager() {
   const [customAlertsTenant, setCustomAlertsTenant] = useState(null);
   const [hoveredCard, setHoveredCard] = useState(null);
   const [activeGroupId, setActiveGroupId] = useState(null);
-  // BUG FIX: `compareMode` was referenced at L1441/1444 (Compare Mode
-  // toggle button) but never declared via useState. The pre-existing
-  // loading-state bug kept the page on the loading spinner forever, so
-  // the main render never reached those lines and the missing state
-  // was never tripped. Once the loading-state fix lets the page render,
-  // ReferenceError: `compareMode is not defined` blanks the whole
-  // component. Adding the missing declaration restores the Compare
-  // Mode toggle to a no-op-but-functional state (the rest of the
-  // compare-mode UI plumbing is a separate follow-up).
-  const [compareMode, setCompareMode] = useState(false);
   // Auth state
   const [authUser, setAuthUser] = useState(null);
   const [canWrite, setCanWrite] = useState(true); // default true for demo/no-auth mode
@@ -475,12 +467,30 @@ export default function TenantManager() {
         onDismiss={() => setApiNotification(null)}
         t={t}
       />
-      <div style={styles.maxWidth}>
-        <div style={styles.header}>
-          <div style={styles.title}>{t('租戶管理器', 'Tenant Manager')}</div>
-          <div style={styles.subtitle}>{t('查看、搜尋和批量操作多租戶配置', 'View, search, and batch-operate tenant configurations')}</div>
-        </div>
+      <div style={styles.header}>
+        <div style={styles.title}>{t('租戶管理器', 'Tenant Manager')}</div>
+        <div style={styles.subtitle}>{t('查看、搜尋和批量操作多租戶配置', 'View, search, and batch-operate tenant configurations')}</div>
+      </div>
 
+      {/* LD-7 (#962): legible identity + view summary + soft empty-state
+          notice on the authed surface. Renders nothing in demo mode
+          (authUser == null). `activeGroupLabel` is derived here from the
+          already-in-scope activeGroupId/groups — the strip stays purely
+          presentational and reaches into no orchestrator state itself. */}
+      <IdentityStrip
+        authUser={authUser}
+        activeFilters={activeFilters}
+        searchText={searchText}
+        activeGroupLabel={
+          activeGroupId && groups[activeGroupId]
+            ? groups[activeGroupId].label
+            : null
+        }
+      />
+
+      {/* Page-level context (stats + banners) spans the full centred
+          width above the sidebar/table split below. */}
+      <div style={styles.layoutNoSidebar}>
         <div style={styles.statsBar}>
           <div style={styles.statCard}>
             <div style={styles.statValue}>{Object.keys(tenants).length}</div>
@@ -545,8 +555,23 @@ export default function TenantManager() {
             </div>
           </div>
         )}
+      </div>
 
-        <div style={styles.controlsPanel}>
+      {/* Working area: group sidebar + main tenant table/content.
+          GroupSidebar is the sole source of onSelectGroup/create/delete
+          (wired to the existing handlers + activeGroupId state). */}
+      <div style={styles.layout}>
+        <GroupSidebar
+          groups={groups}
+          activeGroupId={activeGroupId}
+          onSelectGroup={setActiveGroupId}
+          onCreateGroup={handleCreateGroup}
+          onDeleteGroup={handleDeleteGroup}
+          canWrite={canWrite}
+        />
+
+        <div>
+          <div style={styles.controlsPanel}>
           {/* C-6 Smart Views (S#100) — saved view selector + save/delete
               controls. Hidden when /api/v1/views unreachable (demo mode)
               or when canWrite=false hides the write controls. */}
@@ -648,11 +673,9 @@ export default function TenantManager() {
               style={styles.filterSelect}
             >
               <option value="">{t('所有域', 'All Domains')}</option>
-              <option value="finance">Finance</option>
-              <option value="cache">Cache</option>
-              <option value="analytics">Analytics</option>
-              <option value="mobile">Mobile</option>
-              <option value="streaming">Streaming</option>
+              {filterOptions.domains.map(domain => (
+                <option key={domain} value={domain}>{domain}</option>
+              ))}
             </select>
 
             <label style={styles.formLabel} htmlFor="filter-dbtype">
@@ -665,11 +688,9 @@ export default function TenantManager() {
               style={styles.filterSelect}
             >
               <option value="">{t('所有類型', 'All DB Types')}</option>
-              <option value="mariadb">MariaDB</option>
-              <option value="redis">Redis</option>
-              <option value="postgresql">PostgreSQL</option>
-              <option value="mongodb">MongoDB</option>
-              <option value="kafka">Kafka</option>
+              {filterOptions.dbTypes.map(dbType => (
+                <option key={dbType} value={dbType}>{dbType}</option>
+              ))}
             </select>
           </div>
 
@@ -710,15 +731,6 @@ export default function TenantManager() {
               </button>
             </>
           )}
-
-          <div style={styles.buttonGroup}>
-            <button
-              onClick={() => setCompareMode(!compareMode)}
-              style={{ ...styles.button, ...styles.buttonSecondary }}
-            >
-              {compareMode ? t('退出對比模式', 'Exit Compare Mode') : t('進入對比模式', 'Compare Mode')}
-            </button>
-          </div>
         </div>
 
         {selected.size > 0 && (
@@ -863,11 +875,7 @@ export default function TenantManager() {
                 {groups[activeGroupId].label}
               </div>
               <button
-                onClick={() => {
-                  if (window.confirm(t('確定要刪除此群組嗎?', 'Are you sure you want to delete this group?'))) {
-                    handleDeleteGroup(activeGroupId);
-                  }
-                }}
+                onClick={() => handleDeleteGroup(activeGroupId)}
                 style={{ ...styles.button, ...styles.buttonSecondary, color: 'var(--da-color-error)' }}
               >
                 {t('刪除群組', 'Delete Group')}
@@ -878,6 +886,7 @@ export default function TenantManager() {
             </div>
           </div>
         )}
+        </div>
       </div>
 
       {customAlertsTenant && (

@@ -22,7 +22,7 @@ lang: zh
 | Elasticsearch | rule-pack-elasticsearch.yaml | 11 | 7 | 18 |
 | JVM | rule-pack-jvm.yaml | 9 | 7 | 16 |
 | Kafka | rule-pack-kafka.yaml | 13 | 9 | 22 |
-| Kubernetes | rule-pack-kubernetes.yaml | 16 | 10 | 26 |
+| Kubernetes | rule-pack-kubernetes.yaml | 17 | 10 | 27 |
 | Liveness | rule-pack-liveness.yaml | 0 | 1 | 1 |
 | Mariadb | rule-pack-mariadb.yaml | 11 | 14 | 25 |
 | Mongodb | rule-pack-mongodb.yaml | 10 | 8 | 18 |
@@ -32,7 +32,7 @@ lang: zh
 | Postgresql | rule-pack-postgresql.yaml | 11 | 9 | 20 |
 | Rabbitmq | rule-pack-rabbitmq.yaml | 12 | 8 | 20 |
 | Redis | rule-pack-redis.yaml | 11 | 6 | 17 |
-| **TOTAL** | | **148** | **110** | **258** |
+| **TOTAL** | | **149** | **110** | **259** |
 
 ## 架構說明
 

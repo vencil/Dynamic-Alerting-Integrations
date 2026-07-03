@@ -1,0 +1,35 @@
+{{- if .Values.tenantProjections }}
+# Projection-gate verdict-metric Service (#908 PR-3a). Rendered whenever
+# tenantProjections is set — the gate's degrade/ghost-race observability must NOT
+# depend on Vector's own metrics.enabled (a degrade can happen with self-telemetry
+# off). Exposes the metrics-exposer sidecar (serve_metrics.py) so Prometheus's
+# annotation-based `monitoring-components` job (role: service, namespace monitoring)
+# discovers + scrapes the verdict.
+#
+# Headless (clusterIP: None) for the SAME reason as the Vector self-telemetry
+# Service: each Vector DaemonSet pod is independent, so a ClusterIP would collapse
+# N nodes into one address and the scrape would only see one node. (The alert rules
+# aggregate the verdict across pods anyway — every node mounts the identical
+# registry + projections, so every node's verdict is identical — but per-pod
+# targets keep the topology honest and match the existing convention.)
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "vector.name" . }}-projection-gate-metrics
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "vector.labels" . | nindent 4 }}
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: {{ .Values.projectionGate.metrics.port | quote }}
+    prometheus.io/path: /metrics
+spec:
+  clusterIP: None
+  selector:
+    {{- include "vector.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: gate-metrics
+      port: {{ .Values.projectionGate.metrics.port }}
+      targetPort: gate-metrics
+      protocol: TCP
+{{- end }}

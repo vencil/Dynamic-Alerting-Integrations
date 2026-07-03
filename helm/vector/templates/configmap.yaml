@@ -406,62 +406,6 @@ data:
             ProjectID: {{ . | quote }}
             {{- end }}
         {{- end }}
-      {{- if .Values.tenantProjections }}
-      # ── (b) Tenant-sanitized projection sinks — ADR-021 / #609 ──────────
-      # One STATIC sink per tenant, each pinned to a FIXED AccountID header.
-      # Why static-N and not one dynamic header-templated sink:
-      # Vector's elasticsearch/http sinks set request headers PER-BATCH (one
-      # batch = one request), and a batch can mix events from many tenants —
-      # a per-event header template would stamp ALL events in a mixed batch
-      # with ONE tenant's AccountID = cross-tenant write leak. (Upstream
-      # vectordotdev/vector#21402 confirms the isomorphic per-batch header
-      # failure.) Routing first, then a sink with a CONSTANT header, makes
-      # each sink's batches single-tenant by construction.
-      # ProjectID is fixed 0 for (b) platform-operational logs; (a) tenant
-      # application logs (Phase 2) will use ProjectID 1 in the same store.
-      {{- range $p := .Values.tenantProjections }}
-      vl_tenant_{{ $p.accountId }}:
-        type: elasticsearch
-        inputs:
-          # Consume ONLY this tenant's route output — a single-tenant stream,
-          # so the constant AccountID header below can never mis-stamp.
-          - tenant_route.t_{{ $p.accountId }}
-        endpoints:
-          - http://{{ $.Values.victorialogs.host }}:{{ $.Values.victorialogs.port }}/insert/elasticsearch/
-        api_version: v8
-        compression: gzip
-        healthcheck:
-          enabled: false
-        # ── Fan-out resilience: a tenant sink MUST NOT block (#539 §2 hard rule
-        # / Gemini #894 head-of-line-blocking). VictoriaLogs backpressure on ONE
-        # tenant's partition would otherwise propagate up tenant_route → demux
-        # and wedge the SHARED 0:0 write AND every other tenant. drop_newest
-        # keeps the loss LOCAL to the backpressured tenant — the platform 0:0
-        # copy is the source of truth, so this projection is explicitly best-
-        # effort. The bounded memory buffer also caps RAM (no OOM under a noisy-
-        # neighbor spike); operators needing restart-durability can raise
-        # tenantProjectionBufferMaxEvents or front it with a disk buffer.
-        buffer:
-          max_events: {{ $.Values.tenantProjectionBufferMaxEvents | default 1000 }}
-          when_full: drop_newest
-        query:
-          _msg_field: message
-          _time_field: timestamp
-          # Tenant-safe stream fields ONLY — NOT the platform `streamFields`
-          # (which carries `app`/`k8s_namespace` infra naming that the allowlist
-          # sanitization deliberately drops). Every entry here must also be in
-          # `tenantProjectionKeepFields` or it won't exist on the projected event.
-          _stream_fields: {{ join "," $.Values.tenantProjectionStreamFields | quote }}
-        request:
-          headers:
-            # Verified, server-side-derived tenant partition. NEVER trust a
-            # tenant_id carried in the payload (zero-trust ingestion, ADR-021
-            # §contract) — this AccountID comes from the Git-registry-derived
-            # tenantProjections map, not the log line.
-            AccountID: {{ $p.accountId | quote }}
-            ProjectID: {{ $.Values.tenantProjectionProjectId | quote }}
-      {{- end }}
-      {{- end }}
       {{- range $sink := .Values.additionalSinks }}
       # ── additionalSinks (#539 Phase 3 fan-out) ───────────────────
       # Wrapped with `buffer: {when_full: <_buffer_when_full>}` so the
@@ -534,3 +478,78 @@ data:
           - internal_metrics
         address: 0.0.0.0:{{ .Values.metrics.port }}
       {{- end }}
+
+  30-tenant-routing.yaml: |
+    # Tenant-sanitized projection SINKS — config-dir fragment (#908 PR-2).
+    # The Vector init-container PLACES this file into the --config-dir only when
+    # the projection gate passes; on degrade it is OMITTED and tenant_route's
+    # t_<id> outputs go unconsumed (= discarded, the existing fail-closed path)
+    # → platform-only 0:0. The tenant TRANSFORMS stay in the base config; the write
+    # boundary is here, so gating the sinks is the security-relevant gate.
+    {{- if .Values.tenantProjections }}
+    sinks:
+      # ── (b) Tenant-sanitized projection sinks — ADR-021 / #609 ──────────
+      # One STATIC sink per tenant, each pinned to a FIXED AccountID header.
+      # Why static-N and not one dynamic header-templated sink:
+      # Vector's elasticsearch/http sinks set request headers PER-BATCH (one
+      # batch = one request), and a batch can mix events from many tenants —
+      # a per-event header template would stamp ALL events in a mixed batch
+      # with ONE tenant's AccountID = cross-tenant write leak. (Upstream
+      # vectordotdev/vector#21402 confirms the isomorphic per-batch header
+      # failure.) Routing first, then a sink with a CONSTANT header, makes
+      # each sink's batches single-tenant by construction.
+      # ProjectID is fixed 0 for (b) platform-operational logs; (a) tenant
+      # application logs (Phase 2) will use ProjectID 1 in the same store.
+      {{- range $p := .Values.tenantProjections }}
+      vl_tenant_{{ $p.accountId }}:
+        type: elasticsearch
+        inputs:
+          # Consume ONLY this tenant's route output — a single-tenant stream,
+          # so the constant AccountID header below can never mis-stamp.
+          - tenant_route.t_{{ $p.accountId }}
+        endpoints:
+          - http://{{ $.Values.victorialogs.host }}:{{ $.Values.victorialogs.port }}/insert/elasticsearch/
+        api_version: v8
+        compression: gzip
+        healthcheck:
+          enabled: false
+        # ── Fan-out resilience: a tenant sink MUST NOT block (#539 §2 hard rule
+        # / Gemini #894 head-of-line-blocking). VictoriaLogs backpressure on ONE
+        # tenant's partition would otherwise propagate up tenant_route → demux
+        # and wedge the SHARED 0:0 write AND every other tenant. drop_newest
+        # keeps the loss LOCAL to the backpressured tenant — the platform 0:0
+        # copy is the source of truth, so this projection is explicitly best-
+        # effort. The bounded memory buffer also caps RAM (no OOM under a noisy-
+        # neighbor spike); operators needing restart-durability can raise
+        # tenantProjectionBufferMaxEvents or front it with a disk buffer.
+        buffer:
+          max_events: {{ $.Values.tenantProjectionBufferMaxEvents | default 1000 }}
+          when_full: drop_newest
+        query:
+          _msg_field: message
+          _time_field: timestamp
+          # Tenant-safe stream fields ONLY — NOT the platform `streamFields`
+          # (which carries `app`/`k8s_namespace` infra naming that the allowlist
+          # sanitization deliberately drops). Every entry here must also be in
+          # `tenantProjectionKeepFields` or it won't exist on the projected event.
+          _stream_fields: {{ join "," $.Values.tenantProjectionStreamFields | quote }}
+        request:
+          headers:
+            # Verified, server-side-derived tenant partition. NEVER trust a
+            # tenant_id carried in the payload (zero-trust ingestion, ADR-021
+            # §contract) — this AccountID comes from the Git-registry-derived
+            # tenantProjections map, not the log line.
+            AccountID: {{ $p.accountId | quote }}
+            ProjectID: {{ $.Values.tenantProjectionProjectId | quote }}
+      {{- end }}
+    {{- end }}
+  {{- if .Values.tenantProjections }}
+  # tenant-projections.json — the projections AS DATA, for the projection-gate
+  # init-container (#908 PR-2) to validate against _account_registry.yaml. The init
+  # reads this from the /staging mount; it is NEVER placed into Vector's
+  # --config-dir (Vector would try to load it as a config). Kept in lockstep with
+  # the sinks in 30-tenant-routing.yaml by the render-test (both derive from
+  # .Values.tenantProjections).
+  tenant-projections.json: |
+    {{ .Values.tenantProjections | toJson }}
+  {{- end }}

@@ -37,9 +37,14 @@ image:
 # Portal application settings
 portal:
   listenPort: 80
-  # Tier 1: NO tenant API proxy — portal runs in read-only static mode
-  # 租戶 API 禁用：Portal 以靜態模式運行（僅參考工具，無管理功能）
+  # Tier 1: NO reverse-proxy backends — portal runs in read-only static mode.
+  # BOTH must stay empty (GHSA-3g2h-rf85-5rrv): with oauth2Proxy disabled there is
+  # no proxy to strip client identity headers, so any non-empty target would make
+  # nginx an unauthenticated open proxy to a header-trusting backend. The da-portal
+  # networkpolicy.yaml open-proxy guard enforces this at render time.
+  # 租戶 API / recipe-preview 皆禁用：Portal 以靜態模式運行（僅參考工具，無管理/代理功能）
   tenantApiUrl: ""
+  recipePreviewUrl: ""
 
 # nginx configuration
 nginx:
@@ -120,14 +125,20 @@ podSecurityContext:
   seccompProfile:
     type: RuntimeDefault
 
-# Tier 1: NetworkPolicy DISABLED (Git-Native teams manage via kubectl/GitOps)
-# 禁用 NetworkPolicy（Git-Native 環境由團隊通過 kubectl/GitOps 管理網路策略）
+# Tier 1: NetworkPolicy DISABLED — permitted ONLY because this tier runs a
+# static, oauth2Proxy-disabled portal with NO tenant-api behind it, so there is
+# no header-trust surface to guard (GHSA-3g2h-rf85-5rrv). The da-portal netpol
+# template's fail-closed guard is scoped to oauth2Proxy.enabled=true, so it does
+# NOT fire here. If you enable oauth2Proxy/tenant-api in this tier, you MUST also
+# set networkPolicy.enabled=true.
+# 禁用 NetworkPolicy（Git-Native 靜態 Portal，無 tenant-api 標頭信任面）
 networkPolicy:
   enabled: false
+  # No tenant namespaces — the portal has no legitimate tenant-pod client
+  # (GHSA-3g2h-rf85-5rrv). Retained for reference if netpol is later enabled.
   allowedNamespaces:
     - monitoring
-    - db-a
-    - db-b
+    - ingress-nginx
 
 # Pod annotations
 podAnnotations:

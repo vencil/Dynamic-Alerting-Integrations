@@ -1,0 +1,128 @@
+# ValidatingAdmissionPolicy — anti-silent-disarm for the tenant-projection gate
+# (ADR-021 Phase 2(a) / #908 PR-3). The K8s-native generalisation of the #945
+# mtail-compile lesson: a security control that can be SILENTLY removed is fragile.
+#
+# ⚠️ REQUIRES KUBERNETES >= 1.30 (admissionregistration.k8s.io/v1 GA). On older
+# clusters `kubectl apply` on this file errors with `no matches for kind
+# "ValidatingAdmissionPolicy"` (pre-1.30 it is v1beta1/alpha behind a feature
+# gate). If your cluster is < 1.30, SKIP/REMOVE this file — the policy is
+# defense-in-depth, nothing else depends on it. This matters because the
+# getting-started guide applies k8s/03-monitoring/*.yaml as one loop.
+#
+# WHAT IT GUARDS
+# --------------
+# The fail-closed projection gate (helm/vector) runs as a Vector DaemonSet
+# init-container named `projection-gate`; it is the only un-bypassable point that
+# stops a "unique-but-wrong" accountId from cross-tenant-leaking tenant logs. But
+# nothing stops an operator from editing that init-container OUT of a live Vector
+# DaemonSet (a `kubectl edit`, a Kustomize/GitOps overlay that drops it) while the
+# tenant-routing plumbing stays — silently disarming the gate. This policy catches
+# exactly that: a Vector log-shipper DaemonSet that still mounts the gate's
+# `registry` volume (i.e. tenant projection is active) but no longer has the
+# `projection-gate` init-container.
+#
+# ⚠️ WHY Warn+Audit, NOT Deny (Day-1 blast-radius discipline)
+# ----------------------------------------------------------
+# This is the repo's FIRST VAP and it cannot be validated against a real API
+# server here (no cluster in the dev loop). A wrong CEL on a Deny binding would
+# reject Vector DaemonSet applies CLUSTER-WIDE (fail-closed → cluster DoS). So the
+# BINDING uses `validationActions: [Warn, Audit]`, which — verified against the
+# K8s reference — NEVER blocks the request regardless of `failurePolicy` (even a
+# CEL runtime error is reported, not enforced, when no `Deny` action is present).
+# That makes this 100% safe to ship blind: a disarm surfaces as a kubectl warning
+# + an audit event, with zero deploy risk. PROMOTE TO Deny (flip the binding's
+# validationActions to [Deny]) only AFTER validating the CEL matches/allows
+# correctly on a real cluster — see the runbook for the promotion checklist.
+#
+# THREAT MODEL (honest scope): operator good-faith mistake / accidental disarm of
+# a LIVE gated DaemonSet — the init-container is edited out but the `registry`
+# volume remains. OUT OF SCOPE (deliberate bypasses; the defense there is GitOps
+# PR review): (a) a malicious cluster-admin stripping BOTH the volume and the
+# init-container, or downgrading to a pre-gate chart (neither renders) — no
+# in-cluster admission policy binds an actor who controls the cluster; (b)
+# name-preserving neutering — patching the projection-gate init-container's
+# image/args to a no-op while keeping the name (this policy checks presence by
+# NAME only); (c) a two-step label strip — update 1 removes only the DaemonSet
+# labels (gate intact, passes), update 2 removes the init (binding no longer
+# matches, skipped). NB a SINGLE update stripping labels+init together IS caught:
+# the binding's objectSelector matches old OR new object on UPDATE.
+#
+# EMPTY-SHELL variants (name kept, container broken — e.g. a bad merge-conflict
+# resolution) are deliberately NOT CEL-checked here, because each is already
+# covered by a cheaper layer: a MISSING image is rejected by built-in API
+# validation (image is a required field — a `has(c.image)` here would warn on a
+# request that is about to be rejected anyway); MISSING/garbled args make the
+# gate's argparse exit non-zero -> Init CrashLoopBackOff; a WRONG image wedges the
+# pod in ImagePullBackOff — both waiting states are caught by the
+# VectorProjectionGateStuck KSM alert (configmap-rules-platform.yaml, runbook
+# 8.9.3). A `has()` check cannot catch the remaining case (a VALID no-op
+# image/args), which is threat (b) above.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: vector-projection-gate-anti-disarm
+  labels:
+    app.kubernetes.io/part-of: dynamic-alerting
+    app.kubernetes.io/component: admission-policy
+spec:
+  # A CEL runtime error is governed by failurePolicy — but because the binding is
+  # Warn+Audit (no Deny), even `Fail` here can NEVER block a request; it only
+  # decides whether an eval error is surfaced (Fail = report it) or ignored.
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["apps"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["daemonsets"]
+  # Precondition: only evaluate DaemonSets that are actually running the gated
+  # tenant projection, keyed on the gate's `registry` volume (rendered by
+  # helm/vector ONLY when tenantProjections is set). A single-tenant Vector with
+  # no projection has no `registry` volume → skipped (no false warning). The
+  # `has()` guards the ABSENT-volumes leaf; a structurally degenerate object
+  # (e.g. missing spec.template.spec — admission runs BEFORE strategy validation)
+  # could still error mid-path traversal. Harmless under the Warn+Audit binding
+  # (an eval error is reported, never enforced); after a Deny promotion an eval
+  # error becomes a hard reject under failurePolicy Fail — see the runbook 8.9.4
+  # promotion checklist, which requires re-deciding failurePolicy at that point.
+  matchConditions:
+    - name: gated-tenant-projection-active
+      expression: >-
+        has(object.spec.template.spec.volumes) &&
+        object.spec.template.spec.volumes.exists(v, v.name == 'registry')
+  validations:
+    # The gate init-container MUST be present. `has()` guards a DaemonSet with no
+    # initContainers at all (that IS the disarm case → expression false → warn).
+    - expression: >-
+        has(object.spec.template.spec.initContainers) &&
+        object.spec.template.spec.initContainers.exists(c, c.name == 'projection-gate')
+      reason: Forbidden
+      message: >-
+        Vector projection-gate init-container is missing from a tenant-projecting
+        Vector DaemonSet (it mounts the conf.d registry but has no
+        'projection-gate' init-container). The fail-closed cross-tenant-leak gate
+        (#908) has been disarmed — restore the init-container. See
+        platform-log-aggregation-runbook 8.9.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: vector-projection-gate-anti-disarm-binding
+  labels:
+    app.kubernetes.io/part-of: dynamic-alerting
+    app.kubernetes.io/component: admission-policy
+spec:
+  policyName: vector-projection-gate-anti-disarm
+  # ⛔ Warn+Audit, NOT Deny — see the policy header. This never blocks a deploy;
+  # it emits a kubectl warning + an audit event. Promote to [Deny] only after
+  # real-cluster validation (Deny and Warn are mutually exclusive — replace, not add).
+  validationActions: ["Warn", "Audit"]
+  matchResources:
+    # Scope to Vector log-shipper DaemonSets only (the always-present chart labels
+    # from helm/vector _helpers.tpl). Combined with the policy's matchConditions,
+    # only a gated Vector DaemonSet is ever evaluated.
+    objectSelector:
+      matchLabels:
+        app.kubernetes.io/name: vector
+        app.kubernetes.io/component: log-shipper

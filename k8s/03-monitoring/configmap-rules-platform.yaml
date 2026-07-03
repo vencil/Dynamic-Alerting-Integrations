@@ -1014,3 +1014,166 @@ data:
                 flood. This is a COARSE signal — it cannot name the affected
                 account; correlate with the Vector logs and the account
                 registry. See platform-log-aggregation-runbook §8.7.
+
+          # ── Projection gate: unique-but-wrong accountId, DEGRADED (#908 PR-3a) ──
+          # The fail-closed projection gate (verify_tenant_projections.py init-container)
+          # found a `tenantProjections` entry whose accountId does NOT match the conf.d
+          # account registry — the "unique-but-wrong" copy-paste typo the render-time
+          # {{fail}} uniqueness guard AND values.schema.json both pass, the cross-tenant
+          # LEAK case the gate exists to catch. In degrade mode (default) the gate drops
+          # the tenant-routing fragment → Vector stays up shipping ONLY the platform 0:0
+          # copy → the leak is PREVENTED, but the tenant-sanitized projection is silently
+          # off. Everything looks green; this is the loud signal that promise relies on.
+          #
+          # Metric: vector_tenant_projection_gate_info{category="mismatch",mode}=1, written
+          # by the init-container and re-served by the metrics-exposer sidecar. `max by
+          # (mode, namespace)` collapses the per-node DaemonSet duplicates (every node
+          # mounts the IDENTICAL registry+projections → identical verdict) to one series,
+          # keeps the `mode` toggle + `namespace` (so two Vector INSTALLS in different
+          # namespaces don't silently collapse into one verdict — same keep-topology
+          # discipline as the sibling KSM alert), and strips the noisy scrape labels
+          # (instance/pod/job) so a stray label cannot make `> 0` silently never match.
+          # (namespace is a no-op group key if the scrape does not attach it — harmless.)
+          # ENFORCE-mode mismatch does NOT reach here (the init exits non-zero, Vector
+          # never starts, the sidecar never serves) — that is
+          # VectorProjectionGateStuck below. `for: 5m` debounces a brief
+          # mid-rollout window; a real mismatch is sticky (one-shot-at-boot) and will not
+          # self-clear before this fires.
+          # Behavioural contract: tests/rulepacks/platform-projection-gate_test.yaml.
+          - alert: VectorProjectionGateMismatch
+            expr: |
+              max by (mode, namespace) (
+                vector_tenant_projection_gate_info{category="mismatch"}
+              ) > 0
+            for: 5m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Vector projection gate found a wrong accountId (mode={{ $labels.mode }}) — tenant log routing degraded to 0:0"
+              description: |
+                A `tenantProjections` entry's accountId does not match the
+                conf.d `_account_registry.yaml` allocation — a unique-but-wrong
+                value (the cross-tenant-leak case the render-time uniqueness
+                guard and the integer schema both pass). The gate DEGRADED to
+                platform-only 0:0: the tenant-sanitized projection sinks are
+                omitted, so affected tenants silently get NO own-logs partition
+                (the leak itself is PREVENTED — Vector never wrote to the wrong
+                partition). ACTION: reconcile `tenantProjections` against
+                `_account_registry.yaml` (the SSOT), fix the mismatched
+                accountId, and roll the DaemonSet so the gate re-validates.
+                The exact offending pair is in the projection-gate
+                init-container logs (`kubectl logs <vector-pod> -c
+                projection-gate`). See platform-log-aggregation-runbook §8.9.1.
+
+          # ── Projection gate: registry unreadable at boot / GHOST RACE (#908 PR-3a) ──
+          # The gate could not TRUST the conf.d account registry at boot, so it degraded
+          # to platform-only 0:0 (category="registry_unreadable"). The most insidious
+          # trigger is the fresh-deploy GHOST RACE Gemini flagged: Vector boots BEFORE the
+          # registry ConfigMap has synced (optional:true lets the pod start), the gate
+          # reads a missing/empty registry → degrades, and because validation is
+          # one-shot-at-boot the pod STAYS degraded even after the registry arrives.
+          # Symptom: everything green, but tenant routing silently off forever. Other
+          # triggers: a malformed/newer-schema registry (the gate refuses to validate a
+          # shape it does not understand, fail-closed). Recovery is a manual
+          # `kubectl rollout restart` (re-run the one-shot gate against the now-present
+          # registry) — this alert is what tells on-call to do it.
+          #
+          # Same aggregation discipline as VectorProjectionGateMismatch. Separated from it
+          # because the ROOT CAUSE + RECOVERY differ (config typo → fix the projection;
+          # infra/ordering → rollout restart), so on-call needs distinct identities.
+          # `for: 5m` debounces a transient mid-sync read; a real ghost race is sticky.
+          # Behavioural contract: tests/rulepacks/platform-projection-gate_test.yaml.
+          - alert: VectorRegistryUnreadableAtBoot
+            expr: |
+              max by (mode, namespace) (
+                vector_tenant_projection_gate_info{category="registry_unreadable"}
+              ) > 0
+            for: 5m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Vector projection gate could not read the account registry at boot (mode={{ $labels.mode }}) — tenant routing silently degraded"
+              description: |
+                The projection-gate init-container could not trust the conf.d
+                `_account_registry.yaml` at boot and DEGRADED Vector to
+                platform-only 0:0. Most likely the fresh-deploy ORDERING RACE
+                (Vector started before the registry ConfigMap synced); the gate
+                validates ONCE at boot, so it STAYS degraded even after the
+                registry appears — tenant log routing is silently off while
+                everything else looks healthy. Could also be a malformed or
+                newer-schema registry (fail-closed refusal). ACTION: confirm the
+                registry ConfigMap (`projectionGate.registry.configMapName`)
+                exists and is well-formed, then
+                `kubectl rollout restart ds/<vector>` to re-run the gate against
+                it. Details in the init-container logs (`kubectl logs
+                <vector-pod> -c projection-gate`). See
+                platform-log-aggregation-runbook §8.9.2.
+
+          # ── Projection gate: init-container STUCK → rollout wedged (#908 PR-3a/PR-3) ──
+          # The COMPLEMENT to the two degrade alerts above, for every state where the
+          # gate init NEVER COMPLETES: the pod never leaves Init → Vector AND the
+          # metrics-exposer sidecar never start, so the verdict metric is NEVER served
+          # and the degrade alerts above CANNOT see it. On a DaemonSet this also WEDGES
+          # the rollout: maxUnavailable halts it cluster-wide (the mid-roll node loses
+          # logging entirely; un-rolled nodes keep the old config). Covered states:
+          #   - CrashLoopBackOff — enforce-mode config-bug mismatch (gate exits 1 by
+          #     design; Gemini's original enforce-deadlock blind spot), or ANY-mode
+          #     broken args/entrypoint (argparse exits non-zero).
+          #   - ImagePullBackOff / ErrImagePull / InvalidImageName — a wrong/garbled
+          #     gate image (e.g. a bad merge-conflict resolution or typo'd override):
+          #     the init wedges BEFORE it can crash, in ANY mode (Gemini #970
+          #     empty-shell review — the original CrashLoopBackOff-only matcher was
+          #     BLIND to this, a silent zero-alert rollout wedge).
+          #   - CreateContainerConfigError — e.g. the staging ConfigMap missing.
+          # NOT matched: ContainerCreating / PodInitializing (normal startup).
+          # The only in-cluster signal for all of these is kube-state-metrics seeing
+          # the init container waiting, so this alert keys on KSM, not the (absent)
+          # verdict metric. Alert was renamed from VectorProjectionGateEnforceDeadlock
+          # when the matcher was broadened — "enforce" was a misnomer once image-level
+          # wedges (which hit degrade mode too) were included.
+          #
+          # Signal: kube_pod_init_container_status_waiting_reason{container="projection-gate",
+          # reason=~...}=1 (KSM job, default metric set — confirmed emitted, no
+          # --metric-allowlist filter). `max by (namespace)` collapses the per-node
+          # DaemonSet pods (and the reason fan-out) to one series and keeps `namespace`
+          # on the page (Vector may be installed outside `monitoring`); the stable
+          # container name `projection-gate` scopes it. `max_over_time(...[5m])` is the
+          # kube-prometheus KubePodCrashLooping idiom: a CrashLoopBackOff series briefly
+          # drops to absent while kubelet re-runs the container between backoffs (and
+          # ErrImagePull/ImagePullBackOff alternate), and real Prometheus injects a
+          # staleness marker on the first missing scrape (it does NOT carry the value
+          # forward), so a raw `> 0` could reset `for: 5m` on such a gap and delay
+          # firing. max_over_time is 1 if ANY matched reason was seen in the trailing
+          # 5m; `for: 5m` then requires it SUSTAINED, debouncing a single transient
+          # crash or registry pull hiccup. A real wedge persists until the config/image
+          # is reverted. Depends on KSM being up (a dead KSM is its own concern).
+          # Behavioural contract: tests/rulepacks/platform-projection-gate_test.yaml.
+          - alert: VectorProjectionGateStuck
+            expr: |
+              max by (namespace) (
+                max_over_time(
+                  kube_pod_init_container_status_waiting_reason{container="projection-gate", reason=~"CrashLoopBackOff|ImagePullBackOff|ErrImagePull|InvalidImageName|CreateContainerConfigError"}[5m]
+                )
+              ) > 0
+            for: 5m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Vector projection-gate init-container is stuck (crash loop / image pull) — DaemonSet rollout wedged in {{ $labels.namespace }}"
+              description: |
+                The projection-gate init-container is stuck waiting (crash loop,
+                image-pull failure, or container-config error) — the pod never
+                starts Vector, and on a DaemonSet maxUnavailable then HALTS the
+                rollout cluster-wide (mid-roll nodes lose logging; un-rolled
+                nodes keep the old config — a split brain). The verdict metric
+                is NOT served in this state (Vector + the sidecar never start),
+                so the degrade alerts cannot see it — this KSM signal is the
+                only one. Causes: `tenantProjectionGate: enforce` + a config-bug
+                mismatch (fail-closed working as designed — REVERT the bad
+                `tenantProjections` change); a wrong/garbled gate image or args
+                (any mode — fix `projectionGate.image` / the init spec); a
+                missing staging ConfigMap. Inspect `kubectl describe pod` for
+                the waiting reason and `kubectl logs <vector-pod> -c
+                projection-gate --previous` for crash output. Consider `degrade`
+                mode if a hard rollout stop is worse than fail-available 0:0 for
+                your environment. See platform-log-aggregation-runbook §8.9.3.
