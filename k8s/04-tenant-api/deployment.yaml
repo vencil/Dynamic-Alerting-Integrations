@@ -179,8 +179,18 @@ spec:
             capabilities:
               drop: ["ALL"]
           args:
-            # Provider — change to "oidc" for Google/Keycloak/generic OIDC
+            # Provider — change to "oidc" for Google/Keycloak/generic OIDC.
             - --provider=github
+            # Self-hosted GitLab CE SSO: set provider=gitlab and uncomment the
+            # flags below (issuer = bare instance URL). Groups arrive from
+            # /oauth/userinfo under the openid scope as full paths (org/subteam);
+            # map them in _rbac.yaml. See docs/integration/gitlab-ce-sso.md.
+            #   - --provider=gitlab
+            #   - --oidc-issuer-url=https://gitlab.acme.internal
+            #   - --scope=openid profile email
+            #   - --gitlab-group=acme/sre          # optional group restriction (repeatable)
+            #   - --cookie-expire=4h               # revocation-lag guard (see docs)
+            #   - --cookie-refresh=1h
             # Forward to tenant-api (only accessible within the pod)
             - --upstream=http://localhost:8080
             - --http-address=0.0.0.0:4180
