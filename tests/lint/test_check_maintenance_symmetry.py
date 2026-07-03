@@ -20,6 +20,17 @@ Pinned contracts
 10. **.yml pack scanned too** — a ``.yml`` suffix must not escape the gate (fail-open
     hole class, Gemini #969).
 11. **live repo → pass** — integration teeth: the real rule-packs/ tree is compliant.
+
+Adversarial-review regressions (#981 fresh-eyes pass — each was a CONFIRMED escape)
+12. **second copy in the SAME arm, bare arm naked → fail** — linear ordering alone
+    passed this (P2-1); arm membership now requires the top-level ``or`` between the
+    join and the second copy.
+13. **paired variant spelling → fail** — both arms drifting together (``=~`` /
+    ``== bool 1``) dropped the count to 0 ("legal") (P2-2); token hygiene fails it.
+14. **variant bare marker → fail** — ``on (tenant)`` spacing pushed the whole alert
+    silently out of scope even with a naked bare arm (P2-3); token hygiene fails it.
+15. **live distribution floor** — ≥76 two-arm 2-copy recognised (P2-4): recognition
+    collapse must be loud, not an unchanged "OK — N scanned".
 """
 from __future__ import annotations
 
@@ -129,6 +140,57 @@ def test_yml_suffix_scanned(tree):
     (tree / "rule-pack-x.yml").write_text(
         _pack({"A": _two_arm(bare_maint=False)}), encoding="utf-8")
     assert sym.check() == 1
+
+
+def test_second_copy_same_arm_bare_naked_fails(tree, capsys):
+    """P2-1: copy #2 pasted AFTER the join but still inside the ENRICHED arm — the bare
+    arm is completely naked, yet linear ordering (a < join < b < bare-marker) held."""
+    left = f"(\n  (\n    {BREACH}\n    {MAINT}\n  )\n  {ENRICH}\n  {MAINT}\n)"
+    right = f"(\n  {BREACH}\n  {BARE}\n)"
+    (tree / "rule-pack-x.yaml").write_text(
+        _pack({"A": f"{left}\nor\n{right}"}), encoding="utf-8")
+    assert sym.check() == 1
+    assert "past the top-level `or` union" in capsys.readouterr().out
+
+
+def test_paired_variant_spelling_fails(tree, capsys):
+    """P2-2: BOTH arms drift to the same non-canonical spelling — the count drops to 0,
+    which used to classify as legal ':core-style'. Token hygiene fails it."""
+    expr = _two_arm().replace('filter="maintenance"', 'filter=~"maintenance"')
+    assert 'filter=~' in expr
+    (tree / "rule-pack-x.yaml").write_text(_pack({"A": expr}), encoding="utf-8")
+    assert sym.check() == 1
+    assert "non-canonical `user_state_filter`" in capsys.readouterr().out
+
+
+def test_paired_bool_modifier_fails(tree):
+    """P2-2 (toxic variant): `== bool 1` keeps 0-valued series in the RHS vector —
+    presence-based unless then suppresses EVERY tenant carrying the flag series
+    (all-tenant silent disarm). Must fail, not classify as deliberate 0-copy."""
+    expr = _two_arm().replace("== 1", "== bool 1")
+    (tree / "rule-pack-x.yaml").write_text(_pack({"A": expr}), encoding="utf-8")
+    assert sym.check() == 1
+
+
+def test_bare_marker_variant_not_silently_out_of_scope(tree, capsys):
+    """P2-3: a variant bare marker (`on (tenant)` spacing) used to push the whole alert
+    out of scope — passing even with a NAKED bare arm. Token hygiene fails it."""
+    expr = _two_arm(bare_maint=False).replace(
+        'unless on(tenant) tenant_metadata_info', 'unless on (tenant) tenant_metadata_info')
+    (tree / "rule-pack-x.yaml").write_text(_pack({"A": expr}), encoding="utf-8")
+    assert sym.check() == 1
+    assert "non-canonical `tenant_metadata_info`" in capsys.readouterr().out
+
+
+def test_live_distribution_floor():
+    """P2-4: the classifier must keep RECOGNISING the two-arm shape. 76 two-arm 2-copy
+    alerts at gate introduction — lower this floor ONLY as part of the #947 factor-out
+    refactor (a conscious update), never because recognition silently collapsed."""
+    counts, violations, scanned = sym.classify_all()
+    assert not violations
+    assert counts["two-arm-2copy"] >= 76
+    assert counts["two-arm-other"] == 0
+    assert sum(counts.values()) == scanned
 
 
 def test_live_repo_is_compliant():

@@ -35,6 +35,25 @@ Only the canonical clause spelling counts:
 A near-miss (typo'd filter value, dropped ``== 1``) simply does not match, drops the
 count to 1-in-arm, and fails — that IS the typo detection.
 
+Adversarial-review hardening (#981 fresh-eyes pass, 4 confirmed escapes closed)
+-------------------------------------------------------------------------------
+* **Token hygiene (fail-closed)**: every ``user_state_filter`` occurrence must match the
+  canonical maintenance clause (or a known non-maintenance filter join —
+  ``container_crashloop`` / ``container_imagepull``), and every ``tenant_metadata_info``
+  occurrence must match the enrichment join or the bare marker. Without this, a PAIRED
+  variant spelling (both arms drift together — find-and-replace, ``=~``, ``== bool 1``,
+  spacing) dropped the count to 0 ("legal :core-style"), and a variant BARE marker pushed
+  the whole alert silently out of scope — both escapes now FAIL loudly instead of
+  silently degrading the classification. New deliberate filters must be added to
+  ``_KNOWN_OTHER_USF`` (a conscious lint change, not a silent pass).
+* **Arm membership**: 2 copies must be separated by the top-level ``or`` union — linear
+  ordering alone could not distinguish "second copy pasted after the join but still
+  inside the ENRICHED arm (bare arm naked)" from a true one-per-arm layout.
+* **Recognition-collapse signal**: the OK line prints the classification distribution
+  (2-copy / factored / 0-copy / single-arm) and the test suite pins a floor on the
+  two-arm 2-copy count — if a refactor makes the classifier stop RECOGNISING the shape,
+  the drop is loud instead of an "OK — N scanned" that never changes.
+
 Usage:
   check_maintenance_symmetry.py        # exit 0 ok / 1 violation / 2 caller-error (dev-rule #13)
   check_maintenance_symmetry.py --ci   # same, explicit for CI
@@ -62,6 +81,11 @@ _MAINT = re.compile(
 _BARE = re.compile(r'unless\s+on\(tenant\)\s+tenant_metadata_info')
 _ENRICH = re.compile(r'\*\s+on\(tenant\)\s+group_left\([^)]*\)\s+tenant_metadata_info')
 _OR = re.compile(r'(?<![\w:])or(?![\w:])')
+# Known DELIBERATE non-maintenance user_state_filter joins (kubernetes per-alert
+# opt-ins). A new filter kind must be added here consciously — unknown spellings FAIL.
+_KNOWN_OTHER_USF = re.compile(r'user_state_filter\{filter="container_(?:crashloop|imagepull)"\}')
+_USF_TOKEN = re.compile(r'user_state_filter')
+_TMI_TOKEN = re.compile(r'tenant_metadata_info')
 
 
 def _rule_pack_files() -> list[Path]:
@@ -103,50 +127,102 @@ def _depths(masked: str) -> list[int]:
     return out
 
 
-def _check_expr(expr: str) -> str | None:
-    """None if compliant; else a one-line violation reason."""
+def _token_hygiene(expr: str) -> str | None:
+    """Fail-closed spelling guard (adversarial-review P2-2/P2-3): every marker-token
+    occurrence must be part of a canonical form. Without it, a PAIRED variant spelling
+    drops the maintenance count to 0 ("legal") and a variant bare marker pushes the whole
+    alert out of scope — silent degradation either way."""
+    covered = [m.span() for m in _MAINT.finditer(expr)]
+    covered += [m.span() for m in _KNOWN_OTHER_USF.finditer(expr)]
+    for t in _USF_TOKEN.finditer(expr):
+        if not any(s <= t.start() and t.end() <= e for s, e in covered):
+            return ("non-canonical `user_state_filter` reference — spell the maintenance "
+                    f"clause exactly `{_CANONICAL}`, or add a new deliberate "
+                    "non-maintenance filter to _KNOWN_OTHER_USF in this lint")
+    covered = [m.span() for m in _BARE.finditer(expr)]
+    covered += [m.span() for m in _ENRICH.finditer(expr)]
+    for t in _TMI_TOKEN.finditer(expr):
+        if not any(s <= t.start() and t.end() <= e for s, e in covered):
+            return ("non-canonical `tenant_metadata_info` reference — expected the "
+                    "enrichment join `* on(tenant) group_left(...) tenant_metadata_info` "
+                    "or the bare marker `unless on(tenant) tenant_metadata_info` "
+                    "(exact spacing)")
+    return None
+
+
+def _check_expr(expr: str) -> tuple[str, str | None]:
+    """(classification, violation reason | None).
+
+    Classifications: ``single-arm`` (out of scope), ``two-arm-2copy``,
+    ``two-arm-factored``, ``two-arm-0copy``, ``two-arm-other``."""
+    hygiene = _token_hygiene(expr)
     bares = list(_BARE.finditer(expr))
     if not bares:
-        return None                                   # single-arm shape — out of scope
+        return ("single-arm", hygiene)    # hygiene still applies (P2-3 scope escape)
     maints = list(_MAINT.finditer(expr))
     enrichs = list(_ENRICH.finditer(expr))
     if len(bares) != 1 or len(enrichs) != 1:
-        return (f"unrecognized two-arm shape ({len(enrichs)} enrichment join(s), "
-                f"{len(bares)} bare marker(s)) — extend check_maintenance_symmetry "
-                "or restructure to the canonical single enriched/bare pair")
+        return ("two-arm-other", hygiene or (
+            f"unrecognized two-arm shape ({len(enrichs)} enrichment join(s), "
+            f"{len(bares)} bare marker(s)) — extend check_maintenance_symmetry "
+            "or restructure to the canonical single enriched/bare pair"))
     bare, enrich = bares[0], enrichs[0]
 
     if len(maints) == 0:
-        return None       # factored upstream (:core recording rule) or deliberate no-opt-out
+        # factored upstream (:core recording rule) or deliberate no-opt-out. A paired
+        # VARIANT spelling cannot land here silently — hygiene above already failed it.
+        return ("two-arm-0copy", hygiene)
     if len(maints) == 2:
         a, b = maints
-        if a.end() <= enrich.start() and enrich.end() <= b.start() and b.end() <= bare.start():
-            return None   # canonical: one copy per arm
-        return ("2 maintenance clauses but NOT one-per-arm (expected: enriched-arm copy "
-                "before the group_left join, bare-arm copy before the bare "
-                "`unless tenant_metadata_info`)")
+        masked = _mask_quotes(expr)
+        depth = _depths(masked)
+        ordered = (a.end() <= enrich.start() and enrich.end() <= b.start()
+                   and b.end() <= bare.start())
+        # Arm membership (adversarial-review P2-1): linear ordering alone cannot tell
+        # "second copy pasted after the join but still inside the ENRICHED arm (bare arm
+        # naked)" from a true one-per-arm layout — the top-level `or` union must sit
+        # BETWEEN the enrichment join and the second copy.
+        union_between = any(depth[o.start()] == 0 and enrich.end() <= o.start() < b.start()
+                            for o in _OR.finditer(masked))
+        if ordered and union_between:
+            return ("two-arm-2copy", hygiene)   # canonical: one copy per arm
+        return ("two-arm-2copy", hygiene or (
+            "2 maintenance clauses but NOT one-per-arm (expected: enriched-arm copy "
+            "before the group_left join, bare-arm copy in the OTHER arm — past the "
+            "top-level `or` union — before the bare `unless tenant_metadata_info`)"))
     if len(maints) == 1:
         m = maints[0]
         masked = _mask_quotes(expr)
         depth = _depths(masked)
         if m.start() < bare.end() or depth[m.start()] != 0:
-            return ("only 1 maintenance clause and it sits INSIDE one arm — the other arm "
-                    "has NO maintenance suppression (an onboarding/enriched tenant would "
-                    f"page during its maintenance window). Add the twin copy `{_CANONICAL}` "
-                    "to the other arm, or factor it out: ((enriched) or (bare)) unless ...")
+            return ("two-arm-factored", hygiene or (
+                "only 1 maintenance clause and it sits INSIDE one arm — the other arm "
+                "has NO maintenance suppression (an onboarding/enriched tenant would "
+                f"page during its maintenance window). Add the twin copy `{_CANONICAL}` "
+                "to the other arm, or factor it out: ((enriched) or (bare)) unless ... "
+                "(If the WHOLE expr is wrapped in an extra outer paren pair, strip it — "
+                "the factored clause must sit at paren depth 0.)"))
         toplevel_or = [o for o in _OR.finditer(masked)
                        if depth[o.start()] == 0 and o.start() < m.start()]
         if toplevel_or:
-            return ("factored maintenance clause with a TOP-LEVEL `or` left of it — PromQL "
-                    "`or` binds looser than `unless`, so `A or B unless M` is "
-                    "`A or (B unless M)` and the enriched arm loses suppression. "
-                    "Parenthesise the union: ((enriched) or (bare)) unless on(tenant) (...)")
-        return None       # properly factored single clause
-    return (f"{len(maints)} maintenance clauses in one alert expr (expected 0, 1 factored, "
-            "or 2 one-per-arm)")
+            return ("two-arm-factored", hygiene or (
+                "factored maintenance clause with a TOP-LEVEL `or` left of it — PromQL "
+                "`or` binds looser than `unless`, so `A or B unless M` is "
+                "`A or (B unless M)` and the enriched arm loses suppression. "
+                "Parenthesise the union: ((enriched) or (bare)) unless on(tenant) (...)"))
+        return ("two-arm-factored", hygiene)    # properly factored single clause
+    return ("two-arm-other", hygiene or (
+        f"{len(maints)} maintenance clauses in one alert expr (expected 0, 1 factored, "
+        "or 2 one-per-arm)"))
 
 
-def check() -> int:
+def classify_all() -> tuple[dict[str, int], list[str], int]:
+    """(classification counts, violations, scanned) over rule-packs/. Shared by check()
+    and the distribution-floor test (adversarial-review P2-4: a classifier that stops
+    RECOGNISING the two-arm shape must fail loudly, not print an unchanged \"OK — N
+    scanned\")."""
+    counts = {"two-arm-2copy": 0, "two-arm-factored": 0, "two-arm-0copy": 0,
+              "two-arm-other": 0, "single-arm": 0}
     violations: list[str] = []
     scanned = 0
     for f in _rule_pack_files():
@@ -158,16 +234,26 @@ def check() -> int:
                 if not name or not isinstance(expr, str):
                     continue
                 scanned += 1
-                reason = _check_expr(expr)
+                kind, reason = _check_expr(expr)
+                counts[kind] += 1
                 if reason:
                     violations.append(f"    {f.name}:{name} — {reason}")
+    return counts, violations, scanned
+
+
+def check() -> int:
+    counts, violations, scanned = classify_all()
     if violations:
         print("check_maintenance_symmetry: per-arm maintenance suppression violation(s) "
               "(#947/#977 bare-arm class):")
         print("\n".join(violations))
         print(f"  canonical clause: {_CANONICAL}")
         return 1
-    print(f"check_maintenance_symmetry: OK — {scanned} alert expr(s) scanned, "
+    print(f"check_maintenance_symmetry: OK — {scanned} alert expr(s): "
+          f"{counts['two-arm-2copy']} two-arm 2-copy, "
+          f"{counts['two-arm-factored']} factored, "
+          f"{counts['two-arm-0copy']} 0-copy (:core-style), "
+          f"{counts['single-arm']} single-arm out-of-scope; "
           "maintenance clauses symmetric.")
     return 0
 
