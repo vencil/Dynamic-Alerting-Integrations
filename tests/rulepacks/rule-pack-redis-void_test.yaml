@@ -54,6 +54,9 @@ tests:
         values: '1x30'
       # redis-e: 600 > 500, maintenance active, NO tenant_metadata_info → suppressed
       # by the BARE arm's own maintenance clause (the only tenant whose suppression depends on it).
+      # Static flag — the maintenance-window RELEASE waveform (and the `== 1` 0-value
+      # contract) is pinned ONCE for the whole two-arm class in
+      # rule-pack-mariadb-cpu_test.yaml; duplicating the transition per fixture is bloat.
       - series: 'redis_connected_clients{tenant="redis-e"}'
         values: '600x30'
       - series: 'user_threshold{tenant="redis-e", component="redis", metric="connected_clients", severity="warning"}'
