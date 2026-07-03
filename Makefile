@@ -2,6 +2,7 @@
 # Makefile — Dynamic Alerting Integrations
 # ============================================================
 # (scratch verification touch for PR #983 — safe to revert/close, no-op line)
+# (retargeted PR #984 base to main — this line forces a fresh synchronize event)
 SHELL := /bin/bash
 .DEFAULT_GOAL := help
 
