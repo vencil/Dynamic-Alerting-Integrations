@@ -31,6 +31,13 @@ Adversarial-review regressions (#981 fresh-eyes pass — each was a CONFIRMED es
     silently out of scope even with a naked bare arm (P2-3); token hygiene fails it.
 15. **live distribution floor** — ≥76 two-arm 2-copy recognised (P2-4): recognition
     collapse must be loud, not an unchanged "OK — N scanned".
+
+Gemini #981 comment-trap regressions
+16. **comments must fool no scan** — a ``)`` / ``or`` inside a PromQL ``#`` comment must
+    not corrupt paren depth or the top-level-``or`` scan (canonical expr + hostile
+    comments still passes).
+17. **commented-out clause does not count** — a ``#``-disabled maintenance copy in the
+    bare arm leaves only ONE real copy → fail, not a phantom 2-copy pass.
 """
 from __future__ import annotations
 
@@ -180,6 +187,32 @@ def test_bare_marker_variant_not_silently_out_of_scope(tree, capsys):
     (tree / "rule-pack-x.yaml").write_text(_pack({"A": expr}), encoding="utf-8")
     assert sym.check() == 1
     assert "non-canonical `tenant_metadata_info`" in capsys.readouterr().out
+
+
+def test_comments_do_not_corrupt_scans(tree):
+    """Gemini #981 comment trap: a `)` and a bare ` or ` inside PromQL # comments used
+    to desync _depths / the top-level-or scan → random FP/FN. Canonical expr + hostile
+    comments must still PASS."""
+    left = (f"(\n  # enriched arm (wait for metadata) — hostile ) paren\n"
+            f"  (\n    {BREACH}\n    {MAINT}\n  )\n  {ENRICH}\n)")
+    right = (f"(\n  # bare arm: fires with or without metadata )\n"
+             f"  (\n    {BREACH}\n    {MAINT}\n  )\n  {BARE}\n)")
+    (tree / "rule-pack-x.yaml").write_text(
+        _pack({"A": f"{left}\nor\n{right}"}), encoding="utf-8")
+    assert sym.check() == 0
+
+
+def test_commented_out_clause_does_not_count(tree):
+    """Gemini #981: a #-disabled maintenance copy must not count as a real one — the
+    bare arm is left with NO live suppression, so this must FAIL (1 real copy inside
+    the enriched arm), not pass as a phantom 2-copy layout."""
+    left = f"(\n  (\n    {BREACH}\n    {MAINT}\n  )\n  {ENRICH}\n)"
+    right = (f"(\n  (\n    {BREACH}\n"
+             f"    # unless on(tenant) (user_state_filter{{filter=\"maintenance\"}} == 1)\n"
+             f"  )\n  {BARE}\n)")
+    (tree / "rule-pack-x.yaml").write_text(
+        _pack({"A": f"{left}\nor\n{right}"}), encoding="utf-8")
+    assert sym.check() == 1
 
 
 def test_live_distribution_floor():

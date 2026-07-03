@@ -53,6 +53,21 @@ Adversarial-review hardening (#981 fresh-eyes pass, 4 confirmed escapes closed)
   (2-copy / factored / 0-copy / single-arm) and the test suite pins a floor on the
   two-arm 2-copy count — if a refactor makes the classifier stop RECOGNISING the shape,
   the drop is loud instead of an "OK — N scanned" that never changes.
+* **PromQL comment masking (Gemini #981)**: ``#`` comments inside an expr are blanked
+  (quote-aware, position-preserving) before ANY scan — a ``)`` / ``or`` in a comment
+  must not corrupt paren depth, and a commented-out clause must not count as a real one.
+
+Scope boundaries (verified, do not re-raise)
+--------------------------------------------
+* **Whole-bare-arm deletion is NOT this lint's job**: an enrichment join without the
+  ``or (... unless on(tenant) tenant_metadata_info)`` void branch is the
+  onboarding-vacuum drop class, owned by ``check_leftouterjoin_enrichment.py``
+  (ADR-024 pre-commit hook; semantic proof in ``tests/rulepacks/*-void_test.yaml``).
+* **Byte-canonical dependency (deliberate short-term-tripwire trade-off)**: this lint
+  matches canonical spellings byte-for-byte (modulo ``\\s`` flexibility). Introducing a
+  PromQL formatter that reflows those clauses will trip the token-hygiene guard
+  repo-wide — fail-CLOSED, but coordinate the formatter rollout with a lint update.
+  The lint retires when the #947 factor-out refactor lands (see issue disposition).
 
 Usage:
   check_maintenance_symmetry.py        # exit 0 ok / 1 violation / 2 caller-error (dev-rule #13)
@@ -115,6 +130,41 @@ def _mask_quotes(expr: str) -> str:
     return "".join(out)
 
 
+def _mask_comments(expr: str) -> str:
+    """Blank out PromQL ``#`` comments (position-preserving, quote-aware). A ``)`` /
+    ``or`` inside a comment must not corrupt the paren-depth / top-level-``or`` scans,
+    and a commented-OUT maintenance clause must not count as a real copy (Gemini #981
+    comment trap). A ``#`` inside a double-quoted label value is NOT a comment."""
+    out: list[str] = []
+    in_q = esc = in_c = False
+    for ch in expr:
+        if in_c:
+            if ch == "\n":
+                in_c = False
+                out.append("\n")
+            else:
+                out.append(" ")
+            continue
+        if esc:
+            out.append(ch)
+            esc = False
+            continue
+        if in_q and ch == "\\":
+            out.append(ch)
+            esc = True
+            continue
+        if ch == '"':
+            in_q = not in_q
+            out.append(ch)
+            continue
+        if ch == "#" and not in_q:
+            in_c = True
+            out.append(" ")
+            continue
+        out.append(ch)
+    return "".join(out)
+
+
 def _depths(masked: str) -> list[int]:
     """Paren depth of the position BEFORE consuming each char (index-aligned with expr)."""
     d, out = 0, []
@@ -155,6 +205,7 @@ def _check_expr(expr: str) -> tuple[str, str | None]:
 
     Classifications: ``single-arm`` (out of scope), ``two-arm-2copy``,
     ``two-arm-factored``, ``two-arm-0copy``, ``two-arm-other``."""
+    expr = _mask_comments(expr)   # comments must fool NO scan below (Gemini #981)
     hygiene = _token_hygiene(expr)
     bares = list(_BARE.finditer(expr))
     if not bares:
