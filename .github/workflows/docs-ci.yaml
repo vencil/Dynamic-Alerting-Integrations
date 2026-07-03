@@ -3,6 +3,22 @@
 # Validates and renders documentation on every PR that touches docs/**/*.md
 # or rule-packs/**/*.md.
 #
+# The workflow itself triggers on EVERY pull_request to main (no top-level
+# `paths:` filter) — only individual jobs are gated, via the detect-changes
+# job's `docs_changed` output. Reason: several of these job NAMES are
+# enrolled in main's branch protection required_status_checks. A workflow
+# suppressed entirely by a top-level `paths:` filter reports NO status at
+# all for a PR that doesn't touch those paths, and GitHub treats a required
+# check with no reported status as permanently pending — blocking merge even
+# when every check that DID run is green (PR #928 / #957 both needed a
+# manual `--admin` bypass for this). A job that runs and is skipped via its
+# own `if:`, by contrast, reports `skipped`, which satisfies the
+# requirement. See detect-changes below.
+#
+# head-blob-hygiene is the one job that intentionally stays unconditional
+# (see its own comment) — it's meant to catch historical blob corruption on
+# every push regardless of whether a given PR touches docs/.
+#
 # Jobs:
 #   1. validate-mermaid: Syntax check + optional mmdc render of Mermaid diagrams
 #   2. check-links: Cross-reference validation (internal links, anchors, files)
@@ -16,29 +32,58 @@ name: Documentation CI
 on:
   pull_request:
     branches: [main]
-    paths:
-      - "docs/**/*.md"
-      - "docs/**/*.jsx"
-      - "docs/**/*.html"
-      - "rule-packs/**/*.md"
-      - "README.md"
-      - "README.en.md"
-      - "CLAUDE.md"
-      - "CHANGELOG.md"
-      - "mkdocs.yml"
-      - "scripts/tools/**/*.py"
-      - "scripts/tools/lint/**/*.sh"
-      - ".github/workflows/docs-ci.yaml"
-      - ".pre-commit-config.yaml"
   # head-blob-hygiene also runs on every push so historical drift is caught
   # without waiting for a PR that touches docs/.
   push:
     branches: [main]
 
+# Explicit least-privilege grant (repo default is read-only; every sibling
+# workflow declares this block too). pull-requests:read is specifically for
+# detect-changes' dorny/paths-filter@v3 REST-API mode below.
+permissions:
+  contents: read
+  pull-requests: read
+
 jobs:
+  detect-changes:
+    name: Detect Documentation Changes
+    runs-on: ubuntu-latest
+    # push events keep today's behavior (every job in this workflow runs
+    # unconditionally on push to main) — only pull_request needs gating, so
+    # this job is a no-op (and downstream `if:` short-circuits) on push.
+    if: github.event_name == 'pull_request'
+    outputs:
+      docs_changed: ${{ steps.filter.outputs.docs }}
+    steps:
+      # No actions/checkout here: dorny/paths-filter's default REST-API mode
+      # for pull_request events queries the changed-files list via the
+      # GitHub API and doesn't need a local clone (see its README's "For
+      # pull requests it's not necessary to checkout the code").
+      - name: Filter changed paths
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            docs:
+              - "docs/**/*.md"
+              - "docs/**/*.jsx"
+              - "docs/**/*.html"
+              - "rule-packs/**/*.md"
+              - "README.md"
+              - "README.en.md"
+              - "CLAUDE.md"
+              - "CHANGELOG.md"
+              - "mkdocs.yml"
+              - "scripts/tools/**/*.py"
+              - "scripts/tools/lint/**/*.sh"
+              - ".github/workflows/docs-ci.yaml"
+              - ".pre-commit-config.yaml"
+
   validate-mermaid:
     name: Validate Mermaid Diagrams
     runs-on: ubuntu-latest
+    needs: detect-changes
+    if: github.event_name != 'pull_request' || needs.detect-changes.outputs.docs_changed == 'true'
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -92,6 +137,8 @@ jobs:
   check-links:
     name: Check Documentation Links
     runs-on: ubuntu-latest
+    needs: detect-changes
+    if: github.event_name != 'pull_request' || needs.detect-changes.outputs.docs_changed == 'true'
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -153,6 +200,8 @@ jobs:
   check-frontmatter:
     name: Check Documentation Front Matter
     runs-on: ubuntu-latest
+    needs: detect-changes
+    if: github.event_name != 'pull_request' || needs.detect-changes.outputs.docs_changed == 'true'
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -185,6 +234,8 @@ jobs:
   check-coverage:
     name: Check Documentation Coverage
     runs-on: ubuntu-latest
+    needs: detect-changes
+    if: github.event_name != 'pull_request' || needs.detect-changes.outputs.docs_changed == 'true'
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -235,6 +286,8 @@ jobs:
   mkdocs-build:
     name: MkDocs Build Verification
     runs-on: ubuntu-latest
+    needs: detect-changes
+    if: github.event_name != 'pull_request' || needs.detect-changes.outputs.docs_changed == 'true'
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -267,7 +320,8 @@ jobs:
   doc-line-count:
     name: Documentation Line Count Monitor
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
+    needs: detect-changes
+    if: github.event_name == 'pull_request' && needs.detect-changes.outputs.docs_changed == 'true'
     steps:
       - name: Checkout PR
         uses: actions/checkout@v6
@@ -293,6 +347,8 @@ jobs:
   drift-checks:
     name: Drift Detection (validate_all.py)
     runs-on: ubuntu-latest
+    needs: detect-changes
+    if: github.event_name != 'pull_request' || needs.detect-changes.outputs.docs_changed == 'true'
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -329,6 +385,11 @@ jobs:
     # are ~10s total on ubuntu-latest (jq/curl already built-in).
     name: I-4 Runbook Smoke Test
     runs-on: ubuntu-latest
+    needs: detect-changes
+    # Not a required status check, but without this gate it would now run
+    # (downloading amtool/promtool/yq) on every PR once the workflow-level
+    # `paths:` filter above is removed — this keeps today's cost profile.
+    if: github.event_name != 'pull_request' || needs.detect-changes.outputs.docs_changed == 'true'
     steps:
       - uses: actions/checkout@v6
 
