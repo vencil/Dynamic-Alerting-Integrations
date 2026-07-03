@@ -996,6 +996,20 @@ repos:
         # `python scripts/tools/lint/check_vmalert_coverage.py --generate` + commit.
         files: ^(rule-packs/rule-pack-.*\.ya?ml|tests/rulepacks/(.*_test\.ya?ml|vmalert_coverage_baseline\.yaml)|scripts/tools/lint/check_vmalert_coverage\.py)$
 
+      - id: maintenance-symmetry-check
+        name: rule-pack per-arm maintenance-clause symmetry (#947/#977 bare-arm class guard)
+        entry: python3 -X utf8 scripts/tools/lint/check_maintenance_symmetry.py --ci
+        language: python
+        additional_dependencies: ['pyyaml']
+        pass_filenames: false
+        # Two-arm (enriched or bare) alert exprs hand-copy the maintenance `unless`
+        # once per arm; deleting/typo-ing ONE copy keeps promtool green unless the
+        # fixture carries an e-tenant (#977) — and an onboarding tenant would page
+        # during its maintenance window. Requires 0 copies (:core-factored upstream),
+        # 1 factored top-level copy (union parenthesised — `or` binds looser than
+        # `unless`), or 2 copies one-per-arm and byte-canonical.
+        files: ^(rule-packs/rule-pack-.*\.ya?ml|scripts/tools/lint/check_maintenance_symmetry\.py)$
+
       - id: undefined-tokens-check
         name: Detect JSX/CSS/HTML references to --da-* tokens not defined in design-tokens.css
         entry: python3 -X utf8 scripts/tools/lint/check_undefined_tokens.py --ci
