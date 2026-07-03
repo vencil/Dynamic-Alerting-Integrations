@@ -12,6 +12,11 @@
 #   - db-b: NO metadata (onboarding vacuum) → STILL fires BARE (branch B).
 #   - db-c: over threshold but maintenance  → suppressed.
 #   - db-d: below threshold                → no alert.
+#   - db-e: maintenance + NO metadata     → suppressed by the BARE arm's OWN
+#     maintenance clause (#973-review hole: each arm hand-copies the clause, and
+#     db-c gives the bare copy ZERO mutation coverage — delete that copy and
+#     db-c is still excluded by the bare arm's `unless tenant_metadata_info` —
+#     so deleting/typo-ing it stayed green until this tenant gave it teeth).
 # The observed series is tenant:mysql_threads_running:avg1m =
 #   max by(tenant)(avg_over_time(mysql_global_status_threads_running[1m])). The leaf
 # mysql_global_status_threads_running is a GAUGE (concurrent threads executing — a
@@ -54,6 +59,21 @@ tests:
         values: '82x40'
       - series: 'user_threshold{tenant="db-d", component="mysql", metric="cpu", severity="warning"}'
         values: '100x40'
+      # db-e: 82 > 50, maintenance active, NO tenant_metadata_info → suppressed
+      # by the BARE arm's own maintenance clause (the only tenant whose suppression depends on it).
+      # WAVEFORM (Gemini #977 v2): maintenance ON through 6m15s, then the flag is pushed
+      # as VALUE 0 (not absent) from 6m30s — the release path for the whole two-arm
+      # class, pinned ONCE here (other fixtures keep a static flag; duplicating the
+      # transition per fixture is test bloat). The 0-value release deliberately pins the
+      # `== 1` VALUE contract: a bare presence-based `unless user_state_filter{...}`
+      # (dropped `== 1`) would keep suppressing on the 0-valued series forever
+      # (silent-FN trap) → the 8m firing assertion below turns red.
+      - series: 'mysql_global_status_threads_running{tenant="db-e"}'
+        values: '82x40'
+      - series: 'user_threshold{tenant="db-e", component="mysql", metric="cpu", severity="warning"}'
+        values: '50x40'
+      - series: 'user_state_filter{tenant="db-e", filter="maintenance"}'
+        values: '1x25 0x15'
 
     alert_rule_test:
       - eval_time: 6m
@@ -92,7 +112,66 @@ tests:
               runbook_url: ""
               owner: ""
               tier: ""
-        # db-c (maintenance) and db-d (below threshold) produce NO MariaDBHighThreadsRunning alert.
+        # db-c (maintenance, enriched arm), db-d (below threshold) and db-e (maintenance
+        # STILL ON at 6m, BARE arm — no metadata) produce NO MariaDBHighThreadsRunning alert.
+
+      # Maintenance-window RELEASE (state transition): db-e's flag goes to 0 at ~6m30s →
+      # the `== 1` filter drops the series → unless stops suppressing → for: 30s → db-e
+      # fires BARE by 7m15s. Asserting at 8m proves (a) suppression actually RELEASES
+      # (a broken lookback/offset that never un-suppresses fails here) and (b) the
+      # 0-value semantics of the `== 1` contract (see the input-series note).
+      - eval_time: 8m
+        alertname: MariaDBHighThreadsRunning
+        exp_alerts:
+          # db-a: still firing enriched (unchanged steady breach).
+          - exp_labels:
+              severity: warning
+              metric_group: cpu
+              tenant: db-a
+              runbook_url: "http://rb/a"
+              owner: team-a
+              tier: gold
+            exp_annotations:
+              summary: "High running-thread saturation on db-a"
+              summary_zh: "db-a 執行緒飽和過高"
+              platform_summary: "[gold] db-a: running-thread saturation (threads_running, NOT host CPU%) breached — check lock waits / slow queries / IO stalls. True CPU% → PodContainerHighCPU."
+              platform_summary_zh: "[gold] db-a：執行緒飽和（threads_running，非主機 CPU%）超出 — 檢查鎖等待 / 慢查詢 / IO 停滯。真 CPU% 見 PodContainerHighCPU。"
+              description: "82 running threads (1m avg, warning threshold exceeded)"
+              description_zh: "82 個執行中執行緒（1m 平均，超過警告閾值）"
+              runbook_url: "http://rb/a"
+              owner: team-a
+              tier: gold
+          # db-b: still firing bare (unchanged).
+          - exp_labels:
+              severity: warning
+              metric_group: cpu
+              tenant: db-b
+            exp_annotations:
+              summary: "High running-thread saturation on db-b"
+              summary_zh: "db-b 執行緒飽和過高"
+              platform_summary: "[] db-b: running-thread saturation (threads_running, NOT host CPU%) breached — check lock waits / slow queries / IO stalls. True CPU% → PodContainerHighCPU."
+              platform_summary_zh: "[] db-b：執行緒飽和（threads_running，非主機 CPU%）超出 — 檢查鎖等待 / 慢查詢 / IO 停滯。真 CPU% 見 PodContainerHighCPU。"
+              description: "82 running threads (1m avg, warning threshold exceeded)"
+              description_zh: "82 個執行中執行緒（1m 平均，超過警告閾值）"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+          # db-e: maintenance RELEASED → fires BARE (branch B) — the release-path pin.
+          - exp_labels:
+              severity: warning
+              metric_group: cpu
+              tenant: db-e
+            exp_annotations:
+              summary: "High running-thread saturation on db-e"
+              summary_zh: "db-e 執行緒飽和過高"
+              platform_summary: "[] db-e: running-thread saturation (threads_running, NOT host CPU%) breached — check lock waits / slow queries / IO stalls. True CPU% → PodContainerHighCPU."
+              platform_summary_zh: "[] db-e：執行緒飽和（threads_running，非主機 CPU%）超出 — 檢查鎖等待 / 慢查詢 / IO 停滯。真 CPU% 見 PodContainerHighCPU。"
+              description: "82 running threads (1m avg, warning threshold exceeded)"
+              description_zh: "82 個執行中執行緒（1m 平均，超過警告閾值）"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+        # db-c stays suppressed (flag still 1); db-d stays below threshold.
 
   # ── Critical tier: MariaDBHighThreadsRunningCritical (consumes the orphan cpu_critical) ──
   - interval: 15s
@@ -123,6 +202,17 @@ tests:
         values: '82x40'
       - series: 'user_threshold{tenant="db-d", component="mysql", metric="cpu", severity="critical"}'
         values: '100x40'
+      # db-e: 82 > 50, maintenance active, NO tenant_metadata_info → suppressed
+      # by the BARE arm's own maintenance clause (the only tenant whose suppression depends on it).
+      # Static flag here — the maintenance-window RELEASE waveform (and the `== 1`
+      # 0-value contract) is pinned ONCE for the whole two-arm class in the warning
+      # block above; duplicating the transition per block is test bloat.
+      - series: 'mysql_global_status_threads_running{tenant="db-e"}'
+        values: '82x40'
+      - series: 'user_threshold{tenant="db-e", component="mysql", metric="cpu", severity="critical"}'
+        values: '50x40'
+      - series: 'user_state_filter{tenant="db-e", filter="maintenance"}'
+        values: '1x40'
 
     alert_rule_test:
       - eval_time: 6m
@@ -161,7 +251,8 @@ tests:
               runbook_url: ""
               owner: ""
               tier: ""
-        # db-c (maintenance) and db-d (below threshold) produce NO MariaDBHighThreadsRunningCritical alert.
+        # db-c (maintenance, enriched arm), db-d (below threshold) and db-e (maintenance,
+        # BARE arm — no metadata) produce NO MariaDBHighThreadsRunningCritical alert.
 
   # ── Smoothing regression (#943 / Gemini reset-trap review): rule fires off the 1m AVG, not raw ──
   # Contract: at the 6m eval the INSTANTANEOUS gauge has dipped to 40 (BELOW the 80 threshold),
