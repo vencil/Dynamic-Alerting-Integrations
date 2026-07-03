@@ -266,6 +266,7 @@ DEFAULT_RULE_PACKS_DIR = os.path.join(_REPO_ROOT, "rule-packs")
 # INFO (known-deferred), NOT an error, so this bugfix can merge.
 KNOWN_DEFERRED: dict[str, str] = {
     "container_cpu": "version-aware (ADR-024) — recording-rule sourced, #916",
+    "container_cpu_throttle": "version-aware (ADR-024) — recording-rule sourced, #916/#944",
     "container_memory": "version-aware (ADR-024) — recording-rule sourced, #916",
 }
 

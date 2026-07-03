@@ -1,0 +1,361 @@
+# promtool unit test — #944 PR-2c: chronic CFS throttle alert (PodContainerCPUThrottled).
+# Run: promtool test rules tests/rulepacks/rule-pack-kubernetes-cpu-throttle_test.yaml
+#
+# Signal semantics under test: ratio = rate(cfs_throttled_periods)/rate(cfs_periods)
+# = share of the container's ACTIVE 100ms CFS periods that were throttled. This is
+# DUTY-CYCLE INVARIANT (numerator/denominator share the window) — the adversarial
+# review (#944 ledger) proved the naive "5m dilution" mental model wrong, so several
+# cases below pin the CORRECT model, including its accepted limitations:
+#   A/G) db-a  always-active, 30% ratio, 60% usage, metadata     → ENRICHED fire; and the
+#        for:15m debounce holds at 10m (core true since ~2m, 15m not elapsed → no alert).
+#   B) db-b   same breach, NO metadata                           → BARE fire (vacuum branch).
+#   C) db-c   breach + maintenance, metadata                     → suppressed (enriched arm).
+#   D) db-d   always-active 10% ratio, 40% usage                 → SILENT: the M1 pin. An
+#        always-active DB throttled 1.5s of every 15s reads 10% < 25 — accepted limitation
+#        (chronic-throttle alert, not a burst-latency alert; throttled_seconds deferred).
+#   E) db-e   breach + maintenance, NO metadata                  → suppressed (BARE arm's
+#        `unless` — the #973 db-e lesson: test maintenance on BOTH LOJ arms).
+#   F) db-f   55% ratio + tenant critical override (50)          → Critical fires.
+#   J) db-g   MIXED pod: healthy db (0% ratio) + tiny-limit sidecar at 90% ratio but
+#        12% usage → SILENT: the working-hard floor (usage ≥20% of limit) filters the
+#        kubernetes-mixin CPUThrottlingHigh false-positive class (Go-runtime bursts on a
+#        0.1-0.5 core sidecar limit) instead of letting it saturate the tenant max.
+#   K) db-h   sparse denominator: 1 throttled of 3 active periods = 33% ratio at ~0.3%
+#        usage (a single GC tick) → SILENT via the same floor (low-sample noise).
+#   H) db-i   guard regression on the RAW by_container rule (pre-floor, so the `> 0`
+#        denominator guard alone is under test): frozen counters (0/0 → NaN) and
+#        throttled-counting-while-periods-frozen (x/0 → +Inf) must yield NO series —
+#        NaN/Inf poison max() (verified promtool 2.53.2). NaN cannot be asserted via
+#        exp_samples (NaN≠NaN) → asserted via count() emptiness.
+#   I) db-j   version fallback: v2-labelled pod + version-less threshold → fires with
+#        version="v2" via the FALLBACK branch. (cpu_throttle is NOT in the ADR-024
+#        version pilot allowlist — per-version overrides are out-of-scope; this tests
+#        the branch tenants actually exercise, not the inert exact-match branch.)
+#
+# Timing (dual-engine safety, #973 rule): the RATIO is cold-start exact on both engines
+# (extrapolation cancels), but the usage-FLOOR side climbs during Prometheus' rate
+# cold-start → the for:15m clock starts ~1min earlier on vmalert than promtool. All
+# firing assertions sit at 21m (full window + for + margin) and the debounce assertion
+# at 10m (both engines still pending) — the ~15m30s-17m divergence band has NO
+# assertions, so gate A needs no deviation-catalog entry.
+rule_files:
+  - ../../rule-packs/rule-pack-kubernetes.yaml
+
+evaluation_interval: 15s
+
+tests:
+  # ── A+G) always-active breach: 45/150 = 30% > 25; usage 0.6/1 = 60% > 20-floor ──
+  - interval: 15s
+    input_series:
+      - series: 'container_cpu_cfs_throttled_periods_total{namespace="db-a", pod="mysql-0", container="mysqld"}'
+        values: '0+45x100'
+      - series: 'container_cpu_cfs_periods_total{namespace="db-a", pod="mysql-0", container="mysqld"}'
+        values: '0+150x100'
+      - series: 'container_cpu_usage_seconds_total{namespace="db-a", pod="mysql-0", container="mysqld"}'
+        values: '0+9x100'
+      - series: 'kube_pod_container_resource_limits{resource="cpu", namespace="db-a", pod="mysql-0", container="mysqld"}'
+        values: '1x100'
+      - series: 'kube_pod_labels{namespace="db-a", pod="mysql-0"}'
+        values: '1x100'
+      - series: 'user_threshold{tenant="db-a", component="container", metric="cpu_throttle", severity="warning"}'
+        values: '25x100'
+      - series: 'tenant_metadata_info{tenant="db-a", runbook_url="http://rb/a", owner="team-a", tier="gold"}'
+        values: '1x100'
+    alert_rule_test:
+      # G) for:15m debounce — ratio+floor true since ~2m, 15m not elapsed at 10m.
+      - eval_time: 10m
+        alertname: PodContainerCPUThrottled
+        exp_alerts: []
+      - eval_time: 21m
+        alertname: PodContainerCPUThrottled
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              tenant: db-a
+              version: default
+              runbook_url: "http://rb/a"
+              owner: team-a
+              tier: gold
+            exp_annotations:
+              summary: "Chronic CPU throttling in db-a"
+              summary_zh: "db-a 的容器 CPU 遭核心持續掐頸"
+              platform_summary: "[gold] db-a: sustained CFS throttling — first spread the burst / tune worker concurrency (e.g. GOMAXPROCS); raise the cpu limit only if genuinely under-provisioned; drill down via tenant:container_cpu_throttle_percent:by_container"
+              platform_summary_zh: "[gold] db-a: CFS 持續掐頸 — 請先攤平突發負載／調降併發（如 GOMAXPROCS）；確屬容量不足才提高 cpu limit；以 tenant:container_cpu_throttle_percent:by_container 定位容器"
+              description: "30.0% of the container's active CFS periods were throttled (sustained; usage may look fine — this is quota enforcement, see also PodContainerHighCPU)"
+              description_zh: "容器活躍 CFS 週期中有 30.0% 被核心限流（持續發生；平均使用率可能看似正常 — 這是配額壓制，另見 PodContainerHighCPU）"
+              runbook_url: "http://rb/a"
+              owner: team-a
+              tier: gold
+
+  # ── B) same breach, NO metadata → BARE fire (onboarding-vacuum branch) ──
+  - interval: 15s
+    input_series:
+      - series: 'container_cpu_cfs_throttled_periods_total{namespace="db-b", pod="mysql-0", container="mysqld"}'
+        values: '0+45x100'
+      - series: 'container_cpu_cfs_periods_total{namespace="db-b", pod="mysql-0", container="mysqld"}'
+        values: '0+150x100'
+      - series: 'container_cpu_usage_seconds_total{namespace="db-b", pod="mysql-0", container="mysqld"}'
+        values: '0+9x100'
+      - series: 'kube_pod_container_resource_limits{resource="cpu", namespace="db-b", pod="mysql-0", container="mysqld"}'
+        values: '1x100'
+      - series: 'kube_pod_labels{namespace="db-b", pod="mysql-0"}'
+        values: '1x100'
+      - series: 'user_threshold{tenant="db-b", component="container", metric="cpu_throttle", severity="warning"}'
+        values: '25x100'
+    alert_rule_test:
+      - eval_time: 21m
+        alertname: PodContainerCPUThrottled
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              tenant: db-b
+              version: default
+            exp_annotations:
+              summary: "Chronic CPU throttling in db-b"
+              summary_zh: "db-b 的容器 CPU 遭核心持續掐頸"
+              platform_summary: "[] db-b: sustained CFS throttling — first spread the burst / tune worker concurrency (e.g. GOMAXPROCS); raise the cpu limit only if genuinely under-provisioned; drill down via tenant:container_cpu_throttle_percent:by_container"
+              platform_summary_zh: "[] db-b: CFS 持續掐頸 — 請先攤平突發負載／調降併發（如 GOMAXPROCS）；確屬容量不足才提高 cpu limit；以 tenant:container_cpu_throttle_percent:by_container 定位容器"
+              description: "30.0% of the container's active CFS periods were throttled (sustained; usage may look fine — this is quota enforcement, see also PodContainerHighCPU)"
+              description_zh: "容器活躍 CFS 週期中有 30.0% 被核心限流（持續發生；平均使用率可能看似正常 — 這是配額壓制，另見 PodContainerHighCPU）"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+
+  # ── C) breach + maintenance (metadata present) → suppressed on the ENRICHED arm ──
+  - interval: 15s
+    input_series:
+      - series: 'container_cpu_cfs_throttled_periods_total{namespace="db-c", pod="mysql-0", container="mysqld"}'
+        values: '0+45x100'
+      - series: 'container_cpu_cfs_periods_total{namespace="db-c", pod="mysql-0", container="mysqld"}'
+        values: '0+150x100'
+      - series: 'container_cpu_usage_seconds_total{namespace="db-c", pod="mysql-0", container="mysqld"}'
+        values: '0+9x100'
+      - series: 'kube_pod_container_resource_limits{resource="cpu", namespace="db-c", pod="mysql-0", container="mysqld"}'
+        values: '1x100'
+      - series: 'kube_pod_labels{namespace="db-c", pod="mysql-0"}'
+        values: '1x100'
+      - series: 'user_threshold{tenant="db-c", component="container", metric="cpu_throttle", severity="warning"}'
+        values: '25x100'
+      - series: 'user_state_filter{tenant="db-c", filter="maintenance"}'
+        values: '1x100'
+      - series: 'tenant_metadata_info{tenant="db-c", runbook_url="http://rb/c", owner="team-c", tier="silver"}'
+        values: '1x100'
+    alert_rule_test:
+      - eval_time: 21m
+        alertname: PodContainerCPUThrottled
+        exp_alerts: []
+
+  # ── D) M1 pin: always-active 15/150 = 10% ratio (usage 40% clears the floor) →
+  #      SILENT because the RATIO is honestly below 25 — the bursty "1.5s per 15s"
+  #      pattern does NOT fire by design (duty-cycle invariance; accepted limitation). ──
+  - interval: 15s
+    input_series:
+      - series: 'container_cpu_cfs_throttled_periods_total{namespace="db-d", pod="mysql-0", container="mysqld"}'
+        values: '0+15x100'
+      - series: 'container_cpu_cfs_periods_total{namespace="db-d", pod="mysql-0", container="mysqld"}'
+        values: '0+150x100'
+      - series: 'container_cpu_usage_seconds_total{namespace="db-d", pod="mysql-0", container="mysqld"}'
+        values: '0+6x100'
+      - series: 'kube_pod_container_resource_limits{resource="cpu", namespace="db-d", pod="mysql-0", container="mysqld"}'
+        values: '1x100'
+      - series: 'kube_pod_labels{namespace="db-d", pod="mysql-0"}'
+        values: '1x100'
+      - series: 'user_threshold{tenant="db-d", component="container", metric="cpu_throttle", severity="warning"}'
+        values: '25x100'
+      - series: 'tenant_metadata_info{tenant="db-d", runbook_url="http://rb/d", owner="team-d", tier="gold"}'
+        values: '1x100'
+    alert_rule_test:
+      - eval_time: 21m
+        alertname: PodContainerCPUThrottled
+        exp_alerts: []
+
+  # ── E) breach + maintenance + NO metadata → suppressed on the BARE arm (its own
+  #      `unless` clause — the #973 db-e lesson) ──
+  - interval: 15s
+    input_series:
+      - series: 'container_cpu_cfs_throttled_periods_total{namespace="db-e", pod="mysql-0", container="mysqld"}'
+        values: '0+45x100'
+      - series: 'container_cpu_cfs_periods_total{namespace="db-e", pod="mysql-0", container="mysqld"}'
+        values: '0+150x100'
+      - series: 'container_cpu_usage_seconds_total{namespace="db-e", pod="mysql-0", container="mysqld"}'
+        values: '0+9x100'
+      - series: 'kube_pod_container_resource_limits{resource="cpu", namespace="db-e", pod="mysql-0", container="mysqld"}'
+        values: '1x100'
+      - series: 'kube_pod_labels{namespace="db-e", pod="mysql-0"}'
+        values: '1x100'
+      - series: 'user_threshold{tenant="db-e", component="container", metric="cpu_throttle", severity="warning"}'
+        values: '25x100'
+      - series: 'user_state_filter{tenant="db-e", filter="maintenance"}'
+        values: '1x100'
+    alert_rule_test:
+      - eval_time: 21m
+        alertname: PodContainerCPUThrottled
+        exp_alerts: []
+
+  # ── F) critical tier (tenant opt-in): 82.5/150 = 55% > critical 50 ──
+  - interval: 15s
+    input_series:
+      - series: 'container_cpu_cfs_throttled_periods_total{namespace="db-f", pod="mysql-0", container="mysqld"}'
+        values: '0+82.5x100'
+      - series: 'container_cpu_cfs_periods_total{namespace="db-f", pod="mysql-0", container="mysqld"}'
+        values: '0+150x100'
+      - series: 'container_cpu_usage_seconds_total{namespace="db-f", pod="mysql-0", container="mysqld"}'
+        values: '0+9x100'
+      - series: 'kube_pod_container_resource_limits{resource="cpu", namespace="db-f", pod="mysql-0", container="mysqld"}'
+        values: '1x100'
+      - series: 'kube_pod_labels{namespace="db-f", pod="mysql-0"}'
+        values: '1x100'
+      - series: 'user_threshold{tenant="db-f", component="container", metric="cpu_throttle", severity="warning"}'
+        values: '25x100'
+      - series: 'user_threshold{tenant="db-f", component="container", metric="cpu_throttle", severity="critical"}'
+        values: '50x100'
+      - series: 'tenant_metadata_info{tenant="db-f", runbook_url="http://rb/f", owner="team-f", tier="gold"}'
+        values: '1x100'
+    alert_rule_test:
+      - eval_time: 21m
+        alertname: PodContainerCPUThrottledCritical
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              tenant: db-f
+              version: default
+              runbook_url: "http://rb/f"
+              owner: team-f
+              tier: gold
+            exp_annotations:
+              summary: "CRITICAL CPU throttling in db-f"
+              summary_zh: "db-f 的容器 CPU 掐頸達臨界"
+              platform_summary: "[gold] db-f: CFS throttling CRITICAL — raise the cpu limit now as emergency mitigation, then right-size and spread the burst (limit inflation erodes node headroom); drill down via tenant:container_cpu_throttle_percent:by_container"
+              platform_summary_zh: "[gold] db-f: CFS 掐頸達臨界 — 緊急緩解可先提高 cpu limit，事後請右調容量並攤平突發（limit 膨脹會侵蝕節點餘裕）；以 tenant:container_cpu_throttle_percent:by_container 定位容器"
+              description: "55.0% of the container's active CFS periods were throttled (critical threshold exceeded; quota enforcement, see also PodContainerHighCPU)"
+              description_zh: "容器活躍 CFS 週期中有 55.0% 被核心限流（超過臨界閾值；配額壓制，另見 PodContainerHighCPU）"
+              runbook_url: "http://rb/f"
+              owner: team-f
+              tier: gold
+
+  # ── J) MIXED pod, the composite-floor pin: healthy db container (0% ratio, 30% usage)
+  #      + tiny-limit sidecar at 18/20 = 90% ratio but only 0.06/0.5 = 12% usage →
+  #      the sidecar is filtered by the ≥20%-of-limit floor, the pod stays SILENT.
+  #      Without the floor, max() would surface 90% and page the whole tenant — the
+  #      kubernetes-mixin CPUThrottlingHigh false-positive class, structurally killed. ──
+  - interval: 15s
+    input_series:
+      - series: 'container_cpu_cfs_throttled_periods_total{namespace="db-g", pod="mysql-0", container="mysqld"}'
+        values: '0x100'
+      - series: 'container_cpu_cfs_periods_total{namespace="db-g", pod="mysql-0", container="mysqld"}'
+        values: '0+150x100'
+      - series: 'container_cpu_usage_seconds_total{namespace="db-g", pod="mysql-0", container="mysqld"}'
+        values: '0+4.5x100'
+      - series: 'kube_pod_container_resource_limits{resource="cpu", namespace="db-g", pod="mysql-0", container="mysqld"}'
+        values: '1x100'
+      - series: 'container_cpu_cfs_throttled_periods_total{namespace="db-g", pod="mysql-0", container="exporter"}'
+        values: '0+18x100'
+      - series: 'container_cpu_cfs_periods_total{namespace="db-g", pod="mysql-0", container="exporter"}'
+        values: '0+20x100'
+      - series: 'container_cpu_usage_seconds_total{namespace="db-g", pod="mysql-0", container="exporter"}'
+        values: '0+0.9x100'
+      - series: 'kube_pod_container_resource_limits{resource="cpu", namespace="db-g", pod="mysql-0", container="exporter"}'
+        values: '0.5x100'
+      - series: 'kube_pod_labels{namespace="db-g", pod="mysql-0"}'
+        values: '1x100'
+      - series: 'user_threshold{tenant="db-g", component="container", metric="cpu_throttle", severity="warning"}'
+        values: '25x100'
+      - series: 'tenant_metadata_info{tenant="db-g", runbook_url="http://rb/g", owner="team-g", tier="gold"}'
+        values: '1x100'
+    alert_rule_test:
+      - eval_time: 21m
+        alertname: PodContainerCPUThrottled
+        exp_alerts: []
+
+  # ── K) sparse denominator: 1/3 active periods throttled = 33% ratio from a single
+  #      tick, usage ~0.3% → floor filters the statistical noise → SILENT ──
+  - interval: 15s
+    input_series:
+      - series: 'container_cpu_cfs_throttled_periods_total{namespace="db-h", pod="mysql-0", container="mysqld"}'
+        values: '0+1x100'
+      - series: 'container_cpu_cfs_periods_total{namespace="db-h", pod="mysql-0", container="mysqld"}'
+        values: '0+3x100'
+      - series: 'container_cpu_usage_seconds_total{namespace="db-h", pod="mysql-0", container="mysqld"}'
+        values: '0+0.045x100'
+      - series: 'kube_pod_container_resource_limits{resource="cpu", namespace="db-h", pod="mysql-0", container="mysqld"}'
+        values: '1x100'
+      - series: 'kube_pod_labels{namespace="db-h", pod="mysql-0"}'
+        values: '1x100'
+      - series: 'user_threshold{tenant="db-h", component="container", metric="cpu_throttle", severity="warning"}'
+        values: '25x100'
+      - series: 'tenant_metadata_info{tenant="db-h", runbook_url="http://rb/h", owner="team-h", tier="gold"}'
+        values: '1x100'
+    alert_rule_test:
+      - eval_time: 21m
+        alertname: PodContainerCPUThrottled
+        exp_alerts: []
+
+  # ── H) `> 0` guard regression on the RAW by_container rule (pre-floor): frozen
+  #      counters → 0/0 (NaN) and throttled-counting-while-periods-frozen → x/0 (+Inf)
+  #      must both yield NO series (they'd poison max otherwise). count() emptiness is
+  #      the only way to assert this (exp_samples cannot express NaN). ──
+  - interval: 15s
+    input_series:
+      - series: 'container_cpu_cfs_throttled_periods_total{namespace="db-i", pod="dead-0", container="mysqld"}'
+        values: '500x100'
+      - series: 'container_cpu_cfs_periods_total{namespace="db-i", pod="dead-0", container="mysqld"}'
+        values: '1000x100'
+      - series: 'container_cpu_cfs_throttled_periods_total{namespace="db-i", pod="inf-0", container="mysqld"}'
+        values: '0+5x100'
+      - series: 'container_cpu_cfs_periods_total{namespace="db-i", pod="inf-0", container="mysqld"}'
+        values: '2000x100'
+      - series: 'kube_pod_labels{namespace="db-i", pod="dead-0"}'
+        values: '1x100'
+      - series: 'kube_pod_labels{namespace="db-i", pod="inf-0"}'
+        values: '1x100'
+      - series: 'user_threshold{tenant="db-i", component="container", metric="cpu_throttle", severity="warning"}'
+        values: '25x100'
+    promql_expr_test:
+      - expr: count(tenant:container_cpu_throttle_percent:by_container{tenant="db-i"})
+        eval_time: 21m
+        exp_samples: []
+    alert_rule_test:
+      - eval_time: 21m
+        alertname: PodContainerCPUThrottled
+        exp_alerts: []
+
+  # ── I) version FALLBACK: v2-labelled pod, version-less threshold → fires with the
+  #      metric's REAL version via the fallback branch (cpu_throttle is not in the
+  #      ADR-024 version pilot allowlist, so this is the branch tenants actually get). ──
+  - interval: 15s
+    input_series:
+      - series: 'container_cpu_cfs_throttled_periods_total{namespace="db-j", pod="app-v2", container="mysqld"}'
+        values: '0+45x100'
+      - series: 'container_cpu_cfs_periods_total{namespace="db-j", pod="app-v2", container="mysqld"}'
+        values: '0+150x100'
+      - series: 'container_cpu_usage_seconds_total{namespace="db-j", pod="app-v2", container="mysqld"}'
+        values: '0+9x100'
+      - series: 'kube_pod_container_resource_limits{resource="cpu", namespace="db-j", pod="app-v2", container="mysqld"}'
+        values: '1x100'
+      - series: 'kube_pod_labels{namespace="db-j", pod="app-v2", label_app_kubernetes_io_version="v2"}'
+        values: '1x100'
+      - series: 'user_threshold{tenant="db-j", component="container", metric="cpu_throttle", severity="warning"}'
+        values: '25x100'
+      - series: 'tenant_metadata_info{tenant="db-j", runbook_url="http://rb/j", owner="team-j", tier="gold"}'
+        values: '1x100'
+    alert_rule_test:
+      - eval_time: 21m
+        alertname: PodContainerCPUThrottled
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              tenant: db-j
+              version: v2
+              runbook_url: "http://rb/j"
+              owner: team-j
+              tier: gold
+            exp_annotations:
+              summary: "Chronic CPU throttling in db-j"
+              summary_zh: "db-j 的容器 CPU 遭核心持續掐頸"
+              platform_summary: "[gold] db-j: sustained CFS throttling — first spread the burst / tune worker concurrency (e.g. GOMAXPROCS); raise the cpu limit only if genuinely under-provisioned; drill down via tenant:container_cpu_throttle_percent:by_container"
+              platform_summary_zh: "[gold] db-j: CFS 持續掐頸 — 請先攤平突發負載／調降併發（如 GOMAXPROCS）；確屬容量不足才提高 cpu limit；以 tenant:container_cpu_throttle_percent:by_container 定位容器"
+              description: "30.0% of the container's active CFS periods were throttled (sustained; usage may look fine — this is quota enforcement, see also PodContainerHighCPU)"
+              description_zh: "容器活躍 CFS 週期中有 30.0% 被核心限流（持續發生；平均使用率可能看似正常 — 這是配額壓制，另見 PodContainerHighCPU）"
+              runbook_url: "http://rb/j"
+              owner: team-j
+              tier: gold

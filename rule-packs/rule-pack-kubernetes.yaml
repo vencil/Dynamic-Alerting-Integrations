@@ -164,6 +164,69 @@ groups:
       - record: tenant:pod_weakest_memory_percent:max
         expr: max by(tenant, pod, version) (tenant:container_memory_percent:by_container)
 
+      # CFS throttle ratio (#944 PR-2c): share of a container's ACTIVE 100ms CFS periods
+      # in which the kernel throttled it — the USE-method saturation axis %-of-limit
+      # utilisation cannot see (a bursty container can be choked hard at moderate avg
+      # usage). NOT "share of wall time" and NOT "% of CPU time lost": rate(thr)/rate(per)
+      # is DUTY-CYCLE INVARIANT (numerator and denominator share the window, dilution
+      # cancels), so an always-active DB throttled 1.5s of every 15s reads ~10% while a
+      # mostly-idle sidecar with the same absolute choking reads ~90%. Denominator guard
+      # `> 0` is LOAD-BEARING: frozen counters (terminating pod) yield NaN and a
+      # throttled-while-periods-frozen edge yields +Inf — both POISON downstream max()
+      # (verified on promtool 2.53.2, #944 ledger) — the filter drops those series instead.
+      # This record is the RAW per-container signal (dashboards / drill-down see
+      # everything); the low-signal filtering happens one step down in pod_weakest.
+      # Only containers WITH a cpu limit emit the cfs pair (scrape keep-list, #974).
+      # ⚠️ Known limitation (shared with the CPU%/memory family): the kube_pod_labels
+      # version join drops a pod when KSM is down/lagging → series absent, alert blind;
+      # correlated with the usage family (same join), not a new failure mode.
+      - record: tenant:container_cpu_throttle_percent:by_container
+        expr: |
+          label_replace(
+            (
+              (
+                sum by(namespace, pod, container) (
+                  rate(container_cpu_cfs_throttled_periods_total{namespace=~"db-.+", container!="", container!="POD"}[5m])
+                )
+                /
+                (
+                  sum by(namespace, pod, container) (
+                    rate(container_cpu_cfs_periods_total{namespace=~"db-.+", container!="", container!="POD"}[5m])
+                  ) > 0
+                )
+                * 100
+              )
+              * on(namespace, pod) group_left(version)
+                label_replace(
+                  kube_pod_labels{namespace=~"db-.+"},
+                  "version", "$1", "label_app_kubernetes_io_version", "(.+)"
+                )
+            ),
+            "tenant", "$1", "namespace", "(.*)"
+          )
+
+      # Weakest-link throttle per pod, QUALIFIED by a working-hard floor: a container
+      # only counts toward the pod's throttle signal if it is also using ≥20% of its
+      # cpu limit. This one structural condition kills BOTH adversarial-review killers
+      # (#944 ledger): (a) tiny-limit mostly-idle sidecars (Go runtime bursts on a
+      # 0.1-0.5 core limit read 60-90% ratio at ~10% usage — the well-known
+      # kubernetes-mixin CPUThrottlingHigh false-positive class) would otherwise
+      # permanently saturate the tenant-level max and hide the real db container;
+      # (b) low-denominator noise (1 throttled of 3 active periods = 33% from a single
+      # GC tick, usage ≈ 0). Derivation: during a throttled period usage == quota, so an
+      # always-active container with throttle ratio f has usage ≥ f% of limit — genuine
+      # chronic throttling (≥25%) always clears the 20 floor. Trade-off (accepted,
+      # #944 ledger): intermittent workloads (duty cycle < ~0.8) in the marginal band
+      # may be filtered — revisit with soak data. The floor is a fixed structural guard
+      # (an FP filter), deliberately NOT a tenant-tunable threshold key.
+      - record: tenant:pod_weakest_cpu_throttle_percent:max
+        expr: |
+          max by(tenant, pod, version) (
+            tenant:container_cpu_throttle_percent:by_container
+            and on(namespace, pod, container)
+            (tenant:container_cpu_percent:by_container > 20)
+          )
+
   # -------------------------------------------------------
   # Normalization: Pod state matching (kube-state-metrics)
   # -------------------------------------------------------
@@ -221,6 +284,29 @@ groups:
         expr: |
           label_replace(
             max by(tenant, version) (tenant:pod_weakest_memory_percent:max),
+            "version", "default", "version", "^$"
+          )
+
+      # CFS throttle (#944 PR-2c): same normalize pair as cpu/memory above. NB
+      # `cpu_throttle` is NOT in the version pilot allowlist (resolve.go
+      # pilotVersionMetrics = container/cpu + container/memory only) — tenants cannot
+      # legally set per-version throttle thresholds; the exact-match branch below is
+      # therefore inert by design and every versioned metric takes the version="default"
+      # FALLBACK branch. Kept in the Route-2 shape anyway so the pack stays uniform and
+      # a future pilot expansion is a one-line allowlist change, not a rule rewrite.
+      - record: tenant_version:alert_threshold:container_cpu_throttle
+        expr: |
+          label_replace(
+            max by(tenant, version, severity) (
+              user_threshold{component="container", metric="cpu_throttle"}
+            ),
+            "version", "default", "version", "^$"
+          )
+
+      - record: tenant_version:pod_weakest_cpu_throttle_percent:vlabeled
+        expr: |
+          label_replace(
+            max by(tenant, version) (tenant:pod_weakest_cpu_throttle_percent:max),
             "version", "default", "version", "^$"
           )
 
@@ -322,6 +408,53 @@ groups:
               )
               > on(tenant) group_left()
                 tenant_version:alert_threshold:container_memory{version="default", severity="critical"}
+            )
+          )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
+
+      # CFS throttle cores (#944 PR-2c) — same Route-2 shape (exact-or-fallback per
+      # severity + maintenance unless); see the cpu_throttle threshold record above
+      # for why the exact branch is currently inert (version pilot allowlist).
+      - record: rule_pack_kubernetes:pod_cpu_throttled_warning:core
+        expr: |
+          (
+            (
+              tenant_version:pod_weakest_cpu_throttle_percent:vlabeled
+              > on(tenant, version) group_left()
+                tenant_version:alert_threshold:container_cpu_throttle{severity="warning"}
+            )
+            or
+            (
+              (
+                tenant_version:pod_weakest_cpu_throttle_percent:vlabeled
+                unless on(tenant, version)
+                  tenant_version:alert_threshold:container_cpu_throttle{severity="warning"}
+              )
+              > on(tenant) group_left()
+                tenant_version:alert_threshold:container_cpu_throttle{version="default", severity="warning"}
+            )
+          )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
+
+      - record: rule_pack_kubernetes:pod_cpu_throttled_critical:core
+        expr: |
+          (
+            (
+              tenant_version:pod_weakest_cpu_throttle_percent:vlabeled
+              > on(tenant, version) group_left()
+                tenant_version:alert_threshold:container_cpu_throttle{severity="critical"}
+            )
+            or
+            (
+              (
+                tenant_version:pod_weakest_cpu_throttle_percent:vlabeled
+                unless on(tenant, version)
+                  tenant_version:alert_threshold:container_cpu_throttle{severity="critical"}
+              )
+              > on(tenant) group_left()
+                tenant_version:alert_threshold:container_cpu_throttle{version="default", severity="critical"}
             )
           )
           unless on(tenant)
@@ -445,6 +578,73 @@ groups:
           platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}: 容器記憶體達臨界 — 請評估資源限制"
           description: "Max container memory usage: {{ $value | printf \"%.1f\" }}% (critical threshold exceeded)"
           description_zh: "最大容器記憶體使用率: {{ $value | printf \"%.1f\" }}% (超過臨界閾值)"
+
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"
+      # CFS throttle (#944 PR-2c): the CHRONIC-choking sibling of PodContainerHighCPU —
+      # different root cause (kernel quota enforcement vs high usage), different
+      # remediation (raise the container's cpu limit / spread the burst), hence a
+      # SEPARATE alert + threshold key instead of folding into the usage pipeline
+      # (max(usage%, throttle%) against one threshold cannot serve two scales — #944
+      # ledger). `for: 15m` deliberately differs from the family's 60s: the ratio is a
+      # 5m-memory signal (any burst elevates it for a full window, a 60s debounce is
+      # decorative) — 15m ≈ kubernetes-mixin CPUThrottlingHigh, requiring the choking
+      # to persist across windows. $value = % of ACTIVE 100ms CFS periods throttled
+      # (duty-cycle invariant; NOT % of CPU time lost).
+      - alert: PodContainerCPUThrottled
+        expr: |
+          (
+            rule_pack_kubernetes:pod_cpu_throttled_warning:core
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
+          )
+          or
+          (
+            rule_pack_kubernetes:pod_cpu_throttled_warning:core
+            unless on(tenant) tenant_metadata_info
+          )
+        for: 15m
+        labels:
+          severity: warning
+          tenant: "{{ $labels.tenant }}"
+        annotations:
+          summary: "Chronic CPU throttling in {{ $labels.tenant }}"
+          summary_zh: "{{ $labels.tenant }} 的容器 CPU 遭核心持續掐頸"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: sustained CFS throttling — first spread the burst / tune worker concurrency (e.g. GOMAXPROCS); raise the cpu limit only if genuinely under-provisioned; drill down via tenant:container_cpu_throttle_percent:by_container"
+          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}: CFS 持續掐頸 — 請先攤平突發負載／調降併發（如 GOMAXPROCS）；確屬容量不足才提高 cpu limit；以 tenant:container_cpu_throttle_percent:by_container 定位容器"
+          description: "{{ $value | printf \"%.1f\" }}% of the container's active CFS periods were throttled (sustained; usage may look fine — this is quota enforcement, see also PodContainerHighCPU)"
+          description_zh: "容器活躍 CFS 週期中有 {{ $value | printf \"%.1f\" }}% 被核心限流（持續發生；平均使用率可能看似正常 — 這是配額壓制，另見 PodContainerHighCPU）"
+
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"
+      # Critical mirror (distinct alertname per severity, platform convention). The
+      # critical tier is tenant-opt-in: `container_cpu_throttle_critical` in the tenant
+      # YAML (no platform default; suggested starting point 50).
+      - alert: PodContainerCPUThrottledCritical
+        expr: |
+          (
+            rule_pack_kubernetes:pod_cpu_throttled_critical:core
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
+          )
+          or
+          (
+            rule_pack_kubernetes:pod_cpu_throttled_critical:core
+            unless on(tenant) tenant_metadata_info
+          )
+        for: 15m
+        labels:
+          severity: critical
+          tenant: "{{ $labels.tenant }}"
+        annotations:
+          summary: "CRITICAL CPU throttling in {{ $labels.tenant }}"
+          summary_zh: "{{ $labels.tenant }} 的容器 CPU 掐頸達臨界"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: CFS throttling CRITICAL — raise the cpu limit now as emergency mitigation, then right-size and spread the burst (limit inflation erodes node headroom); drill down via tenant:container_cpu_throttle_percent:by_container"
+          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}: CFS 掐頸達臨界 — 緊急緩解可先提高 cpu limit，事後請右調容量並攤平突發（limit 膨脹會侵蝕節點餘裕）；以 tenant:container_cpu_throttle_percent:by_container 定位容器"
+          description: "{{ $value | printf \"%.1f\" }}% of the container's active CFS periods were throttled (critical threshold exceeded; quota enforcement, see also PodContainerHighCPU)"
+          description_zh: "容器活躍 CFS 週期中有 {{ $value | printf \"%.1f\" }}% 被核心限流（超過臨界閾值；配額壓制，另見 PodContainerHighCPU）"
 
           runbook_url: "{{ $labels.runbook_url }}"
           owner: "{{ $labels.owner }}"

@@ -256,6 +256,8 @@ RULE_PACK_CATALOG = {
         'defaults': {
             'container_cpu': 80,
             'container_cpu_critical': 95,
+            'container_cpu_throttle': 25,  # chronic CFS throttle: % of ACTIVE periods throttled (#944 PR-2c)
+            'container_cpu_throttle_critical': 50,
             'container_memory': 85,
             'container_memory_critical': 95,
         },
