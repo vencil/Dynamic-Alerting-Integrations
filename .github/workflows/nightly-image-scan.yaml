@@ -181,7 +181,7 @@ jobs:
           - name: victoria-logs # helm/victorialogs/values.yaml
             ref: "victoriametrics/victoria-logs:v1.51.0@sha256:e16dd33a95623cc21730cf5285344ed9f97419eeaff7d24b039c135beb85ee7e"
           - name: chargeback-python # helm/chargeback-aggregator/values.yaml
-            ref: "python:3.14-slim@sha256:63a4c7f612a00f92042cbdcc7cdc6a306f38485af0a200b9c89de7d9b1607d15"
+            ref: "python:3.14-slim@sha256:b877e50bd90de10af8d82c57a022fc2e0dc731c5320d762a27986facfc3355c1"
           - name: envoy # helm/federation-gateway/values.yaml
             ref: "envoyproxy/envoy:distroless-v1.38.0@sha256:a7a56545102f7a682e0cafea2c9b8448af1b09ebb710eab688dfb931e3ec7ff6"
           - name: oauth2-proxy # helm/da-portal + helm/tenant-api values.yaml
@@ -203,7 +203,7 @@ jobs:
           - name: configmap-reload # k8s/03-monitoring/deployment-alertmanager.yaml (sidecar)
             ref: "ghcr.io/jimmidyson/configmap-reload:v0.15.0@sha256:b578b7599d65c0279f6e1aad201bba737b9b15e6a4f308281d9e26f765e6657f"
           - name: alpine-git # k8s/04-tenant-api/deployment.yaml (gitops sidecar)
-            ref: "alpine/git:v2.54.0@sha256:8d6ede0b29c666ac111c732468c4d758c1c08f054f211dd98f15d421a6ffab40"
+            ref: "alpine/git:v2.54.0@sha256:e043be20669db13cbcfb6190192babee4cf2dca98709bb0c2d08ca2d35a0a06a"
     steps:
       # Authenticated Docker Hub pulls (rate-limit headroom); guarded no-op without creds.
       - name: Docker Hub login (no-op without creds)
