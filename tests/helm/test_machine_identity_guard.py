@@ -23,6 +23,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+import yaml
 
 _CHART = "helm/tenant-api"
 _RBAC_TEMPLATE = "helm/tenant-api/templates/rbac-machine-identity.yaml"
@@ -116,6 +117,16 @@ def test_render_enabled_emits_full_surface(repo_root: Path):
     )
     assert "--machine-identity-audience=tenant-api" in out, (
         "enabled render must pass the default audience"
+    )
+    # roleRef must reference the ClusterRole by the SAME dynamic (chart-ns-release)
+    # name — a typo in any of the 3 name occurrences would leave the binding
+    # dangling (privilege silently not granted). Assert they match structurally.
+    docs = [d for d in yaml.safe_load_all(out) if d]
+    cr = next(d for d in docs if d.get("kind") == "ClusterRole")
+    crb = next(d for d in docs if d.get("kind") == "ClusterRoleBinding")
+    assert crb["roleRef"]["name"] == cr["metadata"]["name"], (
+        f"binding roleRef {crb['roleRef']['name']!r} must match ClusterRole "
+        f"name {cr['metadata']['name']!r}"
     )
 
 

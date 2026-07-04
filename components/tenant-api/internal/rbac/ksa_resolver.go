@@ -36,8 +36,11 @@ import (
 
 // tokenReviewTimeout bounds a single TokenReview call so a slow/hung apiserver
 // cannot stall the request goroutine the audit runs on. Audit is a low-
-// frequency side-channel; a tight bound is safe.
-const tokenReviewTimeout = 5 * time.Second
+// frequency, opt-in side-channel whose outcome never affects authz, so a tight
+// bound is both safe and preferable: a shorter cap trades a rare false
+// verify_failed (audit-only, harmless) for a smaller worst-case added latency
+// on a machine caller's request when the apiserver is slow.
+const tokenReviewTimeout = 2 * time.Second
 
 // KSAResolver audits Kubernetes ServiceAccount tokens via TokenReview. It
 // implements MachineIdentityAuditor. Construct it with NewKSAResolver.

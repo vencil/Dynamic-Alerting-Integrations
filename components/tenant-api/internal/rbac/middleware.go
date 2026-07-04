@@ -68,11 +68,15 @@ func (m *Manager) Middleware(want Permission, tenantIDFn func(*http.Request) str
 
 // observeSafely runs a machine-identity audit as a guaranteed side-channel:
 // any panic escaping the auditor is recovered HERE so an audit bug can never
-// turn a normal request into a 500. This makes "audit never blocks the request"
-// a middleware-level invariant instead of a contract each MachineIdentityAuditor
-// implementation must self-enforce. Defense-in-depth: KSAResolver.Observe also
-// recovers internally; this is the outer guard covering any current/future
-// auditor (and the seam where a mis-written one would otherwise escape).
+// turn a normal request into a 500. This makes "an audit bug never FAILS the
+// request" a middleware-level invariant instead of a contract each
+// MachineIdentityAuditor implementation must self-enforce. It does NOT make the
+// audit non-blocking: a synchronous auditor still adds its own bounded latency
+// (see the MachineIdentityAuditor contract for the ADR-027 concurrency posture
+// and why bounded-async is deferred to PR-1b-ii). Defense-in-depth:
+// KSAResolver.Observe also recovers internally; this is the outer guard
+// covering any current/future auditor (and the seam where a mis-written one
+// would otherwise escape).
 func observeSafely(a MachineIdentityAuditor, r *http.Request, header *VerifiedPrincipal) {
 	defer func() {
 		if rec := recover(); rec != nil {

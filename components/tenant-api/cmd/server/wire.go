@@ -219,7 +219,8 @@ func wireMachineAuditor(f machineAuditorFlags) (rbac.MachineIdentityAuditor, err
 	// independently of the Helm `required` gate (raw-manifest / bare-binary
 	// deploys never run Helm; the Helm gate also does not catch whitespace).
 	// Fail loud, never fall through to "no audience".
-	if strings.TrimSpace(f.Audience) == "" {
+	audience := strings.TrimSpace(f.Audience)
+	if audience == "" {
 		return nil, fmt.Errorf("--machine-identity-audience must be non-empty when --machine-identity-audit is set (ADR-027 G4)")
 	}
 	client, err := buildInClusterClientset()
@@ -228,5 +229,9 @@ func wireMachineAuditor(f machineAuditorFlags) (rbac.MachineIdentityAuditor, err
 		return nil, fmt.Errorf("machine-identity audit: %w", err)
 	}
 	recorder := handler.NewIdentityAuditRecorder()
-	return rbac.NewKSAResolver(client, f.Audience, f.IssuerAllow, recorder), nil
+	// Bind the TRIMMED audience so the G4 check and the bound value agree: a
+	// value like " tenant-api " passes the non-empty check but, bound verbatim
+	// into the TokenReview, would match no real token and silently make every
+	// audit verify_failed. Trimming keeps validation and use identical.
+	return rbac.NewKSAResolver(client, audience, f.IssuerAllow, recorder), nil
 }

@@ -74,9 +74,24 @@ type IdentityResolver interface {
 
 // MachineIdentityAuditor observes a request for a machine (workload) identity
 // alongside the header principal that authz will actually use. It is a pure
-// side-channel: implementations MUST NOT block the request, MUST NOT mutate
-// the response, and MUST NOT influence the authorization decision. A nil
-// auditor means the feature is disabled (the default).
+// side-channel: implementations MUST NOT change the authorization outcome,
+// MUST NOT fail the request, and MUST NOT mutate the response. A synchronous
+// implementation MAY add bounded latency to the request (up to its own
+// timeout); it MUST bound any network call so a slow/unreachable backend cannot
+// stall the request indefinitely. A nil auditor means the feature is disabled
+// (the default).
+//
+// Concurrency posture (ADR-027): KSAResolver calls the apiserver TokenReview
+// synchronously, adding a bounded (≤ tokenReviewTimeout) delay ONLY to requests
+// carrying a Bearer token — machine callers, which are low-frequency (weekly
+// govern CronJob + interactive preview) and opt-in. This mirrors how the
+// apiserver itself runs webhook token authenticators: synchronous on the hot
+// path, bounded, cache-augmentable. Moving the TokenReview off the request
+// goroutine (bounded async) and adding an in-proc TokenReview cache are
+// DEFERRED to PR-1b-ii, when real machine-caller arrival rate and apiserver p99
+// latency exist to size them — the same field-data trigger under which ADR-027
+// defers local JWKS-offline verification. Sizing a bounded-async worker from
+// today's zero Bearer traffic would be speculative.
 type MachineIdentityAuditor interface {
 	// Observe inspects r for a workload credential and records the audit
 	// outcome (metric + log). header is the hop-B principal the middleware
