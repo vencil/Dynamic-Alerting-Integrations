@@ -34,6 +34,24 @@
 #   as the recommendations prove themselves. Re-runs are idempotent: a tenant
 #   with an open governance PR returns 409 and is skipped (no duplicate spam).
 # ============================================================
+#
+# ── ServiceAccount + audience-bound token (ADR-027 PR-1b-ii-b, #962) ─────────
+# A dedicated SA (replaces the monitoring `default`) carries an audience-bound
+# projected token so tenant-api's machine-identity audit (KSAResolver
+# TokenReview) can verify THIS workload. audit-only today — it NEVER gates the
+# write; the X-Forwarded-* identity below still drives RBAC. automount stays
+# false: the Job makes no Kubernetes API calls, so only the tenant-api token is
+# mounted (least privilege — no broad apiserver-audience token is exposed).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: threshold-govern
+  namespace: monitoring
+  labels:
+    app: dynamic-alerting
+    component: threshold-govern
+automountServiceAccountToken: false
+---
 apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -62,6 +80,10 @@ spec:
             app: dynamic-alerting
             component: threshold-govern
         spec:
+          serviceAccountName: threshold-govern
+          # Only the explicit audience-bound projected token below is mounted;
+          # the default apiserver-audience token is never needed (no K8s API use).
+          automountServiceAccountToken: false
           restartPolicy: Never
           securityContext:
             runAsNonRoot: true
@@ -91,6 +113,12 @@ spec:
                 - threshold-governance@platform.local
                 - --identity-groups
                 - threshold-governance
+                # Machine-identity audit (ADR-027 D1): present the audience-bound
+                # projected SA token as a Bearer ALONGSIDE the identity headers.
+                # tenant-api verifies it (TokenReview) purely for the audit verdict;
+                # the request still authorizes on the X-Forwarded-* headers above.
+                - --auth-token-file
+                - /var/run/secrets/tokens/tenant-api-token
                 # Conservative gate: only meaningfully-drifted thresholds, capped
                 # per run so a first deploy can't flood reviewers (alert-fatigue
                 # budget). Raise --max-prs as the loop earns trust.
@@ -116,6 +144,12 @@ spec:
                   cpu: 200m
                   memory: 256Mi
               volumeMounts:
+                # Audience-bound projected token for tenant-api's machine-identity
+                # audit (ADR-027). readOnly; the one-shot Job reads it once per run
+                # (kubelet rotates the file at ~80% TTL, far beyond a Job's runtime).
+                - name: tenant-api-token
+                  mountPath: /var/run/secrets/tokens
+                  readOnly: true
                 - name: threshold-config
                   mountPath: /etc/config/conf.d
                   readOnly: true
@@ -123,6 +157,16 @@ spec:
                 - name: tmp
                   mountPath: /tmp
           volumes:
+            # ADR-027 D1: audience-bound projected SA token (aud=tenant-api). The
+            # HARD audience binding is what stops a default-audience pod token from
+            # being accepted by tenant-api's TokenReview (G4). kubelet auto-rotates.
+            - name: tenant-api-token
+              projected:
+                sources:
+                  - serviceAccountToken:
+                      path: tenant-api-token
+                      audience: tenant-api
+                      expirationSeconds: 3600
             - name: threshold-config
               configMap:
                 name: threshold-config

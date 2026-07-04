@@ -2874,6 +2874,7 @@ da-tools threshold-govern --config-dir <PATH> --prometheus <URL> --apply \
 | `--identity-email` | X-Forwarded-Email (PR git author / governance identity) | `threshold-governance@platform.local` |
 | `--identity-groups` | X-Forwarded-Groups (an RBAC group with write perm; required for direct `--apply`) | `$DA_GOVERN_GROUPS` |
 | `--auth-token` | Bearer token (oauth2-proxy mode; or `$DA_GOVERN_TOKEN`) | - |
+| `--auth-token-file` | Path to a Bearer token file (K8s audience-bound projected SA token, read at call time; or `$DA_GOVERN_TOKEN_FILE`) | - |
 | `--throttle-seconds` | Seconds to pause between opened PRs | `2` |
 | `--json` | JSON output | - |
 

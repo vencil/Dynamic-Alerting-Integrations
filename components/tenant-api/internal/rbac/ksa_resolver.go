@@ -255,19 +255,20 @@ type machineIdentitySpec struct {
 // metric/log, it never affects authz.
 //
 // The namespaces are canonical: threshold-govern is the fixed `monitoring`
-// CronJob; recipe-preview is co-located with tenant-api (its bare
-// `http://tenant-api:8080` upstream implies the same namespace, i.e. the
-// tenant-api namespace). A deployment that places recipe-preview in a
-// NON-canonical namespace will (correctly, fail-loud) audit as unknown_workload
-// until the caller's real <ns>:<sa> is injected — that config-injection is the
-// residual deferred to PR-1b-ii-b (Helm knows the release namespace when it
-// mounts the token) / the enforce PR. NOTE `verified` still isn't a blanket
+// CronJob; recipe-preview is ALSO deployed to `monitoring` — its Helm DEPLOY
+// CONTRACT (helm/recipe-preview/values.yaml) and da-portal's recipePreviewUrl
+// both pin recipe-preview.monitoring.svc. A deployment that places recipe-preview
+// in a NON-canonical namespace audits (correctly, fail-loud) as unknown_workload
+// until its real <ns>:<sa> is injected — that per-deployment config-injection of
+// the relay allowlist is deferred-with-trigger (needed only if the platform must
+// support recipe-preview in an arbitrary namespace; today it is pinned to
+// `monitoring`). NOTE `verified` still isn't a blanket
 // safety guarantee: for synthetic it means "no out-of-set group" (does not
 // exclude replaying the expected, already-privileged group, nor an empty
 // claim); for relay the forwarded human groups are trusted, not compared.
 var machineIdentityAllowlist = map[string]machineIdentitySpec{
 	"system:serviceaccount:monitoring:threshold-govern": {kind: kindSynthetic, expectedGroups: []string{"threshold-governance"}},
-	"system:serviceaccount:tenant-api:recipe-preview":   {kind: kindRelay},
+	"system:serviceaccount:monitoring:recipe-preview":   {kind: kindRelay},
 }
 
 // auditWorkloadVerdict classifies a verified workload token against the

@@ -41,7 +41,8 @@ def _args(**over):
         lookback="7d", min_samples=100, min_delta_pct=tg.DEFAULT_MIN_DELTA_PCT,
         max_prs=tg.DEFAULT_MAX_PRS, apply=False, tenant_api_url="http://ta:8080",
         identity_email="gov@p.local", identity_groups="threshold-governance",
-        auth_token=None, throttle_seconds=0.0, timeout=5, json_output=False,
+        auth_token=None, auth_token_file=None, throttle_seconds=0.0, timeout=5,
+        json_output=False,
     )
     base.update(over)
     return argparse.Namespace(**base)
@@ -638,3 +639,79 @@ def test_systemic_failure_live_path_circuit_breaker_many_tenants(monkeypatch):
     statuses = {o.status for o in outcomes}
     assert "error" in statuses and "skipped" in statuses   # breaker actually tripped
     assert tg._is_systemic_failure(outcomes, applied=True) is True
+
+
+# ---------------------------------------------------------------------------
+# 6. Bearer token resolution (ADR-027 machine-identity audit; #962 PR-1b-ii-b)
+# ---------------------------------------------------------------------------
+def test_resolve_auth_token_literal_flag_wins(monkeypatch, tmp_path):
+    # A literal --auth-token beats both the env and a token file.
+    monkeypatch.setenv("DA_GOVERN_TOKEN", "env-tok")
+    f = tmp_path / "tok"
+    f.write_text("file-tok", encoding="utf-8")
+    assert tg._resolve_auth_token(_args(auth_token="flag-tok", auth_token_file=str(f))) == "flag-tok"
+
+
+def test_resolve_auth_token_env_literal_when_no_flag(monkeypatch):
+    monkeypatch.setenv("DA_GOVERN_TOKEN", "env-tok")
+    assert tg._resolve_auth_token(_args(auth_token=None)) == "env-tok"
+
+
+def test_resolve_auth_token_reads_file_stripped(tmp_path, monkeypatch):
+    # A projected SA token is a rotated FILE — read it at call time, newline-stripped.
+    monkeypatch.delenv("DA_GOVERN_TOKEN", raising=False)
+    f = tmp_path / "token"
+    f.write_text("ksa-jwt-value\n", encoding="utf-8")
+    assert tg._resolve_auth_token(_args(auth_token=None, auth_token_file=str(f))) == "ksa-jwt-value"
+
+
+def test_resolve_auth_token_literal_beats_file(tmp_path, monkeypatch):
+    monkeypatch.delenv("DA_GOVERN_TOKEN", raising=False)
+    f = tmp_path / "token"
+    f.write_text("file-tok", encoding="utf-8")
+    assert tg._resolve_auth_token(_args(auth_token="lit", auth_token_file=str(f))) == "lit"
+
+
+def test_resolve_auth_token_env_literal_beats_explicit_file(tmp_path, monkeypatch):
+    # Documents the precedence: a literal token SOURCE (flag or DA_GOVERN_TOKEN env)
+    # wins over a file SOURCE — even an explicitly-passed --auth-token-file. The
+    # in-cluster CronJob sets ONLY --auth-token-file (no DA_GOVERN_TOKEN), so the
+    # ordering is never ambiguous there; pinned so any future reorder is deliberate.
+    monkeypatch.setenv("DA_GOVERN_TOKEN", "env-tok")
+    f = tmp_path / "token"
+    f.write_text("file-tok", encoding="utf-8")
+    assert tg._resolve_auth_token(_args(auth_token=None, auth_token_file=str(f))) == "env-tok"
+
+
+def test_resolve_auth_token_file_read_error_degrades_not_raises(tmp_path, monkeypatch, capsys):
+    # ADR-027 never-block: a missing/unreadable token file must NOT abort governance
+    # — it degrades to no Bearer (audit records no_token) with a stderr warning.
+    monkeypatch.delenv("DA_GOVERN_TOKEN", raising=False)
+    missing = tmp_path / "nope"
+    assert tg._resolve_auth_token(_args(auth_token=None, auth_token_file=str(missing))) == ""
+    assert "could not read" in capsys.readouterr().err
+
+
+def test_resolve_auth_token_none_configured(monkeypatch):
+    monkeypatch.delenv("DA_GOVERN_TOKEN", raising=False)
+    assert tg._resolve_auth_token(_args(auth_token=None, auth_token_file=None)) == ""
+
+
+def test_auth_headers_bearer_and_identity_coexist(tmp_path, monkeypatch):
+    # THE ADR-027 invariant for the governance caller: the identity headers (authz)
+    # and the projected-token Bearer (audit) are sent TOGETHER — the audit is a
+    # side-channel, not a replacement for the header identity.
+    monkeypatch.delenv("DA_GOVERN_TOKEN", raising=False)
+    f = tmp_path / "token"
+    f.write_text("ksa-jwt", encoding="utf-8")
+    h = tg._auth_headers(_args(auth_token_file=str(f)))
+    assert h["Authorization"] == "Bearer ksa-jwt"
+    assert h["X-Forwarded-Email"] == "gov@p.local"
+    assert h["X-Forwarded-Groups"] == "threshold-governance"
+
+
+def test_auth_headers_no_token_still_has_identity(monkeypatch):
+    monkeypatch.delenv("DA_GOVERN_TOKEN", raising=False)
+    h = tg._auth_headers(_args(auth_token=None, auth_token_file=None))
+    assert "Authorization" not in h
+    assert h["X-Forwarded-Groups"] == "threshold-governance"
