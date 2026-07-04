@@ -9,9 +9,11 @@ package rbac
 // the authorization decision, which remains entirely header-driven.
 //
 // Hard invariants (each has a dedicated test):
-//   - Never blocks a request and never changes authz. Any error/panic inside
-//     Observe is swallowed (top-level recover) and, at worst, produces an
-//     audit metric — never a request failure.
+//   - Never changes authz, fails the request, or mutates the response. It is
+//     synchronous, so a Bearer-carrying request MAY see bounded latency up to
+//     tokenReviewTimeout (see the MachineIdentityAuditor contract). Any
+//     error/panic inside Observe is swallowed (top-level recover) and, at worst,
+//     produces an audit metric — never a request failure.
 //   - Audience HARD-gate (ADR-027 G4): the TokenReview always binds the
 //     configured audience; a token that authenticates but is NOT scoped to
 //     this audience (e.g. a pod's default-audience token) is verify_failed,
@@ -79,10 +81,11 @@ func NewKSAResolver(client kubernetes.Interface, audience string, issuerAllow []
 	}
 }
 
-// Observe implements MachineIdentityAuditor. It never blocks the request and
-// never affects authz — the middleware calls it purely for its side effects
-// (metric + log). A panic anywhere inside is recovered so a bug in the audit
-// path can never take down a request.
+// Observe implements MachineIdentityAuditor. It never changes authz, fails the
+// request, or mutates the response — the middleware calls it purely for its side
+// effects (metric + log). Being synchronous, it MAY add bounded latency up to
+// tokenReviewTimeout to a Bearer-carrying request. A panic anywhere inside is
+// recovered so a bug in the audit path can never take down a request.
 func (k *KSAResolver) Observe(r *http.Request, header *VerifiedPrincipal) {
 	// Top-level poison-pill guard: audit is best-effort. A recovered panic is
 	// logged but deliberately does NOT emit a metric — at the point of panic

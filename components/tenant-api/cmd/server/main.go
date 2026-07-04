@@ -195,11 +195,12 @@ func main() {
 	// ADR-027 PR-1b-i: machine-identity audit (KSA projected token +
 	// TokenReview). Opt-in and AUDIT-ONLY — when enabled, tenant-api verifies
 	// a caller's ServiceAccount token (if present) and records the outcome
-	// (metric + log) but NEVER blocks the request and NEVER changes authz,
-	// which stays header-driven. Enabling requires an in-cluster config; a
-	// missing one is fatal (MED-7 fail-loud, no silent skip).
+	// (metric + log). It never changes authz (which stays header-driven) and
+	// never fails the request; being a synchronous TokenReview it may add
+	// bounded latency to a Bearer-carrying request. Enabling requires an
+	// in-cluster config; a missing one is fatal (MED-7 fail-loud, no silent skip).
 	machineIdentityAudit := flag.Bool("machine-identity-audit", envBool("TA_MACHINE_IDENTITY_AUDIT"),
-		"ADR-027: audit-only verification of caller ServiceAccount tokens via TokenReview (verify+log+metric, never blocks). Requires in-cluster config. Default off.")
+		"ADR-027: audit-only verification of caller ServiceAccount tokens via TokenReview (verify+log+metric; never changes authz or fails the request; a synchronous review may add bounded latency to Bearer requests). Requires in-cluster config. Default off.")
 	machineIdentityAudience := flag.String("machine-identity-audience", envOrDefault("TA_MACHINE_IDENTITY_AUDIENCE", "tenant-api"),
 		"ADR-027 G4: audience bound into every TokenReview and required in the result. An empty audience would accept any SA token — the Helm chart enforces non-empty; this flag defaults to 'tenant-api'.")
 	machineIdentityIssuer := flag.String("machine-identity-issuer", envOrDefault("TA_MACHINE_IDENTITY_ISSUER", ""),

@@ -37,8 +37,9 @@ func (m *Manager) Middleware(want Permission, tenantIDFn func(*http.Request) str
 
 			// Machine-identity audit (ADR-027): a pure side-channel that runs
 			// BEFORE and independently of authz. It verifies + logs + counts a
-			// workload token if present, but never blocks the request and never
-			// influences the decision below (which stays header-driven).
+			// workload token if present. It never fails the request and never
+			// influences the decision below (which stays header-driven); being a
+			// synchronous TokenReview it may add bounded latency to a Bearer request.
 			if m.machineAuditor != nil {
 				observeSafely(m.machineAuditor, r, bPrincipal)
 			}

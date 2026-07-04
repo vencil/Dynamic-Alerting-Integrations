@@ -77,7 +77,8 @@ type Manager struct {
 	// machineAuditor (ADR-027 PR-1b-i): optional machine-identity audit
 	// side-channel. When non-nil, Middleware calls Observe on every request
 	// AFTER resolving the header principal and independently of the authz
-	// decision — audit only (verify + log + metric), never blocking. nil
+	// decision — audit only (verify + log + metric); it never changes authz or
+	// fails the request (a synchronous review may add bounded latency). nil
 	// (the default) means the feature is disabled and Middleware behaves
 	// byte-identically to the pre-seam version. Set once at startup via
 	// SetMachineAuditor.
