@@ -298,6 +298,15 @@ func (s *configMapStore) revoke(tokenID string, expiresAt time.Time) (bool, erro
 		return false, err
 	}
 	if newlyRevoked {
+		// Emitted AFTER the ConfigMap commit — a deliberate ordering with a
+		// documented, accepted dual-write gap: if the pod hard-dies (OOMKill /
+		// node crash) in the nanoseconds between the commit and this call, the
+		// revocation persists but its event is lost, leaving that one token
+		// without a tamper-evidence anchor (a later targeted un-revoke of it
+		// would go undetected). An Outbox pattern would close the gap but is
+		// absurd over-engineering for a 4h-TTL revocation, so the risk (crash in
+		// the gap AND a precisely-targeted un-revoke) is accepted (ADR-028).
+		//
 		// ADR-028 D3 (PII minimization): opaque token_id + expires_at only —
 		// NO tenant identifier, so the audit sink never becomes a store of
 		// customer identifiers. The reconciler correlates on token_id and, if a
