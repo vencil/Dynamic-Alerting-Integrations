@@ -15,7 +15,7 @@ updated_at: 2026-07-04
 
 ## 狀態
 
-🟡 **Proposed**（2026-07-04）。owner 核可後昇格 Accepted。Refs [#924](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/924)（自 [#903](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/903) RFC 拆出），設計經一輪外部 adversarial review（Gemini）。
+🟡 **Proposed**（2026-07-04）。owner 核可後昇格 Accepted。Refs [#924](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/924)（自 [#903](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/903) RFC 拆出），設計經兩輪外部 adversarial review（Gemini：架構收斂 + 實作邊角護欄）。
 
 > 依語言政策，ADR 自 ADR-019 起不另製 `.en.md`。
 
@@ -115,9 +115,9 @@ updated_at: 2026-07-04
 ## Action Items（MVP 實作，ADR accepted 後）
 
 1. [ ] `configmap_store.go`：`revoke()`（及 revoked-set mutation 路徑）發結構化 `federation_token_revoked` 事件（`token_id` + `expires_at` + `ts`，**不含租戶識別碼**）。
-2. [ ] reconciler（CronJob + 唯讀 RBAC `get` 單一 resourceName）：直讀 CM × 查 VictoriaLogs 對帳 → gauge。
+2. [ ] **reconciler = Python 腳本掛 CronJob**（沿用 [#569](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/569) chargeback-aggregator 形狀：ConfigMap 掛載腳本 + pinned image + `concurrencyPolicy: Forbid`，reuse-over-build、**不新增 Go binary / release 線**）。**直讀 ConfigMap 的 `revoked.txt` key**（純 token_id 行、免 `store.json` schema、無 Go↔Python 雙寫漂移）× 查 VictoriaLogs 對帳 → gauge。唯讀 RBAC（`get` 單一 resourceName）、**絕不經 tenant-api API**。**邊角護欄（Gemini round-2）**：查詢窗只對「已穩定落盤」的 log（`[now-24h, now-1m]`，避 ingestion lag 誤判）；`now < expires_at` 加 **~2m clock-skew tolerance**（近到期即消失視為正常 prune、不誤報 critical，跨 API-server／VictoriaLogs／node 時鐘差）；`concurrencyPolicy: Forbid`（慢查詢跨排程週期不重疊跑、免重複告警）。
 3. [ ] 告警 `FederationRevocationTamperSuspected`（critical）+ `FederationRevocationReconcileStale`（verifier liveness）；promtool 行為契約測試。
-4. [ ] （便宜偵測）gateway 撤銷清單讀取失敗 metric + 告警（fail-open 觸發可見）。
+4. [ ] （便宜偵測）gateway 撤銷清單讀取失敗 → **counter** `federation_gateway_revocation_load_errors_total{reason="file_missing|parse_error"}` + 告警 `rate(...) > 0` **`for: 2m`**（濾掉 pod 啟動 / volume 重建瞬間的 I/O 抖動；持續才代表掛載真壞或遭 DoS，fail-open 觸發可見）。
 5. [ ] （D2 輔助）in-CM revoked-set digest key，明確標註「非主控」。
 6. [ ] runbook：對帳/鑑識程序（查 VictoriaLogs × store 反查租戶）＋ fail-open Risk Acceptance 條目。
 7. [ ] 另立 issue：gateway fail-closed 降級模式（defer-with-trigger）。
