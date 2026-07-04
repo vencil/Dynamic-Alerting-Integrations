@@ -204,9 +204,13 @@ def query_victorialogs(base_url: str, query: str, timeout_s: float = 30.0) -> li
     """Run a LogsQL query; return the newline-delimited JSON rows.
 
     Raises on any transport/HTTP error so the caller can fail closed."""
+    if not base_url.startswith(("http://", "https://")):
+        raise ValueError(f"victorialogs url must be http(s): {base_url!r}")
     url = base_url.rstrip("/") + "/select/logsql/query?" + urllib.parse.urlencode({"query": query})
     req = urllib.request.Request(url, headers={"Accept": "application/json"})
-    with urllib.request.urlopen(req, timeout=timeout_s) as resp:  # noqa: S310 (in-cluster URL)
+    # The scheme is guarded to http(s) above; the URL is the operator-set
+    # in-cluster VictoriaLogs endpoint, not user input.
+    with urllib.request.urlopen(req, timeout=timeout_s) as resp:  # noqa: S310  # nosec B310
         body = resp.read().decode("utf-8", "replace")
     rows: list[dict] = []
     for line in body.splitlines():
