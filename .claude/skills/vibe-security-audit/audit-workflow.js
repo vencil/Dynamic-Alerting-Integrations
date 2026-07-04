@@ -39,6 +39,9 @@ if (!A || typeof A !== 'object' || Array.isArray(A) || !A.target) {
   throw new Error('vibe-security-audit: args must resolve to an OBJECT with a `target` absolute path, e.g. { target: "C:/.../.claude/worktrees/sec-audit/components/tenant-api" }.')
 }
 const ROOT = A.target
+if (!/^(?:[a-zA-Z]:[\\/]|\/)/.test(ROOT)) {
+  throw new Error(`vibe-security-audit: target must be an ABSOLUTE path (got "${ROOT}") — a relative path would be interpolated into agent prompts and read the wrong tree, defeating worktree isolation.`)
+}
 const LABEL = A.componentLabel || 'component'
 
 // --------------------------- schemas ---------------------------
@@ -78,10 +81,15 @@ const VERDICT_SCHEMA = { type: 'object', additionalProperties: false,
     code_cite: { type: 'string' },
     domain_aware: { type: 'boolean' },
     misread_designed_behavior: { type: 'boolean' },
-  } }
+  },
+  // code_cite is required when a finding is CONFIRMED (the validator prompt already
+  // mandates citing the exact file:line on confirm — this is the schema-level backstop).
+  if: { properties: { verdict: { const: 'CONFIRMED' } } },
+  then: { required: ['code_cite'] },
+}
 
 const SYNTH_SCHEMA = { type: 'object', additionalProperties: false,
-  required: ['domain_awareness_verdict', 'domain_awareness_evidence', 'summary', 'recommendation'],
+  required: ['domain_awareness_verdict', 'domain_awareness_evidence', 'coverage_note', 'summary', 'recommendation'],
   properties: {
     domain_awareness_verdict: { type: 'string', enum: ['STRONG', 'PARTIAL', 'WEAK'] },
     domain_awareness_evidence: { type: 'string' },
