@@ -265,23 +265,9 @@ jobs:
           # `unrecognized arguments: docs/ rule-packs/`.
           python scripts/tools/dx/doc_coverage.py --ci
 
-      - name: Update coverage badge JSON
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        run: |
-          python scripts/tools/dx/doc_coverage.py --badge --json > docs/assets/doc-coverage-badge.json || true
-
       - name: Sync glossary abbreviations
         run: |
           python scripts/tools/dx/sync_glossary_abbr.py --check
-
-      - name: Commit badge update
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add docs/assets/doc-coverage-badge.json
-          git diff --staged --quiet || git commit -m "docs: update coverage badge [skip ci]"
-          git push || true
 
   mkdocs-build:
     name: MkDocs Build Verification

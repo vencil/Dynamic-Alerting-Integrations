@@ -133,6 +133,11 @@ jobs:
           # fetch-depth: 0 above gives the base ref); no-ops when the registry
           # is absent/untracked (runtime conf.d state, not committed).
           pre-commit run account-registry-monotonic --all-files
+          # Guards against the docs-ci.yaml dead-auto-commit bug (PR #983 review):
+          # a `git push` in any workflow with no `contents: write` grant silently
+          # no-ops. Wired here (not path-filtered) so editing ANY workflow file
+          # is covered, matching the "Lint Rule Packs" hoisting rationale above.
+          pre-commit run workflow-git-push-permission-check --all-files
 
   lint-rule-packs:
     # Custom Prometheus rule-pack governance linter.
