@@ -1,14 +1,16 @@
-# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+# yaml-language-server: $schema=https://www.coderabbit.ai/integrations/schema.v2.json
 #
-# CodeRabbit 設定（原本設在 web UI，收斂進 repo 以便版本控管 / PR review）。
+# 目的：只關掉「逐次 push 的增量 review」，降低 per-developer rate-limit 消耗。
+# （本 repo maintainer 落在 CodeRabbit 活動量前 5% 的自適應限額，過去一段期間約
+#  1/6 的 PR 初次 review 被限額跳過且不自動補做。）初次 review 照跑；push 後不再
+#  自動重看，需要對最終版再過一次時於 PR 留言 `@coderabbitai review`。
 #
-# 緣由：本 repo PR 量高（~7/天），maintainer 落在 CodeRabbit「活動量前 5%」的
-# per-developer 自適應限額區間，過去 33 天約 16%（36/226）的 PR 初次 review 被
-# rate limit 跳過（且不會自動補做）。降低額度消耗的最安全槓桿 = 停掉「每次 push
-# 後的增量 review」——它不影響任何 PR 的『初次』review，只是不再逐次 push 重看。
-# 需要對修正後的最終版再過一次時，於 PR 手動留言 `@coderabbitai review` 即可。
+# ⚠ inheritance: true —— CodeRabbit 預設 inheritance=false，屆時「有 .coderabbit.yaml
+#  就完全取代 UI 設定、未列出的 key 一律打回預設」。開 inheritance 讓本檔只覆蓋有
+#  寫出來的 key，其餘設定沿用既有 UI / org 值。務必保留這行。
+#  （日後若想把完整設定收斂進本檔：先於 PR 留言 `@coderabbitai configuration`
+#   匯出現行有效設定，逐項寫入後再關掉 inheritance。）
+inheritance: true
 reviews:
-  profile: chill                    # 目前設定，明寫鎖住（feedback 較精簡、不 nitpicky）
   auto_review:
-    enabled: true                   # 維持「開 PR 即自動 review」
-    auto_incremental_review: false  # 唯一有牙的改動：停掉逐次 push 的增量 review，省 per-developer 額度
+    auto_incremental_review: false
