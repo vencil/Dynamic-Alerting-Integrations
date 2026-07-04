@@ -67,6 +67,7 @@ lang: zh
 | `docs/integration/byo-prometheus-integration.md` (.en.md) | Platform Engineers, SREs | Bring Your Own Prometheus (BYOP) — 現有監控架構整合指南 |
 | `docs/integration/deployment-sizing.md` (.en.md) | Platform Engineers, SREs, DevOps | 部署容量規劃指南 |
 | `docs/integration/federation-integration.md` (.en.md) | Platform Engineers | Federation Integration Guide |
+| `docs/integration/gitlab-ce-sso.md` (.en.md) | Platform Engineers, SREs | GitLab CE SSO 整合指南 |
 | `docs/integration/gitops-deployment.md` (.en.md) | Platform Engineers, DevOps | GitOps 部署指南 |
 | `docs/integration/operator-alertmanager-integration.md` (.en.md) | Platform Engineers | Operator Alertmanager 整合指南 |
 | `docs/integration/operator-gitops-deployment.md` (.en.md) | Platform Engineers | Operator GitOps 部署指南 |

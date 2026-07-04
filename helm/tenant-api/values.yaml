@@ -35,6 +35,23 @@ oauth2Proxy:
     pullPolicy: IfNotPresent
   # Provider: github | google | oidc | gitlab
   provider: github
+  # OIDC issuer URL — REQUIRED for `provider: oidc` and `provider: gitlab`
+  # (self-hosted GitLab CE: the bare instance URL, e.g. https://gitlab.acme.internal).
+  # Empty (default) → github provider, flag not rendered. See docs/integration/gitlab-ce-sso.md.
+  oidcIssuerUrl: ""
+  # OAuth scope. GitLab CE: "openid profile email" (groups come from /oauth/userinfo
+  # under `openid`; `read_api` is only needed for --gitlab-group project filtering).
+  # Empty → oauth2-proxy provider default.
+  scope: ""
+  # Optional GitLab group restriction (--gitlab-group, repeatable). Full paths, e.g.
+  # ["acme/sre", "acme/dba"]. Empty → no group restriction at the proxy (RBAC still
+  # enforced by rbac._rbacYaml). GitLab provider only.
+  gitlabGroups: []
+  # Session lifetime / refresh — revocation-lag guard: groups are resolved at login and
+  # cached in the session cookie, so a user removed from a group keeps access until the
+  # cookie expires. Shorten for tighter revocation. Empty → oauth2-proxy defaults.
+  cookieExpire: ""   # e.g. "4h"
+  cookieRefresh: ""  # e.g. "1h" (must be < cookieExpire)
   # Redirect URL must match the registered OAuth2 app callback URL.
   # Set to your actual Ingress host.
   redirectUrl: "http://tenant-api.example.com/oauth2/callback"

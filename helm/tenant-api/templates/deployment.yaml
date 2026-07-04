@@ -228,6 +228,15 @@ spec:
               drop: ["ALL"]
           args:
             - --provider={{ .Values.oauth2Proxy.provider }}
+            {{- with .Values.oauth2Proxy.oidcIssuerUrl }}
+            - --oidc-issuer-url={{ . }}
+            {{- end }}
+            {{- with .Values.oauth2Proxy.scope }}
+            - --scope={{ . }}
+            {{- end }}
+            {{- range .Values.oauth2Proxy.gitlabGroups }}
+            - --gitlab-group={{ . }}
+            {{- end }}
             - --upstream=http://localhost:8080
             - --http-address=0.0.0.0:4180
             - --redirect-url={{ .Values.oauth2Proxy.redirectUrl }}
@@ -240,6 +249,12 @@ spec:
             - --cookie-httponly={{ .Values.oauth2Proxy.cookieHttpOnly }}
             - --cookie-samesite={{ .Values.oauth2Proxy.cookieSameSite }}
             - --cookie-name={{ .Values.oauth2Proxy.cookieName }}
+            {{- with .Values.oauth2Proxy.cookieExpire }}
+            - --cookie-expire={{ . }}
+            {{- end }}
+            {{- with .Values.oauth2Proxy.cookieRefresh }}
+            - --cookie-refresh={{ . }}
+            {{- end }}
           env:
             - name: OAUTH2_PROXY_COOKIE_SECRET
               valueFrom:
