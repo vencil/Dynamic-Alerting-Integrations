@@ -300,3 +300,4 @@ SSE Hub 廣播是 **at-most-once**：per-client buffer 16（`internal/ws/hub.go:
 - ADR-009：oauth2-proxy sidecar 整合
 - 測試：`components/tenant-api/internal/handler/middleware_test.go`（15 cases，middleware bundle）+ `authz_test.go`（14 cases，tenant-scoped authz）
 - v2.7.0：Tenant API basic — 提供 RBAC 框架，本次硬化是其補完
+- **跨租戶 ConfigMap 硬化（cluster-plane，分層互補）**：本文是 tenant-api 的 **app-plane** 硬化（`_rbac.yaml` API 授權）；叢集層的 **operator RBAC 收斂 + off-cluster 稽核**基線見 [跨租戶 ConfigMap 硬化](../cross-tenant-configmap-hardening.md)（#926）——兩者是不同 RBAC 層，勿混淆

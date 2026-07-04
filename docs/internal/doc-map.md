@@ -44,6 +44,7 @@ lang: zh
 | `docs/benchmarks.md` (.en.md) | Platform Engineers, SREs, decision-maker | 性能基準 (Performance Benchmarks) |
 | `docs/cheat-sheet.md` (.en.md) | All | da-tools Quick Reference |
 | `docs/cli-reference.md` (.en.md) | Platform Engineers, SREs, DevOps, Tenants | da-tools CLI Reference |
+| `docs/cross-tenant-configmap-hardening.md` (.en.md) | Platform Engineers, SREs, 安全合規 | 跨租戶 ConfigMap 硬化基線（operator RBAC + off-cluster 稽核） |
 | `docs/custom-rule-governance.md` (.en.md) | Platform Engineers | 多租戶客製化規則治理規範 (Custom Rule Governance Model) |
 | `docs/design/config-driven.md` (.en.md) | Platform Engineers, DevOps | Config-Driven 架構設計 — 三態配置、動態路由、Tenant API |
 | `docs/design/high-availability.md` (.en.md) | Platform Engineers, DevOps | 高可用性 (HA) 設計 — 副本、PDB、防雙倍計算 |

@@ -39,6 +39,8 @@ Date:   2026-02-20
     Default: 75% warning, 90% critical
 ```
 
+> **git 稽核 vs 執行期 ConfigMap 稽核**：上面的 git 歷史是**設定來源**的天然稽核跡；但彙整渲染後的跨租戶 ConfigMap 是**執行期**產物，其「叢集內竄改」偵測需要 off-cluster kube-apiserver audit（tamper-evident-from-inside）。operator RBAC 收斂基線 + audit policy 見 [跨租戶 ConfigMap 硬化](cross-tenant-configmap-hardening.md)。
+
 ### 權責分離 (Separation of Duties)
 
 | 角色 | 職責範圍 | 可修改 | 無法修改 |
@@ -241,3 +243,4 @@ Default deny-all（Ingress + Egress）+ 逐元件白名單：
 | [規則生命週期治理（§7 全 tier 視圖）](./custom-rule-governance.md) | 規則生→老→病→死的橫切治理 + 成熟度限制（遷入評估必讀） |
 | [GitOps Deployment](integration/gitops-deployment.md) | 部署安全、RBAC |
 | [Testing Playbook](./internal/testing-playbook.md) | SAST 測試執行 |
+| [跨租戶 ConfigMap 硬化](./cross-tenant-configmap-hardening.md) | operator RBAC 收斂基線 + off-cluster 稽核（PCI Req 7/10 · SOC 2 CC6/CC7）|

@@ -122,6 +122,7 @@ plugins:
             遷移指南: Migration Guide
             遷移引擎: Migration Engine
             Custom Rule 治理: Custom Rule Governance
+            跨租戶 ConfigMap 硬化: Cross-Tenant ConfigMap Hardening
             進階場景: Advanced Scenarios
             Shadow Monitoring 切換: Shadow Monitoring Cutover
             多叢集 Federation: Multi-cluster Federation
@@ -260,6 +261,7 @@ nav:
   - 治理與安全:
     - 治理與安全: governance-security.md
     - Custom Rule 治理: custom-rule-governance.md
+    - 跨租戶 ConfigMap 硬化: cross-tenant-configmap-hardening.md
   - 場景:
     - Alert Routing Split: scenarios/alert-routing-split.md
     - 測試覆蓋矩陣: internal/test-coverage-matrix.md
