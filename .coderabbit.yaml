@@ -1,0 +1,16 @@
+# yaml-language-server: $schema=https://www.coderabbit.ai/integrations/schema.v2.json
+#
+# 目的：只關掉「逐次 push 的增量 review」，降低 per-developer rate-limit 消耗。
+# （本 repo maintainer 落在 CodeRabbit 活動量前 5% 的自適應限額，過去一段期間約
+#  1/6 的 PR 初次 review 被限額跳過且不自動補做。）初次 review 照跑；push 後不再
+#  自動重看，需要對最終版再過一次時於 PR 留言 `@coderabbitai review`。
+#
+# ⚠ inheritance: true —— CodeRabbit 預設 inheritance=false，屆時「有 .coderabbit.yaml
+#  就完全取代 UI 設定、未列出的 key 一律打回預設」。開 inheritance 讓本檔只覆蓋有
+#  寫出來的 key，其餘設定沿用既有 UI / org 值。務必保留這行。
+#  （日後若想把完整設定收斂進本檔：先於 PR 留言 `@coderabbitai configuration`
+#   匯出現行有效設定，逐項寫入後再關掉 inheritance。）
+inheritance: true
+reviews:
+  auto_review:
+    auto_incremental_review: false
