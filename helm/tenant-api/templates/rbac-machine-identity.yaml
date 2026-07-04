@@ -1,0 +1,44 @@
+{{- if .Values.machineIdentity.enabled }}
+# ADR-027 machine-identity audit baseline (opt-in). tenant-api verifies a
+# machine caller's projected ServiceAccount token via the TokenReview API so it
+# can AUDIT (log + metric) which workload is behind each Bearer-bearing request.
+# This is audit-only — it never blocks authz — but it still needs a cluster-wide
+# grant because tokenreviews.authentication.k8s.io is a NON-namespaced subresource.
+#
+# Minimal privilege: `create` on `tokenreviews` ONLY. We deliberately do NOT bind
+# the built-in `system:auth-delegator` ClusterRole — that also grants
+# subjectaccessreviews (SelfSAR/SAR), which tenant-api never issues and which
+# would widen the blast radius of a compromised pod.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  # ClusterRole is cluster-scoped, so the name must be globally unique. The chart
+  # name ({{ include "tenant-api.name" . }}) is release-independent, so a name
+  # keyed on chart+namespace alone still collides when two releases share a
+  # namespace. Embed BOTH namespace AND release name: (namespace, release-name)
+  # is globally unique (release names are unique within a namespace), so two
+  # releases never share this object — and one release's uninstall can't delete a
+  # ClusterRole/Binding another release still needs.
+  name: {{ include "tenant-api.name" . }}-{{ .Release.Namespace }}-{{ .Release.Name }}-tokenreview
+  labels:
+    {{- include "tenant-api.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["authentication.k8s.io"]
+    resources: ["tokenreviews"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "tenant-api.name" . }}-{{ .Release.Namespace }}-{{ .Release.Name }}-tokenreview
+  labels:
+    {{- include "tenant-api.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "tenant-api.name" . }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "tenant-api.name" . }}-{{ .Release.Namespace }}-{{ .Release.Name }}-tokenreview
+{{- end }}

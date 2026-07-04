@@ -2,8 +2,8 @@ package rbac
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
-	"strings"
 )
 
 // Middleware returns an HTTP middleware that reads IdP identity from
@@ -17,22 +17,31 @@ import (
 // On failure, responds 401 (missing identity) or 403 (insufficient permission).
 //
 // tenantIDFn extracts the tenant ID from the request (may be nil for list endpoints).
+//
+// ADR-027 identity seam (PR-1b-i): the header identity is now resolved through
+// HeaderResolver into a VerifiedPrincipal, and — when a machine-identity
+// auditor is installed (SetMachineAuditor) — an audit side-channel runs before
+// the authorization check. The authorization decision itself is UNCHANGED: it
+// runs entirely off the hop-B header groups. With no auditor installed (the
+// default) the observable behavior is byte-identical to the pre-seam version.
 func (m *Manager) Middleware(want Permission, tenantIDFn func(*http.Request) string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			email := r.Header.Get("X-Forwarded-Email")
-			if email == "" {
-				writeError(w, http.StatusUnauthorized, "missing identity: X-Forwarded-Email header required")
+			// Resolve the trusted-hop (header) principal. Empty email → 401,
+			// same message and status as before the seam.
+			bPrincipal, err := HeaderResolver{}.Resolve(r)
+			if err != nil {
+				writeError(w, http.StatusUnauthorized, err.Error())
 				return
 			}
 
-			rawGroups := r.Header.Get("X-Forwarded-Groups")
-			var groups []string
-			for _, g := range strings.Split(rawGroups, ",") {
-				g = strings.TrimSpace(g)
-				if g != "" {
-					groups = append(groups, g)
-				}
+			// Machine-identity audit (ADR-027): a pure side-channel that runs
+			// BEFORE and independently of authz. It verifies + logs + counts a
+			// workload token if present. It never fails the request and never
+			// influences the decision below (which stays header-driven); being a
+			// synchronous TokenReview it may add bounded latency to a Bearer request.
+			if m.machineAuditor != nil {
+				observeSafely(m.machineAuditor, r, bPrincipal)
 			}
 
 			// For list endpoints (tenantIDFn == nil), check read on wildcard "*"
@@ -41,16 +50,41 @@ func (m *Manager) Middleware(want Permission, tenantIDFn func(*http.Request) str
 				tenantID = tenantIDFn(r)
 			}
 
-			if !m.HasPermission(groups, tenantID, want) {
+			// Authorization is UNCHANGED: still decided off the hop-B groups.
+			if !m.HasPermission(bPrincipal.Groups, tenantID, want) {
 				writeForbidden(w, tenantID, want)
 				return
 			}
 
-			// Attach identity to request context for downstream use
-			r = r.WithContext(withIdentity(r.Context(), email, groups))
+			// Attach identity to request context for downstream use. withIdentity
+			// keeps RequestEmail/RequestGroups working for the ~30 existing
+			// consumers; withPrincipal additionally exposes provenance.
+			ctx := withIdentity(r.Context(), bPrincipal.Email, bPrincipal.Groups)
+			ctx = withPrincipal(ctx, bPrincipal)
+			r = r.WithContext(ctx)
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// observeSafely runs a machine-identity audit as a guaranteed side-channel:
+// any panic escaping the auditor is recovered HERE so an audit bug can never
+// turn a normal request into a 500. This makes "an audit bug never FAILS the
+// request" a middleware-level invariant instead of a contract each
+// MachineIdentityAuditor implementation must self-enforce. It does NOT make the
+// audit non-blocking: a synchronous auditor still adds its own bounded latency
+// (see the MachineIdentityAuditor contract for the ADR-027 concurrency posture
+// and why bounded-async is deferred to PR-1b-ii). Defense-in-depth:
+// KSAResolver.Observe also recovers internally; this is the outer guard
+// covering any current/future auditor (and the seam where a mis-written one
+// would otherwise escape).
+func observeSafely(a MachineIdentityAuditor, r *http.Request, header *VerifiedPrincipal) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			slog.Error("machine-identity audit panic escaped the auditor (recovered at middleware; request unaffected)", "panic", rec)
+		}
+	}()
+	a.Observe(r, header)
 }
 
 // writeError writes a JSON error response.

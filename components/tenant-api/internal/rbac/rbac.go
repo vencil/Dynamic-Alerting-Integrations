@@ -73,7 +73,25 @@ type Manager struct {
 	// open-read (intentional no-RBAC, e.g. local/demo), and an operator
 	// can restore the legacy behavior with --rbac-empty-open.
 	failClosedOnEmpty bool
+
+	// machineAuditor (ADR-027 PR-1b-i): optional machine-identity audit
+	// side-channel. When non-nil, Middleware calls Observe on every request
+	// AFTER resolving the header principal and independently of the authz
+	// decision — audit only (verify + log + metric); it never changes authz or
+	// fails the request (a synchronous review may add bounded latency). nil
+	// (the default) means the feature is disabled and Middleware behaves
+	// byte-identically to the pre-seam version. Set once at startup via
+	// SetMachineAuditor.
+	machineAuditor MachineIdentityAuditor
 }
+
+// SetMachineAuditor installs the machine-identity audit side-channel
+// (ADR-027 PR-1b-i). Called once at startup from main after wiring the
+// TokenReview-backed KSAResolver. Passing nil leaves auditing disabled. This
+// is a prod setter (mirrors the test-only setter style) rather than a
+// constructor arg so NewManager's signature — and its many call sites — stay
+// unchanged.
+func (m *Manager) SetMachineAuditor(a MachineIdentityAuditor) { m.machineAuditor = a }
 
 // NewManager creates a Manager and loads the RBAC config from path.
 // If path is empty, the manager starts in open mode (all

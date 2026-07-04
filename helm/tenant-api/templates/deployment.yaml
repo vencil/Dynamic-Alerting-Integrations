@@ -49,9 +49,11 @@ spec:
         {{- end }}
     spec:
       serviceAccountName: {{ include "tenant-api.name" . }}
-      {{- if .Values.federation.enabled }}
-      # Federation needs the in-cluster API client (ConfigMap token store);
-      # the ServiceAccount disables automount by default, so opt back in.
+      {{- if or .Values.federation.enabled .Values.machineIdentity.enabled }}
+      # Federation needs the in-cluster API client (ConfigMap token store) and
+      # machineIdentity (ADR-027) needs it for the TokenReview call; the
+      # ServiceAccount disables automount by default, so opt back in when either
+      # feature is on.
       automountServiceAccountToken: true
       {{- end }}
       securityContext:
@@ -110,6 +112,18 @@ spec:
             - --federation-key=/etc/federation/{{ .Values.federation.signingKey.secretKey }}
             - --federation-store={{ .Values.federation.store.configMapName }}
             - --federation-token-ttl={{ .Values.federation.tokenTTL }}
+            {{- end }}
+            {{- if .Values.machineIdentity.enabled }}
+            # ADR-027 machine-identity audit baseline — verify machine callers'
+            # projected SA tokens via TokenReview and AUDIT (log+metric) only;
+            # authz still runs on the oauth2-proxy hop headers. audit-only:
+            # never blocks. The audience below is HARD-gated: TokenReview only
+            # accepts a token whose audience list contains it, so an empty
+            # audience would accept ANY SA token (incl. the default-audience
+            # kube-apiserver token) — `required` fails the render loudly rather
+            # than shipping that hole (ADR-027 G4).
+            - --machine-identity-audit
+            - --machine-identity-audience={{ required "machineIdentity.audience MUST be set (ADR-027 G4: empty audience = TokenReview accepts ANY SA token incl default-audience)" .Values.machineIdentity.audience }}
             {{- end }}
           env:
             - name: GIT_COMMITTER_NAME

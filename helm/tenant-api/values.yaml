@@ -208,6 +208,41 @@ federation:
   # operator may safely raise this.
   tokenTTL: 4h
 
+# ── Machine-identity audit baseline (ADR-027, issue #962) ───────────────────
+# Disabled by default. When enabled, tenant-api verifies a machine caller's
+# projected ServiceAccount token via the Kubernetes TokenReview API and AUDITs
+# (structured log + `tenant_api_identity_audit_total{result}` metric) which
+# workload is behind each Bearer-bearing request. This is AUDIT-ONLY — it never
+# blocks authz (authz still runs on the oauth2-proxy hop headers) — it exists to
+# establish the ADR-027 Phase-1 rollout baseline before any enforcement.
+#
+# Opt-out by default because enabling adds an apiserver coupling: the chart
+# grants a `tokenreviews:create` ClusterRole (rbac-machine-identity.yaml) and
+# flips automountServiceAccountToken on, so tenant-api can reach the K8s API.
+#
+# Enabling on an existing deployment:
+#   helm upgrade <release> helm/tenant-api --set machineIdentity.enabled=true
+# The chart then adds the ClusterRole/ClusterRoleBinding, enables token
+# automount, and passes --machine-identity-audit + --machine-identity-audience.
+#
+# ⚠ PREREQUISITE: the running tenant-api image must already contain the audit
+# code (the --machine-identity-* flags). The image tag derives from appVersion;
+# enabling this against an image that predates the flags crash-loops on an
+# unknown flag. Enable only once the deployed image supports it.
+# ⚠ Do NOT enable via `helm upgrade --reuse-values`: it can carry a stale
+# audience past the required-gate. Pass machineIdentity values explicitly.
+machineIdentity:
+  enabled: false
+
+  # TokenReview audience — REQUIRED whenever machineIdentity.enabled=true (the
+  # deployment template `required`s it, so an empty value fails the render).
+  # TokenReview accepts a token only if its audience list contains this value;
+  # an empty/unset audience would accept ANY ServiceAccount token, including the
+  # default kube-apiserver-audience token every pod already mounts (ADR-027 G4).
+  # Callers (PR-1b-ii: recipe-preview / threshold-govern) must mint their
+  # projected token with `audience: tenant-api` to match.
+  audience: tenant-api
+
 service:
   type: ClusterIP
   # Port 80 → oauth2-proxy (4180) — external traffic

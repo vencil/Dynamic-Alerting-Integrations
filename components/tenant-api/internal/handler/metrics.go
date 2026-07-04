@@ -109,6 +109,12 @@ func MetricsHandler(w http.ResponseWriter, r *http.Request) {
 	_, _ = fmt.Fprintf(w, "# TYPE tenant_api_federation_orphaned_subset_files gauge\n")
 	_, _ = fmt.Fprintf(w, "tenant_api_federation_orphaned_subset_files %d\n", orphanSubsets)
 
+	// ADR-027 PR-1b-i: machine-identity (KSA/TokenReview) audit counters.
+	// Audit-only — this family records verification outcomes and NEVER
+	// reflects an authz decision. All four result series are emitted (0 when
+	// audit is disabled) so the metric's shape is stable across the flag.
+	writeIdentityAuditMetrics(w)
+
 	// ADR-022 Layer 2 tripwire: 1 ⇒ --dev-bypass-auth is ON (LOCAL DEV ONLY).
 	// MUST be 0 in production; alert if 1 outside a dev/compose environment.
 	devBypass := 0

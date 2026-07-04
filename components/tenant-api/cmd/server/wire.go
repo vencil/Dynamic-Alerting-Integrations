@@ -27,6 +27,7 @@ import (
 	gl "github.com/vencil/tenant-api/internal/gitlab"
 	"github.com/vencil/tenant-api/internal/handler"
 	"github.com/vencil/tenant-api/internal/platform"
+	"github.com/vencil/tenant-api/internal/rbac"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 )
@@ -131,13 +132,9 @@ func wireFederation(f federationFlags) (*token.Manager, string, error) {
 	if f.KeyPath == "" {
 		return nil, "", nil
 	}
-	cfg, err := rest.InClusterConfig()
+	client, err := buildInClusterClientset()
 	if err != nil {
-		return nil, "", fmt.Errorf("federation: in-cluster k8s config: %w", err)
-	}
-	client, err := kubernetes.NewForConfig(cfg)
-	if err != nil {
-		return nil, "", fmt.Errorf("federation: build k8s client: %w", err)
+		return nil, "", fmt.Errorf("federation: %w", err)
 	}
 	ns := f.Namespace
 	if ns == "" {
@@ -173,4 +170,68 @@ func inClusterNamespace() (string, error) {
 		return "", fmt.Errorf("%s is empty", saNamespacePath)
 	}
 	return ns, nil
+}
+
+// buildInClusterClientset builds a Kubernetes clientset from the in-cluster
+// service-account config. Extracted from wireFederation (ADR-027 PR-1b-i) so
+// the federation token store and the machine-identity auditor share one
+// construction path — and one fail-loud contract: an in-cluster config that
+// cannot be loaded is an error the caller turns fatal, never a silent skip.
+func buildInClusterClientset() (kubernetes.Interface, error) {
+	cfg, err := rest.InClusterConfig()
+	if err != nil {
+		return nil, fmt.Errorf("in-cluster k8s config: %w", err)
+	}
+	client, err := kubernetes.NewForConfig(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("build k8s client: %w", err)
+	}
+	return client, nil
+}
+
+// machineAuditorFlags are the CLI-flag values consumed by wireMachineAuditor.
+type machineAuditorFlags struct {
+	Enabled     bool     // --machine-identity-audit
+	Audience    string   // --machine-identity-audience (bound into every TokenReview; G4)
+	IssuerAllow []string // --machine-identity-issuer (cluster-issuer allowlist; empty = any)
+}
+
+// wireMachineAuditor builds the ADR-027 machine-identity audit side-channel.
+//
+// When disabled it returns (nil, nil) BEFORE touching Kubernetes — a
+// deployment that does not opt in needs no in-cluster client and no
+// tokenreviews RBAC, exactly like federation's KeyPath=="" short-circuit.
+//
+// When enabled it builds the in-cluster clientset and, on failure, returns an
+// error the caller turns into log.Fatalf. This is the MED-7 contract: the
+// audit path MUST fail loud, never fail open. "Init failed → silently skip
+// verification" is the precise anti-pattern this avoids — a misconfigured
+// deployment that cannot verify tokens must not boot as if verification were
+// happening. (The dev-bypass poison pill is the complementary guard for the
+// opposite mistake: running an auth bypass INSIDE a cluster.)
+func wireMachineAuditor(f machineAuditorFlags) (rbac.MachineIdentityAuditor, error) {
+	if !f.Enabled {
+		return nil, nil
+	}
+	// G4 (ADR-027): the bound audience is the last line against accepting any
+	// ServiceAccount token — an empty audience would let a pod's default-audience
+	// token verify. Enforce non-empty HERE so the binary holds the line
+	// independently of the Helm `required` gate (raw-manifest / bare-binary
+	// deploys never run Helm; the Helm gate also does not catch whitespace).
+	// Fail loud, never fall through to "no audience".
+	audience := strings.TrimSpace(f.Audience)
+	if audience == "" {
+		return nil, fmt.Errorf("--machine-identity-audience must be non-empty when --machine-identity-audit is set (ADR-027 G4)")
+	}
+	client, err := buildInClusterClientset()
+	if err != nil {
+		// MED-7: fail loud. Do not degrade to "no audit".
+		return nil, fmt.Errorf("machine-identity audit: %w", err)
+	}
+	recorder := handler.NewIdentityAuditRecorder()
+	// Bind the TRIMMED audience so the G4 check and the bound value agree: a
+	// value like " tenant-api " passes the non-empty check but, bound verbatim
+	// into the TokenReview, would match no real token and silently make every
+	// audit verify_failed. Trimming keeps validation and use identical.
+	return rbac.NewKSAResolver(client, audience, f.IssuerAllow, recorder), nil
 }

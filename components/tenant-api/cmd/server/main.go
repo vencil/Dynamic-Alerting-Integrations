@@ -192,6 +192,20 @@ func main() {
 		envOrDefault("TA_FEDERATION_PROMETHEUS_URL", ""),
 		"Base URL of the Prometheus/VictoriaMetrics backend the federation admission validator queries (Series API). Empty disables admission.")
 
+	// ADR-027 PR-1b-i: machine-identity audit (KSA projected token +
+	// TokenReview). Opt-in and AUDIT-ONLY — when enabled, tenant-api verifies
+	// a caller's ServiceAccount token (if present) and records the outcome
+	// (metric + log). It never changes authz (which stays header-driven) and
+	// never fails the request; being a synchronous TokenReview it may add
+	// bounded latency to a Bearer-carrying request. Enabling requires an
+	// in-cluster config; a missing one is fatal (MED-7 fail-loud, no silent skip).
+	machineIdentityAudit := flag.Bool("machine-identity-audit", envBool("TA_MACHINE_IDENTITY_AUDIT"),
+		"ADR-027: audit-only verification of caller ServiceAccount tokens via TokenReview (verify+log+metric; never changes authz or fails the request; a synchronous review may add bounded latency to Bearer requests). Requires in-cluster config. Default off.")
+	machineIdentityAudience := flag.String("machine-identity-audience", envOrDefault("TA_MACHINE_IDENTITY_AUDIENCE", "tenant-api"),
+		"ADR-027 G4: audience bound into every TokenReview and required in the result. An empty audience would accept any SA token — the Helm chart enforces non-empty; this flag defaults to 'tenant-api'.")
+	machineIdentityIssuer := flag.String("machine-identity-issuer", envOrDefault("TA_MACHINE_IDENTITY_ISSUER", ""),
+		"ADR-027: comma-separated cluster-issuer allowlist for machine-identity audit dispatch. Empty (default) sends any issuer to TokenReview (the apiserver is the sole verifier). Reserved for keypool isolation when the human JWT-A path lands.")
+
 	flag.Parse()
 
 	// PR-10/11: structured (JSON) logging via slog. Configure before
@@ -224,6 +238,26 @@ func main() {
 	}
 	if *rbacPath == "" {
 		log.Printf("WARN: no --rbac path configured: running in open-read mode (all authenticated identities have read access)")
+	}
+
+	// ADR-027 PR-1b-i: machine-identity audit side-channel. Built here so an
+	// in-cluster-config failure is fatal (MED-7 fail-loud) rather than a
+	// silently-skipped verification. Disabled (nil) by default; when enabled
+	// it is installed on the RBAC manager and observes every request WITHOUT
+	// affecting the authorization decision.
+	machineAuditor, err := wireMachineAuditor(machineAuditorFlags{
+		Enabled:     *machineIdentityAudit,
+		Audience:    *machineIdentityAudience,
+		IssuerAllow: splitCSV(*machineIdentityIssuer),
+	})
+	if err != nil {
+		log.Fatalf("FATAL: machine-identity audit init: %v", err)
+	}
+	if machineAuditor != nil {
+		rbacMgr.SetMachineAuditor(machineAuditor)
+		slog.Info("machine-identity audit enabled (ADR-027; audit-only, does not affect authz)",
+			"audience", *machineIdentityAudience,
+			"issuer_allowlist", splitCSV(*machineIdentityIssuer))
 	}
 
 	// v2.6.0: WebSocket/SSE hub for real-time config change notifications.
@@ -683,4 +717,18 @@ func envBool(key string) bool {
 func pathExists(p string) bool {
 	_, err := os.Stat(p)
 	return err == nil
+}
+
+// splitCSV splits a comma-separated flag value into trimmed, non-empty items.
+// An empty string yields nil (used for --machine-identity-issuer, where nil
+// means "no allowlist — send any issuer to TokenReview").
+func splitCSV(s string) []string {
+	var out []string
+	for _, part := range strings.Split(s, ",") {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
 }

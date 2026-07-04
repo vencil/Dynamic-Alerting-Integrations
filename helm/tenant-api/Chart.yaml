@@ -6,7 +6,8 @@ type: application
 # 2.9.8 — #902 L2: pin oauth2-proxy sidecar by digest (oauth2Proxy.image.digest)
 # 2.9.9 — #902 L2 slice-2: pin the alpine/git init-container image by digest
 # 2.9.10 — PR-0: oauth2-proxy GitLab CE OIDC enablement (--oidc-issuer-url/--scope/--gitlab-group)
-version: 2.9.10
+# 2.9.11 — PR-1b-i: machine-identity audit baseline (opt-in tokenreviews ClusterRole + --machine-identity-audit, ADR-027)
+version: 2.9.11
 # appVersion: Go binary 版本
 appVersion: "2.7.0"
 keywords:
