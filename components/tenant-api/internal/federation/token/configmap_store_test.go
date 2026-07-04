@@ -1,9 +1,12 @@
 package token
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"testing"
@@ -199,4 +202,67 @@ func TestConfigMapStore_RefusesNewerSchema(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected put to refuse writing over a newer schema version")
 	}
+}
+
+// TestConfigMapStore_RevokeEmitsEvent asserts the ADR-028 D1 tamper-evidence
+// anchor: a newly-added revocation emits exactly one federation_token_revoked
+// event carrying an opaque token_id + expires_at and NO tenant identifier
+// (D3 PII minimization); an idempotent re-revoke re-emits nothing. The logger
+// is injected per-instance — no global slog swap (CLAUDE.md §測試注入 Seam).
+func TestConfigMapStore_RevokeEmitsEvent(t *testing.T) {
+	t.Parallel()
+	st, _ := newFakeConfigMapStore(t)
+	var buf bytes.Buffer
+	st.(*configMapStore).logger = slog.New(slog.NewJSONHandler(&buf, nil))
+
+	exp := time.Now().Add(90 * time.Minute).UTC()
+	if _, err := st.revoke("ftk_evt", exp); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+
+	events := decodeRevocationEvents(t, &buf)
+	if len(events) != 1 {
+		t.Fatalf("want exactly 1 revocation event, got %d: %s", len(events), buf.String())
+	}
+	ev := events[0]
+	if ev["token_id"] != "ftk_evt" {
+		t.Errorf("token_id = %v, want ftk_evt", ev["token_id"])
+	}
+	if ev["expires_at"] != exp.Format(time.RFC3339) {
+		t.Errorf("expires_at = %v, want %v", ev["expires_at"], exp.Format(time.RFC3339))
+	}
+	for k, v := range ev {
+		if strings.Contains(strings.ToLower(k), "tenant") {
+			t.Errorf("revocation event must not carry a tenant identifier: %s=%v", k, v)
+		}
+	}
+
+	// An idempotent re-revoke of an already-revoked token emits nothing.
+	buf.Reset()
+	if _, err := st.revoke("ftk_evt", exp); err != nil {
+		t.Fatalf("re-revoke: %v", err)
+	}
+	if got := decodeRevocationEvents(t, &buf); len(got) != 0 {
+		t.Errorf("idempotent re-revoke re-emitted an event: %s", buf.String())
+	}
+}
+
+// decodeRevocationEvents returns the JSON log records in buf whose "event"
+// field is "federation_token_revoked".
+func decodeRevocationEvents(t *testing.T, buf *bytes.Buffer) []map[string]any {
+	t.Helper()
+	var out []map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		if line == "" {
+			continue
+		}
+		var rec map[string]any
+		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+			t.Fatalf("log line is not JSON: %q: %v", line, err)
+		}
+		if rec["event"] == "federation_token_revoked" {
+			out = append(out, rec)
+		}
+	}
+	return out
 }
