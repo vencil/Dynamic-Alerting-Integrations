@@ -116,10 +116,12 @@ type IdentityAuditRecorder interface {
 // Audit result labels for tenant_api_identity_audit_total{result}. These are
 // the only values Observe emits.
 const (
-	ResultAuditNoToken       = "no_token"       // no Authorization: Bearer present
-	ResultAuditUnknownIssuer = "unknown_issuer" // token's iss not in the cluster-issuer allowlist
-	ResultAuditVerifyFailed  = "verify_failed"  // TokenReview call errored, unauthenticated, or audience mismatch
-	ResultAuditVerified      = "verified"       // authenticated AND audience-bound to us
+	ResultAuditNoToken         = "no_token"         // no Authorization: Bearer present
+	ResultAuditUnknownIssuer   = "unknown_issuer"   // token's iss not in the cluster-issuer allowlist
+	ResultAuditVerifyFailed    = "verify_failed"    // TokenReview call errored, unauthenticated, or audience mismatch
+	ResultAuditVerified        = "verified"         // authenticated, audience-bound, allowlisted SA (NOT a safety guarantee — see auditWorkloadVerdict)
+	ResultAuditMismatch        = "mismatch"         // verified token, but a synthetic caller's header groups exceed its expected set (privesc signal)
+	ResultAuditUnknownWorkload = "unknown_workload" // verified token, but the ServiceAccount is not in the machine-identity allowlist
 )
 
 // HeaderResolver wraps the pre-existing oauth2-proxy header-trust path in the
