@@ -68,6 +68,7 @@ updated_at: 2026-07-04
 ### D3 honest boundary + PII 最小化
 
 - **honest boundary**：tamper-**evident** 非 proof。錨點強度取決於「攻擊者的 ConfigMap 寫入權**不**延伸到改 VictoriaLogs」——對 tenant-api 範圍威脅成立（偷 SA token 不等於能改 log sink）；全叢集 / VictoriaLogs compromise 則打穿 → 見 defer-with-trigger 的密碼學層。
+- **dual-write gap（accepted risk，外審 Gemini 補）**：producer 在 ConfigMap commit **之後**才發事件，若 tenant-api pod 在這奈秒間隙硬死（OOMKill／node crash），撤銷已生效但事件**丟失** → 該 token 失去 tamper-evidence 錨點，未來針對它的 un-revoke 抓不到。徹底封需 **Outbox pattern**（先寫 CM、另一 process 派發事件），但對 4h-TTL 撤銷是荒謬的過度工程 → **接受此風險**（需 crash 剛好落在間隙 ∧ 攻擊者剛好精準針對該 token，雙巧合）。**不改邏輯**、記錄於此。
 - **PII 最小化（去識別化，外審採納）**：對帳只用 **opaque `token_id`**（非 PII）；**不**把 `<tenant>` 之類客戶識別碼寫進事件——否則 audit sink（VictoriaLogs/SIEM）反而成為客戶機敏資料的外洩庫。IR 時要知道是哪個租戶，從 store 的 records 以 `token_id` 反查即可（映射本就在 store，不必進 log）。
 
 ## 選項與取捨
