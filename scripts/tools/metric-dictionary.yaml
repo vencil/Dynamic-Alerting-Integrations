@@ -22,7 +22,7 @@ mysql_global_status_threads_running:
   maps_to: mysql_cpu
   golden_rule: MariaDBHighThreadsRunning
   rule_pack: mariadb
-  note: "running-thread SATURATION（非主機 CPU%）；threshold key 仍名 mysql_cpu（#944 key-PR 待改）。真 CPU% 見 PodContainerHighCPU"
+  note: "running-thread SATURATION（非主機 CPU%）；threshold key 保留 mysql_cpu（config 契約穩定性；metric/alert 已正名，#944 結案）。真 CPU% 見 PodContainerHighCPU"
 
 mysql_global_status_slow_queries:
   maps_to: mysql_slow_queries

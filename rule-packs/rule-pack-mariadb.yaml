@@ -8,14 +8,14 @@
 #
 # 對應的 threshold-exporter defaults:
 #   mysql_connections: 80
-#   mysql_cpu: 30      # running-thread SATURATION (NOT host CPU%); warning≈30/critical≈50 (PMM/Nichter). key renames in #944 key-PR
+#   mysql_cpu: 30      # running-thread SATURATION (NOT host CPU%); warning≈30/critical≈50 (PMM/Nichter). key kept mysql_cpu (config-contract stability, #944 closed)
 #
 # Tenant config 範例 (conf.d/db-a.yaml):
 #   tenants:
 #     db-a:
 #       mysql_connections: "70"        # 自訂連線數警告閾值
 #       mysql_connections_critical: "120"  # Critical 閾值
-#       mysql_cpu: "60"               # 自訂執行緒飽和警告閾值（threshold key 仍名 mysql_cpu，#944 key-PR 待改）
+#       mysql_cpu: "60"               # 自訂執行緒飽和警告閾值（key 保留 mysql_cpu；config 契約穩定性，#944 結案）
 # ============================================================
 groups:
   # -------------------------------------------------------
@@ -355,7 +355,9 @@ groups:
       # cAdvisor ÷ limit/request) — they decouple both ways (a single heavy query
       # pins a core at low threads_running; lock/IO waits pile threads at low CPU).
       # NOTE: the threshold key (`mysql_cpu`) and metric_group ("cpu") are KEPT
-      # this release for routing/config stability; they rename in the #944 key-PR.
+      # as-is for config-contract stability (a tenant-facing config key + routing
+      # key — the industry norm is to keep these stable, not cosmetically rename;
+      # the metric + alert are already correctly named). #944 closed on this basis.
       - alert: MariaDBHighThreadsRunning
         expr: |
           (
