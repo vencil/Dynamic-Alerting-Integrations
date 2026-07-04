@@ -349,10 +349,11 @@ spec:
 | ADR-024 | [宣告式 Dimensional 告警引擎 — Version-Aware Thresholds + Custom Alerts](adr/024-version-aware-threshold-via-dimensional-label.md) | ✅ Accepted | v2.9.0 |
 | ADR-025 | [告警平面自我存活性 — 讓告警系統能偵測自己的死亡](adr/025-alerting-plane-self-liveness.md) | ✅ Accepted | — |
 | ADR-026 | [Node/Cluster 維護告警抑制 — 不需要子系統](adr/026-node-maintenance-liveness-suppression.md) | 🟡 Proposed | — |
+| ADR-028 | [Federation 撤銷儲存 tamper-evidence — off-cluster 對帳為主控](adr/028-federation-revocation-tamper-evidence.md) | 🟡 Proposed | — |
 
 <!-- ADR_INDEX_END -->
 
-ADR 完整檔案見 [`docs/adr/`](adr/)；EN mirror 位於每份 ADR 的 `.en.md` sibling（ZH 為 SSOT primary）。
+ADR 完整檔案見 [`docs/adr/`](adr/)；ZH 為 SSOT primary，部分 ADR 另附 `.en.md` sibling（ADR-019 起多為 ZH-only，依語言政策）。
 
 ---
 

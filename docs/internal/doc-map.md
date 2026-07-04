@@ -38,6 +38,7 @@ lang: zh
 | `docs/adr/024-version-aware-threshold-via-dimensional-label.md` (.en.md) | Platform Engineers, contributors, SREs | ADR-024: 宣告式 Dimensional 告警引擎 — Version-Aware Thresholds + Custom Alerts |
 | `docs/adr/025-alerting-plane-self-liveness.md` (.en.md) | Platform Engineers, SREs, contributors | ADR-025: 告警平面自我存活性 — 讓告警系統能偵測自己的死亡 |
 | `docs/adr/026-node-maintenance-liveness-suppression.md` | Platform Engineers, SREs | ADR-026: Node/Cluster 維護告警抑制 — 不需要子系統 |
+| `docs/adr/028-federation-revocation-tamper-evidence.md` | Platform Engineers, 安全合規, SREs | ADR-028: Federation 撤銷儲存 tamper-evidence — off-cluster 對帳為主控 |
 | `docs/api/README.md` (.en.md) | Platform Engineers, SREs | Threshold Exporter API Reference |
 | `docs/api/tenant-api-hardening.md` (.en.md) | platform-ops, sre, security | Tenant API Hardening (v2.8.0) |
 | `docs/architecture-and-design.md` (.en.md) | Platform Engineers, SREs, decision-maker | 架構與設計 — 動態多租戶警報平台技術白皮書 |
