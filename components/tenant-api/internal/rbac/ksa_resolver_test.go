@@ -409,69 +409,39 @@ func TestKSA_Verdict_UnlistedSA_UnknownWorkload(t *testing.T) {
 	}
 }
 
-// serviceAccountName extracts "<sa>" from system:serviceaccount:<ns>:<sa>;
-// any other shape yields "".
-func TestServiceAccountName(t *testing.T) {
-	t.Parallel()
-	cases := map[string]string{
-		"system:serviceaccount:monitoring:threshold-govern": "threshold-govern",
-		"system:serviceaccount:tenant-api:recipe-preview":   "recipe-preview",
-		"system:serviceaccount:ns:sa":                       "sa",
-		"system:node:node-1":                                "", // not a serviceaccount
-		"garbage":                                           "",
-		"system:serviceaccount:only-one-segment":            "", // no <ns>:<sa> split
-		"":                                                  "",
-	}
-	for in, want := range cases {
-		if got := serviceAccountName(in); got != want {
-			t.Errorf("serviceAccountName(%q) = %q, want %q", in, got, want)
-		}
-	}
-}
+// ── PR-1b-ii namespace-precise allowlist: ns-collision is closed ─────────────
+// The allowlist is keyed on the FULL system:serviceaccount:<ns>:<sa>, so a
+// same-named SA in another namespace does NOT match. These assert that a
+// spoofed same-name SA audits as unknown_workload (fail-loud), never verified.
 
-// ── PR-1b-ii known-limitation pins (audit-only; ns-agnostic allowlist) ────────
-// These assert CURRENT audit-only behavior so the limitations are visible and
-// intentional (not accidental), and give the enforce PR (which pins full
-// <ns>:<sa>) a red test to flip.
-
-// A same-named SA in a DIFFERENT namespace is classified like the real caller
-// (the allowlist is keyed by SA name only). Group checks still apply, so a
-// collision + out-of-set group is still a mismatch.
+// A same-named synthetic SA in a DIFFERENT namespace does NOT match → unknown_workload.
 func TestKSA_Verdict_NsCollision_Synthetic(t *testing.T) {
 	t.Parallel()
-	// evil-ns, but SA name collides with the synthetic threshold-govern.
 	r, rec := newResolver(t, intersectingReactor(
 		"system:serviceaccount:evil-ns:threshold-govern", []string{testAudience}), nil)
-	// claims exactly the expected group → verified (KNOWN audit-only limitation:
-	// namespace is not checked; the enforce PR must pin full <ns>:<sa>).
 	r.Observe(reqWithBearer(makeJWT("iss")), &VerifiedPrincipal{Groups: []string{"threshold-governance"}})
-	if rec.get(ResultAuditVerified) != 1 {
-		t.Errorf("verified = %d, want 1 (ns-agnostic: same-named synthetic SA passes; counts=%v)", rec.get(ResultAuditVerified), rec.counts)
+	if rec.get(ResultAuditUnknownWorkload) != 1 {
+		t.Errorf("unknown_workload = %d, want 1 (ns-precise: same-named SA in another ns must not match; counts=%v)", rec.get(ResultAuditUnknownWorkload), rec.counts)
 	}
-	// A group check still applies even under a namespace collision.
-	r2, rec2 := newResolver(t, intersectingReactor(
-		"system:serviceaccount:evil-ns:threshold-govern", []string{testAudience}), nil)
-	r2.Observe(reqWithBearer(makeJWT("iss")), &VerifiedPrincipal{Groups: []string{"platform-admins"}})
-	if rec2.get(ResultAuditMismatch) != 1 {
-		t.Errorf("mismatch = %d, want 1 (out-of-set group still flagged under ns-collision)", rec2.get(ResultAuditMismatch))
+	if rec.get(ResultAuditVerified) != 0 {
+		t.Errorf("verified = %d, want 0 (a spoofed same-name SA must not verify)", rec.get(ResultAuditVerified))
 	}
 }
 
-// A same-named RELAY SA in another namespace → unconditional verified for ANY
-// forwarded groups. This is the sharpest audit-only limitation (a spoofed relay
-// is scored `verified` and the audit is silent). Pinned so the gap is visible
-// and intentional, and so the enforce PR (full <ns>:<sa>) has a red test.
-func TestKSA_Verdict_NsCollision_Relay_AnyGroupsVerified(t *testing.T) {
+// A same-named RELAY SA in another namespace also fails ns-precise matching →
+// unknown_workload. This closes the sharpest edge a name-only key would leave
+// open (a spoofed relay that would otherwise be an unconditional `verified`).
+func TestKSA_Verdict_NsCollision_Relay(t *testing.T) {
 	t.Parallel()
 	r, rec := newResolver(t, intersectingReactor(
 		"system:serviceaccount:evil-ns:recipe-preview", []string{testAudience}), nil)
 	r.Observe(reqWithBearer(makeJWT("iss")),
 		&VerifiedPrincipal{Groups: []string{"platform-admins", "db-b-operators"}})
-	if rec.get(ResultAuditVerified) != 1 {
-		t.Errorf("verified = %d, want 1 (KNOWN LIMITATION: relay name-collision → unconditional verified; counts=%v)", rec.get(ResultAuditVerified), rec.counts)
+	if rec.get(ResultAuditUnknownWorkload) != 1 {
+		t.Errorf("unknown_workload = %d, want 1 (ns-precise: spoofed relay in another ns must not match; counts=%v)", rec.get(ResultAuditUnknownWorkload), rec.counts)
 	}
-	if rec.get(ResultAuditMismatch) != 0 {
-		t.Errorf("mismatch = %d, want 0 (a relay never group-checks — the documented gap)", rec.get(ResultAuditMismatch))
+	if rec.get(ResultAuditVerified) != 0 {
+		t.Errorf("verified = %d, want 0 (a spoofed relay must not be unconditionally verified)", rec.get(ResultAuditVerified))
 	}
 }
 

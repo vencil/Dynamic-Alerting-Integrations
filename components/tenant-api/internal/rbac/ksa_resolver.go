@@ -246,38 +246,28 @@ type machineIdentitySpec struct {
 	expectedGroups []string // kindSynthetic only
 }
 
-// machineIdentityAllowlist maps a ServiceAccount NAME to how its verified token
-// may present identity. Keyed by SA name (not the full
-// system:serviceaccount:<ns>:<sa>): audit is namespace-agnostic here; precise
-// namespace pinning and externalizing this to config are deferred to the
-// enforce PR. audit-only — this classification only labels the metric/log, it
-// never affects authz.
+// machineIdentityAllowlist maps a caller's FULL TokenReview username
+// (system:serviceaccount:<ns>:<sa>) to how its verified token may present
+// identity. Keyed on the full username (NAMESPACE-PRECISE): a same-named SA in
+// another namespace does NOT match, so a spoofed same-name SA lands as
+// unknown_workload (fail-loud) rather than verified (which ns-agnostic keying
+// would have silently done). audit-only — this classification only labels the
+// metric/log, it never affects authz.
 //
-// ⚠ Known limitation (audit-only; deferred to enforce; pinned by the
-// TestKSA_Verdict_NsCollision_* tests): because the key is the SA NAME, a
-// same-named SA in ANOTHER namespace is classified identically. For a relay
-// that means any same-named SA yields an unconditional `verified` regardless of
-// forwarded groups — so `verified` means "shaped like a known caller", NOT
-// "provably the trusted caller". The reliable signals are the NEGATIVE ones
-// (`unknown_workload` / `mismatch`); the enforce PR must pin full <ns>:<sa>.
+// The namespaces are canonical: threshold-govern is the fixed `monitoring`
+// CronJob; recipe-preview is co-located with tenant-api (its bare
+// `http://tenant-api:8080` upstream implies the same namespace, i.e. the
+// tenant-api namespace). A deployment that places recipe-preview in a
+// NON-canonical namespace will (correctly, fail-loud) audit as unknown_workload
+// until the caller's real <ns>:<sa> is injected — that config-injection is the
+// residual deferred to PR-1b-ii-b (Helm knows the release namespace when it
+// mounts the token) / the enforce PR. NOTE `verified` still isn't a blanket
+// safety guarantee: for synthetic it means "no out-of-set group" (does not
+// exclude replaying the expected, already-privileged group, nor an empty
+// claim); for relay the forwarded human groups are trusted, not compared.
 var machineIdentityAllowlist = map[string]machineIdentitySpec{
-	"threshold-govern": {kind: kindSynthetic, expectedGroups: []string{"threshold-governance"}},
-	"recipe-preview":   {kind: kindRelay},
-}
-
-// serviceAccountName extracts "<sa>" from a TokenReview username of the form
-// "system:serviceaccount:<ns>:<sa>". Returns "" for any other shape.
-func serviceAccountName(username string) string {
-	const prefix = "system:serviceaccount:"
-	if !strings.HasPrefix(username, prefix) {
-		return ""
-	}
-	rest := username[len(prefix):] // "<ns>:<sa>"
-	i := strings.LastIndex(rest, ":")
-	if i < 0 {
-		return ""
-	}
-	return rest[i+1:]
+	"system:serviceaccount:monitoring:threshold-govern": {kind: kindSynthetic, expectedGroups: []string{"threshold-governance"}},
+	"system:serviceaccount:tenant-api:recipe-preview":   {kind: kindRelay},
 }
 
 // auditWorkloadVerdict classifies a verified workload token against the
@@ -293,7 +283,7 @@ func serviceAccountName(username string) string {
 //     relay, the forwarded human groups are not compared, so verified is
 //     unconditional on groups. `verified` is therefore not a safety guarantee.
 func auditWorkloadVerdict(saUsername string, headerGroups []string) string {
-	spec, ok := machineIdentityAllowlist[serviceAccountName(saUsername)]
+	spec, ok := machineIdentityAllowlist[saUsername] // ns-precise: full system:serviceaccount:<ns>:<sa>
 	if !ok {
 		return ResultAuditUnknownWorkload
 	}
