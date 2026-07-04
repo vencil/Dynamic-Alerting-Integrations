@@ -6,8 +6,8 @@
 # MariaDBHighCPU/Critical in #944 (they always measured threads_running, never host
 # CPU%; "CPU" was a v1.0 demo-scaffold misnomer). They consume the
 # `tenant:alert_threshold:mysql_cpu` / `:mysql_cpu_critical` recording rules (the
-# threshold KEY stays `mysql_cpu` this release — routing/config stability — and
-# renames in the #944 key-PR). Covers, per severity:
+# threshold KEY stays `mysql_cpu` — config-contract stability; the metric + alert
+# are correctly named, #944 closed on that basis). Covers, per severity:
 #   - db-a: metadata present              → fires ENRICHED (branch A).
 #   - db-b: NO metadata (onboarding vacuum) → STILL fires BARE (branch B).
 #   - db-c: over threshold but maintenance  → suppressed.
