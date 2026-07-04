@@ -237,20 +237,19 @@ func (l *rateLimiter) allow(caller string, now time.Time) (bool, int) {
 //
 //  1. `X-Forwarded-Email` (set by oauth2-proxy after auth) —
 //     primary caller identity in production
-//  2. `X-Real-IP` — fallback for unauthenticated probes /
-//     pre-auth requests (rate limit by source IP if no identity)
+//  2. the true TCP peer address (`r.RemoteAddr`) — fallback for
+//     unauthenticated probes / pre-auth requests
 //  3. literal `_anonymous` — last resort, shouldn't happen in
 //     production but keeps the bucket key non-empty
 //
-// The fallback chain mirrors how `rbac.Middleware` keys identity
-// (config.go::Middleware) so the rate limiter and the RBAC layer
-// agree on who's calling.
+// ADR-027: the IP fallback deliberately uses the real peer, NOT the
+// client-supplied `X-Real-IP` / `X-Forwarded-For` headers — those are
+// forgeable and would let a caller evade or poison a rate-limit bucket.
+// middleware.RealIP is intentionally not mounted (see main.go) so
+// r.RemoteAddr is the true peer.
 func rateLimitCaller(r *http.Request) string {
 	if email := strings.TrimSpace(r.Header.Get("X-Forwarded-Email")); email != "" {
 		return email
-	}
-	if ip := strings.TrimSpace(r.Header.Get("X-Real-IP")); ip != "" {
-		return "ip:" + ip
 	}
 	if ra := strings.TrimSpace(r.RemoteAddr); ra != "" {
 		// RemoteAddr typically includes ":port" — strip it so

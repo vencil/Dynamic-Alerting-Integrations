@@ -63,6 +63,16 @@ type RBACConfig struct {
 // pre-PR-8 behavior.
 type Manager struct {
 	*configwatcher.Watcher[RBACConfig]
+
+	// failClosedOnEmpty (ADR-027 MED-8): when true, an empty group set
+	// (a mistyped or empty _rbac.yaml that parses to zero groups) DENIES
+	// all access instead of degrading to open-read. Set when a --rbac
+	// PATH was configured — a configured-but-empty policy is a
+	// misconfiguration and must fail closed, not silently grant read to
+	// every authenticated identity. A bare run with no --rbac path stays
+	// open-read (intentional no-RBAC, e.g. local/demo), and an operator
+	// can restore the legacy behavior with --rbac-empty-open.
+	failClosedOnEmpty bool
 }
 
 // NewManager creates a Manager and loads the RBAC config from path.
@@ -79,8 +89,16 @@ func NewManager(path string) (*Manager, error) {
 	if err != nil {
 		return nil, fmt.Errorf("rbac: initial load failed: %w", err)
 	}
-	return &Manager{Watcher: w}, nil
+	// MED-8: a configured --rbac path that parses to zero groups is a
+	// misconfiguration → fail closed. Path-less (open) mode keeps read.
+	return &Manager{Watcher: w, failClosedOnEmpty: path != ""}, nil
 }
+
+// AllowOpenReadOnEmpty restores the legacy open-read-on-empty behavior
+// even when a --rbac path is configured (the --rbac-empty-open escape
+// hatch). MED-8 fail-closed is the secure default; this exists only for
+// backward compatibility / rollback.
+func (m *Manager) AllowOpenReadOnEmpty() { m.failClosedOnEmpty = false }
 
 // NewForTest returns a Manager pre-populated with cfg and no file
 // path. WatchLoop and Reload become no-ops; only the embedded
@@ -108,6 +126,9 @@ func parseConfig(data []byte) (*RBACConfig, error) {
 func (m *Manager) HasPermission(idpGroups []string, tenantID string, want Permission) bool {
 	cfg := m.Get()
 	if len(cfg.Groups) == 0 {
+		if m.failClosedOnEmpty {
+			return false // MED-8: configured but empty _rbac.yaml → deny
+		}
 		// Open mode — authenticated users have read access only
 		return want == PermRead
 	}
@@ -140,6 +161,9 @@ func (m *Manager) HasPermission(idpGroups []string, tenantID string, want Permis
 func (m *Manager) HasMetadataAccess(idpGroups []string, tenantID, environment, domain string) bool {
 	cfg := m.Get()
 	if len(cfg.Groups) == 0 {
+		if m.failClosedOnEmpty {
+			return false // MED-8: configured but empty _rbac.yaml → deny
+		}
 		return true // open mode — no metadata restrictions
 	}
 

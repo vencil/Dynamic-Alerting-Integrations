@@ -62,6 +62,9 @@ func ListTenants(d *Deps) http.HandlerFunc {
 func filterTenantsByRBAC(tenants []TenantSummary, rbacMgr *rbac.Manager, idpGroups []string) []TenantSummary {
 	cfg := rbacMgr.Get()
 	if len(cfg.Groups) == 0 {
+		// Path-less open mode only. A configured-but-empty _rbac.yaml never
+		// reaches here: the PermRead route gate (main.go) fail-closes it with
+		// 403 before this filter runs (ADR-027 MED-8).
 		return tenants // open mode — no filtering
 	}
 

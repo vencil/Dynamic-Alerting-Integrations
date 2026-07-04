@@ -248,7 +248,9 @@ func TestRateLimit_DisabledWhenZero(t *testing.T) {
 
 func TestRateLimit_FallbackToIPWhenNoEmail(t *testing.T) {
 	t.Parallel()
-	// No X-Forwarded-Email → bucket by X-Real-IP.
+	// No X-Forwarded-Email → bucket by the true TCP peer (r.RemoteAddr).
+	// ADR-027: the spoofable X-Real-IP / X-Forwarded-For headers are NOT used
+	// for bucketing, so per-peer separation is driven by RemoteAddr.
 	cfg := RateLimitConfig{RequestsPerMinute: 1}
 	mw, _ := RateLimit(cfg, make(chan struct{}))
 	handler := mw(http.HandlerFunc(
@@ -257,7 +259,7 @@ func TestRateLimit_FallbackToIPWhenNoEmail(t *testing.T) {
 		}))
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/me", nil)
-	req.Header.Set("X-Real-IP", "10.0.0.1")
+	req.RemoteAddr = "10.0.0.1:5001"
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -265,16 +267,26 @@ func TestRateLimit_FallbackToIPWhenNoEmail(t *testing.T) {
 	}
 
 	req2 := httptest.NewRequest(http.MethodGet, "/api/v1/me", nil)
-	req2.Header.Set("X-Real-IP", "10.0.0.1")
+	req2.RemoteAddr = "10.0.0.1:5002" // same IP, different port → same bucket
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req2)
 	if rec.Code != http.StatusTooManyRequests {
 		t.Errorf("second IP request should be 429 (same IP, cap=1); got %d", rec.Code)
 	}
 
-	// Different IP → fresh bucket.
+	// A spoofed X-Real-IP must NOT create a fresh bucket — same peer IP.
+	req2b := httptest.NewRequest(http.MethodGet, "/api/v1/me", nil)
+	req2b.RemoteAddr = "10.0.0.1:5003"
+	req2b.Header.Set("X-Real-IP", "10.0.0.99") // ignored
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req2b)
+	if rec.Code != http.StatusTooManyRequests {
+		t.Errorf("spoofed X-Real-IP must not bypass the same-peer bucket; got %d", rec.Code)
+	}
+
+	// Different peer IP → fresh bucket.
 	req3 := httptest.NewRequest(http.MethodGet, "/api/v1/me", nil)
-	req3.Header.Set("X-Real-IP", "10.0.0.2")
+	req3.RemoteAddr = "10.0.0.2:5001"
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req3)
 	if rec.Code != http.StatusOK {
