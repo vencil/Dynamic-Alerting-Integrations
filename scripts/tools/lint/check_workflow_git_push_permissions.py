@@ -110,11 +110,13 @@ def _contents_permission(perm) -> Optional[str]:
 
 
 def scan_workflow(path: Path) -> List[str]:
-    """Return violation strings for every ungranted `git push` step in *path*."""
-    try:
-        doc = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except yaml.YAMLError as exc:
-        return [f"{path.name}: YAML parse failure: {exc}"]
+    """Return violation strings for every ungranted `git push` step in *path*.
+
+    Raises `yaml.YAMLError` if *path* fails to parse — a malformed workflow
+    file is a caller error, not a lint finding; `main()` catches it and maps
+    it to `EXIT_CALLER_ERROR`, distinct from a `--ci` violation (EXIT 1).
+    """
+    doc = yaml.safe_load(path.read_text(encoding="utf-8"))
     if not isinstance(doc, dict):
         return []
 
@@ -186,7 +188,11 @@ def main() -> int:
         print(f"ERROR: workflows dir not found: {workflows_dir}", file=sys.stderr)
         return EXIT_CALLER_ERROR
 
-    violations = scan_repo(workflows_dir)
+    try:
+        violations = scan_repo(workflows_dir)
+    except yaml.YAMLError as exc:
+        print(f"ERROR: YAML parse failure while scanning workflows: {exc}", file=sys.stderr)
+        return EXIT_CALLER_ERROR
 
     if violations:
         print("❌ git push permission guard: found ungranted `git push` step(s):")

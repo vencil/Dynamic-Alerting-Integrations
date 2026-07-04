@@ -11,6 +11,9 @@ import os
 import sys
 from pathlib import Path
 
+import pytest
+import yaml
+
 _TOOLS_DIR = os.path.join(
     os.path.dirname(__file__), "..", "..", "scripts", "tools", "lint"
 )
@@ -177,3 +180,36 @@ jobs:
           pre-commit run workflow-git-push-permission-check --all-files
 """)
         assert guard.scan_workflow(wf) == []
+
+
+class TestMalformedYamlIsCallerError:
+    """CodeRabbit-flagged gap (PR #989 review): a YAML parse failure is a
+    caller error (EXIT_CALLER_ERROR=2 per _lib_exitcodes.py and this module's
+    own docstring), not a lint finding. Folding it into `violations` made a
+    malformed workflow file silently exit 0 in non-`--ci` runs — the exact
+    silent-failure shape this whole hook exists to eliminate elsewhere.
+    """
+
+    def test_scan_workflow_raises_on_malformed_yaml(self, tmp_path):
+        wf = _write(tmp_path, "broken.yaml", "jobs: [this is not: valid: yaml")
+        with pytest.raises(yaml.YAMLError):
+            guard.scan_workflow(wf)
+
+    def test_main_exits_caller_error_with_ci_flag(self, tmp_path, monkeypatch):
+        _write(tmp_path, "broken.yaml", "jobs: [this is not: valid: yaml")
+        monkeypatch.setattr(
+            sys, "argv", ["check_workflow_git_push_permissions.py",
+                          "--workflows-dir", str(tmp_path), "--ci"]
+        )
+        assert guard.main() == guard.EXIT_CALLER_ERROR
+
+    def test_main_exits_caller_error_without_ci_flag(self, tmp_path, monkeypatch):
+        """The bug CodeRabbit caught: without --ci this used to return 0
+        (a malformed workflow silently looked clean on a plain, non-CI run).
+        """
+        _write(tmp_path, "broken.yaml", "jobs: [this is not: valid: yaml")
+        monkeypatch.setattr(
+            sys, "argv", ["check_workflow_git_push_permissions.py",
+                          "--workflows-dir", str(tmp_path)]  # no --ci
+        )
+        assert guard.main() == guard.EXIT_CALLER_ERROR
