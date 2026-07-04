@@ -1,7 +1,24 @@
 # validate.yaml — PR validation pipeline
 #
-# Runs on every PR that touches tenant configs, routing, rule packs,
-# or Python/Go source code. Catches issues before merge.
+# Runs on every PR. Catches issues before merge.
+#
+# The workflow itself triggers on EVERY pull_request to main (no top-level
+# `paths:` filter) — only individual jobs are gated, via the detect-changes
+# job's `validate_changed` output. Reason: all 5 job NAMES below (Python
+# Tests, Go Tests, Go Lint, Validate Tenant Config & Routes, Version
+# Consistency) are enrolled in main's branch protection
+# required_status_checks. A workflow suppressed entirely by a top-level
+# `paths:` filter reports NO status at all for a PR that doesn't touch those
+# paths, and GitHub treats a required check with no reported status as
+# permanently pending — blocking merge even when every check that DID run is
+# green. This is the exact same bug class docs-ci.yaml hit (see that
+# workflow's banner comment): a tenant-api-only PR pre-#216, then a
+# helm/**/docs/** PR surfaced by #972/GHSA-3g2h-rf85-5rrv, both "fixed" by
+# adding more paths to the filter list (see the filter's own comments below)
+# — which only delays the next PR shape that isn't on the list from hitting
+# the same wall. A job that runs and is skipped via its own `if:`, by
+# contrast, reports `skipped`, which satisfies the requirement. See
+# detect-changes below.
 #
 # Checks:
 #   1. Python tests (450+ tests)
@@ -16,40 +33,65 @@ name: Validate
 on:
   pull_request:
     branches: [main]
-    paths:
-      - "components/threshold-exporter/config/**"
-      - "components/threshold-exporter/app/**"
-      # tenant-api: branch-protection on `main` requires the four jobs
-      # in this workflow (Python Tests, Go Tests, Validate Tenant
-      # Config & Routes, Version Consistency). Pre-PR-216 the path
-      # filter excluded `components/tenant-api/**`, so any tenant-api-
-      # only PR couldn't satisfy the required-checks contract and
-      # merging fell back to admin override / artificial cross-touch
-      # in CHANGELOG. The included jobs don't actually exercise
-      # tenant-api code (Python tests + threshold-exporter Go tests
-      # + threshold-exporter config validation + version-bump check),
-      # but they're cheap to run and the symmetry with threshold-
-      # exporter PRs is the cleanest fix.
-      - "components/tenant-api/**"
-      - "rule-packs/**"
-      - "scripts/tools/**"
-      - "tests/**"
-      - ".github/custom-rule-policy.yaml"
-      - ".github/workflows/validate.yaml"
-      # helm/** and docs/** PRs (chart hardening, governance docs) hit the SAME
-      # required-checks-contract gap the tenant-api note above describes: main's
-      # branch protection requires this workflow's jobs, but the path filter
-      # excluded these trees, so a helm-only / docs-only PR could not satisfy the
-      # contract and fell back to admin override. Included for the same reason —
-      # the jobs are cheap and Version Consistency (bump_docs --check) is in fact
-      # relevant to docs changes. Surfaced by GHSA-3g2h-rf85-5rrv hardening (#972).
-      - "helm/**"
-      - "docs/**"
+
+# Explicit least-privilege grant (repo default is read-only; every sibling
+# workflow declares this block too). pull-requests:read is specifically for
+# detect-changes' dorny/paths-filter@v3 REST-API mode below.
+permissions:
+  contents: read
+  pull-requests: read
 
 jobs:
+  detect-changes:
+    name: Detect Validate Path Changes
+    runs-on: ubuntu-latest
+    outputs:
+      validate_changed: ${{ steps.filter.outputs.validate }}
+    steps:
+      # No actions/checkout here: dorny/paths-filter's default REST-API mode
+      # for pull_request events queries the changed-files list via the
+      # GitHub API and doesn't need a local clone (see its README's "For
+      # pull requests it's not necessary to checkout the code").
+      - name: Filter changed paths
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            validate:
+              - "components/threshold-exporter/config/**"
+              - "components/threshold-exporter/app/**"
+              # tenant-api: branch-protection on `main` requires the four jobs
+              # in this workflow (Python Tests, Go Tests, Validate Tenant
+              # Config & Routes, Version Consistency). Pre-PR-216 the path
+              # filter excluded `components/tenant-api/**`, so any tenant-api-
+              # only PR couldn't satisfy the required-checks contract and
+              # merging fell back to admin override / artificial cross-touch
+              # in CHANGELOG. The included jobs don't actually exercise
+              # tenant-api code (Python tests + threshold-exporter Go tests
+              # + threshold-exporter config validation + version-bump check),
+              # but they're cheap to run and the symmetry with threshold-
+              # exporter PRs is the cleanest fix.
+              - "components/tenant-api/**"
+              - "rule-packs/**"
+              - "scripts/tools/**"
+              - "tests/**"
+              - ".github/custom-rule-policy.yaml"
+              - ".github/workflows/validate.yaml"
+              # helm/** and docs/** PRs (chart hardening, governance docs) hit the SAME
+              # required-checks-contract gap the tenant-api note above describes: main's
+              # branch protection requires this workflow's jobs, but the path filter
+              # excluded these trees, so a helm-only / docs-only PR could not satisfy the
+              # contract and fell back to admin override. Included for the same reason —
+              # the jobs are cheap and Version Consistency (bump_docs --check) is in fact
+              # relevant to docs changes. Surfaced by GHSA-3g2h-rf85-5rrv hardening (#972).
+              - "helm/**"
+              - "docs/**"
+
   python-tests:
     name: Python Tests
     runs-on: ubuntu-latest
+    needs: detect-changes
+    if: needs.detect-changes.outputs.validate_changed == 'true'
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -69,6 +111,8 @@ jobs:
   go-tests:
     name: Go Tests
     runs-on: ubuntu-latest
+    needs: detect-changes
+    if: needs.detect-changes.outputs.validate_changed == 'true'
     defaults:
       run:
         working-directory: components/threshold-exporter/app
@@ -82,6 +126,8 @@ jobs:
   go-lint:
     name: Go Lint
     runs-on: ubuntu-latest
+    needs: detect-changes
+    if: needs.detect-changes.outputs.validate_changed == 'true'
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
@@ -114,6 +160,8 @@ jobs:
   validate-config:
     name: Validate Tenant Config & Routes
     runs-on: ubuntu-latest
+    needs: detect-changes
+    if: needs.detect-changes.outputs.validate_changed == 'true'
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -170,6 +218,8 @@ jobs:
   version-check:
     name: Version Consistency
     runs-on: ubuntu-latest
+    needs: detect-changes
+    if: needs.detect-changes.outputs.validate_changed == 'true'
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
