@@ -113,11 +113,46 @@ for res in validatingadmissionpolicies.admissionregistration.k8s.io \
   done
 done
 
+# Rule 2b — RBAC self-escalation (external adversarial review, #993): writes on
+# roles/rolebindings (namespaced) or clusterroles/clusterrolebindings (cluster-
+# scoped) let the operator grant itself anything (e.g. bind cluster-admin).
+for res in roles.rbac.authorization.k8s.io rolebindings.rbac.authorization.k8s.io; do
+  for verb in create update patch delete; do
+    assert_denied "$res in ${PLATFORM_NS}" "$verb" "$res" -n "$PLATFORM_NS"
+  done
+done
+for res in clusterroles.rbac.authorization.k8s.io clusterrolebindings.rbac.authorization.k8s.io; do
+  for verb in create update patch delete; do
+    assert_denied "$res" "$verb" "$res"
+  done
+done
+
 # Rule 3 — patch on the specific consuming Deployments (workload-ref redirect, #925).
 for dpl in $DEPLOYMENTS; do
   for verb in patch update; do
     assert_denied "deployment ${dpl} in ${PLATFORM_NS}" "$verb" "deployments.apps/${dpl}" -n "$PLATFORM_NS"
   done
+done
+
+# Rule 4a — pod / workload creation = ServiceAccount hijack (external adversarial
+# review, #993): creating a pod (directly or via any controller) with
+# serviceAccountName set to a consuming SA runs code as that SA, sidestepping the
+# operator-SA RBAC entirely.
+for res in pods deployments.apps statefulsets.apps daemonsets.apps replicasets.apps \
+           jobs.batch cronjobs.batch; do
+  assert_denied "create ${res} in ${PLATFORM_NS} (SA hijack)" create "$res" -n "$PLATFORM_NS"
+done
+
+# Rule 4b — runtime access into consuming pods bypasses config-object defenses
+# (external adversarial review, #993): exec/attach/portforward can dump tokens or
+# interfere with reload; ephemeralcontainers inject a debug container into a live pod.
+# NOTE: subresources go via --subresource=, not "pods/exec" — the slash form is
+# parsed as TYPE/NAME (a pod literally named "exec"), not the exec subresource.
+for sub in exec attach portforward; do
+  assert_denied "create pods/${sub} in ${PLATFORM_NS}" create pods --subresource="$sub" -n "$PLATFORM_NS"
+done
+for verb in update patch; do
+  assert_denied "${verb} pods/ephemeralcontainers in ${PLATFORM_NS}" "$verb" pods --subresource=ephemeralcontainers -n "$PLATFORM_NS"
 done
 
 echo

@@ -49,7 +49,7 @@ Part A 與 Part B 分屬每個框架都刻意拆開的兩個控制族：
 > 原生 RBAC 是**純加成**的——一個主體的有效權限＝所有綁定到它的 Role / ClusterRole 的 rule **聯集**，沒有任何「拒絕」語意（能表達 deny 的是 admission 層，如 ValidatingAdmissionPolicy / OPA / Kyverno，那是更重的 [#903](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/903) deferred 層）。
 > 所以本文說的「拒絕 operator 做 X」實際意義是：**確保沒有任何綁定到 operator 的 Role 授予 X**。基線由兩件事組成——(1) 一份**只授予必要讀取**的窄 Role（§2.2）；(2) 一支驗證有效權限**確實不含**危險 grant 的腳本（§2.3）。
 
-### 2.1 三類必須確保「未被授予」的寫入
+### 2.1 必須確保「未被授予」的寫入
 
 #### 第一條 — 跨租戶 ConfigMap 的 `create` / `update` / `delete` / `deletecollection`
 
@@ -73,9 +73,19 @@ operator 不得對消費跨租戶 ConfigMap 的 Deployment（`federation-gateway
 
 **堵的是 [#925](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/925) 的 workload-ref 重導向**：config-integrity ≠ effective-config-integrity。就算跨租戶 ConfigMap 一個 byte 都沒被動，只要能 `patch` Deployment 的 `spec.template.spec.volumes[].configMap.name`，就能讓消費端**改掛到攻擊者控制的 ConfigMap**，達到等價於竄改的效果，且完全繞過任何只盯著 ConfigMap 物件本身的偵測。
 
+#### 第四條 — 提權與旁路（外部對抗式 review 補強，#993）
+
+前三條堵的是「直接竄改設定物件」；但 operator 若在平台 namespace 握有下列權限，可**完全繞過**只盯 ConfigMap 的防禦：
+
+- **RBAC 自升級**：`roles` / `rolebindings`（namespaced）或 `clusterroles` / `clusterrolebindings`（叢集級）的 `create` / `update` / `patch` / `delete` → 直接幫自己綁上 cluster-admin（RBAC 有 escalate / bind 防護，但極易錯配）。
+- **ServiceAccount 劫持**：`create pods`（或任何會生 pod 的 controller——Deployment / Job / CronJob / StatefulSet / DaemonSet / ReplicaSet）並指定 `serviceAccountName: <消費端 SA>` → 以那個高權 SA 的身份讀寫，完全繞過針對 operator SA 的 RBAC。
+- **Runtime 旁路**：`pods/exec` / `pods/attach` / `pods/portforward`（verb `create`）、`pods/ephemeralcontainers`（`update` / `patch`）→ exec 進消費端 pod dump token 或干擾 reload，**一個 byte 的 ConfigMap 都不用改**。
+
+§2.3 的腳本一併驗證這些（Rule 2b / Rule 4）。**誠實邊界**：RBAC 能把這些 grant 拒掉、收窄立足點，但 exec / runtime 竄改本質屬 **runtime-security 域**（Falco / Tetragon 這類）——RBAC 不封死 runtime 行為；真要封需 §5 提到的 runtime enforcement 層。
+
 ### 2.2 建議的窄 operator Role（least-privilege 樣板）
 
-以下是一份**只讀** ConfigMap 的最小 Role；operator 若還需管理自己的 CRD / 資源，在**另一條** rule 追加，切勿把 configmaps / admissionregistration / 消費端 deployments 的寫入混進來。
+以下是一份**只讀** ConfigMap 的最小 Role；operator 若還需管理自己的 CRD / 資源，在**另一條** rule 追加，切勿把 configmaps / admissionregistration / RBAC / 消費端 deployments 的寫入，或 pod-create / exec 等提權旁路混進來。
 
 ```yaml
 # 建議基線：operator 對跨租戶 ConfigMap 只讀，不得寫。
@@ -100,6 +110,8 @@ rules:
   # ⛔ 刻意「不出現」在本 Role（也不得由其他綁定補上）：
   #   - configmaps 的 create / update / patch / delete / deletecollection（未 resourceName 縮限者）
   #   - admissionregistration.k8s.io/* 的任何寫入
+  #   - rbac.authorization.k8s.io 的 roles/rolebindings/clusterroles/clusterrolebindings 寫入（自綁提權）
+  #   - create pods（及 Deployment/Job 等會生 pod 的 controller）、pods/exec·attach·portforward、pods/ephemeralcontainers（SA 劫持 / runtime 旁路）
   #   - apps/deployments 對 federation-gateway / vector / tenant-api 的 patch / update
 ```
 
@@ -120,6 +132,8 @@ scripts/ops/verify_operator_rbac.sh \
 - 任一危險 grant 可執行（`can-i` 回 `yes`）→ 腳本印 `VIOLATION:` 並以 **exit 1** 收尾（可直接接 CI / 導入前檢查）。
 - 全部收斂 → exit 0。
 - **fail-closed**：若無法評估有效權限（叢集不可達／無 `--as` impersonation 權限）→ 明確 abort、exit 1，**不會誤報 PASS**。
+- **Helm 部署注意**：`--deployments` 預設是邏輯名；Helm 裝出來的 Deployment 多帶 release prefix（如 `my-release-vector`），copy-paste 前務必換成該叢集實際名稱，否則會驗到錯的對象。
+- 可當**週期性 compliance job**（如 nightly cron / 地端 GitLab CI）對目標叢集持續稽核，不只一次性 pre-flight。
 - 需要 `kubectl` 對目標叢集有讀取 RBAC 的權限；腳本本身不改動叢集（唯讀）。
 
 > **⚠️ 誠實邊界**：`kubectl auth can-i` 反映的是 **control-plane 的 RBAC 求值**。它抓得到 Role / Binding 授予的權限，但抓不到繞過 API server 的路徑（例如直接改 etcd、或有 node-level 存取）。那些不在 RBAC 的守備範圍，屬 Part B 稽核與更上游的叢集存取控制。
@@ -208,6 +222,7 @@ audit policy 定義「記什麼」，**「送到哪」是平台相依**的，且
 - **撤銷儲存**：[#924](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/924) 讓 federation token 撤銷儲存 tamper-evident（append-only + hashed）。
 - **workload-ref**：[#925](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/925)（defer-with-trigger）的重導向向量，本文 §2.1 第三條先以 RBAC 收斂 patch 權限作為便宜的第一道。
 - **重量級預防（deferred）**：VAP / OPA / Kyverno 的 admission-time 阻擋、與 GitOps self-heal，仍循 [#903](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/903) 的 activation triggers；本文兩層（RBAC 收斂 + off-cluster 稽核）是**趕在那些 trigger 前先落地的便宜基線**，且 Part A 是其餘一切預防所依賴的地基。
+- **Runtime enforcement（互補、非本文範圍）**：§2.1 第四條的 exec / SA-hijack 等 runtime 旁路，RBAC 只收窄立足點；要偵測／阻斷「已在 pod 內」的行為需 runtime security（Falco / Tetragon）。與本文 RBAC + off-cluster 稽核互補，屬 [#903](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/903) 走向 VAP/OPA + runtime 的後續層。
 
 ## 6. 相關文件 + issue
 

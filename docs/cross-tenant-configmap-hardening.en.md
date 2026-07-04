@@ -49,7 +49,7 @@ Part A and Part B fall into two control families that every framework deliberate
 > Native RBAC is **purely additive** — a subject's effective permissions are the **union** of all Role / ClusterRole rules bound to it, with no "deny" semantics (deny lives in the admission layer — ValidatingAdmissionPolicy / OPA / Kyverno — which is the heavier [#903](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/903) deferred layer).
 > So "deny the operator X" in this document really means: **ensure no Role bound to the operator grants X**. The baseline is two things — (1) a narrow Role that **grants only the necessary reads** (§2.2); (2) a script that verifies the effective permissions **do not** contain the dangerous grants (§2.3).
 
-### 2.1 The three writes that must remain "not granted"
+### 2.1 Writes that must remain "not granted"
 
 #### Rule one — `create` / `update` / `delete` / `deletecollection` on cross-tenant ConfigMaps
 
@@ -73,9 +73,19 @@ The operator must not hold `patch` / `update` on the Deployments that consume cr
 
 **This closes [#925](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/925)'s workload-ref redirect**: config-integrity ≠ effective-config-integrity. Even if not a single byte of the cross-tenant ConfigMap changes, the ability to `patch` a Deployment's `spec.template.spec.volumes[].configMap.name` lets the consumer be **remounted onto an attacker-controlled ConfigMap** — equivalent to tampering, and fully bypassing any detection that only watches the ConfigMap object itself.
 
+#### Rule four — escalation and bypass (external adversarial review, #993)
+
+The first three rules block "directly tampering the config object"; but if the operator holds any of the following in the platform namespace, it can **fully bypass** ConfigMap-only defenses:
+
+- **RBAC self-escalation**: `create` / `update` / `patch` / `delete` on `roles` / `rolebindings` (namespaced) or `clusterroles` / `clusterrolebindings` (cluster-scoped) → bind yourself cluster-admin directly (RBAC has escalate / bind protections, but they are easy to misconfigure).
+- **ServiceAccount hijack**: `create pods` (or any pod-spawning controller — Deployment / Job / CronJob / StatefulSet / DaemonSet / ReplicaSet) with `serviceAccountName: <consuming SA>` → act with that high-privilege SA's identity, sidestepping the operator-SA RBAC entirely.
+- **Runtime bypass**: `pods/exec` / `pods/attach` / `pods/portforward` (verb `create`), `pods/ephemeralcontainers` (`update` / `patch`) → exec into a consuming pod to dump tokens or interfere with reload, **without touching a single byte of the ConfigMap**.
+
+The §2.3 script verifies these too (Rule 2b / Rule 4). **Honest boundary**: RBAC can deny these grants and narrow the foothold, but exec / runtime tampering is fundamentally a **runtime-security** concern (Falco / Tetragon and the like) — RBAC does not seal runtime behavior; sealing it needs the runtime enforcement layer noted in §5.
+
 ### 2.2 Recommended narrow operator Role (least-privilege template)
 
-Below is a minimal Role that only **reads** ConfigMaps; if the operator also manages its own CRDs / resources, add those in a **separate** rule, and never mix configmaps / admissionregistration / consuming-deployment writes in.
+Below is a minimal Role that only **reads** ConfigMaps; if the operator also manages its own CRDs / resources, add those in a **separate** rule, and never mix configmaps / admissionregistration / RBAC / consuming-deployment writes, or pod-create / exec escalation bypasses, in.
 
 ```yaml
 # Recommended baseline: operator reads cross-tenant ConfigMaps, never writes.
@@ -100,6 +110,8 @@ rules:
   # ⛔ Deliberately absent from this Role (and must not be added by any other binding):
   #   - create / update / patch / delete / deletecollection on configmaps (unless resourceName-scoped)
   #   - any write on admissionregistration.k8s.io/*
+  #   - writes on rbac.authorization.k8s.io roles/rolebindings/clusterroles/clusterrolebindings (self-escalation)
+  #   - create pods (and pod-spawning controllers like Deployment/Job), pods/exec·attach·portforward, pods/ephemeralcontainers (SA hijack / runtime bypass)
   #   - patch / update on apps/deployments for federation-gateway / vector / tenant-api
 ```
 
@@ -120,6 +132,8 @@ scripts/ops/verify_operator_rbac.sh \
 - Any dangerous grant executable (`can-i` returns `yes`) → the script prints `VIOLATION:` and exits **1** (wire it straight into CI / pre-onboarding checks).
 - All narrowed → exit 0.
 - **Fail-closed**: if effective permissions can't be evaluated (cluster unreachable / no `--as` impersonation rights) → it aborts and exits 1, **never a false PASS**.
+- **Helm deployments**: `--deployments` defaults are logical names; Helm-installed Deployments usually carry a release prefix (e.g. `my-release-vector`) — replace them with the cluster's actual names before copy-pasting, or you'll verify the wrong objects.
+- Can run as a **periodic compliance job** (e.g. a nightly cron / on-prem GitLab CI) for continuous auditing, not just a one-off pre-flight.
 - Requires `kubectl` with read access to the target cluster's RBAC; the script itself makes no changes (read-only).
 
 > **⚠️ Honest boundary**: `kubectl auth can-i` reflects **control-plane RBAC evaluation**. It catches permissions granted by Roles / Bindings, but not paths that bypass the API server (e.g. direct etcd access, or node-level access). Those are out of RBAC's scope and belong to Part B audit and upstream cluster access control.
@@ -208,6 +222,7 @@ On managed platforms, express the same logic in that platform's log query langua
 - **Revocation store**: [#924](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/924) makes the federation token revocation store tamper-evident (append-only + hashed).
 - **workload-ref**: [#925](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/925) (defer-with-trigger) redirect vector — §2.1 rule three narrows the `patch` permission first as a cheap first line.
 - **Heavyweight prevention (deferred)**: admission-time blocking via VAP / OPA / Kyverno, and GitOps self-heal, still follow [#903](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/903)'s activation triggers; the two layers here (RBAC narrowing + off-cluster audit) are the **cheap baseline to land ahead of those triggers**, and Part A is the foundation everything else's prevention depends on.
+- **Runtime enforcement (complementary, out of scope here)**: §2.1 rule four's exec / SA-hijack runtime bypasses are only narrowed by RBAC; detecting/blocking behavior "already inside a pod" needs runtime security (Falco / Tetragon). Complements this doc's RBAC + off-cluster audit and belongs to [#903](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/903)'s path toward VAP/OPA + runtime.
 
 ## 6. Related docs + issues
 
