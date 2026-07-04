@@ -353,7 +353,7 @@ spec:
 
 <!-- ADR_INDEX_END -->
 
-ADR 完整檔案見 [`docs/adr/`](adr/)；EN mirror 位於每份 ADR 的 `.en.md` sibling（ZH 為 SSOT primary）。
+ADR 完整檔案見 [`docs/adr/`](adr/)；ZH 為 SSOT primary，部分 ADR 另附 `.en.md` sibling（ADR-019 起多為 ZH-only，依語言政策）。
 
 ---
 

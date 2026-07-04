@@ -49,7 +49,7 @@ updated_at: 2026-07-04
 
 **寫端**：`revoke()`（及任何改動 revoked set 的路徑）發一則結構化事件到 stdout，經既有 Vector→VictoriaLogs 落 append-only 日誌：
 
-```
+```json
 { "event": "federation_token_revoked", "token_id": "<opaque>", "expires_at": "<rfc3339>", "ts": "<rfc3339>" }
 ```
 
