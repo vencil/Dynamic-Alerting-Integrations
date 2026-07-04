@@ -67,16 +67,26 @@ fi
 
 fail=0
 
-# can_do <verb> <resource> [namespace-flag...] — echoes "yes"/"no" (never errors out).
+# can_do <verb> <resource> [namespace-flag...] — echoes "yes"/"no", or "" on a
+# probe error (kubectl transport/authz failure that prints neither answer).
 can_do() {
   local verb="$1" resource="$2"; shift 2
   kubectl auth can-i "$verb" "$resource" --as="$SA" "$@" 2>/dev/null || true
 }
 
 # assert_denied <label> <verb> <resource> [namespace-flag...]
+# Fail-closed per check: a probe that yields neither "yes" nor "no" is a
+# transport/authz error, not a "denied" — abort rather than silently pass it as
+# safe. (assert_denied runs in the main shell, so this exit terminates the run;
+# an exit inside can_do would only kill the $(...) subshell and be swallowed.)
 assert_denied() {
   local label="$1" verb="$2" resource="$3"; shift 3
-  if [ "$(can_do "$verb" "$resource" "$@")" = "yes" ]; then
+  local ans; ans="$(can_do "$verb" "$resource" "$@")"
+  if [ -z "$ans" ]; then
+    echo "error: could not evaluate '${verb} ${label}' for ${SA} (probe returned no yes/no) — aborting" >&2
+    exit 1
+  fi
+  if [ "$ans" = "yes" ]; then
     echo "VIOLATION: ${SA} CAN ${verb} ${label}"
     fail=1
   else
