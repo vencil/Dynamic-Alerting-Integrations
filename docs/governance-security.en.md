@@ -39,6 +39,8 @@ Date:   2026-02-20
     Default: 75% warning, 90% critical
 ```
 
+> **git audit vs runtime ConfigMap audit**: the git history above is the natural audit trail of the config *source*; but the assembled cross-tenant ConfigMap is a *runtime* artifact whose in-cluster tamper detection needs off-cluster kube-apiserver audit (tamper-evident-from-inside). The operator RBAC narrowing baseline + audit policy is in [Cross-Tenant ConfigMap Hardening](cross-tenant-configmap-hardening.en.md).
+
 ### Separation of Duties
 
 | Role | Responsibility Scope | Can Modify | Cannot Modify |
@@ -231,3 +233,4 @@ Default deny-all (Ingress + Egress) + per-component whitelist:
 | [Rule Lifecycle Governance (§7 cross-tier view)](./custom-rule-governance.en.md) | Born→aging→sick→retired governance + maturity limits (read before a migration evaluation) |
 | [GitOps Deployment](integration/gitops-deployment.en.md) | Deployment security, RBAC |
 | [Testing Playbook](./internal/testing-playbook.md) | SAST test execution |
+| [Cross-Tenant ConfigMap Hardening](./cross-tenant-configmap-hardening.en.md) | operator RBAC narrowing baseline + off-cluster audit (PCI Req 7/10 · SOC 2 CC6/CC7) |

@@ -300,3 +300,4 @@ SSE Hub broadcast is **at-most-once**: per-client buffer 16 (`internal/ws/hub.go
 - ADR-009: oauth2-proxy sidecar integration
 - Tests: `components/tenant-api/internal/handler/middleware_test.go` (15 cases, middleware bundle) + `authz_test.go` (14 cases, tenant-scoped authz)
 - v2.7.0: Tenant API basic — provided the RBAC framework that this hardening completes
+- **Cross-Tenant ConfigMap Hardening (cluster-plane, layered complement)**: this doc is tenant-api's **app-plane** hardening (`_rbac.yaml` API authz); the cluster-plane **operator RBAC narrowing + off-cluster audit** baseline is in [Cross-Tenant ConfigMap Hardening](../cross-tenant-configmap-hardening.en.md) (#926) — different RBAC layers, don't conflate
