@@ -6,7 +6,7 @@ version: v2.9.0
 lang: zh
 id: ADR-028
 tracking_kind: adr
-status: proposed
+status: accepted
 domain: tenant-api
 created_at: 2026-07-04
 updated_at: 2026-07-04
@@ -15,7 +15,7 @@ updated_at: 2026-07-04
 
 ## 狀態
 
-🟡 **Proposed**（2026-07-04）。owner 核可後昇格 Accepted。Refs [#924](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/924)（自 [#903](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/903) RFC 拆出），設計經兩輪外部 adversarial review（Gemini：架構收斂 + 實作邊角護欄）。
+✅ **Accepted**（2026-07-04）。owner ratify（設計 PR [#995](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/995) merged）+ MVP 實作落地（producer PR [#997](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/997)；reconciler + 告警本 PR）。Refs [#924](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/924)（自 [#903](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/903) RFC 拆出），設計經兩輪外部 adversarial review（Gemini：架構收斂 + 實作邊角護欄）+ CodeRabbit。實作階段三處 impl-time refinement 見 §Action Items。
 
 > 依語言政策，ADR 自 ADR-019 起不另製 `.en.md`。
 
@@ -112,12 +112,17 @@ updated_at: 2026-07-04
 - **變難 / 新增運維面**：多一支 reconciler CronJob（要顧它的 liveness）；VictoriaLogs 需保留期 ≥ token TTL + IR 窗（4h + ~72h « 預設 30d，確認即可）。
 - **要回訪**：defer 的密碼學層 / fail-closed 由上表 trigger 帶回，不主動預建。
 
-## Action Items（MVP 實作，ADR accepted 後）
+## Action Items（MVP 實作）
 
-1. [ ] `configmap_store.go`：`revoke()`（及 revoked-set mutation 路徑）發結構化 `federation_token_revoked` 事件（`token_id` + `expires_at` + `ts`，**不含租戶識別碼**）。
-2. [ ] **reconciler = Python 腳本掛 CronJob**（沿用 [#569](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/569) chargeback-aggregator 形狀：ConfigMap 掛載腳本 + pinned image + `concurrencyPolicy: Forbid`，reuse-over-build、**不新增 Go binary / release 線**）。**直讀 ConfigMap 的 `revoked.txt` key**（純 token_id 行、免 `store.json` schema、無 Go↔Python 雙寫漂移）× 查 VictoriaLogs 對帳 → gauge。唯讀 RBAC（`get` 單一 resourceName）、**絕不經 tenant-api API**。**邊角護欄（Gemini round-2）**：查詢窗只對「已穩定落盤」的 log（`[now-24h, now-1m]`，避 ingestion lag 誤判）；`now < expires_at` 加 **~2m clock-skew tolerance**（近到期即消失視為正常 prune、不誤報 critical，跨 API-server／VictoriaLogs／node 時鐘差）；`concurrencyPolicy: Forbid`（慢查詢跨排程週期不重疊跑、免重複告警）。
-3. [ ] 告警 `FederationRevocationTamperSuspected`（critical）+ `FederationRevocationReconcileStale`（verifier liveness）；promtool 行為契約測試。
-4. [ ] （便宜偵測）gateway 撤銷清單讀取失敗 → **counter** `federation_gateway_revocation_load_errors_total{reason="file_missing|parse_error"}` + 告警 `rate(...) > 0` **`for: 2m`**（濾掉 pod 啟動 / volume 重建瞬間的 I/O 抖動；持續才代表掛載真壞或遭 DoS，fail-open 觸發可見）。
-5. [ ] （D2 輔助）in-CM revoked-set digest key，明確標註「非主控」。
-6. [ ] runbook：對帳/鑑識程序（查 VictoriaLogs × store 反查租戶）＋ fail-open Risk Acceptance 條目。
-7. [ ] 另立 issue：gateway fail-closed 降級模式（defer-with-trigger）。
+> **實作落地 + impl-time refinements**：MVP 分兩段交付——**producer（[#997](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/997)）** + **reconciler + 告警（本 PR）**。三處偏離原設計，皆有依據：
+> - **reconciler 改長駐 Deployment + `/metrics`（非 CronJob）**：平台無 Pushgateway／textfile-collector／vmalert（親驗），短命 CronJob 無法被 scrape；exporter + `up` liveness 才 Prometheus-native。實作為 da-tools image 內的 `_federation_revocation_reconciler.py`（`_`-prefix、`BUILD_EXEMPT`＝baked 但非 dispatched CLI），Deployment 直接 invoke——仍 reuse da-tools、不新增 release 線。
+> - **live 集改「mount `revoked.txt`」直讀（非 API + RBAC）**：kubelet projection＝真·直讀，**免 RBAC**、比 API-read 更難被 compromise 的 tenant-api 欺騙（G3 更純）。
+> - **fail-open counter 由 reconciler 從 VictoriaLogs 查發（非 mtail）**：gateway 讀取失敗 warn 去 Envoy stderr，mtail 只 tail audit access-log 檔、看不到。
+
+1. [x] producer（[#997](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/997)）：`revoke()` 在**新增撤銷**時發 `federation_token_revoked`（opaque `token_id` + `expires_at`、**無租戶**、mutate() commit 後才發、idempotent 不重發、per-instance logger seam）。⚠️ **約束**：tenant-api 須跑 **log level ≤ Info**（事件 Info 級，Warn+ 會靜默過濾掉、令 tamper-evidence 失效）。
+2. [x] reconciler（見上 refinements）：pure `reconcile()` + **fail-closed**（查詢／讀取失敗增 error counter、**不刷 `last_reconcile_ts`**、絕不誤報 all-clear）+ clock-skew margin + settled 窗；`helm/federation-reconciler`（Deployment + SA〔免 RBAC／token〕 + NetworkPolicy〔egress VictoriaLogs〕 + CM-mount + scrape）。
+3. [x] 3 告警（`FederationRevocationTamperSuspected` crit／`…ReconcileStale` crit〔staleness `time()-ts>30m` **or** `absent()`〕／`FederationGatewayRevocationLoadFailure` warn）+ promtool 契約測試（7 案）。
+4. [x] fail-open 偵測：reconciler 暴露 `federation_gateway_revocation_load_errors` **gauge**（近 ~10m 窗、非 24h），告警 `> 0 for: 2m`。
+5. [ ] （D2 輔助）in-CM revoked-set digest——**defer**（明標非主控，小 follow-up）。
+6. [x] runbook：[`federation-revocation-reconciler-runbook.md`](../internal/federation-revocation-reconciler-runbook.md)。
+7. [x] 相鄰 fail-open issue 已開：[#996](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/996)（fail-closed 降級，defer-with-trigger）。

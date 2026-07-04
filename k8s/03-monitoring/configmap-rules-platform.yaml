@@ -665,6 +665,72 @@ data:
                 operational need, build leader-election — do NOT raise replicaCount.
                 Details: docs/api/tenant-api-hardening.md §5.7.
 
+          # --- Federation revocation tamper-evidence (ADR-028 D1 / #924) ---
+          # Metrics from the federation-reconciler Deployment's /metrics
+          # (helm/federation-reconciler). Behavioural contract:
+          # tests/rulepacks/platform-federation-revocation_test.yaml (an extracted
+          # copy of these three alerts — KEEP IN SYNC).
+          - alert: FederationRevocationTamperSuspected
+            expr: federation_revocation_tamper_suspected > 0
+            for: 5m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Federation token un-revoke suspected — reconciler found a revoked-but-live token absent from the live set (ADR-028)"
+              description: |
+                The revocation reconciler found {{ $value }} token(s) that the
+                off-store revocation log says are revoked and NOT yet expired, but
+                that are absent from the live revoked set (tenant-federation-store
+                revoked.txt). This is the ADR-028 un-revoke signal: a write-capable
+                actor (stolen tenant-api SA token / pod RCE) may have dropped a
+                revocation while carrying the legitimate SA identity, which the
+                identity-based controls (#926 audit) cannot see. ACTION: query
+                VictoriaLogs for `event:"federation_token_revoked"` for the opaque
+                token_id(s) (resolve the tenant from the store's records at IR time,
+                ADR-028 D3), diff against the live store, and if malicious restore
+                the revocation from git. Details:
+                docs/adr/028-federation-revocation-tamper-evidence.md.
+
+          - alert: FederationRevocationReconcileStale
+            expr: |
+              (time() - federation_revocation_last_reconcile_timestamp_seconds > 1800)
+              or absent(federation_revocation_last_reconcile_timestamp_seconds)
+            for: 10m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Federation revocation reconciler stale or down — un-revoke detection is not operational (ADR-028)"
+              description: |
+                The federation-reconciler has not SUCCESSFULLY reconciled in over 30
+                minutes, or its metrics are absent (pod down / never scraped). A
+                fail-closed pass (a VictoriaLogs query or revoked.txt read failed)
+                deliberately does NOT refresh the last-reconcile timestamp, so a
+                stuck reconciler surfaces here rather than as a false all-clear — but
+                while it is stale the un-revoke tamper-evidence is BLIND. ACTION:
+                check the reconciler Deployment (`kubectl -n monitoring get deploy
+                federation-reconciler`), its recent logs for fail-closed messages,
+                and VictoriaLogs reachability. Details:
+                docs/adr/028-federation-revocation-tamper-evidence.md.
+
+          - alert: FederationGatewayRevocationLoadFailure
+            expr: federation_gateway_revocation_load_errors > 0
+            for: 2m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Federation gateway cannot read the revoked-set — fail-open is allowing revoked tokens (ADR-028 §fail-open)"
+              description: |
+                The federation-gateway is failing to read the revoked-set
+                (revoked.txt) and is failing OPEN by design — revoked federation
+                tokens ARE being accepted until their TTL (≤4h). This is the ADR-028
+                named Risk Acceptance (a deliberate availability trade-off) made
+                visible; the fail-closed hardening is tracked in #996. ACTION: check
+                the gateway's revoked.txt projected-volume mount and the
+                tenant-federation-store ConfigMap; a persistent failure (vs a
+                pod-start / remount blip) may indicate mount tampering (a DoS of the
+                defence). Details:
+                docs/adr/028-federation-revocation-tamper-evidence.md.
+
           # --- Tenant-exporter liveness: catastrophic fallback (#869) ---
           # Per-tenant TenantExporterAbsent (rule-pack-liveness.yaml) anti-joins
           # tenant_expected_exporter (LHS) against up==1. If the WHOLE

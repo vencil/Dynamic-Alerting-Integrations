@@ -57,6 +57,11 @@ BUILD_EXEMPT = frozenset({
     # components/da-tools/app/build.sh near the dx/describe_tenant.py entry
     # for the full rationale.
     "describe_tenant.py",
+    # #924 / ADR-028 — long-running revocation-reconciler DAEMON, run as a
+    # Deployment via direct invoke (python3 …/_federation_revocation_reconciler.py),
+    # not a `da-tools <cmd>` operator CLI. Baked into the image but exempt from
+    # COMMAND_MAP; the `_` prefix marks it non-dispatched.
+    "_federation_revocation_reconciler.py",
 })
 
 

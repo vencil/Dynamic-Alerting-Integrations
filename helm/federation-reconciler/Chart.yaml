@@ -1,0 +1,18 @@
+apiVersion: v2
+name: federation-reconciler
+description: Federation revocation reconciler (ADR-028 D1, #924) — a long-running detective control that reconciles the off-store revocation event log (VictoriaLogs) against the live revoked set (the tenant-federation-store ConfigMap's revoked.txt, mounted read-only) and exposes tamper / staleness / gateway-fail-open metrics for alerting. Reuses the da-tools image; the script is baked in (scripts/tools/ops/_federation_revocation_reconciler.py). Not a CronJob: the platform has no Pushgateway, so an exporter with up-based liveness is the Prometheus-native shape.
+type: application
+# version: Helm Chart version (bump on chart/template change).
+# 0.1.0 — #924 / ADR-028: initial chart (Deployment + /metrics + revoked.txt mount + NetworkPolicy).
+version: 0.1.0
+# appVersion: the da-tools image the reconciler ships in.
+appVersion: "v2.9.0"
+keywords:
+  - dynamic-alerting
+  - federation
+  - revocation
+  - tamper-evidence
+  - observability
+home: https://github.com/vencil/Dynamic-Alerting-Integrations
+maintainers:
+  - name: vencil

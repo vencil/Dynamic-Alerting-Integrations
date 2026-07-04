@@ -1,0 +1,115 @@
+# promtool behavioural tests for the federation-revocation reconciler alerts
+# (ADR-028 D1 / #924). Contract:
+#   1-2) TamperSuspected fires on a sustained suspected un-revoke (>0 for 5m),
+#        never at 0.
+#   3-5) ReconcileStale fires when the reconciler stops SUCCEEDING — last_reconcile
+#        ts frozen (stuck/erroring) OR the metric absent (pod down) — and NOT while
+#        the ts tracks time() (healthy). Guards the "detection silently blind" gap:
+#        a fail-closed pass never refreshes the ts, so staleness surfaces it.
+#   6-7) GatewayRevocationLoadFailure fires on a sustained fail-open read error
+#        (>0 for 2m), never at 0 (the 2m debounce rides out pod-start / remount blips).
+# Run: promtool test rules tests/rulepacks/platform-federation-revocation_test.yaml
+rule_files:
+  - platform-federation-revocation.rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # 1) Suspected un-revoke sustained → FIRES after for:5m (not before).
+  - interval: 1m
+    name: tamper-fires-when-suspected
+    input_series:
+      - series: 'federation_revocation_tamper_suspected'
+        values: '1+0x9'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: FederationRevocationTamperSuspected
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: FederationRevocationTamperSuspected
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: "Federation token un-revoke suspected — reconciler found a revoked-but-live token absent from the live set (ADR-028)"
+
+  # 2) No tamper (0) → never fires.
+  - interval: 1m
+    name: tamper-clean-does-not-fire
+    input_series:
+      - series: 'federation_revocation_tamper_suspected'
+        values: '0+0x9'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: FederationRevocationTamperSuspected
+        exp_alerts: []
+
+  # 3) Reconciler healthy — last_reconcile ts tracks time() → NOT stale.
+  - interval: 1m
+    name: reconcile-fresh-not-stale
+    input_series:
+      - series: 'federation_revocation_last_reconcile_timestamp_seconds'
+        values: '0+60x40'          # value == eval seconds → time()-value == 0
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: FederationRevocationReconcileStale
+        exp_alerts: []
+
+  # 4) Reconciler stuck — ts frozen (no successful pass) → stale FIRES after for:10m.
+  - interval: 1m
+    name: reconcile-frozen-fires-stale
+    input_series:
+      - series: 'federation_revocation_last_reconcile_timestamp_seconds'
+        values: '60+0x60'          # frozen at 60; time()-60 crosses 1800 at ~31m
+    alert_rule_test:
+      - eval_time: 42m
+        alertname: FederationRevocationReconcileStale
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: "Federation revocation reconciler stale or down — un-revoke detection is not operational (ADR-028)"
+
+  # 5) Reconciler down — metric absent → stale FIRES via absent() after for:10m.
+  - interval: 1m
+    name: reconcile-absent-fires-stale
+    input_series:
+      - series: 'federation_revocation_tamper_suspected'   # unrelated, keeps the test populated
+        values: '0+0x15'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: FederationRevocationReconcileStale
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: "Federation revocation reconciler stale or down — un-revoke detection is not operational (ADR-028)"
+
+  # 6) Gateway fail-open sustained → FIRES after for:2m (not before).
+  - interval: 1m
+    name: gateway-failopen-fires
+    input_series:
+      - series: 'federation_gateway_revocation_load_errors'
+        values: '2+0x9'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: FederationGatewayRevocationLoadFailure
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: FederationGatewayRevocationLoadFailure
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "Federation gateway cannot read the revoked-set — fail-open is allowing revoked tokens (ADR-028 §fail-open)"
+
+  # 7) Gateway clean (0) → never fires (the debounce rides out transients).
+  - interval: 1m
+    name: gateway-clean-does-not-fire
+    input_series:
+      - series: 'federation_gateway_revocation_load_errors'
+        values: '0+0x9'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: FederationGatewayRevocationLoadFailure
+        exp_alerts: []

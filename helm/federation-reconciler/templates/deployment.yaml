@@ -1,0 +1,96 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "federation-reconciler.name" . }}
+  labels:
+    {{- include "federation-reconciler.labels" . | nindent 4 }}
+spec:
+  # Single replica: this is a detective reconciler, not an HA service. Downtime
+  # is caught by the `up` scrape and the staleness alert; a second replica would
+  # only double the identical read-only work.
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "federation-reconciler.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "federation-reconciler.labels" . | nindent 8 }}
+      annotations:
+        {{- with .Values.service.annotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        prometheus.io/port: {{ .Values.metricsPort | quote }}
+    spec:
+      serviceAccountName: {{ include "federation-reconciler.name" . }}
+      automountServiceAccountToken: false
+      securityContext:
+        # No runAsUser pin: the da-tools image already runs as its non-root
+        # `nonroot` user (uid 10001); pinning a different uid (e.g. 65532) would
+        # mismatch the image's file ownership. runAsNonRoot asserts non-root.
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: reconciler
+          image: {{ include "federation-reconciler.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - python3
+            - /opt/da-tools/_federation_revocation_reconciler.py
+            - --victorialogs-url
+            - {{ .Values.victorialogs.url | quote }}
+            - --revoked-file
+            - {{ printf "/etc/revoked/%s" .Values.store.revokedKey | quote }}
+            - --metrics-port
+            - {{ .Values.metricsPort | quote }}
+            - --interval
+            - {{ .Values.reconcile.intervalSeconds | quote }}
+            - --lookback
+            - {{ .Values.reconcile.lookbackSeconds | quote }}
+            - --settle
+            - {{ .Values.reconcile.settleSeconds | quote }}
+            - --skew-margin
+            - {{ .Values.reconcile.skewMarginSeconds | quote }}
+            - --failopen-lookback
+            - {{ .Values.reconcile.failopenLookbackSeconds | quote }}
+          ports:
+            - name: metrics
+              containerPort: {{ .Values.metricsPort }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            privileged: false
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /metrics
+              port: metrics
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /metrics
+              port: metrics
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          volumeMounts:
+            - name: revoked
+              mountPath: /etc/revoked
+              readOnly: true
+      volumes:
+        - name: revoked
+          configMap:
+            name: {{ .Values.store.configMapName }}
+            # optional:true — a fresh store has no revoked.txt key yet (the
+            # tenant-api creates it on the first revoke). A missing file is
+            # handled as a benign empty set by the reconciler (ADR-028 G-B); a
+            # genuinely down store/pod is caught by the `up` liveness instead.
+            optional: true
+            items:
+              - key: {{ .Values.store.revokedKey }}
+                path: {{ .Values.store.revokedKey }}

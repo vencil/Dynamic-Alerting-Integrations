@@ -1,0 +1,58 @@
+# federation-reconciler — ADR-028 D1 (#924) revocation tamper-evidence reconciler.
+
+# The da-tools image bakes the reconciler script (scripts/tools/ops/
+# _federation_revocation_reconciler.py) via build.sh. Pure stdlib — no extra deps.
+image:
+  repository: ghcr.io/vencil/da-tools
+  tag: "v2.9.0"
+  # Optional digest pin (supply-chain; #566 T5 / #902 convention). Empty = tag only.
+  # ⛔ Digest AUTHORITATIVE when set: `--set image.tag=…` alone won't upgrade.
+  digest: ""
+  pullPolicy: IfNotPresent
+
+# The tenant-federation-store ConfigMap (ADR-020) whose revoked.txt key is the
+# live revoked set. Mounted read-only — a kubelet projection is a DIRECT read of
+# the source of truth (NOT via the possibly-compromised tenant-api API), and
+# needs no RBAC (ADR-028 §MVP G3).
+store:
+  configMapName: tenant-federation-store
+  revokedKey: revoked.txt
+
+# VictoriaLogs endpoint the reconciler queries (matches helm/victorialogs).
+victorialogs:
+  url: "http://victorialogs.monitoring.svc.cluster.local:9428"
+
+reconcile:
+  intervalSeconds: 300      # reconcile cadence
+  lookbackSeconds: 86400    # revocation-event window [now-24h, now-settle]
+  settleSeconds: 60         # skip logs younger than this (ingestion lag)
+  skewMarginSeconds: 120    # ~2 min clock-skew tolerance at the TTL boundary
+  failopenLookbackSeconds: 600  # RECENT window for the gateway fail-open gauge
+
+metricsPort: 9099
+
+# Ship the platform's default scrape-annotation contract (federation-gateway parity).
+service:
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/path: /metrics
+
+resources:
+  requests:
+    cpu: 10m
+    memory: 32Mi
+  limits:
+    cpu: 100m
+    memory: 64Mi
+
+# NetworkPolicy: default-deny + only the egress the reconciler needs (DNS +
+# VictoriaLogs) and ingress from the monitoring namespace (Prometheus scrape).
+networkPolicy:
+  enabled: true
+  # Namespace label selector for the Prometheus that scrapes /metrics.
+  scrapeNamespaceLabel:
+    kubernetes.io/metadata.name: monitoring
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
