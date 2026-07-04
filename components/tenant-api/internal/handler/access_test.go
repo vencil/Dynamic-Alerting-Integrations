@@ -87,10 +87,12 @@ func TestCheckTenantAccess_Unauthorized(t *testing.T) {
 
 func TestCheckTenantAccess_OpenMode(t *testing.T) {
 	t.Parallel()
-	// Empty groups = open mode: any authenticated user has read. This is the
-	// case an /api/v1/me-based check gets WRONG (me returns accessible_tenants
-	// [] in open mode), which is why the probe reuses the read middleware.
-	rbacMgr := newRBACManager(t, "groups: []\n")
+	// Path-less open mode (no --rbac configured): any authenticated user has
+	// read. This is the case an /api/v1/me-based check gets WRONG (me returns
+	// accessible_tenants [] in open mode), which is why the probe reuses the
+	// read middleware. (ADR-027 MED-8: a *configured-but-empty* _rbac.yaml now
+	// fails closed instead — see TestCheckTenantAccess_ConfiguredEmptyFailsClosed.)
+	rbacMgr := newRBACManager(t, "") // path-less = open mode
 
 	req := httptest.NewRequest("GET", "/api/v1/tenants/db-a/access", nil)
 	req.Header.Set("X-Forwarded-Email", "test@example.com")
@@ -99,6 +101,23 @@ func TestCheckTenantAccess_OpenMode(t *testing.T) {
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("open-mode status = %d, want %d, body: %s", w.Code, http.StatusOK, w.Body.String())
+	}
+}
+
+// ADR-027 MED-8: a configured --rbac path that parses to zero groups is a
+// misconfiguration and must fail closed — the /access probe returns 403, not
+// the legacy open-read 200.
+func TestCheckTenantAccess_ConfiguredEmptyFailsClosed(t *testing.T) {
+	t.Parallel()
+	rbacMgr := newRBACManager(t, "groups: []\n") // configured but empty → deny
+
+	req := httptest.NewRequest("GET", "/api/v1/tenants/db-a/access", nil)
+	req.Header.Set("X-Forwarded-Email", "test@example.com")
+	w := httptest.NewRecorder()
+	accessRouter(rbacMgr).ServeHTTP(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("configured-empty status = %d, want %d (fail-closed), body: %s", w.Code, http.StatusForbidden, w.Body.String())
 	}
 }
 

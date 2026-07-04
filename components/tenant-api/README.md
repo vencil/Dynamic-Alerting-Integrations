@@ -38,10 +38,10 @@
 
 ## 架構速覽
 
-- **chi router** + 標準 middleware 鏈(RequestID / RealIP / Logger / Recoverer / Timeout)
+- **chi router** + 標準 middleware 鏈(RequestID / Logger / Recoverer / Timeout);**不用 `RealIP`**——它會用 client 送的 `X-Forwarded-For`/`X-Real-IP` 覆寫 `RemoteAddr`(可偽造),故保留真 TCP peer(ADR-027)
 - **`X-Request-ID` 回拋**:把 request id 寫回 response header,方便對應後端 log
 - **逐呼叫者限流**:sliding-window,預設 100 req/min/caller,可關閉
-- **RBAC**:`_rbac.yaml` 定義 group → tenant → permission,熱重載(預設 30s);缺檔則進入 open-read 模式
+- **RBAC**:`_rbac.yaml` 定義 group → tenant → permission,熱重載(預設 30s)。**未設 `--rbac`** 進入 open-read 模式(啟動 WARN);**設了 `--rbac` 但檔案零 group**(打錯字/空檔)→ **fail-closed 拒絕存取**(ADR-027 MED-8),`--rbac-empty-open` 為 rollback 逃生
 - **逐租戶授權**:群組 / view / batch / PR 列表 / task 結果的每個成員都再過一次 per-tenant RBAC
 - **GitOps Writer**:schema 驗證 → 寫 YAML → `git commit`(operator email 當 author,service account 當 committer)
 - **衝突偵測**:寫入後比對 commit 的 parent 與寫入前的 HEAD;若期間被外部 commit 移動 → 回 409

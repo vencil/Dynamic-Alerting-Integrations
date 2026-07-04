@@ -93,6 +93,8 @@ func main() {
 		"Git repository root for commit-on-write (defaults to config-dir)")
 	rbacPath := flag.String("rbac", envOrDefault("TA_RBAC_PATH", ""),
 		"Path to _rbac.yaml (leave empty for open-read mode)")
+	rbacEmptyOpen := flag.Bool("rbac-empty-open", envBool("TA_RBAC_EMPTY_OPEN"),
+		"MED-8 escape hatch: allow open-read when a --rbac path parses to zero groups (default false = fail closed)")
 	listenAddr := flag.String("addr", envOrDefault("TA_ADDR", ":8080"),
 		"HTTP listen address")
 	reloadInterval := flag.Duration("reload-interval", 30*time.Second,
@@ -214,6 +216,15 @@ func main() {
 	if err != nil {
 		log.Fatalf("FATAL: rbac init: %v", err)
 	}
+	// MED-8: a configured --rbac path fails closed on an empty policy by
+	// default. --rbac-empty-open restores the legacy open-read behavior.
+	if *rbacEmptyOpen {
+		rbacMgr.AllowOpenReadOnEmpty()
+		log.Printf("WARN: --rbac-empty-open set: an empty _rbac.yaml grants open read to all authenticated identities (MED-8 fail-closed disabled)")
+	}
+	if *rbacPath == "" {
+		log.Printf("WARN: no --rbac path configured: running in open-read mode (all authenticated identities have read access)")
+	}
 
 	// v2.6.0: WebSocket/SSE hub for real-time config change notifications.
 	// #143: per-client liveness (heartbeat + per-write deadline) from TA_SSE_* env.
@@ -315,7 +326,14 @@ func main() {
 			"store_configmap", *federationStore, "store_namespace", federationNS,
 			"account_registry", account.RegistryFileName)
 		if len(rbacMgr.Get().Groups) == 0 {
-			slog.Warn("federation endpoint enabled but RBAC is in open mode — every token issuance will be denied (admin permission required); supply --rbac")
+			if rbacMgr.FailClosedOnEmpty() {
+				// MED-8: a configured --rbac path resolved to zero groups → ALL
+				// access is denied (not just federation); "supply --rbac" would
+				// be wrong advice since a path is already set.
+				slog.Warn("federation endpoint enabled but RBAC fails closed on an empty configured policy — ALL access is denied; fix the _rbac.yaml referenced by --rbac")
+			} else {
+				slog.Warn("federation endpoint enabled but RBAC is in open mode — every token issuance will be denied (admin permission required); supply --rbac")
+			}
 		}
 	}
 
@@ -368,7 +386,13 @@ func main() {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(handler.RequestIDResponse) // v2.8.0 B-6 PR-1: echo X-Request-ID
-	r.Use(middleware.RealIP)
+	// ADR-027: middleware.RealIP is deliberately NOT used. It unconditionally
+	// overwrites r.RemoteAddr from the client-supplied X-Forwarded-For /
+	// X-Real-IP headers, so anything keyed on RemoteAddr (rate limiting,
+	// audit logs) would be forgeable by any caller. tenant-api sits behind a
+	// same-pod oauth2-proxy (localhost) and a network 8080 port with no
+	// trusted L7 proxy in front, so there is no legitimate reason to trust
+	// those headers for the peer address; keep the true TCP peer.
 	r.Use(handler.SlogRequestLogger) // PR-10/11: structured JSON request log w/ request_id
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Timeout(30 * time.Second))
