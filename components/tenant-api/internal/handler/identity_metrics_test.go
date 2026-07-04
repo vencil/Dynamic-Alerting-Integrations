@@ -31,7 +31,9 @@ func TestIdentityAuditRecorder_IncAndExposition(t *testing.T) {
 		`tenant_api_identity_audit_total{result="verified"} 2`,
 		`tenant_api_identity_audit_total{result="verify_failed"} 1`,
 		`tenant_api_identity_audit_total{result="no_token"} 1`,
-		`tenant_api_identity_audit_total{result="unknown_issuer"} 0`, // always emitted
+		`tenant_api_identity_audit_total{result="unknown_issuer"} 0`,   // always emitted
+		`tenant_api_identity_audit_total{result="mismatch"} 0`,         // PR-1b-ii series, always emitted
+		`tenant_api_identity_audit_total{result="unknown_workload"} 0`, // PR-1b-ii series, always emitted
 		`# TYPE tenant_api_identity_audit_total counter`,
 	} {
 		if !strings.Contains(body, want) {
@@ -52,13 +54,13 @@ func TestIdentityAuditMetrics_Snapshot(t *testing.T) {
 	if snap[rbac.ResultAuditVerified] != 2 {
 		t.Errorf("snapshot[verified] = %d, want 2", snap[rbac.ResultAuditVerified])
 	}
-	// All four keys present even when zero.
-	if len(snap) != 4 {
-		t.Errorf("snapshot has %d keys, want 4", len(snap))
+	// Every known result key is present even when zero (stable metric shape).
+	if len(snap) != len(identityAuditResults) {
+		t.Errorf("snapshot has %d keys, want %d (one per identityAuditResults)", len(snap), len(identityAuditResults))
 	}
 }
 
-// With no auditor ever installed, the four series still render at 0 (stable
+// With no auditor ever installed, all series still render at 0 (stable
 // shape regardless of the feature flag). This runs serial and resets the
 // pointer to nil to model the disabled default.
 func TestIdentityAuditMetrics_DisabledRendersZero(t *testing.T) {

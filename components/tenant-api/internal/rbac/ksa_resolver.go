@@ -151,14 +151,22 @@ func (k *KSAResolver) Observe(r *http.Request, header *VerifiedPrincipal) {
 	}
 
 	sa := res.Status.User.Username // system:serviceaccount:<ns>:<sa>
-	k.record(ResultAuditVerified)
-	k.log().Info("machine-identity audit",
-		"result", ResultAuditVerified,
-		"workload", sa,
-		"header_subject", headerSubject(header),
-		"header_groups", headerGroups(header))
-	// NOTE: mapping the ServiceAccount to an expected identity/group set (the
-	// mismatch verdict) is PR-1b-ii. Here we only record the raw workload id.
+	// PR-1b-ii: classify the verified workload against the machine-identity
+	// allowlist. A synthetic caller (fixed injected identity, e.g. threshold-govern)
+	// whose header groups exceed its expected set is a mismatch (privesc signal); a
+	// relay (e.g. recipe-preview) forwards a human's identity so groups vary and no
+	// fixed comparison applies; an unlisted SA is unknown_workload. Still audit-only:
+	// the verdict only labels the metric/log, never affects authz.
+	hg := headerGroups(header)
+	result := auditWorkloadVerdict(sa, hg)
+	k.record(result)
+	logArgs := []any{"result", result, "workload", sa,
+		"header_subject", headerSubject(header), "header_groups", hg}
+	if result == ResultAuditVerified {
+		k.log().Info("machine-identity audit", logArgs...)
+	} else {
+		k.log().Warn("machine-identity audit: workload identity mismatch", logArgs...)
+	}
 }
 
 // record increments the audit metric, tolerating a nil sink (defensive; prod
@@ -212,6 +220,83 @@ func unverifiedIssuer(token string) string {
 		return ""
 	}
 	return claims.Iss
+}
+
+// ── Machine-identity classification (PR-1b-ii, audit-only) ───────────────────
+
+// machineIdentityKind classifies how a verified workload's ServiceAccount is
+// allowed to present a header identity.
+type machineIdentityKind int
+
+const (
+	// kindSynthetic: the caller synthesizes a FIXED identity (e.g. threshold-govern
+	// injects --identity-groups threshold-governance). The SA token proves the
+	// workload; its header groups MUST stay within the SA's expected set — any
+	// extra group is a mismatch (someone holding this SA token but claiming more).
+	kindSynthetic machineIdentityKind = iota
+	// kindRelay: the caller forwards a HUMAN's identity (e.g. recipe-preview
+	// forwards the end-user's X-Forwarded-*). The SA token proves it is the
+	// trusted relay; the header groups are the user's (legitimately variable), so
+	// no fixed-group comparison applies.
+	kindRelay
+)
+
+type machineIdentitySpec struct {
+	kind           machineIdentityKind
+	expectedGroups []string // kindSynthetic only
+}
+
+// machineIdentityAllowlist maps a caller's FULL TokenReview username
+// (system:serviceaccount:<ns>:<sa>) to how its verified token may present
+// identity. Keyed on the full username (NAMESPACE-PRECISE): a same-named SA in
+// another namespace does NOT match, so a spoofed same-name SA lands as
+// unknown_workload (fail-loud) rather than verified (which ns-agnostic keying
+// would have silently done). audit-only — this classification only labels the
+// metric/log, it never affects authz.
+//
+// The namespaces are canonical: threshold-govern is the fixed `monitoring`
+// CronJob; recipe-preview is co-located with tenant-api (its bare
+// `http://tenant-api:8080` upstream implies the same namespace, i.e. the
+// tenant-api namespace). A deployment that places recipe-preview in a
+// NON-canonical namespace will (correctly, fail-loud) audit as unknown_workload
+// until the caller's real <ns>:<sa> is injected — that config-injection is the
+// residual deferred to PR-1b-ii-b (Helm knows the release namespace when it
+// mounts the token) / the enforce PR. NOTE `verified` still isn't a blanket
+// safety guarantee: for synthetic it means "no out-of-set group" (does not
+// exclude replaying the expected, already-privileged group, nor an empty
+// claim); for relay the forwarded human groups are trusted, not compared.
+var machineIdentityAllowlist = map[string]machineIdentitySpec{
+	"system:serviceaccount:monitoring:threshold-govern": {kind: kindSynthetic, expectedGroups: []string{"threshold-governance"}},
+	"system:serviceaccount:tenant-api:recipe-preview":   {kind: kindRelay},
+}
+
+// auditWorkloadVerdict classifies a verified workload token against the
+// allowlist, returning the audit result label:
+//   - unknown_workload: SA not in the allowlist — the strongest positive signal
+//     (a verified token from a caller we don't recognize, e.g. a default-SA
+//     token that happens to be audience-bound).
+//   - mismatch: a synthetic caller presenting a group OUTSIDE its expected set
+//     (lateral escalation). It does NOT flag a caller replaying the SA token to
+//     claim EXACTLY its expected (already-privileged) group, nor an empty group
+//     set — both are vacuously `verified`.
+//   - verified: allowlisted and, for synthetic, no out-of-set group; for a
+//     relay, the forwarded human groups are not compared, so verified is
+//     unconditional on groups. `verified` is therefore not a safety guarantee.
+func auditWorkloadVerdict(saUsername string, headerGroups []string) string {
+	spec, ok := machineIdentityAllowlist[saUsername] // ns-precise: full system:serviceaccount:<ns>:<sa>
+	if !ok {
+		return ResultAuditUnknownWorkload
+	}
+	if spec.kind == kindRelay {
+		return ResultAuditVerified // relay forwards a human identity; groups vary legitimately
+	}
+	// kindSynthetic: every presented group must be within the expected set.
+	for _, g := range headerGroups {
+		if !containsString(spec.expectedGroups, g) {
+			return ResultAuditMismatch
+		}
+	}
+	return ResultAuditVerified
 }
 
 // containsString reports whether s is in list.

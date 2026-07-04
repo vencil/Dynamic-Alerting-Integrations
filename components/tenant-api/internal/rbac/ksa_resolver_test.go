@@ -347,3 +347,113 @@ func TestUnverifiedIssuer(t *testing.T) {
 		}
 	}
 }
+
+// ── PR-1b-ii: workload identity classification (synthetic / relay / unknown) ──
+
+// A synthetic caller (threshold-govern) presenting exactly its expected group → verified.
+func TestKSA_Verdict_SyntheticInExpectedSet(t *testing.T) {
+	t.Parallel()
+	r, rec := newResolver(t, intersectingReactor(
+		"system:serviceaccount:monitoring:threshold-govern", []string{testAudience}), nil)
+	r.Observe(reqWithBearer(makeJWT("iss")), &VerifiedPrincipal{Groups: []string{"threshold-governance"}})
+	if rec.get(ResultAuditVerified) != 1 {
+		t.Errorf("verified = %d, want 1 (synthetic caller within expected set; counts=%v)", rec.get(ResultAuditVerified), rec.counts)
+	}
+}
+
+// A synthetic caller presenting a group OUTSIDE its expected set → mismatch:
+// someone wielding the threshold-govern SA token to claim more than its
+// synthesized identity allows (a privilege-escalation signal).
+func TestKSA_Verdict_SyntheticOutOfSet_Mismatch(t *testing.T) {
+	t.Parallel()
+	r, rec := newResolver(t, intersectingReactor(
+		"system:serviceaccount:monitoring:threshold-govern", []string{testAudience}), nil)
+	r.Observe(reqWithBearer(makeJWT("iss")),
+		&VerifiedPrincipal{Groups: []string{"threshold-governance", "platform-admins"}})
+	if rec.get(ResultAuditMismatch) != 1 {
+		t.Errorf("mismatch = %d, want 1 (out-of-set group; counts=%v)", rec.get(ResultAuditMismatch), rec.counts)
+	}
+	if rec.get(ResultAuditVerified) != 0 {
+		t.Errorf("verified = %d, want 0 (an out-of-set synthetic claim must not verify)", rec.get(ResultAuditVerified))
+	}
+}
+
+// A relay caller (recipe-preview) forwards a human's identity → verified for ANY
+// forwarded groups (a relay legitimately carries whatever the user has; no
+// fixed-group comparison applies).
+func TestKSA_Verdict_Relay_AnyGroups(t *testing.T) {
+	t.Parallel()
+	r, rec := newResolver(t, intersectingReactor(
+		"system:serviceaccount:tenant-api:recipe-preview", []string{testAudience}), nil)
+	r.Observe(reqWithBearer(makeJWT("iss")),
+		&VerifiedPrincipal{Groups: []string{"db-a-operators", "arbitrary-user-team"}})
+	if rec.get(ResultAuditVerified) != 1 {
+		t.Errorf("verified = %d, want 1 (relay forwards human groups; counts=%v)", rec.get(ResultAuditVerified), rec.counts)
+	}
+	if rec.get(ResultAuditMismatch) != 0 {
+		t.Errorf("mismatch = %d, want 0 (a relay's forwarded groups must not be flagged)", rec.get(ResultAuditMismatch))
+	}
+}
+
+// A verified token whose ServiceAccount is not in the allowlist → unknown_workload.
+func TestKSA_Verdict_UnlistedSA_UnknownWorkload(t *testing.T) {
+	t.Parallel()
+	r, rec := newResolver(t, intersectingReactor(
+		"system:serviceaccount:default:some-other-pod", []string{testAudience}), nil)
+	r.Observe(reqWithBearer(makeJWT("iss")), &VerifiedPrincipal{Groups: []string{"whatever"}})
+	if rec.get(ResultAuditUnknownWorkload) != 1 {
+		t.Errorf("unknown_workload = %d, want 1 (SA not allowlisted; counts=%v)", rec.get(ResultAuditUnknownWorkload), rec.counts)
+	}
+	if rec.get(ResultAuditVerified) != 0 {
+		t.Errorf("verified = %d, want 0 (an unlisted SA must not verify)", rec.get(ResultAuditVerified))
+	}
+}
+
+// ── PR-1b-ii namespace-precise allowlist: ns-collision is closed ─────────────
+// The allowlist is keyed on the FULL system:serviceaccount:<ns>:<sa>, so a
+// same-named SA in another namespace does NOT match. These assert that a
+// spoofed same-name SA audits as unknown_workload (fail-loud), never verified.
+
+// A same-named synthetic SA in a DIFFERENT namespace does NOT match → unknown_workload.
+func TestKSA_Verdict_NsCollision_Synthetic(t *testing.T) {
+	t.Parallel()
+	r, rec := newResolver(t, intersectingReactor(
+		"system:serviceaccount:evil-ns:threshold-govern", []string{testAudience}), nil)
+	r.Observe(reqWithBearer(makeJWT("iss")), &VerifiedPrincipal{Groups: []string{"threshold-governance"}})
+	if rec.get(ResultAuditUnknownWorkload) != 1 {
+		t.Errorf("unknown_workload = %d, want 1 (ns-precise: same-named SA in another ns must not match; counts=%v)", rec.get(ResultAuditUnknownWorkload), rec.counts)
+	}
+	if rec.get(ResultAuditVerified) != 0 {
+		t.Errorf("verified = %d, want 0 (a spoofed same-name SA must not verify)", rec.get(ResultAuditVerified))
+	}
+}
+
+// A same-named RELAY SA in another namespace also fails ns-precise matching →
+// unknown_workload. This closes the sharpest edge a name-only key would leave
+// open (a spoofed relay that would otherwise be an unconditional `verified`).
+func TestKSA_Verdict_NsCollision_Relay(t *testing.T) {
+	t.Parallel()
+	r, rec := newResolver(t, intersectingReactor(
+		"system:serviceaccount:evil-ns:recipe-preview", []string{testAudience}), nil)
+	r.Observe(reqWithBearer(makeJWT("iss")),
+		&VerifiedPrincipal{Groups: []string{"platform-admins", "db-b-operators"}})
+	if rec.get(ResultAuditUnknownWorkload) != 1 {
+		t.Errorf("unknown_workload = %d, want 1 (ns-precise: spoofed relay in another ns must not match; counts=%v)", rec.get(ResultAuditUnknownWorkload), rec.counts)
+	}
+	if rec.get(ResultAuditVerified) != 0 {
+		t.Errorf("verified = %d, want 0 (a spoofed relay must not be unconditionally verified)", rec.get(ResultAuditVerified))
+	}
+}
+
+// A synthetic caller presenting NO groups → verified vacuously (no out-of-set
+// group). Explicit so the empty-groups path is a designed, tested outcome
+// rather than only incidentally exercised by TestKSA_Verified (nil header).
+func TestKSA_Verdict_Synthetic_EmptyGroups_Vacuous(t *testing.T) {
+	t.Parallel()
+	r, rec := newResolver(t, intersectingReactor(
+		"system:serviceaccount:monitoring:threshold-govern", []string{testAudience}), nil)
+	r.Observe(reqWithBearer(makeJWT("iss")), &VerifiedPrincipal{Groups: nil})
+	if rec.get(ResultAuditVerified) != 1 {
+		t.Errorf("verified = %d, want 1 (empty groups → vacuous verified, audit-only; counts=%v)", rec.get(ResultAuditVerified), rec.counts)
+	}
+}

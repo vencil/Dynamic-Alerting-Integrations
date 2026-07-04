@@ -30,6 +30,8 @@ var identityAuditResults = []string{
 	rbac.ResultAuditUnknownIssuer,
 	rbac.ResultAuditVerifyFailed,
 	rbac.ResultAuditVerified,
+	rbac.ResultAuditMismatch,
+	rbac.ResultAuditUnknownWorkload,
 }
 
 // IdentityAuditMetrics holds the per-result counters for the machine-identity
@@ -37,7 +39,7 @@ var identityAuditResults = []string{
 // audit (which runs on request goroutines) is lock-free.
 type IdentityAuditMetrics struct {
 	// counters is a fixed-size parallel array to identityAuditResults.
-	counters [4]atomic.Int64
+	counters [6]atomic.Int64
 }
 
 // Inc implements rbac.IdentityAuditRecorder. An unrecognized result label is
@@ -82,7 +84,7 @@ func NewIdentityAuditRecorder() rbac.IdentityAuditRecorder {
 
 // writeIdentityAuditMetrics renders the tenant_api_identity_audit_total counter
 // family in Prometheus exposition format. When no auditor is installed (audit
-// disabled — the default), all four series are still emitted at 0 so the
+// disabled — the default), all series are still emitted at 0 so the
 // metric's presence is stable regardless of the feature flag.
 func writeIdentityAuditMetrics(w io.Writer) {
 	var snap map[string]int64
