@@ -74,6 +74,9 @@ TOOL_FILES=(
     ops/cutover_tenant.py
     ops/blind_spot_discovery.py
     ops/maintenance_scheduler.py
+    # #924 / ADR-028 — revocation-reconciler daemon (runs as a Deployment via
+    # direct invoke; exempt from COMMAND_MAP, see _lint_helpers.BUILD_EXEMPT).
+    ops/_federation_revocation_reconciler.py
     ops/alert_quality.py
     ops/alert_correlate.py
     # Config generation tools

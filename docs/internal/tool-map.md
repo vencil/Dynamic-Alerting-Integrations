@@ -15,6 +15,7 @@ lang: zh
 
 | 工具 | 用途 |
 |------|------|
+| `_federation_revocation_reconciler.py` | Federation revocation reconciler — ADR-028 D1 detective control (#924). |
 | `_grar_merge.py` | Routing-config merging + tenant substitution + receiver building. |
 | `_grar_parse.py` | Configuration loading + parsing for generate_alertmanager_routes. |
 | `_grar_render.py` | Output rendering + Alertmanager ConfigMap operations. |

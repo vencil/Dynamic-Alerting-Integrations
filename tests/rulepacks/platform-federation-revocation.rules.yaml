@@ -1,0 +1,51 @@
+# Bare-rules promtool target for the federation-revocation reconciler alerts
+# (ADR-028 D1 / #924). promtool needs a top-level `groups:` document, not the
+# deployed `data: platform-alert.yml: |` ConfigMap, so this is an EXTRACTED COPY
+# of the three alerts from k8s/03-monitoring/configmap-rules-platform.yaml.
+#
+# ⚠️ KEEP IN SYNC with that ConfigMap (expr + for + labels + summary). The
+# behavioural contract is exercised by platform-federation-revocation_test.yaml.
+#
+# Metric source: the federation-reconciler Deployment's /metrics (a da-tools
+# subcommand). Names match _federation_revocation_reconciler.py's Metrics.render().
+groups:
+  - name: platform-federation-revocation
+    rules:
+      # An un-revoke was detected: a token the log says is revoked-and-live is
+      # absent from the live set. Critical — a revoked federation token may be
+      # accepted until its TTL. `for: 5m` rides out one reconcile interval so a
+      # single transient mismatch (mount sync vs log) does not page.
+      - alert: FederationRevocationTamperSuspected
+        expr: federation_revocation_tamper_suspected > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Federation token un-revoke suspected — reconciler found a revoked-but-live token absent from the live set (ADR-028)"
+
+      # The tamper-evidence itself is not operational: the reconciler has not
+      # SUCCESSFULLY reconciled recently (stuck / erroring / fail-closed), OR its
+      # metric is absent (pod down / never scraped). Either way detection is
+      # blind — critical. Fresh deploy: last_reconcile ts starts at 0, so this is
+      # stale-by-default until the first successful pass, `for: 10m` grace.
+      - alert: FederationRevocationReconcileStale
+        expr: |
+          (time() - federation_revocation_last_reconcile_timestamp_seconds > 1800)
+          or absent(federation_revocation_last_reconcile_timestamp_seconds)
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Federation revocation reconciler stale or down — un-revoke detection is not operational (ADR-028)"
+
+      # The gateway is failing to read the revoked-set and is failing OPEN
+      # (revoked tokens ARE being allowed through) — the ADR-028 named Risk
+      # Acceptance made visible. Warning (bounded by the 4h TTL); `for: 2m`
+      # filters pod-start / volume-remount I/O blips.
+      - alert: FederationGatewayRevocationLoadFailure
+        expr: federation_gateway_revocation_load_errors > 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Federation gateway cannot read the revoked-set — fail-open is allowing revoked tokens (ADR-028 §fail-open)"
