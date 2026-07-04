@@ -115,6 +115,7 @@ class TestMetrics:
         for name in (
             "federation_revocation_tamper_suspected",
             "federation_revocation_last_reconcile_timestamp_seconds",
+            "federation_revocation_events_dropped",
             "federation_revocation_reconcile_errors_total",
             "federation_gateway_revocation_load_errors",
         ):
@@ -184,6 +185,30 @@ class TestReconcileOnceFailClosed:
         assert m.gateway_load_errors == 2
         assert m.last_reconcile_ts == now
         assert m.reconcile_errors_total == 0
+        assert m.events_dropped == 0            # both rows parsed cleanly
+
+    def test_malformed_event_rows_are_counted_not_silently_dropped(self, tmp_path, monkeypatch):
+        # Schema drift: rows carry the event marker but can't be parsed. They must
+        # be COUNTED (events_dropped), not silently absorbed — a fully-drifted feed
+        # would otherwise reconcile to a clean, healthy zero while a real un-revoke
+        # went unseen and last_reconcile_ts kept refreshing (ADR-028 D3).
+        cfg = _cfg(tmp_path)
+        (tmp_path / "revoked.txt").write_text("", encoding="utf-8")
+        m = rec.Metrics()
+        ev_rows = [
+            {"token_id": "ftk_ok", "expires_at": _future_rfc3339(3600)},
+            {"token_id": "ftk_no_exp"},                    # malformed: missing expires_at
+            {"expires_at": _future_rfc3339(3600)},          # malformed: missing token_id
+        ]
+        monkeypatch.setattr(
+            rec, "query_victorialogs",
+            lambda _u, query, **_k: ev_rows if "federation_token_revoked" in query else [],
+        )
+        rec.reconcile_once(cfg, m, now=_now())
+
+        assert m.events_checked == 1            # only ftk_ok reconciled
+        assert m.events_dropped == 2            # the two malformed rows are made visible
+        assert m.reconcile_errors_total == 0    # malformed != a failed pass (that's fail-closed)
 
 
 def urllib_error():

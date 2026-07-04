@@ -174,6 +174,7 @@ class Metrics:
         self.tamper_suspected = 0            # gauge: current suspected un-revokes
         self.last_reconcile_ts = 0.0         # gauge: unix ts of last SUCCESSFUL reconcile
         self.events_checked = 0              # gauge: events considered last run
+        self.events_dropped = 0              # gauge: event-filtered rows that failed to parse (schema-drift signal)
         self.reconcile_errors_total = 0      # counter: failed reconcile passes (fail-closed)
         self.gateway_load_errors = 0         # gauge: gateway fail-open warns in window
 
@@ -188,6 +189,9 @@ class Metrics:
             "# HELP federation_revocation_events_checked Revocation events reconciled in the last run.",
             "# TYPE federation_revocation_events_checked gauge",
             f"federation_revocation_events_checked {self.events_checked}",
+            "# HELP federation_revocation_events_dropped Event-filtered log rows that failed to parse last run (schema-drift signal; coverage is degraded while non-zero).",
+            "# TYPE federation_revocation_events_dropped gauge",
+            f"federation_revocation_events_dropped {self.events_dropped}",
             "# HELP federation_revocation_reconcile_errors_total Reconcile passes that failed (fail-closed; no all-clear emitted).",
             "# TYPE federation_revocation_reconcile_errors_total counter",
             f"federation_revocation_reconcile_errors_total {self.reconcile_errors_total}",
@@ -247,13 +251,20 @@ def reconcile_once(cfg: "Config", metrics: Metrics, now: float) -> None:
         ev_rows = query_victorialogs(cfg.victorialogs_url, build_logsql_query(cfg.lookback_s, cfg.settle_s))
         fo_rows = query_victorialogs(cfg.victorialogs_url, build_failopen_query(cfg.failopen_lookback_s, cfg.settle_s))
         live = read_live_set(cfg.revoked_file)
-        result = reconcile(parse_events(ev_rows), live, now, cfg.skew_margin_s)
+        parsed = parse_events(ev_rows)
+        result = reconcile(parsed, live, now, cfg.skew_margin_s)
     except Exception as exc:  # noqa: BLE001 — any failure is fail-closed
         metrics.reconcile_errors_total += 1
         print(f"reconcile pass failed (fail-closed, no all-clear): {exc}", file=sys.stderr, flush=True)
         return
     metrics.tamper_suspected = result.tamper_suspected
     metrics.events_checked = result.checked
+    # Rows carried the event marker but couldn't be parsed (missing field / bad
+    # time) → tenant-api event-schema drift silently narrowing coverage. Exposed
+    # as a gauge so the drift is visible, even though any single drop is benign:
+    # a fully-drifted feed would otherwise reconcile to a clean, healthy zero
+    # while a real un-revoke went unseen (ADR-028 D3 honest-boundary).
+    metrics.events_dropped = len(ev_rows) - len(parsed)
     metrics.gateway_load_errors = len(fo_rows)
     metrics.last_reconcile_ts = now
     if result.suspected:
