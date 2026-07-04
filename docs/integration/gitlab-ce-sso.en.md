@@ -81,11 +81,12 @@ curl -s -H "Authorization: Bearer <access_token>" \
 
 ## Session lifetime and revocation lag
 
-Groups are resolved **at login** and cached in the session cookie — a user removed from a GitLab group **keeps access until the cookie expires**. Tighten the revocation lag with `cookieExpire` (total lifetime) + `cookieRefresh` (periodic re-check, must be < `cookieExpire`). This is a mitigation, not instant revocation; instant revocation is part of the later identity-hardening work (see the platform security roadmap).
+Groups are resolved **at login** and cached in the session cookie. **When `cookieRefresh` is set**, the session re-validates the account against GitLab and **overwrites the groups** every interval (the gitlab provider's `RefreshSession` behavior) — so the group/account revocation lag is **bounded by `cookieRefresh` (not `cookieExpire`)**: a short `cookieRefresh` (e.g. 1h) tightens it, and a user removed from a group or disabled is invalidated at the next refresh. **Without `cookieRefresh`**, groups are frozen as of login until `cookieExpire`. Either way this is a **mitigation, not instant revocation** — the backend still blindly trusts `X-Forwarded-Groups`; true instant revocation requires the identity-hardening work (backend stops trusting the unverified header, see the platform security roadmap), so **production cutover waits for it**.
 
 ## Troubleshooting
 
 - **Login loop / cookie not sent**: `cookieSecure: true` requires HTTPS. Either add TLS to the ingress or temporarily set `false` (testing only).
 - **Redirect URI mismatch**: the GitLab application's Redirect URI must match `redirectUrl` verbatim (including scheme and the `/oauth2/callback` suffix).
 - **Blank screen after login**: usually the `_rbac.yaml` group names are not GitLab full paths (see Step 3).
+- **4xx / `431 Request Header Fields Too Large` after login**: for users in **many GitLab groups** (including inherited ones), the session cookie (which encodes the groups and is sent by the client on every request) and the oauth2-proxy-injected `X-Forwarded-Groups` header can grow long enough to exceed the default header/buffer limit of the **ingress controller** or the **nginx inside da-portal**, and the request is dropped. Raise that layer's buffers (nginx-ingress: `nginx.ingress.kubernetes.io/proxy-buffer-size` + `large_client_header_buffers`), or narrow the login surface with `gitlabGroups`. (The tenant-api side is a Go app with a generous `MaxHeaderBytes`, so it is less likely to hit this.)
 - **Allow only specific groups**: use `gitlabGroups` (blocks login at the proxy); fine-grained authorization is still decided by `_rbac.yaml`.

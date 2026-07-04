@@ -81,11 +81,12 @@ curl -s -H "Authorization: Bearer <access_token>" \
 
 ## Session 生命週期與撤權延遲
 
-群組在**登入時**解析並存入 session cookie——使用者被移出某 GitLab 群組後，會**持有存取權直到 cookie 到期**。以 `cookieExpire`（整體壽命）+ `cookieRefresh`（週期重驗，須 < `cookieExpire`）收緊撤權延遲。這是緩解、非即時撤權；即時撤權屬後續身份硬化範圍（見平台安全路線）。
+群組在**登入時**解析並存入 session cookie。**設了 `cookieRefresh` 時**，session 每過該間隔會**重新向 GitLab 驗證帳號並覆寫群組**（gitlab provider 的 `RefreshSession` 行為）——故群組/帳號撤權延遲**被 `cookieRefresh` 綁住（非 `cookieExpire`）**：設短 `cookieRefresh`（例如 1h）即收緊，被移出群組或停用的使用者於下次 refresh 失效。**未設 `cookieRefresh`** 則群組凍結在登入當下、直到 `cookieExpire` 到期。無論如何這都是**緩解、非即時撤權**——後端仍盲信 `X-Forwarded-Groups`，真正的即時撤權要等身份硬化（後端不再信未驗 header，見平台安全路線）落地，故 **production cutover 待其完成**。
 
 ## 疑難排解
 
 - **登入迴圈 / cookie 不送**：`cookieSecure: true` 需 HTTPS。ingress 未上 TLS 時要嘛補 TLS、要嘛暫設 `false`（僅測試）。
 - **Redirect URI mismatch**：GitLab application 的 Redirect URI 必須逐字比對 `redirectUrl`（含 scheme 與 `/oauth2/callback` 尾段）。
 - **登入後全空畫面**：多半是 `_rbac.yaml` 群組名非 GitLab 全路徑（見步驟三）。
+- **登入後 4xx／`431 Request Header Fields Too Large`**：使用者隸屬**大量 GitLab 群組**（含繼承）時，session cookie（編碼 groups，每個請求由 client 帶回）與 oauth2-proxy 注入的 `X-Forwarded-Groups` 表頭會很長，可能超過 **ingress controller** 或 **da-portal 內 nginx** 的預設 header/buffer 上限而被丟棄。調高該層 buffer（nginx-ingress：`nginx.ingress.kubernetes.io/proxy-buffer-size` + `large_client_header_buffers`），或用 `gitlabGroups` 縮登入群組面。（tenant-api 側是 Go app、`MaxHeaderBytes` 較寬鬆，較不會中。）
 - **只想放行特定群組**：用 `gitlabGroups`（proxy 層擋登入）；細粒度授權仍由 `_rbac.yaml` 決定。
