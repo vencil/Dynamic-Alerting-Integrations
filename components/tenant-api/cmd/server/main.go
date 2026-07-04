@@ -326,7 +326,14 @@ func main() {
 			"store_configmap", *federationStore, "store_namespace", federationNS,
 			"account_registry", account.RegistryFileName)
 		if len(rbacMgr.Get().Groups) == 0 {
-			slog.Warn("federation endpoint enabled but RBAC is in open mode — every token issuance will be denied (admin permission required); supply --rbac")
+			if rbacMgr.FailClosedOnEmpty() {
+				// MED-8: a configured --rbac path resolved to zero groups → ALL
+				// access is denied (not just federation); "supply --rbac" would
+				// be wrong advice since a path is already set.
+				slog.Warn("federation endpoint enabled but RBAC fails closed on an empty configured policy — ALL access is denied; fix the _rbac.yaml referenced by --rbac")
+			} else {
+				slog.Warn("federation endpoint enabled but RBAC is in open mode — every token issuance will be denied (admin permission required); supply --rbac")
+			}
 		}
 	}
 

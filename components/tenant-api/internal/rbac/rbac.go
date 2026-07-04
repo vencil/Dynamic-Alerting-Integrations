@@ -100,6 +100,12 @@ func NewManager(path string) (*Manager, error) {
 // backward compatibility / rollback.
 func (m *Manager) AllowOpenReadOnEmpty() { m.failClosedOnEmpty = false }
 
+// FailClosedOnEmpty reports whether this manager denies all access when the
+// configured policy resolves to zero groups (ADR-027 MED-8) — vs. path-less
+// open-read mode. Callers use it to distinguish the two zero-group states
+// (e.g. for accurate startup warnings).
+func (m *Manager) FailClosedOnEmpty() bool { return m.failClosedOnEmpty }
+
 // NewForTest returns a Manager pre-populated with cfg and no file
 // path. WatchLoop and Reload become no-ops; only the embedded
 // permission-check methods are exercised. Intended for unit tests
