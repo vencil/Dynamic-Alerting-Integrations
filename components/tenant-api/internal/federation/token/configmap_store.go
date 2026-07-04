@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"time"
@@ -72,6 +73,10 @@ type configMapStore struct {
 	client    kubernetes.Interface
 	namespace string
 	name      string
+	// logger, when nil, falls back to slog.Default(). A test injects a
+	// buffer-backed logger to assert the revocation event without swapping the
+	// global default (test-seam discipline, CLAUDE.md §測試注入 Seam).
+	logger *slog.Logger
 }
 
 // NewConfigMapStore returns a RecordStore backed by the named ConfigMap
@@ -88,6 +93,15 @@ func NewConfigMapStore(client kubernetes.Interface, namespace, name string) (Rec
 		return nil, fmt.Errorf("federation: open ConfigMap store: %w", err)
 	}
 	return &configMapStore{client: client, namespace: namespace, name: name}, nil
+}
+
+// log returns the store's logger, defaulting to slog.Default() in production
+// (where main.configureLogger has installed the JSON handler on stderr).
+func (s *configMapStore) log() *slog.Logger {
+	if s.logger != nil {
+		return s.logger
+	}
+	return slog.Default()
 }
 
 // load fetches and parses the store ConfigMap. The raw *ConfigMap is
@@ -249,9 +263,18 @@ func (s *configMapStore) listAll(now time.Time) ([]Record, error) {
 // revoke removes the bookkeeping Record and adds the token to the
 // revoked set. It records the revocation even when the Record is
 // already gone (it may have been pruned while the JWT is still live).
+//
+// On a newly-added revocation it emits a structured `federation_token_revoked`
+// event to the log (ADR-028 D1): an off-store, append-only tamper-evidence
+// anchor that the revocation reconciler later checks against the live set to
+// detect an un-revoke. The event is emitted AFTER mutate() commits — never
+// inside the RetryOnConflict closure, which may run several times — and only
+// when the token was not already revoked (an idempotent re-revoke emits nothing).
 func (s *configMapStore) revoke(tokenID string, expiresAt time.Time) (bool, error) {
 	found := false
+	newlyRevoked := false
 	err := s.mutate(func(doc *storeDoc) error {
+		newlyRevoked = false // reset per attempt — RetryOnConflict may re-run this closure
 		kept := doc.Records[:0]
 		for _, r := range doc.Records {
 			if r.TokenID == tokenID {
@@ -268,10 +291,30 @@ func (s *configMapStore) revoke(tokenID string, expiresAt time.Time) (bool, erro
 			}
 		}
 		doc.Revoked = append(doc.Revoked, revokedEntry{TokenID: tokenID, ExpiresAt: expiresAt})
+		newlyRevoked = true
 		return nil
 	})
 	if err != nil {
 		return false, err
+	}
+	if newlyRevoked {
+		// Emitted AFTER the ConfigMap commit — a deliberate ordering with a
+		// documented, accepted dual-write gap: if the pod hard-dies (OOMKill /
+		// node crash) in the nanoseconds between the commit and this call, the
+		// revocation persists but its event is lost, leaving that one token
+		// without a tamper-evidence anchor (a later targeted un-revoke of it
+		// would go undetected). An Outbox pattern would close the gap but is
+		// absurd over-engineering for a 4h-TTL revocation, so the risk (crash in
+		// the gap AND a precisely-targeted un-revoke) is accepted (ADR-028).
+		//
+		// ADR-028 D3 (PII minimization): opaque token_id + expires_at only —
+		// NO tenant identifier, so the audit sink never becomes a store of
+		// customer identifiers. The reconciler correlates on token_id and, if a
+		// human needs the tenant at IR time, resolves it from the store.
+		s.log().Info("federation token revoked",
+			"event", "federation_token_revoked",
+			"token_id", tokenID,
+			"expires_at", expiresAt.UTC().Format(time.RFC3339))
 	}
 	return found, nil
 }
