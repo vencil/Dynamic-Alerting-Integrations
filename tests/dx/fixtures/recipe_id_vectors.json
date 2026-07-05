@@ -1,13 +1,14 @@
 {
-  "_comment": "Cross-language contract for the recipe_id slug (ADR-024 #741). Both the Python compiler (scripts/tools/dx/custom_alerts/shape.py) and the Go exporter (components/threshold-exporter/app/pkg/config/custom_alert.go) MUST compute these exact slugs from these inputs — a drift silently breaks every on(tenant) group_left join. Pure string assembly: no hash, no locale, no map-order dependence. NOTE (TRK-326): `for` is part of the slug (control-plane static rule attribute) and is ALWAYS emitted as the trailing `__for{for}` part (default 1m). Add a case when adding a recipe/param.",
+  "_comment": "Cross-language contract for the recipe_id slug (ADR-024 #741). Both the Python compiler (scripts/tools/dx/custom_alerts/shape.py) and the Go exporter (components/threshold-exporter/app/pkg/config/custom_alert.go) MUST compute these exact slugs from these inputs — a drift silently breaks every on(tenant) group_left join. Deterministic, locale-free, map-order-independent. NOTE (TRK-326): `for` is part of the slug (control-plane static rule attribute) and is ALWAYS emitted as the trailing `__for{for}` part (default 1m). NOTE (#1008 / F3): a recipe with >=1 selector carries a trailing `__x{16-hex}` = first-16-hex of SHA-256 over a length-prefixed canonical of the STRUCTURED shape identity (selectors are the only tenant-controlled free-form slug field; window/quantile/metric/for/group_by are charset/enum-bounded). A no-selector recipe stays byte-identical (no suffix). Add a case when adding a recipe/param.",
   "vectors": [
     {
       "input": {"recipe": "threshold", "metric": "order_queue_depth", "op": ">", "window": "5m"},
       "recipe_id": "threshold__order_queue_depth__gt__w5m__for1m"
     },
     {
+      "_note": "#1008/F3: selectors present → trailing __x{hash} suffix over the structured signature",
       "input": {"recipe": "rate", "metric": "http_requests_total", "selectors_re": {"status": "5.."}, "selectors": {"method": "POST"}, "op": ">", "window": "5m"},
-      "recipe_id": "rate__http_requests_total__s_method_POST__sre_status_5____gt__w5m__for1m"
+      "recipe_id": "rate__http_requests_total__s_method_POST__sre_status_5____gt__w5m__for1m__x38e5c05de00b3e8d"
     },
     {
       "input": {"recipe": "ratio", "metric": "http_errors_total", "denominator_metric": "http_requests_total", "op": ">", "window": "5m"},
@@ -24,7 +25,7 @@
     {
       "_note": "selector ordering must be deterministic: sorted by (key, op), regardless of YAML/map iteration order",
       "input": {"recipe": "threshold", "metric": "m", "op": ">=", "window": "1m", "selectors": {"zeta": "1", "alpha": "2"}},
-      "recipe_id": "threshold__m__s_alpha_2__s_zeta_1__ge__w1m__for1m"
+      "recipe_id": "threshold__m__s_alpha_2__s_zeta_1__ge__w1m__for1m__xf841b595631882bc"
     },
     {
       "_note": "grammar coverage: op omitted → default \">\" → gt (must be identical Go/Python)",
@@ -70,6 +71,26 @@
       "_note": "group_by (ADR-024 §Addendum): per-PVC disk-fill — `gb_persistentvolumeclaim` is appended LAST so a no-group_by slug stays byte-identical; the metric-side aggregation keeps the PVC dimension so a small full volume is not masked by a large empty one in a by(tenant) sum",
       "input": {"recipe": "forecast", "metric": "kubelet_volume_stats_available_bytes", "capacity_metric": "kubelet_volume_stats_capacity_bytes", "op": "<", "horizon": "4h", "for": "30m", "group_by": ["persistentvolumeclaim"]},
       "recipe_id": "forecast__kubelet_volume_stats_available_bytes__lt__h4h__den_kubelet_volume_stats_capacity_bytes__for30m__gb_persistentvolumeclaim"
+    },
+    {
+      "_note": "#1008/F3 S1a: lossy selector value 'us-east-1' — pairs with S1b (both sanitise to s_region_us_east_1) but MUST yield DISTINCT recipe_ids via the __x suffix",
+      "input": {"recipe": "threshold", "metric": "m", "op": ">", "window": "5m", "selectors": {"region": "us-east-1"}},
+      "recipe_id": "threshold__m__s_region_us_east_1__gt__w5m__for1m__xec61444fd43d0679"
+    },
+    {
+      "_note": "#1008/F3 S1b: 'us_east_1' — MUST differ from S1a (collision resolved)",
+      "input": {"recipe": "threshold", "metric": "m", "op": ">", "window": "5m", "selectors": {"region": "us_east_1"}},
+      "recipe_id": "threshold__m__s_region_us_east_1__gt__w5m__for1m__x6e769229297e320b"
+    },
+    {
+      "_note": "#1008/F3 S2a: NON-lossy separator aliasing — {region_x:1} flattens to s_region_x_1 with no lossy char; the structured-signature hash distinguishes it from S2b",
+      "input": {"recipe": "threshold", "metric": "m", "op": ">", "window": "5m", "selectors": {"region_x": "1"}},
+      "recipe_id": "threshold__m__s_region_x_1__gt__w5m__for1m__xef7c84f97792be1d"
+    },
+    {
+      "_note": "#1008/F3 S2b: {region:x_1} flattens to the SAME s_region_x_1 — MUST differ from S2a (proves the hash is over the structured tuple, not the flat join)",
+      "input": {"recipe": "threshold", "metric": "m", "op": ">", "window": "5m", "selectors": {"region": "x_1"}},
+      "recipe_id": "threshold__m__s_region_x_1__gt__w5m__for1m__x90759469cc8214ce"
     }
   ]
 }

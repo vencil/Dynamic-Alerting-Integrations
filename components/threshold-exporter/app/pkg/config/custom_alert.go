@@ -17,6 +17,8 @@ package config
 // on(tenant) group_left join silently matches the empty set (the #731 class).
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log"
@@ -132,6 +134,69 @@ var (
 
 func customAlertSanitise(s string) string {
 	return customAlertSanitiseRe.ReplaceAllString(s, "_")
+}
+
+// caHashField length-prefixes one field as "<byte-len>:<utf-8>". Concatenating
+// length-prefixed fields is injective (NIST SP 800-185 TupleHash style): it closes the
+// delimiter-aliasing collision class where a selector key/value straddles the `_`
+// separator (#1008 / F3). Go string len is the UTF-8 byte length, matching Python.
+// MUST stay byte-identical to shape.py::_lp.
+func caHashField(s string) string {
+	return strconv.Itoa(len(s)) + ":" + s
+}
+
+// shapeHashSuffix is the #1008/F3 disambiguation suffix for a selector-bearing recipe_id:
+// the first 16 hex (64-bit) of SHA-256 over a length-prefixed canonical of the STRUCTURED
+// shape identity. Fields are emitted in a FIXED order with an explicit "" for a field not
+// applicable to the recipe (no None → matches Python trivially). MUST be byte-identical to
+// shape.py::_shape_hash (golden-vector pinned).
+func shapeHashSuffix(spec CustomAlertSpec, op string, items []selectorItem, gb []string) string {
+	isForecast := spec.Recipe == "forecast"
+	den := spec.DenominatorMetric
+	if isForecast {
+		den = spec.CapacityMetric
+	}
+	hashOp := op
+	if spec.Recipe == "absence" {
+		hashOp = ""
+	}
+	window := spec.Window
+	if isForecast {
+		window = ""
+	}
+	quantile := ""
+	if spec.Recipe == "p99_latency" {
+		quantile = string(spec.Quantile)
+		if quantile == "" {
+			quantile = "0.99"
+		}
+	}
+	horizon := ""
+	if isForecast {
+		horizon = spec.Horizon
+	}
+	forVal := spec.For
+	if forVal == "" {
+		forVal = "1m"
+	}
+	var b strings.Builder
+	for _, f := range []string{spec.Recipe, spec.Metric, hashOp, window, quantile, horizon, den, forVal} {
+		b.WriteString(caHashField(f))
+	}
+	b.WriteString(caHashField("sel"))
+	b.WriteString(caHashField(strconv.Itoa(len(items))))
+	for _, it := range items {
+		b.WriteString(caHashField(it.op))
+		b.WriteString(caHashField(it.key))
+		b.WriteString(caHashField(it.value))
+	}
+	b.WriteString(caHashField("gb"))
+	b.WriteString(caHashField(strconv.Itoa(len(gb))))
+	for _, g := range gb {
+		b.WriteString(caHashField(g))
+	}
+	sum := sha256.Sum256([]byte(b.String()))
+	return hex.EncodeToString(sum[:])[:16]
 }
 
 // customAlertGroupBy validates + canonicalises group_by into a sorted, deduped
@@ -356,7 +421,18 @@ func RecipeID(spec CustomAlertSpec) (string, error) {
 	for _, g := range gb {
 		parts = append(parts, "gb_"+g)
 	}
-	return customAlertSanitise(strings.Join(parts, "__")), nil
+	// #1008 / F3: recipe_id must be INJECTIVE over the shape identity, but the readable
+	// slug is not — customAlertSanitise is lossy AND the `s_{key}_{value}`/`__`-join is
+	// ambiguous even with no lossy char ({region_x:1} and {region:x_1} both →
+	// `s_region_x_1`). A selector is the only tenant-controlled free-form slug field
+	// (window/quantile/metric/for/group_by are charset/enum-bounded), so a selector-bearing
+	// recipe carries a disambiguation suffix over the STRUCTURED identity; a no-selector
+	// recipe stays byte-identical. MUST stay byte-identical to shape.py::recipe_id.
+	slug := customAlertSanitise(strings.Join(parts, "__"))
+	if len(spec.Selectors) > 0 || len(spec.SelectorsRe) > 0 {
+		slug += "__x" + shapeHashSuffix(spec, op, items, gb)
+	}
+	return slug, nil
 }
 
 // parseCustomAlertThreshold splits "value[:severity]" → (value, severity).
