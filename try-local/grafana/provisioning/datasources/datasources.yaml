@@ -1,0 +1,28 @@
+# try-local Grafana datasource provisioning.
+#
+# ONE Prometheus datasource, isDefault:true. WHY isDefault matters here: the SOT
+# dashboard (federation-revocation-dashboard.json, mounted read-only) has a
+# `type: datasource` template variable named DS_PROMETHEUS. Grafana binds a
+# datasource-typed template var to the DEFAULT datasource of the matching type
+# at load, so `${DS_PROMETHEUS}` in every panel resolves to this one — no manual
+# picker, no {} placeholder left dangling. Keep this the only Prometheus DS.
+#
+# The name deliberately signals "demo / seeded" (one of the three honesty
+# signals; the other two are the demo-notice home dashboard + README framing) —
+# a trial user glancing at the datasource picker should see the data is
+# synthetic, not a real reconciler feed.
+#
+# url uses the compose SERVICE NAME (prometheus:9090), NOT localhost: Grafana
+# runs in its own container and reaches Prometheus over the compose network.
+# access:proxy → the browser talks to Grafana, Grafana talks to Prometheus
+# (no CORS, works with the loopback-only port bindings).
+apiVersion: 1
+
+datasources:
+  - name: "Prometheus (try-local demo seed)"
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: true

@@ -1,0 +1,37 @@
+{
+  "annotations": { "list": [] },
+  "description": "try-local demo home / honesty notice. Set as the Grafana home dashboard via GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH so it is the FIRST thing a trial user sees — it frames the federation-revocation board as synthetic-data demo BEFORE they read the (real, prod) panels. This dashboard is try-local-ONLY; it is never provisioned in k8s.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [
+    {
+      "icon": "dashboard",
+      "title": "Open: Federation Revocation Reconciler",
+      "type": "link",
+      "tooltip": "The real production security dashboard (synthetic data here)",
+      "url": "/d/federation-revocation"
+    }
+  ],
+  "panels": [
+    {
+      "title": "",
+      "type": "text",
+      "gridPos": { "h": 15, "w": 24, "x": 0, "y": 0 },
+      "options": {
+        "mode": "markdown",
+        "content": "# 🧪 try-local demo — synthetic data\n\n**No real reconciler runs here** (that needs Kubernetes + VictoriaLogs). These metrics are seeded by a small mock (`mock-reconciler`) so you can see the **shape** of a healthy federation-revocation security posture — and how the panels read *together* — without standing up a cluster.\n\nIn production a long-running reconciler (`helm/federation-reconciler`) emits these six metrics from **real** revocation-log-vs-live-set reconciliation: it compares the off-store revocation log against the live revoked set and raises `federation_revocation_tamper_suspected` if a revoked-but-still-live token has gone missing (an *un-revoke* — the ADR-028 tamper-evidence control behind tenant federation).\n\nThe dashboard itself and its thresholds are the **real production ones** (bind-mounted read-only from `k8s/03-monitoring/`) — only the *data* is a demo.\n\n---\n\n### → Open the board\n\n**[Federation Revocation Reconciler](/d/federation-revocation)**  ·  everything should read calm-green:\n\n| panel | healthy | means |\n|---|---|---|\n| **Tamper status** | ✓ Clean | no suspected un-revokes |\n| **Reconciler freshness** | ✓ Fresh | reconcile is live (green sawtooth), not stale |\n| **Gateway fail-open** | ✓ OK | revoked-set reads are succeeding |\n| **Coverage integrity** | ✓ Intact | the event feed parses cleanly (no schema drift) |\n\n_The chaos-scenario timeseries below those stat panels show what **bad** looks like (staleness climbing past 1800s, drops rising, tamper > 0) — here they stay flat/green because the mock emits a healthy resting state._\n\n### → The real thing\n\nSee the runbook + design in the repo: **ADR-028** (federation revocation tamper-evidence) and `docs/grafana-dashboards.md`. To run the actual reconciler you deploy `helm/federation-reconciler` against a cluster with VictoriaLogs — out of scope for this one-command laptop demo."
+      }
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["try-local", "demo", "federation"],
+  "templating": { "list": [] },
+  "time": { "from": "now-6h", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "try-local — Start Here (demo notice)",
+  "uid": "trylocal-home",
+  "version": 1
+}
