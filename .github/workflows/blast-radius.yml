@@ -63,9 +63,15 @@ jobs:
 
       - name: Generate base effective configs
         if: steps.detect.outputs.conf_d != ''
+        # Bind the base ref via env, NOT raw ${{ }} interpolation into the
+        # run: script (same script-injection class as the commitlint PR-title
+        # fix, #1021). github.base_ref is privileged-only — house rule: zero
+        # raw ${{ github.event.* }} / ${{ github.base_ref }} inside run:.
+        env:
+          BASE_REF: ${{ github.base_ref }}
         run: |
           git stash --include-untracked || true
-          git checkout "origin/${{ github.base_ref }}" -- . 2>/dev/null || true
+          git checkout "origin/$BASE_REF" -- . 2>/dev/null || true
 
           # Base branch may not have describe-tenant yet (pre-v2.7.0)
           if [ -f "scripts/tools/dx/describe_tenant.py" ]; then
@@ -84,9 +90,13 @@ jobs:
       - name: Compute blast radius
         if: steps.detect.outputs.conf_d != ''
         id: blast
+        # Same env-binding as "Generate base effective configs" above (#1021
+        # class): no raw base-ref interpolation inside run:.
+        env:
+          BASE_REF: ${{ github.base_ref }}
         run: |
           # Find changed conf.d files for header
-          CHANGED_FILES=$(git diff --name-only "origin/${{ github.base_ref }}"...HEAD -- "${{ steps.detect.outputs.conf_d }}" | head -5 | tr '\n' ', ' | sed 's/,$//')
+          CHANGED_FILES=$(git diff --name-only "origin/$BASE_REF"...HEAD -- "${{ steps.detect.outputs.conf_d }}" | head -5 | tr '\n' ', ' | sed 's/,$//')
 
           python3 scripts/tools/ops/blast_radius.py \
             --base /tmp/base-effective.json \

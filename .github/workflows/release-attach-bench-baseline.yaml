@@ -84,13 +84,16 @@ jobs:
 
       - name: Rename + attach to release
         if: steps.find_artifact.outputs.skip == '0'
+        # Tag name bound via env, NOT raw ${{ }} interpolation into the run:
+        # script (#1021 class house rule: zero raw ${{ github.event.* }}
+        # inside run:).
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
         run: |
           # Rename so the asset name in the Release is meaningful (vs generic
           # `bench-baseline.txt` which clashes if multiple components add
           # files). Format: bench-baseline-<tag>.txt
-          TAG="${{ github.event.release.tag_name }}"
           # Sanitize tag for filename (replace `/` with `-` for tags like
           # `exporter/v2.8.0` → `exporter-v2.8.0`).
           SAFE_TAG="${TAG//\//-}"

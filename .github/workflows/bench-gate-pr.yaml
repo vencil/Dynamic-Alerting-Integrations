@@ -153,9 +153,15 @@ jobs:
       # to find the true branching point.
       - name: Compute merge-base
         id: merge_base
+        # Bind base ref + PR head SHA via env, NOT raw ${{ }} interpolation
+        # into the run: script (#1021 class house rule: zero raw
+        # ${{ github.event.* }} / ${{ github.base_ref }} inside run:).
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          base_ref="origin/${{ github.base_ref }}"
-          pr_head="${{ github.event.pull_request.head.sha }}"
+          base_ref="origin/$BASE_REF"
+          pr_head="$PR_HEAD_SHA"
           base_sha=$(git merge-base "$pr_head" "$base_ref")
           if [ -z "$base_sha" ]; then
             echo "::error::Could not compute merge-base between $pr_head and $base_ref"
@@ -241,10 +247,14 @@ jobs:
       # old reset/clean-workspace dance: the main checkout is never mutated, so
       # there is no dirty-tree-blocks-checkout failure mode.
       - name: Create base + pr worktrees
+        # PR head SHA bound via env (#1021 class house rule); the merge-base
+        # SHA is a needs.* output — derived context, a different class.
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
           git worktree add --detach "$RUNNER_TEMP/wt-base" ${{ needs.preflight.outputs.merge_base_sha }}
-          git worktree add --detach "$RUNNER_TEMP/wt-pr"   ${{ github.event.pull_request.head.sha }}
+          git worktree add --detach "$RUNNER_TEMP/wt-pr"   "$PR_HEAD_SHA"
           echo "base worktree HEAD: $(git -C "$RUNNER_TEMP/wt-base" rev-parse HEAD)"
           echo "pr   worktree HEAD: $(git -C "$RUNNER_TEMP/wt-pr" rev-parse HEAD)"
 
@@ -444,6 +454,8 @@ jobs:
           INCONCLUSIVE_REASON: ${{ steps.compare.outputs.inconclusive_reason }}
           INCONCLUSIVE_CPUS: ${{ steps.compare.outputs.inconclusive_cpus }}
           INCONCLUSIVE_CANARY: ${{ steps.compare.outputs.inconclusive_canary }}
+          # PR head SHA bound via env (#1021 class house rule).
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           {
             # INCONCLUSIVE takes precedence over REGRESSION: if the runner was
@@ -456,7 +468,7 @@ jobs:
               echo "## ✅ Bench Gate — no statistically significant regression"
             fi
             echo ""
-            echo "Compared PR HEAD (\`${{ github.event.pull_request.head.sha }}\`)"
+            echo "Compared PR HEAD (\`$PR_HEAD_SHA\`)"
             echo "against merge-base (\`${{ needs.preflight.outputs.merge_base_sha }}\`)."
             echo "Gate threshold: **p < 0.01 AND |Δ| ≥ 5%** (statistical significance via \`benchstat -alpha=0.01\` + magnitude floor for free-tier-runner noise resistance)."
             echo "Metric scope: **deterministic per-op metrics only** (\`sec/op\`, \`B/op\`, \`allocs/op\`) via \`benchstat -filter\`. Non-deterministic process-level metrics (\`MB-sys\`, \`MB-heap-after-gc\`, \`goroutines\`) are excluded — they are GC/runtime high-water noise, not per-op work (#608)."

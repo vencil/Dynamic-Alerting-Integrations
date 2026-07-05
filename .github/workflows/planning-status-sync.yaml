@@ -51,8 +51,13 @@ jobs:
 
       - name: Resolve base ref
         id: base
+        # Bind the base ref via env, NOT raw ${{ }} interpolation into the
+        # run: script (same script-injection class as the commitlint PR-title
+        # fix, #1021). base.ref is privileged-only — this is the house rule:
+        # zero raw ${{ github.event.* }} inside run:.
+        env:
+          BASE_BRANCH: ${{ github.event.pull_request.base.ref }}
         run: |
-          BASE_BRANCH="${{ github.event.pull_request.base.ref }}"
           # `actions/checkout` does not auto-create an `origin/<branch>` ref for
           # the base; fetch it explicitly so `--base origin/${BASE_BRANCH}`
           # works inside the lint. `--depth=0` is invalid (depth needs a
@@ -64,7 +69,12 @@ jobs:
       - name: Check planning status sync
         # Soft-warn by default (exit 0 with annotations). Flip `--strict` on
         # once adoption stabilises.
+        # PR number is bound via env (same #1021 class: zero raw
+        # ${{ github.event.* }} inside run:). steps.base.outputs.ref stays an
+        # expression — steps context, a different class (derived value).
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           python3 -X utf8 scripts/tools/lint/check_planning_status_sync.py \
             --base "${{ steps.base.outputs.ref }}" \
-            --pr-number "${{ github.event.pull_request.number }}"
+            --pr-number "$PR_NUMBER"

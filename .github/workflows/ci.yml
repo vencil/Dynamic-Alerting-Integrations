@@ -144,6 +144,16 @@ jobs:
           # no-ops. Wired here (not path-filtered) so editing ANY workflow file
           # is covered, matching the "Lint Rule Packs" hoisting rationale above.
           pre-commit run workflow-git-push-permission-check --all-files
+          # GHA workflow lint (actionlint, OSS engine; #1021 follow-up).
+          # Blocks the script-injection class (raw untrusted expression
+          # interpolation spliced into run: scripts — GHA evaluates the
+          # dollar-double-brace form even inside shell comments, so it is
+          # not written out here) + syntax/type/deprecation errors.
+          # language: golang hook — pre-commit builds it once with the
+          # runner's preinstalled Go toolchain (cached under ~/.cache/pre-commit
+          # for the job; no setup-go step needed). shellcheck/pyflakes are
+          # pinned OFF in .pre-commit-config.yaml args for host/CI parity.
+          pre-commit run actionlint --all-files
 
   lint-rule-packs:
     # Custom Prometheus rule-pack governance linter.

@@ -159,6 +159,18 @@ INFO（不列管）：`federation-gateway` / `federation-proxy` / `threshold-exp
 |---|---|---|---|
 | 1 | `try-local/docker-compose.yaml` : alias `tenant-api.monitoring.svc.cluster.local` | legacy compose network alias —— da-portal service pin 的已發行 v2.8.0 portal image 內建 nginx.conf 仍指向 pre-#1004 FQDN；拿掉 alias 會讓 try-local 在 nginx 啟動時掛掉（`host not found in upstream`） | PORTAL_TAG 預設升到 #1004 之後 build 的 portal image 時移除 |
 
+## GHA workflow lint（actionlint，#1021 follow-up — 4 層 SAST 的相鄰檢查，非其中一層）
+
+跑法：`pre-commit run actionlint --all-files`（hook 來自 upstream remote repo [rhysd/actionlint](https://github.com/rhysd/actionlint) pin `v1.7.12`，`language: golang` —— host/CI 用 Go toolchain 現地 build，非 vendored binary；CI 在 `ci.yml` Lint job 點名呼叫）。**hybrid policy：純 OSS engine、無 Vibe wrapper** —— 首掃全 34 workflow 0 findings（zero-baseline），無 severity mapping／exemption registry 需求；若未來 findings 出現且不能即修，才照 class-(b) diff-only ratchet 慣例補 wrapper。
+
+**守備範圍**：workflow 語法／type／deprecated-syntax／action input 檢查 + **untrusted-input rule**（raw `${{ github.event.pull_request.title/body/head_ref/... }}` 拼進 `run:` → BLOCK；canary 實證 exit 1，即 [#1021](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/1021) commitlint PR-title injection class 從此機械攔截）。
+
+**已知不涵蓋（負空間）**：privileged-only context（`github.event.pull_request.base.ref`／`github.base_ref`／PR number／commit SHA／run id／tag 名）不在 actionlint untrusted 清單——raw 拼進 `run:` 不會被擋（實證：base-ref splice 檔在修復前掃過全綠）。此 class 已於 2026-07-05 以一次性 sweep 收零：**YAML parse 全 34 檔 `run:` blocks（非 grep），raw `${{ github.event.* }}`／`github.base_ref`／`github.head_ref` = 0**（#1021 + 9 檔 14 step 18 處 env-route，明細見 CHANGELOG Unreleased）。**新增／修改 workflow 無機械 gate 防此 class 回歸**——靠 house rule（`env:` 綁定，各已修 workflow 的註解為範本）+ review 把關；復發時以同款 parse 掃描重驗。另一 context class（不在 house rule 字面範圍、記載於此不改）：`run:` 內 raw `${{ steps.*.outputs.* }}`／`${{ needs.*.outputs.* }}` 衍生值（如 `self-review-pass2.yaml`／`planning-status-sync.yaml` 的 `steps.base.outputs.ref`，衍生自 base ref、同信任級）與 `github.repository`／`github.server_url`／`github.run_id`／`github.event_name` 類 infra context。
+
+**Engine 整合顯式關閉**：`args: [-shellcheck=, -pyflakes=]` —— shellcheck/pyflakes 為 actionlint 的「裝了才跑」optional 整合，ubuntu CI runner 有、Windows dev host 無，隱式預設會造成 host-green/CI-red finding 漂移。開啟 shellcheck-on-workflows 為獨立決策（需自己的首掃 baseline pass）。
+
+**Baseline 截至 2026-07-05**：**0 findings** ✅ / 0 exemptions（`-shellcheck=` `-pyflakes=` 設定下）。
+
 ## 關聯
 
 - [epic #448](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/448) — Container/k8s SAST 4-layer

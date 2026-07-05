@@ -1121,3 +1121,35 @@ repos:
         # committed file had no consumer (found in PR #983 review, 2026-07-03;
         # the dead auto-commit step was removed). This hook makes a future
         # instance of the same mistake fail loudly instead of silently.
+
+  # --- GHA workflow linter (actionlint; #1021 follow-up) ---
+  # Hybrid policy (lint-policy / iac-lint-baseline): official OSS engine via
+  # the upstream pre-commit hook — no Vibe wrapper, because the first full
+  # scan over all 34 workflows was 0 findings (zero-baseline; no severity
+  # mapping / exemption registry needed). language: golang — pre-commit
+  # builds the pinned tag with the host/CI Go toolchain (no vendored binary,
+  # no fabricated container-image tag).
+  #
+  # Codifies the script-injection class fixed in #1021 (commitlint PR-title)
+  # + the 4 base-ref env-route siblings: actionlint's untrusted-input rule
+  # BLOCKS raw ${{ github.event.pull_request.title/body/head_ref/... }}
+  # spliced into run: (verified: a canary with a raw title splice fails,
+  # exit 1). NOTE the rule covers actionlint's untrusted list only —
+  # privileged-only contexts (base.ref / github.base_ref / PR number) are NOT
+  # flagged; those stay convention ("zero raw ${{ github.event.* }} in
+  # run:", see the env: blocks in commitlint/secret-scan/self-review-pass2/
+  # planning-status-sync/blast-radius) + review.
+  #
+  # -shellcheck= / -pyflakes= pin those optional integrations OFF: the
+  # binaries exist on ubuntu CI runners but not on Windows dev hosts, so an
+  # implicit "runs where installed" default would report DIFFERENT findings
+  # per machine (host-green/CI-red drift). Enabling shellcheck-on-workflows
+  # is a separate future decision needing its own baseline pass.
+  #
+  # CI gate: ci.yml Lint job invokes hooks BY NAME (not all-hooks), so this
+  # is wired there explicitly (`pre-commit run actionlint --all-files`).
+  - repo: https://github.com/rhysd/actionlint
+    rev: v1.7.12
+    hooks:
+      - id: actionlint
+        args: [-shellcheck=, -pyflakes=]
