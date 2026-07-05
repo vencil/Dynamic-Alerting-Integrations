@@ -141,3 +141,11 @@ docs/rule-packs/
 # Session-guard liveness heartbeat (#824) — host session-init writes it,
 # dev container sees it via the shared mount; pre-commit gate reads freshness.
 .vibe/
+
+# Ephemeral local scratch dir at repo root — never tracked. Holds vibe-subagent-review
+# PROGRESS.jsonl ledgers (Makefile agent-progress SCOPE=dev/<scope>), and catches stray
+# git-lfs client hooks an external `git lfs install` drops into a relative `dev/null/`
+# when core.hooksPath is transiently a relative path (the Windows/MSYS `/dev/null`
+# disable-hooks trick gets mangled to `dev/null`). Root-anchored `/dev/` so a nested
+# `<pkg>/dev/` elsewhere in the tree is NOT swept in.
+/dev/
