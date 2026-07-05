@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -689,3 +690,19 @@ def test_iops_recipe_emits_prereq_notice(tmp_path, capsys):
                 "--out", str(tmp_path / "pack.yaml")]
     assert cc.main() == 0
     assert "disk-IOPS-recipe prerequisite" in capsys.readouterr().err
+
+
+# --- E. CLI default ↔ CI canonical source (drift gate) ----------------------
+# The committed pack is compiled from the LIVE conf.d (#741 S3b), so a bare
+# `--check` must scan that same tree — a diverged default makes every
+# no-argument local run report phantom drift against the committed pack.
+def test_cli_default_config_dir_matches_canonical_callers():
+    canonical = "components/threshold-exporter/config/conf.d"
+    assert cc.DEFAULT_CONFIG_REL == canonical
+    assert (_REPO / canonical).is_dir()
+    # Every repo caller pins the canonical tree explicitly; if the tree ever
+    # moves, this forces the CLI default to move in the same PR.
+    pat = re.compile(r"compile_custom_alerts\.py[^\n]*?--config-dir\s+(\S+)")
+    for rel in ("Makefile", ".pre-commit-config.yaml", ".github/workflows/ci.yml"):
+        callers = set(pat.findall((_REPO / rel).read_text(encoding="utf-8")))
+        assert callers == {canonical}, f"{rel} scans {callers}, CLI default is {canonical}"
