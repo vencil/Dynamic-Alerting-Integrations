@@ -246,6 +246,13 @@ session-cleanup: ## Session 結束或異常終止後的清理
 check-planning-bloat: ## 偵測 §12.1 Session Ledger 膨脹 row（dev-rules §A6；用：ARGS="--limit 1500" 覆寫）
 	@python3 scripts/tools/lint/validate_planning_session_row.py $(ARGS)
 
+.PHONY: agent-progress
+agent-progress: ## 長時 agent progress ledger 快照（協議見 vibe-subagent-review skill；用：make agent-progress SCOPE=dev/sec741 [N=10]）
+	@if [ -z "$(SCOPE)" ]; then echo "❌ SCOPE is required. e.g. make agent-progress SCOPE=dev/sec741"; exit 1; fi
+	@files=$$(find "$(SCOPE)" -name 'PROGRESS.jsonl' 2>/dev/null | sort); \
+	if [ -z "$$files" ]; then echo "⚠️  $(SCOPE) 下沒有 PROGRESS.jsonl（目錄不存在、agent 尚未寫入、或 spawn prompt 未內嵌 ledger 契約）"; exit 1; fi; \
+	for f in $$files; do echo "== $$f =="; tail -n $(or $(N),10) "$$f"; echo ""; done
+
 .PHONY: win-commit
 win-commit: ## Windows 逃生門：sandbox hook-gate → Windows stage/commit/push。用：make win-commit MSG=_msg.txt FILES="a b" [SKIP=hook1,hook2] [SKIP_HOOKS=1]
 	@if [ -z "$(MSG)" ]; then echo "❌ MSG is required. e.g. make win-commit MSG=_msg.txt"; exit 1; fi
