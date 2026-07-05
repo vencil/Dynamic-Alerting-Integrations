@@ -10,10 +10,12 @@ The generated pack flows through the EXISTING fan-out unchanged (both glob
 `rule-pack-*.yaml`): generate_rulepack_configmaps.py → configmap, and
 operator_generate.py → PrometheusRule CRD.
 
-Source of declarations (`--config-dir`): defaults to the committed example tree
-`rule-packs/recipes/examples/conf.d/`. S3 (exporter `_custom_alerts` support)
-will switch the production source to the live conf.d; until then the live
-exporter cannot parse the new key, so the example tree is the safe S1+S2 source.
+Source of declarations (`--config-dir`): defaults to the LIVE exporter tree
+`components/threshold-exporter/config/conf.d` — the same canonical source every
+gate (Makefile `custom-alerts-compile*` / pre-commit / CI) pins explicitly, and
+the tree the committed pack is compiled from since S3b. The source MUST be the
+conf.d the exporter serves, or recipe_id will not match emit. The docs example
+tree (`rule-packs/recipes/examples/conf.d/`) stays reachable via `--config-dir`.
 
 `--check` regenerates in memory and SEMANTICALLY compares against the committed
 pack (via check_rulepack_sync), so a stale / hand-edited pack is a hard failure.
@@ -55,7 +57,7 @@ from custom_alerts.loader import CustomAlertConfigError  # noqa: E402
 
 
 PACK_NAME = "custom-alerts"
-DEFAULT_CONFIG_REL = "rule-packs/recipes/examples/conf.d"
+DEFAULT_CONFIG_REL = "components/threshold-exporter/config/conf.d"
 OUT_REL = "rule-packs/rule-pack-custom-alerts.yaml"
 
 
