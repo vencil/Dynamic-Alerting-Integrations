@@ -38,9 +38,9 @@
     "_namespaces": {},
     "_profile": {},
     "_custom_alerts": {
-      "type": "array",
+      "type": ["array", "null"],
       "title": "Platform/domain-inherited custom-alert recipes (#1008 Part C)",
-      "description": "STRUCTURAL guard: must be a LIST of recipe objects, each carrying the base-required keys (recipe/name/metric/threshold — matches loader.py base_required). This shifts-left the crash-class where a scalar or list-of-scalars `_custom_alerts` in a _defaults file (which bypasses the strict tenant customAlertInstance schema) reaches the compiler — a non-mapping entry raised an uncaught AttributeError → whole-platform compile DoS (#1008 F-B). Deeper per-recipe validity (recipe enum, window pattern, ratio→denominator, slug collisions) is the compiler's authority and is fail-soft per recipe (#1008 Part B); it is intentionally NOT duplicated here (a full customAlertInstance $ref for _defaults is a deferred follow-up).",
+      "description": "STRUCTURAL guard: must be a LIST of recipe objects, each carrying the base-required keys (recipe/name/metric/threshold — matches loader.py base_required). `null`/empty is tolerated as a placeholder — the loader reads `_custom_alerts:` (null) as `[]` (`data.get(...) or []`), matching the `defaults`/`state_filters` nil-map convention. This shifts-left the crash-class where a scalar or list-of-scalars `_custom_alerts` in a _defaults file (which bypasses the strict tenant customAlertInstance schema) reaches the compiler — a non-mapping entry raised an uncaught AttributeError → whole-platform compile DoS (#1008 F-B). Deeper per-recipe validity (recipe enum, window pattern, ratio→denominator, slug collisions) is the compiler's authority and is fail-soft per recipe (#1008 Part B); it is intentionally NOT duplicated here (a full customAlertInstance $ref for _defaults is a deferred follow-up).",
       "items": {
         "type": "object",
         "required": ["recipe", "name", "metric", "threshold"]
