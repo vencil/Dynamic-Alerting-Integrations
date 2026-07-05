@@ -35,7 +35,7 @@ description: 全 component 週期性深度安全稽核 — Recon→平行 Hunt(V
    ```
    要換 target 或攻擊面向,傳 `attackClasses: [{key,title,scope,files}]` 覆蓋預設 4 類。
 4. **收尾親驗(鐵律①)**:對每個 `CONFIRMED` finding,**自己** grep+cite 最吃重的 `file:line`,不照收 agent 自評;把跨組件 sink(如 `recipes.py` 內插)也驗。
-5. **產出**:呈現 `domain_awareness_verdict` + confirmed vs rejected + coverage(空的攻擊類=該區 hardened,非未稽核);真 finding 用 `spawn_task` 開 track+fix task(帶對抗式 role prompt)。
+5. **產出**:呈現 `domain_awareness_verdict` + confirmed vs rejected + coverage(空的攻擊類=該區 hardened,非未稽核);真 finding 用 `spawn_task` 開 track+fix task(帶對抗式 role prompt)。fix 後的對抗式重驗 verifier 遵循 [vibe-subagent-review](../vibe-subagent-review/SKILL.md) 的〈長時驗證 agent 可觀測性協議〉— Workflow-first;raw 背景 `Agent` 必寫 `dev/<scope>/PROGRESS.jsonl` 里程碑 ledger;單 agent ~15 分鐘上限,超過拆 staged agents。
 6. **清理**:`git worktree remove .claude/worktrees/sec-audit`(host,不在 container 內)。
 
 ## 成本 & 模型分層
