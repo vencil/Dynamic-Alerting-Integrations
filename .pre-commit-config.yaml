@@ -213,6 +213,10 @@ repos:
         # language: python (not system) — `system` would hit the MS Store
         # python3 shim on Windows hosts (windows-mcp-playbook trap #63).
         language: python
+        # pyyaml: the native PSS namespace-label rule (#1018) parses the
+        # manifests (parse, not grep); absent pyyaml degrades to an explicit
+        # WARN, but the hook venv should carry it so the rule actually runs.
+        additional_dependencies: ['pyyaml']
         pass_filenames: false
         files: '^k8s/.*\.ya?ml$|^\.kube-linter\.yaml$|^scripts/tools/lint/check_(k8s_manifests|iac_helm)\.py$'
         stages: [manual]

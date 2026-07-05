@@ -1,3 +1,11 @@
+# Pod Security Standards (#1018 phased rollout, PR-1 soak stage):
+# warn+audit=restricted on every app-tier namespace — surfaces violations as
+# kubectl warnings + apiserver audit annotations WITHOUT rejecting anything.
+# ⛔ Deliberately NO `enforce` label yet: the enforce flip is a follow-up PR
+# after the soak window (which must cover one full weekly threshold-govern
+# CronJob round — see docs/internal/pss-enforcement-runbook.md).
+# Unpinned (latest) level form on warn/audit is intentional — pin a minor
+# version only at enforce-flip time.
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -5,6 +13,8 @@ metadata:
   labels:
     purpose: database
     instance: db-a
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/audit: restricted
 ---
 apiVersion: v1
 kind: Namespace
@@ -13,6 +23,8 @@ metadata:
   labels:
     purpose: database
     instance: db-b
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/audit: restricted
 ---
 apiVersion: v1
 kind: Namespace
@@ -20,3 +32,5 @@ metadata:
   name: monitoring
   labels:
     purpose: monitoring
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/audit: restricted

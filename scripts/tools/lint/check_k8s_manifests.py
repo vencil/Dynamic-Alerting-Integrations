@@ -34,8 +34,19 @@ NB: there is NO Mode-A source scan here (unlike L2). L2's ALLOW_EMPTY/INSECURE_*
 regex would FALSE-POSITIVE on legitimate raw-manifest keys (e.g. Prometheus
 scrape `insecure_skip_verify: true`), and raw manifests carry no `{{ if }}`
 template branches for a pre-render scan to recover — so the kube-linter pass is
-the whole of L4. Hardcoded *secret values* in raw Secrets are covered by L3
-(its scope includes k8s/**/*.yaml).
+the whole of L4's *workload* scan. Hardcoded *secret values* in raw Secrets are
+covered by L3 (its scope includes k8s/**/*.yaml).
+
+One native (non-kube-linter) rule rides along — PSS namespace labels (#1018):
+every `kind: Namespace` under k8s/ must carry BOTH
+`pod-security.kubernetes.io/warn` and `.../audit` labels with a value in
+{privileged, baseline, restricted}; `enforce` is OPTIONAL (the #1018 rollout is
+phased — enforce flips per-ns after soak) but validated when present.
+INFORMATIONAL ONLY: findings land in WARN and NEVER block (--ci exit stays 0)
+— soak-stage discipline so in-flight PRs are not retroactively gated; revisit
+the severity at enforce-flip time. Engine-independent (pure PyYAML parse; a
+missing PyYAML is surfaced as an explicit WARN, never a silent skip — CI
+installs it).
 
 Engine is binary-on-PATH first (CI installs it), else Docker:
   kube-linter -> `kube-linter` | docker run stackrox/kube-linter:<ver>
@@ -145,6 +156,81 @@ def is_exempt(relpath: str, check: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# PSS namespace-label rule (#1018) — native, engine-independent, WARN-only
+# ---------------------------------------------------------------------------
+PSS_PREFIX = "pod-security.kubernetes.io/"
+PSS_REQUIRED_MODES = ("warn", "audit")   # every Namespace must declare both
+PSS_OPTIONAL_MODES = ("enforce",)        # phased rollout: optional, validated
+PSS_VALID_LEVELS = {"privileged", "baseline", "restricted"}
+
+
+def pss_label_findings(doc: object, relpath: str) -> list[str]:
+    """Findings for ONE parsed YAML doc (pure — unit-tested).
+
+    Non-Namespace kinds and non-mapping docs yield nothing. Values are
+    validated against the three official PSS levels; the *-version companion
+    labels are deliberately NOT validated (pinning is an enforce-flip-time
+    concern, see docs/internal/pss-enforcement-runbook.md).
+    """
+    if not isinstance(doc, dict) or doc.get("kind") != "Namespace":
+        return []
+    meta = doc.get("metadata") or {}
+    name = meta.get("name", "?")
+    labels = meta.get("labels") or {}
+    out: list[str] = []
+    for mode in PSS_REQUIRED_MODES:
+        key = PSS_PREFIX + mode
+        if key not in labels:
+            out.append(
+                f"[pss] {relpath} ns/{name}: missing `{key}` label — every "
+                f"Namespace manifest must declare warn+audit PSS levels "
+                f"(#1018 phased rollout; enforce stays optional until flip)")
+        elif str(labels[key]) not in PSS_VALID_LEVELS:
+            out.append(
+                f"[pss] {relpath} ns/{name}: `{key}: {labels[key]}` is not a "
+                f"valid PSS level (privileged|baseline|restricted)")
+    for mode in PSS_OPTIONAL_MODES:
+        key = PSS_PREFIX + mode
+        if key in labels and str(labels[key]) not in PSS_VALID_LEVELS:
+            out.append(
+                f"[pss] {relpath} ns/{name}: `{key}: {labels[key]}` is not a "
+                f"valid PSS level (privileged|baseline|restricted)")
+    return out
+
+
+def collect_pss_findings(files: list[Path] | None = None) -> list[str]:
+    """PSS-label findings across raw manifests (default: the L4 file set).
+
+    PyYAML-absent and per-file parse failures degrade to an EXPLICIT note in
+    the returned list (still WARN-routed) — an informational rule must never
+    silently skip, but must also never take the whole L4 run down."""
+    try:
+        import yaml
+    except ImportError:
+        return [
+            "[pss] PyYAML unavailable — namespace PSS-label rule (#1018) "
+            "skipped (pip install pyyaml; CI installs it)"]
+    if files is None:
+        files = find_manifest_files()
+    out: list[str] = []
+    for p in files:
+        try:
+            rel = p.relative_to(REPO_ROOT).as_posix()
+        except ValueError:
+            rel = p.name
+        try:
+            docs = list(yaml.safe_load_all(p.read_text(encoding="utf-8")))
+        except (yaml.YAMLError, OSError, UnicodeDecodeError) as e:
+            out.append(
+                f"[pss] {rel}: unreadable/unparseable "
+                f"({e.__class__.__name__}) — PSS-label rule skipped this file")
+            continue
+        for doc in docs:
+            out.extend(pss_label_findings(doc, rel))
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Engine
 # ---------------------------------------------------------------------------
 def engine_available() -> bool:
@@ -206,6 +292,11 @@ def collect_findings(strict: bool) -> dict[str, list[str]]:
         findings["INFO"].append(
             f"[scope] no {MANIFEST_ROOT}/ directory — Layer 4 idle (no raw manifests)")
         return findings
+
+    # PSS namespace-label rule (#1018): engine-independent, so it runs BEFORE
+    # (and regardless of) kube-linter availability. WARN-only by design —
+    # soak-stage discipline, never blocks (--ci exit unaffected).
+    findings["WARN"].extend(collect_pss_findings())
 
     if not engine_available():
         msg = ("kube-linter required but unavailable "

@@ -7,7 +7,7 @@
 # How to run (codifies runbook §4.4; CI runs the equivalent in
 # tests/shared/test_vector_projection_vrl.py):
 #
-#   helm template vector ./helm/vector -n monitoring \
+#   helm template vector ./helm/vector -n vector \
 #     --set 'tenantProjections[0].tenantId=tenant-alpha' \
 #     --set 'tenantProjections[0].accountId=1000' \
 #     --set 'tenantProjections[1].tenantId=tenant-beta' \

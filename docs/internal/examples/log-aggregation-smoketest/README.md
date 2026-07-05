@@ -22,15 +22,18 @@ lang: zh
 ## 跑法（再現紅隊 T2-2 + Phase 3 fan-out）
 
 ```sh
-# 1) 確保 Phase 1+2 已就位（helm/victorialogs + helm/vector + helm/chargeback-aggregator）
-helm list -n monitoring | grep -E "victorialogs|vector|chargeback"
+# 1) 確保 Phase 1+2 已就位（helm/victorialogs + helm/vector + helm/chargeback-aggregator；
+#    #1018 起 vector 在專屬 vector ns —— PSS privileged carve-out）
+helm list -n monitoring | grep -E "victorialogs|chargeback"
+helm list -n vector | grep vector
 
 # 2) 啟 mock-siem
 kubectl apply -f docs/internal/examples/log-aggregation-smoketest/mock-siem.yaml
 kubectl wait -n monitoring --for=condition=ready pod -l app.kubernetes.io/name=mock-siem --timeout=60s
 
-# 3) Vector 加上 fan-out 指向 mock-siem
-helm upgrade vector ./helm/vector -n monitoring \
+# 3) Vector 加上 fan-out 指向 mock-siem（overlay 的 endpoint 已是
+#    mock-siem.monitoring.svc FQDN，跨 ns 可解析）
+helm upgrade vector ./helm/vector -n vector \
   -f docs/internal/examples/log-aggregation-smoketest/vector-phase3-values.yaml
 
 # 4) 驗 fan-out 兩邊都到貨
@@ -40,8 +43,10 @@ kubectl logs -n monitoring -l app.kubernetes.io/name=mock-siem --tail=5 \
 # 5) 驗 §2 back-pressure isolation —— SIEM down，VictoriaLogs 不能受影響
 kubectl scale -n monitoring deploy/mock-siem --replicas=0
 sleep 30
-kubectl get pod -n monitoring -l app.kubernetes.io/name=vector    # 應該 Running, RESTARTS=0
+kubectl get pod -n vector -l app.kubernetes.io/name=vector    # 應該 Running, RESTARTS=0
 # VictoriaLogs row count 應持續成長：
+#（vlq debug pod 留在 monitoring ns、打 vector label —— victorialogs netpol
+#  的 same-ns podSelector 條目就是為這類 debug pod 保留的）
 kubectl run vlq --rm -i --restart=Never --image=busybox:1.36 -n monitoring \
   --labels='app.kubernetes.io/name=vector' \
   -- wget -qO- 'http://victorialogs.monitoring.svc:9428/select/logsql/query?query=%2A+%7C+stats+count%28%29+as+n&limit=1'
@@ -49,7 +54,7 @@ kubectl run vlq --rm -i --restart=Never --image=busybox:1.36 -n monitoring \
 # 6) 清乾淨
 kubectl scale -n monitoring deploy/mock-siem --replicas=1
 kubectl delete -f docs/internal/examples/log-aggregation-smoketest/mock-siem.yaml
-helm upgrade vector ./helm/vector -n monitoring --reuse-values \
+helm upgrade vector ./helm/vector -n vector --reuse-values \
   --set 'additionalSinks=null'   # 移掉 fan-out，回 Phase 1 + 2 設定
 ```
 

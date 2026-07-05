@@ -2,6 +2,7 @@ apiVersion: v2
 name: mariadb-instance
 description: MariaDB instance with mysqld-exporter sidecar for Prometheus monitoring
 # 0.1.1 — #902 L2 slice-2: pin mariadb + mysqld-exporter images by digest
-version: 0.1.1
+# 0.1.2 — #1018 PSS: pod-level runAsNonRoot + runAsUser/Group 999 (restricted-readiness for the db-a/db-b warn+audit soak)
+version: 0.1.2
 appVersion: "11"
 type: application

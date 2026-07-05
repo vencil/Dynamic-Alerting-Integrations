@@ -1,6 +1,10 @@
+# PSS #1018 PR-1 soak stage: warn+audit only, NO enforce yet (flip is a
+# follow-up PR after soak) — see docs/internal/pss-enforcement-runbook.md.
 apiVersion: v1
 kind: Namespace
 metadata:
   name: tenant-api
   labels:
     app.kubernetes.io/part-of: dynamic-alerting
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/audit: restricted

@@ -83,15 +83,20 @@ data:
           - target_label: env
             replacement: "test"
 
-      # Monitoring namespace services
+      # Platform-component services (monitoring + vector namespaces)
       # Auto-discovers: kube-state-metrics, threshold-exporter,
       # and any future component with the annotation.
+      # `vector` was added when the Vector log-agent DaemonSet moved to its
+      # dedicated privileged namespace (#1018 PSS carve-out) — its
+      # vector-metrics + projection-gate-metrics headless Services carry the
+      # same prometheus.io/scrape annotation and would silently drop off
+      # this job without the extra namespace here.
       - job_name: "monitoring-components"
         scrape_interval: 15s
         kubernetes_sd_configs:
           - role: service
             namespaces:
-              names: ["monitoring"]
+              names: ["monitoring", "vector"]
         relabel_configs:
           # Only keep annotated services
           - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_scrape]

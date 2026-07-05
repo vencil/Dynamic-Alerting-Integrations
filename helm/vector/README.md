@@ -63,16 +63,26 @@ Behavior is pinned by `vector test` (`tests/projection_tests.yaml`) + `tests/sha
 
 ## Install
 
+> Since #1018 the canonical install namespace is the dedicated `vector` ns —
+> a PSS `enforce=privileged` carve-out (`k8s/00-namespaces/namespace-vector.yaml`):
+> the DaemonSet's 3 hostPath mounts are forbidden even by the PSS *baseline*
+> profile, so this chart cannot live in a restricted-tier namespace. The chart
+> itself stays ns-agnostic (`.Release.Namespace`). Migrating an existing
+> `monitoring`-ns install: [`platform-log-aggregation-runbook.md` §1.1](../../docs/internal/platform-log-aggregation-runbook.md).
+
 ```bash
+# Namespace first (PSS labels included)
+kubectl apply -f k8s/00-namespaces/namespace-vector.yaml
+
 # Default (federation-gateway only, sink at victorialogs.monitoring.svc:9428)
-helm install vector ./helm/vector -n monitoring
+helm install vector ./helm/vector -n vector
 
 # Override the sink namespace
-helm install vector ./helm/vector -n monitoring \
+helm install vector ./helm/vector -n vector \
   --set victorialogs.host=victorialogs.observability.svc
 
 # Smoke-test (tail all pods on the node)
-helm install vector ./helm/vector -n monitoring \
+helm install vector ./helm/vector -n vector \
   --set source.extraLabelSelector=""
 ```
 

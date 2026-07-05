@@ -33,21 +33,78 @@ stdout、delivery → shipper。log-store 掛掉時 federation gateway 不能
 
 ## 1. Deploy 順序
 
+> ⚠️ **#1018 起 Vector 裝進專屬 `vector` namespace**（PSS privileged
+> carve-out：DaemonSet 的 3 個 hostPath 連 PSS baseline 都禁，不能與
+> restricted-tier 的 `monitoring` 同住）。既有 monitoring-ns 安裝的遷移
+> 步驟見 §1.1。
+
 ```sh
-# 1) Store first — Vector 啟動時會嘗試握手 sink。
+# 0) Vector 專屬 namespace（帶 PSS privileged labels；scripts/setup.sh
+#    會整包 apply k8s/00-namespaces/，手動裝就單獨 apply 這支）。
+kubectl apply -f k8s/00-namespaces/namespace-vector.yaml
+
+# 1) Store first — Vector 啟動時會嘗試握手 sink。victorialogs 續留
+#    monitoring；chart ≥0.3.0 的 netpol 預設放行 vector ns（ingest）。
 helm install victorialogs ./helm/victorialogs -n monitoring \
   --set persistence.size=20Gi \
   --set retentionPeriod=30d
 
-# 2) Shipper second。
-helm install vector ./helm/vector -n monitoring \
+# 2) Shipper second — 裝進 vector ns；sink host 本來就是 FQDN，跨 ns 不用改。
+helm install vector ./helm/vector -n vector \
   --set victorialogs.host=victorialogs.monitoring.svc
+
+#    多租戶（tenantProjections 有設）再多一步前置：projection-gate 掛的
+#    conf.d registry ConfigMap 是 namespaced —— 必須存在於 vector ns
+#    （projectionGate.registry.configMapName 指的那顆），否則 gate 一律
+#    degrade 回 0:0。
 
 # 3) Grafana datasource：plugin 用 GF_INSTALL_PLUGINS 自動裝
 #    （k8s/03-monitoring/deployment-grafana.yaml 已加好）；
 #    datasource provisioning 已寫進 configmap-grafana.yaml。
 kubectl rollout restart -n monitoring deploy/grafana
 ```
+
+### 1.1 既有部署遷移：Vector monitoring → vector ns（#1018）
+
+**先拆後裝、不雙跑**。兩個硬理由：(a) checkpoint 存 hostPath
+`/var/lib/vector`——雙跑會兩個 DaemonSet instance 搶同一 checkpoint dir
+＋重複 ingest；(b) chart 的 ClusterRole / ClusterRoleBinding 名稱固定
+（`vector`，cluster-scoped）——第二個 release 直接撞 Helm ownership
+error 裝不起來。
+
+```sh
+# 1) 前置 wiring（都先於搬遷，否則新 Vector 起來就斷線）：
+kubectl apply -f k8s/00-namespaces/namespace-vector.yaml       # ns + PSS labels
+helm upgrade victorialogs ./helm/victorialogs -n monitoring \
+  --reuse-values                                               # chart ≥0.3.0：netpol 放行 vector ns
+kubectl apply -f k8s/03-monitoring/configmap-prometheus.yaml   # SD 加 vector ns
+kubectl rollout restart -n monitoring deploy/prometheus        # 讓 SD 生效
+# （多租戶）在 vector ns 重建 registry ConfigMap —— ConfigMap 掛載
+# 不跨 ns，monitoring 那顆新 pod 掛不到：
+kubectl get cm <registry-cm> -n monitoring -o yaml \
+  | sed 's/namespace: monitoring/namespace: vector/' | kubectl apply -f -
+
+# 2) 搬遷（低峰窗執行）：
+helm uninstall vector -n monitoring
+helm install vector ./helm/vector -n vector \
+  --set victorialogs.host=victorialogs.monitoring.svc \
+  <原本的 values/-f overlay 全部帶上>
+
+# 3) 驗證：
+kubectl get pods -n vector -l app.kubernetes.io/name=vector -o wide  # 每 node 一顆
+#    victorialogs row count 持續成長（§2 的 stats query）；
+#    Prometheus targets 頁看得到 vector-metrics（namespace=vector）；
+#    （多租戶）gate verdict metric 恢復 serve。
+```
+
+**誠實成本（不假裝零成本）**：uninstall → install 之間有 log 缺口
+（秒～分鐘級，取決於 image pull）。缺口的實際遺失量通常近零——
+checkpoint 在 hostPath 上跨 install 存活，新 DaemonSet 從斷點續讀
+`/var/log/pods`；真正丟的是「缺口期間被 kubelet rotate 掉的檔案尾巴」
+（高流量 node 才會發生）。接受不了就排低峰窗；**不要**用雙跑來消缺口
+（見上方兩個硬理由）。舊 ns 殘留檢查：`helm list -n monitoring` 不應
+再有 vector；`kubectl get all -n monitoring -l app.kubernetes.io/name=vector`
+應為空。
 
 驗 datasource 載入完成：
 
@@ -109,11 +166,11 @@ index）。本 pipeline 的選擇凍結在 `helm/vector/values.yaml` 的
 ### 4.1 「Grafana 查不到 log」
 
 ```sh
-# a) Vector 在每個 node 都跑？
-kubectl get pods -n monitoring -l app.kubernetes.io/name=vector -o wide
+# a) Vector 在每個 node 都跑？（#1018 起 Vector 在專屬 vector ns）
+kubectl get pods -n vector -l app.kubernetes.io/name=vector -o wide
 
 # b) Vector 有沒有看到 gateway 的 pod？
-kubectl logs -n monitoring -l app.kubernetes.io/name=vector --tail=50 \
+kubectl logs -n vector -l app.kubernetes.io/name=vector --tail=50 \
   | grep -i 'federation-gateway\|added file\|matched'
 
 # c) Vector → VictoriaLogs 連得到嗎？
@@ -137,13 +194,15 @@ NOTES.txt 會印警告）。
 
 `kubernetes_logs` 讀 `/var/log/pods/...` 需要能讀 root-owned file。
 本 chart 預設 `runAsUser: 0` + `DAC_READ_SEARCH` cap（其他 cap 全掉）。
-如果叢集有 PSP/PSA 把 root 擋掉，需要：
+平台拓樸已內建解法：**Vector 裝在專屬 `vector` ns，該 ns 是 #1018 PSS
+enforce=privileged carve-out**（見 `k8s/00-namespaces/namespace-vector.yaml`
+與 `docs/internal/pss-enforcement-runbook.md`）——root + hostPath 在這裡
+是設計內。若你的環境另有 admission 政策仍擋 root：
 
 - 切到 `--set containerSecurityContext.runAsUser=472` 並讓 host 把
   `/var/log/pods` group-readable，或
 - 換 image 到 `timberio/vector:0.55.0-distroless-static`（有 `nobody`
-  user），同上需 host 端配合，或
-- 在該 namespace 例外放行 root。
+  user），同上需 host 端配合。
 
 ### 4.4 升 Vector 版本時的 VRL 編譯爆炸
 
@@ -203,7 +262,7 @@ stream 也跟著一起 fan-out，不需要二次配線）。
 
 ```sh
 # Splunk HEC 範例（其他 SIEM 改 sink type 與 endpoint 即可）
-helm upgrade vector ./helm/vector -n monitoring --reuse-values \
+helm upgrade vector ./helm/vector -n vector --reuse-values \
   -f - <<EOF
 additionalSinks:
   - name: splunk_compliance
@@ -230,14 +289,14 @@ kubectl run vlq --rm -i --restart=Never --image=busybox:1.36 --quiet -- \
 
 ```sh
 # 模擬 SIEM 不可達：把 endpoint 改成擋住的 IP，或 scale SIEM 到 0
-helm upgrade vector ./helm/vector -n monitoring --reuse-values \
+helm upgrade vector ./helm/vector -n vector --reuse-values \
   --set 'additionalSinks[0].endpoint=https://10.0.0.1:8088'  # blackhole
 sleep 60
 # 期望：vector pod 仍 Running、VictoriaLogs 仍持續收 row。
 # Vector internal_metrics 會記 dropped-events 對應指標（精確 metric
 # 名稱依 Vector 版本不同，0.55 之後是 `buffer_*_events_total` 系列；
 # 開 metrics.enabled=true 後從 :9598/metrics 撈）。
-kubectl get pod -n monitoring -l app.kubernetes.io/name=vector  # Running
+kubectl get pod -n vector -l app.kubernetes.io/name=vector  # Running
 ```
 
 ### 7.2 鐵則 + 失敗模式
@@ -440,7 +499,7 @@ kubectl exec -n monitoring deploy/victorialogs -- \
 
 ```sh
 # 1) 語法（codify 本 runbook §4.4 手動步驟）
-helm template vector ./helm/vector -n monitoring \
+helm template vector ./helm/vector -n vector \
   --set 'tenantProjections[0].tenantId=tenant-alpha' --set 'tenantProjections[0].accountId=1000' \
   --set 'tenantProjections[1].tenantId=tenant-beta'  --set 'tenantProjections[1].accountId=1001' \
   | yq '.[] | select(.kind=="ConfigMap" and (.metadata.name|test("vector-config"))) | .data."vector.yaml"' \
