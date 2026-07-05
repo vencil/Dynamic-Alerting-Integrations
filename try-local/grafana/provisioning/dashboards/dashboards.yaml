@@ -1,0 +1,25 @@
+# try-local Grafana dashboard provisioning provider.
+#
+# Mirrors the k8s provider shape (k8s/03-monitoring/configmap-grafana.yaml →
+# dashboards.yaml): a single file-based provider that loads every *.json under
+# options.path. foldersFromFilesStructure:false → all dashboards land in the
+# General folder (flat), same as prod.
+#
+# Two dashboards are mounted into that path by docker-compose.yaml:
+#   - federation-revocation-dashboard.json  ← the REAL prod SOT, bind-mounted
+#     READ-ONLY from ../k8s/03-monitoring/ (single source, zero drift — it stays
+#     "the actual production dashboard", we do not fork or edit it)
+#   - trylocal-home.json                    ← a tiny try-local-only demo notice,
+#     also set as the Grafana home via GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH
+apiVersion: 1
+
+providers:
+  - name: "default"
+    orgId: 1
+    folder: ""
+    type: file
+    disableDeletion: false
+    editable: true
+    options:
+      path: /etc/grafana/provisioning/dashboards
+      foldersFromFilesStructure: false

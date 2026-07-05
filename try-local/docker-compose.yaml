@@ -8,6 +8,8 @@
 #   - recipe-preview :8082  would-fire preview API (POST /preview; #657)
 #   - prometheus     :9090  /alerts shows the headline critical FIRING
 #   - alertmanager   :9093  the firing alert, routed to a null receiver
+#   - grafana        :3000  the REAL federation-revocation security dashboard,
+#                           fed by a synthetic mock (Act 2 — see README)
 #   - threshold-exporter    config-driven user_threshold metrics (internal)
 #   - pushgateway    :9091  holds the synthetic DB metric the seed pushed
 #
@@ -198,6 +200,57 @@ services:
       retries: 20
     restart: unless-stopped
 
+  grafana:
+    # The federation-revocation SECURITY dashboard, live on your laptop. In the
+    # DEFAULT stack (not profile-gated) so trial users actually see it — this is
+    # "Act 2" after the MariaDB red light (see README). Pinned to the SAME image
+    # tag as the k8s Deployment (k8s/03-monitoring/deployment-grafana.yaml) so
+    # what you see here matches prod.
+    image: grafana/grafana:12.4.5
+    environment:
+      # Anonymous Admin + no login form: a one-command laptop demo shouldn't ask
+      # for a password. Safe ONLY because the port is loopback-only (below); the
+      # k8s Deployment uses real admin credentials + oauth. NOT for any exposed
+      # deployment.
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      # Land trial users on the demo-notice dashboard FIRST (it frames the data
+      # as synthetic before they read the real panels), then they click through
+      # to the federation board. Path is inside the mounted provisioning dir.
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/grafana/provisioning/dashboards/trylocal-home.json
+    volumes:
+      # Provisioning: datasource (Prometheus, isDefault → resolves the SOT
+      # dashboard's ${DS_PROMETHEUS} var) + the dashboard file-provider.
+      - ./grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./grafana/provisioning/dashboards/dashboards.yaml:/etc/grafana/provisioning/dashboards/dashboards.yaml:ro
+      # The demo-notice home dashboard (try-local only).
+      - ./grafana/dashboards/trylocal-home.json:/etc/grafana/provisioning/dashboards/trylocal-home.json:ro
+      # THE REAL PROD DASHBOARD, bind-mounted READ-ONLY straight from the k8s
+      # source of truth — single source, zero drift, and it stays the actual
+      # production artifact (we never fork/edit it for the demo; honesty comes
+      # from the notice dashboard + datasource name + README, not from touching
+      # this JSON).
+      - ../k8s/03-monitoring/federation-revocation-dashboard.json:/etc/grafana/provisioning/dashboards/federation-revocation-dashboard.json:ro
+    ports:
+      # Loopback-only (same posture as the rest of the stack): anonymous Admin is
+      # enabled above, so LAN exposure would hand anyone on the network full
+      # Grafana admin. Local-only by design.
+      - "127.0.0.1:${EXPOSE_GRAFANA_PORT:-3000}:3000"
+    depends_on:
+      # Grafana's datasource points at the prometheus service; start it first.
+      prometheus:
+        condition: service_started
+    healthcheck:
+      # /api/health is Grafana's documented readiness endpoint (same one the k8s
+      # readinessProbe uses). The image bundles wget (verified). Retries*interval
+      # allows for first-boot plugin/provisioning load.
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
   # ── Seed one-shots (run to completion, then exit) ────────────────────────
   seed-git:
     # git-init the config repo so commit-on-write has a repo. No monitoring
@@ -225,3 +278,27 @@ services:
       pushgateway:
         condition: service_started
     restart: "no"
+
+  # ── Continuous seed (loops; NOT a one-shot) ──────────────────────────────
+  mock-reconciler:
+    # Stands in for the federation-revocation reconciler (which needs K8s +
+    # VictoriaLogs). Loops every ~15s re-pushing the 6 platform-global metrics
+    # with last_reconcile_ts=NOW each iteration. WHY a loop, not a one-shot like
+    # seed-metrics: pushgateway does not honor injected timestamps, so a static
+    # last_reconcile_ts would make `time()-ts` climb and the Grafana freshness
+    # panel flip to a FALSE red "Stale" within ~30m — re-pushing ts=now keeps it
+    # a live green sawtooth. (Full rationale in push-federation-metrics.sh.)
+    # restart: unless-stopped so the freshness signal survives a pushgateway
+    # bounce (re-push repopulates the memory-only gateway).
+    image: curlimages/curl:latest
+    entrypoint: ["/bin/sh"]
+    command: ["/seed/push-federation-metrics.sh"]
+    environment:
+      PUSHGATEWAY_URL: http://pushgateway:9091
+      PUSH_INTERVAL: "15"
+    volumes:
+      - ./seed:/seed:ro
+    depends_on:
+      pushgateway:
+        condition: service_started
+    restart: unless-stopped

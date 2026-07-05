@@ -23,6 +23,8 @@ Give it ~1 minute, then open:
 
 背後還有 **threshold-exporter**（把 config 變成 `user_threshold` 指標）和 **pushgateway**（裝載 seed 推進去的合成 DB 指標）。
 
+還有 **Grafana**（<http://localhost:3000>）—— 這是「Act 2」：正式生產環境用的**聯邦撤銷安全儀表板**，在本機用合成資料點亮（資料是 demo，儀表板與門檻是真的）。詳見下方 [Act 2](#act-2企業安全縱深聯邦撤銷儀表板)。
+
 驗證整條鏈是否正常：
 
 ```bash
@@ -63,7 +65,7 @@ graph LR
 
 ## 兩種跑法
 
-**① 完整 stack**（上面那個）— 6 個服務 + 2 個 one-shot seed，能看到 live 告警紅燈。
+**① 完整 stack**（上面那個）— 8 個長駐服務（含 Grafana）+ 2 個 one-shot seed + 1 個持續 mock seed，能看到 live 告警紅燈，外加 Act 2 的聯邦撤銷安全儀表板。
 
 **② 只跑核心雙星**（Tenant Manager，不含監控）：
 
@@ -85,6 +87,20 @@ git -C try-local/seed/conf.d log --oneline
 - **為什麼會 fire**：seed 往 pushgateway 推了一筆 `mysql_global_status_threads_connected{tenant="db-demo"}=200`，超過 `db-demo` 設定的 critical 閾值 120 → DB rule pack 的 critical 規則 `for:30s` 後觸發。
 - **設計概念展示**：第二個租戶 `cache-demo` 開了 silent_mode + severity dedup，會產生 v2.8.0 的 **Sentinel Alert / Severity Dedup** sentinel（`severity:none`，notification inhibit 來源）。
 
+## Act 2：企業安全縱深（聯邦撤銷儀表板）
+
+> MariaDB 紅燈是主秀；這是**紅燈背後的企業級安全縱深**——想看就看，是邀請，不是必看。
+
+多租戶聯邦（ADR-020/ADR-028）讓租戶跨叢集互信。隨之而來的攻擊面：一個帶著合法 Service Account 身分、具寫入權的行為者，可能**偷偷抹掉一筆撤銷紀錄**（un-revoke），讓一個「已撤銷但還沒過期」的 token 復活。這種竄改連 workload identity 稽核都看不到——所以需要一個**對帳器（reconciler）**持續比對「離線撤銷日誌 vs. 線上撤銷集合」，任何缺口就亮燈。這就是 **ADR-028 的 tamper-evidence 控制**。
+
+打開 **Grafana**：<http://localhost:3000>
+
+- 首頁是一張**demo 說明卡**（先說清楚：這裡是合成資料），點卡片裡的連結進 **Federation Revocation Reconciler** 儀表板。
+- 健康時全部 calm-green：**Tamper status** ✓ Clean、**Reconciler freshness** ✓ Fresh（活的綠色鋸齒，不是 stale）、**Gateway fail-open** ✓ OK、**Coverage integrity** ✓ Intact。
+- 下方的 chaos-scenario 時序圖展示「壞掉長怎樣」（staleness 爬過 1800s、events dropped 上升、tamper > 0）——這裡保持平坦，因為 mock 只發健康的靜止值。
+
+> 🧪 **資料是合成的，儀表板是真的**：`mock-reconciler` 這個小容器每 ~15s 往 pushgateway 推 6 個平台級指標（`last_reconcile_ts` 每次都設成 now，才不會讓 freshness 假性變紅）。**但那張儀表板 JSON 是 production 的正本**——直接從 `k8s/03-monitoring/federation-revocation-dashboard.json` **唯讀掛載**進來，門檻與 alert 對齊都跟正式環境一模一樣，沒有為 demo 改一個字。真正的對帳器（`helm/federation-reconciler`）要接 VictoriaLogs 從真實撤銷日誌算出這些數字——那需要 Kubernetes，不在這個一鍵 laptop demo 範圍內。細節見 **ADR-028**。
+
 ## 關於身分（dev-only auth bypass）
 
 完整 production 由 oauth2-proxy 在前面注入 `X-Forwarded-Email` / `X-Forwarded-Groups`。try-local 沒有 oauth2-proxy，所以 tenant-api 用 `--dev-bypass-auth`（**僅限本機**）在缺 header 時注入一個 dev 身分（`dev@local` / `demo-admins`），瀏覽器才打得開 Tenant Manager。
@@ -97,7 +113,7 @@ git -C try-local/seed/conf.d log --oneline
 
 所有 port 只綁 `127.0.0.1`（本機限定）—— dev-bypass 會為無 header 的請求注入 **admin** 身分，故刻意不對 LAN 開放（避免同網段他人取得寫入/commit 權）。要從別台裝置連，請自行改 compose 的 port binding。
 
-預設用 8080 / 8081 / 9090 / 9091 / 9093。若被占用，編輯 `.env`（從 `.env.example` 複製來的）改任一 `EXPOSE_*_PORT` 後重啟：
+預設用 3000 / 8080 / 8081 / 8082 / 9090 / 9091 / 9093。若被占用，編輯 `.env`（從 `.env.example` 複製來的）改任一 `EXPOSE_*_PORT` 後重啟：
 
 ```bash
 make clean-local && docker compose up -d
