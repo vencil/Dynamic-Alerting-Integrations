@@ -22,7 +22,7 @@ updated_at: 2026-07-05
 
 ## 狀態
 
-🟡 **Proposed**（2026-07-05）。MVP（fault-waveform 注入 harness）鎖定可建；三-oracle 全貌列 Future Work with defer-trigger。內部 fresh-eyes + 外部兩輪對抗 review（含 2026-07-05 第二輪 R2-1..R2-5）已全數 fold-in。**昇 `accepted` trigger**：OQ1（合規 carve-out 清單）消化 **AND** MVP 首份 catch-rate 報告產出（以 field data 驗證方向後定案）。
+🟡 **Proposed**（2026-07-05）。MVP（fault-waveform 注入 harness）鎖定可建；三-oracle 全貌列 Future Work with defer-trigger。內部 fresh-eyes + 外部三輪對抗 review（含 2026-07-05 第二輪 R2-1..R2-5、第三輪 R3-1..R3-2）已全數 fold-in。**昇 `accepted` trigger**：OQ1（合規 carve-out 清單）消化 **AND** MVP 首份 catch-rate 報告產出（以 field data 驗證方向後定案）。
 
 > 依語言政策（自 ADR-019 預設 ZH-only），本 ADR 不另製 `.en.md`。
 
@@ -109,7 +109,7 @@ fault-waveform 注入 **reuse `vmalert -replay`（[#968](https://github.com/venc
 fault-waveform 注入定義為**決策層測試 fixture**（放大版 promtool `input_series`），**不踩資料平面**；波形忠實度仍歸遷移方自管（DTW）。注入**假設** metric 如實 emit——該假設本身的驗證屬資料平面（見 D3 defer / OQ3）。
 
 - **量測點 = pre-inhibition ALERTS，非通知送達（外審 F3）**：catch-rate 算在規則開火層（TSDB `ALERTS`）。Alertmanager 的 group_by/inhibit/silence 若誤配 → 過度收斂/抑制 → **catch-rate 可 100% 但 SRE 收不到 page**。通知送達屬**後抑制 / Toil 層**（RFC 兩層對帳、Future Work；需 shadow-AM webhook 指紋比對）——MVP **不宣稱**驗證通知送達。
-- **對帳單位 = 故障事件（episode），非 per-series `ALERTS` 列（外審R2-3）**：來源 scheduled-search 常隱性匯總（一次搜尋＝一個告警事件），VM `ALERTS` 依 time series 展開——同一注入故障可能齊發 N 筆 series-level alert。catch-rate 分子分母以「故障事件 × alert-class」計、不以 series 列計（承 RFC A2 的 episode 對帳單位）；遷移編目時**標註「舊單一告警 → 新多維齊發」規則群**——此為預期 fan-out、divergence 分類記中性，並成為未來維度收斂／關聯分析的優先群體。
+- **對帳單位 = 故障事件（episode），非 per-series `ALERTS` 列（外審R2-3）**：來源 scheduled-search 常隱性匯總（一次搜尋＝一個告警事件），VM `ALERTS` 依 time series 展開——同一注入故障可能齊發 N 筆 series-level alert。catch-rate 分子分母以「故障事件 × alert-class」計、不以 series 列計（承 RFC A2 的 episode 對帳單位）；遷移編目時**標註「舊單一告警 → 新多維齊發」規則群**——此為預期 fan-out、divergence 分類記中性，並成為未來維度收斂／關聯分析的優先群體。MVP 報告另須揭露**每 episode 的 series 膨脹係數（fan-out ratio，外審R3-1）**：係數過高即顯性警示——catch-rate 命中 ≠ 通知面安全，`group_by`/inhibit 收斂治理（RFC A5）須在 cutover 前跟上；此指標**只揭露、不當 gate**（守 D7 量測點邊界與「MVP 不驗通知送達」之界）。
 - **Trade-off**：positioning 較保守（不主導 cutover 全局）；換 scope 清爽、分工不重談。defer-trigger：若遷移方主動要求 Vibe 主導 cutover gate，才觸發重談邊界。
 
 ### D8. Blast-radius 護欄（強制）
@@ -136,6 +136,7 @@ fault-waveform 注入定義為**決策層測試 fixture**（放大版 promtool `
 - MVP 只蓋已知故障；long tail 靠 Future Work 承接（passive shadow）。
 - temporal-window 逐類分類是前期工（D5 trade-off）。
 - 若遷移方硬性要「證明等價」，outcome-validation 有缺口（OQ1）。
+- **波形庫是靜態資產、隨遷移方拓撲/label 漂移折舊**（外審R3-2）：label schema 漂移在本設計下 **fail-loud 而非靜默退化**——selector 不再匹配 → injected case 不 fire → D8.1 FN=0 擋下 verdict；但由此而來的波形庫維護成本真實。緩解：波形庫的 label 集**自 label-governance 契約（RFC A5）衍生**、不手寫散落；「注入時動態抓 live topology 疊加」則**否決**——會破壞 harness 的 hermetic determinism（固定 epoch／隔離 VM 是 #968 的根基）。
 
 ## Future Work（defer-with-trigger）
 
