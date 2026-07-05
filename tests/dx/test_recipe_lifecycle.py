@@ -84,7 +84,7 @@ def test_notices_empty_when_all_active():
 
 
 def test_notices_flag_deprecated_recipe_in_use(monkeypatch):
-    used = {inst["recipe"] for _t, inst, _o, _own in ld.collect_instances(_EXAMPLES)}
+    used = {inst["recipe"] for _t, inst, _o, _own in ld.collect_instances(_EXAMPLES)[0]}
     used &= set(shp.RECIPES)
     assert used, "example conf.d declares no known recipes — fixture changed?"
     target = sorted(used)[0]
@@ -99,7 +99,7 @@ def test_notices_flag_deprecated_recipe_in_use(monkeypatch):
 
 
 def test_deprecated_recipe_still_compiles(monkeypatch, capsys):
-    used = {inst["recipe"] for _t, inst, _o, _own in ld.collect_instances(_EXAMPLES)}
+    used = {inst["recipe"] for _t, inst, _o, _own in ld.collect_instances(_EXAMPLES)[0]}
     used &= set(shp.RECIPES)
     assert used, "example conf.d declares no known recipes — fixture changed?"
     target = sorted(used)[0]
@@ -110,7 +110,7 @@ def test_deprecated_recipe_still_compiles(monkeypatch, capsys):
 
 
 def test_eol_notice_uses_rejection_wording(monkeypatch):
-    used = {inst["recipe"] for _t, inst, _o, _own in ld.collect_instances(_EXAMPLES)}
+    used = {inst["recipe"] for _t, inst, _o, _own in ld.collect_instances(_EXAMPLES)[0]}
     used &= set(shp.RECIPES)
     assert used, "example conf.d declares no known recipes — fixture changed?"
     target = sorted(used)[0]

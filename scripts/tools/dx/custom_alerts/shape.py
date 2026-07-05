@@ -4,9 +4,23 @@ ADR-024 Capability B (#741). The recipe_id is the identity of a generated rule:
 it is the dedup key, the recording-rule name component, the alertname suffix, AND
 a label on the data-plane `user_threshold` series. Because the same recipe_id is
 computed independently by this Python compiler AND (in S3) by the Go exporter,
-**the slug algorithm is a cross-language contract** — it must be pure string
-assembly with no hashing, no locale, no map-ordering dependence. A drift between
-the two implementations silently breaks every `on(tenant) group_left` join.
+**the slug algorithm is a cross-language contract** — it must be deterministic,
+locale-free, and map-order-independent. A drift silently breaks every
+`on(tenant) group_left` join.
+
+The readable slug is a pure string assembly, but it is NOT injective over the shape
+identity: _sanitise is lossy, and the `s_{key}_{value}`/`__`-join is ambiguous even
+with no lossy char ({region_x:1} and {region:x_1} both → `s_region_x_1`) — #1008 / F3.
+So a recipe with >=1 selector (the only tenant-controlled free-form slug field) carries
+a trailing `__x{16-hex}` = SHA-256 over a length-prefixed canonical of the STRUCTURED
+shape identity (see _shape_hash / _needs_shape_hash). window/quantile/metric/for/group_by
+are charset- or enum-bounded, so they cannot alias.
+
+CONTRACT INVARIANT (load-bearing): the schema `type: string` on every free-form
+slug-bearing field is what guarantees Go (which keeps raw YAML text) and Python (whose
+yaml.safe_load coerces bare scalars) read the SAME value string. Selectors are
+`type: string`; `quantile` still permits a bare number (`type: ["string","number"]`), so
+a bare-number quantile like `0.990` diverges Go↔Python — tracked separately, out of F3.
 
 The contract is pinned by tests/dx/fixtures/recipe_id_vectors.json (a shared
 golden vector both implementations assert against).
@@ -24,10 +38,12 @@ recipe_id grammar (parts joined by `__`, each part sanitised to [a-z0-9_]):
        (e.g. per PVC). Emitted ONLY when present, so a recipe without group_by
        keeps a byte-identical slug. Bounded to ALLOWED_GROUP_BY.
 Sanitisation maps every char outside [a-zA-Z0-9_] to '_' (deterministic, and keeps
-the slug valid as a Prometheus recording-rule name component).
+the slug valid as a Prometheus recording-rule name component). A selector-bearing slug
+additionally carries a trailing `__x{16-hex}` suffix (#1008 / F3) for injectivity.
 """
 from __future__ import annotations
 
+import hashlib
 import re
 from typing import Dict, List, Tuple
 
@@ -138,6 +154,65 @@ class RecipeError(ValueError):
 def _sanitise(s: str) -> str:
     """Map every char outside [a-zA-Z0-9_] to '_'. Deterministic, locale-free."""
     return re.sub(r"[^a-zA-Z0-9_]", "_", s)
+
+
+def _lp(s: str) -> bytes:
+    r"""Length-prefixed UTF-8 encoding of one field: b"<byte-len>:<utf-8>". Concatenating
+    length-prefixed fields is injective (NIST SP 800-185 TupleHash style): no two distinct
+    field sequences share an encoding, which closes the delimiter-aliasing collision class
+    (a selector key/value straddling the `_` separator — #1008 / F3). MUST stay
+    byte-identical to custom_alert.go::caHashField."""
+    b = s.encode("utf-8")
+    return str(len(b)).encode("ascii") + b":" + b
+
+
+def _shape_hash(inst: dict, nhex: int = 16) -> str:
+    """Disambiguation suffix for a selector-bearing recipe_id (#1008 / F3): the first
+    `nhex` hex (64-bit) of SHA-256 over a length-prefixed canonical of the STRUCTURED
+    shape identity. Fields are emitted in a FIXED order, each length-prefixed, with an
+    explicit "" for a field not applicable to the recipe (no None → Go reproduces it
+    trivially). 64-bit puts an adversarial suffix-forcing search at a 2^64 birthday bound;
+    the loader.py collision guard is the last-resort backstop for the residual. MUST be
+    byte-identical to custom_alert.go::shapeHashSuffix (golden-vector pinned)."""
+    recipe = inst["recipe"]
+    is_forecast = recipe == "forecast"
+    den = (inst.get("capacity_metric") if is_forecast else inst.get("denominator_metric")) or ""
+    fields = [
+        recipe,
+        str(inst["metric"]),
+        "" if recipe == "absence" else str(inst.get("op", ">")),
+        "" if is_forecast else str(inst.get("window", "")),
+        str(inst.get("quantile", "0.99")) if recipe == "p99_latency" else "",
+        _normalize_horizon(inst) if is_forecast else "",
+        str(den),
+        _normalize_for(inst),
+    ]
+    buf = bytearray()
+    for f in fields:
+        buf += _lp(f)
+    items = _selector_items(inst)
+    buf += _lp("sel")
+    buf += _lp(str(len(items)))
+    for op, key, value in items:
+        buf += _lp(op)
+        buf += _lp(key)
+        buf += _lp(str(value))
+    gb = _normalize_group_by(inst)
+    buf += _lp("gb")
+    buf += _lp(str(len(gb)))
+    for g in gb:
+        buf += _lp(g)
+    return hashlib.sha256(bytes(buf)).hexdigest()[:nhex]
+
+
+def _needs_shape_hash(inst: dict) -> bool:
+    """True when recipe_id must carry the injective suffix (#1008 / F3): iff the recipe has
+    >=1 selector — the `s_{key}_{value}` join is ambiguous even with no lossy char (S1/S2),
+    and selector values are the only tenant-controlled free-form slug field. All other slug
+    fields (window/quantile/metric/for/group_by) are charset- or enum-bounded after
+    validation, so they cannot alias. A no-selector recipe keeps a byte-identical slug
+    (zero data-plane migration). MUST match custom_alert.go::RecipeID's inline condition."""
+    return bool(inst.get("selectors") or inst.get("selectors_re"))
 
 
 def _normalize_for(inst: dict) -> str:
@@ -394,7 +469,17 @@ def recipe_id(inst: dict) -> str:
     for gb in group_by:
         parts.append("gb_" + gb)
 
-    return _sanitise("__".join(parts))
+    # F3 (#1008): recipe_id must be INJECTIVE over shape_signature. The readable slug is
+    # not — _sanitise is lossy AND the `s_{key}_{value}`/`__`-join is ambiguous even with
+    # no lossy char ({region_x:1} and {region:x_1} both → `s_region_x_1`). A selector is
+    # the only tenant-controlled free-form slug field (window/quantile/metric/for/group_by
+    # are charset/enum-bounded post-validation), so a selector-bearing recipe carries a
+    # disambiguation suffix over the STRUCTURED identity; a no-selector recipe stays
+    # byte-identical. MUST stay byte-identical to custom_alert.go::RecipeID (golden-pinned).
+    slug = _sanitise("__".join(parts))
+    if _needs_shape_hash(inst):
+        slug += "__x" + _shape_hash(inst)
+    return slug
 
 
 def shape_signature(inst: dict) -> Tuple:
