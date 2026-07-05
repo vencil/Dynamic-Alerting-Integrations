@@ -14,11 +14,11 @@ lang: zh
 >
 > 相關文件：[Architecture](./architecture-and-design.md) · [Troubleshooting](./troubleshooting.md) · [Shadow Monitoring SOP](./shadow-monitoring-sop.md)
 
-本文檔介紹 Dynamic Alerting 平台提供的四份 Grafana Dashboard，說明如何部署、使用和排查問題。
+本文檔介紹 Dynamic Alerting 平台提供的六份 Grafana Dashboard，說明如何部署、使用和排查問題。
 
 ## 概覽
 
-Dynamic Alerting 提供四份運維導向的 Dashboard：
+Dynamic Alerting 提供六份運維導向的 Dashboard：
 
 | 名稱 | 用途 | 受眾 |
 |------|------|------|
@@ -26,6 +26,18 @@ Dynamic Alerting 提供四份運維導向的 Dashboard：
 | **Fleet Threshold Distribution** | 跨租戶閾值**數值**分布 + 統計離群偵測（平台治理視角） | Platform Engineer / SRE |
 | **Shadow Monitoring Progress** | Migration 期間舊新 Rule 收斂進度 | SRE / Migration Lead |
 | **Federation Revocation Reconciler** | Federation 撤銷 un-revoke 偵測（ADR-028）健康度、chaos-4 場景視圖 | Platform Engineer / SRE / Security |
+| **Federation Audit — Tenant Federation** | 聯邦資料面稽核：請求速率／拒絕分層／per-tenant 佔用（ADR-020） | Platform Engineer / SRE |
+| **Tenant Log Query — Federation** | 租戶日誌查詢面：查詢速率／延遲 P95／拒絕率（ADR-021，victorialogs mode） | Platform Engineer / SRE |
+
+### 內建 vs. Operator 自選匯入（定位）
+
+出廠 Grafana（`k8s/03-monitoring/`）刻意採 **selective embed**：只有**兩份** Dashboard 嵌在 `configmap-grafana.yaml`、由 `deployment-grafana.yaml` 掛進 provisioning 目錄，隨平台 apply **auto-provision**（內建）；本文目錄的其餘五份一律由 operator 按需自行匯入（各章的方法 A：UI 匯入／方法 B：`da-tools grafana-import` sidecar）。
+
+| 交付方式 | Dashboard | 動機 |
+|----------|-----------|------|
+| **內建（auto-provision）** | **MariaDB Overview**（uid `mariadb-overview`；只存在於 ConfigMap embed、無 standalone JSON，故不列本文目錄） | Showcase 首屏：平台 apply 完第一眼就能看到被監控資料庫的健康度（up／連線數／QPS／InnoDB buffer pool），也是 try-local 一鍵體驗的告警紅燈落點 |
+| **內建（auto-provision）** | **Federation Revocation Reconciler**（本文 Dashboard 4，方法 C） | 安全告警觀測面：un-revoke 偵測（[ADR-028](./adr/028-federation-revocation-tamper-evidence.md)）的三條平台告警隨平台出貨，pager 響起當下就要有對應的現場視圖——不應依賴 operator 記得手動匯入 |
+| **Operator 自選（方法 A / B）** | 其餘五份：Dashboard 1（Platform Overview）、2（Shadow Monitoring）、3（Fleet Threshold Distribution）、5（Federation Audit）、6（Tenant Log Query） | 按需採用：Shadow 只在 migration 期間有意義（cutover 後即移除）、Fleet 治理視角在租戶數少時參考價值有限、Dashboard 5／6 只在啟用對應聯邦面時才有資料；且不少環境接自營 Grafana 而非出廠這台——預設全塞只會產生 no-data 空版面 |
 
 ---
 
@@ -352,6 +364,91 @@ panel 閾值刻意**與 [configmap-rules-platform.yaml](https://github.com/venci
 
 ---
 
+## Dashboard 5: Federation Audit — Tenant Federation
+
+> **檔案：** `k8s/03-monitoring/federation-audit-dashboard.json` · **uid：** `federation-audit` · **來源：** [#511](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/511)（[ADR-020](./adr/020-tenant-federation.md) 聯邦資料面稽核）
+
+### 動機
+
+租戶聯邦（[ADR-020](./adr/020-tenant-federation.md)）資料面的稽核視圖。全部 panel 都從**同一個** counter 導出：`tenant_federation_requests_total{tenant, status}`，由 `helm/federation-gateway` 的 mtail sidecar 從 Envoy audit access log 產生。status enum 六值全 dashboard 固定配色（`ok` 綠／`client_aborted` 藍／`rate_limited` 黃／`auth_failed` 橘／`bad_request` 淺橘／`backend_error` 紅），各 panel 間可直接互相對照。無 template 變數；時間範圍預設 `now-6h`。
+
+### 部署
+
+#### 方法 A：Grafana UI 匯入
+
+1. Grafana 左側欄 → **Dashboards** → **New** → **Import**
+2. 上傳 JSON 檔：`k8s/03-monitoring/federation-audit-dashboard.json`
+3. 選擇 Prometheus datasource，點擊 **Import**
+
+#### Method B: ConfigMap Sidecar Auto-Deployment
+
+```bash
+da-tools grafana-import \
+  --dashboard k8s/03-monitoring/federation-audit-dashboard.json \
+  --name grafana-dashboard-federation-audit --namespace monitoring
+```
+
+### Panel 快速參考
+
+| 區 | Panel | PromQL（要點） | 判讀 |
+|---|-------|---------------|------|
+| 頂列 | **Federation Requests /s (5m)**（Stat） | `sum(rate(tenant_federation_requests_total[5m]))` | 全租戶聯邦請求總速率 |
+| 頂列 | **Rejection Rate (5m)**（Stat） | 被拒四狀態（`rate_limited\|auth_failed\|bad_request\|backend_error`）速率 ÷ 總速率（`clamp_min` 防除零） | 平台拒絕率，**刻意排除 `client_aborted`**（client 自行取消查詢不算平台拒絕）；口徑與 `FederationRejectionRateAnomaly` 告警一致；黃 ≥20%、紅 ≥50% |
+| 頂列 | **Active Federation Tenants**（Stat） | `count(count by(tenant) (tenant_federation_requests_total)) or vector(0)` | 送過至少一次聯邦請求的獨立租戶數 |
+| 頂列 | **Backend Errors /s (5m)**（Stat） | `sum(rate(...{status="backend_error"}[5m]))` | 儲存後端 5xx——**平台故障、非租戶被拒**；紅 ≥0.05 req/s |
+| Row 1 | **Request Rate by Status**（TimeSeries, stacked） | `sum by(status) (rate(...[5m]))` | 依 status enum 疊圖看流量組成 |
+| Row 1 | **Requests by Status (1h)**（PieChart, donut） | `sum by(status) (increase(...[1h]))` | 近 1 小時各 status 佔比 |
+| Row 2 | **3-Layer Rejection Rate**（TimeSeries） | 三條線：`status="rate_limited"`／`status=~"auth_failed\|bad_request"`／`status="backend_error"` | 拒絕發生在哪一層（ADR-020 防禦分層）：gateway 限流（429）→ auth／請求拒絕（4xx）→ 儲存後端錯誤（5xx） |
+| Row 2 | **Requests per Tenant (5m rate)**（BarChart, horizontal） | `sum by(tenant) (rate(...[5m]))` | 盯單一租戶壟斷 gateway |
+| Row 3 | **Per-Tenant Request Breakdown**（Table, 分頁） | `sum by(tenant, status) (rate(...[10m]))`（instant） | 每租戶 × status 一列的明細表 |
+
+---
+
+## Dashboard 6: Tenant Log Query — Federation
+
+> **檔案：** `k8s/03-monitoring/tenant-log-query-dashboard.json` · **uid：** `tenant-log-query` · **來源：** [#609](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/609)（[ADR-021](./adr/021-tenant-log-query-federation.md) 租戶日誌查詢面）
+
+### 動機
+
+租戶日誌查詢面（[ADR-021](./adr/021-tenant-log-query-federation.md)；federation-gateway 跑 **victorialogs mode** 時）的觀測視圖。兩個資料源 metric 皆由 `helm/federation-gateway` 的 mtail sidecar 從 Envoy audit access log 產生：
+
+- `tenant_log_query_requests_total{account_id, project_id, status}`（counter）——查詢量與結果
+- `tenant_log_query_duration_ms`（histogram）——查詢延遲
+
+租戶軸是 `account_id`（**已驗證的 VictoriaLogs partition key**，≥1000）；`project_id` 在目前的平台運維投影下恆為 0（明細表已將其隱藏）。無 template 變數；時間範圍預設 `now-6h`。
+
+### 部署
+
+#### 方法 A：Grafana UI 匯入
+
+1. Grafana 左側欄 → **Dashboards** → **New** → **Import**
+2. 上傳 JSON 檔：`k8s/03-monitoring/tenant-log-query-dashboard.json`
+3. 選擇 Prometheus datasource，點擊 **Import**
+
+#### Method B: ConfigMap Sidecar Auto-Deployment
+
+```bash
+da-tools grafana-import \
+  --dashboard k8s/03-monitoring/tenant-log-query-dashboard.json \
+  --name grafana-dashboard-tenant-log-query --namespace monitoring
+```
+
+### Panel 快速參考
+
+| 區 | Panel | PromQL（要點） | 判讀 |
+|---|-------|---------------|------|
+| 頂列 | **Log Queries /s (5m)**（Stat） | `sum(rate(tenant_log_query_requests_total[5m]))` | 全 account 分區的查詢總速率 |
+| 頂列 | **Rejection Rate (5m)**（Stat） | 被拒四狀態（`rate_limited\|auth_failed\|bad_request\|backend_error`）速率 ÷ 總速率（`clamp_min` 防除零） | **刻意排除 `client_aborted`**（Grafana／LogsQL UI 自行取消查詢不算平台拒絕）；口徑與 `TenantLogQueryRejectionRateAnomaly` 告警一致；黃 ≥20%、紅 ≥50% |
+| 頂列 | **Active Log-Query Tenants**（Stat） | `count(sum by(account_id) (rate(...[5m])) > 0) or vector(0)` | **近 5m 視窗內活躍**（rate > 0）的 account 分區數——視窗活躍、非 all-time 累計 |
+| 頂列 | **Query Latency P95 (5m)**（Stat） | `histogram_quantile(0.95, sum by(le) (rate(tenant_log_query_duration_ms_bucket[5m])))` | 全租戶查詢延遲 P95。上界受 VictoriaLogs `-search.maxQueryDuration=25s`（小於 gateway route 30s）拘束——**P95 逼近 25s＝查詢正撞上儲存端 abort 天花板**；黃 ≥5s、紅 ≥20s |
+| Row 1 | **Request Rate by Status**（TimeSeries, stacked） | `sum by(status) (rate(...[5m]))` | 依 status enum 疊圖（配色同 Dashboard 5） |
+| Row 1 | **Query Latency Heatmap (duration_ms)**（Heatmap） | `sum by(le) (rate(..._bucket[5m]))`（`format: heatmap`） | 延遲分布隨時間的演變；**`le` 保留在 grouping 內**——被 `sum` 剝掉的話 heatmap／`histogram_quantile` 直接壞（PromQL topology-label 陷阱） |
+| Row 2 | **Queries per Tenant (5m rate)**（BarChart, horizontal） | `sum by(account_id) (rate(...[5m]))` | 盯單一租戶壟斷 log-query gateway |
+| Row 2 | **Per-Tenant Query Latency P95 (5m)**（BarChart, horizontal） | `histogram_quantile(0.95, sum by(account_id, le) (rate(..._bucket[5m])))` | 每 account 的 P95；`le` 必須與 `account_id` 一起 group、bucket 才會按租戶正確聚合 |
+| Row 3 | **Per-Tenant Query Breakdown**（Table, 分頁） | `sum by(account_id, status) (rate(...[10m]))`（instant） | 每 account × status 一列的明細表 |
+
+---
+
 ## 常見問題與排查
 
 ### 通用診斷步驟
@@ -511,4 +608,4 @@ modules:
 
 ---
 
-**版本：** | **最後更新：** 2026-06-16
+**版本：** | **最後更新：** 2026-07-05
