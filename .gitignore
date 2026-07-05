@@ -130,6 +130,10 @@ CUsersvencs*
 try-local/seed/conf.d/.git/
 # A visitor's local .env (ports/tags) is theirs; only .env.example is tracked.
 try-local/.env
+# chaos.sh writes this scenario flag at runtime for the "break it" demo; the
+# mock-reconciler loop reads it. Runtime state, never committed (a left-over
+# tamper flag would surprise the next `up`; clean-local rm -f's it too).
+try-local/seed/.demo-mode
 
 # Transient mkdocs build copy of repo-root rule-packs/*.md (scripts/mkdocs/rule_packs_bridge.py)
 docs/rule-packs/

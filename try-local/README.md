@@ -101,6 +101,35 @@ git -C try-local/seed/conf.d log --oneline
 
 > 🧪 **資料是合成的，儀表板是真的**：`mock-reconciler` 這個小容器每 ~15s 往 pushgateway 推 6 個平台級指標（`last_reconcile_ts` 每次都設成 now，才不會讓 freshness 假性變紅）。**但那張儀表板 JSON 是 production 的正本**——直接從 `k8s/03-monitoring/federation-revocation-dashboard.json` **唯讀掛載**進來，門檻與 alert 對齊都跟正式環境一模一樣，沒有為 demo 改一個字。真正的對帳器（`helm/federation-reconciler`）要接 VictoriaLogs 從真實撤銷日誌算出這些數字——那需要 Kubernetes，不在這個一鍵 laptop demo 範圍內。細節見 **ADR-028**。
 
+### 🔴 Break it（earned-red：你自己觸發，看它偵測）
+
+看健康的綠燈很安心，但**看它抓到壞事**才過癮。這是 Act 2 的互動環節：**由你注入一次竄改**，然後看對帳器 ~15s 內把它揪出來亮紅燈。因為紅燈是你按出來的（Falco `event-generator` 的思路），所以這是「原來偵測長這樣」的興奮，不是「出事了」的驚慌。
+
+```bash
+make chaos-tamper     # 💥 注入 headline：一筆已撤銷 token 被偷偷復活（un-revoke）
+# → 打開 http://localhost:3000，~15s 內 Tamper status 從 ✓ Clean 翻成 🔴 CRITICAL
+#   （freshness / coverage / gateway 仍是綠的——只有 tamper 在尖叫）
+make chaos-heal       # ✅ 復原：移除旗標 → 下一次 push (~15s) 全部回到 calm-green
+```
+
+**運作原理**（不新增服務、不開新攻擊面）：`chaos.sh` 只把一個「情境字」寫進 `seed/.demo-mode`；`mock-reconciler` loop 每次推送前讀這個旗標，就發出對應的壞值，所以紅燈會**一直停住**直到你 heal。為什麼用「loop 監看旗標」而不是「單發一次壞值」——單發會被 loop 下一次 ~15s 的健康推送蓋掉、閃一下又變綠。旗標檔是 runtime 產物（已 gitignore；`make clean-local` 也會清掉，避免殘留的 tamper 旗標嚇到下次 `up`）。
+
+完整情境集（headline 以外的走 script，不進 Makefile 以免膨脹）：
+
+```bash
+bash try-local/chaos.sh <tamper|stale|drift|failopen|heal>
+```
+
+| 指令 | 亮哪個燈 | 情境（合成） |
+|---|---|---|
+| `chaos.sh tamper` | 🔴 **Tamper status** CRITICAL | 一筆「已撤銷但未過期」的 token 復活（un-revoke） |
+| `chaos.sh stale` | 🔴 **Reconciler freshness** Stale + fail-closed rate() 爬升 | 對帳器停擺（上次成功 ~2000s 前 > 1800s 門檻） |
+| `chaos.sh drift` | 🟡 **Coverage integrity** + 侵蝕率 | 撤銷日誌 schema 漂移，數列解析失敗（`events_dropped` > 0） |
+| `chaos.sh failopen` | 🟡 **Gateway fail-open** | Gateway 讀不到撤銷集合、fail-open 放行（降級，非被攻破） |
+| `chaos.sh heal` | ✅ 全部回綠 | 移除旗標 → 健康預設 |
+
+> 🧪 同樣的誠實框架：這些全是**合成的注入**，用來展示「壞掉長怎樣 + 偵測怎麼亮」。儀表板 JSON、門檻、alert 對齊仍是 production 正本，一個字都沒為 demo 改。
+
 ## 關於身分（dev-only auth bypass）
 
 完整 production 由 oauth2-proxy 在前面注入 `X-Forwarded-Email` / `X-Forwarded-Groups`。try-local 沒有 oauth2-proxy，所以 tenant-api 用 `--dev-bypass-auth`（**僅限本機**）在缺 header 時注入一個 dev 身分（`dev@local` / `demo-admins`），瀏覽器才打得開 Tenant Manager。
