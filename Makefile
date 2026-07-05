@@ -1000,9 +1000,18 @@ vendor-check: ## 檢查 vendor/ 資源是否完整
 smoke-local: ## try-local：跑 smoke（驗 critical firing + /me 200 + 2 tenants + portal 200）
 	@bash try-local/smoke.sh
 
+.PHONY: chaos-tamper
+chaos-tamper: ## try-local：💥 注入 tamper（聯邦撤銷 Act 2 headline 紅燈；~15s 生效）
+	@bash try-local/chaos.sh tamper
+
+.PHONY: chaos-heal
+chaos-heal: ## try-local：✅ healed，聯邦撤銷儀表板恢復 calm-green
+	@bash try-local/chaos.sh heal
+
 .PHONY: clean-local
 clean-local: ## try-local：完整清理 stack（down -v --remove-orphans，含匿名 volume）
 	@docker compose -f try-local/docker-compose.yaml down -v --remove-orphans
+	@rm -f try-local/seed/.demo-mode
 
 .PHONY: help
 help: ## 顯示說明
