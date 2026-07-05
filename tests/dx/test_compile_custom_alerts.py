@@ -147,7 +147,7 @@ def test_severity_union_emits_declared_branches_only(tmp_path):
         "b.yaml": 'tenants:\n  tb:\n    _custom_alerts:\n'
                   '      - {recipe: threshold, name: c, metric: m, op: ">", window: 5m, threshold: "20:critical"}\n',
     })
-    shapes, _ = ld.build_shapes(tmp_path)
+    shapes, _, _ = ld.build_shapes(tmp_path)
     assert len(shapes) == 1
     assert shapes[0]["severities"] == ["critical", "warning"]
 
@@ -157,7 +157,7 @@ def test_single_severity_no_critical_mirror(tmp_path):
         "a.yaml": 'tenants:\n  ta:\n    _custom_alerts:\n'
                   '      - {recipe: threshold, name: w, metric: m, op: ">", window: 5m, threshold: "10:warning"}\n',
     })
-    shapes, _ = ld.build_shapes(tmp_path)
+    shapes, _, _ = ld.build_shapes(tmp_path)
     assert shapes[0]["severities"] == ["warning"]       # NOT [critical, warning]
 
 
@@ -202,24 +202,30 @@ def test_selector_value_is_escaped():
 
 
 # --- 5. uniqueness ---------------------------------------------------------
-def test_duplicate_name_per_tenant_rejected(tmp_path):
+def test_duplicate_name_per_tenant_quarantined(tmp_path):
+    # #1008 Part B: fail-soft — the second `dup` is QUARANTINED (recorded in `skipped`),
+    # NOT a whole-compile abort; the first compiles.
     _write_tree(tmp_path, {
         "a.yaml": 'tenants:\n  ta:\n    _custom_alerts:\n'
                   '      - {recipe: threshold, name: dup, metric: m1, op: ">", window: 5m, threshold: "1:warning"}\n'
                   '      - {recipe: rate, name: dup, metric: m2, op: ">", window: 5m, threshold: "1:warning"}\n',
     })
-    with pytest.raises(CustomAlertConfigError, match="duplicate custom-alert name"):
-        ld.build_shapes(tmp_path)
+    shapes, _per, skipped = ld.build_shapes(tmp_path)
+    assert len(shapes) == 1                       # the first `dup` compiled
+    assert any("duplicate custom-alert name" in s["reason"] for s in skipped)
 
 
-def test_two_same_severity_same_shape_rejected(tmp_path):
+def test_two_same_severity_same_shape_quarantined(tmp_path):
+    # #1008 Part B: fail-soft — the second warning alert on the SAME shape is quarantined
+    # (keeps the group_left(name) join 1:1); the first compiles.
     _write_tree(tmp_path, {
         "a.yaml": 'tenants:\n  ta:\n    _custom_alerts:\n'
                   '      - {recipe: threshold, name: w1, metric: m, op: ">", window: 5m, threshold: "10:warning"}\n'
                   '      - {recipe: threshold, name: w2, metric: m, op: ">", window: 5m, threshold: "20:warning"}\n',
     })
-    with pytest.raises(CustomAlertConfigError, match="same shape"):
-        ld.build_shapes(tmp_path)
+    shapes, _per, skipped = ld.build_shapes(tmp_path)
+    assert len(shapes) == 1
+    assert any("same shape" in s["reason"] for s in skipped)
 
 
 def test_for_divergence_produces_distinct_shapes(tmp_path):
@@ -233,7 +239,7 @@ def test_for_divergence_produces_distinct_shapes(tmp_path):
         "b.yaml": 'tenants:\n  tb:\n    _custom_alerts:\n'
                   '      - {recipe: threshold, name: slow, metric: m, op: ">", window: 5m, threshold: "1:warning", for: 15m}\n',
     })
-    shapes, _ = ld.build_shapes(tmp_path)
+    shapes, _, _ = ld.build_shapes(tmp_path)
     rids = sorted(s["recipe_id"] for s in shapes)
     assert len(rids) == 2, f"expected 2 distinct shapes (different for), got {rids}"
     assert any(r.endswith("__for1m") for r in rids)
@@ -250,9 +256,103 @@ def test_same_for_still_vectorizes_one_shape(tmp_path):
         "b.yaml": 'tenants:\n  tb:\n    _custom_alerts:\n'
                   '      - {recipe: threshold, name: y, metric: m, op: ">", window: 5m, threshold: "1:warning", for: 5m}\n',
     })
-    shapes, _ = ld.build_shapes(tmp_path)
+    shapes, _, _ = ld.build_shapes(tmp_path)
     assert len(shapes) == 1, "same for + shape must vectorize to ONE rule (O(M))"
     assert shapes[0]["recipe_id"].endswith("__for5m")
+
+
+# --- 5b. #1008 / F3: injective recipe_id + fail-soft quarantine -------------
+def test_f3_lossy_selector_collision_resolved(tmp_path):
+    # S1: selector values differing only in a sanitise-folded char ('us-east-1' vs
+    # 'us_east_1') USED to collapse to one recipe_id → cross-tenant compile abort. The
+    # injective __x{hash} suffix now yields TWO distinct shapes, no collision.
+    _write_tree(tmp_path, {
+        "a.yaml": 'tenants:\n  ta:\n    _custom_alerts:\n'
+            '      - {recipe: threshold, name: r, metric: m, selectors: {region: "us-east-1"}, op: ">", window: 5m, threshold: "1:warning"}\n',
+        "b.yaml": 'tenants:\n  tb:\n    _custom_alerts:\n'
+            '      - {recipe: threshold, name: r, metric: m, selectors: {region: "us_east_1"}, op: ">", window: 5m, threshold: "1:warning"}\n',
+    })
+    shapes, _per, skipped = ld.build_shapes(tmp_path)
+    assert skipped == []
+    assert len({s["recipe_id"] for s in shapes}) == 2
+
+
+def test_f3_separator_aliasing_collision_resolved(tmp_path):
+    # S2: NON-lossy separator aliasing — {region_x:"1"} and {region:"x_1"} both flatten to
+    # the slug part `s_region_x_1` with NO lossy char, yet are distinct shapes. The hash
+    # is over the STRUCTURED signature (not the flat join), so they no longer collide.
+    _write_tree(tmp_path, {
+        "a.yaml": 'tenants:\n  ta:\n    _custom_alerts:\n'
+            '      - {recipe: threshold, name: r, metric: m, selectors: {region_x: "1"}, op: ">", window: 5m, threshold: "1:warning"}\n',
+        "b.yaml": 'tenants:\n  tb:\n    _custom_alerts:\n'
+            '      - {recipe: threshold, name: r, metric: m, selectors: {region: "x_1"}, op: ">", window: 5m, threshold: "1:warning"}\n',
+    })
+    shapes, _per, skipped = ld.build_shapes(tmp_path)
+    assert skipped == []
+    assert len({s["recipe_id"] for s in shapes}) == 2
+
+
+def test_f3_same_shape_still_vectorizes(tmp_path):
+    # the injective suffix must NOT break vectorization: two tenants with the SAME
+    # selector value still share one recipe_id → ONE rule (O(M) preserved).
+    _write_tree(tmp_path, {
+        "a.yaml": 'tenants:\n  ta:\n    _custom_alerts:\n'
+            '      - {recipe: threshold, name: r, metric: m, selectors: {region: "us-east-1"}, op: ">", window: 5m, threshold: "1:warning"}\n',
+        "b.yaml": 'tenants:\n  tb:\n    _custom_alerts:\n'
+            '      - {recipe: threshold, name: r, metric: m, selectors: {region: "us-east-1"}, op: ">", window: 5m, threshold: "1:warning"}\n',
+    })
+    shapes, _per, skipped = ld.build_shapes(tmp_path)
+    assert skipped == []
+    assert len(shapes) == 1
+
+
+def test_failsoft_ratio_missing_denominator_quarantined(tmp_path):
+    # F-A: a ratio recipe without denominator_metric used to raise an uncaught KeyError
+    # (exit 1 = whole-platform DoS). It is now quarantined; a sibling valid recipe still
+    # compiles.
+    _write_tree(tmp_path, {
+        "a.yaml": 'tenants:\n  ta:\n    _custom_alerts:\n'
+            '      - {recipe: ratio, name: bad, metric: m, op: ">", window: 5m, threshold: "0.5:warning"}\n'
+            '      - {recipe: threshold, name: ok, metric: m2, op: ">", window: 5m, threshold: "1:warning"}\n',
+    })
+    shapes, _per, skipped = ld.build_shapes(tmp_path)
+    assert len(shapes) == 1                            # the valid `ok` recipe compiled
+    assert any(s["name"] == "bad" for s in skipped)
+
+
+def test_failsoft_non_mapping_entry_quarantined(tmp_path):
+    # F-B (loader level): a scalar list item is quarantined instead of crashing the
+    # compile with an AttributeError; a sibling valid recipe still compiles.
+    _write_tree(tmp_path, {
+        "a.yaml": 'tenants:\n  ta:\n    _custom_alerts:\n'
+            '      - just_a_bare_string\n'
+            '      - {recipe: threshold, name: ok, metric: m, op: ">", window: 5m, threshold: "1:warning"}\n',
+    })
+    shapes, _per, skipped = ld.build_shapes(tmp_path)
+    assert len(shapes) == 1
+    assert any("not a mapping" in s["reason"] for s in skipped)
+
+
+def test_failsoft_malformed_yaml_file_quarantined(tmp_path):
+    # #1008 Part B: a conf.d FILE that yaml.safe_load can't parse (a control char) is
+    # quarantined at FILE level — the load happens OUTSIDE the per-recipe loop, so without
+    # the file-level fail-soft one bad file (incl. a schema-check-skipped meta file) would
+    # crash the whole compile. Sibling valid files still compile.
+    _write_tree(tmp_path, {
+        "bad.yaml": 'tenants:\n  "x\x1by":\n    _custom_alerts: []\n',   # \x1b → PyYAML ReaderError
+        "good.yaml": 'tenants:\n  t:\n    _custom_alerts:\n'
+            '      - {recipe: threshold, name: ok, metric: m, op: ">", window: 5m, threshold: "1:warning"}\n',
+    })
+    shapes, _per, skipped = ld.build_shapes(tmp_path)
+    assert len(shapes) == 1                               # good.yaml compiled
+    assert any(s["origin"] == "bad.yaml" for s in skipped)
+
+
+def test_safe_log_strips_control_chars():
+    # #1008: the quarantine CI-log line sanitizes control chars (newline / ANSI ESC / tab)
+    # from tenant-controlled fields so a malformed value can't inject forged log lines or
+    # terminal escapes.
+    assert cc._safe_log("a\nFAKE\x1b[2Jb\tc") == "a?FAKE?[2Jb?c"
 
 
 # --- 6. scope inheritance + cap count --------------------------------------
@@ -266,7 +366,7 @@ def test_domain_and_platform_inheritance(tmp_path):
             '  - {recipe: ratio, name: pf, metric: pf_total, denominator_metric: pa_total, op: ">", window: 5m, threshold: "0.01:critical"}\n',
         "fin/pay.yaml": "tenants:\n  pay-a: {}\n",
     })
-    shapes, per_tenant = ld.build_shapes(tmp_path)
+    shapes, per_tenant, _ = ld.build_shapes(tmp_path)
     # shop-a: platform absence + own threshold = 2; pay-a: platform absence + fin ratio = 2
     assert per_tenant == {"shop-a": 2, "pay-a": 2}
     # absence shape is shared by both tenants → still ONE absence rule
@@ -345,13 +445,16 @@ def test_forecast_raw_mode_no_capacity(tmp_path):
     assert "< 0.5" not in txt
 
 
-def test_forecast_requires_horizon(tmp_path):
+def test_forecast_requires_horizon_quarantined(tmp_path):
+    # #1008 Part B: fail-soft — a forecast recipe missing `horizon` is quarantined, not a
+    # whole-compile abort.
     _write_tree(tmp_path, {
         "a.yaml": 'tenants:\n  ta:\n    _custom_alerts:\n'
             '      - {recipe: forecast, name: q, metric: m, op: ">", threshold: "1:warning"}\n',
     })
-    with pytest.raises(ld.CustomAlertConfigError, match="horizon"):
-        ld.build_shapes(tmp_path)
+    shapes, _per, skipped = ld.build_shapes(tmp_path)
+    assert shapes == []
+    assert any("horizon" in s["reason"] for s in skipped)
 
 
 @pytest.mark.parametrize("bad", ["3h", "90m", "5h", "8h"])
@@ -369,8 +472,9 @@ def test_forecast_ratio_threshold_at_or_above_band_rejected(tmp_path):
             "a.yaml": 'tenants:\n  ta:\n    _custom_alerts:\n'
                 f'      - {{recipe: forecast, name: d, metric: avail, capacity_metric: cap, op: "<", horizon: 4h, threshold: "{bad}"}}\n',
         })
-        with pytest.raises(ld.CustomAlertConfigError, match="current-state band"):
-            ld.build_shapes(tmp_path)
+        shapes, _per, skipped = ld.build_shapes(tmp_path)   # #1008 Part B: fail-soft
+        assert shapes == []
+        assert any("current-state band" in s["reason"] for s in skipped)
 
 
 def test_forecast_ratio_threshold_below_band_ok(tmp_path):
@@ -393,16 +497,19 @@ def test_forecast_raw_mode_threshold_not_bounded_by_band(tmp_path):
 
 
 # --- 9. cost guardrail: max_custom_recipes per-tenant cap (S4) --------------
-def test_own_recipe_cap_rejects_over_limit(tmp_path):
-    # 3 OWN recipes, cap 2 → fail loud at compile (deterministic, actionable).
+def test_own_recipe_cap_quarantines_over_limit(tmp_path):
+    # #1008 Part B: fail-soft — 3 OWN recipes with cap 2: the first 2 compile, the 3rd
+    # (over cap) is quarantined DETERMINISTICALLY (triples in file+declaration order), not
+    # a whole-compile abort.
     _write_tree(tmp_path, {
         "a.yaml": 'tenants:\n  ta:\n    _custom_alerts:\n'
             '      - {recipe: threshold, name: a, metric: m1, op: ">", window: 5m, threshold: "1:warning"}\n'
             '      - {recipe: threshold, name: b, metric: m2, op: ">", window: 5m, threshold: "1:warning"}\n'
             '      - {recipe: threshold, name: c, metric: m3, op: ">", window: 5m, threshold: "1:warning"}\n',
     })
-    with pytest.raises(ld.CustomAlertConfigError, match="max_custom_recipes"):
-        ld.build_shapes(tmp_path, max_custom_recipes=2)
+    shapes, per_tenant, skipped = ld.build_shapes(tmp_path, max_custom_recipes=2)
+    assert per_tenant["ta"] == 2 and len(shapes) == 2   # first 2 compiled
+    assert any("max_custom_recipes" in s["reason"] for s in skipped)
 
 
 def test_inherited_recipes_do_not_count_toward_cap(tmp_path):
@@ -415,7 +522,7 @@ def test_inherited_recipes_do_not_count_toward_cap(tmp_path):
         "dom/t.yaml": 'tenants:\n  ta:\n    _custom_alerts:\n'
             '      - {recipe: threshold, name: own1, metric: om1, op: ">", window: 5m, threshold: "1:warning"}\n',
     })
-    _shapes, per_tenant = ld.build_shapes(tmp_path, max_custom_recipes=1)  # no raise
+    _shapes, per_tenant, _ = ld.build_shapes(tmp_path, max_custom_recipes=1)  # no raise
     assert per_tenant["ta"] == 3   # effective = 2 inherited + 1 own (own ≤ cap)
 
 
@@ -425,15 +532,17 @@ def test_own_recipe_cap_at_limit_ok(tmp_path):
             '      - {recipe: threshold, name: a, metric: m1, op: ">", window: 5m, threshold: "1:warning"}\n'
             '      - {recipe: threshold, name: b, metric: m2, op: ">", window: 5m, threshold: "1:warning"}\n',
     })
-    _shapes, per_tenant = ld.build_shapes(tmp_path, max_custom_recipes=2)  # exactly at cap
+    _shapes, per_tenant, _ = ld.build_shapes(tmp_path, max_custom_recipes=2)  # exactly at cap
     assert per_tenant["ta"] == 2
 
 
-def test_build_pack_threads_cap(tmp_path):
-    # CLI wiring guard: build_pack(max_custom_recipes=) must reach build_shapes.
-    # the example fixture's shop-a has 9 OWN recipes → cap 5 must reject here.
-    with pytest.raises(ld.CustomAlertConfigError, match="max_custom_recipes"):
-        cc.build_pack(_EXAMPLES, max_custom_recipes=5)
+def test_build_pack_threads_cap():
+    # CLI wiring guard: build_pack(max_custom_recipes=) must reach build_shapes. The
+    # example fixture's shop-a has 9 OWN recipes → cap 5 quarantines the excess (#1008
+    # Part B fail-soft) and surfaces it in _meta["skipped"], so the pack still builds.
+    pack = cc.build_pack(_EXAMPLES, max_custom_recipes=5)
+    skipped = pack["_meta"]["skipped"]
+    assert any("max_custom_recipes" in s["reason"] for s in skipped)
 
 
 def test_negative_cap_rejected(tmp_path):
@@ -444,17 +553,19 @@ def test_negative_cap_rejected(tmp_path):
         ld.build_shapes(tmp_path, max_custom_recipes=-1)
 
 
-def test_own_duplicate_of_inherited_rejected_not_quota_charged(tmp_path):
-    # phantom-quota guard: a tenant re-declaring a DOMAIN policy shape is REJECTED
-    # (severity-uniqueness) BEFORE the quota counter — it never silently eats cap.
+def test_own_duplicate_of_inherited_quarantined_not_quota_charged(tmp_path):
+    # phantom-quota guard, now fail-soft (#1008 Part B): a tenant re-declaring a DOMAIN
+    # policy shape is QUARANTINED (severity-uniqueness) BEFORE the quota counter — the
+    # inherited policy compiles, the duplicate is skipped and never eats cap.
     _write_tree(tmp_path, {
         "dom/_defaults.yaml": "_custom_alerts:\n"
             '  - {recipe: threshold, name: pol, metric: m, op: ">", window: 5m, threshold: "1:warning"}\n',
         "dom/t.yaml": 'tenants:\n  ta:\n    _custom_alerts:\n'
             '      - {recipe: threshold, name: dup, metric: m, op: ">", window: 5m, threshold: "1:warning"}\n',
     })
-    with pytest.raises(ld.CustomAlertConfigError, match="same shape"):
-        ld.build_shapes(tmp_path, max_custom_recipes=100)
+    _shapes, per_tenant, skipped = ld.build_shapes(tmp_path, max_custom_recipes=100)
+    assert per_tenant["ta"] == 1                       # only the inherited policy counts
+    assert any("same shape" in s["reason"] for s in skipped)
 
 
 def test_multi_severity_same_shape_counts_as_two(tmp_path):
@@ -465,7 +576,7 @@ def test_multi_severity_same_shape_counts_as_two(tmp_path):
             '      - {recipe: threshold, name: w, metric: m, op: ">", window: 5m, threshold: "1:warning"}\n'
             '      - {recipe: threshold, name: c, metric: m, op: ">", window: 5m, threshold: "2:critical"}\n',
     })
-    _shapes, per_tenant = ld.build_shapes(tmp_path, max_custom_recipes=100)
+    _shapes, per_tenant, _ = ld.build_shapes(tmp_path, max_custom_recipes=100)
     assert per_tenant["ta"] == 2
 
 

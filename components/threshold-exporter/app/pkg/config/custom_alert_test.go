@@ -148,7 +148,8 @@ func TestCustomAlert_ListParseSurvivesAndResolves(t *testing.T) {
 		t.Errorf("unexpected resolved threshold: %+v", rt)
 	}
 	want := map[string]string{
-		"recipe_id": "rate__http_requests_total__sre_status_5____gt__w5m__for1m",
+		// #1008/F3: selectors present → recipe_id carries the __x{hash} suffix (Go/Python byte-identical).
+		"recipe_id": "rate__http_requests_total__sre_status_5____gt__w5m__for1m__xb0ff6b9ab9a60507",
 		"name":      "http_5xx",
 		"mode":      "silent",
 	}

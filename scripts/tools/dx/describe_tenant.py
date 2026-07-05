@@ -131,7 +131,11 @@ class ConfDScanner:
         if _ca_loader is None:
             return
         try:
-            for tenant, recipe, origin, is_own in _ca_loader.collect_instances(self.conf_d):
+            # collect_instances returns (triples, file_errors) (#1008 Part B fail-soft);
+            # describe_tenant only needs the triples — unloadable files surface in the
+            # compiler's own skip report, not here.
+            triples, _file_errors = _ca_loader.collect_instances(self.conf_d)
+            for tenant, recipe, origin, is_own in triples:
                 self._custom_alerts_resolved.setdefault(tenant, []).append(
                     (recipe, origin, is_own))
         except Exception as e:  # pragma: no cover
