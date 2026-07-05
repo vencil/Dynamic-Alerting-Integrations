@@ -14,7 +14,7 @@ portal:
   # Port nginx listens on inside container
   listenPort: 80
   # Tenant API URL for reverse proxy /api/v1/
-  tenantApiUrl: "http://tenant-api.monitoring.svc.cluster.local:8080"
+  tenantApiUrl: "http://tenant-api.tenant-api.svc.cluster.local:8080"
   # recipe-preview URL for reverse proxy /preview (#657 would-fire preview)
   recipePreviewUrl: "http://recipe-preview.monitoring.svc.cluster.local:8082"
 
@@ -144,6 +144,37 @@ networkPolicy:
   allowedNamespaces:
     - monitoring
     - ingress-nginx
+  # Egress lockdown (#1004). da-portal fronts tenant-api's header-trusting path, so
+  # a compromised portal pod is a high-value pivot. When it runs as an auth proxy
+  # (oauth2Proxy.enabled) its only legitimate egress is: the two reverse-proxy
+  # backends (tenant-api /api/v1/ + recipe-preview /preview) and the external IdP
+  # (oauth2-proxy's OAuth/OIDC flow) — plus DNS. A Tier-1 static-only portal
+  # (oauth2Proxy.enabled=false, no upstreams — enforced by the open-proxy guard
+  # above) needs only DNS. Set enabled=false to fall back to the monitoring-ns
+  # baseline (default-deny-all still applies if present).
+  egress:
+    enabled: true
+    # tenant-api backend (/api/v1/ proxy). Cross-namespace: tenant-api lives in its
+    # dedicated `tenant-api` ns (#1004) — must track portal.tenantApiUrl above.
+    tenantApiNamespace: tenant-api
+    tenantApiPort: 8080
+    # OR-ed pod selectors: helm-deployed tenant-api uses app.kubernetes.io/name,
+    # the raw k8s/04-tenant-api manifests use `app`. Both listed for either stack.
+    tenantApiPodSelectors:
+      - app.kubernetes.io/name: tenant-api
+      - app: tenant-api
+    # recipe-preview backend (/preview proxy). Same ns as da-portal (monitoring).
+    recipePreviewPort: 8082
+    recipePreviewPodSelectors:
+      - app.kubernetes.io/name: recipe-preview
+    # External IdP for the oauth2-proxy OAuth/OIDC flow (GitHub/GitLab/OIDC over
+    # HTTPS). Defaults to the internet minus the cloud metadata endpoint (mirrors
+    # the alertmanager webhook-egress pattern). Tighten to your IdP's CIDR via
+    # extraEgress + set idpHttpsEnabled=false if your IdP range is known/fixed.
+    idpHttpsEnabled: true
+    idpHttpsPort: 443
+    # Extra egress rules merged verbatim (private IdP CIDR, redis session store…).
+    extraEgress: []
 
 # Pod annotations
 podAnnotations:

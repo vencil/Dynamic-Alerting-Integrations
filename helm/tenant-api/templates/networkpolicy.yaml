@@ -12,14 +12,15 @@
 {{- end }}
 {{- /*
   Empty-selector guard (GHSA-3g2h-rf85-5rrv). internalPortAllow.prometheus /
-  .thresholdGovern feed straight into the port-8080 podSelector.matchLabels via
-  toYaml. An empty map renders `matchLabels: {}`, which Kubernetes treats as
-  matching ALL pods in prometheusNamespace — silently degrading the pod-scoped
-  allow-list back to the namespace-wide over-grant this policy exists to close.
-  Reject it at render time with the same fail-closed intent as the enabled guard.
+  .thresholdGovern / .recipePreview feed straight into the port-8080
+  podSelector.matchLabels via toYaml. An empty map renders `matchLabels: {}`,
+  which Kubernetes treats as matching ALL pods in prometheusNamespace — silently
+  degrading the pod-scoped allow-list back to the namespace-wide over-grant this
+  policy exists to close. Reject it at render time with the same fail-closed
+  intent as the enabled guard.
 */ -}}
-{{- if or (not .Values.networkPolicy.internalPortAllow.prometheus) (not .Values.networkPolicy.internalPortAllow.thresholdGovern) }}
-{{- fail "networkPolicy.internalPortAllow.prometheus/thresholdGovern must be non-empty label selectors: an empty matchLabels map matches ALL pods in the monitoring namespace, reopening the port-8080 identity-header trust bypass (GHSA-3g2h-rf85-5rrv)." }}
+{{- if or (not .Values.networkPolicy.internalPortAllow.prometheus) (not .Values.networkPolicy.internalPortAllow.thresholdGovern) (not .Values.networkPolicy.internalPortAllow.recipePreview) }}
+{{- fail "networkPolicy.internalPortAllow.prometheus/thresholdGovern/recipePreview must be non-empty label selectors: an empty matchLabels map matches ALL pods in the monitoring namespace, reopening the port-8080 identity-header trust bypass (GHSA-3g2h-rf85-5rrv)." }}
 {{- end }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -62,6 +63,13 @@ spec:
           podSelector:
             matchLabels:
               {{- toYaml .Values.networkPolicy.internalPortAllow.thresholdGovern | nindent 14 }}
+        # recipe-preview PEP (#657) — /access authz probe over 8080 (#1004).
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.prometheusNamespace }}
+          podSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.internalPortAllow.recipePreview | nindent 14 }}
       ports:
         - port: 8080
           protocol: TCP

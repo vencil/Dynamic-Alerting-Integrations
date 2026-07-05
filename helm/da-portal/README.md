@@ -124,8 +124,8 @@ helm install da-portal helm/da-portal -n monitoring \
 
 #### Tenant API URL
 
-By default, the chart assumes tenant-api is in the same cluster at:
-`http://tenant-api.monitoring.svc.cluster.local:8080`
+By default, the chart assumes tenant-api is in the same cluster, in its dedicated `tenant-api` namespace (#1004), at:
+`http://tenant-api.tenant-api.svc.cluster.local:8080`
 
 To override:
 
@@ -190,7 +190,7 @@ helm install da-portal helm/da-portal -n monitoring \
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | portal.listenPort | int | 80 | nginx listening port |
-| portal.tenantApiUrl | string | `http://tenant-api.monitoring.svc.cluster.local:8080` | Reverse proxy target |
+| portal.tenantApiUrl | string | `http://tenant-api.tenant-api.svc.cluster.local:8080` | Reverse proxy target |
 
 ### OAuth2 Proxy
 
@@ -314,7 +314,7 @@ The nginx configuration in `configmap-nginx.yaml` reverse-proxies `/api/v1/` to 
 
 ```nginx
 location /api/v1/ {
-  proxy_pass http://tenant-api.monitoring.svc.cluster.local:8080/api/v1/;
+  proxy_pass http://tenant-api.tenant-api.svc.cluster.local:8080/api/v1/;
   proxy_set_header Host $host;
   proxy_set_header X-Real-IP $remote_addr;
   proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -335,9 +335,9 @@ This allows Interactive Tools to communicate with the tenant-api without cross-o
 
 ### 502 Bad Gateway
 
-- Check tenant-api service: `kubectl -n monitoring get svc tenant-api`
-- Verify DNS resolution: `kubectl -n monitoring exec -it deployment/da-portal -c nginx -- nslookup tenant-api.monitoring.svc.cluster.local`
-- Test proxy target: `kubectl -n monitoring port-forward svc/tenant-api 8080:8080`
+- Check tenant-api service: `kubectl -n tenant-api get svc tenant-api`
+- Verify DNS resolution: `kubectl -n monitoring exec -it deployment/da-portal -c nginx -- nslookup tenant-api.tenant-api.svc.cluster.local`
+- Test proxy target: `kubectl -n tenant-api port-forward svc/tenant-api 8080:8080`
 
 ### Static Files Not Loading
 

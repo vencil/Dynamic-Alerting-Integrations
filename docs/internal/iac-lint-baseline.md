@@ -136,6 +136,29 @@ INFO（不列管）：`federation-gateway` / `federation-proxy` / `threshold-exp
 
 > **與其他層的關係**：L4 抓 raw manifest 的 **container misconfig**（kube-linter）;raw Secret 的**硬編字面**由 L3 抓（scope 含 k8s/）;**高熵值**由 #445 trufflehog 抓 —— 三者互補不雙重 fire（kube-linter 無 hardcoded-secret-value check）。
 
+## Cross-namespace service-URL consistency（#1004，純 Vibe wrapper — 4 層 SAST 的相鄰一致性檢查，非其中一層）
+
+跑法：`python3 scripts/tools/lint/check_cross_ns_url_consistency.py [--ci]`（hook `cross-ns-url-check`，default stage — 靜態掃描 <2s；CI 在 Lint job unfiltered 跑 `--all-files`）。**無 open-source engine** —— 「服務 X 的 URL 必須 pin canonical namespace Y」是跨檔案的語意規則，kube-linter 無法表達（`.kube-linter.yaml` 僅內建 checks，已驗證），依 hybrid policy 走 Vibe wrapper（同 L3 類）。
+
+**Policy ／ Data 分離（#1004 Option D）**：governed service→namespace 映射、`chart_context_ns` deploy-contract、`EXEMPTIONS` registry 皆為 **DATA**，外置於 `scripts/tools/lint/cross_ns_url_lint.config.yaml`（與 lint 同目錄，故落在所有 scan glob 之外 —— lint 不會掃到自己的資料）。**非 Python contributor 改 YAML、不動 `.py`**（`.py` 只留 logic：regex／scan／verdict）。**Fail-closed（安全控制）**：config 缺檔、YAML 壞、或 schema 不合（缺頂層 key、型別錯、exemption 少 `exit_condition` 等）→ 印錯到 stderr + **exit 2（caller-error）**，**絕不 silent pass**。config 於 import 時載入，`--config <path>` 可覆寫（測試用）。
+
+**Canonical namespaces（#1004 裁定）**：`tenant-api` → 專屬 `tenant-api` ns（raw v2.4.0 原始意圖 + GHSA 隔離）；`recipe-preview` → `monitoring` ns。
+
+兩條規則（PARSE YAML string scalars，非 grep —— 註解永不誤報）：
+
+- **R1 wrong-namespace FQDN**：scalar 含 `<svc>.<ns>.svc[.cluster.local]` 而 ns ≠ canonical → violation（context-free，錯的 FQDN 到處都錯）。
+- **R2 bare-name cross-ns**：URL 形 bare host（`http(s)://<svc>[:port]` / `<svc>:<port>`）出現在非 canonical ns context（chart deploy contract / doc `metadata.namespace`；context 未知 → 保守 violation）。bare name 在 canonical ns 內是合法同-ns DNS。
+
+**Scope**：`helm/*/values*.yaml`（context = `CHART_CONTEXT_NS` deploy contract）+ `k8s/**/*.yaml`（context = 各 doc `metadata.namespace`）+ `components/da-portal/nginx.conf`（context = monitoring）+ `try-local/docker-compose.yaml`（**僅 R1** —— compose 單一 network 內 bare name 本來就可解析）。**不掃**（deliberate）：純 bare name 無 scheme/port（`name:`/label/chart 名非 host）、host+port 拆兩個 YAML key、helm templates 與 docs prose（values 是 URL SSOT）。
+
+**Severity → action**：violation → **BLOCK**（經 required check `Lint`；同 L1/L3 路徑）。例外走 config 檔的中央 `exemptions` registry（`cross_ns_url_lint.config.yaml`；每筆 path + substring + rationale + **退場條件**，`exit_condition` 由 loader 強制非空），命中降為 INFO 不擋 —— 同 L2/L4 governance。
+
+**Baseline 截至 2026-07-05**：**0 violations** ✅ / 1 registered exemption（INFO）：
+
+| # | Path : hit | Rationale（= EXEMPTIONS 登記） | 退場 / 修補 |
+|---|---|---|---|
+| 1 | `try-local/docker-compose.yaml` : alias `tenant-api.monitoring.svc.cluster.local` | legacy compose network alias —— da-portal service pin 的已發行 v2.8.0 portal image 內建 nginx.conf 仍指向 pre-#1004 FQDN；拿掉 alias 會讓 try-local 在 nginx 啟動時掛掉（`host not found in upstream`） | PORTAL_TAG 預設升到 #1004 之後 build 的 portal image 時移除 |
+
 ## 關聯
 
 - [epic #448](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/448) — Container/k8s SAST 4-layer

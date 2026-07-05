@@ -25,11 +25,13 @@ service:
   type: ClusterIP
   port: 8082                    # single port; matches da-portal recipePreviewUrl :8082
 
-# tenant-api base URL the PEP calls for the /access authz probe. Short same-
-# namespace name (NOT the .cluster.local FQDN) for DNS portability — clusters with
-# a custom DNS domain still resolve it via the pod's search domain; also matches
-# app.py's own default. Override with an FQDN for a cross-namespace tenant-api.
-tenantApiUrl: "http://tenant-api:8080"
+# tenant-api base URL the PEP calls for the /access authz probe. Full FQDN on
+# purpose: tenant-api lives in its dedicated `tenant-api` namespace (#1004
+# canonical ruling), NOT alongside recipe-preview in `monitoring` — a bare
+# `tenant-api` name resolving via the pod's search domain would target the WRONG
+# namespace (monitoring) and silently break under CNI/DNS. Also matches app.py's
+# own default. Override if your tenant-api Service lives elsewhere.
+tenantApiUrl: "http://tenant-api.tenant-api.svc.cluster.local:8080"
 
 # §6 guardrails (app.py env). These match the binary defaults; override if needed.
 preview:
@@ -64,5 +66,26 @@ networkPolicy:
   # recipe-preview blindly trusts X-Forwarded-Email, so ingress MUST be locked to
   # the da-portal pod (the same-origin /preview proxy) — the anti-spoof boundary.
   daPortalName: da-portal
+  # Egress lockdown (#1004). recipe-preview is a PEP that only ever talks to
+  # tenant-api's /access probe (+ DNS). Locking egress to exactly that target is
+  # the real cross-namespace defense: even a compromised recipe-preview pod (or a
+  # spoofed-label neighbour) cannot reach anything else. Disable only if you must
+  # point tenantApiUrl at an out-of-cluster tenant-api.
+  egress:
+    enabled: true
+    # Namespace tenant-api's Service lives in (canonical: dedicated `tenant-api`
+    # namespace — issue #1004; must track `tenantApiUrl` above). ⚠️ MIGRATION: if
+    # you deployed tenant-api into `monitoring` following the pre-#1004 docs, this
+    # egress lock will DENY the /access probe until you override BOTH values to
+    # match — `--set networkPolicy.egress.tenantApiNamespace=monitoring` alongside
+    # a `monitoring`-ns tenantApiUrl (they must always point at the same place).
+    tenantApiNamespace: tenant-api
+    tenantApiPort: 8080
+    # OR-ed pod selectors admitted as egress targets: helm-deployed tenant-api
+    # uses app.kubernetes.io/name; the raw k8s/04-tenant-api manifests use `app`.
+    # Both are listed so either stack works out of the box.
+    tenantApiPodSelectors:
+      - app.kubernetes.io/name: tenant-api
+      - app: tenant-api
 
 podAnnotations: {}              # no /metrics endpoint yet (deferred), so no scrape annotations

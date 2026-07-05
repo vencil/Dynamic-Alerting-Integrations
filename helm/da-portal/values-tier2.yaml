@@ -55,7 +55,7 @@ portal:
   # - DELETE /api/v1/views/{id}                — Delete view
   #
   # All endpoints require valid Bearer token (from OAuth2-proxy) in Authorization header.
-  tenantApiUrl: "http://tenant-api.monitoring.svc.cluster.local:8080"
+  tenantApiUrl: "http://tenant-api.tenant-api.svc.cluster.local:8080"
 
 # nginx configuration
 nginx:

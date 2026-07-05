@@ -26,6 +26,19 @@
 {{- if and (not .Values.oauth2Proxy.enabled) (or .Values.portal.tenantApiUrl .Values.portal.recipePreviewUrl) }}
 {{- fail "oauth2Proxy.enabled=false requires portal.tenantApiUrl AND portal.recipePreviewUrl to be empty (GHSA-3g2h-rf85-5rrv): with no auth proxy stripping client headers, nginx would forward raw X-Forwarded-Groups to a header-trusting backend = unauthenticated identity spoofing. A static-only (Tier 1) portal must not reverse-proxy to tenant-api/recipe-preview." }}
 {{- end }}
+{{- /*
+  Empty-selector fail-guard (#1004). When da-portal proxies (oauth2Proxy.enabled)
+  with egress locked, the tenantApi/recipePreview pod-selector lists feed the
+  egress `to:` peers via range. An empty list renders an empty `to:`, which
+  Kubernetes treats as "all destinations" for that port — silently degrading the
+  8080/8082 egress lockdown to allow-any. Reject at render time (mirrors the
+  tenant-api ingress empty-selector guard).
+*/ -}}
+{{- if and .Values.networkPolicy.enabled .Values.networkPolicy.egress.enabled .Values.oauth2Proxy.enabled }}
+{{- if or (not .Values.networkPolicy.egress.tenantApiPodSelectors) (not .Values.networkPolicy.egress.recipePreviewPodSelectors) }}
+{{- fail "networkPolicy.egress.tenantApiPodSelectors/recipePreviewPodSelectors must be non-empty lists: an empty list renders an empty egress `to:` peer, which Kubernetes treats as ALL destinations for that port — reopening the 8080/8082 egress lockdown (#1004)." }}
+{{- end }}
+{{- end }}
 {{- if .Values.networkPolicy.enabled }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -40,6 +53,9 @@ spec:
       {{- include "da-portal.selectorLabels" . | nindent 6 }}
   policyTypes:
     - Ingress
+    {{- if .Values.networkPolicy.egress.enabled }}
+    - Egress
+    {{- end }}
   ingress:
     # Allow oauth2-proxy port from specified namespaces and ingress
     - from:
@@ -62,4 +78,58 @@ spec:
       ports:
         - port: {{ .Values.portal.listenPort }}
           protocol: TCP
+  {{- if .Values.networkPolicy.egress.enabled }}
+  egress:
+    # DNS resolution (kube-dns / CoreDNS) — every outbound name lookup needs it.
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    {{- if .Values.oauth2Proxy.enabled }}
+    # tenant-api backend (/api/v1/ proxy) on 8080 in its dedicated ns (#1004). One
+    # `to` entry per pod selector (entries OR-ed); each AND-s the ns with the pod.
+    - to:
+        {{- range .Values.networkPolicy.egress.tenantApiPodSelectors }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $.Values.networkPolicy.egress.tenantApiNamespace }}
+          podSelector:
+            matchLabels:
+              {{- toYaml . | nindent 14 }}
+        {{- end }}
+      ports:
+        - port: {{ .Values.networkPolicy.egress.tenantApiPort }}
+          protocol: TCP
+    # recipe-preview backend (/preview proxy) on 8082 in this same (monitoring) ns.
+    - to:
+        {{- range .Values.networkPolicy.egress.recipePreviewPodSelectors }}
+        - podSelector:
+            matchLabels:
+              {{- toYaml . | nindent 14 }}
+        {{- end }}
+      ports:
+        - port: {{ .Values.networkPolicy.egress.recipePreviewPort }}
+          protocol: TCP
+    {{- if .Values.networkPolicy.egress.idpHttpsEnabled }}
+    # External IdP (oauth2-proxy OAuth/OIDC flow) over HTTPS. Internet minus the
+    # cloud metadata endpoint (link-local) — mirrors the alertmanager webhook
+    # egress. Tighten to a known IdP CIDR via extraEgress + idpHttpsEnabled=false.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 169.254.169.254/32
+      ports:
+        - port: {{ .Values.networkPolicy.egress.idpHttpsPort }}
+          protocol: TCP
+    {{- end }}
+    {{- end }}
+    {{- with .Values.networkPolicy.egress.extraEgress }}
+    # Deployment-specific allows (private IdP CIDR, redis session store, …).
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- end }}
 {{- end }}

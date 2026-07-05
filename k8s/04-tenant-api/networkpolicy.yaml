@@ -4,10 +4,13 @@
 # ⚠️ SECURITY (GHSA-3g2h-rf85-5rrv): port 8080 BYPASSES oauth2-proxy and blindly
 # trusts X-Forwarded-Groups / X-Forwarded-Email. Anything that can reach 8080 can
 # assert ANY identity (incl. platform-admins). This netpol IS the identity control
-# for that port — it must be pod-scoped, NOT namespace-scoped. Only the two workloads
-# that legitimately scrape/write over 8080 are admitted:
+# for that port — it must be pod-scoped, NOT namespace-scoped. Only the three
+# workloads that legitimately scrape/write/probe over 8080 are admitted:
 #   • Prometheus scrape           — pod label app=prometheus            (deployment-prometheus.yaml)
 #   • threshold-govern CronJob    — pod label component=threshold-govern (cronjob-threshold-govern.yaml)
+#   • recipe-preview PEP          — pod label app.kubernetes.io/name=recipe-preview (helm/recipe-preview);
+#     calls GET /api/v1/tenants/{id}/access on 8080 forwarding the gateway identity
+#     headers (#1004 unblocks its cross-namespace authz probe)
 # Every OTHER pod in the monitoring namespace (Grafana, Alertmanager, KSM, exporters,
 # ad-hoc debug pods) is now denied — closing the ns-level over-grant.
 apiVersion: networking.k8s.io/v1
@@ -31,10 +34,11 @@ spec:
         - port: 4180
           protocol: TCP
 
-    # Allow ONLY Prometheus + threshold-govern (pod-scoped) on internal port 8080.
-    # Two separate `from` entries: each ns+pod pair is AND-ed within an entry, and
-    # the entries are OR-ed — so this admits (monitoring ∧ prometheus) OR
-    # (monitoring ∧ threshold-govern), and nothing else. (A single entry with two
+    # Allow ONLY Prometheus + threshold-govern + recipe-preview (pod-scoped) on
+    # internal port 8080. Three separate `from` entries: each ns+pod pair is AND-ed
+    # within an entry, and the entries are OR-ed — so this admits
+    # (monitoring ∧ prometheus) OR (monitoring ∧ threshold-govern) OR
+    # (monitoring ∧ recipe-preview), and nothing else. (A single entry with
     # bare podSelectors would OR the pod labels across ANY namespace — wrong.)
     - from:
         - namespaceSelector:
@@ -49,6 +53,12 @@ spec:
           podSelector:
             matchLabels:
               component: threshold-govern
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: recipe-preview
       ports:
         - port: 8080
           protocol: TCP

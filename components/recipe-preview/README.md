@@ -33,7 +33,7 @@
 
 | 變數 | 預設 | 說明 |
 |---|---|---|
-| `PREVIEW_TENANT_API_URL` | `http://tenant-api:8080` | PEP 打的 tenant-api base URL |
+| `PREVIEW_TENANT_API_URL` | `http://tenant-api.tenant-api.svc.cluster.local:8080` | PEP 打的 tenant-api base URL（tenant-api 位於專屬 `tenant-api` namespace，#1004）|
 | `PREVIEW_LISTEN_PORT` | `8082` | 監聽埠 |
 | `PREVIEW_MAX_CONCURRENCY` | `4` | 同時評估上限（每次評估開一個 `promtool` 子程序）|
 | `PREVIEW_RATE_LIMIT_PER_MIN` | `30` | 每租戶每分鐘上限（`0`=關閉）|

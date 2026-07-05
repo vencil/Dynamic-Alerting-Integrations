@@ -89,7 +89,7 @@ kubectl get configmap -n monitoring | grep prometheus-rules
 **tenant-api** (file-based config API, commit-on-write):
 
 ```bash
-helm install tenant-api ./helm/tenant-api/ -n monitoring
+helm install tenant-api ./helm/tenant-api/ -n tenant-api --create-namespace
 ```
 
 Requires:
@@ -105,7 +105,7 @@ helm install da-portal ./helm/da-portal/ -n monitoring
 
 Requires:
 - **oauth2-proxy is mandatory**: the portal nginx routes `:80 → oauth2-proxy:4180`, so **disabling oauth2-proxy CrashLoopBackOffs** the pod (it is the auth front).
-- **Backend**: `config.tenantApiUrl` points at the tenant-api Service (default `http://tenant-api.monitoring.svc.cluster.local:8080`).
+- **Backend**: `config.tenantApiUrl` points at the tenant-api Service (default `http://tenant-api.tenant-api.svc.cluster.local:8080`).
 
 > For a one-command local trial (no oauth2-proxy / git repo; dev-bypass + tenant-api built from source) see [try-local](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/try-local/README.md).
 

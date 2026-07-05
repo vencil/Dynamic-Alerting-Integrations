@@ -41,13 +41,13 @@ Usage:
 
   # 真正開 PR（--apply）：經 tenant-api 為每個租戶開 per-tenant governance PR
   da-tools threshold-govern --config-dir ./conf.d/ --prometheus http://prometheus:9090 \\
-    --apply --tenant-api-url http://tenant-api:8080 \\
+    --apply --tenant-api-url http://tenant-api.tenant-api.svc.cluster.local:8080 \\
     --identity-email threshold-governance@platform.local \\
     --identity-groups threshold-governance
 
   # 收緊閘門 + 限制每次最多開 5 個 PR（防洪 / alert-fatigue budget）
   da-tools threshold-govern --config-dir ./conf.d/ --prometheus http://prometheus:9090 \\
-    --min-delta-pct 40 --max-prs 5 --apply --tenant-api-url http://tenant-api:8080 \\
+    --min-delta-pct 40 --max-prs 5 --apply --tenant-api-url http://tenant-api.tenant-api.svc.cluster.local:8080 \\
     --identity-groups threshold-governance
 
   # JSON 輸出（pipeline / 觀測）
