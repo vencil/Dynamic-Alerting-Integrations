@@ -336,3 +336,141 @@ def test_configmap_embed_matches_standalone():
         "regenerate the configmap data key from "
         "k8s/03-monitoring/federation-revocation-dashboard.json"
     )
+
+
+# ── Colour ↔ text mapping AGREEMENT (the class #1002 burned three times) ─────────
+# A stat panel carries TWO state signals: the threshold background COLOUR and the
+# value-mapping TEXT. They must never contradict. Grafana resolves overlapping
+# inclusive `range` mappings by ARRAY ORDER (first match wins) — NOT the `index` field
+# (that is cosmetic, editor-sort only) — and a threshold step's colour applies to the
+# highest step whose value <= v (inclusive "from here up"). These pure-JSON checks
+# simulate that exact resolution so the agreement can't silently regress: a threshold ↔
+# mapping-boundary mismatch, an unmapped gap on a continuous panel, or an array-order
+# boundary overlap. No promtool needed; runs everywhere.
+#
+# #1002 burned this class three times on the erosion-ratio panel: (1) the panel's
+# threshold flipped colour at 0.01 while the text said "eroded" from 0.0001; (2) an
+# exact-0 value map left a bare-number (0, 0.0001) gap; (3) widening that to an
+# inclusive [0, 0.0001] range collided with the eroded range at exactly 0.0001
+# (= 1/10000, reachable) so Grafana's array-order first-match rendered yellow +
+# "✓ Fully covered". None of those were caught by the promtool goldens or the a11y
+# symbol-count check — only by review. Now codified.
+_COLOUR_SEV = {"green": 0, "yellow": 1, "orange": 1, "red": 2}
+_OK_SYMS = ("✓", "✅", "\U0001f7e2")      # green tier
+_WARN_SYMS = ("⚠", "\U0001f7e1")           # yellow tier
+_BAD_SYMS = ("❌", "✗", "\U0001f534")      # red tier
+
+
+def _threshold_colour(panel: dict, v: float) -> str | None:
+    """Grafana threshold: the colour of the highest step whose value <= v (the first
+    step's null value = -inf)."""
+    colour = None
+    for s in panel["fieldConfig"]["defaults"].get("thresholds", {}).get("steps", []):
+        val = s.get("value")
+        if val is None or v >= val:
+            colour = s.get("color")
+    return colour
+
+
+def _mapping_text_at(panel: dict, v: float) -> str | None:
+    """Grafana value-mapping resolution: the FIRST matching entry in ARRAY ORDER wins
+    (the `index` field does NOT affect precedence). A `range` matches from <= v <= to,
+    both bounds inclusive (absent = ±inf); a `value` matches an exact number. Returns
+    None when v hits no mapping (a bare-number gap)."""
+    for m in panel["fieldConfig"]["defaults"].get("mappings", []):
+        opts = m.get("options", {})
+        if m.get("type") == "range":
+            frm, to = opts.get("from"), opts.get("to")
+            if frm is not None and v < frm:
+                continue
+            if to is not None and v > to:
+                continue
+            return opts.get("result", {}).get("text")
+        if m.get("type") == "value":
+            for key, res in opts.items():
+                try:
+                    hit = float(key) == v
+                except (TypeError, ValueError):
+                    hit = False
+                if hit and isinstance(res, dict):
+                    return res.get("text")
+        # "special" (null / NaN) and unknown types are not reachable by a numeric probe
+    return None
+
+
+def _text_sev(text: str) -> int | None:
+    if any(s in text for s in _OK_SYMS):
+        return 0
+    if any(s in text for s in _WARN_SYMS):
+        return 1
+    if any(s in text for s in _BAD_SYMS):
+        return 2
+    return None
+
+
+def _boundary_probes(panel: dict) -> list[float]:
+    """Values around every threshold + mapping boundary (exact, half, double), plus 0."""
+    d = panel["fieldConfig"]["defaults"]
+    bounds: set[float] = set()
+    for s in d.get("thresholds", {}).get("steps", []):
+        if isinstance(s.get("value"), (int, float)):
+            bounds.add(float(s["value"]))
+    for m in d.get("mappings", []):
+        for k in ("from", "to"):
+            val = m.get("options", {}).get(k)
+            if isinstance(val, (int, float)):
+                bounds.add(float(val))
+    probes = {0.0}
+    for b in bounds:
+        probes.add(b)
+        if b > 0:
+            probes.add(b / 2.0)
+            probes.add(b * 2.0)
+    return sorted(probes)
+
+
+def test_stat_panels_have_no_colour_text_disagreement():
+    """At every threshold / mapping boundary, a stat panel's background COLOUR and its
+    mapping TEXT must agree in severity (green↔✓, yellow↔🟡, red↔🔴). A yellow tile
+    reading "✓ Clean" is worse than either signal alone. Values with NO mapping are
+    skipped here — integer-count panels legitimately leave the fractional (0, 1) band
+    unmapped (the metric can't take it); continuous-ratio full coverage is asserted
+    separately. Locks the #1002 erosion boundary bug (array-order overlap) and any
+    future threshold ↔ mapping mismatch on any stat panel."""
+    for panel in [p for p in _load_panels() if p.get("type") == "stat"]:
+        for v in _boundary_probes(panel):
+            text = _mapping_text_at(panel, v)
+            if text is None:
+                continue
+            csev = _COLOUR_SEV.get(_threshold_colour(panel, v) or "")
+            tsev = _text_sev(text)
+            if csev is None or tsev is None:
+                continue
+            assert csev == tsev, (
+                f"panel {panel['title']!r}: at value {v!r} the threshold background "
+                f"colour (severity {csev}) disagrees with the mapping text {text!r} "
+                f"(severity {tsev}). Grafana resolves overlapping inclusive range "
+                f"mappings by ARRAY ORDER (first match), NOT the index field — order the "
+                f"higher-severity mapping first so it wins the shared boundary."
+            )
+
+
+def test_erosion_ratio_panel_maps_every_value():
+    """The coverage-erosion ratio is CONTINUOUS in [0, 1] (dropped / (checked+dropped)),
+    so — unlike the integer-count stat panels — it must map EVERY value with a symbol +
+    text (no bare-number band), and colour must agree with text throughout. Sweeps the
+    domain including the exact 0.0001 = 1/10000 boundary that burned twice."""
+    panel = next((p for p in _load_panels() if "erosion ratio" in p.get("title", "")), None)
+    assert panel is not None, "erosion-ratio panel renamed/removed (drift-aware)"
+    for v in (0.0, 1e-9, 5e-5, 1e-4, 1.0 / 10000, 2e-4, 1e-3, 0.3, 0.999, 1.0):
+        text = _mapping_text_at(panel, v)
+        assert text is not None, (
+            f"erosion ratio {v!r} maps to NO text (bare number) — a continuous panel "
+            f"must cover its whole domain (ADR-012 / WCAG 1.4.1)"
+        )
+        csev = _COLOUR_SEV.get(_threshold_colour(panel, v) or "")
+        tsev = _text_sev(text)
+        assert csev == tsev, (
+            f"erosion ratio {v!r}: colour severity {csev} != text severity {tsev} "
+            f"({text!r}) — colour and text contradict at this value"
+        )
