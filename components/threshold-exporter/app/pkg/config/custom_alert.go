@@ -94,6 +94,21 @@ var (
 	customAlertNameRe = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
 	// non-identifier chars → '_' (deterministic, locale-free). Mirrors _sanitise.
 	customAlertSanitiseRe = regexp.MustCompile(`[^a-zA-Z0-9_]`)
+	// window is a BARE PromQL token interpolated raw into rate(m[<window>]) — it
+	// cannot be quote-escaped, so it must be allowlisted to the Go-duration charset
+	// (the schema pattern, now enforced imperatively). Mirrors shape.py _WINDOW_RE.
+	customAlertWindowRe = regexp.MustCompile(`^([0-9]+(ns|us|µs|ms|s|m|h))+$`)
+	// quantile: DECIMAL-float charset only. strconv.ParseFloat accepts Go hex-float
+	// literals ("0x1p-1"=0.5) and underscores that CPython float() rejects — this
+	// regex pins the accept-set so the Go preflight and the Python compiler can never
+	// diverge (a divergence lands a poison commit that wedges the CI drift gate; Phase
+	// C hunter finding). Anchored, so MatchString == fullmatch. Mirrors shape.py _QUANTILE_RE.
+	customAlertQuantileRe = regexp.MustCompile(`^[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?$`)
+	// Go-template metacharacters forbidden in a selector VALUE: the value reaches the
+	// alert-annotation template context (recipes.py _alert_rule) where Prometheus
+	// evaluates {{ query … }} across the whole TSDB. Reject so tenant data can never
+	// BECOME template code (SSTI logic-less). Mirrors shape.py _TEMPLATE_METACHARS.
+	customAlertTemplateMetachars = []string{"{{", "}}", "`"}
 	// reserved labels a tenant may not pin as a selector (would hijack the
 	// vectorisation join keys / platform dimensions). Mirrors RESERVED_LABELS.
 	customAlertReservedLabels = map[string]bool{
@@ -151,6 +166,36 @@ func validateCustomAlertMetric(metric, field string) error {
 	return nil
 }
 
+// rejectTemplateMetachars rejects a selector VALUE that could become Go-template
+// code in the annotation sink (see customAlertTemplateMetachars). Mirrors
+// shape.py::_reject_template_metachars.
+func rejectTemplateMetachars(value, key string) error {
+	for _, mc := range customAlertTemplateMetachars {
+		if strings.Contains(value, mc) {
+			return fmt.Errorf("selector value for %q contains a Go-template metacharacter %q: "+
+				"it would reach the alert-annotation template context where Prometheus evaluates "+
+				"{{ … }} at fire time (cross-tenant PromQL injection); selector values may not "+
+				"contain {{, }}, or backticks", key, mc)
+		}
+	}
+	return nil
+}
+
+// validateQuantile rejects a p99_latency quantile that is not a bare number in
+// (0,1) (interpolated raw into histogram_quantile). Mirrors shape.py::_validate_quantile.
+func validateQuantile(q string) error {
+	// Charset gate FIRST — reject Go hex-floats/underscores that ParseFloat accepts
+	// but CPython float() does not, keeping both sides' accept-set identical.
+	if !customAlertQuantileRe.MatchString(q) {
+		return fmt.Errorf("quantile %q must be a decimal number in the open interval (0,1)", q)
+	}
+	f, err := strconv.ParseFloat(q, 64)
+	if err != nil || math.IsNaN(f) || math.IsInf(f, 0) || f <= 0 || f >= 1 {
+		return fmt.Errorf("quantile %q must be a number in the open interval (0,1)", q)
+	}
+	return nil
+}
+
 type selectorItem struct {
 	op, key, value string // op is "=" (selectors) or "=~" (selectors_re)
 }
@@ -172,6 +217,9 @@ func selectorItems(spec CustomAlertSpec) ([]selectorItem, error) {
 		}
 		if customAlertReservedLabels[it.key] {
 			return nil, fmt.Errorf("selector label %q is reserved and may not be pinned", it.key)
+		}
+		if err := rejectTemplateMetachars(it.value, it.key); err != nil {
+			return nil, err
 		}
 	}
 	sort.SliceStable(items, func(i, j int) bool {
@@ -256,6 +304,9 @@ func RecipeID(spec CustomAlertSpec) (string, error) {
 			if q == "" {
 				q = "0.99"
 			}
+			if err := validateQuantile(q); err != nil {
+				return "", err
+			}
 			parts = append(parts, "q"+q)
 		}
 		if spec.Recipe == "ratio" {
@@ -334,8 +385,15 @@ func resolveOneCustomAlert(tenant string, spec CustomAlertSpec) (ResolvedThresho
 	// recipe-aware shaping duration: forecast supplies `horizon` (required + enum
 	// validated in RecipeID), every other recipe supplies `window` (empty window
 	// → invalid PromQL like rate(m[])).
-	if spec.Recipe != "forecast" && spec.Window == "" {
-		return ResolvedThreshold{}, fmt.Errorf("missing required field window")
+	if spec.Recipe != "forecast" {
+		if spec.Window == "" {
+			return ResolvedThreshold{}, fmt.Errorf("missing required field window")
+		}
+		if !customAlertWindowRe.MatchString(spec.Window) {
+			return ResolvedThreshold{}, fmt.Errorf("window %q is not a valid Go duration "+
+				"(^([0-9]+(ns|us|µs|ms|s|m|h))+$); it is interpolated raw into rate(…[<window>]) "+
+				"— an invalid value is a PromQL injection", spec.Window)
+		}
 	}
 	if !customAlertNameRe.MatchString(spec.Name) {
 		return ResolvedThreshold{}, fmt.Errorf("name %q is not a valid identifier", spec.Name)

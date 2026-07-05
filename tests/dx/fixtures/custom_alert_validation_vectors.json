@@ -32,6 +32,16 @@
     {"_note": "bad severity", "valid": false,
      "spec": {"recipe": "threshold", "name": "x", "metric": "m", "op": ">", "window": "5m", "threshold": "1:bogus"}},
     {"_note": "bad for (not enum)", "valid": false,
-     "spec": {"recipe": "threshold", "name": "x", "metric": "m", "op": ">", "window": "5m", "threshold": "1:warning", "for": "2m"}}
+     "spec": {"recipe": "threshold", "name": "x", "metric": "m", "op": ">", "window": "5m", "threshold": "1:warning", "for": "2m"}},
+    {"_note": "F2: selector VALUE carrying a Go-template action rejected — it reaches the alert-annotation template context (recipes.py _alert_rule) where Prometheus evaluates {{ query ... }} across the whole TSDB; _escape_value defends only the PromQL string-literal, not the template. PortSwigger logic-less principle: untrusted data must never become template code.", "valid": false,
+     "spec": {"recipe": "absence", "name": "tmpl_inj", "metric": "up", "selectors": {"probe": "{{ query `sum(user_threshold)` | first | value }}"}, "window": "5m", "threshold": "1:warning"}},
+    {"_note": "F2: selector VALUE with a backtick (Go raw-string delimiter; survives _escape_value which only escapes \\ \" \\n) rejected", "valid": false,
+     "spec": {"recipe": "rate", "name": "tick_inj", "metric": "http_requests_total", "selectors": {"path": "a`b"}, "op": ">", "window": "5m", "threshold": "1:warning"}},
+    {"_note": "F1: window with a PromQL injection rejected — window is raw-interpolated into rate(m[<window>]) (recipes.py); must match the Go-duration charset ^([0-9]+(ns|us|µs|ms|s|m|h))+$ (the schema pattern, now enforced imperatively both sides)", "valid": false,
+     "spec": {"recipe": "rate", "name": "win_inj", "metric": "m", "op": ">", "window": "5m]) or vector(1", "threshold": "1:warning"}},
+    {"_note": "F1: quantile with a PromQL injection rejected — quantile is raw-interpolated into histogram_quantile(<quantile>, ...) (recipes.py); must be a number in (0,1)", "valid": false,
+     "spec": {"recipe": "p99_latency", "name": "q_inj", "metric": "http_request_duration_seconds", "quantile": "0.5) or (1", "op": ">", "window": "5m", "threshold": "1:warning"}},
+    {"_note": "F1-lockstep (Phase C hunter): quantile as a Go hex-float literal. Go strconv.ParseFloat accepts \"0x1p-1\"=0.5 but CPython float() rejects it → without a shared decimal-only regex the Go preflight goes GREEN while the Python CI compiler goes RED, landing a poison commit that wedges the platform-wide #741 S3b drift gate. Must be REJECTED by BOTH (decimal-float charset).", "valid": false,
+     "spec": {"recipe": "p99_latency", "name": "qhex", "metric": "http_request_duration_seconds", "quantile": "0x1p-1", "op": ">", "window": "5m", "threshold": "1:warning"}}
   ]
 }
