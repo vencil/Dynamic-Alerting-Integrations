@@ -90,13 +90,15 @@ INFO（不列管，僅記錄）：`components/da-tools/app/Dockerfile:12` DL3059
 
 **Baseline 截至 2026-05-23**：9 個 chart × values variants，**0 Critical** ✅ / 5 baseline-High（中央豁免）/ 3 INFO。
 
+> **變更（#1018 PSS）**：`mariadb-instance:run-as-non-root`（原 #1）已由 chart 0.1.2 加固解除——pod-level `runAsNonRoot: true` + `runAsUser/Group: 999`（官方 image 的 `mysql` uid，對齊既有 `fsGroup: 999`；顯式 uid 是必要的——mariadb image 預設 root 起 entrypoint、mysqld-exporter image 是非數字 `USER nobody`，兩者 kubelet 都驗不了）。EXEMPTIONS key 已移除——回歸重現該 finding 即 BLOCK。餘 baseline-High 4 筆。
+
 | # | Chart:check | severity | Rationale（= EXEMPTIONS 登記） | 退場 / 修補 |
 |---|---|---|---|---|
-| 1 | `mariadb-instance:run-as-non-root` | High | mariadb 官方 image 啟動需 root 以 chown data dir 後降權 | 改 rootless mariadb image 才可解；政策性保留 |
-| 2 | `mariadb-instance:no-read-only-root-fs` | High | mariadb-server 需可寫 `/var/lib/mysql` data dir | 同 #1 |
+| ~~1~~ | ~~`mariadb-instance:run-as-non-root`~~ | ~~High~~ | **已解除（#1018）**：pod runAsNonRoot + runAsUser/Group 999 | 已除籍；回歸即 BLOCK |
+| 2 | `mariadb-instance:no-read-only-root-fs` | High | mariadb-server 需可寫 `/var/lib/mysql` data dir | 需先盤點 `/run/mysqld`／`/tmp` 的 emptyDir 掛載才可解；保留 |
 | 3 | `tenant-api:no-read-only-root-fs` | High | tenant-api gitops writer shells out to git，需可寫工作區 | **修補候選**：把 git workdir 移到 writable volume + readOnlyRootFilesystem:true |
-| 4 | `vector:run-as-non-root` | High | log-collector DaemonSet 需 root 讀 `/var/log/pods` host log | 架構事實；保留 |
-| 5 | `vector:capabilities-add` | High | `DAC_READ_SEARCH` — 讀其他 UID 擁有的 host log（配 root 需求） | 架構事實；保留 |
+| 4 | `vector:run-as-non-root` | High | log-collector DaemonSet 需 root 讀 `/var/log/pods` host log | 架構事實；保留（#1018 起以專屬 `vector` ns PSS privileged carve-out 圍堵爆炸半徑） |
+| 5 | `vector:capabilities-add` | High | `DAC_READ_SEARCH` — 讀其他 UID 擁有的 host log（配 root 需求） | 架構事實；保留（同 #4 carve-out） |
 
 INFO（不列管）：`federation-gateway` / `federation-proxy` / `threshold-exporter` 的 `pdb-unhealthy-pod-eviction-policy`（PDB best-practice，非急；可於 PDB 補 `unhealthyPodEvictionPolicy: AlwaysAllow`）。
 
@@ -136,13 +138,22 @@ INFO（不列管）：`federation-gateway` / `federation-proxy` / `threshold-exp
 
 > **與其他層的關係**：L4 抓 raw manifest 的 **container misconfig**（kube-linter）;raw Secret 的**硬編字面**由 L3 抓（scope 含 k8s/）;**高熵值**由 #445 trufflehog 抓 —— 三者互補不雙重 fire（kube-linter 無 hardcoded-secret-value check）。
 
+### L4 native 規則：PSS namespace labels（#1018，informational）
+
+`check_k8s_manifests.py` 內建一條**非 kube-linter** 規則（PyYAML parse、非 grep）：`k8s/` 下所有 `kind: Namespace` 必帶 `pod-security.kubernetes.io/warn` + `pod-security.kubernetes.io/audit` 兩個 label，值 ∈ {privileged, baseline, restricted}；`enforce` **選配**（phased rollout —— flip 是 soak 後的 follow-up PR），但出現就驗值。
+
+- **Severity → action：WARN（informational），永不 BLOCK** —— soak 階段紀律，不回溯攔在飛 PR；enforce flip 回合再議是否升級（見 [`pss-enforcement-runbook.md`](pss-enforcement-runbook.md) §3）。
+- **Fail-visible**：PyYAML 缺席或單檔 parse 失敗 → 顯式 WARN 註記、絕不靜默跳過（CI SAST job 已加 pyyaml install step；hook venv 帶 `additional_dependencies: pyyaml`）；規則 engine-independent，kube-linter 不在也照跑。
+- 陽性 canary 釘在 `tests/lint/test_check_k8s_manifests.py`（`TestPssLabelRule`：doc-level + file-level 兩層 canary + 全 repo live baseline = 0 findings + WARN-never-BLOCK 契約測試）。
+- 定位：`AdmissionConfiguration` cluster-default 的 repo 端替代防線（managed cluster 碰不到 apiserver flags）—— 新 ns manifest 忘掛 label 進不了 review 而不自知。
+
 ## Cross-namespace service-URL consistency（#1004，純 Vibe wrapper — 4 層 SAST 的相鄰一致性檢查，非其中一層）
 
 跑法：`python3 scripts/tools/lint/check_cross_ns_url_consistency.py [--ci]`（hook `cross-ns-url-check`，default stage — 靜態掃描 <2s；CI 在 Lint job unfiltered 跑 `--all-files`）。**無 open-source engine** —— 「服務 X 的 URL 必須 pin canonical namespace Y」是跨檔案的語意規則，kube-linter 無法表達（`.kube-linter.yaml` 僅內建 checks，已驗證），依 hybrid policy 走 Vibe wrapper（同 L3 類）。
 
 **Policy ／ Data 分離（#1004 Option D）**：governed service→namespace 映射、`chart_context_ns` deploy-contract、`EXEMPTIONS` registry 皆為 **DATA**，外置於 `scripts/tools/lint/cross_ns_url_lint.config.yaml`（與 lint 同目錄，故落在所有 scan glob 之外 —— lint 不會掃到自己的資料）。**非 Python contributor 改 YAML、不動 `.py`**（`.py` 只留 logic：regex／scan／verdict）。**Fail-closed（安全控制）**：config 缺檔、YAML 壞、或 schema 不合（缺頂層 key、型別錯、exemption 少 `exit_condition` 等）→ 印錯到 stderr + **exit 2（caller-error）**，**絕不 silent pass**。config 於 import 時載入，`--config <path>` 可覆寫（測試用）。
 
-**Canonical namespaces（#1004 裁定）**：`tenant-api` → 專屬 `tenant-api` ns（raw v2.4.0 原始意圖 + GHSA 隔離）；`recipe-preview` → `monitoring` ns。
+**Canonical namespaces（#1004 裁定）**：`tenant-api` → 專屬 `tenant-api` ns（raw v2.4.0 原始意圖 + GHSA 隔離）；`recipe-preview` → `monitoring` ns。（#1018 補：`helm/vector` 的 `chart_context_ns` deploy-contract 改為專屬 `vector` ns —— PSS privileged carve-out；vector 非 governed service，僅 deploy contract 更新。）
 
 兩條規則（PARSE YAML string scalars，非 grep —— 註解永不誤報）：
 

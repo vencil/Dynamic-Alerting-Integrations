@@ -3,7 +3,8 @@
 # tenantProjections is set — the gate's degrade/ghost-race observability must NOT
 # depend on Vector's own metrics.enabled (a degrade can happen with self-telemetry
 # off). Exposes the metrics-exposer sidecar (serve_metrics.py) so Prometheus's
-# annotation-based `monitoring-components` job (role: service, namespace monitoring)
+# annotation-based `monitoring-components` job (role: service, namespaces
+# monitoring + vector — the #1018 PSS carve-out ns is in the SD list)
 # discovers + scrapes the verdict.
 #
 # Headless (clusterIP: None) for the SAME reason as the Vector self-telemetry

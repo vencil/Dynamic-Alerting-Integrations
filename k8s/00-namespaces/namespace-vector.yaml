@@ -1,0 +1,35 @@
+# Dedicated namespace for the Vector log-agent DaemonSet (#1018 PSS carve-out).
+#
+# WHY A PRIVILEGED CARVE-OUT: the Vector DaemonSet mounts 3 hostPath volumes
+# (/var/log, /var/lib/docker/containers, /var/lib/vector — see
+# helm/vector/templates/daemonset.yaml). hostPath is forbidden even by the
+# PSS *baseline* profile, so Vector can never live in a restricted/baseline
+# namespace. Carving the node-level log agent into its own privileged
+# namespace is the industry-standard pattern — the alternative (blanket
+# exemption on `monitoring`) would strip PSS protection from prometheus /
+# grafana / alertmanager / KSM / da-portal too.
+#
+# WHY warn/audit ARE PINNED TO privileged AS WELL: an explicit declaration
+# that this namespace is a deliberate carve-out — it prevents a future
+# well-meaning "tighten all warn labels to restricted" sweep from burying
+# operators in permanent, unfixable warnings for a workload that is
+# privileged BY DESIGN.
+#
+# ⛔ Single-workload namespace by design: only the Vector log shipper (and
+# its projection-gate init-container) belongs here. Do NOT co-locate other
+# components — anything scheduled here escapes restricted admission, and the
+# victorialogs NetworkPolicy admits this namespace wholesale
+# (helm/victorialogs values.yaml `networkPolicy.allowedNamespaces`).
+#
+# Migration of an existing monitoring-ns Vector install:
+# docs/internal/platform-log-aggregation-runbook.md §1.1.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: vector
+  labels:
+    purpose: logging
+    app.kubernetes.io/part-of: dynamic-alerting
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/warn: privileged
+    pod-security.kubernetes.io/audit: privileged

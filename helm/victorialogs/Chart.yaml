@@ -10,7 +10,8 @@ type: application
 # 0.1.4 — #566 Q5: extraEnv/extraEnvFrom (platform convention with helm/vector + helm/chargeback-aggregator)
 # 0.2.0 — ADR-021 Phase 1 / #609: Layer-1 query guardrails (.Values.search → -search.maxQueryTimeRange / maxQueryDuration / maxConcurrentRequests / maxQueueDuration); maxQueryDuration 25s < gateway 30s (cascading-timeout)
 # 0.2.1 — #902 L2 slice-2: pin the VictoriaLogs image by digest (image.digest)
-version: 0.2.1
+# 0.3.0 — #1018 PSS: default netpol admits the dedicated `vector` namespace (allowedNamespaces) — the log-agent PSS carve-out moved Vector out of `monitoring`; default ingress-topology change ⇒ minor bump
+version: 0.3.0
 # appVersion: pinned VictoriaLogs release
 appVersion: "v1.50.0"
 keywords:

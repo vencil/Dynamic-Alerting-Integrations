@@ -21,7 +21,7 @@ chart_context_ns:             # helm chart dir -> DEPLOY-CONTRACT namespace; nul
   federation-reconciler: monitoring
   recipe-preview: monitoring
   threshold-exporter: monitoring
-  vector: monitoring
+  vector: vector              # #1018 PSS carve-out: dedicated privileged ns (hostPath log agent)
   victorialogs: monitoring
   mariadb-instance: null      # tenant-scoped (one release per tenant ns)
 exemptions:                   # matched hit -> INFO; every entry needs exit_condition

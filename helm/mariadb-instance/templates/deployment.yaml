@@ -18,7 +18,23 @@ spec:
         app: mariadb
         instance: {{ .Values.instance }}
     spec:
+      # PSS restricted-readiness (#1018): runAsNonRoot alone is NOT enough —
+      # the official mariadb image starts its entrypoint as root and drops to
+      # mysql (uid 999) itself, and the mysqld-exporter image declares a
+      # NON-NUMERIC `USER nobody`; in both cases kubelet cannot verify the
+      # image user, so admission would fail with "cannot verify user is
+      # non-root". Pinning runAsUser/runAsGroup 999 (the image's `mysql`
+      # uid/gid — consistent with the pre-existing fsGroup: 999 that already
+      # group-owns the PVC) runs BOTH containers as non-root from exec time:
+      # mariadb's entrypoint supports arbitrary-uid startup (skips its chown
+      # path), and the stock mysqld-exporter is a static Go binary —
+      # UID-agnostic (no home-dir, capability, or writable-path dependency),
+      # so 999 is safe. Operators substituting a CUSTOM exporter image must
+      # verify it tolerates UID 999 themselves.
       securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
         fsGroup: 999
         seccompProfile:
           type: RuntimeDefault

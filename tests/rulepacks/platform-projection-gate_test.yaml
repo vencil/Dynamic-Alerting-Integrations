@@ -38,7 +38,7 @@ tests:
     input_series:
       # namespace present (a scrape that attaches it) → aggregation must KEEP it so two
       # Vector installs don't collapse; instance/pod/job are the noisy labels to strip.
-      - series: 'vector_tenant_projection_gate_info{category="mismatch", mode="degrade", namespace="monitoring", instance="10.0.0.5:9599", pod="vector-abc12", job="vector-projection-gate-metrics"}'
+      - series: 'vector_tenant_projection_gate_info{category="mismatch", mode="degrade", namespace="vector", instance="10.0.0.5:9599", pod="vector-abc12", job="vector-projection-gate-metrics"}'
         values: '1+0x9'
     alert_rule_test:
       # MID-window: the mismatch is already true (t0..t4) but `for: 5m` has NOT elapsed
@@ -53,7 +53,7 @@ tests:
           - exp_labels:
               severity: critical
               mode: degrade
-              namespace: monitoring
+              namespace: vector
             exp_annotations:
               summary: "Vector projection gate found a wrong accountId (mode=degrade) — tenant log routing degraded to 0:0"
 
@@ -85,7 +85,7 @@ tests:
   - interval: 1m
     name: registry-unreadable-fires-debounced
     input_series:
-      - series: 'vector_tenant_projection_gate_info{category="registry_unreadable", mode="degrade", namespace="monitoring", instance="10.0.0.7:9599", pod="vector-def34", job="vector-projection-gate-metrics"}'
+      - series: 'vector_tenant_projection_gate_info{category="registry_unreadable", mode="degrade", namespace="vector", instance="10.0.0.7:9599", pod="vector-def34", job="vector-projection-gate-metrics"}'
         values: '1+0x9'
     alert_rule_test:
       - eval_time: 4m   # true since t0 but < for:5m → PENDING (pins the debounce)
@@ -97,7 +97,7 @@ tests:
           - exp_labels:
               severity: critical
               mode: degrade
-              namespace: monitoring
+              namespace: vector
             exp_annotations:
               summary: "Vector projection gate could not read the account registry at boot (mode=degrade) — tenant routing silently degraded"
 
@@ -117,7 +117,7 @@ tests:
   - interval: 1m
     name: enforce-deadlock-fires-debounced
     input_series:
-      - series: 'kube_pod_init_container_status_waiting_reason{container="projection-gate", reason="CrashLoopBackOff", namespace="monitoring", pod="vector-ghi56", instance="10.0.0.9:8080", job="kube-state-metrics"}'
+      - series: 'kube_pod_init_container_status_waiting_reason{container="projection-gate", reason="CrashLoopBackOff", namespace="vector", pod="vector-ghi56", instance="10.0.0.9:8080", job="kube-state-metrics"}'
         values: '1+0x9'
     alert_rule_test:
       - eval_time: 4m   # crashlooping since t0 but < for:5m → PENDING
@@ -128,16 +128,16 @@ tests:
         exp_alerts:
           - exp_labels:
               severity: critical
-              namespace: monitoring
+              namespace: vector
             exp_annotations:
-              summary: "Vector projection-gate init-container is stuck (crash loop / image pull) — DaemonSet rollout wedged in monitoring"
+              summary: "Vector projection-gate init-container is stuck (crash loop / image pull) — DaemonSet rollout wedged in vector"
 
   # 7) a benign init wait (PodInitializing) must NOT fire the deadlock alert — only
   #    CrashLoopBackOff is the deadlock signal (a normal startup briefly waits).
   - interval: 1m
     name: pod-initializing-does-not-fire-deadlock
     input_series:
-      - series: 'kube_pod_init_container_status_waiting_reason{container="projection-gate", reason="PodInitializing", namespace="monitoring", pod="vector-ghi56"}'
+      - series: 'kube_pod_init_container_status_waiting_reason{container="projection-gate", reason="PodInitializing", namespace="vector", pod="vector-ghi56"}'
         values: '1+0x9'
     alert_rule_test:
       - eval_time: 6m
@@ -149,7 +149,7 @@ tests:
   - interval: 1m
     name: other-container-crashloop-does-not-fire-deadlock
     input_series:
-      - series: 'kube_pod_init_container_status_waiting_reason{container="vector", reason="CrashLoopBackOff", namespace="monitoring", pod="vector-ghi56"}'
+      - series: 'kube_pod_init_container_status_waiting_reason{container="vector", reason="CrashLoopBackOff", namespace="vector", pod="vector-ghi56"}'
         values: '1+0x9'
     alert_rule_test:
       - eval_time: 6m
@@ -169,7 +169,7 @@ tests:
   - interval: 1m
     name: enforce-deadlock-flapping-still-fires
     input_series:
-      - series: 'kube_pod_init_container_status_waiting_reason{container="projection-gate", reason="CrashLoopBackOff", namespace="monitoring", pod="vector-ghi56"}'
+      - series: 'kube_pod_init_container_status_waiting_reason{container="projection-gate", reason="CrashLoopBackOff", namespace="vector", pod="vector-ghi56"}'
         values: '1 _ 1 _ 1 _ 1 _ 1 _'   # present every other minute (gaps = brief re-run)
     alert_rule_test:
       - eval_time: 4m   # crashlooping since t0 but < for:5m → PENDING despite the gaps
@@ -180,9 +180,9 @@ tests:
         exp_alerts:
           - exp_labels:
               severity: critical
-              namespace: monitoring
+              namespace: vector
             exp_annotations:
-              summary: "Vector projection-gate init-container is stuck (crash loop / image pull) — DaemonSet rollout wedged in monitoring"
+              summary: "Vector projection-gate init-container is stuck (crash loop / image pull) — DaemonSet rollout wedged in vector"
 
   # 10) WRONG-IMAGE wedge: a garbled/typo'd gate image never pulls → the init sits in
   #     ImagePullBackOff, in ANY mode, and the verdict metric is never served (Vector +
@@ -193,7 +193,7 @@ tests:
   - interval: 1m
     name: image-pull-wedge-fires
     input_series:
-      - series: 'kube_pod_init_container_status_waiting_reason{container="projection-gate", reason="ImagePullBackOff", namespace="monitoring", pod="vector-jkl78", instance="10.0.0.9:8080", job="kube-state-metrics"}'
+      - series: 'kube_pod_init_container_status_waiting_reason{container="projection-gate", reason="ImagePullBackOff", namespace="vector", pod="vector-jkl78", instance="10.0.0.9:8080", job="kube-state-metrics"}'
         values: '1+0x9'
     alert_rule_test:
       - eval_time: 4m   # wedged since t0 but < for:5m → PENDING (same debounce contract)
@@ -204,6 +204,6 @@ tests:
         exp_alerts:
           - exp_labels:
               severity: critical
-              namespace: monitoring
+              namespace: vector
             exp_annotations:
-              summary: "Vector projection-gate init-container is stuck (crash loop / image pull) — DaemonSet rollout wedged in monitoring"
+              summary: "Vector projection-gate init-container is stuck (crash loop / image pull) — DaemonSet rollout wedged in vector"

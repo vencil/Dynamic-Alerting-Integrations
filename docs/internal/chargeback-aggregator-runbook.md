@@ -30,8 +30,9 @@ IV-2f（#511）刻意**沒**在 Envoy 加 `series_returned` 欄位 —— Envoy 
 kubectl apply -f k8s/03-monitoring/configmap-prometheus.yaml
 kubectl rollout restart -n monitoring deploy/prometheus
 
-# 2) Vector 加 prometheus 為 additionalSource。
-helm upgrade vector ./helm/vector -n monitoring --reuse-values \
+# 2) Vector 加 prometheus 為 additionalSource（#1018 起 Vector 在專屬
+#    vector ns —— PSS privileged carve-out）。
+helm upgrade vector ./helm/vector -n vector --reuse-values \
   --set 'additionalSources[0].name=prometheus_query_log' \
   --set 'additionalSources[0].extraLabelSelector=app=prometheus'
 

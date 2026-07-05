@@ -100,6 +100,23 @@ class TestVictoriaLogs:
         }
         assert expected.issubset(labels), f"missing consumers: {expected - labels}"
 
+    @_needs_helm
+    def test_networkpolicy_admits_vector_namespace(self, repo_root: Path) -> None:
+        """#1018 PSS carve-out: Vector ships from its dedicated `vector`
+        namespace, so the default netpol MUST carry a namespaceSelector for
+        it — dropping that row silently severs ingest (Vector -> :9428)."""
+        docs = _render(repo_root / "helm/victorialogs")
+        np = [d for d in docs if d.get("kind") == "NetworkPolicy"][0]
+        peers = np["spec"]["ingress"][0].get("from", [])
+        ns_names = {
+            p["namespaceSelector"]["matchLabels"].get("kubernetes.io/metadata.name")
+            for p in peers if "namespaceSelector" in p
+        }
+        assert "vector" in ns_names, (
+            "default allowedNamespaces must admit the dedicated vector ns "
+            f"(got: {ns_names})"
+        )
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # helm/vector

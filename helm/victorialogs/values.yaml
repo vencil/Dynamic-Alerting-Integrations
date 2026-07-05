@@ -147,6 +147,10 @@ prometheusScrapeAnnotations:
 #
 # Defaults (same-namespace consumers, the common install topology):
 #   - Vector DaemonSet (ingest)              app.kubernetes.io/name=vector
+#     ⚠️ since #1018 Vector deploys into its dedicated `vector` namespace
+#     (PSS privileged carve-out) and reaches :9428 via `allowedNamespaces`
+#     below; the same-ns podSelector row is RETAINED for same-ns debug pods
+#     (the smoketest's labelled `vlq` busybox) and pre-migration installs.
 #   - chargeback-aggregator CronJob (query)  app.kubernetes.io/name=chargeback-aggregator
 #   - Grafana (query)                        app=grafana  (k8s/03-monitoring label)
 #   - federation-gateway (query, ADR-021)    app.kubernetes.io/name=federation-gateway
@@ -178,7 +182,14 @@ networkPolicy:
     # → :9428 forward is dropped and the whole mode is DOA in-cluster.
     - matchLabels:
         app.kubernetes.io/name: federation-gateway
-  allowedNamespaces: []
+  # `vector`: the log shipper's dedicated namespace (#1018 PSS privileged
+  # carve-out — its 3 hostPath mounts are forbidden even by PSS baseline,
+  # so it cannot share the restricted-tier `monitoring` ns). A
+  # namespaceSelector entry admits ALL pods of that namespace — acceptable
+  # ONLY because k8s/00-namespaces/namespace-vector.yaml pins it as a
+  # single-workload namespace. ⛔ Never add a shared/multi-tenant ns here.
+  allowedNamespaces:
+    - vector
 
 # Pod placement. Single pod has no affinity rules; if scaled up the
 # chart user is expected to add an anti-affinity block manually since

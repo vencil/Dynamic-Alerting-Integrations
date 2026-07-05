@@ -399,11 +399,19 @@ jobs:
       - name: Run Container SAST Layer 2 (Helm)
         run: python3 scripts/tools/lint/check_iac_helm.py --ci
 
+      - name: Install PyYAML (L4 PSS namespace-label rule, #1018)
+        # The native PSS rule in check_k8s_manifests.py parses manifests with
+        # PyYAML; setup-python builds don't bundle it. Without this the rule
+        # degrades to an explicit WARN (never a silent skip) — installing it
+        # here makes the informational findings actually visible in CI logs.
+        run: python3 -m pip install --quiet pyyaml
+
       - name: Run Container SAST Layer 4 (raw k8s manifests)
         # Real layer (NOT a stub): k8s/ holds 42 raw manifests. kube-linter
         # over the tree, reusing L2's severity + a (path, check) exemption
         # registry. 0 Critical / baseline-High exempt -> exit 0; a new Critical
         # or unregistered High -> exit 1 (fails this required-check job).
+        # Also runs the native, WARN-only PSS namespace-label rule (#1018).
         run: python3 scripts/tools/lint/check_k8s_manifests.py --ci
 
   python-tests:

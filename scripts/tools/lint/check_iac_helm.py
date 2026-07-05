@@ -117,8 +117,9 @@ DANGEROUS_SOURCE_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
 # CRITICAL is never exemptable here. Adding an entry is a deliberate, reviewable
 # act — the single audit surface for "what privileges has the platform opened".
 EXEMPTIONS: dict[tuple[str, str], str] = {
-    ("mariadb-instance", "run-as-non-root"):
-        "mariadb official image starts as root to chown the data dir then drops to mysql",
+    # ("mariadb-instance", "run-as-non-root") was DE-REGISTERED by #1018: the
+    # chart now pins pod-level runAsNonRoot + runAsUser/Group 999 (PSS
+    # restricted-readiness), so a regression re-introducing the finding BLOCKS.
     ("mariadb-instance", "no-read-only-root-fs"):
         "mariadb-server requires a writable /var/lib/mysql data directory",
     ("tenant-api", "no-read-only-root-fs"):

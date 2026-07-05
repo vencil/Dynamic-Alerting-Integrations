@@ -184,6 +184,118 @@ class TestCollectFindings:
 
 
 # ---------------------------------------------------------------------------
+# PSS namespace-label rule (#1018) — informational, WARN-only
+# ---------------------------------------------------------------------------
+def _ns_doc(name, labels):
+    return {"apiVersion": "v1", "kind": "Namespace",
+            "metadata": {"name": name, "labels": labels}}
+
+
+class TestPssLabelRule:
+    def test_missing_both_labels_flagged(self):
+        """Doc-level positive canary: an unlabeled Namespace yields 2 findings."""
+        out = k8s.pss_label_findings(_ns_doc("app-x", {"purpose": "x"}), "k8s/x.yaml")
+        assert len(out) == 2
+        assert any("pod-security.kubernetes.io/warn" in x for x in out)
+        assert any("pod-security.kubernetes.io/audit" in x for x in out)
+
+    def test_warn_audit_restricted_clean(self):
+        labels = {"pod-security.kubernetes.io/warn": "restricted",
+                  "pod-security.kubernetes.io/audit": "restricted"}
+        assert k8s.pss_label_findings(_ns_doc("app-x", labels), "k8s/x.yaml") == []
+
+    def test_enforce_optional_but_validated(self):
+        base = {"pod-security.kubernetes.io/warn": "privileged",
+                "pod-security.kubernetes.io/audit": "privileged"}
+        # enforce absent -> clean (phased rollout: flip is a follow-up PR)
+        assert k8s.pss_label_findings(_ns_doc("v", dict(base)), "k8s/v.yaml") == []
+        # enforce present + valid -> clean
+        ok = dict(base, **{"pod-security.kubernetes.io/enforce": "privileged"})
+        assert k8s.pss_label_findings(_ns_doc("v", ok), "k8s/v.yaml") == []
+        # enforce present + bogus -> flagged
+        bad = dict(base, **{"pod-security.kubernetes.io/enforce": "Restricted"})
+        out = k8s.pss_label_findings(_ns_doc("v", bad), "k8s/v.yaml")
+        assert len(out) == 1 and "enforce" in out[0]
+
+    def test_invalid_level_value_flagged(self):
+        labels = {"pod-security.kubernetes.io/warn": "restrictedd",
+                  "pod-security.kubernetes.io/audit": "restricted"}
+        out = k8s.pss_label_findings(_ns_doc("app-x", labels), "k8s/x.yaml")
+        assert len(out) == 1 and "not a valid PSS level" in out[0]
+
+    def test_non_namespace_docs_ignored(self):
+        assert k8s.pss_label_findings({"kind": "Deployment", "metadata": {}}, "k8s/d.yaml") == []
+        assert k8s.pss_label_findings(None, "k8s/d.yaml") == []  # empty YAML doc
+        assert k8s.pss_label_findings("scalar", "k8s/d.yaml") == []
+
+    def test_metadata_absent_namespace_still_flagged(self):
+        """A structurally degenerate Namespace doc (no metadata at all) must
+        still yield the 2 missing-label findings — `metadata or {}` guards the
+        traversal, it must not silently pass the doc."""
+        out = k8s.pss_label_findings({"apiVersion": "v1", "kind": "Namespace"}, "k8s/x.yaml")
+        assert len(out) == 2
+        assert all("ns/?" in x for x in out)
+
+    def test_pyyaml_missing_is_explicit_warn_not_silent(self, monkeypatch):
+        """Fail-visible contract: PyYAML absent => ONE explicit WARN note,
+        never a silent empty result (a silently skipped lint is fail-open).
+        sys.modules['yaml']=None makes `import yaml` raise ImportError."""
+        monkeypatch.setitem(sys.modules, "yaml", None)
+        out = k8s.collect_pss_findings()
+        assert len(out) == 1 and "PyYAML unavailable" in out[0]
+
+    def test_collector_positive_canary(self, tmp_path):
+        """FILE-level positive canary: a real on-disk Namespace manifest
+        missing the labels IS caught end-to-end through the collector."""
+        bad = tmp_path / "namespace-bad.yaml"
+        bad.write_text(
+            "apiVersion: v1\nkind: Namespace\nmetadata:\n  name: canary-ns\n"
+            "  labels:\n    purpose: canary\n", encoding="utf-8")
+        out = k8s.collect_pss_findings([bad])
+        assert len(out) == 2
+        assert all("canary-ns" in x for x in out)
+
+    def test_collector_multi_doc_and_parse_error_soft(self, tmp_path):
+        # multi-doc file: only the Namespace doc is evaluated
+        multi = tmp_path / "multi.yaml"
+        multi.write_text(
+            "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: cm\n---\n"
+            "apiVersion: v1\nkind: Namespace\nmetadata:\n  name: n2\n",
+            encoding="utf-8")
+        out = k8s.collect_pss_findings([multi])
+        assert len(out) == 2 and all("ns/n2" in x for x in out)
+        # unparseable file degrades to an explicit note, never raises
+        broken = tmp_path / "broken.yaml"
+        broken.write_text("kind: Namespace\nmetadata: [unclosed", encoding="utf-8")
+        out = k8s.collect_pss_findings([broken])
+        assert len(out) == 1 and "skipped this file" in out[0]
+
+    def test_repo_namespaces_all_labeled(self):
+        """Live baseline: every Namespace manifest under k8s/ ships labeled
+        (db-a / db-b / monitoring / tenant-api warn+audit=restricted; the
+        vector carve-out enforce+warn+audit=privileged).
+
+        NB enforcement topology: the L4 pre-commit hook is MANUAL-stage (needs
+        the kube-linter engine), so on a hookless local commit the PSS rule
+        never runs there — THIS pytest (Python Tests CI, every PR) is the
+        always-on guard that keeps the repo's own namespaces labeled; the CI
+        SAST job additionally surfaces the WARN lines in its log."""
+        assert k8s.collect_pss_findings() == []
+
+    def test_pss_findings_are_warn_never_block(self, monkeypatch):
+        """Contract: the rule is informational — findings land in WARN and
+        --ci still exits 0 (in-flight PRs must not be retro-gated)."""
+        _stub_engine(monkeypatch, [])
+        monkeypatch.setattr(k8s, "collect_pss_findings",
+                            lambda files=None: ["[pss] k8s/x.yaml ns/x: missing ..."])
+        f = k8s.collect_findings(strict=True)
+        assert any("[pss]" in x for x in f["WARN"])
+        assert f["BLOCK"] == []
+        monkeypatch.setattr(sys, "argv", ["prog", "--ci"])
+        assert k8s.main() == 0
+
+
+# ---------------------------------------------------------------------------
 # Discovery
 # ---------------------------------------------------------------------------
 class TestDiscovery:
