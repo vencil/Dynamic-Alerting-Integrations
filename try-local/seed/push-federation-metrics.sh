@@ -30,13 +30,20 @@ PUSH_INTERVAL="${PUSH_INTERVAL:-15}"
 
 echo "[fed-seed] starting continuous federation-revocation mock push to ${PUSHGATEWAY_URL}/metrics/job/demo-seed every ${PUSH_INTERVAL}s"
 
-# Tiny awk-free jitter for events_checked (~38-42): derive from the low digits
-# of the current epoch so the timeseries wiggles without needing a RNG binary.
-# (busybox sh in curlimages/curl has no $RANDOM.)
+# Tiny awk-free jitter for events_checked (~38-42): a per-loop counter drives a
+# sawtooth so the timeseries visibly wiggles without needing a RNG binary
+# (busybox sh in curlimages/curl has no $RANDOM).
+# ⛔ Do NOT derive the jitter from `date +%s`: the loop advances the clock by
+# ~PUSH_INTERVAL each pass, so `now % N` beats against the interval — whenever
+# N divides PUSH_INTERVAL (e.g. 5 | 15) the remainder is CONSTANT and the line
+# goes dead flat (a self-inflicted 拍頻 / resonance; caught in Gemini review of
+# #1012). A monotonic loop counter is interval-independent and always steps by 1.
+_tick=0
 push_once() {
   now="$(date +%s)"
-  # 0..4 from the seconds' ones-digit, biased to sit around 40 → 38..42.
-  jitter=$(( (now % 5) - 2 ))     # -2 .. +2
+  _tick=$(( _tick + 1 ))
+  # counter-driven sawtooth around 40 → 38..42 (interval-independent).
+  jitter=$(( (_tick % 5) - 2 ))   # -2 .. +2
   checked=$(( 40 + jitter ))      # 38 .. 42
 
   # ts=now EVERY iteration — the crux (see header). tamper/dropped/load-errors
