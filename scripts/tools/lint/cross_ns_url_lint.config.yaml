@@ -1,0 +1,35 @@
+# Config DATA for check_cross_ns_url_consistency.py (#1004). Option D:
+# policy (the .py) is separated from data (this file). The lint FAILS CLOSED
+# if this file is missing/malformed. Every governed-namespace expectation is
+# changed HERE — a central, reviewable edit; never self-declared by the chart
+# under test (that would let a drifted chart green-light itself).
+#
+# NOT self-scanned: this file lives under scripts/tools/lint/ — outside every
+# scan glob (helm/*/values*.yaml, k8s/**/*.yaml) and both fixed targets
+# (components/da-portal/nginx.conf, try-local/docker-compose.yaml), so the
+# governed strings below (tenant-api, recipe-preview, the exemption FQDN) can
+# never be flagged as the lint's own data. Verified by a unit test.
+governed_services:            # service -> its ONE canonical namespace
+  tenant-api: tenant-api
+  recipe-preview: monitoring
+chart_context_ns:             # helm chart dir -> DEPLOY-CONTRACT namespace; null = tenant-scoped/no-fixed-ns
+  tenant-api: tenant-api
+  chargeback-aggregator: monitoring
+  da-portal: monitoring
+  federation-gateway: monitoring
+  federation-proxy: monitoring
+  federation-reconciler: monitoring
+  recipe-preview: monitoring
+  threshold-exporter: monitoring
+  vector: monitoring
+  victorialogs: monitoring
+  mariadb-instance: null      # tenant-scoped (one release per tenant ns)
+exemptions:                   # matched hit -> INFO; every entry needs exit_condition
+  - path: try-local/docker-compose.yaml
+    substring: tenant-api.monitoring.svc.cluster.local
+    rationale: >-
+      legacy compose network alias — the da-portal service pins the published
+      v2.8.0 portal image whose baked nginx.conf still targets the pre-#1004
+      FQDN; removing the alias breaks try-local at nginx startup
+      (`host not found in upstream`)
+    exit_condition: "remove when the PORTAL_TAG default is bumped to a portal image built after #1004"

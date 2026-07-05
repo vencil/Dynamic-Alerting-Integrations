@@ -17,12 +17,21 @@ Pinned contracts
 6. **Exemptions**: a registered (path, substring) hit downgrades to INFO.
 7. **Live dogfood**: the real tree has 0 violations and exactly 1 exempt INFO
    (the compose legacy alias) — guards a regression of this very PR.
+8. **Config DATA is external + fail-closed** (#1004 Option D): the governed
+   map / chart contexts / exemptions load from an external YAML; a missing,
+   malformed, or schema-invalid config is a caller-error (exit 2), NEVER a
+   silent pass. The config file itself is outside every scan glob (self-scan
+   guard).
 """
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
+import textwrap
 from pathlib import Path
+
+import pytest
 
 _TOOLS_DIR = os.path.join(
     os.path.dirname(__file__), "..", "..", "scripts", "tools", "lint"
@@ -30,6 +39,37 @@ _TOOLS_DIR = os.path.join(
 sys.path.insert(0, _TOOLS_DIR)
 
 import check_cross_ns_url_consistency as lint  # noqa: E402
+
+_LINT_PY = Path(lint.__file__).resolve()
+
+
+@pytest.fixture
+def restore_lint_config():
+    """Snapshot + restore the module-level config globals so a test that calls
+    _apply_config (which rebinds them) can't leak state into sibling tests."""
+    snap = (lint.GOVERNED_SERVICES, lint.CHART_CONTEXT_NS, lint.EXEMPTIONS,
+            lint._SVC_ALT, lint._FQDN_RE, lint._BARE_SCHEME_RE,
+            lint._BARE_HOSTPORT_RE)
+    yield
+    (lint.GOVERNED_SERVICES, lint.CHART_CONTEXT_NS, lint.EXEMPTIONS,
+     lint._SVC_ALT, lint._FQDN_RE, lint._BARE_SCHEME_RE,
+     lint._BARE_HOSTPORT_RE) = snap
+
+
+_VALID_CONFIG = textwrap.dedent("""\
+    governed_services:
+      tenant-api: tenant-api
+      recipe-preview: monitoring
+    chart_context_ns:
+      tenant-api: tenant-api
+      da-portal: monitoring
+      mariadb-instance: null
+    exemptions:
+      - path: try-local/docker-compose.yaml
+        substring: tenant-api.monitoring.svc.cluster.local
+        rationale: legacy compose network alias
+        exit_condition: "remove when PORTAL_TAG is bumped past #1004"
+""")
 
 
 # ── R1: wrong-namespace FQDN (context-free) ─────────────────────────────────
@@ -262,3 +302,200 @@ def test_live_repo_is_consistent():
     # exactly the one registered exemption: the compose legacy alias
     assert len(infos) == 1
     assert "tenant-api.monitoring.svc" in infos[0]
+
+
+# ── #1004 Option D: config DATA loaded from external file, fail-closed ───────
+def _write_config(tmp_path, text) -> Path:
+    p = tmp_path / "cross_ns_url_lint.config.yaml"
+    p.write_text(text, encoding="utf-8")
+    return p
+
+
+def test_module_constants_loaded_from_real_config():
+    # The module-level constants are the real repo config, loaded at import —
+    # so every legacy test above (which references lint.GOVERNED_SERVICES etc.)
+    # keeps working without any per-test config wiring.
+    assert lint.GOVERNED_SERVICES == {
+        "tenant-api": "tenant-api", "recipe-preview": "monitoring"}
+    assert lint.CHART_CONTEXT_NS["mariadb-instance"] is None
+    assert lint.CHART_CONTEXT_NS["da-portal"] == "monitoring"
+    assert len(lint.CHART_CONTEXT_NS) == 11
+    key = (lint._COMPOSE, "tenant-api.monitoring.svc.cluster.local")
+    assert key in lint.EXEMPTIONS
+    rationale, exit_cond = lint.EXEMPTIONS[key]
+    assert "legacy compose network alias" in rationale
+    assert exit_cond  # non-empty exit condition preserved
+
+
+def test_load_config_valid_returns_expected_structures(tmp_path):
+    cfg = _write_config(tmp_path, _VALID_CONFIG)
+    gov, charts, exemptions = lint.load_config(str(cfg))
+    assert gov == {"tenant-api": "tenant-api", "recipe-preview": "monitoring"}
+    assert charts == {"tenant-api": "tenant-api", "da-portal": "monitoring",
+                      "mariadb-instance": None}
+    key = ("try-local/docker-compose.yaml",
+           "tenant-api.monitoring.svc.cluster.local")
+    assert exemptions[key] == (
+        "legacy compose network alias",
+        "remove when PORTAL_TAG is bumped past #1004")
+
+
+def test_load_config_missing_file_fails_closed(tmp_path):
+    with pytest.raises(lint.ConfigError):
+        lint.load_config(str(tmp_path / "does-not-exist.yaml"))
+
+
+def test_load_config_malformed_yaml_fails_closed(tmp_path):
+    cfg = _write_config(tmp_path, "governed_services: [unterminated\n")
+    with pytest.raises(lint.ConfigError):
+        lint.load_config(str(cfg))
+
+
+def test_load_config_missing_top_level_key_fails_closed(tmp_path):
+    cfg = _write_config(tmp_path,
+                        "governed_services: {tenant-api: tenant-api}\n"
+                        "chart_context_ns: {}\n")  # no `exemptions`
+    with pytest.raises(lint.ConfigError):
+        lint.load_config(str(cfg))
+
+
+def test_load_config_empty_governed_services_fails_closed(tmp_path):
+    cfg = _write_config(tmp_path,
+                        "governed_services: {}\n"
+                        "chart_context_ns: {}\nexemptions: []\n")
+    with pytest.raises(lint.ConfigError):
+        lint.load_config(str(cfg))
+
+
+def test_load_config_exemption_missing_exit_condition_rejected(tmp_path):
+    # HARD REQ #3: every exemption MUST carry a non-empty exit_condition.
+    cfg = _write_config(tmp_path, textwrap.dedent("""\
+        governed_services: {tenant-api: tenant-api}
+        chart_context_ns: {tenant-api: tenant-api}
+        exemptions:
+          - path: try-local/docker-compose.yaml
+            substring: tenant-api.monitoring.svc.cluster.local
+            rationale: some reason
+        """))  # no exit_condition
+    with pytest.raises(lint.ConfigError) as exc:
+        lint.load_config(str(cfg))
+    assert "exit_condition" in str(exc.value)
+
+
+def test_load_config_exemption_blank_exit_condition_rejected(tmp_path):
+    cfg = _write_config(tmp_path, textwrap.dedent("""\
+        governed_services: {tenant-api: tenant-api}
+        chart_context_ns: {tenant-api: tenant-api}
+        exemptions:
+          - path: p
+            substring: s
+            rationale: r
+            exit_condition: "   "
+        """))
+    with pytest.raises(lint.ConfigError):
+        lint.load_config(str(cfg))
+
+
+def test_load_config_bad_chart_ns_type_fails_closed(tmp_path):
+    cfg = _write_config(tmp_path,
+                        "governed_services: {tenant-api: tenant-api}\n"
+                        "chart_context_ns: {da-portal: 123}\n"
+                        "exemptions: []\n")
+    with pytest.raises(lint.ConfigError):
+        lint.load_config(str(cfg))
+
+
+def test_apply_config_rebinds_regexes(tmp_path, restore_lint_config):
+    # A config with a DIFFERENT governed set must reshape the matchers so the
+    # pure functions pick it up (proves the regexes are built post-load).
+    cfg = _write_config(tmp_path, textwrap.dedent("""\
+        governed_services: {only-svc: only-ns}
+        chart_context_ns: {only-svc: only-ns}
+        exemptions: []
+        """))
+    lint._apply_config(str(cfg))
+    # `only-svc` is now governed; `tenant-api` no longer is.
+    assert lint.scan_scalar("http://only-svc:8080", "monitoring") != []
+    assert lint.scan_scalar("http://tenant-api:8080", "monitoring") == []
+
+
+def test_main_missing_config_is_caller_error(tmp_path, monkeypatch):
+    # HARD REQ #1: point main() at a missing config → exit 2, never 0.
+    _write_repo(tmp_path)
+    monkeypatch.setattr(sys, "argv", [
+        "check_cross_ns_url_consistency.py", "--ci",
+        "--config", str(tmp_path / "absent.yaml")])
+    assert lint.main() == 2
+
+
+def test_main_malformed_config_is_caller_error(tmp_path, monkeypatch):
+    _write_repo(tmp_path)
+    bad = _write_config(tmp_path, "governed_services: [unterminated\n")
+    monkeypatch.setattr(sys, "argv", [
+        "check_cross_ns_url_consistency.py", "--ci", "--config", str(bad)])
+    assert lint.main() == 2
+
+
+def test_main_missing_config_subprocess_exits_2(tmp_path):
+    # End-to-end: the real script binary, bad --config → exit 2 (fail-closed).
+    result = subprocess.run(
+        [sys.executable, str(_LINT_PY), "--ci",
+         "--config", str(tmp_path / "absent.yaml")],
+        capture_output=True, timeout=15)
+    assert result.returncode == 2
+    assert b"config data file" in result.stderr
+
+
+# ── #1004 Option D: unmapped chart still → None → conservative violation ─────
+def test_unmapped_chart_still_conservative_violation(tmp_path):
+    # HARD REQ #2: a chart absent from chart_context_ns resolves to None →
+    # a bare governed name in its values fires R2 (same as the old .get()).
+    (tmp_path / ".git").mkdir(exist_ok=True)
+    unmapped = tmp_path / "helm" / "brand-new-chart"
+    unmapped.mkdir(parents=True)
+    (unmapped / "values.yaml").write_text(
+        'api:\n  url: "http://tenant-api:8080"\n', encoding="utf-8")
+    assert "brand-new-chart" not in lint.CHART_CONTEXT_NS  # genuinely unmapped
+    findings = lint.scan_helm_values(
+        unmapped / "values.yaml", "helm/brand-new-chart/values.yaml",
+        chart="brand-new-chart")
+    assert len(findings) == 1
+    assert "context ns=unknown" in findings[0][5]
+
+
+# ── #1004 Option D: config file must NOT be self-scanned ─────────────────────
+def test_config_file_is_not_a_scan_target():
+    # HARD REQ #4: the config lives under scripts/tools/lint/ — outside every
+    # scan glob and both fixed targets — so despite carrying the governed
+    # strings + the exemption FQDN it is never among the lint's scan targets.
+    repo = Path(__file__).resolve().parents[2]
+    cfg = Path(lint.DEFAULT_CONFIG_PATH).resolve()
+    cfg_rel = cfg.relative_to(repo).as_posix()
+
+    scanned: set[str] = set()
+    for pattern in ("helm/*/values*.yaml", "helm/*/values*.yml",
+                    "k8s/**/*.yaml", "k8s/**/*.yml"):
+        for p in repo.glob(pattern):
+            if p.is_file():
+                scanned.add(p.resolve().relative_to(repo).as_posix())
+    scanned.update(lint._FIXED_TARGETS)
+
+    assert cfg_rel not in scanned, (
+        f"config file {cfg_rel} is inside a scan target set — it would "
+        f"self-flag the governed strings it declares")
+    # And its own governed strings really are present in the file (so the
+    # guard above is meaningful, not vacuous).
+    assert "tenant-api.monitoring.svc.cluster.local" in cfg.read_text(
+        encoding="utf-8")
+
+
+def test_config_file_not_flagged_in_live_dogfood():
+    # The live dogfood already proves 0 violations despite the config carrying
+    # tenant-api / recipe-preview / the exemption FQDN; assert the config path
+    # never appears in any finding location.
+    repo = Path(__file__).resolve().parents[2]
+    cfg_rel = Path(lint.DEFAULT_CONFIG_PATH).resolve().relative_to(
+        repo).as_posix()
+    violations, infos, _ = lint.check_repo(repo)
+    assert all(cfg_rel not in v for v in violations)
+    assert all(cfg_rel not in i for i in infos)

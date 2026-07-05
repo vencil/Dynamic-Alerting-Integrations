@@ -51,18 +51,33 @@ WHAT THIS DOES **NOT** CHECK (deliberately):
     forcing a deliberate CHART_CONTEXT_NS entry (same governance as L2's
     EXEMPTIONS registry).
 
-EXEMPTIONS: central registry below (path + substring + rationale + exit
-condition). A matched hit is reported as INFO, not a violation — same
-reporting style as L2/L4 baseline exemptions.
+DATA vs POLICY (#1004, Option D — "separate policy from data"): the governed
+services, chart deploy-contract namespaces and the exemption registry are DATA
+and live in an external YAML file (cross_ns_url_lint.config.yaml, co-located
+with this script). A non-Python contributor edits the YAML, never this code;
+the LOGIC (regexes, scan, verdict) stays here. The config is loaded at import
+and FAILS CLOSED — a missing / unparseable / schema-invalid config is a
+caller-error (exit 2), never a silent pass (this is a security control). The
+config file is co-located under scripts/tools/lint/ specifically so it is
+OUTSIDE every scan glob (helm/*/values*.yaml, k8s/**/*.yaml) and both fixed
+targets — the lint never scans its own data.
+
+EXEMPTIONS: central registry in the config file (path + substring + rationale
++ exit condition; every entry MUST carry a non-empty exit_condition, enforced
+at load). A matched hit is reported as INFO, not a violation — same reporting
+style as L2/L4 baseline exemptions.
 
 Exit codes:
     0  every service URL agrees with the canonical namespaces
     1  violations present (--ci)
-    2  caller error (a fixed scan target is missing / YAML unparseable)
+    2  caller error (a fixed scan target is missing / YAML unparseable /
+       the config file is missing, unparseable, or schema-invalid)
 
 Usage:
     python3 scripts/tools/lint/check_cross_ns_url_consistency.py        # report
     python3 scripts/tools/lint/check_cross_ns_url_consistency.py --ci   # exit 1
+    python3 scripts/tools/lint/check_cross_ns_url_consistency.py \
+        --config path/to/alt.config.yaml   # override data file (testing)
 """
 from __future__ import annotations
 
@@ -88,31 +103,12 @@ from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E
 
 SKIP_DIR_PARTS = {".claude", ".git", "node_modules", ".venv", "venv"}
 
-# Governed service -> its ONE canonical namespace (#1004 ruling).
-GOVERNED_SERVICES: dict[str, str] = {
-    "tenant-api": "tenant-api",
-    "recipe-preview": "monitoring",
-}
-
-# Helm chart dir (under helm/) -> the namespace the chart's DEPLOY CONTRACT
-# targets. This is the R2 context for the chart's values*.yaml: a bare
-# governed name is fine only when the chart deploys INTO that service's
-# canonical namespace. None = tenant-scoped / no fixed namespace → R2 fires
-# conservatively. An unmapped new chart also gets None — add it here
-# deliberately (reviewable act, like L2's EXEMPTIONS).
-CHART_CONTEXT_NS: dict[str, Optional[str]] = {
-    "tenant-api": "tenant-api",
-    "chargeback-aggregator": "monitoring",
-    "da-portal": "monitoring",
-    "federation-gateway": "monitoring",
-    "federation-proxy": "monitoring",
-    "federation-reconciler": "monitoring",
-    "recipe-preview": "monitoring",
-    "threshold-exporter": "monitoring",
-    "vector": "monitoring",
-    "victorialogs": "monitoring",
-    "mariadb-instance": None,  # tenant-scoped (one release per tenant ns)
-}
+# --- Config DATA file (Option D: policy here, data external) ------------------
+# Co-located with this script *on purpose*: scripts/tools/lint/ is OUTSIDE every
+# scan glob (helm/*/values*.yaml, k8s/**/*.yaml) and both fixed targets, so the
+# governed strings the config carries can never be flagged as the lint's own
+# data (self-scan guard; proven by test).
+DEFAULT_CONFIG_PATH = os.path.join(_THIS_DIR, "cross_ns_url_lint.config.yaml")
 
 # Fixed (non-glob) scan targets — missing means the lint's subject moved
 # (caller-error, like check_single_writer_invariant's _TARGETS contract).
@@ -120,39 +116,166 @@ _NGINX_CONF = "components/da-portal/nginx.conf"
 _COMPOSE = "try-local/docker-compose.yaml"
 _FIXED_TARGETS = [_NGINX_CONF, _COMPOSE]
 
-# --- Central exemption registry (#1004) --------------------------------------
-# (repo-relative path, substring-of-the-hit) -> (rationale, exit condition).
-# A matched hit downgrades to INFO. Adding an entry is a deliberate,
-# reviewable act; every entry MUST carry an exit condition so the registry
-# can only shrink, mirrored in docs/internal/iac-lint-baseline.md.
-EXEMPTIONS: dict[tuple[str, str], tuple[str, str]] = {
-    (_COMPOSE, "tenant-api.monitoring.svc.cluster.local"): (
-        "legacy compose network alias — the da-portal service pins the "
-        "published v2.8.0 portal image whose baked nginx.conf still targets "
-        "the pre-#1004 FQDN; removing the alias breaks try-local at nginx "
-        "startup (`host not found in upstream`)",
-        "remove when the PORTAL_TAG default is bumped to a portal image "
-        "built after #1004",
-    ),
-}
 
-_SVC_ALT = "|".join(sorted(GOVERNED_SERVICES))
-# R1: `<svc>.<ns>.svc` (also matches the `.svc.cluster.local` long form).
-# Lookbehind rejects `x-tenant-api.…` / `foo.tenant-api.…` (different host);
-# lookahead rejects `….svcx`. `/` is allowed before (URL `://<svc>.…`).
-_FQDN_RE = re.compile(
-    rf"(?<![\w.-])(?P<svc>{_SVC_ALT})\."
-    rf"(?P<ns>[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)\.svc(?![\w-])"
+class ConfigError(Exception):
+    """Raised when the config DATA file is missing, unparseable, or fails
+    schema validation. main() turns this into EXIT_CALLER_ERROR (2) — this is
+    a security control, so a config problem FAILS CLOSED, never a silent 0."""
+
+
+def load_config(path: str = DEFAULT_CONFIG_PATH):
+    """Read + validate the external config YAML; return the three internal
+    structures the rest of the module uses:
+
+        (GOVERNED_SERVICES: dict[str, str],
+         CHART_CONTEXT_NS:   dict[str, Optional[str]],
+         EXEMPTIONS:         dict[tuple[str, str], tuple[str, str]])
+
+    FAILS CLOSED: any missing file / parse error / schema violation raises
+    ConfigError (never returns partial data), which main() reports as
+    EXIT_CALLER_ERROR. Exposed as a function so tests can point it at a temp
+    fixture file."""
+    try:
+        text = Path(path).read_text(encoding="utf-8")
+    except FileNotFoundError as exc:
+        raise ConfigError(
+            f"config data file not found: {path} — the lint FAILS CLOSED on a "
+            f"missing config (it cannot know the canonical namespaces)."
+        ) from exc
+    except OSError as exc:
+        raise ConfigError(f"cannot read config data file {path}: {exc}") from exc
+
+    try:
+        data = yaml.safe_load(text)
+    except yaml.YAMLError as exc:
+        raise ConfigError(f"config data file {path} is not valid YAML: {exc}") from exc
+
+    if not isinstance(data, dict):
+        raise ConfigError(
+            f"config data file {path} must be a YAML mapping at top level, "
+            f"got {type(data).__name__}."
+        )
+
+    for key in ("governed_services", "chart_context_ns", "exemptions"):
+        if key not in data:
+            raise ConfigError(
+                f"config data file {path} is missing required top-level key "
+                f"`{key}`."
+            )
+
+    # governed_services: non-empty dict[str, str]
+    gov = data["governed_services"]
+    if not isinstance(gov, dict) or not gov:
+        raise ConfigError(
+            f"config {path}: `governed_services` must be a non-empty mapping."
+        )
+    for svc, ns in gov.items():
+        if not isinstance(svc, str) or not svc:
+            raise ConfigError(
+                f"config {path}: `governed_services` has a non-string / empty "
+                f"service key ({svc!r})."
+            )
+        if not isinstance(ns, str) or not ns:
+            raise ConfigError(
+                f"config {path}: `governed_services[{svc}]` must be a non-empty "
+                f"string namespace, got {ns!r}."
+            )
+    governed_services: dict[str, str] = dict(gov)
+
+    # chart_context_ns: dict[str, str | None]
+    charts = data["chart_context_ns"]
+    if not isinstance(charts, dict):
+        raise ConfigError(
+            f"config {path}: `chart_context_ns` must be a mapping."
+        )
+    for chart, ns in charts.items():
+        if not isinstance(chart, str) or not chart:
+            raise ConfigError(
+                f"config {path}: `chart_context_ns` has a non-string / empty "
+                f"chart key ({chart!r})."
+            )
+        if ns is not None and (not isinstance(ns, str) or not ns):
+            raise ConfigError(
+                f"config {path}: `chart_context_ns[{chart}]` must be a "
+                f"non-empty string or null (tenant-scoped), got {ns!r}."
+            )
+    chart_context_ns: dict[str, Optional[str]] = dict(charts)
+
+    # exemptions: list of mappings, each with non-empty path / substring /
+    # rationale / exit_condition. Rebuilt into the (path, substring) ->
+    # (rationale, exit_condition) shape the rest of the code already expects.
+    exemptions_raw = data["exemptions"]
+    if not isinstance(exemptions_raw, list):
+        raise ConfigError(
+            f"config {path}: `exemptions` must be a list (may be empty)."
+        )
+    exemptions: dict[tuple[str, str], tuple[str, str]] = {}
+    for i, entry in enumerate(exemptions_raw):
+        if not isinstance(entry, dict):
+            raise ConfigError(
+                f"config {path}: exemptions[{i}] must be a mapping."
+            )
+        for field in ("path", "substring", "rationale", "exit_condition"):
+            val = entry.get(field)
+            if not isinstance(val, str) or not val.strip():
+                raise ConfigError(
+                    f"config {path}: exemptions[{i}] is missing a non-empty "
+                    f"`{field}` (every exemption MUST carry a non-empty "
+                    f"exit_condition and identifying path/substring/rationale)."
+                )
+        exemptions[(entry["path"], entry["substring"])] = (
+            entry["rationale"], entry["exit_condition"]
+        )
+
+    return governed_services, chart_context_ns, exemptions
+
+
+def _build_matchers(governed_services: dict[str, str]):
+    """Compile the R1/R2 regexes from the governed-service alternation. Kept a
+    function so the module-level constants AND any test using an alternate
+    config are built the same way — all matchers derive from GOVERNED_SERVICES,
+    so they MUST be built after the config loads."""
+    svc_alt = "|".join(sorted(governed_services))
+    # R1: `<svc>.<ns>.svc` (also matches the `.svc.cluster.local` long form).
+    # Lookbehind rejects `x-tenant-api.…` / `foo.tenant-api.…` (different host);
+    # lookahead rejects `….svcx`. `/` is allowed before (URL `://<svc>.…`).
+    fqdn_re = re.compile(
+        rf"(?<![\w.-])(?P<svc>{svc_alt})\."
+        rf"(?P<ns>[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)\.svc(?![\w-])"
+    )
+    # R2a: scheme + bare host. Lookahead rejects FQDNs (`http://tenant-api.…`)
+    # and longer names (`http://tenant-api-canary`).
+    bare_scheme_re = re.compile(rf"https?://(?P<svc>{svc_alt})(?![\w.-])")
+    # R2b: `<svc>:<port>` host:port shape. Lookbehind additionally rejects `/`
+    # so `http://tenant-api:8080` isn't double-counted (R2a owns it) and an
+    # image ref `registry/tenant-api:1234` isn't a host. Lookahead keeps YAML
+    # keys (`tenant-api:` + space/EOL) and label-ish values out: a port must
+    # follow the colon immediately.
+    bare_hostport_re = re.compile(rf"(?<![\w.\-/])(?P<svc>{svc_alt}):\d+(?!\w)")
+    return svc_alt, fqdn_re, bare_scheme_re, bare_hostport_re
+
+
+# --- Import-time load from the default config --------------------------------
+# The module-level constants + regexes below are DERIVED from the config, so
+# they are built AFTER load_config() succeeds — every downstream function and
+# every existing test references these names, so they must exist at import.
+# The load is GUARDED: a config problem is stashed as _CONFIG_LOAD_ERROR (a
+# ConfigError) rather than crashing import with a raw traceback, and main()
+# reports it as EXIT_CALLER_ERROR. GOVERNED_SERVICES etc. fall back to empty so
+# the names exist; the guard in main() ensures we never run a scan on empty
+# data and silently pass.
+GOVERNED_SERVICES: dict[str, str] = {}
+CHART_CONTEXT_NS: dict[str, Optional[str]] = {}
+EXEMPTIONS: dict[tuple[str, str], tuple[str, str]] = {}
+_CONFIG_LOAD_ERROR: Optional[ConfigError] = None
+try:
+    GOVERNED_SERVICES, CHART_CONTEXT_NS, EXEMPTIONS = load_config()
+except ConfigError as _exc:  # pragma: no cover - exercised via reload in tests
+    _CONFIG_LOAD_ERROR = _exc
+
+_SVC_ALT, _FQDN_RE, _BARE_SCHEME_RE, _BARE_HOSTPORT_RE = _build_matchers(
+    GOVERNED_SERVICES
 )
-# R2a: scheme + bare host. Lookahead rejects FQDNs (`http://tenant-api.…`)
-# and longer names (`http://tenant-api-canary`).
-_BARE_SCHEME_RE = re.compile(rf"https?://(?P<svc>{_SVC_ALT})(?![\w.-])")
-# R2b: `<svc>:<port>` host:port shape. Lookbehind additionally rejects `/`
-# so `http://tenant-api:8080` isn't double-counted (R2a owns it) and an
-# image ref `registry/tenant-api:1234` isn't a host. Lookahead keeps YAML
-# keys (`tenant-api:` + space/EOL) and label-ish values out: a port must
-# follow the colon immediately.
-_BARE_HOSTPORT_RE = re.compile(rf"(?<![\w.\-/])(?P<svc>{_SVC_ALT}):\d+(?!\w)")
 
 # A finding: (rel_path, line_or_None, keypath_or_None, matched_fragment,
 #             containing_scalar, message)
@@ -325,6 +448,18 @@ def check_repo(repo: Path) -> Tuple[List[str], List[str], int]:
     return violations, infos, n_files
 
 
+def _apply_config(path: str) -> None:
+    """Load *path* and rebind the module-level constants + regexes so the pure
+    functions (scan_scalar / _expected / match_exemption) pick up this data.
+    Raises ConfigError (fail-closed) on any problem."""
+    global GOVERNED_SERVICES, CHART_CONTEXT_NS, EXEMPTIONS
+    global _SVC_ALT, _FQDN_RE, _BARE_SCHEME_RE, _BARE_HOSTPORT_RE
+    GOVERNED_SERVICES, CHART_CONTEXT_NS, EXEMPTIONS = load_config(path)
+    _SVC_ALT, _FQDN_RE, _BARE_SCHEME_RE, _BARE_HOSTPORT_RE = _build_matchers(
+        GOVERNED_SERVICES
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=__doc__.strip().splitlines()[0],
@@ -332,7 +467,24 @@ def main() -> int:
     )
     parser.add_argument("--ci", action="store_true",
                         help="exit 1 on violation")
+    parser.add_argument(
+        "--config", default=None,
+        help="path to the config DATA file (default: co-located "
+             "cross_ns_url_lint.config.yaml); handy for testing fail-closed "
+             "behaviour")
     args = parser.parse_args()
+
+    # Fail closed on config: a --config override reloads deliberately; with no
+    # override, surface any import-time load error (missing/malformed default
+    # config) as caller-error rather than scanning on empty data → silent pass.
+    try:
+        if args.config is not None:
+            _apply_config(args.config)
+        elif _CONFIG_LOAD_ERROR is not None:
+            raise _CONFIG_LOAD_ERROR
+    except ConfigError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return EXIT_CALLER_ERROR
 
     repo = Path(_THIS_DIR).resolve()
     for parent in [repo, *repo.parents]:

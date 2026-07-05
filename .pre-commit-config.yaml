@@ -832,7 +832,7 @@ repos:
         language: python
         additional_dependencies: ['pyyaml']
         pass_filenames: false
-        files: ^(helm/.*\.ya?ml|k8s/.*\.ya?ml|try-local/docker-compose\.yaml|components/da-portal/nginx\.conf|scripts/tools/lint/check_cross_ns_url_consistency\.py)$
+        files: ^(helm/.*\.ya?ml|k8s/.*\.ya?ml|try-local/docker-compose\.yaml|components/da-portal/nginx\.conf|scripts/tools/lint/check_cross_ns_url_consistency\.py|scripts/tools/lint/cross_ns_url_lint\.config\.yaml)$
         # FATAL: past drift shipped charts/docs pinning `tenant-api.monitoring.
         # svc…` while raw manifests deployed tenant-api into its dedicated
         # `tenant-api` ns, and recipe-preview called bare `http://tenant-api:8080`
@@ -840,9 +840,12 @@ repos:
         # wrong-namespace FQDN anywhere; R2 flags a URL-ish bare governed name
         # outside its canonical ns (chart deploy contract / doc metadata.namespace
         # as context). Parses YAML (comments never fire); kube-linter has no
-        # equivalent semantic check, so this is a Vibe wrapper (cf. L3). Exemptions
-        # via the in-file EXEMPTIONS registry (path + substring + rationale +
-        # exit condition), mirrored in docs/internal/iac-lint-baseline.md.
+        # equivalent semantic check, so this is a Vibe wrapper (cf. L3). #1004
+        # Option D: the governed map / chart contexts / exemptions are DATA in
+        # cross_ns_url_lint.config.yaml (in files: so editing it re-triggers the
+        # lint); a missing/malformed config FAILS CLOSED (exit 2). Exemptions
+        # registry (path + substring + rationale + exit condition) lives there,
+        # mirrored in docs/internal/iac-lint-baseline.md.
 
       - id: account-registry-monotonic
         name: "ADR-021/#609: _account_registry.yaml next_account_id must never decrease (cross-tenant log-leak guard)"
