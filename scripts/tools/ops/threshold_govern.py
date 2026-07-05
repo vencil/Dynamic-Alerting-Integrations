@@ -424,21 +424,51 @@ def verify_only_changed(
 # ---------------------------------------------------------------------------
 # tenant-api client (read-modify-write a per-tenant governance PR)
 # ---------------------------------------------------------------------------
+def _resolve_auth_token(args: argparse.Namespace) -> str:
+    """Resolve the Bearer token: a literal (``--auth-token`` / ``DA_GOVERN_TOKEN``)
+    wins, else a token FILE (``--auth-token-file`` / ``DA_GOVERN_TOKEN_FILE``) — a
+    Kubernetes audience-bound projected SA token (ADR-027). kubelet rotates the
+    file, so it is read at call time (this one-shot CLI reads it once per run).
+
+    The Bearer here only feeds tenant-api's machine-identity AUDIT, which never
+    gates the write; authz rides on the identity headers. So a token-file read
+    error must NOT abort governance — it degrades to no Bearer (the audit records
+    no_token) with a warning, mirroring the audit's own never-block contract.
+    Returns "" when no token is configured or the file cannot be read.
+    """
+    literal = args.auth_token or os.environ.get("DA_GOVERN_TOKEN", "")
+    if literal:
+        return literal
+    if args.auth_token_file:
+        try:
+            with open(args.auth_token_file, encoding="utf-8") as fh:
+                return fh.read().strip()
+        except OSError as exc:
+            print(f"warning: could not read --auth-token-file "
+                  f"{args.auth_token_file!r}: {exc}; continuing without a Bearer "
+                  f"(tenant-api machine-identity audit will record no_token)",
+                  file=sys.stderr)
+    return ""
+
+
 def _auth_headers(args: argparse.Namespace) -> dict[str, str]:
-    """Identity headers for the tenant-api call.
+    """Identity + audit headers for the tenant-api call.
 
     Direct in-cluster mode injects ``X-Forwarded-Email`` / ``X-Forwarded-Groups``
     (the tenant-api RBAC reads these — see rbac/middleware.go); a NetworkPolicy
     must restrict who can reach the API directly with injected identity. An
-    oauth2-proxy-fronted deployment instead passes ``--auth-token`` (Bearer) and
-    lets the proxy inject identity. Both may be set.
+    oauth2-proxy-fronted deployment instead passes a Bearer and lets the proxy
+    inject identity. The Bearer may ALSO be a Kubernetes projected SA token
+    (``--auth-token-file``) that tenant-api audits (ADR-027 machine-identity);
+    that audit is orthogonal to authz, so the identity headers and the Bearer
+    may (and, for in-cluster governance, do) coexist.
     """
     headers: dict[str, str] = {"X-DA-Write-Source": WRITE_SOURCE}
     if args.identity_email:
         headers["X-Forwarded-Email"] = args.identity_email
     if args.identity_groups:
         headers["X-Forwarded-Groups"] = args.identity_groups
-    token = args.auth_token or os.environ.get("DA_GOVERN_TOKEN", "")
+    token = _resolve_auth_token(args)
     if token:
         headers["Authorization"] = "Bearer " + token
     return headers
@@ -837,6 +867,12 @@ def main() -> None:
                         help=("Bearer token（oauth2-proxy 前置模式；亦可用 DA_GOVERN_TOKEN）"
                               if _LANG == "zh" else
                               "Bearer token (oauth2-proxy mode; or env DA_GOVERN_TOKEN)"))
+    parser.add_argument("--auth-token-file", default=os.environ.get("DA_GOVERN_TOKEN_FILE"),
+                        help=("Bearer token 檔路徑（K8s audience-bound projected SA token；"
+                              "呼叫時讀取；亦可用 DA_GOVERN_TOKEN_FILE）"
+                              if _LANG == "zh" else
+                              "Path to a Bearer token file (K8s audience-bound projected SA "
+                              "token, read at call time; or env DA_GOVERN_TOKEN_FILE)"))
     parser.add_argument("--throttle-seconds", type=float, default=DEFAULT_THROTTLE_SECONDS,
                         help="開 PR 之間的間隔秒數（預設 2）" if _LANG == "zh"
                         else "Seconds to pause between opened PRs (default 2)")
@@ -871,10 +907,11 @@ def main() -> None:
                    else "--apply requires --tenant-api-url")
             print(msg, file=sys.stderr)
             sys.exit(EXIT_CALLER_ERROR)
-        if not args.identity_groups and not args.auth_token:
-            msg = ("--apply 需要 --identity-groups（直連）或 --auth-token（oauth2-proxy）"
+        if not args.identity_groups and not args.auth_token and not args.auth_token_file:
+            msg = ("--apply 需要 --identity-groups（直連）或 --auth-token/--auth-token-file（oauth2-proxy）"
                    if _LANG == "zh" else
-                   "--apply requires --identity-groups (direct) or --auth-token (oauth2-proxy)")
+                   "--apply requires --identity-groups (direct) or "
+                   "--auth-token/--auth-token-file (oauth2-proxy)")
             print(msg, file=sys.stderr)
             sys.exit(EXIT_CALLER_ERROR)
 

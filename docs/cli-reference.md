@@ -2613,6 +2613,7 @@ da-tools threshold-govern --config-dir <PATH> --prometheus <URL> --apply \
 | `--identity-email` | X-Forwarded-Email（PR git author / 治理身分） | `threshold-governance@platform.local` |
 | `--identity-groups` | X-Forwarded-Groups（須具 write 權限的 RBAC 群組；直連 `--apply` 必填） | `$DA_GOVERN_GROUPS` |
 | `--auth-token` | Bearer token（oauth2-proxy 前置模式；或 `$DA_GOVERN_TOKEN`） | - |
+| `--auth-token-file` | Bearer token 檔路徑（K8s audience-bound projected SA token，呼叫時讀取；或 `$DA_GOVERN_TOKEN_FILE`） | - |
 | `--throttle-seconds` | 開 PR 之間的間隔秒數 | `2` |
 | `--json` | JSON 輸出 | - |
 

@@ -384,7 +384,7 @@ func TestKSA_Verdict_SyntheticOutOfSet_Mismatch(t *testing.T) {
 func TestKSA_Verdict_Relay_AnyGroups(t *testing.T) {
 	t.Parallel()
 	r, rec := newResolver(t, intersectingReactor(
-		"system:serviceaccount:tenant-api:recipe-preview", []string{testAudience}), nil)
+		"system:serviceaccount:monitoring:recipe-preview", []string{testAudience}), nil)
 	r.Observe(reqWithBearer(makeJWT("iss")),
 		&VerifiedPrincipal{Groups: []string{"db-a-operators", "arbitrary-user-team"}})
 	if rec.get(ResultAuditVerified) != 1 {
