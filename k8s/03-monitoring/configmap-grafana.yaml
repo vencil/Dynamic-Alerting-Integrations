@@ -121,3 +121,747 @@ data:
       "title": "MariaDB Overview",
       "uid": "mariadb-overview"
     }
+  federation-revocation-dashboard.json: |
+    {
+      "annotations": {
+        "list": []
+      },
+      "description": "ADR-028 D1 (#924 / #1002) federation revocation reconciler — the operational field view for the un-revoke tamper-evidence control. Source metrics are emitted by the federation-reconciler Deployment's /metrics (job=federation-reconciler, port 9099; helm/federation-reconciler runs _federation_revocation_reconciler.py). All six metrics are platform-global with ZERO labels, so there is no per-tenant template variable. Panel thresholds are aligned 1:1 to the three platform alerts (FederationRevocationTamperSuspected > 0, FederationRevocationReconcileStale time()-ts > 1800s, FederationGatewayRevocationLoadFailure > 0) so the dashboard and the pager agree on what is bad. Rows map to the runbook's four chaos-validation scenarios: fail-closed / liveness, schema-drift, fail-open (拍頻), and the tamper headline. Behavioural contract: tests/dx/test_federation_revocation_dashboard.py.",
+      "editable": true,
+      "fiscalYearStartMonth": 0,
+      "graphTooltip": 1,
+      "id": null,
+      "links": [
+        {
+          "icon": "dashboard",
+          "title": "Federation Audit",
+          "type": "link",
+          "url": "/d/federation-audit/federation-audit-tenant-federation"
+        },
+        {
+          "icon": "doc",
+          "title": "Dashboard Guide",
+          "type": "link",
+          "targetBlank": true,
+          "url": "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/grafana-dashboards.md"
+        }
+      ],
+      "panels": [
+        {
+          "title": "Tamper status",
+          "description": "HEADLINE SECURITY SIGNAL (ADR-028 D1). Suspected un-revokes: token_ids the off-store revocation log says are revoked and NOT yet expired, but ABSENT from the live revoked set. 0 = clean; >0 = a write-capable actor may have dropped a revocation while carrying the legitimate SA identity (which the #926 identity audit cannot see). Threshold aligned to the FederationRevocationTamperSuspected alert (>0, for 5m, critical). a11y (ADR-012 / WCAG 1.4.1): state is symbol + text, never colour alone. ✓ Clean is a live all-clear ONLY when Reconciler freshness is green — a fail-closed / stale pass does NOT refresh this gauge (it holds its last value), so read the two panels together.",
+          "type": "stat",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "gridPos": {
+            "h": 4,
+            "w": 6,
+            "x": 0,
+            "y": 0
+          },
+          "targets": [
+            {
+              "expr": "federation_revocation_tamper_suspected",
+              "legendFormat": ""
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "thresholds"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "red",
+                    "value": 1
+                  }
+                ]
+              },
+              "mappings": [
+                {
+                  "type": "value",
+                  "options": {
+                    "0": {
+                      "text": "✓ Clean",
+                      "index": 0
+                    }
+                  }
+                },
+                {
+                  "type": "range",
+                  "options": {
+                    "from": 1,
+                    "to": null,
+                    "result": {
+                      "text": "🔴 Tamper",
+                      "index": 1
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "options": {
+            "colorMode": "background",
+            "graphMode": "none",
+            "textMode": "value_and_name"
+          }
+        },
+        {
+          "title": "Reconciler freshness",
+          "description": "Seconds since the last SUCCESSFUL reconcile (time() - last_reconcile_timestamp). A fail-closed pass (VictoriaLogs query or revoked.txt read failed) deliberately does NOT refresh the timestamp, so staleness surfaces here rather than as a false all-clear. <1800 = fresh; >=1800 = the un-revoke detection is BLIND. Threshold aligned to the FederationRevocationReconcileStale alert (time()-ts > 1800s = 30m, for 10m, critical). NOTE: on a fresh deploy the timestamp is 0, so this reads a very large delta (stale-by-default) until the first successful pass. a11y: symbol + text.",
+          "type": "stat",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "gridPos": {
+            "h": 4,
+            "w": 6,
+            "x": 6,
+            "y": 0
+          },
+          "targets": [
+            {
+              "expr": "time() - federation_revocation_last_reconcile_timestamp_seconds",
+              "legendFormat": ""
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "thresholds"
+              },
+              "unit": "s",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "red",
+                    "value": 1800
+                  }
+                ]
+              },
+              "mappings": [
+                {
+                  "type": "range",
+                  "options": {
+                    "from": null,
+                    "to": 1799,
+                    "result": {
+                      "text": "✓ Fresh",
+                      "index": 0
+                    }
+                  }
+                },
+                {
+                  "type": "range",
+                  "options": {
+                    "from": 1800,
+                    "to": null,
+                    "result": {
+                      "text": "🔴 Stale",
+                      "index": 1
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "options": {
+            "colorMode": "background",
+            "graphMode": "none",
+            "textMode": "value_and_name"
+          }
+        },
+        {
+          "title": "Gateway fail-open",
+          "description": "Gateway revoked-set read failures in the recent (~10m) window. The federation-gateway fails OPEN by design when it cannot read revoked.txt — revoked tokens ARE accepted until their TTL (<=4h). 0 = OK; >0 = the ADR-028 named Risk Acceptance is active and revoked tokens are being honoured. Threshold aligned to the FederationGatewayRevocationLoadFailure alert (>0, for 2m, warning). The fail-closed hardening is tracked in #996. a11y: symbol + text.",
+          "type": "stat",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "gridPos": {
+            "h": 4,
+            "w": 6,
+            "x": 12,
+            "y": 0
+          },
+          "targets": [
+            {
+              "expr": "federation_gateway_revocation_load_errors",
+              "legendFormat": ""
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "thresholds"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "yellow",
+                    "value": 1
+                  }
+                ]
+              },
+              "mappings": [
+                {
+                  "type": "value",
+                  "options": {
+                    "0": {
+                      "text": "✓ OK",
+                      "index": 0
+                    }
+                  }
+                },
+                {
+                  "type": "range",
+                  "options": {
+                    "from": 1,
+                    "to": null,
+                    "result": {
+                      "text": "🟡 Fail-open",
+                      "index": 1
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "options": {
+            "colorMode": "background",
+            "graphMode": "none",
+            "textMode": "value_and_name"
+          }
+        },
+        {
+          "title": "Coverage integrity",
+          "description": "Event-filtered log rows that carried the federation_token_revoked marker but FAILED to parse last pass — a tenant-api event-schema drift signal that silently narrows reconciliation coverage. 0 = intact; >0 = coverage is eroded (a fully-drifted feed would otherwise reconcile to a clean, healthy zero while a real un-revoke went unseen — ADR-028 D3 honest boundary). No dedicated alert yet (defer-with-trigger per ADR-028), so this panel is the primary signal. a11y: symbol + text.",
+          "type": "stat",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "gridPos": {
+            "h": 4,
+            "w": 6,
+            "x": 18,
+            "y": 0
+          },
+          "targets": [
+            {
+              "expr": "federation_revocation_events_dropped",
+              "legendFormat": ""
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "thresholds"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "yellow",
+                    "value": 1
+                  }
+                ]
+              },
+              "mappings": [
+                {
+                  "type": "value",
+                  "options": {
+                    "0": {
+                      "text": "✓ Intact",
+                      "index": 0
+                    }
+                  }
+                },
+                {
+                  "type": "range",
+                  "options": {
+                    "from": 1,
+                    "to": null,
+                    "result": {
+                      "text": "🟡 Schema drift",
+                      "index": 1
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "options": {
+            "colorMode": "background",
+            "graphMode": "none",
+            "textMode": "value_and_name"
+          }
+        },
+        {
+          "title": "Reconciler staleness (fail-closed / liveness)",
+          "description": "CHAOS SCENARIO: fail-closed. Seconds since last successful reconcile over time; the 1800s line is the FederationRevocationReconcileStale threshold. Healthy: time()-ts oscillates near 0 (sawtooth on the reconcile interval, 300s). Bad: climbs past 1800 and keeps rising = VictoriaLogs / revoked.txt read is failing and the pass no longer refreshes the timestamp (fail-closed, never a false all-clear). To validate: pause the VictoriaLogs Service and watch this cross 1800.",
+          "type": "timeseries",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 8,
+            "x": 0,
+            "y": 4
+          },
+          "targets": [
+            {
+              "expr": "time() - federation_revocation_last_reconcile_timestamp_seconds",
+              "legendFormat": "staleness"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "thresholds"
+              },
+              "unit": "s",
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 2,
+                "fillOpacity": 10,
+                "showPoints": "never",
+                "thresholdsStyle": {
+                  "mode": "line"
+                }
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "red",
+                    "value": 1800
+                  }
+                ]
+              }
+            }
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom"
+            },
+            "tooltip": {
+              "mode": "single"
+            }
+          }
+        },
+        {
+          "title": "Reconcile error rate (fail-closed)",
+          "description": "CHAOS SCENARIO: fail-closed (companion). rate(federation_revocation_reconcile_errors_total[5m]) — the fail-closed marker. Each failed pass (query / read / reconcile error) bumps this monotonic counter and leaves last_reconcile_ts frozen. Healthy: flat 0. Bad: sustained positive rate AND the staleness panel to the left climbs together = the reconciler is fail-closed and going stale, not silently clearing.",
+          "type": "timeseries",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 8,
+            "x": 8,
+            "y": 4
+          },
+          "targets": [
+            {
+              "expr": "rate(federation_revocation_reconcile_errors_total[5m])",
+              "legendFormat": "errors/s"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "thresholds"
+              },
+              "unit": "short",
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 2,
+                "fillOpacity": 20,
+                "showPoints": "never"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "red",
+                    "value": 0.0001
+                  }
+                ]
+              }
+            }
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom"
+            },
+            "tooltip": {
+              "mode": "single"
+            }
+          }
+        },
+        {
+          "title": "Events checked",
+          "description": "federation_revocation_events_checked — the number of still-comfortably-live revocation events reconciled in the last pass (the working set the tamper check ran over). Context, not an alarm: a sudden drop toward 0 while traffic is expected can hint the query window is returning nothing (read with the staleness and coverage panels).",
+          "type": "timeseries",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 8,
+            "x": 16,
+            "y": 4
+          },
+          "targets": [
+            {
+              "expr": "federation_revocation_events_checked",
+              "legendFormat": "checked"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "fixed",
+                "fixedColor": "blue"
+              },
+              "unit": "short",
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 2,
+                "fillOpacity": 10,
+                "showPoints": "never"
+              }
+            }
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom"
+            },
+            "tooltip": {
+              "mode": "single"
+            }
+          }
+        },
+        {
+          "title": "Events dropped (schema-drift)",
+          "description": "CHAOS SCENARIO: schema-drift. federation_revocation_events_dropped over time — rows that carried the federation_token_revoked marker but could not be parsed (missing field / bad timestamp) = tenant-api event-schema drift. Healthy: flat 0. Bad: any sustained >0 means reconciliation coverage is silently eroding. To validate: inject a federation_token_revoked event missing a required field and watch this rise (visible, not silent).",
+          "type": "timeseries",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 12
+          },
+          "targets": [
+            {
+              "expr": "federation_revocation_events_dropped",
+              "legendFormat": "dropped"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "thresholds"
+              },
+              "unit": "short",
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 2,
+                "fillOpacity": 20,
+                "showPoints": "auto",
+                "thresholdsStyle": {
+                  "mode": "line"
+                }
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "yellow",
+                    "value": 1
+                  }
+                ]
+              }
+            }
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom"
+            },
+            "tooltip": {
+              "mode": "single"
+            }
+          }
+        },
+        {
+          "title": "Coverage erosion ratio (schema-drift)",
+          "description": "CHAOS SCENARIO: schema-drift (proportional view). dropped / (checked + dropped) — the fraction of the event feed the reconciler could NOT parse. clamp_min(...,1) guards the denominator so an idle feed (checked=0, dropped=0) reads 0, NOT 0/0=NaN. 0 = fully covered; approaching 1 = the feed has almost entirely drifted (near-total blindness while the tamper gauge would still read a deceptively healthy 0). unit = percentunit.",
+          "type": "stat",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 12
+          },
+          "targets": [
+            {
+              "expr": "federation_revocation_events_dropped / clamp_min(federation_revocation_events_checked + federation_revocation_events_dropped, 1)",
+              "legendFormat": ""
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "thresholds"
+              },
+              "unit": "percentunit",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "yellow",
+                    "value": 0.0001
+                  }
+                ]
+              },
+              "mappings": [
+                {
+                  "type": "range",
+                  "options": {
+                    "from": 0.0001,
+                    "to": null,
+                    "result": {
+                      "text": "🟡 Coverage eroded",
+                      "index": 1
+                    }
+                  }
+                },
+                {
+                  "type": "range",
+                  "options": {
+                    "from": 0,
+                    "to": 0.0001,
+                    "result": {
+                      "text": "✓ Fully covered",
+                      "index": 0
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "options": {
+            "colorMode": "background",
+            "graphMode": "none",
+            "textMode": "value_and_name"
+          }
+        },
+        {
+          "title": "Gateway revoked-set read failures (fail-open / 拍頻)",
+          "description": "CHAOS SCENARIO: fail-open + 拍頻 (beat-frequency). federation_gateway_revocation_load_errors over the recent window; the >0 line is the FederationGatewayRevocationLoadFailure threshold (for 2m, warning). Healthy: flat 0. Bad: >0 = the gateway is failing OPEN and revoked tokens are honoured until TTL. 拍頻 WATCH: the reconcile interval (300s) beats against the Prometheus scrape interval; oscillation of this gauge right at the for:2m boundary can flap the alert. If you see it toggling in and out of firing near 2m, tune the for: window or the reconcile interval (runbook chaos step 4).",
+          "type": "timeseries",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 24,
+            "x": 0,
+            "y": 20
+          },
+          "targets": [
+            {
+              "expr": "federation_gateway_revocation_load_errors",
+              "legendFormat": "load errors"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "thresholds"
+              },
+              "unit": "short",
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 2,
+                "fillOpacity": 20,
+                "showPoints": "auto",
+                "thresholdsStyle": {
+                  "mode": "line"
+                }
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "yellow",
+                    "value": 1
+                  }
+                ]
+              }
+            }
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom"
+            },
+            "tooltip": {
+              "mode": "single"
+            }
+          }
+        },
+        {
+          "title": "Suspected un-revokes (tamper headline)",
+          "description": "HEADLINE. federation_revocation_tamper_suspected over time; the >0 line is the FederationRevocationTamperSuspected threshold. >0 sustained for 5m = critical: a revoked-but-live token is absent from the live set (ADR-028 un-revoke). Any sustained excursion above 0 is a security event — query VictoriaLogs for event:\"federation_token_revoked\" for the opaque token_id(s), resolve the tenant from the store at IR time (D3), diff against the live store, and if malicious restore the revocation from git. ✓ Clean is a live all-clear ONLY when Reconciler freshness is green — a fail-closed / stale pass does NOT refresh this gauge (it holds its last value), so read the two panels together.",
+          "type": "timeseries",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "gridPos": {
+            "h": 9,
+            "w": 24,
+            "x": 0,
+            "y": 28
+          },
+          "targets": [
+            {
+              "expr": "federation_revocation_tamper_suspected",
+              "legendFormat": "suspected un-revokes"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "thresholds"
+              },
+              "unit": "short",
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 3,
+                "fillOpacity": 25,
+                "showPoints": "auto",
+                "thresholdsStyle": {
+                  "mode": "line"
+                }
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "red",
+                    "value": 1
+                  }
+                ]
+              }
+            }
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom"
+            },
+            "tooltip": {
+              "mode": "single"
+            }
+          }
+        }
+      ],
+      "schemaVersion": 39,
+      "tags": [
+        "dynamic-alerting",
+        "federation",
+        "revocation",
+        "security",
+        "adr-028"
+      ],
+      "templating": {
+        "list": [
+          {
+            "name": "DS_PROMETHEUS",
+            "label": "Prometheus",
+            "type": "datasource",
+            "query": "prometheus",
+            "current": {}
+          }
+        ]
+      },
+      "time": {
+        "from": "now-6h",
+        "to": "now"
+      },
+      "timepicker": {},
+      "timezone": "browser",
+      "title": "Dynamic Alerting — Federation Revocation Reconciler",
+      "uid": "federation-revocation",
+      "version": 1
+    }

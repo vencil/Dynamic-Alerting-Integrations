@@ -62,6 +62,9 @@ spec:
             - name: provisioning-dashboards
               mountPath: /etc/grafana/provisioning/dashboards/mariadb-overview.json
               subPath: mariadb-overview.json
+            - name: provisioning-dashboards
+              mountPath: /etc/grafana/provisioning/dashboards/federation-revocation-dashboard.json
+              subPath: federation-revocation-dashboard.json
             - name: data
               mountPath: /var/lib/grafana
             - name: tmp
