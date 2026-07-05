@@ -59,6 +59,11 @@ DEV_BYPASS_EMAIL = os.environ.get("PREVIEW_DEV_BYPASS_EMAIL", "dev@local")
 DEV_BYPASS_GROUPS = os.environ.get("PREVIEW_DEV_BYPASS_GROUPS", "demo-admins")
 MAX_BODY_BYTES = int(os.environ.get("PREVIEW_MAX_BODY_BYTES", str(64 * 1024)))
 REQUEST_TIMEOUT = float(os.environ.get("PREVIEW_REQUEST_TIMEOUT", "60"))
+# Audience-bound projected SA token (aud=tenant-api) mounted by the Helm chart at
+# /var/run/secrets/tokens/tenant-api-token (#962 b2). Sent as a Bearer to
+# tenant-api's machine-identity AUDIT only. Unset (e.g. try-local, no K8s) → no
+# Bearer, which the fail-open read below handles.
+AUTH_TOKEN_FILE = os.environ.get("PREVIEW_AUTH_TOKEN_FILE", "")
 
 # ADR-022-style containment: dev-bypass is a LOCAL-DEV escape hatch. Refuse to
 # run it inside Kubernetes — where a real oauth2-proxy must front the service —
@@ -126,14 +131,41 @@ def _apply_dev_bypass(headers):
     return out
 
 
+def _read_auth_token():
+    """Bearer for tenant-api's machine-identity audit (ADR-027 / #962 b2). The
+    kubelet-rotated projected SA token file is read at call time. FAIL-OPEN: the
+    token only feeds tenant-api's AUDIT (never gates authz — that rides the
+    /access probe below), so a read failure degrades to no Bearer with a warning,
+    never blocks a preview. Returns "" when unset/unreadable."""
+    if not AUTH_TOKEN_FILE:
+        return ""
+    try:
+        with open(AUTH_TOKEN_FILE, encoding="utf-8") as fh:
+            return fh.read().strip()
+    except (OSError, UnicodeDecodeError) as exc:
+        # OSError = I/O failure; UnicodeDecodeError = a non-UTF-8/corrupt file
+        # (NOT an OSError subclass). Both degrade to no Bearer — the fail-open
+        # contract is "a token problem never blocks a preview", so a malformed
+        # token file must not crash this request-path PEP.
+        print(f"warning: could not read PREVIEW_AUTH_TOKEN_FILE {AUTH_TOKEN_FILE!r}: {exc}; "
+              f"continuing without a Bearer (tenant-api audit records no_token)", file=sys.stderr)
+        return ""
+
+
 def authorize_tenant(headers, tenant):
     """Forward the caller's identity to tenant-api `GET /tenants/{id}/access`.
 
     200 → allow; 401/403/any-other/unreachable/timeout → DENY (fail-closed).
     Only the two gateway-injected identity headers are forwarded — never
-    arbitrary client headers (confused-deputy guard).
+    arbitrary client headers (confused-deputy guard). The machine-identity Bearer
+    (audience-bound SA token) is attached ALONGSIDE the identity headers when
+    mounted; it feeds tenant-api's AUDIT only and is orthogonal to this authz
+    decision — a missing/unreadable token never flips the result.
     """
     fwd = {h: headers[h] for h in _IDENTITY_HEADERS if headers.get(h)}
+    token = _read_auth_token()
+    if token:
+        fwd["Authorization"] = "Bearer " + token
     url = f"{TENANT_API_URL}/api/v1/tenants/{urllib.parse.quote(tenant, safe='')}/access"
     req = urllib.request.Request(url, headers=fwd, method="GET")
     try:

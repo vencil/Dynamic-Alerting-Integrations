@@ -443,7 +443,10 @@ def _resolve_auth_token(args: argparse.Namespace) -> str:
         try:
             with open(args.auth_token_file, encoding="utf-8") as fh:
                 return fh.read().strip()
-        except OSError as exc:
+        except (OSError, UnicodeDecodeError) as exc:
+            # OSError = I/O failure; UnicodeDecodeError = a non-UTF-8/corrupt file
+            # (NOT an OSError subclass). Both degrade to no Bearer — the fail-open
+            # contract must not let a malformed token file abort governance (#962).
             print(f"warning: could not read --auth-token-file "
                   f"{args.auth_token_file!r}: {exc}; continuing without a Bearer "
                   f"(tenant-api machine-identity audit will record no_token)",

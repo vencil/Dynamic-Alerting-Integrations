@@ -52,6 +52,11 @@ spec:
               value: {{ .Values.preview.maxBodyBytes | quote }}
             - name: PREVIEW_REQUEST_TIMEOUT
               value: {{ .Values.preview.requestTimeout | quote }}
+            # Path to the audience-bound projected SA token (volume below). app.py
+            # reads it at call time and sends it as a Bearer to tenant-api's
+            # machine-identity audit; unset/unreadable → no Bearer (fail-open). #962 b2.
+            - name: PREVIEW_AUTH_TOKEN_FILE
+              value: /var/run/secrets/tokens/tenant-api-token
           ports:
             - name: http
               containerPort: {{ .Values.service.port }}
@@ -61,6 +66,12 @@ spec:
             # synthetic rule + data files (the eval core uses tempfile.mkdtemp).
             - name: tmp
               mountPath: /tmp
+            # Audience-bound projected token for tenant-api's machine-identity
+            # audit (ADR-027 / #962 b2). readOnly; app.py reads it per /access call
+            # (kubelet rotates the file at ~80% TTL, transparent to the reader).
+            - name: tenant-api-token
+              mountPath: /var/run/secrets/tokens
+              readOnly: true
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           readinessProbe:
@@ -82,3 +93,19 @@ spec:
           emptyDir:
             medium: Memory
             sizeLimit: 32Mi
+        # Audience-bound machine-identity token for tenant-api's TokenReview audit
+        # (ADR-027 / #962 b2). The HARD `audience: tenant-api` binding is what stops
+        # a default-audience pod token from being accepted by tenant-api's
+        # TokenReview; kubelet auto-rotates it. This is an explicit, orthogonal
+        # mount — the SA keeps automountServiceAccountToken:false (no broad
+        # apiserver-audience token is ever exposed; recipe-preview makes no K8s API
+        # calls). Mirrors k8s/03-monitoring/cronjob-threshold-govern.yaml.
+        - name: tenant-api-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: tenant-api-token
+                  audience: tenant-api
+                  # 900s (15m): caps a stolen-token replay window; well above the
+                  # apiserver 600s floor, kubelet refreshes at ~80% (~12m). #962 b2.
+                  expirationSeconds: 900

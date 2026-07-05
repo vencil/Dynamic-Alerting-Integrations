@@ -166,7 +166,10 @@ spec:
                   - serviceAccountToken:
                       path: tenant-api-token
                       audience: tenant-api
-                      expirationSeconds: 3600
+                      # 900s (15m): caps a stolen-token replay window; well above
+                      # the apiserver 600s floor, kubelet refreshes at ~80% (~12m).
+                      # Aligned fleet-wide with recipe-preview's mount (#962 b2).
+                      expirationSeconds: 900
             - name: threshold-config
               configMap:
                 name: threshold-config
