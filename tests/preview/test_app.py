@@ -205,6 +205,83 @@ class TestPEPFailClosed:
         assert "x-evil" not in seen and "cookie" not in seen and "authorization" not in seen
 
 
+# ── machine-identity Bearer (#962 b2): audience-bound SA token → tenant-api audit ──
+# The token feeds tenant-api's AUDIT only; it is orthogonal to the /access authz
+# decision and reads FAIL-OPEN (unset/unreadable → no Bearer, never blocks).
+class TestMachineIdentityToken:
+    def test_unset_env_returns_empty(self, monkeypatch):
+        monkeypatch.setattr(app, "AUTH_TOKEN_FILE", "")
+        assert app._read_auth_token() == ""
+
+    def test_present_file_returns_stripped_token(self, monkeypatch, tmp_path):
+        p = tmp_path / "tenant-api-token"
+        p.write_text("  eyJhbGciOiJSUzI1\n", encoding="utf-8")   # trailing WS stripped
+        monkeypatch.setattr(app, "AUTH_TOKEN_FILE", str(p))
+        assert app._read_auth_token() == "eyJhbGciOiJSUzI1"
+
+    def test_unreadable_file_fails_open(self, monkeypatch, tmp_path):
+        # Point at a path that does not exist → open() raises OSError → "" (no
+        # exception propagates; the caller proceeds without a Bearer).
+        monkeypatch.setattr(app, "AUTH_TOKEN_FILE", str(tmp_path / "nope"))
+        assert app._read_auth_token() == ""
+
+    def test_malformed_utf8_file_fails_open(self, monkeypatch, tmp_path):
+        # A non-UTF-8 / corrupt token file makes .read() raise UnicodeDecodeError,
+        # which is NOT an OSError subclass. The fail-open contract must still hold:
+        # degrade to no Bearer, never crash this request-path PEP (a kubelet JWT is
+        # always ASCII, but a mis-configured mount / partial write must not 500).
+        p = tmp_path / "tenant-api-token"
+        p.write_bytes(b"\xff\xfe not valid utf-8")
+        monkeypatch.setattr(app, "AUTH_TOKEN_FILE", str(p))
+        assert app._read_auth_token() == ""
+
+    def test_authorize_attaches_bearer_when_token_present(self, monkeypatch, tmp_path):
+        p = tmp_path / "tenant-api-token"
+        p.write_text("tok-123", encoding="utf-8")
+        monkeypatch.setattr(app, "AUTH_TOKEN_FILE", str(p))
+        seen = {}
+
+        def capture(req, timeout=None):
+            seen.update({k.lower(): v for k, v in req.headers.items()})
+            return _Resp(200)
+        monkeypatch.setattr(app.urllib.request, "urlopen", capture)
+        assert app.authorize_tenant(HDR, "shop-a") is True
+        assert seen.get("authorization") == "Bearer tok-123"
+        # the identity headers are still forwarded alongside the Bearer
+        assert seen.get("x-forwarded-email") == "u@x"
+
+    def test_no_bearer_when_token_unset(self, monkeypatch):
+        # Default state (no mounted token): authz still works, no Authorization sent.
+        monkeypatch.setattr(app, "AUTH_TOKEN_FILE", "")
+        seen = {}
+
+        def capture(req, timeout=None):
+            seen.update({k.lower(): v for k, v in req.headers.items()})
+            return _Resp(200)
+        monkeypatch.setattr(app.urllib.request, "urlopen", capture)
+        assert app.authorize_tenant(HDR, "shop-a") is True
+        assert "authorization" not in seen
+
+    def test_fail_closed_unchanged_regardless_of_token(self, monkeypatch, tmp_path):
+        # REGRESSION PIN: a token-read never flips the authz result. tenant-api
+        # returning 403 / raising → authorize_tenant STILL denies (fail-closed),
+        # with OR without a mounted Bearer.
+        p = tmp_path / "tenant-api-token"
+        p.write_text("tok-123", encoding="utf-8")
+        for token_path in (str(p), ""):    # token present, then absent
+            monkeypatch.setattr(app, "AUTH_TOKEN_FILE", token_path)
+
+            def raise_403(req, timeout=None):
+                raise urllib.error.HTTPError(req.full_url, 403, "Forbidden", {}, None)
+            monkeypatch.setattr(app.urllib.request, "urlopen", raise_403)
+            assert app.authorize_tenant(HDR, "shop-a") is False, token_path
+
+            def boom(req, timeout=None):
+                raise OSError("connection refused")
+            monkeypatch.setattr(app.urllib.request, "urlopen", boom)
+            assert app.authorize_tenant(HDR, "shop-a") is False, token_path
+
+
 # ── end-to-end through the REAL eval core (promtool-gated) ──
 @_needs_promtool
 class TestEndToEnd:

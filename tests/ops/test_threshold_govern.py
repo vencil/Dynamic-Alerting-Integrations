@@ -692,6 +692,17 @@ def test_resolve_auth_token_file_read_error_degrades_not_raises(tmp_path, monkey
     assert "could not read" in capsys.readouterr().err
 
 
+def test_resolve_auth_token_malformed_utf8_degrades_not_raises(tmp_path, monkeypatch, capsys):
+    # A non-UTF-8 / corrupt token file raises UnicodeDecodeError (NOT an OSError
+    # subclass). The never-block contract must still hold — degrade to no Bearer,
+    # never crash governance on a mis-configured mount / partial write (#962).
+    monkeypatch.delenv("DA_GOVERN_TOKEN", raising=False)
+    f = tmp_path / "token"
+    f.write_bytes(b"\xff\xfe not valid utf-8")
+    assert tg._resolve_auth_token(_args(auth_token=None, auth_token_file=str(f))) == ""
+    assert "could not read" in capsys.readouterr().err
+
+
 def test_resolve_auth_token_none_configured(monkeypatch):
     monkeypatch.delenv("DA_GOVERN_TOKEN", raising=False)
     assert tg._resolve_auth_token(_args(auth_token=None, auth_token_file=None)) == ""
