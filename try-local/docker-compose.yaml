@@ -76,9 +76,15 @@ services:
     networks:
       default:
         # da-portal's nginx has a baked-in upstream of this exact FQDN
-        # (components/da-portal/nginx.conf). The alias makes it resolve inside
+        # (components/da-portal/nginx.conf — tenant-api lives in its dedicated
+        # `tenant-api` namespace, #1004). The alias makes it resolve inside
         # compose so the published portal image runs UNCHANGED (no file mount).
+        # The old .monitoring alias is kept ONLY because the pinned PUBLISHED
+        # v2.8.0 portal image still bakes the pre-#1004 upstream — nginx dies at
+        # startup ("host not found in upstream") without it. Drop it when
+        # PORTAL_TAG is bumped to an image built after #1004.
         aliases:
+          - tenant-api.tenant-api.svc.cluster.local
           - tenant-api.monitoring.svc.cluster.local
     restart: unless-stopped
 
@@ -119,7 +125,8 @@ services:
       dockerfile: components/recipe-preview/Dockerfile
     image: da-try-local/recipe-preview:source
     environment:
-      PREVIEW_TENANT_API_URL: http://tenant-api:8080
+      # Prod-parity FQDN (#1004) — resolves via the tenant-api service alias above.
+      PREVIEW_TENANT_API_URL: http://tenant-api.tenant-api.svc.cluster.local:8080
       PREVIEW_LISTEN_PORT: "8082"
       # try-local only (mirrors tenant-api ADR-022): inject a demo identity when
       # no oauth2-proxy header is present, so a header-less curl / the portal

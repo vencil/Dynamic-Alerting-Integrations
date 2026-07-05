@@ -826,6 +826,24 @@ repos:
         # Layer 2 of ADR-023 enforcement; layer 1 is the chart's render-time
         # `fail` guard. Horizontal write scaling needs a K8s Lease (Deferred A3).
 
+      - id: cross-ns-url-check
+        name: "#1004: service URLs must pin canonical namespaces (tenant-api → tenant-api ns, recipe-preview → monitoring)"
+        entry: python3 -X utf8 scripts/tools/lint/check_cross_ns_url_consistency.py --ci
+        language: python
+        additional_dependencies: ['pyyaml']
+        pass_filenames: false
+        files: ^(helm/.*\.ya?ml|k8s/.*\.ya?ml|try-local/docker-compose\.yaml|components/da-portal/nginx\.conf|scripts/tools/lint/check_cross_ns_url_consistency\.py)$
+        # FATAL: past drift shipped charts/docs pinning `tenant-api.monitoring.
+        # svc…` while raw manifests deployed tenant-api into its dedicated
+        # `tenant-api` ns, and recipe-preview called bare `http://tenant-api:8080`
+        # cross-ns (unresolvable — bare names only resolve same-ns). R1 flags a
+        # wrong-namespace FQDN anywhere; R2 flags a URL-ish bare governed name
+        # outside its canonical ns (chart deploy contract / doc metadata.namespace
+        # as context). Parses YAML (comments never fire); kube-linter has no
+        # equivalent semantic check, so this is a Vibe wrapper (cf. L3). Exemptions
+        # via the in-file EXEMPTIONS registry (path + substring + rationale +
+        # exit condition), mirrored in docs/internal/iac-lint-baseline.md.
+
       - id: account-registry-monotonic
         name: "ADR-021/#609: _account_registry.yaml next_account_id must never decrease (cross-tenant log-leak guard)"
         entry: python3 -X utf8 scripts/tools/lint/check_account_registry_monotonic.py --ci

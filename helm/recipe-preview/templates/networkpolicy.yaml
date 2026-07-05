@@ -10,14 +10,24 @@ spec:
   podSelector:
     matchLabels:
       {{- include "recipe-preview.selectorLabels" . | nindent 6 }}
-  # Ingress-only (mirrors tenant-api's default posture). recipe-preview blindly
-  # trusts the X-Forwarded-* identity headers, so the load-bearing security control
-  # is that ONLY the da-portal pod (the same-origin /preview proxy) may reach :8082.
-  # Any other pod reaching it directly could spoof identity. (Egress restriction —
-  # to tenant-api + DNS only — is a hardening follow-up; left open here so the
-  # /access call can't break on a mis-specified egress rule.)
+  # recipe-preview blindly trusts the X-Forwarded-* identity headers, so Ingress
+  # is locked to ONLY the da-portal pod (the same-origin /preview proxy) — any
+  # other pod reaching :8082 directly could spoof identity.
+  {{- if .Values.networkPolicy.egress.enabled }}
+  # Egress is locked to tenant-api's /access probe + DNS (#1004): even a
+  # compromised recipe-preview pod (or a spoofed-label neighbour) cannot reach
+  # anything else, and a mis-pointed tenantApiUrl now surfaces as a blocked
+  # /access call → deny, which is the intended fail-closed direction.
+  {{- else }}
+  # Egress is UNRESTRICTED (networkPolicy.egress.enabled=false escape hatch, for an
+  # out-of-cluster tenant-api). The monitoring-ns default-deny-all still applies if
+  # present; re-enable egress lockdown once tenantApiUrl points back in-cluster.
+  {{- end }}
   policyTypes:
     - Ingress
+    {{- if .Values.networkPolicy.egress.enabled }}
+    - Egress
+    {{- end }}
   ingress:
     - from:
         - podSelector:
@@ -26,4 +36,31 @@ spec:
       ports:
         - port: {{ .Values.service.port }}
           protocol: TCP
+  {{- if .Values.networkPolicy.egress.enabled }}
+  egress:
+    # DNS resolution (kube-dns / CoreDNS) — without this the tenant-api name
+    # lookup fails the moment Egress is restricted.
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    # tenant-api /access probe — the ONLY workload egress. One `to` entry per
+    # configured pod selector (entries are OR-ed); each AND-s the tenant-api
+    # namespace with the pod labels.
+    - to:
+        {{- range .Values.networkPolicy.egress.tenantApiPodSelectors }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $.Values.networkPolicy.egress.tenantApiNamespace }}
+          podSelector:
+            matchLabels:
+              {{- toYaml . | nindent 14 }}
+        {{- end }}
+      ports:
+        - port: {{ .Values.networkPolicy.egress.tenantApiPort }}
+          protocol: TCP
+  {{- end }}
 {{- end }}

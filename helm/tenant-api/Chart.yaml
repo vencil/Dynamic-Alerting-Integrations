@@ -7,7 +7,8 @@ type: application
 # 2.9.9 — #902 L2 slice-2: pin the alpine/git init-container image by digest
 # 2.9.10 — PR-0: oauth2-proxy GitLab CE OIDC enablement (--oidc-issuer-url/--scope/--gitlab-group)
 # 2.9.11 — PR-1b-i: machine-identity audit baseline (opt-in tokenreviews ClusterRole + --machine-identity-audit, ADR-027)
-version: 2.9.11
+# 2.9.12 — #1004: admit recipe-preview's /access probe on the port-8080 netpol (third pod-scoped allow entry)
+version: 2.9.12
 # appVersion: Go binary 版本
 appVersion: "2.7.0"
 keywords:

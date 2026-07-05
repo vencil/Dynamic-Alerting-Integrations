@@ -40,6 +40,9 @@ spec:
       {{- include "da-portal.selectorLabels" . | nindent 6 }}
   policyTypes:
     - Ingress
+    {{- if .Values.networkPolicy.egress.enabled }}
+    - Egress
+    {{- end }}
   ingress:
     # Allow oauth2-proxy port from specified namespaces and ingress
     - from:
@@ -62,4 +65,58 @@ spec:
       ports:
         - port: {{ .Values.portal.listenPort }}
           protocol: TCP
+  {{- if .Values.networkPolicy.egress.enabled }}
+  egress:
+    # DNS resolution (kube-dns / CoreDNS) — every outbound name lookup needs it.
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    {{- if .Values.oauth2Proxy.enabled }}
+    # tenant-api backend (/api/v1/ proxy) on 8080 in its dedicated ns (#1004). One
+    # `to` entry per pod selector (entries OR-ed); each AND-s the ns with the pod.
+    - to:
+        {{- range .Values.networkPolicy.egress.tenantApiPodSelectors }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $.Values.networkPolicy.egress.tenantApiNamespace }}
+          podSelector:
+            matchLabels:
+              {{- toYaml . | nindent 14 }}
+        {{- end }}
+      ports:
+        - port: {{ .Values.networkPolicy.egress.tenantApiPort }}
+          protocol: TCP
+    # recipe-preview backend (/preview proxy) on 8082 in this same (monitoring) ns.
+    - to:
+        {{- range .Values.networkPolicy.egress.recipePreviewPodSelectors }}
+        - podSelector:
+            matchLabels:
+              {{- toYaml . | nindent 14 }}
+        {{- end }}
+      ports:
+        - port: {{ .Values.networkPolicy.egress.recipePreviewPort }}
+          protocol: TCP
+    {{- if .Values.networkPolicy.egress.idpHttpsEnabled }}
+    # External IdP (oauth2-proxy OAuth/OIDC flow) over HTTPS. Internet minus the
+    # cloud metadata endpoint (link-local) — mirrors the alertmanager webhook
+    # egress. Tighten to a known IdP CIDR via extraEgress + idpHttpsEnabled=false.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 169.254.169.254/32
+      ports:
+        - port: {{ .Values.networkPolicy.egress.idpHttpsPort }}
+          protocol: TCP
+    {{- end }}
+    {{- end }}
+    {{- with .Values.networkPolicy.egress.extraEgress }}
+    # Deployment-specific allows (private IdP CIDR, redis session store, …).
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- end }}
 {{- end }}

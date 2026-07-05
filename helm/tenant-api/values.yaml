@@ -305,13 +305,16 @@ networkPolicy:
   prometheusNamespace: monitoring
   # Pod-level allow-list for the internal port (8080). ns-level alone over-grants
   # every pod in prometheusNamespace to a header-trusting port — these podSelector
-  # matchLabels narrow it to exactly the two legitimate 8080 clients. Change only
-  # if you relabel Prometheus / the threshold-govern CronJob.
+  # matchLabels narrow it to exactly the three legitimate 8080 clients (incl.
+  # recipe-preview's GET /tenants/{id}/access authz probe, #1004). Change only if
+  # you relabel Prometheus / the threshold-govern CronJob / recipe-preview.
   internalPortAllow:
     prometheus:
       app: prometheus
     thresholdGovern:
       component: threshold-govern
+    recipePreview:
+      app.kubernetes.io/name: recipe-preview
   # Egress restriction (ADR-024 §S6). DEFAULT false = egress stays
   # UNrestricted (the policy is Ingress-only), which is the historical
   # posture and lets tenant-api reach Prometheus (metric discovery),

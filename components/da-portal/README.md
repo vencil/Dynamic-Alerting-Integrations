@@ -128,7 +128,7 @@ helm install da-portal \
 - **Image 不含 build step** — `Dockerfile` 只 `COPY` 預先 build 的成品 + `apk del nginx-module-image-filter nginx-module-xslt`（移掉靜態 server 用不到的模組，cascade 拔 28 個 dep；image 從 72 → 44 packages）+ libavif 殘留檢查（CVE-2025-48174 mitigation）
 - **工具是 esbuild ESM bundle** — source 在 `tools/portal/src/`，`make portal-build` 產 `docs/assets/dist/`；瀏覽器直接 import，**不在瀏覽器端 transpile**
 - **vendor probe** — `jsx-loader.html` 啟動跑同源 sync XHR 試 `vendor/react.production.min.js`；HTTP 200 走 local，否則退 CDN（React 18.3.1 / ReactDOM / Tailwind / Lucide 0.436.0）
-- **tenant-api proxy** — `nginx.conf` 的 `/api/v1/` 預設 upstream 為 `tenant-api.monitoring.svc.cluster.local:8080`，自動轉 oauth2-proxy 注入的 `X-Forwarded-Email` / `X-Forwarded-User` / `X-Forwarded-Groups`
+- **tenant-api proxy** — `nginx.conf` 的 `/api/v1/` 預設 upstream 為 `tenant-api.tenant-api.svc.cluster.local:8080`（tenant-api 位於專屬 `tenant-api` namespace，#1004），自動轉 oauth2-proxy 注入的 `X-Forwarded-Email` / `X-Forwarded-User` / `X-Forwarded-Groups`
 
 ---
 
@@ -159,7 +159,7 @@ docker run -p 8080:80 \
   ghcr.io/vencil/da-portal:v2.9.0
 ```
 
-預設 `nginx.conf` 把 `/api/v1/` proxy 給 `tenant-api.monitoring.svc.cluster.local:8080`。要改 upstream，或加 Prometheus reverse proxy 給 alert preview 直查 PromQL，editable 範本見 [`nginx.conf`](nginx.conf)。
+預設 `nginx.conf` 把 `/api/v1/` proxy 給 `tenant-api.tenant-api.svc.cluster.local:8080`。要改 upstream，或加 Prometheus reverse proxy 給 alert preview 直查 PromQL，editable 範本見 [`nginx.conf`](nginx.conf)。
 
 ---
 
@@ -228,7 +228,7 @@ docker run -p 8080:80 \
 |------|---------|------|
 | Hub 載入後工具白屏 / 404 | image 沒含 `docs/assets/dist/`（舊 / 自建 image） | 確認 `make portal-build` 跑過且 `docs/assets/dist/` 有進 image；重 build |
 | 404 on `/healthz` | 舊 image（< v2.3.0） | 重 build：`make portal-image` |
-| CORS error on tenant-api | nginx proxy upstream 錯 | 改 `nginx.conf` 的 `proxy_pass`，或在 K8s 確認 `tenant-api` Service 存在於 `monitoring` namespace |
+| CORS error on tenant-api | nginx proxy upstream 錯 | 改 `nginx.conf` 的 `proxy_pass`，或在 K8s 確認 `tenant-api` Service 存在於專屬 `tenant-api` namespace（#1004；proxy_pass 應為 `tenant-api.tenant-api.svc.cluster.local:8080`） |
 | Tenant Manager 顯示 demo-mode 提示 | `/api/v1/tenants/search` 回 404 / 5xx | 確認 tenant-api 跑著且 RBAC 有 read 權限；也可能是純靜態部署（無後端），demo mode 為 expected |
 | 工具顯示舊資料 | 掛載的 `platform-data.json` 過舊 | `make platform-data` 重產 + 重 mount |
 | air-gapped 環境 vendor probe 失敗 | `make vendor-download` 沒跑 / `docs/assets/vendor/` 沒進 image | 確認 `docs/assets/vendor/react.production.min.js` 存在；重 build |

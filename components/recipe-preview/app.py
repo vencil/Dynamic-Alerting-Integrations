@@ -47,7 +47,7 @@ for _cand in (
 import _recipe_preview as core  # noqa: E402
 
 # ── config (env) ─────────────────────────────────────────────────────────
-TENANT_API_URL = os.environ.get("PREVIEW_TENANT_API_URL", "http://tenant-api:8080").rstrip("/")
+TENANT_API_URL = os.environ.get("PREVIEW_TENANT_API_URL", "http://tenant-api.tenant-api.svc.cluster.local:8080").rstrip("/")
 AUTHZ_TIMEOUT = float(os.environ.get("PREVIEW_AUTHZ_TIMEOUT", "5"))
 MAX_CONCURRENCY = int(os.environ.get("PREVIEW_MAX_CONCURRENCY", "4"))
 QUEUE_TIMEOUT = float(os.environ.get("PREVIEW_QUEUE_TIMEOUT", "10"))

@@ -91,7 +91,7 @@ kubectl get configmap -n monitoring | grep prometheus-rules
 **tenant-api**（file-based 設定 API，commit-on-write）：
 
 ```bash
-helm install tenant-api ./helm/tenant-api/ -n monitoring
+helm install tenant-api ./helm/tenant-api/ -n tenant-api --create-namespace
 ```
 
 需要：
@@ -107,7 +107,7 @@ helm install da-portal ./helm/da-portal/ -n monitoring
 
 需要：
 - **oauth2-proxy 必備**：portal nginx 把 `:80 → oauth2-proxy:4180`，**關掉 oauth2-proxy 會 CrashLoopBackOff**（它是 auth 前端）。
-- **後端**：`config.tenantApiUrl` 指向 tenant-api Service（預設 `http://tenant-api.monitoring.svc.cluster.local:8080`）。
+- **後端**：`config.tenantApiUrl` 指向 tenant-api Service（預設 `http://tenant-api.tenant-api.svc.cluster.local:8080`）。
 
 > 一鍵本機體驗（不需 oauth2-proxy / git repo；dev-bypass + 從源碼 build tenant-api）見 [try-local](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/try-local/README.md)。
 
