@@ -83,22 +83,26 @@ description: IaC-aware 兩階段 review — code 走 spec→quality、IaC 走 bl
 ### 三條規則
 
 1. **Workflow-first**：多階段 verify / review（≥2 個里程碑、或預估 >15 分鐘）一律用 `Workflow` 工具編排，**不用單一長時背景 `Agent`**——`phase()` / `log()` 原生串流到 `/workflows` live view，且天然把工作拆成多個短 staged agent（單 agent 負擔低、可觀測性內建、可 resume）。`vibe-security-audit` 的 `audit-workflow.js` 即此 pattern。
-2. **raw `Agent` 例外 → 強制 progress ledger**：確有理由用單一背景 `Agent`（單一不可分割里程碑）時，spawn prompt **必須**內嵌下方 ledger 契約（`<scope>` 代換為實際 scratch 目錄，如 `dev/sec741/verify1`）——agent 每過一個里程碑就 append 一行到 `dev/<scope>/PROGRESS.jsonl`。parent 之後 cheap-poll 這個小檔即可（`make agent-progress`），不撈 transcript、不猜 scratch 檔。
-3. **單 agent 範圍上限 ~15 分鐘**：預估超過就拆成 staged agents——每段收在一個 checkpoint、前段結論以文字餵給下段。一個 agent 卡死應在 15 分鐘內被看見，而不是 71 分鐘後才知道。
+2. **raw `Agent` 例外 → 強制 progress ledger**：確有理由用單一背景 `Agent`（單一不可分割里程碑）時，spawn prompt **必須**內嵌下方 ledger 契約（`<scope>` 代換為實際 scratch 目錄，如 `dev/sec741/verify1`）——agent 每過一個里程碑就 append 一行到 `dev/<scope>/PROGRESS.jsonl`。parent 之後 cheap-poll 這個小檔即可（`make agent-progress`），不撈 transcript、不猜 scratch 檔。parent 看到 `blocked` 或連續 `fail` 時**主動介入**（停掉、帶著 ledger 尾端 reframe 後重 spawn），不陪它燒完。
+3. **單 agent 範圍上限 ~15 分鐘**：預估超過就拆成 staged agents——每段收在一個 checkpoint、前段結論以文字餵給下段（`PROGRESS.jsonl` 就是天然的交接摘要：下一棒讀 ledger，不讀前棒充滿錯誤嘗試的 transcript）。一個 agent 卡死應在 15 分鐘內被看見，而不是 71 分鐘後才知道。
 
 ### Ledger 契約（原樣貼進 spawn prompt）
 
 ```text
 進度回報（強制）：每完成一個里程碑，append 一行 JSON 到 dev/<scope>/PROGRESS.jsonl
 （echo '{...}' >> dev/<scope>/PROGRESS.jsonl；append-only——不重寫、不刪行、不換檔名）：
-  {"ts":"<date -u +%FT%TZ>","stage":"<里程碑>","status":"ok|fail|blocked","note":"<一句話>"}
+  {"ts":"<UTC ISO-8601，取自 date -u +%FT%TZ>","stage":"<里程碑>","status":"ok|fail|blocked","note":"<一句話>"}
+note 禁含單/雙引號、反斜線、換行（要引用改全形「」）；有 jq 的環境（如 dev container）
+優先 jq -nc --arg 建行（自動逃逸）；host Git Bash 無 jq，用上行 echo 模板即可。
 驗證類工作的 stage 順序：gate-mapped → repro-built → repro-ran → verdict。
-卡住 >5 分鐘也要寫一行 status=blocked 註明卡點，然後換路徑或直接給部分結論收尾。
+同一 stage 連續失敗/重試 ≥3 次仍未過 → 必須寫一行 status=blocked 註明卡點，並換路徑或
+給部分結論收尾——嚴禁盲目重試（觸發條件用次數不用時間：LLM 沒有內部時鐘，數得準的是次數）。
+會跑外部指令（測試/編譯/查詢）且有掛起風險者，一律 timeout 5m <command> 包裹；逾時記一行 fail。
 ```
 
 ### 觀測與反模式
 
-- 觀測：`make agent-progress SCOPE=dev/<scope>`（`N=10` 調 tail 行數）——列出 SCOPE 下所有 `PROGRESS.jsonl` 尾端。
+- 觀測：`make agent-progress SCOPE=dev/<scope>`（`N=10` 調 tail 行數）——列出 SCOPE 下所有 `PROGRESS.jsonl` 尾端，並對 >15 分鐘未更新的 ledger 印 LIVENESS 警告（agent 自報進度之外的外部存活探針，抓 zombie／掛死）。
 - ⛔ tail agent 的 `.output` transcript（全量 JSONL 撐爆 parent context——這正是 ledger 存在的理由）。
 - ⛔ 把 scratch 檔當進度訊號（非結構化、路徑靠猜、要反覆全掃）。
 - ⛔ 長時 agent 只在完成時 flush 結果（中途不可觀測 = 不可止損）。

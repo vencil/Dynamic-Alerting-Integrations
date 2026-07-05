@@ -247,11 +247,16 @@ check-planning-bloat: ## 偵測 §12.1 Session Ledger 膨脹 row（dev-rules §A
 	@python3 scripts/tools/lint/validate_planning_session_row.py $(ARGS)
 
 .PHONY: agent-progress
-agent-progress: ## 長時 agent progress ledger 快照（協議見 vibe-subagent-review skill；用：make agent-progress SCOPE=dev/sec741 [N=10]）
+agent-progress: ## 長時 agent progress ledger 快照 + liveness 探針（協議見 vibe-subagent-review skill；用：make agent-progress SCOPE=dev/sec741 [N=10]）
 	@if [ -z "$(SCOPE)" ]; then echo "❌ SCOPE is required. e.g. make agent-progress SCOPE=dev/sec741"; exit 1; fi
-	@files=$$(find "$(SCOPE)" -name 'PROGRESS.jsonl' 2>/dev/null | sort); \
+	@n='$(N)'; case "$$n" in ""|*[!0-9]*) [ -n "$$n" ] && echo "⚠️  N='$$n' 非數字，改用預設 10"; n=10;; esac; \
+	files=$$(find "$(SCOPE)" -name 'PROGRESS.jsonl' 2>/dev/null | sort); \
 	if [ -z "$$files" ]; then echo "⚠️  $(SCOPE) 下沒有 PROGRESS.jsonl（目錄不存在、agent 尚未寫入、或 spawn prompt 未內嵌 ledger 契約）"; exit 1; fi; \
-	for f in $$files; do echo "== $$f =="; tail -n $(or $(N),10) "$$f"; echo ""; done
+	for f in $$files; do \
+		echo "== $$f =="; tail -n "$$n" "$$f"; \
+		if [ -n "$$(find "$$f" -mmin +15 2>/dev/null)" ]; then echo "⚠️  LIVENESS: $$f 已 >15 分鐘未更新——agent 可能卡死/zombie，考慮介入"; fi; \
+		echo ""; \
+	done
 
 .PHONY: win-commit
 win-commit: ## Windows 逃生門：sandbox hook-gate → Windows stage/commit/push。用：make win-commit MSG=_msg.txt FILES="a b" [SKIP=hook1,hook2] [SKIP_HOOKS=1]
