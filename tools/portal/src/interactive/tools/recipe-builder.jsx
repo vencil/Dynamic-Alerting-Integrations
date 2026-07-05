@@ -177,8 +177,19 @@ function buildRecipeObject(recipe, f) {
   return obj;
 }
 
+/* yamlValue — quote anything a YAML reader could take as a NON-string scalar.
+ * #1017: a number-looking value (quantile "0.99", incl. dotless exponents like
+ * "95e-2") must be emitted QUOTED — bare, the Go (yaml.v3) and Python (PyYAML
+ * 1.1) readers can disagree on its type/text, silently splitting the
+ * cross-language recipe_id join; the conf.d schema now rejects a bare-number
+ * quantile outright (tenant-config.schema.json `type: string`). Number(v)
+ * covers every form the quantile field validator accepts. Other fields are
+ * never number-like (metric/name are identifiers, window/horizon carry a unit
+ * suffix, threshold is composed as "value:severity" → quoted by the charset
+ * test below). */
 function yamlValue(v) {
-  return /[^a-zA-Z0-9_.]/.test(v) ? JSON.stringify(v) : v;
+  if (/[^a-zA-Z0-9_.]/.test(v) || (v !== '' && !Number.isNaN(Number(v)))) return JSON.stringify(v);
+  return v;
 }
 
 function yamlSnippet(tenantId, obj) {

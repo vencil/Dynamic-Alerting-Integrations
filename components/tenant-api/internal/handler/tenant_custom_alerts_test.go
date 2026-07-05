@@ -255,3 +255,55 @@ func TestPutCustomAlerts_PRMode501(t *testing.T) {
 		t.Fatalf("status = %d, want 501 in PR write-back mode", resp.StatusCode)
 	}
 }
+
+// #1017: a JSON-number quantile must be rejected 400 BEFORE the merge — a bare
+// YAML number in conf.d is read differently by the Go exporter and the Python
+// compiler (recipe_id parity → silently muted alert), and the conf.d schema CI
+// gate (quantile type: string) would reject the committed file anyway.
+func TestPutCustomAlerts_NumberQuantileRejected400(t *testing.T) {
+	t.Parallel()
+	dir := setupConfigDir(t, map[string]string{"db-a.yaml": caTenantYAML, "_defaults.yaml": caDefaults})
+	initGitRepo(t, dir)
+	deps := &Deps{ConfigDir: dir, Writer: newTestWriter(dir), RBAC: newRBACManager(t, caWriteRBAC)}
+
+	h := cfg.ComputeSourceHash([]byte(caTenantYAML))
+	body := `{"base_hash":"` + h + `","custom_alerts":[{"recipe":"p99_latency","name":"p99_slow",` +
+		`"metric":"http_request_duration_seconds","quantile":0.99,"threshold":"2:warning","window":"5m"}]}`
+	resp := putCustomAlerts(t, deps, "db-a", body, "alice@example.com", []string{"dba"})
+	if resp.StatusCode != http.StatusBadRequest {
+		b, _ := readBody(resp)
+		t.Fatalf("status = %d, want 400 for a JSON-number quantile; body: %s", resp.StatusCode, b)
+	}
+	b, _ := readBody(resp)
+	if !strings.Contains(b, "quantile") || !strings.Contains(b, "_custom_alerts[0]") {
+		t.Errorf("400 must carry a locatable quantile violation; body: %s", b)
+	}
+	// nothing must have been written
+	out, _ := os.ReadFile(filepath.Join(dir, "db-a.yaml"))
+	if strings.Contains(string(out), "_custom_alerts") {
+		t.Errorf("rejected write must not touch the file:\n%s", out)
+	}
+}
+
+// #1017 companion: the happy path — a STRING quantile is accepted and lands in
+// conf.d QUOTED (yaml.v3 auto-quotes a number-looking !!str), so both language
+// readers see the same text.
+func TestPutCustomAlerts_StringQuantileWrittenQuoted(t *testing.T) {
+	t.Parallel()
+	dir := setupConfigDir(t, map[string]string{"db-a.yaml": caTenantYAML, "_defaults.yaml": caDefaults})
+	initGitRepo(t, dir)
+	deps := &Deps{ConfigDir: dir, Writer: newTestWriter(dir), RBAC: newRBACManager(t, caWriteRBAC)}
+
+	h := cfg.ComputeSourceHash([]byte(caTenantYAML))
+	body := `{"base_hash":"` + h + `","custom_alerts":[{"recipe":"p99_latency","name":"p99_slow",` +
+		`"metric":"http_request_duration_seconds","quantile":"0.990","threshold":"2:warning","window":"5m"}]}`
+	resp := putCustomAlerts(t, deps, "db-a", body, "alice@example.com", []string{"dba"})
+	if resp.StatusCode != http.StatusOK {
+		b, _ := readBody(resp)
+		t.Fatalf("status = %d, want 200 for a string quantile; body: %s", resp.StatusCode, b)
+	}
+	out, _ := os.ReadFile(filepath.Join(dir, "db-a.yaml"))
+	if !strings.Contains(string(out), `quantile: "0.990"`) {
+		t.Errorf("string quantile must be written quoted (parity contract):\n%s", out)
+	}
+}

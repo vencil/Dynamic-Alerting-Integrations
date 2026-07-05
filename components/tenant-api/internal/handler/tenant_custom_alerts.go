@@ -117,6 +117,20 @@ func PutTenantCustomAlerts(d *Deps) http.HandlerFunc {
 				"base_hash is required; GET the tenant first and echo its source_hash")
 			return
 		}
+		// #1017: quantile must arrive as a JSON STRING. A number has already
+		// lost its authored text and would be merged into conf.d as a bare
+		// YAML scalar, which the Go exporter and the Python compiler can read
+		// differently (recipe_id parity → silently muted alert). Fail loud
+		// before merging — symmetric with the conf.d schema CI gate, which
+		// would reject the committed file anyway (schema type: string).
+		if viol := customalerts.QuantileStringViolations(*req.CustomAlerts); len(viol) > 0 {
+			violations := make([]Violation, 0, len(viol))
+			for _, v := range viol {
+				violations = append(violations, Violation{Field: "_custom_alerts", Reason: v})
+			}
+			WriteValidationErrors(w, r, violations)
+			return
+		}
 
 		// Load the current tenant file (must exist — recipes are authored
 		// against an existing tenant).

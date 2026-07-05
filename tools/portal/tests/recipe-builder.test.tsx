@@ -95,6 +95,27 @@ describe('RecipeBuilder', () => {
     expect(yaml).toContain('name: queue_high');
   });
 
+  it('#1017: number-looking values (quantile) are QUOTED in the YAML snippet; unit-suffixed stay bare', () => {
+    // A bare `quantile: 0.99` pasted into conf.d is read as a NUMBER — the Go
+    // and Python readers can then disagree on its text (recipe_id parity) and
+    // the conf.d schema (quantile type: string) rejects it in CI. The snippet
+    // must emit it quoted; dotless exponents like 95e-2 are the nastiest case
+    // (PyYAML 1.1 reads them as a string, yaml.v3 as a float).
+    render(<RecipeBuilder tenantId="db-a" fetchMetrics={mockFetch(['lat'])} />);
+    fireEvent.change(screen.getByTestId('field-recipe'), { target: { value: 'p99_latency' } });
+    fill('field-name', 'lat_p99');
+    fill('field-metric', 'lat');
+    fill('field-window', '5m');
+    fill('field-threshold', '2');
+    let yaml = screen.getByTestId('yaml-output').textContent || '';
+    expect(yaml).toContain('quantile: "0.99"'); // default quantile, quoted
+    expect(yaml).toContain('window: 5m');       // unit suffix → not number-like → bare
+    expect(yaml).toContain('threshold: "2:warning"');
+    fill('field-quantile', '95e-2');            // form validator accepts (Number() = 0.95)
+    yaml = screen.getByTestId('yaml-output').textContent || '';
+    expect(yaml).toContain('quantile: "95e-2"');
+  });
+
   it('tenant-manager persona (onSubmit): hands off the recipe object, no YAML', () => {
     const onSubmit = vi.fn();
     render(<RecipeBuilder tenantId="db-a" fetchMetrics={mockFetch(['queue_depth'])} onSubmit={onSubmit} />);

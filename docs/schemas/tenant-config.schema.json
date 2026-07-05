@@ -988,13 +988,11 @@
           "examples": ["5m", "10m", "1h"]
         },
         "quantile": {
-          "type": ["string", "number"],
+          "type": "string",
           "title": "Quantile (p99_latency recipe)",
-          "description": "Quantile in the open interval (0,1); default 0.99. Interpolated raw into histogram_quantile(<quantile>, …), so it is decimal-charset + range validated at write + compile time — the Go preflight and the Python compiler share one decimal regex to keep their accept-set identical (a Go hex-float like 0x1p-1 that only one side accepts would wedge the CI drift gate).",
+          "description": "Quantile in the open interval (0,1); default 0.99. STRING-ONLY, always quote it (#1017): the exact quantile TEXT enters the recipe_id slug that the Go exporter and the Python compiler compute independently — a bare YAML number is dialect-ambiguous (PyYAML 1.1 reads a dotless exponent like 95e-2 as a string, yaml.v3 as a float), silently splitting the recipe_id join and muting the alert. Quoting pins both readers to the same text. Also interpolated raw into histogram_quantile(<quantile>, …), so it stays decimal-charset (this pattern) + range validated at write + compile time — the Go preflight and the Python compiler share one decimal regex to keep their accept-set identical (a Go hex-float like 0x1p-1 that only one side accepts would wedge the CI drift gate); the (0,1) range check lives in those validators.",
           "pattern": "^[0-9]*\\.?[0-9]+([eE][-+]?[0-9]+)?$",
-          "exclusiveMinimum": 0,
-          "exclusiveMaximum": 1,
-          "examples": ["0.99", 0.95]
+          "examples": ["0.99", "0.95"]
         },
         "threshold": {
           "$ref": "#/definitions/thresholdScalar",
