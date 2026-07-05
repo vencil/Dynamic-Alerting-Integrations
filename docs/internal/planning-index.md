@@ -26,7 +26,7 @@ lang: zh
 | `TRK-006` | dx | TRK-006: Skip budget CI gate | ci | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
 | `TRK-010` | dx | TRK-010: Flake 自動重試 CI Policy（不是盲目全域 retry） | ci | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
 
-### accepted (26)
+### accepted (27)
 
 | ID | Kind | Title | Domain | PR | Source |
 |----|------|-------|--------|------|--------|
@@ -56,6 +56,7 @@ lang: zh
 | `ADR-024` | adr | ADR-024: 宣告式 Dimensional 告警引擎 — Version-Aware Thresholds + Custom Alerts | threshold-exporter | — | [docs/adr/024-version-aware-threshold-via-dimensional-label.md](../adr/024-version-aware-threshold-via-dimensional-label.md) |
 | `ADR-025` | adr | ADR-025: 告警平面自我存活性 — 讓告警系統能偵測自己的死亡 | observability | — | [docs/adr/025-alerting-plane-self-liveness.md](../adr/025-alerting-plane-self-liveness.md) |
 | `ADR-028` | adr | ADR-028: Federation 撤銷儲存 tamper-evidence — off-cluster 對帳為主控 | tenant-api | — | [docs/adr/028-federation-revocation-tamper-evidence.md](../adr/028-federation-revocation-tamper-evidence.md) |
+| `ADR-029` | adr | ADR-029: 租戶自訂告警跨租戶查詢隔離 — 編譯期邊界中和為主、評估期 ruler 隔離延後 | threshold-exporter | — | [docs/adr/029-custom-alert-cross-tenant-query-scoping.md](../adr/029-custom-alert-cross-tenant-query-scoping.md) |
 
 ### proposed (16)
 
