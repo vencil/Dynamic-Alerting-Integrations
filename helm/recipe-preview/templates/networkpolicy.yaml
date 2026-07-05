@@ -1,4 +1,14 @@
 {{- if .Values.networkPolicy.enabled }}
+{{- /*
+  Empty-selector fail-guard (#1004). networkPolicy.egress.tenantApiPodSelectors
+  feeds the egress `to:` peer via range. An empty list renders an empty `to:`,
+  which Kubernetes treats as "all destinations" for that port — silently
+  degrading the port-8080 egress lockdown to allow-any. Reject at render time
+  (same fail-closed intent as tenant-api's ingress empty-selector guard).
+*/ -}}
+{{- if and .Values.networkPolicy.egress.enabled (not .Values.networkPolicy.egress.tenantApiPodSelectors) }}
+{{- fail "networkPolicy.egress.tenantApiPodSelectors must be a non-empty list: an empty list renders an empty egress `to:` peer, which Kubernetes treats as ALL destinations for port 8080 — reopening the egress lockdown (#1004)." }}
+{{- end }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:

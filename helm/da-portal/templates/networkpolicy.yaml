@@ -26,6 +26,19 @@
 {{- if and (not .Values.oauth2Proxy.enabled) (or .Values.portal.tenantApiUrl .Values.portal.recipePreviewUrl) }}
 {{- fail "oauth2Proxy.enabled=false requires portal.tenantApiUrl AND portal.recipePreviewUrl to be empty (GHSA-3g2h-rf85-5rrv): with no auth proxy stripping client headers, nginx would forward raw X-Forwarded-Groups to a header-trusting backend = unauthenticated identity spoofing. A static-only (Tier 1) portal must not reverse-proxy to tenant-api/recipe-preview." }}
 {{- end }}
+{{- /*
+  Empty-selector fail-guard (#1004). When da-portal proxies (oauth2Proxy.enabled)
+  with egress locked, the tenantApi/recipePreview pod-selector lists feed the
+  egress `to:` peers via range. An empty list renders an empty `to:`, which
+  Kubernetes treats as "all destinations" for that port — silently degrading the
+  8080/8082 egress lockdown to allow-any. Reject at render time (mirrors the
+  tenant-api ingress empty-selector guard).
+*/ -}}
+{{- if and .Values.networkPolicy.enabled .Values.networkPolicy.egress.enabled .Values.oauth2Proxy.enabled }}
+{{- if or (not .Values.networkPolicy.egress.tenantApiPodSelectors) (not .Values.networkPolicy.egress.recipePreviewPodSelectors) }}
+{{- fail "networkPolicy.egress.tenantApiPodSelectors/recipePreviewPodSelectors must be non-empty lists: an empty list renders an empty egress `to:` peer, which Kubernetes treats as ALL destinations for that port — reopening the 8080/8082 egress lockdown (#1004)." }}
+{{- end }}
+{{- end }}
 {{- if .Values.networkPolicy.enabled }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
