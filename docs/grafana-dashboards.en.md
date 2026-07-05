@@ -14,17 +14,18 @@ lang: en
 >
 > Related docs: [Architecture] · [Troubleshooting] · [Shadow Monitoring SOP]
 
-This document introduces the three Grafana Dashboards provided by the Dynamic Alerting platform, with guidance on deployment, usage, and troubleshooting.
+This document introduces the four Grafana Dashboards provided by the Dynamic Alerting platform, with guidance on deployment, usage, and troubleshooting.
 
 ## Overview
 
-Dynamic Alerting provides three operations-oriented Dashboards:
+Dynamic Alerting provides four operations-oriented Dashboards:
 
 | Name | Purpose | Audience |
 |------|---------|----------|
 | **Dynamic Alerting — Platform Overview** | Platform health, tenant state, threshold distribution | Platform Engineer / NOC |
 | **Fleet Threshold Distribution** | Cross-tenant threshold **value** distribution + statistical outlier detection (platform-governance view) | Platform Engineer / SRE |
 | **Shadow Monitoring Progress** | Old vs. new recording rule convergence during migration | SRE / Migration Lead |
+| **Federation Revocation Reconciler** | Federation revocation un-revoke detection (ADR-028) health + chaos-4 scenario view | Platform Engineer / SRE / Security |
 
 ---
 
@@ -286,6 +287,68 @@ The **disable** state (`mysql_connections: "disable"`) is `continue`d at resolve
 ### Hand-off to the Recommender (#656)
 
 This dashboard is the **passive** governance view — use the distribution data to judge whether the real Day-2 pain is fatigue or under-protection *before* committing to further investment. The top-row **P50 (median)** gives the fleet's "consensus center" for this threshold (a robust statistic); the [threshold recommender](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/656) likewise leans on robust percentiles when it proactively suggests, but **over different data** — the recommender computes P50/P95/P99 of a tenant's *observed metric* history, whereas this chart computes the distribution of *every tenant's configured threshold*. The two are complementary: this chart's outlier table is the manual precursor to the recommender's "suggest tightening/loosening to ~X" push.
+
+---
+
+## Dashboard 4: Federation Revocation Reconciler
+
+> **File:** `k8s/03-monitoring/federation-revocation-dashboard.json` · **uid:** `federation-revocation` · **Source:** [#1002](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1002) ([ADR-028](./adr/028-federation-revocation-tamper-evidence.md) D1 / [#924](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/924))
+
+### Motivation
+
+The [ADR-028](./adr/028-federation-revocation-tamper-evidence.md) federation-reconciler (`_federation_revocation_reconciler.py`) periodically reconciles the off-store revocation event log against the live revoked set to detect **un-revokes** (a write-capable attacker silently dropping a not-yet-expired revocation), and exposes six **platform-global, zero-label** metrics on `/metrics` (job=`federation-reconciler`, port 9099). Those metrics previously had only alerts consuming them, no operational view. This dashboard is that **field view** — it lays out the [runbook](internal/federation-revocation-reconciler-runbook.md)'s four chaos-validation scenarios on one page, with panel thresholds **aligned 1:1 to the three platform alerts** (see the mapping below) so the dashboard and the pager agree on what is bad.
+
+> **Why no `$tenant` variable?** All six metrics are platform-global with no tenant label (un-revoke detection is a platform-level control, not per-tenant) — so this dashboard neither needs nor has a tenant dropdown.
+
+### Deployment
+
+#### Method A: Grafana UI Import
+
+1. Grafana left nav → **Dashboards** → **New** → **Import**
+2. Upload JSON file: `k8s/03-monitoring/federation-revocation-dashboard.json`
+3. Select the Prometheus datasource, click **Import**
+
+#### Method B: ConfigMap Sidecar Auto-Deployment
+
+```bash
+da-tools grafana-import \
+  --dashboard k8s/03-monitoring/federation-revocation-dashboard.json \
+  --name grafana-dashboard-federation-revocation --namespace monitoring
+```
+
+#### Method C: Built-in (shipped with Grafana)
+
+This dashboard is **baked into the shipped Grafana**: the JSON is also embedded in `k8s/03-monitoring/configmap-grafana.yaml` (data key `federation-revocation-dashboard.json`) and mounted into the provisioning directory by `deployment-grafana.yaml`, so it appears automatically on platform apply with no manual import. The standalone file is the SOT; a drift-guard in `tests/dx/test_federation_revocation_dashboard.py` pins the embedded copy identical to it.
+
+### Panel Quick Reference
+
+| Region | Panel | PromQL (key part) | Normal | Anomaly |
+|--------|-------|-------------------|--------|---------|
+| Top row | **Tamper status** | `federation_revocation_tamper_suspected` | ✓ Clean (0) = clean, but a live all-clear **only when Reconciler freshness is green**; on a fail-closed/stale pass it holds its last value, so read it together with freshness | 🔴 Tamper (>0) = suspected un-revoke |
+| Top row | **Reconciler freshness** | `time() - ..._last_reconcile_timestamp_seconds` | ✓ Fresh (<1800s) | 🔴 Stale (≥1800s) = detection is blind |
+| Top row | **Gateway fail-open** | `federation_gateway_revocation_load_errors` | ✓ OK (0) | 🟡 Fail-open (>0) = revoked tokens honoured |
+| Top row | **Coverage integrity** | `federation_revocation_events_dropped` | ✓ Intact (0) | 🟡 Schema drift (>0) = coverage eroded |
+| Row 1 | **Reconciler staleness / error rate / events checked** | staleness (with 1800 line), `rate(...reconcile_errors_total[5m])`, `..._events_checked` | staleness sawtooths near 0, error rate flat 0 | staleness climbing + error rate >0 = fail-closed |
+| Row 2 | **Events dropped / erosion ratio** | `..._events_dropped`, `dropped / clamp_min(checked + dropped, 1)` | both 0 | >0 = schema-drift; ratio uses `clamp_min` to avoid 0/0=NaN |
+| Row 3 | **Gateway read failures** | `federation_gateway_revocation_load_errors` (with >0 line) | flat 0 | >0 = fail-open; oscillation near the `for:2m` boundary = beat-frequency |
+| Row 4 | **Suspected un-revokes (headline)** | `federation_revocation_tamper_suspected` (large, with >0 line) | flat 0 | >0 sustained 5m = critical security event |
+
+> **Readable without colour (accessibility):** all five stat panels (four top-row + the erosion ratio) don't rely on colour alone — every colour tier pairs a **symbol + text** (✓ / 🔴 / 🟡). Per ADR-012 / WCAG 1.4.1; an a11y golden in `tests/dx/test_federation_revocation_dashboard.py` pins "every colour tier has a symbol" against regression.
+
+### Chaos-4 Scenario Mapping
+
+This dashboard is the field view for the four scenarios in the [runbook](internal/federation-revocation-reconciler-runbook.md)'s "pre-GA chaos validation":
+
+| Scenario | Primary metric | Healthy | Anomaly |
+|----------|---------------|---------|---------|
+| **fail-open** | `gateway_revocation_load_errors` | 0 | >0 (fires at `for:2m`) |
+| **fail-closed** | `reconcile_errors_total`↑ and `last_reconcile_timestamp` frozen | staleness ≈ 0 | staleness > 1800 |
+| **schema-drift** | `events_dropped` (+ erosion ratio) | 0 | >0 (visible, not silent) |
+| **beat-frequency (拍頻)** | `gateway_load_errors` oscillation at the `for:2m` boundary | no flap | repeated in/out of firing at the boundary → tune `for:` or interval |
+
+### Alignment with Alerts
+
+Panel thresholds deliberately **use the same values as the three alerts in [configmap-rules-platform.yaml](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/k8s/03-monitoring/configmap-rules-platform.yaml)** (a single source of "what is bad"): `FederationRevocationTamperSuspected` (>0, 5m, critical), `FederationRevocationReconcileStale` (`time()-ts > 1800` or absent, 10m, critical), `FederationGatewayRevocationLoadFailure` (>0, 2m, warning). IR steps are in the [runbook](internal/federation-revocation-reconciler-runbook.md).
 
 ---
 

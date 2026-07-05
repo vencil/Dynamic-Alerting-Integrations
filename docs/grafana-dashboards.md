@@ -14,17 +14,18 @@ lang: zh
 >
 > 相關文件：[Architecture](./architecture-and-design.md) · [Troubleshooting](./troubleshooting.md) · [Shadow Monitoring SOP](./shadow-monitoring-sop.md)
 
-本文檔介紹 Dynamic Alerting 平台提供的三份 Grafana Dashboard，說明如何部署、使用和排查問題。
+本文檔介紹 Dynamic Alerting 平台提供的四份 Grafana Dashboard，說明如何部署、使用和排查問題。
 
 ## 概覽
 
-Dynamic Alerting 提供三份運維導向的 Dashboard：
+Dynamic Alerting 提供四份運維導向的 Dashboard：
 
 | 名稱 | 用途 | 受眾 |
 |------|------|------|
 | **Dynamic Alerting — Platform Overview** | 平台整體健康度、Tenant 狀態、Threshold 分佈 | Platform Engineer / NOC |
 | **Fleet Threshold Distribution** | 跨租戶閾值**數值**分布 + 統計離群偵測（平台治理視角） | Platform Engineer / SRE |
 | **Shadow Monitoring Progress** | Migration 期間舊新 Rule 收斂進度 | SRE / Migration Lead |
+| **Federation Revocation Reconciler** | Federation 撤銷 un-revoke 偵測（ADR-028）健康度、chaos-4 場景視圖 | Platform Engineer / SRE / Security |
 
 ---
 
@@ -286,6 +287,68 @@ Tukey fences 需要分布**有離散度**才準。有兩種常見情形會讓它
 ### 與 Recommender（#656）的銜接
 
 本 Dashboard 是**被動**治理視角——先用分布資料判斷 Day-2 真痛點到底是 fatigue 還是裸奔，再決定後續投資。頂列的 **P50（中位數）** 給出全平台對該閾值的『共識中心』（穩健統計量）；[threshold recommender](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/656) 之後對個別租戶主動建議時靠的也是同類穩健百分位，但**取的資料不同**——recommender 算的是該租戶**觀測指標**的歷史 P50/P95/P99，本圖算的是**全租戶已設閾值**的分布。兩者互補：本圖的離群表正是 recommender「建議縮緊／放寬至 ~X」推播的人工先導版。
+
+---
+
+## Dashboard 4: Federation Revocation Reconciler
+
+> **檔案：** `k8s/03-monitoring/federation-revocation-dashboard.json` · **uid：** `federation-revocation` · **來源：** [#1002](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1002)（[ADR-028](./adr/028-federation-revocation-tamper-evidence.md) D1 / [#924](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/924)）
+
+### 動機
+
+[ADR-028](./adr/028-federation-revocation-tamper-evidence.md) 的 federation-reconciler（`_federation_revocation_reconciler.py`）週期性對帳撤銷事件日誌與 live 撤銷集，偵測 **un-revoke**（有寫入權的攻擊者把未過期的撤銷偷偷刪掉），並用 `/metrics`（job=`federation-reconciler`, port 9099）暴露六個**平台全域、零 label** 指標。這些指標先前只有告警在消費、沒有運維視圖。本 Dashboard 就是那個「**現場視圖**」——把 [runbook](internal/federation-revocation-reconciler-runbook.md) 的四個 chaos 驗證場景排成一頁，panel 閾值**與三個平台告警 1:1 對齊**（見下方對照），讓 Dashboard 與 pager 對「什麼叫壞」有一致定義。
+
+> **為何沒有 `$tenant` 變數？** 六個指標都是平台全域、無 tenant label（un-revoke 偵測是平台級控制，非 per-tenant）——因此本 Dashboard 不需要、也沒有租戶下拉選單。
+
+### 部署
+
+#### 方法 A：Grafana UI 匯入
+
+1. Grafana 左側欄 → **Dashboards** → **New** → **Import**
+2. 上傳 JSON 檔：`k8s/03-monitoring/federation-revocation-dashboard.json`
+3. 選擇 Prometheus datasource，點擊 **Import**
+
+#### Method B: ConfigMap Sidecar Auto-Deployment
+
+```bash
+da-tools grafana-import \
+  --dashboard k8s/03-monitoring/federation-revocation-dashboard.json \
+  --name grafana-dashboard-federation-revocation --namespace monitoring
+```
+
+#### 方法 C：內建（隨 Grafana 一起部署）
+
+本 Dashboard 已**烘焙進出廠 Grafana**：JSON 同時嵌在 `k8s/03-monitoring/configmap-grafana.yaml`（data key `federation-revocation-dashboard.json`）並由 `deployment-grafana.yaml` 掛載至 provisioning 目錄，隨平台 apply 自動出現、免手動匯入。standalone 檔為 SOT，嵌入副本由 `tests/dx/test_federation_revocation_dashboard.py` 的 drift-guard 鎖住兩份一致。
+
+### Panel 快速參考
+
+| 區 | Panel | PromQL（要點） | 正常 | 異常 |
+|---|-------|---------------|------|------|
+| 頂列 | **Tamper status** | `federation_revocation_tamper_suspected` | ✓ Clean (0)＝乾淨，但**僅在 Reconciler freshness 為綠時**才是即時 all-clear；fail-closed/stale 時保留舊值，需與 freshness 並讀 | 🔴 Tamper (>0)＝疑似 un-revoke |
+| 頂列 | **Reconciler freshness** | `time() - ..._last_reconcile_timestamp_seconds` | ✓ Fresh (<1800s) | 🔴 Stale (≥1800s)＝偵測瞎了 |
+| 頂列 | **Gateway fail-open** | `federation_gateway_revocation_load_errors` | ✓ OK (0) | 🟡 Fail-open (>0)＝撤銷 token 被放行 |
+| 頂列 | **Coverage integrity** | `federation_revocation_events_dropped` | ✓ Intact (0) | 🟡 Schema drift (>0)＝覆蓋被侵蝕 |
+| Row 1 | **Reconciler staleness / error rate / events checked** | staleness（含 1800 線）、`rate(...reconcile_errors_total[5m])`、`..._events_checked` | staleness 鋸齒近 0、error rate 平 0 | staleness 攀升＋error rate >0＝fail-closed |
+| Row 2 | **Events dropped / erosion ratio** | `..._events_dropped`、`dropped / clamp_min(checked + dropped, 1)` | 皆 0 | >0＝schema-drift；ratio 用 `clamp_min` 防 0/0=NaN |
+| Row 3 | **Gateway read failures** | `federation_gateway_revocation_load_errors`（含 >0 線） | 平 0 | >0＝fail-open；近 `for:2m` 邊界震盪＝拍頻 |
+| Row 4 | **Suspected un-revokes（headline）** | `federation_revocation_tamper_suspected`（大圖，含 >0 線） | 平 0 | >0 持續 5m＝critical 安全事件 |
+
+> **色盲也能判讀（無障礙）：** 五個 stat panel（頂列四個 + erosion ratio）都不只靠顏色——每個顏色階都配**符號＋文字**（✓／🔴／🟡）。依 ADR-012 / WCAG 1.4.1；`tests/dx/test_federation_revocation_dashboard.py` 的 a11y golden 鎖住「每個顏色階都有符號」防退化。
+
+### Chaos-4 場景對照
+
+本 Dashboard 是 [runbook](internal/federation-revocation-reconciler-runbook.md)「上線前 chaos 驗證」四場景的現場視圖：
+
+| 場景 | 主看指標 | 健康 | 異常 |
+|------|---------|------|------|
+| **fail-open** | `gateway_revocation_load_errors` | 0 | >0（`for:2m` 觸發）|
+| **fail-closed** | `reconcile_errors_total`↑ 且 `last_reconcile_timestamp` 停滯 | staleness≈0 | staleness >1800 |
+| **schema-drift** | `events_dropped`（+ erosion ratio） | 0 | >0（可見、非靜默）|
+| **拍頻（beat-frequency）** | `gateway_load_errors` 在 `for:2m` 邊界的震盪 | 不 flap | 邊界反覆進出 firing → 調 `for:` 或 interval |
+
+### 與告警的對齊
+
+panel 閾值刻意**與 [configmap-rules-platform.yaml](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/k8s/03-monitoring/configmap-rules-platform.yaml) 的三個告警同一數值**（單一「什麼叫壞」來源）：`FederationRevocationTamperSuspected`（>0, 5m, critical）、`FederationRevocationReconcileStale`（`time()-ts > 1800` 或 absent, 10m, critical）、`FederationGatewayRevocationLoadFailure`（>0, 2m, warning）。IR 步驟見 [runbook](internal/federation-revocation-reconciler-runbook.md)。
 
 ---
 
