@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
 from pathlib import Path
 from typing import List
@@ -111,6 +112,38 @@ def _silent_sentinel() -> dict:
     }
 
 
+# Platform-authored template actions the compiler ITSELF emits into custom-alert
+# rule labels/annotations — the ONLY {{ … }} allowed in a generated custom-alert
+# rule. Anything else means tenant-controlled data became Go-template code (the F2
+# annotation-injection class), regardless of WHICH field leaked it. Emit-time
+# INVARIANT gate (A+ defence-in-depth): shape.py's boundary reject stops the known
+# selector-value vector; this catches ANY future field reaching a template context
+# without its own guard. Allowed: `{{ $value | printf "%.Nf" }}` and `{{ $labels.X }}`.
+_ALLOWED_TEMPLATE_ACTION = re.compile(
+    r'\{\{\s*(?:\$value\s*\|\s*printf\s+"%\.[0-9]+f"|\$labels\.[a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}'
+)
+
+
+def _assert_annotations_template_safe(groups: List[dict]) -> None:
+    """Fail the compile if any generated label/annotation carries a Go-template
+    action OR backtick beyond the platform allowlist. Catches the F2 injection class
+    at emit time no matter which field carried it. MUST be kept in lockstep with the
+    platform annotations emitted by recipes.py / _silent_sentinel."""
+    for g in groups:
+        for r in g.get("rules", []):
+            fields = dict(r.get("labels") or {})
+            fields.update(r.get("annotations") or {})
+            for name, val in fields.items():
+                residual = _ALLOWED_TEMPLATE_ACTION.sub("", str(val))
+                if "{{" in residual or "}}" in residual or "`" in residual:
+                    ident = r.get("alert") or r.get("record") or "<rule>"
+                    raise CustomAlertConfigError(
+                        f"emit-time invariant violation: {name!r} in {ident!r} contains a "
+                        f"non-platform Go-template action or backtick — tenant-controlled data "
+                        f"must never become template code (F2 injection class). Value: {val!r}"
+                    )
+
+
 def build_pack(config_dir: Path,
                max_custom_recipes: int = _loader.MAX_CUSTOM_RECIPES_DEFAULT) -> dict:
     """Build the rule-pack dict (groups) from a conf.d tree."""
@@ -160,6 +193,9 @@ def build_pack(config_dir: Path,
         # alerts (S7/S8). It is tenant-agnostic — never per-recipe.
         groups.append({"name": "custom-alerts", "rules": [_silent_sentinel()] + alerts})
 
+    # A+ emit-time invariant gate: no tenant-controlled data may have become a
+    # Go-template action in any generated label/annotation (F2 defence-in-depth).
+    _assert_annotations_template_safe(groups)
     return {
         "groups": groups,
         "_meta": {"shapes": len(shapes), "info": len(info), "per_tenant_counts": per_tenant},

@@ -40,6 +40,32 @@ from typing import Dict, List, Tuple
 _METRIC_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 _LABEL_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 
+# `window` (and, for p99_latency, `quantile`) are BARE PromQL tokens interpolated
+# raw into the compiled rule (rate(m[<window>]) / histogram_quantile(<quantile>,…)).
+# Unlike a selector VALUE they cannot be quote-escaped — a bare token IS syntax — so
+# they must be allowlisted. `window` is the Go-duration charset (the schema pattern,
+# now enforced imperatively both sides). MUST match custom_alert.go::customAlertWindowRe.
+_WINDOW_RE = re.compile(r"^([0-9]+(ns|us|µs|ms|s|m|h))+$")
+
+# quantile: DECIMAL-float charset only. Go strconv.ParseFloat accepts Go hex-float
+# literals ("0x1p-1"=0.5) and underscores that CPython float() rejects — a SHARED
+# regex pins the accept-set so the Go preflight and the Python compiler can never
+# diverge (a divergence lands a poison commit that wedges the CI drift gate; Phase C
+# hunter finding). MUST match custom_alert.go::customAlertQuantileRe.
+_QUANTILE_RE = re.compile(r"^[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?$")
+
+# Go-template metacharacters forbidden in a tenant-controlled selector VALUE. The
+# value is safe in the PromQL string-literal (escaped by _escape_value), but it is
+# ALSO interpolated into the alert-annotation `description` (recipes.py _alert_rule),
+# which Prometheus renders as a Go text/template at fire time — where `{{ query … }}`
+# runs arbitrary cross-tenant PromQL. Per the SSTI logic-less principle, untrusted
+# data must never be able to BECOME template code. A denylist by necessity (a label
+# value is arbitrary UTF-8, not allowlistable like an identifier); the emit-time
+# invariant gate (check_custom_alert_annotations) is the backstop. Backtick is the
+# Go raw-string delimiter that survives _escape_value. MUST match
+# custom_alert.go::customAlertTemplateMetachars.
+_TEMPLATE_METACHARS = ("{{", "}}", "`")
+
 # Tenants may NOT set these as selectors: they are the vectorisation join keys /
 # platform-owned dimensions. Letting a tenant pin `tenant=` or `version=` would
 # hijack the cross-tenant isolation or poison the graceful version-join.
@@ -190,6 +216,36 @@ def validate_metric_name(metric: str, field: str = "metric") -> None:
         )
 
 
+def _validate_quantile(quantile: str) -> None:
+    """Reject a p99_latency `quantile` that is not a DECIMAL number in (0,1). It is
+    interpolated raw into histogram_quantile(<quantile>, …); a non-numeric value is a
+    PromQL injection. The decimal-only regex keeps the Go/Python accept-set in lockstep
+    (Go ParseFloat accepts hex-floats/underscores that float() rejects → poison-commit
+    drift). MUST match custom_alert.go::validateQuantile."""
+    if not _QUANTILE_RE.fullmatch(str(quantile)):
+        raise RecipeError(f"quantile {quantile!r} must be a decimal number in (0,1)")
+    try:
+        q = float(quantile)
+    except (TypeError, ValueError):
+        raise RecipeError(f"quantile {quantile!r} is not a number in (0,1)")
+    if not (0.0 < q < 1.0):
+        raise RecipeError(f"quantile {quantile!r} must be in the open interval (0,1)")
+
+
+def _reject_template_metachars(value: str, key: str) -> None:
+    """Reject a selector VALUE that could become Go-template code in the annotation
+    sink (see _TEMPLATE_METACHARS). MUST match custom_alert.go::rejectTemplateMetachars."""
+    v = str(value)
+    for mc in _TEMPLATE_METACHARS:
+        if mc in v:
+            raise RecipeError(
+                f"selector value for {key!r} contains a Go-template metacharacter {mc!r}: "
+                f"it would reach the alert-annotation template context where Prometheus "
+                f"evaluates {{{{ … }}}} at fire time (cross-tenant PromQL injection). "
+                f"Selector values may not contain '{{{{', '}}}}', or backticks."
+            )
+
+
 def _escape_value(value: str) -> str:
     r"""Escape a selector value for a Prometheus double-quoted string literal.
 
@@ -225,6 +281,7 @@ def _selector_items(inst: dict) -> List[Tuple[str, str, str]]:
                 f"selector label {key!r} is reserved (one of {sorted(RESERVED_LABELS)}) "
                 f"— a tenant may not pin a vectorisation/platform label"
             )
+        _reject_template_metachars(_value, key)
     items.sort(key=lambda t: (t[1], t[0]))
     return items
 
@@ -283,9 +340,18 @@ def recipe_id(inst: dict) -> str:
             validate_metric_name(cap, "capacity_metric")
             parts.append("den_" + cap)
     else:
-        parts.append("w" + str(inst.get("window", "")))
+        window = str(inst.get("window", ""))
+        if not _WINDOW_RE.fullmatch(window):
+            raise RecipeError(
+                f"window {window!r} is not a valid Go duration "
+                f"(^([0-9]+(ns|us|µs|ms|s|m|h))+$); it is interpolated raw into "
+                f"rate(…[<window>]) — an invalid value is a PromQL injection"
+            )
+        parts.append("w" + window)
         if recipe == "p99_latency":
-            parts.append("q" + str(inst.get("quantile", "0.99")))
+            quantile = str(inst.get("quantile", "0.99"))
+            _validate_quantile(quantile)
+            parts.append("q" + quantile)
         if recipe == "ratio":
             den = inst["denominator_metric"]
             validate_metric_name(den, "denominator_metric")

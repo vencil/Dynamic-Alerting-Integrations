@@ -990,7 +990,10 @@
         "quantile": {
           "type": ["string", "number"],
           "title": "Quantile (p99_latency recipe)",
-          "description": "Quantile in (0,1); default 0.99.",
+          "description": "Quantile in the open interval (0,1); default 0.99. Interpolated raw into histogram_quantile(<quantile>, …), so it is decimal-charset + range validated at write + compile time — the Go preflight and the Python compiler share one decimal regex to keep their accept-set identical (a Go hex-float like 0x1p-1 that only one side accepts would wedge the CI drift gate).",
+          "pattern": "^[0-9]*\\.?[0-9]+([eE][-+]?[0-9]+)?$",
+          "exclusiveMinimum": 0,
+          "exclusiveMaximum": 1,
           "examples": ["0.99", 0.95]
         },
         "threshold": {

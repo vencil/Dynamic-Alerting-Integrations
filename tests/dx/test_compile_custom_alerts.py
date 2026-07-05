@@ -498,6 +498,38 @@ def test_validation_contract_matches_go():
         )
 
 
+# --- 11. A+ emit-time invariant gate (F2 annotation-injection backstop) -------
+def test_emit_invariant_gate_allows_platform_actions():
+    """The emit-time invariant gate passes platform-authored template actions
+    ({{ $value | printf }} / {{ $labels.X }}) — it must NOT false-positive."""
+    cc._assert_annotations_template_safe([
+        {"rules": [{
+            "alert": "Custom_x",
+            "labels": {"tenant": "{{ $labels.tenant }}", "severity": "warning",
+                       "mode": "{{ $labels.mode }}", "recipe": "rate"},
+            "annotations": {
+                "summary": "Custom alert [{{ $labels.name }}] for {{ $labels.tenant }}",
+                "description": 'rate on m{k="v"}: value {{ $value | printf "%.2f" }} crossed',
+                "description_zh": '值 {{ $value | printf "%.0f" }} 等於設定代碼',
+                "runbook_url": "{{ $labels.runbook_url }}"},
+        }]},
+    ])  # must not raise
+
+
+@pytest.mark.parametrize("bad", [
+    'absence on m{probe="{{ query `sum(x)` | first | value }}"}: v',   # F2 query() action
+    'v {{ printf "x" }} done',                                          # non-allowlisted action
+    "has a raw ` backtick",                                             # Go raw-string delimiter
+])
+def test_emit_invariant_gate_rejects_injection(bad):
+    """Mutation-prove: a non-platform template action or backtick in ANY annotation
+    fails the compile — the F2 backstop, whatever field carried it."""
+    with pytest.raises(CustomAlertConfigError, match="invariant"):
+        cc._assert_annotations_template_safe([
+            {"rules": [{"alert": "Custom_x", "annotations": {"description": bad}}]},
+        ])
+
+
 # --- D. disk-recipe prerequisite notice (#692 P0③ W3) ----------------------
 # A recipe over kubelet_volume_stats_* compiles fine but only fires if the cluster
 # has CSI NodeGetVolumeStats + a volume-stats scrape job + a namespace→tenant

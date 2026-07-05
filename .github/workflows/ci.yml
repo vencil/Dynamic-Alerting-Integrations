@@ -314,6 +314,17 @@ jobs:
       - name: "Custom-alert pack matches live conf.d source (HARD gate — #741 S3b)"
         run: python scripts/tools/dx/compile_custom_alerts.py --check --config-dir components/threshold-exporter/config/conf.d
 
+      # SEC-AUDIT #741: promtool-check the GENERATED custom-alert pack itself. The
+      # drift gate above only compares STRUCTURE (source↔pack), and the unit-test
+      # step (tests/rulepacks/*_test.yaml) never runs on this generated pack — so a
+      # tenant-authored recipe that compiled to syntactically-invalid PromQL (F1 DoS
+      # class: a bad `window`/`quantile` breaking the shared rule file on deploy)
+      # would pass CI. The boundary charset validation (shape.py/custom_alert.go) is
+      # the primary guard; this is the structural backstop that fails the build if any
+      # invalid PromQL ever reaches the shared pack.
+      - name: "Custom-alert generated pack is valid PromQL (SEC-AUDIT #741 F1 backstop)"
+        run: promtool check rules rule-packs/rule-pack-custom-alerts.yaml
+
       # #741 #6 / ADR-024 §8 A1: recipe-status.json is DERIVED from shape.py
       # RECIPE_STATUS (SSOT) and consumed by the Go tenant-api via go:embed.
       # Edit a recipe status but forget `make recipe-status-json` → fail here.
