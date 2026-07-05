@@ -14,11 +14,11 @@ lang: en
 >
 > Related docs: [Architecture] · [Troubleshooting] · [Shadow Monitoring SOP]
 
-This document introduces the four Grafana Dashboards provided by the Dynamic Alerting platform, with guidance on deployment, usage, and troubleshooting.
+This document introduces the six Grafana Dashboards provided by the Dynamic Alerting platform, with guidance on deployment, usage, and troubleshooting.
 
 ## Overview
 
-Dynamic Alerting provides four operations-oriented Dashboards:
+Dynamic Alerting provides six operations-oriented Dashboards:
 
 | Name | Purpose | Audience |
 |------|---------|----------|
@@ -26,6 +26,18 @@ Dynamic Alerting provides four operations-oriented Dashboards:
 | **Fleet Threshold Distribution** | Cross-tenant threshold **value** distribution + statistical outlier detection (platform-governance view) | Platform Engineer / SRE |
 | **Shadow Monitoring Progress** | Old vs. new recording rule convergence during migration | SRE / Migration Lead |
 | **Federation Revocation Reconciler** | Federation revocation un-revoke detection (ADR-028) health + chaos-4 scenario view | Platform Engineer / SRE / Security |
+| **Federation Audit — Tenant Federation** | Federation data-plane audit: request rate / rejection layering / per-tenant share (ADR-020) | Platform Engineer / SRE |
+| **Tenant Log Query — Federation** | Tenant log-query plane: query rate / P95 latency / rejection rate (ADR-021, victorialogs mode) | Platform Engineer / SRE |
+
+### Built-in vs. Operator-Selected Import (positioning)
+
+The shipped Grafana (`k8s/03-monitoring/`) deliberately uses **selective embed**: only **two** dashboards are embedded in `configmap-grafana.yaml` and mounted into the provisioning directory by `deployment-grafana.yaml`, so they **auto-provision** on platform apply (built-in); the remaining five in this catalog are imported by the operator on demand (each chapter's Method A: UI import / Method B: `da-tools grafana-import` sidecar).
+
+| Delivery | Dashboard | Rationale |
+|----------|-----------|-----------|
+| **Built-in (auto-provision)** | **MariaDB Overview** (uid `mariadb-overview`; exists only as a ConfigMap embed with no standalone JSON, hence not listed in this catalog) | Showcase first screen: the first thing you see after platform apply is the health of the monitored database (up / connections / QPS / InnoDB buffer pool) — also where the try-local one-click experience's alert red light lands |
+| **Built-in (auto-provision)** | **Federation Revocation Reconciler** (Dashboard 4 in this doc, Method C) | Security-alert observation surface: the three platform alerts for un-revoke detection ([ADR-028](./adr/028-federation-revocation-tamper-evidence.md)) ship with the platform, so the matching field view must exist the moment the pager fires — it must not depend on an operator remembering a manual import |
+| **Operator-selected (Method A / B)** | The remaining five: Dashboard 1 (Platform Overview), 2 (Shadow Monitoring), 3 (Fleet Threshold Distribution), 5 (Federation Audit), 6 (Tenant Log Query) | Adopt as needed: Shadow only matters during a migration (removed after cutover), the Fleet governance view has limited value at low tenant counts, and Dashboards 5/6 only have data when the corresponding federation plane is enabled; many environments also attach their own Grafana rather than the shipped one — embedding everything by default would only produce no-data blank boards |
 
 ---
 
@@ -352,6 +364,91 @@ Panel thresholds deliberately **use the same values as the three alerts in [conf
 
 ---
 
+## Dashboard 5: Federation Audit — Tenant Federation
+
+> **File:** `k8s/03-monitoring/federation-audit-dashboard.json` · **uid:** `federation-audit` · **Source:** [#511](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/511) ([ADR-020](./adr/020-tenant-federation.md) federation data-plane audit)
+
+### Motivation
+
+The audit view of the tenant federation ([ADR-020](./adr/020-tenant-federation.md)) data plane. Every panel derives from **a single** counter: `tenant_federation_requests_total{tenant, status}`, emitted by the mtail sidecar in `helm/federation-gateway` from the Envoy audit access log. The six status enum values use fixed colours across the whole dashboard (`ok` green / `client_aborted` blue / `rate_limited` yellow / `auth_failed` orange / `bad_request` light orange / `backend_error` red), so panels can be cross-read directly. No template variables; default time range `now-6h`.
+
+### Deployment
+
+#### Method A: Grafana UI Import
+
+1. Grafana left nav → **Dashboards** → **New** → **Import**
+2. Upload JSON file: `k8s/03-monitoring/federation-audit-dashboard.json`
+3. Select the Prometheus datasource, click **Import**
+
+#### Method B: ConfigMap Sidecar Auto-Deployment
+
+```bash
+da-tools grafana-import \
+  --dashboard k8s/03-monitoring/federation-audit-dashboard.json \
+  --name grafana-dashboard-federation-audit --namespace monitoring
+```
+
+### Panel Quick Reference
+
+| Region | Panel | PromQL (key part) | Reading |
+|--------|-------|-------------------|---------|
+| Top row | **Federation Requests /s (5m)** (Stat) | `sum(rate(tenant_federation_requests_total[5m]))` | Total federation request rate across all tenants |
+| Top row | **Rejection Rate (5m)** (Stat) | rate of the four rejected statuses (`rate_limited\|auth_failed\|bad_request\|backend_error`) ÷ total rate (`clamp_min` guards divide-by-zero) | Platform rejection rate; **deliberately excludes `client_aborted`** (a client cancelling its own query is not a platform rejection); same definition as the `FederationRejectionRateAnomaly` alert; yellow ≥20%, red ≥50% |
+| Top row | **Active Federation Tenants** (Stat) | `count(count by(tenant) (tenant_federation_requests_total)) or vector(0)` | Distinct tenants that have sent at least one federation request |
+| Top row | **Backend Errors /s (5m)** (Stat) | `sum(rate(...{status="backend_error"}[5m]))` | Storage-backend 5xx — **a platform fault, not a tenant rejection**; red ≥0.05 req/s |
+| Row 1 | **Request Rate by Status** (TimeSeries, stacked) | `sum by(status) (rate(...[5m]))` | Traffic composition stacked by status enum |
+| Row 1 | **Requests by Status (1h)** (PieChart, donut) | `sum by(status) (increase(...[1h]))` | Share per status over the last hour |
+| Row 2 | **3-Layer Rejection Rate** (TimeSeries) | three series: `status="rate_limited"` / `status=~"auth_failed\|bad_request"` / `status="backend_error"` | Which layer rejects (ADR-020 defence layering): gateway rate-limit (429) → auth / request rejected (4xx) → storage backend error (5xx) |
+| Row 2 | **Requests per Tenant (5m rate)** (BarChart, horizontal) | `sum by(tenant) (rate(...[5m]))` | Watch for one tenant dominating the gateway |
+| Row 3 | **Per-Tenant Request Breakdown** (Table, paginated) | `sum by(tenant, status) (rate(...[10m]))` (instant) | One row per tenant × status |
+
+---
+
+## Dashboard 6: Tenant Log Query — Federation
+
+> **File:** `k8s/03-monitoring/tenant-log-query-dashboard.json` · **uid:** `tenant-log-query` · **Source:** [#609](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/609) ([ADR-021](./adr/021-tenant-log-query-federation.md) tenant log-query plane)
+
+### Motivation
+
+The observability view of the tenant log-query plane ([ADR-021](./adr/021-tenant-log-query-federation.md); when the federation-gateway runs in **victorialogs mode**). Both source metrics are emitted by the mtail sidecar in `helm/federation-gateway` from the Envoy audit access log:
+
+- `tenant_log_query_requests_total{account_id, project_id, status}` (counter) — query volume and outcome
+- `tenant_log_query_duration_ms` (histogram) — query latency
+
+The tenant axis is `account_id` (the **verified VictoriaLogs partition key**, ≥1000); `project_id` is always 0 under the current platform-operational projection (hidden in the breakdown table). No template variables; default time range `now-6h`.
+
+### Deployment
+
+#### Method A: Grafana UI Import
+
+1. Grafana left nav → **Dashboards** → **New** → **Import**
+2. Upload JSON file: `k8s/03-monitoring/tenant-log-query-dashboard.json`
+3. Select the Prometheus datasource, click **Import**
+
+#### Method B: ConfigMap Sidecar Auto-Deployment
+
+```bash
+da-tools grafana-import \
+  --dashboard k8s/03-monitoring/tenant-log-query-dashboard.json \
+  --name grafana-dashboard-tenant-log-query --namespace monitoring
+```
+
+### Panel Quick Reference
+
+| Region | Panel | PromQL (key part) | Reading |
+|--------|-------|-------------------|---------|
+| Top row | **Log Queries /s (5m)** (Stat) | `sum(rate(tenant_log_query_requests_total[5m]))` | Total query rate across all account partitions |
+| Top row | **Rejection Rate (5m)** (Stat) | rate of the four rejected statuses (`rate_limited\|auth_failed\|bad_request\|backend_error`) ÷ total rate (`clamp_min` guards divide-by-zero) | **Deliberately excludes `client_aborted`** (a Grafana/LogsQL UI cancelling its own query is not a platform rejection); same definition as the `TenantLogQueryRejectionRateAnomaly` alert; yellow ≥20%, red ≥50% |
+| Top row | **Active Log-Query Tenants** (Stat) | `count(sum by(account_id) (rate(...[5m])) > 0) or vector(0)` | Account partitions **active within the last 5m window** (rate > 0) — window-active, not all-time |
+| Top row | **Query Latency P95 (5m)** (Stat) | `histogram_quantile(0.95, sum by(le) (rate(tenant_log_query_duration_ms_bucket[5m])))` | Cross-tenant query latency P95. Bounded by VictoriaLogs `-search.maxQueryDuration=25s` (< gateway route 30s) — **a P95 approaching 25s means queries are hitting the storage abort ceiling**; yellow ≥5s, red ≥20s |
+| Row 1 | **Request Rate by Status** (TimeSeries, stacked) | `sum by(status) (rate(...[5m]))` | Stacked by status enum (same colours as Dashboard 5) |
+| Row 1 | **Query Latency Heatmap (duration_ms)** (Heatmap) | `sum by(le) (rate(..._bucket[5m]))` (`format: heatmap`) | Latency distribution over time; **`le` is preserved in the grouping** — strip it in the `sum` and the heatmap / `histogram_quantile` break (the PromQL topology-label trap) |
+| Row 2 | **Queries per Tenant (5m rate)** (BarChart, horizontal) | `sum by(account_id) (rate(...[5m]))` | Watch for one tenant dominating the log-query gateway |
+| Row 2 | **Per-Tenant Query Latency P95 (5m)** (BarChart, horizontal) | `histogram_quantile(0.95, sum by(account_id, le) (rate(..._bucket[5m])))` | Per-account P95; `le` must be grouped alongside `account_id` for buckets to aggregate correctly per tenant |
+| Row 3 | **Per-Tenant Query Breakdown** (Table, paginated) | `sum by(account_id, status) (rate(...[10m]))` (instant) | One row per account × status |
+
+---
+
 ## Troubleshooting
 
 ### General Diagnostic Steps
@@ -511,4 +608,4 @@ Add a new row (Row: API Health) to the Platform Overview Dashboard with the foll
 
 ---
 
-**Version:** | **Last updated:** 2026-06-16
+**Version:** | **Last updated:** 2026-07-05
