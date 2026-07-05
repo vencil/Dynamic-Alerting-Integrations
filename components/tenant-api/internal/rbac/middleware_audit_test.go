@@ -1,6 +1,7 @@
 package rbac
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -225,6 +226,79 @@ func TestMiddleware_AuditPanic_DoesNotBlock(t *testing.T) {
 	}
 	if aud.called.Load() != 1 {
 		t.Errorf("Observe called %d times, want 1", aud.called.Load())
+	}
+}
+
+// ── ADR-027 D2-B §2.3: auditor denominator bound to the network listener ─────
+
+// auditBindingCase runs a request carrying a header identity (+ optional Bearer)
+// through the middleware with a given listener stamped on its context, and
+// returns how many times the auditor's Observe fired. This is the mechanism the
+// Phase-2 gate denominator depends on: human traffic that arrives over the UDS
+// (human) plane must NOT enter the machine-identity audit, while TCP (and any
+// un-stamped, fail-safe-defaulted) traffic must.
+func auditBindingObserveCount(t *testing.T, stamp func(context.Context) context.Context, withBearer bool) int32 {
+	t.Helper()
+	m := NewForTest(&RBACConfig{
+		Groups: []GroupRule{
+			{Name: "db-ops", Tenants: []string{"db-a"}, Permissions: []Permission{PermWrite}},
+		},
+	})
+	aud := &recordingAuditor{}
+	m.SetMachineAuditor(aud)
+
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+	mw := m.Middleware(PermWrite, func(*http.Request) string { return "db-a" })(inner)
+
+	req := httptest.NewRequest("PUT", "/api/v1/tenants/db-a", nil)
+	req.Header.Set("X-Forwarded-Email", "op@example.com")
+	req.Header.Set("X-Forwarded-Groups", "db-ops")
+	if withBearer {
+		req.Header.Set("Authorization", "Bearer forged.token.value")
+	}
+	if stamp != nil {
+		req = req.WithContext(stamp(req.Context()))
+	}
+	w := httptest.NewRecorder()
+	mw.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (authz is header-driven regardless of listener)", w.Code)
+	}
+	return aud.called.Load()
+}
+
+// UDS listener: the audit is SKIPPED whether or not a Bearer is present. Human
+// traffic over the pod-internal socket is a trusted hop, not a machine caller —
+// counting it would pollute the machine-identity denominator (ADR-027 §2.3).
+func TestMiddleware_AuditBinding_UDS_SkipsRegardlessOfBearer(t *testing.T) {
+	t.Parallel()
+	uds := func(ctx context.Context) context.Context { return WithListener(ctx, ListenerUDS) }
+	if n := auditBindingObserveCount(t, uds, false); n != 0 {
+		t.Errorf("UDS (no bearer) Observe count = %d, want 0", n)
+	}
+	if n := auditBindingObserveCount(t, uds, true); n != 0 {
+		t.Errorf("UDS (with bearer) Observe count = %d, want 0 — UDS human plane must never enter the audit", n)
+	}
+}
+
+// TCP listener: the audit runs as before — the machine/relay plane is exactly
+// what the Phase-2 gate is measuring.
+func TestMiddleware_AuditBinding_TCP_Audits(t *testing.T) {
+	t.Parallel()
+	tcp := func(ctx context.Context) context.Context { return WithListener(ctx, ListenerTCP) }
+	if n := auditBindingObserveCount(t, tcp, true); n != 1 {
+		t.Errorf("TCP Observe count = %d, want 1 — the network plane must still be audited", n)
+	}
+}
+
+// No listener stamp (e.g. a code path that forgot ConnContext): treated as TCP
+// and audited. This is the fail-safe direction — an un-attributed request stays
+// IN the denominator, never silently gets the UDS carve-out.
+func TestMiddleware_AuditBinding_NoStamp_AuditsAsTCP(t *testing.T) {
+	t.Parallel()
+	if n := auditBindingObserveCount(t, nil, true); n != 1 {
+		t.Errorf("un-stamped Observe count = %d, want 1 — missing listener must default to TCP (audited)", n)
 	}
 }
 

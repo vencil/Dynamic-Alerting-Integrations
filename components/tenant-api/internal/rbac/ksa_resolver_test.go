@@ -445,6 +445,47 @@ func TestKSA_Verdict_NsCollision_Relay(t *testing.T) {
 	}
 }
 
+// ── ADR-027 D2-B O1: da-portal is the THIRD allowlisted relay ────────────────
+
+// da-portal (monitoring:da-portal) forwards a HUMAN's oauth2-proxy identity with
+// an audience-bound SA token, exactly like recipe-preview → kindRelay. The human
+// groups vary legitimately per user, so ANY groups must audit as `verified`
+// (never mismatch), same contract as the recipe-preview relay.
+func TestKSA_Verdict_DaPortal_Relay_Verified_AnyGroups(t *testing.T) {
+	t.Parallel()
+	r, rec := newResolver(t, intersectingReactor(
+		"system:serviceaccount:monitoring:da-portal", []string{testAudience}), nil)
+	// A privileged human's groups forwarded through the relay — still verified.
+	r.Observe(reqWithBearer(makeJWT("iss")),
+		&VerifiedPrincipal{Groups: []string{"platform-admins", "db-a-operators"}})
+	if rec.get(ResultAuditVerified) != 1 {
+		t.Errorf("verified = %d, want 1 (da-portal relay forwards human groups; not compared; counts=%v)",
+			rec.get(ResultAuditVerified), rec.counts)
+	}
+	if rec.get(ResultAuditMismatch) != 0 {
+		t.Errorf("mismatch = %d, want 0 (a relay's forwarded human groups must never be a mismatch)", rec.get(ResultAuditMismatch))
+	}
+}
+
+// A same-named da-portal SA in a DIFFERENT namespace does NOT match the
+// ns-precise allowlist → unknown_workload (fail-loud), closing the spoofed-relay
+// edge for the new entry just as TestKSA_Verdict_NsCollision_Relay does for
+// recipe-preview.
+func TestKSA_Verdict_DaPortal_NsCollision(t *testing.T) {
+	t.Parallel()
+	r, rec := newResolver(t, intersectingReactor(
+		"system:serviceaccount:evil-ns:da-portal", []string{testAudience}), nil)
+	r.Observe(reqWithBearer(makeJWT("iss")),
+		&VerifiedPrincipal{Groups: []string{"platform-admins"}})
+	if rec.get(ResultAuditUnknownWorkload) != 1 {
+		t.Errorf("unknown_workload = %d, want 1 (ns-precise: da-portal in another ns must not match; counts=%v)",
+			rec.get(ResultAuditUnknownWorkload), rec.counts)
+	}
+	if rec.get(ResultAuditVerified) != 0 {
+		t.Errorf("verified = %d, want 0 (a spoofed da-portal relay must not be unconditionally verified)", rec.get(ResultAuditVerified))
+	}
+}
+
 // A synthetic caller presenting NO groups → verified vacuously (no out-of-set
 // group). Explicit so the empty-groups path is a designed, tested outcome
 // rather than only incidentally exercised by TestKSA_Verified (nil header).

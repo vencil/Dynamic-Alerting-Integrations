@@ -160,8 +160,15 @@ func (k *KSAResolver) Observe(r *http.Request, header *VerifiedPrincipal) {
 	hg := headerGroups(header)
 	result := auditWorkloadVerdict(sa, hg)
 	k.record(result)
+	// ADR-027 D2-B: record which listener accepted this request for human
+	// audit-trail reconciliation. The middleware already skips the audit for the
+	// UDS (human) plane, so in practice this reads "tcp" — but stamping it makes
+	// the log self-describing and would flag any future path that reaches the
+	// audit with an unexpected listener. Connection-derived (unforgeable).
+	listener, _ := ListenerFromContext(r.Context())
 	logArgs := []any{"result", result, "workload", sa,
-		"header_subject", headerSubject(header), "header_groups", hg}
+		"header_subject", headerSubject(header), "header_groups", hg,
+		"listener", listener.String()}
 	if result == ResultAuditVerified {
 		k.log().Info("machine-identity audit", logArgs...)
 	} else {
@@ -257,18 +264,22 @@ type machineIdentitySpec struct {
 // The namespaces are canonical: threshold-govern is the fixed `monitoring`
 // CronJob; recipe-preview is ALSO deployed to `monitoring` — its Helm DEPLOY
 // CONTRACT (helm/recipe-preview/values.yaml) and da-portal's recipePreviewUrl
-// both pin recipe-preview.monitoring.svc. A deployment that places recipe-preview
-// in a NON-canonical namespace audits (correctly, fail-loud) as unknown_workload
-// until its real <ns>:<sa> is injected — that per-deployment config-injection of
-// the relay allowlist is deferred-with-trigger (needed only if the platform must
-// support recipe-preview in an arbitrary namespace; today it is pinned to
-// `monitoring`). NOTE `verified` still isn't a blanket
-// safety guarantee: for synthetic it means "no out-of-set group" (does not
-// exclude replaying the expected, already-privileged group, nor an empty
-// claim); for relay the forwarded human groups are trusted, not compared.
+// both pin recipe-preview.monitoring.svc; da-portal itself (ADR-027 D2-B O1)
+// is likewise the fixed `monitoring` deployment whose nginx forwards the human's
+// oauth2-proxy identity with an audience-bound SA token (kindRelay, like
+// recipe-preview). A deployment that places any of these in a NON-canonical
+// namespace audits (correctly, fail-loud) as unknown_workload until its real
+// <ns>:<sa> is injected — that per-deployment config-injection of the relay
+// allowlist is deferred-with-trigger (needed only if the platform must support
+// an arbitrary namespace; today all three are pinned to `monitoring`). NOTE
+// `verified` still isn't a blanket safety guarantee: for synthetic it means "no
+// out-of-set group" (does not exclude replaying the expected, already-privileged
+// group, nor an empty claim); for relay the forwarded human groups are trusted,
+// not compared.
 var machineIdentityAllowlist = map[string]machineIdentitySpec{
 	"system:serviceaccount:monitoring:threshold-govern": {kind: kindSynthetic, expectedGroups: []string{"threshold-governance"}},
 	"system:serviceaccount:monitoring:recipe-preview":   {kind: kindRelay},
+	"system:serviceaccount:monitoring:da-portal":        {kind: kindRelay},
 }
 
 // auditWorkloadVerdict classifies a verified workload token against the

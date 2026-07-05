@@ -142,6 +142,13 @@ type Deps struct {
 	// default instead of rejecting every write.
 	MaxBodyBytes int64
 
+	// HumanSocketPath is the pod-internal Unix domain socket serving the human
+	// (oauth2-proxy) plane (ADR-027 D2-B, --human-socket). Empty when the human
+	// socket is disabled (the default). When set, Ready self-dials GET /health
+	// over it so a dead human listener surfaces as pod NotReady instead of a
+	// silent human-plane outage that the kubelet's TCP-only probe would miss.
+	HumanSocketPath string
+
 	// BackfillTimeout bounds the AccountID backfill's GitOps write
 	// (POST /federation/accounts/backfill). Wired from the server's
 	// --write-timeout, NOT the global request Timeout middleware:

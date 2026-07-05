@@ -20,6 +20,7 @@ import (
 	"flag"
 	"log"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -206,6 +207,18 @@ func main() {
 	machineIdentityIssuer := flag.String("machine-identity-issuer", envOrDefault("TA_MACHINE_IDENTITY_ISSUER", ""),
 		"ADR-027: comma-separated cluster-issuer allowlist for machine-identity audit dispatch. Empty (default) sends any issuer to TokenReview (the apiserver is the sole verifier). Reserved for keypool isolation when the human JWT-A path lands.")
 
+	// ADR-027 D2-B: human-plane Unix domain socket. When set, tenant-api serves
+	// the SAME router on a SECOND http.Server bound to this pod-internal UDS, in
+	// addition to the network TCP --addr. The same-pod oauth2-proxy points its
+	// --upstream at this socket, so human (browser) traffic never touches the
+	// network 8080 plane. Each listener stamps its identity (tcp|uds) into the
+	// request context via ConnContext — a connection-derived trust signal the
+	// request cannot forge — which the machine-identity audit uses to keep the
+	// UDS human plane OUT of its denominator. Empty (default) = single TCP
+	// listener, byte-identical to pre-D2-B behavior.
+	humanSocket := flag.String("human-socket", envOrDefault("TA_HUMAN_SOCKET", ""),
+		"ADR-027 D2-B: path to a pod-internal Unix domain socket for the human (oauth2-proxy) plane. When set, the same router is ALSO served here and this listener is tagged as the trusted human hop (excluded from the machine-identity audit). Empty (default) = TCP-only, unchanged behavior.")
+
 	flag.Parse()
 
 	// PR-10/11: structured (JSON) logging via slog. Configure before
@@ -390,6 +403,7 @@ func main() {
 		PRClient:           prClient,
 		PRTracker:          prTracker,
 		WriteMode:          wm,
+		HumanSocketPath:    *humanSocket,
 		SearchCache:        handler.NewTenantSnapshotCache(),
 		// #609 CodeRabbit: the fleet-wide AccountID backfill must be bounded by
 		// the operator's --write-timeout, NOT the global 30s request Timeout
@@ -629,17 +643,57 @@ func main() {
 		}
 	})
 
-	// ── HTTP server with graceful shutdown ────────────────────────────────────
+	// ── HTTP server(s) with graceful shutdown ─────────────────────────────────
 	// PR-11/11: timeouts now configurable via TA_{READ,WRITE,IDLE}_TIMEOUT.
-	srv := &http.Server{
+	//
+	// ADR-027 D2-B: the SAME router `r` is served by up to two http.Servers —
+	// the network TCP listener (--addr, machine/relay plane) and, when
+	// --human-socket is set, a pod-internal Unix domain socket (human plane
+	// fronted by the same-pod oauth2-proxy). Each server's ConnContext stamps
+	// its listener identity (tcp|uds) onto every request context at accept time.
+	// This is CONNECTION-derived: it reflects which socket accepted the
+	// connection, so a request cannot forge or strip it (contrast a header). The
+	// machine-identity audit reads it to keep the UDS human plane out of its
+	// denominator (ADR-027 §2.3). Absence of the stamp defaults to TCP
+	// (rbac.ListenerFromContext) — the fail-safe direction.
+	srvTCP := &http.Server{
 		Addr:         *listenAddr,
 		Handler:      r,
 		ReadTimeout:  *readTimeout,
 		WriteTimeout: *writeTimeout,
 		IdleTimeout:  *idleTimeout,
+		ConnContext: func(ctx context.Context, _ net.Conn) context.Context {
+			return rbac.WithListener(ctx, rbac.ListenerTCP)
+		},
 	}
 	slog.Info("http server timeouts",
 		"read", *readTimeout, "write", *writeTimeout, "idle", *idleTimeout)
+
+	// Human-plane UDS server (optional). Built here so a bind failure is fatal
+	// (MED-7 fail-loud) rather than a silent fallback to TCP-only, which would
+	// route human traffic back over the network 8080 plane D2-B exists to drain.
+	var srvUDS *http.Server
+	var udsListener net.Listener
+	if *humanSocket != "" {
+		ln, err := listenUnix(*humanSocket)
+		if err != nil {
+			log.Fatalf("FATAL: human socket: %v", err)
+		}
+		udsListener = ln
+		// Emit the tenant_api_human_socket_up gauge (the Ready self-dial drives
+		// its value). Only when the socket is configured, so it's never a false 0.
+		handler.SetHumanSocketConfigured(true)
+		srvUDS = &http.Server{
+			Handler:      r,
+			ReadTimeout:  *readTimeout,
+			WriteTimeout: *writeTimeout,
+			IdleTimeout:  *idleTimeout,
+			ConnContext: func(ctx context.Context, _ net.Conn) context.Context {
+				return rbac.WithListener(ctx, rbac.ListenerUDS)
+			},
+		}
+		slog.Info("human-plane Unix socket enabled (ADR-027 D2-B)", "path", *humanSocket)
+	}
 
 	// Graceful shutdown on SIGTERM / SIGINT
 	quit := make(chan os.Signal, 1)
@@ -647,10 +701,23 @@ func main() {
 
 	go func() {
 		slog.Info("tenant-api listening", "addr", *listenAddr)
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := srvTCP.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("FATAL: listen: %v", err)
 		}
 	}()
+
+	if srvUDS != nil {
+		go func() {
+			slog.Info("tenant-api listening (human plane)", "socket", *humanSocket)
+			// Serve on the already-bound UDS listener. A non-ErrServerClosed
+			// error means the human plane died — fatal, so the kubelet restarts
+			// the pod rather than the process limping along serving only TCP
+			// (which would silently push humans back onto the 8080 plane).
+			if err := srvUDS.Serve(udsListener); err != nil && err != http.ErrServerClosed {
+				log.Fatalf("FATAL: human socket serve: %v", err)
+			}
+		}()
+	}
 
 	<-quit
 	slog.Info("tenant-api shutting down")
@@ -671,7 +738,17 @@ func main() {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	if err := srv.Shutdown(ctx); err != nil {
+	// Shut down BOTH servers on the same deadline. The UDS server first so the
+	// human plane drains before the TCP plane; either Shutdown returning is
+	// logged but non-fatal (we're already exiting). srvUDS.Shutdown also closes
+	// the underlying listener, which unlinks the socket file (Go UnixListener
+	// semantics) — the successor pod's unlink-before-bind covers an unclean exit.
+	if srvUDS != nil {
+		if err := srvUDS.Shutdown(ctx); err != nil {
+			slog.Warn("human socket shutdown error", "error", err)
+		}
+	}
+	if err := srvTCP.Shutdown(ctx); err != nil {
 		slog.Warn("shutdown error", "error", err)
 	}
 	slog.Info("tenant-api stopped")

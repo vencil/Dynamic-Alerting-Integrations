@@ -12,15 +12,15 @@
 {{- end }}
 {{- /*
   Empty-selector guard (GHSA-3g2h-rf85-5rrv). internalPortAllow.prometheus /
-  .thresholdGovern / .recipePreview feed straight into the port-8080
+  .thresholdGovern / .recipePreview / .daPortal feed straight into the port-8080
   podSelector.matchLabels via toYaml. An empty map renders `matchLabels: {}`,
   which Kubernetes treats as matching ALL pods in prometheusNamespace — silently
   degrading the pod-scoped allow-list back to the namespace-wide over-grant this
   policy exists to close. Reject it at render time with the same fail-closed
-  intent as the enabled guard.
+  intent as the enabled guard. (daPortal added by ADR-027 D2-B O1.)
 */ -}}
-{{- if or (not .Values.networkPolicy.internalPortAllow.prometheus) (not .Values.networkPolicy.internalPortAllow.thresholdGovern) (not .Values.networkPolicy.internalPortAllow.recipePreview) }}
-{{- fail "networkPolicy.internalPortAllow.prometheus/thresholdGovern/recipePreview must be non-empty label selectors: an empty matchLabels map matches ALL pods in the monitoring namespace, reopening the port-8080 identity-header trust bypass (GHSA-3g2h-rf85-5rrv)." }}
+{{- if or (not .Values.networkPolicy.internalPortAllow.prometheus) (not .Values.networkPolicy.internalPortAllow.thresholdGovern) (not .Values.networkPolicy.internalPortAllow.recipePreview) (not .Values.networkPolicy.internalPortAllow.daPortal) }}
+{{- fail "networkPolicy.internalPortAllow.prometheus/thresholdGovern/recipePreview/daPortal must be non-empty label selectors: an empty matchLabels map matches ALL pods in the monitoring namespace, reopening the port-8080 identity-header trust bypass (GHSA-3g2h-rf85-5rrv)." }}
 {{- end }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -70,6 +70,15 @@ spec:
           podSelector:
             matchLabels:
               {{- toYaml .Values.networkPolicy.internalPortAllow.recipePreview | nindent 14 }}
+        # da-portal relay (ADR-027 D2-B O1) — forwards the human's /api/v1 requests
+        # to 8080 with an audience-bound SA token. Same pod+ns AND-scoping as the
+        # others; this is the human-plane network entry that D2-B makes explicit.
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.prometheusNamespace }}
+          podSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.internalPortAllow.daPortal | nindent 14 }}
       ports:
         - port: 8080
           protocol: TCP
